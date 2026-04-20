@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Agent Orchestrator</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Top Navigation -->
+    <nav class="top-nav" id="top-nav">
+      <div class="nav-brand">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+        </svg>
+        <span>Multi-Agent Orchestrator</span>
+      </div>
+      <div class="nav-links">
+        <button class="nav-link" data-page="chat" id="nav-chat">Chat</button>
+        <button class="nav-link" data-page="config" id="nav-config">Config</button>
+      </div>
+      <div class="nav-status">
+        <span>
+          <span class="status-dot disconnected" id="status-dot"></span>
+          <span id="status-text">Connecting…</span>
+        </span>
+        <span class="status-model" id="status-model">—</span>
+      </div>
+    </nav>
+
+    <!-- Page Container -->
+    <div class="page-container" id="page-container"></div>
+  </div>
+
+  <script src="/js/config-page.js"></script>
+  <script src="/js/chat-page.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
