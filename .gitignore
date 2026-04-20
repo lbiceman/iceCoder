@@ -1,0 +1,30 @@
+# 依赖
+node_modules/
+
+# 编译输出
+dist/
+
+# 数据目录（LanceDB 文件、上传文件等）
+data/*
+!data/config.json
+
+# Pipeline 输出
+output/
+
+# 环境变量
+.env
+.env.*
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
