@@ -57,13 +57,14 @@ window.ChatPage = (function () {
     return 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
   }
 
+  // ---- 服务端会话存储（PC 和移动端同步） ----
+
+  /** 从服务端加载会话列表 */
   function loadSessionList() {
+    // 返回缓存（同步），异步刷新
     try {
       var stored = localStorage.getItem(STORAGE_KEY_SESSIONS);
-      if (stored) {
-        var parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
-      }
+      if (stored) return JSON.parse(stored);
     } catch (_e) { /* ignore */ }
     return [];
   }
@@ -74,6 +75,19 @@ window.ChatPage = (function () {
     } catch (_e) { /* ignore */ }
   }
 
+  /** 从服务端拉取会话列表并更新本地缓存 */
+  function fetchSessionList(callback) {
+    fetch('/api/sessions?_t=' + Date.now())
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.sessions) {
+          saveSessionList(data.sessions);
+          if (callback) callback(data.sessions);
+        }
+      })
+      .catch(function () { /* ignore, use local cache */ });
+  }
+
   function getActiveSessionId() {
     return localStorage.getItem(STORAGE_KEY_ACTIVE) || null;
   }
@@ -82,20 +96,26 @@ window.ChatPage = (function () {
     localStorage.setItem(STORAGE_KEY_ACTIVE, id);
   }
 
-  function sessionStorageKey(sessionId) {
-    return 'ice-chat-sess-' + sessionId;
-  }
-
+  /** 保存消息到服务端 + 本地缓存 */
   function saveSessionMessages(sessionId, msgs) {
+    var toSave = msgs.map(function (m) { return { role: m.role, content: m.content }; });
+    // 本地缓存
     try {
-      var toSave = msgs.map(function (m) { return { role: m.role, content: m.content }; });
-      localStorage.setItem(sessionStorageKey(sessionId), JSON.stringify(toSave));
+      localStorage.setItem('ice-chat-sess-' + sessionId, JSON.stringify(toSave));
     } catch (_e) { /* ignore */ }
+    // 异步同步到服务端
+    var title = extractSessionTitle(msgs);
+    fetch('/api/sessions/' + encodeURIComponent(sessionId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: toSave, title: title }),
+    }).catch(function () { /* ignore */ });
   }
 
+  /** 从本地缓存加载消息（同步） */
   function loadSessionMessages(sessionId) {
     try {
-      var stored = localStorage.getItem(sessionStorageKey(sessionId));
+      var stored = localStorage.getItem('ice-chat-sess-' + sessionId);
       if (stored) {
         var parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) return parsed;
@@ -104,8 +124,32 @@ window.ChatPage = (function () {
     return [];
   }
 
+  /** 从服务端加载消息（异步） */
+  function fetchSessionMessages(sessionId, callback) {
+    // 加 _t 防止移动端浏览器缓存 GET 请求
+    var url = '/api/sessions/' + encodeURIComponent(sessionId) + '?_t=' + Date.now();
+    fetch(url)
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        var msgs = (data.messages && data.messages.length > 0) ? data.messages : [];
+        if (msgs.length > 0) {
+          try {
+            localStorage.setItem('ice-chat-sess-' + sessionId, JSON.stringify(msgs));
+          } catch (_e) { /* ignore */ }
+        }
+        if (callback) callback(msgs);
+      })
+      .catch(function () {
+        // 网络失败，用本地缓存
+        var local = loadSessionMessages(sessionId);
+        if (callback) callback(local);
+      });
+  }
+
   function deleteSessionStorage(sessionId) {
-    localStorage.removeItem(sessionStorageKey(sessionId));
+    localStorage.removeItem('ice-chat-sess-' + sessionId);
+    fetch('/api/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' })
+      .catch(function () { /* ignore */ });
   }
 
   /** 从消息列表中提取会话标题（取第一条用户消息的前 30 个字符） */
@@ -144,31 +188,75 @@ window.ChatPage = (function () {
     if (activeId) {
       currentSessionId = activeId;
       messages = loadSessionMessages(activeId);
+      // 异步从服务端拉取最新消息
+      fetchSessionMessages(activeId, function (serverMsgs) {
+        if (serverMsgs.length > messages.length) {
+          messages = serverMsgs;
+          renderMessages();
+        }
+      });
+      fetchSessionList(function () { renderHistory(); });
     } else {
-      currentSessionId = generateSessionId();
-      setActiveSessionId(currentSessionId);
-      // 迁移旧的 ice-chat-messages 数据
-      var oldMsgs = loadMessages();
-      if (oldMsgs.length > 0) {
-        messages = oldMsgs;
-        saveSessionMessages(currentSessionId, messages);
-        updateCurrentSessionMeta();
-        localStorage.removeItem(STORAGE_KEY_MESSAGES);
-      } else {
-        messages = [];
-      }
+      // 没有本地会话 — 从服务端拉取，优先加载 PC 端活跃会话
+      fetch('/api/sessions?_t=' + Date.now())
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          var serverSessions = data.sessions || [];
+          var serverActiveId = data.activeSessionId || null;
+          saveSessionList(serverSessions);
+
+          // 优先使用服务端记录的 PC 端活跃会话
+          var targetId = serverActiveId;
+
+          // 如果没有活跃会话，找有实际内容的
+          if (!targetId && serverSessions.length > 0) {
+            for (var i = 0; i < serverSessions.length; i++) {
+              if (serverSessions[i].title && serverSessions[i].title !== '新对话') {
+                targetId = serverSessions[i].id;
+                break;
+              }
+            }
+            if (!targetId) targetId = serverSessions[0].id;
+          }
+
+          if (targetId) {
+            currentSessionId = targetId;
+            setActiveSessionId(targetId);
+            fetchSessionMessages(targetId, function (serverMsgs) {
+              messages = serverMsgs;
+              renderMessages();
+              renderHistory();
+            });
+          } else {
+            currentSessionId = generateSessionId();
+            setActiveSessionId(currentSessionId);
+            var oldMsgs = loadMessages();
+            if (oldMsgs.length > 0) {
+              messages = oldMsgs;
+              saveSessionMessages(currentSessionId, messages);
+              updateCurrentSessionMeta();
+              localStorage.removeItem(STORAGE_KEY_MESSAGES);
+            }
+            renderMessages();
+          }
+          renderHistory();
+        })
+        .catch(function () {
+          currentSessionId = generateSessionId();
+          setActiveSessionId(currentSessionId);
+          messages = [];
+          renderMessages();
+        });
     }
   }
 
   /** 新建聊天：保存当前会话，创建新会话 */
   function startNewChat() {
-    if (isStreaming) return; // 流式传输中不允许切换
-    // 保存当前会话
+    if (isStreaming) return;
     if (currentSessionId && messages.length > 0) {
       saveSessionMessages(currentSessionId, messages);
       updateCurrentSessionMeta();
     }
-    // 创建新会话
     currentSessionId = generateSessionId();
     setActiveSessionId(currentSessionId);
     messages = [];
@@ -185,12 +273,10 @@ window.ChatPage = (function () {
   function switchToSession(sessionId) {
     if (isStreaming) return;
     if (sessionId === currentSessionId) return;
-    // 保存当前会话
     if (currentSessionId && messages.length > 0) {
       saveSessionMessages(currentSessionId, messages);
       updateCurrentSessionMeta();
     }
-    // 加载目标会话
     currentSessionId = sessionId;
     setActiveSessionId(sessionId);
     messages = loadSessionMessages(sessionId);
@@ -200,6 +286,13 @@ window.ChatPage = (function () {
     if (elPipelinePanel) elPipelinePanel.classList.add('hidden');
     renderMessages();
     renderHistory();
+    // 异步从服务端拉取最新消息
+    fetchSessionMessages(sessionId, function (serverMsgs) {
+      if (serverMsgs.length > 0) {
+        messages = serverMsgs;
+        renderMessages();
+      }
+    });
   }
 
   /** 删除指定会话 */
@@ -208,7 +301,6 @@ window.ChatPage = (function () {
     sessions = sessions.filter(function (s) { return s.id !== sessionId; });
     saveSessionList(sessions);
     deleteSessionStorage(sessionId);
-    // 如果删的是当前会话，新建一个
     if (sessionId === currentSessionId) {
       if (sessions.length > 0) {
         switchToSession(sessions[0].id);
@@ -223,16 +315,21 @@ window.ChatPage = (function () {
   // ---- DOM refs for history sidebar ----
   var elHistoryPanel, elHistoryList;
 
-  // ---- 本地持久化 ----
+  // ---- 持久化 ----
 
   function saveMessages() {
     if (!currentSessionId) return;
+    // 远程模式下，只有包含用户消息时才同步到服务端（避免连接状态消息污染）
+    var hasUserMsg = false;
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].role === 'user') { hasUserMsg = true; break; }
+    }
+    if (remoteMode && !hasUserMsg) return;
     saveSessionMessages(currentSessionId, messages);
     updateCurrentSessionMeta();
   }
 
   function loadMessages() {
-    // 旧版兼容：从 ice-chat-messages 加载
     try {
       var stored = localStorage.getItem(STORAGE_KEY_MESSAGES);
       if (stored) {
@@ -448,7 +545,8 @@ window.ChatPage = (function () {
 
   // ---- 渲染 ----
 
-  function renderMessages() {
+  /** 渲染消息到 DOM（不触发保存，用于只读同步） */
+  function renderMessagesOnly() {
     elMessages.innerHTML = '';
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
@@ -467,6 +565,10 @@ window.ChatPage = (function () {
       elMessages.appendChild(el);
     }
     scrollToBottom();
+  }
+
+  function renderMessages() {
+    renderMessagesOnly();
     saveMessages();
   }
 
@@ -764,14 +866,51 @@ window.ChatPage = (function () {
 
   // ---- 远程模式 WebSocket ----
 
+  var remoteReconnectTimer = null;
+  var remoteReconnectAttempts = 0;
+  var remoteHeartbeatTimer = null;
+  var remoteSyncTimer = null;       // 定期轮询同步消息
+  var remoteConnectTimeout = null;  // WebSocket 连接超时
+  var remoteWsConnected = false;    // 标记是否曾成功连接过（避免重复显示"连接成功"）
+
   function connectRemoteWs() {
+    // 清理旧连接
+    if (remoteWs) {
+      try { remoteWs.close(); } catch (_e) { /* ignore */ }
+    }
+    if (remoteHeartbeatTimer) {
+      clearInterval(remoteHeartbeatTimer);
+      remoteHeartbeatTimer = null;
+    }
+    if (remoteConnectTimeout) {
+      clearTimeout(remoteConnectTimeout);
+      remoteConnectTimeout = null;
+    }
+
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     var wsUrl = protocol + '//' + window.location.host + '/api/remote/ws?token=' + encodeURIComponent(remoteToken);
 
     remoteWs = new WebSocket(wsUrl);
 
+    // 连接超时：移动端冷启动时 WebSocket 可能长时间卡在 CONNECTING
+    remoteConnectTimeout = setTimeout(function () {
+      remoteConnectTimeout = null;
+      if (remoteWs && remoteWs.readyState === WebSocket.CONNECTING) {
+        console.log('[Remote] WebSocket connect timeout, retrying...');
+        try { remoteWs.close(); } catch (_e) { /* ignore */ }
+      }
+    }, 10000);
+
     remoteWs.onopen = function () {
-      // 连接成功由服务端 'connected' 消息触发，这里不重复添加
+      if (remoteConnectTimeout) {
+        clearTimeout(remoteConnectTimeout);
+        remoteConnectTimeout = null;
+      }
+      remoteReconnectAttempts = 0;
+      // 重连后从服务端恢复最新消息
+      syncRemoteMessages();
+      // 启动定期同步（兜底：确保 PC 端消息能同步到移动端）
+      startRemoteSync();
     };
 
     remoteWs.onmessage = function (e) {
@@ -782,24 +921,86 @@ window.ChatPage = (function () {
     };
 
     remoteWs.onclose = function () {
-      messages.push({ role: 'agent', content: '连接已断开' });
+      if (remoteConnectTimeout) {
+        clearTimeout(remoteConnectTimeout);
+        remoteConnectTimeout = null;
+      }
       remoteProcessing = false;
       setStreamingState(false);
-      renderMessages();
       updateNavStatus(false);
+      scheduleReconnect();
     };
 
     remoteWs.onerror = function () {
-      messages.push({ role: 'agent', content: '[err] 远程连接失败' });
-      renderMessages();
+      // onclose 会紧跟着触发，重连逻辑在 onclose 里处理
     };
 
     // 心跳保活
-    setInterval(function () {
+    remoteHeartbeatTimer = setInterval(function () {
       if (remoteWs && remoteWs.readyState === WebSocket.OPEN) {
         remoteWs.send(JSON.stringify({ type: 'ping' }));
       }
-    }, 30000);
+    }, 15000);
+  }
+
+  /** 从服务端同步最新消息（只读同步，不回写服务端） */
+  function syncRemoteMessages() {
+    if (!currentSessionId) return;
+    if (remoteProcessing || isStreaming) return; // 流式传输中不覆盖
+    fetchSessionMessages(currentSessionId, function (serverMsgs) {
+      if (serverMsgs && serverMsgs.length > 0) {
+        // 只在服务端消息更多或内容不同时才更新
+        if (serverMsgs.length >= messages.length) {
+          messages = serverMsgs;
+          // 只渲染 DOM，不回写服务端（避免覆盖 PC 端正在写入的数据）
+          renderMessagesOnly();
+        }
+      }
+    });
+  }
+
+  /** 启动定期轮询同步（每 5 秒从服务端拉取最新消息） */
+  function startRemoteSync() {
+    stopRemoteSync();
+    remoteSyncTimer = setInterval(function () {
+      // 仅在非流式状态下同步
+      if (!remoteProcessing && !isStreaming) {
+        syncRemoteMessages();
+      }
+    }, 5000);
+  }
+
+  /** 停止定期轮询 */
+  function stopRemoteSync() {
+    if (remoteSyncTimer) {
+      clearInterval(remoteSyncTimer);
+      remoteSyncTimer = null;
+    }
+  }
+
+  function scheduleReconnect() {
+    stopRemoteSync(); // 断连时停止轮询
+    if (remoteReconnectTimer) return;
+    // 指数退避：1s, 2s, 4s, 8s, 最大 30s
+    var delay = Math.min(1000 * Math.pow(2, remoteReconnectAttempts), 30000);
+    remoteReconnectAttempts++;
+
+    remoteReconnectTimer = setTimeout(function () {
+      remoteReconnectTimer = null;
+      // 先验证 token 是否还有效
+      fetch('/api/remote/verify?token=' + encodeURIComponent(remoteToken))
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (data.valid) {
+            connectRemoteWs();
+          }
+          // token 失效就不再重连
+        })
+        .catch(function () {
+          // 网络不通，继续重试
+          scheduleReconnect();
+        });
+    }, delay);
   }
 
   function handleRemoteWsMessage(data) {
@@ -924,6 +1125,7 @@ window.ChatPage = (function () {
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'new', description: '新建聊天', prefix: '~' },
+    { name: 'history', description: '显示/隐藏历史记录', prefix: '~' },
     { name: 'clear', description: '清空当前聊天记录', prefix: '~' }
   ];
 
@@ -1146,6 +1348,7 @@ window.ChatPage = (function () {
       body.message = text;
     }
     if (uploadedFile) body.fileId = uploadedFile.fileId;
+    if (currentSessionId) body.sessionId = currentSessionId;
 
     // 发送后清除文件
     removeUploadedFile();
@@ -1347,7 +1550,7 @@ window.ChatPage = (function () {
         renderMessages();
 
         // 创建二维码弹窗
-        showQrModal(data.url, data.qrDataUrl, data.localIP, data.port);
+        showQrModal(data.url, data.qrDataUrl, data.localIP, data.port, data.tunnel);
       })
       .catch(function () {
         messages.push({ role: 'agent', content: '生成二维码失败，请检查网络连接' });
@@ -1355,7 +1558,7 @@ window.ChatPage = (function () {
       });
   }
 
-  function showQrModal(url, qrDataUrl, localIP, port) {
+  function showQrModal(url, qrDataUrl, localIP, port, tunnel) {
     // 创建遮罩层
     var overlay = document.createElement('div');
     overlay.className = 'qr-overlay';
@@ -1395,7 +1598,7 @@ window.ChatPage = (function () {
 
     var info = document.createElement('p');
     info.className = 'qr-info';
-    info.textContent = '局域网 IP: ' + localIP + ' | 端口: ' + port;
+    info.textContent = tunnel ? '通过公网隧道访问（任意网络可用）' : '局域网 IP: ' + localIP + ' | 端口: ' + port;
     modal.appendChild(info);
 
     var hint = document.createElement('p');
@@ -1433,15 +1636,14 @@ window.ChatPage = (function () {
 
     container.innerHTML =
       '<div class="chat-page">' +
-        // 历史记录侧边栏（远程模式隐藏）
-        (remoteMode ? '' :
+        // 历史记录侧边栏
         '<div class="history-panel" id="history-panel">' +
           '<div class="history-header">' +
             '<span>历史记录</span>' +
             '<button class="history-close" id="btn-history-close" title="关闭">&times;</button>' +
           '</div>' +
           '<div class="history-list" id="history-list"></div>' +
-        '</div>') +
+        '</div>' +
         // SSE warning（远程模式隐藏）
         (remoteMode ? '' :
         '<div class="sse-warning hidden" id="sse-warning">' +
@@ -1514,8 +1716,10 @@ window.ChatPage = (function () {
     var inputWrapper = container.querySelector('.input-wrapper');
     inputWrapper.appendChild(elCmdDropdown);
 
-    // 初始化会话系统
-    initSession();
+    // 初始化会话系统（远程模式在下方单独处理）
+    if (!remoteMode) {
+      initSession();
+    }
 
     // 获取模型上下文信息
     fetchModelContext();
@@ -1577,9 +1781,7 @@ window.ChatPage = (function () {
 
     // 渲染已有消息（导航返回时）
     renderMessages();
-    if (!remoteMode) {
-      renderHistory();
-    }
+    renderHistory();
 
     // 如果活跃则恢复流水线面板
     if (!remoteMode && stages.length > 0 && currentExecutionId) {
@@ -1588,29 +1790,91 @@ window.ChatPage = (function () {
       updateProgressBar();
     }
 
-    // 远程模式：验证 token 并连接 WebSocket
+    // 远程模式：先从服务端同步会话，再连接 WebSocket
     if (remoteMode) {
-      messages.push({ role: 'agent', content: '正在连接远程服务…' });
-      renderMessages();
-      fetch('/api/remote/verify?token=' + encodeURIComponent(remoteToken))
+      fetch('/api/sessions?_t=' + Date.now())
         .then(function (res) { return res.json(); })
         .then(function (data) {
-          if (data.valid) {
-            messages.pop();
-            renderMessages();
-            connectRemoteWs();
+          var serverSessions = data.sessions || [];
+          var serverActiveId = data.activeSessionId || null;
+          saveSessionList(serverSessions);
+
+          // 使用 PC 端活跃会话
+          var targetId = serverActiveId;
+          if (!targetId && serverSessions.length > 0) {
+            for (var i = 0; i < serverSessions.length; i++) {
+              if (serverSessions[i].title && serverSessions[i].title !== '新对话') {
+                targetId = serverSessions[i].id;
+                break;
+              }
+            }
+            if (!targetId) targetId = serverSessions[0].id;
+          }
+
+          if (targetId) {
+            currentSessionId = targetId;
+            setActiveSessionId(targetId);
+            // 加载消息后再连接 WebSocket（只渲染，不回写服务端）
+            fetchSessionMessages(targetId, function (serverMsgs) {
+              messages = serverMsgs;
+              renderMessagesOnly();
+              renderHistory();
+              startRemoteConnection();
+            });
           } else {
-            messages.pop();
-            messages.push({ role: 'agent', content: '[err] ' + (data.error || 'Token 无效或已过期，请重新扫码') });
-            renderMessages();
+            currentSessionId = generateSessionId();
+            setActiveSessionId(currentSessionId);
+            startRemoteConnection();
           }
         })
         .catch(function () {
-          messages.pop();
-          messages.push({ role: 'agent', content: '[err] 无法连接到服务器，请确认手机和电脑在同一网络' });
-          renderMessages();
+          // 网络失败，直接连接
+          currentSessionId = generateSessionId();
+          setActiveSessionId(currentSessionId);
+          startRemoteConnection();
         });
     }
+  }
+
+  /** 远程模式：验证 token 并连接 WebSocket */
+  function startRemoteConnection() {
+    fetch('/api/remote/verify?token=' + encodeURIComponent(remoteToken))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.valid) {
+          connectRemoteWs();
+
+          // 切回前台时立即重连 + 刷新消息
+          document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible' && remoteMode) {
+              // 立即同步消息（不管连接状态）
+              syncRemoteMessages();
+              // 如果连接断了，立即重连
+              if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) {
+                if (remoteReconnectTimer) {
+                  clearTimeout(remoteReconnectTimer);
+                  remoteReconnectTimer = null;
+                }
+                remoteReconnectAttempts = 0;
+                connectRemoteWs();
+              } else {
+                // 连接正常，确保轮询在运行
+                startRemoteSync();
+              }
+            } else if (document.visibilityState === 'hidden' && remoteMode) {
+              // 进入后台时停止轮询，节省资源
+              stopRemoteSync();
+            }
+          });
+        } else {
+          messages.push({ role: 'agent', content: '[err] ' + (data.error || 'Token 无效或已过期，请重新扫码') });
+          renderMessages();
+        }
+      })
+      .catch(function () {
+        messages.push({ role: 'agent', content: '[err] 无法连接到服务器，请确认手机和电脑在同一网络' });
+        renderMessages();
+      });
   }
 
   return { render: render };

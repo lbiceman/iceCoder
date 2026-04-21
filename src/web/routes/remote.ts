@@ -48,6 +48,44 @@ function getLocalIP(): string {
 }
 
 /**
+ * 尝试从 cloudflared 获取公网隧道 URL。
+ * cloudflared quick tunnel 会在 metrics 端口暴露隧道信息。
+ */
+let cachedTunnelUrl: string | null = null;
+let tunnelCheckTime = 0;
+
+async function getTunnelUrl(): Promise<string | null> {
+  // 环境变量优先
+  if (process.env.TUNNEL_URL) {
+    return process.env.TUNNEL_URL;
+  }
+
+  // 缓存 30 秒
+  if (cachedTunnelUrl && Date.now() - tunnelCheckTime < 30_000) {
+    return cachedTunnelUrl;
+  }
+
+  try {
+    // cloudflared metrics 默认在 127.0.0.1:20241
+    const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      const data = await res.json() as { hostname?: string };
+      if (data.hostname) {
+        cachedTunnelUrl = `https://${data.hostname}`;
+        tunnelCheckTime = Date.now();
+        return cachedTunnelUrl;
+      }
+    }
+  } catch {
+    // cloudflared 未运行或不可达
+  }
+
+  cachedTunnelUrl = null;
+  tunnelCheckTime = Date.now();
+  return null;
+}
+
+/**
  * 清除所有现有会话。
  * 每次生成新二维码时调用，使旧链接失效。
  */
@@ -98,10 +136,12 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
 
     sessions.set(token, session);
 
-    // 获取本机局域网 IP 和端口
+    // 获取访问 URL（优先公网隧道，回退局域网）
     const localIP = getLocalIP();
     const port = process.env.PORT ?? '3000';
-    const url = `http://${localIP}:${port}/?token=${token}`;
+    const tunnelUrl = await getTunnelUrl();
+    const baseUrl = tunnelUrl || `http://${localIP}:${port}`;
+    const url = `${baseUrl}/?token=${token}`;
 
     // 生成二维码 data URL
     let qrDataUrl = '';
@@ -124,6 +164,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
       qrDataUrl,
       localIP,
       port,
+      tunnel: !!tunnelUrl,
     });
   });
 
@@ -131,6 +172,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
    * GET /api/remote/verify - 验证 token 有效性（手机端调用）
    */
   router.get('/verify', (req: Request, res: Response): void => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const token = req.query.token as string;
     if (!token) {
       res.status(400).json({ valid: false, error: '缺少 token' });

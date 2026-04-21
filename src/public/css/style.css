@@ -508,12 +508,10 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   border: none;
   color: var(--text-muted);
   font-size: 16px;
-  padding: 0 4px;
+  padding: 4px 8px;
   line-height: 1;
-  opacity: 0;
-  transition: opacity 0.15s;
+  opacity: 1;
 }
-.history-item:hover .history-delete { opacity: 1; }
 .history-delete:hover { color: var(--danger); }
 .history-empty {
   padding: 24px 16px;

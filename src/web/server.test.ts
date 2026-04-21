@@ -83,7 +83,7 @@ describe('Web Server', () => {
       expect(response.status).toBe(200);
       const text = await response.text();
       expect(text).toContain('<!DOCTYPE html>');
-      expect(text).toContain('Multi-Agent Orchestrator');
+      expect(text).toContain('ICE');
     });
   });
 

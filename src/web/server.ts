@@ -29,7 +29,7 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   const app = express();
 
   // 解析 JSON 和 URL 编码的请求体
-  app.use(express.json());
+  app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ extended: true }));
 
   // 挂载 API 路由
@@ -46,18 +46,18 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
     : path.join(__dirname, '../../src/public'));
 
   if (isProd) {
-    // 生产模式：提供 Vite 构建产物
     app.use(express.static(staticDir));
-
-    // SPA 回退
     app.get('/{*splat}', (_req: Request, res: Response) => {
+      if (_req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(staticDir, 'index.html'));
     });
   } else {
-    // 开发模式：前端由 Vite dev server 提供，Express 只处理 API
-    // 同时提供静态文件作为回退（直接访问 Express 端口时）
-    app.use(express.static(staticDir));
+    // 开发模式：JS/CSS 也不缓存，方便调试
+    app.use(express.static(staticDir, { etag: false, lastModified: false }));
     app.get('/{*splat}', (_req: Request, res: Response) => {
+      if (_req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(staticDir, 'index.html'));
     });
   }

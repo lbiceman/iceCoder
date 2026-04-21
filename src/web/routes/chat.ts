@@ -14,8 +14,52 @@ import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
+import { setActiveSession } from './sessions.js';
 
 const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
+const SESSIONS_DIR = path.resolve('data/sessions');
+
+/** 将用户消息和 AI 回复保存到服务端会话文件 */
+async function saveToSession(sessionId: string, userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
+  try {
+    await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
+    const sessionFile = path.join(SESSIONS_DIR, `${sessionId.replace(/[^a-zA-Z0-9_-]/g, '')}.json`);
+    const listFile = path.join(SESSIONS_DIR, '_list.json');
+
+    // 读取已有消息
+    let existing: { role: string; content: string }[] = [];
+    try {
+      const data = await fsPromises.readFile(sessionFile, 'utf-8');
+      existing = JSON.parse(data);
+    } catch { /* file doesn't exist yet */ }
+
+    // 追加 step 消息、用户消息和 AI 回复
+    for (const s of steps) {
+      existing.push({ role: 'agent', content: s });
+    }
+    existing.push({ role: 'user', content: userMsg });
+    if (agentMsg) {
+      existing.push({ role: 'agent', content: agentMsg });
+    }
+
+    await fsPromises.writeFile(sessionFile, JSON.stringify(existing), 'utf-8');
+
+    // 更新会话列表
+    let list: { id: string; title: string; updatedAt: number }[] = [];
+    try {
+      const listData = await fsPromises.readFile(listFile, 'utf-8');
+      list = JSON.parse(listData);
+    } catch { /* empty */ }
+
+    const title = userMsg.length > 30 ? userMsg.substring(0, 30) + '…' : userMsg;
+    const idx = list.findIndex(s => s.id === sessionId);
+    const meta = { id: sessionId, title, updatedAt: Date.now() };
+    if (idx >= 0) { list[idx] = meta; } else { list.unshift(meta); }
+    await fsPromises.writeFile(listFile, JSON.stringify(list), 'utf-8');
+  } catch (err) {
+    console.error('[sessions] Failed to save:', err);
+  }
+}
 
 /** 读取系统提示词文件，失败时回退到最小提示词 */
 async function loadSystemPrompt(): Promise<string> {
@@ -58,7 +102,7 @@ export function createChatRouter(options: ChatRouterOptions): Router {
   const router = Router();
 
   const uploadedFiles: Map<string, { path: string; filename: string }> = new Map();
-  const pendingChats: Map<string, { message: string }> = new Map();
+  const pendingChats: Map<string, { message: string; sessionId?: string }> = new Map();
   const activeStreams: Map<string, AbortController> = new Map();
   /** 待用户确认的工具调用：chatId → { resolve } */
   const pendingConfirms: Map<string, { resolve: (approved: boolean) => void }> = new Map();
@@ -86,7 +130,7 @@ export function createChatRouter(options: ChatRouterOptions): Router {
    */
   router.post('/message', async (req: Request, res: Response): Promise<void> => {
     try {
-      const { message, fileId, command } = req.body as { message?: string; fileId?: string; command?: string };
+      const { message, fileId, command, sessionId } = req.body as { message?: string; fileId?: string; command?: string; sessionId?: string };
 
       if (!message && !fileId && !command) {
         res.status(400).json({ error: '需要提供消息、文件ID或命令' });
@@ -122,7 +166,13 @@ export function createChatRouter(options: ChatRouterOptions): Router {
       }
 
       const chatId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      pendingChats.set(chatId, { message: userMessage });
+      pendingChats.set(chatId, { message: userMessage, sessionId: sessionId || undefined });
+
+      // 记录 PC 端当前活跃会话
+      if (sessionId) {
+        setActiveSession(sessionId).catch(() => {});
+      }
+
       res.json({ success: true, chatId, message: '消息已接收', filename });
     } catch (err) {
       res.status(500).json({ error: `消息处理失败: ${err instanceof Error ? err.message : '未知错误'}` });
@@ -205,15 +255,28 @@ export function createChatRouter(options: ChatRouterOptions): Router {
       // ── 创建 Harness 并运行核心循环 ──
       const harness = new Harness(harnessConfig, toolExecutor);
 
+      // 收集 step 消息用于保存
+      const stepMessages: string[] = [];
+
       const result = await harness.run(
         pending.message,
         (msgs, opts) => llmAdapter.chat(msgs, opts),
         (event) => {
           if (abortController.signal.aborted) return;
           try {
-            // 将 HarnessStepEvent 转换为前端兼容的 SSE 格式
             res.write(`data: ${JSON.stringify({ step: event })}\n\n`);
           } catch { /* closed */ }
+
+          // 收集 step 消息
+          if (event.type === 'thinking' && event.content) {
+            stepMessages.push('[think] ' + event.content.substring(0, 200));
+          } else if (event.type === 'tool_call' && event.toolName) {
+            stepMessages.push('[call] ' + event.toolName);
+          } else if (event.type === 'tool_result' && event.toolName) {
+            const icon = event.toolSuccess ? '[ok]' : '[err]';
+            const preview = (event.toolOutput || event.toolError || '').substring(0, 150);
+            stepMessages.push(icon + ' ' + event.toolName + ' → ' + preview);
+          }
         },
       );
 
@@ -231,6 +294,12 @@ export function createChatRouter(options: ChatRouterOptions): Router {
             outputTokens: result.loopState.totalOutputTokens,
           },
         })}\n\n`);
+
+        // 保存到服务端会话
+        if (pending.sessionId) {
+          saveToSession(pending.sessionId, pending.message, result.content, stepMessages)
+            .catch(err => console.error('[sessions] save error:', err));
+        }
       }
     } catch (err) {
       if (abortController.signal.aborted) {

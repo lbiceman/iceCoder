@@ -9,6 +9,7 @@ import { URL } from 'url';
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { getSession, markSessionConnected, removeSession } from './routes/remote.js';
+import { getActiveSession } from './routes/sessions.js';
 import { Harness } from '../harness/harness.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -16,12 +17,58 @@ import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 
 const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
+const SESSIONS_DIR = path.resolve('data/sessions');
 
 async function loadSystemPrompt(): Promise<string> {
   try {
     return await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
   } catch {
     return '你是一个智能助手，拥有工具能力。根据用户需求自主决定使用哪些工具。回答使用中文。';
+  }
+}
+
+/** 将远程消息追加到活跃会话文件（与 PC 端共享） */
+async function appendToActiveSession(userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
+  try {
+    const activeId = await getActiveSession();
+    if (!activeId) return;
+
+    await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
+    const safeId = activeId.replace(/[^a-zA-Z0-9_-]/g, '');
+    const sessionFile = path.join(SESSIONS_DIR, `${safeId}.json`);
+
+    let existing: { role: string; content: string }[] = [];
+    try {
+      const data = await fsPromises.readFile(sessionFile, 'utf-8');
+      existing = JSON.parse(data);
+    } catch { /* file doesn't exist yet */ }
+
+    // 追加 step 消息、用户消息和 AI 回复
+    for (const s of steps) {
+      existing.push({ role: 'agent', content: s });
+    }
+    existing.push({ role: 'user', content: userMsg });
+    if (agentMsg) {
+      existing.push({ role: 'agent', content: agentMsg });
+    }
+
+    await fsPromises.writeFile(sessionFile, JSON.stringify(existing), 'utf-8');
+
+    // 更新会话列表
+    const listFile = path.join(SESSIONS_DIR, '_list.json');
+    let list: { id: string; title: string; updatedAt: number }[] = [];
+    try {
+      const listData = await fsPromises.readFile(listFile, 'utf-8');
+      list = JSON.parse(listData);
+    } catch { /* empty */ }
+
+    const title = userMsg.length > 30 ? userMsg.substring(0, 30) + '…' : userMsg;
+    const idx = list.findIndex(s => s.id === activeId);
+    const meta = { id: activeId, title, updatedAt: Date.now() };
+    if (idx >= 0) { list[idx] = meta; } else { list.unshift(meta); }
+    await fsPromises.writeFile(listFile, JSON.stringify(list), 'utf-8');
+  } catch (err) {
+    console.error('[remote-ws] Failed to save to session:', err);
   }
 }
 
@@ -188,12 +235,27 @@ async function handleRemoteMessage(
 
   const harness = new Harness(harnessConfig, toolExecutor);
 
+  // 收集 step 消息用于持久化到会话文件
+  const stepMessages: string[] = [];
+
   const result = await harness.run(
     message,
     (msgs, opts) => llmAdapter.chat(msgs, opts),
     (event) => {
       if (ws.readyState !== WebSocket.OPEN) return;
       sendJSON(ws, { type: 'step', step: event });
+
+      // 收集 step 消息（与前端 handleRemoteStep 逻辑一致）
+      if (event.type === 'tool_call') {
+        const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
+        const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
+        stepMessages.push(`[call] ${event.toolName}(${truncated})`);
+      } else if (event.type === 'tool_result') {
+        const icon = event.toolSuccess ? '[ok]' : '[err]';
+        const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
+        const truncated = preview.length > 150 ? preview.substring(0, 150) + '…' : preview;
+        stepMessages.push(`${icon} ${event.toolName} → ${truncated}`);
+      }
     },
   );
 
@@ -210,6 +272,11 @@ async function handleRemoteMessage(
       outputTokens: result.loopState.totalOutputTokens,
     });
   }
+
+  // 持久化到服务端会话文件（与 PC 端共享）
+  appendToActiveSession(message, result.content, stepMessages).catch(err => {
+    console.error('[remote-ws] Failed to persist session:', err);
+  });
 }
 
 function sendJSON(ws: WebSocket, data: unknown): void {
