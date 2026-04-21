@@ -1,23 +1,23 @@
 /**
- * SSE (Server-Sent Events) Manager.
- * Manages SSE connections by execution ID and pushes events to connected clients.
+ * SSE（服务器推送事件）管理器。
+ * 按执行 ID 管理 SSE 连接并向已连接的客户端推送事件。
  */
 
 import type { Response } from 'express';
 import type { SSEEvent } from './types.js';
 
 /**
- * Manages Server-Sent Event connections for real-time pipeline updates.
+ * 管理用于实时流水线更新的服务器推送事件连接。
  */
 export class SSEManager {
   private connections: Map<string, Response[]> = new Map();
 
   /**
-   * Adds an SSE connection for a given execution ID.
-   * Sets proper SSE headers on the response.
+   * 为给定执行 ID 添加 SSE 连接。
+   * 在响应上设置正确的 SSE 头。
    */
   addConnection(executionId: string, res: Response): void {
-    // Set SSE headers
+    // 设置 SSE 头
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -27,18 +27,18 @@ export class SSEManager {
     existing.push(res);
     this.connections.set(executionId, existing);
 
-    // Remove connection on client disconnect
+    // 客户端断开时移除连接
     res.on('close', () => {
       this.removeConnection(executionId, res);
     });
   }
 
   /**
-   * Removes a specific SSE connection for an execution ID.
+   * 移除指定执行 ID 的特定 SSE 连接。
    */
   removeConnection(executionId: string, res?: Response): void {
     if (!res) {
-      // Remove all connections for this execution ID
+      // 移除此执行 ID 的所有连接
       const connections = this.connections.get(executionId);
       if (connections) {
         for (const conn of connections) {
@@ -61,7 +61,7 @@ export class SSEManager {
   }
 
   /**
-   * Pushes an SSE event to all connections for a given execution ID.
+   * 向给定执行 ID 的所有连接推送 SSE 事件。
    */
   push(executionId: string, event: SSEEvent): void {
     const connections = this.connections.get(executionId);
@@ -77,14 +77,14 @@ export class SSEManager {
   }
 
   /**
-   * Returns the number of active connections for an execution ID.
+   * 返回指定执行 ID 的活跃连接数。
    */
   getConnectionCount(executionId: string): number {
     return this.connections.get(executionId)?.length ?? 0;
   }
 
   /**
-   * Returns all active execution IDs with connections.
+   * 返回所有有连接的活跃执行 ID。
    */
   getActiveExecutionIds(): string[] {
     return Array.from(this.connections.keys());

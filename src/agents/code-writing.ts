@@ -1,9 +1,9 @@
 /**
- * Code Writing Agent
- * Receives task Markdown and generates source code files per task.
- * Generated code uses Node.js/TypeScript stack.
- * Adds file header comments with task number and description.
- * Flags tasks with unclear descriptions.
+ * 代码编写智能体
+ * 接收任务 Markdown 并为每个任务生成源代码文件。
+ * 生成的代码使用 Node.js/TypeScript 技术栈。
+ * 在文件头部添加包含任务编号和描述的注释。
+ * 标记描述不清晰的任务。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -18,7 +18,7 @@ export class CodeWritingAgent extends BaseAgent {
   protected async doExecute(context: AgentContext): Promise<AgentResult> {
     const tasks = context.inputData.tasks;
 
-    // Validate input task document
+    // 验证输入任务文档
     if (!tasks || typeof tasks !== 'string' || tasks.trim().length === 0) {
       return {
         success: false,
@@ -29,7 +29,7 @@ export class CodeWritingAgent extends BaseAgent {
       };
     }
 
-    // Construct prompt for LLM to generate source code
+    // 构建提示让 LLM 生成源代码
     const prompt = `You are a professional software engineer specializing in Node.js and TypeScript. Based on the following task breakdown document, generate source code files for each task.
 
 Requirements:
@@ -57,13 +57,13 @@ Generate all source files needed to implement the tasks described below.
 ${tasks}
 --- End of Task Document ---`;
 
-    // Call LLM to generate the source code
+    // 调用 LLM 生成源代码
     const result = await this.callLLM(prompt, context);
 
-    // Parse generated files from the LLM response
+    // 从 LLM 响应中解析生成的文件
     const files = this.parseGeneratedFiles(result);
 
-    // Save all generated source files to the output directory
+    // 将所有生成的源文件保存到输出目录
     const savedPaths: string[] = [];
     for (const file of files) {
       const savedPath = await this.saveDocument(file.content, file.filepath, context.outputDir);
@@ -86,8 +86,8 @@ ${tasks}
   }
 
   /**
-   * Parses the LLM response to extract individual file contents.
-   * Expects format: === FILE: <filepath> === ... === END FILE ===
+   * 解析 LLM 响应以提取各个文件内容。
+   * 期望格式：=== FILE: <filepath> === ... === END FILE ===
    */
   private parseGeneratedFiles(content: string): Array<{ filepath: string; content: string }> {
     const files: Array<{ filepath: string; content: string }> = [];
@@ -100,7 +100,7 @@ ${tasks}
       files.push({ filepath, content: fileContent });
     }
 
-    // If no structured files found, save the entire response as a single file
+    // 如果没有找到结构化文件，将整个响应保存为单个文件
     if (files.length === 0 && content.trim().length > 0) {
       files.push({ filepath: 'generated-code.ts', content: content.trim() });
     }

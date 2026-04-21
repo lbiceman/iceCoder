@@ -1,7 +1,7 @@
 /**
- * Report Generator
- * Generates Markdown reports for individual pipeline stages and overall pipeline summaries.
- * Saves reports to the designated output directory with a consistent naming convention.
+ * 报告生成器
+ * 为单个流水线阶段和整体流水线摘要生成 Markdown 报告。
+ * 使用一致的命名规范将报告保存到指定的输出目录。
  */
 
 import { mkdir, writeFile } from 'fs/promises';
@@ -9,18 +9,17 @@ import { join, dirname } from 'path';
 import type { StageStatus, AgentResult, PipelineState } from './types.js';
 
 /**
- * ReportGenerator produces Markdown reports for pipeline stage executions
- * and overall pipeline summaries.
+ * ReportGenerator 为流水线阶段执行和整体流水线摘要生成 Markdown 报告。
  */
 export class ReportGenerator {
   /**
-   * Generates a Markdown report for a single pipeline stage.
-   * Includes stage name, start time, end time, duration, status, and output summary.
+   * 为单个流水线阶段生成 Markdown 报告。
+   * 包含阶段名称、开始时间、结束时间、持续时间、状态和输出摘要。
    *
-   * @param stageStatus - The status object for the completed stage
-   * @param agentResult - The result produced by the agent for this stage
-   * @param executionId - The unique pipeline execution ID
-   * @returns A Markdown-formatted string containing the stage report
+   * @param stageStatus - 已完成阶段的状态对象
+   * @param agentResult - 该阶段智能体产生的结果
+   * @param executionId - 唯一的流水线执行 ID
+   * @returns 包含阶段报告的 Markdown 格式字符串
    */
   generateStageReport(stageStatus: StageStatus, agentResult: AgentResult, executionId: string): string {
     const startTime = stageStatus.startTime ?? new Date();
@@ -69,11 +68,11 @@ export class ReportGenerator {
   }
 
   /**
-   * Generates a summary Markdown report for the entire pipeline execution.
-   * Includes an overview of all stages and a final conclusion.
+   * 为整个流水线执行生成摘要 Markdown 报告。
+   * 包含所有阶段的概览和最终结论。
    *
-   * @param pipelineState - The complete pipeline state after execution
-   * @returns A Markdown-formatted string containing the pipeline summary
+   * @param pipelineState - 执行后的完整流水线状态
+   * @returns 包含流水线摘要的 Markdown 格式字符串
    */
   generatePipelineSummary(pipelineState: PipelineState): string {
     const startTime = pipelineState.startTime;
@@ -167,13 +166,13 @@ export class ReportGenerator {
   }
 
   /**
-   * Saves report content to a file in the specified output directory.
-   * Creates the output directory if it does not exist.
+   * 将报告内容保存到指定输出目录中的文件。
+   * 如果输出目录不存在则自动创建。
    *
-   * @param content - The report content to write
-   * @param filename - The filename for the report
-   * @param outputDir - The directory to save the report in
-   * @returns The full path to the saved report file
+   * @param content - 要写入的报告内容
+   * @param filename - 报告的文件名
+   * @param outputDir - 保存报告的目录
+   * @returns 保存的报告文件的完整路径
    */
   async saveReport(content: string, filename: string, outputDir: string): Promise<string> {
     const filePath = join(outputDir, filename);
@@ -183,12 +182,12 @@ export class ReportGenerator {
   }
 
   /**
-   * Generates a report filename following the naming convention:
+   * 按照命名规范生成报告文件名：
    * {executionId}_{stageName}_report.md
    *
-   * @param executionId - The pipeline execution ID
-   * @param stageName - The name of the stage
-   * @returns The formatted filename string
+   * @param executionId - 流水线执行 ID
+   * @param stageName - 阶段名称
+   * @returns 格式化的文件名字符串
    */
   getReportFilename(executionId: string, stageName: string): string {
     return `${executionId}_${stageName}_report.md`;

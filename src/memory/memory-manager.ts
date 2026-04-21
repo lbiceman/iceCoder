@@ -1,8 +1,8 @@
 /**
- * MemoryManager coordinates all five memory sub-modules, providing a unified
- * interface for storing, retrieving, updating, and deleting memories.
- * Routes operations to the correct sub-module based on memory type.
- * Implements memory consolidation, decay, importance boosting, and association discovery.
+ * MemoryManager 协调所有五个记忆子模块，提供统一的
+ * 存储、检索、更新和删除记忆的接口。
+ * 根据记忆类型将操作路由到正确的子模块。
+ * 实现记忆合并、衰减、重要性提升和关联发现。
  */
 
 import { Memory, MemoryType, EpisodicEvent, Triple, Concept, Skill } from './types.js';
@@ -14,28 +14,28 @@ import { SemanticMemory } from './semantic-memory.js';
 import { ProceduralMemory } from './procedural-memory.js';
 
 /**
- * Configuration for the MemoryManager.
+ * MemoryManager 的配置。
  */
 export interface MemoryManagerConfig {
   shortTerm?: Partial<ShortTermMemoryConfig>;
   longTerm?: Partial<LongTermMemoryConfig>;
-  /** Importance score threshold for consolidation (short-term → long-term) */
+  /** 合并的重要性评分阈值（短期 → 长期） */
   consolidationThreshold?: number;
-  /** Decay interval in milliseconds */
+  /** 衰减间隔（毫秒） */
   decayInterval?: number;
 }
 
 /**
- * Association link between two memories.
+ * 两个记忆之间的关联链接。
  */
 export interface MemoryAssociation {
   sourceId: string;
   targetId: string;
-  strength: number; // 0-1 representing association strength
+  strength: number; // 0-1 表示关联强度
   type: 'content_similarity' | 'temporal_proximity' | 'both';
 }
 
-/** Default MemoryManager configuration */
+/** 默认 MemoryManager 配置 */
 const DEFAULT_CONFIG: Required<MemoryManagerConfig> = {
   shortTerm: { capacity: 100, ttl: 300000 },
   longTerm: { maxResults: 10, similarityThreshold: 0.5, dbPath: './data/memory' },
@@ -44,14 +44,14 @@ const DEFAULT_CONFIG: Required<MemoryManagerConfig> = {
 };
 
 /**
- * Dimension for simple hash-based embeddings used with LongTermMemory.
+ * 与 LongTermMemory 一起使用的简单哈希嵌入维度。
  */
 const EMBEDDING_DIMENSION = 128;
 
 /**
- * MemoryManager provides a unified interface for all memory operations,
- * routing to the appropriate sub-module based on memory type.
- * Implements consolidation, decay, importance boosting, and association discovery.
+ * MemoryManager 为所有记忆操作提供统一接口，
+ * 根据记忆类型路由到适当的子模块。
+ * 实现合并、衰减、重要性提升和关联发现。
  */
 export class MemoryManager {
   private shortTermMemory: ShortTermMemory;
@@ -83,13 +83,13 @@ export class MemoryManager {
   }
 
   /**
-   * Store a memory, routing to the correct sub-module based on type.
+   * 存储记忆，根据类型路由到正确的子模块。
    *
-   * @param content - The content to store
-   * @param type - The memory type determining which sub-module to use
-   * @param metadata - Optional metadata for the memory
-   * @returns The created Memory object
-   * @throws Error if the memory type is not supported
+   * @param content - 要存储的内容
+   * @param type - 决定使用哪个子模块的记忆类型
+   * @param metadata - 可选的记忆元数据
+   * @returns 创建的 Memory 对象
+   * @throws 如果记忆类型不支持则抛出错误
    */
   async store(content: string, type: MemoryType, metadata?: Record<string, any>): Promise<Memory> {
     this.validateMemoryType(type);
@@ -116,12 +116,12 @@ export class MemoryManager {
   }
 
   /**
-   * Retrieve memories matching a query, optionally filtered by type.
+   * 检索匹配查询的记忆，可选按类型过滤。
    *
-   * @param query - Search query string
-   * @param type - Optional memory type to filter by (queries all if not specified)
-   * @param limit - Maximum number of results to return
-   * @returns Array of matching Memory objects
+   * @param query - 搜索查询字符串
+   * @param type - 可选的记忆类型过滤（不指定则查询所有）
+   * @param limit - 返回的最大结果数
+   * @returns 匹配的 Memory 对象数组
    */
   async retrieve(query: string, type?: MemoryType, limit: number = 10): Promise<Memory[]> {
     if (type) {
@@ -129,19 +129,19 @@ export class MemoryManager {
       return this.retrieveFromModule(query, type, limit);
     }
 
-    // Query all sub-modules and merge results
+    // 查询所有子模块并合并结果
     const results: Memory[] = [];
 
     const shortTermResults = await this.shortTermMemory.retrieve(query, limit);
     results.push(...shortTermResults);
 
-    // For long-term memory, use a simple embedding of the query
+    // 对于长期记忆，使用查询的简单嵌入
     try {
       const queryEmbedding = this.generateSimpleEmbedding(query);
       const longTermResults = await this.longTermMemory.retrieve(queryEmbedding, limit);
       results.push(...longTermResults);
     } catch {
-      // Long-term memory may not be initialized yet
+      // 长期记忆可能尚未初始化
     }
 
     const episodicAll = await this.episodicMemory.getAll();
@@ -162,37 +162,36 @@ export class MemoryManager {
       .slice(0, limit);
     results.push(...proceduralMatched);
 
-    // Sort by importance score descending and limit
+    // 按重要性评分降序排列并限制数量
     results.sort((a, b) => b.importanceScore - a.importanceScore);
     return results.slice(0, limit);
   }
 
   /**
-   * Delete a memory by its ID. Tries all sub-modules since we may not know
-   * which module holds the memory.
+   * 按 ID 删除记忆。尝试所有子模块，因为可能不知道记忆在哪个模块中。
    *
-   * @param memoryId - The unique identifier of the memory to delete
-   * @returns true if the memory was found and deleted, false otherwise
+   * @param memoryId - 要删除的记忆的唯一标识符
+   * @returns 如果找到并删除了记忆返回 true，否则返回 false
    */
   async delete(memoryId: string): Promise<boolean> {
-    // Try short-term memory
+    // 尝试短期记忆
     const shortTermDeleted = await this.shortTermMemory.remove(memoryId);
     if (shortTermDeleted) return true;
 
-    // Try episodic memory
+    // 尝试情景记忆
     const episodicDeleted = await this.episodicMemory.remove(memoryId);
     if (episodicDeleted) return true;
 
-    // Try semantic memory
+    // 尝试语义记忆
     const semanticDeleted = await this.semanticMemory.remove(memoryId);
     if (semanticDeleted) return true;
 
-    // Try procedural memory
+    // 尝试程序性记忆
     const proceduralDeleted = await this.proceduralMemory.remove(memoryId);
     if (proceduralDeleted) return true;
 
-    // Try long-term memory last (LanceDB delete doesn't indicate if row existed)
-    // First check if the memory exists in long-term storage
+    // 最后尝试长期记忆（LanceDB 删除不指示行是否存在）
+    // 先检查记忆是否存在于长期存储中
     try {
       const allLongTerm = await this.longTermMemory.getAll();
       const exists = allLongTerm.some(m => m.id === memoryId);
@@ -208,16 +207,15 @@ export class MemoryManager {
   }
 
   /**
-   * Update a memory by its ID. Finds the memory across all sub-modules
-   * and applies the partial updates.
+   * 按 ID 更新记忆。在所有子模块中查找记忆并应用部分更新。
    *
-   * @param memoryId - The unique identifier of the memory to update
-   * @param updates - Partial Memory fields to update
-   * @returns The updated Memory object
-   * @throws Error if the memory is not found
+   * @param memoryId - 要更新的记忆的唯一标识符
+   * @param updates - 要更新的部分 Memory 字段
+   * @returns 更新后的 Memory 对象
+   * @throws 如果记忆未找到则抛出错误
    */
   async update(memoryId: string, updates: Partial<Memory>): Promise<Memory> {
-    // Search all sub-modules for the memory
+    // 在所有子模块中搜索记忆
     const allMemories = await this.getAllMemories();
     const memory = allMemories.find(m => m.id === memoryId);
 
@@ -225,7 +223,7 @@ export class MemoryManager {
       throw new Error(`Memory not found: ${memoryId}`);
     }
 
-    // Apply updates
+    // 应用更新
     if (updates.content !== undefined) memory.content = updates.content;
     if (updates.importanceScore !== undefined) memory.importanceScore = updates.importanceScore;
     if (updates.tags !== undefined) memory.tags = updates.tags;
@@ -236,11 +234,11 @@ export class MemoryManager {
   }
 
   /**
-   * Consolidate short-term memories to long-term memory.
-   * Transfers memories with importance score above the configurable threshold
-   * to long-term memory with compression, then removes them from short-term.
+   * 将短期记忆合并到长期记忆。
+   * 将重要性评分超过可配置阈值的记忆通过压缩传输到长期记忆，
+   * 然后从短期记忆中移除。
    *
-   * @returns Number of memories consolidated
+   * @returns 合并的记忆数量
    */
   async consolidate(): Promise<number> {
     const shortTermMemories = await this.shortTermMemory.getAll();
@@ -248,15 +246,15 @@ export class MemoryManager {
 
     for (const memory of shortTermMemories) {
       if (memory.importanceScore >= this.config.consolidationThreshold) {
-        // Generate embedding and store in long-term memory
+        // 生成嵌入并存储到长期记忆
         const embedding = this.generateSimpleEmbedding(memory.content);
         try {
           await this.longTermMemory.store(memory, embedding);
-          // Remove from short-term memory after successful transfer
+          // 成功传输后从短期记忆中移除
           await this.shortTermMemory.remove(memory.id);
           consolidatedCount++;
         } catch {
-          // If long-term storage fails, keep in short-term
+          // 如果长期存储失败，保留在短期记忆中
         }
       }
     }
@@ -287,12 +285,12 @@ export class MemoryManager {
     for (const memory of allMemories) {
       const timeSinceLastAccess = now - memory.lastAccessedAt.getTime();
 
-      // Only decay if some time has passed
+      // 只有经过一段时间才进行衰减
       if (timeSinceLastAccess <= 0) {
         continue;
       }
 
-      // Determine decay rate based on current importance score
+      // 根据当前重要性评分确定衰减率
       let decayRate: number;
       if (memory.importanceScore > 0.7) {
         decayRate = 0.95; // slow decay
@@ -302,22 +300,22 @@ export class MemoryManager {
         decayRate = 0.80; // fast decay
       }
 
-      // Apply exponential decay
+      // 应用指数衰减
       const decayExponent = timeSinceLastAccess / this.config.decayInterval;
       const newScore = memory.importanceScore * Math.pow(decayRate, decayExponent);
 
-      // Check if memory should be removed (score effectively 0)
+      // 检查记忆是否应被移除（评分实际为 0）
       if (newScore < 0.001) {
         memoriesToRemove.push({ id: memory.id, type: memory.type });
         affectedCount++;
       } else if (newScore !== memory.importanceScore) {
-        // Update the importance score
+        // 更新重要性评分
         memory.importanceScore = newScore;
         affectedCount++;
       }
     }
 
-    // Remove memories that have decayed to 0
+    // 移除已衰减到 0 的记忆
     for (const { id } of memoriesToRemove) {
       await this.delete(id);
     }
@@ -342,14 +340,14 @@ export class MemoryManager {
       throw new Error(`Memory not found: ${memoryId}`);
     }
 
-    // Track access count
+    // 跟踪访问次数
     const currentCount = (this.accessCounts.get(memoryId) ?? 0) + 1;
     this.accessCounts.set(memoryId, currentCount);
 
-    // Calculate boost: min(0.1 * (accessCount / 10), 0.2)
+    // 计算提升值：min(0.1 * (accessCount / 10), 0.2)
     const boost = Math.min(0.1 * (currentCount / 10), 0.2);
 
-    // Apply boost, clamping to [0, 1]
+    // 应用提升，截断到 [0, 1]
     memory.importanceScore = Math.min(1, memory.importanceScore + boost);
     memory.lastAccessedAt = new Date();
 
@@ -369,9 +367,9 @@ export class MemoryManager {
     const allMemories = await this.getAllMemories();
     const newAssociations: MemoryAssociation[] = [];
 
-    // Threshold for content similarity (Jaccard index)
+    // 内容相似度阈值（Jaccard 指数）
     const CONTENT_SIMILARITY_THRESHOLD = 0.3;
-    // Threshold for temporal proximity (within 5 minutes)
+    // 时间邻近度阈值（5 分钟内）
     const TEMPORAL_PROXIMITY_MS = 5 * 60 * 1000;
 
     for (let i = 0; i < allMemories.length; i++) {
@@ -379,7 +377,7 @@ export class MemoryManager {
         const memA = allMemories[i];
         const memB = allMemories[j];
 
-        // Check if association already exists
+        // 检查关联是否已存在
         const existingAssoc = this.associations.find(
           a => (a.sourceId === memA.id && a.targetId === memB.id) ||
                (a.sourceId === memB.id && a.targetId === memA.id)
@@ -388,14 +386,14 @@ export class MemoryManager {
           continue;
         }
 
-        // Calculate content similarity (word overlap / Jaccard)
+        // 计算内容相似度（词重叠 / Jaccard）
         const contentSimilarity = this.calculateWordOverlap(memA.content, memB.content);
 
-        // Calculate temporal proximity
+        // 计算时间邻近度
         const timeDiff = Math.abs(memA.createdAt.getTime() - memB.createdAt.getTime());
         const isTemporallyClose = timeDiff <= TEMPORAL_PROXIMITY_MS;
 
-        // Determine association type and strength
+        // 确定关联类型和强度
         const hasContentSimilarity = contentSimilarity >= CONTENT_SIMILARITY_THRESHOLD;
 
         if (hasContentSimilarity && isTemporallyClose) {

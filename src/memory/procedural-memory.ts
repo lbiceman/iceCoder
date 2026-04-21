@@ -1,14 +1,14 @@
 /**
- * Procedural Memory module for storing and managing skills and habits.
- * Tracks skill proficiency, usage count, and mastery status.
- * Proficiency improves with successful executions and degrades with failures.
+ * 程序性记忆模块，用于存储和管理技能与习惯。
+ * 跟踪技能熟练度、使用次数和掌握状态。
+ * 熟练度随成功执行而提升，随失败而下降。
  */
 
 import { Memory, MemoryType, Skill } from './types.js';
 import { createMemory } from './memory.js';
 
 /**
- * Internal tracking data for skill execution history.
+ * 技能执行历史的内部跟踪数据。
  */
 interface SkillExecutionData {
   totalExecutions: number;
@@ -16,20 +16,19 @@ interface SkillExecutionData {
 }
 
 /**
- * ProceduralMemory manages skill-based memories representing learned procedures,
- * habits, and techniques. Each skill tracks proficiency (0-1), usage count,
- * and mastery status (mastered when proficiency >= 0.8).
+ * ProceduralMemory 管理基于技能的记忆，表示已学习的程序、习惯和技术。
+ * 每个技能跟踪熟练度 (0-1)、使用次数和掌握状态（熟练度 >= 0.8 时标记为已掌握）。
  */
 export class ProceduralMemory {
   private memories: Memory[] = [];
   private executionData: Map<string, SkillExecutionData> = new Map();
 
   /**
-   * Store a new skill as a Memory object.
-   * Sets initial proficiency to 0.1, usageCount to 0, and mastered to false.
+   * 将新技能存储为 Memory 对象。
+   * 设置初始熟练度为 0.1，usageCount 为 0，mastered 为 false。
    *
-   * @param skill - The skill to store (name, steps, lastUsedAt)
-   * @returns The created Memory object
+   * @param skill - 要存储的技能（name、steps、lastUsedAt）
+   * @returns 创建的 Memory 对象
    */
   async store(
     skill: Omit<Skill, 'proficiency' | 'usageCount' | 'mastered'>
@@ -59,14 +58,14 @@ export class ProceduralMemory {
   }
 
   /**
-   * Record an execution of a skill, updating usage count and proficiency.
-   * Proficiency is calculated by blending the success rate with the current proficiency.
-   * A skill is marked as mastered when proficiency reaches 0.8.
+   * 记录技能的一次执行，更新使用次数和熟练度。
+   * 熟练度通过混合成功率和当前熟练度来计算。
+   * 当熟练度达到 0.8 时标记为已掌握。
    *
-   * @param skillName - The name of the skill that was executed
-   * @param success - Whether the execution was successful
-   * @returns The updated Skill data
-   * @throws Error if the skill is not found
+   * @param skillName - 被执行的技能名称
+   * @param success - 执行是否成功
+   * @returns 更新后的 Skill 数据
+   * @throws 如果技能未找到则抛出错误
    */
   async recordExecution(skillName: string, success: boolean): Promise<Skill> {
     const memory = this.memories.find(
@@ -77,7 +76,7 @@ export class ProceduralMemory {
       throw new Error(`Skill not found: ${skillName}`);
     }
 
-    // Update execution tracking data
+    // 更新执行跟踪数据
     let execData = this.executionData.get(skillName);
     if (!execData) {
       execData = { totalExecutions: 0, successfulExecutions: 0 };
@@ -89,20 +88,20 @@ export class ProceduralMemory {
       execData.successfulExecutions += 1;
     }
 
-    // Increment usage count
+    // 增加使用次数
     const usageCount = (memory.metadata!.usageCount as number) + 1;
     memory.metadata!.usageCount = usageCount;
 
-    // Calculate new proficiency: blend success rate with current proficiency
+    // 计算新熟练度：混合成功率和当前熟练度
     const successRate = execData.successfulExecutions / execData.totalExecutions;
     const currentProficiency = memory.metadata!.proficiency as number;
     const newProficiency = 0.5 * successRate + 0.5 * currentProficiency;
     memory.metadata!.proficiency = newProficiency;
 
-    // Mark as mastered when proficiency >= 0.8
+    // 当熟练度 >= 0.8 时标记为已掌握
     memory.metadata!.mastered = newProficiency >= 0.8;
 
-    // Update lastUsedAt
+    // 更新 lastUsedAt
     memory.metadata!.lastUsedAt = new Date().toISOString();
 
     return {
@@ -116,10 +115,10 @@ export class ProceduralMemory {
   }
 
   /**
-   * Query a skill by its name.
+   * 按名称查询技能。
    *
-   * @param skillName - The name of the skill to find
-   * @returns The Skill data if found, null otherwise
+   * @param skillName - 要查找的技能名称
+   * @returns 如果找到返回 Skill 数据，否则返回 null
    */
   async queryByName(skillName: string): Promise<Skill | null> {
     const memory = this.memories.find(
@@ -141,9 +140,9 @@ export class ProceduralMemory {
   }
 
   /**
-   * List all skills sorted by proficiency in descending order.
+   * 列出所有技能，按熟练度降序排列。
    *
-   * @returns Array of all Skill objects sorted by proficiency descending
+   * @returns 按熟练度降序排列的所有 Skill 对象数组
    */
   async listByProficiency(): Promise<Skill[]> {
     return this.memories
@@ -159,19 +158,19 @@ export class ProceduralMemory {
   }
 
   /**
-   * Get all stored procedural memories.
+   * 获取所有存储的程序性记忆。
    *
-   * @returns Array of all stored Memory objects
+   * @returns 所有存储的 Memory 对象数组
    */
   async getAll(): Promise<Memory[]> {
     return [...this.memories];
   }
 
   /**
-   * Remove a memory by its ID.
+   * 按 ID 移除记忆。
    *
-   * @param memoryId - The ID of the memory to remove
-   * @returns true if the memory was found and removed, false otherwise
+   * @param memoryId - 要移除的记忆 ID
+   * @returns 如果找到并移除了记忆返回 true，否则返回 false
    */
   async remove(memoryId: string): Promise<boolean> {
     const index = this.memories.findIndex((m) => m.id === memoryId);

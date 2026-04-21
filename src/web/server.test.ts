@@ -23,15 +23,15 @@ describe('Web Server', () => {
   });
 
   describe('createServer', () => {
-    it('should create an Express app with default configuration', () => {
-      const app = createServer();
+    it('should create an Express app with default configuration', async () => {
+      const app = await createServer();
       expect(app).toBeDefined();
       expect(typeof app.listen).toBe('function');
     });
 
-    it('should create an Express app with custom static directory', () => {
+    it('should create an Express app with custom static directory', async () => {
       const staticDir = path.join(__dirname, '../public');
-      const app = createServer({ staticDir });
+      const app = await createServer({ staticDir });
       expect(app).toBeDefined();
     });
 
@@ -41,7 +41,7 @@ describe('Web Server', () => {
         res.json({ ok: true });
       });
 
-      const app = createServer({
+      const app = await createServer({
         staticDir: path.join(__dirname, '../public'),
         routes: [{ path: '/api', router }],
       });
@@ -56,7 +56,7 @@ describe('Web Server', () => {
     });
 
     it('should serve static files from the configured directory', async () => {
-      const app = createServer({
+      const app = await createServer({
         staticDir: path.join(__dirname, '../public'),
       });
 
@@ -71,7 +71,7 @@ describe('Web Server', () => {
     });
 
     it('should return index.html for unmatched client-side routes (SPA fallback)', async () => {
-      const app = createServer({
+      const app = await createServer({
         staticDir: path.join(__dirname, '../public'),
       });
 
@@ -89,7 +89,7 @@ describe('Web Server', () => {
 
   describe('startServer', () => {
     it('should start the server and log the address', async () => {
-      const app = createServer({
+      const app = await createServer({
         staticDir: path.join(__dirname, '../public'),
       });
 
@@ -99,7 +99,7 @@ describe('Web Server', () => {
     });
 
     it('should reject with error when port is already in use', async () => {
-      const app1 = createServer({
+      const app1 = await createServer({
         staticDir: path.join(__dirname, '../public'),
       });
 

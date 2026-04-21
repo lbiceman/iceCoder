@@ -1,8 +1,8 @@
 /**
- * Task Generation Agent
- * Receives design Markdown and generates a structured task document.
- * Each task includes: task number, description, owning module, dependencies, and estimated complexity.
- * Tasks are sorted by module and dependency order.
+ * 任务生成智能体
+ * 接收设计 Markdown 并生成结构化的任务文档。
+ * 每个任务包含：任务编号、描述、所属模块、依赖关系和估计复杂度。
+ * 任务按模块和依赖顺序排列。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -17,7 +17,7 @@ export class TaskGenerationAgent extends BaseAgent {
   protected async doExecute(context: AgentContext): Promise<AgentResult> {
     const design = context.inputData.design;
 
-    // Validate input design document
+    // 验证输入设计文档
     if (!design || typeof design !== 'string' || design.trim().length === 0) {
       return {
         success: false,
@@ -28,7 +28,7 @@ export class TaskGenerationAgent extends BaseAgent {
       };
     }
 
-    // Construct prompt for LLM to generate task document
+    // 构建提示让 LLM 生成任务文档
     const prompt = `You are a professional project manager and technical lead. Based on the following system design document, generate a comprehensive task breakdown document in Markdown format.
 
 Each task MUST include the following fields:
@@ -50,7 +50,7 @@ Format the output as a clean Markdown document with a table or structured list.
 ${design}
 --- End of Design Document ---`;
 
-    // Call LLM to generate the task document
+    // 调用 LLM 生成任务文档
     const result = await this.callLLM(prompt, context);
 
     // Save the task document to the output directory

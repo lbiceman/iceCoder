@@ -1,7 +1,7 @@
 /**
- * SPA Router and main application logic.
- * Handles hash-based routing between Config Page and Chat Page.
- * Fetches system status (current model) from /api/config.
+ * SPA 路由和主应用逻辑
+ * 处理配置页面和聊天页面之间的 hash 路由
+ * 包含主题切换（默认暗色模式）
  */
 
 /* global ConfigPage, ChatPage */
@@ -9,91 +9,123 @@
 (function () {
   'use strict';
 
-  // ---- State ----
-  let currentPage = null; // 'chat' | 'config'
+  // ---- 状态 ----
+  var currentPage = null;
 
-  // ---- DOM refs ----
-  const pageContainer = document.getElementById('page-container');
-  const navChat = document.getElementById('nav-chat');
-  const navConfig = document.getElementById('nav-config');
-  const statusDot = document.getElementById('status-dot');
-  const statusText = document.getElementById('status-text');
-  const statusModel = document.getElementById('status-model');
+  // ---- DOM 引用 ----
+  var pageContainer = document.getElementById('page-container');
+  var navChat = document.getElementById('nav-chat');
+  var navConfig = document.getElementById('nav-config');
+  var statusDot = document.getElementById('status-dot');
+  var statusText = document.getElementById('status-text');
+  // var statusModel = document.getElementById('status-model');
+  var themeToggle = document.getElementById('theme-toggle');
+  var themeIcon = document.getElementById('theme-icon');
 
-  // ---- Routing ----
+  // ---- 主题管理 ----
+
+  function getStoredTheme() {
+    return localStorage.getItem('ice-theme') || 'dark';
+  }
+
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('ice-theme', theme);
+    themeIcon.textContent = theme === 'dark' ? 'Light' : 'Dark';
+  }
+
+  function toggleTheme() {
+    var current = document.documentElement.getAttribute('data-theme') || 'dark';
+    setTheme(current === 'dark' ? 'light' : 'dark');
+  }
+
+  // ---- 路由 ----
 
   function getRouteFromHash() {
-    const hash = window.location.hash || '';
+    var hash = window.location.hash || '';
     if (hash.startsWith('#/config')) return 'config';
-    return 'chat'; // default
+    return 'chat';
   }
 
   function navigate(page) {
     if (page === currentPage) return;
     currentPage = page;
 
-    // Update hash without triggering hashchange again
-    const newHash = page === 'config' ? '#/config' : '#/chat';
+    var newHash = page === 'config' ? '#/config' : '#/chat';
     if (window.location.hash !== newHash) {
       history.replaceState(null, '', newHash);
     }
 
-    // Update nav active state
     navChat.classList.toggle('active', page === 'chat');
     navConfig.classList.toggle('active', page === 'config');
 
-    // Render page
     renderPage(page);
   }
 
   function renderPage(page) {
-    // Clear container
     pageContainer.innerHTML = '';
-
     if (page === 'config') {
-      ConfigPage.render(pageContainer);
+      window.ConfigPage.render(pageContainer);
     } else {
-      ChatPage.render(pageContainer);
+      window.ChatPage.render(pageContainer);
     }
   }
 
-  // ---- System Status ----
+  // ---- 系统状态 ----
 
-  async function fetchSystemStatus() {
-    try {
-      const res = await fetch('/api/config');
-      if (!res.ok) throw new Error('Failed to fetch config');
-      const data = await res.json();
+  function fetchSystemStatus() {
+    fetch('/api/config')
+      .then(function (res) {
+        if (!res.ok) throw new Error('获取配置失败');
+        return res.json();
+      })
+      .then(function (data) {
+        statusDot.classList.remove('disconnected');
+        statusDot.classList.add('connected');
+        statusText.textContent = '已连接';
 
-      statusDot.classList.remove('disconnected');
-      statusDot.classList.add('connected');
-      statusText.textContent = 'Connected';
-
-      // Find default provider or first provider
-      const providers = data.providers || [];
-      if (providers.length > 0) {
-        const defaultProvider = providers.find(function (p) { return p.isDefault; }) || providers[0];
-        statusModel.textContent = defaultProvider.modelName || '—';
-      } else {
-        statusModel.textContent = '—';
-      }
-    } catch (_err) {
-      statusDot.classList.remove('connected');
-      statusDot.classList.add('disconnected');
-      statusText.textContent = 'Disconnected';
-      statusModel.textContent = '—';
-    }
+        var providers = data.providers || [];
+        if (providers.length > 0) {
+          var defaultProvider = providers.find(function (p) { return p.isDefault; }) || providers[0];
+          // statusModel.textContent = defaultProvider.modelName || '—';
+        } else {
+          // statusModel.textContent = '—';
+        }
+      })
+      .catch(function () {
+        statusDot.classList.remove('connected');
+        statusDot.classList.add('disconnected');
+        statusText.textContent = '未连接';
+        // statusModel.textContent = '—';
+      });
   }
 
-  // ---- Init ----
+  // ---- 初始化 ----
 
   function init() {
-    // Listen for hash changes
+    // 检测是否为远程控制模式（URL 含 ?token=xxx）
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('token')) {
+      // 远程控制模式：隐藏配置按钮，直接渲染聊天页面（ChatPage 内部处理远程逻辑）
+      setTheme(getStoredTheme());
+      navConfig.style.display = 'none';
+      themeToggle.addEventListener('click', toggleTheme);
+      fetchSystemStatus();
+      window.ChatPage.render(pageContainer);
+      return;
+    }
+
+    // 应用存储的主题（默认暗色）
+    setTheme(getStoredTheme());
+
+    // 主题切换按钮
+    themeToggle.addEventListener('click', toggleTheme);
+
+    // 监听 hash 变化
     window.addEventListener('hashchange', function () {
       navigate(getRouteFromHash());
     });
 
-    // Nav button clicks
     navChat.addEventListener('click', function () {
       window.location.hash = '#/chat';
     });
@@ -101,21 +133,16 @@
       window.location.hash = '#/config';
     });
 
-    // Fetch system status
     fetchSystemStatus();
-    // Refresh status every 30 seconds
     setInterval(fetchSystemStatus, 30000);
 
-    // Initial route
     navigate(getRouteFromHash());
   }
 
-  // Expose a way for pages to refresh status
   window.AppRouter = {
     refreshStatus: fetchSystemStatus
   };
 
-  // Start
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

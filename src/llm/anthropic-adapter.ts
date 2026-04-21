@@ -1,6 +1,6 @@
 /**
- * Anthropic Provider Adapter - Implements ProviderAdapter for Anthropic Messages API.
- * Supports chat, streaming, tool use, and Anthropic-specific model parameters.
+ * Anthropic 提供者适配器 - 为 Anthropic Messages API 实现 ProviderAdapter。
+ * 支持聊天、流式传输、工具使用和 Anthropic 特定的模型参数。
  *
  * Requirements: 21.1, 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.8
  */
@@ -18,7 +18,7 @@ import type {
 } from './types.js';
 
 /**
- * Configuration for the Anthropic adapter.
+ * Anthropic 适配器的配置。
  */
 export interface AnthropicAdapterConfig {
   apiKey: string;
@@ -30,8 +30,8 @@ export interface AnthropicAdapterConfig {
 }
 
 /**
- * Anthropic Provider Adapter implementing the ProviderAdapter interface.
- * Supports Anthropic Messages API with tool use and streaming.
+ * Anthropic 提供者适配器，实现 ProviderAdapter 接口。
+ * 支持 Anthropic Messages API 的工具使用和流式传输。
  */
 export class AnthropicAdapter implements ProviderAdapter {
   public readonly name = 'anthropic';
@@ -49,9 +49,9 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
-   * Send a chat request to Anthropic Messages API.
-   * Extracts system messages as a separate parameter, converts remaining messages
-   * to Anthropic format, sends request, and converts response back.
+   * 向 Anthropic Messages API 发送聊天请求。
+   * 将系统消息提取为单独的参数，将剩余消息转换为 Anthropic 格式，
+   * 发送请求，再将响应转换回来。
    */
   async chat(messages: UnifiedMessage[], options: LLMOptions): Promise<LLMResponse> {
     try {
@@ -66,9 +66,8 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
-   * Send a streaming chat request to Anthropic Messages API.
-   * Handles SSE events: message_start, content_block_delta (text), message_stop.
-   * Uses the SDK's high-level stream events: text, inputJson, message.
+   * 向 Anthropic Messages API 发送流式聊天请求。
+   * 使用 SDK 的高级流事件：text、inputJson、message。
    */
   async stream(
     messages: UnifiedMessage[],
@@ -92,7 +91,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
       callback('', true);
 
-      // Extract tool calls from the final message content blocks
+      // 从最终消息的内容块中提取工具调用
       const toolCalls: ToolCall[] = [];
       for (const block of finalMessage.content) {
         if (block.type === 'tool_use') {
@@ -128,9 +127,9 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
-   * Convert UnifiedMessage[] to Anthropic format.
-   * Extracts system messages as a separate string parameter.
-   * Remaining messages are converted to Anthropic MessageParam format.
+   * 将 UnifiedMessage[] 转换为 Anthropic 格式。
+   * 将系统消息提取为单独的字符串参数。
+   * 剩余消息转换为 Anthropic MessageParam 格式。
    */
   private convertToAnthropicMessages(messages: UnifiedMessage[]): {
     systemPrompt: string | undefined;
@@ -148,7 +147,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       } else if (msg.role === 'user' || msg.role === 'assistant') {
         anthropicMessages.push(this.convertSingleMessage(msg));
       } else if (msg.role === 'tool') {
-        // Tool results are sent as user messages with tool_result content blocks
+        // 工具结果作为包含 tool_result 内容块的用户消息发送
         anthropicMessages.push({
           role: 'user',
           content: [
@@ -173,7 +172,7 @@ export class AnthropicAdapter implements ProviderAdapter {
    */
   private convertSingleMessage(msg: UnifiedMessage): Anthropic.MessageParam {
     if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-      // Assistant message with tool calls
+      // 带工具调用的助手消息
       const content: Anthropic.ContentBlockParam[] = [];
       const textContent = this.resolveContent(msg.content);
       if (textContent) {
@@ -190,7 +189,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       return { role: 'assistant', content };
     }
 
-    // Regular user or assistant message
+    // 普通用户或助手消息
     const textContent = this.resolveContent(msg.content);
     return {
       role: msg.role as 'user' | 'assistant',
@@ -254,7 +253,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       params.top_k = options.topK;
     }
 
-    // Handle tools (Tool Use)
+    // 处理工具（Tool Use）
     if (options.tools && options.tools.length > 0) {
       params.tools = this.convertToolDefinitions(options.tools);
     }
@@ -328,7 +327,7 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
-   * Convert Anthropic API errors to a unified error format.
+   * 将 Anthropic API 错误转换为统一错误格式。
    */
   private convertError(error: unknown): Error {
     if (error instanceof Anthropic.APIError) {

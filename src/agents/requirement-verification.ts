@@ -1,8 +1,8 @@
 /**
- * Requirement Verification Agent
- * Receives original requirements and test results, then verifies each requirement.
- * Marks each requirement as: satisfied, partially satisfied, or unsatisfied.
- * Includes gap description for partially/unsatisfied requirements.
+ * 需求验证智能体
+ * 接收原始需求和测试结果，然后验证每个需求。
+ * 将每个需求标记为：已满足、部分满足或未满足。
+ * 对部分满足/未满足的需求包含差距描述。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -18,7 +18,7 @@ export class RequirementVerificationAgent extends BaseAgent {
     const requirements = context.inputData.requirements;
     const testResults = context.inputData.testResults;
 
-    // Validate input requirements
+    // 验证输入需求
     if (!requirements || typeof requirements !== 'string' || requirements.trim().length === 0) {
       return {
         success: false,
@@ -29,7 +29,7 @@ export class RequirementVerificationAgent extends BaseAgent {
       };
     }
 
-    // Validate test results
+    // 验证测试结果
     if (!testResults || typeof testResults !== 'string' || testResults.trim().length === 0) {
       return {
         success: false,
@@ -40,7 +40,7 @@ export class RequirementVerificationAgent extends BaseAgent {
       };
     }
 
-    // Construct prompt for LLM to verify requirements
+    // 构建提示让 LLM 验证需求
     const prompt = `You are a professional requirements verification specialist. Based on the original requirements document and the test results report, verify each requirement and determine its satisfaction status.
 
 For EACH requirement, provide:
@@ -65,7 +65,7 @@ ${requirements}
 ${testResults}
 --- End of Test Results Report ---`;
 
-    // Call LLM to verify requirements
+    // 调用 LLM 验证需求
     const result = await this.callLLM(prompt, context);
 
     // Save the verification report to the output directory

@@ -17,10 +17,6 @@ export interface AgentConfig {
 export interface MemoryManager {
   store(content: string, type: string, metadata?: Record<string, any>): Promise<any>;
   retrieve(query: string, type?: string, limit?: number): Promise<any[]>;
-  delete(memoryId: string): Promise<boolean>;
-  update(memoryId: string, updates: Record<string, any>): Promise<any>;
-  consolidate(): Promise<number>;
-  decay(): Promise<number>;
 }
 
 /**
@@ -29,8 +25,6 @@ export interface MemoryManager {
  */
 export interface LLMAdapter {
   chat(messages: any[], options?: any): Promise<any>;
-  stream(messages: any[], callback: (chunk: string, done: boolean) => void, options?: any): Promise<any>;
-  countTokens(text: string): Promise<number>;
 }
 
 /**

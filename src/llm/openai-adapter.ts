@@ -1,6 +1,6 @@
 /**
- * OpenAI Provider Adapter - Implements ProviderAdapter for OpenAI Chat Completions API.
- * Supports configurable baseURL for OpenAI-compatible APIs (e.g., NVIDIA).
+ * OpenAI 提供者适配器 - 为 OpenAI Chat Completions API 实现 ProviderAdapter。
+ * 支持可配置的 baseURL 以兼容 OpenAI 兼容 API（如 NVIDIA）。
  *
  * Requirements: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6, 20.7, 20.8
  */
@@ -18,7 +18,7 @@ import type {
 } from './types.js';
 
 /**
- * Configuration for the OpenAI adapter.
+ * OpenAI 适配器的配置。
  */
 export interface OpenAIAdapterConfig {
   apiKey: string;
@@ -34,8 +34,8 @@ export interface OpenAIAdapterConfig {
 }
 
 /**
- * OpenAI Provider Adapter implementing the ProviderAdapter interface.
- * Supports OpenAI Chat Completions API and OpenAI-compatible APIs (e.g., NVIDIA).
+ * OpenAI 提供者适配器，实现 ProviderAdapter 接口。
+ * 支持 OpenAI Chat Completions API 和 OpenAI 兼容 API（如 NVIDIA）。
  */
 export class OpenAIAdapter implements ProviderAdapter {
   public readonly name = 'openai';
@@ -55,8 +55,8 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Send a chat request to OpenAI Chat Completions API.
-   * Converts UnifiedMessage[] to OpenAI format, sends request, converts response back.
+   * 向 OpenAI Chat Completions API 发送聊天请求。
+   * 将 UnifiedMessage[] 转换为 OpenAI 格式，发送请求，再将响应转换回来。
    */
   async chat(messages: UnifiedMessage[], options: LLMOptions): Promise<LLMResponse> {
     try {
@@ -71,8 +71,8 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Send a streaming chat request to OpenAI Chat Completions API.
-   * Handles both delta.content and delta.reasoning_content fields.
+   * 向 OpenAI Chat Completions API 发送流式聊天请求。
+   * 处理 delta.content 和 delta.reasoning_content 字段。
    */
   async stream(
     messages: UnifiedMessage[],
@@ -168,14 +168,14 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Simple token estimation: approximately 4 characters per token.
+   * 简单的 token 估算：大约每 4 个字符一个 token。
    */
   async countTokens(text: string): Promise<number> {
     return Math.ceil(text.length / 4);
   }
 
   /**
-   * Convert UnifiedMessage[] to OpenAI ChatCompletionMessageParam[].
+   * 将 UnifiedMessage[] 转换为 OpenAI ChatCompletionMessageParam[]。
    */
   private convertToOpenAIMessages(
     messages: UnifiedMessage[],
@@ -184,7 +184,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Convert a single UnifiedMessage to OpenAI message format.
+   * 将单个 UnifiedMessage 转换为 OpenAI 消息格式。
    */
   private convertSingleMessage(msg: UnifiedMessage): OpenAI.ChatCompletionMessageParam {
     const content = this.resolveContent(msg.content);
@@ -223,7 +223,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Resolve content from string or ContentBlock[] to string.
+   * 将内容从 string 或 ContentBlock[] 解析为 string。
    */
   private resolveContent(content: string | ContentBlock[]): string {
     if (typeof content === 'string') {
@@ -236,7 +236,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Build request parameters for OpenAI API call.
+   * 构建 OpenAI API 调用的请求参数。
    */
   private buildRequestParams(
     messages: OpenAI.ChatCompletionMessageParam[],
@@ -251,7 +251,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       stream,
     };
 
-    // Apply default params
+    // 应用默认参数
     if (this.defaultParams.temperature !== undefined) {
       params.temperature = this.defaultParams.temperature;
     }
@@ -268,7 +268,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       params.presence_penalty = this.defaultParams.presencePenalty;
     }
 
-    // Override with per-call options
+    // 使用每次调用的选项覆盖
     if (options.temperature !== undefined) {
       params.temperature = options.temperature;
     }
@@ -285,17 +285,17 @@ export class OpenAIAdapter implements ProviderAdapter {
       params.presence_penalty = options.presencePenalty;
     }
 
-    // Handle tools (Function Calling)
+    // 处理工具（Function Calling）
     if (options.tools && options.tools.length > 0) {
       params.tools = this.convertToolDefinitions(options.tools);
     }
 
-    // Pass-through provider-specific parameters (e.g., chat_template_kwargs for NVIDIA)
+    // 透传提供者特定参数（如 NVIDIA 的 chat_template_kwargs）
     if (options.chatTemplateKwargs) {
       params.chat_template_kwargs = options.chatTemplateKwargs;
     }
 
-    // Include stream_options for usage in streaming
+    // 在流式模式中包含 stream_options 以获取使用统计
     if (stream) {
       params.stream_options = { include_usage: true };
     }
@@ -414,7 +414,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * Convert OpenAI API errors to a unified error format.
+   * 将 OpenAI API 错误转换为统一错误格式。
    */
   private convertError(error: unknown): Error {
     if (error instanceof OpenAI.APIError) {

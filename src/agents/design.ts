@@ -1,7 +1,7 @@
 /**
- * Design Agent
- * Receives requirements Markdown and generates a structured design document.
- * Includes sections: system architecture overview, module breakdown, interface design, and data model design.
+ * 设计智能体
+ * 接收需求 Markdown 并生成结构化的设计文档。
+ * 包含章节：系统架构概述、模块分解、接口设计和数据模型设计。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -16,7 +16,7 @@ export class DesignAgent extends BaseAgent {
   protected async doExecute(context: AgentContext): Promise<AgentResult> {
     const requirements = context.inputData.requirements;
 
-    // Validate input requirements
+    // 验证输入需求
     if (!requirements || typeof requirements !== 'string' || requirements.trim().length === 0) {
       return {
         success: false,
@@ -27,7 +27,7 @@ export class DesignAgent extends BaseAgent {
       };
     }
 
-    // Construct prompt for LLM to generate design document
+    // 构建提示让 LLM 生成设计文档
     const prompt = `You are a professional software architect. Based on the following requirements document, generate a comprehensive system design document in Markdown format.
 
 The document MUST include the following sections:
@@ -44,7 +44,7 @@ Format the output as a clean Markdown document with proper headings, lists, and 
 ${requirements}
 --- End of Requirements Document ---`;
 
-    // Call LLM to generate the design document
+    // 调用 LLM 生成设计文档
     const result = await this.callLLM(prompt, context);
 
     // Save the design document to the output directory

@@ -1,23 +1,23 @@
 /**
- * Short-Term Memory implementation.
- * Provides a fixed-size queue with configurable capacity and TTL-based expiration.
- * Eviction policy: lowest importance score, then earliest last access time.
+ * 短期记忆实现。
+ * 提供具有可配置容量和基于 TTL 过期机制的固定大小队列。
+ * 淘汰策略：最低重要性评分优先，相同时选择最早访问时间的。
  */
 
 import { Memory } from './types.js';
 
 /**
- * Configuration for Short-Term Memory.
+ * 短期记忆的配置。
  */
 export interface ShortTermMemoryConfig {
-  /** Maximum number of memories the queue can hold. */
+  /** 队列可容纳的最大记忆数量。 */
   capacity: number;
-  /** Time-to-live in milliseconds for each memory entry. */
+  /** 每条记忆条目的存活时间（毫秒）。 */
   ttl: number;
 }
 
 /**
- * Internal memory entry that tracks expiration time.
+ * 跟踪过期时间的内部记忆条目。
  */
 interface MemoryEntry {
   memory: Memory;
@@ -25,8 +25,7 @@ interface MemoryEntry {
 }
 
 /**
- * ShortTermMemory manages a fixed-size queue of memories with TTL expiration
- * and importance-based eviction.
+ * ShortTermMemory 管理具有 TTL 过期和基于重要性淘汰的固定大小记忆队列。
  */
 export class ShortTermMemory {
   private queue: MemoryEntry[] = [];
@@ -37,8 +36,8 @@ export class ShortTermMemory {
   }
 
   /**
-   * Store a memory in the short-term queue.
-   * Cleans expired entries first, then evicts if at capacity, then adds the new memory.
+   * 将记忆存储到短期队列中。
+   * 先清理过期条目，如果达到容量则淘汰，然后添加新记忆。
    */
   async store(memory: Memory): Promise<void> {
     this.cleanExpired();
@@ -56,13 +55,13 @@ export class ShortTermMemory {
   }
 
   /**
-   * Retrieve memories matching the query string.
-   * Cleans expired entries first, performs substring matching on content,
-   * and updates lastAccessedAt for matched memories.
+   * 检索匹配查询字符串的记忆。
+   * 先清理过期条目，对内容执行子字符串匹配，
+   * 并更新匹配记忆的 lastAccessedAt。
    *
-   * @param query - Search string to match against memory content
-   * @param limit - Maximum number of results to return (default: 10)
-   * @returns Array of matching memories sorted by importance score descending
+   * @param query - 用于匹配记忆内容的搜索字符串
+   * @param limit - 返回的最大结果数（默认：10）
+   * @returns 按重要性评分降序排列的匹配记忆数组
    */
   async retrieve(query: string, limit: number = 10): Promise<Memory[]> {
     this.cleanExpired();
@@ -72,20 +71,20 @@ export class ShortTermMemory {
 
     for (const entry of this.queue) {
       if (entry.memory.content.toLowerCase().includes(lowerQuery)) {
-        // Update lastAccessedAt on access
+    // 更新访问时的 lastAccessedAt
         entry.memory.lastAccessedAt = new Date();
         matched.push(entry);
       }
     }
 
-    // Sort by importance score descending
+    // 按重要性评分降序排列
     matched.sort((a, b) => b.memory.importanceScore - a.memory.importanceScore);
 
     return matched.slice(0, limit).map(entry => entry.memory);
   }
 
   /**
-   * Get all non-expired memories in the queue.
+   * 获取队列中所有未过期的记忆。
    */
   async getAll(): Promise<Memory[]> {
     this.cleanExpired();
@@ -93,8 +92,8 @@ export class ShortTermMemory {
   }
 
   /**
-   * Remove a specific memory by ID.
-   * @returns true if the memory was found and removed, false otherwise.
+   * 按 ID 移除特定记忆。
+   * @returns 如果找到并移除了记忆返回 true，否则返回 false。
    */
   async remove(memoryId: string): Promise<boolean> {
     const index = this.queue.findIndex(entry => entry.memory.id === memoryId);
@@ -106,8 +105,8 @@ export class ShortTermMemory {
   }
 
   /**
-   * Eviction policy: remove the memory with the lowest importance score.
-   * If tied, remove the one with the earliest lastAccessedAt.
+   * 淘汰策略：移除重要性评分最低的记忆。
+   * 如果评分相同，移除 lastAccessedAt 最早的。
    */
   private evict(): void {
     if (this.queue.length === 0) {
@@ -137,7 +136,7 @@ export class ShortTermMemory {
   }
 
   /**
-   * Remove all memories whose TTL has expired.
+   * 移除所有 TTL 已过期的记忆。
    */
   private cleanExpired(): void {
     const now = Date.now();
