@@ -45,6 +45,7 @@ import { createPipelineRouter, wireOrchestratorToSSE } from './web/routes/pipeli
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
 import { attachRemoteWebSocket } from './web/remote-ws.js';
+import { createSessionsRouter } from './web/routes/sessions.js';
 
 // 类型
 import type { ProviderConfig } from './web/types.js';
@@ -241,6 +242,7 @@ async function main(): Promise<void> {
       { path: '/api/chat', router: createChatRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
+      { path: '/api/sessions', router: createSessionsRouter() },
       { path: '/api', router: createPipelineRouter({ orchestrator, sseManager }) },
     ],
   });
