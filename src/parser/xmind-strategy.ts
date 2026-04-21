@@ -1,14 +1,14 @@
 /**
- * XMind file parsing strategy using JSZip.
- * XMind files are ZIP archives containing a content.json file with the mind map structure.
- * Recursively traverses the topic tree to extract hierarchical text with indentation.
+ * 使用 JSZip 的 XMind 文件解析策略。
+ * XMind 文件是包含 content.json 文件的 ZIP 归档，其中存储了思维导图结构。
+ * 递归遍历主题树以提取带缩进的层次化文本。
  */
 
 import JSZip from 'jszip';
 import { FileParserStrategy, ParseResult } from './types.js';
 
 /**
- * Represents a topic node in the XMind content.json structure.
+ * 表示 XMind content.json 结构中的主题节点。
  */
 interface XMindTopic {
   title?: string;
@@ -18,7 +18,7 @@ interface XMindTopic {
 }
 
 /**
- * Represents a sheet in the XMind content.json structure.
+ * 表示 XMind content.json 结构中的画布。
  */
 interface XMindSheet {
   rootTopic?: XMindTopic;
@@ -94,8 +94,8 @@ export class XMindParserStrategy implements FileParserStrategy {
   }
 
   /**
-   * Recursively traverses a topic node and its children, building indented text lines.
-   * Returns the total number of nodes traversed.
+   * 递归遍历主题节点及其子节点，构建缩进文本行。
+   * 返回遍历的节点总数。
    */
   private traverseTopic(topic: XMindTopic, depth: number, lines: string[]): number {
     const indent = '  '.repeat(depth);

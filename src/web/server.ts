@@ -1,6 +1,7 @@
 /**
- * Express web server with static file hosting and SPA fallback.
- * Serves the frontend application and provides API route mounting.
+ * Express Web 服务器，提供 API 路由。
+ * 开发模式下前端由 Vite dev server 提供（通过 proxy 转发 API 请求）。
+ * 生产模式下提供 Vite 构建产物的静态文件托管和 SPA 回退。
  */
 
 import express, { type Express, type Router, type Request, type Response } from 'express';
@@ -12,57 +13,60 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Configuration for creating the Express server.
+ * 创建 Express 服务器的配置。
  */
 export interface ServerConfig {
-  /** Directory to serve static files from. Defaults to src/public. */
+  /** 提供静态文件的目录（生产模式）。默认为 dist/public。 */
   staticDir?: string;
-  /** API routes to mount on the app. */
+  /** 要挂载到应用的 API 路由。 */
   routes?: { path: string; router: Router }[];
 }
 
 /**
- * Creates and configures an Express application.
- *
- * @param config - Optional server configuration
- * @returns Configured Express application
+ * 创建并配置 Express 应用。
  */
-export function createServer(config?: ServerConfig): Express {
+export async function createServer(config?: ServerConfig): Promise<Express> {
   const app = express();
 
-  // Parse JSON and URL-encoded bodies
+  // 解析 JSON 和 URL 编码的请求体
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Determine static files directory
-  // Default to src/public relative to project root (not dist), since frontend files are plain HTML/CSS/JS
-  const staticDir = config?.staticDir ?? path.join(__dirname, '../../src/public');
-
-  // Serve static files
-  app.use(express.static(staticDir));
-
-  // Mount any provided API routes
+  // 挂载 API 路由
   if (config?.routes) {
     for (const route of config.routes) {
       app.use(route.path, route.router);
     }
   }
 
-  // SPA fallback: for GET requests that don't match API routes, send index.html
-  app.get('/{*splat}', (req: Request, res: Response) => {
-    const indexPath = path.join(staticDir, 'index.html');
-    res.sendFile(indexPath);
-  });
+  // 静态文件托管（生产模式或指定了 staticDir 时）
+  const isProd = process.env.NODE_ENV === 'production';
+  const staticDir = config?.staticDir ?? (isProd
+    ? path.join(__dirname, '../../dist/public')
+    : path.join(__dirname, '../../src/public'));
+
+  if (isProd) {
+    // 生产模式：提供 Vite 构建产物
+    app.use(express.static(staticDir));
+
+    // SPA 回退
+    app.get('/{*splat}', (_req: Request, res: Response) => {
+      res.sendFile(path.join(staticDir, 'index.html'));
+    });
+  } else {
+    // 开发模式：前端由 Vite dev server 提供，Express 只处理 API
+    // 同时提供静态文件作为回退（直接访问 Express 端口时）
+    app.use(express.static(staticDir));
+    app.get('/{*splat}', (_req: Request, res: Response) => {
+      res.sendFile(path.join(staticDir, 'index.html'));
+    });
+  }
 
   return app;
 }
 
 /**
- * Starts the Express server on the specified port.
- *
- * @param app - Express application to start
- * @param port - Port number to listen on
- * @returns Promise that resolves with the HTTP server on success, or rejects on error
+ * 在指定端口启动 Express 服务器。
  */
 export function startServer(app: Express, port: number): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -75,7 +79,7 @@ export function startServer(app: Express, port: number): Promise<Server> {
         settled = true;
         const addr = server.address();
         const actualPort = typeof addr === 'object' && addr ? addr.port : port;
-        console.log(`Server listening on http://localhost:${actualPort}`);
+        console.log(`API server listening on http://localhost:${actualPort}`);
         resolve(server);
       }
     });

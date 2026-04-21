@@ -1,7 +1,7 @@
 /**
- * HTML parsing strategy using cheerio.
- * Extracts text content and structural information from HTML files,
- * preserving headings, lists, and paragraph structure.
+ * 使用 cheerio 的 HTML 解析策略。
+ * 从 HTML 文件中提取文本内容和结构信息，
+ * 保留标题、列表和段落结构。
  */
 
 import * as cheerio from 'cheerio';
@@ -16,7 +16,7 @@ export class HtmlParserStrategy implements FileParserStrategy {
       const html = buffer.toString('utf-8');
       const $ = cheerio.load(html);
 
-      // Remove script and style tags before extraction
+      // 在提取前移除 script 和 style 标签
       $('script').remove();
       $('style').remove();
 
@@ -28,7 +28,7 @@ export class HtmlParserStrategy implements FileParserStrategy {
         const el = $(element);
         const tagName = element.tagName.toLowerCase();
 
-        // Only process direct text content to avoid duplication
+        // 仅处理直接文本内容以避免重复
         if (tagName === 'h1') {
           const text = el.text().trim();
           if (text) lines.push(`# ${text}`);
@@ -56,7 +56,7 @@ export class HtmlParserStrategy implements FileParserStrategy {
         }
       });
 
-      // If no structured elements found, fall back to body text
+      // 如果没有找到结构化元素，回退到 body 文本
       if (lines.length === 0) {
         const bodyText = $('body').text().trim();
         if (bodyText) {

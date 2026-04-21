@@ -1,6 +1,6 @@
 /**
- * Configuration API routes.
- * Handles saving and loading provider configurations to/from data/config.json.
+ * 配置 API 路由。
+ * 处理提供者配置的保存和加载（data/config.json）。
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -11,7 +11,7 @@ import type { ProviderConfig } from '../types.js';
 const CONFIG_PATH = path.resolve('data/config.json');
 
 /**
- * Masks an API key, showing only the first 4 and last 4 characters.
+ * 遮蔽 API 密钥，仅显示前 4 位和后 4 位字符。
  */
 function maskApiKey(apiKey: string): string {
   if (apiKey.length <= 8) {
@@ -23,8 +23,8 @@ function maskApiKey(apiKey: string): string {
 }
 
 /**
- * Validates a single provider configuration.
- * Returns an error message if invalid, or null if valid.
+ * 验证单个提供者配置。
+ * 如果无效返回错误消息，有效则返回 null。
  */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
@@ -37,13 +37,55 @@ function validateProvider(provider: ProviderConfig): string | null {
 }
 
 /**
- * Creates the configuration API router.
+ * 根据模型名称返回最大上下文长度（token 数）。
+ * 已知模型返回精确值，未知模型根据名称模式推断。
+ */
+function getModelMaxContext(modelName: string): number {
+  const name = modelName.toLowerCase();
+
+  // DeepSeek 系列
+  if (name.includes('deepseek')) return 131072;
+
+  // OpenAI GPT-4o 系列
+  if (name.includes('gpt-4o')) return 128000;
+  if (name.includes('gpt-4-turbo')) return 128000;
+  if (name.includes('gpt-4')) return 8192;
+  if (name.includes('gpt-3.5-turbo-16k')) return 16384;
+  if (name.includes('gpt-3.5')) return 4096;
+  if (name.includes('o1') || name.includes('o3') || name.includes('o4')) return 200000;
+
+  // Claude 系列
+  if (name.includes('claude-3') || name.includes('claude-4')) return 200000;
+  if (name.includes('claude-2')) return 100000;
+  if (name.includes('claude')) return 200000;
+
+  // GLM 系列
+  if (name.includes('glm-4')) return 128000;
+  if (name.includes('glm')) return 128000;
+
+  // Qwen 系列
+  if (name.includes('qwen')) return 131072;
+
+  // Llama 系列
+  if (name.includes('llama-3')) return 128000;
+  if (name.includes('llama')) return 8192;
+
+  // Mistral 系列
+  if (name.includes('mistral')) return 32768;
+  if (name.includes('mixtral')) return 32768;
+
+  // 默认保守估计
+  return 8192;
+}
+
+/**
+ * 创建配置 API 路由。
  */
 export function createConfigRouter(): Router {
   const router = Router();
 
   /**
-   * POST /api/config - Save provider configurations.
+   * POST /api/config - 保存提供者配置。
    */
   router.post('/', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -54,7 +96,7 @@ export function createConfigRouter(): Router {
         return;
       }
 
-      // Validate each provider
+      // 验证每个提供者
       for (let i = 0; i < providers.length; i++) {
         const error = validateProvider(providers[i]);
         if (error) {
@@ -74,17 +116,18 @@ export function createConfigRouter(): Router {
   });
 
   /**
-   * GET /api/config - Load saved configurations with masked API keys.
+   * GET /api/config - 加载已保存的配置（API 密钥已遮蔽）。
    */
   router.get('/', async (_req: Request, res: Response): Promise<void> => {
     try {
       const data = await fs.readFile(CONFIG_PATH, 'utf-8');
       const config = JSON.parse(data) as { providers: ProviderConfig[] };
 
-      // Mask API keys before returning
+      // 返回前遮蔽 API 密钥
       const maskedProviders = config.providers.map((provider) => ({
         ...provider,
         apiKey: maskApiKey(provider.apiKey),
+        maxContextTokens: getModelMaxContext(provider.modelName),
       }));
 
       res.json({ providers: maskedProviders });

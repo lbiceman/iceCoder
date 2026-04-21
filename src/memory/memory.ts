@@ -1,14 +1,14 @@
 /**
- * Memory data structure factory and importance score calculation.
- * Provides creation of Memory objects with auto-generated IDs, timestamps,
- * and importance score calculation based on weighted factors.
+ * Memory 数据结构工厂和重要性评分计算。
+ * 提供带自动生成 ID、时间戳的 Memory 对象创建，
+ * 以及基于加权因子的重要性评分计算。
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { Memory, MemoryType } from './types.js';
 
 /**
- * Weights for importance score calculation.
+ * 重要性评分计算的权重。
  */
 const WEIGHTS = {
   contentLength: 0.15,
@@ -19,40 +19,40 @@ const WEIGHTS = {
 };
 
 /**
- * Emotion keywords used for emotion intensity detection.
+ * 用于情感强度检测的情感关键词。
  */
 const EMOTION_KEYWORDS: Record<string, number> = {
-  // High intensity (1.0)
+  // 高强度 (1.0)
   'critical': 1.0,
   'urgent': 1.0,
   'emergency': 1.0,
   'fatal': 1.0,
   'catastrophic': 1.0,
-  // Medium-high intensity (0.8)
+  // 中高强度 (0.8)
   'important': 0.8,
   'significant': 0.8,
   'essential': 0.8,
   'crucial': 0.8,
   'severe': 0.8,
-  // Medium intensity (0.6)
+  // 中等强度 (0.6)
   'warning': 0.6,
   'concern': 0.6,
   'notable': 0.6,
   'attention': 0.6,
   'issue': 0.6,
-  // Low-medium intensity (0.4)
+  // 中低强度 (0.4)
   'minor': 0.4,
   'note': 0.4,
   'info': 0.4,
   'update': 0.4,
-  // Low intensity (0.2)
+  // 低强度 (0.2)
   'routine': 0.2,
   'normal': 0.2,
   'standard': 0.2,
 };
 
 /**
- * Interaction type factor values.
+ * 交互类型因子值。
  */
 const INTERACTION_TYPE_FACTORS: Record<string, number> = {
   user_input: 1.0,
@@ -61,7 +61,7 @@ const INTERACTION_TYPE_FACTORS: Record<string, number> = {
 };
 
 /**
- * Memory type factor values.
+ * 记忆类型因子值。
  */
 const MEMORY_TYPE_FACTORS: Record<MemoryType, number> = {
   [MemoryType.PROCEDURAL]: 0.9,
@@ -72,16 +72,16 @@ const MEMORY_TYPE_FACTORS: Record<MemoryType, number> = {
 };
 
 /**
- * Calculate the content length factor.
- * Normalized to [0, 1] using min(content.length / 1000, 1.0).
+ * 计算内容长度因子。
+ * 归一化到 [0, 1]，使用 min(content.length / 1000, 1.0)。
  */
 function calculateContentLengthFactor(content: string): number {
   return Math.min(content.length / 1000, 1.0);
 }
 
 /**
- * Calculate the emotion intensity factor based on keyword matching.
- * Returns the highest matching emotion keyword intensity, or 0 if none match.
+ * 基于关键词匹配计算情感强度因子。
+ * 返回匹配的最高情感关键词强度，如果没有匹配则返回 0。
  */
 function calculateEmotionIntensityFactor(content: string): number {
   const lowerContent = content.toLowerCase();
@@ -97,42 +97,42 @@ function calculateEmotionIntensityFactor(content: string): number {
 }
 
 /**
- * Calculate the interaction type factor.
- * Defaults to 'system_generated' (0.4) if type is not recognized.
+ * 计算交互类型因子。
+ * 如果类型未识别，默认为 'system_generated' (0.4)。
  */
 function calculateInteractionTypeFactor(interactionType: string): number {
   return INTERACTION_TYPE_FACTORS[interactionType] ?? 0.4;
 }
 
 /**
- * Calculate the memory type factor.
+ * 计算记忆类型因子。
  */
 function calculateMemoryTypeFactor(memoryType: MemoryType): number {
   return MEMORY_TYPE_FACTORS[memoryType] ?? 0.3;
 }
 
 /**
- * Calculate the repetition frequency factor.
- * Normalized to [0, 1] using min(accessCount / 10, 1.0).
+ * 计算重复频率因子。
+ * 归一化到 [0, 1]，使用 min(accessCount / 10, 1.0)。
  */
 function calculateRepetitionFrequencyFactor(accessCount: number): number {
   return Math.min(accessCount / 10, 1.0);
 }
 
 /**
- * Calculate the importance score for a memory based on weighted factors.
- * Result is normalized to [0, 1] range.
+ * 基于加权因子计算记忆的重要性评分。
+ * 结果归一化到 [0, 1] 范围。
  *
- * Formula:
+ * 公式：
  * ImportanceScore = w1 * contentLengthFactor + w2 * emotionIntensityFactor
  *                 + w3 * interactionTypeFactor + w4 * memoryTypeFactor
  *                 + w5 * repetitionFrequencyFactor
  *
- * @param content - The memory content text
- * @param memoryType - The type of memory
- * @param interactionType - The interaction type (user_input, agent_transfer, system_generated)
- * @param accessCount - Number of times the memory has been accessed
- * @returns Importance score normalized to [0, 1]
+ * @param content - 记忆内容文本
+ * @param memoryType - 记忆类型
+ * @param interactionType - 交互类型（user_input、agent_transfer、system_generated）
+ * @param accessCount - 记忆被访问的次数
+ * @returns 归一化到 [0, 1] 的重要性评分
  */
 export function calculateImportanceScore(
   content: string,
@@ -153,12 +153,12 @@ export function calculateImportanceScore(
     WEIGHTS.memoryType * memoryTypeFactor +
     WEIGHTS.repetitionFrequency * repetitionFrequencyFactor;
 
-  // Normalize to [0, 1] range (clamp)
+  // 归一化到 [0, 1] 范围（截断）
   return Math.max(0, Math.min(1, score));
 }
 
 /**
- * Options for creating a new Memory.
+ * 创建新 Memory 的选项。
  */
 export interface CreateMemoryOptions {
   content: string;
@@ -170,12 +170,11 @@ export interface CreateMemoryOptions {
 }
 
 /**
- * Factory function to create a new Memory object.
- * Auto-generates a unique ID, sets creation/access timestamps,
- * and calculates the initial importance score.
+ * 创建新 Memory 对象的工厂函数。
+ * 自动生成唯一 ID，设置创建/访问时间戳，并计算初始重要性评分。
  *
- * @param options - Memory creation options
- * @returns A fully initialized Memory object
+ * @param options - Memory 创建选项
+ * @returns 完全初始化的 Memory 对象
  */
 export function createMemory(options: CreateMemoryOptions): Memory {
   const {

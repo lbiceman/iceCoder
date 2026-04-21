@@ -1,7 +1,7 @@
 /**
- * Requirement Analysis Agent
- * Analyzes parsed text content and generates a structured requirements Markdown document.
- * Includes sections: functional requirements, non-functional requirements, constraints, and priority annotations.
+ * 需求分析智能体
+ * 分析解析后的文本内容并生成结构化的需求 Markdown 文档。
+ * 包含章节：功能需求、非功能需求、约束条件和优先级标注。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -14,9 +14,9 @@ export class RequirementAnalysisAgent extends BaseAgent {
   }
 
   protected async doExecute(context: AgentContext): Promise<AgentResult> {
-    const text = context.inputData.text;
+    const text = context.inputData.text || context.inputData.content;
 
-    // Validate input text
+    // 验证输入文本
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
       return {
         success: false,
@@ -27,7 +27,7 @@ export class RequirementAnalysisAgent extends BaseAgent {
       };
     }
 
-    // Construct prompt for LLM to analyze text and generate structured requirements
+    // 构建提示让 LLM 分析文本并生成结构化需求
     const prompt = `You are a professional requirements analyst. Analyze the following text content and generate a structured requirements document in Markdown format.
 
 The document MUST include the following sections:
@@ -44,10 +44,10 @@ Format the output as a clean Markdown document with proper headings and lists.
 ${text}
 --- End of Input Text ---`;
 
-    // Call LLM to analyze the text
+    // 调用 LLM 分析文本
     const result = await this.callLLM(prompt, context);
 
-    // Check if LLM determined no requirements could be found
+    // 检查 LLM 是否判定无法找到需求
     if (result.trim() === 'NO_REQUIREMENTS_FOUND') {
       return {
         success: false,
@@ -58,10 +58,10 @@ ${text}
       };
     }
 
-    // Save the requirements document to the output directory
+    // 将需求文档保存到输出目录
     const savedPath = await this.saveDocument(result, 'requirements.md', context.outputDir);
 
-    // Store the result in episodic memory for future reference
+    // 将结果存储到情景记忆以供将来参考
     await this.storeMemory(
       `Generated requirements document from input text. Output saved to ${savedPath}`,
       MemoryType.EPISODIC,

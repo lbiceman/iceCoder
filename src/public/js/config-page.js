@@ -1,20 +1,21 @@
 /**
- * Config Page module.
- * Renders a form for managing LLM provider configurations.
- * Supports multiple providers with add/remove, API key masking, and validation.
+ * 配置页面模块。
+ * 渲染 LLM 提供者配置管理表单。
+ * 支持多提供者的添加/移除、API 密钥遮蔽和验证。
  */
 
 /* exported ConfigPage */
 
-var ConfigPage = (function () {
+window.ConfigPage = (function () {
   'use strict';
 
-  // ---- State ----
+  // ---- 状态 ----
   var providers = [];
   var container = null;
   var nextId = 1;
+  var defaultIndex = 0; // 当前选中的默认提供者索引
 
-  // ---- Helpers ----
+  // ---- 辅助函数 ----
 
   function generateId() {
     return 'provider-' + Date.now() + '-' + (nextId++);
@@ -26,7 +27,7 @@ var ConfigPage = (function () {
   }
 
   function showNotification(message, type) {
-    // Remove existing notification
+    // 移除已有通知
     var existing = document.querySelector('.notification');
     if (existing) existing.remove();
 
@@ -72,7 +73,7 @@ var ConfigPage = (function () {
       });
   }
 
-  // ---- Validation ----
+  // ---- 验证 ----
 
   function validateProvider(prov) {
     var errors = {};
@@ -104,7 +105,7 @@ var ConfigPage = (function () {
     }
   }
 
-  // ---- Rendering ----
+  // ---- 渲染 ----
 
   function createProviderCard(prov, index) {
     var card = document.createElement('div');
@@ -113,9 +114,17 @@ var ConfigPage = (function () {
 
     var displayKey = prov._masked ? prov.apiKey : (prov.apiKey ? maskApiKey(prov.apiKey) : '');
 
+    var isDefault = index === defaultIndex;
+
     card.innerHTML =
       '<div class="provider-card-header">' +
-        '<span class="provider-card-title">Provider #' + (index + 1) + '</span>' +
+        '<div class="provider-card-title-row">' +
+          '<span class="provider-card-title">Provider #' + (index + 1) + '</span>' +
+          '<label class="default-radio-label" title="Set as default model">' +
+            '<input type="radio" name="default-provider" data-action="set-default" ' + (isDefault ? 'checked' : '') + '>' +
+            '<span class="default-radio-text">' + (isDefault ? '✓ Default' : 'Set as Default') + '</span>' +
+          '</label>' +
+        '</div>' +
         '<button class="btn-remove-provider" title="Remove provider" data-action="remove">&times;</button>' +
       '</div>' +
       '<div class="form-grid">' +
@@ -146,16 +155,29 @@ var ConfigPage = (function () {
         '</div>' +
       '</div>';
 
-    // Wire temperature slider
+    // 连接温度滑块
     var slider = card.querySelector('[data-field="temperature"]');
     var sliderVal = card.querySelector('[data-value="temperature"]');
     slider.addEventListener('input', function () {
       sliderVal.textContent = slider.value;
     });
 
-    // Wire remove button
+    // 连接移除按钮
     card.querySelector('[data-action="remove"]').addEventListener('click', function () {
+      // 如果删除的是默认提供者之前的，调整 defaultIndex
+      if (index < defaultIndex) {
+        defaultIndex--;
+      } else if (index === defaultIndex) {
+        defaultIndex = 0;
+      }
       providers.splice(index, 1);
+      if (providers.length === 0) defaultIndex = 0;
+      renderProviders();
+    });
+
+    // 连接默认选择按钮
+    card.querySelector('[data-action="set-default"]').addEventListener('change', function () {
+      defaultIndex = index;
       renderProviders();
     });
 
@@ -196,7 +218,7 @@ var ConfigPage = (function () {
           temperature: parseFloat(card.querySelector('[data-field="temperature"]').value),
           maxTokens: parseInt(card.querySelector('[data-field="maxTokens"]').value, 10) || undefined
         },
-        isDefault: i === 0
+        isDefault: i === defaultIndex
       });
     }
     return result;
@@ -206,7 +228,7 @@ var ConfigPage = (function () {
     var data = collectFormData();
     var hasErrors = false;
 
-    // Validate
+      // 验证
     var cards = container.querySelectorAll('.provider-card');
     for (var i = 0; i < cards.length; i++) {
       clearFieldErrors(cards[i]);
@@ -226,14 +248,22 @@ var ConfigPage = (function () {
         showNotification('Failed to save: ' + err.message, 'error');
       } else {
         showNotification('Configuration saved successfully', 'success');
-        // Refresh providers from server to get masked keys
+        // 从服务器刷新提供者以获取遮蔽的密钥
         loadConfig(function (_err, loaded) {
           if (!_err) {
             providers = loaded.map(function (p) { p._masked = true; return p; });
+            // 恢复默认提供者索引
+            defaultIndex = 0;
+            for (var i = 0; i < providers.length; i++) {
+              if (providers[i].isDefault) {
+                defaultIndex = i;
+                break;
+              }
+            }
             renderProviders();
           }
         });
-        // Refresh system status in nav
+        // 刷新导航中的系统状态
         if (window.AppRouter && window.AppRouter.refreshStatus) {
           window.AppRouter.refreshStatus();
         }
@@ -253,7 +283,7 @@ var ConfigPage = (function () {
     renderProviders();
   }
 
-  // ---- Public API ----
+  // ---- 公共 API ----
 
   function render(parentEl) {
     container = parentEl;
@@ -261,7 +291,7 @@ var ConfigPage = (function () {
     container.innerHTML =
       '<div class="config-page">' +
         '<h1>Model Configuration</h1>' +
-        '<p class="subtitle">Manage your LLM provider settings. The first provider is used as the default.</p>' +
+        '<p class="subtitle">Manage your LLM provider settings. Select a default provider using the radio button.</p>' +
         '<div id="provider-list"></div>' +
         '<div class="config-actions">' +
           '<button class="btn btn-primary" id="btn-save">Save Configuration</button>' +
@@ -272,16 +302,24 @@ var ConfigPage = (function () {
     container.querySelector('#btn-save').addEventListener('click', handleSave);
     container.querySelector('#btn-add').addEventListener('click', handleAddProvider);
 
-    // Load existing config
+    // 加载已有配置
     loadConfig(function (err, loaded) {
       if (err) {
         showNotification('Failed to load configuration', 'error');
         providers = [];
       } else {
         providers = loaded.map(function (p) { p._masked = true; return p; });
+        // 找到标记为默认的提供者
+        defaultIndex = 0;
+        for (var i = 0; i < providers.length; i++) {
+          if (providers[i].isDefault) {
+            defaultIndex = i;
+            break;
+          }
+        }
       }
       if (providers.length === 0) {
-        // Add one empty provider card by default
+        // 默认添加一个空的提供者卡片
         providers.push({
           id: generateId(),
           providerName: 'openai',

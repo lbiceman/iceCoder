@@ -1,27 +1,27 @@
 /**
- * Semantic Memory module for storing and querying knowledge as triples and concepts.
- * Supports subject-predicate-object triples, concept definitions, and knowledge graph traversal.
+ * 语义记忆模块，用于以三元组和概念形式存储和查询知识。
+ * 支持主语-谓语-宾语三元组、概念定义和知识图谱遍历。
  */
 
 import { Memory, MemoryType, Triple, Concept } from './types.js';
 import { createMemory } from './memory.js';
 
 /**
- * SemanticMemory manages fact-based and conceptual knowledge.
- * It stores knowledge as subject-predicate-object triples and concept definitions,
- * and supports queries by subject, predicate, and depth-limited knowledge graph traversal.
+ * SemanticMemory 管理基于事实和概念的知识。
+ * 以主语-谓语-宾语三元组和概念定义的形式存储知识，
+ * 支持按主语、谓语查询以及深度限制的知识图谱遍历。
  */
 export class SemanticMemory {
   private memories: Memory[] = [];
 
   /**
-   * Store a subject-predicate-object triple as a Memory object.
-   * Validates that subject, predicate, and object are all non-empty.
+   * 将主语-谓语-宾语三元组存储为 Memory 对象。
+   * 验证 subject、predicate 和 object 均非空。
    *
-   * @param triple - The triple to store
-   * @param sourceAgent - The name of the agent storing this triple
-   * @returns The created Memory object
-   * @throws Error if subject, predicate, or object is empty
+   * @param triple - 要存储的三元组
+   * @param sourceAgent - 存储此三元组的智能体名称
+   * @returns 创建的 Memory 对象
+   * @throws 如果 subject、predicate 或 object 为空则抛出错误
    */
   async storeTriple(triple: Triple, sourceAgent: string): Promise<Memory> {
     if (!triple.subject || triple.subject.trim() === '') {
@@ -56,11 +56,11 @@ export class SemanticMemory {
   }
 
   /**
-   * Store a concept definition as a Memory object.
+   * 将概念定义存储为 Memory 对象。
    *
-   * @param concept - The concept to store
-   * @param sourceAgent - The name of the agent storing this concept
-   * @returns The created Memory object
+   * @param concept - 要存储的概念
+   * @param sourceAgent - 存储此概念的智能体名称
+   * @returns 创建的 Memory 对象
    */
   async storeConcept(concept: Concept, sourceAgent: string): Promise<Memory> {
     const content = `${concept.name}: ${concept.definition}`;
@@ -84,10 +84,10 @@ export class SemanticMemory {
   }
 
   /**
-   * Query all triples where the subject matches the given value.
+   * 查询所有 subject 匹配给定值的三元组。
    *
-   * @param subject - The subject to search for
-   * @returns Array of Triple objects matching the subject
+   * @param subject - 要搜索的主语
+   * @returns 匹配主语的 Triple 对象数组
    */
   async queryBySubject(subject: string): Promise<Triple[]> {
     return this.memories
@@ -104,10 +104,10 @@ export class SemanticMemory {
   }
 
   /**
-   * Query all triples where the predicate matches the given value.
+   * 查询所有 predicate 匹配给定值的三元组。
    *
-   * @param predicate - The predicate to search for
-   * @returns Array of Triple objects matching the predicate
+   * @param predicate - 要搜索的谓语
+   * @returns 匹配谓语的 Triple 对象数组
    */
   async queryByPredicate(predicate: string): Promise<Triple[]> {
     return this.memories
@@ -124,12 +124,11 @@ export class SemanticMemory {
   }
 
   /**
-   * Query the knowledge graph starting from a concept, traversing relations
-   * up to a specified maximum depth using BFS.
+   * 从一个概念开始查询知识图谱，使用 BFS 遍历关系直到指定的最大深度。
    *
-   * @param startConcept - The name of the concept to start traversal from
-   * @param maxDepth - Maximum depth of traversal (0 returns only the start concept)
-   * @returns Array of Concept objects reachable within maxDepth
+   * @param startConcept - 开始遍历的概念名称
+   * @param maxDepth - 最大遍历深度（0 仅返回起始概念）
+   * @returns 在 maxDepth 内可达的 Concept 对象数组
    */
   async queryKnowledgeGraph(
     startConcept: string,
@@ -138,7 +137,7 @@ export class SemanticMemory {
     const visited = new Set<string>();
     const result: Concept[] = [];
 
-    // BFS queue: each entry is [conceptName, currentDepth]
+    // BFS 队列：每个条目为 [conceptName, currentDepth]
     const queue: [string, number][] = [[startConcept, 0]];
 
     while (queue.length > 0) {
@@ -150,7 +149,7 @@ export class SemanticMemory {
 
       visited.add(conceptName);
 
-      // Find the concept memory
+      // 查找概念记忆
       const conceptMemory = this.memories.find(
         (memory) =>
           memory.metadata?.kind === 'concept' &&
@@ -173,7 +172,7 @@ export class SemanticMemory {
 
       result.push(concept);
 
-      // If we haven't reached max depth, enqueue related concepts
+      // 如果未达到最大深度，将相关概念加入队列
       if (depth < maxDepth) {
         for (const relation of concept.relations) {
           if (!visited.has(relation.target)) {
@@ -187,19 +186,19 @@ export class SemanticMemory {
   }
 
   /**
-   * Get all stored semantic memories.
+   * 获取所有存储的语义记忆。
    *
-   * @returns Array of all stored Memory objects
+   * @returns 所有存储的 Memory 对象数组
    */
   async getAll(): Promise<Memory[]> {
     return [...this.memories];
   }
 
   /**
-   * Remove a memory by its ID.
+   * 按 ID 移除记忆。
    *
-   * @param memoryId - The ID of the memory to remove
-   * @returns true if the memory was found and removed, false otherwise
+   * @param memoryId - 要移除的记忆 ID
+   * @returns 如果找到并移除了记忆返回 true，否则返回 false
    */
   async remove(memoryId: string): Promise<boolean> {
     const index = this.memories.findIndex((m) => m.id === memoryId);

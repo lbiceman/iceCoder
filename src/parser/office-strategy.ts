@@ -1,60 +1,50 @@
 /**
- * Office file parsing strategy using officeparser.
- * Handles DOC, DOCX, PPT, PPTX formats by extracting text content.
- * For presentations (PPT/PPTX), extracts per-slide text and includes page count in metadata.
+ * Office 文件解析策略，使用 officeparser 库
+ * 支持 DOCX、PPTX、XLSX、ODT、ODP、ODS、PDF、RTF 格式的文本提取
+ * 注意：officeparser 不支持旧版 .doc 和 .ppt 格式
  */
 
-import { OfficeParser } from 'officeparser';
+import { parseOffice } from 'officeparser';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { FileParserStrategy, ParseResult } from './types.js';
 
 export class OfficeParserStrategy implements FileParserStrategy {
-  supportedExtensions: string[] = ['doc', 'docx', 'ppt', 'pptx'];
+  supportedExtensions: string[] = ['docx', 'pptx', 'xlsx', 'odt', 'odp', 'ods', 'pdf', 'rtf'];
 
   async parse(buffer: Buffer, filename: string): Promise<ParseResult> {
     const ext = this.extractExtension(filename);
 
     try {
-      const ast = await OfficeParser.parseOffice(buffer);
+      // officeparser 需要带扩展名的文件路径才能识别格式
+      // 将 buffer 写入临时文件（保留原始扩展名）
+      const tempDir = os.tmpdir();
+      const tempFile = path.join(tempDir, `office-parse-${Date.now()}.${ext}`);
+      await fs.writeFile(tempFile, buffer);
+
+      let content: string;
+      try {
+        // parseOffice 直接返回提取的文本字符串
+        content = String(await parseOffice(tempFile));
+      } finally {
+        // 清理临时文件
+        await fs.unlink(tempFile).catch(() => {});
+      }
 
       const isPresentation = ext === 'ppt' || ext === 'pptx';
 
-      let content: string;
-      let pageCount: number | undefined;
-
-      if (isPresentation) {
-        // For presentations, extract per-slide text
-        const slideNodes = ast.content.filter(
-          (node) => node.type === 'slide'
-        );
-
-        if (slideNodes.length > 0) {
-          pageCount = slideNodes.length;
-          const slideTexts = slideNodes.map((slide, index) => {
-            const slideText = this.extractNodeText(slide);
-            return `--- Slide ${index + 1} ---\n${slideText}`;
-          });
-          content = slideTexts.join('\n\n');
-        } else {
-          // Fallback: use toText() and estimate page count from content separators
-          content = ast.toText();
-          pageCount = this.estimateSlideCount(content);
-        }
-      } else {
-        // For documents (DOC/DOCX), extract full text
-        content = ast.toText();
-      }
-
       return {
         success: true,
-        content,
+        content: content || '',
         metadata: {
           filename,
           format: ext,
-          ...(isPresentation && pageCount !== undefined ? { pageCount } : {}),
+          ...(isPresentation ? { pageCount: this.estimateSlideCount(content) } : {}),
         },
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
+      const message = error instanceof Error ? error.message : '未知错误';
       return {
         success: false,
         content: '',
@@ -62,41 +52,21 @@ export class OfficeParserStrategy implements FileParserStrategy {
           filename,
           format: ext,
         },
-        error: `Failed to parse Office file: ${message}`,
+        error: `Office 文件解析失败: ${message}`,
       };
     }
   }
 
   /**
-   * Recursively extracts text from a content node and its children.
-   */
-  private extractNodeText(node: { text?: string; children?: { text?: string; children?: any[] }[] }): string {
-    if (node.text) {
-      return node.text;
-    }
-
-    if (node.children && node.children.length > 0) {
-      return node.children
-        .map((child) => this.extractNodeText(child))
-        .filter((text) => text.length > 0)
-        .join('\n');
-    }
-
-    return '';
-  }
-
-  /**
-   * Estimates slide count from plain text content by looking for content patterns.
-   * This is a fallback when structured slide nodes are not available.
+   * 从文本内容估算幻灯片页数
    */
   private estimateSlideCount(content: string): number {
-    // Split by double newlines as a rough slide boundary estimate
     const sections = content.split(/\n{3,}/);
     return Math.max(sections.length, 1);
   }
 
   /**
-   * Extracts the file extension from a filename (without the leading dot).
+   * 从文件名提取扩展名（不含点号）
    */
   private extractExtension(filename: string): string {
     const dotIndex = filename.lastIndexOf('.');

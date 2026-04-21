@@ -1,8 +1,8 @@
 /**
- * Testing Agent
- * Receives requirements, design, and task documents and generates E2E test cases.
- * Each test case includes: test description, preconditions, test steps, and expected results.
- * Generates a test result report with pass count, fail count, and failure details.
+ * 测试智能体
+ * 接收需求、设计和任务文档并生成端到端测试用例。
+ * 每个测试用例包含：测试描述、前置条件、测试步骤和预期结果。
+ * 生成包含通过数、失败数和失败详情的测试结果报告。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -19,7 +19,7 @@ export class TestingAgent extends BaseAgent {
     const design = context.inputData.design;
     const tasks = context.inputData.tasks;
 
-    // Validate that at least requirements are provided
+    // 验证至少提供了需求
     if (!requirements || typeof requirements !== 'string' || requirements.trim().length === 0) {
       return {
         success: false,
@@ -30,7 +30,7 @@ export class TestingAgent extends BaseAgent {
       };
     }
 
-    // Construct prompt for LLM to generate E2E test cases
+    // 构建提示让 LLM 生成端到端测试用例
     const prompt = `You are a professional QA engineer. Based on the following project documents, generate comprehensive end-to-end test cases that cover all functional requirements.
 
 Each test case MUST include:
@@ -61,13 +61,13 @@ ${requirements}
 ${design ? `--- Design Document ---\n${design}\n--- End of Design Document ---\n` : ''}
 ${tasks ? `--- Task Document ---\n${tasks}\n--- End of Task Document ---\n` : ''}`;
 
-    // Call LLM to generate the test cases
+    // 调用 LLM 生成测试用例
     const result = await this.callLLM(prompt, context);
 
     // Save the test document to the output directory
     const testFilePath = await this.saveDocument(result, 'test-cases.md', context.outputDir);
 
-    // Generate and save a summary test report
+    // 生成并保存测试报告摘要
     const report = this.generateTestReport(result);
     const reportPath = await this.saveDocument(report, 'test-report.md', context.outputDir);
 
@@ -87,11 +87,11 @@ ${tasks ? `--- Task Document ---\n${tasks}\n--- End of Task Document ---\n` : ''
   }
 
   /**
-   * Generates a structured test report from the test cases content.
-   * Extracts test case count and produces a summary report.
+   * 从测试用例内容生成结构化的测试报告。
+   * 提取测试用例数量并生成摘要报告。
    */
   private generateTestReport(testContent: string): string {
-    // Count test cases by looking for test ID patterns
+    // 通过查找测试 ID 模式来计算测试用例数
     const testCasePattern = /TC-\d+/g;
     const matches = testContent.match(testCasePattern) || [];
     const uniqueTestCases = new Set(matches);

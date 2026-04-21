@@ -1,0 +1,49 @@
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "E:\\my\\memory\\memory.jsonl"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "create_entities",
+        "create_relations",
+        "add_observations",
+        "open_nodes",
+        "search_nodes",
+        "read_graph",
+        "delete_entities",
+        "delete_relations",
+        "delete_observations"
+      ]
+    },
+    "browsermcp": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer@latest"],
+      "env": {
+        "PUPPETEER_EXECUTABLE_PATH": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      },
+      "disabled": true,
+      "autoApprove": [
+        "puppeteer_navigate",
+        "puppeteer_screenshot",
+        "puppeteer_evaluate",
+        "puppeteer_click"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "disabled": false,
+      "autoApprove": ["read_file", "list_directory"]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "disabled": false,
+      "autoApprove": ["fetch"]
+    }
+  }
+}

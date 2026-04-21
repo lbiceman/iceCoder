@@ -1,41 +1,37 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Multi-Agent Orchestrator</title>
+  <title>ICE - 多智能体编排平台</title>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
   <div id="app">
-    <!-- Top Navigation -->
+    <!-- 顶部导航 -->
     <nav class="top-nav" id="top-nav">
       <div class="nav-brand">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-        </svg>
-        <span>Multi-Agent Orchestrator</span>
+        <span class="logo-text">IceCoder</span>
       </div>
       <div class="nav-links">
-        <button class="nav-link" data-page="chat" id="nav-chat">Chat</button>
-        <button class="nav-link" data-page="config" id="nav-config">Config</button>
+        <button class="nav-link" data-page="chat" id="nav-chat">聊天</button>
+        <button class="nav-link" data-page="config" id="nav-config">配置</button>
       </div>
-      <div class="nav-status">
-        <span>
+      <div class="nav-right">
+        <button class="theme-toggle" id="theme-toggle" title="切换主题">
+          <span class="theme-icon" id="theme-icon">Light</span>
+        </button>
+        <div class="nav-status">
           <span class="status-dot disconnected" id="status-dot"></span>
-          <span id="status-text">Connecting…</span>
-        </span>
-        <span class="status-model" id="status-model">—</span>
+          <span class="status-text" id="status-text">连接中…</span>
+        </div>
       </div>
     </nav>
 
-    <!-- Page Container -->
+    <!-- 页面容器 -->
     <div class="page-container" id="page-container"></div>
   </div>
 
-  <script src="/js/config-page.js"></script>
-  <script src="/js/chat-page.js"></script>
-  <script src="/js/app.js"></script>
+  <script type="module" src="/js/main.js"></script>
 </body>
 </html>

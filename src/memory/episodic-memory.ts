@@ -1,27 +1,26 @@
 /**
- * Episodic Memory module for storing and querying event-based memories.
- * Supports time-range queries, participant-based queries, and event consolidation.
+ * 情景记忆模块，用于存储和查询基于事件的记忆。
+ * 支持时间范围查询、参与者查询和事件合并。
  */
 
 import { Memory, MemoryType, EpisodicEvent } from './types.js';
 import { createMemory } from './memory.js';
 
 /**
- * EpisodicMemory manages event-based memories representing specific experiences
- * or occurrences. Each event includes a description, timestamps, participants,
- * and optional emotion annotation.
+ * EpisodicMemory 管理基于事件的记忆，表示具体的经历或事件。
+ * 每个事件包含描述、时间戳、参与者和可选的情感标注。
  */
 export class EpisodicMemory {
   private memories: Memory[] = [];
 
   /**
-   * Store an episodic event as a Memory object.
-   * Validates that required fields (description, occurredAt) are present.
+   * 将情景事件存储为 Memory 对象。
+   * 验证必填字段（description、occurredAt）是否存在。
    *
-   * @param event - The episodic event to store
-   * @param sourceAgent - The name of the agent storing this event
-   * @returns The created Memory object
-   * @throws Error if required fields are missing or empty
+   * @param event - 要存储的情景事件
+   * @param sourceAgent - 存储此事件的智能体名称
+   * @returns 创建的 Memory 对象
+   * @throws 如果必填字段缺失或为空则抛出错误
    */
   async store(event: EpisodicEvent, sourceAgent: string): Promise<Memory> {
     if (!event.description || event.description.trim() === '') {
@@ -51,13 +50,13 @@ export class EpisodicMemory {
   }
 
   /**
-   * Query episodic memories within a time range.
-   * Returns events where occurredAt is between start and end (inclusive),
-   * sorted by occurredAt ascending.
+   * 查询指定时间范围内的情景记忆。
+   * 返回 occurredAt 在 start 和 end 之间（含）的事件，
+   * 按 occurredAt 升序排列。
    *
-   * @param start - Start of the time range
-   * @param end - End of the time range
-   * @returns Array of Memory objects sorted by occurredAt ascending
+   * @param start - 时间范围的开始
+   * @param end - 时间范围的结束
+   * @returns 按 occurredAt 升序排列的 Memory 对象数组
    */
   async queryByTimeRange(start: Date, end: Date): Promise<Memory[]> {
     const filtered = this.memories.filter((memory) => {
@@ -73,11 +72,11 @@ export class EpisodicMemory {
   }
 
   /**
-   * Query episodic memories by participant.
-   * Returns all events where the given participant is in the participants array.
+   * 按参与者查询情景记忆。
+   * 返回给定参与者在 participants 数组中的所有事件。
    *
-   * @param participant - The participant name to search for
-   * @returns Array of Memory objects involving the given participant
+   * @param participant - 要搜索的参与者名称
+   * @returns 涉及给定参与者的 Memory 对象数组
    */
   async queryByParticipant(participant: string): Promise<Memory[]> {
     return this.memories.filter((memory) => {
@@ -87,12 +86,12 @@ export class EpisodicMemory {
   }
 
   /**
-   * Consolidate multiple events into a single summary record.
-   * Merges the descriptions of the specified events into one combined Memory.
+   * 将多个事件合并为单个摘要记录。
+   * 将指定事件的描述合并为一个组合 Memory。
    *
-   * @param eventIds - Array of memory IDs to consolidate
-   * @returns A new Memory object containing the consolidated summary
-   * @throws Error if no matching events are found
+   * @param eventIds - 要合并的记忆 ID 数组
+   * @returns 包含合并摘要的新 Memory 对象
+   * @throws 如果没有找到匹配的事件则抛出错误
    */
   async consolidateEvents(eventIds: string[]): Promise<Memory> {
     const events = this.memories.filter((m) => eventIds.includes(m.id));
@@ -101,18 +100,18 @@ export class EpisodicMemory {
       throw new Error('No matching events found for consolidation');
     }
 
-    // Sort events by occurredAt for chronological summary
+    // 按 occurredAt 排序以生成按时间顺序的摘要
     const sorted = events.sort((a, b) => {
       const aTime = new Date(a.metadata?.occurredAt).getTime();
       const bTime = new Date(b.metadata?.occurredAt).getTime();
       return aTime - bTime;
     });
 
-    // Combine descriptions into a summary
+    // 将描述合并为摘要
     const descriptions = sorted.map((m) => m.metadata?.description ?? m.content);
     const summaryContent = descriptions.join('; ');
 
-    // Collect all unique participants
+    // 收集所有唯一参与者
     const allParticipants = new Set<string>();
     for (const event of sorted) {
       const participants: string[] = event.metadata?.participants ?? [];
@@ -121,7 +120,7 @@ export class EpisodicMemory {
       }
     }
 
-    // Use the earliest occurredAt and latest endedAt/occurredAt
+    // 使用最早的 occurredAt 和最晚的 endedAt/occurredAt
     const earliestOccurredAt = sorted[0].metadata?.occurredAt;
     const latestTime = sorted[sorted.length - 1].metadata?.endedAt
       ?? sorted[sorted.length - 1].metadata?.occurredAt;
@@ -146,19 +145,19 @@ export class EpisodicMemory {
   }
 
   /**
-   * Get all stored episodic memories.
+   * 获取所有存储的情景记忆。
    *
-   * @returns Array of all stored Memory objects
+   * @returns 所有存储的 Memory 对象数组
    */
   async getAll(): Promise<Memory[]> {
     return [...this.memories];
   }
 
   /**
-   * Remove a memory by its ID.
+   * 按 ID 移除记忆。
    *
-   * @param memoryId - The ID of the memory to remove
-   * @returns true if the memory was found and removed, false otherwise
+   * @param memoryId - 要移除的记忆 ID
+   * @returns 如果找到并移除了记忆返回 true，否则返回 false
    */
   async remove(memoryId: string): Promise<boolean> {
     const index = this.memories.findIndex((m) => m.id === memoryId);

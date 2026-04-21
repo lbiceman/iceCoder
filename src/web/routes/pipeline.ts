@@ -1,6 +1,6 @@
 /**
- * Pipeline status and SSE endpoint routes.
- * Provides real-time pipeline updates via SSE and pipeline state queries.
+ * 流水线状态和 SSE 端点路由。
+ * 通过 SSE 提供实时流水线更新和流水线状态查询。
  */
 
 import { Router, type Request, type Response } from 'express';
@@ -9,7 +9,7 @@ import type { SSEManager } from '../sse.js';
 import type { SSEEvent } from '../types.js';
 
 /**
- * Options for creating the pipeline router.
+ * 创建流水线路由的选项。
  */
 export interface PipelineRouterOptions {
   orchestrator: Orchestrator;
@@ -17,16 +17,16 @@ export interface PipelineRouterOptions {
 }
 
 /**
- * Creates the pipeline API router.
- * Provides SSE streaming, pipeline state, and stage report endpoints.
+ * 创建流水线 API 路由。
+ * 提供 SSE 流式传输、流水线状态和阶段报告端点。
  */
 export function createPipelineRouter(options: PipelineRouterOptions): Router {
   const { orchestrator, sseManager } = options;
   const router = Router();
 
   /**
-   * GET /api/chat/stream/:id - Establish SSE connection for pipeline updates.
-   * Pushes stage_update, message, pipeline_complete, and error events.
+   * GET /api/chat/stream/:id - 建立用于流水线更新的 SSE 连接。
+   * 推送 stage_update、message、pipeline_complete 和 error 事件。
    */
   router.get('/chat/stream/:id', (req: Request, res: Response): void => {
     const executionId = req.params.id as string;
@@ -36,10 +36,10 @@ export function createPipelineRouter(options: PipelineRouterOptions): Router {
       return;
     }
 
-    // Register SSE connection
+    // 注册 SSE 连接
     sseManager.addConnection(executionId, res);
 
-    // Send initial connection confirmation
+    // 发送初始连接确认
     const connectEvent: SSEEvent = {
       type: 'message',
       data: { content: 'SSE connection established' },
@@ -48,7 +48,7 @@ export function createPipelineRouter(options: PipelineRouterOptions): Router {
   });
 
   /**
-   * GET /api/pipeline/:id - Return current pipeline state.
+   * GET /api/pipeline/:id - 返回当前流水线状态。
    */
   router.get('/pipeline/:id', (req: Request, res: Response): void => {
     const executionId = req.params.id as string;
@@ -65,7 +65,7 @@ export function createPipelineRouter(options: PipelineRouterOptions): Router {
       return;
     }
 
-    // Serialize the pipeline state (Map -> Object for JSON)
+    // 序列化流水线状态（Map -> Object 用于 JSON）
     const serializedState = {
       executionId: state.executionId,
       stages: state.stages,
@@ -79,7 +79,7 @@ export function createPipelineRouter(options: PipelineRouterOptions): Router {
   });
 
   /**
-   * GET /api/pipeline/:id/report/:stage - Return stage report content.
+   * GET /api/pipeline/:id/report/:stage - 返回阶段报告内容。
    */
   router.get('/pipeline/:id/report/:stage', async (req: Request, res: Response): Promise<void> => {
     const executionId = req.params.id as string;
@@ -115,7 +115,7 @@ export function createPipelineRouter(options: PipelineRouterOptions): Router {
 }
 
 /**
- * Wires Orchestrator events to the SSE manager for real-time updates.
+ * 将编排器事件连接到 SSE 管理器以实现实时更新。
  */
 export function wireOrchestratorToSSE(orchestrator: Orchestrator, sseManager: SSEManager): void {
   orchestrator.onStageChange((stage) => {
@@ -139,7 +139,7 @@ export function wireOrchestratorToSSE(orchestrator: Orchestrator, sseManager: SS
     };
     sseManager.push(state.executionId, event);
 
-    // Clean up SSE connections after pipeline completes
+    // 流水线完成后清理 SSE 连接
     setTimeout(() => {
       sseManager.removeConnection(state.executionId);
     }, 5000);
