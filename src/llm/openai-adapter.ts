@@ -30,6 +30,8 @@ export interface OpenAIAdapterConfig {
   topP?: number;
   frequencyPenalty?: number;
   presencePenalty?: number;
+  /** 单次 API 请求超时（毫秒），默认 120000（2 分钟） */
+  timeout?: number;
   [key: string]: any;
 }
 
@@ -48,9 +50,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       apiKey: config.apiKey,
       baseURL: config.baseURL,
       organization: config.organization,
+      timeout: config.timeout ?? 120_000,       // 2 分钟超时，防止无限挂起
+      maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
     });
     this.model = config.model;
-    const { apiKey, baseURL, organization, model, ...rest } = config;
+    const { apiKey, baseURL, organization, model, timeout, ...rest } = config;
     this.defaultParams = rest;
   }
 
@@ -63,7 +67,15 @@ export class OpenAIAdapter implements ProviderAdapter {
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, false);
 
+      console.log(`[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
+      const startTime = Date.now();
+
       const response = await this.client.chat.completions.create(params);
+
+      const elapsed = Date.now() - startTime;
+      const usage = (response as OpenAI.ChatCompletion).usage;
+      console.log(`[OpenAI] chat 响应 ← ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'}→${usage?.completion_tokens ?? '?'}`);
+
       return this.convertResponse(response as OpenAI.ChatCompletion);
     } catch (error) {
       throw this.convertError(error);
@@ -82,6 +94,9 @@ export class OpenAIAdapter implements ProviderAdapter {
     try {
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, true);
+
+      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
+      const startTime = Date.now();
 
       const stream = await this.client.chat.completions.create({
         ...params,
@@ -144,6 +159,9 @@ export class OpenAIAdapter implements ProviderAdapter {
       }
 
       callback('', true);
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[OpenAI] stream 完成 ← ${elapsed}ms | tokens: ${promptTokens}→${completionTokens}`);
 
       const combinedContent = reasoningContent
         ? `${reasoningContent}\n\n${fullContent}`
