@@ -309,8 +309,10 @@ async function handleChatMessage(
   }
   sendJSON(ws, {
     type: 'tokenUsage',
-    inputTokens: result.loopState.totalInputTokens,
-    outputTokens: result.loopState.totalOutputTokens,
+    inputTokens: result.loopState.lastInputTokens,
+    outputTokens: result.loopState.lastOutputTokens,
+    totalInputTokens: result.loopState.totalInputTokens,
+    totalOutputTokens: result.loopState.totalOutputTokens,
   });
 }
 

@@ -40,3 +40,17 @@ export type {
 } from './types.js';
 
 export { FILE_MEMORY_TYPES } from './types.js';
+
+// ─── 新增：集成模块 ───
+
+export { FileMemoryManager, createFileMemoryManager } from './file-memory-manager.js';
+export type { FileMemoryManagerConfig } from './file-memory-manager.js';
+
+export { MultiLevelMemoryLoader, MemoryLevel, createMultiLevelMemoryLoader } from './multi-level-memory.js';
+export type { MultiLevelMemoryConfig } from './multi-level-memory.js';
+
+export { AsyncMemoryPrefetcher, RelevanceAnalyzer, createAsyncPrefetcher } from './async-prefetch.js';
+export type { PrefetchConfig, PrefetchResult } from './async-prefetch.js';
+
+export { MemoryExtractor, createMemoryExtractor } from './memory-extractor.js';
+export type { ExtractionConfig, CandidateMemory, ConversationMessage } from './memory-extractor.js';

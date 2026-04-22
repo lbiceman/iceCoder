@@ -7,6 +7,7 @@
 import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
 import type { MemoryManager } from '../memory/memory-manager.js';
+import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 
 // ─── 上下文组装 ───
 
@@ -98,10 +99,14 @@ export type StopReason =
 export interface LoopState {
   /** 当前轮次 */
   currentRound: number;
-  /** 累计输入 token */
+  /** 累计输入 token（所有轮次 API 返回的 inputTokens 之和） */
   totalInputTokens: number;
-  /** 累计输出 token */
+  /** 累计输出 token（所有轮次 API 返回的 outputTokens 之和） */
   totalOutputTokens: number;
+  /** 最后一轮 API 调用的输入 token（= 当前上下文窗口占用） */
+  lastInputTokens: number;
+  /** 最后一轮 API 调用的输出 token */
+  lastOutputTokens: number;
   /** 累计工具调用次数 */
   totalToolCalls: number;
   /** 开始时间 */
@@ -132,8 +137,10 @@ export interface HarnessConfig {
   compactionEnableLLMSummary?: boolean;
   /** confirm 权限的回调：返回 true 允许，false 拒绝 */
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-  /** 记忆文件目录路径（用于文件记忆预取） */
+  /** 记忆文件目录路径（用于文件记忆预取，向后兼容） */
   memoryDir?: string;
+  /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */
+  fileMemoryManager?: FileMemoryManager;
   /** 结构化记忆管理器（可选，用于运行时工作记忆） */
   memoryManager?: MemoryManager;
   /** 记忆检索的最大条数（默认 5） */

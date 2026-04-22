@@ -1117,13 +1117,10 @@ window.ChatPage = (function () {
   /** 更新导航栏连接状态 */
   function updateNavStatus(connected) {
     var dot = document.getElementById('status-dot');
-    var text = document.getElementById('status-text');
     if (dot) {
       dot.classList.toggle('connected', connected);
       dot.classList.toggle('disconnected', !connected);
-    }
-    if (text) {
-      text.textContent = connected ? '已连接' : '未连接';
+      dot.title = connected ? '已连接' : '未连接';
     }
   }
 
@@ -1145,8 +1142,9 @@ window.ChatPage = (function () {
   }
 
   function updateTokenUsage(inputTokens, outputTokens) {
-    usedInputTokens += inputTokens;
-    usedOutputTokens += outputTokens;
+    // 直接赋值：inputTokens/outputTokens 代表当前上下文窗口占用（最后一轮 API 调用的值）
+    usedInputTokens = inputTokens;
+    usedOutputTokens = outputTokens;
     renderContextBar();
   }
 

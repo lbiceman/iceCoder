@@ -25,6 +25,8 @@ export class LoopController {
       currentRound: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
       totalToolCalls: 0,
       startTime: Date.now(),
     };
@@ -77,6 +79,9 @@ export class LoopController {
   recordTokenUsage(inputTokens: number, outputTokens: number): void {
     this.state.totalInputTokens += inputTokens;
     this.state.totalOutputTokens += outputTokens;
+    // 记录最后一轮的值（= 当前上下文窗口实际占用）
+    this.state.lastInputTokens = inputTokens;
+    this.state.lastOutputTokens = outputTokens;
   }
 
   /**
