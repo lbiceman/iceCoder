@@ -17,7 +17,6 @@
   var navChat = document.getElementById('nav-chat');
   var navConfig = document.getElementById('nav-config');
   var statusDot = document.getElementById('status-dot');
-  var statusText = document.getElementById('status-text');
   // var statusModel = document.getElementById('status-model');
   var themeToggle = document.getElementById('theme-toggle');
   var themeIcon = document.getElementById('theme-icon');
@@ -82,7 +81,7 @@
       .then(function (data) {
         statusDot.classList.remove('disconnected');
         statusDot.classList.add('connected');
-        statusText.textContent = '已连接';
+        statusDot.title = '已连接';
 
         var providers = data.providers || [];
         if (providers.length > 0) {
@@ -95,7 +94,7 @@
       .catch(function () {
         statusDot.classList.remove('connected');
         statusDot.classList.add('disconnected');
-        statusText.textContent = '未连接';
+        statusDot.title = '未连接';
         // statusModel.textContent = '—';
       });
   }

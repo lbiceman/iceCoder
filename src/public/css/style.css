@@ -172,14 +172,13 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .nav-status {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
 }
 
 .status-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  cursor: default;
 }
 .status-dot.connected {
   background: var(--success);
@@ -187,11 +186,6 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 }
 .status-dot.disconnected {
   background: var(--text-muted);
-}
-
-.status-text {
-  color: var(--text-primary);
-  font-size: 12px;
 }
 
 .theme-toggle {

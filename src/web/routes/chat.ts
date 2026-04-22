@@ -294,8 +294,8 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         res.write(`data: ${JSON.stringify({
           done: true,
           tokenUsage: {
-            inputTokens: result.loopState.totalInputTokens,
-            outputTokens: result.loopState.totalOutputTokens,
+            inputTokens: result.loopState.lastInputTokens,
+            outputTokens: result.loopState.lastOutputTokens,
           },
         })}\n\n`);
 
