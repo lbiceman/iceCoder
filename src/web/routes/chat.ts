@@ -15,9 +15,11 @@ import type { HarnessConfig } from '../../harness/types.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
 import { setActiveSession } from './sessions.js';
+import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 
 const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
 const SESSIONS_DIR = path.resolve('data/sessions');
+const MEMORY_DIR = path.resolve('data/memory-files');
 
 /** 将用户消息和 AI 回复保存到服务端会话文件 */
 async function saveToSession(sessionId: string, userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
@@ -218,6 +220,7 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         context: {
           systemPrompt,
           tools: toolDefs,
+          memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
         },
         loop: {
           maxRounds: 800,
@@ -229,6 +232,7 @@ export function createChatRouter(options: ChatRouterOptions): Router {
         ],
         compactionThreshold: 40,
         compactionKeepRecent: 10,
+        memoryDir: MEMORY_DIR,
         onConfirm: (toolName, args) => {
           return new Promise<boolean>((resolve) => {
             // 通知前端弹框

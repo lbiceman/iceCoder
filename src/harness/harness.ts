@@ -1,22 +1,20 @@
 /**
- * Harness — 核心循环引擎。
+ * Harness — 核心循环引擎（状态机模式）。
  *
- * 这是整个系统的心脏：
+ * 参考 Claude Code 的 query.ts 架构：
+ * 使用 while(true) + 可变 State 对象的迭代模式，
+ * 避免深度递归导致的栈溢出。
  *
- * while (未完成) {
- *   context = 组装上下文(系统提示 + 记忆 + 历史 + 工具结果)
- *   response = LLM(context)
- *   action = 解析(response)
- *   if (action == 调用工具) → 权限检查 → 执行工具 → 结果塞回 context → 继续循环
- *   if (action == 完成) → 退出
- * }
+ * 每轮迭代：
+ * 1. 消息预处理（工具结果预算裁剪 → 上下文压缩）
+ * 2. 调用 LLM
+ * 3. 处理响应
+ * 4. 决定 continue / stop
  *
- * 所有 AI 执行的操作均由 Harness 负责。
- * 其他模块（LLM、ToolExecutor、Memory）只提供能力，不驱动循环。
+ * state.transition 记录每次 continue 的原因，方便调试和测试。
  */
 
-import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
-import type { ToolCall } from '../llm/types.js';
+import type { UnifiedMessage, ToolDefinition, ToolCall } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type {
   HarnessConfig,
@@ -25,12 +23,76 @@ import type {
   ChatFunction,
   StopReason,
 } from './types.js';
-import { ContextAssembler } from './context-assembler.js';
+import { ContextAssembler, normalizeMessages } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { PermissionManager } from './permission.js';
 import { ContextCompactor } from './context-compactor.js';
 import { HarnessLogger } from './logger.js';
-import type { HarnessLogEntry } from './logger.js';
+import { StopHookManager } from './stop-hooks.js';
+import { TokenBudgetTracker } from './token-budget.js';
+import { StreamingToolExecutor } from './streaming-tool-executor.js';
+import type { StreamingToolResult } from './streaming-tool-executor.js';
+import { scanMemoryFiles, memoryFreshnessNote } from '../memory/file-memory/index.js';
+import type { MemoryManager } from '../memory/memory-manager.js';
+import { MemoryType } from '../memory/types.js';
+
+// ─── 工具输出截断上限 ───
+const MAX_TOOL_OUTPUT = 30000;
+
+// ─── max-output-tokens 恢复最大次数 ───
+const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
+
+// ─── LLM 调用重试配置 ───
+const LLM_MAX_RETRIES = 3;
+const LLM_RETRY_BASE_DELAY = 1000;
+const LLM_RETRY_MAX_DELAY = 15000;
+
+/** 判断错误是否可重试（网络超时、限流、服务端错误） */
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    // 网络错误
+    if (msg.includes('timeout') || msg.includes('econnreset') || msg.includes('econnrefused')
+      || msg.includes('fetch failed') || msg.includes('network')) return true;
+    // 限流
+    if (msg.includes('rate limit') || msg.includes('429') || msg.includes('too many requests')) return true;
+    // 服务端错误
+    if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('overloaded')) return true;
+  }
+  return false;
+}
+
+/**
+ * 循环 continue 的原因（用于调试和测试）。
+ * 参考 Claude Code 的 state.transition。
+ */
+type Transition =
+  | 'initial'
+  | 'tool_calls'
+  | 'max_output_tokens_recovery'
+  | 'stop_hook_continue'
+  | 'token_budget_continuation'
+  | 'llm_error_retry'
+  | 'compaction_retry';
+
+/**
+ * 迭代间携带的可变状态。
+ * 参考 Claude Code 的 State 类型。
+ */
+interface LoopState {
+  /** 当前对话消息列表 */
+  messages: UnifiedMessage[];
+  /** 可用工具定义 */
+  tools: ToolDefinition[];
+  /** 当前轮次 */
+  turnCount: number;
+  /** max-output-tokens 恢复计数 */
+  maxOutputTokensRecoveryCount: number;
+  /** LLM 调用连续重试计数 */
+  llmRetryCount: number;
+  /** 上一次 continue 的原因 */
+  transition: Transition;
+}
 
 /**
  * Harness 是 Agent 循环的核心引擎。
@@ -44,7 +106,14 @@ export class Harness {
   private permissionManager: PermissionManager;
   private contextCompactor: ContextCompactor;
   private toolExecutor: ToolExecutor;
+  private stopHookManager: StopHookManager;
+  private tokenBudgetTracker?: TokenBudgetTracker;
   private onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  private memoryDir?: string;
+  private memoryManager?: MemoryManager;
+  private memoryRetrieveLimit: number;
+  /** 当前用户消息，用于记忆相关性检索 */
+  private currentUserMessage: string = '';
 
   constructor(
     config: HarnessConfig,
@@ -55,14 +124,34 @@ export class Harness {
     this.permissionManager = new PermissionManager(config.permissions);
     this.contextCompactor = new ContextCompactor({
       threshold: config.compactionThreshold ?? 40,
+      tokenThreshold: config.compactionTokenThreshold,
       keepRecent: config.compactionKeepRecent ?? 10,
+      enableLLMSummary: config.compactionEnableLLMSummary,
     });
     this.toolExecutor = toolExecutor;
+    this.stopHookManager = new StopHookManager();
     this.onConfirm = config.onConfirm;
+
+    // 记忆目录：用于文件记忆持久化
+    this.memoryDir = config.memoryDir;
+
+    // 结构化记忆管理器：用于运行时工作记忆
+    this.memoryManager = config.memoryManager;
+    this.memoryRetrieveLimit = config.memoryRetrieveLimit ?? 5;
+
+    // 如果配置了 token 预算，创建追踪器
+    if (config.loop.tokenBudget) {
+      this.tokenBudgetTracker = new TokenBudgetTracker({
+        totalBudget: config.loop.tokenBudget,
+      });
+    }
   }
 
   /**
-   * 执行核心循环。
+   * 执行核心循环（状态机模式）。
+   *
+   * 参考 Claude Code 的 queryLoop()：
+   * while(true) + State 对象，每轮迭代 = 预处理 → LLM 调用 → 响应处理 → 决定继续/停止。
    *
    * @param userMessage - 用户输入
    * @param chatFn - LLM 调用函数
@@ -76,25 +165,102 @@ export class Harness {
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
 
-    // ── 第 0 步：组装初始上下文 ──
+    // ── 初始化（循环外，只执行一次）──
     const messages = this.contextAssembler.assembleInitialMessages(userMessage);
     const tools = this.contextAssembler.getTools();
-
     logger.loopStart(tools.length, messages.length);
 
-    // ── 核心循环（受 maxRounds / tokenBudget / timeout / userAbort 控制）──
-    let stopReason = this.loopController.shouldContinue();
-    while (!stopReason) {
+    // 保存用户消息用于记忆相关性检索
+    this.currentUserMessage = userMessage;
+    this.memoryInjected = false;
+
+    // 将用户输入存入短期记忆（如果有 MemoryManager）
+    await this.storeToMemory(userMessage, 'user_input');
+
+    // 初始化可变状态
+    const state: LoopState = {
+      messages,
+      tools,
+      turnCount: 0,
+      maxOutputTokensRecoveryCount: 0,
+      llmRetryCount: 0,
+      transition: 'initial',
+    };
+
+    // ── 核心循环（参考 Claude Code 的 while(true) 迭代模式）──
+    while (true) {
+      // 1. 解构当前状态
+      const { messages: msgs, tools: currentTools } = state;
+
+      // 2. 消息预处理管线（工具结果预算裁剪 → 上下文压缩）
+      this.applyToolResultBudget(msgs);
+      await this.maybeCompact(msgs, chatFn, logger, onStep);
+
+      // 3. 推进轮次，检查循环控制
       this.loopController.advanceRound();
+      state.turnCount++;
       const round = this.loopController.getState().currentRound;
-      logger.roundStart(round, messages.length);
+      logger.roundStart(round, msgs.length);
 
-      // ── 上下文压缩（如果需要）──
-      this.maybeCompact(messages, logger, onStep);
+      const loopStop = this.loopController.shouldContinue();
+      if (loopStop) {
+        return this.handleStop(loopStop, msgs, chatFn, currentTools, logger, onStep);
+      }
 
-      // ── 调用 LLM ──
+      // 4. 调用 LLM（带错误恢复）
       logger.llmCall();
-      const response = await chatFn(messages, { tools });
+
+      // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
+      const normalizedMsgs = normalizeMessages(msgs);
+
+      // 检查用户中断
+      if (this.loopController.isAborted()) {
+        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
+      }
+
+      let response;
+      try {
+        response = await chatFn(normalizedMsgs, { tools: currentTools });
+        state.llmRetryCount = 0; // 成功后重置重试计数
+      } catch (error) {
+        // ── LLM 调用错误恢复 ──
+        if (isRetryableError(error) && state.llmRetryCount < LLM_MAX_RETRIES) {
+          state.llmRetryCount++;
+          const delay = Math.min(
+            LLM_RETRY_BASE_DELAY * Math.pow(2, state.llmRetryCount - 1),
+            LLM_RETRY_MAX_DELAY,
+          );
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          logger.error(`LLM 调用失败 (${state.llmRetryCount}/${LLM_MAX_RETRIES}): ${errorMsg}，${delay}ms 后重试`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          state.transition = 'llm_error_retry';
+          // 不推进轮次，回退 advanceRound
+          continue;
+        }
+
+        // 不可重试或重试次数用完 → 返回错误
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        logger.error(`LLM 调用失败且无法恢复: ${errorMsg}`);
+        this.loopController.stop('error');
+        const finalState = this.loopController.getState();
+        logger.loopStop('error', finalState.currentRound, finalState.totalToolCalls);
+        await this.consolidateMemory();
+
+        onStep?.({
+          type: 'final',
+          iteration: finalState.currentRound,
+          totalToolCalls: finalState.totalToolCalls,
+          content: `LLM 调用错误: ${errorMsg}`,
+          stopReason: 'error',
+        });
+
+        return {
+          content: `LLM 调用错误: ${errorMsg}`,
+          loopState: finalState,
+          messages: [...msgs],
+          log: logger.getEntries(),
+        };
+      }
 
       const tokenUsage = {
         input: response.usage?.inputTokens ?? 0,
@@ -102,66 +268,423 @@ export class Harness {
       };
       this.loopController.recordTokenUsage(tokenUsage.input, tokenUsage.output);
 
-      // ── 解析响应 ──
+      // 记录 token 预算
+      if (this.tokenBudgetTracker) {
+        this.tokenBudgetTracker.recordUsage(tokenUsage.input, tokenUsage.output);
+      }
 
-      // 情况 1：模型说 done（没有工具调用）
-      if (response.finishReason !== 'tool_calls' || !response.toolCalls || response.toolCalls.length === 0) {
+      // 5. 处理响应：无工具调用 → 进入退出/恢复逻辑
+      const hasToolCalls = response.finishReason === 'tool_calls'
+        && response.toolCalls
+        && response.toolCalls.length > 0;
+
+      if (!hasToolCalls) {
         logger.llmResponseFinal(tokenUsage);
 
+        // ── 5a. max-output-tokens 恢复 ──
+        // 参考 Claude Code：finishReason === 'length' 时注入"请继续"，最多重试 3 次
+        if (
+          response.finishReason === 'length'
+          && state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
+        ) {
+          state.maxOutputTokensRecoveryCount++;
+          console.log(
+            `[harness] max-output-tokens 恢复 (${state.maxOutputTokensRecoveryCount}/${MAX_OUTPUT_TOKENS_RECOVERY_LIMIT})`,
+          );
+
+          // 将模型的部分回复加入对话
+          if (response.content) {
+            msgs.push({ role: 'assistant', content: response.content });
+          }
+          // 参考 Claude Code：精确措辞防止模型浪费 token 重复之前的内容
+          msgs.push({
+            role: 'user',
+            content: '直接继续 — 不要道歉，不要重述之前的内容。如果上次回复在中途被截断，从截断处继续。将剩余工作拆分为更小的步骤。',
+          });
+          state.transition = 'max_output_tokens_recovery';
+          continue;
+        }
+
+        // 如果 max-output-tokens 恢复次数用完，报告停止原因
+        if (
+          response.finishReason === 'length'
+          && state.maxOutputTokensRecoveryCount >= MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
+        ) {
+          this.loopController.stop('max_output_tokens');
+          const finalState = this.loopController.getState();
+          logger.loopStop('max_output_tokens', finalState.currentRound, finalState.totalToolCalls);
+
+          // 循环结束时触发记忆合并
+          await this.consolidateMemory();
+
+          onStep?.({
+            type: 'final',
+            iteration: finalState.currentRound,
+            totalToolCalls: finalState.totalToolCalls,
+            content: response.content,
+            stopReason: 'max_output_tokens',
+            tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
+            totalTokenUsage: {
+              inputTokens: finalState.totalInputTokens,
+              outputTokens: finalState.totalOutputTokens,
+            },
+          });
+
+          return {
+            content: response.content,
+            loopState: finalState,
+            messages: [...msgs],
+            log: logger.getEntries(),
+          };
+        }
+
+        // ── 5b. 停止钩子 ──
+        // 参考 Claude Code 的 stop hooks：如果钩子要求继续，注入消息后 continue
+        if (this.stopHookManager.count > 0) {
+          const hookResult = await this.stopHookManager.execute(msgs, response.content);
+          if (hookResult.shouldContinue && hookResult.message) {
+            console.log(`[harness] 停止钩子 "${hookResult.hookName}" 要求继续`);
+            msgs.push({ role: 'user', content: hookResult.message });
+            state.transition = 'stop_hook_continue';
+            continue;
+          }
+        }
+
+        // ── 5c. Token 预算继续 ──
+        // 参考 Claude Code 的 token budget：预算充足时注入 nudge 消息
+        if (this.tokenBudgetTracker && this.tokenBudgetTracker.shouldContinue()) {
+          const nudge = this.tokenBudgetTracker.getContinuationMessage();
+          console.log(`[harness] token 预算继续: ${this.tokenBudgetTracker.getSummary()}`);
+          msgs.push({ role: 'user', content: nudge });
+          state.transition = 'token_budget_continuation';
+          continue;
+        }
+
+        // ── 5d. 正常完成 → return ──
         this.loopController.stop('model_done');
-        const state = this.loopController.getState();
-        logger.loopStop('model_done', state.currentRound, state.totalToolCalls);
+        const finalState = this.loopController.getState();
+        logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
+
+        // 循环结束时触发记忆合并
+        await this.consolidateMemory();
 
         onStep?.({
           type: 'final',
-          iteration: state.currentRound,
-          totalToolCalls: state.totalToolCalls,
+          iteration: finalState.currentRound,
+          totalToolCalls: finalState.totalToolCalls,
           content: response.content,
           stopReason: 'model_done',
           tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-          totalTokenUsage: { inputTokens: state.totalInputTokens, outputTokens: state.totalOutputTokens },
+          totalTokenUsage: {
+            inputTokens: finalState.totalInputTokens,
+            outputTokens: finalState.totalOutputTokens,
+          },
         });
 
         return {
           content: response.content,
-          loopState: state,
-          messages: [...messages],
+          loopState: finalState,
+          messages: [...msgs],
           log: logger.getEntries(),
         };
       }
 
-      // 情况 2：模型请求工具调用
-      logger.llmResponseToolCalls(response.toolCalls.length, tokenUsage);
+      // 6. 有工具调用 → 执行工具
+      logger.llmResponseToolCalls(response.toolCalls!.length, tokenUsage);
 
-      // 推送 token 用量（附带思考内容，如果有的话）
+      // 推送思考内容（如果有）
       onStep?.({
         type: 'thinking',
         iteration: round,
         content: response.content || undefined,
         tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-        totalTokenUsage: { inputTokens: this.loopController.getState().totalInputTokens, outputTokens: this.loopController.getState().totalOutputTokens },
+        totalTokenUsage: {
+          inputTokens: this.loopController.getState().totalInputTokens,
+          outputTokens: this.loopController.getState().totalOutputTokens,
+        },
       });
 
       // 将 assistant 的 tool_calls 消息加入对话
-      messages.push({
+      msgs.push({
         role: 'assistant',
         content: response.content || '',
         toolCalls: response.toolCalls,
       });
 
-      // ── 执行工具调用（带权限检查）──
-      await this.executeToolCalls(response.toolCalls, messages, logger, onStep);
+      // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
+      await this.executeToolCallsStreaming(response.toolCalls!, msgs, logger, onStep);
 
-      // ── 检查下一轮是否应该停止 ──
-      stopReason = this.loopController.shouldContinue();
+      // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
+      // 放在所有 tool 结果之后、下一轮 LLM 调用之前
+      await this.injectMemoryContext(msgs);
+
+      // 6c. maxTurns 检查（由 loopController 处理）
+      const nextStop = this.loopController.shouldContinue();
+      if (nextStop) {
+        return this.handleStop(nextStop, msgs, chatFn, currentTools, logger, onStep);
+      }
+
+      // 6d. 构造下一轮状态 → continue
+      // 重置恢复计数（工具调用成功意味着模型在正常工作）
+      state.maxOutputTokensRecoveryCount = 0;
+      state.llmRetryCount = 0;
+      state.transition = 'tool_calls';
+      // messages 和 tools 已就地更新，直接 continue
+    }
+  }
+
+
+  /**
+   * 工具结果预算裁剪。
+   *
+   * 参考 Claude Code 的 applyToolResultBudget()：
+   * 对旧的工具结果做大小预算裁剪，防止上下文爆炸。
+   * 越早的工具结果裁剪越激进，最近的保持完整。
+   */
+  private applyToolResultBudget(messages: UnifiedMessage[]): void {
+    // 保留最近 6 条 tool 消息不裁剪，对更早的做渐进式截断
+    const KEEP_RECENT = 6;
+    const BUDGET_PER_MESSAGE = 3000;
+
+    let toolMsgCount = 0;
+    // 从后往前数 tool 消息
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'tool') toolMsgCount++;
     }
 
-    // 循环因 maxRounds / tokenBudget / timeout / userAbort 退出
-    return this.handleStop(stopReason, messages, chatFn, tools, logger, onStep);
+    if (toolMsgCount <= KEEP_RECENT) return;
+
+    // 从前往后裁剪旧的 tool 消息
+    let seen = 0;
+    const cutoff = toolMsgCount - KEEP_RECENT;
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+      seen++;
+      if (seen > cutoff) break;
+
+      if (msg.content.length > BUDGET_PER_MESSAGE) {
+        messages[i] = {
+          ...msg,
+          content: msg.content.substring(0, BUDGET_PER_MESSAGE)
+            + `\n...[工具结果已裁剪，原始长度 ${msg.content.length} 字符]`,
+        };
+      }
+    }
   }
 
   /**
-   * 执行工具调用，带权限检查。
+   * 注入记忆上下文（整合文件记忆 + 结构化记忆）。
+   *
+   * 两个来源合并为一条 <system-reminder>，避免多条 user 消息堆积：
+   * 1. 文件记忆：扫描 memoryDir，按修改时间取最新的，附带新鲜度提醒
+   * 2. 结构化记忆：用当前用户消息做相关性检索，返回高重要性记忆
+   *
+   * 只在第一轮工具调用后注入一次，后续轮次跳过（避免重复堆积）。
+   */
+  private memoryInjected = false;
+
+  private async injectMemoryContext(messages: UnifiedMessage[]): Promise<void> {
+    if (this.memoryInjected) return;
+    if (!this.memoryDir && !this.memoryManager) return;
+
+    const sections: string[] = [];
+
+    // ── 文件记忆 ──
+    if (this.memoryDir) {
+      try {
+        const fileMemories = await scanMemoryFiles(this.memoryDir, 50);
+        if (fileMemories.length > 0) {
+          const parts: string[] = [];
+          for (const mem of fileMemories.slice(0, 10)) {
+            const freshness = memoryFreshnessNote(mem.mtimeMs);
+            const desc = mem.description ? `: ${mem.description}` : '';
+            parts.push(`${freshness}- ${mem.filename}${desc}`);
+          }
+          sections.push(`文件记忆：\n${parts.join('\n')}`);
+        }
+      } catch {
+        // 文件记忆扫描失败不阻塞
+      }
+    }
+
+    // ── 结构化记忆检索 ──
+    if (this.memoryManager && this.currentUserMessage) {
+      try {
+        const retrieved = await this.memoryManager.retrieve(
+          this.currentUserMessage,
+          undefined,
+          this.memoryRetrieveLimit,
+        );
+        if (retrieved.length > 0) {
+          const parts = retrieved.map(m => {
+            const age = Math.floor((Date.now() - m.lastAccessedAt.getTime()) / 86_400_000);
+            const ageStr = age === 0 ? '今天' : age === 1 ? '昨天' : `${age}天前`;
+            const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : '';
+            return `- (${m.type}, ${ageStr}, 重要性:${m.importanceScore.toFixed(2)})${tags} ${m.content.substring(0, 200)}`;
+          });
+          sections.push(`相关记忆：\n${parts.join('\n')}`);
+
+          // 提升被检索到的记忆的重要性
+          for (const m of retrieved) {
+            try {
+              await this.memoryManager.boostImportanceScore(m.id);
+            } catch {
+              // 提升失败不阻塞
+            }
+          }
+        }
+      } catch {
+        // 结构化记忆检索失败不阻塞
+      }
+    }
+
+    if (sections.length > 0) {
+      const reminder = `<system-reminder>\n${sections.join('\n\n')}\n</system-reminder>`;
+      messages.push({ role: 'user', content: reminder });
+    }
+
+    this.memoryInjected = true;
+  }
+
+  /**
+   * 使用 StreamingToolExecutor 执行工具调用。
+   *
+   * 并行安全的工具（isConcurrencySafe）并行执行，
+   * 非并行安全的工具串行执行。
+   * 每个工具执行前检查权限和用户中断。
+   * 中断时为未完成的 tool_use 补齐错误 tool_result。
+   */
+  private async executeToolCallsStreaming(
+    toolCalls: ToolCall[],
+    messages: UnifiedMessage[],
+    logger: HarnessLogger,
+    onStep?: (event: HarnessStepEvent) => void,
+  ): Promise<void> {
+    const streamingExecutor = new StreamingToolExecutor(this.toolExecutor);
+    const iteration = this.loopController.getState().currentRound;
+
+    // 第一遍：权限检查 + 提交到流式执行器
+    const submittedIds = new Set<string>();
+    for (const tc of toolCalls) {
+      // 检查用户中断
+      if (this.loopController.isAborted()) {
+        // 为剩余未执行的 tool_use 补齐错误 tool_result
+        this.yieldMissingToolResults(toolCalls, submittedIds, messages);
+        break;
+      }
+
+      // ── 权限检查 ──
+      const permission = this.permissionManager.canUseTool(tc.name);
+
+      if (!permission.allowed && permission.permission === 'deny') {
+        logger.toolDenied(tc.name, permission.message);
+        onStep?.({
+          type: 'tool_denied',
+          iteration,
+          toolName: tc.name,
+          toolArgs: tc.arguments,
+          toolError: permission.message,
+        });
+        messages.push({
+          role: 'tool',
+          content: `工具调用被拒绝: ${permission.message}。请使用其他方式完成任务。`,
+          toolCallId: tc.id,
+        });
+        this.loopController.recordToolCalls(1);
+        continue;
+      }
+
+      if (!permission.allowed && permission.permission === 'confirm') {
+        onStep?.({ type: 'tool_confirm', iteration, toolName: tc.name, toolArgs: tc.arguments });
+        let approved = true;
+        if (this.onConfirm) {
+          approved = await this.onConfirm(tc.name, tc.arguments);
+        }
+        if (!approved) {
+          logger.toolDenied(tc.name, '用户拒绝');
+          messages.push({
+            role: 'tool',
+            content: `工具调用被用户拒绝。请使用其他方式完成任务。`,
+            toolCallId: tc.id,
+          });
+          this.loopController.recordToolCalls(1);
+          continue;
+        }
+      }
+
+      // ── 提交到流式执行器 ──
+      logger.toolCall(tc.name, tc.arguments);
+      onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
+      streamingExecutor.submit(tc);
+      submittedIds.add(tc.id);
+    }
+
+    // 第二遍：等待所有已提交的工具完成，收集结果
+    const results = await streamingExecutor.flush();
+
+    for (const sr of results) {
+      const { toolCall: tc, result, durationMs } = sr;
+      const output = result.success ? result.output : `工具执行错误: ${result.error}`;
+
+      logger.toolResult(tc.name, result.success, output.length, result.error);
+      onStep?.({
+        type: 'tool_result',
+        iteration,
+        toolName: tc.name,
+        toolSuccess: result.success,
+        toolOutput: output.substring(0, 500),
+        toolError: result.success ? undefined : result.error,
+      });
+
+      const truncatedOutput = output.length > MAX_TOOL_OUTPUT
+        ? output.substring(0, MAX_TOOL_OUTPUT) + `\n\n[输出已截断，原始长度: ${output.length} 字符]`
+        : output;
+
+      messages.push({
+        role: 'tool',
+        content: truncatedOutput,
+        toolCallId: tc.id,
+      });
+
+      await this.storeToolInteraction(tc.name, tc.arguments, result.success, output);
+      this.loopController.recordToolCalls(1);
+    }
+
+    // 如果中断发生在 flush 期间，为未完成的补齐
+    if (this.loopController.isAborted()) {
+      this.yieldMissingToolResults(toolCalls, new Set(results.map(r => r.toolCall.id)), messages);
+    }
+  }
+
+  /**
+   * 为未完成的 tool_use 补齐错误 tool_result。
+   *
+   * 参考 Claude Code 的 yieldMissingToolResultBlocks()：
+   * 中断或错误时，API 要求每个 tool_use 都有对应的 tool_result，
+   * 否则下一轮调用会报错。
+   */
+  private yieldMissingToolResults(
+    toolCalls: ToolCall[],
+    completedIds: Set<string>,
+    messages: UnifiedMessage[],
+  ): void {
+    for (const tc of toolCalls) {
+      if (completedIds.has(tc.id)) continue;
+      // 检查消息中是否已有此 tool_result（权限拒绝等情况）
+      const hasResult = messages.some(m => m.role === 'tool' && m.toolCallId === tc.id);
+      if (hasResult) continue;
+
+      messages.push({
+        role: 'tool',
+        content: '工具执行被中断。',
+        toolCallId: tc.id,
+      });
+    }
+  }
+
+  /**
+   * 执行工具调用（串行回退，用于不支持流式执行的场景）。
    */
   private async executeToolCalls(
     toolCalls: ToolCall[],
@@ -248,8 +771,7 @@ export class Harness {
       });
 
       // 将工具结果加入对话（限制单次工具输出长度，防止上下文溢出）
-      var MAX_TOOL_OUTPUT = 30000;
-      var truncatedOutput = output.length > MAX_TOOL_OUTPUT
+      const truncatedOutput = output.length > MAX_TOOL_OUTPUT
         ? output.substring(0, MAX_TOOL_OUTPUT) + '\n\n[输出已截断，原始长度: ' + output.length + ' 字符]'
         : output;
 
@@ -258,6 +780,9 @@ export class Harness {
         content: truncatedOutput,
         toolCallId: tc.id,
       });
+
+      // 将工具交互记录到情景记忆
+      await this.storeToolInteraction(tc.name, tc.arguments, result.success, output);
 
       this.loopController.recordToolCalls(1);
     }
@@ -270,13 +795,16 @@ export class Harness {
     reason: StopReason,
     messages: UnifiedMessage[],
     chatFn: ChatFunction,
-    tools: ToolDefinition[],
+    _tools: ToolDefinition[],
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
   ): Promise<HarnessResult> {
     this.loopController.stop(reason);
     const state = this.loopController.getState();
     logger.loopStop(reason, state.currentRound, state.totalToolCalls);
+
+    // 循环结束时触发记忆合并（短期 → 长期）
+    await this.consolidateMemory();
 
     // 如果是用户中断，直接返回
     if (reason === 'user_abort') {
@@ -320,14 +848,15 @@ export class Harness {
   /**
    * 如果需要，执行上下文压缩。
    */
-  private maybeCompact(
+  private async maybeCompact(
     messages: UnifiedMessage[],
+    chatFn: ChatFunction,
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
-  ): void {
+  ): Promise<void> {
     if (this.contextCompactor.needsCompaction(messages)) {
       const before = messages.length;
-      const compacted = this.contextCompactor.compact(messages);
+      const compacted = await this.contextCompactor.compact(messages, chatFn);
 
       messages.length = 0;
       messages.push(...compacted);
@@ -349,5 +878,94 @@ export class Harness {
    */
   getLoopState() {
     return this.loopController.getState();
+  }
+
+  /**
+   * 获取停止钩子管理器（用于注册自定义钩子）。
+   */
+  getStopHookManager(): StopHookManager {
+    return this.stopHookManager;
+  }
+
+  /**
+   * 获取记忆管理器（用于外部直接操作记忆）。
+   */
+  getMemoryManager(): MemoryManager | undefined {
+    return this.memoryManager;
+  }
+
+  // ─── 记忆集成私有方法 ───
+
+  /**
+   * 将内容存入短期记忆。
+   * 失败不阻塞主流程。
+   */
+  private async storeToMemory(
+    content: string,
+    interactionType: string,
+    metadata?: Record<string, any>,
+  ): Promise<void> {
+    if (!this.memoryManager) return;
+    try {
+      await this.memoryManager.store(content, MemoryType.SHORT_TERM, {
+        interactionType,
+        sourceAgent: 'harness',
+        ...metadata,
+      });
+    } catch {
+      // 记忆存储失败不阻塞主流程
+    }
+  }
+
+  /**
+   * 将工具交互记录到情景记忆。
+   * 只记录摘要（工具名 + 成功/失败 + 输出前 200 字符），不记录完整输出。
+   */
+  private async storeToolInteraction(
+    toolName: string,
+    args: Record<string, any>,
+    success: boolean,
+    output: string,
+  ): Promise<void> {
+    if (!this.memoryManager) return;
+    try {
+      const argsStr = JSON.stringify(args);
+      const truncatedArgs = argsStr.length > 200 ? argsStr.substring(0, 200) + '...' : argsStr;
+      const truncatedOutput = output.substring(0, 200);
+      const status = success ? '成功' : '失败';
+      const description = `工具调用 ${toolName}(${truncatedArgs}) → ${status}: ${truncatedOutput}`;
+
+      await this.memoryManager.store(description, MemoryType.EPISODIC, {
+        interactionType: 'agent_transfer',
+        sourceAgent: 'harness',
+        participants: ['harness', toolName],
+        occurredAt: new Date().toISOString(),
+        toolName,
+        success,
+      });
+    } catch {
+      // 记忆存储失败不阻塞主流程
+    }
+  }
+
+  /**
+   * 触发记忆合并：将高重要性短期记忆转入长期记忆，并执行衰减。
+   * 在循环结束时调用，失败不阻塞。
+   */
+  private async consolidateMemory(): Promise<void> {
+    if (!this.memoryManager) return;
+    try {
+      const consolidated = await this.memoryManager.consolidate();
+      if (consolidated > 0) {
+        console.log(`[harness] 记忆合并: ${consolidated} 条短期记忆转入长期记忆`);
+      }
+
+      const decayed = await this.memoryManager.decay();
+      if (decayed > 0) {
+        console.log(`[harness] 记忆衰减: ${decayed} 条记忆受影响`);
+      }
+    } catch {
+      // 合并/衰减失败不阻塞
+    }
   }
 }

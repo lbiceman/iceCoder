@@ -21,9 +21,11 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
+import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 
 const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
 const SESSIONS_DIR = path.resolve('data/sessions');
+const MEMORY_DIR = path.resolve('data/memory-files');
 
 async function loadSystemPrompt(): Promise<string> {
   try {
@@ -204,7 +206,11 @@ async function handleChatMessage(
   }
 
   const harnessConfig: HarnessConfig = {
-    context: { systemPrompt, tools: toolDefs },
+    context: {
+      systemPrompt,
+      tools: toolDefs,
+      memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+    },
     loop: {
       maxRounds: 800,
       timeout: 60 * 60 * 1000,
@@ -214,6 +220,7 @@ async function handleChatMessage(
     ],
     compactionThreshold: 40,
     compactionKeepRecent: 10,
+    memoryDir: MEMORY_DIR,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, { type: 'confirm', toolName, args });

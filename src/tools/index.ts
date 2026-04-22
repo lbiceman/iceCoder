@@ -1,10 +1,17 @@
 /**
  * 工具系统入口。
  * 创建并注册所有内置工具，返回配置好的 ToolRegistry 和 ToolExecutor。
+ *
+ * 模块组成：
+ * - ToolRegistry: 工具注册表
+ * - ToolExecutor: 工具执行器（带重试和超时）
+ * - ToolValidator: 工具输入验证器（参考 Claude Code 的 Tool.validateInput）
+ * - ToolMetadata: 工具元数据（参考 Claude Code 的 Tool 接口元数据字段）
  */
 
 import { ToolRegistry } from './tool-registry.js';
 import { ToolExecutor } from './tool-executor.js';
+import { ToolValidator, createDefaultValidationRules } from './tool-validator.js';
 import { createFileTools } from './builtin/file-tools.js';
 import { createUrlFetchTool } from './builtin/url-fetch-tool.js';
 import { createDocParseTools } from './builtin/doc-parse-tool.js';
@@ -17,6 +24,10 @@ import type { FileParser } from '../parser/file-parser.js';
 import type { ToolExecutorConfig } from './types.js';
 
 export type { ToolExecutorConfig } from './types.js';
+export { ToolValidator, createDefaultValidationRules } from './tool-validator.js';
+export type { ValidationResult, ValidationRule } from './tool-validator.js';
+export { getToolMetadata, isConcurrencySafe, isReadOnly, isDestructive, DEFAULT_TOOL_METADATA } from './tool-metadata.js';
+export type { ToolMetadata, ToolTag } from './tool-metadata.js';
 
 /**
  * 工具系统初始化选项。
@@ -36,11 +47,12 @@ export interface ToolSystemOptions {
 export interface ToolSystem {
   registry: ToolRegistry;
   executor: ToolExecutor;
+  validator: ToolValidator;
 }
 
 /**
  * 初始化完整的工具系统。
- * 注册所有内置工具并返回 registry 和 executor。
+ * 注册所有内置工具并返回 registry、executor 和 validator。
  */
 export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   const { workDir, fileParser, executorConfig } = options;
@@ -79,7 +91,13 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
 
   const executor = new ToolExecutor(registry, executorConfig);
 
+  // 初始化验证器（参考 Claude Code 的 Tool.validateInput）
+  const validator = new ToolValidator();
+  for (const rule of createDefaultValidationRules()) {
+    validator.addGlobalRule(rule);
+  }
+
   console.log(`工具系统已初始化，共注册 ${registry.getAll().length} 个工具`);
 
-  return { registry, executor };
+  return { registry, executor, validator };
 }

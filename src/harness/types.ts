@@ -6,6 +6,7 @@
 
 import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
+import type { MemoryManager } from '../memory/memory-manager.js';
 
 // ─── 上下文组装 ───
 
@@ -13,16 +14,22 @@ import type { HarnessLogEntry } from './logger.js';
  * 上下文组装配置，决定"喂什么"给模型。
  */
 export interface ContextAssemblyConfig {
-  /** 系统提示词 */
+  /** 系统提示词（静态部分，可缓存） */
   systemPrompt: string;
   /** 可用工具定义 */
   tools: ToolDefinition[];
   /** 环境信息（OS、当前目录等） */
   environment?: Record<string, string>;
-  /** 记忆注入内容 */
+  /** 持久化记忆提示词（由 loadMemoryPrompt 生成，包含记忆指令 + MEMORY.md 内容） */
+  memoryPrompt?: string;
+  /** 额外记忆片段（向后兼容） */
   memories?: string[];
   /** 用户偏好 */
   userPreferences?: Record<string, any>;
+  /** 用户上下文（CLAUDE.md 内容等，以 key-value 形式注入到 <system-reminder>） */
+  userContext?: Record<string, string>;
+  /** 系统上下文（Git 状态等实时信息，追加到系统提示词末尾） */
+  systemContext?: Record<string, string>;
 }
 
 // ─── 权限系统 ───
@@ -76,12 +83,14 @@ export interface LoopControlConfig {
  * 循环停止原因。
  */
 export type StopReason =
-  | 'model_done'       // 模型说 done
-  | 'max_rounds'       // 达到最大轮次
-  | 'token_budget'     // token 预算耗尽
-  | 'timeout'          // 超时
-  | 'user_abort'       // 用户中断
-  | 'error';           // 错误
+  | 'model_done'         // 模型说 done
+  | 'max_rounds'         // 达到最大轮次
+  | 'token_budget'       // token 预算耗尽
+  | 'timeout'            // 超时
+  | 'user_abort'         // 用户中断
+  | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
+  | 'stop_hook'          // 停止钩子阻止继续
+  | 'error';             // 错误
 
 /**
  * 循环状态跟踪。
@@ -113,12 +122,22 @@ export interface HarnessConfig {
   loop: LoopControlConfig;
   /** 权限规则 */
   permissions?: ToolPermissionRule[];
-  /** 上下文压缩阈值（消息数量） */
+  /** 上下文压缩阈值（消息数量，向后兼容） */
   compactionThreshold?: number;
+  /** 上下文压缩的 token 阈值（优先于消息数阈值，默认 80000） */
+  compactionTokenThreshold?: number;
   /** 上下文压缩后保留的最近消息数 */
   compactionKeepRecent?: number;
+  /** 是否启用 LLM 摘要压缩（默认 false，启用后压缩质量更高但消耗额外 token） */
+  compactionEnableLLMSummary?: boolean;
   /** confirm 权限的回调：返回 true 允许，false 拒绝 */
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  /** 记忆文件目录路径（用于文件记忆预取） */
+  memoryDir?: string;
+  /** 结构化记忆管理器（可选，用于运行时工作记忆） */
+  memoryManager?: MemoryManager;
+  /** 记忆检索的最大条数（默认 5） */
+  memoryRetrieveLimit?: number;
 }
 
 /**
