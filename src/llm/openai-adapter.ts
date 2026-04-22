@@ -176,11 +176,95 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   /**
    * 将 UnifiedMessage[] 转换为 OpenAI ChatCompletionMessageParam[]。
+   *
+   * 包含兜底校验：确保每个 assistant(tool_calls) 的 tool_call_id
+   * 都有对应的 tool 消息，防止 OpenAI API 返回 400 错误。
    */
   private convertToOpenAIMessages(
     messages: UnifiedMessage[],
   ): OpenAI.ChatCompletionMessageParam[] {
-    return messages.map((msg) => this.convertSingleMessage(msg));
+    const converted = messages.map((msg) => this.convertSingleMessage(msg));
+    return this.validateToolCallPairing(converted);
+  }
+
+  /**
+   * 最终兜底：校验 OpenAI 消息格式中 tool_calls 与 tool 消息的配对完整性。
+   *
+   * OpenAI API 严格要求：assistant 消息中的每个 tool_call id 必须有
+   * 一条 role=tool + tool_call_id 的消息与之对应，否则返回 400。
+   *
+   * 此方法作为发送前的最后一道防线，在 normalizeMessages 之后再做一次检查。
+   */
+  private validateToolCallPairing(
+    messages: OpenAI.ChatCompletionMessageParam[],
+  ): OpenAI.ChatCompletionMessageParam[] {
+    // 收集所有 assistant 的 tool_call id
+    const requiredIds = new Map<string, number>(); // id -> assistant 消息索引
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          requiredIds.set(tc.id, i);
+        }
+      }
+    }
+
+    if (requiredIds.size === 0) return messages;
+
+    // 收集已有的 tool 消息 id
+    const existingToolIds = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role === 'tool' && 'tool_call_id' in msg && msg.tool_call_id) {
+        existingToolIds.add(msg.tool_call_id);
+      }
+    }
+
+    // 找缺失的
+    const missingIds: { id: string; assistantIdx: number }[] = [];
+    for (const [id, idx] of requiredIds) {
+      if (!existingToolIds.has(id)) {
+        missingIds.push({ id, assistantIdx: idx });
+      }
+    }
+
+    if (missingIds.length === 0) return messages;
+
+    // 按 assistantIdx 分组
+    const missingByIdx = new Map<number, string[]>();
+    for (const { id, assistantIdx } of missingIds) {
+      if (!missingByIdx.has(assistantIdx)) {
+        missingByIdx.set(assistantIdx, []);
+      }
+      missingByIdx.get(assistantIdx)!.push(id);
+    }
+
+    // 插入占位 tool 消息
+    const result: OpenAI.ChatCompletionMessageParam[] = [];
+    for (let i = 0; i < messages.length; i++) {
+      result.push(messages[i]);
+
+      if (missingByIdx.has(i)) {
+        // 跳过紧随其后的已有 tool 消息（它们已经在 result 中了，下一轮循环会加）
+        // 找到该 assistant 后面连续 tool 消息的末尾
+        let j = i + 1;
+        while (j < messages.length && messages[j].role === 'tool') {
+          result.push(messages[j]);
+          j++;
+        }
+        // 在末尾补齐缺失的
+        for (const missingId of missingByIdx.get(i)!) {
+          result.push({
+            role: 'tool',
+            content: '[工具结果丢失]',
+            tool_call_id: missingId,
+          });
+        }
+        // 跳过已处理的
+        i = j - 1;
+      }
+    }
+
+    return result;
   }
 
   /**
