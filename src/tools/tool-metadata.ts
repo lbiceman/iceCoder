@@ -233,6 +233,35 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 30000,
     tags: ['shell'],
   },
+
+  // ── 系统文件浏览器 ──
+  list_drives: {
+    name: 'list_drives',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    searchHint: '列出磁盘驱动器 盘符',
+    maxResultSizeChars: 5000,
+    tags: ['directory'],
+  },
+  browse_directory: {
+    name: 'browse_directory',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    searchHint: '浏览目录 文件管理器 打开文件夹',
+    maxResultSizeChars: 30000,
+    tags: ['directory', 'file_read'],
+  },
+  open_file: {
+    name: 'open_file',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    searchHint: '打开文件 读取任意文件',
+    maxResultSizeChars: 50000,
+    tags: ['file_read'],
+  },
 };
 
 /**

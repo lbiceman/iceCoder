@@ -40,18 +40,17 @@ import { RequirementVerificationAgent } from './agents/requirement-verification.
 import { SSEManager } from './web/sse.js';
 import { createServer, startServer } from './web/server.js';
 import { createConfigRouter } from './web/routes/config.js';
-import { createChatRouter } from './web/routes/chat.js';
 import { createPipelineRouter, wireOrchestratorToSSE } from './web/routes/pipeline.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
-import { attachChatWebSocket } from './web/chat-ws.js';
+import { attachChatWebSocket, cleanupChatResources } from './web/chat-ws.js';
 import { createSessionsRouter } from './web/routes/sessions.js';
 
 // 类型
 import type { ProviderConfig } from './web/types.js';
 
-const CONFIG_PATH = path.resolve('data/config.json');
-const OUTPUT_DIR = path.resolve('output');
+const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
+const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
 
 /**
  * 从 data/config.json 读取提供者配置。
@@ -239,7 +238,6 @@ async function main(): Promise<void> {
   const app = await createServer({
     routes: [
       { path: '/api/config', router: createConfigRouter() },
-      { path: '/api/chat', router: createChatRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/sessions', router: createSessionsRouter() },
@@ -255,6 +253,16 @@ async function main(): Promise<void> {
 
   // 10. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);
+
+  // 11. 优雅关闭处理
+  const shutdown = () => {
+    console.log('Shutting down...');
+    cleanupChatResources();
+    server.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
   console.log('Multi-Agent Orchestrator is ready');
 }

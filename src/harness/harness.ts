@@ -25,13 +25,12 @@ import type {
 } from './types.js';
 import { ContextAssembler, normalizeMessages } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
-import { PermissionManager } from './permission.js';
 import { ContextCompactor } from './context-compactor.js';
 import { HarnessLogger } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
-import type { StreamingToolResult } from './streaming-tool-executor.js';
+import { getToolMetadata } from '../tools/tool-metadata.js';
 import { scanMemoryFiles, memoryFreshnessNote } from '../memory/file-memory/index.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { ConversationMessage } from '../memory/file-memory/memory-extractor.js';
@@ -48,6 +47,18 @@ const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 const LLM_MAX_RETRIES = 3;
 const LLM_RETRY_BASE_DELAY = 1000;
 const LLM_RETRY_MAX_DELAY = 15000;
+
+// ─── 工具结果预算裁剪 ───
+const TOOL_RESULT_KEEP_RECENT = 6;
+const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
+
+// ─── 记忆注入 ───
+const MEMORY_MAX_FILE_MEMORIES = 10;
+const MEMORY_MAX_RELEVANT_MEMORIES = 10;
+
+// ─── 默认压缩配置 ───
+const DEFAULT_COMPACTION_THRESHOLD = 40;
+const DEFAULT_COMPACTION_KEEP_RECENT = 10;
 
 /** 判断错误是否可重试（网络超时、限流、服务端错误） */
 function isRetryableError(error: unknown): boolean {
@@ -105,7 +116,6 @@ interface LoopState {
 export class Harness {
   private contextAssembler: ContextAssembler;
   private loopController: LoopController;
-  private permissionManager: PermissionManager;
   private contextCompactor: ContextCompactor;
   private toolExecutor: ToolExecutor;
   private stopHookManager: StopHookManager;
@@ -124,11 +134,10 @@ export class Harness {
   ) {
     this.contextAssembler = new ContextAssembler(config.context);
     this.loopController = new LoopController(config.loop);
-    this.permissionManager = new PermissionManager(config.permissions);
     this.contextCompactor = new ContextCompactor({
-      threshold: config.compactionThreshold ?? 40,
+      threshold: config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
       tokenThreshold: config.compactionTokenThreshold,
-      keepRecent: config.compactionKeepRecent ?? 10,
+      keepRecent: config.compactionKeepRecent ?? DEFAULT_COMPACTION_KEEP_RECENT,
       enableLLMSummary: config.compactionEnableLLMSummary,
     });
     this.toolExecutor = toolExecutor;
@@ -162,17 +171,26 @@ export class Harness {
    * @param userMessage - 用户输入
    * @param chatFn - LLM 调用函数
    * @param onStep - 每一步的回调（用于 SSE 实时推送）
+   * @param existingMessages - 已有的对话消息历史（参考 claude-code 的 params.messages）
    * @returns Harness 执行结果（包含结构化日志）
    */
   async run(
     userMessage: string,
     chatFn: ChatFunction,
     onStep?: (event: HarnessStepEvent) => void,
+    existingMessages?: UnifiedMessage[],
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
 
     // ── 初始化（循环外，只执行一次）──
-    const messages = this.contextAssembler.assembleInitialMessages(userMessage);
+    // 参考 claude-code：如果有已有消息历史，直接追加用户消息；否则从零构建
+    let messages: UnifiedMessage[];
+    if (existingMessages && existingMessages.length > 0) {
+      messages = existingMessages;
+      messages.push({ role: 'user', content: userMessage });
+    } else {
+      messages = this.contextAssembler.assembleInitialMessages(userMessage);
+    }
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
@@ -452,8 +470,8 @@ export class Harness {
    */
   private applyToolResultBudget(messages: UnifiedMessage[]): void {
     // 保留最近 6 条 tool 消息不裁剪，对更早的做渐进式截断
-    const KEEP_RECENT = 6;
-    const BUDGET_PER_MESSAGE = 3000;
+    const KEEP_RECENT = TOOL_RESULT_KEEP_RECENT;
+    const BUDGET_PER_MESSAGE = TOOL_RESULT_BUDGET_PER_MESSAGE;
 
     let toolMsgCount = 0;
     // 从后往前数 tool 消息
@@ -505,7 +523,7 @@ export class Harness {
         // 使用相关性检索（消费异步预取结果或同步检索）
         const relevantMemories = await this.fileMemoryManager.getRelevantMemories(
           this.currentUserMessage,
-          10,
+          MEMORY_MAX_RELEVANT_MEMORIES,
         );
         if (relevantMemories.length > 0) {
           const { memoryFreshnessNote } = await import('../memory/file-memory/memory-age.js');
@@ -526,7 +544,7 @@ export class Harness {
         const fileMemories = await scanMemoryFiles(this.memoryDir, 50);
         if (fileMemories.length > 0) {
           const parts: string[] = [];
-          for (const mem of fileMemories.slice(0, 10)) {
+          for (const mem of fileMemories.slice(0, MEMORY_MAX_FILE_MEMORIES)) {
             const freshness = memoryFreshnessNote(mem.mtimeMs);
             const desc = mem.description ? `: ${mem.description}` : '';
             parts.push(`${freshness}- ${mem.filename}${desc}`);
@@ -599,11 +617,6 @@ export class Harness {
         break;
       }
 
-      // ── 权限检查（已禁用：所有工具直接放行）──
-      // const permission = this.permissionManager.canUseTool(tc.name);
-      // if (!permission.allowed && permission.permission === 'deny') { ... }
-      // if (!permission.allowed && permission.permission === 'confirm') { ... }
-
       // ── 提交到流式执行器 ──
       logger.toolCall(tc.name, tc.arguments);
       onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
@@ -615,7 +628,7 @@ export class Harness {
     const results = await streamingExecutor.flush();
 
     for (const sr of results) {
-      const { toolCall: tc, result, durationMs } = sr;
+      const { toolCall: tc, result } = sr;
       const output = result.success ? result.output : `工具执行错误: ${result.error}`;
 
       logger.toolResult(tc.name, result.success, output.length, result.error);
@@ -628,8 +641,10 @@ export class Harness {
         toolError: result.success ? undefined : result.error,
       });
 
-      const truncatedOutput = output.length > MAX_TOOL_OUTPUT
-        ? output.substring(0, MAX_TOOL_OUTPUT) + `\n\n[输出已截断，原始长度: ${output.length} 字符]`
+      const toolMeta = getToolMetadata(tc.name);
+      const maxOutput = toolMeta.maxResultSizeChars === Infinity ? MAX_TOOL_OUTPUT : Math.min(toolMeta.maxResultSizeChars, MAX_TOOL_OUTPUT);
+      const truncatedOutput = output.length > maxOutput
+        ? output.substring(0, maxOutput) + `\n\n[输出已截断，原始长度: ${output.length} 字符]`
         : output;
 
       messages.push({
@@ -671,65 +686,6 @@ export class Harness {
         content: '工具执行被中断。',
         toolCallId: tc.id,
       });
-    }
-  }
-
-  /**
-   * 执行工具调用（串行回退，用于不支持流式执行的场景）。
-   */
-  private async executeToolCalls(
-    toolCalls: ToolCall[],
-    messages: UnifiedMessage[],
-    logger: HarnessLogger,
-    onStep?: (event: HarnessStepEvent) => void,
-  ): Promise<void> {
-    for (const tc of toolCalls) {
-      const iteration = this.loopController.getState().currentRound;
-
-      // ── 权限检查（已禁用：所有工具直接放行）──
-
-      // ── 记录工具调用 ──
-      logger.toolCall(tc.name, tc.arguments);
-      onStep?.({
-        type: 'tool_call',
-        iteration,
-        toolName: tc.name,
-        toolArgs: tc.arguments,
-      });
-
-      // ── 执行工具 ──
-      const result = await this.toolExecutor.executeTool(tc);
-
-      const output = result.success
-        ? result.output
-        : `工具执行错误: ${result.error}`;
-
-      // ── 记录工具结果 ──
-      logger.toolResult(tc.name, result.success, output.length, result.error);
-      onStep?.({
-        type: 'tool_result',
-        iteration,
-        toolName: tc.name,
-        toolSuccess: result.success,
-        toolOutput: output.substring(0, 500),
-        toolError: result.success ? undefined : result.error,
-      });
-
-      // 将工具结果加入对话（限制单次工具输出长度，防止上下文溢出）
-      const truncatedOutput = output.length > MAX_TOOL_OUTPUT
-        ? output.substring(0, MAX_TOOL_OUTPUT) + '\n\n[输出已截断，原始长度: ' + output.length + ' 字符]'
-        : output;
-
-      messages.push({
-        role: 'tool',
-        content: truncatedOutput,
-        toolCallId: tc.id,
-      });
-
-      // 将工具交互记录到情景记忆
-      await this.storeToolInteraction(tc.name, tc.arguments, result.success, output);
-
-      this.loopController.recordToolCalls(1);
     }
   }
 
@@ -812,13 +768,6 @@ export class Harness {
   }
 
   /**
-   * 获取权限管理器（用于外部配置）。
-   */
-  getPermissionManager(): PermissionManager {
-    return this.permissionManager;
-  }
-
-  /**
    * 获取循环状态。
    */
   getLoopState() {
@@ -888,6 +837,22 @@ export class Harness {
         toolName,
         success,
       });
+
+      // 存入语义记忆：工具使用模式（知识图谱三元组）
+      if (success) {
+        await this.memoryManager.store(
+          `工具 ${toolName} 可用于: ${truncatedArgs}`,
+          MemoryType.SEMANTIC,
+          { interactionType: 'tool_knowledge', sourceAgent: 'harness', toolName },
+        ).catch(() => {});
+      }
+
+      // 存入过程记忆：工具执行技能追踪
+      await this.memoryManager.store(
+        `${toolName}: ${status}`,
+        MemoryType.PROCEDURAL,
+        { interactionType: 'skill_tracking', sourceAgent: 'harness', toolName, success },
+      ).catch(() => {});
     } catch {
       // 记忆存储失败不阻塞主流程
     }
@@ -909,6 +874,12 @@ export class Harness {
         const decayed = await this.memoryManager.decay();
         if (decayed > 0) {
           console.log(`[harness] 记忆衰减: ${decayed} 条记忆受影响`);
+        }
+
+        // 发现记忆间的关联（内容相似性 + 时间邻近性）
+        const associations = await this.memoryManager.discoverAssociations();
+        if (associations.length > 0) {
+          console.log(`[harness] 发现 ${associations.length} 条记忆关联`);
         }
       } catch {
         // 合并/衰减失败不阻塞
