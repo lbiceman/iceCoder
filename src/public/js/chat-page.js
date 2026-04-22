@@ -388,9 +388,26 @@ window.ChatPage = (function () {
     }
   }
 
-  // ---- Thinking 指示器 ----
+  /** 判断用户是否在聊天底部附近（100px 阈值） */
+  function isNearBottom() {
+    if (!elMessages) return true;
+    var threshold = 100;
+    return elMessages.scrollHeight - elMessages.scrollTop - elMessages.clientHeight < threshold;
+  }
+
+  /** 仅在用户处于底部附近时才滚动到底部 */
+  function scrollToBottomIfNeeded() {
+    if (isNearBottom()) {
+      scrollToBottom();
+    }
+  }
+
+  // ---- Thinking 指示器（含轮次显示） ----
+
+  var currentTurnCount = 0; // 当前轮次计数（不写入 messages）
 
   function showThinking(withFile) {
+    currentTurnCount = 0;
     var el = document.createElement('div');
     el.className = 'message agent thinking';
     el.setAttribute('id', 'thinking-indicator');
@@ -406,11 +423,34 @@ window.ChatPage = (function () {
     content.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> ' + thinkText;
     el.appendChild(content);
 
+    var turnEl = document.createElement('div');
+    turnEl.setAttribute('id', 'turn-counter');
+    turnEl.className = 'turn-counter';
+    turnEl.style.cssText = 'font-size:12px;color:#888;margin-top:4px;';
+    el.appendChild(turnEl);
+
     elMessages.appendChild(el);
     scrollToBottom();
   }
 
+  /** 更新 thinking 指示器下方的轮次显示 */
+  function updateTurnCounter(turn) {
+    if (turn > currentTurnCount) {
+      currentTurnCount = turn;
+    }
+    var el = document.getElementById('turn-counter');
+    if (el) {
+      el.textContent = '第 ' + currentTurnCount + ' 轮';
+    }
+    if (!document.getElementById('thinking-indicator') && currentTurnCount > 0) {
+      showThinking(false);
+      var counter = document.getElementById('turn-counter');
+      if (counter) counter.textContent = '第 ' + currentTurnCount + ' 轮';
+    }
+  }
+
   function removeThinking() {
+    currentTurnCount = 0;
     var el = document.getElementById('thinking-indicator');
     if (el && el.parentNode) {
       el.parentNode.removeChild(el);
@@ -420,7 +460,7 @@ window.ChatPage = (function () {
   // ---- 渲染 ----
 
   /** 渲染消息到 DOM（不触发保存，用于只读同步） */
-  function renderMessagesOnly() {
+  function renderMessagesOnly(shouldScroll) {
     elMessages.innerHTML = '';
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
@@ -438,7 +478,10 @@ window.ChatPage = (function () {
 
       elMessages.appendChild(el);
     }
-    scrollToBottom();
+    // shouldScroll 未传参时默认滚动（兼容其他调用方）
+    if (shouldScroll !== false) {
+      scrollToBottom();
+    }
   }
 
   function renderMessages() {
@@ -714,9 +757,10 @@ window.ChatPage = (function () {
     if (!currentSessionId) return;
     if (wsProcessing || isStreaming) return;
     fetchSessionMessages(currentSessionId, function (serverMsgs) {
-      if (serverMsgs && serverMsgs.length > 0) {
+      if (serverMsgs && serverMsgs.length > 0 && serverMsgs.length !== messages.length) {
+        var wasNearBottom = isNearBottom();
         messages = serverMsgs;
-        renderMessagesOnly();
+        renderMessagesOnly(wasNearBottom);
       }
     });
   }
@@ -768,8 +812,8 @@ window.ChatPage = (function () {
         renderMessages();
         break;
       case 'info':
-        messages.push({ role: 'agent', content: data.message });
-        renderMessages();
+        // info 消息（如工具调用次数）不写入聊天记录，仅在控制台记录
+        console.log('[info]', data.message);
         break;
       case 'confirm':
         handleWsConfirm(data.toolName, data.args);
@@ -784,30 +828,15 @@ window.ChatPage = (function () {
 
   function handleWsStep(step) {
     if (!step) return;
+    // 更新 token 用量（仅更新状态栏，不写入聊天记录）
     if (step.totalTokenUsage) {
       usedInputTokens = step.totalTokenUsage.inputTokens || 0;
       usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
       renderContextBar();
     }
-    var stepMsg = '';
-    if (step.type === 'thinking' && step.content) {
-      stepMsg = '[think] ' + step.content.substring(0, 200);
-    } else if (step.type === 'tool_call') {
-      var argsPreview = step.toolArgs ? JSON.stringify(step.toolArgs) : '';
-      if (argsPreview.length > 100) argsPreview = argsPreview.substring(0, 100) + '…';
-      stepMsg = '[call] ' + step.toolName + '(' + argsPreview + ')';
-    } else if (step.type === 'tool_result') {
-      var icon = step.toolSuccess ? '[ok]' : '[err]';
-      var preview = step.toolOutput ? step.toolOutput.substring(0, 150) : (step.toolError || '');
-      if (preview.length > 150) preview = preview.substring(0, 150) + '…';
-      stepMsg = icon + ' ' + step.toolName + ' → ' + preview;
-    } else if (step.type === 'final' && step.totalToolCalls > 0) {
-      stepMsg = '[done] 共调用 ' + step.totalToolCalls + ' 次工具';
-    }
-    if (stepMsg) {
-      removeThinking();
-      messages.push({ role: 'agent', content: stepMsg });
-      renderMessages();
+    // 更新轮次指示器（不写入 messages，仅 UI 展示）
+    if (step.iteration) {
+      updateTurnCounter(step.iteration);
     }
   }
 
@@ -839,13 +868,15 @@ window.ChatPage = (function () {
     { name: 'new', description: '新建聊天', prefix: '~' },
     { name: 'history', description: '显示/隐藏历史记录', prefix: '~' },
     { name: 'clear', description: '清空当前聊天记录', prefix: '~' },
+    { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
     { name: 'qrCode', description: '生成二维码，手机扫码远程控制', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'new', description: '新建聊天', prefix: '~' },
     { name: 'history', description: '显示/隐藏历史记录', prefix: '~' },
-    { name: 'clear', description: '清空当前聊天记录', prefix: '~' }
+    { name: 'clear', description: '清空当前聊天记录', prefix: '~' },
+    { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' }
   ];
 
   function getLocalCommands() {
@@ -1020,6 +1051,16 @@ window.ChatPage = (function () {
       autoResizeInput();
       hideCmdDropdown();
       showQrCode();
+      return;
+    }
+
+    // 处理 ~open 命令：发送给 LLM，但不在聊天框显示
+    if (text === '~open') {
+      elInput.value = '';
+      autoResizeInput();
+      hideCmdDropdown();
+      showThinking(false);
+      sendWsMessage('~open');
       return;
     }
 

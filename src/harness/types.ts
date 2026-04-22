@@ -31,6 +31,8 @@ export interface ContextAssemblyConfig {
   userContext?: Record<string, string>;
   /** 系统上下文（Git 状态等实时信息，追加到系统提示词末尾） */
   systemContext?: Record<string, string>;
+  /** 对话历史（上一轮之前的消息，注入到 system prompt 和当前用户消息之间） */
+  conversationHistory?: { role: string; content: string }[];
 }
 
 // ─── 权限系统 ───

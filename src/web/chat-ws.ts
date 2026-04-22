@@ -246,56 +246,27 @@ async function handleChatMessage(
 
   const harness = new Harness(harnessConfig, toolExecutor);
 
-  // 实时写入 step 消息的批量队列
-  let pendingSteps: { role: string; content: string }[] = [];
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-  async function flushSteps(): Promise<void> {
-    if (pendingSteps.length === 0 || !targetSessionId) return;
-    const batch = pendingSteps.splice(0);
-    await appendMessages(targetSessionId, batch).catch(() => {});
-  }
-
-  function enqueueStep(msg: string): void {
-    pendingSteps.push({ role: 'agent', content: msg });
-    if (!flushTimer) {
-      flushTimer = setTimeout(async () => {
-        flushTimer = null;
-        await flushSteps();
-      }, 2000);
-    }
-  }
-
   const result = await harness.run(
     message,
     (msgs, opts) => llmAdapter.chat(msgs, opts),
     (event) => {
-      // 推送到 WebSocket（如果还连着）
+      // 推送 step 到 WebSocket（仅用于前端 token 用量更新，不写入聊天记录）
       sendJSON(ws, { type: 'step', step: event });
 
-      // 格式化 step 消息并加入写入队列
-      let stepMsg = '';
+      // step 信息仅在服务端日志输出，不写入会话文件
       if (event.type === 'tool_call') {
         const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
         const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
-        stepMsg = `[call] ${event.toolName}(${truncated})`;
+        console.log(`[step] [call] ${event.toolName}(${truncated})`);
       } else if (event.type === 'tool_result') {
         const icon = event.toolSuccess ? '[ok]' : '[err]';
         const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
-        const truncated = preview.length > 150 ? preview.substring(0, 150) + '…' : preview;
-        stepMsg = `${icon} ${event.toolName} → ${truncated}`;
-      }
-      if (stepMsg) {
-        enqueueStep(stepMsg);
+        console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
       }
     },
   );
 
-  // 确保剩余 step 写入
-  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  await flushSteps();
-
-  // 写入最终 AI 回复
+  // 写入最终 AI 回复（不写入中间 step）
   if (targetSessionId && result.content) {
     await appendMessages(targetSessionId, [{ role: 'agent', content: result.content }]).catch(() => {});
   }
