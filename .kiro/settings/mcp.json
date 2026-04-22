@@ -2,7 +2,10 @@
   "mcpServers": {
     "memory": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
       "env": {
         "MEMORY_FILE_PATH": "E:\\my\\memory\\memory.jsonl"
       },
@@ -21,7 +24,10 @@
     },
     "browsermcp": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-puppeteer@latest"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer@latest"
+      ],
       "env": {
         "PUPPETEER_EXECUTABLE_PATH": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
       },
@@ -35,15 +41,28 @@
     },
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ],
       "disabled": false,
-      "autoApprove": ["read_file", "list_directory"]
+      "autoApprove": [
+        "read_file",
+        "list_directory",
+        "get_file_info",
+        "read_text_file"
+      ]
     },
     "fetch": {
       "command": "uvx",
-      "args": ["mcp-server-fetch"],
+      "args": [
+        "mcp-server-fetch"
+      ],
       "disabled": false,
-      "autoApprove": ["fetch"]
+      "autoApprove": [
+        "fetch"
+      ]
     }
   }
 }

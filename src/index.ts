@@ -44,7 +44,7 @@ import { createChatRouter } from './web/routes/chat.js';
 import { createPipelineRouter, wireOrchestratorToSSE } from './web/routes/pipeline.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
-import { attachRemoteWebSocket } from './web/remote-ws.js';
+import { attachChatWebSocket } from './web/chat-ws.js';
 import { createSessionsRouter } from './web/routes/sessions.js';
 
 // 类型
@@ -250,8 +250,8 @@ async function main(): Promise<void> {
   // 8. 启动服务器
   const server = await startServer(app, port);
 
-  // 9. 附加远程控制 WebSocket
-  attachRemoteWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
+  // 9. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
+  attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
 
   // 10. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);

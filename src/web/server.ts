@@ -54,7 +54,13 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
     });
   } else {
     // 开发模式：JS/CSS 也不缓存，方便调试
-    app.use(express.static(staticDir, { etag: false, lastModified: false }));
+    app.use(express.static(staticDir, {
+      etag: false,
+      lastModified: false,
+      setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      },
+    }));
     app.get('/{*splat}', (_req: Request, res: Response) => {
       if (_req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

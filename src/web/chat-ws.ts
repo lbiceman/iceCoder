@@ -1,6 +1,12 @@
 /**
- * 远程控制 WebSocket 处理器。
- * 手机端通过 WebSocket 发送指令，服务端复用 Harness 执行并回传结果。
+ * 统一 WebSocket 聊天处理器。
+ * PC 端和移动端共用同一套 WebSocket 通信逻辑。
+ * 
+ * 连接路径:
+ *   - PC 端:   /api/chat/ws
+ *   - 移动端:  /api/chat/ws?token=xxx
+ * 
+ * 区别仅在于移动端需要 token 验证（扫码场景），PC 端直接连接。
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
@@ -8,8 +14,8 @@ import type { Server } from 'http';
 import { URL } from 'url';
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
-import { getSession, markSessionConnected, removeSession } from './routes/remote.js';
-import { getActiveSession } from './routes/sessions.js';
+import { getSession, markSessionConnected } from './routes/remote.js';
+import { getActiveSession, setActiveSession } from './routes/sessions.js';
 import { Harness } from '../harness/harness.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -27,63 +33,56 @@ async function loadSystemPrompt(): Promise<string> {
   }
 }
 
-/** 将远程消息追加到会话文件（与 PC 端共享） */
-async function appendToSession(targetSessionId: string | undefined, userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
+/** 追加消息到会话文件 */
+async function appendMessages(sessionId: string, msgs: { role: string; content: string }[]): Promise<void> {
+  if (!sessionId || msgs.length === 0) return;
   try {
-    // 优先使用前端传来的 sessionId，回退到服务端活跃会话
-    const activeId = targetSessionId || await getActiveSession();
-    if (!activeId) return;
-
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    const safeId = activeId.replace(/[^a-zA-Z0-9_-]/g, '');
-    const sessionFile = path.join(SESSIONS_DIR, `${safeId}.json`);
+    const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
+    const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
 
     let existing: { role: string; content: string }[] = [];
     try {
-      const data = await fsPromises.readFile(sessionFile, 'utf-8');
+      const data = await fsPromises.readFile(filePath, 'utf-8');
       existing = JSON.parse(data);
     } catch { /* file doesn't exist yet */ }
 
-    // 追加 step 消息、用户消息和 AI 回复
-    for (const s of steps) {
-      existing.push({ role: 'agent', content: s });
-    }
-    existing.push({ role: 'user', content: userMsg });
-    if (agentMsg) {
-      existing.push({ role: 'agent', content: agentMsg });
-    }
+    existing.push(...msgs);
+    await fsPromises.writeFile(filePath, JSON.stringify(existing), 'utf-8');
 
-    await fsPromises.writeFile(sessionFile, JSON.stringify(existing), 'utf-8');
-
-    // 更新会话列表
+    // 更新会话列表的 updatedAt
     const listFile = path.join(SESSIONS_DIR, '_list.json');
     let list: { id: string; title: string; updatedAt: number }[] = [];
     try {
       const listData = await fsPromises.readFile(listFile, 'utf-8');
       list = JSON.parse(listData);
     } catch { /* empty */ }
-
-    const title = userMsg.length > 30 ? userMsg.substring(0, 30) + '…' : userMsg;
-    const idx = list.findIndex(s => s.id === activeId);
-    const meta = { id: activeId, title, updatedAt: Date.now() };
-    if (idx >= 0) { list[idx] = meta; } else { list.unshift(meta); }
+    const idx = list.findIndex(s => s.id === sessionId);
+    if (idx >= 0) {
+      list[idx].updatedAt = Date.now();
+    } else {
+      // 从消息中提取标题
+      const userMsg = msgs.find(m => m.role === 'user');
+      const title = userMsg ? (userMsg.content.length > 30 ? userMsg.content.substring(0, 30) + '…' : userMsg.content) : '新对话';
+      list.unshift({ id: sessionId, title, updatedAt: Date.now() });
+    }
     await fsPromises.writeFile(listFile, JSON.stringify(list), 'utf-8');
   } catch (err) {
-    console.error('[remote-ws] Failed to save to session:', err);
+    console.error('[chat-ws] appendMessages failed:', err);
   }
 }
 
-export interface RemoteWSOptions {
+export interface ChatWSOptions {
   orchestrator: Orchestrator;
   toolRegistry: ToolRegistry;
   toolExecutor: ToolExecutor;
 }
 
 /**
- * 将 WebSocket 服务器附加到 HTTP 服务器上。
- * 路径: /api/remote/ws?token=xxx
+ * 将统一 WebSocket 服务器附加到 HTTP 服务器上。
+ * 路径: /api/chat/ws 或 /api/chat/ws?token=xxx
  */
-export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions): void {
+export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
   const { orchestrator, toolRegistry, toolExecutor } = options;
 
   const wss = new WebSocketServer({ noServer: true });
@@ -94,42 +93,38 @@ export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions):
       const baseUrl = `http://${request.headers.host || 'localhost'}`;
       const url = new URL(request.url || '', baseUrl);
 
-      if (url.pathname !== '/api/remote/ws') {
-        // 不是本 handler 的路径，跳过（让其他 upgrade handler 处理）
+      // 同时支持旧路径（兼容）和新路径
+      if (url.pathname !== '/api/chat/ws' && url.pathname !== '/api/remote/ws') {
         return;
       }
 
       const token = url.searchParams.get('token');
-      if (!token) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
-      }
 
-      const session = getSession(token);
-      if (!session) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-        socket.destroy();
-        return;
+      // 有 token → 验证（移动端扫码场景）
+      if (token) {
+        const session = getSession(token);
+        if (!session) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+        markSessionConnected(token);
       }
-
-      // 标记会话已连接
-      markSessionConnected(token);
+      // 无 token → PC 端直接连接，不需要验证
 
       wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request, token);
+        wss.emit('connection', ws, request);
       });
     } catch {
       socket.destroy();
     }
   });
 
-  // 处理 WebSocket 连接
-  wss.on('connection', (ws: WebSocket, _request: unknown, token: string) => {
-    console.log(`[Remote] Mobile client connected (token: ${token.slice(0, 8)}...)`);
+  // 处理 WebSocket 连接（PC 和移动端统一处理）
+  wss.on('connection', (ws: WebSocket) => {
+    console.log('[ChatWS] Client connected');
 
-    // 发送连接成功消息
-    sendJSON(ws, { type: 'connected', message: '连接成功，可以开始发送指令' });
+    sendJSON(ws, { type: 'connected', message: '连接成功' });
 
     let isProcessing = false;
 
@@ -139,6 +134,11 @@ export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions):
 
         if (msg.type === 'ping') {
           sendJSON(ws, { type: 'pong' });
+          return;
+        }
+
+        if (msg.type === 'stop') {
+          // TODO: 支持中断正在执行的任务
           return;
         }
 
@@ -152,7 +152,7 @@ export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions):
           sendJSON(ws, { type: 'status', status: 'processing' });
 
           try {
-            await handleRemoteMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor, msg.sessionId);
+            await handleChatMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor, msg.sessionId);
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : '执行失败';
             sendJSON(ws, { type: 'error', message: errMsg });
@@ -167,20 +167,18 @@ export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions):
     });
 
     ws.on('close', () => {
-      console.log(`[Remote] Mobile client disconnected (token: ${token.slice(0, 8)}...)`);
-      // 不删除会话，允许刷新后重新连接。会话只在生成新二维码时才清除。
+      console.log('[ChatWS] Client disconnected');
     });
 
-    ws.on('error', () => {
-      // 同上，不删除会话
-    });
+    ws.on('error', () => { /* ignore */ });
   });
 }
 
 /**
- * 处理来自手机端的消息，复用 Harness 执行 AI 对话。
+ * 处理聊天消息，执行 AI 对话并实时推送进度。
+ * PC 端和移动端共用此函数。
  */
-async function handleRemoteMessage(
+async function handleChatMessage(
   ws: WebSocket,
   message: string,
   orchestrator: Orchestrator,
@@ -192,14 +190,24 @@ async function handleRemoteMessage(
   const toolDefs = toolRegistry.getDefinitions();
   const systemPrompt = await loadSystemPrompt();
 
+  // 确定目标会话 ID
+  const targetSessionId = sessionId || await getActiveSession() || undefined;
+
+  // 记录活跃会话
+  if (targetSessionId) {
+    setActiveSession(targetSessionId).catch(() => {});
+  }
+
+  // 立即写入用户消息到会话文件
+  if (targetSessionId) {
+    await appendMessages(targetSessionId, [{ role: 'user', content: message }]);
+  }
+
   const harnessConfig: HarnessConfig = {
-    context: {
-      systemPrompt,
-      tools: toolDefs,
-    },
+    context: { systemPrompt, tools: toolDefs },
     loop: {
       maxRounds: 800,
-      timeout: 60 * 60 * 1000, // 1 小时超时
+      timeout: 60 * 60 * 1000,
     },
     permissions: [
       { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要用户确认' },
@@ -208,13 +216,8 @@ async function handleRemoteMessage(
     compactionKeepRecent: 10,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
-        sendJSON(ws, {
-          type: 'confirm',
-          toolName,
-          args,
-        });
+        sendJSON(ws, { type: 'confirm', toolName, args });
 
-        // 监听确认回复
         const handler = (data: Buffer | string) => {
           try {
             const reply = JSON.parse(data.toString());
@@ -226,7 +229,6 @@ async function handleRemoteMessage(
         };
         ws.on('message', handler);
 
-        // 60 秒超时自动拒绝
         setTimeout(() => {
           ws.off('message', handler);
           resolve(false);
@@ -237,40 +239,18 @@ async function handleRemoteMessage(
 
   const harness = new Harness(harnessConfig, toolExecutor);
 
-  // 确定目标会话 ID
-  const targetSessionId = sessionId || await getActiveSession() || undefined;
-
-  // 先把用户消息立即写入会话文件（这样移动端重连后至少能看到自己发的消息）
-  if (targetSessionId) {
-    await appendToSession(targetSessionId, message, '', []);
-  }
-
-  // 用于实时追加 step 到会话文件的辅助函数
-  let pendingSteps: string[] = [];
+  // 实时写入 step 消息的批量队列
+  let pendingSteps: { role: string; content: string }[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** 将积攒的 step 消息批量追加到会话文件（防止写入过于频繁） */
   async function flushSteps(): Promise<void> {
     if (pendingSteps.length === 0 || !targetSessionId) return;
     const batch = pendingSteps.splice(0);
-    try {
-      const safeId = targetSessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
-      let existing: { role: string; content: string }[] = [];
-      try {
-        const data = await fsPromises.readFile(filePath, 'utf-8');
-        existing = JSON.parse(data);
-      } catch { /* ignore */ }
-      for (const s of batch) {
-        existing.push({ role: 'agent', content: s });
-      }
-      await fsPromises.writeFile(filePath, JSON.stringify(existing), 'utf-8');
-    } catch { /* ignore flush errors */ }
+    await appendMessages(targetSessionId, batch).catch(() => {});
   }
 
-  /** 将 step 消息加入待写入队列，每 2 秒批量写入一次 */
   function enqueueStep(msg: string): void {
-    pendingSteps.push(msg);
+    pendingSteps.push({ role: 'agent', content: msg });
     if (!flushTimer) {
       flushTimer = setTimeout(async () => {
         flushTimer = null;
@@ -284,11 +264,9 @@ async function handleRemoteMessage(
     (msgs, opts) => llmAdapter.chat(msgs, opts),
     (event) => {
       // 推送到 WebSocket（如果还连着）
-      if (ws.readyState === WebSocket.OPEN) {
-        sendJSON(ws, { type: 'step', step: event });
-      }
+      sendJSON(ws, { type: 'step', step: event });
 
-      // 收集 step 消息并实时写入会话文件
+      // 格式化 step 消息并加入写入队列
       let stepMsg = '';
       if (event.type === 'tool_call') {
         const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
@@ -306,38 +284,27 @@ async function handleRemoteMessage(
     },
   );
 
-  // 确保剩余的 step 消息写入
+  // 确保剩余 step 写入
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   await flushSteps();
 
-  // 追加最终 AI 回复到会话文件
+  // 写入最终 AI 回复
   if (targetSessionId && result.content) {
-    try {
-      const safeId = targetSessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
-      let existing: { role: string; content: string }[] = [];
-      try {
-        const data = await fsPromises.readFile(filePath, 'utf-8');
-        existing = JSON.parse(data);
-      } catch { /* ignore */ }
-      existing.push({ role: 'agent', content: result.content });
-      await fsPromises.writeFile(filePath, JSON.stringify(existing), 'utf-8');
-    } catch { /* ignore */ }
+    await appendMessages(targetSessionId, [{ role: 'agent', content: result.content }]).catch(() => {});
   }
 
-  if (ws.readyState === WebSocket.OPEN) {
-    if (result.content) {
-      sendJSON(ws, { type: 'response', content: result.content });
-    }
-    if (result.loopState.totalToolCalls > 0) {
-      sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
-    }
-    sendJSON(ws, {
-      type: 'tokenUsage',
-      inputTokens: result.loopState.totalInputTokens,
-      outputTokens: result.loopState.totalOutputTokens,
-    });
+  // 推送最终结果到 WebSocket
+  if (result.content) {
+    sendJSON(ws, { type: 'response', content: result.content });
   }
+  if (result.loopState.totalToolCalls > 0) {
+    sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
+  }
+  sendJSON(ws, {
+    type: 'tokenUsage',
+    inputTokens: result.loopState.totalInputTokens,
+    outputTokens: result.loopState.totalOutputTokens,
+  });
 }
 
 function sendJSON(ws: WebSocket, data: unknown): void {
