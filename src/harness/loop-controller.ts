@@ -115,4 +115,12 @@ export class LoopController {
   getRemainingRounds(): number {
     return Math.max(0, this.config.maxRounds - this.state.currentRound);
   }
+
+  /**
+   * 检查用户是否已中断（AbortSignal）。
+   * 用于在工具执行期间实时检查中断状态。
+   */
+  isAborted(): boolean {
+    return this.config.signal?.aborted ?? false;
+  }
 }

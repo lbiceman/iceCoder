@@ -51,7 +51,10 @@
         "read_file",
         "list_directory",
         "get_file_info",
-        "read_text_file"
+        "read_text_file",
+        "list_allowed_directories",
+        "write_file",
+        "edit_file"
       ]
     },
     "fetch": {
