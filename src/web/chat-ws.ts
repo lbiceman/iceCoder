@@ -22,10 +22,86 @@ import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
+import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
+import { MemoryManager } from '../memory/memory-manager.js';
+import type { UnifiedMessage } from '../llm/types.js';
 
-const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
-const SESSIONS_DIR = path.resolve('data/sessions');
-const MEMORY_DIR = path.resolve('data/memory-files');
+const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
+
+/**
+ * 会话级消息缓存。
+ * 参考 claude-code 的 state.messages：跨轮次累积，包含完整的结构化对话历史。
+ * 带 TTL 清理：超过 24 小时未访问的会话自动清除。
+ */
+const sessionMessages = new Map<string, { messages: UnifiedMessage[]; lastAccess: number }>();
+const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 小时
+const SESSION_CLEANUP_INTERVAL = 30 * 60 * 1000; // 每 30 分钟清理一次
+
+// 定期清理过期会话缓存
+let sessionCleanupTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of sessionMessages) {
+    if (now - entry.lastAccess > SESSION_TTL) {
+      sessionMessages.delete(id);
+      console.log(`[session] 清理过期会话缓存: ${id}`);
+    }
+  }
+}, SESSION_CLEANUP_INTERVAL);
+
+/**
+ * 全局记忆系统实例（进程级单例）。
+ * 参考 claude-code：记忆系统在进程启动时初始化一次，所有会话共享。
+ */
+let globalFileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
+let globalMemoryManager: MemoryManager | null = null;
+let memoryInitialized = false;
+let memoryDecayTimer: ReturnType<typeof setInterval> | null = null;
+
+async function ensureMemoryInitialized(): Promise<void> {
+  if (memoryInitialized) return;
+
+  try {
+    // 初始化文件记忆管理器
+    globalFileMemoryManager = createFileMemoryManager({
+      memory: { memoryDir: MEMORY_DIR },
+      enableAutoExtraction: true,
+      enableAsyncPrefetch: true,
+    });
+    await globalFileMemoryManager.initialize();
+    console.log('[memory] FileMemoryManager 初始化成功');
+  } catch (err) {
+    console.error('[memory] FileMemoryManager 初始化失败:', err);
+    globalFileMemoryManager = null;
+  }
+
+  try {
+    // 初始化结构化记忆管理器
+    globalMemoryManager = new MemoryManager();
+    console.log('[memory] MemoryManager 初始化成功');
+
+    // 启动记忆衰减后台调度器（每 5 分钟执行一次）
+    if (!memoryDecayTimer) {
+      memoryDecayTimer = setInterval(async () => {
+        if (!globalMemoryManager) return;
+        try {
+          const decayed = await globalMemoryManager.decay();
+          if (decayed > 0) {
+            console.log(`[memory] 后台衰减: ${decayed} 条记忆受影响`);
+          }
+        } catch {
+          // 衰减失败不阻塞
+        }
+      }, 5 * 60 * 1000);
+    }
+  } catch (err) {
+    console.error('[memory] MemoryManager 初始化失败:', err);
+    globalMemoryManager = null;
+  }
+
+  memoryInitialized = true;
+}
 
 async function loadSystemPrompt(): Promise<string> {
   try {
@@ -192,18 +268,27 @@ async function handleChatMessage(
   const toolDefs = toolRegistry.getDefinitions();
   const systemPrompt = await loadSystemPrompt();
 
+  // 确保记忆系统已初始化
+  await ensureMemoryInitialized();
+
   // 确定目标会话 ID
   const targetSessionId = sessionId || await getActiveSession() || undefined;
 
   // 记录活跃会话
   if (targetSessionId) {
-    setActiveSession(targetSessionId).catch(() => {});
+    setActiveSession(targetSessionId).catch(err => console.error('[chat-ws] setActiveSession failed:', err));
   }
 
-  // 立即写入用户消息到会话文件
+  // 写入用户消息到会话文件（用于前端展示和持久化）
   if (targetSessionId) {
     await appendMessages(targetSessionId, [{ role: 'user', content: message }]);
   }
+
+  // ── 参考 claude-code：获取或初始化会话级消息缓存 ──
+  // 如果缓存中有该会话的消息历史，直接复用（包含完整的 toolCalls/toolCallId 结构）
+  // 如果没有（新会话或服务重启），传 undefined 让 Harness 从零构建
+  const cached = targetSessionId ? sessionMessages.get(targetSessionId) : undefined;
+  const existingMessages = cached?.messages;
 
   const harnessConfig: HarnessConfig = {
     context: {
@@ -214,13 +299,17 @@ async function handleChatMessage(
     loop: {
       maxRounds: 800,
       timeout: 60 * 60 * 1000,
+      tokenBudget: 500000,
     },
     permissions: [
       { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要用户确认' },
     ],
     compactionThreshold: 40,
     compactionKeepRecent: 10,
+    compactionEnableLLMSummary: true,
     memoryDir: MEMORY_DIR,
+    fileMemoryManager: globalFileMemoryManager ?? undefined,
+    memoryManager: globalMemoryManager ?? undefined,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, { type: 'confirm', toolName, args });
@@ -246,6 +335,17 @@ async function handleChatMessage(
 
   const harness = new Harness(harnessConfig, toolExecutor);
 
+  // 注册默认停止钩子：检查模型是否过早停止
+  harness.getStopHookManager().register(async (_messages, lastContent) => {
+    // 如果模型回复中包含"我需要"、"接下来"等未完成信号，提示继续
+    const incompleteSignals = ['我需要继续', '接下来我会', '下一步是', '还需要', '未完成'];
+    const hasIncomplete = incompleteSignals.some(s => lastContent.includes(s));
+    return {
+      shouldContinue: hasIncomplete,
+      message: hasIncomplete ? '你提到了还有未完成的工作，请继续执行。' : undefined,
+      hookName: 'incomplete_task_check',
+    };
+  });
   const result = await harness.run(
     message,
     (msgs, opts) => llmAdapter.chat(msgs, opts),
@@ -264,11 +364,18 @@ async function handleChatMessage(
         console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
       }
     },
+    existingMessages, // 参考 claude-code：传入已有消息历史
   );
+
+  // ── 参考 claude-code：缓存完整的结构化消息历史 ──
+  // result.messages 包含 system prompt + 所有 user/assistant/tool 消息（含 toolCalls/toolCallId）
+  if (targetSessionId) {
+    sessionMessages.set(targetSessionId, { messages: result.messages, lastAccess: Date.now() });
+  }
 
   // 写入最终 AI 回复（不写入中间 step）
   if (targetSessionId && result.content) {
-    await appendMessages(targetSessionId, [{ role: 'agent', content: result.content }]).catch(() => {});
+    await appendMessages(targetSessionId, [{ role: 'agent', content: result.content }]).catch(err => console.error('[chat-ws] appendMessages failed:', err));
   }
 
   // 推送最终结果到 WebSocket
@@ -291,4 +398,20 @@ function sendJSON(ws: WebSocket, data: unknown): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
   }
+}
+
+/**
+ * 清理聊天系统资源（优雅关闭时调用）。
+ */
+export function cleanupChatResources(): void {
+  if (memoryDecayTimer) {
+    clearInterval(memoryDecayTimer);
+    memoryDecayTimer = null;
+  }
+  if (sessionCleanupTimer) {
+    clearInterval(sessionCleanupTimer);
+    sessionCleanupTimer = null;
+  }
+  sessionMessages.clear();
+  console.log('[chat-ws] Resources cleaned up');
 }

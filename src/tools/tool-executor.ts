@@ -9,6 +9,7 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResult, ToolExecutorConfig } from './types.js';
 import type { ToolRegistry } from './tool-registry.js';
+import type { ToolValidator } from './tool-validator.js';
 
 const DEFAULT_CONFIG: ToolExecutorConfig = {
   maxRetries: 3,
@@ -20,20 +21,33 @@ const DEFAULT_CONFIG: ToolExecutorConfig = {
 export class ToolExecutor {
   private registry: ToolRegistry;
   private config: ToolExecutorConfig;
+  private validator?: ToolValidator;
 
-  constructor(registry: ToolRegistry, config?: Partial<ToolExecutorConfig>) {
+  constructor(registry: ToolRegistry, config?: Partial<ToolExecutorConfig>, validator?: ToolValidator) {
     this.registry = registry;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.validator = validator;
   }
 
   /**
-   * 执行单个工具调用，带重试和超时。
+   * 执行单个工具调用，带验证、重试和超时。
    */
   async executeTool(toolCall: ToolCall): Promise<ToolResult> {
     const tool = this.registry.get(toolCall.name);
     if (!tool) {
       return { success: false, output: '', error: `未知工具: ${toolCall.name}` };
     }
+
+    // 执行前验证输入参数
+    if (this.validator) {
+      const validation = this.validator.validate(toolCall);
+      if (!validation.valid) {
+        return { success: false, output: '', error: `输入验证失败: ${validation.message}` };
+      }
+    }
+
+    // 根据工具元数据确定超时时间
+    const timeout = this.config.toolTimeout;
 
     let lastError: string | undefined;
 
@@ -61,19 +75,6 @@ export class ToolExecutor {
       output: '',
       error: `工具 "${toolCall.name}" 在 ${this.config.maxRetries + 1} 次尝试后仍然失败: ${lastError}`,
     };
-  }
-
-  /**
-   * 批量执行多个工具调用（并行）。
-   */
-  async executeToolCalls(toolCalls: ToolCall[]): Promise<Map<string, ToolResult>> {
-    const results = new Map<string, ToolResult>();
-    const promises = toolCalls.map(async (tc) => {
-      const result = await this.executeTool(tc);
-      results.set(tc.id, result);
-    });
-    await Promise.all(promises);
-    return results;
   }
 
   private async executeWithTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
