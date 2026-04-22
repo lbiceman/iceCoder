@@ -1,7 +1,7 @@
 {
-  "name": "multi-agent-orchestrator",
+  "name": "ice-coder",
   "version": "1.0.0",
-  "description": "A Node.js-based multi-agent collaborative platform for software development pipeline",
+  "description": "AI coding assistant with tool-use capabilities for PC and mobile",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
