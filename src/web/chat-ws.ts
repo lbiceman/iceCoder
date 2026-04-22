@@ -65,7 +65,7 @@ async function ensureMemoryInitialized(): Promise<void> {
   try {
     // 初始化文件记忆管理器
     globalFileMemoryManager = createFileMemoryManager({
-      memory: { memoryDir: MEMORY_DIR },
+      memory: { memoryDir: 'data/memory-files' },
       enableAutoExtraction: true,
       enableAsyncPrefetch: true,
     });
