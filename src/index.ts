@@ -1,5 +1,5 @@
 /**
- * 多智能体编排器 - 应用入口点
+ * iceCoder - 应用入口点
  *
  * 加载提供者配置，初始化 LLM 适配器、文件解析器、
  * 包含所有 6 个子智能体的编排器，并启动带 SSE 支持的 Express Web 服务器
@@ -211,7 +211,7 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
  * 主应用引导程序。
  */
 async function main(): Promise<void> {
-  console.log('Multi-Agent Orchestrator starting...');
+  console.log('iceCoder starting...');
 
   // 1. 加载提供者配置
   const providers = await loadConfig();
@@ -264,10 +264,10 @@ async function main(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  console.log('Multi-Agent Orchestrator is ready');
+  console.log('iceCoder is ready');
 }
 
 main().catch((err) => {
-  console.error('Failed to start Multi-Agent Orchestrator:', err);
+  console.error('Failed to start iceCoder:', err);
   process.exit(1);
 });
