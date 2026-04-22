@@ -190,12 +190,28 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
   const result: UnifiedMessage[] = [];
   const seenToolCallIds = new Set<string>();
 
+  // 第一遍：收集所有 assistant 消息中需要的 tool_call_id
+  const requiredToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
+        requiredToolCallIds.add(tc.id);
+      }
+    }
+  }
+
   for (let i = 0; i < messages.length; i++) {
     let msg = messages[i];
 
-    // 跳过空内容消息（system 除外）
+    // 跳过空内容消息（system 除外），但保留被 tool_call 依赖的 tool 消息
     if (msg.role !== 'system' && !msg.content && !msg.toolCalls?.length) {
-      continue;
+      // 兜底：如果是 tool 消息且其 toolCallId 被某个 assistant 依赖，不能跳过
+      if (msg.role === 'tool' && msg.toolCallId && requiredToolCallIds.has(msg.toolCallId)) {
+        // 空内容的 tool 消息也必须保留，补一个占位内容
+        msg = { ...msg, content: '[empty]' };
+      } else {
+        continue;
+      }
     }
 
     // 去重 tool_use ID
@@ -226,6 +242,109 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
     }
 
     result.push(msg);
+  }
+
+  // 第二遍：兜底校验 — 确保每个 assistant(tool_calls) 后面都有对应的 tool 消息
+  return ensureToolCallPairing(result);
+}
+
+/**
+ * 兜底校验：确保消息列表中每个 assistant 的 tool_call 都有对应的 tool 消息。
+ *
+ * OpenAI API 要求：assistant 消息中的每个 tool_call_id 必须有一条
+ * role=tool 的消息与之对应，否则返回 400 错误。
+ *
+ * 此函数在消息列表最终发送前做最后一道防线：
+ * 1. 收集所有 assistant 消息中的 tool_call_id
+ * 2. 收集所有 tool 消息中的 toolCallId
+ * 3. 为缺失的 tool_call_id 补齐占位 tool 消息
+ * 4. 移除没有对应 tool_call 的孤立 tool 消息
+ */
+export function ensureToolCallPairing(messages: UnifiedMessage[]): UnifiedMessage[] {
+  // 收集所有 assistant 的 tool_call_id 及其位置
+  const toolCallIdToAssistantIdx = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === 'assistant' && msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
+        toolCallIdToAssistantIdx.set(tc.id, i);
+      }
+    }
+  }
+
+  // 如果没有 tool_calls，直接返回
+  if (toolCallIdToAssistantIdx.size === 0) return messages;
+
+  // 收集已有的 tool 消息的 toolCallId
+  const existingToolResultIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'tool' && msg.toolCallId) {
+      existingToolResultIds.add(msg.toolCallId);
+    }
+  }
+
+  // 找出缺失的 tool_call_id
+  const missingIds: { id: string; assistantIdx: number }[] = [];
+  for (const [id, idx] of toolCallIdToAssistantIdx) {
+    if (!existingToolResultIds.has(id)) {
+      missingIds.push({ id, assistantIdx: idx });
+    }
+  }
+
+  // 找出孤立的 tool 消息（没有对应的 tool_call）
+  const orphanedToolCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === 'tool' && msg.toolCallId && !toolCallIdToAssistantIdx.has(msg.toolCallId)) {
+      orphanedToolCallIds.add(msg.toolCallId);
+    }
+  }
+
+  // 如果没有缺失也没有孤立，直接返回
+  if (missingIds.length === 0 && orphanedToolCallIds.size === 0) return messages;
+
+  // 构建修复后的消息列表
+  const result: UnifiedMessage[] = [];
+
+  // 按 assistantIdx 分组缺失的 id，方便在正确位置插入
+  const missingByAssistant = new Map<number, string[]>();
+  for (const { id, assistantIdx } of missingIds) {
+    if (!missingByAssistant.has(assistantIdx)) {
+      missingByAssistant.set(assistantIdx, []);
+    }
+    missingByAssistant.get(assistantIdx)!.push(id);
+  }
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
+    // 跳过孤立的 tool 消息
+    if (msg.role === 'tool' && msg.toolCallId && orphanedToolCallIds.has(msg.toolCallId)) {
+      continue;
+    }
+
+    result.push(msg);
+
+    // 在 assistant(tool_calls) 消息后面，找到该 assistant 对应的最后一条 tool 消息后插入缺失的
+    if (msg.role === 'assistant' && missingByAssistant.has(i)) {
+      // 先把后续已有的 tool 消息加入
+      let j = i + 1;
+      while (j < messages.length && messages[j].role === 'tool') {
+        if (!(messages[j].toolCallId && orphanedToolCallIds.has(messages[j].toolCallId!))) {
+          result.push(messages[j]);
+        }
+        j++;
+      }
+      // 补齐缺失的 tool 消息
+      for (const missingId of missingByAssistant.get(i)!) {
+        result.push({
+          role: 'tool',
+          content: '[工具结果丢失 — 执行可能被中断或结果未正确记录]',
+          toolCallId: missingId,
+        });
+      }
+      // 跳过已处理的 tool 消息
+      i = j - 1;
+    }
   }
 
   return result;
