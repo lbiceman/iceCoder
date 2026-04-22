@@ -143,6 +143,13 @@
     refreshStatus: fetchSystemStatus
   };
 
+  // 检测 bfcache 恢复（移动端浏览器关闭后重新打开可能从缓存恢复页面）
+  window.addEventListener('pageshow', function (event) {
+    if (event.persisted) {
+      window.location.reload();
+    }
+  });
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {

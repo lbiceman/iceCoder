@@ -31,19 +31,23 @@ window.ChatPage = (function () {
   var messages = [];       // { role: 'user'|'agent', content: string }
   var uploadedFile = null; // { fileId, filename, size } or null
   var currentExecutionId = null;
-  var eventSource = null;
   var stages = [];         // { name, status }
   var agentResponseBuffer = ''; // accumulates streaming chunks
   var isStreaming = false;      // 是否正在流式传输
-  var activeChatId = null;      // 当前流式聊天的 chatId
-  var activeChatSource = null;  // 当前流式聊天的 EventSource
   var currentSessionId = null;  // 当前会话 ID
 
-  // ---- 远程模式 ----
-  var remoteMode = false;       // 是否为远程控制模式
-  var remoteToken = null;       // 远程 token
-  var remoteWs = null;          // WebSocket 连接
-  var remoteProcessing = false; // 远程模式下是否正在处理
+  // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
+  var remoteMode = false;       // 是否为远程控制模式（带 token）
+  var remoteToken = null;       // 远程 token（移动端扫码用）
+
+  // ---- WebSocket（PC 和移动端统一） ----
+  var chatWs = null;            // WebSocket 连接
+  var wsProcessing = false;     // 是否正在处理消息
+  var wsReconnectTimer = null;
+  var wsReconnectAttempts = 0;
+  var wsHeartbeatTimer = null;
+  var wsSyncTimer = null;       // 定期轮询同步
+  var wsConnectTimeout = null;
 
   // ---- 上下文用量跟踪 ----
   var maxContextTokens = 0;     // 当前模型最大上下文
@@ -319,14 +323,10 @@ window.ChatPage = (function () {
 
   function saveMessages() {
     if (!currentSessionId) return;
-    // 远程模式下，只有包含用户消息时才同步到服务端（避免连接状态消息污染）
-    var hasUserMsg = false;
-    for (var i = 0; i < messages.length; i++) {
-      if (messages[i].role === 'user') { hasUserMsg = true; break; }
-    }
-    if (remoteMode && !hasUserMsg) return;
-    saveSessionMessages(currentSessionId, messages);
-    updateCurrentSessionMeta();
+    try {
+      var toSave = messages.map(function (m) { return { role: m.role, content: m.content }; });
+      localStorage.setItem('ice-chat-sess-' + currentSessionId, JSON.stringify(toSave));
+    } catch (_e) { /* ignore */ }
   }
 
   function loadMessages() {
@@ -349,7 +349,6 @@ window.ChatPage = (function () {
   var elMessages, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
   var elPipelinePanel, elProgressFill, elStagesContainer;
-  var elSseWarning, elReconnectBtn;
 
   // ---- 辅助函数 ----
 
@@ -416,131 +415,6 @@ window.ChatPage = (function () {
     if (el && el.parentNode) {
       el.parentNode.removeChild(el);
     }
-  }
-
-  // ---- SSE 流式聊天 ----
-
-  function connectChatSSE(chatId) {
-    activeChatId = chatId;
-    var source = new EventSource('/api/chat/stream-chat/' + encodeURIComponent(chatId));
-    activeChatSource = source;
-    setStreamingState(true);
-
-    source.addEventListener('message', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-
-        if (data.error) {
-          removeThinking();
-          finalizeAgentResponse();
-          messages.push({ role: 'agent', content: 'Error: ' + data.error });
-          renderMessages();
-          source.close();
-          activeChatSource = null;
-          return;
-        }
-
-        if (data.stopped) {
-          // 后端确认已停止，前端可能已经处理过
-          removeThinking();
-          finalizeAgentResponse();
-          renderMessages();
-          source.close();
-          activeChatSource = null;
-          return;
-        }
-
-        if (data.done) {
-          removeThinking();
-          finalizeAgentResponse();
-          // token 用量已通过 step 事件实时更新
-          renderMessages();
-          source.close();
-          activeChatSource = null;
-          return;
-        }
-
-        if (data.toolCalls && data.toolCalls > 0) {
-          messages.push({ role: 'agent', content: '[tool] 已调用 ' + data.toolCalls + ' 次工具' });
-          renderMessages();
-          return;
-        }
-
-        // 实时展示 AI 的思考和工具调用步骤
-        if (data.step) {
-          var step = data.step;
-
-          // 更新上下文用量（每轮 LLM 调用都会推送）
-          if (step.totalTokenUsage) {
-            usedInputTokens = step.totalTokenUsage.inputTokens || 0;
-            usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
-            renderContextBar();
-          }
-
-          var stepMsg = '';
-          if (step.type === 'thinking' && step.content) {
-            stepMsg = '[think] ' + step.content.substring(0, 200);
-          } else if (step.type === 'tool_call') {
-            var argsPreview = step.toolArgs ? JSON.stringify(step.toolArgs) : '';
-            if (argsPreview.length > 100) argsPreview = argsPreview.substring(0, 100) + '…';
-            stepMsg = '[call] ' + step.toolName + '(' + argsPreview + ')';
-          } else if (step.type === 'tool_result') {
-            var icon = step.toolSuccess ? '[ok]' : '[err]';
-            var preview = step.toolOutput ? step.toolOutput.substring(0, 150) : (step.toolError || '');
-            if (preview.length > 150) preview = preview.substring(0, 150) + '…';
-            stepMsg = icon + ' ' + step.toolName + ' → ' + preview;
-          } else if (step.type === 'final' && step.totalToolCalls > 0) {
-            stepMsg = '[done] 共调用 ' + step.totalToolCalls + ' 次工具';
-          }
-          if (stepMsg) {
-            removeThinking();
-            messages.push({ role: 'agent', content: stepMsg });
-            renderMessages();
-          }
-          return;
-        }
-
-        // AI 请求用户确认危险操作（如删除文件）
-        if (data.confirm) {
-          removeThinking();
-          var info = data.confirm;
-          var argsText = info.args ? JSON.stringify(info.args) : '';
-          var ok = window.confirm(
-            'AI 请求执行危险操作：\n\n' +
-            '工具: ' + info.toolName + '\n' +
-            '参数: ' + argsText + '\n\n' +
-            '是否允许？'
-          );
-          fetch('/api/chat/confirm/' + encodeURIComponent(info.chatId), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ approved: ok }),
-          }).catch(function () { /* ignore */ });
-          messages.push({
-            role: 'agent',
-            content: ok
-              ? '[ok] 用户已确认: ' + info.toolName
-              : '[denied] 用户已拒绝: ' + info.toolName,
-          });
-          renderMessages();
-          return;
-        }
-
-        if (data.content) {
-          // 首次收到内容时移除 thinking 指示器
-          removeThinking();
-          appendAgentChunk(data.content);
-        }
-      } catch (_err) { /* ignore parse errors */ }
-    });
-
-    source.onerror = function () {
-      removeThinking();
-      finalizeAgentResponse();
-      renderMessages();
-      source.close();
-      activeChatSource = null;
-    };
   }
 
   // ---- 渲染 ----
@@ -632,21 +506,13 @@ window.ChatPage = (function () {
       elSendBtn.title = 'Send';
       elSendBtn.classList.remove('btn-stop');
       elInput.disabled = false;
-      activeChatId = null;
     }
   }
 
   function handleStop() {
-    // 关闭流式聊天 SSE 连接
-    if (activeChatSource) {
-      activeChatSource.close();
-      activeChatSource = null;
-    }
-
-    // 通知后端停止 LLM 流
-    if (activeChatId) {
-      fetch('/api/chat/stop/' + encodeURIComponent(activeChatId), { method: 'POST' })
-        .catch(function () { /* 忽略网络错误 */ });
+    // 通过 WebSocket 通知后端停止
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+      chatWs.send(JSON.stringify({ type: 'stop' }));
     }
 
     // 结束当前响应
@@ -777,9 +643,9 @@ window.ChatPage = (function () {
 
   function removeUploadedFile() {
     uploadedFile = null;
-    elFileStatus.classList.add('hidden');
-    elFileName.textContent = '';
-    elFileInput.value = '';
+    if (elFileStatus) elFileStatus.classList.add('hidden');
+    if (elFileName) elFileName.textContent = '';
+    if (elFileInput) elFileInput.value = '';
   }
 
   function formatSize(bytes) {
@@ -788,227 +654,100 @@ window.ChatPage = (function () {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
-  // ---- SSE ----
+  // ---- 统一 WebSocket 通信（PC 和移动端共用） ----
 
-  function connectSSE(executionId) {
-    if (eventSource) {
-      eventSource.close();
+  function connectChatWs() {
+    if (chatWs) {
+      try { chatWs.close(); } catch (_e) { /* ignore */ }
     }
-
-    currentExecutionId = executionId;
-    elSseWarning.classList.add('hidden');
-
-    eventSource = new EventSource('/api/chat/stream/' + encodeURIComponent(executionId));
-
-    eventSource.addEventListener('message', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-        if (data.content) {
-          appendAgentChunk(data.content);
-        }
-      } catch (_err) { /* ignore parse errors */ }
-    });
-
-    eventSource.addEventListener('stage_update', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-        if (data.stageStatus) {
-          updateStageStatus(data.stageStatus.name, data.stageStatus.status);
-        }
-      } catch (_err) { /* ignore */ }
-    });
-
-    eventSource.addEventListener('pipeline_complete', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-        finalizeAgentResponse();
-        // Mark all stages as completed if pipeline succeeded
-        if (data.pipelineState && data.pipelineState.stages) {
-          for (var i = 0; i < data.pipelineState.stages.length; i++) {
-            var s = data.pipelineState.stages[i];
-            updateStageStatus(s.name, s.status);
-          }
-        }
-        messages.push({ role: 'agent', content: 'Pipeline execution completed.' });
-        renderMessages();
-      } catch (_err) { /* ignore */ }
-
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-    });
-
-    eventSource.addEventListener('error_event', function (e) {
-      try {
-        var data = JSON.parse(e.data);
-        finalizeAgentResponse();
-        messages.push({ role: 'agent', content: 'Error: ' + (data.error || 'Unknown error') });
-        renderMessages();
-      } catch (_err) { /* ignore */ }
-    });
-
-    eventSource.onerror = function () {
-      // SSE 断开连接
-      elSseWarning.classList.remove('hidden');
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-    };
-  }
-
-  function reconnectSSE() {
-    if (currentExecutionId) {
-      connectSSE(currentExecutionId);
-    }
-  }
-
-  // ---- 远程模式 WebSocket ----
-
-  var remoteReconnectTimer = null;
-  var remoteReconnectAttempts = 0;
-  var remoteHeartbeatTimer = null;
-  var remoteSyncTimer = null;       // 定期轮询同步消息
-  var remoteConnectTimeout = null;  // WebSocket 连接超时
-  var remoteWsConnected = false;    // 标记是否曾成功连接过（避免重复显示"连接成功"）
-
-  function connectRemoteWs() {
-    // 清理旧连接
-    if (remoteWs) {
-      try { remoteWs.close(); } catch (_e) { /* ignore */ }
-    }
-    if (remoteHeartbeatTimer) {
-      clearInterval(remoteHeartbeatTimer);
-      remoteHeartbeatTimer = null;
-    }
-    if (remoteConnectTimeout) {
-      clearTimeout(remoteConnectTimeout);
-      remoteConnectTimeout = null;
-    }
+    if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
+    if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
 
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var wsUrl = protocol + '//' + window.location.host + '/api/remote/ws?token=' + encodeURIComponent(remoteToken);
+    var wsUrl = protocol + '//' + window.location.host + '/api/chat/ws';
+    if (remoteToken) {
+      wsUrl += '?token=' + encodeURIComponent(remoteToken);
+    }
 
-    remoteWs = new WebSocket(wsUrl);
+    chatWs = new WebSocket(wsUrl);
 
-    // 连接超时：移动端冷启动时 WebSocket 可能长时间卡在 CONNECTING
-    remoteConnectTimeout = setTimeout(function () {
-      remoteConnectTimeout = null;
-      if (remoteWs && remoteWs.readyState === WebSocket.CONNECTING) {
-        console.log('[Remote] WebSocket connect timeout, retrying...');
-        try { remoteWs.close(); } catch (_e) { /* ignore */ }
+    wsConnectTimeout = setTimeout(function () {
+      wsConnectTimeout = null;
+      if (chatWs && chatWs.readyState === WebSocket.CONNECTING) {
+        try { chatWs.close(); } catch (_e) { /* ignore */ }
       }
     }, 10000);
 
-    remoteWs.onopen = function () {
-      if (remoteConnectTimeout) {
-        clearTimeout(remoteConnectTimeout);
-        remoteConnectTimeout = null;
-      }
-      remoteReconnectAttempts = 0;
-      // 重连后从服务端恢复最新消息
-      syncRemoteMessages();
-      // 启动定期同步（兜底：确保 PC 端消息能同步到移动端）
-      startRemoteSync();
+    chatWs.onopen = function () {
+      if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
+      wsReconnectAttempts = 0;
+      updateNavStatus(true);
+      syncMessages();
+      startSyncPolling();
     };
 
-    remoteWs.onmessage = function (e) {
+    chatWs.onmessage = function (e) {
       try {
         var data = JSON.parse(e.data);
-        handleRemoteWsMessage(data);
+        handleWsMessage(data);
       } catch (_err) { /* ignore */ }
     };
 
-    remoteWs.onclose = function () {
-      if (remoteConnectTimeout) {
-        clearTimeout(remoteConnectTimeout);
-        remoteConnectTimeout = null;
-      }
-      remoteProcessing = false;
+    chatWs.onclose = function () {
+      if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
+      wsProcessing = false;
       setStreamingState(false);
       updateNavStatus(false);
-      scheduleReconnect();
+      scheduleWsReconnect();
     };
 
-    remoteWs.onerror = function () {
-      // onclose 会紧跟着触发，重连逻辑在 onclose 里处理
-    };
+    chatWs.onerror = function () { /* onclose handles it */ };
 
-    // 心跳保活
-    remoteHeartbeatTimer = setInterval(function () {
-      if (remoteWs && remoteWs.readyState === WebSocket.OPEN) {
-        remoteWs.send(JSON.stringify({ type: 'ping' }));
+    wsHeartbeatTimer = setInterval(function () {
+      if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+        chatWs.send(JSON.stringify({ type: 'ping' }));
       }
     }, 15000);
   }
 
-  /** 从服务端同步最新消息（只读同步，不回写服务端） */
-  function syncRemoteMessages() {
+  function syncMessages() {
     if (!currentSessionId) return;
-    if (remoteProcessing || isStreaming) return; // 流式传输中不覆盖
+    if (wsProcessing || isStreaming) return;
     fetchSessionMessages(currentSessionId, function (serverMsgs) {
       if (serverMsgs && serverMsgs.length > 0) {
-        // 只在服务端消息更多或内容不同时才更新
-        if (serverMsgs.length >= messages.length) {
-          messages = serverMsgs;
-          // 只渲染 DOM，不回写服务端（避免覆盖 PC 端正在写入的数据）
-          renderMessagesOnly();
-        }
+        messages = serverMsgs;
+        renderMessagesOnly();
       }
     });
   }
 
-  /** 启动定期轮询同步（每 5 秒从服务端拉取最新消息） */
-  function startRemoteSync() {
-    stopRemoteSync();
-    remoteSyncTimer = setInterval(function () {
-      // 仅在非流式状态下同步
-      if (!remoteProcessing && !isStreaming) {
-        syncRemoteMessages();
+  function startSyncPolling() {
+    stopSyncPolling();
+    wsSyncTimer = setInterval(function () {
+      if (!wsProcessing && !isStreaming) {
+        syncMessages();
       }
     }, 5000);
   }
 
-  /** 停止定期轮询 */
-  function stopRemoteSync() {
-    if (remoteSyncTimer) {
-      clearInterval(remoteSyncTimer);
-      remoteSyncTimer = null;
-    }
+  function stopSyncPolling() {
+    if (wsSyncTimer) { clearInterval(wsSyncTimer); wsSyncTimer = null; }
   }
 
-  function scheduleReconnect() {
-    stopRemoteSync(); // 断连时停止轮询
-    if (remoteReconnectTimer) return;
-    // 指数退避：1s, 2s, 4s, 8s, 最大 30s
-    var delay = Math.min(1000 * Math.pow(2, remoteReconnectAttempts), 30000);
-    remoteReconnectAttempts++;
-
-    remoteReconnectTimer = setTimeout(function () {
-      remoteReconnectTimer = null;
-      // 先验证 token 是否还有效
-      fetch('/api/remote/verify?token=' + encodeURIComponent(remoteToken))
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          if (data.valid) {
-            connectRemoteWs();
-          }
-          // token 失效就不再重连
-        })
-        .catch(function () {
-          // 网络不通，继续重试
-          scheduleReconnect();
-        });
+  function scheduleWsReconnect() {
+    stopSyncPolling();
+    if (wsReconnectTimer) return;
+    var delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts), 30000);
+    wsReconnectAttempts++;
+    wsReconnectTimer = setTimeout(function () {
+      wsReconnectTimer = null;
+      connectChatWs();
     }, delay);
   }
 
-  function handleRemoteWsMessage(data) {
+  function handleWsMessage(data) {
     switch (data.type) {
       case 'connected':
-        messages.push({ role: 'agent', content: data.message });
-        renderMessages();
-        updateNavStatus(true);
         break;
       case 'response':
         removeThinking();
@@ -1017,15 +756,11 @@ window.ChatPage = (function () {
         renderMessages();
         break;
       case 'step':
-        handleRemoteStep(data.step);
+        handleWsStep(data.step);
         break;
       case 'status':
-        remoteProcessing = data.status === 'processing';
-        if (remoteProcessing) {
-          setStreamingState(true);
-        } else {
-          setStreamingState(false);
-        }
+        wsProcessing = data.status === 'processing';
+        setStreamingState(wsProcessing);
         break;
       case 'error':
         removeThinking();
@@ -1037,7 +772,7 @@ window.ChatPage = (function () {
         renderMessages();
         break;
       case 'confirm':
-        handleRemoteConfirm(data.toolName, data.args);
+        handleWsConfirm(data.toolName, data.args);
         break;
       case 'tokenUsage':
         updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0);
@@ -1047,16 +782,13 @@ window.ChatPage = (function () {
     }
   }
 
-  function handleRemoteStep(step) {
+  function handleWsStep(step) {
     if (!step) return;
-
-    // 更新上下文用量
     if (step.totalTokenUsage) {
       usedInputTokens = step.totalTokenUsage.inputTokens || 0;
       usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
       renderContextBar();
     }
-
     var stepMsg = '';
     if (step.type === 'thinking' && step.content) {
       stepMsg = '[think] ' + step.content.substring(0, 200);
@@ -1079,37 +811,24 @@ window.ChatPage = (function () {
     }
   }
 
-  function handleRemoteConfirm(toolName, args) {
+  function handleWsConfirm(toolName, args) {
     removeThinking();
     var argsText = args ? JSON.stringify(args) : '';
-    var ok = window.confirm(
-      'AI 请求执行危险操作：\n\n' +
-      '工具: ' + toolName + '\n' +
-      '参数: ' + argsText + '\n\n' +
-      '是否允许？'
-    );
-    if (remoteWs && remoteWs.readyState === WebSocket.OPEN) {
-      remoteWs.send(JSON.stringify({ type: 'confirm_reply', approved: ok }));
+    var ok = window.confirm('AI 请求执行危险操作：\n\n工具: ' + toolName + '\n参数: ' + argsText + '\n\n是否允许？');
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+      chatWs.send(JSON.stringify({ type: 'confirm_reply', approved: ok }));
     }
-    messages.push({
-      role: 'agent',
-      content: ok
-        ? '[ok] 用户已确认: ' + toolName
-        : '[denied] 用户已拒绝: ' + toolName,
-    });
+    messages.push({ role: 'agent', content: ok ? '[ok] 用户已确认: ' + toolName : '[denied] 用户已拒绝: ' + toolName });
     renderMessages();
   }
 
-  function sendRemoteMessage(text) {
-    if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) {
+  function sendWsMessage(text) {
+    if (!chatWs || chatWs.readyState !== WebSocket.OPEN) {
       messages.push({ role: 'agent', content: '[err] 未连接，无法发送' });
       renderMessages();
       return;
     }
-    messages.push({ role: 'user', content: text });
-    renderMessages();
-    showThinking(false);
-    remoteWs.send(JSON.stringify({ type: 'message', content: text }));
+    chatWs.send(JSON.stringify({ type: 'message', content: text, sessionId: currentSessionId }));
   }
 
   // ---- 命令面板 ----
@@ -1304,27 +1023,7 @@ window.ChatPage = (function () {
       return;
     }
 
-    // ---- 远程模式：通过 WebSocket 发送 ----
-    if (remoteMode) {
-      elInput.value = '';
-      autoResizeInput();
-      hideCmdDropdown();
-      sendRemoteMessage(text);
-      return;
-    }
-
-    // 处理 /pipeline 命令：启动流水线
-    var isPipeline = text === '/pipeline';
-    if (isPipeline && !uploadedFile) {
-      messages.push({ role: 'agent', content: '请先上传文件，再执行 /pipeline 命令。' });
-      elInput.value = '';
-      autoResizeInput();
-      hideCmdDropdown();
-      renderMessages();
-      return;
-    }
-
-    // 合并为一条用户消息显示
+    // 统一通过 WebSocket 发送（PC 和移动端共用）
     var displayParts = [];
     if (text) displayParts.push(text);
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
@@ -1335,66 +1034,16 @@ window.ChatPage = (function () {
     elInput.value = '';
     autoResizeInput();
     hideCmdDropdown();
+    showThinking(!!uploadedFile);
 
-    // 显示 thinking 指示器
-    var hasFile = !!uploadedFile;
-    showThinking(hasFile);
-
-    // 构建请求体
-    var body = {};
-    if (isPipeline) {
-      body.command = 'pipeline';
-    } else if (text) {
-      body.message = text;
+    // 如果有文件，先上传，再把 fileId 附加到消息中
+    var msgText = text || '';
+    if (uploadedFile) {
+      msgText = (msgText ? msgText + '\n' : '') + '[file:' + uploadedFile.fileId + '] ' + uploadedFile.filename;
     }
-    if (uploadedFile) body.fileId = uploadedFile.fileId;
-    if (currentSessionId) body.sessionId = currentSessionId;
-
-    // 发送后清除文件
     removeUploadedFile();
 
-    // 发送到服务器
-    fetch('/api/chat/message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.error) {
-          removeThinking();
-          messages.push({ role: 'agent', content: 'Error: ' + data.error });
-          renderMessages();
-          return;
-        }
-
-        if (data.executionId) {
-          // Pipeline started — init progress and connect SSE
-          removeThinking();
-          initStages();
-          agentResponseBuffer = '';
-          connectSSE(data.executionId);
-          messages.push({ role: 'agent', content: 'Pipeline started for ' + (data.filename || 'your request') + '…' });
-          renderMessages();
-        } else if (data.chatId) {
-          // 流式聊天 — 连接 SSE 获取 AI 回复（AI 自主使用工具）
-          agentResponseBuffer = '';
-          connectChatSSE(data.chatId);
-        } else if (data.content) {
-          removeThinking();
-          messages.push({ role: 'agent', content: data.content });
-          renderMessages();
-        } else {
-          removeThinking();
-          messages.push({ role: 'agent', content: data.message || 'Message received.' });
-          renderMessages();
-        }
-      })
-      .catch(function () {
-        removeThinking();
-        messages.push({ role: 'agent', content: 'Failed to send message. Please check your connection.' });
-        renderMessages();
-      });
+    sendWsMessage(msgText);
   }
 
   // ---- 历史记录侧边栏渲染 ----
@@ -1644,12 +1293,6 @@ window.ChatPage = (function () {
           '</div>' +
           '<div class="history-list" id="history-list"></div>' +
         '</div>' +
-        // SSE warning（远程模式隐藏）
-        (remoteMode ? '' :
-        '<div class="sse-warning hidden" id="sse-warning">' +
-          '<span>Connection lost.</span>' +
-          '<button id="btn-reconnect">Reconnect</button>' +
-        '</div>') +
         // Pipeline panel（远程模式隐藏）
         (remoteMode ? '' :
         '<div class="pipeline-panel hidden" id="pipeline-panel">' +
@@ -1701,8 +1344,6 @@ window.ChatPage = (function () {
     elPipelinePanel = container.querySelector('#pipeline-panel');
     elProgressFill = container.querySelector('#progress-fill');
     elStagesContainer = container.querySelector('#stages-container');
-    elSseWarning = container.querySelector('#sse-warning');
-    elReconnectBtn = container.querySelector('#btn-reconnect');
     elHistoryPanel = container.querySelector('#history-panel');
     elHistoryList = container.querySelector('#history-list');
     var elHistoryClose = container.querySelector('#btn-history-close');
@@ -1775,10 +1416,6 @@ window.ChatPage = (function () {
       elFileRemove.addEventListener('click', removeUploadedFile);
     }
 
-    if (elReconnectBtn) {
-      elReconnectBtn.addEventListener('click', reconnectSSE);
-    }
-
     // 渲染已有消息（导航返回时）
     renderMessages();
     renderHistory();
@@ -1790,16 +1427,16 @@ window.ChatPage = (function () {
       updateProgressBar();
     }
 
-    // 远程模式：先从服务端同步会话，再连接 WebSocket
+    // 远程模式：从服务端同步会话
     if (remoteMode) {
+      messages = [];
+      renderMessagesOnly();
       fetch('/api/sessions?_t=' + Date.now())
         .then(function (res) { return res.json(); })
         .then(function (data) {
           var serverSessions = data.sessions || [];
           var serverActiveId = data.activeSessionId || null;
           saveSessionList(serverSessions);
-
-          // 使用 PC 端活跃会话
           var targetId = serverActiveId;
           if (!targetId && serverSessions.length > 0) {
             for (var i = 0; i < serverSessions.length; i++) {
@@ -1810,71 +1447,41 @@ window.ChatPage = (function () {
             }
             if (!targetId) targetId = serverSessions[0].id;
           }
-
           if (targetId) {
             currentSessionId = targetId;
             setActiveSessionId(targetId);
-            // 加载消息后再连接 WebSocket（只渲染，不回写服务端）
             fetchSessionMessages(targetId, function (serverMsgs) {
               messages = serverMsgs;
               renderMessagesOnly();
               renderHistory();
-              startRemoteConnection();
             });
           } else {
             currentSessionId = generateSessionId();
             setActiveSessionId(currentSessionId);
-            startRemoteConnection();
           }
         })
         .catch(function () {
-          // 网络失败，直接连接
           currentSessionId = generateSessionId();
           setActiveSessionId(currentSessionId);
-          startRemoteConnection();
         });
     }
-  }
 
-  /** 远程模式：验证 token 并连接 WebSocket */
-  function startRemoteConnection() {
-    fetch('/api/remote/verify?token=' + encodeURIComponent(remoteToken))
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.valid) {
-          connectRemoteWs();
+    // PC 和移动端统一连接 WebSocket
+    connectChatWs();
 
-          // 切回前台时立即重连 + 刷新消息
-          document.addEventListener('visibilitychange', function () {
-            if (document.visibilityState === 'visible' && remoteMode) {
-              // 立即同步消息（不管连接状态）
-              syncRemoteMessages();
-              // 如果连接断了，立即重连
-              if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) {
-                if (remoteReconnectTimer) {
-                  clearTimeout(remoteReconnectTimer);
-                  remoteReconnectTimer = null;
-                }
-                remoteReconnectAttempts = 0;
-                connectRemoteWs();
-              } else {
-                // 连接正常，确保轮询在运行
-                startRemoteSync();
-              }
-            } else if (document.visibilityState === 'hidden' && remoteMode) {
-              // 进入后台时停止轮询，节省资源
-              stopRemoteSync();
-            }
-          });
-        } else {
-          messages.push({ role: 'agent', content: '[err] ' + (data.error || 'Token 无效或已过期，请重新扫码') });
-          renderMessages();
+    // 切回前台时重连 + 刷新消息
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') {
+        syncMessages();
+        if (!chatWs || chatWs.readyState !== WebSocket.OPEN) {
+          if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+          wsReconnectAttempts = 0;
+          connectChatWs();
         }
-      })
-      .catch(function () {
-        messages.push({ role: 'agent', content: '[err] 无法连接到服务器，请确认手机和电脑在同一网络' });
-        renderMessages();
-      });
+      } else {
+        stopSyncPolling();
+      }
+    });
   }
 
   return { render: render };
