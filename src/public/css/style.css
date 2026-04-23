@@ -644,9 +644,21 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 /* ── Chat Input Area ── */
 .chat-input-area {
   background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  padding: 12px 16px;
+  border-top: none;
+  padding: 0 0 0 0;
   flex-shrink: 0;
+}
+.chat-input-area > .ctx-bottom-bar {
+  /* 进度条作为 input area 的上边框 */
+  margin-bottom: 0;
+}
+.chat-input-area > .chat-input-row,
+.chat-input-area > .file-upload-status {
+  padding: 0 16px;
+}
+.chat-input-area > .chat-input-row {
+  padding-top: 12px;
+  padding-bottom: 12px;
 }
 
 .file-upload-status {
@@ -999,7 +1011,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   .config-page { padding: 0 12px; margin: 16px auto; }
   .form-grid { grid-template-columns: 1fr; }
   .chat-messages { padding: 12px; gap: 10px; }
-  .chat-input-area { padding: 10px 12px; }
+  .chat-input-area > .chat-input-row { padding: 16px 12px; }
   .message { max-width: 90%; padding: 10px 14px; }
   .pipeline-stages { gap: 4px; }
 }
