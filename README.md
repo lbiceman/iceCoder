@@ -456,47 +456,6 @@ npm run build
 # 启动 Web 服务器
 npm start
 ```
-
-### CLI 命令
-
-安装后通过 `iceCoder` 命令使用，开发时用 `npm run iceCoder` 代替：
-
-```bash
-# 交互式终端对话（同时启动 Web 服务器，终端/浏览器/手机三端同步）
-iceCoder chat
-
-# 交互式对话，指定端口
-iceCoder chat --port 8080
-
-# 纯终端模式（不启动 Web 服务器）
-iceCoder chat --no-serve
-
-# 启动 Web 服务器（仅 Web，无终端交互）
-iceCoder start
-iceCoder start --port 8080
-
-# 单次任务执行（非交互，适合脚本/CI）
-iceCoder run "修复 TypeScript 编译错误"
-iceCoder run "给所有函数加 JSDoc" --max-rounds 50
-iceCoder run "写一个登录 API" --json
-
-# 列出所有可用工具
-iceCoder tools
-iceCoder tools --json
-
-# 查看 MCP Server 连接状态
-iceCoder mcp
-
-# 查看 LLM 提供者配置
-iceCoder config
-
-# 切换默认 LLM 提供者
-iceCoder config set default <provider-id>
-
-# 显示帮助
-iceCoder help
-```
-
 ### 全局安装
 
 ```bash

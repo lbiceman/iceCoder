@@ -23,6 +23,10 @@ export interface MultiLevelMemoryConfig extends FileMemoryConfig {
   userMemoryDir: string;
   /** 当前工作目录 */
   currentDir: string;
+  /** 是否启用团队记忆同步 */
+  enableTeamSync?: boolean;
+  /** 团队记忆目录 */
+  teamMemoryDir?: string;
 }
 
 /**
