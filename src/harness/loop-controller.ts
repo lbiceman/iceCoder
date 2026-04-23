@@ -74,6 +74,15 @@ export class LoopController {
   }
 
   /**
+   * 回退一轮（用于 LLM 重试时不计入轮次）。
+   */
+  rewindRound(): void {
+    if (this.state.currentRound > 0) {
+      this.state.currentRound--;
+    }
+  }
+
+  /**
    * 记录 token 使用。
    */
   recordTokenUsage(inputTokens: number, outputTokens: number): void {
