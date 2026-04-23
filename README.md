@@ -432,8 +432,22 @@ npm run dev
 # 仅启动 API 服务器
 npm run dev:api
 
-# CLI 开发模式（交互式终端对话 + Web 服务器）
-npm run iceCoder chat
+# CLI 交互式终端对话（+ Web 服务器）
+npm run chat
+npm run chat -- --port 8080
+
+# 仅启动 Web 服务器
+npm run ice:start
+
+# 单次任务
+npm run ice:run -- "修复编译错误"
+
+# 查看工具 / MCP 状态
+npm run ice:tools
+npm run ice:mcp
+
+# 传任意参数给 CLI
+npm run iceCoder -- <子命令> [参数]
 ```
 
 ### 生产模式
