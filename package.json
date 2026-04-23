@@ -15,7 +15,7 @@
   ],
   "type": "module",
   "scripts": {
-    "build": "tsc --listEmittedFiles && vite build",
+    "build": "tsc --listEmittedFiles && vite build && npm pack",
     "build:server": "tsc",
     "build:web": "vite build",
     "start": "NODE_ENV=production node dist/index.js",
