@@ -3,13 +3,13 @@
  * iceCoder CLI 入口。
  *
  * 用法:
- *   ice chat              交互式终端对话（默认同时启动 Web 服务器）
- *   ice serve             仅启动 Web 服务器
- *   ice run "任务描述"     单次任务执行
- *   ice tools             列出所有可用工具
- *   ice mcp               查看 MCP Server 状态
- *   ice config             查看/管理配置
- *   ice help              显示帮助
+ *   iceCoder chat              交互式终端对话（默认同时启动 Web 服务器）
+ *   iceCoder start             启动 Web 服务器
+ *   iceCoder run "任务描述"     单次任务执行
+ *   iceCoder tools             列出所有可用工具
+ *   iceCoder mcp               查看 MCP Server 状态
+ *   iceCoder config            查看/管理配置
+ *   iceCoder help              显示帮助
  */
 
 import { parseArgs } from './utils/args-parser.js';
@@ -21,20 +21,20 @@ const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
 
 ${c.bold}用法:${c.reset}
-  ice chat [options]           交互式终端对话
-  ice serve [options]          启动 Web 服务器
-  ice run "任务" [options]     单次任务执行
-  ice tools [--json]           列出所有可用工具
-  ice mcp                      查看 MCP Server 状态
-  ice config                   查看 LLM 提供者配置
-  ice config set default <id>  切换默认 LLM 提供者
-  ice help                     显示此帮助
+  iceCoder chat [options]           交互式终端对话
+  iceCoder start [options]          启动 Web 服务器
+  iceCoder run "任务" [options]     单次任务执行
+  iceCoder tools [--json]           列出所有可用工具
+  iceCoder mcp                      查看 MCP Server 状态
+  iceCoder config                   查看 LLM 提供者配置
+  iceCoder config set default <id>  切换默认 LLM 提供者
+  iceCoder help                     显示此帮助
 
 ${c.bold}chat 选项:${c.reset}
   --port, -p <n>     Web 服务器端口 (默认 3000)
   --no-serve         不启动 Web 服务器（纯终端模式）
 
-${c.bold}serve 选项:${c.reset}
+${c.bold}start 选项:${c.reset}
   --port, -p <n>     服务器端口 (默认 3000)
 
 ${c.bold}run 选项:${c.reset}
@@ -82,6 +82,7 @@ async function main(): Promise<void> {
       await runChat(ctx, args);
       break;
     }
+    case 'start':
     case 'serve': {
       const { runServe } = await import('./commands/serve.js');
       await runServe(ctx, args);
