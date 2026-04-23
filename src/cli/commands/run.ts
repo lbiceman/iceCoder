@@ -17,17 +17,6 @@ import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 
-const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
-const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
-
-async function loadSystemPrompt(): Promise<string> {
-  try {
-    return await fs.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
-  } catch {
-    return '你是一个智能助手，拥有工具能力。根据用户需求自主决定使用哪些工具。回答使用中文。';
-  }
-}
-
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
   if (!task) {
@@ -37,6 +26,15 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
 
   const maxRounds = getFlagNum(args.flags, 'max-rounds') ?? 100;
   const jsonOutput = hasFlag(args.flags, 'json');
+  const { systemPromptPath, memoryFilesDir } = ctx.paths;
+
+  async function loadSystemPrompt(): Promise<string> {
+    try {
+      return await fs.readFile(systemPromptPath, 'utf-8');
+    } catch {
+      return '你是一个智能助手，拥有工具能力。根据用户需求自主决定使用哪些工具。回答使用中文。';
+    }
+  }
 
   if (!jsonOutput) {
     info(`任务: ${task}`);
@@ -54,7 +52,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       context: {
         systemPrompt,
         tools: toolDefs,
-        memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+        memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
       },
       loop: {
         maxRounds,
@@ -65,7 +63,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       compactionThreshold: 40,
       compactionKeepRecent: 10,
       compactionEnableLLMSummary: true,
-      memoryDir: MEMORY_DIR,
+      memoryDir: memoryFilesDir,
     };
 
     const harness = new Harness(harnessConfig, ctx.toolExecutor);
