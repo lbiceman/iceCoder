@@ -113,13 +113,17 @@ export class MultiLevelMemoryLoader {
     let memoryDir: string;
     switch (level) {
       case MemoryLevel.PROJECT:
-        memoryDir = path.join(this.config.projectRoot, this.config.memoryDir);
+        memoryDir = path.isAbsolute(this.config.memoryDir)
+          ? this.config.memoryDir
+          : path.join(this.config.projectRoot, this.config.memoryDir);
         break;
       case MemoryLevel.USER:
         memoryDir = this.config.userMemoryDir;
         break;
       case MemoryLevel.DIRECTORY:
-        memoryDir = path.join(this.config.currentDir, this.config.memoryDir);
+        memoryDir = path.isAbsolute(this.config.memoryDir)
+          ? this.config.memoryDir
+          : path.join(this.config.currentDir, this.config.memoryDir);
         break;
       case MemoryLevel.TEAM:
         memoryDir = this.config.teamMemoryDir!;
