@@ -8,6 +8,11 @@
  * 4. tools/list 获取工具列表
  * 5. tools/call 调用工具
  *
+ * 传输格式：
+ * - 发送：JSON + 换行符（\n）
+ * - 接收：自动检测 Content-Length 分帧 或 裸 JSON 行
+ *   大多数 MCP Server 使用裸 JSON 行格式（每行一个 JSON-RPC 消息）
+ *
  * 参考 MCP 规范：https://modelcontextprotocol.io/specification
  */
 
@@ -56,7 +61,6 @@ export class MCPClient {
     this.process = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...env },
-      shell: true,
       windowsHide: true,
     });
 
@@ -78,7 +82,7 @@ export class MCPClient {
       console.log(`[mcp:${this.serverName}] 进程退出 code=${code} signal=${signal}`);
       this._ready = false;
       // 拒绝所有待处理请求
-      for (const [id, pending] of this.pendingRequests) {
+      for (const [, pending] of this.pendingRequests) {
         clearTimeout(pending.timer);
         pending.reject(new Error(`MCP server ${this.serverName} 进程退出`));
       }
@@ -136,6 +140,8 @@ export class MCPClient {
 
   /**
    * 发送 JSON-RPC 请求并等待响应。
+   *
+   * 发送格式：裸 JSON + 换行符（大多数 MCP Server 使用此格式）。
    */
   private sendRequest(method: string, params: Record<string, any>, timeout = REQUEST_TIMEOUT): Promise<any> {
     return new Promise((resolve, reject) => {
@@ -159,10 +165,10 @@ export class MCPClient {
 
       this.pendingRequests.set(id, { resolve, reject, timer });
 
-      const message = JSON.stringify(request);
-      const frame = `Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`;
+      // 裸 JSON + 换行符（MCP stdio 标准格式）
+      const message = JSON.stringify(request) + '\n';
 
-      this.process.stdin!.write(frame, (err) => {
+      this.process.stdin!.write(message, (err) => {
         if (err) {
           clearTimeout(timer);
           this.pendingRequests.delete(id);
@@ -184,72 +190,109 @@ export class MCPClient {
       params,
     };
 
-    const message = JSON.stringify(notification);
-    const frame = `Content-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`;
-
-    this.process.stdin!.write(frame);
+    const message = JSON.stringify(notification) + '\n';
+    this.process.stdin!.write(message);
   }
 
   /**
    * 处理从 stdout 接收的数据。
-   * 解析 Content-Length 分帧的 JSON-RPC 消息。
+   *
+   * 支持两种格式：
+   * 1. Content-Length 分帧（LSP 风格）
+   * 2. 裸 JSON 行（每行一个 JSON 对象，大多数 MCP Server 使用此格式）
    */
   private handleData(data: string): void {
     this.buffer += data;
+    this.processBuffer();
+  }
 
-    while (true) {
-      // 查找 Content-Length 头
-      const headerEnd = this.buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) break;
+  /**
+   * 处理缓冲区中的消息。
+   */
+  private processBuffer(): void {
+    while (this.buffer.length > 0) {
+      // 跳过前导空白和换行
+      const trimmedStart = this.buffer.search(/\S/);
+      if (trimmedStart === -1) {
+        this.buffer = '';
+        return;
+      }
+      if (trimmedStart > 0) {
+        this.buffer = this.buffer.substring(trimmedStart);
+      }
 
-      const header = this.buffer.substring(0, headerEnd);
-      const match = header.match(/Content-Length:\s*(\d+)/i);
-      if (!match) {
-        // 没有 Content-Length 头，尝试直接解析 JSON
-        const jsonStart = this.buffer.indexOf('{');
-        if (jsonStart === -1) {
+      // 检测格式：Content-Length 头 或 裸 JSON
+      if (this.buffer.startsWith('Content-Length:')) {
+        // LSP 风格分帧
+        if (!this.tryParseContentLength()) return;
+      } else if (this.buffer.startsWith('{')) {
+        // 裸 JSON 行
+        if (!this.tryParseJsonLine()) return;
+      } else {
+        // 未知内容，跳到下一个 { 或 Content-Length
+        const nextJson = this.buffer.indexOf('{', 1);
+        const nextHeader = this.buffer.indexOf('Content-Length:', 1);
+
+        let skipTo = -1;
+        if (nextJson !== -1 && nextHeader !== -1) {
+          skipTo = Math.min(nextJson, nextHeader);
+        } else if (nextJson !== -1) {
+          skipTo = nextJson;
+        } else if (nextHeader !== -1) {
+          skipTo = nextHeader;
+        }
+
+        if (skipTo === -1) {
+          // 没有可识别的内容，清空缓冲区
           this.buffer = '';
-          break;
+          return;
         }
-        // 尝试找到完整的 JSON 对象
-        try {
-          const jsonStr = this.extractJson(this.buffer.substring(jsonStart));
-          if (jsonStr) {
-            this.handleMessage(jsonStr);
-            this.buffer = this.buffer.substring(jsonStart + jsonStr.length);
-            continue;
-          }
-        } catch {
-          // JSON 不完整，等待更多数据
-        }
-        break;
+        this.buffer = this.buffer.substring(skipTo);
       }
-
-      const contentLength = parseInt(match[1]);
-      const bodyStart = headerEnd + 4;
-
-      if (this.buffer.length < bodyStart + contentLength) {
-        // 消息体不完整，等待更多数据
-        break;
-      }
-
-      const body = this.buffer.substring(bodyStart, bodyStart + contentLength);
-      this.buffer = this.buffer.substring(bodyStart + contentLength);
-
-      this.handleMessage(body);
     }
   }
 
   /**
-   * 从字符串中提取第一个完整的 JSON 对象。
+   * 尝试解析 Content-Length 分帧的消息。
+   * 返回 true 表示成功解析了一条消息，false 表示数据不完整需要等待。
    */
-  private extractJson(str: string): string | null {
+  private tryParseContentLength(): boolean {
+    const headerEnd = this.buffer.indexOf('\r\n\r\n');
+    if (headerEnd === -1) return false;
+
+    const header = this.buffer.substring(0, headerEnd);
+    const match = header.match(/Content-Length:\s*(\d+)/i);
+    if (!match) {
+      // 无效头，跳过这一行
+      this.buffer = this.buffer.substring(headerEnd + 4);
+      return true;
+    }
+
+    const contentLength = parseInt(match[1]);
+    const bodyStart = headerEnd + 4;
+
+    if (this.buffer.length < bodyStart + contentLength) {
+      return false; // 消息体不完整
+    }
+
+    const body = this.buffer.substring(bodyStart, bodyStart + contentLength);
+    this.buffer = this.buffer.substring(bodyStart + contentLength);
+    this.handleMessage(body);
+    return true;
+  }
+
+  /**
+   * 尝试解析裸 JSON 行。
+   * 使用括号匹配找到完整的 JSON 对象。
+   * 返回 true 表示成功解析了一条消息，false 表示数据不完整需要等待。
+   */
+  private tryParseJsonLine(): boolean {
     let depth = 0;
     let inString = false;
     let escape = false;
 
-    for (let i = 0; i < str.length; i++) {
-      const ch = str[i];
+    for (let i = 0; i < this.buffer.length; i++) {
+      const ch = this.buffer[i];
 
       if (escape) {
         escape = false;
@@ -261,7 +304,7 @@ export class MCPClient {
         continue;
       }
 
-      if (ch === '"') {
+      if (ch === '"' && !escape) {
         inString = !inString;
         continue;
       }
@@ -272,12 +315,16 @@ export class MCPClient {
       else if (ch === '}') {
         depth--;
         if (depth === 0) {
-          return str.substring(0, i + 1);
+          const jsonStr = this.buffer.substring(0, i + 1);
+          this.buffer = this.buffer.substring(i + 1);
+          this.handleMessage(jsonStr);
+          return true;
         }
       }
     }
 
-    return null;
+    // JSON 对象不完整，等待更多数据
+    return false;
   }
 
   /**
