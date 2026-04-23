@@ -21,18 +21,6 @@ import { MemoryManager } from '../../memory/memory-manager.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
 
-const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
-const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
-
-/** 加载系统提示词 */
-async function loadSystemPrompt(): Promise<string> {
-  try {
-    return await fs.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
-  } catch {
-    return '你是一个智能助手，拥有工具能力。根据用户需求自主决定使用哪些工具。回答使用中文。';
-  }
-}
-
 /**
  * 在终端显示 ASCII 二维码。
  */
@@ -130,6 +118,16 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   const noServe = hasFlag(args.flags, 'no-serve');
   const withTunnel = hasFlag(args.flags, 'with-tunnel');
   const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
+  const { systemPromptPath, memoryFilesDir } = ctx.paths;
+
+  /** 加载系统提示词 */
+  async function loadSystemPrompt(): Promise<string> {
+    try {
+      return await fs.readFile(systemPromptPath, 'utf-8');
+    } catch {
+      return '你是一个智能助手，拥有工具能力。根据用户需求自主决定使用哪些工具。回答使用中文。';
+    }
+  }
 
   // 启动 Web 服务器（除非 --no-serve）
   let serveResult: ServeResult | null = null;
@@ -151,7 +149,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
   try {
     fileMemoryManager = createFileMemoryManager({
-      memory: { memoryDir: 'data/memory-files' },
+      memory: { memoryDir: memoryFilesDir },
       enableAutoExtraction: true,
       enableAsyncPrefetch: true,
     });
@@ -255,7 +253,7 @@ ${c.bold}终端内置命令:${c.reset}
         context: {
           systemPrompt,
           tools: toolDefs,
-          memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+          memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
         },
         loop: {
           maxRounds: 200,
@@ -268,7 +266,7 @@ ${c.bold}终端内置命令:${c.reset}
         compactionThreshold: 40,
         compactionKeepRecent: 10,
         compactionEnableLLMSummary: true,
-        memoryDir: MEMORY_DIR,
+        memoryDir: memoryFilesDir,
         fileMemoryManager: fileMemoryManager ?? undefined,
         memoryManager: memoryManager ?? undefined,
         onConfirm: async (toolName, toolArgs) => {

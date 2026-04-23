@@ -77,6 +77,22 @@ async function main(): Promise<void> {
   // 需要完整引导的命令
   const ctx = await bootstrap();
 
+  // 首次运行提示
+  if (ctx.isFirstRun) {
+    console.log(`
+${c.bold}${c.yellow}首次运行！${c.reset}
+
+已在 ${c.underline}${ctx.paths.dataDir}${c.reset} 创建默认配置。
+
+${c.bold}下一步：${c.reset}
+  1. 编辑 ${c.cyan}${ctx.paths.configPath}${c.reset}
+  2. 将 ${c.yellow}sk-your-api-key-here${c.reset} 替换为你的 API Key
+  3. 可选：修改 apiUrl 和 modelName 使用其他模型（如 DeepSeek）
+  4. 重新运行 ${c.green}iceCoder start${c.reset}
+`);
+    process.exit(0);
+  }
+
   switch (command) {
     case 'start': {
       // CLI + Web + Cloudflare Tunnel 三合一

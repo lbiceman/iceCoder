@@ -1,7 +1,11 @@
 /**
  * 应用引导模块。
- * 抽取 index.ts 中的初始化逻辑为可复用函数，
- * 供 CLI 和 Web 入口共享。
+ * 抽取初始化逻辑为可复用函数，供 CLI 和 Web 入口共享。
+ *
+ * 路径解析优先级：
+ * 1. 环境变量
+ * 2. 当前目录 data/（开发模式）
+ * 3. ~/.iceCoder/（全局安装模式，首次运行自动创建）
  */
 
 import fs from 'fs/promises';
@@ -23,12 +27,10 @@ import { TaskGenerationAgent } from '../agents/task-generation.js';
 import { CodeWritingAgent } from '../agents/code-writing.js';
 import { TestingAgent } from '../agents/testing.js';
 import { RequirementVerificationAgent } from '../agents/requirement-verification.js';
+import { resolveDataPaths, ensureDataDir, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ProviderConfig } from '../web/types.js';
-
-const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
-const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
 
 /**
  * 引导结果，包含所有初始化好的核心组件。
@@ -40,13 +42,15 @@ export interface BootstrapResult {
   toolRegistry: ToolRegistry;
   toolExecutor: ToolExecutor;
   mcpManager: MCPManager;
+  /** 解析后的数据路径（供其他模块使用） */
+  paths: DataPaths;
 }
 
 /**
  * 加载 LLM 提供者配置。
  */
-export async function loadConfig(): Promise<ProviderConfig[]> {
-  const data = await fs.readFile(CONFIG_PATH, 'utf-8');
+export async function loadConfig(configPath: string): Promise<ProviderConfig[]> {
+  const data = await fs.readFile(configPath, 'utf-8');
   const config = JSON.parse(data) as { providers: ProviderConfig[] };
   return config.providers;
 }
@@ -100,11 +104,18 @@ export function initializeFileParser(): FileParser {
 }
 
 /**
- * 完整引导：加载配置 → 初始化所有组件。
+ * 完整引导：解析路径 → 自动初始化 → 加载配置 → 初始化所有组件。
+ * 返回 isFirstRun 表示是否首次运行（需要提示用户配置 API Key）。
  */
-export async function bootstrap(): Promise<BootstrapResult> {
+export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boolean }> {
+  // 解析数据路径
+  const paths = await resolveDataPaths();
+
+  // 确保数据目录和默认配置存在
+  const isFirstRun = await ensureDataDir(paths);
+
   // 加载配置
-  const providers = await loadConfig();
+  const providers = await loadConfig(paths.configPath);
 
   // 初始化 LLM
   const llmAdapter = initializeLLMAdapter(providers);
@@ -114,7 +125,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
 
   // 初始化编排器
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-    outputDir: OUTPUT_DIR,
+    outputDir: paths.outputDir,
     stageMaxRetries: 2,
     stageRetryDelay: 3000,
   });
@@ -126,7 +137,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
   });
 
   // 初始化 MCP
-  const mcpManager = new MCPManager({ configPath: CONFIG_PATH });
+  const mcpManager = new MCPManager({ configPath: paths.configPath });
   try {
     await mcpManager.initialize();
     for (const tool of mcpManager.getRegisteredTools()) {
@@ -144,7 +155,9 @@ export async function bootstrap(): Promise<BootstrapResult> {
   orchestrator.registerAgent(new TestingAgent());
   orchestrator.registerAgent(new RequirementVerificationAgent());
 
-  return { llmAdapter, fileParser, orchestrator, toolRegistry: registry, toolExecutor: executor, mcpManager };
+  return {
+    llmAdapter, fileParser, orchestrator,
+    toolRegistry: registry, toolExecutor: executor,
+    mcpManager, paths, isFirstRun,
+  };
 }
-
-export { CONFIG_PATH };

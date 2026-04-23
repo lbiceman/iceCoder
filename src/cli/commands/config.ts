@@ -5,27 +5,28 @@
 import { promises as fs } from 'node:fs';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { c, table, info, success, error } from '../utils/terminal-ui.js';
-import { CONFIG_PATH, loadConfig } from '../bootstrap.js';
+import { resolveDataPaths } from '../paths.js';
 
 export async function runConfig(_args: ParsedArgs): Promise<void> {
   const subCmd = _args.positional[0];
+  const paths = await resolveDataPaths();
 
   if (subCmd === 'set') {
-    await handleSet(_args);
+    await handleSet(_args, paths.configPath);
     return;
   }
 
-  // 默认：显示当前配置
-  await showConfig();
+  await showConfig(paths.configPath);
 }
 
-async function showConfig(): Promise<void> {
+async function showConfig(configPath: string): Promise<void> {
   try {
-    const providers = await loadConfig();
+    const data = await fs.readFile(configPath, 'utf-8');
+    const config = JSON.parse(data) as { providers: Array<{ id: string; providerName: string; modelName: string; apiUrl: string; isDefault?: boolean }> };
 
     console.log(`\n${c.bold}LLM 提供者配置${c.reset}\n`);
 
-    const rows = providers.map((p) => [
+    const rows = config.providers.map((p) => [
       p.isDefault ? `${c.green}★${c.reset} ${p.id}` : `  ${p.id}`,
       p.providerName,
       p.modelName,
@@ -33,20 +34,20 @@ async function showConfig(): Promise<void> {
     ]);
 
     table(['ID', '类型', '模型', 'API URL'], rows);
-    console.log(`\n${c.dim}配置文件: ${CONFIG_PATH}${c.reset}`);
+    console.log(`\n${c.dim}配置文件: ${configPath}${c.reset}`);
     console.log(`${c.dim}使用 "iceCoder config set default <id>" 切换默认提供者${c.reset}\n`);
   } catch (err) {
     error('读取配置失败: ' + (err instanceof Error ? err.message : String(err)));
   }
 }
 
-async function handleSet(args: ParsedArgs): Promise<void> {
+async function handleSet(args: ParsedArgs, configPath: string): Promise<void> {
   const key = args.positional[1];
   const value = args.positional[2];
 
   if (key === 'default' && value) {
     try {
-      const data = await fs.readFile(CONFIG_PATH, 'utf-8');
+      const data = await fs.readFile(configPath, 'utf-8');
       const config = JSON.parse(data) as { providers: Array<{ id: string; isDefault?: boolean }> };
 
       const target = config.providers.find((p) => p.id === value);
@@ -64,7 +65,7 @@ async function handleSet(args: ParsedArgs): Promise<void> {
         p.isDefault = p.id === value;
       }
 
-      await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
+      await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
       success(`默认提供者已切换为: ${value}`);
     } catch (err) {
       error('更新配置失败: ' + (err instanceof Error ? err.message : String(err)));
