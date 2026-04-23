@@ -1,16 +1,17 @@
 /**
- * ice chat — 交互式终端对话。
+ * iceCoder chat/cli/start — 交互式终端对话。
  *
- * 默认同时启动 Web 服务器，终端/PC 浏览器/手机三端共享同一个会话。
- * 使用 --no-serve 可禁用 Web 服务器（纯终端模式）。
+ * start 模式：CLI + Web + Cloudflare Tunnel 三合一
+ * cli 模式：仅终端对话（--no-serve）
  */
 
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
+import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
-import { getFlagNum, hasFlag } from '../utils/args-parser.js';
+import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
 import { c, info, success, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
 import { Harness } from '../../harness/harness.js';
@@ -77,17 +78,71 @@ async function showScanQR(port: number): Promise<void> {
 }
 
 /**
- * ice chat 命令入口。
+ * 启动 Cloudflare Tunnel 子进程。
+ */
+function startTunnel(port: number, tunnelBin?: string): ChildProcess {
+  const bin = tunnelBin || process.env.CLOUDFLARED_BIN || 'cloudflared';
+  const args = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', '127.0.0.1:20241'];
+
+  info(`启动 Cloudflare Tunnel: ${bin}`);
+
+  const child = spawn(bin, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  });
+
+  child.stdout?.on('data', (chunk: Buffer) => {
+    const msg = chunk.toString().trim();
+    // 提取隧道 URL
+    const urlMatch = msg.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    if (urlMatch) {
+      info(`🌐 公网地址: ${c.underline}${urlMatch[0]}${c.reset}`);
+    }
+  });
+
+  child.stderr?.on('data', (chunk: Buffer) => {
+    const msg = chunk.toString().trim();
+    const urlMatch = msg.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    if (urlMatch) {
+      info(`🌐 公网地址: ${c.underline}${urlMatch[0]}${c.reset}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    error(`Cloudflare Tunnel 启动失败: ${err.message}`);
+    info('可通过 --no-tunnel 跳过，或 --tunnel-bin 指定 cloudflared 路径');
+  });
+
+  child.on('exit', (code) => {
+    if (code !== null && code !== 0) {
+      error(`Cloudflare Tunnel 退出 (code: ${code})`);
+    }
+  });
+
+  return child;
+}
+
+/**
+ * iceCoder chat/cli/start 命令入口。
  */
 export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const noServe = hasFlag(args.flags, 'no-serve');
+  const withTunnel = hasFlag(args.flags, 'with-tunnel');
   const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
 
   // 启动 Web 服务器（除非 --no-serve）
   let serveResult: ServeResult | null = null;
+  let tunnelProcess: ChildProcess | null = null;
+
   if (!noServe) {
     serveResult = await startWebServer(ctx, port);
     info(`Web 服务器已启动: ${c.underline}http://localhost:${port}${c.reset}`);
+
+    // 启动 Cloudflare Tunnel（start 模式）
+    if (withTunnel && !hasFlag(args.flags, 'no-tunnel')) {
+      tunnelProcess = startTunnel(port, getFlagStr(args.flags, 'tunnel-bin'));
+    }
   }
 
   // 初始化记忆系统
@@ -142,6 +197,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
     if (cmd === 'quit' || cmd === 'exit' || cmd === 'q') {
       console.log('Bye!');
+      tunnelProcess?.kill();
       serveResult?.cleanup();
       ctx.mcpManager.shutdown().catch(() => {});
       process.exit(0);
@@ -278,6 +334,7 @@ ${c.bold}终端内置命令:${c.reset}
 
   rl.on('close', () => {
     console.log('\nBye!');
+    tunnelProcess?.kill();
     serveResult?.cleanup();
     ctx.mcpManager.shutdown().catch(() => {});
     process.exit(0);
