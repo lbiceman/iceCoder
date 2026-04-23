@@ -115,9 +115,9 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   console.log(`${c.bold}${c.cyan}iceCoder${c.reset} ${c.dim}v1.0.0${c.reset}`);
   console.log(`${c.dim}工具: ${ctx.toolRegistry.getAll().length} 个内置${ctx.mcpManager.totalTools > 0 ? ` + ${ctx.mcpManager.totalTools} 个 MCP` : ''}${c.reset}`);
   if (serveResult) {
-    console.log(`${c.dim}输入 ~scan 显示手机连接二维码${c.reset}`);
+    console.log(`${c.dim}输入 /scan 显示手机连接二维码${c.reset}`);
   }
-  console.log(`${c.dim}输入 ~quit 退出${c.reset}`);
+  console.log(`${c.dim}输入 /help 查看命令，/quit 退出${c.reset}`);
   divider();
 
   // 创建 readline 接口
@@ -137,15 +137,17 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       return;
     }
 
-    // 内置命令
-    if (input === '~quit' || input === '~exit') {
+    // 内置命令（支持 ~cmd 和 /cmd 两种前缀）
+    const cmd = input.startsWith('~') ? input.substring(1) : input.startsWith('/') ? input.substring(1) : '';
+
+    if (cmd === 'quit' || cmd === 'exit' || cmd === 'q') {
       console.log('Bye!');
       serveResult?.cleanup();
       ctx.mcpManager.shutdown().catch(() => {});
       process.exit(0);
     }
 
-    if (input === '~scan') {
+    if (cmd === 'scan') {
       if (serveResult) {
         await showScanQR(port);
       } else {
@@ -155,7 +157,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       return;
     }
 
-    if (input === '~tools') {
+    if (cmd === 'tools') {
       const tools = ctx.toolRegistry.getAll();
       info(`共 ${tools.length} 个工具:`);
       for (const t of tools) {
@@ -165,9 +167,22 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       return;
     }
 
-    if (input === '~clear') {
+    if (cmd === 'clear') {
       sessionMessages = undefined;
       success('对话历史已清空');
+      rl.prompt();
+      return;
+    }
+
+    if (cmd === 'help') {
+      console.log(`
+${c.bold}终端内置命令:${c.reset}
+  ${c.cyan}/scan${c.reset}    显示手机连接二维码
+  ${c.cyan}/tools${c.reset}   列出可用工具
+  ${c.cyan}/clear${c.reset}   清空对话历史
+  ${c.cyan}/help${c.reset}    显示此帮助
+  ${c.cyan}/quit${c.reset}    退出
+`);
       rl.prompt();
       return;
     }
