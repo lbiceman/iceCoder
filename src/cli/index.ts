@@ -3,8 +3,9 @@
  * iceCoder CLI 入口。
  *
  * 用法:
- *   iceCoder chat              交互式终端对话（默认同时启动 Web 服务器）
- *   iceCoder start             启动 Web 服务器
+ *   iceCoder start             启动全部（CLI + Web + Cloudflare Tunnel）
+ *   iceCoder cli               仅终端交互式对话
+ *   iceCoder web               仅启动 Web 服务器
  *   iceCoder run "任务描述"     单次任务执行
  *   iceCoder tools             列出所有可用工具
  *   iceCoder mcp               查看 MCP Server 状态
@@ -21,8 +22,9 @@ const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
 
 ${c.bold}用法:${c.reset}
-  iceCoder chat [options]           交互式终端对话
-  iceCoder start [options]          启动 Web 服务器
+  iceCoder start [options]          启动全部（CLI + Web + Cloudflare Tunnel）
+  iceCoder cli [options]            仅终端交互式对话
+  iceCoder web [options]            仅启动 Web 服务器
   iceCoder run "任务" [options]     单次任务执行
   iceCoder tools [--json]           列出所有可用工具
   iceCoder mcp                      查看 MCP Server 状态
@@ -30,22 +32,21 @@ ${c.bold}用法:${c.reset}
   iceCoder config set default <id>  切换默认 LLM 提供者
   iceCoder help                     显示此帮助
 
-${c.bold}chat 选项:${c.reset}
-  --port, -p <n>     Web 服务器端口 (默认 3000)
-  --no-serve         不启动 Web 服务器（纯终端模式）
-
-${c.bold}start 选项:${c.reset}
-  --port, -p <n>     服务器端口 (默认 3000)
+${c.bold}start/cli/web 选项:${c.reset}
+  --port, -p <n>       Web 服务器端口 (默认 3000)
+  --no-tunnel          不启动 Cloudflare Tunnel (仅 start)
+  --tunnel-bin <path>  cloudflared 可执行文件路径
 
 ${c.bold}run 选项:${c.reset}
   --max-rounds <n>   最大循环轮次 (默认 100)
   --json             输出 JSON 格式结果
 
-${c.bold}chat 内置命令:${c.reset}
-  ~scan              显示手机连接二维码
-  ~tools             列出可用工具
-  ~clear             清空对话历史
-  ~quit              退出
+${c.bold}终端内置命令 (cli/start 模式):${c.reset}
+  /scan              显示手机连接二维码
+  /tools             列出可用工具
+  /clear             清空对话历史
+  /help              显示命令帮助
+  /quit              退出
 `;
 
 async function main(): Promise<void> {
@@ -70,21 +71,31 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 无子命令默认进入 chat
-  const command = args.command || 'chat';
+  // 无子命令默认 start
+  const command = args.command || 'start';
 
   // 需要完整引导的命令
   const ctx = await bootstrap();
 
   switch (command) {
-    case 'chat':
-    case 'cli': {
+    case 'start': {
+      // CLI + Web + Cloudflare Tunnel 三合一
       const { runChat } = await import('./commands/chat.js');
+      args.flags['with-tunnel'] = true;
       await runChat(ctx, args);
       break;
     }
-    case 'start':
+    case 'cli':
+    case 'chat': {
+      // 仅终端对话（不启动 Web）
+      const { runChat } = await import('./commands/chat.js');
+      args.flags['no-serve'] = true;
+      await runChat(ctx, args);
+      break;
+    }
+    case 'web':
     case 'serve': {
+      // 仅 Web 服务器
       const { runServe } = await import('./commands/serve.js');
       await runServe(ctx, args);
       break;

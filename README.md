@@ -426,7 +426,7 @@ npm install
 ### 开发模式
 
 ```bash
-# 启动全部（CLI + Web + Cloudflare Tunnel 三合一）
+# 启动全部（CLI + Web + Cloudflare Tunnel）
 npm run iceCoder
 
 # 仅启动 CLI 终端对话
@@ -442,6 +442,9 @@ npm run iceCoder:run -- "修复编译错误"
 npm run iceCoder:tools
 npm run iceCoder:mcp
 npm run iceCoder:config
+
+# Vite 前端开发（热更新）
+npm run dev
 ```
 
 ### 生产模式
@@ -502,6 +505,40 @@ npm link          # 本地全局注册 iceCoder 命令
 
 # 或发布后
 npm install -g ice-coder
+```
+
+安装后直接使用：
+
+```bash
+# 启动全部（CLI + Web + Cloudflare Tunnel）
+iceCoder start
+iceCoder start --port 8080
+iceCoder start --no-tunnel
+
+# 仅终端交互式对话
+iceCoder cli
+
+# 仅启动 Web 服务器
+iceCoder web
+iceCoder web --port 8080
+
+# 单次任务执行
+iceCoder run "修复 TypeScript 编译错误"
+iceCoder run "给所有函数加 JSDoc" --max-rounds 50
+iceCoder run "写一个登录 API" --json
+
+# 列出所有可用工具
+iceCoder tools
+
+# 查看 MCP Server 连接状态
+iceCoder mcp
+
+# 查看/切换 LLM 配置
+iceCoder config
+iceCoder config set default <provider-id>
+
+# 显示帮助
+iceCoder help
 ```
 
 ### 终端内置命令
