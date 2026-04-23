@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "删除操作确认",
+  "description": "仅在执行删除操作（deleteFile等）时要求用户确认，其他所有操作自动放行无需确认",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      ".*delete.*",
+      ".*remove.*",
+      ".*rm .*"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "这是一个删除操作，必须先向用户确认后才能执行。请描述将要删除的内容并询问用户是否确认。如果用户未明确同意，则不执行删除。"
+  }
+}
