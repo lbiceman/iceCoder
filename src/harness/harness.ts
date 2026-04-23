@@ -261,7 +261,9 @@ export class Harness {
           logger.error(`LLM 调用失败 (${state.llmRetryCount}/${LLM_MAX_RETRIES}): ${errorMsg}，${delay}ms 后重试`);
           await new Promise(resolve => setTimeout(resolve, delay));
           state.transition = 'llm_error_retry';
-          // 不推进轮次，回退 advanceRound
+          // 回退轮次计数（重试不算新轮次）
+          this.loopController.rewindRound();
+          state.turnCount--;
           continue;
         }
 
@@ -612,9 +614,26 @@ export class Harness {
     for (const tc of toolCalls) {
       // 检查用户中断
       if (this.loopController.isAborted()) {
-        // 为剩余未执行的 tool_use 补齐错误 tool_result
         this.yieldMissingToolResults(toolCalls, submittedIds, messages);
         break;
+      }
+
+      // ── 权限检查：破坏性工具需要用户确认 ──
+      const meta = getToolMetadata(tc.name);
+      if (meta.isDestructive && this.onConfirm) {
+        onStep?.({ type: 'tool_confirm', iteration, toolName: tc.name, toolArgs: tc.arguments });
+        const allowed = await this.onConfirm(tc.name, tc.arguments);
+        if (!allowed) {
+          logger.toolResult(tc.name, false, 0, '用户拒绝执行');
+          onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+          messages.push({
+            role: 'tool',
+            content: `用户拒绝执行工具 ${tc.name}。请换一种方式完成任务，或询问用户。`,
+            toolCallId: tc.id,
+          });
+          submittedIds.add(tc.id);
+          continue;
+        }
       }
 
       // ── 提交到流式执行器 ──
@@ -725,21 +744,32 @@ export class Harness {
       content: '请根据以上工具调用结果，给出最终的总结回答。',
     });
 
-    const finalResponse = await chatFn(messages, { tools: [] });
-    logger.llmResponseFinal({
-      input: finalResponse.usage?.inputTokens ?? 0,
-      output: finalResponse.usage?.outputTokens ?? 0,
-    });
+    let finalContent = '';
+    try {
+      const finalResponse = await chatFn(messages, { tools: [] });
+      finalContent = finalResponse.content;
+      logger.llmResponseFinal({
+        input: finalResponse.usage?.inputTokens ?? 0,
+        output: finalResponse.usage?.outputTokens ?? 0,
+      });
+    } catch (err) {
+      // 最终总结调用失败，用最后一条 assistant 消息作为回复
+      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.content);
+      finalContent = typeof lastAssistant?.content === 'string'
+        ? lastAssistant.content
+        : `任务因 ${reason} 停止，最终总结生成失败。`;
+      logger.error(`最终总结 LLM 调用失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     onStep?.({
       type: 'final',
       totalToolCalls: state.totalToolCalls,
-      content: finalResponse.content,
+      content: finalContent,
       stopReason: reason,
     });
 
     return {
-      content: finalResponse.content,
+      content: finalContent,
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
