@@ -72,6 +72,7 @@ async function findCloudflared(customBin?: string): Promise<string | null> {
   const candidates = [
     customBin,
     process.env.CLOUDFLARED_BIN,
+    'E:\\tools\\cloudflared\\cloudflared.exe', // 本地开发环境
     'cloudflared', // PATH 中查找
   ].filter(Boolean) as string[];
 
