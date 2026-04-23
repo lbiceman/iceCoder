@@ -68,7 +68,17 @@ export class StreamingToolExecutor {
         await this.waitForAll();
       }
 
-      const result = await this.toolExecutor.executeTool(toolCall);
+      let result: ToolResult;
+      try {
+        result = await this.toolExecutor.executeTool(toolCall);
+      } catch (err) {
+        // 兜底：ToolExecutor 内部异常不应该发生，但防御性处理
+        result = {
+          success: false,
+          output: '',
+          error: `工具执行异常: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
       const durationMs = Date.now() - startTime;
 
       const streamingResult: StreamingToolResult = {

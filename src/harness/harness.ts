@@ -215,6 +215,8 @@ export class Harness {
     };
 
     // ── 核心循环（参考 Claude Code 的 while(true) 迭代模式）──
+    // try/finally 确保无论哪条路径退出，记忆合并都会执行一次
+    try {
     while (true) {
       // 1. 解构当前状态
       const { messages: msgs, tools: currentTools } = state;
@@ -273,7 +275,6 @@ export class Harness {
         this.loopController.stop('error');
         const finalState = this.loopController.getState();
         logger.loopStop('error', finalState.currentRound, finalState.totalToolCalls);
-        await this.consolidateMemory();
 
         onStep?.({
           type: 'final',
@@ -343,9 +344,6 @@ export class Harness {
           const finalState = this.loopController.getState();
           logger.loopStop('max_output_tokens', finalState.currentRound, finalState.totalToolCalls);
 
-          // 循环结束时触发记忆合并
-          await this.consolidateMemory();
-
           onStep?.({
             type: 'final',
             iteration: finalState.currentRound,
@@ -393,9 +391,6 @@ export class Harness {
         this.loopController.stop('model_done');
         const finalState = this.loopController.getState();
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
-
-        // 循环结束时触发记忆合并
-        await this.consolidateMemory();
 
         onStep?.({
           type: 'final',
@@ -459,6 +454,10 @@ export class Harness {
       state.llmRetryCount = 0;
       state.transition = 'tool_calls';
       // messages 和 tools 已就地更新，直接 continue
+    }
+    } finally {
+      // 统一记忆合并：无论哪条路径退出循环，都执行一次
+      await this.consolidateMemory();
     }
   }
 
@@ -722,9 +721,6 @@ export class Harness {
     this.loopController.stop(reason);
     const state = this.loopController.getState();
     logger.loopStop(reason, state.currentRound, state.totalToolCalls);
-
-    // 循环结束时触发记忆合并（短期 → 长期）
-    await this.consolidateMemory();
 
     // 如果是用户中断，直接返回
     if (reason === 'user_abort') {
