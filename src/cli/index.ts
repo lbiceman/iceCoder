@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   const ctx = await bootstrap();
 
   switch (command) {
-    case 'chat': {
+    case 'chat':
+    case 'cli': {
       const { runChat } = await import('./commands/chat.js');
       await runChat(ctx, args);
       break;

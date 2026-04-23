@@ -433,18 +433,21 @@ npm run dev
 npm run dev:api
 
 # CLI 交互式终端对话（+ Web 服务器）
-npm run chat
-npm run chat -- --port 8080
+npm run iceCoder:cli
+npm run iceCoder:cli -- --port 8080
 
 # 仅启动 Web 服务器
-npm run ice:start
+npm run iceCoder:start
 
 # 单次任务
-npm run ice:run -- "修复编译错误"
+npm run iceCoder:run -- "修复编译错误"
 
 # 查看工具 / MCP 状态
-npm run ice:tools
-npm run ice:mcp
+npm run iceCoder:tools
+npm run iceCoder:mcp
+
+# 查看/切换配置
+npm run iceCoder:config
 
 # 传任意参数给 CLI
 npm run iceCoder -- <子命令> [参数]
