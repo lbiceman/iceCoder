@@ -6,9 +6,16 @@
   "bin": {
     "iceCoder": "dist/cli/index.js"
   },
+  "files": [
+    "dist/",
+    "data/config.json",
+    "data/system-prompt.md",
+    "package.json",
+    "README.md"
+  ],
   "type": "module",
   "scripts": {
-    "build": "tsc && vite build",
+    "build": "tsc --listEmittedFiles && vite build",
     "build:server": "tsc",
     "build:web": "vite build",
     "start": "NODE_ENV=production node dist/index.js",
