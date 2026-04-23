@@ -7,7 +7,8 @@
 iceCoder 是一个 AI 编程助手，核心能力包括：
 
 - **多轮对话**：跨轮次累积的结构化消息历史，AI 能记住完整上下文
-- **20+ 内置工具**：文件操作、搜索、Shell 命令、文档解析、系统文件浏览
+- **32+ 内置工具**：文件操作、搜索、Git、Shell 命令、文档解析、网页搜索、系统文件浏览
+- **MCP 协议支持**：可连接外部 MCP Server 动态扩展工具能力
 - **6 智能体流水线**：需求分析 → 设计 → 任务拆分 → 编码 → 测试 → 验证
 - **五层记忆系统**：短期、长期（向量检索）、情景、语义、过程记忆
 - **移动端支持**：扫码连接，手机远程操控电脑上的 AI
@@ -48,8 +49,9 @@ iceCoder 是一个 AI 编程助手，核心能力包括：
 │                      能力层                               │
 │  ┌────────────┐ ┌────────────┐ ┌────────────────────────┐│
 │  │  工具系统   │ │  LLM 适配  │ │      记忆系统          ││
-│  │ 20+ 工具   │ │ OpenAI     │ │ 短期/长期/情景/语义/过程││
-│  │ + 验证器   │ │ Anthropic  │ │ + 文件记忆             ││
+│  │ 32+ 工具   │ │ OpenAI     │ │ 短期/长期/情景/语义/过程││
+│  │ + MCP 扩展 │ │ Anthropic  │ │ + 文件记忆             ││
+│  │ + 验证器   │ │            │ │                        ││
 │  └────────────┘ └────────────┘ └────────────────────────┘│
 └──────────────────────────────────────────────────────────┘
 ```
@@ -249,16 +251,29 @@ src/
 │   ├── tool-executor.ts        # 工具执行器（重试+超时+验证）
 │   ├── tool-validator.ts       # 输入验证器
 │   ├── tool-metadata.ts        # 工具元数据（并行安全/只读/破坏性）
-│   └── builtin/                # 20+ 内置工具
-│       ├── file-tools.ts       # 文件读写删改
-│       ├── search-tools.ts     # 文件内容/名称搜索
+│   └── builtin/                # 32 个内置工具
+│       ├── file-tools.ts       # 文件读写删改（7 个）
+│       ├── search-tools.ts     # 文件内容/名称搜索（2 个）
 │       ├── shell-tool.ts       # Shell 命令执行
 │       ├── url-fetch-tool.ts   # HTTP 请求
-│       ├── doc-parse-tool.ts   # 文档解析
+│       ├── doc-parse-tool.ts   # 文档解析（5 个）
 │       ├── pptx-parse-tool.ts  # PPTX 深度解析
 │       ├── xmind-parse-tool.ts # XMind 深度解析
 │       ├── doc-extract-tool.ts # DOC 格式解析
-│       └── filesystem-browser-tool.ts  # 系统文件浏览器
+│       ├── xlsx-parse-tool.ts  # XLSX 深度解析
+│       ├── filesystem-browser-tool.ts  # 系统文件浏览器（3 个）
+│       ├── fs-operations-tool.ts   # 创建目录/移动/复制（3 个）
+│       ├── diff-tool.ts        # 文件差异对比
+│       ├── batch-edit-tool.ts  # 批量查找替换
+│       ├── read-lines-tool.ts  # 按行范围读取
+│       ├── web-search-tool.ts  # 网页搜索
+│       ├── git-tool.ts         # Git 操作
+│       └── patch-tool.ts       # 应用 diff 补丁
+├── mcp/                        # MCP 协议客户端
+│   ├── index.ts                # 模块入口
+│   ├── mcp-client.ts           # stdio MCP Server 客户端
+│   ├── mcp-manager.ts          # 多 Server 生命周期管理
+│   └── types.ts                # MCP 协议类型定义
 ├── llm/                        # LLM 适配层
 │   ├── llm-adapter.ts          # 统一适配器（提供者注册+切换）
 │   ├── openai-adapter.ts       # OpenAI 适配
@@ -299,7 +314,7 @@ src/
 │       ├── main.js             # 配置页逻辑
 │       └── chat-page.js        # 聊天页逻辑
 └── data/                       # 运行时数据
-    ├── config.json             # LLM 提供者配置
+    ├── config.json             # LLM 提供者 + MCP 服务器配置
     ├── system-prompt.md        # 系统提示词
     ├── sessions/               # 会话历史
     ├── memory-files/           # 文件记忆
@@ -311,6 +326,8 @@ src/
 
 ## 工具清单
 
+### 内置工具（32 个）
+
 | 分类 | 工具名 | 说明 | 执行方式 |
 |------|--------|------|---------|
 | 文件 | `read_file` | 读取文件内容 | 可并行 |
@@ -320,19 +337,79 @@ src/
 | 文件 | `delete_file` | 删除文件 | 串行 |
 | 文件 | `list_directory` | 列出目录 | 可并行 |
 | 文件 | `file_info` | 文件详情 | 可并行 |
+| 文件 | `read_file_lines` | 按行范围读取，支持负数索引 | 可并行 |
+| 文件 | `create_directory` | 递归创建目录 | 串行 |
+| 文件 | `move_file` | 移动/重命名文件或目录 | 串行 |
+| 文件 | `copy_file` | 复制文件或递归复制目录 | 串行 |
+| 编辑 | `batch_edit_file` | 一次调用多处查找替换 | 串行 |
+| 编辑 | `diff_files` | 对比两个文件差异（unified diff） | 可并行 |
+| 编辑 | `patch_file` | 应用 unified diff 补丁 | 串行 |
 | 搜索 | `search_in_files` | 文件内容搜索 | 可并行 |
 | 搜索 | `find_files` | 文件名搜索 | 可并行 |
 | 解析 | `parse_document` | 通用文档解析 | 可并行 |
-| 解析 | `parse_pptx_deep` | PPTX 逐页解析 | 可并行 |
-| 解析 | `parse_xmind_deep` | XMind 树形解析 | 可并行 |
-| 解析 | `parse_doc_deep` | DOC 格式解析 | 可并行 |
-| 网络 | `fetch_url` | HTTP 请求 | 可并行 |
-| Shell | `run_command` | 执行命令 | 串行 |
+| 解析 | `parse_doc` | Word 文档解析 | 可并行 |
+| 解析 | `parse_ppt` | PPT 解析 | 可并行 |
+| 解析 | `parse_xmind` | XMind 解析 | 可并行 |
+| 解析 | `parse_html` | HTML 解析 | 可并行 |
+| 解析 | `parse_pptx_deep` | PPTX 逐页深度解析 | 可并行 |
+| 解析 | `parse_xmind_deep` | XMind 树形深度解析 | 可并行 |
+| 解析 | `parse_doc_deep` | DOC 格式深度解析 | 可并行 |
+| 解析 | `parse_xlsx_deep` | XLSX 逐工作表解析 | 可并行 |
+| 网络 | `fetch_url` | HTTP 请求（支持 GET/POST 等） | 可并行 |
+| 网络 | `web_search` | 网页搜索（DuckDuckGo/SearXNG） | 可并行 |
+| Git | `git` | 结构化 Git 操作（status/diff/log/commit 等） | 串行 |
+| Shell | `run_command` | 执行 Shell 命令 | 串行 |
 | 浏览器 | `list_drives` | 列出磁盘驱动器 | 可并行 |
 | 浏览器 | `browse_directory` | 浏览任意目录 | 可并行 |
 | 浏览器 | `open_file` | 读取任意文件 | 可并行 |
 
-> **可并行**：同一轮多个调用可同时执行，提高速度。**串行**：写操作或有副作用的命令，按顺序逐个执行，避免冲突。
+### MCP 动态工具
+
+通过 MCP 协议连接外部 Server，工具以 `mcp_{server}_{tool}` 格式自动注册。
+
+---
+
+## MCP 配置
+
+iceCoder 内置 MCP Client，可连接任意 MCP Server 扩展工具能力。配置格式兼容 Kiro / Claude Desktop 的 `mcp.json`。
+
+在 `data/config.json` 的 `mcpServers` 字段配置：
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "data/mcp-memory.jsonl"
+      },
+      "disabled": false,
+      "autoApprove": ["create_entities", "search_nodes", "read_graph"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "disabled": false
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "disabled": false
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `command` | 启动命令（npx / uvx / node 等） |
+| `args` | 命令参数 |
+| `env` | 环境变量 |
+| `disabled` | 设为 `true` 禁用该 Server |
+| `autoApprove` | 自动批准的工具列表（无需用户确认） |
+
+项目启动时自动连接所有已启用的 MCP Server，发现的工具会注册到工具系统供 LLM 调用。
 
 ---
 
@@ -343,7 +420,7 @@ src/
 npm install
 
 # 配置 LLM 提供者（编辑 data/config.json）
-# 至少配置一个 OpenAI 或 Anthropic 的 API Key
+# 至少配置一个 OpenAI 兼容的 API Key
 
 # 启动开发服务器
 npm run dev
@@ -360,7 +437,7 @@ npm start
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `PORT` | `3000` | 服务端口 |
-| `ICE_CONFIG_PATH` | `data/config.json` | LLM 配置文件路径 |
+| `ICE_CONFIG_PATH` | `data/config.json` | LLM + MCP 配置文件路径 |
 | `ICE_OUTPUT_DIR` | `output` | 流水线输出目录 |
 | `ICE_SYSTEM_PROMPT_PATH` | `data/system-prompt.md` | 系统提示词路径 |
 | `ICE_SESSIONS_DIR` | `data/sessions` | 会话存储目录 |
@@ -384,11 +461,12 @@ npm start
 
 | 层级 | 技术 |
 |------|------|
-| 运行时 | Node.js ≥ 18 / Bun |
+| 运行时 | Node.js ≥ 18 |
 | 语言 | TypeScript |
 | Web 框架 | Express |
 | 实时通信 | WebSocket (ws) + SSE |
 | LLM | OpenAI SDK + Anthropic SDK |
 | 向量数据库 | LanceDB |
 | 文档解析 | jszip, xml2js, cheerio, officeparser |
+| MCP 协议 | 内置 stdio 客户端，兼容 MCP 2024-11-05 规范 |
 | 前端 | 原生 HTML/CSS/JS（单页应用） |
