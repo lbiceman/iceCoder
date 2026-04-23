@@ -234,6 +234,101 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     tags: ['shell'],
   },
 
+  // ── 文件系统操作 ──
+  create_directory: {
+    name: 'create_directory',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    searchHint: '创建目录 新建文件夹 mkdir',
+    maxResultSizeChars: 1000,
+    tags: ['directory'],
+  },
+  move_file: {
+    name: 'move_file',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: true,
+    searchHint: '移动文件 重命名 rename mv',
+    maxResultSizeChars: 1000,
+    tags: ['file_write'],
+  },
+  copy_file: {
+    name: 'copy_file',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    searchHint: '复制文件 拷贝 cp copy',
+    maxResultSizeChars: 1000,
+    tags: ['file_write'],
+  },
+
+  // ── 差异对比 ──
+  diff_files: {
+    name: 'diff_files',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    searchHint: '对比差异 diff 文件比较 代码审查',
+    maxResultSizeChars: 50000,
+    tags: ['file_read'],
+  },
+
+  // ── 批量编辑 ──
+  batch_edit_file: {
+    name: 'batch_edit_file',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    searchHint: '批量替换 多处修改 批量编辑',
+    maxResultSizeChars: 5000,
+    tags: ['file_write'],
+  },
+
+  // ── 按行读取 ──
+  read_file_lines: {
+    name: 'read_file_lines',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    searchHint: '按行读取 行范围 部分读取 大文件',
+    maxResultSizeChars: Infinity,
+    tags: ['file_read'],
+  },
+
+  // ── 网页搜索 ──
+  web_search: {
+    name: 'web_search',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    searchHint: '搜索 Google Bing DuckDuckGo 互联网',
+    maxResultSizeChars: 30000,
+    tags: ['network'],
+  },
+
+  // ── Git ──
+  git: {
+    name: 'git',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    searchHint: 'git 版本控制 提交 分支 diff status',
+    maxResultSizeChars: 50000,
+    tags: ['shell'],
+  },
+
+  // ── Patch ──
+  patch_file: {
+    name: 'patch_file',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: false,
+    searchHint: '打补丁 应用diff patch 代码修改',
+    maxResultSizeChars: 5000,
+    tags: ['file_write'],
+  },
+
   // ── 系统文件浏览器 ──
   list_drives: {
     name: 'list_drives',

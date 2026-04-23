@@ -22,6 +22,13 @@ import { createXmindParseTool } from './builtin/xmind-parse-tool.js';
 import { createDocExtractTool } from './builtin/doc-extract-tool.js';
 import { createXlsxParseTool } from './builtin/xlsx-parse-tool.js';
 import { createFilesystemBrowserTools } from './builtin/filesystem-browser-tool.js';
+import { createFsOperationsTools } from './builtin/fs-operations-tool.js';
+import { createDiffTool } from './builtin/diff-tool.js';
+import { createBatchEditTool } from './builtin/batch-edit-tool.js';
+import { createReadLinesTool } from './builtin/read-lines-tool.js';
+import { createWebSearchTool } from './builtin/web-search-tool.js';
+import { createGitTool } from './builtin/git-tool.js';
+import { createPatchTool } from './builtin/patch-tool.js';
 import type { FileParser } from '../parser/file-parser.js';
 import type { ToolExecutorConfig } from './types.js';
 
@@ -98,6 +105,29 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   for (const tool of createFilesystemBrowserTools()) {
     registry.register(tool);
   }
+
+  // 注册文件系统操作工具（创建目录、移动、复制）
+  for (const tool of createFsOperationsTools(workDir)) {
+    registry.register(tool);
+  }
+
+  // 注册文件差异对比工具
+  registry.register(createDiffTool(workDir));
+
+  // 注册批量编辑工具
+  registry.register(createBatchEditTool(workDir));
+
+  // 注册按行范围读取工具
+  registry.register(createReadLinesTool(workDir));
+
+  // 注册网页搜索工具
+  registry.register(createWebSearchTool());
+
+  // 注册 Git 操作工具
+  registry.register(createGitTool(workDir));
+
+  // 注册 Patch 应用工具
+  registry.register(createPatchTool(workDir));
 
   // 初始化验证器（必须在 ToolExecutor 之前创建）
   const validator = new ToolValidator();
