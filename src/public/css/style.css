@@ -665,7 +665,6 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
   font-size: 12px;
   color: var(--text-secondary);
   background: var(--bg-card);

@@ -14,6 +14,7 @@ import { createToolsRouter } from '../../web/routes/tools.js';
 import { createRemoteRouter } from '../../web/routes/remote.js';
 import { attachChatWebSocket, cleanupChatResources } from '../../web/chat-ws.js';
 import { createSessionsRouter } from '../../web/routes/sessions.js';
+import { createUploadRouter } from '../../web/routes/upload.js';
 import type { Server } from 'http';
 
 export interface ServeResult {
@@ -37,6 +38,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/sessions', router: createSessionsRouter() },
+      { path: '/api/chat/upload', router: createUploadRouter() },
       { path: '/api', router: createPipelineRouter({ orchestrator, sseManager }) },
     ],
   });
