@@ -421,16 +421,105 @@ npm install
 
 # 配置 LLM 提供者（编辑 data/config.json）
 # 至少配置一个 OpenAI 兼容的 API Key
+```
 
-# 启动开发服务器
+### 开发模式
+
+```bash
+# 启动开发服务器（API + Web + Cloudflare Tunnel）
 npm run dev
 
-# 或构建后启动
+# 仅启动 API 服务器
+npm run dev:api
+
+# CLI 开发模式（交互式终端对话 + Web 服务器）
+npm run iceCoder chat
+```
+
+### 生产模式
+
+```bash
+# 构建
 npm run build
+
+# 启动 Web 服务器
 npm start
 ```
 
-访问 `http://localhost:3000` 打开聊天界面。
+### CLI 命令
+
+安装后通过 `iceCoder` 命令使用，开发时用 `npm run iceCoder` 代替：
+
+```bash
+# 交互式终端对话（同时启动 Web 服务器，终端/浏览器/手机三端同步）
+iceCoder chat
+
+# 交互式对话，指定端口
+iceCoder chat --port 8080
+
+# 纯终端模式（不启动 Web 服务器）
+iceCoder chat --no-serve
+
+# 启动 Web 服务器（仅 Web，无终端交互）
+iceCoder start
+iceCoder start --port 8080
+
+# 单次任务执行（非交互，适合脚本/CI）
+iceCoder run "修复 TypeScript 编译错误"
+iceCoder run "给所有函数加 JSDoc" --max-rounds 50
+iceCoder run "写一个登录 API" --json
+
+# 列出所有可用工具
+iceCoder tools
+iceCoder tools --json
+
+# 查看 MCP Server 连接状态
+iceCoder mcp
+
+# 查看 LLM 提供者配置
+iceCoder config
+
+# 切换默认 LLM 提供者
+iceCoder config set default <provider-id>
+
+# 显示帮助
+iceCoder help
+```
+
+### 全局安装
+
+```bash
+npm run build
+npm link          # 本地全局注册 iceCoder 命令
+
+# 或发布后
+npm install -g ice-coder
+```
+
+### 终端内置命令
+
+在 `iceCoder chat` 交互模式下：
+
+| 命令 | 说明 |
+|------|------|
+| `~scan` | 显示 ASCII 二维码，手机扫码连接 |
+| `~tools` | 列出可用工具 |
+| `~clear` | 清空对话历史 |
+| `~quit` | 退出 |
+
+### Web 聊天命令
+
+在浏览器聊天框输入 `~` 查看可用命令：
+
+| 命令 | 说明 |
+|------|------|
+| `~new` | 新建聊天 |
+| `~history` | 显示/隐藏历史记录 |
+| `~clear` | 清空当前聊天 |
+| `~open` | 打开文件管理器，浏览电脑文件 |
+| `~scan` | 手机扫码连接，远程控制 |
+
+访问 `http://localhost:3000` 打开 Web 聊天界面。
 
 ### 环境变量
 
@@ -442,18 +531,6 @@ npm start
 | `ICE_SYSTEM_PROMPT_PATH` | `data/system-prompt.md` | 系统提示词路径 |
 | `ICE_SESSIONS_DIR` | `data/sessions` | 会话存储目录 |
 | `ICE_MEMORY_DIR` | `data/memory-files` | 文件记忆目录 |
-
-### 聊天命令
-
-在聊天框输入 `~` 查看可用命令：
-
-| 命令 | 说明 |
-|------|------|
-| `~new` | 新建聊天 |
-| `~history` | 显示/隐藏历史记录 |
-| `~clear` | 清空当前聊天 |
-| `~open` | 打开文件管理器，浏览电脑文件 |
-| `~scan` | 手机扫码连接，远程控制 |
 
 ---
 
