@@ -28,6 +28,9 @@ import { Orchestrator } from './core/orchestrator.js';
 // 工具
 import { initializeToolSystem } from './tools/index.js';
 
+// MCP
+import { MCPManager } from './mcp/index.js';
+
 // 智能体
 import { RequirementAnalysisAgent } from './agents/requirement-analysis.js';
 import { DesignAgent } from './agents/design.js';
@@ -118,10 +121,10 @@ function initializeFileParser(): FileParser {
  * 创建编排器并注册所有 6 个子智能体。
  * 返回编排器和工具系统用于路由连接。
  */
-function initializeOrchestrator(
+async function initializeOrchestrator(
   fileParser: FileParser,
   llmAdapter: LLMAdapter,
-): { orchestrator: Orchestrator; toolRegistry: import('./tools/tool-registry.js').ToolRegistry; toolExecutor: import('./tools/tool-executor.js').ToolExecutor } {
+): Promise<{ orchestrator: Orchestrator; toolRegistry: import('./tools/tool-registry.js').ToolRegistry; toolExecutor: import('./tools/tool-executor.js').ToolExecutor; mcpManager: MCPManager }> {
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: OUTPUT_DIR,
     stageMaxRetries: 2,
@@ -134,6 +137,21 @@ function initializeOrchestrator(
     fileParser,
   });
 
+  // 初始化 MCP 管理器并注册 MCP 工具
+  const mcpManager = new MCPManager({ configPath: CONFIG_PATH });
+  try {
+    await mcpManager.initialize();
+    // 将 MCP 工具注册到工具注册表
+    for (const tool of mcpManager.getRegisteredTools()) {
+      registry.register(tool);
+    }
+    if (mcpManager.totalTools > 0) {
+      console.log(`已注册 ${mcpManager.totalTools} 个 MCP 工具到工具系统`);
+    }
+  } catch (err) {
+    console.error('MCP 初始化失败（不影响核心功能）:', err);
+  }
+
   // 注册所有 6 个流水线智能体
   orchestrator.registerAgent(new RequirementAnalysisAgent());
   orchestrator.registerAgent(new DesignAgent());
@@ -142,7 +160,7 @@ function initializeOrchestrator(
   orchestrator.registerAgent(new TestingAgent());
   orchestrator.registerAgent(new RequirementVerificationAgent());
 
-  return { orchestrator, toolRegistry: registry, toolExecutor: executor };
+  return { orchestrator, toolRegistry: registry, toolExecutor: executor, mcpManager };
 }
 
 /**
@@ -224,7 +242,7 @@ async function main(): Promise<void> {
   const fileParser = initializeFileParser();
 
   // 4. 使用 FileParser、LLMAdapter、工具系统和输出配置初始化编排器
-  const { orchestrator, toolRegistry, toolExecutor } = initializeOrchestrator(fileParser, llmAdapter);
+  const { orchestrator, toolRegistry, toolExecutor, mcpManager } = await initializeOrchestrator(fileParser, llmAdapter);
 
   // 5. 创建 SSE 管理器用于前端实时更新
   const sseManager = new SSEManager();
@@ -258,6 +276,7 @@ async function main(): Promise<void> {
   const shutdown = () => {
     console.log('Shutting down...');
     cleanupChatResources();
+    mcpManager.shutdown().catch((err) => console.error('MCP shutdown error:', err));
     server.close();
     process.exit(0);
   };
