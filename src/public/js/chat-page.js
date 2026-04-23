@@ -950,6 +950,11 @@ window.ChatPage = (function () {
           e.preventDefault();
           selectCmd(idx);
         });
+        // 移动端触摸支持
+        item.addEventListener('touchend', function (e) {
+          e.preventDefault();
+          selectCmd(idx);
+        });
       })(i);
       elCmdDropdown.appendChild(item);
     }
@@ -1345,29 +1350,23 @@ window.ChatPage = (function () {
         '</div>') +
         // Messages
         '<div class="chat-messages" id="chat-messages"></div>' +
-        // Input area
+        // Input area（进度条作为上边框）
         '<div class="chat-input-area">' +
-          (remoteMode ? '' :
+          '<div class="ctx-bottom-bar" id="ctx-bar" title="上下文用量">' +
+            '<div class="ctx-bottom-fill"></div>' +
+          '</div>' +
           '<div class="file-upload-status hidden" id="file-status">' +
             '<span class="file-name" id="file-name"></span>' +
             '<button class="file-remove" id="file-remove" title="Remove file">&times;</button>' +
-          '</div>') +
+          '</div>' +
           '<div class="chat-input-row">' +
-            (remoteMode ? '' :
-            '<button class="btn-icon" id="btn-file" title="Upload file"><span class="icon-clip"></span></button>') +
+            '<button class="btn-icon" id="btn-file" title="Upload file"><span class="icon-clip"></span></button>' +
             '<div class="input-wrapper">' +
-              '<textarea id="chat-input" rows="1" placeholder="' +
-                (remoteMode ? '输入指令… (输入 ~ 查看命令)' : 'Type a message… (输入 / 或 ~ 查看命令)') +
-              '"></textarea>' +
+              '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
             '</div>' +
             '<button class="btn-icon btn-send" id="btn-send" title="Send"><span class="icon-send"></span></button>' +
           '</div>' +
-          (remoteMode ? '' :
-          '<input type="file" class="hidden-input" id="file-input">') +
-        '</div>' +
-        // 底部上下文用量条
-        '<div class="ctx-bottom-bar" id="ctx-bar" title="上下文用量">' +
-          '<div class="ctx-bottom-fill"></div>' +
+          '<input type="file" class="hidden-input" id="file-input">' +
         '</div>' +
       '</div>';
 

@@ -326,15 +326,20 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   /**
    * 将内容从 string 或 ContentBlock[] 解析为 string。
+   * 清理可能导致 JSON 解析失败的非法字符。
    */
   private resolveContent(content: string | ContentBlock[]): string {
+    let text: string;
     if (typeof content === 'string') {
-      return content;
+      text = content;
+    } else {
+      text = content
+        .filter((block) => block.type === 'text' && block.text)
+        .map((block) => block.text!)
+        .join('\n');
     }
-    return content
-      .filter((block) => block.type === 'text' && block.text)
-      .map((block) => block.text!)
-      .join('\n');
+    // 清理非法的转义序列（如 \x 开头的十六进制转义），防止 API JSON 解析失败
+    return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
   }
 
   /**
