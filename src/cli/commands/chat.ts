@@ -13,7 +13,7 @@ import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
-import { c, info, success, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
+import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
@@ -66,15 +66,53 @@ async function showScanQR(port: number): Promise<void> {
 }
 
 /**
- * 启动 Cloudflare Tunnel 子进程。
+ * 检测 cloudflared 是否可用。
  */
-function startTunnel(port: number, tunnelBin?: string): ChildProcess {
-  const bin = tunnelBin || process.env.CLOUDFLARED_BIN || 'cloudflared';
-  const args = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', '127.0.0.1:20241'];
+async function findCloudflared(customBin?: string): Promise<string | null> {
+  const candidates = [
+    customBin,
+    process.env.CLOUDFLARED_BIN,
+    'cloudflared', // PATH 中查找
+  ].filter(Boolean) as string[];
+
+  for (const bin of candidates) {
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync(`${bin} --version`, { stdio: 'ignore', timeout: 5000 });
+      return bin;
+    } catch {
+      // 不可用，继续尝试下一个
+    }
+  }
+  return null;
+}
+
+/**
+ * 启动 Cloudflare Tunnel 子进程。
+ * 如果 cloudflared 不存在，提示用户下载并跳过。
+ */
+async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProcess | null> {
+  const bin = await findCloudflared(tunnelBin);
+
+  if (!bin) {
+    warn('未检测到 cloudflared，跳过公网隧道。');
+    console.log(`
+  ${c.bold}安装 cloudflared:${c.reset}
+    Windows:  ${c.cyan}winget install cloudflare.cloudflared${c.reset}
+    macOS:    ${c.cyan}brew install cloudflared${c.reset}
+    Linux:    ${c.cyan}curl -fsSL https://pkg.cloudflare.com/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared${c.reset}
+    手动下载: ${c.underline}https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/${c.reset}
+
+  安装后重新运行 ${c.green}iceCoder start${c.reset} 即可自动启用公网隧道。
+  或使用 ${c.green}--tunnel-bin <路径>${c.reset} 指定 cloudflared 位置。
+`);
+    return null;
+  }
 
   info(`启动 Cloudflare Tunnel: ${bin}`);
 
-  const child = spawn(bin, args, {
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', '127.0.0.1:20241'];
+  const child = spawn(bin, tunnelArgs, {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
     windowsHide: true,
@@ -139,7 +177,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
     // 启动 Cloudflare Tunnel（start 模式）
     if (withTunnel && !hasFlag(args.flags, 'no-tunnel')) {
-      tunnelProcess = startTunnel(port, getFlagStr(args.flags, 'tunnel-bin'));
+      tunnelProcess = await startTunnel(port, getFlagStr(args.flags, 'tunnel-bin'));
     }
   }
 
