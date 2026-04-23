@@ -25,6 +25,7 @@ import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import { MemoryManager } from '../memory/memory-manager.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import { resolveFileReferences } from './routes/upload.js';
 
 const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
@@ -268,6 +269,12 @@ async function handleChatMessage(
   const toolDefs = toolRegistry.getDefinitions();
   const systemPrompt = await loadSystemPrompt();
 
+  // 解析消息中的文件引用 [file:xxx]，替换为实际文件路径
+  const { text: resolvedMessage, filePaths } = resolveFileReferences(message);
+  const finalMessage = filePaths.length > 0
+    ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
+    : resolvedMessage;
+
   // 确保记忆系统已初始化
   await ensureMemoryInitialized();
 
@@ -347,7 +354,7 @@ async function handleChatMessage(
     };
   });
   const result = await harness.run(
-    message,
+    finalMessage,
     (msgs, opts) => llmAdapter.chat(msgs, opts),
     (event) => {
       // 推送 step 到 WebSocket（仅用于前端 token 用量更新，不写入聊天记录）
