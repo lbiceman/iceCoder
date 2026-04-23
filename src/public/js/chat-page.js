@@ -869,7 +869,7 @@ window.ChatPage = (function () {
     { name: 'history', description: '显示/隐藏历史记录', prefix: '~' },
     { name: 'clear', description: '清空当前聊天记录', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
-    { name: 'qrCode', description: '生成二维码，手机扫码远程控制', prefix: '~' }
+    { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
@@ -1050,8 +1050,8 @@ window.ChatPage = (function () {
       return;
     }
 
-    // 处理 ~qrCode 命令：生成远程控制二维码
-    if (text === '~qrCode' && !remoteMode) {
+    // 处理 ~scan 命令：生成远程控制二维码
+    if (text === '~scan' && !remoteMode) {
       elInput.value = '';
       autoResizeInput();
       hideCmdDropdown();
