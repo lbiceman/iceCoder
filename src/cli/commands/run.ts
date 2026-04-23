@@ -31,7 +31,7 @@ async function loadSystemPrompt(): Promise<string> {
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
   if (!task) {
-    error('请提供任务描述。用法: ice run "修复编译错误"');
+    error('请提供任务描述。用法: iceCoder run "修复编译错误"');
     process.exit(1);
   }
 

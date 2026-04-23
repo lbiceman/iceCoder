@@ -34,7 +34,7 @@ async function showConfig(): Promise<void> {
 
     table(['ID', '类型', '模型', 'API URL'], rows);
     console.log(`\n${c.dim}配置文件: ${CONFIG_PATH}${c.reset}`);
-    console.log(`${c.dim}使用 "ice config set default <id>" 切换默认提供者${c.reset}\n`);
+    console.log(`${c.dim}使用 "iceCoder config set default <id>" 切换默认提供者${c.reset}\n`);
   } catch (err) {
     error('读取配置失败: ' + (err instanceof Error ? err.message : String(err)));
   }
@@ -70,6 +70,6 @@ async function handleSet(args: ParsedArgs): Promise<void> {
       error('更新配置失败: ' + (err instanceof Error ? err.message : String(err)));
     }
   } else {
-    error('用法: ice config set default <provider-id>');
+    error('用法: iceCoder config set default <provider-id>');
   }
 }

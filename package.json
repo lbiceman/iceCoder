@@ -4,7 +4,7 @@
   "description": "AI coding assistant with tool-use capabilities for PC and mobile",
   "main": "dist/index.js",
   "bin": {
-    "ice": "dist/cli/index.js"
+    "iceCoder": "dist/cli/index.js"
   },
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "build:web": "vite build",
     "start": "NODE_ENV=production node dist/index.js",
     "cli": "tsx src/cli/index.ts",
+    "iceCoder": "tsx src/cli/index.ts",
     "dev": "concurrently -n api,web,tunnel -c blue,green,magenta \"tsx src/index.ts\" \"tsx scripts/wait-then-vite.ts\" \"E:\\tools\\cloudflared\\cloudflared.exe tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241\"",
     "dev:api": "tsx src/index.ts",
     "dev:web": "vite",

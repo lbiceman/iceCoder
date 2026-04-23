@@ -124,7 +124,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${c.green}ice>${c.reset} `,
+    prompt: `${c.green}iceCoder>${c.reset} `,
     terminal: process.stdin.isTTY ?? false,
   });
 
