@@ -5,6 +5,7 @@
  */
 
 import express, { type Express, type Router, type Request, type Response } from 'express';
+import fs from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { Server } from 'http';
@@ -39,11 +40,14 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
     }
   }
 
-  // 静态文件托管（生产模式或指定了 staticDir 时）
+  // 静态文件托管
+  // 路径解析：__dirname 在编译后是 dist/web/，优先找 dist/public，回退 src/public
   const isProd = process.env.NODE_ENV === 'production';
-  const staticDir = config?.staticDir ?? (isProd
-    ? path.join(__dirname, '../../dist/public')
-    : path.join(__dirname, '../../src/public'));
+  const distPublic = path.join(__dirname, '../public');       // dist/web/../public = dist/public
+  const srcPublic = path.join(__dirname, '../../src/public'); // 开发模式回退
+  const staticDir = config?.staticDir ?? (
+    fs.existsSync(distPublic) ? distPublic : srcPublic
+  );
 
   if (isProd) {
     app.use(express.static(staticDir));
