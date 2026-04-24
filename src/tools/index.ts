@@ -1,12 +1,12 @@
 /**
- * 工具系统入口�?
- * 创建并注册所有内置工具，返回配置好的 ToolRegistry �?ToolExecutor�?
+ * 工具系统入口。
+ * 创建并注册所有内置工具，返回配置好的 ToolRegistry 和 ToolExecutor。
  *
- * 模块组成�?
- * - ToolRegistry: 工具注册�?
- * - ToolExecutor: 工具执行器（带重试和超时�?
- * - ToolValidator: 工具输入验证器（参�?Claude Code �?Tool.validateInput�?
- * - ToolMetadata: 工具元数据（参�?Claude Code �?Tool 接口元数据字段）
+ * 模块组成：
+ * - ToolRegistry: 工具注册表
+ * - ToolExecutor: 工具执行器（带重试和超时）
+ * - ToolValidator: 工具输入验证器
+ * - ToolMetadata: 工具元数据
  */
 
 import { ToolRegistry } from './tool-registry.js';

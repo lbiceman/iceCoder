@@ -1,7 +1,7 @@
 /**
  * 提示词系统类型定义。
  *
- * 参考 Claude Code 的分段式系统提示词架构：
+ * 分段式系统提示词架构：
  * - 静态部分（可缓存）：身份、规则、工具使用指南、风格
  * - 动态部分（每会话变化）：环境信息、记忆、语言偏好
  *
@@ -72,7 +72,6 @@ export interface EnvironmentInfo {
 /**
  * 用户上下文 — 作为第一条 user 消息注入到对话中。
  *
- * 参考 Claude Code 的 getUserContext()：
  * 将项目规范、编码规范等以 <system-reminder> 标签包裹，
  * 注入到消息列表最前面。
  */
@@ -83,7 +82,6 @@ export interface UserContext {
 /**
  * 系统上下文 — 追加到系统提示词末尾。
  *
- * 参考 Claude Code 的 getSystemContext()：
  * 包含 git 状态等实时信息。
  */
 export interface SystemContext {

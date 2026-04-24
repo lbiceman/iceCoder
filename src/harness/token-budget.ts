@@ -1,7 +1,6 @@
 /**
  * Token 预算追踪器。
  *
- * 参考 Claude Code 的 query/tokenBudget.ts：
  * 当模型认为任务完成但 token 预算还有剩余时，
  * 可以注入 nudge 消息让模型继续工作。
  *

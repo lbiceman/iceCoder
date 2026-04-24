@@ -23,8 +23,6 @@ window.ChatPage = (function () {
 
   // ---- localStorage keys ----
   var STORAGE_KEY_MESSAGES = 'ice-chat-messages';
-  var STORAGE_KEY_SESSIONS = 'ice-chat-sessions';   // [{id, title, updatedAt}]
-  var STORAGE_KEY_ACTIVE = 'ice-chat-active-session'; // 当前会话 id
 
   // ---- State ----
   var container = null;
@@ -34,7 +32,6 @@ window.ChatPage = (function () {
   var stages = [];         // { name, status }
   var agentResponseBuffer = ''; // accumulates streaming chunks
   var isStreaming = false;      // 是否正在流式传输
-  var currentSessionId = null;  // 当前会话 ID
 
   // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
   var remoteMode = false;       // 是否为远程控制模式（带 token）
@@ -55,286 +52,20 @@ window.ChatPage = (function () {
   var usedOutputTokens = 0;     // 累计输出 token
   var modelName = '';            // 当前模型名称
 
-  // ---- 会话历史管理 ----
+  // ---- 消息持久化（单会话，固定 ID） ----
 
-  function generateSessionId() {
-    return 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
-  }
+  var SESSION_ID = 'default';
 
-  // ---- 服务端会话存储（PC 和移动端同步） ----
-
-  /** 从服务端加载会话列表 */
-  function loadSessionList() {
-    // 返回缓存（同步），异步刷新
+  /** 保存消息到本地缓存（服务端由后端统一写入） */
+  function saveSessionMessages() {
+    var toSave = messages.map(function (m) { return { role: m.role, content: m.content }; });
     try {
-      var stored = localStorage.getItem(STORAGE_KEY_SESSIONS);
-      if (stored) return JSON.parse(stored);
+      localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(toSave));
     } catch (_e) { /* ignore */ }
-    return [];
-  }
-
-  function saveSessionList(sessions) {
-    try {
-      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(sessions));
-    } catch (_e) { /* ignore */ }
-  }
-
-  /** 从服务端拉取会话列表并更新本地缓存 */
-  function fetchSessionList(callback) {
-    fetch('/api/sessions?_t=' + Date.now())
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.sessions) {
-          saveSessionList(data.sessions);
-          if (callback) callback(data.sessions);
-        }
-      })
-      .catch(function () { /* ignore, use local cache */ });
-  }
-
-  function getActiveSessionId() {
-    return localStorage.getItem(STORAGE_KEY_ACTIVE) || null;
-  }
-
-  function setActiveSessionId(id) {
-    localStorage.setItem(STORAGE_KEY_ACTIVE, id);
-  }
-
-  /** 保存消息到服务端 + 本地缓存 */
-  function saveSessionMessages(sessionId, msgs) {
-    var toSave = msgs.map(function (m) { return { role: m.role, content: m.content }; });
-    // 本地缓存
-    try {
-      localStorage.setItem('ice-chat-sess-' + sessionId, JSON.stringify(toSave));
-    } catch (_e) { /* ignore */ }
-    // 异步同步到服务端
-    var title = extractSessionTitle(msgs);
-    fetch('/api/sessions/' + encodeURIComponent(sessionId), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: toSave, title: title }),
-    }).catch(function () { /* ignore */ });
   }
 
   /** 从本地缓存加载消息（同步） */
-  function loadSessionMessages(sessionId) {
-    try {
-      var stored = localStorage.getItem('ice-chat-sess-' + sessionId);
-      if (stored) {
-        var parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (_e) { /* ignore */ }
-    return [];
-  }
-
-  /** 从服务端加载消息（异步） */
-  function fetchSessionMessages(sessionId, callback) {
-    // 加 _t 防止移动端浏览器缓存 GET 请求
-    var url = '/api/sessions/' + encodeURIComponent(sessionId) + '?_t=' + Date.now();
-    fetch(url)
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        var msgs = (data.messages && data.messages.length > 0) ? data.messages : [];
-        if (msgs.length > 0) {
-          try {
-            localStorage.setItem('ice-chat-sess-' + sessionId, JSON.stringify(msgs));
-          } catch (_e) { /* ignore */ }
-        }
-        if (callback) callback(msgs);
-      })
-      .catch(function () {
-        // 网络失败，用本地缓存
-        var local = loadSessionMessages(sessionId);
-        if (callback) callback(local);
-      });
-  }
-
-  function deleteSessionStorage(sessionId) {
-    localStorage.removeItem('ice-chat-sess-' + sessionId);
-    fetch('/api/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' })
-      .catch(function () { /* ignore */ });
-  }
-
-  /** 从消息列表中提取会话标题（取第一条用户消息的前 30 个字符） */
-  function extractSessionTitle(msgs) {
-    for (var i = 0; i < msgs.length; i++) {
-      if (msgs[i].role === 'user' && msgs[i].content) {
-        var text = msgs[i].content.replace(/\[file\][^\n]*/g, '').trim();
-        if (text) return text.length > 30 ? text.substring(0, 30) + '…' : text;
-      }
-    }
-    return '新对话';
-  }
-
-  /** 更新当前会话在 session list 中的元数据 */
-  function updateCurrentSessionMeta() {
-    if (!currentSessionId) return;
-    var sessions = loadSessionList();
-    var found = false;
-    for (var i = 0; i < sessions.length; i++) {
-      if (sessions[i].id === currentSessionId) {
-        sessions[i].title = extractSessionTitle(messages);
-        sessions[i].updatedAt = Date.now();
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      sessions.unshift({ id: currentSessionId, title: extractSessionTitle(messages), updatedAt: Date.now() });
-    }
-    saveSessionList(sessions);
-  }
-
-  /** 初始化或恢复会话 */
-  function initSession() {
-    var activeId = getActiveSessionId();
-    if (activeId) {
-      currentSessionId = activeId;
-      messages = loadSessionMessages(activeId);
-      // 异步从服务端拉取最新消息
-      fetchSessionMessages(activeId, function (serverMsgs) {
-        if (serverMsgs.length > messages.length) {
-          messages = serverMsgs;
-          renderMessages();
-        }
-      });
-      fetchSessionList(function () { renderHistory(); });
-    } else {
-      // 没有本地会话 — 从服务端拉取，优先加载 PC 端活跃会话
-      fetch('/api/sessions?_t=' + Date.now())
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          var serverSessions = data.sessions || [];
-          var serverActiveId = data.activeSessionId || null;
-          saveSessionList(serverSessions);
-
-          // 优先使用服务端记录的 PC 端活跃会话
-          var targetId = serverActiveId;
-
-          // 如果没有活跃会话，找有实际内容的
-          if (!targetId && serverSessions.length > 0) {
-            for (var i = 0; i < serverSessions.length; i++) {
-              if (serverSessions[i].title && serverSessions[i].title !== '新对话') {
-                targetId = serverSessions[i].id;
-                break;
-              }
-            }
-            if (!targetId) targetId = serverSessions[0].id;
-          }
-
-          if (targetId) {
-            currentSessionId = targetId;
-            setActiveSessionId(targetId);
-            fetchSessionMessages(targetId, function (serverMsgs) {
-              messages = serverMsgs;
-              renderMessages();
-              renderHistory();
-            });
-          } else {
-            currentSessionId = generateSessionId();
-            setActiveSessionId(currentSessionId);
-            var oldMsgs = loadMessages();
-            if (oldMsgs.length > 0) {
-              messages = oldMsgs;
-              saveSessionMessages(currentSessionId, messages);
-              updateCurrentSessionMeta();
-              localStorage.removeItem(STORAGE_KEY_MESSAGES);
-            }
-            renderMessages();
-          }
-          renderHistory();
-        })
-        .catch(function () {
-          currentSessionId = generateSessionId();
-          setActiveSessionId(currentSessionId);
-          messages = [];
-          renderMessages();
-        });
-    }
-  }
-
-  /** 新建聊天：保存当前会话，创建新会话 */
-  function startNewChat() {
-    if (isStreaming) return;
-    if (currentSessionId && messages.length > 0) {
-      saveSessionMessages(currentSessionId, messages);
-      updateCurrentSessionMeta();
-    }
-    currentSessionId = generateSessionId();
-    setActiveSessionId(currentSessionId);
-    messages = [];
-    stages = [];
-    currentExecutionId = null;
-    resetTokenUsage();
-    if (elPipelinePanel) elPipelinePanel.classList.add('hidden');
-    renderMessages();
-    renderHistory();
-    if (elInput) elInput.focus();
-
-    // 通知后端切换会话（清除旧的消息缓存关联）
-    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
-      chatWs.send(JSON.stringify({ type: 'new_session', sessionId: currentSessionId }));
-    }
-  }
-
-  /** 切换到指定会话 */
-  function switchToSession(sessionId) {
-    if (isStreaming) return;
-    if (sessionId === currentSessionId) return;
-    if (currentSessionId && messages.length > 0) {
-      saveSessionMessages(currentSessionId, messages);
-      updateCurrentSessionMeta();
-    }
-    currentSessionId = sessionId;
-    setActiveSessionId(sessionId);
-    messages = loadSessionMessages(sessionId);
-    stages = [];
-    currentExecutionId = null;
-    resetTokenUsage();
-    if (elPipelinePanel) elPipelinePanel.classList.add('hidden');
-    renderMessages();
-    renderHistory();
-    // 异步从服务端拉取最新消息
-    fetchSessionMessages(sessionId, function (serverMsgs) {
-      if (serverMsgs.length > 0) {
-        messages = serverMsgs;
-        renderMessages();
-      }
-    });
-  }
-
-  /** 删除指定会话 */
-  function deleteSession(sessionId) {
-    var sessions = loadSessionList();
-    sessions = sessions.filter(function (s) { return s.id !== sessionId; });
-    saveSessionList(sessions);
-    deleteSessionStorage(sessionId);
-    if (sessionId === currentSessionId) {
-      if (sessions.length > 0) {
-        switchToSession(sessions[0].id);
-      } else {
-        startNewChat();
-      }
-    } else {
-      renderHistory();
-    }
-  }
-
-  // ---- DOM refs for history sidebar ----
-  var elHistoryPanel, elHistoryList;
-
-  // ---- 持久化 ----
-
-  function saveMessages() {
-    if (!currentSessionId) return;
-    try {
-      var toSave = messages.map(function (m) { return { role: m.role, content: m.content }; });
-      localStorage.setItem('ice-chat-sess-' + currentSessionId, JSON.stringify(toSave));
-    } catch (_e) { /* ignore */ }
-  }
-
-  function loadMessages() {
+  function loadLocalMessages() {
     try {
       var stored = localStorage.getItem(STORAGE_KEY_MESSAGES);
       if (stored) {
@@ -345,9 +76,50 @@ window.ChatPage = (function () {
     return [];
   }
 
+  /** 从服务端加载消息（异步） */
+  function fetchServerMessages(callback) {
+    var url = '/api/sessions/' + SESSION_ID + '?_t=' + Date.now();
+    fetch(url)
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        var msgs = (data.messages && data.messages.length > 0) ? data.messages : [];
+        if (callback) callback(msgs);
+      })
+      .catch(function () {
+        if (callback) callback([]);
+      });
+  }
+
+  /** 初始化：从本地缓存加载，再从服务端同步 */
+  function initSession() {
+    messages = loadLocalMessages();
+    renderMessages();
+    // 异步从服务端拉取最新消息
+    fetchServerMessages(function (serverMsgs) {
+      if (serverMsgs.length > messages.length) {
+        messages = serverMsgs;
+        renderMessages();
+      }
+    });
+  }
+
+  // ---- 持久化 ----
+
+  function saveMessages() {
+    saveSessionMessages();
+  }
+
+  function loadMessages() {
+    return loadLocalMessages();
+  }
+
   function clearMessages() {
     messages = [];
     saveMessages();
+    // 通知后端清除消息缓存，下一轮从零构建
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+      chatWs.send(JSON.stringify({ type: 'clear_session' }));
+    }
   }
 
   // ---- DOM refs (set during render) ----
@@ -760,13 +532,18 @@ window.ChatPage = (function () {
   }
 
   function syncMessages() {
-    if (!currentSessionId) return;
     if (wsProcessing || isStreaming) return;
-    fetchSessionMessages(currentSessionId, function (serverMsgs) {
-      if (serverMsgs && serverMsgs.length > 0 && serverMsgs.length !== messages.length) {
+    fetchServerMessages(function (serverMsgs) {
+      if (!serverMsgs || serverMsgs.length === 0) return;
+      // 服务端是权威数据源（后端统一写入），有新消息就更新
+      if (serverMsgs.length > messages.length) {
         var wasNearBottom = isNearBottom();
         messages = serverMsgs;
         renderMessagesOnly(wasNearBottom);
+        // 同步到 localStorage
+        try {
+          localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(serverMsgs));
+        } catch (_e) { /* ignore */ }
       }
     });
   }
@@ -863,7 +640,7 @@ window.ChatPage = (function () {
       renderMessages();
       return;
     }
-    chatWs.send(JSON.stringify({ type: 'message', content: text, sessionId: currentSessionId }));
+    chatWs.send(JSON.stringify({ type: 'message', content: text }));
   }
 
   // ---- 命令面板 ----
@@ -871,17 +648,13 @@ window.ChatPage = (function () {
   // ~ 开头：本地命令（不发送到服务器）
   // / 开头：服务端命令（发送到服务器执行）
   var PC_LOCAL_COMMANDS = [
-    { name: 'new', description: '新建聊天', prefix: '~' },
-    { name: 'history', description: '显示/隐藏历史记录', prefix: '~' },
-    { name: 'clear', description: '清空当前聊天记录', prefix: '~' },
+    { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
-    { name: 'new', description: '新建聊天', prefix: '~' },
-    { name: 'history', description: '显示/隐藏历史记录', prefix: '~' },
-    { name: 'clear', description: '清空当前聊天记录', prefix: '~' },
+    { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' }
   ];
 
@@ -1028,31 +801,13 @@ window.ChatPage = (function () {
     var text = elInput.value.trim();
     if (!text && !uploadedFile) return;
 
-    // 处理 ~clear 命令：清空聊天记录（本地命令，不发送）
+    // 处理 ~clear 命令：清空聊天显示和后端缓存（记忆系统不受影响）
     if (text === '~clear') {
       elInput.value = '';
       autoResizeInput();
       hideCmdDropdown();
       clearMessages();
       renderMessages();
-      return;
-    }
-
-    // 处理 ~new 命令：新建聊天
-    if (text === '~new') {
-      elInput.value = '';
-      autoResizeInput();
-      hideCmdDropdown();
-      startNewChat();
-      return;
-    }
-
-    // 处理 ~history 命令：切换历史面板
-    if (text === '~history') {
-      elInput.value = '';
-      autoResizeInput();
-      hideCmdDropdown();
-      toggleHistory();
       return;
     }
 
@@ -1096,64 +851,6 @@ window.ChatPage = (function () {
     removeUploadedFile();
 
     sendWsMessage(msgText);
-  }
-
-  // ---- 历史记录侧边栏渲染 ----
-
-  function renderHistory() {
-    if (!elHistoryList) return;
-    var sessions = loadSessionList();
-    elHistoryList.innerHTML = '';
-
-    if (sessions.length === 0) {
-      var empty = document.createElement('div');
-      empty.className = 'history-empty';
-      empty.textContent = '暂无历史记录';
-      elHistoryList.appendChild(empty);
-      return;
-    }
-
-    // 按更新时间倒序
-    sessions.sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
-
-    for (var i = 0; i < sessions.length; i++) {
-      (function (sess) {
-        var item = document.createElement('div');
-        item.className = 'history-item' + (sess.id === currentSessionId ? ' active' : '');
-
-        var title = document.createElement('span');
-        title.className = 'history-title';
-        title.textContent = sess.title || '新对话';
-        title.title = sess.title || '新对话';
-        item.appendChild(title);
-
-        var del = document.createElement('button');
-        del.className = 'history-delete';
-        del.innerHTML = '&times;';
-        del.title = '删除';
-        del.addEventListener('mousedown', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-        });
-        del.addEventListener('click', function (e) {
-          e.stopPropagation();
-          deleteSession(sess.id);
-        });
-        item.appendChild(del);
-
-        item.addEventListener('click', function () {
-          switchToSession(sess.id);
-        });
-
-        elHistoryList.appendChild(item);
-      })(sessions[i]);
-    }
-  }
-
-  function toggleHistory() {
-    if (!elHistoryPanel) return;
-    elHistoryPanel.classList.toggle('open');
-    renderHistory();
   }
 
   // ---- 输入框自动调整大小 ----
@@ -1338,14 +1035,6 @@ window.ChatPage = (function () {
 
     container.innerHTML =
       '<div class="chat-page">' +
-        // 历史记录侧边栏
-        '<div class="history-panel" id="history-panel">' +
-          '<div class="history-header">' +
-            '<span>历史记录</span>' +
-            '<button class="history-close" id="btn-history-close" title="关闭">&times;</button>' +
-          '</div>' +
-          '<div class="history-list" id="history-list"></div>' +
-        '</div>' +
         // Pipeline panel（远程模式隐藏）
         (remoteMode ? '' :
         '<div class="pipeline-panel hidden" id="pipeline-panel">' +
@@ -1391,9 +1080,6 @@ window.ChatPage = (function () {
     elPipelinePanel = container.querySelector('#pipeline-panel');
     elProgressFill = container.querySelector('#progress-fill');
     elStagesContainer = container.querySelector('#stages-container');
-    elHistoryPanel = container.querySelector('#history-panel');
-    elHistoryList = container.querySelector('#history-list');
-    var elHistoryClose = container.querySelector('#btn-history-close');
     elContextBar = container.querySelector('#ctx-bar');
 
     // 立即渲染上下文条（加载状态）
@@ -1419,11 +1105,6 @@ window.ChatPage = (function () {
 
     // 绑定事件
     elSendBtn.addEventListener('click', handleSend);
-    if (elHistoryClose) {
-      elHistoryClose.addEventListener('click', function () {
-        elHistoryPanel.classList.remove('open');
-      });
-    }
 
     elInput.addEventListener('keydown', function (e) {
       // 命令面板键盘导航优先
@@ -1465,7 +1146,6 @@ window.ChatPage = (function () {
 
     // 渲染已有消息（导航返回时）
     renderMessages();
-    renderHistory();
 
     // 如果活跃则恢复流水线面板
     if (!remoteMode && stages.length > 0 && currentExecutionId) {
@@ -1474,43 +1154,16 @@ window.ChatPage = (function () {
       updateProgressBar();
     }
 
-    // 远程模式：从服务端同步会话
+    // 远程模式：从服务端同步消息
     if (remoteMode) {
       messages = [];
       renderMessagesOnly();
-      fetch('/api/sessions?_t=' + Date.now())
-        .then(function (res) { return res.json(); })
-        .then(function (data) {
-          var serverSessions = data.sessions || [];
-          var serverActiveId = data.activeSessionId || null;
-          saveSessionList(serverSessions);
-          var targetId = serverActiveId;
-          if (!targetId && serverSessions.length > 0) {
-            for (var i = 0; i < serverSessions.length; i++) {
-              if (serverSessions[i].title && serverSessions[i].title !== '新对话') {
-                targetId = serverSessions[i].id;
-                break;
-              }
-            }
-            if (!targetId) targetId = serverSessions[0].id;
-          }
-          if (targetId) {
-            currentSessionId = targetId;
-            setActiveSessionId(targetId);
-            fetchSessionMessages(targetId, function (serverMsgs) {
-              messages = serverMsgs;
-              renderMessagesOnly();
-              renderHistory();
-            });
-          } else {
-            currentSessionId = generateSessionId();
-            setActiveSessionId(currentSessionId);
-          }
-        })
-        .catch(function () {
-          currentSessionId = generateSessionId();
-          setActiveSessionId(currentSessionId);
-        });
+      fetchServerMessages(function (serverMsgs) {
+        if (serverMsgs.length > 0) {
+          messages = serverMsgs;
+          renderMessagesOnly();
+        }
+      });
     }
 
     // PC 和移动端统一连接 WebSocket

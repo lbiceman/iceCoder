@@ -165,9 +165,9 @@ async function initializeOrchestrator(
 
 /**
  * 重新加载提供者配置并重新初始化 LLM 适配器。
- * 支持不重启智能体的情况下热切换提供者。
+ * 委托给 bootstrap 中的共享实现。
  */
-async function reloadLLMAdapter(llmAdapter: LLMAdapter): Promise<void> {
+async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void> {
   const providers = await loadConfig();
 
   for (const provider of providers) {
@@ -217,7 +217,7 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
         clearTimeout(debounceTimer);
       }
       debounceTimer = setTimeout(() => {
-        reloadLLMAdapter(llmAdapter).catch((err) => {
+        reloadLLMAdapterFromConfig(llmAdapter).catch((err) => {
           console.error('Failed to reload LLM adapter config:', err);
         });
       }, 500);
@@ -255,7 +255,11 @@ async function main(): Promise<void> {
 
   const app = await createServer({
     routes: [
-      { path: '/api/config', router: createConfigRouter() },
+      { path: '/api/config', router: createConfigRouter({
+        onConfigSaved: () => {
+          reloadLLMAdapterFromConfig(llmAdapter).catch(err => console.error('Failed to reload LLM adapter:', err));
+        },
+      }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/sessions', router: createSessionsRouter() },

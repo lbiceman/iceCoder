@@ -1,7 +1,7 @@
 /**
  * 系统提示词段落定义。
  *
- * 参考 Claude Code 的 prompts.ts，将系统提示词拆分为独立的段落，
+ * 将系统提示词拆分为独立的段落，
  * 每个段落职责单一，可独立开关和排序。
  *
  * 段落分为两类：
@@ -15,7 +15,6 @@ import type { PromptSection, EnvironmentInfo } from './types.js';
 
 /**
  * 身份介绍段落。
- * 参考 Claude Code 的 getSimpleIntroSection()。
  */
 export function createIntroSection(): PromptSection {
   return {
@@ -32,7 +31,6 @@ export function createIntroSection(): PromptSection {
 
 /**
  * 系统规则段落。
- * 参考 Claude Code 的 getSimpleSystemSection()。
  */
 export function createSystemSection(): PromptSection {
   return {
@@ -51,7 +49,6 @@ export function createSystemSection(): PromptSection {
 
 /**
  * 任务执行段落。
- * 参考 Claude Code 的 getSimpleDoingTasksSection()。
  */
 export function createDoingTasksSection(): PromptSection {
   return {
@@ -77,7 +74,6 @@ export function createDoingTasksSection(): PromptSection {
 
 /**
  * 谨慎操作段落。
- * 参考 Claude Code 的 getActionsSection()。
  */
 export function createActionsSection(): PromptSection {
   return {
@@ -100,7 +96,6 @@ export function createActionsSection(): PromptSection {
 
 /**
  * 工具使用指南段落。
- * 参考 Claude Code 的 getUsingYourToolsSection()。
  */
 export function createToolUsageSection(): PromptSection {
   return {
@@ -124,7 +119,6 @@ export function createToolUsageSection(): PromptSection {
 
 /**
  * 风格和语气段落。
- * 参考 Claude Code 的 getSimpleToneAndStyleSection()。
  */
 export function createToneSection(): PromptSection {
   return {
@@ -143,7 +137,6 @@ export function createToneSection(): PromptSection {
 
 /**
  * Shell 命令使用指南段落。
- * 参考 Claude Code 的 BashTool prompt。
  */
 export function createShellGuideSection(): PromptSection {
   return {
@@ -170,7 +163,6 @@ export function createShellGuideSection(): PromptSection {
 
 /**
  * 环境信息段落。
- * 参考 Claude Code 的 computeSimpleEnvInfo()。
  */
 export function createEnvironmentSection(env: EnvironmentInfo): PromptSection {
   const lines = [
@@ -196,7 +188,6 @@ export function createEnvironmentSection(env: EnvironmentInfo): PromptSection {
 
 /**
  * 语言偏好段落。
- * 参考 Claude Code 的 getLanguageSection()。
  */
 export function createLanguageSection(language: string): PromptSection {
   return {
@@ -212,7 +203,6 @@ export function createLanguageSection(language: string): PromptSection {
 
 /**
  * 记忆注入段落。
- * 参考 Claude Code 的 loadMemoryPrompt()。
  */
 export function createMemorySection(memories: string[]): PromptSection {
   return {
@@ -245,7 +235,6 @@ export function createPreferencesSection(preferences: Record<string, any>): Prom
 
 /**
  * 工具结果清理提醒段落。
- * 参考 Claude Code 的 getFunctionResultClearingSection()。
  */
 export function createToolResultClearingSection(): PromptSection {
   return {

@@ -1,7 +1,7 @@
 /**
  * 工具元数据 — 描述工具的行为特征。
  *
- * 参考 Claude Code 的 Tool 接口中的元数据字段：
+ * 元数据字段：
  * - isConcurrencySafe: 是否可以并行执行
  * - isReadOnly: 是否为只读操作
  * - isDestructive: 是否为破坏性操作
@@ -36,7 +36,6 @@ export interface ToolMetadata {
 
 /**
  * 工具分类标签。
- * 参考 Claude Code 的工具分类方式。
  */
 export type ToolTag =
   | 'file_read'      // 文件读取

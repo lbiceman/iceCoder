@@ -94,6 +94,45 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
 }
 
 /**
+ * 热重载 LLM 适配器配置。
+ * 重新读取配置文件，注册所有 providers 并切换默认提供者。
+ */
+export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: string): Promise<void> {
+  const providers = await loadConfig(configPath);
+
+  for (const provider of providers) {
+    if (provider.providerName === 'openai') {
+      llmAdapter.registerProvider(new OpenAIAdapter({
+        name: provider.id,
+        apiKey: provider.apiKey,
+        baseURL: provider.apiUrl,
+        model: provider.modelName,
+        temperature: provider.parameters.temperature,
+        maxTokens: provider.parameters.maxTokens,
+        topP: provider.parameters.topP,
+      }));
+    } else if (provider.providerName === 'anthropic') {
+      llmAdapter.registerProvider(new AnthropicAdapter({
+        apiKey: provider.apiKey,
+        model: provider.modelName,
+        temperature: provider.parameters.temperature,
+        maxTokens: provider.parameters.maxTokens,
+        topP: provider.parameters.topP,
+      }));
+    }
+  }
+
+  const defaultProvider = providers.find((p) => p.isDefault);
+  if (defaultProvider) {
+    llmAdapter.setDefaultProvider(defaultProvider.id);
+  } else if (providers.length > 0) {
+    llmAdapter.setDefaultProvider(providers[0].id);
+  }
+
+  console.log('LLM adapter configuration reloaded');
+}
+
+/**
  * 初始化文件解析器。
  */
 export function initializeFileParser(): FileParser {

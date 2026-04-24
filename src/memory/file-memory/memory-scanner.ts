@@ -1,7 +1,6 @@
 /**
  * 记忆目录扫描器。
  *
- * 参考 Claude Code 的 memoryScan.ts：
  * 扫描记忆目录中的 .md 文件，读取 frontmatter，
  * 返回按修改时间排序的记忆头信息列表。
  */

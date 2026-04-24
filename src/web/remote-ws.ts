@@ -8,8 +8,7 @@ import type { Server } from 'http';
 import { URL } from 'url';
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
-import { getSession, markSessionConnected, removeSession } from './routes/remote.js';
-import { getActiveSession } from './routes/sessions.js';
+import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -18,6 +17,7 @@ import type { ToolRegistry } from '../tools/tool-registry.js';
 
 const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
 const SESSIONS_DIR = path.resolve('data/sessions');
+const SESSION_ID = 'default';
 
 async function loadSystemPrompt(): Promise<string> {
   try {
@@ -27,16 +27,11 @@ async function loadSystemPrompt(): Promise<string> {
   }
 }
 
-/** 将远程消息追加到会话文件（与 PC 端共享） */
-async function appendToSession(targetSessionId: string | undefined, userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
+/** 将远程消息追加到会话文件（与 PC 端共享固定文件） */
+async function appendToSession(userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
   try {
-    // 优先使用前端传来的 sessionId，回退到服务端活跃会话
-    const activeId = targetSessionId || await getActiveSession();
-    if (!activeId) return;
-
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    const safeId = activeId.replace(/[^a-zA-Z0-9_-]/g, '');
-    const sessionFile = path.join(SESSIONS_DIR, `${safeId}.json`);
+    const sessionFile = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
 
     let existing: { role: string; content: string }[] = [];
     try {
@@ -44,7 +39,6 @@ async function appendToSession(targetSessionId: string | undefined, userMsg: str
       existing = JSON.parse(data);
     } catch { /* file doesn't exist yet */ }
 
-    // 追加 step 消息、用户消息和 AI 回复
     for (const s of steps) {
       existing.push({ role: 'agent', content: s });
     }
@@ -54,20 +48,6 @@ async function appendToSession(targetSessionId: string | undefined, userMsg: str
     }
 
     await fsPromises.writeFile(sessionFile, JSON.stringify(existing), 'utf-8');
-
-    // 更新会话列表
-    const listFile = path.join(SESSIONS_DIR, '_list.json');
-    let list: { id: string; title: string; updatedAt: number }[] = [];
-    try {
-      const listData = await fsPromises.readFile(listFile, 'utf-8');
-      list = JSON.parse(listData);
-    } catch { /* empty */ }
-
-    const title = userMsg.length > 30 ? userMsg.substring(0, 30) + '…' : userMsg;
-    const idx = list.findIndex(s => s.id === activeId);
-    const meta = { id: activeId, title, updatedAt: Date.now() };
-    if (idx >= 0) { list[idx] = meta; } else { list.unshift(meta); }
-    await fsPromises.writeFile(listFile, JSON.stringify(list), 'utf-8');
   } catch (err) {
     console.error('[remote-ws] Failed to save to session:', err);
   }
@@ -152,7 +132,7 @@ export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions):
           sendJSON(ws, { type: 'status', status: 'processing' });
 
           try {
-            await handleRemoteMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor, msg.sessionId);
+            await handleRemoteMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor);
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : '执行失败';
             sendJSON(ws, { type: 'error', message: errMsg });
@@ -186,7 +166,6 @@ async function handleRemoteMessage(
   orchestrator: Orchestrator,
   toolRegistry: ToolRegistry,
   toolExecutor: ToolExecutor,
-  sessionId?: string,
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
   const toolDefs = toolRegistry.getDefinitions();
@@ -237,13 +216,8 @@ async function handleRemoteMessage(
 
   const harness = new Harness(harnessConfig, toolExecutor);
 
-  // 确定目标会话 ID
-  const targetSessionId = sessionId || await getActiveSession() || undefined;
-
-  // 先把用户消息立即写入会话文件（这样移动端重连后至少能看到自己发的消息）
-  if (targetSessionId) {
-    await appendToSession(targetSessionId, message, '', []);
-  }
+  // 先把用户消息立即写入会话文件
+  await appendToSession(message, '', []);
 
   // 用于实时追加 step 到会话文件的辅助函数
   let pendingSteps: string[] = [];
@@ -251,11 +225,10 @@ async function handleRemoteMessage(
 
   /** 将积攒的 step 消息批量追加到会话文件（防止写入过于频繁） */
   async function flushSteps(): Promise<void> {
-    if (pendingSteps.length === 0 || !targetSessionId) return;
+    if (pendingSteps.length === 0) return;
     const batch = pendingSteps.splice(0);
     try {
-      const safeId = targetSessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
+      const filePath = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
       let existing: { role: string; content: string }[] = [];
       try {
         const data = await fsPromises.readFile(filePath, 'utf-8');
@@ -311,10 +284,9 @@ async function handleRemoteMessage(
   await flushSteps();
 
   // 追加最终 AI 回复到会话文件
-  if (targetSessionId && result.content) {
+  if (result.content) {
     try {
-      const safeId = targetSessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-      const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
+      const filePath = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
       let existing: { role: string; content: string }[] = [];
       try {
         const data = await fsPromises.readFile(filePath, 'utf-8');

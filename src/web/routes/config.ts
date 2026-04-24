@@ -82,11 +82,17 @@ function getModelMaxContext(modelName: string): number {
 /**
  * 创建配置 API 路由。
  */
-export function createConfigRouter(): Router {
+export interface ConfigRouterOptions {
+  /** 配置保存成功后的回调（用于触发 LLM adapter 热重载） */
+  onConfigSaved?: () => void;
+}
+
+export function createConfigRouter(options?: ConfigRouterOptions): Router {
   const router = Router();
 
   /**
    * POST /api/config - 保存提供者配置。
+   * 如果前端发来的 apiKey 是脱敏值（包含 *），保留原文件中的真实 key。
    */
   router.post('/', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -97,17 +103,48 @@ export function createConfigRouter(): Router {
         return;
       }
 
+      // 读取现有配置，用于恢复被脱敏的 apiKey
+      let existingProviders: ProviderConfig[] = [];
+      try {
+        const data = await fs.readFile(CONFIG_PATH, 'utf-8');
+        const existing = JSON.parse(data) as { providers: ProviderConfig[] };
+        existingProviders = existing.providers || [];
+      } catch { /* 文件不存在，首次保存 */ }
+
+      // 构建 id → 原始 apiKey 的映射
+      const originalKeys = new Map<string, string>();
+      for (const p of existingProviders) {
+        if (p.id && p.apiKey) {
+          originalKeys.set(p.id, p.apiKey);
+        }
+      }
+
+      // 处理每个 provider：如果 apiKey 是脱敏值，恢复原始 key
+      const resolvedProviders = providers.map(provider => {
+        let apiKey = provider.apiKey;
+        if (apiKey && apiKey.includes('*') && provider.id && originalKeys.has(provider.id)) {
+          // 脱敏值，恢复原始 key
+          apiKey = originalKeys.get(provider.id)!;
+        }
+        return { ...provider, apiKey };
+      });
+
       // 验证每个提供者
-      for (let i = 0; i < providers.length; i++) {
-        const error = validateProvider(providers[i]);
+      for (let i = 0; i < resolvedProviders.length; i++) {
+        const error = validateProvider(resolvedProviders[i]);
         if (error) {
           res.status(400).json({ error: `Provider ${i}: ${error}` });
           return;
         }
       }
 
-      const configData = JSON.stringify({ providers }, null, 2);
+      const configData = JSON.stringify({ providers: resolvedProviders }, null, 2);
       await fs.writeFile(CONFIG_PATH, configData, 'utf-8');
+
+      // 触发热重载回调
+      if (options?.onConfigSaved) {
+        try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
+      }
 
       res.json({ success: true, message: 'Configuration saved successfully' });
     } catch (err) {

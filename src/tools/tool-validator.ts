@@ -1,13 +1,10 @@
 /**
  * 工具输入验证器。
  *
- * 参考 Claude Code 的 Tool.validateInput()：
  * 在工具执行前验证输入参数的合法性，
  * 将验证错误反馈给模型，让模型自行修正。
  *
- * 与 Claude Code 的区别：
- * - Claude Code 每个工具自带 validateInput 方法
- * - 我们使用集中式验证器 + 可注册的验证规则
+ * 使用集中式验证器 + 可注册的验证规则。
  */
 
 import type { ToolCall } from '../llm/types.js';

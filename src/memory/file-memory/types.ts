@@ -1,11 +1,10 @@
 /**
  * 基于文件的持久化记忆系统 — 类型定义。
  *
- * 参考 Claude Code 的 memdir 模块：
  * 记忆存储在文件系统中，以 MEMORY.md 为索引入口，
  * 每条记忆是一个独立的 Markdown 文件，带 frontmatter 元数据。
  *
- * 四种记忆类型（参考 Claude Code 的 memoryTypes.ts）：
+ * 四种记忆类型：
  * - user: 用户画像（角色、目标、偏好）
  * - feedback: 行为反馈（用户纠正或确认的工作方式）
  * - project: 项目上下文（进行中的工作、目标、截止日期）

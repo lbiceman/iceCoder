@@ -1,7 +1,6 @@
 /**
  * Harness — 核心循环引擎（状态机模式）。
  *
- * 参考 Claude Code 的 query.ts 架构：
  * 使用 while(true) + 可变 State 对象的迭代模式，
  * 避免深度递归导致的栈溢出。
  *
@@ -77,7 +76,6 @@ function isRetryableError(error: unknown): boolean {
 
 /**
  * 循环 continue 的原因（用于调试和测试）。
- * 参考 Claude Code 的 state.transition。
  */
 type Transition =
   | 'initial'
@@ -90,7 +88,6 @@ type Transition =
 
 /**
  * 迭代间携带的可变状态。
- * 参考 Claude Code 的 State 类型。
  */
 interface LoopState {
   /** 当前对话消息列表 */
@@ -165,13 +162,12 @@ export class Harness {
   /**
    * 执行核心循环（状态机模式）。
    *
-   * 参考 Claude Code 的 queryLoop()：
    * while(true) + State 对象，每轮迭代 = 预处理 → LLM 调用 → 响应处理 → 决定继续/停止。
    *
    * @param userMessage - 用户输入
    * @param chatFn - LLM 调用函数
    * @param onStep - 每一步的回调（用于 SSE 实时推送）
-   * @param existingMessages - 已有的对话消息历史（参考 claude-code 的 params.messages）
+   * @param existingMessages - 已有的对话消息历史
    * @returns Harness 执行结果（包含结构化日志）
    */
   async run(
@@ -183,7 +179,7 @@ export class Harness {
     const logger = new HarnessLogger();
 
     // ── 初始化（循环外，只执行一次）──
-    // 参考 claude-code：如果有已有消息历史，直接追加用户消息；否则从零构建
+    // 如果有已有消息历史，直接追加用户消息；否则从零构建
     let messages: UnifiedMessage[];
     if (existingMessages && existingMessages.length > 0) {
       messages = existingMessages;
@@ -214,7 +210,7 @@ export class Harness {
       transition: 'initial',
     };
 
-    // ── 核心循环（参考 Claude Code 的 while(true) 迭代模式）──
+    // ── 核心循环（while(true) 迭代模式）──
     // try/finally 确保无论哪条路径退出，记忆合并都会执行一次
     try {
     while (true) {
@@ -312,7 +308,7 @@ export class Harness {
         logger.llmResponseFinal(tokenUsage);
 
         // ── 5a. max-output-tokens 恢复 ──
-        // 参考 Claude Code：finishReason === 'length' 时注入"请继续"，最多重试 3 次
+        // finishReason === 'length' 时注入"请继续"，最多重试 3 次
         if (
           response.finishReason === 'length'
           && state.maxOutputTokensRecoveryCount < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
@@ -326,7 +322,7 @@ export class Harness {
           if (response.content) {
             msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
           }
-          // 参考 Claude Code：精确措辞防止模型浪费 token 重复之前的内容
+          // 精确措辞防止模型浪费 token 重复之前的内容
           msgs.push({
             role: 'user',
             content: '直接继续 — 不要道歉，不要重述之前的内容。如果上次回复在中途被截断，从截断处继续。将剩余工作拆分为更小的步骤。',
@@ -366,7 +362,7 @@ export class Harness {
         }
 
         // ── 5b. 停止钩子 ──
-        // 参考 Claude Code 的 stop hooks：如果钩子要求继续，注入消息后 continue
+        // 如果钩子要求继续，注入消息后 continue
         if (this.stopHookManager.count > 0) {
           const hookResult = await this.stopHookManager.execute(msgs, response.content);
           if (hookResult.shouldContinue && hookResult.message) {
@@ -378,7 +374,7 @@ export class Harness {
         }
 
         // ── 5c. Token 预算继续 ──
-        // 参考 Claude Code 的 token budget：预算充足时注入 nudge 消息
+        // 预算充足时注入 nudge 消息
         if (this.tokenBudgetTracker && this.tokenBudgetTracker.shouldContinue()) {
           const nudge = this.tokenBudgetTracker.getContinuationMessage();
           console.log(`[harness] token 预算继续: ${this.tokenBudgetTracker.getSummary()}`);
@@ -466,7 +462,6 @@ export class Harness {
   /**
    * 工具结果预算裁剪。
    *
-   * 参考 Claude Code 的 applyToolResultBudget()：
    * 对旧的工具结果做大小预算裁剪，防止上下文爆炸。
    * 越早的工具结果裁剪越激进，最近的保持完整。
    */
@@ -685,7 +680,6 @@ export class Harness {
   /**
    * 为未完成的 tool_use 补齐错误 tool_result。
    *
-   * 参考 Claude Code 的 yieldMissingToolResultBlocks()：
    * 中断或错误时，API 要求每个 tool_use 都有对应的 tool_result，
    * 否则下一轮调用会报错。
    */
