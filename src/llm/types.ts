@@ -20,6 +20,8 @@ export interface UnifiedMessage {
   content: string | ContentBlock[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  /** 思考过程内容（DeepSeek 等模型的 reasoning_content，需原样传回 API） */
+  reasoningContent?: string;
 }
 
 /**
@@ -48,6 +50,8 @@ export interface LLMResponse {
   toolCalls?: ToolCall[];
   usage: TokenUsage;
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
+  /** 思考过程内容（DeepSeek 等模型） */
+  reasoningContent?: string;
 }
 
 /**

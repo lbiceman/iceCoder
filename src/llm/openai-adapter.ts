@@ -297,10 +297,14 @@ export class OpenAIAdapter implements ProviderAdapter {
       case 'user':
         return { role: 'user', content };
       case 'assistant': {
-        const assistantMsg: OpenAI.ChatCompletionAssistantMessageParam = {
+        const assistantMsg: any = {
           role: 'assistant',
           content,
         };
+        // 传回 reasoning_content（DeepSeek thinking 模式要求）
+        if (msg.reasoningContent) {
+          assistantMsg.reasoning_content = msg.reasoningContent;
+        }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           assistantMsg.tool_calls = msg.toolCalls.map((tc) => ({
             id: tc.id,
@@ -431,18 +435,17 @@ export class OpenAIAdapter implements ProviderAdapter {
     const choice = response.choices[0];
     const message = choice?.message;
 
-    let content = message?.content || '';
+    const content = message?.content || '';
 
-    // Handle reasoning_content if present (for thinking models)
+    // 提取 reasoning_content（DeepSeek 等 thinking 模型）
     const messageAny = message as any;
-    if (messageAny?.reasoning_content) {
-      content = `${messageAny.reasoning_content}\n\n${content}`;
-    }
+    const reasoningContent = messageAny?.reasoning_content || undefined;
 
     const toolCalls = this.parseToolCalls(message?.tool_calls);
 
     return {
       content,
+      reasoningContent,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: {
         inputTokens: response.usage?.prompt_tokens ?? 0,
