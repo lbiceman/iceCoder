@@ -201,8 +201,6 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
   wss.on('connection', (ws: WebSocket) => {
-    console.log('[ChatWS] Client connected');
-
     sendJSON(ws, { type: 'connected', message: '连接成功' });
 
     let isProcessing = false;
@@ -246,7 +244,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     });
 
     ws.on('close', () => {
-      console.log('[ChatWS] Client disconnected');
+      // 静默处理，不刷屏
     });
 
     ws.on('error', () => { /* ignore */ });
