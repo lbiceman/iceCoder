@@ -297,7 +297,7 @@ ${c.bold}终端内置命令:${c.reset}
         loop: {
           maxRounds: 200,
           timeout: 30 * 60 * 1000,
-          tokenBudget: 300000,
+          tokenBudget: 500000,
         },
         permissions: [
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },

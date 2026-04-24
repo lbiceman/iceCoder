@@ -306,7 +306,7 @@ async function handleChatMessage(
     loop: {
       maxRounds: 800,
       timeout: 60 * 60 * 1000,
-      tokenBudget: 500000,
+      tokenBudget: 900000,
     },
     permissions: [
       { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要用户确认' },

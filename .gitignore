@@ -29,7 +29,5 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-claude-code/
-
 # 二进制工具
 bin/
