@@ -1188,7 +1188,8 @@ window.ChatPage = (function () {
   }
 
   function updateTokenUsage(inputTokens, outputTokens) {
-    // 直接赋值：inputTokens/outputTokens 代表当前上下文窗口占用（最后一轮 API 调用的值）
+    // inputTokens = 当前上下文窗口占用（最后一轮 API 调用的输入 token 数）
+    // 这就是实际的上下文大小，outputTokens 不计入（下一轮会合并到 input 中）
     usedInputTokens = inputTokens;
     usedOutputTokens = outputTokens;
     renderContextBar();
@@ -1203,7 +1204,8 @@ window.ChatPage = (function () {
   function renderContextBar() {
     if (!elContextBar) return;
 
-    var usedTotal = usedInputTokens + usedOutputTokens;
+    // 上下文占用 = inputTokens（当前窗口大小），不加 outputTokens（避免重复计算）
+    var usedTotal = usedInputTokens;
     var pct = maxContextTokens ? Math.min(100, Math.round((usedTotal / maxContextTokens) * 100)) : 0;
     var barColor = pct < 60 ? '#4caf50' : pct < 85 ? '#ff9800' : '#e94560';
 
@@ -1213,8 +1215,9 @@ window.ChatPage = (function () {
       fill.style.background = barColor;
     }
 
-    elContextBar.title = '上下文用量: ' + pct + '%' +
-      (maxContextTokens ? ' (' + formatTokenCount(usedTotal) + '/' + formatTokenCount(maxContextTokens) + ')' : '');
+    elContextBar.title = '上下文: ' + pct + '%' +
+      (maxContextTokens ? ' (' + formatTokenCount(usedTotal) + '/' + formatTokenCount(maxContextTokens) + ')' : '') +
+      ' | 本轮输出: ' + formatTokenCount(usedOutputTokens);
   }
 
   function formatTokenCount(n) {
