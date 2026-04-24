@@ -22,6 +22,8 @@ import type {
  */
 export interface OpenAIAdapterConfig {
   apiKey: string;
+  /** 适配器名称（用于注册和选择，默认 'openai'） */
+  name?: string;
   baseURL?: string;
   organization?: string;
   model: string;
@@ -40,12 +42,13 @@ export interface OpenAIAdapterConfig {
  * 支持 OpenAI Chat Completions API 和 OpenAI 兼容 API（如 NVIDIA）。
  */
 export class OpenAIAdapter implements ProviderAdapter {
-  public readonly name = 'openai';
+  public readonly name: string;
   private client: OpenAI;
   private model: string;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
 
   constructor(config: OpenAIAdapterConfig) {
+    this.name = config.name ?? 'openai';
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,

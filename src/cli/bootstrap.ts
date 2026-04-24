@@ -64,6 +64,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     if (provider.providerName === 'openai') {
       llmAdapter.registerProvider(new OpenAIAdapter({
+        name: provider.id,
         apiKey: provider.apiKey,
         baseURL: provider.apiUrl,
         model: provider.modelName,
@@ -84,9 +85,9 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
 
   const defaultProvider = providers.find((p) => p.isDefault);
   if (defaultProvider) {
-    llmAdapter.setDefaultProvider(defaultProvider.providerName);
+    llmAdapter.setDefaultProvider(defaultProvider.id);
   } else if (providers.length > 0) {
-    llmAdapter.setDefaultProvider(providers[0].providerName);
+    llmAdapter.setDefaultProvider(providers[0].id);
   }
 
   return llmAdapter;

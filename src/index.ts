@@ -75,6 +75,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     if (provider.providerName === 'openai') {
       const openaiAdapter = new OpenAIAdapter({
+        name: provider.id,
         apiKey: provider.apiKey,
         baseURL: provider.apiUrl,
         model: provider.modelName,
@@ -95,13 +96,11 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
     }
   }
 
-  // 将默认提供者设置为标记 isDefault: true 的提供者
   const defaultProvider = providers.find((p) => p.isDefault);
   if (defaultProvider) {
-    llmAdapter.setDefaultProvider(defaultProvider.providerName);
+    llmAdapter.setDefaultProvider(defaultProvider.id);
   } else if (providers.length > 0) {
-    // 如果没有标记为默认的，回退到第一个提供者
-    llmAdapter.setDefaultProvider(providers[0].providerName);
+    llmAdapter.setDefaultProvider(providers[0].id);
   }
 
   return llmAdapter;
@@ -171,10 +170,10 @@ async function initializeOrchestrator(
 async function reloadLLMAdapter(llmAdapter: LLMAdapter): Promise<void> {
   const providers = await loadConfig();
 
-  // 从更新的配置重新注册所有提供者
   for (const provider of providers) {
     if (provider.providerName === 'openai') {
       const openaiAdapter = new OpenAIAdapter({
+        name: provider.id,
         apiKey: provider.apiKey,
         baseURL: provider.apiUrl,
         model: provider.modelName,
@@ -197,9 +196,9 @@ async function reloadLLMAdapter(llmAdapter: LLMAdapter): Promise<void> {
 
   const defaultProvider = providers.find((p) => p.isDefault);
   if (defaultProvider) {
-    llmAdapter.setDefaultProvider(defaultProvider.providerName);
+    llmAdapter.setDefaultProvider(defaultProvider.id);
   } else if (providers.length > 0) {
-    llmAdapter.setDefaultProvider(providers[0].providerName);
+    llmAdapter.setDefaultProvider(providers[0].id);
   }
 
   console.log('LLM adapter configuration reloaded');
