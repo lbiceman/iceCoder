@@ -271,6 +271,11 @@ window.ChatPage = (function () {
     renderMessages();
     renderHistory();
     if (elInput) elInput.focus();
+
+    // 通知后端切换会话（清除旧的消息缓存关联）
+    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+      chatWs.send(JSON.stringify({ type: 'new_session', sessionId: currentSessionId }));
+    }
   }
 
   /** 切换到指定会话 */

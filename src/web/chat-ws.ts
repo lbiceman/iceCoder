@@ -219,6 +219,14 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           return;
         }
 
+        if (msg.type === 'new_session') {
+          // 前端 ~new 命令：切换到新会话，更新后端 active session
+          if (msg.sessionId) {
+            setActiveSession(msg.sessionId).catch(() => {});
+          }
+          return;
+        }
+
         if (msg.type === 'message' && msg.content) {
           if (isProcessing) {
             sendJSON(ws, { type: 'error', message: '正在处理上一条指令，请稍候' });
