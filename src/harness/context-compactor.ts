@@ -1,7 +1,7 @@
 /**
  * 上下文压缩器 — 五层递进策略。
  *
- * 参考 Claude Code 的 services/compact/ 四层压缩，本项目实现五层：
+ * 本项目实现五层压缩：
  * 1. snip — 裁剪历史中的冗余段落（重复的 system-reminder、context-summary）
  * 2. microcompact — 对旧工具调用只保留名称+结果状态，删除参数细节和完整输出
  * 3. toolResultTrim — 裁剪超长的工具结果

@@ -1,7 +1,7 @@
 /**
  * 提示词组装器 — 将各段落组装成完整的系统提示词。
  *
- * 参考 Claude Code 的提示词拼接流程（docs/prompt-assembly-flow.md）：
+ * 提示词拼接流程：
  *
  * 1. 收集所有段落（静态 + 动态）
  * 2. 按优先级排序
@@ -9,10 +9,8 @@
  * 4. 拼接成完整的系统提示词字符串
  * 5. 可选：注入用户上下文和系统上下文
  *
- * 与 Claude Code 的区别：
- * - Claude Code 使用数组形式的 system prompt（每个元素一个 cache block）
- * - 我们使用单字符串形式（更简单，适合当前架构）
- * - 但保留了分段设计，方便未来升级
+ * 当前使用单字符串形式（更简单，适合当前架构），
+ * 但保留了分段设计，方便未来升级为数组形式（每个元素一个 cache block）。
  */
 
 import type {
@@ -139,7 +137,6 @@ export class PromptAssembler {
   /**
    * 构建用户上下文。
    *
-   * 参考 Claude Code 的 getUserContext()：
    * 将项目规范等以 key-value 形式返回，
    * 后续由 Harness 以 <system-reminder> 标签注入到消息列表。
    */
@@ -160,7 +157,6 @@ export class PromptAssembler {
   /**
    * 构建系统上下文。
    *
-   * 参考 Claude Code 的 getSystemContext()：
    * 包含 git 状态等实时信息，追加到系统提示词末尾。
    */
   private buildSystemContext(_config: PromptAssemblyConfig): SystemContext {
@@ -172,7 +168,6 @@ export class PromptAssembler {
 /**
  * 将用户上下文格式化为 <system-reminder> 消息。
  *
- * 参考 Claude Code 的 prependUserContext()：
  * 将用户上下文包裹在 <system-reminder> 标签中，
  * 作为第一条 user 消息注入到对话历史。
  */
@@ -193,8 +188,6 @@ ${sections}
 
 /**
  * 将系统上下文追加到系统提示词。
- *
- * 参考 Claude Code 的 appendSystemContext()。
  */
 export function appendSystemContext(
   systemPrompt: string,

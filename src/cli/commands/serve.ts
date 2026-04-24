@@ -4,6 +4,7 @@
  */
 
 import type { BootstrapResult } from '../bootstrap.js';
+import { reloadLLMAdapter } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum } from '../utils/args-parser.js';
 import { SSEManager } from '../../web/sse.js';
@@ -27,14 +28,19 @@ export interface ServeResult {
  * 启动 Web 服务器，返回 server 实例。
  */
 export async function startWebServer(ctx: BootstrapResult, port: number): Promise<ServeResult> {
-  const { orchestrator, toolRegistry, toolExecutor } = ctx;
+  const { orchestrator, toolRegistry, toolExecutor, llmAdapter, paths } = ctx;
 
   const sseManager = new SSEManager();
   wireOrchestratorToSSE(orchestrator, sseManager);
 
   const app = await createServer({
     routes: [
-      { path: '/api/config', router: createConfigRouter() },
+      { path: '/api/config', router: createConfigRouter({
+        onConfigSaved: () => {
+          reloadLLMAdapter(llmAdapter, paths.configPath).catch(err =>
+            console.error('[serve] Failed to reload LLM adapter:', err));
+        },
+      }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/sessions', router: createSessionsRouter() },

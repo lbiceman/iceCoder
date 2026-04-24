@@ -15,7 +15,6 @@ import { URL } from 'url';
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
-import { getActiveSession, setActiveSession } from './routes/sessions.js';
 import { Harness } from '../harness/harness.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -30,30 +29,18 @@ import { resolveFileReferences } from './routes/upload.js';
 const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
+const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
 
 /**
- * 会话级消息缓存。
- * 参考 claude-code 的 state.messages：跨轮次累积，包含完整的结构化对话历史。
- * 带 TTL 清理：超过 24 小时未访问的会话自动清除。
+ * 单会话消息缓存。
+ * 跨轮次累积，包含完整的结构化对话历史（含 toolCalls/toolCallId）。
+ * 服务重启后丢失，harness 从零构建，记忆系统提供上下文连续性。
  */
-const sessionMessages = new Map<string, { messages: UnifiedMessage[]; lastAccess: number }>();
-const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 小时
-const SESSION_CLEANUP_INTERVAL = 30 * 60 * 1000; // 每 30 分钟清理一次
-
-// 定期清理过期会话缓存
-let sessionCleanupTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
-  const now = Date.now();
-  for (const [id, entry] of sessionMessages) {
-    if (now - entry.lastAccess > SESSION_TTL) {
-      sessionMessages.delete(id);
-      console.log(`[session] 清理过期会话缓存: ${id}`);
-    }
-  }
-}, SESSION_CLEANUP_INTERVAL);
+let cachedMessages: UnifiedMessage[] | undefined;
 
 /**
  * 全局记忆系统实例（进程级单例）。
- * 参考 claude-code：记忆系统在进程启动时初始化一次，所有会话共享。
+ * 记忆系统在进程启动时初始化一次，所有会话共享。
  */
 let globalFileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
 let globalMemoryManager: MemoryManager | null = null;
@@ -112,49 +99,35 @@ async function loadSystemPrompt(): Promise<string> {
   }
 }
 
-/** 追加消息到会话文件 */
-async function appendMessages(sessionId: string, msgs: { role: string; content: string }[]): Promise<void> {
-  if (!sessionId || msgs.length === 0) return;
+export interface ChatWSOptions {
+  orchestrator: Orchestrator;
+  toolRegistry: ToolRegistry;
+  toolExecutor: ToolExecutor;
+}
+
+/** 追加消息到会话文件（后端是唯一写入者） */
+async function appendMessages(msgs: { role: string; content: string }[]): Promise<void> {
+  if (msgs.length === 0) return;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-    const filePath = path.join(SESSIONS_DIR, `${safeId}.json`);
-
     let existing: { role: string; content: string }[] = [];
     try {
-      const data = await fsPromises.readFile(filePath, 'utf-8');
+      const data = await fsPromises.readFile(SESSION_FILE, 'utf-8');
       existing = JSON.parse(data);
     } catch { /* file doesn't exist yet */ }
-
     existing.push(...msgs);
-    await fsPromises.writeFile(filePath, JSON.stringify(existing), 'utf-8');
-
-    // 更新会话列表的 updatedAt
-    const listFile = path.join(SESSIONS_DIR, '_list.json');
-    let list: { id: string; title: string; updatedAt: number }[] = [];
-    try {
-      const listData = await fsPromises.readFile(listFile, 'utf-8');
-      list = JSON.parse(listData);
-    } catch { /* empty */ }
-    const idx = list.findIndex(s => s.id === sessionId);
-    if (idx >= 0) {
-      list[idx].updatedAt = Date.now();
-    } else {
-      // 从消息中提取标题
-      const userMsg = msgs.find(m => m.role === 'user');
-      const title = userMsg ? (userMsg.content.length > 30 ? userMsg.content.substring(0, 30) + '…' : userMsg.content) : '新对话';
-      list.unshift({ id: sessionId, title, updatedAt: Date.now() });
-    }
-    await fsPromises.writeFile(listFile, JSON.stringify(list), 'utf-8');
+    await fsPromises.writeFile(SESSION_FILE, JSON.stringify(existing), 'utf-8');
   } catch (err) {
     console.error('[chat-ws] appendMessages failed:', err);
   }
 }
 
-export interface ChatWSOptions {
-  orchestrator: Orchestrator;
-  toolRegistry: ToolRegistry;
-  toolExecutor: ToolExecutor;
+/** 清空会话文件（~clear 时调用） */
+async function clearSessionFile(): Promise<void> {
+  try {
+    await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
+    await fsPromises.writeFile(SESSION_FILE, '[]', 'utf-8');
+  } catch { /* ignore */ }
 }
 
 /**
@@ -219,11 +192,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           return;
         }
 
-        if (msg.type === 'new_session') {
-          // 前端 ~new 命令：切换到新会话，更新后端 active session
-          if (msg.sessionId) {
-            setActiveSession(msg.sessionId).catch(() => {});
-          }
+        if (msg.type === 'clear_session') {
+          // 前端 ~clear 命令：清除后端消息缓存和会话文件
+          cachedMessages = undefined;
+          clearSessionFile().catch(() => {});
+          console.log('[chat-ws] 清除会话缓存和文件');
           return;
         }
 
@@ -237,7 +210,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           sendJSON(ws, { type: 'status', status: 'processing' });
 
           try {
-            await handleChatMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor, msg.sessionId);
+            await handleChatMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor);
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : '执行失败';
             sendJSON(ws, { type: 'error', message: errMsg });
@@ -269,7 +242,6 @@ async function handleChatMessage(
   orchestrator: Orchestrator,
   toolRegistry: ToolRegistry,
   toolExecutor: ToolExecutor,
-  sessionId?: string,
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
   const toolDefs = toolRegistry.getDefinitions();
@@ -284,23 +256,12 @@ async function handleChatMessage(
   // 确保记忆系统已初始化
   await ensureMemoryInitialized();
 
-  // 确定目标会话 ID（前端每条消息必须带 sessionId，不再回退到 getActiveSession）
-  const targetSessionId = sessionId || undefined;
+  const existingMessages = cachedMessages;
 
-  const cached = targetSessionId ? sessionMessages.get(targetSessionId) : undefined;
-  const existingMessages = cached?.messages;
+  // 写入用户消息到会话文件
+  await appendMessages([{ role: 'user', content: message }]);
 
-  // 记录活跃会话
-  if (targetSessionId) {
-    setActiveSession(targetSessionId).catch(err => console.error('[chat-ws] setActiveSession failed:', err));
-  }
-
-  // 写入用户消息到会话文件（用于前端展示和持久化）
-  if (targetSessionId) {
-    await appendMessages(targetSessionId, [{ role: 'user', content: message }]);
-  }
-
-  // ── 参考 claude-code：获取或初始化会话级消息缓存 ──
+  // ── 获取或初始化会话级消息缓存 ──
   // 如果缓存中有该会话的消息历史，直接复用（包含完整的 toolCalls/toolCallId 结构）
   // 如果没有（新会话或服务重启），传 undefined 让 Harness 从零构建
 
@@ -378,18 +339,15 @@ async function handleChatMessage(
         console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
       }
     },
-    existingMessages, // 参考 claude-code：传入已有消息历史
+    existingMessages,
   );
 
-  // ── 参考 claude-code：缓存完整的结构化消息历史 ──
-  // result.messages 包含 system prompt + 所有 user/assistant/tool 消息（含 toolCalls/toolCallId）
-  if (targetSessionId) {
-    sessionMessages.set(targetSessionId, { messages: result.messages, lastAccess: Date.now() });
-  }
+  // 缓存完整的结构化消息历史
+  cachedMessages = result.messages;
 
-  // 写入最终 AI 回复（不写入中间 step）
-  if (targetSessionId && result.content) {
-    await appendMessages(targetSessionId, [{ role: 'agent', content: result.content }]).catch(err => console.error('[chat-ws] appendMessages failed:', err));
+  // 写入 AI 回复到会话文件
+  if (result.content) {
+    await appendMessages([{ role: 'agent', content: result.content }]).catch(() => {});
   }
 
   // 推送最终结果到 WebSocket
@@ -422,10 +380,6 @@ export function cleanupChatResources(): void {
     clearInterval(memoryDecayTimer);
     memoryDecayTimer = null;
   }
-  if (sessionCleanupTimer) {
-    clearInterval(sessionCleanupTimer);
-    sessionCleanupTimer = null;
-  }
-  sessionMessages.clear();
+  cachedMessages = undefined;
   console.log('[chat-ws] Resources cleaned up');
 }

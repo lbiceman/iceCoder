@@ -1,7 +1,7 @@
 /**
  * 基于文件的持久化记忆系统入口。
  *
- * 参考 Claude Code 的 memdir 模块，提供：
+ * 提供：
  * - 基于文件的持久化记忆（MEMORY.md 索引 + 主题文件）
  * - 四种记忆类型分类（user/feedback/project/reference）
  * - 记忆提示词注入（告诉模型如何读写记忆）

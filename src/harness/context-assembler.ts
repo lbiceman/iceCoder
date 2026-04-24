@@ -1,7 +1,7 @@
 /**
  * 上下文组装器 — 负责"喂什么"给模型。
  *
- * 参考 Claude Code 的提示词拼接流程（prompt-assembly-flow）：
+ * 提示词拼接流程：
  * 1. 系统提示词（静态规则 + 动态环境/记忆），静态/动态分界支持缓存
  * 2. 用户上下文（以 <system-reminder> 注入到消息列表）
  * 3. 系统上下文（Git 状态等追加到系统提示词末尾）
@@ -9,7 +9,7 @@
  *
  * 职责：
  * - system prompt 拼装（静态部分 memoize，动态部分每次重算）
- * - 用户上下文注入（CLAUDE.md/MEMORY.md 内容 + 当前日期）
+ * - 用户上下文注入（MEMORY.md 内容 + 当前日期）
  * - 系统上下文注入（Git 状态等实时信息）
  * - 消息规范化（合并连续 user、清理孤立消息、去重 tool_use ID）
  * - 工具定义组装
@@ -33,7 +33,6 @@ export class ContextAssembler {
   /**
    * 构建系统提示词，分为静态部分（可缓存）和动态部分（每次重算）。
    *
-   * 参考 Claude Code 的 SYSTEM_PROMPT_DYNAMIC_BOUNDARY 分界：
    * 静态前缀跨会话缓存，动态后缀每次重算。
    */
   buildSystemPrompt(): string {
@@ -122,13 +121,12 @@ export class ContextAssembler {
   /**
    * 构建用户上下文消息。
    *
-   * 参考 Claude Code 的 getUserContext() + prependUserContext()：
    * 将项目规范、当前日期、自定义上下文以 <system-reminder> 标签包裹。
    */
   private buildUserContextMessage(): string | null {
     const sections: string[] = [];
 
-    // 自定义用户上下文（CLAUDE.md 等）
+    // 自定义用户上下文（XXX.md等）
     if (this.config.userContext && Object.keys(this.config.userContext).length > 0) {
       for (const [key, value] of Object.entries(this.config.userContext)) {
         sections.push(`# ${key}\n${value}`);
@@ -180,7 +178,7 @@ ${sections.join('\n\n')}
 /**
  * 规范化消息列表，准备发送给 API。
  *
- * 参考 Claude Code 的 normalizeMessagesForAPI()：
+ * 处理逻辑：
  * 1. 合并连续的 user 消息（API 不允许连续同角色消息）
  * 2. 去重 tool_use ID（防止重复 ID 导致 API 报错）
  * 3. 清理孤立的 assistant 消息（只有 thinking 没有内容或工具调用）

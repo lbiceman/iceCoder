@@ -1,7 +1,6 @@
 /**
  * 记忆提示词构建器。
  *
- * 参考 Claude Code 的 memdir.ts：
  * 构建注入到系统提示词中的记忆指令，告诉模型：
  * - 记忆目录在哪里
  * - 如何保存记忆（frontmatter 格式 + MEMORY.md 索引）
@@ -80,7 +79,6 @@ export async function ensureMemoryDirExists(memoryDir: string): Promise<void> {
 
 /**
  * 构建记忆行为指令（不含 MEMORY.md 内容）。
- * 参考 Claude Code 的 buildMemoryLines()。
  */
 export function buildMemoryInstructions(memoryDir: string): string {
   return `# 持久化记忆
@@ -186,7 +184,6 @@ type: {{user, feedback, project, reference}}
 
 /**
  * 加载完整的记忆提示词（指令 + MEMORY.md 内容）。
- * 参考 Claude Code 的 buildMemoryPrompt()。
  */
 export async function loadMemoryPrompt(
   config: Partial<FileMemoryConfig> = {},
