@@ -324,7 +324,7 @@ export class Harness {
 
           // 将模型的部分回复加入对话
           if (response.content) {
-            msgs.push({ role: 'assistant', content: response.content });
+            msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
           }
           // 参考 Claude Code：精确措辞防止模型浪费 token 重复之前的内容
           msgs.push({
@@ -433,6 +433,7 @@ export class Harness {
         role: 'assistant',
         content: response.content || '',
         toolCalls: response.toolCalls,
+        reasoningContent: response.reasoningContent,
       });
 
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
