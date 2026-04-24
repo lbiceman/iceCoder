@@ -727,6 +727,7 @@ window.ChatPage = (function () {
       updateNavStatus(true);
       syncMessages();
       startSyncPolling();
+      fetchModelContext();
     };
 
     chatWs.onmessage = function (e) {
