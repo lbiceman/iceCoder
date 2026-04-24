@@ -44,6 +44,7 @@ function getModelMaxContext(modelName: string): number {
   const name = modelName.toLowerCase();
 
   // DeepSeek 系列
+  if (name.includes('deepseek-v4')) return 1000000;
   if (name.includes('deepseek')) return 131072;
 
   // OpenAI GPT-4o 系列
@@ -124,10 +125,11 @@ export function createConfigRouter(): Router {
       const config = JSON.parse(data) as { providers: ProviderConfig[] };
 
       // 返回前遮蔽 API 密钥
-      const maskedProviders = config.providers.map((provider) => ({
+      const maskedProviders = config.providers.map((provider: any) => ({
         ...provider,
         apiKey: maskApiKey(provider.apiKey),
-        maxContextTokens: getModelMaxContext(provider.modelName),
+        // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
+        maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),
       }));
 
       res.json({ providers: maskedProviders });
