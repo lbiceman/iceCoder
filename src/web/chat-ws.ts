@@ -284,8 +284,11 @@ async function handleChatMessage(
   // 确保记忆系统已初始化
   await ensureMemoryInitialized();
 
-  // 确定目标会话 ID
-  const targetSessionId = sessionId || await getActiveSession() || undefined;
+  // 确定目标会话 ID（前端每条消息必须带 sessionId，不再回退到 getActiveSession）
+  const targetSessionId = sessionId || undefined;
+
+  const cached = targetSessionId ? sessionMessages.get(targetSessionId) : undefined;
+  const existingMessages = cached?.messages;
 
   // 记录活跃会话
   if (targetSessionId) {
@@ -300,8 +303,6 @@ async function handleChatMessage(
   // ── 参考 claude-code：获取或初始化会话级消息缓存 ──
   // 如果缓存中有该会话的消息历史，直接复用（包含完整的 toolCalls/toolCallId 结构）
   // 如果没有（新会话或服务重启），传 undefined 让 Harness 从零构建
-  const cached = targetSessionId ? sessionMessages.get(targetSessionId) : undefined;
-  const existingMessages = cached?.messages;
 
   const harnessConfig: HarnessConfig = {
     context: {
