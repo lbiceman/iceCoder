@@ -1,0 +1,37 @@
+{
+  "providers": [
+    {
+      "id": "default",
+      "providerName": "openai",
+      "apiUrl": "https://api.deepseek.com",
+      "apiKey": "sk-your-api-key-here",
+      "modelName": "deepseek-chat",
+      "parameters": {
+        "temperature": 0.7,
+        "maxTokens": 8192
+      },
+      "maxContextTokens": 131072,
+      "isDefault": true
+    }
+  ],
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "data/mcp-memory.jsonl"
+      },
+      "disabled": true
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "disabled": true
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "disabled": true
+    }
+  }
+}
