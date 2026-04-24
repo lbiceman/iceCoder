@@ -57,7 +57,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       loop: {
         maxRounds,
         timeout: 60 * 60 * 1000,
-        tokenBudget: 500000,
+        tokenBudget: 900000,
       },
       permissions: [],
       compactionThreshold: 40,
