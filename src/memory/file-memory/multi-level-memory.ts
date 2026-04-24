@@ -23,10 +23,6 @@ export interface MultiLevelMemoryConfig extends FileMemoryConfig {
   userMemoryDir: string;
   /** 当前工作目录 */
   currentDir: string;
-  /** 是否启用团队记忆同步 */
-  enableTeamSync?: boolean;
-  /** 团队记忆目录 */
-  teamMemoryDir?: string;
 }
 
 /**
@@ -50,7 +46,6 @@ export enum MemoryLevel {
   PROJECT = 'project',
   USER = 'user',
   DIRECTORY = 'directory',
-  TEAM = 'team',
 }
 
 /**
@@ -74,7 +69,6 @@ export class MultiLevelMemoryLoader {
       MemoryLevel.PROJECT,
       MemoryLevel.USER,
       MemoryLevel.DIRECTORY,
-      ...(this.config.enableTeamSync && this.config.teamMemoryDir ? [MemoryLevel.TEAM] : []),
     ];
 
     const results = await Promise.all(
@@ -88,7 +82,6 @@ export class MultiLevelMemoryLoader {
       [MemoryLevel.PROJECT]: [],
       [MemoryLevel.USER]: [],
       [MemoryLevel.DIRECTORY]: [],
-      [MemoryLevel.TEAM]: [],
     };
 
     results.forEach(({ level, memories }) => {
@@ -124,9 +117,6 @@ export class MultiLevelMemoryLoader {
         memoryDir = path.isAbsolute(this.config.memoryDir)
           ? this.config.memoryDir
           : path.join(this.config.currentDir, this.config.memoryDir);
-        break;
-      case MemoryLevel.TEAM:
-        memoryDir = this.config.teamMemoryDir!;
         break;
       default:
         memoryDir = this.config.memoryDir;
@@ -216,32 +206,6 @@ export class MultiLevelMemoryLoader {
   }
 
   /**
-   * 同步团队记忆
-   */
-  async syncTeamMemories(): Promise<boolean> {
-    if (!this.config.enableTeamSync || !this.config.teamMemoryDir) {
-      return false;
-    }
-
-    try {
-      // 检查团队目录是否存在
-      await fs.access(this.config.teamMemoryDir);
-      
-      // 加载团队记忆
-      const teamMemories = await this.loadLevel(MemoryLevel.TEAM);
-      
-      // 同步到用户目录（可选）
-      // 这里可以实现更复杂的同步逻辑，如增量同步、冲突解决等
-      
-      console.log(`[MultiLevelMemory] Synced ${teamMemories.length} team memories`);
-      return true;
-    } catch (error) {
-      console.error('[MultiLevelMemory] Team sync failed:', error);
-      return false;
-    }
-  }
-
-  /**
    * 获取级别显示名称
    */
   private getLevelDisplayName(level: MemoryLevel): string {
@@ -252,8 +216,6 @@ export class MultiLevelMemoryLoader {
         return '用户';
       case MemoryLevel.DIRECTORY:
         return '目录';
-      case MemoryLevel.TEAM:
-        return '团队';
       default:
         return level;
     }
