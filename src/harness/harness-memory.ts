@@ -367,13 +367,34 @@ export class HarnessMemoryIntegration {
   }
 
   /**
+   * 清理消息前缀，移除会导致 DeepSeek thinking 模式报错的字段。
+   * DeepSeek 要求 reasoning_content 必须回传，但 tool 消息被过滤后
+   * 消息结构不完整，会触发 400 错误。
+   * 解决方案：移除 reasoningContent 和 toolCalls，只保留纯文本对话。
+   */
+  private sanitizeConversationPrefix(messages: UnifiedMessage[]): UnifiedMessage[] {
+    return messages
+      .filter(m => m.role === 'system' || m.role === 'user' || m.role === 'assistant')
+      .map(m => {
+        if (m.role === 'assistant') {
+          // 移除 reasoningContent 和 toolCalls，只保留纯文本内容
+          const { reasoningContent, toolCalls, ...rest } = m;
+          return rest;
+        }
+        return m;
+      })
+      // 过滤掉没有内容的 assistant 消息（纯 tool_calls 的 assistant 消息 content 可能为空）
+      .filter(m => m.role !== 'assistant' || (m.content && m.content !== ''));
+  }
+
+  /**
    * 执行实际的 LLM 提取调用。
    */
   private async _doExtract(messages: UnifiedMessage[], _turnCount: number): Promise<void> {
     if (!this.llmAdapter) return;
 
     try {
-      const conversationPrefix = messages.filter(m => m.role !== 'tool');
+      const conversationPrefix = this.sanitizeConversationPrefix(messages);
       const recentMessages = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .slice(-20);
@@ -420,7 +441,7 @@ export class HarnessMemoryIntegration {
       const shouldDream = await this.memoryDream.shouldDream(this.memoryDir);
       if (!shouldDream) return;
 
-      const conversationPrefix = this.currentMessages.filter(m => m.role !== 'tool');
+      const conversationPrefix = this.sanitizeConversationPrefix(this.currentMessages);
 
       let fileCountBefore = 0;
       try {
@@ -482,10 +503,11 @@ export class HarnessMemoryIntegration {
       const currentNotes = await setupSessionMemoryFile(this.sessionMemoryState);
       const prompt = buildSessionMemoryUpdatePrompt(currentNotes, this.sessionMemoryState.notesPath);
 
-      // 使用 LLM 更新会话笔记
+      // 使用 LLM 更新会话笔记（清理 reasoningContent/toolCalls 防止 DeepSeek 报错）
+      const sanitizedPrefix = this.sanitizeConversationPrefix(messages).slice(-50);
       const response = await this.llmAdapter.chat(
         [
-          ...messages.filter(m => m.role !== 'tool').slice(-50),
+          ...sanitizedPrefix,
           { role: 'user', content: prompt },
         ],
         { maxTokens: 4096, temperature: 0 },
