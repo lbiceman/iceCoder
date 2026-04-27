@@ -80,6 +80,44 @@ function getModelMaxContext(modelName: string): number {
 }
 
 /**
+ * 根据模型名称返回单次最大输出 token 数。
+ * 用户不填 maxTokens 时，系统自动推算。
+ */
+export function getModelMaxOutputTokens(modelName: string): number {
+  const name = modelName.toLowerCase();
+
+  // DeepSeek 系列
+  if (name.includes('deepseek-v4')) return 16384;
+  if (name.includes('deepseek')) return 8192;
+
+  // OpenAI 系列
+  if (name.includes('o1') || name.includes('o3') || name.includes('o4')) return 100000;
+  if (name.includes('gpt-4o')) return 16384;
+  if (name.includes('gpt-4-turbo')) return 4096;
+  if (name.includes('gpt-4')) return 8192;
+  if (name.includes('gpt-3.5')) return 4096;
+
+  // Claude 系列
+  if (name.includes('claude-3') || name.includes('claude-4')) return 8192;
+  if (name.includes('claude')) return 4096;
+
+  // GLM 系列
+  if (name.includes('glm')) return 8192;
+
+  // Qwen 系列
+  if (name.includes('qwen')) return 8192;
+
+  // Llama 系列
+  if (name.includes('llama')) return 4096;
+
+  // Mistral 系列
+  if (name.includes('mistral') || name.includes('mixtral')) return 4096;
+
+  // 默认
+  return 4096;
+}
+
+/**
  * 创建配置 API 路由。
  */
 export interface ConfigRouterOptions {

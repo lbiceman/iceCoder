@@ -31,35 +31,35 @@ export class TestingAgent extends BaseAgent {
     }
 
     // 构建提示让 LLM 生成端到端测试用例
-    const prompt = `You are a professional QA engineer. Based on the following project documents, generate comprehensive end-to-end test cases that cover all functional requirements.
+    const prompt = `你是一名专业的 QA 工程师。根据以下项目文档，生成覆盖所有功能需求的端到端测试用例。
 
-Each test case MUST include:
-1. **Test ID**: Unique identifier (e.g., TC-001)
-2. **Test Description**: What is being tested
-3. **Preconditions**: Setup required before the test
-4. **Test Steps**: Numbered steps to execute
-5. **Expected Results**: What should happen after each step or at the end
+每个测试用例必须包含：
+1. **测试编号**：唯一标识符（如 TC-001）
+2. **测试描述**：测试的内容
+3. **前置条件**：测试前需要的准备工作
+4. **测试步骤**：编号的执行步骤
+5. **预期结果**：每个步骤或最终应该发生的结果
 
-Additionally, generate a **Test Result Report** section at the end with:
-- Total test cases count
-- Pass count (assume all pass for initial generation)
-- Fail count
-- Failure details (if any)
+另外，在文档末尾生成 **测试结果报告** 章节，包含：
+- 测试用例总数
+- 通过数（初始生成时假设全部通过）
+- 失败数
+- 失败详情（如有）
 
-Requirements for test generation:
-1. Cover ALL functional requirements from the requirements document
-2. Include positive and negative test scenarios
-3. Include boundary condition tests where applicable
-4. Tests should be independent and repeatable
+测试生成要求：
+1. 覆盖需求文档中的所有功能需求
+2. 包含正向和反向测试场景
+3. 包含边界条件测试
+4. 测试应独立且可重复执行
 
-Format the output as a clean Markdown document.
+输出格式为规范的 Markdown 文档。
 
---- Requirements Document ---
+--- 需求文档 ---
 ${requirements}
---- End of Requirements Document ---
+--- 需求文档结束 ---
 
-${design ? `--- Design Document ---\n${design}\n--- End of Design Document ---\n` : ''}
-${tasks ? `--- Task Document ---\n${tasks}\n--- End of Task Document ---\n` : ''}`;
+${design ? `--- 设计文档 ---\n${design}\n--- 设计文档结束 ---\n` : ''}
+${tasks ? `--- 任务文档 ---\n${tasks}\n--- 任务文档结束 ---\n` : ''}`;
 
     // 调用 LLM 生成测试用例
     const result = await this.callLLM(prompt, context);

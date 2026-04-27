@@ -28,21 +28,21 @@ export class DesignAgent extends BaseAgent {
     }
 
     // 构建提示让 LLM 生成设计文档
-    const prompt = `You are a professional software architect. Based on the following requirements document, generate a comprehensive system design document in Markdown format.
+    const prompt = `你是一名专业的软件架构师。根据以下需求文档，生成完整的系统设计文档（Markdown 格式）。
 
-The document MUST include the following sections:
-1. **System Architecture Overview** - High-level architecture description, key design decisions, and technology choices
-2. **Module Breakdown** - Detailed breakdown of system modules/components with responsibilities and interactions
-3. **Interface Design** - API interfaces, data contracts, and communication protocols between modules
-4. **Data Model Design** - Database schemas, data structures, and relationships
+文档必须包含以下章节：
+1. **系统架构概述** — 高层架构描述、关键设计决策和技术选型
+2. **模块分解** — 系统模块/组件的详细分解，包含职责和交互关系
+3. **接口设计** — API 接口、数据契约和模块间通信协议
+4. **数据模型设计** — 数据库 schema、数据结构和关系
 
-If the requirements are incomplete or ambiguous, annotate the gaps clearly with "[GAP]" markers and explain what additional information is needed.
+如果需求不完整或有歧义，用 "[GAP]" 标记清楚标注，并说明需要哪些额外信息。
 
-Format the output as a clean Markdown document with proper headings, lists, and code blocks where appropriate.
+输出格式为规范的 Markdown 文档，使用正确的标题、列表和代码块。
 
---- Requirements Document ---
+--- 需求文档 ---
 ${requirements}
---- End of Requirements Document ---`;
+--- 需求文档结束 ---`;
 
     // 调用 LLM 生成设计文档
     const result = await this.callLLM(prompt, context);

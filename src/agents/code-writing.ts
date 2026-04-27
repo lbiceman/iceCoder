@@ -30,32 +30,32 @@ export class CodeWritingAgent extends BaseAgent {
     }
 
     // 构建提示让 LLM 生成源代码
-    const prompt = `You are a professional software engineer specializing in Node.js and TypeScript. Based on the following task breakdown document, generate source code files for each task.
+    const prompt = `你是一名专业的软件工程师，擅长 Node.js 和 TypeScript。根据以下任务分解文档，为每个任务生成源代码文件。
 
-Requirements:
-1. Use Node.js/TypeScript stack
-2. Each generated file MUST start with a header comment containing:
-   - Task number
-   - Task description
-   - Example: // Task: T-001 - Implement user authentication module
-3. Generate complete, working TypeScript code with proper types
-4. Include necessary imports and exports
-5. Follow best practices: proper error handling, input validation, clear naming
-6. If a task description is unclear or ambiguous, flag it with a comment: // [UNCLEAR] <explanation of what is unclear>
+要求：
+1. 使用 Node.js/TypeScript 技术栈
+2. 每个生成的文件必须以包含以下信息的头部注释开头：
+   - 任务编号
+   - 任务描述
+   - 示例：// Task: T-001 - 实现用户认证模块
+3. 生成完整、可运行的 TypeScript 代码，包含正确的类型定义
+4. 包含必要的 import 和 export
+5. 遵循最佳实践：正确的错误处理、输入验证、清晰的命名
+6. 如果任务描述不清晰或有歧义，用注释标记：// [UNCLEAR] <说明不清楚的地方>
 
-Output format:
-For each file, use the following structure:
+输出格式：
+每个文件使用以下结构：
 \`\`\`
-=== FILE: <filepath> ===
-<file content>
+=== FILE: <文件路径> ===
+<文件内容>
 === END FILE ===
 \`\`\`
 
-Generate all source files needed to implement the tasks described below.
+生成实现以下任务所需的所有源文件。
 
---- Task Document ---
+--- 任务文档 ---
 ${tasks}
---- End of Task Document ---`;
+--- 任务文档结束 ---`;
 
     // 调用 LLM 生成源代码
     const result = await this.callLLM(prompt, context);

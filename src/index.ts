@@ -42,7 +42,7 @@ import { RequirementVerificationAgent } from './agents/requirement-verification.
 // Web 层
 import { SSEManager } from './web/sse.js';
 import { createServer, startServer } from './web/server.js';
-import { createConfigRouter } from './web/routes/config.js';
+import { createConfigRouter, getModelMaxOutputTokens } from './web/routes/config.js';
 import { createPipelineRouter, wireOrchestratorToSSE } from './web/routes/pipeline.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
@@ -73,6 +73,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   const llmAdapter = new LLMAdapter();
 
   for (const provider of providers) {
+    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
@@ -80,7 +81,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         baseURL: provider.apiUrl,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       });
       llmAdapter.registerProvider(openaiAdapter);
@@ -89,7 +90,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         apiKey: provider.apiKey,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       });
       llmAdapter.registerProvider(anthropicAdapter);
@@ -171,6 +172,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
   const providers = await loadConfig();
 
   for (const provider of providers) {
+    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
@@ -178,7 +180,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
         baseURL: provider.apiUrl,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       });
       llmAdapter.registerProvider(openaiAdapter);
@@ -187,7 +189,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
         apiKey: provider.apiKey,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       });
       llmAdapter.registerProvider(anthropicAdapter);

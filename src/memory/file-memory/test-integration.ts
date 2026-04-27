@@ -53,8 +53,6 @@ async function testFileMemorySystem() {
     searchResults.forEach((memory, index) => {
       console.log(`  ${index + 1}. ${memory.filename} - ${memory.description || '无描述'}`);
     });
-    console.log();
-
     // 6. 测试自动记忆提取
     console.log('5. 测试自动记忆提取...');
     const testConversation: ConversationMessage[] = [

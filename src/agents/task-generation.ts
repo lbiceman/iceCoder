@@ -29,26 +29,26 @@ export class TaskGenerationAgent extends BaseAgent {
     }
 
     // 构建提示让 LLM 生成任务文档
-    const prompt = `You are a professional project manager and technical lead. Based on the following system design document, generate a comprehensive task breakdown document in Markdown format.
+    const prompt = `你是一名专业的项目经理和技术负责人。根据以下系统设计文档，生成完整的任务分解文档（Markdown 格式）。
 
-Each task MUST include the following fields:
-- **Task Number**: Sequential identifier (e.g., T-001, T-002)
-- **Description**: Clear description of what needs to be implemented
-- **Owning Module**: Which module/component this task belongs to
-- **Dependencies**: List of task numbers this task depends on (or "None")
-- **Estimated Complexity**: Low / Medium / High
+每个任务必须包含以下字段：
+- **任务编号**：顺序标识符（如 T-001、T-002）
+- **描述**：需要实现的内容的清晰描述
+- **所属模块**：该任务属于哪个模块/组件
+- **依赖关系**：该任务依赖的任务编号列表（或"无"）
+- **预估复杂度**：低 / 中 / 高
 
-Requirements for the task list:
-1. Tasks must be sorted by module first, then by dependency order within each module
-2. Tasks should be granular enough to be completed independently
-3. Dependencies must reference valid task numbers
-4. Cover all modules and interfaces described in the design document
+任务列表要求：
+1. 先按模块分组，模块内按依赖顺序排列
+2. 任务粒度应足够细，可独立完成
+3. 依赖关系必须引用有效的任务编号
+4. 覆盖设计文档中描述的所有模块和接口
 
-Format the output as a clean Markdown document with a table or structured list.
+输出格式为规范的 Markdown 文档，使用表格或结构化列表。
 
---- Design Document ---
+--- 设计文档 ---
 ${design}
---- End of Design Document ---`;
+--- 设计文档结束 ---`;
 
     // 调用 LLM 生成任务文档
     const result = await this.callLLM(prompt, context);

@@ -23,7 +23,7 @@ async function loadSystemPrompt(): Promise<string> {
   try {
     return await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
   } catch {
-    return '你是一个智能助手，拥有工具能力。根据用户需求自主决定使用哪些工具。回答使用中文。';
+    return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用中文。';
   }
 }
 
