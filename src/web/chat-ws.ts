@@ -39,6 +39,12 @@ const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
 let cachedMessages: UnifiedMessage[] | undefined;
 
 /**
+ * 当前活跃的 AbortController（用于用户中断正在执行的任务）。
+ * 每次 handleChatMessage 开始时创建，结束时清空。
+ */
+let activeAbortController: AbortController | null = null;
+
+/**
  * 全局记忆系统实例（进程级单例）。
  * 记忆系统在进程启动时初始化一次，所有会话共享。
  */
@@ -162,7 +168,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'stop') {
-          // TODO: 支持中断正在执行的任务
+          // 中断正在执行的任务
+          if (activeAbortController) {
+            activeAbortController.abort();
+            console.log('[chat-ws] 用户请求中断任务');
+          }
           return;
         }
 
@@ -234,9 +244,9 @@ async function handleChatMessage(
   // 写入用户消息到会话文件
   await appendMessages([{ role: 'user', content: message }]);
 
-  // ── 获取或初始化会话级消息缓存 ──
-  // 如果缓存中有该会话的消息历史，直接复用（包含完整的 toolCalls/toolCallId 结构）
-  // 如果没有（新会话或服务重启），传 undefined 让 Harness 从零构建
+  // 创建 AbortController 用于用户中断
+  const abortController = new AbortController();
+  activeAbortController = abortController;
 
   const harnessConfig: HarnessConfig = {
     context: {
@@ -248,6 +258,7 @@ async function handleChatMessage(
       maxRounds: 800,
       timeout: 60 * 60 * 1000,
       tokenBudget: 900000,
+      signal: abortController.signal,
     },
     permissions: [
       { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要用户确认' },
@@ -293,14 +304,20 @@ async function handleChatMessage(
       hookName: 'incomplete_task_check',
     };
   });
+
   const result = await harness.run(
     finalMessage,
     (msgs, opts) => llmAdapter.chat(msgs, opts),
     (event) => {
-      // 推送 step 到 WebSocket（仅用于前端 token 用量更新，不写入聊天记录）
+      // 推送 step 到 WebSocket
       sendJSON(ws, { type: 'step', step: event });
 
-      // step 信息仅在服务端日志输出，不写入会话文件
+      // 流式增量文本直接推送
+      if (event.type === 'stream_delta' && event.delta) {
+        sendJSON(ws, { type: 'stream', delta: event.delta });
+      }
+
+      // step 信息仅在服务端日志输出
       if (event.type === 'tool_call') {
         const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
         const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
@@ -312,7 +329,12 @@ async function handleChatMessage(
       }
     },
     existingMessages,
+    // 流式调用函数
+    (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
   );
+
+  // 清空 abort controller
+  activeAbortController = null;
 
   // 缓存完整的结构化消息历史
   cachedMessages = result.messages;
@@ -322,11 +344,15 @@ async function handleChatMessage(
     await appendMessages([{ role: 'agent', content: result.content }]).catch(() => {});
   }
 
-  // 推送最终结果到 WebSocket
+  // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
+  sendJSON(ws, { type: 'stream_end' });
+
   if (result.content) {
     sendJSON(ws, { type: 'response', content: result.content });
   }
-  if (result.loopState.totalToolCalls > 0) {
+  if (result.loopState.stopReason === 'user_abort') {
+    sendJSON(ws, { type: 'info', message: '任务已被用户中断' });
+  } else if (result.loopState.totalToolCalls > 0) {
     sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
   }
   sendJSON(ws, {
@@ -348,6 +374,10 @@ function sendJSON(ws: WebSocket, data: unknown): void {
  * 清理聊天系统资源（优雅关闭时调用）。
  */
 export function cleanupChatResources(): void {
+  if (activeAbortController) {
+    activeAbortController.abort();
+    activeAbortController = null;
+  }
   cachedMessages = undefined;
   console.log('[chat-ws] Resources cleaned up');
 }

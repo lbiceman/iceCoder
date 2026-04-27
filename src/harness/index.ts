@@ -29,6 +29,7 @@ export type {
   HarnessResult,
   HarnessStepEvent,
   ChatFunction,
+  StreamFunction,
   ContextAssemblyConfig,
   LoopControlConfig,
   LoopState,

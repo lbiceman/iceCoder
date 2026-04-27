@@ -125,11 +125,12 @@ export class OpenAIAdapter implements ProviderAdapter {
             callback(delta.content, false);
           }
 
-          // Handle reasoning_content for thinking models (e.g., NVIDIA glm-5.1)
+          // Handle reasoning_content for thinking models (e.g., DeepSeek)
+          // 不推送到 callback — reasoning_content 是内部思考过程，不直接展示给用户
+          // 但必须保留并回传给 API，否则 DeepSeek thinking 模式会报 400
           const deltaAny = delta as any;
           if (deltaAny.reasoning_content) {
             reasoningContent += deltaAny.reasoning_content;
-            callback(deltaAny.reasoning_content, false);
           }
 
           // Handle tool calls in streaming
@@ -167,14 +168,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       const elapsed = Date.now() - startTime;
       console.log(`[OpenAI] stream 完成 ← ${elapsed}ms | tokens: ${promptTokens}→${completionTokens}`);
 
-      const combinedContent = reasoningContent
-        ? `${reasoningContent}\n\n${fullContent}`
-        : fullContent;
-
       const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
 
       return {
-        content: combinedContent,
+        content: fullContent,
+        reasoningContent: reasoningContent || undefined,
         toolCalls: parsedToolCalls.length > 0 ? parsedToolCalls : undefined,
         usage: {
           inputTokens: promptTokens,
