@@ -16,6 +16,7 @@ import type {
   ToolDefinition,
   UnifiedMessage,
 } from './types.js';
+import { estimateStringTokens } from './token-estimator.js';
 
 /**
  * OpenAI 适配器的配置。
@@ -192,7 +193,7 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 简单的 token 估算：大约每 4 个字符一个 token。
    */
   async countTokens(text: string): Promise<number> {
-    return Math.ceil(text.length / 4);
+    return estimateStringTokens(text);
   }
 
   /**

@@ -13,6 +13,7 @@
  */
 
 import type { UnifiedMessage } from '../llm/types.js';
+import { estimateMessagesTokens } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 
 /**
@@ -41,39 +42,10 @@ const DEFAULT_CONFIG: CompactionConfig = {
 
 /**
  * 估算消息列表的 token 数。
- * 区分中英文：中文字符约 1 token/字，英文约 0.25 token/字。
+ * 委托给统一的 token-estimator，保持向后兼容的导出。
  */
 export function estimateTokens(messages: UnifiedMessage[]): number {
-  let tokens = 0;
-  for (const msg of messages) {
-    tokens += estimateStringTokens(typeof msg.content === 'string' ? msg.content : '');
-    if (Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.text) tokens += estimateStringTokens(block.text);
-      }
-    }
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        tokens += estimateStringTokens(tc.name + JSON.stringify(tc.arguments));
-      }
-    }
-    tokens += 4; // 每条消息的 role/结构开销
-  }
-  return tokens;
-}
-
-/** 估算单个字符串的 token 数 */
-function estimateStringTokens(text: string): number {
-  let tokens = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code >= 0x4E00 && code <= 0x9FFF) {
-      tokens += 1; // CJK 字符约 1 token/字
-    } else {
-      tokens += 0.25; // 英文约 4 字符/token
-    }
-  }
-  return Math.ceil(tokens);
+  return estimateMessagesTokens(messages);
 }
 
 /**
