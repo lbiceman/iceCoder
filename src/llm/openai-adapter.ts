@@ -345,8 +345,16 @@ export class OpenAIAdapter implements ProviderAdapter {
         .map((block) => block.text!)
         .join('\n');
     }
-    // 清理非法的转义序列（如 \x 开头的十六进制转义），防止 API JSON 解析失败
-    return text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+    // 1. 清理 ASCII 控制字符（保留 \t \n \r）
+    text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    // 2. 清理 lone surrogates（U+D800-U+DFFF），这些在 JSON 中非法
+    //    会导致某些 API 服务器（如 DeepSeek）JSON 解析失败
+    // eslint-disable-next-line no-control-regex
+    text = text.replace(/[\uD800-\uDFFF]/g, '\uFFFD');
+    // 3. 清理其他 Unicode 控制字符（C1 控制字符 U+0080-U+009F）
+    // eslint-disable-next-line no-control-regex
+    text = text.replace(/[\x80-\x9F]/g, '');
+    return text;
   }
 
   /**

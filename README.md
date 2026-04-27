@@ -2,6 +2,8 @@
 
 基于 Node.js + TypeScript 的 AI 编程助手，支持 PC 和移动端通过聊天界面与 AI 交互，自动调用工具完成复杂任务。
 
+> **记忆系统亮点**：参考 Claude Code 架构实现的 LLM 驱动记忆系统（LLM 语义召回 + LLM 自动提取 + autoDream 整合 + 文件持久化），核心架构与 Claude Code 同级，在容错（LLM 不可用时回退正则）、遥测（真实 JSONL + EventEmitter 而非 stub）、可维护性（模块集中 + 零外部 DB + 人类可读 Markdown）上更优。
+
 ## 项目概览
 
 iceCoder 是一个 AI 编程助手，核心能力包括：
@@ -233,15 +235,19 @@ LLM 调用 → 工具执行
 
 #### 记忆系统评分
 
+> 架构参考 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 的记忆系统（LLM 召回 + LLM 提取 + autoDream + 文件持久化）
+
 | 维度 | 分数 | 说明 |
 |------|:---:|------|
 | 功能完整性 | **9.5** | LLM 召回（去重） + LLM 提取（主代理互斥） + 主代理直接写入 + 会话记忆 + autoDream（文件锁） + 记忆漂移警告 + 安全验证 + 遥测 + 远程配置 |
 | 工程质量 | **9** | 零外部 DB 依赖，全链路容错，LLM 不可用时回退关键词/正则，prompt cache 优化，sequential 并发控制 + ConsolidationLock + 闭包隔离 |
 | 实际效果 | **9.5** | LLM 语义召回（跨轮次去重） + 主代理直接写入 + 后台提取互斥 + 会话笔记连续性 + autoDream 防止记忆劣化 |
-| 安全性 | **8.5** | 完整路径验证链（null byte/URL 编码/Unicode/symlink） |
+| 安全性 | **8.5** | 完整路径验证链（null byte/URL 编码/Unicode/symlink），未实现 Claude Code 的秘密扫描和团队记忆防泄露 |
 | 复杂度 | **5/10** | 单一管理器 + 文件存储 + 会话记忆 + 并发控制 + 远程配置，概念层次适中 |
 | 维护难度 | **4/10** | 零外部 DB，记忆全是人类可读文件，遥测可快速定位问题，闭包隔离便于测试 |
 | 扩展难度 | **4/10** | 召回/提取/Dream 都可换 prompt 策略，远程配置支持运行时调参，遥测 EventEmitter 可接外部监控 |
+
+> **相比 Claude Code 的优势**：模块集中在单一目录更易维护、LLM 不可用时有正则回退容错更强、遥测是真实实现（非 stub）可定位问题、远程配置自建不依赖 GrowthBook。
 
 ---
 
