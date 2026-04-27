@@ -21,6 +21,7 @@ import type {
   HarnessResult,
   HarnessStepEvent,
   ChatFunction,
+  StreamFunction,
   StopReason,
 } from './types.js';
 import { ContextAssembler, normalizeMessages } from './context-assembler.js';
@@ -150,9 +151,10 @@ export class Harness {
    * while(true) + State 对象，每轮迭代 = 预处理 → LLM 调用 → 响应处理 → 决定继续/停止。
    *
    * @param userMessage - 用户输入
-   * @param chatFn - LLM 调用函数
+   * @param chatFn - LLM 调用函数（非流式，用于工具调用轮次的回退）
    * @param onStep - 每一步的回调（用于 SSE 实时推送）
    * @param existingMessages - 已有的对话消息历史
+   * @param streamFn - LLM 流式调用函数（可选，启用后文本回复逐 chunk 推送）
    * @returns Harness 执行结果（包含结构化日志）
    */
   async run(
@@ -160,6 +162,7 @@ export class Harness {
     chatFn: ChatFunction,
     onStep?: (event: HarnessStepEvent) => void,
     existingMessages?: UnifiedMessage[],
+    streamFn?: StreamFunction,
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
 
@@ -230,7 +233,22 @@ export class Harness {
 
       let response;
       try {
-        response = await chatFn(normalizedMsgs, { tools: currentTools });
+        // ── 选择流式或非流式调用 ──
+        if (streamFn) {
+          response = await streamFn(normalizedMsgs, (chunk, done) => {
+            // 用户中断后不再推送流式增量
+            if (this.loopController.isAborted()) return;
+            if (!done && chunk) {
+              onStep?.({ type: 'stream_delta', iteration: round, delta: chunk });
+            }
+          }, { tools: currentTools });
+          // 流式调用完成后检查中断（流式期间可能收到 abort）
+          if (this.loopController.isAborted()) {
+            return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
+          }
+        } else {
+          response = await chatFn(normalizedMsgs, { tools: currentTools });
+        }
         state.llmRetryCount = 0; // 成功后重置重试计数
       } catch (error) {
         // ── LLM 调用错误恢复 ──
@@ -420,6 +438,11 @@ export class Harness {
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
       await this.executeToolCallsStreaming(response.toolCalls!, msgs, logger, onStep);
 
+      // 6a-abort. 工具执行后立即检查中断
+      if (this.loopController.isAborted()) {
+        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
+      }
+
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
       // 放在所有 tool 结果之后、下一轮 LLM 调用之前
       await this.memoryIntegration.injectMemoryContext(msgs);
@@ -538,8 +561,12 @@ export class Harness {
 
     // 第二遍：等待所有已提交的工具完成，收集结果
     const results = await streamingExecutor.flush();
+    const processedIds = new Set<string>();
 
     for (const sr of results) {
+      // 中断后跳过剩余结果处理
+      if (this.loopController.isAborted()) break;
+
       const { toolCall: tc, result } = sr;
       const output = result.success ? result.output : `工具执行错误: ${result.error}`;
 
@@ -565,12 +592,13 @@ export class Harness {
         toolCallId: tc.id,
       });
 
+      processedIds.add(tc.id);
       this.loopController.recordToolCalls(1);
     }
 
-    // 如果中断发生在 flush 期间，为未完成的补齐
+    // 如果中断发生，为未处理的工具补齐 tool_result
     if (this.loopController.isAborted()) {
-      this.yieldMissingToolResults(toolCalls, new Set(results.map(r => r.toolCall.id)), messages);
+      this.yieldMissingToolResults(toolCalls, processedIds, messages);
     }
   }
 

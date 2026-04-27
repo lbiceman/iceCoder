@@ -146,9 +146,11 @@ export interface HarnessConfig {
  * Harness 循环中每一步的事件回调。
  */
 export interface HarnessStepEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'compaction' | 'final';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'compaction' | 'final' | 'stream_delta';
   iteration?: number;
   content?: string;
+  /** 流式输出的增量文本（仅 stream_delta 类型） */
+  delta?: string;
   toolName?: string;
   toolArgs?: Record<string, any>;
   toolSuccess?: boolean;
@@ -181,5 +183,16 @@ export interface HarnessResult {
  */
 export type ChatFunction = (
   messages: UnifiedMessage[],
+  options: { tools: ToolDefinition[] },
+) => Promise<LLMResponse>;
+
+/**
+ * LLM 流式调用函数类型。
+ * callback 在每个 chunk 到达时调用，done=true 表示流结束。
+ * 返回完整的 LLMResponse（包含 toolCalls、usage 等）。
+ */
+export type StreamFunction = (
+  messages: UnifiedMessage[],
+  callback: (chunk: string, done: boolean) => void,
   options: { tools: ToolDefinition[] },
 ) => Promise<LLMResponse>;

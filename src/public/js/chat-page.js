@@ -32,6 +32,7 @@ window.ChatPage = (function () {
   var stages = [];         // { name, status }
   var agentResponseBuffer = ''; // accumulates streaming chunks
   var isStreaming = false;      // 是否正在流式传输
+  var userStopped = false;      // 用户是否已点击停止（忽略后续 stream 消息）
 
   // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
   var remoteMode = false;       // 是否为远程控制模式（带 token）
@@ -266,6 +267,18 @@ window.ChatPage = (function () {
     saveMessages();
   }
 
+  // ---- 流式滚动节流 ----
+  var scrollRafPending = false;
+
+  function scheduleScrollToBottom() {
+    if (scrollRafPending) return;
+    scrollRafPending = true;
+    requestAnimationFrame(function () {
+      scrollRafPending = false;
+      scrollToBottomIfNeeded();
+    });
+  }
+
   function appendAgentChunk(text) {
     agentResponseBuffer += text;
 
@@ -277,24 +290,34 @@ window.ChatPage = (function () {
       // 新建流式消息，先 renderMessages 确保 DOM 顺序正确
       messages.push({ role: 'agent', content: agentResponseBuffer, _streaming: true });
       renderMessages();
-      // 给最后一个 agent 消息元素加标记
+      // 给最后一个 agent 消息元素加标记，并缓存内容节点
       var allMsgEls = elMessages.querySelectorAll('.message.agent');
       var newEl = allMsgEls[allMsgEls.length - 1];
-      if (newEl) newEl.setAttribute('id', 'streaming-msg');
+      if (newEl) {
+        newEl.setAttribute('id', 'streaming-msg');
+        // 缓存内容节点引用，后续直接追加文本
+        var contentEl = newEl.lastChild;
+        if (contentEl) newEl._streamContentEl = contentEl;
+      }
       scrollToBottom();
       return;
     }
 
-    // 增量更新：找到标记的流式消息元素
+    // 增量追加：直接向内容节点追加文本，避免整体替换导致重排
     var streamEl = document.getElementById('streaming-msg');
-    if (streamEl) {
+    if (streamEl && streamEl._streamContentEl) {
+      streamEl._streamContentEl.appendChild(document.createTextNode(text));
+    } else if (streamEl) {
       var contentEl = streamEl.lastChild;
-      if (contentEl) contentEl.textContent = agentResponseBuffer;
+      if (contentEl) {
+        contentEl.appendChild(document.createTextNode(text));
+        streamEl._streamContentEl = contentEl;
+      }
     } else {
       // 回退：完整重新渲染
       renderMessages();
     }
-    scrollToBottom();
+    scheduleScrollToBottom();
   }
 
   function finalizeAgentResponse() {
@@ -303,9 +326,12 @@ window.ChatPage = (function () {
       delete lastMsg._streaming;
     }
     agentResponseBuffer = '';
-    // 清除流式消息 DOM 标记
+    // 清除流式消息 DOM 标记和缓存引用
     var streamEl = document.getElementById('streaming-msg');
-    if (streamEl) streamEl.removeAttribute('id');
+    if (streamEl) {
+      streamEl.removeAttribute('id');
+      delete streamEl._streamContentEl;
+    }
     setStreamingState(false);
     saveMessages();
   }
@@ -330,6 +356,7 @@ window.ChatPage = (function () {
   }
 
   function handleStop() {
+    userStopped = true;
     // 通过 WebSocket 通知后端停止
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify({ type: 'stop' }));
@@ -576,21 +603,47 @@ window.ChatPage = (function () {
     switch (data.type) {
       case 'connected':
         break;
-      case 'response':
+      case 'stream':
+        // 流式增量文本：逐 chunk 追加到当前 agent 消息
+        if (userStopped) break; // 用户已停止，忽略后续流式数据
         removeThinking();
-        finalizeAgentResponse();
-        messages.push({ role: 'agent', content: data.content });
-        renderMessages();
+        if (!isStreaming) setStreamingState(true);
+        appendAgentChunk(data.delta || '');
+        break;
+      case 'stream_end':
+        // 流式结束：定稿当前流式消息
+        if (!userStopped) finalizeAgentResponse();
+        break;
+      case 'response':
+        // 完整响应（流式结束后的最终内容，或非流式模式的回退）
+        if (userStopped) break; // 用户已停止，忽略
+        removeThinking();
+        // 如果已经有流式内容，stream_end 已经 finalize 了，response 用于持久化
+        // 如果没有流式内容（纯工具调用轮次无文本输出），直接显示
+        var lastMsg = messages[messages.length - 1];
+        if (lastMsg && lastMsg.role === 'agent' && lastMsg.content === data.content) {
+          // 流式内容已经显示，跳过重复渲染
+        } else if (lastMsg && lastMsg.role === 'agent' && lastMsg.content && agentResponseBuffer === '') {
+          // 流式已 finalize 且内容一致，跳过
+        } else {
+          finalizeAgentResponse();
+          messages.push({ role: 'agent', content: data.content });
+          renderMessages();
+        }
         break;
       case 'step':
         handleWsStep(data.step);
         break;
       case 'status':
         wsProcessing = data.status === 'processing';
+        if (data.status === 'idle') {
+          userStopped = false; // 任务结束，重置停止标记
+        }
         setStreamingState(wsProcessing);
         break;
       case 'error':
         removeThinking();
+        finalizeAgentResponse();
         messages.push({ role: 'agent', content: '[err] ' + data.message });
         renderMessages();
         break;
@@ -890,6 +943,7 @@ window.ChatPage = (function () {
     removeUploadedFile();
 
     sendWsMessage(msgText);
+    userStopped = false; // 新消息发送，重置停止标记
   }
 
   // ---- 输入框自动调整大小 ----
