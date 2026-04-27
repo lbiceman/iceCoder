@@ -384,4 +384,85 @@ type: user
       expect(result.writtenPaths.length).toBe(1);
     });
   });
+
+  describe('extract — 秘密扫描集成', () => {
+    it('包含 API Key 的记忆内容被自动脱敏', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          filename: 'api_ref.md',
+          type: 'reference',
+          name: 'API 配置',
+          description: 'API 密钥信息',
+          content: '用户的 AWS Key 是 AKIAIOSFODNN7EXAMPLE，用于访问 S3。',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths.length).toBe(1);
+
+      // 读取写入的文件，验证 Key 已被脱敏
+      const content = await fs.readFile(result.writtenPaths[0], 'utf-8');
+      expect(content).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      expect(content).toContain('[REDACTED]');
+    });
+
+    it('包含 GitHub PAT 的记忆内容被自动脱敏', async () => {
+      const fakePat = 'ghp_' + 'a'.repeat(36);
+      const llmResponse = JSON.stringify([
+        {
+          filename: 'github_ref.md',
+          type: 'reference',
+          name: 'GitHub',
+          description: 'GitHub 访问信息',
+          content: `GitHub token: ${fakePat}`,
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      const content = await fs.readFile(result.writtenPaths[0], 'utf-8');
+      expect(content).not.toContain(fakePat);
+      expect(content).toContain('[REDACTED]');
+    });
+
+    it('无秘密的记忆内容原样写入', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          filename: 'safe.md',
+          type: 'user',
+          name: '安全内容',
+          description: '无敏感信息',
+          content: '用户偏好使用 TypeScript 和 React。',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      const content = await fs.readFile(result.writtenPaths[0], 'utf-8');
+      expect(content).toContain('TypeScript 和 React');
+      expect(content).not.toContain('[REDACTED]');
+    });
+  });
 });

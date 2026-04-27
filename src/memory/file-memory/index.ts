@@ -73,6 +73,14 @@ export {
   PathTraversalError,
 } from './memory-security.js';
 
+export {
+  scanForSecrets,
+  redactSecrets,
+  containsSecrets,
+  getSecretLabel,
+} from './memory-secret-scanner.js';
+export type { SecretMatch } from './memory-secret-scanner.js';
+
 // ─── 配置模块 ───
 
 export * from './memory-config.js';

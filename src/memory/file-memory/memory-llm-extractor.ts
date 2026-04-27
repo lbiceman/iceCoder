@@ -14,6 +14,7 @@ import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
+import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
 import { DEFAULT_LLM_EXTRACTION_CONFIG } from './memory-config.js';
 
 /**
@@ -261,7 +262,18 @@ ${memory.content}
 ---
 *Extracted: ${new Date().toISOString()}*`;
 
-        await fs.writeFile(filePath, fileContent, 'utf-8');
+        // 秘密扫描：检测并脱敏敏感信息
+        const secrets = scanForSecrets(fileContent);
+        let safeContent = fileContent;
+        if (secrets.length > 0) {
+          const labels = secrets.map(s => s.label).join(', ');
+          console.warn(
+            `[LLMMemoryExtractor] Secret detected in memory "${memory.filename}": ${labels}. Redacting.`,
+          );
+          safeContent = redactSecrets(fileContent);
+        }
+
+        await fs.writeFile(filePath, safeContent, 'utf-8');
         writtenPaths.push(filePath);
       } catch (error) {
         console.error(`[LLMMemoryExtractor] Failed to save memory ${memory.filename}:`, error);

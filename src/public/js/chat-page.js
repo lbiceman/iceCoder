@@ -650,12 +650,14 @@ window.ChatPage = (function () {
   var PC_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
-    { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' }
+    { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
+    { name: 'memoryStatus', description: '查看记忆系统遥测报告', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
-    { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' }
+    { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
+    { name: 'memoryStatus', description: '查看记忆系统遥测报告', prefix: '~' }
   ];
 
   function getLocalCommands() {
@@ -836,6 +838,34 @@ window.ChatPage = (function () {
         '6. 每次 browse_directory 返回的 [当前路径] 就是你所在的目录，记住它。\n' +
         '7. 目录用 📁，文件用 📄，驱动器用 💾。\n' +
         '8. 每次显示目录内容后，等待用户的下一条指令。');
+      return;
+    }
+
+    // 处理 ~memoryStatus 命令：获取并显示记忆系统遥测报告
+    if (text === '~memoryStatus') {
+      elInput.value = '';
+      autoResizeInput();
+      hideCmdDropdown();
+      messages.push({ role: 'agent', content: '正在获取记忆系统遥测报告…' });
+      renderMessages();
+
+      fetch('/api/memory/telemetry')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          // 移除 "正在获取" 消息
+          messages.pop();
+          if (data.success && data.report) {
+            messages.push({ role: 'agent', content: data.report });
+          } else {
+            messages.push({ role: 'agent', content: '获取遥测报告失败: ' + (data.error || '未知错误') });
+          }
+          renderMessages();
+        })
+        .catch(function () {
+          messages.pop();
+          messages.push({ role: 'agent', content: '获取遥测报告失败，请检查服务器是否运行' });
+          renderMessages();
+        });
       return;
     }
 
