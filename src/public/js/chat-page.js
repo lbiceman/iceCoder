@@ -651,13 +651,13 @@ window.ChatPage = (function () {
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
-    { name: 'memoryStatus', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
-    { name: 'memoryStatus', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
   ];
 
   function getLocalCommands() {
@@ -841,8 +841,8 @@ window.ChatPage = (function () {
       return;
     }
 
-    // 处理 ~memoryStatus 命令：获取并显示记忆系统遥测报告
-    if (text === '~memoryStatus') {
+    // 处理 ~telemetry 命令：获取并显示记忆系统遥测报告
+    if (text === '~telemetry') {
       elInput.value = '';
       autoResizeInput();
       hideCmdDropdown();

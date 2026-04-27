@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import { URL } from 'url';
 import { promises as fsPromises } from 'node:fs';
+import { formatFriendlyError } from '../cli/friendly-errors.js';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
@@ -185,8 +186,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           try {
             await handleChatMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor);
           } catch (err) {
-            const errMsg = err instanceof Error ? err.message : '执行失败';
-            sendJSON(ws, { type: 'error', message: errMsg });
+            sendJSON(ws, { type: 'error', message: formatFriendlyError(err) });
           }
 
           isProcessing = false;

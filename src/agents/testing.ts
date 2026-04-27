@@ -1,8 +1,7 @@
 /**
  * 测试智能体
- * 接收需求、设计和任务文档并生成端到端测试用例。
- * 每个测试用例包含：测试描述、前置条件、测试步骤和预期结果。
- * 生成包含通过数、失败数和失败详情的测试结果报告。
+ * 接收需求、设计和任务文档，通过 Harness 循环编写并执行测试。
+ * 可以使用工具读取源代码、写入测试文件、运行测试命令。
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -18,7 +17,6 @@ export class TestingAgent extends BaseAgent {
     const design = context.inputData.design;
     const tasks = context.inputData.tasks;
 
-    // 验证至少提供了需求
     if (!requirements || typeof requirements !== 'string' || requirements.trim().length === 0) {
       return {
         success: false,
@@ -29,89 +27,73 @@ export class TestingAgent extends BaseAgent {
       };
     }
 
-    // 构建提示让 LLM 生成端到端测试用例
-    const prompt = `你是一名专业的 QA 工程师。根据以下项目文档，生成覆盖所有功能需求的端到端测试用例。
+    const prompt = `你是一名专业的 QA 工程师。根据以下项目文档，编写并执行端到端测试。
 
-每个测试用例必须包含：
-1. **测试编号**：唯一标识符（如 TC-001）
-2. **测试描述**：测试的内容
-3. **前置条件**：测试前需要的准备工作
-4. **测试步骤**：编号的执行步骤
-5. **预期结果**：每个步骤或最终应该发生的结果
+工作流程：
+1. 先用 list_directory 和 read_file 了解项目结构和已有代码
+2. 用 write_file 编写测试文件（使用项目已有的测试框架）
+3. 用 run_command 执行测试
+4. 如果测试失败，分析原因并修复
+5. 最终给出测试报告
 
-另外，在文档末尾生成 **测试结果报告** 章节，包含：
-- 测试用例总数
-- 通过数（初始生成时假设全部通过）
-- 失败数
-- 失败详情（如有）
-
-测试生成要求：
-1. 覆盖需求文档中的所有功能需求
-2. 包含正向和反向测试场景
-3. 包含边界条件测试
-4. 测试应独立且可重复执行
-
-输出格式为规范的 Markdown 文档。
+测试要求：
+- 覆盖需求文档中的所有功能需求
+- 包含正向和反向测试场景
+- 包含边界条件测试
+- 每个测试用例包含：测试编号（TC-001）、描述、步骤、预期结果
 
 --- 需求文档 ---
 ${requirements}
 --- 需求文档结束 ---
 
 ${design ? `--- 设计文档 ---\n${design}\n--- 设计文档结束 ---\n` : ''}
-${tasks ? `--- 任务文档 ---\n${tasks}\n--- 任务文档结束 ---\n` : ''}`;
+${tasks ? `--- 任务文档 ---\n${tasks}\n--- 任务文档结束 ---\n` : ''}
 
-    // 调用 LLM 生成测试用例
-    const result = await this.callLLM(prompt, context);
+请开始。先了解项目结构，然后编写和执行测试。`;
 
-    // Save the test document to the output directory
-    const testFilePath = await this.saveDocument(result, 'test-cases.md', context.outputDir);
+    const result = await this.runWithHarness(prompt, context, {
+      systemPrompt: '你是 Testing 智能体，一名专业的 QA 工程师。你可以使用文件操作工具读取源代码、写入测试文件，使用 Shell 工具执行测试命令。根据需求编写高质量的测试用例并确保通过。',
+      maxRounds: 80,
+      timeout: 15 * 60 * 1000,
+    });
 
-    // 生成并保存测试报告摘要
-    const report = this.generateTestReport(result);
-    const reportPath = await this.saveDocument(report, 'test-report.md', context.outputDir);
+    // 提取测试报告
+    const report = this.extractTestReport(result.content);
+    const reportPath = await this.saveDocument(
+      report || result.content,
+      'test-report.md',
+      context.outputDir,
+    );
+
+    // 提取写入的测试文件
+    const writtenFiles = this.extractWrittenFiles(result.messages);
 
     return {
       success: true,
-      outputData: { testReport: report },
-      artifacts: [testFilePath, reportPath],
-      summary: `Successfully generated test cases at ${testFilePath} and report at ${reportPath}`,
+      outputData: { testReport: report || result.content },
+      artifacts: [reportPath, ...writtenFiles],
+      summary: `测试完成（${result.loopState.totalToolCalls} 次工具调用，${result.loopState.currentRound} 轮）。${writtenFiles.length > 0 ? `写入 ${writtenFiles.length} 个测试文件。` : ''}`,
     };
   }
 
-  /**
-   * 从测试用例内容生成结构化的测试报告。
-   * 提取测试用例数量并生成摘要报告。
-   */
-  private generateTestReport(testContent: string): string {
-    // 通过查找测试 ID 模式来计算测试用例数
-    const testCasePattern = /TC-\d+/g;
-    const matches = testContent.match(testCasePattern) || [];
-    const uniqueTestCases = new Set(matches);
-    const totalTests = uniqueTestCases.size;
+  private extractTestReport(content: string): string | null {
+    // 尝试提取 markdown 中的测试报告部分
+    const reportMatch = content.match(/#{1,3}\s*(?:测试|Test).*?Report[\s\S]*$/i);
+    return reportMatch ? reportMatch[0] : null;
+  }
 
-    const report = `# Test Result Report
-
-## Summary
-
-| Metric | Count |
-|--------|-------|
-| Total Test Cases | ${totalTests} |
-| Passed | ${totalTests} |
-| Failed | 0 |
-| Skipped | 0 |
-
-## Status: ALL TESTS PASSED
-
-## Details
-
-All ${totalTests} test cases have been generated and are ready for execution.
-Test cases cover functional requirements as specified in the requirements document.
-
-## Generated Test Cases
-
-${Array.from(uniqueTestCases).map(tc => `- ${tc}: Defined`).join('\n')}
-`;
-
-    return report;
+  private extractWrittenFiles(messages: any[]): string[] {
+    const files = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (['write_file', 'edit_file', 'append_file'].includes(tc.name)) {
+            const filePath = tc.arguments?.path || tc.arguments?.file_path;
+            if (filePath) files.add(filePath);
+          }
+        }
+      }
+    }
+    return Array.from(files);
   }
 }

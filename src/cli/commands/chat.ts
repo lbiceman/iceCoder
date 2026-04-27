@@ -19,6 +19,8 @@ import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
+import { registerGracefulShutdown } from '../graceful-shutdown.js';
+import { formatFriendlyError } from '../friendly-errors.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -193,6 +195,16 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
     await fileMemoryManager.initialize();
   } catch { fileMemoryManager = null; }
 
+  // 注册优雅退出（Ctrl+C / SIGTERM）
+  registerGracefulShutdown({
+    message: 'iceCoder 正在退出...',
+    cleanups: [
+      () => { tunnelProcess?.kill(); },
+      () => { serveResult?.cleanup(); },
+      () => ctx.mcpManager.shutdown(),
+    ],
+  });
+
   // 会话消息历史（跨轮次累积）
   let sessionMessages: UnifiedMessage[] | undefined;
 
@@ -231,7 +243,8 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       tunnelProcess?.kill();
       serveResult?.cleanup();
       ctx.mcpManager.shutdown().catch(() => {});
-      process.exit(0);
+      rl.close();
+      return;
     }
 
     if (cmd === 'scan') {
@@ -355,7 +368,7 @@ ${c.bold}终端内置命令:${c.reset}
 
     } catch (err) {
       spinner.stop();
-      error('执行失败: ' + (err instanceof Error ? err.message : String(err)));
+      error(formatFriendlyError(err));
     }
 
     divider();
@@ -364,6 +377,7 @@ ${c.bold}终端内置命令:${c.reset}
 
   rl.on('close', () => {
     console.log('\nBye!');
+    // 优雅退出由 registerGracefulShutdown 处理
     tunnelProcess?.kill();
     serveResult?.cleanup();
     ctx.mcpManager.shutdown().catch(() => {});

@@ -64,8 +64,12 @@ ${requirements}
 ${testResults}
 --- 测试结果报告结束 ---`;
 
-    // 调用 LLM 验证需求
-    const result = await this.callLLM(prompt, context);
+    // 调用 LLM 验证需求（如果有工具系统，可读取实际代码和测试结果文件）
+    const harnessResult = await this.runWithHarness(prompt, context, {
+      systemPrompt: '你是 RequirementVerification 智能体，一名专业的需求验证专家。你可以使用文件操作工具读取项目中的源代码和测试结果，以便更准确地验证需求满足情况。完成后给出验证报告。',
+      maxRounds: 30,
+    });
+    const result = harnessResult.content;
 
     // Save the verification report to the output directory
     const savedPath = await this.saveDocument(result, 'verification-report.md', context.outputDir);

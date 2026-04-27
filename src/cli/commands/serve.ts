@@ -18,6 +18,7 @@ import { createSessionsRouter } from '../../web/routes/sessions.js';
 import { createUploadRouter } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
 import type { Server } from 'http';
+import { registerGracefulShutdown } from '../graceful-shutdown.js';
 
 export interface ServeResult {
   server: Server;
@@ -70,13 +71,11 @@ export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<
 
   const { cleanup } = await startWebServer(ctx, port);
 
-  // 优雅关闭
-  const shutdown = () => {
-    console.log('Shutting down...');
-    cleanup();
-    ctx.mcpManager.shutdown().catch(() => {});
-    process.exit(0);
-  };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  registerGracefulShutdown({
+    message: 'iceCoder 正在退出...',
+    cleanups: [
+      () => { cleanup(); },
+      () => ctx.mcpManager.shutdown(),
+    ],
+  });
 }

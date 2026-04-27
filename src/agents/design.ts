@@ -43,8 +43,12 @@ export class DesignAgent extends BaseAgent {
 ${requirements}
 --- 需求文档结束 ---`;
 
-    // 调用 LLM 生成设计文档
-    const result = await this.callLLM(prompt, context);
+    // 调用 LLM 生成设计文档（如果有工具系统，可读取项目代码了解现有架构）
+    const harnessResult = await this.runWithHarness(prompt, context, {
+      systemPrompt: '你是 Design 智能体，一名专业的软件架构师。你可以使用文件操作工具读取项目中的现有代码和配置，以便设计与现有架构一致的方案。完成后给出完整的设计文档。',
+      maxRounds: 20,
+    });
+    const result = harnessResult.content;
 
     // Save the design document to the output directory
     const savedPath = await this.saveDocument(result, 'design.md', context.outputDir);
