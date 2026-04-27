@@ -16,6 +16,7 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import { TokenCounter } from './token-counter.js';
+import { estimateStringTokens } from './token-estimator.js';
 
 /**
  * 默认重试配置。
@@ -161,8 +162,8 @@ export class LLMAdapter implements LLMAdapterInterface {
       const provider = this.providers.get(this.defaultProvider)!;
       return provider.countTokens(text);
     }
-    // 简单估算回退：大约每 4 个字符一个 token
-    return Math.ceil(text.length / 4);
+    // 简单估算回退：区分中英文字符
+    return estimateStringTokens(text);
   }
 
   /**

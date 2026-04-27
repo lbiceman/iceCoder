@@ -16,6 +16,7 @@ import type {
   ToolDefinition,
   UnifiedMessage,
 } from './types.js';
+import { estimateStringTokens } from './token-estimator.js';
 
 /**
  * Anthropic 适配器的配置。
@@ -120,10 +121,10 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
-   * Simple token estimation: approximately 4 characters per token.
+   * Token 估算：区分 CJK 和 ASCII 字符。
    */
   async countTokens(text: string): Promise<number> {
-    return Math.ceil(text.length / 4);
+    return estimateStringTokens(text);
   }
 
   /**

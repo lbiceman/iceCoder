@@ -14,6 +14,7 @@
  */
 
 import type { UnifiedMessage, ToolDefinition, ToolCall } from '../llm/types.js';
+import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type {
   HarnessConfig,
@@ -180,7 +181,7 @@ export class Harness {
       {
         chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
         stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
-        countTokens: async (text) => Math.ceil(text.length / 4),
+        countTokens: async (text) => estimateStringTokens(text),
       },
     );
 
