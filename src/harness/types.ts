@@ -6,7 +6,6 @@
 
 import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
-import type { MemoryManager } from '../memory/memory-manager.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 
 // ─── 上下文组装 ───
@@ -141,10 +140,6 @@ export interface HarnessConfig {
   memoryDir?: string;
   /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */
   fileMemoryManager?: FileMemoryManager;
-  /** 结构化记忆管理器（可选，用于运行时工作记忆） */
-  memoryManager?: MemoryManager;
-  /** 记忆检索的最大条数（默认 5） */
-  memoryRetrieveLimit?: number;
 }
 
 /**

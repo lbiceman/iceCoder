@@ -62,6 +62,10 @@ export interface TokenUsage {
   outputTokens: number;
   totalTokens: number;
   provider: string;
+  /** prompt cache 读取的 token 数（提供商支持时返回，如 Anthropic） */
+  cacheReadTokens?: number;
+  /** prompt cache 写入的 token 数 */
+  cacheCreationTokens?: number;
 }
 
 /**

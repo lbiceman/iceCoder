@@ -7,7 +7,6 @@
 
 import { BaseAgent } from '../core/base-agent.js';
 import { AgentContext, AgentResult } from '../core/types.js';
-import { MemoryType } from '../memory/types.js';
 
 export class TestingAgent extends BaseAgent {
   constructor() {
@@ -70,13 +69,6 @@ ${tasks ? `--- 任务文档 ---\n${tasks}\n--- 任务文档结束 ---\n` : ''}`;
     // 生成并保存测试报告摘要
     const report = this.generateTestReport(result);
     const reportPath = await this.saveDocument(report, 'test-report.md', context.outputDir);
-
-    // Store the result in episodic memory for future reference
-    await this.storeMemory(
-      `Generated E2E test cases and report. Test file: ${testFilePath}, Report: ${reportPath}`,
-      MemoryType.EPISODIC,
-      context,
-    );
 
     return {
       success: true,

@@ -6,7 +6,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Agent, AgentContext, AgentResult } from './types.js';
-import { MemoryType } from '../memory/types.js';
 import { UnifiedMessage } from '../llm/types.js';
 
 /**
@@ -71,17 +70,6 @@ export abstract class BaseAgent implements Agent {
 
     const response = await context.llmAdapter.chat([message]);
     return response.content;
-  }
-
-  /**
-   * 将内容存储到智能体记忆系统的辅助方法。
-   *
-   * @param content - 要存储为记忆的内容
-   * @param type - 记忆类型（short_term、long_term、episodic 等）
-   * @param context - 包含记忆管理器的智能体执行上下文
-   */
-  protected async storeMemory(content: string, type: MemoryType, context: AgentContext): Promise<void> {
-    await context.memoryManager.store(content, type, { sourceAgent: this.name });
   }
 
   /**

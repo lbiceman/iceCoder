@@ -17,7 +17,6 @@ import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, S
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
-import { MemoryManager } from '../../memory/memory-manager.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
 
@@ -184,7 +183,6 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
   // 初始化记忆系统
   let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
-  let memoryManager: MemoryManager | null = null;
 
   try {
     fileMemoryManager = createFileMemoryManager({
@@ -194,10 +192,6 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
     });
     await fileMemoryManager.initialize();
   } catch { fileMemoryManager = null; }
-
-  try {
-    memoryManager = new MemoryManager();
-  } catch { memoryManager = null; }
 
   // 会话消息历史（跨轮次累积）
   let sessionMessages: UnifiedMessage[] | undefined;
@@ -307,7 +301,6 @@ ${c.bold}终端内置命令:${c.reset}
         compactionEnableLLMSummary: true,
         memoryDir: memoryFilesDir,
         fileMemoryManager: fileMemoryManager ?? undefined,
-        memoryManager: memoryManager ?? undefined,
         onConfirm: async (toolName, toolArgs) => {
           // 终端确认
           spinner.stop();

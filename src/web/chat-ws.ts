@@ -22,7 +22,6 @@ import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
-import { MemoryManager } from '../memory/memory-manager.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 
@@ -43,9 +42,7 @@ let cachedMessages: UnifiedMessage[] | undefined;
  * 记忆系统在进程启动时初始化一次，所有会话共享。
  */
 let globalFileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
-let globalMemoryManager: MemoryManager | null = null;
 let memoryInitialized = false;
-let memoryDecayTimer: ReturnType<typeof setInterval> | null = null;
 
 async function ensureMemoryInitialized(): Promise<void> {
   if (memoryInitialized) return;
@@ -62,30 +59,6 @@ async function ensureMemoryInitialized(): Promise<void> {
   } catch (err) {
     console.error('[memory] FileMemoryManager 初始化失败:', err);
     globalFileMemoryManager = null;
-  }
-
-  try {
-    // 初始化结构化记忆管理器
-    globalMemoryManager = new MemoryManager();
-    console.log('[memory] MemoryManager 初始化成功');
-
-    // 启动记忆衰减后台调度器（每 5 分钟执行一次）
-    if (!memoryDecayTimer) {
-      memoryDecayTimer = setInterval(async () => {
-        if (!globalMemoryManager) return;
-        try {
-          const decayed = await globalMemoryManager.decay();
-          if (decayed > 0) {
-            console.log(`[memory] 后台衰减: ${decayed} 条记忆受影响`);
-          }
-        } catch {
-          // 衰减失败不阻塞
-        }
-      }, 5 * 60 * 1000);
-    }
-  } catch (err) {
-    console.error('[memory] MemoryManager 初始化失败:', err);
-    globalMemoryManager = null;
   }
 
   memoryInitialized = true;
@@ -284,7 +257,6 @@ async function handleChatMessage(
     compactionEnableLLMSummary: true,
     memoryDir: MEMORY_DIR,
     fileMemoryManager: globalFileMemoryManager ?? undefined,
-    memoryManager: globalMemoryManager ?? undefined,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, { type: 'confirm', toolName, args });
@@ -376,10 +348,6 @@ function sendJSON(ws: WebSocket, data: unknown): void {
  * 清理聊天系统资源（优雅关闭时调用）。
  */
 export function cleanupChatResources(): void {
-  if (memoryDecayTimer) {
-    clearInterval(memoryDecayTimer);
-    memoryDecayTimer = null;
-  }
   cachedMessages = undefined;
   console.log('[chat-ws] Resources cleaned up');
 }

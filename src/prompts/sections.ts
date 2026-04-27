@@ -127,8 +127,7 @@ export function createToneSection(): PromptSection {
     content: `# 风格和语气
  - 简洁直接，先说答案再说原因。
  - 只在需要时输出文本，避免冗余。
- - 引用代码时使用 文件路径:行号 格式。
- - 不使用 emoji。`,
+ - 引用代码时使用 文件路径:行号 格式。`,
     isStatic: true,
     priority: 50,
     enabled: true,

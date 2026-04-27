@@ -820,13 +820,22 @@ window.ChatPage = (function () {
       return;
     }
 
-    // 处理 ~open 命令：发送给 LLM，但不在聊天框显示
+    // 处理 ~open 命令：注入文件浏览器指令后发送给 LLM
     if (text === '~open') {
       elInput.value = '';
       autoResizeInput();
       hideCmdDropdown();
       showThinking(false);
-      sendWsMessage('~open');
+      sendWsMessage('~open\n\n' +
+        '【文件浏览器模式】请按以下规则操作：\n' +
+        '1. 先调用 list_drives 列出所有磁盘驱动器，然后等待用户指示。\n' +
+        '2. 用户说"打开 X:"或"进入 X:"时，调用 browse_directory 浏览该盘符根目录。\n' +
+        '3. 用户说"进入 XXX"时，在当前路径基础上拼接子目录名，直接调用一次 browse_directory（传入完整绝对路径，严禁从头重复导航）。\n' +
+        '4. 用户给出绝对路径时：目录用 browse_directory，文件用 open_file。\n' +
+        '5. 用户说"返回"或"上一级"时，浏览当前目录的父目录。\n' +
+        '6. 每次 browse_directory 返回的 [当前路径] 就是你所在的目录，记住它。\n' +
+        '7. 目录用 📁，文件用 📄，驱动器用 💾。\n' +
+        '8. 每次显示目录内容后，等待用户的下一条指令。');
       return;
     }
 
