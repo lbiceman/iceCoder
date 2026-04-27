@@ -7,7 +7,6 @@
 
 import { BaseAgent } from '../core/base-agent.js';
 import { AgentContext, AgentResult } from '../core/types.js';
-import { MemoryType } from '../memory/types.js';
 
 export class RequirementVerificationAgent extends BaseAgent {
   constructor() {
@@ -70,13 +69,6 @@ ${testResults}
 
     // Save the verification report to the output directory
     const savedPath = await this.saveDocument(result, 'verification-report.md', context.outputDir);
-
-    // Store the result in episodic memory for future reference
-    await this.storeMemory(
-      `Generated requirement verification report. Output saved to ${savedPath}`,
-      MemoryType.EPISODIC,
-      context,
-    );
 
     return {
       success: true,

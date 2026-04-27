@@ -10,7 +10,7 @@ iceCoder 是一个 AI 编程助手，核心能力包括：
 - **32+ 内置工具**：文件操作、搜索、Git、Shell 命令、文档解析、网页搜索、系统文件浏览
 - **MCP 协议支持**：可连接外部 MCP Server 动态扩展工具能力
 - **6 智能体流水线**：需求分析 → 设计 → 任务拆分 → 编码 → 测试 → 验证
-- **五层记忆系统**：短期、长期（向量检索）、情景、语义、过程记忆
+- **LLM 驱动记忆系统**：LLM 语义召回 + LLM 自动提取 + autoDream 整合 + 文件持久化
 - **移动端支持**：扫码连接，手机远程操控电脑上的 AI
 - **上下文压缩**：自动裁剪 + LLM 摘要，支持超长对话
 
@@ -22,7 +22,7 @@ iceCoder 是一个 AI 编程助手，核心能力包括：
 ┌─────────────────────────────────────────────────────────┐
 │                      客户端层                            │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │   PC 浏览器   │  │  移动端浏览器  │  │  SSE 客户端   │  │
+│  │   PC 浏览器   │  │  移动端浏览器  │  │  SSE 客户端 │  │
 │  └──────┬───────┘  └──────┬───────┘  └───────┬───────┘  │
 │         │ WebSocket        │ WebSocket         │ SSE     │
 └─────────┼─────────────────┼──────────────────┼──────────┘
@@ -49,7 +49,7 @@ iceCoder 是一个 AI 编程助手，核心能力包括：
 │                      能力层                               │
 │  ┌────────────┐ ┌────────────┐ ┌────────────────────────┐│
 │  │  工具系统   │ │  LLM 适配  │ │      记忆系统          ││
-│  │ 32+ 工具   │ │ OpenAI     │ │ 短期/长期/情景/语义/过程││
+│  │ 32+ 工具   │ │ OpenAI     │ │ LLM 驱动记忆系统      ││
 │  │ + MCP 扩展 │ │ Anthropic  │ │ + 文件记忆             ││
 │  │ + 验证器   │ │            │ │                        ││
 │  └────────────┘ └────────────┘ └────────────────────────┘│
@@ -177,46 +177,71 @@ iceCoder 是一个 AI 编程助手，核心能力包括：
 - 输出链接为下一阶段的输入
 
 
-### 3. 记忆系统流转
+### 3. 记忆系统架构
+
+记忆系统采用 **LLM 驱动 + 文件持久化** 架构，以 `FileMemoryManager` 为唯一管理器。
+
+| 层 | 位置 | 核心能力 |
+|----|------|---------|
+| 文件记忆 | `src/memory/file-memory/` | MEMORY.md 索引 + Markdown 主题文件，三级加载，新鲜度追踪 |
+| LLM 召回 | `memory-recall.ts` | 用 LLM sideQuery 从记忆 manifest 中选最相关的 5 个文件（回退关键词匹配），跨轮次去重 |
+| LLM 提取 | `memory-llm-extractor.ts` | fork 主对话完整上下文，LLM 判断什么值得记并自动写入（回退正则规则），与主代理直接写入互斥 |
+| 主代理直接写入 | `harness-memory.ts` | 主代理可在对话中直接写入记忆文件，后台提取自动检测并跳过（hasMemoryWritesSince 互斥） |
+| 会话记忆 | `session-memory.ts` | 独立的结构化会话笔记（10 个 section），在上下文压缩后保持连续性 |
+| autoDream | `memory-dream.ts` | 定期整合：合并重复、修正过时、修剪索引、转换相对日期，带文件锁保护 |
+| 并发控制 | `memory-concurrency.ts` | sequential 串行包装 + inProgress 互斥 + trailing run + ConsolidationLock 文件锁 |
+| 远程配置 | `memory-remote-config.ts` | 动态加载记忆系统参数（提取/整合/召回阈值），支持运行时调整无需重启 |
+| 安全验证 | `memory-security.ts` | null byte / URL 编码 / Unicode / symlink 逃逸防护 |
+| 遥测 | `memory-telemetry.ts` | 召回/提取/Dream 形状数据，JSONL 日志 + EventEmitter |
+
+> **已停用模块（保留备用）：** `memory-manager.ts`（仅供 Pipeline 使用）、`working-memory.ts`、`persistent-memory.ts` 中的重要性评分（`calculateImportanceScore`）、衰减（`decay`）、合并（`consolidate`）、提升（`boostImportanceScore`）机制已停用。这些机制在 LLM 驱动的架构下贡献有限——召回靠 LLM sideQuery，整理靠 autoDream，不再需要数值化的评分和衰减算法。代码保留供未来需要时启用。
+
+#### 四种文件记忆类型
+
+| 类型 | 说明 | 触发保存时机 |
+|------|------|-------------|
+| `user` | 用户画像（角色、目标、偏好） | 了解到用户角色、偏好、职责时 |
+| `feedback` | 行为反馈（纠正或确认的工作方式） | 用户纠正方法或确认某方法有效时 |
+| `project` | 项目上下文（目标、计划、截止日期） | 了解到谁在做什么、为什么、截止日期时 |
+| `reference` | 外部引用（链接、文档、系统信息） | 了解到外部系统中的资源及其用途时 |
+
+#### Harness 集成数据流
 
 ```
-用户消息
+用户输入
   │
-  ├──► 短期记忆 (ShortTermMemory)
-  │      容量: 100 条, TTL: 5 分钟
-  │         │
-  │         │ consolidate() 合并
-  │         ▼
-  │    长期记忆 (LongTermMemory)
-  │      LanceDB 向量存储
-  │      语义相似度检索
+  ├─→ 异步预取文件记忆（fire-and-forget）
   │
-  ├──► 情景记忆 (EpisodicMemory)
-  │      记录工具调用事件
-  │      时间戳 + 参与者 + 结果
+  ▼
+LLM 调用 → 工具执行
+  │                  ┌─→ 主代理直接写入记忆（用户明确要求时）
+  ├─→ LLM 召回注入上下文（跨轮次去重，alreadySurfaced 过滤）
+  │     用 LLM sideQuery 从 manifest 选最相关的 5 个文件
+  │     以 <system-reminder> 注入消息列表（仅首轮工具调用后注入一次）
+  ▼
+循环结束
   │
-  ├──► 语义记忆 (SemanticMemory)
-  │      知识图谱三元组
-  │      工具使用模式
+  ├─→ 主代理互斥检测（hasMemoryWritesSince）
+  │     如果主代理已写入记忆 → 跳过后台提取，推进 cursor
   │
-  └──► 过程记忆 (ProceduralMemory)
-         技能熟练度追踪
-         工具执行成功率
-
-         ┌──────────────────┐
-         │  后台衰减调度器    │
-         │  每 5 分钟执行     │
-         │  decay() 指数衰减  │
-         │  0.95/0.90/0.80   │
-         └──────────────────┘
-
-文件记忆 (FileMemoryManager)
-  │
-  ├── data/memory-files/*.md
-  ├── 多级加载 (项目/用户/目录/团队)
-  ├── 异步预取 + 相关性排序
-  └── 对话自动提取
+  └─→ consolidateMemory()（sequential 串行 + inProgress 互斥）
+       ├─→ LLM 提取（fork 完整上下文，trailing run 机制）
+       ├─→ 会话记忆更新（token 阈值 + 工具调用阈值双条件触发）
+       ├─→ autoDream（ConsolidationLock 文件锁 + 时间/会话门控）
+       └─→ 遥测记录（召回/提取/Dream 形状数据）
 ```
+
+#### 记忆系统评分
+
+| 维度 | 分数 | 说明 |
+|------|:---:|------|
+| 功能完整性 | **9.5** | LLM 召回（去重） + LLM 提取（主代理互斥） + 主代理直接写入 + 会话记忆 + autoDream（文件锁） + 记忆漂移警告 + 安全验证 + 遥测 + 远程配置 |
+| 工程质量 | **9** | 零外部 DB 依赖，全链路容错，LLM 不可用时回退关键词/正则，prompt cache 优化，sequential 并发控制 + ConsolidationLock + 闭包隔离 |
+| 实际效果 | **9.5** | LLM 语义召回（跨轮次去重） + 主代理直接写入 + 后台提取互斥 + 会话笔记连续性 + autoDream 防止记忆劣化 |
+| 安全性 | **8.5** | 完整路径验证链（null byte/URL 编码/Unicode/symlink） |
+| 复杂度 | **5/10** | 单一管理器 + 文件存储 + 会话记忆 + 并发控制 + 远程配置，概念层次适中 |
+| 维护难度 | **4/10** | 零外部 DB，记忆全是人类可读文件，遥测可快速定位问题，闭包隔离便于测试 |
+| 扩展难度 | **4/10** | 召回/提取/Dream 都可换 prompt 策略，远程配置支持运行时调参，遥测 EventEmitter 可接外部监控 |
 
 ---
 
@@ -279,18 +304,29 @@ src/
 │   ├── openai-adapter.ts       # OpenAI 适配
 │   ├── anthropic-adapter.ts    # Anthropic 适配
 │   └── types.ts                # 统一消息/响应类型
-├── memory/                     # 记忆系统
-│   ├── memory-manager.ts       # 统一管理器（5 子模块协调）
-│   ├── short-term-memory.ts    # 短期记忆（内存缓存）
-│   ├── long-term-memory.ts     # 长期记忆（LanceDB 向量）
-│   ├── episodic-memory.ts      # 情景记忆（事件）
-│   ├── semantic-memory.ts      # 语义记忆（知识图谱）
-│   ├── procedural-memory.ts    # 过程记忆（技能）
-│   ├── types.ts                # 记忆类型定义
-│   └── file-memory/            # 文件记忆子系统
-│       ├── file-memory-manager.ts  # 文件记忆管理器
-│       ├── multi-level-memory.ts   # 多级加载
-│       ├── memory-extractor.ts     # 对话记忆提取
+├── memory/                     # 记忆系统（LLM 驱动 + 文件持久化）
+│   ├── memory-manager.ts       # ⚠️ 仅供 Pipeline 使用，聊天路径已不使用
+│   ├── memory.ts               # Memory 工厂（重要性评分已停用，保留备用）
+│   ├── working-memory.ts       # ⚠️ 仅供 Pipeline 使用（内存队列）
+│   ├── persistent-memory.ts    # ⚠️ 仅供 Pipeline 使用（JSON 持久化）
+│   ├── types.ts                # 记忆类型定义（WORKING / PERSISTENT）
+│   └── file-memory/            # 聊天路径的唯一记忆系统
+│       ├── file-memory-manager.ts  # 文件记忆统一管理器
+│       ├── memory-recall.ts        # 🔥 LLM 语义召回（sideQuery 选最相关文件）
+│       ├── memory-llm-extractor.ts # 🔥 LLM 自动提取（fork 完整上下文）
+│       ├── memory-dream.ts         # 🔥 autoDream 记忆整合（合并/修剪/去重，带 ConsolidationLock）
+│       ├── memory-concurrency.ts   # 🔒 并发控制（sequential + ConsolidationLock + ExtractionGuard）
+│       ├── memory-remote-config.ts # ⚙️ 远程/动态配置（运行时可调参数）
+│       ├── session-memory.ts       # 📝 会话记忆（结构化笔记，压缩后保持连续性）
+│       ├── memory-security.ts      # 🔒 路径安全验证（null byte/symlink/遍历）
+│       ├── memory-telemetry.ts     # 📊 遥测（召回/提取/Dream 形状数据）
+│       ├── multi-level-memory.ts   # 三级加载（项目/用户/目录）
+│       ├── async-prefetch.ts       # 异步预取 + 相关性分析
+│       ├── memory-extractor.ts     # 正则提取（LLM 提取的回退方案）
+│       ├── memory-scanner.ts       # 记忆目录扫描 + frontmatter 解析
+│       ├── memory-prompt.ts        # 记忆提示词构建（注入系统提示词）
+│       ├── memory-age.ts           # 新鲜度追踪（过时记忆警告）
+│       ├── types.ts                # 文件记忆类型定义
 │       └── index.ts                # 导出入口
 ├── parser/                     # 文档解析（策略模式）
 │   ├── file-parser.ts          # 解析器主体
@@ -363,55 +399,6 @@ src/
 | 浏览器 | `browse_directory` | 浏览任意目录 | 可并行 |
 | 浏览器 | `open_file` | 读取任意文件 | 可并行 |
 
-### MCP 动态工具
-
-通过 MCP 协议连接外部 Server，工具以 `mcp_{server}_{tool}` 格式自动注册。
-
----
-
-## MCP 配置
-
-iceCoder 内置 MCP Client，可连接任意 MCP Server 扩展工具能力。配置格式兼容 Kiro / Claude Desktop 的 `mcp.json`。
-
-在 `data/config.json` 的 `mcpServers` 字段配置：
-
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "env": {
-        "MEMORY_FILE_PATH": "data/mcp-memory.jsonl"
-      },
-      "disabled": false,
-      "autoApprove": ["create_entities", "search_nodes", "read_graph"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "disabled": false
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"],
-      "disabled": false
-    }
-  }
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `command` | 启动命令（npx / uvx / node 等） |
-| `args` | 命令参数 |
-| `env` | 环境变量 |
-| `disabled` | 设为 `true` 禁用该 Server |
-| `autoApprove` | 自动批准的工具列表（无需用户确认） |
-
-项目启动时自动连接所有已启用的 MCP Server，发现的工具会注册到工具系统供 LLM 调用。
-
----
 
 ## 快速开始
 
@@ -545,7 +532,6 @@ iceCoder help
 | Web 框架 | Express |
 | 实时通信 | WebSocket (ws) + SSE |
 | LLM | OpenAI SDK + Anthropic SDK |
-| 向量数据库 | LanceDB |
 | 文档解析 | jszip, xml2js, cheerio, officeparser |
 | MCP 协议 | 内置 stdio 客户端，兼容 MCP 2024-11-05 规范 |
 | 前端 | 原生 HTML/CSS/JS（单页应用） |

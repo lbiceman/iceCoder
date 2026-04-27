@@ -36,13 +36,6 @@ class IntegrationMockAgent extends BaseAgent {
   }
 
   protected async doExecute(context: AgentContext): Promise<AgentResult> {
-    // Store a summary to episodic memory via the context's memoryManager
-    await context.memoryManager.store(
-      `${this.name} processed input and produced output`,
-      'short_term' as any,
-      { sourceAgent: this.name, executionId: context.executionId, stage: this.name },
-    );
-
     return {
       success: true,
       outputData: {
@@ -128,11 +121,9 @@ function createSampleHtmlBuffer(): Buffer {
 function createFullOrchestrator(): {
   orchestrator: Orchestrator;
   outputDir: string;
-  memoryDir: string;
   llmAdapter: LLMAdapter;
 } {
   const outputDir = createTempDir();
-  const memoryDir = createTempDir();
 
   // Real FileParser with HTML strategy
   const fileParser = new FileParser();
@@ -146,9 +137,6 @@ function createFullOrchestrator(): {
 
   const config: OrchestratorConfig = {
     outputDir,
-    memoryConfig: {
-      longTerm: { dbPath: memoryDir },
-    },
   };
 
   const orchestrator = new Orchestrator(fileParser, llmAdapter, config);
@@ -158,7 +146,7 @@ function createFullOrchestrator(): {
     orchestrator.registerAgent(new IntegrationMockAgent(name));
   }
 
-  return { orchestrator, outputDir, memoryDir, llmAdapter };
+  return { orchestrator, outputDir, llmAdapter };
 }
 
 afterEach(async () => {
@@ -313,72 +301,6 @@ describe('Integration: SSE Events During Pipeline', () => {
       expect(event.startTime).toBeInstanceOf(Date);
       expect(event.endTime).toBeInstanceOf(Date);
     }
-  });
-});
-
-describe('Integration: Cross-Agent Memory Sharing', () => {
-  it('agents store memories during pipeline execution that are retrievable', async () => {
-    const { orchestrator } = createFullOrchestrator();
-    const htmlBuffer = createSampleHtmlBuffer();
-
-    await orchestrator.executePipeline(htmlBuffer, 'requirements.html');
-
-    // Each agent should have its own MemoryManager with stored memories
-    const memoryManagers = orchestrator.getMemoryManagers();
-    expect(memoryManagers.size).toBe(6);
-
-    for (const stageName of STAGE_NAMES) {
-      const mm = memoryManagers.get(stageName);
-      expect(mm).toBeDefined();
-
-      // The agent stored a short-term memory during execution
-      const memories = await mm!.retrieve(stageName);
-      // Should find at least the memory stored by the agent + the episodic memory from orchestrator
-      expect(memories.length).toBeGreaterThanOrEqual(1);
-    }
-  });
-
-  it('cross-agent memory retrieval works after pipeline execution', async () => {
-    const { orchestrator } = createFullOrchestrator();
-    const htmlBuffer = createSampleHtmlBuffer();
-
-    await orchestrator.executePipeline(htmlBuffer, 'requirements.html');
-
-    // RequirementAnalysis agent's memory should be accessible from another agent
-    const results = await orchestrator.crossAgentMemoryRetrieve(
-      'Design',
-      'RequirementAnalysis',
-      'processed',
-    );
-    expect(Array.isArray(results)).toBe(true);
-    // The IntegrationMockAgent stores a memory containing "processed"
-    expect(results.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('cross-agent memory retrieval fails for non-existent agent', async () => {
-    const { orchestrator } = createFullOrchestrator();
-    const htmlBuffer = createSampleHtmlBuffer();
-
-    await orchestrator.executePipeline(htmlBuffer, 'requirements.html');
-
-    await expect(
-      orchestrator.crossAgentMemoryRetrieve('Design', 'NonExistentAgent', 'query'),
-    ).rejects.toThrow('Target agent "NonExistentAgent" does not exist');
-  });
-
-  it('shared memory space is accessible', async () => {
-    const { orchestrator } = createFullOrchestrator();
-
-    const sharedMemory = orchestrator.getSharedMemory();
-    expect(sharedMemory).toBeDefined();
-
-    // Store something in shared memory
-    await sharedMemory.store('shared knowledge item', 'short_term' as any, {
-      sourceAgent: 'system',
-    });
-
-    const results = await sharedMemory.retrieve('shared knowledge');
-    expect(results.length).toBeGreaterThanOrEqual(1);
   });
 });
 

@@ -8,7 +8,6 @@
 
 import { BaseAgent } from '../core/base-agent.js';
 import { AgentContext, AgentResult } from '../core/types.js';
-import { MemoryType } from '../memory/types.js';
 
 export class CodeWritingAgent extends BaseAgent {
   constructor() {
@@ -69,13 +68,6 @@ ${tasks}
       const savedPath = await this.saveDocument(file.content, file.filepath, context.outputDir);
       savedPaths.push(savedPath);
     }
-
-    // Store the result in episodic memory for future reference
-    await this.storeMemory(
-      `Generated ${files.length} source code files from task document. Files: ${savedPaths.join(', ')}`,
-      MemoryType.EPISODIC,
-      context,
-    );
 
     return {
       success: true,

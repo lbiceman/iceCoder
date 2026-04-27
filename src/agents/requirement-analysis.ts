@@ -6,7 +6,6 @@
 
 import { BaseAgent } from '../core/base-agent.js';
 import { AgentContext, AgentResult } from '../core/types.js';
-import { MemoryType } from '../memory/types.js';
 
 export class RequirementAnalysisAgent extends BaseAgent {
   constructor() {
@@ -60,13 +59,6 @@ ${text}
 
     // 将需求文档保存到输出目录
     const savedPath = await this.saveDocument(result, 'requirements.md', context.outputDir);
-
-    // 将结果存储到情景记忆以供将来参考
-    await this.storeMemory(
-      `Generated requirements document from input text. Output saved to ${savedPath}`,
-      MemoryType.EPISODIC,
-      context,
-    );
 
     return {
       success: true,

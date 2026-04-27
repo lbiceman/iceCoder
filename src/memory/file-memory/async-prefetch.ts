@@ -11,6 +11,7 @@
 import { EventEmitter } from 'events';
 import type { MemoryHeader } from './types.js';
 import type { MultiLevelMemoryLoader } from './multi-level-memory.js';
+import { DEFAULT_PREFETCH_CONFIG as CENTRALIZED_PREFETCH_CONFIG } from './memory-config.js';
 
 /**
  * 预取配置
@@ -25,16 +26,6 @@ export interface PrefetchConfig {
   /** 相关性阈值（0-1） */
   relevanceThreshold: number;
 }
-
-/**
- * 默认配置
- */
-const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
-  timeout: 5000,
-  maxPrefetch: 20,
-  enableRelevance: true,
-  relevanceThreshold: 0.3,
-};
 
 /**
  * 预取结果
@@ -133,7 +124,7 @@ export class AsyncMemoryPrefetcher extends EventEmitter {
   ) {
     super();
     this.memoryLoader = memoryLoader;
-    this.config = { ...DEFAULT_PREFETCH_CONFIG, ...config };
+    this.config = { ...CENTRALIZED_PREFETCH_CONFIG, ...config };
     this.relevanceAnalyzer = new RelevanceAnalyzer();
   }
 

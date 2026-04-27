@@ -52,5 +52,82 @@ export type { MultiLevelMemoryConfig } from './multi-level-memory.js';
 export { AsyncMemoryPrefetcher, RelevanceAnalyzer, createAsyncPrefetcher } from './async-prefetch.js';
 export type { PrefetchConfig, PrefetchResult } from './async-prefetch.js';
 
-export { MemoryExtractor, createMemoryExtractor } from './memory-extractor.js';
-export type { ExtractionConfig, CandidateMemory, ConversationMessage } from './memory-extractor.js';
+// ─── LLM 驱动模块 ───
+
+export { recallRelevantMemories } from './memory-recall.js';
+export type { RecallResult } from './memory-recall.js';
+
+export { LLMMemoryExtractor, createLLMMemoryExtractor } from './memory-llm-extractor.js';
+export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
+
+export { MemoryDream, createMemoryDream } from './memory-dream.js';
+export type { DreamConfig, DreamResult } from './memory-dream.js';
+
+// ─── 安全模块 ───
+
+export {
+  validatePath,
+  validatePathWithSymlink,
+  isWithinMemoryDir,
+  sanitizePathKey,
+  PathTraversalError,
+} from './memory-security.js';
+
+// ─── 配置模块 ───
+
+export * from './memory-config.js';
+
+// ─── 工具模块 ───
+
+export { parseLLMJson, parseLLMJsonObject, parseLLMJsonArray } from './json-parser.js';
+
+// ─── 遥测模块 ───
+
+export { MemoryTelemetry, getMemoryTelemetry, resetMemoryTelemetry } from './memory-telemetry.js';
+export type {
+  TelemetryConfig,
+  TelemetryEvent,
+  TelemetryEventType,
+  RecallTelemetry,
+  ExtractTelemetry,
+  DreamTelemetry,
+  StatsTelemetry,
+} from './memory-telemetry.js';
+
+// ─── 并发控制与锁机制 ───
+
+export {
+  sequential,
+  ConsolidationLock,
+  initExtractionGuard,
+  drainExtractions,
+} from './memory-concurrency.js';
+export type { ExtractionGuardState } from './memory-concurrency.js';
+
+// ─── 远程/动态配置 ───
+
+export {
+  getDynamicConfig,
+  refreshConfig,
+  saveConfig,
+  getExtractionConfig,
+  getDreamConfig,
+  getRecallConfig,
+  getSessionMemoryConfig,
+  resetDynamicConfig,
+} from './memory-remote-config.js';
+export type { MemoryDynamicConfig } from './memory-remote-config.js';
+
+// ─── 会话记忆 ───
+
+export {
+  initSessionMemoryState,
+  shouldUpdateSessionMemory,
+  setupSessionMemoryFile,
+  buildSessionMemoryUpdatePrompt,
+  truncateSessionMemoryForCompact,
+  isSessionMemoryEmpty,
+  getSessionMemoryContent,
+  SESSION_MEMORY_TEMPLATE,
+} from './session-memory.js';
+export type { SessionMemoryState } from './session-memory.js';

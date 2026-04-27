@@ -30,11 +30,7 @@ import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import { getToolMetadata } from '../tools/tool-metadata.js';
-import { scanMemoryFiles, memoryFreshnessNote } from '../memory/file-memory/index.js';
-import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
-import type { ConversationMessage } from '../memory/file-memory/memory-extractor.js';
-import type { MemoryManager } from '../memory/memory-manager.js';
-import { MemoryType } from '../memory/types.js';
+import { HarnessMemoryIntegration } from './harness-memory.js';
 
 // ─── 工具输出截断上限 ───
 const MAX_TOOL_OUTPUT = 30000;
@@ -50,10 +46,6 @@ const LLM_RETRY_MAX_DELAY = 15000;
 // ─── 工具结果预算裁剪 ───
 const TOOL_RESULT_KEEP_RECENT = 6;
 const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
-
-// ─── 记忆注入 ───
-const MEMORY_MAX_FILE_MEMORIES = 10;
-const MEMORY_MAX_RELEVANT_MEMORIES = 10;
 
 // ─── 默认压缩配置 ───
 const DEFAULT_COMPACTION_THRESHOLD = 40;
@@ -118,12 +110,8 @@ export class Harness {
   private stopHookManager: StopHookManager;
   private tokenBudgetTracker?: TokenBudgetTracker;
   private onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
-  private memoryDir?: string;
-  private fileMemoryManager?: FileMemoryManager;
-  private memoryManager?: MemoryManager;
-  private memoryRetrieveLimit: number;
-  /** 当前用户消息，用于记忆相关性检索 */
-  private currentUserMessage: string = '';
+  /** 记忆集成层（解耦的记忆系统交互） */
+  private memoryIntegration: HarnessMemoryIntegration;
 
   constructor(
     config: HarnessConfig,
@@ -141,15 +129,11 @@ export class Harness {
     this.stopHookManager = new StopHookManager();
     this.onConfirm = config.onConfirm;
 
-    // 记忆目录：用于文件记忆持久化（向后兼容）
-    this.memoryDir = config.memoryDir;
-
-    // 文件记忆管理器：多级加载+异步预取+自动提取（优先于 memoryDir）
-    this.fileMemoryManager = config.fileMemoryManager;
-
-    // 结构化记忆管理器：用于运行时工作记忆
-    this.memoryManager = config.memoryManager;
-    this.memoryRetrieveLimit = config.memoryRetrieveLimit ?? 5;
+    // 记忆集成层
+    this.memoryIntegration = new HarnessMemoryIntegration({
+      memoryDir: config.memoryDir,
+      fileMemoryManager: config.fileMemoryManager,
+    });
 
     // 如果配置了 token 预算，创建追踪器
     if (config.loop.tokenBudget) {
@@ -191,14 +175,14 @@ export class Harness {
     logger.loopStart(tools.length, messages.length);
 
     // 保存用户消息用于记忆相关性检索
-    this.currentUserMessage = userMessage;
-    this.memoryInjected = false;
-
-    // 将用户输入存入短期记忆（如果有 MemoryManager）
-    await this.storeToMemory(userMessage, 'user_input');
-
-    // 启动异步记忆预取（不阻塞，后续 injectMemoryContext 时消费结果）
-    this.startMemoryPrefetch(userMessage);
+    this.memoryIntegration.onLoopStart(
+      userMessage,
+      {
+        chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
+        stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
+        countTokens: async (text) => Math.ceil(text.length / 4),
+      },
+    );
 
     // 初始化可变状态
     const state: LoopState = {
@@ -437,7 +421,7 @@ export class Harness {
 
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
       // 放在所有 tool 结果之后、下一轮 LLM 调用之前
-      await this.injectMemoryContext(msgs);
+      await this.memoryIntegration.injectMemoryContext(msgs);
 
       // 6c. maxTurns 检查（由 loopController 处理）
       const nextStop = this.loopController.shouldContinue();
@@ -454,7 +438,8 @@ export class Harness {
     }
     } finally {
       // 统一记忆合并：无论哪条路径退出循环，都执行一次
-      await this.consolidateMemory();
+      await this.memoryIntegration.onLoopEnd(state.messages, state.turnCount);
+      this.memoryIntegration.dispose();
     }
   }
 
@@ -497,95 +482,7 @@ export class Harness {
     }
   }
 
-  /**
-   * 注入记忆上下文（整合文件记忆 + 结构化记忆）。
-   *
-   * 两个来源合并为一条 <system-reminder>，避免多条 user 消息堆积：
-   * 1. 文件记忆：扫描 memoryDir，按修改时间取最新的，附带新鲜度提醒
-   * 2. 结构化记忆：用当前用户消息做相关性检索，返回高重要性记忆
-   *
-   * 只在第一轮工具调用后注入一次，后续轮次跳过（避免重复堆积）。
-   */
-  private memoryInjected = false;
-
-  private async injectMemoryContext(messages: UnifiedMessage[]): Promise<void> {
-    if (this.memoryInjected) return;
-    if (!this.memoryDir && !this.fileMemoryManager && !this.memoryManager) return;
-
-    const sections: string[] = [];
-
-    // ── 文件记忆（优先使用 FileMemoryManager，回退到旧的 scanMemoryFiles）──
-    if (this.fileMemoryManager) {
-      try {
-        // 使用相关性检索（消费异步预取结果或同步检索）
-        const relevantMemories = await this.fileMemoryManager.getRelevantMemories(
-          this.currentUserMessage,
-          MEMORY_MAX_RELEVANT_MEMORIES,
-        );
-        if (relevantMemories.length > 0) {
-          const { memoryFreshnessNote } = await import('../memory/file-memory/memory-age.js');
-          const parts: string[] = [];
-          for (const mem of relevantMemories) {
-            const freshness = memoryFreshnessNote(mem.mtimeMs);
-            const desc = mem.description ? `: ${mem.description}` : '';
-            parts.push(`${freshness}- ${mem.filename}${desc}`);
-          }
-          sections.push(`文件记忆（按相关性排序）：\n${parts.join('\n')}`);
-        }
-      } catch {
-        // FileMemoryManager 失败不阻塞
-      }
-    } else if (this.memoryDir) {
-      // 向后兼容：旧的 scanMemoryFiles 路径
-      try {
-        const fileMemories = await scanMemoryFiles(this.memoryDir, 50);
-        if (fileMemories.length > 0) {
-          const parts: string[] = [];
-          for (const mem of fileMemories.slice(0, MEMORY_MAX_FILE_MEMORIES)) {
-            const freshness = memoryFreshnessNote(mem.mtimeMs);
-            const desc = mem.description ? `: ${mem.description}` : '';
-            parts.push(`${freshness}- ${mem.filename}${desc}`);
-          }
-          sections.push(`文件记忆：\n${parts.join('\n')}`);
-        }
-      } catch {
-        // 文件记忆扫描失败不阻塞
-      }
-    }
-
-    // ── 结构化记忆检索 ──
-    if (this.memoryManager && this.currentUserMessage) {
-      try {
-        const retrieved = await this.memoryManager.retrieve(
-          this.currentUserMessage,
-          undefined,
-          this.memoryRetrieveLimit,
-        );
-        if (retrieved.length > 0) {
-          const parts = retrieved.map(m => {
-            const age = Math.floor((Date.now() - m.lastAccessedAt.getTime()) / 86_400_000);
-            const ageStr = age === 0 ? '今天' : age === 1 ? '昨天' : `${age}天前`;
-            const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : '';
-            return `- (${m.type}, ${ageStr}, 重要性:${m.importanceScore.toFixed(2)})${tags} ${m.content.substring(0, 200)}`;
-          });
-          sections.push(`相关记忆：\n${parts.join('\n')}`);
-
-          for (const m of retrieved) {
-            try { await this.memoryManager.boostImportanceScore(m.id); } catch { /* */ }
-          }
-        }
-      } catch {
-        // 结构化记忆检索失败不阻塞
-      }
-    }
-
-    if (sections.length > 0) {
-      const reminder = `<system-reminder>\n${sections.join('\n\n')}\n</system-reminder>`;
-      messages.push({ role: 'user', content: reminder });
-    }
-
-    this.memoryInjected = true;
-  }
+  // ─── 记忆集成由 HarnessMemoryIntegration 处理 ───
 
   /**
    * 使用 StreamingToolExecutor 执行工具调用。
@@ -667,7 +564,6 @@ export class Harness {
         toolCallId: tc.id,
       });
 
-      await this.storeToolInteraction(tc.name, tc.arguments, result.success, output);
       this.loopController.recordToolCalls(1);
     }
 
@@ -800,149 +696,5 @@ export class Harness {
    */
   getStopHookManager(): StopHookManager {
     return this.stopHookManager;
-  }
-
-  /**
-   * 获取记忆管理器（用于外部直接操作记忆）。
-   */
-  getMemoryManager(): MemoryManager | undefined {
-    return this.memoryManager;
-  }
-
-  // ─── 记忆集成私有方法 ───
-
-  /**
-   * 将内容存入短期记忆。
-   * 失败不阻塞主流程。
-   */
-  private async storeToMemory(
-    content: string,
-    interactionType: string,
-    metadata?: Record<string, any>,
-  ): Promise<void> {
-    if (!this.memoryManager) return;
-    try {
-      await this.memoryManager.store(content, MemoryType.SHORT_TERM, {
-        interactionType,
-        sourceAgent: 'harness',
-        ...metadata,
-      });
-    } catch {
-      // 记忆存储失败不阻塞主流程
-    }
-  }
-
-  /**
-   * 将工具交互记录到情景记忆。
-   * 只记录摘要（工具名 + 成功/失败 + 输出前 200 字符），不记录完整输出。
-   */
-  private async storeToolInteraction(
-    toolName: string,
-    args: Record<string, any>,
-    success: boolean,
-    output: string,
-  ): Promise<void> {
-    if (!this.memoryManager) return;
-    try {
-      const argsStr = JSON.stringify(args);
-      const truncatedArgs = argsStr.length > 200 ? argsStr.substring(0, 200) + '...' : argsStr;
-      const truncatedOutput = output.substring(0, 200);
-      const status = success ? '成功' : '失败';
-      const description = `工具调用 ${toolName}(${truncatedArgs}) → ${status}: ${truncatedOutput}`;
-
-      await this.memoryManager.store(description, MemoryType.EPISODIC, {
-        interactionType: 'agent_transfer',
-        sourceAgent: 'harness',
-        participants: ['harness', toolName],
-        occurredAt: new Date().toISOString(),
-        toolName,
-        success,
-      });
-
-      // 存入语义记忆：工具使用模式（知识图谱三元组）
-      if (success) {
-        await this.memoryManager.store(
-          `工具 ${toolName} 可用于: ${truncatedArgs}`,
-          MemoryType.SEMANTIC,
-          { interactionType: 'tool_knowledge', sourceAgent: 'harness', toolName },
-        ).catch(() => {});
-      }
-
-      // 存入过程记忆：工具执行技能追踪
-      await this.memoryManager.store(
-        `${toolName}: ${status}`,
-        MemoryType.PROCEDURAL,
-        { interactionType: 'skill_tracking', sourceAgent: 'harness', toolName, success },
-      ).catch(() => {});
-    } catch {
-      // 记忆存储失败不阻塞主流程
-    }
-  }
-
-  /**
-   * 触发记忆合并 + 自动提取 + 衰减。
-   * 在循环结束时调用，失败不阻塞。
-   */
-  private async consolidateMemory(): Promise<void> {
-    // ── 结构化记忆合并+衰减 ──
-    if (this.memoryManager) {
-      try {
-        const consolidated = await this.memoryManager.consolidate();
-        if (consolidated > 0) {
-          console.log(`[harness] 记忆合并: ${consolidated} 条短期记忆转入长期记忆`);
-        }
-
-        const decayed = await this.memoryManager.decay();
-        if (decayed > 0) {
-          console.log(`[harness] 记忆衰减: ${decayed} 条记忆受影响`);
-        }
-
-        // 发现记忆间的关联（内容相似性 + 时间邻近性）
-        const associations = await this.memoryManager.discoverAssociations();
-        if (associations.length > 0) {
-          console.log(`[harness] 发现 ${associations.length} 条记忆关联`);
-        }
-      } catch {
-        // 合并/衰减失败不阻塞
-      }
-    }
-
-    // ── 文件记忆自动提取 ──
-    if (this.fileMemoryManager) {
-      try {
-        // 从当前对话中提取值得记住的信息
-        const conversationMessages: ConversationMessage[] = [];
-        // 只提取 user 和 assistant 消息（跳过 system/tool）
-        if (this.currentUserMessage) {
-          conversationMessages.push({
-            role: 'user',
-            content: this.currentUserMessage,
-            timestamp: Date.now(),
-          });
-        }
-        if (conversationMessages.length > 0) {
-          const { saved } = await this.fileMemoryManager.extractMemoriesFromConversation(
-            conversationMessages,
-          );
-          if (saved > 0) {
-            console.log(`[harness] 自动记忆提取: ${saved} 条记忆已保存`);
-          }
-        }
-      } catch {
-        // 自动提取失败不阻塞
-      }
-    }
-  }
-
-  /**
-   * 启动异步记忆预取（不阻塞主流程）。
-   * 在循环开始时调用，结果在 injectMemoryContext 时消费。
-   */
-  private startMemoryPrefetch(query: string): void {
-    if (!this.fileMemoryManager) return;
-    // fire-and-forget：不 await，不阻塞
-    this.fileMemoryManager.prefetchMemories(query).catch(() => {
-      // 预取失败静默处理
-    });
   }
 }

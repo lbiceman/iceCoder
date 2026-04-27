@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { MemoryHeader, FileMemoryConfig } from './types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { memoryFreshnessNote } from './memory-age.js';
+import { DEFAULT_MULTI_LEVEL_CONFIG as CENTRALIZED_DEFAULT } from './memory-config.js';
 
 /**
  * 多级记忆配置
@@ -24,20 +25,6 @@ export interface MultiLevelMemoryConfig extends FileMemoryConfig {
   /** 当前工作目录 */
   currentDir: string;
 }
-
-/**
- * 默认配置
- */
-const DEFAULT_MULTI_LEVEL_CONFIG: MultiLevelMemoryConfig = {
-  memoryDir: './data/memory-files',
-  entrypointName: 'MEMORY.md',
-  maxEntrypointLines: 200,
-  maxEntrypointBytes: 25000,
-  maxMemoryFiles: 200,
-  projectRoot: '.',
-  userMemoryDir: './data/user-memory',
-  currentDir: '.',
-};
 
 /**
  * 记忆级别
@@ -58,7 +45,7 @@ export class MultiLevelMemoryLoader {
   private syncInterval: number = 5 * 60 * 1000; // 5分钟同步一次
 
   constructor(config?: Partial<MultiLevelMemoryConfig>) {
-    this.config = { ...DEFAULT_MULTI_LEVEL_CONFIG, ...config };
+    this.config = { ...CENTRALIZED_DEFAULT, ...config };
   }
 
   /**

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Unit tests for BaseAgent and all 6 sub-agents.
  * Tests execute() methods with mock LLM responses and error handling for invalid inputs.
  */
@@ -22,14 +22,6 @@ function createMockContext(inputData: Record<string, any> = {}): AgentContext {
     executionId: 'test-exec-123',
     inputData,
     config: {},
-    memoryManager: {
-      store: vi.fn().mockResolvedValue({}),
-      retrieve: vi.fn().mockResolvedValue([]),
-      delete: vi.fn().mockResolvedValue(true),
-      update: vi.fn().mockResolvedValue({}),
-      consolidate: vi.fn().mockResolvedValue(0),
-      decay: vi.fn().mockResolvedValue(0),
-    },
     llmAdapter: {
       chat: vi.fn().mockResolvedValue({
         content: 'Mock LLM response',
@@ -126,7 +118,6 @@ describe('RequirementAnalysisAgent', () => {
     expect(result.artifacts.length).toBe(1);
     expect(result.artifacts[0]).toContain('requirements.md');
     expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
-    expect(ctx.memoryManager.store).toHaveBeenCalledTimes(1);
   });
 
   it('fails with empty text input', async () => {
@@ -163,7 +154,6 @@ describe('DesignAgent', () => {
     expect(result.artifacts.length).toBe(1);
     expect(result.artifacts[0]).toContain('design.md');
     expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
-    expect(ctx.memoryManager.store).toHaveBeenCalledTimes(1);
   });
 
   it('fails with empty requirements input', async () => {
@@ -190,7 +180,6 @@ describe('TaskGenerationAgent', () => {
     expect(result.artifacts.length).toBe(1);
     expect(result.artifacts[0]).toContain('tasks.md');
     expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
-    expect(ctx.memoryManager.store).toHaveBeenCalledTimes(1);
   });
 
   it('fails with empty design input', async () => {
@@ -216,7 +205,6 @@ describe('CodeWritingAgent', () => {
     expect(result.outputData.code).toBe('Mock LLM response');
     expect(result.artifacts.length).toBeGreaterThan(0);
     expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
-    expect(ctx.memoryManager.store).toHaveBeenCalledTimes(1);
   });
 
   it('fails with empty tasks input', async () => {
@@ -246,7 +234,6 @@ describe('TestingAgent', () => {
     expect(result.outputData.testReport).toBeDefined();
     expect(result.artifacts.length).toBe(2); // test-cases.md and test-report.md
     expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
-    expect(ctx.memoryManager.store).toHaveBeenCalledTimes(1);
   });
 
   it('fails with empty requirements input', async () => {
@@ -276,7 +263,6 @@ describe('RequirementVerificationAgent', () => {
     expect(result.artifacts.length).toBe(1);
     expect(result.artifacts[0]).toContain('verification-report.md');
     expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
-    expect(ctx.memoryManager.store).toHaveBeenCalledTimes(1);
   });
 
   it('fails with empty requirements input', async () => {

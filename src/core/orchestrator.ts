@@ -18,15 +18,12 @@ import type {
 import { PipelineStateManager } from './pipeline-state.js';
 import { ReportGenerator } from './report-generator.js';
 import { FileParser } from '../parser/file-parser.js';
-import { MemoryManager } from '../memory/memory-manager.js';
-import type { MemoryManagerConfig } from '../memory/memory-manager.js';
 
 /**
  * 编排器的配置。
  */
 export interface OrchestratorConfig {
   outputDir: string;
-  memoryConfig?: MemoryManagerConfig;
   /** 阶段失败时的最大重试次数 */
   stageMaxRetries?: number;
   /** 阶段重试基础延迟（毫秒） */
@@ -43,15 +40,11 @@ export interface PipelineConfig {
 /**
  * Orchestrator 协调多智能体流水线的执行。
  * - 动态注册/注销智能体
- * - 为每个智能体创建独立的 MemoryManager 实例
- * - 维护所有智能体可访问的共享记忆空间
  * - 按固定顺序执行流水线阶段，将输出链接为输入
  * - 发射事件用于 SSE 集成（stage_change、pipeline_complete）
  */
 export class Orchestrator {
   private agents: Map<string, Agent> = new Map();
-  private memoryManagers: Map<string, MemoryManager> = new Map();
-  private sharedMemory: MemoryManager;
   private fileParser: FileParser;
   private llmAdapter: LLMAdapter;
   private reportGenerator: ReportGenerator;
@@ -69,26 +62,23 @@ export class Orchestrator {
     this.config = config;
     this.reportGenerator = new ReportGenerator();
     this.eventEmitter = new EventEmitter();
-    this.sharedMemory = new MemoryManager(config.memoryConfig);
   }
 
   /**
-   * 注册一个智能体并为其创建独立的 MemoryManager。
+   * 注册一个智能体。
    * @param agent - 要注册的智能体
    */
   registerAgent(agent: Agent): void {
     const name = agent.getName();
     this.agents.set(name, agent);
-    this.memoryManagers.set(name, new MemoryManager(this.config.memoryConfig));
   }
 
   /**
-   * 注销一个智能体并移除其 MemoryManager。
+   * 注销一个智能体。
    * @param name - 要注销的智能体名称
    */
   unregisterAgent(name: string): void {
     this.agents.delete(name);
-    this.memoryManagers.delete(name);
   }
 
   /**
@@ -236,14 +226,12 @@ export class Orchestrator {
       stateManager.startStage(stageDef.name);
       this.emitStageChange(this.findStage(stateManager.getState(), stageDef.name)!);
 
-      const agentMemory = this.memoryManagers.get(stageDef.agent.getName());
       const inputData = stageDef.inputMapper(stateManager.getState());
 
       const context: AgentContext = {
         executionId: state.executionId,
         inputData,
         config: pipelineConfig ?? {},
-        memoryManager: agentMemory ?? this.sharedMemory,
         llmAdapter: this.llmAdapter,
         outputDir: this.config.outputDir,
       };
@@ -300,18 +288,6 @@ export class Orchestrator {
       if (result.success) {
         stateManager.completeStage(stageDef.name, result);
         this.emitStageChange(this.findStage(stateManager.getState(), stageDef.name)!);
-
-        if (agentMemory) {
-          try {
-            await agentMemory.store(
-              result.summary,
-              'episodic' as any,
-              { executionId: state.executionId, stage: stageDef.name },
-            );
-          } catch {
-            // 非关键操作，不影响 Pipeline
-          }
-        }
 
         const stageStatus = this.findStage(stateManager.getState(), stageDef.name)!;
         const reportContent = this.reportGenerator.generateStageReport(
@@ -412,14 +388,12 @@ export class Orchestrator {
       this.emitStageChange(this.findStage(stateManager.getState(), stageDef.name)!);
 
       // 构建智能体上下文
-      const agentMemory = this.memoryManagers.get(stageDef.agent.getName());
       const inputData = stageDef.inputMapper(stateManager.getState());
 
       const context: AgentContext = {
         executionId: state.executionId,
         inputData,
         config: pipelineConfig ?? {},
-        memoryManager: agentMemory ?? this.sharedMemory,
         llmAdapter: this.llmAdapter,
         outputDir: this.config.outputDir,
       };
@@ -474,19 +448,6 @@ export class Orchestrator {
         // 完成阶段
         stateManager.completeStage(stageDef.name, result);
         this.emitStageChange(this.findStage(stateManager.getState(), stageDef.name)!);
-
-        // 将关键输出存储到智能体的情景记忆中
-        if (agentMemory) {
-          try {
-            await agentMemory.store(
-              result.summary,
-              'episodic' as any,
-              { executionId: state.executionId, stage: stageDef.name },
-            );
-          } catch {
-            // 非关键操作：记忆存储失败不影响流水线
-          }
-        }
 
         // 生成并保存阶段报告
         const stageStatus = this.findStage(stateManager.getState(), stageDef.name)!;
@@ -548,35 +509,6 @@ export class Orchestrator {
   }
 
   /**
-   * 从目标智能体的 MemoryManager 中检索记忆。
-   * 在检索前验证目标智能体是否存在。
-   *
-   * @param requestingAgent - 发起请求的智能体名称
-   * @param targetAgent - 要访问其记忆的智能体名称
-   * @param query - 搜索查询
-   * @returns 匹配的记忆数组
-   * @throws 如果目标智能体不存在则抛出错误
-   */
-  async crossAgentMemoryRetrieve(
-    _requestingAgent: string,
-    targetAgent: string,
-    query: string,
-  ): Promise<any[]> {
-    const targetMemory = this.memoryManagers.get(targetAgent);
-    if (!targetMemory) {
-      throw new Error(`Target agent "${targetAgent}" does not exist`);
-    }
-    return targetMemory.retrieve(query);
-  }
-
-  /**
-   * 返回所有智能体可访问的共享记忆空间。
-   */
-  getSharedMemory(): MemoryManager {
-    return this.sharedMemory;
-  }
-
-  /**
    * 返回 LLM 适配器，用于直接聊天。
    */
   getLLMAdapter(): LLMAdapter {
@@ -595,13 +527,6 @@ export class Orchestrator {
    */
   getAgents(): Map<string, Agent> {
     return this.agents;
-  }
-
-  /**
-   * 返回记忆管理器映射。
-   */
-  getMemoryManagers(): Map<string, MemoryManager> {
-    return this.memoryManagers;
   }
 
   // --- 私有辅助方法 ---

@@ -13,14 +13,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { FileMemoryConfig, EntrypointTruncation } from './types.js';
-
-const DEFAULT_CONFIG: FileMemoryConfig = {
-  memoryDir: './data/memory-files',
-  entrypointName: 'MEMORY.md',
-  maxEntrypointLines: 200,
-  maxEntrypointBytes: 25000,
-  maxMemoryFiles: 200,
-};
+import { DEFAULT_FILE_MEMORY_CONFIG } from './memory-config.js';
 
 /**
  * 截断 MEMORY.md 索引内容。
@@ -28,7 +21,7 @@ const DEFAULT_CONFIG: FileMemoryConfig = {
  */
 export function truncateEntrypointContent(
   raw: string,
-  config: FileMemoryConfig = DEFAULT_CONFIG,
+  config: FileMemoryConfig = DEFAULT_FILE_MEMORY_CONFIG,
 ): EntrypointTruncation {
   const trimmed = raw.trim();
   const contentLines = trimmed.split('\n');
@@ -107,7 +100,7 @@ export function buildMemoryInstructions(memoryDir: string): string {
 <type>
     <name>project</name>
     <description>关于进行中的工作、目标、计划、bug 或事件的信息，这些无法从代码或 git 历史中推导出来。</description>
-    <when_to_save>当你了解到谁在做什么、为什么、截止日期是什么时。始终将相对日期转换为绝对日期（如"周四"→"2026-03-05"）</when_to_save>
+    <when_to_save>当你了解到谁在做什么、为什么、截止日期是什么时。始终将相对日期转换为绝对日期（如"周四"转为"2026-03-05"）</when_to_save>
     <how_to_use>用这些记忆更全面地理解用户请求背后的细节和细微差别</how_to_use>
 </type>
 <type>
@@ -177,7 +170,24 @@ type: {{user, feedback, project, reference}}
 记忆中提到的具体函数、文件或标志是"写入记忆时存在"的声明，可能已被重命名、删除或从未合并。引用前：
 - 如果记忆提到文件路径：检查文件是否存在
 - 如果记忆提到函数或标志：grep 搜索一下
+- 如果用户即将根据你的建议采取行动（不只是询问历史），先验证
 - "记忆说 X 存在"不等于"X 现在存在"
+
+总结仓库状态的记忆（活动日志、架构快照）是时间冻结的。如果用户询问"最近"或"当前"状态，优先使用 \`git log\` 或读取代码，而非回忆快照。
+
+## 记忆漂移警告
+
+记忆记录会随时间变得过时。将记忆作为"某个时间点的事实"的上下文。在基于记忆中的信息回答用户或构建假设之前，通过读取文件或资源的当前状态来验证记忆是否仍然正确。如果召回的记忆与当前信息冲突，信任你现在观察到的——并更新或删除过时的记忆，而不是基于它行动。
+
+## 主代理直接写入记忆
+
+你可以在对话过程中直接写入记忆文件，无需等待后台提取。当以下情况发生时，立即保存：
+- 用户明确要求你记住某件事
+- 用户纠正了你的方法（feedback 类型）
+- 你了解到重要的用户画像信息（user 类型）
+- 你了解到项目上下文或截止日期（project 类型）
+
+后台提取系统会自动检测你已写入的记忆，跳过重复提取。两者互斥，不会产生冲突。
 `;
 }
 
@@ -187,7 +197,7 @@ type: {{user, feedback, project, reference}}
 export async function loadMemoryPrompt(
   config: Partial<FileMemoryConfig> = {},
 ): Promise<string | null> {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
+  const cfg = { ...DEFAULT_FILE_MEMORY_CONFIG, ...config };
 
   await ensureMemoryDirExists(cfg.memoryDir);
 

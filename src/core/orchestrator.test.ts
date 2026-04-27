@@ -83,14 +83,10 @@ function createTempDir(): string {
 
 function createOrchestrator(opts?: { fileParserSuccess?: boolean }): Orchestrator {
   const outputDir = createTempDir();
-  const memoryDir = createTempDir();
   const fileParser = createMockFileParser(opts?.fileParserSuccess ?? true);
   const llmAdapter = createMockLLMAdapter();
   const config: OrchestratorConfig = {
     outputDir,
-    memoryConfig: {
-      longTerm: { dbPath: memoryDir },
-    },
   };
   return new Orchestrator(fileParser, llmAdapter, config);
 }
@@ -123,17 +119,16 @@ afterEach(async () => {
 // --- Tests ---
 
 describe('Orchestrator - Agent Registration', () => {
-  it('registerAgent adds agent and creates MemoryManager', () => {
+  it('registerAgent adds agent', () => {
     const orchestrator = createOrchestrator();
     const agent = new MockAgent('TestAgent');
 
     orchestrator.registerAgent(agent);
 
     expect(orchestrator.getAgents().has('TestAgent')).toBe(true);
-    expect(orchestrator.getMemoryManagers().has('TestAgent')).toBe(true);
   });
 
-  it('unregisterAgent removes agent and MemoryManager', () => {
+  it('unregisterAgent removes agent', () => {
     const orchestrator = createOrchestrator();
     const agent = new MockAgent('TestAgent');
 
@@ -142,7 +137,6 @@ describe('Orchestrator - Agent Registration', () => {
 
     orchestrator.unregisterAgent('TestAgent');
     expect(orchestrator.getAgents().has('TestAgent')).toBe(false);
-    expect(orchestrator.getMemoryManagers().has('TestAgent')).toBe(false);
   });
 });
 
@@ -282,31 +276,6 @@ describe('Orchestrator - Pipeline Execution', () => {
     // Verify pipeline summary exists
     const summaryFile = files.find(f => f.includes('pipeline_summary'));
     expect(summaryFile).toBeDefined();
-  });
-});
-
-describe('Orchestrator - Cross-Agent Memory', () => {
-  it('crossAgentMemoryRetrieve returns memories from target agent', async () => {
-    const orchestrator = createOrchestrator();
-    const agent = new MockAgent('TargetAgent');
-    orchestrator.registerAgent(agent);
-
-    // Store something in the target agent's memory
-    const targetMemory = orchestrator.getMemoryManagers().get('TargetAgent');
-    expect(targetMemory).toBeDefined();
-    await targetMemory!.store('important fact', 'short_term', { sourceAgent: 'TargetAgent' });
-
-    // Cross-agent retrieval should work
-    const results = await orchestrator.crossAgentMemoryRetrieve('RequestingAgent', 'TargetAgent', 'important');
-    expect(Array.isArray(results)).toBe(true);
-  });
-
-  it('crossAgentMemoryRetrieve throws error for non-existent target agent', async () => {
-    const orchestrator = createOrchestrator();
-
-    await expect(
-      orchestrator.crossAgentMemoryRetrieve('RequestingAgent', 'NonExistentAgent', 'query')
-    ).rejects.toThrow('Target agent "NonExistentAgent" does not exist');
   });
 });
 

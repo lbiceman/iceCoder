@@ -6,7 +6,6 @@
 
 import { BaseAgent } from '../core/base-agent.js';
 import { AgentContext, AgentResult } from '../core/types.js';
-import { MemoryType } from '../memory/types.js';
 
 export class DesignAgent extends BaseAgent {
   constructor() {
@@ -49,13 +48,6 @@ ${requirements}
 
     // Save the design document to the output directory
     const savedPath = await this.saveDocument(result, 'design.md', context.outputDir);
-
-    // Store the result in episodic memory for future reference
-    await this.storeMemory(
-      `Generated design document from requirements. Output saved to ${savedPath}`,
-      MemoryType.EPISODIC,
-      context,
-    );
 
     return {
       success: true,

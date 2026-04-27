@@ -13,12 +13,15 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { MemoryHeader, FileMemoryConfig } from './types.js';
-import type { ConversationMessage } from './memory-extractor.js';
 import { MultiLevelMemoryLoader, type MultiLevelMemoryConfig, MemoryLevel } from './multi-level-memory.js';
 import { AsyncMemoryPrefetcher, type PrefetchConfig } from './async-prefetch.js';
-import { MemoryExtractor, type ExtractionConfig, type CandidateMemory } from './memory-extractor.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { loadMemoryPrompt } from './memory-prompt.js';
+import {
+  DEFAULT_FILE_MEMORY_CONFIG,
+  DEFAULT_MULTI_LEVEL_CONFIG,
+  DEFAULT_PREFETCH_CONFIG,
+} from './memory-config.js';
 
 /**
  * 文件记忆管理器配置
@@ -30,46 +33,21 @@ export interface FileMemoryManagerConfig {
   multiLevel: Partial<MultiLevelMemoryConfig>;
   /** 异步预取配置 */
   prefetch: Partial<PrefetchConfig>;
-  /** 自动提取配置 */
-  extraction: Partial<ExtractionConfig>;
-  /** 是否启用自动提取 */
-  enableAutoExtraction: boolean;
   /** 是否启用异步预取 */
   enableAsyncPrefetch: boolean;
+  /** 是否启用自动提取（由 LLMMemoryExtractor 在 Harness 层处理） */
+  enableAutoExtraction: boolean;
 }
 
 /**
  * 默认配置
  */
 const DEFAULT_CONFIG: FileMemoryManagerConfig = {
-  memory: {
-    memoryDir: './data/memory-files',
-    entrypointName: 'MEMORY.md',
-    maxEntrypointLines: 200,
-    maxEntrypointBytes: 25000,
-    maxMemoryFiles: 200,
-  },
-  multiLevel: {
-    projectRoot: '.',
-    userMemoryDir: './data/user-memory',
-    currentDir: '.',
-  },
-  prefetch: {
-    timeout: 5000,
-    maxPrefetch: 20,
-    enableRelevance: true,
-    relevanceThreshold: 0.3,
-  },
-  extraction: {
-    enableUserExtraction: true,
-    enableFeedbackExtraction: true,
-    enableProjectExtraction: true,
-    enableReferenceExtraction: true,
-    minContentLength: 20,
-    confidenceThreshold: 0.7,
-  },
-  enableAutoExtraction: true,
+  memory: DEFAULT_FILE_MEMORY_CONFIG,
+  multiLevel: DEFAULT_MULTI_LEVEL_CONFIG,
+  prefetch: DEFAULT_PREFETCH_CONFIG,
   enableAsyncPrefetch: true,
+  enableAutoExtraction: true,
 };
 
 /**
@@ -79,7 +57,6 @@ export class FileMemoryManager {
   private config: FileMemoryManagerConfig;
   private memoryLoader: MultiLevelMemoryLoader;
   private prefetcher: AsyncMemoryPrefetcher | null = null;
-  private extractor: MemoryExtractor | null = null;
   private isInitialized = false;
 
   constructor(config?: Partial<FileMemoryManagerConfig>) {
@@ -97,11 +74,6 @@ export class FileMemoryManager {
         this.memoryLoader,
         this.config.prefetch
       );
-    }
-
-    // 初始化记忆提取器（如果启用）
-    if (this.config.enableAutoExtraction) {
-      this.extractor = new MemoryExtractor(this.config.extraction);
     }
   }
 
@@ -178,44 +150,6 @@ export class FileMemoryManager {
   }
 
   /**
-   * 从对话中提取记忆
-   */
-  async extractMemoriesFromConversation(
-    messages: ConversationMessage[]
-  ): Promise<{ candidates: CandidateMemory[]; saved: number }> {
-    if (!this.extractor) {
-      return { candidates: [], saved: 0 };
-    }
-
-    try {
-      // 提取候选记忆
-      const candidates = this.extractor.extractFromConversation(messages);
-      
-      if (candidates.length === 0) {
-        return { candidates: [], saved: 0 };
-      }
-
-      // 保存记忆到文件
-      const memoryDir = this.config.memory.memoryDir || DEFAULT_CONFIG.memory.memoryDir!;
-      const { saved } = await this.extractor.saveMemories(candidates, memoryDir);
-
-      // 更新索引
-      await this.extractor.updateMemoryIndex(memoryDir, this.config.memory.entrypointName);
-
-      // 清除缓存以反映新记忆
-      this.memoryLoader.clearCache();
-      if (this.prefetcher) {
-        this.prefetcher.clearPrefetchCache();
-      }
-
-      return { candidates, saved };
-    } catch (error) {
-      console.error('[FileMemoryManager] Memory extraction failed:', error);
-      return { candidates: [], saved: 0 };
-    }
-  }
-
-  /**
    * 手动保存记忆
    */
   async saveMemory(
@@ -245,11 +179,6 @@ ${content}
 *手动保存*`;
 
       await fs.writeFile(filePath, memoryContent, 'utf-8');
-
-      // 更新索引
-      if (this.extractor) {
-        await this.extractor.updateMemoryIndex(memoryDir, this.config.memory.entrypointName);
-      }
 
       // 清除缓存
       this.memoryLoader.clearCache();
@@ -405,10 +334,6 @@ ${content}
 
     if (config.prefetch && this.prefetcher) {
       this.prefetcher.updateConfig(this.config.prefetch);
-    }
-
-    if (config.extraction && this.extractor) {
-      this.extractor.updateConfig(this.config.extraction);
     }
   }
 }

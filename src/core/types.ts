@@ -11,15 +11,6 @@ export interface AgentConfig {
 }
 
 /**
- * MemoryManager 的前向引用接口，用于避免循环依赖。
- * 完整实现位于 src/memory/memory-manager.ts。
- */
-export interface MemoryManager {
-  store(content: string, type: string, metadata?: Record<string, any>): Promise<any>;
-  retrieve(query: string, type?: string, limit?: number): Promise<any[]>;
-}
-
-/**
  * LLMAdapter 的前向引用接口，用于避免循环依赖。
  * 完整实现位于 src/llm/llm-adapter.ts。
  */
@@ -34,7 +25,6 @@ export interface AgentContext {
   executionId: string;
   inputData: Record<string, any>;
   config: AgentConfig;
-  memoryManager: MemoryManager;
   llmAdapter: LLMAdapter;
   outputDir: string;
 }

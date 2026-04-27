@@ -7,7 +7,6 @@
 
 import { BaseAgent } from '../core/base-agent.js';
 import { AgentContext, AgentResult } from '../core/types.js';
-import { MemoryType } from '../memory/types.js';
 
 export class TaskGenerationAgent extends BaseAgent {
   constructor() {
@@ -55,13 +54,6 @@ ${design}
 
     // Save the task document to the output directory
     const savedPath = await this.saveDocument(result, 'tasks.md', context.outputDir);
-
-    // Store the result in episodic memory for future reference
-    await this.storeMemory(
-      `Generated task breakdown document from design. Output saved to ${savedPath}`,
-      MemoryType.EPISODIC,
-      context,
-    );
 
     return {
       success: true,

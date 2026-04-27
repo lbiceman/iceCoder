@@ -5,11 +5,11 @@ describe('OfficeParserStrategy', () => {
   const strategy = new OfficeParserStrategy();
 
   describe('supportedExtensions', () => {
-    it('should support doc, docx, ppt, and pptx extensions', () => {
-      expect(strategy.supportedExtensions).toContain('doc');
+    it('should support docx, pptx, xlsx and other modern Office formats', () => {
       expect(strategy.supportedExtensions).toContain('docx');
-      expect(strategy.supportedExtensions).toContain('ppt');
       expect(strategy.supportedExtensions).toContain('pptx');
+      expect(strategy.supportedExtensions).toContain('xlsx');
+      expect(strategy.supportedExtensions).toContain('pdf');
     });
   });
 
@@ -20,7 +20,7 @@ describe('OfficeParserStrategy', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(result.error).toContain('Failed to parse Office file');
+      expect(result.error).toContain('Office 文件解析失败');
       expect(result.metadata.filename).toBe('corrupted.docx');
       expect(result.metadata.format).toBe('docx');
     });
@@ -31,31 +31,31 @@ describe('OfficeParserStrategy', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(result.error).toContain('Failed to parse Office file');
+      expect(result.error).toContain('Office 文件解析失败');
       expect(result.metadata.filename).toBe('corrupted.pptx');
       expect(result.metadata.format).toBe('pptx');
     });
 
-    it('should return error for invalid/corrupted buffer (doc)', async () => {
-      const invalidBuffer = Buffer.from('not a doc file content');
-      const result = await strategy.parse(invalidBuffer, 'corrupted.doc');
+    it('should return error for invalid/corrupted buffer (xlsx)', async () => {
+      const invalidBuffer = Buffer.from('not a xlsx file content');
+      const result = await strategy.parse(invalidBuffer, 'corrupted.xlsx');
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(result.error).toContain('Failed to parse Office file');
-      expect(result.metadata.filename).toBe('corrupted.doc');
-      expect(result.metadata.format).toBe('doc');
+      expect(result.error).toContain('Office 文件解析失败');
+      expect(result.metadata.filename).toBe('corrupted.xlsx');
+      expect(result.metadata.format).toBe('xlsx');
     });
 
-    it('should return error for invalid/corrupted buffer (ppt)', async () => {
-      const invalidBuffer = Buffer.from('not a ppt file content');
-      const result = await strategy.parse(invalidBuffer, 'corrupted.ppt');
+    it('should return error for invalid/corrupted buffer (pdf)', async () => {
+      const invalidBuffer = Buffer.from('not a pdf file content');
+      const result = await strategy.parse(invalidBuffer, 'corrupted.pdf');
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(result.error).toContain('Failed to parse Office file');
-      expect(result.metadata.filename).toBe('corrupted.ppt');
-      expect(result.metadata.format).toBe('ppt');
+      expect(result.error).toContain('Office 文件解析失败');
+      expect(result.metadata.filename).toBe('corrupted.pdf');
+      expect(result.metadata.format).toBe('pdf');
     });
 
     it('should include empty content on error', async () => {
