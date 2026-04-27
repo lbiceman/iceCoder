@@ -41,29 +41,29 @@ export class RequirementVerificationAgent extends BaseAgent {
     }
 
     // 构建提示让 LLM 验证需求
-    const prompt = `You are a professional requirements verification specialist. Based on the original requirements document and the test results report, verify each requirement and determine its satisfaction status.
+    const prompt = `你是一名专业的需求验证专家。根据原始需求文档和测试结果报告，验证每个需求的满足状态。
 
-For EACH requirement, provide:
-1. **Requirement ID/Name**: The requirement identifier
-2. **Status**: One of:
-   - ✅ **Satisfied** - Requirement is fully met based on test results
-   - ⚠️ **Partially Satisfied** - Requirement is partially met with gaps
-   - ❌ **Unsatisfied** - Requirement is not met
-3. **Evidence**: Reference to test cases that verify this requirement
-4. **Gap Description** (for Partially Satisfied or Unsatisfied): Detailed explanation of what is missing or incomplete
+对每个需求，提供：
+1. **需求编号/名称**：需求标识符
+2. **状态**：以下之一：
+   - ✅ **已满足** — 根据测试结果，需求已完全满足
+   - ⚠️ **部分满足** — 需求部分满足，存在差距
+   - ❌ **未满足** — 需求未满足
+3. **证据**：验证该需求的测试用例引用
+4. **差距描述**（部分满足或未满足时）：详细说明缺失或不完整的内容
 
-Output format:
-- Generate a Markdown verification report
-- Include a summary table at the top with counts of satisfied, partially satisfied, and unsatisfied requirements
-- Follow with detailed per-requirement analysis
+输出格式：
+- 生成 Markdown 验证报告
+- 顶部包含摘要表格，统计已满足、部分满足和未满足的需求数量
+- 后面是逐条需求的详细分析
 
---- Original Requirements Document ---
+--- 原始需求文档 ---
 ${requirements}
---- End of Requirements Document ---
+--- 需求文档结束 ---
 
---- Test Results Report ---
+--- 测试结果报告 ---
 ${testResults}
---- End of Test Results Report ---`;
+--- 测试结果报告结束 ---`;
 
     // 调用 LLM 验证需求
     const result = await this.callLLM(prompt, context);

@@ -28,21 +28,21 @@ export class RequirementAnalysisAgent extends BaseAgent {
     }
 
     // 构建提示让 LLM 分析文本并生成结构化需求
-    const prompt = `You are a professional requirements analyst. Analyze the following text content and generate a structured requirements document in Markdown format.
+    const prompt = `你是一名专业的需求分析师。分析以下文本内容，生成结构化的需求文档（Markdown 格式）。
 
-The document MUST include the following sections:
-1. **Functional Requirements** - A numbered list of functional requirements extracted from the text
-2. **Non-Functional Requirements** - A numbered list of non-functional requirements (performance, security, scalability, etc.)
-3. **Constraints** - A list of technical, business, or resource constraints identified in the text
-4. **Priority Annotations** - For each requirement, annotate its priority level (High/Medium/Low) based on the context
+文档必须包含以下章节：
+1. **功能需求** — 从文本中提取的功能需求编号列表
+2. **非功能需求** — 非功能需求编号列表（性能、安全、可扩展性等）
+3. **约束条件** — 文本中识别出的技术、业务或资源约束
+4. **优先级标注** — 根据上下文为每个需求标注优先级（高/中/低）
 
-If the text does not contain any identifiable requirements, respond with exactly: "NO_REQUIREMENTS_FOUND"
+如果文本中没有可识别的需求，请回复："NO_REQUIREMENTS_FOUND"
 
-Format the output as a clean Markdown document with proper headings and lists.
+输出格式为规范的 Markdown 文档，使用正确的标题和列表。
 
---- Input Text ---
+--- 输入文本 ---
 ${text}
---- End of Input Text ---`;
+--- 输入文本结束 ---`;
 
     // 调用 LLM 分析文本
     const result = await this.callLLM(prompt, context);

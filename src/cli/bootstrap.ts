@@ -18,6 +18,7 @@ import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
 import { XMindParserStrategy } from '../parser/xmind-strategy.js';
+import { getModelMaxOutputTokens } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager } from '../mcp/index.js';
@@ -62,6 +63,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   const llmAdapter = new LLMAdapter();
 
   for (const provider of providers) {
+    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
       llmAdapter.registerProvider(new OpenAIAdapter({
         name: provider.id,
@@ -69,7 +71,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         baseURL: provider.apiUrl,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       }));
     } else if (provider.providerName === 'anthropic') {
@@ -77,7 +79,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         apiKey: provider.apiKey,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       }));
     }
@@ -101,6 +103,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
   const providers = await loadConfig(configPath);
 
   for (const provider of providers) {
+    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
       llmAdapter.registerProvider(new OpenAIAdapter({
         name: provider.id,
@@ -108,7 +111,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
         baseURL: provider.apiUrl,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       }));
     } else if (provider.providerName === 'anthropic') {
@@ -116,7 +119,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
         apiKey: provider.apiKey,
         model: provider.modelName,
         temperature: provider.parameters.temperature,
-        maxTokens: provider.parameters.maxTokens,
+        maxTokens,
         topP: provider.parameters.topP,
       }));
     }
