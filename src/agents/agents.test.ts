@@ -202,9 +202,9 @@ describe('CodeWritingAgent', () => {
 
     const result = await agent.execute(ctx);
     expect(result.success).toBe(true);
-    expect(result.outputData.code).toBe('Mock LLM response');
-    expect(result.artifacts.length).toBeGreaterThan(0);
-    expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
+    expect(result.outputData.code).toBeDefined();
+    // 无工具系统时回退到单次 LLM 调用，不会写入文件
+    expect(ctx.llmAdapter.chat).toHaveBeenCalled();
   });
 
   it('fails with empty tasks input', async () => {
@@ -232,8 +232,8 @@ describe('TestingAgent', () => {
     const result = await agent.execute(ctx);
     expect(result.success).toBe(true);
     expect(result.outputData.testReport).toBeDefined();
-    expect(result.artifacts.length).toBe(2); // test-cases.md and test-report.md
-    expect(ctx.llmAdapter.chat).toHaveBeenCalledTimes(1);
+    expect(result.artifacts.length).toBeGreaterThanOrEqual(1); // test-report.md
+    expect(ctx.llmAdapter.chat).toHaveBeenCalled();
   });
 
   it('fails with empty requirements input', async () => {

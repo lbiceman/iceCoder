@@ -28,6 +28,10 @@ export interface OrchestratorConfig {
   stageMaxRetries?: number;
   /** 阶段重试基础延迟（毫秒） */
   stageRetryDelay?: number;
+  /** 工具执行器（可选，传入后 Agent 可使用 Harness 工具循环） */
+  toolExecutor?: any;
+  /** 工具定义列表（可选，与 toolExecutor 配合使用） */
+  toolDefinitions?: any[];
 }
 
 /**
@@ -234,6 +238,8 @@ export class Orchestrator {
         config: pipelineConfig ?? {},
         llmAdapter: this.llmAdapter,
         outputDir: this.config.outputDir,
+        toolExecutor: this.config.toolExecutor,
+        toolDefinitions: this.config.toolDefinitions,
       };
 
       let result: AgentResult;
@@ -396,6 +402,8 @@ export class Orchestrator {
         config: pipelineConfig ?? {},
         llmAdapter: this.llmAdapter,
         outputDir: this.config.outputDir,
+        toolExecutor: this.config.toolExecutor,
+        toolDefinitions: this.config.toolDefinitions,
       };
 
       // 使用阶段级重试执行智能体

@@ -27,6 +27,10 @@ export interface AgentContext {
   config: AgentConfig;
   llmAdapter: LLMAdapter;
   outputDir: string;
+  /** 工具执行器（可选，启用后 Agent 可通过 Harness 使用工具） */
+  toolExecutor?: any;
+  /** 可用工具定义列表（可选，与 toolExecutor 配合使用） */
+  toolDefinitions?: any[];
 }
 
 /**

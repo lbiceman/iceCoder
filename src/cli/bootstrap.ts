@@ -166,13 +166,6 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   // 初始化文件解析器
   const fileParser = initializeFileParser();
 
-  // 初始化编排器
-  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-    outputDir: paths.outputDir,
-    stageMaxRetries: 2,
-    stageRetryDelay: 3000,
-  });
-
   // 初始化工具系统
   const { registry, executor } = initializeToolSystem({
     workDir: path.resolve('.'),
@@ -189,6 +182,15 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   } catch (err) {
     console.error('MCP 初始化失败（不影响核心功能）:', err);
   }
+
+  // 初始化编排器（传入工具系统，让 Agent 可以使用 Harness 工具循环）
+  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
+    outputDir: paths.outputDir,
+    stageMaxRetries: 2,
+    stageRetryDelay: 3000,
+    toolExecutor: executor,
+    toolDefinitions: registry.getDefinitions(),
+  });
 
   // 注册智能体
   orchestrator.registerAgent(new RequirementAnalysisAgent());

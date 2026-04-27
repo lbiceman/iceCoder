@@ -43,8 +43,12 @@ export class RequirementAnalysisAgent extends BaseAgent {
 ${text}
 --- 输入文本结束 ---`;
 
-    // 调用 LLM 分析文本
-    const result = await this.callLLM(prompt, context);
+    // 调用 LLM 分析文本（如果有工具系统，使用 Harness 循环以便读取项目文件获取上下文）
+    const harnessResult = await this.runWithHarness(prompt, context, {
+      systemPrompt: '你是 RequirementAnalysis 智能体，一名专业的需求分析师。你可以使用文件操作工具读取项目中的现有文档和代码，以便更好地理解上下文。分析完成后给出结构化的需求文档。',
+      maxRounds: 20,
+    });
+    const result = harnessResult.content;
 
     // 检查 LLM 是否判定无法找到需求
     if (result.trim() === 'NO_REQUIREMENTS_FOUND') {

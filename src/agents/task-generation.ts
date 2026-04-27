@@ -49,8 +49,12 @@ export class TaskGenerationAgent extends BaseAgent {
 ${design}
 --- 设计文档结束 ---`;
 
-    // 调用 LLM 生成任务文档
-    const result = await this.callLLM(prompt, context);
+    // 调用 LLM 生成任务文档（如果有工具系统，可读取项目结构辅助任务拆分）
+    const harnessResult = await this.runWithHarness(prompt, context, {
+      systemPrompt: '你是 TaskGeneration 智能体，一名专业的项目经理。你可以使用文件操作工具读取项目结构和现有代码，以便更准确地拆分任务。完成后给出结构化的任务文档。',
+      maxRounds: 20,
+    });
+    const result = harnessResult.content;
 
     // Save the task document to the output directory
     const savedPath = await this.saveDocument(result, 'tasks.md', context.outputDir);
