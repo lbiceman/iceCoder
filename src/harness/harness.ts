@@ -512,7 +512,11 @@ export class Harness {
     }
     } finally {
       // 统一记忆合并：无论哪条路径退出循环，都执行一次
-      await this.memoryIntegration.onLoopEnd(state.messages, state.turnCount);
+      await this.memoryIntegration.onLoopEnd(
+        state.messages,
+        state.turnCount,
+        this.loopController.getState().totalInputTokens,
+      );
       this.memoryIntegration.dispose();
     }
   }
@@ -763,10 +767,22 @@ export class Harness {
   ): Promise<void> {
     if (this.contextCompactor.needsCompaction(messages)) {
       const before = messages.length;
+
+      // 压缩前获取会话笔记（保持连续性）
+      const sessionNotes = await this.memoryIntegration.getSessionMemoryForCompact();
+
       const compacted = await this.contextCompactor.compact(messages, chatFn);
 
       messages.length = 0;
       messages.push(...compacted);
+
+      // 压缩后注入会话笔记（帮助模型恢复上下文）
+      if (sessionNotes) {
+        messages.push({
+          role: 'user',
+          content: `<session-notes>\n以下是本次会话的结构化笔记，帮助你恢复上下文：\n\n${sessionNotes}\n</session-notes>`,
+        });
+      }
 
       logger.compaction(before, messages.length);
       onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });

@@ -107,32 +107,57 @@ iceCoder tools / mcp / config / help
 
 | 模块 | 说明 |
 |------|------|
-| `memory-recall.ts` | LLM 语义召回（回退关键词匹配），跨轮次去重 |
-| `memory-llm-extractor.ts` | LLM 自动提取（fork 完整上下文），与主代理直接写入互斥 |
-| `memory-dream.ts` | autoDream 定期整合（合并/修剪/去重），ConsolidationLock 文件锁 |
+| `memory-recall.ts` | LLM 语义召回（回退关键词匹配），跨轮次去重，置信度/召回频率加权排序 |
+| `memory-llm-extractor.ts` | LLM 自动提取（fork 完整上下文），结构化去重 + 用户习惯检测，与主代理直接写入互斥 |
+| `memory-dream.ts` | autoDream 定期整合（合并/修剪/去重/用户习惯分析/过期清理），ConsolidationLock 文件锁 |
+| `memory-age.ts` | 记忆衰减机制（fresh/stale/expired 三级），高置信度记忆衰减更慢 |
 | `session-memory.ts` | 会话笔记（10 section），上下文压缩后保持连续性 |
 | `memory-concurrency.ts` | sequential 串行 + inProgress 互斥 + trailing run |
 | `memory-secret-scanner.ts` | 25 条高置信度正则，写入前自动脱敏 API Key/Token |
 | `memory-security.ts` | 路径安全验证（null byte/URL 编码/symlink） |
 | `memory-telemetry.ts` | JSONL 日志 + EventEmitter，`~telemetry` 查看报告 |
 | `memory-remote-config.ts` | 运行时动态调参，无需重启 |
+| `multi-level-memory.ts` | 三级加载（项目级/用户级/目录级），user 类型记忆跨项目共享 |
 
-四种记忆类型：`user`（用户画像）、`feedback`（行为反馈）、`project`（项目上下文）、`reference`（外部引用）。
+四种记忆类型：`user`（用户画像/习惯/偏好）、`feedback`（行为反馈）、`project`（项目上下文）、`reference`（外部引用）。
 
-**数据流**：用户输入 → 异步预取记忆 → LLM 调用 + 工具执行 → LLM 召回注入上下文 → 循环结束 → 主代理互斥检测 → 后台提取 + 会话记忆更新 + autoDream + 遥测。
+**记忆元数据**：每条记忆携带 `confidence`（置信度 0-1）、`source`（来源）、`recallCount`（召回次数）、`lastRecalledAt`（上次召回时间）、`tags`（语义标签），用于结构化去重、衰减判断和召回排序。
+
+**多级存储**：user 类型记忆写入 `data/user-memory`（跨项目共享），其他类型写入 `data/memory-files`（项目级）。召回时合并两级记忆。
+
+**数据流**：用户输入 → 异步预取记忆 → LLM 调用 + 工具执行 → LLM 召回注入上下文（更新 recallCount） → 循环结束 → 主代理互斥检测 → 后台提取（结构化去重 + 用户习惯检测） + 会话记忆更新 + autoDream（过期清理 + 用户行为分析） + 遥测。
+
+**Prompt Caching**：system prompt 纯静态（跨轮次不变），动态内容合并到首条 user 消息；Anthropic 适配器在 system 和 tools 上标记 `cache_control`；已发送消息不做就地修改（工具结果裁剪在副本上执行）。
 
 #### 评分
 
+**架构视角评分**
+
 | 维度 | 分数 | 说明 |
 |------|:---:|------|
-| 功能完整性 | **9.5** | 召回 + 提取 + 互斥 + 会话记忆 + autoDream + 漂移警告 + 安全 + 遥测 + 远程配置 |
-| 工程质量 | **9** | 零外部 DB，全链路容错，LLM 回退关键词/正则，prompt cache，并发控制 |
-| 实际效果 | **9.5** | 语义召回 + 跨轮次去重 + 后台提取互斥 + 会话连续性 + autoDream 防劣化 |
-| 安全性 | **9** | 路径验证链 + 25 条秘密扫描规则自动脱敏 |
+| 功能完整性 | **10** | 召回 + 提取 + 互斥 + 会话记忆 + autoDream + 用户习惯检测 + 过期衰减 + 结构化去重 + 置信度追踪 + 多级加载 + 安全 + 遥测 + 远程配置 + Prompt Caching + 话题切换多轮注入 + 响应格式验证 + contentPreview 正文召回 + 中文 bigram 分词 |
+| 工程质量 | **9.5** | 零外部 DB，全链路容错，5 层 JSON 解析回退，prompt cache，并发控制（sequential + inProgress + trailing run），ConsolidationLock（PID + 死锁检测 + 回滚），10 个测试文件 360 用例 + 8 场景 57 项端到端模拟 |
+| 实际效果 | **9.5** | 语义召回 + 两阶段关键词回退（粗筛 description+preview → 精读二次排序）+ 中文 bigram 零依赖分词 + 跨轮次去重 + 话题切换重新召回 + 无关查询零误召回 + description 差时 contentPreview 兜底 |
+| 可扩展性 | **8** | 多级分离 + 过期清理支撑更大规模，maxMemoryFiles=200 硬上限，向量检索待接入 |
+| 安全性 | **9.5** | 路径验证链覆盖 7 种攻击向量 + 25 条高置信度秘密扫描规则自动脱敏 + 会话记忆写入前 10-section 格式验证 |
 
-**综合评分：9.3 / 10**
+**架构综合：9.3 / 10**
 
-> **相比 社区逆向的Claude Code**：模块集中单一目录更易维护、LLM 不可用时有正则回退、遥测是真实实现（非 stub）、远程配置不依赖 GrowthBook。
+**用户体验视角评分**（端到端模拟验证，8 场景 57 项检查全通过）
+
+| 维度 | 权重 | 分数 | 说明 |
+|------|:---:|:---:|------|
+| 记得住 | 25% | **8.5** | 自动提取用户偏好/纠正/习惯，信号词+内容特征双触发，结构化去重。短对话可能不触发提取，无用户确认机制 |
+| 想得起 | 25% | **9.0** | LLM 语义召回（manifest 含 contentPreview）+ 两阶段关键词回退（粗筛+精读）+ 中文 bigram 分词 + 话题切换重新召回 + description 差时 contentPreview 兜底。每轮最多 5 条的上限仍在 |
+| 不打扰 | 20% | **8.0** | 全后台运行，异步预取，50 文件扫描 12ms。无记忆面板，注入消息用户可见 |
+| 不出错 | 15% | **9.0** | 25 条秘密规则 + 7 种路径防护 + 会话记忆验证 + 并发锁。无备份机制 |
+| 能成长 | 15% | **7.5** | autoDream 整合 + 三级衰减 + 多级存储。200 文件上限，无向量检索，无导出/导入 |
+
+**用户体验综合：8.5 / 10**
+
+> **相比 社区逆向的Claude Code**：模块集中单一目录更易维护、LLM 不可用时有正则+bigram 回退（中英文均可）、遥测是真实实现（非 stub）、远程配置不依赖 GrowthBook、记忆衰减和置信度追踪是 Claude Code 没有的特性、话题切换多轮注入和 contentPreview 正文召回是 Claude Code 没有的能力。
+>
+> **用户体验改进方向**：① 记忆面板 UI（查看/删除/搜索）② 记忆确认机制（"我记住了 X，对吗？"）③ Dream 前自动备份 ④ 接入向量检索突破 200 文件上限
 
 ---
 

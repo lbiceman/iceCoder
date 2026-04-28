@@ -174,6 +174,7 @@ export class LLMMemoryExtractor {
 
   /**
    * 构建提取提示词。
+   * 包含现有记忆清单用于去重，以及结构化去重指令。
    */
   private buildExtractionPrompt(
     recentMessages: UnifiedMessage[],
@@ -190,11 +191,20 @@ export class LLMMemoryExtractor {
 
     return `${EXTRACTION_SYSTEM_PROMPT}
 
+## Deduplication rules
+- Check the existing memory list below CAREFULLY before creating new memories
+- If an existing memory covers the same topic, UPDATE it (use the same filename) instead of creating a new one
+- For user habits: if "user_preferred_languages.md" exists and user now also uses Go, update that file to add Go
+- Include "tags" field for semantic dedup: e.g., ["lang:typescript", "lang:python", "tool:vite"]
+- Include "confidence" field: 1.0 for user explicit statements ("I prefer X"), 0.5 for inferred patterns
+- Include "source" field: always "llm_extract"
+
 ## Recent conversation to analyze
 
 ${conversationText}${existingManifest}
 
-Extract memories worth saving from the conversation above. Return JSON array only.`;
+Extract memories worth saving from the conversation above. Return JSON array only.
+Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract")`;
   }
 
   /**
@@ -225,6 +235,8 @@ Extract memories worth saving from the conversation above. Return JSON array onl
 
   /**
    * 将提取的记忆保存到文件。
+   * 包含结构化去重：如果同名文件已存在，更新而非覆盖。
+   * 多级路由：user 类型记忆写入用户级目录（跨项目共享）。
    */
   private async saveMemories(
     memories: Array<{
@@ -233,12 +245,17 @@ Extract memories worth saving from the conversation above. Return JSON array onl
       name: string;
       description: string;
       content: string;
+      tags?: string[];
+      confidence?: number;
+      source?: string;
     }>,
     memoryDir: string,
   ): Promise<string[]> {
     const writtenPaths: string[] = [];
+    const userMemoryDir = path.resolve(process.env.ICE_USER_MEMORY_DIR ?? 'data/user-memory');
 
     await fs.mkdir(memoryDir, { recursive: true });
+    await fs.mkdir(userMemoryDir, { recursive: true });
 
     for (const memory of memories) {
       try {
@@ -248,9 +265,11 @@ Extract memories worth saving from the conversation above. Return JSON array onl
           .replace(/\.{2,}/g, '_');
 
         // 路径安全验证
+        // user 类型记忆写入用户级目录（跨项目共享），其他写入项目级目录
+        const targetDir = memory.type === 'user' ? userMemoryDir : memoryDir;
         let filePath: string;
         try {
-          filePath = validatePath(safeFilename, memoryDir);
+          filePath = validatePath(safeFilename, targetDir);
         } catch (e) {
           if (e instanceof PathTraversalError) {
             console.error(`[LLMMemoryExtractor] Path security violation: ${e.message}`);
@@ -259,16 +278,33 @@ Extract memories worth saving from the conversation above. Return JSON array onl
           throw e;
         }
 
+        // 结构化去重：检查文件是否已存在
+        let isUpdate = false;
+        try {
+          await fs.access(filePath);
+          isUpdate = true;
+        } catch { /* 文件不存在，正常创建 */ }
+
+        const tags = memory.tags && memory.tags.length > 0 ? memory.tags.join(', ') : '';
+        const confidence = memory.confidence ?? 0.5;
+        const source = memory.source ?? 'llm_extract';
+        const now = new Date().toISOString();
+
         const fileContent = `---
 name: ${memory.name}
 description: ${memory.description}
 type: ${memory.type}
+source: ${source}
+confidence: ${confidence}
+tags: ${tags}
+createdAt: ${now}
+recallCount: 0
 ---
 
 ${memory.content}
 
 ---
-*Extracted: ${new Date().toISOString()}*`;
+*${isUpdate ? 'Updated' : 'Extracted'}: ${now}*`;
 
         // 秘密扫描：检测并脱敏敏感信息
         const secrets = scanForSecrets(fileContent);
@@ -283,6 +319,10 @@ ${memory.content}
 
         await fs.writeFile(filePath, safeContent, 'utf-8');
         writtenPaths.push(filePath);
+
+        if (isUpdate) {
+          console.log(`[LLMMemoryExtractor] Updated existing memory: ${safeFilename}`);
+        }
       } catch (error) {
         console.error(`[LLMMemoryExtractor] Failed to save memory ${memory.filename}:`, error);
       }

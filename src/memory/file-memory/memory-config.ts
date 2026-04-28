@@ -38,7 +38,7 @@ export const DEFAULT_FILE_MEMORY_CONFIG: FileMemoryConfig = {
 export const DEFAULT_MULTI_LEVEL_CONFIG: MultiLevelMemoryConfig = {
   ...DEFAULT_FILE_MEMORY_CONFIG,
   projectRoot: '.',
-  userMemoryDir: DEFAULT_USER_MEMORY_DIR,
+  userMemoryDir: process.env.ICE_USER_MEMORY_DIR ?? './data/user-memory',
   currentDir: '.',
 };
 
@@ -62,8 +62,8 @@ export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
 // ─── Dream 整合配置 ───
 
 export const DEFAULT_DREAM_CONFIG: DreamConfig = {
-  sessionInterval: 5,
-  fileCountThreshold: 30,
+  sessionInterval: 3,
+  fileCountThreshold: 10,
   maxIndexLines: 200,
   maxIndexBytes: 25000,
   maxOutputTokens: 4096,
@@ -85,9 +85,6 @@ export const MEMORY_MAX_RELEVANT = 10;
 
 /** LLM 提取触发条件：最小对话轮次 */
 export const EXTRACTION_MIN_TURNS = 3;
-
-/** LLM 提取触发条件：用户消息最小长度 */
-export const EXTRACTION_MIN_USER_MSG_LENGTH = 50;
 
 /**
  * LLM 提取触发信号词。

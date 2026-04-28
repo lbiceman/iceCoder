@@ -1,5 +1,5 @@
 /**
- * Harness 记忆集成层（v2 — 全面优化版）。
+ * Harness 记忆集成层（v3 — 多轮注入 + 响应验证 + 统一召回）。
  *
  * 优化项：
  * 1. 主代理直接写入 + 后台提取互斥（hasMemoryWritesSince）
@@ -11,9 +11,12 @@
  * 7. 召回去重（alreadySurfaced 跨轮次去重）
  * 8. 主代理互斥（检测主代理写入记忆后跳过后台提取）
  * 9. 会话笔记连续性（SessionMemory 在压缩后保持连续性）
+ * 10. 话题切换检测 — 多轮记忆注入（v3 新增）
+ * 11. 会话记忆响应验证 — 写入前校验 10-section 格式（v3 新增）
  */
 
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
@@ -28,6 +31,29 @@ import {
   MEMORY_MAX_RELEVANT,
   EXTRACTION_SIGNAL_WORDS,
 } from '../memory/file-memory/memory-config.js';
+
+/**
+ * 内容启发式模式 — 检测用户消息中暗示偏好/习惯的关键词。
+ * 匹配到这些模式时，即使消息很短也触发提取。
+ * 覆盖：编程语言、框架、工具链、工作流偏好。
+ */
+const CONTENT_HEURISTIC_PATTERNS: RegExp[] = [
+  // 编程语言（"用 TS 写"、"python 脚本"、"java 项目"）
+  /\b(typescript|javascript|python|java|golang|rust|ruby|swift|kotlin|dart|php|c\+\+|c#)\b/i,
+  /\b(ts|js|py|go|rb)\b/,
+  // 框架/库（"react 组件"、"vue 页面"、"express 路由"）
+  /\b(react|vue|angular|svelte|next\.?js|nuxt|express|fastify|django|flask|spring|nest\.?js)\b/i,
+  // 工具链（"用 vite"、"webpack 配置"、"docker 部署"）
+  /\b(vite|webpack|rollup|esbuild|docker|kubernetes|nginx|pm2|jest|vitest|mocha|pytest)\b/i,
+  // 数据库（"mysql 查询"、"redis 缓存"）
+  /\b(mysql|postgres|mongodb|redis|sqlite|elasticsearch)\b/i,
+  // 工作流偏好（"我喜欢"、"我习惯"、"我一般"、"我通常"）
+  /我(喜欢|习惯|一般|通常|倾向|偏好)/,
+  // 角色/身份（"我是前端"、"我做后端"、"我负责"）
+  /我(是|做|负责|在做|主要)/,
+  // 英文偏好表达
+  /\b(i prefer|i usually|i always|i like to|my workflow)\b/i,
+];
 // 新增：并发控制、远程配置、闭包隔离、会话记忆
 import {
   sequential,
@@ -47,6 +73,7 @@ import {
   getSessionMemoryContent,
   truncateSessionMemoryForCompact,
   isSessionMemoryEmpty,
+  validateSessionMemoryContent,
   type SessionMemoryState,
 } from '../memory/file-memory/session-memory.js';
 
@@ -113,12 +140,81 @@ function hasToolCallsInLastAssistantTurn(messages: UnifiedMessage[]): boolean {
   return false;
 }
 
+// ─── 话题切换检测 ───
+
 /**
- * Harness 记忆集成（v2）。
+ * 检测两条用户消息之间是否发生了话题切换。
+ *
+ * 使用 token 重叠度（Jaccard 系数）判断：
+ * - 重叠度 < 0.15 → 话题切换（几乎没有共同词汇）
+ * - 重叠度 >= 0.15 → 同一话题
+ *
+ * 支持中英文混合：英文按空格分词，中文用 bigram 滑动窗口。
+ * 不需要额外 LLM 调用，纯本地计算。
+ */
+function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
+  if (!previousMessage || !currentMessage) return false;
+
+  const tokenize = (text: string): Set<string> => {
+    const tokens = new Set<string>();
+    const lower = text.toLowerCase();
+    // 英文词
+    for (const w of lower.split(/[^a-z0-9]+/).filter(w => w.length > 2)) {
+      tokens.add(w);
+    }
+    // 中文 bigram
+    const cjk = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g);
+    if (cjk) {
+      for (const seg of cjk) {
+        for (let i = 0; i < seg.length - 1; i++) {
+          tokens.add(seg.slice(i, i + 2));
+        }
+      }
+    }
+    return tokens;
+  };
+
+  const prevTokens = tokenize(previousMessage);
+  const currTokens = tokenize(currentMessage);
+
+  // 任一消息 token 太少（< 3），不做判断
+  if (prevTokens.size < 3 || currTokens.size < 3) return false;
+
+  // Jaccard 系数 = |A ∩ B| / |A ∪ B|
+  let intersection = 0;
+  for (const token of currTokens) {
+    if (prevTokens.has(token)) intersection++;
+  }
+  const union = prevTokens.size + currTokens.size - intersection;
+  const jaccard = union > 0 ? intersection / union : 0;
+
+  return jaccard < 0.15;
+}
+
+/**
+ * 从消息历史中提取最近一条用户消息的文本内容。
+ * 跳过 system-reminder 注入的消息。
+ */
+function getLatestUserMessage(messages: UnifiedMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    const content = typeof msg.content === 'string' ? msg.content : '';
+    // 跳过记忆注入的 system-reminder 消息
+    if (content.startsWith('<system-reminder>')) continue;
+    // 跳过会话笔记注入的 session-notes 消息
+    if (content.startsWith('<session-notes>')) continue;
+    return content;
+  }
+  return '';
+}
+
+/**
+ * Harness 记忆集成（v3）。
  *
  * 生命周期：
  * 1. onLoopStart(userMessage, llmAdapter) — 循环开始，启动预取
- * 2. injectMemoryContext(messages) — 第一轮工具调用后注入记忆（带去重）
+ * 2. injectMemoryContext(messages) — 工具调用后注入记忆（话题切换时重新召回）
  * 3. onLoopEnd(messages, turnCount) — 循环结束，提取 + 整合（带互斥）
  * 4. getSessionMemoryForCompact() — 压缩时获取会话笔记（保持连续性）
  * 5. dispose() — 清理资源
@@ -142,13 +238,17 @@ export class HarnessMemoryIntegration {
   private currentUserMessage = '';
   /** 已展示过的记忆文件路径（跨轮次去重） */
   private surfacedMemoryPaths = new Set<string>();
-  /** 是否已注入记忆（每轮只注入一次） */
-  private memoryInjected = false;
+  /** 上次记忆注入时的用户消息（用于话题切换检测） */
+  private lastInjectionUserMessage = '';
+  /** 本轮是否已注入记忆（每轮 user 消息最多注入一次） */
+  private injectedForCurrentMessage = false;
   private currentMessages: UnifiedMessage[] = [];
   /** 上次提取时的消息索引（用于主代理互斥检测） */
   private lastExtractionMessageIndex = 0;
   /** 提取轮次计数器（用于节流） */
   private extractionTurnCounter = 0;
+  /** 记忆目录是否存在（延迟检测，避免对不存在的目录触发提取） */
+  private memoryDirExists: boolean | null = null;
 
   // ── sequential 包装的提取函数 ──
   private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
@@ -186,9 +286,15 @@ export class HarnessMemoryIntegration {
   onLoopStart(userMessage: string, llmAdapter: LLMAdapterInterface | null): void {
     this.currentUserMessage = userMessage;
     this.llmAdapter = llmAdapter;
-    this.memoryInjected = false;
+    this.injectedForCurrentMessage = false;
+
+    // 同步检测记忆目录是否存在（只检测一次）
+    if (this.memoryDirExists === null) {
+      this.memoryDirExists = existsSync(this.memoryDir);
+    }
     // 注意：surfacedMemoryPaths 不清空 — 跨轮次去重
     // 只在新会话时清空（构造函数中初始化为空）
+    // lastInjectionUserMessage 也不清空 — 用于跨轮次话题切换检测
 
     // 异步预取（fire-and-forget）
     if (this.fileMemoryManager) {
@@ -199,20 +305,37 @@ export class HarnessMemoryIntegration {
   }
 
   /**
-   * 注入记忆上下文（LLM 语义召回 + 去重）。
-   * 只在第一轮工具调用后注入一次。
-   * alreadySurfaced 过滤已展示的文件，避免重复选择。
+   * 注入记忆上下文（LLM 语义召回 + 去重 + 话题切换检测）。
+   *
+   * v3 改进：不再只注入一次。每轮工具调用后检测：
+   * - 如果是本轮首次注入 → 正常注入
+   * - 如果已注入过但检测到话题切换 → 重新召回并注入
+   * - 如果已注入且话题未变 → 跳过
+   *
+   * 话题切换检测使用 Jaccard 词重叠度，纯本地计算，不消耗 LLM 调用。
+   * alreadySurfaced 仍然跨轮次去重，避免重复展示同一记忆。
    */
   async injectMemoryContext(messages: UnifiedMessage[]): Promise<void> {
-    if (this.memoryInjected) return;
     if (!this.memoryDir && !this.fileMemoryManager) return;
+
+    // 获取当前最新的用户消息（可能是循环中途用户追加的）
+    const latestUserMsg = getLatestUserMessage(messages) || this.currentUserMessage;
+
+    // 判断是否需要注入
+    if (this.injectedForCurrentMessage) {
+      // 已经为当前消息注入过 → 检测话题是否切换
+      if (!hasTopicShifted(this.lastInjectionUserMessage, latestUserMsg)) {
+        return; // 话题未变，跳过
+      }
+      console.debug('[harness-memory] 检测到话题切换，重新召回记忆');
+    }
 
     const recallCfg = getRecallConfig();
     const sections: string[] = [];
 
     try {
       const recallResult = await recallRelevantMemories(
-        this.currentUserMessage,
+        latestUserMsg,
         this.memoryDir,
         this.llmAdapter,
         this.surfacedMemoryPaths, // 跨轮次去重
@@ -225,7 +348,7 @@ export class HarnessMemoryIntegration {
         usedLLM: recallResult.usedLLM,
         durationMs: recallResult.duration,
         selectedFiles: recallResult.memories.map(m => m.filename),
-        queryLength: this.currentUserMessage.length,
+        queryLength: latestUserMsg.length,
       }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
@@ -248,26 +371,29 @@ export class HarnessMemoryIntegration {
       messages.push({ role: 'user', content: reminder });
     }
 
-    this.memoryInjected = true;
+    this.injectedForCurrentMessage = true;
+    this.lastInjectionUserMessage = latestUserMsg;
   }
 
   /**
-   * 循环结束时调用。条件触发 LLM 提取 + autoDream。
+   * 循环结束时调用。条件触发 LLM 提取 + 会话记忆更新 + autoDream。
    * 带主代理互斥：如果主代理已直接写入记忆，跳过后台提取。
    */
-  async onLoopEnd(messages: UnifiedMessage[], turnCount: number): Promise<void> {
+  async onLoopEnd(messages: UnifiedMessage[], turnCount: number, totalInputTokens?: number): Promise<void> {
     this.currentMessages = messages;
 
     // ── 主代理互斥检测 ──
-    // 如果主代理在上次提取后直接写入了记忆文件，跳过后台提取
-    // 并推进 cursor，避免下次提取重复处理这些消息
     if (hasMemoryWritesSince(messages, this.lastExtractionMessageIndex, this.memoryDir)) {
       console.debug('[harness-memory] 跳过提取 — 主代理已直接写入记忆文件');
       this.lastExtractionMessageIndex = messages.length;
-      // 仍然执行 dream（dream 不受主代理写入影响）
     } else {
       // ── 条件触发 LLM 提取（sequential 包装，防止重叠） ──
       await this.sequentialExtract(messages, turnCount);
+    }
+
+    // ── 会话记忆更新（上下文压缩前的连续性保障） ──
+    if (totalInputTokens !== undefined) {
+      await this.maybeUpdateSessionMemory(messages, totalInputTokens);
     }
 
     // ── autoDream 整合 ──
@@ -305,25 +431,37 @@ export class HarnessMemoryIntegration {
 
   /**
    * 判断是否应该触发 LLM 提取。
-   * 使用远程配置的阈值，支持动态调整。
+   *
+   * 基于对话内容的启发式判断，不再依赖消息长度硬编码阈值。
+   * 触发条件（任一满足）：
+   * 1. 信号词触发 — 用户消息包含"记住"、"偏好"等词
+   * 2. 对话深度触发 — 轮次 >= minTurns 且对话中有工具调用（说明在做实际工作）
+   * 3. 内容特征触发 — 用户消息暗示了编程语言/框架/工具偏好
    */
   private shouldExtract(turnCount: number): boolean {
     if (!this.llmAdapter || !this.currentUserMessage) return false;
+    // 记忆目录不存在时不触发提取（测试环境或未初始化）
+    if (!this.memoryDirExists) return false;
 
     const cfg = getExtractionConfig();
-
-    // 信号词触发（优先级最高，不受节流限制）
     const msgLower = this.currentUserMessage.toLowerCase();
+
+    // 1. 信号词触发（优先级最高，不受节流限制）
     const hasSignal = EXTRACTION_SIGNAL_WORDS.some(w => msgLower.includes(w));
     if (hasSignal) return true;
 
-    // 轮次节流：每 N 个合格轮次提取一次
+    // 2. 内容特征触发 — 检测编程语言/框架/工具相关的关键词
+    //    即使消息很短（如"用 TS 写个排序"），也能触发
+    const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
+    if (hasContentSignal && turnCount >= 1) return true;
+
+    // 3. 轮次节流：每 N 个合格轮次提取一次
     this.extractionTurnCounter++;
     if (this.extractionTurnCounter < cfg.turnThrottle) return false;
 
-    // 轮次 + 长度触发
-    if (turnCount >= cfg.minTurns && this.currentUserMessage.length >= 50) {
-      this.extractionTurnCounter = 0; // 重置节流计数
+    // 4. 对话深度触发 — 轮次够了就提取（不再要求消息长度）
+    if (turnCount >= cfg.minTurns) {
+      this.extractionTurnCounter = 0;
       return true;
     }
 
@@ -479,6 +617,7 @@ export class HarnessMemoryIntegration {
 
   /**
    * 条件触发会话记忆更新。
+   * v3 改进：写入前验证 LLM 响应是否符合 10-section 模板格式。
    */
   async maybeUpdateSessionMemory(
     messages: UnifiedMessage[],
@@ -513,16 +652,24 @@ export class HarnessMemoryIntegration {
         { maxTokens: 4096, temperature: 0 },
       );
 
-      // 将更新后的内容写入文件
+      // v3 改进：写入前验证响应格式
       if (response.content) {
-        // 提取 write_file 内容或直接使用响应
-        const { promises: fsPromises } = await import('node:fs');
-        await fsPromises.writeFile(this.sessionMemoryState.notesPath, response.content, 'utf-8');
+        const validation = validateSessionMemoryContent(response.content);
+        if (validation.valid) {
+          const { promises: fsPromises } = await import('node:fs');
+          await fsPromises.writeFile(this.sessionMemoryState.notesPath, response.content, 'utf-8');
+          console.debug('[harness-memory] 会话记忆已更新');
+        } else {
+          console.debug(
+            `[harness-memory] 会话记忆更新被拒绝 — ${validation.reason}` +
+            (validation.missingSections ? ` (缺失: ${validation.missingSections.join(', ')})` : ''),
+          );
+          // 保留原内容不覆盖
+        }
       }
 
       this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;
       this.sessionMemoryState.lastProcessedIndex = messages.length;
-      console.debug('[harness-memory] 会话记忆已更新');
     } catch (err) {
       console.debug('[harness-memory] session memory update failed:', err instanceof Error ? err.message : err);
     } finally {

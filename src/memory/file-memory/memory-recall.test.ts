@@ -50,10 +50,16 @@ Some content for ${filename}`;
 beforeEach(async () => {
   tempDir = path.join(os.tmpdir(), `recall-test-${randomUUID()}`);
   await fs.mkdir(tempDir, { recursive: true });
+  // 隔离用户级记忆目录，避免扫描到真实的 data/user-memory
+  process.env.ICE_USER_MEMORY_DIR = path.join(os.tmpdir(), `recall-user-mem-${randomUUID()}`);
 });
 
 afterEach(async () => {
   await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  if (process.env.ICE_USER_MEMORY_DIR) {
+    await fs.rm(process.env.ICE_USER_MEMORY_DIR, { recursive: true, force: true }).catch(() => {});
+  }
+  delete process.env.ICE_USER_MEMORY_DIR;
 });
 
 // ─── 测试用例 ───

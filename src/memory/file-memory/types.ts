@@ -28,6 +28,18 @@ export interface MemoryFrontmatter {
   description: string;
   /** 记忆类型 */
   type: FileMemoryType;
+  /** 来源：哪次对话/操作创建的 */
+  source?: 'llm_extract' | 'dream' | 'manual' | 'user_explicit';
+  /** 置信度：0-1，用户明确声明=1，LLM推断=0.5，dream整合=0.7 */
+  confidence?: number;
+  /** 被召回次数（每次被选中时递增） */
+  recallCount?: number;
+  /** 上次被召回的时间（ISO 字符串） */
+  lastRecalledAt?: string;
+  /** 创建时间（ISO 字符串） */
+  createdAt?: string;
+  /** 语义标签（用于结构化去重，如 "lang:typescript", "tool:vite"） */
+  tags?: string[];
 }
 
 /**
@@ -44,6 +56,20 @@ export interface MemoryHeader {
   description: string | null;
   /** frontmatter 中的类型 */
   type: FileMemoryType | undefined;
+  /** 置信度 */
+  confidence: number;
+  /** 被召回次数 */
+  recallCount: number;
+  /** 上次被召回的时间（毫秒时间戳，0 表示从未被召回） */
+  lastRecalledMs: number;
+  /** 创建时间（毫秒时间戳） */
+  createdMs: number;
+  /** 语义标签 */
+  tags: string[];
+  /** 来源 */
+  source: string | undefined;
+  /** 正文前 300 字符预览（用于召回时的内容匹配） */
+  contentPreview: string;
 }
 
 /**

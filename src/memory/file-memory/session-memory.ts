@@ -65,6 +65,32 @@ _逐步记录尝试了什么、做了什么？每步非常简短的摘要_
 const MAX_SECTION_LENGTH = 2000;
 const MAX_TOTAL_SESSION_MEMORY_TOKENS = 12000;
 
+/**
+ * 会话笔记必须包含的核心 section 标题。
+ * 至少要有这 3 个才算有效（其余 section 可以为空但标题不能丢）。
+ */
+const REQUIRED_SECTION_HEADERS = [
+  '# Session Title',
+  '# Current State',
+  '# Worklog',
+];
+
+/**
+ * 所有 10 个 section 标题（用于完整性检查）。
+ */
+const ALL_SECTION_HEADERS = [
+  '# Session Title',
+  '# Current State',
+  '# Task Specification',
+  '# Files and Functions',
+  '# Workflow',
+  '# Errors & Corrections',
+  '# Codebase Documentation',
+  '# Learnings',
+  '# Key Results',
+  '# Worklog',
+];
+
 // ─── 状态管理（闭包隔离） ───
 
 export interface SessionMemoryState {
@@ -302,4 +328,54 @@ function flushSection(
   }
   keptLines.push('\n[... section 因长度截断 ...]');
   return { lines: keptLines, wasTruncated: true };
+}
+
+
+// ─── 响应验证 ───
+
+/**
+ * 验证 LLM 返回的会话笔记内容是否符合 10-section 模板格式。
+ *
+ * 验证规则：
+ * 1. 必须包含所有 3 个核心 section 标题（Session Title, Current State, Worklog）
+ * 2. 内容不能为空或过短（< 50 字符）
+ * 3. 至少包含 7/10 个 section 标题（允许 LLM 偶尔丢失非核心 section）
+ *
+ * @returns 验证结果：valid=true 表示可以写入，否则返回拒绝原因
+ */
+export function validateSessionMemoryContent(content: string): {
+  valid: boolean;
+  reason?: string;
+  missingSections?: string[];
+} {
+  if (!content || content.trim().length < 50) {
+    return { valid: false, reason: 'Content too short or empty' };
+  }
+
+  // 检查核心 section 标题
+  const missingRequired = REQUIRED_SECTION_HEADERS.filter(
+    header => !content.includes(header),
+  );
+  if (missingRequired.length > 0) {
+    return {
+      valid: false,
+      reason: `Missing required sections: ${missingRequired.join(', ')}`,
+      missingSections: missingRequired,
+    };
+  }
+
+  // 检查整体完整性（至少 7/10 个 section）
+  const presentCount = ALL_SECTION_HEADERS.filter(
+    header => content.includes(header),
+  ).length;
+  if (presentCount < 7) {
+    const missing = ALL_SECTION_HEADERS.filter(h => !content.includes(h));
+    return {
+      valid: false,
+      reason: `Only ${presentCount}/10 sections present (minimum 7)`,
+      missingSections: missing,
+    };
+  }
+
+  return { valid: true };
 }

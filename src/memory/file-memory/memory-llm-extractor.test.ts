@@ -14,6 +14,7 @@ import { createLLMMemoryExtractor, LLMMemoryExtractor } from './memory-llm-extra
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../llm/types.js';
 
 let tempDir: string;
+let userMemoryTempDir: string;
 
 function createMockLLM(response: string, cacheReadTokens = 0): LLMAdapterInterface {
   return {
@@ -39,11 +40,16 @@ function createMockLLM(response: string, cacheReadTokens = 0): LLMAdapterInterfa
 
 beforeEach(async () => {
   tempDir = path.join(os.tmpdir(), `extractor-test-${randomUUID()}`);
+  userMemoryTempDir = path.join(os.tmpdir(), `extractor-user-mem-${randomUUID()}`);
   await fs.mkdir(tempDir, { recursive: true });
+  await fs.mkdir(userMemoryTempDir, { recursive: true });
+  process.env.ICE_USER_MEMORY_DIR = userMemoryTempDir;
 });
 
 afterEach(async () => {
   await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  await fs.rm(userMemoryTempDir, { recursive: true, force: true }).catch(() => {});
+  delete process.env.ICE_USER_MEMORY_DIR;
 });
 
 describe('LLMMemoryExtractor', () => {
@@ -219,7 +225,7 @@ describe('LLMMemoryExtractor', () => {
       const llmResponse = JSON.stringify([
         {
           filename: '../../../etc/passwd',
-          type: 'user',
+          type: 'project',
           name: 'hack',
           description: 'hack',
           content: 'hack',
