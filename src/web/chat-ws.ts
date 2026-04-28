@@ -25,6 +25,7 @@ import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
+import { randomUUID } from 'node:crypto';
 
 const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
@@ -121,11 +122,11 @@ export interface ChatWSOptions {
 }
 
 /** 追加消息到会话文件（后端是唯一写入者） */
-async function appendMessages(msgs: { role: string; content: string }[]): Promise<void> {
+async function appendMessages(msgs: { role: string; content: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<void> {
   if (msgs.length === 0) return;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    let existing: { role: string; content: string }[] = [];
+    let existing: any[] = [];
     try {
       const data = await fsPromises.readFile(SESSION_FILE, 'utf-8');
       existing = JSON.parse(data);
@@ -316,7 +317,8 @@ async function handleChatMessage(
   const existingMessages = cachedMessages;
 
   // 写入用户消息到会话文件
-  await appendMessages([{ role: 'user', content: message }]);
+  const userMsgId = randomUUID();
+  await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
 
   // 创建 AbortController 用于用户中断
   const abortController = new AbortController();
@@ -379,6 +381,9 @@ async function handleChatMessage(
     };
   });
 
+  // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
+  const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];
+
   const result = await harness.run(
     finalMessage,
     (msgs, opts) => llmAdapter.chat(msgs, opts),
@@ -396,12 +401,22 @@ async function handleChatMessage(
         sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
       }
 
-      // step 信息仅在服务端日志输出
-      if (event.type === 'tool_call') {
+      // 收集工具调用记录
+      if (event.type === 'tool_call' && event.toolName) {
         const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
+        const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
+          || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
+        toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
         const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
         console.log(`[step] [call] ${event.toolName}(${truncated})`);
-      } else if (event.type === 'tool_result') {
+      } else if (event.type === 'tool_result' && event.toolName) {
+        // 更新批次中最后一个匹配的工具状态
+        for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
+          if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
+            toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
+            break;
+          }
+        }
         const icon = event.toolSuccess ? '[ok]' : '[err]';
         const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
         console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
@@ -421,9 +436,28 @@ async function handleChatMessage(
   cachedMessages = result.messages;
   saveStructuredMessages(result.messages);
 
-  // 写入 AI 回复到会话文件
+  // 写入 AI 回复 + 工具调用记录到会话文件
+  const agentMsgId = randomUUID();
+  const sessionEntries: any[] = [];
+
+  // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
+  for (const trace of toolTraceBatch) {
+    sessionEntries.push({
+      role: 'tool_trace',
+      parentId: agentMsgId,
+      toolName: trace.toolName,
+      detail: trace.detail,
+      status: trace.status,
+    });
+  }
+
+  // agent 消息
   if (result.content) {
-    await appendMessages([{ role: 'agent', content: result.content }]).catch(() => {});
+    sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
+  }
+
+  if (sessionEntries.length > 0) {
+    await appendMessages(sessionEntries).catch(() => {});
   }
 
   // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
