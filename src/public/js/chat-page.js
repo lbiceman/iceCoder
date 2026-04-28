@@ -939,6 +939,16 @@ window.ChatPage = (function () {
         // info 消息（如工具调用次数）不写入聊天记录，仅在控制台记录
         console.log('[info]', data.message);
         break;
+      case 'memory_notice':
+        // v4 被动确认：记忆提取通知，显示为淡化提示
+        if (data.notices && data.notices.length > 0) {
+          for (var ni = 0; ni < data.notices.length; ni++) {
+            messages.push({ role: 'agent', content: data.notices[ni] });
+            appendMessageEl(messages[messages.length - 1]);
+          }
+          saveMessages();
+        }
+        break;
       case 'confirm':
         handleWsConfirm(data.toolName, data.args);
         break;
@@ -1024,14 +1034,16 @@ window.ChatPage = (function () {
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'export', description: '导出所有记忆文件', prefix: '~' }
+    { name: 'export', description: '导出所有记忆文件', prefix: '~' },
+    { name: 'memory', description: '查看/管理记忆文件', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'export', description: '导出所有记忆文件', prefix: '~' }
+    { name: 'export', description: '导出所有记忆文件', prefix: '~' },
+    { name: 'memory', description: '查看/管理记忆文件', prefix: '~' }
   ];
 
   function getLocalCommands() {
@@ -1281,6 +1293,76 @@ window.ChatPage = (function () {
         .catch(function (err) {
           messages.pop();
           messages.push({ role: 'agent', content: '记忆导出失败: ' + (err.message || '未知错误') });
+          renderMessages();
+        });
+      return;
+    }
+
+    // 处理 ~memory 命令：查看/管理记忆文件
+    if (text === '~memory' || text.indexOf('~memory ') === 0) {
+      elInput.value = '';
+      autoResizeInput();
+      hideCmdDropdown();
+
+      var memArgs = text.substring(7).trim(); // "~memory" 后面的参数
+
+      // ~memory delete <filename>
+      if (memArgs.indexOf('delete ') === 0) {
+        var delFilename = memArgs.substring(7).trim();
+        if (!delFilename) {
+          messages.push({ role: 'agent', content: '用法: ~memory delete <文件名>' });
+          renderMessages();
+          return;
+        }
+        messages.push({ role: 'agent', content: '正在删除记忆: ' + delFilename + '…' });
+        renderMessages();
+
+        fetch('/api/memory/files/' + encodeURIComponent(delFilename), { method: 'DELETE' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            messages.pop();
+            if (data.success) {
+              messages.push({ role: 'agent', content: '✅ 已删除记忆: ' + delFilename });
+            } else {
+              messages.push({ role: 'agent', content: '❌ 删除失败: ' + (data.error || '未知错误') });
+            }
+            renderMessages();
+          })
+          .catch(function (err) {
+            messages.pop();
+            messages.push({ role: 'agent', content: '❌ 删除失败: ' + (err.message || '网络错误') });
+            renderMessages();
+          });
+        return;
+      }
+
+      // ~memory (无参数) — 列出所有记忆
+      messages.push({ role: 'agent', content: '正在加载记忆列表…' });
+      renderMessages();
+
+      fetch('/api/memory/files')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          messages.pop();
+          if (!data.success || !data.files || data.files.length === 0) {
+            messages.push({ role: 'agent', content: '📭 暂无记忆文件。' });
+            renderMessages();
+            return;
+          }
+          var lines = ['📋 **记忆文件** (' + data.files.length + ' 个)\n'];
+          for (var fi = 0; fi < data.files.length; fi++) {
+            var f = data.files[fi];
+            var typeTag = f.type ? '[' + f.type + '] ' : '';
+            var desc = f.description ? ' — ' + f.description : '';
+            lines.push((fi + 1) + '. ' + typeTag + '`' + f.filename + '`' + desc);
+          }
+          lines.push('\n删除记忆: `~memory delete <文件名>`');
+          messages.push({ role: 'agent', content: lines.join('\n') });
+          renderMessages();
+        })
+        .catch(function (err) {
+          messages.pop();
+          messages.push({ role: 'agent', content: '加载记忆列表失败: ' + (err.message || '网络错误') });
           renderMessages();
         });
       return;

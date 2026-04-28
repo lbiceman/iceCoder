@@ -802,4 +802,12 @@ export class Harness {
   getStopHookManager(): StopHookManager {
     return this.stopHookManager;
   }
+
+  /**
+   * 获取并清空记忆提取的被动确认通知。
+   * 调用方在返回最终回复时附加这些通知给用户。
+   */
+  flushExtractionNotices(): string[] {
+    return this.memoryIntegration.flushExtractionNotices();
+  }
 }

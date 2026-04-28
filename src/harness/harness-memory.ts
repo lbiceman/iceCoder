@@ -1,5 +1,5 @@
 /**
- * Harness 记忆集成层（v3 — 多轮注入 + 响应验证 + 统一召回）。
+ * Harness 记忆集成层（v4 — 被动确认 + 偏好正则扩充）。
  *
  * 优化项：
  * 1. 主代理直接写入 + 后台提取互斥（hasMemoryWritesSince）
@@ -11,8 +11,10 @@
  * 7. 召回去重（alreadySurfaced 跨轮次去重）
  * 8. 主代理互斥（检测主代理写入记忆后跳过后台提取）
  * 9. 会话笔记连续性（SessionMemory 在压缩后保持连续性）
- * 10. 话题切换检测 — 多轮记忆注入（v3 新增）
- * 11. 会话记忆响应验证 — 写入前校验 10-section 格式（v3 新增）
+ * 10. 话题切换检测 — 多轮记忆注入（v3）
+ * 11. 会话记忆响应验证 — 写入前校验 10-section 格式（v3）
+ * 12. 被动确认 — 提取后通知用户记住了什么（v4 新增）
+ * 13. 偏好正则扩充 — 祈使句 + 否定偏好 + 风格偏好（v4 新增）
  */
 
 import path from 'node:path';
@@ -53,6 +55,19 @@ const CONTENT_HEURISTIC_PATTERNS: RegExp[] = [
   /我(是|做|负责|在做|主要)/,
   // 英文偏好表达
   /\b(i prefer|i usually|i always|i like to|my workflow)\b/i,
+
+  // ── v4 新增：祈使句 + 否定偏好 + 风格偏好 ──
+
+  // 祈使句偏好（"别用分号"、"不要用 var"、"以后不要加注释"、"每次都加 JSDoc"）
+  /(?:别|不要|不用|禁止|停止|以后不要?|以后别).{0,15}(?:用|写|加|做|改|放|搞|弄)/,
+  /(?:每次|总是|一定要?|务必|必须|始终).{0,15}(?:用|写|加|做|改|放|检查|确认)/,
+  // 风格偏好（"代码要简洁"、"注释用中文"、"变量名用驼峰"）
+  /(?:代码|注释|变量名?|函数名?|文件名?|命名|缩进|格式).{0,10}(?:要|用|写|改成|换成|统一)/,
+  // 否定反馈（"这样不好"、"不是这样"、"别这么做"、"太啰嗦了"）
+  /(?:不好|不对|不是这样|别这么|太啰嗦|太复杂|太简单|太长了|太短了)/,
+  // 英文祈使偏好（"don't use semicolons"、"always add types"、"never use var"）
+  /\b(don'?t use|never use|always use|always add|stop using|no more)\b/i,
+  /\b(use .{1,20} instead|switch to|prefer .{1,20} over)\b/i,
 ];
 // 新增：并发控制、远程配置、闭包隔离、会话记忆
 import {
@@ -249,6 +264,8 @@ export class HarnessMemoryIntegration {
   private extractionTurnCounter = 0;
   /** 记忆目录是否存在（延迟检测，避免对不存在的目录触发提取） */
   private memoryDirExists: boolean | null = null;
+  /** 被动确认队列 — 提取完成后暂存摘要，下次返回时附加给用户 */
+  private _extractionNotices: string[] = [];
 
   // ── sequential 包装的提取函数 ──
   private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
@@ -412,12 +429,25 @@ export class HarnessMemoryIntegration {
   }
 
   /**
+   * 获取并清空被动确认通知队列。
+   * 调用方（harness / chat-ws）在返回最终回复时附加这些通知。
+   *
+   * 返回格式示例：["💾 已记住：你偏好 TypeScript + Vitest"]
+   */
+  flushExtractionNotices(): string[] {
+    const notices = [...this._extractionNotices];
+    this._extractionNotices = [];
+    return notices;
+  }
+
+  /**
    * 清理资源。
    */
   dispose(): void {
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
     this.llmAdapter = null;
+    this._extractionNotices = [];
   }
 
   /**
@@ -563,6 +593,13 @@ export class HarnessMemoryIntegration {
           ? `(prefix=${conversationPrefix.length} msgs, cache ${result.cacheActuallyHit ? 'HIT' : 'MISS'})`
           : '';
         console.log(`[harness-memory] LLM 提取: ${result.writtenPaths.length} 条记忆已保存 ${cacheNote}`);
+
+        // ── v4 被动确认：将提取摘要加入通知队列 ──
+        const filenames = result.writtenPaths.map(p => path.basename(p, '.md'));
+        const summary = filenames
+          .map(f => f.replace(/^(user|feedback|project|reference)_/, '').replace(/_/g, ' '))
+          .join(', ');
+        this._extractionNotices.push(`💾 已记住：${summary}`);
       }
     } catch (err) {
       console.debug('[harness-memory] extraction failed:', err instanceof Error ? err.message : err);
