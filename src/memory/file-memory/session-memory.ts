@@ -336,10 +336,10 @@ function flushSection(
 /**
  * 验证 LLM 返回的会话笔记内容是否符合 10-section 模板格式。
  *
- * 验证规则：
- * 1. 必须包含所有 3 个核心 section 标题（Session Title, Current State, Worklog）
- * 2. 内容不能为空或过短（< 50 字符）
- * 3. 至少包含 7/10 个 section 标题（允许 LLM 偶尔丢失非核心 section）
+ * 验证规则（宽松模式，兼容 DeepSeek 等指令遵循较弱的模型）：
+ * 1. 内容不能为空或过短（< 50 字符）
+ * 2. 必须包含至少 2/3 个核心 section 标题（Session Title, Current State, Worklog）
+ * 3. 至少包含 5/10 个 section 标题
  *
  * @returns 验证结果：valid=true 表示可以写入，否则返回拒绝原因
  */
@@ -352,27 +352,28 @@ export function validateSessionMemoryContent(content: string): {
     return { valid: false, reason: 'Content too short or empty' };
   }
 
-  // 检查核心 section 标题
-  const missingRequired = REQUIRED_SECTION_HEADERS.filter(
-    header => !content.includes(header),
+  // 检查核心 section 标题（至少 2/3 个即可，兼容模型偶尔丢失一个）
+  const presentRequired = REQUIRED_SECTION_HEADERS.filter(
+    header => content.includes(header),
   );
-  if (missingRequired.length > 0) {
+  if (presentRequired.length < 2) {
+    const missing = REQUIRED_SECTION_HEADERS.filter(h => !content.includes(h));
     return {
       valid: false,
-      reason: `Missing required sections: ${missingRequired.join(', ')}`,
-      missingSections: missingRequired,
+      reason: `Missing required sections: ${missing.join(', ')}`,
+      missingSections: missing,
     };
   }
 
-  // 检查整体完整性（至少 7/10 个 section）
+  // 检查整体完整性（至少 5/10 个 section）
   const presentCount = ALL_SECTION_HEADERS.filter(
     header => content.includes(header),
   ).length;
-  if (presentCount < 7) {
+  if (presentCount < 5) {
     const missing = ALL_SECTION_HEADERS.filter(h => !content.includes(h));
     return {
       valid: false,
-      reason: `Only ${presentCount}/10 sections present (minimum 7)`,
+      reason: `Only ${presentCount}/10 sections present (minimum 5)`,
       missingSections: missing,
     };
   }
