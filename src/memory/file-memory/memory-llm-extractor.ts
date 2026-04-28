@@ -49,10 +49,18 @@ export interface ExtractionResult {
 const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract information worth remembering for future conversations.
 
 ## Memory types
-- user: User's role, goals, preferences, knowledge
+- user: User's role, goals, preferences, knowledge, habits, preferred programming languages, frameworks, work style
 - feedback: Guidance on how to work — corrections AND confirmations
 - project: Ongoing work context not derivable from code/git
 - reference: Pointers to external systems/resources
+
+## User habit detection
+Pay special attention to implicit user habits revealed by the conversation:
+- If the user consistently writes or asks about a specific language (TypeScript, Python, etc.), record it as a user preference
+- If the user prefers certain tools, frameworks, or patterns, record it
+- If the user has a communication style preference (language, verbosity, formality), record it
+- If the user corrects you in a way that reveals a preference, record it as both feedback AND user habit
+- Update existing user memories if new information supplements them (e.g., user now also uses Go in addition to TypeScript)
 
 ## What NOT to save
 - Code patterns, architecture, file paths — derivable from reading the project
@@ -62,7 +70,7 @@ const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze 
 
 ## Output format
 Return a JSON array of memories to save. Each memory object has:
-- "filename": string (e.g., "user_role.md", "feedback_testing.md")
+- "filename": string (e.g., "user_role.md", "feedback_testing.md", "user_preferred_languages.md")
 - "type": "user" | "feedback" | "project" | "reference"
 - "name": string (short name)
 - "description": string (one-line description for future relevance matching)

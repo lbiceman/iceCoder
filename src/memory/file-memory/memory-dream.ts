@@ -61,7 +61,7 @@ export interface DreamResult {
 function buildDreamPrompt(memoryDir: string, maxIndexLines: number): string {
   return `# Memory Consolidation (Dream)
 
-You are performing a memory consolidation pass. Review and organize the memory files to keep them useful and concise.
+You are performing a memory consolidation pass. Review and organize the memory files, AND analyze user behavior patterns to extract user habits.
 
 Memory directory: \`${memoryDir}\`
 
@@ -75,7 +75,19 @@ For each issue found:
 - Convert relative dates to absolute dates
 - Fix contradictions (if two memories disagree, keep the newer one)
 
-## Phase 3 — Prune Index
+## Phase 3 — User Habit Analysis (NEW)
+Analyze ALL memory files (especially project and feedback types) to detect user behavior patterns:
+- **Programming languages**: Which languages does the user work with most? (e.g., TypeScript, Python, Java)
+- **Frameworks & tools**: What frameworks, libraries, build tools does the user prefer?
+- **Coding style**: Any patterns in how they write code, name things, structure projects?
+- **Work habits**: Do they prefer detailed explanations or concise answers? Do they test first? Do they use specific workflows?
+- **Communication style**: What language do they communicate in? Do they prefer formal or casual tone?
+
+If you detect clear patterns that are NOT already captured in existing "user" type memories, create new user memories for them.
+If existing user memories need updating (e.g., user now also works with a new language), update them.
+Only record patterns with strong evidence (appearing in 3+ memories or conversations). Do not guess.
+
+## Phase 4 — Prune Index
 Update MEMORY.md to stay under ${maxIndexLines} lines:
 - Remove pointers to deleted/merged memories
 - Shorten verbose entries (move detail to topic files)
@@ -84,13 +96,13 @@ Update MEMORY.md to stay under ${maxIndexLines} lines:
 ## Output format
 Return a JSON object with:
 - "actions": array of actions taken, each with:
-  - "type": "merge" | "update" | "delete" | "create" | "index_update"
+  - "type": "merge" | "update" | "delete" | "create" | "index_update" | "user_habit"
   - "files": array of affected filenames
   - "reason": why this action was taken
 - "new_index": the complete new MEMORY.md content (string)
 - "file_writes": array of files to write, each with:
-  - "filename": string
-  - "content": string (full file content including frontmatter)
+  - "filename": string (for user habits, use "user_" prefix, e.g., "user_programming_languages.md", "user_work_style.md")
+  - "content": string (full file content including frontmatter with type: user)
 - "file_deletes": array of filenames to delete
 - "summary": one-paragraph summary of what changed
 

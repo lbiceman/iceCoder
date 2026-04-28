@@ -36,6 +36,11 @@ window.ChatPage = (function () {
   var userStopped = false;      // 用户是否已点击停止（忽略后续 stream 消息）
   var streamFinalized = false;  // 标记刚刚 finalize 了流式消息（用于跳过冗余 response）
 
+  // ---- 工具调用记录（服务端持久化，通过 parentId 关联到 agent 消息） ----
+  // toolTraces: { [agentMsgId]: [{ toolName, detail, status }] }
+  var toolTraces = {};
+  var currentToolBatch = [];    // 当前轮次收集的工具调用，等 agent 消息确定后关联
+
   // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
   var remoteMode = false;       // 是否为远程控制模式（带 token）
   var remoteToken = null;       // 远程 token（移动端扫码用）
@@ -96,12 +101,17 @@ window.ChatPage = (function () {
   /** 初始化：从本地缓存加载，再从服务端同步 */
   function initSession() {
     messages = loadLocalMessages();
+    toolTraces = {};
     renderMessages();
-    // 异步从服务端拉取最新消息
+    // 异步从服务端拉取最新消息（含 tool_trace）
     fetchServerMessages(function (serverMsgs) {
-      if (serverMsgs.length > messages.length) {
-        messages = serverMsgs;
-        renderMessages();
+      if (serverMsgs.length > 0) {
+        var separated = separateToolTraces(serverMsgs);
+        if (separated.msgs.length >= messages.length) {
+          messages = separated.msgs;
+          toolTraces = separated.traces;
+          renderMessages();
+        }
       }
     });
   }
@@ -119,12 +129,40 @@ window.ChatPage = (function () {
   function clearMessages() {
     messages = [];
     pendingImages = [];
+    toolTraces = {};
+    currentToolBatch = [];
     saveMessages();
     // 通知后端清除消息缓存，下一轮从零构建
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify({ type: 'clear_session' }));
     }
     renderPendingImages();
+  }
+
+  /**
+   * 从服务端消息数组中分离出 tool_trace 条目，构建 toolTraces 映射。
+   * 返回过滤后的纯消息数组（不含 tool_trace）。
+   */
+  function separateToolTraces(serverMsgs) {
+    var msgs = [];
+    var traces = {};
+    for (var i = 0; i < serverMsgs.length; i++) {
+      var m = serverMsgs[i];
+      if (m.role === 'tool_trace' && m.parentId) {
+        if (!traces[m.parentId]) traces[m.parentId] = [];
+        traces[m.parentId].push({ toolName: m.toolName || '', detail: m.detail || '', status: m.status || 'pending' });
+      } else {
+        msgs.push(m);
+      }
+    }
+    return { msgs: msgs, traces: traces };
+  }
+
+  /** 将当前收集的工具调用批次暂存（等 agent 消息的 id 从服务端同步后关联） */
+  function flushToolBatchLocal() {
+    // 工具调用记录已由后端持久化，前端只需清空当前批次
+    // 下次 syncMessages 时会从服务端拉到完整的 tool_trace
+    currentToolBatch = [];
   }
 
   // ---- DOM refs (set during render) ----
@@ -267,6 +305,15 @@ window.ChatPage = (function () {
     }
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
+
+      // 在 agent 消息前渲染关联的工具调用记录（通过 msg.id 查找）
+      var traces = msg.id ? toolTraces[msg.id] : null;
+      if (traces && traces.length > 0) {
+        for (var t = 0; t < traces.length; t++) {
+          renderToolTraceEl(traces[t]);
+        }
+      }
+
       var el = document.createElement('div');
       el.className = 'message ' + msg.role;
 
@@ -298,6 +345,39 @@ window.ChatPage = (function () {
     if (shouldScroll !== false) {
       scrollToBottom();
     }
+  }
+
+  /** 渲染单条工具调用记录到 DOM（用于历史恢复） */
+  function renderToolTraceEl(trace) {
+    if (!elMessages) return;
+    var el = document.createElement('div');
+    el.className = 'tool-action';
+    el.setAttribute('data-tool', trace.toolName);
+
+    var iconEl = document.createElement('span');
+    iconEl.className = 'tool-icon ' + (trace.status || 'pending');
+    if (trace.status === 'success') {
+      iconEl.textContent = '✓';
+    } else if (trace.status === 'error') {
+      iconEl.textContent = '✗';
+    } else {
+      iconEl.textContent = '⟳';
+    }
+    el.appendChild(iconEl);
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'tool-name';
+    nameEl.textContent = trace.toolName;
+    el.appendChild(nameEl);
+
+    if (trace.detail) {
+      var detailEl = document.createElement('span');
+      detailEl.className = 'tool-detail';
+      detailEl.textContent = trace.detail;
+      el.appendChild(detailEl);
+    }
+
+    elMessages.insertBefore(el, elAnchor);
   }
 
   function renderMessages() {
@@ -407,6 +487,11 @@ window.ChatPage = (function () {
       streamEl.removeAttribute('id');
       delete streamEl._streamContentEl;
     }
+    // 将收集的工具调用批次清空（后端已持久化）
+    var agentMsgIndex = messages.length - 1;
+    if (agentMsgIndex >= 0 && messages[agentMsgIndex].role === 'agent') {
+      flushToolBatchLocal();
+    }
     setStreamingState(false);
     saveMessages();
   }
@@ -459,12 +544,16 @@ window.ChatPage = (function () {
           streamEl.removeAttribute('id');
           delete streamEl._streamContentEl;
         }
+        // 清空工具调用批次（后端已持久化）
+        flushToolBatchLocal();
       }
     } else {
       // 没有流式内容但正在处理（可能在工具执行阶段）
       // 追加一条中断提示
       var infoMsg = { role: 'agent', content: '[已停止]' };
       messages.push(infoMsg);
+      // 清空工具调用批次
+      flushToolBatchLocal();
       appendMessageEl(infoMsg);
     }
 
@@ -744,14 +833,16 @@ window.ChatPage = (function () {
     if (wsProcessing || isStreaming) return;
     fetchServerMessages(function (serverMsgs) {
       if (!serverMsgs || serverMsgs.length === 0) return;
+      var separated = separateToolTraces(serverMsgs);
       // 服务端是权威数据源（后端统一写入），有新消息就更新
-      if (serverMsgs.length > messages.length) {
+      if (separated.msgs.length > messages.length) {
         var wasNearBottom = isNearBottom();
-        messages = serverMsgs;
+        messages = separated.msgs;
+        toolTraces = separated.traces;
         renderMessagesOnly(wasNearBottom);
         // 同步到 localStorage
         try {
-          localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(serverMsgs));
+          localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(separated.msgs.map(function (m) { return { role: m.role, content: m.content }; })));
         } catch (_e) { /* ignore */ }
       }
     });
@@ -816,6 +907,8 @@ window.ChatPage = (function () {
         // 非流式模式：直接显示完整响应
         finalizeAgentResponse();
         messages.push({ role: 'agent', content: data.content });
+        // 清空工具调用批次（后端已持久化）
+        flushToolBatchLocal();
         appendMessageEl(messages[messages.length - 1]);
         saveMessages();
         break;
@@ -872,7 +965,7 @@ window.ChatPage = (function () {
     if (step.iteration) {
       updateTurnCounter(step.iteration);
     }
-    // 工具调用：在聊天区追加紧凑条目
+    // 工具调用：在聊天区追加紧凑条目 + 收集到当前批次
     if (step.type === 'tool_call' && step.toolName) {
       var detail = '';
       if (step.toolArgs) {
@@ -884,10 +977,20 @@ window.ChatPage = (function () {
         }
       }
       appendToolAction(step.toolName, detail, 'pending');
+      // 收集到当前批次（稍后关联到 agent 消息）
+      currentToolBatch.push({ toolName: step.toolName, detail: detail, status: 'pending' });
     }
-    // 工具结果：更新对应条目的图标
+    // 工具结果：更新对应条目的图标 + 更新批次中的状态
     if (step.type === 'tool_result' && step.toolName) {
-      updateLastToolAction(step.toolName, step.toolSuccess ? 'success' : 'error');
+      var resultStatus = step.toolSuccess ? 'success' : 'error';
+      updateLastToolAction(step.toolName, resultStatus);
+      // 更新批次中最后一个匹配的工具状态
+      for (var i = currentToolBatch.length - 1; i >= 0; i--) {
+        if (currentToolBatch[i].toolName === step.toolName && currentToolBatch[i].status === 'pending') {
+          currentToolBatch[i].status = resultStatus;
+          break;
+        }
+      }
     }
   }
 
@@ -1547,10 +1650,13 @@ window.ChatPage = (function () {
     // 远程模式：从服务端同步消息
     if (remoteMode) {
       messages = [];
+      toolTraces = {};
       renderMessagesOnly();
       fetchServerMessages(function (serverMsgs) {
         if (serverMsgs.length > 0) {
-          messages = serverMsgs;
+          var separated = separateToolTraces(serverMsgs);
+          messages = separated.msgs;
+          toolTraces = separated.traces;
           renderMessagesOnly();
         }
       });
