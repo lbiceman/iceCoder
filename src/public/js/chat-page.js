@@ -1306,6 +1306,36 @@ window.ChatPage = (function () {
 
       var memArgs = text.substring(7).trim(); // "~memory" 后面的参数
 
+      // ~memory view <filename>
+      if (memArgs.indexOf('view ') === 0) {
+        var viewFilename = memArgs.substring(5).trim();
+        if (!viewFilename) {
+          messages.push({ role: 'agent', content: '用法: ~memory view <文件名>' });
+          renderMessages();
+          return;
+        }
+        messages.push({ role: 'agent', content: '正在读取: ' + viewFilename + '…' });
+        renderMessages();
+
+        fetch('/api/memory/files/' + encodeURIComponent(viewFilename))
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            messages.pop();
+            if (data.success) {
+              messages.push({ role: 'agent', content: '📄 **' + viewFilename + '** (' + data.level + '级)\n\n```markdown\n' + data.content + '\n```' });
+            } else {
+              messages.push({ role: 'agent', content: '❌ 读取失败: ' + (data.error || '未知错误') });
+            }
+            renderMessages();
+          })
+          .catch(function (err) {
+            messages.pop();
+            messages.push({ role: 'agent', content: '❌ 读取失败: ' + (err.message || '网络错误') });
+            renderMessages();
+          });
+        return;
+      }
+
       // ~memory delete <filename>
       if (memArgs.indexOf('delete ') === 0) {
         var delFilename = memArgs.substring(7).trim();
@@ -1356,7 +1386,7 @@ window.ChatPage = (function () {
             var desc = f.description ? ' — ' + f.description : '';
             lines.push((fi + 1) + '. ' + typeTag + '`' + f.filename + '`' + desc);
           }
-          lines.push('\n删除记忆: `~memory delete <文件名>`');
+          lines.push('\n查看记忆: `~memory view <文件名>` | 删除记忆: `~memory delete <文件名>`');
           messages.push({ role: 'agent', content: lines.join('\n') });
           renderMessages();
         })

@@ -68,7 +68,7 @@ const DEFAULT_DYNAMIC_CONFIG: MemoryDynamicConfig = {
     turnThrottle: 1,
   },
   dream: {
-    minHours: 4,
+    minHours: 6,
     minSessions: 3,
     enabled: true,
   },

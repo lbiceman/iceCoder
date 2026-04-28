@@ -88,6 +88,13 @@ If you detect clear patterns that are NOT already captured in existing "user" ty
 If existing user memories need updating (e.g., user now also works with a new language), update them.
 Only record patterns with strong evidence (appearing in 3+ memories or conversations). Do not guess.
 
+## Phase 3b — Promote User Candidates
+The extractor writes LLM-inferred user memories (confidence < 1) to the PROJECT directory as candidates.
+Review these candidate user memories:
+- If a candidate's pattern is confirmed by 3+ other memories or feedback → promote it: add it to "file_writes" with "promote_to_user": true
+- If a candidate contradicts other evidence → add it to "file_deletes"
+- If a candidate is too early to judge → leave it alone
+
 ## Phase 4 — Prune Index
 Update MEMORY.md to stay under ${maxIndexLines} lines:
 - Remove pointers to deleted/merged memories
@@ -104,6 +111,7 @@ Return a JSON object with:
 - "file_writes": array of files to write, each with:
   - "filename": string (for user habits, use "user_" prefix, e.g., "user_programming_languages.md", "user_work_style.md")
   - "content": string (full file content including frontmatter with type: user)
+  - "promote_to_user": boolean (optional, true = write to user-level directory instead of project-level)
 - "file_deletes": array of filenames to delete
 - "summary": one-paragraph summary of what changed
 
@@ -375,13 +383,27 @@ export class MemoryDream {
     let filesDeleted = 0;
 
     // 写入文件
+    const userMemoryDir = path.resolve(process.env.ICE_USER_MEMORY_DIR ?? 'data/user-memory');
     if (Array.isArray(parsed.file_writes)) {
       for (const fw of parsed.file_writes) {
         if (!fw.filename || !fw.content) continue;
         try {
-          const filePath = validatePath(fw.filename, memoryDir);
+          // promote_to_user: Dream 确认的用户记忆 → 写入用户级目录
+          const writeDir = fw.promote_to_user ? userMemoryDir : memoryDir;
+          await fs.mkdir(writeDir, { recursive: true });
+          const filePath = validatePath(fw.filename, writeDir);
           await fs.writeFile(filePath, fw.content, 'utf-8');
           filesModified++;
+
+          if (fw.promote_to_user) {
+            console.log(`[MemoryDream] Promoted to user-level: ${fw.filename}`);
+            // 删除项目级的候选文件（如果存在）
+            try {
+              const projPath = validatePath(fw.filename, memoryDir);
+              await fs.unlink(projPath);
+              filesDeleted++;
+            } catch { /* 项目级不存在，正常 */ }
+          }
         } catch (e) {
           if (e instanceof PathTraversalError) {
             console.error(`[MemoryDream] Path security violation: ${e.message}`);
