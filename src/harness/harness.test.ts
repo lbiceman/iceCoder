@@ -934,8 +934,10 @@ describe('Harness - 边界情况', () => {
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
     let callCount = 0;
-    const chatFn: ChatFunction = vi.fn().mockImplementation(async () => {
+    let lastSentMessages: any[] = [];
+    const chatFn: ChatFunction = vi.fn().mockImplementation(async (msgs: any[]) => {
       callCount++;
+      lastSentMessages = msgs;
       if (callCount <= 8) {
         return toolCallResponse([{ id: `tc${callCount}`, name: 'read_file' }]);
       }
@@ -948,13 +950,14 @@ describe('Harness - 边界情况', () => {
     const toolMsgs = result.messages.filter(m => m.role === 'tool');
     // 至少有一些 tool 消息
     expect(toolMsgs.length).toBeGreaterThan(0);
-    // 前面的旧 tool 消息应该被裁剪
-    const firstToolMsg = toolMsgs[0];
-    const firstContent = firstToolMsg.content as string;
-    // 如果有超过 6 条 tool 消息，前面的应该被裁剪
-    if (toolMsgs.length > 6) {
-      expect(firstContent.length).toBeLessThan(longOutput.length);
-      expect(firstContent).toContain('工具结果已裁剪');
+
+    // 原始消息保持完整（缓存友好 — 不就地修改已有消息）
+    // 裁剪只发生在发送给 LLM 的副本上
+    const sentToolMsgs = lastSentMessages.filter((m: any) => m.role === 'tool');
+    if (sentToolMsgs.length > 6) {
+      const firstSentContent = sentToolMsgs[0].content as string;
+      expect(firstSentContent.length).toBeLessThan(longOutput.length);
+      expect(firstSentContent).toContain('工具结果已裁剪');
     }
   });
 

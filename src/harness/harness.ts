@@ -226,8 +226,7 @@ export class Harness {
       // 1. 解构当前状态
       const { messages: msgs, tools: currentTools } = state;
 
-      // 2. 消息预处理管线（工具结果预算裁剪 → 上下文压缩）
-      this.applyToolResultBudget(msgs);
+      // 2. 消息预处理管线（上下文压缩，不修改已有消息内容）
       await this.maybeCompact(msgs, chatFn, logger, onStep);
 
       // 3. 推进轮次，检查循环控制
@@ -245,7 +244,9 @@ export class Harness {
       logger.llmCall();
 
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
+      // 工具结果预算裁剪在副本上执行，不修改原始消息（保持前缀缓存一致性）
       const normalizedMsgs = normalizeMessages(msgs);
+      this.applyToolResultBudget(normalizedMsgs);
 
       // 检查用户中断
       if (this.loopController.isAborted()) {

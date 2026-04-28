@@ -26,8 +26,9 @@ window.ChatPage = (function () {
 
   // ---- State ----
   var container = null;
-  var messages = [];       // { role: 'user'|'agent', content: string }
+  var messages = [];       // { role: 'user'|'agent', content: string, images?: string[] }
   var uploadedFile = null; // { fileId, filename, size } or null
+  var pendingImages = [];  // 待发送的图片 { dataUrl, file } 列表
   var currentExecutionId = null;
   var stages = [];         // { name, status }
   var agentResponseBuffer = ''; // accumulates streaming chunks
@@ -117,11 +118,13 @@ window.ChatPage = (function () {
 
   function clearMessages() {
     messages = [];
+    pendingImages = [];
     saveMessages();
     // 通知后端清除消息缓存，下一轮从零构建
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify({ type: 'clear_session' }));
     }
+    renderPendingImages();
   }
 
   // ---- DOM refs (set during render) ----
@@ -272,6 +275,20 @@ window.ChatPage = (function () {
       label.textContent = msg.role === 'user' ? 'You' : 'Agent';
       el.appendChild(label);
 
+      // 渲染图片缩略图（如果有）
+      if (msg.images && msg.images.length > 0) {
+        var imgRow = document.createElement('div');
+        imgRow.className = 'msg-images';
+        for (var j = 0; j < msg.images.length; j++) {
+          var img = document.createElement('img');
+          img.src = msg.images[j];
+          img.className = 'msg-image-thumb';
+          img.alt = '图片 ' + (j + 1);
+          imgRow.appendChild(img);
+        }
+        el.appendChild(imgRow);
+      }
+
       var content = document.createElement('div');
       content.textContent = msg.content;
       el.appendChild(content);
@@ -298,6 +315,20 @@ window.ChatPage = (function () {
     label.className = 'msg-label';
     label.textContent = msg.role === 'user' ? 'You' : 'Agent';
     el.appendChild(label);
+
+    // 渲染图片缩略图（如果有）
+    if (msg.images && msg.images.length > 0) {
+      var imgRow = document.createElement('div');
+      imgRow.className = 'msg-images';
+      for (var i = 0; i < msg.images.length; i++) {
+        var img = document.createElement('img');
+        img.src = msg.images[i];
+        img.className = 'msg-image-thumb';
+        img.alt = '图片 ' + (i + 1);
+        imgRow.appendChild(img);
+      }
+      el.appendChild(imgRow);
+    }
 
     var content = document.createElement('div');
     content.textContent = msg.content;
@@ -407,28 +438,40 @@ window.ChatPage = (function () {
       chatWs.send(JSON.stringify({ type: 'stop' }));
     }
 
-    // 结束当前响应
+    // 立即结束 UI 状态
     removeThinking();
+
     if (agentResponseBuffer) {
       // 保留已接收的部分内容，标记为已停止
       var lastMsg = messages[messages.length - 1];
       if (lastMsg && lastMsg._streaming) {
-        lastMsg.content = agentResponseBuffer + '\n\n[已停止]';
+        var stoppedContent = stripStatusTag(agentResponseBuffer);
+        lastMsg.content = stoppedContent ? stoppedContent + '\n\n[已停止]' : '[已停止]';
         delete lastMsg._streaming;
-        // 更新 DOM 中流式消息的内容（不做全量重建）
+        // 更新 DOM 中流式消息的内容
         var streamEl = document.getElementById('streaming-msg');
         if (streamEl) {
           var contentEl = streamEl._streamContentEl || streamEl.lastChild;
           if (contentEl) {
-            contentEl.appendChild(document.createTextNode('\n\n[已停止]'));
+            // 清理并重写内容（避免残留的半截 status 标记）
+            contentEl.textContent = lastMsg.content;
           }
           streamEl.removeAttribute('id');
           delete streamEl._streamContentEl;
         }
       }
+    } else {
+      // 没有流式内容但正在处理（可能在工具执行阶段）
+      // 追加一条中断提示
+      var infoMsg = { role: 'agent', content: '[已停止]' };
+      messages.push(infoMsg);
+      appendMessageEl(infoMsg);
     }
+
     agentResponseBuffer = '';
+    streamFinalized = false;
     setStreamingState(false);
+    wsProcessing = false;
     saveMessages();
   }
 
@@ -547,9 +590,6 @@ window.ChatPage = (function () {
     if (elFileStatus) elFileStatus.classList.add('hidden');
     if (elFileName) elFileName.textContent = '';
     if (elFileInput) elFileInput.value = '';
-    // 移除粘贴预览
-    var preview = document.getElementById('paste-preview');
-    if (preview) preview.parentNode.removeChild(preview);
   }
 
   /** 显示粘贴图片的缩略预览 */
@@ -571,6 +611,70 @@ window.ChatPage = (function () {
       }
     };
     reader.readAsDataURL(file);
+  }
+
+  /** 添加待发送图片（粘贴或拖拽） */
+  function addPendingImage(file) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var dataUrl = e.target.result;
+      pendingImages.push({ dataUrl: dataUrl, file: file });
+      renderPendingImages();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  /** 移除指定索引的待发送图片 */
+  function removePendingImage(index) {
+    pendingImages.splice(index, 1);
+    renderPendingImages();
+  }
+
+  /** 清空所有待发送图片 */
+  function clearPendingImages() {
+    pendingImages = [];
+    renderPendingImages();
+  }
+
+  /** 渲染待发送图片预览区 */
+  function renderPendingImages() {
+    var previewArea = document.getElementById('pending-images-preview');
+    if (!previewArea) return;
+
+    if (pendingImages.length === 0) {
+      previewArea.classList.add('hidden');
+      previewArea.innerHTML = '';
+      return;
+    }
+
+    previewArea.classList.remove('hidden');
+    previewArea.innerHTML = '';
+
+    for (var i = 0; i < pendingImages.length; i++) {
+      (function (idx) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'pending-image-item';
+
+        var img = document.createElement('img');
+        img.src = pendingImages[idx].dataUrl;
+        img.className = 'pending-image-thumb';
+        img.alt = '待发送图片';
+        wrapper.appendChild(img);
+
+        var removeBtn = document.createElement('button');
+        removeBtn.className = 'pending-image-remove';
+        removeBtn.textContent = '×';
+        removeBtn.title = '移除图片';
+        removeBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          removePendingImage(idx);
+        });
+        wrapper.appendChild(removeBtn);
+
+        previewArea.appendChild(wrapper);
+      })(i);
+    }
   }
 
   function formatSize(bytes) {
@@ -689,11 +793,21 @@ window.ChatPage = (function () {
         break;
       case 'stream_end':
         // 流式结束：定稿当前流式消息
-        if (!userStopped) finalizeAgentResponse();
+        if (!userStopped) {
+          finalizeAgentResponse();
+        } else {
+          // 用户已停止，清理残留状态
+          agentResponseBuffer = '';
+          streamFinalized = false;
+        }
         break;
       case 'response':
         // 完整响应（流式结束后的最终内容，或非流式模式的回退）
-        if (userStopped) break;
+        if (userStopped) {
+          // 用户已停止，忽略后续 response
+          userStopped = false; // 重置，准备下一轮
+          break;
+        }
         // 如果刚刚 finalize 了流式消息，response 是冗余的，跳过
         if (streamFinalized) {
           streamFinalized = false;
@@ -711,10 +825,15 @@ window.ChatPage = (function () {
       case 'status':
         wsProcessing = data.status === 'processing';
         if (data.status === 'idle') {
-          userStopped = false;
-          removeThinking();  // LLM 结束，隐藏状态栏
+          // 任务结束（正常完成或中断后后端清理完毕）
+          if (userStopped) {
+            userStopped = false; // 重置停止标记
+          }
+          removeThinking();
+          setStreamingState(false);
+        } else {
+          setStreamingState(wsProcessing);
         }
-        setStreamingState(wsProcessing);
         break;
       case 'error':
         finalizeAgentResponse();
@@ -951,7 +1070,7 @@ window.ChatPage = (function () {
     }
 
     var text = elInput.value.trim();
-    if (!text && !uploadedFile) return;
+    if (!text && !uploadedFile && pendingImages.length === 0) return;
 
     // 处理 ~clear 命令：清空聊天显示和后端缓存（记忆系统不受影响）
     if (text === '~clear') {
@@ -1026,8 +1145,9 @@ window.ChatPage = (function () {
     var displayParts = [];
     if (text) displayParts.push(text);
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
-    if (displayParts.length > 0) {
-      var userMsg = { role: 'user', content: displayParts.join('\n') };
+    var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
+    if (displayParts.length > 0 || msgImages.length > 0) {
+      var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       messages.push(userMsg);
       appendMessageEl(userMsg);
       saveMessages();
@@ -1036,7 +1156,7 @@ window.ChatPage = (function () {
     autoResizeInput();
     hideCmdDropdown();
     userScrolledUp = false; // 发送新消息时重置，确保看到回复
-    showThinking(!!uploadedFile);
+    showThinking(!!uploadedFile || msgImages.length > 0);
 
     // 如果有文件，先上传，再把 fileId 附加到消息中
     var msgText = text || '';
@@ -1045,7 +1165,18 @@ window.ChatPage = (function () {
     }
     removeUploadedFile();
 
-    sendWsMessage(msgText);
+    // 构建 WebSocket 消息（可能包含图片）
+    if (msgImages.length > 0) {
+      // 发送带图片的多模态消息
+      chatWs.send(JSON.stringify({
+        type: 'message',
+        content: msgText || '请分析这些图片',
+        images: msgImages,
+      }));
+    } else {
+      sendWsMessage(msgText);
+    }
+    clearPendingImages();
     userStopped = false; // 新消息发送，重置停止标记
     streamFinalized = false;
   }
@@ -1255,6 +1386,7 @@ window.ChatPage = (function () {
           '<div class="ctx-bottom-bar" id="ctx-bar" title="上下文用量">' +
             '<div class="ctx-bottom-fill"></div>' +
           '</div>' +
+          '<div class="pending-images-preview hidden" id="pending-images-preview"></div>' +
           '<div class="file-upload-status hidden" id="file-status">' +
             '<span class="file-name" id="file-name"></span>' +
             '<button class="file-remove" id="file-remove" title="Remove file">&times;</button>' +
@@ -1338,7 +1470,7 @@ window.ChatPage = (function () {
       setTimeout(hideCmdDropdown, 150);
     });
 
-    // 粘贴图片支持：从剪贴板粘贴图片自动上传
+    // 粘贴图片支持：从剪贴板粘贴图片加入待发送列表
     elInput.addEventListener('paste', function (e) {
       var items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
@@ -1347,19 +1479,42 @@ window.ChatPage = (function () {
           e.preventDefault();
           var file = items[i].getAsFile();
           if (file) {
-            // 生成文件名
-            var ext = file.type.split('/')[1] || 'png';
-            if (ext === 'jpeg') ext = 'jpg';
-            var name = 'paste-' + Date.now() + '.' + ext;
-            var namedFile = new File([file], name, { type: file.type });
-            handleFileSelect(namedFile);
-            // 显示粘贴预览
-            showPastePreview(file);
+            addPendingImage(file);
           }
           return;
         }
       }
     });
+
+    // 拖拽图片支持：拖拽图片到聊天区
+    var chatPage = container.querySelector('.chat-page');
+    if (chatPage) {
+      chatPage.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.add('drag-over');
+      });
+      chatPage.addEventListener('dragleave', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.remove('drag-over');
+      });
+      chatPage.addEventListener('drop', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.remove('drag-over');
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (!files) return;
+        for (var i = 0; i < files.length; i++) {
+          if (files[i].type.indexOf('image/') === 0) {
+            addPendingImage(files[i]);
+          } else {
+            // 非图片文件走文件上传流程
+            handleFileSelect(files[i]);
+          }
+        }
+      });
+    }
 
     if (elFileBtn) {
       elFileBtn.addEventListener('click', function () {

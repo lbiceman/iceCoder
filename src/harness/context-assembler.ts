@@ -2,17 +2,14 @@
  * 上下文组装器 — 负责"喂什么"给模型。
  *
  * 提示词拼接流程：
- * 1. 系统提示词（静态规则 + 动态环境/记忆），静态/动态分界支持缓存
- * 2. 用户上下文（以 <system-reminder> 注入到消息列表）
- * 3. 系统上下文（Git 状态等追加到系统提示词末尾）
- * 4. 工具定义
+ * 1. 系统提示词（纯静态规则，跨轮次不变 → 最大化前缀缓存命中）
+ * 2. 动态上下文（环境/记忆/偏好，作为独立 user 消息注入 → 不污染 system prompt 前缀）
+ * 3. 工具定义（跨轮次不变 → 缓存友好）
  *
- * 职责：
- * - system prompt 拼装（静态部分 memoize，动态部分每次重算）
- * - 用户上下文注入（MEMORY.md 内容 + 当前日期）
- * - 系统上下文注入（Git 状态等实时信息）
- * - 消息规范化（合并连续 user、清理孤立消息、去重 tool_use ID）
- * - 工具定义组装
+ * Prompt Caching 优化原则：
+ * - system prompt 内容跨轮次完全一致 → DeepSeek/OpenAI 自动前缀缓存命中
+ * - 动态内容（记忆、日期等）放在 system prompt 之后的独立消息中
+ * - 已发送的消息内容不做就地修改（由 harness 在发送副本上裁剪）
  */
 
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
@@ -25,20 +22,23 @@ export class ContextAssembler {
   private config: ContextAssemblyConfig;
   /** 静态系统提示词缓存（直到 invalidateCache 被调用） */
   private staticPromptCache: string | null = null;
+  /** 动态上下文缓存（内容变化时才重算） */
+  private dynamicContextCache: string | null = null;
+  private dynamicContextHash: string = '';
 
   constructor(config: ContextAssemblyConfig) {
     this.config = config;
   }
 
   /**
-   * 构建系统提示词，分为静态部分（可缓存）和动态部分（每次重算）。
+   * 构建系统提示词 — 仅包含静态内容。
    *
-   * 静态前缀跨会话缓存，动态后缀每次重算。
+   * Prompt Caching 关键：system prompt 跨轮次完全一致，
+   * DeepSeek/OpenAI 的自动前缀缓存才能命中。
+   * 动态内容（记忆、环境等）通过 buildDynamicContextMessage() 独立注入。
    */
   buildSystemPrompt(): string {
-    const staticPart = this.buildStaticPrompt();
-    const dynamicPart = this.buildDynamicPrompt();
-    return dynamicPart ? `${staticPart}\n\n${dynamicPart}` : staticPart;
+    return this.buildStaticPrompt();
   }
 
   /**
@@ -51,9 +51,13 @@ export class ContextAssembler {
   }
 
   /**
-   * 动态部分：环境信息、记忆、用户偏好 — 每会话变化。
+   * 构建动态上下文消息（环境信息、记忆、用户偏好等）。
+   *
+   * 作为独立的 user 消息注入到 system prompt 之后，
+   * 不污染 system prompt 的前缀缓存。
+   * 返回 null 表示没有动态内容。
    */
-  private buildDynamicPrompt(): string {
+  buildDynamicContextMessage(): string | null {
     const parts: string[] = [];
 
     // 环境信息
@@ -90,14 +94,32 @@ export class ContextAssembler {
       parts.push(ctxLines);
     }
 
+    // 自定义用户上下文（XXX.md等）
+    if (this.config.userContext && Object.keys(this.config.userContext).length > 0) {
+      for (const [key, value] of Object.entries(this.config.userContext)) {
+        parts.push(`# ${key}\n${value}`);
+      }
+    }
+
+    // 当前日期
+    const now = new Date();
+    parts.push(`# currentDate\n今天是 ${now.toISOString().split('T')[0]}。`);
+
     // 工具结果清理提醒
     parts.push(`# 工具结果管理\n旧的工具调用结果可能会被自动清理以节省上下文空间。请在获取重要信息后及时记录关键内容，因为工具结果可能在后续对话中不再可用。`);
 
-    return parts.join('\n\n');
+    if (parts.length === 0) return null;
+
+    return `<system-context>\n${parts.join('\n\n')}\n</system-context>`;
   }
 
   /**
-   * 组装初始消息序列：system prompt + 用户上下文 + user message。
+   * 组装初始消息序列：system prompt + 动态上下文 + user message。
+   *
+   * 结构：
+   * [0] system: 静态提示词（跨轮次不变 → 缓存命中）
+   * [1] user: <system-context>动态内容</system-context>（会话级稳定）
+   * [2] user: 用户实际输入
    */
   assembleInitialMessages(userMessage: string): UnifiedMessage[] {
     const messages: UnifiedMessage[] = [];
@@ -107,44 +129,15 @@ export class ContextAssembler {
       messages.push({ role: 'system', content: systemPrompt });
     }
 
-    // 注入用户上下文
-    const userContextMsg = this.buildUserContextMessage();
-    if (userContextMsg) {
-      messages.push({ role: 'user', content: userContextMsg });
+    // 注入动态上下文（记忆、环境、日期等）
+    const dynamicContext = this.buildDynamicContextMessage();
+    if (dynamicContext) {
+      messages.push({ role: 'user', content: dynamicContext });
     }
 
     messages.push({ role: 'user', content: userMessage });
 
     return messages;
-  }
-
-  /**
-   * 构建用户上下文消息。
-   *
-   * 将项目规范、当前日期、自定义上下文以 <system-reminder> 标签包裹。
-   */
-  private buildUserContextMessage(): string | null {
-    const sections: string[] = [];
-
-    // 自定义用户上下文（XXX.md等）
-    if (this.config.userContext && Object.keys(this.config.userContext).length > 0) {
-      for (const [key, value] of Object.entries(this.config.userContext)) {
-        sections.push(`# ${key}\n${value}`);
-      }
-    }
-
-    // 当前日期
-    const now = new Date();
-    sections.push(`# currentDate\n今天是 ${now.toISOString().split('T')[0]}。`);
-
-    if (sections.length === 0) return null;
-
-    return `<system-reminder>
-以下上下文信息可能与你的任务相关，也可能无关。
-不要主动回应这些上下文，除非它与当前任务高度相关。
-
-${sections.join('\n\n')}
-</system-reminder>`;
   }
 
   /**
@@ -170,6 +163,8 @@ ${sections.join('\n\n')}
    */
   invalidateCache(): void {
     this.staticPromptCache = null;
+    this.dynamicContextCache = null;
+    this.dynamicContextHash = '';
   }
 }
 
@@ -231,6 +226,11 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
       && prev?.role === 'user'
       && typeof msg.content === 'string'
       && typeof prev.content === 'string'
+      // 不合并 <system-context> 和 <system-reminder> 消息（保持前缀缓存一致性）
+      && !msg.content.startsWith('<system-context>')
+      && !msg.content.startsWith('<system-reminder>')
+      && !prev.content.startsWith('<system-context>')
+      && !prev.content.startsWith('<system-reminder>')
     ) {
       result[result.length - 1] = {
         ...prev,

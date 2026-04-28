@@ -122,22 +122,26 @@ export class ContextCompactor {
    * 第一层：Snip — 裁剪历史中的冗余段落。
    *
    * - 删除重复的 <system-reminder>（只保留最后一个）
+   * - 删除重复的 <system-context>（只保留最后一个）
    * - 删除旧的 <context-summary>（被新的替代）
    * - 删除空内容的 assistant 消息
    */
   private snip(messages: UnifiedMessage[]): UnifiedMessage[] {
     let lastReminderIdx = -1;
     let lastSummaryIdx = -1;
+    let lastContextIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       const content = typeof messages[i].content === 'string' ? messages[i].content as string : '';
       if (lastReminderIdx === -1 && content.startsWith('<system-reminder>')) lastReminderIdx = i;
       if (lastSummaryIdx === -1 && content.startsWith('<context-summary>')) lastSummaryIdx = i;
+      if (lastContextIdx === -1 && content.startsWith('<system-context>')) lastContextIdx = i;
     }
 
     return messages.filter((msg, idx) => {
       const content = typeof msg.content === 'string' ? msg.content as string : '';
       if (content.startsWith('<system-reminder>') && idx !== lastReminderIdx) return false;
       if (content.startsWith('<context-summary>') && idx !== lastSummaryIdx) return false;
+      if (content.startsWith('<system-context>') && idx !== lastContextIdx) return false;
       if (msg.role === 'assistant' && !msg.toolCalls?.length && !content.trim()) return false;
       return true;
     });
