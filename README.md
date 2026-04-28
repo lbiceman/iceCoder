@@ -1,197 +1,217 @@
 ﻿# iceCoder
 
-基于 Node.js + TypeScript 的 AI 编程助手，支持 PC / 移动端通过聊天界面与 AI 交互，自动调用工具完成复杂任务。
+**A complete, production-grade memory system for AI coding agents** — with a full coding assistant built around it.
 
-## 核心能力
+**English** | [中文](./README.zh-CN.md)
 
-- **多轮对话** — 跨轮次结构化消息历史
-- **32+ 内置工具** — 文件、搜索、Git、Shell、文档解析、网页搜索
-- **MCP 协议** — 动态连接外部工具 Server
-- **6 智能体流水线** — 需求 → 设计 → 拆分 → 编码 → 测试 → 验证
-- **LLM 驱动记忆** — 语义召回 + 自动提取 + autoDream 整合 + 秘密扫描
-- **移动端** — 扫码连接，手机远程操控
-- **上下文压缩** — 自动裁剪 + LLM 摘要，支持超长对话
+Most AI coding assistants forget everything when the session ends. iceCoder doesn't. It ships with a 15-module LLM-driven memory system that automatically extracts, recalls, consolidates, and secures knowledge across sessions — zero external databases, pure file-based persistence.
 
-## 快速开始
+> **Why this matters:** Aider has no persistent memory. Cline relies on community-built "Memory Bank" hacks. Even Claude Code's memory system (per the 2025 source leak) uses a simpler architecture. iceCoder's memory system is the most complete open-source implementation available.
+
+## What the Memory System Does
+
+```
+Session 1: "I prefer Vitest over Jest"
+  → Auto-extracted to memory file with confidence score
+  → Secret-scanned before writing to disk
+
+Session 2: "Write tests for this module"
+  → LLM semantic recall finds the Vitest preference
+  → Tests generated with Vitest, not Jest
+  → 💾 Passive confirmation: "Recalled: vitest preference"
+
+Background: autoDream consolidation merges duplicates,
+  prunes stale memories, detects user habit patterns
+```
+
+### Memory Architecture
+
+```
+User input → Async prefetch → Harness loop (LLM + tools + memory injection) → Response
+  → Background: extraction (mutex) + session notes + autoDream + telemetry
+```
+
+### 15 Modules, Full Lifecycle
+
+| Module | What it does |
+|--------|-------------|
+| **memory-recall** | LLM semantic recall with keyword+bigram fallback, cross-turn dedup, confidence/frequency weighting |
+| **memory-llm-extractor** | Auto-extraction via signal words + 30 content-pattern regexes + turn throttling, mutex with agent writes |
+| **memory-dream** | autoDream consolidation: merge/prune/dedup/expire, ConsolidationLock with PID + deadlock detection + rollback |
+| **memory-age** | Three-tier decay (fresh/stale/expired), high-confidence memories decay 2x slower |
+| **session-memory** | 10-section session notes, validated before write, injected after context compaction |
+| **memory-concurrency** | `sequential()` wrapper + inProgress mutex + trailing run pattern |
+| **memory-secret-scanner** | 25 high-confidence rules (from gitleaks), auto-redact before disk write |
+| **memory-security** | Path validation against 7 attack vectors (null byte, traversal, URL encoding, Unicode NFKC, symlink, absolute path, backslash) |
+| **memory-telemetry** | JSONL logging + EventEmitter for recall/extraction/dream metrics |
+| **memory-remote-config** | Runtime parameter tuning via hot-reloaded config file |
+| **multi-level-memory** | Three-tier loading (project/user/directory), user-type memories shared across projects |
+| **harness-memory** | Integration layer: passive confirmation, preference regex, topic-shift detection, agent write mutex |
+| **json-parser** | 4-layer LLM JSON parsing fallback (direct → markdown block → regex extract → fix common errors) |
+| **memory-config** | Centralized defaults for all memory subsystems |
+| **async-prefetch** | Fire-and-forget memory prefetching with cache |
+
+### Key Design Decisions
+
+**LLM recall + keyword bigram fallback** — When the LLM is available, it selects relevant memories from a manifest. When it's not (rate limit, timeout), the system falls back to two-stage keyword matching with Chinese bigram tokenization (zero-dependency, no dictionary needed).
+
+**Topic-shift re-recall** — Jaccard coefficient < 0.15 between consecutive user messages triggers fresh memory recall. Pure local computation, zero LLM cost.
+
+**Secret scanning before write** — 25 regex rules derived from gitleaks catch API keys, tokens, and private keys before they're persisted. Rule source code splits and concatenates key prefixes to avoid triggering scanners on the source itself.
+
+**Agent write mutex** — If the main agent writes to memory files directly (via write_file tool), background extraction skips that conversation turn. `hasMemoryWritesSince` scans assistant tool_use messages to detect this.
+
+**Passive confirmation** — After extraction, the next response includes "💾 Remembered: ..." so users know what was stored. Builds trust without interrupting flow.
+
+**autoDream consolidation** — Four-phase process (Orient → Gather → Consolidate → Prune) that merges duplicates, resolves contradictions, detects user habit patterns, and promotes confirmed user preferences from project-level to user-level storage. Protected by file lock with PID write + deadlock detection + failure rollback.
+
+
+### vs. Claude Code Memory (per 2025 source leak)
+
+| Capability | iceCoder | Claude Code |
+|-----------|:--------:|:-----------:|
+| LLM semantic recall | ✅ | ✅ |
+| LLM auto-extraction | ✅ | ✅ |
+| autoDream consolidation | ✅ | ✅ |
+| Fallback when LLM unavailable | ✅ regex + bigram | ❌ |
+| Memory decay + confidence | ✅ three-tier | ❌ |
+| Topic-shift re-recall | ✅ Jaccard local | ❌ |
+| Content preview fallback | ✅ 300 chars | ❌ |
+| Telemetry | ✅ real JSONL | ⚠️ stub |
+| Runtime config | ✅ file hot-reload | ⚠️ GrowthBook |
+| Secret scanning | ✅ 25 rules | ✅ |
+
+> This table compares memory subsystem design only. Claude Code has native prompt caching, 200k context, multi-agent parallelism, and Anthropic's infrastructure — a different league as a complete product.
+
+---
+
+## Beyond Memory: Full Coding Assistant
+
+iceCoder is also a complete AI coding assistant with CLI, Web, and mobile interfaces.
+
+### Capabilities
+
+- **32+ built-in tools** — file ops, search, Git, shell, document parsing (PPTX/XMind/XLSX/HTML), web search
+- **MCP protocol** — dynamically connect external tool servers
+- **6-agent pipeline** — requirements → design → task split → coding → testing → verification
+- **Harness loop engine** — custom state machine (not LangChain), with max-output-tokens recovery, `<status>` tag continuation, exponential backoff retry, tool result budget trimming, stream/non-stream auto-fallback
+- **Context compaction** — auto-trim + LLM summarization for long conversations
+- **Mobile** — scan QR code to connect phone as remote controller
+- **LLM adapter** — unified interface for OpenAI + Anthropic SDKs, hot-switchable
+
+### Quick Start
 
 ```bash
 npm install
-# 编辑 data/config.json，配置至少一个 OpenAI 兼容的 API Key
+# Edit data/config.json — add at least one OpenAI-compatible API key
+npm run iceCoder          # Start all (CLI + Web + Tunnel)
 ```
 
-### 常用命令
+### Commands
 
 ```bash
-npm run iceCoder              # 启动全部（CLI + Web + Tunnel）
-npm run iceCoder:cli          # 仅 CLI
-npm run iceCoder:web          # 仅 Web
-npm run iceCoder:run -- "修复编译错误"  # 单次任务
-npm run iceCoder:tools        # 查看工具
-npm run iceCoder:mcp          # 查看 MCP
-npm run iceCoder:config       # 查看配置
-npm run dev                   # Vite 前端热更新
-npm run build && npm start    # 生产构建
+npm run iceCoder              # CLI + Web + Tunnel
+npm run iceCoder:cli          # CLI only
+npm run iceCoder:web          # Web only
+npm run iceCoder:run -- "fix the build errors"   # One-shot task
+npm run iceCoder:tools        # List tools
+npm run iceCoder:mcp          # List MCP servers
+npm run iceCoder:config       # Show config
+npm run dev                   # Vite dev server
+npm run build && npm start    # Production build
 ```
 
-### 全局安装
+### Global Install
 
 ```bash
 npm run build && npm link
-iceCoder start [--port 8080]  # CLI + Web + Tunnel
-iceCoder cli / web            # 仅终端 / 仅 Web
-iceCoder run "修复编译错误" [--max-rounds 50] [--json]
+iceCoder start [--port 8080]
+iceCoder cli / web
+iceCoder run "fix build errors" [--max-rounds 50] [--json]
 iceCoder tools / mcp / config / help
 ```
 
-### 内置命令（`~` 前缀）
+### Built-in Commands (`~` prefix)
 
-| 命令 | 说明 |
-|------|------|
-| `~clear` | 清空对话历史 |
-| `~open` | 文件管理器（Web） |
-| `~scan` | 手机扫码连接 |
-| `~telemetry` | 记忆遥测报告 |
-| `~export` | 导出记忆文件 |
-| `~memory` | 查看/管理/删除记忆文件 |
-| `~tools` | 列出工具（终端） |
-| `~quit` | 退出（终端） |
+| Command | Description |
+|---------|-------------|
+| `~clear` | Clear conversation history |
+| `~open` | File manager (Web) |
+| `~scan` | QR code for mobile connection |
+| `~telemetry` | Memory telemetry report |
+| `~export` | Export memory files |
+| `~memory` | View/manage/delete memories |
+| `~tools` | List tools (terminal) |
+| `~quit` | Exit (terminal) |
 
-### 环境变量
+### Environment Variables
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | `3000` | 服务端口 |
-| `ICE_CONFIG_PATH` | `data/config.json` | LLM + MCP 配置 |
-| `ICE_SYSTEM_PROMPT_PATH` | `data/system-prompt.md` | 系统提示词 |
-| `ICE_SESSIONS_DIR` | `data/sessions` | 会话存储 |
-| `ICE_MEMORY_DIR` | `data/memory-files` | 文件记忆 |
-| `ICE_OUTPUT_DIR` | `output` | 流水线输出 |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | Server port |
+| `ICE_CONFIG_PATH` | `data/config.json` | LLM + MCP config |
+| `ICE_SYSTEM_PROMPT_PATH` | `data/system-prompt.md` | System prompt |
+| `ICE_SESSIONS_DIR` | `data/sessions` | Session storage |
+| `ICE_MEMORY_DIR` | `data/memory-files` | File memory |
+| `ICE_OUTPUT_DIR` | `output` | Pipeline output |
 
 ---
 
-## 架构
+## Architecture
 
 ```
-客户端（PC/移动端 WebSocket + SSE + CLI）
+Clients (PC/Mobile WebSocket + SSE + CLI)
   → Express + WebSocket Server
-    → Harness 循环引擎（对话）/ Orchestrator（6 阶段流水线）
-      → 工具系统（32+ 内置 + MCP）+ LLM 适配 + 记忆系统
+    → Harness loop engine (chat) / Orchestrator (6-stage pipeline)
+      → Tool system (32+ built-in + MCP) + LLM adapter + Memory system
 ```
 
-**Harness 循环**：预处理 → LLM → 工具执行 → 记忆注入 → 循环至无工具调用 → 返回回复 + 后台提取记忆。
+### Design Decisions
 
-### 关键设计决策
+| Aspect | Choice |
+|--------|--------|
+| Loop engine | Custom Harness state machine, not LangChain — full control over tool execution flow |
+| Tool system | Central registry + Zod validation + unified executor + streaming parallel execution |
+| LLM adapter | Unified interface (OpenAI + Anthropic SDK), hot-switchable providers |
+| Memory persistence | Zero external DB, pure files + LLM semantic recall |
+| Frontend | Zero-framework vanilla HTML/CSS/JS |
+| MCP | stdio protocol, dynamic load/unload |
 
-| 维度 | 方案 |
-|------|------|
-| 循环引擎 | 自研 Harness，非 LangChain，完全掌控工具执行流程 |
-| 工具系统 | 集中注册 + Zod 校验 + 统一执行器 |
-| LLM 适配 | 统一接口（OpenAI + Anthropic SDK），可热切换 |
-| 记忆持久化 | 零外部 DB，纯文件 + LLM 语义召回 |
-| 前端 | 零框架原生 HTML/CSS/JS |
-| MCP | stdio 协议，动态加载/卸载 |
 
 ---
 
-## 记忆系统
-
-采用 **LLM 驱动 + 文件持久化** 架构，以 `FileMemoryManager` 为唯一管理器。
-
-### 模块
-
-| 模块 | 职责 |
-|------|------|
-| `memory-recall` | LLM 语义召回，回退关键词 + bigram 匹配，跨轮次去重，置信度/频率加权 |
-| `memory-llm-extractor` | LLM 自动提取，结构化去重 + 用户习惯检测，与主代理写入互斥 |
-| `memory-dream` | autoDream 整合（合并/修剪/去重/过期清理），ConsolidationLock 文件锁 |
-| `memory-age` | 三级衰减（fresh/stale/expired），高置信度衰减更慢 |
-| `session-memory` | 会话笔记（10 section），上下文压缩后保持连续性 |
-| `memory-concurrency` | sequential 串行 + inProgress 互斥 + trailing run |
-| `memory-secret-scanner` | 25 条正则，写入前自动脱敏 |
-| `memory-security` | 路径安全（null byte/URL 编码/symlink） |
-| `memory-telemetry` | JSONL 日志 + EventEmitter |
-| `memory-remote-config` | 运行时动态调参 |
-| `multi-level-memory` | 三级加载（项目/用户/目录），user 类型跨项目共享 |
-| `harness-memory` | 集成层：被动确认 + 偏好正则 + 话题切换 + 主代理互斥 |
-
-### 数据流
-
-```
-用户输入 → 异步预取记忆 → Harness 循环（LLM + 工具 + 记忆注入）→ 返回回复
-  → 后台：记忆提取(互斥) + 会话笔记 + autoDream + 遥测
-```
-
-### 评分（基于代码通读）
-
-**架构维度**
-
-| 维度 | 分数 | 说明 |
-|------|:---:|------|
-| 功能完整性 | **9.5** | 15 个模块覆盖完整生命周期：召回（LLM + 两阶段关键词 + bigram）→ 提取（信号词 + 内容特征 + 轮次三级触发）→ 互斥（主代理写入检测 `hasMemoryWritesSince`）→ 会话记忆（10-section 模板 + 写入前格式验证）→ autoDream（过期清理 + 用户习惯分析）→ 话题切换重召回（Jaccard 本地计算）→ 多级存储（user 类型跨项目共享）→ 安全 + 遥测 + 远程配置 + Prompt Caching。在开源 AI 编程助手中功能链条最完整 |
-| 工程质量 | **9.0** | 零外部 DB 全文件方案，5 层 JSON 解析回退，并发控制四件套（sequential + inProgress + trailing run + ConsolidationLock），锁实现含 PID 写入 + 死锁检测 + 竞争检测 + mtime 回滚，8 个测试文件 100+ 用例。扣分项：scanMemoryFiles 每次全量 I/O（O(N) 读 frontmatter + preview），无备份机制 |
-| 实际效果 | **9.0** | 召回路径设计精细：LLM 语义选择 → 失败回退关键词粗筛（description + filename + contentPreview）→ 精读二次排序 → 置信度/新鲜度/频率加权。提取触发不靠硬编码阈值，用信号词 + 30 条内容特征正则 + 轮次节流三级启发式。话题切换用 Jaccard < 0.15 判定，零 LLM 开销。扣分项：每轮 5 条上限偏保守 |
-| 可扩展性 | **7.5** | 三级存储分离 + 过期清理 + 远程动态调参。200 文件硬上限 + 全量扫描是规模天花板，但对个人/小团队项目够用。接入向量检索后可突破 |
-| 安全性 | **9.5** | 路径验证链覆盖 7 种攻击向量（null byte / 路径遍历 / URL 编码 / Unicode NFKC / symlink + dangling symlink + ELOOP / 绝对路径 / 反斜杠），25 条高置信度秘密扫描规则（gitleaks 精选，拆分拼接避免源码误报），会话记忆写入前 10-section 格式验证。在同类项目中安全覆盖最全面 |
-
-**架构综合：9.0 / 10**
-
-**用户体验维度**
-
-| 维度 | 权重 | 分数 | 说明 |
-|------|:---:|:---:|------|
-| 记得住 | 25% | **9.0** | 三级触发（信号词 + 40 条内容特征正则 + 轮次节流）+ 被动确认（用户知道记了什么）。主代理直接写入 + 后台提取互斥不冲突 |
-| 想得起 | 25% | **9.0** | LLM 语义召回 + 两阶段关键词回退（粗筛 15 → 精读 5）+ 中文 bigram 零依赖分词 + 跨轮次 `alreadySurfaced` 去重 + Jaccard 话题切换重召回 + contentPreview 300 字符兜底 + recallCount/lastRecalledAt 元数据追踪。召回路径在开源方案中最完整 |
-| 不打扰 | 20% | **8.5** | 全后台异步（fire-and-forget 预取 + sequential 提取），注入用 `<system-reminder>` 标签包裹。会话记忆更新条件精细（token 增长 + 工具调用数 + 自然断点三重判断）。被动确认为淡化提示不打断流程 |
-| 不出错 | 15% | **9.0** | 秘密扫描 + 7 种路径防护 + 会话记忆写入前验证（至少 7/10 section）+ ConsolidationLock 防并发 + Dream 失败自动回滚。`~memory` 命令支持用户删除错误记忆 |
-| 能成长 | 15% | **7.5** | autoDream 四阶段整合（Orient → Gather → Consolidate → Prune）+ 三级衰减（高置信度阈值翻倍）+ 多级存储 + `~export` 导出。扣分：200 文件上限，无向量检索，无导入 |
-
-**用户体验综合：8.7 / 10**
-
-### 与 Claude Code 对比
-
-基于社区逆向的 Claude Code 记忆架构对比：
-
-| 能力 | iceCoder | Claude Code |
-|------|:---:|:---:|
-| LLM 语义召回 | ✅ | ✅ |
-| LLM 自动提取 | ✅ | ✅ |
-| autoDream 整合 | ✅ | ✅ |
-| LLM 不可用时回退 | ✅ 正则 + bigram | ❌ |
-| 记忆衰减 + 置信度 | ✅ 三级衰减 | ❌ |
-| 话题切换重召回 | ✅ Jaccard 本地 | ❌ |
-| contentPreview 兜底 | ✅ 300 字符 | ❌ |
-| 遥测 | ✅ 真实 JSONL | ⚠️ stub |
-| 远程配置 | ✅ 文件热加载 | ⚠️ 依赖 GrowthBook |
-| 秘密扫描 | ✅ 25 条规则 | ✅ |
-| 模块组织 | 单目录 15 模块 | 分散多目录 |
-
-### 已知局限
-
-- 200 文件硬上限 + 全量扫描，无向量检索
-- 纯 LLM 召回每次消耗 ~256 output tokens
-- 无备份/恢复、无加密存储
-
----
-
-## 目录结构
+## Project Structure
 
 ```
 src/
-├── index.ts          # 入口
-├── cli/              # CLI 命令
-├── core/             # 编排器 + 智能体基类 + 流水线状态
-├── agents/           # 6 个专业智能体
-├── harness/          # 对话循环引擎
-├── tools/            # 工具注册表 + 32 个内置工具
-├── mcp/              # MCP 客户端
-├── llm/              # LLM 适配层
-├── memory/           # 记忆系统
-├── parser/           # 文档解析
+├── index.ts          # Entry point
+├── cli/              # CLI commands
+├── core/             # Orchestrator + agent base class + pipeline state
+├── agents/           # 6 specialized agents
+├── harness/          # Conversation loop engine
+├── tools/            # Tool registry + 32 built-in tools
+├── mcp/              # MCP client
+├── llm/              # LLM adapter layer
+├── memory/           # Memory system (15 modules)
+├── parser/           # Document parsing
 ├── web/              # Express + WebSocket + SSE
-├── public/           # 前端
-└── data/             # 运行时数据
+├── public/           # Frontend
+└── data/             # Runtime data
 ```
 
-## 技术栈
+## Known Limitations
 
-Node.js ≥ 18 · TypeScript · Express · WebSocket + SSE · OpenAI SDK + Anthropic SDK · jszip + xml2js + cheerio + officeparser · MCP 2024-11-05 · 原生 HTML/CSS/JS
+- 200-file hard cap + full scan per recall (no vector search)
+- LLM recall costs ~256 output tokens per invocation
+- No backup/restore, no encrypted storage
+- Dream consolidation reads only first 50 files (2000 chars each)
+- `harness-memory.ts` integration layer is overloaded (~450 lines, too many responsibilities)
+- Memory modules are flat in one directory (not organized into recall/, extraction/, dream/, security/ subdirectories)
+
+## Tech Stack
+
+Node.js ≥ 18 · TypeScript · Express · WebSocket + SSE · OpenAI SDK + Anthropic SDK · jszip + xml2js + cheerio + officeparser · MCP 2024-11-05 · Vanilla HTML/CSS/JS
+
+## License
+
+ISC
