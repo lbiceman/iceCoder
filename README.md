@@ -52,6 +52,7 @@ iceCoder tools / mcp / config / help
 | `~scan` | 手机扫码连接 |
 | `~telemetry` | 记忆遥测报告 |
 | `~export` | 导出记忆文件 |
+| `~memory` | 查看/管理/删除记忆文件 |
 | `~tools` | 列出工具（终端） |
 | `~quit` | 退出（终端） |
 
@@ -111,6 +112,7 @@ iceCoder tools / mcp / config / help
 | `memory-telemetry` | JSONL 日志 + EventEmitter |
 | `memory-remote-config` | 运行时动态调参 |
 | `multi-level-memory` | 三级加载（项目/用户/目录），user 类型跨项目共享 |
+| `harness-memory` | 集成层：被动确认 + 偏好正则 + 话题切换 + 主代理互斥 |
 
 ### 数据流
 
@@ -137,13 +139,13 @@ iceCoder tools / mcp / config / help
 
 | 维度 | 权重 | 分数 | 说明 |
 |------|:---:|:---:|------|
-| 记得住 | 25% | **8.5** | 三级触发（信号词 + 30 条内容特征正则 + 轮次节流），不靠消息长度硬编码。LLM 提取 prompt 含结构化去重指令 + 用户习惯检测 + tags 语义标签。主代理直接写入 + 后台提取互斥不冲突。扣分：短对话可能不触发，无用户确认 |
+| 记得住 | 25% | **9.0** | 三级触发（信号词 + 40 条内容特征正则 + 轮次节流）+ 被动确认（用户知道记了什么）。主代理直接写入 + 后台提取互斥不冲突 |
 | 想得起 | 25% | **9.0** | LLM 语义召回 + 两阶段关键词回退（粗筛 15 → 精读 5）+ 中文 bigram 零依赖分词 + 跨轮次 `alreadySurfaced` 去重 + Jaccard 话题切换重召回 + contentPreview 300 字符兜底 + recallCount/lastRecalledAt 元数据追踪。召回路径在开源方案中最完整 |
-| 不打扰 | 20% | **8.5** | 全后台异步（fire-and-forget 预取 + sequential 提取），注入用 `<system-reminder>` 标签包裹。会话记忆更新条件精细（token 增长 + 工具调用数 + 自然断点三重判断）。扣分：无记忆面板，注入消息用户可见 |
-| 不出错 | 15% | **9.0** | 秘密扫描 + 7 种路径防护 + 会话记忆写入前验证（至少 7/10 section）+ ConsolidationLock 防并发 + Dream 失败自动回滚。扣分：无备份，无加密 |
+| 不打扰 | 20% | **8.5** | 全后台异步（fire-and-forget 预取 + sequential 提取），注入用 `<system-reminder>` 标签包裹。会话记忆更新条件精细（token 增长 + 工具调用数 + 自然断点三重判断）。被动确认为淡化提示不打断流程 |
+| 不出错 | 15% | **9.0** | 秘密扫描 + 7 种路径防护 + 会话记忆写入前验证（至少 7/10 section）+ ConsolidationLock 防并发 + Dream 失败自动回滚。`~memory` 命令支持用户删除错误记忆 |
 | 能成长 | 15% | **7.5** | autoDream 四阶段整合（Orient → Gather → Consolidate → Prune）+ 三级衰减（高置信度阈值翻倍）+ 多级存储 + `~export` 导出。扣分：200 文件上限，无向量检索，无导入 |
 
-**用户体验综合：8.6 / 10**
+**用户体验综合：8.7 / 10**
 
 ### 与 Claude Code 对比
 
@@ -167,7 +169,6 @@ iceCoder tools / mcp / config / help
 
 - 200 文件硬上限 + 全量扫描，无向量检索
 - 纯 LLM 召回每次消耗 ~256 output tokens
-- 无记忆面板（用户无法查看/编辑/确认记忆）
 - 无备份/恢复、无加密存储
 
 ---

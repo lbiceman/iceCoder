@@ -463,6 +463,12 @@ async function handleChatMessage(
   // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
   sendJSON(ws, { type: 'stream_end' });
 
+  // v4 被动确认：附加记忆提取通知
+  const extractionNotices = harness.flushExtractionNotices();
+  if (extractionNotices.length > 0) {
+    sendJSON(ws, { type: 'memory_notice', notices: extractionNotices });
+  }
+
   if (result.content) {
     sendJSON(ws, { type: 'response', content: result.content });
   }

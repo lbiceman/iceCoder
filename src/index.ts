@@ -51,6 +51,7 @@ import { createSessionsRouter } from './web/routes/sessions.js';
 import { createUploadRouter } from './web/routes/upload.js';
 import { createMemoryTelemetryRouter } from './web/routes/memory-telemetry.js';
 import { createMemoryExportRouter } from './web/routes/memory-export.js';
+import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 
 // 类型
 import type { ProviderConfig } from './web/types.js';
@@ -269,6 +270,7 @@ async function main(): Promise<void> {
       { path: '/api/sessions', router: createSessionsRouter() },
       { path: '/api/chat/upload', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
+      { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/memory', router: createMemoryExportRouter() },
       { path: '/api', router: createPipelineRouter({ orchestrator, sseManager }) },
     ],

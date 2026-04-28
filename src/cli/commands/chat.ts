@@ -281,9 +281,91 @@ ${c.bold}终端内置命令:${c.reset}
   ${c.cyan}/tools${c.reset}   列出可用工具
   ${c.cyan}/clear${c.reset}   清空对话历史
   ${c.cyan}/export${c.reset}  导出记忆文件
+  ${c.cyan}/memory${c.reset}  查看/管理记忆文件
   ${c.cyan}/help${c.reset}    显示此帮助
   ${c.cyan}/quit${c.reset}    退出
 `);
+      rl.prompt();
+      return;
+    }
+
+    if (cmd === 'memory' || cmd.startsWith('memory ')) {
+      try {
+        const { promises: fsP } = await import('node:fs');
+        const pathMod = await import('node:path');
+        const { scanMemoryFiles } = await import('../../memory/file-memory/memory-scanner.js');
+        const { validatePath, PathTraversalError } = await import('../../memory/file-memory/memory-security.js');
+
+        const projDir = pathMod.default.resolve(memoryFilesDir);
+        const userDir = pathMod.default.resolve(process.env.ICE_USER_MEMORY_DIR || 'data/user-memory');
+        const memArgs = cmd.substring(6).trim(); // "memory" 后面的参数
+
+        // ~memory delete <filename>
+        if (memArgs.startsWith('delete ')) {
+          const delFilename = memArgs.substring(7).trim();
+          if (!delFilename) {
+            error('用法: /memory delete <文件名>');
+            rl.prompt();
+            return;
+          }
+          if (delFilename === 'MEMORY.md') {
+            error('不能删除索引文件 MEMORY.md');
+            rl.prompt();
+            return;
+          }
+
+          let deleted = false;
+          for (const dir of [projDir, userDir]) {
+            try {
+              const filePath = validatePath(delFilename, dir);
+              await fsP.access(filePath);
+              await fsP.unlink(filePath);
+              success(`已删除记忆: ${delFilename}`);
+              deleted = true;
+              break;
+            } catch (e) {
+              if (e instanceof PathTraversalError) {
+                error('路径安全验证失败');
+                rl.prompt();
+                return;
+              }
+              // 文件不在此目录，继续
+            }
+          }
+          if (!deleted) {
+            error(`记忆文件未找到: ${delFilename}`);
+          }
+          rl.prompt();
+          return;
+        }
+
+        // ~memory (无参数) — 列出所有记忆
+        const projMemories = await scanMemoryFiles(projDir, 200);
+        const userMemories = await scanMemoryFiles(userDir, 50);
+        const seenFilenames = new Set(projMemories.map(m => m.filename));
+        const allMemories = [
+          ...projMemories.map(m => ({ ...m, level: 'project' })),
+          ...userMemories.filter(m => !seenFilenames.has(m.filename)).map(m => ({ ...m, level: 'user' })),
+        ];
+
+        if (allMemories.length === 0) {
+          info('📭 暂无记忆文件。');
+          rl.prompt();
+          return;
+        }
+
+        info(`📋 记忆文件 (${allMemories.length} 个):`);
+        for (let i = 0; i < allMemories.length; i++) {
+          const m = allMemories[i];
+          const typeTag = m.type ? `[${m.type}]` : '';
+          const desc = m.description ? ` — ${m.description}` : '';
+          const levelTag = m.level === 'user' ? ' (用户级)' : '';
+          console.log(`  ${c.cyan}${i + 1}.${c.reset} ${typeTag} ${m.filename}${desc}${levelTag}`);
+        }
+        console.log(`\n  删除记忆: ${c.cyan}/memory delete <文件名>${c.reset}`);
+      } catch (e) {
+        error(`记忆操作失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
       rl.prompt();
       return;
     }
@@ -423,6 +505,12 @@ ${c.bold}终端内置命令:${c.reset}
       // 输出 AI 回复
       if (result.content) {
         aiText(result.content);
+      }
+
+      // v4 被动确认：显示记忆提取通知
+      const extractionNotices = harness.flushExtractionNotices();
+      for (const notice of extractionNotices) {
+        console.log(`${c.dim}${notice}${c.reset}`);
       }
 
       // 显示统计
