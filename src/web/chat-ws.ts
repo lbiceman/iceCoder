@@ -221,7 +221,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           return;
         }
 
-        if (msg.type === 'message' && msg.content) {
+        if (msg.type === 'message' && (msg.content || (msg.images && msg.images.length > 0))) {
           if (isProcessing) {
             sendJSON(ws, { type: 'error', message: '正在处理上一条指令，请稍候' });
             return;
@@ -231,7 +231,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           sendJSON(ws, { type: 'status', status: 'processing' });
 
           try {
-            await handleChatMessage(ws, msg.content, orchestrator, toolRegistry, toolExecutor);
+            const inlineImages: string[] = Array.isArray(msg.images) ? msg.images : [];
+            await handleChatMessage(ws, msg.content || '', orchestrator, toolRegistry, toolExecutor, inlineImages);
           } catch (err) {
             sendJSON(ws, { type: 'error', message: formatFriendlyError(err) });
           }
@@ -262,6 +263,7 @@ async function handleChatMessage(
   orchestrator: Orchestrator,
   toolRegistry: ToolRegistry,
   toolExecutor: ToolExecutor,
+  inlineImages: string[] = [],
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
   const toolDefs = toolRegistry.getDefinitions();
@@ -272,24 +274,33 @@ async function handleChatMessage(
 
   // 构建用户消息（可能包含图片的多模态消息）
   let userMessageContent: string | import('../llm/types.js').ContentBlock[];
-  if (imageUrls.length > 0) {
+
+  // 合并所有图片来源：文件上传的图片 + 前端直接发送的 base64 图片
+  const allImageDataUrls: string[] = [...inlineImages]; // 前端粘贴/拖拽的 base64 图片
+
+  // 处理文件上传中的图片（读取文件转 base64）
+  for (const imgPath of imageUrls) {
+    try {
+      const imgData = await fsPromises.readFile(imgPath);
+      const ext = path.extname(imgPath).toLowerCase().replace('.', '');
+      const mimeType = ext === 'jpg' ? 'jpeg' : ext;
+      const dataUrl = `data:image/${mimeType};base64,${imgData.toString('base64')}`;
+      allImageDataUrls.push(dataUrl);
+    } catch (err) {
+      console.error('[chat-ws] 读取图片失败:', err);
+    }
+  }
+
+  if (allImageDataUrls.length > 0) {
     // 多模态消息：文本 + 图片
     const blocks: import('../llm/types.js').ContentBlock[] = [];
     const textPart = filePaths.length > 0
       ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
-      : resolvedMessage;
+      : resolvedMessage || '请分析这些图片';
     blocks.push({ type: 'text', text: textPart });
 
-    for (const imgPath of imageUrls) {
-      try {
-        const imgData = await fsPromises.readFile(imgPath);
-        const ext = path.extname(imgPath).toLowerCase().replace('.', '');
-        const mimeType = ext === 'jpg' ? 'jpeg' : ext;
-        const dataUrl = `data:image/${mimeType};base64,${imgData.toString('base64')}`;
-        blocks.push({ type: 'image', imageUrl: dataUrl });
-      } catch (err) {
-        console.error('[chat-ws] 读取图片失败:', err);
-      }
+    for (const dataUrl of allImageDataUrls) {
+      blocks.push({ type: 'image', imageUrl: dataUrl });
     }
     userMessageContent = blocks;
   } else {

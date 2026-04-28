@@ -16,39 +16,39 @@
 
 /* ── Dark Theme (default) ── */
 [data-theme="dark"] {
-  --bg-primary: #0c0c1d;
-  --bg-secondary: #13132b;
-  --bg-card: #1a1a38;
-  --bg-input: #161633;
-  --bg-nav: rgba(12, 12, 29, 0.95);
-  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-primary: #10112a;
+  --bg-secondary: #171838;
+  --bg-card: #1e1f42;
+  --bg-input: #1a1b3a;
+  --bg-nav: rgba(16, 17, 42, 0.96);
+  --bg-hover: rgba(255, 255, 255, 0.07);
 
-  --text-primary: #e4e4ef;
-  --text-secondary: #8e8eaf;
-  --text-muted: #5c5c7a;
+  --text-primary: #ededf5;
+  --text-secondary: #a8a8c8;
+  --text-muted: #7e7ea0;
 
-  --border-color: #252548;
-  --border-light: #1e1e40;
+  --border-color: #2e2e58;
+  --border-light: #262650;
 
-  --accent: #5b8def;
-  --accent-hover: #4a7de0;
-  --accent-light: rgba(91, 141, 239, 0.12);
-  --accent-glow: rgba(91, 141, 239, 0.2);
+  --accent: #6b9cff;
+  --accent-hover: #5a8bf0;
+  --accent-light: rgba(107, 156, 255, 0.14);
+  --accent-glow: rgba(107, 156, 255, 0.22);
 
-  --success: #34d399;
-  --success-light: rgba(52, 211, 153, 0.12);
-  --warning: #fbbf24;
-  --warning-light: rgba(251, 191, 36, 0.12);
-  --danger: #f87171;
-  --danger-light: rgba(248, 113, 113, 0.1);
+  --success: #3ee0a5;
+  --success-light: rgba(62, 224, 165, 0.14);
+  --warning: #fcc63a;
+  --warning-light: rgba(252, 198, 58, 0.14);
+  --danger: #ff8080;
+  --danger-light: rgba(255, 128, 128, 0.12);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.45);
 
   --msg-user-bg: #5b8def;
-  --msg-agent-bg: #1a1a38;
-  --msg-agent-border: #252548;
+  --msg-agent-bg: #1e1f42;
+  --msg-agent-border: #2e2e58;
 }
 
 /* ── Light Theme ── */
@@ -596,7 +596,8 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   margin-bottom: 0;
 }
 .chat-input-area > .chat-input-row,
-.chat-input-area > .file-upload-status {
+.chat-input-area > .file-upload-status,
+.chat-input-area > .pending-images-preview {
   padding: 0 16px;
 }
 .chat-input-area > .chat-input-row {
@@ -625,6 +626,88 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   font-size: 16px;
 }
 .file-upload-status .file-remove:hover { color: var(--danger); }
+
+/* ── Pending Images Preview ── */
+.pending-images-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+}
+.pending-images-preview.hidden { display: none; }
+.pending-image-item {
+  position: relative;
+  display: inline-block;
+}
+.pending-image-thumb {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+.pending-image-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+}
+.pending-image-remove:hover {
+  background: #dc2626;
+}
+
+/* ── Message Images ── */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.msg-image-thumb {
+  max-width: 200px;
+  max-height: 150px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: transform var(--transition);
+}
+.msg-image-thumb:hover {
+  transform: scale(1.05);
+}
+
+/* ── Drag Over Indicator ── */
+.chat-page.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+.chat-page.drag-over::after {
+  content: '拖放图片到此处';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--accent-light);
+  color: var(--accent);
+  padding: 16px 32px;
+  border-radius: var(--radius-lg);
+  font-size: 16px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 100;
+}
+.chat-page {
+  position: relative;
+}
 
 .chat-input-row {
   display: flex;
@@ -748,7 +831,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .agent-status-bar {
   display: none;
   position: fixed;
-  bottom: 72px;            /* token 进度条上方约 10px */
+  bottom: 80px;            /* token 进度条上方约 10px */
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
@@ -801,7 +884,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   color: var(--text-muted);
 }
 .tool-action .tool-icon.success {
-  color: #4caf50;
+  color: #4dd860;
 }
 .tool-action .tool-icon.error {
   color: var(--danger, #e94560);

@@ -1,6 +1,11 @@
 /**
  * Anthropic 提供者适配器 - 为 Anthropic Messages API 实现 ProviderAdapter。
- * 支持聊天、流式传输、工具使用和 Anthropic 特定的模型参数。
+ * 支持聊天、流式传输、工具使用、Prompt Caching 和 Anthropic 特定的模型参数。
+ *
+ * Prompt Caching 策略：
+ * - system prompt 标记 cache_control → 跨轮次缓存（节省 90% 输入 token 费用）
+ * - tools 列表最后一个工具标记 cache_control → 工具定义缓存
+ * - 缓存命中的 token 在 usage 中通过 cache_read_input_tokens 返回
  *
  * Requirements: 21.1, 21.2, 21.3, 21.4, 21.5, 21.6, 21.7, 21.8
  */
@@ -17,6 +22,9 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import { estimateStringTokens } from './token-estimator.js';
+
+/** Anthropic cache_control 标记 */
+const CACHE_BREAKPOINT = { type: 'ephemeral' as const };
 
 /**
  * Anthropic 适配器的配置。
@@ -56,8 +64,8 @@ export class AnthropicAdapter implements ProviderAdapter {
    */
   async chat(messages: UnifiedMessage[], options: LLMOptions): Promise<LLMResponse> {
     try {
-      const { systemPrompt, anthropicMessages } = this.convertToAnthropicMessages(messages);
-      const params = this.buildRequestParams(systemPrompt, anthropicMessages, options);
+      const { systemBlocks, anthropicMessages } = this.convertToAnthropicMessages(messages);
+      const params = this.buildRequestParams(systemBlocks, anthropicMessages, options);
 
       const response = await this.client.messages.create(params);
       return this.convertResponse(response as Anthropic.Message);
@@ -76,8 +84,8 @@ export class AnthropicAdapter implements ProviderAdapter {
     options: LLMOptions,
   ): Promise<LLMResponse> {
     try {
-      const { systemPrompt, anthropicMessages } = this.convertToAnthropicMessages(messages);
-      const params = this.buildRequestParams(systemPrompt, anthropicMessages, options);
+      const { systemBlocks, anthropicMessages } = this.convertToAnthropicMessages(messages);
+      const params = this.buildRequestParams(systemBlocks, anthropicMessages, options);
 
       const stream = this.client.messages.stream({ ...params });
 
@@ -104,6 +112,12 @@ export class AnthropicAdapter implements ProviderAdapter {
         }
       }
 
+      const cacheRead = finalMessage.usage.cache_read_input_tokens ?? 0;
+      const cacheCreation = finalMessage.usage.cache_creation_input_tokens ?? 0;
+      if (cacheRead > 0 || cacheCreation > 0) {
+        console.log(`[Anthropic] stream cache: read=${cacheRead}, creation=${cacheCreation}`);
+      }
+
       return {
         content: fullContent,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -112,6 +126,8 @@ export class AnthropicAdapter implements ProviderAdapter {
           outputTokens: finalMessage.usage.output_tokens,
           totalTokens: finalMessage.usage.input_tokens + finalMessage.usage.output_tokens,
           provider: this.name,
+          cacheReadTokens: cacheRead || undefined,
+          cacheCreationTokens: cacheCreation || undefined,
         },
         finishReason: this.mapStopReason(finalMessage.stop_reason),
       };
@@ -129,21 +145,21 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /**
    * 将 UnifiedMessage[] 转换为 Anthropic 格式。
-   * 将系统消息提取为单独的字符串参数。
+   * 将系统消息提取为 TextBlockParam[]（支持 cache_control 标记）。
    * 剩余消息转换为 Anthropic MessageParam 格式。
    */
   private convertToAnthropicMessages(messages: UnifiedMessage[]): {
-    systemPrompt: string | undefined;
+    systemBlocks: Anthropic.Messages.TextBlockParam[] | undefined;
     anthropicMessages: Anthropic.MessageParam[];
   } {
-    const systemMessages: string[] = [];
+    const systemTexts: string[] = [];
     const anthropicMessages: Anthropic.MessageParam[] = [];
 
     for (const msg of messages) {
       if (msg.role === 'system') {
         const text = this.resolveContent(msg.content);
         if (text) {
-          systemMessages.push(text);
+          systemTexts.push(text);
         }
       } else if (msg.role === 'user' || msg.role === 'assistant') {
         anthropicMessages.push(this.convertSingleMessage(msg));
@@ -162,10 +178,53 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
     }
 
-    return {
-      systemPrompt: systemMessages.length > 0 ? systemMessages.join('\n\n') : undefined,
-      anthropicMessages,
-    };
+    // 构建 system 参数为 TextBlockParam[]，在最后一个块上标记 cache_control
+    let systemBlocks: Anthropic.Messages.TextBlockParam[] | undefined;
+    if (systemTexts.length > 0) {
+      systemBlocks = systemTexts.map((text, idx) => {
+        const block: Anthropic.Messages.TextBlockParam = { type: 'text', text };
+        // 在最后一个 system 块上标记缓存断点
+        if (idx === systemTexts.length - 1) {
+          block.cache_control = CACHE_BREAKPOINT;
+        }
+        return block;
+      });
+    }
+
+    return { systemBlocks, anthropicMessages: this.mergeConsecutiveUserMessages(anthropicMessages) };
+  }
+
+  /**
+   * 合并连续的 user 消息（Anthropic API 要求 user/assistant 严格交替）。
+   * 将连续 user 消息的 content 合并为一个数组。
+   */
+  private mergeConsecutiveUserMessages(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+    const result: Anthropic.MessageParam[] = [];
+    for (const msg of messages) {
+      const prev = result[result.length - 1];
+      if (msg.role === 'user' && prev?.role === 'user') {
+        // 合并 content：统一转为数组形式
+        const prevParts = this.toContentArray(prev.content);
+        const currParts = this.toContentArray(msg.content);
+        result[result.length - 1] = {
+          role: 'user',
+          content: [...prevParts, ...currParts],
+        };
+      } else {
+        result.push(msg);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 将 Anthropic 消息 content 统一转为 ContentBlockParam 数组。
+   */
+  private toContentArray(content: Anthropic.MessageParam['content']): Anthropic.ContentBlockParam[] {
+    if (typeof content === 'string') {
+      return [{ type: 'text', text: content }];
+    }
+    return content as Anthropic.ContentBlockParam[];
   }
 
   /**
@@ -240,9 +299,11 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /**
    * Build request parameters for Anthropic API call.
+   * system 参数使用 TextBlockParam[] 格式以支持 cache_control 标记。
+   * tools 列表最后一个工具标记 cache_control 以缓存工具定义。
    */
   private buildRequestParams(
-    systemPrompt: string | undefined,
+    systemBlocks: Anthropic.Messages.TextBlockParam[] | undefined,
     messages: Anthropic.MessageParam[],
     options: LLMOptions,
   ): Anthropic.MessageCreateParams {
@@ -255,8 +316,9 @@ export class AnthropicAdapter implements ProviderAdapter {
       max_tokens: maxTokens,
     };
 
-    if (systemPrompt) {
-      params.system = systemPrompt;
+    // system 参数使用 TextBlockParam[] 格式（已包含 cache_control）
+    if (systemBlocks && systemBlocks.length > 0) {
+      params.system = systemBlocks;
     }
 
     // Apply default params
@@ -281,9 +343,17 @@ export class AnthropicAdapter implements ProviderAdapter {
       params.top_k = options.topK;
     }
 
-    // 处理工具（Tool Use）
+    // 处理工具（Tool Use）— 最后一个工具标记 cache_control
     if (options.tools && options.tools.length > 0) {
-      params.tools = this.convertToolDefinitions(options.tools);
+      const tools = this.convertToolDefinitions(options.tools);
+      // 在最后一个工具上标记缓存断点，使整个工具列表被缓存
+      if (tools.length > 0) {
+        tools[tools.length - 1] = {
+          ...tools[tools.length - 1],
+          cache_control: CACHE_BREAKPOINT,
+        };
+      }
+      params.tools = tools;
     }
 
     return params as Anthropic.MessageCreateParams;
@@ -305,6 +375,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /**
    * Convert Anthropic Message response to unified LLMResponse.
+   * 提取 cache_read_input_tokens 和 cache_creation_input_tokens 到 usage 中。
    */
   private convertResponse(response: Anthropic.Message): LLMResponse {
     let content = '';
@@ -322,6 +393,12 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
     }
 
+    const cacheRead = response.usage.cache_read_input_tokens ?? 0;
+    const cacheCreation = response.usage.cache_creation_input_tokens ?? 0;
+    if (cacheRead > 0 || cacheCreation > 0) {
+      console.log(`[Anthropic] cache: read=${cacheRead}, creation=${cacheCreation}`);
+    }
+
     return {
       content,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -330,6 +407,8 @@ export class AnthropicAdapter implements ProviderAdapter {
         outputTokens: response.usage.output_tokens,
         totalTokens: response.usage.input_tokens + response.usage.output_tokens,
         provider: this.name,
+        cacheReadTokens: cacheRead || undefined,
+        cacheCreationTokens: cacheCreation || undefined,
       },
       finishReason: this.mapStopReason(response.stop_reason),
     };
