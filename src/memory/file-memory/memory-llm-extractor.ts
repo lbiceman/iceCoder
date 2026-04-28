@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
+import type { MemoryHeader } from './types.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
@@ -78,6 +79,47 @@ Return a JSON array of memories to save. Each memory object has:
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.`;
+
+/**
+ * 基于 tags 重叠度查找重复记忆。
+ *
+ * 同类型 + tags Jaccard 重叠 ≥ 0.6 → 视为重复，应合并到已有文件。
+ * 返回重叠度最高的已有记忆，或 null。
+ */
+function findDuplicateByTags(
+  newTags: string[],
+  newType: string,
+  existing: MemoryHeader[],
+): MemoryHeader | null {
+  if (newTags.length === 0) return null;
+
+  const newSet = new Set(newTags.map(t => t.trim().toLowerCase()));
+  let bestMatch: MemoryHeader | null = null;
+  let bestOverlap = 0;
+
+  for (const mem of existing) {
+    // 只比较同类型的记忆
+    if (mem.type !== newType) continue;
+    if (!mem.tags || mem.tags.length === 0) continue;
+
+    const existingSet = new Set(mem.tags.map(t => t.trim().toLowerCase()));
+
+    // Jaccard 系数 = |A ∩ B| / |A ∪ B|
+    let intersection = 0;
+    for (const tag of newSet) {
+      if (existingSet.has(tag)) intersection++;
+    }
+    const union = newSet.size + existingSet.size - intersection;
+    const jaccard = union > 0 ? intersection / union : 0;
+
+    if (jaccard >= 0.6 && jaccard > bestOverlap) {
+      bestOverlap = jaccard;
+      bestMatch = mem;
+    }
+  }
+
+  return bestMatch;
+}
 
 /**
  * LLM 驱动的记忆提取器。
@@ -238,6 +280,12 @@ Each object must have: filename, type, name, description, content, tags (string[
    * 包含结构化去重：如果同名文件已存在，更新而非覆盖。
    * 多级路由：user 类型记忆写入用户级目录（跨项目共享）。
    */
+  /**
+   * 将提取的记忆保存到文件。
+   * 包含结构化去重：如果同名文件已存在，更新而非覆盖。
+   * 多级路由：user 类型记忆写入用户级目录（跨项目共享）。
+   * v4 新增：tags 重叠度硬去重 — 同类型 + tags 重叠 ≥70% 时合并到已有文件。
+   */
   private async saveMemories(
     memories: Array<{
       filename: string;
@@ -256,6 +304,17 @@ Each object must have: filename, type, name, description, content, tags (string[
 
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.mkdir(userMemoryDir, { recursive: true });
+
+    // v4: 预扫描已有记忆，用于 tags 重叠度去重
+    const targetDirs = [memoryDir, userMemoryDir];
+    const existingByDir = new Map<string, Awaited<ReturnType<typeof scanMemoryFiles>>>();
+    for (const dir of targetDirs) {
+      try {
+        existingByDir.set(dir, await scanMemoryFiles(dir, 200));
+      } catch {
+        existingByDir.set(dir, []);
+      }
+    }
 
     for (const memory of memories) {
       try {
@@ -278,12 +337,26 @@ Each object must have: filename, type, name, description, content, tags (string[
           throw e;
         }
 
-        // 结构化去重：检查文件是否已存在
+        // 结构化去重：检查文件是否已存在（同名）
         let isUpdate = false;
         try {
           await fs.access(filePath);
           isUpdate = true;
         } catch { /* 文件不存在，正常创建 */ }
+
+        // v4: tags 重叠度硬去重 — 新文件时检查是否与已有记忆高度重复
+        if (!isUpdate && memory.tags && memory.tags.length > 0) {
+          const existing = existingByDir.get(targetDir) || [];
+          const duplicate = findDuplicateByTags(memory.tags, memory.type, existing);
+          if (duplicate) {
+            // 重定向到已有文件（合并而非新建）
+            console.log(
+              `[LLMMemoryExtractor] Tags dedup: "${safeFilename}" → merging into "${duplicate.filename}" (overlap ≥60%)`,
+            );
+            filePath = duplicate.filePath;
+            isUpdate = true;
+          }
+        }
 
         const tags = memory.tags && memory.tags.length > 0 ? memory.tags.join(', ') : '';
         const confidence = memory.confidence ?? 0.5;
@@ -321,7 +394,7 @@ ${memory.content}
         writtenPaths.push(filePath);
 
         if (isUpdate) {
-          console.log(`[LLMMemoryExtractor] Updated existing memory: ${safeFilename}`);
+          console.log(`[LLMMemoryExtractor] Updated existing memory: ${path.basename(filePath)}`);
         }
       } catch (error) {
         console.error(`[LLMMemoryExtractor] Failed to save memory ${memory.filename}:`, error);
