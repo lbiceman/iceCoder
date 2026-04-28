@@ -55,7 +55,7 @@ export class ContextAssembler {
    *
    * 作为独立的 user 消息注入到 system prompt 之后，
    * 不污染 system prompt 的前缀缓存。
-   * 返回 null 表示没有动态内容。
+   * 返回 null 表示没有有意义的动态内容。
    */
   buildDynamicContextMessage(): string | null {
     const parts: string[] = [];
@@ -101,14 +101,13 @@ export class ContextAssembler {
       }
     }
 
-    // 当前日期
+    // 只有在有实质性动态内容时才生成上下文消息
+    if (parts.length === 0) return null;
+
+    // 追加日期和工具提醒（仅在有其他动态内容时才附加）
     const now = new Date();
     parts.push(`# currentDate\n今天是 ${now.toISOString().split('T')[0]}。`);
-
-    // 工具结果清理提醒
     parts.push(`# 工具结果管理\n旧的工具调用结果可能会被自动清理以节省上下文空间。请在获取重要信息后及时记录关键内容，因为工具结果可能在后续对话中不再可用。`);
-
-    if (parts.length === 0) return null;
 
     return `<system-context>\n${parts.join('\n\n')}\n</system-context>`;
   }
@@ -117,9 +116,11 @@ export class ContextAssembler {
    * 组装初始消息序列：system prompt + 动态上下文 + user message。
    *
    * 结构：
-   * [0] system: 静态提示词（跨轮次不变 → 缓存命中）
-   * [1] user: <system-context>动态内容</system-context>（会话级稳定）
-   * [2] user: 用户实际输入
+   * - 有动态上下文时: [system, user(<system-context> + 用户输入)]
+   * - 无动态上下文时: [system, user(用户输入)]
+   *
+   * 动态上下文和用户输入合并为一条 user 消息，避免连续 user 消息问题。
+   * 动态上下文在会话内不变，所以合并后的消息前缀仍然稳定 → 缓存友好。
    */
   assembleInitialMessages(userMessage: string): UnifiedMessage[] {
     const messages: UnifiedMessage[] = [];
@@ -129,13 +130,13 @@ export class ContextAssembler {
       messages.push({ role: 'system', content: systemPrompt });
     }
 
-    // 注入动态上下文（记忆、环境、日期等）
+    // 动态上下文和用户输入合并为一条 user 消息
     const dynamicContext = this.buildDynamicContextMessage();
     if (dynamicContext) {
-      messages.push({ role: 'user', content: dynamicContext });
+      messages.push({ role: 'user', content: `${dynamicContext}\n\n${userMessage}` });
+    } else {
+      messages.push({ role: 'user', content: userMessage });
     }
-
-    messages.push({ role: 'user', content: userMessage });
 
     return messages;
   }
@@ -226,11 +227,6 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
       && prev?.role === 'user'
       && typeof msg.content === 'string'
       && typeof prev.content === 'string'
-      // 不合并 <system-context> 和 <system-reminder> 消息（保持前缀缓存一致性）
-      && !msg.content.startsWith('<system-context>')
-      && !msg.content.startsWith('<system-reminder>')
-      && !prev.content.startsWith('<system-context>')
-      && !prev.content.startsWith('<system-reminder>')
     ) {
       result[result.length - 1] = {
         ...prev,

@@ -136,6 +136,7 @@ export {
   truncateSessionMemoryForCompact,
   isSessionMemoryEmpty,
   getSessionMemoryContent,
+  validateSessionMemoryContent,
   SESSION_MEMORY_TEMPLATE,
 } from './session-memory.js';
 export type { SessionMemoryState } from './session-memory.js';

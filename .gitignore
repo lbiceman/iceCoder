@@ -32,3 +32,6 @@ npm-debug.log*
 
 # 二进制工具
 bin/
+
+# Test artifacts
+__test_*

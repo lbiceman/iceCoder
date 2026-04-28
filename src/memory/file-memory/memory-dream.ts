@@ -22,6 +22,7 @@ import { parseLLMJsonObject } from './json-parser.js';
 import { DEFAULT_DREAM_CONFIG } from './memory-config.js';
 import { ConsolidationLock } from './memory-concurrency.js';
 import { getDreamConfig } from './memory-remote-config.js';
+import { getExpiredMemories, getStaleMemories } from './memory-age.js';
 
 /**
  * Dream 配置。
@@ -141,6 +142,10 @@ export class MemoryDream {
   /**
    * 检查是否应该触发整合。
    * 使用远程配置覆盖本地默认值。
+   * 触发条件（任一满足即触发）：
+   * 1. 时间间隔 + 会话数都达标
+   * 2. 自上次 dream 以来新增了 10+ 个记忆文件
+   * 3. 存在过期记忆需要清理
    */
   async shouldDream(memoryDir: string): Promise<boolean> {
     // 从远程配置获取最新阈值
@@ -155,26 +160,42 @@ export class MemoryDream {
       this.lock = new ConsolidationLock(memoryDir);
     }
 
-    // 时间门控：使用锁文件的 mtime 作为 lastConsolidatedAt
-    const lastConsolidatedAt = await this.lock.readLastConsolidatedAt();
-    const hoursSince = (Date.now() - lastConsolidatedAt) / 3_600_000;
-    const minHours = remoteCfg.minHours || this.config.sessionInterval;
-    if (hoursSince < minHours) return false;
-
-    // 会话间隔检查
-    const minSessions = remoteCfg.minSessions || this.config.sessionInterval;
-    if (this.sessionCount < minSessions) {
-      return false;
-    }
-
-    // 记忆文件数检查
+    // 扫描记忆文件
+    let memories;
     try {
-      const memories = await scanMemoryFiles(memoryDir, 500);
-      return memories.length >= this.config.fileCountThreshold;
+      memories = await scanMemoryFiles(memoryDir, 500);
     } catch (err) {
       console.debug('[MemoryDream] scanMemoryFiles failed:', err instanceof Error ? err.message : err);
       return false;
     }
+
+    // 条件 3：存在过期记忆需要清理（不受时间门控限制）
+    const expired = getExpiredMemories(memories);
+    if (expired.length >= 3) {
+      console.log(`[MemoryDream] ${expired.length} expired memories detected, triggering dream`);
+      return true;
+    }
+
+    // 时间门控：使用锁文件的 mtime 作为 lastConsolidatedAt
+    const lastConsolidatedAt = await this.lock.readLastConsolidatedAt();
+    const hoursSince = (Date.now() - lastConsolidatedAt) / 3_600_000;
+    const minHours = remoteCfg.minHours || 4; // 降低默认值：24h → 4h
+    if (hoursSince < minHours) return false;
+
+    // 条件 1：会话间隔 + 文件数阈值
+    const minSessions = remoteCfg.minSessions || this.config.sessionInterval;
+    if (this.sessionCount >= minSessions && memories.length >= this.config.fileCountThreshold) {
+      return true;
+    }
+
+    // 条件 2：自上次 dream 以来新增了较多文件（基于文件创建时间）
+    const newFilesSinceDream = memories.filter(m => m.createdMs > lastConsolidatedAt).length;
+    if (newFilesSinceDream >= 10) {
+      console.log(`[MemoryDream] ${newFilesSinceDream} new files since last dream, triggering`);
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -264,6 +285,13 @@ export class MemoryDream {
     // 读取所有记忆文件内容
     const memoryContents = await this.readMemoryContents(memoryDir, memories);
 
+    // 分析过期和陈旧记忆
+    const expired = getExpiredMemories(memories);
+    const stale = getStaleMemories(memories);
+    const expiryInfo = expired.length > 0 || stale.length > 0
+      ? `\n\n## Expired/Stale memories\n\nExpired (should be deleted or archived):\n${expired.map(m => `- ${m.filename} (last active: ${new Date(Math.max(m.lastRecalledMs || 0, m.mtimeMs)).toISOString()}, confidence: ${m.confidence})`).join('\n') || '(none)'}\n\nStale (consider updating or removing):\n${stale.map(m => `- ${m.filename} (last active: ${new Date(Math.max(m.lastRecalledMs || 0, m.mtimeMs)).toISOString()}, recallCount: ${m.recallCount})`).join('\n') || '(none)'}`
+      : '';
+
     // 读取当前 MEMORY.md
     let currentIndex = '';
     try {
@@ -274,7 +302,7 @@ export class MemoryDream {
 
     // 构建 LLM 请求
     const dreamPrompt = buildDreamPrompt(memoryDir, this.config.maxIndexLines);
-    const userContent = `${dreamPrompt}\n\n## Current MEMORY.md\n\n${currentIndex || '(empty)'}\n\n## Memory files\n\n${memoryContents}`;
+    const userContent = `${dreamPrompt}\n\n## Current MEMORY.md\n\n${currentIndex || '(empty)'}\n\n## Memory files\n\n${memoryContents}${expiryInfo}`;
 
     // 构建消息（支持 prompt cache）
     let messages: UnifiedMessage[];
