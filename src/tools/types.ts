@@ -15,9 +15,15 @@ export interface ToolResult {
 }
 
 /**
- * 工具处理器函数类型。
+ * 工具输出流回调（用于实时推送命令输出）。
  */
-export type ToolHandler = (args: Record<string, any>) => Promise<ToolResult>;
+export type ToolOutputCallback = (chunk: string) => void;
+
+/**
+ * 工具处理器函数类型。
+ * onOutput 可选回调，支持实时输出流。
+ */
+export type ToolHandler = (args: Record<string, any>, onOutput?: ToolOutputCallback) => Promise<ToolResult>;
 
 /**
  * 已注册的工具，包含定义和处理器。

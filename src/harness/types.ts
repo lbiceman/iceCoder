@@ -146,7 +146,7 @@ export interface HarnessConfig {
  * Harness 循环中每一步的事件回调。
  */
 export interface HarnessStepEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'compaction' | 'final' | 'stream_delta';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'compaction' | 'final' | 'stream_delta' | 'tool_output';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */

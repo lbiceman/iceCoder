@@ -7,7 +7,7 @@
  */
 
 import type { ToolCall } from '../llm/types.js';
-import type { ToolResult, ToolExecutorConfig } from './types.js';
+import type { ToolResult, ToolExecutorConfig, ToolOutputCallback } from './types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolValidator } from './tool-validator.js';
 
@@ -31,8 +31,9 @@ export class ToolExecutor {
 
   /**
    * 执行单个工具调用，带验证、重试和超时。
+   * @param onOutput - 可选的实时输出回调（用于 shell 命令等长时间运行的工具）
    */
-  async executeTool(toolCall: ToolCall): Promise<ToolResult> {
+  async executeTool(toolCall: ToolCall, onOutput?: ToolOutputCallback): Promise<ToolResult> {
     const tool = this.registry.get(toolCall.name);
     if (!tool) {
       return { success: false, output: '', error: `未知工具: ${toolCall.name}` };
@@ -46,15 +47,12 @@ export class ToolExecutor {
       }
     }
 
-    // 根据工具元数据确定超时时间
-    const timeout = this.config.toolTimeout;
-
     let lastError: string | undefined;
 
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
       try {
         const result = await this.executeWithTimeout(
-          () => tool.handler(toolCall.arguments),
+          () => tool.handler(toolCall.arguments, onOutput),
           this.config.toolTimeout,
         );
         return result;
