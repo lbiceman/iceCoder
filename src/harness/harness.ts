@@ -53,6 +53,17 @@ const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
 const DEFAULT_COMPACTION_THRESHOLD = 40;
 const DEFAULT_COMPACTION_KEEP_RECENT = 10;
 
+// ─── 任务状态标记解析 ───
+type TaskStatus = 'complete' | 'incomplete' | 'unknown';
+
+/** 从模型回复中提取 <status>complete|incomplete</status> 标记 */
+function parseTaskStatus(content: string | undefined): TaskStatus {
+  if (!content) return 'unknown';
+  const match = content.match(/<status>\s*(complete|incomplete)\s*<\/status>/i);
+  if (!match) return 'unknown';
+  return match[1].toLowerCase() as TaskStatus;
+}
+
 /** 判断错误是否可重试（网络超时、限流、服务端错误） */
 function isRetryableError(error: unknown): boolean {
   if (error instanceof Error) {
@@ -76,7 +87,7 @@ type Transition =
   | 'tool_calls'
   | 'max_output_tokens_recovery'
   | 'stop_hook_continue'
-  | 'token_budget_continuation'
+  | 'status_incomplete_continue'
   | 'llm_error_retry'
   | 'compaction_retry';
 
@@ -163,17 +174,27 @@ export class Harness {
     onStep?: (event: HarnessStepEvent) => void,
     existingMessages?: UnifiedMessage[],
     streamFn?: StreamFunction,
+    /** 多模态用户消息内容（图片等），如果提供则替代纯文本 userMessage 作为消息内容 */
+    userContentBlocks?: import('../llm/types.js').ContentBlock[],
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
 
     // ── 初始化（循环外，只执行一次）──
     // 如果有已有消息历史，直接追加用户消息；否则从零构建
     let messages: UnifiedMessage[];
+    const messageContent = userContentBlocks ?? userMessage;
     if (existingMessages && existingMessages.length > 0) {
       messages = existingMessages;
-      messages.push({ role: 'user', content: userMessage });
+      messages.push({ role: 'user', content: messageContent });
     } else {
       messages = this.contextAssembler.assembleInitialMessages(userMessage);
+      // 如果有多模态内容，替换最后一条 user 消息的 content
+      if (userContentBlocks) {
+        const lastUserIdx = messages.length - 1;
+        if (messages[lastUserIdx]?.role === 'user') {
+          messages[lastUserIdx] = { ...messages[lastUserIdx], content: userContentBlocks };
+        }
+      }
     }
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
@@ -235,13 +256,25 @@ export class Harness {
       try {
         // ── 选择流式或非流式调用 ──
         if (streamFn) {
-          response = await streamFn(normalizedMsgs, (chunk, done) => {
-            // 用户中断后不再推送流式增量
-            if (this.loopController.isAborted()) return;
-            if (!done && chunk) {
-              onStep?.({ type: 'stream_delta', iteration: round, delta: chunk });
+          try {
+            response = await streamFn(normalizedMsgs, (chunk, done) => {
+              // 用户中断后不再推送流式增量
+              if (this.loopController.isAborted()) return;
+              if (!done && chunk) {
+                onStep?.({ type: 'stream_delta', iteration: round, delta: chunk });
+              }
+            }, { tools: currentTools });
+          } catch (streamError) {
+            // 流式调用失败（如 DeepSeek thinking 模式的 reasoning_content 兼容问题）
+            // 自动回退到非流式调用
+            const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
+            if (errMsg.includes('reasoning_content') || errMsg.includes('Failed to deserialize')) {
+              console.log('[harness] 流式调用失败，回退到非流式: ' + errMsg.substring(0, 100));
+              response = await chatFn(normalizedMsgs, { tools: currentTools });
+            } else {
+              throw streamError;
             }
-          }, { tools: currentTools });
+          }
           // 流式调用完成后检查中断（流式期间可能收到 abort）
           if (this.loopController.isAborted()) {
             return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
@@ -364,9 +397,35 @@ export class Harness {
           };
         }
 
-        // ── 5b. 停止钩子 ──
-        // 如果钩子要求继续，注入消息后 continue
-        if (this.stopHookManager.count > 0) {
+        // ── 5b. 基于 <status> 标记的继续判断 ──
+        // 模型在回复末尾声明任务状态：complete / incomplete / unknown
+        const taskStatus = parseTaskStatus(response.content);
+
+        if (taskStatus === 'incomplete') {
+          // 模型明确说任务未完成 → 检查预算是否允许继续
+          const budgetOk = !this.tokenBudgetTracker || this.tokenBudgetTracker.shouldContinue();
+          if (budgetOk) {
+            console.log(`[harness] 模型声明 incomplete，继续执行`);
+            // 将模型的部分回复加入对话
+            if (response.content) {
+              msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
+            }
+            msgs.push({
+              role: 'user',
+              content: '继续执行未完成的任务。不要重复已完成的内容。',
+            });
+            if (this.tokenBudgetTracker) {
+              this.tokenBudgetTracker.recordContinuation();
+            }
+            state.transition = 'status_incomplete_continue';
+            continue;
+          }
+          console.log(`[harness] 模型声明 incomplete 但预算不足，停止`);
+        }
+
+        // ── 5c. 停止钩子（兜底） ──
+        // 仅在 status 标记缺失时作为回退
+        if (taskStatus === 'unknown' && this.stopHookManager.count > 0) {
           const hookResult = await this.stopHookManager.execute(msgs, response.content);
           if (hookResult.shouldContinue && hookResult.message) {
             console.log(`[harness] 停止钩子 "${hookResult.hookName}" 要求继续`);
@@ -374,16 +433,6 @@ export class Harness {
             state.transition = 'stop_hook_continue';
             continue;
           }
-        }
-
-        // ── 5c. Token 预算继续 ──
-        // 预算充足时注入 nudge 消息
-        if (this.tokenBudgetTracker && this.tokenBudgetTracker.shouldContinue()) {
-          const nudge = this.tokenBudgetTracker.getContinuationMessage();
-          console.log(`[harness] token 预算继续: ${this.tokenBudgetTracker.getSummary()}`);
-          msgs.push({ role: 'user', content: nudge });
-          state.transition = 'token_budget_continuation';
-          continue;
         }
 
         // ── 5d. 正常完成 → return ──
@@ -522,7 +571,17 @@ export class Harness {
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
   ): Promise<void> {
-    const streamingExecutor = new StreamingToolExecutor(this.toolExecutor);
+    const streamingExecutor = new StreamingToolExecutor(
+      this.toolExecutor,
+      // 实时工具输出回调：推送到 onStep
+      onStep ? (toolCallId, toolName, chunk) => {
+        onStep({
+          type: 'tool_output',
+          toolName,
+          content: chunk,
+        });
+      } : undefined,
+    );
     const iteration = this.loopController.getState().currentRound;
 
     // 第一遍：权限检查 + 提交到流式执行器
