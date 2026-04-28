@@ -516,11 +516,32 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;          /* 禁用容器自身锚定 */
+  overscroll-behavior: contain;
   padding: 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
+
+/* 顶部弹性 spacer：消息少时把内容推到底部 */
+.chat-messages::before {
+  content: '';
+  flex: 1 1 auto;
+  overflow-anchor: none;          /* spacer 不参与锚定 */
+}
+
+/* 底部锚点：浏览器用它来保持滚动位置 */
+.chat-messages-anchor {
+  overflow-anchor: auto;
+  height: 1px;
+  flex-shrink: 0;
+}
+
+.chat-messages:empty::before {
+  display: none;
+}
+
 .chat-messages:empty::after {
   content: '发送消息开始对话';
   color: var(--text-muted);
@@ -538,6 +559,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   line-height: 1.65;
   word-wrap: break-word;
   white-space: pre-wrap;
+  flex-shrink: 0;
 }
 
 .message.user {
@@ -722,15 +744,79 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   background: #c0392b;
 }
 
-/* Thinking indicator */
-.message.thinking { opacity: 0.7; }
-.thinking-content {
+/* Thinking indicator — fixed 悬浮在 token 进度条上方 */
+.agent-status-bar {
+  display: none;
+  position: fixed;
+  bottom: 72px;            /* token 进度条上方约 10px */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-card, var(--bg-secondary));
+  border: 1px solid var(--border-light, var(--border-color));
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.agent-status-bar.active {
+  display: flex;
+}
+.agent-status-bar .status-text {
   display: flex;
   align-items: center;
-  gap: 2px;
-  color: var(--text-muted);
-  font-size: 14px;
+  gap: 4px;
 }
+.agent-status-bar .status-turn {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* 工具调用条目（聊天记录中） */
+.tool-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-left: 2px solid var(--border-color);
+  margin-left: 4px;
+  max-width: 78%;
+  overflow: hidden;
+}
+.tool-action .tool-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+}
+.tool-action .tool-icon.pending {
+  color: var(--text-muted);
+}
+.tool-action .tool-icon.success {
+  color: #4caf50;
+}
+.tool-action .tool-icon.error {
+  color: var(--danger, #e94560);
+}
+.tool-action .tool-name {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.tool-action .tool-detail {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .thinking-dots {
   display: inline-flex;
   gap: 1px;
@@ -738,7 +824,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .thinking-dots span {
   animation: thinkBounce 1.4s infinite ease-in-out both;
   font-weight: bold;
-  font-size: 18px;
+  font-size: 14px;
 }
 .thinking-dots span:nth-child(1) { animation-delay: 0s; }
 .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
@@ -932,6 +1018,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   .form-grid { grid-template-columns: 1fr; }
   .chat-messages { padding: 12px; gap: 10px; }
   .chat-input-area > .chat-input-row { padding: 16px 12px; }
+  .agent-status-bar { bottom: 78px; }
   .message { max-width: 90%; padding: 10px 14px; }
   .pipeline-stages { gap: 4px; }
 }

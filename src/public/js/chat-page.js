@@ -33,6 +33,7 @@ window.ChatPage = (function () {
   var agentResponseBuffer = ''; // accumulates streaming chunks
   var isStreaming = false;      // 是否正在流式传输
   var userStopped = false;      // 用户是否已点击停止（忽略后续 stream 消息）
+  var streamFinalized = false;  // 标记刚刚 finalize 了流式消息（用于跳过冗余 response）
 
   // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
   var remoteMode = false;       // 是否为远程控制模式（带 token）
@@ -124,9 +125,10 @@ window.ChatPage = (function () {
   }
 
   // ---- DOM refs (set during render) ----
-  var elMessages, elInput, elSendBtn, elFileBtn, elFileInput;
+  var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
   var elPipelinePanel, elProgressFill, elStagesContainer;
+  var elStatusBar, elStatusText, elStatusTurn;
 
   // ---- 辅助函数 ----
 
@@ -134,16 +136,6 @@ window.ChatPage = (function () {
     var div = document.createElement('div');
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
-  }
-
-  function getFileExtension(filename) {
-    var dot = filename.lastIndexOf('.');
-    return dot >= 0 ? filename.slice(dot).toLowerCase() : '';
-  }
-
-  function isSupportedFile(filename) {
-    // 不限制文件格式，允许用户上传任何文件，解析不了的由后端返回提示
-    return true;
   }
 
   /**
@@ -166,72 +158,99 @@ window.ChatPage = (function () {
     }
   }
 
-  /** 判断用户是否在聊天底部附近（100px 阈值） */
+  /** 判断用户是否在聊天底部附近（150px 阈值） */
   function isNearBottom() {
     if (!elMessages) return true;
-    var threshold = 100;
+    var threshold = 150;
     return elMessages.scrollHeight - elMessages.scrollTop - elMessages.clientHeight < threshold;
   }
 
-  /** 仅在用户处于底部附近时才滚动到底部 */
-  function scrollToBottomIfNeeded() {
-    if (isNearBottom()) {
-      scrollToBottom();
-    }
-  }
+  // ---- 状态指示器（输入区上方状态栏） ----
 
-  // ---- Thinking 指示器（含轮次显示） ----
-
-  var currentTurnCount = 0; // 当前轮次计数（不写入 messages）
+  var currentTurnCount = 0;
 
   function showThinking(withFile) {
     currentTurnCount = 0;
-    var el = document.createElement('div');
-    el.className = 'message agent thinking';
-    el.setAttribute('id', 'thinking-indicator');
-
-    var label = document.createElement('div');
-    label.className = 'msg-label';
-    label.textContent = 'Agent';
-    el.appendChild(label);
-
-    var content = document.createElement('div');
-    content.className = 'thinking-content';
+    if (!elStatusBar) return;
     var thinkText = withFile ? 'Parsing file & Thinking' : 'Thinking';
-    content.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> ' + thinkText;
-    el.appendChild(content);
-
-    var turnEl = document.createElement('div');
-    turnEl.setAttribute('id', 'turn-counter');
-    turnEl.className = 'turn-counter';
-    turnEl.style.cssText = 'font-size:12px;color:#888;margin-top:4px;';
-    el.appendChild(turnEl);
-
-    elMessages.appendChild(el);
-    scrollToBottom();
+    updateStatusText(thinkText);
+    if (elStatusTurn) elStatusTurn.textContent = '';
+    elStatusBar.classList.add('active');
   }
 
-  /** 更新 thinking 指示器下方的轮次显示 */
   function updateTurnCounter(turn) {
     if (turn > currentTurnCount) {
       currentTurnCount = turn;
     }
-    var el = document.getElementById('turn-counter');
-    if (el) {
-      el.textContent = '第 ' + currentTurnCount + ' 轮';
-    }
-    if (!document.getElementById('thinking-indicator') && currentTurnCount > 0) {
-      showThinking(false);
-      var counter = document.getElementById('turn-counter');
-      if (counter) counter.textContent = '第 ' + currentTurnCount + ' 轮';
+    if (elStatusTurn) {
+      elStatusTurn.textContent = '第 ' + currentTurnCount + ' 轮';
     }
   }
 
   function removeThinking() {
     currentTurnCount = 0;
-    var el = document.getElementById('thinking-indicator');
-    if (el && el.parentNode) {
-      el.parentNode.removeChild(el);
+    if (elStatusBar) {
+      elStatusBar.classList.remove('active');
+    }
+    if (elStatusText) elStatusText.innerHTML = '';
+    if (elStatusTurn) elStatusTurn.textContent = '';
+  }
+
+  /** 更新状态栏文本（保留动画点） */
+  function updateStatusText(text) {
+    if (!elStatusText) return;
+    elStatusText.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> ' + escapeHtml(text);
+  }
+
+  /** 在聊天区追加工具调用条目（紧凑行） */
+  function appendToolAction(toolName, detail, status) {
+    if (!elMessages) return;
+    var el = document.createElement('div');
+    el.className = 'tool-action';
+    el.setAttribute('data-tool', toolName);
+
+    var iconEl = document.createElement('span');
+    iconEl.className = 'tool-icon ' + (status || 'pending');
+    if (status === 'success') {
+      iconEl.textContent = '✓';
+    } else if (status === 'error') {
+      iconEl.textContent = '✗';
+    } else {
+      iconEl.textContent = '⟳';
+    }
+    el.appendChild(iconEl);
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'tool-name';
+    nameEl.textContent = toolName;
+    el.appendChild(nameEl);
+
+    if (detail) {
+      var detailEl = document.createElement('span');
+      detailEl.className = 'tool-detail';
+      detailEl.textContent = detail;
+      el.appendChild(detailEl);
+    }
+
+    elMessages.insertBefore(el, elAnchor);
+    return el;
+  }
+
+  /** 更新最后一个匹配工具名的条目状态 */
+  function updateLastToolAction(toolName, status) {
+    if (!elMessages) return;
+    // 从锚点往前找最后一个匹配的 tool-action
+    var node = elAnchor ? elAnchor.previousSibling : elMessages.lastChild;
+    while (node) {
+      if (node.nodeType === 1 && node.classList && node.classList.contains('tool-action') && node.getAttribute('data-tool') === toolName) {
+        var iconEl = node.querySelector('.tool-icon');
+        if (iconEl) {
+          iconEl.className = 'tool-icon ' + status;
+          iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+        }
+        return;
+      }
+      node = node.previousSibling;
     }
   }
 
@@ -239,7 +258,10 @@ window.ChatPage = (function () {
 
   /** 渲染消息到 DOM（不触发保存，用于只读同步） */
   function renderMessagesOnly(shouldScroll) {
-    elMessages.innerHTML = '';
+    // 保留锚点，清除其他内容
+    while (elMessages.firstChild !== elAnchor) {
+      elMessages.removeChild(elMessages.firstChild);
+    }
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
       var el = document.createElement('div');
@@ -254,9 +276,8 @@ window.ChatPage = (function () {
       content.textContent = msg.content;
       el.appendChild(content);
 
-      elMessages.appendChild(el);
+      elMessages.insertBefore(el, elAnchor);
     }
-    // shouldScroll 未传参时默认滚动（兼容其他调用方）
     if (shouldScroll !== false) {
       scrollToBottom();
     }
@@ -267,43 +288,58 @@ window.ChatPage = (function () {
     saveMessages();
   }
 
-  // ---- 流式滚动节流 ----
-  var scrollRafPending = false;
+  /** 增量追加单条消息到 DOM（避免全量 innerHTML 重建导致闪烁） */
+  function appendMessageEl(msg) {
+    if (!elMessages) return;
+    var el = document.createElement('div');
+    el.className = 'message ' + msg.role;
 
-  function scheduleScrollToBottom() {
-    if (scrollRafPending) return;
-    scrollRafPending = true;
-    requestAnimationFrame(function () {
-      scrollRafPending = false;
-      scrollToBottomIfNeeded();
-    });
+    var label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = msg.role === 'user' ? 'You' : 'Agent';
+    el.appendChild(label);
+
+    var content = document.createElement('div');
+    content.textContent = msg.content;
+    el.appendChild(content);
+
+    elMessages.insertBefore(el, elAnchor);
   }
+
+  // ---- 滚动状态（overflow-anchor 自动粘底） ----
+  /** 用户是否手动向上滚动过（脱离底部） */
+  var userScrolledUp = false;
 
   function appendAgentChunk(text) {
     agentResponseBuffer += text;
 
-    // 更新最后一条智能体消息或创建新的
     var lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role === 'agent' && lastMsg._streaming) {
+      // 已有流式消息，更新数据模型
       lastMsg.content = agentResponseBuffer;
     } else {
-      // 新建流式消息，先 renderMessages 确保 DOM 顺序正确
+      // 新建流式消息
       messages.push({ role: 'agent', content: agentResponseBuffer, _streaming: true });
-      renderMessages();
-      // 给最后一个 agent 消息元素加标记，并缓存内容节点
-      var allMsgEls = elMessages.querySelectorAll('.message.agent');
-      var newEl = allMsgEls[allMsgEls.length - 1];
-      if (newEl) {
-        newEl.setAttribute('id', 'streaming-msg');
-        // 缓存内容节点引用，后续直接追加文本
-        var contentEl = newEl.lastChild;
-        if (contentEl) newEl._streamContentEl = contentEl;
-      }
-      scrollToBottom();
+
+      var el = document.createElement('div');
+      el.className = 'message agent';
+      el.setAttribute('id', 'streaming-msg');
+
+      var label = document.createElement('div');
+      label.className = 'msg-label';
+      label.textContent = 'Agent';
+      el.appendChild(label);
+
+      var contentDiv = document.createElement('div');
+      contentDiv.appendChild(document.createTextNode(text));
+      el.appendChild(contentDiv);
+      el._streamContentEl = contentDiv;
+
+      elMessages.insertBefore(el, elAnchor);
       return;
     }
 
-    // 增量追加：直接向内容节点追加文本，避免整体替换导致重排
+    // 增量追加文本节点
     var streamEl = document.getElementById('streaming-msg');
     if (streamEl && streamEl._streamContentEl) {
       streamEl._streamContentEl.appendChild(document.createTextNode(text));
@@ -313,22 +349,30 @@ window.ChatPage = (function () {
         contentEl.appendChild(document.createTextNode(text));
         streamEl._streamContentEl = contentEl;
       }
-    } else {
-      // 回退：完整重新渲染
-      renderMessages();
     }
-    scheduleScrollToBottom();
+  }
+
+  /** 从文本中移除 <status>...</status> 标记（系统用，不展示给用户） */
+  function stripStatusTag(text) {
+    return text.replace(/<status>\s*(?:complete|incomplete)\s*<\/status>/gi, '').trimEnd();
   }
 
   function finalizeAgentResponse() {
     var lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg._streaming) {
       delete lastMsg._streaming;
+      streamFinalized = true;
+      // 清理 status 标记
+      lastMsg.content = stripStatusTag(lastMsg.content);
     }
     agentResponseBuffer = '';
-    // 清除流式消息 DOM 标记和缓存引用
     var streamEl = document.getElementById('streaming-msg');
     if (streamEl) {
+      if (streamEl._streamContentEl) {
+        streamEl._streamContentEl.normalize();
+        // 同步清理 DOM 中的 status 标记
+        streamEl._streamContentEl.textContent = stripStatusTag(streamEl._streamContentEl.textContent || '');
+      }
       streamEl.removeAttribute('id');
       delete streamEl._streamContentEl;
     }
@@ -339,6 +383,7 @@ window.ChatPage = (function () {
   // ---- 发送/停止按钮状态切换 ----
 
   function setStreamingState(streaming) {
+    if (isStreaming === streaming) return; // 状态未变，不操作 DOM
     isStreaming = streaming;
     if (!elSendBtn) return;
 
@@ -370,11 +415,20 @@ window.ChatPage = (function () {
       if (lastMsg && lastMsg._streaming) {
         lastMsg.content = agentResponseBuffer + '\n\n[已停止]';
         delete lastMsg._streaming;
+        // 更新 DOM 中流式消息的内容（不做全量重建）
+        var streamEl = document.getElementById('streaming-msg');
+        if (streamEl) {
+          var contentEl = streamEl._streamContentEl || streamEl.lastChild;
+          if (contentEl) {
+            contentEl.appendChild(document.createTextNode('\n\n[已停止]'));
+          }
+          streamEl.removeAttribute('id');
+          delete streamEl._streamContentEl;
+        }
       }
     }
     agentResponseBuffer = '';
     setStreamingState(false);
-    renderMessages();
     saveMessages();
   }
 
@@ -493,6 +547,30 @@ window.ChatPage = (function () {
     if (elFileStatus) elFileStatus.classList.add('hidden');
     if (elFileName) elFileName.textContent = '';
     if (elFileInput) elFileInput.value = '';
+    // 移除粘贴预览
+    var preview = document.getElementById('paste-preview');
+    if (preview) preview.parentNode.removeChild(preview);
+  }
+
+  /** 显示粘贴图片的缩略预览 */
+  function showPastePreview(file) {
+    // 移除旧预览
+    var old = document.getElementById('paste-preview');
+    if (old) old.parentNode.removeChild(old);
+
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = document.createElement('img');
+      img.src = e.target.result;
+      img.setAttribute('id', 'paste-preview');
+      img.style.cssText = 'max-width:120px;max-height:80px;border-radius:6px;margin:6px 16px;border:1px solid var(--border-color);display:block;';
+      // 插入到 file-status 后面
+      var inputArea = elFileStatus ? elFileStatus.parentNode : null;
+      if (inputArea && elFileStatus) {
+        inputArea.insertBefore(img, elFileStatus.nextSibling);
+      }
+    };
+    reader.readAsDataURL(file);
   }
 
   function formatSize(bytes) {
@@ -605,8 +683,7 @@ window.ChatPage = (function () {
         break;
       case 'stream':
         // 流式增量文本：逐 chunk 追加到当前 agent 消息
-        if (userStopped) break; // 用户已停止，忽略后续流式数据
-        removeThinking();
+        if (userStopped) break;
         if (!isStreaming) setStreamingState(true);
         appendAgentChunk(data.delta || '');
         break;
@@ -616,20 +693,17 @@ window.ChatPage = (function () {
         break;
       case 'response':
         // 完整响应（流式结束后的最终内容，或非流式模式的回退）
-        if (userStopped) break; // 用户已停止，忽略
-        removeThinking();
-        // 如果已经有流式内容，stream_end 已经 finalize 了，response 用于持久化
-        // 如果没有流式内容（纯工具调用轮次无文本输出），直接显示
-        var lastMsg = messages[messages.length - 1];
-        if (lastMsg && lastMsg.role === 'agent' && lastMsg.content === data.content) {
-          // 流式内容已经显示，跳过重复渲染
-        } else if (lastMsg && lastMsg.role === 'agent' && lastMsg.content && agentResponseBuffer === '') {
-          // 流式已 finalize 且内容一致，跳过
-        } else {
-          finalizeAgentResponse();
-          messages.push({ role: 'agent', content: data.content });
-          renderMessages();
+        if (userStopped) break;
+        // 如果刚刚 finalize 了流式消息，response 是冗余的，跳过
+        if (streamFinalized) {
+          streamFinalized = false;
+          break;
         }
+        // 非流式模式：直接显示完整响应
+        finalizeAgentResponse();
+        messages.push({ role: 'agent', content: data.content });
+        appendMessageEl(messages[messages.length - 1]);
+        saveMessages();
         break;
       case 'step':
         handleWsStep(data.step);
@@ -637,15 +711,17 @@ window.ChatPage = (function () {
       case 'status':
         wsProcessing = data.status === 'processing';
         if (data.status === 'idle') {
-          userStopped = false; // 任务结束，重置停止标记
+          userStopped = false;
+          removeThinking();  // LLM 结束，隐藏状态栏
         }
         setStreamingState(wsProcessing);
         break;
       case 'error':
-        removeThinking();
         finalizeAgentResponse();
         messages.push({ role: 'agent', content: '[err] ' + data.message });
-        renderMessages();
+        appendMessageEl(messages[messages.length - 1]);
+        saveMessages();
+        removeThinking();
         break;
       case 'info':
         // info 消息（如工具调用次数）不写入聊天记录，仅在控制台记录
@@ -657,6 +733,9 @@ window.ChatPage = (function () {
       case 'tokenUsage':
         updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0);
         break;
+      case 'tool_output':
+        // 工具实时输出（忽略，工具调用已在聊天区展示）
+        break;
       case 'pong':
         break;
     }
@@ -664,27 +743,45 @@ window.ChatPage = (function () {
 
   function handleWsStep(step) {
     if (!step) return;
-    // 更新 token 用量（仅更新状态栏，不写入聊天记录）
+    // 更新 token 用量
     if (step.totalTokenUsage) {
       usedInputTokens = step.totalTokenUsage.inputTokens || 0;
       usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
       renderContextBar();
     }
-    // 更新轮次指示器（不写入 messages，仅 UI 展示）
+    // 更新轮次指示器
     if (step.iteration) {
       updateTurnCounter(step.iteration);
+    }
+    // 工具调用：在聊天区追加紧凑条目
+    if (step.type === 'tool_call' && step.toolName) {
+      var detail = '';
+      if (step.toolArgs) {
+        // 提取关键参数作为摘要（文件路径、命令等）
+        detail = step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query || '';
+        if (!detail) {
+          var argsStr = JSON.stringify(step.toolArgs);
+          detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+        }
+      }
+      appendToolAction(step.toolName, detail, 'pending');
+    }
+    // 工具结果：更新对应条目的图标
+    if (step.type === 'tool_result' && step.toolName) {
+      updateLastToolAction(step.toolName, step.toolSuccess ? 'success' : 'error');
     }
   }
 
   function handleWsConfirm(toolName, args) {
-    removeThinking();
     var argsText = args ? JSON.stringify(args) : '';
     var ok = window.confirm('AI 请求执行危险操作：\n\n工具: ' + toolName + '\n参数: ' + argsText + '\n\n是否允许？');
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify({ type: 'confirm_reply', approved: ok }));
     }
-    messages.push({ role: 'agent', content: ok ? '[ok] 用户已确认: ' + toolName : '[denied] 用户已拒绝: ' + toolName });
-    renderMessages();
+    var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + toolName : '[denied] 用户已拒绝: ' + toolName };
+    messages.push(confirmMsg);
+    appendMessageEl(confirmMsg);
+    saveMessages();
   }
 
   function sendWsMessage(text) {
@@ -882,15 +979,18 @@ window.ChatPage = (function () {
       hideCmdDropdown();
       showThinking(false);
       sendWsMessage('~open\n\n' +
-        '【文件浏览器模式】请按以下规则操作：\n' +
-        '1. 先调用 list_drives 列出所有磁盘驱动器，然后等待用户指示。\n' +
-        '2. 用户说"打开 X:"或"进入 X:"时，调用 browse_directory 浏览该盘符根目录。\n' +
-        '3. 用户说"进入 XXX"时，在当前路径基础上拼接子目录名，直接调用一次 browse_directory（传入完整绝对路径，严禁从头重复导航）。\n' +
-        '4. 用户给出绝对路径时：目录用 browse_directory，文件用 open_file。\n' +
-        '5. 用户说"返回"或"上一级"时，浏览当前目录的父目录。\n' +
-        '6. 每次 browse_directory 返回的 [当前路径] 就是你所在的目录，记住它。\n' +
-        '7. 目录用 📁，文件用 📄，驱动器用 💾。\n' +
-        '8. 每次显示目录内容后，等待用户的下一条指令。');
+        '【文件浏览器模式】忽略之前对话中的所有任务和主题。你现在是文件浏览器。\n\n' +
+        '核心规则：\n' +
+        '- 每次调用工具后，必须把工具返回的内容（驱动器列表、目录内容）完整展示给用户。\n' +
+        '- 展示完内容后等待用户下一条指令。\n' +
+        '- 禁止分析、总结、评价、修改任何文件或项目。只做导航和展示。\n\n' +
+        '导航规则：\n' +
+        '1. 现在立即调用 list_drives，然后把所有驱动器列出来。\n' +
+        '2. 用户说"进入 X:"时，调用 browse_directory 浏览该路径，然后列出目录内容。\n' +
+        '3. 用户说"进入 XXX"时，拼接到当前路径，调用 browse_directory，然后列出目录内容。\n' +
+        '4. 用户说"返回"时，浏览当前目录的父目录，然后列出目录内容。\n' +
+        '5. 记住当前路径。\n\n' +
+        '展示格式：目录用 [DIR]，文件用 [FILE]，驱动器用 [DRIVE]。');
       return;
     }
 
@@ -927,12 +1027,15 @@ window.ChatPage = (function () {
     if (text) displayParts.push(text);
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
     if (displayParts.length > 0) {
-      messages.push({ role: 'user', content: displayParts.join('\n') });
+      var userMsg = { role: 'user', content: displayParts.join('\n') };
+      messages.push(userMsg);
+      appendMessageEl(userMsg);
+      saveMessages();
     }
-    renderMessages();
     elInput.value = '';
     autoResizeInput();
     hideCmdDropdown();
+    userScrolledUp = false; // 发送新消息时重置，确保看到回复
     showThinking(!!uploadedFile);
 
     // 如果有文件，先上传，再把 fileId 附加到消息中
@@ -944,6 +1047,7 @@ window.ChatPage = (function () {
 
     sendWsMessage(msgText);
     userStopped = false; // 新消息发送，重置停止标记
+    streamFinalized = false;
   }
 
   // ---- 输入框自动调整大小 ----
@@ -1139,8 +1243,13 @@ window.ChatPage = (function () {
           '</div>' +
           '<div class="pipeline-stages" id="stages-container"></div>' +
         '</div>') +
-        // Messages
-        '<div class="chat-messages" id="chat-messages"></div>' +
+        // Messages（正序 + overflow-anchor 锚点粘底）
+        '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
+        // Thinking 指示器（fixed 悬浮）
+        '<div class="agent-status-bar" id="agent-status-bar">' +
+          '<span class="status-text" id="status-text"></span>' +
+          '<span class="status-turn" id="status-turn"></span>' +
+        '</div>' +
         // Input area（进度条作为上边框）
         '<div class="chat-input-area">' +
           '<div class="ctx-bottom-bar" id="ctx-bar" title="上下文用量">' +
@@ -1163,6 +1272,7 @@ window.ChatPage = (function () {
 
     // 缓存 DOM 引用
     elMessages = container.querySelector('#chat-messages');
+    elAnchor = container.querySelector('#chat-anchor');
     elInput = container.querySelector('#chat-input');
     elSendBtn = container.querySelector('#btn-send');
     elFileBtn = container.querySelector('#btn-file');
@@ -1174,9 +1284,18 @@ window.ChatPage = (function () {
     elProgressFill = container.querySelector('#progress-fill');
     elStagesContainer = container.querySelector('#stages-container');
     elContextBar = container.querySelector('#ctx-bar');
+    elStatusBar = container.querySelector('#agent-status-bar');
+    elStatusText = container.querySelector('#status-text');
+    elStatusTurn = container.querySelector('#status-turn');
 
     // 立即渲染上下文条（加载状态）
     renderContextBar();
+
+    // 监听用户滚动：检测是否手动向上滚动（脱离底部）
+    elMessages.addEventListener('scroll', function () {
+      var atBottom = elMessages.scrollHeight - elMessages.scrollTop - elMessages.clientHeight < 80;
+      userScrolledUp = !atBottom;
+    });
 
     // 创建命令面板下拉框并插入到 input-wrapper 中
     elCmdDropdown = createCmdDropdown();
@@ -1217,6 +1336,29 @@ window.ChatPage = (function () {
     elInput.addEventListener('blur', function () {
       // 延迟隐藏，让 mousedown 事件有机会触发
       setTimeout(hideCmdDropdown, 150);
+    });
+
+    // 粘贴图片支持：从剪贴板粘贴图片自动上传
+    elInput.addEventListener('paste', function (e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image/') === 0) {
+          e.preventDefault();
+          var file = items[i].getAsFile();
+          if (file) {
+            // 生成文件名
+            var ext = file.type.split('/')[1] || 'png';
+            if (ext === 'jpeg') ext = 'jpg';
+            var name = 'paste-' + Date.now() + '.' + ext;
+            var namedFile = new File([file], name, { type: file.type });
+            handleFileSelect(namedFile);
+            // 显示粘贴预览
+            showPastePreview(file);
+          }
+          return;
+        }
+      }
     });
 
     if (elFileBtn) {

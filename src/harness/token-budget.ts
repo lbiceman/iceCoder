@@ -1,11 +1,11 @@
 /**
  * Token 预算追踪器。
  *
- * 当模型认为任务完成但 token 预算还有剩余时，
- * 可以注入 nudge 消息让模型继续工作。
+ * 作为 <status> 标记机制的安全网：
+ * - 模型声明 incomplete 时，检查预算是否允许继续
+ * - 预算耗尽或继续次数用完时，强制停止
  *
- * 这在长任务中很有用：模型可能因为上下文压力
- * 而过早停止，token 预算追踪器可以鼓励它继续。
+ * 不再主动注入 nudge 消息，继续决策由 harness 的 status 解析逻辑驱动。
  */
 
 /**
@@ -14,19 +14,16 @@
 export interface TokenBudgetConfig {
   /** 总 token 预算（输入 + 输出） */
   totalBudget: number;
-  /** 当剩余预算超过此比例时，注入继续提示（0-1） */
+  /** 当剩余预算低于此比例时，不允许继续（0-1） */
   continuationThreshold: number;
   /** 最大继续次数（防止无限循环） */
   maxContinuations: number;
-  /** 继续提示消息 */
-  continuationMessage: string;
 }
 
 const DEFAULT_CONFIG: TokenBudgetConfig = {
   totalBudget: 500000,
   continuationThreshold: 0.3,
-  maxContinuations: 3,
-  continuationMessage: '你还有剩余的 token 预算。如果任务尚未完全完成，请继续工作。如果已经完成，请给出最终总结。',
+  maxContinuations: 5,
 };
 
 /**
@@ -65,7 +62,7 @@ export class TokenBudgetTracker {
   }
 
   /**
-   * 检查是否应该注入继续提示。
+   * 检查预算是否允许继续。
    *
    * 条件：
    * 1. 剩余预算超过阈值
@@ -81,13 +78,10 @@ export class TokenBudgetTracker {
   }
 
   /**
-   * 获取继续提示消息并递增计数。
+   * 记录一次继续（由 harness 在确认继续后调用）。
    */
-  getContinuationMessage(): string {
+  recordContinuation(): void {
     this.continuationCount++;
-    const remaining = this.getRemaining();
-    const used = this.getTotalUsed();
-    return `${this.config.continuationMessage}\n\n[token 使用情况: 已用 ${used}, 剩余 ${remaining}]`;
   }
 
   /**
