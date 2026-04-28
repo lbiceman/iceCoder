@@ -277,14 +277,15 @@ Each object must have: filename, type, name, description, content, tags (string[
 
   /**
    * 将提取的记忆保存到文件。
-   * 包含结构化去重：如果同名文件已存在，更新而非覆盖。
-   * 多级路由：user 类型记忆写入用户级目录（跨项目共享）。
-   */
-  /**
-   * 将提取的记忆保存到文件。
-   * 包含结构化去重：如果同名文件已存在，更新而非覆盖。
-   * 多级路由：user 类型记忆写入用户级目录（跨项目共享）。
-   * v4 新增：tags 重叠度硬去重 — 同类型 + tags 重叠 ≥70% 时合并到已有文件。
+   *
+   * 去重策略：
+   * - 同名文件已存在 → 更新而非新建
+   * - tags Jaccard 重叠 ≥ 0.6 → 合并到已有文件
+   *
+   * 写入路由：
+   * - user 类型 + confidence=1（用户明确声明）→ 写入用户级目录（跨项目共享）
+   * - user 类型 + confidence<1（LLM 推断）→ 写入项目级目录作为候选，等 Dream 整合确认后提升
+   * - 其他类型 → 写入项目级目录
    */
   private async saveMemories(
     memories: Array<{
@@ -324,8 +325,12 @@ Each object must have: filename, type, name, description, content, tags (string[
           .replace(/\.{2,}/g, '_');
 
         // 路径安全验证
-        // user 类型记忆写入用户级目录（跨项目共享），其他写入项目级目录
-        const targetDir = memory.type === 'user' ? userMemoryDir : memoryDir;
+        // user 类型 + 高置信度（用户明确声明）→ 用户级目录（跨项目共享）
+        // user 类型 + 低置信度（LLM 推断）→ 项目级目录（候选，等 Dream 提升）
+        // 其他类型 → 项目级目录
+        const memConfidence = memory.confidence ?? 0.5;
+        const isExplicitUser = memory.type === 'user' && memConfidence >= 1.0;
+        const targetDir = isExplicitUser ? userMemoryDir : memoryDir;
         let filePath: string;
         try {
           filePath = validatePath(safeFilename, targetDir);

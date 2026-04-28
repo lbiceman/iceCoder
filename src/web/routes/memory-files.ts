@@ -73,6 +73,38 @@ export function createMemoryFilesRouter(): Router {
   });
 
   /**
+   * GET /:filename — 查看指定记忆文件的完整内容
+   */
+  router.get('/:filename', async (req: Request, res: Response): Promise<void> => {
+    const filename = req.params.filename as string;
+
+    if (!filename) {
+      res.status(400).json({ success: false, error: 'Missing filename' });
+      return;
+    }
+
+    const projDir = path.resolve(DEFAULT_MEMORY_DIR);
+    const userDir = path.resolve(DEFAULT_USER_MEMORY_DIR);
+
+    for (const dir of [projDir, userDir]) {
+      try {
+        const filePath = validatePath(filename, dir);
+        const content = await fs.readFile(filePath, 'utf-8');
+        const level = dir === userDir ? 'user' : 'project';
+        res.json({ success: true, filename, level, content });
+        return;
+      } catch (e) {
+        if (e instanceof PathTraversalError) {
+          res.status(403).json({ success: false, error: 'Path security violation' });
+          return;
+        }
+      }
+    }
+
+    res.status(404).json({ success: false, error: `Memory file not found: ${filename}` });
+  });
+
+  /**
    * DELETE /:filename — 删除指定记忆文件
    */
   router.delete('/:filename', async (req: Request, res: Response): Promise<void> => {

@@ -300,6 +300,40 @@ ${c.bold}终端内置命令:${c.reset}
         const userDir = pathMod.default.resolve(process.env.ICE_USER_MEMORY_DIR || 'data/user-memory');
         const memArgs = cmd.substring(6).trim(); // "memory" 后面的参数
 
+        // ~memory view <filename>
+        if (memArgs.startsWith('view ')) {
+          const viewFilename = memArgs.substring(5).trim();
+          if (!viewFilename) {
+            error('用法: /memory view <文件名>');
+            rl.prompt();
+            return;
+          }
+
+          let found = false;
+          for (const dir of [projDir, userDir]) {
+            try {
+              const filePath = validatePath(viewFilename, dir);
+              const content = await fsP.readFile(filePath, 'utf-8');
+              const level = dir === userDir ? '用户级' : '项目级';
+              info(`📄 ${viewFilename} (${level})`);
+              console.log(content);
+              found = true;
+              break;
+            } catch (e) {
+              if (e instanceof PathTraversalError) {
+                error('路径安全验证失败');
+                rl.prompt();
+                return;
+              }
+            }
+          }
+          if (!found) {
+            error(`记忆文件未找到: ${viewFilename}`);
+          }
+          rl.prompt();
+          return;
+        }
+
         // ~memory delete <filename>
         if (memArgs.startsWith('delete ')) {
           const delFilename = memArgs.substring(7).trim();
@@ -362,7 +396,8 @@ ${c.bold}终端内置命令:${c.reset}
           const levelTag = m.level === 'user' ? ' (用户级)' : '';
           console.log(`  ${c.cyan}${i + 1}.${c.reset} ${typeTag} ${m.filename}${desc}${levelTag}`);
         }
-        console.log(`\n  删除记忆: ${c.cyan}/memory delete <文件名>${c.reset}`);
+        console.log(`\n  查看记忆: ${c.cyan}/memory view <文件名>${c.reset}`);
+        console.log(`  删除记忆: ${c.cyan}/memory delete <文件名>${c.reset}`);
       } catch (e) {
         error(`记忆操作失败: ${e instanceof Error ? e.message : String(e)}`);
       }
