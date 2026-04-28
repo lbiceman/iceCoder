@@ -9,6 +9,8 @@ data/*
 !data/config.example.json
 !data/.gitkeep
 
+docs
+
 # Pipeline 输出
 output/
 
