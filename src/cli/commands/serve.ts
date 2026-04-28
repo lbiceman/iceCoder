@@ -17,6 +17,7 @@ import { attachChatWebSocket, cleanupChatResources } from '../../web/chat-ws.js'
 import { createSessionsRouter } from '../../web/routes/sessions.js';
 import { createUploadRouter } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
+import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 
@@ -48,6 +49,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/sessions', router: createSessionsRouter() },
       { path: '/api/chat/upload', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
+      { path: '/api/memory', router: createMemoryExportRouter() },
       { path: '/api', router: createPipelineRouter({ orchestrator, sseManager }) },
     ],
   });

@@ -1023,13 +1023,15 @@ window.ChatPage = (function () {
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
+    { name: 'export', description: '导出所有记忆文件', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
-    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' }
+    { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
+    { name: 'export', description: '导出所有记忆文件', prefix: '~' }
   ];
 
   function getLocalCommands() {
@@ -1239,6 +1241,46 @@ window.ChatPage = (function () {
         .catch(function () {
           messages.pop();
           messages.push({ role: 'agent', content: '获取遥测报告失败，请检查服务器是否运行' });
+          renderMessages();
+        });
+      return;
+    }
+
+    // 处理 ~export 命令：导出记忆文件
+    if (text === '~export') {
+      elInput.value = '';
+      autoResizeInput();
+      hideCmdDropdown();
+      messages.push({ role: 'agent', content: '正在导出记忆文件…' });
+      renderMessages();
+
+      fetch('/api/memory/stats')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.success || data.total === 0) {
+            messages.pop();
+            messages.push({ role: 'agent', content: '没有可导出的记忆文件。' });
+            renderMessages();
+            return;
+          }
+          // 触发下载
+          var a = document.createElement('a');
+          a.href = '/api/memory/export';
+          a.download = '';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+
+          messages.pop();
+          messages.push({
+            role: 'agent',
+            content: '记忆导出完成！共 ' + data.total + ' 个文件（项目级 ' + data.project.files + ' + 用户级 ' + data.user.files + '）。\n\n文件已开始下载。'
+          });
+          renderMessages();
+        })
+        .catch(function (err) {
+          messages.pop();
+          messages.push({ role: 'agent', content: '记忆导出失败: ' + (err.message || '未知错误') });
           renderMessages();
         });
       return;
