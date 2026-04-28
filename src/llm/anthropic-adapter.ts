@@ -190,6 +190,33 @@ export class AnthropicAdapter implements ProviderAdapter {
       return { role: 'assistant', content };
     }
 
+    // 用户消息：检查是否包含图片
+    if (msg.role === 'user' && Array.isArray(msg.content)) {
+      const hasImage = msg.content.some(b => b.type === 'image' && b.imageUrl);
+      if (hasImage) {
+        const parts: Anthropic.ContentBlockParam[] = [];
+        for (const block of msg.content) {
+          if (block.type === 'text' && block.text) {
+            parts.push({ type: 'text', text: block.text });
+          } else if (block.type === 'image' && block.imageUrl) {
+            // 解析 data URL: data:image/png;base64,xxx
+            const match = block.imageUrl.match(/^data:image\/(\w+);base64,(.+)$/);
+            if (match) {
+              parts.push({
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: `image/${match[1]}` as any,
+                  data: match[2],
+                },
+              });
+            }
+          }
+        }
+        return { role: 'user', content: parts };
+      }
+    }
+
     // 普通用户或助手消息
     const textContent = this.resolveContent(msg.content);
     return {

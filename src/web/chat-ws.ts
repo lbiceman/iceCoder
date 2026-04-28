@@ -34,15 +34,45 @@ const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
 /**
  * 单会话消息缓存。
  * 跨轮次累积，包含完整的结构化对话历史（含 toolCalls/toolCallId）。
- * 服务重启后丢失，harness 从零构建，记忆系统提供上下文连续性。
+ * 同时持久化到磁盘，服务重启后自动恢复。
  */
 let cachedMessages: UnifiedMessage[] | undefined;
+
+/** 结构化消息持久化文件路径 */
+const STRUCTURED_SESSION_FILE = path.join(SESSIONS_DIR, 'default.structured.json');
 
 /**
  * 当前活跃的 AbortController（用于用户中断正在执行的任务）。
  * 每次 handleChatMessage 开始时创建，结束时清空。
  */
 let activeAbortController: AbortController | null = null;
+
+/** 保存结构化消息到磁盘（防抖，避免频繁写入） */
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+function saveStructuredMessages(messages: UnifiedMessage[]): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
+      await fsPromises.writeFile(STRUCTURED_SESSION_FILE, JSON.stringify(messages), 'utf-8');
+    } catch (err) {
+      console.error('[chat-ws] 保存结构化消息失败:', err);
+    }
+  }, 1000);
+}
+
+/** 从磁盘加载结构化消息（启动时调用一次） */
+async function loadStructuredMessages(): Promise<UnifiedMessage[] | undefined> {
+  try {
+    const data = await fsPromises.readFile(STRUCTURED_SESSION_FILE, 'utf-8');
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      console.log(`[chat-ws] 恢复 ${parsed.length} 条结构化消息`);
+      return parsed;
+    }
+  } catch { /* 文件不存在或解析失败，正常情况 */ }
+  return undefined;
+}
 
 /**
  * 全局记忆系统实例（进程级单例）。
@@ -66,6 +96,11 @@ async function ensureMemoryInitialized(): Promise<void> {
   } catch (err) {
     console.error('[memory] FileMemoryManager 初始化失败:', err);
     globalFileMemoryManager = null;
+  }
+
+  // 恢复结构化消息（服务重启后恢复对话上下文）
+  if (!cachedMessages) {
+    cachedMessages = await loadStructuredMessages();
   }
 
   memoryInitialized = true;
@@ -107,6 +142,8 @@ async function clearSessionFile(): Promise<void> {
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
     await fsPromises.writeFile(SESSION_FILE, '[]', 'utf-8');
+    // 同时清除结构化消息文件
+    await fsPromises.writeFile(STRUCTURED_SESSION_FILE, '[]', 'utf-8').catch(() => {});
   } catch { /* ignore */ }
 }
 
@@ -231,10 +268,36 @@ async function handleChatMessage(
   const systemPrompt = await loadSystemPrompt();
 
   // 解析消息中的文件引用 [file:xxx]，替换为实际文件路径
-  const { text: resolvedMessage, filePaths } = resolveFileReferences(message);
-  const finalMessage = filePaths.length > 0
-    ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
-    : resolvedMessage;
+  const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
+
+  // 构建用户消息（可能包含图片的多模态消息）
+  let userMessageContent: string | import('../llm/types.js').ContentBlock[];
+  if (imageUrls.length > 0) {
+    // 多模态消息：文本 + 图片
+    const blocks: import('../llm/types.js').ContentBlock[] = [];
+    const textPart = filePaths.length > 0
+      ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
+      : resolvedMessage;
+    blocks.push({ type: 'text', text: textPart });
+
+    for (const imgPath of imageUrls) {
+      try {
+        const imgData = await fsPromises.readFile(imgPath);
+        const ext = path.extname(imgPath).toLowerCase().replace('.', '');
+        const mimeType = ext === 'jpg' ? 'jpeg' : ext;
+        const dataUrl = `data:image/${mimeType};base64,${imgData.toString('base64')}`;
+        blocks.push({ type: 'image', imageUrl: dataUrl });
+      } catch (err) {
+        console.error('[chat-ws] 读取图片失败:', err);
+      }
+    }
+    userMessageContent = blocks;
+  } else {
+    userMessageContent = filePaths.length > 0
+      ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
+      : resolvedMessage;
+  }
+  const finalMessage = typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
 
   // 确保记忆系统已初始化
   await ensureMemoryInitialized();
@@ -317,6 +380,11 @@ async function handleChatMessage(
         sendJSON(ws, { type: 'stream', delta: event.delta });
       }
 
+      // 工具实时输出推送
+      if (event.type === 'tool_output' && event.content) {
+        sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
+      }
+
       // step 信息仅在服务端日志输出
       if (event.type === 'tool_call') {
         const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
@@ -331,13 +399,16 @@ async function handleChatMessage(
     existingMessages,
     // 流式调用函数
     (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
+    // 多模态内容块（图片等）
+    Array.isArray(userMessageContent) ? userMessageContent : undefined,
   );
 
   // 清空 abort controller
   activeAbortController = null;
 
-  // 缓存完整的结构化消息历史
+  // 缓存完整的结构化消息历史并持久化到磁盘
   cachedMessages = result.messages;
+  saveStructuredMessages(result.messages);
 
   // 写入 AI 回复到会话文件
   if (result.content) {

@@ -45,19 +45,29 @@ export function getUploadedFile(fileId: string): { originalName: string; filePat
 
 /**
  * 解析消息中的 [file:xxx] 引用，替换为文件路径信息。
- * 返回处理后的消息文本和关联的文件路径列表。
+ * 图片文件会转为 base64 data URL 供多模态 LLM 使用。
+ * 返回处理后的消息文本、关联的文件路径列表和图片 data URL 列表。
  */
-export function resolveFileReferences(message: string): { text: string; filePaths: string[] } {
+export function resolveFileReferences(message: string): { text: string; filePaths: string[]; imageUrls: string[] } {
   const filePaths: string[] = [];
+  const imageUrls: string[] = [];
+  const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+
   const resolved = message.replace(/\[file:([a-f0-9-]+)\]\s*(.*)/g, (_match, fileId: string, filename: string) => {
     const file = uploadedFiles.get(fileId);
     if (file) {
+      const ext = path.extname(file.originalName).toLowerCase();
+      if (IMAGE_EXTENSIONS.includes(ext)) {
+        // 图片文件：读取并转为 base64 data URL（同步标记，异步处理在调用方）
+        imageUrls.push(file.filePath);
+        return `[已上传图片] ${file.originalName}`;
+      }
       filePaths.push(file.filePath);
       return `[已上传文件] ${file.originalName} (路径: ${file.filePath}, 大小: ${file.size} 字节)`;
     }
     return `[文件未找到] ${filename || fileId}`;
   });
-  return { text: resolved, filePaths };
+  return { text: resolved, filePaths, imageUrls };
 }
 
 /**

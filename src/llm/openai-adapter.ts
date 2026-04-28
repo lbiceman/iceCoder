@@ -35,6 +35,8 @@ export interface OpenAIAdapterConfig {
   presencePenalty?: number;
   /** 单次 API 请求超时（毫秒），默认 120000（2 分钟） */
   timeout?: number;
+  /** 是否支持视觉/图片输入（默认自动检测：gpt-4o/gpt-4-vision 等支持，其他不支持） */
+  supportsVision?: boolean;
   [key: string]: any;
 }
 
@@ -46,6 +48,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   public readonly name: string;
   private client: OpenAI;
   private model: string;
+  private supportsVision: boolean;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
 
   constructor(config: OpenAIAdapterConfig) {
@@ -58,8 +61,29 @@ export class OpenAIAdapter implements ProviderAdapter {
       maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
     });
     this.model = config.model;
-    const { apiKey, baseURL, organization, model, timeout, ...rest } = config;
+    // 视觉支持：显式配置 > 自动检测
+    this.supportsVision = config.supportsVision ?? this.detectVisionSupport(config.model);
+    const { apiKey, baseURL, organization, model, timeout, supportsVision, ...rest } = config;
     this.defaultParams = rest;
+  }
+
+  /**
+   * 根据模型名称自动检测是否支持视觉输入。
+   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), claude-3, qwen-vl 等。
+   * 保守策略：未知模型默认不支持。
+   */
+  private detectVisionSupport(model: string): boolean {
+    const m = model.toLowerCase();
+    // OpenAI 视觉模型
+    if (m.includes('gpt-4o') || m.includes('gpt-4-vision') || m.includes('gpt-4-turbo')) return true;
+    // Anthropic (通过 OpenAI 兼容层)
+    if (m.includes('claude-3') || m.includes('claude-4')) return true;
+    // 通义千问视觉
+    if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
+    // Google Gemini
+    if (m.includes('gemini')) return true;
+    // 默认不支持（DeepSeek、GLM 等纯文本模型）
+    return false;
   }
 
   /**
@@ -203,7 +227,19 @@ export class OpenAIAdapter implements ProviderAdapter {
   private convertToOpenAIMessages(
     messages: UnifiedMessage[],
   ): OpenAI.ChatCompletionMessageParam[] {
-    const converted = messages.map((msg) => this.convertSingleMessage(msg));
+    // DeepSeek thinking 模式修复：如果会话中任何 assistant 消息有 reasoningContent，
+    // 则所有 assistant 消息都必须有 reasoning_content 字段，缺失的补空字符串。
+    const hasAnyReasoning = messages.some(m => m.role === 'assistant' && m.reasoningContent);
+    const normalized = hasAnyReasoning
+      ? messages.map(m => {
+          if (m.role === 'assistant' && !m.reasoningContent) {
+            return { ...m, reasoningContent: '' };
+          }
+          return m;
+        })
+      : messages;
+
+    const converted = normalized.map((msg) => this.convertSingleMessage(msg));
     return this.validateToolCallPairing(converted);
   }
 
@@ -291,20 +327,55 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 将单个 UnifiedMessage 转换为 OpenAI 消息格式。
    */
   private convertSingleMessage(msg: UnifiedMessage): OpenAI.ChatCompletionMessageParam {
-    const content = this.resolveContent(msg.content);
-
     switch (msg.role) {
       case 'system':
-        return { role: 'system', content };
-      case 'user':
-        return { role: 'user', content };
+        return { role: 'system', content: this.resolveContent(msg.content) };
+      case 'user': {
+        // 检查是否包含图片内容块
+        if (Array.isArray(msg.content)) {
+          const hasImage = msg.content.some(b => b.type === 'image' && b.imageUrl);
+          if (hasImage) {
+            if (this.supportsVision) {
+              // 视觉模型：发送图片内容
+              const parts: OpenAI.ChatCompletionContentPart[] = [];
+              for (const block of msg.content) {
+                if (block.type === 'text' && block.text) {
+                  parts.push({ type: 'text', text: this.cleanText(block.text) });
+                } else if (block.type === 'image' && block.imageUrl) {
+                  parts.push({
+                    type: 'image_url',
+                    image_url: { url: block.imageUrl },
+                  });
+                }
+              }
+              return { role: 'user', content: parts };
+            } else {
+              // 非视觉模型：降级为纯文本，提示用户
+              const textParts: string[] = [];
+              let imageCount = 0;
+              for (const block of msg.content) {
+                if (block.type === 'text' && block.text) {
+                  textParts.push(this.cleanText(block.text));
+                } else if (block.type === 'image') {
+                  imageCount++;
+                }
+              }
+              if (imageCount > 0) {
+                textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+              }
+              return { role: 'user', content: textParts.join('\n') };
+            }
+          }
+        }
+        return { role: 'user', content: this.resolveContent(msg.content) };
+      }
       case 'assistant': {
         const assistantMsg: any = {
           role: 'assistant',
-          content,
+          content: this.resolveContent(msg.content),
         };
         // 传回 reasoning_content（DeepSeek thinking 模式要求）
-        if (msg.reasoningContent) {
+        if (msg.reasoningContent !== undefined) {
           assistantMsg.reasoning_content = msg.reasoningContent;
         }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
@@ -322,11 +393,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       case 'tool':
         return {
           role: 'tool',
-          content,
+          content: this.resolveContent(msg.content),
           tool_call_id: msg.toolCallId || '',
         };
       default:
-        return { role: 'user', content };
+        return { role: 'user', content: this.resolveContent(msg.content) };
     }
   }
 
@@ -344,10 +415,16 @@ export class OpenAIAdapter implements ProviderAdapter {
         .map((block) => block.text!)
         .join('\n');
     }
+    return this.cleanText(text);
+  }
+
+  /**
+   * 清理文本中可能导致 API JSON 解析失败的非法字符。
+   */
+  private cleanText(text: string): string {
     // 1. 清理 ASCII 控制字符（保留 \t \n \r）
     text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
     // 2. 清理 lone surrogates（U+D800-U+DFFF），这些在 JSON 中非法
-    //    会导致某些 API 服务器（如 DeepSeek）JSON 解析失败
     // eslint-disable-next-line no-control-regex
     text = text.replace(/[\uD800-\uDFFF]/g, '\uFFFD');
     // 3. 清理其他 Unicode 控制字符（C1 控制字符 U+0080-U+009F）

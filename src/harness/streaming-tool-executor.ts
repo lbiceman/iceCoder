@@ -13,7 +13,7 @@
  */
 
 import type { ToolCall } from '../llm/types.js';
-import type { ToolResult } from '../tools/types.js';
+import type { ToolResult, ToolOutputCallback } from '../tools/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { isConcurrencySafe } from '../tools/tool-metadata.js';
 
@@ -48,9 +48,14 @@ export class StreamingToolExecutor {
   private toolExecutor: ToolExecutor;
   private pendingResults: Map<string, Promise<StreamingToolResult>> = new Map();
   private completedResults: StreamingToolResult[] = [];
+  private onToolOutput?: (toolCallId: string, toolName: string, chunk: string) => void;
 
-  constructor(toolExecutor: ToolExecutor) {
+  constructor(
+    toolExecutor: ToolExecutor,
+    onToolOutput?: (toolCallId: string, toolName: string, chunk: string) => void,
+  ) {
     this.toolExecutor = toolExecutor;
+    this.onToolOutput = onToolOutput;
   }
 
   /**
@@ -61,6 +66,11 @@ export class StreamingToolExecutor {
   submit(toolCall: ToolCall): void {
     const startTime = Date.now();
 
+    // 构建实时输出回调
+    const outputCallback: ToolOutputCallback | undefined = this.onToolOutput
+      ? (chunk: string) => { this.onToolOutput!(toolCall.id, toolCall.name, chunk); }
+      : undefined;
+
     const executePromise = (async (): Promise<StreamingToolResult> => {
       // 如果工具不是并行安全的，等待所有之前的工具完成
       if (!isConcurrencySafe(toolCall.name)) {
@@ -69,7 +79,7 @@ export class StreamingToolExecutor {
 
       let result: ToolResult;
       try {
-        result = await this.toolExecutor.executeTool(toolCall);
+        result = await this.toolExecutor.executeTool(toolCall, outputCallback);
       } catch (err) {
         // 兜底：ToolExecutor 内部异常不应该发生，但防御性处理
         result = {
