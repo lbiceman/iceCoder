@@ -196,9 +196,19 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   } catch { fileMemoryManager = null; }
 
   // 注册优雅退出（Ctrl+C / SIGTERM）
+  // latestHarness 追踪最近一次对话的 Harness 实例，
+  // 退出时 drain 确保后台记忆提取/Dream 完成。
+  let latestHarness: InstanceType<typeof Harness> | null = null;
+
   registerGracefulShutdown({
     message: 'iceCoder 正在退出...',
     cleanups: [
+      async () => {
+        if (latestHarness) {
+          await latestHarness.drainMemory(5000);
+          latestHarness = null;
+        }
+      },
       () => { tunnelProcess?.kill(); },
       () => { serveResult?.cleanup(); },
       () => ctx.mcpManager.shutdown(),
@@ -513,6 +523,7 @@ ${c.bold}终端内置命令:${c.reset}
       };
 
       const harness = new Harness(harnessConfig, ctx.toolExecutor);
+      latestHarness = harness;
 
       spinner.stop();
 

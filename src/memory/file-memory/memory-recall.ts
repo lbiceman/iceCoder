@@ -1,5 +1,5 @@
 /**
- * LLM 驱动的记忆相关性召回（v4 — 否定查询展开 + 时间范围加权）。
+ * LLM 驱动的记忆相关性召回（v5 — TF-IDF 加权关键词回退）。
  *
  * 扫描记忆目录的 frontmatter，拼成 manifest 列表，
  * 用 LLM sideQuery 从中选出最相关的记忆文件（最多 5 个）。
@@ -15,6 +15,10 @@
  *   "不要用 Jest" → 补充搜索词 ["test", "testing", "vitest", ...]
  * - 时间范围加权：解析"上周"/"最近三天"等相对时间，软加权匹配记忆
  *   不硬过滤，只提升时间范围内记忆的优先级
+ *
+ * v5 改进：
+ * - TF-IDF 加权关键词回退：给 token 加逆文档频率权重，稀有词权重更高
+ * - description/filename token 权重 ×2（比 contentPreview 更重要）
  */
 
 import type { MemoryHeader } from './types.js';
@@ -428,11 +432,49 @@ function computeTimeBoost(memory: MemoryHeader, range: TimeRange): number {
   return 1.0;
 }
 
+// ─── v5: TF-IDF 加权 ───
+
+/**
+ * 构建逆文档频率（IDF）表。
+ *
+ * IDF(token) = log(N / df(token))
+ * - N = 文档总数
+ * - df(token) = 包含该 token 的文档数
+ *
+ * 稀有词（如 "typescript"）IDF 高，常见词（如 "the"）IDF 低。
+ * 零额外 I/O：复用已扫描的 MemoryHeader 中的 description + filename + contentPreview。
+ */
+export function buildIdfMap(memories: MemoryHeader[]): Map<string, number> {
+  const N = memories.length;
+  if (N === 0) return new Map();
+
+  // 统计每个 token 出现在多少个文档中
+  const df = new Map<string, number>();
+  for (const mem of memories) {
+    const docTokens = new Set<string>();
+    for (const t of tokenize(mem.description ?? '')) docTokens.add(t);
+    for (const t of tokenize(mem.filename)) docTokens.add(t);
+    for (const t of tokenize(mem.contentPreview ?? '')) docTokens.add(t);
+
+    for (const token of docTokens) {
+      df.set(token, (df.get(token) || 0) + 1);
+    }
+  }
+
+  // 计算 IDF：log((N + 1) / (df + 1)) + 1
+  // 加 1 平滑避免 log(1)=0 的问题（单文档场景）
+  const idfMap = new Map<string, number>();
+  for (const [token, count] of df) {
+    idfMap.set(token, Math.log((N + 1) / (count + 1)) + 1);
+  }
+  return idfMap;
+}
+
 /**
  * 关键词匹配回退（LLM 不可用时使用）。
  *
  * 两阶段召回：
- * 1. 粗筛：用 description + filename + contentPreview 的 token 匹配，选出 top 15
+ * 1. 粗筛：用 description + filename + contentPreview 的 TF-IDF 加权匹配，选出 top 15
  * 2. 精读：读取 top 15 的完整正文，二次评分，取 top maxResults
  *
  * 新鲜度/置信度/频率加分只在有关键词命中时才生效。
@@ -441,6 +483,10 @@ function computeTimeBoost(memory: MemoryHeader, range: TimeRange): number {
  * v4 改进：
  * - 否定展开词合并到 queryTokens（扩大匹配面）
  * - 时间范围加权（范围内记忆 score ×1.5）
+ *
+ * v5 改进：
+ * - TF-IDF 加权：稀有 token 命中权重更高（"typescript" > "the"）
+ * - description/filename 命中权重 ×2（比 contentPreview 更重要）
  */
 function keywordFallback(
   query: string,
@@ -461,29 +507,42 @@ function keywordFallback(
     }
   }
 
-  // ── 第一阶段：粗筛（description + filename + contentPreview）──
+  // v5: 构建 IDF 表（一次遍历，零额外 I/O）
+  const idfMap = buildIdfMap(memories);
+
+  // 计算查询 token 的总 IDF 权重（用于归一化）
+  let totalQueryIdf = 0;
+  for (const token of queryTokens) {
+    totalQueryIdf += idfMap.get(token) ?? 1.0; // 未知 token 默认 IDF=1.0
+  }
+
+  // ── 第一阶段：粗筛（description + filename + contentPreview，TF-IDF 加权）──
   const COARSE_LIMIT = Math.max(maxResults * 3, 15);
 
   const scored = memories.map(memory => {
     let keywordScore = 0;
     const descLower = (memory.description ?? '').toLowerCase();
 
-    // 完整子串匹配（description）
+    // 完整子串匹配（description）— 最高优先级
     if (descLower.includes(queryLower)) {
       keywordScore += 1.0;
     } else {
-      // token 重叠（description + filename + contentPreview）
+      // v5: TF-IDF 加权 token 匹配
       const descTokens = tokenize(memory.description ?? '');
       const filenameTokens = tokenize(memory.filename);
       const previewTokens = tokenize(memory.contentPreview ?? '');
 
-      let hits = 0;
+      let weightedHits = 0;
       for (const token of queryTokens) {
-        if (descTokens.has(token) || filenameTokens.has(token) || previewTokens.has(token)) {
-          hits++;
+        const idf = idfMap.get(token) ?? 1.0;
+        // description/filename 命中权重 ×2（更重要的字段）
+        if (descTokens.has(token) || filenameTokens.has(token)) {
+          weightedHits += idf * 2;
+        } else if (previewTokens.has(token)) {
+          weightedHits += idf;
         }
       }
-      keywordScore += queryTokens.size > 0 ? (hits / queryTokens.size) * 0.6 : 0;
+      keywordScore += totalQueryIdf > 0 ? (weightedHits / (totalQueryIdf * 2)) * 0.6 : 0;
     }
 
     // 关键词完全不匹配 → 分数为 0，不召回
@@ -523,35 +582,38 @@ function keywordFallback(
   }
 
   // ── 第二阶段：精读正文，二次评分 ──
-  return refineWithFullContent(queryTokens, coarseResults, maxResults);
+  return refineWithFullContent(queryTokens, coarseResults, maxResults, idfMap);
 }
 
 /**
  * 精读正文二次评分。
  *
  * 同步读取 contentPreview（已在 MemoryHeader 中），
- * 对粗筛候选做更精确的 token 匹配排序。
+ * 对粗筛候选做更精确的 TF-IDF 加权匹配排序。
  *
  * 注意：这里用 contentPreview（300 字符）而非读取完整文件，
  * 因为 scanMemoryFiles 已经提取了 preview，无需额外 I/O。
- * 如果 preview 不够，粗筛阶段已经用 preview 匹配过了，
- * 精读阶段主要是重新排序而非发现新匹配。
+ *
+ * v5: 使用 IDF 加权，稀有 token 命中贡献更大。
  */
 function refineWithFullContent(
   queryTokens: Set<string>,
   candidates: Array<{ memory: MemoryHeader; score: number }>,
   maxResults: number,
+  idfMap: Map<string, number> = new Map(),
 ): MemoryHeader[] {
   const refined = candidates.map(({ memory, score }) => {
-    // 用完整 contentPreview 做更精确的匹配
     const previewTokens = tokenize(memory.contentPreview ?? '');
-    let contentHits = 0;
+    let weightedHits = 0;
+    let totalWeight = 0;
     for (const token of queryTokens) {
-      if (previewTokens.has(token)) contentHits++;
+      const idf = idfMap.get(token) ?? 1.0;
+      totalWeight += idf;
+      if (previewTokens.has(token)) weightedHits += idf;
     }
     // 正文匹配加分（最多 0.3）
-    const contentBonus = queryTokens.size > 0
-      ? (contentHits / queryTokens.size) * 0.3
+    const contentBonus = totalWeight > 0
+      ? (weightedHits / totalWeight) * 0.3
       : 0;
 
     return { memory, score: score + contentBonus };

@@ -357,20 +357,33 @@ export class MemoryDream {
   }
 
   /**
-   * 读取所有记忆文件内容。
+   * 读取记忆文件内容（按重要性排序）。
+   *
+   * v5 改进：
+   * - 从 50 文件 × 2000 字符 → 80 文件 × 1200 字符（总 token 预算不变，覆盖面 +60%）
+   * - 按 evictionScore 升序排列（分数越低越重要），确保高价值记忆优先被整合
    */
   private async readMemoryContents(
     memoryDir: string,
-    memories: Array<{ filename: string; filePath: string }>,
+    memories: Array<{ filename: string; filePath: string; mtimeMs: number; confidence: number; recallCount: number; lastRecalledMs: number; type?: string }>,
   ): Promise<string> {
+    const DREAM_READ_LIMIT = 80;
+    const DREAM_TRUNCATE_CHARS = 1200;
+
+    // 按重要性排序：evictionScore 越低越重要（不该被淘汰 = 应该优先整合）
+    const sorted = [...memories].sort((a, b) => {
+      const scoreA = this.computeDreamPriority(a);
+      const scoreB = this.computeDreamPriority(b);
+      return scoreA - scoreB; // 升序：重要的在前
+    });
+
     const parts: string[] = [];
 
-    for (const mem of memories.slice(0, 50)) { // 限制读取数量
+    for (const mem of sorted.slice(0, DREAM_READ_LIMIT)) {
       try {
         const content = await fs.readFile(mem.filePath, 'utf-8');
-        // 截断过长的文件
-        const truncated = content.length > 2000
-          ? content.substring(0, 2000) + '\n...[truncated]'
+        const truncated = content.length > DREAM_TRUNCATE_CHARS
+          ? content.substring(0, DREAM_TRUNCATE_CHARS) + '\n...[truncated]'
           : content;
         parts.push(`### ${mem.filename}\n\n${truncated}`);
       } catch (err) {
@@ -378,7 +391,25 @@ export class MemoryDream {
       }
     }
 
+    if (memories.length > DREAM_READ_LIMIT) {
+      parts.push(`\n> Note: ${memories.length - DREAM_READ_LIMIT} additional memory files were not included (sorted by importance, least important omitted).`);
+    }
+
     return parts.join('\n\n---\n\n');
+  }
+
+  /**
+   * 计算 Dream 读取优先级（越低越重要）。
+   * 复用 evictionScore 的逻辑：高置信度、高召回频率、user 类型 → 低分 → 优先读取。
+   */
+  private computeDreamPriority(mem: { mtimeMs: number; confidence: number; recallCount: number; lastRecalledMs: number; type?: string }): number {
+    const lastActiveMs = Math.max(mem.lastRecalledMs || 0, mem.mtimeMs);
+    const daysSinceActive = Math.max(0, (Date.now() - lastActiveMs) / 86_400_000);
+    const agePenalty = Math.min(daysSinceActive, 365) / 365 * 100;
+    const confidenceBonus = (mem.confidence || 0.5) * 30;
+    const recallBonus = Math.min(mem.recallCount || 0, 20) / 20 * 20;
+    const typeBonus = mem.type === 'user' ? 15 : 0;
+    return agePenalty - confidenceBonus - recallBonus - typeBonus;
   }
 
   /**

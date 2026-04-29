@@ -511,13 +511,18 @@ export class Harness {
       // messages 和 tools 已就地更新，直接 continue
     }
     } finally {
-      // 统一记忆合并：无论哪条路径退出循环，都执行一次
-      await this.memoryIntegration.onLoopEnd(
+      // 记忆合并：fire-and-forget，不阻塞主循环返回
+      // 提取/Dream/会话记忆更新在后台异步完成，
+      // 进程退出时由 drainExtractions 确保完成。
+      this.memoryIntegration.onLoopEnd(
         state.messages,
         state.turnCount,
         this.loopController.getState().totalInputTokens,
-      );
-      this.memoryIntegration.dispose();
+      ).catch(err => {
+        console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
+      });
+      // 注意：不调用 dispose()，因为后台任务仍在使用 memoryIntegration。
+      // dispose 由外部调用方（chat.ts 的 shutdown cleanup）负责。
     }
   }
 
@@ -809,5 +814,20 @@ export class Harness {
    */
   flushExtractionNotices(): string[] {
     return this.memoryIntegration.flushExtractionNotices();
+  }
+
+  /**
+   * 等待后台记忆任务完成并清理资源。
+   *
+   * 在进程退出前调用，确保：
+   * - 进行中的 LLM 提取完成（不丢失记忆）
+   * - 进行中的 Dream 整合完成（不损坏记忆文件）
+   * - 会话记忆更新完成
+   *
+   * @param timeoutMs - 最大等待时间（默认 10 秒）
+   */
+  async drainMemory(timeoutMs: number = 10_000): Promise<void> {
+    await this.memoryIntegration.drain(timeoutMs);
+    this.memoryIntegration.dispose();
   }
 }
