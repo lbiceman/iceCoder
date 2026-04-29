@@ -40,6 +40,8 @@ export interface MemoryFrontmatter {
   createdAt?: string;
   /** 语义标签（用于结构化去重，如 "lang:typescript", "tool:vite"） */
   tags?: string[];
+  /** 关联的其他记忆文件名（用于多跳关联召回） */
+  relatedTo?: string[];
 }
 
 /**
@@ -70,6 +72,8 @@ export interface MemoryHeader {
   source: string | undefined;
   /** 正文前 300 字符预览（用于召回时的内容匹配） */
   contentPreview: string;
+  /** 关联的其他记忆文件名 */
+  relatedTo: string[];
 }
 
 /**

@@ -431,6 +431,7 @@ export class MemoryDream {
     }
 
     // 删除文件
+    const deletedFilenames: string[] = [];
     if (Array.isArray(parsed.file_deletes)) {
       for (const filename of parsed.file_deletes) {
         if (!filename || filename === 'MEMORY.md') continue;
@@ -438,6 +439,7 @@ export class MemoryDream {
           const filePath = validatePath(filename, memoryDir);
           await fs.unlink(filePath);
           filesDeleted++;
+          deletedFilenames.push(filename);
         } catch (e) {
           if (e instanceof PathTraversalError) {
             console.error(`[MemoryDream] Path security violation: ${e.message}`);
@@ -445,6 +447,11 @@ export class MemoryDream {
           // 文件不存在等错误静默处理
         }
       }
+    }
+
+    // 清理悬空关联：移除其他文件中指向已删除文件的 relatedTo 条目
+    if (deletedFilenames.length > 0) {
+      await this.cleanDanglingRelations(memoryDir, deletedFilenames);
     }
 
     // 更新索引
@@ -463,6 +470,47 @@ export class MemoryDream {
       filesModified,
       filesDeleted,
     };
+  }
+
+  // ─── 悬空关联清理 ───
+
+  /**
+   * 清理悬空关联：扫描记忆目录中所有文件，
+   * 移除 frontmatter relatedTo 中指向已删除文件的条目。
+   */
+  private async cleanDanglingRelations(memoryDir: string, deletedFilenames: string[]): Promise<void> {
+    if (deletedFilenames.length === 0) return;
+    const deletedSet = new Set(deletedFilenames);
+
+    try {
+      const entries = await fs.readdir(memoryDir);
+      const mdFiles = entries.filter(f => f.endsWith('.md') && f !== 'MEMORY.md');
+
+      for (const filename of mdFiles) {
+        const filePath = path.join(memoryDir, filename);
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          if (!content.includes('relatedTo:')) continue;
+
+          // 解析 relatedTo 行
+          const match = content.match(/^relatedTo:\s*(.+)$/m);
+          if (!match) continue;
+
+          const currentRelated = match[1].split(',').map(s => s.trim()).filter(Boolean);
+          const cleaned = currentRelated.filter(r => !deletedSet.has(r));
+
+          if (cleaned.length === currentRelated.length) continue; // 无变化
+
+          const newRelatedLine = `relatedTo: ${cleaned.join(', ')}`;
+          const updated = content.replace(/^relatedTo:\s*.+$/m, newRelatedLine);
+          await fs.writeFile(filePath, updated, 'utf-8');
+        } catch {
+          // 单个文件处理失败不阻塞
+        }
+      }
+    } catch {
+      // 目录读取失败，静默处理
+    }
   }
 
   // ─── Dream 备份 ───

@@ -104,12 +104,15 @@ export async function recallRelevantMemories(
   if (llmAdapter) {
     try {
       const selected = await llmSelectMemories(query, memories, llmAdapter, maxResults, factIndex);
-      // 对选中文件的 facts 做关键词精排
-      const selectedFacts = extractFactsFromSelected(query, selected, factIndex);
+      // ── 关联扩展（1 跳）──
+      const expanded = expandRelatedMemories(selected, memories, alreadySurfaced);
+      // 对选中文件 + 关联文件的 facts 做关键词精排
+      const allSelected = [...selected, ...expanded];
+      const selectedFacts = extractFactsFromSelected(query, allSelected, factIndex);
       // 异步更新召回计数（不阻塞返回）
-      updateRecallMetadata(selected).catch(() => {});
+      updateRecallMetadata(allSelected).catch(() => {});
       return {
-        memories: selected,
+        memories: allSelected,
         facts: selectedFacts,
         duration: Date.now() - startTime,
         usedLLM: true,
@@ -122,11 +125,14 @@ export async function recallRelevantMemories(
 
   // 回退：关键词匹配
   const fallbackResults = keywordFallback(query, memories, maxResults);
-  const fallbackFacts = extractFactsFromSelected(query, fallbackResults, factIndex);
+  // ── 关联扩展（关键词回退路径也支持）──
+  const fallbackExpanded = expandRelatedMemories(fallbackResults, memories, alreadySurfaced);
+  const allFallback = [...fallbackResults, ...fallbackExpanded];
+  const fallbackFacts = extractFactsFromSelected(query, allFallback, factIndex);
   // 异步更新召回计数
-  updateRecallMetadata(fallbackResults).catch(() => {});
+  updateRecallMetadata(allFallback).catch(() => {});
   return {
-    memories: fallbackResults,
+    memories: allFallback,
     facts: fallbackFacts,
     duration: Date.now() - startTime,
     usedLLM: false,
@@ -374,6 +380,101 @@ async function updateRecallMetadata(memories: MemoryHeader[]): Promise<void> {
       // 更新失败不阻塞
     }
   }
+}
+
+// ─── v3: 关联扩展 ───
+
+/** 关联扩展最大数量 */
+const MAX_RELATED_EXPAND = 3;
+
+/**
+ * 关联扩展：从选中文件的 relatedTo 字段和 tags 相似度中发现关联文件。
+ *
+ * 双路径策略：
+ * 1. 显式关联（frontmatter relatedTo）— 精确，由 LLM 提取时生成
+ * 2. 隐式关联（tags Jaccard >= 0.3）— 兜底，纯代码计算，覆盖旧文件
+ *
+ * 只扩展 1 跳，不递归。最多扩展 MAX_RELATED_EXPAND 个文件。
+ */
+export function expandRelatedMemories(
+  selected: MemoryHeader[],
+  allMemories: MemoryHeader[],
+  alreadySurfaced: Set<string>,
+  maxExpand: number = MAX_RELATED_EXPAND,
+): MemoryHeader[] {
+  const selectedPaths = new Set(selected.map(m => m.filePath));
+  const selectedFilenames = new Set(selected.map(m => m.filename));
+  const byFilename = new Map(allMemories.map(m => [m.filename, m]));
+
+  // 候选集：按来源标记分数
+  const candidates = new Map<string, { mem: MemoryHeader; score: number; source: 'explicit' | 'tags' }>();
+
+  // ── 路径 1：显式关联（relatedTo 字段）──
+  for (const mem of selected) {
+    if (!mem.relatedTo || mem.relatedTo.length === 0) continue;
+    for (const relatedFilename of mem.relatedTo) {
+      if (selectedFilenames.has(relatedFilename)) continue; // 已选中
+      const related = byFilename.get(relatedFilename);
+      if (!related) continue; // 文件不存在
+      if (alreadySurfaced.has(related.filePath)) continue; // 已展示过
+      if (selectedPaths.has(related.filePath)) continue;
+
+      const existing = candidates.get(related.filePath);
+      // 显式关联分数 = 1.0（最高优先级）
+      if (!existing || existing.score < 1.0) {
+        candidates.set(related.filePath, { mem: related, score: 1.0, source: 'explicit' });
+      }
+    }
+  }
+
+  // ── 路径 2：隐式关联（tags Jaccard >= 0.3）──
+  for (const candidate of allMemories) {
+    if (selectedPaths.has(candidate.filePath)) continue;
+    if (alreadySurfaced.has(candidate.filePath)) continue;
+    if (candidates.has(candidate.filePath)) continue; // 已被显式关联选中
+    if (!candidate.tags || candidate.tags.length === 0) continue;
+
+    // 计算与所有选中文件的最大 tags Jaccard
+    let maxJaccard = 0;
+    for (const sel of selected) {
+      if (!sel.tags || sel.tags.length === 0) continue;
+      const jaccard = computeTagJaccard(sel.tags, candidate.tags);
+      if (jaccard > maxJaccard) maxJaccard = jaccard;
+    }
+
+    if (maxJaccard >= 0.3) {
+      candidates.set(candidate.filePath, { mem: candidate, score: maxJaccard, source: 'tags' });
+    }
+  }
+
+  // 按分数降序排列，取前 maxExpand 个
+  const sorted = Array.from(candidates.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxExpand);
+
+  if (sorted.length > 0) {
+    const explicit = sorted.filter(s => s.source === 'explicit').length;
+    const implicit = sorted.filter(s => s.source === 'tags').length;
+    console.debug(
+      `[memory-recall] Relation expansion: +${sorted.length} files (${explicit} explicit, ${implicit} tags-based)`,
+    );
+  }
+
+  return sorted.map(s => s.mem);
+}
+
+/**
+ * 计算两组 tags 的 Jaccard 系数。
+ */
+function computeTagJaccard(tagsA: string[], tagsB: string[]): number {
+  const setA = new Set(tagsA.map(t => t.trim().toLowerCase()));
+  const setB = new Set(tagsB.map(t => t.trim().toLowerCase()));
+  let intersection = 0;
+  for (const tag of setA) {
+    if (setB.has(tag)) intersection++;
+  }
+  const union = setA.size + setB.size - intersection;
+  return union > 0 ? intersection / union : 0;
 }
 
 // ─── v2: Fact Key Expansion 辅助函数 ───
