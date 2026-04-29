@@ -365,15 +365,15 @@ export function validateSessionMemoryContent(content: string): {
     };
   }
 
-  // 检查整体完整性（至少 5/10 个 section）
+  // 检查整体完整性（至少 7/10 个 section）
   const presentCount = ALL_SECTION_HEADERS.filter(
     header => content.includes(header),
   ).length;
-  if (presentCount < 5) {
+  if (presentCount < 7) {
     const missing = ALL_SECTION_HEADERS.filter(h => !content.includes(h));
     return {
       valid: false,
-      reason: `Only ${presentCount}/10 sections present (minimum 5)`,
+      reason: `Only ${presentCount}/10 sections present (minimum 7)`,
       missingSections: missing,
     };
   }
