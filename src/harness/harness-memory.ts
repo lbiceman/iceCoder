@@ -494,6 +494,11 @@ export class HarnessMemoryIntegration {
    * 带主代理互斥：如果主代理已直接写入记忆，跳过后台提取。
    */
   async onLoopEnd(messages: UnifiedMessage[], turnCount: number, totalInputTokens?: number): Promise<void> {
+    // Eval mode: skip all memory extraction to save tokens
+    if (process.env.ICE_EVAL_MODE === '1') {
+      return;
+    }
+
     this.currentMessages = messages;
 
     // ── 主代理互斥检测 ──
