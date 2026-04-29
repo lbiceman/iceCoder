@@ -1,5 +1,5 @@
 /**
- * Harness 记忆集成层（v4 — 被动确认 + 偏好正则扩充）。
+ * Harness 记忆集成层（v5 — CoN + JSON 结构化读取策略）。
  *
  * 优化项：
  * 1. 主代理直接写入 + 后台提取互斥（hasMemoryWritesSince）
@@ -13,17 +13,20 @@
  * 9. 会话笔记连续性（SessionMemory 在压缩后保持连续性）
  * 10. 话题切换检测 — 多轮记忆注入（v3）
  * 11. 会话记忆响应验证 — 写入前校验 10-section 格式（v3）
- * 12. 被动确认 — 提取后通知用户记住了什么（v4 新增）
- * 13. 偏好正则扩充 — 祈使句 + 否定偏好 + 风格偏好（v4 新增）
+ * 12. 被动确认 — 提取后通知用户记住了什么（v4）
+ * 13. 偏好正则扩充 — 祈使句 + 否定偏好 + 风格偏好（v4）
+ * 14. CoN + JSON 结构化读取 — 读取完整记忆内容，JSON 格式呈现，
+ *     Chain-of-Note 指令要求先提取再推理（v5 新增，基于 LongMemEval ICLR 2025）
  */
 
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
-import { scanMemoryFiles, memoryFreshnessNote } from '../memory/file-memory/index.js';
+import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
 import { recallRelevantMemories } from '../memory/file-memory/memory-recall.js';
+import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
@@ -224,6 +227,77 @@ function getLatestUserMessage(messages: UnifiedMessage[]): string {
   return '';
 }
 
+// ─── CoN + JSON 结构化读取 ───
+
+/**
+ * 结构化记忆项（用于 JSON 格式注入）。
+ */
+interface StructuredMemoryItem {
+  filename: string;
+  type: string;
+  description: string;
+  age: string;
+  freshness: 'fresh' | 'stale' | 'expired';
+  confidence: number;
+  recallCount: number;
+  tags?: string[];
+  content: string;
+}
+
+/**
+ * 从 Markdown 文件内容中提取正文（跳过 frontmatter）。
+ */
+function extractBodyFromMarkdown(raw: string): string {
+  const lines = raw.split('\n');
+  let bodyStart = 0;
+
+  if (lines[0]?.trim() === '---') {
+    for (let i = 1; i < lines.length; i++) {
+      if (lines[i].trim() === '---') {
+        bodyStart = i + 1;
+        break;
+      }
+    }
+  }
+
+  // 去除空行、纯格式行（--- 分隔线、* 时间戳行）
+  return lines.slice(bodyStart)
+    .map(l => l.trim())
+    .filter(l => l.length > 0 && l !== '---' && !l.startsWith('*Extracted:') && !l.startsWith('*Updated:') && !l.startsWith('*保存时间:'))
+    .join('\n');
+}
+
+/**
+ * 构建 Chain-of-Note + JSON 结构化记忆注入提示词。
+ *
+ * 基于 LongMemEval 论文（ICLR 2025）的最优读取策略：
+ * 1. JSON 结构化格式 — 帮助模型清晰识别每条记忆的边界和元数据
+ * 2. Chain-of-Note 指令 — 要求模型先从每条记忆中提取相关信息，再基于提取的笔记推理
+ *
+ * 论文实验表明，CoN + JSON 比直接注入自然语言列表提升 ~10 个百分点的 QA 准确率。
+ */
+function buildCoNMemoryPrompt(items: StructuredMemoryItem[], recallMethod: string): string {
+  const json = JSON.stringify(items, null, 2);
+
+  return `<system-reminder>
+## Recalled Memories (${items.length} items, via ${recallMethod})
+
+\`\`\`json
+${json}
+\`\`\`
+
+## How to use these memories (Chain-of-Note)
+
+Before using any memory in your response, follow these steps:
+1. **Extract**: For each memory item above, identify what information is relevant to the current query
+2. **Assess freshness**: Memories marked "stale" or "expired" may be outdated — verify against current code/state before citing as fact
+3. **Synthesize**: Combine the extracted notes to form your response
+4. **Cite**: When your response is informed by a memory, mention which memory file it came from
+
+Do NOT blindly trust memory content. Memories are point-in-time observations. If a memory references specific files, line numbers, or code behavior, verify against the current codebase first.
+</system-reminder>`;
+}
+
 /**
  * Harness 记忆集成（v3）。
  *
@@ -322,15 +396,16 @@ export class HarnessMemoryIntegration {
   }
 
   /**
-   * 注入记忆上下文（LLM 语义召回 + 去重 + 话题切换检测）。
+   * 注入记忆上下文（v5 — CoN + JSON 结构化读取策略）。
    *
-   * v3 改进：不再只注入一次。每轮工具调用后检测：
-   * - 如果是本轮首次注入 → 正常注入
-   * - 如果已注入过但检测到话题切换 → 重新召回并注入
-   * - 如果已注入且话题未变 → 跳过
+   * LongMemEval 论文证明 Chain-of-Note + JSON 结构化格式是最优的读取策略，
+   * 比直接注入文件列表提升 ~10 个百分点的 QA 准确率。
    *
-   * 话题切换检测使用 Jaccard 词重叠度，纯本地计算，不消耗 LLM 调用。
-   * alreadySurfaced 仍然跨轮次去重，避免重复展示同一记忆。
+   * 改进点：
+   * - 读取召回记忆的完整内容（而非仅 filename + description）
+   * - 以 JSON 结构化格式呈现每条记忆的元数据和内容
+   * - 附加 Chain-of-Note 指令，要求模型先提取关键信息再推理
+   * - 保留话题切换检测和跨轮次去重
    */
   async injectMemoryContext(messages: UnifiedMessage[]): Promise<void> {
     if (!this.memoryDir && !this.fileMemoryManager) return;
@@ -348,7 +423,6 @@ export class HarnessMemoryIntegration {
     }
 
     const recallCfg = getRecallConfig();
-    const sections: string[] = [];
 
     try {
       const recallResult = await recallRelevantMemories(
@@ -369,23 +443,20 @@ export class HarnessMemoryIntegration {
       }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
-        const parts: string[] = [];
+        // ── v5: CoN + JSON 结构化读取 ──
+        const memoryItems = await this.buildStructuredMemoryItems(recallResult.memories);
+
+        // 标记为已展示
         for (const mem of recallResult.memories) {
-          const freshness = memoryFreshnessNote(mem.mtimeMs);
-          const desc = mem.description ? `: ${mem.description}` : '';
-          parts.push(`${freshness}- ${mem.filename}${desc}`);
           this.surfacedMemoryPaths.add(mem.filePath);
         }
-        const method = recallResult.usedLLM ? 'LLM 语义召回' : '关键词匹配';
-        sections.push(`相关记忆文件（${method}）：\n${parts.join('\n')}`);
+
+        const method = recallResult.usedLLM ? 'LLM semantic recall' : 'keyword fallback';
+        const reminder = buildCoNMemoryPrompt(memoryItems, method);
+        messages.push({ role: 'user', content: reminder });
       }
     } catch (err) {
       console.debug('[harness-memory] recall failed:', err instanceof Error ? err.message : err);
-    }
-
-    if (sections.length > 0) {
-      const reminder = `<system-reminder>\n${sections.join('\n\n')}\n</system-reminder>`;
-      messages.push({ role: 'user', content: reminder });
     }
 
     this.injectedForCurrentMessage = true;
@@ -458,6 +529,52 @@ export class HarnessMemoryIntegration {
   }
 
   // ─── 私有方法 ───
+
+  /**
+   * 构建结构化记忆项（读取完整内容 + 元数据）。
+   *
+   * 为每条召回的记忆读取完整文件内容，提取 frontmatter 之后的正文，
+   * 组装为 JSON 结构化格式供 CoN 读取策略使用。
+   *
+   * 单条记忆内容截断到 2000 字符，避免上下文爆炸。
+   */
+  private async buildStructuredMemoryItems(
+    memories: import('../memory/file-memory/types.js').MemoryHeader[],
+  ): Promise<StructuredMemoryItem[]> {
+    const items: StructuredMemoryItem[] = [];
+    const MAX_CONTENT_CHARS = 2000;
+
+    for (const mem of memories) {
+      let content = mem.contentPreview || '';
+      // 尝试读取完整文件内容（比 300 字符 preview 更完整）
+      try {
+        const raw = await fs.readFile(mem.filePath, 'utf-8');
+        // 跳过 frontmatter，提取正文
+        content = extractBodyFromMarkdown(raw);
+        if (content.length > MAX_CONTENT_CHARS) {
+          content = content.substring(0, MAX_CONTENT_CHARS) + '...[truncated]';
+        }
+      } catch {
+        // 读取失败时使用 contentPreview 回退
+      }
+
+      const decayStatus = getMemoryDecayStatus(mem);
+
+      items.push({
+        filename: mem.filename,
+        type: mem.type || 'unknown',
+        description: mem.description || '',
+        age: memoryAge(mem.mtimeMs),
+        freshness: decayStatus,
+        confidence: mem.confidence,
+        recallCount: mem.recallCount,
+        tags: mem.tags.length > 0 ? mem.tags : undefined,
+        content,
+      });
+    }
+
+    return items;
+  }
 
   /**
    * 判断是否应该触发 LLM 提取。
