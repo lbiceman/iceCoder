@@ -11,6 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { recallRelevantMemories } from './memory-recall.js';
+import { expandNegationQuery, parseTimeRange } from './memory-recall.js';
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage, LLMOptions } from '../../llm/types.js';
 
 // ─── 测试工具 ───
@@ -260,5 +261,195 @@ describe('recallRelevantMemories', () => {
       expect(typeof result.duration).toBe('number');
       expect(result.duration).toBeGreaterThanOrEqual(0);
     });
+  });
+});
+
+// ─── v4: 否定查询展开测试 ───
+
+describe('expandNegationQuery', () => {
+  it('中文否定 — "不要用 Jest" 展开为测试领域词', () => {
+    const result = expandNegationQuery('不要用 Jest');
+    expect(result).toContain('jest');
+    expect(result).toContain('test');
+    expect(result).toContain('testing');
+    expect(result).toContain('vitest');
+  });
+
+  it('英文否定 — "don\'t use Webpack" 展开为构建领域词', () => {
+    const result = expandNegationQuery("don't use Webpack");
+    expect(result).toContain('webpack');
+    expect(result).toContain('build');
+    expect(result).toContain('vite');
+  });
+
+  it('"stop using npm" 展开为包管理领域词', () => {
+    const result = expandNegationQuery('stop using npm');
+    expect(result).toContain('npm');
+    expect(result).toContain('yarn');
+    expect(result).toContain('pnpm');
+  });
+
+  it('"别用 var" 展开为变量声明领域词', () => {
+    const result = expandNegationQuery('别用 var');
+    expect(result).toContain('var');
+    expect(result).toContain('let');
+    expect(result).toContain('const');
+  });
+
+  it('"never use react" 展开为前端框架领域词', () => {
+    const result = expandNegationQuery('never use react');
+    expect(result).toContain('react');
+    expect(result).toContain('vue');
+    expect(result).toContain('framework');
+  });
+
+  it('无否定模式时返回空数组', () => {
+    const result = expandNegationQuery('我喜欢用 TypeScript');
+    expect(result).toEqual([]);
+  });
+
+  it('否定对象不在映射表中时仍返回对象本身', () => {
+    const result = expandNegationQuery('不要用 SomeObscureTool');
+    expect(result).toContain('someobscuretool');
+    // 没有领域展开，但至少有对象本身
+    expect(result.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('过短的否定对象被忽略', () => {
+    const result = expandNegationQuery('不要用 x');
+    expect(result).toEqual([]);
+  });
+});
+
+// ─── v4: 时间范围解析测试 ───
+
+describe('parseTimeRange', () => {
+  it('"昨天" 解析为 1-2 天前', () => {
+    const result = parseTimeRange('昨天记住的那个');
+    expect(result).not.toBeNull();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    expect(result!.since).toBeCloseTo(now - 2 * DAY, -4); // 精度到秒级
+    expect(result!.until).toBeCloseTo(now - DAY, -4);
+    expect(result!.matchedText).toBe('昨天');
+  });
+
+  it('"上周" 解析为 7-14 天前', () => {
+    const result = parseTimeRange('上周说的偏好');
+    expect(result).not.toBeNull();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    expect(result!.since).toBeCloseTo(now - 14 * DAY, -4);
+    expect(result!.until).toBeCloseTo(now - 7 * DAY, -4);
+  });
+
+  it('"最近3天" 解析为 0-3 天前', () => {
+    const result = parseTimeRange('最近3天的记忆');
+    expect(result).not.toBeNull();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    expect(result!.since).toBeCloseTo(now - 3 * DAY, -4);
+    expect(result!.until).toBeCloseTo(now, -4);
+  });
+
+  it('"last week" 解析为 7-14 天前', () => {
+    const result = parseTimeRange('what did I say last week');
+    expect(result).not.toBeNull();
+    expect(result!.matchedText).toBe('last week');
+  });
+
+  it('"past 5 days" 解析为 0-5 天前', () => {
+    const result = parseTimeRange('memories from the past 5 days');
+    expect(result).not.toBeNull();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    expect(result!.since).toBeCloseTo(now - 5 * DAY, -4);
+    expect(result!.until).toBeCloseTo(now, -4);
+  });
+
+  it('"yesterday" 英文解析', () => {
+    const result = parseTimeRange('what I said yesterday');
+    expect(result).not.toBeNull();
+    expect(result!.matchedText).toBe('yesterday');
+  });
+
+  it('"最近" 解析为最近 7 天', () => {
+    const result = parseTimeRange('最近记住的东西');
+    expect(result).not.toBeNull();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    expect(result!.since).toBeCloseTo(now - 7 * DAY, -4);
+  });
+
+  it('无时间线索时返回 null', () => {
+    const result = parseTimeRange('我喜欢用 TypeScript');
+    expect(result).toBeNull();
+  });
+
+  it('"上个月" 解析为 30-60 天前', () => {
+    const result = parseTimeRange('上个月的项目');
+    expect(result).not.toBeNull();
+    const now = Date.now();
+    const DAY = 86_400_000;
+    expect(result!.since).toBeCloseTo(now - 60 * DAY, -4);
+    expect(result!.until).toBeCloseTo(now - 30 * DAY, -4);
+  });
+});
+
+// ─── v4: 否定查询集成测试 ───
+
+describe('否定查询集成', () => {
+  it('关键词回退路径 — 否定展开帮助命中同领域记忆', async () => {
+    // 写入一个关于 Vitest 偏好的记忆
+    const content = `---
+name: testing_preference
+description: 用户偏好 Vitest 做测试
+type: feedback
+tags: tool:vitest, testing
+---
+
+用户明确表示偏好使用 Vitest 而非 Jest 做单元测试。`;
+    await fs.writeFile(path.join(tempDir, 'feedback_testing.md'), content, 'utf-8');
+
+    // 用否定查询（不提 Vitest，只说不要 Jest）
+    const result = await recallRelevantMemories('不要用 Jest', tempDir, null);
+
+    // 应该能命中 testing 相关的记忆（通过领域展开 jest → testing/vitest）
+    expect(result.memories.length).toBeGreaterThan(0);
+    expect(result.memories[0].filename).toBe('feedback_testing.md');
+  });
+});
+
+// ─── v4: 时间范围集成测试 ───
+
+describe('时间范围集成', () => {
+  it('关键词回退路径 — 时间范围内的记忆排序更高', async () => {
+    // 写入两个记忆，描述相似
+    const oldContent = `---
+name: old_preference
+description: 用户的编程偏好
+type: user
+createdAt: 2026-01-01T00:00:00.000Z
+---
+
+用户偏好 Python`;
+    await fs.writeFile(path.join(tempDir, 'old_pref.md'), oldContent, 'utf-8');
+
+    // 新文件（刚创建，在"最近"范围内）
+    const newContent = `---
+name: new_preference
+description: 用户的编程偏好
+type: user
+---
+
+用户偏好 TypeScript`;
+    await fs.writeFile(path.join(tempDir, 'new_pref.md'), newContent, 'utf-8');
+
+    // 查询包含"最近"
+    const result = await recallRelevantMemories('最近的编程偏好', tempDir, null);
+
+    expect(result.memories.length).toBe(2);
+    // 新文件应该排在前面（时间范围加权 + 新鲜度加分）
+    expect(result.memories[0].filename).toBe('new_pref.md');
   });
 });

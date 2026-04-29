@@ -1,5 +1,5 @@
 /**
- * LLM 驱动的记忆相关性召回（v2 — Fact Key Expansion）。
+ * LLM 驱动的记忆相关性召回（v4 — 否定查询展开 + 时间范围加权）。
  *
  * 扫描记忆目录的 frontmatter，拼成 manifest 列表，
  * 用 LLM sideQuery 从中选出最相关的记忆文件（最多 5 个）。
@@ -9,6 +9,12 @@
  * - manifest 中每个文件附加 top-3 facts 作为 Key Expansion
  * - 召回结果包含 fact 级精排结果
  * - LLM sideQuery 仍然选文件（不选 fact），保持 256 token 输出预算
+ *
+ * v4 改进：
+ * - 否定查询展开：LLM prompt 加否定意识 + 关键词路径加领域展开表
+ *   "不要用 Jest" → 补充搜索词 ["test", "testing", "vitest", ...]
+ * - 时间范围加权：解析"上周"/"最近三天"等相对时间，软加权匹配记忆
+ *   不硬过滤，只提升时间范围内记忆的优先级
  */
 
 import type { MemoryHeader } from './types.js';
@@ -41,6 +47,11 @@ const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be u
 Return a JSON object with a "selected" field containing an array of filenames for the memories that will clearly be useful (up to 5). Only include memories that you are certain will be helpful based on their name and description.
 - If you are unsure if a memory will be useful, do not include it. Be selective and discerning.
 - If there are no relevant memories, return an empty array.
+- **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X", "stop using X", "别用 X"), also select memories about alternatives to X or preferences in the same domain. Examples:
+  - "don't use Jest" → also select memories about testing preferences (Vitest, Mocha, etc.)
+  - "不要用 var" → also select memories about variable declaration style
+  - "stop using Webpack" → also select memories about build tool preferences
+- **Time awareness**: If the query references a time period ("last week", "上周", "yesterday", "最近"), prefer memories whose timestamps fall within that period, but do not exclude others.
 - Return ONLY valid JSON, no other text.
 
 Example response: {"selected": ["user_role.md", "feedback_testing.md"]}`;
@@ -88,6 +99,17 @@ export async function recallRelevantMemories(
     return { memories: [], facts: [], duration: Date.now() - startTime, usedLLM: false };
   }
 
+  // v4: 预计算否定展开和时间范围（两条路径共用）
+  const negationExpansions = expandNegationQuery(query);
+  const timeRange = parseTimeRange(query);
+
+  if (negationExpansions.length > 0) {
+    console.debug(`[memory-recall] Negation expansion: +${negationExpansions.length} tokens [${negationExpansions.slice(0, 5).join(', ')}${negationExpansions.length > 5 ? '...' : ''}]`);
+  }
+  if (timeRange) {
+    console.debug(`[memory-recall] Time range detected: "${timeRange.matchedText}" → ${new Date(timeRange.since).toISOString().split('T')[0]} ~ ${new Date(timeRange.until).toISOString().split('T')[0]}`);
+  }
+
   // 构建 Fact Index（缓存，mtime 失效）
   // 读取完整文件内容用于精确的 fact 提取
   const factIndex = getFactIndex();
@@ -103,7 +125,7 @@ export async function recallRelevantMemories(
   // 如果有 LLM 适配器，使用 LLM 召回
   if (llmAdapter) {
     try {
-      const selected = await llmSelectMemories(query, memories, llmAdapter, maxResults, factIndex);
+      const selected = await llmSelectMemories(query, memories, llmAdapter, maxResults, factIndex, timeRange);
       // ── 关联扩展（1 跳）──
       const expanded = expandRelatedMemories(selected, memories, alreadySurfaced);
       // 对选中文件 + 关联文件的 facts 做关键词精排
@@ -124,7 +146,7 @@ export async function recallRelevantMemories(
   }
 
   // 回退：关键词匹配
-  const fallbackResults = keywordFallback(query, memories, maxResults);
+  const fallbackResults = keywordFallback(query, memories, maxResults, negationExpansions, timeRange);
   // ── 关联扩展（关键词回退路径也支持）──
   const fallbackExpanded = expandRelatedMemories(fallbackResults, memories, alreadySurfaced);
   const allFallback = [...fallbackResults, ...fallbackExpanded];
@@ -149,15 +171,21 @@ async function llmSelectMemories(
   llmAdapter: LLMAdapterInterface,
   maxResults: number,
   factIndex: import('./memory-fact-index.js').FactIndex,
+  timeRange: TimeRange | null = null,
 ): Promise<MemoryHeader[]> {
   const manifest = formatManifestWithFacts(memories, query, factIndex);
   const validFilenames = new Set(memories.map(m => m.filename));
+
+  // v4: 时间范围提示（帮助 LLM 优先选择时间范围内的记忆）
+  const timeHint = timeRange
+    ? `\n\nNote: The user is asking about memories from ${new Date(timeRange.since).toISOString().split('T')[0]} to ${new Date(timeRange.until).toISOString().split('T')[0]} ("${timeRange.matchedText}"). Prefer memories with timestamps in this range.`
+    : '';
 
   const messages: UnifiedMessage[] = [
     { role: 'system', content: SELECT_MEMORIES_SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `Query: ${query}\n\nAvailable memories:\n${manifest}`,
+      content: `Query: ${query}\n\nAvailable memories:\n${manifest}${timeHint}`,
     },
   ];
 
@@ -233,6 +261,173 @@ function tokenize(text: string): Set<string> {
   return tokens;
 }
 
+// ─── v4: 否定查询展开 ───
+
+/**
+ * 否定查询正则：匹配"不要用 X"、"don't use X"等模式，提取否定对象。
+ */
+const NEGATION_PATTERNS: RegExp[] = [
+  // 中文否定
+  /(?:不要|别|不用|禁止|停止|以后不要?|以后别)\s*(?:用|写|加|做|搞)?\s*(\S+)/,
+  // 英文否定
+  /(?:don'?t use|never use|stop using|no more|avoid)\s+(\S+)/i,
+];
+
+/**
+ * 领域展开表：否定对象 → 同领域搜索词。
+ *
+ * 不做同义词映射（Jest→Vitest），而是做领域展开（Jest→testing）。
+ * 领域映射表小且稳定，维护成本低。
+ * 同时包含常见替代品名称，提高命中率。
+ */
+const DOMAIN_EXPANSION: Record<string, string[]> = {
+  // 测试框架
+  jest:       ['test', 'testing', '测试', 'vitest', 'mocha', 'playwright', 'cypress'],
+  vitest:     ['test', 'testing', '测试', 'jest', 'mocha'],
+  mocha:      ['test', 'testing', '测试', 'jest', 'vitest'],
+  cypress:    ['test', 'testing', 'e2e', '测试', 'playwright'],
+  playwright: ['test', 'testing', 'e2e', '测试', 'cypress'],
+  // 构建工具
+  webpack:    ['build', 'bundler', '构建', '打包', 'vite', 'esbuild', 'rollup'],
+  rollup:     ['build', 'bundler', '构建', 'vite', 'webpack', 'esbuild'],
+  vite:       ['build', 'bundler', '构建', 'webpack', 'rollup', 'esbuild'],
+  esbuild:    ['build', 'bundler', '构建', 'vite', 'webpack'],
+  // 包管理
+  npm:        ['package', 'install', '包管理', 'yarn', 'pnpm'],
+  yarn:       ['package', 'install', '包管理', 'npm', 'pnpm'],
+  pnpm:       ['package', 'install', '包管理', 'npm', 'yarn'],
+  // 变量声明 / JS 语法
+  var:        ['variable', 'declaration', '变量', 'let', 'const'],
+  semicolons: ['style', 'format', '风格', '分号', 'prettier', 'eslint'],
+  // 框架
+  react:      ['framework', 'frontend', '前端', '框架', 'vue', 'svelte', 'angular'],
+  vue:        ['framework', 'frontend', '前端', '框架', 'react', 'svelte'],
+  angular:    ['framework', 'frontend', '前端', '框架', 'react', 'vue'],
+  // 语言
+  javascript: ['language', '语言', 'typescript', 'js', 'ts'],
+  python:     ['language', '语言', 'java', 'golang', 'rust'],
+  // 数据库
+  mysql:      ['database', 'db', '数据库', 'postgres', 'sqlite', 'mongodb'],
+  mongodb:    ['database', 'db', '数据库', 'mysql', 'postgres'],
+  postgres:   ['database', 'db', '数据库', 'mysql', 'mongodb', 'postgresql'],
+  redis:      ['cache', '缓存', 'memcached'],
+};
+
+/**
+ * 从查询中提取否定对象并展开为同领域搜索词。
+ *
+ * "不要用 Jest" → ["jest", "test", "testing", "测试", "vitest", "mocha", ...]
+ * "don't use Webpack" → ["webpack", "build", "bundler", "构建", "vite", ...]
+ *
+ * 即使没有映射表命中，也把否定对象本身加入搜索词
+ * （"不要用 Jest" 至少能匹配到包含 "jest" 的记忆）。
+ *
+ * @returns 补充的搜索词列表（空数组表示查询中没有否定模式）
+ */
+export function expandNegationQuery(query: string): string[] {
+  const extra: string[] = [];
+  for (const pattern of NEGATION_PATTERNS) {
+    const match = query.match(pattern);
+    if (!match || !match[1]) continue;
+    const target = match[1].toLowerCase().replace(/['".,;!?。，；！？]/g, '');
+    if (target.length < 2) continue; // 过短的匹配忽略
+
+    // 否定对象本身加入搜索词
+    extra.push(target);
+
+    // 领域展开
+    const expansions = DOMAIN_EXPANSION[target];
+    if (expansions) {
+      extra.push(...expansions);
+    }
+  }
+  return extra;
+}
+
+// ─── v4: 时间范围加权 ───
+
+/**
+ * 时间范围描述。
+ */
+export interface TimeRange {
+  /** 起始时间（毫秒时间戳） */
+  since: number;
+  /** 结束时间（毫秒时间戳） */
+  until: number;
+  /** 匹配的原始文本（用于 LLM 提示） */
+  matchedText: string;
+}
+
+/**
+ * 从查询中解析相对时间表达式。
+ *
+ * 支持：
+ * - 中文："上周"、"昨天"、"前天"、"最近三天"、"这周"、"本周"、"上个月"、"最近"
+ * - 英文："last week"、"yesterday"、"past 3 days"、"this week"、"last month"、"recently"
+ *
+ * 返回 null 表示查询中没有时间线索。
+ */
+export function parseTimeRange(query: string): TimeRange | null {
+  const now = Date.now();
+  const DAY = 86_400_000;
+
+  // 中文：最近N天
+  const recentDaysCN = query.match(/最近\s*(\d+)\s*天/);
+  if (recentDaysCN) {
+    const days = parseInt(recentDaysCN[1], 10);
+    if (days > 0 && days <= 365) {
+      return { since: now - days * DAY, until: now, matchedText: recentDaysCN[0] };
+    }
+  }
+
+  // 英文：past/last N days
+  const recentDaysEN = query.match(/(?:past|last)\s+(\d+)\s+days?/i);
+  if (recentDaysEN) {
+    const days = parseInt(recentDaysEN[1], 10);
+    if (days > 0 && days <= 365) {
+      return { since: now - days * DAY, until: now, matchedText: recentDaysEN[0] };
+    }
+  }
+
+  // 固定模式（按优先级排列，先匹配更具体的）
+  const fixedPatterns: Array<{ re: RegExp; since: number; until: number }> = [
+    { re: /昨天|yesterday/i,           since: now - 2 * DAY,  until: now - DAY },
+    { re: /前天/,                       since: now - 3 * DAY,  until: now - 2 * DAY },
+    { re: /上周|last\s+week/i,         since: now - 14 * DAY, until: now - 7 * DAY },
+    { re: /这周|本周|this\s+week/i,    since: now - 7 * DAY,  until: now },
+    { re: /上个月|last\s+month/i,      since: now - 60 * DAY, until: now - 30 * DAY },
+    { re: /最近|recently/i,            since: now - 7 * DAY,  until: now },
+  ];
+
+  for (const { re, since, until } of fixedPatterns) {
+    const match = query.match(re);
+    if (match) {
+      return { since, until, matchedText: match[0] };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 计算记忆的时间范围加权因子。
+ *
+ * 使用"最后活跃时间"（lastRecalledMs 或 mtimeMs 取较大值）判断。
+ * - 在时间范围内：返回 TIME_RANGE_BOOST（提升优先级）
+ * - 不在范围内：返回 1.0（不惩罚，只加分）
+ *
+ * 软加权设计：即使时间解析不精确，也不会漏掉相关记忆。
+ */
+const TIME_RANGE_BOOST = 1.5;
+
+function computeTimeBoost(memory: MemoryHeader, range: TimeRange): number {
+  const activeMs = Math.max(memory.lastRecalledMs || 0, memory.mtimeMs, memory.createdMs);
+  if (activeMs >= range.since && activeMs <= range.until) {
+    return TIME_RANGE_BOOST;
+  }
+  return 1.0;
+}
+
 /**
  * 关键词匹配回退（LLM 不可用时使用）。
  *
@@ -242,14 +437,29 @@ function tokenize(text: string): Set<string> {
  *
  * 新鲜度/置信度/频率加分只在有关键词命中时才生效。
  * 没有任何 token 匹配的记忆，分数为 0，不会被召回。
+ *
+ * v4 改进：
+ * - 否定展开词合并到 queryTokens（扩大匹配面）
+ * - 时间范围加权（范围内记忆 score ×1.5）
  */
 function keywordFallback(
   query: string,
   memories: MemoryHeader[],
   maxResults: number,
+  negationExpansions: string[] = [],
+  timeRange: TimeRange | null = null,
 ): MemoryHeader[] {
   const queryLower = query.toLowerCase();
   const queryTokens = tokenize(query);
+
+  // v4: 否定展开词合并到搜索 token 集合
+  if (negationExpansions.length > 0) {
+    for (const word of negationExpansions) {
+      for (const token of tokenize(word)) {
+        queryTokens.add(token);
+      }
+    }
+  }
 
   // ── 第一阶段：粗筛（description + filename + contentPreview）──
   const COARSE_LIMIT = Math.max(maxResults * 3, 15);
@@ -293,6 +503,11 @@ function keywordFallback(
     // 召回频率加分（经常被召回的记忆更可能有用）
     const recallBonus = Math.min(memory.recallCount || 0, 10) / 10;
     score += recallBonus * 0.1;
+
+    // v4: 时间范围加权（范围内记忆 score ×1.5）
+    if (timeRange) {
+      score *= computeTimeBoost(memory, timeRange);
+    }
 
     return { memory, score };
   });

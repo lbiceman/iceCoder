@@ -54,8 +54,8 @@ export type { PrefetchConfig, PrefetchResult } from './async-prefetch.js';
 
 // ─── LLM 驱动模块 ───
 
-export { recallRelevantMemories, expandRelatedMemories } from './memory-recall.js';
-export type { RecallResult } from './memory-recall.js';
+export { recallRelevantMemories, expandRelatedMemories, expandNegationQuery, parseTimeRange } from './memory-recall.js';
+export type { RecallResult, TimeRange } from './memory-recall.js';
 
 export { LLMMemoryExtractor, createLLMMemoryExtractor } from './memory-llm-extractor.js';
 export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
