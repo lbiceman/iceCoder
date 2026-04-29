@@ -231,8 +231,12 @@ function getLatestUserMessage(messages: UnifiedMessage[]): string {
 
 /**
  * 结构化记忆项（用于 JSON 格式注入）。
+ * v5.1: 支持文件级和 fact 级两种粒度。
  */
 interface StructuredMemoryItem {
+  /** fact 文本（fact 粒度时使用） */
+  fact?: string;
+  /** 来源文件名 */
   filename: string;
   type: string;
   description: string;
@@ -241,7 +245,22 @@ interface StructuredMemoryItem {
   confidence: number;
   recallCount: number;
   tags?: string[];
-  content: string;
+  /** 完整内容（文件粒度回退时使用） */
+  content?: string;
+}
+
+/**
+ * 简化版衰减状态计算（用于 fact 粒度，只有 mtimeMs 和 confidence）。
+ */
+function getMemoryDecayStatusFromMs(
+  mtimeMs: number,
+  confidence: number,
+): 'fresh' | 'stale' | 'expired' {
+  const daysSinceActive = Math.max(0, Math.floor((Date.now() - mtimeMs) / 86_400_000));
+  const multiplier = confidence >= 0.8 ? 2 : 1;
+  if (daysSinceActive >= 180 * multiplier) return 'expired';
+  if (daysSinceActive >= 90 * multiplier) return 'stale';
+  return 'fresh';
 }
 
 /**
@@ -443,8 +462,11 @@ export class HarnessMemoryIntegration {
       }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
-        // ── v5: CoN + JSON 结构化读取 ──
-        const memoryItems = await this.buildStructuredMemoryItems(recallResult.memories);
+        // ── v5.1: Fact 粒度 CoN + JSON 结构化读取 ──
+        const memoryItems = await this.buildStructuredMemoryItems(
+          recallResult.memories,
+          recallResult.facts,
+        );
 
         // 标记为已展示
         for (const mem of recallResult.memories) {
@@ -531,14 +553,44 @@ export class HarnessMemoryIntegration {
   // ─── 私有方法 ───
 
   /**
-   * 构建结构化记忆项（读取完整内容 + 元数据）。
+   * 构建结构化记忆项（fact 粒度优先，文件粒度回退）。
    *
-   * 为每条召回的记忆读取完整文件内容，提取 frontmatter 之后的正文，
-   * 组装为 JSON 结构化格式供 CoN 读取策略使用。
+   * 策略：
+   * - 如果有精排后的 facts → 以 fact 粒度注入（每条 fact 一个 JSON 项）
+   * - 如果没有 facts（fact 提取失败或文件内容太短）→ 回退到文件粒度
    *
-   * 单条记忆内容截断到 2000 字符，避免上下文爆炸。
+   * fact 粒度的优势（LongMemEval 实验数据）：
+   * - 多会话推理准确率显著提升
+   * - 每条 fact 独立、简短，CoN 读取时模型能更精确地提取和推理
+   * - 减少无关信息的干扰
    */
   private async buildStructuredMemoryItems(
+    memories: import('../memory/file-memory/types.js').MemoryHeader[],
+    facts: import('../memory/file-memory/memory-fact-index.js').FactEntry[],
+  ): Promise<StructuredMemoryItem[]> {
+    // 如果有精排后的 facts，以 fact 粒度注入
+    if (facts.length > 0) {
+      return facts.map(fact => ({
+        fact: fact.factText,
+        filename: fact.sourceFile,
+        type: fact.type || 'unknown',
+        description: '', // fact 本身就是描述
+        age: memoryAge(fact.mtimeMs),
+        freshness: getMemoryDecayStatusFromMs(fact.mtimeMs, fact.confidence),
+        confidence: fact.confidence,
+        recallCount: 0,
+        tags: fact.tags.length > 0 ? fact.tags : undefined,
+      }));
+    }
+
+    // 回退：文件粒度（和 v5 相同）
+    return this.buildFileGranularityItems(memories);
+  }
+
+  /**
+   * 文件粒度的结构化记忆项构建（v5 回退路径）。
+   */
+  private async buildFileGranularityItems(
     memories: import('../memory/file-memory/types.js').MemoryHeader[],
   ): Promise<StructuredMemoryItem[]> {
     const items: StructuredMemoryItem[] = [];
@@ -546,10 +598,8 @@ export class HarnessMemoryIntegration {
 
     for (const mem of memories) {
       let content = mem.contentPreview || '';
-      // 尝试读取完整文件内容（比 300 字符 preview 更完整）
       try {
         const raw = await fs.readFile(mem.filePath, 'utf-8');
-        // 跳过 frontmatter，提取正文
         content = extractBodyFromMarkdown(raw);
         if (content.length > MAX_CONTENT_CHARS) {
           content = content.substring(0, MAX_CONTENT_CHARS) + '...[truncated]';

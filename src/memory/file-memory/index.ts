@@ -85,6 +85,11 @@ export type { SecretMatch } from './memory-secret-scanner.js';
 
 export * from './memory-config.js';
 
+// ─── Fact 索引模块 ───
+
+export { FactIndex, getFactIndex, resetFactIndex } from './memory-fact-index.js';
+export type { FactEntry } from './memory-fact-index.js';
+
 // ─── 工具模块 ───
 
 export { parseLLMJson, parseLLMJsonObject, parseLLMJsonArray } from './json-parser.js';

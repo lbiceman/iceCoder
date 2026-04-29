@@ -1,18 +1,21 @@
 /**
- * LLM 驱动的记忆相关性召回。
+ * LLM 驱动的记忆相关性召回（v2 — Fact Key Expansion）。
  *
  * 扫描记忆目录的 frontmatter，拼成 manifest 列表，
  * 用 LLM sideQuery 从中选出最相关的记忆文件（最多 5 个）。
+ * 选中后，对文件内的 facts 做关键词精排，返回最相关的 facts。
  *
- * 比关键词匹配强一个量级：
- * - "修复 bug" 能匹配到描述为"缺陷修复流程和注意事项"的记忆
- * - "性能优化" 能匹配到描述为"数据库查询慢的排查经验"的记忆
+ * v2 改进（基于 LongMemEval ICLR 2025）：
+ * - manifest 中每个文件附加 top-3 facts 作为 Key Expansion
+ * - 召回结果包含 fact 级精排结果
+ * - LLM sideQuery 仍然选文件（不选 fact），保持 256 token 输出预算
  */
 
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { parseLLMJsonObject } from './json-parser.js';
+import { getFactIndex, type FactEntry } from './memory-fact-index.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -22,6 +25,8 @@ import path from 'node:path';
 export interface RecallResult {
   /** 选中的记忆文件 */
   memories: MemoryHeader[];
+  /** 选中文件中精排后的 facts（按相关性排序） */
+  facts: FactEntry[];
   /** 召回耗时（毫秒） */
   duration: number;
   /** 是否使用了 LLM（false 表示回退到关键词匹配） */
@@ -80,17 +85,32 @@ export async function recallRelevantMemories(
   const memories = allMemories.filter(m => !alreadySurfaced.has(m.filePath));
 
   if (memories.length === 0) {
-    return { memories: [], duration: Date.now() - startTime, usedLLM: false };
+    return { memories: [], facts: [], duration: Date.now() - startTime, usedLLM: false };
   }
+
+  // 构建 Fact Index（缓存，mtime 失效）
+  // 读取完整文件内容用于精确的 fact 提取
+  const factIndex = getFactIndex();
+  const fullContents = new Map<string, string>();
+  for (const mem of memories) {
+    try {
+      const content = await fs.readFile(mem.filePath, 'utf-8');
+      fullContents.set(mem.filePath, content);
+    } catch { /* 读取失败时 buildIndex 会回退到 contentPreview */ }
+  }
+  factIndex.buildIndex(memories, fullContents);
 
   // 如果有 LLM 适配器，使用 LLM 召回
   if (llmAdapter) {
     try {
-      const selected = await llmSelectMemories(query, memories, llmAdapter, maxResults);
+      const selected = await llmSelectMemories(query, memories, llmAdapter, maxResults, factIndex);
+      // 对选中文件的 facts 做关键词精排
+      const selectedFacts = extractFactsFromSelected(query, selected, factIndex);
       // 异步更新召回计数（不阻塞返回）
       updateRecallMetadata(selected).catch(() => {});
       return {
         memories: selected,
+        facts: selectedFacts,
         duration: Date.now() - startTime,
         usedLLM: true,
       };
@@ -102,10 +122,12 @@ export async function recallRelevantMemories(
 
   // 回退：关键词匹配
   const fallbackResults = keywordFallback(query, memories, maxResults);
+  const fallbackFacts = extractFactsFromSelected(query, fallbackResults, factIndex);
   // 异步更新召回计数
   updateRecallMetadata(fallbackResults).catch(() => {});
   return {
     memories: fallbackResults,
+    facts: fallbackFacts,
     duration: Date.now() - startTime,
     usedLLM: false,
   };
@@ -113,14 +135,16 @@ export async function recallRelevantMemories(
 
 /**
  * 使用 LLM 从记忆 manifest 中选择最相关的文件。
+ * v2: manifest 中每个文件附加 top-3 facts 作为 Key Expansion。
  */
 async function llmSelectMemories(
   query: string,
   memories: MemoryHeader[],
   llmAdapter: LLMAdapterInterface,
   maxResults: number,
+  factIndex: import('./memory-fact-index.js').FactIndex,
 ): Promise<MemoryHeader[]> {
-  const manifest = formatMemoryManifest(memories);
+  const manifest = formatManifestWithFacts(memories, query, factIndex);
   const validFilenames = new Set(memories.map(m => m.filename));
 
   const messages: UnifiedMessage[] = [
@@ -350,4 +374,69 @@ async function updateRecallMetadata(memories: MemoryHeader[]): Promise<void> {
       // 更新失败不阻塞
     }
   }
+}
+
+// ─── v2: Fact Key Expansion 辅助函数 ───
+
+/**
+ * 格式化带 Fact Key Expansion 的 manifest。
+ *
+ * 在每个文件的描述后附加 top-3 facts，帮助 LLM sideQuery
+ * 看到更多上下文信息，做出更精确的选择。
+ *
+ * 格式示例：
+ * - [user] user_role.md (2026-04-29T...): 用户的角色和职责
+ *   · 用户是前端开发者，偏好 React + TypeScript
+ *   · 用户在一家创业公司工作
+ *   · 用户习惯使用 Vitest 做测试
+ */
+function formatManifestWithFacts(
+  memories: MemoryHeader[],
+  query: string,
+  factIndex: import('./memory-fact-index.js').FactIndex,
+): string {
+  return memories
+    .map(m => {
+      const tag = m.type ? `[${m.type}] ` : '';
+      const ts = new Date(m.mtimeMs).toISOString();
+      const desc = m.description || '';
+      const preview = m.contentPreview
+        ? ` | ${m.contentPreview.substring(0, 150)}`
+        : '';
+
+      // Key Expansion: 附加 top-3 facts
+      const topFacts = factIndex.getTopFactsForFile(m.filePath, query, 3);
+      const factLines = topFacts.length > 0
+        ? '\n' + topFacts.map(f => `  · ${f.substring(0, 100)}`).join('\n')
+        : '';
+
+      return desc
+        ? `- ${tag}${m.filename} (${ts}): ${desc}${preview}${factLines}`
+        : `- ${tag}${m.filename} (${ts})${preview}${factLines}`;
+    })
+    .join('\n');
+}
+
+/**
+ * 从选中的记忆文件中提取并精排 facts。
+ *
+ * 对选中文件的所有 facts 做关键词匹配精排，
+ * 返回按相关性排序的 top-15 facts。
+ */
+function extractFactsFromSelected(
+  query: string,
+  selectedMemories: MemoryHeader[],
+  factIndex: import('./memory-fact-index.js').FactIndex,
+): import('./memory-fact-index.js').FactEntry[] {
+  // 收集选中文件的所有 facts（已在 buildIndex 时缓存）
+  const selectedPaths = new Set(selectedMemories.map(m => m.filePath));
+  // 重新调用 buildIndex 会命中缓存（mtime 未变）
+  const allFacts = factIndex.buildIndex(selectedMemories);
+  const relevantFacts = allFacts.filter(f => selectedPaths.has(f.sourceFilePath));
+
+  if (relevantFacts.length === 0) return [];
+
+  // 关键词精排：如果有匹配则按相关性排序，否则返回全部（文件已被选中，facts 本身就是相关的）
+  const ranked = factIndex.rankFacts(query, relevantFacts, 15);
+  return ranked.length > 0 ? ranked : relevantFacts.slice(0, 15);
 }
