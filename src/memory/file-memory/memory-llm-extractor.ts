@@ -17,6 +17,7 @@ import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
 import { DEFAULT_LLM_EXTRACTION_CONFIG } from './memory-config.js';
+import { evictIfNeeded } from './memory-eviction.js';
 
 /**
  * 提取配置。
@@ -404,6 +405,13 @@ ${memory.content}
       } catch (error) {
         console.error(`[LLMMemoryExtractor] Failed to save memory ${memory.filename}:`, error);
       }
+    }
+
+    // ── 写入完成后检查是否需要淘汰 ──
+    if (writtenPaths.length > 0) {
+      evictIfNeeded(memoryDir).catch(err => {
+        console.debug('[LLMMemoryExtractor] Eviction check failed:', err instanceof Error ? err.message : err);
+      });
     }
 
     return writtenPaths;

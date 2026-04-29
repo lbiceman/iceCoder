@@ -67,6 +67,9 @@ export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   maxIndexLines: 200,
   maxIndexBytes: 25000,
   maxOutputTokens: 4096,
+  enableBackup: true,
+  backupDir: 'data/memory/dream-backups',
+  maxBackups: 3,
 };
 
 // ─── 遥测配置 ───

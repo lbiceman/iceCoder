@@ -38,6 +38,12 @@ export interface DreamConfig {
   maxIndexBytes: number;
   /** LLM 最大输出 token */
   maxOutputTokens: number;
+  /** 是否启用 Dream 前备份 */
+  enableBackup: boolean;
+  /** 备份目录 */
+  backupDir: string;
+  /** 保留的最大备份数 */
+  maxBackups: number;
 }
 
 /**
@@ -332,7 +338,16 @@ export class MemoryDream {
     });
 
     // 解析响应并执行操作
-    const result = await this.executeDreamActions(memoryDir, response.content);
+    const parsed = parseLLMJsonObject<any>(response.content);
+
+    // ── Dream 前备份 ──
+    if (parsed && this.config.enableBackup) {
+      await this.backupBeforeDream(memoryDir, parsed).catch(err => {
+        console.warn('[MemoryDream] Backup failed (continuing without backup):', err instanceof Error ? err.message : err);
+      });
+    }
+
+    const result = await this.executeDreamActions(memoryDir, response.content, parsed);
 
     return {
       executed: true,
@@ -372,9 +387,10 @@ export class MemoryDream {
   private async executeDreamActions(
     memoryDir: string,
     responseContent: string,
+    preParsed?: any,
   ): Promise<{ summary: string; filesModified: number; filesDeleted: number }> {
-    // 使用健壮的 JSON 解析器
-    const parsed = parseLLMJsonObject<any>(responseContent);
+    // 使用预解析的结果或重新解析
+    const parsed = preParsed ?? parseLLMJsonObject<any>(responseContent);
     if (!parsed) {
       return { summary: 'Failed to parse dream response.', filesModified: 0, filesDeleted: 0 };
     }
@@ -447,6 +463,202 @@ export class MemoryDream {
       filesModified,
       filesDeleted,
     };
+  }
+
+  // ─── Dream 备份 ───
+
+  /**
+   * 在 Dream 执行写入/删除操作之前，备份所有将被影响的文件。
+   * 滚动保留 maxBackups 份备份。
+   */
+  async backupBeforeDream(memoryDir: string, parsed: any): Promise<string | null> {
+    if (!this.config.enableBackup) return null;
+
+    const backupDir = this.config.backupDir;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(backupDir, `backup-${timestamp}`);
+
+    // 收集需要备份的文件
+    const filesToBackup = new Set<string>();
+
+    // file_writes 中将被覆盖的文件
+    if (Array.isArray(parsed.file_writes)) {
+      for (const fw of parsed.file_writes) {
+        if (fw.filename) filesToBackup.add(fw.filename);
+      }
+    }
+
+    // file_deletes 中将被删除的文件
+    if (Array.isArray(parsed.file_deletes)) {
+      for (const filename of parsed.file_deletes) {
+        if (filename) filesToBackup.add(filename);
+      }
+    }
+
+    // new_index 存在时备份 MEMORY.md
+    if (parsed.new_index) {
+      filesToBackup.add('MEMORY.md');
+    }
+
+    if (filesToBackup.size === 0) return null;
+
+    // 创建备份目录
+    await fs.mkdir(backupPath, { recursive: true });
+
+    // 复制文件
+    const backedUp: Array<{ filename: string; reason: string }> = [];
+    for (const filename of filesToBackup) {
+      const srcPath = path.join(memoryDir, filename);
+      try {
+        const content = await fs.readFile(srcPath, 'utf-8');
+        const destPath = path.join(backupPath, filename);
+        await fs.mkdir(path.dirname(destPath), { recursive: true });
+        await fs.writeFile(destPath, content, 'utf-8');
+
+        const reason = Array.isArray(parsed.file_deletes) && parsed.file_deletes.includes(filename)
+          ? 'will_be_deleted'
+          : filename === 'MEMORY.md'
+            ? 'index_update'
+            : 'will_be_overwritten';
+        backedUp.push({ filename, reason });
+      } catch {
+        // 文件不存在（新建而非覆盖），跳过
+      }
+    }
+
+    if (backedUp.length === 0) {
+      // 没有实际备份任何文件，清理空目录
+      await fs.rm(backupPath, { recursive: true, force: true }).catch(() => {});
+      return null;
+    }
+
+    // 写入 manifest
+    const manifest = {
+      timestamp: new Date().toISOString(),
+      backedUpFiles: backedUp,
+      dreamSummary: parsed.summary || '',
+      dreamActions: parsed.actions || [],
+    };
+    await fs.writeFile(
+      path.join(backupPath, 'manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf-8',
+    );
+
+    // 清理旧备份
+    await this.pruneOldBackups();
+
+    console.log(`[MemoryDream] Backup created: ${path.basename(backupPath)} (${backedUp.length} files)`);
+    return backupPath;
+  }
+
+  /**
+   * 清理旧备份，保留最新的 maxBackups 份。
+   */
+  private async pruneOldBackups(): Promise<void> {
+    try {
+      const backupDir = this.config.backupDir;
+      const entries = await fs.readdir(backupDir, { withFileTypes: true });
+      const backupDirs = entries
+        .filter(e => e.isDirectory() && e.name.startsWith('backup-'))
+        .map(e => e.name)
+        .sort(); // ISO 时间戳排序 = 时间顺序
+
+      if (backupDirs.length <= this.config.maxBackups) return;
+
+      const toDelete = backupDirs.slice(0, backupDirs.length - this.config.maxBackups);
+      for (const dir of toDelete) {
+        await fs.rm(path.join(this.config.backupDir, dir), { recursive: true, force: true });
+      }
+    } catch {
+      // 目录不存在等，静默处理
+    }
+  }
+
+  /**
+   * 从备份恢复记忆文件。
+   *
+   * @param memoryDir - 记忆目录
+   * @param backupName - 备份目录名（如 "backup-2026-04-29T08-30-00"），不指定则用最新
+   * @returns 恢复的文件数
+   */
+  async restoreFromBackup(memoryDir: string, backupName?: string): Promise<number> {
+    const backupDir = this.config.backupDir;
+
+    let targetBackup: string;
+    if (backupName) {
+      targetBackup = path.join(backupDir, backupName);
+    } else {
+      // 找最新的备份
+      const entries = await fs.readdir(backupDir, { withFileTypes: true });
+      const backupDirs = entries
+        .filter(e => e.isDirectory() && e.name.startsWith('backup-'))
+        .map(e => e.name)
+        .sort();
+      if (backupDirs.length === 0) {
+        console.log('[MemoryDream] No backups found');
+        return 0;
+      }
+      targetBackup = path.join(backupDir, backupDirs[backupDirs.length - 1]);
+    }
+
+    // 读取 manifest
+    let manifest: any;
+    try {
+      const raw = await fs.readFile(path.join(targetBackup, 'manifest.json'), 'utf-8');
+      manifest = JSON.parse(raw);
+    } catch {
+      console.error('[MemoryDream] Failed to read backup manifest');
+      return 0;
+    }
+
+    // 恢复文件
+    let restored = 0;
+    for (const entry of manifest.backedUpFiles || []) {
+      try {
+        const srcPath = path.join(targetBackup, entry.filename);
+        const destPath = path.join(memoryDir, entry.filename);
+        const content = await fs.readFile(srcPath, 'utf-8');
+        await fs.mkdir(path.dirname(destPath), { recursive: true });
+        await fs.writeFile(destPath, content, 'utf-8');
+        restored++;
+      } catch {
+        console.debug(`[MemoryDream] Failed to restore ${entry.filename}`);
+      }
+    }
+
+    console.log(`[MemoryDream] Restored ${restored} files from ${path.basename(targetBackup)}`);
+    return restored;
+  }
+
+  /**
+   * 列出可用的备份。
+   */
+  async listBackups(): Promise<Array<{ name: string; timestamp: string; fileCount: number }>> {
+    try {
+      const entries = await fs.readdir(this.config.backupDir, { withFileTypes: true });
+      const backups: Array<{ name: string; timestamp: string; fileCount: number }> = [];
+
+      for (const e of entries) {
+        if (!e.isDirectory() || !e.name.startsWith('backup-')) continue;
+        try {
+          const manifestPath = path.join(this.config.backupDir, e.name, 'manifest.json');
+          const raw = await fs.readFile(manifestPath, 'utf-8');
+          const manifest = JSON.parse(raw);
+          backups.push({
+            name: e.name,
+            timestamp: manifest.timestamp || '',
+            fileCount: manifest.backedUpFiles?.length || 0,
+          });
+        } catch {
+          backups.push({ name: e.name, timestamp: '', fileCount: 0 });
+        }
+      }
+
+      return backups.sort((a, b) => b.name.localeCompare(a.name));
+    } catch {
+      return [];
+    }
   }
 
   /**

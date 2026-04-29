@@ -145,3 +145,13 @@ export {
   SESSION_MEMORY_TEMPLATE,
 } from './session-memory.js';
 export type { SessionMemoryState } from './session-memory.js';
+
+// ─── 淘汰机制 ───
+
+export {
+  evictIfNeeded,
+  computeEvictionScore,
+  restoreEvicted,
+  listEvictedFiles,
+} from './memory-eviction.js';
+export type { EvictionConfig, EvictionResult } from './memory-eviction.js';
