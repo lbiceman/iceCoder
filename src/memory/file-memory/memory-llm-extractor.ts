@@ -77,6 +77,7 @@ Return a JSON array of memories to save. Each memory object has:
 - "name": string (short name)
 - "description": string (one-line description for future relevance matching)
 - "content": string (the memory content)
+- "relatedTo": string[] (filenames of existing memories that are semantically related to this one. Only reference files from the existing memory list. Empty array if no relations.)
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.`;
@@ -247,7 +248,7 @@ export class LLMMemoryExtractor {
 ${conversationText}${existingManifest}
 
 Extract memories worth saving from the conversation above. Return JSON array only.
-Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract")`;
+Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), relatedTo (string[], filenames of related existing memories or empty array)`;
   }
 
   /**
@@ -369,6 +370,15 @@ Each object must have: filename, type, name, description, content, tags (string[
         const source = memory.source ?? 'llm_extract';
         const now = new Date().toISOString();
 
+        // 校验 relatedTo：只保留在已有记忆清单中存在的文件名
+        const existingFilenames = new Set<string>();
+        for (const mems of existingByDir.values()) {
+          for (const m of mems) existingFilenames.add(m.filename);
+        }
+        const validRelatedTo = (memory.relatedTo || [])
+          .filter(f => existingFilenames.has(f) && f !== safeFilename);
+        const relatedToStr = validRelatedTo.length > 0 ? validRelatedTo.join(', ') : '';
+
         const fileContent = `---
 name: ${memory.name}
 description: ${memory.description}
@@ -376,6 +386,7 @@ type: ${memory.type}
 source: ${source}
 confidence: ${confidence}
 tags: ${tags}
+relatedTo: ${relatedToStr}
 createdAt: ${now}
 recallCount: 0
 ---
