@@ -1,0 +1,142 @@
+{
+  "summary": {
+    "total_samples": 10,
+    "passed": 10,
+    "failed": 0,
+    "errors": 0,
+    "overall_accuracy": 100.0
+  },
+  "recall_at_5": 100.0,
+  "multi_hop_accuracy": 100.0,
+  "expired_filter_accuracy": 100.0,
+  "breakdown": {
+    "single_hop": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "accuracy": 100.0
+    },
+    "multi_hop": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "accuracy": 100.0
+    },
+    "expired_filter": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "accuracy": 100.0
+    }
+  },
+  "details": [
+    {
+      "id": "locomo-1",
+      "metric": "single_hop",
+      "query": "What test framework does the user prefer?",
+      "answer": "Vitest",
+      "passed": true,
+      "recalled_text": "recallCount: 1\nlastRecalledAt: 2026-04-29T07:35:26.611Z\n---\nname: 测试框架决策\ndescription: 项目使用 Vitest 而非 Jest，新代码必须编写 Vitest 测试\ntype: feedback\n---\n\n- **测试框架**: Vitest（不使用 Jest）\n- **适用范围**: 所有新代码必须编写对应的 Vitest 测试\n- **记录时间**: 2026-04-29\n\n\n---\nname: 错误监控迁移到 Datadog\ndescription: 项目错误监控已从 Sentry 迁移到 Datadog，迁移日期 2026-04-28\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: monitoring, datadog, sentry, migration\ncreatedAt: 2026-04-29T07:17:04.325Z\nrecallCount: 0\n---\n\n## 错误监控\n- **当前监控工具**: Datadog\n- **迁移日期**: 2026-04-28\n- **前工具**: Sentry（通过 SENTRY_DSN 环境变量配置，已废弃）\n- **Datadog 配置方式**: 未指定（待确认）\n\n---\n*Updated: 2026-04-29T07:17:04.325Z*\n\n---\nname: 避免重复已完成内容\ndescription: 用户要求 assistant 不要重复已完成的步骤或信息，保持简洁\ntype: feedback\nsource: llm_extract\nconfidence: 0.9\ntags: communication, conciseness, avoid-repetition\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 0\n---\n\n用户明确指示：当继续执行未完成的任务时，不要重复已完成的内容。该反馈适用于所有后续对话，assistant 应直接推进，无需重新列出已确认的信息。\n\n---\n*Extracted: 2026-04-29T07:15:29.704Z*\n\n---\nname: Docker Compose 端口映射\ndescription: iceCoder 项目的 Docker Compose 服务定义和端口映射，含端口选择原因\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: docker-compose, local-dev, postgres, redis, mailhog, port-reason\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 0\n---\n\n## Docker Compose 本地开发环境\n\n### 服务列表\n\n| 服务 | 说明 |\n|------|------|\n| **app** | 主应用服务 (Express 5 + TypeScript)，映射 `3000:3000` |\n| **postgres** | PostgreSQL 数据库，映射 `5433:5432` |\n| **redis** | Redis 缓存 |\n| **mailhog** | 邮件测试工具 |\n\n### 端口原因\n- `postgres` 暴露在 5433 端口：避免与本地可能运行的 PostgreSQL 实例（默认端口 5432）冲突\n\n---\n*Updated: 2026-04-29T07:15:29.704Z*\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:12:02.139Z\n---\nname: API 版本化策略\ndescription: CloudScale 支付微服务使用 URL 路径版本化，所有端点当前均为 /api/v2\ntype: project\n---\n\n# API 版本化策略\n\n- **策略**: URL 路径版本化（URL-based versioning）\n- **当前版本**: `/api/v2` — 所有端点统一使用 v2\n- **v1 状态**: 仍处于活跃状态但已废弃（deprecated）\n- **v1 下线计划**: 2026 年 Q2 末（2026-06-30）前关停\n- **记录时间**: 2026-04-29\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:10:00.276Z\n---\nname: 用户偏好\nde",
+      "response": "根据记忆和项目配置，你偏好 **Vitest**，不使用 Jest。\n\n- `package.json` 中已有 `vitest` 和 `vitest.config.ts` 配置\n- 记忆文件 `feedback_testing.md` 中记录：所有新代码必须编写对应的 Vitest 测试\n\n有什么需要帮忙的吗？你偏好 **Vitest**，这是已经确认的决策（记录在 `feedback_testing.md` 中）。项目已配置好 `vitest` 依赖和 `vitest.config.ts`，所有新代码必须编写对应的 Vitest 测试，不使用 Jest。\n\n有什么需要我帮忙的吗？配置没问题，Vitest 已就绪。有什么具体任务需要我帮忙的吗？项目已有 **29 个测试文件**，全部使用 Vitest，一切正常。\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-2",
+      "metric": "multi_hop",
+      "query": "What is the user's name and what company do they work for?",
+      "answer": "Alex Chen,CloudScale",
+      "passed": true,
+      "recalled_text": "recallCount: 1\nlastRecalledAt: 2026-04-29T07:36:18.490Z\n---\nname: 测试框架决策\ndescription: 项目使用 Vitest 而非 Jest，新代码必须编写 Vitest 测试\ntype: feedback\n---\n\n- **测试框架**: Vitest（不使用 Jest）\n- **适用范围**: 所有新代码必须编写对应的 Vitest 测试\n- **记录时间**: 2026-04-29\n\n\n---\nname: 错误监控迁移到 Datadog\ndescription: 项目错误监控已从 Sentry 迁移到 Datadog，迁移日期 2026-04-28\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: monitoring, datadog, sentry, migration\ncreatedAt: 2026-04-29T07:17:04.325Z\nrecallCount: 0\n---\n\n## 错误监控\n- **当前监控工具**: Datadog\n- **迁移日期**: 2026-04-28\n- **前工具**: Sentry（通过 SENTRY_DSN 环境变量配置，已废弃）\n- **Datadog 配置方式**: 未指定（待确认）\n\n---\n*Updated: 2026-04-29T07:17:04.325Z*\n\n---\nname: 避免重复已完成内容\ndescription: 用户要求 assistant 不要重复已完成的步骤或信息，保持简洁\ntype: feedback\nsource: llm_extract\nconfidence: 0.9\ntags: communication, conciseness, avoid-repetition\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 0\n---\n\n用户明确指示：当继续执行未完成的任务时，不要重复已完成的内容。该反馈适用于所有后续对话，assistant 应直接推进，无需重新列出已确认的信息。\n\n---\n*Extracted: 2026-04-29T07:15:29.704Z*\n\n---\nname: Docker Compose 端口映射\ndescription: iceCoder 项目的 Docker Compose 服务定义和端口映射，含端口选择原因\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: docker-compose, local-dev, postgres, redis, mailhog, port-reason\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 0\n---\n\n## Docker Compose 本地开发环境\n\n### 服务列表\n\n| 服务 | 说明 |\n|------|------|\n| **app** | 主应用服务 (Express 5 + TypeScript)，映射 `3000:3000` |\n| **postgres** | PostgreSQL 数据库，映射 `5433:5432` |\n| **redis** | Redis 缓存 |\n| **mailhog** | 邮件测试工具 |\n\n### 端口原因\n- `postgres` 暴露在 5433 端口：避免与本地可能运行的 PostgreSQL 实例（默认端口 5432）冲突\n\n---\n*Updated: 2026-04-29T07:15:29.704Z*\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:12:02.139Z\n---\nname: API 版本化策略\ndescription: CloudScale 支付微服务使用 URL 路径版本化，所有端点当前均为 /api/v2\ntype: project\n---\n\n# API 版本化策略\n\n- **策略**: URL 路径版本化（URL-based versioning）\n- **当前版本**: `/api/v2` — 所有端点统一使用 v2\n- **v1 状态**: 仍处于活跃状态但已废弃（deprecated）\n- **v1 下线计划**: 2026 年 Q2 末（2026-06-30）前关停\n- **记录时间**: 2026-04-29\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:10:00.276Z\n---\nname: 用户偏好\nde",
+      "response": "你的信息已经在记忆中了：\n\n- **姓名**: Alex Chen\n- **公司**: CloudScale Inc.\n- **职位**: 高级后端工程师\n- **主要工作**: 支付微服务，处理约 50k TPM\n\n欢迎回来，Alex！有什么需要帮忙的吗？\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-3",
+      "metric": "expired_filter",
+      "query": "What version of Tailwind CSS is the team using?",
+      "answer": "v3",
+      "passed": true,
+      "recalled_text": "---\nname: 信任用户关于技术栈的陈述\ndescription: 用户直接告知的技术栈信息优先于记忆中的旧数据\ntype: feedback\n---\n\n当用户主动告知当前技术栈状态（如框架版本、迁移信息）时，应直接以用户的话为准，而不是依赖记忆中可能过时的记录。记忆中的旧数据可能是之前的会话留存，不一定反映最新状态。\n\n触发此 feedback 的场景：2026-04-29，用户说\"Tailwind CSS v3 with JIT\"，我错误地理解为用户纠正了我的记忆（记忆原本写的是 v4），于是将 v4 改成了 v3。然后用户澄清他们已经迁移到 v4，我才改回来。\n\n教训：用户主动说的话总是当前最新的 ground truth。\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:38:04.273Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:36:18.490Z\n---\nname: 测试框架决策\ndescription: 项目使用 Vitest 而非 Jest，新代码必须编写 Vitest 测试\ntype: feedback\n---\n\n- **测试框架**: Vitest（不使用 Jest）\n- **适用范围**: 所有新代码必须编写对应的 Vitest 测试\n- **记录时间**: 2026-04-29\n\n\n---\nname: 错误监控迁移到 Datadog\ndescription: 项目错误监控已从 Sentry 迁移到 Datadog，迁移日期 2026-04-28\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: monitoring, datadog, sentry, migration\ncreatedAt: 2026-04-29T07:17:04.325Z\nrecallCount: 0\n---\n\n## 错误监控\n- **当前监控工具**: Datadog\n- **迁移日期**: 2026-04-28\n- **前工具**: Sentry（通过 SENTRY_DSN 环境变量配置，已废弃）\n- **Datadog 配置方式**: 未指定（待确认）\n\n---\n*Updated: 2026-04-29T07:17:04.325Z*\n\n---\nname: 避免重复已完成内容\ndescription: 用户要求 assistant 不要重复已完成的步骤或信息，保持简洁\ntype: feedback\nsource: llm_extract\nconfidence: 0.9\ntags: communication, conciseness, avoid-repetition\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 0\n---\n\n用户明确指示：当继续执行未完成的任务时，不要重复已完成的内容。该反馈适用于所有后续对话，assistant 应直接推进，无需重新列出已确认的信息。\n\n---\n*Extracted: 2026-04-29T07:15:29.704Z*\n\n---\nname: Docker Compose 端口映射\ndescription: iceCoder 项目的 Docker Compose 服务定义和端",
+      "response": "根据记忆记录，团队当前使用的是 **Tailwind CSS v4**，刚从 v3 迁移完成。\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-4",
+      "metric": "multi_hop",
+      "query": "What CI/CD platform and cloud deployment target does the team use?",
+      "answer": "GitHub Actions,ECS Fargate",
+      "passed": true,
+      "recalled_text": "---\nname: CI/CD Pipeline\ndescription: CloudScale Inc. 部署流水线使用 GitHub Actions 进行 CI/CD，目标环境为 AWS ECS Fargate\ntype: project\n---\n\n## CI/CD 部署流水线\n\n- **CI/CD 工具**: GitHub Actions\n- **部署目标**: AWS ECS Fargate\n- **记录时间**: 2026-04-29（用户主动告知）\n\n### 技术细节（待补充）\n## 环境地址\n- **Staging**: https://staging.cloudscale.io\n- **Production**: https://api.cloudscale.io\n\n## 技术细节（待补充）\n- 具体的 GitHub Actions workflow 配置、构建步骤、部署策略等尚未了解\n\n\n---\nname: 用户沟通语言\n description: 用户全程使用中文与助理沟通\ntype: user\n---\n\n- **沟通语言**: 中文（简体）\n- **确认依据**: 所有历史对话记录、记忆文件和系统提示均为中文，无任何英文交互\n- **记录时间**: 2026-04-29\n\n\n---\nname: 信任用户关于技术栈的陈述\ndescription: 用户直接告知的技术栈信息优先于记忆中的旧数据\ntype: feedback\n---\n\n当用户主动告知当前技术栈状态（如框架版本、迁移信息）时，应直接以用户的话为准，而不是依赖记忆中可能过时的记录。记忆中的旧数据可能是之前的会话留存，不一定反映最新状态。\n\n触发此 feedback 的场景：2026-04-29，用户说\"Tailwind CSS v3 with JIT\"，我错误地理解为用户纠正了我的记忆（记忆原本写的是 v4），于是将 v4 改成了 v3。然后用户澄清他们已经迁移到 v4，我才改回来。\n\n教训：用户主动说的话总是当前最新的 ground truth。\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:38:04.273Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:36:18.490Z\n---\nname: 测试框架决策\ndescription: 项目使用 Vitest 而非 Jest，新代码必须编写 Vitest 测试\ntype: feedback\n---\n\n- **测试框架**: Vitest（不使用 Jest）\n- **适用范围**: 所有新代码必须编写对应的 Vitest 测试\n- **记录时间**: 2026-04-29\n\n\n---\nname: 错误监控迁移到 Datadog\ndescription: 项目错误监控已从 Sentry 迁移到 Datadog，迁移日期 2026-04-28\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: monitoring, datadog, sentry, migration\ncreatedAt: 2026-04-29T07:17:04.325Z\nrecallCount: 0\n---\n\n## 错误监控\n- **当前监控工具**: Datadog\n-",
+      "response": "根据当前记忆，团队的部署流水线如下：\n\n- **CI/CD 平台**: GitHub Actions\n- **部署目标**: AWS ECS Fargate\n- **Staging 环境**: https://staging.cloudscale.io\n- **Production 环境**: https://api.cloudscale.io\n\n需要我深入了解具体的 workflow 配置吗？",
+      "error": null
+    },
+    {
+      "id": "locomo-5",
+      "metric": "single_hop",
+      "query": "Which package manager should be used for this project?",
+      "answer": "pnpm",
+      "passed": true,
+      "recalled_text": "recallCount: 1\nlastRecalledAt: 2026-04-29T07:38:04.273Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn。用户明确要求所有命令使用 pnpm，不接受 npm/yarn 替代方案\n\n\n---\nname: CI/CD Pipeline\ndescription: CloudScale Inc. 部署流水线使用 GitHub Actions 进行 CI/CD，目标环境为 AWS ECS Fargate\ntype: project\n---\n\n## CI/CD 部署流水线\n\n- **CI/CD 工具**: GitHub Actions\n- **部署目标**: AWS ECS Fargate\n- **记录时间**: 2026-04-29（用户主动告知）\n\n### 技术细节（待补充）\n## 环境地址\n- **Staging**: https://staging.cloudscale.io\n- **Production**: https://api.cloudscale.io\n\n## 技术细节（待补充）\n- 具体的 GitHub Actions workflow 配置、构建步骤、部署策略等尚未了解\n\n\n---\nname: 用户沟通语言\n description: 用户全程使用中文与助理沟通\ntype: user\n---\n\n- **沟通语言**: 中文（简体）\n- **确认依据**: 所有历史对话记录、记忆文件和系统提示均为中文，无任何英文交互\n- **记录时间**: 2026-04-29\n\n\n---\nname: 信任用户关于技术栈的陈述\ndescription: 用户直接告知的技术栈信息优先于记忆中的旧数据\ntype: feedback\n---\n\n当用户主动告知当前技术栈状态（如框架版本、迁移信息）时，应直接以用户的话为准，而不是依赖记忆中可能过时的记录。记忆中的旧数据可能是之前的会话留存，不一定反映最新状态。\n\n触发此 feedback 的场景：2026-04-29，用户说\"Tailwind CSS v3 with JIT\"，我错误地理解为用户纠正了我的记忆（记忆原本写的是 v4），于是将 v4 改成了 v3。然后用户澄清他们已经迁移到 v4，我才改回来。\n\n教训：用户主动说的话总是当前最新的 ground truth。\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:36:18.490Z\n---\nname: 测试框架决策\ndescription: 项目使用 Vitest 而非 Jest，新代码必须编写 Vitest 测试\ntype: feedback\n---\n\n- **测试框架**: Vitest（不使用 Jest）\n- **适用范围**: 所有新代码必须编写对应的 Vitest 测试\n- **记录时间**: 2026-04-29\n\n\n---\nname: 错误监控迁移到 Datadog\ndescription: 项目错误监控已从 Sentry 迁移到 Datadog，迁移日期 2026-04-28\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: monitoring, datadog, sentry, migration\ncreatedAt: 2026-04-29T07:17:04.325Z\nrecallCount: 0\n",
+      "response": "根据你的偏好设定，这个项目使用 **pnpm** 作为包管理器，所有包管理操作（安装依赖、运行脚本、更新等）都必须使用 `pnpm` 命令，不得使用 `npm` 或 `yarn`。\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-6",
+      "metric": "expired_filter",
+      "query": "What caching system is used for API responses?",
+      "answer": "Redis",
+      "passed": true,
+      "recalled_text": "---\nname: 支付微服务缓存架构\ndescription: 支付微服务使用 Memcached 做 API 缓存（300s TTL），Redis 仅用于认证令牌存储（24h TTL）\ntype: project\ntags: memcached, redis, cache, ttl, auth-tokens, payment-service, cloudscale\ncreatedAt: 2026-04-29T07:04:05.344Z\n---\n\n## 缓存分层架构\n\n- **API 响应缓存**: **Memcached**\n  - 2026-04-22 从 Redis 迁移至 Memcached\n  - 默认 TTL: 300 秒 (5 分钟)\n  - 用途: 减少数据库负载，提升 API 响应速度\n- **认证令牌存储**: **Redis**\n  - TTL: 24 小时 (86400 秒)\n  - Redis 不再用于 API 缓存层\n\n---\n*Updated: 2026-04-29 — 确认：API 缓存用 Memcached（上周切换），Redis 仅存认证令牌*\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:38:04.273Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn。用户明确要求所有命令使用 pnpm，不接受 npm/yarn 替代方案\n\n\n---\nname: CI/CD Pipeline\ndescription: CloudScale Inc. 部署流水线使用 GitHub Actions 进行 CI/CD，目标环境为 AWS ECS Fargate\ntype: project\n---\n\n## CI/CD 部署流水线\n\n- **CI/CD 工具**: GitHub Actions\n- **部署目标**: AWS ECS Fargate\n- **记录时间**: 2026-04-29（用户主动告知）\n\n### 技术细节（待补充）\n## 环境地址\n- **Staging**: https://staging.cloudscale.io\n- **Production**: https://api.cloudscale.io\n\n## 技术细节（待补充）\n- 具体的 GitHub Actions workflow 配置、构建步骤、部署策略等尚未了解\n\n\n---\nname: 用户沟通语言\n description: 用户全程使用中文与助理沟通\ntype: user\n---\n\n- **沟通语言**: 中文（简体）\n- **确认依据**: 所有历史对话记录、记忆文件和系统提示均为中文，无任何英文交互\n- **记录时间**: 2026-04-29\n\n\n---\nname: 信任用户关于技术栈的陈述\ndescription: 用户直接告知的技术栈信息优先于记忆中的旧数据\ntype: feedback\n---\n\n当用户主动告知当前技术栈状态（如框架版本、迁移信息）时，应直接以用户的话为准，而不是依赖记忆中可能过时的记录。记忆中的旧数据可能是之前的会话留存，不一定反映最新状态。\n\n触发此 feedback 的场景：2026-04-29，用户说\"Tailwind CSS v3 with JIT\"，我错误地理解为用户纠正了我的记忆（记忆原本写的是 v4），于是将 v4 改成了 v3。然后用户澄清他们已经迁移到 v4，我",
+      "response": "API 响应缓存使用的是 **Memcached**（上周从 Redis 迁移过来），默认 TTL 为 300 秒。Redis 现在只用于认证令牌存储，24 小时过期。\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-7",
+      "metric": "multi_hop",
+      "query": "What are the code formatting rules for quotes and semicolons?",
+      "answer": "single quotes,no semicolons",
+      "passed": true,
+      "recalled_text": "recallCount: 1\nlastRecalledAt: 2026-04-29T07:47:59.512Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn。用户明确要求所有命令使用 pnpm，不接受 npm/yarn 替代方案\n\n\n---\nname: 支付微服务缓存架构\ndescription: 支付微服务使用 Memcached 做 API 缓存（300s TTL），Redis 仅用于认证令牌存储（24h TTL）\ntype: project\ntags: memcached, redis, cache, ttl, auth-tokens, payment-service, cloudscale\ncreatedAt: 2026-04-29T07:04:05.344Z\n---\n\n## 缓存分层架构\n\n- **API 响应缓存**: **Memcached**\n  - 2026-04-22 从 Redis 迁移至 Memcached\n  - 默认 TTL: 300 秒 (5 分钟)\n  - 用途: 减少数据库负载，提升 API 响应速度\n- **认证令牌存储**: **Redis**\n  - TTL: 24 小时 (86400 秒)\n  - Redis 不再用于 API 缓存层\n\n---\n*Updated: 2026-04-29 — 确认：API 缓存用 Memcached（上周切换），Redis 仅存认证令牌*\n\n\n---\nname: CI/CD Pipeline\ndescription: CloudScale Inc. 部署流水线使用 GitHub Actions 进行 CI/CD，目标环境为 AWS ECS Fargate\ntype: project\n---\n\n## CI/CD 部署流水线\n\n- **CI/CD 工具**: GitHub Actions\n- **部署目标**: AWS ECS Fargate\n- **记录时间**: 2026-04-29（用户主动告知）\n\n### 技术细节（待补充）\n## 环境地址\n- **Staging**: https://staging.cloudscale.io\n- **Production**: https://api.cloudscale.io\n\n## 技术细节（待补充）\n- 具体的 GitHub Actions workflow 配置、构建步骤、部署策略等尚未了解\n\n\n---\nname: 用户沟通语言\n description: 用户全程使用中文与助理沟通\ntype: user\n---\n\n- **沟通语言**: 中文（简体）\n- **确认依据**: 所有历史对话记录、记忆文件和系统提示均为中文，无任何英文交互\n- **记录时间**: 2026-04-29\n\n\n---\nname: 信任用户关于技术栈的陈述\ndescription: 用户直接告知的技术栈信息优先于记忆中的旧数据\ntype: feedback\n---\n\n当用户主动告知当前技术栈状态（如框架版本、迁移信息）时，应直接以用户的话为准，而不是依赖记忆中可能过时的记录。记忆中的旧数据可能是之前的会话留存，不一定反映最新状态。\n\n触发此 feedback 的场景：2026-04-29，用户说\"Tailwind CSS v3 with JIT\"，我错误地理解为用户纠正了我的记忆（记忆原本写的是 v4），于是将 v4 改成了 v3。然后用户澄清他们已经迁移到 v4，我",
+      "response": "让我查一下项目中的 Prettier 配置和 ESLint/编辑器设置来确认。从记忆中（`user_preferences.md`）可以确认：\n\n**代码格式化规则：**\n\n| 规则 | 值 |\n|------|-----|\n| **引号** | 单引号（single quotes）`'` |\n| **分号** | 不写分号（no semicolons） |\n| **缩进** | 2 个空格 |\n| **执行工具** | Prettier |\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-8",
+      "metric": "single_hop",
+      "query": "What is the current API version?",
+      "answer": "v2",
+      "passed": true,
+      "recalled_text": "recallCount: 1\nlastRecalledAt: 2026-04-29T07:49:29.620Z\n---\nname: API 版本化策略\ndescription: CloudScale 支付微服务使用 URL 路径版本化，所有端点当前均为 /api/v2\ntype: project\n---\n\n# API 版本化策略\n\n- **策略**: URL 路径版本化（URL-based versioning）\n- **当前版本**: `/api/v2` — 所有端点统一使用 v2\n- **v1 状态**: 仍处于活跃状态但已废弃（deprecated）\n- **v1 下线计划**: 2026 年 Q2 末（2026-06-30）前关停\n- **记录时间**: 2026-04-29\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:48:55.740Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn。用户明确要求所有命令使用 pnpm，不接受 npm/yarn 替代方案\n\n\n---\nname: 支付微服务缓存架构\ndescription: 支付微服务使用 Memcached 做 API 缓存（300s TTL），Redis 仅用于认证令牌存储（24h TTL）\ntype: project\ntags: memcached, redis, cache, ttl, auth-tokens, payment-service, cloudscale\ncreatedAt: 2026-04-29T07:04:05.344Z\n---\n\n## 缓存分层架构\n\n- **API 响应缓存**: **Memcached**\n  - 2026-04-22 从 Redis 迁移至 Memcached\n  - 默认 TTL: 300 秒 (5 分钟)\n  - 用途: 减少数据库负载，提升 API 响应速度\n- **认证令牌存储**: **Redis**\n  - TTL: 24 小时 (86400 秒)\n  - Redis 不再用于 API 缓存层\n\n---\n*Updated: 2026-04-29 — 确认：API 缓存用 Memcached（上周切换），Redis 仅存认证令牌*\n\n\n---\nname: CI/CD Pipeline\ndescription: CloudScale Inc. 部署流水线使用 GitHub Actions 进行 CI/CD，目标环境为 AWS ECS Fargate\ntype: project\n---\n\n## CI/CD 部署流水线\n\n- **CI/CD 工具**: GitHub Actions\n- **部署目标**: AWS ECS Fargate\n- **记录时间**: 2026-04-29（用户主动告知）\n\n### 技术细节（待补充）\n## 环境地址\n- **Staging**: https://staging.cloudscale.io\n- **Production**: https://api.cloudscale.io\n\n## 技术细节（待补充）\n- 具体的 GitHub Actions workflow 配置、构建步骤、部署策略等尚未了解\n\n\n---\nname: 用户沟通语言\n description: 用户全程使用中文与助理沟通\ntype: user\n---\n\n- **沟通语言**: 中文（简体）\n- ",
+      "response": "当前 API 版本是 **`/api/v2`**，所有端点统一使用。\n\n**v1** 仍处于活跃状态但已标记为废弃（deprecated），计划在 **2026 年 Q2 末（2026-06-30）** 前关停下线。\n\n这些信息已记录在 `project_api_versioning.md` 中。\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-9",
+      "metric": "multi_hop",
+      "query": "What port is the PostgreSQL database exposed on in Docker Compose and why?",
+      "answer": "5433,avoid conflicts",
+      "passed": true,
+      "recalled_text": "lastRecalledAt: 2026-04-29T07:50:12.144Z\n---\nname: Docker Compose 端口映射\ndescription: iceCoder 项目的 Docker Compose 服务定义和端口映射，含端口选择原因\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: docker-compose, local-dev, postgres, redis, mailhog, port-reason\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 1\n---\n\n## Docker Compose 本地开发环境\n\n### 服务列表\n\n| 服务 | 说明 |\n|------|------|\n| **app** | 主应用服务 (Express 5 + TypeScript)，映射 `3000:3000` |\n| **postgres** | PostgreSQL 数据库，映射 `5433:5432` |\n| **redis** | Redis 缓存 |\n| **mailhog** | 邮件测试工具 |\n\n### 端口原因\n- `postgres` 暴露在 5433 端口：避免与本地可能运行的 PostgreSQL 实例（默认端口 5432）冲突\n\n---\n*Updated: 2026-04-29T07:15:29.704Z*\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:49:29.620Z\n---\nname: API 版本化策略\ndescription: CloudScale 支付微服务使用 URL 路径版本化，所有端点当前均为 /api/v2\ntype: project\n---\n\n# API 版本化策略\n\n- **策略**: URL 路径版本化（URL-based versioning）\n- **当前版本**: `/api/v2` — 所有端点统一使用 v2\n- **v1 状态**: 仍处于活跃状态但已废弃（deprecated）\n- **v1 下线计划**: 2026 年 Q2 末（2026-06-30）前关停\n- **记录时间**: 2026-04-29\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:48:55.740Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn。用户明确要求所有命令使用 pnpm，不接受 npm/yarn 替代方案\n\n\n---\nname: 支付微服务缓存架构\ndescription: 支付微服务使用 Memcached 做 API 缓存（300s TTL），Redis 仅用于认证令牌存储（24h TTL）\ntype: project\ntags: memcached, redis, cache, ttl, auth-tokens, payment-service, cloudscale\ncreatedAt: 2026-04-29T07:04:05.344Z\n---\n\n## 缓存分层架构\n\n- **API 响应缓存**: **Memcached**\n  - 2026-04-22 从 Redis 迁移至 Memcached\n  - 默认 TTL: 300 秒 (5 分钟)\n  - 用途: 减少数据库负载，提升 ",
+      "response": "PostgreSQL 宿主端口暴露在 **5433**（容器内部依然用标准的 5432）。\n\n原因：避免与本地可能运行的 PostgreSQL 实例（默认端口 5432）冲突。\n\n<status>complete</status>",
+      "error": null
+    },
+    {
+      "id": "locomo-10",
+      "metric": "expired_filter",
+      "query": "What tool is used for error monitoring?",
+      "answer": "Sentry",
+      "passed": true,
+      "recalled_text": "---\nname: 错误监控迁移到 Datadog\ndescription: 支付微服务项目错误监控已从 Sentry 迁移到 Datadog，迁移完成日期 2026-04-28\ntype: project\n---\n\n## 错误监控\n- **当前监控工具**: Datadog\n- **迁移日期**: 2026-04-28（昨日完成）\n- **前工具**: Sentry（原通过 SENTRY_DSN 环境变量配置，已废弃）\n- **Datadog 配置方式**: 待确认\n\n---\n*Updated: 2026-04-29*\n\n\nlastRecalledAt: 2026-04-29T07:50:12.144Z\n---\nname: Docker Compose 端口映射\ndescription: iceCoder 项目的 Docker Compose 服务定义和端口映射，含端口选择原因\ntype: project\nsource: llm_extract\nconfidence: 1\ntags: docker-compose, local-dev, postgres, redis, mailhog, port-reason\ncreatedAt: 2026-04-29T07:15:29.704Z\nrecallCount: 1\n---\n\n## Docker Compose 本地开发环境\n\n### 服务列表\n\n| 服务 | 说明 |\n|------|------|\n| **app** | 主应用服务 (Express 5 + TypeScript)，映射 `3000:3000` |\n| **postgres** | PostgreSQL 数据库，映射 `5433:5432` |\n| **redis** | Redis 缓存 |\n| **mailhog** | 邮件测试工具 |\n\n### 端口原因\n- `postgres` 暴露在 5433 端口：避免与本地可能运行的 PostgreSQL 实例（默认端口 5432）冲突\n\n---\n*Updated: 2026-04-29T07:15:29.704Z*\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:49:29.620Z\n---\nname: API 版本化策略\ndescription: CloudScale 支付微服务使用 URL 路径版本化，所有端点当前均为 /api/v2\ntype: project\n---\n\n# API 版本化策略\n\n- **策略**: URL 路径版本化（URL-based versioning）\n- **当前版本**: `/api/v2` — 所有端点统一使用 v2\n- **v1 状态**: 仍处于活跃状态但已废弃（deprecated）\n- **v1 下线计划**: 2026 年 Q2 末（2026-06-30）前关停\n- **记录时间**: 2026-04-29\n\n\nrecallCount: 1\nlastRecalledAt: 2026-04-29T07:48:55.740Z\n---\nname: 用户偏好\ndescription: 用户的角色、技术栈偏好和代码规范要求\ntype: user\n---\n\n- **角色**: 全栈工程师，主要使用 Vue + Node.js 技术栈\n- **当前项目**: iceCoder（AI 编程助手工具）\n- **技术栈**: Node.js, Express 5, TypeScript\n- **数据库偏好**: PostgreSQL + Prisma ORM\n- **语言**: 仅使用 TypeScript，不使用 JavaScript\n- **CSS 框架**: Tailwind CSS v4（刚从 v3 迁移完成）\n- **命名规范**: 驼峰命名（camelCase），禁止下划线\n- **风格**: 函数式编程，不使用 class 组件\n- **文档**: 每次添加 JSDoc 注释\n- **代码风格**: 简洁不啰嗦，优先用最少代码解决问题\n- **Prettier 格式化**: 单引号、无分号、2 空格缩进\n- **ESLint**: Airbnb TypeScript 预设（eslint-config-airbnb-typescript）+ 自定义 import 排序规则\n- **包管理器**: pnpm，禁止使用 npm 或 yarn。用户明确要求所有命令使用 pnpm，不接受 npm/yarn 替代方案\n\n\n---\nname: 支付微服务缓存架构\ndescription: 支付微服务使用 Memcached 做 API 缓存（300s TTL），Redis 仅用于认证令牌",
+      "response": "当前使用的是 **Datadog**。2026-04-28（昨天）刚完成从 Sentry 到 Datadog 的迁移，旧的 `SENTRY_DSN` 环境变量已废弃。\n\n<status>complete</status>",
+      "error": null
+    }
+  ],
+  "metadata": {
+    "timestamp": "2026-04-29T15:54:53.905197",
+    "host": "127.0.0.1",
+    "port": 3000,
+    "dataset": "D:\\work\\self\\iceCoder\\LoCoMo\\dataset.jsonl",
+    "elapsed_seconds": 1235.5,
+    "extract_wait": 5
+  }
+}

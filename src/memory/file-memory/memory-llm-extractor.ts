@@ -299,6 +299,7 @@ Each object must have: filename, type, name, description, content, tags (string[
       tags?: string[];
       confidence?: number;
       source?: string;
+      relatedTo?: string[];
     }>,
     memoryDir: string,
   ): Promise<string[]> {
@@ -376,7 +377,7 @@ Each object must have: filename, type, name, description, content, tags (string[
           for (const m of mems) existingFilenames.add(m.filename);
         }
         const validRelatedTo = (memory.relatedTo || [])
-          .filter(f => existingFilenames.has(f) && f !== safeFilename);
+          .filter((f: string) => existingFilenames.has(f) && f !== safeFilename);
         const relatedToStr = validRelatedTo.length > 0 ? validRelatedTo.join(', ') : '';
 
         const fileContent = `---
