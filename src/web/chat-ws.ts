@@ -28,6 +28,7 @@ import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
 
 const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
+const CODING_PROMPT_PATH = path.resolve('data/coding-prompt.md');
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
@@ -109,7 +110,15 @@ async function ensureMemoryInitialized(): Promise<void> {
 
 async function loadSystemPrompt(): Promise<string> {
   try {
-    return await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
+    let prompt = await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
+    // Append coding guidelines when tools are available (not in eval mode)
+    if (process.env.ICE_DISABLE_TOOLS !== '1') {
+      try {
+        const codingPrompt = await fsPromises.readFile(CODING_PROMPT_PATH, 'utf-8');
+        prompt += '\n\n' + codingPrompt;
+      } catch { /* coding prompt not found, skip */ }
+    }
+    return prompt;
   } catch {
     return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用中文。';
   }
