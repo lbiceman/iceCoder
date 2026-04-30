@@ -84,7 +84,7 @@ export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
 // ─── Harness 记忆集成配置 ───
 
 /** 记忆注入：最大相关记忆数 */
-export const MEMORY_MAX_RELEVANT = 10;
+export const MEMORY_MAX_RELEVANT = 20;
 
 /** LLM 提取触发条件：最小对话轮次 */
 export const EXTRACTION_MIN_TURNS = 3;

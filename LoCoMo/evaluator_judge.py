@@ -234,3 +234,104 @@ def judge_adversarial(question: str, response: str,
         instruction=instruction,
     )
     return _call_judge_api(JUDGE_SYSTEM_PROMPT, prompt, cfg)
+
+
+# ---------------------------------------------------------------------------
+# Memory Extraction via LLM
+# ---------------------------------------------------------------------------
+
+EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and produce a comprehensive structured summary.
+
+Rules:
+1. Extract ALL important facts, events, preferences, relationships, and temporal information.
+2. Convert relative time references ("yesterday", "last week") to absolute dates using the conversation date.
+3. Include WHO, WHAT, WHEN, WHERE details explicitly for every fact.
+4. Preserve exact names, dates, numbers, and specific details — never paraphrase numbers or dates.
+5. For preferences or opinions, note WHO holds the preference.
+6. Use bullet points for each distinct fact.
+7. Group related facts under topic headers.
+8. Return ONLY the structured summary text, no JSON, no code blocks."""
+
+EXTRACT_USER_TEMPLATE = """Conversation date/time: {datetime}
+Participants: {speaker_a} and {speaker_b}
+
+Conversation:
+{transcript}
+
+Create a comprehensive structured summary of ALL facts from this conversation.
+Format as a bullet-point list grouped by topic. Each bullet must be a self-contained fact with specific details (who, what, when, where).
+Example format:
+
+## Events
+- Caroline attended the LGBTQ support group on 7 May 2023 and felt welcomed.
+- Melanie plans to go swimming with her kids on 8 May 2023.
+
+## Preferences & Opinions
+- Caroline is considering a career in counseling or mental health.
+
+## Relationships
+- Caroline and Melanie are close friends who discuss personal matters."""
+
+
+def extract_memories_from_session(
+    transcript: str,
+    datetime_str: str,
+    speaker_a: str,
+    speaker_b: str,
+    cfg: Optional[dict] = None,
+) -> str:
+    """
+    Use LLM to extract a structured summary from a conversation session.
+    Returns a single markdown text with all facts as bullet points.
+    """
+    if cfg is None:
+        cfg = _get_config()
+
+    prompt = EXTRACT_USER_TEMPLATE.format(
+        datetime=datetime_str or "unknown",
+        speaker_a=speaker_a,
+        speaker_b=speaker_b,
+        transcript=transcript[:6000],
+    )
+
+    if requests is None:
+        raise RuntimeError("requests library not installed")
+
+    url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": cfg["model"],
+        "messages": [
+            {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 4096,
+    }
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            if resp.status_code == 429:
+                wait = min(RETRY_DELAY * (attempt + 1), 10)
+                logger.warning(f"Rate limited during extraction, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"].strip()
+            return content
+
+        except requests.RequestException as e:
+            logger.warning(f"Extraction API attempt {attempt+1} failed: {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+        except (KeyError, IndexError) as e:
+            logger.warning(f"Extraction parse error: {e}")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+
+    return ""

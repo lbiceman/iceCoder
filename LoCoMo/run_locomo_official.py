@@ -293,6 +293,7 @@ def extract_sessions(conversation: dict) -> list:
 # ---------------------------------------------------------------------------
 
 from evaluator_judge import judge_qa, judge_adversarial, _get_config as get_judge_config
+from evaluator_judge import extract_memories_from_session
 
 
 def evaluate_qa(response: str, qa_item: dict, threshold: float = 0.6,
@@ -381,11 +382,12 @@ MEMORY_DIR = SCRIPT_DIR.parent / "data" / "memory-files"
 def inject_conversations(host: str, port: int, sample: dict,
                          batch_size: int = 0) -> int:
     """
-    Inject conversations by writing memory files directly to disk.
+    Inject conversations by extracting structured summaries via LLM,
+    writing ONE memory file per session.
 
-    This bypasses the slow WebSocket → LLM Harness pipeline entirely.
-    Each session is written as a memory file in iceCoder's memory format,
-    making the conversations immediately available for recall during QA.
+    Flow: conversation → LLM extraction → one structured memory file per session.
+    This keeps file count low (= number of sessions) so top-K recall
+    can cover most or all sessions.
 
     Returns total number of memory files written.
     """
@@ -397,14 +399,15 @@ def inject_conversations(host: str, port: int, sample: dict,
 
     total_turns = sum(len(turns) for _, _, turns in sessions)
     file_count = 0
+    extract_cfg = get_judge_config()
 
     logger.info(f"  Injecting {len(sessions)} sessions, {total_turns} turns "
-                f"(direct file write mode)")
+                f"(LLM extraction mode, 1 file/session, model={extract_cfg['model']})")
 
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     index_lines = ["# 记忆索引\n"]
 
-    pbar = tqdm(sessions, desc="    Writing memory files", unit="sess", leave=False)
+    pbar = tqdm(sessions, desc="    Extracting memories", unit="sess", leave=False)
 
     for sess_key, dt_str, turns in pbar:
         pbar.set_postfix_str(f"{sess_key}")
@@ -415,51 +418,64 @@ def inject_conversations(host: str, port: int, sample: dict,
             speaker = turn.get("speaker", "unknown")
             text = turn.get("text", "")
             if text:
-                lines.append(f"**{speaker}**: {text}")
+                lines.append(f"{speaker}: {text}")
 
         if not lines:
             continue
 
-        transcript = "\n\n".join(lines)
+        transcript = "\n".join(lines)
 
-        # Create memory file
-        sess_num = sess_key.split("_")[1]
-        filename = f"locomo_{sample_id}_{sess_key}.md"
+        # Extract structured summary via LLM (returns markdown text)
+        summary = extract_memories_from_session(
+            transcript=transcript,
+            datetime_str=dt_str,
+            speaker_a=speaker_a,
+            speaker_b=speaker_b,
+            cfg=extract_cfg,
+        )
+
+        if not summary:
+            logger.warning(f"    No summary extracted from {sess_key}")
+            continue
+
+        bullet_count = summary.count("\n-")
+        logger.info(f"    {sess_key}: extracted ~{bullet_count} facts")
+
         now_iso = datetime.now(tz=__import__('datetime').timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        sess_num = sess_key.split("_")[1]
 
-        description = (f"LoCoMo conversation {sample_id} {sess_key} "
-                       f"between {speaker_a} and {speaker_b}")
+        # One file per session
+        filename = f"locomo_{sample_id}_session_{sess_num}.md"
+        description = (f"Structured summary of {sample_id} session {sess_num} "
+                       f"({speaker_a} and {speaker_b})")
         if dt_str:
             description += f" at {dt_str}"
 
-        content = f"""---
-name: {sample_id} {sess_key}
+        file_content = f"""---
+name: {sample_id} session {sess_num} summary
 description: {description}
-type: conversation
-source: locomo_eval
-confidence: 1
-tags: locomo, {sample_id}, {sess_key}
+type: session_summary
+source: locomo_eval_llm
+confidence: 0.9
+tags: {sample_id}, session_{sess_num}, {speaker_a}, {speaker_b}
 createdAt: {now_iso}
 recallCount: 0
 ---
 
-## Conversation: {sample_id} — Session {sess_num}
+# {sample_id} — Session {sess_num}
 **Participants**: {speaker_a} and {speaker_b}
+**Time**: {dt_str or 'unknown'}
+
+{summary}
+
+---
+*Extracted from {sample_id} {sess_key} — LoCoMo evaluation*
 """
-        if dt_str:
-            content += f"**Time**: {dt_str}\n"
-
-        content += f"\n{transcript}\n\n---\n*Injected for LoCoMo evaluation: {now_iso}*\n"
-
         filepath = MEMORY_DIR / filename
-        filepath.write_text(content, encoding="utf-8")
+        filepath.write_text(file_content, encoding="utf-8")
         file_count += 1
 
-        # Add to index
-        index_lines.append(
-            f"- [{sample_id} {sess_key}]({filename}) — "
-            f"{description}\n"
-        )
+        index_lines.append(f"- [{sample_id} session {sess_num}]({filename}) — {description}\n")
 
     pbar.close()
 
@@ -467,8 +483,8 @@ recallCount: 0
     index_file = MEMORY_DIR / "MEMORY.md"
     index_file.write_text("".join(index_lines), encoding="utf-8")
 
-    logger.info(f"  Written {file_count} memory files ({total_turns} turns) "
-                f"to {MEMORY_DIR}")
+    logger.info(f"  Written {file_count} memory files from {len(sessions)} sessions "
+                f"({total_turns} original turns) to {MEMORY_DIR}")
     return file_count
 
 
