@@ -255,7 +255,14 @@ Rules:
 7. AIM FOR 4-6 ITEMS PER CONVERSATION SESSION. Only extract what is truly important and distinct.
 8. Prioritize: events with specific dates > personal facts > preferences > opinions > casual remarks.
 9. Return a JSON array of objects, each with: "name", "description", "content", "tags", "eventDate"
-10. Return ONLY the JSON array, no other text, no code blocks."""
+10. Return ONLY the JSON array, no other text, no code blocks.
+
+## CRITICAL: Preserve specific details
+- Book titles, song names, movie names — quote them EXACTLY (e.g., "Nothing is Impossible", "Charlotte's Web")
+- Pet names, people names — spell them exactly as mentioned
+- Exact numbers: ages, distances, counts, years (e.g., "4 years", "10 years ago", "3 children")
+- Specific dates and durations — convert ALL relative dates to absolute
+- Hobbies, instruments, sports — list each one mentioned"""
 
 EXTRACT_USER_TEMPLATE = """Conversation date/time: {datetime}
 Participants: {speaker_a} and {speaker_b}

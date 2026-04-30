@@ -378,6 +378,56 @@ def evaluate_adversarial(response: str, qa_item: dict, threshold: float = 0.6,
 
 MEMORY_DIR = SCRIPT_DIR.parent / "data" / "memory-files"
 
+# Month name → number mapping for date extraction
+_MONTH_MAP = {
+    'january': 1, 'february': 2, 'march': 3, 'april': 4,
+    'may': 5, 'june': 6, 'july': 7, 'august': 8,
+    'september': 9, 'october': 10, 'november': 11, 'december': 12,
+}
+
+def _extract_date_from_text(text: str) -> str:
+    """
+    Try to extract a YYYY-MM-DD date from text using regex patterns.
+    Returns empty string if no date found.
+    """
+    # ISO format: 2023-07-18
+    m = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', text)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    # "18 July 2023" or "7 May 2023"
+    m = re.search(r'\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b', text, re.IGNORECASE)
+    if m:
+        day = int(m.group(1))
+        month = _MONTH_MAP.get(m.group(2).lower(), 0)
+        year = m.group(3)
+        if month:
+            return f"{year}-{month:02d}-{day:02d}"
+
+    # "July 18, 2023" or "July 2023"
+    m = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b', text, re.IGNORECASE)
+    if m:
+        month = _MONTH_MAP.get(m.group(1).lower(), 0)
+        day = int(m.group(2))
+        year = m.group(3)
+        if month:
+            return f"{year}-{month:02d}-{day:02d}"
+
+    # "July 2023" (month only → use 1st of month)
+    m = re.search(r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b', text, re.IGNORECASE)
+    if m:
+        month = _MONTH_MAP.get(m.group(1).lower(), 0)
+        year = m.group(2)
+        if month:
+            return f"{year}-{month:02d}-01"
+
+    # Year only: "in 2022" (use Jan 1)
+    m = re.search(r'\b(20\d{2})\b', text)
+    if m:
+        return f"{m.group(1)}-01-01"
+
+    return ""
+
 
 def inject_conversations(host: str, port: int, sample: dict,
                          batch_size: int = 0) -> int:
@@ -454,6 +504,10 @@ def inject_conversations(host: str, port: int, sample: dict,
                 tags_str = str(tags_list)
 
             event_date = fact.get("eventDate", "") or ""
+
+            # Post-process: if eventDate is empty, try to extract from tags/content/name
+            if not event_date:
+                event_date = _extract_date_from_text(tags_str + " " + name + " " + content_body)
 
             # Safe filename
             safe_name = re.sub(r"[^\w\s-]", "", name.lower())
