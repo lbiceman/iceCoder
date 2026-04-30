@@ -473,13 +473,17 @@ export class HarnessMemoryIntegration {
         // ── 二级召回：LLM 精排 ──
         let selectedMemories = recallResult.memories;
 
-        if (selectedMemories.length > finalK && this.llmAdapter) {
+        if (selectedMemories.length > fallbackK && this.llmAdapter) {
+          // 候选数远超 finalK → 精排有价值
           selectedMemories = await this.rerankMemories(
             latestUserMsg, selectedMemories, finalK, fallbackK,
           );
-        } else {
-          selectedMemories = selectedMemories.slice(0, finalK);
+        } else if (selectedMemories.length > finalK) {
+          // 候选数略超 finalK 但不够多（≤ 2×finalK）→ 跳过精排，全部注入
+          // 精排在这种情况下会砍掉有价值的记忆
+          console.debug(`[harness-memory] Skip rerank: ${selectedMemories.length} candidates ≤ ${fallbackK}, injecting all`);
         }
+        // else: 候选数 ≤ finalK → 直接全部注入
 
         // ── v5.1: Fact 粒度 CoN + JSON 结构化读取 ──
         const memoryItems = await this.buildStructuredMemoryItems(

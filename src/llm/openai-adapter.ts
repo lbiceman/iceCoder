@@ -190,7 +190,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       callback('', true);
 
       const elapsed = Date.now() - startTime;
-      console.log(`[OpenAI] stream 完成 ← ${elapsed}ms | tokens: ${promptTokens}→${completionTokens}`);
+      console.log(`[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} / ${completionTokens}`);
 
       const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
 
