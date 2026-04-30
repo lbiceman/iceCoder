@@ -19,6 +19,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { gzip } from 'node:zlib';
 import { promisify } from 'node:util';
+import { recallRelevantMemories } from '../../memory/file-memory/memory-recall.js';
+import { MEMORY_MAX_RELEVANT } from '../../memory/file-memory/memory-config.js';
+import type { LLMAdapter } from '../../llm/llm-adapter.js';
 
 const gzipAsync = promisify(gzip);
 
@@ -90,7 +93,7 @@ async function packMemories(
 }
 
 /** 创建记忆导出 API 路由。 */
-export function createMemoryExportRouter(): Router {
+export function createMemoryExportRouter(llmAdapter?: LLMAdapter): Router {
   const router = Router();
 
   /** GET /export — 下载 gzip 压缩包 */
@@ -137,6 +140,61 @@ export function createMemoryExportRouter(): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: '统计失败: ' + message });
+    }
+  });
+
+  /**
+   * POST /recall — 召回测试：给定 query，返回召回的记忆文件内容。
+   * 走完整的 LLM 语义召回管线，但不让模型回答问题。
+   * Body: { "query": "...", "topK": 10 }
+   */
+  router.post('/recall', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { query, topK } = req.body as { query: string; topK?: number };
+      if (!query) {
+        res.status(400).json({ success: false, error: 'Missing query' });
+        return;
+      }
+
+      const memoryDir = path.resolve(DEFAULT_MEMORY_DIR);
+      const k = topK ?? MEMORY_MAX_RELEVANT;
+
+      // Build LLM adapter interface for recall
+      const adapter = llmAdapter ? {
+        chat: async (msgs: any[], opts?: any) => llmAdapter.chat(msgs, { tools: [], ...opts }),
+        stream: async () => { throw new Error('Not supported'); },
+        countTokens: async (text: string) => Math.ceil(text.length / 4),
+      } : null;
+
+      const result = await recallRelevantMemories(query, memoryDir, adapter, new Set(), k);
+
+      // Read full content of recalled files
+      const recalled = [];
+      for (const mem of result.memories) {
+        let content = '';
+        try {
+          content = await fs.readFile(mem.filePath, 'utf-8');
+        } catch { /* skip */ }
+        recalled.push({
+          filename: mem.filename,
+          description: mem.description,
+          tags: mem.tags,
+          content,
+        });
+      }
+
+      res.json({
+        success: true,
+        query,
+        topK: k,
+        usedLLM: result.usedLLM,
+        duration: result.duration,
+        recalled: recalled.length,
+        files: recalled,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).json({ success: false, error: message });
     }
   });
 

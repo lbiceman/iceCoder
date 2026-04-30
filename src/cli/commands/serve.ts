@@ -51,7 +51,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/chat/upload', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
-      { path: '/api/memory', router: createMemoryExportRouter() },
+      { path: '/api/memory', router: createMemoryExportRouter(llmAdapter) },
       { path: '/api', router: createPipelineRouter({ orchestrator, sseManager }) },
     ],
   });
