@@ -245,12 +245,18 @@ EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to a
 Rules:
 1. Extract ALL important facts, events, preferences, relationships, and temporal information.
 2. Convert relative time references ("yesterday", "last week") to absolute dates using the conversation date.
-3. Include WHO, WHAT, WHEN, WHERE details explicitly for every fact.
-4. Preserve exact names, dates, numbers, and specific details — never paraphrase numbers or dates.
-5. For preferences or opinions, note WHO holds the preference.
-6. Use bullet points for each distinct fact.
-7. Group related facts under topic headers.
-8. Return ONLY the structured summary text, no JSON, no code blocks."""
+   - "yesterday" on 8 May 2023 → "7 May 2023"
+   - "last year" on 8 May 2023 → "2022"
+   - "next Monday" on 8 May 2023 → "15 May 2023"
+   - "two weeks ago" on 8 May 2023 → "24 April 2023"
+3. For EVERY event or fact, explicitly state WHEN it happened or will happen with an absolute date.
+4. Include WHO, WHAT, WHEN, WHERE details explicitly for every fact.
+5. Preserve exact names, dates, numbers, and specific details — never paraphrase numbers or dates.
+6. For preferences or opinions, note WHO holds the preference.
+7. Use bullet points for each distinct fact.
+8. Group related facts under topic headers.
+9. Add a dedicated "## Timeline" section listing all events in chronological order with exact dates.
+10. Return ONLY the structured summary text, no JSON, no code blocks."""
 
 EXTRACT_USER_TEMPLATE = """Conversation date/time: {datetime}
 Participants: {speaker_a} and {speaker_b}
