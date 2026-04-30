@@ -46,18 +46,18 @@ export interface RecallResult {
 /**
  * 记忆选择的系统提示词。
  */
-const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to an AI coding assistant as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
+const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to an AI assistant as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
 
 Return a JSON object with a "selected" field containing an array of filenames for the memories that will clearly be useful (up to 5). Only include memories that you are certain will be helpful based on their name and description.
 - If you are unsure if a memory will be useful, do not include it. Be selective and discerning.
 - If there are no relevant memories, return an empty array.
+- **Broad relevance**: Select any memory that contains information related to the people, events, topics, or time periods mentioned in the query. This includes personal conversations, project details, user preferences, and any factual information.
 - **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X", "stop using X", "别用 X"), also select memories about alternatives to X or preferences in the same domain. Examples:
   - "don't use Jest" → also select memories about testing preferences (Vitest, Mocha, etc.)
   - "不要用 var" → also select memories about variable declaration style
   - "stop using Webpack" → also select memories about build tool preferences
 - **Time awareness**: If the query references a time period ("last week", "上周", "yesterday", "最近"), prefer memories whose timestamps fall within that period, but do not exclude others.
 - Return ONLY valid JSON, no other text.
-
 Example response: {"selected": ["user_role.md", "feedback_testing.md"]}`;
 
 /**
