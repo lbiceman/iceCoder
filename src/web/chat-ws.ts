@@ -108,10 +108,6 @@ async function ensureMemoryInitialized(): Promise<void> {
 }
 
 async function loadSystemPrompt(): Promise<string> {
-  // Eval mode: use minimal system prompt to save tokens
-  if (process.env.ICE_EVAL_MODE === '1') {
-    return '你是 iceCoder，一个拥有记忆能力的智能助手。根据你的记忆回答用户的问题。回答使用英文，保持简洁。';
-  }
   try {
     return await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
   } catch {

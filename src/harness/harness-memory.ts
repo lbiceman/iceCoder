@@ -446,6 +446,10 @@ export class HarnessMemoryIntegration {
     }
 
     const recallCfg = getRecallConfig();
+    // 二级召回：粗召回 4x，精排后取 maxResults；精排失败时 fallback 到 2x
+    const finalK = recallCfg.maxResults || MEMORY_MAX_RELEVANT;
+    const coarseK = finalK * 4;
+    const fallbackK = finalK * 2;
 
     try {
       const recallResult = await recallRelevantMemories(
@@ -453,7 +457,7 @@ export class HarnessMemoryIntegration {
         this.memoryDir,
         this.llmAdapter,
         this.surfacedMemoryPaths, // 跨轮次去重
-        recallCfg.maxResults || MEMORY_MAX_RELEVANT,
+        coarseK,
       );
 
       this.telemetry.logRecall({
@@ -466,18 +470,29 @@ export class HarnessMemoryIntegration {
       }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
+        // ── 二级召回：LLM 精排 ──
+        let selectedMemories = recallResult.memories;
+
+        if (selectedMemories.length > finalK && this.llmAdapter) {
+          selectedMemories = await this.rerankMemories(
+            latestUserMsg, selectedMemories, finalK, fallbackK,
+          );
+        } else {
+          selectedMemories = selectedMemories.slice(0, finalK);
+        }
+
         // ── v5.1: Fact 粒度 CoN + JSON 结构化读取 ──
         const memoryItems = await this.buildStructuredMemoryItems(
-          recallResult.memories,
+          selectedMemories,
           recallResult.facts,
         );
 
         // 标记为已展示
-        for (const mem of recallResult.memories) {
+        for (const mem of selectedMemories) {
           this.surfacedMemoryPaths.add(mem.filePath);
         }
 
-        const method = recallResult.usedLLM ? 'LLM semantic recall' : 'keyword fallback';
+        const method = recallResult.usedLLM ? 'LLM semantic recall + rerank' : 'keyword fallback';
         const reminder = buildCoNMemoryPrompt(memoryItems, method);
         messages.push({ role: 'user', content: reminder });
       }
@@ -487,6 +502,60 @@ export class HarnessMemoryIntegration {
 
     this.injectedForCurrentMessage = true;
     this.lastInjectionUserMessage = latestUserMsg;
+  }
+
+  /**
+   * LLM 精排：从粗召回结果中选出最相关的 top-K 记忆。
+   */
+  private async rerankMemories(
+    query: string,
+    candidates: import('../memory/file-memory/types.js').MemoryHeader[],
+    topK: number,
+    fallbackK: number,
+  ): Promise<import('../memory/file-memory/types.js').MemoryHeader[]> {
+    if (!this.llmAdapter) return candidates.slice(0, fallbackK);
+
+    // 构建候选列表摘要
+    const candidateList = candidates.map((m, i) =>
+      `${i + 1}. [${m.filename}] ${m.description || '(no description)'} | tags: ${m.tags.join(', ')}`
+    ).join('\n');
+
+    const rerankPrompt = `User query: "${query}"
+
+Here are ${candidates.length} memory files. Select the ${topK} most relevant ones for answering the query.
+Return ONLY a JSON object: {"selected": [1, 3, 7, ...]} with the numbers of your selections.
+
+${candidateList}`;
+
+    try {
+      const response = await this.llmAdapter.chat(
+        [
+          { role: 'system', content: 'You are a memory relevance ranker. Select the most relevant memories for the given query. Return only JSON.' },
+          { role: 'user', content: rerankPrompt },
+        ],
+        { tools: [] },
+      );
+
+      const content = response.content.trim();
+      // Parse JSON response
+      const jsonMatch = content.match(/\{[\s\S]*"selected"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const indices: number[] = parsed.selected || [];
+        const selected = indices
+          .filter(i => i >= 1 && i <= candidates.length)
+          .map(i => candidates[i - 1]);
+        if (selected.length > 0) {
+          console.debug(`[harness-memory] Rerank: ${candidates.length} → ${selected.length} memories`);
+          return selected.slice(0, topK);
+        }
+      }
+    } catch (err) {
+      console.debug('[harness-memory] Rerank failed, using coarse results:', err instanceof Error ? err.message : err);
+    }
+
+    // Fallback: return first fallbackK from coarse results
+    return candidates.slice(0, fallbackK);
   }
 
   /**
