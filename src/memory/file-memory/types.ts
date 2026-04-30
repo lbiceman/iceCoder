@@ -42,6 +42,8 @@ export interface MemoryFrontmatter {
   tags?: string[];
   /** 关联的其他记忆文件名（用于多跳关联召回） */
   relatedTo?: string[];
+  /** 事件发生的日期（ISO 格式，如 "2023-07-18"），从对话内容中提取 */
+  eventDate?: string;
 }
 
 /**
@@ -74,6 +76,8 @@ export interface MemoryHeader {
   contentPreview: string;
   /** 关联的其他记忆文件名 */
   relatedTo: string[];
+  /** 事件发生的日期（毫秒时间戳，0 表示无事件日期） */
+  eventDateMs: number;
 }
 
 /**

@@ -86,6 +86,8 @@ export async function scanMemoryFiles(
         const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
         const relatedToRaw = frontmatter.relatedTo;
         const relatedTo = relatedToRaw ? relatedToRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
+        const eventDate = frontmatter.eventDate;
+        const eventDateMs = eventDate ? new Date(eventDate).getTime() || 0 : 0;
 
         return {
           filename: relativePath as string,
@@ -101,6 +103,7 @@ export async function scanMemoryFiles(
           source: frontmatter.source || undefined,
           contentPreview: extractContentPreview(content),
           relatedTo,
+          eventDateMs: Number.isFinite(eventDateMs) ? eventDateMs : 0,
         };
       }),
     );

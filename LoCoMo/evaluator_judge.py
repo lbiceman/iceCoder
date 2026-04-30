@@ -240,22 +240,22 @@ def judge_adversarial(question: str, response: str,
 # Memory Extraction via LLM
 # ---------------------------------------------------------------------------
 
-EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and extract individual facts as separate memory items.
+EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and extract the MOST IMPORTANT facts as compact memory items.
 
 Rules:
-1. Each memory item must be ONE self-contained fact that can be understood without the original conversation.
-2. Convert relative time references to absolute dates using the conversation date:
-   - "yesterday" on 8 May 2023 → "7 May 2023"
-   - "last year" on 8 May 2023 → "2022"
-   - "next Monday" on 8 May 2023 → "15 May 2023"
-   - "two weeks ago" on 8 May 2023 → "24 April 2023"
-3. For EVERY fact, explicitly state WHEN it happened with an absolute date.
-4. Include WHO, WHAT, WHEN, WHERE details explicitly.
-5. Preserve exact names, dates, numbers — never paraphrase.
-6. Separate DISTINCT facts into SEPARATE items. Do NOT merge unrelated information.
-7. For preferences or opinions, note WHO holds the preference.
-8. Return a JSON array of objects, each with: "name", "description", "content", "tags"
-9. Return ONLY the JSON array, no other text, no code blocks."""
+1. Each memory item should be a SELF-CONTAINED fact or a group of closely related facts about the same topic.
+2. MERGE related facts into ONE item. For example:
+   - "Person has pets Oliver (cat) and Bailey (cat)" → ONE item, not two
+   - "Person went camping at beach, mountains, and forest" → ONE item listing all locations
+   - "Person A and Person B are friends who support each other" → ONE item
+3. Convert relative time references to absolute dates using the conversation date.
+4. For EVERY fact, explicitly state WHEN it happened with an absolute date.
+5. Include WHO, WHAT, WHEN, WHERE details explicitly.
+6. Preserve exact names, dates, numbers — never paraphrase.
+7. AIM FOR 4-6 ITEMS PER CONVERSATION SESSION. Only extract what is truly important and distinct.
+8. Prioritize: events with specific dates > personal facts > preferences > opinions > casual remarks.
+9. Return a JSON array of objects, each with: "name", "description", "content", "tags", "eventDate"
+10. Return ONLY the JSON array, no other text, no code blocks."""
 
 EXTRACT_USER_TEMPLATE = """Conversation date/time: {datetime}
 Participants: {speaker_a} and {speaker_b}
@@ -263,12 +263,15 @@ Participants: {speaker_a} and {speaker_b}
 Conversation:
 {transcript}
 
-Extract ALL important facts, events, preferences, and relationships as SEPARATE items.
+Extract the MOST IMPORTANT facts, events, preferences, and relationships. MERGE related facts into single items.
+Target: 4-6 items for this conversation segment. Quality over quantity.
+
 Return a JSON array where each item has:
-- "name": short descriptive title (e.g., "Caroline attended LGBTQ support group on 7 May 2023")
-- "description": one-sentence summary with key details
-- "content": full description with all specifics (who, what, when, where)
-- "tags": array of relevant tags (people names, topics, exact dates)
+- "name": short descriptive title WITH date (e.g., "Caroline attended LGBTQ support group on 7 May 2023")
+- "description": one-sentence summary with ALL key details — be SPECIFIC and SEARCHABLE
+- "content": full description with all specifics (who, what, when, where). Include multiple related facts in one content block.
+- "tags": array of relevant tags (people names, topics, exact dates in YYYY-MM-DD format)
+- "eventDate": YYYY-MM-DD format date when this event/fact occurred (null if not time-specific)
 
 The "name" and "description" fields are critical — they will be used to match this memory to future queries. Make them specific and searchable."""
 
@@ -282,17 +285,103 @@ def extract_memories_from_session(
 ) -> list:
     """
     Use LLM to extract individual fact items from a conversation session.
-    Returns a list of dicts with name, description, content, tags.
+    For long transcripts (>5000 chars), splits into chunks and extracts from each,
+    then deduplicates by name similarity.
+    Returns a list of dicts with name, description, content, tags, eventDate.
     """
     if cfg is None:
         cfg = _get_config()
 
+    MAX_CHUNK = 5000
+
+    if len(transcript) <= MAX_CHUNK:
+        return _extract_single_chunk(transcript, datetime_str, speaker_a, speaker_b, cfg)
+
+    # Split long transcripts by turn boundaries
+    chunks = _split_transcript_into_chunks(transcript, MAX_CHUNK)
+    all_facts = []
+    for i, chunk in enumerate(chunks):
+        chunk_hint = f"(Part {i+1}/{len(chunks)}) " if len(chunks) > 1 else ""
+        facts = _extract_single_chunk(
+            chunk, datetime_str, speaker_a, speaker_b, cfg, chunk_hint=chunk_hint
+        )
+        all_facts.extend(facts)
+
+    # Deduplicate by name similarity
+    return _deduplicate_facts(all_facts)
+
+
+def _split_transcript_into_chunks(transcript: str, max_chars: int) -> list:
+    """Split transcript at turn boundaries (speaker lines) to stay under max_chars."""
+    lines = transcript.split('\n')
+    chunks = []
+    current_chunk_lines = []
+    current_len = 0
+
+    for line in lines:
+        line_len = len(line) + 1  # +1 for newline
+        if current_len + line_len > max_chars and current_chunk_lines:
+            chunks.append('\n'.join(current_chunk_lines))
+            current_chunk_lines = []
+            current_len = 0
+        current_chunk_lines.append(line)
+        current_len += line_len
+
+    if current_chunk_lines:
+        chunks.append('\n'.join(current_chunk_lines))
+
+    return chunks
+
+
+def _deduplicate_facts(facts: list) -> list:
+    """Remove near-duplicate facts by comparing normalized names."""
+    if not facts:
+        return facts
+
+    seen_names = set()
+    unique = []
+    for fact in facts:
+        name = fact.get("name", "").lower().strip()
+        # Simple dedup: skip if exact name match
+        if name in seen_names:
+            continue
+        # Check for high overlap with existing names (>80% word overlap)
+        is_dup = False
+        name_words = set(name.split())
+        if len(name_words) >= 2:
+            for seen in seen_names:
+                seen_words = set(seen.split())
+                if not seen_words:
+                    continue
+                overlap = len(name_words & seen_words)
+                union = len(name_words | seen_words)
+                if union > 0 and overlap / union > 0.8:
+                    is_dup = True
+                    break
+        if not is_dup:
+            seen_names.add(name)
+            unique.append(fact)
+
+    return unique
+
+
+def _extract_single_chunk(
+    transcript: str,
+    datetime_str: str,
+    speaker_a: str,
+    speaker_b: str,
+    cfg: dict,
+    chunk_hint: str = "",
+) -> list:
+    """Extract facts from a single transcript chunk via LLM."""
     prompt = EXTRACT_USER_TEMPLATE.format(
         datetime=datetime_str or "unknown",
         speaker_a=speaker_a,
         speaker_b=speaker_b,
         transcript=transcript[:6000],
     )
+    if chunk_hint:
+        prompt = f"Note: This is {chunk_hint}of a longer conversation. Extract all facts from this segment.\n\n{prompt}"
 
     if requests is None:
         raise RuntimeError("requests library not installed")

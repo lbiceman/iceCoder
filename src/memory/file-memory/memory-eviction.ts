@@ -37,11 +37,11 @@ export interface EvictionConfig {
 
 export const DEFAULT_EVICTION_CONFIG: EvictionConfig = {
   enabled: true,
-  softLimit: 180,
-  evictionTarget: 160,
+  softLimit: 120,
+  evictionTarget: 100,
   evictedDir: 'data/memory/evicted',
   maxEvictedFiles: 100,
-  protectionDays: 7,
+  protectionDays: 3,
 };
 
 // ─── 淘汰结果 ───

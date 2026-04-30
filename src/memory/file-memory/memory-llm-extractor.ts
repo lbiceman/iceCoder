@@ -69,15 +69,17 @@ Pay special attention to implicit user habits revealed by the conversation:
 - Git history, recent changes — git log/blame are authoritative
 - Debugging solutions — the fix is in the code
 - Tool call details, system prompts, ephemeral task state
+- Casual conversation, small talk, or transient remarks that don't reveal lasting preferences or facts
 
 ## Output format
 Return a JSON array of memories to save. Each memory object has:
 - "filename": string (e.g., "user_role.md", "feedback_testing.md", "user_preferred_languages.md")
 - "type": "user" | "feedback" | "project" | "reference"
-- "name": string (short name)
-- "description": string (one-line description for future relevance matching)
+- "name": string (short name, include date if time-specific)
+- "description": string (one-line description for future relevance matching — be SPECIFIC, include names/dates/key details)
 - "content": string (the memory content)
 - "relatedTo": string[] (filenames of existing memories that are semantically related to this one. Only reference files from the existing memory list. Empty array if no relations.)
+- "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.`;
@@ -248,7 +250,7 @@ export class LLMMemoryExtractor {
 ${conversationText}${existingManifest}
 
 Extract memories worth saving from the conversation above. Return JSON array only.
-Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), relatedTo (string[], filenames of related existing memories or empty array)`;
+Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), relatedTo (string[], filenames of related existing memories or empty array), eventDate (string YYYY-MM-DD or null)`;
   }
 
   /**
@@ -300,6 +302,7 @@ Each object must have: filename, type, name, description, content, tags (string[
       confidence?: number;
       source?: string;
       relatedTo?: string[];
+      eventDate?: string | null;
     }>,
     memoryDir: string,
   ): Promise<string[]> {
@@ -380,6 +383,8 @@ Each object must have: filename, type, name, description, content, tags (string[
           .filter((f: string) => existingFilenames.has(f) && f !== safeFilename);
         const relatedToStr = validRelatedTo.length > 0 ? validRelatedTo.join(', ') : '';
 
+        const eventDateStr = memory.eventDate || '';
+
         const fileContent = `---
 name: ${memory.name}
 description: ${memory.description}
@@ -388,6 +393,7 @@ source: ${source}
 confidence: ${confidence}
 tags: ${tags}
 relatedTo: ${relatedToStr}
+eventDate: ${eventDateStr}
 createdAt: ${now}
 recallCount: 0
 ---

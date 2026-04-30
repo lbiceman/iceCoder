@@ -453,6 +453,8 @@ def inject_conversations(host: str, port: int, sample: dict,
             else:
                 tags_str = str(tags_list)
 
+            event_date = fact.get("eventDate", "") or ""
+
             # Safe filename
             safe_name = re.sub(r"[^\w\s-]", "", name.lower())
             safe_name = re.sub(r"\s+", "_", safe_name.strip())[:40]
@@ -465,6 +467,7 @@ type: reference
 source: locomo_eval_llm
 confidence: 0.9
 tags: {tags_str}
+eventDate: {event_date}
 createdAt: {now_iso}
 recallCount: 0
 ---

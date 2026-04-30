@@ -98,7 +98,10 @@ export async function recallRelevantMemories(
   }
   const memories = allMemories.filter(m => !alreadySurfaced.has(m.filePath));
 
-  if (memories.length === 0) {
+  // 过滤极低置信度的记忆（减少噪声，降低幻觉）
+  const filteredMemories = memories.filter(m => m.confidence >= 0.3);
+
+  if (filteredMemories.length === 0) {
     return { memories: [], facts: [], duration: Date.now() - startTime, usedLLM: false };
   }
 
@@ -117,20 +120,20 @@ export async function recallRelevantMemories(
   // 读取完整文件内容用于精确的 fact 提取
   const factIndex = getFactIndex();
   const fullContents = new Map<string, string>();
-  for (const mem of memories) {
+  for (const mem of filteredMemories) {
     try {
       const content = await fs.readFile(mem.filePath, 'utf-8');
       fullContents.set(mem.filePath, content);
     } catch { /* 读取失败时 buildIndex 会回退到 contentPreview */ }
   }
-  factIndex.buildIndex(memories, fullContents);
+  factIndex.buildIndex(filteredMemories, fullContents);
 
   // 如果有 LLM 适配器，使用 LLM 召回
   if (llmAdapter) {
     try {
-      const selected = await llmSelectMemories(query, memories, llmAdapter, maxResults, factIndex, timeRange);
+      const selected = await llmSelectMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange);
       // ── 关联扩展（1 跳）──
-      const expanded = expandRelatedMemories(selected, memories, alreadySurfaced);
+      const expanded = expandRelatedMemories(selected, filteredMemories, alreadySurfaced);
       // 对选中文件 + 关联文件的 facts 做关键词精排
       const allSelected = [...selected, ...expanded];
       const selectedFacts = extractFactsFromSelected(query, allSelected, factIndex);
@@ -149,9 +152,9 @@ export async function recallRelevantMemories(
   }
 
   // 回退：关键词匹配
-  const fallbackResults = keywordFallback(query, memories, maxResults, negationExpansions, timeRange);
+  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange);
   // ── 关联扩展（关键词回退路径也支持）──
-  const fallbackExpanded = expandRelatedMemories(fallbackResults, memories, alreadySurfaced);
+  const fallbackExpanded = expandRelatedMemories(fallbackResults, filteredMemories, alreadySurfaced);
   const allFallback = [...fallbackResults, ...fallbackExpanded];
   const fallbackFacts = extractFactsFromSelected(query, allFallback, factIndex);
   // 异步更新召回计数
@@ -369,12 +372,85 @@ export interface TimeRange {
  * 支持：
  * - 中文："上周"、"昨天"、"前天"、"最近三天"、"这周"、"本周"、"上个月"、"最近"
  * - 英文："last week"、"yesterday"、"past 3 days"、"this week"、"last month"、"recently"
+ * - 绝对月份："July 2023"、"2023年7月"
+ * - 绝对日期："18 July 2023"、"2023年7月18日"、"2023-07-18"
  *
  * 返回 null 表示查询中没有时间线索。
  */
 export function parseTimeRange(query: string): TimeRange | null {
   const now = Date.now();
   const DAY = 86_400_000;
+
+  // ── 绝对日期（优先级最高，最精确）──
+
+  // ISO 格式：2023-07-18
+  const isoDate = query.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (isoDate) {
+    const d = new Date(`${isoDate[1]}-${isoDate[2]}-${isoDate[3]}T00:00:00Z`);
+    if (!isNaN(d.getTime())) {
+      return { since: d.getTime(), until: d.getTime() + DAY, matchedText: isoDate[0] };
+    }
+  }
+
+  // 中文绝对日期：2023年7月18日
+  const absDateCN = query.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/);
+  if (absDateCN) {
+    const d = new Date(Date.UTC(parseInt(absDateCN[1]), parseInt(absDateCN[2]) - 1, parseInt(absDateCN[3])));
+    if (!isNaN(d.getTime())) {
+      return { since: d.getTime(), until: d.getTime() + DAY, matchedText: absDateCN[0] };
+    }
+  }
+
+  // 英文绝对日期：18 July 2023 / July 18, 2023 / July 18 2023
+  const MONTH_NAMES = '(?:January|February|March|April|May|June|July|August|September|October|November|December)';
+  const MONTH_MAP: Record<string, number> = {
+    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+  };
+  const absDateEN1 = query.match(new RegExp(`(\\d{1,2})\\s+(${MONTH_NAMES})\\s+(\\d{4})`, 'i'));
+  if (absDateEN1) {
+    const month = MONTH_MAP[absDateEN1[2].toLowerCase()];
+    if (month !== undefined) {
+      const d = Date.UTC(parseInt(absDateEN1[3]), month, parseInt(absDateEN1[1]));
+      return { since: d, until: d + DAY, matchedText: absDateEN1[0] };
+    }
+  }
+  const absDateEN2 = query.match(new RegExp(`(${MONTH_NAMES})\\s+(\\d{1,2}),?\\s+(\\d{4})`, 'i'));
+  if (absDateEN2) {
+    const month = MONTH_MAP[absDateEN2[1].toLowerCase()];
+    if (month !== undefined) {
+      const d = Date.UTC(parseInt(absDateEN2[3]), month, parseInt(absDateEN2[2]));
+      return { since: d, until: d + DAY, matchedText: absDateEN2[0] };
+    }
+  }
+
+  // ── 绝对月份 ──
+
+  // 中文：2023年7月
+  const absMonthCN = query.match(/(\d{4})\s*年\s*(\d{1,2})\s*月/);
+  if (absMonthCN && !absDateCN) { // 避免和绝对日期重复匹配
+    const year = parseInt(absMonthCN[1]);
+    const month = parseInt(absMonthCN[2]) - 1;
+    const start = new Date(Date.UTC(year, month, 1));
+    const end = new Date(Date.UTC(year, month + 1, 1));
+    if (!isNaN(start.getTime())) {
+      return { since: start.getTime(), until: end.getTime(), matchedText: absMonthCN[0] };
+    }
+  }
+
+  // 英文：July 2023 / in July 2023
+  const absMonthEN = query.match(new RegExp(`(?:in\\s+)?(${MONTH_NAMES})\\s+(\\d{4})`, 'i'));
+  if (absMonthEN && !absDateEN1 && !absDateEN2) {
+    const month = MONTH_MAP[absMonthEN[1].toLowerCase()];
+    if (month !== undefined) {
+      const year = parseInt(absMonthEN[2]);
+      const start = Date.UTC(year, month, 1);
+      const end = Date.UTC(year, month + 1, 1);
+      return { since: start, until: end, matchedText: absMonthEN[0] };
+    }
+  }
+
+  // ── 相对时间（现有逻辑）──
 
   // 中文：最近N天
   const recentDaysCN = query.match(/最近\s*(\d+)\s*天/);
@@ -417,15 +493,24 @@ export function parseTimeRange(query: string): TimeRange | null {
 /**
  * 计算记忆的时间范围加权因子。
  *
- * 使用"最后活跃时间"（lastRecalledMs 或 mtimeMs 取较大值）判断。
- * - 在时间范围内：返回 TIME_RANGE_BOOST（提升优先级）
+ * 优先使用事件时间（eventDateMs），回退到文件活跃时间。
+ * - 事件时间精确匹配：返回 EVENT_TIME_BOOST（最高优先级）
+ * - 文件活跃时间匹配：返回 TIME_RANGE_BOOST
  * - 不在范围内：返回 1.0（不惩罚，只加分）
  *
  * 软加权设计：即使时间解析不精确，也不会漏掉相关记忆。
  */
 const TIME_RANGE_BOOST = 1.5;
+const EVENT_TIME_BOOST = 2.0;
 
 function computeTimeBoost(memory: MemoryHeader, range: TimeRange): number {
+  // 优先用事件时间（eventDateMs）— 这是事实发生的真实时间
+  const eventMs = memory.eventDateMs || 0;
+  if (eventMs > 0 && eventMs >= range.since && eventMs <= range.until) {
+    return EVENT_TIME_BOOST;
+  }
+
+  // 回退：文件活跃时间（写入/修改/召回时间）
   const activeMs = Math.max(memory.lastRecalledMs || 0, memory.mtimeMs, memory.createdMs);
   if (activeMs >= range.since && activeMs <= range.until) {
     return TIME_RANGE_BOOST;
@@ -789,6 +874,10 @@ function formatManifestWithFacts(
       const preview = m.contentPreview
         ? ` | ${m.contentPreview.substring(0, 150)}`
         : '';
+      // 事件日期标注（帮助 LLM 按时间选择记忆）
+      const eventDateStr = m.eventDateMs
+        ? ` [event: ${new Date(m.eventDateMs).toISOString().split('T')[0]}]`
+        : '';
 
       // Key Expansion: 附加 top-3 facts
       const topFacts = factIndex.getTopFactsForFile(m.filePath, query, 3);
@@ -797,8 +886,8 @@ function formatManifestWithFacts(
         : '';
 
       return desc
-        ? `- ${tag}${m.filename} (${ts}): ${desc}${preview}${factLines}`
-        : `- ${tag}${m.filename} (${ts})${preview}${factLines}`;
+        ? `- ${tag}${m.filename} (${ts}): ${desc}${eventDateStr}${preview}${factLines}`
+        : `- ${tag}${m.filename} (${ts})${eventDateStr}${preview}${factLines}`;
     })
     .join('\n');
 }

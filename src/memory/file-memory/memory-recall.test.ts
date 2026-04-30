@@ -86,6 +86,7 @@ function makeHeader(overrides: Partial<MemoryHeader> & { filename: string }): Me
     source: undefined,
     contentPreview: '',
     relatedTo: [],
+    eventDateMs: 0,
     ...overrides,
   };
 }

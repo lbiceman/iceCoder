@@ -30,7 +30,7 @@ export const DEFAULT_FILE_MEMORY_CONFIG: FileMemoryConfig = {
   entrypointName: DEFAULT_ENTRYPOINT_NAME,
   maxEntrypointLines: 200,
   maxEntrypointBytes: 25000,
-  maxMemoryFiles: 200,
+  maxMemoryFiles: 150,
 };
 
 // ─── 多级加载配置 ───
@@ -62,7 +62,7 @@ export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
 // ─── Dream 整合配置 ───
 
 export const DEFAULT_DREAM_CONFIG: DreamConfig = {
-  sessionInterval: 3,
+  sessionInterval: 5,
   fileCountThreshold: 10,
   maxIndexLines: 200,
   maxIndexBytes: 25000,

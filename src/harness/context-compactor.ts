@@ -34,10 +34,10 @@ export interface CompactionConfig {
 
 const DEFAULT_CONFIG: CompactionConfig = {
   threshold: 40,
-  tokenThreshold: 80000,
-  keepRecent: 10,
+  tokenThreshold: 60000,
+  keepRecent: 15,
   maxToolResultLength: 3000,
-  enableLLMSummary: false,
+  enableLLMSummary: true,
 };
 
 /**

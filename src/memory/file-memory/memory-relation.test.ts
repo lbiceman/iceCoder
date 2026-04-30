@@ -37,6 +37,7 @@ function makeHeader(overrides: Partial<MemoryHeader> = {}): MemoryHeader {
     source: 'llm_extract',
     contentPreview: '',
     relatedTo: [],
+    eventDateMs: 0,
     ...overrides,
   };
 }
