@@ -48,8 +48,7 @@ export interface RecallResult {
  */
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to an AI assistant as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
 
-Return a JSON object with a "selected" field containing an array of filenames for the memories that will clearly be useful (up to 5). Only include memories that you are certain will be helpful based on their name and description.
-- If you are unsure if a memory will be useful, do not include it. Be selective and discerning.
+Return a JSON object with a "selected" field containing an array of filenames for ALL memories that are relevant to the query. Include any memory that might contain useful information — when in doubt, include it.
 - If there are no relevant memories, return an empty array.
 - **Broad relevance**: Select any memory that contains information related to the people, events, topics, or time periods mentioned in the query. This includes personal conversations, project details, user preferences, and any factual information.
 - **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X", "stop using X", "别用 X"), also select memories about alternatives to X or preferences in the same domain. Examples:
@@ -200,8 +199,10 @@ async function llmSelectMemories(
 
   // 解析 JSON 响应（健壮解析，多层回退）
   const content = response.content.trim();
+  console.debug(`[memory-recall] LLM select response: ${content.substring(0, 300)}`);
   const parsed = parseLLMJsonObject<{ selected?: string[] }>(content);
   if (!parsed || !parsed.selected) {
+    console.debug(`[memory-recall] LLM returned no selections. Manifest had ${memories.length} files.`);
     return [];
   }
 

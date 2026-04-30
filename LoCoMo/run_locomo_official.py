@@ -382,12 +382,11 @@ MEMORY_DIR = SCRIPT_DIR.parent / "data" / "memory-files"
 def inject_conversations(host: str, port: int, sample: dict,
                          batch_size: int = 0) -> int:
     """
-    Inject conversations by extracting structured summaries via LLM,
-    writing ONE memory file per session.
+    Inject conversations by extracting individual facts via LLM,
+    writing ONE memory file per fact (small file strategy).
 
-    Flow: conversation → LLM extraction → one structured memory file per session.
-    This keeps file count low (= number of sessions) so top-K recall
-    can cover most or all sessions.
+    Each fact gets its own file with a specific name and description,
+    making LLM recall highly precise — the description IS the fact.
 
     Returns total number of memory files written.
     """
@@ -402,7 +401,7 @@ def inject_conversations(host: str, port: int, sample: dict,
     extract_cfg = get_judge_config()
 
     logger.info(f"  Injecting {len(sessions)} sessions, {total_turns} turns "
-                f"(LLM extraction mode, 1 file/session, model={extract_cfg['model']})")
+                f"(LLM extraction mode, 1 file/fact, model={extract_cfg['model']})")
 
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     index_lines = ["# 记忆索引\n"]
@@ -425,8 +424,8 @@ def inject_conversations(host: str, port: int, sample: dict,
 
         transcript = "\n".join(lines)
 
-        # Extract structured summary via LLM (returns markdown text)
-        summary = extract_memories_from_session(
+        # Extract individual facts via LLM (returns list of dicts)
+        facts = extract_memories_from_session(
             transcript=transcript,
             datetime_str=dt_str,
             speaker_a=speaker_a,
@@ -434,48 +433,49 @@ def inject_conversations(host: str, port: int, sample: dict,
             cfg=extract_cfg,
         )
 
-        if not summary:
-            logger.warning(f"    No summary extracted from {sess_key}")
+        if not facts:
+            logger.warning(f"    No facts extracted from {sess_key}")
             continue
 
-        bullet_count = summary.count("\n-")
-        logger.info(f"    {sess_key}: extracted ~{bullet_count} facts")
+        logger.info(f"    {sess_key}: extracted {len(facts)} facts")
 
         now_iso = datetime.now(tz=__import__('datetime').timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         sess_num = sess_key.split("_")[1]
 
-        # One file per session
-        filename = f"locomo_{sample_id}_session_{sess_num}.md"
-        description = (f"Structured summary of {sample_id} session {sess_num} "
-                       f"({speaker_a} and {speaker_b})")
-        if dt_str:
-            description += f" at {dt_str}"
+        # Write each fact as a separate small file
+        for fi, fact in enumerate(facts):
+            name = fact.get("name", f"{sample_id} s{sess_num} fact {fi+1}")
+            description = fact.get("description", name)
+            content_body = fact.get("content", description)
+            tags_list = fact.get("tags", [])
+            if isinstance(tags_list, list):
+                tags_str = ", ".join(str(t) for t in tags_list)
+            else:
+                tags_str = str(tags_list)
 
-        file_content = f"""---
-name: {sample_id} session {sess_num} summary
+            # Safe filename
+            safe_name = re.sub(r"[^\w\s-]", "", name.lower())
+            safe_name = re.sub(r"\s+", "_", safe_name.strip())[:40]
+            filename = f"locomo_{sample_id}_s{sess_num}_{fi:02d}_{safe_name}.md"
+
+            file_content = f"""---
+name: {name}
 description: {description}
-type: session_summary
+type: reference
 source: locomo_eval_llm
 confidence: 0.9
-tags: {sample_id}, session_{sess_num}, {speaker_a}, {speaker_b}
+tags: {tags_str}
 createdAt: {now_iso}
 recallCount: 0
 ---
 
-# {sample_id} — Session {sess_num}
-**Participants**: {speaker_a} and {speaker_b}
-**Time**: {dt_str or 'unknown'}
-
-{summary}
-
----
-*Extracted from {sample_id} {sess_key} — LoCoMo evaluation*
+{content_body}
 """
-        filepath = MEMORY_DIR / filename
-        filepath.write_text(file_content, encoding="utf-8")
-        file_count += 1
+            filepath = MEMORY_DIR / filename
+            filepath.write_text(file_content, encoding="utf-8")
+            file_count += 1
 
-        index_lines.append(f"- [{sample_id} session {sess_num}]({filename}) — {description}\n")
+            index_lines.append(f"- [{name}]({filename}) — {description}\n")
 
     pbar.close()
 

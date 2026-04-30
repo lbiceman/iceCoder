@@ -450,9 +450,9 @@ export class HarnessMemoryIntegration {
     }
 
     const recallCfg = getRecallConfig();
-    // 二级召回：粗召回 4x，精排后取 maxResults；精排失败时 fallback 到 2x
+    // 二级召回：粗召回 6x，精排后取 maxResults；精排失败时 fallback 到 2x
     const finalK = recallCfg.maxResults || MEMORY_MAX_RELEVANT;
-    const coarseK = finalK * 4;
+    const coarseK = finalK * 6;
     const fallbackK = finalK * 2;
 
     try {
@@ -530,7 +530,10 @@ export class HarnessMemoryIntegration {
 
     const rerankPrompt = `User query: "${query}"
 
-Here are ${candidates.length} memory files. Select the ${topK} most relevant ones for answering the query.
+Here are ${candidates.length} memory files. Select ALL that are relevant to answering the query (typically 3-${topK}, depending on query complexity).
+- Simple factual questions → select fewer (2-5)
+- Questions requiring multiple facts or time ranges → select more (5-${topK})
+- Maximum ${topK} selections
 Return ONLY a JSON object: {"selected": [1, 3, 7, ...]} with the numbers of your selections.
 
 ${candidateList}`;

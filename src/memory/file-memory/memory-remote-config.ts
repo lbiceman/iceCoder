@@ -73,7 +73,7 @@ const DEFAULT_DYNAMIC_CONFIG: MemoryDynamicConfig = {
     enabled: true,
   },
   recall: {
-    maxResults: 5,
+    maxResults: 15,
   },
   sessionMemory: {
     enabled: true,

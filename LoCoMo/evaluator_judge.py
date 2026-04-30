@@ -240,23 +240,22 @@ def judge_adversarial(question: str, response: str,
 # Memory Extraction via LLM
 # ---------------------------------------------------------------------------
 
-EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and produce a comprehensive structured summary.
+EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and extract individual facts as separate memory items.
 
 Rules:
-1. Extract ALL important facts, events, preferences, relationships, and temporal information.
-2. Convert relative time references ("yesterday", "last week") to absolute dates using the conversation date.
+1. Each memory item must be ONE self-contained fact that can be understood without the original conversation.
+2. Convert relative time references to absolute dates using the conversation date:
    - "yesterday" on 8 May 2023 → "7 May 2023"
    - "last year" on 8 May 2023 → "2022"
    - "next Monday" on 8 May 2023 → "15 May 2023"
    - "two weeks ago" on 8 May 2023 → "24 April 2023"
-3. For EVERY event or fact, explicitly state WHEN it happened or will happen with an absolute date.
-4. Include WHO, WHAT, WHEN, WHERE details explicitly for every fact.
-5. Preserve exact names, dates, numbers, and specific details — never paraphrase numbers or dates.
-6. For preferences or opinions, note WHO holds the preference.
-7. Use bullet points for each distinct fact.
-8. Group related facts under topic headers.
-9. Add a dedicated "## Timeline" section listing all events in chronological order with exact dates.
-10. Return ONLY the structured summary text, no JSON, no code blocks."""
+3. For EVERY fact, explicitly state WHEN it happened with an absolute date.
+4. Include WHO, WHAT, WHEN, WHERE details explicitly.
+5. Preserve exact names, dates, numbers — never paraphrase.
+6. Separate DISTINCT facts into SEPARATE items. Do NOT merge unrelated information.
+7. For preferences or opinions, note WHO holds the preference.
+8. Return a JSON array of objects, each with: "name", "description", "content", "tags"
+9. Return ONLY the JSON array, no other text, no code blocks."""
 
 EXTRACT_USER_TEMPLATE = """Conversation date/time: {datetime}
 Participants: {speaker_a} and {speaker_b}
@@ -264,19 +263,14 @@ Participants: {speaker_a} and {speaker_b}
 Conversation:
 {transcript}
 
-Create a comprehensive structured summary of ALL facts from this conversation.
-Format as a bullet-point list grouped by topic. Each bullet must be a self-contained fact with specific details (who, what, when, where).
-Example format:
+Extract ALL important facts, events, preferences, and relationships as SEPARATE items.
+Return a JSON array where each item has:
+- "name": short descriptive title (e.g., "Caroline attended LGBTQ support group on 7 May 2023")
+- "description": one-sentence summary with key details
+- "content": full description with all specifics (who, what, when, where)
+- "tags": array of relevant tags (people names, topics, exact dates)
 
-## Events
-- Caroline attended the LGBTQ support group on 7 May 2023 and felt welcomed.
-- Melanie plans to go swimming with her kids on 8 May 2023.
-
-## Preferences & Opinions
-- Caroline is considering a career in counseling or mental health.
-
-## Relationships
-- Caroline and Melanie are close friends who discuss personal matters."""
+The "name" and "description" fields are critical — they will be used to match this memory to future queries. Make them specific and searchable."""
 
 
 def extract_memories_from_session(
@@ -285,10 +279,10 @@ def extract_memories_from_session(
     speaker_a: str,
     speaker_b: str,
     cfg: Optional[dict] = None,
-) -> str:
+) -> list:
     """
-    Use LLM to extract a structured summary from a conversation session.
-    Returns a single markdown text with all facts as bullet points.
+    Use LLM to extract individual fact items from a conversation session.
+    Returns a list of dicts with name, description, content, tags.
     """
     if cfg is None:
         cfg = _get_config()
@@ -329,15 +323,25 @@ def extract_memories_from_session(
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"].strip()
-            return content
+
+            # Parse JSON array
+            if content.startswith("```"):
+                content = re.sub(r"^```(?:json)?\s*", "", content)
+                content = re.sub(r"\s*```$", "", content)
+
+            items = json.loads(content)
+            if isinstance(items, list):
+                return items
+            logger.warning(f"Extraction returned non-list: {type(items)}")
+            return []
 
         except requests.RequestException as e:
             logger.warning(f"Extraction API attempt {attempt+1} failed: {e}")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
-        except (KeyError, IndexError) as e:
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.warning(f"Extraction parse error: {e}")
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_DELAY)
 
-    return ""
+    return []
