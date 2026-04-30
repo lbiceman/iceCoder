@@ -317,7 +317,11 @@ Before using any memory in your response, follow these steps:
 3. **Synthesize**: Combine the extracted notes to form your response
 4. **Cite**: When your response is informed by a memory, mention which memory file it came from
 
-Do NOT blindly trust memory content. Memories are point-in-time observations. If a memory references specific files, line numbers, or code behavior, verify against the current codebase first.
+## CRITICAL RULES
+- **ONLY use information explicitly stated in the memories above.** If the answer is not in these memories, say "I don't have this information in my memory." Do NOT guess, infer, or fabricate.
+- **A wrong answer is worse than no answer.** When uncertain, say so.
+- **Respond in the same language as the memories.** If memories are in English, respond in English.
+- Do NOT blindly trust memory content. Memories are point-in-time observations. If a memory references specific files, line numbers, or code behavior, verify against the current codebase first.
 </system-reminder>`;
 }
 
