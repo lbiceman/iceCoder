@@ -637,17 +637,24 @@ async function updateRecallMetadata(memories: MemoryHeader[]): Promise<void> {
       const newCount = (mem.recallCount || 0) + 1;
 
       // 更新或插入 recallCount 和 lastRecalledAt
+      // 定位 frontmatter 的结束标记（第二个 ---）
       let updated = content;
       if (updated.includes('recallCount:')) {
         updated = updated.replace(/recallCount:\s*\d+/, `recallCount: ${newCount}`);
       } else {
-        // 在 --- 结束标记前插入
-        updated = updated.replace(/^(---\s*$)/m, `recallCount: ${newCount}\n$1`);
+        // 在 frontmatter 结束标记前插入（匹配第二个 ---，即 frontmatter 结尾）
+        const fmEnd = updated.indexOf('---', updated.indexOf('---') + 3);
+        if (fmEnd > 0) {
+          updated = updated.slice(0, fmEnd) + `recallCount: ${newCount}\n` + updated.slice(fmEnd);
+        }
       }
       if (updated.includes('lastRecalledAt:')) {
         updated = updated.replace(/lastRecalledAt:\s*\S+/, `lastRecalledAt: ${now}`);
       } else {
-        updated = updated.replace(/^(---\s*$)/m, `lastRecalledAt: ${now}\n$1`);
+        const fmEnd = updated.indexOf('---', updated.indexOf('---') + 3);
+        if (fmEnd > 0) {
+          updated = updated.slice(0, fmEnd) + `lastRecalledAt: ${now}\n` + updated.slice(fmEnd);
+        }
       }
 
       if (updated !== content) {
