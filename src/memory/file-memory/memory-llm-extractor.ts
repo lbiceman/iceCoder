@@ -33,6 +33,18 @@ export interface LLMExtractionConfig {
 }
 
 /**
+ * 矛盾信息。
+ */
+export interface ContradictionInfo {
+  /** 新提取的记忆文件名 */
+  newFile: string;
+  /** 被矛盾的已有记忆文件名 */
+  contradictsFile: string;
+  /** 新记忆的简要描述（用于通知用户） */
+  newSummary: string;
+}
+
+/**
  * 提取结果。
  */
 export interface ExtractionResult {
@@ -44,6 +56,8 @@ export interface ExtractionResult {
   usedPromptCache: boolean;
   /** 提供商是否真正命中了 prompt cache（基于 API 返回的 cacheReadTokens） */
   cacheActuallyHit: boolean;
+  /** 检测到的矛盾列表（需要用户确认后才更新旧记忆） */
+  contradictions: ContradictionInfo[];
 }
 
 /**
@@ -71,6 +85,14 @@ Pay special attention to implicit user habits revealed by the conversation:
 - Debugging solutions — the fix is in the code
 - Tool call details, system prompts, ephemeral task state
 
+## Contradiction detection / 矛盾检测
+When extracting, check if the new fact CONTRADICTS an existing memory:
+- If the user corrects a previously remembered fact (e.g., "I actually use Python now, not Java"), this is a contradiction
+- If the conversation reveals that a previous memory is outdated or wrong, this is a contradiction
+- Mark contradicted memories with the "contradicts" field pointing to the existing file
+
+**Important**: Contradictions require user confirmation before updating. Only mark a contradiction when the user EXPLICITLY states the old information is wrong — not when you infer it might be outdated.
+
 ## Output format
 Return a JSON array of memories to save. Each memory object has:
 - "filename": string (e.g., "user_role.md", "feedback_testing.md", "user_preferred_languages.md")
@@ -80,6 +102,7 @@ Return a JSON array of memories to save. Each memory object has:
 - "content": string (the memory content — include ALL relevant details, not summaries)
 - "relatedTo": string[] (filenames of existing memories that are semantically related to this one. Only reference files from the existing memory list. Empty array if no relations.)
 - "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
+- "contradicts": string | null (filename of existing memory that this new fact contradicts. null if no contradiction)
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.
@@ -209,13 +232,14 @@ export class LLMMemoryExtractor {
       const cacheActuallyHit = (response.usage?.cacheReadTokens ?? 0) > 0;
 
       const memories = this.parseExtractionResponse(response.content);
-      const writtenPaths = await this.saveMemories(memories, memoryDir);
+      const { writtenPaths, contradictions } = await this.saveMemories(memories, memoryDir);
 
       return {
         writtenPaths,
         duration: Date.now() - startTime,
         usedPromptCache,
         cacheActuallyHit,
+        contradictions,
       };
     } catch (error) {
       console.error('[LLMMemoryExtractor] Extraction failed:', error);
@@ -224,6 +248,7 @@ export class LLMMemoryExtractor {
         duration: Date.now() - startTime,
         usedPromptCache,
         cacheActuallyHit: false,
+        contradictions: [],
       };
     }
   }
@@ -272,6 +297,12 @@ Each object must have: filename, type, name, description, content, tags (string[
     name: string;
     description: string;
     content: string;
+    tags?: string[];
+    confidence?: number;
+    source?: string;
+    relatedTo?: string[];
+    eventDate?: string | null;
+    contradicts?: string | null;
   }> {
     // 使用健壮的 JSON 解析器（多层回退策略）
     const parsed = parseLLMJsonArray<any[]>(content);
@@ -313,10 +344,12 @@ Each object must have: filename, type, name, description, content, tags (string[
       source?: string;
       relatedTo?: string[];
       eventDate?: string | null;
+      contradicts?: string | null;
     }>,
     memoryDir: string,
-  ): Promise<string[]> {
+  ): Promise<{ writtenPaths: string[]; contradictions: ContradictionInfo[] }> {
     const writtenPaths: string[] = [];
+    const contradictions: ContradictionInfo[] = [];
     const userMemoryDir = path.resolve(process.env.ICE_USER_MEMORY_DIR ?? 'data/user-memory');
 
     await fs.mkdir(memoryDir, { recursive: true });
@@ -378,6 +411,20 @@ Each object must have: filename, type, name, description, content, tags (string[
             filePath = duplicate.filePath;
             isUpdate = true;
           }
+        }
+
+        // 矛盾检测：LLM 标记了 contradicts 字段 → 记录但不覆盖，等用户确认
+        if (memory.contradicts) {
+          contradictions.push({
+            newFile: safeFilename,
+            contradictsFile: memory.contradicts,
+            newSummary: memory.description || memory.name,
+          });
+          console.log(
+            `[LLMMemoryExtractor] Contradiction detected: "${safeFilename}" contradicts "${memory.contradicts}" — deferring update`,
+          );
+          // 仍写入新记忆（作为候选），但不覆盖旧文件
+          // 旧文件的更新需要用户确认后由 Dream 或手动完成
         }
 
         const tags = memory.tags && memory.tags.length > 0 ? memory.tags.join(', ') : '';
@@ -446,7 +493,7 @@ ${memory.content}
       });
     }
 
-    return writtenPaths;
+    return { writtenPaths, contradictions };
   }
 
   /**

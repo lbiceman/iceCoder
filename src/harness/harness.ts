@@ -749,7 +749,16 @@ export class Harness {
   }
 
   /**
-   * 如果需要，执行上下文压缩。
+   * 如果需要，执行上下文压缩（参考 claude-code 的压缩策略）。
+   *
+   * 两条路径：
+   * 1. 会话记忆可用 → compactWithSessionMemory（0 LLM 成本）
+   * 2. 会话记忆不可用 → compact（1 次 LLM 调用）
+   *
+   * 压缩后统一恢复：
+   * - 重新注入最近读过的文件内容
+   * - 保留最近注入的记忆消息
+   * - 注入恢复指引
    */
   private async maybeCompact(
     messages: UnifiedMessage[],
@@ -757,51 +766,67 @@ export class Harness {
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
   ): Promise<void> {
-    if (this.contextCompactor.needsCompaction(messages)) {
-      const before = messages.length;
+    if (!this.contextCompactor.needsCompaction(messages)) return;
 
-      // 压缩前获取会话笔记（保持连续性）
-      const sessionNotes = await this.memoryIntegration.getSessionMemoryForCompact();
+    const before = messages.length;
 
-      // 保存最近注入的记忆内容（压缩后可能丢失）
-      const recentMemoryMessages: UnifiedMessage[] = [];
-      for (let i = messages.length - 1; i >= 0 && recentMemoryMessages.length < 3; i--) {
-        const rawContent = messages[i].content;
-        const content: string = typeof rawContent === 'string' ? rawContent : '';
-        if (content.startsWith('<system-reminder>') && content.includes('Recalled Memories')) {
-          recentMemoryMessages.unshift(messages[i]);
-          break; // 只保留最近一条记忆注入
-        }
+    // 压缩前获取会话笔记
+    const sessionNotes = await this.memoryIntegration.getSessionMemoryForCompact();
+
+    // 压缩前保存最近注入的记忆消息
+    const recentMemoryMessages: UnifiedMessage[] = [];
+    for (let i = messages.length - 1; i >= 0 && recentMemoryMessages.length < 3; i--) {
+      const rawContent = messages[i].content;
+      const content: string = typeof rawContent === 'string' ? rawContent : '';
+      if (content.startsWith('<system-reminder>') && content.includes('Recalled Memories')) {
+        recentMemoryMessages.unshift(messages[i]);
+        break;
       }
+    }
 
-      const compacted = await this.contextCompactor.compact(messages, chatFn);
+    // 压缩前提取最近文件内容（压缩后会丢失）
+    const recentFileContents = this.contextCompactor.extractRecentFileContents(messages);
 
+    // ── 压缩 ──
+    if (sessionNotes) {
+      // 会话记忆路径：会话记忆作为摘要，0 LLM 成本
+      const compacted = this.contextCompactor.compactWithSessionMemory(messages, sessionNotes);
       messages.length = 0;
       messages.push(...compacted);
-
-      // 压缩后恢复记忆注入（如果被压缩掉了）
-      if (recentMemoryMessages.length > 0) {
-        const hasMemoryInCompacted = messages.some(m => {
-          const c = typeof m.content === 'string' ? m.content : '';
-          return c.startsWith('<system-reminder>') && c.includes('Recalled Memories');
-        });
-        if (!hasMemoryInCompacted) {
-          // 记忆被压缩掉了，重新注入
-          messages.splice(messages.length - Math.min(this.contextCompactor.getConfig().keepRecent, messages.length), 0, ...recentMemoryMessages);
-        }
-      }
-
-      // 压缩后注入会话笔记（帮助模型恢复上下文）
-      if (sessionNotes) {
-        messages.push({
-          role: 'user',
-          content: `<session-notes>\n以下是本次会话的结构化笔记，帮助你恢复上下文：\n\n${sessionNotes}\n</session-notes>`,
-        });
-      }
-
-      logger.compaction(before, messages.length);
-      onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
+    } else {
+      // LLM 压缩路径：五层递进，保留一次 LLM 调用
+      const compacted = await this.contextCompactor.compact(messages, chatFn);
+      messages.length = 0;
+      messages.push(...compacted);
     }
+
+    // ── 压缩后统一恢复 ──
+
+    // 1. 重新注入最近记忆消息（如果被压缩掉了）
+    if (recentMemoryMessages.length > 0) {
+      const hasMemoryInCompacted = messages.some(m => {
+        const c = typeof m.content === 'string' ? m.content : '';
+        return c.startsWith('<system-reminder>') && c.includes('Recalled Memories');
+      });
+      if (!hasMemoryInCompacted) {
+        messages.splice(
+          messages.length - Math.min(this.contextCompactor.getConfig().keepRecent, messages.length),
+          0,
+          ...recentMemoryMessages,
+        );
+      }
+    }
+
+    // 2. 重新注入最近文件内容
+    if (recentFileContents.length > 0) {
+      messages.push(...recentFileContents);
+    }
+
+    // 3. 注入恢复指引
+    messages.push(this.contextCompactor.buildRecoveryPrompt(!!sessionNotes));
+
+    logger.compaction(before, messages.length);
+    onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
   }
 
   /**
