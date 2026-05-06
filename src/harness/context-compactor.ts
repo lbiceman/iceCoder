@@ -1,15 +1,22 @@
 /**
- * 上下文压缩器 — 五层递进策略。
+ * 上下文压缩器 — 参考 claude-code 的分层策略。
  *
- * 本项目实现五层压缩：
- * 1. snip — 裁剪历史中的冗余段落（重复的 system-reminder、context-summary）
- * 2. microcompact — 对旧工具调用只保留名称+结果状态，删除参数细节和完整输出
- * 3. toolResultTrim — 裁剪超长的工具结果
- * 4. structuralExtract — 从被删消息中提取结构化摘要（不调 LLM）
- * 5. llmSummarize — 用 LLM 对被删消息生成摘要（可选）
+ * 两条压缩路径：
+ * - 会话记忆路径（compactWithSessionMemory）：0 LLM 成本，会话记忆作为摘要
+ * - LLM 路径（compact）：五层递进，可选 LLM 精炼
  *
- * 阈值判断使用估算 token 数，区分中英文字符。
- * 压缩时保证消息对完整性：不会孤立 assistant 的 tool_calls 或 tool 结果。
+ * 五层压缩：
+ * 1. snip — 裁剪冗余段落（重复的 system-reminder、context-summary）
+ * 2. microcompact — 压缩旧工具调用细节（文件操作结果保留完整）
+ * 3. toolResultTrim — 裁剪超长工具结果（文件操作上限 15K 字符）
+ * 4. structuralExtract — 从被删消息提取结构化摘要（不调 LLM）
+ * 5. llmSummarize — 用 LLM 精炼摘要（可选，会话记忆路径跳过）
+ *
+ * 压缩后恢复：
+ * - extractRecentFileContents：重新注入最近读过的文件内容
+ * - buildRecoveryPrompt：注入恢复指引（"直接继续，不要重复"）
+ *
+ * 最近消息保留使用 token 预算（≥10K token, ≥5 条消息, ≤40K token）。
  */
 
 import type { UnifiedMessage } from '../llm/types.js';
@@ -24,20 +31,35 @@ export interface CompactionConfig {
   threshold: number;
   /** 触发压缩的估算 token 阈值（优先于 threshold） */
   tokenThreshold?: number;
-  /** 压缩后保留的最近消息数 */
+  /** 压缩后保留的最近消息数上限 */
   keepRecent: number;
+  /** 保留最近消息的最小 token 数（参考 claude-code: 10000） */
+  keepRecentMinTokens: number;
+  /** 保留最近消息的最大 token 数（参考 claude-code: 40000） */
+  keepRecentMaxTokens: number;
+  /** 保留最近消息的最小条数 */
+  keepRecentMinMessages: number;
   /** 单个工具结果的最大字符数 */
   maxToolResultLength: number;
   /** 是否启用 LLM 摘要（需要在 compact 时传入 chatFn） */
   enableLLMSummary?: boolean;
+  /** 重新注入最近文件内容的最大文件数 */
+  maxReinjectFiles: number;
+  /** 重新注入最近文件内容的总 token 预算 */
+  maxReinjectTokens: number;
 }
 
 const DEFAULT_CONFIG: CompactionConfig = {
   threshold: 40,
   tokenThreshold: 60000,
-  keepRecent: 15,
+  keepRecent: 40,
+  keepRecentMinTokens: 10000,
+  keepRecentMaxTokens: 40000,
+  keepRecentMinMessages: 5,
   maxToolResultLength: 3000,
   enableLLMSummary: true,
+  maxReinjectFiles: 5,
+  maxReinjectTokens: 50000,
 };
 
 /**
@@ -83,11 +105,139 @@ export class ContextCompactor {
   }
 
   /**
+   * 会话记忆压缩路径（参考 claude-code sessionMemoryCompact）。
+   *
+   * 会话记忆已在后台持续更新，直接作为压缩摘要，不需要额外 LLM 调用。
+   * 保留最近消息（token 预算），会话记忆作为摘要注入。
+   */
+  compactWithSessionMemory(
+    messages: UnifiedMessage[],
+    sessionNotes: string,
+  ): UnifiedMessage[] {
+    // 第一层：snip
+    let compacted = this.snip(messages);
+
+    // 第二层：microcompact（保留文件操作结果）
+    compacted = this.microcompact(compacted);
+
+    // 第三层：裁剪工具结果
+    compacted = this.trimToolResults(compacted);
+
+    // 分离消息（使用 token 预算）
+    const { systemMessages, droppedMessages, recentMessages } =
+      this.splitMessages(compacted);
+
+    if (droppedMessages.length === 0) return compacted;
+
+    // 用会话记忆作为摘要（替代 LLM 调用）
+    const summaryContent = [
+      '<context-summary>',
+      'This session is being continued from a previous conversation. Session notes below are the authoritative source for current session state.',
+      '',
+      '## Precedence rules',
+      '1. Current conversation > Session notes > Long-term memory',
+      '2. If session notes contradict long-term memory, trust session notes',
+      '3. If you detect a contradiction that matters, mention it to the user',
+      '',
+      sessionNotes,
+      '</context-summary>',
+    ].join('\n');
+
+    return [
+      ...systemMessages,
+      { role: 'user' as const, content: summaryContent },
+      ...recentMessages,
+    ];
+  }
+
+  /**
+   * 从消息历史中提取最近读取的文件内容。
+   *
+   * 压缩后重新注入，确保 LLM 不丢失已读的源码。
+   * 参考 claude-code 的 createPostCompactFileAttachments。
+   */
+  extractRecentFileContents(
+    messages: UnifiedMessage[],
+    maxFiles?: number,
+    maxTotalTokens?: number,
+  ): UnifiedMessage[] {
+    const fileLimit = maxFiles ?? this.config.maxReinjectFiles;
+    const tokenLimit = maxTotalTokens ?? this.config.maxReinjectTokens;
+
+    // 构建 toolCallId → toolName 映射
+    const toolCallIdToName = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          toolCallIdToName.set(tc.id, tc.name);
+        }
+      }
+    }
+
+    // 从后往前找最近的 read_file 结果
+    const fileResults: { path: string; content: string }[] = [];
+    const seenPaths = new Set<string>();
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role !== 'tool' || !msg.toolCallId) continue;
+      if (toolCallIdToName.get(msg.toolCallId) !== 'read_file') continue;
+      if (typeof msg.content !== 'string' || !msg.content.trim()) continue;
+
+      // 从对应的 assistant 消息中提取文件路径
+      const filePath = this.findToolArg(messages, msg.toolCallId, 'path');
+      if (!filePath || seenPaths.has(filePath)) continue;
+
+      seenPaths.add(filePath);
+      fileResults.unshift({ path: filePath, content: msg.content });
+
+      if (fileResults.length >= fileLimit) break;
+    }
+
+    if (fileResults.length === 0) return [];
+
+    // 格式化为 user 消息，受 token 预算限制
+    const parts: string[] = ['<recent-file-contents>'];
+    let totalChars = 0;
+    const charLimit = tokenLimit * 4; // 粗略估算 1 token ≈ 4 字符
+
+    for (const { path, content } of fileResults) {
+      const entry = `\n### ${path}\n\`\`\`\n${content}\n\`\`\``;
+      if (totalChars + entry.length > charLimit) break;
+      parts.push(entry);
+      totalChars += entry.length;
+    }
+
+    parts.push('</recent-file-contents>');
+    return [{ role: 'user' as const, content: parts.join('\n') }];
+  }
+
+  /**
+   * 构建压缩后的恢复指引消息。
+   * 参考 claude-code 的 "Continue directly, don't recap" 模式。
+   */
+  buildRecoveryPrompt(hasSessionNotes: boolean): UnifiedMessage {
+    const base = 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.';
+    const recentPreserved = hasSessionNotes
+      ? '\n\nRecent messages are preserved verbatim.'
+      : '';
+    const instruction = '\n\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.';
+
+    return {
+      role: 'user' as const,
+      content: `${base}${recentPreserved}${instruction}`,
+    };
+  }
+
+  /**
    * 执行五层递进压缩。
+   *
+   * 如果传入 sessionNotes，跳过第 5 层 LLM 调用，直接使用会话记忆作为摘要。
    */
   async compact(
     messages: UnifiedMessage[],
     chatFn?: ChatFunction,
+    sessionNotes?: string,
   ): Promise<UnifiedMessage[]> {
     // 第一层：snip — 裁剪冗余段落
     let compacted = this.snip(messages);
@@ -110,9 +260,11 @@ export class ContextCompactor {
     // 第四层：结构化摘要
     const structuralSummary = this.extractStructuralSummary(droppedMessages);
 
-    // 第五层：LLM 精炼
+    // 第五层：优先使用会话记忆，否则 LLM 精炼
     let finalSummary: string;
-    if (this.config.enableLLMSummary && chatFn) {
+    if (sessionNotes) {
+      finalSummary = sessionNotes;
+    } else if (this.config.enableLLMSummary && chatFn) {
       finalSummary = await this.llmSummarize(structuralSummary, droppedMessages, chatFn);
     } else {
       finalSummary = structuralSummary;
@@ -159,14 +311,30 @@ export class ContextCompactor {
    *
    * 对非最近 N 轮的工具调用，只保留工具名和结果状态，
    * 删除参数细节和完整输出。
+   *
+   * 例外：read_file / write_file / edit_file / append_file 的结果不压缩。
+   * 源码是编码 agent 的核心上下文，压缩后 LLM 会反复重新读取文件。
    */
   private microcompact(messages: UnifiedMessage[]): UnifiedMessage[] {
     const recentStart = Math.max(0, messages.length - this.config.keepRecent);
 
+    // 构建 toolCallId → toolName 映射，用于判断 tool 结果对应的工具类型
+    const toolCallIdToName = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          toolCallIdToName.set(tc.id, tc.name);
+        }
+      }
+    }
+
+    // 文件操作工具 — 结果保留完整内容（源码是编码 agent 的核心上下文）
+    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+
     return messages.map((msg, idx) => {
       if (idx >= recentStart) return msg;
 
-      // 压缩旧的 assistant tool_calls
+      // 压缩旧的 assistant tool_calls（保留工具名，清除参数）
       if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
         const toolNames = msg.toolCalls.map(tc => tc.name).join(', ');
         return {
@@ -176,8 +344,11 @@ export class ContextCompactor {
         };
       }
 
-      // 压缩旧的 tool 结果
+      // 压缩旧的 tool 结果（文件操作工具的结果不压缩）
       if (msg.role === 'tool' && typeof msg.content === 'string') {
+        const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
+        if (toolName && FILE_TOOLS.has(toolName)) return msg; // 保留完整内容
+
         const content = msg.content;
         const isError = content.startsWith('工具执行错误') || content.startsWith('工具调用被拒绝');
         const status = isError ? '失败' : '成功';
@@ -191,15 +362,36 @@ export class ContextCompactor {
 
   /**
    * 裁剪超长的工具结果。
+   *
+   * 文件操作工具的结果上限更高（maxToolResultLength * 5），
+   * 因为源码是编码 agent 的核心上下文。
    */
   trimToolResults(messages: UnifiedMessage[]): UnifiedMessage[] {
+    // 构建 toolCallId → toolName 映射
+    const toolCallIdToName = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          toolCallIdToName.set(tc.id, tc.name);
+        }
+      }
+    }
+
+    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+
     return messages.map(msg => {
       if (msg.role === 'tool' && typeof msg.content === 'string') {
-        if (msg.content.length > this.config.maxToolResultLength) {
+        const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
+        const isFileOp = toolName && FILE_TOOLS.has(toolName);
+        const limit = isFileOp
+          ? this.config.maxToolResultLength * 5  // 文件操作：15000 字符
+          : this.config.maxToolResultLength;      // 其他工具：3000 字符
+
+        if (msg.content.length > limit) {
           return {
             ...msg,
-            content: msg.content.substring(0, this.config.maxToolResultLength) +
-              `\n...[已截断，原始长度 ${msg.content.length} 字符]`,
+            content: msg.content.substring(0, limit) +
+              `\n...[truncated, original length: ${msg.content.length} chars]`,
           };
         }
       }
@@ -209,14 +401,30 @@ export class ContextCompactor {
 
   /**
    * 将消息分为三部分：system、要删除的、要保留的。
+   *
    * 保证消息对完整性：如果切割点落在 assistant(tool_calls) 和 tool 结果之间，
    * 向前调整切割点，把整个工具交互对保留在一起。
+   *
+   * 文件操作工具的结果（read_file 等）始终保留在 recent 中，
+   * 因为源码是编码 agent 的核心上下文。
    */
   private splitMessages(messages: UnifiedMessage[]): {
     systemMessages: UnifiedMessage[];
     droppedMessages: UnifiedMessage[];
     recentMessages: UnifiedMessage[];
   } {
+    // 构建文件操作的 toolCallId 集合
+    const fileToolCallIds = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file'].includes(tc.name)) {
+            fileToolCallIds.add(tc.id);
+          }
+        }
+      }
+    }
+
     const systemMessages: UnifiedMessage[] = [];
     let contentStart = 0;
 
@@ -226,8 +434,8 @@ export class ContextCompactor {
       contentStart = 1;
     }
 
-    // 计算初始切割点
-    let splitAt = Math.max(contentStart, messages.length - this.config.keepRecent);
+    // 计算初始切割点（token 预算优先，参考 claude-code: ≥10K token, ≥5 条消息, ≤40K token）
+    let splitAt = this.findSplitByTokenBudget(messages, contentStart);
 
     // 消息对完整性修正：
     // 如果 splitAt 处是 tool 消息，说明它的 assistant(tool_calls) 在前面，
@@ -251,6 +459,23 @@ export class ContextCompactor {
       }
     }
 
+    // 向前扩展切割点，确保文件操作的 assistant + tool 交互对不被拆分
+    while (splitAt > contentStart) {
+      const msg = messages[splitAt];
+      if (msg.role === 'tool' && msg.toolCallId && fileToolCallIds.has(msg.toolCallId)) {
+        splitAt--;
+        continue;
+      }
+      if (
+        msg.role === 'assistant' && msg.toolCalls &&
+        msg.toolCalls.some(tc => fileToolCallIds.has(tc.id))
+      ) {
+        splitAt--;
+        continue;
+      }
+      break;
+    }
+
     return {
       systemMessages,
       droppedMessages: messages.slice(contentStart, splitAt),
@@ -260,8 +485,22 @@ export class ContextCompactor {
 
   /**
    * 第四层：结构化摘要提取。
+   *
+   * 文件操作工具的结果给予更多摘要空间（保留 500 字符而非 80）。
    */
   private extractStructuralSummary(messages: UnifiedMessage[]): string {
+    // 构建 toolCallId → toolName 映射
+    const toolCallIdToName = new Map<string, string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          toolCallIdToName.set(tc.id, tc.name);
+        }
+      }
+    }
+
+    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+
     const lines: string[] = [];
     lines.push(`以下是之前 ${messages.length} 条对话的结构化摘要：`);
 
@@ -290,7 +529,11 @@ export class ContextCompactor {
         const content = typeof msg.content === 'string' ? msg.content : '';
         const isError = content.startsWith('工具执行错误') || content.startsWith('工具调用被拒绝') || content.startsWith('[失败]');
         const status = isError ? '❌' : '✅';
-        const truncated = content.length > 80 ? content.substring(0, 80) + '...' : content;
+
+        // 文件操作工具的结果保留更多内容（500 字符而非 80）
+        const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
+        const maxLen = (toolName && FILE_TOOLS.has(toolName)) ? 500 : 80;
+        const truncated = content.length > maxLen ? content.substring(0, maxLen) + '...' : content;
         lines.push(`  ${status} 结果: ${truncated}`);
       }
     }
@@ -310,7 +553,7 @@ export class ContextCompactor {
       const summarizeMessages: UnifiedMessage[] = [
         {
           role: 'system',
-          content: '你是一个上下文压缩助手。将以下对话摘要精炼为更简洁的版本，保留：1) 用户的核心意图 2) 关键的工具调用及其结果 3) 重要的决策点和发现。删除重复信息和不重要的细节。用中文输出，控制在 500 字以内。',
+          content: 'You are a context compaction assistant. Refine the following conversation summary into a more concise version. Preserve: 1) user core intent 2) key tool calls and their results — especially file contents (read_file results contain source code that the agent needs) 3) important decisions and findings. Remove duplicates and unimportant details. Keep under 500 words.',
         },
         {
           role: 'user',
@@ -327,5 +570,63 @@ export class ContextCompactor {
     }
 
     return structuralSummary;
+  }
+
+  /**
+   * 根据 token 预算计算切割点。
+   *
+   * 从消息末尾向前扫描，累计 token 直到满足以下条件之一：
+   * 1. 累计 token ≥ keepRecentMinTokens 且消息数 ≥ keepRecentMinMessages
+   * 2. 累计 token ≥ keepRecentMaxTokens（硬上限）
+   * 3. 到达消息列表开头
+   *
+   * 同时受 keepRecent（消息数上限）约束。
+   */
+  private findSplitByTokenBudget(messages: UnifiedMessage[], contentStart: number): number {
+    let tokenCount = 0;
+    let messageCount = 0;
+    const minTokens = this.config.keepRecentMinTokens;
+    const maxTokens = this.config.keepRecentMaxTokens;
+    const minMessages = this.config.keepRecentMinMessages;
+    const maxMessages = this.config.keepRecent;
+
+    // 从末尾向前扫描
+    for (let i = messages.length - 1; i >= contentStart; i--) {
+      const msgTokens = estimateTokens([messages[i]]);
+      tokenCount += msgTokens;
+      messageCount++;
+
+      // 硬上限：token 超过最大值
+      if (tokenCount >= maxTokens) {
+        return i;
+      }
+
+      // 消息数上限
+      if (messageCount >= maxMessages) {
+        return i;
+      }
+
+      // 满足最小要求后可以停止
+      if (tokenCount >= minTokens && messageCount >= minMessages) {
+        return i;
+      }
+    }
+
+    return contentStart;
+  }
+
+  /**
+   * 从消息历史中查找指定 toolCallId 的工具调用参数。
+   */
+  private findToolArg(messages: UnifiedMessage[], toolCallId: string, argName: string): string | undefined {
+    for (const msg of messages) {
+      if (msg.role !== 'assistant' || !msg.toolCalls) continue;
+      for (const tc of msg.toolCalls) {
+        if (tc.id === toolCallId) {
+          return tc.arguments?.[argName] != null ? String(tc.arguments[argName]) : undefined;
+        }
+      }
+    }
+    return undefined;
   }
 }

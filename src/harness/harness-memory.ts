@@ -293,26 +293,24 @@ ${json}
 \`\`\`
 ${entityHint}
 
-## How to use these memories (Chain-of-Note)
+## How to use these memories
 
-Before using any memory in your response, follow these steps:
-1. **Extract**: For each memory item above, identify what information is relevant to the current query
-2. **Assess freshness**: Memories marked "stale" or "expired" may be outdated — verify against current code/state before citing as fact
-3. **Synthesize**: Combine the extracted notes to form your response
-4. **Cite**: When your response is informed by a memory, mention which memory file it came from
+1. **Extract**: Identify what information is relevant to the current query
+2. **Use fresh memories directly**. Only verify "stale" or "expired" memories against current code.
+3. **Do NOT re-read files you have already read** in this conversation — use what you already know.
+4. **Cite**: When informed by a memory, mention which file it came from.
 
-## Answering strategy
-- **Factual recall** (who/what/when/where): Use only information explicitly written in the memories. If uncertain, state your uncertainty level
-- **Reasoned judgment** (would/could/likely/might): Reason from known information in the memories, but mark your reasoning. E.g., "Based on [memory X], it is likely that... because..."
-- **Open-ended questions** (opinion/analysis/synthesis): Synthesize across multiple memories, citing each source
-- **Hard rule**: Do NOT fabricate specific names, dates, or numbers that are not in the memories. If memories contain relevant but imprecise information, give your best inference and state your confidence level
-- **List completeness**: If memories contain a list of items (games, tricks, countries, books, names), you MUST include ALL items in your answer. A partial list is worse than admitting uncertainty. If you can only find some items, list what you have AND explicitly state which items you could not find.
+## Precedence / 优先级
 
-## CRITICAL RULES — STRICTLY ENFORCE
-- **You MUST respond in the same language as the question.** If the question is in English, your response must be entirely in English. If the question is in Chinese, your response must be entirely in Chinese. This is one of the highest priority rules.
-- Do NOT blindly trust memory content. Memories are point-in-time observations. Verify stale/expired memories against current code state.
-- Partially correct is better than giving up entirely. If you know part of the answer, give what you are sure about and clearly mark what is uncertain.
+When information conflicts between sources, use this order (highest wins):
+1. Current conversation (what the user just said or confirmed)
+2. Session notes (current session state — most recent work)
+3. Recalled long-term memories (cross-session knowledge)
+
+If session notes contradict a long-term memory, trust session notes. If you detect a contradiction that the user should know about, mention it explicitly.
+
 - If these memories are irrelevant to the current task, ignore them and proceed normally.
+- Respond in the same language as the user's message.
 </system-reminder>`;
 }
 
@@ -859,6 +857,7 @@ ${candidateList}`;
       let usedPromptCache = false;
       let cacheActuallyHit = false;
       const allWrittenPaths: string[] = [];
+      const allContradictions: Array<{ newFile: string; contradictsFile: string; newSummary: string }> = [];
 
       for (const chunk of chunks) {
         if (chunk.length === 0) continue;
@@ -875,6 +874,7 @@ ${candidateList}`;
         if (result.usedPromptCache) usedPromptCache = true;
         if (result.cacheActuallyHit) cacheActuallyHit = true;
         allWrittenPaths.push(...result.writtenPaths);
+        allContradictions.push(...result.contradictions);
       }
 
       // 推进 cursor
@@ -902,6 +902,16 @@ ${candidateList}`;
           .map(f => f.replace(/^(user|feedback|project|reference)_/, '').replace(/_/g, ' '))
           .join(', ');
         this._extractionNotices.push(`💾 已记住：${summary}`);
+      }
+
+      // 矛盾通知：告知用户哪些旧记忆与新信息冲突，需要确认
+      if (allContradictions.length > 0) {
+        for (const c of allContradictions) {
+          const oldName = c.contradictsFile.replace(/\.md$/, '').replace(/_/g, ' ');
+          this._extractionNotices.push(
+            `⚠️ 检测到矛盾：新信息 "${c.newSummary}" 与已有记忆 "${oldName}" 冲突。旧记忆已保留，新信息已记录为候选。如需更新旧记忆请确认。`,
+          );
+        }
       }
     } catch (err) {
       console.debug('[harness-memory] extraction failed:', err instanceof Error ? err.message : err);
