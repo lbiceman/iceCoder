@@ -53,17 +53,6 @@ const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
 const DEFAULT_COMPACTION_THRESHOLD = 40;
 const DEFAULT_COMPACTION_KEEP_RECENT = 15;
 
-// ─── 任务状态标记解析 ───
-type TaskStatus = 'complete' | 'incomplete' | 'unknown';
-
-/** 从模型回复中提取 <status>complete|incomplete</status> 标记 */
-function parseTaskStatus(content: string | undefined): TaskStatus {
-  if (!content) return 'unknown';
-  const match = content.match(/<status>\s*(complete|incomplete)\s*<\/status>/i);
-  if (!match) return 'unknown';
-  return match[1].toLowerCase() as TaskStatus;
-}
-
 /** 判断错误是否可重试（网络超时、限流、服务端错误） */
 function isRetryableError(error: unknown): boolean {
   if (error instanceof Error) {
@@ -87,7 +76,6 @@ type Transition =
   | 'tool_calls'
   | 'max_output_tokens_recovery'
   | 'stop_hook_continue'
-  | 'status_incomplete_continue'
   | 'llm_error_retry'
   | 'compaction_retry';
 
@@ -409,35 +397,8 @@ export class Harness {
           };
         }
 
-        // ── 5b. 基于 <status> 标记的继续判断 ──
-        // 模型在回复末尾声明任务状态：complete / incomplete / unknown
-        const taskStatus = parseTaskStatus(response.content);
-
-        if (taskStatus === 'incomplete') {
-          // 模型明确说任务未完成 → 检查预算是否允许继续
-          const budgetOk = !this.tokenBudgetTracker || this.tokenBudgetTracker.shouldContinue();
-          if (budgetOk) {
-            console.log(`[harness] 模型声明 incomplete，继续执行`);
-            // 将模型的部分回复加入对话
-            if (response.content) {
-              msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
-            }
-            msgs.push({
-              role: 'user',
-              content: '继续执行未完成的任务。不要重复已完成的内容。',
-            });
-            if (this.tokenBudgetTracker) {
-              this.tokenBudgetTracker.recordContinuation();
-            }
-            state.transition = 'status_incomplete_continue';
-            continue;
-          }
-          console.log(`[harness] 模型声明 incomplete 但预算不足，停止`);
-        }
-
-        // ── 5c. 停止钩子（兜底） ──
-        // 仅在 status 标记缺失时作为回退
-        if (taskStatus === 'unknown' && this.stopHookManager.count > 0) {
+        // ── 5b. 停止钩子（兜底） ──
+        if (this.stopHookManager.count > 0) {
           const hookResult = await this.stopHookManager.execute(msgs, response.content);
           if (hookResult.shouldContinue && hookResult.message) {
             console.log(`[harness] 停止钩子 "${hookResult.hookName}" 要求继续`);

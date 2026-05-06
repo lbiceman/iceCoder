@@ -1,10 +1,13 @@
 /**
  * 多级文件记忆加载器。
  * 
- * 三级加载机制：
- * 1. 项目级记忆 (project-level): 项目根目录下的记忆
- * 2. 用户级记忆 (user-level): 用户特定目录下的记忆
- * 3. 目录级记忆 (directory-level): 当前工作目录下的记忆
+ * 三级加载机制（按优先级从低到高排列，越靠后优先级越高）：
+ * 1. 用户级记忆 (user-level): 用户特定目录下的个人记忆（最低优先级）
+ * 2. 项目级记忆 (project-level): 项目根目录下的共享记忆
+ * 3. 目录级记忆 (directory-level): 当前工作目录下的项目私有配置（最高优先级）
+ *
+ * 参考 claude-code 的优先级设计：越靠后的文件模型注意力越高。
+ * 用户级 → 项目共享 → 项目私有（最后加载 = 最高优先级）。
  */
 
 import { promises as fs } from 'node:fs';
@@ -49,12 +52,15 @@ export class MultiLevelMemoryLoader {
   }
 
   /**
-   * 加载所有级别的记忆
+   * 加载所有级别的记忆。
+   *
+   * 顺序：USER → PROJECT → DIRECTORY（越靠后优先级越高）。
+   * 参考 claude-code：later files = higher priority。
    */
   async loadAllLevels(): Promise<Record<MemoryLevel, MemoryHeader[]>> {
     const levels = [
-      MemoryLevel.PROJECT,
       MemoryLevel.USER,
+      MemoryLevel.PROJECT,
       MemoryLevel.DIRECTORY,
     ];
 
@@ -65,9 +71,10 @@ export class MultiLevelMemoryLoader {
       })
     );
 
+    // 初始化顺序与 levels 一致：USER → PROJECT → DIRECTORY（越靠后优先级越高）
     const resultMap: Record<MemoryLevel, MemoryHeader[]> = {
-      [MemoryLevel.PROJECT]: [],
       [MemoryLevel.USER]: [],
+      [MemoryLevel.PROJECT]: [],
       [MemoryLevel.DIRECTORY]: [],
     };
 
@@ -141,14 +148,17 @@ export class MultiLevelMemoryLoader {
   }
 
   /**
-   * 格式化多级记忆清单
+   * 格式化多级记忆清单。
+   *
+   * 按优先级从低到高排列（越靠后 = 模型注意力越高）：
+   * 用户（全局） → 项目（共享） → 项目（私有）
    */
   formatMultiLevelManifest(memoriesByLevel: Record<MemoryLevel, MemoryHeader[]>): string {
     let result = '';
-    
+
     Object.entries(memoriesByLevel).forEach(([level, memories]) => {
       if (memories.length === 0) return;
-      
+
       result += `\n## ${this.getLevelDisplayName(level as MemoryLevel)} 记忆\n\n`;
       result += formatMemoryManifest(memories);
     });
@@ -177,12 +187,12 @@ export class MultiLevelMemoryLoader {
    */
   private getLevelDisplayName(level: MemoryLevel): string {
     switch (level) {
-      case MemoryLevel.PROJECT:
-        return '项目';
       case MemoryLevel.USER:
-        return '用户';
+        return '用户（全局）';
+      case MemoryLevel.PROJECT:
+        return '项目（共享）';
       case MemoryLevel.DIRECTORY:
-        return '目录';
+        return '项目（私有）';
       default:
         return level;
     }

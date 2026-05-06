@@ -131,9 +131,10 @@ export class ContextAssembler {
     }
 
     // 动态上下文和用户输入合并为一条 user 消息
+    // 用明确分隔符区分系统上下文和用户的实际指令
     const dynamicContext = this.buildDynamicContextMessage();
     if (dynamicContext) {
-      messages.push({ role: 'user', content: `${dynamicContext}\n\n${userMessage}` });
+      messages.push({ role: 'user', content: `${dynamicContext}\n\n---\n## User's message\n${userMessage}` });
     } else {
       messages.push({ role: 'user', content: userMessage });
     }
