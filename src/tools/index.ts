@@ -29,7 +29,14 @@ import { createReadLinesTool } from './builtin/read-lines-tool.js';
 import { createWebSearchTool } from './builtin/web-search-tool.js';
 import { createGitTool } from './builtin/git-tool.js';
 import { createPatchTool } from './builtin/patch-tool.js';
+import { createBackgroundTools } from './builtin/background-tools.js';
+import { createGlobTool } from './builtin/glob-tool.js';
+import { createImageReadTool } from './builtin/image-read-tool.js';
+import { createNotebookReadTool } from './builtin/notebook-read-tool.js';
+import { createEnvInfoTool } from './builtin/env-info-tool.js';
+import { createUndoEditTool } from './builtin/undo-edit-tool.js';
 import type { FileParser } from '../parser/file-parser.js';
+import type { LLMAdapterInterface } from '../llm/types.js';
 import type { ToolExecutorConfig } from './types.js';
 
 export type { ToolExecutorConfig } from './types.js';
@@ -42,11 +49,13 @@ export type { ToolMetadata, ToolTag } from './tool-metadata.js';
  * 工具系统初始化选项�?
  */
 export interface ToolSystemOptions {
-  /** 工作目录（文件操作和命令执行的根目录�?*/
+  /** 工作目录（文件操作和命令执行的根目录）*/
   workDir: string;
-  /** 文件解析器实�?*/
+  /** 文件解析器实例*/
   fileParser: FileParser;
-  /** 工具执行器配�?*/
+  /** LLM 适配器（用于 image_read 等需要 LLM 的工具）*/
+  llmAdapter?: LLMAdapterInterface;
+  /** 工具执行器配置*/
   executorConfig?: Partial<ToolExecutorConfig>;
 }
 
@@ -64,7 +73,7 @@ export interface ToolSystem {
  * 注册所有内置工具并返回 registry、executor �?validator�?
  */
 export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
-  const { workDir, fileParser, executorConfig } = options;
+  const { workDir, fileParser, llmAdapter, executorConfig } = options;
 
   const registry = new ToolRegistry();
 
@@ -88,6 +97,11 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
 
   // 注册 Shell 命令工具
   registry.register(createShellTool(workDir));
+
+  // 注册后台任务工具
+  for (const tool of createBackgroundTools(workDir)) {
+    registry.register(tool);
+  }
 
   // 注册 PPTX 深度解析工具
   registry.register(createPptxParseTool(workDir));
@@ -128,6 +142,23 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
 
   // 注册 Patch 应用工具
   registry.register(createPatchTool(workDir));
+
+  // 注册 Glob 文件搜索工具
+  registry.register(createGlobTool(workDir));
+
+  // 注册图片读取工具（需要 LLM 视觉能力）
+  if (llmAdapter) {
+    registry.register(createImageReadTool(workDir, llmAdapter));
+  }
+
+  // 注册 Notebook 读取工具
+  registry.register(createNotebookReadTool(workDir));
+
+  // 注册环境信息工具
+  registry.register(createEnvInfoTool());
+
+  // 注册撤销编辑工具
+  registry.register(createUndoEditTool());
 
   // 初始化验证器（必须在 ToolExecutor 之前创建）
   const validator = new ToolValidator();

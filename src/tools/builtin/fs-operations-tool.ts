@@ -39,7 +39,8 @@ export function createFsOperationsTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'create_directory',
-        description: '创建目录。支持递归创建多层嵌套目录。如果目录已存在则不报错。',
+        // 创建目录。已存在不报错。
+        description: 'Create directory. No error if already exists. Auto-creates parent directories recursively.',
         parameters: {
           type: 'object',
           properties: {
@@ -59,8 +60,9 @@ export function createFsOperationsTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'move_file',
+        // 移动或重命名文件/目录。
         description:
-          '移动或重命名文件/目录。如果目标路径的父目录不存在会自动创建。可用于重命名（同目录下移动）或跨目录移动。',
+          'Move or rename file/directory. Auto-creates target parent directories if not exist.',
         parameters: {
           type: 'object',
           properties: {
@@ -116,8 +118,9 @@ export function createFsOperationsTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'copy_file',
+        // 复制文件或目录。支持递归。
         description:
-          '复制文件或目录。支持递归复制整个目录树。如果目标路径的父目录不存在会自动创建。',
+          'Copy file or directory. Supports recursive copy. Auto-creates target parent directories if not exist.',
         parameters: {
           type: 'object',
           properties: {

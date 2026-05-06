@@ -290,8 +290,9 @@ export function createPptxParseTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'parse_pptx_deep',
+      // 深度解析 .pptx。逐页提取文本（含分组形状）、备注、元数据。基础解析用 parse_ppt。
       description:
-        '深度解析 PPTX 演示文稿。逐页提取文本（含分组形状）、备注和元数据。比通用 parse_ppt 工具提供更丰富的结构化信息。',
+        'Deep parse .pptx. Extract per-slide text (including grouped shapes), notes, metadata. For basic parsing use parse_ppt.',
       parameters: {
         type: 'object',
         properties: {

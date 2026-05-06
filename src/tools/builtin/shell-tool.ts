@@ -32,8 +32,9 @@ export function createShellTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'run_command',
+      // 执行 shell 命令。超时 30s。长命令用 run_background。Git 用 git 工具。
       description:
-        '在工作目录中执行 shell 命令。返回 stdout 和 stderr。有超时限制和安全检查。',
+        'Execute shell command and wait for result. Default timeout 30s. Use run_background for commands >30s. Prefer git tool for git operations. Has dangerous command blocklist (rm -rf /, format, shutdown, etc).',
       parameters: {
         type: 'object',
         properties: {

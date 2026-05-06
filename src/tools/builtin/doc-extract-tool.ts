@@ -150,8 +150,9 @@ export function createDocExtractTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'parse_doc_deep',
+      // 解析旧版 .doc 文件（OLE2 二进制格式）。新版 .docx 用 parse_doc。
       description:
-        '解析 Word 文档（.doc 格式）并提取文本内容。支持 OLE2 二进制格式和 MIME/HTML 伪装格式。',
+        'Parse legacy .doc files (OLE2 binary format). For .docx use parse_doc.',
       parameters: {
         type: 'object',
         properties: {

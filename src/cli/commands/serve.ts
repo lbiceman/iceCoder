@@ -21,6 +21,7 @@ import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
+import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
 
 export interface ServeResult {
   server: Server;
@@ -79,6 +80,7 @@ export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<
     message: 'iceCoder 正在退出...',
     cleanups: [
       () => { cleanup(); },
+      () => { getBackgroundTaskManager().dispose(); },
       () => ctx.mcpManager.shutdown(),
     ],
   });

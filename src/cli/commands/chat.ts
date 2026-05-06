@@ -20,7 +20,9 @@ import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
+import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
 import { formatFriendlyError } from '../friendly-errors.js';
+import { PromptAssembler } from '../../prompts/prompt-assembler.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -160,13 +162,37 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
   const { systemPromptPath, memoryFilesDir } = ctx.paths;
 
-  /** 加载系统提示词 */
+  /** 加载系统提示词（使用 PromptAssembler，与 Web 端一致） */
   async function loadSystemPrompt(): Promise<string> {
+    const assembler = new PromptAssembler();
+
+    // 加载项目级用户指令（.iceCoder/memory.md）
+    const iceCoderDir = path.resolve('.iceCoder');
+    const memoryMdPath = path.join(iceCoderDir, 'memory.md');
+    let projectMemory = '';
     try {
-      return await fs.readFile(systemPromptPath, 'utf-8');
+      projectMemory = (await fs.readFile(memoryMdPath, 'utf-8')).trim();
     } catch {
-      return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用中文。';
+      try {
+        await fs.mkdir(iceCoderDir, { recursive: true });
+        await fs.writeFile(memoryMdPath, '# 项目记忆\n', 'utf-8');
+      } catch { /* ignore */ }
     }
+
+    const appendParts = [projectMemory].filter(Boolean);
+    const appendSystemPrompt = appendParts.length > 0 ? appendParts.join('\n\n') : undefined;
+
+    const result = assembler.assemble({
+      language: '中文',
+      environment: {
+        workingDirectory: process.cwd(),
+        platform: process.platform === 'win32' ? 'win32' : process.platform,
+        currentDate: new Date().toISOString().slice(0, 10),
+      },
+      appendSystemPrompt,
+    });
+
+    return result.systemPrompt;
   }
 
   // 启动 Web 服务器（除非 --no-serve）
@@ -209,6 +235,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
           latestHarness = null;
         }
       },
+      () => { getBackgroundTaskManager().dispose(); },
       () => { tunnelProcess?.kill(); },
       () => { serveResult?.cleanup(); },
       () => ctx.mcpManager.shutdown(),

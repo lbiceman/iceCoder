@@ -89,7 +89,8 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
     {
       definition: {
         name: 'list_drives',
-        description: '列出电脑上所有可用的磁盘驱动器（如 C:\\, D:\\）。用于文件浏览的起点。',
+        // 列出所有磁盘驱动器。
+        description: 'List all disk drives. Starting point for file browsing.',
         parameters: {
           type: 'object',
           properties: {},
@@ -125,7 +126,8 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
     {
       definition: {
         name: 'browse_directory',
-        description: '浏览电脑上任意目录的内容。支持绝对路径（如 D:\\Projects, /home/user）。显示文件和文件夹列表，包含大小和修改时间。',
+        // 浏览目录外目录（需绝对路径）。目录内用 list_directory。
+        description: 'Browse directories outside working directory (requires absolute path). Use list_directory for directories inside working directory. Shows file list with size and modification time.',
         parameters: {
           type: 'object',
           properties: {
@@ -235,7 +237,8 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
     {
       definition: {
         name: 'open_file',
-        description: '读取电脑上任意位置的文件内容。支持绝对路径。自动判断文本/二进制文件。对于文本文件显示内容，对于二进制文件显示文件信息。',
+        // 读取目录外文件（需绝对路径）。目录内用 read_file。
+        description: 'Read files outside working directory (requires absolute path). Use read_file for files inside working directory. Auto-detects text/binary.',
         parameters: {
           type: 'object',
           properties: {

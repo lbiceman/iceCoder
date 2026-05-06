@@ -161,8 +161,9 @@ export function createDiffTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'diff_files',
+      // 对比文件差异。也支持文本对比（用 text1/text2）。
       description:
-        '对比两个文件的差异，返回 unified diff 格式。可用于代码审查、理解变更。也支持直接对比两段文本内容。',
+        'Compare two files and return unified diff. Also supports comparing two text strings (use text1/text2 instead of file1/file2). Returns no diff if files are identical.',
       parameters: {
         type: 'object',
         properties: {

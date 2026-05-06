@@ -477,8 +477,9 @@ export function createXlsxParseTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'parse_xlsx_deep',
+      // 深度解析 .xlsx。逐工作表提取数据，支持合并单元格、日期格式、元数据。基础解析用 parse_document。
       description:
-        '深度解析 XLSX 电子表格。逐工作表提取数据（含行、列、单元格值），支持共享字符串、合并单元格、日期格式识别和元数据。比通用 parse_document 工具提供更丰富的结构化信息。',
+        'Deep parse .xlsx. Extract per-worksheet data with merged cells, date formats, metadata. For basic parsing use parse_document.',
       parameters: {
         type: 'object',
         properties: {

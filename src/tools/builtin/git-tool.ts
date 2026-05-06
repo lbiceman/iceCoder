@@ -61,8 +61,9 @@ export function createGitTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'git',
+      // Git 操作。比 run_command 更安全（禁止交互式、force push）。
       description:
-        '执行 Git 操作。支持常用子命令：status、diff、log、add、commit、branch、checkout、stash、push、pull、reset、show 等。比 run_command 更安全（禁止交互式操作）。',
+        'Execute Git operations. Safer than run_command (blocks interactive prompts and force push). Common subcommands: status, diff, log, add, commit, branch, checkout, stash, push, pull, reset, show.',
       parameters: {
         type: 'object',
         properties: {

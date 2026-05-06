@@ -127,8 +127,9 @@ export function createWebSearchTool(): RegisteredTool {
   return {
     definition: {
       name: 'web_search',
+      // 搜索互联网。获取页面内容用 fetch_url。
       description:
-        '搜索互联网内容。返回搜索结果列表（标题、URL、摘要）。可用于查找文档、教程、解决方案、最新信息等。搜索后可用 fetch_url 工具获取具体页面内容。',
+        'Search the internet. Returns titles, URLs, and snippets. Use fetch_url to get full page content.',
       parameters: {
         type: 'object',
         properties: {

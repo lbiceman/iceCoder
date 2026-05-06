@@ -21,8 +21,9 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
     {
       definition: {
         name: 'parse_document',
+        // 通用文档解析。自动选策略。不支持旧版 .doc/.ppt。深度解析用 parse_xlsx_deep/parse_pptx_deep。
         description:
-          '解析文档文件并提取文本内容。支持格式: HTML, DOCX, PPTX, XLSX, ODT, ODP, ODS, PDF, RTF, XMind, TXT, Markdown, CSV, JSON。自动根据文件扩展名选择解析策略。不支持旧版 .doc/.ppt 格式。',
+          'Universal document parser. Auto-selects strategy by file extension. Supports HTML/DOCX/PPTX/XLSX/ODT/PDF/RTF/XMind/TXT/Markdown/CSV/JSON. Does not support legacy .doc/.ppt. For deep parsing use parse_xlsx_deep/parse_pptx_deep.',
         parameters: {
           type: 'object',
           properties: {
@@ -74,7 +75,8 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
     {
       definition: {
         name: 'parse_doc',
-        description: '解析 Word 文档（DOCX）并提取文本内容。注意：不支持旧版 .doc 格式。',
+        // 解析 .docx 文件。旧版 .doc 用 parse_doc_deep。
+        description: 'Parse .docx files. For legacy .doc use parse_doc_deep.',
         parameters: {
           type: 'object',
           properties: {
@@ -100,7 +102,8 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
     {
       definition: {
         name: 'parse_ppt',
-        description: '解析 PowerPoint 演示文稿（PPTX）并提取文本内容和幻灯片结构。注意：不支持旧版 .ppt 格式，请使用 parse_pptx_deep 工具。',
+        // 解析 .pptx 提取文本和幻灯片结构。需更详细信息（含分组形状、备注）用 parse_pptx_deep。
+        description: 'Parse .pptx to extract text and slide structure. For detailed info (grouped shapes, notes) use parse_pptx_deep.',
         parameters: {
           type: 'object',
           properties: {
@@ -131,7 +134,8 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
     {
       definition: {
         name: 'parse_xmind',
-        description: '解析 XMind 思维导图文件，提取层级结构化的文本内容。',
+        // 解析 XMind 思维导图提取层级文本。需备注/标签/链接等信息用 parse_xmind_deep。
+        description: 'Parse XMind mind map to extract hierarchical text. For notes/labels/links use parse_xmind_deep.',
         parameters: {
           type: 'object',
           properties: {
@@ -162,7 +166,8 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
     {
       definition: {
         name: 'parse_html',
-        description: '解析 HTML 文件，提取结构化文本内容（标题、段落、列表等）。',
+        // 解析 HTML 提取结构化文本（标题、段落、列表）。
+        description: 'Parse HTML to extract structured text (headings, paragraphs, lists).',
         parameters: {
           type: 'object',
           properties: {

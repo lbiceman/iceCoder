@@ -133,8 +133,9 @@ export function createPatchTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'patch_file',
+      // 应用 diff 补丁。大段修改用。小改动用 edit_file。
       description:
-        '将 unified diff 格式的补丁应用到文件。比 edit_file 更精确，适合大段代码修改。支持模糊匹配（行号偏移时自动搜索上下文）。',
+        'Apply unified diff patch to file. For large code changes. Use edit_file for small changes. Supports fuzzy matching (auto-searches context when line numbers shift).',
       parameters: {
         type: 'object',
         properties: {

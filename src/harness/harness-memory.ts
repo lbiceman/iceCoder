@@ -33,7 +33,7 @@ import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
-import { tokenize } from '../memory/file-memory/memory-tokenizer.js';
+import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
 import {
   MEMORY_MAX_RELEVANT,
@@ -273,12 +273,12 @@ function getMemoryDecayStatusFromMs(
 function buildCoNMemoryPrompt(items: StructuredMemoryItem[], recallMethod: string): string {
   const json = JSON.stringify(items, null, 2);
 
-  // Extract entity names from items for a hint line
+  // 提取实体名（中英文混合）作为提示行
   const entitySet = new Set<string>();
   for (const item of items) {
     const textToScan = `${item.fact ?? ''} ${item.content ?? ''} ${item.description ?? ''}`;
-    for (const m of textToScan.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/g)) {
-      if (m[1].length > 2) entitySet.add(m[1]);
+    for (const entity of extractEntities(textToScan)) {
+      entitySet.add(entity);
     }
   }
   const entityHint = entitySet.size > 0
@@ -308,11 +308,11 @@ Before using any memory in your response, follow these steps:
 - **Hard rule**: Do NOT fabricate specific names, dates, or numbers that are not in the memories. If memories contain relevant but imprecise information, give your best inference and state your confidence level
 - **List completeness**: If memories contain a list of items (games, tricks, countries, books, names), you MUST include ALL items in your answer. A partial list is worse than admitting uncertainty. If you can only find some items, list what you have AND explicitly state which items you could not find.
 
-## CRITICAL RULES — 严格遵守
-- **禁止调用工具。** 不要输出<tool_call>、function call、read_file 或任何工具调用格式。你没有工具可用，直接用上面的记忆回答。
-- **必须使用与问题完全相同的语言回答。** 如果问题用英文，你的回答必须全英文。如果问题用中文，你的回答必须全中文。这是最高优先级规则之一。
-- Do NOT blindly trust memory content. Memories are point-in-time observations.
+## CRITICAL RULES — STRICTLY ENFORCE
+- **You MUST respond in the same language as the question.** If the question is in English, your response must be entirely in English. If the question is in Chinese, your response must be entirely in Chinese. This is one of the highest priority rules.
+- Do NOT blindly trust memory content. Memories are point-in-time observations. Verify stale/expired memories against current code state.
 - Partially correct is better than giving up entirely. If you know part of the answer, give what you are sure about and clearly mark what is uncertain.
+- If these memories are irrelevant to the current task, ignore them and proceed normally.
 </system-reminder>`;
 }
 

@@ -19,8 +19,9 @@ export function createReadLinesTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'read_file_lines',
+      // 按行范围读取。大文件用。小文件用 read_file。支持负数索引。
       description:
-        '按行范围读取文件内容。适合大文件场景，只读取需要的部分。支持负数索引（-1 表示最后一行）。同时返回文件总行数。',
+        'Read file by line range. For large files (>500 lines). Use read_file for small files. Supports negative index (-1 = last line). Returns total line count.',
       parameters: {
         type: 'object',
         properties: {

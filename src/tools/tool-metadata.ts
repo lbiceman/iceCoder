@@ -5,7 +5,6 @@
  * - isConcurrencySafe: 是否可以并行执行
  * - isReadOnly: 是否为只读操作
  * - isDestructive: 是否为破坏性操作
- * - searchHint: 工具搜索关键词
  * - maxResultSizeChars: 最大结果大小
  *
  * 这些元数据帮助 Harness 做出更智能的决策：
@@ -26,8 +25,6 @@ export interface ToolMetadata {
   isReadOnly: boolean;
   /** 是否为破坏性操作（如删除文件、覆盖内容） */
   isDestructive: boolean;
-  /** 工具搜索关键词（3-10 个词，帮助模型通过关键词找到工具） */
-  searchHint?: string;
   /** 最大结果大小（字符数），超过此大小会被截断 */
   maxResultSizeChars: number;
   /** 工具分类标签 */
@@ -45,7 +42,8 @@ export type ToolTag =
   | 'shell'          // Shell 命令
   | 'network'        // 网络请求
   | 'parse'          // 文档解析
-  | 'directory';     // 目录操作
+  | 'directory'      // 目录操作
+  | 'background';    // 后台任务
 
 /**
  * 默认工具元数据映射。
@@ -58,7 +56,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '读取文件内容 查看源码',
     maxResultSizeChars: Infinity, // 读取工具不截断，由自身限制
     tags: ['file_read'],
   },
@@ -67,7 +64,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '写入文件 创建文件 保存内容',
     maxResultSizeChars: 1000,
     tags: ['file_write'],
   },
@@ -76,7 +72,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '追加内容 添加到文件末尾',
     maxResultSizeChars: 1000,
     tags: ['file_write'],
   },
@@ -85,7 +80,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '编辑文件 查找替换 修改代码',
     maxResultSizeChars: 2000,
     tags: ['file_write'],
   },
@@ -94,7 +88,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: true,
-    searchHint: '删除文件 移除文件',
     maxResultSizeChars: 500,
     tags: ['file_delete'],
   },
@@ -103,7 +96,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '列出目录 查看文件列表 浏览文件夹',
     maxResultSizeChars: 30000,
     tags: ['directory', 'file_read'],
   },
@@ -112,7 +104,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '文件信息 文件大小 修改时间',
     maxResultSizeChars: 2000,
     tags: ['file_read'],
   },
@@ -123,7 +114,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '搜索文件内容 grep 查找文本',
     maxResultSizeChars: 30000,
     tags: ['search'],
   },
@@ -132,7 +122,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '查找文件 按名称搜索 glob',
     maxResultSizeChars: 30000,
     tags: ['search'],
   },
@@ -143,7 +132,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '解析文档 提取文本 HTML DOCX PPTX',
     maxResultSizeChars: 50000,
     tags: ['parse'],
   },
@@ -152,7 +140,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '解析 Word 文档 DOCX',
     maxResultSizeChars: 50000,
     tags: ['parse'],
   },
@@ -161,7 +148,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '解析 PPT 演示文稿 PPTX',
     maxResultSizeChars: 50000,
     tags: ['parse'],
   },
@@ -170,7 +156,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '解析思维导图 XMind',
     maxResultSizeChars: 50000,
     tags: ['parse'],
   },
@@ -179,7 +164,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '解析 HTML 网页',
     maxResultSizeChars: 50000,
     tags: ['parse'],
   },
@@ -188,7 +172,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '深度解析 PPTX 逐页提取',
     maxResultSizeChars: 100000,
     tags: ['parse'],
   },
@@ -197,7 +180,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '深度解析 XMind 树形结构',
     maxResultSizeChars: 100000,
     tags: ['parse'],
   },
@@ -206,7 +188,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '深度解析 DOC OLE2 格式',
     maxResultSizeChars: 100000,
     tags: ['parse'],
   },
@@ -217,7 +198,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '访问 URL 抓取网页 HTTP 请求',
     maxResultSizeChars: 50000,
     tags: ['network'],
   },
@@ -228,9 +208,34 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false, // 取决于具体命令，由权限系统判断
-    searchHint: '执行命令 Shell bash 终端',
     maxResultSizeChars: 30000,
     tags: ['shell'],
+  },
+
+  // ── 后台任务 ──
+  run_background: {
+    name: 'run_background',
+    isConcurrencySafe: true,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 2000,
+    tags: ['shell', 'background'],
+  },
+  check_task: {
+    name: 'check_task',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 10000,
+    tags: ['shell', 'background'],
+  },
+  list_tasks: {
+    name: 'list_tasks',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 5000,
+    tags: ['shell', 'background'],
   },
 
   // ── 文件系统操作 ──
@@ -239,7 +244,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '创建目录 新建文件夹 mkdir',
     maxResultSizeChars: 1000,
     tags: ['directory'],
   },
@@ -248,7 +252,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '移动文件 重命名 rename mv',
     maxResultSizeChars: 1000,
     tags: ['file_write'],
   },
@@ -257,7 +260,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '复制文件 拷贝 cp copy',
     maxResultSizeChars: 1000,
     tags: ['file_write'],
   },
@@ -268,7 +270,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '对比差异 diff 文件比较 代码审查',
     maxResultSizeChars: 50000,
     tags: ['file_read'],
   },
@@ -279,7 +280,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '批量替换 多处修改 批量编辑',
     maxResultSizeChars: 5000,
     tags: ['file_write'],
   },
@@ -290,7 +290,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '按行读取 行范围 部分读取 大文件',
     maxResultSizeChars: Infinity,
     tags: ['file_read'],
   },
@@ -301,7 +300,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '搜索 Google Bing DuckDuckGo 互联网',
     maxResultSizeChars: 30000,
     tags: ['network'],
   },
@@ -312,7 +310,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: 'git 版本控制 提交 分支 diff status',
     maxResultSizeChars: 50000,
     tags: ['shell'],
   },
@@ -323,7 +320,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,
-    searchHint: '打补丁 应用diff patch 代码修改',
     maxResultSizeChars: 5000,
     tags: ['file_write'],
   },
@@ -334,7 +330,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '列出磁盘驱动器 盘符',
     maxResultSizeChars: 5000,
     tags: ['directory'],
   },
@@ -343,7 +338,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '浏览目录 文件管理器 打开文件夹',
     maxResultSizeChars: 30000,
     tags: ['directory', 'file_read'],
   },
@@ -352,9 +346,57 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    searchHint: '打开文件 读取任意文件',
     maxResultSizeChars: 50000,
     tags: ['file_read'],
+  },
+  // ---- 新增工具 ----
+  glob_files: {
+    name: 'glob_files',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 50000,
+    tags: ['search', 'file_read'],
+  },
+  image_read: {
+    name: 'image_read',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 30000,
+    tags: ['file_read', 'parse'],
+  },
+  notebook_read: {
+    name: 'notebook_read',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 50000,
+    tags: ['file_read', 'parse'],
+  },
+  stop_task: {
+    name: 'stop_task',
+    isConcurrencySafe: true,
+    isReadOnly: false,
+    isDestructive: false,
+    maxResultSizeChars: 5000,
+    tags: ['background'],
+  },
+  env_info: {
+    name: 'env_info',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 10000,
+    tags: ['shell'],
+  },
+  undo_edit: {
+    name: 'undo_edit',
+    isConcurrencySafe: false,
+    isReadOnly: false,
+    isDestructive: true,
+    maxResultSizeChars: 10000,
+    tags: ['file_write'],
   },
 };
 

@@ -139,6 +139,7 @@ async function initializeOrchestrator(
   const { registry, executor } = initializeToolSystem({
     workDir: path.resolve('.'),
     fileParser,
+    llmAdapter,
   });
 
   // 初始化 MCP 管理器并注册 MCP 工具

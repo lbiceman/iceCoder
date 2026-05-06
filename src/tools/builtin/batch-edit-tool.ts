@@ -6,6 +6,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
+import { getEditHistory } from './undo-edit-tool.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -18,8 +19,9 @@ export function createBatchEditTool(workDir: string): RegisteredTool {
   return {
     definition: {
       name: 'batch_edit_file',
+      // 多处查找替换。比多次 edit_file 更高效。单处修改用 edit_file。
       description:
-        '对文件执行多处查找替换操作。每个替换按顺序执行（前一个替换的结果作为后一个的输入）。比多次调用 edit_file 更高效。',
+        'Multiple find-and-replace on a single file. More efficient than multiple edit_file calls. Each replacement executes in order. For single changes use edit_file.',
       parameters: {
         type: 'object',
         properties: {
@@ -64,6 +66,9 @@ export function createBatchEditTool(workDir: string): RegisteredTool {
       try {
         let content = await fs.readFile(filePath, 'utf-8');
         const originalContent = content;
+
+        // 保存快照（在实际修改前）
+        await getEditHistory().saveSnapshot(filePath, 'batch_edit_file');
         const results: string[] = [];
 
         for (let i = 0; i < edits.length; i++) {

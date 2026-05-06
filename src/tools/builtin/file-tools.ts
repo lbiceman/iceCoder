@@ -6,6 +6,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
+import { getEditHistory } from './undo-edit-tool.js';
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -24,7 +25,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'read_file',
-        description: '读取指定文件的内容。支持文本文件。可指定编码，默认 utf-8。',
+        // 读取文件内容。修改前必须先读。大文件用 read_file_lines。目录外用 open_file。
+        description: 'Read file content and return full text. Must read before modifying. Use read_file_lines for large files (>500 lines). Use open_file for files outside working directory.',
         parameters: {
           type: 'object',
           properties: {
@@ -46,7 +48,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'write_file',
-        description: '将内容写入指定文件。如果文件不存在则创建，存在则覆盖。自动创建父目录。',
+        // 创建新文件或覆盖已有文件。修改部分内容用 edit_file。追加用 append_file。
+        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file.',
         parameters: {
           type: 'object',
           properties: {
@@ -59,6 +62,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       },
       handler: async (args) => {
         const filePath = safePath(args.path, workDir);
+        await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, args.content, (args.encoding || 'utf-8') as BufferEncoding);
         return { success: true, output: `文件已写入: ${args.path}` };
@@ -69,7 +73,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'append_file',
-        description: '向指定文件末尾追加内容。如果文件不存在则创建。',
+        // 向文件末尾追加。修改已有内容用 edit_file。
+        description: 'Append content to end of file. Creates file if not exists. For modifying existing content use edit_file.',
         parameters: {
           type: 'object',
           properties: {
@@ -91,7 +96,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'edit_file',
-        description: '在文件中查找并替换指定内容。支持正则表达式。',
+        // 查找替换。search 必须精确匹配现有内容。多处修改用 batch_edit_file。大段修改用 patch_file。
+        description: 'Find and replace in existing file. search must exactly match existing content. For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file.',
         parameters: {
           type: 'object',
           properties: {
@@ -120,6 +126,9 @@ export function createFileTools(workDir: string): RegisteredTool[] {
 
         const newContent = content.replace(pattern, args.replace);
         const changed = content !== newContent;
+        if (changed) {
+          await getEditHistory().saveSnapshot(filePath, 'edit_file');
+        }
         await fs.writeFile(filePath, newContent, 'utf-8');
 
         return {
@@ -133,7 +142,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'delete_file',
-        description: '删除指定文件。',
+        // 删除文件。需要用户确认。
+        description: 'Delete a file. Requires user confirmation. Verify file path before deleting.',
         parameters: {
           type: 'object',
           properties: {
@@ -153,7 +163,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'list_directory',
-        description: '列出指定目录下的文件和子目录。可选递归深度。',
+        // 列出目录内容。递归用 recursive: true。目录外用 browse_directory。
+        description: 'List files and subdirectories. Use recursive: true for recursive listing. Use browse_directory for directories outside working directory.',
         parameters: {
           type: 'object',
           properties: {
@@ -178,7 +189,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'file_info',
-        description: '获取文件或目录的详细信息（大小、修改时间、类型等）。',
+        // 获取文件元信息：大小、修改时间、类型。
+        description: 'Get file or directory metadata: size, modification time, type.',
         parameters: {
           type: 'object',
           properties: {

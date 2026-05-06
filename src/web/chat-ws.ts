@@ -119,6 +119,27 @@ async function loadSystemPrompt(): Promise<string> {
     assembler.removeSection('shell_guide');
   }
 
+  // 加载项目级用户指令（.iceCoder/memory.md）
+  // 如果目录或文件不存在，自动创建
+  const iceCoderDir = path.resolve('.iceCoder');
+  const memoryMdPath = path.join(iceCoderDir, 'memory.md');
+  let projectMemory = '';
+  try {
+    projectMemory = await fsPromises.readFile(memoryMdPath, 'utf-8');
+    projectMemory = projectMemory.trim();
+    if (projectMemory) {
+      console.log(`[chat-ws] 已加载项目指令 (.iceCoder/memory.md, ${projectMemory.length} 字符)`);
+    }
+  } catch {
+    // 文件不存在，自动创建目录和模板文件
+    try {
+      await fsPromises.mkdir(iceCoderDir, { recursive: true });
+      const template = '# 项目记忆\n';
+      await fsPromises.writeFile(memoryMdPath, template, 'utf-8');
+      console.log('[chat-ws] 已创建 .iceCoder/memory.md 模板文件');
+    } catch { /* 创建失败，静默跳过 */ }
+  }
+
   const evalAppend = isEvalMode ? `\n\n## 评测模式（EVALUATION MODE）
 
 你正在接受记忆系统的标准化评测。请严格遵守以下规则：
@@ -130,6 +151,12 @@ async function loadSystemPrompt(): Promise<string> {
 5. **必须使用与问题完全相同的语言回答。** 英文问题必须英文答，中文问题必须中文答。这是硬性规则，违反此规则的回答将被判为错误。
 6. **部分正确优于完全放弃**。如果你知道部分答案，给出你确定的部分，对不确定的部分明确标注。` : undefined;
 
+  // 拼接追加内容：项目指令 + 评测指令
+  const appendParts = [projectMemory, evalAppend].filter(Boolean);
+  const appendSystemPrompt = appendParts.length > 0
+    ? appendParts.join('\n\n')
+    : undefined;
+
   const result = assembler.assemble({
     language: '中文',
     environment: {
@@ -137,7 +164,7 @@ async function loadSystemPrompt(): Promise<string> {
       platform: process.platform === 'win32' ? 'win32' : process.platform,
       currentDate: new Date().toISOString().slice(0, 10),
     },
-    appendSystemPrompt: evalAppend,
+    appendSystemPrompt,
   });
 
   return result.systemPrompt;

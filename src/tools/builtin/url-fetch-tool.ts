@@ -84,8 +84,9 @@ export function createUrlFetchTool(): RegisteredTool {
   return {
     definition: {
       name: 'fetch_url',
+      // 访问 URL。搜索信息先用 web_search。不支持登录页面。
       description:
-        '访问指定 URL 并返回页面内容。支持 HTML（自动提取正文文本）、JSON、纯文本。可自定义请求方法、请求头和请求体。',
+        'Fetch URL content. Supports HTML/JSON/plain text. Use web_search first for finding information. Does not support authenticated pages.',
       parameters: {
         type: 'object',
         properties: {

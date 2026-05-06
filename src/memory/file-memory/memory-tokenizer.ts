@@ -60,18 +60,43 @@ export function tokenize(
 }
 
 /**
- * 提取文本中的实体名（大写开头的连续英文词）。
+ * 中文停用词（常见虚词，不适合作为实体）。
+ */
+const CJK_STOP_WORDS = new Set([
+  '这个', '那个', '什么', '怎么', '为什么', '可以', '应该',
+  '需要', '已经', '但是', '因为', '所以', '如果', '虽然', '不过', '然后',
+  '或者', '以及', '而且', '并且', '还是', '就是', '不是', '没有', '不要',
+  '我们', '他们', '她们', '它们', '自己', '这里', '那里', '这些', '那些',
+  '一个', '一些', '所有', '每个', '任何', '其他', '这样', '那样', '怎样',
+]);
+
+/**
+ * 提取文本中的实体名（英文大写开头词 + 中文 2-4 字词组）。
  *
  * "What did James buy?" → ["James"]
  * "James and Mary went to New York" → ["James", "Mary", "New York"]
+ * "张三喜欢用 TypeScript" → ["张三", "喜欢", "typescript"]
  *
  * @returns 实体名集合（已转小写）
  */
 export function extractEntities(text: string): Set<string> {
   const entities = new Set<string>();
+
+  // 英文实体：大写开头的连续词
   for (const m of text.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/g)) {
     const entity = m[1].toLowerCase();
     if (entity.length > 2) entities.add(entity);
   }
+
+  // 中文实体：2-4 字的连续中文字符段（排除停用词）
+  const cjkSegments = text.match(/[\u4e00-\u9fff]{2,4}/g);
+  if (cjkSegments) {
+    for (const seg of cjkSegments) {
+      if (!CJK_STOP_WORDS.has(seg)) {
+        entities.add(seg);
+      }
+    }
+  }
+
   return entities;
 }

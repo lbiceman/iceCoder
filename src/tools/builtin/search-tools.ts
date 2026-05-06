@@ -24,7 +24,8 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'search_in_files',
-        description: '在指定目录下的文件中搜索匹配的文本内容。支持正则表达式。返回匹配行及上下文。',
+        // 搜索文件内容。自动跳过 node_modules。按文件名搜索用 find_files。
+        description: 'Search file content for text or regex. Returns matching lines with context. Auto-skips node_modules and hidden directories. For filename search use find_files.',
         parameters: {
           type: 'object',
           properties: {
@@ -60,7 +61,8 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'find_files',
-        description: '按文件名模式搜索文件。支持通配符匹配。',
+        // 按文件名搜索。搜内容用 search_in_files。
+        description: 'Search files by name pattern (supports * and ? wildcards). For content search use search_in_files.',
         parameters: {
           type: 'object',
           properties: {
