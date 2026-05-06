@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
+import { getScannerCache } from './memory-scanner-cache.js';
 import type { MemoryHeader } from './types.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
@@ -82,7 +83,14 @@ Return a JSON array of memories to save. Each memory object has:
 - "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
 
 If nothing is worth saving, return an empty array: []
-Return ONLY valid JSON, no other text.`;
+Return ONLY valid JSON, no other text.
+
+## Completeness requirements
+- When extracting facts, include ALL details — dates, names, quantities, locations
+- Do NOT summarize multiple facts into one. Each distinct fact = separate memory entry
+- When a list is mentioned (e.g., "instruments: clarinet and violin"), preserve ALL items in the list, not just the first
+- Always convert relative dates to absolute dates (e.g., "next Thursday" → "2024-03-07")
+- Preserve exact quotes and specific wording when they matter (names, technical terms, preferences)`;
 
 /**
  * 基于 tags 重叠度查找重复记忆。
@@ -159,7 +167,7 @@ export class LLMMemoryExtractor {
     // 获取现有记忆清单（避免重复）
     let existingManifest = '';
     try {
-      const existing = await scanMemoryFiles(memoryDir, 200);
+      const existing = await getScannerCache().scan(memoryDir, 200);
       if (existing.length > 0) {
         existingManifest = `\n\nExisting memory files (do not duplicate):\n${formatMemoryManifest(existing)}`;
       }
@@ -312,12 +320,13 @@ Each object must have: filename, type, name, description, content, tags (string[
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.mkdir(userMemoryDir, { recursive: true });
 
-    // v4: 预扫描已有记忆，用于 tags 重叠度去重
+    // v4: 预扫描已有记忆，用于 tags 重叠度去重（使用 ScannerCache）
+    const scannerCache = getScannerCache();
     const targetDirs = [memoryDir, userMemoryDir];
-    const existingByDir = new Map<string, Awaited<ReturnType<typeof scanMemoryFiles>>>();
+    const existingByDir = new Map<string, Awaited<ReturnType<typeof scannerCache.scan>>>();
     for (const dir of targetDirs) {
       try {
-        existingByDir.set(dir, await scanMemoryFiles(dir, 200));
+        existingByDir.set(dir, await scannerCache.scan(dir, 200));
       } catch {
         existingByDir.set(dir, []);
       }
@@ -427,6 +436,9 @@ ${memory.content}
 
     // ── 写入完成后检查是否需要淘汰 ──
     if (writtenPaths.length > 0) {
+      // 使扫描缓存失效（新文件已写入）
+      scannerCache.invalidate(memoryDir);
+      scannerCache.invalidate(userMemoryDir);
       evictIfNeeded(memoryDir).catch(err => {
         console.debug('[LLMMemoryExtractor] Eviction check failed:', err instanceof Error ? err.message : err);
       });

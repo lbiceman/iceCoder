@@ -8,6 +8,7 @@ dist/
 data/*
 !data/config.example.json
 !data/.gitkeep
+LoCoMo/
 
 docs/
 

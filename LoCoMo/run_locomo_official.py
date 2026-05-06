@@ -36,6 +36,7 @@ import sys
 import re
 from datetime import datetime
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent))  # 确保 LoCoMo 目录在模块搜索路径中
 
 try:
     import requests
@@ -509,6 +510,15 @@ def inject_conversations(host: str, port: int, sample: dict,
             if not event_date:
                 event_date = _extract_date_from_text(tags_str + " " + name + " " + content_body)
 
+            # T2: If still empty, use session date as default
+            if not event_date and dt_str:
+                event_date = _extract_date_from_text(dt_str)
+            if not event_date:
+                # Last resort: extract year-month from session date string
+                m = re.search(r'(\d{4})-(\d{2})', dt_str or "")
+                if m:
+                    event_date = f"{m.group(1)}-{m.group(2)}-01"
+
             # Safe filename
             safe_name = re.sub(r"[^\w\s-]", "", name.lower())
             safe_name = re.sub(r"\s+", "_", safe_name.strip())[:40]
@@ -534,7 +544,10 @@ recallCount: 0
 
             index_lines.append(f"- [{name}]({filename}) — {description}\n")
 
-    pbar.close()
+    try:
+        pbar.close()
+    except (OSError, ValueError):
+        pass  # tqdm close error on Windows, safe to ignore
 
     # Write MEMORY.md index
     index_file = MEMORY_DIR / "MEMORY.md"
@@ -583,12 +596,15 @@ def run_qa_evaluation(host: str, port: int, qa_list: list,
         pending_futures.clear()
         pending_futures.extend(still_pending)
 
-    pbar = tqdm(qa_list, desc="    Evaluating QA", unit="q")
+    pbar = tqdm(qa_list, desc="    Evaluating QA", unit="q", ncols=80, ascii=True)
 
     for i, qa_item in enumerate(pbar):
         question = qa_item.get("question", "")
         category = qa_item.get("category", 0)
-        pbar.set_postfix_str(f"cat={category}")
+        try:
+            pbar.set_postfix_str(f"cat={category}")
+        except (OSError, ValueError):
+            pass  # tqdm display error on Windows, safe to ignore
 
         # Collect any finished judge results
         _collect_done_futures()
@@ -611,7 +627,10 @@ def run_qa_evaluation(host: str, port: int, qa_list: list,
         fut = judge_pool.submit(_judge_task, i, response, qa_item, threshold, judge_cfg)
         pending_futures.append((i, fut))
 
-    pbar.close()
+    try:
+        pbar.close()
+    except (OSError, ValueError):
+        pass  # tqdm close error on Windows, safe to ignore
 
     # Wait for all remaining judge futures
     for idx, fut in pending_futures:

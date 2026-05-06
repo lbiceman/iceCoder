@@ -158,14 +158,27 @@ def _call_judge_api(system_prompt: str, user_prompt: str, cfg: dict) -> dict:
 
 
 def _parse_judge_response(content: str) -> dict:
-    """Parse the judge's JSON response, handling markdown code blocks."""
+    """Parse the judge's JSON response, handling markdown code blocks and parse failures."""
     # Strip markdown code block if present
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*", "", content)
         content = re.sub(r"\s*```$", "", content)
 
-    result = json.loads(content)
+    try:
+        result = json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        # Regex fallback: extract verdict and confidence from malformed JSON
+        verdict_m = re.search(r'"verdict"\s*:\s*"(correct|incorrect)"', content, re.IGNORECASE)
+        conf_m = re.search(r'"confidence"\s*:\s*([\d.]+)', content)
+        reason_m = re.search(r'"reason"\s*:\s*"([^"]*)"', content)
+        if verdict_m:
+            return {
+                "verdict": verdict_m.group(1).lower(),
+                "confidence": float(conf_m.group(1)) if conf_m else 0.5,
+                "reason": reason_m.group(1) if reason_m else "Parsed via regex fallback",
+            }
+        return {"verdict": "incorrect", "confidence": 0.0, "reason": f"JSON parse failed: {content[:200]}"}
 
     # Normalize
     verdict = str(result.get("verdict", "incorrect")).lower().strip()
@@ -240,29 +253,61 @@ def judge_adversarial(question: str, response: str,
 # Memory Extraction via LLM
 # ---------------------------------------------------------------------------
 
-EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and extract the MOST IMPORTANT facts as compact memory items.
+EXTRACT_SYSTEM_PROMPT = """You are a memory extraction system. Your task is to analyze a conversation and extract EVERY DISTINCT FACT as a separate memory item.
 
 Rules:
-1. Each memory item should be a SELF-CONTAINED fact or a group of closely related facts about the same topic.
-2. MERGE related facts into ONE item. For example:
-   - "Person has pets Oliver (cat) and Bailey (cat)" → ONE item, not two
-   - "Person went camping at beach, mountains, and forest" → ONE item listing all locations
-   - "Person A and Person B are friends who support each other" → ONE item
-3. Convert relative time references to absolute dates using the conversation date.
+1. ATOMIC EXTRACTION: Each memory item must contain exactly ONE piece of information. Do NOT combine multiple facts into one item.
+   - WRONG: "James's pets and training" combining dog names + training tricks + adoption date
+   - RIGHT: "James has a dog named Max" (one fact), "James has a dog named Daisy" (another fact), "James trained his dogs to sit and stay" (another fact)
+2. NO ITEM COUNT LIMIT. Extract as many items as needed to capture ALL information. A typical session may produce 15-30 items.
+3. Convert relative time references to absolute dates using the session date provided.
 4. For EVERY fact, explicitly state WHEN it happened with an absolute date.
 5. Include WHO, WHAT, WHEN, WHERE details explicitly.
 6. Preserve exact names, dates, numbers — never paraphrase.
-7. AIM FOR 4-6 ITEMS PER CONVERSATION SESSION. Only extract what is truly important and distinct.
-8. Prioritize: events with specific dates > personal facts > preferences > opinions > casual remarks.
-9. Return a JSON array of objects, each with: "name", "description", "content", "tags", "eventDate"
-10. Return ONLY the JSON array, no other text, no code blocks.
+7. Prioritize: events with specific dates > personal facts > preferences > opinions > casual remarks.
+8. Return a JSON array of objects, each with: "name", "description", "content", "tags", "eventDate"
+9. Return ONLY the JSON array, no other text, no code blocks.
+
+## CRITICAL: Atomic fact extraction
+Extract EACH fact as its OWN item. Do NOT group by topic. Examples:
+- "James has a dog named Max" → one item
+- "James has a dog named Daisy" → one item
+- "James trained his dogs to sit, stay, paw, and rollover" → one item (list of tricks)
+- "James adopted a puppy named Ned from Stamford shelter in April 2022" → one item
+- "John started playing drums in February 2022" → one item
+- "John plays CS:GO" → one item
+- "John organized a charity tournament on May 7, 2022" → one item
+Each item should be a SINGLE, searchable fact that can answer a specific question.
 
 ## CRITICAL: Preserve specific details
-- Book titles, song names, movie names — quote them EXACTLY (e.g., "Nothing is Impossible", "Charlotte's Web")
-- Pet names, people names — spell them exactly as mentioned
+- Book titles, song names, movie names — quote them EXACTLY (e.g., "The Name of the Wind", "Charlotte's Web")
+- Pet names, people names — spell them exactly as mentioned, list ALL of them
 - Exact numbers: ages, distances, counts, years (e.g., "4 years", "10 years ago", "3 children")
 - Specific dates and durations — convert ALL relative dates to absolute
-- Hobbies, instruments, sports — list each one mentioned"""
+- Hobbies, instruments, sports — list each one mentioned
+
+## MANDATORY: List completeness
+When a conversation mentions a LIST of items (games, countries, tricks, books, food, names), you MUST include ALL items in a single memory entry. NEVER truncate a list.
+- "I have cats named Oliver, Luna, and Bailey" → ONE item listing ALL THREE names
+- "I read 'Nothing is Impossible' and 'Charlotte's Web'" → ONE item listing BOTH titles
+- "He can do sit, stay, paw, rollover, swim, catch frisbees, and balance on skateboard" → ONE item listing ALL 7 tricks
+If you mention one item from a list, you MUST mention all.
+
+## MANDATORY: Absolute date conversion
+ALL relative time expressions MUST be converted to absolute dates using the session date:
+- "yesterday" → calculate from session date
+- "last weekend" → calculate from session date
+- "about 10 years ago" → calculate the approximate year
+If you cannot determine the exact date, include your best estimate and mark it with "approximately".
+NEVER leave a relative time expression as-is.
+
+## MANDATORY: eventDate field
+The "eventDate" field is REQUIRED for every item. Use YYYY-MM-DD format.
+- If the fact has a specific date, use it
+- If only a month is known, use the first of that month (e.g., "2022-04-01")
+- If only a year is known, use January 1 (e.g., "2022-01-01")
+- If no date can be inferred, use the session date as default
+NEVER leave eventDate empty or null."""
 
 EXTRACT_USER_TEMPLATE = """Conversation date/time: {datetime}
 Participants: {speaker_a} and {speaker_b}
@@ -270,17 +315,21 @@ Participants: {speaker_a} and {speaker_b}
 Conversation:
 {transcript}
 
-Extract the MOST IMPORTANT facts, events, preferences, and relationships. MERGE related facts into single items.
-Target: 4-6 items for this conversation segment. Quality over quantity.
+Extract EVERY distinct fact from this conversation as a separate memory item. Do NOT group by topic — each fact gets its own item.
+There is NO limit on the number of items. Extract as many as needed.
 
 Return a JSON array where each item has:
-- "name": short descriptive title WITH date (e.g., "Caroline attended LGBTQ support group on 7 May 2023")
-- "description": one-sentence summary with ALL key details — be SPECIFIC and SEARCHABLE
-- "content": full description with all specifics (who, what, when, where). Include multiple related facts in one content block.
+- "name": short descriptive title WITH date (e.g., "James adopted a puppy named Ned in April 2022")
+- "description": one-sentence summary with key details — be SPECIFIC and SEARCHABLE
+- "content": full description with all specifics (who, what, when, where)
 - "tags": array of relevant tags (people names, topics, exact dates in YYYY-MM-DD format)
-- "eventDate": YYYY-MM-DD format date when this event/fact occurred (null if not time-specific)
+- "eventDate": REQUIRED — YYYY-MM-DD format date when this event/fact occurred. Use session date if no specific date.
 
-The "name" and "description" fields are critical — they will be used to match this memory to future queries. Make them specific and searchable."""
+CRITICAL rules:
+1. Each item = ONE fact. Do NOT combine multiple facts.
+2. If a list is mentioned (games, tricks, countries, books), ALL items must be in one entry.
+3. ALL dates must be absolute (YYYY-MM-DD). Convert relative dates using the session date.
+4. The "name" and "description" will be used to match future queries — make them specific and searchable."""
 
 
 def extract_memories_from_session(
@@ -292,17 +341,25 @@ def extract_memories_from_session(
 ) -> list:
     """
     Use LLM to extract individual fact items from a conversation session.
-    For long transcripts (>5000 chars), splits into chunks and extracts from each,
-    then deduplicates by name similarity.
+    Two-pass extraction:
+      Pass 1: extract from all chunks
+      Pass 2: find uncovered segments, re-extract from them
     Returns a list of dicts with name, description, content, tags, eventDate.
     """
     if cfg is None:
         cfg = _get_config()
 
-    MAX_CHUNK = 5000
+    MAX_CHUNK = 8000
 
     if len(transcript) <= MAX_CHUNK:
-        return _extract_single_chunk(transcript, datetime_str, speaker_a, speaker_b, cfg)
+        # Single chunk: extract twice, merge
+        facts1 = _extract_single_chunk(transcript, datetime_str, speaker_a, speaker_b, cfg)
+        uncovered = _find_uncovered_segments(transcript, facts1)
+        if uncovered and len(uncovered) > 300:
+            facts2 = _extract_single_chunk(uncovered, datetime_str, speaker_a, speaker_b, cfg,
+                                           chunk_hint="(补充提取) ")
+            facts1.extend(facts2)
+        return _deduplicate_facts(facts1)
 
     # Split long transcripts by turn boundaries
     chunks = _split_transcript_into_chunks(transcript, MAX_CHUNK)
@@ -314,8 +371,57 @@ def extract_memories_from_session(
         )
         all_facts.extend(facts)
 
+    # Pass 2: find uncovered segments from the full transcript
+    uncovered = _find_uncovered_segments(transcript, all_facts)
+    if uncovered and len(uncovered) > 500:
+        logger.info(f"    Pass 2: re-extracting from {len(uncovered)} uncovered chars")
+        extra_facts = _extract_single_chunk(
+            uncovered[:10000], datetime_str, speaker_a, speaker_b, cfg,
+            chunk_hint="(补充提取) "
+        )
+        all_facts.extend(extra_facts)
+
     # Deduplicate by name similarity
     return _deduplicate_facts(all_facts)
+
+
+def _find_uncovered_segments(transcript: str, facts: list, min_segment_len: int = 200) -> str:
+    """
+    Find transcript segments that are NOT covered by any extracted fact.
+    Uses keyword matching: if a sentence's key terms don't appear in any fact,
+    it's considered uncovered.
+    Returns the uncovered text concatenated.
+    """
+    if not facts:
+        return transcript
+
+    # Build a set of all keywords from extracted facts
+    fact_keywords = set()
+    for f in facts:
+        for field in (f.get("name", ""), f.get("description", ""), f.get("content", "")):
+            # Extract words > 3 chars as keywords
+            for word in re.findall(r'\b\w{4,}\b', field.lower()):
+                fact_keywords.add(word)
+
+    # Split transcript into sentences/speaker turns
+    lines = transcript.split('\n')
+    uncovered_lines = []
+
+    for line in lines:
+        if len(line.strip()) < 20:
+            continue
+        # Check if this line has keywords matching extracted facts
+        line_words = set(re.findall(r'\b\w{4,}\b', line.lower()))
+        # If fewer than 20% of the line's keywords are in fact_keywords, it's uncovered
+        if not line_words:
+            continue
+        overlap = len(line_words & fact_keywords)
+        overlap_ratio = overlap / len(line_words) if line_words else 0
+        if overlap_ratio < 0.2:
+            uncovered_lines.append(line)
+
+    uncovered_text = '\n'.join(uncovered_lines)
+    return uncovered_text if len(uncovered_text) >= min_segment_len else ""
 
 
 def _split_transcript_into_chunks(transcript: str, max_chars: int) -> list:
@@ -362,7 +468,7 @@ def _deduplicate_facts(facts: list) -> list:
                     continue
                 overlap = len(name_words & seen_words)
                 union = len(name_words | seen_words)
-                if union > 0 and overlap / union > 0.8:
+                if union > 0 and overlap / union > 0.7:
                     is_dup = True
                     break
         if not is_dup:
@@ -385,7 +491,7 @@ def _extract_single_chunk(
         datetime=datetime_str or "unknown",
         speaker_a=speaker_a,
         speaker_b=speaker_b,
-        transcript=transcript[:6000],
+        transcript=transcript[:10000],
     )
     if chunk_hint:
         prompt = f"Note: This is {chunk_hint}of a longer conversation. Extract all facts from this segment.\n\n{prompt}"
@@ -405,7 +511,7 @@ def _extract_single_chunk(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 4096,
+        "max_tokens": 12288,
     }
 
     for attempt in range(MAX_RETRIES):

@@ -150,6 +150,15 @@ export class FileMemoryManager {
   }
 
   /**
+   * 获取预取缓存的记忆（不触发新的预取，零 I/O）
+   * 用于将预取结果注入主召回路径，提升初始评分。
+   */
+  getPrefetchedMemories(query: string): MemoryHeader[] {
+    if (!this.prefetcher) return [];
+    return this.prefetcher.getPrefetchedMemories(query);
+  }
+
+  /**
    * 手动保存记忆
    */
   async saveMemory(

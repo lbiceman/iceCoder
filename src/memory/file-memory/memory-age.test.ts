@@ -9,9 +9,32 @@ import {
   memoryAge,
   memoryFreshnessText,
   memoryFreshnessNote,
+  getMemoryDecayStatus,
+  memoryDecayFactor,
 } from './memory-age.js';
+import type { MemoryHeader } from './types.js';
 
 const DAY_MS = 86_400_000;
+
+function makeHeader(overrides: Partial<MemoryHeader>): MemoryHeader {
+  return {
+    filePath: '/tmp/test.md',
+    filename: 'test.md',
+    mtimeMs: Date.now(),
+    description: null,
+    type: undefined,
+    confidence: 0.5,
+    recallCount: 0,
+    lastRecalledMs: 0,
+    createdMs: Date.now(),
+    tags: [],
+    source: undefined,
+    contentPreview: '',
+    relatedTo: [],
+    eventDateMs: 0,
+    ...overrides,
+  };
+}
 
 describe('memoryAgeDays', () => {
   it('今天的时间戳返回 0', () => {
@@ -72,5 +95,83 @@ describe('memoryFreshnessNote', () => {
     expect(note).toContain('<system-reminder>');
     expect(note).toContain('</system-reminder>');
     expect(note).toContain('10 天');
+  });
+});
+
+// ─── getMemoryDecayStatus ───
+
+describe('getMemoryDecayStatus', () => {
+  it('新建记忆返回 fresh', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() });
+    expect(getMemoryDecayStatus(mem)).toBe('fresh');
+  });
+
+  it('90 天前的记忆返回 stale', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() - 91 * DAY_MS });
+    expect(getMemoryDecayStatus(mem)).toBe('stale');
+  });
+
+  it('180 天前的记忆返回 expired', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() - 181 * DAY_MS });
+    expect(getMemoryDecayStatus(mem)).toBe('expired');
+  });
+
+  it('高置信度（>=0.8）记忆衰减阈值翻倍', () => {
+    // 90 天 + 高置信度 → 仍为 fresh（阈值 180 天）
+    const highConf = makeHeader({ mtimeMs: Date.now() - 91 * DAY_MS, confidence: 1.0 });
+    expect(getMemoryDecayStatus(highConf)).toBe('fresh');
+
+    // 90 天 + 低置信度 → stale
+    const lowConf = makeHeader({ mtimeMs: Date.now() - 91 * DAY_MS, confidence: 0.3 });
+    expect(getMemoryDecayStatus(lowConf)).toBe('stale');
+  });
+
+  it('高置信度 180 天后仍为 stale（阈值 360 天才 expired）', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() - 181 * DAY_MS, confidence: 1.0 });
+    expect(getMemoryDecayStatus(mem)).toBe('stale');
+  });
+
+  it('高置信度 360 天后为 expired', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() - 361 * DAY_MS, confidence: 1.0 });
+    expect(getMemoryDecayStatus(mem)).toBe('expired');
+  });
+
+  it('lastRecalledMs 比 mtimeMs 更新时以 lastRecalledMs 为准', () => {
+    // mtimeMs 很旧，但最近被召回过
+    const mem = makeHeader({
+      mtimeMs: Date.now() - 200 * DAY_MS,
+      lastRecalledMs: Date.now() - 10 * DAY_MS,
+    });
+    expect(getMemoryDecayStatus(mem)).toBe('fresh');
+  });
+});
+
+// ─── memoryDecayFactor ───
+
+describe('memoryDecayFactor', () => {
+  it('fresh 记忆返回 1.0', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() });
+    expect(memoryDecayFactor(mem)).toBe(1.0);
+  });
+
+  it('stale 记忆返回 0.5', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() - 91 * DAY_MS });
+    expect(memoryDecayFactor(mem)).toBe(0.5);
+  });
+
+  it('expired 记忆返回 0.1', () => {
+    const mem = makeHeader({ mtimeMs: Date.now() - 181 * DAY_MS });
+    expect(memoryDecayFactor(mem)).toBe(0.1);
+  });
+
+  it('衰减因子直接影响召回分数排序', () => {
+    // 两个相同分数的记忆，fresh 应该排在 stale 前面
+    const fresh = makeHeader({ filename: 'fresh.md', mtimeMs: Date.now(), confidence: 0.5 });
+    const stale = makeHeader({ filename: 'stale.md', mtimeMs: Date.now() - 100 * DAY_MS, confidence: 0.5 });
+
+    const freshScore = 1.0 * memoryDecayFactor(fresh);
+    const staleScore = 1.0 * memoryDecayFactor(stale);
+
+    expect(freshScore).toBeGreaterThan(staleScore);
   });
 });

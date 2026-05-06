@@ -118,9 +118,22 @@ async function loadSystemPrompt(): Promise<string> {
         prompt += '\n\n' + codingPrompt;
       } catch { /* coding prompt not found, skip */ }
     }
+    // Eval mode: append strict answering instructions
+    if (process.env.ICE_EVAL_MODE === '1') {
+      prompt += `\n\n## 评测模式（EVALUATION MODE）
+
+你正在接受记忆系统的标准化评测。请严格遵守以下规则：
+
+1. **直接回答问题**。不要调用任何工具、不要输出特殊字符、不要尝试读取文件。你没有工具可用。
+2. **只使用系统注入的记忆**。你的回答必须完全基于 <system-reminder> 中提供的记忆内容。
+3. **基于记忆推理**。如果记忆中没有直接答案但可以推理，给出推理结果并说明依据。只在完全没有相关信息时才说"不知道"。
+4. **回答要简洁精准**。直接给出答案，不需要长篇解释。
+5. **必须使用与问题完全相同的语言回答。** 英文问题必须英文答，中文问题必须中文答。这是硬性规则，违反此规则的回答将被判为错误。
+6. **部分正确优于完全放弃**。如果你知道部分答案，给出你确定的部分，对不确定的部分明确标注。`;
+    }
     return prompt;
   } catch {
-    return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用中文。';
+    return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用与用户相同的语言。';
   }
 }
 

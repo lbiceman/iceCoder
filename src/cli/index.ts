@@ -33,7 +33,7 @@ ${c.bold}用法:${c.reset}
   iceCoder help                     显示此帮助
 
 ${c.bold}start/cli/web 选项:${c.reset}
-  --port, -p <n>       Web 服务器端口 (默认 3000)
+  --port, -p <n>       Web 服务器端口 (默认 1024)
   --no-tunnel          不启动 Cloudflare Tunnel (仅 start)
   --tunnel-bin <path>  cloudflared 可执行文件路径
 

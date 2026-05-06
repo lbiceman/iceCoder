@@ -26,7 +26,7 @@
     "iceCoder:tools": "tsx src/cli/index.ts tools",
     "iceCoder:mcp": "tsx src/cli/index.ts mcp",
     "iceCoder:config": "tsx src/cli/index.ts config",
-    "dev": "concurrently -n api,web,tunnel -c blue,green,magenta \"tsx src/index.ts\" \"tsx scripts/wait-then-vite.ts\" \"E:\\tools\\cloudflared\\cloudflared.exe tunnel --url http://localhost:3000 --metrics 127.0.0.1:20241\"",
+    "dev": "concurrently -n api,web,tunnel -c blue,green,magenta \"tsx src/index.ts\" \"tsx scripts/wait-then-vite.ts\" \"E:\\tools\\cloudflared\\cloudflared.exe tunnel --url http://localhost:1024 --metrics 127.0.0.1:20241\"",
     "dev:api": "tsx src/index.ts",
     "dev:web": "vite",
     "test": "vitest --run"
@@ -40,6 +40,7 @@
     "@anthropic-ai/sdk": "^0.90.0",
     "@types/ws": "^8.18.1",
     "cheerio": "^1.2.0",
+    "domhandler": "^6.0.1",
     "express": "^5.2.1",
     "jszip": "^3.10.1",
     "multer": "^2.1.1",

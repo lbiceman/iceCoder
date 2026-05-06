@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { MemoryHeader, FileMemoryType, FileMemoryConfig } from './types.js';
 import { FILE_MEMORY_TYPES } from './types.js';
+import { extractBodyFromMarkdown } from './memory-parser.js';
 
 /** frontmatter 最大读取行数 */
 const FRONTMATTER_MAX_LINES = 30;
@@ -123,28 +124,12 @@ export async function scanMemoryFiles(
  * 返回 frontmatter 之后的前 N 个字符，去除空行和 Markdown 格式标记。
  */
 function extractContentPreview(content: string): string {
-  const lines = content.split('\n');
-  let bodyStart = 0;
-
-  // 跳过 frontmatter（--- ... ---）
-  if (lines[0]?.trim() === '---') {
-    for (let i = 1; i < lines.length; i++) {
-      if (lines[i].trim() === '---') {
-        bodyStart = i + 1;
-        break;
-      }
-    }
-  }
-
-  // 提取正文，去除空行和纯格式行（如 --- 分隔线、* 时间戳行）
-  const bodyLines = lines.slice(bodyStart)
-    .map(l => l.trim())
-    .filter(l => l.length > 0 && l !== '---' && !l.startsWith('*'));
-
-  const body = bodyLines.join(' ');
-  return body.length > CONTENT_PREVIEW_MAX_CHARS
-    ? body.substring(0, CONTENT_PREVIEW_MAX_CHARS)
-    : body;
+  const body = extractBodyFromMarkdown(content, { keepTimestampLines: false });
+  // extractBodyFromMarkdown 返回换行分隔的正文，这里用空格连接
+  const joined = body.replace(/\n/g, ' ');
+  return joined.length > CONTENT_PREVIEW_MAX_CHARS
+    ? joined.substring(0, CONTENT_PREVIEW_MAX_CHARS)
+    : joined;
 }
 
 /**

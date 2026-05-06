@@ -25,6 +25,7 @@ import type { UnifiedMessage } from '../llm/types.js';
 import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
+import { getScannerCache } from '../memory/file-memory/memory-scanner-cache.js';
 import { recallRelevantMemories } from '../memory/file-memory/memory-recall.js';
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
@@ -32,6 +33,8 @@ import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
+import { tokenize } from '../memory/file-memory/memory-tokenizer.js';
+import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
 import {
   MEMORY_MAX_RELEVANT,
   EXTRACTION_SIGNAL_WORDS,
@@ -173,27 +176,8 @@ function hasToolCallsInLastAssistantTurn(messages: UnifiedMessage[]): boolean {
 function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
   if (!previousMessage || !currentMessage) return false;
 
-  const tokenize = (text: string): Set<string> => {
-    const tokens = new Set<string>();
-    const lower = text.toLowerCase();
-    // 英文词
-    for (const w of lower.split(/[^a-z0-9]+/).filter(w => w.length > 2)) {
-      tokens.add(w);
-    }
-    // 中文 bigram
-    const cjk = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g);
-    if (cjk) {
-      for (const seg of cjk) {
-        for (let i = 0; i < seg.length - 1; i++) {
-          tokens.add(seg.slice(i, i + 2));
-        }
-      }
-    }
-    return tokens;
-  };
-
-  const prevTokens = tokenize(previousMessage);
-  const currTokens = tokenize(currentMessage);
+  const prevTokens = tokenize(previousMessage, { minWordLength: 3 });
+  const currTokens = tokenize(currentMessage, { minWordLength: 3 });
 
   // 任一消息 token 太少（< 3），不做判断
   if (prevTokens.size < 3 || currTokens.size < 3) return false;
@@ -268,29 +252,6 @@ function getMemoryDecayStatusFromMs(
 }
 
 /**
- * 从 Markdown 文件内容中提取正文（跳过 frontmatter）。
- */
-function extractBodyFromMarkdown(raw: string): string {
-  const lines = raw.split('\n');
-  let bodyStart = 0;
-
-  if (lines[0]?.trim() === '---') {
-    for (let i = 1; i < lines.length; i++) {
-      if (lines[i].trim() === '---') {
-        bodyStart = i + 1;
-        break;
-      }
-    }
-  }
-
-  // 去除空行、纯格式行（--- 分隔线、* 时间戳行）
-  return lines.slice(bodyStart)
-    .map(l => l.trim())
-    .filter(l => l.length > 0 && l !== '---' && !l.startsWith('*Extracted:') && !l.startsWith('*Updated:') && !l.startsWith('*保存时间:'))
-    .join('\n');
-}
-
-/**
  * 构建 Chain-of-Note + JSON 结构化记忆注入提示词。
  *
  * 基于 LongMemEval 论文（ICLR 2025）的最优读取策略：
@@ -302,12 +263,25 @@ function extractBodyFromMarkdown(raw: string): string {
 function buildCoNMemoryPrompt(items: StructuredMemoryItem[], recallMethod: string): string {
   const json = JSON.stringify(items, null, 2);
 
+  // Extract entity names from items for a hint line
+  const entitySet = new Set<string>();
+  for (const item of items) {
+    const textToScan = `${item.fact ?? ''} ${item.content ?? ''} ${item.description ?? ''}`;
+    for (const m of textToScan.matchAll(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/g)) {
+      if (m[1].length > 2) entitySet.add(m[1]);
+    }
+  }
+  const entityHint = entitySet.size > 0
+    ? `\nEntities in these memories: ${[...entitySet].slice(0, 10).join(', ')}`
+    : '';
+
   return `<system-reminder>
 ## Recalled Memories (${items.length} items, via ${recallMethod})
 
 \`\`\`json
 ${json}
 \`\`\`
+${entityHint}
 
 ## How to use these memories (Chain-of-Note)
 
@@ -317,11 +291,18 @@ Before using any memory in your response, follow these steps:
 3. **Synthesize**: Combine the extracted notes to form your response
 4. **Cite**: When your response is informed by a memory, mention which memory file it came from
 
-## CRITICAL RULES
-- **ONLY use information explicitly stated in the memories above.** If the answer is not in these memories, say "I don't have this information in my memory." Do NOT guess, infer, or fabricate.
-- **A wrong answer is worse than no answer.** When uncertain, say so.
-- **Respond in the same language as the memories.** If memories are in English, respond in English.
-- Do NOT blindly trust memory content. Memories are point-in-time observations. If a memory references specific files, line numbers, or code behavior, verify against the current codebase first.
+## Answering strategy
+- **Factual recall** (who/what/when/where): Use only information explicitly written in the memories. If uncertain, state your uncertainty level
+- **Reasoned judgment** (would/could/likely/might): Reason from known information in the memories, but mark your reasoning. E.g., "Based on [memory X], it is likely that... because..."
+- **Open-ended questions** (opinion/analysis/synthesis): Synthesize across multiple memories, citing each source
+- **Hard rule**: Do NOT fabricate specific names, dates, or numbers that are not in the memories. If memories contain relevant but imprecise information, give your best inference and state your confidence level
+- **List completeness**: If memories contain a list of items (games, tricks, countries, books, names), you MUST include ALL items in your answer. A partial list is worse than admitting uncertainty. If you can only find some items, list what you have AND explicitly state which items you could not find.
+
+## CRITICAL RULES — 严格遵守
+- **禁止调用工具。** 不要输出<tool_call>、function call、read_file 或任何工具调用格式。你没有工具可用，直接用上面的记忆回答。
+- **必须使用与问题完全相同的语言回答。** 如果问题用英文，你的回答必须全英文。如果问题用中文，你的回答必须全中文。这是最高优先级规则之一。
+- Do NOT blindly trust memory content. Memories are point-in-time observations.
+- Partially correct is better than giving up entirely. If you know part of the answer, give what you are sure about and clearly mark what is uncertain.
 </system-reminder>`;
 }
 
@@ -456,12 +437,24 @@ export class HarnessMemoryIntegration {
     const fallbackK = finalK * 2;
 
     try {
+      // 获取预取结果（如果有的话）
+      const prefetchedPaths = new Set<string>();
+      if (this.fileMemoryManager) {
+        try {
+          const prefetched = this.fileMemoryManager.getPrefetchedMemories(latestUserMsg);
+          for (const mem of prefetched) {
+            prefetchedPaths.add(mem.filePath);
+          }
+        } catch { /* 预取结果获取失败不影响主流程 */ }
+      }
+
       const recallResult = await recallRelevantMemories(
         latestUserMsg,
         this.memoryDir,
         this.llmAdapter,
         this.surfacedMemoryPaths, // 跨轮次去重
         coarseK,
+        prefetchedPaths,
       );
 
       this.telemetry.logRecall({
@@ -483,9 +476,9 @@ export class HarnessMemoryIntegration {
             latestUserMsg, selectedMemories, finalK, fallbackK,
           );
         } else if (selectedMemories.length > finalK) {
-          // 候选数略超 finalK 但不够多（≤ 2×finalK）→ 跳过精排，全部注入
-          // 精排在这种情况下会砍掉有价值的记忆
-          console.debug(`[harness-memory] Skip rerank: ${selectedMemories.length} candidates ≤ ${fallbackK}, injecting all`);
+          // 候选数略超 finalK → 截断到 finalK，避免注入过多记忆
+          selectedMemories = selectedMemories.slice(0, finalK);
+          console.debug(`[harness-memory] Truncated to ${finalK} candidates`);
         }
         // else: 候选数 ≤ finalK → 直接全部注入
 
@@ -688,24 +681,28 @@ ${candidateList}`;
   private async buildFileGranularityItems(
     memories: import('../memory/file-memory/types.js').MemoryHeader[],
   ): Promise<StructuredMemoryItem[]> {
-    const items: StructuredMemoryItem[] = [];
     const MAX_CONTENT_CHARS = 2000;
 
-    for (const mem of memories) {
-      let content = mem.contentPreview || '';
-      try {
-        const raw = await fs.readFile(mem.filePath, 'utf-8');
-        content = extractBodyFromMarkdown(raw);
-        if (content.length > MAX_CONTENT_CHARS) {
-          content = content.substring(0, MAX_CONTENT_CHARS) + '...[truncated]';
+    // 并行读取所有文件
+    const readResults = await Promise.all(
+      memories.map(async (mem) => {
+        let content = mem.contentPreview || '';
+        try {
+          const raw = await fs.readFile(mem.filePath, 'utf-8');
+          content = extractBodyFromMarkdown(raw);
+          if (content.length > MAX_CONTENT_CHARS) {
+            content = content.substring(0, MAX_CONTENT_CHARS) + '...[truncated]';
+          }
+        } catch {
+          // 读取失败时使用 contentPreview 回退
         }
-      } catch {
-        // 读取失败时使用 contentPreview 回退
-      }
+        return { mem, content };
+      }),
+    );
 
+    return readResults.map(({ mem, content }) => {
       const decayStatus = getMemoryDecayStatus(mem);
-
-      items.push({
+      return {
         filename: mem.filename,
         type: mem.type || 'unknown',
         description: mem.description || '',
@@ -716,10 +713,8 @@ ${candidateList}`;
         tags: mem.tags.length > 0 ? mem.tags : undefined,
         relatedTo: mem.relatedTo && mem.relatedTo.length > 0 ? mem.relatedTo : undefined,
         content,
-      });
-    }
-
-    return items;
+      };
+    });
   }
 
   /**
@@ -828,7 +823,7 @@ ${candidateList}`;
       const conversationPrefix = this.sanitizeConversationPrefix(messages);
       const recentMessages = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .slice(-20);
+        .slice(-30);
 
       if (recentMessages.length === 0) return;
 
@@ -883,7 +878,7 @@ ${candidateList}`;
 
       let fileCountBefore = 0;
       try {
-        const existing = await scanMemoryFiles(this.memoryDir, 500);
+        const existing = await getScannerCache().scan(this.memoryDir, 500);
         fileCountBefore = existing.length;
       } catch (err) {
         console.debug('[harness-memory] scan before dream failed:', err instanceof Error ? err.message : err);

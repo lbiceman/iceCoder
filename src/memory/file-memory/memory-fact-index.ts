@@ -16,6 +16,9 @@
  */
 
 import type { MemoryHeader, FileMemoryType } from './types.js';
+import { tokenize, extractEntities } from './memory-tokenizer.js';
+import { extractBodyFromMarkdown } from './memory-parser.js';
+import { promises as fs } from 'node:fs';
 
 /**
  * 单条事实。
@@ -47,12 +50,20 @@ interface CacheEntry {
   mtimeMs: number;
 }
 
+/**
+ * 文件内容缓存条目（mtime 失效）。
+ */
+interface ContentCacheEntry {
+  content: string;
+  mtimeMs: number;
+}
+
 /** 最小 fact 长度（过短的行没有信息量） */
 const MIN_FACT_LENGTH = 6;
 /** 最大 fact 长度（超长行按标点分割） */
-const MAX_FACT_LENGTH = 200;
+const MAX_FACT_LENGTH = 300;
 /** 每个文件最多提取的 fact 数量 */
-const MAX_FACTS_PER_FILE = 20;
+const MAX_FACTS_PER_FILE = 30;
 
 /**
  * Fact 索引构建器。
@@ -62,35 +73,88 @@ const MAX_FACTS_PER_FILE = 20;
  */
 export class FactIndex {
   private cache = new Map<string, CacheEntry>();
+  /** 文件内容缓存（避免重复 readFile） */
+  private contentCache = new Map<string, ContentCacheEntry>();
 
   /**
    * 从记忆头信息列表构建 fact 索引。
    *
-   * 优先读取完整文件内容（精确的行分割），
-   * 回退到 contentPreview（空格分隔，按句号分割）。
+   * 自动从磁盘读取文件内容（mtime 失效时重新读取），
+   * 如果外部已提供 fullContents 则优先使用（零 I/O）。
+   * 回退到 contentPreview（无需额外 I/O）。
    *
    * @param memories - scanMemoryFiles 返回的记忆头信息
    * @param fullContents - 可选的完整文件内容 map（filePath → content）
    * @returns 所有 facts 的扁平列表
    */
-  buildIndex(
+  async buildIndex(
     memories: MemoryHeader[],
     fullContents?: Map<string, string>,
-  ): FactEntry[] {
+  ): Promise<FactEntry[]> {
     const allFacts: FactEntry[] = [];
 
+    // 批量读取需要从磁盘加载的文件内容（并发）
+    const toRead: MemoryHeader[] = [];
     for (const mem of memories) {
-      // 检查缓存
+      // 检查 fact 缓存（mtime 未变则跳过）
       const cached = this.cache.get(mem.filePath);
       if (cached && cached.mtimeMs === mem.mtimeMs) {
         allFacts.push(...cached.facts);
         continue;
       }
+      // 如果外部未提供 fullContents，且内容缓存未命中，则需要从磁盘读取
+      if (!fullContents?.has(mem.filePath)) {
+        const contentCached = this.contentCache.get(mem.filePath);
+        if (!contentCached || contentCached.mtimeMs !== mem.mtimeMs) {
+          toRead.push(mem);
+        }
+      }
+    }
 
-      // 优先使用 fullContents，其次 contentPreview
-      const text = fullContents?.get(mem.filePath) ?? mem.contentPreview ?? '';
-      const hasFullContent = fullContents?.has(mem.filePath) ?? false;
-      const body = hasFullContent ? extractBody(text) : text;
+    // 并发读取需要从磁盘加载的文件
+    if (toRead.length > 0) {
+      const readResults = await Promise.allSettled(
+        toRead.map(async (mem) => {
+          const content = await fs.readFile(mem.filePath, 'utf-8');
+          return { filePath: mem.filePath, content, mtimeMs: mem.mtimeMs };
+        }),
+      );
+      for (const result of readResults) {
+        if (result.status === 'fulfilled') {
+          this.contentCache.set(result.value.filePath, {
+            content: result.value.content,
+            mtimeMs: result.value.mtimeMs,
+          });
+        }
+      }
+    }
+
+    // 构建未缓存文件的 facts
+    for (const mem of memories) {
+      const cached = this.cache.get(mem.filePath);
+      if (cached && cached.mtimeMs === mem.mtimeMs) {
+        continue; // 已在上面处理
+      }
+
+      // 获取文件内容：外部传入 > 内容缓存 > contentPreview
+      let text: string;
+      let hasFullContent: boolean;
+
+      if (fullContents?.has(mem.filePath)) {
+        text = fullContents.get(mem.filePath)!;
+        hasFullContent = true;
+      } else {
+        const contentCached = this.contentCache.get(mem.filePath);
+        if (contentCached && contentCached.mtimeMs === mem.mtimeMs) {
+          text = contentCached.content;
+          hasFullContent = true;
+        } else {
+          text = mem.contentPreview ?? '';
+          hasFullContent = false;
+        }
+      }
+
+      const body = hasFullContent ? extractBodyFromMarkdown(text) : text;
       const rawFacts = splitIntoFacts(body);
       const facts: FactEntry[] = rawFacts.slice(0, MAX_FACTS_PER_FILE).map(factText => ({
         factText,
@@ -112,6 +176,15 @@ export class FactIndex {
   }
 
   /**
+   * 获取指定文件的所有已缓存 facts。
+   * 如果缓存中没有，返回空数组（不触发读取）。
+   */
+  getFactsForFile(filePath: string): FactEntry[] {
+    const cached = this.cache.get(filePath);
+    return cached?.facts ?? [];
+  }
+
+  /**
    * 对 facts 做关键词精排。
    *
    * 使用和 memory-recall.ts 相同的 tokenize + 重叠度算法，
@@ -126,13 +199,29 @@ export class FactIndex {
     // 空查询时直接返回前 N 条（不做排序）
     if (queryTokens.size === 0) return facts.slice(0, maxResults);
 
+    // v6: 提取查询中的实体名（大写开头连续英文词）
+    const queryEntities = extractEntities(query);
+
     const scored = facts.map(fact => {
       const factTokens = tokenize(fact.factText);
       let hits = 0;
       for (const token of queryTokens) {
         if (factTokens.has(token)) hits++;
       }
-      const score = queryTokens.size > 0 ? hits / queryTokens.size : 0;
+      let score = queryTokens.size > 0 ? hits / queryTokens.size : 0;
+
+      // v6: 实体名精确匹配加权
+      if (queryEntities.size > 0 && score > 0) {
+        const factLower = fact.factText.toLowerCase();
+        let entityHits = 0;
+        for (const entity of queryEntities) {
+          if (factLower.includes(entity)) entityHits++;
+        }
+        if (entityHits > 0) {
+          score += 0.3 * (entityHits / queryEntities.size);
+        }
+      }
+
       return { fact, score };
     });
 
@@ -163,10 +252,11 @@ export class FactIndex {
   }
 
   /**
-   * 清除缓存。
+   * 清除缓存（包括内容缓存）。
    */
   clearCache(): void {
     this.cache.clear();
+    this.contentCache.clear();
   }
 
   /**
@@ -182,34 +272,6 @@ export class FactIndex {
 }
 
 // ─── 内部工具函数 ───
-
-/**
- * 从 Markdown 内容中提取正文（跳过 frontmatter）。
- */
-function extractBody(content: string): string {
-  const lines = content.split('\n');
-  let bodyStart = 0;
-
-  if (lines[0]?.trim() === '---') {
-    for (let i = 1; i < lines.length; i++) {
-      if (lines[i].trim() === '---') {
-        bodyStart = i + 1;
-        break;
-      }
-    }
-  }
-
-  return lines.slice(bodyStart)
-    .map(l => l.trim())
-    .filter(l =>
-      l.length > 0 &&
-      l !== '---' &&
-      !l.startsWith('*Extracted:') &&
-      !l.startsWith('*Updated:') &&
-      !l.startsWith('*保存时间:'),
-    )
-    .join('\n');
-}
 
 /**
  * 将正文分割为独立事实。
@@ -252,38 +314,6 @@ function splitIntoFacts(body: string): string[] {
   }
 
   return facts;
-}
-
-/**
- * 混合语言分词器（和 memory-recall.ts 中的实现一致）。
- *
- * 英文/数字：按空格+标点分词，过滤 ≤1 字符的词。
- * 中文：bigram 滑动窗口。
- */
-function tokenize(text: string): Set<string> {
-  const tokens = new Set<string>();
-  const lower = text.toLowerCase();
-
-  // 英文/数字词
-  const englishWords = lower.split(/[^a-z0-9]+/).filter(w => w.length > 1);
-  for (const w of englishWords) {
-    tokens.add(w);
-  }
-
-  // 中文 bigram
-  const cjkSegments = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g);
-  if (cjkSegments) {
-    for (const seg of cjkSegments) {
-      if (seg.length === 1) {
-        tokens.add(seg);
-      }
-      for (let i = 0; i < seg.length - 1; i++) {
-        tokens.add(seg.slice(i, i + 2));
-      }
-    }
-  }
-
-  return tokens;
 }
 
 // ─── 全局单例 ───

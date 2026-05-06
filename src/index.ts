@@ -256,7 +256,7 @@ async function main(): Promise<void> {
   wireOrchestratorToSSE(orchestrator, sseManager);
 
   // 7. 创建带所有 API 路由的 Express 服务器
-  const port = parseInt(process.env.PORT ?? '3000', 10);
+  const port = parseInt(process.env.PORT ?? '1024', 10);
 
   const app = await createServer({
     routes: [

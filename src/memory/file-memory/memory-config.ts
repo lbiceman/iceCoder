@@ -54,8 +54,8 @@ export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
 // ─── LLM 提取配置 ───
 
 export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
-  maxMemories: 5,
-  maxOutputTokens: 2048,
+  maxMemories: 8,
+  maxOutputTokens: 3072,
   enablePromptCache: true,
 };
 
@@ -84,10 +84,10 @@ export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
 // ─── Harness 记忆集成配置 ───
 
 /** 记忆注入：最大相关记忆数 */
-export const MEMORY_MAX_RELEVANT = 15;
+export const MEMORY_MAX_RELEVANT = 40;
 
 /** LLM 提取触发条件：最小对话轮次 */
-export const EXTRACTION_MIN_TURNS = 3;
+export const EXTRACTION_MIN_TURNS = 2;
 
 /**
  * LLM 提取触发信号词。

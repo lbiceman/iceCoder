@@ -8,11 +8,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 5173,
+    port: 1025,
     // 将 API 请求代理到 Express 后端
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:1024',
         changeOrigin: true,
         ws: true,
       },

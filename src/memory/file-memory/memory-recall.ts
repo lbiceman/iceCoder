@@ -23,9 +23,12 @@
 
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
+import { getScannerCache } from './memory-scanner-cache.js';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { parseLLMJsonObject } from './json-parser.js';
 import { getFactIndex, type FactEntry } from './memory-fact-index.js';
+import { tokenize, extractEntities } from './memory-tokenizer.js';
+import { memoryDecayFactor } from './memory-age.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -44,20 +47,22 @@ export interface RecallResult {
 }
 
 /**
- * 记忆选择的系统提示词。
+ * 记忆选择的系统提示词（v7 — 合并选文件和精排为一次调用）。
  */
-const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to an AI assistant as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
+const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to an AI assistant as it processes a user's query. You will be given the user's query and a list of available memory files, each with key facts.
 
-Return a JSON object with a "selected" field containing an array of filenames for ALL memories that are relevant to the query. Include any memory that might contain useful information — when in doubt, include it.
-- If there are no relevant memories, return an empty array.
-- **Broad relevance**: Select any memory that contains information related to the people, events, topics, or time periods mentioned in the query. This includes personal conversations, project details, user preferences, and any factual information.
-- **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X", "stop using X", "别用 X"), also select memories about alternatives to X or preferences in the same domain. Examples:
-  - "don't use Jest" → also select memories about testing preferences (Vitest, Mocha, etc.)
-  - "不要用 var" → also select memories about variable declaration style
-  - "stop using Webpack" → also select memories about build tool preferences
-- **Time awareness**: If the query references a time period ("last week", "上周", "yesterday", "最近"), prefer memories whose timestamps fall within that period, but do not exclude others.
+Return a JSON object with:
+- "selected": array of filenames for ALL memories relevant to the query
+- "selected_facts": array of objects, each with "id" (fact ID like F1, F2...) and "reasoning" (why this fact is relevant)
+
+Guidelines:
+- **Broad relevance**: Select any memory containing information related to people, events, topics, or time periods in the query. When in doubt, include it.
+- If no memories are relevant, return empty arrays.
+- **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X"), also select memories about alternatives to X.
+- **Time awareness**: If the query references a time period, prefer memories with timestamps in that period, but do not exclude others.
+- **Fact selection**: From the selected files, pick the specific facts most relevant to answering the query. Limit to 30 facts total.
 - Return ONLY valid JSON, no other text.
-Example response: {"selected": ["user_role.md", "feedback_testing.md"]}`;
+Example: {"selected": ["user_role.md", "feedback_testing.md"], "selected_facts": [{"id": "F1", "reasoning": "Directly answers the query about user role"}, {"id": "F5", "reasoning": "Provides context about testing preferences"}]}`;
 
 /**
  * LLM 驱动的记忆召回。
@@ -75,18 +80,20 @@ export async function recallRelevantMemories(
   llmAdapter: LLMAdapterInterface | null,
   alreadySurfaced: Set<string> = new Set(),
   maxResults: number = 5,
+  prefetchedPaths: Set<string> = new Set(),
 ): Promise<RecallResult> {
   const startTime = Date.now();
 
-  // 扫描记忆文件（项目级 + 用户级）
-  const allMemories = await scanMemoryFiles(memoryDir, 200);
+  // 扫描记忆文件（项目级 + 用户级，使用扫描缓存）
+  const scannerCache = getScannerCache();
+  const allMemories = await scannerCache.scan(memoryDir, 200);
   // 用户级记忆：只在非测试环境且目录存在时扫描
   if (!memoryDir.includes('__test') && !memoryDir.includes('nonexistent')) {
     const userMemoryDir = path.resolve(process.env.ICE_USER_MEMORY_DIR ?? 'data/user-memory');
     const resolvedMemoryDir = path.resolve(memoryDir);
     if (resolvedMemoryDir !== userMemoryDir) {
       try {
-        const userMemories = await scanMemoryFiles(userMemoryDir, 50);
+        const userMemories = await scannerCache.scan(userMemoryDir, 50);
         const seen = new Set(allMemories.map(m => m.filename));
         for (const um of userMemories) {
           if (!seen.has(um.filename)) {
@@ -117,26 +124,23 @@ export async function recallRelevantMemories(
   }
 
   // 构建 Fact Index（缓存，mtime 失效）
-  // 读取完整文件内容用于精确的 fact 提取
+  // FactIndex 现在自行管理文件内容缓存，无需外部读取
   const factIndex = getFactIndex();
-  const fullContents = new Map<string, string>();
-  for (const mem of filteredMemories) {
-    try {
-      const content = await fs.readFile(mem.filePath, 'utf-8');
-      fullContents.set(mem.filePath, content);
-    } catch { /* 读取失败时 buildIndex 会回退到 contentPreview */ }
-  }
-  factIndex.buildIndex(filteredMemories, fullContents);
+  await factIndex.buildIndex(filteredMemories);
 
-  // 如果有 LLM 适配器，使用 LLM 召回
+  // 如果有 LLM 适配器，使用 LLM 召回（v7：一次调用同时选文件和精排 facts）
   if (llmAdapter) {
     try {
-      const selected = await llmSelectMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange);
+      const llmResult = await llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange);
       // ── 关联扩展（1 跳）──
-      const expanded = expandRelatedMemories(selected, filteredMemories, alreadySurfaced);
-      // 对选中文件 + 关联文件的 facts 做关键词精排
-      const allSelected = [...selected, ...expanded];
-      const selectedFacts = extractFactsFromSelected(query, allSelected, factIndex);
+      const expanded = expandRelatedMemories(llmResult.selectedMemories, filteredMemories, alreadySurfaced);
+      const allSelected = [...llmResult.selectedMemories, ...expanded];
+      // 如果有关联扩展的文件，补充它们的 facts
+      let selectedFacts = llmResult.selectedFacts;
+      if (expanded.length > 0) {
+        const expandedFacts = await extractFactsFromSelected(query, expanded, factIndex);
+        selectedFacts = [...selectedFacts, ...expandedFacts].slice(0, 15);
+      }
       // 异步更新召回计数（不阻塞返回）
       updateRecallMetadata(allSelected).catch(() => {});
       return {
@@ -152,11 +156,11 @@ export async function recallRelevantMemories(
   }
 
   // 回退：关键词匹配
-  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange);
+  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange, prefetchedPaths);
   // ── 关联扩展（关键词回退路径也支持）──
   const fallbackExpanded = expandRelatedMemories(fallbackResults, filteredMemories, alreadySurfaced);
   const allFallback = [...fallbackResults, ...fallbackExpanded];
-  const fallbackFacts = extractFactsFromSelected(query, allFallback, factIndex);
+  const fallbackFacts = await extractFactsFromSelected(query, allFallback, factIndex);
   // 异步更新召回计数
   updateRecallMetadata(allFallback).catch(() => {});
   return {
@@ -168,21 +172,33 @@ export async function recallRelevantMemories(
 }
 
 /**
- * 使用 LLM 从记忆 manifest 中选择最相关的文件。
- * v2: manifest 中每个文件附加 top-3 facts 作为 Key Expansion。
+ * LLM 一次调用同时选文件和精排 facts 的结果。
  */
-async function llmSelectMemories(
+interface LLMSelectResult {
+  /** 选中的记忆文件 */
+  selectedMemories: MemoryHeader[];
+  /** LLM 选中的 fact IDs 对应的精排结果 */
+  selectedFacts: FactEntry[];
+}
+
+/**
+ * 使用 LLM 从记忆 manifest 中选择最相关的文件，同时精排 facts（v7 — 合并为一次调用）。
+ *
+ * 之前需要两次 LLM 调用：选文件 + 精排 facts。
+ * 现在一次 LLM 调用同时返回选中的文件和 facts，节省 ~40% token。
+ */
+async function llmSelectAndRankMemories(
   query: string,
   memories: MemoryHeader[],
   llmAdapter: LLMAdapterInterface,
   maxResults: number,
   factIndex: import('./memory-fact-index.js').FactIndex,
   timeRange: TimeRange | null = null,
-): Promise<MemoryHeader[]> {
-  const manifest = formatManifestWithFacts(memories, query, factIndex);
+): Promise<LLMSelectResult> {
+  const { manifest, factIdMap } = formatManifestWithFactIds(memories, query, factIndex);
   const validFilenames = new Set(memories.map(m => m.filename));
 
-  // v4: 时间范围提示（帮助 LLM 优先选择时间范围内的记忆）
+  // v4: 时间范围提示
   const timeHint = timeRange
     ? `\n\nNote: The user is asking about memories from ${new Date(timeRange.since).toISOString().split('T')[0]} to ${new Date(timeRange.until).toISOString().split('T')[0]} ("${timeRange.matchedText}"). Prefer memories with timestamps in this range.`
     : '';
@@ -196,77 +212,56 @@ async function llmSelectMemories(
   ];
 
   const response = await llmAdapter.chat(messages, {
-    maxTokens: 256,
+    maxTokens: 512,
     temperature: 0,
   });
 
-  // 解析 JSON 响应（健壮解析，多层回退）
+  // 解析 JSON 响应
   const content = response.content.trim();
-  console.debug(`[memory-recall] LLM select response: ${content.substring(0, 300)}`);
-  const parsed = parseLLMJsonObject<{ selected?: string[] }>(content);
-  if (!parsed || !parsed.selected) {
+  console.debug(`[memory-recall] LLM select+rank response: ${content.substring(0, 500)}`);
+  const parsed = parseLLMJsonObject<{
+    selected?: string[];
+    selected_facts?: Array<{ id: string; reasoning: string }>;
+  }>(content);
+
+  if (!parsed || !parsed.selected || parsed.selected.length === 0) {
     console.debug(`[memory-recall] LLM returned no selections. Manifest had ${memories.length} files.`);
-    return [];
+    return { selectedMemories: [], selectedFacts: [] };
   }
 
   try {
+    // 解析选中的文件
     const selectedFilenames = parsed.selected
       .filter((f: string) => validFilenames.has(f))
       .slice(0, maxResults);
 
     const byFilename = new Map(memories.map(m => [m.filename, m]));
-    return selectedFilenames
+    const selectedMemories = selectedFilenames
       .map((f: string) => byFilename.get(f))
       .filter((m: MemoryHeader | undefined): m is MemoryHeader => m !== undefined);
-  } catch {
-    return [];
-  }
-}
 
-/**
- * 中日韩字符检测正则。
- * CJK Unified Ideographs (4E00-9FFF) + 扩展 A/B + 兼容。
- */
-const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
-
-/**
- * 混合语言分词器。
- *
- * 英文/数字：按空格+标点分词，过滤 ≤1 字符的词。
- * 中文：bigram 滑动窗口（2 字一组）。
- *   "数据库查询优化" → ["数据", "据库", "库查", "查询", "询优", "优化"]
- *
- * bigram 在信息检索中是经典的中文处理方案：
- * - 零依赖，无需词典
- * - 对"匹配"场景够用（查询和记忆描述共享相同 bigram 即可命中）
- * - 会产生无意义片段（如"据库"），但不影响匹配效果
- */
-function tokenize(text: string): Set<string> {
-  const tokens = new Set<string>();
-  const lower = text.toLowerCase();
-
-  // 英文/数字词：按非字母数字字符分割
-  const englishWords = lower.split(/[^a-z0-9]+/).filter(w => w.length > 1);
-  for (const w of englishWords) {
-    tokens.add(w);
-  }
-
-  // 提取中文字符序列，对每段做 bigram
-  const cjkSegments = lower.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g);
-  if (cjkSegments) {
-    for (const seg of cjkSegments) {
-      // 单字也加入（允许单字匹配，如"库"匹配"数据库"）
-      if (seg.length === 1) {
-        tokens.add(seg);
+    // 解析选中的 facts
+    let selectedFacts: FactEntry[] = [];
+    if (parsed.selected_facts && factIdMap.size > 0) {
+      const factEntries: FactEntry[] = [];
+      for (const sf of parsed.selected_facts) {
+        const fact = factIdMap.get(sf.id);
+        if (fact) factEntries.push(fact);
       }
-      // bigram
-      for (let i = 0; i < seg.length - 1; i++) {
-        tokens.add(seg.slice(i, i + 2));
+      if (factEntries.length > 0) {
+        selectedFacts = factEntries.slice(0, 30);
       }
     }
-  }
 
-  return tokens;
+    // 如果 LLM 没有返回 selected_facts，回退到关键词精排
+    if (selectedFacts.length === 0 && selectedMemories.length > 0) {
+      selectedFacts = await extractFactsFromSelected(query, selectedMemories, factIndex);
+    }
+
+    return { selectedMemories, selectedFacts };
+  } catch {
+    return { selectedMemories: [], selectedFacts: [] };
+  }
 }
 
 // ─── v4: 否定查询展开 ───
@@ -452,6 +447,58 @@ export function parseTimeRange(query: string): TimeRange | null {
 
   // ── 相对时间（现有逻辑）──
 
+  // "the [weekday] before [date]" — LoCoMo 高频模式
+  // e.g., "the Sunday before 25 May 2023" → 21 May 2023
+  const WEEKDAY_NAMES = '(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)';
+  const WEEKDAY_MAP: Record<string, number> = {
+    sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+  };
+  // "the week before [date]" → 7-day range ending before date
+  const weekBeforeMatch = query.match(new RegExp(`the\\s+week\\s+before\\s+(\\d{1,2})\\s+(${MONTH_NAMES})\\s+(\\d{4})`, 'i'));
+  if (weekBeforeMatch) {
+    const month = MONTH_MAP[weekBeforeMatch[2].toLowerCase()];
+    if (month !== undefined) {
+      const refDate = Date.UTC(parseInt(weekBeforeMatch[3]), month, parseInt(weekBeforeMatch[1]));
+      return { since: refDate - 7 * DAY, until: refDate, matchedText: weekBeforeMatch[0] };
+    }
+  }
+  // "the [weekday] before [date]"
+  const weekdayBeforeMatch = query.match(new RegExp(`the\\s+(${WEEKDAY_NAMES})\\s+before\\s+(\\d{1,2})\\s+(${MONTH_NAMES})\\s+(\\d{4})`, 'i'));
+  if (weekdayBeforeMatch) {
+    const targetWeekday = WEEKDAY_MAP[weekdayBeforeMatch[1].toLowerCase()];
+    const month = MONTH_MAP[weekdayBeforeMatch[3].toLowerCase()];
+    if (targetWeekday !== undefined && month !== undefined) {
+      const refDate = new Date(Date.UTC(parseInt(weekdayBeforeMatch[4]), month, parseInt(weekdayBeforeMatch[2])));
+      // Walk back from refDate to find the previous target weekday
+      const refDay = refDate.getUTCDay();
+      let daysBack = refDay - targetWeekday;
+      if (daysBack <= 0) daysBack += 7; // ensure we go backwards at least 1 day
+      const targetMs = refDate.getTime() - daysBack * DAY;
+      return { since: targetMs, until: targetMs + DAY, matchedText: weekdayBeforeMatch[0] };
+    }
+  }
+  // "the week before [ISO date]"
+  const weekBeforeISO = query.match(/the\s+week\s+before\s+(\d{4})-(\d{2})-(\d{2})/i);
+  if (weekBeforeISO) {
+    const refDate = new Date(`${weekBeforeISO[1]}-${weekBeforeISO[2]}-${weekBeforeISO[3]}T00:00:00Z`);
+    if (!isNaN(refDate.getTime())) {
+      return { since: refDate.getTime() - 7 * DAY, until: refDate.getTime(), matchedText: weekBeforeISO[0] };
+    }
+  }
+  // "N years/days/months ago"
+  const nTimeAgo = query.match(/(\d+)\s+(years?|months?|days?)\s+ago/i);
+  if (nTimeAgo) {
+    const n = parseInt(nTimeAgo[1], 10);
+    const unit = nTimeAgo[2].toLowerCase();
+    if (n > 0 && n <= 100) {
+      let since: number;
+      if (unit.startsWith('year')) since = now - n * 365 * DAY;
+      else if (unit.startsWith('month')) since = now - n * 30 * DAY;
+      else since = now - n * DAY;
+      return { since, until: now, matchedText: nTimeAgo[0] };
+    }
+  }
+
   // 中文：最近N天
   const recentDaysCN = query.match(/最近\s*(\d+)\s*天/);
   if (recentDaysCN) {
@@ -556,6 +603,55 @@ export function buildIdfMap(memories: MemoryHeader[]): Map<string, number> {
   return idfMap;
 }
 
+// ─── IDF 表缓存 ───
+
+/** IDF 缓存条目 */
+interface IdfCacheEntry {
+  idfMap: Map<string, number>;
+  /** 缓存时记忆列表的指纹（filenames + mtimeMs 排序后的哈希） */
+  fingerprint: string;
+}
+
+/** 进程级 IDF 缓存 */
+let idfCache: IdfCacheEntry | null = null;
+
+/**
+ * 计算记忆列表的指纹（用于判断是否需要重建 IDF 表）。
+ * 基于 filenames + mtimeMs 排序后拼接，快速判断记忆列表是否变化。
+ */
+function computeMemoriesFingerprint(memories: MemoryHeader[]): string {
+  const sorted = memories
+    .map(m => `${m.filename}:${m.mtimeMs}`)
+    .sort()
+    .join('|');
+  return `${memories.length}:${sorted.length}:${sorted.slice(0, 500)}`;
+}
+
+/**
+ * 带缓存的 IDF 表构建。
+ *
+ * 如果记忆列表未变化（指纹相同），直接返回缓存结果；
+ * 否则重新计算并更新缓存。
+ */
+export function buildIdfMapCached(memories: MemoryHeader[]): Map<string, number> {
+  const fingerprint = computeMemoriesFingerprint(memories);
+
+  if (idfCache && idfCache.fingerprint === fingerprint) {
+    return idfCache.idfMap;
+  }
+
+  const idfMap = buildIdfMap(memories);
+  idfCache = { idfMap, fingerprint };
+  return idfMap;
+}
+
+/**
+ * 使 IDF 缓存失效（记忆文件变更后调用）。
+ */
+export function invalidateIdfCache(): void {
+  idfCache = null;
+}
+
 /**
  * 关键词匹配回退（LLM 不可用时使用）。
  *
@@ -580,9 +676,13 @@ function keywordFallback(
   maxResults: number,
   negationExpansions: string[] = [],
   timeRange: TimeRange | null = null,
+  prefetchedPaths: Set<string> = new Set(),
 ): MemoryHeader[] {
   const queryLower = query.toLowerCase();
   const queryTokens = tokenize(query);
+
+  // v6: 提取实体名（大写开头的连续英文词），用于精确匹配加权
+  const queryEntities = extractEntities(query);
 
   // v4: 否定展开词合并到搜索 token 集合
   if (negationExpansions.length > 0) {
@@ -593,8 +693,8 @@ function keywordFallback(
     }
   }
 
-  // v5: 构建 IDF 表（一次遍历，零额外 I/O）
-  const idfMap = buildIdfMap(memories);
+  // v5: 构建 IDF 表（带缓存，记忆列表未变化时零计算）
+  const idfMap = buildIdfMapCached(memories);
 
   // 计算查询 token 的总 IDF 权重（用于归一化）
   let totalQueryIdf = 0;
@@ -631,6 +731,18 @@ function keywordFallback(
       keywordScore += totalQueryIdf > 0 ? (weightedHits / (totalQueryIdf * 2)) * 0.6 : 0;
     }
 
+    // v6: 实体名精确匹配加权 — 查询中的实体名出现在记忆中时额外加分
+    if (queryEntities.size > 0 && keywordScore > 0) {
+      const memText = `${memory.description ?? ''} ${memory.contentPreview ?? ''} ${memory.filename}`.toLowerCase();
+      let entityHits = 0;
+      for (const entity of queryEntities) {
+        if (memText.includes(entity)) entityHits++;
+      }
+      if (entityHits > 0) {
+        keywordScore += 0.3 * (entityHits / queryEntities.size); // 最多 +0.3
+      }
+    }
+
     // 关键词完全不匹配 → 分数为 0，不召回
     if (keywordScore === 0) {
       return { memory, score: 0 };
@@ -638,9 +750,9 @@ function keywordFallback(
 
     let score = keywordScore;
 
-    // 新鲜度加分（最近修改的记忆更相关）
-    const ageDays = Math.floor((Date.now() - memory.mtimeMs) / 86_400_000);
-    score += Math.max(0, 1 - ageDays / 30) * 0.2;
+    // 新鲜度加分：使用 decay factor（stale 0.5x, expired 0.1x）
+    const decay = memoryDecayFactor(memory);
+    score *= decay;
 
     // 置信度加分（用户明确声明的记忆优先）
     score += (memory.confidence || 0.5) * 0.15;
@@ -654,11 +766,16 @@ function keywordFallback(
       score *= computeTimeBoost(memory, timeRange);
     }
 
+    // 预取命中加分（预取器提前识别的相关记忆）
+    if (prefetchedPaths.has(memory.filePath)) {
+      score += 0.2;
+    }
+
     return { memory, score };
   });
 
   const coarseResults = scored
-    .filter(item => item.score > 0.1)
+    .filter(item => item.score > 0.05)
     .sort((a, b) => b.score - a.score)
     .slice(0, COARSE_LIMIT);
 
@@ -713,43 +830,99 @@ function refineWithFullContent(
 
 /**
  * 异步更新被召回记忆的元数据（recallCount + lastRecalledAt）。
- * 直接修改文件的 frontmatter，不影响正文内容。
+ *
+ * v6: 批量延迟写入 — 内存计数器 + 30 秒定时 flush。
+ * 避免每次召回都对每个文件做 readFile + writeFile。
  */
-async function updateRecallMetadata(memories: MemoryHeader[]): Promise<void> {
-  const now = new Date().toISOString();
-  for (const mem of memories) {
-    try {
-      const content = await fs.readFile(mem.filePath, 'utf-8');
-      const newCount = (mem.recallCount || 0) + 1;
+const FLUSH_INTERVAL_MS = 30_000;
 
-      // 更新或插入 recallCount 和 lastRecalledAt
-      // 定位 frontmatter 的结束标记（第二个 ---）
+/** 内存中的待更新计数器 */
+const pendingUpdates = new Map<string, { count: number; lastRecalledAt: string }>();
+
+/** flush 定时器 */
+let flushTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 启动 flush 定时器（懒启动） */
+function ensureFlushTimer(): void {
+  if (flushTimer) return;
+  flushTimer = setInterval(() => {
+    flushRecallMetadata().catch(() => {});
+  }, FLUSH_INTERVAL_MS);
+  // 允许进程正常退出（不阻塞）
+  if (flushTimer && typeof flushTimer === 'object' && 'unref' in flushTimer) {
+    flushTimer.unref();
+  }
+}
+
+/** 将内存中的召回计数批量写入文件 */
+async function flushRecallMetadata(): Promise<void> {
+  if (pendingUpdates.size === 0) return;
+
+  // 取出所有待更新条目
+  const updates = new Map(pendingUpdates);
+  pendingUpdates.clear();
+
+  for (const [filePath, { count, lastRecalledAt }] of updates) {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+
       let updated = content;
       if (updated.includes('recallCount:')) {
-        updated = updated.replace(/recallCount:\s*\d+/, `recallCount: ${newCount}`);
+        // 读取当前值并加上增量
+        const currentMatch = updated.match(/recallCount:\s*(\d+)/);
+        const currentCount = currentMatch ? parseInt(currentMatch[1], 10) : 0;
+        updated = updated.replace(/recallCount:\s*\d+/, `recallCount: ${currentCount + count}`);
       } else {
-        // 在 frontmatter 结束标记前插入（匹配第二个 ---，即 frontmatter 结尾）
         const fmEnd = updated.indexOf('---', updated.indexOf('---') + 3);
         if (fmEnd > 0) {
-          updated = updated.slice(0, fmEnd) + `recallCount: ${newCount}\n` + updated.slice(fmEnd);
+          updated = updated.slice(0, fmEnd) + `recallCount: ${count}\n` + updated.slice(fmEnd);
         }
       }
       if (updated.includes('lastRecalledAt:')) {
-        updated = updated.replace(/lastRecalledAt:\s*\S+/, `lastRecalledAt: ${now}`);
+        updated = updated.replace(/lastRecalledAt:\s*\S+/, `lastRecalledAt: ${lastRecalledAt}`);
       } else {
         const fmEnd = updated.indexOf('---', updated.indexOf('---') + 3);
         if (fmEnd > 0) {
-          updated = updated.slice(0, fmEnd) + `lastRecalledAt: ${now}\n` + updated.slice(fmEnd);
+          updated = updated.slice(0, fmEnd) + `lastRecalledAt: ${lastRecalledAt}\n` + updated.slice(fmEnd);
         }
       }
 
       if (updated !== content) {
-        await fs.writeFile(mem.filePath, updated, 'utf-8');
+        await fs.writeFile(filePath, updated, 'utf-8');
       }
     } catch {
       // 更新失败不阻塞
     }
   }
+}
+
+/** 记录召回计数到内存（不立即写文件） */
+function updateRecallMetadata(memories: MemoryHeader[]): Promise<void> {
+  const now = new Date().toISOString();
+  for (const mem of memories) {
+    const existing = pendingUpdates.get(mem.filePath);
+    if (existing) {
+      existing.count += 1;
+      existing.lastRecalledAt = now;
+    } else {
+      pendingUpdates.set(mem.filePath, { count: 1, lastRecalledAt: now });
+    }
+  }
+  // 启动定时器
+  ensureFlushTimer();
+  // 立即返回，不等待 flush
+  return Promise.resolve();
+}
+
+/**
+ * 强制刷新所有待写入的召回计数（用于优雅关闭时调用）。
+ */
+export async function drainRecallMetadata(): Promise<void> {
+  if (flushTimer) {
+    clearInterval(flushTimer);
+    flushTimer = null;
+  }
+  await flushRecallMetadata();
 }
 
 // ─── v3: 关联扩展 ───
@@ -850,7 +1023,60 @@ function computeTagJaccard(tagsA: string[], tagsB: string[]): number {
 // ─── v2: Fact Key Expansion 辅助函数 ───
 
 /**
- * 格式化带 Fact Key Expansion 的 manifest。
+ * 格式化带 Fact ID 的 manifest（v7 — 用于合并 LLM 调用）。
+ *
+ * 每条 fact 标注唯一 ID（如 F1、F2），LLM 可以直接引用 fact ID。
+ * 返回 manifest 文本和 fact ID → FactEntry 的映射。
+ *
+ * 格式示例：
+ * - [user] user_role.md (2026-04-29T...): 用户的角色和职责 [event: 2026-04-29]
+ *   · F1: 用户是前端开发者，偏好 React + TypeScript
+ *   · F2: 用户在一家创业公司工作
+ *   · F3: 用户习惯使用 Vitest 做测试
+ */
+function formatManifestWithFactIds(
+  memories: MemoryHeader[],
+  query: string,
+  factIndex: import('./memory-fact-index.js').FactIndex,
+): { manifest: string; factIdMap: Map<string, FactEntry> } {
+  const factIdMap = new Map<string, FactEntry>();
+  let factCounter = 0;
+  const lines: string[] = [];
+
+  for (const m of memories) {
+    const tag = m.type ? `[${m.type}] ` : '';
+    const ts = new Date(m.mtimeMs).toISOString();
+    const desc = m.description || '';
+    const preview = m.contentPreview
+      ? ` | ${m.contentPreview.substring(0, 150)}`
+      : '';
+    const eventDateStr = m.eventDateMs
+      ? ` [event: ${new Date(m.eventDateMs).toISOString().split('T')[0]}]`
+      : '';
+
+    // 获取该文件的 ranked facts（带 FactEntry）
+    const rankedFacts = factIndex.rankFacts(query, factIndex.getFactsForFile(m.filePath), 5);
+
+    const factLines = rankedFacts.length > 0
+      ? '\n' + rankedFacts.map(f => {
+          factCounter++;
+          const id = `F${factCounter}`;
+          factIdMap.set(id, f);
+          return `  · ${id}: ${f.factText.substring(0, 120)}`;
+        }).join('\n')
+      : '';
+
+    const header = desc
+      ? `- ${tag}${m.filename} (${ts}): ${desc}${eventDateStr}${preview}`
+      : `- ${tag}${m.filename} (${ts})${eventDateStr}${preview}`;
+    lines.push(header + factLines);
+  }
+
+  return { manifest: lines.join('\n'), factIdMap };
+}
+
+/**
+ * 格式化带 Fact Key Expansion 的 manifest（旧版，用于回退）。
  *
  * 在每个文件的描述后附加 top-3 facts，帮助 LLM sideQuery
  * 看到更多上下文信息，做出更精确的选择。
@@ -898,15 +1124,15 @@ function formatManifestWithFacts(
  * 对选中文件的所有 facts 做关键词匹配精排，
  * 返回按相关性排序的 top-15 facts。
  */
-function extractFactsFromSelected(
+async function extractFactsFromSelected(
   query: string,
   selectedMemories: MemoryHeader[],
   factIndex: import('./memory-fact-index.js').FactIndex,
-): import('./memory-fact-index.js').FactEntry[] {
+): Promise<import('./memory-fact-index.js').FactEntry[]> {
   // 收集选中文件的所有 facts（已在 buildIndex 时缓存）
   const selectedPaths = new Set(selectedMemories.map(m => m.filePath));
   // 重新调用 buildIndex 会命中缓存（mtime 未变）
-  const allFacts = factIndex.buildIndex(selectedMemories);
+  const allFacts = await factIndex.buildIndex(selectedMemories);
   const relevantFacts = allFacts.filter(f => selectedPaths.has(f.sourceFilePath));
 
   if (relevantFacts.length === 0) return [];
