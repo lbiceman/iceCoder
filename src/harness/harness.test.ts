@@ -439,10 +439,10 @@ describe('Harness - 停止钩子', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// 7. Token 预算继续
+// 7. 模型响应行为
 // ═══════════════════════════════════════════════════════════════
-describe('Harness - Token 预算继续', () => {
-  it('模型声明 complete 时不继续，即使预算充足', async () => {
+describe('Harness - 模型响应行为', () => {
+  it('模型纯文本响应时直接停止', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({
@@ -451,17 +451,16 @@ describe('Harness - Token 预算继续', () => {
     }), executor);
 
     const chatFn: ChatFunction = vi.fn().mockImplementation(async () => {
-      return finalResponse('Here is the summary.\n<status>complete</status>', { input: 100, output: 50 });
+      return finalResponse('Here is the summary.', { input: 100, output: 50 });
     });
 
     const result = await harness.run('Summarize the project', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
-    // complete 标记 → 只调用 1 次
     expect(chatFn).toHaveBeenCalledTimes(1);
   });
 
-  it('模型声明 incomplete 时继续，直到 complete', async () => {
+  it('模型通过 tool_calls 自然地连续执行多步任务', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({
@@ -470,22 +469,22 @@ describe('Harness - Token 预算继续', () => {
     }), executor);
 
     let callCount = 0;
-    const chatFn: ChatFunction = vi.fn().mockImplementation(async () => {
+    const chatFn: ChatFunction = vi.fn().mockImplementation(async (msgs) => {
       callCount++;
       if (callCount < 3) {
-        return finalResponse(`Part ${callCount}\n<status>incomplete</status>`, { input: 100, output: 50 });
+        return toolCallResponse([{ id: `tc_${callCount}`, name: 'read_file', args: { path: '/file.txt' } }], 'Reading file...');
       }
-      return finalResponse(`Final part\n<status>complete</status>`, { input: 100, output: 50 });
+      return finalResponse('All done.', { input: 100, output: 50 });
     });
 
-    const result = await harness.run('Long task', chatFn);
+    const result = await harness.run('Multi-step task', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
-    // 2 次 incomplete + 1 次 complete = 3 次
+    // 2 次 tool call + 1 次 final = 3 次
     expect(chatFn).toHaveBeenCalledTimes(3);
   });
 
-  it('无 status 标记时直接停止（兼容旧行为）', async () => {
+  it('模型无工具调用的纯文本响应直接停止', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({
@@ -494,7 +493,7 @@ describe('Harness - Token 预算继续', () => {
     }), executor);
 
     const chatFn: ChatFunction = vi.fn().mockImplementation(async () => {
-      return finalResponse('Done, no status tag.', { input: 100, output: 50 });
+      return finalResponse('Done, no tool calls.', { input: 100, output: 50 });
     });
 
     const result = await harness.run('Quick question', chatFn);
