@@ -40,10 +40,10 @@ const MAX_TOOL_OUTPUT = 30000;
 // ─── max-output-tokens 恢复最大次数 ───
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
-// ─── LLM 调用重试配置 ───
-const LLM_MAX_RETRIES = 3;
-const LLM_RETRY_BASE_DELAY = 1000;
-const LLM_RETRY_MAX_DELAY = 15000;
+// ─── LLM 调用重试配置（Harness 层仅做 1 次快速重试，主要重试由 LLMAdapter 负责） ───
+const LLM_MAX_RETRIES = 1;
+const LLM_RETRY_BASE_DELAY = 2000;
+const LLM_RETRY_MAX_DELAY = 2000;
 
 // ─── 工具结果预算裁剪 ───
 const TOOL_RESULT_KEEP_RECENT = 6;
@@ -51,7 +51,7 @@ const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
 
 // ─── 默认压缩配置 ───
 const DEFAULT_COMPACTION_THRESHOLD = 40;
-const DEFAULT_COMPACTION_KEEP_RECENT = 10;
+const DEFAULT_COMPACTION_KEEP_RECENT = 15;
 
 // ─── 任务状态标记解析 ───
 type TaskStatus = 'complete' | 'incomplete' | 'unknown';
@@ -237,7 +237,7 @@ export class Harness {
 
       const loopStop = this.loopController.shouldContinue();
       if (loopStop) {
-        return this.handleStop(loopStop, msgs, chatFn, currentTools, logger, onStep);
+        return this.handleStop(loopStop, msgs, chatFn, currentTools, logger, onStep, streamFn);
       }
 
       // 4. 调用 LLM（带错误恢复）
@@ -250,7 +250,7 @@ export class Harness {
 
       // 检查用户中断
       if (this.loopController.isAborted()) {
-        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
+        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
       }
 
       let response;
@@ -278,15 +278,15 @@ export class Harness {
           }
           // 流式调用完成后检查中断（流式期间可能收到 abort）
           if (this.loopController.isAborted()) {
-            return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
+            return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
           }
         } else {
           response = await chatFn(normalizedMsgs, { tools: currentTools });
         }
         state.llmRetryCount = 0; // 成功后重置重试计数
       } catch (error) {
-        // ── LLM 调用错误恢复 ──
-        if (isRetryableError(error) && state.llmRetryCount < LLM_MAX_RETRIES) {
+        // ── LLM 调用错误恢复（仅 1 次快速重试，主要重试由 LLMAdapter 负责） ──
+        if (isRetryableError(error) && state.llmRetryCount < LLM_MAX_RETRIES && !this.loopController.isAborted()) {
           state.llmRetryCount++;
           const delay = Math.min(
             LLM_RETRY_BASE_DELAY * Math.pow(2, state.llmRetryCount - 1),
@@ -294,7 +294,18 @@ export class Harness {
           );
           const errorMsg = error instanceof Error ? error.message : String(error);
           logger.error(`LLM 调用失败 (${state.llmRetryCount}/${LLM_MAX_RETRIES}): ${errorMsg}，${delay}ms 后重试`);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          // 支持中断的等待
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, delay);
+            const checkAbort = () => { clearTimeout(timer); resolve(); };
+            if (this.loopController.isAborted()) { checkAbort(); return; }
+            // 每 500ms 检查一次中断状态
+            const interval = setInterval(() => {
+              if (this.loopController.isAborted()) { clearInterval(interval); checkAbort(); }
+            }, 500);
+            const origResolve = resolve;
+            resolve = () => { clearInterval(interval); origResolve(); };
+          });
           state.transition = 'llm_error_retry';
           // 回退轮次计数（重试不算新轮次）
           this.loopController.rewindRound();
@@ -490,7 +501,7 @@ export class Harness {
 
       // 6a-abort. 工具执行后立即检查中断
       if (this.loopController.isAborted()) {
-        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep);
+        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
       }
 
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
@@ -500,7 +511,7 @@ export class Harness {
       // 6c. maxTurns 检查（由 loopController 处理）
       const nextStop = this.loopController.shouldContinue();
       if (nextStop) {
-        return this.handleStop(nextStop, msgs, chatFn, currentTools, logger, onStep);
+        return this.handleStop(nextStop, msgs, chatFn, currentTools, logger, onStep, streamFn);
       }
 
       // 6d. 构造下一轮状态 → continue
@@ -706,6 +717,7 @@ export class Harness {
     _tools: ToolDefinition[],
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
+    streamFn?: StreamFunction,
   ): Promise<HarnessResult> {
     this.loopController.stop(reason);
     const state = this.loopController.getState();
@@ -731,12 +743,26 @@ export class Harness {
 
     let finalContent = '';
     try {
-      const finalResponse = await chatFn(messages, { tools: [] });
-      finalContent = finalResponse.content;
-      logger.llmResponseFinal({
-        input: finalResponse.usage?.inputTokens ?? 0,
-        output: finalResponse.usage?.outputTokens ?? 0,
-      });
+      // 优先使用流式调用，让前端实时看到总结内容
+      if (streamFn) {
+        const finalResponse = await streamFn(messages, (chunk, done) => {
+          if (!done && chunk) {
+            onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: chunk });
+          }
+        }, { tools: [] });
+        finalContent = finalResponse.content;
+        logger.llmResponseFinal({
+          input: finalResponse.usage?.inputTokens ?? 0,
+          output: finalResponse.usage?.outputTokens ?? 0,
+        });
+      } else {
+        const finalResponse = await chatFn(messages, { tools: [] });
+        finalContent = finalResponse.content;
+        logger.llmResponseFinal({
+          input: finalResponse.usage?.inputTokens ?? 0,
+          output: finalResponse.usage?.outputTokens ?? 0,
+        });
+      }
     } catch (err) {
       // 最终总结调用失败，用最后一条 assistant 消息作为回复
       const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.content);
@@ -776,10 +802,33 @@ export class Harness {
       // 压缩前获取会话笔记（保持连续性）
       const sessionNotes = await this.memoryIntegration.getSessionMemoryForCompact();
 
+      // 保存最近注入的记忆内容（压缩后可能丢失）
+      const recentMemoryMessages: UnifiedMessage[] = [];
+      for (let i = messages.length - 1; i >= 0 && recentMemoryMessages.length < 3; i--) {
+        const rawContent = messages[i].content;
+        const content: string = typeof rawContent === 'string' ? rawContent : '';
+        if (content.startsWith('<system-reminder>') && content.includes('Recalled Memories')) {
+          recentMemoryMessages.unshift(messages[i]);
+          break; // 只保留最近一条记忆注入
+        }
+      }
+
       const compacted = await this.contextCompactor.compact(messages, chatFn);
 
       messages.length = 0;
       messages.push(...compacted);
+
+      // 压缩后恢复记忆注入（如果被压缩掉了）
+      if (recentMemoryMessages.length > 0) {
+        const hasMemoryInCompacted = messages.some(m => {
+          const c = typeof m.content === 'string' ? m.content : '';
+          return c.startsWith('<system-reminder>') && c.includes('Recalled Memories');
+        });
+        if (!hasMemoryInCompacted) {
+          // 记忆被压缩掉了，重新注入
+          messages.splice(messages.length - Math.min(this.contextCompactor.getConfig().keepRecent, messages.length), 0, ...recentMemoryMessages);
+        }
+      }
 
       // 压缩后注入会话笔记（帮助模型恢复上下文）
       if (sessionNotes) {

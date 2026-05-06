@@ -49,10 +49,10 @@ export interface ExtractionResult {
 /**
  * 提取 Agent 的系统提示词。
  */
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract information worth remembering for future conversations.
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract ALL information worth remembering for future conversations. Be THOROUGH — missing information is worse than extracting too much.
 
 ## Memory types
-- user: User's role, goals, preferences, knowledge, habits, preferred programming languages, frameworks, work style
+- user: User's role, goals, preferences, knowledge, habits, preferred programming languages, frameworks, work style, personal details (name, location, family, pets, hobbies)
 - feedback: Guidance on how to work — corrections AND confirmations
 - project: Ongoing work context not derivable from code/git
 - reference: Pointers to external systems/resources
@@ -70,7 +70,6 @@ Pay special attention to implicit user habits revealed by the conversation:
 - Git history, recent changes — git log/blame are authoritative
 - Debugging solutions — the fix is in the code
 - Tool call details, system prompts, ephemeral task state
-- Casual conversation, small talk, or transient remarks that don't reveal lasting preferences or facts
 
 ## Output format
 Return a JSON array of memories to save. Each memory object has:
@@ -78,19 +77,22 @@ Return a JSON array of memories to save. Each memory object has:
 - "type": "user" | "feedback" | "project" | "reference"
 - "name": string (short name, include date if time-specific)
 - "description": string (one-line description for future relevance matching — be SPECIFIC, include names/dates/key details)
-- "content": string (the memory content)
+- "content": string (the memory content — include ALL relevant details, not summaries)
 - "relatedTo": string[] (filenames of existing memories that are semantically related to this one. Only reference files from the existing memory list. Empty array if no relations.)
 - "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.
 
-## Completeness requirements
-- When extracting facts, include ALL details — dates, names, quantities, locations
-- Do NOT summarize multiple facts into one. Each distinct fact = separate memory entry
-- When a list is mentioned (e.g., "instruments: clarinet and violin"), preserve ALL items in the list, not just the first
-- Always convert relative dates to absolute dates (e.g., "next Thursday" → "2024-03-07")
-- Preserve exact quotes and specific wording when they matter (names, technical terms, preferences)`;
+## CRITICAL COMPLETENESS RULES
+1. **Extract EVERY distinct fact.** Each fact = separate memory entry. Do NOT merge unrelated facts.
+2. **Preserve ALL list items.** If the conversation mentions 5 countries, extract all 5 — not just the first 2.
+3. **Include ALL names, dates, quantities, locations.** These are the most valuable recall anchors.
+4. **Capture personal details.** Family members, pets, hobbies, health, relationships, travel — these are frequently asked about.
+5. **Capture implicit preferences.** "I usually use..." or "Let's go with X again" = preference for X.
+6. **Convert relative dates to absolute dates.** "next Thursday" → "2024-03-07".
+7. **Preserve exact quotes when they matter.** Names, technical terms, specific wording.
+8. **When in doubt, extract it.** False negatives (missing info) are much worse than false positives (extra info).`;
 
 /**
  * 基于 tags 重叠度查找重复记忆。

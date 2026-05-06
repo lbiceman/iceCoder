@@ -75,13 +75,20 @@ export class ToolExecutor {
     };
   }
 
-  private async executeWithTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`工具执行超时 (${timeoutMs}ms)`)), timeoutMs);
-      fn()
-        .then((result) => { clearTimeout(timer); resolve(result); })
-        .catch((error) => { clearTimeout(timer); reject(error); });
-    });
+  private async executeWithTimeout<T>(fn: (signal?: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const result = await fn(controller.signal);
+      return result;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`工具执行超时 (${timeoutMs}ms)`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private sleep(ms: number): Promise<void> {

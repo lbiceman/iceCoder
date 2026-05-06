@@ -76,6 +76,13 @@ export class ContextCompactor {
   }
 
   /**
+   * 获取当前配置（供外部查询）。
+   */
+  getConfig(): CompactionConfig {
+    return this.config;
+  }
+
+  /**
    * 执行五层递进压缩。
    */
   async compact(

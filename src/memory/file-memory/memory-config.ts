@@ -54,8 +54,8 @@ export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
 // ─── LLM 提取配置 ───
 
 export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
-  maxMemories: 8,
-  maxOutputTokens: 3072,
+  maxMemories: 15,
+  maxOutputTokens: 4096,
   enablePromptCache: true,
 };
 
@@ -94,8 +94,22 @@ export const EXTRACTION_MIN_TURNS = 2;
  * 用户消息包含这些词时，即使轮次不够也触发提取。
  */
 export const EXTRACTION_SIGNAL_WORDS = [
-  '记住', '记下', 'remember', '偏好', '习惯', '以后',
-  '不要', '停止', '应该', '总是', '从不',
-  '我是', '我的角色', '我的职位',
-  '截止', 'deadline', '目标', '计划',
+  // 记忆指令
+  '记住', '记下', 'remember', 'save this', 'keep in mind',
+  // 偏好/习惯
+  '偏好', '习惯', '喜欢', '不喜欢', 'prefer', 'like', 'dislike',
+  // 否定指令
+  '不要', '不用', '别用', '禁止', '停止', "don't", 'never', 'stop',
+  // 频率/规则
+  '应该', '总是', '每次', '始终', '务必', '必须', 'always', 'should', 'must',
+  '从不', 'never',
+  // 时间/计划
+  '以后', '下次', '今后', 'from now on', 'next time',
+  '截止', 'deadline', '目标', '计划', 'schedule',
+  // 身份/角色
+  '我是', '我的角色', '我的职位', '我在', '我负责', 'I am', 'my role',
+  // 纠正/反馈
+  '不对', '错了', '不好', '太啰嗦', '太复杂', 'wrong', 'incorrect',
+  // 技术偏好
+  '用中文', '用英文', '简洁', '详细', 'verbose', 'concise',
 ];

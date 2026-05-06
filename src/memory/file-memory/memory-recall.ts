@@ -131,7 +131,11 @@ export async function recallRelevantMemories(
   // 如果有 LLM 适配器，使用 LLM 召回（v7：一次调用同时选文件和精排 facts）
   if (llmAdapter) {
     try {
-      const llmResult = await llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange);
+      // LLM 召回带 30 秒超时，防止无限挂起
+      const llmResult = await Promise.race([
+        llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('LLM recall timeout (30s)')), 30_000)),
+      ]);
       // ── 关联扩展（1 跳）──
       const expanded = expandRelatedMemories(llmResult.selectedMemories, filteredMemories, alreadySurfaced);
       const allSelected = [...llmResult.selectedMemories, ...expanded];
@@ -618,13 +622,19 @@ let idfCache: IdfCacheEntry | null = null;
 /**
  * 计算记忆列表的指纹（用于判断是否需要重建 IDF 表）。
  * 基于 filenames + mtimeMs 排序后拼接，快速判断记忆列表是否变化。
+ * 使用 hash 避免大记忆集（100+ 文件）时截断导致指纹碰撞。
  */
 function computeMemoriesFingerprint(memories: MemoryHeader[]): string {
   const sorted = memories
     .map(m => `${m.filename}:${m.mtimeMs}`)
     .sort()
     .join('|');
-  return `${memories.length}:${sorted.length}:${sorted.slice(0, 500)}`;
+  // 简单 hash：将完整字符串压缩为确定性短字符串
+  let hash = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    hash = ((hash << 5) - hash + sorted.charCodeAt(i)) | 0;
+  }
+  return `${memories.length}:${Math.abs(hash).toString(36)}`;
 }
 
 /**

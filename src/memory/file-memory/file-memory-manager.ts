@@ -112,7 +112,8 @@ export class FileMemoryManager {
   }
 
   /**
-   * 获取相关记忆
+   * 获取相关记忆（使用 recallRelevantMemories 统一召回路径）。
+   * 注意：Harness 层直接调用 recallRelevantMemories，此方法仅用于非 Harness 场景。
    */
   async getRelevantMemories(query: string, limit: number = 10): Promise<MemoryHeader[]> {
     await this.ensureInitialized();
@@ -123,15 +124,18 @@ export class FileMemoryManager {
       if (prefetched.length > 0) {
         return prefetched.slice(0, limit);
       }
-
-      // 异步触发预取（不等待）
-      this.prefetcher.prefetch(query).catch(error => {
-        console.error('[FileMemoryManager] Async prefetch failed:', error);
-      });
     }
 
-    // 同步获取相关记忆
-    return this.memoryLoader.getRelevantMemories(query, limit);
+    // 使用统一的 recallRelevantMemories 召回路径
+    const { recallRelevantMemories } = await import('./memory-recall.js');
+    const result = await recallRelevantMemories(
+      query,
+      this.config.memory.memoryDir || 'data/memory-files',
+      null, // no LLM adapter — keyword fallback only
+      new Set(),
+      limit,
+    );
+    return result.memories;
   }
 
   /**

@@ -26,9 +26,8 @@ import { createFileMemoryManager } from '../memory/file-memory/file-memory-manag
 import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
+import { PromptAssembler } from '../prompts/prompt-assembler.js';
 
-const SYSTEM_PROMPT_PATH = path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH ?? 'data/system-prompt.md');
-const CODING_PROMPT_PATH = path.resolve('data/coding-prompt.md');
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
@@ -109,18 +108,18 @@ async function ensureMemoryInitialized(): Promise<void> {
 }
 
 async function loadSystemPrompt(): Promise<string> {
-  try {
-    let prompt = await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
-    // Append coding guidelines when tools are available (not in eval mode)
-    if (process.env.ICE_DISABLE_TOOLS !== '1') {
-      try {
-        const codingPrompt = await fsPromises.readFile(CODING_PROMPT_PATH, 'utf-8');
-        prompt += '\n\n' + codingPrompt;
-      } catch { /* coding prompt not found, skip */ }
-    }
-    // Eval mode: append strict answering instructions
-    if (process.env.ICE_EVAL_MODE === '1') {
-      prompt += `\n\n## 评测模式（EVALUATION MODE）
+  const isEvalMode = process.env.ICE_EVAL_MODE === '1';
+  const isToolsDisabled = process.env.ICE_DISABLE_TOOLS === '1';
+
+  const assembler = new PromptAssembler();
+
+  // Eval mode: disable tool-related sections, append eval instructions
+  if (isEvalMode || isToolsDisabled) {
+    assembler.removeSection('tool_usage');
+    assembler.removeSection('shell_guide');
+  }
+
+  const evalAppend = isEvalMode ? `\n\n## 评测模式（EVALUATION MODE）
 
 你正在接受记忆系统的标准化评测。请严格遵守以下规则：
 
@@ -129,12 +128,19 @@ async function loadSystemPrompt(): Promise<string> {
 3. **基于记忆推理**。如果记忆中没有直接答案但可以推理，给出推理结果并说明依据。只在完全没有相关信息时才说"不知道"。
 4. **回答要简洁精准**。直接给出答案，不需要长篇解释。
 5. **必须使用与问题完全相同的语言回答。** 英文问题必须英文答，中文问题必须中文答。这是硬性规则，违反此规则的回答将被判为错误。
-6. **部分正确优于完全放弃**。如果你知道部分答案，给出你确定的部分，对不确定的部分明确标注。`;
-    }
-    return prompt;
-  } catch {
-    return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用与用户相同的语言。';
-  }
+6. **部分正确优于完全放弃**。如果你知道部分答案，给出你确定的部分，对不确定的部分明确标注。` : undefined;
+
+  const result = assembler.assemble({
+    language: '中文',
+    environment: {
+      workingDirectory: process.cwd(),
+      platform: process.platform === 'win32' ? 'win32' : process.platform,
+      currentDate: new Date().toISOString().slice(0, 10),
+    },
+    appendSystemPrompt: evalAppend,
+  });
+
+  return result.systemPrompt;
 }
 
 export interface ChatWSOptions {
@@ -217,6 +223,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     sendJSON(ws, { type: 'connected', message: '连接成功' });
 
     let isProcessing = false;
+    /** 处理期间用户发来的消息队列（处理完后自动发送） */
+    const pendingMessages: Array<{ content: string; images: string[] }> = [];
 
     ws.on('message', async (data) => {
       try {
@@ -239,6 +247,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         if (msg.type === 'clear_session') {
           // 前端 ~clear 命令：清除后端消息缓存和会话文件
           cachedMessages = undefined;
+          // 取消防抖写入，防止旧的 cachedMessages 覆盖清空操作
+          if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
           clearSessionFile().catch(() => {});
           console.log('[chat-ws] 清除会话缓存和文件');
           return;
@@ -246,7 +256,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
         if (msg.type === 'message' && (msg.content || (msg.images && msg.images.length > 0))) {
           if (isProcessing) {
-            sendJSON(ws, { type: 'error', message: '正在处理上一条指令，请稍候' });
+            // 缓存消息到队列，处理完后自动发送
+            pendingMessages.push({ content: msg.content || '', images: Array.isArray(msg.images) ? msg.images : [] });
+            sendJSON(ws, { type: 'info', message: '已排队，当前任务完成后自动处理' });
             return;
           }
 
@@ -258,6 +270,17 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             await handleChatMessage(ws, msg.content || '', orchestrator, toolRegistry, toolExecutor, inlineImages);
           } catch (err) {
             sendJSON(ws, { type: 'error', message: formatFriendlyError(err) });
+          }
+
+          // 处理队列中的待发消息
+          while (pendingMessages.length > 0) {
+            const pending = pendingMessages.shift()!;
+            sendJSON(ws, { type: 'status', status: 'processing' });
+            try {
+              await handleChatMessage(ws, pending.content, orchestrator, toolRegistry, toolExecutor, pending.images);
+            } catch (err) {
+              sendJSON(ws, { type: 'error', message: formatFriendlyError(err) });
+            }
           }
 
           isProcessing = false;
@@ -345,6 +368,8 @@ async function handleChatMessage(
   // 创建 AbortController 用于用户中断
   const abortController = new AbortController();
   activeAbortController = abortController;
+  // 将中断信号传递给 LLMAdapter，支持重试等待期间中断
+  llmAdapter.setAbortSignal?.(abortController.signal);
 
   const harnessConfig: HarnessConfig = {
     context: {
@@ -383,6 +408,7 @@ async function handleChatMessage(
 
         setTimeout(() => {
           ws.off('message', handler);
+          sendJSON(ws, { type: 'confirm_timeout', toolName });
           resolve(false);
         }, 60_000);
       });
@@ -451,8 +477,9 @@ async function handleChatMessage(
     Array.isArray(userMessageContent) ? userMessageContent : undefined,
   );
 
-  // 清空 abort controller
+  // 清空 abort controller 和中断信号
   activeAbortController = null;
+  llmAdapter.setAbortSignal?.(null);
 
   // 缓存完整的结构化消息历史并持久化到磁盘
   cachedMessages = result.messages;

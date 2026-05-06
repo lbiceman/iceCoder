@@ -56,13 +56,13 @@ const CONTENT_HEURISTIC_PATTERNS: RegExp[] = [
   // 数据库（"mysql 查询"、"redis 缓存"）
   /\b(mysql|postgres|mongodb|redis|sqlite|elasticsearch)\b/i,
   // 工作流偏好（"我喜欢"、"我习惯"、"我一般"、"我通常"）
-  /我(喜欢|习惯|一般|通常|倾向|偏好)/,
+  /我(喜欢|习惯|一般|通常|倾向|偏好|想|要|需要)/,
   // 角色/身份（"我是前端"、"我做后端"、"我负责"）
-  /我(是|做|负责|在做|主要)/,
+  /我(是|做|负责|在做|主要|叫|名字)/,
   // 英文偏好表达
-  /\b(i prefer|i usually|i always|i like to|my workflow)\b/i,
+  /\b(i prefer|i usually|i always|i like to|my workflow|my name)\b/i,
 
-  // ── v4 新增：祈使句 + 否定偏好 + 风格偏好 ──
+  // ── 祈使句 + 否定偏好 + 风格偏好 ──
 
   // 祈使句偏好（"别用分号"、"不要用 var"、"以后不要加注释"、"每次都加 JSDoc"）
   /(?:别|不要|不用|禁止|停止|以后不要?|以后别).{0,15}(?:用|写|加|做|改|放|搞|弄)/,
@@ -74,6 +74,15 @@ const CONTENT_HEURISTIC_PATTERNS: RegExp[] = [
   // 英文祈使偏好（"don't use semicolons"、"always add types"、"never use var"）
   /\b(don'?t use|never use|always use|always add|stop using|no more)\b/i,
   /\b(use .{1,20} instead|switch to|prefer .{1,20} over)\b/i,
+
+  // ── 日常对话中的隐含偏好/事实 ──
+  // 个人信息（"我在北京"、"我们团队"、"我们公司"）
+  /(?:我在|我们|我的|团队|公司|项目|产品).{0,10}(?:用|做|负责|叫|叫作|是)/,
+  // 生活偏好（"我喜欢喝"、"我最爱"、"我经常"）
+  /(?:我|我们).{0,5}(?:喜欢|最爱|经常|每天|每周|每月|去过|住|养)/,
+  // 事件/经历（"昨天"、"上周"、"去年"、"我买了"、"我去了"）
+  /(?:昨天|今天|上周|本月|去年|今年|前天|明天|下周|下个月).{0,15}(?:我|我们)/,
+  /(?:我|我们).{0,10}(?:买了|去了|开始|学了|试了|发现|决定|完成)/,
 ];
 // 新增：并发控制、远程配置、闭包隔离、会话记忆
 import {
@@ -176,8 +185,9 @@ function hasToolCallsInLastAssistantTurn(messages: UnifiedMessage[]): boolean {
 function hasTopicShifted(previousMessage: string, currentMessage: string): boolean {
   if (!previousMessage || !currentMessage) return false;
 
-  const prevTokens = tokenize(previousMessage, { minWordLength: 3 });
-  const currTokens = tokenize(currentMessage, { minWordLength: 3 });
+  // minWordLength: 2 — 中文词通常 2 个字（如"前端"、"组件"）
+  const prevTokens = tokenize(previousMessage, { minWordLength: 2 });
+  const currTokens = tokenize(currentMessage, { minWordLength: 2 });
 
   // 任一消息 token 太少（< 3），不做判断
   if (prevTokens.size < 3 || currTokens.size < 3) return false;
@@ -190,7 +200,7 @@ function hasTopicShifted(previousMessage: string, currentMessage: string): boole
   const union = prevTokens.size + currTokens.size - intersection;
   const jaccard = union > 0 ? intersection / union : 0;
 
-  return jaccard < 0.15;
+  return jaccard < 0.2;
 }
 
 /**
@@ -739,7 +749,7 @@ ${candidateList}`;
     if (hasSignal) return true;
 
     // 2. 内容特征触发 — 检测编程语言/框架/工具相关的关键词
-    //    即使消息很短（如"用 TS 写个排序"），也能触发
+    //    需要至少 1 轮对话才触发（首轮就有足够上下文时也应提取）
     const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
     if (hasContentSignal && turnCount >= 1) return true;
 
@@ -815,45 +825,79 @@ ${candidateList}`;
 
   /**
    * 执行实际的 LLM 提取调用。
+   *
+   * v6 改进：长对话分块提取。
+   * 之前只看最近 30 条消息，长对话中早期信息完全丢失。
+   * 现在将未提取消息按 20 条一块分片，逐块提取，
+   * 每块都走完整的 extract → saveMemories 流程（自动去重）。
+   * 长对话首次提取最多处理 3 块（60 条消息），避免过长等待。
    */
   private async _doExtract(messages: UnifiedMessage[], _turnCount: number): Promise<void> {
     if (!this.llmAdapter) return;
 
     try {
       const conversationPrefix = this.sanitizeConversationPrefix(messages);
-      const recentMessages = messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .slice(-30);
+      const allConversation = messages
+        .filter(m => m.role === 'user' || m.role === 'assistant');
 
-      if (recentMessages.length === 0) return;
+      if (allConversation.length === 0) return;
 
-      const result = await this.llmExtractor.extract(
-        recentMessages,
-        this.memoryDir,
-        this.llmAdapter,
-        conversationPrefix.length > 0 ? conversationPrefix : undefined,
-      );
+      // 只提取上次提取之后的新消息
+      const newMessages = allConversation.slice(this.lastExtractionMessageIndex);
+      if (newMessages.length === 0) return;
+
+      // 分块：每块最多 CHUNK_SIZE 条消息，首次最多 MAX_CHUNKS 块
+      const CHUNK_SIZE = 20;
+      const MAX_CHUNKS = 3;
+      const chunks: UnifiedMessage[][] = [];
+      for (let i = 0; i < newMessages.length && chunks.length < MAX_CHUNKS; i += CHUNK_SIZE) {
+        chunks.push(newMessages.slice(i, i + CHUNK_SIZE));
+      }
+
+      let totalWritten = 0;
+      let totalDuration = 0;
+      let usedPromptCache = false;
+      let cacheActuallyHit = false;
+      const allWrittenPaths: string[] = [];
+
+      for (const chunk of chunks) {
+        if (chunk.length === 0) continue;
+
+        const result = await this.llmExtractor.extract(
+          chunk,
+          this.memoryDir,
+          this.llmAdapter,
+          conversationPrefix.length > 0 ? conversationPrefix : undefined,
+        );
+
+        totalWritten += result.writtenPaths.length;
+        totalDuration += result.duration;
+        if (result.usedPromptCache) usedPromptCache = true;
+        if (result.cacheActuallyHit) cacheActuallyHit = true;
+        allWrittenPaths.push(...result.writtenPaths);
+      }
 
       // 推进 cursor
       this.lastExtractionMessageIndex = messages.length;
 
       this.telemetry.logExtract({
-        messageCount: recentMessages.length,
-        extractedCount: result.writtenPaths.length,
-        usedPromptCache: result.usedPromptCache,
+        messageCount: newMessages.length,
+        extractedCount: totalWritten,
+        usedPromptCache,
         contextPrefixLength: conversationPrefix.length,
-        durationMs: result.duration,
-        writtenFiles: result.writtenPaths.map(p => path.basename(p)),
+        durationMs: totalDuration,
+        writtenFiles: [],
       }).catch(() => {});
 
-      if (result.writtenPaths.length > 0) {
-        const cacheNote = result.usedPromptCache
-          ? `(prefix=${conversationPrefix.length} msgs, cache ${result.cacheActuallyHit ? 'HIT' : 'MISS'})`
+      if (totalWritten > 0) {
+        const cacheNote = usedPromptCache
+          ? `(prefix=${conversationPrefix.length} msgs, cache ${cacheActuallyHit ? 'HIT' : 'MISS'})`
           : '';
-        console.log(`[harness-memory] LLM 提取: ${result.writtenPaths.length} 条记忆已保存 ${cacheNote}`);
+        const chunkNote = chunks.length > 1 ? ` (${chunks.length} chunks)` : '';
+        console.log(`[harness-memory] LLM 提取: ${totalWritten} 条记忆已保存${chunkNote} ${cacheNote}`);
 
-        // ── v4 被动确认：将提取摘要加入通知队列 ──
-        const filenames = result.writtenPaths.map(p => path.basename(p, '.md'));
+        // 被动确认：合并为一条通知（避免多 chunk 时刷屏）
+        const filenames = allWrittenPaths.map(p => path.basename(p, '.md'));
         const summary = filenames
           .map(f => f.replace(/^(user|feedback|project|reference)_/, '').replace(/_/g, ' '))
           .join(', ');

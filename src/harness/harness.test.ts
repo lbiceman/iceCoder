@@ -338,8 +338,8 @@ describe('Harness - LLM 错误重试', () => {
 
     expect(result.loopState.stopReason).toBe('error');
     expect(result.content).toContain('timeout');
-    // LLM_MAX_RETRIES=3, 所以 1 初始 + 3 重试 = 4 次
-    expect(chatFn).toHaveBeenCalledTimes(4);
+    // LLM_MAX_RETRIES=1, 所以 1 初始 + 1 重试 = 2 次
+    expect(chatFn).toHaveBeenCalledTimes(2);
   }, 60000);
 
   it('各种可重试错误类型都能识别', async () => {

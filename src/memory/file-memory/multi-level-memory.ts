@@ -128,45 +128,6 @@ export class MultiLevelMemoryLoader {
   }
 
   /**
-   * 获取相关记忆（跨级别检索）。
-   *
-   * 注意：此方法仅用于 FileMemoryManager 的简单检索场景。
-   * Harness 层的记忆召回统一走 recallRelevantMemories（LLM 语义召回 + 关键词回退），
-   * 不经过此方法，避免两套独立的召回逻辑。
-   *
-   * @deprecated 优先使用 recallRelevantMemories 进行语义召回
-   */
-  async getRelevantMemories(query: string, limit: number = 10): Promise<MemoryHeader[]> {
-    const allLevels = await this.loadAllLevels();
-    const allMemories: MemoryHeader[] = [];
-    
-    // 合并所有级别的记忆
-    Object.values(allLevels).forEach(memories => {
-      allMemories.push(...memories);
-    });
-
-    // 简单关键词匹配（仅作为 FileMemoryManager 的回退路径）
-    const queryLower = query.toLowerCase();
-    const relevant = allMemories.filter(memory => {
-      if (memory.description?.toLowerCase().includes(queryLower)) {
-        return true;
-      }
-      
-      // 检查文件名
-      if (memory.filename.toLowerCase().includes(queryLower)) {
-        return true;
-      }
-      
-      return false;
-    });
-
-    // 按修改时间排序（最新的优先）
-    relevant.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    
-    return relevant.slice(0, limit);
-  }
-
-  /**
    * 获取所有记忆（跨级别合并，不做过滤）。
    * 供 recallRelevantMemories 等外部召回逻辑使用。
    */

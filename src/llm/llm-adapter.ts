@@ -96,9 +96,18 @@ export class LLMAdapter implements LLMAdapterInterface {
   private defaultProvider: string = '';
   private tokenCounter: TokenCounter = new TokenCounter();
   private retryConfig: RetryConfig;
+  /** 外部可设置的中断信号（用于用户中断重试等待） */
+  private _abortSignal: AbortSignal | null = null;
 
   constructor(retryConfig?: Partial<RetryConfig>) {
     this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...retryConfig };
+  }
+
+  /**
+   * 设置中断信号（用于用户中断重试等待）。
+   */
+  setAbortSignal(signal: AbortSignal | null): void {
+    this._abortSignal = signal;
   }
 
   /**
@@ -231,9 +240,30 @@ export class LLMAdapter implements LLMAdapterInterface {
   }
 
   /**
-   * 休眠指定的毫秒数。
+   * 休眠指定的毫秒数（支持中断信号）。
    */
   private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, ms);
+      // 如果有中断信号，监听中断
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new Error('Interrupted by user'));
+      };
+      if (this._abortSignal) {
+        if (this._abortSignal.aborted) {
+          clearTimeout(timer);
+          reject(new Error('Interrupted by user'));
+          return;
+        }
+        this._abortSignal.addEventListener('abort', onAbort, { once: true });
+        // 清理：正常完成时移除监听器
+        const origResolve = resolve;
+        resolve = () => {
+          this._abortSignal?.removeEventListener('abort', onAbort);
+          origResolve();
+        };
+      }
+    });
   }
 }
