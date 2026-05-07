@@ -49,13 +49,16 @@ export class StreamingToolExecutor {
   private pendingResults: Map<string, Promise<StreamingToolResult>> = new Map();
   private completedResults: StreamingToolResult[] = [];
   private onToolOutput?: (toolCallId: string, toolName: string, chunk: string) => void;
+  private abortSignal?: AbortSignal;
 
   constructor(
     toolExecutor: ToolExecutor,
     onToolOutput?: (toolCallId: string, toolName: string, chunk: string) => void,
+    abortSignal?: AbortSignal,
   ) {
     this.toolExecutor = toolExecutor;
     this.onToolOutput = onToolOutput;
+    this.abortSignal = abortSignal;
   }
 
   /**
@@ -105,9 +108,29 @@ export class StreamingToolExecutor {
 
   /**
    * 等待所有已提交的工具执行完毕，返回所有结果。
+   * 如果设置了 abortSignal，会在信号触发时提前返回已完成的结果。
    */
   async flush(): Promise<StreamingToolResult[]> {
-    await this.waitForAll();
+    if (this.abortSignal?.aborted) {
+      // 已经中断，直接返回已完成的结果
+      const results = [...this.completedResults];
+      this.completedResults = [];
+      this.pendingResults.clear();
+      return results;
+    }
+
+    if (this.abortSignal) {
+      // 与 abortSignal 竞争：信号触发时提前返回
+      await Promise.race([
+        this.waitForAll(),
+        new Promise<void>(resolve => {
+          this.abortSignal!.addEventListener('abort', () => resolve(), { once: true });
+        }),
+      ]);
+    } else {
+      await this.waitForAll();
+    }
+
     const results = [...this.completedResults];
     this.completedResults = [];
     this.pendingResults.clear();

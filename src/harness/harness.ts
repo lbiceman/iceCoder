@@ -40,6 +40,15 @@ const MAX_TOOL_OUTPUT = 30000;
 // ─── max-output-tokens 恢复最大次数 ───
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
+// ─── 连续工具失败熔断阈值 ───
+const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+
+// ─── LLM 空响应重试最大次数 ───
+const MAX_EMPTY_RESPONSE_RETRIES = 2;
+
+// ─── stop_hook 连续干预上限 ───
+const MAX_STOP_HOOK_CONTINUATIONS = 3;
+
 // ─── LLM 调用重试配置（Harness 层仅做 1 次快速重试，主要重试由 LLMAdapter 负责） ───
 const LLM_MAX_RETRIES = 1;
 const LLM_RETRY_BASE_DELAY = 2000;
@@ -93,6 +102,12 @@ interface LoopState {
   maxOutputTokensRecoveryCount: number;
   /** LLM 调用连续重试计数 */
   llmRetryCount: number;
+  /** LLM 空响应重试计数 */
+  emptyResponseRetryCount: number;
+  /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
+  consecutiveToolFailures: number;
+  /** stop_hook 连续干预计数 */
+  stopHookContinuationCount: number;
   /** 上一次 continue 的原因 */
   transition: Transition;
 }
@@ -113,6 +128,8 @@ export class Harness {
   private onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** 记忆集成层（解耦的记忆系统交互） */
   private memoryIntegration: HarnessMemoryIntegration;
+  /** 用户中断信号（传递给工具执行器，实现跨层超时中断） */
+  private abortSignal?: AbortSignal;
 
   constructor(
     config: HarnessConfig,
@@ -129,6 +146,7 @@ export class Harness {
     this.toolExecutor = toolExecutor;
     this.stopHookManager = new StopHookManager();
     this.onConfirm = config.onConfirm;
+    this.abortSignal = config.loop.signal;
 
     // 记忆集成层
     this.memoryIntegration = new HarnessMemoryIntegration({
@@ -204,6 +222,9 @@ export class Harness {
       turnCount: 0,
       maxOutputTokensRecoveryCount: 0,
       llmRetryCount: 0,
+      emptyResponseRetryCount: 0,
+      consecutiveToolFailures: 0,
+      stopHookContinuationCount: 0,
       transition: 'initial',
     };
 
@@ -397,16 +418,83 @@ export class Harness {
           };
         }
 
-        // ── 5b. 停止钩子（兜底） ──
+        // ── 5b. LLM 空响应恢复 ──
+        // 空内容 + 无工具调用 + 非 length 截断 → 可能是 API 偶发异常
+        if (
+          (!response.content || !response.content.trim())
+          && state.emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES
+        ) {
+          state.emptyResponseRetryCount++;
+          console.log(
+            `[harness] LLM 空响应重试 (${state.emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES})`,
+          );
+          msgs.push({ role: 'user', content: '请继续。' });
+          state.transition = 'max_output_tokens_recovery';
+          continue;
+        }
+
+        // 空响应重试用完 → 走 error 路径
+        if (!response.content || !response.content.trim()) {
+          this.loopController.stop('error');
+          const finalState = this.loopController.getState();
+          logger.loopStop('error', finalState.currentRound, finalState.totalToolCalls);
+
+          onStep?.({
+            type: 'final',
+            iteration: finalState.currentRound,
+            totalToolCalls: finalState.totalToolCalls,
+            content: 'LLM 返回空响应',
+            stopReason: 'error',
+          });
+
+          return {
+            content: 'LLM 返回空响应，请重试。',
+            loopState: finalState,
+            messages: [...msgs],
+            log: logger.getEntries(),
+          };
+        }
+
+        // 空响应重试成功（有内容了），重置计数
+        state.emptyResponseRetryCount = 0;
+
+        // ── 5c. 停止钩子（兜底） ──
         if (this.stopHookManager.count > 0) {
           const hookResult = await this.stopHookManager.execute(msgs, response.content);
           if (hookResult.shouldContinue && hookResult.message) {
-            console.log(`[harness] 停止钩子 "${hookResult.hookName}" 要求继续`);
+            // 连续干预上限检查，防止钩子无限振荡
+            state.stopHookContinuationCount++;
+            if (state.stopHookContinuationCount > MAX_STOP_HOOK_CONTINUATIONS) {
+              console.log(`[harness] 停止钩子连续干预 ${state.stopHookContinuationCount} 次，强制停止`);
+              this.loopController.stop('stop_hook');
+              const finalState = this.loopController.getState();
+              logger.loopStop('stop_hook', finalState.currentRound, finalState.totalToolCalls);
+
+              onStep?.({
+                type: 'final',
+                iteration: finalState.currentRound,
+                totalToolCalls: finalState.totalToolCalls,
+                content: response.content,
+                stopReason: 'stop_hook',
+              });
+
+              return {
+                content: response.content,
+                loopState: finalState,
+                messages: [...msgs],
+                log: logger.getEntries(),
+              };
+            }
+
+            console.log(`[harness] 停止钩子 "${hookResult.hookName}" 要求继续 (${state.stopHookContinuationCount}/${MAX_STOP_HOOK_CONTINUATIONS})`);
             msgs.push({ role: 'user', content: hookResult.message });
             state.transition = 'stop_hook_continue';
             continue;
           }
         }
+
+        // 模型正常完成，重置 stop hook 计数
+        state.stopHookContinuationCount = 0;
 
         // ── 5d. 正常完成 → return ──
         this.loopController.stop('model_done');
@@ -458,11 +546,42 @@ export class Harness {
       });
 
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
-      await this.executeToolCallsStreaming(response.toolCalls!, msgs, logger, onStep);
+      const toolStats = await this.executeToolCallsStreaming(
+        response.toolCalls!, msgs, logger, onStep, this.abortSignal,
+      );
 
       // 6a-abort. 工具执行后立即检查中断
       if (this.loopController.isAborted()) {
         return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
+      }
+
+      // 6a-fuse. 连续工具失败熔断
+      if (toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount) {
+        state.consecutiveToolFailures++;
+        if (state.consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+          console.log(`[harness] 连续 ${state.consecutiveToolFailures} 轮工具全部失败，触发熔断`);
+          this.loopController.stop('circuit_breaker');
+          const finalState = this.loopController.getState();
+          logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
+
+          onStep?.({
+            type: 'final',
+            iteration: finalState.currentRound,
+            totalToolCalls: finalState.totalToolCalls,
+            content: `连续 ${state.consecutiveToolFailures} 轮工具调用全部失败，已触发熔断保护。`,
+            stopReason: 'circuit_breaker',
+          });
+
+          return {
+            content: `连续 ${state.consecutiveToolFailures} 轮工具调用全部失败，已触发熔断保护。最后的错误已记录，请检查工具配置或环境后重试。`,
+            loopState: finalState,
+            messages: [...msgs],
+            log: logger.getEntries(),
+          };
+        }
+      } else {
+        // 有成功执行的工具，重置计数
+        state.consecutiveToolFailures = 0;
       }
 
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
@@ -479,6 +598,7 @@ export class Harness {
       // 重置恢复计数（工具调用成功意味着模型在正常工作）
       state.maxOutputTokensRecoveryCount = 0;
       state.llmRetryCount = 0;
+      state.emptyResponseRetryCount = 0;
       state.transition = 'tool_calls';
       // messages 和 tools 已就地更新，直接 continue
     }
@@ -546,16 +666,18 @@ export class Harness {
    * 非并行安全的工具串行执行。
    * 每个工具执行前检查权限和用户中断。
    * 中断时为未完成的 tool_use 补齐错误 tool_result。
+   *
+   * @returns 工具执行统计（用于连续失败熔断判断）
    */
   private async executeToolCallsStreaming(
     toolCalls: ToolCall[],
     messages: UnifiedMessage[],
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
-  ): Promise<void> {
+    harnessAbortSignal?: AbortSignal,
+  ): Promise<{ failedCount: number; totalCount: number }> {
     const streamingExecutor = new StreamingToolExecutor(
       this.toolExecutor,
-      // 实时工具输出回调：推送到 onStep
       onStep ? (toolCallId, toolName, chunk) => {
         onStep({
           type: 'tool_output',
@@ -563,6 +685,7 @@ export class Harness {
           content: chunk,
         });
       } : undefined,
+      harnessAbortSignal,
     );
     const iteration = this.loopController.getState().currentRound;
 
@@ -603,6 +726,7 @@ export class Harness {
     // 第二遍：等待所有已提交的工具完成，收集结果
     const results = await streamingExecutor.flush();
     const processedIds = new Set<string>();
+    let failedCount = 0;
 
     for (const sr of results) {
       // 中断后跳过剩余结果处理
@@ -610,6 +734,8 @@ export class Harness {
 
       const { toolCall: tc, result } = sr;
       const output = result.success ? result.output : `工具执行错误: ${result.error}`;
+
+      if (!result.success) failedCount++;
 
       logger.toolResult(tc.name, result.success, output.length, result.error);
       onStep?.({
@@ -641,6 +767,8 @@ export class Harness {
     if (this.loopController.isAborted()) {
       this.yieldMissingToolResults(toolCalls, processedIds, messages);
     }
+
+    return { failedCount, totalCount: results.length };
   }
 
   /**
