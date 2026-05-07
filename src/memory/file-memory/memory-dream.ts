@@ -21,11 +21,6 @@ import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonObject } from './json-parser.js';
 import {
   DEFAULT_DREAM_CONFIG,
-  DREAM_READ_LIMIT,
-  DREAM_TRUNCATE_CHARS,
-  DREAM_NEW_FILES_TRIGGER,
-  DREAM_EXPIRED_TRIGGER,
-  DREAM_STATE_FILE_PATH,
   EVICTION_AGE_CAP_DAYS,
   EVICTION_CONFIDENCE_WEIGHT,
   EVICTION_RECALL_CAP,
@@ -33,6 +28,17 @@ import {
   EVICTION_USER_TYPE_BONUS,
   DEFAULT_CONFIDENCE_FALLBACK,
 } from './memory-config.js';
+
+/** Dream 读取文件数上限 */
+const DREAM_READ_LIMIT = 80;
+/** Dream 每个文件截断字符数 */
+const DREAM_TRUNCATE_CHARS = 1200;
+/** Dream 新增文件触发阈值 */
+const DREAM_NEW_FILES_TRIGGER = 10;
+/** Dream 过期记忆触发阈值 */
+const DREAM_EXPIRED_TRIGGER = 3;
+/** Dream 状态文件路径 */
+const DREAM_STATE_FILE_PATH = 'data/memory/dream-state.json';
 import { ConsolidationLock } from './memory-concurrency.js';
 import { getDreamConfig } from './memory-remote-config.js';
 import { getExpiredMemories, getStaleMemories } from './memory-age.js';

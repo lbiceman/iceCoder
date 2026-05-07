@@ -34,27 +34,47 @@ import path from 'node:path';
 import {
   type RelevanceGateConfig,
   DEFAULT_RELEVANCE_GATE_CONFIG,
-  TIME_RANGE_BOOST,
-  EVENT_TIME_BOOST,
-  MAX_RELATED_EXPAND,
-  RECALL_FLUSH_INTERVAL_MS,
-  LLM_RECALL_TIMEOUT_MS,
-  LLM_RECALL_MAX_TOKENS,
-  FACT_SELECTION_LIMIT,
-  CONFIDENCE_FILTER_THRESHOLD,
-  CONFIDENCE_BONUS_WEIGHT,
-  RECALL_BONUS_WEIGHT,
-  RECALL_BONUS_CAP,
-  PREFETCH_HIT_BONUS,
-  ENTITY_MATCH_BONUS_MAX,
-  CONTENT_BONUS_MAX,
-  DESC_FILENAME_WEIGHT_MULTIPLIER,
-  SCORE_FILTER_THRESHOLD,
-  COARSE_LIMIT_MULTIPLIER,
-  COARSE_LIMIT_MIN,
-  TAGS_JACCARD_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
 } from './memory-config.js';
+
+/** 时间范围加权倍数 */
+const TIME_RANGE_BOOST = 1.5;
+/** 事件时间加权倍数 */
+const EVENT_TIME_BOOST = 2.0;
+/** 关联扩展最大数量 */
+const MAX_RELATED_EXPAND = 3;
+/** 召回元数据批量写入间隔（毫秒） */
+const RECALL_FLUSH_INTERVAL_MS = 30_000;
+/** LLM 召回超时（毫秒） */
+const LLM_RECALL_TIMEOUT_MS = 30_000;
+/** LLM 召回最大输出 token */
+const LLM_RECALL_MAX_TOKENS = 512;
+/** Fact 选择上限 */
+const FACT_SELECTION_LIMIT = 30;
+/** 置信度过滤阈值（低于此值的记忆不参与召回） */
+const CONFIDENCE_FILTER_THRESHOLD = 0.3;
+/** 置信度加分权重 */
+const CONFIDENCE_BONUS_WEIGHT = 0.15;
+/** 召回频率加分权重 */
+const RECALL_BONUS_WEIGHT = 0.1;
+/** 召回频率加分上限 */
+const RECALL_BONUS_CAP = 10;
+/** 预取命中加分 */
+const PREFETCH_HIT_BONUS = 0.2;
+/** 实体匹配加分上限 */
+const ENTITY_MATCH_BONUS_MAX = 0.3;
+/** 内容匹配加分上限 */
+const CONTENT_BONUS_MAX = 0.3;
+/** description/filename 权重倍数（比 contentPreview 更重要） */
+const DESC_FILENAME_WEIGHT_MULTIPLIER = 2;
+/** 分数过滤阈值 */
+const SCORE_FILTER_THRESHOLD = 0.05;
+/** 关键词粗筛倍数 */
+const COARSE_LIMIT_MULTIPLIER = 3;
+/** 关键词粗筛最小数量 */
+const COARSE_LIMIT_MIN = 15;
+/** Tags Jaccard 阈值（关联扩展） */
+const TAGS_JACCARD_THRESHOLD = 0.3;
 
 /**
  * 召回结果。

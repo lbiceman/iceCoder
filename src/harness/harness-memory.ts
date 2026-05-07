@@ -38,19 +38,28 @@ import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js'
 import {
   MEMORY_MAX_RELEVANT,
   EXTRACTION_SIGNAL_WORDS,
-  TOPIC_SHIFT_JACCARD_THRESHOLD,
-  HARNESS_FILE_CONTENT_TRUNCATE,
-  EXTRACTION_CHUNK_SIZE,
-  EXTRACTION_MAX_CHUNKS,
-  COARSE_RECALL_MULTIPLIER,
-  FALLBACK_RECALL_MULTIPLIER,
-  SESSION_MEMORY_LLM_MAX_TOKENS,
-  SESSION_MEMORY_SANITIZED_PREFIX_LIMIT,
   STALE_THRESHOLD_DAYS,
   EXPIRED_THRESHOLD_DAYS,
   HIGH_CONFIDENCE_THRESHOLD,
   HIGH_CONFIDENCE_DECAY_MULTIPLIER,
 } from '../memory/file-memory/memory-config.js';
+
+/** 话题切换 Jaccard 阈值 */
+const TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2;
+/** 文件粒度内容截断字符数 */
+const HARNESS_FILE_CONTENT_TRUNCATE = 2000;
+/** 提取消息分块大小 */
+const EXTRACTION_CHUNK_SIZE = 20;
+/** 提取最大分块数 */
+const EXTRACTION_MAX_CHUNKS = 3;
+/** 粗召回倍数 */
+const COARSE_RECALL_MULTIPLIER = 6;
+/** 回退召回倍数 */
+const FALLBACK_RECALL_MULTIPLIER = 2;
+/** 会话记忆 LLM 最大输出 token */
+const SESSION_MEMORY_LLM_MAX_TOKENS = 4096;
+/** 会话记忆净化前缀消息数 */
+const SESSION_MEMORY_SANITIZED_PREFIX_LIMIT = 50;
 
 /**
  * 内容启发式模式 — 检测用户消息中暗示偏好/习惯的关键词。
@@ -369,6 +378,10 @@ export class HarnessMemoryIntegration {
   private memoryDirExists: boolean | null = null;
   /** 被动确认队列 — 提取完成后暂存摘要，下次返回时附加给用户 */
   private _extractionNotices: string[] = [];
+  /** 会话内去重：已注入的记忆 ID 集合（manifest 变化时清空） */
+  private injectedMemoryIds = new Set<string>();
+  /** 上次 manifest 指纹（用于检测记忆文件变化） */
+  private lastManifestHash = '';
 
   // ── sequential 包装的提取函数 ──
   private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
@@ -416,6 +429,17 @@ export class HarnessMemoryIntegration {
     // 只在新会话时清空（构造函数中初始化为空）
     // lastInjectionUserMessage 也不清空 — 用于跨轮次话题切换检测
 
+    // 会话内去重：manifest 变化时清空 injectedMemoryIds
+    // （新记忆写入后，召回结果可能变化，需要重新注入）
+    const currentHash = getScannerCache().getManifestHash(this.memoryDir);
+    if (currentHash && currentHash !== this.lastManifestHash) {
+      if (this.injectedMemoryIds.size > 0) {
+        console.debug(`[harness-memory] Manifest changed, clearing in-session dedup (${this.injectedMemoryIds.size} entries)`);
+      }
+      this.injectedMemoryIds.clear();
+      this.lastManifestHash = currentHash;
+    }
+
     // 异步预取（fire-and-forget）
     if (this.fileMemoryManager) {
       this.fileMemoryManager.prefetchMemories(userMessage).catch((err) => {
@@ -457,6 +481,8 @@ export class HarnessMemoryIntegration {
     const coarseK = finalK * COARSE_RECALL_MULTIPLIER;
     const fallbackK = finalK * FALLBACK_RECALL_MULTIPLIER;
 
+    let dedupCount = 0;
+
     try {
       // 获取预取结果（如果有的话）
       const prefetchedPaths = new Set<string>();
@@ -485,6 +511,7 @@ export class HarnessMemoryIntegration {
         durationMs: recallResult.duration,
         selectedFiles: recallResult.memories.map(m => m.filename),
         queryLength: latestUserMsg.length,
+        dedupCount,
       }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
@@ -517,6 +544,21 @@ export class HarnessMemoryIntegration {
           return;
         }
 
+        // ── 会话内去重：过滤已注入的记忆 ──
+        const recallCfgForDedup = getRecallConfig();
+        if (recallCfgForDedup.dedupInSession && this.injectedMemoryIds.size > 0) {
+          const beforeCount = selectedMemories.length;
+          selectedMemories = selectedMemories.filter(m => !this.injectedMemoryIds.has(m.filename));
+          dedupCount = beforeCount - selectedMemories.length;
+          if (dedupCount > 0) {
+            console.debug(`[harness-memory] In-session dedup: filtered ${dedupCount} already-injected memories`);
+          }
+          if (selectedMemories.length === 0) {
+            console.debug('[harness-memory] All memories deduped, skipping injection');
+            return;
+          }
+        }
+
         // ── v5.1: Fact 粒度 CoN + JSON 结构化读取 ──
         const memoryItems = await this.buildStructuredMemoryItems(
           selectedMemories,
@@ -526,6 +568,7 @@ export class HarnessMemoryIntegration {
         // 标记为已展示
         for (const mem of selectedMemories) {
           this.surfacedMemoryPaths.add(mem.filePath);
+          this.injectedMemoryIds.add(mem.filename);
         }
 
         const method = recallResult.usedLLM ? 'LLM semantic recall + rerank' : 'keyword fallback';
@@ -538,6 +581,10 @@ export class HarnessMemoryIntegration {
 
     this.injectedForCurrentMessage = true;
     this.lastInjectionUserMessage = latestUserMsg;
+
+    // 更新 manifest 指纹（scanner cache 已在召回时填充）
+    const newHash = getScannerCache().getManifestHash(this.memoryDir);
+    if (newHash) this.lastManifestHash = newHash;
   }
 
   /**
@@ -656,6 +703,8 @@ ${candidateList}`;
   dispose(): void {
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
+    this.injectedMemoryIds.clear();
+    this.lastManifestHash = '';
     this.llmAdapter = null;
     this._extractionNotices = [];
   }
@@ -922,6 +971,12 @@ ${candidateList}`;
           : '';
         const chunkNote = chunks.length > 1 ? ` (${chunks.length} chunks)` : '';
         console.log(`[harness-memory] LLM 提取: ${totalWritten} 条记忆已保存${chunkNote} ${cacheNote}`);
+
+        // 新记忆写入后清空会话内去重 Set（manifest 已变化，召回结果可能不同）
+        if (this.injectedMemoryIds.size > 0) {
+          console.debug(`[harness-memory] New memories extracted, clearing in-session dedup (${this.injectedMemoryIds.size} entries)`);
+          this.injectedMemoryIds.clear();
+        }
 
         // 被动确认：合并为一条通知（避免多 chunk 时刷屏）
         const filenames = allWrittenPaths.map(p => path.basename(p, '.md'));

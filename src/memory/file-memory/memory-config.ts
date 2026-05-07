@@ -108,6 +108,8 @@ export interface SessionMemoryConfig {
 /** 召回远程配置 */
 export interface RecallConfig {
   maxResults: number;
+  /** 会话内去重：避免同一记忆在同一会话中反复注入（默认 true） */
+  dedupInSession: boolean;
 }
 
 /** 提取远程配置 */
@@ -209,6 +211,7 @@ export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
 
 export const DEFAULT_RECALL_CONFIG: RecallConfig = {
   maxResults: 15,
+  dedupInSession: true,
 };
 
 export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
@@ -294,134 +297,20 @@ export const DECAY_FACTOR_STALE = 0.5;
 export const DECAY_FACTOR_EXPIRED = 0.1;
 
 // ══════════════════════════════════════════════════════════════════
-// 记忆扫描常量（memory-scanner.ts）
+// 共享常量（多模块引用）
 // ══════════════════════════════════════════════════════════════════
-
-/** frontmatter 最大读取行数 */
-export const FRONTMATTER_MAX_LINES = 30;
-
-/** 正文预览最大字符数 */
-export const CONTENT_PREVIEW_MAX_CHARS = 300;
-
-/** Manifest 预览截断字符数 */
-export const MANIFEST_PREVIEW_TRUNCATE = 150;
 
 /** 默认置信度回退值 */
 export const DEFAULT_CONFIDENCE_FALLBACK = 0.5;
 
-// ══════════════════════════════════════════════════════════════════
-// 记忆召回常量（memory-recall.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** 时间范围加权倍数 */
-export const TIME_RANGE_BOOST = 1.5;
-
-/** 事件时间加权倍数 */
-export const EVENT_TIME_BOOST = 2.0;
-
-/** 关联扩展最大数量 */
-export const MAX_RELATED_EXPAND = 3;
-
-/** 召回元数据批量写入间隔（毫秒） */
-export const RECALL_FLUSH_INTERVAL_MS = 30_000;
-
-/** LLM 召回超时（毫秒） */
-export const LLM_RECALL_TIMEOUT_MS = 30_000;
-
-/** LLM 召回最大输出 token */
-export const LLM_RECALL_MAX_TOKENS = 512;
-
-/** Fact 选择上限 */
-export const FACT_SELECTION_LIMIT = 30;
-
-/** 置信度过滤阈值（低于此值的记忆不参与召回） */
-export const CONFIDENCE_FILTER_THRESHOLD = 0.3;
-
-/** Tags Jaccard 阈值（关联扩展） */
-export const TAGS_JACCARD_THRESHOLD = 0.3;
-
-/** Tags Jaccard 阈值（去重） */
-export const TAGS_JACCARD_DEDUP_THRESHOLD = 0.6;
-
-/** 关键词粗筛倍数 */
-export const COARSE_LIMIT_MULTIPLIER = 3;
-
-/** 关键词粗筛最小数量 */
-export const COARSE_LIMIT_MIN = 15;
-
-/** 分数过滤阈值 */
-export const SCORE_FILTER_THRESHOLD = 0.05;
-
-/** 置信度加分权重 */
-export const CONFIDENCE_BONUS_WEIGHT = 0.15;
-
-/** 召回频率加分权重 */
-export const RECALL_BONUS_WEIGHT = 0.1;
-
-/** 召回频率加分上限 */
-export const RECALL_BONUS_CAP = 10;
-
-/** 预取命中加分 */
-export const PREFETCH_HIT_BONUS = 0.2;
-
-/** 实体匹配加分上限 */
-export const ENTITY_MATCH_BONUS_MAX = 0.3;
-
-/** 内容匹配加分上限 */
-export const CONTENT_BONUS_MAX = 0.3;
-
-/** description/filename 权重倍数（比 contentPreview 更重要） */
-export const DESC_FILENAME_WEIGHT_MULTIPLIER = 2;
-
-/** LLM 相关性检查：上下文关键词截断数 */
-export const LLM_RELEVANCE_CONTEXT_LIMIT = 50;
-
-/** LLM 相关性检查：每条记忆 tag 截断数 */
-export const LLM_RELEVANCE_TAG_LIMIT = 3;
-
-/** LLM 相关性检查：description 截断字符数 */
-export const LLM_RELEVANCE_DESC_TRUNCATE = 80;
-
-// ══════════════════════════════════════════════════════════════════
-// Fact 索引常量（memory-fact-index.ts）
-// ══════════════════════════════════════════════════════════════════
+/** 用户级记忆路由的置信度阈值 */
+export const USER_LEVEL_CONFIDENCE_THRESHOLD = 1.0;
 
 /** Fact 最小长度 */
 export const MIN_FACT_LENGTH = 6;
 
-/** Fact 最大长度 */
-export const MAX_FACT_LENGTH = 300;
-
 /** 每个文件最大 Fact 数 */
 export const MAX_FACTS_PER_FILE = 30;
-
-/** Fact 排序默认返回数 */
-export const FACT_RANK_DEFAULT_MAX = 15;
-
-/** 每个文件默认展示 Fact 数 */
-export const FACTS_PER_FILE_DEFAULT = 3;
-
-/** Fact 实体匹配加分 */
-export const FACT_ENTITY_MATCH_BONUS = 0.3;
-
-// ══════════════════════════════════════════════════════════════════
-// Dream 整合常量（memory-dream.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** Dream 读取文件数上限 */
-export const DREAM_READ_LIMIT = 80;
-
-/** Dream 每个文件截断字符数 */
-export const DREAM_TRUNCATE_CHARS = 1200;
-
-/** Dream 新增文件触发阈值 */
-export const DREAM_NEW_FILES_TRIGGER = 10;
-
-/** Dream 过期记忆触发阈值 */
-export const DREAM_EXPIRED_TRIGGER = 3;
-
-/** Dream 状态文件路径 */
-export const DREAM_STATE_FILE_PATH = 'data/memory/dream-state.json';
 
 // ══════════════════════════════════════════════════════════════════
 // 淘汰评分常量（memory-eviction.ts / memory-dream.ts 共用）
@@ -447,80 +336,3 @@ export const EVICTION_CONFIDENCE_PROTECTION = 1.0;
 
 /** 淘汰扫描上限 */
 export const EVICTION_SCAN_LIMIT = 10000;
-
-// ══════════════════════════════════════════════════════════════════
-// LLM 提取常量（memory-llm-extractor.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** 消息内容截断字符数 */
-export const EXTRACTION_MESSAGE_TRUNCATE = 2000;
-
-/** 用户级记忆路由的置信度阈值 */
-export const USER_LEVEL_CONFIDENCE_THRESHOLD = 1.0;
-
-// ══════════════════════════════════════════════════════════════════
-// 会话记忆常量（session-memory.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** 单个 section 最大 token 数 */
-export const SESSION_MAX_SECTION_TOKENS = 2000;
-
-/** 会话记忆总 token 上限 */
-export const SESSION_MAX_TOTAL_TOKENS = 12000;
-
-/** 内容验证最小长度 */
-export const SESSION_VALIDATION_MIN_LENGTH = 50;
-
-// ══════════════════════════════════════════════════════════════════
-// 并发控制常量（memory-concurrency.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** 整合锁文件名 */
-export const CONSOLIDATION_LOCK_FILE = '.consolidate-lock';
-
-/** 整合锁持有者过期时间（毫秒） */
-export const CONSOLIDATION_LOCK_STALE_MS = 60 * 60 * 1000; // 1 小时
-
-/** drainExtractions 默认超时（毫秒） */
-export const DRAIN_EXTRACTIONS_TIMEOUT_MS = 60_000;
-
-// ══════════════════════════════════════════════════════════════════
-// 扫描缓存常量（memory-scanner-cache.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** 扫描缓存默认 TTL（毫秒） */
-export const SCANNER_CACHE_TTL_MS = 30_000;
-
-// ══════════════════════════════════════════════════════════════════
-// Harness 集成常量（harness-memory.ts）
-// ══════════════════════════════════════════════════════════════════
-
-/** 话题切换 Jaccard 阈值 */
-export const TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2;
-
-/** 文件粒度内容截断字符数 */
-export const HARNESS_FILE_CONTENT_TRUNCATE = 2000;
-
-/** 提取消息分块大小 */
-export const EXTRACTION_CHUNK_SIZE = 20;
-
-/** 提取最大分块数 */
-export const EXTRACTION_MAX_CHUNKS = 3;
-
-/** 粗召回倍数 */
-export const COARSE_RECALL_MULTIPLIER = 6;
-
-/** 回退召回倍数 */
-export const FALLBACK_RECALL_MULTIPLIER = 2;
-
-/** 会话记忆 LLM 最大输出 token */
-export const SESSION_MEMORY_LLM_MAX_TOKENS = 4096;
-
-/** 会话记忆净化前缀消息数 */
-export const SESSION_MEMORY_SANITIZED_PREFIX_LIMIT = 50;
-
-/** 远程配置缓存刷新间隔（毫秒） */
-export const REMOTE_CONFIG_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-
-/** 远程配置文件路径 */
-export const REMOTE_CONFIG_FILE_PATH = 'data/memory/memory-config.json';
