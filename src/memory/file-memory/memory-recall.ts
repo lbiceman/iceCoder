@@ -50,6 +50,8 @@ const MAX_RELATED_EXPAND = 3;
 const RECALL_FLUSH_INTERVAL_MS = 30_000;
 /** LLM 召回超时（毫秒） */
 const LLM_RECALL_TIMEOUT_MS = 30_000;
+/** LLM 召回最少候选数：候选数不足时直接走关键词回退，避免无意义的 LLM 调用 */
+const LLM_RECALL_MIN_CANDIDATES = 4;
 /** LLM 召回最大输出 token */
 const LLM_RECALL_MAX_TOKENS = 512;
 /** Fact 选择上限 */
@@ -183,8 +185,9 @@ export async function recallRelevantMemories(
   const factIndex = getFactIndex();
   await factIndex.buildIndex(filteredMemories);
 
-  // 如果有 LLM 适配器，使用 LLM 召回（v7：一次调用同时选文件和精排 facts）
-  if (llmAdapter) {
+  // 如果有 LLM 适配器且候选数足够，使用 LLM 召回（v7：一次调用同时选文件和精排 facts）
+  // 候选数不足时直接走关键词回退，避免无意义的 LLM 调用（10-14s 开销）
+  if (llmAdapter && filteredMemories.length >= LLM_RECALL_MIN_CANDIDATES) {
     try {
       // LLM 召回带 30 秒超时，防止无限挂起
       const llmResult = await Promise.race([
