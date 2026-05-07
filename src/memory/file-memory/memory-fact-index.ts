@@ -19,6 +19,14 @@ import type { MemoryHeader, FileMemoryType } from './types.js';
 import { tokenize, extractEntities } from './memory-tokenizer.js';
 import { extractBodyFromMarkdown } from './memory-parser.js';
 import { promises as fs } from 'node:fs';
+import {
+  MIN_FACT_LENGTH,
+  MAX_FACT_LENGTH,
+  MAX_FACTS_PER_FILE,
+  FACT_RANK_DEFAULT_MAX,
+  FACTS_PER_FILE_DEFAULT,
+  FACT_ENTITY_MATCH_BONUS,
+} from './memory-config.js';
 
 /**
  * 单条事实。
@@ -58,12 +66,6 @@ interface ContentCacheEntry {
   mtimeMs: number;
 }
 
-/** 最小 fact 长度（过短的行没有信息量） */
-const MIN_FACT_LENGTH = 6;
-/** 最大 fact 长度（超长行按标点分割） */
-const MAX_FACT_LENGTH = 300;
-/** 每个文件最多提取的 fact 数量 */
-const MAX_FACTS_PER_FILE = 30;
 
 /**
  * Fact 索引构建器。
@@ -193,7 +195,7 @@ export class FactIndex {
   rankFacts(
     query: string,
     facts: FactEntry[],
-    maxResults: number = 15,
+    maxResults: number = FACT_RANK_DEFAULT_MAX,
   ): FactEntry[] {
     const queryTokens = tokenize(query);
     // 空查询时直接返回前 N 条（不做排序）
@@ -218,7 +220,7 @@ export class FactIndex {
           if (factLower.includes(entity)) entityHits++;
         }
         if (entityHits > 0) {
-          score += 0.3 * (entityHits / queryEntities.size);
+          score += FACT_ENTITY_MATCH_BONUS * (entityHits / queryEntities.size);
         }
       }
 
@@ -238,7 +240,7 @@ export class FactIndex {
   getTopFactsForFile(
     filePath: string,
     query: string,
-    maxFacts: number = 3,
+    maxFacts: number = FACTS_PER_FILE_DEFAULT,
   ): string[] {
     const cached = this.cache.get(filePath);
     if (!cached || cached.facts.length === 0) return [];

@@ -10,12 +10,11 @@ import path from 'node:path';
 import type { MemoryHeader, FileMemoryType, FileMemoryConfig } from './types.js';
 import { FILE_MEMORY_TYPES } from './types.js';
 import { extractBodyFromMarkdown } from './memory-parser.js';
-
-/** frontmatter 最大读取行数 */
-const FRONTMATTER_MAX_LINES = 30;
-
-/** 正文预览最大字符数 */
-const CONTENT_PREVIEW_MAX_CHARS = 300;
+import {
+  FRONTMATTER_MAX_LINES,
+  CONTENT_PREVIEW_MAX_CHARS,
+  DEFAULT_CONFIDENCE_FALLBACK,
+} from './memory-config.js';
 
 /**
  * 解析 frontmatter 中的记忆类型。
@@ -79,7 +78,7 @@ export async function scanMemoryFiles(
         const frontmatter = parseFrontmatter(truncatedContent);
 
         // 解析新增元数据字段
-        const confidence = frontmatter.confidence ? parseFloat(frontmatter.confidence) : 0.5;
+        const confidence = frontmatter.confidence ? parseFloat(frontmatter.confidence) : DEFAULT_CONFIDENCE_FALLBACK;
         const recallCount = frontmatter.recallCount ? parseInt(frontmatter.recallCount, 10) : 0;
         const lastRecalledAt = frontmatter.lastRecalledAt;
         const createdAt = frontmatter.createdAt;
@@ -96,7 +95,7 @@ export async function scanMemoryFiles(
           mtimeMs: stat.mtimeMs,
           description: frontmatter.description || null,
           type: parseMemoryType(frontmatter.type),
-          confidence: Number.isFinite(confidence) ? confidence : 0.5,
+          confidence: Number.isFinite(confidence) ? confidence : DEFAULT_CONFIDENCE_FALLBACK,
           recallCount: Number.isFinite(recallCount) ? recallCount : 0,
           lastRecalledMs: lastRecalledAt ? new Date(lastRecalledAt).getTime() || 0 : 0,
           createdMs: createdAt ? new Date(createdAt).getTime() || stat.birthtimeMs : stat.birthtimeMs,

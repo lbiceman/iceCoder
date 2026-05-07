@@ -17,32 +17,22 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
+import {
+  type EvictionConfig,
+  DEFAULT_EVICTION_CONFIG,
+  EVICTION_AGE_CAP_DAYS,
+  EVICTION_CONFIDENCE_WEIGHT,
+  EVICTION_RECALL_CAP,
+  EVICTION_RECALL_WEIGHT,
+  EVICTION_USER_TYPE_BONUS,
+  EVICTION_CONFIDENCE_PROTECTION,
+  EVICTION_SCAN_LIMIT,
+  DEFAULT_CONFIDENCE_FALLBACK,
+} from './memory-config.js';
 
-// ─── 配置 ───
-
-export interface EvictionConfig {
-  /** 是否启用自动淘汰 */
-  enabled: boolean;
-  /** 软上限：触发淘汰的文件数阈值 */
-  softLimit: number;
-  /** 淘汰后的目标文件数 */
-  evictionTarget: number;
-  /** 淘汰归档目录（绝对路径或相对于 memoryDir 的父目录） */
-  evictedDir: string;
-  /** 归档目录最大文件数（超过后删除最老的） */
-  maxEvictedFiles: number;
-  /** 保护期：最近 N 天内创建或召回的记忆不淘汰 */
-  protectionDays: number;
-}
-
-export const DEFAULT_EVICTION_CONFIG: EvictionConfig = {
-  enabled: true,
-  softLimit: 120,
-  evictionTarget: 100,
-  evictedDir: 'data/memory/evicted',
-  maxEvictedFiles: 100,
-  protectionDays: 3,
-};
+// 重新导出类型和默认值，保持向后兼容
+export type { EvictionConfig } from './memory-config.js';
+export { DEFAULT_EVICTION_CONFIG } from './memory-config.js';
 
 // ─── 淘汰结果 ───
 
@@ -75,16 +65,16 @@ export function computeEvictionScore(mem: MemoryHeader): number {
   const daysSinceActive = Math.max(0, (Date.now() - lastActiveMs) / 86_400_000);
 
   // 越久没活跃，淘汰分越高（0-100）
-  const agePenalty = Math.min(daysSinceActive, 365) / 365 * 100;
+  const agePenalty = Math.min(daysSinceActive, EVICTION_AGE_CAP_DAYS) / EVICTION_AGE_CAP_DAYS * 100;
 
   // 高置信度保护（0-30）
-  const confidenceBonus = (mem.confidence || 0.5) * 30;
+  const confidenceBonus = (mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) * EVICTION_CONFIDENCE_WEIGHT;
 
   // 召回频率保护（0-20，上限 recallCount=20）
-  const recallBonus = Math.min(mem.recallCount || 0, 20) / 20 * 20;
+  const recallBonus = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
 
   // user 类型保护（0 或 15）
-  const typeBonus = mem.type === 'user' ? 15 : 0;
+  const typeBonus = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
 
   return agePenalty - confidenceBonus - recallBonus - typeBonus;
 }
@@ -114,7 +104,7 @@ export async function evictIfNeeded(
   }
 
   // 扫描全部文件（不截断）
-  const allMemories = await scanMemoryFiles(memoryDir, 10000);
+  const allMemories = await scanMemoryFiles(memoryDir, EVICTION_SCAN_LIMIT);
   const fileCountBefore = allMemories.length;
 
   if (fileCountBefore <= cfg.softLimit) {
@@ -133,7 +123,7 @@ export async function evictIfNeeded(
 
   const candidates = allMemories.filter(mem => {
     // 不淘汰高置信度记忆（用户明确声明）
-    if ((mem.confidence || 0.5) >= 1.0) return false;
+    if ((mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) >= EVICTION_CONFIDENCE_PROTECTION) return false;
 
     // 不淘汰保护期内的记忆
     const lastActiveMs = Math.max(mem.lastRecalledMs || 0, mem.mtimeMs, mem.createdMs);

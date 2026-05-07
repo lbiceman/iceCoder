@@ -31,6 +31,30 @@ import { tokenize, extractEntities } from './memory-tokenizer.js';
 import { memoryDecayFactor } from './memory-age.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import {
+  type RelevanceGateConfig,
+  DEFAULT_RELEVANCE_GATE_CONFIG,
+  TIME_RANGE_BOOST,
+  EVENT_TIME_BOOST,
+  MAX_RELATED_EXPAND,
+  RECALL_FLUSH_INTERVAL_MS,
+  LLM_RECALL_TIMEOUT_MS,
+  LLM_RECALL_MAX_TOKENS,
+  FACT_SELECTION_LIMIT,
+  CONFIDENCE_FILTER_THRESHOLD,
+  CONFIDENCE_BONUS_WEIGHT,
+  RECALL_BONUS_WEIGHT,
+  RECALL_BONUS_CAP,
+  PREFETCH_HIT_BONUS,
+  ENTITY_MATCH_BONUS_MAX,
+  CONTENT_BONUS_MAX,
+  DESC_FILENAME_WEIGHT_MULTIPLIER,
+  SCORE_FILTER_THRESHOLD,
+  COARSE_LIMIT_MULTIPLIER,
+  COARSE_LIMIT_MIN,
+  TAGS_JACCARD_THRESHOLD,
+  DEFAULT_CONFIDENCE_FALLBACK,
+} from './memory-config.js';
 
 /**
  * 召回结果。
@@ -106,7 +130,7 @@ export async function recallRelevantMemories(
   const memories = allMemories.filter(m => !alreadySurfaced.has(m.filePath));
 
   // 过滤极低置信度的记忆（减少噪声，降低幻觉）
-  const filteredMemories = memories.filter(m => m.confidence >= 0.3);
+  const filteredMemories = memories.filter(m => m.confidence >= CONFIDENCE_FILTER_THRESHOLD);
 
   if (filteredMemories.length === 0) {
     return { memories: [], facts: [], duration: Date.now() - startTime, usedLLM: false };
@@ -134,7 +158,7 @@ export async function recallRelevantMemories(
       // LLM 召回带 30 秒超时，防止无限挂起
       const llmResult = await Promise.race([
         llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('LLM recall timeout (30s)')), 30_000)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`LLM recall timeout (${LLM_RECALL_TIMEOUT_MS / 1000}s)`)), LLM_RECALL_TIMEOUT_MS)),
       ]);
       // ── 关联扩展（1 跳）──
       const expanded = expandRelatedMemories(llmResult.selectedMemories, filteredMemories, alreadySurfaced);
@@ -143,7 +167,7 @@ export async function recallRelevantMemories(
       let selectedFacts = llmResult.selectedFacts;
       if (expanded.length > 0) {
         const expandedFacts = await extractFactsFromSelected(query, expanded, factIndex);
-        selectedFacts = [...selectedFacts, ...expandedFacts].slice(0, 15);
+        selectedFacts = [...selectedFacts, ...expandedFacts].slice(0, FACT_SELECTION_LIMIT);
       }
       // 异步更新召回计数（不阻塞返回）
       updateRecallMetadata(allSelected).catch(() => {});
@@ -216,7 +240,7 @@ async function llmSelectAndRankMemories(
   ];
 
   const response = await llmAdapter.chat(messages, {
-    maxTokens: 512,
+    maxTokens: LLM_RECALL_MAX_TOKENS,
     temperature: 0,
   });
 
@@ -253,7 +277,7 @@ async function llmSelectAndRankMemories(
         if (fact) factEntries.push(fact);
       }
       if (factEntries.length > 0) {
-        selectedFacts = factEntries.slice(0, 30);
+        selectedFacts = factEntries.slice(0, FACT_SELECTION_LIMIT);
       }
     }
 
@@ -551,9 +575,6 @@ export function parseTimeRange(query: string): TimeRange | null {
  *
  * 软加权设计：即使时间解析不精确，也不会漏掉相关记忆。
  */
-const TIME_RANGE_BOOST = 1.5;
-const EVENT_TIME_BOOST = 2.0;
-
 function computeTimeBoost(memory: MemoryHeader, range: TimeRange): number {
   // 优先用事件时间（eventDateMs）— 这是事实发生的真实时间
   const eventMs = memory.eventDateMs || 0;
@@ -713,7 +734,7 @@ function keywordFallback(
   }
 
   // ── 第一阶段：粗筛（description + filename + contentPreview，TF-IDF 加权）──
-  const COARSE_LIMIT = Math.max(maxResults * 3, 15);
+  const COARSE_LIMIT = Math.max(maxResults * COARSE_LIMIT_MULTIPLIER, COARSE_LIMIT_MIN);
 
   const scored = memories.map(memory => {
     let keywordScore = 0;
@@ -733,12 +754,12 @@ function keywordFallback(
         const idf = idfMap.get(token) ?? 1.0;
         // description/filename 命中权重 ×2（更重要的字段）
         if (descTokens.has(token) || filenameTokens.has(token)) {
-          weightedHits += idf * 2;
+          weightedHits += idf * DESC_FILENAME_WEIGHT_MULTIPLIER;
         } else if (previewTokens.has(token)) {
           weightedHits += idf;
         }
       }
-      keywordScore += totalQueryIdf > 0 ? (weightedHits / (totalQueryIdf * 2)) * 0.6 : 0;
+      keywordScore += totalQueryIdf > 0 ? (weightedHits / (totalQueryIdf * DESC_FILENAME_WEIGHT_MULTIPLIER)) * CONTENT_BONUS_MAX : 0;
     }
 
     // v6: 实体名精确匹配加权 — 查询中的实体名出现在记忆中时额外加分
@@ -749,7 +770,7 @@ function keywordFallback(
         if (memText.includes(entity)) entityHits++;
       }
       if (entityHits > 0) {
-        keywordScore += 0.3 * (entityHits / queryEntities.size); // 最多 +0.3
+        keywordScore += ENTITY_MATCH_BONUS_MAX * (entityHits / queryEntities.size);
       }
     }
 
@@ -765,11 +786,11 @@ function keywordFallback(
     score *= decay;
 
     // 置信度加分（用户明确声明的记忆优先）
-    score += (memory.confidence || 0.5) * 0.15;
+    score += (memory.confidence || DEFAULT_CONFIDENCE_FALLBACK) * CONFIDENCE_BONUS_WEIGHT;
 
     // 召回频率加分（经常被召回的记忆更可能有用）
-    const recallBonus = Math.min(memory.recallCount || 0, 10) / 10;
-    score += recallBonus * 0.1;
+    const recallBonus = Math.min(memory.recallCount || 0, RECALL_BONUS_CAP) / RECALL_BONUS_CAP;
+    score += recallBonus * RECALL_BONUS_WEIGHT;
 
     // v4: 时间范围加权（范围内记忆 score ×1.5）
     if (timeRange) {
@@ -778,14 +799,14 @@ function keywordFallback(
 
     // 预取命中加分（预取器提前识别的相关记忆）
     if (prefetchedPaths.has(memory.filePath)) {
-      score += 0.2;
+      score += PREFETCH_HIT_BONUS;
     }
 
     return { memory, score };
   });
 
   const coarseResults = scored
-    .filter(item => item.score > 0.05)
+    .filter(item => item.score > SCORE_FILTER_THRESHOLD)
     .sort((a, b) => b.score - a.score)
     .slice(0, COARSE_LIMIT);
 
@@ -826,7 +847,7 @@ function refineWithFullContent(
     }
     // 正文匹配加分（最多 0.3）
     const contentBonus = totalWeight > 0
-      ? (weightedHits / totalWeight) * 0.3
+      ? (weightedHits / totalWeight) * CONTENT_BONUS_MAX
       : 0;
 
     return { memory, score: score + contentBonus };
@@ -844,8 +865,6 @@ function refineWithFullContent(
  * v6: 批量延迟写入 — 内存计数器 + 30 秒定时 flush。
  * 避免每次召回都对每个文件做 readFile + writeFile。
  */
-const FLUSH_INTERVAL_MS = 30_000;
-
 /** 内存中的待更新计数器 */
 const pendingUpdates = new Map<string, { count: number; lastRecalledAt: string }>();
 
@@ -857,7 +876,7 @@ function ensureFlushTimer(): void {
   if (flushTimer) return;
   flushTimer = setInterval(() => {
     flushRecallMetadata().catch(() => {});
-  }, FLUSH_INTERVAL_MS);
+  }, RECALL_FLUSH_INTERVAL_MS);
   // 允许进程正常退出（不阻塞）
   if (flushTimer && typeof flushTimer === 'object' && 'unref' in flushTimer) {
     flushTimer.unref();
@@ -937,9 +956,6 @@ export async function drainRecallMetadata(): Promise<void> {
 
 // ─── v3: 关联扩展 ───
 
-/** 关联扩展最大数量 */
-const MAX_RELATED_EXPAND = 3;
-
 /**
  * 关联扩展：从选中文件的 relatedTo 字段和 tags 相似度中发现关联文件。
  *
@@ -995,7 +1011,7 @@ export function expandRelatedMemories(
       if (jaccard > maxJaccard) maxJaccard = jaccard;
     }
 
-    if (maxJaccard >= 0.3) {
+    if (maxJaccard >= TAGS_JACCARD_THRESHOLD) {
       candidates.set(candidate.filePath, { mem: candidate, score: maxJaccard, source: 'tags' });
     }
   }
@@ -1155,27 +1171,6 @@ async function extractFactsFromSelected(
 // ─── 记忆相关性门控（Relevance Gate） ───
 
 /**
- * 相关性门控配置。
- */
-export interface RelevanceGateConfig {
-  /** 是否启用门控（默认 true） */
-  enabled: boolean;
-  /** 用于构建上下文的最近消息数（默认 3） */
-  contextWindow: number;
-  /** Layer 1: 最小关键词重叠数（默认 2） */
-  minKeywordOverlap: number;
-  /** Layer 2: 是否启用 LLM 验证（默认 false，节约 token） */
-  enableLLMCheck: boolean;
-}
-
-const DEFAULT_RELEVANCE_GATE_CONFIG: RelevanceGateConfig = {
-  enabled: true,
-  contextWindow: 3,
-  minKeywordOverlap: 2,
-  enableLLMCheck: false,
-};
-
-/**
  * 从消息列表中提取关键词集合。
  * 合并用户消息和助手消息的文本内容，统一 tokenize。
  */
@@ -1297,11 +1292,11 @@ Return ONLY the JSON object, no other text.`;
  * 解决问题：无关记忆（如 vitest 配置）被注入到无关任务中，干扰 agent。
  *
  * Layer 1: 快速关键词重叠（零成本，过滤明显无关的记忆）
- * Layer 2: LLM 验证（可选，处理语义相关但关键词不重叠的情况）
+ * Layer 2: LLM 验证（自动触发：当 Layer 1 通过率低于 rescueThreshold 时）
  *
  * @param memories - 召回的记忆列表
  * @param recentMessages - 最近的对话消息（用于构建上下文）
- * @param llmAdapter - LLM 适配器（Layer 2 需要）
+ * @param llmAdapter - LLM 适配器（rescue 时需要）
  * @param config - 门控配置
  * @returns 通过门控的记忆列表
  */
@@ -1331,29 +1326,25 @@ export async function filterByContextRelevance(
     }
   }
 
-  // 如果 Layer 1 已经过滤掉全部或大部分，直接返回
-  if (layer1Passed.length === 0) {
-    console.debug(`[memory-recall] Relevance gate: ${memories.length} memories all filtered by keyword overlap`);
-    return [];
-  }
+  const passRate = layer1Passed.length / memories.length;
 
-  if (layer1Failed.length === 0) {
-    // 全部通过 Layer 1，跳过 Layer 2
-    return memories;
-  }
-
-  // Layer 2: LLM 验证（仅对 Layer 1 失败的记忆做验证）
-  if (!cfg.enableLLMCheck || !llmAdapter) {
-    // 不启用 LLM 验证，只返回 Layer 1 通过的
-    console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed keyword overlap`);
+  // 通过率足够高 → 直接返回，不浪费 LLM token
+  if (passRate >= cfg.rescueThreshold) {
+    console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed (${(passRate * 100).toFixed(0)}%)`);
     return layer1Passed;
   }
 
+  // 通过率太低 → 自动触发 LLM rescue
+  if (!llmAdapter) {
+    console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed, no LLM for rescue`);
+    return layer1Passed;
+  }
+
+  console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed (${(passRate * 100).toFixed(0)}%), triggering LLM rescue`);
   const layer2Indices = await llmRelevanceCheck(layer1Failed, contextKeywords, llmAdapter);
-  const layer2Passed = layer1Failed.filter((_, i) => layer2Indices.has(i));
+  const rescued = layer1Failed.filter((_, i) => layer2Indices.has(i));
 
-  const result = [...layer1Passed, ...layer2Passed];
-  console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length} keyword + ${layer2Passed.length} LLM = ${result.length}/${memories.length}`);
-
+  const result = [...layer1Passed, ...rescued];
+  console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length} keyword + ${rescued.length} rescued = ${result.length}/${memories.length}`);
   return result;
 }

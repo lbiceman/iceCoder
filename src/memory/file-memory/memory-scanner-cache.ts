@@ -12,15 +12,13 @@
 
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
+import { SCANNER_CACHE_TTL_MS } from './memory-config.js';
 
 /** 缓存条目 */
 interface CacheEntry {
   memories: MemoryHeader[];
   timestamp: number;
 }
-
-/** 默认 TTL（30 秒） */
-const DEFAULT_TTL_MS = 30_000;
 
 /**
  * 记忆扫描缓存。
@@ -29,7 +27,7 @@ export class MemoryScannerCache {
   private cache = new Map<string, CacheEntry>();
   private ttlMs: number;
 
-  constructor(ttlMs: number = DEFAULT_TTL_MS) {
+  constructor(ttlMs: number = SCANNER_CACHE_TTL_MS) {
     this.ttlMs = ttlMs;
   }
 
