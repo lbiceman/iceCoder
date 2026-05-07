@@ -24,6 +24,8 @@
  * 最近消息保留使用 token 预算（≥10K token, ≥5 条消息, ≤40K token）。
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
@@ -73,8 +75,6 @@ function getContextWindow(): number {
 
   // 2. 从 provider 配置读取 maxContextTokens（取所有 provider 中最大的值）
   try {
-    const fs = require('fs') as typeof import('fs');
-    const path = require('path') as typeof import('path');
     const configPath = path.resolve('data/config.json');
     const raw = fs.readFileSync(configPath, 'utf-8');
     const config = JSON.parse(raw) as { providers?: Array<{ maxContextTokens?: number }> };
@@ -96,6 +96,8 @@ function getCompactionRatio(): number {
   const env = parseFloat(process.env.ICE_COMPACTION_RATIO || '');
   return Number.isFinite(env) && env > 0 && env <= 1 ? env : DEFAULT_COMPACTION_RATIO;
 }
+
+console.log("getContextWindow: " + getContextWindow());
 
 const DEFAULT_CONFIG: CompactionConfig = {
   threshold: 40,
