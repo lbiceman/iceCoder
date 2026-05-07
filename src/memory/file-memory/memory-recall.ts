@@ -35,6 +35,8 @@ import {
   type RelevanceGateConfig,
   DEFAULT_RELEVANCE_GATE_CONFIG,
   DEFAULT_CONFIDENCE_FALLBACK,
+  STALE_THRESHOLD_DAYS,
+  EXPIRED_THRESHOLD_DAYS,
 } from './memory-config.js';
 
 /** 时间范围加权倍数 */
@@ -1367,4 +1369,109 @@ export async function filterByContextRelevance(
   const result = [...layer1Passed, ...rescued];
   console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length} keyword + ${rescued.length} rescued = ${result.length}/${memories.length}`);
   return result;
+}
+
+// ─── 上下文预算过滤 ───
+
+/**
+ * 估算文本的 token 数（1 token ≈ 4 字符）。
+ */
+export function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * 记忆预算条目（带权重和预估 token 数）。
+ */
+export interface BudgetItem {
+  memory: MemoryHeader;
+  weight: number;
+  estimatedTokens: number;
+}
+
+/**
+ * 记忆预算过滤结果。
+ */
+export interface BudgetFilterResult {
+  /** 过滤后的记忆列表 */
+  filtered: MemoryHeader[];
+  /** 被跳过的记忆数（超预算） */
+  skippedCount: number;
+  /** 被截断为摘要的记忆文件名 */
+  truncatedFiles: string[];
+}
+
+/**
+ * 计算 recencyScore（新鲜度分数）。
+ * 基于 memory-age 的衰减状态：fresh=1.0, stale=0.6, expired=0.3。
+ */
+function recencyScore(memory: MemoryHeader): number {
+  const daysSinceActive = Math.max(0, (Date.now() - Math.max(memory.lastRecalledMs || 0, memory.mtimeMs)) / 86_400_000);
+  if (daysSinceActive >= EXPIRED_THRESHOLD_DAYS) return 0.3;
+  if (daysSinceActive >= STALE_THRESHOLD_DAYS) return 0.6;
+  return 1.0;
+}
+
+/**
+ * 按上下文预算过滤记忆列表。
+ *
+ * 按 weight = confidence * recencyScore 降序排序，
+ * 逐条累加 token 数直到预算上限，但至少保留 minResults 条。
+ *
+ * @param memories - 候选记忆列表
+ * @param budgetTokens - 可用于记忆注入的 token 预算
+ * @param minResults - 至少保留的记忆数（默认 3）
+ * @returns 过滤结果
+ */
+export function filterByBudget(
+  memories: MemoryHeader[],
+  budgetTokens: number,
+  minResults: number = 3,
+): BudgetFilterResult {
+  if (memories.length === 0) {
+    return { filtered: [], skippedCount: 0, truncatedFiles: [] };
+  }
+
+  // 按权重排序：confidence * recencyScore
+  const scored = memories.map(m => ({
+    memory: m,
+    weight: (m.confidence || DEFAULT_CONFIDENCE_FALLBACK) * recencyScore(m),
+    estimatedTokens: estimateTokenCount(m.contentPreview || m.description || ''),
+  }));
+  scored.sort((a, b) => b.weight - a.weight);
+
+  const filtered: MemoryHeader[] = [];
+  const truncatedFiles: string[] = [];
+  let usedTokens = 0;
+
+  for (const item of scored) {
+    // 至少保留 minResults 条（无条件加入）
+    if (filtered.length < minResults) {
+      filtered.push(item.memory);
+      usedTokens += item.estimatedTokens;
+      continue;
+    }
+
+    // 预算检查
+    if (usedTokens + item.estimatedTokens <= budgetTokens) {
+      filtered.push(item.memory);
+      usedTokens += item.estimatedTokens;
+    } else {
+      // 超预算：尝试用 contentPreview 替代（约 75 tokens = 300 chars / 4）
+      const previewTokens = estimateTokenCount(item.memory.contentPreview || '');
+      if (previewTokens > 0 && usedTokens + previewTokens <= budgetTokens) {
+        filtered.push(item.memory);
+        usedTokens += previewTokens;
+        truncatedFiles.push(item.memory.filename);
+      }
+      // 否则跳过
+    }
+  }
+
+  const skippedCount = memories.length - filtered.length;
+  if (skippedCount > 0) {
+    console.debug(`[memory-recall] Budget filter: ${memories.length} → ${filtered.length} (${skippedCount} skipped, ${truncatedFiles.length} truncated, budget=${budgetTokens} tokens)`);
+  }
+
+  return { filtered, skippedCount, truncatedFiles };
 }

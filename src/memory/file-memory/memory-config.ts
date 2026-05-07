@@ -110,6 +110,12 @@ export interface RecallConfig {
   maxResults: number;
   /** 会话内去重：避免同一记忆在同一会话中反复注入（默认 true） */
   dedupInSession: boolean;
+  /** 记忆注入占上下文窗口的最大比例（默认 0.05，即 5%） */
+  budgetTokenRatio: number;
+  /** 记忆注入的绝对 token 上限（默认 3000） */
+  maxMemoryBudget: number;
+  /** 预算紧张时至少注入的记忆数（默认 3） */
+  minBudgetResults: number;
 }
 
 /** 提取远程配置 */
@@ -212,6 +218,9 @@ export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
 export const DEFAULT_RECALL_CONFIG: RecallConfig = {
   maxResults: 15,
   dedupInSession: true,
+  budgetTokenRatio: 0.05,
+  maxMemoryBudget: 3000,
+  minBudgetResults: 3,
 };
 
 export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
