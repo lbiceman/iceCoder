@@ -34,6 +34,7 @@ import path from 'node:path';
 import {
   type RelevanceGateConfig,
   DEFAULT_RELEVANCE_GATE_CONFIG,
+  DEFAULT_RECALL_CONFIG,
   DEFAULT_CONFIDENCE_FALLBACK,
   STALE_THRESHOLD_DAYS,
   EXPIRED_THRESHOLD_DAYS,
@@ -127,6 +128,7 @@ export async function recallRelevantMemories(
   alreadySurfaced: Set<string> = new Set(),
   maxResults: number = 5,
   prefetchedPaths: Set<string> = new Set(),
+  topicSwitched: boolean = false,
 ): Promise<RecallResult> {
   const startTime = Date.now();
 
@@ -179,7 +181,7 @@ export async function recallRelevantMemories(
     try {
       // LLM 召回带 30 秒超时，防止无限挂起
       const llmResult = await Promise.race([
-        llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange),
+        llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange, topicSwitched),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`LLM recall timeout (${LLM_RECALL_TIMEOUT_MS / 1000}s)`)), LLM_RECALL_TIMEOUT_MS)),
       ]);
       // ── 关联扩展（1 跳）──
@@ -206,7 +208,7 @@ export async function recallRelevantMemories(
   }
 
   // 回退：关键词匹配
-  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange, prefetchedPaths);
+  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange, prefetchedPaths, topicSwitched);
   // ── 关联扩展（关键词回退路径也支持）──
   const fallbackExpanded = expandRelatedMemories(fallbackResults, filteredMemories, alreadySurfaced);
   const allFallback = [...fallbackResults, ...fallbackExpanded];
@@ -244,6 +246,7 @@ async function llmSelectAndRankMemories(
   maxResults: number,
   factIndex: import('./memory-fact-index.js').FactIndex,
   timeRange: TimeRange | null = null,
+  topicSwitched: boolean = false,
 ): Promise<LLMSelectResult> {
   const { manifest, factIdMap } = formatManifestWithFactIds(memories, query, factIndex);
   const validFilenames = new Set(memories.map(m => m.filename));
@@ -253,11 +256,16 @@ async function llmSelectAndRankMemories(
     ? `\n\nNote: The user is asking about memories from ${new Date(timeRange.since).toISOString().split('T')[0]} to ${new Date(timeRange.until).toISOString().split('T')[0]} ("${timeRange.matchedText}"). Prefer memories with timestamps in this range.`
     : '';
 
+  // 话题切换提示：优先项目约定，降低用户偏好权重
+  const topicHint = topicSwitched
+    ? `\n\nNote: The conversation has shifted to a new topic. Prioritize project conventions and technical facts over personal preferences. Only include preferences if directly relevant to the current query.`
+    : '';
+
   const messages: UnifiedMessage[] = [
     { role: 'system', content: SELECT_MEMORIES_SYSTEM_PROMPT },
     {
       role: 'user',
-      content: `Query: ${query}\n\nAvailable memories:\n${manifest}${timeHint}`,
+      content: `Query: ${query}\n\nAvailable memories:\n${manifest}${timeHint}${topicHint}`,
     },
   ];
 
@@ -730,6 +738,7 @@ function keywordFallback(
   negationExpansions: string[] = [],
   timeRange: TimeRange | null = null,
   prefetchedPaths: Set<string> = new Set(),
+  topicSwitched: boolean = false,
 ): MemoryHeader[] {
   const queryLower = query.toLowerCase();
   const queryTokens = tokenize(query);
@@ -822,6 +831,13 @@ function keywordFallback(
     // 预取命中加分（预取器提前识别的相关记忆）
     if (prefetchedPaths.has(memory.filePath)) {
       score += PREFETCH_HIT_BONUS;
+    }
+
+    // 话题切换时按记忆类型调整权重
+    if (topicSwitched && score > 0 && memory.type) {
+      const weights = DEFAULT_RECALL_CONFIG.topicSwitchWeight;
+      const typeWeight = weights[memory.type] ?? 1.0;
+      score *= typeWeight;
     }
 
     return { memory, score };
@@ -1258,6 +1274,7 @@ async function llmRelevanceCheck(
   memories: MemoryHeader[],
   contextKeywords: Set<string>,
   llmAdapter: LLMAdapterInterface,
+  topicSwitched: boolean = false,
 ): Promise<Set<number>> {
   // 构建上下文摘要（只取关键词，节约 token）
   const contextSnippet = Array.from(contextKeywords).slice(0, 50).join(', ');
@@ -1269,12 +1286,16 @@ async function llmRelevanceCheck(
     return `${i + 1}. [${m.filename}] ${desc} | tags: ${tags}`;
   }).join('\n');
 
+  const topicNote = topicSwitched
+    ? `\nNote: The conversation has shifted topics. Prioritize project conventions and technical facts. Only include personal preferences if directly relevant.`
+    : '';
+
   const prompt = `You are checking if recalled memories are relevant to the current conversation.
 
 Conversation keywords: ${contextSnippet}
 
 Recalled memories:
-${memoryList}
+${memoryList}${topicNote}
 
 For each memory, decide if it's relevant to the conversation topic. Return a JSON object with "relevant" as an array of 1-based indices of relevant memories. If none are relevant, return {"relevant": []}.
 Return ONLY the JSON object, no other text.`;
@@ -1307,6 +1328,93 @@ Return ONLY the JSON object, no other text.`;
   return new Set(memories.map((_, i) => i));
 }
 
+// ─── Rescue 优化：缓存 + 短预览匹配 ───
+
+/** rescue 结果缓存（LRU）：key = 过滤记忆 ID 哈希，value = rescue 后应召回的索引集 */
+const rescueCache = new Map<string, Set<number>>();
+/** 缓存最大条目数（从配置读取，运行时更新） */
+let rescueCacheMaxSize = 20;
+
+/**
+ * 计算过滤记忆集的缓存键。
+ * 基于排序后的文件名拼接，快速确定性哈希。
+ */
+function rescueCacheKey(memories: MemoryHeader[]): string {
+  const sorted = memories.map(m => m.filename).sort().join('|');
+  let hash = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    hash = ((hash << 5) - hash + sorted.charCodeAt(i)) | 0;
+  }
+  return `${memories.length}:${Math.abs(hash).toString(36)}`;
+}
+
+/**
+ * 向 rescue 缓存写入结果（LRU 淘汰）。
+ */
+function setRescueCache(key: string, indices: Set<number>): void {
+  if (rescueCache.size >= rescueCacheMaxSize) {
+    // LRU：删除最早的条目
+    const firstKey = rescueCache.keys().next().value;
+    if (firstKey !== undefined) rescueCache.delete(firstKey);
+  }
+  rescueCache.set(key, indices);
+}
+
+/**
+ * 清空 rescue 缓存（manifest 变化时调用）。
+ */
+export function invalidateRescueCache(): void {
+  rescueCache.clear();
+}
+
+/**
+ * 短预览关键词匹配（替代 LLM rescue）。
+ *
+ * 当被过滤记忆的 contentPreview 总长度 < 阈值时，
+ * 用 token 重叠度（Jaccard 变体）快速判断相关性，
+ * 选取得分最高且 > 0.1 的前 2 条。
+ *
+ * @returns rescue 后应召回的索引集，或 null（应使用 LLM rescue）
+ */
+function shortPreviewMatch(
+  memories: MemoryHeader[],
+  contextKeywords: Set<string>,
+  previewThreshold: number,
+): Set<number> | null {
+  if (contextKeywords.size === 0) return null;
+
+  // 计算总预览长度
+  const totalPreviewLen = memories.reduce((sum, m) => sum + (m.contentPreview?.length || 0), 0);
+  if (totalPreviewLen >= previewThreshold) return null; // 预览太长，交给 LLM
+
+  // 对每条记忆计算 token 重叠度
+  const scored: Array<{ index: number; score: number }> = [];
+  for (let i = 0; i < memories.length; i++) {
+    const preview = memories[i].contentPreview || '';
+    if (preview.length === 0) continue;
+
+    const previewTokens = tokenize(preview, { minWordLength: 2 });
+    let hits = 0;
+    for (const token of contextKeywords) {
+      if (previewTokens.has(token)) hits++;
+    }
+    // Jaccard 变体：hits / union
+    const union = contextKeywords.size + previewTokens.size - hits;
+    const score = union > 0 ? hits / union : 0;
+    if (score > 0.1) {
+      scored.push({ index: i, score });
+    }
+  }
+
+  if (scored.length === 0) return null; // 无匹配，交给 LLM
+
+  // 取得分最高的前 2 条
+  scored.sort((a, b) => b.score - a.score);
+  const result = new Set(scored.slice(0, 2).map(s => s.index));
+  console.debug(`[memory-recall] Short preview match: ${result.size}/${memories.length} rescued (skipping LLM)`);
+  return result;
+}
+
 /**
  * 记忆相关性门控（两层过滤）。
  *
@@ -1327,6 +1435,7 @@ export async function filterByContextRelevance(
   recentMessages: UnifiedMessage[],
   llmAdapter: LLMAdapterInterface | null,
   config: Partial<RelevanceGateConfig> = {},
+  topicSwitched: boolean = false,
 ): Promise<MemoryHeader[]> {
   if (memories.length === 0) return [];
 
@@ -1356,15 +1465,37 @@ export async function filterByContextRelevance(
     return layer1Passed;
   }
 
-  // 通过率太低 → 自动触发 LLM rescue
-  if (!llmAdapter) {
-    console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed, no LLM for rescue`);
-    return layer1Passed;
+  // 通过率太低 → rescue（缓存 > 短预览匹配 > LLM）
+  rescueCacheMaxSize = cfg.rescueCacheSize || 20;
+
+  // 1. 检查 rescue 缓存
+  const cacheKey = rescueCacheKey(layer1Failed);
+  let layer2Indices = rescueCache.get(cacheKey);
+
+  if (layer2Indices) {
+    console.debug(`[memory-recall] Relevance gate: rescue cache hit`);
+  } else {
+    // 2. 短预览关键词匹配（避免 LLM 调用）
+    const previewMatch = shortPreviewMatch(
+      layer1Failed, contextKeywords, cfg.rescueShortPreviewThreshold || 500,
+    );
+
+    if (previewMatch) {
+      layer2Indices = previewMatch;
+      setRescueCache(cacheKey, layer2Indices);
+    } else {
+      // 3. LLM rescue（兜底）
+      if (!llmAdapter) {
+        console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed, no LLM for rescue`);
+        return layer1Passed;
+      }
+      console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed (${(passRate * 100).toFixed(0)}%), triggering LLM rescue`);
+      layer2Indices = await llmRelevanceCheck(layer1Failed, contextKeywords, llmAdapter, topicSwitched);
+      setRescueCache(cacheKey, layer2Indices);
+    }
   }
 
-  console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed (${(passRate * 100).toFixed(0)}%), triggering LLM rescue`);
-  const layer2Indices = await llmRelevanceCheck(layer1Failed, contextKeywords, llmAdapter);
-  const rescued = layer1Failed.filter((_, i) => layer2Indices.has(i));
+  const rescued = layer1Failed.filter((_, i) => layer2Indices!.has(i));
 
   const result = [...layer1Passed, ...rescued];
   console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length} keyword + ${rescued.length} rescued = ${result.length}/${memories.length}`);

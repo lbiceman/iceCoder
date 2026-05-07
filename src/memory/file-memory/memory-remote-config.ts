@@ -110,6 +110,10 @@ export function getSessionMemoryConfig(): MemoryDynamicConfig['sessionMemory'] {
   return getDynamicConfig().sessionMemory;
 }
 
+export function getFeedbackConfig(): MemoryDynamicConfig['feedback'] {
+  return getDynamicConfig().feedback;
+}
+
 /**
  * 重置为默认配置（用于测试）。
  */
@@ -135,6 +139,7 @@ function mergeConfig(
     recall: mergeSection(base.recall, override.recall),
     relevanceGate: mergeSection(base.relevanceGate, override.relevanceGate),
     sessionMemory: mergeSection(base.sessionMemory, override.sessionMemory),
+    feedback: mergeSection(base.feedback, override.feedback),
   };
 }
 
