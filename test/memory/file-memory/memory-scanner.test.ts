@@ -88,7 +88,6 @@ describe('formatMemoryManifest', () => {
         tags: [],
         source: undefined,
         contentPreview: '',
-        relatedTo: [],
         eventDateMs: 0,
       },
       {
@@ -104,7 +103,6 @@ describe('formatMemoryManifest', () => {
         tags: [],
         source: undefined,
         contentPreview: '',
-        relatedTo: [],
         eventDateMs: 0,
       },
     ];

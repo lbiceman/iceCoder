@@ -86,8 +86,6 @@ export async function scanMemoryFiles(
         const createdAt = frontmatter.createdAt;
         const tagsRaw = frontmatter.tags;
         const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
-        const relatedToRaw = frontmatter.relatedTo;
-        const relatedTo = relatedToRaw ? relatedToRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
         const eventDate = frontmatter.eventDate;
         const eventDateMs = eventDate ? new Date(eventDate).getTime() || 0 : 0;
 
@@ -104,7 +102,6 @@ export async function scanMemoryFiles(
           tags,
           source: frontmatter.source || undefined,
           contentPreview: extractContentPreview(content),
-          relatedTo,
           eventDateMs: Number.isFinite(eventDateMs) ? eventDateMs : 0,
         };
       }),

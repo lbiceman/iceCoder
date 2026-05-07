@@ -9,7 +9,6 @@
  * - readMemoryContents（v5: 80 文件 × 1200 字符、按重要性排序、溢出提示）
  * - computeDreamPriority（高置信度、高召回、user 类型、新鲜度）
  * - backupBeforeDream / restoreFromBackup / listBackups
- * - cleanDanglingRelations
  * - forceDream
  */
 
@@ -28,17 +27,16 @@ async function writeMemoryFile(
   dir: string,
   filename: string,
   description: string,
-  opts: { type?: string; confidence?: number; recallCount?: number; content?: string; relatedTo?: string } = {},
+  opts: { type?: string; confidence?: number; recallCount?: number; content?: string } = {},
 ) {
   const type = opts.type ?? 'project';
   const confidence = opts.confidence !== undefined ? `\nconfidence: ${opts.confidence}` : '';
   const recallCount = opts.recallCount !== undefined ? `\nrecallCount: ${opts.recallCount}` : '';
-  const relatedTo = opts.relatedTo ? `\nrelatedTo: ${opts.relatedTo}` : '';
   const body = opts.content ?? `Content of ${filename}`;
   const fileContent = `---
 name: ${filename.replace('.md', '')}
 description: ${description}
-type: ${type}${confidence}${recallCount}${relatedTo}
+type: ${type}${confidence}${recallCount}
 ---
 
 ${body}`;
@@ -332,30 +330,6 @@ describe('Dream 执行', () => {
 
     // MEMORY.md 应该仍然存在
     await expect(fs.access(path.join(tempDir, 'MEMORY.md'))).resolves.toBeUndefined();
-  });
-
-  it('Dream 清理悬空关联', async () => {
-    await writeMemoryFile(tempDir, 'a.md', '文件A', { relatedTo: 'to_delete.md' });
-    await writeMemoryFile(tempDir, 'to_delete.md', '要删除的');
-
-    const mockLLM = createMockLLM(JSON.stringify({
-      actions: [],
-      new_index: null,
-      file_writes: [],
-      file_deletes: ['to_delete.md'],
-      summary: 'Deleted file.',
-    }));
-
-    const dream = createMemoryDream({ enableBackup: false });
-    await dream.forceDream(tempDir, mockLLM);
-
-    // a.md 的 relatedTo 应该被清理
-    const aContent = await fs.readFile(path.join(tempDir, 'a.md'), 'utf-8');
-    const relatedMatch = aContent.match(/^relatedTo:\s*(.*)$/m);
-    // relatedTo 应该为空或不包含 to_delete.md
-    if (relatedMatch) {
-      expect(relatedMatch[1].trim()).not.toContain('to_delete.md');
-    }
   });
 
   it('LLM 返回无效 JSON 时优雅失败', async () => {

@@ -30,7 +30,6 @@ function makeHeader(overrides: Partial<MemoryHeader>): MemoryHeader {
     tags: [],
     source: undefined,
     contentPreview: '',
-    relatedTo: [],
     eventDateMs: 0,
     ...overrides,
   };

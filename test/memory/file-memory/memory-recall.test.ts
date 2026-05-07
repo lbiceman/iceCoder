@@ -7,7 +7,7 @@
  * - 关键词回退（TF-IDF 加权、description/filename 权重 ×2、新鲜度、置信度、频率）
  * - 否定查询展开（中文、英文、领域展开、无映射、过短）
  * - 时间范围解析（中文、英文、固定模式、无时间线索）
- * - 关联扩展（显式 relatedTo、隐式 tags Jaccard、maxExpand 限制）
+ * - 关联扩展（tags Jaccard、maxExpand 限制）
  * - buildIdfMap（IDF 计算、单文档平滑、空输入）
  * - 边界情况（空目录、不存在目录、MEMORY.md 跳过、耗时）
  * - 集成测试（否定 + 关键词回退、时间范围 + 排序）
@@ -55,17 +55,16 @@ async function writeMemoryFile(
   dir: string,
   filename: string,
   description: string,
-  opts: { type?: string; tags?: string; confidence?: number; relatedTo?: string; content?: string } = {},
+  opts: { type?: string; tags?: string; confidence?: number; content?: string } = {},
 ) {
   const type = opts.type ?? 'user';
   const tags = opts.tags ? `\ntags: ${opts.tags}` : '';
   const confidence = opts.confidence !== undefined ? `\nconfidence: ${opts.confidence}` : '';
-  const relatedTo = opts.relatedTo ? `\nrelatedTo: ${opts.relatedTo}` : '';
   const body = opts.content ?? `Some content for ${filename}`;
   const fileContent = `---
 name: ${filename.replace('.md', '')}
 description: ${description}
-type: ${type}${tags}${confidence}${relatedTo}
+type: ${type}${tags}${confidence}
 ---
 
 ${body}`;
@@ -85,7 +84,6 @@ function makeHeader(overrides: Partial<MemoryHeader> & { filename: string }): Me
     tags: [],
     source: undefined,
     contentPreview: '',
-    relatedTo: [],
     eventDateMs: 0,
     ...overrides,
   };
@@ -524,20 +522,7 @@ describe('parseTimeRange', () => {
 // ─── 关联扩展 ───
 
 describe('expandRelatedMemories', () => {
-  it('显式 relatedTo 扩展', () => {
-    const selected = [makeHeader({ filename: 'a.md', relatedTo: ['b.md'] })];
-    const all = [
-      makeHeader({ filename: 'a.md' }),
-      makeHeader({ filename: 'b.md' }),
-      makeHeader({ filename: 'c.md' }),
-    ];
-    const expanded = expandRelatedMemories(selected, all, new Set());
-
-    expect(expanded.length).toBe(1);
-    expect(expanded[0].filename).toBe('b.md');
-  });
-
-  it('隐式 tags Jaccard ≥ 0.3 扩展', () => {
+  it('tags Jaccard ≥ 0.2 扩展', () => {
     const selected = [makeHeader({ filename: 'a.md', tags: ['lang:ts', 'tool:vite', 'test'] })];
     const all = [
       makeHeader({ filename: 'a.md', tags: ['lang:ts', 'tool:vite', 'test'] }),
@@ -552,53 +537,53 @@ describe('expandRelatedMemories', () => {
 
   it('不扩展已选中的文件', () => {
     const selected = [
-      makeHeader({ filename: 'a.md', relatedTo: ['b.md'] }),
-      makeHeader({ filename: 'b.md' }),
+      makeHeader({ filename: 'a.md', tags: ['lang:ts'] }),
+      makeHeader({ filename: 'b.md', tags: ['lang:ts'] }),
     ];
-    const all = [makeHeader({ filename: 'a.md' }), makeHeader({ filename: 'b.md' })];
+    const all = [
+      makeHeader({ filename: 'a.md', tags: ['lang:ts'] }),
+      makeHeader({ filename: 'b.md', tags: ['lang:ts'] }),
+    ];
     const expanded = expandRelatedMemories(selected, all, new Set());
 
     expect(expanded.length).toBe(0);
   });
 
   it('不扩展已展示过的文件', () => {
-    const selected = [makeHeader({ filename: 'a.md', relatedTo: ['b.md'] })];
-    const bHeader = makeHeader({ filename: 'b.md' });
-    const all = [makeHeader({ filename: 'a.md' }), bHeader];
+    const selected = [makeHeader({ filename: 'a.md', tags: ['lang:ts'] })];
+    const bHeader = makeHeader({ filename: 'b.md', tags: ['lang:ts'] });
+    const all = [makeHeader({ filename: 'a.md', tags: ['lang:ts'] }), bHeader];
     const expanded = expandRelatedMemories(selected, all, new Set([bHeader.filePath]));
 
     expect(expanded.length).toBe(0);
   });
 
   it('maxExpand 限制扩展数量', () => {
-    const selected = [makeHeader({ filename: 'a.md', relatedTo: ['b.md', 'c.md', 'd.md', 'e.md'] })];
+    const selected = [makeHeader({ filename: 'a.md', tags: ['lang:ts'] })];
     const all = [
-      makeHeader({ filename: 'a.md' }),
-      makeHeader({ filename: 'b.md' }),
-      makeHeader({ filename: 'c.md' }),
-      makeHeader({ filename: 'd.md' }),
-      makeHeader({ filename: 'e.md' }),
+      makeHeader({ filename: 'a.md', tags: ['lang:ts'] }),
+      makeHeader({ filename: 'b.md', tags: ['lang:ts'] }),
+      makeHeader({ filename: 'c.md', tags: ['lang:ts'] }),
+      makeHeader({ filename: 'd.md', tags: ['lang:ts'] }),
+      makeHeader({ filename: 'e.md', tags: ['lang:ts'] }),
     ];
     const expanded = expandRelatedMemories(selected, all, new Set(), 2);
 
     expect(expanded.length).toBe(2);
   });
 
-  it('显式关联优先于隐式关联', () => {
-    const selected = [makeHeader({
-      filename: 'a.md',
-      relatedTo: ['explicit.md'],
-      tags: ['lang:ts'],
-    })];
+  it('低 Jaccard 分数的排在后面', () => {
+    const selected = [makeHeader({ filename: 'a.md', tags: ['lang:ts', 'tool:vite', 'testing'] })];
     const all = [
-      makeHeader({ filename: 'a.md', tags: ['lang:ts'] }),
-      makeHeader({ filename: 'explicit.md', tags: [] }),
-      makeHeader({ filename: 'implicit.md', tags: ['lang:ts'] }), // Jaccard = 1.0
+      makeHeader({ filename: 'a.md', tags: ['lang:ts', 'tool:vite', 'testing'] }),
+      makeHeader({ filename: 'b.md', tags: ['lang:ts', 'tool:vite'] }), // Jaccard = 2/4 = 0.5
+      makeHeader({ filename: 'c.md', tags: ['lang:ts'] }), // Jaccard = 1/5 = 0.2
     ];
-    const expanded = expandRelatedMemories(selected, all, new Set(), 1);
+    const expanded = expandRelatedMemories(selected, all, new Set(), 2);
 
-    expect(expanded.length).toBe(1);
-    expect(expanded[0].filename).toBe('explicit.md'); // 显式 score=1.0 优先
+    expect(expanded.length).toBe(2);
+    expect(expanded[0].filename).toBe('b.md'); // higher Jaccard
+    expect(expanded[1].filename).toBe('c.md'); // lower Jaccard
   });
 });
 
