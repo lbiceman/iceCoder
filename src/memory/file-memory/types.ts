@@ -40,8 +40,6 @@ export interface MemoryFrontmatter {
   createdAt?: string;
   /** 语义标签（用于结构化去重，如 "lang:typescript", "tool:vite"） */
   tags?: string[];
-  /** 关联的其他记忆文件名（用于多跳关联召回） */
-  relatedTo?: string[];
   /** 事件发生的日期（ISO 格式，如 "2023-07-18"），从对话内容中提取 */
   eventDate?: string;
 }
@@ -74,8 +72,6 @@ export interface MemoryHeader {
   source: string | undefined;
   /** 正文前 300 字符预览（用于召回时的内容匹配） */
   contentPreview: string;
-  /** 关联的其他记忆文件名 */
-  relatedTo: string[];
   /** 事件发生的日期（毫秒时间戳，0 表示无事件日期） */
   eventDateMs: number;
 }

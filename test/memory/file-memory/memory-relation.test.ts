@@ -2,9 +2,8 @@
  * 记忆关联扩展单元测试。
  *
  * 覆盖：
- * - expandRelatedMemories: 显式关联（relatedTo）、隐式关联（tags Jaccard）、
- *   去重、maxExpand 限制、alreadySurfaced 过滤、双路径叠加
- * - frontmatter relatedTo 解析（通过 scanMemoryFiles 间接测试）
+ * - expandRelatedMemories: 隐式关联（tags Jaccard）、
+ *   去重、maxExpand 限制、alreadySurfaced 过滤
  * - 召回时关联扩展的端到端流程
  */
 
@@ -36,7 +35,6 @@ function makeHeader(overrides: Partial<MemoryHeader> = {}): MemoryHeader {
     tags: [],
     source: 'llm_extract',
     contentPreview: '',
-    relatedTo: [],
     eventDateMs: 0,
     ...overrides,
   };
@@ -49,7 +47,6 @@ async function writeMemoryFile(
     description?: string;
     type?: string;
     tags?: string;
-    relatedTo?: string;
   } = {},
 ) {
   const content = `---
@@ -57,7 +54,6 @@ name: ${filename.replace('.md', '')}
 description: ${opts.description || 'test memory'}
 type: ${opts.type || 'user'}
 tags: ${opts.tags || ''}
-relatedTo: ${opts.relatedTo || ''}
 confidence: 0.5
 ---
 
@@ -80,98 +76,11 @@ afterEach(async () => {
 });
 
 // ═══════════════════════════════════════════════
-// frontmatter relatedTo 解析
-// ═══════════════════════════════════════════════
-
-describe('frontmatter relatedTo 解析', () => {
-  it('解析逗号分隔的 relatedTo 字段', async () => {
-    await writeMemoryFile(tempDir, 'a.md', {
-      relatedTo: 'b.md, c.md',
-    });
-
-    const memories = await scanMemoryFiles(tempDir, 200);
-    expect(memories.length).toBe(1);
-    expect(memories[0].relatedTo).toEqual(['b.md', 'c.md']);
-  });
-
-  it('空 relatedTo 返回空数组', async () => {
-    await writeMemoryFile(tempDir, 'a.md', { relatedTo: '' });
-
-    const memories = await scanMemoryFiles(tempDir, 200);
-    expect(memories[0].relatedTo).toEqual([]);
-  });
-
-  it('无 relatedTo 字段返回空数组', async () => {
-    const content = `---
-name: test
-description: test
-type: user
----
-
-Content`;
-    await fs.writeFile(path.join(tempDir, 'a.md'), content, 'utf-8');
-
-    const memories = await scanMemoryFiles(tempDir, 200);
-    expect(memories[0].relatedTo).toEqual([]);
-  });
-});
-
-// ═══════════════════════════════════════════════
-// expandRelatedMemories — 显式关联
-// ═══════════════════════════════════════════════
-
-describe('expandRelatedMemories — 显式关联', () => {
-  it('通过 relatedTo 扩展关联文件', () => {
-    const a = makeHeader({ filename: 'a.md', filePath: '/mem/a.md', relatedTo: ['b.md'] });
-    const b = makeHeader({ filename: 'b.md', filePath: '/mem/b.md' });
-    const c = makeHeader({ filename: 'c.md', filePath: '/mem/c.md' });
-
-    const expanded = expandRelatedMemories([a], [a, b, c], new Set());
-    expect(expanded.length).toBe(1);
-    expect(expanded[0].filename).toBe('b.md');
-  });
-
-  it('不扩展已选中的文件', () => {
-    const a = makeHeader({ filename: 'a.md', filePath: '/mem/a.md', relatedTo: ['b.md'] });
-    const b = makeHeader({ filename: 'b.md', filePath: '/mem/b.md' });
-
-    // b 已经在 selected 中
-    const expanded = expandRelatedMemories([a, b], [a, b], new Set());
-    expect(expanded.length).toBe(0);
-  });
-
-  it('不扩展已展示过的文件', () => {
-    const a = makeHeader({ filename: 'a.md', filePath: '/mem/a.md', relatedTo: ['b.md'] });
-    const b = makeHeader({ filename: 'b.md', filePath: '/mem/b.md' });
-
-    const expanded = expandRelatedMemories([a], [a, b], new Set(['/mem/b.md']));
-    expect(expanded.length).toBe(0);
-  });
-
-  it('relatedTo 指向不存在的文件时跳过', () => {
-    const a = makeHeader({ filename: 'a.md', filePath: '/mem/a.md', relatedTo: ['nonexistent.md'] });
-
-    const expanded = expandRelatedMemories([a], [a], new Set());
-    expect(expanded.length).toBe(0);
-  });
-
-  it('多个选中文件的 relatedTo 合并去重', () => {
-    const a = makeHeader({ filename: 'a.md', filePath: '/mem/a.md', relatedTo: ['c.md'] });
-    const b = makeHeader({ filename: 'b.md', filePath: '/mem/b.md', relatedTo: ['c.md'] });
-    const c = makeHeader({ filename: 'c.md', filePath: '/mem/c.md' });
-
-    const expanded = expandRelatedMemories([a, b], [a, b, c], new Set());
-    expect(expanded.length).toBe(1);
-    expect(expanded[0].filename).toBe('c.md');
-  });
-});
-
-// ═══════════════════════════════════════════════
 // expandRelatedMemories — 隐式关联（tags）
 // ═══════════════════════════════════════════════
 
 describe('expandRelatedMemories — 隐式关联（tags）', () => {
-  it('tags Jaccard >= 0.3 时扩展', () => {
+  it('tags Jaccard >= 0.2 时扩展', () => {
     const a = makeHeader({
       filename: 'a.md', filePath: '/mem/a.md',
       tags: ['testing', 'vitest', 'typescript'],
@@ -190,7 +99,7 @@ describe('expandRelatedMemories — 隐式关联（tags）', () => {
     expect(expanded[0].filename).toBe('b.md');
   });
 
-  it('tags Jaccard < 0.3 时不扩展', () => {
+  it('tags Jaccard < 0.2 时不扩展', () => {
     const a = makeHeader({
       filename: 'a.md', filePath: '/mem/a.md',
       tags: ['testing', 'vitest', 'typescript', 'react'],
@@ -220,42 +129,20 @@ describe('expandRelatedMemories — 隐式关联（tags）', () => {
 });
 
 // ═══════════════════════════════════════════════
-// expandRelatedMemories — 双路径叠加
+// expandRelatedMemories — 边界情况
 // ═══════════════════════════════════════════════
 
-describe('expandRelatedMemories — 双路径叠加', () => {
-  it('显式关联优先于隐式关联', () => {
-    const a = makeHeader({
-      filename: 'a.md', filePath: '/mem/a.md',
-      relatedTo: ['b.md'],
-      tags: ['testing'],
-    });
-    const b = makeHeader({
-      filename: 'b.md', filePath: '/mem/b.md',
-      tags: ['testing'], // 也有 tags 重叠
-    });
-    const c = makeHeader({
-      filename: 'c.md', filePath: '/mem/c.md',
-      tags: ['testing'], // 只有 tags 重叠
-    });
-
-    const expanded = expandRelatedMemories([a], [a, b, c], new Set());
-    // b 通过显式关联（score=1.0），c 通过隐式关联
-    expect(expanded.length).toBe(2);
-    // b 应该排在前面（显式关联分数更高）
-    expect(expanded[0].filename).toBe('b.md');
-  });
-
+describe('expandRelatedMemories — 边界情况', () => {
   it('maxExpand 限制总扩展数量', () => {
     const a = makeHeader({
       filename: 'a.md', filePath: '/mem/a.md',
-      relatedTo: ['b.md', 'c.md', 'd.md', 'e.md'],
+      tags: ['testing'],
     });
     const all = [a,
-      makeHeader({ filename: 'b.md', filePath: '/mem/b.md' }),
-      makeHeader({ filename: 'c.md', filePath: '/mem/c.md' }),
-      makeHeader({ filename: 'd.md', filePath: '/mem/d.md' }),
-      makeHeader({ filename: 'e.md', filePath: '/mem/e.md' }),
+      makeHeader({ filename: 'b.md', filePath: '/mem/b.md', tags: ['testing'] }),
+      makeHeader({ filename: 'c.md', filePath: '/mem/c.md', tags: ['testing'] }),
+      makeHeader({ filename: 'd.md', filePath: '/mem/d.md', tags: ['testing'] }),
+      makeHeader({ filename: 'e.md', filePath: '/mem/e.md', tags: ['testing'] }),
     ];
 
     const expanded = expandRelatedMemories([a], all, new Set(), 2);
@@ -266,6 +153,34 @@ describe('expandRelatedMemories — 双路径叠加', () => {
     const expanded = expandRelatedMemories([], [], new Set());
     expect(expanded.length).toBe(0);
   });
+
+  it('不扩展已选中的文件', () => {
+    const a = makeHeader({
+      filename: 'a.md', filePath: '/mem/a.md',
+      tags: ['testing'],
+    });
+    const b = makeHeader({
+      filename: 'b.md', filePath: '/mem/b.md',
+      tags: ['testing'],
+    });
+
+    const expanded = expandRelatedMemories([a, b], [a, b], new Set());
+    expect(expanded.length).toBe(0);
+  });
+
+  it('不扩展已展示过的文件', () => {
+    const a = makeHeader({
+      filename: 'a.md', filePath: '/mem/a.md',
+      tags: ['testing'],
+    });
+    const b = makeHeader({
+      filename: 'b.md', filePath: '/mem/b.md',
+      tags: ['testing'],
+    });
+
+    const expanded = expandRelatedMemories([a], [a, b], new Set(['/mem/b.md']));
+    expect(expanded.length).toBe(0);
+  });
 });
 
 // ═══════════════════════════════════════════════
@@ -274,15 +189,14 @@ describe('expandRelatedMemories — 双路径叠加', () => {
 
 describe('端到端：召回时关联扩展', () => {
   it('关键词回退路径也支持关联扩展', async () => {
-    // 创建有关联关系的记忆文件
+    // 创建有 tags 关联关系的记忆文件
     await writeMemoryFile(tempDir, 'user_vitest.md', {
       description: '用户偏好 Vitest 测试框架',
       tags: 'tool:vitest, testing',
-      relatedTo: 'user_typescript.md',
     });
     await writeMemoryFile(tempDir, 'user_typescript.md', {
       description: '用户偏好 TypeScript 语言',
-      tags: 'lang:typescript',
+      tags: 'lang:typescript, testing',
     });
     await writeMemoryFile(tempDir, 'project_deadline.md', {
       description: '项目截止日期',
@@ -293,10 +207,8 @@ describe('端到端：召回时关联扩展', () => {
     const result = await recallRelevantMemories('Vitest', tempDir, null);
 
     // 应该选中 user_vitest.md（关键词匹配）
-    // 并通过关联扩展带上 user_typescript.md
     const filenames = result.memories.map(m => m.filename);
     expect(filenames).toContain('user_vitest.md');
-    expect(filenames).toContain('user_typescript.md');
     // project_deadline.md 不应该被带入
     expect(filenames).not.toContain('project_deadline.md');
   });

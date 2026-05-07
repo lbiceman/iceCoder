@@ -264,10 +264,6 @@ interface StructuredMemoryItem {
   tags?: string[];
   /** 完整内容（文件粒度回退时使用） */
   content?: string;
-  /** 该记忆关联的其他文件 */
-  relatedTo?: string[];
-  /** 该记忆是因为哪个文件的关联被带进来的（关联扩展来源） */
-  relatedFrom?: string;
   /** 解释性标记：简述注入原因，如 "user, 置信度 0.9" */
   reason?: string;
 }
@@ -874,10 +870,7 @@ ${candidateList}`;
   ): Promise<StructuredMemoryItem[]> {
     // 如果有精排后的 facts，以 fact 粒度注入
     if (facts.length > 0) {
-      // 构建 filename → relatedTo 映射（用于标注关联来源）
-      const memByFilename = new Map(memories.map(m => [m.filename, m]));
       return facts.map(fact => {
-        const sourceMem = memByFilename.get(fact.sourceFile);
         const type = fact.type || 'unknown';
         return {
           fact: fact.factText,
@@ -889,7 +882,6 @@ ${candidateList}`;
           confidence: fact.confidence,
           recallCount: 0,
           tags: fact.tags.length > 0 ? fact.tags : undefined,
-          relatedTo: sourceMem?.relatedTo && sourceMem.relatedTo.length > 0 ? sourceMem.relatedTo : undefined,
           reason: `[相关记忆 - ${type}, 置信度 ${fact.confidence}]`,
         };
       });
@@ -936,7 +928,6 @@ ${candidateList}`;
         confidence: mem.confidence,
         recallCount: mem.recallCount,
         tags: mem.tags.length > 0 ? mem.tags : undefined,
-        relatedTo: mem.relatedTo && mem.relatedTo.length > 0 ? mem.relatedTo : undefined,
         content,
         reason: `[相关记忆 - ${type}, 置信度 ${mem.confidence}]`,
       };

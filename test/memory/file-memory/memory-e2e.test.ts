@@ -142,7 +142,7 @@ describe('记忆系统端到端', () => {
           tags: ['lang:typescript', 'framework:vitest'],
           confidence: 1.0,
           source: 'llm_extract',
-          relatedTo: [],
+
           eventDate: null,
           contradicts: null,
         },
@@ -209,7 +209,7 @@ describe('记忆系统端到端', () => {
           tags: ['role:backend'],
           confidence: 1.0,
           source: 'llm_extract',
-          relatedTo: [],
+
           eventDate: null,
           contradicts: null,
         },
@@ -226,7 +226,7 @@ describe('记忆系统端到端', () => {
           tags: ['role:fullstack'],
           confidence: 1.0,
           source: 'llm_extract',
-          relatedTo: [],
+
           eventDate: null,
           contradicts: null,
         },
@@ -395,7 +395,6 @@ Designed 5 end-to-end test scenarios.
           tags: ['lang:python'],
           confidence: 1.0,
           source: 'llm_extract',
-          relatedTo: ['user_preferred_lang.md'],
           eventDate: '2026-05-06',
           contradicts: 'user_preferred_lang.md',
         },
@@ -455,7 +454,7 @@ Designed 5 end-to-end test scenarios.
           tags: ['project:memory', 'testing:e2e'],
           confidence: 0.8,
           source: 'llm_extract',
-          relatedTo: [],
+
           eventDate: null,
           contradicts: null,
         },
