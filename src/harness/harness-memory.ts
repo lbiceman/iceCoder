@@ -26,7 +26,7 @@ import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
 import { getScannerCache } from '../memory/file-memory/memory-scanner-cache.js';
-import { recallRelevantMemories, filterByContextRelevance } from '../memory/file-memory/memory-recall.js';
+import { recallRelevantMemories, filterByContextRelevance, filterByBudget } from '../memory/file-memory/memory-recall.js';
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
@@ -267,6 +267,8 @@ interface StructuredMemoryItem {
   relatedTo?: string[];
   /** 该记忆是因为哪个文件的关联被带进来的（关联扩展来源） */
   relatedFrom?: string;
+  /** 解释性标记：简述注入原因，如 "user, 置信度 0.9" */
+  reason?: string;
 }
 
 /**
@@ -309,6 +311,8 @@ function buildCoNMemoryPrompt(items: StructuredMemoryItem[], recallMethod: strin
 
   return `<system-reminder>
 ## Recalled Memories (${items.length} items, via ${recallMethod})
+
+以下是系统根据当前对话从长期记忆中注入的相关信息，每条附有来源类型和置信度说明。
 
 \`\`\`json
 ${json}
@@ -559,6 +563,21 @@ export class HarnessMemoryIntegration {
           }
         }
 
+        // ── 上下文预算过滤：动态调整注入数量 ──
+        const recallCfgForBudget = getRecallConfig();
+        const budgetRatio = recallCfgForBudget.budgetTokenRatio || 0.05;
+        const maxBudget = recallCfgForBudget.maxMemoryBudget || 3000;
+        const minBudgetResults = recallCfgForBudget.minBudgetResults || 3;
+        const contextWindow = this.estimateContextWindow();
+        const memoryBudget = Math.min(Math.floor(contextWindow * budgetRatio), maxBudget);
+
+        if (selectedMemories.length > minBudgetResults) {
+          const budgetResult = filterByBudget(selectedMemories, memoryBudget, minBudgetResults);
+          if (budgetResult.skippedCount > 0) {
+            selectedMemories = budgetResult.filtered;
+          }
+        }
+
         // ── v5.1: Fact 粒度 CoN + JSON 结构化读取 ──
         const memoryItems = await this.buildStructuredMemoryItems(
           selectedMemories,
@@ -740,10 +759,11 @@ ${candidateList}`;
       const memByFilename = new Map(memories.map(m => [m.filename, m]));
       return facts.map(fact => {
         const sourceMem = memByFilename.get(fact.sourceFile);
+        const type = fact.type || 'unknown';
         return {
           fact: fact.factText,
           filename: fact.sourceFile,
-          type: fact.type || 'unknown',
+          type,
           description: '',
           age: memoryAge(fact.mtimeMs),
           freshness: getMemoryDecayStatusFromMs(fact.mtimeMs, fact.confidence),
@@ -751,6 +771,7 @@ ${candidateList}`;
           recallCount: 0,
           tags: fact.tags.length > 0 ? fact.tags : undefined,
           relatedTo: sourceMem?.relatedTo && sourceMem.relatedTo.length > 0 ? sourceMem.relatedTo : undefined,
+          reason: `[相关记忆 - ${type}, 置信度 ${fact.confidence}]`,
         };
       });
     }
@@ -786,9 +807,10 @@ ${candidateList}`;
 
     return readResults.map(({ mem, content }) => {
       const decayStatus = getMemoryDecayStatus(mem);
+      const type = mem.type || 'unknown';
       return {
         filename: mem.filename,
-        type: mem.type || 'unknown',
+        type,
         description: mem.description || '',
         age: memoryAge(mem.mtimeMs),
         freshness: decayStatus,
@@ -797,8 +819,19 @@ ${candidateList}`;
         tags: mem.tags.length > 0 ? mem.tags : undefined,
         relatedTo: mem.relatedTo && mem.relatedTo.length > 0 ? mem.relatedTo : undefined,
         content,
+        reason: `[相关记忆 - ${type}, 置信度 ${mem.confidence}]`,
       };
     });
+  }
+
+  /**
+   * 估算模型上下文窗口大小。
+   * 优先从环境变量读取，否则使用默认 128k。
+   */
+  private estimateContextWindow(): number {
+    const envWindow = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
+    if (Number.isFinite(envWindow) && envWindow > 0) return envWindow;
+    return 128_000;
   }
 
   /**
