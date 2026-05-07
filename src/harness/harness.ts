@@ -1033,6 +1033,17 @@ export class Harness {
     const lastUserStr = typeof lastUserMsg === 'string' ? lastUserMsg : undefined;
     messages.push(this.contextCompactor.buildRecoveryPrompt(!!sessionNotes, lastUserStr));
 
+    // 4. 在最后一条用户消息前插入上下文更新提示（防止 LLM 回复压缩前的旧消息）
+    for (let i = messages.length - 2; i >= 0; i--) {
+      if (messages[i].role === 'user' && typeof messages[i].content === 'string') {
+        messages[i] = {
+          ...messages[i],
+          content: 'Important context update was just performed. The conversation above is historical context. We should only respond to the latest message above and ignore any questions within the historical context.\n\n' + (messages[i].content as string),
+        };
+        break;
+      }
+    }
+
     logger.compaction(before, messages.length);
     onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
   }
