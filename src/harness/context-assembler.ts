@@ -16,6 +16,23 @@ import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { ContextAssemblyConfig } from './types.js';
 
 /**
+ * 消息优先级规则 — 硬编码追加到系统提示词末尾。
+ *
+ * 目的：当用户发出记忆类指令或任务结束信号时，
+ * Agent 只确认该指令，不附带之前任何任务的信息。
+ */
+const MESSAGE_PRIORITY_RULES = `
+
+## 消息优先级规则
+
+当用户消息以以下模式开头时，只处理该指令并简洁确认，不得在回复中附带之前任何任务的信息或总结：
+- "记住：..."、"帮我记住..."、"请记住..."、"记住这个..."
+- 回复示例："✅ 已记住：你是前端开发工程师，擅长 JS/TS/Vue3，项目是 iceCoder。"
+
+当用户消息包含以下关键词时，视为此前所有任务已关闭，不得继续执行：
+- "任务完成"、"就这样"、"可以了"、"没问题"、"OK"`;
+
+/**
  * ContextAssembler 将各种上下文源组装成发送给 LLM 的消息序列。
  */
 export class ContextAssembler {
@@ -43,10 +60,13 @@ export class ContextAssembler {
 
   /**
    * 静态部分：身份、规则、工具指南 — 可跨会话缓存。
+   *
+   * 末尾硬编码追加消息优先级规则，确保记忆类指令和任务结束信号
+   * 被模型正确识别，不与之前的任务上下文混淆。
    */
   private buildStaticPrompt(): string {
     if (this.staticPromptCache) return this.staticPromptCache;
-    this.staticPromptCache = this.config.systemPrompt;
+    this.staticPromptCache = this.config.systemPrompt + MESSAGE_PRIORITY_RULES;
     return this.staticPromptCache;
   }
 

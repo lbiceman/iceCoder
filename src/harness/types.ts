@@ -89,7 +89,8 @@ export type StopReason =
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
-  | 'stop_hook'          // 停止钩子阻止继续
+  | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
+  | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 
 /**
