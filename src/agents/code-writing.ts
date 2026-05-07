@@ -1,7 +1,7 @@
 /**
- * 代码编写智能体
- * 接收任务 Markdown 并通过 Harness 循环（工具调用 + 多轮推理）生成源代码。
- * 可以使用文件工具读取现有代码、写入新文件、执行 Shell 命令验证。
+ * Code Writing Agent
+ * Receives task Markdown and generates source code through a Harness loop (tool calls + multi-turn reasoning).
+ * Can use file tools to read existing code, write new files, and execute Shell commands for verification.
  */
 
 import { BaseAgent } from '../core/base-agent.js';
@@ -25,42 +25,64 @@ export class CodeWritingAgent extends BaseAgent {
       };
     }
 
-    const prompt = `你是一名专业的软件工程师，擅长 Node.js 和 TypeScript。根据以下任务分解文档，实现所有任务。
+    // 代码编写提示词：指导 LLM 根据任务文档实现代码
+    /*
+    中文版本：
+    你是一名专业的软件工程师，精通 Node.js 和 TypeScript。请根据以下任务分解文档，实现所有任务。
 
-要求：
-1. 使用工具读取项目中的现有代码，了解项目结构和代码风格
-2. 使用 write_file 工具创建或修改源代码文件
-3. 每个文件必须包含任务编号注释（如 // Task: T-001）
-4. 生成完整、可运行的 TypeScript 代码，包含正确的类型定义
-5. 遵循项目现有的代码风格和目录结构
-6. 如果任务描述不清晰，用注释标记：// [UNCLEAR] <说明>
-7. 完成所有文件后，给出实现总结
+    要求：
+    1. 使用工具读取项目中的现有代码，了解项目结构和代码风格
+    2. 使用 write_file 工具创建或修改源代码文件
+    3. 每个文件必须包含任务编号注释（如 // Task: T-001）
+    4. 生成完整、可运行的 TypeScript 代码，包含正确的类型定义
+    5. 遵循项目现有的代码风格和目录结构
+    6. 如果任务描述不清楚，请用注释标记：// [UNCLEAR] <描述>
+    7. 完成所有文件后，提供实现总结
 
---- 任务文档 ---
+    --- 任务文档 ---
+    ${tasks}
+    --- 任务文档结束 ---
+
+    请开始实现。先阅读项目结构了解现有代码，然后逐个任务实现。
+    */
+    const prompt = `You are a professional software engineer proficient in Node.js and TypeScript. Implement all tasks based on the following task breakdown document.
+
+Requirements:
+1. Use tools to read existing code in the project to understand the project structure and code style
+2. Use write_file tool to create or modify source code files
+3. Each file must include a task number comment (e.g. // Task: T-001)
+4. Generate complete, runnable TypeScript code with correct type definitions
+5. Follow the project's existing code style and directory structure
+6. If a task description is unclear, mark with a comment: // [UNCLEAR] <description>
+7. After completing all files, provide an implementation summary
+
+--- Task Document ---
 ${tasks}
---- 任务文档结束 ---
+--- End of Task Document ---
 
-请开始实现。先读取项目结构了解现有代码，然后逐个任务实现。`;
+Please begin implementation. First read the project structure to understand existing code, then implement task by task.`;
 
     const result = await this.runWithHarness(prompt, context, {
-      systemPrompt: '你是 CodeWriting 智能体，一名专业的软件工程师。你可以使用文件操作工具（read_file、write_file、edit_file、list_directory 等）和 Shell 工具来完成编码任务。根据任务需求自主决定使用哪些工具，编写高质量的代码。',
+      // 代码编写智能体的系统提示词
+      // 中文版本：你是 CodeWriting 智能体，一名专业的软件工程师。你可以使用文件操作工具（read_file、write_file、edit_file、list_directory 等）和 Shell 工具来完成编码任务。根据任务需求自主决定使用哪些工具，并编写高质量的代码。
+      systemPrompt: 'You are the CodeWriting agent, a professional software engineer. You can use file operation tools (read_file, write_file, edit_file, list_directory, etc.) and Shell tools to complete coding tasks. Autonomously decide which tools to use based on task requirements and write high-quality code.',
       maxRounds: 100,
       timeout: 15 * 60 * 1000,
     });
 
-    // 从 Harness 结果中提取写入的文件路径
+    // Extract written file paths from Harness result
     const writtenFiles = this.extractWrittenFiles(result.messages);
 
     return {
       success: true,
       outputData: { code: result.content, files: writtenFiles },
       artifacts: writtenFiles,
-      summary: `代码实现完成（${result.loopState.totalToolCalls} 次工具调用，${result.loopState.currentRound} 轮）。${writtenFiles.length > 0 ? `写入 ${writtenFiles.length} 个文件。` : ''}`,
+      summary: `Code implementation completed (${result.loopState.totalToolCalls} tool calls, ${result.loopState.currentRound} rounds).${writtenFiles.length > 0 ? ` Written ${writtenFiles.length} file(s).` : ''}`,
     };
   }
 
   /**
-   * 从对话历史中提取 write_file/edit_file 工具调用的文件路径。
+   * Extract file paths from write_file/edit_file tool calls in conversation history.
    */
   private extractWrittenFiles(messages: any[]): string[] {
     const files = new Set<string>();
