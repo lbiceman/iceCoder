@@ -10,11 +10,13 @@ import path from 'node:path';
 import type { MemoryHeader, FileMemoryType, FileMemoryConfig } from './types.js';
 import { FILE_MEMORY_TYPES } from './types.js';
 import { extractBodyFromMarkdown } from './memory-parser.js';
-import {
-  FRONTMATTER_MAX_LINES,
-  CONTENT_PREVIEW_MAX_CHARS,
-  DEFAULT_CONFIDENCE_FALLBACK,
-} from './memory-config.js';
+import { DEFAULT_CONFIDENCE_FALLBACK } from './memory-config.js';
+
+/** frontmatter 最大读取行数 */
+const FRONTMATTER_MAX_LINES = 30;
+
+/** 正文预览最大字符数 */
+const CONTENT_PREVIEW_MAX_CHARS = 300;
 
 /**
  * 解析 frontmatter 中的记忆类型。

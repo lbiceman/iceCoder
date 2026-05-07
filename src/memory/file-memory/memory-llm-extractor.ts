@@ -19,11 +19,14 @@ import { parseLLMJsonArray } from './json-parser.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
 import {
   DEFAULT_LLM_EXTRACTION_CONFIG,
-  EXTRACTION_MESSAGE_TRUNCATE,
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
-  TAGS_JACCARD_DEDUP_THRESHOLD,
 } from './memory-config.js';
+
+/** 消息内容截断字符数 */
+const EXTRACTION_MESSAGE_TRUNCATE = 2000;
+/** Tags Jaccard 阈值（去重） */
+const TAGS_JACCARD_DEDUP_THRESHOLD = 0.6;
 import { evictIfNeeded } from './memory-eviction.js';
 
 /**

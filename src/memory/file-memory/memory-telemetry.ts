@@ -44,6 +44,8 @@ export interface RecallTelemetry {
   selectedFiles: string[];
   /** 查询长度（字符数，不记录内容） */
   queryLength: number;
+  /** 会话内去重过滤掉的记忆数 */
+  dedupCount?: number;
 }
 
 /**

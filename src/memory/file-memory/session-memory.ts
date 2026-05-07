@@ -28,7 +28,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { UnifiedMessage, LLMAdapterInterface } from '../../llm/types.js';
 import { getSessionMemoryConfig } from './memory-remote-config.js';
-import { SESSION_MAX_SECTION_TOKENS, SESSION_MAX_TOTAL_TOKENS, SESSION_VALIDATION_MIN_LENGTH } from './memory-config.js';
+
+/** 单个 section 最大 token 数 */
+const SESSION_MAX_SECTION_TOKENS = 2000;
+/** 会话记忆总 token 上限 */
+const SESSION_MAX_TOTAL_TOKENS = 12000;
+/** 内容验证最小长度 */
+const SESSION_VALIDATION_MIN_LENGTH = 50;
 
 // ─── 模板 ───
 

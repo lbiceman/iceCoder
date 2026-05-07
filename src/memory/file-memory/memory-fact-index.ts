@@ -21,12 +21,17 @@ import { extractBodyFromMarkdown } from './memory-parser.js';
 import { promises as fs } from 'node:fs';
 import {
   MIN_FACT_LENGTH,
-  MAX_FACT_LENGTH,
   MAX_FACTS_PER_FILE,
-  FACT_RANK_DEFAULT_MAX,
-  FACTS_PER_FILE_DEFAULT,
-  FACT_ENTITY_MATCH_BONUS,
 } from './memory-config.js';
+
+/** Fact 最大长度 */
+const MAX_FACT_LENGTH = 300;
+/** Fact 排序默认返回数 */
+const FACT_RANK_DEFAULT_MAX = 15;
+/** 每个文件默认展示 Fact 数 */
+const FACTS_PER_FILE_DEFAULT = 3;
+/** Fact 实体匹配加分 */
+const FACT_ENTITY_MATCH_BONUS = 0.3;
 
 /**
  * 单条事实。

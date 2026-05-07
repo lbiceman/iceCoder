@@ -23,9 +23,12 @@ import path from 'node:path';
 import {
   type MemoryDynamicConfig,
   DEFAULT_DYNAMIC_CONFIG,
-  REMOTE_CONFIG_FILE_PATH,
-  REMOTE_CONFIG_REFRESH_INTERVAL_MS,
 } from './memory-config.js';
+
+/** 远程配置文件路径 */
+const REMOTE_CONFIG_FILE_PATH = 'data/memory/memory-config.json';
+/** 远程配置缓存刷新间隔（毫秒） */
+const REMOTE_CONFIG_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 // 重新导出类型，保持向后兼容
 export type {

@@ -12,13 +12,15 @@
 
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
-import { SCANNER_CACHE_TTL_MS } from './memory-config.js';
 
 /** 缓存条目 */
 interface CacheEntry {
   memories: MemoryHeader[];
   timestamp: number;
 }
+
+/** 默认 TTL（30 秒） */
+const DEFAULT_TTL_MS = 30_000;
 
 /**
  * 记忆扫描缓存。
@@ -27,7 +29,7 @@ export class MemoryScannerCache {
   private cache = new Map<string, CacheEntry>();
   private ttlMs: number;
 
-  constructor(ttlMs: number = SCANNER_CACHE_TTL_MS) {
+  constructor(ttlMs: number = DEFAULT_TTL_MS) {
     this.ttlMs = ttlMs;
   }
 
@@ -79,6 +81,29 @@ export class MemoryScannerCache {
       memoryCount: entry.memories.length,
     }));
     return { dirCount: this.cache.size, entries };
+  }
+
+  /**
+   * 计算指定目录的记忆 manifest 指纹。
+   *
+   * 基于 filenames + mtimeMs 排序后拼接的快速 hash，
+   * 用于检测 manifest 是否变化（触发去重 Set 清空）。
+   * 如果缓存中没有该目录，返回空字符串。
+   */
+  getManifestHash(memoryDir: string): string {
+    const cached = this.cache.get(memoryDir);
+    if (!cached) return '';
+
+    const sorted = cached.memories
+      .map(m => `${m.filename}:${m.mtimeMs}`)
+      .sort()
+      .join('|');
+
+    let hash = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      hash = ((hash << 5) - hash + sorted.charCodeAt(i)) | 0;
+    }
+    return `${cached.memories.length}:${Math.abs(hash).toString(36)}`;
   }
 }
 
