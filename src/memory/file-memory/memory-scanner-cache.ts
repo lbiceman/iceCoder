@@ -55,6 +55,18 @@ export class MemoryScannerCache {
   }
 
   /**
+   * 获取缓存中的记忆文件数量（不触发扫描，仅检查缓存）。
+   * 缓存未命中时返回 -1。
+   */
+  getCachedCount(memoryDir: string): number {
+    const cached = this.cache.get(memoryDir);
+    if (!cached) return -1;
+    const now = Date.now();
+    if ((now - cached.timestamp) >= this.ttlMs) return -1; // 过期
+    return cached.memories.length;
+  }
+
+  /**
    * 使指定目录的缓存失效。
    *
    * 在写入/删除/淘汰记忆文件后调用。

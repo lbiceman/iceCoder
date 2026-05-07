@@ -132,8 +132,15 @@ export async function recallRelevantMemories(
 ): Promise<RecallResult> {
   const startTime = Date.now();
 
-  // 扫描记忆文件（项目级 + 用户级，使用扫描缓存）
+  // ── 空目录快速跳过 ──
+  // 如果扫描缓存已知该目录为空（且未过期），直接返回，避免重复扫描
   const scannerCache = getScannerCache();
+  const cachedCount = scannerCache.getCachedCount(memoryDir);
+  if (cachedCount === 0) {
+    return { memories: [], facts: [], duration: Date.now() - startTime, usedLLM: false };
+  }
+
+  // 扫描记忆文件（项目级 + 用户级，使用扫描缓存）
   const allMemories = await scannerCache.scan(memoryDir, 200);
   // 用户级记忆：只在非测试环境且目录存在时扫描
   if (!memoryDir.includes('__test') && !memoryDir.includes('nonexistent')) {

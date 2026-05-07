@@ -383,6 +383,12 @@ export class HarnessMemoryIntegration {
   private injectedMemoryIds = new Set<string>();
   /** 上次 manifest 指纹（用于检测记忆文件变化） */
   private lastManifestHash = '';
+  /** 记忆目录是否有有效记忆文件（延迟检测，manifest 变化时刷新） */
+  private hasMemories: boolean | null = null;
+  /** 连续空召回计数（用于冷却机制） */
+  private consecutiveEmptyRecalls = 0;
+  /** 空召冷却剩余轮次（冷却期间跳过召回） */
+  private emptyRecallCooldown = 0;
 
   // ── 用户反馈追踪 ──
   /** 最近一次被动确认的记忆信息（用于检测用户反馈） */
@@ -454,13 +460,15 @@ export class HarnessMemoryIntegration {
       this.injectedMemoryIds.clear();
       invalidateRescueCache();
       this.lastManifestHash = currentHash;
+      // manifest 变化 → 重新检查是否有记忆文件
+      this.hasMemories = null;
     }
 
     // ── 用户反馈检测 ──
     this.detectFeedback(userMessage);
 
-    // 异步预取（fire-and-forget）
-    if (this.fileMemoryManager) {
+    // 异步预取（fire-and-forget，记忆库为空时跳过）
+    if (this.fileMemoryManager && this.hasMemories !== false) {
       this.fileMemoryManager.prefetchMemories(userMessage).catch((err) => {
         console.debug('[harness-memory] prefetch failed:', err instanceof Error ? err.message : err);
       });
@@ -481,6 +489,7 @@ export class HarnessMemoryIntegration {
    */
   async injectMemoryContext(messages: UnifiedMessage[]): Promise<void> {
     if (!this.memoryDir && !this.fileMemoryManager) return;
+    if (this.memoryDirExists === false) return;
 
     // 获取当前最新的用户消息（可能是循环中途用户追加的）
     const latestUserMsg = getLatestUserMessage(messages) || this.currentUserMessage;
@@ -492,6 +501,27 @@ export class HarnessMemoryIntegration {
         return; // 话题未变，跳过
       }
       console.debug('[harness-memory] 检测到话题切换，重新召回记忆');
+    }
+
+    // ── 空记忆库快速跳过 ──
+    // 延迟检测：首次调用时扫描记忆目录，结果缓存到 manifest 变化时刷新
+    if (this.hasMemories === null && this.memoryDirExists) {
+      try {
+        const entries = await fs.readdir(this.memoryDir);
+        this.hasMemories = entries.some(f => f.endsWith('.md') && f !== 'MEMORY.md');
+      } catch {
+        this.hasMemories = false;
+      }
+    }
+    if (this.hasMemories === false) {
+      return; // 记忆目录为空，跳过召回
+    }
+
+    // ── 空召回冷却机制 ──
+    // 连续多次空召回后暂停几轮，避免无意义的重复扫描
+    if (this.emptyRecallCooldown > 0) {
+      this.emptyRecallCooldown--;
+      return;
     }
 
     const recallCfg = getRecallConfig();
@@ -612,6 +642,17 @@ export class HarnessMemoryIntegration {
         const method = recallResult.usedLLM ? 'LLM semantic recall + rerank' : 'keyword fallback';
         const reminder = buildCoNMemoryPrompt(memoryItems, method);
         messages.push({ role: 'user', content: reminder });
+        // 召回成功，重置空召回计数
+        this.consecutiveEmptyRecalls = 0;
+        this.emptyRecallCooldown = 0;
+      } else {
+        // 空召回 → 累计计数，连续 3 次空召回后冷却 3 轮
+        this.consecutiveEmptyRecalls++;
+        if (this.consecutiveEmptyRecalls >= 3) {
+          this.emptyRecallCooldown = 3;
+          this.consecutiveEmptyRecalls = 0;
+          console.debug('[harness-memory] 连续空召回，冷却 3 轮');
+        }
       }
     } catch (err) {
       console.debug('[harness-memory] recall failed:', err instanceof Error ? err.message : err);
