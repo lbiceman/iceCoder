@@ -58,7 +58,7 @@ const DEFAULT_CONFIG: CompactionConfig = {
   keepRecentMinMessages: 5,
   maxToolResultLength: 3000,
   enableLLMSummary: true,
-  maxReinjectFiles: 5,
+  maxReinjectFiles: 8,
   maxReinjectTokens: 50000,
 };
 
@@ -216,16 +216,21 @@ export class ContextCompactor {
    * 构建压缩后的恢复指引消息。
    * 参考 claude-code 的 "Continue directly, don't recap" 模式。
    */
-  buildRecoveryPrompt(hasSessionNotes: boolean): UnifiedMessage {
+  buildRecoveryPrompt(hasSessionNotes: boolean, lastUserMessage?: string): UnifiedMessage {
     const base = 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.';
     const recentPreserved = hasSessionNotes
       ? '\n\nRecent messages are preserved verbatim.'
       : '';
     const instruction = '\n\nContinue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.';
 
+    const executionHint = lastUserMessage
+      && /\b(修改|执行|实现|改|fix|implement|execute|do it|proceed|go ahead)\b/i.test(lastUserMessage)
+      ? '\n\nIMPORTANT: The user asked you to execute/implement changes. DO NOT re-analyze. Call write/edit tools directly to implement what was requested.'
+      : '';
+
     return {
       role: 'user' as const,
-      content: `${base}${recentPreserved}${instruction}`,
+      content: `${base}${recentPreserved}${instruction}${executionHint}`,
     };
   }
 
@@ -436,6 +441,21 @@ export class ContextCompactor {
 
     // 计算初始切割点（token 预算优先，参考 claude-code: ≥10K token, ≥5 条消息, ≤40K token）
     let splitAt = this.findSplitByTokenBudget(messages, contentStart);
+
+    // 保护长篇分析文本（assistant 无 toolCalls 且 content > 500 字符），
+    // 这类消息通常是分析报告，压缩后会丢失关键上下文导致重复分析。
+    for (let i = contentStart; i < splitAt; i++) {
+      const msg = messages[i];
+      if (
+        msg.role === 'assistant'
+        && !msg.toolCalls?.length
+        && typeof msg.content === 'string'
+        && msg.content.length > 500
+      ) {
+        splitAt = i;
+        break;
+      }
+    }
 
     // 消息对完整性修正：
     // 如果 splitAt 处是 tool 消息，说明它的 assistant(tool_calls) 在前面，

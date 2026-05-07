@@ -106,6 +106,8 @@ interface LoopState {
   emptyResponseRetryCount: number;
   /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
   consecutiveToolFailures: number;
+  /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */
+  consecutiveReadOnlyRounds: number;
   /** stop_hook 连续干预计数 */
   stopHookContinuationCount: number;
   /** 上一次 continue 的原因 */
@@ -224,6 +226,7 @@ export class Harness {
       llmRetryCount: 0,
       emptyResponseRetryCount: 0,
       consecutiveToolFailures: 0,
+      consecutiveReadOnlyRounds: 0,
       stopHookContinuationCount: 0,
       transition: 'initial',
     };
@@ -582,6 +585,21 @@ export class Harness {
       } else {
         // 有成功执行的工具，重置计数
         state.consecutiveToolFailures = 0;
+      }
+
+      // 6a-readonly. 连续只读轮次跟踪（分析瘫痪检测）
+      const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
+      const hadWriteTool = response.toolCalls?.some(tc => WRITE_TOOLS.has(tc.name)) ?? false;
+      if (hadWriteTool) {
+        state.consecutiveReadOnlyRounds = 0;
+      } else if (response.toolCalls?.length) {
+        state.consecutiveReadOnlyRounds++;
+        if (state.consecutiveReadOnlyRounds >= 5) {
+          msgs.push({
+            role: 'user',
+            content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
+          });
+        }
       }
 
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
@@ -951,7 +969,9 @@ export class Harness {
     }
 
     // 3. 注入恢复指引
-    messages.push(this.contextCompactor.buildRecoveryPrompt(!!sessionNotes));
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content;
+    const lastUserStr = typeof lastUserMsg === 'string' ? lastUserMsg : undefined;
+    messages.push(this.contextCompactor.buildRecoveryPrompt(!!sessionNotes, lastUserStr));
 
     logger.compaction(before, messages.length);
     onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
