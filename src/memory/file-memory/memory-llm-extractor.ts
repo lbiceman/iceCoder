@@ -17,7 +17,13 @@ import type { MemoryHeader } from './types.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
-import { DEFAULT_LLM_EXTRACTION_CONFIG } from './memory-config.js';
+import {
+  DEFAULT_LLM_EXTRACTION_CONFIG,
+  EXTRACTION_MESSAGE_TRUNCATE,
+  USER_LEVEL_CONFIDENCE_THRESHOLD,
+  DEFAULT_CONFIDENCE_FALLBACK,
+  TAGS_JACCARD_DEDUP_THRESHOLD,
+} from './memory-config.js';
 import { evictIfNeeded } from './memory-eviction.js';
 
 /**
@@ -149,7 +155,7 @@ function findDuplicateByTags(
     const union = newSet.size + existingSet.size - intersection;
     const jaccard = union > 0 ? intersection / union : 0;
 
-    if (jaccard >= 0.6 && jaccard > bestOverlap) {
+    if (jaccard >= TAGS_JACCARD_DEDUP_THRESHOLD && jaccard > bestOverlap) {
       bestOverlap = jaccard;
       bestMatch = mem;
     }
@@ -266,7 +272,7 @@ export class LLMMemoryExtractor {
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => {
         const content = typeof m.content === 'string' ? m.content : '';
-        return `${m.role}: ${content.substring(0, 2000)}`;
+        return `${m.role}: ${content.substring(0, EXTRACTION_MESSAGE_TRUNCATE)}`;
       })
       .join('\n\n');
 
@@ -378,8 +384,8 @@ Each object must have: filename, type, name, description, content, tags (string[
         // user 类型 + 高置信度（用户明确声明）→ 用户级目录（跨项目共享）
         // user 类型 + 低置信度（LLM 推断）→ 项目级目录（候选，等 Dream 提升）
         // 其他类型 → 项目级目录
-        const memConfidence = memory.confidence ?? 0.5;
-        const isExplicitUser = memory.type === 'user' && memConfidence >= 1.0;
+        const memConfidence = memory.confidence ?? DEFAULT_CONFIDENCE_FALLBACK;
+        const isExplicitUser = memory.type === 'user' && memConfidence >= USER_LEVEL_CONFIDENCE_THRESHOLD;
         const targetDir = isExplicitUser ? userMemoryDir : memoryDir;
         let filePath: string;
         try {
@@ -428,7 +434,7 @@ Each object must have: filename, type, name, description, content, tags (string[
         }
 
         const tags = memory.tags && memory.tags.length > 0 ? memory.tags.join(', ') : '';
-        const confidence = memory.confidence ?? 0.5;
+        const confidence = memory.confidence ?? DEFAULT_CONFIDENCE_FALLBACK;
         const source = memory.source ?? 'llm_extract';
         const now = new Date().toISOString();
 

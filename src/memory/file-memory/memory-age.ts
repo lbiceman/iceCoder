@@ -11,11 +11,16 @@
  */
 
 import type { MemoryHeader } from './types.js';
-
-/** 陈旧阈值（天） */
-const STALE_THRESHOLD_DAYS = 90;
-/** 过期阈值（天） */
-const EXPIRED_THRESHOLD_DAYS = 180;
+import {
+  STALE_THRESHOLD_DAYS,
+  EXPIRED_THRESHOLD_DAYS,
+  HIGH_CONFIDENCE_THRESHOLD,
+  HIGH_CONFIDENCE_DECAY_MULTIPLIER,
+  DECAY_FACTOR_FRESH,
+  DECAY_FACTOR_STALE,
+  DECAY_FACTOR_EXPIRED,
+  DEFAULT_CONFIDENCE_FALLBACK,
+} from './memory-config.js';
 
 /**
  * 计算记忆的年龄（天数）。
@@ -79,7 +84,7 @@ export function getMemoryDecayStatus(memory: MemoryHeader): MemoryDecayStatus {
   const daysSinceActive = Math.max(0, Math.floor((Date.now() - lastActiveMs) / 86_400_000));
 
   // 高置信度记忆衰减更慢
-  const confidenceMultiplier = (memory.confidence || 0.5) >= 0.8 ? 2 : 1;
+  const confidenceMultiplier = (memory.confidence || DEFAULT_CONFIDENCE_FALLBACK) >= HIGH_CONFIDENCE_THRESHOLD ? HIGH_CONFIDENCE_DECAY_MULTIPLIER : 1;
   const staleThreshold = STALE_THRESHOLD_DAYS * confidenceMultiplier;
   const expiredThreshold = EXPIRED_THRESHOLD_DAYS * confidenceMultiplier;
 
@@ -109,8 +114,8 @@ export function getStaleMemories(memories: MemoryHeader[]): MemoryHeader[] {
 export function memoryDecayFactor(memory: MemoryHeader): number {
   const status = getMemoryDecayStatus(memory);
   switch (status) {
-    case 'fresh': return 1.0;
-    case 'stale': return 0.5;
-    case 'expired': return 0.1;
+    case 'fresh': return DECAY_FACTOR_FRESH;
+    case 'stale': return DECAY_FACTOR_STALE;
+    case 'expired': return DECAY_FACTOR_EXPIRED;
   }
 }

@@ -38,6 +38,18 @@ import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js'
 import {
   MEMORY_MAX_RELEVANT,
   EXTRACTION_SIGNAL_WORDS,
+  TOPIC_SHIFT_JACCARD_THRESHOLD,
+  HARNESS_FILE_CONTENT_TRUNCATE,
+  EXTRACTION_CHUNK_SIZE,
+  EXTRACTION_MAX_CHUNKS,
+  COARSE_RECALL_MULTIPLIER,
+  FALLBACK_RECALL_MULTIPLIER,
+  SESSION_MEMORY_LLM_MAX_TOKENS,
+  SESSION_MEMORY_SANITIZED_PREFIX_LIMIT,
+  STALE_THRESHOLD_DAYS,
+  EXPIRED_THRESHOLD_DAYS,
+  HIGH_CONFIDENCE_THRESHOLD,
+  HIGH_CONFIDENCE_DECAY_MULTIPLIER,
 } from '../memory/file-memory/memory-config.js';
 
 /**
@@ -94,6 +106,7 @@ import {
 import {
   getExtractionConfig,
   getRecallConfig,
+  getRelevanceGateConfig,
 } from '../memory/file-memory/memory-remote-config.js';
 import {
   initSessionMemoryState,
@@ -200,7 +213,7 @@ function hasTopicShifted(previousMessage: string, currentMessage: string): boole
   const union = prevTokens.size + currTokens.size - intersection;
   const jaccard = union > 0 ? intersection / union : 0;
 
-  return jaccard < 0.2;
+  return jaccard < TOPIC_SHIFT_JACCARD_THRESHOLD;
 }
 
 /**
@@ -255,9 +268,9 @@ function getMemoryDecayStatusFromMs(
   confidence: number,
 ): 'fresh' | 'stale' | 'expired' {
   const daysSinceActive = Math.max(0, Math.floor((Date.now() - mtimeMs) / 86_400_000));
-  const multiplier = confidence >= 0.8 ? 2 : 1;
-  if (daysSinceActive >= 180 * multiplier) return 'expired';
-  if (daysSinceActive >= 90 * multiplier) return 'stale';
+  const multiplier = confidence >= HIGH_CONFIDENCE_THRESHOLD ? HIGH_CONFIDENCE_DECAY_MULTIPLIER : 1;
+  if (daysSinceActive >= EXPIRED_THRESHOLD_DAYS * multiplier) return 'expired';
+  if (daysSinceActive >= STALE_THRESHOLD_DAYS * multiplier) return 'stale';
   return 'fresh';
 }
 
@@ -441,8 +454,8 @@ export class HarnessMemoryIntegration {
     const recallCfg = getRecallConfig();
     // 二级召回：粗召回 6x，精排后取 maxResults；精排失败时 fallback 到 2x
     const finalK = recallCfg.maxResults || MEMORY_MAX_RELEVANT;
-    const coarseK = finalK * 6;
-    const fallbackK = finalK * 2;
+    const coarseK = finalK * COARSE_RECALL_MULTIPLIER;
+    const fallbackK = finalK * FALLBACK_RECALL_MULTIPLIER;
 
     try {
       // 获取预取结果（如果有的话）
@@ -491,10 +504,12 @@ export class HarnessMemoryIntegration {
         // else: 候选数 ≤ finalK → 直接全部注入
 
         // ── 相关性门控：过滤与当前对话无关的记忆 ──
+        const relevanceGateCfg = getRelevanceGateConfig();
         selectedMemories = await filterByContextRelevance(
           selectedMemories,
           messages,
           this.llmAdapter,
+          relevanceGateCfg,
         );
 
         if (selectedMemories.length === 0) {
@@ -701,7 +716,7 @@ ${candidateList}`;
   private async buildFileGranularityItems(
     memories: import('../memory/file-memory/types.js').MemoryHeader[],
   ): Promise<StructuredMemoryItem[]> {
-    const MAX_CONTENT_CHARS = 2000;
+    const MAX_CONTENT_CHARS = HARNESS_FILE_CONTENT_TRUNCATE;
 
     // 并行读取所有文件
     const readResults = await Promise.all(
@@ -857,8 +872,8 @@ ${candidateList}`;
       if (newMessages.length === 0) return;
 
       // 分块：每块最多 CHUNK_SIZE 条消息，首次最多 MAX_CHUNKS 块
-      const CHUNK_SIZE = 20;
-      const MAX_CHUNKS = 3;
+      const CHUNK_SIZE = EXTRACTION_CHUNK_SIZE;
+      const MAX_CHUNKS = EXTRACTION_MAX_CHUNKS;
       const chunks: UnifiedMessage[][] = [];
       for (let i = 0; i < newMessages.length && chunks.length < MAX_CHUNKS; i += CHUNK_SIZE) {
         chunks.push(newMessages.slice(i, i + CHUNK_SIZE));
@@ -1004,13 +1019,13 @@ ${candidateList}`;
       const prompt = buildSessionMemoryUpdatePrompt(currentNotes, this.sessionMemoryState.notesPath);
 
       // 使用 LLM 更新会话笔记（清理 reasoningContent/toolCalls 防止 DeepSeek 报错）
-      const sanitizedPrefix = this.sanitizeConversationPrefix(messages).slice(-50);
+      const sanitizedPrefix = this.sanitizeConversationPrefix(messages).slice(-SESSION_MEMORY_SANITIZED_PREFIX_LIMIT);
       const response = await this.llmAdapter.chat(
         [
           ...sanitizedPrefix,
           { role: 'user', content: prompt },
         ],
-        { maxTokens: 4096, temperature: 0 },
+        { maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS, temperature: 0 },
       );
 
       // v3 改进：写入前验证响应格式

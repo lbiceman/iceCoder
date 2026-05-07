@@ -19,7 +19,20 @@ import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonObject } from './json-parser.js';
-import { DEFAULT_DREAM_CONFIG } from './memory-config.js';
+import {
+  DEFAULT_DREAM_CONFIG,
+  DREAM_READ_LIMIT,
+  DREAM_TRUNCATE_CHARS,
+  DREAM_NEW_FILES_TRIGGER,
+  DREAM_EXPIRED_TRIGGER,
+  DREAM_STATE_FILE_PATH,
+  EVICTION_AGE_CAP_DAYS,
+  EVICTION_CONFIDENCE_WEIGHT,
+  EVICTION_RECALL_CAP,
+  EVICTION_RECALL_WEIGHT,
+  EVICTION_USER_TYPE_BONUS,
+  DEFAULT_CONFIDENCE_FALLBACK,
+} from './memory-config.js';
 import { ConsolidationLock } from './memory-concurrency.js';
 import { getDreamConfig } from './memory-remote-config.js';
 import { getExpiredMemories, getStaleMemories } from './memory-age.js';
@@ -140,7 +153,7 @@ export class MemoryDream {
 
   constructor(config?: Partial<DreamConfig>) {
     this.config = { ...DEFAULT_DREAM_CONFIG, ...config };
-    this.stateFilePath = 'data/memory/dream-state.json';
+    this.stateFilePath = DREAM_STATE_FILE_PATH;
   }
 
   /**
@@ -185,7 +198,7 @@ export class MemoryDream {
 
     // 条件 3：存在过期记忆需要清理（不受时间门控限制）
     const expired = getExpiredMemories(memories);
-    if (expired.length >= 3) {
+    if (expired.length >= DREAM_EXPIRED_TRIGGER) {
       console.log(`[MemoryDream] ${expired.length} expired memories detected, triggering dream`);
       return true;
     }
@@ -204,7 +217,7 @@ export class MemoryDream {
 
     // 条件 2：自上次 dream 以来新增了较多文件（基于文件创建时间）
     const newFilesSinceDream = memories.filter(m => m.createdMs > lastConsolidatedAt).length;
-    if (newFilesSinceDream >= 10) {
+    if (newFilesSinceDream >= DREAM_NEW_FILES_TRIGGER) {
       console.log(`[MemoryDream] ${newFilesSinceDream} new files since last dream, triggering`);
       return true;
     }
@@ -367,9 +380,6 @@ export class MemoryDream {
     memoryDir: string,
     memories: Array<{ filename: string; filePath: string; mtimeMs: number; confidence: number; recallCount: number; lastRecalledMs: number; type?: string }>,
   ): Promise<string> {
-    const DREAM_READ_LIMIT = 80;
-    const DREAM_TRUNCATE_CHARS = 1200;
-
     // 按重要性排序：evictionScore 越低越重要（不该被淘汰 = 应该优先整合）
     const sorted = [...memories].sort((a, b) => {
       const scoreA = this.computeDreamPriority(a);
@@ -405,10 +415,10 @@ export class MemoryDream {
   private computeDreamPriority(mem: { mtimeMs: number; confidence: number; recallCount: number; lastRecalledMs: number; type?: string }): number {
     const lastActiveMs = Math.max(mem.lastRecalledMs || 0, mem.mtimeMs);
     const daysSinceActive = Math.max(0, (Date.now() - lastActiveMs) / 86_400_000);
-    const agePenalty = Math.min(daysSinceActive, 365) / 365 * 100;
-    const confidenceBonus = (mem.confidence || 0.5) * 30;
-    const recallBonus = Math.min(mem.recallCount || 0, 20) / 20 * 20;
-    const typeBonus = mem.type === 'user' ? 15 : 0;
+    const agePenalty = Math.min(daysSinceActive, EVICTION_AGE_CAP_DAYS) / EVICTION_AGE_CAP_DAYS * 100;
+    const confidenceBonus = (mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) * EVICTION_CONFIDENCE_WEIGHT;
+    const recallBonus = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
+    const typeBonus = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
     return agePenalty - confidenceBonus - recallBonus - typeBonus;
   }
 

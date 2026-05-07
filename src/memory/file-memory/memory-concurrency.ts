@@ -12,6 +12,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { CONSOLIDATION_LOCK_FILE, CONSOLIDATION_LOCK_STALE_MS, DRAIN_EXTRACTIONS_TIMEOUT_MS } from './memory-config.js';
 
 // ─── sequential 包装器 ───
 
@@ -34,8 +35,6 @@ export function sequential<T extends (...args: any[]) => Promise<any>>(fn: T): T
 
 // ─── ConsolidationLock ───
 
-const LOCK_FILE = '.consolidate-lock';
-const HOLDER_STALE_MS = 60 * 60 * 1000; // 1 小时
 
 /**
  * 基于文件的 autoDream 整合锁。
@@ -53,7 +52,7 @@ export class ConsolidationLock {
   private lockPath: string;
 
   constructor(memoryDir: string) {
-    this.lockPath = path.join(memoryDir, LOCK_FILE);
+    this.lockPath = path.join(memoryDir, CONSOLIDATION_LOCK_FILE);
   }
 
   /**
@@ -92,7 +91,7 @@ export class ConsolidationLock {
     }
 
     // 锁未过期且持有者存活 → 获取失败
-    if (mtimeMs !== undefined && Date.now() - mtimeMs < HOLDER_STALE_MS) {
+    if (mtimeMs !== undefined && Date.now() - mtimeMs < CONSOLIDATION_LOCK_STALE_MS) {
       if (holderPid !== undefined && this.isProcessRunning(holderPid)) {
         console.debug(
           `[ConsolidationLock] held by live PID ${holderPid} (${Math.round((Date.now() - mtimeMs) / 1000)}s ago)`,
@@ -210,7 +209,7 @@ export function initExtractionGuard(): ExtractionGuardState {
  */
 export async function drainExtractions(
   guard: ExtractionGuardState,
-  timeoutMs: number = 60_000,
+  timeoutMs: number = DRAIN_EXTRACTIONS_TIMEOUT_MS,
 ): Promise<void> {
   if (guard.inFlightExtractions.size === 0) return;
   await Promise.race([
