@@ -2,7 +2,7 @@
  * 上下文压缩器 — 参考 claude-code 的分层策略。
  *
  * 压缩触发阈值为动态计算：contextWindow × compactionRatio。
- * - contextWindow：通过 ICE_CONTEXT_WINDOW 环境变量配置（默认 128K）
+ * - contextWindow：ICE_CONTEXT_WINDOW 环境变量 > data/config.json maxContextTokens > 默认 128K
  * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.8，即 80%）
  * - 1M 窗口 → 阈值 800K，128K 窗口 → 阈值 102K
  *
@@ -54,16 +54,41 @@ export interface CompactionConfig {
   maxReinjectTokens: number;
 }
 
-/** 默认上下文窗口大小（未配置 ICE_CONTEXT_WINDOW 时的兜底值） */
+/** 默认上下文窗口大小（未配置时的兜底值） */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 /** 默认压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */
 const DEFAULT_COMPACTION_RATIO = 0.8;
 
-/** 从环境变量读取上下文窗口大小 */
+/**
+ * 读取上下文窗口大小。优先级：
+ * 1. ICE_CONTEXT_WINDOW 环境变量（手动覆盖）
+ * 2. data/config.json 中当前 provider 的 maxContextTokens（自动获取）
+ * 3. 默认 128K
+ */
 function getContextWindow(): number {
+  // 1. 环境变量优先
   const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-  return Number.isFinite(env) && env > 0 ? env : DEFAULT_CONTEXT_WINDOW;
+  if (Number.isFinite(env) && env > 0) return env;
+
+  // 2. 从 provider 配置读取 maxContextTokens（取所有 provider 中最大的值）
+  try {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const configPath = path.resolve('data/config.json');
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(raw) as { providers?: Array<{ maxContextTokens?: number }> };
+    let maxCtx = 0;
+    for (const p of config.providers ?? []) {
+      if (p.maxContextTokens && p.maxContextTokens > maxCtx) {
+        maxCtx = p.maxContextTokens;
+      }
+    }
+    if (maxCtx > 0) return maxCtx;
+  } catch { /* 配置文件不存在或解析失败，使用默认值 */ }
+
+  // 3. 兜底
+  return DEFAULT_CONTEXT_WINDOW;
 }
 
 /** 从环境变量读取压缩触发比例（0-1 之间） */
