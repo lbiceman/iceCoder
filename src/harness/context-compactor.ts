@@ -1,6 +1,11 @@
 /**
  * 上下文压缩器 — 参考 claude-code 的分层策略。
  *
+ * 压缩触发阈值为动态计算：contextWindow × compactionRatio。
+ * - contextWindow：通过 ICE_CONTEXT_WINDOW 环境变量配置（默认 128K）
+ * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.8，即 80%）
+ * - 1M 窗口 → 阈值 800K，128K 窗口 → 阈值 102K
+ *
  * 两条压缩路径：
  * - 会话记忆路径（compactWithSessionMemory）：0 LLM 成本，会话记忆作为摘要
  * - LLM 路径（compact）：五层递进，可选 LLM 精炼
@@ -29,7 +34,7 @@ import type { ChatFunction } from './types.js';
 export interface CompactionConfig {
   /** 触发压缩的消息数量阈值（向后兼容） */
   threshold: number;
-  /** 触发压缩的估算 token 阈值（优先于 threshold） */
+  /** 触发压缩的估算 token 阈值（优先于 threshold）。默认动态计算：contextWindow × ratio */
   tokenThreshold?: number;
   /** 压缩后保留的最近消息数上限 */
   keepRecent: number;
@@ -49,9 +54,27 @@ export interface CompactionConfig {
   maxReinjectTokens: number;
 }
 
+/** 默认上下文窗口大小（未配置 ICE_CONTEXT_WINDOW 时的兜底值） */
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+/** 默认压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */
+const DEFAULT_COMPACTION_RATIO = 0.8;
+
+/** 从环境变量读取上下文窗口大小 */
+function getContextWindow(): number {
+  const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
+  return Number.isFinite(env) && env > 0 ? env : DEFAULT_CONTEXT_WINDOW;
+}
+
+/** 从环境变量读取压缩触发比例（0-1 之间） */
+function getCompactionRatio(): number {
+  const env = parseFloat(process.env.ICE_COMPACTION_RATIO || '');
+  return Number.isFinite(env) && env > 0 && env <= 1 ? env : DEFAULT_COMPACTION_RATIO;
+}
+
 const DEFAULT_CONFIG: CompactionConfig = {
   threshold: 40,
-  tokenThreshold: 60000,
+  tokenThreshold: Math.floor(getContextWindow() * getCompactionRatio()),
   keepRecent: 40,
   keepRecentMinTokens: 10000,
   keepRecentMaxTokens: 40000,
