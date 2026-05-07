@@ -95,6 +95,10 @@ export interface RelevanceGateConfig {
   contextWindow: number;
   minKeywordOverlap: number;
   rescueThreshold: number;
+  /** rescue 结果缓存大小（LRU，默认 20） */
+  rescueCacheSize: number;
+  /** 短预览匹配阈值：总 contentPreview 字符数低于此值时跳过 LLM rescue（默认 500） */
+  rescueShortPreviewThreshold: number;
 }
 
 /** 会话记忆远程配置 */
@@ -116,6 +120,8 @@ export interface RecallConfig {
   maxMemoryBudget: number;
   /** 预算紧张时至少注入的记忆数（默认 3） */
   minBudgetResults: number;
+  /** 话题切换时各类型记忆的权重倍数 */
+  topicSwitchWeight: Record<string, number>;
 }
 
 /** 提取远程配置 */
@@ -133,6 +139,18 @@ export interface DreamRemoteConfig {
   enabled: boolean;
 }
 
+/** 用户反馈配置 */
+export interface FeedbackConfig {
+  /** 是否启用反馈检测（默认 true） */
+  enabled: boolean;
+  /** 否定关键词 */
+  negativeKeywords: string[];
+  /** 肯定关键词 */
+  positiveKeywords: string[];
+  /** 反馈窗口最大轮次（默认 3） */
+  maxTurnsToFeedback: number;
+}
+
 /** 动态配置完整结构（对应 memory-config.json） */
 export interface MemoryDynamicConfig {
   extraction: ExtractionRemoteConfig;
@@ -140,6 +158,7 @@ export interface MemoryDynamicConfig {
   recall: RecallConfig;
   relevanceGate: RelevanceGateConfig;
   sessionMemory: SessionMemoryConfig;
+  feedback: FeedbackConfig;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -206,6 +225,8 @@ export const DEFAULT_RELEVANCE_GATE_CONFIG: RelevanceGateConfig = {
   contextWindow: 3,
   minKeywordOverlap: 1,
   rescueThreshold: 0.5,
+  rescueCacheSize: 20,
+  rescueShortPreviewThreshold: 500,
 };
 
 export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
@@ -221,6 +242,7 @@ export const DEFAULT_RECALL_CONFIG: RecallConfig = {
   budgetTokenRatio: 0.05,
   maxMemoryBudget: 3000,
   minBudgetResults: 3,
+  topicSwitchWeight: { convention: 1.5, preference: 0.7, fact: 1.0 },
 };
 
 export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
@@ -236,6 +258,13 @@ export const DEFAULT_DREAM_REMOTE_CONFIG: DreamRemoteConfig = {
   enabled: true,
 };
 
+export const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
+  enabled: true,
+  negativeKeywords: ['不对', '不是', '错了', '不用', '别', 'wrong', 'incorrect', 'nope', 'stop'],
+  positiveKeywords: ['对', '是的', '很好', '就是这样', 'yes', 'correct', 'right', 'good'],
+  maxTurnsToFeedback: 3,
+};
+
 /** 完整动态配置默认值 */
 export const DEFAULT_DYNAMIC_CONFIG: MemoryDynamicConfig = {
   extraction: { ...DEFAULT_EXTRACTION_REMOTE_CONFIG },
@@ -243,6 +272,7 @@ export const DEFAULT_DYNAMIC_CONFIG: MemoryDynamicConfig = {
   recall: { ...DEFAULT_RECALL_CONFIG },
   relevanceGate: { ...DEFAULT_RELEVANCE_GATE_CONFIG },
   sessionMemory: { ...DEFAULT_SESSION_MEMORY_CONFIG },
+  feedback: { ...DEFAULT_FEEDBACK_CONFIG },
 };
 
 // ══════════════════════════════════════════════════════════════════

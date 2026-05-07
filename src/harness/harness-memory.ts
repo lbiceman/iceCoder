@@ -26,7 +26,7 @@ import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
 import { getScannerCache } from '../memory/file-memory/memory-scanner-cache.js';
-import { recallRelevantMemories, filterByContextRelevance, filterByBudget } from '../memory/file-memory/memory-recall.js';
+import { recallRelevantMemories, filterByContextRelevance, filterByBudget, invalidateRescueCache } from '../memory/file-memory/memory-recall.js';
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
@@ -116,6 +116,7 @@ import {
   getExtractionConfig,
   getRecallConfig,
   getRelevanceGateConfig,
+  getFeedbackConfig,
 } from '../memory/file-memory/memory-remote-config.js';
 import {
   initSessionMemoryState,
@@ -387,8 +388,17 @@ export class HarnessMemoryIntegration {
   /** 上次 manifest 指纹（用于检测记忆文件变化） */
   private lastManifestHash = '';
 
-  // ── sequential 包装的提取函数 ──
+  // ── 用户反馈追踪 ──
+  /** 最近一次被动确认的记忆信息（用于检测用户反馈） */
+  private lastConfirmedMemories: {
+    filenames: string[];
+    timestamp: number;
+    turnCount: number;
+  } | null = null;
+
+  // ── sequential 包装的函数 ──
   private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
+  private sequentialAdjustConfidence: (filenames: string[], delta: number) => Promise<void>;
 
   constructor(config: HarnessMemoryConfig) {
     this.memoryDir = config.memoryDir || 'data/memory-files';
@@ -407,6 +417,11 @@ export class HarnessMemoryIntegration {
     this.sequentialExtract = sequential(
       async (messages: UnifiedMessage[], turnCount: number) => {
         await this._extractMemoriesImpl(messages, turnCount);
+      },
+    );
+    this.sequentialAdjustConfidence = sequential(
+      async (filenames: string[], delta: number) => {
+        await this._adjustConfidenceImpl(filenames, delta);
       },
     );
   }
@@ -441,8 +456,12 @@ export class HarnessMemoryIntegration {
         console.debug(`[harness-memory] Manifest changed, clearing in-session dedup (${this.injectedMemoryIds.size} entries)`);
       }
       this.injectedMemoryIds.clear();
+      invalidateRescueCache();
       this.lastManifestHash = currentHash;
     }
+
+    // ── 用户反馈检测 ──
+    this.detectFeedback(userMessage);
 
     // 异步预取（fire-and-forget）
     if (this.fileMemoryManager) {
@@ -484,6 +503,8 @@ export class HarnessMemoryIntegration {
     const finalK = recallCfg.maxResults || MEMORY_MAX_RELEVANT;
     const coarseK = finalK * COARSE_RECALL_MULTIPLIER;
     const fallbackK = finalK * FALLBACK_RECALL_MULTIPLIER;
+    // 话题切换信号：用于召回阶段调整类型权重
+    const topicSwitched = this.injectedForCurrentMessage && hasTopicShifted(this.lastInjectionUserMessage, latestUserMsg);
 
     let dedupCount = 0;
 
@@ -506,6 +527,7 @@ export class HarnessMemoryIntegration {
         this.surfacedMemoryPaths, // 跨轮次去重
         coarseK,
         prefetchedPaths,
+        topicSwitched,
       );
 
       this.telemetry.logRecall({
@@ -525,7 +547,7 @@ export class HarnessMemoryIntegration {
         if (selectedMemories.length > fallbackK && this.llmAdapter) {
           // 候选数远超 finalK → 精排有价值
           selectedMemories = await this.rerankMemories(
-            latestUserMsg, selectedMemories, finalK, fallbackK,
+            latestUserMsg, selectedMemories, finalK, fallbackK, topicSwitched,
           );
         } else if (selectedMemories.length > finalK) {
           // 候选数略超 finalK → 截断到 finalK，避免注入过多记忆
@@ -541,6 +563,7 @@ export class HarnessMemoryIntegration {
           messages,
           this.llmAdapter,
           relevanceGateCfg,
+          topicSwitched,
         );
 
         if (selectedMemories.length === 0) {
@@ -614,6 +637,7 @@ export class HarnessMemoryIntegration {
     candidates: import('../memory/file-memory/types.js').MemoryHeader[],
     topK: number,
     fallbackK: number,
+    topicSwitched: boolean = false,
   ): Promise<import('../memory/file-memory/types.js').MemoryHeader[]> {
     if (!this.llmAdapter) return candidates.slice(0, fallbackK);
 
@@ -622,12 +646,16 @@ export class HarnessMemoryIntegration {
       `${i + 1}. [${m.filename}] ${m.description || '(no description)'} | tags: ${m.tags.join(', ')}`
     ).join('\n');
 
+    const topicNote = topicSwitched
+      ? `\n- The conversation has shifted to a new topic. Prioritize project conventions and technical facts. Only include personal preferences if directly relevant to the query.`
+      : '';
+
     const rerankPrompt = `User query: "${query}"
 
 Here are ${candidates.length} memory files. Select ALL that are relevant to answering the query (typically 3-${topK}, depending on query complexity).
 - Simple factual questions → select fewer (2-5)
 - Questions requiring multiple facts or time ranges → select more (5-${topK})
-- Maximum ${topK} selections
+- Maximum ${topK} selections${topicNote}
 Return ONLY a JSON object: {"selected": [1, 3, 7, ...]} with the numbers of your selections.
 
 ${candidateList}`;
@@ -724,6 +752,7 @@ ${candidateList}`;
     this.surfacedMemoryPaths.clear();
     this.injectedMemoryIds.clear();
     this.lastManifestHash = '';
+    this.lastConfirmedMemories = null;
     this.llmAdapter = null;
     this._extractionNotices = [];
   }
@@ -736,6 +765,96 @@ ${candidateList}`;
   }
 
   // ─── 私有方法 ───
+
+  /**
+   * 检测用户对被动确认的反馈（否定/肯定），调整记忆置信度。
+   *
+   * 超时重置：超过 maxTurnsToFeedback 轮未反馈则清除。
+   */
+  private detectFeedback(userMessage: string): void {
+    if (!this.lastConfirmedMemories) return;
+
+    const fbCfg = getFeedbackConfig();
+    if (!fbCfg.enabled) return;
+
+    // 超时检查
+    this.lastConfirmedMemories.turnCount++;
+    if (this.lastConfirmedMemories.turnCount > fbCfg.maxTurnsToFeedback) {
+      this.lastConfirmedMemories = null;
+      return;
+    }
+
+    // 仅当消息较短（< 50 字符）且主要意图为反馈时才触发
+    const msg = userMessage.trim();
+    if (msg.length > 50) return;
+
+    const msgLower = msg.toLowerCase();
+
+    // 否定检测
+    const isNegative = fbCfg.negativeKeywords.some(kw => msgLower.includes(kw.toLowerCase()));
+    if (isNegative) {
+      const filenames = this.lastConfirmedMemories.filenames;
+      console.debug(`[harness-memory] 用户否定反馈: ${filenames.join(', ')}`);
+      this.sequentialAdjustConfidence(filenames, -0.5).catch(() => {});
+      this.lastConfirmedMemories = null;
+      return;
+    }
+
+    // 肯定检测
+    const isPositive = fbCfg.positiveKeywords.some(kw => msgLower.includes(kw.toLowerCase()));
+    if (isPositive) {
+      const filenames = this.lastConfirmedMemories.filenames;
+      console.debug(`[harness-memory] 用户肯定反馈: ${filenames.join(', ')}`);
+      this.sequentialAdjustConfidence(filenames, 0.2).catch(() => {});
+      this.lastConfirmedMemories = null;
+      return;
+    }
+  }
+
+  /**
+   * 调整记忆文件的置信度（sequential 包装，确保文件写入互斥）。
+   *
+   * @param filenames - 要调整的记忆文件名列表
+   * @param delta - 置信度变化量（正数提升，负数降低）
+   */
+  private async _adjustConfidenceImpl(filenames: string[], delta: number): Promise<void> {
+    for (const filename of filenames) {
+      const filePath = path.join(this.memoryDir, filename);
+      try {
+        const content = await fs.readFile(filePath, 'utf-8');
+        const match = content.match(/confidence:\s*([\d.]+)/);
+        if (!match) continue;
+
+        const current = parseFloat(match[1]);
+        if (!Number.isFinite(current)) continue;
+
+        // 计算新置信度：下限 0.1，上限 1.0
+        let newConfidence: number;
+        if (delta < 0) {
+          // 否定：减半（但不超过 0.1 下限）
+          newConfidence = Math.max(0.1, current * (1 + delta));
+        } else {
+          // 肯定：提升（上限 1.0）
+          newConfidence = Math.min(1.0, current * (1 + delta));
+        }
+        newConfidence = Math.round(newConfidence * 100) / 100;
+
+        const updated = content.replace(
+          /confidence:\s*[\d.]+/,
+          `confidence: ${newConfidence}`,
+        );
+        await fs.writeFile(filePath, updated, 'utf-8');
+
+        // 使扫描缓存失效（文件内容已变更）
+        getScannerCache().invalidate(this.memoryDir);
+
+        const direction = delta < 0 ? '↓' : '↑';
+        console.log(`[harness-memory] 置信度调整: ${filename} ${current} ${direction} ${newConfidence}`);
+      } catch (err) {
+        console.debug(`[harness-memory] 置信度调整失败: ${filename}`, err instanceof Error ? err.message : err);
+      }
+    }
+  }
 
   /**
    * 构建结构化记忆项（fact 粒度优先，文件粒度回退）。
@@ -1009,6 +1128,7 @@ ${candidateList}`;
         if (this.injectedMemoryIds.size > 0) {
           console.debug(`[harness-memory] New memories extracted, clearing in-session dedup (${this.injectedMemoryIds.size} entries)`);
           this.injectedMemoryIds.clear();
+          invalidateRescueCache();
         }
 
         // 被动确认：合并为一条通知（避免多 chunk 时刷屏）
@@ -1017,6 +1137,13 @@ ${candidateList}`;
           .map(f => f.replace(/^(user|feedback|project|reference)_/, '').replace(/_/g, ' '))
           .join(', ');
         this._extractionNotices.push(`💾 已记住：${summary}`);
+
+        // 记录最近确认的记忆（用于反馈检测）
+        this.lastConfirmedMemories = {
+          filenames,
+          timestamp: Date.now(),
+          turnCount: 0,
+        };
       }
 
       // 矛盾通知：告知用户哪些旧记忆与新信息冲突，需要确认
