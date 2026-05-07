@@ -26,7 +26,7 @@ import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import { scanMemoryFiles, memoryAge } from '../memory/file-memory/index.js';
 import { getScannerCache } from '../memory/file-memory/memory-scanner-cache.js';
-import { recallRelevantMemories } from '../memory/file-memory/memory-recall.js';
+import { recallRelevantMemories, filterByContextRelevance } from '../memory/file-memory/memory-recall.js';
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
@@ -489,6 +489,18 @@ export class HarnessMemoryIntegration {
           console.debug(`[harness-memory] Truncated to ${finalK} candidates`);
         }
         // else: 候选数 ≤ finalK → 直接全部注入
+
+        // ── 相关性门控：过滤与当前对话无关的记忆 ──
+        selectedMemories = await filterByContextRelevance(
+          selectedMemories,
+          messages,
+          this.llmAdapter,
+        );
+
+        if (selectedMemories.length === 0) {
+          console.debug('[harness-memory] All memories filtered by relevance gate, skipping injection');
+          return;
+        }
 
         // ── v5.1: Fact 粒度 CoN + JSON 结构化读取 ──
         const memoryItems = await this.buildStructuredMemoryItems(

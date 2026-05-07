@@ -1151,3 +1151,209 @@ async function extractFactsFromSelected(
   const ranked = factIndex.rankFacts(query, relevantFacts, 15);
   return ranked.length > 0 ? ranked : relevantFacts.slice(0, 15);
 }
+
+// ─── 记忆相关性门控（Relevance Gate） ───
+
+/**
+ * 相关性门控配置。
+ */
+export interface RelevanceGateConfig {
+  /** 是否启用门控（默认 true） */
+  enabled: boolean;
+  /** 用于构建上下文的最近消息数（默认 3） */
+  contextWindow: number;
+  /** Layer 1: 最小关键词重叠数（默认 2） */
+  minKeywordOverlap: number;
+  /** Layer 2: 是否启用 LLM 验证（默认 false，节约 token） */
+  enableLLMCheck: boolean;
+}
+
+const DEFAULT_RELEVANCE_GATE_CONFIG: RelevanceGateConfig = {
+  enabled: true,
+  contextWindow: 3,
+  minKeywordOverlap: 2,
+  enableLLMCheck: false,
+};
+
+/**
+ * 从消息列表中提取关键词集合。
+ * 合并用户消息和助手消息的文本内容，统一 tokenize。
+ */
+function extractContextKeywords(messages: UnifiedMessage[], maxMessages: number): Set<string> {
+  const recentMessages = messages.slice(-maxMessages);
+  const combinedText = recentMessages
+    .map(m => {
+      if (typeof m.content === 'string') return m.content;
+      if (Array.isArray(m.content)) {
+        return m.content
+          .filter(b => b.type === 'text')
+          .map(b => b.text)
+          .join(' ');
+      }
+      return '';
+    })
+    .join(' ');
+
+  return tokenize(combinedText, { minWordLength: 3 });
+}
+
+/**
+ * Layer 1: 快速关键词重叠过滤（零成本）。
+ *
+ * 检查记忆的 tags/description/contentPreview 与最近对话的关键词是否重叠。
+ * 重叠数 >= minKeywordOverlap 则通过。
+ */
+function hasKeywordOverlap(
+  memory: MemoryHeader,
+  contextKeywords: Set<string>,
+  minOverlap: number,
+): boolean {
+  if (contextKeywords.size === 0) return true; // 无上下文关键词时放行
+
+  // 构建记忆的关键词集合：tags + description + contentPreview
+  const memoryText = [
+    memory.tags.join(' '),
+    memory.description || '',
+    memory.contentPreview || '',
+  ].join(' ');
+  const memoryKeywords = tokenize(memoryText, { minWordLength: 3 });
+
+  // 计算交集大小
+  let overlap = 0;
+  for (const kw of memoryKeywords) {
+    if (contextKeywords.has(kw)) {
+      overlap++;
+      if (overlap >= minOverlap) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Layer 2: LLM 验证（可选，节约 token）。
+ *
+ * 将记忆的关键词 + 摘要 与最近对话关键词一起发给 LLM，
+ * 让 LLM 判断每条记忆是否与当前对话相关。
+ * 返回通过验证的记忆索引集合。
+ */
+async function llmRelevanceCheck(
+  memories: MemoryHeader[],
+  contextKeywords: Set<string>,
+  llmAdapter: LLMAdapterInterface,
+): Promise<Set<number>> {
+  // 构建上下文摘要（只取关键词，节约 token）
+  const contextSnippet = Array.from(contextKeywords).slice(0, 50).join(', ');
+
+  // 构建记忆摘要列表（每条记忆只取 filename + description + top-3 tags）
+  const memoryList = memories.map((m, i) => {
+    const tags = m.tags.slice(0, 3).join(', ');
+    const desc = m.description ? m.description.substring(0, 80) : '';
+    return `${i + 1}. [${m.filename}] ${desc} | tags: ${tags}`;
+  }).join('\n');
+
+  const prompt = `You are checking if recalled memories are relevant to the current conversation.
+
+Conversation keywords: ${contextSnippet}
+
+Recalled memories:
+${memoryList}
+
+For each memory, decide if it's relevant to the conversation topic. Return a JSON object with "relevant" as an array of 1-based indices of relevant memories. If none are relevant, return {"relevant": []}.
+Return ONLY the JSON object, no other text.`;
+
+  try {
+    const response = await llmAdapter.chat(
+      [
+        { role: 'system', content: 'You are a relevance filter. Return only JSON.' },
+        { role: 'user', content: prompt },
+      ],
+      { tools: [] },
+    );
+
+    const content = response.content.trim();
+    const jsonMatch = content.match(/\{[\s\S]*"relevant"[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      const indices: number[] = parsed.relevant || [];
+      return new Set(
+        indices
+          .filter(i => i >= 1 && i <= memories.length)
+          .map(i => i - 1),
+      );
+    }
+  } catch (err) {
+    console.debug('[memory-recall] LLM relevance check failed:', err instanceof Error ? err.message : err);
+  }
+
+  // Fallback: 全部通过
+  return new Set(memories.map((_, i) => i));
+}
+
+/**
+ * 记忆相关性门控（两层过滤）。
+ *
+ * 在召回记忆注入上下文之前，检查每条记忆是否与最近对话相关。
+ * 解决问题：无关记忆（如 vitest 配置）被注入到无关任务中，干扰 agent。
+ *
+ * Layer 1: 快速关键词重叠（零成本，过滤明显无关的记忆）
+ * Layer 2: LLM 验证（可选，处理语义相关但关键词不重叠的情况）
+ *
+ * @param memories - 召回的记忆列表
+ * @param recentMessages - 最近的对话消息（用于构建上下文）
+ * @param llmAdapter - LLM 适配器（Layer 2 需要）
+ * @param config - 门控配置
+ * @returns 通过门控的记忆列表
+ */
+export async function filterByContextRelevance(
+  memories: MemoryHeader[],
+  recentMessages: UnifiedMessage[],
+  llmAdapter: LLMAdapterInterface | null,
+  config: Partial<RelevanceGateConfig> = {},
+): Promise<MemoryHeader[]> {
+  if (memories.length === 0) return [];
+
+  const cfg = { ...DEFAULT_RELEVANCE_GATE_CONFIG, ...config };
+  if (!cfg.enabled) return memories;
+
+  // 提取上下文关键词
+  const contextKeywords = extractContextKeywords(recentMessages, cfg.contextWindow);
+
+  // Layer 1: 快速关键词重叠过滤
+  const layer1Passed: MemoryHeader[] = [];
+  const layer1Failed: MemoryHeader[] = [];
+
+  for (const memory of memories) {
+    if (hasKeywordOverlap(memory, contextKeywords, cfg.minKeywordOverlap)) {
+      layer1Passed.push(memory);
+    } else {
+      layer1Failed.push(memory);
+    }
+  }
+
+  // 如果 Layer 1 已经过滤掉全部或大部分，直接返回
+  if (layer1Passed.length === 0) {
+    console.debug(`[memory-recall] Relevance gate: ${memories.length} memories all filtered by keyword overlap`);
+    return [];
+  }
+
+  if (layer1Failed.length === 0) {
+    // 全部通过 Layer 1，跳过 Layer 2
+    return memories;
+  }
+
+  // Layer 2: LLM 验证（仅对 Layer 1 失败的记忆做验证）
+  if (!cfg.enableLLMCheck || !llmAdapter) {
+    // 不启用 LLM 验证，只返回 Layer 1 通过的
+    console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length}/${memories.length} passed keyword overlap`);
+    return layer1Passed;
+  }
+
+  const layer2Indices = await llmRelevanceCheck(layer1Failed, contextKeywords, llmAdapter);
+  const layer2Passed = layer1Failed.filter((_, i) => layer2Indices.has(i));
+
+  const result = [...layer1Passed, ...layer2Passed];
+  console.debug(`[memory-recall] Relevance gate: ${layer1Passed.length} keyword + ${layer2Passed.length} LLM = ${result.length}/${memories.length}`);
+
+  return result;
+}
