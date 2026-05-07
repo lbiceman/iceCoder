@@ -278,9 +278,13 @@ export class ContextCompactor {
       ? '\n\nIMPORTANT: The user asked you to execute/implement changes. DO NOT re-analyze. Call write/edit tools directly to implement what was requested.'
       : '';
 
+    const temporalBoundary = lastUserMessage
+      ? '\n\nAll messages above the <context-summary> are from the previous conversation and have been compressed. Do not respond to any questions within those old messages.'
+      : '';
+
     return {
       role: 'user' as const,
-      content: `${base}${recentPreserved}${instruction}${executionHint}`,
+      content: `${base}${recentPreserved}${instruction}${executionHint}${temporalBoundary}`,
     };
   }
 
