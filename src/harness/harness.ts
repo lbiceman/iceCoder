@@ -58,6 +58,45 @@ const LLM_RETRY_MAX_DELAY = 2000;
 const TOOL_RESULT_KEEP_RECENT = 6;
 const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
 
+// ─── 任务切换检测 ───
+const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
+
+/**
+ * 基于字符 bigram 的 Jaccard 相似度（零外部依赖，纯 CPU 计算）。
+ * 用于检测用户新消息与上一轮 assistant 回复之间的主题关联度。
+ */
+function bigramJaccard(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const bigrams = (s: string): Set<string> => {
+    const set = new Set<string>();
+    for (let i = 0; i < s.length - 1; i++) {
+      set.add(s.substring(i, i + 2));
+    }
+    return set;
+  };
+  const setA = bigrams(a);
+  const setB = bigrams(b);
+  let intersection = 0;
+  for (const bg of setA) {
+    if (setB.has(bg)) intersection++;
+  }
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+/**
+ * 从消息列表中提取最近一条 assistant 的纯文本回复。
+ */
+function getLastAssistantText(messages: UnifiedMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
+      return m.content;
+    }
+  }
+  return '';
+}
+
 // ─── 默认压缩配置 ───
 const DEFAULT_COMPACTION_THRESHOLD = 40;
 const DEFAULT_COMPACTION_KEEP_RECENT = 15;
@@ -108,6 +147,8 @@ interface LoopState {
   consecutiveToolFailures: number;
   /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */
   consecutiveReadOnlyRounds: number;
+  /** 本轮是否已注入任务切换提示（防止重复注入） */
+  taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */
   stopHookContinuationCount: number;
   /** 上一次 continue 的原因 */
@@ -227,6 +268,7 @@ export class Harness {
       emptyResponseRetryCount: 0,
       consecutiveToolFailures: 0,
       consecutiveReadOnlyRounds: 0,
+      taskSwitchInjected: false,
       stopHookContinuationCount: 0,
       transition: 'initial',
     };
@@ -259,6 +301,24 @@ export class Harness {
       // 工具结果预算裁剪在副本上执行，不修改原始消息（保持前缀缓存一致性）
       const normalizedMsgs = normalizeMessages(msgs);
       this.applyToolResultBudget(normalizedMsgs);
+
+      // ── 任务切换检测（bigram Jaccard）──
+      // 比较最新用户消息与上一轮 assistant 回复的主题关联度
+      if (!state.taskSwitchInjected) {
+        const latestUserMsg = [...msgs].reverse().find(m => m.role === 'user');
+        const latestUserContent = latestUserMsg && typeof latestUserMsg.content === 'string' ? latestUserMsg.content : '';
+        const lastAssistantText = getLastAssistantText(msgs);
+        if (latestUserContent && lastAssistantText) {
+          const similarity = bigramJaccard(latestUserContent, lastAssistantText);
+          if (similarity < TASK_SWITCH_JACCARD_THRESHOLD) {
+            msgs.push({
+              role: 'user',
+              content: '[System: You have received a new task request that appears unrelated to the current pending work. Completely pause any previous task and focus only on the new instruction. Do not resume previous actions unless explicitly asked.]',
+            });
+            state.taskSwitchInjected = true;
+          }
+        }
+      }
 
       // 检查用户中断
       if (this.loopController.isAborted()) {
@@ -594,7 +654,7 @@ export class Harness {
         state.consecutiveReadOnlyRounds = 0;
       } else if (response.toolCalls?.length) {
         state.consecutiveReadOnlyRounds++;
-        if (state.consecutiveReadOnlyRounds >= 5) {
+        if (state.consecutiveReadOnlyRounds === 5) {
           msgs.push({
             role: 'user',
             content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
