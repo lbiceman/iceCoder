@@ -536,8 +536,8 @@ ${c.bold}终端内置命令:${c.reset}
         onConfirm: async (toolName, toolArgs) => {
           // 终端确认
           spinner.stop();
-          const argsStr = JSON.stringify(toolArgs).substring(0, 100);
-          console.log(`\n${c.yellow}⚠ 需要确认: ${toolName}(${argsStr})${c.reset}`);
+          const detail = toolName.includes('(') ? '' : ` (${JSON.stringify(toolArgs).substring(0, 80)})`;
+          console.log(`\n${c.yellow}⚠ 需要确认: ${toolName}${detail}${c.reset}`);
 
           return new Promise<boolean>((resolve) => {
             const confirmRl = createInterface({ input: process.stdin, output: process.stdout });

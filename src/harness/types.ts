@@ -86,6 +86,7 @@ export type StopReason =
   | 'model_done'         // 模型说 done
   | 'max_rounds'         // 达到最大轮次
   | 'token_budget'       // token 预算耗尽
+  | 'task_recovery'      // 压缩后失忆恢复
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）

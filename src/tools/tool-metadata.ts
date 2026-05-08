@@ -87,7 +87,7 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     name: 'fs_operation',
     isConcurrencySafe: false,
     isReadOnly: false,
-    isDestructive: true,
+    isDestructive: false,   // 运行时根据 operation 参数判断，见 isDestructiveOperation()
     maxResultSizeChars: 30000,
     tags: ['directory', 'file_write', 'file_delete'],
   },
@@ -300,6 +300,35 @@ export function isConcurrencySafe(toolName: string): boolean {
  */
 export function isReadOnly(toolName: string): boolean {
   return getToolMetadata(toolName).isReadOnly;
+}
+
+/**
+ * 检查工具是否为破坏性操作。
+ */
+/** fs_operation 中破坏性的 operation 值 */
+const DESTRUCTIVE_FS_OPERATIONS = new Set(['delete', 'move']);
+
+/**
+ * 判断 fs_operation 的具体 operation 是否为破坏性操作。
+ */
+export function isDestructiveOperation(operation: string): boolean {
+  return DESTRUCTIVE_FS_OPERATIONS.has(operation);
+}
+
+/** 破坏性 shell 命令模式 */
+const DESTRUCTIVE_COMMAND_PATTERNS: RegExp[] = [
+  /\brm\b/, /\brmdir\b/, /\bdel\b/, /\berase\b/,
+  /\bgit\s+push\s+.*(-f|--force)/, /\bgit\s+reset\s+--hard\b/, /\bgit\s+clean\b/,
+  /\bdd\b/, /\bmkfs\b/, /\bformat\b/,
+  /\bdropdb\b/, /\bDROP\s+(TABLE|DATABASE)\b/i,
+  /:\s*>/, /\b(shutdown|reboot|halt)\b/,
+];
+
+/**
+ * 判断 shell 命令是否为破坏性命令。
+ */
+export function isDestructiveCommand(command: string): boolean {
+  return DESTRUCTIVE_COMMAND_PATTERNS.some((p) => p.test(command));
 }
 
 /**
