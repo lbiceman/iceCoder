@@ -59,6 +59,9 @@ export interface CompactionConfig {
 /** 默认上下文窗口大小（未配置时的兜底值） */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 
+/** 用户消息内容长度超过此阈值时强制保留，防止任务描述被压缩丢弃 */
+const MIN_USER_MSG_LENGTH_TO_PRESERVE = 300;
+
 /** 默认压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */
 const DEFAULT_COMPACTION_RATIO = 0.8;
 
@@ -505,6 +508,20 @@ export class ContextCompactor {
         && !msg.toolCalls?.length
         && typeof msg.content === 'string'
         && msg.content.length > 500
+      ) {
+        splitAt = i;
+        break;
+      }
+    }
+
+    // 保护包含任务描述的长用户消息（content > 300 字符），
+    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致 Agent 无法继续执行任务。
+    for (let i = contentStart; i < splitAt; i++) {
+      const msg = messages[i];
+      if (
+        msg.role === 'user'
+        && typeof msg.content === 'string'
+        && msg.content.length > MIN_USER_MSG_LENGTH_TO_PRESERVE
       ) {
         splitAt = i;
         break;
