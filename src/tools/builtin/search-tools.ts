@@ -38,6 +38,8 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
         },
       },
       handler: async (args) => {
+        // Normalize: query/keyword are accepted aliases for pattern
+        if (args.pattern === undefined) args.pattern = args.query || args.keyword;
         const mode = (args.mode as string) || 'content';
         const maxResults = (args.maxResults as number) || 50;
 

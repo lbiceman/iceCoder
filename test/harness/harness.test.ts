@@ -544,7 +544,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     expect(result.content).toBe('OK, I will not delete it');
     expect(handler).not.toHaveBeenCalled();
-    const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('用户拒绝'));
+    const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('User denied'));
     expect(toolMsg).toBeDefined();
   });
 });
@@ -862,7 +862,7 @@ describe('Harness - 边界情况', () => {
     const chatFn = createChatFn([finalResponse(''), finalResponse(''), finalResponse('')]);
     const result = await harness.run('test', chatFn);
 
-    expect(result.content).toBe('LLM 返回空响应，请重试。');
+    expect(result.content).toBe('LLM returned empty response, please retry.');
     expect(result.loopState.stopReason).toBe('error');
   });
 
