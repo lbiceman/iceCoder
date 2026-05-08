@@ -292,7 +292,7 @@ export function createXmindParseTool(workDir: string): RegisteredTool {
       name: 'parse_xmind_deep',
       // 深度解析 XMind。提取节点标题、备注、标签、链接。支持树形文本和 Markdown 输出。基础解析用 parse_xmind。
       description:
-        'Deep parse XMind. Extract node titles, notes, labels, links. Supports tree text and Markdown output. For basic parsing use parse_xmind.',
+        'Deep parse XMind. Extract node titles, notes, labels, links. Supports tree text and Markdown output. For basic parsing use parse_document.',
       parameters: {
         type: 'object',
         properties: {

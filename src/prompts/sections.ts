@@ -145,20 +145,20 @@ export function createToolUsageSection(): PromptSection {
 - Do NOT use run_command when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL to assisting the user.
 - Call independent tools in parallel. Call dependent tools sequentially.
 - Do not repeat tool calls you have already made in this conversation unless the data may have changed.
-- After starting a background task, continue other work. Use check_task to monitor progress.
+- After starting a background task (run_command with background:true), continue other work. Use run_command with action:"check" and task_id to monitor progress.
 - You can call multiple tools in a single response. Maximize use of parallel tool calls where possible to increase efficiency.
 
 ## File reading
-Read file content → read_file. Large files (>500 lines) → read_file_lines. Outside working directory → open_file (requires absolute path)
+Read file content → read_file (use offset/limit for large files). Outside working directory → open_file (requires absolute path)
 
 ## File editing
 Local changes → edit_file (search must exactly match existing content). Multiple changes → batch_edit_file. Large changes → patch_file. New file → write_file (overwrites existing). Append → append_file
 
 ## Search
-Search filenames → find_files. Search file content → search_in_files (auto-skips node_modules). Search internet → web_search. Fetch webpage → fetch_url
+Search filenames → search_codebase (use mode:"filename"). Search file content → search_codebase (auto-skips node_modules). Search internet → web_search. Fetch webpage → fetch_url
 
 ## Command execution
-Short commands (<30s) → run_command. Long commands → run_background. Git operations → git (safer than run_command)
+Short commands → run_command. Long commands → run_command (use background:true). Git operations → git (safer than run_command)
 
 ## Document parsing
 General documents → parse_document (auto-selects strategy). Deep parsing → parse_xlsx_deep / parse_pptx_deep

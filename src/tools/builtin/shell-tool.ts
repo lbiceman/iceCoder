@@ -1,11 +1,11 @@
 /**
  * Shell 命令执行工具。
- * 提供在受限环境中执行 shell 命令的能力。
- * 支持实时输出流（通过 onOutput 回调推送 stdout/stderr）。
+ * 提供在受限环境中执行 shell 命令的能力（前台和后台）。
  */
 
 import { spawn } from 'node:child_process';
 import type { RegisteredTool, ToolOutputCallback } from '../types.js';
+import { getBackgroundTaskManager } from '../background-task-manager.js';
 
 /** 命令执行超时（毫秒） */
 const DEFAULT_TIMEOUT = 30000;
@@ -15,56 +15,114 @@ const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
 
 /** 危险命令黑名单 */
 const DANGEROUS_PATTERNS = [
-  /\brm\s+-rf\s+\/(?!\w)/i,     // rm -rf /
-  /\bformat\b/i,                  // format
-  /\bmkfs\b/i,                    // mkfs
-  /\bdd\s+if=/i,                  // dd if=
-  /\b:>\s*\/etc\//i,             // 清空系统文件
-  /\bshutdown\b/i,               // shutdown
-  /\breboot\b/i,                  // reboot
+  /\brm\s+-rf\s+\/(?!\w)/i,
+  /\bformat\b/i,
+  /\bmkfs\b/i,
+  /\bdd\s+if=/i,
+  /\b:>\s*\/etc\//i,
+  /\bshutdown\b/i,
+  /\breboot\b/i,
 ];
 
 /**
- * 创建 Shell 命令执行工具。
+ * 创建 Shell 命令执行工具（含前台和后台任务管理）。
  * @param workDir - 命令执行的工作目录
  */
 export function createShellTool(workDir: string): RegisteredTool {
+  // 确保 BackgroundTaskManager 已初始化
+  const bgManager = getBackgroundTaskManager(workDir);
+
   return {
     definition: {
       name: 'run_command',
-      // 执行 shell 命令。超时 30s。长命令用 run_background。Git 用 git 工具。
       description:
-        'Execute shell command and wait for result. Default timeout 30s. Use run_background for commands >30s. Prefer git tool for git operations. Has dangerous command blocklist (rm -rf /, format, shutdown, etc).',
+        'Execute shell commands (foreground or background). Foreground: waits for result (default 30s timeout). Background: set background:true for long commands, returns task_id immediately. Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks. Use task_id + action:"stop" to kill a running background task. Has dangerous command blocklist.',
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: '要执行的 shell 命令' },
-          timeout: {
-            type: 'number',
-            description: '命令超时（毫秒），默认 30000',
-            default: 30000,
-          },
+          command: { type: 'string', description: 'Shell command to execute (not needed for list action)' },
+          timeout: { type: 'number', description: 'Timeout in ms for foreground (default 30000)', default: 30000 },
+          background: { type: 'boolean', description: 'Run command in background, returns task_id immediately', default: false },
+          task_id: { type: 'string', description: 'Task ID for checking or stopping a background task' },
+          action: { type: 'string', description: 'For background management: "check" (query task status), "stop" (kill task), "list" (list all tasks)' },
+          label: { type: 'string', description: 'Optional label for background task' },
         },
-        required: ['command'],
+        required: [],
       },
     },
     handler: async (args, onOutput?: ToolOutputCallback) => {
-      const command = args.command as string;
+      const action = (args.action as string) || '';
+      const taskId = (args.task_id as string) || '';
+
+      // ── Background task management actions ──
+      if (action === 'list') {
+        const tasks = bgManager.list();
+        if (tasks.length === 0) return { success: true, output: 'No background tasks.' };
+        const summary = tasks.map(t => ({
+          taskId: t.taskId, label: t.label, status: t.status, elapsed: t.elapsed,
+          ...(t.exitCode !== null ? { exitCode: t.exitCode } : {}),
+        }));
+        return { success: true, output: JSON.stringify(summary, null, 2) };
+      }
+
+      if (action === 'check') {
+        if (!taskId) return { success: false, output: '', error: 'task_id is required for check action' };
+        const status = bgManager.getStatus(taskId);
+        if (!status) return { success: false, output: '', error: `Task ${taskId} not found` };
+        const output = bgManager.getOutput(taskId, 50);
+        const result: Record<string, any> = { taskId: status.taskId, label: status.label, status: status.status, elapsed: status.elapsed };
+        if (status.exitCode !== null) result.exitCode = status.exitCode;
+        if (status.error) result.error = status.error;
+        result.output = output || '(no output)';
+        return {
+          success: status.status === 'completed',
+          output: JSON.stringify(result, null, 2),
+          error: status.status === 'failed' || status.status === 'timeout' ? status.error || undefined : undefined,
+        };
+      }
+
+      if (action === 'stop') {
+        if (!taskId) return { success: false, output: '', error: 'task_id is required for stop action' };
+        const status = bgManager.getStatus(taskId);
+        if (!status) return { success: false, output: '', error: `Task ${taskId} not found` };
+        if (status.status !== 'running') return { success: false, output: '', error: `Task ${taskId} is not running (status: ${status.status})` };
+        const killed = bgManager.kill(taskId);
+        return killed
+          ? { success: true, output: `Task ${taskId} (${status.label || 'unlabeled'}) terminated.` }
+          : { success: false, output: '', error: `Failed to stop task ${taskId}` };
+      }
+
+      // ── Background task start ──
+      if (args.background) {
+        const command = (args.command as string) || '';
+        if (!command.trim()) return { success: false, output: '', error: 'Command cannot be empty' };
+        const timeoutSec = ((args.timeout as number) || 300000) / 1000;
+        const label = (args.label as string) || '';
+        const bgResult = bgManager.spawn(command, timeoutSec * 1000, label);
+        if (bgResult.error) return { success: false, output: '', error: bgResult.error };
+        const bgStatus = bgManager.getStatus(bgResult.taskId);
+        return {
+          success: true,
+          output: JSON.stringify({
+            taskId: bgResult.taskId, status: 'started',
+            label: bgStatus?.label || label, timeout: `${timeoutSec}s`,
+            message: 'Task started in background. Use action:"check" with task_id to poll progress.',
+          }, null, 2),
+        };
+      }
+
+      // ── Foreground execution ──
+      const command = (args.command as string) || '';
+      if (!command.trim()) return { success: false, output: '', error: 'Command is required for foreground execution' };
       const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
 
-      // 安全检查
       for (const pattern of DANGEROUS_PATTERNS) {
         if (pattern.test(command)) {
-          return {
-            success: false,
-            output: '',
-            error: `安全检查失败: 命令包含危险操作模式`,
-          };
+          return { success: false, output: '', error: 'Security check failed: command matches dangerous pattern' };
         }
       }
 
       return new Promise((resolve) => {
-        // 使用 spawn + shell 模式，支持管道和重定向
         const isWindows = process.platform === 'win32';
         const shell = isWindows ? 'cmd.exe' : '/bin/sh';
         const shellArgs = isWindows ? ['/c', command] : ['-c', command];
@@ -80,73 +138,38 @@ export function createShellTool(workDir: string): RegisteredTool {
         let totalSize = 0;
         let killed = false;
 
-        // 超时处理
         const timer = setTimeout(() => {
           killed = true;
           child.kill('SIGTERM');
-          // 给进程 2 秒优雅退出，否则强杀
-          setTimeout(() => {
-            try { child.kill('SIGKILL'); } catch { /* ignore */ }
-          }, 2000);
+          setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, 2000);
         }, timeout);
 
         child.stdout.on('data', (data: Buffer) => {
           const chunk = data.toString();
           totalSize += data.length;
-          if (totalSize <= MAX_OUTPUT_SIZE) {
-            stdout += chunk;
-            // 实时推送 stdout
-            if (onOutput) onOutput(chunk);
-          }
+          if (totalSize <= MAX_OUTPUT_SIZE) { stdout += chunk; if (onOutput) onOutput(chunk); }
         });
 
         child.stderr.on('data', (data: Buffer) => {
           const chunk = data.toString();
           totalSize += data.length;
-          if (totalSize <= MAX_OUTPUT_SIZE) {
-            stderr += chunk;
-            // 实时推送 stderr
-            if (onOutput) onOutput('[stderr] ' + chunk);
-          }
+          if (totalSize <= MAX_OUTPUT_SIZE) { stderr += chunk; if (onOutput) onOutput('[stderr] ' + chunk); }
         });
 
         child.on('close', (code) => {
           clearTimeout(timer);
-
           let output = '';
           if (stdout) output += stdout;
           if (stderr) output += (output ? '\n\n[stderr]\n' : '[stderr]\n') + stderr;
 
-          if (killed) {
-            resolve({
-              success: false,
-              output,
-              error: `命令执行超时 (${timeout}ms)`,
-            });
-            return;
-          }
-
-          if (code === 0) {
-            resolve({
-              success: true,
-              output: output || '命令执行成功（无输出）',
-            });
-          } else {
-            resolve({
-              success: false,
-              output,
-              error: `命令执行失败 (exit code: ${code})`,
-            });
-          }
+          if (killed) { resolve({ success: false, output, error: `Command timed out (${timeout}ms)` }); return; }
+          if (code === 0) { resolve({ success: true, output: output || 'Command succeeded (no output)' }); }
+          else { resolve({ success: false, output, error: `Command failed (exit code: ${code})` }); }
         });
 
         child.on('error', (err) => {
           clearTimeout(timer);
-          resolve({
-            success: false,
-            output: '',
-            error: `命令启动失败: ${err.message}`,
-          });
+          resolve({ success: false, output: '', error: `Command failed to start: ${err.message}` });
         });
       });
     },

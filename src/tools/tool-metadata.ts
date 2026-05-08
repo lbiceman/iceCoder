@@ -83,21 +83,13 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 2000,
     tags: ['file_write'],
   },
-  delete_file: {
-    name: 'delete_file',
+  fs_operation: {
+    name: 'fs_operation',
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: true,
-    maxResultSizeChars: 500,
-    tags: ['file_delete'],
-  },
-  list_directory: {
-    name: 'list_directory',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
     maxResultSizeChars: 30000,
-    tags: ['directory', 'file_read'],
+    tags: ['directory', 'file_write', 'file_delete'],
   },
   file_info: {
     name: 'file_info',
@@ -109,58 +101,18 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
   },
 
   // ── 搜索 ──
-  search_in_files: {
-    name: 'search_in_files',
+  search_codebase: {
+    name: 'search_codebase',
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    maxResultSizeChars: 30000,
-    tags: ['search'],
-  },
-  find_files: {
-    name: 'find_files',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 30000,
-    tags: ['search'],
+    maxResultSizeChars: 50000,
+    tags: ['search', 'file_read'],
   },
 
   // ── 文档解析 ──
   parse_document: {
     name: 'parse_document',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 50000,
-    tags: ['parse'],
-  },
-  parse_doc: {
-    name: 'parse_doc',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 50000,
-    tags: ['parse'],
-  },
-  parse_ppt: {
-    name: 'parse_ppt',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 50000,
-    tags: ['parse'],
-  },
-  parse_xmind: {
-    name: 'parse_xmind',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 50000,
-    tags: ['parse'],
-  },
-  parse_html: {
-    name: 'parse_html',
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
@@ -183,8 +135,8 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 100000,
     tags: ['parse'],
   },
-  parse_doc_deep: {
-    name: 'parse_doc_deep',
+  parse_doc_legacy: {
+    name: 'parse_doc_legacy',
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
@@ -212,58 +164,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     tags: ['shell'],
   },
 
-  // ── 后台任务 ──
-  run_background: {
-    name: 'run_background',
-    isConcurrencySafe: true,
-    isReadOnly: false,
-    isDestructive: false,
-    maxResultSizeChars: 2000,
-    tags: ['shell', 'background'],
-  },
-  check_task: {
-    name: 'check_task',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 10000,
-    tags: ['shell', 'background'],
-  },
-  list_tasks: {
-    name: 'list_tasks',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 5000,
-    tags: ['shell', 'background'],
-  },
-
-  // ── 文件系统操作 ──
-  create_directory: {
-    name: 'create_directory',
-    isConcurrencySafe: false,
-    isReadOnly: false,
-    isDestructive: false,
-    maxResultSizeChars: 1000,
-    tags: ['directory'],
-  },
-  move_file: {
-    name: 'move_file',
-    isConcurrencySafe: false,
-    isReadOnly: false,
-    isDestructive: false,
-    maxResultSizeChars: 1000,
-    tags: ['file_write'],
-  },
-  copy_file: {
-    name: 'copy_file',
-    isConcurrencySafe: false,
-    isReadOnly: false,
-    isDestructive: false,
-    maxResultSizeChars: 1000,
-    tags: ['file_write'],
-  },
-
   // ── 差异对比 ──
   diff_files: {
     name: 'diff_files',
@@ -282,16 +182,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isDestructive: false,
     maxResultSizeChars: 5000,
     tags: ['file_write'],
-  },
-
-  // ── 按行读取 ──
-  read_file_lines: {
-    name: 'read_file_lines',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: Infinity,
-    tags: ['file_read'],
   },
 
   // ── 网页搜索 ──
@@ -349,15 +239,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 50000,
     tags: ['file_read'],
   },
-  // ---- 新增工具 ----
-  glob_files: {
-    name: 'glob_files',
-    isConcurrencySafe: true,
-    isReadOnly: true,
-    isDestructive: false,
-    maxResultSizeChars: 50000,
-    tags: ['search', 'file_read'],
-  },
   image_read: {
     name: 'image_read',
     isConcurrencySafe: true,
@@ -373,14 +254,6 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isDestructive: false,
     maxResultSizeChars: 50000,
     tags: ['file_read', 'parse'],
-  },
-  stop_task: {
-    name: 'stop_task',
-    isConcurrencySafe: true,
-    isReadOnly: false,
-    isDestructive: false,
-    maxResultSizeChars: 5000,
-    tags: ['background'],
   },
   env_info: {
     name: 'env_info',

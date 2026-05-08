@@ -508,7 +508,7 @@ describe('Harness - 模型响应行为', () => {
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 破坏性工具权限确认', () => {
   it('用户允许时正常执行破坏性工具', async () => {
-    const tools = [makeTool('delete_file')];
+    const tools = [makeTool('fs_operation')];
     const executor = createToolExecutor(tools, async () => ({ success: true, output: 'Deleted' }));
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
@@ -516,7 +516,7 @@ describe('Harness - 破坏性工具权限确认', () => {
     }), executor);
 
     const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'delete_file', args: { path: 'temp.txt' } }]),
+      toolCallResponse([{ id: 'tc1', name: 'fs_operation', args: { operation: 'delete', path: 'temp.txt' } }]),
       finalResponse('File deleted'),
     ]);
 
@@ -527,7 +527,7 @@ describe('Harness - 破坏性工具权限确认', () => {
   });
 
   it('用户拒绝时跳过工具并通知 LLM', async () => {
-    const tools = [makeTool('delete_file')];
+    const tools = [makeTool('fs_operation')];
     const handler = vi.fn().mockResolvedValue({ success: true, output: 'Deleted' });
     const executor = createToolExecutor(tools, handler);
     const harness = new Harness(minConfig({
@@ -536,7 +536,7 @@ describe('Harness - 破坏性工具权限确认', () => {
     }), executor);
 
     const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'delete_file', args: { path: 'important.txt' } }]),
+      toolCallResponse([{ id: 'tc1', name: 'fs_operation', args: { operation: 'delete', path: 'important.txt' } }]),
       finalResponse('OK, I will not delete it'),
     ]);
 
@@ -651,7 +651,7 @@ describe('Harness - onStep 回调', () => {
   });
 
   it('破坏性工具拒绝时触发 tool_confirm + tool_denied 事件', async () => {
-    const tools = [makeTool('delete_file')];
+    const tools = [makeTool('fs_operation')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
@@ -659,7 +659,7 @@ describe('Harness - onStep 回调', () => {
     }), executor);
 
     const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'delete_file' }]),
+      toolCallResponse([{ id: 'tc1', name: 'fs_operation', args: { operation: 'delete', path: 'test.txt' } }]),
       finalResponse('OK'),
     ]);
 
@@ -1002,7 +1002,7 @@ describe('Harness - 边界情况', () => {
 // 17. 连续工具失败熔断
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 连续工具失败熔断', () => {
-  it('连续 3 轮工具全部失败后触发 circuit_breaker', async () => {
+  it('连续 3 轮工具全部失败后注入策略调整提示', async () => {
     const tools = [makeTool('read_file')];
     const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;
     const executor = createToolExecutor(tools, failHandler);
@@ -1017,9 +1017,9 @@ describe('Harness - 连续工具失败熔断', () => {
     ]);
     const result = await harness.run('test', chatFn);
 
-    expect(result.loopState.stopReason).toBe('circuit_breaker');
-    expect(result.content).toContain('连续');
-    expect(result.content).toContain('熔断');
+    // 熔断改为渐进式干预：3 轮失败后注入提示并继续，模型可正常回复
+    expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.content).toBe('summary');
   });
 
   it('工具失败后有成功则重置熔断计数', async () => {

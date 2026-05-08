@@ -40,8 +40,10 @@ const MAX_TOOL_OUTPUT = 30000;
 // ─── max-output-tokens 恢复最大次数 ───
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
-// ─── 连续工具失败熔断阈值 ───
+// ─── 连续工具失败提示干预阈值 ───
+// 第3轮开始注入强提示A，第6轮开始注入强提示B，第10轮触发熔断
 const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+const CIRCUIT_BREAKER_THRESHOLD = 10;
 
 // ─── LLM 空响应重试最大次数 ───
 const MAX_EMPTY_RESPONSE_RETRIES = 2;
@@ -618,11 +620,14 @@ export class Harness {
         return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
       }
 
-      // 6a-fuse. 连续工具失败熔断
+      // 6a-fuse. 连续工具失败处理（渐进式提示干预 + 最终熔断）
       if (toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount) {
         state.consecutiveToolFailures++;
-        if (state.consecutiveToolFailures >= MAX_CONSECUTIVE_TOOL_FAILURES) {
-          console.log(`[harness] 连续 ${state.consecutiveToolFailures} 轮工具全部失败，触发熔断`);
+        const failureCount = state.consecutiveToolFailures;
+
+        if (failureCount >= CIRCUIT_BREAKER_THRESHOLD) {
+          // 第10轮：触发熔断，停止循环
+          console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，触发熔断`);
           this.loopController.stop('circuit_breaker');
           const finalState = this.loopController.getState();
           logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
@@ -631,17 +636,49 @@ export class Harness {
             type: 'final',
             iteration: finalState.currentRound,
             totalToolCalls: finalState.totalToolCalls,
-            content: `连续 ${state.consecutiveToolFailures} 轮工具调用全部失败，已触发熔断保护。`,
+            content: `连续 ${failureCount} 轮工具调用全部失败，已触发熔断保护。`,
             stopReason: 'circuit_breaker',
           });
 
           return {
-            content: `连续 ${state.consecutiveToolFailures} 轮工具调用全部失败，已触发熔断保护。最后的错误已记录，请检查工具配置或环境后重试。`,
+            content: `连续 ${failureCount} 轮工具调用全部失败，已触发熔断保护。最后的错误已记录，请检查工具配置或环境后重试。`,
             loopState: finalState,
             messages: [...msgs],
             log: logger.getEntries(),
           };
         }
+
+        if (failureCount >= 6) {
+          // 第6-9轮：注入更强提示，要求停止尝试并说明原因
+          msgs.push({
+            role: 'user',
+            content: `[System] 警告：连续 ${failureCount} 轮工具调用全部失败。多次尝试仍未成功，请立即停止重复相同的错误操作。\n\n你必须：\n1. 停止尝试之前失败过的方法\n2. 直接向用户说明当前遇到的问题和失败原因\n3. 请求用户协助或提供替代方案\n\n不要继续尝试工具调用，直接回复用户。`,
+          });
+          console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入停止尝试提示`);
+        } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+          // 第3-5轮：注入强提示A，要求分析失败原因并换方法
+          const lastErrors = msgs
+            .slice(-6)
+            .filter(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('工具执行错误:'))
+            .map(m => (m.content as string).substring(0, 200));
+
+          const errorSummary = lastErrors.length > 0
+            ? `最近的错误:\n${lastErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
+            : '';
+
+          msgs.push({
+            role: 'user',
+            content: `[System] 注意：连续 ${failureCount} 轮工具调用全部失败。${errorSummary ? '\n' + errorSummary : ''}\n\n请分析失败原因，并采用完全不同的方法完成任务。可能的调整方向：\n- 检查文件路径是否正确（使用 list_directory 确认）\n- 检查命令语法是否正确\n- 尝试使用其他工具替代\n- 如果确实无法执行，请直接向用户说明原因，不要继续尝试相同的操作。`,
+          });
+          console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入策略调整提示`);
+        } else if (failureCount === 2) {
+          // 第2轮：轻提示，提醒上一轮失败了
+          msgs.push({
+            role: 'user',
+            content: '[System] 上一轮的所有工具调用都失败了。请检查参数是否正确，并尝试调整方法。',
+          });
+        }
+        // 第1轮：不干预，让模型自己处理错误信息
       } else {
         // 有成功执行的工具，重置计数
         state.consecutiveToolFailures = 0;

@@ -411,7 +411,7 @@ async function handleChatMessage(
       signal: abortController.signal,
     },
     permissions: [
-      { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要用户确认' },
+      { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
     compactionThreshold: 40,
     compactionKeepRecent: 10,

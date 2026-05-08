@@ -149,14 +149,13 @@ function safePath(filePath: string, baseDir: string): string {
 export function createDocExtractTool(workDir: string): RegisteredTool {
   return {
     definition: {
-      name: 'parse_doc_deep',
-      // 解析旧版 .doc 文件（OLE2 二进制格式）。新版 .docx 用 parse_doc。
+      name: 'parse_doc_legacy',
       description:
-        'Parse legacy .doc files (OLE2 binary format). For .docx use parse_doc.',
+        'Parse legacy .doc files (OLE2 binary format, pre-2007 Word). For modern .docx use parse_document. Not for deep parsing — the name "legacy" refers to the old .doc binary format, not enhanced depth.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'DOC 文件路径（相对于工作目录）' },
+          path: { type: 'string', description: 'Legacy .doc file path relative to work directory' },
         },
         required: ['path'],
       },
