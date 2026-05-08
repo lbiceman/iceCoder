@@ -9,6 +9,7 @@ import type { LLMResponse, ToolDefinition, UnifiedMessage } from '../../src/llm/
 import type { ToolResult } from '../../src/tools/types.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
+import { isDestructiveOperation, isDestructiveCommand } from '../../src/tools/tool-metadata.js';
 
 // ═══ 测试工具 ═══
 

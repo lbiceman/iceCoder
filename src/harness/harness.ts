@@ -31,7 +31,7 @@ import { HarnessLogger } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
-import { getToolMetadata } from '../tools/tool-metadata.js';
+import { getToolMetadata, isDestructiveOperation, isDestructiveCommand } from '../tools/tool-metadata.js';
 import { HarnessMemoryIntegration } from './harness-memory.js';
 
 // ─── 工具输出截断上限 ───
@@ -155,6 +155,10 @@ interface LoopState {
   stopHookContinuationCount: number;
   /** 上一次 continue 的原因 */
   transition: Transition;
+  /** 本轮是否刚刚完成上下文压缩 */
+  justCompacted: boolean;
+  /** 压缩后失忆恢复次数（每次压缩后最多 1 次） */
+  amnesiaRecoveryCount: number;
 }
 
 /**
@@ -273,6 +277,8 @@ export class Harness {
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
       transition: 'initial',
+      justCompacted: false,
+      amnesiaRecoveryCount: 0,
     };
 
     // ── 核心循环（while(true) 迭代模式）──
@@ -282,8 +288,8 @@ export class Harness {
       // 1. 解构当前状态
       const { messages: msgs, tools: currentTools } = state;
 
-      // 2. 消息预处理管线（上下文压缩，不修改已有消息内容）
-      await this.maybeCompact(msgs, chatFn, logger, onStep);
+      // 2. 消息预处理管线（微压缩 → 硬压缩，不修改已有消息内容）
+      await this.maybeCompact(msgs, chatFn, logger, onStep, state);
 
       // 3. 推进轮次，检查循环控制
       this.loopController.advanceRound();
@@ -429,7 +435,50 @@ export class Harness {
       if (!hasToolCalls) {
         logger.llmResponseFinal(tokenUsage);
 
-        // ── 5a. max-output-tokens 恢复 ──
+        // ── 5a. 压缩后失忆检测与自动补救 ──
+        if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
+          const responseText = response.content || '';
+          const amnesiaPatterns = [
+            /无法确定.*任务/, /不确定.*任务/, /忘记/, /请重复/, /请描述/,
+            /unsure what task/i, /don'?t know what task/i, /what (was|is) the task/i,
+            /can'?t remember/i, /forgot/i, /what would you like/i,
+          ];
+          const isAmnesia = amnesiaPatterns.some(p => p.test(responseText));
+          if (isAmnesia) {
+            state.amnesiaRecoveryCount++;
+            console.log('[harness] 检测到压缩后失忆，自动注入任务上下文...');
+            // 注入 assistant 回复（即使它可能是询问）
+            if (response.content) {
+              msgs.push({ role: 'assistant', content: response.content });
+            }
+            // 尝试从会话笔记读取任务描述
+            try {
+              const sessionNotes = await this.memoryIntegration.getSessionMemoryForCompact();
+              if (sessionNotes) {
+                msgs.push({
+                  role: 'user',
+                  content: `<system-reminder>\n## Task Recovery\nContext was just compressed. Your session notes contain the current task:\n\n${sessionNotes.substring(0, 1500)}\n\nContinue executing the task described above. Do NOT ask the user to repeat the task.\n</system-reminder>`,
+                });
+              } else {
+                msgs.push({
+                  role: 'user',
+                  content: '[System: Context was just compressed. Continue with the most recent task. Check the conversation history above for the task description. Do not ask the user to repeat the task.]',
+                });
+              }
+            } catch {
+              msgs.push({
+                role: 'user',
+                content: '[System: Context was just compressed. Continue with the most recent task. If you cannot determine the task, check the files you were working on.]',
+              });
+            }
+            state.justCompacted = false;
+            continue;
+          }
+          // 没有失忆迹象 → 正常完成，清除标记
+          state.justCompacted = false;
+        }
+
+        // ── 5b. max-output-tokens 恢复 ──
         // finishReason === 'length' 时注入"请继续"，最多重试 3 次
         if (
           response.finishReason === 'length'
@@ -587,7 +636,8 @@ export class Harness {
         };
       }
 
-      // 6. 有工具调用 → 执行工具
+      // 6. 有工具调用 → 执行工具（正常恢复，清除压缩标记）
+      if (state.justCompacted) state.justCompacted = false;
       logger.llmResponseToolCalls(response.toolCalls!.length, tokenUsage);
 
       // 推送思考内容（如果有）
@@ -814,10 +864,11 @@ export class Harness {
       }
 
       // ── 权限检查：破坏性工具需要用户确认 ──
-      const meta = getToolMetadata(tc.name);
-      if (meta.isDestructive && this.onConfirm) {
-        onStep?.({ type: 'tool_confirm', iteration, toolName: tc.name, toolArgs: tc.arguments });
-        const allowed = await this.onConfirm(tc.name, tc.arguments);
+      const needsConfirm = this.isDestructiveToolCall(tc);
+      if (needsConfirm && this.onConfirm) {
+        const confirmToolName = this.formatConfirmToolName(tc);
+        onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: tc.arguments });
+        const allowed = await this.onConfirm(confirmToolName, tc.arguments);
         if (!allowed) {
           logger.toolResult(tc.name, false, 0, 'User denied execution');
           onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
@@ -1008,10 +1059,35 @@ export class Harness {
     chatFn: ChatFunction,
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
+    state?: LoopState,
   ): Promise<void> {
+    // ── 第一道防线：轻量微压缩（65% 阈值，纯本地，零 LLM 成本）──
+    if (this.contextCompactor.needsMicroCompaction(messages) && !this.contextCompactor.needsCompaction(messages)) {
+      const before = messages.length;
+      const compacted = this.contextCompactor.doLightCompact(messages);
+      messages.length = 0;
+      messages.push(...compacted);
+      console.log(`[harness] 微压缩: ${before} → ${messages.length} 条消息 (纯本地，零 LLM 成本)`);
+      logger.compaction(before, messages.length);
+      onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
+      return; // 微压缩不注入恢复提示，对 LLM 透明
+    }
+
+    // ── 第二道防线：硬压缩 ──
     if (!this.contextCompactor.needsCompaction(messages)) return;
 
     const before = messages.length;
+
+    // 压缩前备份任务目标到会话笔记（异步，不阻塞压缩）
+    const taskDesc = this.contextCompactor.getTaskDescription(messages);
+    if (taskDesc) {
+      this.memoryIntegration.maybeUpdateSessionMemory(
+        messages,
+        0, // force update regardless of token count
+      ).catch(err => {
+        console.debug('[harness] task backup before compaction failed:', err instanceof Error ? err.message : err);
+      });
+    }
 
     // 压缩前获取会话笔记
     const sessionNotes = await this.memoryIntegration.getSessionMemoryForCompact();
@@ -1032,12 +1108,10 @@ export class Harness {
 
     // ── 压缩 ──
     if (sessionNotes) {
-      // 会话记忆路径：会话记忆作为摘要，0 LLM 成本
       const compacted = this.contextCompactor.compactWithSessionMemory(messages, sessionNotes);
       messages.length = 0;
       messages.push(...compacted);
     } else {
-      // LLM 压缩路径：五层递进，保留一次 LLM 调用
       const compacted = await this.contextCompactor.compact(messages, chatFn);
       messages.length = 0;
       messages.push(...compacted);
@@ -1065,20 +1139,20 @@ export class Harness {
       messages.push(...recentFileContents);
     }
 
-    // 3. 注入恢复指引
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content;
-    const lastUserStr = typeof lastUserMsg === 'string' ? lastUserMsg : undefined;
-    messages.push(this.contextCompactor.buildRecoveryPrompt(!!sessionNotes, lastUserStr));
-
-    // 4. 在最后一条用户消息前插入上下文更新提示（防止 LLM 回复压缩前的旧消息）
-    for (let i = messages.length - 2; i >= 0; i--) {
-      if (messages[i].role === 'user' && typeof messages[i].content === 'string') {
-        messages[i] = {
-          ...messages[i],
-          content: 'Important context update was just performed. The conversation above is historical context. We should only respond to the latest message above and ignore any questions within the historical context.\n\n' + (messages[i].content as string),
-        };
-        break;
+    // 3. 注入恢复指引（使用新的多重恢复提示）
+    const recentUserMsgs: string[] = [];
+    for (let i = messages.length - 1; i >= 0 && recentUserMsgs.length < 3; i--) {
+      const msg = messages[i];
+      if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.length > 50) {
+        recentUserMsgs.unshift(msg.content);
       }
+    }
+    messages.push(this.contextCompactor.buildRecoveryPrompt(recentUserMsgs, !!sessionNotes));
+
+    // 4. 设置压缩标记（用于后续失忆检测）
+    if (state) {
+      state.justCompacted = true;
+      state.amnesiaRecoveryCount = 0;
     }
 
     logger.compaction(before, messages.length);
@@ -1117,6 +1191,42 @@ export class Harness {
    *
    * @param timeoutMs - 最大等待时间（默认 10 秒）
    */
+  /**
+   * 判断工具调用是否需要用户确认。
+   * 对于 fs_operation 和 run_command，运行时分析具体参数来决定破坏性。
+   * 其他工具由元数据的 isDestructive 字段决定。
+   */
+  private isDestructiveToolCall(tc: ToolCall): boolean {
+    if (tc.name === 'fs_operation') {
+      const op = (tc.arguments as Record<string, any>)?.operation as string | undefined;
+      return op ? isDestructiveOperation(op) : false;
+    }
+    if (tc.name === 'run_command') {
+      const cmd = (tc.arguments as Record<string, any>)?.command as string | undefined;
+      return cmd ? isDestructiveCommand(cmd) : false;
+    }
+    return getToolMetadata(tc.name).isDestructive;
+  }
+
+  /**
+   * 格式化确认时的工具名称，附加具体的操作信息。
+   * 例如：`fs_operation (delete)`、`run_command (rm -rf node_modules)`。
+   */
+  private formatConfirmToolName(tc: ToolCall): string {
+    if (tc.name === 'fs_operation') {
+      const op = (tc.arguments as Record<string, any>)?.operation as string | undefined;
+      return op ? `fs_operation (${op})` : tc.name;
+    }
+    if (tc.name === 'run_command') {
+      const cmd = (tc.arguments as Record<string, any>)?.command as string | undefined;
+      if (cmd) {
+        const short = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;
+        return `run_command (${short})`;
+      }
+    }
+    return tc.name;
+  }
+
   async drainMemory(timeoutMs: number = 10_000): Promise<void> {
     await this.memoryIntegration.drain(timeoutMs);
     this.memoryIntegration.dispose();
