@@ -51,7 +51,7 @@ export function truncateEntrypointContent(
       : `${lineCount} 行，${byteCount} 字节`;
 
   return {
-    content: truncated + `\n\n> 警告: ${config.entrypointName} 有 ${reason}。只加载了部分内容。请保持索引条目简短（每行不超过 ~200 字符），将详细内容放入主题文件。`,
+    content: truncated + `\n\n> Warning: ${config.entrypointName} has ${reason}. Only partial content was loaded. Please keep index entries concise (no more than ~200 characters per line) and place detailed content in topic files.`,
     lineCount,
     byteCount,
     wasLineTruncated,

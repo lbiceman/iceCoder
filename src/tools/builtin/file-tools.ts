@@ -75,9 +75,9 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            content: { type: 'string', description: '要写入的内容' },
-            encoding: { type: 'string', description: '文件编码，默认 utf-8', default: 'utf-8' },
+            path: { type: 'string', description: 'File path (relative to work directory)' },
+            content: { type: 'string', description: 'Content to write' },
+            encoding: { type: 'string', description: 'File encoding, default utf-8', default: 'utf-8' },
           },
           required: ['path', 'content'],
         },
@@ -87,7 +87,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, args.content, (args.encoding || 'utf-8') as BufferEncoding);
-        return { success: true, output: `文件已写入: ${args.path}` };
+        return { success: true, output: `File written: ${args.path}` };
       },
     },
 
@@ -100,8 +100,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            content: { type: 'string', description: '要追加的内容' },
+            path: { type: 'string', description: 'File path (relative to work directory)' },
+            content: { type: 'string', description: 'Content to append' },
           },
           required: ['path', 'content'],
         },
@@ -110,7 +110,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         const filePath = safePath(args.path, workDir);
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.appendFile(filePath, args.content, 'utf-8');
-        return { success: true, output: `内容已追加到: ${args.path}` };
+        return { success: true, output: `Content appended to: ${args.path}` };
       },
     },
 
@@ -123,11 +123,11 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            search: { type: 'string', description: '要查找的内容（字符串或正则表达式）' },
-            replace: { type: 'string', description: '替换后的内容' },
-            isRegex: { type: 'boolean', description: '是否使用正则表达式匹配', default: false },
-            replaceAll: { type: 'boolean', description: '是否替换所有匹配项', default: true },
+            path: { type: 'string', description: 'File path (relative to work directory)' },
+            search: { type: 'string', description: 'Content to search for (string or regex)' },
+            replace: { type: 'string', description: 'Replacement content' },
+            isRegex: { type: 'boolean', description: 'Whether to use regex matching', default: false },
+            replaceAll: { type: 'boolean', description: 'Whether to replace all matches', default: true },
           },
           required: ['path', 'search', 'replace'],
         },
@@ -155,7 +155,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
 
         return {
           success: true,
-          output: changed ? `文件已修改: ${args.path}` : `未找到匹配内容，文件未变更: ${args.path}`,
+          output: changed ? `File modified: ${args.path}` : `No match found, file unchanged: ${args.path}`,
         };
       },
     },
@@ -248,7 +248,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件或目录路径（相对于工作目录）' },
+            path: { type: 'string', description: 'File or directory path (relative to work directory)' },
           },
           required: ['path'],
         },
