@@ -126,8 +126,8 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
     {
       definition: {
         name: 'browse_directory',
-        // 浏览目录外目录（需绝对路径）。目录内用 list_directory。
-        description: 'Browse directories outside working directory (requires absolute path). Use list_directory for directories inside working directory. Shows file list with size and modification time.',
+        // 浏览目录外目录（需绝对路径）。目录内用 fs_operation。
+        description: 'Browse directories outside working directory (requires absolute path). Use fs_operation for directories inside working directory. Shows file list with size and modification time.',
         parameters: {
           type: 'object',
           properties: {

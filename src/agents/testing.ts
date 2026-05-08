@@ -33,7 +33,7 @@ export class TestingAgent extends BaseAgent {
     你是一名专业的 QA 工程师。请根据以下项目文档，编写并执行端到端测试。
 
     工作流程：
-    1. 使用 list_directory 和 read_file 了解项目结构和现有代码
+    1. 使用 fs_operation 和 read_file 了解项目结构和现有代码
     2. 使用 write_file 编写测试文件（使用项目现有的测试框架）
     3. 使用 run_command 执行测试
     4. 如果测试失败，分析原因并修复
@@ -57,7 +57,7 @@ export class TestingAgent extends BaseAgent {
     const prompt = `You are a professional QA engineer. Based on the following project documents, write and execute end-to-end tests.
 
 Workflow:
-1. Use list_directory and read_file to understand the project structure and existing code
+1. Use fs_operation and read_file to understand the project structure and existing code
 2. Use write_file to write test files (using the project's existing test framework)
 3. Use run_command to execute tests
 4. If tests fail, analyze the cause and fix them
