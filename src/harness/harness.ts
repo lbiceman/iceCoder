@@ -447,7 +447,7 @@ export class Harness {
           // 精确措辞防止模型浪费 token 重复之前的内容
           msgs.push({
             role: 'user',
-            content: '直接继续 — 不要道歉，不要重述之前的内容。如果上次回复在中途被截断，从截断处继续。将剩余工作拆分为更小的步骤。',
+            content: 'Continue directly — do not apologize, do not restate previous content. If the last response was cut off mid-way, continue from where it left off. Split remaining work into smaller steps.',
           });
           state.transition = 'max_output_tokens_recovery';
           continue;
@@ -493,7 +493,7 @@ export class Harness {
           console.log(
             `[harness] LLM 空响应重试 (${state.emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES})`,
           );
-          msgs.push({ role: 'user', content: '请继续。' });
+          msgs.push({ role: 'user', content: 'Please continue.' });
           state.transition = 'max_output_tokens_recovery';
           continue;
         }
@@ -508,12 +508,12 @@ export class Harness {
             type: 'final',
             iteration: finalState.currentRound,
             totalToolCalls: finalState.totalToolCalls,
-            content: 'LLM 返回空响应',
+            content: 'LLM returned empty response',
             stopReason: 'error',
           });
 
           return {
-            content: 'LLM 返回空响应，请重试。',
+            content: 'LLM returned empty response, please retry.',
             loopState: finalState,
             messages: [...msgs],
             log: logger.getEntries(),
@@ -636,12 +636,12 @@ export class Harness {
             type: 'final',
             iteration: finalState.currentRound,
             totalToolCalls: finalState.totalToolCalls,
-            content: `连续 ${failureCount} 轮工具调用全部失败，已触发熔断保护。`,
+            content: `${failureCount} consecutive rounds of tool calls failed, circuit breaker triggered.`,
             stopReason: 'circuit_breaker',
           });
 
           return {
-            content: `连续 ${failureCount} 轮工具调用全部失败，已触发熔断保护。最后的错误已记录，请检查工具配置或环境后重试。`,
+            content: `${failureCount} consecutive rounds of tool calls failed, circuit breaker triggered. The last errors have been logged; please check tool configuration or environment and retry.`,
             loopState: finalState,
             messages: [...msgs],
             log: logger.getEntries(),
@@ -652,30 +652,30 @@ export class Harness {
           // 第6-9轮：注入更强提示，要求停止尝试并说明原因
           msgs.push({
             role: 'user',
-            content: `[System] 警告：连续 ${failureCount} 轮工具调用全部失败。多次尝试仍未成功，请立即停止重复相同的错误操作。\n\n你必须：\n1. 停止尝试之前失败过的方法\n2. 直接向用户说明当前遇到的问题和失败原因\n3. 请求用户协助或提供替代方案\n\n不要继续尝试工具调用，直接回复用户。`,
+            content: `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded. Please immediately stop repeating the same failed operations.\n\nYou must:\n1. Stop trying methods that have previously failed\n2. Directly explain the current problem and failure reasons to the user\n3. Ask the user for assistance or provide alternative solutions\n\nDo not continue attempting tool calls; reply to the user directly.`,
           });
           console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入停止尝试提示`);
         } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES) {
           // 第3-5轮：注入强提示A，要求分析失败原因并换方法
           const lastErrors = msgs
             .slice(-6)
-            .filter(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('工具执行错误:'))
+            .filter(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Tool execution error:'))
             .map(m => (m.content as string).substring(0, 200));
 
           const errorSummary = lastErrors.length > 0
-            ? `最近的错误:\n${lastErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
+            ? `Recent errors:\n${lastErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
             : '';
 
           msgs.push({
             role: 'user',
-            content: `[System] 注意：连续 ${failureCount} 轮工具调用全部失败。${errorSummary ? '\n' + errorSummary : ''}\n\n请分析失败原因，并采用完全不同的方法完成任务。可能的调整方向：\n- 检查文件路径是否正确（使用 list_directory 确认）\n- 检查命令语法是否正确\n- 尝试使用其他工具替代\n- 如果确实无法执行，请直接向用户说明原因，不要继续尝试相同的操作。`,
+            content: `[System] Note: ${failureCount} consecutive rounds of tool calls have all failed.${errorSummary ? '\n' + errorSummary : ''}\n\nPlease analyze the failure reasons and adopt a completely different approach to complete the task. Possible adjustment directions:\n- Check if file paths are correct (use list_directory to confirm)\n- Check if command syntax is correct\n- Try using alternative tools\n- If execution is truly impossible, directly explain the reason to the user and do not continue trying the same operation.`,
           });
           console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入策略调整提示`);
         } else if (failureCount === 2) {
           // 第2轮：轻提示，提醒上一轮失败了
           msgs.push({
             role: 'user',
-            content: '[System] 上一轮的所有工具调用都失败了。请检查参数是否正确，并尝试调整方法。',
+            content: '[System] All tool calls in the previous round failed. Please check if parameters are correct and try adjusting your approach.',
           });
         }
         // 第1轮：不干预，让模型自己处理错误信息
@@ -819,11 +819,11 @@ export class Harness {
         onStep?.({ type: 'tool_confirm', iteration, toolName: tc.name, toolArgs: tc.arguments });
         const allowed = await this.onConfirm(tc.name, tc.arguments);
         if (!allowed) {
-          logger.toolResult(tc.name, false, 0, '用户拒绝执行');
+          logger.toolResult(tc.name, false, 0, 'User denied execution');
           onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
           messages.push({
             role: 'tool',
-            content: `用户拒绝执行工具 ${tc.name}。请换一种方式完成任务，或询问用户。`,
+            content: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
             toolCallId: tc.id,
           });
           submittedIds.add(tc.id);
@@ -905,7 +905,7 @@ export class Harness {
 
       messages.push({
         role: 'tool',
-        content: '工具执行被中断。',
+        content: 'Tool execution was interrupted.',
         toolCallId: tc.id,
       });
     }
@@ -942,7 +942,7 @@ export class Harness {
     logger.llmCall();
     messages.push({
       role: 'user',
-      content: '请根据以上工具调用结果，给出最终的总结回答。',
+      content: 'Please provide a final summary answer based on the tool call results above.',
     });
 
     let finalContent = '';
