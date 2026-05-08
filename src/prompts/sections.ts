@@ -17,6 +17,29 @@ import type { PromptSection, EnvironmentInfo } from './types.js';
 // ─── 静态段落（可缓存）───
 
 /**
+ * 核心行动准则段落。
+ * 注入"行动优先"的行为哲学，将首选策略从分析扳向执行。
+ */
+export function createActionFirstSection(): PromptSection {
+  return {
+    id: 'action_first',
+    title: 'Action-First Principle',
+    content: `## 核心行动准则 (Action-First Principle)
+
+Your primary goal is to efficiently complete the user's task. Before each response, quickly assess:
+- Is the user's request clear and achievable through direct tool calls?
+- If context is missing, can you get it with 1–2 read-only tool calls (e.g. reading a file)?
+
+When the answer is yes, **call tools directly — do not output any analysis text**.
+Do NOT output "Let me think...", "I need to analyze...", "Let me first understand..." or similar pre-action thinking. Go straight to the tool call.
+Only output a brief plan before acting when the task is genuinely complex, spans multiple systems, or the approach is unclear.`,
+    isStatic: true,
+    priority: 1,
+    enabled: true,
+  };
+}
+
+/**
  * 身份介绍段落。
  * 告诉模型它是谁、有什么能力、基本行为准则。
  */
@@ -342,6 +365,7 @@ Tool results are automatically cleared to save space. Record important informati
 export function getDefaultSections(): PromptSection[] {
   return [
     createIntroSection(),
+    createActionFirstSection(),
     createSystemSection(),
     createDoingTasksSection(),
     createActionsSection(),

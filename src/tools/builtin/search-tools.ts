@@ -22,7 +22,7 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'search_codebase',
         description:
-          'Search the codebase. Default mode searches file content with regex/text pattern. Set mode:"filename" to find files by glob pattern (e.g. "**/*.ts", "src/**/*.test.js"). Set mode:"content" for explicit content search. Auto-skips node_modules and hidden directories.',
+          'Search the codebase. Default mode searches file content with regex/text pattern. Set mode:"filename" to find files by glob pattern (e.g. "**/*.ts", "src/**/*.test.js"). Set mode:"content" for explicit content search. Auto-skips node_modules and hidden directories. Use immediately when asked to find or search for code.',
         parameters: {
           type: 'object',
           properties: {

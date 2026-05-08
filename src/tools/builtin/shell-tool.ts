@@ -36,7 +36,7 @@ export function createShellTool(workDir: string): RegisteredTool {
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Foreground: waits for result (default 30s timeout). Background: set background:true for long commands, returns task_id immediately. Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks. Use task_id + action:"stop" to kill a running background task. Has dangerous command blocklist.',
+        'Execute shell commands (foreground or background). Foreground: waits for result (default 30s timeout). Background: set background:true for long commands, returns task_id immediately. Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks. Use task_id + action:"stop" to kill a running background task. Has dangerous command blocklist. Use immediately for any explicit shell command the user requests.',
       parameters: {
         type: 'object',
         properties: {
