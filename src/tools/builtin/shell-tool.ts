@@ -51,6 +51,8 @@ export function createShellTool(workDir: string): RegisteredTool {
       },
     },
     handler: async (args, onOutput?: ToolOutputCallback) => {
+      // Normalize: cmd is an accepted alias for command
+      if (args.cmd !== undefined && args.command === undefined) args.command = args.cmd;
       const action = (args.action as string) || '';
       const taskId = (args.task_id as string) || '';
 

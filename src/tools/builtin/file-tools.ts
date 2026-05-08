@@ -39,9 +39,14 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        // filePath is an accepted alias for path (LLMs sometimes use it by habit)
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) {
+          return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        }
+        const resolvedPath = safePath(rawPath, workDir);
         const encoding = (args.encoding || 'utf-8') as BufferEncoding;
-        const content = await fs.readFile(filePath, encoding);
+        const content = await fs.readFile(resolvedPath, encoding);
 
         if (args.offset !== undefined || args.limit !== undefined) {
           const allLines = content.split('\n');
@@ -58,7 +63,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
             .join('\n');
           return {
             success: true,
-            output: `${args.path} (lines ${start}-${end}, total ${totalLines})\n${'─'.repeat(40)}\n${numbered}`,
+            output: `${rawPath} (lines ${start}-${end}, total ${totalLines})\n${'─'.repeat(40)}\n${numbered}`,
           };
         }
 
@@ -83,11 +88,13 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const filePath = safePath(rawPath, workDir);
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, args.content, (args.encoding || 'utf-8') as BufferEncoding);
-        return { success: true, output: `File written: ${args.path}` };
+        return { success: true, output: `File written: ${rawPath}` };
       },
     },
 
@@ -133,7 +140,9 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const filePath = safePath(rawPath, workDir);
         let content = await fs.readFile(filePath, 'utf-8');
 
         let pattern: string | RegExp;
@@ -185,7 +194,9 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       },
       handler: async (args) => {
         const op = args.operation as string;
-        const filePath = safePath(args.path, workDir);
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const filePath = safePath(rawPath, workDir);
 
         switch (op) {
           case 'list': {

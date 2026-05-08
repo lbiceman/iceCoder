@@ -36,14 +36,21 @@ export class ToolExecutor {
   async executeTool(toolCall: ToolCall, onOutput?: ToolOutputCallback): Promise<ToolResult> {
     const tool = this.registry.get(toolCall.name);
     if (!tool) {
-      return { success: false, output: '', error: `未知工具: ${toolCall.name}` };
+      return { success: false, output: '', error: `Unknown tool: ${toolCall.name}` };
     }
 
     // 执行前验证输入参数
     if (this.validator) {
       const validation = this.validator.validate(toolCall);
       if (!validation.valid) {
-        return { success: false, output: '', error: `输入验证失败: ${validation.message}` };
+        const expectedParams = tool.definition.parameters?.properties
+          ? Object.keys(tool.definition.parameters.properties)
+          : [];
+        const receivedParams = Object.keys(toolCall.arguments);
+        const hint = expectedParams.length > 0
+          ? ` [accepted params: ${expectedParams.join(', ')}] [received params: ${receivedParams.join(', ') || '(none)'}]`
+          : '';
+        return { success: false, output: '', error: `Input validation failed: ${validation.message}${hint}` };
       }
     }
 
@@ -58,6 +65,17 @@ export class ToolExecutor {
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
+
+        // Detect common parameter name mismatch patterns
+        const isTypeError = lastError.includes('must be of type') && lastError.includes('Received undefined');
+        if (isTypeError) {
+          const expectedParams = tool.definition.parameters?.properties
+            ? Object.keys(tool.definition.parameters.properties)
+            : [];
+          const receivedParams = Object.keys(toolCall.arguments);
+          lastError = `${lastError} — Likely parameter name mismatch. Tool "${toolCall.name}" accepts: [${expectedParams.join(', ')}]. Received: [${receivedParams.join(', ') || '(none)'}].`;
+        }
+
         if (attempt < this.config.maxRetries) {
           const delay = Math.min(
             this.config.retryBaseDelay * Math.pow(2, attempt),
@@ -71,7 +89,7 @@ export class ToolExecutor {
     return {
       success: false,
       output: '',
-      error: `工具 "${toolCall.name}" 在 ${this.config.maxRetries + 1} 次尝试后仍然失败: ${lastError}`,
+      error: `Tool "${toolCall.name}" failed after ${this.config.maxRetries + 1} attempts: ${lastError}`,
     };
   }
 
