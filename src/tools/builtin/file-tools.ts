@@ -26,7 +26,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'read_file',
         description:
-          'Read file content. Returns full text by default. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used.',
+          'Read file content. Returns full text by default. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used. Use immediately when you need to read a file\'s content.',
         parameters: {
           type: 'object',
           properties: {
@@ -71,7 +71,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'write_file',
         // 创建新文件或覆盖已有文件。修改部分内容用 edit_file。追加用 append_file。
-        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file.',
+        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file. Use directly when asked to create a new file.',
         parameters: {
           type: 'object',
           properties: {
@@ -119,7 +119,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'edit_file',
         // 查找替换。search 必须精确匹配现有内容。多处修改用 batch_edit_file。大段修改用 patch_file。
-        description: 'Find and replace in existing file. search must exactly match existing content. For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file.',
+        description: 'Find and replace in existing file. search must exactly match existing content. For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file. Use this tool immediately when asked to modify code.',
         parameters: {
           type: 'object',
           properties: {
