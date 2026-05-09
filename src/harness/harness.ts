@@ -36,6 +36,9 @@ import { getToolMetadata, isDestructiveOperation, isDestructiveCommand } from '.
 import { HarnessMemoryIntegration } from './harness-memory.js';
 import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
+import { TaskCheckpointManager, type TaskCheckpointStatus } from './checkpoint.js';
+import { buildToolPlan, formatToolPlan } from './tool-planner.js';
+import { RuntimeTelemetry } from './runtime-telemetry.js';
 
 // ─── 工具输出截断上限 ───
 const MAX_TOOL_OUTPUT = 30000;
@@ -251,6 +254,8 @@ export class Harness {
   private memoryIntegration: HarnessMemoryIntegration;
   /** 用户中断信号（传递给工具执行器，实现跨层超时中断） */
   private abortSignal?: AbortSignal;
+  private checkpointManager?: TaskCheckpointManager;
+  private runtimeTelemetry?: RuntimeTelemetry;
 
   constructor(
     config: HarnessConfig,
@@ -269,6 +274,10 @@ export class Harness {
     this.permissionRules = config.permissions ?? [];
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
+    this.checkpointManager = config.sessionDir
+      ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
+      : undefined;
+    this.runtimeTelemetry = new RuntimeTelemetry(config.sessionDir, config.sessionId);
 
     // 记忆集成层
     this.memoryIntegration = new HarnessMemoryIntegration({
@@ -324,6 +333,10 @@ export class Harness {
         }
       }
     }
+    const activeCheckpoint = await this.checkpointManager?.loadActive();
+    if (activeCheckpoint) {
+      messages.push(this.checkpointManager!.buildResumeMessage(activeCheckpoint));
+    }
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
@@ -374,10 +387,15 @@ export class Harness {
       state.turnCount++;
       const round = this.loopController.getState().currentRound;
       logger.roundStart(round, msgs.length);
+      this.runtimeTelemetry?.recordRound({
+        round,
+        task: state.taskState.snapshot(),
+        repo: state.repoContext.snapshot(),
+      });
 
       const loopStop = this.loopController.shouldContinue();
       if (loopStop) {
-        return this.handleStop(loopStop, msgs, chatFn, currentTools, logger, onStep, streamFn);
+        return this.handleStop(loopStop, msgs, chatFn, currentTools, logger, onStep, streamFn, state);
       }
 
       // 4. 调用 LLM（带错误恢复）
@@ -409,7 +427,7 @@ export class Harness {
 
       // 检查用户中断
       if (this.loopController.isAborted()) {
-        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
+        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn, state);
       }
 
       let response;
@@ -437,7 +455,7 @@ export class Harness {
           }
           // 流式调用完成后检查中断（流式期间可能收到 abort）
           if (this.loopController.isAborted()) {
-            return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
+            return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn, state);
           }
         } else {
           response = await chatFn(normalizedMsgs, { tools: currentTools });
@@ -500,6 +518,12 @@ export class Harness {
         output: response.usage?.outputTokens ?? 0,
       };
       this.loopController.recordTokenUsage(tokenUsage.input, tokenUsage.output);
+      this.runtimeTelemetry?.recordRound({
+        round,
+        task: state.taskState.snapshot(),
+        repo: state.repoContext.snapshot(),
+        tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
+      });
 
       // 记录 token 预算
       if (this.tokenBudgetTracker) {
@@ -697,7 +721,11 @@ export class Harness {
           }
           msgs.push({
             role: 'user',
-            content: '[System] The user asked for an executable software-engineering action, but you did not call any tools. Continue now by calling the appropriate tool(s) to inspect, modify, run, test, or verify as needed. Do not answer with a plan or promise unless the task is impossible.',
+            content: [
+              '[System] The user asked for an executable software-engineering action, but you did not call any tools. Continue now by calling the appropriate tool(s) to inspect, modify, run, test, or verify as needed. Do not answer with a plan or promise unless the task is impossible.',
+              '',
+              formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+            ].join('\n'),
           });
           state.transition = 'no_tool_execution_recovery';
           continue;
@@ -710,7 +738,11 @@ export class Harness {
           }
           msgs.push({
             role: 'user',
-            content: state.taskState.buildVerificationPrompt(),
+            content: [
+              state.taskState.buildVerificationPrompt(),
+              '',
+              formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+            ].join('\n'),
           });
           state.transition = 'stop_hook_continue';
           continue;
@@ -723,6 +755,8 @@ export class Harness {
         this.loopController.stop('model_done');
         const finalState = this.loopController.getState();
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
+        await this.saveTaskCheckpoint('completed', userMessage, msgs, state, 'model_done');
+        this.recordTelemetrySummary('model_done', state);
 
         onStep?.({
           type: 'final',
@@ -784,7 +818,7 @@ export class Harness {
 
       // 6a-abort. 工具执行后立即检查中断
       if (this.loopController.isAborted()) {
-        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn);
+        return this.handleStop('user_abort', msgs, chatFn, currentTools, logger, onStep, streamFn, state);
       }
 
       // 6a-fuse. 连续工具失败处理（渐进式提示干预 + 最终熔断）
@@ -798,6 +832,8 @@ export class Harness {
           this.loopController.stop('circuit_breaker');
           const finalState = this.loopController.getState();
           logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
+          await this.saveTaskCheckpoint('failed', userMessage, msgs, state, 'circuit_breaker');
+          this.recordTelemetrySummary('circuit_breaker', state);
 
           onStep?.({
             type: 'final',
@@ -851,6 +887,8 @@ export class Harness {
         state.consecutiveToolFailures = 0;
       }
 
+      await this.saveTaskCheckpoint('running', userMessage, msgs, state);
+
       // 6a-readonly. 连续只读轮次跟踪（分析瘫痪检测）
       const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
       const hadWriteTool = response.toolCalls?.some(tc => WRITE_TOOLS.has(tc.name)) ?? false;
@@ -873,7 +911,7 @@ export class Harness {
       // 6c. maxTurns 检查（由 loopController 处理）
       const nextStop = this.loopController.shouldContinue();
       if (nextStop) {
-        return this.handleStop(nextStop, msgs, chatFn, currentTools, logger, onStep, streamFn);
+        return this.handleStop(nextStop, msgs, chatFn, currentTools, logger, onStep, streamFn, state);
       }
 
       // 6d. 构造下一轮状态 → continue
@@ -1083,6 +1121,12 @@ export class Harness {
       }
 
       logger.toolResult(tc.name, result.success, output.length, result.error);
+      this.runtimeTelemetry?.recordTool({
+        round: iteration,
+        toolName: tc.name,
+        success: result.success,
+        outputLength: output.length,
+      });
       onStep?.({
         type: 'tool_result',
         iteration,
@@ -1144,6 +1188,62 @@ export class Harness {
     }
   }
 
+  private async saveTaskCheckpoint(
+    status: TaskCheckpointStatus,
+    userGoal: string,
+    messages: UnifiedMessage[],
+    runtimeState: {
+      taskState: TaskState;
+      repoContext: RepoContext;
+      failedToolCallSignatures: Map<string, number>;
+    } | undefined,
+    stopReason?: StopReason,
+  ): Promise<void> {
+    if (!this.checkpointManager || !runtimeState) return;
+
+    try {
+      const failedToolCalls = [...runtimeState.failedToolCallSignatures.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([signature, count]) => `${signature} (x${count})`);
+
+      await this.checkpointManager.save({
+        status,
+        userGoal,
+        taskState: runtimeState.taskState.snapshot(),
+        repoContext: runtimeState.repoContext.snapshot(),
+        loopState: this.loopController.getState(),
+        messages,
+        failedToolCalls,
+        stopReason,
+      });
+    } catch (err) {
+      console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  private recordTelemetrySummary(
+    stopReason: StopReason,
+    runtimeState: {
+      taskState: TaskState;
+      repoContext: RepoContext;
+    },
+  ): void {
+    const loopState = this.loopController.getState();
+    const task = runtimeState.taskState.snapshot();
+    this.runtimeTelemetry?.recordSummary({
+      stopReason,
+      task,
+      repo: runtimeState.repoContext.snapshot(),
+      rounds: loopState.currentRound,
+      toolCalls: loopState.totalToolCalls,
+      verificationRate: task.verificationStatus === 'passed' ? 1 : 0,
+      noToolFinal: loopState.totalToolCalls === 0,
+      tokensPerSuccessfulTask: stopReason === 'model_done'
+        ? loopState.totalInputTokens + loopState.totalOutputTokens
+        : undefined,
+    });
+  }
+
   /**
    * 处理循环停止：请求 LLM 给出最终总结。
    */
@@ -1155,10 +1255,23 @@ export class Harness {
     logger: HarnessLogger,
     onStep?: (event: HarnessStepEvent) => void,
     streamFn?: StreamFunction,
+    runtimeState?: {
+      taskState: TaskState;
+      repoContext: RepoContext;
+      failedToolCallSignatures: Map<string, number>;
+    },
   ): Promise<HarnessResult> {
     this.loopController.stop(reason);
     const state = this.loopController.getState();
     logger.loopStop(reason, state.currentRound, state.totalToolCalls);
+    await this.saveTaskCheckpoint(
+      reason === 'user_abort' ? 'aborted' : reason === 'error' ? 'failed' : 'paused',
+      getLatestRealUserText(messages, '') || '',
+      messages,
+      runtimeState,
+      reason,
+    );
+    if (runtimeState) this.recordTelemetrySummary(reason, runtimeState);
 
     // 如果是用户中断，直接返回
     if (reason === 'user_abort') {
@@ -1281,6 +1394,7 @@ export class Harness {
     if (!this.contextCompactor.needsCompaction(messages)) return;
 
     const before = messages.length;
+    const beforeTokens = this.contextCompactor.getEstimatedTokens(messages);
 
     // 压缩前备份任务目标到会话笔记（异步，不阻塞压缩）
     const taskDesc = this.contextCompactor.getTaskDescription(messages);
@@ -1372,6 +1486,12 @@ export class Harness {
     }
 
     logger.compaction(before, messages.length);
+    this.runtimeTelemetry?.recordCompaction({
+      beforeMessages: before,
+      afterMessages: messages.length,
+      beforeTokens,
+      afterTokens: this.contextCompactor.getEstimatedTokens(messages),
+    });
     onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
   }
 

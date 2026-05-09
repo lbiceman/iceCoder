@@ -154,6 +154,7 @@ export abstract class BaseAgent implements Agent {
       compactionThreshold: 40,
       compactionKeepRecent: 10,
       compactionEnableLLMSummary: true,
+      sessionDir: context.sessionDir,
     };
 
     const harness = new Harness(harnessConfig, context.toolExecutor);

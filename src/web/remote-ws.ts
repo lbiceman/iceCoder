@@ -190,6 +190,7 @@ async function handleRemoteMessage(
     compactionKeepRecent: 10,
     memoryDir: MEMORY_DIR,
     compactionEnableLLMSummary: true,
+    sessionDir: SESSIONS_DIR,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, {

@@ -24,6 +24,8 @@ import { FileParser } from '../parser/file-parser.js';
  */
 export interface OrchestratorConfig {
   outputDir: string;
+  /** 会话目录，用于 Agent Harness checkpoint */
+  sessionDir?: string;
   /** 阶段失败时的最大重试次数 */
   stageMaxRetries?: number;
   /** 阶段重试基础延迟（毫秒） */
@@ -238,6 +240,7 @@ export class Orchestrator {
         config: pipelineConfig ?? {},
         llmAdapter: this.llmAdapter,
         outputDir: this.config.outputDir,
+        sessionDir: this.config.sessionDir,
         toolExecutor: this.config.toolExecutor,
         toolDefinitions: this.config.toolDefinitions,
       };
@@ -402,6 +405,7 @@ export class Orchestrator {
         config: pipelineConfig ?? {},
         llmAdapter: this.llmAdapter,
         outputDir: this.config.outputDir,
+        sessionDir: this.config.sessionDir,
         toolExecutor: this.config.toolExecutor,
         toolDefinitions: this.config.toolDefinitions,
       };

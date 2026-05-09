@@ -3,6 +3,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Harness } from '../../src/harness/harness.js';
 import { ContextCompactor } from '../../src/harness/context-compactor.js';
 import { TaskState } from '../../src/harness/task-state.js';
@@ -13,6 +16,7 @@ import type { ToolResult } from '../../src/tools/types.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
 import { isDestructiveOperation, isDestructiveCommand } from '../../src/tools/tool-metadata.js';
+import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
 import {
   DEFAULT_LONG_RUNNING_MAX_ROUNDS,
   DEFAULT_LONG_RUNNING_TIMEOUT_MS,
@@ -1507,5 +1511,96 @@ describe('Harness - 停止钩子连续干预上限', () => {
     const result = await harness.run('test', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 19. Task checkpoint
+// ═══════════════════════════════════════════════════════════════
+describe('Harness - task checkpoint', () => {
+  it('工具执行后保存 running checkpoint，完成后标记 completed', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-checkpoint-'));
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'src/a.ts' } }]),
+      finalResponse('done'),
+    ]);
+
+    const result = await harness.run('Read src/a.ts', chatFn);
+    const raw = await fs.readFile(path.join(sessionDir, 'default.checkpoint.json'), 'utf-8');
+    const checkpoint = JSON.parse(raw) as TaskCheckpoint;
+
+    expect(result.loopState.stopReason).toBe('model_done');
+    expect(checkpoint.status).toBe('completed');
+    expect(checkpoint.userGoal).toBe('Read src/a.ts');
+    expect(checkpoint.taskState.filesRead).toContain('src/a.ts');
+  });
+
+  it('恢复时注入 active checkpoint', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-checkpoint-'));
+    await fs.writeFile(
+      path.join(sessionDir, 'default.checkpoint.json'),
+      JSON.stringify({
+        version: 1,
+        taskId: 'task-1',
+        status: 'paused',
+        userGoal: 'Fix TypeScript errors',
+        phase: 'verification',
+        taskState: {
+          goal: 'Fix TypeScript errors',
+          intent: 'debug',
+          phase: 'verification',
+          filesRead: [],
+          filesChanged: ['src/a.ts'],
+          commandsRun: ['npx tsc --noEmit'],
+          verificationRequired: true,
+          verificationStatus: 'failed',
+        },
+        repoContext: {
+          filesRead: [],
+          filesChanged: ['src/a.ts'],
+          commandsRun: ['npx tsc --noEmit'],
+          testCommands: ['npx tsc --noEmit'],
+          recentDiagnostics: ['tsc failed'],
+        },
+        failedToolCalls: [],
+        messageCount: 12,
+        loop: {
+          currentRound: 3,
+          totalToolCalls: 3,
+          totalInputTokens: 100,
+          totalOutputTokens: 20,
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } satisfies TaskCheckpoint),
+      'utf-8',
+    );
+
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+    }), executor);
+
+    const chatFn: ChatFunction = vi.fn().mockImplementation(async (messages: UnifiedMessage[]) => {
+      expect(messages.some(m =>
+        m.role === 'user'
+        && typeof m.content === 'string'
+        && m.content.includes('<resume-checkpoint>')
+        && m.content.includes('Fix TypeScript errors')
+      )).toBe(true);
+      return finalResponse('resumed');
+    });
+
+    const result = await harness.run('继续', chatFn);
+    expect(result.content).toBe('resumed');
   });
 });

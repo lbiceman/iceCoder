@@ -186,6 +186,7 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   // 初始化编排器（传入工具系统，让 Agent 可以使用 Harness 工具循环）
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: paths.outputDir,
+    sessionDir: paths.sessionsDir,
     stageMaxRetries: 2,
     stageRetryDelay: 3000,
     toolExecutor: executor,
