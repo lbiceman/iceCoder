@@ -26,7 +26,14 @@ import { createFileMemoryManager } from '../memory/file-memory/file-memory-manag
 import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
-import { PromptAssembler } from '../prompts/prompt-assembler.js';
+import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
+import type { AssembledPrompt } from '../prompts/types.js';
+import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
+import {
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudgetFromEnv,
+} from '../harness/token-budget-config.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
@@ -88,7 +95,7 @@ async function ensureMemoryInitialized(): Promise<void> {
   try {
     // 初始化文件记忆管理器
     globalFileMemoryManager = createFileMemoryManager({
-      memory: { memoryDir: 'data/memory-files' },
+      memory: { memoryDir: MEMORY_DIR },
       enableAutoExtraction: true,
       enableAsyncPrefetch: true,
     });
@@ -107,67 +114,8 @@ async function ensureMemoryInitialized(): Promise<void> {
   memoryInitialized = true;
 }
 
-async function loadSystemPrompt(): Promise<string> {
-  const isEvalMode = process.env.ICE_EVAL_MODE === '1';
-  const isToolsDisabled = process.env.ICE_DISABLE_TOOLS === '1';
-
-  const assembler = new PromptAssembler();
-
-  // Eval mode: disable tool-related sections, append eval instructions
-  if (isEvalMode || isToolsDisabled) {
-    assembler.removeSection('tool_usage');
-    assembler.removeSection('shell_guide');
-  }
-
-  // 加载项目级用户指令（.iceCoder/memory.md）
-  // 如果目录或文件不存在，自动创建
-  const iceCoderDir = path.resolve('.iceCoder');
-  const memoryMdPath = path.join(iceCoderDir, 'memory.md');
-  let projectMemory = '';
-  try {
-    projectMemory = await fsPromises.readFile(memoryMdPath, 'utf-8');
-    projectMemory = projectMemory.trim();
-    if (projectMemory) {
-      console.log(`[chat-ws] 已加载项目指令 (.iceCoder/memory.md, ${projectMemory.length} 字符)`);
-    }
-  } catch {
-    // 文件不存在，自动创建目录和模板文件
-    try {
-      await fsPromises.mkdir(iceCoderDir, { recursive: true });
-      const template = '# 项目记忆\n';
-      await fsPromises.writeFile(memoryMdPath, template, 'utf-8');
-      console.log('[chat-ws] 已创建 .iceCoder/memory.md 模板文件');
-    } catch { /* 创建失败，静默跳过 */ }
-  }
-
-  const evalAppend = isEvalMode ? `\n\n## 评测模式（EVALUATION MODE）
-
-你正在接受记忆系统的标准化评测。请严格遵守以下规则：
-
-1. **直接回答问题**。不要调用任何工具、不要输出特殊字符、不要尝试读取文件。你没有工具可用。
-2. **只使用系统注入的记忆**。你的回答必须完全基于 <system-reminder> 中提供的记忆内容。
-3. **基于记忆推理**。如果记忆中没有直接答案但可以推理，给出推理结果并说明依据。只在完全没有相关信息时才说"不知道"。
-4. **回答要简洁精准**。直接给出答案，不需要长篇解释。
-5. **必须使用与问题完全相同的语言回答。** 英文问题必须英文答，中文问题必须中文答。这是硬性规则，违反此规则的回答将被判为错误。
-6. **部分正确优于完全放弃**。如果你知道部分答案，给出你确定的部分，对不确定的部分明确标注。` : undefined;
-
-  // 拼接追加内容：项目指令 + 评测指令
-  const appendParts = [projectMemory, evalAppend].filter(Boolean);
-  const appendSystemPrompt = appendParts.length > 0
-    ? appendParts.join('\n\n')
-    : undefined;
-
-  const result = assembler.assemble({
-    language: '中文',
-    environment: {
-      workingDirectory: process.cwd(),
-      platform: process.platform === 'win32' ? 'win32' : process.platform,
-      currentDate: new Date().toISOString().slice(0, 10),
-    },
-    appendSystemPrompt,
-  });
-
-  return result.systemPrompt;
+async function loadAssembledPrompt(): Promise<AssembledPrompt> {
+  return loadAssembledChatPrompt({ logPrefix: '[chat-ws]' });
 }
 
 export interface ChatWSOptions {
@@ -340,7 +288,8 @@ async function handleChatMessage(
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
   const toolDefs = toolRegistry.getDefinitions();
-  const systemPrompt = await loadSystemPrompt();
+  const assembled = await loadAssembledPrompt();
+  const harnessDynamic = harnessOverlayToContextFields(assembled);
 
   // 解析消息中的文件引用 [file:xxx]，替换为实际文件路径
   const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
@@ -400,24 +349,26 @@ async function handleChatMessage(
 
   const harnessConfig: HarnessConfig = {
     context: {
-      systemPrompt,
-      tools: process.env.ICE_DISABLE_TOOLS === '1' ? [] : toolDefs,
+      systemPrompt: assembled.systemPrompt,
+      tools: shouldDisableRuntimeTools() ? [] : toolDefs,
       memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+      ...harnessDynamic,
     },
     loop: {
-      maxRounds: 800,
-      timeout: 60 * 60 * 1000,
-      tokenBudget: 900000,
+      maxRounds: getHarnessMaxRoundsFromEnv(),
+      timeout: getHarnessTimeoutMsFromEnv(),
+      tokenBudget: getHarnessTokenBudgetFromEnv(),
       signal: abortController.signal,
     },
     permissions: [
-      { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要用户确认' },
+      { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
     compactionThreshold: 40,
     compactionKeepRecent: 10,
     compactionEnableLLMSummary: true,
     memoryDir: MEMORY_DIR,
     fileMemoryManager: globalFileMemoryManager ?? undefined,
+    sessionDir: SESSIONS_DIR,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, { type: 'confirm', toolName, args });

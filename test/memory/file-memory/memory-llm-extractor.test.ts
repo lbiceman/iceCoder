@@ -10,7 +10,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createLLMMemoryExtractor, LLMMemoryExtractor } from '../../src/memory/file-memory/memory-llm-extractor.js';
+import { createLLMMemoryExtractor, LLMMemoryExtractor } from '../../../src/memory/file-memory/memory-llm-extractor.js';
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../../src/llm/types.js';
 
 let tempDir: string;

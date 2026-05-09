@@ -30,7 +30,7 @@ describe('Web Server', () => {
     });
 
     it('should create an Express app with custom static directory', async () => {
-      const staticDir = path.join(__dirname, '../public');
+      const staticDir = path.join(__dirname, '../../src/public');
       const app = await createServer({ staticDir });
       expect(app).toBeDefined();
     });
@@ -42,7 +42,7 @@ describe('Web Server', () => {
       });
 
       const app = await createServer({
-        staticDir: path.join(__dirname, '../public'),
+        staticDir: path.join(__dirname, '../../src/public'),
         routes: [{ path: '/api', router }],
       });
 
@@ -57,7 +57,7 @@ describe('Web Server', () => {
 
     it('should serve static files from the configured directory', async () => {
       const app = await createServer({
-        staticDir: path.join(__dirname, '../public'),
+        staticDir: path.join(__dirname, '../../src/public'),
       });
 
       server = await startServer(app, 0);
@@ -72,7 +72,7 @@ describe('Web Server', () => {
 
     it('should return index.html for unmatched client-side routes (SPA fallback)', async () => {
       const app = await createServer({
-        staticDir: path.join(__dirname, '../public'),
+        staticDir: path.join(__dirname, '../../src/public'),
       });
 
       server = await startServer(app, 0);
@@ -90,7 +90,7 @@ describe('Web Server', () => {
   describe('startServer', () => {
     it('should start the server and log the address', async () => {
       const app = await createServer({
-        staticDir: path.join(__dirname, '../public'),
+        staticDir: path.join(__dirname, '../../src/public'),
       });
 
       server = await startServer(app, 0);
@@ -100,7 +100,7 @@ describe('Web Server', () => {
 
     it('should reject with error when port is already in use', async () => {
       const app1 = await createServer({
-        staticDir: path.join(__dirname, '../public'),
+        staticDir: path.join(__dirname, '../../src/public'),
       });
 
       // Occupy a port using a raw net server with exclusive flag

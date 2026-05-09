@@ -25,21 +25,48 @@ export function createFileTools(workDir: string): RegisteredTool[] {
     {
       definition: {
         name: 'read_file',
-        // 读取文件内容。修改前必须先读。大文件用 read_file_lines。目录外用 open_file。
-        description: 'Read file content and return full text. Must read before modifying. Use read_file_lines for large files (>500 lines). Use open_file for files outside working directory.',
+        description:
+          'Read file content. Returns full text by default. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used. Use immediately when you need to read a file\'s content.',
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            encoding: { type: 'string', description: '文件编码，默认 utf-8', default: 'utf-8' },
+            path: { type: 'string', description: 'File path relative to work directory' },
+            encoding: { type: 'string', description: 'File encoding, default utf-8', default: 'utf-8' },
+            offset: { type: 'number', description: 'Start line number (1-based). When provided with limit, reads only that line range instead of the whole file.' },
+            limit: { type: 'number', description: 'Maximum lines to read. Use together with offset to read a specific window into a large file.' },
           },
           required: ['path'],
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        // filePath is an accepted alias for path (LLMs sometimes use it by habit)
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) {
+          return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        }
+        const resolvedPath = safePath(rawPath, workDir);
         const encoding = (args.encoding || 'utf-8') as BufferEncoding;
-        const content = await fs.readFile(filePath, encoding);
+        const content = await fs.readFile(resolvedPath, encoding);
+
+        if (args.offset !== undefined || args.limit !== undefined) {
+          const allLines = content.split('\n');
+          const totalLines = allLines.length;
+          let start = (args.offset as number) || 1;
+          if (start < 0) start = totalLines + start + 1;
+          start = Math.max(1, Math.min(start, totalLines));
+          const end = args.limit !== undefined
+            ? Math.max(start, Math.min(start + (args.limit as number) - 1, totalLines))
+            : totalLines;
+          const selectedLines = allLines.slice(start - 1, end);
+          const numbered = selectedLines
+            .map((line, idx) => `${start + idx}: ${line}`)
+            .join('\n');
+          return {
+            success: true,
+            output: `${rawPath} (lines ${start}-${end}, total ${totalLines})\n${'─'.repeat(40)}\n${numbered}`,
+          };
+        }
+
         return { success: true, output: content };
       },
     },
@@ -49,23 +76,25 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'write_file',
         // 创建新文件或覆盖已有文件。修改部分内容用 edit_file。追加用 append_file。
-        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file.',
+        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file. Use directly when asked to create a new file.',
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            content: { type: 'string', description: '要写入的内容' },
-            encoding: { type: 'string', description: '文件编码，默认 utf-8', default: 'utf-8' },
+            path: { type: 'string', description: 'File path (relative to work directory)' },
+            content: { type: 'string', description: 'Content to write' },
+            encoding: { type: 'string', description: 'File encoding, default utf-8', default: 'utf-8' },
           },
           required: ['path', 'content'],
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const filePath = safePath(rawPath, workDir);
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, args.content, (args.encoding || 'utf-8') as BufferEncoding);
-        return { success: true, output: `文件已写入: ${args.path}` };
+        return { success: true, output: `File written: ${rawPath}` };
       },
     },
 
@@ -78,8 +107,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            content: { type: 'string', description: '要追加的内容' },
+            path: { type: 'string', description: 'File path (relative to work directory)' },
+            content: { type: 'string', description: 'Content to append' },
           },
           required: ['path', 'content'],
         },
@@ -88,7 +117,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         const filePath = safePath(args.path, workDir);
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.appendFile(filePath, args.content, 'utf-8');
-        return { success: true, output: `内容已追加到: ${args.path}` };
+        return { success: true, output: `Content appended to: ${args.path}` };
       },
     },
 
@@ -97,21 +126,23 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'edit_file',
         // 查找替换。search 必须精确匹配现有内容。多处修改用 batch_edit_file。大段修改用 patch_file。
-        description: 'Find and replace in existing file. search must exactly match existing content. For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file.',
+        description: 'Find and replace in existing file. search must exactly match existing content. For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file. Use this tool immediately when asked to modify code.',
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
-            search: { type: 'string', description: '要查找的内容（字符串或正则表达式）' },
-            replace: { type: 'string', description: '替换后的内容' },
-            isRegex: { type: 'boolean', description: '是否使用正则表达式匹配', default: false },
-            replaceAll: { type: 'boolean', description: '是否替换所有匹配项', default: true },
+            path: { type: 'string', description: 'File path (relative to work directory)' },
+            search: { type: 'string', description: 'Content to search for (string or regex)' },
+            replace: { type: 'string', description: 'Replacement content' },
+            isRegex: { type: 'boolean', description: 'Whether to use regex matching', default: false },
+            replaceAll: { type: 'boolean', description: 'Whether to replace all matches', default: true },
           },
           required: ['path', 'search', 'replace'],
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const filePath = safePath(rawPath, workDir);
         let content = await fs.readFile(filePath, 'utf-8');
 
         let pattern: string | RegExp;
@@ -133,55 +164,89 @@ export function createFileTools(workDir: string): RegisteredTool[] {
 
         return {
           success: true,
-          output: changed ? `文件已修改: ${args.path}` : `未找到匹配内容，文件未变更: ${args.path}`,
+          output: changed ? `File modified: ${args.path}` : `No match found, file unchanged: ${args.path}`,
         };
       },
     },
 
-    // ---- 删除文件 ----
+    // ---- 文件系统操作（合并 delete_file, list_directory, create_directory, move_file, copy_file） ----
     {
       definition: {
-        name: 'delete_file',
-        // 删除文件。需要用户确认。
-        description: 'Delete a file. Requires user confirmation. Verify file path before deleting.',
+        name: 'fs_operation',
+        description:
+          'File system operations. operation: "list" — list directory contents (supports recursive, maxDepth); "create_dir" — create directory (auto-creates parents); "delete" — delete a file; "move" — move/rename file or directory (requires target); "copy" — copy file or directory recursively (requires target). Use overwrite: true to overwrite existing targets for move/copy.',
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件路径（相对于工作目录）' },
+            operation: {
+              type: 'string',
+              enum: ['list', 'create_dir', 'delete', 'move', 'copy'],
+              description: 'Operation: list (list dir), create_dir (create dir), delete (delete file), move (move/rename), copy (copy file/dir)',
+            },
+            path: { type: 'string', description: 'Target path relative to work directory' },
+            target: { type: 'string', description: 'Destination path for move or copy operations' },
+            recursive: { type: 'boolean', description: 'Recursive listing for list operation', default: false },
+            maxDepth: { type: 'number', description: 'Max recursion depth for list, default 3', default: 3 },
+            overwrite: { type: 'boolean', description: 'Overwrite existing target for move/copy, default false', default: false },
           },
-          required: ['path'],
+          required: ['operation', 'path'],
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
-        await fs.unlink(filePath);
-        return { success: true, output: `文件已删除: ${args.path}` };
-      },
-    },
+        const op = args.operation as string;
+        const rawPath = args.path || args.filePath;
+        if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const filePath = safePath(rawPath, workDir);
 
-    // ---- 列出目录 ----
-    {
-      definition: {
-        name: 'list_directory',
-        // 列出目录内容。递归用 recursive: true。目录外用 browse_directory。
-        description: 'List files and subdirectories. Use recursive: true for recursive listing. Use browse_directory for directories outside working directory.',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string', description: '目录路径（相对于工作目录）', default: '.' },
-            recursive: { type: 'boolean', description: '是否递归列出子目录', default: false },
-            maxDepth: { type: 'number', description: '递归最大深度', default: 3 },
-          },
-          required: [],
-        },
-      },
-      handler: async (args) => {
-        const dirPath = safePath(args.path || '.', workDir);
-        const recursive = args.recursive || false;
-        const maxDepth = args.maxDepth || 3;
-
-        const entries = await listDir(dirPath, workDir, recursive, maxDepth, 0);
-        return { success: true, output: entries.join('\n') };
+        switch (op) {
+          case 'list': {
+            const recursive = args.recursive || false;
+            const maxDepth = args.maxDepth || 3;
+            const entries = await listDir(filePath, workDir, recursive, maxDepth, 0);
+            return { success: true, output: entries.join('\n') };
+          }
+          case 'create_dir': {
+            await fs.mkdir(filePath, { recursive: true });
+            return { success: true, output: `Directory created: ${args.path}` };
+          }
+          case 'delete': {
+            await fs.unlink(filePath);
+            return { success: true, output: `File deleted: ${args.path}` };
+          }
+          case 'move': {
+            const target = args.target as string;
+            if (!target) return { success: false, output: '', error: 'target is required for move operation' };
+            const destPath = safePath(target, workDir);
+            const overwrite = args.overwrite || false;
+            try { await fs.access(filePath); } catch { return { success: false, output: '', error: `Source not found: ${args.path}` }; }
+            if (!overwrite) {
+              try { await fs.access(destPath); return { success: false, output: '', error: `Target exists: ${target}. Set overwrite: true to replace.` }; } catch { /* ok */ }
+            }
+            await fs.mkdir(path.dirname(destPath), { recursive: true });
+            await fs.rename(filePath, destPath);
+            return { success: true, output: `Moved: ${args.path} → ${target}` };
+          }
+          case 'copy': {
+            const target = args.target as string;
+            if (!target) return { success: false, output: '', error: 'target is required for copy operation' };
+            const destPath = safePath(target, workDir);
+            const overwrite = args.overwrite || false;
+            let srcStat;
+            try { srcStat = await fs.stat(filePath); } catch { return { success: false, output: '', error: `Source not found: ${args.path}` }; }
+            if (!overwrite) {
+              try { await fs.access(destPath); return { success: false, output: '', error: `Target exists: ${target}. Set overwrite: true to replace.` }; } catch { /* ok */ }
+            }
+            await fs.mkdir(path.dirname(destPath), { recursive: true });
+            if (srcStat.isDirectory()) {
+              await copyDir(filePath, destPath);
+              return { success: true, output: `Copied directory: ${args.path} → ${target}` };
+            }
+            await fs.copyFile(filePath, destPath);
+            return { success: true, output: `Copied file: ${args.path} → ${target}` };
+          }
+          default:
+            return { success: false, output: '', error: `Unknown operation: ${op}. Valid: list, create_dir, delete, move, copy` };
+        }
       },
     },
 
@@ -194,7 +259,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: '文件或目录路径（相对于工作目录）' },
+            path: { type: 'string', description: 'File or directory path (relative to work directory)' },
           },
           required: ['path'],
         },
@@ -214,6 +279,23 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       },
     },
   ];
+}
+
+/**
+ * 递归复制目录。
+ */
+async function copyDir(src: string, dest: string): Promise<void> {
+  await fs.mkdir(dest, { recursive: true });
+  const entries = await fs.readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await copyDir(srcPath, destPath);
+    } else {
+      await fs.copyFile(srcPath, destPath);
+    }
+  }
 }
 
 /**

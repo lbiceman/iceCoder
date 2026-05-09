@@ -7,8 +7,8 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { MemoryHeader, FileMemoryType, FileMemoryConfig } from './types.js';
-import { FILE_MEMORY_TYPES } from './types.js';
+import type { MemoryHeader, FileMemoryType, FileMemoryConfig, MemoryLevel, EvidenceStrength } from './types.js';
+import { EVIDENCE_STRENGTHS, FILE_MEMORY_TYPES, MEMORY_LEVELS } from './types.js';
 import { extractBodyFromMarkdown } from './memory-parser.js';
 import { DEFAULT_CONFIDENCE_FALLBACK } from './memory-config.js';
 
@@ -25,6 +25,27 @@ const CONTENT_PREVIEW_MAX_CHARS = 300;
 export function parseMemoryType(raw: unknown): FileMemoryType | undefined {
   if (typeof raw !== 'string') return undefined;
   return FILE_MEMORY_TYPES.find(t => t === raw);
+}
+
+export function parseMemoryLevel(raw: unknown, type?: FileMemoryType): MemoryLevel {
+  if (typeof raw === 'string') {
+    const parsed = MEMORY_LEVELS.find(t => t === raw);
+    if (parsed) return parsed;
+  }
+  if (type === 'feedback') return 'preference';
+  if (type === 'project' || type === 'reference') return 'project_fact';
+  return 'observation';
+}
+
+export function parseEvidenceStrength(raw: unknown, confidence?: number): EvidenceStrength {
+  if (typeof raw === 'string') {
+    const parsed = EVIDENCE_STRENGTHS.find(t => t === raw);
+    if (parsed) return parsed;
+  }
+  if ((confidence ?? 0) >= 0.95) return 'explicit';
+  if ((confidence ?? 0) >= 0.75) return 'repeated';
+  if ((confidence ?? 0) >= 0.45) return 'inferred';
+  return 'weak';
 }
 
 /**
@@ -84,17 +105,22 @@ export async function scanMemoryFiles(
         const recallCount = frontmatter.recallCount ? parseInt(frontmatter.recallCount, 10) : 0;
         const lastRecalledAt = frontmatter.lastRecalledAt;
         const createdAt = frontmatter.createdAt;
+        const type = parseMemoryType(frontmatter.type);
         const tagsRaw = frontmatter.tags;
         const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
         const eventDate = frontmatter.eventDate;
         const eventDateMs = eventDate ? new Date(eventDate).getTime() || 0 : 0;
+        const level = parseMemoryLevel(frontmatter.level, type);
+        const evidenceStrength = parseEvidenceStrength(frontmatter.evidenceStrength, confidence);
 
         return {
           filename: relativePath as string,
           filePath,
           mtimeMs: stat.mtimeMs,
           description: frontmatter.description || null,
-          type: parseMemoryType(frontmatter.type),
+          type,
+          level,
+          evidenceStrength,
           confidence: Number.isFinite(confidence) ? confidence : DEFAULT_CONFIDENCE_FALLBACK,
           recallCount: Number.isFinite(recallCount) ? recallCount : 0,
           lastRecalledMs: lastRecalledAt ? new Date(lastRecalledAt).getTime() || 0 : 0,
@@ -140,6 +166,7 @@ export function formatMemoryManifest(memories: MemoryHeader[]): string {
   return memories
     .map(m => {
       const tag = m.type ? `[${m.type}] ` : '';
+      const v2 = m.level && m.evidenceStrength ? ` {level=${m.level}, evidence=${m.evidenceStrength}}` : '';
       const ts = new Date(m.mtimeMs).toISOString();
       const desc = m.description || '';
       // 附上 contentPreview（截取前 150 字符，避免 manifest 过大）
@@ -147,8 +174,8 @@ export function formatMemoryManifest(memories: MemoryHeader[]): string {
         ? ` | ${m.contentPreview.substring(0, 150)}`
         : '';
       return desc
-        ? `- ${tag}${m.filename} (${ts}): ${desc}${preview}`
-        : `- ${tag}${m.filename} (${ts})${preview}`;
+        ? `- ${tag}${m.filename} (${ts}): ${desc}${v2}${preview}`
+        : `- ${tag}${m.filename} (${ts})${v2}${preview}`;
     })
     .join('\n');
 }

@@ -16,29 +16,6 @@ import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { ContextAssemblyConfig } from './types.js';
 
 /**
- * 消息优先级规则 — 硬编码追加到系统提示词末尾。
- *
- * 目的：当用户发出记忆类指令或任务结束信号时，
- * Agent 只确认该指令，不附带之前任何任务的信息。
- */
-const MESSAGE_PRIORITY_RULES = `
-
-## 消息优先级规则
-
-当用户消息以以下模式开头时，只处理该指令并简洁确认，不得在回复中附带之前任何任务的信息或总结：
-- "记住：..."、"帮我记住..."、"请记住..."、"记住这个..."
-- 回复示例："已记住：你是前端开发工程师，擅长 JS/TS/Vue3，项目是 iceCoder。"
-
-当用户消息包含以下关键词时，视为此前所有任务已关闭，不得继续执行：
-- "任务完成"、"就这样"、"可以了"、"没问题"、"OK"
-
-当用户消息包含以下执行指令时，立即调用 write/edit 工具执行修改，不要再次分析或重新读取已有上下文的文件：
-- "开始修改"、"开始执行"、"动手吧"、"按方案改"、"直接改"、"改吧"
-- "go ahead"、"proceed"、"do it"、"execute"、"implement it"
-
-当用户消息是一个全新的、与当前对话中讨论的未完成任务明显不同的指令时（例如从修改代码切换为查找文档、修改配置等），你必须先认为旧任务已被搁置或放弃，不再执行任何旧任务中的待完成操作。只解释并执行新指令，不要从旧任务中附加任何无关操作或总结。`;
-
-/**
  * ContextAssembler 将各种上下文源组装成发送给 LLM 的消息序列。
  */
 export class ContextAssembler {
@@ -65,14 +42,11 @@ export class ContextAssembler {
   }
 
   /**
-   * 静态部分：身份、规则、工具指南 — 可跨会话缓存。
-   *
-   * 末尾硬编码追加消息优先级规则，确保记忆类指令和任务结束信号
-   * 被模型正确识别，不与之前的任务上下文混淆。
+   * 静态内容即 `config.systemPrompt`（由 PromptAssembler 提供，已含 Execution 内消息优先级等规则）。
    */
   private buildStaticPrompt(): string {
     if (this.staticPromptCache) return this.staticPromptCache;
-    this.staticPromptCache = this.config.systemPrompt + MESSAGE_PRIORITY_RULES;
+    this.staticPromptCache = this.config.systemPrompt;
     return this.staticPromptCache;
   }
 
@@ -92,6 +66,11 @@ export class ContextAssembler {
         .map(([k, v]) => `- ${k}: ${v}`)
         .join('\n');
       parts.push(`# 环境信息\n${envLines}`);
+    }
+
+    if (this.config.language?.trim()) {
+      const lang = this.config.language.trim();
+      parts.push(`# Language\nAlways respond in ${lang}. Technical terms and code identifiers stay as-is.`);
     }
 
     // 持久化记忆提示词
@@ -130,10 +109,16 @@ export class ContextAssembler {
     // 只有在有实质性动态内容时才生成上下文消息
     if (parts.length === 0) return null;
 
-    // 追加日期和工具提醒（仅在有其他动态内容时才附加）
-    const now = new Date();
-    parts.push(`# currentDate\n今天是 ${now.toISOString().split('T')[0]}。`);
-    parts.push(`# 工具结果管理\n旧的工具调用结果可能会被自动清理以节省上下文空间。请在获取重要信息后及时记录关键内容，因为工具结果可能在后续对话中不再可用。`);
+    const env = this.config.environment;
+    const hasDateInEnv = !!(env && env.currentDate);
+    if (!hasDateInEnv) {
+      const now = new Date();
+      parts.push(`# currentDate\nToday is ${now.toISOString().split('T')[0]}.`);
+    }
+
+    parts.push(
+      `# tool-result-retention\nEarlier tool outputs may be compressed or dropped from context in later turns. If you still need a conclusion or data in a subsequent turn, save it in your reply or a reusable memo; do not assume it is still readable just because it was printed before.`,
+    );
 
     return `<system-context>\n${parts.join('\n\n')}\n</system-context>`;
   }

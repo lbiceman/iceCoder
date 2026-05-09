@@ -64,10 +64,8 @@ Please begin implementation. First read the project structure to understand exis
 
     const result = await this.runWithHarness(prompt, context, {
       // 代码编写智能体的系统提示词
-      // 中文版本：你是 CodeWriting 智能体，一名专业的软件工程师。你可以使用文件操作工具（read_file、write_file、edit_file、list_directory 等）和 Shell 工具来完成编码任务。根据任务需求自主决定使用哪些工具，并编写高质量的代码。
-      systemPrompt: 'You are the CodeWriting agent, a professional software engineer. You can use file operation tools (read_file, write_file, edit_file, list_directory, etc.) and Shell tools to complete coding tasks. Autonomously decide which tools to use based on task requirements and write high-quality code.',
-      maxRounds: 100,
-      timeout: 15 * 60 * 1000,
+      // 中文版本：你是 CodeWriting 智能体，一名专业的软件工程师。你可以使用文件操作工具（read_file、write_file、edit_file、fs_operation 等）和 Shell 工具来完成编码任务。根据任务需求自主决定使用哪些工具，并编写高质量的代码。
+      systemPrompt: 'You are the CodeWriting agent, a professional software engineer. You can use file operation tools (read_file, write_file, edit_file, fs_operation, etc.) and Shell tools to complete coding tasks. Autonomously decide which tools to use based on task requirements and write high-quality code.',
     });
 
     // Extract written file paths from Harness result

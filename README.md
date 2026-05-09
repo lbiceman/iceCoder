@@ -1,405 +1,339 @@
-# iceCoder
+﻿# iceCoder
 
-**A complete, production-grade memory system for AI coding agents** — with a full coding assistant built around it.
+iceCoder is an AI coding agent runtime for local repositories. It combines a tool-using Harness loop, file-based long-term memory, session memory for compaction recovery, prompt assembly, and CLI/Web/Remote interfaces.
 
-**English** | [中文](./README.zh-CN.md)
+The project goal is not only to chat with an LLM. The goal is to run a software-engineering agent that can understand a task, inspect a repository, edit files, run verification, recover from failures, preserve useful memory, and continue long sessions without losing state.
 
-Most AI coding assistants forget everything when the session ends. iceCoder doesn't. It ships with a 15-module LLM-driven memory system that automatically extracts, recalls, consolidates, and secures knowledge across sessions — zero external databases, pure file-based persistence.
-
-> **Why this matters:** Aider has no persistent memory. Cline relies on community-built "Memory Bank" hacks. Even Claude Code's memory system (per the 2025 source leak) uses a simpler architecture. iceCoder's memory system is the most complete open-source implementation available.
+[中文文档](./README.zh-CN.md) | [Next Work](./nextWork.md)
 
 ---
 
-## What the Memory System Does
+## Current Status
 
+The core Runtime P0/P1 work has been implemented:
+
+- Tool calls execute when `toolCalls` is present, regardless of provider `finishReason` quirks.
+- Executable tasks that receive a text-only response get a no-tool recovery prompt.
+- `permissions` supports `allow / confirm / deny`, including wildcard patterns such as `read_*`.
+- `confirm` without a configured confirmation handler is denied by default.
+- Task State v1 tracks task intent, phase, files read/changed, commands, and verification state.
+- Verification Gate v1 prevents editable tasks from claiming completion before verification when verification tools are available.
+- RepoContext v1 tracks files read, files changed, commands, test commands, and recent diagnostics.
+- Runtime State and Repo Context are injected before each LLM call once they contain useful state.
+- Repeated failed tool calls are detected and the model is instructed to change strategy.
+- Session memory supports forced update before compaction.
+- Memory prompts have been tightened to prefer precise, evidence-backed long-term memories.
+- A minimal `npm run eval:agent` skeleton defines future Agent Runtime metrics.
+
+Verification:
+
+```bash
+npx tsc --noEmit
+npm test
+npm run eval:agent
 ```
-Session 1: "I prefer Vitest over Jest"
-  → Auto-extracted to memory file with confidence score
-  → Secret-scanned before writing to disk
 
-Session 2: "Write tests for this module"
-  → LLM semantic recall finds the Vitest preference
-  → Relevance gate: passes ✓
-  → Tests generated with Vitest, not Jest
-  → 💾 Passive confirmation: "Recalled: vitest preference"
+Current verified baseline:
 
-Session 3: "Help me deploy to production"
-  → LLM recall returns Vitest memory
-  → Relevance gate: Layer 1 keyword mismatch → Layer 2 LLM rescue → filtered out
-  → No irrelevant Vitest memory injected
-
-Background: autoDream consolidation merges duplicates,
-  prunes stale memories, detects user habit patterns
-```
+- 33 test files passed
+- 560 tests passed
+- No new npm dependencies were added for the runtime improvements
 
 ---
 
-## Full Memory Architecture
+## Runtime Architecture
 
+```text
+User / CLI / Web / Remote
+  -> loadAssembledChatPrompt()
+  -> HarnessConfig
+      -> ContextAssembler
+      -> LLMAdapter
+      -> ToolExecutor
+      -> HarnessMemoryIntegration
+      -> ContextCompactor
+  -> Harness.run()
 ```
-User input
-  → Async prefetch (fire-and-forget)
-  → Harness loop
-      ├─ onLoopStart: load memory context
-      ├─ injectMemoryContext: recall → rerank → relevance gate → CoN+JSON injection
-      ├─ LLM + tool execution (loop)
-      └─ onLoopEnd: background extraction + session notes + autoDream
-  → Response + passive confirmation notices
+
+### Harness Loop
+
+The Harness is the runtime state machine around the LLM:
+
+```text
+initialize messages
+initialize TaskState
+initialize RepoContext
+while running:
+  maybe compact context
+  inject runtime state and repo context
+  normalize messages
+  call LLM with tools
+  if toolCalls:
+    apply permissions
+    execute tools
+    update TaskState / RepoContext
+    inject relevant memories
+    continue
+  else:
+    recover no-tool executable tasks
+    enforce verification gate
+    run stop hooks
+    finalize
 ```
+
+Key runtime protections:
+
+- No-tool recovery for executable tasks
+- Verification gate after file-changing tools
+- Permission rules before tool execution
+- Confirmation-required tools are denied if no confirmation callback exists
+- Repeated failed tool signature detection
+- Consecutive failure circuit breaker
+- Context compaction and post-compaction Runtime Recovery Context
+
+---
+
+## Prompt System
+
+Prompt assembly is split into stable and dynamic layers.
+
+### Stable System Prompt
+
+Defined by `src/prompts/sections.ts` and assembled by `PromptAssembler`:
+
+- identity
+- work style
+- execution rules
+- modification rules
+- tool usage policy
+- shell rules
+- context-management reminders
+
+### Dynamic Context
+
+Injected by `ContextAssembler`:
+
+- environment
+- current date
+- language override if explicitly configured
+- persistent memory instructions
+- project instructions
+- runtime state
+- repo context
+- memory context
+
+This separation keeps the stable prompt cache-friendly while allowing changing runtime state to flow into the model.
+
+### Tool Disable Semantics
+
+`ICE_EVAL_MODE=1` or `ICE_DISABLE_TOOLS=1` disables runtime tools and removes tool-oriented prompt sections. This avoids the earlier split where some entrypoints removed tool instructions but still passed tools to the model.
+
+---
+
+## Tool Runtime
+
+Tools are registered in `src/tools/` and exposed to the model through tool schemas.
+
+Important components:
+
+- `ToolRegistry`: stores available tools and definitions
+- `ToolExecutor`: validates and executes tool calls with retry/timeout
+- `StreamingToolExecutor`: batches and streams tool execution output
+- `tool-metadata`: read-only, destructive, concurrency, and result-size metadata
+- Harness permissions: runtime policy for allow/confirm/deny
+
+Current tool categories:
+
+- file read/write/edit/patch
+- shell commands
+- git
+- code search
+- document parsing
+- web search/fetch
+- environment and diff helpers
+
+---
+
+## Memory System
+
+iceCoder uses file-based persistent memory. It does not require an external database.
+
+### Memory Types
+
+| Type | Purpose |
+|---|---|
+| `user` | durable user profile, role, goals, explicit preferences |
+| `feedback` | corrections and behavior feedback |
+| `project` | project facts not derivable from code or git |
+| `reference` | links or references to external systems |
 
 ### Memory Lifecycle
 
+```text
+conversation
+  -> extraction trigger
+  -> LLM extraction
+  -> secret scan
+  -> dedup / contradiction check
+  -> write memory files
+  -> recall on future tasks
+  -> relevance gate
+  -> CoN + JSON injection
+  -> dream consolidation
+  -> decay / eviction
 ```
-Write path:
-  Conversation → Signal word detection → LLM extraction → Dedup check → Secret scan → Write file
-                                                              ↓
-                                                      Contradiction detection → Notify user
 
-Read path:
-  User message → Keyword extraction → LLM/keyword recall → Rerank → Relevance gate → Inject context
-                                                              ↓
-                                                      Layer 1: keyword overlap (zero cost)
-                                                      Layer 2: LLM rescue (auto-triggered)
+### Recall Flow
 
-Consolidation path:
-  Session accumulation → autoDream trigger → Orient → Gather → Consolidate → Prune
-                                                          ↓
-                                                  Merge duplicates / Resolve contradictions / Promote user preferences
+```text
+query
+  -> scan memory files
+  -> confidence filter
+  -> FactIndex build/cache
+  -> LLM recall if candidate count is high enough
+  -> keyword fallback otherwise
+  -> related memory expansion
+  -> relevance gate
+  -> execution-intent filter
+  -> budget filter
+  -> JSON memory prompt injection
 ```
+
+Recent changes tightened memory behavior:
+
+- Recall prompt now uses strict relevance rather than broad inclusion.
+- Coding/debugging tasks prefer project facts and technical constraints.
+- Personal preferences are injected only when strongly relevant.
+- Extraction prompt now prefers fewer high-confidence memories over noisy long-term memory.
+- Weak one-off signals should remain session state, not persistent memory.
 
 ---
 
-## 15 Modules, Full Lifecycle
+## Session Memory and Compaction
 
-| Module | What it does |
-|--------|-------------|
-| **memory-recall** | LLM semantic recall + TF-IDF weighted keyword fallback, two-level recall (coarse → LLM rerank), fact-level ranking, negation expansion, time-range weighting, entity matching, **relevance gate** (two-layer filtering with auto LLM rescue) |
-| **memory-llm-extractor** | Auto-extraction via signal words + 30 content-pattern regexes + turn throttling, mutex with agent writes, secret scanning, contradiction detection |
-| **memory-dream** | autoDream consolidation: merge/prune/dedup/expire, ConsolidationLock with PID + deadlock detection + rollback, user candidate promotion |
-| **memory-age** | Three-tier decay (fresh/stale/expired), high-confidence memories decay 2x slower |
-| **session-memory** | 10-section session notes, validated before write, injected after context compaction |
-| **memory-concurrency** | `sequential()` wrapper + inProgress mutex + trailing run pattern |
-| **memory-secret-scanner** | 25 high-confidence rules (from gitleaks), auto-redact before disk write |
-| **memory-security** | Path validation against 7 attack vectors (null byte, traversal, URL encoding, Unicode NFKC, symlink, absolute path, backslash) |
-| **memory-telemetry** | JSONL logging + EventEmitter for recall/extraction/dream metrics |
-| **memory-remote-config** | Runtime parameter tuning via hot-reloaded config file (5-min cache) |
-| **multi-level-memory** | Three-tier loading (project/user/directory), user-type memories shared across projects |
-| **harness-memory** | Integration layer: passive confirmation, preference regex, topic-shift detection, agent write mutex, relevance gate integration |
-| **json-parser** | 4-layer LLM JSON parsing fallback (direct → markdown block → regex extract → fix common errors) |
-| **memory-config** | Centralized defaults for all memory subsystems |
-| **async-prefetch** | Fire-and-forget memory prefetching with cache |
-
----
-
-## Key Design Decisions
-
-### Relevance Gate
-
-**Problem:** Recalled memories may be irrelevant to the current conversation (e.g., Vitest test config injected when solving a deployment issue), confusing the agent.
-
-**Solution:** Two-layer filtering with auto rescue.
-
-```
-Recalled memories
-  → Layer 1: Keyword overlap check (zero cost)
-      ├─ Pass rate ≥ 50% → return passed
-      └─ Pass rate < 50% → trigger Layer 2
-  → Layer 2: LLM rescue (auto-triggered)
-      └─ Recover relevant memories from filtered batch
-```
-
-**Configuration (`data/memory/memory-config.json`):**
-```json
-{
-  "relevanceGate": {
-    "enabled": true,
-    "contextWindow": 3,
-    "minKeywordOverlap": 1,
-    "rescueThreshold": 0.5
-  }
-}
-```
-
-### LLM Recall + Keyword Bigram Fallback
-
-When the LLM is available, it selects relevant memories from a manifest. When it's not (rate limit, timeout), the system falls back to two-stage keyword matching with Chinese bigram tokenization (zero-dependency, no dictionary needed).
-
-**Two-level recall flow:**
-1. Coarse recall: 6x candidates
-2. LLM rerank: select top-K from candidates
-3. Relevance gate: filter out irrelevant memories
-
-**TF-IDF weighting (v5):** Rare tokens get higher weight, description/filename tokens weighted ×2.
-
-### Topic-Shift Re-Recall
-
-Jaccard coefficient < 0.2 between consecutive user messages triggers fresh memory recall. Pure local computation, zero LLM cost.
-
-### Secret Scanning Before Write
-
-25 regex rules derived from gitleaks catch API keys, tokens, and private keys before they're persisted. Rule source code splits and concatenates key prefixes to avoid triggering scanners on the source itself.
-
-### Agent Write Mutex
-
-If the main agent writes to memory files directly (via write_file tool), background extraction skips that conversation turn. `hasMemoryWritesSince` scans assistant tool_use messages to detect this.
-
-### Passive Confirmation
-
-After extraction, the next response includes "💾 Remembered: ..." so users know what was stored. Builds trust without interrupting flow.
-
-### autoDream Consolidation
-
-Four-phase process (Orient → Gather → Consolidate → Prune) that merges duplicates, resolves contradictions, detects user habit patterns, and promotes confirmed user preferences from project-level to user-level storage. Protected by file lock with PID write + deadlock detection + failure rollback.
-
-### Contradiction Detection
-
-LLM marks `contradicts` field during extraction. New memories don't directly overwrite old ones — contradictions are recorded and users are notified for confirmation.
+Long sessions use session memory and context compaction to avoid losing current task state.
 
 ### Session Memory
 
-Independent of persistent memory, a session-level notebook system with 10 fixed sections that maintains continuity across context compactions.
+`session-memory.ts` maintains a structured Markdown session note with sections such as:
 
-**Trigger conditions:**
-- Token growth exceeds threshold (default 5000)
-- Tool call count exceeds threshold (default 3)
-- Or: previous assistant turn had no tool calls (natural conversation breakpoint)
+- Session Title
+- Current State
+- Task Specification
+- Files and Functions
+- Workflow
+- Errors & Corrections
+- Worklog
 
----
+Recent changes:
 
-## vs. Claude Code Memory (per 2025 source leak)
+- forced session memory update is supported before compaction
+- session memory update prompt now asks the LLM to return Markdown directly
+- code validates returned notes before writing
 
-| Capability | iceCoder | Claude Code |
-|-----------|:--------:|:-----------:|
-| LLM semantic recall | ✅ | ✅ |
-| LLM auto-extraction | ✅ | ✅ |
-| autoDream consolidation | ✅ | ✅ |
-| Fallback when LLM unavailable | ✅ TF-IDF + bigram | ❌ |
-| Memory decay + confidence | ✅ three-tier | ❌ |
-| Topic-shift re-recall | ✅ Jaccard local | ❌ |
-| Relevance gate | ✅ two-layer + auto rescue | ❌ |
-| Fact-level ranking | ✅ | ❌ |
-| Negation expansion | ✅ | ❌ |
-| Time-range weighting | ✅ | ❌ |
-| Content preview fallback | ✅ 300 chars | ❌ |
-| Telemetry | ✅ real JSONL | ⚠️ stub |
-| Runtime config | ✅ file hot-reload | ⚠️ GrowthBook |
-| Secret scanning | ✅ 25 rules | ✅ |
+### Context Compaction
 
-> This table compares memory subsystem design only. Claude Code has native prompt caching, 200k context, multi-agent parallelism, and Anthropic's infrastructure — a different league as a complete product.
+`ContextCompactor` uses layered compression:
 
----
+1. snip duplicate reminders/summaries
+2. microcompact old low-value history
+3. trim long tool results
+4. extract structural summary
+5. optionally refine summary with LLM
+6. re-inject recent file content and recovery prompt
 
-## Beyond Memory: Full Coding Assistant
+The context window is selected by priority:
 
-iceCoder is also a complete AI coding assistant with CLI, Web, and mobile interfaces.
-
-### Capabilities
-
-- **32+ built-in tools** — file ops, search, Git, shell, document parsing (PPTX/XMind/XLSX/HTML), web search
-- **MCP protocol** — dynamically connect external tool servers
-- **6-agent pipeline** — requirements → design → task split → coding → testing → verification
-- **Harness loop engine** — custom state machine (not LangChain), with max-output-tokens recovery, `<status>` tag continuation, exponential backoff retry, tool result budget trimming, stream/non-stream auto-fallback, **consecutive failure circuit breaker**
-- **Context compaction** — auto-trim + LLM summarization for long conversations
-- **Mobile** — scan QR code to connect phone as remote controller
-- **LLM adapter** — unified interface for OpenAI + Anthropic SDKs, hot-switchable
-
-### Circuit Breaker
-
-Automatically stops when consecutive tool failures reach threshold, preventing infinite loops.
-
-**Config:** `maxConsecutiveFailures` (default 3)
-
-**Behavior:** Any failure in a batch → counter increments → all succeed → counter resets → threshold reached → auto-stop with user prompt
+```text
+ICE_CONTEXT_WINDOW
+  -> default provider maxContextTokens
+  -> largest configured provider maxContextTokens
+  -> 128k default
+```
 
 ---
 
-## Quick Start
+## Task State and Repo Context
+
+Task State v1 and RepoContext v1 are the current bridge toward a stronger Agent Runtime.
+
+Task State tracks:
+
+- goal
+- intent
+- phase
+- files read
+- files changed
+- commands run
+- whether verification is required
+- verification status
+
+RepoContext tracks:
+
+- files read
+- files changed
+- commands run
+- test commands
+- recent diagnostics
+
+Once useful state exists, Harness injects it as runtime context before LLM calls.
+
+This gives the model a stable view of what has happened even if conversation history grows or is compacted.
+
+---
+
+## Agent Evaluation
+
+A minimal eval skeleton exists:
+
+```bash
+npm run eval:agent
+```
+
+It currently defines the metric names and baseline case categories. It is not yet a full scoring runner.
+
+Target metrics:
+
+- task_success_rate
+- tool_call_rate
+- first_tool_latency
+- no_tool_final_rate
+- verification_rate
+- repeat_failure_rate
+- memory_interference_rate
+- tokens_per_successful_task
+- compaction_saved_tokens
+
+See `nextWork.md` for the next implementation steps.
+
+---
+
+## Development
 
 ```bash
 npm install
-# Edit data/config.json — add at least one OpenAI-compatible API key
-npm run iceCoder          # Start all (CLI + Web + Tunnel)
+npm test
+npx tsc --noEmit
+npm run eval:agent
 ```
 
-### Commands
+Common commands:
 
 ```bash
-npm run iceCoder              # CLI + Web + Tunnel
-npm run iceCoder:cli          # CLI only
-npm run iceCoder:web          # Web only
-npm run iceCoder:run -- "fix the build errors"   # One-shot task
-npm run iceCoder:tools        # List tools
-npm run iceCoder:mcp          # List MCP servers
-npm run iceCoder:config       # Show config
-npm run dev                   # Vite dev server
-npm run build && npm start    # Production build
-```
-
-### Global Install
-
-```bash
-npm run build && npm link
-iceCoder start [--port 8080]
-iceCoder cli / web
-iceCoder run "fix build errors" [--max-rounds 50] [--json]
-iceCoder tools / mcp / config / help
-```
-
-### Built-in Commands (`~` prefix)
-
-| Command | Description |
-|---------|-------------|
-| `~clear` | Clear conversation history |
-| `~open` | File manager (Web) |
-| `~scan` | QR code for mobile connection |
-| `~telemetry` | Memory telemetry report |
-| `~export` | Export memory files |
-| `~memory` | View/manage/delete memories |
-| `~tools` | List tools (terminal) |
-| `~quit` | Exit (terminal) |
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3000` | Server port |
-| `ICE_CONFIG_PATH` | `data/config.json` | LLM + MCP config |
-| `ICE_SYSTEM_PROMPT_PATH` | `data/system-prompt.md` | System prompt |
-| `ICE_SESSIONS_DIR` | `data/sessions` | Session storage |
-| `ICE_MEMORY_DIR` | `data/memory-files` | File memory |
-| `ICE_OUTPUT_DIR` | `output` | Pipeline output |
-
-### Dynamic Config (`data/memory/memory-config.json`)
-
-```json
-{
-  "extraction": {
-    "minTurns": 3,
-    "minTokens": 5000,
-    "toolCallInterval": 3,
-    "turnThrottle": 1
-  },
-  "dream": {
-    "minHours": 6,
-    "minSessions": 3,
-    "enabled": true
-  },
-  "recall": {
-    "maxResults": 15
-  },
-  "relevanceGate": {
-    "enabled": true,
-    "contextWindow": 3,
-    "minKeywordOverlap": 1,
-    "rescueThreshold": 0.5
-  },
-  "sessionMemory": {
-    "enabled": true,
-    "minTokensToInit": 10000,
-    "minTokensBetweenUpdate": 5000,
-    "toolCallsBetweenUpdates": 3
-  }
-}
-```
-
-Config hot-reloads with 5-minute cache refresh, no restart needed.
-
----
-
-## Architecture
-
-```
-Clients (PC/Mobile WebSocket + SSE + CLI)
-  → Express + WebSocket Server
-    → Harness loop engine (chat) / Orchestrator (6-stage pipeline)
-      → Tool system (32+ built-in + MCP) + LLM adapter + Memory system
-```
-
-### Design Decisions
-
-| Aspect | Choice |
-|--------|--------|
-| Loop engine | Custom Harness state machine, not LangChain — full control over tool execution flow |
-| Tool system | Central registry + Zod validation + unified executor + streaming parallel execution |
-| LLM adapter | Unified interface (OpenAI + Anthropic SDK), hot-switchable providers |
-| Memory persistence | Zero external DB, pure files + LLM semantic recall |
-| Frontend | Zero-framework vanilla HTML/CSS/JS |
-| MCP | stdio protocol, dynamic load/unload |
-
----
-
-## Project Structure
-
-```
-src/
-├── index.ts          # Entry point
-├── cli/              # CLI commands
-├── core/             # Orchestrator + agent base class + pipeline state
-├── agents/           # 6 specialized agents
-├── harness/          # Conversation loop engine
-├── tools/            # Tool registry + 32 built-in tools
-├── mcp/              # MCP client
-├── llm/              # LLM adapter layer
-├── memory/           # Memory system (15 modules)
-├── parser/           # Document parsing
-├── web/              # Express + WebSocket + SSE
-├── public/           # Frontend
-└── data/             # Runtime data
+npm run dev
+npm run dev:api
+npm run dev:web
+npx tsx src/cli/index.ts run "fix failing tests"
 ```
 
 ---
 
-## Memory System File Map
+## Roadmap
 
-```
-src/memory/file-memory/
-├── index.ts                  # Unified exports
-├── types.ts                  # Type definitions
-├── file-memory-manager.ts    # FileMemoryManager main class
-├── memory-recall.ts          # Recall engine (LLM + keyword + relevance gate)
-├── memory-llm-extractor.ts   # LLM auto-extraction
-├── memory-dream.ts           # autoDream consolidation
-├── memory-scanner.ts         # File scanning + frontmatter parsing
-├── memory-scanner-cache.ts   # Scanner cache
-├── memory-fact-index.ts      # Fact-level index
-├── memory-prompt.ts          # Memory system prompts
-├── session-memory.ts         # Session memory (10-section notes)
-├── multi-level-memory.ts     # Three-tier loading
-├── memory-config.ts          # Centralized defaults
-├── memory-remote-config.ts   # Remote dynamic config
-├── memory-eviction.ts        # LRU eviction
-├── memory-age.ts             # Decay + freshness
-├── memory-security.ts        # Path security
-├── memory-secret-scanner.ts  # Secret scanning
-├── memory-concurrency.ts     # Concurrency control
-├── memory-telemetry.ts       # Telemetry logging
-├── memory-tokenizer.ts       # Chinese/English tokenization
-├── memory-parser.ts          # Markdown parsing
-├── json-parser.ts            # LLM JSON parsing fallback
-└── async-prefetch.ts         # Async prefetch
+The remaining work is tracked in `nextWork.md`. The next high-impact items are:
 
-src/harness/
-├── harness.ts                # Harness loop engine
-├── harness-memory.ts         # Memory integration layer
-├── loop-controller.ts        # Loop control + circuit breaker
-└── types.ts                  # Type definitions
-```
-
----
-
-## Known Limitations
-
-- 200-file hard cap + full scan per recall (no vector search)
-- LLM recall costs ~256 output tokens per invocation
-- No backup/restore, no encrypted storage
-- Dream consolidation reads only first 50 files (2000 chars each)
-- `harness-memory.ts` integration layer is overloaded (~450 lines, too many responsibilities)
-- Memory modules are flat in one directory (not organized into recall/, extraction/, dream/, security/ subdirectories)
-
-## Tech Stack
-
-Node.js ≥ 18 · TypeScript · Express · WebSocket + SSE · OpenAI SDK + Anthropic SDK · jszip + xml2js + cheerio + officeparser · MCP 2024-11-05 · Vanilla HTML/CSS/JS
-
-## License
-
-ISC
+1. Memory v2 structured levels and conflict arbitration
+2. persisted Runtime Recovery Context in session notes
+3. real Agent Eval runner with pass/fail scoring
+4. telemetry persistence for runtime metrics
+5. model-aware tool planning and recovery strategies

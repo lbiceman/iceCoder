@@ -22,6 +22,7 @@ import { promises as fs } from 'node:fs';
 import {
   MIN_FACT_LENGTH,
   MAX_FACTS_PER_FILE,
+  LONG_LINE_SENTENCE_SPLIT_AT,
 } from './memory-config.js';
 
 /** Fact 最大长度 */
@@ -304,19 +305,32 @@ function splitIntoFacts(body: string): string[] {
 
     if (line.length < MIN_FACT_LENGTH) continue;
 
-    if (line.length <= MAX_FACT_LENGTH) {
+    const shouldSplitSentences =
+      line.length > LONG_LINE_SENTENCE_SPLIT_AT || line.length > MAX_FACT_LENGTH;
+
+    if (!shouldSplitSentences) {
       facts.push(line);
+      continue;
+    }
+
+    const segments = line.split(/(?<=[。；;.!！?？])\s*/);
+    const pieces: string[] = [];
+    for (const seg of segments) {
+      const trimmed = seg.trim();
+      if (trimmed.length < MIN_FACT_LENGTH) continue;
+      pieces.push(
+        trimmed.length > MAX_FACT_LENGTH
+          ? trimmed.substring(0, MAX_FACT_LENGTH) + '...'
+          : trimmed,
+      );
+    }
+
+    if (pieces.length > 0) {
+      facts.push(...pieces);
     } else {
-      // 超长行按句号/分号分割
-      const segments = line.split(/(?<=[。；;.!！?？])\s*/);
-      for (const seg of segments) {
-        const trimmed = seg.trim();
-        if (trimmed.length >= MIN_FACT_LENGTH) {
-          facts.push(trimmed.length > MAX_FACT_LENGTH
-            ? trimmed.substring(0, MAX_FACT_LENGTH) + '...'
-            : trimmed);
-        }
-      }
+      facts.push(
+        line.length > MAX_FACT_LENGTH ? line.substring(0, MAX_FACT_LENGTH) + '...' : line,
+      );
     }
   }
 

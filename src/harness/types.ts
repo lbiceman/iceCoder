@@ -18,6 +18,8 @@ export interface ContextAssemblyConfig {
   systemPrompt: string;
   /** 可用工具定义 */
   tools: ToolDefinition[];
+  /** 可选：固定工作语言时注入动态层；留空则不由系统指定语种 */
+  language?: string;
   /** 环境信息（OS、当前目录等） */
   environment?: Record<string, string>;
   /** 持久化记忆提示词（由 loadMemoryPrompt 生成，包含记忆指令 + MEMORY.md 内容） */
@@ -86,6 +88,7 @@ export type StopReason =
   | 'model_done'         // 模型说 done
   | 'max_rounds'         // 达到最大轮次
   | 'token_budget'       // token 预算耗尽
+  | 'task_recovery'      // 压缩后失忆恢复
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
@@ -141,6 +144,10 @@ export interface HarnessConfig {
   memoryDir?: string;
   /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */
   fileMemoryManager?: FileMemoryManager;
+  /** 会话目录，用于保存任务断点 checkpoint */
+  sessionDir?: string;
+  /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
+  sessionId?: string;
 }
 
 /**

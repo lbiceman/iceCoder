@@ -72,7 +72,7 @@ export interface ExtractionResult {
 /**
  * 提取 Agent 的系统提示词。
  */
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract ALL information worth remembering for future conversations. Be THOROUGH — missing information is worse than extracting too much.
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract durable information worth remembering for future conversations. Be precise: noisy or weak memories are harmful because they can distract future coding tasks.
 
 ## Memory types
 - user: User's role, goals, preferences, knowledge, habits, preferred programming languages, frameworks, work style, personal details (name, location, family, pets, hobbies)
@@ -80,13 +80,11 @@ const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze 
 - project: Ongoing work context not derivable from code/git
 - reference: Pointers to external systems/resources
 
-## User habit detection
-Pay special attention to implicit user habits revealed by the conversation:
-- If the user consistently writes or asks about a specific language (TypeScript, Python, etc.), record it as a user preference
-- If the user prefers certain tools, frameworks, or patterns, record it
-- If the user has a communication style preference (language, verbosity, formality), record it
-- If the user corrects you in a way that reveals a preference, record it as both feedback AND user habit
-- Update existing user memories if new information supplements them (e.g., user now also uses Go in addition to TypeScript)
+## Evidence threshold
+- Explicit "remember this" / "记住" requests should be saved.
+- Clear corrections or stable preferences may be saved.
+- A single weak signal, temporary debugging detail, or ordinary tool output should NOT become long-term memory.
+- If a fact only matters for the current task, prefer leaving it out; session notes can handle temporary state.
 
 ## What NOT to save
 - Code patterns, architecture, file paths — derivable from reading the project
@@ -111,6 +109,8 @@ Return a JSON array of memories to save. Each memory object has:
 - "content": string (the memory content — include ALL relevant details, not summaries)
 - "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
 - "contradicts": string | null (filename of existing memory that this new fact contradicts. null if no contradiction)
+- "level": "hard_rule" | "project_fact" | "preference" | "observation" | "session_state"
+- "evidenceStrength": "explicit" | "repeated" | "inferred" | "weak"
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.
@@ -123,7 +123,7 @@ Return ONLY valid JSON, no other text.
 5. **Capture implicit preferences.** "I usually use..." or "Let's go with X again" = preference for X.
 6. **Convert relative dates to absolute dates.** "next Thursday" → "2024-03-07".
 7. **Preserve exact quotes when they matter.** Names, technical terms, specific wording.
-8. **When in doubt, extract it.** False negatives (missing info) are much worse than false positives (extra info).`;
+8. **When in doubt, do not extract.** Prefer fewer high-confidence memories over noisy long-term memory.`;
 
 /**
  * 基于 tags 重叠度查找重复记忆。
@@ -164,6 +164,25 @@ function findDuplicateByTags(
   }
 
   return bestMatch;
+}
+
+function normalizeMemoryLevel(raw: unknown, type: string): string {
+  if (typeof raw === 'string' && ['hard_rule', 'project_fact', 'preference', 'observation', 'session_state'].includes(raw)) {
+    return raw;
+  }
+  if (type === 'feedback') return 'preference';
+  if (type === 'project' || type === 'reference') return 'project_fact';
+  return 'observation';
+}
+
+function normalizeEvidenceStrength(raw: unknown, confidence: number): string {
+  if (typeof raw === 'string' && ['explicit', 'repeated', 'inferred', 'weak'].includes(raw)) {
+    return raw;
+  }
+  if (confidence >= 0.95) return 'explicit';
+  if (confidence >= 0.75) return 'repeated';
+  if (confidence >= 0.45) return 'inferred';
+  return 'weak';
 }
 
 /**
@@ -287,13 +306,15 @@ export class LLMMemoryExtractor {
 - Include "tags" field for semantic dedup: e.g., ["lang:typescript", "lang:python", "tool:vite"]
 - Include "confidence" field: 1.0 for user explicit statements ("I prefer X"), 0.5 for inferred patterns
 - Include "source" field: always "llm_extract"
+- Include "level": hard_rule only for explicit durable rules; project_fact for technical facts; preference for user preferences; observation for soft facts; session_state only for current-session state that should not become long-term user memory
+- Include "evidenceStrength": explicit for direct user statements, repeated for repeated behavior, inferred for model inference, weak for uncertain signals
 
 ## Recent conversation to analyze
 
 ${conversationText}${existingManifest}
 
 Extract memories worth saving from the conversation above. Return JSON array only.
-Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), eventDate (string YYYY-MM-DD or null)`;
+Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), eventDate (string YYYY-MM-DD or null), level, evidenceStrength`;
   }
 
   /**
@@ -310,6 +331,8 @@ Each object must have: filename, type, name, description, content, tags (string[
     source?: string;
     eventDate?: string | null;
     contradicts?: string | null;
+    level?: string;
+    evidenceStrength?: string;
   }> {
     // 使用健壮的 JSON 解析器（多层回退策略）
     const parsed = parseLLMJsonArray<any[]>(content);
@@ -351,6 +374,8 @@ Each object must have: filename, type, name, description, content, tags (string[
       source?: string;
       eventDate?: string | null;
       contradicts?: string | null;
+      level?: string;
+      evidenceStrength?: string;
     }>,
     memoryDir: string,
   ): Promise<{ writtenPaths: string[]; contradictions: ContradictionInfo[] }> {
@@ -436,6 +461,8 @@ Each object must have: filename, type, name, description, content, tags (string[
         const tags = memory.tags && memory.tags.length > 0 ? memory.tags.join(', ') : '';
         const confidence = memory.confidence ?? DEFAULT_CONFIDENCE_FALLBACK;
         const source = memory.source ?? 'llm_extract';
+        const level = normalizeMemoryLevel(memory.level, memory.type);
+        const evidenceStrength = normalizeEvidenceStrength(memory.evidenceStrength, confidence);
         const now = new Date().toISOString();
 
         const eventDateStr = memory.eventDate || '';
@@ -444,6 +471,8 @@ Each object must have: filename, type, name, description, content, tags (string[
 name: ${memory.name}
 description: ${memory.description}
 type: ${memory.type}
+level: ${level}
+evidenceStrength: ${evidenceStrength}
 source: ${source}
 confidence: ${confidence}
 tags: ${tags}

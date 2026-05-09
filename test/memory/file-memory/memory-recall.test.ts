@@ -24,8 +24,9 @@ import {
   parseTimeRange,
   expandRelatedMemories,
   buildIdfMap,
-} from '../../src/memory/file-memory/memory-recall.js';
-import type { MemoryHeader } from '../../src/memory/file-memory/types.js';
+  LLM_RECALL_MIN_CANDIDATES,
+} from '../../../src/memory/file-memory/memory-recall.js';
+import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../../src/llm/types.js';
 
 // ─── 测试工具 ───
@@ -71,6 +72,17 @@ ${body}`;
   await fs.writeFile(path.join(dir, filename), fileContent, 'utf-8');
 }
 
+/** 写入若干填充记忆文件，使 `recallRelevantMemories` 在排除 `alreadySurfaced` 后脑选数满足 LLM 路径门槛 */
+async function writeFillerMemories(dir: string, count: number, prefix = 'filler') {
+  for (let i = 0; i < count; i++) {
+    await writeMemoryFile(dir, `${prefix}_${i}.md`, `填充记忆候选 ${i}`);
+  }
+}
+
+function fillersForRecallLLM(candidateCountExcludingFillers: number): number {
+  return Math.max(0, LLM_RECALL_MIN_CANDIDATES - candidateCountExcludingFillers);
+}
+
 function makeHeader(overrides: Partial<MemoryHeader> & { filename: string }): MemoryHeader {
   return {
     filePath: `/tmp/${overrides.filename}`,
@@ -110,6 +122,7 @@ describe('recallRelevantMemories — LLM 路径', () => {
     await writeMemoryFile(tempDir, 'user_role.md', '用户的角色和职责');
     await writeMemoryFile(tempDir, 'feedback_testing.md', '测试相关的反馈');
     await writeMemoryFile(tempDir, 'project_deadline.md', '项目截止日期');
+    await writeFillerMemories(tempDir, fillersForRecallLLM(3));
 
     const mockLLM = createMockLLM('{"selected": ["user_role.md", "feedback_testing.md"]}');
     const result = await recallRelevantMemories('我的角色是什么', tempDir, mockLLM);
@@ -122,6 +135,7 @@ describe('recallRelevantMemories — LLM 路径', () => {
 
   it('LLM 返回不存在的文件名时过滤掉', async () => {
     await writeMemoryFile(tempDir, 'real_file.md', '真实文件');
+    await writeFillerMemories(tempDir, fillersForRecallLLM(1));
     const mockLLM = createMockLLM('{"selected": ["real_file.md", "nonexistent.md"]}');
     const result = await recallRelevantMemories('查询', tempDir, mockLLM);
 
@@ -131,6 +145,7 @@ describe('recallRelevantMemories — LLM 路径', () => {
 
   it('LLM 返回空数组时结果为空', async () => {
     await writeMemoryFile(tempDir, 'some_file.md', '某个文件');
+    await writeFillerMemories(tempDir, fillersForRecallLLM(1));
     const mockLLM = createMockLLM('{"selected": []}');
     const result = await recallRelevantMemories('完全无关的查询', tempDir, mockLLM);
 
@@ -183,6 +198,7 @@ describe('recallRelevantMemories — alreadySurfaced', () => {
   it('过滤已展示过的记忆', async () => {
     await writeMemoryFile(tempDir, 'shown.md', '已展示的记忆');
     await writeMemoryFile(tempDir, 'new.md', '新记忆');
+    await writeFillerMemories(tempDir, fillersForRecallLLM(1));
 
     const shownPath = path.join(tempDir, 'shown.md');
     const mockLLM = createMockLLM('{"selected": ["new.md"]}');
@@ -604,6 +620,7 @@ describe('recallRelevantMemories — 边界情况', () => {
   it('跳过 MEMORY.md 索引文件', async () => {
     await fs.writeFile(path.join(tempDir, 'MEMORY.md'), '# Index', 'utf-8');
     await writeMemoryFile(tempDir, 'note.md', '笔记');
+    await writeFillerMemories(tempDir, fillersForRecallLLM(1));
 
     const mockLLM = createMockLLM('{"selected": ["note.md"]}');
     const result = await recallRelevantMemories('查询', tempDir, mockLLM);

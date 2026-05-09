@@ -51,7 +51,7 @@ const RECALL_FLUSH_INTERVAL_MS = 30_000;
 /** LLM 召回超时（毫秒） */
 const LLM_RECALL_TIMEOUT_MS = 30_000;
 /** LLM 召回最少候选数：候选数不足时直接走关键词回退，避免无意义的 LLM 调用 */
-const LLM_RECALL_MIN_CANDIDATES = 4;
+export const LLM_RECALL_MIN_CANDIDATES = 4;
 /** LLM 召回最大输出 token */
 const LLM_RECALL_MAX_TOKENS = 512;
 /** Fact 选择上限 */
@@ -95,6 +95,69 @@ export interface RecallResult {
   usedLLM: boolean;
 }
 
+type RecallIntent = 'execute' | 'inspect' | 'question';
+
+export function inferRecallIntent(query: string): RecallIntent {
+  const q = query.toLowerCase();
+  if (/修复|修改|实现|新增|创建|重构|测试|运行|验证|fix|edit|modify|implement|create|refactor|test|run|verify/.test(q)) {
+    return 'execute';
+  }
+  if (/查看|读取|搜索|解释|说明|分析|read|search|inspect|explain|analyze/.test(q)) return 'inspect';
+  return 'question';
+}
+
+export function filterByMemoryLevelForIntent(memories: MemoryHeader[], intent: RecallIntent): MemoryHeader[] {
+  return memories.filter(memory => {
+    // Backward compatibility: old memory files/tests do not have v2 metadata.
+    // Keep their previous recall behavior until they are naturally rewritten.
+    if (!memory.level || !memory.evidenceStrength) return true;
+    if (intent === 'execute') {
+      return memory.level !== 'session_state';
+    }
+    if (intent === 'inspect') {
+      return memory.level !== 'session_state' || memory.evidenceStrength === 'explicit';
+    }
+    return true;
+  });
+}
+
+function dedupeConflictingMemories(memories: MemoryHeader[]): MemoryHeader[] {
+  const groups = new Map<string, MemoryHeader[]>();
+  for (const memory of memories) {
+    const key = conflictKey(memory);
+    if (!key) continue;
+    const group = groups.get(key) ?? [];
+    group.push(memory);
+    groups.set(key, group);
+  }
+
+  const suppressed = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    const winner = [...group].sort(compareMemoryPriority)[0];
+    for (const memory of group) {
+      if (memory.filePath !== winner.filePath) suppressed.add(memory.filePath);
+    }
+  }
+  return memories.filter(memory => !suppressed.has(memory.filePath));
+}
+
+function conflictKey(memory: MemoryHeader): string | null {
+  if (!memory.level || !memory.evidenceStrength) return null;
+  const topicTag = memory.tags.find(tag => /^(pref|preference|rule|topic|tool|lang|framework):/.test(tag));
+  if (topicTag) return `${memory.level}:${topicTag.toLowerCase()}`;
+  return null;
+}
+
+function compareMemoryPriority(a: MemoryHeader, b: MemoryHeader): number {
+  const evidenceRank: Record<string, number> = { explicit: 4, repeated: 3, inferred: 2, weak: 1 };
+  const evidenceDelta = (evidenceRank[b.evidenceStrength] ?? 0) - (evidenceRank[a.evidenceStrength] ?? 0);
+  if (evidenceDelta !== 0) return evidenceDelta;
+  const confidenceDelta = b.confidence - a.confidence;
+  if (confidenceDelta !== 0) return confidenceDelta;
+  return b.mtimeMs - a.mtimeMs;
+}
+
 /**
  * 记忆选择的系统提示词（v7 — 合并选文件和精排为一次调用）。
  */
@@ -105,11 +168,12 @@ Return a JSON object with:
 - "selected_facts": array of objects, each with "id" (fact ID like F1, F2...) and "reasoning" (why this fact is relevant)
 
 Guidelines:
-- **Broad relevance**: Select any memory containing information related to people, events, topics, or time periods in the query. When in doubt, include it.
+- **Strict relevance**: Select a memory only when it directly helps answer or execute the current query. When in doubt, leave it out.
+- For coding/debugging/editing tasks, prefer project facts and concrete technical constraints. Include personal preferences only when they strongly match the requested action.
 - If no memories are relevant, return empty arrays.
 - **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X"), also select memories about alternatives to X.
 - **Time awareness**: If the query references a time period, prefer memories with timestamps in that period, but do not exclude others.
-- **Fact selection**: From the selected files, pick the specific facts most relevant to answering the query. Limit to 30 facts total.
+- **Fact selection**: From the selected files, pick only the specific facts most relevant to answering or executing the query. Limit to 30 facts total.
 - Return ONLY valid JSON, no other text.
 Example: {"selected": ["user_role.md", "feedback_testing.md"], "selected_facts": [{"id": "F1", "reasoning": "Directly answers the query about user role"}, {"id": "F5", "reasoning": "Provides context about testing preferences"}]}`;
 
@@ -162,8 +226,13 @@ export async function recallRelevantMemories(
   }
   const memories = allMemories.filter(m => !alreadySurfaced.has(m.filePath));
 
-  // 过滤极低置信度的记忆（减少噪声，降低幻觉）
-  const filteredMemories = memories.filter(m => m.confidence >= CONFIDENCE_FILTER_THRESHOLD);
+  // 过滤极低置信度和不适合当前任务类型的记忆（减少噪声，降低幻觉）
+  const filteredMemories = dedupeConflictingMemories(
+    filterByMemoryLevelForIntent(
+      memories.filter(m => m.confidence >= CONFIDENCE_FILTER_THRESHOLD),
+      inferRecallIntent(query),
+    ),
+  );
 
   if (filteredMemories.length === 0) {
     return { memories: [], facts: [], duration: Date.now() - startTime, usedLLM: false };

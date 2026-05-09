@@ -276,7 +276,7 @@ describe('scanMemoryFiles + FactIndex 联合', () => {
       const content = await fs.readFile(mem.filePath, 'utf-8');
       fullContents.set(mem.filePath, content);
     }
-    const facts = factIndex.buildIndex(memories, fullContents);
+    const facts = await factIndex.buildIndex(memories, fullContents);
 
     expect(facts.length).toBe(8);
     expect(facts.every(f => f.sourceFile === 'user_preferences.md')).toBe(true);
@@ -302,7 +302,7 @@ describe('scanMemoryFiles + FactIndex 联合', () => {
       const content = await fs.readFile(mem.filePath, 'utf-8');
       fullContents.set(mem.filePath, content);
     }
-    factIndex.buildIndex(memories, fullContents);
+    await factIndex.buildIndex(memories, fullContents);
 
     const topFacts = factIndex.getTopFactsForFile(memories[0].filePath, 'React 性能', 3);
     expect(topFacts.length).toBeGreaterThan(0);
@@ -330,7 +330,7 @@ describe('scanMemoryFiles + FactIndex 联合', () => {
       const content = await fs.readFile(mem.filePath, 'utf-8');
       fullContents.set(mem.filePath, content);
     }
-    const facts = factIndex.buildIndex(memories, fullContents);
+    const facts = await factIndex.buildIndex(memories, fullContents);
 
     expect(facts.length).toBe(2);
     const sources = new Set(facts.map(f => f.sourceFile));
