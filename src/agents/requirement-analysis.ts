@@ -64,7 +64,6 @@ ${text}
       // 需求分析智能体的系统提示词
       // 中文版本：你是 RequirementAnalysis 智能体，一名专业的需求分析师。你可以使用文件操作工具读取现有项目文档和代码，以更好地理解上下文。分析完成后请提供结构化的需求文档。
       systemPrompt: 'You are the RequirementAnalysis agent, a professional requirements analyst. You can use file operation tools to read existing project documents and code to better understand the context. Provide a structured requirements document when analysis is complete.',
-      maxRounds: 20,
     });
     const result = harnessResult.content;
 

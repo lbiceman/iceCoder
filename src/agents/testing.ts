@@ -82,8 +82,6 @@ Please begin. First understand the project structure, then write and execute tes
       // 测试智能体的系统提示词
       // 中文版本：你是 Testing 智能体，一名专业的 QA 工程师。你可以使用文件操作工具读取源代码和编写测试文件，使用 Shell 工具执行测试命令。根据需求编写高质量的测试用例并确保它们通过。
       systemPrompt: 'You are the Testing agent, a professional QA engineer. You can use file operation tools to read source code and write test files, and use Shell tools to execute test commands. Write high-quality test cases based on requirements and ensure they pass.',
-      maxRounds: 80,
-      timeout: 15 * 60 * 1000,
     });
 
     const report = this.extractTestReport(result.content);

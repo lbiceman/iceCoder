@@ -64,7 +64,6 @@ ${requirements}
       // 设计智能体的系统提示词
       // 中文版本：你是 Design 智能体，一名专业的软件架构师。你可以使用文件操作工具读取现有项目代码和配置，以设计与当前架构一致的方案。完成后请提供完整的设计文档。
       systemPrompt: 'You are the Design agent, a professional software architect. You can use file operation tools to read existing project code and configuration to design solutions consistent with the current architecture. Provide a complete design document when done.',
-      maxRounds: 20,
     });
     const result = harnessResult.content;
 

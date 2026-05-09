@@ -26,6 +26,11 @@ import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
 import type { AssembledPrompt } from '../../prompts/types.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
+import {
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudgetFromEnv,
+} from '../../harness/token-budget-config.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -501,9 +506,9 @@ ${c.bold}终端内置命令:${c.reset}
           ...harnessOverlayToContextFields(assembled),
         },
         loop: {
-          maxRounds: 200,
-          timeout: 30 * 60 * 1000,
-          tokenBudget: 500000,
+          maxRounds: getHarnessMaxRoundsFromEnv(),
+          timeout: getHarnessTimeoutMsFromEnv(),
+          tokenBudget: getHarnessTokenBudgetFromEnv(),
         },
         permissions: [
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },

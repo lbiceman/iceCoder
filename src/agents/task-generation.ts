@@ -75,7 +75,6 @@ ${design}
       // 任务生成智能体的系统提示词
       // 中文版本：你是 TaskGeneration 智能体，一名专业的项目经理。你可以使用文件操作工具读取项目结构和现有代码，以更准确地分解任务。完成后请提供结构化的任务文档。
       systemPrompt: 'You are the TaskGeneration agent, a professional project manager. You can use file operation tools to read project structure and existing code to break down tasks more accurately. Provide a structured task document when done.',
-      maxRounds: 20,
     });
     const result = harnessResult.content;
 

@@ -29,6 +29,11 @@ import { randomUUID } from 'node:crypto';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
 import type { AssembledPrompt } from '../prompts/types.js';
 import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
+import {
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudgetFromEnv,
+} from '../harness/token-budget-config.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
@@ -350,9 +355,9 @@ async function handleChatMessage(
       ...harnessDynamic,
     },
     loop: {
-      maxRounds: 800,
-      timeout: 60 * 60 * 1000,
-      tokenBudget: 900000,
+      maxRounds: getHarnessMaxRoundsFromEnv(),
+      timeout: getHarnessTimeoutMsFromEnv(),
+      tokenBudget: getHarnessTokenBudgetFromEnv(),
       signal: abortController.signal,
     },
     permissions: [
