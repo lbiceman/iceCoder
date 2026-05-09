@@ -3,14 +3,11 @@
  *
  * 提示词拼接流程：
  *
- * 1. 收集所有段落（静态 + 动态）
+ * 1. 收集所有段落（静态 + 自选动态段如 memories）
  * 2. 按优先级排序
- * 3. 过滤掉未启用的段落
- * 4. 拼接成完整的系统提示词字符串
- * 5. 可选：注入用户上下文和系统上下文
- *
- * 当前使用单字符串形式（更简单，适合当前架构），
- * 但保留了分段设计，方便未来升级为数组形式（每个元素一个 cache block）。
+ * 3. 过滤掉未启用的段落与 removeSection 禁用的默认段
+ * 4. 拼接稳定 system（不含 environment、append、memories、preferences）
+ * 5. 易变项经 harnessOverlay 与 userContext 进入首轮 `<system-context>`
  */
 
 import type {
@@ -19,14 +16,54 @@ import type {
   AssembledPrompt,
   UserContext,
   SystemContext,
+  EnvironmentInfo,
+  HarnessPromptOverlay,
+  HarnessDynamicContextSlice,
 } from './types.js';
-import {
-  getDefaultSections,
-  createEnvironmentSection,
-  createLanguageSection,
-  createMemorySection,
-  createPreferencesSection,
-} from './sections.js';
+import { getDefaultSections } from './sections.js';
+
+/**
+ * EnvironmentInfo → 扁平键值，供 ContextAssembler.environment 使用。
+ */
+export function environmentInfoToRecord(env: EnvironmentInfo): Record<string, string> {
+  const r: Record<string, string> = {
+    workingDirectory: env.workingDirectory,
+    platform: env.platform,
+    currentDate: env.currentDate,
+  };
+  if (env.shell) r.shell = env.shell;
+  if (env.osVersion) r.osVersion = env.osVersion;
+  if (env.isGitRepo !== undefined) r.gitRepo = env.isGitRepo ? 'yes' : 'no';
+  if (env.modelName) r.model = env.modelName;
+  return r;
+}
+
+/**
+ * 将 assemble 产出的 harnessOverlay 映射到 Harness 上下文片段。
+ * 合并 `AssembledPrompt.userContext`（如 memories）与 overlay 中的项目说明。
+ */
+export function harnessOverlayToContextFields(ap: AssembledPrompt): HarnessDynamicContextSlice {
+  const o = ap.harnessOverlay;
+  const out: HarnessDynamicContextSlice = {};
+
+  if (o?.environment && Object.keys(o.environment).length > 0) {
+    out.environment = o.environment;
+  }
+  if (o?.language?.trim()) {
+    out.language = o.language.trim();
+  }
+
+  const uc: Record<string, string> = {};
+  if (ap.userContext) Object.assign(uc, ap.userContext);
+  if (o?.projectMarkdown?.trim()) {
+    uc.project_instructions = o.projectMarkdown.trim();
+  }
+  if (Object.keys(uc).length > 0) {
+    out.userContext = uc;
+  }
+
+  return out;
+}
 
 /**
  * 提示词组装器。
@@ -35,15 +72,23 @@ import {
  * ```ts
  * const assembler = new PromptAssembler();
  * const result = assembler.assemble({
- *   language: '中文',
- *   environment: { workingDirectory: '/project', platform: 'darwin', currentDate: '2026-04-22' },
- *   memories: ['项目使用 TypeScript + Vite'],
+ *   environment: { workingDirectory: '/project', platform: 'darwin', currentDate: '2026-05-09' },
+ *   memories: ['optional — goes to dynamic userContext, not static system'],
  * });
  * console.log(result.systemPrompt);
  * ```
  */
 export class PromptAssembler {
   private customSections: PromptSection[] = [];
+  private disabledDefaultSectionIds = new Set<string>();
+
+  /**
+   * 禁用默认段落（含 getDefaultSections 中的 id）。
+   */
+  removeSection(id: string): void {
+    this.disabledDefaultSectionIds.add(id);
+    this.customSections = this.customSections.filter(s => s.id !== id);
+  }
 
   /**
    * 添加自定义段落。
@@ -53,102 +98,115 @@ export class PromptAssembler {
   }
 
   /**
-   * 移除指定 ID 的段落。
-   */
-  removeSection(id: string): void {
-    this.customSections = this.customSections.filter(s => s.id !== id);
-  }
-
-  /**
    * 组装完整的提示词。
    */
   assemble(config: PromptAssemblyConfig = {}): AssembledPrompt {
-    // 如果提供了自定义系统提示词，直接使用
+    // 自定义 system：正文仅 custom；appendSystemPrompt → overlay（与默认路径一致）
     if (config.customSystemPrompt) {
-      const content = config.appendSystemPrompt
-        ? `${config.customSystemPrompt}\n\n${config.appendSystemPrompt}`
-        : config.customSystemPrompt;
+      const systemPrompt = config.customSystemPrompt.trim();
+      const baseOverlay = this.buildHarnessOverlay({
+        ...config,
+        appendSystemPrompt: undefined,
+      });
+      let harnessOverlay: HarnessPromptOverlay | undefined = baseOverlay;
+      if (config.appendSystemPrompt?.trim()) {
+        harnessOverlay = {
+          ...(baseOverlay ?? {}),
+          projectMarkdown: config.appendSystemPrompt.trim(),
+        };
+      }
+      const hasOverlay = !!(
+        harnessOverlay
+        && (harnessOverlay.environment
+          || harnessOverlay.language
+          || harnessOverlay.projectMarkdown)
+      );
 
       return {
         systemPromptSections: [{
           id: 'custom',
           title: '自定义提示词',
-          content,
+          content: systemPrompt,
           isStatic: false,
           priority: 0,
           enabled: true,
         }],
-        systemPrompt: content,
+        systemPrompt,
+        harnessOverlay: hasOverlay ? harnessOverlay : undefined,
+        userContext: this.nonEmptyUserContext(config),
+        systemContext: this.buildSystemContext(config),
       };
     }
 
-    // 收集所有段落
-    const sections: PromptSection[] = [
-      ...getDefaultSections(),
-      ...this.customSections,
+    const baseSections: PromptSection[] = [
+      ...getDefaultSections().filter(s => !this.disabledDefaultSectionIds.has(s.id)),
+      ...this.customSections.filter(s => !this.disabledDefaultSectionIds.has(s.id)),
     ];
 
-    // 添加动态段落
-    if (config.environment) {
-      sections.push(createEnvironmentSection(config.environment));
-    }
+    const sections: PromptSection[] = [...baseSections];
 
-    if (config.language) {
-      sections.push(createLanguageSection(config.language));
-    }
-
-    if (config.memories && config.memories.length > 0) {
-      sections.push(createMemorySection(config.memories));
-    }
-
-    if (config.userPreferences && Object.keys(config.userPreferences).length > 0) {
-      sections.push(createPreferencesSection(config.userPreferences));
-    }
-
-    // 过滤 + 排序
     const enabledSections = sections
       .filter(s => s.enabled)
       .sort((a, b) => a.priority - b.priority);
 
-    // 拼接
     let systemPrompt = enabledSections
       .map(s => s.content)
       .join('\n\n');
 
-    // 追加内容
-    if (config.appendSystemPrompt) {
-      systemPrompt += `\n\n${config.appendSystemPrompt}`;
-    }
-
-    // 构建用户上下文
-    const userContext = this.buildUserContext(config);
-
-    // 构建系统上下文
+    const harnessOverlay = this.buildHarnessOverlay(config);
     const systemContext = this.buildSystemContext(config);
 
     return {
       systemPromptSections: enabledSections,
       systemPrompt,
-      userContext: Object.keys(userContext).length > 0 ? userContext : undefined,
+      harnessOverlay,
+      userContext: this.nonEmptyUserContext(config),
       systemContext: Object.keys(systemContext).length > 0 ? systemContext : undefined,
     };
   }
 
+  private buildHarnessOverlay(config: PromptAssemblyConfig): HarnessPromptOverlay | undefined {
+    const overlay: HarnessPromptOverlay = {};
+
+    if (config.environment) {
+      overlay.environment = environmentInfoToRecord(config.environment);
+    }
+
+    if (config.language?.trim()) {
+      overlay.language = config.language.trim();
+    }
+
+    if (config.appendSystemPrompt?.trim()) {
+      overlay.projectMarkdown = config.appendSystemPrompt.trim();
+    }
+
+    const hasAny = overlay.environment
+      || overlay.language
+      || overlay.projectMarkdown;
+
+    return hasAny ? overlay : undefined;
+  }
+
+  private nonEmptyUserContext(config: PromptAssemblyConfig): UserContext | undefined {
+    const u = this.buildUserContext(config);
+    return Object.keys(u).length > 0 ? u : undefined;
+  }
+
   /**
-   * 构建用户上下文。
-   *
-   * 将项目规范等以 key-value 形式返回，
-   * 后续由 Harness 以 <system-reminder> 标签注入到消息列表。
+   * 构建用户上下文（注入首轮 `<system-context>` # 小节，不写入静态 system）。
    */
   private buildUserContext(config: PromptAssemblyConfig): UserContext {
     const context: UserContext = {};
 
     if (config.memories && config.memories.length > 0) {
-      context.projectMemory = config.memories.join('\n\n');
+      context.projectMemory = `# Project Memory\n${config.memories.join('\n\n')}`;
     }
 
-    if (config.environment?.currentDate) {
-      context.currentDate = `今天是 ${config.environment.currentDate}。`;
+    if (config.userPreferences && Object.keys(config.userPreferences).length > 0) {
+      const lines = Object.entries(config.userPreferences)
+        .map(([k, v]) => `- ${k}: ${JSON.stringify(v)}`)
+        .join('\n');
+      context.user_preferences = `# User Preferences\n${lines}`;
     }
 
     return context;
@@ -160,7 +218,6 @@ export class PromptAssembler {
    * 包含 git 状态等实时信息，追加到系统提示词末尾。
    */
   private buildSystemContext(_config: PromptAssemblyConfig): SystemContext {
-    // 当前版本暂不注入 git 状态等，预留扩展点
     return {};
   }
 }

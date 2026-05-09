@@ -14,20 +14,14 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
+import { loadMemoryPrompt } from '../memory/file-memory/index.js';
+import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
+import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
 
-const SYSTEM_PROMPT_PATH = path.resolve('data/system-prompt.md');
+const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSIONS_DIR = path.resolve('data/sessions');
 const SESSION_ID = 'default';
 
-async function loadSystemPrompt(): Promise<string> {
-  try {
-    return await fsPromises.readFile(SYSTEM_PROMPT_PATH, 'utf-8');
-  } catch {
-    return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用中文。';
-  }
-}
-
-/** 将远程消息追加到会话文件（与 PC 端共享固定文件） */
 async function appendToSession(userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
@@ -168,23 +162,29 @@ async function handleRemoteMessage(
   toolExecutor: ToolExecutor,
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
-  const toolDefs = toolRegistry.getDefinitions();
-  const systemPrompt = await loadSystemPrompt();
+  const toolDefs = shouldDisableRuntimeTools() ? [] : toolRegistry.getDefinitions();
+  const assembled = await loadAssembledChatPrompt({ logPrefix: '[remote-ws]' });
+  const harnessDynamic = harnessOverlayToContextFields(assembled);
 
   const harnessConfig: HarnessConfig = {
     context: {
-      systemPrompt,
+      systemPrompt: assembled.systemPrompt,
       tools: toolDefs,
+      memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+      ...harnessDynamic,
     },
     loop: {
       maxRounds: 800,
       timeout: 60 * 60 * 1000, // 1 小时超时
+      tokenBudget: 900_000,
     },
     permissions: [
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
     compactionThreshold: 40,
     compactionKeepRecent: 10,
+    memoryDir: MEMORY_DIR,
+    compactionEnableLLMSummary: true,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, {

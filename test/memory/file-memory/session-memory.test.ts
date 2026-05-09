@@ -20,10 +20,10 @@ import {
   getSessionMemoryContent,
   SESSION_MEMORY_TEMPLATE,
   type SessionMemoryState,
-} from '../../src/memory/file-memory/session-memory.js';
+} from '../../../src/memory/file-memory/session-memory.js';
 
 // Mock remote config
-vi.mock('../../src/memory/file-memory/memory-remote-config.js', () => ({
+vi.mock('../../../src/memory/file-memory/memory-remote-config.js', () => ({
   getSessionMemoryConfig: vi.fn(() => ({
     enabled: true,
     minTokensToInit: 1000,
@@ -104,6 +104,12 @@ describe('shouldUpdateSessionMemory', () => {
     const result = shouldUpdateSessionMemory(state, 1100, 10, false);
     expect(result).toBe(false);
   });
+
+  it('force=true 时忽略 token 与工具阈值并初始化', () => {
+    const result = shouldUpdateSessionMemory(state, 0, 0, true, true);
+    expect(result).toBe(true);
+    expect(state.initialized).toBe(true);
+  });
 });
 
 // ─── setupSessionMemoryFile ───
@@ -152,7 +158,8 @@ describe('buildSessionMemoryUpdatePrompt', () => {
     const prompt = buildSessionMemoryUpdatePrompt(SESSION_MEMORY_TEMPLATE, '/notes.md');
 
     expect(prompt).toContain('section 标题');
-    expect(prompt).toContain('write_file');
+    expect(prompt).toContain('只返回完整更新后的 Markdown 内容');
+    expect(prompt).not.toContain('write_file');
   });
 
   it('超大 section 时生成精简提醒', () => {

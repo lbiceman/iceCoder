@@ -22,7 +22,10 @@ import type { UnifiedMessage } from '../../llm/types.js';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
 import { formatFriendlyError } from '../friendly-errors.js';
-import { PromptAssembler } from '../../prompts/prompt-assembler.js';
+import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
+import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
+import type { AssembledPrompt } from '../../prompts/types.js';
+import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -160,39 +163,15 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   const noServe = hasFlag(args.flags, 'no-serve');
   const withTunnel = hasFlag(args.flags, 'with-tunnel');
   const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
-  const { systemPromptPath, memoryFilesDir } = ctx.paths;
+  const { memoryFilesDir } = ctx.paths;
 
-  /** 加载系统提示词（使用 PromptAssembler，与 Web 端一致） */
-  async function loadSystemPrompt(): Promise<string> {
-    const assembler = new PromptAssembler();
-
-    // 加载项目级用户指令（.iceCoder/memory.md）
-    const iceCoderDir = path.resolve('.iceCoder');
-    const memoryMdPath = path.join(iceCoderDir, 'memory.md');
-    let projectMemory = '';
-    try {
-      projectMemory = (await fs.readFile(memoryMdPath, 'utf-8')).trim();
-    } catch {
-      try {
-        await fs.mkdir(iceCoderDir, { recursive: true });
-        await fs.writeFile(memoryMdPath, '# 项目记忆\n', 'utf-8');
-      } catch { /* ignore */ }
-    }
-
-    const appendParts = [projectMemory].filter(Boolean);
-    const appendSystemPrompt = appendParts.length > 0 ? appendParts.join('\n\n') : undefined;
-
-    const result = assembler.assemble({
-      language: '中文',
-      environment: {
-        workingDirectory: process.cwd(),
-        platform: process.platform === 'win32' ? 'win32' : process.platform,
-        currentDate: new Date().toISOString().slice(0, 10),
-      },
-      appendSystemPrompt,
+  /** 加载提示词（与 WebSocket 共用逻辑；不绑定固定自然语言）。 */
+  async function loadAssembledPrompt(): Promise<AssembledPrompt> {
+    return loadAssembledChatPrompt({
+      logPrefix: '[cli]',
+      systemPromptPath: ctx.paths.systemPromptPath,
+      defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     });
-
-    return result.systemPrompt;
   }
 
   // 启动 Web 服务器（除非 --no-serve）
@@ -511,14 +490,15 @@ ${c.bold}终端内置命令:${c.reset}
     spinner.start();
 
     try {
-      const systemPrompt = await loadSystemPrompt();
-      const toolDefs = ctx.toolRegistry.getDefinitions();
+      const assembled = await loadAssembledPrompt();
+      const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
 
       const harnessConfig: HarnessConfig = {
         context: {
-          systemPrompt,
+          systemPrompt: assembled.systemPrompt,
           tools: toolDefs,
           memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
+          ...harnessOverlayToContextFields(assembled),
         },
         loop: {
           maxRounds: 200,

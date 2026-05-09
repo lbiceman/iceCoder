@@ -72,7 +72,7 @@ export interface ExtractionResult {
 /**
  * 提取 Agent 的系统提示词。
  */
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract ALL information worth remembering for future conversations. Be THOROUGH — missing information is worse than extracting too much.
+const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract durable information worth remembering for future conversations. Be precise: noisy or weak memories are harmful because they can distract future coding tasks.
 
 ## Memory types
 - user: User's role, goals, preferences, knowledge, habits, preferred programming languages, frameworks, work style, personal details (name, location, family, pets, hobbies)
@@ -80,13 +80,11 @@ const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze 
 - project: Ongoing work context not derivable from code/git
 - reference: Pointers to external systems/resources
 
-## User habit detection
-Pay special attention to implicit user habits revealed by the conversation:
-- If the user consistently writes or asks about a specific language (TypeScript, Python, etc.), record it as a user preference
-- If the user prefers certain tools, frameworks, or patterns, record it
-- If the user has a communication style preference (language, verbosity, formality), record it
-- If the user corrects you in a way that reveals a preference, record it as both feedback AND user habit
-- Update existing user memories if new information supplements them (e.g., user now also uses Go in addition to TypeScript)
+## Evidence threshold
+- Explicit "remember this" / "记住" requests should be saved.
+- Clear corrections or stable preferences may be saved.
+- A single weak signal, temporary debugging detail, or ordinary tool output should NOT become long-term memory.
+- If a fact only matters for the current task, prefer leaving it out; session notes can handle temporary state.
 
 ## What NOT to save
 - Code patterns, architecture, file paths — derivable from reading the project
@@ -123,7 +121,7 @@ Return ONLY valid JSON, no other text.
 5. **Capture implicit preferences.** "I usually use..." or "Let's go with X again" = preference for X.
 6. **Convert relative dates to absolute dates.** "next Thursday" → "2024-03-07".
 7. **Preserve exact quotes when they matter.** Names, technical terms, specific wording.
-8. **When in doubt, extract it.** False negatives (missing info) are much worse than false positives (extra info).`;
+8. **When in doubt, do not extract.** Prefer fewer high-confidence memories over noisy long-term memory.`;
 
 /**
  * 基于 tags 重叠度查找重复记忆。

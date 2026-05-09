@@ -5,7 +5,6 @@
  */
 
 import * as cheerio from 'cheerio';
-import { Element } from 'domhandler';
 import { FileParserStrategy, ParseResult } from './types.js';
 
 export class HtmlParserStrategy implements FileParserStrategy {
@@ -21,14 +20,18 @@ export class HtmlParserStrategy implements FileParserStrategy {
       $('style').remove();
 
       const lines: string[] = [];
+      const blockSelector = 'h1, h2, h3, h4, h5, h6, p, li';
 
-      $('body').find('*').each((_index, element) => {
-        if (!(element instanceof Element)) return;
-
+      $('body').find(blockSelector).each((_index, element) => {
         const el = $(element);
-        const tagName = element.tagName.toLowerCase();
+        const tagNameRaw = el.prop('tagName');
+        if (typeof tagNameRaw !== 'string') return;
+        const tagName = tagNameRaw.toLowerCase();
 
-        // 仅处理直接文本内容以避免重复
+        if (tagName === 'p' && el.parent().is('li')) {
+          return;
+        }
+
         if (tagName === 'h1') {
           const text = el.text().trim();
           if (text) lines.push(`# ${text}`);

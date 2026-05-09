@@ -12,10 +12,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { expandRelatedMemories } from '../../src/memory/file-memory/memory-recall.js';
-import { scanMemoryFiles } from '../../src/memory/file-memory/memory-scanner.js';
-import { recallRelevantMemories } from '../../src/memory/file-memory/memory-recall.js';
-import type { MemoryHeader } from '../../src/memory/file-memory/types.js';
+import { expandRelatedMemories } from '../../../src/memory/file-memory/memory-recall.js';
+import { scanMemoryFiles } from '../../../src/memory/file-memory/memory-scanner.js';
+import { recallRelevantMemories } from '../../../src/memory/file-memory/memory-recall.js';
+import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
 
 // ─── 测试工具 ───
 
