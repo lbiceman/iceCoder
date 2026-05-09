@@ -69,6 +69,17 @@ const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
 // ─── 任务切换检测 ───
 const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
 
+/** 硬压缩前等待会话笔记 LLM 更新的上限（毫秒）；超时则用磁盘已有内容继续。可用 ICE_SESSION_MEMORY_BEFORE_COMPACT_MS 覆盖。 */
+const DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS = 120_000;
+const PRE_COMPACT_SESSION_TIMEOUT_MSG = 'pre_compact_session_memory_timeout';
+
+function preCompactSessionMemoryWaitMs(): number {
+  const raw = process.env.ICE_SESSION_MEMORY_BEFORE_COMPACT_MS;
+  if (raw == null || raw === '') return DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
+}
+
 /**
  * 基于字符 bigram 的 Jaccard 相似度（零外部依赖，纯 CPU 计算）。
  * 用于检测用户新消息与上一轮 assistant 回复之间的主题关联度。
@@ -1401,19 +1412,38 @@ export class Harness {
     const before = messages.length;
     const beforeTokens = this.contextCompactor.getEstimatedTokens(messages);
 
-    // 压缩前备份任务目标到会话笔记（异步，不阻塞压缩）
+    // 压缩前备份任务目标到会话笔记：等待完成后再读盘，避免与硬压缩读到旧笔记竞态（带超时降级）
     const taskDesc = this.contextCompactor.getTaskDescription(messages);
     if (taskDesc) {
-      this.memoryIntegration.maybeUpdateSessionMemory(
-        messages,
-        0,
-        true,
-        state
-          ? { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() }
-          : undefined,
-      ).catch(err => {
-        console.debug('[harness] task backup before compaction failed:', err instanceof Error ? err.message : err);
+      const waitMs = preCompactSessionMemoryWaitMs();
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(PRE_COMPACT_SESSION_TIMEOUT_MSG)), waitMs);
       });
+      try {
+        await Promise.race([
+          this.memoryIntegration.maybeUpdateSessionMemory(
+            messages,
+            0,
+            true,
+            state
+              ? { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() }
+              : undefined,
+          ),
+          timeoutPromise,
+        ]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === PRE_COMPACT_SESSION_TIMEOUT_MSG) {
+          console.log(
+            `[harness] 压缩前会话笔记更新超时（>${waitMs}ms），使用磁盘上现有内容继续压缩`,
+          );
+        } else {
+          console.debug('[harness] 压缩前等待会话笔记更新失败:', msg);
+        }
+      } finally {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      }
     }
 
     // 压缩前获取会话笔记
