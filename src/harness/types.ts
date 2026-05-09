@@ -144,6 +144,10 @@ export interface HarnessConfig {
   memoryDir?: string;
   /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */
   fileMemoryManager?: FileMemoryManager;
+  /** 会话目录，用于保存任务断点 checkpoint */
+  sessionDir?: string;
+  /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
+  sessionId?: string;
 }
 
 /**

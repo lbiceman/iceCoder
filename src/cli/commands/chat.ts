@@ -518,6 +518,7 @@ ${c.bold}终端内置命令:${c.reset}
         compactionEnableLLMSummary: true,
         memoryDir: memoryFilesDir,
         fileMemoryManager: fileMemoryManager ?? undefined,
+        sessionDir: ctx.paths.sessionsDir,
         onConfirm: async (toolName, toolArgs) => {
           // 终端确认
           spinner.stop();

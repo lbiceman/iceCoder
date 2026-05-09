@@ -58,6 +58,7 @@ import type { ProviderConfig } from './web/types.js';
 
 const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
 const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 
 /**
  * 从 data/config.json 读取提供者配置。
@@ -131,6 +132,7 @@ async function initializeOrchestrator(
 ): Promise<{ orchestrator: Orchestrator; toolRegistry: import('./tools/tool-registry.js').ToolRegistry; toolExecutor: import('./tools/tool-executor.js').ToolExecutor; mcpManager: MCPManager }> {
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: OUTPUT_DIR,
+    sessionDir: SESSIONS_DIR,
     stageMaxRetries: 2,
     stageRetryDelay: 3000,
   });

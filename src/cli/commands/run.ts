@@ -67,6 +67,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       compactionKeepRecent: 10,
       compactionEnableLLMSummary: true,
       memoryDir: memoryFilesDir,
+      sessionDir: ctx.paths.sessionsDir,
     };
 
     const harness = new Harness(harnessConfig, ctx.toolExecutor);

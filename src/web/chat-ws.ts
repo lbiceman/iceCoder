@@ -368,6 +368,7 @@ async function handleChatMessage(
     compactionEnableLLMSummary: true,
     memoryDir: MEMORY_DIR,
     fileMemoryManager: globalFileMemoryManager ?? undefined,
+    sessionDir: SESSIONS_DIR,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, { type: 'confirm', toolName, args });

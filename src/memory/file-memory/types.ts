@@ -18,6 +18,12 @@
 export const FILE_MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'] as const;
 export type FileMemoryType = typeof FILE_MEMORY_TYPES[number];
 
+export const MEMORY_LEVELS = ['hard_rule', 'project_fact', 'preference', 'observation', 'session_state'] as const;
+export type MemoryLevel = typeof MEMORY_LEVELS[number];
+
+export const EVIDENCE_STRENGTHS = ['explicit', 'repeated', 'inferred', 'weak'] as const;
+export type EvidenceStrength = typeof EVIDENCE_STRENGTHS[number];
+
 /**
  * 记忆文件的 frontmatter 元数据。
  */
@@ -28,6 +34,10 @@ export interface MemoryFrontmatter {
   description: string;
   /** 记忆类型 */
   type: FileMemoryType;
+  /** 结构化层级：控制召回优先级和任务类型过滤 */
+  level?: MemoryLevel;
+  /** 证据强度：控制噪声过滤和冲突选择 */
+  evidenceStrength?: EvidenceStrength;
   /** 来源：哪次对话/操作创建的 */
   source?: 'llm_extract' | 'dream' | 'manual' | 'user_explicit';
   /** 置信度：0-1，用户明确声明=1，LLM推断=0.5，dream整合=0.7 */
@@ -58,6 +68,10 @@ export interface MemoryHeader {
   description: string | null;
   /** frontmatter 中的类型 */
   type: FileMemoryType | undefined;
+  /** 结构化层级 */
+  level: MemoryLevel;
+  /** 证据强度 */
+  evidenceStrength: EvidenceStrength;
   /** 置信度 */
   confidence: number;
   /** 被召回次数 */

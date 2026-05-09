@@ -109,6 +109,8 @@ Return a JSON array of memories to save. Each memory object has:
 - "content": string (the memory content — include ALL relevant details, not summaries)
 - "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
 - "contradicts": string | null (filename of existing memory that this new fact contradicts. null if no contradiction)
+- "level": "hard_rule" | "project_fact" | "preference" | "observation" | "session_state"
+- "evidenceStrength": "explicit" | "repeated" | "inferred" | "weak"
 
 If nothing is worth saving, return an empty array: []
 Return ONLY valid JSON, no other text.
@@ -162,6 +164,25 @@ function findDuplicateByTags(
   }
 
   return bestMatch;
+}
+
+function normalizeMemoryLevel(raw: unknown, type: string): string {
+  if (typeof raw === 'string' && ['hard_rule', 'project_fact', 'preference', 'observation', 'session_state'].includes(raw)) {
+    return raw;
+  }
+  if (type === 'feedback') return 'preference';
+  if (type === 'project' || type === 'reference') return 'project_fact';
+  return 'observation';
+}
+
+function normalizeEvidenceStrength(raw: unknown, confidence: number): string {
+  if (typeof raw === 'string' && ['explicit', 'repeated', 'inferred', 'weak'].includes(raw)) {
+    return raw;
+  }
+  if (confidence >= 0.95) return 'explicit';
+  if (confidence >= 0.75) return 'repeated';
+  if (confidence >= 0.45) return 'inferred';
+  return 'weak';
 }
 
 /**
@@ -285,13 +306,15 @@ export class LLMMemoryExtractor {
 - Include "tags" field for semantic dedup: e.g., ["lang:typescript", "lang:python", "tool:vite"]
 - Include "confidence" field: 1.0 for user explicit statements ("I prefer X"), 0.5 for inferred patterns
 - Include "source" field: always "llm_extract"
+- Include "level": hard_rule only for explicit durable rules; project_fact for technical facts; preference for user preferences; observation for soft facts; session_state only for current-session state that should not become long-term user memory
+- Include "evidenceStrength": explicit for direct user statements, repeated for repeated behavior, inferred for model inference, weak for uncertain signals
 
 ## Recent conversation to analyze
 
 ${conversationText}${existingManifest}
 
 Extract memories worth saving from the conversation above. Return JSON array only.
-Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), eventDate (string YYYY-MM-DD or null)`;
+Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), eventDate (string YYYY-MM-DD or null), level, evidenceStrength`;
   }
 
   /**
@@ -308,6 +331,8 @@ Each object must have: filename, type, name, description, content, tags (string[
     source?: string;
     eventDate?: string | null;
     contradicts?: string | null;
+    level?: string;
+    evidenceStrength?: string;
   }> {
     // 使用健壮的 JSON 解析器（多层回退策略）
     const parsed = parseLLMJsonArray<any[]>(content);
@@ -349,6 +374,8 @@ Each object must have: filename, type, name, description, content, tags (string[
       source?: string;
       eventDate?: string | null;
       contradicts?: string | null;
+      level?: string;
+      evidenceStrength?: string;
     }>,
     memoryDir: string,
   ): Promise<{ writtenPaths: string[]; contradictions: ContradictionInfo[] }> {
@@ -434,6 +461,8 @@ Each object must have: filename, type, name, description, content, tags (string[
         const tags = memory.tags && memory.tags.length > 0 ? memory.tags.join(', ') : '';
         const confidence = memory.confidence ?? DEFAULT_CONFIDENCE_FALLBACK;
         const source = memory.source ?? 'llm_extract';
+        const level = normalizeMemoryLevel(memory.level, memory.type);
+        const evidenceStrength = normalizeEvidenceStrength(memory.evidenceStrength, confidence);
         const now = new Date().toISOString();
 
         const eventDateStr = memory.eventDate || '';
@@ -442,6 +471,8 @@ Each object must have: filename, type, name, description, content, tags (string[
 name: ${memory.name}
 description: ${memory.description}
 type: ${memory.type}
+level: ${level}
+evidenceStrength: ${evidenceStrength}
 source: ${source}
 confidence: ${confidence}
 tags: ${tags}
