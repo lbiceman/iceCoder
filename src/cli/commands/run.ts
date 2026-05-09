@@ -17,6 +17,11 @@ import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
+import {
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudgetFromEnv,
+} from '../../harness/token-budget-config.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
@@ -25,7 +30,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
     process.exit(1);
   }
 
-  const maxRounds = getFlagNum(args.flags, 'max-rounds') ?? 100;
+  const maxRounds = getFlagNum(args.flags, 'max-rounds') ?? getHarnessMaxRoundsFromEnv();
   const jsonOutput = hasFlag(args.flags, 'json');
   const { memoryFilesDir } = ctx.paths;
 
@@ -54,8 +59,8 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       },
       loop: {
         maxRounds,
-        timeout: 60 * 60 * 1000,
-        tokenBudget: 900000,
+        timeout: getHarnessTimeoutMsFromEnv(),
+        tokenBudget: getHarnessTokenBudgetFromEnv(),
       },
       permissions: [],
       compactionThreshold: 40,

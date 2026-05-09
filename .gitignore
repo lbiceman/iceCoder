@@ -9,6 +9,7 @@ data/*
 !data/config.example.json
 !data/.gitkeep
 LoCoMo/
+claude-code/
 
 docs/
 

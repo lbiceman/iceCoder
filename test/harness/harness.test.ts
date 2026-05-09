@@ -13,6 +13,13 @@ import type { ToolResult } from '../../src/tools/types.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
 import { isDestructiveOperation, isDestructiveCommand } from '../../src/tools/tool-metadata.js';
+import {
+  DEFAULT_LONG_RUNNING_MAX_ROUNDS,
+  DEFAULT_LONG_RUNNING_TIMEOUT_MS,
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudgetFromEnv,
+} from '../../src/harness/token-budget-config.js';
 
 // ═══ 测试工具 ═══
 
@@ -365,6 +372,30 @@ describe('Harness - max_rounds 停止', () => {
 
     expect(result.loopState.stopReason).toBe('max_rounds');
     expect(result.content).toBe('Summary after max rounds');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 3b. token_budget 停止
+// ═══════════════════════════════════════════════════════════════
+describe('Harness - token_budget 停止', () => {
+  it('预算耗尽时直接返回暂停说明，不再请求最终总结', async () => {
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      loop: { maxRounds: 100, tokenBudget: 100 },
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+    ]);
+
+    const result = await harness.run('Do work', chatFn);
+
+    expect(result.loopState.stopReason).toBe('token_budget');
+    expect(result.content).toContain('token 预算耗尽而暂停');
+    expect(chatFn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -967,6 +998,16 @@ describe('Harness - handleStop 总结失败回退', () => {
 // 15. ContextCompactor 微压缩
 // ═══════════════════════════════════════════════════════════════
 describe('ContextCompactor - 微压缩', () => {
+  it('达到 tokenThreshold 时触发硬压缩，不再等到上下文几乎耗尽', () => {
+    const compactor = new ContextCompactor({ tokenThreshold: 100 });
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'x'.repeat(600) },
+    ];
+
+    expect(compactor.needsCompaction(messages)).toBe(true);
+  });
+
   it('保留最近的短用户执行指令', () => {
     const compactor = new ContextCompactor();
     const messages: UnifiedMessage[] = [
@@ -1010,6 +1051,72 @@ describe('ContextCompactor - 微压缩', () => {
     expect(message.content).toContain('src/a.ts');
     expect(message.content).toContain('npm test');
     expect(message.content).toContain('<runtime-recovery-context>');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 15b. Harness token budget config
+// ═══════════════════════════════════════════════════════════════
+describe('Harness token budget config', () => {
+  const originalBudget = process.env.ICE_HARNESS_TOKEN_BUDGET;
+  const originalTimeoutHours = process.env.ICE_HARNESS_TIMEOUT_HOURS;
+  const originalTimeoutMs = process.env.ICE_HARNESS_TIMEOUT_MS;
+  const originalMaxRounds = process.env.ICE_HARNESS_MAX_ROUNDS;
+
+  afterEach(() => {
+    if (originalBudget === undefined) {
+      delete process.env.ICE_HARNESS_TOKEN_BUDGET;
+    } else {
+      process.env.ICE_HARNESS_TOKEN_BUDGET = originalBudget;
+    }
+    if (originalTimeoutHours === undefined) {
+      delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
+    } else {
+      process.env.ICE_HARNESS_TIMEOUT_HOURS = originalTimeoutHours;
+    }
+    if (originalTimeoutMs === undefined) {
+      delete process.env.ICE_HARNESS_TIMEOUT_MS;
+    } else {
+      process.env.ICE_HARNESS_TIMEOUT_MS = originalTimeoutMs;
+    }
+    if (originalMaxRounds === undefined) {
+      delete process.env.ICE_HARNESS_MAX_ROUNDS;
+    } else {
+      process.env.ICE_HARNESS_MAX_ROUNDS = originalMaxRounds;
+    }
+  });
+
+  it('默认关闭累计 token 预算，仅显式配置时启用', () => {
+    delete process.env.ICE_HARNESS_TOKEN_BUDGET;
+    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
+
+    process.env.ICE_HARNESS_TOKEN_BUDGET = 'off';
+    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
+
+    process.env.ICE_HARNESS_TOKEN_BUDGET = '0';
+    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
+
+    process.env.ICE_HARNESS_TOKEN_BUDGET = '1200000';
+    expect(getHarnessTokenBudgetFromEnv()).toBe(1200000);
+  });
+
+  it('默认允许长时间连续工作，timeout 和 rounds 可显式覆盖', () => {
+    delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
+    delete process.env.ICE_HARNESS_TIMEOUT_MS;
+    delete process.env.ICE_HARNESS_MAX_ROUNDS;
+
+    expect(getHarnessTimeoutMsFromEnv()).toBe(DEFAULT_LONG_RUNNING_TIMEOUT_MS);
+    expect(getHarnessMaxRoundsFromEnv()).toBe(DEFAULT_LONG_RUNNING_MAX_ROUNDS);
+
+    process.env.ICE_HARNESS_TIMEOUT_HOURS = '6';
+    expect(getHarnessTimeoutMsFromEnv()).toBe(6 * 60 * 60 * 1000);
+
+    delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
+    process.env.ICE_HARNESS_TIMEOUT_MS = '7200000';
+    expect(getHarnessTimeoutMsFromEnv()).toBe(7200000);
+
+    process.env.ICE_HARNESS_MAX_ROUNDS = '9000';
+    expect(getHarnessMaxRoundsFromEnv()).toBe(9000);
   });
 });
 

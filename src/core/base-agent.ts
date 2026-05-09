@@ -13,6 +13,7 @@ import { Agent, AgentContext, AgentResult } from './types.js';
 import { UnifiedMessage } from '../llm/types.js';
 import { Harness } from '../harness/harness.js';
 import type { HarnessConfig, HarnessResult } from '../harness/types.js';
+import { getHarnessMaxRoundsFromEnv, getHarnessTimeoutMsFromEnv } from '../harness/token-budget-config.js';
 
 /**
  * Harness 运行选项（可选覆盖默认值）。
@@ -20,9 +21,9 @@ import type { HarnessConfig, HarnessResult } from '../harness/types.js';
 export interface HarnessRunOptions {
   /** 系统提示词（默认使用 Agent 名称生成） */
   systemPrompt?: string;
-  /** 最大循环轮次（默认 50） */
+  /** 最大循环轮次（默认使用 ICE_HARNESS_MAX_ROUNDS 或 5000） */
   maxRounds?: number;
-  /** 超时时间毫秒（默认 10 分钟） */
+  /** 超时时间毫秒（默认使用 ICE_HARNESS_TIMEOUT_* 或 5 小时） */
   timeout?: number;
   /** Token 预算（默认 200000） */
   tokenBudget?: number;
@@ -146,9 +147,9 @@ export abstract class BaseAgent implements Agent {
         tools: context.toolDefinitions,
       },
       loop: {
-        maxRounds: options?.maxRounds ?? 50,
-        timeout: options?.timeout ?? 10 * 60 * 1000,
-        tokenBudget: options?.tokenBudget ?? 200000,
+        maxRounds: options?.maxRounds ?? getHarnessMaxRoundsFromEnv(),
+        timeout: options?.timeout ?? getHarnessTimeoutMsFromEnv(),
+        tokenBudget: options?.tokenBudget,
       },
       compactionThreshold: 40,
       compactionKeepRecent: 10,

@@ -1171,6 +1171,28 @@ export class Harness {
       };
     }
 
+    if (reason === 'token_budget') {
+      const finalContent = [
+        '任务因 token 预算耗尽而暂停，尚未确认完成。',
+        `已执行 ${state.currentRound} 轮、${state.totalToolCalls} 次工具调用。`,
+        '请继续发送“继续”或提高/关闭 ICE_HARNESS_TOKEN_BUDGET 后重试。',
+      ].join('\n');
+
+      onStep?.({
+        type: 'final',
+        totalToolCalls: state.totalToolCalls,
+        content: finalContent,
+        stopReason: reason,
+      });
+
+      return {
+        content: finalContent,
+        loopState: state,
+        messages: [...messages],
+        log: logger.getEntries(),
+      };
+    }
+
     // 其他原因：请求 LLM 总结
     logger.llmCall();
     messages.push({

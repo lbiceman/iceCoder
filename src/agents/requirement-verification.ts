@@ -92,7 +92,6 @@ ${testResults}
       // 需求验证智能体的系统提示词
       // 中文版本：你是 RequirementVerification 智能体，一名专业的需求验证专家。你可以使用文件操作工具读取项目源代码和测试结果，以更准确地验证需求满足情况。完成后请提供验证报告。
       systemPrompt: 'You are the RequirementVerification agent, a professional requirements verification expert. You can use file operation tools to read project source code and test results to more accurately verify requirement fulfillment. Provide a verification report when done.',
-      maxRounds: 30,
     });
     const result = harnessResult.content;
 

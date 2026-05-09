@@ -126,7 +126,6 @@ function getCompactionRatio(): number {
 
 const DEFAULT_CONFIG: CompactionConfig = {
   threshold: 40,
-  tokenThreshold: Math.floor(getContextWindow() * getCompactionRatio()),
   keepRecent: 40,
   keepRecentMinTokens: 10000,
   keepRecentMaxTokens: 40000,
@@ -161,6 +160,7 @@ export class ContextCompactor {
 
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config.tokenThreshold ??= Math.floor(getContextWindow() * getCompactionRatio());
   }
 
   /**
@@ -221,22 +221,20 @@ export class ContextCompactor {
    * 检查是否需要硬压缩（双重校验）。
    *
    * 条件：
-   * 1. 剩余空间不足 COMPACTION_RESERVE_TOKENS token，且
-   * 2. 当前使用量 >= contextWindow × DEFAULT_COMPACTION_RATIO
+   * 1. 当前使用量达到 tokenThreshold（默认 contextWindow × compactionRatio），或
+   * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
   needsCompaction(messages: UnifiedMessage[]): boolean {
     const ctxWindow = getContextWindow();
     const currentTokens = estimateTokens(messages);
     const remaining = ctxWindow - currentTokens;
-    const ratioThreshold = Math.floor(ctxWindow * DEFAULT_COMPACTION_RATIO);
+    const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * getCompactionRatio());
 
-    if (remaining >= COMPACTION_RESERVE_TOKENS) return false;
-    if (currentTokens < ratioThreshold) return false;
+    if (currentTokens >= tokenThreshold) return true;
+    if (remaining < COMPACTION_RESERVE_TOKENS) return true;
 
-    // 向后兼容：也检查旧的阈值逻辑
-    if (this.config.tokenThreshold) {
-      return currentTokens > this.config.tokenThreshold;
-    }
+    // 向后兼容：未配置 token 阈值时也检查旧的消息数阈值逻辑。
+    if (this.config.tokenThreshold) return false;
     return messages.length > this.config.threshold;
   }
 

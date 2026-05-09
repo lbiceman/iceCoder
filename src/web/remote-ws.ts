@@ -17,6 +17,11 @@ import type { ToolRegistry } from '../tools/tool-registry.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
+import {
+  getHarnessMaxRoundsFromEnv,
+  getHarnessTimeoutMsFromEnv,
+  getHarnessTokenBudgetFromEnv,
+} from '../harness/token-budget-config.js';
 
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSIONS_DIR = path.resolve('data/sessions');
@@ -174,9 +179,9 @@ async function handleRemoteMessage(
       ...harnessDynamic,
     },
     loop: {
-      maxRounds: 800,
-      timeout: 60 * 60 * 1000, // 1 小时超时
-      tokenBudget: 900_000,
+      maxRounds: getHarnessMaxRoundsFromEnv(),
+      timeout: getHarnessTimeoutMsFromEnv(),
+      tokenBudget: getHarnessTokenBudgetFromEnv(),
     },
     permissions: [
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
