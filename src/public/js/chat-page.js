@@ -54,6 +54,9 @@ window.ChatPage = (function () {
   var wsSyncTimer = null;       // 定期轮询同步
   var wsConnectTimeout = null;
 
+  /** 上次已成功应用的服务端会话快照签名（避免 sync 轮询无意义全量重绘） */
+  var lastSessionSyncSig = '';
+
   // ---- 上下文用量跟踪 ----
   var maxContextTokens = 0;     // 当前模型最大上下文
   var usedInputTokens = 0;      // 累计输入 token
@@ -64,9 +67,26 @@ window.ChatPage = (function () {
 
   var SESSION_ID = 'default';
 
+  /** 序列化单条消息写入 localStorage（保留 id 以便刷新后挂载 tool_trace） */
+  function serializeMessageForStorage(m) {
+    var o = { role: m.role, content: m.content };
+    if (m.id) o.id = m.id;
+    return o;
+  }
+
+  /** 规范化本地缓存条目（忽略未知 role / 损坏项） */
+  function normalizeStoredMessage(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var role = raw.role;
+    if (role !== 'user' && role !== 'agent') return null;
+    var o = { role: role, content: typeof raw.content === 'string' ? raw.content : '' };
+    if (raw.id) o.id = raw.id;
+    return o;
+  }
+
   /** 保存消息到本地缓存（服务端由后端统一写入） */
   function saveSessionMessages() {
-    var toSave = messages.map(function (m) { return { role: m.role, content: m.content }; });
+    var toSave = messages.map(function (m) { return serializeMessageForStorage(m); });
     try {
       localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(toSave));
     } catch (_e) { /* ignore */ }
@@ -78,7 +98,13 @@ window.ChatPage = (function () {
       var stored = localStorage.getItem(STORAGE_KEY_MESSAGES);
       if (stored) {
         var parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
+        if (!Array.isArray(parsed)) return [];
+        var out = [];
+        for (var i = 0; i < parsed.length; i++) {
+          var n = normalizeStoredMessage(parsed[i]);
+          if (n) out.push(n);
+        }
+        return out;
       }
     } catch (_e) { /* ignore */ }
     return [];
@@ -111,20 +137,9 @@ window.ChatPage = (function () {
     renderMessages();
     // 异步从服务端拉取最新消息（含 tool_trace）
     fetchServerMessages(function (serverMsgs) {
-      if (serverMsgs.length > 0) {
-        var separated = separateToolTraces(serverMsgs);
-        // 正在流式或任务处理中时不要覆盖，避免 renderMessages 拆掉流式 DOM 导致「有字但不显示」
-        if (
-          separated.msgs.length >= messages.length
-          && !hasStreamingAgent()
-          && !wsProcessing
-          && !isStreaming
-        ) {
-          messages = separated.msgs;
-          toolTraces = separated.traces;
-          renderMessages();
-        }
-      }
+      if (serverMsgs.length === 0) return;
+      var separated = separateToolTraces(serverMsgs);
+      applyServerChatSnapshot(separated, { fullRender: true, authoritative: true });
     });
   }
 
@@ -143,6 +158,7 @@ window.ChatPage = (function () {
     pendingImages = [];
     toolTraces = {};
     currentToolBatch = [];
+    lastSessionSyncSig = '';
     saveMessages();
     // 通知后端清除消息缓存，下一轮从零构建
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
@@ -168,6 +184,47 @@ window.ChatPage = (function () {
       }
     }
     return { msgs: msgs, traces: traces };
+  }
+
+  function snapshotTraceTotals(tr) {
+    var keys = Object.keys(tr || {}).sort();
+    if (!keys.length) return '';
+    return keys.map(function (k) { return k + '=' + tr[k].length; }).join(';');
+  }
+
+  /** 服务端会话快照签名（条数 + 各条 id + tool_trace 体量），用于跳过重复 apply */
+  function sessionPayloadSig(separated) {
+    var ids = separated.msgs.map(function (m) { return m.id || ''; }).join(',');
+    return separated.msgs.length + '|' + ids + '|' + snapshotTraceTotals(separated.traces);
+  }
+
+  /**
+   * 用服务端分离后的会话覆盖本地 messages + toolTraces。
+   * opts.authoritative：冷启动/应以服务端为准（忽略本地多出来的仅前端消息，如 memory_notice、confirm）
+   * @returns {boolean} 是否发生了更新（含渲染）
+   */
+  function applyServerChatSnapshot(separated, options) {
+    var opts = options || {};
+    if (hasStreamingAgent() || wsProcessing || isStreaming) return false;
+    if (!opts.authoritative && separated.msgs.length < messages.length) return false;
+
+    var sig = sessionPayloadSig(separated);
+    if (sig === lastSessionSyncSig && separated.msgs.length === messages.length) {
+      return false;
+    }
+
+    var wasNearBottom = isNearBottom();
+    messages = separated.msgs;
+    toolTraces = separated.traces;
+    lastSessionSyncSig = sig;
+
+    if (opts.fullRender) {
+      renderMessages();
+    } else {
+      renderMessagesOnly(wasNearBottom);
+      saveSessionMessages();
+    }
+    return true;
   }
 
   /** 将当前收集的工具调用批次暂存（等 agent 消息的 id 从服务端同步后关联） */
@@ -866,17 +923,7 @@ window.ChatPage = (function () {
     fetchServerMessages(function (serverMsgs) {
       if (!serverMsgs || serverMsgs.length === 0) return;
       var separated = separateToolTraces(serverMsgs);
-      // 服务端是权威数据源（后端统一写入），有新消息就更新
-      if (separated.msgs.length > messages.length) {
-        var wasNearBottom = isNearBottom();
-        messages = separated.msgs;
-        toolTraces = separated.traces;
-        renderMessagesOnly(wasNearBottom);
-        // 同步到 localStorage
-        try {
-          localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(separated.msgs.map(function (m) { return { role: m.role, content: m.content }; })));
-        } catch (_e) { /* ignore */ }
-      }
+      applyServerChatSnapshot(separated, { fullRender: false });
     });
   }
 
@@ -1837,13 +1884,12 @@ window.ChatPage = (function () {
     if (remoteMode) {
       messages = [];
       toolTraces = {};
+      lastSessionSyncSig = '';
       renderMessagesOnly();
       fetchServerMessages(function (serverMsgs) {
         if (serverMsgs.length > 0) {
           var separated = separateToolTraces(serverMsgs);
-          messages = separated.msgs;
-          toolTraces = separated.traces;
-          renderMessagesOnly();
+          applyServerChatSnapshot(separated, { fullRender: false, authoritative: true });
         }
       });
     }

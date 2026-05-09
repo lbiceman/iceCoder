@@ -478,9 +478,15 @@ async function handleChatMessage(
     });
   }
 
-  // agent 消息
+  // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
   if (result.content) {
     sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
+  } else if (toolTraceBatch.length > 0) {
+    sessionEntries.push({
+      role: 'agent',
+      content: '（本轮仅有工具调用，无文字回复）',
+      id: agentMsgId,
+    });
   }
 
   if (sessionEntries.length > 0) {
