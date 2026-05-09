@@ -900,6 +900,40 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   text-overflow: ellipsis;
 }
 
+/* 工具调用折叠组（历史 + 实时） */
+.tool-trace-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 6px 0;
+  max-width: 92%;
+}
+.tool-trace-visible {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-trace-collapsed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-trace-toggle {
+  align-self: flex-start;
+  margin: 4px 0 2px 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary, rgba(255,255,255,0.06));
+  color: var(--text-secondary);
+}
+.tool-trace-toggle:hover {
+  border-color: var(--accent-color, #4fc3f7);
+  color: var(--text-primary);
+}
+
 .thinking-dots {
   display: inline-flex;
   gap: 1px;

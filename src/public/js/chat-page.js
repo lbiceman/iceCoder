@@ -10,6 +10,9 @@ window.ChatPage = (function () {
   'use strict';
 
   // ---- Constants ----
+  /** 超过此数量时折叠更早的工具行；始终保留最新的若干条可见 */
+  var TOOL_TRACE_VISIBLE_MAX = 3;
+
   var SUPPORTED_EXTENSIONS = []; // 不限制，允许所有格式
   var supportedPattern = null;
   var STAGE_NAMES = [
@@ -40,6 +43,14 @@ window.ChatPage = (function () {
   // toolTraces: { [agentMsgId]: [{ toolName, detail, status }] }
   var toolTraces = {};
   var currentToolBatch = [];    // 当前轮次收集的工具调用，等 agent 消息确定后关联
+
+  /** 本轮对话实时工具区（WS）：更早的进折叠区，保留最新 TOOL_TRACE_VISIBLE_MAX 条 */
+  var liveToolRoundActive = false;
+  var liveToolRoundRoot = null;
+  var liveToolRoundVisible = null;
+  var liveToolRoundCollapsed = null;
+  var liveToolRoundToggle = null;
+  var liveToolRoundCount = 0;
 
   // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
   var remoteMode = false;       // 是否为远程控制模式（带 token）
@@ -312,9 +323,16 @@ window.ChatPage = (function () {
     elStatusText.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> ' + escapeHtml(text);
   }
 
-  /** 在聊天区追加工具调用条目（紧凑行） */
-  function appendToolAction(toolName, detail, status) {
-    if (!elMessages) return;
+  function resetLiveToolRoundTargets() {
+    liveToolRoundRoot = null;
+    liveToolRoundVisible = null;
+    liveToolRoundCollapsed = null;
+    liveToolRoundToggle = null;
+    liveToolRoundCount = 0;
+  }
+
+  /** 创建单行工具 DOM（历史 / 实时共用） */
+  function createToolActionRow(toolName, detail, status) {
     var el = document.createElement('div');
     el.className = 'tool-action';
     el.setAttribute('data-tool', toolName);
@@ -341,22 +359,148 @@ window.ChatPage = (function () {
       detailEl.textContent = detail;
       el.appendChild(detailEl);
     }
-
-    elMessages.insertBefore(el, elAnchor);
     return el;
   }
 
-  /** 更新最后一个匹配工具名的条目状态 */
+  function bindToolTraceToggle(btn, collapsedEl) {
+    btn.addEventListener('click', function () {
+      var expanded = btn.getAttribute('aria-expanded') === 'true';
+      if (expanded) {
+        collapsedEl.style.display = 'none';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.textContent = '还有 ' + collapsedEl.children.length + ' 条历史 · 展开';
+      } else {
+        collapsedEl.style.display = '';
+        btn.setAttribute('aria-expanded', 'true');
+        btn.textContent = '收起';
+      }
+    });
+    btn.setAttribute('aria-expanded', 'false');
+  }
+
+  function refreshCollapsedToggleLabel(btn, collapsedEl) {
+    if (!btn || !collapsedEl || collapsedEl.children.length === 0) return;
+    if (btn.getAttribute('aria-expanded') === 'true') {
+      btn.textContent = '收起';
+    } else {
+      btn.textContent = '还有 ' + collapsedEl.children.length + ' 条历史 · 展开';
+    }
+  }
+
+  /** 历史恢复：插入可折叠工具组（插在 insertBefore 节点前）；默认展示最新若干条，更早的折叠 */
+  function insertFoldableToolTraceGroup(traces, insertBeforeNode) {
+    if (!elMessages || !traces || traces.length === 0) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'tool-trace-group';
+    var visible = document.createElement('div');
+    visible.className = 'tool-trace-visible';
+
+    var max = TOOL_TRACE_VISIBLE_MAX;
+    var i;
+    if (traces.length <= max) {
+      for (i = 0; i < traces.length; i++) {
+        var tr = traces[i];
+        visible.appendChild(createToolActionRow(tr.toolName || '', tr.detail || '', tr.status || 'pending'));
+      }
+      wrap.appendChild(visible);
+      elMessages.insertBefore(wrap, insertBeforeNode);
+      return;
+    }
+
+    var olderCount = traces.length - max;
+    var collapsed = document.createElement('div');
+    collapsed.className = 'tool-trace-collapsed';
+    collapsed.style.display = 'none';
+    for (var j = 0; j < olderCount; j++) {
+      var tOld = traces[j];
+      collapsed.appendChild(createToolActionRow(tOld.toolName || '', tOld.detail || '', tOld.status || 'pending'));
+    }
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'tool-trace-toggle';
+    toggle.textContent = '还有 ' + olderCount + ' 条历史 · 展开';
+    bindToolTraceToggle(toggle, collapsed);
+
+    for (var k = olderCount; k < traces.length; k++) {
+      var tNew = traces[k];
+      visible.appendChild(createToolActionRow(tNew.toolName || '', tNew.detail || '', tNew.status || 'pending'));
+    }
+
+    wrap.appendChild(collapsed);
+    wrap.appendChild(toggle);
+    wrap.appendChild(visible);
+    elMessages.insertBefore(wrap, insertBeforeNode);
+  }
+
+  function ensureLiveToolGroupDom() {
+    if (liveToolRoundRoot) return;
+    liveToolRoundRoot = document.createElement('div');
+    liveToolRoundRoot.className = 'tool-trace-group';
+    liveToolRoundCollapsed = document.createElement('div');
+    liveToolRoundCollapsed.className = 'tool-trace-collapsed';
+    liveToolRoundCollapsed.style.display = 'none';
+    liveToolRoundToggle = document.createElement('button');
+    liveToolRoundToggle.type = 'button';
+    liveToolRoundToggle.className = 'tool-trace-toggle';
+    liveToolRoundToggle.style.display = 'none';
+    liveToolRoundVisible = document.createElement('div');
+    liveToolRoundVisible.className = 'tool-trace-visible';
+    liveToolRoundRoot.appendChild(liveToolRoundCollapsed);
+    liveToolRoundRoot.appendChild(liveToolRoundToggle);
+    liveToolRoundRoot.appendChild(liveToolRoundVisible);
+    bindToolTraceToggle(liveToolRoundToggle, liveToolRoundCollapsed);
+    elMessages.insertBefore(liveToolRoundRoot, elAnchor);
+  }
+
+  /** 在聊天区追加工具调用条目（紧凑行）；实时轮次超阈值时折叠更早记录 */
+  function appendToolAction(toolName, detail, status) {
+    if (!elMessages) return null;
+
+    var row = createToolActionRow(toolName, detail, status);
+
+    if (liveToolRoundActive) {
+      ensureLiveToolGroupDom();
+      liveToolRoundCount++;
+      liveToolRoundVisible.appendChild(row);
+      while (liveToolRoundVisible.children.length > TOOL_TRACE_VISIBLE_MAX) {
+        var oldest = liveToolRoundVisible.firstChild;
+        if (oldest) liveToolRoundCollapsed.appendChild(oldest);
+      }
+      if (liveToolRoundCollapsed.children.length > 0) {
+        liveToolRoundToggle.style.display = '';
+        refreshCollapsedToggleLabel(liveToolRoundToggle, liveToolRoundCollapsed);
+      }
+      return row;
+    }
+
+    elMessages.insertBefore(row, elAnchor);
+    return row;
+  }
+
+  /** 更新最后一个匹配工具名的条目状态（支持 .tool-trace-group 内） */
   function updateLastToolAction(toolName, status) {
     if (!elMessages) return;
-    // 从锚点往前找最后一个匹配的 tool-action
     var node = elAnchor ? elAnchor.previousSibling : elMessages.lastChild;
     while (node) {
+      if (node.nodeType === 1 && node.classList && node.classList.contains('tool-trace-group')) {
+        var rows = node.querySelectorAll('.tool-action');
+        for (var r = rows.length - 1; r >= 0; r--) {
+          if (rows[r].getAttribute('data-tool') === toolName) {
+            var iconEl = rows[r].querySelector('.tool-icon');
+            if (iconEl) {
+              iconEl.className = 'tool-icon ' + status;
+              iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+            }
+            return;
+          }
+        }
+      }
       if (node.nodeType === 1 && node.classList && node.classList.contains('tool-action') && node.getAttribute('data-tool') === toolName) {
-        var iconEl = node.querySelector('.tool-icon');
-        if (iconEl) {
-          iconEl.className = 'tool-icon ' + status;
-          iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+        var iconEl2 = node.querySelector('.tool-icon');
+        if (iconEl2) {
+          iconEl2.className = 'tool-icon ' + status;
+          iconEl2.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
         }
         return;
       }
@@ -368,6 +512,9 @@ window.ChatPage = (function () {
 
   /** 渲染消息到 DOM（不触发保存，用于只读同步） */
   function renderMessagesOnly(shouldScroll) {
+    liveToolRoundActive = false;
+    resetLiveToolRoundTargets();
+
     // 保留锚点，清除其他内容
     while (elMessages.firstChild !== elAnchor) {
       elMessages.removeChild(elMessages.firstChild);
@@ -378,9 +525,7 @@ window.ChatPage = (function () {
       // 在 agent 消息前渲染关联的工具调用记录（通过 msg.id 查找）
       var traces = msg.id ? toolTraces[msg.id] : null;
       if (traces && traces.length > 0) {
-        for (var t = 0; t < traces.length; t++) {
-          renderToolTraceEl(traces[t]);
-        }
+        insertFoldableToolTraceGroup(traces, elAnchor);
       }
 
       var el = document.createElement('div');
@@ -414,39 +559,6 @@ window.ChatPage = (function () {
     if (shouldScroll !== false) {
       scrollToBottom();
     }
-  }
-
-  /** 渲染单条工具调用记录到 DOM（用于历史恢复） */
-  function renderToolTraceEl(trace) {
-    if (!elMessages) return;
-    var el = document.createElement('div');
-    el.className = 'tool-action';
-    el.setAttribute('data-tool', trace.toolName);
-
-    var iconEl = document.createElement('span');
-    iconEl.className = 'tool-icon ' + (trace.status || 'pending');
-    if (trace.status === 'success') {
-      iconEl.textContent = '✓';
-    } else if (trace.status === 'error') {
-      iconEl.textContent = '✗';
-    } else {
-      iconEl.textContent = '⟳';
-    }
-    el.appendChild(iconEl);
-
-    var nameEl = document.createElement('span');
-    nameEl.className = 'tool-name';
-    nameEl.textContent = trace.toolName;
-    el.appendChild(nameEl);
-
-    if (trace.detail) {
-      var detailEl = document.createElement('span');
-      detailEl.className = 'tool-detail';
-      detailEl.textContent = trace.detail;
-      el.appendChild(detailEl);
-    }
-
-    elMessages.insertBefore(el, elAnchor);
   }
 
   function renderMessages() {
@@ -1114,6 +1226,8 @@ window.ChatPage = (function () {
       renderMessages();
       return;
     }
+    resetLiveToolRoundTargets();
+    liveToolRoundActive = true;
     chatWs.send(JSON.stringify({ type: 'message', content: text }));
   }
 
@@ -1516,6 +1630,8 @@ window.ChatPage = (function () {
 
     // 构建 WebSocket 消息（可能包含图片）
     if (msgImages.length > 0) {
+      resetLiveToolRoundTargets();
+      liveToolRoundActive = true;
       // 发送带图片的多模态消息
       chatWs.send(JSON.stringify({
         type: 'message',

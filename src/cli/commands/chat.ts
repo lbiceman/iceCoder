@@ -154,7 +154,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 
   child.on('exit', (code) => {
     if (code !== null && code !== 0) {
-      error(`Cloudflare Tunnel 退出 (code: ${code})`);
+      error(`Cloudflare Tunnel 控制台退出 (code: ${code})`);
     }
   });
 
