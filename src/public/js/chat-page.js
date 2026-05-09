@@ -98,6 +98,12 @@ window.ChatPage = (function () {
       });
   }
 
+  /** 当前是否有一条正在流式输出的 Agent 消息（勿全量重绘，否则会删掉 #streaming-msg） */
+  function hasStreamingAgent() {
+    var last = messages[messages.length - 1];
+    return !!(last && last.role === 'agent' && last._streaming);
+  }
+
   /** 初始化：从本地缓存加载，再从服务端同步 */
   function initSession() {
     messages = loadLocalMessages();
@@ -107,7 +113,13 @@ window.ChatPage = (function () {
     fetchServerMessages(function (serverMsgs) {
       if (serverMsgs.length > 0) {
         var separated = separateToolTraces(serverMsgs);
-        if (separated.msgs.length >= messages.length) {
+        // 正在流式或任务处理中时不要覆盖，避免 renderMessages 拆掉流式 DOM 导致「有字但不显示」
+        if (
+          separated.msgs.length >= messages.length
+          && !hasStreamingAgent()
+          && !wsProcessing
+          && !isStreaming
+        ) {
           messages = separated.msgs;
           toolTraces = separated.traces;
           renderMessages();
@@ -452,6 +464,22 @@ window.ChatPage = (function () {
 
     // 增量追加文本节点
     var streamEl = document.getElementById('streaming-msg');
+    if (!streamEl) {
+      // 全量 render 曾移除流式节点：按当前缓冲重建气泡，否则只有内存有字、界面空白
+      var wrap = document.createElement('div');
+      wrap.className = 'message agent';
+      wrap.setAttribute('id', 'streaming-msg');
+      var lab = document.createElement('div');
+      lab.className = 'msg-label';
+      lab.textContent = 'Agent';
+      wrap.appendChild(lab);
+      var contentDiv = document.createElement('div');
+      contentDiv.textContent = agentResponseBuffer;
+      wrap.appendChild(contentDiv);
+      wrap._streamContentEl = contentDiv;
+      elMessages.insertBefore(wrap, elAnchor);
+      return;
+    }
     if (streamEl && streamEl._streamContentEl) {
       streamEl._streamContentEl.appendChild(document.createTextNode(text));
     } else if (streamEl) {
@@ -470,6 +498,7 @@ window.ChatPage = (function () {
 
   function finalizeAgentResponse() {
     var lastMsg = messages[messages.length - 1];
+    var wasStreaming = !!(lastMsg && lastMsg._streaming);
     if (lastMsg && lastMsg._streaming) {
       delete lastMsg._streaming;
       streamFinalized = true;
@@ -486,6 +515,9 @@ window.ChatPage = (function () {
       }
       streamEl.removeAttribute('id');
       delete streamEl._streamContentEl;
+    } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
+      // 流式节点已丢失：补画一条，避免 streamFinalized 跳过 response 后界面无气泡
+      appendMessageEl(lastMsg);
     }
     // 将收集的工具调用批次清空（后端已持久化）
     var agentMsgIndex = messages.length - 1;
@@ -830,7 +862,7 @@ window.ChatPage = (function () {
   }
 
   function syncMessages() {
-    if (wsProcessing || isStreaming) return;
+    if (wsProcessing || isStreaming || hasStreamingAgent()) return;
     fetchServerMessages(function (serverMsgs) {
       if (!serverMsgs || serverMsgs.length === 0) return;
       var separated = separateToolTraces(serverMsgs);
