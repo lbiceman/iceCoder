@@ -146,6 +146,8 @@ export interface HarnessConfig {
   fileMemoryManager?: FileMemoryManager;
   /** 会话目录，用于保存任务断点 checkpoint */
   sessionDir?: string;
+  /** 工作区根目录（会话笔记 package.json 锚定；默认 process.cwd()） */
+  workspaceRoot?: string;
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
 }

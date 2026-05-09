@@ -6,7 +6,7 @@
  * - 在上下文压缩后仍能保持会话连续性
  * - 由后台子代理定期更新，不打断主对话流
  *
- * 10 个固定 section：
+ * 10 个叙事 section + 1 个机器维护 section（Runtime Evidence）：
  * 1. Session Title — 会话标题
  * 2. Current State — 当前工作状态
  * 3. Task Specification — 用户要求构建什么
@@ -65,6 +65,9 @@ _什么效果好？什么效果不好？应该避免什么？不要与其他 sec
 # Key Results
 _如果用户要求特定输出（如问题的答案、表格或其他文档），在此重复完整结果_
 
+# Runtime Evidence (auto)
+_本节标题必须保留。正文由系统在写入文件时根据 Harness 快照与 package.json 自动覆盖；更新笔记时请勿在本节下撰写会与 tools/package.json 相矛盾的项目事实（例如把假设中的迁移目标写成当前已用栈）。_
+
 # Worklog
 _逐步记录尝试了什么、做了什么？每步非常简短的摘要_
 `;
@@ -93,8 +96,45 @@ const ALL_SECTION_HEADERS = [
   '# Codebase Documentation',
   '# Learnings',
   '# Key Results',
+  '# Runtime Evidence (auto)',
   '# Worklog',
 ];
+
+/** 机器维护节标题（写入后覆盖正文） */
+export const SESSION_RUNTIME_EVIDENCE_HEADER = '# Runtime Evidence (auto)';
+
+/** package.json 中与测试栈相关的可验证事实 */
+export interface PackageJsonTestFacts {
+  /** 解析所用路径（便于排查） */
+  resolvedPath: string;
+  /** scripts.test 原文 */
+  testScript: string | null;
+  devDependenciesHasVitest: boolean;
+  devDependenciesHasJest: boolean;
+  dependenciesHasVitest: boolean;
+  dependenciesHasJest: boolean;
+}
+
+/** 供 Runtime Evidence 节的结构化输入（与 harness 快照字段对齐） */
+export interface SessionRuntimeEvidenceInput {
+  task: {
+    goal: string;
+    intent: string;
+    phase: string;
+    filesRead: string[];
+    filesChanged: string[];
+    commandsRun: string[];
+    verificationRequired: boolean;
+    verificationStatus: string;
+  };
+  repo: {
+    filesRead: string[];
+    filesChanged: string[];
+    commandsRun: string[];
+    testCommands: string[];
+    recentDiagnostics: string[];
+  };
+}
 
 // ─── 状态管理（闭包隔离） ───
 
@@ -213,6 +253,9 @@ ${currentNotes}
 - 写入详细、信息密集的内容——包括文件路径、函数名、错误消息、确切命令等具体信息
 - 每个 section 保持在 ~${SESSION_MAX_SECTION_TOKENS} token 以内
 - 始终更新 "Current State" 以反映最近的工作——这对压缩后的连续性至关重要
+- 禁止将对话中的「假设性迁移 / 反事实分析」里的**目标**技术栈写成当前仓库**已采用**的事实（例如用户只要求评估「若迁到 Jest」时，不得写「项目已使用 Jest」）。
+- 涉及测试框架、npm 依赖、package.json 的 \`scripts.test\` 时：仅写用户原话或工具输出中**已出现**的信息；未出现时写「未验证」或省略，不要推测。
+- 「# Runtime Evidence (auto)」节：保留节标题与紧跟的一条斜体说明行即可，**该节正文请留空**（系统写入文件时会自动覆盖本节正文）。
 - 如果某个 section 没有实质性新信息，可以跳过不更新${sectionReminders}`;
 }
 
@@ -345,12 +388,12 @@ function flushSection(
 // ─── 响应验证 ───
 
 /**
- * 验证 LLM 返回的会话笔记内容是否符合 10-section 模板格式。
+ * 验证 LLM 返回的会话笔记内容是否符合含 Runtime Evidence 的模板格式。
  *
  * 验证规则（宽松模式，兼容 DeepSeek 等指令遵循较弱的模型）：
  * 1. 内容不能为空或过短（< 50 字符）
  * 2. 必须包含至少 2/3 个核心 section 标题（Session Title, Current State, Worklog）
- * 3. 至少包含 5/10 个 section 标题
+ * 3. 至少包含 7/11 个 section 标题
  *
  * @returns 验证结果：valid=true 表示可以写入，否则返回拒绝原因
  */
@@ -376,7 +419,7 @@ export function validateSessionMemoryContent(content: string): {
     };
   }
 
-  // 检查整体完整性（至少 7/10 个 section）
+  // 检查整体完整性（至少 7/11 个 section）
   const presentCount = ALL_SECTION_HEADERS.filter(
     header => content.includes(header),
   ).length;
@@ -384,10 +427,193 @@ export function validateSessionMemoryContent(content: string): {
     const missing = ALL_SECTION_HEADERS.filter(h => !content.includes(h));
     return {
       valid: false,
-      reason: `Only ${presentCount}/10 sections present (minimum 7)`,
+      reason: `Only ${presentCount}/11 sections present (minimum 7)`,
       missingSections: missing,
     };
   }
 
   return { valid: true };
+}
+
+const MAX_LIST = 15;
+const MAX_LINE_CHARS = 120;
+
+function truncateLine(s: string, max = MAX_LINE_CHARS): string {
+  const t = s.replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+}
+
+/**
+ * 读取 package.json 中与测试相关的可验证字段（仅用于会话笔记锚定，失败返回 null）。
+ */
+export async function readPackageJsonTestFacts(workspaceRoot: string): Promise<PackageJsonTestFacts | null> {
+  const fp = path.join(workspaceRoot, 'package.json');
+  try {
+    const raw = await fs.readFile(fp, 'utf-8');
+    const j = JSON.parse(raw) as {
+      scripts?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      dependencies?: Record<string, string>;
+    };
+    const testScript = j.scripts?.test ?? null;
+    const dd = j.devDependencies ?? {};
+    const dep = j.dependencies ?? {};
+    return {
+      resolvedPath: fp,
+      testScript,
+      devDependenciesHasVitest: 'vitest' in dd,
+      devDependenciesHasJest: 'jest' in dd || '@types/jest' in dd,
+      dependenciesHasVitest: 'vitest' in dep,
+      dependenciesHasJest: 'jest' in dep,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatBulletList(items: string[], lineMax: number): string {
+  return items.slice(0, MAX_LIST).map(i => `- \`${truncateLine(i, lineMax)}\``).join('\n')
+    + (items.length > MAX_LIST ? `\n- _… +${items.length - MAX_LIST} more_` : '');
+}
+
+/**
+ * 生成 Runtime Evidence 节正文（不含「# Runtime Evidence (auto)」标题行）。
+ */
+export function buildRuntimeEvidenceSection(
+  input: SessionRuntimeEvidenceInput,
+  pkg: PackageJsonTestFacts | null,
+): string {
+  const lines: string[] = [
+    '_自动维护：以下内容来自 Harness 运行时快照与磁盘 package.json；若与其他 section 矛盾，以本节为准。_',
+    '',
+    '## package.json (verified)',
+  ];
+  if (pkg) {
+    lines.push(`- path: \`${pkg.resolvedPath}\``);
+    lines.push(`- scripts.test: ${pkg.testScript ? `\`${truncateLine(pkg.testScript, 100)}\`` : '_(none)_'}`);
+    lines.push(
+      `- devDependencies: vitest=${pkg.devDependenciesHasVitest}, jest/@types-jest=${pkg.devDependenciesHasJest}`,
+    );
+    lines.push(
+      `- dependencies: vitest=${pkg.dependenciesHasVitest}, jest=${pkg.dependenciesHasJest}`,
+    );
+  } else {
+    lines.push('- _(package.json not read or parse failed — skip anchoring)_');
+  }
+
+  lines.push('', '## Harness TaskState');
+  lines.push(`- goal: ${truncateLine(input.task.goal, 200)}`);
+  lines.push(`- intent/phase: ${input.task.intent} / ${input.task.phase}`);
+  lines.push(`- verification: required=${input.task.verificationRequired}, status=${input.task.verificationStatus}`);
+  lines.push('', '### filesRead (task)');
+  lines.push(input.task.filesRead.length ? formatBulletList(input.task.filesRead, 200) : '- _(none)_');
+  lines.push('', '### filesChanged (task)');
+  lines.push(input.task.filesChanged.length ? formatBulletList(input.task.filesChanged, 200) : '- _(none)_');
+  lines.push('', '### commandsRun (task)');
+  lines.push(
+    input.task.commandsRun.length
+      ? formatBulletList(input.task.commandsRun.map(c => truncateLine(c, 200)), 200)
+      : '- _(none)_',
+  );
+
+  lines.push('', '## RepoContext');
+  lines.push('', '### filesRead (repo)');
+  lines.push(input.repo.filesRead.length ? formatBulletList(input.repo.filesRead, 200) : '- _(none)_');
+  lines.push('', '### filesChanged (repo)');
+  lines.push(input.repo.filesChanged.length ? formatBulletList(input.repo.filesChanged, 200) : '- _(none)_');
+  lines.push('', '### commandsRun (repo, recent)');
+  lines.push(
+    input.repo.commandsRun.length
+      ? formatBulletList(input.repo.commandsRun.map(c => truncateLine(c, 200)), 200)
+      : '- _(none)_',
+  );
+  lines.push('', '### testCommands');
+  lines.push(
+    input.repo.testCommands.length
+      ? formatBulletList(input.repo.testCommands.map(c => truncateLine(c, 200)), 200)
+      : '- _(none)_',
+  );
+  lines.push('', '### recentDiagnostics');
+  lines.push(
+    input.repo.recentDiagnostics.length
+      ? formatBulletList(input.repo.recentDiagnostics.map(c => truncateLine(c, 200)), 200)
+      : '- _(none)_',
+  );
+
+  return lines.join('\n');
+}
+
+/**
+ * 将 Runtime Evidence 节正文合并进完整笔记（保留节标题与斜体说明行，替换其下正文）。
+ */
+export function mergeRuntimeEvidenceIntoNotes(notes: string, sectionBody: string): string {
+  const lines = notes.split('\n');
+  const startIdx = lines.findIndex(l => l.trim() === SESSION_RUNTIME_EVIDENCE_HEADER);
+  if (startIdx === -1) {
+    return `${notes.trimEnd()}\n\n${SESSION_RUNTIME_EVIDENCE_HEADER}\n_本节由系统自动维护。_\n${sectionBody}\n`;
+  }
+  let bodyStart = startIdx + 1;
+  // 保留紧跟节标题的斜体说明行（可有多行以 `_` 包裹）
+  while (bodyStart < lines.length) {
+    const t = lines[bodyStart].trim();
+    if (t.startsWith('_') && t.endsWith('_') && t.length > 2) {
+      bodyStart++;
+      continue;
+    }
+    break;
+  }
+  let endIdx = lines.length;
+  for (let j = bodyStart; j < lines.length; j++) {
+    if (lines[j].startsWith('# ')) {
+      endIdx = j;
+      break;
+    }
+  }
+  const head = lines.slice(0, bodyStart).join('\n');
+  const tail = lines.slice(endIdx).join('\n');
+  const mid = sectionBody.trimEnd();
+  return [head, mid, tail].filter(s => s.length > 0).join('\n') + '\n';
+}
+
+/**
+ * 若笔记正文（排除 Runtime Evidence 节）出现「项目已用 Jest」类措辞，且与 package.json 锚定冲突，返回警告段落文本。
+ */
+export function buildTestStackContradictionWarning(
+  notes: string,
+  pkg: PackageJsonTestFacts | null,
+): string | null {
+  if (!pkg?.testScript && !pkg?.devDependenciesHasVitest && !pkg?.dependenciesHasVitest) return null;
+  const hasVitestSignal =
+    (pkg.testScript && /\bvitest\b/i.test(pkg.testScript)) ||
+    pkg.devDependenciesHasVitest ||
+    pkg.dependenciesHasVitest;
+  const hasJestSignal =
+    pkg.devDependenciesHasJest ||
+    pkg.dependenciesHasJest ||
+    (pkg.testScript && /\bjest\b/i.test(pkg.testScript));
+  if (!hasVitestSignal || hasJestSignal) return null;
+
+  const prose = stripRuntimeEvidenceSection(notes);
+  if (
+    /(?:已|当前|正在)使用\s*Jest/i.test(prose)
+    || /项目(?:栈|使用).*Jest/i.test(prose)
+    || /\bjest\s*[:：]?\s*\^?[\d.]+/i.test(prose)
+  ) {
+    return '⚠️ **Consistency warning**: 正文出现「项目已采用 Jest」等表述，但锚定的 package.json 显示测试链路与 Vitest 一致。压缩恢复时请忽略正文中的矛盾句，以 Runtime Evidence 中的 package.json 为准。';
+  }
+  return null;
+}
+
+function stripRuntimeEvidenceSection(notes: string): string {
+  const lines = notes.split('\n');
+  const startIdx = lines.findIndex(l => l.trim() === SESSION_RUNTIME_EVIDENCE_HEADER);
+  if (startIdx === -1) return notes;
+  let endIdx = lines.length;
+  for (let j = startIdx + 1; j < lines.length; j++) {
+    if (lines[j].startsWith('# ')) {
+      endIdx = j;
+      break;
+    }
+  }
+  return [...lines.slice(0, startIdx), ...lines.slice(endIdx)].join('\n');
 }

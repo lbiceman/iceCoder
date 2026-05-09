@@ -603,13 +603,14 @@ window.ChatPage = (function () {
   var userScrolledUp = false;
 
   function appendAgentChunk(text) {
-    agentResponseBuffer += text;
-
     var lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role === 'agent' && lastMsg._streaming) {
       // 已有流式消息，更新数据模型
+      agentResponseBuffer += text;
       lastMsg.content = agentResponseBuffer;
     } else {
+      repairOrphanStreamingIfAny();
+      agentResponseBuffer += text;
       // 新建流式消息
       messages.push({ role: 'agent', content: agentResponseBuffer, _streaming: true });
 
@@ -695,6 +696,55 @@ window.ChatPage = (function () {
     }
     setStreamingState(false);
     saveMessages();
+  }
+
+  /** 从流式气泡 DOM 读取正文（不含 Agent 标签行） */
+  function getStreamingBubbleBodyText(streamEl) {
+    if (!streamEl) return '';
+    if (streamEl._streamContentEl) {
+      return streamEl._streamContentEl.textContent || '';
+    }
+    var label = streamEl.querySelector('.msg-label');
+    var n = label ? label.nextElementSibling : null;
+    while (n && n.classList && n.classList.contains('msg-images')) {
+      n = n.nextElementSibling;
+    }
+    return n ? (n.textContent || '') : '';
+  }
+
+  /**
+   * 模型与 DOM 不一致时收尾：页面上仍有 #streaming-msg，但 messages 最后一项已不是流式 agent。
+   * 避免重复 id 导致后续 chunk 写到旧气泡（显示在用户气泡上方）。
+   */
+  function repairOrphanStreamingIfAny() {
+    if (!elMessages) return;
+    var streamEl = document.getElementById('streaming-msg');
+    if (!streamEl) return;
+
+    var bodyText = getStreamingBubbleBodyText(streamEl);
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'agent' && messages[i]._streaming) {
+        messages[i].content = stripStatusTag(bodyText);
+        delete messages[i]._streaming;
+        break;
+      }
+    }
+
+    streamEl.removeAttribute('id');
+    delete streamEl._streamContentEl;
+    agentResponseBuffer = '';
+    flushToolBatchLocal();
+    setStreamingState(false);
+    saveMessages();
+  }
+
+  /** 发送新用户消息前结束本轮流式，保证新气泡永远在用户气泡之下 */
+  function finalizeBeforeUserMessage() {
+    if (hasStreamingAgent()) {
+      finalizeAgentResponse();
+    } else {
+      repairOrphanStreamingIfAny();
+    }
   }
 
   // ---- 发送/停止按钮状态切换 ----
@@ -1610,6 +1660,7 @@ window.ChatPage = (function () {
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
     if (displayParts.length > 0 || msgImages.length > 0) {
+      finalizeBeforeUserMessage();
       var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       messages.push(userMsg);
       appendMessageEl(userMsg);

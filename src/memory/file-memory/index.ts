@@ -105,6 +105,7 @@ export type {
   ExtractTelemetry,
   DreamTelemetry,
   StatsTelemetry,
+  SessionMemoryTelemetry,
 } from './memory-telemetry.js';
 
 // ─── 并发控制与锁机制 ───
@@ -143,8 +144,13 @@ export {
   getSessionMemoryContent,
   validateSessionMemoryContent,
   SESSION_MEMORY_TEMPLATE,
+  SESSION_RUNTIME_EVIDENCE_HEADER,
+  readPackageJsonTestFacts,
+  buildRuntimeEvidenceSection,
+  mergeRuntimeEvidenceIntoNotes,
+  buildTestStackContradictionWarning,
 } from './session-memory.js';
-export type { SessionMemoryState } from './session-memory.js';
+export type { SessionMemoryState, PackageJsonTestFacts, SessionRuntimeEvidenceInput } from './session-memory.js';
 
 // ─── 淘汰机制 ───
 

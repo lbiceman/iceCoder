@@ -283,6 +283,8 @@ export class Harness {
     this.memoryIntegration = new HarnessMemoryIntegration({
       memoryDir: config.memoryDir,
       fileMemoryManager: config.fileMemoryManager,
+      sessionDir: config.sessionDir,
+      workspaceRoot: config.workspaceRoot,
     });
 
     // 如果配置了 token 预算，创建追踪器
@@ -402,6 +404,8 @@ export class Harness {
       logger.llmCall();
 
       this.upsertRuntimeContextMessage(msgs, state);
+
+      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm' });
 
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
       // 工具结果预算裁剪在副本上执行，不修改原始消息（保持前缀缓存一致性）
@@ -930,6 +934,7 @@ export class Harness {
         state.messages,
         state.turnCount,
         this.loopController.getState().totalInputTokens,
+        { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() },
       ).catch(err => {
         console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
       });
@@ -1401,8 +1406,11 @@ export class Harness {
     if (taskDesc) {
       this.memoryIntegration.maybeUpdateSessionMemory(
         messages,
-        0, // force update regardless of token count
+        0,
         true,
+        state
+          ? { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() }
+          : undefined,
       ).catch(err => {
         console.debug('[harness] task backup before compaction failed:', err instanceof Error ? err.message : err);
       });

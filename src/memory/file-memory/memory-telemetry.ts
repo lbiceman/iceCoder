@@ -46,6 +46,20 @@ export interface RecallTelemetry {
   queryLength: number;
   /** 会话内去重过滤掉的记忆数 */
   dedupCount?: number;
+  /** 召回阶段：首轮粗召回 vs 工具后标准召回 */
+  recallPhase?: 'coarse_pre_llm' | 'standard';
+}
+
+/**
+ * 会话笔记写入遥测。
+ */
+export interface SessionMemoryTelemetry {
+  type: 'session_memory';
+  timestamp: string;
+  wrote: boolean;
+  rejectReason?: string;
+  evidenceAnchored: boolean;
+  contradictionWarning: boolean;
 }
 
 /**
@@ -113,7 +127,8 @@ export type TelemetryEvent =
   | RecallTelemetry
   | ExtractTelemetry
   | DreamTelemetry
-  | StatsTelemetry;
+  | StatsTelemetry
+  | SessionMemoryTelemetry;
 
 /**
  * 遥测配置。
@@ -171,6 +186,18 @@ export class MemoryTelemetry extends EventEmitter {
       this.stats.keywordRecallCount++;
     }
 
+    await this.writeEvent(event);
+  }
+
+  /**
+   * 会话笔记更新事件。
+   */
+  async logSessionMemory(data: Omit<SessionMemoryTelemetry, 'type' | 'timestamp'>): Promise<void> {
+    const event: SessionMemoryTelemetry = {
+      type: 'session_memory',
+      timestamp: new Date().toISOString(),
+      ...data,
+    };
     await this.writeEvent(event);
   }
 
@@ -299,13 +326,15 @@ export class MemoryTelemetry extends EventEmitter {
   private formatEventSummary(event: TelemetryEvent): string {
     switch (event.type) {
       case 'memory_recall':
-        return `recall: ${event.selectedCount}/${event.candidateCount} selected, ${event.usedLLM ? 'LLM' : 'keyword'}, ${event.durationMs}ms`;
+        return `recall: ${event.selectedCount}/${event.candidateCount} selected, ${event.usedLLM ? 'LLM' : 'keyword'}, ${event.durationMs}ms${event.recallPhase ? ` [${event.recallPhase}]` : ''}`;
       case 'memory_extract':
         return `extract: ${event.extractedCount} from ${event.messageCount} msgs, cache=${event.usedPromptCache}, prefix=${event.contextPrefixLength}, ${event.durationMs}ms`;
       case 'memory_dream':
         return `dream: ${event.executed ? `${event.filesModified} modified, ${event.filesDeleted} deleted` : 'skipped'}, ${event.durationMs}ms`;
       case 'memory_stats':
         return `stats: ${event.totalFiles} files, avg age ${event.avgAgeDays}d, index ${event.indexLineCount} lines`;
+      case 'session_memory':
+        return `session_memory: wrote=${event.wrote}, anchored=${event.evidenceAnchored}, warn=${event.contradictionWarning}${event.rejectReason ? ` (${event.rejectReason})` : ''}`;
     }
   }
 

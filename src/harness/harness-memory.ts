@@ -128,8 +128,14 @@ import {
   truncateSessionMemoryForCompact,
   isSessionMemoryEmpty,
   validateSessionMemoryContent,
+  readPackageJsonTestFacts,
+  buildRuntimeEvidenceSection,
+  mergeRuntimeEvidenceIntoNotes,
+  buildTestStackContradictionWarning,
   type SessionMemoryState,
 } from '../memory/file-memory/session-memory.js';
+import type { TaskStateSnapshot } from './task-state.js';
+import type { RepoContextSnapshot } from './repo-context.js';
 
 /**
  * HarnessMemoryIntegration 配置。
@@ -137,9 +143,14 @@ import {
 export interface HarnessMemoryConfig {
   memoryDir?: string;
   fileMemoryManager?: FileMemoryManager;
-  /** 会话数据目录（用于会话笔记） */
+  /** 会话数据目录（会话笔记） */
   sessionDir?: string;
+  /** 工作区根目录（用于 package.json 锚定） */
+  workspaceRoot?: string;
 }
+
+/** 记忆注入模式 */
+export type InjectMemoryMode = 'default' | 'coarse_pre_llm';
 
 // ─── 主代理写入检测 ───
 
@@ -432,10 +443,11 @@ export class HarnessMemoryIntegration {
   private hasMemories: boolean | null = null;
   /** 连续空召回计数（用于冷却机制） */
   private consecutiveEmptyRecalls = 0;
-  /** 空召冷却剩余轮次（冷却期间跳过召回） */
+  /** 空召冷却剩余轮次（冷却期间跳过标准召回；首轮粗召回不受此处约束） */
   private emptyRecallCooldown = 0;
-
-  // ── 用户反馈追踪 ──
+  private lastCoarsePreLlmMessage = '';
+  /** 工作区根（package.json） */
+  private workspaceRoot: string;
   /** 最近一次被动确认的记忆信息（用于检测用户反馈） */
   private lastConfirmedMemories: {
     filenames: string[];
@@ -451,6 +463,8 @@ export class HarnessMemoryIntegration {
     this.memoryDir = config.memoryDir || 'data/memory-files';
     this.fileMemoryManager = config.fileMemoryManager;
     this.telemetry = getMemoryTelemetry();
+
+    this.workspaceRoot = config.workspaceRoot ?? process.cwd();
 
     // 闭包隔离：每个 HarnessMemoryIntegration 实例有独立状态
     this.extractionGuard = initExtractionGuard();
@@ -486,8 +500,7 @@ export class HarnessMemoryIntegration {
     this.currentUserMessage = userMessage;
     this.llmAdapter = llmAdapter;
     this.injectedForCurrentMessage = false;
-
-    // 同步检测记忆目录是否存在（只检测一次）
+    this.lastCoarsePreLlmMessage = '';
     if (this.memoryDirExists === null) {
       this.memoryDirExists = existsSync(this.memoryDir);
     }
@@ -532,12 +545,19 @@ export class HarnessMemoryIntegration {
    * - 附加 Chain-of-Note 指令，要求模型先提取关键信息再推理
    * - 保留话题切换检测和跨轮次去重
    */
-  async injectMemoryContext(messages: UnifiedMessage[]): Promise<void> {
+  async injectMemoryContext(
+    messages: UnifiedMessage[],
+    options?: { mode?: InjectMemoryMode },
+  ): Promise<void> {
     if (!this.memoryDir && !this.fileMemoryManager) return;
     if (this.memoryDirExists === false) return;
 
-    // 获取当前最新的用户消息（可能是循环中途用户追加的）
     const latestUserMsg = getLatestUserMessage(messages) || this.currentUserMessage;
+
+    if (options?.mode === 'coarse_pre_llm') {
+      await this.injectCoarseKeywordRecall(messages, latestUserMsg);
+      return;
+    }
 
     // 判断是否需要注入
     if (this.injectedForCurrentMessage) {
@@ -601,7 +621,7 @@ export class HarnessMemoryIntegration {
         topicSwitched,
       );
 
-      this.telemetry.logRecall({
+      await this.telemetry.logRecall({
         candidateCount: recallResult.memories.length + this.surfacedMemoryPaths.size,
         selectedCount: recallResult.memories.length,
         usedLLM: recallResult.usedLLM,
@@ -609,6 +629,7 @@ export class HarnessMemoryIntegration {
         selectedFiles: recallResult.memories.map(m => m.filename),
         queryLength: latestUserMsg.length,
         dedupCount,
+        recallPhase: 'standard',
       }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
@@ -714,6 +735,99 @@ export class HarnessMemoryIntegration {
   }
 
   /**
+   * 首轮工具前：仅关键词召回 top-K，不调用侧边 LLM。
+   * 不设置 injectedForCurrentMessage，以便 post-tool 全量召回仍可进行。
+   */
+  private async injectCoarseKeywordRecall(
+    messages: UnifiedMessage[],
+    latestUserMsg: string,
+  ): Promise<void> {
+    if (!latestUserMsg.trim()) return;
+    if (this.lastCoarsePreLlmMessage === latestUserMsg) return;
+
+    if (this.hasMemories === null && this.memoryDirExists) {
+      try {
+        const entries = await fs.readdir(this.memoryDir);
+        this.hasMemories = entries.some(f => f.endsWith('.md') && f !== 'MEMORY.md');
+      } catch {
+        this.hasMemories = false;
+      }
+    }
+    if (this.hasMemories === false) {
+      this.lastCoarsePreLlmMessage = latestUserMsg;
+      return;
+    }
+
+    const COARSE_TOP = 3;
+    let dedupCount = 0;
+
+    try {
+      const prefetchedPaths = new Set<string>();
+      if (this.fileMemoryManager) {
+        try {
+          const prefetched = this.fileMemoryManager.getPrefetchedMemories(latestUserMsg);
+          for (const mem of prefetched) {
+            prefetchedPaths.add(mem.filePath);
+          }
+        } catch { /* ignore */ }
+      }
+
+      const recallResult = await recallRelevantMemories(
+        latestUserMsg,
+        this.memoryDir,
+        null,
+        this.surfacedMemoryPaths,
+        COARSE_TOP,
+        prefetchedPaths,
+        false,
+      );
+
+      await this.telemetry.logRecall({
+        candidateCount: recallResult.memories.length + this.surfacedMemoryPaths.size,
+        selectedCount: recallResult.memories.length,
+        usedLLM: recallResult.usedLLM,
+        durationMs: recallResult.duration,
+        selectedFiles: recallResult.memories.map(m => m.filename),
+        queryLength: latestUserMsg.length,
+        dedupCount,
+        recallPhase: 'coarse_pre_llm',
+      }).catch(() => {});
+
+      if (recallResult.memories.length === 0) {
+        return;
+      }
+
+      let selectedMemories = filterMemoriesForExecutionIntent(latestUserMsg, recallResult.memories)
+        .slice(0, COARSE_TOP);
+
+      const recallCfgForDedup = getRecallConfig();
+      if (recallCfgForDedup.dedupInSession && this.injectedMemoryIds.size > 0) {
+        const beforeCount = selectedMemories.length;
+        selectedMemories = selectedMemories.filter(m => !this.injectedMemoryIds.has(m.filename));
+        dedupCount = beforeCount - selectedMemories.length;
+      }
+      if (selectedMemories.length === 0) {
+        return;
+      }
+
+      const memoryItems = await this.buildStructuredMemoryItems(selectedMemories, recallResult.facts);
+      for (const mem of selectedMemories) {
+        this.surfacedMemoryPaths.add(mem.filePath);
+        this.injectedMemoryIds.add(mem.filename);
+      }
+      const reminder = buildCoNMemoryPrompt(memoryItems, 'keyword pre-LLM recall');
+      messages.push({ role: 'user', content: reminder });
+    } catch (err) {
+      console.debug('[harness-memory] coarse recall failed:', err instanceof Error ? err.message : err);
+    } finally {
+      this.lastCoarsePreLlmMessage = latestUserMsg;
+    }
+
+    const newHash = getScannerCache().getManifestHash(this.memoryDir);
+    if (newHash) this.lastManifestHash = newHash;
+  }
+
+  /**
    * LLM 精排：从粗召回结果中选出最相关的 top-K 记忆。
    */
   private async rerankMemories(
@@ -779,7 +893,12 @@ ${candidateList}`;
    * 循环结束时调用。条件触发 LLM 提取 + 会话记忆更新 + autoDream。
    * 带主代理互斥：如果主代理已直接写入记忆，跳过后台提取。
    */
-  async onLoopEnd(messages: UnifiedMessage[], turnCount: number, totalInputTokens?: number): Promise<void> {
+  async onLoopEnd(
+    messages: UnifiedMessage[],
+    turnCount: number,
+    totalInputTokens?: number,
+    runtimeSnapshots?: { task: TaskStateSnapshot; repo: RepoContextSnapshot },
+  ): Promise<void> {
     // Eval mode: skip all memory extraction to save tokens
     if (process.env.ICE_EVAL_MODE === '1') {
       return;
@@ -798,7 +917,7 @@ ${candidateList}`;
 
     // ── 会话记忆更新（上下文压缩前的连续性保障） ──
     if (totalInputTokens !== undefined) {
-      await this.maybeUpdateSessionMemory(messages, totalInputTokens);
+      await this.maybeUpdateSessionMemory(messages, totalInputTokens, false, runtimeSnapshots);
     }
 
     // ── autoDream 整合 ──
@@ -839,6 +958,7 @@ ${candidateList}`;
     this.lastConfirmedMemories = null;
     this.llmAdapter = null;
     this._extractionNotices = [];
+    this.lastCoarsePreLlmMessage = '';
   }
 
   /**
@@ -1293,6 +1413,7 @@ ${candidateList}`;
     messages: UnifiedMessage[],
     currentTokenCount: number,
     force = false,
+    runtimeSnapshots?: { task: TaskStateSnapshot; repo: RepoContextSnapshot },
   ): Promise<void> {
     if (!this.llmAdapter) return;
 
@@ -1328,15 +1449,53 @@ ${candidateList}`;
       if (response.content) {
         const validation = validateSessionMemoryContent(response.content);
         if (validation.valid) {
+          const pkg = await readPackageJsonTestFacts(this.workspaceRoot);
+          const runtimeInput = runtimeSnapshots
+            ? { task: runtimeSnapshots.task, repo: runtimeSnapshots.repo }
+            : {
+                task: {
+                  goal: '',
+                  intent: 'question',
+                  phase: 'intent',
+                  filesRead: [],
+                  filesChanged: [],
+                  commandsRun: [],
+                  verificationRequired: false,
+                  verificationStatus: 'not_required',
+                },
+                repo: {
+                  filesRead: [],
+                  filesChanged: [],
+                  commandsRun: [],
+                  testCommands: [],
+                  recentDiagnostics: [],
+                },
+              };
+          let evidenceMd = buildRuntimeEvidenceSection(runtimeInput, pkg);
+          const warn = buildTestStackContradictionWarning(response.content, pkg);
+          if (warn) {
+            evidenceMd += `\n\n${warn}`;
+          }
+          let finalNotes = mergeRuntimeEvidenceIntoNotes(response.content, evidenceMd);
           const { promises: fsPromises } = await import('node:fs');
-          await fsPromises.writeFile(this.sessionMemoryState.notesPath, response.content, 'utf-8');
+          await fsPromises.writeFile(this.sessionMemoryState.notesPath, finalNotes, 'utf-8');
+          await this.telemetry.logSessionMemory({
+            wrote: true,
+            evidenceAnchored: !!pkg,
+            contradictionWarning: !!warn,
+          }).catch(() => {});
           console.debug('[harness-memory] 会话记忆已更新');
         } else {
+          await this.telemetry.logSessionMemory({
+            wrote: false,
+            rejectReason: validation.reason,
+            evidenceAnchored: false,
+            contradictionWarning: false,
+          }).catch(() => {});
           console.debug(
             `[harness-memory] 会话记忆更新被拒绝 — ${validation.reason}` +
             (validation.missingSections ? ` (缺失: ${validation.missingSections.join(', ')})` : ''),
           );
-          // 保留原内容不覆盖
         }
       }
 
