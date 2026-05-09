@@ -124,9 +124,26 @@ export interface ChatWSOptions {
   toolExecutor: ToolExecutor;
 }
 
-/** 追加消息到会话文件（后端是唯一写入者） */
-async function appendMessages(msgs: { role: string; content: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<void> {
-  if (msgs.length === 0) return;
+/** 当前所有聊天 WebSocket 客户端（PC + 移动端），用于会话持久化后通知其它端拉取 default.json */
+const chatClients = new Set<WebSocket>();
+
+function broadcastSessionUpdated(reason: string, except?: WebSocket): void {
+  const payload = JSON.stringify({ type: 'session_updated', reason });
+  for (const client of chatClients) {
+    if (client === except) continue;
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/** 追加消息到会话文件（后端是唯一写入者）；失败返回 false */
+async function appendMessages(msgs: { role: string; content: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<boolean> {
+  if (msgs.length === 0) return true;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
     let existing: any[] = [];
@@ -136,8 +153,10 @@ async function appendMessages(msgs: { role: string; content: string; id?: string
     } catch { /* file doesn't exist yet */ }
     existing.push(...msgs);
     await fsPromises.writeFile(SESSION_FILE, JSON.stringify(existing), 'utf-8');
+    return true;
   } catch (err) {
     console.error('[chat-ws] appendMessages failed:', err);
+    return false;
   }
 }
 
@@ -195,6 +214,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
   wss.on('connection', (ws: WebSocket) => {
+    chatClients.add(ws);
+    ws.once('close', () => {
+      chatClients.delete(ws);
+    });
+
     sendJSON(ws, { type: 'connected', message: '连接成功' });
 
     let isProcessing = false;
@@ -224,7 +248,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           cachedMessages = undefined;
           // 取消防抖写入，防止旧的 cachedMessages 覆盖清空操作
           if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-          clearSessionFile().catch(() => {});
+          await clearSessionFile();
+          broadcastSessionUpdated('cleared', ws);
           console.log('[chat-ws] 清除会话缓存和文件');
           return;
         }
@@ -264,10 +289,6 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       } catch {
         sendJSON(ws, { type: 'error', message: '消息格式错误' });
       }
-    });
-
-    ws.on('close', () => {
-      // 静默处理，不刷屏
     });
 
     ws.on('error', () => { /* ignore */ });
@@ -339,7 +360,8 @@ async function handleChatMessage(
 
   // 写入用户消息到会话文件
   const userMsgId = randomUUID();
-  await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
+  const userPersisted = await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
+  if (userPersisted) broadcastSessionUpdated('user_message', ws);
 
   // 创建 AbortController 用于用户中断
   const abortController = new AbortController();
@@ -490,7 +512,8 @@ async function handleChatMessage(
   }
 
   if (sessionEntries.length > 0) {
-    await appendMessages(sessionEntries).catch(() => {});
+    const persisted = await appendMessages(sessionEntries);
+    if (persisted) broadcastSessionUpdated('turn_complete', ws);
   }
 
   // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
@@ -534,5 +557,6 @@ export function cleanupChatResources(): void {
     activeAbortController = null;
   }
   cachedMessages = undefined;
+  chatClients.clear();
   console.log('[chat-ws] Resources cleaned up');
 }

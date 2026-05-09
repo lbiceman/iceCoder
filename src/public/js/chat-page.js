@@ -918,6 +918,16 @@ window.ChatPage = (function () {
     }, 15000);
   }
 
+  /** 其它端写入 default.json 后立即拉取服务端快照（含 tool_trace），与轮询互补 */
+  function pullServerChatSnapshotAuthoritative() {
+    if (wsProcessing || isStreaming || hasStreamingAgent()) return;
+    fetchServerMessages(function (serverMsgs) {
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = separateToolTraces(raw);
+      applyServerChatSnapshot(separated, { fullRender: false, authoritative: true });
+    });
+  }
+
   function syncMessages() {
     if (wsProcessing || isStreaming || hasStreamingAgent()) return;
     fetchServerMessages(function (serverMsgs) {
@@ -954,6 +964,9 @@ window.ChatPage = (function () {
   function handleWsMessage(data) {
     switch (data.type) {
       case 'connected':
+        break;
+      case 'session_updated':
+        pullServerChatSnapshotAuthoritative();
         break;
       case 'stream':
         // 流式增量文本：逐 chunk 追加到当前 agent 消息
