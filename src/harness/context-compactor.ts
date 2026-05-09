@@ -2,9 +2,9 @@
  * 上下文压缩器 — 参考 claude-code 的分层策略。
  *
  * 压缩触发阈值为动态计算：contextWindow × compactionRatio。
- * - contextWindow：ICE_CONTEXT_WINDOW 环境变量 > data/config.json maxContextTokens > 默认 128K
- * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.8，即 80%）
- * - 1M 窗口 → 阈值 800K，128K 窗口 → 阈值 102K
+ * - contextWindow：ICE_CONTEXT_WINDOW 环境变量 > 默认 provider maxContextTokens > 最大 provider maxContextTokens > 默认 128K
+ * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.88，即 88%）
+ * - 1M 窗口 → 阈值 880K，128K 窗口 → 阈值 112K
  *
  * 两条压缩路径：
  * - 会话记忆路径（compactWithSessionMemory）：0 LLM 成本，会话记忆作为摘要
@@ -29,6 +29,8 @@ import * as path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
+import type { TaskStateSnapshot } from './task-state.js';
+import type { RepoContextSnapshot } from './repo-context.js';
 
 /**
  * 压缩配置。
@@ -94,11 +96,15 @@ function getContextWindow(): number {
   const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
   if (Number.isFinite(env) && env > 0) return env;
 
-  // 2. 从 provider 配置读取 maxContextTokens（取所有 provider 中最大的值）
+  // 2. 从 provider 配置读取当前默认 provider 的 maxContextTokens；未标记默认时回退最大值。
   try {
     const configPath = path.resolve('data/config.json');
     const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as { providers?: Array<{ maxContextTokens?: number }> };
+    const config = JSON.parse(raw) as { providers?: Array<{ maxContextTokens?: number; isDefault?: boolean }> };
+    const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
+    if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
+      return defaultProvider.maxContextTokens;
+    }
     let maxCtx = 0;
     for (const p of config.providers ?? []) {
       if (p.maxContextTokens && p.maxContextTokens > maxCtx) {
@@ -117,8 +123,6 @@ function getCompactionRatio(): number {
   const env = parseFloat(process.env.ICE_COMPACTION_RATIO || '');
   return Number.isFinite(env) && env > 0 && env <= 1 ? env : DEFAULT_COMPACTION_RATIO;
 }
-
-console.log("getContextWindow: " + getContextWindow());
 
 const DEFAULT_CONFIG: CompactionConfig = {
   threshold: 40,
@@ -139,6 +143,12 @@ const DEFAULT_CONFIG: CompactionConfig = {
  */
 export function estimateTokens(messages: UnifiedMessage[]): number {
   return estimateMessagesTokens(messages);
+}
+
+function isShortActionInstruction(content: string): boolean {
+  const trimmed = content.trim().toLowerCase();
+  return /^(跑|运行|执行|测|测试|修|修改|改|继续|提交|检查|验证)/.test(trimmed)
+    || /\b(run|test|fix|edit|continue|commit|check|verify)\b/i.test(trimmed);
 }
 
 /**
@@ -188,8 +198,9 @@ export class ContextCompactor {
     const currentTurn = assistantTurnCount;
 
     return messages.filter((msg, idx) => {
-      // 丢弃简短确认消息（user，内容 < 50 字符）
+      // 丢弃简短确认消息，但保留短执行指令（如“跑测试”“继续”“fix it”）。
       if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.length < SHORT_USER_MSG_MAX_LENGTH) {
+        if (isShortActionInstruction(msg.content)) return true;
         return false;
       }
 
@@ -241,6 +252,32 @@ export class ContextCompactor {
    */
   getConfig(): CompactionConfig {
     return this.config;
+  }
+
+  /**
+   * 构建压缩恢复用的结构化 Runtime State。
+   *
+   * 这条消息在硬压缩后重新注入，优先级高于自然语言摘要，
+   * 用于保证 Agent 还能知道当前目标、改动文件和下一步验证命令。
+   */
+  buildRuntimeRecoveryContext(
+    taskState: TaskStateSnapshot,
+    repoContext: RepoContextSnapshot,
+  ): UnifiedMessage {
+    return {
+      role: 'user',
+      content: [
+        '<runtime-recovery-context>',
+        'This structured runtime state survived context compaction. Treat it as authoritative for the current task unless the latest user message says otherwise.',
+        '',
+        '# Runtime State',
+        JSON.stringify(taskState, null, 2),
+        '',
+        '# Repo Context',
+        JSON.stringify(repoContext, null, 2),
+        '</runtime-recovery-context>',
+      ].join('\n'),
+    };
   }
 
   /**

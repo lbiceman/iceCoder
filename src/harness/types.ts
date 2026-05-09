@@ -18,6 +18,8 @@ export interface ContextAssemblyConfig {
   systemPrompt: string;
   /** 可用工具定义 */
   tools: ToolDefinition[];
+  /** 可选：固定工作语言时注入动态层；留空则不由系统指定语种 */
+  language?: string;
   /** 环境信息（OS、当前目录等） */
   environment?: Record<string, string>;
   /** 持久化记忆提示词（由 loadMemoryPrompt 生成，包含记忆指令 + MEMORY.md 内容） */

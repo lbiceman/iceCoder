@@ -35,9 +35,9 @@ export interface PromptSection {
 export interface PromptAssemblyConfig {
   /** 自定义系统提示词（如果提供，替换默认提示词） */
   customSystemPrompt?: string;
-  /** 追加到系统提示词末尾的内容 */
+  /** 附加说明（项目公约、评测模式等）：进入 harness 动态层 `projectMarkdown`，不拼进静态 system */
   appendSystemPrompt?: string;
-  /** 语言偏好（如 "中文"、"English"） */
+  /** 若设置，则经由 overlay 注入动态 `# Language`；默认聊天可不传，由用户消息决定语气 */
   language?: string;
   /** 环境信息 */
   environment?: EnvironmentInfo;
@@ -50,7 +50,7 @@ export interface PromptAssemblyConfig {
 }
 
 /**
- * 环境信息 — 注入到系统提示词中，让模型了解运行环境。
+ * 运行环境 — 经 `harnessOverlay.environment` 注入首轮 `<system-context>`，不写入静态 system。
  */
 export interface EnvironmentInfo {
   /** 工作目录 */
@@ -89,13 +89,34 @@ export interface SystemContext {
 }
 
 /**
- * 组装后的完整提示词结构。
+ * 不拼入静态 system、而交给 Harness 动态上下文的切片（首轮 &lt;system-context&gt;），
+ * 避免日期/语言导致前缀缓存失效，并与 Execution 段落职责分离。
  */
+export interface HarnessPromptOverlay {
+  environment?: Record<string, string>;
+  /** 示例："中文"；注入为简短的 Language 段 */
+  language?: string;
+  /** 如 .iceCoder/memory.md */
+  projectMarkdown?: string;
+}
+
+/**
+ * `harnessOverlayToContextFields` 的返回值；键与 Harness `ContextAssemblyConfig` 子集对齐。
+ * 定义在本模块可避免 prompts ↔ harness 类型循环依赖。
+ */
+export interface HarnessDynamicContextSlice {
+  environment?: Record<string, string>;
+  language?: string;
+  userContext?: Record<string, string>;
+}
+
 export interface AssembledPrompt {
   /** 系统提示词（分段数组） */
   systemPromptSections: PromptSection[];
-  /** 系统提示词（拼接后的完整字符串） */
+  /** 系统提示词（拼接后的完整字符串 — 仅为稳定前缀，不含环境与语言段落） */
   systemPrompt: string;
+  /** 动态层：环境与语言、项目 Markdown；由入口绑定到 Harness.context */
+  harnessOverlay?: HarnessPromptOverlay;
   /** 用户上下文 */
   userContext?: UserContext;
   /** 系统上下文 */

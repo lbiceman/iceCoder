@@ -4,6 +4,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Harness } from '../../src/harness/harness.js';
+import { ContextCompactor } from '../../src/harness/context-compactor.js';
+import { TaskState } from '../../src/harness/task-state.js';
+import { RepoContext } from '../../src/harness/repo-context.js';
 import type { HarnessConfig, HarnessStepEvent, ChatFunction } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition, UnifiedMessage } from '../../src/llm/types.js';
 import type { ToolResult } from '../../src/tools/types.js';
@@ -147,6 +150,121 @@ describe('Harness - 正常完成', () => {
 // 2. 工具调用循环
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 工具调用循环', () => {
+  it('即使 finishReason=stop，只要 toolCalls 非空也执行工具', async () => {
+    const tools = [makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const responseWithStopAndTools: LLMResponse = {
+      content: 'Reading file',
+      toolCalls: [{ id: 'tc1', name: 'read_file', arguments: {} }],
+      usage: makeUsage(),
+      finishReason: 'stop',
+    };
+    const chatFn = createChatFn([
+      responseWithStopAndTools,
+      finalResponse('Read complete'),
+    ]);
+
+    const result = await harness.run('Read file', chatFn);
+
+    expect(result.content).toBe('Read complete');
+    expect(result.loopState.totalToolCalls).toBe(1);
+  });
+
+  it('执行型任务首轮未调用工具时会自动继续执行', async () => {
+    const tools = [makeTool('edit_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      finalResponse('我会先修改这个问题。'),
+      toolCallResponse([{ id: 'tc1', name: 'edit_file' }]),
+      finalResponse('已修复'),
+    ]);
+
+    const result = await harness.run('修复这个失败用例', chatFn);
+
+    expect(result.content).toBe('已修复');
+    expect(result.loopState.totalToolCalls).toBe(1);
+    expect(chatFn).toHaveBeenCalledTimes(3);
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('did not call any tools')
+    )).toBe(true);
+  });
+
+  it('修改代码后未验证时会阻止直接完成并要求验证', async () => {
+    const tools = [makeTool('edit_file'), makeTool('run_command')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      finalResponse('已修复'),
+      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+      finalResponse('已修复并通过测试'),
+    ]);
+
+    const result = await harness.run('修复失败用例', chatFn);
+
+    expect(result.content).toBe('已修复并通过测试');
+    expect(result.loopState.totalToolCalls).toBe(2);
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('changed files but has not verified')
+    )).toBe(true);
+  });
+
+  it('修改代码后已运行验证命令时允许完成', async () => {
+    const tools = [makeTool('edit_file'), makeTool('run_command')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+      finalResponse('已修复并验证'),
+    ]);
+
+    const result = await harness.run('修复失败用例', chatFn);
+
+    expect(result.content).toBe('已修复并验证');
+    expect(result.loopState.totalToolCalls).toBe(2);
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('changed files but has not verified')
+    )).toBe(false);
+  });
+
+  it('工具执行后注入 Runtime State 和 Repo Context', async () => {
+    const tools = [makeTool('read_file'), makeTool('edit_file'), makeTool('run_command')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc3', name: 'run_command', args: { command: 'npm test' } }]),
+      finalResponse('done'),
+    ]);
+
+    const result = await harness.run('修复 src/a.ts', chatFn);
+    const runtimeStateMessage = result.messages.find(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.startsWith('[System Runtime State]')
+    );
+
+    expect(runtimeStateMessage?.content).toContain('# Runtime State');
+    expect(runtimeStateMessage?.content).toContain('# Repo Context');
+    expect(runtimeStateMessage?.content).toContain('src/a.ts');
+    expect(runtimeStateMessage?.content).toContain('npm test');
+  });
+
   it('一轮工具调用后返回最终回复', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
@@ -508,6 +626,84 @@ describe('Harness - 模型响应行为', () => {
 // 8. 破坏性工具权限确认
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 破坏性工具权限确认', () => {
+  it('permissions=deny 时拒绝匹配工具且不执行 handler', async () => {
+    const tools = [makeTool('read_file')];
+    const handler = vi.fn().mockResolvedValue({ success: true, output: 'read' });
+    const executor = createToolExecutor(tools, handler);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      permissions: [{ pattern: 'read_file', permission: 'deny', reason: 'readonly disabled' }],
+    }));
+    // minConfig 会被完整 overrides 覆盖不了 executor，所以使用独立实例保持 handler 可观察
+    const harnessWithExecutor = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      permissions: [{ pattern: 'read_file', permission: 'deny', reason: 'readonly disabled' }],
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse('Cannot read'),
+    ]);
+
+    const result = await harnessWithExecutor.run('Read file', chatFn);
+
+    expect(result.content).toBe('Cannot read');
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.messages.some(m =>
+      m.role === 'tool'
+      && typeof m.content === 'string'
+      && m.content.includes('denied by policy')
+    )).toBe(true);
+  });
+
+  it('permissions=confirm 时对非破坏性工具也触发确认', async () => {
+    const tools = [makeTool('read_file')];
+    const handler = vi.fn().mockResolvedValue({ success: true, output: 'read' });
+    const executor = createToolExecutor(tools, handler);
+    const onConfirm = vi.fn().mockResolvedValue(false);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      permissions: [{ pattern: 'read_*', permission: 'confirm', reason: 'confirm reads' }],
+      onConfirm,
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse('User declined'),
+    ]);
+
+    const result = await harness.run('Read file', chatFn);
+
+    expect(result.content).toBe('User declined');
+    expect(onConfirm).toHaveBeenCalledWith('read_file', {});
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('permissions=confirm 但没有 onConfirm 时默认拒绝而不是静默执行', async () => {
+    const tools = [makeTool('read_file')];
+    const handler = vi.fn().mockResolvedValue({ success: true, output: 'read' });
+    const executor = createToolExecutor(tools, handler);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      permissions: [{ pattern: 'read_file', permission: 'confirm', reason: 'confirm callback missing' }],
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse('Need confirmation'),
+    ]);
+
+    const result = await harness.run('Read file', chatFn);
+
+    expect(result.content).toBe('Need confirmation');
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.messages.some(m =>
+      m.role === 'tool'
+      && typeof m.content === 'string'
+      && m.content.includes('requires confirmation')
+    )).toBe(true);
+  });
+
   it('用户允许时正常执行破坏性工具', async () => {
     const tools = [makeTool('fs_operation')];
     const executor = createToolExecutor(tools, async () => ({ success: true, output: 'Deleted' }));
@@ -768,6 +964,56 @@ describe('Harness - handleStop 总结失败回退', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// 15. ContextCompactor 微压缩
+// ═══════════════════════════════════════════════════════════════
+describe('ContextCompactor - 微压缩', () => {
+  it('保留最近的短用户执行指令', () => {
+    const compactor = new ContextCompactor();
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'ok' },
+      { role: 'assistant', content: 'ack' },
+      { role: 'user', content: '跑测试' },
+    ];
+
+    const compacted = compactor.doLightCompact(messages);
+
+    expect(compacted.some(m => m.role === 'user' && m.content === '跑测试')).toBe(true);
+    expect(compacted.some(m => m.role === 'user' && m.content === 'ok')).toBe(false);
+  });
+
+  it('构建压缩恢复 Runtime State，保留目标、改动文件和验证命令', () => {
+    const compactor = new ContextCompactor();
+    const taskState = new TaskState('修复失败用例');
+    const repoContext = new RepoContext();
+
+    taskState.recordToolResult(
+      { id: 'edit1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'edited' },
+    );
+    taskState.recordToolResult(
+      { id: 'test1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'passed' },
+    );
+    repoContext.recordToolResult(
+      { id: 'edit1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'edited' },
+    );
+    repoContext.recordToolResult(
+      { id: 'test1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'passed' },
+    );
+
+    const message = compactor.buildRuntimeRecoveryContext(taskState.snapshot(), repoContext.snapshot());
+
+    expect(message.content).toContain('修复失败用例');
+    expect(message.content).toContain('src/a.ts');
+    expect(message.content).toContain('npm test');
+    expect(message.content).toContain('<runtime-recovery-context>');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
 // 13. 工具输出截断
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 工具输出截断', () => {
@@ -922,6 +1168,35 @@ describe('Harness - 边界情况', () => {
     expect(result.loopState.totalToolCalls).toBe(0);
   });
 
+  it('多轮会话中的最新执行指令未调用工具时也会触发一次恢复', async () => {
+    const tools = [makeTool('run_command')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+    const existingMessages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '之前的问题' },
+      { role: 'assistant', content: '之前已经调用过工具', toolCalls: [{ id: 'old', name: 'run_command', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'old' },
+      { role: 'assistant', content: '之前完成' },
+    ];
+
+    const chatFn = createChatFn([
+      finalResponse('我会运行测试。'),
+      toolCallResponse([{ id: 'tc1', name: 'run_command' }]),
+      finalResponse('测试完成'),
+    ]);
+
+    const result = await harness.run('运行测试', chatFn, undefined, existingMessages);
+
+    expect(result.content).toBe('测试完成');
+    expect(result.loopState.totalToolCalls).toBe(1);
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('did not call any tools')
+    )).toBe(true);
+  });
+
   it('token 使用量跨多轮正确累计', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
@@ -1021,6 +1296,27 @@ describe('Harness - 连续工具失败熔断', () => {
     // 熔断改为渐进式干预：3 轮失败后注入提示并继续，模型可正常回复
     expect(result.loopState.stopReason).toBe('model_done');
     expect(result.content).toBe('summary');
+  });
+
+  it('重复同参工具失败时注入换策略提示', async () => {
+    const tools = [makeTool('read_file')];
+    const failHandler = async () => ({ success: false, output: '', error: 'not found' }) as ToolResult;
+    const executor = createToolExecutor(tools, failHandler);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'missing.ts' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'missing.ts' } }]),
+      finalResponse('blocked'),
+    ]);
+
+    const result = await harness.run('Read missing file', chatFn);
+
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('Repeated failed tool call detected')
+    )).toBe(true);
   });
 
   it('工具失败后有成功则重置熔断计数', async () => {

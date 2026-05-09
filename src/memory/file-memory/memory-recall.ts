@@ -51,7 +51,7 @@ const RECALL_FLUSH_INTERVAL_MS = 30_000;
 /** LLM 召回超时（毫秒） */
 const LLM_RECALL_TIMEOUT_MS = 30_000;
 /** LLM 召回最少候选数：候选数不足时直接走关键词回退，避免无意义的 LLM 调用 */
-const LLM_RECALL_MIN_CANDIDATES = 4;
+export const LLM_RECALL_MIN_CANDIDATES = 4;
 /** LLM 召回最大输出 token */
 const LLM_RECALL_MAX_TOKENS = 512;
 /** Fact 选择上限 */
@@ -105,11 +105,12 @@ Return a JSON object with:
 - "selected_facts": array of objects, each with "id" (fact ID like F1, F2...) and "reasoning" (why this fact is relevant)
 
 Guidelines:
-- **Broad relevance**: Select any memory containing information related to people, events, topics, or time periods in the query. When in doubt, include it.
+- **Strict relevance**: Select a memory only when it directly helps answer or execute the current query. When in doubt, leave it out.
+- For coding/debugging/editing tasks, prefer project facts and concrete technical constraints. Include personal preferences only when they strongly match the requested action.
 - If no memories are relevant, return empty arrays.
 - **Negation awareness**: If the query expresses a negative preference ("don't use X", "不要用 X"), also select memories about alternatives to X.
 - **Time awareness**: If the query references a time period, prefer memories with timestamps in that period, but do not exclude others.
-- **Fact selection**: From the selected files, pick the specific facts most relevant to answering the query. Limit to 30 facts total.
+- **Fact selection**: From the selected files, pick only the specific facts most relevant to answering or executing the query. Limit to 30 facts total.
 - Return ONLY valid JSON, no other text.
 Example: {"selected": ["user_role.md", "feedback_testing.md"], "selected_facts": [{"id": "F1", "reasoning": "Directly answers the query about user role"}, {"id": "F5", "reasoning": "Provides context about testing preferences"}]}`;
 

@@ -4,12 +4,22 @@
  * 提供结构化的提示词组装能力。
  */
 
-export { PromptAssembler, formatUserContextMessage, appendSystemContext } from './prompt-assembler.js';
+export { loadAssembledChatPrompt, shouldDisableRuntimeTools } from './load-chat-prompt.js';
+
+export {
+  PromptAssembler,
+  formatUserContextMessage,
+  appendSystemContext,
+  environmentInfoToRecord,
+  harnessOverlayToContextFields,
+} from './prompt-assembler.js';
 
 export type {
   PromptSection,
   PromptAssemblyConfig,
   AssembledPrompt,
+  HarnessPromptOverlay,
+  HarnessDynamicContextSlice,
   EnvironmentInfo,
   UserContext,
   SystemContext,
@@ -18,12 +28,15 @@ export type {
 export {
   getDefaultSections,
   createIntroSection,
+  createWorkStyleSection,
   createSystemSection,
   createDoingTasksSection,
   createActionsSection,
   createToolUsageSection,
   createShellGuideSection,
   createToneSection,
+  createActionFirstSection,
+  createOutputEfficiencySection,
   createEnvironmentSection,
   createLanguageSection,
   createMemorySection,

@@ -18,7 +18,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createMemoryDream, type MemoryDream } from '../../../src/memory/file-memory/memory-dream.js';
-import type { LLMAdapterInterface, UnifiedMessage } from '../../../../src/llm/types.js';
+import type { LLMAdapterInterface, UnifiedMessage } from '../../../src/llm/types.js';
 
 let tempDir: string;
 let backupDir: string;

@@ -16,7 +16,7 @@ import type {
   ProviderAdapter,
   StreamCallback,
   UnifiedMessage,
-} from './types.js';
+} from '../../src/llm/types.js';
 
 /**
  * Creates a mock ProviderAdapter for testing.

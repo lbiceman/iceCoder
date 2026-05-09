@@ -29,7 +29,8 @@
     "dev": "concurrently -n api,web,tunnel -c blue,green,magenta \"tsx src/index.ts\" \"tsx scripts/wait-then-vite.ts\" \"E:\\tools\\cloudflared\\cloudflared.exe tunnel --url http://localhost:1024 --metrics 127.0.0.1:20241\"",
     "dev:api": "tsx src/index.ts",
     "dev:web": "vite",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "eval:agent": "tsx scripts/agent-eval.ts"
   },
   "engines": {
     "node": ">=18"

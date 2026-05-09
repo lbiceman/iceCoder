@@ -14,8 +14,8 @@ import {
   parseMemoryType,
   scanMemoryFiles,
   formatMemoryManifest,
-} from '../../src/memory/file-memory/memory-scanner.js';
-import type { MemoryHeader } from '../../src/memory/file-memory/types.js';
+} from '../../../src/memory/file-memory/memory-scanner.js';
+import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
 
 describe('parseFrontmatter', () => {
   it('解析标准 frontmatter', () => {

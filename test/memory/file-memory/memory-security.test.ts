@@ -10,7 +10,7 @@ import {
   isWithinMemoryDir,
   sanitizePathKey,
   PathTraversalError,
-} from '../../src/memory/file-memory/memory-security.js';
+} from '../../../src/memory/file-memory/memory-security.js';
 
 const ALLOWED_DIR = path.resolve('./test-memory-dir');
 

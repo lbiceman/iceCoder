@@ -7,8 +7,6 @@
  *   ice run "写一个用户注册 API" --json
  */
 
-import path from 'node:path';
-import { promises as fs } from 'node:fs';
 import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, hasFlag } from '../utils/args-parser.js';
@@ -16,6 +14,9 @@ import { c, info, error, toolCall, toolResult, Spinner } from '../utils/terminal
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
+import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
+import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
+import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
@@ -26,15 +27,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
 
   const maxRounds = getFlagNum(args.flags, 'max-rounds') ?? 100;
   const jsonOutput = hasFlag(args.flags, 'json');
-  const { systemPromptPath, memoryFilesDir } = ctx.paths;
-
-  async function loadSystemPrompt(): Promise<string> {
-    try {
-      return await fs.readFile(systemPromptPath, 'utf-8');
-    } catch {
-      return '你是 iceCoder，一个拥有工具能力的智能编程助手。根据用户需求自主决定使用哪些工具。回答使用中文。';
-    }
-  }
+  const { memoryFilesDir } = ctx.paths;
 
   if (!jsonOutput) {
     info(`任务: ${task}`);
@@ -45,14 +38,19 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
   if (!jsonOutput) spinner.start();
 
   try {
-    const systemPrompt = await loadSystemPrompt();
-    const toolDefs = ctx.toolRegistry.getDefinitions();
+    const assembled = await loadAssembledChatPrompt({
+      logPrefix: '[run]',
+      systemPromptPath: ctx.paths.systemPromptPath,
+      defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
+    });
+    const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
 
     const harnessConfig: HarnessConfig = {
       context: {
-        systemPrompt,
+        systemPrompt: assembled.systemPrompt,
         tools: toolDefs,
         memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
+        ...harnessOverlayToContextFields(assembled),
       },
       loop: {
         maxRounds,

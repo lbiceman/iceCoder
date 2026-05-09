@@ -83,9 +83,9 @@ export async function ensureMemoryDirExists(memoryDir: string): Promise<void> {
 export function buildMemoryInstructions(memoryDir: string): string {
   return `# Persistent Memory
 
-You have a file-based persistent memory system at \`${memoryDir}\`. Write to it directly with write_file.
+You have a file-based persistent memory system at \`${memoryDir}\`. Use it as background context, not as a replacement for the user's current task.
 
-Save immediately when the user asks you to remember something. Remove the entry when asked to forget. If told to ignore memory, treat MEMORY.md as empty.
+Save immediately with write_file only when the user explicitly asks you to remember something. Remove the entry when asked to forget. If told to ignore memory, treat MEMORY.md as empty.
 
 ## Memory Types
 
@@ -110,7 +110,7 @@ type: {{user | feedback | project | reference}}
 
 MEMORY.md index: one line per entry, ≤150 chars — \`- [Title](file.md) — summary\`
 
-You can write memory files directly during conversation. Background extraction detects your writes and skips duplicates.
+For ordinary coding/debugging tasks, focus on the task. Background extraction can handle incidental memories after the response; do not pause implementation just to maintain memory files.
 
 ## Multi-level Memory
 

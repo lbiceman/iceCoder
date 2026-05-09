@@ -4,13 +4,13 @@
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { createServer, startServer } from '../server.js';
-import { createConfigRouter } from './config.js';
-import { createPipelineRouter } from './pipeline.js';
-import { SSEManager } from '../sse.js';
+import { createServer, startServer } from '../../../src/web/server.js';
+import { createConfigRouter } from '../../../src/web/routes/config.js';
+import { createPipelineRouter } from '../../../src/web/routes/pipeline.js';
+import { SSEManager } from '../../../src/web/sse.js';
 import type { Server } from 'http';
-import type { Orchestrator } from '../../core/orchestrator.js';
-import type { PipelineState, StageStatus } from '../../core/types.js';
+import type { Orchestrator } from '../../../src/core/orchestrator.js';
+import type { PipelineState, StageStatus } from '../../../src/core/types.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';

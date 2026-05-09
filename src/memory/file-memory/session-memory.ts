@@ -134,10 +134,16 @@ export function shouldUpdateSessionMemory(
   currentTokenCount: number,
   toolCallsSinceLastUpdate: number,
   hasToolCallsInLastTurn: boolean,
+  force = false,
 ): boolean {
   const config = getSessionMemoryConfig();
 
   if (!config.enabled) return false;
+
+  if (force) {
+    state.initialized = true;
+    return true;
+  }
 
   // 初始化检查
   if (!state.initialized) {
@@ -197,7 +203,7 @@ export function buildSessionMemoryUpdatePrompt(
 ${currentNotes}
 </current_notes_content>
 
-你的唯一任务是使用 write_file 工具更新笔记文件，然后停止。
+你的唯一任务是只返回完整更新后的 Markdown 内容。不要调用工具，不要解释，不要包裹代码块。
 
 关键编辑规则：
 - 文件必须保持其精确结构，所有 section 标题和斜体描述保持不变

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { AgentContext, AgentResult, StageStatus } from './types.js';
+import type { AgentContext, AgentResult, StageStatus } from '../../src/core/types.js';
 
 describe('AgentContext structure', () => {
   it('should allow creation with all required fields', () => {

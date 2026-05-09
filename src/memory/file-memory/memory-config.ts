@@ -351,6 +351,9 @@ export const MIN_FACT_LENGTH = 6;
 /** 每个文件最大 Fact 数 */
 export const MAX_FACTS_PER_FILE = 30;
 
+/** 单行超过该字符数且无换行时，按中英文句号等标点分割为多条 fact */
+export const LONG_LINE_SENTENCE_SPLIT_AT = 200;
+
 // ══════════════════════════════════════════════════════════════════
 // 淘汰评分常量（memory-eviction.ts / memory-dream.ts 共用）
 // ══════════════════════════════════════════════════════════════════

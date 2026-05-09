@@ -18,15 +18,15 @@ import { randomUUID } from 'node:crypto';
 import { Orchestrator, OrchestratorConfig } from '../src/core/orchestrator.js';
 import { BaseAgent } from '../src/core/base-agent.js';
 import { FileParser } from '../src/parser/file-parser.js';
-import { HtmlParserStrategy } from './parser/html-strategy.js';
-import { LLMAdapter } from './llm/llm-adapter.js';
+import { HtmlParserStrategy } from '../src/parser/html-strategy.js';
+import { LLMAdapter } from '../src/llm/llm-adapter.js';
 import type {
   AgentContext,
   AgentResult,
   PipelineState,
   StageStatus,
-} from './core/types.js';
-import type { ProviderAdapter, LLMOptions, LLMResponse, StreamCallback, UnifiedMessage } from './llm/types.js';
+} from '../src/core/types.js';
+import type { ProviderAdapter, LLMOptions, LLMResponse, StreamCallback, UnifiedMessage } from '../src/llm/types.js';
 
 // --- Mock Agent that produces realistic output ---
 

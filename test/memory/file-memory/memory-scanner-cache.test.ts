@@ -10,18 +10,18 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryScannerCache, getScannerCache, resetScannerCache } from '../../src/memory/file-memory/memory-scanner-cache.js';
-import type { MemoryHeader } from '../../src/memory/file-memory/types.js';
+import { MemoryScannerCache, getScannerCache, resetScannerCache } from '../../../src/memory/file-memory/memory-scanner-cache.js';
+import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
 
 // Mock scanMemoryFiles
-vi.mock('../../src/memory/file-memory/memory-scanner.js', () => ({
+vi.mock('../../../src/memory/file-memory/memory-scanner.js', () => ({
   scanMemoryFiles: vi.fn(async () => [
     { filename: 'a.md', filePath: '/tmp/a.md', mtimeMs: Date.now() },
     { filename: 'b.md', filePath: '/tmp/b.md', mtimeMs: Date.now() },
   ] as MemoryHeader[]),
 }));
 
-import { scanMemoryFiles } from '../../src/memory/file-memory/memory-scanner.js';
+import { scanMemoryFiles } from '../../../src/memory/file-memory/memory-scanner.js';
 
 beforeEach(() => {
   vi.clearAllMocks();

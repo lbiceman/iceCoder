@@ -14,8 +14,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import type { UnifiedMessage, LLMResponse } from '../../../../src/llm/types.js';
-import type { LLMAdapterInterface } from '../../../../src/llm/types.js';
+import type { UnifiedMessage, LLMResponse } from '../../../src/llm/types.js';
+import type { LLMAdapterInterface } from '../../../src/llm/types.js';
 import { LLMMemoryExtractor } from '../../../src/memory/file-memory/memory-llm-extractor.js';
 import { recallRelevantMemories } from '../../../src/memory/file-memory/memory-recall.js';
 import { getScannerCache } from '../../../src/memory/file-memory/memory-scanner-cache.js';
@@ -27,9 +27,9 @@ import {
   isSessionMemoryEmpty,
   SESSION_MEMORY_TEMPLATE,
 } from '../../../src/memory/file-memory/session-memory.js';
-import { ContextCompactor } from '../../../../src/harness/context-compactor.js';
+import { ContextCompactor } from '../../../src/harness/context-compactor.js';
 import { extractBodyFromMarkdown } from '../../../src/memory/file-memory/memory-parser.js';
-import { HarnessMemoryIntegration } from '../../../../src/harness/harness-memory.js';
+import { HarnessMemoryIntegration } from '../../../src/harness/harness-memory.js';
 
 // ─── Mock helpers ───
 

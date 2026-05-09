@@ -10,7 +10,7 @@ import {
   redactSecrets,
   containsSecrets,
   getSecretLabel,
-} from '../../src/memory/file-memory/memory-secret-scanner.js';
+} from '../../../src/memory/file-memory/memory-secret-scanner.js';
 
 // ─── scanForSecrets ───
 
