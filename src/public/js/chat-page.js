@@ -69,8 +69,9 @@ window.ChatPage = (function () {
   var lastSessionSyncSig = '';
 
   // ---- 上下文用量跟踪 ----
-  var maxContextTokens = 0;     // 当前模型最大上下文
-  var usedInputTokens = 0;      // 累计输入 token
+  var maxContextTokens = 0;     // 当前模型最大上下文（/api/config 默认 provider）
+  /** 用于进度条：最近一轮 LLM 请求的 inputTokens（≈该轮上下文占用），非多轮累计 */
+  var usedInputTokens = 0;
   var usedOutputTokens = 0;     // 累计输出 token
   var modelName = '';            // 当前模型名称
 

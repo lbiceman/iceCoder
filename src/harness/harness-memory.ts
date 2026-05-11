@@ -1366,8 +1366,30 @@ ${candidateList}`;
     if (!this.llmAdapter) return;
 
     try {
-      const shouldDream = await this.memoryDream.shouldDream(this.memoryDir);
-      if (!shouldDream) return;
+      const tProj = Date.now();
+      const projEvict = await this.memoryDream.evictProjectMemoryIfOverCap(this.memoryDir);
+      if (projEvict.executed) {
+        await this.telemetry.logMemoryCapEvict({
+          scope: 'project',
+          fileCountBefore: projEvict.fileCountBefore,
+          filesEvicted: projEvict.evictedFiles.length,
+          durationMs: Date.now() - tProj,
+        }).catch(() => {});
+      }
+
+      const tUser = Date.now();
+      const userEvict = await this.memoryDream.evictUserMemoryIfOverCap();
+      if (userEvict.executed) {
+        await this.telemetry.logMemoryCapEvict({
+          scope: 'user',
+          fileCountBefore: userEvict.fileCountBefore,
+          filesEvicted: userEvict.evictedFiles.length,
+          durationMs: Date.now() - tUser,
+        }).catch(() => {});
+      }
+
+      const dreamGate = await this.memoryDream.evaluateDreamGate(this.memoryDir);
+      if (!dreamGate.shouldRun) return;
 
       const conversationPrefix = this.sanitizeConversationPrefix(this.currentMessages);
 
@@ -1390,14 +1412,17 @@ ${candidateList}`;
         fileCountBefore,
         filesModified: dreamResult.filesModified,
         filesDeleted: dreamResult.filesDeleted,
+        filesEvicted: dreamResult.filesEvicted,
         durationMs: dreamResult.duration,
-        trigger: 'session_interval',
+        trigger: dreamGate.trigger ?? 'session_interval',
       }).catch(() => {});
 
       if (dreamResult.executed) {
         console.log(
           `[harness-memory] autoDream: ${dreamResult.summary} ` +
-          `(${dreamResult.filesModified} 修改, ${dreamResult.filesDeleted} 删除, ${dreamResult.duration}ms)`,
+          `(${dreamResult.filesModified} 修改, ${dreamResult.filesDeleted} 删除` +
+          `${dreamResult.filesEvicted ? `, ${dreamResult.filesEvicted} 淘汰归档` : ''}) ` +
+          `${dreamResult.duration}ms)`,
         );
       }
     } catch (err) {

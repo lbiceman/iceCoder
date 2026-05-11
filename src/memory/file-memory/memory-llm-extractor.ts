@@ -21,6 +21,7 @@ import {
   DEFAULT_LLM_EXTRACTION_CONFIG,
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
+  resolveUserMemoryEvictedDir,
 } from './memory-config.js';
 
 /** 消息内容截断字符数 */
@@ -515,6 +516,11 @@ ${memory.content}
       scannerCache.invalidate(userMemoryDir);
       evictIfNeeded(memoryDir).catch(err => {
         console.debug('[LLMMemoryExtractor] Eviction check failed:', err instanceof Error ? err.message : err);
+      });
+      evictIfNeeded(userMemoryDir, {
+        evictedDir: resolveUserMemoryEvictedDir(),
+      }).catch(err => {
+        console.debug('[LLMMemoryExtractor] User memory eviction failed:', err instanceof Error ? err.message : err);
       });
     }
 

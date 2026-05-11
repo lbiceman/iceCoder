@@ -16,6 +16,7 @@
  */
 
 import type { FileMemoryConfig } from './types.js';
+import path from 'node:path';
 
 // ══════════════════════════════════════════════════════════════════
 // 目录与路径
@@ -29,6 +30,25 @@ export const DEFAULT_USER_MEMORY_DIR = './data/user-memory';
 
 /** 默认索引文件名 */
 export const DEFAULT_ENTRYPOINT_NAME = 'MEMORY.md';
+
+/** 解析用户记忆目录绝对路径（尊重 ICE_USER_MEMORY_DIR） */
+export function resolveUserMemoryDir(): string {
+  return path.resolve(process.env.ICE_USER_MEMORY_DIR ?? DEFAULT_USER_MEMORY_DIR);
+}
+
+/** 用户记忆淘汰归档目录（默认同级 evicted/） */
+export function resolveUserMemoryEvictedDir(): string {
+  return path.join(resolveUserMemoryDir(), 'evicted');
+}
+
+/**
+ * 按类型的淘汰分加成（越高越优先被淘汰；user 类型仍享受 EVICTION_USER_TYPE_BONUS 保护）。
+ */
+export function evictionTypeEvictionBias(type: string | undefined): number {
+  if (type === 'feedback') return 8;
+  if (type === 'reference') return 12;
+  return 0;
+}
 
 // ══════════════════════════════════════════════════════════════════
 // 接口定义（Single Source of Truth）
@@ -59,6 +79,16 @@ export interface LLMExtractionConfig {
   enablePromptCache: boolean;
 }
 
+/** 淘汰配置 */
+export interface EvictionConfig {
+  enabled: boolean;
+  softLimit: number;
+  evictionTarget: number;
+  evictedDir: string;
+  maxEvictedFiles: number;
+  protectionDays: number;
+}
+
 /** Dream 整合配置 */
 export interface DreamConfig {
   sessionInterval: number;
@@ -69,6 +99,22 @@ export interface DreamConfig {
   enableBackup: boolean;
   backupDir: string;
   maxBackups: number;
+  /**
+   * Dream LLM 步骤完成后是否强制执行记忆数量上限（调用与提取相同的加权淘汰：陈旧、低置信、低召回优先移入 evicted/）。
+   */
+  enforceMemoryCapAfterDream: boolean;
+  /** 项目记忆目录中保留的 .md 条数上限（不含 MEMORY.md）；超出则在 Dream 末尾淘汰。 */
+  postDreamMemoryCap: number;
+  /** 传入 `evictIfNeeded` 的覆盖项（如测试指定 `evictedDir`）；`softLimit` / `evictionTarget` 仍由本类强制为 `postDreamMemoryCap`。 */
+  afterDreamEviction?: Partial<EvictionConfig>;
+  /** MEMORY.md 中本地死链数 ≥ 此值时触发 Dream（需 LLM 修索引；与条数上限解耦） */
+  staleIndexDeadLinksThreshold: number;
+  /** Dream 完成后是否对用户级记忆目录做条数淘汰 */
+  enforceUserMemoryCapAfterDream: boolean;
+  /** 用户级 .md 条数上限（不含 MEMORY.md，若有） */
+  userMemoryPostDreamCap: number;
+  /** 用户级淘汰传入 `evictIfNeeded` 的覆盖项；默认归档目录为 `resolveUserMemoryEvictedDir()` */
+  afterUserDreamEviction?: Partial<EvictionConfig>;
 }
 
 /** 遥测配置 */
@@ -77,16 +123,6 @@ export interface TelemetryConfig {
   enableFileLog: boolean;
   enableConsoleLog: boolean;
   maxLogSize: number;
-}
-
-/** 淘汰配置 */
-export interface EvictionConfig {
-  enabled: boolean;
-  softLimit: number;
-  evictionTarget: number;
-  evictedDir: string;
-  maxEvictedFiles: number;
-  protectionDays: number;
 }
 
 /** 相关性门控配置 */
@@ -170,7 +206,7 @@ export const DEFAULT_FILE_MEMORY_CONFIG: FileMemoryConfig = {
   entrypointName: DEFAULT_ENTRYPOINT_NAME,
   maxEntrypointLines: 200,
   maxEntrypointBytes: 25000,
-  maxMemoryFiles: 150,
+  maxMemoryFiles: 100,
 };
 
 export const DEFAULT_MULTI_LEVEL_CONFIG: MultiLevelMemoryConfig = {
@@ -202,6 +238,11 @@ export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   enableBackup: true,
   backupDir: 'data/memory/dream-backups',
   maxBackups: 3,
+  enforceMemoryCapAfterDream: true,
+  postDreamMemoryCap: 100,
+  staleIndexDeadLinksThreshold: 3,
+  enforceUserMemoryCapAfterDream: true,
+  userMemoryPostDreamCap: 100,
 };
 
 export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
@@ -213,7 +254,7 @@ export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
 
 export const DEFAULT_EVICTION_CONFIG: EvictionConfig = {
   enabled: true,
-  softLimit: 120,
+  softLimit: 100,
   evictionTarget: 100,
   evictedDir: 'data/memory/evicted',
   maxEvictedFiles: 100,

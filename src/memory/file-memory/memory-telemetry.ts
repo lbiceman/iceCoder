@@ -23,6 +23,7 @@ export type TelemetryEventType =
   | 'memory_recall'
   | 'memory_extract'
   | 'memory_dream'
+  | 'memory_cap_evict'
   | 'memory_store'
   | 'memory_stats';
 
@@ -96,10 +97,29 @@ export interface DreamTelemetry {
   filesModified: number;
   /** 删除的文件数 */
   filesDeleted: number;
+  /** 淘汰归档数（移入 evicted/） */
+  filesEvicted?: number;
   /** 耗时（毫秒） */
   durationMs: number;
   /** 触发原因 */
-  trigger: 'session_interval' | 'file_threshold' | 'manual';
+  trigger:
+    | 'session_interval'
+    | 'file_threshold'
+    | 'manual'
+    | 'expired'
+    | 'session_and_files'
+    | 'new_files'
+    | 'stale_index';
+}
+
+/** 仅条数淘汰（无 Dream LLM） */
+export interface MemoryCapEvictTelemetry {
+  type: 'memory_cap_evict';
+  timestamp: string;
+  scope: 'project' | 'user';
+  fileCountBefore: number;
+  filesEvicted: number;
+  durationMs: number;
 }
 
 /**
@@ -127,6 +147,7 @@ export type TelemetryEvent =
   | RecallTelemetry
   | ExtractTelemetry
   | DreamTelemetry
+  | MemoryCapEvictTelemetry
   | StatsTelemetry
   | SessionMemoryTelemetry;
 
@@ -158,6 +179,7 @@ export class MemoryTelemetry extends EventEmitter {
     totalRecallDurationMs: 0,
     totalExtractDurationMs: 0,
     totalDreamDurationMs: 0,
+    totalCapEvicts: 0,
     totalMemoriesExtracted: 0,
     totalMemoriesSelected: 0,
   };
@@ -240,6 +262,19 @@ export class MemoryTelemetry extends EventEmitter {
   }
 
   /**
+   * 记录仅条数上限淘汰（无 Dream）。
+   */
+  async logMemoryCapEvict(data: Omit<MemoryCapEvictTelemetry, 'type' | 'timestamp'>): Promise<void> {
+    const event: MemoryCapEvictTelemetry = {
+      type: 'memory_cap_evict',
+      timestamp: new Date().toISOString(),
+      ...data,
+    };
+    this.stats.totalCapEvicts++;
+    await this.writeEvent(event);
+  }
+
+  /**
    * 记录记忆库统计。
    */
   async logStats(data: Omit<StatsTelemetry, 'type' | 'timestamp'>): Promise<void> {
@@ -273,6 +308,7 @@ export class MemoryTelemetry extends EventEmitter {
       totalRecalls: this.stats.totalRecalls,
       totalExtracts: this.stats.totalExtracts,
       totalDreams: this.stats.totalDreams,
+      totalCapEvicts: this.stats.totalCapEvicts,
       avgRecallMs,
       avgExtractMs,
       llmRecallRate,
@@ -330,7 +366,9 @@ export class MemoryTelemetry extends EventEmitter {
       case 'memory_extract':
         return `extract: ${event.extractedCount} from ${event.messageCount} msgs, cache=${event.usedPromptCache}, prefix=${event.contextPrefixLength}, ${event.durationMs}ms`;
       case 'memory_dream':
-        return `dream: ${event.executed ? `${event.filesModified} modified, ${event.filesDeleted} deleted` : 'skipped'}, ${event.durationMs}ms`;
+        return `dream: ${event.executed ? `${event.filesModified} modified, ${event.filesDeleted} deleted${event.filesEvicted ? `, ${event.filesEvicted} evicted` : ''} [${event.trigger}]` : 'skipped'}, ${event.durationMs}ms`;
+      case 'memory_cap_evict':
+        return `cap_evict: ${event.scope} ${event.filesEvicted} evicted (before ${event.fileCountBefore}), ${event.durationMs}ms`;
       case 'memory_stats':
         return `stats: ${event.totalFiles} files, avg age ${event.avgAgeDays}d, index ${event.indexLineCount} lines`;
       case 'session_memory':

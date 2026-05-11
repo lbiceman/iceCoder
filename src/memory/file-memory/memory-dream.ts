@@ -27,7 +27,13 @@ import {
   EVICTION_RECALL_WEIGHT,
   EVICTION_USER_TYPE_BONUS,
   DEFAULT_CONFIDENCE_FALLBACK,
+  type DreamConfig,
+  evictionTypeEvictionBias,
+  resolveUserMemoryDir,
+  resolveUserMemoryEvictedDir,
 } from './memory-config.js';
+import { evictIfNeeded, type EvictionResult } from './memory-eviction.js';
+import { getScannerCache } from './memory-scanner-cache.js';
 
 /** Dream 读取文件数上限 */
 const DREAM_READ_LIMIT = 80;
@@ -42,28 +48,12 @@ const DREAM_STATE_FILE_PATH = 'data/memory/dream-state.json';
 import { ConsolidationLock } from './memory-concurrency.js';
 import { getDreamConfig } from './memory-remote-config.js';
 import { getExpiredMemories, getStaleMemories } from './memory-age.js';
+import { countDeadLinksInMemoryIndex } from './memory-index-health.js';
 
 /**
- * Dream 配置。
+ * Dream 触发原因（用于遥测与门控）。
  */
-export interface DreamConfig {
-  /** 触发整合的最小会话间隔 */
-  sessionInterval: number;
-  /** 触发整合的记忆文件数阈值 */
-  fileCountThreshold: number;
-  /** MEMORY.md 最大行数 */
-  maxIndexLines: number;
-  /** MEMORY.md 最大字节数 */
-  maxIndexBytes: number;
-  /** LLM 最大输出 token */
-  maxOutputTokens: number;
-  /** 是否启用 Dream 前备份 */
-  enableBackup: boolean;
-  /** 备份目录 */
-  backupDir: string;
-  /** 保留的最大备份数 */
-  maxBackups: number;
-}
+export type DreamTrigger = 'expired' | 'session_and_files' | 'new_files' | 'stale_index';
 
 /**
  * Dream 结果。
@@ -77,6 +67,8 @@ export interface DreamResult {
   filesModified: number;
   /** 删除的文件数 */
   filesDeleted: number;
+  /** 淘汰归档的文件数（Dream 完成后按上限移入 evicted/） */
+  filesEvicted?: number;
   /** 耗时（毫秒） */
   duration: number;
 }
@@ -84,7 +76,7 @@ export interface DreamResult {
 /**
  * Dream 整合提示词。
  */
-function buildDreamPrompt(memoryDir: string, maxIndexLines: number): string {
+function buildDreamPrompt(memoryDir: string, maxIndexLines: number, memoryFileCap: number): string {
   return `# Memory Consolidation (Dream)
 
 You are performing a memory consolidation pass. Review and organize the memory files, AND analyze user behavior patterns to extract user habits.
@@ -125,6 +117,8 @@ Update MEMORY.md to stay under ${maxIndexLines} lines:
 - Remove pointers to deleted/merged memories
 - Shorten verbose entries (move detail to topic files)
 - Add pointers to important memories missing from the index
+
+After this pass, the runtime may move excess topic memory files (over ~${memoryFileCap} \`.md\` entries, excluding MEMORY.md) to an \`evicted/\` archive using age, low confidence, and low recall — prioritize merging duplicates and removing stale content in your JSON actions; do not delete files solely to hit a number.
 
 ## Output format
 Return a JSON object with:
@@ -180,55 +174,132 @@ export class MemoryDream {
    * 2. 自上次 dream 以来新增了 10+ 个记忆文件
    * 3. 存在过期记忆需要清理
    */
+  /**
+   * 是否应运行 Dream（仅布尔，兼容旧调用方）。
+   */
   async shouldDream(memoryDir: string): Promise<boolean> {
-    // 从远程配置获取最新阈值
-    const remoteCfg = getDreamConfig();
-    if (!remoteCfg.enabled) return false;
+    return (await this.evaluateDreamGate(memoryDir)).shouldRun;
+  }
 
-    // 从文件恢复状态（进程重启后不丢失）
+  /**
+   * Dream 门控：返回是否运行及触发原因（遥测用）。超条数上限不触发 Dream，由轻量淘汰单独处理。
+   */
+  async evaluateDreamGate(memoryDir: string): Promise<{ shouldRun: boolean; trigger: DreamTrigger | null }> {
+    const remoteCfg = getDreamConfig();
+    if (!remoteCfg.enabled) return { shouldRun: false, trigger: null };
+
     await this.restoreState();
 
-    // 初始化锁
     if (!this.lock) {
       this.lock = new ConsolidationLock(memoryDir);
     }
 
-    // 扫描记忆文件
     let memories;
     try {
       memories = await scanMemoryFiles(memoryDir, 500);
     } catch (err) {
       console.debug('[MemoryDream] scanMemoryFiles failed:', err instanceof Error ? err.message : err);
-      return false;
+      return { shouldRun: false, trigger: null };
     }
 
-    // 条件 3：存在过期记忆需要清理（不受时间门控限制）
     const expired = getExpiredMemories(memories);
     if (expired.length >= DREAM_EXPIRED_TRIGGER) {
       console.log(`[MemoryDream] ${expired.length} expired memories detected, triggering dream`);
-      return true;
+      return { shouldRun: true, trigger: 'expired' };
     }
 
-    // 时间门控：使用锁文件的 mtime 作为 lastConsolidatedAt
+    const { dead } = await countDeadLinksInMemoryIndex(memoryDir);
+    if (dead >= this.config.staleIndexDeadLinksThreshold) {
+      console.log(`[MemoryDream] MEMORY.md has ${dead} dead link(s), triggering dream`);
+      return { shouldRun: true, trigger: 'stale_index' };
+    }
+
     const lastConsolidatedAt = await this.lock.readLastConsolidatedAt();
     const hoursSince = (Date.now() - lastConsolidatedAt) / 3_600_000;
-    const minHours = remoteCfg.minHours || 4; // 降低默认值：24h → 4h
-    if (hoursSince < minHours) return false;
+    const minHours = remoteCfg.minHours || 4;
+    if (hoursSince < minHours) return { shouldRun: false, trigger: null };
 
-    // 条件 1：会话间隔 + 文件数阈值
     const minSessions = remoteCfg.minSessions || this.config.sessionInterval;
     if (this.sessionCount >= minSessions && memories.length >= this.config.fileCountThreshold) {
-      return true;
+      return { shouldRun: true, trigger: 'session_and_files' };
     }
 
-    // 条件 2：自上次 dream 以来新增了较多文件（基于文件创建时间）
     const newFilesSinceDream = memories.filter(m => m.createdMs > lastConsolidatedAt).length;
     if (newFilesSinceDream >= DREAM_NEW_FILES_TRIGGER) {
       console.log(`[MemoryDream] ${newFilesSinceDream} new files since last dream, triggering`);
-      return true;
+      return { shouldRun: true, trigger: 'new_files' };
     }
 
-    return false;
+    return { shouldRun: false, trigger: null };
+  }
+
+  /**
+   * 项目记忆超过上限时仅淘汰（不跑 Dream LLM）。
+   */
+  async evictProjectMemoryIfOverCap(memoryDir: string): Promise<EvictionResult> {
+    if (!this.config.enforceMemoryCapAfterDream) {
+      let n = 0;
+      try {
+        n = (await scanMemoryFiles(memoryDir, 500)).length;
+      } catch { /* empty */ }
+      return { executed: false, fileCountBefore: n, fileCountAfter: n, evictedFiles: [], summary: 'project cap eviction disabled' };
+    }
+    const memories = await scanMemoryFiles(memoryDir, 500);
+    const cap = this.config.postDreamMemoryCap;
+    if (memories.length <= cap) {
+      return {
+        executed: false,
+        fileCountBefore: memories.length,
+        fileCountAfter: memories.length,
+        evictedFiles: [],
+        summary: 'below cap',
+      };
+    }
+    const out = await evictIfNeeded(memoryDir, {
+      ...(this.config.afterDreamEviction ?? {}),
+      softLimit: cap,
+      evictionTarget: cap,
+    });
+    if (out.executed) getScannerCache().invalidate(memoryDir);
+    return out;
+  }
+
+  /**
+   * 用户级记忆超过上限时仅淘汰。
+   */
+  async evictUserMemoryIfOverCap(): Promise<EvictionResult> {
+    const userDir = resolveUserMemoryDir();
+    if (!this.config.enforceUserMemoryCapAfterDream) {
+      let n = 0;
+      try {
+        n = (await scanMemoryFiles(userDir, 500)).length;
+      } catch { /* empty */ }
+      return { executed: false, fileCountBefore: n, fileCountAfter: n, evictedFiles: [], summary: 'user cap eviction disabled' };
+    }
+    let memories;
+    try {
+      memories = await scanMemoryFiles(userDir, 500);
+    } catch {
+      return { executed: false, fileCountBefore: 0, fileCountAfter: 0, evictedFiles: [], summary: 'user dir unreadable' };
+    }
+    const cap = this.config.userMemoryPostDreamCap;
+    if (memories.length <= cap) {
+      return {
+        executed: false,
+        fileCountBefore: memories.length,
+        fileCountAfter: memories.length,
+        evictedFiles: [],
+        summary: 'below cap',
+      };
+    }
+    const out = await evictIfNeeded(userDir, {
+      ...(this.config.afterUserDreamEviction ?? {}),
+      softLimit: cap,
+      evictionTarget: cap,
+      evictedDir: this.config.afterUserDreamEviction?.evictedDir ?? resolveUserMemoryEvictedDir(),
+    });
+    if (out.executed) getScannerCache().invalidate(userDir);
+    return out;
   }
 
   /**
@@ -334,7 +405,7 @@ export class MemoryDream {
     }
 
     // 构建 LLM 请求
-    const dreamPrompt = buildDreamPrompt(memoryDir, this.config.maxIndexLines);
+    const dreamPrompt = buildDreamPrompt(memoryDir, this.config.maxIndexLines, this.config.postDreamMemoryCap);
     const userContent = `${dreamPrompt}\n\n## Current MEMORY.md\n\n${currentIndex || '(empty)'}\n\n## Memory files\n\n${memoryContents}${expiryInfo}`;
 
     // 构建消息（支持 prompt cache）
@@ -368,9 +439,38 @@ export class MemoryDream {
 
     const result = await this.executeDreamActions(memoryDir, response.content, parsed);
 
+    let filesEvicted = 0;
+    if (this.config.enforceMemoryCapAfterDream) {
+      const cap = this.config.postDreamMemoryCap;
+      const evictOutcome = await evictIfNeeded(memoryDir, {
+        ...(this.config.afterDreamEviction ?? {}),
+        softLimit: cap,
+        evictionTarget: cap,
+      });
+      filesEvicted += evictOutcome.evictedFiles.length;
+      if (evictOutcome.executed) {
+        getScannerCache().invalidate(memoryDir);
+      }
+    }
+    if (this.config.enforceUserMemoryCapAfterDream) {
+      const userDir = resolveUserMemoryDir();
+      const uCap = this.config.userMemoryPostDreamCap;
+      const userEvict = await evictIfNeeded(userDir, {
+        ...(this.config.afterUserDreamEviction ?? {}),
+        softLimit: uCap,
+        evictionTarget: uCap,
+        evictedDir: this.config.afterUserDreamEviction?.evictedDir ?? resolveUserMemoryEvictedDir(),
+      });
+      filesEvicted += userEvict.evictedFiles.length;
+      if (userEvict.executed) {
+        getScannerCache().invalidate(userDir);
+      }
+    }
+
     return {
       executed: true,
       ...result,
+      filesEvicted,
       duration: Date.now() - startTime,
     };
   }
@@ -425,7 +525,7 @@ export class MemoryDream {
     const confidenceBonus = (mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) * EVICTION_CONFIDENCE_WEIGHT;
     const recallBonus = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
     const typeBonus = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
-    return agePenalty - confidenceBonus - recallBonus - typeBonus;
+    return agePenalty - confidenceBonus - recallBonus - typeBonus + evictionTypeEvictionBias(mem.type);
   }
 
   /**

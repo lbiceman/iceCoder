@@ -8,7 +8,7 @@
  * - 最后活跃时间（越久没活跃，越该淘汰）
  * - 置信度（高置信度记忆受保护）
  * - 召回频率（经常被召回的记忆受保护）
- * - 记忆类型（user 类型受保护）
+ * - 记忆类型（user 受保护；feedback/reference 更易淘汰）
  *
  * 被淘汰的文件移动到 evicted/ 目录（可恢复），不是直接删除。
  */
@@ -28,6 +28,7 @@ import {
   EVICTION_CONFIDENCE_PROTECTION,
   EVICTION_SCAN_LIMIT,
   DEFAULT_CONFIDENCE_FALLBACK,
+  evictionTypeEvictionBias,
 } from './memory-config.js';
 
 // 重新导出类型和默认值，保持向后兼容
@@ -73,10 +74,11 @@ export function computeEvictionScore(mem: MemoryHeader): number {
   // 召回频率保护（0-20，上限 recallCount=20）
   const recallBonus = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
 
-  // user 类型保护（0 或 15）
+  // user 类型保护（0 或 15）；feedback / reference 等见 evictionTypeEvictionBias
   const typeBonus = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
+  const typeEvictBias = evictionTypeEvictionBias(mem.type);
 
-  return agePenalty - confidenceBonus - recallBonus - typeBonus;
+  return agePenalty - confidenceBonus - recallBonus - typeBonus + typeEvictBias;
 }
 
 // ─── 核心淘汰逻辑 ───

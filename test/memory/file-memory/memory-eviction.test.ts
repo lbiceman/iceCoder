@@ -116,6 +116,15 @@ describe('computeEvictionScore', () => {
     expect(computeEvictionScore(manyRecalls)).toBeLessThan(computeEvictionScore(noRecall));
   });
 
+  it('feedback/reference 比同条件 project 更易被淘汰（分更高）', () => {
+    const t = Date.now() - 30 * 86_400_000;
+    const proj = makeHeader({ mtimeMs: t, type: 'project' });
+    const fb = makeHeader({ mtimeMs: t, type: 'feedback' });
+    const ref = makeHeader({ mtimeMs: t, type: 'reference' });
+    expect(computeEvictionScore(fb)).toBeGreaterThan(computeEvictionScore(proj));
+    expect(computeEvictionScore(ref)).toBeGreaterThan(computeEvictionScore(fb));
+  });
+
   it('user 类型记忆受保护', () => {
     const oldTime = Date.now() - 200 * 86_400_000;
     const project = makeHeader({ mtimeMs: oldTime, type: 'project' });
