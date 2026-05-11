@@ -1366,30 +1366,11 @@ ${candidateList}`;
     if (!this.llmAdapter) return;
 
     try {
-      const tProj = Date.now();
-      const projEvict = await this.memoryDream.evictProjectMemoryIfOverCap(this.memoryDir);
-      if (projEvict.executed) {
-        await this.telemetry.logMemoryCapEvict({
-          scope: 'project',
-          fileCountBefore: projEvict.fileCountBefore,
-          filesEvicted: projEvict.evictedFiles.length,
-          durationMs: Date.now() - tProj,
-        }).catch(() => {});
-      }
-
-      const tUser = Date.now();
-      const userEvict = await this.memoryDream.evictUserMemoryIfOverCap();
-      if (userEvict.executed) {
-        await this.telemetry.logMemoryCapEvict({
-          scope: 'user',
-          fileCountBefore: userEvict.fileCountBefore,
-          filesEvicted: userEvict.evictedFiles.length,
-          durationMs: Date.now() - tUser,
-        }).catch(() => {});
-      }
-
       const dreamGate = await this.memoryDream.evaluateDreamGate(this.memoryDir);
-      if (!dreamGate.shouldRun) return;
+      if (!dreamGate.shouldRun) {
+        await this.evictMemoryOverCap();
+        return;
+      }
 
       const conversationPrefix = this.sanitizeConversationPrefix(this.currentMessages);
 
@@ -1425,8 +1406,42 @@ ${candidateList}`;
           `${dreamResult.duration}ms)`,
         );
       }
+
+      // 用户级记忆不参与项目 Dream 输入，仍在 Dream 后单独做上限兜底。
+      await this.evictMemoryOverCap({ project: false, user: true });
     } catch (err) {
       console.debug('[harness-memory] dream failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  private async evictMemoryOverCap(scope: { project?: boolean; user?: boolean } = {}): Promise<void> {
+    const doProject = scope.project ?? true;
+    const doUser = scope.user ?? true;
+
+    if (doProject) {
+      const tProj = Date.now();
+      const projEvict = await this.memoryDream.evictProjectMemoryIfOverCap(this.memoryDir);
+      if (projEvict.executed) {
+        await this.telemetry.logMemoryCapEvict({
+          scope: 'project',
+          fileCountBefore: projEvict.fileCountBefore,
+          filesEvicted: projEvict.evictedFiles.length,
+          durationMs: Date.now() - tProj,
+        }).catch(() => {});
+      }
+    }
+
+    if (doUser) {
+      const tUser = Date.now();
+      const userEvict = await this.memoryDream.evictUserMemoryIfOverCap();
+      if (userEvict.executed) {
+        await this.telemetry.logMemoryCapEvict({
+          scope: 'user',
+          fileCountBefore: userEvict.fileCountBefore,
+          filesEvicted: userEvict.evictedFiles.length,
+          durationMs: Date.now() - tUser,
+        }).catch(() => {});
+      }
     }
   }
 

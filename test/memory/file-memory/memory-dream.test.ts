@@ -27,17 +27,31 @@ async function writeMemoryFile(
   dir: string,
   filename: string,
   description: string,
-  opts: { type?: string; confidence?: number; recallCount?: number; content?: string; createdAt?: string } = {},
+  opts: {
+    type?: string;
+    confidence?: number;
+    recallCount?: number;
+    content?: string;
+    createdAt?: string;
+    level?: string;
+    evidenceStrength?: string;
+    source?: string;
+    eventDate?: string;
+  } = {},
 ) {
   const type = opts.type ?? 'project';
   const confidence = opts.confidence !== undefined ? `\nconfidence: ${opts.confidence}` : '';
   const recallCount = opts.recallCount !== undefined ? `\nrecallCount: ${opts.recallCount}` : '';
   const createdAt = opts.createdAt !== undefined ? `\ncreatedAt: ${opts.createdAt}` : '';
+  const level = opts.level !== undefined ? `\nlevel: ${opts.level}` : '';
+  const evidenceStrength = opts.evidenceStrength !== undefined ? `\nevidenceStrength: ${opts.evidenceStrength}` : '';
+  const source = opts.source !== undefined ? `\nsource: ${opts.source}` : '';
+  const eventDate = opts.eventDate !== undefined ? `\neventDate: ${opts.eventDate}` : '';
   const body = opts.content ?? `Content of ${filename}`;
   const fileContent = `---
 name: ${filename.replace('.md', '')}
 description: ${description}
-type: ${type}${confidence}${recallCount}${createdAt}
+type: ${type}${confidence}${recallCount}${createdAt}${level}${evidenceStrength}${source}${eventDate}
 ---
 
 ${body}`;
@@ -161,7 +175,7 @@ describe('evaluateDreamGate', () => {
     expect(gate.trigger).toBe('stale_index');
   });
 
-  it('仅超过条数上限不触发 Dream（与 cap 解耦）', async () => {
+  it('超过条数上限时触发 Dream，先整合再淘汰', async () => {
     const lockPath = path.join(tempDir, '.consolidate-lock');
     await fs.writeFile(lockPath, '1', 'utf-8');
     const lockT = (Date.now() - 8 * 86_400_000) / 1000;
@@ -178,7 +192,8 @@ describe('evaluateDreamGate', () => {
       postDreamMemoryCap: 5,
     });
     const gate = await dream.evaluateDreamGate(tempDir);
-    expect(gate.shouldRun).toBe(false);
+    expect(gate.shouldRun).toBe(true);
+    expect(gate.trigger).toBe('over_cap');
   });
 });
 
@@ -275,6 +290,40 @@ describe('Dream readMemoryContents（v5 优化）', () => {
     const highIdx = userMessage.content.indexOf('high_priority.md');
     const lowIdx = userMessage.content.indexOf('low_priority.md');
     expect(highIdx).toBeLessThan(lowIdx);
+  });
+
+  it('显式规则和强证据记忆优先于临时弱证据记忆', async () => {
+    await writeMemoryFile(tempDir, 'weak_session.md', '临时弱证据', {
+      type: 'project',
+      confidence: 0.4,
+      recallCount: 0,
+      level: 'session_state',
+      evidenceStrength: 'weak',
+      source: 'llm_extract',
+    });
+    await writeMemoryFile(tempDir, 'hard_rule.md', '明确规则', {
+      type: 'project',
+      confidence: 0.7,
+      recallCount: 0,
+      level: 'hard_rule',
+      evidenceStrength: 'explicit',
+      source: 'user_explicit',
+    });
+
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'All good.',
+    }));
+
+    const dream = createMemoryDream({ enableBackup: false });
+    await dream.forceDream(tempDir, mockLLM);
+
+    const chatCall = (mockLLM.chat as any).mock.calls[0];
+    const userMessage = chatCall[0].find((m: UnifiedMessage) => m.role === 'user');
+    expect(userMessage.content.indexOf('hard_rule.md')).toBeLessThan(userMessage.content.indexOf('weak_session.md'));
   });
 
   it('超长文件内容被截断到 1200 字符', async () => {

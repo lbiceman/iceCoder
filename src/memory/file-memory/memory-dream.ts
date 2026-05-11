@@ -21,19 +21,13 @@ import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonObject } from './json-parser.js';
 import {
   DEFAULT_DREAM_CONFIG,
-  EVICTION_AGE_CAP_DAYS,
-  EVICTION_CONFIDENCE_WEIGHT,
-  EVICTION_RECALL_CAP,
-  EVICTION_RECALL_WEIGHT,
-  EVICTION_USER_TYPE_BONUS,
-  DEFAULT_CONFIDENCE_FALLBACK,
   type DreamConfig,
-  evictionTypeEvictionBias,
   resolveUserMemoryDir,
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
-import { evictIfNeeded, type EvictionResult } from './memory-eviction.js';
+import { computeEvictionScore, evictIfNeeded, type EvictionResult } from './memory-eviction.js';
 import { getScannerCache } from './memory-scanner-cache.js';
+import type { MemoryHeader } from './types.js';
 
 /** Dream 读取文件数上限 */
 const DREAM_READ_LIMIT = 80;
@@ -53,7 +47,7 @@ import { countDeadLinksInMemoryIndex } from './memory-index-health.js';
 /**
  * Dream 触发原因（用于遥测与门控）。
  */
-export type DreamTrigger = 'expired' | 'session_and_files' | 'new_files' | 'stale_index';
+export type DreamTrigger = 'expired' | 'session_and_files' | 'new_files' | 'stale_index' | 'over_cap';
 
 /**
  * Dream 结果。
@@ -182,7 +176,7 @@ export class MemoryDream {
   }
 
   /**
-   * Dream 门控：返回是否运行及触发原因（遥测用）。超条数上限不触发 Dream，由轻量淘汰单独处理。
+   * Dream 门控：返回是否运行及触发原因（遥测用）。超条数上限先触发 Dream，让 LLM 有机会合并/修正，再由 Dream 后淘汰收敛到上限。
    */
   async evaluateDreamGate(memoryDir: string): Promise<{ shouldRun: boolean; trigger: DreamTrigger | null }> {
     const remoteCfg = getDreamConfig();
@@ -206,6 +200,11 @@ export class MemoryDream {
     if (expired.length >= DREAM_EXPIRED_TRIGGER) {
       console.log(`[MemoryDream] ${expired.length} expired memories detected, triggering dream`);
       return { shouldRun: true, trigger: 'expired' };
+    }
+
+    if (this.config.enforceMemoryCapAfterDream && memories.length > this.config.postDreamMemoryCap) {
+      console.log(`[MemoryDream] ${memories.length} memories exceed cap ${this.config.postDreamMemoryCap}, triggering dream before eviction`);
+      return { shouldRun: true, trigger: 'over_cap' };
     }
 
     const { dead } = await countDeadLinksInMemoryIndex(memoryDir);
@@ -484,7 +483,7 @@ export class MemoryDream {
    */
   private async readMemoryContents(
     memoryDir: string,
-    memories: Array<{ filename: string; filePath: string; mtimeMs: number; confidence: number; recallCount: number; lastRecalledMs: number; type?: string }>,
+    memories: MemoryHeader[],
   ): Promise<string> {
     // 按重要性排序：evictionScore 越低越重要（不该被淘汰 = 应该优先整合）
     const sorted = [...memories].sort((a, b) => {
@@ -518,14 +517,8 @@ export class MemoryDream {
    * 计算 Dream 读取优先级（越低越重要）。
    * 复用 evictionScore 的逻辑：高置信度、高召回频率、user 类型 → 低分 → 优先读取。
    */
-  private computeDreamPriority(mem: { mtimeMs: number; confidence: number; recallCount: number; lastRecalledMs: number; type?: string }): number {
-    const lastActiveMs = Math.max(mem.lastRecalledMs || 0, mem.mtimeMs);
-    const daysSinceActive = Math.max(0, (Date.now() - lastActiveMs) / 86_400_000);
-    const agePenalty = Math.min(daysSinceActive, EVICTION_AGE_CAP_DAYS) / EVICTION_AGE_CAP_DAYS * 100;
-    const confidenceBonus = (mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) * EVICTION_CONFIDENCE_WEIGHT;
-    const recallBonus = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
-    const typeBonus = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
-    return agePenalty - confidenceBonus - recallBonus - typeBonus + evictionTypeEvictionBias(mem.type);
+  private computeDreamPriority(mem: MemoryHeader): number {
+    return computeEvictionScore(mem);
   }
 
   /**

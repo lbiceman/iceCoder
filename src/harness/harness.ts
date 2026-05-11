@@ -40,6 +40,11 @@ import { TaskCheckpointManager, type TaskCheckpointStatus } from './checkpoint.j
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
+import {
+  ensureDelegateToSubagentTool,
+  formatSubAgentResult,
+  SubAgentRunner,
+} from './sub-agent-runner.js';
 
 // ─── max-output-tokens 恢复最大次数 ───
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
@@ -83,6 +88,8 @@ function toolExecutionUserHint(toolName: string): string {
 // ─── 工具结果预算裁剪 ───
 const TOOL_RESULT_KEEP_RECENT = 6;
 const TOOL_RESULT_BUDGET_PER_MESSAGE = 3000;
+const SUBAGENT_RESULT_KEEP_RECENT = 6;
+const OLD_SUBAGENT_SUMMARY_CHARS = 300;
 
 // ─── 任务切换检测 ───
 const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
@@ -191,6 +198,27 @@ function isActionableToolRequest(text: string): boolean {
   return !questionOnly;
 }
 
+function isSubAgentToolResult(msg: UnifiedMessage): msg is UnifiedMessage & { content: string } {
+  return msg.role === 'tool'
+    && typeof msg.content === 'string'
+    && msg.content.startsWith('[SubAgent Result]');
+}
+
+function truncateOldSubAgentResult(content: string): string {
+  const marker = '\nsummary:\n';
+  const markerIndex = content.indexOf(marker);
+  if (markerIndex < 0) {
+    return content.length > OLD_SUBAGENT_SUMMARY_CHARS
+      ? `${content.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[旧子代理结果已裁剪，原始长度 ${content.length} 字符]`
+      : content;
+  }
+
+  const header = content.slice(0, markerIndex + marker.length);
+  const summary = content.slice(markerIndex + marker.length);
+  if (summary.length <= OLD_SUBAGENT_SUMMARY_CHARS) return content;
+  return `${header}${summary.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[旧子代理摘要已裁剪，原始长度 ${summary.length} 字符]`;
+}
+
 // ─── 默认压缩配置 ───
 const DEFAULT_COMPACTION_THRESHOLD = 40;
 const DEFAULT_COMPACTION_KEEP_RECENT = 15;
@@ -285,12 +313,17 @@ export class Harness {
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
   private runtimeTelemetry?: RuntimeTelemetry;
+  private workspaceRoot: string;
 
   constructor(
     config: HarnessConfig,
     toolExecutor: ToolExecutor,
   ) {
-    this.contextAssembler = new ContextAssembler(config.context);
+    const context = {
+      ...config.context,
+      tools: ensureDelegateToSubagentTool(config.context.tools),
+    };
+    this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
     this.contextCompactor = new ContextCompactor({
       threshold: config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
@@ -303,6 +336,7 @@ export class Harness {
     this.permissionRules = config.permissions ?? [];
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
+    this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.checkpointManager = config.sessionDir
       ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
       : undefined;
@@ -439,6 +473,7 @@ export class Harness {
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
       // 工具结果预算裁剪在副本上执行，不修改原始消息（保持前缀缓存一致性）
       const normalizedMsgs = normalizeMessages(msgs);
+      this.applySubAgentResultRetention(normalizedMsgs);
       this.applyToolResultBudget(normalizedMsgs);
 
       // ── 任务切换检测（bigram Jaccard）──
@@ -838,7 +873,7 @@ export class Harness {
 
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
       const toolStats = await this.executeToolCallsStreaming(
-        response.toolCalls!, msgs, logger, onStep, this.abortSignal, state.taskState, state.repoContext,
+        response.toolCalls!, msgs, logger, onStep, this.abortSignal, state.taskState, state.repoContext, chatFn, currentTools,
       );
 
       const repeatedFailures = this.collectRepeatedFailures(response.toolCalls!, toolStats.failedSignatures, state.failedToolCallSignatures);
@@ -1011,6 +1046,25 @@ export class Harness {
     }
   }
 
+  /**
+   * 子代理结果本身已经是摘要；长对话里只保留最近几条完整摘要，旧摘要再次压缩。
+   */
+  private applySubAgentResultRetention(messages: UnifiedMessage[]): void {
+    let subAgentResultCount = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (!isSubAgentToolResult(msg)) continue;
+
+      subAgentResultCount++;
+      if (subAgentResultCount <= SUBAGENT_RESULT_KEEP_RECENT) continue;
+
+      messages[i] = {
+        ...msg,
+        content: truncateOldSubAgentResult(msg.content),
+      };
+    }
+  }
+
   // ─── 记忆集成由 HarnessMemoryIntegration 处理 ───
 
   private upsertRuntimeContextMessage(messages: UnifiedMessage[], state: LoopState): void {
@@ -1062,6 +1116,8 @@ export class Harness {
     harnessAbortSignal?: AbortSignal,
     taskState?: TaskState,
     repoContext?: RepoContext,
+    chatFn?: ChatFunction,
+    currentTools?: ToolDefinition[],
   ): Promise<{ failedCount: number; totalCount: number; failedSignatures: string[] }> {
     const streamingExecutor = new StreamingToolExecutor(
       this.toolExecutor,
@@ -1075,6 +1131,9 @@ export class Harness {
       harnessAbortSignal,
     );
     const iteration = this.loopController.getState().currentRound;
+    let directFailedCount = 0;
+    let directTotalCount = 0;
+    const directFailedSignatures: string[] = [];
 
     // 第一遍：权限检查 + 提交到流式执行器
     const submittedIds = new Set<string>();
@@ -1083,6 +1142,75 @@ export class Harness {
       if (this.loopController.isAborted()) {
         this.yieldMissingToolResults(toolCalls, submittedIds, messages);
         break;
+      }
+
+      if (tc.name === 'delegate_to_subagent') {
+        logger.toolCall(tc.name, tc.arguments);
+        onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
+        onStep?.({
+          type: 'tool_progress',
+          iteration,
+          phase: 'running',
+          toolName: tc.name,
+          content: '正在委派只读子代理探索代码库…',
+        });
+
+        let output: string;
+        let success = true;
+        let error: string | undefined;
+        try {
+          if (!chatFn || !currentTools) {
+            throw new Error('delegate_to_subagent requires Harness chat function and tool definitions');
+          }
+          const runner = new SubAgentRunner({
+            toolExecutor: this.toolExecutor,
+            toolDefinitions: currentTools,
+            chatFn,
+            workspaceRoot: this.workspaceRoot,
+          });
+          const result = await runner.run({
+            task: String(tc.arguments.task ?? ''),
+            context: typeof tc.arguments.context === 'string' ? tc.arguments.context : undefined,
+          });
+          output = formatSubAgentResult(result);
+          success = result.status !== 'error';
+          error = result.error;
+        } catch (err) {
+          success = false;
+          error = err instanceof Error ? err.message : String(err);
+          output = `工具执行错误: ${error}`;
+        }
+
+        directTotalCount++;
+        if (!success) {
+          directFailedCount++;
+          directFailedSignatures.push(this.toolCallSignature(tc));
+        }
+        logger.toolResult(tc.name, success, output.length, error);
+        this.runtimeTelemetry?.recordTool({
+          round: iteration,
+          toolName: tc.name,
+          success,
+          outputLength: output.length,
+        });
+        onStep?.({
+          type: 'tool_result',
+          iteration,
+          toolName: tc.name,
+          toolSuccess: success,
+          toolOutput: output.substring(0, 500),
+          toolError: success ? undefined : error,
+        });
+        messages.push({
+          role: 'tool',
+          content: output,
+          toolCallId: tc.id,
+        });
+        taskState?.recordToolResult(tc, { success, output, error });
+        repoContext?.recordToolResult(tc, { success, output, error });
+        this.loopController.recordToolCalls(1);
+        submittedIds.add(tc.id);
+        continue;
       }
 
       // ── 权限检查：显式规则优先，破坏性工具兜底确认 ──
@@ -1146,8 +1274,8 @@ export class Harness {
     // 第二遍：等待所有已提交的工具完成，收集结果
     const results = await streamingExecutor.flush();
     const processedIds = new Set<string>();
-    let failedCount = 0;
-    const failedSignatures: string[] = [];
+    let failedCount = directFailedCount;
+    const failedSignatures: string[] = [...directFailedSignatures];
 
     for (const sr of results) {
       // 中断后跳过剩余结果处理
@@ -1202,7 +1330,7 @@ export class Harness {
       this.yieldMissingToolResults(toolCalls, processedIds, messages);
     }
 
-    return { failedCount, totalCount: results.length, failedSignatures };
+    return { failedCount, totalCount: results.length + directTotalCount, failedSignatures };
   }
 
   /**

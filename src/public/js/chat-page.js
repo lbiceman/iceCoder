@@ -1146,7 +1146,7 @@ window.ChatPage = (function () {
       case 'pulse':
         if (elStatusBar && elStatusBar.classList.contains('active')) {
           var hint = lastToolProgressHint || '处理中';
-          updateStatusText(hint + ' · 连接正常');
+          updateStatusText(hint);
         }
         break;
     }

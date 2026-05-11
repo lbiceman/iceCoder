@@ -762,7 +762,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   gap: 8px;
   padding: 6px 18px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-primary);
   background: var(--bg-card, var(--bg-secondary));
   border: 1px solid var(--border-light, var(--border-color));
   border-radius: 20px;
