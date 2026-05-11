@@ -22,12 +22,6 @@ import { getModelMaxOutputTokens } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager } from '../mcp/index.js';
-import { RequirementAnalysisAgent } from '../agents/requirement-analysis.js';
-import { DesignAgent } from '../agents/design.js';
-import { TaskGenerationAgent } from '../agents/task-generation.js';
-import { CodeWritingAgent } from '../agents/code-writing.js';
-import { TestingAgent } from '../agents/testing.js';
-import { RequirementVerificationAgent } from '../agents/requirement-verification.js';
 import { resolveDataPaths, ensureDataDir, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -183,23 +177,11 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
     console.error('MCP 初始化失败（不影响核心功能）:', err);
   }
 
-  // 初始化编排器（传入工具系统，让 Agent 可以使用 Harness 工具循环）
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: paths.outputDir,
     sessionDir: paths.sessionsDir,
-    stageMaxRetries: 2,
-    stageRetryDelay: 3000,
-    toolExecutor: executor,
-    toolDefinitions: registry.getDefinitions(),
   });
 
-  // 注册智能体
-  orchestrator.registerAgent(new RequirementAnalysisAgent());
-  orchestrator.registerAgent(new DesignAgent());
-  orchestrator.registerAgent(new TaskGenerationAgent());
-  orchestrator.registerAgent(new CodeWritingAgent());
-  orchestrator.registerAgent(new TestingAgent());
-  orchestrator.registerAgent(new RequirementVerificationAgent());
 
   return {
     llmAdapter, fileParser, orchestrator,

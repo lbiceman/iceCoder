@@ -1,6 +1,10 @@
 ﻿# iceCoder 架构与运行时说明
 
-iceCoder 是一个面向本地代码仓库的 AI 编码 Agent Runtime。它不只是聊天壳，而是把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测指标组合在一起，目标是逐步接近 Claude Code / Codex CLI 这类主流软件工程 Agent 的可靠性。
+iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测骨架组合在一起，目标是接近 Claude Code / Codex CLI 等工具在**可靠执行工程任务**上的表现。
+
+**已从代码库移除：** 早期的**多阶段流水线**及按阶段注册的 **Agent** 抽象（如 `BaseAgent`、`executePipeline`、阶段报告生成等）。当前 `Orchestrator` 仅聚合 `FileParser` 与 `LLMAdapter`，供 WebSocket 聊天等入口共享实例。
+
+[English](./README.md) | [后续优化计划](./nextWork.md)
 
 [English](./README.md) | [后续优化计划](./nextWork.md)
 
@@ -18,11 +22,10 @@ npm test
 npm run eval:agent
 ```
 
-当前验证结果：
+当前验证结果（请以本机为准）：
 
-- 33 个测试文件通过
-- 561 条测试通过
-- 未为本轮 Runtime 整改引入新的 npm 依赖
+- 32 个测试文件通过
+- 531 条测试通过
 
 ---
 
@@ -45,7 +48,7 @@ CLI / Web / Remote
 | 模块 | 职责 |
 |---|---|
 | `src/prompts/*` | 提示词分段、静态 system、动态 overlay、评测/禁工具模式 |
-| `src/harness/harness.ts` | Agent 主循环、工具执行、恢复、权限、验证门禁 |
+| `src/harness/harness.ts` | 带工具调用的 LLM 主循环、执行、恢复、权限、验证门禁 |
 | `src/harness/task-state.ts` | 当前任务状态账本 |
 | `src/harness/repo-context.ts` | 仓库上下文账本 |
 | `src/harness/context-assembler.ts` | 组装 system prompt 与动态上下文 |
@@ -101,6 +104,19 @@ while running:
 | 重复失败检测 | 同工具同参数重复失败时提示换策略 |
 | 短指令保护 | 微压缩不会删除“跑测试”“继续”等短执行指令 |
 | 会话记忆 force 更新 | 压缩前可强制备份当前会话状态 |
+
+### 3.2 子代理（Sub-Agent Runner）
+
+`src/harness/sub-agent-runner.ts` 提供**隔离的只读子代理**用于代码库探索。主模型调用 `delegate_to_subagent` 时，它会启动一个私有消息循环，使用白名单工具集（仅 `read_file`、`search_codebase`、`fs_operation list`）。子代理独立运行（60s 超时、上限 10 轮），读取文件、搜索代码后返回**结构化摘要**而非原始文件内容。
+
+这解决了"上下文污染"问题：以前每次探索任务都会把大量搜索结果和文件内容直接丢进会话历史，加速压缩并浪费 token。有了子代理后，主上下文只收到短摘要（约几百 token），探索引起的上下文膨胀降低约 60-80%。
+
+子代理还带有**进程级 LRU 缓存**（默认 100 条，按 task + filesRead + mtime 作为键），文件未变时跳过重复执行。
+
+关键组件：
+- `SubAgentRunner` — 带超时和轮次限制的隔离消息循环
+- `delegate_to_subagent` — 暴露给模型委派探索任务的工具
+- `formatSubAgentResult()` — 将结构化结果格式化为主会话可读的工具结果
 
 ---
 
@@ -274,6 +290,43 @@ iceCoder 的长期记忆是文件化的，不依赖外部数据库。
 - 记忆提取从“宁滥勿缺”改为“证据优先”。
 - 单次弱信号不应进入长期记忆，交给会话记忆处理。
 
+
+### 7.5 Dream 整合与记忆淘汰
+
+- 这块参考了claudeCode的创意
+
+`src/memory/file-memory/memory-dream.ts` 运行周期性"做梦"过程（类比人类睡眠记忆整合），对记忆文件进行审查、去重和修剪。触发条件：
+
+- 会话数达到阈值（每 5 次会话）
+- 记忆文件数超过阈值（默认 30 个）
+- 上次 Dream 后有新文件 ≥ 10 个
+- 检测到过期记忆 ≥ 3 个
+- MEMORY.md 索引中存在死链接
+- 记忆数超过 Dream 后上限
+
+Dream 阶段：**定向** → **收集** → **整合** → **修剪**。整合后，如果配置了 `enforceMemoryCapAfterDream` / `enforceUserMemoryCapAfterDream`，会自动执行上限强制淘汰，分别作用于项目级和用户级记忆目录。
+
+`src/memory/file-memory/memory-eviction.ts` 实现**加权评分淘汰**（非纯 LRU）。评分因素：
+
+| 因素 | 范围 | 效果 |
+|---|---|---|
+| 新鲜度惩罚 | 0-100 | 越久不活跃分越高（更易淘汰） |
+| 置信度保护 | 0-30 | 高置信度记忆受保护 |
+| 召回频率保护 | 0-20 | 经常被召回的受保护 |
+| 类型保护 | 0 或 15 | `user` 类型受保护 |
+| 层级保护 | -18 到 35 | `hard_rule` > `preference` > `project_fact` > `observation` > `session_state` |
+| 证据强度保护 | -16 到 28 | `explicit` > `repeated` > `inferred` > `weak` |
+| 来源保护 | 0-30 | `user_explicit` > `manual` > `dream` > `llm_extract` |
+| 类型淘汰偏置 | 可配置 | `feedback` / `reference` 类型偏向淘汰 |
+
+安全保障：
+- `confidence >= 1.0` 的记忆永不淘汰（用户明确声明）
+- 保护期内的活跃记忆不淘汰
+- `MEMORY.md` 索引文件本身永不淘汰
+- 被淘汰文件移入 `evicted/` 目录（可通过 `restoreEvicted()` 恢复）
+- 淘汰日志写入 `evicted/eviction-log.jsonl`
+- 自动清理过旧归档文件
+
 ---
 
 ## 8. 会话记忆与压缩
@@ -324,9 +377,9 @@ ICE_CONTEXT_WINDOW
 
 ---
 
-## 9. Agent Eval
+## 9. 运行时评测（eval 骨架）
 
-当前提供最小 eval 骨架：
+`npm run eval:agent` 为**历史脚本名**；当前提供的是最小 eval 骨架（指标名与 case 分类），尚未实现完整判分 Runner。
 
 ```bash
 npm run eval:agent
@@ -374,21 +427,29 @@ npx tsx src/cli/index.ts run "修复失败测试"
 
 ---
 
-## 11. 当前仍需优化
+## 11. 会话压缩与恢复（Runtime 持久化）
+
+每次会话笔记（`session-notes.md`）在 **Runtime Evidence (auto)** 一节中除人类可读摘要外，会写入 fenced 块 \`\`\`icecoder-runtime：内含 `TaskState` 与 `RepoContext` 的结构化 JSON（带体积上限）。**续聊且已有消息历史时**，Harness 会优先从该块 **`applySnapshot` 到内存**，从而在进程或页面重载后仍能恢复目标、阶段、已读/已改文件与验证状态，而不必仅靠自然语言猜测。
+
+持久化 JSON 的 **schema**（`PersistedRuntimeV1`、`TaskStateSnapshot`、`RepoContextSnapshot` 等）统一定义在 **`src/types/runtime-snapshot.ts`**：`session-memory` 只依赖该公共模块，与 `task-state` / `repo-context` 实现类解耦，避免 memory 层反向引用 harness。
+
+首轮若判定为可执行的工程任务，会向模型注入 **Tool Planner**：根据 `taskState.intent`（如 debug / edit / test）附上 **建议优先调用的 2～3 个工具名**（映射表见 `src/harness/tool-plan-intent-map.ts`），减少犹豫性开场。
+
+---
+
+## 12. 当前仍需优化
 
 后续工作主要包括：
 
 1. Memory v2 结构化分级：hard_rule / project_fact / preference / observation / session_state。
-2. 压缩恢复持久化：将 Runtime Recovery Context 同步进 session notes，支持进程重启恢复。
-3. 正式 Agent Eval Runner：真实执行、判分、输出趋势。
-4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
-5. Tool Planner：按任务类型生成建议工具链。
+2. 正式 **Eval Runner**：真实执行、判分、输出趋势。
+3. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
 
 ---
 
-## 12. 项目目标
+## 13. 项目目标
 
-iceCoder 的目标不是“回答更像 Agent”，而是：
+iceCoder 的目标不是“回答更像聊天机器人”，而是：
 
 ```text
 用户给任务

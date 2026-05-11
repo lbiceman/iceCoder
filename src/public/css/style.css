@@ -435,83 +435,6 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   position: relative;
 }
 
-/* ── Pipeline Progress ── */
-.pipeline-panel {
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
-  padding: 12px 24px;
-  flex-shrink: 0;
-}
-.pipeline-panel.hidden { display: none; }
-
-.pipeline-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.pipeline-header h3 {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.pipeline-progress-bar {
-  width: 100%;
-  height: 4px;
-  background: var(--border-color);
-  border-radius: 2px;
-  overflow: hidden;
-  margin-bottom: 10px;
-}
-.pipeline-progress-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 2px;
-  transition: width 0.4s ease;
-  width: 0%;
-}
-
-.pipeline-stages {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.stage-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  font-weight: 500;
-  border: 1px solid var(--border-color);
-  background: var(--bg-card);
-  color: var(--text-muted);
-}
-.stage-label.running {
-  background: var(--accent-light);
-  color: var(--accent);
-  border-color: var(--accent);
-  animation: pulse 1.5s infinite;
-}
-.stage-label.completed {
-  background: var(--success-light);
-  color: var(--success);
-  border-color: var(--success);
-  cursor: pointer;
-}
-.stage-label.completed:hover { text-decoration: underline; }
-.stage-label.failed {
-  background: var(--danger-light);
-  color: var(--danger);
-  border-color: var(--danger);
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
 /* ── Chat Messages ── */
 .chat-messages {
   flex: 1;
@@ -569,7 +492,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   border-bottom-right-radius: 4px;
 }
 
-.message.agent {
+.message.assistant {
   align-self: flex-start;
   background: var(--msg-agent-bg);
   border: 1px solid var(--msg-agent-border);
@@ -839,7 +762,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   gap: 8px;
   padding: 6px 18px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-primary);
   background: var(--bg-card, var(--bg-secondary));
   border: 1px solid var(--border-light, var(--border-color));
   border-radius: 20px;
@@ -898,6 +821,40 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 工具调用折叠组（历史 + 实时） */
+.tool-trace-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 6px 0;
+  max-width: 92%;
+}
+.tool-trace-visible {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-trace-collapsed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-trace-toggle {
+  align-self: flex-start;
+  margin: 4px 0 2px 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary, rgba(255,255,255,0.06));
+  color: var(--text-secondary);
+}
+.tool-trace-toggle:hover {
+  border-color: var(--accent-color, #4fc3f7);
+  color: var(--text-primary);
 }
 
 .thinking-dots {
@@ -1103,7 +1060,6 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   .chat-input-area > .chat-input-row { padding: 16px 12px; }
   .agent-status-bar { bottom: 78px; }
   .message { max-width: 90%; padding: 10px 14px; }
-  .pipeline-stages { gap: 4px; }
 }
 
 /* ===== Flat Icons (CSS-only) ===== */

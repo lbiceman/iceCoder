@@ -56,7 +56,7 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    maxResultSizeChars: Infinity, // 读取工具不截断，由自身限制
+    maxResultSizeChars: 22_000,
     tags: ['file_read'],
   },
   write_file: {
@@ -88,7 +88,7 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: false,
     isReadOnly: false,
     isDestructive: false,   // 运行时根据 operation 参数判断，见 isDestructiveOperation()
-    maxResultSizeChars: 30000,
+    maxResultSizeChars: 24_000,
     tags: ['directory', 'file_write', 'file_delete'],
   },
   file_info: {
@@ -106,7 +106,7 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    maxResultSizeChars: 50000,
+    maxResultSizeChars: 32_000,
     tags: ['search', 'file_read'],
   },
 
@@ -116,7 +116,7 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    maxResultSizeChars: 50000,
+    maxResultSizeChars: 32_000,
     tags: ['parse'],
   },
   parse_pptx_deep: {

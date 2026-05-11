@@ -8,7 +8,8 @@ import { Router, type Request, type Response } from 'express';
 import { promises as fs } from 'node:fs';
 import path from 'path';
 
-const SESSIONS_DIR = path.resolve('data/sessions');
+/** 与 chat-ws.ts 使用相同解析规则，避免读写的不是同一个 default.json */
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const SESSION_ID = 'default';
 const SESSION_FILE = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
 

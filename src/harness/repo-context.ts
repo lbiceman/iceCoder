@@ -1,16 +1,11 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
+import type { RepoContextSnapshot } from '../types/runtime-snapshot.js';
+
+export type { RepoContextSnapshot } from '../types/runtime-snapshot.js';
 
 const READ_TOOLS = new Set(['read_file', 'open_file', 'file_info']);
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
-
-export interface RepoContextSnapshot {
-  filesRead: string[];
-  filesChanged: string[];
-  commandsRun: string[];
-  testCommands: string[];
-  recentDiagnostics: string[];
-}
 
 export class RepoContext {
   private filesRead = new Set<string>();
@@ -47,6 +42,15 @@ export class RepoContext {
       testCommands: this.testCommands.slice(-5),
       recentDiagnostics: [...this.recentDiagnostics],
     };
+  }
+
+  /** 从会话笔记中的 JSON 快照恢复 */
+  applySnapshot(snapshot: RepoContextSnapshot): void {
+    this.filesRead = new Set(snapshot.filesRead);
+    this.filesChanged = new Set(snapshot.filesChanged);
+    this.commandsRun = [...snapshot.commandsRun];
+    this.testCommands = [...snapshot.testCommands];
+    this.recentDiagnostics = [...snapshot.recentDiagnostics];
   }
 
   hasContent(): boolean {

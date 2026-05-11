@@ -66,7 +66,12 @@ function aggregateLogEntries(entries: TelemetryLogEntry[]) {
   let dreamCount = 0;
   let dreamTotalModified = 0;
   let dreamTotalDeleted = 0;
+  let dreamTotalEvicted = 0;
   let dreamTotalMs = 0;
+
+  let capEvictCount = 0;
+  let capEvictFiles = 0;
+  let capEvictMs = 0;
 
   for (const e of entries) {
     switch (e.type) {
@@ -87,8 +92,14 @@ function aggregateLogEntries(entries: TelemetryLogEntry[]) {
           dreamCount++;
           dreamTotalModified += e.filesModified || 0;
           dreamTotalDeleted += e.filesDeleted || 0;
+          dreamTotalEvicted += e.filesEvicted || 0;
           dreamTotalMs += e.durationMs || 0;
         }
+        break;
+      case 'memory_cap_evict':
+        capEvictCount++;
+        capEvictFiles += e.filesEvicted || 0;
+        capEvictMs += e.durationMs || 0;
         break;
     }
   }
@@ -110,7 +121,13 @@ function aggregateLogEntries(entries: TelemetryLogEntry[]) {
       count: dreamCount,
       totalModified: dreamTotalModified,
       totalDeleted: dreamTotalDeleted,
+      totalEvicted: dreamTotalEvicted,
       avgMs: dreamCount > 0 ? Math.round(dreamTotalMs / dreamCount) : 0,
+    },
+    capEvict: {
+      count: capEvictCount,
+      totalFilesEvicted: capEvictFiles,
+      avgMs: capEvictCount > 0 ? Math.round(capEvictMs / capEvictCount) : 0,
     },
   };
 }
@@ -189,10 +206,18 @@ function formatReport(
     const count = log.dream.count || processSummary.totalDreams;
     const modified = log.dream.totalModified;
     const deleted = log.dream.totalDeleted;
+    const evicted = log.dream.totalEvicted;
     const avgMs = log.dream.avgMs;
-    lines.push(`**整合** ${count} 次 | 修改 ${modified} 文件 / 删除 ${deleted} 文件 | 平均 ${avgMs}ms`);
+    const evPart = evicted > 0 ? ` / 淘汰归档 ${evicted}` : '';
+    lines.push(`**整合(Dream)** ${count} 次 | 修改 ${modified} / 删除 ${deleted}${evPart} | 平均 ${avgMs}ms`);
   } else {
-    lines.push('**整合** 暂无数据');
+    lines.push('**整合(Dream)** 暂无数据');
+  }
+
+  if (log.capEvict.count > 0) {
+    lines.push(
+      `**条数淘汰** ${log.capEvict.count} 次 | 共归档 ${log.capEvict.totalFilesEvicted} 条 | 平均 ${log.capEvict.avgMs}ms`,
+    );
   }
 
   // 记忆库

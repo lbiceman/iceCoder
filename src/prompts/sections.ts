@@ -128,6 +128,7 @@ export function createToolUsageSection(): PromptSection {
     content: `# Tools
 
 ## Principles
+- When you need to explore a directory, understand module structure, or search across multiple files, use delegate_to_subagent. Reserve direct read_file/search_codebase for single-file lookups.
 - Do NOT use run_command when a dedicated tool exists.
 - Independent tools in parallel; dependent tools in order.
 - Do not repeat tool calls unless data may have changed.

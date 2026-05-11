@@ -266,20 +266,23 @@ export async function recallRelevantMemories(
       // ── 关联扩展（1 跳）──
       const expanded = expandRelatedMemories(llmResult.selectedMemories, filteredMemories, alreadySurfaced);
       const allSelected = [...llmResult.selectedMemories, ...expanded];
-      // 如果有关联扩展的文件，补充它们的 facts
-      let selectedFacts = llmResult.selectedFacts;
-      if (expanded.length > 0) {
-        const expandedFacts = await extractFactsFromSelected(query, expanded, factIndex);
-        selectedFacts = [...selectedFacts, ...expandedFacts].slice(0, FACT_SELECTION_LIMIT);
+      if (allSelected.length > 0) {
+        // 如果有关联扩展的文件，补充它们的 facts
+        let selectedFacts = llmResult.selectedFacts;
+        if (expanded.length > 0) {
+          const expandedFacts = await extractFactsFromSelected(query, expanded, factIndex);
+          selectedFacts = [...selectedFacts, ...expandedFacts].slice(0, FACT_SELECTION_LIMIT);
+        }
+        // 异步更新召回计数（不阻塞返回）
+        updateRecallMetadata(allSelected).catch(() => {});
+        return {
+          memories: allSelected,
+          facts: selectedFacts,
+          duration: Date.now() - startTime,
+          usedLLM: true,
+        };
       }
-      // 异步更新召回计数（不阻塞返回）
-      updateRecallMetadata(allSelected).catch(() => {});
-      return {
-        memories: allSelected,
-        facts: selectedFacts,
-        duration: Date.now() - startTime,
-        usedLLM: true,
-      };
+      console.debug('[memory-recall] LLM recall returned empty selection, falling back to keyword');
     } catch (error) {
       console.error('[memory-recall] LLM recall failed, falling back to keyword:', error);
       // LLM 失败时回退到关键词匹配

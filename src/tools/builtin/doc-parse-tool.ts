@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import type { FileParser } from '../../parser/file-parser.js';
+import { getDocParseTextMaxChars, getMaxToolOutputChars } from '../tool-output-limits.js';
 
 /**
  * 创建文档解析工具。
@@ -16,6 +17,17 @@ import type { FileParser } from '../../parser/file-parser.js';
  * @param workDir - 工作目录
  */
 export function createDocParseTools(fileParser: FileParser, workDir: string): RegisteredTool[] {
+  function softTruncate(body: string, maxChars: number): { text: string; truncated: boolean } {
+    if (body.length <= maxChars) return { text: body, truncated: false };
+    let slice = body.slice(0, maxChars);
+    const lastNl = slice.lastIndexOf('\n');
+    if (lastNl > maxChars * 0.4) slice = slice.slice(0, lastNl);
+    return {
+      text: `${slice}\n\n[内容已截断，原始约 ${body.length} 字符 — 可换用更小范围或分段解析]`,
+      truncated: true,
+    };
+  }
+
   return [
     {
       definition: {
@@ -38,7 +50,9 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
         const textExtensions = ['txt', 'md', 'markdown', 'csv', 'json', 'xml', 'yaml', 'yml', 'log', 'ini', 'cfg', 'conf', 'toml'];
         if (textExtensions.includes(ext)) {
           const content = await fs.readFile(filePath, 'utf-8');
-          return { success: true, output: `File: ${filename}\nFormat: ${ext}\n\n${content}` };
+          const maxText = getDocParseTextMaxChars();
+          const { text } = softTruncate(content, maxText);
+          return { success: true, output: `File: ${filename}\nFormat: ${ext}\n\n${text}` };
         }
 
         const buffer = await fs.readFile(filePath);
@@ -53,7 +67,9 @@ export function createDocParseTools(fileParser: FileParser, workDir: string): Re
         if (meta.pageCount) header += `\nPages: ${meta.pageCount}`;
         if (meta.nodeCount) header += `\nNodes: ${meta.nodeCount}`;
 
-        return { success: true, output: `${header}\n\n${result.content}` };
+        const maxParsed = getMaxToolOutputChars();
+        const { text: body } = softTruncate(result.content, maxParsed);
+        return { success: true, output: `${header}\n\n${body}` };
       },
     },
   ];

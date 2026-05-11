@@ -124,9 +124,26 @@ export interface ChatWSOptions {
   toolExecutor: ToolExecutor;
 }
 
-/** 追加消息到会话文件（后端是唯一写入者） */
-async function appendMessages(msgs: { role: string; content: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<void> {
-  if (msgs.length === 0) return;
+/** 当前所有聊天 WebSocket 客户端（PC + 移动端），用于会话持久化后通知其它端拉取 default.json */
+const chatClients = new Set<WebSocket>();
+
+function broadcastSessionUpdated(reason: string, except?: WebSocket): void {
+  const payload = JSON.stringify({ type: 'session_updated', reason });
+  for (const client of chatClients) {
+    if (client === except) continue;
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(payload);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/** 追加消息到会话文件（后端是唯一写入者）；失败返回 false */
+async function appendMessages(msgs: { role: string; content: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<boolean> {
+  if (msgs.length === 0) return true;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
     let existing: any[] = [];
@@ -136,8 +153,10 @@ async function appendMessages(msgs: { role: string; content: string; id?: string
     } catch { /* file doesn't exist yet */ }
     existing.push(...msgs);
     await fsPromises.writeFile(SESSION_FILE, JSON.stringify(existing), 'utf-8');
+    return true;
   } catch (err) {
     console.error('[chat-ws] appendMessages failed:', err);
+    return false;
   }
 }
 
@@ -195,6 +214,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
   wss.on('connection', (ws: WebSocket) => {
+    chatClients.add(ws);
+    ws.once('close', () => {
+      chatClients.delete(ws);
+    });
+
     sendJSON(ws, { type: 'connected', message: '连接成功' });
 
     let isProcessing = false;
@@ -224,7 +248,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           cachedMessages = undefined;
           // 取消防抖写入，防止旧的 cachedMessages 覆盖清空操作
           if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-          clearSessionFile().catch(() => {});
+          await clearSessionFile();
+          broadcastSessionUpdated('cleared', ws);
           console.log('[chat-ws] 清除会话缓存和文件');
           return;
         }
@@ -264,10 +289,6 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       } catch {
         sendJSON(ws, { type: 'error', message: '消息格式错误' });
       }
-    });
-
-    ws.on('close', () => {
-      // 静默处理，不刷屏
     });
 
     ws.on('error', () => { /* ignore */ });
@@ -339,7 +360,8 @@ async function handleChatMessage(
 
   // 写入用户消息到会话文件
   const userMsgId = randomUUID();
-  await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
+  const userPersisted = await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
+  if (userPersisted) broadcastSessionUpdated('user_message', ws);
 
   // 创建 AbortController 用于用户中断
   const abortController = new AbortController();
@@ -410,107 +432,124 @@ async function handleChatMessage(
   // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
   const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];
 
-  const result = await harness.run(
-    finalMessage,
-    (msgs, opts) => llmAdapter.chat(msgs, opts),
-    (event) => {
-      // 推送 step 到 WebSocket
-      sendJSON(ws, { type: 'step', step: event });
+  const pulseTimer = setInterval(() => {
+    sendJSON(ws, { type: 'pulse', ts: Date.now() });
+  }, 10_000);
 
-      // 流式增量文本直接推送
-      if (event.type === 'stream_delta' && event.delta) {
-        sendJSON(ws, { type: 'stream', delta: event.delta });
-      }
+  try {
+    const result = await harness.run(
+      finalMessage,
+      (msgs, opts) => llmAdapter.chat(msgs, opts),
+      (event) => {
+        // 推送 step 到 WebSocket
+        sendJSON(ws, { type: 'step', step: event });
 
-      // 工具实时输出推送
-      if (event.type === 'tool_output' && event.content) {
-        sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
-      }
-
-      // 收集工具调用记录
-      if (event.type === 'tool_call' && event.toolName) {
-        const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
-        const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
-          || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
-        toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
-        const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
-        console.log(`[step] [call] ${event.toolName}(${truncated})`);
-      } else if (event.type === 'tool_result' && event.toolName) {
-        // 更新批次中最后一个匹配的工具状态
-        for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
-          if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
-            toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
-            break;
-          }
+        // 流式增量文本直接推送
+        if (event.type === 'stream_delta' && event.delta) {
+          sendJSON(ws, { type: 'stream', delta: event.delta });
         }
-        const icon = event.toolSuccess ? '[ok]' : '[err]';
-        const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
-        console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
-      }
-    },
-    existingMessages,
-    // 流式调用函数
-    (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
-    // 多模态内容块（图片等）
-    Array.isArray(userMessageContent) ? userMessageContent : undefined,
-  );
 
-  // 清空 abort controller 和中断信号
-  activeAbortController = null;
-  llmAdapter.setAbortSignal?.(null);
+        // 工具实时输出推送
+        if (event.type === 'tool_output' && event.content) {
+          sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
+        }
 
-  // 缓存完整的结构化消息历史并持久化到磁盘
-  cachedMessages = result.messages;
-  saveStructuredMessages(result.messages);
+        // 收集工具调用记录
+        if (event.type === 'tool_call' && event.toolName) {
+          const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
+          const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
+            || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
+          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
+          const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
+          console.log(`[step] [call] ${event.toolName}(${truncated})`);
+        } else if (event.type === 'tool_result' && event.toolName) {
+          // 更新批次中最后一个匹配的工具状态
+          for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
+            if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
+              toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
+              break;
+            }
+          }
+          const icon = event.toolSuccess ? '[ok]' : '[err]';
+          const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
+          console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
+        }
+      },
+      existingMessages,
+      // 流式调用函数
+      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
+      // 多模态内容块（图片等）
+      Array.isArray(userMessageContent) ? userMessageContent : undefined,
+    );
 
-  // 写入 AI 回复 + 工具调用记录到会话文件
-  const agentMsgId = randomUUID();
-  const sessionEntries: any[] = [];
+    // 清空 abort controller 和中断信号
+    activeAbortController = null;
+    llmAdapter.setAbortSignal?.(null);
 
-  // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
-  for (const trace of toolTraceBatch) {
-    sessionEntries.push({
-      role: 'tool_trace',
-      parentId: agentMsgId,
-      toolName: trace.toolName,
-      detail: trace.detail,
-      status: trace.status,
+    // 缓存完整的结构化消息历史并持久化到磁盘
+    cachedMessages = result.messages;
+    saveStructuredMessages(result.messages);
+
+    // 写入 AI 回复 + 工具调用记录到会话文件
+    const agentMsgId = randomUUID();
+    const sessionEntries: any[] = [];
+
+    // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
+    for (const trace of toolTraceBatch) {
+      sessionEntries.push({
+        role: 'tool_trace',
+        parentId: agentMsgId,
+        toolName: trace.toolName,
+        detail: trace.detail,
+        status: trace.status,
+      });
+    }
+
+    // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
+    if (result.content) {
+      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
+    } else if (toolTraceBatch.length > 0) {
+      sessionEntries.push({
+        role: 'agent',
+        content: '（本轮仅有工具调用，无文字回复）',
+        id: agentMsgId,
+      });
+    }
+
+    if (sessionEntries.length > 0) {
+      const persisted = await appendMessages(sessionEntries);
+      if (persisted) broadcastSessionUpdated('turn_complete', ws);
+    }
+
+    // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
+    sendJSON(ws, { type: 'stream_end' });
+
+    // v4 被动确认：附加记忆提取通知
+    const extractionNotices = harness.flushExtractionNotices();
+    if (extractionNotices.length > 0) {
+      sendJSON(ws, { type: 'memory_notice', notices: extractionNotices });
+    }
+
+    if (result.content) {
+      sendJSON(ws, { type: 'response', content: result.content });
+    }
+    if (result.loopState.stopReason === 'user_abort') {
+      sendJSON(ws, { type: 'info', message: '任务已被用户中断' });
+    } else if (result.loopState.totalToolCalls > 0) {
+      sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
+    }
+    sendJSON(ws, {
+      type: 'tokenUsage',
+      inputTokens: result.loopState.lastInputTokens,
+      outputTokens: result.loopState.lastOutputTokens,
+      totalInputTokens: result.loopState.totalInputTokens,
+      totalOutputTokens: result.loopState.totalOutputTokens,
     });
+  } finally {
+    clearInterval(pulseTimer);
+    activeAbortController = null;
+    llmAdapter.setAbortSignal?.(null);
   }
-
-  // agent 消息
-  if (result.content) {
-    sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
-  }
-
-  if (sessionEntries.length > 0) {
-    await appendMessages(sessionEntries).catch(() => {});
-  }
-
-  // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
-  sendJSON(ws, { type: 'stream_end' });
-
-  // v4 被动确认：附加记忆提取通知
-  const extractionNotices = harness.flushExtractionNotices();
-  if (extractionNotices.length > 0) {
-    sendJSON(ws, { type: 'memory_notice', notices: extractionNotices });
-  }
-
-  if (result.content) {
-    sendJSON(ws, { type: 'response', content: result.content });
-  }
-  if (result.loopState.stopReason === 'user_abort') {
-    sendJSON(ws, { type: 'info', message: '任务已被用户中断' });
-  } else if (result.loopState.totalToolCalls > 0) {
-    sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
-  }
-  sendJSON(ws, {
-    type: 'tokenUsage',
-    inputTokens: result.loopState.lastInputTokens,
-    outputTokens: result.loopState.lastOutputTokens,
-    totalInputTokens: result.loopState.totalInputTokens,
-    totalOutputTokens: result.loopState.totalOutputTokens,
-  });
 }
 
 function sendJSON(ws: WebSocket, data: unknown): void {
@@ -528,5 +567,6 @@ export function cleanupChatResources(): void {
     activeAbortController = null;
   }
   cachedMessages = undefined;
+  chatClients.clear();
   console.log('[chat-ws] Resources cleaned up');
 }

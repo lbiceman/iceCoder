@@ -61,7 +61,9 @@ export { LLMMemoryExtractor, createLLMMemoryExtractor } from './memory-llm-extra
 export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
 
 export { MemoryDream, createMemoryDream } from './memory-dream.js';
-export type { DreamConfig, DreamResult } from './memory-dream.js';
+export type { DreamResult, DreamTrigger } from './memory-dream.js';
+
+export { countDeadLinksInMemoryIndex } from './memory-index-health.js';
 
 // ─── 安全模块 ───
 
@@ -104,7 +106,9 @@ export type {
   RecallTelemetry,
   ExtractTelemetry,
   DreamTelemetry,
+  MemoryCapEvictTelemetry,
   StatsTelemetry,
+  SessionMemoryTelemetry,
 } from './memory-telemetry.js';
 
 // ─── 并发控制与锁机制 ───
@@ -143,8 +147,16 @@ export {
   getSessionMemoryContent,
   validateSessionMemoryContent,
   SESSION_MEMORY_TEMPLATE,
+  SESSION_RUNTIME_EVIDENCE_HEADER,
+  ICECODER_RUNTIME_FENCE_LANG,
+  readPackageJsonTestFacts,
+  buildRuntimeEvidenceSection,
+  mergeRuntimeEvidenceIntoNotes,
+  buildTestStackContradictionWarning,
+  parsePersistedRuntime,
+  serializePersistedRuntime,
 } from './session-memory.js';
-export type { SessionMemoryState } from './session-memory.js';
+export type { SessionMemoryState, PackageJsonTestFacts, SessionRuntimeEvidenceInput } from './session-memory.js';
 
 // ─── 淘汰机制 ───
 

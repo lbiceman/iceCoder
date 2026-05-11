@@ -31,7 +31,7 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
             directory: { type: 'string', description: 'Search directory relative to work dir, default root', default: '.' },
             filePattern: { type: 'string', description: 'Filter files by name pattern for content mode (e.g. *.ts)', default: '*' },
             isRegex: { type: 'boolean', description: 'Treat pattern as regex for content mode', default: false },
-            maxResults: { type: 'number', description: 'Maximum results', default: 50 },
+            maxResults: { type: 'number', description: 'Maximum results', default: 40 },
             contextLines: { type: 'number', description: 'Context lines around matches for content mode', default: 2 },
           },
           required: ['pattern'],
@@ -41,7 +41,7 @@ export function createSearchTools(workDir: string): RegisteredTool[] {
         // Normalize: query/keyword are accepted aliases for pattern
         if (args.pattern === undefined) args.pattern = args.query || args.keyword;
         const mode = (args.mode as string) || 'content';
-        const maxResults = (args.maxResults as number) || 50;
+        const maxResults = (args.maxResults as number) || 40;
 
         if (mode === 'filename') {
           // ── Glob filename search (merged from search_codebase) ──

@@ -8,7 +8,7 @@
  * - 最后活跃时间（越久没活跃，越该淘汰）
  * - 置信度（高置信度记忆受保护）
  * - 召回频率（经常被召回的记忆受保护）
- * - 记忆类型（user 类型受保护）
+ * - 记忆类型（user 受保护；feedback/reference 更易淘汰）
  *
  * 被淘汰的文件移动到 evicted/ 目录（可恢复），不是直接删除。
  */
@@ -28,6 +28,7 @@ import {
   EVICTION_CONFIDENCE_PROTECTION,
   EVICTION_SCAN_LIMIT,
   DEFAULT_CONFIDENCE_FALLBACK,
+  evictionTypeEvictionBias,
 } from './memory-config.js';
 
 // 重新导出类型和默认值，保持向后兼容
@@ -51,32 +52,105 @@ export interface EvictionResult {
 
 // ─── 淘汰评分 ───
 
+const DAY_MS = 86_400_000;
+
+const LEVEL_PROTECTION: Record<string, number> = {
+  hard_rule: 35,
+  preference: 24,
+  project_fact: 14,
+  observation: 4,
+  session_state: -18,
+};
+
+const EVIDENCE_PROTECTION: Record<string, number> = {
+  explicit: 28,
+  repeated: 20,
+  inferred: 4,
+  weak: -16,
+};
+
+const SOURCE_PROTECTION: Record<string, number> = {
+  user_explicit: 30,
+  manual: 22,
+  dream: 10,
+  llm_extract: 0,
+};
+
+export interface EvictionScoreBreakdown {
+  score: number;
+  freshnessPenalty: number;
+  confidenceProtection: number;
+  recallProtection: number;
+  typeProtection: number;
+  levelProtection: number;
+  evidenceProtection: number;
+  sourceProtection: number;
+  typeEvictBias: number;
+  activeDays: number;
+}
+
 /**
  * 计算记忆的淘汰评分。
  *
  * 分数越高越该被淘汰：
- * - agePenalty: 越久没活跃，分越高（0-100）
- * - confidenceBonus: 高置信度记忆受保护（0-30）
- * - recallBonus: 经常被召回的记忆受保护（0-20）
- * - typeBonus: user 类型记忆受保护（0 或 15）
+ * - freshnessPenalty: 越久没活跃/发生，分越高（0-100）
+ * - confidenceProtection: 高置信度记忆受保护（0-30）
+ * - recallProtection: 经常被召回的记忆受保护（0-20）
+ * - type/level/evidence/source: 显式规则、偏好、强证据、人工/用户明确记忆受保护
  */
 export function computeEvictionScore(mem: MemoryHeader): number {
-  const lastActiveMs = Math.max(mem.lastRecalledMs || 0, mem.mtimeMs);
-  const daysSinceActive = Math.max(0, (Date.now() - lastActiveMs) / 86_400_000);
+  return computeEvictionScoreBreakdown(mem).score;
+}
 
-  // 越久没活跃，淘汰分越高（0-100）
-  const agePenalty = Math.min(daysSinceActive, EVICTION_AGE_CAP_DAYS) / EVICTION_AGE_CAP_DAYS * 100;
+export function computeEvictionScoreBreakdown(mem: MemoryHeader, now = Date.now()): EvictionScoreBreakdown {
+  const lastActiveMs = getFreshnessAnchorMs(mem);
+  const activeDays = Math.max(0, (now - lastActiveMs) / DAY_MS);
+
+  // 越久没活跃/发生，淘汰分越高（0-100）
+  const freshnessPenalty = Math.min(activeDays, EVICTION_AGE_CAP_DAYS) / EVICTION_AGE_CAP_DAYS * 100;
 
   // 高置信度保护（0-30）
-  const confidenceBonus = (mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) * EVICTION_CONFIDENCE_WEIGHT;
+  const confidenceProtection = (mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) * EVICTION_CONFIDENCE_WEIGHT;
 
   // 召回频率保护（0-20，上限 recallCount=20）
-  const recallBonus = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
+  const recallProtection = Math.min(mem.recallCount || 0, EVICTION_RECALL_CAP) / EVICTION_RECALL_CAP * EVICTION_RECALL_WEIGHT;
 
-  // user 类型保护（0 或 15）
-  const typeBonus = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
+  // user 类型保护（0 或 15）；feedback / reference 等见 evictionTypeEvictionBias
+  const typeProtection = mem.type === 'user' ? EVICTION_USER_TYPE_BONUS : 0;
+  const levelProtection = LEVEL_PROTECTION[mem.level] ?? 0;
+  const evidenceProtection = EVIDENCE_PROTECTION[mem.evidenceStrength] ?? 0;
+  const sourceProtection = mem.source ? (SOURCE_PROTECTION[mem.source] ?? 0) : 0;
+  const typeEvictBias = evictionTypeEvictionBias(mem.type);
+  const score = freshnessPenalty
+    - confidenceProtection
+    - recallProtection
+    - typeProtection
+    - levelProtection
+    - evidenceProtection
+    - sourceProtection
+    + typeEvictBias;
 
-  return agePenalty - confidenceBonus - recallBonus - typeBonus;
+  return {
+    score,
+    freshnessPenalty,
+    confidenceProtection,
+    recallProtection,
+    typeProtection,
+    levelProtection,
+    evidenceProtection,
+    sourceProtection,
+    typeEvictBias,
+    activeDays,
+  };
+}
+
+function getFreshnessAnchorMs(mem: MemoryHeader): number {
+  return Math.max(
+    mem.lastRecalledMs || 0,
+    mem.eventDateMs || 0,
+    mem.createdMs || 0,
+    mem.mtimeMs || 0,
+  );
 }
 
 // ─── 核心淘汰逻辑 ───
@@ -126,7 +200,7 @@ export async function evictIfNeeded(
     if ((mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) >= EVICTION_CONFIDENCE_PROTECTION) return false;
 
     // 不淘汰保护期内的记忆
-    const lastActiveMs = Math.max(mem.lastRecalledMs || 0, mem.mtimeMs, mem.createdMs);
+    const lastActiveMs = getFreshnessAnchorMs(mem);
     if (now - lastActiveMs < protectionMs) return false;
 
     return true;
@@ -153,13 +227,16 @@ export async function evictIfNeeded(
 
   // 执行淘汰：移动文件到 evictedDir
   const evictedFiles: string[] = [];
+  const evictedDetails: Array<{ filename: string; score: number; reason: string }> = [];
   for (const mem of toEvict) {
+    const breakdown = computeEvictionScoreBreakdown(mem);
     try {
       const destPath = path.join(cfg.evictedDir, mem.filename);
       // 确保目标子目录存在（如果 filename 包含子路径）
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.rename(mem.filePath, destPath);
       evictedFiles.push(mem.filename);
+      evictedDetails.push({ filename: mem.filename, score: breakdown.score, reason: formatEvictionReason(mem, breakdown) });
     } catch (err) {
       // 移动失败（跨设备等），回退到复制+删除
       try {
@@ -169,6 +246,7 @@ export async function evictIfNeeded(
         await fs.writeFile(destPath, content, 'utf-8');
         await fs.unlink(mem.filePath);
         evictedFiles.push(mem.filename);
+        evictedDetails.push({ filename: mem.filename, score: breakdown.score, reason: formatEvictionReason(mem, breakdown) });
       } catch {
         console.debug(`[memory-eviction] Failed to evict ${mem.filename}:`, err instanceof Error ? err.message : err);
       }
@@ -179,7 +257,7 @@ export async function evictIfNeeded(
   await pruneEvictedDir(cfg.evictedDir, cfg.maxEvictedFiles);
 
   // 写入淘汰日志
-  await appendEvictionLog(cfg.evictedDir, evictedFiles);
+  await appendEvictionLog(cfg.evictedDir, evictedDetails);
 
   const fileCountAfter = fileCountBefore - evictedFiles.length;
   const summary = evictedFiles.length > 0
@@ -191,6 +269,17 @@ export async function evictIfNeeded(
   }
 
   return { executed: evictedFiles.length > 0, fileCountBefore, fileCountAfter, evictedFiles, summary };
+}
+
+function formatEvictionReason(mem: MemoryHeader, score: EvictionScoreBreakdown): string {
+  const weakSignals: string[] = [];
+  if (score.activeDays > 90) weakSignals.push(`inactive ${Math.round(score.activeDays)}d`);
+  if ((mem.confidence || DEFAULT_CONFIDENCE_FALLBACK) < 0.5) weakSignals.push(`low confidence ${mem.confidence}`);
+  if ((mem.recallCount || 0) === 0) weakSignals.push('never recalled');
+  if (mem.evidenceStrength === 'weak') weakSignals.push('weak evidence');
+  if (mem.level === 'session_state') weakSignals.push('session state');
+  if (mem.type === 'reference' || mem.type === 'feedback') weakSignals.push(`${mem.type} bias`);
+  return weakSignals.length > 0 ? weakSignals.join(', ') : 'lowest weighted retention score';
 }
 
 /**
@@ -274,14 +363,18 @@ async function pruneEvictedDir(evictedDir: string, maxFiles: number): Promise<vo
 /**
  * 追加淘汰日志。
  */
-async function appendEvictionLog(evictedDir: string, evictedFiles: string[]): Promise<void> {
-  if (evictedFiles.length === 0) return;
+async function appendEvictionLog(
+  evictedDir: string,
+  evictedDetails: Array<{ filename: string; score: number; reason: string }>,
+): Promise<void> {
+  if (evictedDetails.length === 0) return;
   try {
     const logPath = path.join(evictedDir, '_eviction_log.jsonl');
     const entry = JSON.stringify({
       timestamp: new Date().toISOString(),
-      evictedFiles,
-      count: evictedFiles.length,
+      evictedFiles: evictedDetails.map(f => f.filename),
+      evictedDetails,
+      count: evictedDetails.length,
     }) + '\n';
     await fs.appendFile(logPath, entry, 'utf-8');
   } catch {

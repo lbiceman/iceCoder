@@ -872,6 +872,7 @@ describe('Harness - onStep 回调', () => {
     const types = events.map(e => e.type);
     expect(types).toContain('thinking');
     expect(types).toContain('tool_call');
+    expect(types).toContain('tool_progress');
     expect(types).toContain('tool_result');
     expect(types).toContain('final');
 

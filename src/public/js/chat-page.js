@@ -1,7 +1,6 @@
 /**
  * 聊天页面模块。
- * 渲染聊天界面，包含消息输入、文件上传、SSE 流式传输、
- * 流水线进度条和阶段状态标签。
+ * 渲染聊天界面，包含消息输入、文件上传与 WebSocket 流式回复。
  */
 
 /* exported ChatPage */
@@ -10,16 +9,11 @@ window.ChatPage = (function () {
   'use strict';
 
   // ---- Constants ----
+  /** 超过此数量时折叠更早的工具行；始终保留最新的若干条可见 */
+  var TOOL_TRACE_VISIBLE_MAX = 3;
+
   var SUPPORTED_EXTENSIONS = []; // 不限制，允许所有格式
   var supportedPattern = null;
-  var STAGE_NAMES = [
-    'Requirement Analysis',
-    'Design',
-    'Task Generation',
-    'Code Writing',
-    'Testing',
-    'Requirement Verification'
-  ];
 
   // ---- localStorage keys ----
   var STORAGE_KEY_MESSAGES = 'ice-chat-messages';
@@ -29,17 +23,23 @@ window.ChatPage = (function () {
   var messages = [];       // { role: 'user'|'agent', content: string, images?: string[] }
   var uploadedFile = null; // { fileId, filename, size } or null
   var pendingImages = [];  // 待发送的图片 { dataUrl, file } 列表
-  var currentExecutionId = null;
-  var stages = [];         // { name, status }
-  var agentResponseBuffer = ''; // accumulates streaming chunks
+  var streamReplyBuffer = ''; // accumulates streaming chunks
   var isStreaming = false;      // 是否正在流式传输
   var userStopped = false;      // 用户是否已点击停止（忽略后续 stream 消息）
   var streamFinalized = false;  // 标记刚刚 finalize 了流式消息（用于跳过冗余 response）
 
-  // ---- 工具调用记录（服务端持久化，通过 parentId 关联到 agent 消息） ----
-  // toolTraces: { [agentMsgId]: [{ toolName, detail, status }] }
+  // ---- 工具调用记录（服务端持久化，通过 parentId 关联到助手侧消息） ----
+  // toolTraces: { [assistantMsgId]: [{ toolName, detail, status }] }
   var toolTraces = {};
-  var currentToolBatch = [];    // 当前轮次收集的工具调用，等 agent 消息确定后关联
+  var currentToolBatch = [];    // 当前轮次收集的工具调用，等助手消息 id 从服务端同步后关联
+
+  /** 本轮对话实时工具区（WS）：更早的进折叠区，保留最新 TOOL_TRACE_VISIBLE_MAX 条 */
+  var liveToolRoundActive = false;
+  var liveToolRoundRoot = null;
+  var liveToolRoundVisible = null;
+  var liveToolRoundCollapsed = null;
+  var liveToolRoundToggle = null;
+  var liveToolRoundCount = 0;
 
   // ---- 远程模式（仅控制 UI 差异，通信方式统一用 WebSocket） ----
   var remoteMode = false;       // 是否为远程控制模式（带 token）
@@ -48,15 +48,21 @@ window.ChatPage = (function () {
   // ---- WebSocket（PC 和移动端统一） ----
   var chatWs = null;            // WebSocket 连接
   var wsProcessing = false;     // 是否正在处理消息
+  /** 最近一次工具执行阶段提示（与 pulse 心跳一起刷新状态栏） */
+  var lastToolProgressHint = '';
   var wsReconnectTimer = null;
   var wsReconnectAttempts = 0;
   var wsHeartbeatTimer = null;
   var wsSyncTimer = null;       // 定期轮询同步
   var wsConnectTimeout = null;
 
+  /** 上次已成功应用的服务端会话快照签名（避免 sync 轮询无意义全量重绘） */
+  var lastSessionSyncSig = '';
+
   // ---- 上下文用量跟踪 ----
-  var maxContextTokens = 0;     // 当前模型最大上下文
-  var usedInputTokens = 0;      // 累计输入 token
+  var maxContextTokens = 0;     // 当前模型最大上下文（/api/config 默认 provider）
+  /** 用于进度条：最近一轮 LLM 请求的 inputTokens（≈该轮上下文占用），非多轮累计 */
+  var usedInputTokens = 0;
   var usedOutputTokens = 0;     // 累计输出 token
   var modelName = '';            // 当前模型名称
 
@@ -64,9 +70,40 @@ window.ChatPage = (function () {
 
   var SESSION_ID = 'default';
 
+  /**
+   * 移除模型按记忆/系统要求在末尾输出的 <status>…</status>（不向用户展示）。
+   */
+  function stripStatusTag(text) {
+    if (!text || typeof text !== 'string') return text;
+    return text
+      .replace(/<status>\s*(?:complete|incomplete)\s*<\/status>/gi, '')
+      .replace(/\s*$/, '');
+  }
+
+  /** 序列化单条消息写入 localStorage（保留 id 以便刷新后挂载 tool_trace） */
+  function serializeMessageForStorage(m) {
+    var c = m.content;
+    if (m.role === 'agent' && typeof c === 'string') c = stripStatusTag(c);
+    var o = { role: m.role, content: c };
+    if (m.id) o.id = m.id;
+    return o;
+  }
+
+  /** 规范化本地缓存条目（忽略未知 role / 损坏项） */
+  function normalizeStoredMessage(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var role = raw.role;
+    if (role !== 'user' && role !== 'agent') return null;
+    var rawContent = typeof raw.content === 'string' ? raw.content : '';
+    var content = role === 'agent' ? stripStatusTag(rawContent) : rawContent;
+    var o = { role: role, content: content };
+    if (raw.id) o.id = raw.id;
+    return o;
+  }
+
   /** 保存消息到本地缓存（服务端由后端统一写入） */
   function saveSessionMessages() {
-    var toSave = messages.map(function (m) { return { role: m.role, content: m.content }; });
+    var toSave = messages.map(function (m) { return serializeMessageForStorage(m); });
     try {
       localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(toSave));
     } catch (_e) { /* ignore */ }
@@ -78,7 +115,13 @@ window.ChatPage = (function () {
       var stored = localStorage.getItem(STORAGE_KEY_MESSAGES);
       if (stored) {
         var parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
+        if (!Array.isArray(parsed)) return [];
+        var out = [];
+        for (var i = 0; i < parsed.length; i++) {
+          var n = normalizeStoredMessage(parsed[i]);
+          if (n) out.push(n);
+        }
+        return out;
       }
     } catch (_e) { /* ignore */ }
     return [];
@@ -98,6 +141,12 @@ window.ChatPage = (function () {
       });
   }
 
+  /** 当前是否有一条正在流式输出的助手消息（勿全量重绘，否则会删掉 #streaming-msg） */
+  function hasStreamingModelBubble() {
+    var last = messages[messages.length - 1];
+    return !!(last && last.role === 'agent' && last._streaming);
+  }
+
   /** 初始化：从本地缓存加载，再从服务端同步 */
   function initSession() {
     messages = loadLocalMessages();
@@ -105,14 +154,9 @@ window.ChatPage = (function () {
     renderMessages();
     // 异步从服务端拉取最新消息（含 tool_trace）
     fetchServerMessages(function (serverMsgs) {
-      if (serverMsgs.length > 0) {
-        var separated = separateToolTraces(serverMsgs);
-        if (separated.msgs.length >= messages.length) {
-          messages = separated.msgs;
-          toolTraces = separated.traces;
-          renderMessages();
-        }
-      }
+      if (serverMsgs.length === 0) return;
+      var separated = separateToolTraces(serverMsgs);
+      applyServerChatSnapshot(separated, { fullRender: true, authoritative: true });
     });
   }
 
@@ -131,6 +175,7 @@ window.ChatPage = (function () {
     pendingImages = [];
     toolTraces = {};
     currentToolBatch = [];
+    lastSessionSyncSig = '';
     saveMessages();
     // 通知后端清除消息缓存，下一轮从零构建
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
@@ -152,13 +197,58 @@ window.ChatPage = (function () {
         if (!traces[m.parentId]) traces[m.parentId] = [];
         traces[m.parentId].push({ toolName: m.toolName || '', detail: m.detail || '', status: m.status || 'pending' });
       } else {
-        msgs.push(m);
+        var cloned = Object.assign({}, m);
+        if ((m.role === 'agent' || m.role === 'assistant') && typeof m.content === 'string') {
+          cloned.content = stripStatusTag(m.content);
+        }
+        msgs.push(cloned);
       }
     }
     return { msgs: msgs, traces: traces };
   }
 
-  /** 将当前收集的工具调用批次暂存（等 agent 消息的 id 从服务端同步后关联） */
+  function snapshotTraceTotals(tr) {
+    var keys = Object.keys(tr || {}).sort();
+    if (!keys.length) return '';
+    return keys.map(function (k) { return k + '=' + tr[k].length; }).join(';');
+  }
+
+  /** 服务端会话快照签名（条数 + 各条 id + tool_trace 体量），用于跳过重复 apply */
+  function sessionPayloadSig(separated) {
+    var ids = separated.msgs.map(function (m) { return m.id || ''; }).join(',');
+    return separated.msgs.length + '|' + ids + '|' + snapshotTraceTotals(separated.traces);
+  }
+
+  /**
+   * 用服务端分离后的会话覆盖本地 messages + toolTraces。
+   * opts.authoritative：冷启动/应以服务端为准（忽略本地多出来的仅前端消息，如 memory_notice、confirm）
+   * @returns {boolean} 是否发生了更新（含渲染）
+   */
+  function applyServerChatSnapshot(separated, options) {
+    var opts = options || {};
+    if (hasStreamingModelBubble() || wsProcessing || isStreaming) return false;
+    if (!opts.authoritative && separated.msgs.length < messages.length) return false;
+
+    var sig = sessionPayloadSig(separated);
+    if (sig === lastSessionSyncSig && separated.msgs.length === messages.length) {
+      return false;
+    }
+
+    var wasNearBottom = isNearBottom();
+    messages = separated.msgs;
+    toolTraces = separated.traces;
+    lastSessionSyncSig = sig;
+
+    if (opts.fullRender) {
+      renderMessages();
+    } else {
+      renderMessagesOnly(wasNearBottom);
+      saveSessionMessages();
+    }
+    return true;
+  }
+
+  /** 将当前收集的工具调用批次暂存（等助手消息的 id 从服务端同步后关联） */
   function flushToolBatchLocal() {
     // 工具调用记录已由后端持久化，前端只需清空当前批次
     // 下次 syncMessages 时会从服务端拉到完整的 tool_trace
@@ -168,7 +258,6 @@ window.ChatPage = (function () {
   // ---- DOM refs (set during render) ----
   var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
-  var elPipelinePanel, elProgressFill, elStagesContainer;
   var elStatusBar, elStatusText, elStatusTurn;
 
   // ---- 辅助函数 ----
@@ -230,6 +319,7 @@ window.ChatPage = (function () {
 
   function removeThinking() {
     currentTurnCount = 0;
+    lastToolProgressHint = '';
     if (elStatusBar) {
       elStatusBar.classList.remove('active');
     }
@@ -243,9 +333,16 @@ window.ChatPage = (function () {
     elStatusText.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> ' + escapeHtml(text);
   }
 
-  /** 在聊天区追加工具调用条目（紧凑行） */
-  function appendToolAction(toolName, detail, status) {
-    if (!elMessages) return;
+  function resetLiveToolRoundTargets() {
+    liveToolRoundRoot = null;
+    liveToolRoundVisible = null;
+    liveToolRoundCollapsed = null;
+    liveToolRoundToggle = null;
+    liveToolRoundCount = 0;
+  }
+
+  /** 创建单行工具 DOM（历史 / 实时共用） */
+  function createToolActionRow(toolName, detail, status) {
     var el = document.createElement('div');
     el.className = 'tool-action';
     el.setAttribute('data-tool', toolName);
@@ -272,22 +369,148 @@ window.ChatPage = (function () {
       detailEl.textContent = detail;
       el.appendChild(detailEl);
     }
-
-    elMessages.insertBefore(el, elAnchor);
     return el;
   }
 
-  /** 更新最后一个匹配工具名的条目状态 */
+  function bindToolTraceToggle(btn, collapsedEl) {
+    btn.addEventListener('click', function () {
+      var expanded = btn.getAttribute('aria-expanded') === 'true';
+      if (expanded) {
+        collapsedEl.style.display = 'none';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.textContent = '还有 ' + collapsedEl.children.length + ' 条历史 · 展开';
+      } else {
+        collapsedEl.style.display = '';
+        btn.setAttribute('aria-expanded', 'true');
+        btn.textContent = '收起';
+      }
+    });
+    btn.setAttribute('aria-expanded', 'false');
+  }
+
+  function refreshCollapsedToggleLabel(btn, collapsedEl) {
+    if (!btn || !collapsedEl || collapsedEl.children.length === 0) return;
+    if (btn.getAttribute('aria-expanded') === 'true') {
+      btn.textContent = '收起';
+    } else {
+      btn.textContent = '还有 ' + collapsedEl.children.length + ' 条历史 · 展开';
+    }
+  }
+
+  /** 历史恢复：插入可折叠工具组（插在 insertBefore 节点前）；默认展示最新若干条，更早的折叠 */
+  function insertFoldableToolTraceGroup(traces, insertBeforeNode) {
+    if (!elMessages || !traces || traces.length === 0) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'tool-trace-group';
+    var visible = document.createElement('div');
+    visible.className = 'tool-trace-visible';
+
+    var max = TOOL_TRACE_VISIBLE_MAX;
+    var i;
+    if (traces.length <= max) {
+      for (i = 0; i < traces.length; i++) {
+        var tr = traces[i];
+        visible.appendChild(createToolActionRow(tr.toolName || '', tr.detail || '', tr.status || 'pending'));
+      }
+      wrap.appendChild(visible);
+      elMessages.insertBefore(wrap, insertBeforeNode);
+      return;
+    }
+
+    var olderCount = traces.length - max;
+    var collapsed = document.createElement('div');
+    collapsed.className = 'tool-trace-collapsed';
+    collapsed.style.display = 'none';
+    for (var j = 0; j < olderCount; j++) {
+      var tOld = traces[j];
+      collapsed.appendChild(createToolActionRow(tOld.toolName || '', tOld.detail || '', tOld.status || 'pending'));
+    }
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'tool-trace-toggle';
+    toggle.textContent = '还有 ' + olderCount + ' 条历史 · 展开';
+    bindToolTraceToggle(toggle, collapsed);
+
+    for (var k = olderCount; k < traces.length; k++) {
+      var tNew = traces[k];
+      visible.appendChild(createToolActionRow(tNew.toolName || '', tNew.detail || '', tNew.status || 'pending'));
+    }
+
+    wrap.appendChild(collapsed);
+    wrap.appendChild(toggle);
+    wrap.appendChild(visible);
+    elMessages.insertBefore(wrap, insertBeforeNode);
+  }
+
+  function ensureLiveToolGroupDom() {
+    if (liveToolRoundRoot) return;
+    liveToolRoundRoot = document.createElement('div');
+    liveToolRoundRoot.className = 'tool-trace-group';
+    liveToolRoundCollapsed = document.createElement('div');
+    liveToolRoundCollapsed.className = 'tool-trace-collapsed';
+    liveToolRoundCollapsed.style.display = 'none';
+    liveToolRoundToggle = document.createElement('button');
+    liveToolRoundToggle.type = 'button';
+    liveToolRoundToggle.className = 'tool-trace-toggle';
+    liveToolRoundToggle.style.display = 'none';
+    liveToolRoundVisible = document.createElement('div');
+    liveToolRoundVisible.className = 'tool-trace-visible';
+    liveToolRoundRoot.appendChild(liveToolRoundCollapsed);
+    liveToolRoundRoot.appendChild(liveToolRoundToggle);
+    liveToolRoundRoot.appendChild(liveToolRoundVisible);
+    bindToolTraceToggle(liveToolRoundToggle, liveToolRoundCollapsed);
+    elMessages.insertBefore(liveToolRoundRoot, elAnchor);
+  }
+
+  /** 在聊天区追加工具调用条目（紧凑行）；实时轮次超阈值时折叠更早记录 */
+  function appendToolAction(toolName, detail, status) {
+    if (!elMessages) return null;
+
+    var row = createToolActionRow(toolName, detail, status);
+
+    if (liveToolRoundActive) {
+      ensureLiveToolGroupDom();
+      liveToolRoundCount++;
+      liveToolRoundVisible.appendChild(row);
+      while (liveToolRoundVisible.children.length > TOOL_TRACE_VISIBLE_MAX) {
+        var oldest = liveToolRoundVisible.firstChild;
+        if (oldest) liveToolRoundCollapsed.appendChild(oldest);
+      }
+      if (liveToolRoundCollapsed.children.length > 0) {
+        liveToolRoundToggle.style.display = '';
+        refreshCollapsedToggleLabel(liveToolRoundToggle, liveToolRoundCollapsed);
+      }
+      return row;
+    }
+
+    elMessages.insertBefore(row, elAnchor);
+    return row;
+  }
+
+  /** 更新最后一个匹配工具名的条目状态（支持 .tool-trace-group 内） */
   function updateLastToolAction(toolName, status) {
     if (!elMessages) return;
-    // 从锚点往前找最后一个匹配的 tool-action
     var node = elAnchor ? elAnchor.previousSibling : elMessages.lastChild;
     while (node) {
+      if (node.nodeType === 1 && node.classList && node.classList.contains('tool-trace-group')) {
+        var rows = node.querySelectorAll('.tool-action');
+        for (var r = rows.length - 1; r >= 0; r--) {
+          if (rows[r].getAttribute('data-tool') === toolName) {
+            var iconEl = rows[r].querySelector('.tool-icon');
+            if (iconEl) {
+              iconEl.className = 'tool-icon ' + status;
+              iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+            }
+            return;
+          }
+        }
+      }
       if (node.nodeType === 1 && node.classList && node.classList.contains('tool-action') && node.getAttribute('data-tool') === toolName) {
-        var iconEl = node.querySelector('.tool-icon');
-        if (iconEl) {
-          iconEl.className = 'tool-icon ' + status;
-          iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+        var iconEl2 = node.querySelector('.tool-icon');
+        if (iconEl2) {
+          iconEl2.className = 'tool-icon ' + status;
+          iconEl2.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
         }
         return;
       }
@@ -299,6 +522,9 @@ window.ChatPage = (function () {
 
   /** 渲染消息到 DOM（不触发保存，用于只读同步） */
   function renderMessagesOnly(shouldScroll) {
+    liveToolRoundActive = false;
+    resetLiveToolRoundTargets();
+
     // 保留锚点，清除其他内容
     while (elMessages.firstChild !== elAnchor) {
       elMessages.removeChild(elMessages.firstChild);
@@ -306,12 +532,10 @@ window.ChatPage = (function () {
     for (var i = 0; i < messages.length; i++) {
       var msg = messages[i];
 
-      // 在 agent 消息前渲染关联的工具调用记录（通过 msg.id 查找）
+      // 在助手消息前渲染关联的工具调用记录（通过 msg.id 查找）
       var traces = msg.id ? toolTraces[msg.id] : null;
       if (traces && traces.length > 0) {
-        for (var t = 0; t < traces.length; t++) {
-          renderToolTraceEl(traces[t]);
-        }
+        insertFoldableToolTraceGroup(traces, elAnchor);
       }
 
       var el = document.createElement('div');
@@ -319,7 +543,7 @@ window.ChatPage = (function () {
 
       var label = document.createElement('div');
       label.className = 'msg-label';
-      label.textContent = msg.role === 'user' ? 'You' : 'Agent';
+      label.textContent = msg.role === 'user' ? 'You' : 'Assistant';
       el.appendChild(label);
 
       // 渲染图片缩略图（如果有）
@@ -337,7 +561,7 @@ window.ChatPage = (function () {
       }
 
       var content = document.createElement('div');
-      content.textContent = msg.content;
+      content.textContent = msg.role === 'agent' ? stripStatusTag(msg.content) : msg.content;
       el.appendChild(content);
 
       elMessages.insertBefore(el, elAnchor);
@@ -345,39 +569,6 @@ window.ChatPage = (function () {
     if (shouldScroll !== false) {
       scrollToBottom();
     }
-  }
-
-  /** 渲染单条工具调用记录到 DOM（用于历史恢复） */
-  function renderToolTraceEl(trace) {
-    if (!elMessages) return;
-    var el = document.createElement('div');
-    el.className = 'tool-action';
-    el.setAttribute('data-tool', trace.toolName);
-
-    var iconEl = document.createElement('span');
-    iconEl.className = 'tool-icon ' + (trace.status || 'pending');
-    if (trace.status === 'success') {
-      iconEl.textContent = '✓';
-    } else if (trace.status === 'error') {
-      iconEl.textContent = '✗';
-    } else {
-      iconEl.textContent = '⟳';
-    }
-    el.appendChild(iconEl);
-
-    var nameEl = document.createElement('span');
-    nameEl.className = 'tool-name';
-    nameEl.textContent = trace.toolName;
-    el.appendChild(nameEl);
-
-    if (trace.detail) {
-      var detailEl = document.createElement('span');
-      detailEl.className = 'tool-detail';
-      detailEl.textContent = trace.detail;
-      el.appendChild(detailEl);
-    }
-
-    elMessages.insertBefore(el, elAnchor);
   }
 
   function renderMessages() {
@@ -393,7 +584,7 @@ window.ChatPage = (function () {
 
     var label = document.createElement('div');
     label.className = 'msg-label';
-    label.textContent = msg.role === 'user' ? 'You' : 'Agent';
+    label.textContent = msg.role === 'user' ? 'You' : 'Assistant';
     el.appendChild(label);
 
     // 渲染图片缩略图（如果有）
@@ -411,7 +602,7 @@ window.ChatPage = (function () {
     }
 
     var content = document.createElement('div');
-    content.textContent = msg.content;
+    content.textContent = msg.role === 'agent' ? stripStatusTag(msg.content) : msg.content;
     el.appendChild(content);
 
     elMessages.insertBefore(el, elAnchor);
@@ -421,28 +612,29 @@ window.ChatPage = (function () {
   /** 用户是否手动向上滚动过（脱离底部） */
   var userScrolledUp = false;
 
-  function appendAgentChunk(text) {
-    agentResponseBuffer += text;
-
+  function appendStreamChunk(text) {
     var lastMsg = messages[messages.length - 1];
     if (lastMsg && lastMsg.role === 'agent' && lastMsg._streaming) {
       // 已有流式消息，更新数据模型
-      lastMsg.content = agentResponseBuffer;
+      streamReplyBuffer += text;
+      lastMsg.content = streamReplyBuffer;
     } else {
+      repairOrphanStreamingIfAny();
+      streamReplyBuffer += text;
       // 新建流式消息
-      messages.push({ role: 'agent', content: agentResponseBuffer, _streaming: true });
+      messages.push({ role: 'agent', content: streamReplyBuffer, _streaming: true });
 
       var el = document.createElement('div');
-      el.className = 'message agent';
+      el.className = 'message assistant';
       el.setAttribute('id', 'streaming-msg');
 
       var label = document.createElement('div');
       label.className = 'msg-label';
-      label.textContent = 'Agent';
+      label.textContent = 'Assistant';
       el.appendChild(label);
 
       var contentDiv = document.createElement('div');
-      contentDiv.appendChild(document.createTextNode(text));
+      contentDiv.textContent = stripStatusTag(streamReplyBuffer);
       el.appendChild(contentDiv);
       el._streamContentEl = contentDiv;
 
@@ -452,31 +644,43 @@ window.ChatPage = (function () {
 
     // 增量追加文本节点
     var streamEl = document.getElementById('streaming-msg');
+    if (!streamEl) {
+      // 全量 render 曾移除流式节点：按当前缓冲重建气泡，否则只有内存有字、界面空白
+      var wrap = document.createElement('div');
+      wrap.className = 'message assistant';
+      wrap.setAttribute('id', 'streaming-msg');
+      var lab = document.createElement('div');
+      lab.className = 'msg-label';
+      lab.textContent = 'Assistant';
+      wrap.appendChild(lab);
+      var contentDiv = document.createElement('div');
+      contentDiv.textContent = stripStatusTag(streamReplyBuffer);
+      wrap.appendChild(contentDiv);
+      wrap._streamContentEl = contentDiv;
+      elMessages.insertBefore(wrap, elAnchor);
+      return;
+    }
     if (streamEl && streamEl._streamContentEl) {
-      streamEl._streamContentEl.appendChild(document.createTextNode(text));
+      streamEl._streamContentEl.textContent = stripStatusTag(streamReplyBuffer);
     } else if (streamEl) {
       var contentEl = streamEl.lastChild;
       if (contentEl) {
-        contentEl.appendChild(document.createTextNode(text));
+        contentEl.textContent = stripStatusTag(streamReplyBuffer);
         streamEl._streamContentEl = contentEl;
       }
     }
   }
 
-  /** 从文本中移除 <status>...</status> 标记（系统用，不展示给用户） */
-  function stripStatusTag(text) {
-    return text.replace(/<status>\s*(?:complete|incomplete)\s*<\/status>/gi, '').trimEnd();
-  }
-
-  function finalizeAgentResponse() {
+  function finalizeStreamResponse() {
     var lastMsg = messages[messages.length - 1];
+    var wasStreaming = !!(lastMsg && lastMsg._streaming);
     if (lastMsg && lastMsg._streaming) {
       delete lastMsg._streaming;
       streamFinalized = true;
-      // 清理 status 标记
+      // 清理 status 标记（与流式展示一致）
       lastMsg.content = stripStatusTag(lastMsg.content);
     }
-    agentResponseBuffer = '';
+    streamReplyBuffer = '';
     var streamEl = document.getElementById('streaming-msg');
     if (streamEl) {
       if (streamEl._streamContentEl) {
@@ -486,14 +690,66 @@ window.ChatPage = (function () {
       }
       streamEl.removeAttribute('id');
       delete streamEl._streamContentEl;
+    } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
+      // 流式节点已丢失：补画一条，避免 streamFinalized 跳过 response 后界面无气泡
+      appendMessageEl(lastMsg);
     }
     // 将收集的工具调用批次清空（后端已持久化）
-    var agentMsgIndex = messages.length - 1;
-    if (agentMsgIndex >= 0 && messages[agentMsgIndex].role === 'agent') {
+    var lastMsgIdx = messages.length - 1;
+    if (lastMsgIdx >= 0 && messages[lastMsgIdx].role === 'agent') {
       flushToolBatchLocal();
     }
     setStreamingState(false);
     saveMessages();
+  }
+
+  /** 从流式气泡 DOM 读取正文（不含角色标签行） */
+  function getStreamingBubbleBodyText(streamEl) {
+    if (!streamEl) return '';
+    if (streamEl._streamContentEl) {
+      return streamEl._streamContentEl.textContent || '';
+    }
+    var label = streamEl.querySelector('.msg-label');
+    var n = label ? label.nextElementSibling : null;
+    while (n && n.classList && n.classList.contains('msg-images')) {
+      n = n.nextElementSibling;
+    }
+    return n ? (n.textContent || '') : '';
+  }
+
+  /**
+   * 模型与 DOM 不一致时收尾：页面上仍有 #streaming-msg，但 messages 最后一项已不是流式助手气泡。
+   * 避免重复 id 导致后续 chunk 写到旧气泡（显示在用户气泡上方）。
+   */
+  function repairOrphanStreamingIfAny() {
+    if (!elMessages) return;
+    var streamEl = document.getElementById('streaming-msg');
+    if (!streamEl) return;
+
+    var bodyText = getStreamingBubbleBodyText(streamEl);
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'agent' && messages[i]._streaming) {
+        messages[i].content = stripStatusTag(bodyText);
+        delete messages[i]._streaming;
+        break;
+      }
+    }
+
+    streamEl.removeAttribute('id');
+    delete streamEl._streamContentEl;
+    streamReplyBuffer = '';
+    flushToolBatchLocal();
+    setStreamingState(false);
+    saveMessages();
+  }
+
+  /** 发送新用户消息前结束本轮流式，保证新气泡永远在用户气泡之下 */
+  function finalizeBeforeUserMessage() {
+    if (hasStreamingModelBubble()) {
+      finalizeStreamResponse();
+    } else {
+      repairOrphanStreamingIfAny();
+    }
   }
 
   // ---- 发送/停止按钮状态切换 ----
@@ -526,11 +782,11 @@ window.ChatPage = (function () {
     // 立即结束 UI 状态
     removeThinking();
 
-    if (agentResponseBuffer) {
+    if (streamReplyBuffer) {
       // 保留已接收的部分内容，标记为已停止
       var lastMsg = messages[messages.length - 1];
       if (lastMsg && lastMsg._streaming) {
-        var stoppedContent = stripStatusTag(agentResponseBuffer);
+        var stoppedContent = stripStatusTag(streamReplyBuffer);
         lastMsg.content = stoppedContent ? stoppedContent + '\n\n[已停止]' : '[已停止]';
         delete lastMsg._streaming;
         // 更新 DOM 中流式消息的内容
@@ -557,87 +813,11 @@ window.ChatPage = (function () {
       appendMessageEl(infoMsg);
     }
 
-    agentResponseBuffer = '';
+    streamReplyBuffer = '';
     streamFinalized = false;
     setStreamingState(false);
     wsProcessing = false;
     saveMessages();
-  }
-
-  // ---- 流水线进度 ----
-
-  function initStages() {
-    stages = STAGE_NAMES.map(function (name) {
-      return { name: name, status: 'pending' };
-    });
-    renderStages();
-    updateProgressBar();
-    elPipelinePanel.classList.remove('hidden');
-  }
-
-  function renderStages() {
-    elStagesContainer.innerHTML = '';
-    for (var i = 0; i < stages.length; i++) {
-      var s = stages[i];
-      var el = document.createElement('span');
-      el.className = 'stage-label ' + s.status;
-      el.textContent = s.name + ' — ' + s.status;
-      el.setAttribute('data-stage', s.name);
-
-      if (s.status === 'completed') {
-        (function (stageName) {
-          el.title = 'Click to view report';
-          el.addEventListener('click', function () {
-            viewStageReport(stageName);
-          });
-        })(s.name);
-      }
-
-      elStagesContainer.appendChild(el);
-    }
-  }
-
-  function updateProgressBar() {
-    var completed = 0;
-    for (var i = 0; i < stages.length; i++) {
-      if (stages[i].status === 'completed') completed++;
-    }
-    var pct = stages.length > 0 ? Math.round((completed / stages.length) * 100) : 0;
-    elProgressFill.style.width = pct + '%';
-  }
-
-  function updateStageStatus(stageName, status) {
-    for (var i = 0; i < stages.length; i++) {
-      if (stages[i].name === stageName) {
-        stages[i].status = status;
-        break;
-      }
-    }
-    renderStages();
-    updateProgressBar();
-  }
-
-  function viewStageReport(stageName) {
-    if (!currentExecutionId) return;
-    // 规范化阶段名称用于 API（小写，连字符分隔）
-    var stageKey = stageName.toLowerCase().replace(/\s+/g, '-');
-    var url = '/api/pipeline/' + encodeURIComponent(currentExecutionId) + '/report/' + encodeURIComponent(stageKey);
-
-    fetch(url)
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.error) {
-          messages.push({ role: 'agent', content: '[Report] ' + data.error });
-        } else {
-          var summary = data.result && data.result.summary ? data.result.summary : JSON.stringify(data.result, null, 2);
-          messages.push({ role: 'agent', content: '[' + stageName + ' Report]\n' + summary });
-        }
-        renderMessages();
-      })
-      .catch(function () {
-        messages.push({ role: 'agent', content: '[Report] Failed to load report for ' + stageName });
-        renderMessages();
-      });
   }
 
   // ---- 文件上传 ----
@@ -829,22 +1009,22 @@ window.ChatPage = (function () {
     }, 15000);
   }
 
+  /** 其它端写入 default.json 后立即拉取服务端快照（含 tool_trace），与轮询互补 */
+  function pullServerChatSnapshotAuthoritative() {
+    if (wsProcessing || isStreaming || hasStreamingModelBubble()) return;
+    fetchServerMessages(function (serverMsgs) {
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = separateToolTraces(raw);
+      applyServerChatSnapshot(separated, { fullRender: false, authoritative: true });
+    });
+  }
+
   function syncMessages() {
-    if (wsProcessing || isStreaming) return;
+    if (wsProcessing || isStreaming || hasStreamingModelBubble()) return;
     fetchServerMessages(function (serverMsgs) {
       if (!serverMsgs || serverMsgs.length === 0) return;
       var separated = separateToolTraces(serverMsgs);
-      // 服务端是权威数据源（后端统一写入），有新消息就更新
-      if (separated.msgs.length > messages.length) {
-        var wasNearBottom = isNearBottom();
-        messages = separated.msgs;
-        toolTraces = separated.traces;
-        renderMessagesOnly(wasNearBottom);
-        // 同步到 localStorage
-        try {
-          localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(separated.msgs.map(function (m) { return { role: m.role, content: m.content }; })));
-        } catch (_e) { /* ignore */ }
-      }
+      applyServerChatSnapshot(separated, { fullRender: false });
     });
   }
 
@@ -876,19 +1056,22 @@ window.ChatPage = (function () {
     switch (data.type) {
       case 'connected':
         break;
+      case 'session_updated':
+        pullServerChatSnapshotAuthoritative();
+        break;
       case 'stream':
-        // 流式增量文本：逐 chunk 追加到当前 agent 消息
+        // 流式增量文本：逐 chunk 追加到当前助手侧消息
         if (userStopped) break;
         if (!isStreaming) setStreamingState(true);
-        appendAgentChunk(data.delta || '');
+        appendStreamChunk(data.delta || '');
         break;
       case 'stream_end':
         // 流式结束：定稿当前流式消息
         if (!userStopped) {
-          finalizeAgentResponse();
+          finalizeStreamResponse();
         } else {
           // 用户已停止，清理残留状态
-          agentResponseBuffer = '';
+          streamReplyBuffer = '';
           streamFinalized = false;
         }
         break;
@@ -905,8 +1088,8 @@ window.ChatPage = (function () {
           break;
         }
         // 非流式模式：直接显示完整响应
-        finalizeAgentResponse();
-        messages.push({ role: 'agent', content: data.content });
+        finalizeStreamResponse();
+        messages.push({ role: 'agent', content: stripStatusTag(data.content || '') });
         // 清空工具调用批次（后端已持久化）
         flushToolBatchLocal();
         appendMessageEl(messages[messages.length - 1]);
@@ -929,7 +1112,7 @@ window.ChatPage = (function () {
         }
         break;
       case 'error':
-        finalizeAgentResponse();
+        finalizeStreamResponse();
         messages.push({ role: 'agent', content: '[err] ' + data.message });
         appendMessageEl(messages[messages.length - 1]);
         saveMessages();
@@ -960,6 +1143,12 @@ window.ChatPage = (function () {
         break;
       case 'pong':
         break;
+      case 'pulse':
+        if (elStatusBar && elStatusBar.classList.contains('active')) {
+          var hint = lastToolProgressHint || '处理中';
+          updateStatusText(hint);
+        }
+        break;
     }
   }
 
@@ -975,6 +1164,12 @@ window.ChatPage = (function () {
     if (step.iteration) {
       updateTurnCounter(step.iteration);
     }
+    if (step.type === 'tool_progress' && step.content) {
+      lastToolProgressHint = step.content;
+      if (elStatusBar && elStatusBar.classList.contains('active')) {
+        updateStatusText(step.content);
+      }
+    }
     // 工具调用：在聊天区追加紧凑条目 + 收集到当前批次
     if (step.type === 'tool_call' && step.toolName) {
       var detail = '';
@@ -987,7 +1182,7 @@ window.ChatPage = (function () {
         }
       }
       appendToolAction(step.toolName, detail, 'pending');
-      // 收集到当前批次（稍后关联到 agent 消息）
+      // 收集到当前批次（稍后关联到助手消息）
       currentToolBatch.push({ toolName: step.toolName, detail: detail, status: 'pending' });
     }
     // 工具结果：更新对应条目的图标 + 更新批次中的状态
@@ -1022,13 +1217,14 @@ window.ChatPage = (function () {
       renderMessages();
       return;
     }
+    resetLiveToolRoundTargets();
+    liveToolRoundActive = true;
     chatWs.send(JSON.stringify({ type: 'message', content: text }));
   }
 
   // ---- 命令面板 ----
 
   // ~ 开头：本地命令（不发送到服务器）
-  // / 开头：服务端命令（发送到服务器执行）
   var PC_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '打开文件管理器，浏览电脑文件', prefix: '~' },
@@ -1052,12 +1248,6 @@ window.ChatPage = (function () {
 
   var LOCAL_COMMANDS = PC_LOCAL_COMMANDS; // 初始值，render 时会更新
 
-  var SLASH_COMMANDS = [
-    { name: 'pipeline', description: '启动开发流水线（需要先上传文件）', prefix: '/' }
-  ];
-
-  var ALL_COMMANDS = LOCAL_COMMANDS.concat(SLASH_COMMANDS);
-
   var elCmdDropdown = null;
   var cmdSelectedIndex = 0;
   var cmdVisible = false;
@@ -1073,9 +1263,13 @@ window.ChatPage = (function () {
 
   function showCmdDropdown(prefix, filter) {
     if (!elCmdDropdown) return;
+    if (prefix !== '~') {
+      hideCmdDropdown();
+      return;
+    }
     cmdActivePrefix = prefix;
     var query = (filter || '').toLowerCase();
-    var source = prefix === '/' ? SLASH_COMMANDS : getLocalCommands();
+    var source = getLocalCommands();
     cmdFiltered = source.filter(function (cmd) {
       return cmd.name.toLowerCase().indexOf(query) >= 0;
     });
@@ -1138,10 +1332,7 @@ window.ChatPage = (function () {
 
   function handleCmdInput() {
     var val = elInput.value;
-    if (val.indexOf('/') === 0) {
-      var filter = val.slice(1);
-      showCmdDropdown('/', filter);
-    } else if (val.indexOf('~') === 0) {
+    if (val.indexOf('~') === 0) {
       var filter = val.slice(1);
       showCmdDropdown('~', filter);
     } else {
@@ -1404,6 +1595,7 @@ window.ChatPage = (function () {
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
     if (displayParts.length > 0 || msgImages.length > 0) {
+      finalizeBeforeUserMessage();
       var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       messages.push(userMsg);
       appendMessageEl(userMsg);
@@ -1424,6 +1616,8 @@ window.ChatPage = (function () {
 
     // 构建 WebSocket 消息（可能包含图片）
     if (msgImages.length > 0) {
+      resetLiveToolRoundTargets();
+      liveToolRoundActive = true;
       // 发送带图片的多模态消息
       chatWs.send(JSON.stringify({
         type: 'message',
@@ -1620,17 +1814,6 @@ window.ChatPage = (function () {
 
     container.innerHTML =
       '<div class="chat-page">' +
-        // Pipeline panel（远程模式隐藏）
-        (remoteMode ? '' :
-        '<div class="pipeline-panel hidden" id="pipeline-panel">' +
-          '<div class="pipeline-header">' +
-            '<h3>Pipeline Progress</h3>' +
-          '</div>' +
-          '<div class="pipeline-progress-bar">' +
-            '<div class="pipeline-progress-fill" id="progress-fill"></div>' +
-          '</div>' +
-          '<div class="pipeline-stages" id="stages-container"></div>' +
-        '</div>') +
         // Messages（正序 + overflow-anchor 锚点粘底）
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         // Thinking 指示器（fixed 悬浮）
@@ -1669,9 +1852,6 @@ window.ChatPage = (function () {
     elFileStatus = container.querySelector('#file-status');
     elFileName = container.querySelector('#file-name');
     elFileRemove = container.querySelector('#file-remove');
-    elPipelinePanel = container.querySelector('#pipeline-panel');
-    elProgressFill = container.querySelector('#progress-fill');
-    elStagesContainer = container.querySelector('#stages-container');
     elContextBar = container.querySelector('#ctx-bar');
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusText = container.querySelector('#status-text');
@@ -1794,24 +1974,16 @@ window.ChatPage = (function () {
     // 渲染已有消息（导航返回时）
     renderMessages();
 
-    // 如果活跃则恢复流水线面板
-    if (!remoteMode && stages.length > 0 && currentExecutionId) {
-      elPipelinePanel.classList.remove('hidden');
-      renderStages();
-      updateProgressBar();
-    }
-
     // 远程模式：从服务端同步消息
     if (remoteMode) {
       messages = [];
       toolTraces = {};
+      lastSessionSyncSig = '';
       renderMessagesOnly();
       fetchServerMessages(function (serverMsgs) {
         if (serverMsgs.length > 0) {
           var separated = separateToolTraces(serverMsgs);
-          messages = separated.msgs;
-          toolTraces = separated.traces;
-          renderMessagesOnly();
+          applyServerChatSnapshot(separated, { fullRender: false, authoritative: true });
         }
       });
     }

@@ -602,7 +602,7 @@ Designed 5 end-to-end test scenarios.
   // ─── 补充：会话记忆验证函数 ───
 
   describe('会话记忆验证', () => {
-    it('validateSessionMemoryContent 正确验证 10 section 格式', () => {
+    it('validateSessionMemoryContent 接受含 Runtime Evidence 的 11 节结构', () => {
       // 完整模板应通过
       const fullTemplate = SESSION_MEMORY_TEMPLATE + '\nSome content here to make it longer than 50 chars.';
       // 模板本身可能不够 50 字符，加些内容
@@ -626,6 +626,8 @@ Memory system uses 4 types.
 Session memory has 10 sections.
 # Key Results
 All scenarios designed.
+# Runtime Evidence (auto)
+_保留标题_
 # Worklog
 Explored and implemented.`;
 

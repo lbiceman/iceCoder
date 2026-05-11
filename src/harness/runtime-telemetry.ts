@@ -1,8 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { StopReason } from './types.js';
-import type { TaskStateSnapshot } from './task-state.js';
-import type { RepoContextSnapshot } from './repo-context.js';
+import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 
 export type RuntimeTelemetryEvent =
   | {
