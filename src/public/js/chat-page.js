@@ -1257,7 +1257,6 @@ window.ChatPage = (function () {
             sessionPet.setVisible(true);
             sessionPet.setState('happy');
             var memLine = typeof data.notices[0] === 'string' ? data.notices[0] : '';
-            if (memLine.length > 200) memLine = memLine.slice(0, 200) + '…';
             if (petUiSessionActive || wsProcessing || isStreaming) {
               sessionPet.setBubbleText(memLine || '已更新记忆');
             }
@@ -1965,7 +1964,7 @@ window.ChatPage = (function () {
         // 点阵宠物本体 + 头顶气泡（无机身外壳）
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
-          '<canvas class="pet-canvas" id="pet-canvas" width="128" height="128" role="img" aria-label="会话状态宠物，拖动移动；双击恢复默认位置" title="拖动：移动；双击：恢复默认位置"></canvas>' +
+          '<canvas class="pet-canvas" id="pet-canvas" width="512" height="512" role="img" aria-label="会话状态宠物，拖动移动；双击恢复默认位置" title="拖动：移动；双击：恢复默认位置"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         // Input area（进度条作为上边框）

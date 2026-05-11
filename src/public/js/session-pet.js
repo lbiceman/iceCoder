@@ -1,23 +1,47 @@
 /**
- * 1-bit 像素狗：逻辑 64×64（参考图 session-pet-lab），CELL=2 → 画布 128×128。
- * 表情为 patches 叠加。可选 JSON 覆盖（坐标为 64×64）。
+ * 1-bit 像素狗：逻辑 128×128，逻辑画布 512×512（CELL=4）。
+ * 格缝与绘制逻辑昼夜相同；仅墨色由 --pet-pixel / data-theme 决定。
  */
 (function () {
   'use strict';
 
-  var GRID_W = 64;
-  var GRID_H = 64;
-  var CELL = 2;
+  var GRID_W = 128;
+  var GRID_H = 128;
+  var CELL = 4;
+  /** 格间留白（逻辑像素） */
+  var CELL_PAD = 0.3;
+
+  /** 栅格化时超采样倍数（内部 256→输出 128） */
+  var RASTER_SUPERSAMPLE = 2;
+  var RASTER_THRESHOLD = 146;
 
   /** 参考图（JPEG/PNG）；失败时用下方 32×32 ASCII 放大占位 */
   var PET_IMG_SRC = '/img/session-pet-lab.jpg';
 
-  /** 黑白 */
-  var COL_PANEL = '#ffffff';
-  var COL_SEGMENT = '#000000';
+  /** 气泡只做一行摘要：超出截断（与 CSS ellipsis 配合） */
+  var PET_BUBBLE_MAX_CHARS = 42;
+
+  function getPetInkColor() {
+    try {
+      var v = getComputedStyle(document.documentElement).getPropertyValue('--pet-pixel').trim();
+      if (v) return v;
+    } catch (_e) {}
+    return document.documentElement.getAttribute('data-theme') === 'light' ? '#0a0a0c' : '#e8e8f2';
+  }
+
+  function clampBubbleLine(text) {
+    if (text === undefined || text === null) return '';
+    var s = String(text).replace(/\s+/g, ' ').trim();
+    if (!s) return '';
+    var line = s.split(/\r\n|\n|\r/)[0].trim();
+    if (line.length > PET_BUBBLE_MAX_CHARS) {
+      line = line.slice(0, PET_BUBBLE_MAX_CHARS - 1) + '…';
+    }
+    return line;
+  }
 
   /**
-   * 32×32 占位拉布拉多（仅图加载失败时用）；每格在 64×64 中占 2×2
+   * 32×32 占位拉布拉多（仅图加载失败时用）；在 GRID 上按倍率铺满
    */
   var DOG_ASCII_32 = [
     '................................',
@@ -56,14 +80,17 @@
 
   function upscale32LinesToGrid(lines) {
     var g = [];
+    var f = GRID_W / 32;
+    if (f !== (f | 0)) return g;
+    f = f | 0;
     for (var r = 0; r < GRID_H; r++) {
       var row = [];
-      var r32 = r >> 1;
+      var r32 = (r / f) | 0;
       var line = lines[r32] || '';
       if (line.length > 32) line = line.substring(0, 32);
       while (line.length < 32) line += ' ';
       for (var c = 0; c < GRID_W; c++) {
-        var c32 = c >> 1;
+        var c32 = (c / f) | 0;
         var ch = line.charAt(c32);
         row.push(ch === '#' || ch === 'O' || ch === '1' ? 1 : 0);
       }
@@ -72,30 +99,39 @@
     return g;
   }
 
-  /** 将 32×32 设计坐标上的 patches 扩成 64×64（每格 2×2） */
-  function expandPatches2x(patches) {
+  /** 将 32×32 设计坐标 patches 铺到当前 GRID（GRID 须为 32 的整数倍） */
+  function expandPatchesFrom32(patches) {
     if (!patches || !patches.length) return [];
+    var f = GRID_W / 32;
+    if (f !== (f | 0) || f < 1) return [];
+    f = f | 0;
     var out = [];
-    for (var i = 0; i < patches.length; i++) {
-      var p = patches[i];
-      var r = p[0];
-      var c = p[1];
-      var v = p[2];
-      out.push(
-        [r * 2, c * 2, v],
-        [r * 2, c * 2 + 1, v],
-        [r * 2 + 1, c * 2, v],
-        [r * 2 + 1, c * 2 + 1, v],
-      );
+    var i;
+    var p;
+    var r0;
+    var c0;
+    var v;
+    var dr;
+    var dc;
+    for (i = 0; i < patches.length; i++) {
+      p = patches[i];
+      r0 = p[0] * f;
+      c0 = p[1] * f;
+      v = p[2];
+      for (dr = 0; dr < f; dr++) {
+        for (dc = 0; dc < f; dc++) {
+          out.push([r0 + dr, c0 + dc, v]);
+        }
+      }
     }
     return out;
   }
 
-  function buildBuiltin64(states32) {
+  function buildBuiltinFrom32Design(states32) {
     var o = {};
     for (var k in states32) {
       if (states32.hasOwnProperty(k)) {
-        o[k] = { patches: expandPatches2x(states32[k].patches) };
+        o[k] = { patches: expandPatchesFrom32(states32[k].patches) };
       }
     }
     return o;
@@ -103,7 +139,7 @@
 
   var BASE_GRID = upscale32LinesToGrid(DOG_ASCII_32);
 
-  /** 表情定义在 32×32 设计网格（与占位狗对齐；参考图加载后如眨眼偏移可改 session-pet-expressions.json 用 64 坐标修） */
+  /** 表情定义在 32×32 设计网格，运行时展开为 GRID 尺寸；也可在 JSON 中写展开后坐标（128×128） */
   var BUILTIN_STATES_32 = {
     idle: { patches: [] },
     idle_blink: {
@@ -198,7 +234,7 @@
     }
   };
 
-  var builtinPatches64 = buildBuiltin64(BUILTIN_STATES_32);
+  var builtinPatches64 = buildBuiltinFrom32Design(BUILTIN_STATES_32);
   var jsonExtraPatches = {};
 
   function cloneGrid(src) {
@@ -418,9 +454,12 @@
 
     function setupCanvas() {
       if (!canvas) return;
-      canvas.width = cw;
-      canvas.height = ch;
-      ctx = canvas.getContext('2d');
+      var dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+      ctx = canvas.getContext('2d', { alpha: true });
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
       ctx.imageSmoothingEnabled = false;
       draw();
     }
@@ -436,20 +475,40 @@
       }
       applyPatches(g, mergedPatchesForState(exprName));
 
+      var ink = getPetInkColor();
+      var pad = CELL_PAD;
+      var sz = CELL - pad * 2;
       for (r = 0; r < GRID_H; r++) {
         for (c = 0; c < GRID_W; c++) {
-          ctx.fillStyle = g[r][c] ? COL_SEGMENT : COL_PANEL;
-          ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+          if (g[r][c]) {
+            ctx.fillStyle = ink;
+            ctx.fillRect(c * CELL + pad, r * CELL + pad, sz, sz);
+          }
         }
       }
     }
 
     function draw() {
       if (!ctx) return;
-      ctx.fillStyle = COL_PANEL;
-      ctx.fillRect(0, 0, cw, ch);
+      ctx.clearRect(0, 0, cw, ch);
       drawLcd();
     }
+
+    if (typeof MutationObserver !== 'undefined') {
+      var themeObs = new MutationObserver(function () {
+        draw();
+      });
+      themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    }
+
+    var resizeDprTimer = null;
+    function onResizeDpr() {
+      if (resizeDprTimer) clearTimeout(resizeDprTimer);
+      resizeDprTimer = setTimeout(function () {
+        setupCanvas();
+      }, 200);
+    }
+    window.addEventListener('resize', onResizeDpr);
 
     function scheduleBlink() {
       if (blinkTimer) clearInterval(blinkTimer);
@@ -477,29 +536,52 @@
 
     function setBubbleText(text) {
       if (!bubbleEl) return;
-      if (!text) {
+      var t = clampBubbleLine(text);
+      if (!t) {
         bubbleEl.textContent = '';
         bubbleEl.classList.remove('has-text');
         return;
       }
       bubbleEl.classList.add('has-text');
-      bubbleEl.textContent = text;
+      bubbleEl.textContent = t;
     }
 
     function setTurnLabel(text) {
       if (turnEl) turnEl.textContent = text || '';
     }
 
-    function rasterFromImageData32(octx) {
-      var id = octx.getImageData(0, 0, GRID_W, GRID_H);
+    function rasterFromSupersampledCanvas(octx, internalSide) {
+      var id = octx.getImageData(0, 0, internalSide, internalSide);
       var d = id.data;
+      var ss = RASTER_SUPERSAMPLE;
+      var expected = GRID_W * ss;
+      if (internalSide !== expected || GRID_W !== GRID_H) {
+        return;
+      }
       var g = [];
-      for (var r = 0; r < GRID_H; r++) {
+      var r;
+      var c;
+      var dr;
+      var dc;
+      var sum;
+      var rr;
+      var cc;
+      var idx;
+      var lum;
+      for (r = 0; r < GRID_H; r++) {
         var row = [];
-        for (var c = 0; c < GRID_W; c++) {
-          var i = (r * GRID_W + c) << 2;
-          var lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
-          row.push(lum < 140 ? 1 : 0);
+        for (c = 0; c < GRID_W; c++) {
+          sum = 0;
+          for (dr = 0; dr < ss; dr++) {
+            for (dc = 0; dc < ss; dc++) {
+              rr = r * ss + dr;
+              cc = c * ss + dc;
+              idx = (rr * internalSide + cc) << 2;
+              lum = (d[idx] + d[idx + 1] + d[idx + 2]) / 3;
+              sum += lum;
+            }
+          }
+          row.push(sum / (ss * ss) < RASTER_THRESHOLD ? 1 : 0);
         }
         g.push(row);
       }
@@ -511,17 +593,18 @@
       img.onload = function () {
         if (typeof createImageBitmap === 'function') {
           createImageBitmap(img, {
-            resizeWidth: GRID_W,
-            resizeHeight: GRID_H,
+            resizeWidth: GRID_W * RASTER_SUPERSAMPLE,
+            resizeHeight: GRID_H * RASTER_SUPERSAMPLE,
             resizeQuality: 'pixelated',
           })
             .then(function (bmp) {
               var oc = document.createElement('canvas');
-              oc.width = GRID_W;
-              oc.height = GRID_H;
+              var hi = GRID_W * RASTER_SUPERSAMPLE;
+              oc.width = hi;
+              oc.height = hi;
               var octx = oc.getContext('2d');
               octx.drawImage(bmp, 0, 0);
-              rasterFromImageData32(octx);
+              rasterFromSupersampledCanvas(octx, hi);
               try {
                 bmp.close();
               } catch (_eClose) {}
@@ -529,22 +612,24 @@
             })
             .catch(function () {
               var oc2 = document.createElement('canvas');
-              oc2.width = GRID_W;
-              oc2.height = GRID_H;
+              var hi2 = GRID_W * RASTER_SUPERSAMPLE;
+              oc2.width = hi2;
+              oc2.height = hi2;
               var octx2 = oc2.getContext('2d');
               octx2.imageSmoothingEnabled = false;
-              octx2.drawImage(img, 0, 0, GRID_W, GRID_H);
-              rasterFromImageData32(octx2);
+              octx2.drawImage(img, 0, 0, hi2, hi2);
+              rasterFromSupersampledCanvas(octx2, hi2);
               cb();
             });
         } else {
           var oc3 = document.createElement('canvas');
-          oc3.width = GRID_W;
-          oc3.height = GRID_H;
+          var hi3 = GRID_W * RASTER_SUPERSAMPLE;
+          oc3.width = hi3;
+          oc3.height = hi3;
           var octx3 = oc3.getContext('2d');
           octx3.imageSmoothingEnabled = false;
-          octx3.drawImage(img, 0, 0, GRID_W, GRID_H);
-          rasterFromImageData32(octx3);
+          octx3.drawImage(img, 0, 0, hi3, hi3);
+          rasterFromSupersampledCanvas(octx3, hi3);
           cb();
         }
       };

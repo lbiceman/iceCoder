@@ -49,6 +49,9 @@
   --msg-user-bg: #5b8def;
   --msg-agent-bg: #1e1f42;
   --msg-agent-border: #2e2e58;
+
+  /* 夜间略柔白，减轻暗底上「光晕糊成面」；格缝由 JS 夜间加宽配合 */
+  --pet-pixel: #e8e8f2;
 }
 
 /* ── Light Theme ── */
@@ -86,6 +89,9 @@
   --msg-user-bg: #4a7de0;
   --msg-agent-bg: #ffffff;
   --msg-agent-border: #e4e4ee;
+
+  /* 白天：近纯黑墨点，提高对比 */
+  --pet-pixel: #0a0a0c;
 }
 
 /* ===== Global ===== */
@@ -780,34 +786,49 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   opacity: 0;
   transform: translateY(4px);
   transition: opacity 0.2s ease, transform 0.2s ease;
-  word-break: break-word;
+  max-width: min(85vw, 280px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .pet-bubble.has-text {
   opacity: 1;
   transform: translateY(0);
 }
 
-/* 点阵宠物本体（无机身）：黑白像素画布可拖动 */
+/* 点阵宠物：512 画布，固定 134×134 CSS 像素；昼夜同尺寸，仅墨色与阴影区分 */
 .pet-canvas {
   display: block;
-  width: 96px;
-  height: 96px;
-  max-width: 24vw;
+  width: 134px;
+  height: 134px;
+  max-width: min(31vw, 168px);
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  -ms-interpolation-mode: nearest-neighbor;
   cursor: grab;
   touch-action: none;
   pointer-events: auto;
   -webkit-user-select: none;
   user-select: none;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: none;
+  background: transparent;
   box-sizing: border-box;
-  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.2));
   line-height: 0;
+}
+[data-theme="dark"] .pet-canvas {
+  filter: none;
+}
+[data-theme="light"] .pet-canvas {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.14));
 }
 .pet-canvas.pet-dragging {
   cursor: grabbing;
-  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.35));
+}
+[data-theme="dark"] .pet-canvas.pet-dragging {
+  filter: none;
+}
+[data-theme="light"] .pet-canvas.pet-dragging {
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.2));
 }
 .pet-canvas.pet-dragging.pet-wobble {
   animation: none;
