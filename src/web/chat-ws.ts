@@ -432,114 +432,124 @@ async function handleChatMessage(
   // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
   const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];
 
-  const result = await harness.run(
-    finalMessage,
-    (msgs, opts) => llmAdapter.chat(msgs, opts),
-    (event) => {
-      // 推送 step 到 WebSocket
-      sendJSON(ws, { type: 'step', step: event });
+  const pulseTimer = setInterval(() => {
+    sendJSON(ws, { type: 'pulse', ts: Date.now() });
+  }, 10_000);
 
-      // 流式增量文本直接推送
-      if (event.type === 'stream_delta' && event.delta) {
-        sendJSON(ws, { type: 'stream', delta: event.delta });
-      }
+  try {
+    const result = await harness.run(
+      finalMessage,
+      (msgs, opts) => llmAdapter.chat(msgs, opts),
+      (event) => {
+        // 推送 step 到 WebSocket
+        sendJSON(ws, { type: 'step', step: event });
 
-      // 工具实时输出推送
-      if (event.type === 'tool_output' && event.content) {
-        sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
-      }
-
-      // 收集工具调用记录
-      if (event.type === 'tool_call' && event.toolName) {
-        const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
-        const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
-          || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
-        toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
-        const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
-        console.log(`[step] [call] ${event.toolName}(${truncated})`);
-      } else if (event.type === 'tool_result' && event.toolName) {
-        // 更新批次中最后一个匹配的工具状态
-        for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
-          if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
-            toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
-            break;
-          }
+        // 流式增量文本直接推送
+        if (event.type === 'stream_delta' && event.delta) {
+          sendJSON(ws, { type: 'stream', delta: event.delta });
         }
-        const icon = event.toolSuccess ? '[ok]' : '[err]';
-        const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
-        console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
-      }
-    },
-    existingMessages,
-    // 流式调用函数
-    (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
-    // 多模态内容块（图片等）
-    Array.isArray(userMessageContent) ? userMessageContent : undefined,
-  );
 
-  // 清空 abort controller 和中断信号
-  activeAbortController = null;
-  llmAdapter.setAbortSignal?.(null);
+        // 工具实时输出推送
+        if (event.type === 'tool_output' && event.content) {
+          sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
+        }
 
-  // 缓存完整的结构化消息历史并持久化到磁盘
-  cachedMessages = result.messages;
-  saveStructuredMessages(result.messages);
+        // 收集工具调用记录
+        if (event.type === 'tool_call' && event.toolName) {
+          const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
+          const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
+            || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
+          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
+          const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
+          console.log(`[step] [call] ${event.toolName}(${truncated})`);
+        } else if (event.type === 'tool_result' && event.toolName) {
+          // 更新批次中最后一个匹配的工具状态
+          for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
+            if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
+              toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
+              break;
+            }
+          }
+          const icon = event.toolSuccess ? '[ok]' : '[err]';
+          const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
+          console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
+        }
+      },
+      existingMessages,
+      // 流式调用函数
+      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
+      // 多模态内容块（图片等）
+      Array.isArray(userMessageContent) ? userMessageContent : undefined,
+    );
 
-  // 写入 AI 回复 + 工具调用记录到会话文件
-  const agentMsgId = randomUUID();
-  const sessionEntries: any[] = [];
+    // 清空 abort controller 和中断信号
+    activeAbortController = null;
+    llmAdapter.setAbortSignal?.(null);
 
-  // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
-  for (const trace of toolTraceBatch) {
-    sessionEntries.push({
-      role: 'tool_trace',
-      parentId: agentMsgId,
-      toolName: trace.toolName,
-      detail: trace.detail,
-      status: trace.status,
+    // 缓存完整的结构化消息历史并持久化到磁盘
+    cachedMessages = result.messages;
+    saveStructuredMessages(result.messages);
+
+    // 写入 AI 回复 + 工具调用记录到会话文件
+    const agentMsgId = randomUUID();
+    const sessionEntries: any[] = [];
+
+    // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
+    for (const trace of toolTraceBatch) {
+      sessionEntries.push({
+        role: 'tool_trace',
+        parentId: agentMsgId,
+        toolName: trace.toolName,
+        detail: trace.detail,
+        status: trace.status,
+      });
+    }
+
+    // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
+    if (result.content) {
+      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
+    } else if (toolTraceBatch.length > 0) {
+      sessionEntries.push({
+        role: 'agent',
+        content: '（本轮仅有工具调用，无文字回复）',
+        id: agentMsgId,
+      });
+    }
+
+    if (sessionEntries.length > 0) {
+      const persisted = await appendMessages(sessionEntries);
+      if (persisted) broadcastSessionUpdated('turn_complete', ws);
+    }
+
+    // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
+    sendJSON(ws, { type: 'stream_end' });
+
+    // v4 被动确认：附加记忆提取通知
+    const extractionNotices = harness.flushExtractionNotices();
+    if (extractionNotices.length > 0) {
+      sendJSON(ws, { type: 'memory_notice', notices: extractionNotices });
+    }
+
+    if (result.content) {
+      sendJSON(ws, { type: 'response', content: result.content });
+    }
+    if (result.loopState.stopReason === 'user_abort') {
+      sendJSON(ws, { type: 'info', message: '任务已被用户中断' });
+    } else if (result.loopState.totalToolCalls > 0) {
+      sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
+    }
+    sendJSON(ws, {
+      type: 'tokenUsage',
+      inputTokens: result.loopState.lastInputTokens,
+      outputTokens: result.loopState.lastOutputTokens,
+      totalInputTokens: result.loopState.totalInputTokens,
+      totalOutputTokens: result.loopState.totalOutputTokens,
     });
+  } finally {
+    clearInterval(pulseTimer);
+    activeAbortController = null;
+    llmAdapter.setAbortSignal?.(null);
   }
-
-  // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
-  if (result.content) {
-    sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
-  } else if (toolTraceBatch.length > 0) {
-    sessionEntries.push({
-      role: 'agent',
-      content: '（本轮仅有工具调用，无文字回复）',
-      id: agentMsgId,
-    });
-  }
-
-  if (sessionEntries.length > 0) {
-    const persisted = await appendMessages(sessionEntries);
-    if (persisted) broadcastSessionUpdated('turn_complete', ws);
-  }
-
-  // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
-  sendJSON(ws, { type: 'stream_end' });
-
-  // v4 被动确认：附加记忆提取通知
-  const extractionNotices = harness.flushExtractionNotices();
-  if (extractionNotices.length > 0) {
-    sendJSON(ws, { type: 'memory_notice', notices: extractionNotices });
-  }
-
-  if (result.content) {
-    sendJSON(ws, { type: 'response', content: result.content });
-  }
-  if (result.loopState.stopReason === 'user_abort') {
-    sendJSON(ws, { type: 'info', message: '任务已被用户中断' });
-  } else if (result.loopState.totalToolCalls > 0) {
-    sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
-  }
-  sendJSON(ws, {
-    type: 'tokenUsage',
-    inputTokens: result.loopState.lastInputTokens,
-    outputTokens: result.loopState.lastOutputTokens,
-    totalInputTokens: result.loopState.totalInputTokens,
-    totalOutputTokens: result.loopState.totalOutputTokens,
-  });
 }
 
 function sendJSON(ws: WebSocket, data: unknown): void {

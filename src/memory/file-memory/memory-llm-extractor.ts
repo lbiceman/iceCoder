@@ -71,7 +71,7 @@ export interface ExtractionResult {
 }
 
 /**
- * 提取 Agent 的系统提示词。
+ * 提取当前对话的系统提示词片段。
  */
 const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract durable information worth remembering for future conversations. Be precise: noisy or weak memories are harmful because they can distract future coding tasks.
 

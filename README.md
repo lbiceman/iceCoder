@@ -1,8 +1,10 @@
 ﻿# iceCoder
 
-iceCoder is an AI coding agent runtime for local repositories. It combines a tool-using Harness loop, file-based long-term memory, session memory for compaction recovery, prompt assembly, and CLI/Web/Remote interfaces.
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, file-based long-term memory, session memory for compaction recovery, prompt assembly, and CLI / Web / Remote entrypoints.
 
-The project goal is not only to chat with an LLM. The goal is to run a software-engineering agent that can understand a task, inspect a repository, edit files, run verification, recover from failures, preserve useful memory, and continue long sessions without losing state.
+The goal is not only to chat with a model, but to run a **software-engineering assistant** that can understand a task, inspect a repository, edit files, run verification, recover from failures, preserve useful memory, and continue long sessions without losing state.
+
+**Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
 [中文文档](./README.zh-CN.md) | [Next Work](./nextWork.md)
 
@@ -23,7 +25,7 @@ The core Runtime P0/P1 work has been implemented:
 - Repeated failed tool calls are detected and the model is instructed to change strategy.
 - Session memory supports forced update before compaction.
 - Memory prompts have been tightened to prefer precise, evidence-backed long-term memories.
-- A minimal `npm run eval:agent` skeleton defines future Agent Runtime metrics.
+- A minimal `npm run eval:agent` skeleton defines future **runtime** metrics (naming is historical).
 
 Verification:
 
@@ -33,11 +35,10 @@ npm test
 npm run eval:agent
 ```
 
-Current verified baseline:
+Current verified baseline (run locally after changes):
 
-- 33 test files passed
-- 560 tests passed
-- No new npm dependencies were added for the runtime improvements
+- 32 test files passed
+- 531 tests passed
 
 ---
 
@@ -255,7 +256,7 @@ ICE_CONTEXT_WINDOW
 
 ## Task State and Repo Context
 
-Task State v1 and RepoContext v1 are the current bridge toward a stronger Agent Runtime.
+Task State v1 and RepoContext v1 are the current bridge toward a stronger **tool-using** runtime with clearer state and verification.
 
 Task State tracks:
 
@@ -282,9 +283,9 @@ This gives the model a stable view of what has happened even if conversation his
 
 ---
 
-## Agent Evaluation
+## Runtime evaluation (eval harness)
 
-A minimal eval skeleton exists:
+A minimal eval skeleton exists (script name `eval:agent` is legacy):
 
 ```bash
 npm run eval:agent
@@ -334,6 +335,6 @@ The remaining work is tracked in `nextWork.md`. The next high-impact items are:
 
 1. Memory v2 structured levels and conflict arbitration
 2. persisted Runtime Recovery Context in session notes
-3. real Agent Eval runner with pass/fail scoring
+3. real eval runner with pass/fail scoring
 4. telemetry persistence for runtime metrics
 5. model-aware tool planning and recovery strategies

@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
+import { getReadFileDefaultMaxChars, getReadFileDefaultMaxLines } from '../tool-output-limits.js';
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -67,7 +68,32 @@ export function createFileTools(workDir: string): RegisteredTool[] {
           };
         }
 
-        return { success: true, output: content };
+        // 无窗口参数：大文件软截断，避免整文件灌入主上下文（仍可通过 offset/limit 分段读取）
+        const maxLines = getReadFileDefaultMaxLines();
+        const maxChars = getReadFileDefaultMaxChars();
+        const allLines = content.split('\n');
+        let lines = allLines;
+        let truncated = false;
+        if (allLines.length > maxLines) {
+          lines = allLines.slice(0, maxLines);
+          truncated = true;
+        }
+        let body = lines.join('\n');
+        if (body.length > maxChars) {
+          body = body.slice(0, maxChars);
+          const lastNl = body.lastIndexOf('\n');
+          if (lastNl > maxChars * 0.4) body = body.slice(0, lastNl);
+          truncated = true;
+        }
+        if (!truncated) {
+          return { success: true, output: content };
+        }
+        const totalLines = allLines.length;
+        const totalChars = content.length;
+        const header =
+          `${rawPath} (partial read: lines 1–${lines.length}/${totalLines}, chars ~${body.length}/${totalChars} — use offset and limit to read more)\n` +
+          `${'─'.repeat(40)}`;
+        return { success: true, output: `${header}\n${body}` };
       },
     },
 

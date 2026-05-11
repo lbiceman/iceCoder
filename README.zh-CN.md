@@ -1,6 +1,10 @@
 ﻿# iceCoder 架构与运行时说明
 
-iceCoder 是一个面向本地代码仓库的 AI 编码 Agent Runtime。它不只是聊天壳，而是把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测指标组合在一起，目标是逐步接近 Claude Code / Codex CLI 这类主流软件工程 Agent 的可靠性。
+iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测骨架组合在一起，目标是接近 Claude Code / Codex CLI 等工具在**可靠执行工程任务**上的表现。
+
+**已从代码库移除：** 早期的**多阶段流水线**及按阶段注册的 **Agent** 抽象（如 `BaseAgent`、`executePipeline`、阶段报告生成等）。当前 `Orchestrator` 仅聚合 `FileParser` 与 `LLMAdapter`，供 WebSocket 聊天等入口共享实例。
+
+[English](./README.md) | [后续优化计划](./nextWork.md)
 
 [English](./README.md) | [后续优化计划](./nextWork.md)
 
@@ -18,11 +22,10 @@ npm test
 npm run eval:agent
 ```
 
-当前验证结果：
+当前验证结果（请以本机为准）：
 
-- 33 个测试文件通过
-- 561 条测试通过
-- 未为本轮 Runtime 整改引入新的 npm 依赖
+- 32 个测试文件通过
+- 531 条测试通过
 
 ---
 
@@ -45,7 +48,7 @@ CLI / Web / Remote
 | 模块 | 职责 |
 |---|---|
 | `src/prompts/*` | 提示词分段、静态 system、动态 overlay、评测/禁工具模式 |
-| `src/harness/harness.ts` | Agent 主循环、工具执行、恢复、权限、验证门禁 |
+| `src/harness/harness.ts` | 带工具调用的 LLM 主循环、执行、恢复、权限、验证门禁 |
 | `src/harness/task-state.ts` | 当前任务状态账本 |
 | `src/harness/repo-context.ts` | 仓库上下文账本 |
 | `src/harness/context-assembler.ts` | 组装 system prompt 与动态上下文 |
@@ -324,9 +327,9 @@ ICE_CONTEXT_WINDOW
 
 ---
 
-## 9. Agent Eval
+## 9. 运行时评测（eval 骨架）
 
-当前提供最小 eval 骨架：
+`npm run eval:agent` 为**历史脚本名**；当前提供的是最小 eval 骨架（指标名与 case 分类），尚未实现完整判分 Runner。
 
 ```bash
 npm run eval:agent
@@ -380,7 +383,7 @@ npx tsx src/cli/index.ts run "修复失败测试"
 
 1. Memory v2 结构化分级：hard_rule / project_fact / preference / observation / session_state。
 2. 压缩恢复持久化：将 Runtime Recovery Context 同步进 session notes，支持进程重启恢复。
-3. 正式 Agent Eval Runner：真实执行、判分、输出趋势。
+3. 正式 **Eval Runner**：真实执行、判分、输出趋势。
 4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
 5. Tool Planner：按任务类型生成建议工具链。
 
@@ -388,7 +391,7 @@ npx tsx src/cli/index.ts run "修复失败测试"
 
 ## 12. 项目目标
 
-iceCoder 的目标不是“回答更像 Agent”，而是：
+iceCoder 的目标不是“回答更像聊天机器人”，而是：
 
 ```text
 用户给任务

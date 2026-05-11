@@ -256,7 +256,7 @@ export class ContextCompactor {
    * 构建压缩恢复用的结构化 Runtime State。
    *
    * 这条消息在硬压缩后重新注入，优先级高于自然语言摘要，
-   * 用于保证 Agent 还能知道当前目标、改动文件和下一步验证命令。
+   * 用于保证模型还能知道当前目标、改动文件和下一步验证命令。
    */
   buildRuntimeRecoveryContext(
     taskState: TaskStateSnapshot,
@@ -503,7 +503,7 @@ Continue the conversation from where it left off without asking the user any fur
 
   /**
    * 从消息历史中提取任务描述（最早的长度 > 200 字符的用户消息）。
-   * 用于压缩前备份到会话笔记，确保压缩后 Agent 能找回任务目标。
+   * 用于压缩前备份到会话笔记，确保压缩后模型能找回任务目标。
    * @returns 截取前 300 字符的任务摘要，若无长用户消息则返回 null
    */
   getTaskDescription(messages: UnifiedMessage[]): string | null {
@@ -693,7 +693,7 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // 保护包含任务描述的长用户消息（content > MIN_USER_MSG_LENGTH_TO_PRESERVE），
-    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致 Agent 无法继续执行任务。
+    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致模型无法继续执行任务。
     for (let i = contentStart; i < splitAt; i++) {
       const msg = messages[i];
       if (

@@ -39,9 +39,7 @@ import { RepoContext } from './repo-context.js';
 import { TaskCheckpointManager, type TaskCheckpointStatus } from './checkpoint.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
-
-// ─── 工具输出截断上限 ───
-const MAX_TOOL_OUTPUT = 30000;
+import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
 
 // ─── max-output-tokens 恢复最大次数 ───
 const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
@@ -61,6 +59,26 @@ const MAX_STOP_HOOK_CONTINUATIONS = 3;
 const LLM_MAX_RETRIES = 1;
 const LLM_RETRY_BASE_DELAY = 2000;
 const LLM_RETRY_MAX_DELAY = 2000;
+
+/** 工具执行阶段推给前端的简短说明（降低「长时间无反馈」焦虑） */
+function toolExecutionUserHint(toolName: string): string {
+  const hints: Record<string, string> = {
+    read_file: '正在读取文件（大文件将自动截断，可按提示用 offset/limit 续读）…',
+    search_codebase: '正在搜索代码库，可能需要几秒…',
+    parse_document: '正在解析文档，较大文件可能较慢…',
+    run_command: '正在执行命令…',
+    fs_operation: '正在操作文件或目录…',
+    fetch_url: '正在请求 URL…',
+    web_search: '正在联网搜索…',
+    git: '正在执行 git…',
+    browse_directory: '正在浏览目录…',
+    list_drives: '正在列出磁盘…',
+    parse_pptx_deep: '正在深度解析 PPTX…',
+    parse_xmind_deep: '正在解析 XMind…',
+    image_read: '正在读取图片…',
+  };
+  return hints[toolName] ?? `正在执行「${toolName}」…`;
+}
 
 // ─── 工具结果预算裁剪 ───
 const TOOL_RESULT_KEEP_RECENT = 6;
@@ -247,7 +265,7 @@ interface LoopState {
 }
 
 /**
- * Harness 是 Agent 循环的核心引擎。
+ * Harness 是带工具调用的 LLM 迭代循环引擎。
  *
  * 用户 prompt 决定"做什么"，Harness 决定"怎么做"。
  * 只有在安全边界上，Harness 才会硬性覆盖用户意图。
@@ -1114,6 +1132,13 @@ export class Harness {
       // ── 提交到流式执行器 ──
       logger.toolCall(tc.name, tc.arguments);
       onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
+      onStep?.({
+        type: 'tool_progress',
+        iteration,
+        phase: 'running',
+        toolName: tc.name,
+        content: toolExecutionUserHint(tc.name),
+      });
       streamingExecutor.submit(tc);
       submittedIds.add(tc.id);
     }
@@ -1153,7 +1178,8 @@ export class Harness {
       });
 
       const toolMeta = getToolMetadata(tc.name);
-      const maxOutput = toolMeta.maxResultSizeChars === Infinity ? MAX_TOOL_OUTPUT : Math.min(toolMeta.maxResultSizeChars, MAX_TOOL_OUTPUT);
+      const maxCap = getMaxToolOutputChars();
+      const maxOutput = toolMeta.maxResultSizeChars === Infinity ? maxCap : Math.min(toolMeta.maxResultSizeChars, maxCap);
       const truncatedOutput = output.length > maxOutput
         ? output.substring(0, maxOutput) + `\n\n[输出已截断，原始长度: ${output.length} 字符]`
         : output;
