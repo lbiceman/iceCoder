@@ -750,38 +750,92 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   background: #c0392b;
 }
 
-/* Thinking indicator — fixed 悬浮在 token 进度条上方 */
-.agent-status-bar {
-  display: none;
+/* 会话宠物指示器 — fixed，在 token 进度条上方；常驻显示（LCD 宠物 + 工作时气泡） */
+.session-pet-indicator {
+  display: flex;
   position: fixed;
-  bottom: 80px;            /* token 进度条上方约 10px */
+  bottom: 80px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 6px 18px;
+  gap: 6px;
+  pointer-events: none;
+  max-width: min(92vw, 360px);
+}
+.session-pet-indicator.active {
+  display: flex;
+}
+.pet-bubble {
+  padding: 8px 12px;
   font-size: 12px;
+  line-height: 1.35;
   color: var(--text-primary);
   background: var(--bg-card, var(--bg-secondary));
   border: 1px solid var(--border-light, var(--border-color));
-  border-radius: 20px;
+  border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  white-space: nowrap;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  word-break: break-word;
+}
+.pet-bubble.has-text {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* 点阵宠物本体（无机身）：黑白像素画布可拖动 */
+.pet-canvas {
+  display: block;
+  width: 96px;
+  height: 96px;
+  max-width: 24vw;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: grab;
+  touch-action: none;
+  pointer-events: auto;
+  -webkit-user-select: none;
+  user-select: none;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.2));
+  line-height: 0;
+}
+.pet-canvas.pet-dragging {
+  cursor: grabbing;
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.35));
+}
+.pet-canvas.pet-dragging.pet-wobble {
+  animation: none;
+}
+.pet-canvas.pet-wobble {
+  animation: pet-wobble 0.5s ease-in-out infinite;
+}
+@keyframes pet-wobble {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.session-pet-indicator .pet-bubble,
+.session-pet-indicator .status-turn {
   pointer-events: none;
 }
-.agent-status-bar.active {
-  display: flex;
-}
-.agent-status-bar .status-text {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.agent-status-bar .status-turn {
-  margin-left: 8px;
+.session-pet-indicator .status-turn {
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
-  opacity: 0.7;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pet-canvas.pet-wobble {
+    animation: none;
+  }
+  .pet-bubble {
+    transition: none;
+  }
 }
 
 /* 工具调用条目（聊天记录中） */
@@ -1058,7 +1112,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   .form-grid { grid-template-columns: 1fr; }
   .chat-messages { padding: 12px; gap: 10px; }
   .chat-input-area > .chat-input-row { padding: 16px 12px; }
-  .agent-status-bar { bottom: 78px; }
+  .session-pet-indicator { bottom: 78px; }
   .message { max-width: 90%; padding: 10px 14px; }
 }
 

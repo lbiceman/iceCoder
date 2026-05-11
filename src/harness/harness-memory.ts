@@ -21,6 +21,7 @@
 
 import path from 'node:path';
 import { existsSync, promises as fs } from 'node:fs';
+import type { HarnessStepEvent, MemoryStepKind } from './types.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { LLMAdapterInterface } from '../llm/types.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
@@ -47,6 +48,27 @@ import {
 
 /** 话题切换 Jaccard 阈值 */
 const TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2;
+
+function memoryFilesBubbleSummary(memories: { filename: string }[], maxNames = 3): string {
+  if (!memories.length) return '';
+  const parts = memories.slice(0, maxNames).map(m => m.filename.replace(/\.md$/i, ''));
+  let s = '想起了：' + parts.join('、');
+  if (memories.length > maxNames) s += ` 等 ${memories.length} 条`;
+  return s;
+}
+
+function emitMemoryStep(
+  onStep: ((event: HarnessStepEvent) => void) | undefined,
+  memoryKind: MemoryStepKind,
+  memoryDetail?: string,
+): void {
+  if (!onStep) return;
+  onStep({
+    type: 'memory_event',
+    memoryKind,
+    memoryDetail,
+  });
+}
 /** 文件粒度内容截断字符数 */
 const HARNESS_FILE_CONTENT_TRUNCATE = 2000;
 /** 提取消息分块大小 */
@@ -583,15 +605,16 @@ export class HarnessMemoryIntegration {
    */
   async injectMemoryContext(
     messages: UnifiedMessage[],
-    options?: { mode?: InjectMemoryMode },
+    options?: { mode?: InjectMemoryMode; onStep?: (event: HarnessStepEvent) => void },
   ): Promise<void> {
     if (!this.memoryDir && !this.fileMemoryManager) return;
     if (this.memoryDirExists === false) return;
 
     const latestUserMsg = getLatestUserMessage(messages) || this.currentUserMessage;
+    const onStep = options?.onStep;
 
     if (options?.mode === 'coarse_pre_llm') {
-      await this.injectCoarseKeywordRecall(messages, latestUserMsg);
+      await this.injectCoarseKeywordRecall(messages, latestUserMsg, onStep);
       return;
     }
 
@@ -716,6 +739,7 @@ export class HarnessMemoryIntegration {
 
         if (selectedMemories.length === 0) {
           console.debug('[harness-memory] All memories filtered by relevance gate, skipping injection');
+          emitMemoryStep(onStep, 'recall_skipped', '记忆与当前对话相关性不足，已跳过');
           return;
         }
 
@@ -730,6 +754,7 @@ export class HarnessMemoryIntegration {
           }
           if (selectedMemories.length === 0) {
             console.debug('[harness-memory] All memories deduped, skipping injection');
+            emitMemoryStep(onStep, 'recall_skipped', '本轮记忆已注入过');
             return;
           }
         }
@@ -765,11 +790,13 @@ export class HarnessMemoryIntegration {
         const reminder = buildCoNMemoryPrompt(memoryItems, method);
         messages.push({ role: 'user', content: reminder });
         didInjectThisRecall = true;
+        emitMemoryStep(onStep, 'recall_hit', memoryFilesBubbleSummary(selectedMemories));
         // 召回成功，重置空召回计数
         this.consecutiveEmptyRecalls = 0;
         this.emptyRecallCooldown = 0;
       } else {
         // 空召回 → 累计计数，连续 3 次空召回后冷却 3 轮
+        emitMemoryStep(onStep, 'recall_empty');
         this.consecutiveEmptyRecalls++;
         if (this.consecutiveEmptyRecalls >= 3) {
           this.emptyRecallCooldown = 3;
@@ -800,6 +827,7 @@ export class HarnessMemoryIntegration {
   private async injectCoarseKeywordRecall(
     messages: UnifiedMessage[],
     latestUserMsg: string,
+    onStep?: (event: HarnessStepEvent) => void,
   ): Promise<void> {
     if (!latestUserMsg.trim()) return;
     if (this.lastCoarsePreLlmMessage === latestUserMsg) return;
@@ -876,6 +904,7 @@ export class HarnessMemoryIntegration {
       }
       const reminder = buildCoNMemoryPrompt(memoryItems, 'keyword pre-LLM recall');
       messages.push({ role: 'user', content: reminder });
+      emitMemoryStep(onStep, 'recall_coarse_hit', memoryFilesBubbleSummary(selectedMemories));
     } catch (err) {
       console.debug('[harness-memory] coarse recall failed:', err instanceof Error ? err.message : err);
     } finally {

@@ -440,10 +440,17 @@ export class Harness {
 
     if (existingMessages && existingMessages.length > 0) {
       try {
-        await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
+        const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
           state.taskState,
           state.repoContext,
         );
+        if (hydrated) {
+          onStep?.({
+            type: 'memory_event',
+            memoryKind: 'session_hydrate',
+            memoryDetail: '已从会话笔记恢复任务与仓库状态',
+          });
+        }
       } catch (err) {
         console.debug(
           '[harness] session-notes 运行时恢复失败:',
@@ -483,7 +490,7 @@ export class Harness {
 
       this.upsertRuntimeContextMessage(msgs, state);
 
-      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm' });
+      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm', onStep });
 
       if (
         state.turnCount === 1
@@ -1002,7 +1009,7 @@ export class Harness {
 
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
       // 放在所有 tool 结果之后、下一轮 LLM 调用之前
-      await this.memoryIntegration.injectMemoryContext(msgs);
+      await this.memoryIntegration.injectMemoryContext(msgs, { onStep });
 
       // 6c. maxTurns 检查（由 loopController 处理）
       const nextStop = this.loopController.shouldContinue();

@@ -1,0 +1,5 @@
+{
+  "version": 2,
+  "comment": "states.<name>.patches 为 [row,col,0|1]，逻辑网格 64×64（与 session-pet-lab 参考图一致）。可在此用 64 坐标修正眨眼等。",
+  "states": {}
+}

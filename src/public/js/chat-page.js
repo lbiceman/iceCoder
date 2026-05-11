@@ -258,7 +258,9 @@ window.ChatPage = (function () {
   // ---- DOM refs (set during render) ----
   var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
-  var elStatusBar, elStatusText, elStatusTurn;
+  var elStatusBar, elStatusTurn;
+  /** 会话宠物指示器（见 session-pet.js） */
+  var sessionPet = null;
 
   // ---- 辅助函数 ----
 
@@ -298,39 +300,154 @@ window.ChatPage = (function () {
   // ---- 状态指示器（输入区上方状态栏） ----
 
   var currentTurnCount = 0;
+  /** 从发送后到 removeThinking 前视为「工作台会话」，允许气泡与 pulse 刷新 */
+  var petUiSessionActive = false;
 
   function showThinking(withFile) {
     currentTurnCount = 0;
-    if (!elStatusBar) return;
-    var thinkText = withFile ? 'Parsing file & Thinking' : 'Thinking';
-    updateStatusText(thinkText);
-    if (elStatusTurn) elStatusTurn.textContent = '';
-    elStatusBar.classList.add('active');
+    petUiSessionActive = true;
+    if (!sessionPet) return;
+    sessionPet.setVisible(true);
+    sessionPet.setState('thinking');
+    sessionPet.setTurnLabel('');
+    sessionPet.setBubbleText(withFile ? '解析文件中…' : '');
   }
 
   function updateTurnCounter(turn) {
     if (turn > currentTurnCount) {
       currentTurnCount = turn;
     }
-    if (elStatusTurn) {
-      elStatusTurn.textContent = '第 ' + currentTurnCount + ' 轮';
+    if (sessionPet) {
+      sessionPet.setTurnLabel(
+        petUiSessionActive || wsProcessing || isStreaming
+          ? currentTurnCount
+            ? '第 ' + currentTurnCount + ' 轮'
+            : ''
+          : '',
+      );
     }
   }
 
   function removeThinking() {
     currentTurnCount = 0;
     lastToolProgressHint = '';
-    if (elStatusBar) {
-      elStatusBar.classList.remove('active');
-    }
-    if (elStatusText) elStatusText.innerHTML = '';
-    if (elStatusTurn) elStatusTurn.textContent = '';
+    petUiSessionActive = false;
+    if (!sessionPet) return;
+    sessionPet.setState('idle');
+    sessionPet.setBubbleText('');
+    sessionPet.setTurnLabel('');
   }
 
-  /** 更新状态栏文本（保留动画点） */
+  /** 仅在工作台前会话中更新气泡（工具进度、心跳等） */
   function updateStatusText(text) {
-    if (!elStatusText) return;
-    elStatusText.innerHTML = '<span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> ' + escapeHtml(text);
+    if (!sessionPet) return;
+    if (!petUiSessionActive && !wsProcessing && !isStreaming) return;
+    sessionPet.setBubbleText(text || '');
+  }
+
+  /**
+   * 将 Harness step 映射到会话宠物表情 + 气泡（工作台会话中会显示气泡文案）。
+   */
+  function applyHarnessStepToPet(step) {
+    if (!sessionPet || !step) return;
+
+    function recoverThinkingOrIdle() {
+      sessionPet.setState(isStreaming || wsProcessing ? 'thinking' : 'idle');
+    }
+
+    /** 有字时仅在工作/流式中展示；传 '' 则总是清空气泡 */
+    function bubble(txt) {
+      if (txt === undefined || txt === null) return;
+      if (txt === '') {
+        sessionPet.setBubbleText('');
+        return;
+      }
+      if (!petUiSessionActive && !wsProcessing && !isStreaming) return;
+      sessionPet.setBubbleText(String(txt));
+    }
+
+    switch (step.type) {
+      case 'thinking':
+        sessionPet.setState('thinking');
+        if (step.content) bubble(step.content);
+        break;
+      case 'tool_call':
+        sessionPet.setState('working');
+        {
+          var toolHint = step.toolName || '';
+          if (step.toolArgs) {
+            var argHint =
+              step.toolArgs.path ||
+              step.toolArgs.file ||
+              step.toolArgs.command ||
+              step.toolArgs.query ||
+              '';
+            if (argHint) toolHint = (toolHint ? toolHint + ' · ' : '') + argHint;
+          }
+          bubble(step.content || toolHint || '调用工具…');
+        }
+        break;
+      case 'tool_result':
+        if (step.toolSuccess === false) {
+          sessionPet.setState('confused');
+          bubble(step.toolError || step.content || '工具失败');
+        } else {
+          recoverThinkingOrIdle();
+          var okMsg = lastToolProgressHint || step.content;
+          if (okMsg) bubble(okMsg);
+        }
+        break;
+      case 'tool_denied':
+        sessionPet.setState('alert');
+        bubble(step.content || '已拒绝工具');
+        break;
+      case 'tool_confirm':
+        sessionPet.setState('alert');
+        bubble(step.content || '待确认');
+        break;
+      case 'tool_progress':
+        sessionPet.setState('working');
+        bubble(step.content || '');
+        break;
+      case 'compaction':
+        sessionPet.setState('thinking');
+        bubble(step.content || '整理上下文中…');
+        break;
+      case 'final':
+        if (step.stopReason === 'error' || step.stopReason === 'circuit_breaker') {
+          sessionPet.setState('confused');
+          bubble(step.content || '出错了');
+        } else if (step.stopReason === 'user_abort') {
+          recoverThinkingOrIdle();
+          sessionPet.setBubbleText('');
+        } else {
+          sessionPet.setState('happy');
+          if (step.content) bubble(step.content);
+        }
+        break;
+      case 'stream_delta':
+        sessionPet.setState('thinking');
+        break;
+      case 'tool_output':
+        break;
+      case 'memory_event':
+        {
+          var mk = step.memoryKind;
+          if (mk === 'recall_hit' || mk === 'recall_coarse_hit') {
+            sessionPet.setState('happy');
+          } else if (mk === 'recall_empty' || mk === 'recall_skipped') {
+            recoverThinkingOrIdle();
+          } else if (mk === 'session_hydrate') {
+            sessionPet.setState('idle');
+          } else {
+            recoverThinkingOrIdle();
+          }
+          if (step.memoryDetail) bubble(step.memoryDetail);
+        }
+        break;
+      default:
+        break;
+    }
   }
 
   function resetLiveToolRoundTargets() {
@@ -1063,6 +1180,9 @@ window.ChatPage = (function () {
         // 流式增量文本：逐 chunk 追加到当前助手侧消息
         if (userStopped) break;
         if (!isStreaming) setStreamingState(true);
+        if (sessionPet && sessionPet.isVisible()) {
+          sessionPet.setState('thinking');
+        }
         appendStreamChunk(data.delta || '');
         break;
       case 'stream_end':
@@ -1109,6 +1229,9 @@ window.ChatPage = (function () {
           setStreamingState(false);
         } else {
           setStreamingState(wsProcessing);
+          if (sessionPet && sessionPet.isVisible() && wsProcessing) {
+            sessionPet.setState('thinking');
+          }
         }
         break;
       case 'error':
@@ -1130,9 +1253,27 @@ window.ChatPage = (function () {
             appendMessageEl(messages[messages.length - 1]);
           }
           saveMessages();
+          if (sessionPet) {
+            sessionPet.setVisible(true);
+            sessionPet.setState('happy');
+            var memLine = typeof data.notices[0] === 'string' ? data.notices[0] : '';
+            if (memLine.length > 200) memLine = memLine.slice(0, 200) + '…';
+            if (petUiSessionActive || wsProcessing || isStreaming) {
+              sessionPet.setBubbleText(memLine || '已更新记忆');
+            }
+            setTimeout(function () {
+              if (!sessionPet || !sessionPet.isVisible()) return;
+              sessionPet.setState(wsProcessing || isStreaming ? 'thinking' : 'idle');
+              sessionPet.setBubbleText('');
+            }, 5200);
+          }
         }
         break;
       case 'confirm':
+        if (sessionPet && sessionPet.isVisible()) {
+          sessionPet.setState('alert');
+          sessionPet.setBubbleText('请在弹窗中确认危险操作');
+        }
         handleWsConfirm(data.toolName, data.args);
         break;
       case 'tokenUsage':
@@ -1144,7 +1285,7 @@ window.ChatPage = (function () {
       case 'pong':
         break;
       case 'pulse':
-        if (elStatusBar && elStatusBar.classList.contains('active')) {
+        if (sessionPet && sessionPet.isVisible()) {
           var hint = lastToolProgressHint || '处理中';
           updateStatusText(hint);
         }
@@ -1166,7 +1307,7 @@ window.ChatPage = (function () {
     }
     if (step.type === 'tool_progress' && step.content) {
       lastToolProgressHint = step.content;
-      if (elStatusBar && elStatusBar.classList.contains('active')) {
+      if (sessionPet && sessionPet.isVisible()) {
         updateStatusText(step.content);
       }
     }
@@ -1197,6 +1338,7 @@ window.ChatPage = (function () {
         }
       }
     }
+    applyHarnessStepToPet(step);
   }
 
   function handleWsConfirm(toolName, args) {
@@ -1209,6 +1351,10 @@ window.ChatPage = (function () {
     messages.push(confirmMsg);
     appendMessageEl(confirmMsg);
     saveMessages();
+    if (sessionPet && sessionPet.isVisible()) {
+      sessionPet.setState(isStreaming || wsProcessing ? 'thinking' : 'idle');
+      sessionPet.setBubbleText(lastToolProgressHint || '');
+    }
   }
 
   function sendWsMessage(text) {
@@ -1816,9 +1962,10 @@ window.ChatPage = (function () {
       '<div class="chat-page">' +
         // Messages（正序 + overflow-anchor 锚点粘底）
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
-        // Thinking 指示器（fixed 悬浮）
-        '<div class="agent-status-bar" id="agent-status-bar">' +
-          '<span class="status-text" id="status-text"></span>' +
+        // 点阵宠物本体 + 头顶气泡（无机身外壳）
+        '<div class="session-pet-indicator" id="agent-status-bar">' +
+          '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
+          '<canvas class="pet-canvas" id="pet-canvas" width="128" height="128" role="img" aria-label="会话状态宠物，拖动移动；双击恢复默认位置" title="拖动：移动；双击：恢复默认位置"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         // Input area（进度条作为上边框）
@@ -1854,7 +2001,9 @@ window.ChatPage = (function () {
     elFileRemove = container.querySelector('#file-remove');
     elContextBar = container.querySelector('#ctx-bar');
     elStatusBar = container.querySelector('#agent-status-bar');
-    elStatusText = container.querySelector('#status-text');
+    if (window.SessionPet) {
+      sessionPet = window.SessionPet.create(elStatusBar);
+    }
     elStatusTurn = container.querySelector('#status-turn');
 
     // 立即渲染上下文条（加载状态）
