@@ -39,6 +39,8 @@ const DREAM_NEW_FILES_TRIGGER = 10;
 const DREAM_EXPIRED_TRIGGER = 3;
 /** Dream 状态文件路径 */
 const DREAM_STATE_FILE_PATH = 'data/memory/dream-state.json';
+/** 因 stale_index 跑完 Dream 后，在此时间内不再仅因死链再次触发（避免 LLM 未修好索引时连打） */
+const STALE_INDEX_DREAM_COOLDOWN_MS = 12 * 60 * 1000;
 import { ConsolidationLock } from './memory-concurrency.js';
 import { getDreamConfig } from './memory-remote-config.js';
 import { getExpiredMemories, getStaleMemories } from './memory-age.js';
@@ -140,6 +142,8 @@ export class MemoryDream {
   private config: DreamConfig;
   private sessionCount: number = 0;
   private lastDreamTime: number = 0;
+  /** 最近一次因 MEMORY.md 死链（stale_index）成功跑完 Dream 的时间戳（用于防抖） */
+  private staleIndexDreamCompletedAt: number = 0;
   /** 状态持久化文件路径 */
   private stateFilePath: string;
   /** 整合锁 */
@@ -209,8 +213,19 @@ export class MemoryDream {
 
     const { dead } = await countDeadLinksInMemoryIndex(memoryDir);
     if (dead >= this.config.staleIndexDeadLinksThreshold) {
-      console.log(`[MemoryDream] MEMORY.md has ${dead} dead link(s), triggering dream`);
-      return { shouldRun: true, trigger: 'stale_index' };
+      const sinceStaleDream = Date.now() - this.staleIndexDreamCompletedAt;
+      if (
+        this.staleIndexDreamCompletedAt > 0
+        && sinceStaleDream >= 0
+        && sinceStaleDream < STALE_INDEX_DREAM_COOLDOWN_MS
+      ) {
+        console.debug(
+          `[MemoryDream] ${dead} dead link(s) but stale_index dream cooldown active (${Math.round(sinceStaleDream / 1000)}s since last)`,
+        );
+      } else {
+        console.log(`[MemoryDream] MEMORY.md has ${dead} dead link(s), triggering dream`);
+        return { shouldRun: true, trigger: 'stale_index' };
+      }
     }
 
     const lastConsolidatedAt = await this.lock.readLastConsolidatedAt();
@@ -825,6 +840,14 @@ export class MemoryDream {
   }
 
   /**
+   * 在因 stale_index 成功执行 Dream 后调用，启动防抖窗口，减少重复检查/长跑。
+   */
+  notifyStaleIndexDreamCompleted(): void {
+    this.staleIndexDreamCompletedAt = Date.now();
+    this.persistState().catch(() => {});
+  }
+
+  /**
    * 更新配置。
    */
   updateConfig(config: Partial<DreamConfig>): void {
@@ -843,6 +866,7 @@ export class MemoryDream {
       const state = {
         sessionCount: this.sessionCount,
         lastDreamTime: this.lastDreamTime,
+        staleIndexDreamCompletedAt: this.staleIndexDreamCompletedAt,
         updatedAt: new Date().toISOString(),
       };
       await fs.writeFile(this.stateFilePath, JSON.stringify(state), 'utf-8');
@@ -863,6 +887,12 @@ export class MemoryDream {
       }
       if (typeof state.lastDreamTime === 'number') {
         this.lastDreamTime = Math.max(this.lastDreamTime, state.lastDreamTime);
+      }
+      if (typeof state.staleIndexDreamCompletedAt === 'number' && state.staleIndexDreamCompletedAt > 0) {
+        this.staleIndexDreamCompletedAt = Math.max(
+          this.staleIndexDreamCompletedAt,
+          state.staleIndexDreamCompletedAt,
+        );
       }
     } catch {
       // 文件不存在或解析失败，使用内存中的值（正常情况）

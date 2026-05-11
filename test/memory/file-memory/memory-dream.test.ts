@@ -175,6 +175,22 @@ describe('evaluateDreamGate', () => {
     expect(gate.trigger).toBe('stale_index');
   });
 
+  it('stale_index 在 notify 后冷却期内不重复触发', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'MEMORY.md'),
+      '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
+      'utf-8',
+    );
+    await writeMemoryFile(tempDir, 'only.md', 'n');
+    const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
+    const gate1 = await dream.evaluateDreamGate(tempDir);
+    expect(gate1.trigger).toBe('stale_index');
+    dream.notifyStaleIndexDreamCompleted();
+    const gate2 = await dream.evaluateDreamGate(tempDir);
+    expect(gate2.shouldRun).toBe(false);
+    expect(gate2.trigger).toBeNull();
+  });
+
   it('超过条数上限时触发 Dream，先整合再淘汰', async () => {
     const lockPath = path.join(tempDir, '.consolidate-lock');
     await fs.writeFile(lockPath, '1', 'utf-8');

@@ -333,8 +333,8 @@ export const DEFAULT_RELEVANCE_GATE_CONFIG: RelevanceGateConfig = {
 export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
   enabled: true,
   minTokensToInit: 10000,
-  minTokensBetweenUpdate: 5000,
-  toolCallsBetweenUpdates: 3,
+  minTokensBetweenUpdate: 6000,
+  toolCallsBetweenUpdates: 4,
 };
 
 /** 注入主上下文时条数、预算比例与话题切换权重 */

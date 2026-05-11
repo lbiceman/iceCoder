@@ -61,6 +61,31 @@ const FALLBACK_RECALL_MULTIPLIER = 2;
 const SESSION_MEMORY_LLM_MAX_TOKENS = 4096;
 /** 会话记忆净化前缀消息数 */
 const SESSION_MEMORY_SANITIZED_PREFIX_LIMIT = 50;
+/** 标准召回最短间隔（毫秒）；同样 manifest + 用户问题且上轮已注入时跳过。0=禁用。ICE_STANDARD_RECALL_COOLDOWN_SEC */
+const STANDARD_RECALL_COOLDOWN_MS = (() => {
+  const raw = process.env.ICE_STANDARD_RECALL_COOLDOWN_SEC;
+  if (raw === undefined || raw === '') return 5 * 60 * 1000;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return 5 * 60 * 1000;
+  if (n <= 0) return 0;
+  return n * 1000;
+})();
+/** 会话记忆 LLM 前：净化前缀总字符下限（非 force） */
+const SESSION_MEMORY_PREFIX_MIN_CHARS = 320;
+/** 会话记忆校验失败后指数退避基础/上限（毫秒） */
+const SESSION_MEMORY_BACKOFF_BASE_MS = 20_000;
+const SESSION_MEMORY_BACKOFF_MAX_MS = 300_000;
+/** 单次提取参与 LLM 的最大 user/assistant 条数（含早期首条用户锚定）。ICE_EXTRACTION_MAX_MESSAGES */
+const EXTRACTION_MAX_MESSAGES = (() => {
+  const raw = process.env.ICE_EXTRACTION_MAX_MESSAGES;
+  if (raw === undefined || raw === '') return 80;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 20 ? n : 80;
+})();
+
+function standardRecallCooldownKey(manifestHash: string, userMsg: string, topicSwitched: boolean): string {
+  return `${manifestHash}\n${userMsg}\n${topicSwitched ? '1' : '0'}`;
+}
 
 /**
  * 内容启发式模式 — 检测用户消息中暗示偏好/习惯的关键词。
@@ -461,6 +486,15 @@ export class HarnessMemoryIntegration {
   private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
   private sequentialAdjustConfidence: (filenames: string[], delta: number) => Promise<void>;
 
+  /** 连续会话记忆校验失败次数（用于退避） */
+  private sessionMemoryRejectStreak = 0;
+  /** 会话记忆 LLM 最早可重试时间 */
+  private sessionMemoryBackoffUntil = 0;
+  /** 标准召回冷却：上次完成的 query+manifest 键 */
+  private lastStandardRecallCooldownKey = '';
+  private lastStandardRecallCompleteAt = 0;
+  private lastStandardRecallInjected = false;
+
   constructor(config: HarnessMemoryConfig) {
     this.memoryDir = config.memoryDir || 'data/memory-files';
     this.fileMemoryManager = config.fileMemoryManager;
@@ -600,6 +634,24 @@ export class HarnessMemoryIntegration {
     const topicSwitched = this.injectedForCurrentMessage && hasTopicShifted(this.lastInjectionUserMessage, latestUserMsg);
 
     let dedupCount = 0;
+    const manifestHash = this.memoryDir ? (getScannerCache().getManifestHash(this.memoryDir) ?? '') : '';
+    const recallCooldownKey = standardRecallCooldownKey(manifestHash, latestUserMsg, topicSwitched);
+    const nowMs = Date.now();
+    if (
+      STANDARD_RECALL_COOLDOWN_MS > 0
+      && this.lastStandardRecallInjected
+      && nowMs - this.lastStandardRecallCompleteAt < STANDARD_RECALL_COOLDOWN_MS
+      && recallCooldownKey === this.lastStandardRecallCooldownKey
+    ) {
+      console.debug('[harness-memory] 标准召回冷却：已注入且 manifest+query 未变，跳过扫描');
+      this.injectedForCurrentMessage = true;
+      this.lastInjectionUserMessage = latestUserMsg;
+      const nh = this.memoryDir ? getScannerCache().getManifestHash(this.memoryDir) : '';
+      if (nh) this.lastManifestHash = nh;
+      return;
+    }
+
+    let didInjectThisRecall = false;
 
     try {
       // 获取预取结果（如果有的话）
@@ -712,6 +764,7 @@ export class HarnessMemoryIntegration {
         const method = recallResult.usedLLM ? 'LLM semantic recall + rerank' : 'keyword fallback';
         const reminder = buildCoNMemoryPrompt(memoryItems, method);
         messages.push({ role: 'user', content: reminder });
+        didInjectThisRecall = true;
         // 召回成功，重置空召回计数
         this.consecutiveEmptyRecalls = 0;
         this.emptyRecallCooldown = 0;
@@ -726,6 +779,10 @@ export class HarnessMemoryIntegration {
       }
     } catch (err) {
       console.debug('[harness-memory] recall failed:', err instanceof Error ? err.message : err);
+    } finally {
+      this.lastStandardRecallCooldownKey = recallCooldownKey;
+      this.lastStandardRecallCompleteAt = Date.now();
+      this.lastStandardRecallInjected = didInjectThisRecall;
     }
 
     this.injectedForCurrentMessage = true;
@@ -1268,6 +1325,26 @@ ${candidateList}`;
   }
 
   /**
+   * 限制单次提取参与的 user/assistant 条数：保留首条实质用户消息 + 最近窗口。
+   */
+  private clipMessagesForExtraction(msgs: UnifiedMessage[]): UnifiedMessage[] {
+    const max = EXTRACTION_MAX_MESSAGES;
+    if (msgs.length <= max) return msgs;
+    const firstUserIdx = msgs.findIndex(
+      m => m.role === 'user' && typeof m.content === 'string' && m.content.trim().length > 0,
+    );
+    if (firstUserIdx < 0) {
+      return msgs.slice(-max);
+    }
+    if (firstUserIdx >= msgs.length - max + 1) {
+      return msgs.slice(-max);
+    }
+    const headLen = firstUserIdx + 1;
+    const tailLen = max - headLen;
+    return [...msgs.slice(0, headLen), ...msgs.slice(-tailLen)];
+  }
+
+  /**
    * 执行实际的 LLM 提取调用。
    *
    * v6 改进：长对话分块提取。
@@ -1287,8 +1364,16 @@ ${candidateList}`;
       if (allConversation.length === 0) return;
 
       // 只提取上次提取之后的新消息
-      const newMessages = allConversation.slice(this.lastExtractionMessageIndex);
-      if (newMessages.length === 0) return;
+      const newMessagesRaw = allConversation.slice(this.lastExtractionMessageIndex);
+      if (newMessagesRaw.length === 0) return;
+
+      const newMessages = this.clipMessagesForExtraction(newMessagesRaw);
+      const clippedCount = newMessagesRaw.length - newMessages.length;
+      if (clippedCount > 0) {
+        console.debug(
+          `[harness-memory] 提取消息裁剪: ${newMessagesRaw.length} → ${newMessages.length}（保留首条用户锚点 + 最近窗口）`,
+        );
+      }
 
       // 分块：每块最多 CHUNK_SIZE 条消息，首次最多 MAX_CHUNKS 块
       const CHUNK_SIZE = EXTRACTION_CHUNK_SIZE;
@@ -1323,8 +1408,8 @@ ${candidateList}`;
         allContradictions.push(...result.contradictions);
       }
 
-      // 推进 cursor
-      this.lastExtractionMessageIndex = messages.length;
+      // 推进 cursor：对齐 user/assistant 轴（勿用含 tool 的 messages.length）
+      this.lastExtractionMessageIndex = allConversation.length;
 
       this.telemetry.logExtract({
         messageCount: newMessages.length,
@@ -1406,6 +1491,13 @@ ${candidateList}`;
         this.llmAdapter,
         conversationPrefix.length > 0 ? conversationPrefix : undefined,
       );
+
+      if (this.memoryDir) {
+        getScannerCache().invalidate(this.memoryDir);
+      }
+      if (dreamGate.trigger === 'stale_index' && dreamResult.executed) {
+        this.memoryDream.notifyStaleIndexDreamCompleted();
+      }
 
       this.telemetry.logDream({
         executed: dreamResult.executed,
@@ -1489,6 +1581,23 @@ ${candidateList}`;
       return;
     }
 
+    if (Date.now() < this.sessionMemoryBackoffUntil) {
+      console.debug('[harness-memory] 会话记忆退避中，跳过 LLM 更新');
+      return;
+    }
+
+    const prePrefix = this.sanitizeConversationPrefix(messages);
+    const preChars = prePrefix.reduce(
+      (acc, m) => acc + (typeof m.content === 'string' ? m.content.length : 0),
+      0,
+    );
+    if (!force && preChars < SESSION_MEMORY_PREFIX_MIN_CHARS) {
+      console.debug(
+        `[harness-memory] 会话记忆预检：净化前缀过短 (${preChars} < ${SESSION_MEMORY_PREFIX_MIN_CHARS})，跳过`,
+      );
+      return;
+    }
+
     this.sessionMemoryState.extractionInProgress = true;
     try {
       const currentNotes = await setupSessionMemoryFile(this.sessionMemoryState);
@@ -1543,8 +1652,16 @@ ${candidateList}`;
             evidenceAnchored: !!pkg,
             contradictionWarning: !!warn,
           }).catch(() => {});
+          this.sessionMemoryRejectStreak = 0;
+          this.sessionMemoryBackoffUntil = 0;
           console.debug('[harness-memory] 会话记忆已更新');
         } else {
+          this.sessionMemoryRejectStreak = Math.min(this.sessionMemoryRejectStreak + 1, 8);
+          const backoff = Math.min(
+            SESSION_MEMORY_BACKOFF_MAX_MS,
+            SESSION_MEMORY_BACKOFF_BASE_MS * 2 ** (this.sessionMemoryRejectStreak - 1),
+          );
+          this.sessionMemoryBackoffUntil = Date.now() + backoff;
           await this.telemetry.logSessionMemory({
             wrote: false,
             rejectReason: validation.reason,
@@ -1556,6 +1673,19 @@ ${candidateList}`;
             (validation.missingSections ? ` (缺失: ${validation.missingSections.join(', ')})` : ''),
           );
         }
+      } else {
+        this.sessionMemoryRejectStreak = Math.min(this.sessionMemoryRejectStreak + 1, 8);
+        const backoff = Math.min(
+          SESSION_MEMORY_BACKOFF_MAX_MS,
+          SESSION_MEMORY_BACKOFF_BASE_MS * 2 ** (this.sessionMemoryRejectStreak - 1),
+        );
+        this.sessionMemoryBackoffUntil = Date.now() + backoff;
+        await this.telemetry.logSessionMemory({
+          wrote: false,
+          rejectReason: 'empty LLM response',
+          evidenceAnchored: false,
+          contradictionWarning: false,
+        }).catch(() => {});
       }
 
       this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;
