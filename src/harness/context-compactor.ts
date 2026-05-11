@@ -29,8 +29,7 @@ import * as path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
-import type { TaskStateSnapshot } from './task-state.js';
-import type { RepoContextSnapshot } from './repo-context.js';
+import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 
 /**
  * 压缩配置。
@@ -438,7 +437,7 @@ export class ContextCompactor {
       : '';
 
     const sessionNotesDirective = hasSessionNotes
-      ? '\n\n**CRITICAL**: Check the session notes (data/sessions/session-notes.md) for the current task specification. If a task was in progress, continue executing it using the session notes as the authoritative source. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
+      ? '\n\n**CRITICAL**: Session notes include narrative sections plus a machine-readable `icecoder-runtime` JSON block under Runtime Evidence for exact task/repo state. Use that for resuming work after restarts. Also check data/sessions/session-notes.md path when applicable. If a task was in progress, continue from session notes + structured state. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
       : '';
 
     return {

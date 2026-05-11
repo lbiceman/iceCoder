@@ -22,6 +22,10 @@ import {
   mergeRuntimeEvidenceIntoNotes,
   SESSION_RUNTIME_EVIDENCE_HEADER,
   buildTestStackContradictionWarning,
+  serializePersistedRuntime,
+  parsePersistedRuntime,
+  ICECODER_RUNTIME_FENCE_LANG,
+  buildRuntimeEvidenceSection,
   type SessionMemoryState,
   type PackageJsonTestFacts,
 } from '../../../src/memory/file-memory/session-memory.js';
@@ -291,5 +295,91 @@ _
 # Worklog
 ok`;
     expect(buildTestStackContradictionWarning(notes, pkg)).toBeTruthy();
+  });
+});
+
+describe('persisted runtime (icecoder-runtime)', () => {
+  const minimalTask = {
+    goal: 'fix login',
+    intent: 'debug',
+    phase: 'context' as const,
+    filesRead: ['a.ts'],
+    filesChanged: [],
+    commandsRun: ['npm test'],
+    verificationRequired: false,
+    verificationStatus: 'not_required' as const,
+  };
+  const minimalRepo = {
+    filesRead: ['a.ts'],
+    filesChanged: [],
+    commandsRun: ['npm test'],
+    testCommands: ['npm test'],
+    recentDiagnostics: [],
+  };
+
+  it('serialize + parse roundtrip', () => {
+    const json = serializePersistedRuntime(minimalTask, minimalRepo);
+    const notes = `blah\n\n\`\`\`${ICECODER_RUNTIME_FENCE_LANG}\n${json}\n\`\`\`\n`;
+    const p = parsePersistedRuntime(notes);
+    expect(p).not.toBeNull();
+    expect(p!.task.goal).toBe('fix login');
+    expect(p!.repo.filesRead).toContain('a.ts');
+  });
+
+  it('buildRuntimeEvidenceSection 含可解析 fence', () => {
+    const md = buildRuntimeEvidenceSection(
+      {
+        task: {
+          goal: 'g',
+          intent: 'edit',
+          phase: 'editing',
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          verificationRequired: true,
+          verificationStatus: 'required',
+        },
+        repo: {
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      },
+      null,
+    );
+    expect(md).toContain(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`);
+    expect(parsePersistedRuntime(md)?.task.intent).toBe('edit');
+  });
+
+  it('truncateSessionMemoryForCompact 保留 Runtime Evidence 内长 JSON', () => {
+    const evidence = buildRuntimeEvidenceSection(
+      {
+        task: {
+          goal: 'g',
+          intent: 'refactor',
+          phase: 'editing',
+          filesRead: Array.from({ length: 80 }, (_, i) => `f${i}.ts`),
+          filesChanged: [],
+          commandsRun: [],
+          verificationRequired: false,
+          verificationStatus: 'not_required',
+        },
+        repo: {
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      },
+      null,
+    );
+    const longWorklog = '# Worklog\n' + 'x'.repeat(25000);
+    const content = `# Session Title\nok\n\n# Runtime Evidence (auto)\n${evidence}\n\n${longWorklog}`;
+    const { truncatedContent } = truncateSessionMemoryForCompact(content);
+    expect(parsePersistedRuntime(truncatedContent)).not.toBeNull();
+    expect(truncatedContent).toContain('icecoder-runtime');
   });
 });

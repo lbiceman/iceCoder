@@ -148,10 +148,13 @@ export {
   validateSessionMemoryContent,
   SESSION_MEMORY_TEMPLATE,
   SESSION_RUNTIME_EVIDENCE_HEADER,
+  ICECODER_RUNTIME_FENCE_LANG,
   readPackageJsonTestFacts,
   buildRuntimeEvidenceSection,
   mergeRuntimeEvidenceIntoNotes,
   buildTestStackContradictionWarning,
+  parsePersistedRuntime,
+  serializePersistedRuntime,
 } from './session-memory.js';
 export type { SessionMemoryState, PackageJsonTestFacts, SessionRuntimeEvidenceInput } from './session-memory.js';
 

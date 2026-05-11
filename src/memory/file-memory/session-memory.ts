@@ -27,6 +27,15 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { UnifiedMessage, LLMAdapterInterface } from '../../llm/types.js';
+import type {
+  TaskIntent,
+  TaskPhase,
+  TaskStateSnapshot,
+  VerificationStatus,
+  RepoContextSnapshot,
+  PersistedRuntimeV1,
+} from '../../types/runtime-snapshot.js';
+import { PERSIST_RUNTIME_SCHEMA_VERSION } from '../../types/runtime-snapshot.js';
 import { getSessionMemoryConfig } from './memory-remote-config.js';
 
 /** 单个 section 最大 token 数 */
@@ -134,6 +143,148 @@ export interface SessionRuntimeEvidenceInput {
     testCommands: string[];
     recentDiagnostics: string[];
   };
+}
+
+/** fenced code block 语言标记，用于嵌入可解析的 TaskState + RepoContext */
+export const ICECODER_RUNTIME_FENCE_LANG = 'icecoder-runtime';
+
+const MAX_PERSIST_PATHS = 64;
+const MAX_PERSIST_TASK_CMDS = 32;
+const MAX_PERSIST_REPO_CMDS = 24;
+const MAX_PERSIST_TEST_CMDS = 8;
+const MAX_PERSIST_DIAG = 8;
+
+const TASK_INTENTS = new Set<string>([
+  'question', 'inspect', 'edit', 'debug', 'test', 'refactor', 'docs',
+]);
+const TASK_PHASES = new Set<string>(['intent', 'context', 'editing', 'verification', 'final']);
+const VERIFICATION_STATUSES = new Set<string>([
+  'not_required', 'required', 'passed', 'failed',
+]);
+
+function capPaths(paths: string[]): string[] {
+  return paths.slice(0, MAX_PERSIST_PATHS);
+}
+
+function capTaskSnapshot(t: TaskStateSnapshot): TaskStateSnapshot {
+  return {
+    ...t,
+    filesRead: capPaths(t.filesRead),
+    filesChanged: capPaths(t.filesChanged),
+    commandsRun: t.commandsRun.slice(-MAX_PERSIST_TASK_CMDS),
+  };
+}
+
+function capRepoSnapshot(r: RepoContextSnapshot): RepoContextSnapshot {
+  return {
+    filesRead: capPaths(r.filesRead),
+    filesChanged: capPaths(r.filesChanged),
+    commandsRun: r.commandsRun.slice(-MAX_PERSIST_REPO_CMDS),
+    testCommands: r.testCommands.slice(-MAX_PERSIST_TEST_CMDS),
+    recentDiagnostics: r.recentDiagnostics.slice(-MAX_PERSIST_DIAG),
+  };
+}
+
+function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskStateSnapshot {
+  return {
+    goal: input.goal,
+    intent: input.intent as TaskIntent,
+    phase: input.phase as TaskPhase,
+    filesRead: [...input.filesRead],
+    filesChanged: [...input.filesChanged],
+    commandsRun: [...input.commandsRun],
+    verificationRequired: input.verificationRequired,
+    verificationStatus: input.verificationStatus as VerificationStatus,
+  };
+}
+
+function inputToRepoSnapshot(input: SessionRuntimeEvidenceInput['repo']): RepoContextSnapshot {
+  return {
+    filesRead: [...input.filesRead],
+    filesChanged: [...input.filesChanged],
+    commandsRun: [...input.commandsRun],
+    testCommands: [...input.testCommands],
+    recentDiagnostics: [...input.recentDiagnostics],
+  };
+}
+
+/**
+ * 生成供写入 session-notes 的持久化 JSON（含体积上限，避免单文件过大）。
+ */
+export function serializePersistedRuntime(
+  task: TaskStateSnapshot,
+  repo: RepoContextSnapshot,
+): string {
+  const payload: PersistedRuntimeV1 = {
+    version: PERSIST_RUNTIME_SCHEMA_VERSION,
+    task: capTaskSnapshot(task),
+    repo: capRepoSnapshot(repo),
+  };
+  return JSON.stringify(payload);
+}
+
+/**
+ * 从 session-notes 全文解析持久化运行时快照（取最后一个 fence，以支持多次写入）。
+ */
+export function parsePersistedRuntime(notes: string): {
+  task: TaskStateSnapshot;
+  repo: RepoContextSnapshot;
+} | null {
+  const open = `\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`;
+  let idx = notes.lastIndexOf(open);
+  if (idx === -1) return null;
+  const start = idx + open.length;
+  const close = notes.indexOf('```', start);
+  if (close === -1) return null;
+  const raw = notes.slice(start, close).trim();
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const o = parsed as Record<string, unknown>;
+  if (o.version !== PERSIST_RUNTIME_SCHEMA_VERSION) return null;
+  const task = o.task;
+  const repo = o.repo;
+  if (!task || typeof task !== 'object' || !repo || typeof repo !== 'object') return null;
+  const tt = task as Record<string, unknown>;
+  const rr = repo as Record<string, unknown>;
+  if (typeof tt.goal !== 'string' || !tt.goal.trim()) return null;
+  if (typeof tt.intent !== 'string' || !TASK_INTENTS.has(tt.intent)) return null;
+  if (typeof tt.phase !== 'string' || !TASK_PHASES.has(tt.phase)) return null;
+  if (typeof tt.verificationRequired !== 'boolean') return null;
+  if (typeof tt.verificationStatus !== 'string' || !VERIFICATION_STATUSES.has(tt.verificationStatus)) {
+    return null;
+  }
+  if (!Array.isArray(tt.filesRead) || !Array.isArray(tt.filesChanged) || !Array.isArray(tt.commandsRun)) {
+    return null;
+  }
+  if (!Array.isArray(rr.filesRead) || !Array.isArray(rr.filesChanged) || !Array.isArray(rr.commandsRun)) {
+    return null;
+  }
+  if (!Array.isArray(rr.testCommands) || !Array.isArray(rr.recentDiagnostics)) return null;
+
+  const outTask: TaskStateSnapshot = {
+    goal: tt.goal,
+    intent: tt.intent as TaskIntent,
+    phase: tt.phase as TaskPhase,
+    filesRead: tt.filesRead.filter((x): x is string => typeof x === 'string'),
+    filesChanged: tt.filesChanged.filter((x): x is string => typeof x === 'string'),
+    commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
+    verificationRequired: tt.verificationRequired,
+    verificationStatus: tt.verificationStatus as VerificationStatus,
+  };
+  const outRepo: RepoContextSnapshot = {
+    filesRead: rr.filesRead.filter((x): x is string => typeof x === 'string'),
+    filesChanged: rr.filesChanged.filter((x): x is string => typeof x === 'string'),
+    commandsRun: rr.commandsRun.filter((x): x is string => typeof x === 'string'),
+    testCommands: rr.testCommands.filter((x): x is string => typeof x === 'string'),
+    recentDiagnostics: rr.recentDiagnostics.filter((x): x is string => typeof x === 'string'),
+  };
+  return { task: capTaskSnapshot(outTask), repo: capRepoSnapshot(outRepo) };
 }
 
 // ─── 状态管理（闭包隔离） ───
@@ -255,7 +406,7 @@ ${currentNotes}
 - 始终更新 "Current State" 以反映最近的工作——这对压缩后的连续性至关重要
 - 禁止将对话中的「假设性迁移 / 反事实分析」里的**目标**技术栈写成当前仓库**已采用**的事实（例如用户只要求评估「若迁到 Jest」时，不得写「项目已使用 Jest」）。
 - 涉及测试框架、npm 依赖、package.json 的 \`scripts.test\` 时：仅写用户原话或工具输出中**已出现**的信息；未出现时写「未验证」或省略，不要推测。
-- 「# Runtime Evidence (auto)」节：保留节标题与紧跟的一条斜体说明行即可，**该节正文请留空**（系统写入文件时会自动覆盖本节正文）。
+- 「# Runtime Evidence (auto)」节：保留节标题与紧跟的一条斜体说明行即可，**该节正文请留空**（系统写入文件时会用运行时快照与 \`icecoder-runtime\` 持久化块自动覆盖本节正文，模型无需生成该区域）。
 - 如果某个 section 没有实质性新信息，可以跳过不更新${sectionReminders}`;
 }
 
@@ -275,7 +426,11 @@ export function truncateSessionMemoryForCompact(content: string): {
 
   for (const line of lines) {
     if (line.startsWith('# ')) {
-      const result = flushSection(currentSectionHeader, currentSectionLines, maxCharsPerSection);
+      const sectionLimit =
+        currentSectionHeader.trim() === SESSION_RUNTIME_EVIDENCE_HEADER
+          ? Number.MAX_SAFE_INTEGER
+          : maxCharsPerSection;
+      const result = flushSection(currentSectionHeader, currentSectionLines, sectionLimit);
       outputLines.push(...result.lines);
       wasTruncated = wasTruncated || result.wasTruncated;
       currentSectionHeader = line;
@@ -285,7 +440,11 @@ export function truncateSessionMemoryForCompact(content: string): {
     }
   }
 
-  const result = flushSection(currentSectionHeader, currentSectionLines, maxCharsPerSection);
+  const lastSectionLimit =
+    currentSectionHeader.trim() === SESSION_RUNTIME_EVIDENCE_HEADER
+      ? Number.MAX_SAFE_INTEGER
+      : maxCharsPerSection;
+  const result = flushSection(currentSectionHeader, currentSectionLines, lastSectionLimit);
   outputLines.push(...result.lines);
   wasTruncated = wasTruncated || result.wasTruncated;
 
@@ -538,6 +697,19 @@ export function buildRuntimeEvidenceSection(
     input.repo.recentDiagnostics.length
       ? formatBulletList(input.repo.recentDiagnostics.map(c => truncateLine(c, 200)), 200)
       : '- _(none)_',
+  );
+
+  const taskSnap = capTaskSnapshot(inputToTaskSnapshot(input.task));
+  const repoSnap = capRepoSnapshot(inputToRepoSnapshot(input.repo));
+  const json = serializePersistedRuntime(taskSnap, repoSnap);
+  lines.push(
+    '',
+    '## Persisted runtime (machine)',
+    '_以下 JSON 由系统自动写入，用于进程/页面重启后恢复 TaskState 与 RepoContext；请勿删除 fenced 块。_',
+    '',
+    `\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`,
+    json,
+    '```',
   );
 
   return lines.join('\n');

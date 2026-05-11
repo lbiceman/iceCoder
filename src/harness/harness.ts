@@ -69,6 +69,7 @@ const LLM_RETRY_MAX_DELAY = 2000;
 function toolExecutionUserHint(toolName: string): string {
   const hints: Record<string, string> = {
     read_file: '正在读取文件（大文件将自动截断，可按提示用 offset/limit 续读）…',
+    edit_file: '正在编辑文件, 请稍后...',
     search_codebase: '正在搜索代码库，可能需要几秒…',
     parse_document: '正在解析文档，较大文件可能较慢…',
     run_command: '正在执行命令…',
@@ -437,6 +438,20 @@ export class Harness {
       failedToolCallSignatures: new Map(),
     };
 
+    if (existingMessages && existingMessages.length > 0) {
+      try {
+        await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
+          state.taskState,
+          state.repoContext,
+        );
+      } catch (err) {
+        console.debug(
+          '[harness] session-notes 运行时恢复失败:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     // ── 核心循环（while(true) 迭代模式）──
     // try/finally 确保无论哪条路径退出，记忆合并都会执行一次
     try {
@@ -469,6 +484,19 @@ export class Harness {
       this.upsertRuntimeContextMessage(msgs, state);
 
       await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm' });
+
+      if (
+        state.turnCount === 1
+        && currentTools.length > 0
+        && isActionableToolRequest(getLatestRealUserText(msgs, userMessage))
+      ) {
+        msgs.push({
+          role: 'user',
+          content: formatToolPlan(
+            buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot()),
+          ),
+        });
+      }
 
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
       // 工具结果预算裁剪在副本上执行，不修改原始消息（保持前缀缓存一致性）

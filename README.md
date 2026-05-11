@@ -82,6 +82,19 @@ while running:
     finalize
 ```
 
+### Sub-Agent Runner
+
+`src/harness/sub-agent-runner.ts` provides an **isolated read-only agent** for codebase exploration. When the main model calls `delegate_to_subagent`, a private message loop starts with a whitelisted tool set (`read_file`, `search_codebase`, `fs_operation list` only). The sub-agent runs independently (60s timeout, max 10 rounds), reads files, searches code, and returns a **concise structured summary** instead of dumping raw file contents into the main context.
+
+This solves the "context pollution" problem: previously, each exploration task dumped large search results and file contents directly into the session, accelerating compaction and wasting tokens. With the sub-agent, the main context receives only a short summary (~hundreds of tokens), cutting exploration-induced context bloat by an estimated 60-80%.
+
+The sub-agent also has a **process-level LRU cache** (default 100 entries, keyed by task + filesRead + mtimes) to skip re-execution of identical queries when files haven't changed on disk.
+
+Key components:
+- `SubAgentRunner` — isolated message loop with timeout and round limits
+- `delegate_to_subagent` — the tool exposed to the model for delegation
+- `formatSubAgentResult()` — formats the structured result for the main session
+
 Key runtime protections:
 
 - No-tool recovery for executable tasks
@@ -207,6 +220,40 @@ Recent changes tightened memory behavior:
 - Personal preferences are injected only when strongly relevant.
 - Extraction prompt now prefers fewer high-confidence memories over noisy long-term memory.
 - Weak one-off signals should remain session state, not persistent memory.
+
+### Dream Consolidation & Eviction
+
+`src/memory/file-memory/memory-dream.ts` runs a periodic "dream" process (analogous to human sleep consolidation) that reviews, deduplicates, and prunes memories. Triggers:
+
+- Session threshold (every 5 sessions)
+- File count threshold (default 30 files)
+- New files since last dream (≥10)
+- Expired memories detected (≥3)
+- Dead links in MEMORY.md index
+- Memory count exceeds post-dream cap
+
+Dream phases: **Orient** → **Gather** → **Consolidate** → **Prune**. After consolidation, the system runs a cap-enforcing eviction pass on both project-level and user-level memory directories when configured (`enforceMemoryCapAfterDream` / `enforceUserMemoryCapAfterDream`).
+
+`src/memory/file-memory/memory-eviction.ts` implements a **weighted scoring eviction** (not pure LRU). Scores combine:
+
+| Factor | Range | Effect |
+|---|---|---|
+| Freshness penalty | 0-100 | Longer inactive = higher score (more likely evicted) |
+| Confidence protection | 0-30 | High confidence memories are protected |
+| Recall protection | 0-20 | Frequently recalled memories are protected |
+| Type protection | 0 or 15 | `user` type is protected |
+| Level protection | -18 to 35 | `hard_rule` > `preference` > `project_fact` > `observation` > `session_state` |
+| Evidence protection | -16 to 28 | `explicit` > `repeated` > `inferred` > `weak` |
+| Source protection | 0-30 | `user_explicit` > `manual` > `dream` > `llm_extract` |
+| Type evict bias | configurable | `feedback` / `reference` types biased toward eviction |
+
+Safety protections:
+- Memories with `confidence >= 1.0` are never evicted (user explicit declarations)
+- Recently active memories (within `protectionDays`) are never evicted
+- The `MEMORY.md` index file itself is never evicted
+- Evicted files go to `evicted/` subdirectory (recoverable via `restoreEvicted()`)
+- Eviction log is written to `evicted/eviction-log.jsonl`
+- Old evicted archives are automatically pruned
 
 ---
 

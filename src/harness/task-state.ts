@@ -1,23 +1,21 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
+import type {
+  TaskIntent,
+  TaskPhase,
+  TaskStateSnapshot,
+  VerificationStatus,
+} from '../types/runtime-snapshot.js';
 
-export type TaskIntent = 'question' | 'inspect' | 'edit' | 'debug' | 'test' | 'refactor' | 'docs';
-export type TaskPhase = 'intent' | 'context' | 'editing' | 'verification' | 'final';
-export type VerificationStatus = 'not_required' | 'required' | 'passed' | 'failed';
+export type {
+  TaskIntent,
+  TaskPhase,
+  TaskStateSnapshot,
+  VerificationStatus,
+} from '../types/runtime-snapshot.js';
 
 const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'search_codebase', 'git', 'file_info']);
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
-
-export interface TaskStateSnapshot {
-  goal: string;
-  intent: TaskIntent;
-  phase: TaskPhase;
-  filesRead: string[];
-  filesChanged: string[];
-  commandsRun: string[];
-  verificationRequired: boolean;
-  verificationStatus: VerificationStatus;
-}
 
 export class TaskState {
   private goal: string;
@@ -89,6 +87,20 @@ Run an appropriate verification command now (for example: focused tests, npm tes
       verificationRequired: this.verificationRequired,
       verificationStatus: this.verificationStatus,
     };
+  }
+
+  /**
+   * 从持久化快照恢复（会话笔记中的 JSON）。用于长会话重启后继续同一任务。
+   */
+  applySnapshot(snapshot: TaskStateSnapshot): void {
+    this.goal = snapshot.goal;
+    this.intent = snapshot.intent;
+    this.phase = snapshot.phase;
+    this.filesRead = new Set(snapshot.filesRead);
+    this.filesChanged = new Set(snapshot.filesChanged);
+    this.commandsRun = [...snapshot.commandsRun];
+    this.verificationRequired = snapshot.verificationRequired;
+    this.verificationStatus = snapshot.verificationStatus;
   }
 }
 

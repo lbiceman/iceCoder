@@ -132,10 +132,12 @@ import {
   buildRuntimeEvidenceSection,
   mergeRuntimeEvidenceIntoNotes,
   buildTestStackContradictionWarning,
+  parsePersistedRuntime,
   type SessionMemoryState,
 } from '../memory/file-memory/session-memory.js';
-import type { TaskStateSnapshot } from './task-state.js';
-import type { RepoContextSnapshot } from './repo-context.js';
+import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import type { TaskState } from './task-state.js';
+import type { RepoContext } from './repo-context.js';
 
 /**
  * HarnessMemoryIntegration 配置。
@@ -923,6 +925,23 @@ ${candidateList}`;
     // ── autoDream 整合 ──
     this.memoryDream.recordSession();
     await this.maybeDream();
+  }
+
+  /**
+   * 从 session-notes.md 中的 fenced JSON 恢复 TaskState / RepoContext（续聊、进程重启后）。
+   */
+  async hydrateRuntimeFromSessionNotes(
+    taskState: TaskState,
+    repoContext: RepoContext,
+  ): Promise<boolean> {
+    const raw = await getSessionMemoryContent(this.sessionMemoryState);
+    if (!raw) return false;
+    const parsed = parsePersistedRuntime(raw);
+    if (!parsed) return false;
+    taskState.applySnapshot(parsed.task);
+    repoContext.applySnapshot(parsed.repo);
+    console.debug('[harness-memory] 已从 session-notes 恢复运行时快照');
+    return true;
   }
 
   /**
