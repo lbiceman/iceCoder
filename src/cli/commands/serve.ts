@@ -41,6 +41,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   const app = await createServer({
     routes: [
       { path: '/api/config', router: createConfigRouter({
+        configPath: paths.configPath,
         onConfigSaved: () => {
           reloadLLMAdapter(llmAdapter, paths.configPath).catch(err =>
             console.error('[serve] Failed to reload LLM adapter:', err));

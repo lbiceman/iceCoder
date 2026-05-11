@@ -264,6 +264,7 @@ async function main(): Promise<void> {
   const app = await createServer({
     routes: [
       { path: '/api/config', router: createConfigRouter({
+        configPath: CONFIG_PATH,
         onConfigSaved: () => {
           reloadLLMAdapterFromConfig(llmAdapter).catch(err => console.error('Failed to reload LLM adapter:', err));
         },

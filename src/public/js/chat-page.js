@@ -79,9 +79,21 @@ window.ChatPage = (function () {
 
   var SESSION_ID = 'default';
 
+  /**
+   * 移除模型按记忆/系统要求在末尾输出的 <status>…</status>（不向用户展示）。
+   */
+  function stripStatusTag(text) {
+    if (!text || typeof text !== 'string') return text;
+    return text
+      .replace(/<status>\s*(?:complete|incomplete)\s*<\/status>/gi, '')
+      .replace(/\s*$/, '');
+  }
+
   /** 序列化单条消息写入 localStorage（保留 id 以便刷新后挂载 tool_trace） */
   function serializeMessageForStorage(m) {
-    var o = { role: m.role, content: m.content };
+    var c = m.content;
+    if (m.role === 'agent' && typeof c === 'string') c = stripStatusTag(c);
+    var o = { role: m.role, content: c };
     if (m.id) o.id = m.id;
     return o;
   }
@@ -91,7 +103,9 @@ window.ChatPage = (function () {
     if (!raw || typeof raw !== 'object') return null;
     var role = raw.role;
     if (role !== 'user' && role !== 'agent') return null;
-    var o = { role: role, content: typeof raw.content === 'string' ? raw.content : '' };
+    var rawContent = typeof raw.content === 'string' ? raw.content : '';
+    var content = role === 'agent' ? stripStatusTag(rawContent) : rawContent;
+    var o = { role: role, content: content };
     if (raw.id) o.id = raw.id;
     return o;
   }
@@ -192,7 +206,11 @@ window.ChatPage = (function () {
         if (!traces[m.parentId]) traces[m.parentId] = [];
         traces[m.parentId].push({ toolName: m.toolName || '', detail: m.detail || '', status: m.status || 'pending' });
       } else {
-        msgs.push(m);
+        var cloned = Object.assign({}, m);
+        if ((m.role === 'agent' || m.role === 'assistant') && typeof m.content === 'string') {
+          cloned.content = stripStatusTag(m.content);
+        }
+        msgs.push(cloned);
       }
     }
     return { msgs: msgs, traces: traces };
@@ -552,7 +570,7 @@ window.ChatPage = (function () {
       }
 
       var content = document.createElement('div');
-      content.textContent = msg.content;
+      content.textContent = msg.role === 'agent' ? stripStatusTag(msg.content) : msg.content;
       el.appendChild(content);
 
       elMessages.insertBefore(el, elAnchor);
@@ -593,7 +611,7 @@ window.ChatPage = (function () {
     }
 
     var content = document.createElement('div');
-    content.textContent = msg.content;
+    content.textContent = msg.role === 'agent' ? stripStatusTag(msg.content) : msg.content;
     el.appendChild(content);
 
     elMessages.insertBefore(el, elAnchor);
@@ -625,7 +643,7 @@ window.ChatPage = (function () {
       el.appendChild(label);
 
       var contentDiv = document.createElement('div');
-      contentDiv.appendChild(document.createTextNode(text));
+      contentDiv.textContent = stripStatusTag(agentResponseBuffer);
       el.appendChild(contentDiv);
       el._streamContentEl = contentDiv;
 
@@ -645,26 +663,21 @@ window.ChatPage = (function () {
       lab.textContent = 'Agent';
       wrap.appendChild(lab);
       var contentDiv = document.createElement('div');
-      contentDiv.textContent = agentResponseBuffer;
+      contentDiv.textContent = stripStatusTag(agentResponseBuffer);
       wrap.appendChild(contentDiv);
       wrap._streamContentEl = contentDiv;
       elMessages.insertBefore(wrap, elAnchor);
       return;
     }
     if (streamEl && streamEl._streamContentEl) {
-      streamEl._streamContentEl.appendChild(document.createTextNode(text));
+      streamEl._streamContentEl.textContent = stripStatusTag(agentResponseBuffer);
     } else if (streamEl) {
       var contentEl = streamEl.lastChild;
       if (contentEl) {
-        contentEl.appendChild(document.createTextNode(text));
+        contentEl.textContent = stripStatusTag(agentResponseBuffer);
         streamEl._streamContentEl = contentEl;
       }
     }
-  }
-
-  /** 从文本中移除 <status>...</status> 标记（系统用，不展示给用户） */
-  function stripStatusTag(text) {
-    return text.replace(/<status>\s*(?:complete|incomplete)\s*<\/status>/gi, '').trimEnd();
   }
 
   function finalizeAgentResponse() {
@@ -673,7 +686,7 @@ window.ChatPage = (function () {
     if (lastMsg && lastMsg._streaming) {
       delete lastMsg._streaming;
       streamFinalized = true;
-      // 清理 status 标记
+      // 清理 status 标记（与流式展示一致）
       lastMsg.content = stripStatusTag(lastMsg.content);
     }
     agentResponseBuffer = '';
@@ -1161,7 +1174,7 @@ window.ChatPage = (function () {
         }
         // 非流式模式：直接显示完整响应
         finalizeAgentResponse();
-        messages.push({ role: 'agent', content: data.content });
+        messages.push({ role: 'agent', content: stripStatusTag(data.content || '') });
         // 清空工具调用批次（后端已持久化）
         flushToolBatchLocal();
         appendMessageEl(messages[messages.length - 1]);

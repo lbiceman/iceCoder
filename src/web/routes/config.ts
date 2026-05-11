@@ -8,7 +8,19 @@ import fs from 'fs/promises';
 import path from 'path';
 import type { ProviderConfig } from '../types.js';
 
-const CONFIG_PATH = path.resolve('data/config.json');
+/** 与 bootstrap / index 使用同一规则，避免 Web  API 读写错误的 config.json */
+function resolveConfigPath(explicit?: string): string {
+  if (explicit) return path.resolve(explicit);
+  if (process.env.ICE_CONFIG_PATH) return path.resolve(process.env.ICE_CONFIG_PATH);
+  return path.resolve('data/config.json');
+}
+
+/** 恰好一个 isDefault: true，避免前端或旧配置出现全 false 时默默地用「第一条」当默认 */
+function normalizeDefaultFlags(providers: ProviderConfig[]): ProviderConfig[] {
+  const idx = providers.findIndex(p => p.isDefault === true);
+  const keep = idx >= 0 ? idx : 0;
+  return providers.map((p, i) => ({ ...p, isDefault: i === keep }));
+}
 
 /**
  * 遮蔽 API 密钥，仅显示前 4 位和后 4 位字符。
@@ -123,9 +135,12 @@ export function getModelMaxOutputTokens(modelName: string): number {
 export interface ConfigRouterOptions {
   /** 配置保存成功后的回调（用于触发 LLM adapter 热重载） */
   onConfigSaved?: () => void;
+  /** 配置文件路径（须与 LLM bootstrap 的 configPath 一致，例如 CLI 下的 ~/.iceCoder/config.json） */
+  configPath?: string;
 }
 
 export function createConfigRouter(options?: ConfigRouterOptions): Router {
+  const configFile = resolveConfigPath(options?.configPath);
   const router = Router();
 
   /**
@@ -144,7 +159,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       // 读取现有配置，用于恢复被脱敏的 apiKey
       let existingProviders: ProviderConfig[] = [];
       try {
-        const data = await fs.readFile(CONFIG_PATH, 'utf-8');
+        const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as { providers: ProviderConfig[] };
         existingProviders = existing.providers || [];
       } catch { /* 文件不存在，首次保存 */ }
@@ -167,17 +182,19 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         return { ...provider, apiKey };
       });
 
+      const normalizedProviders = normalizeDefaultFlags(resolvedProviders);
+
       // 验证每个提供者
-      for (let i = 0; i < resolvedProviders.length; i++) {
-        const error = validateProvider(resolvedProviders[i]);
+      for (let i = 0; i < normalizedProviders.length; i++) {
+        const error = validateProvider(normalizedProviders[i]);
         if (error) {
           res.status(400).json({ error: `Provider ${i}: ${error}` });
           return;
         }
       }
 
-      const configData = JSON.stringify({ providers: resolvedProviders }, null, 2);
-      await fs.writeFile(CONFIG_PATH, configData, 'utf-8');
+      const configData = JSON.stringify({ providers: normalizedProviders }, null, 2);
+      await fs.writeFile(configFile, configData, 'utf-8');
 
       // 触发热重载回调
       if (options?.onConfigSaved) {
@@ -196,7 +213,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
    */
   router.get('/', async (_req: Request, res: Response): Promise<void> => {
     try {
-      const data = await fs.readFile(CONFIG_PATH, 'utf-8');
+      const data = await fs.readFile(configFile, 'utf-8');
       const config = JSON.parse(data) as { providers: ProviderConfig[] };
 
       // 返回前遮蔽 API 密钥
