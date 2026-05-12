@@ -68,7 +68,7 @@ const LLM_RETRY_MAX_DELAY = 2000;
 /** 工具执行阶段推给前端的简短说明（降低「长时间无反馈」焦虑） */
 function toolExecutionUserHint(toolName: string): string {
   const hints: Record<string, string> = {
-    read_file: '正在读取文件（大文件将自动截断，可按提示用 offset/limit 续读）…',
+    read_file: '正在读取文件（大文件将自动截断）…',
     edit_file: '正在编辑文件, 请稍后...',
     search_codebase: '正在搜索代码库，可能需要几秒…',
     parse_document: '正在解析文档，较大文件可能较慢…',
@@ -150,6 +150,7 @@ function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('<context-summary>')
     || trimmed.startsWith('[System Runtime State]')
     || trimmed.startsWith('[System')
+    || trimmed.startsWith('[Runtime Tool Planner]')
     || trimmed.startsWith('Please provide a final summary answer based on the tool call results above.')
     || trimmed.startsWith('Continue directly');
 }
@@ -188,7 +189,7 @@ function isActionableToolRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
-  const isActionable = /修(复|好|改)|修改|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|提交|创建.*pr/i.test(t)
+  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|提交|创建.*pr/i.test(t)
     || /\b(fix|debug|investigate|implement|modify|edit|update|refactor|search|read|create|delete|commit|check)\b/i.test(t)
     || /\b(run|execute)\s+\S+/i.test(t)
     || /\b(test|verify)\s+\S+|\S+\s+(tests?|verification)\b/i.test(t);
@@ -440,10 +441,17 @@ export class Harness {
 
     if (existingMessages && existingMessages.length > 0) {
       try {
-        await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
+        const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
           state.taskState,
           state.repoContext,
         );
+        if (hydrated) {
+          onStep?.({
+            type: 'memory_event',
+            memoryKind: 'session_hydrate',
+            memoryDetail: '已从会话笔记恢复任务与仓库状态',
+          });
+        }
       } catch (err) {
         console.debug(
           '[harness] session-notes 运行时恢复失败:',
@@ -483,7 +491,7 @@ export class Harness {
 
       this.upsertRuntimeContextMessage(msgs, state);
 
-      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm' });
+      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm', onStep });
 
       if (
         state.turnCount === 1
@@ -1002,7 +1010,7 @@ export class Harness {
 
       // 6b. 注入记忆上下文（文件记忆 + 结构化记忆检索）
       // 放在所有 tool 结果之后、下一轮 LLM 调用之前
-      await this.memoryIntegration.injectMemoryContext(msgs);
+      await this.memoryIntegration.injectMemoryContext(msgs, { onStep });
 
       // 6c. maxTurns 检查（由 loopController 处理）
       const nextStop = this.loopController.shouldContinue();

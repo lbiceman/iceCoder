@@ -18,11 +18,11 @@ import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
 import { XMindParserStrategy } from '../parser/xmind-strategy.js';
-import { getModelMaxOutputTokens } from '../web/routes/config.js';
+import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager } from '../mcp/index.js';
-import { resolveDataPaths, ensureDataDir, type DataPaths } from './paths.js';
+import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ProviderConfig } from '../web/types.js';
@@ -59,6 +59,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       llmAdapter.registerProvider(new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -67,6 +68,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       }));
     } else if (provider.providerName === 'anthropic') {
       llmAdapter.registerProvider(new AnthropicAdapter({
@@ -99,6 +101,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       llmAdapter.registerProvider(new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -107,6 +110,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       }));
     } else if (provider.providerName === 'anthropic') {
       llmAdapter.registerProvider(new AnthropicAdapter({
@@ -167,7 +171,7 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   });
 
   // 初始化 MCP
-  const mcpManager = new MCPManager({ configPath: paths.configPath });
+  const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
   try {
     await mcpManager.initialize();
     for (const tool of mcpManager.getRegisteredTools()) {

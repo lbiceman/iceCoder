@@ -135,6 +135,10 @@ export function createToolUsageSection(): PromptSection {
 - Background run_command → continue work; poll with action:"check" and task_id.
 - Use multiple tools per turn when useful.
 
+## MCP (Model Context Protocol)
+- Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.
+- **Only** open MCP config files (e.g. \`.iceCoder/mcp.json\`) when the user asks **where** MCP is configured, wants an edit/review of that file, or you are debugging **why** a server is missing or failing — not for normal tool use.
+
 ## File reading
 read_file (offset/limit for large files). Outside cwd → open_file (absolute path).
 

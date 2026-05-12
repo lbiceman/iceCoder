@@ -30,7 +30,7 @@ import { MCPManager } from './mcp/index.js';
 
 // Web 层
 import { createServer, startServer } from './web/server.js';
-import { createConfigRouter, getModelMaxOutputTokens } from './web/routes/config.js';
+import { createConfigRouter, getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from './web/routes/config.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
 import { attachChatWebSocket, cleanupChatResources } from './web/chat-ws.js';
@@ -42,6 +42,7 @@ import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 
 // 类型
 import type { ProviderConfig } from './web/types.js';
+import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
 
 const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
 const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
@@ -66,6 +67,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -74,6 +76,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       });
       llmAdapter.registerProvider(openaiAdapter);
     } else if (provider.providerName === 'anthropic') {
@@ -122,7 +125,7 @@ async function initializeOrchestrator(
     llmAdapter,
   });
 
-  const mcpManager = new MCPManager({ configPath: CONFIG_PATH });
+  const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
   try {
     await mcpManager.initialize();
     for (const tool of mcpManager.getRegisteredTools()) {
@@ -153,6 +156,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -161,6 +165,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       });
       llmAdapter.registerProvider(openaiAdapter);
     } else if (provider.providerName === 'anthropic') {
@@ -211,6 +216,8 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
  */
 async function main(): Promise<void> {
   console.log('iceCoder starting...');
+
+  await ensureMcpConfigFile(CONFIG_PATH);
 
   // 1. 加载提供者配置
   const providers = await loadConfig();

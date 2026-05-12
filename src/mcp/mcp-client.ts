@@ -17,6 +17,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import type {
   MCPServerConfig,
   MCPToolDefinition,
@@ -28,8 +29,13 @@ import type {
 /** 请求超时（毫秒） */
 const REQUEST_TIMEOUT = 60_000;
 
-/** 初始化超时（毫秒） */
-const INIT_TIMEOUT = 30_000;
+/** 初始化超时（毫秒）；Puppeteer 等首次 npx 拉包可能较慢，可由 ICE_MCP_INIT_TIMEOUT_MS 覆盖 */
+const INIT_TIMEOUT = (() => {
+  const raw = process.env.ICE_MCP_INIT_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return 120_000;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 15_000 ? n : 120_000;
+})();
 
 /**
  * 单个 MCP Server 的客户端连接。
@@ -56,7 +62,12 @@ export class MCPClient {
    * 启动 MCP Server 进程并完成初始化握手。
    */
   async start(): Promise<void> {
-    const { command, args = [], env = {} } = this.config;
+    let { command, args = [], env = {} } = this.config;
+
+    // Windows：裸 `npx` 在非 shell 的 spawn 下常找不到，统一改为 npx.cmd
+    if (process.platform === 'win32' && /^npx$/i.test(path.basename(command, path.extname(command)))) {
+      command = 'npx.cmd';
+    }
 
     this.process = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -335,12 +346,17 @@ export class MCPClient {
     try {
       const msg = JSON.parse(body) as JsonRpcResponse;
 
-      // 响应消息（有 id）
+      // 响应消息（有 id）— 服务端可能以 number 或十进制 string 回显
       if (msg.id !== undefined && msg.id !== null) {
-        const pending = this.pendingRequests.get(msg.id);
+        const idNum = typeof msg.id === 'number'
+          ? msg.id
+          : typeof msg.id === 'string' && /^\d+$/.test(msg.id)
+            ? Number.parseInt(msg.id, 10)
+            : NaN;
+        const pending = Number.isFinite(idNum) ? this.pendingRequests.get(idNum) : undefined;
         if (pending) {
           clearTimeout(pending.timer);
-          this.pendingRequests.delete(msg.id);
+          this.pendingRequests.delete(idNum);
 
           if (msg.error) {
             pending.reject(new Error(`MCP error [${msg.error.code}]: ${msg.error.message}`));

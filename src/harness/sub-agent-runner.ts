@@ -9,6 +9,7 @@ import type { ToolCall, ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ChatFunction } from './types.js';
 import { normalizeMessages } from './context-assembler.js';
+import { getSubAgentTimeoutMsFromEnv } from './token-budget-config.js';
 
 /** 单次委派请求：任务描述与可选约束。 */
 export interface SubAgentRequest {
@@ -18,7 +19,7 @@ export interface SubAgentRequest {
   context?: string;
   /** 子循环最大轮次，默认 {@link DEFAULT_MAX_ROUNDS} */
   maxRounds?: number;
-  /** 子循环总超时（毫秒），默认 {@link DEFAULT_TIMEOUT_MS} */
+  /** 子循环总超时（毫秒）；未传则 {@link getSubAgentTimeoutMsFromEnv}（可用 ICE_SUBAGENT_TIMEOUT_MS） */
   timeoutMs?: number;
   /** 允许的 LLM 工具名；未传则用默认只读三件套 */
   tools?: string[];
@@ -53,8 +54,6 @@ interface SubAgentRunnerOptions {
 
 /** 子循环默认最大推理轮次 */
 const DEFAULT_MAX_ROUNDS = 10;
-/** 子循环默认总超时（毫秒） */
-const DEFAULT_TIMEOUT_MS = 60_000;
 /** MVP 默认只允许读文件、搜代码、列目录 */
 const DEFAULT_ALLOWED_TOOLS = new Set(['read_file', 'search_codebase', 'fs_operation']);
 /** 子代理侧单条工具结果字符上限（与 read 截断共用） */
@@ -206,7 +205,7 @@ export class SubAgentRunner {
     if (cached) return cached;
 
     const maxRounds = request.maxRounds ?? DEFAULT_MAX_ROUNDS;
-    const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeoutMs = request.timeoutMs ?? getSubAgentTimeoutMsFromEnv();
     const allowedTools = new Set(request.tools ?? [...DEFAULT_ALLOWED_TOOLS]);
     allowedTools.delete('delegate_to_subagent');
 

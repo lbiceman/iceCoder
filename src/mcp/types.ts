@@ -89,7 +89,7 @@ export interface MCPToolResult {
 /**
  * MCP 服务器运行时状态。
  */
-export type MCPServerStatus = 'starting' | 'ready' | 'error' | 'stopped';
+export type MCPServerStatus = 'starting' | 'ready' | 'error' | 'stopped' | 'disabled';
 
 /**
  * MCP 服务器运行时信息。
