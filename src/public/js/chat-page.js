@@ -112,6 +112,7 @@ window.ChatPage = (function () {
       elInput.value = '';
       UI.autoResizeInput();
       Cmd.hide();
+      resetTokenUsage();
       Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
       UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
       return;

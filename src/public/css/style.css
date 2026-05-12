@@ -751,7 +751,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   background: #c0392b;
 }
 
-/* 会话宠物指示器 — fixed，在 token 进度条上方；常驻显示（宠物 + 工作时气泡） */
+/* 会话宠物指示器 — fixed；上下文占用由宠物眼睛色相提示（无环形进度条） */
 /* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏宠物 */
 .session-pet-indicator {
   display: flex;

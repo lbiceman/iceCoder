@@ -1,16 +1,16 @@
 /**
  * 会话宠物指示器
- * 极简 NOMI 风格：固定黑底 + 白色胶囊眼睛 + 环形 token 进度条。
+ * 极简风格：固定黑底 + 胶囊眼睛（颜色随 token 用量变化）。
  * 不区分昼夜模式，始终黑底白字。
  * 眨眼：1-3 秒随机间隔，闭眼 150ms。
  *
  * 表情系统：20 种对外状态（+ 内部 blink 眨眼帧），按业务切换。
+ * 眼睛颜色：由 COLORS 数组按上下文 token 占用率（0%…100%）取色（无单独环形进度条）。
  */
 (function () {
   'use strict';
 
   var PET_SIZE = 120;
-  var RING_THICKNESS = 3;
   var EYE_W = 14;
   /** 胶囊眼竖向逻辑高度（非画布位置）；减小此值可缩矮眼睛形状 */
   var EYE_H = 18;
@@ -24,10 +24,36 @@
 
   var PET_BUBBLE_MAX_CHARS = 42;
 
-  // 固定颜色：黑底白眼睛
+  /** 眼睛色板：低占用靠前，高占用靠后；按 tokenPct∈[0,100] 均分到各档 */
+  var COLORS = [
+    '#FFFFFF',
+    '#FCD7E4',
+    '#88EDC7',
+    '#B8FCC8',
+    '#A7CBFD',
+    '#06BCFD',
+    '#F1A8B2',
+    '#E7CAF7',
+    '#FF7795',
+    '#ED0A6B',
+  ];
+
+  // 固定颜色：黑底；眼睛线色由上下文 token 占用率从 COLORS 取值（见 eyeColorForTokenPct）
   var BODY_BG = '#0a0a12';
-  var EYE_COLOR = '#ffffff';
+  var READ_GLASSES_STROKE = 'rgba(255,255,255,0.55)';
   var GLOW_COLOR = 'rgba(107,156,255,0.10)';
+
+  /** token 占用率 0…100 → COLORS 下标 */
+  function eyeColorForTokenPct(pct) {
+    var arr = COLORS;
+    if (!arr || arr.length === 0) return '#88edc7';
+    if (arr.length === 1) return arr[0];
+    var p = Math.max(0, Math.min(100, Number(pct) || 0));
+    var idx = Math.min(arr.length - 1, Math.floor((p / 100) * arr.length));
+    return arr[idx];
+  }
+
+  var EYE_COLOR = eyeColorForTokenPct(0);
 
   function clampBubbleLine(text) {
     if (text === undefined || text === null) return '';
@@ -44,7 +70,7 @@
   var DRAG_MARGIN = 8;
 
   function initPetDrag(rootEl, dragHandleEl) {
-    if (!rootEl || !dragHandleEl) return { afterShow: function () {} };
+    if (!rootEl || !dragHandleEl) return { afterShow: function () { } };
 
     var dragPointerId = null;
     var startClientX = 0;
@@ -507,7 +533,7 @@
     var lr = READ_LENS_DIA_PX / 2;
     var templeLen = 7.5;
     ctx.save();
-    ctx.strokeStyle = EYE_COLOR;
+    ctx.strokeStyle = READ_GLASSES_STROKE;
     ctx.lineWidth = 1.2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -629,23 +655,6 @@
       ctx.imageSmoothingQuality = 'high';
     }
 
-    function drawRing(cx, cy, radius, thickness, pct) {
-      if (!ctx || pct <= 0) return;
-      var startAngle = -Math.PI / 2;
-      var endAngle = startAngle + (Math.PI * 2 * Math.min(pct, 100) / 100);
-
-      var grad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
-      grad.addColorStop(0, '#5ee7df');
-      grad.addColorStop(1, '#b490ca');
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, startAngle, endAngle);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = thickness;
-      ctx.lineCap = 'round';
-      ctx.stroke();
-    }
-
     function drawFace(timestamp) {
       if (!ctx) return;
       var cx = PET_SIZE / 2;
@@ -658,9 +667,6 @@
       if (state === 'happy') scale *= 1.02;
       if (state === 'playful') scale *= 1 + Math.sin(timestamp / 350) * 0.012;
 
-      var ringRadius = PET_SIZE / 2 - RING_THICKNESS / 2;
-      drawRing(cx, cy + breath, ringRadius, RING_THICKNESS, tokenPct);
-
       ctx.save();
       ctx.translate(cx, cy);
       ctx.scale(scale, scale);
@@ -670,13 +676,13 @@
 
       // 外圈光晕
       ctx.beginPath();
-      ctx.arc(cx, bodyY, PET_SIZE / 2 - RING_THICKNESS - 2, 0, Math.PI * 2);
+      ctx.arc(cx, bodyY, PET_SIZE / 2 - 4, 0, Math.PI * 2);
       ctx.fillStyle = GLOW_COLOR;
       ctx.fill();
 
       // 机身：固定黑底
       ctx.beginPath();
-      ctx.arc(cx, bodyY, PET_SIZE / 2 - RING_THICKNESS - 6, 0, Math.PI * 2);
+      ctx.arc(cx, bodyY, PET_SIZE / 2 - 8, 0, Math.PI * 2);
       ctx.fillStyle = BODY_BG;
       ctx.fill();
 
@@ -797,6 +803,7 @@
       tokenMax = max || 0;
       tokenOutput = output || 0;
       tokenPct = tokenMax ? Math.min(100, Math.round((tokenUsed / tokenMax) * 100)) : 0;
+      EYE_COLOR = eyeColorForTokenPct(tokenPct);
       if (canvas) {
         canvas.title = '上下文: ' + tokenPct + '%' +
           (tokenMax ? ' (' + formatTokenCount(tokenUsed) + '/' + formatTokenCount(tokenMax) + ')' : '') +
