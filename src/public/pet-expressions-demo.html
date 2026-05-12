@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>会话宠物 · 表情联调</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-primary);
+      padding-bottom: 120px;
+    }
+    .demo-hint {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+      z-index: 101;
+    }
+    .pet-demo-panel {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-height: 42vh;
+      overflow-y: auto;
+      padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0));
+      background: var(--bg-nav, rgba(20, 22, 38, 0.92));
+      border-top: 1px solid var(--border-color);
+      z-index: 100;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-content: flex-start;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+    .pet-demo-btn {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-secondary, var(--bg-card));
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .pet-demo-btn:hover {
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+    .pet-demo-btn.active {
+      background: var(--accent-light, rgba(74, 125, 224, 0.15));
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <p class="demo-hint">共 20 种表情 · 点击下方按钮切换 · 当前：<strong id="state-label" style="color:var(--text-primary)">—</strong></p>
+  <div class="session-pet-indicator active" id="pet-root">
+    <div class="pet-bubble has-text" id="pet-bubble"></div>
+    <canvas class="pet-canvas" id="pet-canvas" width="120" height="120" role="img" aria-label="表情演示"></canvas>
+    <span class="status-turn" id="status-turn">表情联调</span>
+  </div>
+  <div class="pet-demo-panel" id="pet-demo-panel" role="group" aria-label="表情切换"></div>
+  <script src="/js/session-pet.js"></script>
+  <script>
+(function () {
+  var EXPRESSIONS = [
+    'idle',
+    'happy',
+    'thinking',
+    'working',
+    'confused',
+    'alert',
+    'anxious',
+    'rest',
+    'surprised',
+    'sad',
+    'angry',
+    'curious',
+    'dizzy',
+    'shy',
+    'love',
+    'weary',
+    'focused',
+    'read',
+    'determined',
+    'playful'
+  ];
+  var root = document.getElementById('pet-root');
+  var label = document.getElementById('state-label');
+  var panel = document.getElementById('pet-demo-panel');
+  var pet = window.SessionPet.create(root);
+  var currentBtn = null;
+
+  function selectState(name, btn) {
+    if (currentBtn) currentBtn.classList.remove('active');
+    currentBtn = btn || null;
+    if (btn) btn.classList.add('active');
+    pet.setState(name);
+    label.textContent = name;
+    pet.setBubbleText(name);
+  }
+
+  for (var i = 0; i < EXPRESSIONS.length; i++) {
+    (function (name) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pet-demo-btn';
+      btn.textContent = name;
+      btn.setAttribute('data-state', name);
+      btn.addEventListener('click', function () {
+        selectState(name, btn);
+      });
+      panel.appendChild(btn);
+    })(EXPRESSIONS[i]);
+  }
+
+  if (panel.firstChild) {
+    selectState('idle', panel.firstChild);
+  }
+})();
+  </script>
+</body>
+</html>

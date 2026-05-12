@@ -1,5 +1,0 @@
-{
-  "version": 2,
-  "comment": "states.<name>.patches 为 [row,col,0|1]。坐标为展开后逻辑网格 128×128（或由 32 设计坐标 ×4）。",
-  "states": {}
-}

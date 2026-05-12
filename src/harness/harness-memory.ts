@@ -796,7 +796,7 @@ export class HarnessMemoryIntegration {
         this.emptyRecallCooldown = 0;
       } else {
         // 空召回 → 累计计数，连续 3 次空召回后冷却 3 轮
-        emitMemoryStep(onStep, 'recall_empty');
+        emitMemoryStep(onStep, 'recall_empty', '未找到可注入的相关记忆');
         this.consecutiveEmptyRecalls++;
         if (this.consecutiveEmptyRecalls >= 3) {
           this.emptyRecallCooldown = 3;
