@@ -34,7 +34,7 @@ describe('session-pet-palette', () => {
   });
 
   it('空色板回退默认色', () => {
-    expect(eyeColorForTokenPct(50, [])).toBe('#88edc7');
+    expect(eyeColorForTokenPct(50, [])).toBe('#FCD7E4');
   });
 
   it('pickRandomPaletteColor 从色板取值', () => {

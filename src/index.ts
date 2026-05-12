@@ -42,6 +42,7 @@ import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 
 // 类型
 import type { ProviderConfig } from './web/types.js';
+import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
 
 const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
 const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
@@ -122,7 +123,7 @@ async function initializeOrchestrator(
     llmAdapter,
   });
 
-  const mcpManager = new MCPManager({ configPath: CONFIG_PATH });
+  const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
   try {
     await mcpManager.initialize();
     for (const tool of mcpManager.getRegisteredTools()) {
@@ -211,6 +212,8 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
  */
 async function main(): Promise<void> {
   console.log('iceCoder starting...');
+
+  await ensureMcpConfigFile(CONFIG_PATH);
 
   // 1. 加载提供者配置
   const providers = await loadConfig();

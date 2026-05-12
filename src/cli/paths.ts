@@ -81,6 +81,26 @@ export async function resolveDataPaths(): Promise<DataPaths> {
 
 // ── 默认配置文件内容 ──
 
+/** 与 data/config.example.json 一致的 MCP 占位（默认全部 disabled，避免误连网/误启进程） */
+export const MCP_SERVERS_TEMPLATE: Record<string, Record<string, unknown>> = {
+  memory: {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-memory'],
+    env: { MEMORY_FILE_PATH: 'data/mcp-memory.jsonl' },
+    disabled: true,
+  },
+  filesystem: {
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
+    disabled: true,
+  },
+  fetch: {
+    command: 'uvx',
+    args: ['mcp-server-fetch'],
+    disabled: true,
+  },
+};
+
 const DEFAULT_CONFIG = {
   providers: [
     {
@@ -96,7 +116,6 @@ const DEFAULT_CONFIG = {
       isDefault: true,
     },
   ],
-  mcpServers: {},
 };
 
 export const DEFAULT_SYSTEM_PROMPT = `你是 iceCoder，一个智能编程助手，具备读写文件、执行命令、搜索代码等工具能力。
@@ -104,6 +123,42 @@ export const DEFAULT_SYSTEM_PROMPT = `你是 iceCoder，一个智能编程助手
 核心原则：根据任务自主选用工具；修改代码前先看相关文件；完成后按需验证。
 
 自然语言由你与用户共同选择，无强制回复语种。`;
+
+/** MCP 独立配置文件路径（相对当前工作目录，可用 ICE_MCP_CONFIG_PATH 覆盖） */
+export function resolveMcpConfigPath(): string {
+  if (process.env.ICE_MCP_CONFIG_PATH?.trim()) {
+    return path.resolve(process.env.ICE_MCP_CONFIG_PATH.trim());
+  }
+  return path.join(process.cwd(), '.iceCoder', 'mcp.json');
+}
+
+/**
+ * 若不存在则创建 `.iceCoder/mcp.json`。
+ * 首次创建时：若 `mainConfigPath`（如 data/config.json）中仍有 `mcpServers`，则迁移至该文件；否则写入占位模板。
+ */
+export async function ensureMcpConfigFile(mainConfigPath?: string): Promise<void> {
+  const mcpPath = resolveMcpConfigPath();
+  const dir = path.dirname(mcpPath);
+  await fs.mkdir(dir, { recursive: true });
+  if (await exists(mcpPath)) return;
+
+  if (mainConfigPath && (await exists(mainConfigPath))) {
+    try {
+      const raw = await fs.readFile(mainConfigPath, 'utf-8');
+      const parsed = JSON.parse(raw) as { mcpServers?: Record<string, Record<string, unknown>> };
+      if (parsed.mcpServers && typeof parsed.mcpServers === 'object' && Object.keys(parsed.mcpServers).length > 0) {
+        await fs.writeFile(mcpPath, `${JSON.stringify({ mcpServers: parsed.mcpServers }, null, 2)}\n`, 'utf-8');
+        console.log(`[iceCoder] 已从主配置迁移 mcpServers 至 ${mcpPath}`);
+        return;
+      }
+    } catch {
+      /* 使用下方占位 */
+    }
+  }
+
+  const initial = { mcpServers: { ...MCP_SERVERS_TEMPLATE } };
+  await fs.writeFile(mcpPath, `${JSON.stringify(initial, null, 2)}\n`, 'utf-8');
+}
 
 /**
  * 首次运行初始化：创建 ~/.iceCoder/ 及默认配置。
@@ -123,6 +178,8 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
     await fs.writeFile(paths.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
     isFirstRun = true;
   }
+
+  await ensureMcpConfigFile(paths.configPath);
 
   // 创建默认系统提示词
   if (!(await exists(paths.systemPromptPath))) {

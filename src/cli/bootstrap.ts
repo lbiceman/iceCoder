@@ -22,7 +22,7 @@ import { getModelMaxOutputTokens } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager } from '../mcp/index.js';
-import { resolveDataPaths, ensureDataDir, type DataPaths } from './paths.js';
+import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ProviderConfig } from '../web/types.js';
@@ -167,7 +167,7 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   });
 
   // 初始化 MCP
-  const mcpManager = new MCPManager({ configPath: paths.configPath });
+  const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
   try {
     await mcpManager.initialize();
     for (const tool of mcpManager.getRegisteredTools()) {

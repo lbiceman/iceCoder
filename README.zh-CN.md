@@ -1,10 +1,10 @@
 ﻿# iceCoder 架构与运行时说明
 
-iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测骨架组合在一起，目标是接近 Claude Code / Codex CLI 等工具在**可靠执行工程任务**上的表现。
+iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测骨架组合在一起，并提供 **CLI、HTTP API、WebSocket 聊天与静态 Web 前端**（可选接入 **MCP** 工具），目标是接近 Claude Code / Codex CLI 等工具在**可靠执行工程任务**上的表现。
+
+**技术栈：** Node.js 18+、TypeScript、Express（生产环境托管 SPA）、Vite（开发态独立端口）、WebSocket、Vitest。
 
 **已从代码库移除：** 早期的**多阶段流水线**及按阶段注册的 **Agent** 抽象（如 `BaseAgent`、`executePipeline`、阶段报告生成等）。当前 `Orchestrator` 仅聚合 `FileParser` 与 `LLMAdapter`，供 WebSocket 聊天等入口共享实例。
-
-[English](./README.md) | [后续优化计划](./nextWork.md)
 
 [English](./README.md) | [后续优化计划](./nextWork.md)
 
@@ -14,7 +14,7 @@ iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harnes
 
 当前已经完成 Runtime P0/P1 的核心整改，重点解决“该干活时不干活”“改完不验证”“权限规则不生效”“压缩丢短指令”等问题。
 
-已验证基线：
+验证命令：
 
 ```bash
 npx tsc --noEmit
@@ -22,10 +22,7 @@ npm test
 npm run eval:agent
 ```
 
-当前验证结果（请以本机为准）：
-
-- 32 个测试文件通过
-- 531 条测试通过
+**测试基线请以 `npm test` 终端输出为准。** 用例分布在 `test/**/*.test.ts`，规模约为 **30+ 个测试文件、550+ 条用例**（随提交增减会变化）。
 
 ---
 
@@ -57,6 +54,10 @@ CLI / Web / Remote
 | `src/memory/file-memory/*` | 文件化长期记忆完整生命周期 |
 | `src/tools/*` | 工具注册、执行、元数据、权限辅助 |
 | `src/llm/*` | OpenAI / Anthropic 兼容适配器 |
+| `src/mcp/*` | MCP 子进程客户端，将外部 Server 工具并入 `ToolRegistry` |
+| `src/web/*` | Express、`/api/*` 路由、统一聊天 WebSocket |
+| `src/public/*` | Vite 前端根目录（聊天页、配置 UI、**会话宠物** Canvas 与桥接脚本等） |
+| `src/types/runtime-snapshot.ts` | 会话笔记中 `icecoder-runtime` 块的版本化 JSON 模型 |
 
 ---
 
@@ -117,6 +118,10 @@ while running:
 - `SubAgentRunner` — 带超时和轮次限制的隔离消息循环
 - `delegate_to_subagent` — 暴露给模型委派探索任务的工具
 - `formatSubAgentResult()` — 将结构化结果格式化为主会话可读的工具结果
+
+### 3.3 工具规划提示（Tool Planner）
+
+对首轮即判定为**可执行工程任务**的对话，Harness 可注入 **Tool Planner**：依据 `taskState.intent`（如 debug / edit / test）给出 **2～3 个优先建议工具名**（映射表见 `src/harness/tool-plan-intent-map.ts`，逻辑见 `src/harness/tool-planner.ts`），减少模型开场「只寒暄不调用工具」的情况。
 
 ---
 
@@ -377,7 +382,69 @@ ICE_CONTEXT_WINDOW
 
 ---
 
-## 9. 运行时评测（eval 骨架）
+## 9. Web 服务、MCP 与配置
+
+| 组件 | 默认端口 | 说明 |
+|------|----------|------|
+| Express（`src/index.ts`） | **1024**（`PORT`） | REST API；生产环境同时托管 `dist/public` 静态 SPA |
+| Vite 开发服务器（`vite.config.ts`） | **1025** | 开发态 UI；`/api` 与 WS 代理到 `localhost:1024` |
+
+主要 API 前缀：`/api/config`、`/api/tools`、`/api/remote`、`/api/sessions`、`/api/chat/upload`、`/api/memory/*`。提供者配置默认读取 **`data/config.json`**（可参考 `data/config.example.json`）；`src/index.ts` 支持对配置文件 **watch 热重载** 提供者。
+
+### 会话宠物（Web 聊天指示器）
+
+**仅 Web 聊天页**：在 `src/public` 中用 Canvas 绘制的「会话状态宠物」，用于把 **轮次、思考、工具进度、记忆提示** 等映射成表情与气泡，**不修改** Harness 与后端协议逻辑。
+
+| 方面 | 说明 |
+|------|------|
+| **外观** | 约 120×120 逻辑像素、黑底胶囊眼；**眼睛颜色**在页面加载时从 `session-pet-palette.js` 色板随机选取，与 token 百分比无关（纯装饰）。 |
+| **外圈圆环** | 自顶端顺时针，表示**上下文 / token 占用**大致比例（绿→黄→红渐变）。 |
+| **表情** | 对外约 **20** 种状态（含眨眼等），由 `chat-pet-bridge.js` 根据 WebSocket 推送的步骤事件（与 `HarnessStepEvent` 对应）在 `chat-page.js` 中更新。 |
+| **交互** | 可拖动改位置，位置存 `localStorage`（键 `ice-session-pet-position`）；**双击**恢复默认摆放；Canvas 的无障碍文案由 `buildSessionPetCanvasAriaLabel` 生成。 |
+| **相关文件** | `src/public/js/session-pet.js`、`session-pet-palette.js`、`chat-pet-bridge.js`；样式在 `src/public/css/style.css`；入口侧在 `chat-page.js`、`main.js`。 |
+| **联调页** | `src/public/pet-expressions-demo.html` 与 `pet-expressions-demo.js`，用于手动切换表情验收。 |
+| **测试** | `test/public/session-pet-palette.test.ts`、`session-pet-expression-cycle.test.ts`。 |
+
+**CLI / 纯终端模式没有宠物**；它是 SPA 聊天的可选视觉反馈，与核心运行时解耦。
+
+### MCP
+
+`src/mcp/mcp-manager.ts` 从**项目工作目录**下的 **`.iceCoder/mcp.json`** 读取顶层 **`mcpServers`**（可用环境变量 **`ICE_MCP_CONFIG_PATH`** 指向其他文件）。为每个启用的 Server 拉起子进程并把其工具注册进主 **`ToolRegistry`**（工具名形如 `mcp_服务器名_工具名`）。初始化失败会打日志但不阻断核心服务。模板见 **`.iceCoder/mcp.example.json`**。命令行：`iceCoder mcp`。
+
+**说明：** LLM 提供者仍在 `data/config.json`（或 `ICE_CONFIG_PATH`）；MCP 与主配置已拆分。
+
+### 常用环境变量
+
+| 变量 | 作用 |
+|------|------|
+| `ICE_CONFIG_PATH` | 配置 JSON 路径（默认 `data/config.json`） |
+| `ICE_OUTPUT_DIR` | 通用输出目录（默认 `output`） |
+| `ICE_SESSIONS_DIR` | 会话目录（默认 `data/sessions`） |
+| `PORT` | HTTP 端口（默认 `1024`） |
+| `NODE_ENV` | `production` 时静态资源与 SPA 回退行为按生产处理 |
+| `ICE_CONTEXT_WINDOW` | 覆盖上下文窗口上限 |
+| `ICE_MCP_CONFIG_PATH` | 可选：MCP 专用 JSON 的绝对路径（默认 `<运行目录>/.iceCoder/mcp.json`） |
+| `ICE_MCP_INIT_TIMEOUT_MS` | MCP 握手 `initialize` 超时（毫秒，默认 `120000`；Puppeteer 首次 `npx` 拉包过慢时可加大） |
+
+### 仓库目录（摘要）
+
+```text
+src/cli/          CLI 与 bootstrap
+src/core/         Orchestrator
+src/harness/      Harness、压缩、子代理、Tool Planner、任务/仓库状态
+src/memory/       文件化记忆、会话笔记、Dream、淘汰
+src/tools/        内置工具与执行器
+src/mcp/          MCP 管理
+src/web/          Express、路由、WebSocket
+src/public/       前端（Vite root）：聊天页、会话宠物 Canvas/桥接、静态资源
+src/types/        共享类型（含运行时快照 schema）
+test/             Vitest
+data/             配置与会话数据
+```
+
+---
+
+## 10. 运行时评测（eval 骨架）
 
 `npm run eval:agent` 为**历史脚本名**；当前提供的是最小 eval 骨架（指标名与 case 分类），尚未实现完整判分 Runner。
 
@@ -407,7 +474,7 @@ npm run eval:agent
 
 ---
 
-## 10. 开发与验证
+## 11. 开发与验证
 
 ```bash
 npm install
@@ -427,27 +494,29 @@ npx tsx src/cli/index.ts run "修复失败测试"
 
 ---
 
-## 11. 会话压缩与恢复（Runtime 持久化）
+## 12. 会话压缩与恢复（Runtime 持久化）
 
 每次会话笔记（`session-notes.md`）在 **Runtime Evidence (auto)** 一节中除人类可读摘要外，会写入 fenced 块 \`\`\`icecoder-runtime：内含 `TaskState` 与 `RepoContext` 的结构化 JSON（带体积上限）。**续聊且已有消息历史时**，Harness 会优先从该块 **`applySnapshot` 到内存**，从而在进程或页面重载后仍能恢复目标、阶段、已读/已改文件与验证状态，而不必仅靠自然语言猜测。
 
 持久化 JSON 的 **schema**（`PersistedRuntimeV1`、`TaskStateSnapshot`、`RepoContextSnapshot` 等）统一定义在 **`src/types/runtime-snapshot.ts`**：`session-memory` 只依赖该公共模块，与 `task-state` / `repo-context` 实现类解耦，避免 memory 层反向引用 harness。
 
-首轮若判定为可执行的工程任务，会向模型注入 **Tool Planner**：根据 `taskState.intent`（如 debug / edit / test）附上 **建议优先调用的 2～3 个工具名**（映射表见 `src/harness/tool-plan-intent-map.ts`），减少犹豫性开场。
+（首轮任务时的 **Tool Planner** 行为见上文 §3.3。）
 
 ---
 
-## 12. 当前仍需优化
+## 13. 当前仍需优化
 
 后续工作主要包括：
 
 1. Memory v2 结构化分级：hard_rule / project_fact / preference / observation / session_state。
-2. 正式 **Eval Runner**：真实执行、判分、输出趋势。
-3. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
+2. 压缩与会话笔记的进一步耦合（如压缩前后 token 统计、恢复上下文预算裁剪等）——**结构化 `icecoder-runtime` 快照已可写入 `session-notes.md`**，细节见 `nextWork.md`。
+3. 正式 **Eval Runner**：真实执行、判分、输出趋势。
+4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
+5. 在现有 **Tool Planner** 之上，加强按失败模式动态规划与恢复策略。
 
 ---
 
-## 13. 项目目标
+## 14. 项目目标
 
 iceCoder 的目标不是“回答更像聊天机器人”，而是：
 

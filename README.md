@@ -1,6 +1,8 @@
 ﻿# iceCoder
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, file-based long-term memory, session memory for compaction recovery, prompt assembly, and CLI / Web / Remote entrypoints.
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
+
+**Stack:** Node.js 18+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
 The goal is not only to chat with a model, but to run a **software-engineering assistant** that can understand a task, inspect a repository, edit files, run verification, recover from failures, preserve useful memory, and continue long sessions without losing state.
 
@@ -35,10 +37,7 @@ npm test
 npm run eval:agent
 ```
 
-Current verified baseline (run locally after changes):
-
-- 32 test files passed
-- 531 tests passed
+Treat **`npm test`** as the source of truth for counts and pass/fail. The suite is organized under `test/**/*.test.ts` (on the order of **three dozen** files and **550+** examples—numbers drift as tests are added).
 
 ---
 
@@ -104,6 +103,10 @@ Key runtime protections:
 - Repeated failed tool signature detection
 - Consecutive failure circuit breaker
 - Context compaction and post-compaction Runtime Recovery Context
+
+### Tool planner
+
+On the first user turn of an executable engineering task, the Harness may inject a **tool planner** hint: a short list of **2–3 suggested tool names** derived from `taskState.intent` (see `src/harness/tool-plan-intent-map.ts` and `src/harness/tool-planner.ts`). This reduces hesitant openings where the model chats instead of acting.
 
 ---
 
@@ -299,6 +302,12 @@ ICE_CONTEXT_WINDOW
   -> 128k default
 ```
 
+### Runtime snapshot in session notes
+
+Structured **`TaskState`** and **`RepoContext`** can be persisted into `data/sessions/session-notes.md` inside a fenced block with language tag **`icecoder-runtime`** (JSON payload). Schema types live in **`src/types/runtime-snapshot.ts`** (`PersistedRuntimeV1`, etc.) so session-memory does not depend on harness implementation classes.
+
+When a chat session **resumes with existing message history**, the Harness can **`applySnapshot`** from that block so process restarts or UI reloads still restore goal, phase, files touched, and verification status—not only narrative session notes.
+
 ---
 
 ## Task State and Repo Context
@@ -356,6 +365,79 @@ See `nextWork.md` for the next implementation steps.
 
 ---
 
+## Web app, API, and ports
+
+- **HTTP server** (`src/index.ts`, `src/web/server.ts`): default port **`1024`** (`PORT` env). Serves the built SPA static assets in production; in development it still hosts API routes while the Vite dev server serves the UI.
+- **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
+- **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients can use `/api/remote` and related routes.
+- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry, files, export).
+- **Frontend** lives under `src/public/` (e.g. chat UI scripts, session pet indicator). Production build output: `dist/public/`.
+
+LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
+
+### Session pet (Web UI indicator)
+
+The **chat page** embeds an optional **session pet**: a small canvas-based character that reflects runtime activity **without** changing Harness or backend logic.
+
+| | |
+|---|---|
+| **Rendering** | ~120×120 logical px, dark body, capsule eyes; eye color is picked once per load from `session-pet-palette.js` (decorative, not tied to token %). |
+| **Token ring** | Outer arc from top, clockwise — approximate **context / token usage** ratio (green → yellow → red). |
+| **Expressions** | Many (~20) named visual states (e.g. thinking, idle, tool/memory hints) driven by **`ChatPetBridge`** from WebSocket `HarnessStepEvent`-style updates in `chat-page.js`. |
+| **Interaction** | Drag to reposition (saved under `localStorage` key `ice-session-pet-position`); double-click resets placement. Canvas `aria-label` is built via `buildSessionPetCanvasAriaLabel`. |
+| **Key files** | `src/public/js/session-pet.js`, `session-pet-palette.js`, `chat-pet-bridge.js`; styles under `src/public/css/style.css`; wired in `chat-page.js` / `main.js`. |
+| **Demo** | `src/public/pet-expressions-demo.html` + `pet-expressions-demo.js` for manual expression checks. |
+| **Tests** | `test/public/session-pet-palette.test.ts`, `session-pet-expression-cycle.test.ts`. |
+
+CLI-only workflows do **not** include the pet; it is a **browser UX** affordance for the SPA chat.
+
+---
+
+## MCP (Model Context Protocol)
+
+`src/mcp/mcp-manager.ts` reads **`mcpServers`** from **`.iceCoder/mcp.json`** under the current working directory (override with **`ICE_MCP_CONFIG_PATH`**). Shape matches common MCP configs: top-level `mcpServers` object. When a server starts successfully, its tools are **registered into the main `ToolRegistry`** alongside builtins (prefixed `mcp_{serverName}_{toolName}`). Failures are logged but do not block core startup. See **`.iceCoder/mcp.example.json`** for a template. CLI: `iceCoder mcp` for status.
+
+**Note:** LLM provider settings stay in `data/config.json` (or `ICE_CONFIG_PATH`); MCP is intentionally separate.
+
+---
+
+## Configuration and environment variables
+
+| Variable | Role |
+|----------|------|
+| `ICE_CONFIG_PATH` | Path to provider + MCP config JSON (default `data/config.json`) |
+| `ICE_OUTPUT_DIR` | General output directory (default `output`) |
+| `ICE_SESSIONS_DIR` | Session data directory (default `data/sessions`) |
+| `PORT` | HTTP/API port (default `1024`) |
+| `NODE_ENV` | `production` enables production static-SPA behavior in `createServer` |
+| `ICE_CONTEXT_WINDOW` | Override context window size (see compaction section) |
+| `ICE_MCP_CONFIG_PATH` | Optional absolute path to MCP JSON (default: `<cwd>/.iceCoder/mcp.json`) |
+| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` timeout in ms (default `120000`; increase if Puppeteer or `npx` cold install exceeds it) |
+
+---
+
+## Repository layout (concise)
+
+```text
+src/
+  cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
+  core/             # Orchestrator (shared file parser + LLM adapter)
+  harness/          # Harness loop, compaction, task/repo state, sub-agent, tool planner
+  llm/              # OpenAI / Anthropic adapters
+  memory/file-memory/  # File-based memory, session notes, dream, eviction
+  parser/           # FileParser strategies (HTML, Office, XMind)
+  prompts/          # Prompt assembly
+  tools/            # Builtin tools, registry, executor
+  mcp/              # MCP client manager
+  web/              # Express server, routes, WebSocket chat
+  public/           # Vite root: chat UI, session pet (canvas + bridge), static assets
+  types/            # Shared types (e.g. runtime snapshot schema)
+test/               # Vitest suites mirroring src areas
+data/               # config, sessions, optional MCP memory file
+```
+
+---
+
 ## Development
 
 ```bash
@@ -368,11 +450,14 @@ npm run eval:agent
 Common commands:
 
 ```bash
-npm run dev
-npm run dev:api
-npm run dev:web
+npm run dev          # API + Vite (project script may include tunnel; see package.json)
+npm run dev:api      # API only (tsx src/index.ts)
+npm run dev:web      # Vite only (port 1025)
+npx tsx src/cli/index.ts web --port 1024
 npx tsx src/cli/index.ts run "fix failing tests"
 ```
+
+Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js` (see `package.json` `bin`).
 
 ---
 
@@ -381,7 +466,7 @@ npx tsx src/cli/index.ts run "fix failing tests"
 The remaining work is tracked in `nextWork.md`. The next high-impact items are:
 
 1. Memory v2 structured levels and conflict arbitration
-2. persisted Runtime Recovery Context in session notes
+2. Deeper compaction/session-notes integration (token accounting, tighter recovery budget units) — structured `icecoder-runtime` snapshots already exist; see `nextWork.md`
 3. real eval runner with pass/fail scoring
 4. telemetry persistence for runtime metrics
-5. model-aware tool planning and recovery strategies
+5. Richer model-aware planning and failure recovery strategies (beyond the current intent-based tool planner)

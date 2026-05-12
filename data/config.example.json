@@ -13,25 +13,5 @@
       "maxContextTokens": 131072,
       "isDefault": true
     }
-  ],
-  "mcpServers": {
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "env": {
-        "MEMORY_FILE_PATH": "data/mcp-memory.jsonl"
-      },
-      "disabled": true
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "disabled": true
-    },
-    "fetch": {
-      "command": "uvx",
-      "args": ["mcp-server-fetch"],
-      "disabled": true
-    }
-  }
+  ]
 }

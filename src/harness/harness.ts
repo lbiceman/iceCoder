@@ -150,6 +150,7 @@ function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('<context-summary>')
     || trimmed.startsWith('[System Runtime State]')
     || trimmed.startsWith('[System')
+    || trimmed.startsWith('[Runtime Tool Planner]')
     || trimmed.startsWith('Please provide a final summary answer based on the tool call results above.')
     || trimmed.startsWith('Continue directly');
 }
