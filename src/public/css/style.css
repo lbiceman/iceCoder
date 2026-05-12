@@ -751,7 +751,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   background: #c0392b;
 }
 
-/* 会话宠物指示器 — fixed；上下文占用由宠物眼睛色相提示（无环形进度条） */
+/* 会话宠物指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
 /* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏宠物 */
 .session-pet-indicator {
   display: flex;
@@ -853,6 +853,28 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   opacity: 0.85;
+}
+.pet-token-hint {
+  display: block;
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--text-muted);
+  opacity: 0.9;
+  text-align: center;
+  max-width: min(31vw, 148px);
+  margin: 0;
+  pointer-events: none;
+}
+.session-pet-indicator__token-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   .pet-canvas.pet-wobble {

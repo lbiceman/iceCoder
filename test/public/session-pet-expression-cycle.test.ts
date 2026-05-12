@@ -3,6 +3,11 @@
  * 与 src/public/js/session-pet.js 中 EXPRESSIONS 键一致（不含 blink，blink 由内部眨眼定时器驱动）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** 与 SessionPet EXPRESSIONS 对外键一致（不含 blink） */
 export const PET_EXPRESSION_CYCLE = [
@@ -29,6 +34,17 @@ export const PET_EXPRESSION_CYCLE = [
 ] as const;
 
 export type PetExpressionId = (typeof PET_EXPRESSION_CYCLE)[number];
+
+describe('PET_EXPRESSION_CYCLE 与 session-pet.js 同步', () => {
+  it('对外表情键在 session-pet.js 的 EXPRESSIONS 映射表中存在', () => {
+    var sessionPetPath = path.join(__dirname, '../../src/public/js/session-pet.js');
+    var src = readFileSync(sessionPetPath, 'utf-8');
+    for (var i = 0; i < PET_EXPRESSION_CYCLE.length; i++) {
+      var id = PET_EXPRESSION_CYCLE[i];
+      expect(src).toMatch(new RegExp('\\b' + id + '\\s*:\\s*expression'));
+    }
+  });
+});
 
 /** 立即应用首项，之后每 intervalMs 切下一项；返回 stop 清除定时器 */
 export function createPetExpressionCycle(
