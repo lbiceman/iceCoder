@@ -255,7 +255,8 @@ window.ConfigPage = (function () {
         },
         isDefault: i === defaultIndex,
         supportsVision: original.supportsVision,
-        maxContextTokens: original.maxContextTokens
+        maxContextTokens: original.maxContextTokens,
+        requestTimeoutMs: original.requestTimeoutMs
       });
     }
     return result;

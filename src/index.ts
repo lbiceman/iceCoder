@@ -30,7 +30,7 @@ import { MCPManager } from './mcp/index.js';
 
 // Web 层
 import { createServer, startServer } from './web/server.js';
-import { createConfigRouter, getModelMaxOutputTokens } from './web/routes/config.js';
+import { createConfigRouter, getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from './web/routes/config.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
 import { attachChatWebSocket, cleanupChatResources } from './web/chat-ws.js';
@@ -67,6 +67,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -75,6 +76,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       });
       llmAdapter.registerProvider(openaiAdapter);
     } else if (provider.providerName === 'anthropic') {
@@ -154,6 +156,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -162,6 +165,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       });
       llmAdapter.registerProvider(openaiAdapter);
     } else if (provider.providerName === 'anthropic') {

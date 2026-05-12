@@ -11,6 +11,7 @@
         "maxTokens": 8192
       },
       "maxContextTokens": 131072,
+      "requestTimeoutMs": 180000,
       "isDefault": true
     }
   ]

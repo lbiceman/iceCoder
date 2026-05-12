@@ -35,9 +35,24 @@ function maskApiKey(apiKey: string): string {
 }
 
 /**
- * 验证单个提供者配置。
- * 如果无效返回错误消息，有效则返回 null。
+ * 解析 OpenAI 兼容提供者的单次请求超时（毫秒）。
+ * 优先级：provider.requestTimeoutMs → ICE_OPENAI_REQUEST_TIMEOUT_MS → undefined（由适配器默认 120s 处理）。
  */
+export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number | undefined {
+  if (
+    typeof provider.requestTimeoutMs === 'number' &&
+    Number.isFinite(provider.requestTimeoutMs) &&
+    provider.requestTimeoutMs > 0
+  ) {
+    return Math.floor(provider.requestTimeoutMs);
+  }
+  const raw = process.env.ICE_OPENAI_REQUEST_TIMEOUT_MS?.trim();
+  if (!raw) return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** 验证单个提供者配置：无效返回错误文案，合法返回 null */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
     return 'API URL is required and cannot be empty';

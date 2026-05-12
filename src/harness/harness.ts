@@ -68,7 +68,7 @@ const LLM_RETRY_MAX_DELAY = 2000;
 /** 工具执行阶段推给前端的简短说明（降低「长时间无反馈」焦虑） */
 function toolExecutionUserHint(toolName: string): string {
   const hints: Record<string, string> = {
-    read_file: '正在读取文件（大文件将自动截断，可按提示用 offset/limit 续读）…',
+    read_file: '正在读取文件（大文件将自动截断）…',
     edit_file: '正在编辑文件, 请稍后...',
     search_codebase: '正在搜索代码库，可能需要几秒…',
     parse_document: '正在解析文档，较大文件可能较慢…',
@@ -189,7 +189,7 @@ function isActionableToolRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
 
-  const isActionable = /修(复|好|改)|修改|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|提交|创建.*pr/i.test(t)
+  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|提交|创建.*pr/i.test(t)
     || /\b(fix|debug|investigate|implement|modify|edit|update|refactor|search|read|create|delete|commit|check)\b/i.test(t)
     || /\b(run|execute)\s+\S+/i.test(t)
     || /\b(test|verify)\s+\S+|\S+\s+(tests?|verification)\b/i.test(t);
