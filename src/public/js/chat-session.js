@@ -140,14 +140,21 @@ window.ChatSession = (function () {
     saveSessionMessages();
   }
 
-  function clearMessages(chatWs) {
+  function clearMessages(transport) {
     messages = [];
     toolTraces = {};
     currentToolBatch = [];
     lastSessionSyncSig = '';
     saveMessages();
-    if (chatWs && chatWs.readyState === WebSocket.OPEN) {
-      chatWs.send(JSON.stringify({ type: 'clear_session' }));
+    if (!transport || typeof transport.send !== 'function') return;
+    // 原生 WebSocket：send 只接受字符串
+    if (transport.readyState !== undefined) {
+      if (transport.readyState === WebSocket.OPEN) {
+        transport.send(JSON.stringify({ type: 'clear_session' }));
+      }
+    } else {
+      // ChatWebSocket 适配器 { send: WS.send }，内部已检查 OPEN 并 JSON 序列化
+      transport.send({ type: 'clear_session' });
     }
   }
 
