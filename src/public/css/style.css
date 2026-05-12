@@ -14,43 +14,51 @@
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
-/* ── Dark Theme (default) ── */
+/* ── Dark Theme (default): 略提亮蓝灰底 + 天蓝 accent ── */
 [data-theme="dark"] {
-  --bg-primary: #10112a;
-  --bg-secondary: #171838;
-  --bg-card: #1e1f42;
-  --bg-input: #1a1b3a;
-  --bg-nav: rgba(16, 17, 42, 0.96);
-  --bg-hover: rgba(255, 255, 255, 0.07);
+  --bg-primary: #1b2030;
+  --bg-secondary: #242a3a;
+  --bg-card: #2d3447;
+  --bg-input: #282f42;
+  --bg-nav: rgba(27, 32, 48, 0.94);
+  --bg-hover: rgba(255, 255, 255, 0.09);
 
-  --text-primary: #ededf5;
-  --text-secondary: #a8a8c8;
-  --text-muted: #7e7ea0;
+  --text-primary: #f2f4fa;
+  --text-secondary: #b9c0d4;
+  --text-muted: #8b93ab;
 
-  --border-color: #2e2e58;
-  --border-light: #262650;
+  --border-color: #404a62;
+  --border-light: #363e54;
 
-  --accent: #6b9cff;
-  --accent-hover: #5a8bf0;
-  --accent-light: rgba(107, 156, 255, 0.14);
-  --accent-glow: rgba(107, 156, 255, 0.22);
+  --accent: #7ec8ff;
+  --accent-hover: #a3d9ff;
+  --accent-light: rgba(126, 200, 255, 0.18);
+  --accent-glow: rgba(126, 200, 255, 0.28);
 
-  --success: #3ee0a5;
-  --success-light: rgba(62, 224, 165, 0.14);
-  --warning: #fcc63a;
-  --warning-light: rgba(252, 198, 58, 0.14);
-  --danger: #ff8080;
-  --danger-light: rgba(255, 128, 128, 0.12);
+  /* 右下角发送：单独降亮，不与导航/链接强 accent 同色 */
+  --btn-send-bg: #4f84c9;
+  --btn-send-hover: #5f94d6;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.45);
+  /* 输入聚焦：弱化冷色描边光晕（略偏灰蓝，与对话框一体） */
+  --focus-ring-color: #7388ab;
+  --focus-ring-glow: rgba(115, 136, 171, 0.32);
 
-  --msg-user-bg: #5b8def;
-  --msg-agent-bg: #1e1f42;
-  --msg-agent-border: #2e2e58;
+  --success: #5ce9ae;
+  --success-light: rgba(92, 233, 174, 0.16);
+  --warning: #ffd166;
+  --warning-light: rgba(255, 209, 102, 0.16);
+  --danger: #ff9d9d;
+  --danger-light: rgba(255, 157, 157, 0.14);
 
-  --pet-body: #e8e8f2;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.22);
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.36);
+
+  --msg-user-bg: #5aa8f0;
+  --msg-agent-bg: var(--bg-card);
+  --msg-agent-border: var(--border-color);
+
+  --pet-body: #eceef7;
 }
 
 /* ── Light Theme ── */
@@ -346,8 +354,8 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--focus-ring-color, var(--accent));
+  box-shadow: 0 0 0 3px var(--focus-ring-glow, var(--accent-glow));
 }
 .form-group input.error { border-color: var(--danger); }
 .form-group .error-msg { color: var(--danger); font-size: 12px; margin-top: 2px; }
@@ -663,8 +671,8 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 }
 .input-wrapper textarea:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--focus-ring-color, var(--accent));
+  box-shadow: 0 0 0 3px var(--focus-ring-glow, var(--accent-glow));
 }
 
 /* Command dropdown */
@@ -727,13 +735,13 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 }
 
 .btn-send {
-  background: var(--accent);
+  background: var(--btn-send-bg, var(--accent));
   color: #fff;
   border-color: transparent;
   border-radius: var(--radius);
 }
 .btn-send:hover {
-  background: var(--accent-hover);
+  background: var(--btn-send-hover, var(--accent-hover));
   color: #fff;
 }
 .btn-send:disabled {
@@ -746,9 +754,6 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   border-color: transparent;
   font-size: 14px;
   line-height: 1;
-}
-.btn-send.btn-stop:hover {
-  background: #c0392b;
 }
 
 /* 会话宠物指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
