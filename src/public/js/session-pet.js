@@ -891,8 +891,7 @@ import {
           '%' +
           (tokenMax ? ' (' + usedL + '/' + maxL + ')' : '') +
           ' | 本轮输出: ' +
-          outL +
-          ' | 圆环示占用';
+          outL;
         canvas.setAttribute(
           'aria-label',
           buildSessionPetCanvasAriaLabel({

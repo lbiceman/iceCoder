@@ -23,6 +23,8 @@ window.ChatPage = (function () {
   var isStreaming = false;
   var userStopped = false;
   var streamFinalized = false;
+  /** 本轮是否收到过流式增量（用于区分 stream_end + response 双包时的重复追加） */
+  var streamChunksReceived = false;
   var remoteMode = false;
   var remoteToken = null;
 
@@ -195,6 +197,7 @@ window.ChatPage = (function () {
     Cmd.hide();
     userStopped = false;
     streamFinalized = false;
+    streamChunksReceived = false;
     Pet.showThinking(!!uploadedFile || msgImages.length > 0);
 
     var msgText = text || '';
@@ -244,6 +247,7 @@ window.ChatPage = (function () {
 
     isStreaming = false;
     streamFinalized = false;
+    streamChunksReceived = false;
     UI.setStreamingState(false);
     WS.setProcessing(false);
     Session.saveMessages();
@@ -265,6 +269,7 @@ window.ChatPage = (function () {
 
   function onWsStream(data) {
     if (userStopped) return;
+    streamChunksReceived = true;
     if (!isStreaming) {
       isStreaming = true;
       UI.setStreamingState(true);
@@ -276,9 +281,11 @@ window.ChatPage = (function () {
   function onWsStreamEnd() {
     if (!userStopped) {
       UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    } else {
-      // 用户已停止，清理残留状态
+      if (streamChunksReceived) {
+        streamFinalized = true;
+      }
     }
+    streamChunksReceived = false;
     isStreaming = false;
     UI.setStreamingState(false);
   }
