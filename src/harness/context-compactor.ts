@@ -11,8 +11,8 @@
  * - LLM 路径（compact）：五层递进，可选 LLM 精炼
  *
  * 五层压缩：
- * 1. snip — 裁剪冗余段落（重复的 system-reminder、context-summary）
- * 2. microcompact — 压缩旧工具调用细节（文件操作结果保留完整）
+ * 1. snip — 裁剪冗余段落（重复的 system-reminder、context-summary、compact_boundary、recent-dialogue-focus）
+ * 2. microcompact — 压缩旧工具调用细节（硬压缩路径）；微压缩（doLightCompact）侧清空白名单工具的过时正文，不删短 user
  * 3. toolResultTrim — 裁剪超长工具结果（文件操作上限 15K 字符）
  * 4. structuralExtract — 从被删消息提取结构化摘要（不调 LLM）
  * 5. llmSummarize — 用 LLM 精炼摘要（可选，会话记忆路径跳过）
@@ -31,6 +31,14 @@ import { estimateMessagesTokens } from '../llm/token-estimator.js';
 import type { IceCoderConfigFile } from '../web/types.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import type { CompactBoundaryMeta } from './compaction-strategy.js';
+import {
+  applyLightMicrocompactToolClear,
+  buildCompactBoundaryContent,
+  buildRecentDialogueFocusContent,
+  isSyntheticUserBlockContent,
+  truncateSessionNotesForCompact,
+} from './compaction-strategy.js';
 
 /**
  * 压缩配置。
@@ -75,6 +83,9 @@ const MICRO_COMPACT_RATIO = (() => {
 
 /** 每会话最大微压缩次数 */
 const MAX_MICRO_COMPACTS_PER_SESSION = 3;
+
+/** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe / Claude Code 后缀锚点） */
+const MIN_REAL_USERS_IN_SUFFIX = 2;
 
 /** 硬压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */
 const DEFAULT_COMPACTION_RATIO = 0.88;
@@ -148,28 +159,6 @@ export function estimateTokens(messages: UnifiedMessage[]): number {
   return estimateMessagesTokens(messages);
 }
 
-function isShortActionInstruction(content: string): boolean {
-  const trimmed = content.trim().toLowerCase();
-  return /^(跑|运行|执行|测|测试|修|修改|改|继续|提交|检查|验证)/.test(trimmed)
-    || /\b(run|test|fix|edit|continue|commit|check|verify)\b/i.test(trimmed);
-}
-
-/**
- * 微压缩时是否保留「短用户消息」（长度 &lt; SHORT_USER_MSG_MAX_LENGTH）。
- * 除英文执行短句外，须保留中文导航/盘符/路径片段，否则高上下文占用时模型只剩旧工具模板（如反复列盘）。
- */
-function shouldPreserveShortUserMessage(content: string): boolean {
-  if (isShortActionInstruction(content)) return true;
-  const t = content.trim();
-  if (/进入|打开|返回|上一级|后退|刷新|重新列出|列出|盘|驱动器|浏览|文件夹|目录/i.test(t)) {
-    return true;
-  }
-  // Windows 盘符或路径片段（含 ~open、单行路径）
-  if (/[a-zA-Z]:[/\\]/.test(content) || /^[a-zA-Z]\s*盘/i.test(t)) return true;
-  if (/\[[^\]]*file:[^\]]*\]/i.test(content)) return true;
-  return false;
-}
-
 /**
  * ContextCompactor 管理对话历史的压缩，防止 token 溢出。
  */
@@ -206,41 +195,33 @@ export class ContextCompactor {
    * 执行轻量微压缩（预防层）。
    *
    * 纯本地操作，不调用 LLM：
-   * - 截断超过 5 轮的工具结果为最多 500 字符
-   * - 丢弃长度 < 50 字符的简短确认消息（保留执行型与导航/路径型短句，见 shouldPreserveShortUserMessage）
-   * 微压缩后不注入恢复提示，对 LLM 完全透明。
+   * - **不丢弃**短 user（B：避免误伤导航/确认句）
+   * - 对「白名单」内、超过最近 5 个 tool-calling assistant 轮的工具结果，清空正文为占位 stub（节省 token）
+   * 微压缩后不注入恢复提示，对 LLM 近似透明。
    */
   doLightCompact(messages: UnifiedMessage[]): UnifiedMessage[] {
     this.microCompactCount++;
 
-    // 统计 assistant 消息轮次（每个 assistant 消息算一轮）
-    let assistantTurnCount = 0;
-    const msgTurnMap = new Map<number, number>();
+    let assistantRound = 0;
+    const msgAssistantRound = new Map<number, number>();
+    const toolCallIdToName = new Map<string, string>();
+
     for (let i = 0; i < messages.length; i++) {
-      if (messages[i].role === 'assistant' && messages[i].toolCalls?.length) {
-        assistantTurnCount++;
-      }
-      msgTurnMap.set(i, assistantTurnCount);
-    }
-    const currentTurn = assistantTurnCount;
-
-    return messages.filter((msg, idx) => {
-      // 丢弃简短确认消息，但保留短执行指令（如“跑测试”“继续”“fix it”）。
-      if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.length < SHORT_USER_MSG_MAX_LENGTH) {
-        if (shouldPreserveShortUserMessage(msg.content)) return true;
-        return false;
-      }
-
-      // 截断旧工具结果（超过 5 轮的非文件操作工具结果）
-      if (msg.role === 'tool' && typeof msg.content === 'string') {
-        const msgTurn = msgTurnMap.get(idx) ?? 0;
-        if (currentTurn - msgTurn > 5 && msg.content.length > 500) {
-          // 保留工具名和状态，截断内容
-          return true; // 保留消息但会在后续被 trimToolResults 裁剪
+      const m = messages[i];
+      if (m.role === 'assistant' && m.toolCalls?.length) {
+        assistantRound++;
+        for (const tc of m.toolCalls) {
+          toolCallIdToName.set(tc.id, tc.name);
         }
       }
+      msgAssistantRound.set(i, assistantRound);
+    }
 
-      return true;
+    return applyLightMicrocompactToolClear(messages, {
+      keepLastAssistantToolRounds: 5,
+      toolCallIdToName,
+      msgAssistantRound,
+      currentAssistantRound: assistantRound,
     });
   }
 
@@ -315,6 +296,10 @@ export class ContextCompactor {
     messages: UnifiedMessage[],
     sessionNotes: string,
   ): UnifiedMessage[] {
+    const preCompactMessages = messages.slice();
+    const beforeTokens = estimateTokens(messages);
+    const beforeMessages = messages.length;
+
     // 第一层：snip
     let compacted = this.snip(messages);
 
@@ -330,7 +315,9 @@ export class ContextCompactor {
 
     if (droppedMessages.length === 0) return compacted;
 
-    // 用会话记忆作为摘要（替代 LLM 调用）
+    const { text: notesBody } = truncateSessionNotesForCompact(sessionNotes);
+
+    // 用会话记忆作为摘要（替代 LLM 调用）；过长会话笔记截断以免占满预算（D）
     const summaryContent = [
       '<context-summary>',
       'This session is being continued from a previous conversation. Session notes below are the authoritative source for current session state.',
@@ -340,15 +327,25 @@ export class ContextCompactor {
       '2. If session notes contradict long-term memory, trust session notes',
       '3. If you detect a contradiction that matters, mention it to the user',
       '',
-      sessionNotes,
+      notesBody,
       '</context-summary>',
     ].join('\n');
 
-    return [
-      ...systemMessages,
-      { role: 'user' as const, content: summaryContent },
-      ...recentMessages,
+    const summaryMsg = { role: 'user' as const, content: summaryContent };
+    const core = [...systemMessages, summaryMsg, ...recentMessages];
+    const meta: CompactBoundaryMeta = {
+      beforeTokens,
+      beforeMessages,
+      afterTokens: estimateTokens(core),
+      afterMessages: core.length,
+    };
+
+    const anchors: UnifiedMessage[] = [
+      { role: 'user', content: buildCompactBoundaryContent(meta) },
+      { role: 'user', content: buildRecentDialogueFocusContent(preCompactMessages) },
     ];
+
+    return [...systemMessages, summaryMsg, ...anchors, ...recentMessages];
   }
 
   /**
@@ -496,6 +493,10 @@ Continue the conversation from where it left off without asking the user any fur
     chatFn?: ChatFunction,
     sessionNotes?: string,
   ): Promise<UnifiedMessage[]> {
+    const preCompactMessages = messages.slice();
+    const beforeTokens = estimateTokens(messages);
+    const beforeMessages = messages.length;
+
     // 第一层：snip — 裁剪冗余段落
     let compacted = this.snip(messages);
     if (!this.needsCompaction(compacted)) return compacted;
@@ -520,18 +521,31 @@ Continue the conversation from where it left off without asking the user any fur
     // 第五层：优先使用会话记忆，否则 LLM 精炼
     let finalSummary: string;
     if (sessionNotes) {
-      finalSummary = sessionNotes;
+      finalSummary = truncateSessionNotesForCompact(sessionNotes).text;
     } else if (this.config.enableLLMSummary && chatFn) {
       finalSummary = await this.llmSummarize(structuralSummary, droppedMessages, chatFn);
     } else {
       finalSummary = structuralSummary;
     }
 
-    return [
-      ...systemMessages,
-      { role: 'user' as const, content: `<context-summary>\n${finalSummary}\n</context-summary>` },
-      ...recentMessages,
+    const summaryMsg = {
+      role: 'user' as const,
+      content: `<context-summary>\n${finalSummary}\n</context-summary>`,
+    };
+    const core = [...systemMessages, summaryMsg, ...recentMessages];
+    const meta: CompactBoundaryMeta = {
+      beforeTokens,
+      beforeMessages,
+      afterTokens: estimateTokens(core),
+      afterMessages: core.length,
+    };
+
+    const anchors: UnifiedMessage[] = [
+      { role: 'user', content: buildCompactBoundaryContent(meta) },
+      { role: 'user', content: buildRecentDialogueFocusContent(preCompactMessages) },
     ];
+
+    return [...systemMessages, summaryMsg, ...anchors, ...recentMessages];
   }
 
   /**
@@ -556,17 +570,22 @@ Continue the conversation from where it left off without asking the user any fur
    * - 删除重复的 <system-reminder>（只保留最后一个）
    * - 删除重复的 <system-context>（只保留最后一个）
    * - 删除旧的 <context-summary>（被新的替代）
+   * - 删除重复的 <compact_boundary> / <recent-dialogue-focus>（各只保留最后一条）
    * - 删除空内容的 assistant 消息
    */
   private snip(messages: UnifiedMessage[]): UnifiedMessage[] {
     let lastReminderIdx = -1;
     let lastSummaryIdx = -1;
     let lastContextIdx = -1;
+    let lastBoundaryIdx = -1;
+    let lastFocusIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       const content = typeof messages[i].content === 'string' ? messages[i].content as string : '';
       if (lastReminderIdx === -1 && content.startsWith('<system-reminder>')) lastReminderIdx = i;
       if (lastSummaryIdx === -1 && content.startsWith('<context-summary>')) lastSummaryIdx = i;
       if (lastContextIdx === -1 && content.startsWith('<system-context>')) lastContextIdx = i;
+      if (lastBoundaryIdx === -1 && content.startsWith('<compact_boundary')) lastBoundaryIdx = i;
+      if (lastFocusIdx === -1 && content.startsWith('<recent-dialogue-focus')) lastFocusIdx = i;
     }
 
     return messages.filter((msg, idx) => {
@@ -574,6 +593,8 @@ Continue the conversation from where it left off without asking the user any fur
       if (content.startsWith('<system-reminder>') && idx !== lastReminderIdx) return false;
       if (content.startsWith('<context-summary>') && idx !== lastSummaryIdx) return false;
       if (content.startsWith('<system-context>') && idx !== lastContextIdx) return false;
+      if (content.startsWith('<compact_boundary') && idx !== lastBoundaryIdx) return false;
+      if (content.startsWith('<recent-dialogue-focus') && idx !== lastFocusIdx) return false;
       if (msg.role === 'assistant' && !msg.toolCalls?.length && !content.trim()) return false;
       return true;
     });
@@ -760,6 +781,14 @@ Continue the conversation from where it left off without asking the user any fur
       }
     }
 
+    // C：后缀中至少保留若干条「真实 user」轮次，避免只剩工具噪声
+    splitAt = this.ensureMinimumRealUsersInSuffix(
+      messages,
+      contentStart,
+      splitAt,
+      MIN_REAL_USERS_IN_SUFFIX,
+    );
+
     // 消息对完整性修正：
     // 如果 splitAt 处是 tool 消息，说明它的 assistant(tool_calls) 在前面，
     // 需要向前找到对应的 assistant 消息，把整个交互对放到 recent 中。
@@ -830,7 +859,13 @@ Continue the conversation from where it left off without asking the user any fur
     for (const msg of messages) {
       if (msg.role === 'user') {
         const content = typeof msg.content === 'string' ? msg.content : '[多模态内容]';
-        if (content.startsWith('<system-reminder>') || content.startsWith('<context-summary>')) continue;
+        if (
+          content.startsWith('<system-reminder>')
+          || content.startsWith('<context-summary>')
+          || isSyntheticUserBlockContent(content)
+        ) {
+          continue;
+        }
         const truncated = content.length > 100 ? content.substring(0, 100) + '...' : content;
         lines.push(`- 用户: ${truncated}`);
       } else if (msg.role === 'assistant') {
@@ -936,6 +971,31 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     return contentStart;
+  }
+
+  /** 从索引 fromIdx 起后缀中的非注入 user 条数 */
+  private countNonSyntheticUsersFrom(messages: UnifiedMessage[], fromIdx: number): number {
+    let n = 0;
+    for (let i = fromIdx; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== 'user' || typeof m.content !== 'string') continue;
+      if (isSyntheticUserBlockContent(m.content)) continue;
+      if (m.content.trim().length > 0) n++;
+    }
+    return n;
+  }
+
+  private ensureMinimumRealUsersInSuffix(
+    messages: UnifiedMessage[],
+    contentStart: number,
+    splitAt: number,
+    minUsers: number,
+  ): number {
+    let s = splitAt;
+    while (s > contentStart && this.countNonSyntheticUsersFrom(messages, s) < minUsers) {
+      s--;
+    }
+    return s;
   }
 
   /**

@@ -37,6 +37,7 @@ import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js'
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
+import { isSyntheticUserBlockContent } from './compaction-strategy.js';
 import {
   MEMORY_MAX_RELEVANT,
   EXTRACTION_SIGNAL_WORDS,
@@ -288,22 +289,26 @@ function hasTopicShifted(previousMessage: string, currentMessage: string): boole
 }
 
 /**
+ * 判断一条 user 消息的 content 是否应视为「真实用户话」（用于召回 query / 话题切换）。
+ * 跳过压缩锚点、恢复注入、记忆与会话笔记包装等。
+ */
+export function isEligibleLatestUserMessageContent(content: string): boolean {
+  if (content.startsWith('[System')) return false;
+  if (content.startsWith('<session-notes>')) return false;
+  if (isSyntheticUserBlockContent(content)) return false;
+  return true;
+}
+
+/**
  * 从消息历史中提取最近一条用户消息的文本内容。
- * 跳过 system-reminder 注入的消息。
+ * 跳过注入块（记忆、摘要、压缩锚点、文件恢复等）。
  */
 function getLatestUserMessage(messages: UnifiedMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== 'user') continue;
     const content = typeof msg.content === 'string' ? msg.content : '';
-    // 跳过首轮动态系统上下文、系统补救提示和摘要注入。
-    if (content.startsWith('<system-context>')) continue;
-    if (content.startsWith('<context-summary>')) continue;
-    if (content.startsWith('[System')) continue;
-    // 跳过记忆注入的 system-reminder 消息
-    if (content.startsWith('<system-reminder>')) continue;
-    // 跳过会话笔记注入的 session-notes 消息
-    if (content.startsWith('<session-notes>')) continue;
+    if (!isEligibleLatestUserMessageContent(content)) continue;
     return content;
   }
   return '';

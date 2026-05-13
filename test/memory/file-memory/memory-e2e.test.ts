@@ -369,6 +369,13 @@ Designed 5 end-to-end test scenarios.
       expect(summaryMsg!.content).toContain('Working on end-to-end tests');
       expect(summaryMsg!.content).toContain('Precedence rules');
       expect(summaryMsg!.content).toContain('Current conversation > Session notes > Long-term memory');
+
+      const si = compacted.findIndex(
+        m => typeof m.content === 'string' && m.content.startsWith('<context-summary>'),
+      );
+      expect(si).toBeGreaterThanOrEqual(0);
+      expect(String(compacted[si + 1]?.content)).toContain('<compact_boundary>');
+      expect(String(compacted[si + 2]?.content)).toContain('<recent-dialogue-focus>');
     });
   });
 

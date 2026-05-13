@@ -1588,7 +1588,7 @@ export class Harness {
     onStep?: (event: HarnessStepEvent) => void,
     state?: LoopState,
   ): Promise<void> {
-    // ── 第一道防线：轻量微压缩（65% 阈值，纯本地，零 LLM 成本）──
+    // ── 第一道防线：轻量微压缩（约 72% 阈值，纯本地，零 LLM 成本）──
     if (this.contextCompactor.needsMicroCompaction(messages) && !this.contextCompactor.needsCompaction(messages)) {
       const before = messages.length;
       const compacted = this.contextCompactor.doLightCompact(messages);
