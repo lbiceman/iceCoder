@@ -37,6 +37,7 @@ import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js'
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
+import { isSyntheticUserBlockContent } from './compaction-strategy.js';
 import {
   MEMORY_MAX_RELEVANT,
   EXTRACTION_SIGNAL_WORDS,
@@ -94,6 +95,8 @@ const STANDARD_RECALL_COOLDOWN_MS = (() => {
 })();
 /** 会话记忆 LLM 前：净化前缀总字符下限（非 force） */
 const SESSION_MEMORY_PREFIX_MIN_CHARS = 320;
+/** 校验失败后重试时附带上一轮草稿的最大字符（避免撑爆上下文） */
+const SESSION_MEMORY_RETRY_PREVIEW_CHARS = 8000;
 /** 会话记忆校验失败后指数退避基础/上限（毫秒） */
 const SESSION_MEMORY_BACKOFF_BASE_MS = 20_000;
 const SESSION_MEMORY_BACKOFF_MAX_MS = 300_000;
@@ -288,22 +291,26 @@ function hasTopicShifted(previousMessage: string, currentMessage: string): boole
 }
 
 /**
+ * 判断一条 user 消息的 content 是否应视为「真实用户话」（用于召回 query / 话题切换）。
+ * 跳过压缩锚点、恢复注入、记忆与会话笔记包装等。
+ */
+export function isEligibleLatestUserMessageContent(content: string): boolean {
+  if (content.startsWith('[System')) return false;
+  if (content.startsWith('<session-notes>')) return false;
+  if (isSyntheticUserBlockContent(content)) return false;
+  return true;
+}
+
+/**
  * 从消息历史中提取最近一条用户消息的文本内容。
- * 跳过 system-reminder 注入的消息。
+ * 跳过注入块（记忆、摘要、压缩锚点、文件恢复等）。
  */
 function getLatestUserMessage(messages: UnifiedMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== 'user') continue;
     const content = typeof msg.content === 'string' ? msg.content : '';
-    // 跳过首轮动态系统上下文、系统补救提示和摘要注入。
-    if (content.startsWith('<system-context>')) continue;
-    if (content.startsWith('<context-summary>')) continue;
-    if (content.startsWith('[System')) continue;
-    // 跳过记忆注入的 system-reminder 消息
-    if (content.startsWith('<system-reminder>')) continue;
-    // 跳过会话笔记注入的 session-notes 消息
-    if (content.startsWith('<session-notes>')) continue;
+    if (!isEligibleLatestUserMessageContent(content)) continue;
     return content;
   }
   return '';
@@ -1446,7 +1453,7 @@ ${candidateList}`;
         usedPromptCache,
         contextPrefixLength: conversationPrefix.length,
         durationMs: totalDuration,
-        writtenFiles: [],
+        writtenFiles: allWrittenPaths,
       }).catch(() => {});
 
       if (totalWritten > 0) {
@@ -1634,17 +1641,46 @@ ${candidateList}`;
 
       // 使用 LLM 更新会话笔记（清理 reasoningContent/toolCalls 防止 DeepSeek 报错）
       const sanitizedPrefix = this.sanitizeConversationPrefix(messages).slice(-SESSION_MEMORY_SANITIZED_PREFIX_LIMIT);
-      const response = await this.llmAdapter.chat(
-        [
-          ...sanitizedPrefix,
-          { role: 'user', content: prompt },
-        ],
-        { maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS, temperature: 0 },
-      );
+      const baseChatMessages: UnifiedMessage[] = [
+        ...sanitizedPrefix,
+        { role: 'user', content: prompt },
+      ];
+
+      let response = await this.llmAdapter.chat(baseChatMessages, {
+        maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS,
+        temperature: 0,
+      });
+
+      let sessionRetried = false;
+      let validation = response.content
+        ? validateSessionMemoryContent(response.content)
+        : { valid: false as const, reason: 'empty LLM response' };
+
+      if (!validation.valid && response.content) {
+        const preview =
+          response.content.length > SESSION_MEMORY_RETRY_PREVIEW_CHARS
+            ? `${response.content.slice(0, SESSION_MEMORY_RETRY_PREVIEW_CHARS)}\n\n…(truncated)`
+            : response.content;
+        const missingHint = validation.missingSections?.length
+          ? `Include EVERY missing section header exactly as in the template. Missing or incomplete: ${validation.missingSections.slice(0, 12).join('; ')}. `
+          : '';
+        const retryUser = `${missingHint}Your previous draft failed: ${validation.reason}. Output the COMPLETE session notes markdown again with all 11 section headers (# Session Title … # Worklog) plus # Runtime Evidence (auto).`;
+        response = await this.llmAdapter.chat(
+          [
+            ...baseChatMessages,
+            { role: 'assistant', content: preview },
+            { role: 'user', content: retryUser },
+          ],
+          { maxTokens: SESSION_MEMORY_LLM_MAX_TOKENS, temperature: 0 },
+        );
+        sessionRetried = true;
+        validation = response.content
+          ? validateSessionMemoryContent(response.content)
+          : { valid: false as const, reason: 'empty LLM response' };
+      }
 
       // v3 改进：写入前验证响应格式
       if (response.content) {
-        const validation = validateSessionMemoryContent(response.content);
         if (validation.valid) {
           const pkg = await readPackageJsonTestFacts(this.workspaceRoot);
           const runtimeInput = runtimeSnapshots
@@ -1680,6 +1716,7 @@ ${candidateList}`;
             wrote: true,
             evidenceAnchored: !!pkg,
             contradictionWarning: !!warn,
+            retried: sessionRetried,
           }).catch(() => {});
           this.sessionMemoryRejectStreak = 0;
           this.sessionMemoryBackoffUntil = 0;
@@ -1696,6 +1733,7 @@ ${candidateList}`;
             rejectReason: validation.reason,
             evidenceAnchored: false,
             contradictionWarning: false,
+            retried: sessionRetried,
           }).catch(() => {});
           console.debug(
             `[harness-memory] 会话记忆更新被拒绝 — ${validation.reason}` +
@@ -1714,6 +1752,7 @@ ${candidateList}`;
           rejectReason: 'empty LLM response',
           evidenceAnchored: false,
           contradictionWarning: false,
+          retried: sessionRetried,
         }).catch(() => {});
       }
 

@@ -146,6 +146,8 @@ export interface HarnessConfig {
   compactionKeepRecent?: number;
   /** 是否启用 LLM 摘要压缩（默认 false，启用后压缩质量更高但消耗额外 token） */
   compactionEnableLLMSummary?: boolean;
+  /** 硬压缩后再注入的 read_file 唯一路径数上限（传入则由 Harness 交给 ContextCompactor，默认 12） */
+  compactionMaxReinjectFiles?: number;
   /** confirm 权限的回调：返回 true 允许，false 拒绝 */
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   /** 记忆文件目录路径（用于文件记忆预取，向后兼容） */

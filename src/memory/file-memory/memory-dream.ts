@@ -44,7 +44,7 @@ const STALE_INDEX_DREAM_COOLDOWN_MS = 12 * 60 * 1000;
 import { ConsolidationLock } from './memory-concurrency.js';
 import { getDreamConfig } from './memory-remote-config.js';
 import { getExpiredMemories, getStaleMemories } from './memory-age.js';
-import { countDeadLinksInMemoryIndex } from './memory-index-health.js';
+import { countDeadLinksInMemoryIndex, repairDeadLinksInMemoryIndex } from './memory-index-health.js';
 
 /**
  * Dream 触发原因（用于遥测与门控）。
@@ -604,12 +604,26 @@ export class MemoryDream {
       }
     }
 
+    const wroteFullIndex = !!(parsed.new_index && typeof parsed.new_index === 'string');
+    if (deletedFilenames.length > 0 && !wroteFullIndex) {
+      try {
+        const repair = await repairDeadLinksInMemoryIndex(memoryDir);
+        if (repair.wrote) {
+          console.debug(`[MemoryDream] MEMORY.md stripped ${repair.removedLinks} dead link(s) after deletes`);
+          getScannerCache().invalidate(memoryDir);
+        }
+      } catch (e) {
+        console.debug('[MemoryDream] repair MEMORY.md links failed:', e instanceof Error ? e.message : e);
+      }
+    }
+
     // 更新索引
-    if (parsed.new_index && typeof parsed.new_index === 'string') {
+    if (wroteFullIndex) {
       try {
         const indexPath = path.join(memoryDir, 'MEMORY.md');
-        await fs.writeFile(indexPath, parsed.new_index, 'utf-8');
+        await fs.writeFile(indexPath, parsed.new_index as string, 'utf-8');
         filesModified++;
+        getScannerCache().invalidate(memoryDir);
       } catch (error) {
         console.error('[MemoryDream] Failed to update MEMORY.md:', error);
       }

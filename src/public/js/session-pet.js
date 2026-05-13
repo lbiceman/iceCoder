@@ -605,38 +605,65 @@ import {
     ctx.stroke();
   }
 
-  /** read：白色圆框眼镜（直径 READ_LENS_DIA_PX）；画在眼上，眨眼后仍绘镜框 */
+  /** read：白色长方镜框；上两角小圆角，下两角更大圆角（基准 READ_LENS_DIA_PX） */
   function drawReadGlasses(ctx, leftX, rightX, y) {
-    var lr = READ_LENS_DIA_PX / 2;
-    var templeLen = 7.5;
+    var base = READ_LENS_DIA_PX / 1.8;
+    var lensHalfW = base * 1.05;
+    var lensHalfH = base * 0.72;
+    var lensCornerRTop = Math.min(
+      Math.max(1.25 * PET_SCALE, READ_LENS_DIA_PX * 0.09),
+      lensHalfW * 0.38,
+      lensHalfH * 0.38
+    );
+
+    function strokeLensAt(cx, cy) {
+      var x = cx - lensHalfW;
+      var yy = cy - lensHalfH;
+      var w = lensHalfW * 2;
+      var h = lensHalfH * 2;
+      var rt = Math.min(lensCornerRTop, w / 2 - 0.01, h / 2 - 0.01);
+      var rb = Math.min(
+        Math.max(rt * 2.6, READ_LENS_DIA_PX * 0.16),
+        w / 2 - 0.01,
+        h - rt - 0.02
+      );
+      ctx.beginPath();
+      ctx.moveTo(x + rt, yy);
+      ctx.arcTo(x + w, yy, x + w, yy + h, rt);
+      ctx.lineTo(x + w, yy + h - rb);
+      ctx.arcTo(x + w, yy + h, x, yy + h, rb);
+      ctx.lineTo(x + rb, yy + h);
+      ctx.arcTo(x, yy + h, x, yy, rb);
+      ctx.lineTo(x, yy + rt);
+      ctx.arcTo(x, yy, x + w, yy, rt);
+      ctx.closePath();
+      ctx.stroke();
+    }
+
     ctx.save();
     ctx.strokeStyle = READ_GLASSES_STROKE;
     ctx.lineWidth = 1.2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    strokeLensAt(leftX, y);
+    strokeLensAt(rightX, y);
     ctx.beginPath();
-    ctx.arc(leftX, y, lr, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(rightX, y, lr, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(leftX + lr, y);
-    ctx.lineTo(rightX - lr, y);
+    ctx.moveTo(leftX + lensHalfW, y);
+    ctx.lineTo(rightX - lensHalfW, y);
     ctx.stroke();
     ctx.lineWidth = 1.55;
     ctx.beginPath();
-    ctx.moveTo(leftX - lr, y);
-    ctx.lineTo(leftX - lr - templeLen, y - 10);
-    ctx.moveTo(rightX + lr, y);
-    ctx.lineTo(rightX + lr + templeLen, y - 10);
+    ctx.moveTo(leftX - lensHalfW, y);
+    ctx.lineTo(leftX - lensHalfW - 2, y - 20);
+    ctx.moveTo(rightX + lensHalfW, y);
+    ctx.lineTo(rightX + lensHalfW + 2, y - 20);
     ctx.stroke();
     ctx.restore();
   }
 
-  /** 18. read — 直径 12px 实心圆眼；24px 白色圆镜框见 drawReadGlasses */
+  /** 18. read — 直径 12px 实心圆眼；长方镜片上小圆角、下大圆角见 drawReadGlasses */
   function expressionRead(ctx, leftX, rightX, y, ec) {
-    var er = READ_EYE_DIA_PX / 2;
+    var er = READ_EYE_DIA_PX / 1.6;
     ctx.fillStyle = ec;
     ctx.beginPath();
     ctx.arc(leftX, y, er, 0, Math.PI * 2);

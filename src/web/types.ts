@@ -26,7 +26,10 @@ export interface ProviderConfig {
   };
   isDefault?: boolean;
   supportsVision?: boolean;
-  /** 冰豆（Web 会话指示器）与压缩器参考的上下文窗口上限（token） */
+  /**
+   * 上下文窗口上限（token）；默认 provider 此值参与计算生效窗口（见 `readEffectiveContextWindowTokens`）
+   * 并映射档位：≤128K→S，≤256K→M，≤512K→L，>512K→XL（`tierFromMaxContextTokens`）。
+   */
   maxContextTokens?: number;
 }
 

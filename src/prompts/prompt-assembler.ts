@@ -227,6 +227,7 @@ export class PromptAssembler {
  *
  * 将用户上下文包裹在 <system-reminder> 标签中，
  * 作为第一条 user 消息注入到对话历史。
+ * 模板字符串内仅含发给模型的英文提示；中文含义见函数体内紧邻模板的注释。
  */
 export function formatUserContextMessage(userContext: UserContext): string {
   if (Object.keys(userContext).length === 0) return '';
@@ -235,9 +236,12 @@ export function formatUserContextMessage(userContext: UserContext): string {
     .map(([key, value]) => `# ${key}\n${value}`)
     .join('\n\n');
 
+  /*
+   * 【中文】以下为系统随对话注入的用户上下文（对应文中 user context）；可能与当前任务有关也可能无关；
+   * 请勿主动展开讨论或复述，除非其与当前任务高度相关。
+   */
   return `<system-reminder>
-以下上下文信息可能与你的任务相关，也可能无关。
-不要主动回应这些上下文，除非它与当前任务高度相关。
+The following user context may or may not be relevant to your task. Do not proactively respond to or elaborate on this context unless it is highly relevant to the current task.
 
 ${sections}
 </system-reminder>`;

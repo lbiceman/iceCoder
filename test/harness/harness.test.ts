@@ -665,10 +665,10 @@ describe('Harness - 破坏性工具权限确认', () => {
     const tools = [makeTool('read_file')];
     const handler = vi.fn().mockResolvedValue({ success: true, output: 'read' });
     const executor = createToolExecutor(tools, handler);
-    const harness = new Harness(minConfig({
-      context: { systemPrompt: 'test', tools },
-      permissions: [{ pattern: 'read_file', permission: 'deny', reason: 'readonly disabled' }],
-    }));
+    // const harness = new Harness(minConfig({
+    //   context: { systemPrompt: 'test', tools },
+    //   permissions: [{ pattern: 'read_file', permission: 'deny', reason: 'readonly disabled' }],
+    // }));
     // minConfig 会被完整 overrides 覆盖不了 executor，所以使用独立实例保持 handler 可观察
     const harnessWithExecutor = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
@@ -1013,7 +1013,65 @@ describe('ContextCompactor - 微压缩', () => {
     expect(compactor.needsCompaction(messages)).toBe(true);
   });
 
-  it('保留最近的短用户执行指令', () => {
+  it('微压缩保留全部短 user，并对过时白名单工具结果清空正文（B）', () => {
+    const compactor = new ContextCompactor();
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'ok' },
+    ];
+    for (let i = 1; i <= 7; i++) {
+      messages.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `tc${i}`, name: 'run_command', arguments: {} }],
+        },
+        {
+          role: 'tool',
+          toolCallId: `tc${i}`,
+          content: i === 1 ? 'VERYLONGOUTPUT'.repeat(100) : `KEEPTHIS${i}`.repeat(20),
+        },
+      );
+    }
+    messages.push({ role: 'user', content: '跑测试' });
+
+    const compacted = compactor.doLightCompact(messages);
+
+    expect(compacted.some(m => m.role === 'user' && m.content === 'ok')).toBe(true);
+    expect(compacted.some(m => m.role === 'user' && m.content === '跑测试')).toBe(true);
+    const t1 = compacted.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
+    const t6 = compacted.find(m => m.role === 'tool' && m.toolCallId === 'tc6');
+    expect((t1!.content as string).startsWith('[Old tool result cleared for context]')).toBe(true);
+    expect(t6!.content).toContain('KEEPTHIS6');
+  });
+
+  it('微压缩不清空 read_file 结果（即便轮次很旧）', () => {
+    const compactor = new ContextCompactor();
+    const oldBody = 'FILEBODY'.repeat(200);
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'a.ts' } }],
+      },
+      { role: 'tool', toolCallId: 'r1', content: oldBody },
+    ];
+    for (let i = 2; i <= 7; i++) {
+      messages.push(
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `tc${i}`, name: 'run_command', arguments: {} }],
+        },
+        { role: 'tool', toolCallId: `tc${i}`, content: 'x' },
+      );
+    }
+    const compacted = compactor.doLightCompact(messages);
+    expect(compacted.find(m => m.toolCallId === 'r1')!.content).toBe(oldBody);
+  });
+
+  it('保留最近的短用户执行指令（微压缩不再删短 user）', () => {
     const compactor = new ContextCompactor();
     const messages: UnifiedMessage[] = [
       { role: 'system', content: 'sys' },
@@ -1025,7 +1083,22 @@ describe('ContextCompactor - 微压缩', () => {
     const compacted = compactor.doLightCompact(messages);
 
     expect(compacted.some(m => m.role === 'user' && m.content === '跑测试')).toBe(true);
-    expect(compacted.some(m => m.role === 'user' && m.content === 'ok')).toBe(false);
+    expect(compacted.some(m => m.role === 'user' && m.content === 'ok')).toBe(true);
+  });
+
+  it('保留中文导航与盘符路径短句（微压缩保留全部短 user）', () => {
+    const compactor = new ContextCompactor();
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '嗯' },
+      { role: 'assistant', content: 'ack' },
+      { role: 'user', content: '进入D盘' },
+      { role: 'user', content: 'D:\\\\work' },
+    ];
+    const compacted = compactor.doLightCompact(messages);
+    expect(compacted.some(m => m.role === 'user' && m.content === '进入D盘')).toBe(true);
+    expect(compacted.some(m => m.role === 'user' && m.content === 'D:\\\\work')).toBe(true);
+    expect(compacted.some(m => m.role === 'user' && m.content === '嗯')).toBe(true);
   });
 
   it('构建压缩恢复 Runtime State，保留目标、改动文件和验证命令', () => {
