@@ -756,8 +756,8 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   line-height: 1;
 }
 
-/* 会话宠物指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
-/* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏宠物 */
+/* 冰豆会话指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
+/* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏冰豆 */
 .session-pet-indicator {
   display: flex;
   position: fixed;
@@ -808,7 +808,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   transform: translate(-50%, 0);
 }
 
-/* 圆形宠物：96×96 逻辑画布（与 session-pet.js PET_SIZE / canvas 属性一致） */
+/* 冰豆画布：96×96 逻辑像素（与 session-pet.js PET_SIZE / canvas 属性一致） */
 .pet-canvas {
   display: block;
   width: 96px;

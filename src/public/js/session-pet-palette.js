@@ -1,12 +1,15 @@
 /**
- * 会话宠物色板与 token 下标工具（浏览器与 Vitest 共用，ESM）
+ * 冰豆（Ice Bean）色板与 token 下标工具（浏览器与 Vitest 共用，ESM）
  * 圆环进度用 token 百分比；眼睛颜色由启动时 pickRandomPaletteColor 决定。
  */
+
+/** 会话指示器在用户界面中的显示名称（无障碍与文案统一入口） */
+export const SESSION_PET_DISPLAY_NAME = '冰豆';
 
 /** 装饰用眼各色色板（启动随机挑一种，与 token 无关） */
 export const SESSION_PET_PALETTE_COLORS = [
   '#FFFFFF',
-  '#FCD7E4',
+  '#D6F064',
   '#88EDC7',
   '#B8FCC8',
   '#A7CBFD',
@@ -76,5 +79,5 @@ export function buildSessionPetCanvasAriaLabel(o) {
     '。本轮输出 ' +
     o.outputLabel +
     '。';
-  return '会话状态宠物。' + ring + ' ' + usage;
+  return SESSION_PET_DISPLAY_NAME + '。' + ring + ' ' + usage;
 }

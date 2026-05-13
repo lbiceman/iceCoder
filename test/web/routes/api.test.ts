@@ -5,6 +5,7 @@
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { createServer, startServer } from '../../../src/web/server.js';
+import { createUploadRouter, CHAT_UPLOAD_MAX_FILE_BYTES } from '../../../src/web/routes/upload.js';
 import type { Server } from 'http';
 import fs from 'fs/promises';
 import path from 'path';
@@ -256,5 +257,36 @@ describe('Config API Routes', () => {
     // "abcd12345678wxyz" → "abcd********wxyz"
     expect(masked).toBe('abcd********wxyz');
     expect(masked.length).toBe(apiKey.length);
+  });
+});
+
+describe('Chat upload API routes', () => {
+  let server: Server | null = null;
+
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = null;
+    }
+  });
+
+  async function createUploadTestServer(): Promise<number> {
+    const app = await createServer({
+      staticDir: path.join(__dirname, '../../public'),
+      routes: [{ path: '/api/chat', router: createUploadRouter() }],
+    });
+    server = await startServer(app, 0);
+    return getPort(server);
+  }
+
+  it('GET /api/chat/supported-formats returns capability JSON', async () => {
+    const port = await createUploadTestServer();
+    const response = await fetch(`http://localhost:${port}/api/chat/supported-formats`);
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(Array.isArray(data.extensions)).toBe(true);
+    expect(Array.isArray(data.imageExtensions)).toBe(true);
+    expect(data.maxFileBytes).toBe(CHAT_UPLOAD_MAX_FILE_BYTES);
+    expect(data.imageExtensions).toContain('.png');
   });
 });

@@ -1,7 +1,7 @@
 /**
  * 聊天页面主模块（重构后）
  * 职责：DOM 渲染、事件绑定、模块协调
- * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet
+ * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet（冰豆）
  */
 
 /* exported ChatPage */
@@ -472,7 +472,11 @@ window.ChatPage = (function () {
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
-          '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="会话状态宠物，拖动移动；双击恢复默认位置" title="拖动：移动；双击：恢复默认位置"></canvas>' +
+          '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="' +
+          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
+          '，拖动移动；双击恢复默认位置" title="' +
+          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
+          '：拖动移动；双击恢复默认位置"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         '<div class="chat-input-area">' +
@@ -513,7 +517,7 @@ window.ChatPage = (function () {
     var inputWrapper = container.querySelector('.input-wrapper');
     if (inputWrapper && cmdDropdown) inputWrapper.appendChild(cmdDropdown);
 
-    // 初始化宠物
+    // 初始化冰豆（会话指示器）
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);

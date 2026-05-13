@@ -246,7 +246,7 @@ async function main(): Promise<void> {
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/sessions', router: createSessionsRouter() },
-      { path: '/api/chat/upload', router: createUploadRouter() },
+      { path: '/api/chat', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/memory', router: createMemoryExportRouter() },

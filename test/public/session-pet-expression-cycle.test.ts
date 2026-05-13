@@ -1,5 +1,5 @@
 /**
- * 会话宠物表情轮播逻辑：每 intervalMs 切换一次 setState。
+ * 冰豆表情轮播逻辑：每 intervalMs 切换一次 setState。
  * 与 src/public/js/session-pet.js 中 EXPRESSIONS 键一致（不含 blink，blink 由内部眨眼定时器驱动）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

@@ -1,5 +1,5 @@
 /**
- * 会话宠物指示器
+ * 冰豆（Ice Bean）— iceCoder Web 会话状态指示器
  * 极简风格：固定黑底 + 胶囊眼睛；眼睛色在启动时从色板随机。
  * 不区分昼夜模式，始终黑底白字。
  * 眨眼：1-3 秒随机间隔，闭眼 150ms。
@@ -11,6 +11,7 @@ import {
   SESSION_PET_PALETTE_COLORS as COLORS,
   pickRandomPaletteColor,
   buildSessionPetCanvasAriaLabel,
+  SESSION_PET_DISPLAY_NAME,
 } from './session-pet-palette.js';
 
 (function () {
@@ -395,11 +396,42 @@ import {
     expressionAngry(ctx, leftX, rightX, y, ec);
   }
 
-  /** 6. alert — 警觉（眼睛睁大） */
+  /** 6. alert — 警觉（横宽椭圆眼眶 + 内上凝视点；与 surprised 中空大圆区分） */
   function expressionAlert(ctx, leftX, rightX, y, ec) {
-    var bigH = EYE_H * 0.7;
-    drawCapsuleEye(ctx, leftX, y - 2, EYE_W / 2 + 1, bigH / 2, ec);
-    drawCapsuleEye(ctx, rightX, y - 2, EYE_W / 2 + 1, bigH / 2, ec);
+    var lidY = y - 1;
+    var rx = EYE_W / 2 + 1.2;
+    var ry = EYE_H * 0.41;
+    var lw = 2.35;
+
+    ctx.beginPath();
+    ctx.ellipse(leftX, lidY, rx, ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = lw;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.ellipse(rightX, lidY, rx, ry, 0, 0, Math.PI * 2);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = lw;
+    ctx.stroke();
+
+    ctx.fillStyle = ec;
+    ctx.beginPath();
+    ctx.arc(leftX + 1.85, lidY - 1.35, 1.9, 0, Math.PI * 2);
+    ctx.arc(rightX - 1.85, lidY - 1.35, 1.9, 0, Math.PI * 2);
+    ctx.fill();
+
+    var browLift = ry + 3;
+    ctx.beginPath();
+    ctx.moveTo(leftX - rx * 0.52, lidY - browLift + 2.85);
+    ctx.lineTo(leftX + rx * 0.42, lidY - browLift + 1.15);
+    ctx.moveTo(rightX - rx * 0.42, lidY - browLift + 1.15);
+    ctx.lineTo(rightX + rx * 0.52, lidY - browLift + 2.85);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
   }
 
   /** 7. anxious — 焦虑（眼睛快速眨动效果用横线表示） */
@@ -891,11 +923,12 @@ import {
       var outL = formatTokenCount(tokenOutput);
       if (canvas) {
         canvas.title =
-          '上下文: ' +
+          SESSION_PET_DISPLAY_NAME +
+          ' · 上下文 ' +
           tokenPct +
           '%' +
           (tokenMax ? ' (' + usedL + '/' + maxL + ')' : '') +
-          ' | 本轮输出: ' +
+          ' · 本轮输出 ' +
           outL;
         canvas.setAttribute(
           'aria-label',
@@ -962,6 +995,7 @@ import {
   }
 
   window.SessionPet = {
-    create: create
+    create: create,
   };
+  window.SESSION_PET_DISPLAY_NAME = SESSION_PET_DISPLAY_NAME;
 })();

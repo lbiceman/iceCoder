@@ -26,7 +26,7 @@ export interface ProviderConfig {
   };
   isDefault?: boolean;
   supportsVision?: boolean;
-  /** 会话宠物与压缩器参考的上下文窗口上限（token） */
+  /** 冰豆（Web 会话指示器）与压缩器参考的上下文窗口上限（token） */
   maxContextTokens?: number;
 }
 

@@ -53,7 +53,7 @@ export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number 
 }
 
 /**
- * 读取当前默认提供者的会话宠物用上下文（不向客户端暴露密钥）。
+ * 读取当前默认提供者下冰豆与压缩器共用上下文上限（不向客户端暴露密钥）。
  * 供 WebSocket `connected` 包携带，替代聊天页周期性 GET /api/config。
  */
 export async function resolveDefaultChatModelMeta(

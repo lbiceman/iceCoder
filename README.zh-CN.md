@@ -56,7 +56,7 @@ CLI / Web / Remote
 | `src/llm/*` | OpenAI / Anthropic 兼容适配器 |
 | `src/mcp/*` | MCP 子进程客户端，将外部 Server 工具并入 `ToolRegistry` |
 | `src/web/*` | Express、`/api/*` 路由、统一聊天 WebSocket |
-| `src/public/*` | Vite 前端根目录（聊天页、配置 UI、**会话宠物** Canvas 与桥接脚本等） |
+| `src/public/*` | Vite 前端根目录（聊天页、配置 UI、**冰豆** Canvas 与会话指示桥接脚本等） |
 | `src/types/runtime-snapshot.ts` | 会话笔记中 `icecoder-runtime` 块的版本化 JSON 模型 |
 
 ---
@@ -391,21 +391,21 @@ ICE_CONTEXT_WINDOW
 
 主要 API 前缀：`/api/config`、`/api/tools`、`/api/remote`、`/api/sessions`、`/api/chat/upload`、`/api/memory/*`。提供者配置默认读取 **`data/config.json`**（可参考 `data/config.example.json`）；`src/index.ts` 支持对配置文件 **watch 热重载** 提供者。
 
-### 会话宠物（Web 聊天指示器）
+### 冰豆（Ice Bean · Web 聊天指示器）
 
-**仅 Web 聊天页**：在 `src/public` 中用 Canvas 绘制的「会话状态宠物」，用于把 **轮次、思考、工具进度、记忆提示** 等映射成表情与气泡，**不修改** Harness 与后端协议逻辑。
+**仅 Web 聊天页**：在 `src/public` 中用 Canvas 绘制的会话状态角色 **「冰豆」**，用于把 **轮次、思考、工具进度、记忆提示** 等映射成表情与气泡；显示名常量见 `SESSION_PET_DISPLAY_NAME`（`session-pet-palette.js`），**不修改** Harness 与后端协议逻辑。
 
 | 方面 | 说明 |
 |------|------|
 | **外观** | 约 120×120 逻辑像素、黑底胶囊眼；**眼睛颜色**在页面加载时从 `session-pet-palette.js` 色板随机选取，与 token 百分比无关（纯装饰）。 |
 | **外圈圆环** | 自顶端顺时针，表示**上下文 / token 占用**大致比例（绿→黄→红渐变）。 |
 | **表情** | 对外约 **20** 种状态（含眨眼等），由 `chat-pet-bridge.js` 根据 WebSocket 推送的步骤事件（与 `HarnessStepEvent` 对应）在 `chat-page.js` 中更新。 |
-| **交互** | 可拖动改位置，位置存 `localStorage`（键 `ice-session-pet-position`）；**双击**恢复默认摆放；Canvas 的无障碍文案由 `buildSessionPetCanvasAriaLabel` 生成。 |
+| **交互** | 可拖动改位置，位置存 `localStorage`（键 `ice-session-pet-position`）；**双击**恢复默认摆放；Canvas 的无障碍文案由 `buildSessionPetCanvasAriaLabel` 生成（前缀为「冰豆」）。 |
 | **相关文件** | `src/public/js/session-pet.js`、`session-pet-palette.js`、`chat-pet-bridge.js`；样式在 `src/public/css/style.css`；入口侧在 `chat-page.js`、`main.js`。 |
 | **联调页** | `src/public/pet-expressions-demo.html` 与 `pet-expressions-demo.js`，用于手动切换表情验收。 |
 | **测试** | `test/public/session-pet-palette.test.ts`、`session-pet-expression-cycle.test.ts`。 |
 
-**CLI / 纯终端模式没有宠物**；它是 SPA 聊天的可选视觉反馈，与核心运行时解耦。
+**CLI / 纯终端模式没有冰豆**；它是 SPA 聊天的可选视觉反馈，与核心运行时解耦。
 
 ### MCP
 
@@ -436,7 +436,7 @@ src/memory/       文件化记忆、会话笔记、Dream、淘汰
 src/tools/        内置工具与执行器
 src/mcp/          MCP 管理
 src/web/          Express、路由、WebSocket
-src/public/       前端（Vite root）：聊天页、会话宠物 Canvas/桥接、静态资源
+src/public/       前端（Vite root）：聊天页、冰豆 Canvas/桥接、静态资源
 src/types/        共享类型（含运行时快照 schema）
 test/             Vitest
 data/             配置与会话数据
