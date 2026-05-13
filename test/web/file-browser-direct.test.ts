@@ -4,24 +4,21 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  detectFileBrowserClose,
   detectFileBrowserOpen,
   extractWindowsAbsolutePaths,
   inferLastBrowsedDir,
   looksLikeBrowserNavigation,
+  looksLikeFileAnalysisIntent,
   parseDriveLetterIntent,
 } from '../../src/web/file-browser-direct.js';
 
 describe('file-browser-direct helpers', () => {
   it('detectFileBrowserOpen', () => {
     expect(detectFileBrowserOpen('~open\n【文件浏览器模式】')).toBe(true);
+    expect(detectFileBrowserOpen('~open\n【目录列举】')).toBe(true);
+    expect(detectFileBrowserOpen('~open\n[Directory browsing] shortcut')).toBe(true);
+    expect(detectFileBrowserOpen('~open\n【目录浏览】')).toBe(true);
     expect(detectFileBrowserOpen('聊聊别的')).toBe(false);
-  });
-
-  it('detectFileBrowserClose', () => {
-    expect(detectFileBrowserClose('~browser_close')).toBe(true);
-    expect(detectFileBrowserClose('prefix\n~close_browser')).toBe(true);
-    expect(detectFileBrowserClose('no')).toBe(false);
   });
 
   it('extractWindowsAbsolutePaths', () => {
@@ -40,6 +37,12 @@ describe('file-browser-direct helpers', () => {
   it('inferLastBrowsedDir', () => {
     expect(inferLastBrowsedDir('D:\\')).toBe('D:\\');
     expect(inferLastBrowsedDir('D:\\foo')).toBe('D:\\foo\\');
+  });
+
+  it('looksLikeFileAnalysisIntent', () => {
+    expect(looksLikeFileAnalysisIntent('分析一下 ice-excel-demand.pptx')).toBe(true);
+    expect(looksLikeFileAnalysisIntent('总结出来')).toBe(true);
+    expect(looksLikeFileAnalysisIntent('进入 D 盘')).toBe(false);
   });
 
   it('looksLikeBrowserNavigation', () => {

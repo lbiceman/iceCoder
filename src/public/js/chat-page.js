@@ -149,26 +149,16 @@ window.ChatPage = (function () {
       return;
     }
 
-    // ~open
+    // ~open：发给模型的指令为英文。中文含义——用户若只给文件名，须结合最近一次目录列表里的 `[当前路径]` 拼成绝对路径后再调用 parse_document / parse_pptx_deep / open_file。
     if (text === '~open') {
       elInput.value = '';
       UI.autoResizeInput();
       Cmd.hide();
       Pet.showThinking(false);
-      WS.sendMessage('~open\n\n' +
-        '【文件浏览器模式】忽略之前对话中的所有任务和主题。你现在是文件浏览器。\n\n' +
-        '核心规则：\n' +
-        '- 每次调用工具后，必须把工具返回的内容（驱动器列表、目录内容）完整展示给用户。\n' +
-        '- 展示完内容后等待用户下一条指令。\n' +
-        '- 禁止分析、总结、评价、修改任何文件或项目。只做导航和展示。\n\n' +
-        '导航规则：\n' +
-        '1. 现在立即调用 list_drives，然后把所有驱动器列出来。\n' +
-        '2. 用户说"进入 X:"时，调用 browse_directory 浏览该路径，然后列出目录内容。\n' +
-        '3. 用户说"进入 XXX"时，拼接到当前路径，调用 browse_directory，然后列出目录内容。\n' +
-        '4. 用户说"返回"时，浏览当前目录的父目录，然后列出目录内容。\n' +
-        '5. 记住当前路径。\n' +
-        '6. 退出浏览模式请发一行 ~browser_close（或 ~close_browser）。\n\n' +
-        '展示格式：目录用 [DIR]，文件用 [FILE]，驱动器用 [DRIVE]。');
+      WS.sendMessage(
+        '~open\n\n' +
+        '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
+      );
       return;
     }
 

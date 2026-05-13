@@ -1,6 +1,6 @@
 /**
- * 文件浏览器模式（~open）服务端确定性导航。
- * 不依赖模型是否发起 tool_calls，避免长会话下「只复读盘符列表」的假输出。
+ * ~open 目录列举：服务端对 list_drives / browse_directory 的确定性执行。
+ * 与「是否允许解析文件」无关；仅避免模型编造磁盘列表。
  */
 
 import path from 'node:path';
@@ -9,13 +9,17 @@ import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolCall } from '../llm/types.js';
 
 const MARKER_OPEN = /(?:^|\n)\s*~open\b/;
-const MARKER_CLOSE = /(?:^|\n)\s*~browser_close\b|(?:^|\n)\s*~close_browser\b/;
-/** 与前端注入的标题一致时视为进入浏览模式 */
-const MARKER_UI_ZH = /【文件浏览器模式】/;
+/** 与前端注入标题一致时视为 ~open 会话（兼容旧文案） */
+const MARKER_UI_ZH = /【(?:文件浏览器模式|目录列举|目录浏览[^】]*)】/;
 
 /** 用户希望基于目录内容做推理时使用 Harness，但先注入真实 browse 输出 */
 const ANALYSIS_HINT =
   /分析|解读|总结|评价|介绍一下|干什么用|什么项目|readme|看看.*项目|了解下|说明一下|讲讲/i;
+
+/** 是否与「分析/总结目录或文件」语义相近（供 chat-ws 注入「最近一次列出路径」提示） */
+export function looksLikeFileAnalysisIntent(text: string): boolean {
+  return ANALYSIS_HINT.test(normalizeTyping(text));
+}
 
 function normalizeTyping(text: string): string {
   return text.replace(/：/g, ':').trim();
@@ -24,10 +28,6 @@ function normalizeTyping(text: string): string {
 export function detectFileBrowserOpen(rawMessage: string): boolean {
   const t = rawMessage.trimStart();
   return MARKER_OPEN.test(rawMessage) || (t.startsWith('~open') && MARKER_UI_ZH.test(rawMessage));
-}
-
-export function detectFileBrowserClose(rawMessage: string): boolean {
-  return MARKER_CLOSE.test(rawMessage);
 }
 
 /**
@@ -140,7 +140,7 @@ export async function tryDirectFileBrowserTurn(options: {
   lastBrowsedPath: string | null;
   platform: NodeJS.Platform;
   hasImages: boolean;
-  /** 当前是否处于文件浏览器模式（曾 ~open 且未关闭） */
+  /** 当前是否在目录列举会话中（本进程内曾发送过 ~open，直至 clear_session；用于确定性导航） */
   active: boolean;
 }): Promise<DirectTurnResult> {
   const {
@@ -175,7 +175,7 @@ export async function tryDirectFileBrowserTurn(options: {
   if (!active) return { handled: false };
 
   const paths = extractWindowsAbsolutePaths(text);
-  const wantsAnalysis = ANALYSIS_HINT.test(text);
+  const wantsAnalysis = looksLikeFileAnalysisIntent(text);
 
   if (wantsAnalysis && paths.length > 0) {
     const target = longestPath(paths);

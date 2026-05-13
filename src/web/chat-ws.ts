@@ -36,8 +36,8 @@ import {
 } from '../harness/token-budget-config.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 import {
-  detectFileBrowserClose,
   detectFileBrowserOpen,
+  looksLikeFileAnalysisIntent,
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
 
@@ -61,7 +61,7 @@ const STRUCTURED_SESSION_FILE = path.join(SESSIONS_DIR, 'default.structured.json
  */
 let activeAbortController: AbortController | null = null;
 
-/** ~open 文件浏览器模式：服务端确定性导航状态（进程级，随 clear_session 重置） */
+/** ~open 后启用目录列举快捷导航（进程级，仅随 clear_session / 进程退出重置；无单独「退出」命令） */
 let fileBrowserModeActive = false;
 /** 最近一次 browse_directory 成功的目录（Windows，以 \\ 结尾） */
 let fileBrowserLastBrowsedPath: string | null = null;
@@ -181,7 +181,7 @@ async function clearSessionFile(): Promise<void> {
   } catch { /* ignore */ }
 }
 
-/** 文件浏览器确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
+/** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
 async function finalizeDirectBrowserTurn(
   ws: WebSocket,
   opts: {
@@ -439,11 +439,6 @@ async function handleChatMessage(
     typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
 
   const opensBrowser = detectFileBrowserOpen(message);
-  const closesBrowser = detectFileBrowserClose(message);
-  if (closesBrowser && !opensBrowser) {
-    fileBrowserModeActive = false;
-    fileBrowserLastBrowsedPath = null;
-  }
   if (opensBrowser) {
     fileBrowserModeActive = true;
     fileBrowserLastBrowsedPath = null;
@@ -462,18 +457,7 @@ async function handleChatMessage(
   const resolvedForDirect =
     typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
 
-  // ── 文件浏览器：服务端直接执行 list_drives / browse_directory，避免模型假列表 ──
-  if (closesBrowser && !opensBrowser) {
-    const assistantText =
-      '已退出文件浏览器模式（~browser_close）。后续对话不再由服务端强制列出磁盘。\n\n<status>complete</status>';
-    await finalizeDirectBrowserTurn(ws, {
-      userStructuredContent: harnessUserMessage,
-      assistantContent: assistantText,
-      toolTraceBatch: [],
-    });
-    return;
-  }
-
+  // ── 目录列举：服务端直接执行 list_drives / browse_directory，避免模型假列表 ──
   const direct = await tryDirectFileBrowserTurn({
     toolExecutor,
     resolvedText: resolvedForDirect,
@@ -510,6 +494,14 @@ async function handleChatMessage(
     fileBrowserLastBrowsedPath = direct.newLastBrowsedPath;
     harnessUserMessage = direct.augmentedUserText;
     console.log('[chat-ws] file-browser-direct harness_augment (browse_directory output injected)');
+  }
+
+  if (
+    fileBrowserLastBrowsedPath
+    && typeof harnessUserMessage === 'string'
+    && looksLikeFileAnalysisIntent(message)
+  ) {
+    harnessUserMessage += `\n\n（服务端提示：最近一次列出的文件夹为 \`${fileBrowserLastBrowsedPath}\`。用户若只给出文件名，请与该路径拼接为完整绝对路径后调用 parse_document / parse_pptx_deep / open_file。）`;
   }
 
   // 创建 AbortController 用于用户中断
