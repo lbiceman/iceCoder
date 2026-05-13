@@ -61,6 +61,8 @@ export interface SessionMemoryTelemetry {
   rejectReason?: string;
   evidenceAnchored: boolean;
   contradictionWarning: boolean;
+  /** 是否在校验失败后执行了第二轮生成 */
+  retried?: boolean;
 }
 
 /**

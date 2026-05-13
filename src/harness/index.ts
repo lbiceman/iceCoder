@@ -19,6 +19,16 @@ export { ContextAssembler, normalizeMessages } from './context-assembler.js';
 export { LoopController } from './loop-controller.js';
 export { PermissionManager } from './permission.js';
 export { ContextCompactor, estimateTokens } from './context-compactor.js';
+export {
+  readEffectiveContextWindowTokens,
+  getContextWindowTier,
+  tierFromMaxContextTokens,
+  CONTEXT_TIER_S_MAX,
+  CONTEXT_TIER_M_MAX,
+  CONTEXT_TIER_L_MAX,
+  DEFAULT_EFFECTIVE_CONTEXT_WINDOW,
+} from './context-window-tier.js';
+export type { ContextWindowTier } from './context-window-tier.js';
 export { HarnessLogger } from './logger.js';
 export { StopHookManager } from './stop-hooks.js';
 export { TokenBudgetTracker } from './token-budget.js';

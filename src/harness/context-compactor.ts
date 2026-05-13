@@ -2,7 +2,7 @@
  * 上下文压缩器 — 参考 claude-code 的分层策略。
  *
  * 压缩触发阈值为动态计算：contextWindow × compactionRatio。
- * - contextWindow：ICE_CONTEXT_WINDOW 环境变量 > 默认 provider maxContextTokens > 最大 provider maxContextTokens > 默认 128K
+ * - contextWindow：ICE_CONTEXT_WINDOW > readEffectiveContextWindowTokens()（默认 provider 的 maxContextTokens，见 context-window-tier.ts）> 默认 128K
  * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.88，即 88%）
  * - 1M 窗口 → 阈值 880K，128K 窗口 → 阈值 112K
  *
@@ -24,11 +24,8 @@
  * 最近消息保留使用 token 预算（≥10K token, ≥5 条消息, ≤40K token）。
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
-import type { IceCoderConfigFile } from '../web/types.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
@@ -39,6 +36,7 @@ import {
   isSyntheticUserBlockContent,
   truncateSessionNotesForCompact,
 } from './compaction-strategy.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 
 /**
  * 压缩配置。
@@ -65,9 +63,6 @@ export interface CompactionConfig {
   /** 重新注入最近文件内容的总 token 预算 */
   maxReinjectTokens: number;
 }
-
-/** 默认上下文窗口大小（未配置时的兜底值） */
-const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 /** 用户消息内容长度超过此阈值时强制保留，防止任务描述被压缩丢弃 */
 const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
@@ -97,36 +92,10 @@ const COMPACTION_RESERVE_TOKENS = (() => {
 })();
 
 /**
- * 读取上下文窗口大小。优先级：
- * 1. ICE_CONTEXT_WINDOW 环境变量（手动覆盖）
- * 2. data/config.json 中当前 provider 的 maxContextTokens（自动获取）
- * 3. 默认 128K
+ * 读取上下文窗口大小（委托 {@link readEffectiveContextWindowTokens}）。
  */
 function getContextWindow(): number {
-  // 1. 环境变量优先
-  const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-  if (Number.isFinite(env) && env > 0) return env;
-
-  // 2. 从 provider 配置读取当前默认 provider 的 maxContextTokens；未标记默认时回退最大值。
-  try {
-    const configPath = path.resolve('data/config.json');
-    const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as IceCoderConfigFile;
-    const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
-    if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
-      return defaultProvider.maxContextTokens;
-    }
-    let maxCtx = 0;
-    for (const p of config.providers ?? []) {
-      if (p.maxContextTokens && p.maxContextTokens > maxCtx) {
-        maxCtx = p.maxContextTokens;
-      }
-    }
-    if (maxCtx > 0) return maxCtx;
-  } catch { /* 配置文件不存在或解析失败，使用默认值 */ }
-
-  // 3. 兜底
-  return DEFAULT_CONTEXT_WINDOW;
+  return readEffectiveContextWindowTokens();
 }
 
 /** 从环境变量读取压缩触发比例（0-1 之间） */

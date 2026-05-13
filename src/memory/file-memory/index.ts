@@ -63,7 +63,7 @@ export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extract
 export { MemoryDream, createMemoryDream } from './memory-dream.js';
 export type { DreamResult, DreamTrigger } from './memory-dream.js';
 
-export { countDeadLinksInMemoryIndex } from './memory-index-health.js';
+export { countDeadLinksInMemoryIndex, repairDeadLinksInMemoryIndex } from './memory-index-health.js';
 
 // ─── 安全模块 ───
 

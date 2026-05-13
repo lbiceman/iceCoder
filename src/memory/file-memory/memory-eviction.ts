@@ -17,6 +17,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
+import { repairDeadLinksInMemoryIndex } from './memory-index-health.js';
+import { getScannerCache } from './memory-scanner-cache.js';
 import {
   type EvictionConfig,
   DEFAULT_EVICTION_CONFIG,
@@ -266,6 +268,15 @@ export async function evictIfNeeded(
 
   if (evictedFiles.length > 0) {
     console.log(`[memory-eviction] ${summary}`);
+    try {
+      const repair = await repairDeadLinksInMemoryIndex(memoryDir);
+      if (repair.wrote) {
+        console.debug(`[memory-eviction] MEMORY.md stripped ${repair.removedLinks} dead link(s)`);
+        getScannerCache().invalidate(memoryDir);
+      }
+    } catch (err) {
+      console.debug('[memory-eviction] repair MEMORY.md links failed:', err instanceof Error ? err.message : err);
+    }
   }
 
   return { executed: evictedFiles.length > 0, fileCountBefore, fileCountAfter, evictedFiles, summary };
