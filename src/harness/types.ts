@@ -96,7 +96,7 @@ export type StopReason =
   | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 
-/** 推送到前端的记忆子状态（会话宠物 / 气泡） */
+/** 推送到前端的记忆子状态（冰豆 / Web 会话指示气泡） */
 export type MemoryStepKind =
   | 'recall_coarse_hit'  // 首轮 LLM 前粗召回命中
   | 'recall_hit'         // 工具后轮次标准召回命中

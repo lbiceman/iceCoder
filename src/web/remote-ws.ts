@@ -22,6 +22,7 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudgetFromEnv,
 } from '../harness/token-budget-config.js';
+import { resolveDefaultChatModelMeta } from './routes/config.js';
 
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSIONS_DIR = path.resolve('data/sessions');
@@ -104,11 +105,19 @@ export function attachRemoteWebSocket(server: Server, options: RemoteWSOptions):
   });
 
   // 处理 WebSocket 连接
-  wss.on('connection', (ws: WebSocket, _request: unknown, token: string) => {
+  wss.on('connection', async (ws: WebSocket, _request: unknown, token: string) => {
     console.log(`[Remote] Mobile client connected (token: ${token.slice(0, 8)}...)`);
 
-    // 发送连接成功消息
-    sendJSON(ws, { type: 'connected', message: '连接成功，可以开始发送指令' });
+    try {
+      const meta = await resolveDefaultChatModelMeta();
+      sendJSON(ws, {
+        type: 'connected',
+        message: '连接成功，可以开始发送指令',
+        ...(meta ? { modelContext: meta } : {}),
+      });
+    } catch {
+      sendJSON(ws, { type: 'connected', message: '连接成功，可以开始发送指令' });
+    }
 
     let isProcessing = false;
 

@@ -25,7 +25,7 @@ import { MCPManager } from '../mcp/index.js';
 import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
-import type { ProviderConfig } from '../web/types.js';
+import type { ProviderConfig, IceCoderConfigFile } from '../web/types.js';
 
 /**
  * 引导结果，包含所有初始化好的核心组件。
@@ -46,7 +46,7 @@ export interface BootstrapResult {
  */
 export async function loadConfig(configPath: string): Promise<ProviderConfig[]> {
   const data = await fs.readFile(configPath, 'utf-8');
-  const config = JSON.parse(data) as { providers: ProviderConfig[] };
+  const config = JSON.parse(data) as IceCoderConfigFile;
   return config.providers;
 }
 

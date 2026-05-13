@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   SESSION_PET_PALETTE_COLORS,
+  SESSION_PET_DISPLAY_NAME,
   tokenPercentToPaletteIndex,
   eyeColorForTokenPct,
   pickRandomPaletteColor,
@@ -9,6 +10,10 @@ import {
 
 describe('session-pet-palette', () => {
   const n = SESSION_PET_PALETTE_COLORS.length;
+
+  it('显示名与会话指示器文案一致（冰豆）', () => {
+    expect(SESSION_PET_DISPLAY_NAME).toBe('冰豆');
+  });
 
   it('色板长度与工程一致', () => {
     expect(n).toBeGreaterThanOrEqual(2);
@@ -56,6 +61,7 @@ describe('session-pet-palette', () => {
       tokenMaxLabel: '8.0K',
       outputLabel: '100',
     });
+    expect(label).toContain('冰豆');
     expect(label).toMatch(/圆环/);
     expect(label).toMatch(/随机/);
     expect(label).toContain('40%');

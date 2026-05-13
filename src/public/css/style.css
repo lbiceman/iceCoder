@@ -756,18 +756,18 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   line-height: 1;
 }
 
-/* 会话宠物指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
-/* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏宠物 */
+/* 冰豆会话指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
+/* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏冰豆 */
 .session-pet-indicator {
   display: flex;
   position: fixed;
-  bottom: 80px;
+  bottom: 76px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   pointer-events: none;
   width: max-content;
   max-width: none;
@@ -808,12 +808,12 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   transform: translate(-50%, 0);
 }
 
-/* NOMI 圆形宠物：120 画布，固定 120×120 CSS 像素 */
+/* 冰豆画布：96×96 逻辑像素（与 session-pet.js PET_SIZE / canvas 属性一致） */
 .pet-canvas {
   display: block;
-  width: 120px;
-  height: 120px;
-  max-width: min(31vw, 148px);
+  width: 96px;
+  height: 96px;
+  max-width: min(31vw, 120px);
   cursor: grab;
   touch-action: none;
   pointer-events: auto;
@@ -866,7 +866,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   color: var(--text-muted);
   opacity: 0.9;
   text-align: center;
-  max-width: min(31vw, 148px);
+  max-width: min(31vw, 120px);
   margin: 0;
   pointer-events: none;
 }
@@ -1150,7 +1150,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   .form-grid { grid-template-columns: 1fr; }
   .chat-messages { padding: 12px; gap: 10px; }
   .chat-input-area > .chat-input-row { padding: 16px 12px; }
-  .session-pet-indicator { bottom: 78px; }
+  .session-pet-indicator { bottom: 72px; }
   .message { max-width: 90%; padding: 10px 14px; }
 }
 

@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { c, table, info, success, error } from '../utils/terminal-ui.js';
 import { resolveDataPaths } from '../paths.js';
+import type { IceCoderConfigFile, ProviderConfig } from '../../web/types.js';
 
 export async function runConfig(_args: ParsedArgs): Promise<void> {
   const subCmd = _args.positional[0];
@@ -22,11 +23,11 @@ export async function runConfig(_args: ParsedArgs): Promise<void> {
 async function showConfig(configPath: string): Promise<void> {
   try {
     const data = await fs.readFile(configPath, 'utf-8');
-    const config = JSON.parse(data) as { providers: Array<{ id: string; providerName: string; modelName: string; apiUrl: string; isDefault?: boolean }> };
+    const config = JSON.parse(data) as IceCoderConfigFile;
 
     console.log(`\n${c.bold}LLM 提供者配置${c.reset}\n`);
 
-    const rows = config.providers.map((p) => [
+    const rows = config.providers.map((p: ProviderConfig) => [
       p.isDefault ? `${c.green}★${c.reset} ${p.id}` : `  ${p.id}`,
       p.providerName,
       p.modelName,
@@ -48,9 +49,9 @@ async function handleSet(args: ParsedArgs, configPath: string): Promise<void> {
   if (key === 'default' && value) {
     try {
       const data = await fs.readFile(configPath, 'utf-8');
-      const config = JSON.parse(data) as { providers: Array<{ id: string; isDefault?: boolean }> };
+      const config = JSON.parse(data) as IceCoderConfigFile;
 
-      const target = config.providers.find((p) => p.id === value);
+      const target = config.providers.find((p: ProviderConfig) => p.id === value);
       if (!target) {
         error(`未找到提供者: ${value}`);
         info('可用的提供者 ID:');

@@ -1,6 +1,6 @@
 /**
- * 宠物状态桥接模块
- * 负责：将 Harness StepEvent 映射到宠物表情状态 + 气泡文案
+ * 冰豆状态桥接模块
+ * 负责：将 Harness StepEvent 映射到表情状态 + 气泡文案
  */
 
 /* exported ChatPetBridge */

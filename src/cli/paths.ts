@@ -12,6 +12,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type { IceCoderConfigFile } from '../web/types.js';
 
 /** 用户主目录下的 iceCoder 数据目录 */
 const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
@@ -101,7 +102,7 @@ export const MCP_SERVERS_TEMPLATE: Record<string, Record<string, unknown>> = {
   },
 };
 
-const DEFAULT_CONFIG = {
+const DEFAULT_CONFIG: IceCoderConfigFile = {
   providers: [
     {
       id: 'default',

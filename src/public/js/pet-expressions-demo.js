@@ -1,5 +1,5 @@
 /**
- * 表情联调页入口（ESM，便于 session-pet 再导出 palette）
+ * 冰豆表情联调页入口（ESM，便于 session-pet 再导出 palette）
  */
 import './session-pet.js';
 import { SESSION_PET_PALETTE_COLORS } from './session-pet-palette.js';

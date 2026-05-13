@@ -371,25 +371,25 @@ See `nextWork.md` for the next implementation steps.
 - **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
 - **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients can use `/api/remote` and related routes.
 - **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry, files, export).
-- **Frontend** lives under `src/public/` (e.g. chat UI scripts, session pet indicator). Production build output: `dist/public/`.
+- **Frontend** lives under `src/public/` (e.g. chat UI scripts, Ice Bean indicator). Production build output: `dist/public/`.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
 
-### Session pet (Web UI indicator)
+### Ice Bean (session indicator, Web UI)
 
-The **chat page** embeds an optional **session pet**: a small canvas-based character that reflects runtime activity **without** changing Harness or backend logic.
+The **chat page** embeds an optional **Ice Bean** (Chinese display name **冰豆**, `SESSION_PET_DISPLAY_NAME` in `session-pet-palette.js`): a small canvas-based indicator that reflects runtime activity **without** changing Harness or backend logic.
 
 | | |
 |---|---|
 | **Rendering** | ~120×120 logical px, dark body, capsule eyes; eye color is picked once per load from `session-pet-palette.js` (decorative, not tied to token %). |
 | **Token ring** | Outer arc from top, clockwise — approximate **context / token usage** ratio (green → yellow → red). |
 | **Expressions** | Many (~20) named visual states (e.g. thinking, idle, tool/memory hints) driven by **`ChatPetBridge`** from WebSocket `HarnessStepEvent`-style updates in `chat-page.js`. |
-| **Interaction** | Drag to reposition (saved under `localStorage` key `ice-session-pet-position`); double-click resets placement. Canvas `aria-label` is built via `buildSessionPetCanvasAriaLabel`. |
+| **Interaction** | Drag to reposition (saved under `localStorage` key `ice-session-pet-position`); double-click resets placement. Canvas `aria-label` is built via `buildSessionPetCanvasAriaLabel` (starts with 冰豆). |
 | **Key files** | `src/public/js/session-pet.js`, `session-pet-palette.js`, `chat-pet-bridge.js`; styles under `src/public/css/style.css`; wired in `chat-page.js` / `main.js`. |
 | **Demo** | `src/public/pet-expressions-demo.html` + `pet-expressions-demo.js` for manual expression checks. |
 | **Tests** | `test/public/session-pet-palette.test.ts`, `session-pet-expression-cycle.test.ts`. |
 
-CLI-only workflows do **not** include the pet; it is a **browser UX** affordance for the SPA chat.
+CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordance for the SPA chat.
 
 ---
 
@@ -430,7 +430,7 @@ src/
   tools/            # Builtin tools, registry, executor
   mcp/              # MCP client manager
   web/              # Express server, routes, WebSocket chat
-  public/           # Vite root: chat UI, session pet (canvas + bridge), static assets
+  public/           # Vite root: chat UI, Ice Bean (canvas + bridge), static assets
   types/            # Shared types (e.g. runtime snapshot schema)
 test/               # Vitest suites mirroring src areas
 data/               # config, sessions, optional MCP memory file

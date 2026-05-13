@@ -6,7 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
-import type { ProviderConfig } from '../types.js';
+import type { ProviderConfig, IceCoderConfigFile } from '../types.js';
 
 /** 与 bootstrap / index 使用同一规则，避免 Web  API 读写错误的 config.json */
 function resolveConfigPath(explicit?: string): string {
@@ -50,6 +50,29 @@ export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number 
   if (!raw) return undefined;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * 读取当前默认提供者下冰豆与压缩器共用上下文上限（不向客户端暴露密钥）。
+ * 供 WebSocket `connected` 包携带，替代聊天页周期性 GET /api/config。
+ */
+export async function resolveDefaultChatModelMeta(
+  explicitConfigPath?: string,
+): Promise<{ modelName: string; maxContextTokens: number } | null> {
+  const configFile = resolveConfigPath(explicitConfigPath);
+  try {
+    const raw = await fs.readFile(configFile, 'utf-8');
+    const parsed = JSON.parse(raw) as IceCoderConfigFile;
+    const providers = normalizeDefaultFlags(parsed.providers ?? []);
+    const p = providers.find(pp => pp.isDefault) ?? providers[0];
+    if (!p) return null;
+    return {
+      modelName: p.modelName || '',
+      maxContextTokens: p.maxContextTokens ?? getModelMaxContext(p.modelName),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null */
@@ -175,7 +198,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       let existingProviders: ProviderConfig[] = [];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
-        const existing = JSON.parse(data) as { providers: ProviderConfig[] };
+        const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
       } catch { /* 文件不存在，首次保存 */ }
 
@@ -229,10 +252,10 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
   router.get('/', async (_req: Request, res: Response): Promise<void> => {
     try {
       const data = await fs.readFile(configFile, 'utf-8');
-      const config = JSON.parse(data) as { providers: ProviderConfig[] };
+      const config = JSON.parse(data) as IceCoderConfigFile;
 
       // 返回前遮蔽 API 密钥
-      const maskedProviders = config.providers.map((provider: any) => ({
+      const maskedProviders = config.providers.map((provider: ProviderConfig) => ({
         ...provider,
         apiKey: maskApiKey(provider.apiKey),
         // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断

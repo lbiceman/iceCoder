@@ -28,6 +28,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
+import type { IceCoderConfigFile } from '../web/types.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 
@@ -99,7 +100,7 @@ function getContextWindow(): number {
   try {
     const configPath = path.resolve('data/config.json');
     const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as { providers?: Array<{ maxContextTokens?: number; isDefault?: boolean }> };
+    const config = JSON.parse(raw) as IceCoderConfigFile;
     const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
     if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
       return defaultProvider.maxContextTokens;

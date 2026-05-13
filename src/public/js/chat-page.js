@@ -1,7 +1,7 @@
 /**
  * 聊天页面主模块（重构后）
  * 职责：DOM 渲染、事件绑定、模块协调
- * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet
+ * 依赖：ChatSession, ChatWebSocket, ChatUI, ChatCommands, ChatFile, ChatQR, ChatPetBridge, SessionPet（冰豆）
  */
 
 /* exported ChatPage */
@@ -56,6 +56,19 @@ window.ChatPage = (function () {
     }
   }
 
+  function applyModelContextFromWs(data) {
+    if (!data || !data.modelContext) return false;
+    var mc = data.modelContext;
+    if (typeof mc.maxContextTokens === 'number' && mc.maxContextTokens > 0) {
+      maxContextTokens = mc.maxContextTokens;
+    }
+    if (typeof mc.modelName === 'string') {
+      modelName = mc.modelName;
+    }
+    updatePetTokenUsage();
+    return true;
+  }
+
   // ---- Token 用量 ----
   function fetchModelContext() {
     fetch('/api/config')
@@ -69,6 +82,13 @@ window.ChatPage = (function () {
           updatePetTokenUsage();
         }
       })
+      .catch(function () { /* ignore */ });
+  }
+
+  function fetchSupportedFormats() {
+    fetch('/api/chat/supported-formats')
+      .then(function (res) { return res.json(); })
+      .then(function () { /* ignore */ })
       .catch(function () { /* ignore */ });
   }
 
@@ -253,12 +273,17 @@ window.ChatPage = (function () {
     Session.saveMessages();
   }
 
+  function onWsConnected(data) {
+    if (!applyModelContextFromWs(data)) {
+      fetchModelContext();
+    }
+  }
+
   // ---- WebSocket 事件处理 ----
   function onWsOpen() {
     updateNavStatus(true);
     syncMessages();
     WS.startSyncPolling();
-    fetchModelContext();
   }
 
   function onWsClose() {
@@ -427,7 +452,10 @@ window.ChatPage = (function () {
     Session.fetchServerMessages(function (serverMsgs) {
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
-      Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing());
+      if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
+        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        Session.saveMessages();
+      }
     });
   }
 
@@ -444,7 +472,11 @@ window.ChatPage = (function () {
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
-          '<canvas class="pet-canvas" id="pet-canvas" width="120" height="120" role="img" aria-label="会话状态宠物，拖动移动；双击恢复默认位置" title="拖动：移动；双击：恢复默认位置"></canvas>' +
+          '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="' +
+          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
+          '，拖动移动；双击恢复默认位置" title="' +
+          (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
+          '：拖动移动；双击恢复默认位置"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         '<div class="chat-input-area">' +
@@ -485,26 +517,20 @@ window.ChatPage = (function () {
     var inputWrapper = container.querySelector('.input-wrapper');
     if (inputWrapper && cmdDropdown) inputWrapper.appendChild(cmdDropdown);
 
-    // 初始化宠物
+    // 初始化冰豆（会话指示器）
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
     }
 
-    // 初始化会话
-    if (!remoteMode) {
-      Session.initSession();
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-    }
+    // 初始化会话：先从 localStorage 载入（本地页与远程页都需要内存里有消息再绘制）
+    Session.initSession();
 
-    fetchModelContext();
-
-    if (!remoteMode) {
-      fetchSupportedFormats();
-    }
+    fetchSupportedFormats();
 
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
+    WS.on('connected', onWsConnected);
     WS.on('close', onWsClose);
     WS.on('stream', onWsStream);
     WS.on('stream_end', onWsStreamEnd);
@@ -596,18 +622,16 @@ window.ChatPage = (function () {
       elFileRemove.addEventListener('click', File.removeUploadedFile);
     }
 
-    // 渲染已有消息
+    // 渲染已有消息（远程模式先展示本地缓存；服务端返回后以快照为准刷新）
     UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
 
-    // 远程模式同步
     if (remoteMode) {
-      Session.initSession();
-      UI.renderMessagesOnly([], {}, Session.stripStatusTag);
       Session.fetchServerMessages(function (serverMsgs) {
-        if (serverMsgs.length > 0) {
-          var separated = Session.separateToolTraces(serverMsgs);
-          Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing());
+        var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+        var separated = Session.separateToolTraces(raw);
+        if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
           UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+          Session.saveMessages();
         }
       });
     }
@@ -623,13 +647,6 @@ window.ChatPage = (function () {
         WS.stopSyncPolling();
       }
     });
-  }
-
-  function fetchSupportedFormats() {
-    fetch('/api/chat/supported-formats')
-      .then(function (res) { return res.json(); })
-      .then(function () { /* ignore */ })
-      .catch(function () { /* ignore */ });
   }
 
   return { render: render };
