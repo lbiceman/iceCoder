@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>冰豆 · 表情联调</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-primary);
+      padding-bottom: min(52vh, 420px);
+    }
+    .demo-hint {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+      z-index: 101;
+    }
+    .pet-demo-dock {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      max-height: 48vh;
+      background: var(--bg-nav, rgba(20, 22, 38, 0.92));
+      border-top: 1px solid var(--border-color);
+      box-sizing: border-box;
+    }
+    .pet-demo-controls {
+      flex-shrink: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 14px 20px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border-color);
+      box-sizing: border-box;
+    }
+    .pet-demo-panel {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0));
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-content: flex-start;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+    .pet-demo-btn {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-secondary, var(--bg-card));
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .pet-demo-btn:hover {
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+    .pet-demo-btn.active {
+      background: var(--accent-light, rgba(74, 125, 224, 0.15));
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .pet-demo-ring {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--text-secondary, #aaa);
+    }
+    .pet-demo-ring input[type="range"] {
+      width: min(200px, 42vw);
+      accent-color: var(--accent, #4a7de0);
+    }
+    .pet-demo-ring output {
+      font-variant-numeric: tabular-nums;
+      min-width: 3.2em;
+      color: var(--text-primary);
+    }
+    .pet-demo-colors-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary, #aaa);
+    }
+    .pet-demo-colors {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: min(90vw, 320px);
+      justify-content: center;
+    }
+    .pet-demo-swatch {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      cursor: pointer;
+      padding: 0;
+      box-sizing: border-box;
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    .pet-demo-swatch:hover {
+      transform: scale(1.08);
+      box-shadow: 0 0 0 2px var(--accent, rgba(74, 125, 224, 0.5));
+    }
+    .pet-demo-swatch.selected {
+      box-shadow: 0 0 0 2px var(--text-primary);
+      border-color: var(--text-primary);
+    }
+  </style>
+</head>
+<body>
+  <p class="demo-hint">共 20 种表情 · 下方按钮切换 · 滑块调圆环占用 · 色点切换眼睛颜色 · 当前：<strong id="state-label" style="color:var(--text-primary)">—</strong></p>
+  <div class="session-pet-indicator active" id="pet-root">
+    <div class="pet-bubble has-text" id="pet-bubble"></div>
+    <canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="冰豆表情演示"></canvas>
+    <span class="status-turn" id="status-turn">表情联调</span>
+  </div>
+  <div class="pet-demo-dock">
+    <div class="pet-demo-controls" id="pet-demo-controls">
+      <label class="pet-demo-ring" for="pet-ring-slider">
+        <span>圆环占用</span>
+        <input type="range" id="pet-ring-slider" min="0" max="100" value="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="调整 token 圆环进度">
+        <output id="pet-ring-value" for="pet-ring-slider">0%</output>
+      </label>
+      <div class="pet-demo-colors-wrap">
+        <span>眼睛颜色</span>
+        <div class="pet-demo-colors" id="pet-demo-colors" role="group" aria-label="点击切换表情线条颜色"></div>
+      </div>
+    </div>
+    <div class="pet-demo-panel" id="pet-demo-panel" role="group" aria-label="表情切换"></div>
+  </div>
+  <script type="module" src="/js/pet-expressions-demo.js"></script>
+</body>
+</html>

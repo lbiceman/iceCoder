@@ -21,6 +21,7 @@ import {
   DEFAULT_LLM_EXTRACTION_CONFIG,
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
+  resolveUserMemoryEvictedDir,
 } from './memory-config.js';
 
 /** 消息内容截断字符数 */
@@ -70,7 +71,7 @@ export interface ExtractionResult {
 }
 
 /**
- * 提取 Agent 的系统提示词。
+ * 提取当前对话的系统提示词片段。
  */
 const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract durable information worth remembering for future conversations. Be precise: noisy or weak memories are harmful because they can distract future coding tasks.
 
@@ -515,6 +516,11 @@ ${memory.content}
       scannerCache.invalidate(userMemoryDir);
       evictIfNeeded(memoryDir).catch(err => {
         console.debug('[LLMMemoryExtractor] Eviction check failed:', err instanceof Error ? err.message : err);
+      });
+      evictIfNeeded(userMemoryDir, {
+        evictedDir: resolveUserMemoryEvictedDir(),
+      }).catch(err => {
+        console.debug('[LLMMemoryExtractor] User memory eviction failed:', err instanceof Error ? err.message : err);
       });
     }
 

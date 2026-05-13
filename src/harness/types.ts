@@ -96,6 +96,14 @@ export type StopReason =
   | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 
+/** 推送到前端的记忆子状态（冰豆 / Web 会话指示气泡） */
+export type MemoryStepKind =
+  | 'recall_coarse_hit'  // 首轮 LLM 前粗召回命中
+  | 'recall_hit'         // 工具后轮次标准召回命中
+  | 'recall_empty'       // 标准召回无结果
+  | 'recall_skipped'     // 跳过（空库、过滤、去重后无条等）
+  | 'session_hydrate';   // 从 session-notes 恢复运行时快照
+
 /**
  * 循环状态跟踪。
  */
@@ -146,6 +154,8 @@ export interface HarnessConfig {
   fileMemoryManager?: FileMemoryManager;
   /** 会话目录，用于保存任务断点 checkpoint */
   sessionDir?: string;
+  /** 工作区根目录（会话笔记 package.json 锚定；默认 process.cwd()） */
+  workspaceRoot?: string;
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
 }
@@ -154,11 +164,13 @@ export interface HarnessConfig {
  * Harness 循环中每一步的事件回调。
  */
 export interface HarnessStepEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'compaction' | 'final' | 'stream_delta' | 'tool_output';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'tool_progress' | 'compaction' | 'final' | 'stream_delta' | 'tool_output' | 'memory_event';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */
   delta?: string;
+  /** 工具执行中给用户看的提示（仅 tool_progress） */
+  phase?: 'running';
   toolName?: string;
   toolArgs?: Record<string, any>;
   toolSuccess?: boolean;
@@ -170,6 +182,10 @@ export interface HarnessStepEvent {
   tokenUsage?: { inputTokens: number; outputTokens: number };
   /** 累计 token 用量 */
   totalTokenUsage?: { inputTokens: number; outputTokens: number };
+  /** 记忆子状态（仅 type === 'memory_event'） */
+  memoryKind?: MemoryStepKind;
+  /** 给用户看的短说明（气泡） */
+  memoryDetail?: string;
 }
 
 /**

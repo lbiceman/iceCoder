@@ -13,7 +13,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@core': './src/core',
-      '@agents': './src/agents',
       '@parser': './src/parser',
       '@memory': './src/memory',
       '@llm': './src/llm',

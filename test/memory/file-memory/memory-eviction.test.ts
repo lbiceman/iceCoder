@@ -35,6 +35,8 @@ function makeHeader(overrides: Partial<MemoryHeader> = {}): MemoryHeader {
     mtimeMs: Date.now(),
     description: 'test memory',
     type: 'project',
+    level: 'project_fact',
+    evidenceStrength: 'inferred',
     confidence: 0.5,
     recallCount: 0,
     lastRecalledMs: 0,
@@ -57,6 +59,10 @@ async function writeMemoryFile(
     recallCount?: number;
     lastRecalledAt?: string;
     createdAt?: string;
+    level?: string;
+    evidenceStrength?: string;
+    source?: string;
+    eventDate?: string;
   } = {},
 ) {
   const content = `---
@@ -67,6 +73,10 @@ confidence: ${opts.confidence ?? 0.5}
 recallCount: ${opts.recallCount ?? 0}
 ${opts.lastRecalledAt ? `lastRecalledAt: ${opts.lastRecalledAt}` : ''}
 ${opts.createdAt ? `createdAt: ${opts.createdAt}` : ''}
+${opts.level ? `level: ${opts.level}` : ''}
+${opts.evidenceStrength ? `evidenceStrength: ${opts.evidenceStrength}` : ''}
+${opts.source ? `source: ${opts.source}` : ''}
+${opts.eventDate ? `eventDate: ${opts.eventDate}` : ''}
 ---
 
 Content of ${filename}`;
@@ -97,7 +107,7 @@ describe('computeEvictionScore', () => {
 
   it('长期不活跃的记忆分数高（该淘汰）', () => {
     const oldTime = Date.now() - 300 * 86_400_000; // 300 天前
-    const mem = makeHeader({ mtimeMs: oldTime, lastRecalledMs: 0, recallCount: 0, confidence: 0.3 });
+    const mem = makeHeader({ mtimeMs: oldTime, createdMs: oldTime, lastRecalledMs: 0, recallCount: 0, confidence: 0.3 });
     const score = computeEvictionScore(mem);
     expect(score).toBeGreaterThan(50);
   });
@@ -116,6 +126,15 @@ describe('computeEvictionScore', () => {
     expect(computeEvictionScore(manyRecalls)).toBeLessThan(computeEvictionScore(noRecall));
   });
 
+  it('feedback/reference 比同条件 project 更易被淘汰（分更高）', () => {
+    const t = Date.now() - 30 * 86_400_000;
+    const proj = makeHeader({ mtimeMs: t, type: 'project' });
+    const fb = makeHeader({ mtimeMs: t, type: 'feedback' });
+    const ref = makeHeader({ mtimeMs: t, type: 'reference' });
+    expect(computeEvictionScore(fb)).toBeGreaterThan(computeEvictionScore(proj));
+    expect(computeEvictionScore(ref)).toBeGreaterThan(computeEvictionScore(fb));
+  });
+
   it('user 类型记忆受保护', () => {
     const oldTime = Date.now() - 200 * 86_400_000;
     const project = makeHeader({ mtimeMs: oldTime, type: 'project' });
@@ -130,6 +149,35 @@ describe('computeEvictionScore', () => {
     const score = computeEvictionScore(mem);
     // 最后活跃是 5 天前，不是 300 天前
     expect(score).toBeLessThan(30);
+  });
+
+  it('显式规则、强证据和用户明确来源会降低淘汰分', () => {
+    const oldTime = Date.now() - 180 * 86_400_000;
+    const weakSession = makeHeader({
+      mtimeMs: oldTime,
+      createdMs: oldTime,
+      level: 'session_state',
+      evidenceStrength: 'weak',
+      source: 'llm_extract',
+      confidence: 0.4,
+    });
+    const hardRule = makeHeader({
+      mtimeMs: oldTime,
+      createdMs: oldTime,
+      level: 'hard_rule',
+      evidenceStrength: 'explicit',
+      source: 'user_explicit',
+      confidence: 0.4,
+    });
+    expect(computeEvictionScore(hardRule)).toBeLessThan(computeEvictionScore(weakSession));
+  });
+
+  it('recent eventDate 作为新鲜度信号保护记忆', () => {
+    const oldTime = Date.now() - 240 * 86_400_000;
+    const recentEvent = Date.now() - 2 * 86_400_000;
+    const oldEvent = makeHeader({ mtimeMs: oldTime, createdMs: oldTime, eventDateMs: oldTime });
+    const freshEvent = makeHeader({ mtimeMs: oldTime, createdMs: oldTime, eventDateMs: recentEvent });
+    expect(computeEvictionScore(freshEvent)).toBeLessThan(computeEvictionScore(oldEvent));
   });
 });
 
@@ -267,6 +315,8 @@ describe('evictIfNeeded', () => {
     const logContent = await fs.readFile(logPath, 'utf-8');
     const logEntry = JSON.parse(logContent.trim());
     expect(logEntry.evictedFiles).toBeDefined();
+    expect(logEntry.evictedDetails?.[0]?.reason).toBeDefined();
+    expect(typeof logEntry.evictedDetails?.[0]?.score).toBe('number');
     expect(logEntry.count).toBeGreaterThan(0);
   });
 });

@@ -1,11 +1,8 @@
 /**
  * iceCoder - 应用入口点
  *
- * 加载提供者配置，初始化 LLM 适配器、文件解析器、
- * 包含所有 6 个子智能体的编排器，并启动带 SSE 支持的 Express Web 服务器
- * 以实现前端实时更新。
- *
- * Requirements: 2.1, 10.4, 18.1, 18.6, 19.4, 19.5, 22.1, 22.6
+ * 加载提供者配置，初始化 LLM 适配器、文件解析器、工具系统、编排器，
+ * 并启动 Express Web 服务器与 WebSocket 聊天。
  */
 
 import fs from 'fs/promises';
@@ -31,19 +28,9 @@ import { initializeToolSystem } from './tools/index.js';
 // MCP
 import { MCPManager } from './mcp/index.js';
 
-// 智能体
-import { RequirementAnalysisAgent } from './agents/requirement-analysis.js';
-import { DesignAgent } from './agents/design.js';
-import { TaskGenerationAgent } from './agents/task-generation.js';
-import { CodeWritingAgent } from './agents/code-writing.js';
-import { TestingAgent } from './agents/testing.js';
-import { RequirementVerificationAgent } from './agents/requirement-verification.js';
-
 // Web 层
-import { SSEManager } from './web/sse.js';
 import { createServer, startServer } from './web/server.js';
-import { createConfigRouter, getModelMaxOutputTokens } from './web/routes/config.js';
-import { createPipelineRouter, wireOrchestratorToSSE } from './web/routes/pipeline.js';
+import { createConfigRouter, getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from './web/routes/config.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
 import { attachChatWebSocket, cleanupChatResources } from './web/chat-ws.js';
@@ -54,7 +41,8 @@ import { createMemoryExportRouter } from './web/routes/memory-export.js';
 import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 
 // 类型
-import type { ProviderConfig } from './web/types.js';
+import type { ProviderConfig, IceCoderConfigFile } from './web/types.js';
+import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
 
 const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
 const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
@@ -65,7 +53,7 @@ const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions
  */
 async function loadConfig(): Promise<ProviderConfig[]> {
   const data = await fs.readFile(CONFIG_PATH, 'utf-8');
-  const config = JSON.parse(data) as { providers: ProviderConfig[] };
+  const config = JSON.parse(data) as IceCoderConfigFile;
   return config.providers;
 }
 
@@ -79,6 +67,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -87,6 +76,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       });
       llmAdapter.registerProvider(openaiAdapter);
     } else if (provider.providerName === 'anthropic') {
@@ -123,32 +113,21 @@ function initializeFileParser(): FileParser {
 }
 
 /**
- * 创建编排器并注册所有 6 个子智能体。
- * 返回编排器和工具系统用于路由连接。
+ * 初始化工具系统 + MCP，再创建编排器（与 CLI bootstrap 行为一致）。
  */
 async function initializeOrchestrator(
   fileParser: FileParser,
   llmAdapter: LLMAdapter,
 ): Promise<{ orchestrator: Orchestrator; toolRegistry: import('./tools/tool-registry.js').ToolRegistry; toolExecutor: import('./tools/tool-executor.js').ToolExecutor; mcpManager: MCPManager }> {
-  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-    outputDir: OUTPUT_DIR,
-    sessionDir: SESSIONS_DIR,
-    stageMaxRetries: 2,
-    stageRetryDelay: 3000,
-  });
-
-  // 初始化工具系统
   const { registry, executor } = initializeToolSystem({
     workDir: path.resolve('.'),
     fileParser,
     llmAdapter,
   });
 
-  // 初始化 MCP 管理器并注册 MCP 工具
-  const mcpManager = new MCPManager({ configPath: CONFIG_PATH });
+  const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
   try {
     await mcpManager.initialize();
-    // 将 MCP 工具注册到工具注册表
     for (const tool of mcpManager.getRegisteredTools()) {
       registry.register(tool);
     }
@@ -159,13 +138,10 @@ async function initializeOrchestrator(
     console.error('MCP 初始化失败（不影响核心功能）:', err);
   }
 
-  // 注册所有 6 个流水线智能体
-  orchestrator.registerAgent(new RequirementAnalysisAgent());
-  orchestrator.registerAgent(new DesignAgent());
-  orchestrator.registerAgent(new TaskGenerationAgent());
-  orchestrator.registerAgent(new CodeWritingAgent());
-  orchestrator.registerAgent(new TestingAgent());
-  orchestrator.registerAgent(new RequirementVerificationAgent());
+  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
+    outputDir: OUTPUT_DIR,
+    sessionDir: SESSIONS_DIR,
+  });
 
   return { orchestrator, toolRegistry: registry, toolExecutor: executor, mcpManager };
 }
@@ -180,6 +156,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       const openaiAdapter = new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -188,6 +165,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       });
       llmAdapter.registerProvider(openaiAdapter);
     } else if (provider.providerName === 'anthropic') {
@@ -239,6 +217,8 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
 async function main(): Promise<void> {
   console.log('iceCoder starting...');
 
+  await ensureMcpConfigFile(CONFIG_PATH);
+
   // 1. 加载提供者配置
   const providers = await loadConfig();
   console.log(`Loaded ${providers.length} provider configuration(s)`);
@@ -252,18 +232,13 @@ async function main(): Promise<void> {
   // 4. 使用 FileParser、LLMAdapter、工具系统和输出配置初始化编排器
   const { orchestrator, toolRegistry, toolExecutor, mcpManager } = await initializeOrchestrator(fileParser, llmAdapter);
 
-  // 5. 创建 SSE 管理器用于前端实时更新
-  const sseManager = new SSEManager();
-
-  // 6. 将编排器事件连接到 SSE 管理器
-  wireOrchestratorToSSE(orchestrator, sseManager);
-
-  // 7. 创建带所有 API 路由的 Express 服务器
+  // 5. 创建带所有 API 路由的 Express 服务器
   const port = parseInt(process.env.PORT ?? '1024', 10);
 
   const app = await createServer({
     routes: [
       { path: '/api/config', router: createConfigRouter({
+        configPath: CONFIG_PATH,
         onConfigSaved: () => {
           reloadLLMAdapterFromConfig(llmAdapter).catch(err => console.error('Failed to reload LLM adapter:', err));
         },
@@ -271,24 +246,23 @@ async function main(): Promise<void> {
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
       { path: '/api/remote', router: createRemoteRouter({ orchestrator, toolRegistry, toolExecutor }) },
       { path: '/api/sessions', router: createSessionsRouter() },
-      { path: '/api/chat/upload', router: createUploadRouter() },
+      { path: '/api/chat', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/memory', router: createMemoryExportRouter() },
-      { path: '/api', router: createPipelineRouter({ orchestrator, sseManager }) },
     ],
   });
 
-  // 8. 启动服务器
+  // 6. 启动服务器
   const server = await startServer(app, port);
 
-  // 9. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
+  // 7. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
   attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
 
-  // 10. 监视配置变化以支持 LLM 提供者热切换
+  // 8. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);
 
-  // 11. 优雅关闭处理
+  // 9. 优雅关闭处理
   const shutdown = () => {
     console.log('Shutting down...');
     cleanupChatResources();

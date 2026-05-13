@@ -11,7 +11,34 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 
-/** 上传文件存储目录 */
+/** 与 multer 单文件上限一致 */
+export const CHAT_UPLOAD_MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+/** 多模态 / resolveFileReferences 识别的图片扩展名 */
+export const CHAT_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'] as const;
+
+/** 前端可参考的扩展名（实际上传入口不按后缀拦截） */
+const CHAT_SUGGESTED_EXTENSIONS = [
+  '.txt',
+  '.md',
+  '.json',
+  '.csv',
+  '.xml',
+  '.html',
+  '.htm',
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx',
+  '.xmind',
+  '.zip',
+  ...CHAT_IMAGE_EXTENSIONS,
+] as const;
+
+/** 上传临时目录 */
 const UPLOAD_DIR = path.join(os.tmpdir(), 'iceCoder-uploads');
 
 /** 已上传文件的元数据缓存 */
@@ -51,13 +78,12 @@ export function getUploadedFile(fileId: string): { originalName: string; filePat
 export function resolveFileReferences(message: string): { text: string; filePaths: string[]; imageUrls: string[] } {
   const filePaths: string[] = [];
   const imageUrls: string[] = [];
-  const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
 
   const resolved = message.replace(/\[file:([a-f0-9-]+)\]\s*(.*)/g, (_match, fileId: string, filename: string) => {
     const file = uploadedFiles.get(fileId);
     if (file) {
       const ext = path.extname(file.originalName).toLowerCase();
-      if (IMAGE_EXTENSIONS.includes(ext)) {
+      if ((CHAT_IMAGE_EXTENSIONS as readonly string[]).includes(ext)) {
         // 图片文件：读取并转为 base64 data URL（同步标记，异步处理在调用方）
         imageUrls.push(file.filePath);
         return `[已上传图片] ${file.originalName}`;
@@ -92,13 +118,24 @@ export function createUploadRouter(): Router {
 
   const upload = multer({
     storage,
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+    limits: { fileSize: CHAT_UPLOAD_MAX_FILE_BYTES },
+  });
+
+  /**
+   * GET /api/chat/supported-formats — 上传/解析能力说明（供前端展示，非强制校验）
+   */
+  router.get('/supported-formats', (_req: Request, res: Response): void => {
+    res.json({
+      extensions: [...CHAT_SUGGESTED_EXTENSIONS],
+      imageExtensions: [...CHAT_IMAGE_EXTENSIONS],
+      maxFileBytes: CHAT_UPLOAD_MAX_FILE_BYTES,
+    });
   });
 
   /**
    * POST /api/chat/upload — 上传文件
    */
-  router.post('/', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
+  router.post('/upload', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
     try {
       const file = (req as any).file;
       if (!file) {

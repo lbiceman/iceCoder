@@ -28,9 +28,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
+import type { IceCoderConfigFile } from '../web/types.js';
 import type { ChatFunction } from './types.js';
-import type { TaskStateSnapshot } from './task-state.js';
-import type { RepoContextSnapshot } from './repo-context.js';
+import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 
 /**
  * 压缩配置。
@@ -100,7 +100,7 @@ function getContextWindow(): number {
   try {
     const configPath = path.resolve('data/config.json');
     const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as { providers?: Array<{ maxContextTokens?: number; isDefault?: boolean }> };
+    const config = JSON.parse(raw) as IceCoderConfigFile;
     const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
     if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
       return defaultProvider.maxContextTokens;
@@ -256,7 +256,7 @@ export class ContextCompactor {
    * 构建压缩恢复用的结构化 Runtime State。
    *
    * 这条消息在硬压缩后重新注入，优先级高于自然语言摘要，
-   * 用于保证 Agent 还能知道当前目标、改动文件和下一步验证命令。
+   * 用于保证模型还能知道当前目标、改动文件和下一步验证命令。
    */
   buildRuntimeRecoveryContext(
     taskState: TaskStateSnapshot,
@@ -438,7 +438,7 @@ export class ContextCompactor {
       : '';
 
     const sessionNotesDirective = hasSessionNotes
-      ? '\n\n**CRITICAL**: Check the session notes (data/sessions/session-notes.md) for the current task specification. If a task was in progress, continue executing it using the session notes as the authoritative source. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
+      ? '\n\n**CRITICAL**: Session notes include narrative sections plus a machine-readable `icecoder-runtime` JSON block under Runtime Evidence for exact task/repo state. Use that for resuming work after restarts. Also check data/sessions/session-notes.md path when applicable. If a task was in progress, continue from session notes + structured state. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
       : '';
 
     return {
@@ -503,7 +503,7 @@ Continue the conversation from where it left off without asking the user any fur
 
   /**
    * 从消息历史中提取任务描述（最早的长度 > 200 字符的用户消息）。
-   * 用于压缩前备份到会话笔记，确保压缩后 Agent 能找回任务目标。
+   * 用于压缩前备份到会话笔记，确保压缩后模型能找回任务目标。
    * @returns 截取前 300 字符的任务摘要，若无长用户消息则返回 null
    */
   getTaskDescription(messages: UnifiedMessage[]): string | null {
@@ -693,7 +693,7 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // 保护包含任务描述的长用户消息（content > MIN_USER_MSG_LENGTH_TO_PRESERVE），
-    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致 Agent 无法继续执行任务。
+    // 这类消息通常是用户最初的任务说明，压缩后丢失会导致模型无法继续执行任务。
     for (let i = contentStart; i < splitAt; i++) {
       const msg = messages[i];
       if (

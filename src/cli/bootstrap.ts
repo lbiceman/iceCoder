@@ -18,20 +18,14 @@ import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
 import { XMindParserStrategy } from '../parser/xmind-strategy.js';
-import { getModelMaxOutputTokens } from '../web/routes/config.js';
+import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager } from '../mcp/index.js';
-import { RequirementAnalysisAgent } from '../agents/requirement-analysis.js';
-import { DesignAgent } from '../agents/design.js';
-import { TaskGenerationAgent } from '../agents/task-generation.js';
-import { CodeWritingAgent } from '../agents/code-writing.js';
-import { TestingAgent } from '../agents/testing.js';
-import { RequirementVerificationAgent } from '../agents/requirement-verification.js';
-import { resolveDataPaths, ensureDataDir, type DataPaths } from './paths.js';
+import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
-import type { ProviderConfig } from '../web/types.js';
+import type { ProviderConfig, IceCoderConfigFile } from '../web/types.js';
 
 /**
  * 引导结果，包含所有初始化好的核心组件。
@@ -52,7 +46,7 @@ export interface BootstrapResult {
  */
 export async function loadConfig(configPath: string): Promise<ProviderConfig[]> {
   const data = await fs.readFile(configPath, 'utf-8');
-  const config = JSON.parse(data) as { providers: ProviderConfig[] };
+  const config = JSON.parse(data) as IceCoderConfigFile;
   return config.providers;
 }
 
@@ -65,6 +59,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       llmAdapter.registerProvider(new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -73,6 +68,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       }));
     } else if (provider.providerName === 'anthropic') {
       llmAdapter.registerProvider(new AnthropicAdapter({
@@ -105,6 +101,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
     if (provider.providerName === 'openai') {
+      const rt = resolveOpenAiRequestTimeoutMs(provider);
       llmAdapter.registerProvider(new OpenAIAdapter({
         name: provider.id,
         apiKey: provider.apiKey,
@@ -113,6 +110,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
         temperature: provider.parameters.temperature,
         maxTokens,
         topP: provider.parameters.topP,
+        ...(rt !== undefined ? { timeout: rt } : {}),
       }));
     } else if (provider.providerName === 'anthropic') {
       llmAdapter.registerProvider(new AnthropicAdapter({
@@ -173,7 +171,7 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   });
 
   // 初始化 MCP
-  const mcpManager = new MCPManager({ configPath: paths.configPath });
+  const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
   try {
     await mcpManager.initialize();
     for (const tool of mcpManager.getRegisteredTools()) {
@@ -183,23 +181,11 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
     console.error('MCP 初始化失败（不影响核心功能）:', err);
   }
 
-  // 初始化编排器（传入工具系统，让 Agent 可以使用 Harness 工具循环）
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: paths.outputDir,
     sessionDir: paths.sessionsDir,
-    stageMaxRetries: 2,
-    stageRetryDelay: 3000,
-    toolExecutor: executor,
-    toolDefinitions: registry.getDefinitions(),
   });
 
-  // 注册智能体
-  orchestrator.registerAgent(new RequirementAnalysisAgent());
-  orchestrator.registerAgent(new DesignAgent());
-  orchestrator.registerAgent(new TaskGenerationAgent());
-  orchestrator.registerAgent(new CodeWritingAgent());
-  orchestrator.registerAgent(new TestingAgent());
-  orchestrator.registerAgent(new RequirementVerificationAgent());
 
   return {
     llmAdapter, fileParser, orchestrator,

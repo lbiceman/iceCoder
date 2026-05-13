@@ -143,14 +143,14 @@ describe('recallRelevantMemories — LLM 路径', () => {
     expect(result.memories[0].filename).toBe('real_file.md');
   });
 
-  it('LLM 返回空数组时结果为空', async () => {
-    await writeMemoryFile(tempDir, 'some_file.md', '某个文件');
+  it('LLM 返回空数组时回退到关键词匹配', async () => {
+    await writeMemoryFile(tempDir, 'vitest_pref.md', '项目使用 Vitest 做单元测试');
     await writeFillerMemories(tempDir, fillersForRecallLLM(1));
     const mockLLM = createMockLLM('{"selected": []}');
-    const result = await recallRelevantMemories('完全无关的查询', tempDir, mockLLM);
+    const result = await recallRelevantMemories('Vitest 单元测试', tempDir, mockLLM);
 
-    expect(result.usedLLM).toBe(true);
-    expect(result.memories).toEqual([]);
+    expect(result.usedLLM).toBe(false);
+    expect(result.memories.some(m => m.filename === 'vitest_pref.md')).toBe(true);
   });
 
   it('LLM 返回无效 JSON 时结果为空', async () => {

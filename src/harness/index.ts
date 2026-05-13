@@ -28,6 +28,7 @@ export type {
   HarnessConfig,
   HarnessResult,
   HarnessStepEvent,
+  MemoryStepKind,
   ChatFunction,
   StreamFunction,
   ContextAssemblyConfig,

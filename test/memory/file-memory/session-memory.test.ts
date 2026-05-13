@@ -19,7 +19,15 @@ import {
   isSessionMemoryEmpty,
   getSessionMemoryContent,
   SESSION_MEMORY_TEMPLATE,
+  mergeRuntimeEvidenceIntoNotes,
+  SESSION_RUNTIME_EVIDENCE_HEADER,
+  buildTestStackContradictionWarning,
+  serializePersistedRuntime,
+  parsePersistedRuntime,
+  ICECODER_RUNTIME_FENCE_LANG,
+  buildRuntimeEvidenceSection,
   type SessionMemoryState,
+  type PackageJsonTestFacts,
 } from '../../../src/memory/file-memory/session-memory.js';
 
 // Mock remote config
@@ -258,5 +266,120 @@ describe('initSessionMemoryState', () => {
   it('notesPath 指向 session-notes.md', () => {
     const s = initSessionMemoryState('/my/session');
     expect(s.notesPath).toBe(path.join('/my/session', 'session-notes.md'));
+  });
+});
+
+describe('Runtime Evidence merge & contradiction', () => {
+  it('mergeRuntimeEvidenceIntoNotes 替换节正文', async () => {
+    const st = initSessionMemoryState(tempDir);
+    const tmpl = await setupSessionMemoryFile(st);
+    expect(tmpl).toContain(SESSION_RUNTIME_EVIDENCE_HEADER);
+    const merged = mergeRuntimeEvidenceIntoNotes(tmpl, '## Auto\n- fact: test');
+    expect(merged).toContain('## Auto');
+    expect(merged).toContain('fact: test');
+  });
+
+  it('buildTestStackContradictionWarning 检测 Jest 幻觉风险', () => {
+    const pkg: PackageJsonTestFacts = {
+      resolvedPath: '/x/package.json',
+      testScript: 'vitest --run',
+      devDependenciesHasVitest: true,
+      devDependenciesHasJest: false,
+      dependenciesHasVitest: false,
+      dependenciesHasJest: false,
+    };
+    const notes = `# Session Title
+项目已使用 Jest 作为测试框架
+# Runtime Evidence (auto)
+_
+# Worklog
+ok`;
+    expect(buildTestStackContradictionWarning(notes, pkg)).toBeTruthy();
+  });
+});
+
+describe('persisted runtime (icecoder-runtime)', () => {
+  const minimalTask = {
+    goal: 'fix login',
+    intent: 'debug',
+    phase: 'context' as const,
+    filesRead: ['a.ts'],
+    filesChanged: [],
+    commandsRun: ['npm test'],
+    verificationRequired: false,
+    verificationStatus: 'not_required' as const,
+  };
+  const minimalRepo = {
+    filesRead: ['a.ts'],
+    filesChanged: [],
+    commandsRun: ['npm test'],
+    testCommands: ['npm test'],
+    recentDiagnostics: [],
+  };
+
+  it('serialize + parse roundtrip', () => {
+    const json = serializePersistedRuntime(minimalTask, minimalRepo);
+    const notes = `blah\n\n\`\`\`${ICECODER_RUNTIME_FENCE_LANG}\n${json}\n\`\`\`\n`;
+    const p = parsePersistedRuntime(notes);
+    expect(p).not.toBeNull();
+    expect(p!.task.goal).toBe('fix login');
+    expect(p!.repo.filesRead).toContain('a.ts');
+  });
+
+  it('buildRuntimeEvidenceSection 含可解析 fence', () => {
+    const md = buildRuntimeEvidenceSection(
+      {
+        task: {
+          goal: 'g',
+          intent: 'edit',
+          phase: 'editing',
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          verificationRequired: true,
+          verificationStatus: 'required',
+        },
+        repo: {
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      },
+      null,
+    );
+    expect(md).toContain(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`);
+    expect(parsePersistedRuntime(md)?.task.intent).toBe('edit');
+  });
+
+  it('truncateSessionMemoryForCompact 保留 Runtime Evidence 内长 JSON', () => {
+    const evidence = buildRuntimeEvidenceSection(
+      {
+        task: {
+          goal: 'g',
+          intent: 'refactor',
+          phase: 'editing',
+          filesRead: Array.from({ length: 80 }, (_, i) => `f${i}.ts`),
+          filesChanged: [],
+          commandsRun: [],
+          verificationRequired: false,
+          verificationStatus: 'not_required',
+        },
+        repo: {
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      },
+      null,
+    );
+    const longWorklog = '# Worklog\n' + 'x'.repeat(25000);
+    const content = `# Session Title\nok\n\n# Runtime Evidence (auto)\n${evidence}\n\n${longWorklog}`;
+    const { truncatedContent } = truncateSessionMemoryForCompact(content);
+    expect(parsePersistedRuntime(truncatedContent)).not.toBeNull();
+    expect(truncatedContent).toContain('icecoder-runtime');
   });
 });

@@ -16,6 +16,7 @@
  */
 
 import type { FileMemoryConfig } from './types.js';
+import path from 'node:path';
 
 // ══════════════════════════════════════════════════════════════════
 // 目录与路径
@@ -30,6 +31,25 @@ export const DEFAULT_USER_MEMORY_DIR = './data/user-memory';
 /** 默认索引文件名 */
 export const DEFAULT_ENTRYPOINT_NAME = 'MEMORY.md';
 
+/** 解析用户记忆目录绝对路径（尊重 ICE_USER_MEMORY_DIR） */
+export function resolveUserMemoryDir(): string {
+  return path.resolve(process.env.ICE_USER_MEMORY_DIR ?? DEFAULT_USER_MEMORY_DIR);
+}
+
+/** 用户记忆淘汰归档目录（默认同级 evicted/） */
+export function resolveUserMemoryEvictedDir(): string {
+  return path.join(resolveUserMemoryDir(), 'evicted');
+}
+
+/**
+ * 按类型的淘汰分加成（越高越优先被淘汰；user 类型仍享受 EVICTION_USER_TYPE_BONUS 保护）。
+ */
+export function evictionTypeEvictionBias(type: string | undefined): number {
+  if (type === 'feedback') return 8;
+  if (type === 'reference') return 12;
+  return 0;
+}
+
 // ══════════════════════════════════════════════════════════════════
 // 接口定义（Single Source of Truth）
 // ══════════════════════════════════════════════════════════════════
@@ -37,63 +57,113 @@ export const DEFAULT_ENTRYPOINT_NAME = 'MEMORY.md';
 /** 文件记忆基础配置 */
 export type { FileMemoryConfig } from './types.js';
 
-/** 多级加载配置 */
+/** 多级加载配置（用户级 / 项目级 / 目录级合并时用） */
 export interface MultiLevelMemoryConfig extends FileMemoryConfig {
+  /** 项目根，用于锚定项目级记忆目录 */
   projectRoot: string;
+  /** 用户级记忆根路径（可与环境变量一致） */
   userMemoryDir: string;
+  /** 当前工作目录，用于目录级记忆解析 */
   currentDir: string;
 }
 
-/** 异步预取配置 */
+/** 异步预取配置（`async-prefetch` 等） */
 export interface PrefetchConfig {
+  /** 单次预取超时（毫秒） */
   timeout: number;
+  /** 单次最多预取的记忆条数 */
   maxPrefetch: number;
+  /** 是否按相关度过滤预取候选 */
   enableRelevance: boolean;
+  /** 相关度分数 ≥ 此值才预取（0–1） */
   relevanceThreshold: number;
 }
 
-/** LLM 提取配置 */
+/** LLM 批量提取记忆时的上限与模型参数 */
 export interface LLMExtractionConfig {
+  /** 单次响应中最多落盘的记忆条数 */
   maxMemories: number;
+  /** 提取用 LLM 补全 token 上限 */
   maxOutputTokens: number;
+  /** 是否启用提供商侧 prompt 缓存（静态前缀复用） */
   enablePromptCache: boolean;
 }
 
-/** Dream 整合配置 */
-export interface DreamConfig {
-  sessionInterval: number;
-  fileCountThreshold: number;
-  maxIndexLines: number;
-  maxIndexBytes: number;
-  maxOutputTokens: number;
-  enableBackup: boolean;
-  backupDir: string;
-  maxBackups: number;
-}
-
-/** 遥测配置 */
-export interface TelemetryConfig {
-  logPath: string;
-  enableFileLog: boolean;
-  enableConsoleLog: boolean;
-  maxLogSize: number;
-}
-
-/** 淘汰配置 */
+/**
+ * 条数超标时的「加权淘汰」配置（`memory-eviction.ts`）。
+ * 文件被移到 `evictedDir`，一般不直接物理删除。
+ */
 export interface EvictionConfig {
+  /** 是否启用自动淘汰 */
   enabled: boolean;
+  /** 超过此条数开始考虑淘汰（与 `evictionTarget` 配合） */
   softLimit: number;
+  /** 淘汰后目标保留的 `.md` 条数（不含 `MEMORY.md` 时与扫描逻辑一致） */
   evictionTarget: number;
+  /** 被淘汰文件移动到的归档目录 */
   evictedDir: string;
+  /** `evicted` 目录内最多保留多少个 `.md`，超出删最旧 */
   maxEvictedFiles: number;
+  /** 最近活跃（创建/召回/mtime）在天内的记忆不参与淘汰 */
   protectionDays: number;
 }
 
-/** 相关性门控配置 */
+/** autoDream（`memory-dream.ts`）本地静态配置 */
+export interface DreamConfig {
+  /** `recordSession` 累计多少次会话后，可与文件数门控一起参与触发 */
+  sessionInterval: number;
+  /** 门控：当前扫描到的记忆文件数 ≥ 此值才可能因「会话+文件」触发 Dream */
+  fileCountThreshold: number;
+  /** Dream 提示词中要求 `MEMORY.md` 不超过的大致行数 */
+  maxIndexLines: number;
+  /** 索引字节上限（与行数一起约束入口文件体积） */
+  maxIndexBytes: number;
+  /** Dream LLM 调用 `maxTokens` 上限 */
+  maxOutputTokens: number;
+  /** 是否在改写前写入备份目录 */
+  enableBackup: boolean;
+  /** Dream 备份根目录 */
+  backupDir: string;
+  /** 最多保留几份备份（旧的由 dream 逻辑清理） */
+  maxBackups: number;
+  /**
+   * Dream LLM 步骤完成后是否强制执行记忆数量上限（调用与提取相同的加权淘汰：陈旧、低置信、低召回优先移入 evicted/）。
+   */
+  enforceMemoryCapAfterDream: boolean;
+  /** 项目记忆目录中保留的 .md 条数上限（不含 MEMORY.md）；超出则在 Dream 末尾淘汰。 */
+  postDreamMemoryCap: number;
+  /** 传入 `evictIfNeeded` 的覆盖项（如测试指定 `evictedDir`）；`softLimit` / `evictionTarget` 仍由本类强制为 `postDreamMemoryCap`。 */
+  afterDreamEviction?: Partial<EvictionConfig>;
+  /** MEMORY.md 中本地死链数 ≥ 此值时触发 Dream（需 LLM 修索引；与条数上限解耦） */
+  staleIndexDeadLinksThreshold: number;
+  /** Dream 完成后是否对用户级记忆目录做条数淘汰 */
+  enforceUserMemoryCapAfterDream: boolean;
+  /** 用户级 .md 条数上限（不含 MEMORY.md，若有） */
+  userMemoryPostDreamCap: number;
+  /** 用户级淘汰传入 `evictIfNeeded` 的覆盖项；默认归档目录为 `resolveUserMemoryEvictedDir()` */
+  afterUserDreamEviction?: Partial<EvictionConfig>;
+}
+
+/** 记忆遥测落盘与控制台开关（`memory-telemetry.ts`） */
+export interface TelemetryConfig {
+  /** JSONL 等文件路径 */
+  logPath: string;
+  /** 是否写文件日志 */
+  enableFileLog: boolean;
+  /** 是否额外打 console */
+  enableConsoleLog: boolean;
+  /** 当日志文件超过此字节数时的轮转/截断阈值（由遥测实现解释） */
+  maxLogSize: number;
+}
+
+/** 召回前的粗排门控与 LLM rescue（`harness-memory` / recall 相关） */
 export interface RelevanceGateConfig {
   enabled: boolean;
+  /** 与当前轮相邻要考虑的用户消息窗口大小（轮次数） */
   contextWindow: number;
+  /** 关键词重叠至少几个才过粗排 */
   minKeywordOverlap: number;
+  /** 低于此相关度可触发 rescue 二次判定 */
   rescueThreshold: number;
   /** rescue 结果缓存大小（LRU，默认 20） */
   rescueCacheSize: number;
@@ -101,16 +171,20 @@ export interface RelevanceGateConfig {
   rescueShortPreviewThreshold: number;
 }
 
-/** 会话记忆远程配置 */
+/** 会话级笔记 / 短期摘要更新节奏（`session-memory.ts`） */
 export interface SessionMemoryConfig {
   enabled: boolean;
+  /** 累计对话 token 超过此值才初始化会话记忆 */
   minTokensToInit: number;
+  /** 两次自动更新之间至少间隔多少 token */
   minTokensBetweenUpdate: number;
+  /** 或每多少次工具调用触发一次更新（与 token 条件配合） */
   toolCallsBetweenUpdates: number;
 }
 
-/** 召回远程配置 */
+/** 记忆召回注入到 prompt 时的条数与预算（`memory-recall.ts`） */
 export interface RecallConfig {
+  /** 粗召回最多取多少条候选 */
   maxResults: number;
   /** 会话内去重：避免同一记忆在同一会话中反复注入（默认 true） */
   dedupInSession: boolean;
@@ -124,24 +198,31 @@ export interface RecallConfig {
   topicSwitchWeight: Record<string, number>;
 }
 
-/** 提取远程配置 */
+/** 何时触发「对话中提取记忆」的远程门控（与 `EXTRACTION_SIGNAL_WORDS` 等并存） */
 export interface ExtractionRemoteConfig {
+  /** 最少对话轮次 */
   minTurns: number;
+  /** 最少累计输入 token */
   minTokens: number;
+  /** 每隔多少次工具调用可视为一次提取采样点 */
   toolCallInterval: number;
+  /** 同一轮内节流：至少隔多少轮才再尝试提取 */
   turnThrottle: number;
 }
 
-/** Dream 远程配置 */
+/** Dream 是否启用及时间/会话门槛（`getDreamConfig()` 覆盖本地默认） */
 export interface DreamRemoteConfig {
+  /** 距离上次整合至少间隔小时数 */
   minHours: number;
+  /** 自上次 Dream 后至少累计多少次 `recordSession` */
   minSessions: number;
+  /** 总开关：为 false 时 `evaluateDreamGate` 直接不跑 LLM Dream */
   enabled: boolean;
 }
 
 /** 用户反馈配置 */
 export interface FeedbackConfig {
-  /** 是否启用反馈检测（默认 true） */
+  /** 是否启用反（默认 true） */
   enabled: boolean;
   /** 否定关键词 */
   negativeKeywords: string[];
@@ -165,14 +246,16 @@ export interface MemoryDynamicConfig {
 // 静态默认值
 // ══════════════════════════════════════════════════════════════════
 
+/** 单项目文件记忆：目录、索引文件名与体积、条数软上限（与 Dream 后 `postDreamMemoryCap` 常对齐） */
 export const DEFAULT_FILE_MEMORY_CONFIG: FileMemoryConfig = {
   memoryDir: DEFAULT_MEMORY_DIR,
   entrypointName: DEFAULT_ENTRYPOINT_NAME,
   maxEntrypointLines: 200,
   maxEntrypointBytes: 25000,
-  maxMemoryFiles: 150,
+  maxMemoryFiles: 100,
 };
 
+/** 多层级加载器默认路径占位（实际运行时由 bootstrap 传入真实根目录） */
 export const DEFAULT_MULTI_LEVEL_CONFIG: MultiLevelMemoryConfig = {
   ...DEFAULT_FILE_MEMORY_CONFIG,
   projectRoot: '.',
@@ -180,6 +263,7 @@ export const DEFAULT_MULTI_LEVEL_CONFIG: MultiLevelMemoryConfig = {
   currentDir: '.',
 };
 
+/** 后台异步预取记忆的保守默认 */
 export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
   timeout: 5000,
   maxPrefetch: 20,
@@ -187,14 +271,21 @@ export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
   relevanceThreshold: 0.3,
 };
 
+/** `memory-llm-extractor` 单次提取规模默认 */
 export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
   maxMemories: 15,
   maxOutputTokens: 4096,
   enablePromptCache: true,
 };
 
+/**
+ * Dream 整合默认：触发门槛、索引大小、备份与 Dream 后条数上限。
+ * 远程 `DreamRemoteConfig` 可缩短 `minHours` / `minSessions` 等。
+ */
 export const DEFAULT_DREAM_CONFIG: DreamConfig = {
+  /** 与 `recordSession` 叠加：`sessionCount >= sessionInterval` 时才可能触发 */
   sessionInterval: 5,
+  /** 与门控组合：记忆文件数至少此值才考虑「会话+文件」类触发 */
   fileCountThreshold: 10,
   maxIndexLines: 200,
   maxIndexBytes: 25000,
@@ -202,8 +293,16 @@ export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   enableBackup: true,
   backupDir: 'data/memory/dream-backups',
   maxBackups: 3,
+  enforceMemoryCapAfterDream: true,
+  /** 项目 `.md` 条数上限（不含 MEMORY.md），与 `DEFAULT_FILE_MEMORY_CONFIG.maxMemoryFiles` 常一致 */
+  postDreamMemoryCap: 100,
+  staleIndexDeadLinksThreshold: 3,
+  enforceUserMemoryCapAfterDream: true,
+  /** 用户目录同样维持 100 条话题文件规模 */
+  userMemoryPostDreamCap: 100,
 };
 
+/** 遥测 JSONL 默认路径与体积上限 */
 export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
   logPath: 'data/memory/telemetry.jsonl',
   enableFileLog: true,
@@ -213,13 +312,14 @@ export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
 
 export const DEFAULT_EVICTION_CONFIG: EvictionConfig = {
   enabled: true,
-  softLimit: 120,
+  softLimit: 100,
   evictionTarget: 100,
   evictedDir: 'data/memory/evicted',
   maxEvictedFiles: 100,
   protectionDays: 3,
 };
 
+/** 召回相关度门控 + rescue 默认阈值 */
 export const DEFAULT_RELEVANCE_GATE_CONFIG: RelevanceGateConfig = {
   enabled: true,
   contextWindow: 3,
@@ -229,13 +329,15 @@ export const DEFAULT_RELEVANCE_GATE_CONFIG: RelevanceGateConfig = {
   rescueShortPreviewThreshold: 500,
 };
 
+/** 会话笔记更新默认：偏长对话才维护，避免短聊写盘 */
 export const DEFAULT_SESSION_MEMORY_CONFIG: SessionMemoryConfig = {
   enabled: true,
   minTokensToInit: 10000,
-  minTokensBetweenUpdate: 5000,
-  toolCallsBetweenUpdates: 3,
+  minTokensBetweenUpdate: 6000,
+  toolCallsBetweenUpdates: 4,
 };
 
+/** 注入主上下文时条数、预算比例与话题切换权重 */
 export const DEFAULT_RECALL_CONFIG: RecallConfig = {
   maxResults: 15,
   dedupInSession: true,
@@ -245,6 +347,7 @@ export const DEFAULT_RECALL_CONFIG: RecallConfig = {
   topicSwitchWeight: { convention: 1.5, preference: 0.7, fact: 1.0 },
 };
 
+/** 提取触发：轮次 / token / 工具节奏默认门槛 */
 export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
   minTurns: 3,
   minTokens: 5000,
@@ -252,12 +355,14 @@ export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
   turnThrottle: 1,
 };
 
+/** Dream 远程：最短间隔 6h、最少 3 次会话累计后才与时间门控联动 */
 export const DEFAULT_DREAM_REMOTE_CONFIG: DreamRemoteConfig = {
   minHours: 6,
   minSessions: 3,
   enabled: true,
 };
 
+/** 用户口头肯定/否定反馈检测默认词表与窗口 */
 export const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
   enabled: true,
   negativeKeywords: ['不对', '不是', '错了', '不用', '别', 'wrong', 'incorrect', 'nope', 'stop'],
@@ -265,7 +370,7 @@ export const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
   maxTurnsToFeedback: 3,
 };
 
-/** 完整动态配置默认值 */
+/** 合并 `DEFAULT_*_REMOTE_CONFIG` 的初始快照，供 `memory-remote-config` 未加载时回退 */
 export const DEFAULT_DYNAMIC_CONFIG: MemoryDynamicConfig = {
   extraction: { ...DEFAULT_EXTRACTION_REMOTE_CONFIG },
   dream: { ...DEFAULT_DREAM_REMOTE_CONFIG },

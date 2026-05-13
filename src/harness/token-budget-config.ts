@@ -33,3 +33,14 @@ export function getHarnessTimeoutMsFromEnv(defaultMs = DEFAULT_LONG_RUNNING_TIME
 export function getHarnessMaxRoundsFromEnv(defaultRounds = DEFAULT_LONG_RUNNING_MAX_ROUNDS): number {
   return readPositiveIntEnv('ICE_HARNESS_MAX_ROUNDS') ?? defaultRounds;
 }
+
+/** 与 OpenAIAdapter 默认单次请求超时对齐，避免首轮 LLM 仍可等、子代理外层 60s 先失败 */
+const DEFAULT_SUBAGENT_ENVELOPE_MS = 120_000;
+
+/**
+ * 子代理 delegate 整段耗时上限（毫秒）。
+ * 可被 `SubAgentRequest.timeoutMs` 覆盖；默认 120s 或与 ICE_SUBAGENT_TIMEOUT_MS 一致。
+ */
+export function getSubAgentTimeoutMsFromEnv(defaultMs = DEFAULT_SUBAGENT_ENVELOPE_MS): number {
+  return readPositiveIntEnv('ICE_SUBAGENT_TIMEOUT_MS') ?? defaultMs;
+}

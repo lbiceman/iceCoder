@@ -6,9 +6,21 @@
 import { Router, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
-import type { ProviderConfig } from '../types.js';
+import type { ProviderConfig, IceCoderConfigFile } from '../types.js';
 
-const CONFIG_PATH = path.resolve('data/config.json');
+/** 与 bootstrap / index 使用同一规则，避免 Web  API 读写错误的 config.json */
+function resolveConfigPath(explicit?: string): string {
+  if (explicit) return path.resolve(explicit);
+  if (process.env.ICE_CONFIG_PATH) return path.resolve(process.env.ICE_CONFIG_PATH);
+  return path.resolve('data/config.json');
+}
+
+/** 恰好一个 isDefault: true，避免前端或旧配置出现全 false 时默默地用「第一条」当默认 */
+function normalizeDefaultFlags(providers: ProviderConfig[]): ProviderConfig[] {
+  const idx = providers.findIndex(p => p.isDefault === true);
+  const keep = idx >= 0 ? idx : 0;
+  return providers.map((p, i) => ({ ...p, isDefault: i === keep }));
+}
 
 /**
  * 遮蔽 API 密钥，仅显示前 4 位和后 4 位字符。
@@ -23,9 +35,47 @@ function maskApiKey(apiKey: string): string {
 }
 
 /**
- * 验证单个提供者配置。
- * 如果无效返回错误消息，有效则返回 null。
+ * 解析 OpenAI 兼容提供者的单次请求超时（毫秒）。
+ * 优先级：provider.requestTimeoutMs → ICE_OPENAI_REQUEST_TIMEOUT_MS → undefined（由适配器默认 120s 处理）。
  */
+export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number | undefined {
+  if (
+    typeof provider.requestTimeoutMs === 'number' &&
+    Number.isFinite(provider.requestTimeoutMs) &&
+    provider.requestTimeoutMs > 0
+  ) {
+    return Math.floor(provider.requestTimeoutMs);
+  }
+  const raw = process.env.ICE_OPENAI_REQUEST_TIMEOUT_MS?.trim();
+  if (!raw) return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * 读取当前默认提供者下冰豆与压缩器共用上下文上限（不向客户端暴露密钥）。
+ * 供 WebSocket `connected` 包携带，替代聊天页周期性 GET /api/config。
+ */
+export async function resolveDefaultChatModelMeta(
+  explicitConfigPath?: string,
+): Promise<{ modelName: string; maxContextTokens: number } | null> {
+  const configFile = resolveConfigPath(explicitConfigPath);
+  try {
+    const raw = await fs.readFile(configFile, 'utf-8');
+    const parsed = JSON.parse(raw) as IceCoderConfigFile;
+    const providers = normalizeDefaultFlags(parsed.providers ?? []);
+    const p = providers.find(pp => pp.isDefault) ?? providers[0];
+    if (!p) return null;
+    return {
+      modelName: p.modelName || '',
+      maxContextTokens: p.maxContextTokens ?? getModelMaxContext(p.modelName),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 验证单个提供者配置：无效返回错误文案，合法返回 null */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
     return 'API URL is required and cannot be empty';
@@ -123,9 +173,12 @@ export function getModelMaxOutputTokens(modelName: string): number {
 export interface ConfigRouterOptions {
   /** 配置保存成功后的回调（用于触发 LLM adapter 热重载） */
   onConfigSaved?: () => void;
+  /** 配置文件路径（须与 LLM bootstrap 的 configPath 一致，例如 CLI 下的 ~/.iceCoder/config.json） */
+  configPath?: string;
 }
 
 export function createConfigRouter(options?: ConfigRouterOptions): Router {
+  const configFile = resolveConfigPath(options?.configPath);
   const router = Router();
 
   /**
@@ -144,8 +197,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       // 读取现有配置，用于恢复被脱敏的 apiKey
       let existingProviders: ProviderConfig[] = [];
       try {
-        const data = await fs.readFile(CONFIG_PATH, 'utf-8');
-        const existing = JSON.parse(data) as { providers: ProviderConfig[] };
+        const data = await fs.readFile(configFile, 'utf-8');
+        const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
       } catch { /* 文件不存在，首次保存 */ }
 
@@ -167,17 +220,19 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         return { ...provider, apiKey };
       });
 
+      const normalizedProviders = normalizeDefaultFlags(resolvedProviders);
+
       // 验证每个提供者
-      for (let i = 0; i < resolvedProviders.length; i++) {
-        const error = validateProvider(resolvedProviders[i]);
+      for (let i = 0; i < normalizedProviders.length; i++) {
+        const error = validateProvider(normalizedProviders[i]);
         if (error) {
           res.status(400).json({ error: `Provider ${i}: ${error}` });
           return;
         }
       }
 
-      const configData = JSON.stringify({ providers: resolvedProviders }, null, 2);
-      await fs.writeFile(CONFIG_PATH, configData, 'utf-8');
+      const configData = JSON.stringify({ providers: normalizedProviders }, null, 2);
+      await fs.writeFile(configFile, configData, 'utf-8');
 
       // 触发热重载回调
       if (options?.onConfigSaved) {
@@ -196,11 +251,11 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
    */
   router.get('/', async (_req: Request, res: Response): Promise<void> => {
     try {
-      const data = await fs.readFile(CONFIG_PATH, 'utf-8');
-      const config = JSON.parse(data) as { providers: ProviderConfig[] };
+      const data = await fs.readFile(configFile, 'utf-8');
+      const config = JSON.parse(data) as IceCoderConfigFile;
 
       // 返回前遮蔽 API 密钥
-      const maskedProviders = config.providers.map((provider: any) => ({
+      const maskedProviders = config.providers.map((provider: ProviderConfig) => ({
         ...provider,
         apiKey: maskApiKey(provider.apiKey),
         // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断

@@ -10,23 +10,24 @@
  */
 
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { MCPClient } from './mcp-client.js';
 import type {
-  MCPConfig,
   MCPServerConfig,
   MCPServerInfo,
   MCPServerStatus,
   MCPToolDefinition,
 } from './types.js';
 import type { RegisteredTool, ToolResult } from '../tools/types.js';
+import { resolveMcpConfigPath } from '../cli/paths.js';
 
 /**
  * MCP Manager 配置。
  */
 export interface MCPManagerOptions {
-  /** 配置文件路径（默认 data/config.json） */
-  configPath?: string;
+  /**
+   * MCP 专用 JSON 路径（默认可通过 ICE_MCP_CONFIG_PATH 或 `.iceCoder/mcp.json` 解析）。
+   */
+  mcpConfigPath?: string;
 }
 
 /**
@@ -35,7 +36,8 @@ export interface MCPManagerOptions {
 interface ServerRecord {
   name: string;
   config: MCPServerConfig;
-  client: MCPClient;
+  /** 未启动的项（如 config.disabled）为 null */
+  client: MCPClient | null;
   status: MCPServerStatus;
   tools: MCPToolDefinition[];
   error?: string;
@@ -46,10 +48,10 @@ interface ServerRecord {
  */
 export class MCPManager {
   private servers = new Map<string, ServerRecord>();
-  private configPath: string;
+  private readonly mcpConfigPath: string;
 
   constructor(options?: MCPManagerOptions) {
-    this.configPath = options?.configPath ?? path.resolve('data/config.json');
+    this.mcpConfigPath = options?.mcpConfigPath ?? resolveMcpConfigPath();
   }
 
   /**
@@ -59,18 +61,27 @@ export class MCPManager {
     const mcpConfig = await this.loadMCPConfig();
 
     if (!mcpConfig || Object.keys(mcpConfig).length === 0) {
-      console.log('[mcp-manager] 未找到 MCP 服务器配置');
+      console.warn(
+        `[mcp-manager] 未找到可用的 MCP 配置：请在 ${this.mcpConfigPath} 中设置 mcpServers（可参考仓库内 .iceCoder/mcp.example.json），或将需启用的条目的 disabled 设为 false。也可用环境变量 ICE_MCP_CONFIG_PATH 指定路径。`,
+      );
       return;
     }
 
-    console.log(`[mcp-manager] 发现 ${Object.keys(mcpConfig).length} 个 MCP 服务器配置`);
+    console.log(`[mcp-manager] 发现 ${Object.keys(mcpConfig).length} 个 MCP 服务器配置项`);
 
-    // 并行启动所有已启用的服务器
+    // 并行启动所有已启用的服务器（禁用的仅登记状态，便于 iceCoder mcp 展示）
     const startPromises: Promise<void>[] = [];
 
     for (const [name, config] of Object.entries(mcpConfig)) {
       if (config.disabled) {
-        console.log(`[mcp-manager] 跳过已禁用的服务器: ${name}`);
+        this.servers.set(name, {
+          name,
+          config,
+          client: null,
+          status: 'disabled',
+          tools: [],
+        });
+        console.log(`[mcp-manager] 已注册（未启动）禁用的服务器: ${name}`);
         continue;
       }
       startPromises.push(this.startServer(name, config));
@@ -81,6 +92,11 @@ export class MCPManager {
     const readyCount = Array.from(this.servers.values()).filter((s) => s.status === 'ready').length;
     const totalTools = Array.from(this.servers.values()).reduce((sum, s) => sum + s.tools.length, 0);
     console.log(`[mcp-manager] 初始化完成: ${readyCount} 个服务器就绪, 共 ${totalTools} 个 MCP 工具`);
+    if (readyCount === 0 && this.servers.size > 0) {
+      console.log(
+        '[mcp-manager] 当前没有可注册的 MCP 工具：若配置中均为 disabled，请将需要的服务器改为 "disabled": false；若启动失败请检查本机 npx/uvx 是否可用（Windows 上需已安装 Node 且 PATH 中有 npx.cmd）。',
+      );
+    }
   }
 
   /**
@@ -119,11 +135,13 @@ export class MCPManager {
    */
   private async loadMCPConfig(): Promise<Record<string, MCPServerConfig> | null> {
     try {
-      const data = await fs.readFile(this.configPath, 'utf-8');
+      const data = await fs.readFile(this.mcpConfigPath, 'utf-8');
       const config = JSON.parse(data) as { mcpServers?: Record<string, MCPServerConfig> };
       return config.mcpServers ?? null;
     } catch (err) {
-      console.error(`[mcp-manager] 加载配置失败: ${err instanceof Error ? err.message : err}`);
+      console.error(
+        `[mcp-manager] 加载 MCP 配置失败 (${this.mcpConfigPath}): ${err instanceof Error ? err.message : err}`,
+      );
       return null;
     }
   }
@@ -161,7 +179,7 @@ export class MCPManager {
   private createToolHandler(serverName: string, toolName: string): (args: Record<string, any>) => Promise<ToolResult> {
     return async (args: Record<string, any>): Promise<ToolResult> => {
       const record = this.servers.get(serverName);
-      if (!record || record.status !== 'ready') {
+      if (!record || record.status !== 'ready' || !record.client) {
         return {
           success: false,
           output: '',
@@ -230,9 +248,12 @@ export class MCPManager {
     if (!record) {
       throw new Error(`MCP 服务器 ${name} 不存在`);
     }
+    if (record.status === 'disabled') {
+      throw new Error(`MCP 服务器 ${name} 已在配置中禁用，请先将 disabled 设为 false`);
+    }
 
     // 停止旧进程
-    await record.client.stop();
+    if (record.client) await record.client.stop();
 
     // 重新启动
     await this.startServer(name, record.config);
@@ -245,6 +266,7 @@ export class MCPManager {
     const stopPromises: Promise<void>[] = [];
 
     for (const [name, record] of this.servers) {
+      if (!record.client) continue;
       console.log(`[mcp-manager] 停止服务器: ${name}`);
       stopPromises.push(
         record.client.stop().catch((err) => {

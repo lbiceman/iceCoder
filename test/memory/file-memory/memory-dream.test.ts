@@ -27,16 +27,31 @@ async function writeMemoryFile(
   dir: string,
   filename: string,
   description: string,
-  opts: { type?: string; confidence?: number; recallCount?: number; content?: string } = {},
+  opts: {
+    type?: string;
+    confidence?: number;
+    recallCount?: number;
+    content?: string;
+    createdAt?: string;
+    level?: string;
+    evidenceStrength?: string;
+    source?: string;
+    eventDate?: string;
+  } = {},
 ) {
   const type = opts.type ?? 'project';
   const confidence = opts.confidence !== undefined ? `\nconfidence: ${opts.confidence}` : '';
   const recallCount = opts.recallCount !== undefined ? `\nrecallCount: ${opts.recallCount}` : '';
+  const createdAt = opts.createdAt !== undefined ? `\ncreatedAt: ${opts.createdAt}` : '';
+  const level = opts.level !== undefined ? `\nlevel: ${opts.level}` : '';
+  const evidenceStrength = opts.evidenceStrength !== undefined ? `\nevidenceStrength: ${opts.evidenceStrength}` : '';
+  const source = opts.source !== undefined ? `\nsource: ${opts.source}` : '';
+  const eventDate = opts.eventDate !== undefined ? `\neventDate: ${opts.eventDate}` : '';
   const body = opts.content ?? `Content of ${filename}`;
   const fileContent = `---
 name: ${filename.replace('.md', '')}
 description: ${description}
-type: ${type}${confidence}${recallCount}
+type: ${type}${confidence}${recallCount}${createdAt}${level}${evidenceStrength}${source}${eventDate}
 ---
 
 ${body}`;
@@ -144,6 +159,60 @@ describe('shouldDream', () => {
   });
 });
 
+// ─── evaluateDreamGate（触发原因 / 与条数解耦） ───
+
+describe('evaluateDreamGate', () => {
+  it('MEMORY.md 死链达到阈值时 stale_index', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'MEMORY.md'),
+      '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
+      'utf-8',
+    );
+    await writeMemoryFile(tempDir, 'only.md', 'n');
+    const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
+    const gate = await dream.evaluateDreamGate(tempDir);
+    expect(gate.shouldRun).toBe(true);
+    expect(gate.trigger).toBe('stale_index');
+  });
+
+  it('stale_index 在 notify 后冷却期内不重复触发', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'MEMORY.md'),
+      '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
+      'utf-8',
+    );
+    await writeMemoryFile(tempDir, 'only.md', 'n');
+    const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
+    const gate1 = await dream.evaluateDreamGate(tempDir);
+    expect(gate1.trigger).toBe('stale_index');
+    dream.notifyStaleIndexDreamCompleted();
+    const gate2 = await dream.evaluateDreamGate(tempDir);
+    expect(gate2.shouldRun).toBe(false);
+    expect(gate2.trigger).toBeNull();
+  });
+
+  it('超过条数上限时触发 Dream，先整合再淘汰', async () => {
+    const lockPath = path.join(tempDir, '.consolidate-lock');
+    await fs.writeFile(lockPath, '1', 'utf-8');
+    const lockT = (Date.now() - 8 * 86_400_000) / 1000;
+    await fs.utimes(lockPath, lockT, lockT);
+    const oldIso = new Date(Date.now() - 20 * 86_400_000).toISOString();
+    const fileT = (Date.now() - 20 * 86_400_000) / 1000;
+    for (let i = 0; i < 12; i++) {
+      await writeMemoryFile(tempDir, `many_${i}.md`, `m${i}`, { createdAt: oldIso });
+      await fs.utimes(path.join(tempDir, `many_${i}.md`), fileT, fileT);
+    }
+    const dream = createMemoryDream({
+      sessionInterval: 5,
+      fileCountThreshold: 100,
+      postDreamMemoryCap: 5,
+    });
+    const gate = await dream.evaluateDreamGate(tempDir);
+    expect(gate.shouldRun).toBe(true);
+    expect(gate.trigger).toBe('over_cap');
+  });
+});
+
 // ─── recordSession ───
 
 describe('recordSession', () => {
@@ -239,6 +308,40 @@ describe('Dream readMemoryContents（v5 优化）', () => {
     expect(highIdx).toBeLessThan(lowIdx);
   });
 
+  it('显式规则和强证据记忆优先于临时弱证据记忆', async () => {
+    await writeMemoryFile(tempDir, 'weak_session.md', '临时弱证据', {
+      type: 'project',
+      confidence: 0.4,
+      recallCount: 0,
+      level: 'session_state',
+      evidenceStrength: 'weak',
+      source: 'llm_extract',
+    });
+    await writeMemoryFile(tempDir, 'hard_rule.md', '明确规则', {
+      type: 'project',
+      confidence: 0.7,
+      recallCount: 0,
+      level: 'hard_rule',
+      evidenceStrength: 'explicit',
+      source: 'user_explicit',
+    });
+
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'All good.',
+    }));
+
+    const dream = createMemoryDream({ enableBackup: false });
+    await dream.forceDream(tempDir, mockLLM);
+
+    const chatCall = (mockLLM.chat as any).mock.calls[0];
+    const userMessage = chatCall[0].find((m: UnifiedMessage) => m.role === 'user');
+    expect(userMessage.content.indexOf('hard_rule.md')).toBeLessThan(userMessage.content.indexOf('weak_session.md'));
+  });
+
   it('超长文件内容被截断到 1200 字符', async () => {
     const longContent = 'A'.repeat(3000);
     await writeMemoryFile(tempDir, 'long.md', '长文件', { content: longContent });
@@ -311,6 +414,46 @@ describe('Dream 执行', () => {
     await expect(fs.access(path.join(tempDir, 'to_delete.md'))).rejects.toThrow();
     // 保留的文件仍在
     await expect(fs.access(path.join(tempDir, 'to_keep.md'))).resolves.toBeUndefined();
+  });
+
+  it('Dream 完成后将超出上限的记忆淘汰到 evicted 目录', async () => {
+    const evictedDir = path.join(tempDir, 'evicted');
+    for (let i = 0; i < 8; i++) {
+      await writeMemoryFile(tempDir, `bulk_${i}.md`, `批量${i}`, { confidence: 0.3 });
+      const fp = path.join(tempDir, `bulk_${i}.md`);
+      const t = (Date.now() - (10 + i) * 86_400_000) / 1000;
+      await fs.utimes(fp, t, t);
+    }
+
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'noop',
+    }));
+
+    const dream = createMemoryDream({
+      enableBackup: false,
+      postDreamMemoryCap: 5,
+      enforceMemoryCapAfterDream: true,
+      afterDreamEviction: {
+        evictedDir,
+        protectionDays: 0,
+        maxEvictedFiles: 50,
+      },
+    });
+
+    const result = await dream.forceDream(tempDir, mockLLM);
+
+    expect(result.executed).toBe(true);
+    expect(result.filesEvicted).toBe(3);
+
+    const remaining = (await fs.readdir(tempDir)).filter(f => f.endsWith('.md'));
+    expect(remaining.length).toBe(5);
+
+    const evicted = (await fs.readdir(evictedDir)).filter(f => f.endsWith('.md'));
+    expect(evicted.length).toBe(3);
   });
 
   it('Dream 不删除 MEMORY.md', async () => {

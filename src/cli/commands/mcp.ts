@@ -10,8 +10,13 @@ export async function runMcp(ctx: BootstrapResult, _args: ParsedArgs): Promise<v
   const infos = ctx.mcpManager.getServerInfos();
 
   if (infos.length === 0) {
-    console.log(`\n${c.dim}未配置 MCP Server。在 data/config.json 的 mcpServers 字段添加配置。${c.reset}\n`);
+    console.log(`\n${c.dim}未配置 MCP Server（${c.cyan}.iceCoder/mcp.json${c.dim} 中无 mcpServers 或为空）。可参考 ${c.cyan}.iceCoder/mcp.example.json${c.dim}；将需启用的条目的 ${c.yellow}disabled${c.dim} 设为 false。环境变量 ${c.yellow}ICE_MCP_CONFIG_PATH${c.dim} 可覆盖配置文件路径。${c.reset}\n`);
     return;
+  }
+
+  const readyTools = infos.filter((s) => s.status === 'ready').reduce((n, s) => n + s.tools.length, 0);
+  if (readyTools === 0) {
+    console.log(`\n${c.yellow}提示：${c.reset} 以下 MCP 均已登记，但尚无 ${c.green}ready${c.reset} 的服务器（多为 ${c.dim}disabled${c.reset} 或启动失败）。启用前请安装 Node；${c.dim}uvx${c.reset} 类条目需本机已安装 Python/uv。\n`);
   }
 
   console.log(`\n${c.bold}MCP Server 状态${c.reset}\n`);
@@ -21,6 +26,7 @@ export async function runMcp(ctx: BootstrapResult, _args: ParsedArgs): Promise<v
     starting: `${c.yellow}●${c.reset}`,
     error: `${c.red}●${c.reset}`,
     stopped: `${c.dim}●${c.reset}`,
+    disabled: `${c.dim}○${c.reset}`,
   };
 
   const rows = infos.map((s) => [

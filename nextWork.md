@@ -128,25 +128,17 @@ recovery prompt
 
 把运行时行为变成可观测数据。
 
-### 需要做什么
+### 已完成（初版）
 
-1. 新增 runtime telemetry JSONL。
-2. 记录每轮：
-   - task intent
-   - phase
-   - tool calls
-   - permission decisions
-   - verification status
-   - token usage
-   - memory injected token estimate
-   - compaction before/after token estimate
-3. 汇总会话级指标。
+1. `src/harness/runtime-telemetry.ts` 已实现，`Harness` 构造时启用。
+2. JSONL 默认路径：`data/runtime/telemetry.jsonl`（或通过 `ICE_RUNTIME_DIR` 指定根目录下的 `telemetry.jsonl`）。
+3. 事件类型包括：`round`、`tool`、`compaction`、`summary`（含部分 token 与验证相关字段）。
 
-### 如何做
+### 仍需加强
 
-- 新增 `src/harness/runtime-telemetry.ts`。
-- 复用现有 `HarnessLogger`，但输出结构化事件。
-- 默认写入 `data/runtime/telemetry.jsonl`。
+1. 权限裁决、验证状态等字段在事件中的覆盖度与一致性（与 Eval 指标对齐）。
+2. **会话级与跨会话汇总**、CI 可读报告、简单看板或 `npm run` 汇总脚本。
+3. 与 `scripts/agent-eval.ts` **real** 模式打通：用完整 case 跑 Harness 后自动解析 JSONL 判分。
 
 ### 验收标准
 
@@ -193,7 +185,7 @@ recovery prompt
 
 - 将 `.gitattributes` 和行尾归一化单独提交。
 - 检查所有新文件是否纳入 Git。
-- 将 `README.md` / `README.zh-CN.md` 与真实测试数量同步。
+- 将 `README.md` / `README.zh-CN.md` 与真实测试数量同步（当前 Vitest：33 files / 567 tests，以 `npm test` 为准）。
 - 运行：
 
 ```bash

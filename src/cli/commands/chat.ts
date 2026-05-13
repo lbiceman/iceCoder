@@ -154,7 +154,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 
   child.on('exit', (code) => {
     if (code !== null && code !== 0) {
-      error(`Cloudflare Tunnel 退出 (code: ${code})`);
+      error(`Cloudflare Tunnel 控制台退出 (code: ${code})`);
     }
   });
 
@@ -546,6 +546,9 @@ ${c.bold}终端内置命令:${c.reset}
         (event) => {
           if (event.type === 'thinking' && event.content) {
             // 思考内容（部分模型会返回）
+          }
+          if (event.type === 'tool_progress' && event.content) {
+            console.log(`${c.dim}${event.content}${c.reset}`);
           }
           if (event.type === 'tool_call' && event.toolName) {
             const argsStr = event.toolArgs ? JSON.stringify(event.toolArgs) : '';

@@ -14,6 +14,40 @@ window.ConfigPage = (function () {
   var container = null;
   var nextId = 1;
   var defaultIndex = 0; // 当前选中的默认提供者索引
+  var autoSaveDefaultTimer = null;
+
+  function tryAutoSaveDefault() {
+    if (autoSaveDefaultTimer) clearTimeout(autoSaveDefaultTimer);
+    autoSaveDefaultTimer = setTimeout(function () {
+      autoSaveDefaultTimer = null;
+      var data = collectFormData();
+      for (var i = 0; i < data.length; i++) {
+        if (Object.keys(validateProvider(data[i])).length > 0) return;
+      }
+      saveConfig(data, function (err) {
+        if (err) {
+          showNotification('默认模型未能保存: ' + err.message, 'error');
+          return;
+        }
+        loadConfig(function (_err, loaded) {
+          if (!_err) {
+            providers = loaded.map(function (p) { p._masked = true; return p; });
+            defaultIndex = 0;
+            for (var j = 0; j < providers.length; j++) {
+              if (providers[j].isDefault) {
+                defaultIndex = j;
+                break;
+              }
+            }
+            renderProviders();
+          }
+        });
+        if (window.AppRouter && window.AppRouter.refreshStatus) {
+          window.AppRouter.refreshStatus();
+        }
+      });
+    }, 320);
+  }
 
   // ---- 辅助函数 ----
 
@@ -179,6 +213,7 @@ window.ConfigPage = (function () {
     card.querySelector('[data-action="set-default"]').addEventListener('change', function () {
       defaultIndex = index;
       renderProviders();
+      tryAutoSaveDefault();
     });
 
     return card;
@@ -218,7 +253,10 @@ window.ConfigPage = (function () {
           temperature: parseFloat(card.querySelector('[data-field="temperature"]').value),
           maxTokens: parseInt(card.querySelector('[data-field="maxTokens"]').value, 10) || undefined
         },
-        isDefault: i === defaultIndex
+        isDefault: i === defaultIndex,
+        supportsVision: original.supportsVision,
+        maxContextTokens: original.maxContextTokens,
+        requestTimeoutMs: original.requestTimeoutMs
       });
     }
     return result;

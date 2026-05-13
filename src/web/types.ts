@@ -1,12 +1,10 @@
 /**
  * Web 服务器模块的类型定义。
- * 定义提供者配置和 SSE 事件类型。
  */
-
-import type { StageStatus, PipelineState } from '../core/types.js';
 
 /**
  * LLM 提供者配置，存储在 data/config.json 中。
+ * 前端 UI、REST、CLI、压缩器、WebSocket 均依赖此结构与真实 JSON 一致；新增顶层字段时请同步 `data/config.example.json`。
  */
 export interface ProviderConfig {
   id: string;
@@ -14,6 +12,11 @@ export interface ProviderConfig {
   apiUrl: string;
   apiKey: string;
   modelName: string;
+  /**
+   * OpenAI 兼容适配器：单次 HTTP 请求超时（毫秒）。
+   * 未设置时可用环境变量 ICE_OPENAI_REQUEST_TIMEOUT_MS；再高才回退 SDK 默认。
+   */
+  requestTimeoutMs?: number;
   parameters: {
     temperature?: number;
     maxTokens?: number;
@@ -22,17 +25,12 @@ export interface ProviderConfig {
     [key: string]: any;
   };
   isDefault?: boolean;
+  supportsVision?: boolean;
+  /** 冰豆（Web 会话指示器）与压缩器参考的上下文窗口上限（token） */
+  maxContextTokens?: number;
 }
 
-/**
- * 服务器推送事件（SSE）结构，用于与客户端的实时通信。
- */
-export interface SSEEvent {
-  type: 'message' | 'stage_update' | 'pipeline_complete' | 'error';
-  data: {
-    content?: string;
-    stageStatus?: StageStatus;
-    pipelineState?: PipelineState;
-    error?: string;
-  };
+/** `data/config.json` 顶层结构（仅存 providers 数组；未来可扩展其他键） */
+export interface IceCoderConfigFile {
+  providers: ProviderConfig[];
 }
