@@ -34,6 +34,7 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudgetFromEnv,
 } from '../harness/token-budget-config.js';
+import { resolveDefaultChatModelMeta } from './routes/config.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
@@ -213,13 +214,22 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
   });
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', async (ws: WebSocket) => {
     chatClients.add(ws);
     ws.once('close', () => {
       chatClients.delete(ws);
     });
 
-    sendJSON(ws, { type: 'connected', message: '连接成功' });
+    try {
+      const meta = await resolveDefaultChatModelMeta();
+      sendJSON(ws, {
+        type: 'connected',
+        message: '连接成功',
+        ...(meta ? { modelContext: meta } : {}),
+      });
+    } catch {
+      sendJSON(ws, { type: 'connected', message: '连接成功' });
+    }
 
     let isProcessing = false;
     /** 处理期间用户发来的消息队列（处理完后自动发送） */

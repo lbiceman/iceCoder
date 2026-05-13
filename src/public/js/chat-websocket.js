@@ -88,6 +88,7 @@ window.ChatWebSocket = (function () {
   function handleMessage(data) {
     switch (data.type) {
       case 'connected':
+        emit('connected', data || {});
         break;
       case 'session_updated':
         emit('session_updated', {});

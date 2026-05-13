@@ -133,9 +133,12 @@
     });
 
     fetchSystemStatus();
-    setInterval(fetchSystemStatus, 30000);
-
     navigate(getRouteFromHash());
+    window.addEventListener('visibilitychange', function onVis () {
+      if (document.visibilityState === 'visible') {
+        fetchSystemStatus();
+      }
+    });
   }
 
   window.AppRouter = {

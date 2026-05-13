@@ -4,6 +4,7 @@
 
 /**
  * LLM 提供者配置，存储在 data/config.json 中。
+ * 前端 UI、REST、CLI、压缩器、WebSocket 均依赖此结构与真实 JSON 一致；新增顶层字段时请同步 `data/config.example.json`。
  */
 export interface ProviderConfig {
   id: string;
@@ -24,4 +25,12 @@ export interface ProviderConfig {
     [key: string]: any;
   };
   isDefault?: boolean;
+  supportsVision?: boolean;
+  /** 会话宠物与压缩器参考的上下文窗口上限（token） */
+  maxContextTokens?: number;
+}
+
+/** `data/config.json` 顶层结构（仅存 providers 数组；未来可扩展其他键） */
+export interface IceCoderConfigFile {
+  providers: ProviderConfig[];
 }

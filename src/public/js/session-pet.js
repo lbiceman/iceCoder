@@ -16,13 +16,16 @@ import {
 (function () {
   'use strict';
 
-  var PET_SIZE = 120;
-  var EYE_W = 14;
+  /** 逻辑画布边长（与 CSS .pet-canvas、HTML canvas width/height 一致） */
+  var PET_SIZE = 96;
+  /** 版面比例：相对最初 120×120 设计稿 */
+  var PET_SCALE = PET_SIZE / 120;
+  var EYE_W = Math.round(14 * PET_SCALE);
   /** 胶囊眼竖向逻辑高度（非画布位置）；减小此值可缩矮眼睛形状 */
-  var EYE_H = 18;
-  /** read：眼直径 12px 实心圆、镜片框直径 24px */
-  var READ_EYE_DIA_PX = 8;
-  var READ_LENS_DIA_PX = 24;
+  var EYE_H = Math.round(18 * PET_SCALE);
+  /** read：实心圆眼、镜框（随 PET_SCALE） */
+  var READ_EYE_DIA_PX = Math.max(5, Math.round(8 * PET_SCALE));
+  var READ_LENS_DIA_PX = Math.round(24 * PET_SCALE);
 
   var BLINK_MIN = 1000;
   var BLINK_MAX = 3000;
@@ -31,12 +34,12 @@ import {
   var PET_BUBBLE_MAX_CHARS = 42;
 
   // 固定颜色：黑底；眼睛线色见 create() 闭包内 eyeColor（每实例独立）
-  var BODY_BG = '#0a0a12';
+  var BODY_BG = '#000000';
   var READ_GLASSES_STROKE = 'rgba(255,255,255,0.55)';
   var GLOW_COLOR = 'rgba(107,156,255,0.10)';
 
   /** token 圆环线宽（逻辑像素） */
-  var TOKEN_RING_LINE_WIDTH = 3.25;
+  var TOKEN_RING_LINE_WIDTH = 3.25 * PET_SCALE;
   /** 圆环内侧与机身外缘的间距（逻辑像素） */
   var TOKEN_RING_BODY_GAP = 3;
   /** 机身圆半径（与下方 fill 用的半径一致） */
@@ -129,8 +132,8 @@ import {
 
     function getBounds() {
       var rect = rootEl.getBoundingClientRect();
-      var w = rect.width > 2 ? rect.width : rootEl.offsetWidth || 160;
-      var h = rect.height > 2 ? rect.height : rootEl.offsetHeight || 200;
+      var w = rect.width > 2 ? rect.width : rootEl.offsetWidth || 136;
+      var h = rect.height > 2 ? rect.height : rootEl.offsetHeight || 168;
       var nav = document.getElementById('top-nav');
       var topNavBottom = nav ? nav.getBoundingClientRect().bottom : 0;
       var minT = Math.max(DRAG_MARGIN, topNavBottom + DRAG_MARGIN);
@@ -764,12 +767,14 @@ import {
         ctx.stroke();
       }
 
-      // 眼睛位置
+      // 眼睛位置（水平/垂直间距按 PET_SCALE 相对 120×120 稿）
+      var eyeSpreadX = Math.round(24 * PET_SCALE);
+      var eyeDyBase = Math.round(-4 * PET_SCALE);
       var eyeOff = getEyeOffsetForState(state);
-      var eyeYL = bodyY - 4 + eyeOff.ly;
-      var eyeYR = bodyY - 4 + eyeOff.ry;
-      var eyeXL = cx - 24 + eyeOff.lx;
-      var eyeXR = cx + 24 + eyeOff.rx;
+      var eyeYL = bodyY + eyeDyBase + eyeOff.ly;
+      var eyeYR = bodyY + eyeDyBase + eyeOff.ry;
+      var eyeXL = cx - eyeSpreadX + eyeOff.lx;
+      var eyeXR = cx + eyeSpreadX + eyeOff.rx;
 
       if (isBlinking) {
         if (state === 'read') {
