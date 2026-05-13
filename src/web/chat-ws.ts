@@ -35,6 +35,11 @@ import {
   getHarnessTokenBudgetFromEnv,
 } from '../harness/token-budget-config.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
+import {
+  detectFileBrowserClose,
+  detectFileBrowserOpen,
+  tryDirectFileBrowserTurn,
+} from './file-browser-direct.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
@@ -55,6 +60,11 @@ const STRUCTURED_SESSION_FILE = path.join(SESSIONS_DIR, 'default.structured.json
  * 每次 handleChatMessage 开始时创建，结束时清空。
  */
 let activeAbortController: AbortController | null = null;
+
+/** ~open 文件浏览器模式：服务端确定性导航状态（进程级，随 clear_session 重置） */
+let fileBrowserModeActive = false;
+/** 最近一次 browse_directory 成功的目录（Windows，以 \\ 结尾） */
+let fileBrowserLastBrowsedPath: string | null = null;
 
 /** 保存结构化消息到磁盘（防抖，避免频繁写入） */
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -143,7 +153,7 @@ function broadcastSessionUpdated(reason: string, except?: WebSocket): void {
 }
 
 /** 追加消息到会话文件（后端是唯一写入者）；失败返回 false */
-async function appendMessages(msgs: { role: string; content: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<boolean> {
+async function appendMessages(msgs: { role: string; content?: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<boolean> {
   if (msgs.length === 0) return true;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
@@ -169,6 +179,68 @@ async function clearSessionFile(): Promise<void> {
     // 同时清除结构化消息文件
     await fsPromises.writeFile(STRUCTURED_SESSION_FILE, '[]', 'utf-8').catch(() => {});
   } catch { /* ignore */ }
+}
+
+/** 文件浏览器确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
+async function finalizeDirectBrowserTurn(
+  ws: WebSocket,
+  opts: {
+    userStructuredContent: string;
+    assistantContent: string;
+    toolTraceBatch: { toolName: string; detail: string; status: string }[];
+    syntheticTool?: { toolName: string; toolDetail: string; success: boolean };
+  },
+): Promise<void> {
+  const base = cachedMessages ? [...cachedMessages] : [];
+  base.push({ role: 'user', content: opts.userStructuredContent });
+  base.push({ role: 'assistant', content: opts.assistantContent });
+  cachedMessages = base;
+  saveStructuredMessages(base);
+
+  const agentMsgId = randomUUID();
+  const entries: Parameters<typeof appendMessages>[0] = [];
+  for (const t of opts.toolTraceBatch) {
+    entries.push({
+      role: 'tool_trace',
+      parentId: agentMsgId,
+      toolName: t.toolName,
+      detail: t.detail,
+      status: t.status,
+    });
+  }
+  entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
+  await appendMessages(entries);
+  broadcastSessionUpdated('turn_complete', ws);
+
+  if (opts.syntheticTool) {
+    sendJSON(ws, {
+      type: 'step',
+      step: {
+        type: 'tool_call',
+        toolName: opts.syntheticTool.toolName,
+        toolArgs: opts.syntheticTool.toolDetail ? { path: opts.syntheticTool.toolDetail } : {},
+      },
+    });
+    sendJSON(ws, {
+      type: 'step',
+      step: {
+        type: 'tool_result',
+        toolName: opts.syntheticTool.toolName,
+        toolSuccess: opts.syntheticTool.success,
+        toolOutput: opts.assistantContent.substring(0, 800),
+      },
+    });
+  }
+
+  sendJSON(ws, { type: 'stream_end' });
+  sendJSON(ws, { type: 'response', content: opts.assistantContent });
+  sendJSON(ws, {
+    type: 'tokenUsage',
+    inputTokens: 0,
+    outputTokens: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+  });
 }
 
 /**
@@ -256,6 +328,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         if (msg.type === 'clear_session') {
           // 前端 ~clear 命令：清除后端消息缓存和会话文件
           cachedMessages = undefined;
+          fileBrowserModeActive = false;
+          fileBrowserLastBrowsedPath = null;
           // 取消防抖写入，防止旧的 cachedMessages 覆盖清空操作
           if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
           await clearSessionFile();
@@ -361,7 +435,19 @@ async function handleChatMessage(
       ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
       : resolvedMessage;
   }
-  const finalMessage = typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
+  let harnessUserMessage =
+    typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
+
+  const opensBrowser = detectFileBrowserOpen(message);
+  const closesBrowser = detectFileBrowserClose(message);
+  if (closesBrowser && !opensBrowser) {
+    fileBrowserModeActive = false;
+    fileBrowserLastBrowsedPath = null;
+  }
+  if (opensBrowser) {
+    fileBrowserModeActive = true;
+    fileBrowserLastBrowsedPath = null;
+  }
 
   // 确保记忆系统已初始化
   await ensureMemoryInitialized();
@@ -372,6 +458,59 @@ async function handleChatMessage(
   const userMsgId = randomUUID();
   const userPersisted = await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
   if (userPersisted) broadcastSessionUpdated('user_message', ws);
+
+  const resolvedForDirect =
+    typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
+
+  // ── 文件浏览器：服务端直接执行 list_drives / browse_directory，避免模型假列表 ──
+  if (closesBrowser && !opensBrowser) {
+    const assistantText =
+      '已退出文件浏览器模式（~browser_close）。后续对话不再由服务端强制列出磁盘。\n\n<status>complete</status>';
+    await finalizeDirectBrowserTurn(ws, {
+      userStructuredContent: harnessUserMessage,
+      assistantContent: assistantText,
+      toolTraceBatch: [],
+    });
+    return;
+  }
+
+  const direct = await tryDirectFileBrowserTurn({
+    toolExecutor,
+    resolvedText: resolvedForDirect,
+    opensBrowser,
+    lastBrowsedPath: fileBrowserLastBrowsedPath,
+    platform: process.platform,
+    hasImages: inlineImages.length > 0 || Array.isArray(userMessageContent),
+    active: fileBrowserModeActive,
+  });
+
+  if (direct.handled && direct.variant === 'deterministic') {
+    fileBrowserLastBrowsedPath = direct.newLastBrowsedPath;
+    console.log(`[chat-ws] file-browser-direct ${direct.toolName} ok=${direct.success}`);
+    await finalizeDirectBrowserTurn(ws, {
+      userStructuredContent: harnessUserMessage,
+      assistantContent: direct.assistantMarkdown,
+      toolTraceBatch: [
+        {
+          toolName: direct.toolName,
+          detail: direct.toolDetail,
+          status: direct.success ? 'success' : 'error',
+        },
+      ],
+      syntheticTool: {
+        toolName: direct.toolName,
+        toolDetail: direct.toolDetail,
+        success: direct.success,
+      },
+    });
+    return;
+  }
+
+  if (direct.handled && direct.variant === 'harness_augment') {
+    fileBrowserLastBrowsedPath = direct.newLastBrowsedPath;
+    harnessUserMessage = direct.augmentedUserText;
+    console.log('[chat-ws] file-browser-direct harness_augment (browse_directory output injected)');
+  }
 
   // 创建 AbortController 用于用户中断
   const abortController = new AbortController();
@@ -448,7 +587,7 @@ async function handleChatMessage(
 
   try {
     const result = await harness.run(
-      finalMessage,
+      harnessUserMessage,
       (msgs, opts) => llmAdapter.chat(msgs, opts),
       (event) => {
         // 推送 step 到 WebSocket
@@ -577,6 +716,8 @@ export function cleanupChatResources(): void {
     activeAbortController = null;
   }
   cachedMessages = undefined;
+  fileBrowserModeActive = false;
+  fileBrowserLastBrowsedPath = null;
   chatClients.clear();
   console.log('[chat-ws] Resources cleaned up');
 }

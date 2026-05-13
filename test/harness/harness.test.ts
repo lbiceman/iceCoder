@@ -1028,6 +1028,21 @@ describe('ContextCompactor - 微压缩', () => {
     expect(compacted.some(m => m.role === 'user' && m.content === 'ok')).toBe(false);
   });
 
+  it('保留中文导航与盘符路径短句（避免误删后进复读盘面模板）', () => {
+    const compactor = new ContextCompactor();
+    const messages: UnifiedMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: '嗯' },
+      { role: 'assistant', content: 'ack' },
+      { role: 'user', content: '进入D盘' },
+      { role: 'user', content: 'D:\\\\work' },
+    ];
+    const compacted = compactor.doLightCompact(messages);
+    expect(compacted.some(m => m.role === 'user' && m.content === '进入D盘')).toBe(true);
+    expect(compacted.some(m => m.role === 'user' && m.content === 'D:\\\\work')).toBe(true);
+    expect(compacted.some(m => m.role === 'user' && m.content === '嗯')).toBe(false);
+  });
+
   it('构建压缩恢复 Runtime State，保留目标、改动文件和验证命令', () => {
     const compactor = new ContextCompactor();
     const taskState = new TaskState('修复失败用例');

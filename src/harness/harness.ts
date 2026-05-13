@@ -27,7 +27,7 @@ import type {
 } from './types.js';
 import { ContextAssembler, normalizeMessages } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
-import { ContextCompactor } from './context-compactor.js';
+import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
 import { HarnessLogger } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
@@ -327,12 +327,16 @@ export class Harness {
     };
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
-    this.contextCompactor = new ContextCompactor({
+    const compactionPartial: Partial<CompactionConfig> = {
       threshold: config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
       tokenThreshold: config.compactionTokenThreshold,
       keepRecent: config.compactionKeepRecent ?? DEFAULT_COMPACTION_KEEP_RECENT,
       enableLLMSummary: config.compactionEnableLLMSummary,
-    });
+    };
+    if (config.compactionMaxReinjectFiles != null) {
+      compactionPartial.maxReinjectFiles = config.compactionMaxReinjectFiles;
+    }
+    this.contextCompactor = new ContextCompactor(compactionPartial);
     this.toolExecutor = toolExecutor;
     this.stopHookManager = new StopHookManager();
     this.permissionRules = config.permissions ?? [];

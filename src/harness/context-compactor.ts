@@ -52,7 +52,7 @@ export interface CompactionConfig {
   maxToolResultLength: number;
   /** 是否启用 LLM 摘要（需要在 compact 时传入 chatFn） */
   enableLLMSummary?: boolean;
-  /** 重新注入最近文件内容的最大文件数 */
+  /** 硬压缩后再注入的 read_file 结果最多保留几条唯一路径（构造时钳制在 1–64，默认 12 与历史行为一致） */
   maxReinjectFiles: number;
   /** 重新注入最近文件内容的总 token 预算 */
   maxReinjectTokens: number;
@@ -67,10 +67,10 @@ const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
 /** 简短用户消息阈值：长度低于此值的确认消息在轻量压缩中可丢弃 */
 const SHORT_USER_MSG_MAX_LENGTH = 50;
 
-/** 轻量微压缩触发比例（可通过 ICE_MICRO_COMPACT_RATIO 环境变量覆盖） */
+/** 轻量微压缩触发比例（可通过 ICE_MICRO_COMPACT_RATIO 环境变量覆盖；默认略低于硬压缩，减少误删短指令） */
 const MICRO_COMPACT_RATIO = (() => {
   const env = parseFloat(process.env.ICE_MICRO_COMPACT_RATIO || '');
-  return Number.isFinite(env) && env > 0 && env <= 1 ? env : 0.65;
+  return Number.isFinite(env) && env > 0 && env <= 1 ? env : 0.72;
 })();
 
 /** 每会话最大微压缩次数 */
@@ -132,9 +132,13 @@ const DEFAULT_CONFIG: CompactionConfig = {
   keepRecentMinMessages: 5,
   maxToolResultLength: 3000,
   enableLLMSummary: true,
-  maxReinjectFiles: 8,
+  maxReinjectFiles: 12,
   maxReinjectTokens: 50000,
 };
+
+/** 再注入唯一文件数上限（构造参数钳制） */
+const MIN_REINJECT_FILES_CAP = 1;
+const MAX_REINJECT_FILES_CAP = 64;
 
 /**
  * 估算消息列表的 token 数。
@@ -151,6 +155,22 @@ function isShortActionInstruction(content: string): boolean {
 }
 
 /**
+ * 微压缩时是否保留「短用户消息」（长度 &lt; SHORT_USER_MSG_MAX_LENGTH）。
+ * 除英文执行短句外，须保留中文导航/盘符/路径片段，否则高上下文占用时模型只剩旧工具模板（如反复列盘）。
+ */
+function shouldPreserveShortUserMessage(content: string): boolean {
+  if (isShortActionInstruction(content)) return true;
+  const t = content.trim();
+  if (/进入|打开|返回|上一级|后退|刷新|重新列出|列出|盘|驱动器|浏览|文件夹|目录/i.test(t)) {
+    return true;
+  }
+  // Windows 盘符或路径片段（含 ~open、单行路径）
+  if (/[a-zA-Z]:[/\\]/.test(content) || /^[a-zA-Z]\s*盘/i.test(t)) return true;
+  if (/\[[^\]]*file:[^\]]*\]/i.test(content)) return true;
+  return false;
+}
+
+/**
  * ContextCompactor 管理对话历史的压缩，防止 token 溢出。
  */
 export class ContextCompactor {
@@ -161,11 +181,18 @@ export class ContextCompactor {
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.config.tokenThreshold ??= Math.floor(getContextWindow() * getCompactionRatio());
+    const reinjectCap = this.config.maxReinjectFiles;
+    this.config.maxReinjectFiles =
+      typeof reinjectCap === 'number' &&
+      Number.isFinite(reinjectCap) &&
+      reinjectCap >= MIN_REINJECT_FILES_CAP
+        ? Math.min(Math.floor(reinjectCap), MAX_REINJECT_FILES_CAP)
+        : DEFAULT_CONFIG.maxReinjectFiles;
   }
 
   /**
    * 检查是否需要轻量微压缩（在硬压缩之前）。
-   * 微压缩在 65% 上下文使用量时触发，纯本地操作，零 LLM 成本。
+   * 微压缩在默认约 72% 上下文使用量时触发（可 ICE_MICRO_COMPACT_RATIO 覆盖），纯本地操作，零 LLM 成本。
    */
   needsMicroCompaction(messages: UnifiedMessage[]): boolean {
     if (this.microCompactCount >= MAX_MICRO_COMPACTS_PER_SESSION) return false;
@@ -180,7 +207,7 @@ export class ContextCompactor {
    *
    * 纯本地操作，不调用 LLM：
    * - 截断超过 5 轮的工具结果为最多 500 字符
-   * - 丢弃长度 < 50 字符的简短确认消息
+   * - 丢弃长度 < 50 字符的简短确认消息（保留执行型与导航/路径型短句，见 shouldPreserveShortUserMessage）
    * 微压缩后不注入恢复提示，对 LLM 完全透明。
    */
   doLightCompact(messages: UnifiedMessage[]): UnifiedMessage[] {
@@ -200,7 +227,7 @@ export class ContextCompactor {
     return messages.filter((msg, idx) => {
       // 丢弃简短确认消息，但保留短执行指令（如“跑测试”“继续”“fix it”）。
       if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.length < SHORT_USER_MSG_MAX_LENGTH) {
-        if (isShortActionInstruction(msg.content)) return true;
+        if (shouldPreserveShortUserMessage(msg.content)) return true;
         return false;
       }
 
@@ -329,6 +356,9 @@ export class ContextCompactor {
    *
    * 压缩后重新注入，确保 LLM 不丢失已读的源码。
    * 参考 claude-code 的 createPostCompactFileAttachments。
+   *
+   * 唯一路径条数上限取自 {@link CompactionConfig.maxReinjectFiles}；
+   * 传入 maxFiles 时在单次调用上覆盖该配置。
    */
   extractRecentFileContents(
     messages: UnifiedMessage[],
@@ -336,6 +366,7 @@ export class ContextCompactor {
     maxTotalTokens?: number,
   ): UnifiedMessage[] {
     const tokenLimit = maxTotalTokens ?? this.config.maxReinjectTokens;
+    const maxCap = this.config.maxReinjectFiles;
 
     // 构建 toolCallId → toolName 映射
     const toolCallIdToName = new Map<string, string>();
@@ -363,9 +394,11 @@ export class ContextCompactor {
     }
     const currentTurn = assistantTurn;
 
-    // 动态文件上限：最近 10 轮内 read_file 的唯一文件数，上限 12
+    // 动态文件上限：最近 10 轮内 read_file 轮次数（无则沿用 ≤8 的启发上限），且不超过 maxReinjectFiles
     const recentReadFileTurns = readFileTurns.filter(t => currentTurn - t < 10);
-    const dynamicFileLimit = maxFiles ?? Math.min(recentReadFileTurns.length || 8, 12);
+    const fallbackHint = Math.min(8, maxCap);
+    const dynamicFileLimit =
+      maxFiles ?? Math.min(recentReadFileTurns.length || fallbackHint, maxCap);
 
     // 从后往前找最近的 read_file 结果
     const fileResults: { path: string; content: string }[] = [];

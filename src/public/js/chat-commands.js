@@ -205,7 +205,8 @@ window.ChatCommands = (function () {
       '2. 用户说"进入 X:"时，调用 browse_directory 浏览该路径，然后列出目录内容。\n' +
       '3. 用户说"进入 XXX"时，拼接到当前路径，调用 browse_directory，然后列出目录内容。\n' +
       '4. 用户说"返回"时，浏览当前目录的父目录，然后列出目录内容。\n' +
-      '5. 记住当前路径。\n\n' +
+      '5. 记住当前路径。\n' +
+      '6. 退出浏览模式请发一行 ~browser_close（或 ~close_browser）。\n\n' +
       '展示格式：目录用 [DIR]，文件用 [FILE]，驱动器用 [DRIVE]。');
   }
 
