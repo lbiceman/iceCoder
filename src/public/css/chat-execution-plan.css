@@ -1,0 +1,181 @@
+/**
+ * 执行透明层面板样式（Execution Transparency Layer）。
+ *
+ * 复用全局 CSS 变量（--bg-card / --text-primary 等），保证 dark / light 主题自动跟随。
+ * 设计：右上角折叠卡片；移动端固定到聊天输入框上方。
+ */
+
+.exec-plan-panel {
+  position: fixed;
+  top: 76px;
+  right: 24px;
+  width: 280px;
+  max-height: calc(100vh - 200px);
+  background: var(--bg-card, #2d3447);
+  border: 1px solid var(--border-color, #404a62);
+  border-radius: 12px;
+  color: var(--text-primary, #f2f4fa);
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  z-index: 18;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.exec-plan-panel.visible {
+  display: flex;
+}
+
+.exec-plan-panel.collapsed .exec-plan-list {
+  display: none;
+}
+
+.exec-plan-panel.collapsed .exec-plan-caret {
+  transform: rotate(-90deg);
+}
+
+.exec-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light, #363e54);
+  background: var(--bg-secondary, #242a3a);
+}
+
+.exec-plan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.exec-plan-caret {
+  display: inline-block;
+  transition: transform 140ms ease;
+  font-size: 11px;
+  color: var(--text-secondary, #b9c0d4);
+}
+
+.exec-plan-title {
+  white-space: nowrap;
+}
+
+.exec-plan-progress {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-secondary, #b9c0d4);
+}
+
+.exec-plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exec-plan-step {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-input, #282f42);
+  border: 1px solid transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.45;
+}
+
+.exec-plan-step.active {
+  border-color: #6b9cff;
+  box-shadow: 0 0 0 1px rgba(107, 156, 255, 0.18);
+}
+
+.exec-plan-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.exec-plan-step-title {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.exec-plan-step-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.09));
+  color: var(--text-secondary);
+}
+
+.exec-plan-step.status-running .exec-plan-step-badge {
+  background: rgba(107, 156, 255, 0.18);
+  color: #6b9cff;
+  animation: ice-plan-pulse 1.4s ease-in-out infinite;
+}
+
+.exec-plan-step.status-done .exec-plan-step-badge {
+  background: rgba(30, 207, 180, 0.16);
+  color: #1ecfb4;
+}
+
+.exec-plan-step.status-failed .exec-plan-step-badge {
+  background: rgba(252, 90, 118, 0.16);
+  color: #fc5a76;
+}
+
+.exec-plan-step.status-skipped {
+  opacity: 0.55;
+}
+
+.exec-plan-step.status-skipped .exec-plan-step-title {
+  text-decoration: line-through;
+}
+
+.exec-plan-step-tools,
+.exec-plan-step-evidence {
+  font-size: 11.5px;
+  color: var(--text-secondary, #b9c0d4);
+  word-break: break-all;
+}
+
+.exec-plan-step-evidence {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.exec-plan-step-error {
+  font-size: 11.5px;
+  color: #fc5a76;
+  word-break: break-all;
+}
+
+@keyframes ice-plan-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* 移动端：贴在底部输入区上方 */
+@media (max-width: 768px) {
+  .exec-plan-panel {
+    top: auto;
+    right: 8px;
+    left: 8px;
+    bottom: 140px;
+    width: auto;
+    max-height: 42vh;
+  }
+}

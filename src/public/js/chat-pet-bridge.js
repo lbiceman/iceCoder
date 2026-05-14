@@ -193,6 +193,38 @@ window.ChatPetBridge = (function () {
           if (memLine) bubble(memLine);
         }
         break;
+      case 'execution_plan_init':
+        {
+          sessionPet.setState('surprised');
+          var planIntent = step.plan && step.plan.intent;
+          var planIntros = {
+            edit: '拆成几步搞定',
+            debug: '先复现 → 修 → 验',
+            test: '跑测试 → 看失败 → 调',
+            refactor: '先看引用，再批改',
+            inspect: '读一下相关位置',
+            docs: '先看现状再写',
+          };
+          bubble(planIntros[planIntent] || '已生成执行计划');
+        }
+        break;
+      case 'execution_plan_update':
+        {
+          var patch = step.patch;
+          var sp = patch && patch.stepPatches && patch.stepPatches[0];
+          if (sp && sp.status === 'failed') {
+            sessionPet.setState('weary');
+            if (sp.error) bubble(sp.error);
+          } else if (sp && sp.status === 'running') {
+            sessionPet.setState('working');
+          } else if (typeof patch.progress === 'number' && patch.progress === 100) {
+            sessionPet.setState('happy');
+            bubble('计划全部完成');
+          } else if (sp && sp.status === 'done') {
+            sessionPet.setState('playful');
+          }
+        }
+        break;
       default:
         break;
     }

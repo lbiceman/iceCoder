@@ -185,6 +185,38 @@ import {
   parsePersistedRuntime,
   type SessionMemoryState,
 } from '../memory/file-memory/session-memory.js';
+import {
+  parsePersistedPlan,
+  buildPlanFence,
+  ICECODER_PLAN_FENCE_LANG,
+} from '../memory/file-memory/execution-plan-fence.js';
+import type { ExecutionPlan } from '../types/execution-plan.js';
+
+/**
+ * 把 session-notes 文本中所有 `icecoder-plan` fence 移除（用于追加最新 plan 前去重）。
+ */
+function stripPlanFence(notes: string): string {
+  const open = `\`\`\`${ICECODER_PLAN_FENCE_LANG}`;
+  let cursor = 0;
+  let out = '';
+  while (cursor < notes.length) {
+    const idx = notes.indexOf(open, cursor);
+    if (idx === -1) {
+      out += notes.slice(cursor);
+      break;
+    }
+    out += notes.slice(cursor, idx);
+    const close = notes.indexOf('```', idx + open.length);
+    if (close === -1) {
+      out += notes.slice(idx);
+      break;
+    }
+    cursor = close + 3;
+    // 同时吃掉紧跟的换行（避免多余空行累积）
+    if (notes[cursor] === '\n') cursor++;
+  }
+  return out;
+}
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { TaskState } from './task-state.js';
 import type { RepoContext } from './repo-context.js';
@@ -1035,6 +1067,53 @@ ${candidateList}`;
     repoContext.applySnapshot(parsed.repo);
     console.debug('[harness-memory] 已从 session-notes 恢复运行时快照');
     return true;
+  }
+
+  /**
+   * 从 session-notes.md 中的 plan fence 解析最近一次执行计划。
+   * 仅在 ICE_ENABLE_EXECUTION_PLAN 启用时被 Harness 调用。
+   */
+  async hydratePlanFromSessionNotes(): Promise<ExecutionPlan | null> {
+    try {
+      const raw = await getSessionMemoryContent(this.sessionMemoryState);
+      if (!raw) return null;
+      return parsePersistedPlan(raw);
+    } catch (err) {
+      console.debug(
+        '[harness-memory] plan hydrate failed:',
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 把当前 plan 追加写入 session-notes.md（独立 fence；不影响 runtime fence）。
+   * 文件不存在或目录创建失败时静默忽略，保持与现有 fire-and-forget 一致。
+   */
+  async persistPlanToSessionNotes(plan: ExecutionPlan): Promise<void> {
+    try {
+      const notesPath = this.sessionMemoryState.notesPath;
+      let existing = '';
+      try {
+        existing = await fs.readFile(notesPath, 'utf-8');
+      } catch {
+        // file missing → write fresh
+      }
+      const fence = buildPlanFence(plan);
+      // 移除旧 plan fence（如果存在），再 append 最新的
+      const stripped = stripPlanFence(existing);
+      const next = stripped.endsWith('\n') || stripped.length === 0
+        ? `${stripped}${fence}\n`
+        : `${stripped}\n${fence}\n`;
+      await fs.mkdir(path.dirname(notesPath), { recursive: true });
+      await fs.writeFile(notesPath, next, 'utf-8');
+    } catch (err) {
+      console.debug(
+        '[harness-memory] plan persist failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /**

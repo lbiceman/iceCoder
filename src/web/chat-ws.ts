@@ -40,6 +40,7 @@ import {
   looksLikeFileAnalysisIntent,
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
+import { isExecutionPlanEnabled } from '../harness/execution-plan-config.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
@@ -341,11 +342,13 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       chatClients.delete(ws);
     });
 
+    const features = { executionPlan: isExecutionPlanEnabled() };
     try {
       const meta = await resolveDefaultChatModelMeta();
       sendJSON(ws, {
         type: 'connected',
         message: '连接成功',
+        features,
         ...(meta ? { modelContext: meta } : {}),
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
@@ -354,6 +357,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       sendJSON(ws, {
         type: 'connected',
         message: '连接成功',
+        features,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
       });

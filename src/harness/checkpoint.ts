@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import type { ExecutionPlan } from '../types/execution-plan.js';
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
 
@@ -27,6 +28,8 @@ export interface TaskCheckpoint {
   };
   createdAt: string;
   updatedAt: string;
+  /** Execution Transparency Layer 持久化的执行计划（feature flag 关时不写入） */
+  plan?: ExecutionPlan;
 }
 
 export interface TaskCheckpointUpdate {
@@ -38,6 +41,7 @@ export interface TaskCheckpointUpdate {
   messages: UnifiedMessage[];
   failedToolCalls?: string[];
   stopReason?: StopReason;
+  plan?: ExecutionPlan;
 }
 
 export class TaskCheckpointManager {
@@ -83,6 +87,7 @@ export class TaskCheckpointManager {
       },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      ...(update.plan ? { plan: update.plan } : existing?.plan ? { plan: existing.plan } : {}),
     };
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
@@ -93,17 +98,28 @@ export class TaskCheckpointManager {
   }
 
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
-    return {
-      role: 'user',
-      content: [
-        '<resume-checkpoint>',
-        'A previous task was interrupted or left in progress. Treat this checkpoint as authoritative short-term task state.',
-        'If the latest user message is clearly a new unrelated task, ignore this checkpoint and focus on the latest user request.',
-        '',
-        JSON.stringify(checkpoint, null, 2),
-        '</resume-checkpoint>',
-      ].join('\n'),
-    };
+    const lines = [
+      '<resume-checkpoint>',
+      'A previous task was interrupted or left in progress. Treat this checkpoint as authoritative short-term task state.',
+      'If the latest user message is clearly a new unrelated task, ignore this checkpoint and focus on the latest user request.',
+      '',
+      JSON.stringify(checkpoint, null, 2),
+    ];
+
+    const plan = checkpoint.plan;
+    if (plan && plan.activeStepId) {
+      const active = plan.steps.find(s => s.id === plan.activeStepId);
+      if (active) {
+        lines.push(
+          '',
+          `[Plan Recovery] Previously you were at step "${active.title}" (status=${active.status}).`,
+          'Continue from this step. Do not regenerate the plan.',
+        );
+      }
+    }
+
+    lines.push('</resume-checkpoint>');
+    return { role: 'user', content: lines.join('\n') };
   }
 
   private async readExisting(): Promise<TaskCheckpoint | null> {

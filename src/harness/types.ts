@@ -7,6 +7,7 @@
 import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
+import type { ExecutionPlan, ExecutionPlanPatch } from '../types/execution-plan.js';
 
 // ─── 上下文组装 ───
 
@@ -164,9 +165,25 @@ export interface HarnessConfig {
 
 /**
  * Harness 循环中每一步的事件回调。
+ *
+ * `execution_plan_init` / `execution_plan_update` 来自 Execution Transparency Layer，
+ * 仅在 ICE_ENABLE_EXECUTION_PLAN 启用时出现；其他事件类型不受影响。
  */
 export interface HarnessStepEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'tool_progress' | 'compaction' | 'final' | 'stream_delta' | 'tool_output' | 'memory_event';
+  type:
+    | 'thinking'
+    | 'tool_call'
+    | 'tool_result'
+    | 'tool_denied'
+    | 'tool_confirm'
+    | 'tool_progress'
+    | 'compaction'
+    | 'final'
+    | 'stream_delta'
+    | 'tool_output'
+    | 'memory_event'
+    | 'execution_plan_init'
+    | 'execution_plan_update';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */
@@ -188,6 +205,12 @@ export interface HarnessStepEvent {
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */
   memoryDetail?: string;
+  /** 执行计划全量载荷（仅 type === 'execution_plan_init'） */
+  plan?: ExecutionPlan;
+  /** 执行计划 ID（仅 type === 'execution_plan_update'） */
+  planId?: string;
+  /** 执行计划增量补丁（仅 type === 'execution_plan_update'） */
+  patch?: ExecutionPlanPatch;
 }
 
 /**

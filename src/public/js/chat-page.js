@@ -141,6 +141,7 @@ window.ChatPage = (function () {
       resetTokenUsage();
       Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
       UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
       return;
     }
 
@@ -383,6 +384,10 @@ window.ChatPage = (function () {
       var resultStatus = step.toolSuccess ? 'success' : 'error';
       UI.updateLastToolAction(step.toolName, resultStatus);
       Session.updateToolBatchStatus(step.toolName, resultStatus);
+    }
+    if (window.ChatExecutionPlanBridge
+      && (step.type === 'execution_plan_init' || step.type === 'execution_plan_update')) {
+      window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
   }
