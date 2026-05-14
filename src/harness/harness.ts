@@ -43,6 +43,10 @@ import { buildExecutionPlan } from './execution-plan-generator.js';
 import { ExecutionPlanTracker, type ExecutionPlanEventEmitter } from './execution-plan-tracker.js';
 import { isExecutionPlanEnabled } from './execution-plan-config.js';
 import type { ExecutionPlan } from '../types/execution-plan.js';
+import { BranchBudgetTracker } from './branch-budget.js';
+import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
+import { reviewStep, type StepReviewResult } from './step-review.js';
+import type { CheckpointSaveTrigger } from '../types/runtime-checkpoint.js';
 import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
 import {
   ensureDelegateToSubagentTool,
@@ -296,6 +300,14 @@ interface LoopState {
   runtimeStateHash: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
+  /** Resilience v2：分支预算 tracker（feature flag 关时为 undefined） */
+  branchBudget?: BranchBudgetTracker;
+  /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
+  branchBudgetWarnedThisRound: boolean;
+  /** Resilience v2：本轮是否已做过 step review（避免重复） */
+  stepReviewedThisRound: boolean;
+  /** Resilience v2：最近一次 step review 结果（供启发式参考） */
+  lastStepReview?: StepReviewResult;
 }
 
 /**
@@ -322,6 +334,10 @@ export class Harness {
   private workspaceRoot: string;
   /** Execution Transparency Layer 开关（构造时一次性快照） */
   private executionPlanEnabled: boolean;
+  /** Runtime Resilience v2 开关（构造时一次性快照） */
+  private resilienceV2Enabled: boolean;
+  /** Resilience v2：增强 checkpoint 引擎（关闭时为 undefined） */
+  private checkpointEngine?: CheckpointEngine;
   /**
    * 当前 run() 调用的执行计划追踪器。
    * 每次 run() 开始时按需创建，结束后清空；为 undefined 表示当前任务未启用或不适合 plan。
@@ -359,6 +375,12 @@ export class Harness {
       : undefined;
     this.runtimeTelemetry = new RuntimeTelemetry(config.sessionDir, config.sessionId);
     this.executionPlanEnabled = isExecutionPlanEnabled();
+
+    // Resilience v2：feature flag 受控，关闭时完全不实例化任何子系统
+    this.resilienceV2Enabled = isResilienceV2Enabled();
+    if (this.resilienceV2Enabled && config.sessionDir) {
+      this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
+    }
 
     // 记忆集成层
     this.memoryIntegration = new HarnessMemoryIntegration({
@@ -456,7 +478,31 @@ export class Harness {
       repoContext: new RepoContext(),
       runtimeStateHash: '',
       failedToolCallSignatures: new Map(),
+      branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
+      branchBudgetWarnedThisRound: false,
+      stepReviewedThisRound: false,
     };
+
+    if (this.resilienceV2Enabled && this.checkpointEngine) {
+      try {
+        const v2 = await this.checkpointEngine.loadV2();
+        if (v2) {
+          state.branchBudget?.applySnapshot(v2.branchBudget);
+          const pending = this.checkpointEngine.pendingRecoverySignals();
+          if (pending.length > 0) {
+            for (const sig of pending) {
+              messages.push({ role: 'user', content: sig.message });
+            }
+            this.checkpointEngine.markRecoverySignalsConsumed(s => !s.consumed);
+          }
+        }
+      } catch (err) {
+        console.debug(
+          '[harness] resilience v2 load failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
 
     if (existingMessages && existingMessages.length > 0) {
       try {
@@ -880,6 +926,7 @@ export class Harness {
             ].join('\n'),
           });
           this.currentPlanTracker?.onVerificationRequired();
+          this.resilienceSaveCheckpoint('verification_started', state);
           state.transition = 'stop_hook_continue';
           continue;
         }
@@ -893,6 +940,7 @@ export class Harness {
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
         this.currentPlanTracker?.onFinal('model_done');
         await this.saveTaskCheckpoint('completed', userMessage, msgs, state, 'model_done');
+        this.resilienceSaveCheckpoint('final_draft', state, 'model_done');
         this.recordTelemetrySummary('model_done', state);
 
         onStep?.({
@@ -941,8 +989,17 @@ export class Harness {
       });
 
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
+      state.branchBudgetWarnedThisRound = false;
+      state.stepReviewedThisRound = false;
       const toolStats = await this.executeToolCallsStreaming(
         response.toolCalls!, msgs, logger, onStep, this.abortSignal, state.taskState, state.repoContext, chatFn, currentTools,
+      );
+
+      // 6a-resilience-v2. 把这一轮工具调用录入 branchBudget（仅 flag 启用时执行）
+      this.resilienceRecordToolCalls(
+        response.toolCalls!,
+        new Set(toolStats.failedSignatures),
+        state,
       );
 
       const repeatedFailures = this.collectRepeatedFailures(response.toolCalls!, toolStats.failedSignatures, state.failedToolCallSignatures);
@@ -951,6 +1008,22 @@ export class Harness {
           role: 'user',
           content: `[System] Repeated failed tool call detected: ${repeatedFailures.join(', ')}. Do not retry the same tool with the same arguments. Change the path, parameters, command, or use a different tool; if blocked, explain the exact blocker and evidence.`,
         });
+      }
+
+      // 6a-resilience-v2. 分支预算超限 → 注入 recovery warning
+      this.resilienceMaybeBranchRecover(state, msgs);
+
+      // 6a-resilience-v2. 工具失败 → 触发 step review（启发式 + 可选 LLM）
+      if (toolStats.failedCount > 0) {
+        await this.resilienceMaybeReviewStep(state, 'tool_failure', chatFn);
+      }
+
+      // 6a-resilience-v2. 验证失败 → 单独 hook（与 tool_failure 区分，便于 checkpoint trigger 归类）
+      if (state.taskState.snapshot().verificationStatus === 'failed') {
+        this.resilienceSaveCheckpoint('verification_failed', state);
+        if (!state.stepReviewedThisRound) {
+          await this.resilienceMaybeReviewStep(state, 'verification_failure', chatFn);
+        }
       }
 
       // 6a-abort. 工具执行后立即检查中断
@@ -1026,6 +1099,7 @@ export class Harness {
       }
 
       await this.saveTaskCheckpoint('running', userMessage, msgs, state);
+      this.resilienceSaveCheckpoint('step_completed', state);
 
       // 6a-readonly. 连续只读轮次跟踪（分析瘫痪检测）
       const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
@@ -1580,6 +1654,7 @@ export class Harness {
       taskState: TaskState;
       repoContext: RepoContext;
       failedToolCallSignatures: Map<string, number>;
+      branchBudget?: BranchBudgetTracker;
     },
   ): Promise<HarnessResult> {
     this.loopController.stop(reason);
@@ -1593,6 +1668,7 @@ export class Harness {
       runtimeState,
       reason,
     );
+    this.resilienceSaveCheckpoint('final_draft', runtimeState, reason);
     if (runtimeState) this.recordTelemetrySummary(reason, runtimeState);
 
     // 如果是用户中断，直接返回
@@ -1837,6 +1913,7 @@ export class Harness {
       afterTokens: this.contextCompactor.getEstimatedTokens(messages),
     });
     onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
+    this.resilienceSaveCheckpoint('compaction', state);
   }
 
   /**
@@ -1958,4 +2035,229 @@ export class Harness {
     await this.memoryIntegration.drain(timeoutMs);
     this.memoryIntegration.dispose();
   }
+
+  // ─── Resilience v2 集成（feature flag 关时全部 no-op） ───
+
+  /**
+   * 记录一轮工具调用到 branchBudget 和 checkpointEngine。
+   * 关 flag 时 no-op。
+   */
+  private resilienceRecordToolCalls(
+    toolCalls: ToolCall[],
+    failedSignatures: Set<string>,
+    state: LoopState,
+  ): void {
+    if (!this.resilienceV2Enabled || !state.branchBudget) return;
+
+    for (const tc of toolCalls) {
+      const sig = this.toolCallSignature(tc);
+      const failed = failedSignatures.has(sig);
+
+      const path = typeof tc.arguments?.path === 'string'
+        ? tc.arguments.path
+        : (typeof tc.arguments?.file_path === 'string' ? tc.arguments.file_path : undefined);
+      if (path && /^(edit_file|write_file|append_file|batch_edit_file|patch_file)$/.test(tc.name)) {
+        state.branchBudget.recordFileEdit(path);
+      }
+
+      if (tc.name === 'run_command' && failed) {
+        const cmd = typeof tc.arguments?.command === 'string' ? tc.arguments.command : '';
+        if (cmd) state.branchBudget.recordFailedCommandAttempt(cmd);
+      }
+
+      if (failed) {
+        state.branchBudget.recordError(sig);
+        this.checkpointEngine?.save({
+          trigger: 'tool_failed',
+          branchBudget: state.branchBudget,
+          appendFailure: {
+            signature: sig,
+            count: 1,
+            at: Date.now(),
+          },
+        }).catch(err => console.debug(
+          '[harness] resilience v2 save (tool_failed) failed:',
+          err instanceof Error ? err.message : err,
+        ));
+      }
+
+      this.checkpointEngine?.save({
+        trigger: failed ? 'tool_failed' : 'step_completed',
+        branchBudget: state.branchBudget,
+        appendTool: {
+          toolName: tc.name,
+          success: !failed,
+          signature: sig,
+          at: Date.now(),
+        },
+      }).catch(err => console.debug(
+        '[harness] resilience v2 save (tool) failed:',
+        err instanceof Error ? err.message : err,
+      ));
+    }
+  }
+
+  /**
+   * 检查分支预算是否触发，需要则注入 recovery warning 到对话。
+   * 每轮最多注入 1 次，避免与已有的 consecutiveToolFailures 提示叠加。
+   */
+  private resilienceMaybeBranchRecover(state: LoopState, msgs: UnifiedMessage[]): void {
+    if (!this.resilienceV2Enabled || !state.branchBudget) return;
+    if (state.branchBudgetWarnedThisRound) return;
+
+    const decision = state.branchBudget.shouldBranchRecover();
+    if (!decision.triggered) return;
+
+    const signal = state.branchBudget.buildRecoverySignal(decision);
+    if (!signal) return;
+
+    msgs.push({ role: 'user', content: signal.message });
+    state.branchBudget.markRecoveryTriggered();
+    state.branchBudgetWarnedThisRound = true;
+
+    this.checkpointEngine?.save({
+      trigger: 'tool_failed',
+      branchBudget: state.branchBudget,
+      appendRecoverySignal: signal,
+    }).catch(err => console.debug(
+      '[harness] resilience v2 save (recovery signal) failed:',
+      err instanceof Error ? err.message : err,
+    ));
+  }
+
+  /**
+   * 在工具失败 / 验证失败时做一次 step review。
+   * 每轮最多 1 次；启发式给出明确结论时不触发 LLM。
+   */
+  private async resilienceMaybeReviewStep(
+    state: LoopState,
+    trigger: 'tool_failure' | 'verification_failure' | 'step_transition',
+    chatFn: ChatFunction,
+  ): Promise<void> {
+    if (!this.resilienceV2Enabled) return;
+    if (state.stepReviewedThisRound) return;
+    state.stepReviewedThisRound = true;
+
+    try {
+      const recentTools = collectRecentToolTraces(state.messages, 5);
+      const lastErrors = collectRecentErrors(state.messages, 3);
+      const planActive = this.currentPlanTracker?.getPlan();
+      const activeStep = planActive?.activeStepId
+        ? planActive.steps.find(s => s.id === planActive.activeStepId)
+        : undefined;
+
+      const result = await reviewStep({
+        goal: state.taskState.snapshot().goal,
+        currentStep: activeStep?.title,
+        recentTools,
+        lastErrors,
+        trigger,
+        taskSnapshot: state.taskState.snapshot(),
+        previousReview: state.lastStepReview,
+      }, chatFn);
+
+      state.lastStepReview = result;
+
+      // 仅当 step-review 给出"重复 + 建议 fallback"且 branchBudget 这轮没触发时，
+      // 才发出一条独立、温和的提示；否则交给现有 consecutiveToolFailures / branchBudget 流程。
+      if (
+        result.repeatedPattern
+        && result.fallbackSuggested
+        && !state.branchBudgetWarnedThisRound
+      ) {
+        state.messages.push({
+          role: 'user',
+          content: `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`,
+        });
+        state.branchBudgetWarnedThisRound = true;
+      }
+    } catch (err) {
+      console.debug(
+        '[harness] resilience v2 step-review failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * v2 checkpoint 合并保存。在以下 hook 点调用：
+   *   step_completed / tool_failed / verification_started / verification_failed
+   *   compaction / final_draft
+   */
+  private resilienceSaveCheckpoint(
+    trigger: CheckpointSaveTrigger,
+    state: { taskState: TaskState; branchBudget?: BranchBudgetTracker } | undefined,
+    stopReason?: StopReason,
+  ): void {
+    if (!this.resilienceV2Enabled || !this.checkpointEngine) return;
+    if (!state) return;
+
+    const plan = this.currentPlanTracker?.getPlan();
+    const activeStep = plan?.activeStepId
+      ? plan.steps.find(s => s.id === plan.activeStepId)
+      : undefined;
+
+    this.checkpointEngine.save({
+      trigger,
+      branchBudget: state.branchBudget,
+      currentStepId: plan?.activeStepId,
+      currentStepTitle: activeStep?.title,
+      verificationPending: state.taskState.shouldBlockFinalForVerification(),
+      lastStopReason: stopReason,
+      ...(plan ? { plan } : {}),
+    }).catch(err => console.debug(
+      `[harness] resilience v2 save (${trigger}) failed:`,
+      err instanceof Error ? err.message : err,
+    ));
+  }
+}
+
+// ─── Resilience v2 内部辅助：从消息历史抽取 step-review 所需的最小上下文 ───
+
+function collectRecentToolTraces(
+  messages: UnifiedMessage[],
+  max: number,
+): Array<{ toolName: string; signature: string; success: boolean; error?: string }> {
+  const traces: Array<{ toolName: string; signature: string; success: boolean; error?: string }> = [];
+  // 倒序遍历，找最近 N 条 tool result
+  for (let i = messages.length - 1; i >= 0 && traces.length < max; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    const content = msg.content;
+    const failed = content.includes('Tool execution error:') || content.includes('工具执行错误');
+    const errorMatch = content.match(/(?:Tool execution error|工具执行错误)[:：]\s*([^\n]{1,200})/);
+    // 反向查找最近的 assistant tool_calls 以拿到 toolName 与 args
+    let toolName = 'unknown';
+    let signature = '';
+    for (let j = i - 1; j >= 0; j--) {
+      const m = messages[j];
+      if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+      const matchTC = m.toolCalls.find(tc => tc.id === msg.toolCallId);
+      if (matchTC) {
+        toolName = matchTC.name;
+        signature = `${matchTC.name}:${JSON.stringify(matchTC.arguments ?? {})}`;
+      }
+      break;
+    }
+    traces.unshift({
+      toolName,
+      signature: signature || toolName,
+      success: !failed,
+      error: failed ? (errorMatch?.[1] ?? content.slice(0, 200)) : undefined,
+    });
+  }
+  return traces;
+}
+
+function collectRecentErrors(messages: UnifiedMessage[], max: number): string[] {
+  const errors: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && errors.length < max; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    const content = msg.content;
+    if (content.includes('Tool execution error:') || content.includes('工具执行错误')) {
+      errors.unshift(content.slice(0, 240));
+    }
+  }
+  return errors;
 }
