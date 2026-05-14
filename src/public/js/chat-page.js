@@ -175,16 +175,6 @@ window.ChatPage = (function () {
       return;
     }
 
-    // ~export
-    if (text === '~export') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleExport(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    // ~memory（无后缀参数）：打开记忆图谱页（view/delete 仍为聊天内清单命令）
     if (text === '~memory') {
       elInput.value = '';
       UI.autoResizeInput();
