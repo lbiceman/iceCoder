@@ -2,7 +2,8 @@
  * 执行透明层 — 前端事件桥。
  *
  * 职责：
- *   1. 订阅 ChatWebSocket 的 `step`、`connected`、`session_updated` 事件；
+ *   1. 由 ChatPage 转发 `connected` / `session_updated`（见 notifyConnected / notifySessionUpdated）。
+ *      原因：ChatWebSocket.on() 每个 type 只保留最后一个回调，若在桥里 WS.on('connected') 会被 ChatPage 覆盖。
  *   2. 把 `execution_plan_init / update` 转给 ChatExecutionPlan 面板；
  *   3. WS 重连或先错过 init 时通过 GET /api/sessions/:id/plan 重同步；
  *   4. flag 关闭时整条桥不挂载。
@@ -59,9 +60,13 @@ window.ChatExecutionPlanBridge = (function () {
   }
 
   function onStep(data) {
-    if (!enabled) return;
     var step = data && data.step;
     if (!step) return;
+    // connected 若被其它模块覆盖导致 enabled 仍为 false，仍以首包 init 打开功能
+    if (step.type === 'execution_plan_init' && step.plan) {
+      enabled = true;
+    }
+    if (!enabled) return;
 
     if (step.type === 'execution_plan_init' && step.plan) {
       currentPlanId = step.plan.planId;
@@ -96,8 +101,15 @@ window.ChatExecutionPlanBridge = (function () {
       .then(function (body) {
         var plan = body && body.plan;
         if (!plan) {
-          if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-          currentPlanId = null;
+          // REST 可能晚于 WebSocket：首轮任务尚未把 plan 写入 checkpoint/session-notes 时
+          // 接口会返回 null；若此时 WS 已推送 execution_plan_init，绝不能 clear 掉正在显示的面板。
+          var live = window.ChatExecutionPlan && window.ChatExecutionPlan.getPlan
+            ? window.ChatExecutionPlan.getPlan()
+            : null;
+          if (!live) {
+            if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+            currentPlanId = null;
+          }
           return;
         }
         currentPlanId = plan.planId;
@@ -117,21 +129,8 @@ window.ChatExecutionPlanBridge = (function () {
 
   function attach() {
     if (attached) return;
-    if (!window.ChatWebSocket) return;
     attached = true;
-
-    // 复用 ChatPage 已有的 step 路由：bridge 仅在已有 step listener 之上再挂一层观察者，
-    // 不抢占其他模块的 step 消费。
-    var WS = window.ChatWebSocket;
-    if (WS.on) {
-      // 现在 ChatWebSocket.on 是「最后写入覆盖」语义，因此我们不直接覆盖 step，
-      // 而是通过包装在 ChatPage 注册的 step 处理函数之外的方式：监听 connected + session_updated，
-      // 并把 step 的处理放进 ChatPage 内部 (见 chat-page.js)。
-      // 这里只订阅 connected / session_updated；step 由 ChatPage 主动转发到 handleStep。
-      WS.on('connected', function (data) { onConnected(data); });
-      WS.on('session_updated', function () { onSessionUpdated(); });
-    }
-    // 暴露 handleStep 给 ChatPage 在 onWsStep 内手动调用，避免覆盖既有 step handler
+    // connected / session_updated 必须由 ChatPage 调用 notify*（ChatWebSocket 单处理器会被覆盖）。
     bridgeApi._handleStep = onStep;
   }
 
@@ -147,6 +146,10 @@ window.ChatExecutionPlanBridge = (function () {
   bridgeApi.handleStep = handleStep;
   bridgeApi.isEnabled = isEnabled;
   bridgeApi.fetchAndApply = fetchAndApply;
+  /** ChatPage.onWsConnected 末尾调用 — 不可替代 WS.on */
+  bridgeApi.notifyConnected = onConnected;
+  /** ChatPage.session_updated 时与拉取快照一并调用 */
+  bridgeApi.notifySessionUpdated = onSessionUpdated;
 
   // 模块加载即挂载（main.js 加载顺序保证 ChatWebSocket 已存在）
   if (document.readyState === 'loading') {

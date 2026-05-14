@@ -17,7 +17,8 @@
   color: var(--text-primary, #f2f4fa);
   font-size: 13px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
-  z-index: 18;
+  /* 高于 .cmd-dropdown(20)、.session-pet-indicator(100)，避免被遮挡 */
+  z-index: 120;
   display: none;
   flex-direction: column;
   overflow: hidden;

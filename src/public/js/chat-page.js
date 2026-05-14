@@ -296,6 +296,9 @@ window.ChatPage = (function () {
     if (data && data.tunnelReady) {
       announceTunnelReadyFromPayload(data.tunnelReady);
     }
+    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
+      window.ChatExecutionPlanBridge.notifyConnected(data || {});
+    }
   }
 
   // ---- WebSocket 事件处理 ----
@@ -490,6 +493,13 @@ window.ChatPage = (function () {
     });
   }
 
+  function onWsSessionUpdated() {
+    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
+      window.ChatExecutionPlanBridge.notifySessionUpdated();
+    }
+    pullServerChatSnapshotAuthoritative();
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
     container = parentEl;
@@ -575,7 +585,7 @@ window.ChatPage = (function () {
     WS.on('confirm', onWsConfirm);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    WS.on('session_updated', pullServerChatSnapshotAuthoritative);
+    WS.on('session_updated', onWsSessionUpdated);
     WS.on('sync', syncMessages);
 
     // 连接 WebSocket
