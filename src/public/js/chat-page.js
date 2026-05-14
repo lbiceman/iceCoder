@@ -27,6 +27,10 @@ window.ChatPage = (function () {
   var streamChunksReceived = false;
   var remoteMode = false;
   var remoteToken = null;
+  /** 本页仅提示一次 MCP 就绪（含 WS 晚连时 connected.mcpReady 补发） */
+  var mcpReadyAnnounced = false;
+  /** 本页仅提示一次公网隧道就绪 */
+  var tunnelReadyAnnounced = false;
 
   // Token 用量
   var maxContextTokens = 0;
@@ -264,9 +268,33 @@ window.ChatPage = (function () {
     Session.saveMessages();
   }
 
+  function announceTunnelReadyFromPayload(payload) {
+    if (!payload || !payload.url || tunnelReadyAnnounced) return;
+    tunnelReadyAnnounced = true;
+    Pet.applyTunnelReadyToPet(payload, {
+      isStreaming: isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
+  function announceMcpReadyFromPayload(payload) {
+    if (!payload || mcpReadyAnnounced) return;
+    mcpReadyAnnounced = true;
+    Pet.applyMcpReadyToPet(payload, {
+      isStreaming: isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
       fetchModelContext();
+    }
+    if (data && data.mcpReady) {
+      announceMcpReadyFromPayload(data.mcpReady);
+    }
+    if (data && data.tunnelReady) {
+      announceTunnelReadyFromPayload(data.tunnelReady);
     }
   }
 
@@ -381,6 +409,14 @@ window.ChatPage = (function () {
     UI.appendMessageEl(msg, Session.stripStatusTag);
     Session.saveMessages();
     Pet.removeThinking(isStreaming, WS.isProcessing());
+  }
+
+  function onWsMcpReady(data) {
+    announceMcpReadyFromPayload(data || {});
+  }
+
+  function onWsTunnelReady(data) {
+    announceTunnelReadyFromPayload(data || {});
   }
 
   function onWsMemoryNotice(data) {
@@ -529,6 +565,8 @@ window.ChatPage = (function () {
     WS.on('step', onWsStep);
     WS.on('status', onWsStatus);
     WS.on('error', onWsError);
+    WS.on('mcp_ready', onWsMcpReady);
+    WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
     WS.on('confirm', onWsConfirm);
     WS.on('tokenUsage', onWsTokenUsage);

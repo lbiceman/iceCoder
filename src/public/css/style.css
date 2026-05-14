@@ -140,7 +140,15 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .nav-brand {
   display: flex;
   align-items: center;
+  gap: 10px;
   margin-right: auto;
+}
+
+.nav-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: block;
 }
 
 .logo-text {
@@ -1145,6 +1153,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 @media (max-width: 640px) {
   .top-nav { padding: 0 12px; height: 46px; }
   .logo-text { font-size: 16px; }
+  .nav-logo { width: 24px; height: 24px; }
   .nav-link { padding: 5px 12px; font-size: 12px; }
   .config-page { padding: 0 12px; margin: 16px auto; }
   .form-grid { grid-template-columns: 1fr; }

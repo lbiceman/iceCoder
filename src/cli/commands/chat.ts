@@ -31,6 +31,10 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudgetFromEnv,
 } from '../../harness/token-budget-config.js';
+import {
+  fetchQuickTunnelPublicUrl,
+  resolveTunnelMetricsListenAddress,
+} from '../../web/quicktunnel-url.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -52,17 +56,10 @@ async function showScanQR(port: number): Promise<void> {
       if (localIP !== '127.0.0.1') break;
     }
 
-    // 尝试获取 cloudflared 隧道 URL
+    // 尝试获取 cloudflared 隧道 URL（与 Web remote / WS 探测共用 ICE_TUNNEL_METRICS_*）
     let url = `http://${localIP}:${port}`;
-    try {
-      const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: AbortSignal.timeout(2000) });
-      if (res.ok) {
-        const data = await res.json() as { hostname?: string };
-        if (data.hostname) {
-          url = `https://${data.hostname}`;
-        }
-      }
-    } catch { /* no tunnel */ }
+    const tunnelUrl = await fetchQuickTunnelPublicUrl();
+    if (tunnelUrl) url = tunnelUrl;
 
     const QRCode = await import('qrcode');
     const qrText = await QRCode.default.toString(url, { type: 'terminal', small: true });
@@ -123,7 +120,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 
   info(`启动 Cloudflare Tunnel: ${bin}`);
 
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', '127.0.0.1:20241'];
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', resolveTunnelMetricsListenAddress()];
   const child = spawn(bin, tunnelArgs, {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',

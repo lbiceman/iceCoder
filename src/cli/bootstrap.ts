@@ -21,7 +21,8 @@ import { XMindParserStrategy } from '../parser/xmind-strategy.js';
 import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
-import { MCPManager } from '../mcp/index.js';
+import { MCPManager, startMcpBackgroundInit } from '../mcp/index.js';
+import { broadcastMcpReady } from '../web/chat-ws.js';
 import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -170,16 +171,15 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
     fileParser,
   });
 
-  // 初始化 MCP
   const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
-  try {
-    await mcpManager.initialize();
-    for (const tool of mcpManager.getRegisteredTools()) {
-      registry.register(tool);
-    }
-  } catch (err) {
-    console.error('MCP 初始化失败（不影响核心功能）:', err);
-  }
+  startMcpBackgroundInit(mcpManager, registry, (r) => {
+    broadcastMcpReady({
+      ok: r.ok,
+      toolCount: r.toolCount,
+      readyServers: r.readyServers,
+      ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+    });
+  });
 
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: paths.outputDir,

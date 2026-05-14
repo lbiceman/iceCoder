@@ -11,7 +11,8 @@ import { createServer, startServer } from '../../web/server.js';
 import { createConfigRouter } from '../../web/routes/config.js';
 import { createToolsRouter } from '../../web/routes/tools.js';
 import { createRemoteRouter } from '../../web/routes/remote.js';
-import { attachChatWebSocket, cleanupChatResources } from '../../web/chat-ws.js';
+import { attachChatWebSocket, broadcastTunnelReady, cleanupChatResources } from '../../web/chat-ws.js';
+import { startTunnelReadyWatcher } from '../../web/tunnel-ready-watcher.js';
 import { createSessionsRouter } from '../../web/routes/sessions.js';
 import { createUploadRouter } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
@@ -55,7 +56,12 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   const server = await startServer(app, port);
   attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
 
+  const stopTunnelWatcher = startTunnelReadyWatcher({
+    onReady: (url) => broadcastTunnelReady({ url }),
+  });
+
   const cleanup = () => {
+    stopTunnelWatcher();
     cleanupChatResources();
     server.close();
   };
