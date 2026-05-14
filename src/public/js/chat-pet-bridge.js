@@ -11,6 +11,8 @@ window.ChatPetBridge = (function () {
   var sessionPet = null;
   var currentTurnCount = 0;
   var petUiSessionActive = false;
+  var lastIsStreaming = false;
+  var lastWsProcessing = false;
   var lastToolProgressHint = '';
   var memoryNoticeResetTimer = null;
   var MEMORY_NOTICE_MS = 5200;
@@ -23,25 +25,61 @@ window.ChatPetBridge = (function () {
     sessionPet = pet;
   }
 
+  function hasLiveExecutionPlan() {
+    var P = window.ChatExecutionPlan;
+    if (!P || typeof P.getPlan !== 'function') return false;
+    if (typeof P.isPanelSuppressed === 'function' && P.isPanelSuppressed()) return false;
+    var plan = P.getPlan();
+    return !!(plan && plan.steps && plan.steps.length);
+  }
+
+  /**
+   * 有执行计划时底部显示步骤进度摘要；否则回退为「第 N 轮」。
+   */
+  function syncExecPlanFoot() {
+    if (!sessionPet) return;
+    if (hasLiveExecutionPlan()) {
+      sessionPet.setTurnLabel(
+        ChatExecutionPlan.formatFootSummary(ChatExecutionPlan.getPlan()),
+      );
+      return;
+    }
+    sessionPet.setTurnLabel(
+      petUiSessionActive || lastWsProcessing || lastIsStreaming
+        ? currentTurnCount
+          ? '第 ' + currentTurnCount + ' 轮'
+          : ''
+        : '',
+    );
+  }
+
   function showThinking(withFile) {
     currentTurnCount = 0;
     petUiSessionActive = true;
+    lastIsStreaming = false;
+    lastWsProcessing = true;
     if (!sessionPet) return;
     sessionPet.setVisible(true);
     sessionPet.setState('thinking');
-    sessionPet.setTurnLabel('');
     sessionPet.setBubbleText(withFile ? '解析文件中…' : '');
+    syncExecPlanFoot();
   }
 
   function updateTurnCounter(turn, isStreaming, wsProcessing) {
+    lastIsStreaming = !!isStreaming;
+    lastWsProcessing = !!wsProcessing;
     if (turn > currentTurnCount) {
       currentTurnCount = turn;
     }
     if (sessionPet) {
+      if (hasLiveExecutionPlan()) {
+        syncExecPlanFoot();
+        return;
+      }
       sessionPet.setTurnLabel(
         petUiSessionActive || wsProcessing || isStreaming
           ? currentTurnCount ? '第 ' + currentTurnCount + ' 轮' : ''
-          : ''
+          : '',
       );
     }
   }
@@ -50,6 +88,8 @@ window.ChatPetBridge = (function () {
     currentTurnCount = 0;
     lastToolProgressHint = '';
     petUiSessionActive = false;
+    lastIsStreaming = !!isStreaming;
+    lastWsProcessing = !!wsProcessing;
     if (memoryNoticeResetTimer) {
       clearTimeout(memoryNoticeResetTimer);
       memoryNoticeResetTimer = null;
@@ -58,6 +98,7 @@ window.ChatPetBridge = (function () {
     sessionPet.setState('idle');
     sessionPet.setBubbleText('');
     sessionPet.setTurnLabel('');
+    syncExecPlanFoot();
   }
 
   function updateStatusText(text, isStreaming, wsProcessing) {
@@ -349,5 +390,6 @@ window.ChatPetBridge = (function () {
     applyTunnelReadyToPet: applyTunnelReadyToPet,
     getSessionPet: getSessionPet,
     isSessionActive: isSessionActive,
+    syncExecPlanFoot: syncExecPlanFoot,
   };
 })();

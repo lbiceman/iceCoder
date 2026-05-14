@@ -6,7 +6,7 @@
  *      原因：ChatWebSocket.on() 每个 type 只保留最后一个回调，若在桥里 WS.on('connected') 会被 ChatPage 覆盖。
  *   2. 把 `execution_plan_init / update` 转给 ChatExecutionPlan 面板；
  *   3. WS 重连或先错过 init 时通过 GET /api/sessions/:id/plan 重同步；
- *   4. flag 关闭时整条桥不挂载。
+ *   4. 详情卡片锚定冰豆底部 #status-turn；localStorage ICE_PLAN_PANEL=0 仍可关闭计划展示。
  *
  * 设计文档：docs/execution-transparency-layer.md §Frontend Design
  */

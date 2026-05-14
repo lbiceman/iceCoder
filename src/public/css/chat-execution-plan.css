@@ -1,40 +1,37 @@
 /**
- * 执行透明层面板样式（Execution Transparency Layer）。
- *
- * 复用全局 CSS 变量（--bg-card / --text-primary 等），保证 dark / light 主题自动跟随。
- * 设计：右上角折叠卡片；移动端固定到聊天输入框上方。
+ * 执行透明层 — 宠物锚定悬停弹层（原右上角卡片改为 popover）。
  */
 
 .exec-plan-panel {
   position: fixed;
-  top: 76px;
-  right: 24px;
-  width: 280px;
-  max-height: calc(100vh - 200px);
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(52vh, 420px);
   background: var(--bg-card, #2d3447);
   border: 1px solid var(--border-color, #404a62);
   border-radius: 12px;
   color: var(--text-primary, #f2f4fa);
   font-size: 13px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
-  /* 高于 .cmd-dropdown(20)、.session-pet-indicator(100)，避免被遮挡 */
-  z-index: 120;
-  display: none;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+  z-index: 125;
   flex-direction: column;
   overflow: hidden;
-  transition: opacity 160ms ease, transform 160ms ease;
-}
-
-.exec-plan-panel.visible {
-  display: flex;
-}
-
-.exec-plan-panel.collapsed .exec-plan-list {
   display: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
 }
 
-.exec-plan-panel.collapsed .exec-plan-caret {
-  transform: rotate(-90deg);
+.exec-plan-panel.exec-plan-panel--popover.exec-plan-panel--open {
+  display: flex;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.exec-plan-panel.exec-plan-panel--suppressed {
+  display: none !important;
+  pointer-events: none !important;
 }
 
 .exec-plan-header {
@@ -46,34 +43,20 @@
   background: var(--bg-secondary, #242a3a);
 }
 
-.exec-plan-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0;
-}
-
-.exec-plan-caret {
-  display: inline-block;
-  transition: transform 140ms ease;
-  font-size: 11px;
-  color: var(--text-secondary, #b9c0d4);
-}
-
 .exec-plan-title {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  flex: 1;
+  margin-right: 8px;
 }
 
 .exec-plan-progress {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   color: var(--text-secondary, #b9c0d4);
+  flex-shrink: 0;
 }
 
 .exec-plan-list {
@@ -167,16 +150,4 @@
 @keyframes ice-plan-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
-}
-
-/* 移动端：贴在底部输入区上方 */
-@media (max-width: 768px) {
-  .exec-plan-panel {
-    top: auto;
-    right: 8px;
-    left: 8px;
-    bottom: 140px;
-    width: auto;
-    max-height: 42vh;
-  }
 }
