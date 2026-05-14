@@ -112,11 +112,14 @@ export async function scanMemoryFiles(
         const eventDateMs = eventDate ? new Date(eventDate).getTime() || 0 : 0;
         const level = parseMemoryLevel(frontmatter.level, type);
         const evidenceStrength = parseEvidenceStrength(frontmatter.evidenceStrength, confidence);
+        const rawName = frontmatter.name?.trim();
+        const name = rawName || null;
 
         return {
           filename: relativePath as string,
           filePath,
           mtimeMs: stat.mtimeMs,
+          name,
           description: frontmatter.description || null,
           type,
           level,

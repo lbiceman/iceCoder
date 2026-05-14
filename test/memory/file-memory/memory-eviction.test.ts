@@ -33,6 +33,7 @@ function makeHeader(overrides: Partial<MemoryHeader> = {}): MemoryHeader {
     filename: 'test.md',
     filePath: '/mem/test.md',
     mtimeMs: Date.now(),
+    name: null,
     description: 'test memory',
     type: 'project',
     level: 'project_fact',

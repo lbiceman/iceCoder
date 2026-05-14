@@ -14,6 +14,10 @@ window.ChatPetBridge = (function () {
   var lastToolProgressHint = '';
   var memoryNoticeResetTimer = null;
   var MEMORY_NOTICE_MS = 5200;
+  var mcpReadyResetTimer = null;
+  var MCP_READY_NOTICE_MS = 5200;
+  var tunnelReadyResetTimer = null;
+  var TUNNEL_READY_NOTICE_MS = 5200;
 
   function init(pet) {
     sessionPet = pet;
@@ -203,6 +207,73 @@ window.ChatPetBridge = (function () {
   }
 
   /**
+   * MCP 后台加载完成（WebSocket mcp_ready）：表情 + 气泡，数秒后复原
+   */
+  function applyMcpReadyToPet(payload, ctx) {
+    if (!sessionPet) return;
+    ctx = ctx || {};
+    if (mcpReadyResetTimer) {
+      clearTimeout(mcpReadyResetTimer);
+      mcpReadyResetTimer = null;
+    }
+    sessionPet.setVisible(true);
+    var ok = payload && payload.ok !== false;
+    var n = payload && typeof payload.toolCount === 'number' ? payload.toolCount : 0;
+    var bubble;
+    if (!ok) {
+      sessionPet.setState('weary');
+      var err = payload && payload.errorMessage ? String(payload.errorMessage) : '';
+      bubble = err ? 'MCP 失败：' + err.slice(0, 22) : 'MCP 加载失败';
+    } else if (n > 0) {
+      sessionPet.setState('happy');
+      bubble = 'MCP 就绪 · ' + n + ' 工具';
+    } else {
+      sessionPet.setState('playful');
+      bubble = 'MCP 就绪（无扩展工具）';
+    }
+    sessionPet.setBubbleText(bubble);
+    var wsProcessing = !!ctx.wsProcessing;
+    var isStreaming = !!ctx.isStreaming;
+    mcpReadyResetTimer = setTimeout(function () {
+      mcpReadyResetTimer = null;
+      if (!sessionPet || !sessionPet.isVisible()) return;
+      sessionPet.setState(wsProcessing || isStreaming ? 'read' : 'idle');
+      sessionPet.setBubbleText('');
+    }, MCP_READY_NOTICE_MS);
+  }
+
+  /**
+   * Cloudflare Quick Tunnel 就绪（WebSocket tunnel_ready）
+   */
+  function applyTunnelReadyToPet(payload, ctx) {
+    if (!sessionPet || !payload || !payload.url) return;
+    ctx = ctx || {};
+    if (tunnelReadyResetTimer) {
+      clearTimeout(tunnelReadyResetTimer);
+      tunnelReadyResetTimer = null;
+    }
+    sessionPet.setVisible(true);
+    sessionPet.setState('curious');
+    var hostHint = '';
+    try {
+      var u = new URL(String(payload.url));
+      hostHint = u.hostname;
+      if (hostHint.length > 26) hostHint = hostHint.slice(0, 24) + '…';
+    } catch (_e) {
+      hostHint = String(payload.url).slice(0, 26);
+    }
+    sessionPet.setBubbleText('隧道就绪 · ' + hostHint);
+    var wsProcessing = !!ctx.wsProcessing;
+    var isStreaming = !!ctx.isStreaming;
+    tunnelReadyResetTimer = setTimeout(function () {
+      tunnelReadyResetTimer = null;
+      if (!sessionPet || !sessionPet.isVisible()) return;
+      sessionPet.setState(wsProcessing || isStreaming ? 'read' : 'idle');
+      sessionPet.setBubbleText('');
+    }, TUNNEL_READY_NOTICE_MS);
+  }
+
+  /**
    * 回合结束 passive 记忆提取（WebSocket memory_notice）：表情 + 气泡，数秒后复原
    */
   function applyMemoryNoticesToPet(notices, ctx) {
@@ -242,6 +313,8 @@ window.ChatPetBridge = (function () {
     setLastToolProgressHint: setLastToolProgressHint,
     applyHarnessStepToPet: applyHarnessStepToPet,
     applyMemoryNoticesToPet: applyMemoryNoticesToPet,
+    applyMcpReadyToPet: applyMcpReadyToPet,
+    applyTunnelReadyToPet: applyTunnelReadyToPet,
     getSessionPet: getSessionPet,
     isSessionActive: isSessionActive,
   };

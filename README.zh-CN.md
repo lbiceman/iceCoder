@@ -513,6 +513,8 @@ npx tsx src/cli/index.ts run "修复失败测试"
 3. 正式 **Eval Runner**：真实执行、判分、输出趋势。
 4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
 5. 在现有 **Tool Planner** 之上，加强按失败模式动态规划与恢复策略。
+6. 多agent协同。让主agent能够自定义创建子agent帮他工作。一个主agent负责统筹所有子agent
+7. 
 
 ---
 

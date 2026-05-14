@@ -4,7 +4,7 @@
  * 包含主题切换（默认暗色模式）
  */
 
-/* global ConfigPage, ChatPage */
+/* global ConfigPage, ChatPage, MemoryPage */
 
 (function () {
   'use strict';
@@ -43,20 +43,34 @@
   function getRouteFromHash() {
     var hash = window.location.hash || '';
     if (hash.startsWith('#/config')) return 'config';
+    if (hash.startsWith('#/memory')) return 'memory';
     return 'chat';
   }
 
   function navigate(page) {
     if (page === currentPage) return;
+    var prev = currentPage;
     currentPage = page;
 
-    var newHash = page === 'config' ? '#/config' : '#/chat';
+    var newHash = '#/chat';
+    if (page === 'config') newHash = '#/config';
+    else if (page === 'memory') newHash = '#/memory';
+
     if (window.location.hash !== newHash) {
       history.replaceState(null, '', newHash);
     }
 
     navChat.classList.toggle('active', page === 'chat');
     navConfig.classList.toggle('active', page === 'config');
+
+    if (
+      prev === 'memory' &&
+      page !== 'memory' &&
+      window.MemoryPage &&
+      typeof window.MemoryPage.destroy === 'function'
+    ) {
+      window.MemoryPage.destroy();
+    }
 
     renderPage(page);
   }
@@ -65,6 +79,8 @@
     pageContainer.innerHTML = '';
     if (page === 'config') {
       window.ConfigPage.render(pageContainer);
+    } else if (page === 'memory' && window.MemoryPage) {
+      window.MemoryPage.render(pageContainer);
     } else {
       window.ChatPage.render(pageContainer);
     }

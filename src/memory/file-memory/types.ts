@@ -64,6 +64,8 @@ export interface MemoryHeader {
   filePath: string;
   /** 文件修改时间（毫秒时间戳） */
   mtimeMs: number;
+  /** frontmatter 中的名称（可读标题） */
+  name: string | null;
   /** frontmatter 中的描述 */
   description: string | null;
   /** frontmatter 中的类型 */

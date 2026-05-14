@@ -12,6 +12,7 @@ import os from 'os';
 import type { Orchestrator } from '../../core/orchestrator.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
+import { fetchQuickTunnelPublicUrl } from '../quicktunnel-url.js';
 
 // ---- 类型定义 ----
 
@@ -65,19 +66,11 @@ async function getTunnelUrl(): Promise<string | null> {
     return cachedTunnelUrl;
   }
 
-  try {
-    // cloudflared metrics 默认在 127.0.0.1:20241
-    const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: AbortSignal.timeout(2000) });
-    if (res.ok) {
-      const data = await res.json() as { hostname?: string };
-      if (data.hostname) {
-        cachedTunnelUrl = `https://${data.hostname}`;
-        tunnelCheckTime = Date.now();
-        return cachedTunnelUrl;
-      }
-    }
-  } catch {
-    // cloudflared 未运行或不可达
+  const fresh = await fetchQuickTunnelPublicUrl();
+  if (fresh) {
+    cachedTunnelUrl = fresh;
+    tunnelCheckTime = Date.now();
+    return cachedTunnelUrl;
   }
 
   cachedTunnelUrl = null;

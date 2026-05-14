@@ -119,6 +119,17 @@ window.ChatWebSocket = (function () {
       case 'memory_notice':
         emit('memory_notice', { notices: data.notices });
         break;
+      case 'mcp_ready':
+        emit('mcp_ready', {
+          ok: data.ok !== false,
+          toolCount: typeof data.toolCount === 'number' ? data.toolCount : 0,
+          readyServers: typeof data.readyServers === 'number' ? data.readyServers : 0,
+          errorMessage: data.errorMessage,
+        });
+        break;
+      case 'tunnel_ready':
+        emit('tunnel_ready', { url: data.url || '' });
+        break;
       case 'confirm':
         emit('confirm', { toolName: data.toolName, args: data.args });
         break;

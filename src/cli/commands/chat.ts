@@ -31,6 +31,10 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudgetFromEnv,
 } from '../../harness/token-budget-config.js';
+import {
+  fetchQuickTunnelPublicUrl,
+  resolveTunnelMetricsListenAddress,
+} from '../../web/quicktunnel-url.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -52,17 +56,10 @@ async function showScanQR(port: number): Promise<void> {
       if (localIP !== '127.0.0.1') break;
     }
 
-    // 尝试获取 cloudflared 隧道 URL
+    // 尝试获取 cloudflared 隧道 URL（与 Web remote / WS 探测共用 ICE_TUNNEL_METRICS_*）
     let url = `http://${localIP}:${port}`;
-    try {
-      const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: AbortSignal.timeout(2000) });
-      if (res.ok) {
-        const data = await res.json() as { hostname?: string };
-        if (data.hostname) {
-          url = `https://${data.hostname}`;
-        }
-      }
-    } catch { /* no tunnel */ }
+    const tunnelUrl = await fetchQuickTunnelPublicUrl();
+    if (tunnelUrl) url = tunnelUrl;
 
     const QRCode = await import('qrcode');
     const qrText = await QRCode.default.toString(url, { type: 'terminal', small: true });
@@ -123,7 +120,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 
   info(`启动 Cloudflare Tunnel: ${bin}`);
 
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', '127.0.0.1:20241'];
+  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', resolveTunnelMetricsListenAddress()];
   const child = spawn(bin, tunnelArgs, {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
@@ -301,7 +298,6 @@ ${c.bold}终端内置命令:${c.reset}
   ${c.cyan}/scan${c.reset}    显示手机连接二维码
   ${c.cyan}/tools${c.reset}   列出可用工具
   ${c.cyan}/clear${c.reset}   清空对话历史
-  ${c.cyan}/export${c.reset}  导出记忆文件
   ${c.cyan}/memory${c.reset}  查看/管理记忆文件
   ${c.cyan}/help${c.reset}    显示此帮助
   ${c.cyan}/quit${c.reset}    退出
@@ -426,71 +422,6 @@ ${c.bold}终端内置命令:${c.reset}
       return;
     }
 
-    if (cmd === 'export') {
-      try {
-        const { promises: fsP } = await import('node:fs');
-        const pathMod = await import('node:path');
-        const { gzip: gzipCb } = await import('node:zlib');
-        const { promisify } = await import('node:util');
-        const gzipFn = promisify(gzipCb);
-
-        const projDir = pathMod.default.resolve(memoryFilesDir);
-        const userDir = pathMod.default.resolve(process.env.ICE_USER_MEMORY_DIR || 'data/user-memory');
-
-        // 扫描文件
-        const scanDir = async (dir: string): Promise<string[]> => {
-          try {
-            const entries = await fsP.readdir(dir, { recursive: true });
-            return entries.filter((e: any) => typeof e === 'string' && e.endsWith('.md')) as string[];
-          } catch { return []; }
-        };
-
-        const projFiles = await scanDir(projDir);
-        const userFiles = await scanDir(userDir);
-        const total = projFiles.length + userFiles.length;
-
-        if (total === 0) {
-          info('没有可导出的记忆文件。');
-          rl.prompt();
-          return;
-        }
-
-        // 打包
-        const entries: Array<{ rp: string; buf: Buffer }> = [];
-        for (const f of projFiles) {
-          entries.push({ rp: 'project/' + f.replace(/\\/g, '/'), buf: await fsP.readFile(pathMod.default.join(projDir, f)) });
-        }
-        for (const f of userFiles) {
-          entries.push({ rp: 'user/' + f.replace(/\\/g, '/'), buf: await fsP.readFile(pathMod.default.join(userDir, f)) });
-        }
-
-        let size = 4;
-        for (const e of entries) { size += 2 + Buffer.byteLength(e.rp) + 4 + e.buf.length; }
-        const raw = Buffer.alloc(size);
-        let off = 0;
-        raw.writeUInt32BE(entries.length, off); off += 4;
-        for (const e of entries) {
-          const pb = Buffer.from(e.rp, 'utf-8');
-          raw.writeUInt16BE(pb.length, off); off += 2;
-          pb.copy(raw, off); off += pb.length;
-          raw.writeUInt32BE(e.buf.length, off); off += 4;
-          e.buf.copy(raw, off); off += e.buf.length;
-        }
-
-        const compressed = await gzipFn(raw);
-        const date = new Date().toISOString().split('T')[0];
-        const outPath = `icecoder-memory-${date}.gz`;
-        await fsP.writeFile(outPath, compressed);
-
-        success(`记忆导出完成: ${outPath} (${total} 个文件, ${(compressed.length / 1024).toFixed(1)} KB)`);
-      } catch (e) {
-        error(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      rl.prompt();
-      return;
-    }
-
-    // 发送给 AI
     const spinner = new Spinner('思考中...');
     spinner.start();
 

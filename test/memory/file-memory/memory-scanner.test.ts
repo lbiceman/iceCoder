@@ -79,8 +79,11 @@ describe('formatMemoryManifest', () => {
         filename: 'user_role.md',
         filePath: '/mem/user_role.md',
         mtimeMs: new Date('2026-01-15').getTime(),
+        name: null,
         description: '用户角色信息',
         type: 'user',
+        level: 'preference',
+        evidenceStrength: 'inferred',
         confidence: 0.5,
         recallCount: 0,
         lastRecalledMs: 0,
@@ -94,8 +97,11 @@ describe('formatMemoryManifest', () => {
         filename: 'no_desc.md',
         filePath: '/mem/no_desc.md',
         mtimeMs: new Date('2026-01-10').getTime(),
+        name: null,
         description: null,
         type: undefined,
+        level: 'observation',
+        evidenceStrength: 'weak',
         confidence: 0.5,
         recallCount: 0,
         lastRecalledMs: 0,
@@ -149,6 +155,9 @@ content`, 'utf-8');
     const results = await scanMemoryFiles(tempDir);
     expect(results).toHaveLength(2);
     expect(results[0].description).toBeDefined();
+    const byName = new Map(results.map(r => [r.filename, r]));
+    expect(byName.get('user_role.md')?.name).toBe('role');
+    expect(byName.get('feedback.md')?.name).toBe('fb');
     expect(results.map(r => r.filename).sort()).toEqual(['feedback.md', 'user_role.md']);
   });
 

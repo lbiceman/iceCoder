@@ -4,7 +4,13 @@
  * 生产模式下提供 Vite 构建产物的静态文件托管和 SPA 回退。
  */
 
-import express, { type Express, type Router, type Request, type Response } from 'express';
+import express, {
+  type Express,
+  type Router,
+  type Request,
+  type Response,
+  type NextFunction,
+} from 'express';
 import fs from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -49,8 +55,21 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
     fs.existsSync(distPublic) ? distPublic : srcPublic
   );
 
+  const faviconSvgPath = path.join(staticDir, 'favicon.svg');
+  /** 浏览器默认请求 /favicon.ico；须先于 SPA 回退，否则会被改成返回 index.html */
+  const sendFaviconIco: express.RequestHandler = (_req, res, next: NextFunction) => {
+    if (!fs.existsSync(faviconSvgPath)) {
+      next();
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.type('image/svg+xml');
+    res.sendFile(faviconSvgPath);
+  };
+
   if (isProd) {
     app.use(express.static(staticDir));
+    app.get('/favicon.ico', sendFaviconIco);
     app.get('/{*splat}', (_req: Request, res: Response) => {
       if (_req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -65,6 +84,7 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       },
     }));
+    app.get('/favicon.ico', sendFaviconIco);
     app.get('/{*splat}', (_req: Request, res: Response) => {
       if (_req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

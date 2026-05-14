@@ -38,26 +38,36 @@ export function createMemoryFilesRouter(): Router {
       const allMemories = [
         ...projMemories.map(m => ({
           filename: m.filename,
+          name: m.name || '',
           type: m.type || 'unknown',
           description: m.description || '',
+          contentPreview: m.contentPreview || '',
           confidence: m.confidence,
           recallCount: m.recallCount,
+          memoryLevel: m.level,
+          evidenceStrength: m.evidenceStrength,
           source: m.source || '',
           tags: m.tags,
           level: 'project' as const,
+          createdAt: new Date(m.createdMs).toISOString(),
           modifiedAt: new Date(m.mtimeMs).toISOString(),
         })),
         ...userMemories
           .filter(m => !seenFilenames.has(m.filename))
           .map(m => ({
             filename: m.filename,
+            name: m.name || '',
             type: m.type || 'unknown',
             description: m.description || '',
+            contentPreview: m.contentPreview || '',
             confidence: m.confidence,
             recallCount: m.recallCount,
+            memoryLevel: m.level,
+            evidenceStrength: m.evidenceStrength,
             source: m.source || '',
             tags: m.tags,
             level: 'user' as const,
+            createdAt: new Date(m.createdMs).toISOString(),
             modifiedAt: new Date(m.mtimeMs).toISOString(),
           })),
       ];

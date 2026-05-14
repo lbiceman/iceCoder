@@ -1,6 +1,6 @@
 /**
  * 命令面板模块
- * 负责：~ 命令下拉框、本地命令处理（clear/open/scan/telemetry/export/memory）
+ * 负责：~ 命令下拉框、本地命令处理（clear/open/scan/telemetry/memory）
  */
 
 /* exported ChatCommands */
@@ -13,16 +13,14 @@ window.ChatCommands = (function () {
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'export', description: '导出所有记忆文件', prefix: '~' },
-    { name: 'memory', description: '查看/管理记忆文件', prefix: '~' }
+    { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'export', description: '导出所有记忆文件', prefix: '~' },
-    { name: 'memory', description: '查看/管理记忆文件', prefix: '~' }
+    { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
   ];
 
   var elCmdDropdown = null;
@@ -226,44 +224,6 @@ window.ChatCommands = (function () {
       });
   }
 
-  function handleExport(messages, appendFn, saveFn) {
-    messages.push({ role: 'agent', content: '正在导出记忆文件…' });
-    appendFn(messages[messages.length - 1]);
-    saveFn();
-
-    fetch('/api/memory/stats')
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (!data.success || data.total === 0) {
-          messages.pop();
-          messages.push({ role: 'agent', content: '没有可导出的记忆文件。' });
-          appendFn(messages[messages.length - 1]);
-          saveFn();
-          return;
-        }
-        var a = document.createElement('a');
-        a.href = '/api/memory/export';
-        a.download = '';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        messages.pop();
-        messages.push({
-          role: 'agent',
-          content: '记忆导出完成！共 ' + data.total + ' 个文件（项目级 ' + data.project.files + ' + 用户级 ' + data.user.files + '）。\n\n文件已开始下载。'
-        });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      })
-      .catch(function (err) {
-        messages.pop();
-        messages.push({ role: 'agent', content: '记忆导出失败: ' + (err.message || '未知错误') });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      });
-  }
-
   function handleMemory(text, messages, appendFn, saveFn) {
     var memArgs = text.substring(7).trim();
 
@@ -382,7 +342,6 @@ window.ChatCommands = (function () {
     handleScan: handleScan,
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
-    handleExport: handleExport,
     handleMemory: handleMemory,
   };
 })();

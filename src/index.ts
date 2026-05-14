@@ -26,14 +26,20 @@ import { Orchestrator } from './core/orchestrator.js';
 import { initializeToolSystem } from './tools/index.js';
 
 // MCP
-import { MCPManager } from './mcp/index.js';
+import { MCPManager, startMcpBackgroundInit } from './mcp/index.js';
 
 // Web 层
 import { createServer, startServer } from './web/server.js';
 import { createConfigRouter, getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from './web/routes/config.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
-import { attachChatWebSocket, cleanupChatResources } from './web/chat-ws.js';
+import {
+  attachChatWebSocket,
+  broadcastMcpReady,
+  broadcastTunnelReady,
+  cleanupChatResources,
+} from './web/chat-ws.js';
+import { startTunnelReadyWatcher } from './web/tunnel-ready-watcher.js';
 import { createSessionsRouter } from './web/routes/sessions.js';
 import { createUploadRouter } from './web/routes/upload.js';
 import { createMemoryTelemetryRouter } from './web/routes/memory-telemetry.js';
@@ -113,7 +119,7 @@ function initializeFileParser(): FileParser {
 }
 
 /**
- * 初始化工具系统 + MCP，再创建编排器（与 CLI bootstrap 行为一致）。
+ * 初始化工具系统与 MCPManager（MCP 进程在 HTTP 就绪后后台拉起，见 main）。
  */
 async function initializeOrchestrator(
   fileParser: FileParser,
@@ -126,17 +132,6 @@ async function initializeOrchestrator(
   });
 
   const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
-  try {
-    await mcpManager.initialize();
-    for (const tool of mcpManager.getRegisteredTools()) {
-      registry.register(tool);
-    }
-    if (mcpManager.totalTools > 0) {
-      console.log(`已注册 ${mcpManager.totalTools} 个 MCP 工具到工具系统`);
-    }
-  } catch (err) {
-    console.error('MCP 初始化失败（不影响核心功能）:', err);
-  }
 
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: OUTPUT_DIR,
@@ -259,12 +254,28 @@ async function main(): Promise<void> {
   // 7. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
   attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
 
+  // 7b. MCP 后台初始化（不阻塞监听）；完成后广播 mcp_ready，并由宠物提示
+  startMcpBackgroundInit(mcpManager, toolRegistry, (r) => {
+    broadcastMcpReady({
+      ok: r.ok,
+      toolCount: r.toolCount,
+      readyServers: r.readyServers,
+      ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+    });
+  });
+
+  // 7c. Cloudflare Quick Tunnel 后台探测（与 concurrently 启动的 cloudflared 对齐）；就绪后 WS 推送 + 宠物提示
+  const stopTunnelReadyWatcher = startTunnelReadyWatcher({
+    onReady: (url) => broadcastTunnelReady({ url }),
+  });
+
   // 8. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);
 
   // 9. 优雅关闭处理
   const shutdown = () => {
     console.log('Shutting down...');
+    stopTunnelReadyWatcher();
     cleanupChatResources();
     mcpManager.shutdown().catch((err) => console.error('MCP shutdown error:', err));
     server.close();

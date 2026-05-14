@@ -138,6 +138,29 @@ export interface ChatWSOptions {
 /** 当前所有聊天 WebSocket 客户端（PC + 移动端），用于会话持久化后通知其它端拉取 default.json */
 const chatClients = new Set<WebSocket>();
 
+/** MCP 后台初始化完成后的最新状态（晚到的 WS 连接可从 connected 包中补齐） */
+let mcpReadySnapshot: {
+  ok: boolean;
+  toolCount: number;
+  readyServers: number;
+  errorMessage?: string;
+} | null = null;
+
+/** Quick Tunnel 公网 URL 就绪后快照（晚到的 WS 可从 connected 补齐） */
+let tunnelReadySnapshot: { url: string } | null = null;
+
+function sendToAllChatClients(jsonBody: string): void {
+  for (const client of chatClients) {
+    if (client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(jsonBody);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 function broadcastSessionUpdated(reason: string, except?: WebSocket): void {
   const payload = JSON.stringify({ type: 'session_updated', reason });
   for (const client of chatClients) {
@@ -150,6 +173,32 @@ function broadcastSessionUpdated(reason: string, except?: WebSocket): void {
       }
     }
   }
+}
+
+/** MCP 后台初始化结束（成功或失败）时广播给所有已连接的聊天客户端 */
+export function broadcastMcpReady(payload: {
+  ok: boolean;
+  toolCount: number;
+  readyServers: number;
+  errorMessage?: string;
+}): void {
+  const snap = {
+    ok: payload.ok,
+    toolCount: payload.toolCount,
+    readyServers: payload.readyServers,
+    ...(payload.errorMessage ? { errorMessage: payload.errorMessage } : {}),
+  };
+  mcpReadySnapshot = snap;
+  sendToAllChatClients(JSON.stringify({ type: 'mcp_ready', ...snap }));
+}
+
+/** Cloudflare Quick Tunnel 可用时广播给所有聊天 WS 客户端 */
+export function broadcastTunnelReady(payload: { url: string }): void {
+  tunnelReadySnapshot = { url: payload.url };
+  sendToAllChatClients(JSON.stringify({
+    type: 'tunnel_ready',
+    url: payload.url,
+  }));
 }
 
 /** 追加消息到会话文件（后端是唯一写入者）；失败返回 false */
@@ -298,9 +347,16 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         type: 'connected',
         message: '连接成功',
         ...(meta ? { modelContext: meta } : {}),
+        ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
+        ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
       });
     } catch {
-      sendJSON(ws, { type: 'connected', message: '连接成功' });
+      sendJSON(ws, {
+        type: 'connected',
+        message: '连接成功',
+        ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
+        ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
+      });
     }
 
     let isProcessing = false;
@@ -711,5 +767,7 @@ export function cleanupChatResources(): void {
   fileBrowserModeActive = false;
   fileBrowserLastBrowsedPath = null;
   chatClients.clear();
+  mcpReadySnapshot = null;
+  tunnelReadySnapshot = null;
   console.log('[chat-ws] Resources cleaned up');
 }

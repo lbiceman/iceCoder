@@ -13,3 +13,5 @@ export type {
   MCPServerInfo,
   MCPServerStatus,
 } from './types.js';
+export { startMcpBackgroundInit } from './start-mcp-background.js';
+export type { McpBackgroundSettled } from './start-mcp-background.js';
