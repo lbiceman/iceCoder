@@ -1,9 +1,10 @@
 /**
- * 判断 session-notes / checkpoint 之外的「仅笔记 plan」是否应与当前用户一轮合并展示。
- * 避免已完成的旧 plan（100%）或明显新任务仍占住 tracker，导致首轮无法 maybeInit。
+ * 判断 session-notes / checkpoint 中的持久化 plan 是否应挂载到本轮 tracker。
+ * 避免已完成的旧 plan（100%）、checkpoint 与用户新目标不一致、或多段任务第一段跑满后占位导致无法重建计划。
  */
 
 import type { ExecutionPlan } from '../types/execution-plan.js';
+import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 
 /** 与 harness 任务切换检测同阈值的 Jaccard（低于则视为新主题） */
 export const PLAN_SESSION_JACCARD_THRESHOLD = 0.15;
@@ -48,12 +49,55 @@ export function userMessageAlignsWithPersistedGoal(
 }
 
 /**
+ * 持久化 plan（会话笔记或 checkpoint）是否仍与「本轮用户输入 + 可选的 checkpoint.userGoal」同一任务链。
+ */
+export function shouldAttachPersistedExecutionPlan(
+  plan: Pick<ExecutionPlan, 'goal' | 'progress'>,
+  latestUserMessage: string,
+  alternatePersistedGoals: string[] = [],
+): boolean {
+  if (plan.progress >= 100) return false;
+  if (userMessageAlignsWithPersistedGoal(plan.goal, latestUserMessage)) return true;
+  for (const alt of alternatePersistedGoals) {
+    if (alt.trim() && userMessageAlignsWithPersistedGoal(alt, latestUserMessage)) return true;
+  }
+  return false;
+}
+
+/**
  * 仅从 session-notes hydrate 的 plan：已跑完或与当前输入明显不是同一任务则不恢复。
  */
 export function shouldAttachPlanFromSessionNotes(
   plan: Pick<ExecutionPlan, 'goal' | 'progress'>,
   latestUserMessage: string,
 ): boolean {
-  if (plan.progress >= 100) return false;
-  return userMessageAlignsWithPersistedGoal(plan.goal, latestUserMessage);
+  return shouldAttachPersistedExecutionPlan(plan, latestUserMessage);
+}
+
+/** 由 TaskState 快照推断「当前实质工作」更偏哪类计划模板（粗粒度）。 */
+export function inferWorkIntentFromTaskSnapshot(snap: TaskStateSnapshot): TaskIntent {
+  if (snap.phase === 'verification') return 'test';
+  if (snap.phase === 'editing') return 'edit';
+  if (snap.filesChanged.length > 0) return 'edit';
+  if (snap.verificationRequired) return 'test';
+  return 'inspect';
+}
+
+/**
+ * 同一条用户消息里多段任务：inspect 计划已跑满 100%，但仍在做实现/测试/写文档类工作时，应换一套计划。
+ */
+export function shouldRefreshTerminalInspectPlan(
+  plan: Pick<ExecutionPlan, 'intent' | 'progress'>,
+  snap: TaskStateSnapshot,
+  latestUserMessage: string,
+): boolean {
+  if (plan.progress < 100) return false;
+  if (plan.intent !== 'inspect') return false;
+  const work = inferWorkIntentFromTaskSnapshot(snap);
+  if (work !== 'inspect') return true;
+  const t = latestUserMessage;
+  if (/创建|新增|写入|实现|修改|编辑|跑|测试|文档|部署|write|create|implement|modify|edit|run|test|docs/i.test(t)) {
+    return true;
+  }
+  return false;
 }

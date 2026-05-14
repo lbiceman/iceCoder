@@ -43,7 +43,12 @@ import { buildExecutionPlan } from './execution-plan-generator.js';
 import { ExecutionPlanTracker, type ExecutionPlanEventEmitter } from './execution-plan-tracker.js';
 import { isExecutionPlanEnabled } from './execution-plan-config.js';
 import type { ExecutionPlan } from '../types/execution-plan.js';
-import { shouldAttachPlanFromSessionNotes, userMessageAlignsWithPersistedGoal } from './session-plan-hydrate.js';
+import {
+  shouldAttachPersistedExecutionPlan,
+  shouldAttachPlanFromSessionNotes,
+  shouldRefreshTerminalInspectPlan,
+  userMessageAlignsWithPersistedGoal,
+} from './session-plan-hydrate.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { reviewStep, type StepReviewResult } from './step-review.js';
@@ -526,9 +531,15 @@ export class Harness {
       }
     }
 
-    // 优先用 checkpoint 中的 plan 恢复 tracker；否则仅在笔记 plan 未结束且与本轮用户目标一致时从 session-notes 恢复
+    // checkpoint plan 与笔记 plan：均在「未完 + 与用户本轮诉求同一任务链」时才恢复，否则让首轮 maybeInit 生成新卡片
     if (this.executionPlanEnabled) {
-      let resumePlan: ExecutionPlan | null = activeCheckpoint?.plan ?? null;
+      let resumePlan: ExecutionPlan | null = null;
+      if (activeCheckpoint?.plan) {
+        const cp = activeCheckpoint.plan;
+        if (shouldAttachPersistedExecutionPlan(cp, userMessage, [activeCheckpoint.userGoal])) {
+          resumePlan = cp;
+        }
+      }
       if (!resumePlan) {
         const fromNotes = await this.memoryIntegration.hydratePlanFromSessionNotes();
         if (fromNotes && shouldAttachPlanFromSessionNotes(fromNotes, userMessage)) {
@@ -585,8 +596,18 @@ export class Harness {
           ),
         });
 
-        // 首轮且可执行型任务：尝试生成 / 关联执行计划（feature flag 受控）
-        this.maybeInitExecutionPlan(state, userMessage, onStep);
+        // 首轮可执行：若检测到下面对话块会判定「与上一轮 assistant 无关」则延后初始化计划，
+        // 避免任务切换分支 reset 后再初始化导致重复推送 execution_plan_init。
+        const preLatest = getLatestRealUserText(msgs, userMessage);
+        const preAssistant = getLastAssistantText(msgs);
+        const pendingUnrelatedAssistant = !!(
+          preLatest
+          && preAssistant
+          && bigramJaccard(preLatest, preAssistant) < TASK_SWITCH_JACCARD_THRESHOLD
+        );
+        if (!pendingUnrelatedAssistant) {
+          this.maybeInitExecutionPlan(state, userMessage, onStep);
+        }
       }
 
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
@@ -608,9 +629,16 @@ export class Harness {
               content: '[System: You have received a new task request that appears unrelated to the current pending work. Completely pause any previous task and focus only on the new instruction. Do not resume previous actions unless explicitly asked.]',
             });
             state.taskSwitchInjected = true;
+            if (this.executionPlanEnabled) {
+              this.resetExecutionPlanTracker();
+              this.maybeInitExecutionPlan(state, userMessage, onStep);
+            }
           }
         }
       }
+
+      // 同一条用户消息多段任务：inspect 计划在首轮已跑满 100% 时，为后续「实现 / 写入 / 测试」换新计划卡片
+      this.maybeRefreshExecutionPlanForContinuedWork(state, userMessage, onStep);
 
       // 检查用户中断
       if (this.loopController.isAborted()) {
@@ -1591,6 +1619,40 @@ export class Harness {
     if (!plan) return;
 
     this.attachExecutionPlan(plan, onStep);
+  }
+
+  /**
+   * 单次 run、多轮工具后：第一段 inspect 已到 100% 但仍有实现类工作时重建计划。
+   */
+  private maybeRefreshExecutionPlanForContinuedWork(
+    state: LoopState,
+    userMessage: string,
+    onStep?: (event: HarnessStepEvent) => void,
+  ): void {
+    if (!this.executionPlanEnabled) return;
+    if (!this.currentPlanTracker) return;
+    if (state.turnCount < 2) return;
+
+    const plan = this.currentPlanTracker.getPlan();
+    const snap = state.taskState.snapshot();
+    const realUser = getLatestRealUserText(state.messages, userMessage);
+    if (!realUser?.trim()) return;
+
+    if (!shouldRefreshTerminalInspectPlan(plan, snap, realUser)) return;
+
+    const planGoal = realUser.trim();
+    const planIntent = inferIntent(planGoal);
+    const taskSnapshotForPlan = userMessageAlignsWithPersistedGoal(snap.goal, realUser) ? snap : undefined;
+    const newPlan = buildExecutionPlan({
+      goal: planGoal,
+      intent: planIntent,
+      taskSnapshot: taskSnapshotForPlan,
+    });
+    if (!newPlan) {
+      this.resetExecutionPlanTracker();
+      return;
+    }
+    this.attachExecutionPlan(newPlan, onStep);
   }
 
   private async saveTaskCheckpoint(
