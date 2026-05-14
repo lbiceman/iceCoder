@@ -34,7 +34,7 @@ import { TokenBudgetTracker } from './token-budget.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import { getToolMetadata, isDestructiveOperation, isDestructiveCommand } from '../tools/tool-metadata.js';
 import { HarnessMemoryIntegration } from './harness-memory.js';
-import { TaskState } from './task-state.js';
+import { inferIntent, TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
 import { TaskCheckpointManager, type TaskCheckpointStatus } from './checkpoint.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
@@ -43,6 +43,7 @@ import { buildExecutionPlan } from './execution-plan-generator.js';
 import { ExecutionPlanTracker, type ExecutionPlanEventEmitter } from './execution-plan-tracker.js';
 import { isExecutionPlanEnabled } from './execution-plan-config.js';
 import type { ExecutionPlan } from '../types/execution-plan.js';
+import { shouldAttachPlanFromSessionNotes, userMessageAlignsWithPersistedGoal } from './session-plan-hydrate.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { reviewStep, type StepReviewResult } from './step-review.js';
@@ -525,10 +526,15 @@ export class Harness {
       }
     }
 
-    // 优先用 checkpoint 中的 plan 恢复 tracker，其次从 session-notes 中解析
+    // 优先用 checkpoint 中的 plan 恢复 tracker；否则仅在笔记 plan 未结束且与本轮用户目标一致时从 session-notes 恢复
     if (this.executionPlanEnabled) {
-      const resumePlan = activeCheckpoint?.plan
-        ?? await this.memoryIntegration.hydratePlanFromSessionNotes();
+      let resumePlan: ExecutionPlan | null = activeCheckpoint?.plan ?? null;
+      if (!resumePlan) {
+        const fromNotes = await this.memoryIntegration.hydratePlanFromSessionNotes();
+        if (fromNotes && shouldAttachPlanFromSessionNotes(fromNotes, userMessage)) {
+          resumePlan = fromNotes;
+        }
+      }
       if (resumePlan) {
         this.attachExecutionPlan(resumePlan, onStep);
       }
@@ -1568,13 +1574,19 @@ export class Harness {
     if (this.currentPlanTracker) return;
 
     const realUser = getLatestRealUserText(state.messages, userMessage);
-    if (!realUser) return;
+    if (!realUser?.trim()) return;
 
     const snap = state.taskState.snapshot();
+    const planGoal = realUser.trim();
+    const planIntent = inferIntent(planGoal);
+    const taskSnapshotForPlan = userMessageAlignsWithPersistedGoal(snap.goal, realUser)
+      ? snap
+      : undefined;
+
     const plan = buildExecutionPlan({
-      goal: snap.goal || realUser,
-      intent: snap.intent,
-      taskSnapshot: snap,
+      goal: planGoal,
+      intent: planIntent,
+      taskSnapshot: taskSnapshotForPlan,
     });
     if (!plan) return;
 

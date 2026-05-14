@@ -104,7 +104,8 @@ Run an appropriate verification command now (for example: focused tests, npm tes
   }
 }
 
-function inferIntent(text: string): TaskIntent {
+/** 由用户自然语言推断任务意图（与 TaskState 构造逻辑一致，供执行计划等复用） */
+export function inferIntent(text: string): TaskIntent {
   const t = text.toLowerCase();
   if (/测试|运行|verify|test|vitest|jest|pytest|tsc/.test(t)) return 'test';
   if (/修复|失败|报错|错误|debug|fix|investigate/.test(t)) return 'debug';
