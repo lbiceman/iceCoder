@@ -14,7 +14,7 @@ window.ChatCommands = (function () {
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'export', description: '导出所有记忆文件', prefix: '~' },
-    { name: 'memory', description: '查看/管理记忆文件', prefix: '~' }
+    { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
@@ -22,7 +22,7 @@ window.ChatCommands = (function () {
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'export', description: '导出所有记忆文件', prefix: '~' },
-    { name: 'memory', description: '查看/管理记忆文件', prefix: '~' }
+    { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
   ];
 
   var elCmdDropdown = null;

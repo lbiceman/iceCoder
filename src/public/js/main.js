@@ -13,4 +13,5 @@ import './chat-file.js';
 import './chat-qr.js';
 import './chat-pet-bridge.js';
 import './chat-page.js';
+import './memory-page.js';
 import './app.js';

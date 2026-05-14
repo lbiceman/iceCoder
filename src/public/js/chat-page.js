@@ -184,12 +184,21 @@ window.ChatPage = (function () {
       return;
     }
 
-    // ~memory
-    if (text === '~memory' || text.indexOf('~memory ') === 0) {
+    // ~memory（无后缀参数）：打开记忆图谱页（view/delete 仍为聊天内清单命令）
+    if (text === '~memory') {
       elInput.value = '';
       UI.autoResizeInput();
       Cmd.hide();
-      Cmd.handleMemory(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      window.location.hash = '#/memory';
+      return;
+    }
+    if (text.indexOf('~memory ') === 0) {
+      elInput.value = '';
+      UI.autoResizeInput();
+      Cmd.hide();
+      Cmd.handleMemory(text, Session.getMessages(), function (msg) {
+        UI.appendMessageEl(msg, Session.stripStatusTag);
+      }, Session.saveMessages);
       return;
     }
 
