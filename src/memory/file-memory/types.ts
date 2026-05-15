@@ -52,6 +52,11 @@ export interface MemoryFrontmatter {
   tags?: string[];
   /** 事件发生的日期（ISO 格式，如 "2023-07-18"），从对话内容中提取 */
   eventDate?: string;
+  /**
+   * 提取子智能体写入的类别：habit | hobby | recurring_mistake | stable_preference | explicit_rule | project_convention
+   *（历史文件可能缺省）
+   */
+  memoryCategory?: string;
 }
 
 /**

@@ -50,12 +50,32 @@ import {
 /** 话题切换 Jaccard 阈值 */
 const TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2;
 
-function memoryFilesBubbleSummary(memories: { filename: string }[], maxNames = 3): string {
+function formatMemoryFilenameListForPet(memories: { filename: string }[], maxNames: number): string {
   if (!memories.length) return '';
   const parts = memories.slice(0, maxNames).map(m => m.filename.replace(/\.md$/i, ''));
-  let s = '想起了：' + parts.join('、');
-  if (memories.length > maxNames) s += ` 等 ${memories.length} 条`;
+  let s = parts.join('、');
+  if (memories.length > maxNames) s += ` 等共 ${memories.length} 条`;
   return s;
+}
+
+/**
+ * 生成冰豆气泡文案：明确表示记忆已作为本轮 **发给模型的 user 消息** 注入上下文（`buildCoNMemoryPrompt`）。
+ * 与回合末 WebSocket `memory_notice`（💾 被动提取写入磁盘）区分。
+ *
+ * @param phase `coarse` = 首轮 LLM 前粗召回；`standard` = 标准召回
+ */
+export function formatMemoryInjectionPetMessage(
+  memories: { filename: string }[],
+  phase: 'standard' | 'coarse',
+  maxNames = 3,
+): string {
+  const list = formatMemoryFilenameListForPet(memories, maxNames);
+  const head =
+    phase === 'coarse'
+      ? '首轮已把记忆并入本回合提示'
+      : '已把记忆并入本回合提示';
+  if (!list) return `${head}（模型将参考这些记忆）`;
+  return `${head}：${list}`;
 }
 
 function emitMemoryStep(
@@ -829,7 +849,7 @@ export class HarnessMemoryIntegration {
         const reminder = buildCoNMemoryPrompt(memoryItems, method);
         messages.push({ role: 'user', content: reminder });
         didInjectThisRecall = true;
-        emitMemoryStep(onStep, 'recall_hit', memoryFilesBubbleSummary(selectedMemories));
+        emitMemoryStep(onStep, 'recall_hit', formatMemoryInjectionPetMessage(selectedMemories, 'standard'));
         // 召回成功，重置空召回计数
         this.consecutiveEmptyRecalls = 0;
         this.emptyRecallCooldown = 0;
@@ -943,7 +963,7 @@ export class HarnessMemoryIntegration {
       }
       const reminder = buildCoNMemoryPrompt(memoryItems, 'keyword pre-LLM recall');
       messages.push({ role: 'user', content: reminder });
-      emitMemoryStep(onStep, 'recall_coarse_hit', memoryFilesBubbleSummary(selectedMemories));
+      emitMemoryStep(onStep, 'recall_coarse_hit', formatMemoryInjectionPetMessage(selectedMemories, 'coarse'));
     } catch (err) {
       console.debug('[harness-memory] coarse recall failed:', err instanceof Error ? err.message : err);
     } finally {

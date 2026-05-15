@@ -57,7 +57,7 @@ export type { PrefetchConfig, PrefetchResult } from './async-prefetch.js';
 export { recallRelevantMemories, expandRelatedMemories, expandNegationQuery, parseTimeRange, LLM_RECALL_MIN_CANDIDATES } from './memory-recall.js';
 export type { RecallResult, TimeRange } from './memory-recall.js';
 
-export { LLMMemoryExtractor, createLLMMemoryExtractor } from './memory-llm-extractor.js';
+export { LLMMemoryExtractor, createLLMMemoryExtractor, ALLOWED_MEMORY_CATEGORIES, isAllowedMemoryCategory } from './memory-llm-extractor.js';
 export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
 
 export { MemoryDream, createMemoryDream } from './memory-dream.js';

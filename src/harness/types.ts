@@ -97,10 +97,10 @@ export type StopReason =
   | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 
-/** 推送到前端的记忆子状态（冰豆 / Web 会话指示气泡） */
+/** 推送到前端的记忆子状态（冰豆 / Web 会话指示气泡）；hit/coarse_hit 仅在已注入本轮模型上下文时发出 */
 export type MemoryStepKind =
-  | 'recall_coarse_hit'  // 首轮 LLM 前粗召回命中
-  | 'recall_hit'         // 工具后轮次标准召回命中
+  | 'recall_coarse_hit'  // 首轮 LLM 前粗召回且已并入提示
+  | 'recall_hit'         // 标准召回且已并入提示
   | 'recall_empty'       // 标准召回无结果
   | 'recall_skipped'     // 跳过（空库、过滤、去重后无条等）
   | 'session_hydrate';   // 从 session-notes 恢复运行时快照

@@ -211,16 +211,14 @@ window.ChatPetBridge = (function () {
         {
           var mk = step.memoryKind;
           var memDefaults = {
-            recall_hit: '想起了相关记忆',
-            recall_coarse_hit: '预检索命中记忆',
+            recall_hit: '记忆已并入',
+            recall_coarse_hit: '首轮记忆已并入',
             recall_empty: '未找到可注入的相关记忆',
             recall_skipped: '本轮未注入记忆',
             session_hydrate: '已恢复会话状态',
           };
-          if (mk === 'recall_hit') {
+          if (mk === 'recall_hit' || mk === 'recall_coarse_hit') {
             sessionPet.setState('love');
-          } else if (mk === 'recall_coarse_hit') {
-            sessionPet.setState('curious');
           } else if (mk === 'recall_empty') {
             sessionPet.setState('sad');
           } else if (mk === 'recall_skipped') {
