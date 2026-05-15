@@ -4,7 +4,7 @@
  * 设计目标：
  *   1. 与 v1 (TaskCheckpoint) 完全兼容：v2 是 v1 的**可选**扩展，
  *      老 checkpoint 文件按 v1 解析即可，不丢任何字段。
- *   2. 仅在 `ICE_ENABLE_RESILIENCE_V2=1` 启用时被写入；
+ *   2. 由 CheckpointEngine 在存在 sessionDir 时写入 v2 附加字段；
  *      关闭 flag 时 checkpoint 行为与现有 TaskCheckpointManager 完全一致。
  *   3. 字段全部是「快照型」描述，便于跨进程恢复执行控制状态。
  *

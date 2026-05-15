@@ -41,7 +41,8 @@ export interface TaskCheckpointUpdate {
   messages: UnifiedMessage[];
   failedToolCalls?: string[];
   stopReason?: StopReason;
-  plan?: ExecutionPlan;
+  /** 显式 `null`：从 checkpoint 中移除已持久化的 plan（与「省略字段则保留旧值」区分） */
+  plan?: ExecutionPlan | null;
 }
 
 export class TaskCheckpointManager {
@@ -66,6 +67,16 @@ export class TaskCheckpointManager {
   async save(update: TaskCheckpointUpdate): Promise<TaskCheckpoint> {
     const existing = await this.readExisting();
     const now = new Date().toISOString();
+    let planField: { plan?: ExecutionPlan } = {};
+    if (Object.prototype.hasOwnProperty.call(update, 'plan')) {
+      if (update.plan != null) {
+        planField = { plan: update.plan };
+      }
+      // update.plan === null：不写 plan（从 JSON 去掉），表示本轮无附着计划
+    } else if (existing?.plan) {
+      planField = { plan: existing.plan };
+    }
+
     const checkpoint: TaskCheckpoint = {
       version: 1,
       taskId: existing?.taskId ?? createTaskId(update.userGoal, now),
@@ -87,7 +98,7 @@ export class TaskCheckpointManager {
       },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      ...(update.plan ? { plan: update.plan } : existing?.plan ? { plan: existing.plan } : {}),
+      ...planField,
     };
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
@@ -95,6 +106,25 @@ export class TaskCheckpointManager {
     await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
     await fs.rename(tmpPath, this.checkpointPath);
     return checkpoint;
+  }
+
+  /**
+   * 从磁盘 checkpoint 移除已保存的 execution plan。
+   * 与「本轮不向 UI 恢复 plan」一致，避免 GET /sessions/:id/plan 仍为旧快照。
+   */
+  async clearEmbeddedPlan(): Promise<void> {
+    try {
+      const existing = await this.readExisting();
+      if (!existing?.plan) return;
+      const checkpoint = { ...existing };
+      delete checkpoint.plan;
+      const tmpPath = `${this.checkpointPath}.tmp`;
+      await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
+      await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
+      await fs.rename(tmpPath, this.checkpointPath);
+    } catch {
+      /* ignore missing / malformed checkpoint */
+    }
   }
 
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {

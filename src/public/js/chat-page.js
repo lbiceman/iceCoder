@@ -389,7 +389,9 @@ window.ChatPage = (function () {
       Session.updateToolBatchStatus(step.toolName, resultStatus);
     }
     if (window.ChatExecutionPlanBridge
-      && (step.type === 'execution_plan_init' || step.type === 'execution_plan_update')) {
+      && (step.type === 'execution_plan_init'
+        || step.type === 'execution_plan_update'
+        || step.type === 'execution_plan_clear')) {
       window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());

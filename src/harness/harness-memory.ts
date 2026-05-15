@@ -1117,6 +1117,31 @@ ${candidateList}`;
   }
 
   /**
+   * 从 session-notes.md 移除所有 `icecoder-plan` fence。
+   * 当本轮 Harness 判定不挂载恢复中的 plan 时调用，以免 REST `/plan` 仍返回上一轮计划。
+   */
+  async clearPlanFenceFromSessionNotes(): Promise<void> {
+    try {
+      const notesPath = this.sessionMemoryState.notesPath;
+      let existing = '';
+      try {
+        existing = await fs.readFile(notesPath, 'utf-8');
+      } catch {
+        return;
+      }
+      const stripped = stripPlanFence(existing).replace(/\s+$/, '');
+      const next = stripped.endsWith('\n') || stripped.length === 0 ? stripped : `${stripped}\n`;
+      await fs.mkdir(path.dirname(notesPath), { recursive: true });
+      await fs.writeFile(notesPath, next, 'utf-8');
+    } catch (err) {
+      console.debug(
+        '[harness-memory] clear plan fence failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
    * 获取会话笔记内容（用于上下文压缩后注入，保持连续性）。
    */
   async getSessionMemoryForCompact(): Promise<string | null> {

@@ -4,7 +4,7 @@
  * 职责：
  *   1. 由 ChatPage 转发 `connected` / `session_updated`（见 notifyConnected / notifySessionUpdated）。
  *      原因：ChatWebSocket.on() 每个 type 只保留最后一个回调，若在桥里 WS.on('connected') 会被 ChatPage 覆盖。
- *   2. 把 `execution_plan_init / update` 转给 ChatExecutionPlan 面板；
+ *   2. 把 `execution_plan_init / update / clear` 转给 ChatExecutionPlan 面板；
  *   3. WS 重连或先错过 init 时通过 GET /api/sessions/:id/plan 重同步；
  *   4. 详情卡片锚定冰豆底部 #status-turn；localStorage ICE_PLAN_PANEL=0 仍可关闭计划展示。
  *
@@ -62,6 +62,14 @@ window.ChatExecutionPlanBridge = (function () {
   function onStep(data) {
     var step = data && data.step;
     if (!step) return;
+
+    // 独立于 enabled：上一轮残留 UI 在非计划型对话时也必须清掉
+    if (step.type === 'execution_plan_clear') {
+      currentPlanId = null;
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+      return;
+    }
+
     // connected 若被其它模块覆盖导致 enabled 仍为 false，仍以首包 init 打开功能
     if (step.type === 'execution_plan_init' && step.plan) {
       enabled = true;

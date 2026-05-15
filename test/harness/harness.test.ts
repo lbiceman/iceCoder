@@ -1178,20 +1178,18 @@ describe('Harness token budget config', () => {
     expect(getHarnessTokenBudgetFromEnv()).toBe(1200000);
   });
 
-  it('默认允许长时间连续工作，timeout 和 rounds 可显式覆盖', () => {
+  it('墙钟超时硬编码 24h；maxRounds 仍可由 ICE_HARNESS_MAX_ROUNDS 覆盖', () => {
     delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
     delete process.env.ICE_HARNESS_TIMEOUT_MS;
     delete process.env.ICE_HARNESS_MAX_ROUNDS;
 
+    expect(getHarnessTimeoutMsFromEnv()).toBe(24 * 60 * 60 * 1000);
     expect(getHarnessTimeoutMsFromEnv()).toBe(DEFAULT_LONG_RUNNING_TIMEOUT_MS);
     expect(getHarnessMaxRoundsFromEnv()).toBe(DEFAULT_LONG_RUNNING_MAX_ROUNDS);
 
     process.env.ICE_HARNESS_TIMEOUT_HOURS = '6';
-    expect(getHarnessTimeoutMsFromEnv()).toBe(6 * 60 * 60 * 1000);
-
-    delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
     process.env.ICE_HARNESS_TIMEOUT_MS = '7200000';
-    expect(getHarnessTimeoutMsFromEnv()).toBe(7200000);
+    expect(getHarnessTimeoutMsFromEnv()).toBe(DEFAULT_LONG_RUNNING_TIMEOUT_MS);
 
     process.env.ICE_HARNESS_MAX_ROUNDS = '9000';
     expect(getHarnessMaxRoundsFromEnv()).toBe(9000);

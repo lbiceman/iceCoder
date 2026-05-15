@@ -166,7 +166,7 @@ export interface HarnessConfig {
 /**
  * Harness 循环中每一步的事件回调。
  *
- * `execution_plan_init` / `execution_plan_update` 来自 Execution Transparency Layer，
+ * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 来自 Execution Transparency Layer，
  * 仅在 ICE_ENABLE_EXECUTION_PLAN 启用时出现；其他事件类型不受影响。
  */
 export interface HarnessStepEvent {
@@ -183,7 +183,8 @@ export interface HarnessStepEvent {
     | 'tool_output'
     | 'memory_event'
     | 'execution_plan_init'
-    | 'execution_plan_update';
+    | 'execution_plan_update'
+    | 'execution_plan_clear';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */

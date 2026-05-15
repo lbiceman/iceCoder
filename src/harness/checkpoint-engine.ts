@@ -8,8 +8,8 @@
  *   2. **附加不破坏**：不替换 TaskCheckpointManager，而是包装它；
  *      Harness 仍然使用 TaskCheckpointManager.save() 写入 v1 字段；
  *      CheckpointEngine 负责合并写入 v2 附加字段。
- *   3. **Feature flag 受控**：`ICE_ENABLE_RESILIENCE_V2=1` 关闭时
- *      该引擎不被实例化，行为完全等价于 v1。
+ *   3. **默认始终开启**：与 Execution Transparency Layer 一致，不再通过环境变量关闭；
+ *      无 `sessionDir` 时仍不会创建引擎（无可写 checkpoint 路径）。
  *
  * 持久化 trigger（来自 docs/长时间连续工作.md §Save Trigger）：
  *   - step completed / tool failed / verification started / verification failed
@@ -68,12 +68,9 @@ const MAX_RECENT_TOOLS = 20;
 const MAX_RECENT_FAILURES = 10;
 const MAX_RECOVERY_SIGNALS = 8;
 
-/** Feature flag 检测（独立函数便于测试 mock） */
+/** 是否启用 Runtime Resilience v2（始终为 true，与 `isExecutionPlanEnabled` 策略一致） */
 export function isResilienceV2Enabled(): boolean {
-  const raw = process.env.ICE_ENABLE_RESILIENCE_V2;
-  if (!raw) return false;
-  const v = raw.trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes';
+  return true;
 }
 
 /**

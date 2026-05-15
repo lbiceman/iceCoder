@@ -36,7 +36,7 @@ import { getToolMetadata, isDestructiveOperation, isDestructiveCommand } from '.
 import { HarnessMemoryIntegration } from './harness-memory.js';
 import { inferIntent, TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
-import { TaskCheckpointManager, type TaskCheckpointStatus } from './checkpoint.js';
+import { TaskCheckpointManager, type TaskCheckpointStatus, type TaskCheckpointUpdate } from './checkpoint.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { buildExecutionPlan } from './execution-plan-generator.js';
@@ -79,7 +79,7 @@ const LLM_MAX_RETRIES = 1;
 const LLM_RETRY_BASE_DELAY = 2000;
 const LLM_RETRY_MAX_DELAY = 2000;
 
-/** 工具执行阶段推给前端的简短说明（降低「长时间无反馈」焦虑） */
+/** 工具调用阶段发往 UI 的一步提示文案（缓解长时间无 SSE 体感）。 */
 function toolExecutionUserHint(toolName: string): string {
   const hints: Record<string, string> = {
     read_file: '正在读取文件（大文件将自动截断）…',
@@ -113,6 +113,7 @@ const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
 const DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS = 120_000;
 const PRE_COMPACT_SESSION_TIMEOUT_MSG = 'pre_compact_session_memory_timeout';
 
+/** 读取 `ICE_SESSION_MEMORY_BEFORE_COMPACT_MS`；无效时使用默认等待上限。 */
 function preCompactSessionMemoryWaitMs(): number {
   const raw = process.env.ICE_SESSION_MEMORY_BEFORE_COMPACT_MS;
   if (raw == null || raw === '') return DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
@@ -156,6 +157,10 @@ function getLastAssistantText(messages: UnifiedMessage[]): string {
   return '';
 }
 
+/**
+ * 识别「非真人用户」的 user 前缀（运行时状态、会话笔记摘要、工具规划等）。
+ * {@link getLatestRealUserText} 会跳过此类消息。
+ */
 function isSystemInjectedUserContent(content: string): boolean {
   const trimmed = content.trim();
   return trimmed.startsWith('<system-context>')
@@ -169,6 +174,7 @@ function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('Continue directly');
 }
 
+/** 倒序查找第一条未被 {@link isSystemInjectedUserContent} 排除的 user 文本。 */
 function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -179,10 +185,15 @@ function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): strin
   return fallback;
 }
 
+/** 是否已有 assistant 带 `toolCalls` 的轮次（任意位置）。 */
 function hasAssistantToolCallAttempt(messages: UnifiedMessage[]): boolean {
   return messages.some(m => m.role === 'assistant' && !!m.toolCalls?.length);
 }
 
+/**
+ * 自最近一条真实 user 起，后方是否出现过 assistant `toolCalls`。
+ * 用于判别「本条用户输入之后模型是否尝试过工具」。
+ */
 function hasAssistantToolCallAfterLatestRealUser(messages: UnifiedMessage[]): boolean {
   let latestRealUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -199,27 +210,48 @@ function hasAssistantToolCallAfterLatestRealUser(messages: UnifiedMessage[]): bo
     .some(m => m.role === 'assistant' && !!m.toolCalls?.length);
 }
 
+/**
+ * 是否适合首轮注入 Runtime Tool Planner，并可能与执行计划同开。
+ *
+ * - 第一层：中英文子串判断是否像「要动工具的工程诉求」；
+ * - 第二层：若以纯疑问措辞开头且无实现侧关键词，视为不可执行。
+ */
 function isActionableToolRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
+  const rawTrim = text.trim();
   if (!t) return false;
 
-  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|提交|创建.*pr/i.test(t)
+  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|生成|添加|提交|创建.*pr/i.test(t)
     || /\b(fix|debug|investigate|implement|modify|edit|update|refactor|search|read|create|delete|commit|check)\b/i.test(t)
     || /\b(run|execute)\s+\S+/i.test(t)
     || /\b(test|verify)\s+\S+|\S+\s+(tests?|verification)\b/i.test(t);
   if (!isActionable) return false;
 
-  const questionOnly = /^(为什么|如何|怎么|解释|说明|what|why|how)\b/i.test(t)
+  // 「分析一下…」等与英文 \b：JS 的词边界夹在汉字之间常为 false，需单独前缀或分隔符判别
+  const questionOnlyCn = rawTrim.startsWith('分析一下')
+    || rawTrim.startsWith('说明一下')
+    || rawTrim.startsWith('解释一下')
+    || rawTrim.startsWith('为什么')
+    || rawTrim.startsWith('如何')
+    || rawTrim.startsWith('怎么')
+    || /^解释([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^说明([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^分析([\s\u3000，。、！？]|$)/.test(rawTrim);
+  const questionOnly = (questionOnlyCn || /^(what|why|how)\b/i.test(t))
     && !/(修|改|解决|处理|运行|测试|fix|modify|run|test|implement)/i.test(t);
   return !questionOnly;
 }
 
+/** 子代理回灌的 tool 消息格式，供历史裁剪识别。 */
 function isSubAgentToolResult(msg: UnifiedMessage): msg is UnifiedMessage & { content: string } {
   return msg.role === 'tool'
     && typeof msg.content === 'string'
     && msg.content.startsWith('[SubAgent Result]');
 }
 
+/**
+ * 压缩过旧子代理 tool 结果正文；保留 `summary:\\n` 前头部，对摘要段单独限长。
+ */
 function truncateOldSubAgentResult(content: string): string {
   const marker = '\nsummary:\n';
   const markerIndex = content.indexOf(marker);
@@ -306,7 +338,7 @@ interface LoopState {
   runtimeStateHash: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
-  /** Resilience v2：分支预算 tracker（feature flag 关时为 undefined） */
+  /** Resilience v2：分支预算 tracker */
   branchBudget?: BranchBudgetTracker;
   /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
   branchBudgetWarnedThisRound: boolean;
@@ -340,9 +372,9 @@ export class Harness {
   private workspaceRoot: string;
   /** Execution Transparency Layer 开关（构造时一次性快照） */
   private executionPlanEnabled: boolean;
-  /** Runtime Resilience v2 开关（构造时一次性快照） */
+  /** Runtime Resilience v2（始终开启，与 isResilienceV2Enabled 一致） */
   private resilienceV2Enabled: boolean;
-  /** Resilience v2：增强 checkpoint 引擎（关闭时为 undefined） */
+  /** Resilience v2：增强 checkpoint 引擎（无 sessionDir 时未创建） */
   private checkpointEngine?: CheckpointEngine;
   /**
    * 当前 run() 调用的执行计划追踪器。
@@ -382,7 +414,7 @@ export class Harness {
     this.runtimeTelemetry = new RuntimeTelemetry(config.sessionDir, config.sessionId);
     this.executionPlanEnabled = isExecutionPlanEnabled();
 
-    // Resilience v2：feature flag 受控，关闭时完全不实例化任何子系统
+    // Resilience v2：无 sessionDir 时不创建 CheckpointEngine（v2 磁盘合并）；其余子逻辑仍开启
     this.resilienceV2Enabled = isResilienceV2Enabled();
     if (this.resilienceV2Enabled && config.sessionDir) {
       this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
@@ -453,6 +485,9 @@ export class Harness {
 
     // 每次 run 都是一次干净的 plan 生命周期
     this.resetExecutionPlanTracker();
+    if (this.executionPlanEnabled) {
+      onStep?.({ type: 'execution_plan_clear' });
+    }
 
     // 保存用户消息用于记忆相关性检索
     this.memoryIntegration.onLoopStart(
@@ -534,11 +569,20 @@ export class Harness {
     // checkpoint plan 与笔记 plan：均在「未完 + 与用户本轮诉求同一任务链」时才恢复，否则让首轮 maybeInit 生成新卡片
     if (this.executionPlanEnabled) {
       let resumePlan: ExecutionPlan | null = null;
-      if (activeCheckpoint?.plan) {
-        const cp = activeCheckpoint.plan;
-        if (shouldAttachPersistedExecutionPlan(cp, userMessage, [activeCheckpoint.userGoal])) {
-          resumePlan = cp;
-        }
+      const checkpointPlan = activeCheckpoint?.plan;
+      const checkpointPlanOk =
+        !!checkpointPlan
+        && !!activeCheckpoint
+        && shouldAttachPersistedExecutionPlan(
+          checkpointPlan,
+          userMessage,
+          [activeCheckpoint.userGoal],
+        );
+      if (checkpointPlanOk && checkpointPlan) {
+        resumePlan = checkpointPlan;
+      } else if (checkpointPlan) {
+        // 与 Harness 挂载结论不一致时不要留在 checkpoint，否则 GET /sessions/:id/plan 仍返回旧快照
+        await this.checkpointManager?.clearEmbeddedPlan();
       }
       if (!resumePlan) {
         const fromNotes = await this.memoryIntegration.hydratePlanFromSessionNotes();
@@ -548,6 +592,9 @@ export class Harness {
       }
       if (resumePlan) {
         this.attachExecutionPlan(resumePlan, onStep);
+      } else {
+        await this.memoryIntegration.clearPlanFenceFromSessionNotes();
+        await this.checkpointManager?.clearEmbeddedPlan();
       }
     }
 
@@ -631,6 +678,7 @@ export class Harness {
             state.taskSwitchInjected = true;
             if (this.executionPlanEnabled) {
               this.resetExecutionPlanTracker();
+              onStep?.({ type: 'execution_plan_clear' });
               this.maybeInitExecutionPlan(state, userMessage, onStep);
             }
           }
@@ -1263,6 +1311,10 @@ export class Harness {
 
   // ─── 记忆集成由 HarnessMemoryIntegration 处理 ───
 
+  /**
+   * LLM 调用前注入 `[System Runtime State]`：TaskState + RepoContext 快照。
+   * 无读/写/命令且无需验证时不注入；内容未变（hash）则去重旧块后覆盖。
+   */
   private upsertRuntimeContextMessage(messages: UnifiedMessage[], state: LoopState): void {
     const repoSnapshot = state.repoContext.snapshot();
     const taskSnapshot = state.taskState.snapshot();
@@ -1650,6 +1702,7 @@ export class Harness {
     });
     if (!newPlan) {
       this.resetExecutionPlanTracker();
+      onStep?.({ type: 'execution_plan_clear' });
       return;
     }
     this.attachExecutionPlan(newPlan, onStep);
@@ -1673,8 +1726,7 @@ export class Harness {
         .filter(([, count]) => count > 0)
         .map(([signature, count]) => `${signature} (x${count})`);
 
-      const plan = this.currentPlanTracker?.getPlan();
-      await this.checkpointManager.save({
+      const checkpointSave: TaskCheckpointUpdate = {
         status,
         userGoal,
         taskState: runtimeState.taskState.snapshot(),
@@ -1683,8 +1735,11 @@ export class Harness {
         messages,
         failedToolCalls,
         stopReason,
-        ...(plan ? { plan } : {}),
-      });
+      };
+      if (this.executionPlanEnabled) {
+        checkpointSave.plan = this.currentPlanTracker?.getPlan() ?? null;
+      }
+      await this.checkpointManager.save(checkpointSave);
     } catch (err) {
       console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
     }
@@ -1998,8 +2053,8 @@ export class Harness {
   }
 
   /**
-   * 获取当前 run 的执行计划快照（仅在 ICE_ENABLE_EXECUTION_PLAN 启用且当前轮已生成时返回）。
-   * 主要供调试 / 端到端测试使用；前端通过 WS event 获取实时 plan。
+   * 当前 run 的执行计划快照；未生成或为 `question` 意图时可能为 `undefined`。
+   * 生产环境以前端 WS `execution_plan_*` 为准，此接口侧重调试与测试。
    */
   getExecutionPlan(): ExecutionPlan | undefined {
     return this.currentPlanTracker?.getPlan();
@@ -2021,19 +2076,9 @@ export class Harness {
   }
 
   /**
-   * 等待后台记忆任务完成并清理资源。
+   * 判断工具调用是否具有破坏性。
    *
-   * 在进程退出前调用，确保：
-   * - 进行中的 LLM 提取完成（不丢失记忆）
-   * - 进行中的 Dream 整合完成（不损坏记忆文件）
-   * - 会话记忆更新完成
-   *
-   * @param timeoutMs - 最大等待时间（默认 10 秒）
-   */
-  /**
-   * 判断工具调用是否需要用户确认。
-   * 对于 fs_operation 和 run_command，运行时分析具体参数来决定破坏性。
-   * 其他工具由元数据的 isDestructive 字段决定。
+   * `fs_operation` / `run_command` 在运行时解析参数；其余工具使用元数据 `isDestructive`。
    */
   private isDestructiveToolCall(tc: ToolCall): boolean {
     if (tc.name === 'fs_operation') {
@@ -2047,6 +2092,9 @@ export class Harness {
     return getToolMetadata(tc.name).isDestructive;
   }
 
+  /**
+   * 配置的 pattern 命中则直接采用规则权限；否则破坏性工具默认为 `confirm`。
+   */
   private resolveToolPermission(tc: ToolCall): { permission: 'allow' | 'confirm' | 'deny'; reason?: string } {
     for (const rule of this.permissionRules) {
       if (this.matchesPermissionPattern(rule.pattern, tc.name)) {
@@ -2060,6 +2108,7 @@ export class Harness {
     };
   }
 
+  /** Glob 风格：`*`、精确工具名或 `*` 展开的 `^escaped$` 正则。 */
   private matchesPermissionPattern(pattern: string, toolName: string): boolean {
     if (pattern === '*' || pattern === toolName) return true;
     const escaped = pattern
@@ -2068,10 +2117,14 @@ export class Harness {
     return new RegExp(`^${escaped}$`).test(toolName);
   }
 
+  /** 连续失败统计用的稳定键（工具名 + 序列化参数）。 */
   private toolCallSignature(tc: ToolCall): string {
     return `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
   }
 
+  /**
+   * 累加失败签名计数，返回本轮起已连续失败 ≥2 次的签名（供熔断/强提示）。
+   */
   private collectRepeatedFailures(
     _toolCalls: ToolCall[],
     failedSignatures: string[],
@@ -2105,12 +2158,17 @@ export class Harness {
     return tc.name;
   }
 
+  /**
+   * 等待后台记忆任务完成并释放资源，供进程退出前调用。
+   *
+   * @param timeoutMs - 最大等待毫秒数（默认 10s）
+   */
   async drainMemory(timeoutMs: number = 10_000): Promise<void> {
     await this.memoryIntegration.drain(timeoutMs);
     this.memoryIntegration.dispose();
   }
 
-  // ─── Resilience v2 集成（feature flag 关时全部 no-op） ───
+  // ─── Resilience v2 集成（无 sessionDir 时 checkpointEngine 为 undefined，持久化相关为 no-op） ───
 
   /**
    * 记录一轮工具调用到 branchBudget 和 checkpointEngine。
@@ -2288,6 +2346,9 @@ export class Harness {
 
 // ─── Resilience v2 内部辅助：从消息历史抽取 step-review 所需的最小上下文 ───
 
+/**
+ * 自尾部向前收集最近 `max` 条 tool 结果，并反向匹配对应 assistant `toolCalls` 得到名称与签名。
+ */
 function collectRecentToolTraces(
   messages: UnifiedMessage[],
   max: number,
@@ -2323,6 +2384,7 @@ function collectRecentToolTraces(
   return traces;
 }
 
+/** 收集最近若干条 tool 错误摘要（中英错误前缀）。 */
 function collectRecentErrors(messages: UnifiedMessage[], max: number): string[] {
   const errors: string[] = [];
   for (let i = messages.length - 1; i >= 0 && errors.length < max; i--) {

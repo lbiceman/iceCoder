@@ -54,27 +54,8 @@ function buildV1Checkpoint(): TaskCheckpoint {
 }
 
 describe('isResilienceV2Enabled', () => {
-  const KEY = 'ICE_ENABLE_RESILIENCE_V2';
-  const original = process.env[KEY];
-
-  afterEach(() => {
-    if (original === undefined) delete process.env[KEY];
-    else process.env[KEY] = original;
-  });
-
-  it('未设置时关闭', () => {
-    delete process.env[KEY];
-    expect(isResilienceV2Enabled()).toBe(false);
-  });
-
-  it.each(['1', 'true', 'TRUE', 'yes'])('启用值: %s', (v) => {
-    process.env[KEY] = v;
+  it('硬编码为始终开启（不再读取 ICE_ENABLE_RESILIENCE_V2）', () => {
     expect(isResilienceV2Enabled()).toBe(true);
-  });
-
-  it.each(['0', 'false', 'no', ''])('关闭值: %s', (v) => {
-    process.env[KEY] = v;
-    expect(isResilienceV2Enabled()).toBe(false);
   });
 });
 

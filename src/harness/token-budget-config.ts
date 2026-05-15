@@ -20,14 +20,16 @@ function readPositiveIntEnv(name: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-export const DEFAULT_LONG_RUNNING_TIMEOUT_MS = 5 * 60 * 60 * 1000;
+/** 单次 Harness run 墙钟超时（毫秒）。硬编码 24 小时，不再通过环境变量覆盖。 */
+export const DEFAULT_LONG_RUNNING_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_LONG_RUNNING_MAX_ROUNDS = 5000;
 
-export function getHarnessTimeoutMsFromEnv(defaultMs = DEFAULT_LONG_RUNNING_TIMEOUT_MS): number {
-  const hours = readPositiveIntEnv('ICE_HARNESS_TIMEOUT_HOURS');
-  if (hours !== undefined) return hours * 60 * 60 * 1000;
-
-  return readPositiveIntEnv('ICE_HARNESS_TIMEOUT_MS') ?? defaultMs;
+/**
+ * Harness 单次 `run()` 的墙钟超时。
+ * 固定为 {@link DEFAULT_LONG_RUNNING_TIMEOUT_MS}（24h）
+ */
+export function getHarnessTimeoutMsFromEnv(): number {
+  return DEFAULT_LONG_RUNNING_TIMEOUT_MS;
 }
 
 export function getHarnessMaxRoundsFromEnv(defaultRounds = DEFAULT_LONG_RUNNING_MAX_ROUNDS): number {
