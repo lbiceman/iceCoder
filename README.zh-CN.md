@@ -1,6 +1,6 @@
 ﻿# iceCoder 架构与运行时说明
 
-iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，把提示词系统、工具执行、任务状态、仓库上下文、长期记忆、会话记忆、上下文压缩和评测骨架组合在一起，并提供 **CLI、HTTP API、WebSocket 聊天与静态 Web 前端**（可选接入 **MCP** 工具），目标是接近 Claude Code / Codex CLI 等工具在**可靠执行工程任务**上的表现。
+iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，整合提示词拼装、工具执行、任务状态、仓库上下文；叠加 **Execution Transparency Layer（执行透明层）** 的结构化 **`ExecutionPlan`**（步骤进度、会话恢复、`execution_plan_*` WebSocket）；以及 **CheckpointEngine（Runtime Resilience v2）** 在同一份 checkpoint JSON 上附加 `runtimeV2` 以增强长会话弹性；再配合文件化长期记忆、会话压缩与快照、CLI / HTTP API / WebSocket SPA，以及可选 **MCP** 工具接入，目标是接近 Claude Code / Codex CLI 等工具在「可靠执行工程任务」上的表现。
 
 **技术栈：** Node.js 18+、TypeScript、Express（生产环境托管 SPA）、Vite（开发态独立端口）、WebSocket、Vitest。
 
@@ -12,7 +12,7 @@ iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harnes
 
 ## 1. 当前状态
 
-当前已经完成 Runtime P0/P1 的核心整改，重点解决“该干活时不干活”“改完不验证”“权限规则不生效”“压缩丢短指令”等问题。
+当前已经完成 Runtime P0/P1 的核心整改，重点解决“该干活时不干活”“改完不验证”“权限规则不生效”“压缩丢短指令”等问题；并已接通 **Execution Transparency Layer**（结构化执行计划、`execution_plan_*` 推送与 checkpoint 附带 plan）、**CheckpointEngine（Runtime Resilience v2）**（同文件叠加 `runtimeV2`）。
 
 验证命令：
 
@@ -22,7 +22,7 @@ npm test
 npm run eval:agent
 ```
 
-**测试基线请以 `npm test` 终端输出为准。** 用例分布在 `test/**/*.test.ts`，规模约为 **30+ 个测试文件、550+ 条用例**（随提交增减会变化）。
+**测试基线请以 `npm test` 终端输出为准。** 用例分布在 `test/**/*.test.ts`，规模约为 **50+ 个测试文件、680+ 条用例**（随提交增减会变化）。
 
 ---
 
@@ -37,6 +37,7 @@ CLI / Web / Remote
       -> ToolExecutor
       -> HarnessMemoryIntegration
       -> ContextCompactor
+      -> ExecutionPlanTracker（ETL） + TaskCheckpointManager / CheckpointEngine
   -> Harness.run()
 ```
 
@@ -58,6 +59,13 @@ CLI / Web / Remote
 | `src/web/*` | Express、`/api/*` 路由、统一聊天 WebSocket |
 | `src/public/*` | Vite 前端根目录（聊天页、配置 UI、**冰豆** Canvas 与会话指示桥接脚本等） |
 | `src/types/runtime-snapshot.ts` | 会话笔记中 `icecoder-runtime` 块的版本化 JSON 模型 |
+| `src/types/execution-plan.ts` | ExecutionPlan 步骤结构与状态枚举 |
+| `src/types/runtime-checkpoint.ts` | `runtimeV2`、保存触发器等 Resilience schema |
+| `src/harness/execution-plan-generator.ts` | 首轮结构化计划生成 |
+| `src/harness/execution-plan-tracker.ts` | 步骤进度与 `execution_plan_*` 事件 |
+| `src/harness/checkpoint.ts` | `TaskCheckpoint` v1，`plan` 字段持久化 |
+| `src/harness/checkpoint-engine.ts` | `CheckpointEngine`：合并写入 `runtimeV2` |
+| `src/harness/branch-budget.ts` | 分支预算快照供 checkpoint |
 
 ---
 
@@ -105,6 +113,8 @@ while running:
 | 重复失败检测 | 同工具同参数重复失败时提示换策略 |
 | 短指令保护 | 微压缩不会删除“跑测试”“继续”等短执行指令 |
 | 会话记忆 force 更新 | 压缩前可强制备份当前会话状态 |
+| **执行透明层（ETL）** | **结构化 ExecutionPlan，`execution_plan_*` WebSocket，`TaskCheckpoint.plan` 与会话 hydrate** |
+| **CheckpointEngine（v2）** | **`runtimeV2` 叠加在同一 checkpoint JSON，串联写盘不破坏 v1** |
 
 ### 3.2 子代理（Sub-Agent Runner）
 
@@ -122,6 +132,18 @@ while running:
 ### 3.3 工具规划提示（Tool Planner）
 
 对首轮即判定为**可执行工程任务**的对话，Harness 可注入 **Tool Planner**：依据 `taskState.intent`（如 debug / edit / test）给出 **2～3 个优先建议工具名**（映射表见 `src/harness/tool-plan-intent-map.ts`，逻辑见 `src/harness/tool-planner.ts`），减少模型开场「只寒暄不调用工具」的情况。
+
+### 3.4 执行透明层（ETL）
+
+- **对象**：`ExecutionPlan`（`src/types/execution-plan.ts`），由 `execution-plan-generator.ts` 生成、`ExecutionPlanTracker` 在运行中推进。
+- **可观察性**：通过 `HarnessStepEvent` 发送 `execution_plan_init` / `execution_plan_update` / `execution_plan_clear`（定义见 `src/harness/types.ts`），前端与 **冰豆** 共用通道。
+- **持久化**：在配置 `sessionDir` 时写入 `TaskCheckpoint.plan`，并与会话笔记中的 fence 协同恢复（相关单测在 `test/harness/execution-plan-*.test.ts`、`session-plan-hydrate` 等）。
+- **语义**：Plan 是对用户的**路线图提示**与恢复辅助，并**不取代** Harness 的工具裁决；设计与边界见 **`docs/execution-transparency-layer.md`**。
+- **开关**：当前 `isExecutionPlanEnabled()` 恒为 **`true`**，无环境变量关闭路径（`execution-plan-config.ts`）。
+
+### 3.5 CheckpointEngine（Runtime Resilience v2）
+
+`CheckpointEngine`（`checkpoint-engine.ts`）在 **`TaskCheckpointManager` 负责的同一 `{sessionId}.checkpoint.json`** 上附加 **`runtimeV2`**：积累近期工具轨迹、失败、恢复信号、分支预算快照等（`branch-budget.ts`）。磁盘写入经 Harness 内 **`checkpointPersistTail`** 串行化，避免交错 rename。**无 `runtimeV2` 的旧文件仍可读**；新字段对老代码透明。触发与字段含义见 **`docs/长时间连续工作.md`** Part 3。
 
 ---
 
@@ -417,29 +439,44 @@ ICE_CONTEXT_WINDOW
 
 | 变量 | 作用 |
 |------|------|
-| `ICE_CONFIG_PATH` | 配置 JSON 路径（默认 `data/config.json`） |
+| `ICE_CONFIG_PATH` | **仅 LLM 提供者**配置（`providers[]` 等），默认 `data/config.json`；**不包含** MCP（MCP 见 `.iceCoder/mcp.json` 或 `ICE_MCP_CONFIG_PATH`） |
+| `ICE_DATA_DIR` | CLI `resolveDataPaths` 根目录：一键决定 `config`、`sessions`、记忆目录等首次落盘位置（与仅跑 `src/index.ts` 时需自行对齐路径） |
+| `ICE_SYSTEM_PROMPT_PATH` | 覆盖 `system-prompt.md` 路径 |
 | `ICE_OUTPUT_DIR` | 通用输出目录（默认 `output`） |
-| `ICE_SESSIONS_DIR` | 会话目录（默认 `data/sessions`） |
+| `ICE_SESSIONS_DIR` | 会话与 checkpoint 目录（默认 `data/sessions`） |
+| `ICE_MEMORY_DIR` | 项目记忆文件根（常见 `data/memory-files`） |
+| `ICE_USER_MEMORY_DIR` | 用户维度记忆（常见 `data/user-memory`） |
+| `ICE_RUNTIME_DIR` | 可选：运行时遥测落盘根（`runtime-telemetry.ts`） |
 | `PORT` | HTTP 端口（默认 `1024`） |
 | `NODE_ENV` | `production` 时静态资源与 SPA 回退行为按生产处理 |
 | `ICE_CONTEXT_WINDOW` | 覆盖上下文窗口上限 |
-| `ICE_MCP_CONFIG_PATH` | 可选：MCP 专用 JSON 的绝对路径（默认 `<运行目录>/.iceCoder/mcp.json`） |
-| `ICE_MCP_INIT_TIMEOUT_MS` | MCP 握手 `initialize` 超时（毫秒，默认 `120000`；Puppeteer 首次 `npx` 拉包过慢时可加大） |
+| `ICE_EVAL_MODE` / `ICE_DISABLE_TOOLS` | 评测或禁工具：不传 tool schema、去掉工具向提示段 |
+| `ICE_TUNNEL_*` | Quick Tunnel 探测（如 `ICE_TUNNEL_METRICS_PORT`、`ICE_TUNNEL_PROBE_MS`、`ICE_TUNNEL_WS_NOTIFY`） |
+| `ICE_MCP_CONFIG_PATH` | MCP 专用 JSON（默认 `<cwd>/.iceCoder/mcp.json`） |
+| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` 超时（毫秒，默认 `120000`） |
+
+### 设计与架构文档（推荐阅读）
+
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — 分层鸟瞰
+- [`docs/execution-transparency-layer.md`](./docs/execution-transparency-layer.md) — 执行透明层设计
+- [`docs/长时间连续工作.md`](./docs/长时间连续工作.md) — 长会话与 checkpoint 触发
+- [`docs/任务图规划.md`](./docs/任务图规划.md) — StepGraph / 任务图 Planner 前瞻说明
 
 ### 仓库目录（摘要）
 
 ```text
 src/cli/          CLI 与 bootstrap
 src/core/         Orchestrator
-src/harness/      Harness、压缩、子代理、Tool Planner、任务/仓库状态
+src/harness/      Harness、压缩、ETL（ExecutionPlan）、checkpoint/CheckpointEngine v2、branch-budget、子代理、Tool Planner、任务/仓库状态
 src/memory/       文件化记忆、会话笔记、Dream、淘汰
 src/tools/        内置工具与执行器
 src/mcp/          MCP 管理
 src/web/          Express、路由、WebSocket
 src/public/       前端（Vite root）：聊天页、冰豆 Canvas/桥接、静态资源
-src/types/        共享类型（含运行时快照 schema）
+src/types/        execution-plan、runtime-snapshot、runtime-checkpoint 等共享类型
+docs/             架构与长篇设计稿
 test/             Vitest
-data/             配置与会话数据
+data/             提供者配置模板、会话数据等
 ```
 
 ---
@@ -500,7 +537,7 @@ npx tsx src/cli/index.ts run "修复失败测试"
 
 持久化 JSON 的 **schema**（`PersistedRuntimeV1`、`TaskStateSnapshot`、`RepoContextSnapshot` 等）统一定义在 **`src/types/runtime-snapshot.ts`**：`session-memory` 只依赖该公共模块，与 `task-state` / `repo-context` 实现类解耦，避免 memory 层反向引用 harness。
 
-（首轮任务时的 **Tool Planner** 行为见上文 §3.3。）
+（首轮任务时的 **Tool Planner** 见上文 §3.3；**ExecutionPlan** / checkpoint 附带 plan 见 §3.4。）
 
 ---
 
@@ -512,9 +549,8 @@ npx tsx src/cli/index.ts run "修复失败测试"
 2. 压缩与会话笔记的进一步耦合（如压缩前后 token 统计、恢复上下文预算裁剪等）——**结构化 `icecoder-runtime` 快照已可写入 `session-notes.md`**，细节见 `nextWork.md`。
 3. 正式 **Eval Runner**：真实执行、判分、输出趋势。
 4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
-5. 在现有 **Tool Planner** 之上，加强按失败模式动态规划与恢复策略。
-6. 多agent协同。让主agent能够自定义创建子agent帮他工作。一个主agent负责统筹所有子agent
-7. 
+5. 在现有 **Tool Planner** 之上，加强按失败模式动态规划与恢复策略（长期形态可参考 **`docs/任务图规划.md`** 中的 StepGraph 思路）。
+6. 多 Agent 协同：主 Agent 按需编排子 Agent（与当前 **`delegate_to_subagent`** 只读探索子回路形成演进关系）。
 
 ---
 

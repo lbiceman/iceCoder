@@ -1071,7 +1071,7 @@ ${candidateList}`;
 
   /**
    * 从 session-notes.md 中的 plan fence 解析最近一次执行计划。
-   * 仅在 ICE_ENABLE_EXECUTION_PLAN 启用时被 Harness 调用。
+   * 由 Harness 在需要解析笔记内 plan fence 时调用（ETL 当前始终开启）。
    */
   async hydratePlanFromSessionNotes(): Promise<ExecutionPlan | null> {
     try {

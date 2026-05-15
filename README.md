@@ -1,6 +1,6 @@
 ﻿# iceCoder
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, optional **structured execution plans** for UI/resume (**Execution Transparency Layer**), resilient **checkpoint** persistence (including `CheckpointEngine` v2 fields layered on legacy checkpoints), file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
 
 **Stack:** Node.js 18+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
@@ -27,6 +27,8 @@ The core Runtime P0/P1 work has been implemented:
 - Repeated failed tool calls are detected and the model is instructed to change strategy.
 - Session memory supports forced update before compaction.
 - Memory prompts have been tightened to prefer precise, evidence-backed long-term memories.
+- **Execution Transparency Layer** is wired for structured plans, WebSocket **`execution_plan_*`** events, and checkpoint-backed resume when `sessionDir` is configured.
+- **Runtime Resilience v2**: `CheckpointEngine` augments the same `{session}.checkpoint.json` with `runtimeV2` telemetry while staying backward-compatible with legacy checkpoint readers.
 - A minimal `npm run eval:agent` skeleton defines future **runtime** metrics (naming is historical).
 
 Verification:
@@ -37,7 +39,7 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth for counts and pass/fail. The suite is organized under `test/**/*.test.ts` (on the order of **three dozen** files and **550+** examples—numbers drift as tests are added).
+Treat **`npm test`** as the source of truth for counts and pass/fail. The suite lives under `test/**/*.test.ts` (on the order of **50+** files and **680+** cases; counts drift as tests are added).
 
 ---
 
@@ -52,6 +54,7 @@ User / CLI / Web / Remote
       -> ToolExecutor
       -> HarnessMemoryIntegration
       -> ContextCompactor
+      -> ExecutionPlanTracker (ETL) + TaskCheckpointManager / CheckpointEngine
   -> Harness.run()
 ```
 
@@ -107,6 +110,24 @@ Key runtime protections:
 ### Tool planner
 
 On the first user turn of an executable engineering task, the Harness may inject a **tool planner** hint: a short list of **2–3 suggested tool names** derived from `taskState.intent` (see `src/harness/tool-plan-intent-map.ts` and `src/harness/tool-planner.ts`). This reduces hesitant openings where the model chats instead of acting.
+
+### Execution Transparency Layer (ETL)
+
+Above the Harness loop sits a **structured execution plan** (`ExecutionPlan` types in `src/types/execution-plan.ts`):
+
+- **Generation / tracking**: `buildExecutionPlan()` (`execution-plan-generator.ts`) builds an initial step list; `ExecutionPlanTracker` advances steps as phases and tooling evolve and emits **`execution_plan_init`** / **`execution_plan_update`** / **`execution_plan_clear`** on the same `HarnessStepEvent` channel used by Ice Bean (see `src/harness/types.ts`).
+- **Persistence**: When `sessionDir` is set, an active **`plan`** is stored on **`TaskCheckpoint`** (`src/harness/checkpoint.ts`) beside task state so resume can reattach steps after crash or reconnect; Harness also aligns with fenced **session-note** payloads where applicable (hydration helpers in `session-plan-*` paths — see tests under `test/harness/execution-plan-*.test.ts`).
+- **Intent**: Visible X/N-style progress for the SPA, finer-grained UX, and recovery without repeating the goal — **not** a rigid judge of allowed tool calls; the LLM remains in the loop (`docs/execution-transparency-layer.md`).
+
+Execution plan tooling is **always enabled** today (`src/harness/execution-plan-config.ts`); there is **no** env flag to disable it.
+
+### CheckpointEngine (Runtime Resilience v2)
+
+`CheckpointEngine` (`src/harness/checkpoint-engine.ts`) wraps the existing **`TaskCheckpointManager`** writes for the **same** `{sessionId}.checkpoint.json` file:
+
+- **`TaskCheckpoint`** (v1) fields remain authoritative for resumes and tooling; **`runtimeV2`** is an **additive** sibling object for richer telemetry-style history (recent tools, failures, recovery signals, **branch budget** snapshots via `branch-budget.ts`).
+- Older files without `runtimeV2` still load cleanly; saves merge v1 + v2 without conflicting renames (`checkpointPersistTail` serializes writes in Harness).
+- Triggers mirror the long-session design (step/tool/verification/compaction milestones — see `docs/长时间连续工作.md`, Part 3).
 
 ---
 
@@ -405,14 +426,21 @@ CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordanc
 
 | Variable | Role |
 |----------|------|
-| `ICE_CONFIG_PATH` | Path to provider + MCP config JSON (default `data/config.json`) |
+| `ICE_CONFIG_PATH` | **LLM provider** config JSON (`providers[]`, defaults). Default `data/config.json`. **Does not** point at MCP ([MCP](#mcp-model-context-protocol) stays in `.iceCoder/mcp.json` unless `ICE_MCP_CONFIG_PATH`). |
+| `ICE_DATA_DIR` | CLI bootstrap root: when set, `resolveDataPaths()` builds `config.json`, sessions, memory dirs under it (CLI / first-run UX). Server entry (`src/index.ts`) still defaults config to `ICE_CONFIG_PATH` or `data/config.json` unless you align paths yourself. |
+| `ICE_SYSTEM_PROMPT_PATH` | Override `system-prompt.md` path passed into prompt assembly. |
 | `ICE_OUTPUT_DIR` | General output directory (default `output`) |
-| `ICE_SESSIONS_DIR` | Session data directory (default `data/sessions`) |
+| `ICE_SESSIONS_DIR` | Session / checkpoint notes directory (default `data/sessions`) |
+| `ICE_MEMORY_DIR` | Project memory-files root (often `data/memory-files` in dev) |
+| `ICE_USER_MEMORY_DIR` | User-scoped memories (often `data/user-memory`) |
+| `ICE_RUNTIME_DIR` | Optional telemetry / runtime artefact dir (`runtime-telemetry.ts`) |
 | `PORT` | HTTP/API port (default `1024`) |
 | `NODE_ENV` | `production` enables production static-SPA behavior in `createServer` |
 | `ICE_CONTEXT_WINDOW` | Override context window size (see compaction section) |
-| `ICE_MCP_CONFIG_PATH` | Optional absolute path to MCP JSON (default: `<cwd>/.iceCoder/mcp.json`) |
-| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` timeout in ms (default `120000`; increase if Puppeteer or `npx` cold install exceeds it) |
+| `ICE_EVAL_MODE`, `ICE_DISABLE_TOOLS` | Eval / no-tools runs (omit tool schemas and tool-oriented prompt slices) |
+| `ICE_TUNNEL_*` | Quick Tunnel discovery for dev (`ICE_TUNNEL_METRICS_PORT`, `ICE_TUNNEL_METRICS_HOST`, `ICE_TUNNEL_PROBE_MS`, `ICE_TUNNEL_WS_NOTIFY`) |
+| `ICE_MCP_CONFIG_PATH` | Absolute path to MCP JSON (default `<cwd>/.iceCoder/mcp.json`) |
+| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` timeout ms (default `120000`; raise for cold `npx` / Puppeteer) |
 
 ---
 
@@ -422,7 +450,8 @@ CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordanc
 src/
   cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
   core/             # Orchestrator (shared file parser + LLM adapter)
-  harness/          # Harness loop, compaction, task/repo state, sub-agent, tool planner
+  harness/          # Harness, compaction, task/repo state, sub-agent, tool planner,
+                    # ExecutionPlan tracker/generator, checkpoint + CheckpointEngine v2, branch budget
   llm/              # OpenAI / Anthropic adapters
   memory/file-memory/  # File-based memory, session notes, dream, eviction
   parser/           # FileParser strategies (HTML, Office, XMind)
@@ -431,9 +460,10 @@ src/
   mcp/              # MCP client manager
   web/              # Express server, routes, WebSocket chat
   public/           # Vite root: chat UI, Ice Bean (canvas + bridge), static assets
-  types/            # Shared types (e.g. runtime snapshot schema)
+  types/            # Shared types (runtime snapshot, ExecutionPlan, runtime-checkpoint schema)
+docs/               # Architecture & design notes (execution transparency, checkpoints, roadmap)
 test/               # Vitest suites mirroring src areas
-data/               # config, sessions, optional MCP memory file
+data/               # Provider config templates, sessions, optional MCP-side memory sample
 ```
 
 ---
@@ -461,12 +491,23 @@ Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js`
 
 ---
 
+## Design documentation
+
+Higher-level prose (beyond this README):
+
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — layered overview
+- [`docs/execution-transparency-layer.md`](./docs/execution-transparency-layer.md) — ETL design
+- [`docs/长时间连续工作.md`](./docs/长时间连续工作.md) — long sessions & checkpoint triggers
+- [`docs/任务图规划.md`](./docs/任务图规划.md) — forward-looking StepGraph Planner notes
+
+---
+
 ## Roadmap
 
-The remaining work is tracked in `nextWork.md`. The next high-impact items are:
+The remaining work is tracked in `nextWork.md`. Representative next items:
 
 1. Memory v2 structured levels and conflict arbitration
-2. Deeper compaction/session-notes integration (token accounting, tighter recovery budget units) — structured `icecoder-runtime` snapshots already exist; see `nextWork.md`
-3. real eval runner with pass/fail scoring
-4. telemetry persistence for runtime metrics
-5. Richer model-aware planning and failure recovery strategies (beyond the current intent-based tool planner)
+2. Deeper compaction / session-notes integration (token accounting, tighter recovery budgets) — `icecoder-runtime` snapshots already exist
+3. A real eval runner with pass/fail scoring
+4. Telemetry persistence for runtime metrics
+5. Stronger adaptive planning beyond the intent-based tool planner (see StepGraph Planner doc)

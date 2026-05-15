@@ -166,8 +166,8 @@ export interface HarnessConfig {
 /**
  * Harness 循环中每一步的事件回调。
  *
- * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 来自 Execution Transparency Layer，
- * 仅在 ICE_ENABLE_EXECUTION_PLAN 启用时出现；其他事件类型不受影响。
+ * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 来自 Execution Transparency Layer
+ *（当前 `isExecutionPlanEnabled()` 恒为 true）；其他事件类型不受影响。
  */
 export interface HarnessStepEvent {
   type:
