@@ -107,11 +107,14 @@ Run an appropriate verification command now (for example: focused tests, npm tes
 /** 由用户自然语言推断任务意图（与 TaskState 构造逻辑一致，供执行计划等复用） */
 export function inferIntent(text: string): TaskIntent {
   const t = text.toLowerCase();
-  if (/测试|运行|verify|test|vitest|jest|pytest|tsc/.test(t)) return 'test';
+  // 先识别「实现 / 新建」类 —— 避免路径中含 test（如 D:\work\test）被误判为跑测试
+  if (/修改|改|实现|新增|创建|生成|edit|modify|implement|create|update/.test(t)) return 'edit';
+  if (/测试|运行\s*测试|跑测试|verify|(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b|vitest|jest|pytest|\btsc\b/.test(t)) {
+    return 'test';
+  }
   if (/修复|失败|报错|错误|debug|fix|investigate/.test(t)) return 'debug';
   if (/重构|refactor/.test(t)) return 'refactor';
   if (/文档|readme|docs?/.test(t)) return 'docs';
-  if (/修改|改|实现|新增|创建|edit|modify|implement|create|update/.test(t)) return 'edit';
   if (/查看|读取|搜索|解释|说明|read|search|explain|inspect/.test(t)) return 'inspect';
   return 'question';
 }
