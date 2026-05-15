@@ -20,7 +20,7 @@ import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/l
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 
@@ -190,7 +190,7 @@ async function handleRemoteMessage(
     loop: {
       maxRounds: getHarnessMaxRoundsFromEnv(),
       timeout: getHarnessTimeoutMsFromEnv(),
-      tokenBudget: getHarnessTokenBudgetFromEnv(),
+      tokenBudget: getHarnessTokenBudget(),
     },
     permissions: [
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },

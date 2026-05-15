@@ -32,7 +32,7 @@ import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 import {
@@ -580,7 +580,7 @@ async function handleChatMessage(
     loop: {
       maxRounds: getHarnessMaxRoundsFromEnv(),
       timeout: getHarnessTimeoutMsFromEnv(),
-      tokenBudget: getHarnessTokenBudgetFromEnv(),
+      tokenBudget: getHarnessTokenBudget(),
       signal: abortController.signal,
     },
     permissions: [

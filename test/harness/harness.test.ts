@@ -18,11 +18,12 @@ import { ToolExecutor } from '../../src/tools/tool-executor.js';
 import { isDestructiveOperation, isDestructiveCommand } from '../../src/tools/tool-metadata.js';
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
 import {
+  DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL,
   DEFAULT_LONG_RUNNING_MAX_ROUNDS,
   DEFAULT_LONG_RUNNING_TIMEOUT_MS,
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../../src/harness/token-budget-config.js';
 
 // ═══ 测试工具 ═══
@@ -1136,27 +1137,9 @@ describe('ContextCompactor - 微压缩', () => {
 // 15b. Harness token budget config
 // ═══════════════════════════════════════════════════════════════
 describe('Harness token budget config', () => {
-  const originalBudget = process.env.ICE_HARNESS_TOKEN_BUDGET;
-  const originalTimeoutHours = process.env.ICE_HARNESS_TIMEOUT_HOURS;
-  const originalTimeoutMs = process.env.ICE_HARNESS_TIMEOUT_MS;
   const originalMaxRounds = process.env.ICE_HARNESS_MAX_ROUNDS;
 
   afterEach(() => {
-    if (originalBudget === undefined) {
-      delete process.env.ICE_HARNESS_TOKEN_BUDGET;
-    } else {
-      process.env.ICE_HARNESS_TOKEN_BUDGET = originalBudget;
-    }
-    if (originalTimeoutHours === undefined) {
-      delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
-    } else {
-      process.env.ICE_HARNESS_TIMEOUT_HOURS = originalTimeoutHours;
-    }
-    if (originalTimeoutMs === undefined) {
-      delete process.env.ICE_HARNESS_TIMEOUT_MS;
-    } else {
-      process.env.ICE_HARNESS_TIMEOUT_MS = originalTimeoutMs;
-    }
     if (originalMaxRounds === undefined) {
       delete process.env.ICE_HARNESS_MAX_ROUNDS;
     } else {
@@ -1164,18 +1147,13 @@ describe('Harness token budget config', () => {
     }
   });
 
-  it('默认关闭累计 token 预算，仅显式配置时启用', () => {
+  it('累计 token 预算为硬编码常数；不再读取 ICE_HARNESS_TOKEN_BUDGET', () => {
     delete process.env.ICE_HARNESS_TOKEN_BUDGET;
-    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
-
+    expect(getHarnessTokenBudget()).toBe(DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL);
     process.env.ICE_HARNESS_TOKEN_BUDGET = 'off';
-    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
-
-    process.env.ICE_HARNESS_TOKEN_BUDGET = '0';
-    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
-
+    expect(getHarnessTokenBudget()).toBe(DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL);
     process.env.ICE_HARNESS_TOKEN_BUDGET = '1200000';
-    expect(getHarnessTokenBudgetFromEnv()).toBe(1200000);
+    expect(getHarnessTokenBudget()).toBe(DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL);
   });
 
   it('墙钟超时硬编码 24h；maxRounds 仍可由 ICE_HARNESS_MAX_ROUNDS 覆盖', () => {

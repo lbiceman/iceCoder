@@ -29,7 +29,7 @@ import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import {
   fetchQuickTunnelPublicUrl,
@@ -439,7 +439,7 @@ ${c.bold}终端内置命令:${c.reset}
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
           timeout: getHarnessTimeoutMsFromEnv(),
-          tokenBudget: getHarnessTokenBudgetFromEnv(),
+          tokenBudget: getHarnessTokenBudget(),
         },
         permissions: [
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },

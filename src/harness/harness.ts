@@ -109,17 +109,9 @@ const OLD_SUBAGENT_SUMMARY_CHARS = 300;
 // ─── 任务切换检测 ───
 const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
 
-/** 硬压缩前等待会话笔记 LLM 更新的上限（毫秒）；超时则用磁盘已有内容继续。可用 ICE_SESSION_MEMORY_BEFORE_COMPACT_MS 覆盖。 */
-const DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS = 120_000;
+/** 硬压缩前等待会话笔记 LLM 更新的上限（毫秒）。超时则用磁盘已有内容继续。固定为 2 分钟。 */
+const PRE_COMPACT_SESSION_MEMORY_WAIT_MS = 120_000;
 const PRE_COMPACT_SESSION_TIMEOUT_MSG = 'pre_compact_session_memory_timeout';
-
-/** 读取 `ICE_SESSION_MEMORY_BEFORE_COMPACT_MS`；无效时使用默认等待上限。 */
-function preCompactSessionMemoryWaitMs(): number {
-  const raw = process.env.ICE_SESSION_MEMORY_BEFORE_COMPACT_MS;
-  if (raw == null || raw === '') return DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
-}
 
 /**
  * 基于字符 bigram 的 Jaccard 相似度（零外部依赖，纯 CPU 计算）。
@@ -1815,7 +1807,7 @@ export class Harness {
       const finalContent = [
         '任务因 token 预算耗尽而暂停，尚未确认完成。',
         `已执行 ${state.currentRound} 轮、${state.totalToolCalls} 次工具调用。`,
-        '请继续发送“继续”或提高/关闭 ICE_HARNESS_TOKEN_BUDGET 后重试。',
+        '请拆分任务或发起新会话后重试。',
       ].join('\n');
 
       onStep?.({
@@ -1926,7 +1918,7 @@ export class Harness {
     // 压缩前备份任务目标到会话笔记：等待完成后再读盘，避免与硬压缩读到旧笔记竞态（带超时降级）
     const taskDesc = this.contextCompactor.getTaskDescription(messages);
     if (taskDesc) {
-      const waitMs = preCompactSessionMemoryWaitMs();
+      const waitMs = PRE_COMPACT_SESSION_MEMORY_WAIT_MS;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error(PRE_COMPACT_SESSION_TIMEOUT_MSG)), waitMs);

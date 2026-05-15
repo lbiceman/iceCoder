@@ -20,7 +20,7 @@ import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
@@ -60,7 +60,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       loop: {
         maxRounds,
         timeout: getHarnessTimeoutMsFromEnv(),
-        tokenBudget: getHarnessTokenBudgetFromEnv(),
+        tokenBudget: getHarnessTokenBudget(),
       },
       permissions: [],
       compactionThreshold: 40,
