@@ -44,6 +44,13 @@ function finalResponse(content: string, tokens = { input: 100, output: 50 }): LL
   return { content, usage: makeUsage(tokens.input, tokens.output), finishReason: 'stop' };
 }
 
+/** step-review 启发式不确定时会额外消费一次 chatFn；队列中插入本桩避免抢走主对话的 mock。 */
+function stepReviewLlmStub(): LLMResponse {
+  return finalResponse(
+    '{"progressMade":false,"repeatedPattern":false,"fallbackSuggested":false,"reason":"test-stub"}',
+  );
+}
+
 function toolCallResponse(calls: { id: string; name: string; args?: Record<string, any> }[], content = ''): LLMResponse {
   return {
     content,
@@ -341,6 +348,7 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
       finalResponse('File does not exist'),
     ]);
 
@@ -1448,6 +1456,7 @@ describe('Harness - 连续工具失败熔断', () => {
     // 3 轮工具调用（全部失败）+ 1 次最终总结
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       finalResponse('summary'),
@@ -1467,6 +1476,7 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'missing.ts' } }]),
+      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'missing.ts' } }]),
       finalResponse('blocked'),
     ]);

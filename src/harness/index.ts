@@ -29,7 +29,7 @@ export {
   DEFAULT_EFFECTIVE_CONTEXT_WINDOW,
 } from './context-window-tier.js';
 export type { ContextWindowTier } from './context-window-tier.js';
-export { HarnessLogger } from './logger.js';
+export { HarnessLogger, type LlmRoundLogMeta, type LlmRoundTokenUsage } from './logger.js';
 export { StopHookManager } from './stop-hooks.js';
 export { TokenBudgetTracker } from './token-budget.js';
 export { StreamingToolExecutor } from './streaming-tool-executor.js';

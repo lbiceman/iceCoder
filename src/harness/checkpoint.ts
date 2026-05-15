@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
@@ -102,7 +103,7 @@ export class TaskCheckpointManager {
     };
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
-    const tmpPath = `${this.checkpointPath}.tmp`;
+    const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
     await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
     await fs.rename(tmpPath, this.checkpointPath);
     return checkpoint;
@@ -118,7 +119,7 @@ export class TaskCheckpointManager {
       if (!existing?.plan) return;
       const checkpoint = { ...existing };
       delete checkpoint.plan;
-      const tmpPath = `${this.checkpointPath}.tmp`;
+      const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
       await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
       await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
       await fs.rename(tmpPath, this.checkpointPath);

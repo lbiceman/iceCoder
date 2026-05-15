@@ -14,7 +14,7 @@
  */
 
 import type { UnifiedMessage, ToolDefinition, ToolCall } from '../llm/types.js';
-import { estimateStringTokens } from '../llm/token-estimator.js';
+import { estimateMessagesTokens, estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type {
   HarnessConfig,
@@ -28,7 +28,7 @@ import type {
 import { ContextAssembler, normalizeMessages } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
-import { HarnessLogger } from './logger.js';
+import { HarnessLogger, type LlmRoundLogMeta, type LlmRoundTokenUsage } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
@@ -112,6 +112,30 @@ const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
 /** 硬压缩前等待会话笔记 LLM 更新的上限（毫秒）。超时则用磁盘已有内容继续。固定为 2 分钟。 */
 const PRE_COMPACT_SESSION_MEMORY_WAIT_MS = 120_000;
 const PRE_COMPACT_SESSION_TIMEOUT_MSG = 'pre_compact_session_memory_timeout';
+
+/** 构造 LLM 轮次日志字段（provider usage 分项 + 本地上下文估算）。 */
+function buildLlmRoundLogFields(
+  messages: UnifiedMessage[],
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheMissTokens?: number;
+  },
+): { usage: LlmRoundTokenUsage; meta: LlmRoundLogMeta } {
+  return {
+    usage: {
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      cacheReadTokens: usage?.cacheReadTokens,
+      cacheMissTokens: usage?.cacheMissTokens,
+    },
+    meta: {
+      messageCount: messages.length,
+      estContextTokens: estimateMessagesTokens(messages),
+    },
+  };
+}
 
 /**
  * 基于字符 bigram 的 Jaccard 相似度（零外部依赖，纯 CPU 计算）。
@@ -360,6 +384,8 @@ export class Harness {
   /** 用户中断信号（传递给工具执行器，实现跨层超时中断） */
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
+  /** 同一 checkpoint JSON 路径上串联 TaskCheckpointManager 与 CheckpointEngine 的磁盘写，消除交叉 rename 间歇读失效。 */
+  private checkpointPersistTail = Promise.resolve();
   private runtimeTelemetry?: RuntimeTelemetry;
   private workspaceRoot: string;
   /** Execution Transparency Layer 开关（构造时一次性快照） */
@@ -426,6 +452,20 @@ export class Harness {
         totalBudget: config.loop.tokenBudget,
       });
     }
+  }
+
+  /** 将 checkpoint/v2 磁盘更新串行化（仅在有持久化路径时生效）。 */
+  private enqueueCheckpointPersist<T>(task: () => Promise<T>): Promise<T> {
+    if (!this.checkpointManager && !this.checkpointEngine) {
+      return task();
+    }
+    const run = () => task();
+    const p = this.checkpointPersistTail.then(run, run);
+    this.checkpointPersistTail = p.then(
+      (): void => {},
+      (): void => {},
+    );
+    return p;
   }
 
   /**
@@ -772,6 +812,7 @@ export class Harness {
         input: response.usage?.inputTokens ?? 0,
         output: response.usage?.outputTokens ?? 0,
       };
+      const llmRoundLog = buildLlmRoundLogFields(normalizedMsgs, response.usage);
       this.loopController.recordTokenUsage(tokenUsage.input, tokenUsage.output);
       this.runtimeTelemetry?.recordRound({
         round,
@@ -789,7 +830,7 @@ export class Harness {
       const hasToolCalls = !!response.toolCalls?.length;
 
       if (!hasToolCalls) {
-        logger.llmResponseFinal(tokenUsage);
+        logger.llmResponseFinal(llmRoundLog.usage, llmRoundLog.meta);
 
         // ── 5a. 压缩后失忆检测与自动补救 ──
         if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
@@ -1000,7 +1041,7 @@ export class Harness {
             ].join('\n'),
           });
           this.currentPlanTracker?.onVerificationRequired();
-          this.resilienceSaveCheckpoint('verification_started', state);
+          await this.resilienceSaveCheckpoint('verification_started', state);
           state.transition = 'stop_hook_continue';
           continue;
         }
@@ -1014,7 +1055,7 @@ export class Harness {
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
         this.currentPlanTracker?.onFinal('model_done');
         await this.saveTaskCheckpoint('completed', userMessage, msgs, state, 'model_done');
-        this.resilienceSaveCheckpoint('final_draft', state, 'model_done');
+        await this.resilienceSaveCheckpoint('final_draft', state, 'model_done');
         this.recordTelemetrySummary('model_done', state);
 
         onStep?.({
@@ -1040,7 +1081,7 @@ export class Harness {
 
       // 6. 有工具调用 → 执行工具（正常恢复，清除压缩标记）
       if (state.justCompacted) state.justCompacted = false;
-      logger.llmResponseToolCalls(response.toolCalls!.length, tokenUsage);
+      logger.llmResponseToolCalls(response.toolCalls!.length, llmRoundLog.usage, llmRoundLog.meta);
 
       // 推送思考内容（如果有）
       onStep?.({
@@ -1070,7 +1111,7 @@ export class Harness {
       );
 
       // 6a-resilience-v2. 把这一轮工具调用录入 branchBudget（仅 flag 启用时执行）
-      this.resilienceRecordToolCalls(
+      await this.resilienceRecordToolCalls(
         response.toolCalls!,
         new Set(toolStats.failedSignatures),
         state,
@@ -1094,7 +1135,7 @@ export class Harness {
 
       // 6a-resilience-v2. 验证失败 → 单独 hook（与 tool_failure 区分，便于 checkpoint trigger 归类）
       if (state.taskState.snapshot().verificationStatus === 'failed') {
-        this.resilienceSaveCheckpoint('verification_failed', state);
+        await this.resilienceSaveCheckpoint('verification_failed', state);
         if (!state.stepReviewedThisRound) {
           await this.resilienceMaybeReviewStep(state, 'verification_failure', chatFn);
         }
@@ -1173,7 +1214,7 @@ export class Harness {
       }
 
       await this.saveTaskCheckpoint('running', userMessage, msgs, state);
-      this.resilienceSaveCheckpoint('step_completed', state);
+      await this.resilienceSaveCheckpoint('step_completed', state);
 
       // 6a-readonly. 连续只读轮次跟踪（分析瘫痪检测）
       const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
@@ -1713,28 +1754,30 @@ export class Harness {
   ): Promise<void> {
     if (!this.checkpointManager || !runtimeState) return;
 
-    try {
-      const failedToolCalls = [...runtimeState.failedToolCallSignatures.entries()]
-        .filter(([, count]) => count > 0)
-        .map(([signature, count]) => `${signature} (x${count})`);
+    await this.enqueueCheckpointPersist(async () => {
+      try {
+        const failedToolCalls = [...runtimeState.failedToolCallSignatures.entries()]
+          .filter(([, count]) => count > 0)
+          .map(([signature, count]) => `${signature} (x${count})`);
 
-      const checkpointSave: TaskCheckpointUpdate = {
-        status,
-        userGoal,
-        taskState: runtimeState.taskState.snapshot(),
-        repoContext: runtimeState.repoContext.snapshot(),
-        loopState: this.loopController.getState(),
-        messages,
-        failedToolCalls,
-        stopReason,
-      };
-      if (this.executionPlanEnabled) {
-        checkpointSave.plan = this.currentPlanTracker?.getPlan() ?? null;
+        const checkpointSave: TaskCheckpointUpdate = {
+          status,
+          userGoal,
+          taskState: runtimeState.taskState.snapshot(),
+          repoContext: runtimeState.repoContext.snapshot(),
+          loopState: this.loopController.getState(),
+          messages,
+          failedToolCalls,
+          stopReason,
+        };
+        if (this.executionPlanEnabled) {
+          checkpointSave.plan = this.currentPlanTracker?.getPlan() ?? null;
+        }
+        await this.checkpointManager!.save(checkpointSave);
+      } catch (err) {
+        console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
       }
-      await this.checkpointManager.save(checkpointSave);
-    } catch (err) {
-      console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
-    }
+    });
   }
 
   private recordTelemetrySummary(
@@ -1789,7 +1832,7 @@ export class Harness {
       runtimeState,
       reason,
     );
-    this.resilienceSaveCheckpoint('final_draft', runtimeState, reason);
+    await this.resilienceSaveCheckpoint('final_draft', runtimeState, reason);
     if (runtimeState) this.recordTelemetrySummary(reason, runtimeState);
 
     // 如果是用户中断，直接返回
@@ -1842,17 +1885,13 @@ export class Harness {
           }
         }, { tools: [] });
         finalContent = finalResponse.content;
-        logger.llmResponseFinal({
-          input: finalResponse.usage?.inputTokens ?? 0,
-          output: finalResponse.usage?.outputTokens ?? 0,
-        });
+        const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
+        logger.llmResponseFinal(sumLog.usage, sumLog.meta);
       } else {
         const finalResponse = await chatFn(messages, { tools: [] });
         finalContent = finalResponse.content;
-        logger.llmResponseFinal({
-          input: finalResponse.usage?.inputTokens ?? 0,
-          output: finalResponse.usage?.outputTokens ?? 0,
-        });
+        const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
+        logger.llmResponseFinal(sumLog.usage, sumLog.meta);
       }
     } catch (err) {
       // 最终总结调用失败，用最后一条 assistant 消息作为回复
@@ -1900,11 +1939,13 @@ export class Harness {
     // ── 第一道防线：轻量微压缩（约 72% 阈值，纯本地，零 LLM 成本）──
     if (this.contextCompactor.needsMicroCompaction(messages) && !this.contextCompactor.needsCompaction(messages)) {
       const before = messages.length;
+      const beforeTok = this.contextCompactor.getEstimatedTokens(messages);
       const compacted = this.contextCompactor.doLightCompact(messages);
       messages.length = 0;
       messages.push(...compacted);
+      const afterTok = this.contextCompactor.getEstimatedTokens(messages);
       console.log(`[harness] 微压缩: ${before} → ${messages.length} 条消息 (纯本地，零 LLM 成本)`);
-      logger.compaction(before, messages.length);
+      logger.compaction(before, messages.length, beforeTok, afterTok);
       onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
       return; // 微压缩不注入恢复提示，对 LLM 透明
     }
@@ -2026,15 +2067,16 @@ export class Harness {
       state.amnesiaRecoveryCount = 0;
     }
 
-    logger.compaction(before, messages.length);
+    const afterTokCompact = this.contextCompactor.getEstimatedTokens(messages);
+    logger.compaction(before, messages.length, beforeTokens, afterTokCompact);
     this.runtimeTelemetry?.recordCompaction({
       beforeMessages: before,
       afterMessages: messages.length,
       beforeTokens,
-      afterTokens: this.contextCompactor.getEstimatedTokens(messages),
+      afterTokens: afterTokCompact,
     });
     onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
-    this.resilienceSaveCheckpoint('compaction', state);
+    await this.resilienceSaveCheckpoint('compaction', state);
   }
 
   /**
@@ -2165,13 +2207,17 @@ export class Harness {
   /**
    * 记录一轮工具调用到 branchBudget 和 checkpointEngine。
    * 关 flag 时 no-op。
+   *
+   * 磁盘写入必须经 enqueueCheckpointPersist，与 TaskCheckpointManager 串行，避免绕过队列与 v1 save 交叉 rename。
    */
-  private resilienceRecordToolCalls(
+  private async resilienceRecordToolCalls(
     toolCalls: ToolCall[],
     failedSignatures: Set<string>,
     state: LoopState,
-  ): void {
-    if (!this.resilienceV2Enabled || !state.branchBudget) return;
+  ): Promise<void> {
+    if (!this.resilienceV2Enabled || !state.branchBudget || !this.checkpointEngine) return;
+
+    const engine = this.checkpointEngine;
 
     for (const tc of toolCalls) {
       const sig = this.toolCallSignature(tc);
@@ -2191,33 +2237,45 @@ export class Harness {
 
       if (failed) {
         state.branchBudget.recordError(sig);
-        this.checkpointEngine?.save({
-          trigger: 'tool_failed',
-          branchBudget: state.branchBudget,
-          appendFailure: {
-            signature: sig,
-            count: 1,
-            at: Date.now(),
-          },
-        }).catch(err => console.debug(
-          '[harness] resilience v2 save (tool_failed) failed:',
-          err instanceof Error ? err.message : err,
-        ));
+        await this.enqueueCheckpointPersist(async () => {
+          try {
+            await engine.save({
+              trigger: 'tool_failed',
+              branchBudget: state.branchBudget,
+              appendFailure: {
+                signature: sig,
+                count: 1,
+                at: Date.now(),
+              },
+            });
+          } catch (err) {
+            console.debug(
+              '[harness] resilience v2 save (tool_failed) failed:',
+              err instanceof Error ? err.message : err,
+            );
+          }
+        });
       }
 
-      this.checkpointEngine?.save({
-        trigger: failed ? 'tool_failed' : 'step_completed',
-        branchBudget: state.branchBudget,
-        appendTool: {
-          toolName: tc.name,
-          success: !failed,
-          signature: sig,
-          at: Date.now(),
-        },
-      }).catch(err => console.debug(
-        '[harness] resilience v2 save (tool) failed:',
-        err instanceof Error ? err.message : err,
-      ));
+      await this.enqueueCheckpointPersist(async () => {
+        try {
+          await engine.save({
+            trigger: failed ? 'tool_failed' : 'step_completed',
+            branchBudget: state.branchBudget,
+            appendTool: {
+              toolName: tc.name,
+              success: !failed,
+              signature: sig,
+              at: Date.now(),
+            },
+          });
+        } catch (err) {
+          console.debug(
+            '[harness] resilience v2 save (tool) failed:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      });
     }
   }
 
@@ -2226,7 +2284,7 @@ export class Harness {
    * 每轮最多注入 1 次，避免与已有的 consecutiveToolFailures 提示叠加。
    */
   private resilienceMaybeBranchRecover(state: LoopState, msgs: UnifiedMessage[]): void {
-    if (!this.resilienceV2Enabled || !state.branchBudget) return;
+    if (!this.resilienceV2Enabled || !state.branchBudget || !this.checkpointEngine) return;
     if (state.branchBudgetWarnedThisRound) return;
 
     const decision = state.branchBudget.shouldBranchRecover();
@@ -2239,14 +2297,21 @@ export class Harness {
     state.branchBudget.markRecoveryTriggered();
     state.branchBudgetWarnedThisRound = true;
 
-    this.checkpointEngine?.save({
-      trigger: 'tool_failed',
-      branchBudget: state.branchBudget,
-      appendRecoverySignal: signal,
-    }).catch(err => console.debug(
-      '[harness] resilience v2 save (recovery signal) failed:',
-      err instanceof Error ? err.message : err,
-    ));
+    const engine = this.checkpointEngine;
+    void this.enqueueCheckpointPersist(async () => {
+      try {
+        await engine.save({
+          trigger: 'tool_failed',
+          branchBudget: state.branchBudget,
+          appendRecoverySignal: signal,
+        });
+      } catch (err) {
+        console.debug(
+          '[harness] resilience v2 save (recovery signal) failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    });
   }
 
   /**
@@ -2308,31 +2373,38 @@ export class Harness {
    *   step_completed / tool_failed / verification_started / verification_failed
    *   compaction / final_draft
    */
-  private resilienceSaveCheckpoint(
+  private async resilienceSaveCheckpoint(
     trigger: CheckpointSaveTrigger,
     state: { taskState: TaskState; branchBudget?: BranchBudgetTracker } | undefined,
     stopReason?: StopReason,
-  ): void {
+  ): Promise<void> {
     if (!this.resilienceV2Enabled || !this.checkpointEngine) return;
     if (!state) return;
 
+    const engine = this.checkpointEngine;
     const plan = this.currentPlanTracker?.getPlan();
     const activeStep = plan?.activeStepId
       ? plan.steps.find(s => s.id === plan.activeStepId)
       : undefined;
 
-    this.checkpointEngine.save({
-      trigger,
-      branchBudget: state.branchBudget,
-      currentStepId: plan?.activeStepId,
-      currentStepTitle: activeStep?.title,
-      verificationPending: state.taskState.shouldBlockFinalForVerification(),
-      lastStopReason: stopReason,
-      ...(plan ? { plan } : {}),
-    }).catch(err => console.debug(
-      `[harness] resilience v2 save (${trigger}) failed:`,
-      err instanceof Error ? err.message : err,
-    ));
+    await this.enqueueCheckpointPersist(async () => {
+      try {
+        await engine.save({
+          trigger,
+          branchBudget: state.branchBudget,
+          currentStepId: plan?.activeStepId,
+          currentStepTitle: activeStep?.title,
+          verificationPending: state.taskState.shouldBlockFinalForVerification(),
+          lastStopReason: stopReason,
+          ...(plan ? { plan } : {}),
+        });
+      } catch (err) {
+        console.debug(
+          `[harness] resilience v2 save (${trigger}) failed:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    });
   }
 }
 

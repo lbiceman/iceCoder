@@ -62,8 +62,10 @@ export interface TokenUsage {
   outputTokens: number;
   totalTokens: number;
   provider: string;
-  /** prompt cache 读取的 token 数（提供商支持时返回，如 Anthropic） */
+  /** prompt cache 读取的 token 数（DeepSeek prompt_cache_hit_tokens；Anthropic/OpenAI cached 分项） */
   cacheReadTokens?: number;
+  /** 未命中缓存的输入 token（DeepSeek prompt_cache_miss_tokens；OpenAI 可由 prompt_tokens - cached_tokens 推导） */
+  cacheMissTokens?: number;
   /** prompt cache 写入的 token 数 */
   cacheCreationTokens?: number;
 }

@@ -18,6 +18,7 @@
  * 设计文档：docs/长时间连续工作.md §Part 3
  */
 
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -125,14 +126,65 @@ export class CheckpointEngine {
   async save(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
     this.applyInput(input);
 
-    const existing = await this.readExistingFile();
-    const merged: CombinedCheckpointFile = {
-      ...(existing ?? this.buildMinimalV1Stub()),
+    await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
+    const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
+
+    const isTerminal = (c: CombinedCheckpointFile | null | undefined): c is CombinedCheckpointFile =>
+      !!c && (c.status === 'completed' || c.status === 'failed' || c.status === 'aborted');
+
+    const peekA = await this.readExistingCheckpoint(6, 14);
+    const peekB = await this.readExistingCheckpoint(6, 14);
+
+    let base: CombinedCheckpointFile | null =
+      isTerminal(peekB) ? peekB
+      : isTerminal(peekA) ? peekA
+      : peekB ?? peekA;
+
+    // TaskCheckpointManager 写完 tmp 后 rename 的极短窗口内读盘可能失败；
+    // 若目标文件已存在，则短重试而非用 running stub 覆盖可能已写入的终态 v1。
+    if (!base) {
+      try {
+        await fs.access(this.checkpointPath);
+        for (let i = 0; i < 12; i++) {
+          const recovered = await this.readExistingCheckpoint(4, 20);
+          if (recovered) {
+            base = recovered;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 12));
+        }
+        if (!base) {
+          console.debug(
+            '[checkpoint-engine] skip v2 merge write: checkpoint file exists but JSON not readable yet',
+          );
+          return cloneV2(this.v2State);
+        }
+      } catch {
+        base = this.buildMinimalV1Stub();
+      }
+    }
+
+    let merged: CombinedCheckpointFile = {
+      ...base,
       runtimeV2: cloneV2(this.v2State),
     };
 
-    await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
-    const tmpPath = `${this.checkpointPath}.tmp`;
+    const peekC = await this.readExistingCheckpoint(8, 18);
+    if (isTerminal(peekC)) {
+      merged = { ...peekC, runtimeV2: cloneV2(this.v2State) };
+    }
+
+    // rename 前一拍：Manager 可能比 Engine 的快照更新；必须用最新磁盘快照做 v1 信封，否则会写回陈旧 running。
+    const fence = await this.readExistingCheckpoint(12, 16);
+    if (fence) {
+      merged = { ...fence, runtimeV2: cloneV2(this.v2State) };
+    } else if (await this.checkpointMainPathProbablyExists()) {
+      console.debug(
+        '[checkpoint-engine] skip v2 merge write before rename: file exists but could not parse JSON reliably',
+      );
+      return cloneV2(this.v2State);
+    }
+
     await fs.writeFile(tmpPath, JSON.stringify(merged, null, 2), 'utf-8');
     await fs.rename(tmpPath, this.checkpointPath);
 
@@ -210,12 +262,49 @@ export class CheckpointEngine {
 
   // ─── 内部 ───
 
-  private async readExistingFile(): Promise<CombinedCheckpointFile | null> {
+  /** 是否为「尚无 checkpoint 文件」类错误；ENOENT 不重试 backoff，否则会拖慢首轮 save（单测超时）。 */
+  private isENOENT(err: unknown): boolean {
+    return typeof err === 'object'
+      && err !== null
+      && 'code' in err
+      && (err as { code?: unknown }).code === 'ENOENT';
+  }
+
+  /** 校验 JSON checkpoint 的版本号是否为有效 v1。 */
+  private isV1CombinedCheckpoint(parsed: unknown): parsed is CombinedCheckpointFile {
+    if (!parsed || typeof parsed !== 'object') return false;
+    const ver = (parsed as { version?: unknown }).version;
+    return typeof ver === 'number' && ver === 1;
+  }
+
+  /** 读取现有 checkpoint JSON；多轮退让重试以降低与 TaskCheckpointManager.rename 的竞争读失败概率。 */
+  private async readExistingCheckpoint(
+    maxAttempts: number,
+    baseBackoffMs = 22,
+  ): Promise<CombinedCheckpointFile | null> {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const raw = await fs.readFile(this.checkpointPath, 'utf-8');
+        const parsed: unknown = JSON.parse(raw);
+        if (!this.isV1CombinedCheckpoint(parsed)) continue;
+        return parsed;
+      } catch (err: unknown) {
+        if (this.isENOENT(err)) return null;
+        if (attempt < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, baseBackoffMs * (attempt + 1)));
+        }
+      }
+    }
+    return null;
+  }
+
+  /** 磁盘上是否存在主 checkpoint 路径（先于 JSON 解析）；配合「存在但解析失败→跳过写入」语义。 */
+  private async checkpointMainPathProbablyExists(): Promise<boolean> {
     try {
-      const raw = await fs.readFile(this.checkpointPath, 'utf-8');
-      return JSON.parse(raw) as CombinedCheckpointFile;
+      await fs.access(this.checkpointPath);
+      return true;
     } catch {
-      return null;
+      return false;
     }
   }
 
