@@ -35,50 +35,59 @@ export interface ExecutionPlanGeneratorInput {
  */
 function templateForIntent(intent: TaskIntent): Array<Omit<ExecutionStep, 'id' | 'status'>> {
   switch (intent) {
+    /**
+     * 实现类：新建 / 编辑 / 调整实现共用（不预设「已有源文件」「只能是修改」）。
+     * context / verification 措辞与同结构的 debug、test、refactor 对齐，便于面板一致理解。
+     */
     case 'edit':
       return [
         { title: '理解目标', phase: 'intent', requiresTool: false },
-        { title: '阅读相关源文件', phase: 'context', requiresTool: true },
-        { title: '修改对应代码', phase: 'editing', requiresTool: true },
-        { title: '执行验证命令', phase: 'verification', requiresTool: true, isVerification: true },
-        { title: '总结改动', phase: 'final', requiresTool: false },
+        { title: '查阅相关内容', phase: 'context', requiresTool: true },
+        { title: '编写或修改代码', phase: 'editing', requiresTool: true },
+        { title: '运行验证命令', phase: 'verification', requiresTool: true, isVerification: true },
+        { title: '总结变更', phase: 'final', requiresTool: false },
       ];
+    /** 排查类：报错 / 异常行为 / 失败用例 / 性能等均可落入「定位—取证—修复—验证」 */
     case 'debug':
       return [
-        { title: '复现 / 解析错误', phase: 'intent', requiresTool: false },
-        { title: '搜索并读取相关文件', phase: 'context', requiresTool: true },
-        { title: '修复最小代码路径', phase: 'editing', requiresTool: true },
-        { title: '运行重点测试或类型检查', phase: 'verification', requiresTool: true, isVerification: true },
-        { title: '回报根因与改动', phase: 'final', requiresTool: false },
+        { title: '明确问题与现象', phase: 'intent', requiresTool: false },
+        { title: '查阅上下文与证据', phase: 'context', requiresTool: true },
+        { title: '以最小改动修复', phase: 'editing', requiresTool: true },
+        { title: '运行验证命令', phase: 'verification', requiresTool: true, isVerification: true },
+        { title: '总结原因与变更', phase: 'final', requiresTool: false },
       ];
+    /** 测试类：写新测、修测试、跑红/跑绿、补快照等 */
     case 'test':
       return [
-        { title: '定位待跑测试', phase: 'intent', requiresTool: false },
-        { title: '运行失败用例', phase: 'context', requiresTool: true },
-        { title: '修代码或修测试', phase: 'editing', requiresTool: true },
-        { title: '重跑聚焦测试', phase: 'verification', requiresTool: true, isVerification: true },
-        { title: '汇报测试结果', phase: 'final', requiresTool: false },
+        { title: '明确范围与目标', phase: 'intent', requiresTool: false },
+        { title: '运行并查看输出', phase: 'context', requiresTool: true },
+        { title: '调整代码或测试', phase: 'editing', requiresTool: true },
+        { title: '运行验证命令', phase: 'verification', requiresTool: true, isVerification: true },
+        { title: '总结测试与结论', phase: 'final', requiresTool: false },
       ];
+    /** 重构类：改名 / 抽函数 / 挪文件 / 改签名等，不预设「一定是批量」 */
     case 'refactor':
       return [
-        { title: '梳理重构范围', phase: 'intent', requiresTool: false },
-        { title: '检查引用 / 使用点', phase: 'context', requiresTool: true },
-        { title: '批量应用变更', phase: 'editing', requiresTool: true },
-        { title: '运行测试 / 类型检查', phase: 'verification', requiresTool: true, isVerification: true },
-        { title: '总结重构影响', phase: 'final', requiresTool: false },
+        { title: '明确目标与范围', phase: 'intent', requiresTool: false },
+        { title: '查阅影响范围与依赖', phase: 'context', requiresTool: true },
+        { title: '应用重构改动', phase: 'editing', requiresTool: true },
+        { title: '运行验证命令', phase: 'verification', requiresTool: true, isVerification: true },
+        { title: '总结影响与变更', phase: 'final', requiresTool: false },
       ];
+    /** 只读查阅：解释代码、导航仓库、对比行为等 */
     case 'inspect':
       return [
-        { title: '确认查阅范围', phase: 'intent', requiresTool: false },
-        { title: '搜索或读取相关位置', phase: 'context', requiresTool: true },
+        { title: '明确查阅范围', phase: 'intent', requiresTool: false },
+        { title: '查阅相关内容', phase: 'context', requiresTool: true },
         { title: '依据证据回答', phase: 'final', requiresTool: false },
       ];
+    /** 文档类：从零写 README、补 API 说明、与代码同步等 */
     case 'docs':
       return [
-        { title: '理解文档目标', phase: 'intent', requiresTool: false },
-        { title: '查看现有文档与源码', phase: 'context', requiresTool: true },
+        { title: '明确文档目标', phase: 'intent', requiresTool: false },
+        { title: '查阅相关文档与代码', phase: 'context', requiresTool: true },
         { title: '编写或更新文档', phase: 'editing', requiresTool: true },
-        { title: '总结文档改动', phase: 'final', requiresTool: false },
+        { title: '总结文档变更', phase: 'final', requiresTool: false },
       ];
     case 'question':
       // question 类不展示执行计划
