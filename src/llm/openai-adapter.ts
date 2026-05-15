@@ -104,14 +104,13 @@ export class OpenAIAdapter implements ProviderAdapter {
 
       const elapsed = Date.now() - startTime;
       const usage = (response as OpenAI.ChatCompletion).usage;
-      const usageAny = usage as Record<string, unknown> | undefined;
-      const pc = usageAny ? extractPromptCacheFromChatUsage(usageAny) : {};
+      const pc = usage ? extractPromptCacheFromChatUsage(usage) : {};
       const cacheFrag =
         pc.cacheReadTokens != null || pc.cacheMissTokens != null
           ? ` | cache_hit/miss=${pc.cacheReadTokens ?? '?'}/${pc.cacheMissTokens ?? '?'}`
           : '';
       console.log(
-        `[OpenAI] chat 响应 ← ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'}→${usage?.completion_tokens ?? '?'}${cacheFrag}`,
+        `[OpenAI] chat 响应: ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'} | ${usage?.completion_tokens ?? '?'}${cacheFrag}`,
       );
 
       return this.convertResponse(response as OpenAI.ChatCompletion);
@@ -195,7 +194,7 @@ export class OpenAIAdapter implements ProviderAdapter {
         if (chunk.usage) {
           promptTokens = chunk.usage.prompt_tokens ?? 0;
           completionTokens = chunk.usage.completion_tokens ?? 0;
-          lastUsageExtras = extractPromptCacheFromChatUsage(chunk.usage as Record<string, unknown>);
+          lastUsageExtras = extractPromptCacheFromChatUsage(chunk.usage);
         }
       }
 
@@ -204,10 +203,10 @@ export class OpenAIAdapter implements ProviderAdapter {
       const elapsed = Date.now() - startTime;
       const streamCacheFrag =
         lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
-          ? ` | cache_hit/miss=${lastUsageExtras.cacheReadTokens ?? '?'}/${lastUsageExtras.cacheMissTokens ?? '?'}`
+          ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`
           : '';
       console.log(
-        `[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} / ${completionTokens}${streamCacheFrag}`,
+        `[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} | ${completionTokens}${streamCacheFrag}`,
       );
 
       const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
@@ -550,8 +549,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
     const toolCalls = this.parseToolCalls(message?.tool_calls);
 
-    const rawUsage = response.usage as Record<string, unknown> | undefined;
-    const cacheSlice = extractPromptCacheFromChatUsage(rawUsage ?? null);
+    const cacheSlice = extractPromptCacheFromChatUsage(response.usage ?? null);
 
     return {
       content,

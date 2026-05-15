@@ -120,7 +120,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 
   info(`启动 Cloudflare Tunnel: ${bin}`);
 
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', resolveTunnelMetricsListenAddress()];
+  const tunnelArgs = ['tunnel', '--url', `http://127.0.0.1:${port}`, '--metrics', resolveTunnelMetricsListenAddress()];
   const child = spawn(bin, tunnelArgs, {
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
@@ -164,7 +164,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const noServe = hasFlag(args.flags, 'no-serve');
   const withTunnel = hasFlag(args.flags, 'with-tunnel');
-  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
+  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3784', 10);
   const { memoryFilesDir } = ctx.paths;
 
   /** 加载提示词（与 WebSocket 共用逻辑；不绑定固定自然语言）。 */
@@ -182,7 +182,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
   if (!noServe) {
     serveResult = await startWebServer(ctx, port);
-    info(`Web 服务器已启动: ${c.underline}http://localhost:${port}${c.reset}`);
+    info(`Web 服务器已启动: ${c.underline}http://127.0.0.1:${port}${c.reset}`);
 
     // 启动 Cloudflare Tunnel（start 模式）
     if (withTunnel && !hasFlag(args.flags, 'no-tunnel')) {

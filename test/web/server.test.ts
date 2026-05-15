@@ -55,6 +55,21 @@ describe('Web Server', () => {
       expect(data).toEqual({ ok: true });
     });
 
+    it('should serve index.html for GET /', async () => {
+      const app = await createServer({
+        staticDir: path.join(__dirname, '../../src/public'),
+      });
+
+      server = await startServer(app, 0);
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain('<!DOCTYPE html>');
+    });
+
     it('should serve static files from the configured directory', async () => {
       const app = await createServer({
         staticDir: path.join(__dirname, '../../src/public'),
