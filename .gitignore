@@ -11,8 +11,6 @@ data/*
 LoCoMo/
 claude-code/
 
-docs/
-
 # Pipeline 输出
 output/
 

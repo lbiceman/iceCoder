@@ -12,7 +12,7 @@ iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harnes
 
 ## 1. 当前状态
 
-当前已经完成 Runtime P0/P1 的核心整改，重点解决“该干活时不干活”“改完不验证”“权限规则不生效”“压缩丢短指令”等问题；并已接通 **Execution Transparency Layer**（结构化执行计划、`execution_plan_*` 推送与 checkpoint 附带 plan）、**CheckpointEngine（Runtime Resilience v2）**（同文件叠加 `runtimeV2`）。
+已接通 **Execution Transparency Layer**（结构化执行计划、`execution_plan_*` 推送与 checkpoint 附带 plan）、**CheckpointEngine（Runtime Resilience v2）**（同文件叠加 `runtimeV2`）。
 
 验证命令：
 
