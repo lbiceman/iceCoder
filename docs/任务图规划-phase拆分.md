@@ -405,6 +405,46 @@ rm test/task-graph-review.test.ts
 | §20.6 | 与 PermissionManager / TaskState / StepReview / BranchBudget 的接入点 |
 | §16 | 配置与开关（ICE_TASK_GRAPH 环境变量） |
 
+## 2. Scope Boundary
+
+**Phase 5 是必要前提，但不是充分条件。**
+
+Phase 5 做的事情：
+- 在 Harness 循环中注入节点上下文（system reminder）
+- 工具调用前执行 contract 检查（allow/warn/block）
+- 每轮结束后评估 escalation 策略
+- 节点完成后 advance cursor / markDone
+
+Phase 5 **不做**的事情：
+- **不修改 Harness 的 stop 条件**（见 §9 Forbidden Changes）
+- 不引入无限循环的"闸门"—— 合约检查只能限制单节点内的行为，无法在 Harness 层面强制终止失控循环
+
+**还需要 ~15 行的 stop 闸门**：在 Harness 主循环的关键位置加入一个基于 `GraphExecutor` 状态的强制终止判断。当 TaskGraph 已 done/failed 或无更多可用分支时，即使 Harness 自身的 stop 条件尚未触发，也应强制 break。这个 stop 闸门不属于 Phase 5 的范围，需要作为独立的小改动在 Phase 5 完成后追加。
+
+具体来说，stop 闸门需要在 Harness 循环的以下位置织入：
+
+1. **每轮开始前**：检查 `graphExecutor.isTerminal()` → 如果 graph 已 done/failed，立即 break
+2. **工具调用循环内**：当 `advanceOrComplete()` 返回 `graphDone` 时，设置 break 标志
+3. **循环末尾**：在现有 stop 条件链之前，增加 `|| graphExecutor.shouldForceStop()`
+
+```typescript
+// stop 闸门伪代码（~15 行，不属于 Phase 5）
+// 1. 每轮开始前
+if (this.graphExecutor?.isTerminal()) break;
+
+// 2. advanceOrComplete 后
+const advanceResult = this.graphExecutor?.advanceOrComplete();
+if (advanceResult?.graphDone) break;
+
+// 3. 循环末尾 stop 条件扩充
+if (existingStopConditions || this.graphExecutor?.shouldForceStop()) break;
+```
+
+| 谁负责 | 做什么 |
+|---|---|
+| Phase 5 | 注入合约上下文、工具约束、节点推进 |
+| stop 闸门（Phase 5 之后） | ~15 行改动，在 Harness 循环中织入强制终止判断 |
+
 ## 3. Files To Modify
 
 | 路径 | 改动描述 |
