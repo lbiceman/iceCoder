@@ -41,6 +41,7 @@ import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 // Execution plan layer removed (Phase 11) — replaced by TaskGraph
 import { shouldUseTaskGraph } from './task-graph-config.js';
+import { shouldApplyCasualHarness, shouldSkipResilienceCheckpoint } from './casual-mode.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { reviewStep, type StepReviewResult } from './step-review.js';
@@ -643,12 +644,17 @@ export class Harness {
         }
       }
 
-      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm', onStep });
+      {
+        const intent = state.taskState.snapshot().intent;
+        const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
+        await this.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+      }
 
       if (
         state.turnCount === 1
         && currentTools.length > 0
         && isActionableToolRequest(getLatestRealUserText(msgs, userMessage))
+        && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
       ) {
         msgs.push({
           role: 'user',
@@ -985,6 +991,7 @@ export class Harness {
           && state.noToolExecutionRecoveryCount < 1
           && state.stopHookContinuationCount === 0
           && isActionableToolRequest(getLatestRealUserText(msgs, userMessage))
+          && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
         ) {
           state.noToolExecutionRecoveryCount++;
           if (response.content) {
@@ -2276,6 +2283,7 @@ export class Harness {
   ): Promise<void> {
     if (!this.resilienceV2Enabled || !this.checkpointEngine) return;
     if (!state) return;
+    if (shouldSkipResilienceCheckpoint(state.taskState.snapshot().intent)) return;
 
     const engine = this.checkpointEngine;
 

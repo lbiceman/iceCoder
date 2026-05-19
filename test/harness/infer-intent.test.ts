@@ -15,4 +15,12 @@ describe('inferIntent', () => {
     expect(inferIntent('跑一下 vitest，把失败用例修掉')).toBe('test');
     expect(inferIntent('npm test 失败了')).toBe('test');
   });
+
+  it('纯分析报错 → question，非 debug', () => {
+    expect(inferIntent('分析一下为什么报错')).toBe('question');
+  });
+
+  it('分析并查看代码 → inspect', () => {
+    expect(inferIntent('解释一下 src/harness.ts 里这段逻辑')).toBe('inspect');
+  });
 });

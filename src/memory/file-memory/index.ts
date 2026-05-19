@@ -128,6 +128,7 @@ export {
   refreshConfig,
   saveConfig,
   getExtractionConfig,
+  getCasualExtractionConfig,
   getDreamConfig,
   getRecallConfig,
   getSessionMemoryConfig,

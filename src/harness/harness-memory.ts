@@ -37,6 +37,10 @@ import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js'
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
+import {
+  evaluateCasualMemoryExtraction,
+  shouldApplyCasualHarness,
+} from './casual-mode.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
 import {
   MEMORY_MAX_RELEVANT,
@@ -184,6 +188,7 @@ import {
   type ExtractionGuardState,
 } from '../memory/file-memory/memory-concurrency.js';
 import {
+  getCasualExtractionConfig,
   getExtractionConfig,
   getRecallConfig,
   getRelevanceGateConfig,
@@ -237,7 +242,7 @@ function stripPlanFence(notes: string): string {
   }
   return out;
 }
-import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { TaskState } from './task-state.js';
 import type { RepoContext } from './repo-context.js';
 
@@ -254,7 +259,7 @@ export interface HarnessMemoryConfig {
 }
 
 /** 记忆注入模式 */
-export type InjectMemoryMode = 'default' | 'coarse_pre_llm';
+export type InjectMemoryMode = 'default' | 'coarse_pre_llm' | 'casual_light';
 
 // ─── 主代理写入检测 ───
 
@@ -575,6 +580,8 @@ export class HarnessMemoryIntegration {
   private lastStandardRecallCooldownKey = '';
   private lastStandardRecallCompleteAt = 0;
   private lastStandardRecallInjected = false;
+  /** onLoopEnd 时任务 intent，供 casual 提取门控 */
+  private loopEndTaskIntent?: TaskIntent;
 
   constructor(config: HarnessMemoryConfig) {
     this.memoryDir = config.memoryDir || 'data/memory-files';
@@ -672,8 +679,10 @@ export class HarnessMemoryIntegration {
     const latestUserMsg = getLatestUserMessage(messages) || this.currentUserMessage;
     const onStep = options?.onStep;
 
-    if (options?.mode === 'coarse_pre_llm') {
-      await this.injectCoarseKeywordRecall(messages, latestUserMsg, onStep);
+    if (options?.mode === 'coarse_pre_llm' || options?.mode === 'casual_light') {
+      const topK = options.mode === 'casual_light' ? 2 : 3;
+      const phase = options.mode === 'casual_light' ? 'casual_light' : 'coarse_pre_llm';
+      await this.injectCoarseKeywordRecall(messages, latestUserMsg, onStep, topK, phase);
       return;
     }
 
@@ -887,6 +896,8 @@ export class HarnessMemoryIntegration {
     messages: UnifiedMessage[],
     latestUserMsg: string,
     onStep?: (event: HarnessStepEvent) => void,
+    topK = 3,
+    recallPhase: 'coarse_pre_llm' | 'casual_light' = 'coarse_pre_llm',
   ): Promise<void> {
     if (!latestUserMsg.trim()) return;
     if (this.lastCoarsePreLlmMessage === latestUserMsg) return;
@@ -904,7 +915,6 @@ export class HarnessMemoryIntegration {
       return;
     }
 
-    const COARSE_TOP = 3;
     let dedupCount = 0;
 
     try {
@@ -923,7 +933,7 @@ export class HarnessMemoryIntegration {
         this.memoryDir,
         null,
         this.surfacedMemoryPaths,
-        COARSE_TOP,
+        topK,
         prefetchedPaths,
         false,
       );
@@ -936,7 +946,7 @@ export class HarnessMemoryIntegration {
         selectedFiles: recallResult.memories.map(m => m.filename),
         queryLength: latestUserMsg.length,
         dedupCount,
-        recallPhase: 'coarse_pre_llm',
+        recallPhase,
       }).catch(() => {});
 
       if (recallResult.memories.length === 0) {
@@ -944,7 +954,7 @@ export class HarnessMemoryIntegration {
       }
 
       let selectedMemories = filterMemoriesForExecutionIntent(latestUserMsg, recallResult.memories)
-        .slice(0, COARSE_TOP);
+        .slice(0, topK);
 
       const recallCfgForDedup = getRecallConfig();
       if (recallCfgForDedup.dedupInSession && this.injectedMemoryIds.size > 0) {
@@ -1051,6 +1061,7 @@ ${candidateList}`;
       return;
     }
 
+    this.loopEndTaskIntent = runtimeSnapshots?.task.intent;
     this.currentMessages = messages;
 
     // ── 主代理互斥检测 ──
@@ -1397,21 +1408,50 @@ ${candidateList}`;
    * 2. 对话深度触发 — 轮次 >= minTurns 且对话中有工具调用（说明在做实际工作）
    * 3. 内容特征触发 — 用户消息暗示了编程语言/框架/工具偏好
    */
-  private shouldExtract(turnCount: number): boolean {
+  private sessionHasToolCalls(messages: UnifiedMessage[]): boolean {
+    return messages.some(
+      m => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0,
+    );
+  }
+
+  private shouldExtract(turnCount: number, messages: UnifiedMessage[]): boolean {
     if (!this.llmAdapter || !this.currentUserMessage) return false;
     // 记忆目录不存在时不触发提取（测试环境或未初始化）
     if (!this.memoryDirExists) return false;
 
     const cfg = getExtractionConfig();
     const msgLower = this.currentUserMessage.toLowerCase();
+    const hasSignal = EXTRACTION_SIGNAL_WORDS.some(w => msgLower.includes(w));
+    const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
+
+    const intent = this.loopEndTaskIntent;
+    if (intent && shouldApplyCasualHarness(intent)) {
+      const casualCfg = getCasualExtractionConfig();
+      if (hasSignal) return true;
+      if (hasContentSignal && turnCount >= 1 && casualCfg.allowContentSignalWithoutTools) {
+        return true;
+      }
+
+      this.extractionTurnCounter++;
+      const allow = evaluateCasualMemoryExtraction({
+        turnCount,
+        hasSignalWord: false,
+        hasContentSignal: false,
+        sessionHasToolCalls: this.sessionHasToolCalls(messages),
+        extractionTurnCounter: this.extractionTurnCounter,
+        turnThrottle: cfg.turnThrottle,
+        config: casualCfg,
+      });
+      if (allow) {
+        this.extractionTurnCounter = 0;
+      }
+      return allow;
+    }
 
     // 1. 信号词触发（优先级最高，不受节流限制）
-    const hasSignal = EXTRACTION_SIGNAL_WORDS.some(w => msgLower.includes(w));
     if (hasSignal) return true;
 
     // 2. 内容特征触发 — 检测编程语言/框架/工具相关的关键词
-    //    需要至少 1 轮对话才触发（首轮就有足够上下文时也应提取）
-    const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
     if (hasContentSignal && turnCount >= 1) return true;
 
     // 3. 轮次节流：每 N 个合格轮次提取一次
@@ -1433,7 +1473,7 @@ ${candidateList}`;
    */
   private async _extractMemoriesImpl(messages: UnifiedMessage[], turnCount: number): Promise<void> {
     if (!this.llmAdapter) return;
-    if (!this.shouldExtract(turnCount)) return;
+    if (!this.shouldExtract(turnCount, messages)) return;
 
     // inProgress 互斥
     if (this.extractionGuard.inProgress) {
