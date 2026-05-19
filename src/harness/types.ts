@@ -7,7 +7,7 @@
 import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
-import type { ExecutionPlan, ExecutionPlanPatch } from '../types/execution-plan.js';
+import type { TaskGraphView, TaskGraphPatch } from '../types/task-graph-view.js';
 
 // ─── 上下文组装 ───
 
@@ -175,8 +175,8 @@ export interface HarnessConfig {
 /**
  * Harness 循环中每一步的事件回调。
  *
- * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 来自 Execution Transparency Layer
- *（当前 `isExecutionPlanEnabled()` 恒为 true）；其他事件类型不受影响。
+ * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 保留给前端兼容（Phase 13）；
+ * 新事件 `task_graph_*` 由 TaskGraph 驱动。
  */
 export interface HarnessStepEvent {
   type:
@@ -227,12 +227,12 @@ export interface HarnessStepEvent {
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */
   memoryDetail?: string;
-  /** 执行计划全量载荷（仅 type === 'execution_plan_init'） */
-  plan?: ExecutionPlan;
+  /** TaskGraph 全量视图（仅 type === 'execution_plan_init'） */
+  plan?: TaskGraphView;
   /** 执行计划 ID（仅 type === 'execution_plan_update'） */
   planId?: string;
-  /** 执行计划增量补丁（仅 type === 'execution_plan_update'） */
-  patch?: ExecutionPlanPatch;
+  /** TaskGraph 增量补丁（仅 type === 'execution_plan_update'） */
+  patch?: TaskGraphPatch;
 }
 
 /**

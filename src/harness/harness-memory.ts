@@ -210,7 +210,7 @@ import {
   buildPlanFence,
   ICECODER_PLAN_FENCE_LANG,
 } from '../memory/file-memory/execution-plan-fence.js';
-import type { ExecutionPlan } from '../types/execution-plan.js';
+// ExecutionPlan type removed (Phase 11)
 
 /**
  * 把 session-notes 文本中所有 `icecoder-plan` fence 移除（用于追加最新 plan 前去重）。
@@ -1093,7 +1093,7 @@ ${candidateList}`;
    * 从 session-notes.md 中的 plan fence 解析最近一次执行计划。
    * 由 Harness 在需要解析笔记内 plan fence 时调用（ETL 当前始终开启）。
    */
-  async hydratePlanFromSessionNotes(): Promise<ExecutionPlan | null> {
+  async hydratePlanFromSessionNotes(): Promise<any> {
     try {
       const raw = await getSessionMemoryContent(this.sessionMemoryState);
       if (!raw) return null;
@@ -1111,7 +1111,7 @@ ${candidateList}`;
    * 把当前 plan 追加写入 session-notes.md（独立 fence；不影响 runtime fence）。
    * 文件不存在或目录创建失败时静默忽略，保持与现有 fire-and-forget 一致。
    */
-  async persistPlanToSessionNotes(plan: ExecutionPlan): Promise<void> {
+  async persistPlanToSessionNotes(plan: any): Promise<void> {
     try {
       const notesPath = this.sessionMemoryState.notesPath;
       let existing = '';

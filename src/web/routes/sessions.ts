@@ -8,7 +8,7 @@ import { Router, type Request, type Response } from 'express';
 import { promises as fs } from 'node:fs';
 import path from 'path';
 import { parsePersistedPlan } from '../../memory/file-memory/execution-plan-fence.js';
-import type { ExecutionPlan } from '../../types/execution-plan.js';
+// ExecutionPlan type removed (Phase 11)
 import type { TaskCheckpoint } from '../../harness/checkpoint.js';
 
 /** 与 chat-ws.ts 使用相同解析规则，避免读写的不是同一个 default.json */
@@ -31,12 +31,12 @@ async function ensureDir(): Promise<void> {
  * 优先从 checkpoint 中取（最新），退化到 session-notes plan fence。
  * 找不到则返回 null。
  */
-async function readSessionPlan(sessionId: string): Promise<ExecutionPlan | null> {
+async function readSessionPlan(sessionId: string): Promise<any> {
   const checkpointPath = path.join(SESSIONS_DIR, `${sessionId}.checkpoint.json`);
   try {
     const raw = await fs.readFile(checkpointPath, 'utf-8');
     const cp = JSON.parse(raw) as TaskCheckpoint;
-    if (cp?.plan) return cp.plan;
+    if ((cp as any)?.plan) return (cp as any).plan;
   } catch {
     /* file missing or unparsable → fall through */
   }

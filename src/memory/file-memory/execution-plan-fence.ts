@@ -6,14 +6,41 @@
  *   - 解析时取最后一个 fence（支持多次写入累加，恢复时拿到最新状态）。
  *
  * 设计文档：docs/execution-transparency-layer.md §Session Recovery
+ *
+ * Phase 11: 类型从已删除的 execution-plan.ts 内联到这里
  */
 
-import {
-  PERSIST_PLAN_SCHEMA_VERSION,
-  type ExecutionPlan,
-  type ExecutionStep,
-  type ExecutionStepStatus,
-} from '../../types/execution-plan.js';
+// Types inlined from deleted execution-plan.ts (Phase 11)
+const PERSIST_PLAN_SCHEMA_VERSION = 1 as const;
+
+type ExecutionStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+
+interface ExecutionStep {
+  id: string;
+  title: string;
+  phase: string;
+  suggestedTools?: string[];
+  requiresTool: boolean;
+  isVerification?: boolean;
+  status: ExecutionStepStatus;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+  evidence?: string;
+}
+
+interface ExecutionPlan {
+  version: typeof PERSIST_PLAN_SCHEMA_VERSION;
+  planId: string;
+  goal: string;
+  intent: string;
+  steps: ExecutionStep[];
+  activeStepId?: string;
+  progress: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 import type { TaskIntent, TaskPhase } from '../../types/runtime-snapshot.js';
 
 /** fenced code block 语言标记 */

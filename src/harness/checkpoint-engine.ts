@@ -24,7 +24,7 @@ import path from 'node:path';
 
 import type { TaskGraphSnapshot, GraphMetrics, GraphSession } from '../types/task-graph.js';
 import type { TaskCheckpoint } from './checkpoint.js';
-import type { ExecutionPlan } from '../types/execution-plan.js';
+// ExecutionPlan type removed (Phase 11)
 import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
@@ -66,7 +66,7 @@ export interface CheckpointSaveInput {
   /** 待注入的 recovery signal（新触发的） */
   appendRecoverySignal?: RecoverySignal;
   /** ExecutionPlan，可选（仅用于读 plan.version） */
-  plan?: ExecutionPlan;
+  plan?: any; // Phase 11: ExecutionPlan type removed
   /** Harness loop 当前 stopReason（如果已停止） */
   lastStopReason?: TaskCheckpoint['stopReason'];
   /** TaskGraph 快照（Phase 6） */

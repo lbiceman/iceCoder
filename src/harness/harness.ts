@@ -39,21 +39,12 @@ import { RepoContext } from './repo-context.js';
 import { TaskCheckpointManager, type TaskCheckpointStatus, type TaskCheckpointUpdate } from './checkpoint.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
-import { buildExecutionPlan } from './execution-plan-generator.js';
-import { ExecutionPlanTracker, type ExecutionPlanEventEmitter } from './execution-plan-tracker.js';
-import { isExecutionPlanEnabled } from './execution-plan-config.js';
-import type { ExecutionPlan } from '../types/execution-plan.js';
-import {
-  shouldAttachPersistedExecutionPlan,
-  shouldAttachPlanFromSessionNotes,
-  shouldRefreshTerminalInspectPlan,
-  userMessageAlignsWithPersistedGoal,
-} from './session-plan-hydrate.js';
+// Execution plan layer removed (Phase 11) — replaced by TaskGraph
+import { shouldUseTaskGraph } from './task-graph-config.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { reviewStep, type StepReviewResult } from './step-review.js';
 import { GraphExecutor } from './task-graph-executor.js';
-import { isTaskGraphEnabled } from './task-graph-config.js';
 import type { CheckpointSaveTrigger } from '../types/runtime-checkpoint.js';
 import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
 import {
@@ -388,21 +379,16 @@ export class Harness {
   private checkpointManager?: TaskCheckpointManager;
   /** 同一 checkpoint JSON 路径上串联 TaskCheckpointManager 与 CheckpointEngine 的磁盘写，消除交叉 rename 间歇读失效。 */
   private checkpointPersistTail = Promise.resolve();
-  /** TaskGraph 执行器（ICE_TASK_GRAPH 开关控制） */
-  private graphExecutor?: GraphExecutor;
+  /** TaskGraph 执行器（Phase 11 始终开启） */
+  private graphExecutor: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
   private workspaceRoot: string;
-  /** Execution Transparency Layer 开关（构造时一次性快照） */
-  private executionPlanEnabled: boolean;
+
   /** Runtime Resilience v2（始终开启，与 isResilienceV2Enabled 一致） */
   private resilienceV2Enabled: boolean;
   /** Resilience v2：增强 checkpoint 引擎（无 sessionDir 时未创建） */
   private checkpointEngine?: CheckpointEngine;
-  /**
-   * 当前 run() 调用的执行计划追踪器。
-   * 每次 run() 开始时按需创建，结束后清空；为 undefined 表示当前任务未启用或不适合 plan。
-   */
-  private currentPlanTracker?: ExecutionPlanTracker;
+
 
   constructor(
     config: HarnessConfig,
@@ -434,7 +420,7 @@ export class Harness {
       ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
       : undefined;
     this.runtimeTelemetry = new RuntimeTelemetry(config.sessionDir, config.sessionId);
-    this.executionPlanEnabled = isExecutionPlanEnabled();
+
 
     // Resilience v2：无 sessionDir 时不创建 CheckpointEngine（v2 磁盘合并）；其余子逻辑仍开启
     this.resilienceV2Enabled = isResilienceV2Enabled();
@@ -442,10 +428,8 @@ export class Harness {
       this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
     }
 
-    // TaskGraph 集成（ICE_TASK_GRAPH 环境变量控制）
-    if (isTaskGraphEnabled()) {
-      this.graphExecutor = new GraphExecutor();
-    }
+    // TaskGraph 始终开启 (Phase 11)
+    this.graphExecutor = new GraphExecutor();
 
     // 记忆集成层
     this.memoryIntegration = new HarnessMemoryIntegration({
@@ -524,11 +508,6 @@ export class Harness {
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
-    // 每次 run 都是一次干净的 plan 生命周期
-    this.resetExecutionPlanTracker();
-    if (this.executionPlanEnabled) {
-      onStep?.({ type: 'execution_plan_clear' });
-    }
 
     // 保存用户消息用于记忆相关性检索
     this.memoryIntegration.onLoopStart(
@@ -607,37 +586,7 @@ export class Harness {
       }
     }
 
-    // checkpoint plan 与笔记 plan：均在「未完 + 与用户本轮诉求同一任务链」时才恢复，否则让首轮 maybeInit 生成新卡片
-    if (this.executionPlanEnabled) {
-      let resumePlan: ExecutionPlan | null = null;
-      const checkpointPlan = activeCheckpoint?.plan;
-      const checkpointPlanOk =
-        !!checkpointPlan
-        && !!activeCheckpoint
-        && shouldAttachPersistedExecutionPlan(
-          checkpointPlan,
-          userMessage,
-          [activeCheckpoint.userGoal],
-        );
-      if (checkpointPlanOk && checkpointPlan) {
-        resumePlan = checkpointPlan;
-      } else if (checkpointPlan) {
-        // 与 Harness 挂载结论不一致时不要留在 checkpoint，否则 GET /sessions/:id/plan 仍返回旧快照
-        await this.checkpointManager?.clearEmbeddedPlan();
-      }
-      if (!resumePlan) {
-        const fromNotes = await this.memoryIntegration.hydratePlanFromSessionNotes();
-        if (fromNotes && shouldAttachPlanFromSessionNotes(fromNotes, userMessage)) {
-          resumePlan = fromNotes;
-        }
-      }
-      if (resumePlan) {
-        this.attachExecutionPlan(resumePlan, onStep);
-      } else {
-        await this.memoryIntegration.clearPlanFenceFromSessionNotes();
-        await this.checkpointManager?.clearEmbeddedPlan();
-      }
-    }
+    // checkpoint plan resume removed (Phase 11 — TaskGraph handles context)
 
     // ── 核心循环（while(true) 迭代模式）──
     // try/finally 确保无论哪条路径退出，记忆合并都会执行一次
@@ -670,14 +619,16 @@ export class Harness {
 
       this.upsertRuntimeContextMessage(msgs, state);
 
-      // TaskGraph: init graph on first round of new task
+      // TaskGraph: init graph on first round — gated by TaskDomainGate
       if (state.turnCount === 1 && this.graphExecutor) {
         const taskSnapshot = state.taskState.snapshot();
-        this.graphExecutor.initGraph({
-          goal: taskSnapshot.goal || userMessage,
-          intent: taskSnapshot.intent,
-        });
-        onStep?.({ type: 'task_graph_init', graphGoal: taskSnapshot.goal || userMessage, graphIntent: taskSnapshot.intent });
+        if (shouldUseTaskGraph(taskSnapshot.intent)) {
+          this.graphExecutor.initGraph({
+            goal: taskSnapshot.goal || userMessage,
+            intent: taskSnapshot.intent,
+          });
+          onStep?.({ type: 'task_graph_init', graphGoal: taskSnapshot.goal || userMessage, graphIntent: taskSnapshot.intent });
+        }
       }
 
       // TaskGraph: inject node context before LLM call
@@ -707,7 +658,7 @@ export class Harness {
         });
 
         // 首轮可执行：若检测到下面对话块会判定「与上一轮 assistant 无关」则延后初始化计划，
-        // 避免任务切换分支 reset 后再初始化导致重复推送 execution_plan_init。
+        // 避免任务切换分支重复推送 plan 事件。
         const preLatest = getLatestRealUserText(msgs, userMessage);
         const preAssistant = getLastAssistantText(msgs);
         const pendingUnrelatedAssistant = !!(
@@ -715,9 +666,7 @@ export class Harness {
           && preAssistant
           && bigramJaccard(preLatest, preAssistant) < TASK_SWITCH_JACCARD_THRESHOLD
         );
-        if (!pendingUnrelatedAssistant) {
-          this.maybeInitExecutionPlan(state, userMessage, onStep);
-        }
+        // maybeInitExecutionPlan removed (Phase 11 — TaskGraph handles init)
       }
 
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
@@ -739,17 +688,12 @@ export class Harness {
               content: '[System: You have received a new task request that appears unrelated to the current pending work. Completely pause any previous task and focus only on the new instruction. Do not resume previous actions unless explicitly asked.]',
             });
             state.taskSwitchInjected = true;
-            if (this.executionPlanEnabled) {
-              this.resetExecutionPlanTracker();
-              onStep?.({ type: 'execution_plan_clear' });
-              this.maybeInitExecutionPlan(state, userMessage, onStep);
-            }
+            // Execution plan task-switch reset removed (Phase 11)
           }
         }
       }
 
-      // 同一条用户消息多段任务：inspect 计划在首轮已跑满 100% 时，为后续「实现 / 写入 / 测试」换新计划卡片
-      this.maybeRefreshExecutionPlanForContinuedWork(state, userMessage, onStep);
+      // maybeRefreshExecutionPlanForContinuedWork removed (Phase 11)
 
       // 检查用户中断
       if (this.loopController.isAborted()) {
@@ -1071,7 +1015,7 @@ export class Harness {
               formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
             ].join('\n'),
           });
-          this.currentPlanTracker?.onVerificationRequired();
+          // currentPlanTracker.onVerificationRequired removed (Phase 11)
           await this.resilienceSaveCheckpoint('verification_started', state);
           state.transition = 'stop_hook_continue';
           continue;
@@ -1092,7 +1036,7 @@ export class Harness {
         this.loopController.stop('model_done');
         const finalState = this.loopController.getState();
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
-        this.currentPlanTracker?.onFinal('model_done');
+        // currentPlanTracker.onFinal removed (Phase 11)
         await this.saveTaskCheckpoint('completed', userMessage, msgs, state, 'model_done');
         await this.resilienceSaveCheckpoint('final_draft', state, 'model_done');
         this.recordTelemetrySummary('model_done', state);
@@ -1209,7 +1153,7 @@ export class Harness {
           this.loopController.stop('circuit_breaker');
           const finalState = this.loopController.getState();
           logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
-          this.currentPlanTracker?.onFinal('circuit_breaker');
+          // currentPlanTracker.onFinal removed (Phase 11)
           await this.saveTaskCheckpoint('failed', userMessage, msgs, state, 'circuit_breaker');
           this.recordTelemetrySummary('circuit_breaker', state);
 
@@ -1320,23 +1264,7 @@ export class Harness {
       // messages 和 tools 已就地更新，直接 continue
     }
     } finally {
-      // ETL 收尾：兜底触发 onFinal（覆盖 max_output_tokens / error / stop_hook 等未走 handleStop 的 return 路径）
-      const finalStopReason = this.loopController.getState().stopReason;
-      if (finalStopReason && this.currentPlanTracker) {
-        try {
-          this.currentPlanTracker.onFinal(finalStopReason);
-        } catch (err) {
-          console.debug('[harness] plan onFinal failed:', err instanceof Error ? err.message : err);
-        }
-      }
-      // 把最终 plan 持久化到 session-notes（plan fence），以便下次跨进程恢复
-      if (this.currentPlanTracker) {
-        const finalPlan = this.currentPlanTracker.getPlan();
-        this.memoryIntegration.persistPlanToSessionNotes(finalPlan).catch((err: unknown) => {
-          console.debug('[harness] plan persist failed:', err instanceof Error ? err.message : err);
-        });
-      }
-      this.resetExecutionPlanTracker();
+      // ETL persist & reset removed (Phase 11 — TaskGraph handles persistence)
 
       // 记忆合并：fire-and-forget，不阻塞主循环返回
       // 提取/Dream/会话记忆更新在后台异步完成，
@@ -1560,12 +1488,7 @@ export class Harness {
         taskState?.recordToolResult(tc, { success, output, error });
         repoContext?.recordToolResult(tc, { success, output, error });
         if (taskState && repoContext) {
-          this.currentPlanTracker?.onToolResult(
-            tc,
-            { success, output, error },
-            taskState.snapshot(),
-            repoContext.snapshot(),
-          );
+          // currentPlanTracker.onToolResult removed (Phase 11)
         }
         this.loopController.recordToolCalls(1);
         submittedIds.add(tc.id);
@@ -1680,7 +1603,7 @@ export class Harness {
       taskState?.recordToolResult(tc, result);
       repoContext?.recordToolResult(tc, result);
       if (taskState && repoContext) {
-        this.currentPlanTracker?.onToolResult(tc, result, taskState.snapshot(), repoContext.snapshot());
+        // currentPlanTracker.onToolResult removed (Phase 11)
       }
 
       processedIds.add(tc.id);
@@ -1720,96 +1643,11 @@ export class Harness {
     }
   }
 
-  /** 清空当前 run 的 plan tracker（封装赋值以避免 TS 控制流 narrowing） */
-  private resetExecutionPlanTracker(): void {
-    this.currentPlanTracker = undefined;
-  }
 
-  /**
-   * 用一个 plan 启动 / 重置当前 run 的 tracker。
-   * 由 maybeInitExecutionPlan 与续聊恢复路径共用。
-   */
-  private attachExecutionPlan(
-    plan: ExecutionPlan,
-    onStep?: (event: HarnessStepEvent) => void,
-  ): void {
-    if (!this.executionPlanEnabled) return;
-    const emit: ExecutionPlanEventEmitter = (ev) => {
-      onStep?.(ev as HarnessStepEvent);
-    };
-    if (this.currentPlanTracker) {
-      this.currentPlanTracker.resetPlan(plan);
-    } else {
-      this.currentPlanTracker = new ExecutionPlanTracker({ plan, emit });
-    }
-  }
 
-  /**
-   * 首轮且可执行型任务：尝试构建执行计划。
-   * 已有 tracker（如续聊恢复）时不重复创建。
-   */
-  private maybeInitExecutionPlan(
-    state: LoopState,
-    userMessage: string,
-    onStep?: (event: HarnessStepEvent) => void,
-  ): void {
-    if (!this.executionPlanEnabled) return;
-    if (this.currentPlanTracker) return;
+  // attachExecutionPlan + maybeInitExecutionPlan removed (Phase 11 — TaskGraph handles context)
 
-    const realUser = getLatestRealUserText(state.messages, userMessage);
-    if (!realUser?.trim()) return;
-
-    const snap = state.taskState.snapshot();
-    const planGoal = realUser.trim();
-    const planIntent = inferIntent(planGoal);
-    const taskSnapshotForPlan = userMessageAlignsWithPersistedGoal(snap.goal, realUser)
-      ? snap
-      : undefined;
-
-    const plan = buildExecutionPlan({
-      goal: planGoal,
-      intent: planIntent,
-      taskSnapshot: taskSnapshotForPlan,
-    });
-    if (!plan) return;
-
-    this.attachExecutionPlan(plan, onStep);
-  }
-
-  /**
-   * 单次 run、多轮工具后：第一段 inspect 已到 100% 但仍有实现类工作时重建计划。
-   */
-  private maybeRefreshExecutionPlanForContinuedWork(
-    state: LoopState,
-    userMessage: string,
-    onStep?: (event: HarnessStepEvent) => void,
-  ): void {
-    if (!this.executionPlanEnabled) return;
-    if (!this.currentPlanTracker) return;
-    if (state.turnCount < 2) return;
-
-    const plan = this.currentPlanTracker.getPlan();
-    const snap = state.taskState.snapshot();
-    const realUser = getLatestRealUserText(state.messages, userMessage);
-    if (!realUser?.trim()) return;
-
-    if (!shouldRefreshTerminalInspectPlan(plan, snap, realUser)) return;
-
-    const planGoal = realUser.trim();
-    const planIntent = inferIntent(planGoal);
-    const taskSnapshotForPlan = userMessageAlignsWithPersistedGoal(snap.goal, realUser) ? snap : undefined;
-    const newPlan = buildExecutionPlan({
-      goal: planGoal,
-      intent: planIntent,
-      taskSnapshot: taskSnapshotForPlan,
-    });
-    if (!newPlan) {
-      this.resetExecutionPlanTracker();
-      onStep?.({ type: 'execution_plan_clear' });
-      return;
-    }
-    this.attachExecutionPlan(newPlan, onStep);
-  }
+  // maybeRefreshExecutionPlanForContinuedWork removed (Phase 11 — TaskGraph replaces it)
 
   private async saveTaskCheckpoint(
     status: TaskCheckpointStatus,
@@ -1840,9 +1678,6 @@ export class Harness {
           failedToolCalls,
           stopReason,
         };
-        if (this.executionPlanEnabled) {
-          checkpointSave.plan = this.currentPlanTracker?.getPlan() ?? null;
-        }
         await this.checkpointManager!.save(checkpointSave);
       } catch (err) {
         console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
@@ -1894,7 +1729,7 @@ export class Harness {
     this.loopController.stop(reason);
     const state = this.loopController.getState();
     logger.loopStop(reason, state.currentRound, state.totalToolCalls);
-    this.currentPlanTracker?.onFinal(reason);
+    // currentPlanTracker.onFinal removed (Phase 11)
     await this.saveTaskCheckpoint(
       reason === 'user_abort' ? 'aborted' : reason === 'error' ? 'failed' : 'paused',
       getLatestRealUserText(messages, '') || '',
@@ -2156,13 +1991,7 @@ export class Harness {
     return this.loopController.getState();
   }
 
-  /**
-   * 当前 run 的执行计划快照；未生成或为 `question` 意图时可能为 `undefined`。
-   * 生产环境以前端 WS `execution_plan_*` 为准，此接口侧重调试与测试。
-   */
-  getExecutionPlan(): ExecutionPlan | undefined {
-    return this.currentPlanTracker?.getPlan();
-  }
+  // getExecutionPlan removed (Phase 11 — execution plan layer deleted)
 
   /**
    * 获取停止钩子管理器（用于注册自定义钩子）。
@@ -2400,14 +2229,11 @@ export class Harness {
     try {
       const recentTools = collectRecentToolTraces(state.messages, 5);
       const lastErrors = collectRecentErrors(state.messages, 3);
-      const planActive = this.currentPlanTracker?.getPlan();
-      const activeStep = planActive?.activeStepId
-        ? planActive.steps.find(s => s.id === planActive.activeStepId)
-        : undefined;
+      // planActive/activeStep removed (Phase 11 — currentPlanTracker deleted)
 
       const result = await reviewStep({
         goal: state.taskState.snapshot().goal,
-        currentStep: activeStep?.title,
+        currentStep: undefined, // activeStep removed (Phase 11)
         recentTools,
         lastErrors,
         trigger,
@@ -2452,21 +2278,14 @@ export class Harness {
     if (!state) return;
 
     const engine = this.checkpointEngine;
-    const plan = this.currentPlanTracker?.getPlan();
-    const activeStep = plan?.activeStepId
-      ? plan.steps.find(s => s.id === plan.activeStepId)
-      : undefined;
 
     await this.enqueueCheckpointPersist(async () => {
       try {
         await engine.save({
           trigger,
           branchBudget: state.branchBudget,
-          currentStepId: plan?.activeStepId,
-          currentStepTitle: activeStep?.title,
           verificationPending: state.taskState.shouldBlockFinalForVerification(),
           lastStopReason: stopReason,
-          ...(plan ? { plan } : {}),
         });
       } catch (err) {
         console.debug(

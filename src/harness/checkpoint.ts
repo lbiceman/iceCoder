@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
-import type { ExecutionPlan } from '../types/execution-plan.js';
+// ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
 
@@ -29,8 +29,7 @@ export interface TaskCheckpoint {
   };
   createdAt: string;
   updatedAt: string;
-  /** Execution Transparency Layer 持久化的执行计划（feature flag 关时不写入） */
-  plan?: ExecutionPlan;
+  // plan field removed (Phase 11)
 }
 
 export interface TaskCheckpointUpdate {
@@ -42,8 +41,7 @@ export interface TaskCheckpointUpdate {
   messages: UnifiedMessage[];
   failedToolCalls?: string[];
   stopReason?: StopReason;
-  /** 显式 `null`：从 checkpoint 中移除已持久化的 plan（与「省略字段则保留旧值」区分） */
-  plan?: ExecutionPlan | null;
+  // plan field removed (Phase 11)
 }
 
 export class TaskCheckpointManager {
@@ -68,15 +66,7 @@ export class TaskCheckpointManager {
   async save(update: TaskCheckpointUpdate): Promise<TaskCheckpoint> {
     const existing = await this.readExisting();
     const now = new Date().toISOString();
-    let planField: { plan?: ExecutionPlan } = {};
-    if (Object.prototype.hasOwnProperty.call(update, 'plan')) {
-      if (update.plan != null) {
-        planField = { plan: update.plan };
-      }
-      // update.plan === null：不写 plan（从 JSON 去掉），表示本轮无附着计划
-    } else if (existing?.plan) {
-      planField = { plan: existing.plan };
-    }
+    // planField logic removed (Phase 11)
 
     const checkpoint: TaskCheckpoint = {
       version: 1,
@@ -99,7 +89,7 @@ export class TaskCheckpointManager {
       },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      ...planField,
+      // ...planField removed (Phase 11)
     };
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
@@ -109,24 +99,7 @@ export class TaskCheckpointManager {
     return checkpoint;
   }
 
-  /**
-   * 从磁盘 checkpoint 移除已保存的 execution plan。
-   * 与「本轮不向 UI 恢复 plan」一致，避免 GET /sessions/:id/plan 仍为旧快照。
-   */
-  async clearEmbeddedPlan(): Promise<void> {
-    try {
-      const existing = await this.readExisting();
-      if (!existing?.plan) return;
-      const checkpoint = { ...existing };
-      delete checkpoint.plan;
-      const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
-      await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
-      await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
-      await fs.rename(tmpPath, this.checkpointPath);
-    } catch {
-      /* ignore missing / malformed checkpoint */
-    }
-  }
+  // clearEmbeddedPlan removed (Phase 11 — execution plan layer deleted)
 
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
     const lines = [
@@ -137,17 +110,7 @@ export class TaskCheckpointManager {
       JSON.stringify(checkpoint, null, 2),
     ];
 
-    const plan = checkpoint.plan;
-    if (plan && plan.activeStepId) {
-      const active = plan.steps.find(s => s.id === plan.activeStepId);
-      if (active) {
-        lines.push(
-          '',
-          `[Plan Recovery] Previously you were at step "${active.title}" (status=${active.status}).`,
-          'Continue from this step. Do not regenerate the plan.',
-        );
-      }
-    }
+    // Plan Recovery removed (Phase 11)
 
     lines.push('</resume-checkpoint>');
     return { role: 'user', content: lines.join('\n') };
