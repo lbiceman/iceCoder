@@ -11,6 +11,8 @@ window.ChatPetBridge = (function () {
   var sessionPet = null;
   var currentTurnCount = 0;
   var petUiSessionActive = false;
+  var lastIsStreaming = false;
+  var lastWsProcessing = false;
   var lastToolProgressHint = '';
   var memoryNoticeResetTimer = null;
   var MEMORY_NOTICE_MS = 5200;
@@ -23,25 +25,61 @@ window.ChatPetBridge = (function () {
     sessionPet = pet;
   }
 
+  function hasLiveExecutionPlan() {
+    var P = window.ChatExecutionPlan;
+    if (!P || typeof P.getPlan !== 'function') return false;
+    if (typeof P.isPanelSuppressed === 'function' && P.isPanelSuppressed()) return false;
+    var plan = P.getPlan();
+    return !!(plan && plan.steps && plan.steps.length);
+  }
+
+  /**
+   * 有执行计划时底部显示步骤进度摘要；否则回退为「第 N 轮」。
+   */
+  function syncExecPlanFoot() {
+    if (!sessionPet) return;
+    if (hasLiveExecutionPlan()) {
+      sessionPet.setTurnLabel(
+        ChatExecutionPlan.formatFootSummary(ChatExecutionPlan.getPlan()),
+      );
+      return;
+    }
+    sessionPet.setTurnLabel(
+      petUiSessionActive || lastWsProcessing || lastIsStreaming
+        ? currentTurnCount
+          ? '第 ' + currentTurnCount + ' 轮'
+          : ''
+        : '',
+    );
+  }
+
   function showThinking(withFile) {
     currentTurnCount = 0;
     petUiSessionActive = true;
+    lastIsStreaming = false;
+    lastWsProcessing = true;
     if (!sessionPet) return;
     sessionPet.setVisible(true);
     sessionPet.setState('thinking');
-    sessionPet.setTurnLabel('');
     sessionPet.setBubbleText(withFile ? '解析文件中…' : '');
+    syncExecPlanFoot();
   }
 
   function updateTurnCounter(turn, isStreaming, wsProcessing) {
+    lastIsStreaming = !!isStreaming;
+    lastWsProcessing = !!wsProcessing;
     if (turn > currentTurnCount) {
       currentTurnCount = turn;
     }
     if (sessionPet) {
+      if (hasLiveExecutionPlan()) {
+        syncExecPlanFoot();
+        return;
+      }
       sessionPet.setTurnLabel(
         petUiSessionActive || wsProcessing || isStreaming
           ? currentTurnCount ? '第 ' + currentTurnCount + ' 轮' : ''
-          : ''
+          : '',
       );
     }
   }
@@ -50,6 +88,8 @@ window.ChatPetBridge = (function () {
     currentTurnCount = 0;
     lastToolProgressHint = '';
     petUiSessionActive = false;
+    lastIsStreaming = !!isStreaming;
+    lastWsProcessing = !!wsProcessing;
     if (memoryNoticeResetTimer) {
       clearTimeout(memoryNoticeResetTimer);
       memoryNoticeResetTimer = null;
@@ -58,6 +98,7 @@ window.ChatPetBridge = (function () {
     sessionPet.setState('idle');
     sessionPet.setBubbleText('');
     sessionPet.setTurnLabel('');
+    syncExecPlanFoot();
   }
 
   function updateStatusText(text, isStreaming, wsProcessing) {
@@ -134,6 +175,26 @@ window.ChatPetBridge = (function () {
         sessionPet.setState('focused');
         bubble(step.content || '整理上下文中…');
         break;
+      case 'task_graph_init':
+        sessionPet.setState('thinking');
+        bubble('任务图已启动');
+        break;
+      case 'task_graph_node':
+        if (step.graphStatus === 'failed') {
+          sessionPet.setState('alert');
+          bubble('节点失败');
+        } else {
+          sessionPet.setState('thinking');
+        }
+        break;
+      case 'task_graph_branch':
+        sessionPet.setState('alert');
+        bubble(step.message || '分支切换');
+        break;
+      case 'task_graph_done':
+        sessionPet.setState('happy');
+        bubble('任务图完成');
+        break;
       case 'final':
         {
           var sr = step.stopReason;
@@ -170,16 +231,14 @@ window.ChatPetBridge = (function () {
         {
           var mk = step.memoryKind;
           var memDefaults = {
-            recall_hit: '想起了相关记忆',
-            recall_coarse_hit: '预检索命中记忆',
+            recall_hit: '记忆已并入',
+            recall_coarse_hit: '首轮记忆已并入',
             recall_empty: '未找到可注入的相关记忆',
             recall_skipped: '本轮未注入记忆',
             session_hydrate: '已恢复会话状态',
           };
-          if (mk === 'recall_hit') {
+          if (mk === 'recall_hit' || mk === 'recall_coarse_hit') {
             sessionPet.setState('love');
-          } else if (mk === 'recall_coarse_hit') {
-            sessionPet.setState('curious');
           } else if (mk === 'recall_empty') {
             sessionPet.setState('sad');
           } else if (mk === 'recall_skipped') {
@@ -191,6 +250,38 @@ window.ChatPetBridge = (function () {
           }
           var memLine = step.memoryDetail || (mk ? memDefaults[mk] : '') || '';
           if (memLine) bubble(memLine);
+        }
+        break;
+      case 'execution_plan_init':
+        {
+          sessionPet.setState('surprised');
+          var planIntent = step.plan && step.plan.intent;
+          var planIntros = {
+            edit: '拆成几步搞定',
+            debug: '先复现 → 修 → 验',
+            test: '跑测试 → 看失败 → 调',
+            refactor: '先看引用，再批改',
+            inspect: '读一下相关位置',
+            docs: '先看现状再写',
+          };
+          bubble(planIntros[planIntent] || '已生成执行计划');
+        }
+        break;
+      case 'execution_plan_update':
+        {
+          var patch = step.patch;
+          var sp = patch && patch.stepPatches && patch.stepPatches[0];
+          if (sp && sp.status === 'failed') {
+            sessionPet.setState('weary');
+            if (sp.error) bubble(sp.error);
+          } else if (sp && sp.status === 'running') {
+            sessionPet.setState('working');
+          } else if (typeof patch.progress === 'number' && patch.progress === 100) {
+            sessionPet.setState('happy');
+            bubble('计划全部完成');
+          } else if (sp && sp.status === 'done') {
+            sessionPet.setState('playful');
+          }
         }
         break;
       default:
@@ -317,5 +408,6 @@ window.ChatPetBridge = (function () {
     applyTunnelReadyToPet: applyTunnelReadyToPet,
     getSessionPet: getSessionPet,
     isSessionActive: isSessionActive,
+    syncExecPlanFoot: syncExecPlanFoot,
   };
 })();

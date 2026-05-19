@@ -29,7 +29,7 @@ export {
   DEFAULT_EFFECTIVE_CONTEXT_WINDOW,
 } from './context-window-tier.js';
 export type { ContextWindowTier } from './context-window-tier.js';
-export { HarnessLogger } from './logger.js';
+export { HarnessLogger, type LlmRoundLogMeta, type LlmRoundTokenUsage } from './logger.js';
 export { StopHookManager } from './stop-hooks.js';
 export { TokenBudgetTracker } from './token-budget.js';
 export { StreamingToolExecutor } from './streaming-tool-executor.js';
@@ -54,3 +54,24 @@ export type { HarnessLogEntry } from './logger.js';
 export type { StopHookResult, StopHookFn } from './stop-hooks.js';
 export type { TokenBudgetConfig } from './token-budget.js';
 export type { StreamingToolResult } from './streaming-tool-executor.js';
+
+// TaskGraph
+export { createTaskGraph, getCurrentNode, advanceCursor, markGraphDone, toSnapshot, applySnapshot } from './task-graph.js';
+export { buildGraph, discoverRepoShape } from './task-graph-builder.js';
+export { ContractValidator, DeviationDetector, FailureClassifier, EscalationManager, NodeCostTrackerImpl } from './task-graph-review.js';
+export { GraphExecutor } from './task-graph-executor.js';
+// isTaskGraphEnabled removed (Phase 11 — TaskGraph always on)
+export {
+  serializeGraphSnapshot,
+  deserializeGraphSnapshot,
+  buildGraphFence,
+  buildMetricsFence,
+  buildDebugFence,
+  parseGraphFence,
+  parseMetricsFence,
+  parseDebugFence,
+  parsePersistedTaskGraph,
+  ICECODER_GRAPH_FENCE_LANG,
+  ICECODER_METRICS_FENCE_LANG,
+  ICECODER_DEBUG_FENCE_LANG,
+} from './task-graph-persistence.js';

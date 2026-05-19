@@ -860,8 +860,7 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-4px); }
 }
-.session-pet-indicator .pet-bubble,
-.session-pet-indicator .status-turn {
+.session-pet-indicator .pet-bubble {
   pointer-events: none;
 }
 .session-pet-indicator .status-turn {
@@ -869,6 +868,26 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   opacity: 0.85;
+  pointer-events: none;
+  max-width: min(90vw, 320px);
+  text-align: center;
+  word-break: break-word;
+}
+/* 有执行计划时底部摘要可 hover / 点击展开详情 popover */
+.session-pet-indicator .status-turn.exec-plan-anchor {
+  pointer-events: auto;
+  cursor: help;
+  color: var(--text-secondary, #b9c0d4);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.session-pet-indicator .status-turn.exec-plan-anchor:hover,
+.session-pet-indicator .status-turn.exec-plan-anchor:focus-visible {
+  color: var(--text-primary);
+  outline: none;
+  background: rgba(107, 156, 255, 0.12);
 }
 .pet-token-hint {
   display: block;

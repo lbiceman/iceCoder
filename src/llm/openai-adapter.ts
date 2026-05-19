@@ -16,7 +16,9 @@ import type {
   ToolDefinition,
   UnifiedMessage,
 } from './types.js';
+import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
+import { prepareToolsForChatCompletions } from './tool-offering.js';
 
 /**
  * OpenAI 适配器的配置。
@@ -102,7 +104,14 @@ export class OpenAIAdapter implements ProviderAdapter {
 
       const elapsed = Date.now() - startTime;
       const usage = (response as OpenAI.ChatCompletion).usage;
-      console.log(`[OpenAI] chat 响应 ← ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'}→${usage?.completion_tokens ?? '?'}`);
+      const pc = usage ? extractPromptCacheFromChatUsage(usage) : {};
+      const cacheFrag =
+        pc.cacheReadTokens != null || pc.cacheMissTokens != null
+          ? ` | cache_hit/miss=${pc.cacheReadTokens ?? '?'}/${pc.cacheMissTokens ?? '?'}`
+          : '';
+      console.log(
+        `[OpenAI] chat 响应: ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'} | ${usage?.completion_tokens ?? '?'}${cacheFrag}`,
+      );
 
       return this.convertResponse(response as OpenAI.ChatCompletion);
     } catch (error) {
@@ -137,6 +146,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
       let promptTokens = 0;
       let completionTokens = 0;
+      let lastUsageExtras: ReturnType<typeof extractPromptCacheFromChatUsage> = {};
 
       for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta;
@@ -184,13 +194,20 @@ export class OpenAIAdapter implements ProviderAdapter {
         if (chunk.usage) {
           promptTokens = chunk.usage.prompt_tokens ?? 0;
           completionTokens = chunk.usage.completion_tokens ?? 0;
+          lastUsageExtras = extractPromptCacheFromChatUsage(chunk.usage);
         }
       }
 
       callback('', true);
 
       const elapsed = Date.now() - startTime;
-      console.log(`[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} / ${completionTokens}`);
+      const streamCacheFrag =
+        lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
+          ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`
+          : '';
+      console.log(
+        `[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} | ${completionTokens}${streamCacheFrag}`,
+      );
 
       const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
 
@@ -203,6 +220,7 @@ export class OpenAIAdapter implements ProviderAdapter {
           outputTokens: completionTokens,
           totalTokens: promptTokens + completionTokens,
           provider: this.name,
+          ...lastUsageExtras,
         },
         finishReason,
       };
@@ -483,9 +501,10 @@ export class OpenAIAdapter implements ProviderAdapter {
       params.presence_penalty = options.presencePenalty;
     }
 
-    // 处理工具（Function Calling）
-    if (options.tools && options.tools.length > 0) {
-      params.tools = this.convertToolDefinitions(options.tools);
+    // 处理工具（Function Calling）；排序 + 可选瘦描述 → 前缀更稳、更小
+    const prepared = prepareToolsForChatCompletions(options.tools);
+    if (prepared && prepared.length > 0) {
+      params.tools = this.convertToolDefinitions(prepared);
     }
 
     // 透传提供者特定参数（如 NVIDIA 的 chat_template_kwargs）
@@ -530,6 +549,8 @@ export class OpenAIAdapter implements ProviderAdapter {
 
     const toolCalls = this.parseToolCalls(message?.tool_calls);
 
+    const cacheSlice = extractPromptCacheFromChatUsage(response.usage ?? null);
+
     return {
       content,
       reasoningContent,
@@ -537,8 +558,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       usage: {
         inputTokens: response.usage?.prompt_tokens ?? 0,
         outputTokens: response.usage?.completion_tokens ?? 0,
-        totalTokens: response.usage?.total_tokens ?? 0,
+        totalTokens:
+          response.usage?.total_tokens
+          ?? (response.usage?.prompt_tokens ?? 0) + (response.usage?.completion_tokens ?? 0),
         provider: this.name,
+        ...cacheSlice,
       },
       finishReason: this.mapFinishReason(choice?.finish_reason),
     };

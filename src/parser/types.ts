@@ -15,6 +15,7 @@ export interface FileParserStrategy {
 /**
  * 文件解析操作的结果。
  */
+// execution-plan probe
 export interface ParseResult {
   success: boolean;
   content: string;

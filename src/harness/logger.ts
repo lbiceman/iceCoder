@@ -40,9 +40,20 @@ export interface HarnessLogEntry {
   data?: Record<string, any>;
 }
 
-/**
- * HarnessLogger 收集结构化日志，方便观察 AI 的每一步行为。
- */
+/** 单轮 LLM 返回的 usage 日志（不含明文内容） */
+export interface LlmRoundTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheMissTokens?: number;
+}
+
+export interface LlmRoundLogMeta {
+  messageCount: number;
+  /** 本地估算的消息文本+结构 token（与 provider prompt_tokens 口径不同，仅作对比） */
+  estContextTokens: number;
+}
+
 export class HarnessLogger {
   private entries: HarnessLogEntry[] = [];
   private currentRound: number = 0;
@@ -74,12 +85,20 @@ export class HarnessLogger {
   /**
    * LLM 返回 — 只记录行为类型，不记录内容。
    */
-  llmResponseFinal(tokenUsage: { input: number; output: number }): void {
-    this.log('llm_response', `← LLM 返回最终回复 | tokens: ${tokenUsage.input}→${tokenUsage.output}`);
+  llmResponseFinal(usage: LlmRoundTokenUsage, meta: LlmRoundLogMeta): void {
+    this.log(
+      'llm_response',
+      `← LLM 返回最终回复 | prompt→completion: ${usage.inputTokens}→${usage.outputTokens}${this.formatCacheSuffix(usage)} | msgs=${meta.messageCount} ~estCtxTok=${meta.estContextTokens}`,
+      { usage, meta },
+    );
   }
 
-  llmResponseToolCalls(count: number, tokenUsage: { input: number; output: number }): void {
-    this.log('llm_response', `← LLM 请求 ${count} 个工具调用 | tokens: ${tokenUsage.input}→${tokenUsage.output}`);
+  llmResponseToolCalls(count: number, usage: LlmRoundTokenUsage, meta: LlmRoundLogMeta): void {
+    this.log(
+      'llm_response',
+      `← LLM 请求 ${count} 个工具调用 | prompt→completion: ${usage.inputTokens}→${usage.outputTokens}${this.formatCacheSuffix(usage)} | msgs=${meta.messageCount} ~estCtxTok=${meta.estContextTokens}`,
+      { usage, meta, toolCallCount: count },
+    );
   }
 
   /**
@@ -119,8 +138,21 @@ export class HarnessLogger {
   /**
    * 上下文压缩。
    */
-  compaction(before: number, after: number): void {
-    this.log('compaction', `📦 上下文压缩: ${before} → ${after} 条消息`);
+  compaction(
+    beforeMsgs: number,
+    afterMsgs: number,
+    beforeTokens?: number,
+    afterTokens?: number,
+  ): void {
+    const tok =
+      beforeTokens !== undefined && afterTokens !== undefined
+        ? ` | ~estCtxTok ${Math.round(beforeTokens)}→${Math.round(afterTokens)}`
+        : '';
+    this.log(
+      'compaction',
+      `📦 上下文压缩: ${beforeMsgs} → ${afterMsgs} 条消息${tok}`,
+      { beforeMsgs, afterMsgs, beforeTokens, afterTokens },
+    );
   }
 
   /**
@@ -152,6 +184,18 @@ export class HarnessLogger {
     for (const entry of this.entries) {
       console.log(`[harness] ${entry.detail}`);
     }
+  }
+
+  private formatCacheSuffix(usage: LlmRoundTokenUsage): string {
+    const hit = usage.cacheReadTokens;
+    const miss = usage.cacheMissTokens;
+    if (hit === undefined && miss === undefined) return '';
+    const h = hit ?? 0;
+    const m = miss ?? 0;
+    const denom = h + m;
+    const pct = denom > 0 ? Math.round((100 * h) / denom) : null;
+    const pctStr = pct === null ? 'n/a' : `${pct}%`;
+    return ` | cache_hit/miss=${h}/${m} (${pctStr} hit of hit+miss)`;
   }
 
   private log(event: HarnessLogEntry['event'], detail: string, data?: Record<string, any>): void {

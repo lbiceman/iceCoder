@@ -1,6 +1,6 @@
 ﻿# iceCoder
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole context injection source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (including `CheckpointEngine` v2 fields layered on legacy checkpoints), file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
 
 **Stack:** Node.js 18+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
@@ -8,7 +8,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
-[中文文档](./README.zh-CN.md) | [Next Work](./nextWork.md)
+[中文文档](./README.zh-CN.md) | [Next Work](./docs/nextWork.md)
 
 ---
 
@@ -27,6 +27,8 @@ The core Runtime P0/P1 work has been implemented:
 - Repeated failed tool calls are detected and the model is instructed to change strategy.
 - Session memory supports forced update before compaction.
 - Memory prompts have been tightened to prefer precise, evidence-backed long-term memories.
+- **TaskGraph** is the sole structured execution context injected into LLM prompts for critical intents (`edit`, `debug`, `test`, `refactor`); legacy **`execution_plan_*`** WebSocket events remain for frontend compatibility only.
+- **Runtime Resilience v2**: `CheckpointEngine` augments the same `{session}.checkpoint.json` with `runtimeV2` telemetry while staying backward-compatible with legacy checkpoint readers.
 - A minimal `npm run eval:agent` skeleton defines future **runtime** metrics (naming is historical).
 
 Verification:
@@ -37,7 +39,7 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth for counts and pass/fail. The suite is organized under `test/**/*.test.ts` (on the order of **three dozen** files and **550+** examples—numbers drift as tests are added).
+Treat **`npm test`** as the source of truth for counts and pass/fail. The suite lives under `test/**/*.test.ts` (on the order of **60+** test files; case counts drift as tests are added).
 
 ---
 
@@ -52,6 +54,7 @@ User / CLI / Web / Remote
       -> ToolExecutor
       -> HarnessMemoryIntegration
       -> ContextCompactor
+      -> GraphExecutor (TaskGraph) + TaskCheckpointManager / CheckpointEngine
   -> Harness.run()
 ```
 
@@ -66,6 +69,7 @@ initialize RepoContext
 while running:
   maybe compact context
   inject runtime state and repo context
+  coarse keyword memory recall (pre-LLM, up to 3 files)
   normalize messages
   call LLM with tools
   if toolCalls:
@@ -107,6 +111,32 @@ Key runtime protections:
 ### Tool planner
 
 On the first user turn of an executable engineering task, the Harness may inject a **tool planner** hint: a short list of **2–3 suggested tool names** derived from `taskState.intent` (see `src/harness/tool-plan-intent-map.ts` and `src/harness/tool-planner.ts`). This reduces hesitant openings where the model chats instead of acting.
+
+### TaskGraph (replaces Execution Transparency Layer)
+
+The Harness loop integrates **TaskGraph** as the **sole context injection source** for LLM prompts (Phase 11–13). TaskGraph replaces the legacy Execution Transparency Layer (ETL).
+
+- **Generation**: `buildGraph()` (`task-graph-builder.ts`) constructs a multi-step task graph from intent snapshots; `GraphExecutor` (`task-graph-executor.ts`) manages graph lifecycle, node context injection, tool call validation, and round evaluation.
+- **Context injection**: `GraphExecutor.getCurrentNodeContext()` returns the **only** structured context appended to LLM prompts — no other execution plan data enters the model. Non-critical intents (`question`, `inspect`, `explain`) skip graph initialization via **TaskDomainGate** (`shouldUseTaskGraph()` in `task-graph-config.ts`), preserving free-mode operation.
+- **Events**: Graph lifecycle emits **`task_graph_init`** / **`task_graph_node`** / **`task_graph_branch`** / **`task_graph_done`** on the `HarnessStepEvent` channel. Legacy `execution_plan_*` event types are retained for frontend compatibility only.
+- **Persistence**: Legacy checkpoint `plan` field and `ExecutionPlan` types have been removed (Phase 11). TaskGraph state persists through `checkpoint-engine.ts` `runtimeV2` field.
+
+Key files:
+- `src/types/task-graph.ts` — core graph data model
+- `src/types/task-graph-view.ts` — UI view model types
+- `src/harness/task-graph.ts` — graph state machine
+- `src/harness/task-graph-builder.ts` — graph construction
+- `src/harness/task-graph-executor.ts` — Harness integration bridge
+- `src/harness/task-graph-review.ts` — contract validation, deviation detection, failure classification
+- `src/harness/task-graph-config.ts` — TaskDomainGate (`shouldUseTaskGraph`)
+
+### CheckpointEngine (Runtime Resilience v2)
+
+`CheckpointEngine` (`src/harness/checkpoint-engine.ts`) wraps the existing **`TaskCheckpointManager`** writes for the **same** `{sessionId}.checkpoint.json` file:
+
+- **`TaskCheckpoint`** (v1) fields remain authoritative for resumes and tooling; **`runtimeV2`** is an **additive** sibling object for richer telemetry-style history (recent tools, failures, recovery signals, **branch budget** snapshots via `branch-budget.ts`).
+- Older files without `runtimeV2` still load cleanly; saves merge v1 + v2 without conflicting renames (`checkpointPersistTail` serializes writes in Harness).
+- Triggers mirror the long-session design (step/tool/verification/compaction milestones — see `docs/requirement/长时间连续工作-finish.md`).
 
 ---
 
@@ -200,21 +230,41 @@ conversation
   -> decay / eviction
 ```
 
-### Recall Flow
+### Recall Flow (dual-phase)
+
+Memory injection runs in **two phases** inside `HarnessMemoryIntegration` (`src/harness/harness-memory.ts`):
+
+| Phase | When | LLM? | `recallPhase` telemetry |
+|-------|------|------|-------------------------|
+| **Coarse pre-LLM** | Before every main LLM call (`harness.ts`) | **No** — `llmAdapter` is passed as `null` | `coarse_pre_llm` |
+| **Standard** | After tool rounds, before the next LLM call | **Maybe** — see gates below | `standard` |
+
+Coarse recall returns up to **3** files via keyword/TF-IDF only (fast, ~3s typical). It does **not** set `injectedForCurrentMessage`, so standard recall can still run after tools.
+
+Standard recall pipeline (`src/memory/file-memory/memory-recall.ts`):
 
 ```text
 query
-  -> scan memory files
-  -> confidence filter
+  -> scan project + user memory dirs (scanner cache)
+  -> exclude alreadySurfaced paths (cross-turn dedup)
+  -> confidence filter (>= 0.3)
+  -> intent / level filter (execute vs inspect vs question)
+  -> dedupe conflicting memories
   -> FactIndex build/cache
-  -> LLM recall if candidate count is high enough
-  -> keyword fallback otherwise
-  -> related memory expansion
-  -> relevance gate
-  -> execution-intent filter
-  -> budget filter
-  -> JSON memory prompt injection
+  -> if llmAdapter AND filtered candidates >= 4 (LLM_RECALL_MIN_CANDIDATES):
+        LLM select files + rank facts (30s timeout) -> usedLLM: true
+     else OR empty LLM result OR timeout/error:
+        keyword fallback (TF-IDF, negation expansion, time-range boost) -> usedLLM: false
+  -> related-memory expansion (1-hop, max 3)
+  -> Harness: optional LLM rerank if candidates > 2 * finalK
+  -> relevance gate (keyword overlap; LLM rescue if pass rate low)
+  -> execution-intent filter + token budget filter
+  -> CoN + JSON prompt injection
 ```
+
+**Why telemetry may show 0% LLM recall:** coarse events always count as keyword; with a **small memory library** (e.g. &lt; 15 files), `alreadySurfaced` often leaves **&lt; 4** candidates so the LLM branch is skipped; harness **rerank** uses LLM but does **not** set `usedLLM` on recall events. See `GET /api/memory/telemetry` and `data/memory/telemetry.jsonl`.
+
+**Key constants:** `LLM_RECALL_MIN_CANDIDATES = 4`, `CONFIDENCE_FILTER_THRESHOLD = 0.3`, standard recall cooldown default **5 min** (`ICE_STANDARD_RECALL_COOLDOWN_SEC`, `0` disables). Remote overrides: `data/memory/memory-config.json` (hot-reloaded).
 
 Recent changes tightened memory behavior:
 
@@ -228,8 +278,8 @@ Recent changes tightened memory behavior:
 
 `src/memory/file-memory/memory-dream.ts` runs a periodic "dream" process (analogous to human sleep consolidation) that reviews, deduplicates, and prunes memories. Triggers:
 
-- Session threshold (every 5 sessions)
-- File count threshold (default 30 files)
+- Session threshold (local default every **5** sessions; remote `minSessions` default **3** in `data/memory/memory-config.json`)
+- File count threshold (default **10** files, `DEFAULT_DREAM_CONFIG.fileCountThreshold`)
 - New files since last dream (≥10)
 - Expired memories detected (≥3)
 - Dead links in MEMORY.md index
@@ -257,6 +307,12 @@ Safety protections:
 - Evicted files go to `evicted/` subdirectory (recoverable via `restoreEvicted()`)
 - Eviction log is written to `evicted/eviction-log.jsonl`
 - Old evicted archives are automatically pruned
+
+### Memory telemetry
+
+- **Process + JSONL:** `src/memory/file-memory/memory-telemetry.ts` writes `memory_recall` / `memory_extract` / `memory_dream` events; default log path `data/memory/telemetry.jsonl`.
+- **HTTP:** `GET /api/memory/telemetry` aggregates recent days (LLM vs keyword recall rate, extract cache hits, Dream stats, store file counts).
+- **Recall metrics:** `usedLLM` reflects only `recallRelevantMemories()` — not harness rerank or relevance-gate rescue LLM calls.
 
 ---
 
@@ -361,16 +417,17 @@ Target metrics:
 - tokens_per_successful_task
 - compaction_saved_tokens
 
-See `nextWork.md` for the next implementation steps.
+See [`docs/nextWork.md`](./docs/nextWork.md) for the next implementation steps.
 
 ---
 
 ## Web app, API, and ports
 
-- **HTTP server** (`src/index.ts`, `src/web/server.ts`): default port **`1024`** (`PORT` env). Serves the built SPA static assets in production; in development it still hosts API routes while the Vite dev server serves the UI.
+- **HTTP server** (`src/index.ts`, `src/web/server.ts`): default port **`1024`** when started via `tsx src/index.ts` / `npm run dev:api`. Serves the built SPA static assets in production; in development it still hosts API routes while the Vite dev server serves the UI.
+- **CLI `web` / `start` / `chat`**: default port **`3784`** unless `PORT` or `--port` is set (`src/cli/commands/serve.ts`, `chat.ts`).
 - **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
 - **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients can use `/api/remote` and related routes.
-- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry, files, recall test).
+- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export).
 - **Frontend** lives under `src/public/` (e.g. chat UI scripts, Ice Bean indicator). Production build output: `dist/public/`.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
@@ -403,16 +460,120 @@ CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordanc
 
 ## Configuration and environment variables
 
-| Variable | Role |
-|----------|------|
-| `ICE_CONFIG_PATH` | Path to provider + MCP config JSON (default `data/config.json`) |
-| `ICE_OUTPUT_DIR` | General output directory (default `output`) |
-| `ICE_SESSIONS_DIR` | Session data directory (default `data/sessions`) |
-| `PORT` | HTTP/API port (default `1024`) |
-| `NODE_ENV` | `production` enables production static-SPA behavior in `createServer` |
-| `ICE_CONTEXT_WINDOW` | Override context window size (see compaction section) |
-| `ICE_MCP_CONFIG_PATH` | Optional absolute path to MCP JSON (default: `<cwd>/.iceCoder/mcp.json`) |
-| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` timeout in ms (default `120000`; increase if Puppeteer or `npx` cold install exceeds it) |
+All process environment variables read under `src/` and `scripts/` are listed below (grouped; defaults follow the code).
+
+### Common environment variables
+
+#### Paths and data directories
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_DATA_DIR` | CLI `resolveDataPaths()` root; derives `config.json`, `sessions`, `memory-files`, etc. | When unset: `data/` if `data/config.json` exists, else `~/.iceCoder/` |
+| `ICE_CONFIG_PATH` | LLM provider config JSON (`providers[]`); **not** MCP | `data/config.json` |
+| `ICE_SYSTEM_PROMPT_PATH` | Override assembled `system-prompt.md` | `data/system-prompt.md` or under `ICE_DATA_DIR` |
+| `ICE_OUTPUT_DIR` | General output directory | `output` |
+| `ICE_SESSIONS_DIR` | Sessions, checkpoints, `session-notes.md` | `data/sessions` |
+| `ICE_MEMORY_DIR` | Project-level memory files | `data/memory-files` |
+| `ICE_USER_MEMORY_DIR` | User-scoped memory directory | `data/user-memory` |
+| `ICE_RUNTIME_DIR` | Harness runtime telemetry JSONL root (`runtime-telemetry.ts`) | Falls back to session dir when unset |
+
+#### HTTP server and Node
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `PORT` | HTTP/API listen port | `src/index.ts` / `dev:api`: **1024**; CLI `web`/`start`/`chat`: **3784** |
+| `NODE_ENV` | `production` serves static SPA from `dist/public` | Dev behavior when unset |
+
+#### Prompts, eval, and LLM requests
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_EVAL_MODE` | `1` skips memory extraction paths and pairs with no-tools eval | — |
+| `ICE_DISABLE_TOOLS` | `1` omits tool schemas and tool-oriented prompt sections | — |
+| `ICE_CONTEXT_WINDOW` | Override context window token cap (compaction, Ice Bean ring) | Else provider `maxContextTokens` or 128k |
+| `ICE_OPENAI_REQUEST_TIMEOUT_MS` | Per-request timeout (ms) for OpenAI-compatible providers | Adapter default ~120s |
+| `ICE_SLIM_TOOL_DESCRIPTIONS` | `1`/`true` truncates tool descriptions | Off |
+| `ICE_SLIM_TOOL_DESC_MAX_CHARS` | Max chars per truncated description | `384` |
+
+#### Harness main loop
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_HARNESS_MAX_ROUNDS` | Max rounds per `Harness.run()` | `5000` |
+| `ICE_TASK_GRAPH` | Read by `isTaskGraphEnabled()`; Harness **always** constructs `GraphExecutor` — graph init is gated by intent via `shouldUseTaskGraph` | Unset = flag off (little effect on current main path) |
+
+**Built-in (no env var):** `question` / `inspect` automatically use the casual path (light memory recall, no Tool Plan / forced-tool recovery, no Resilience checkpoints). `edit` / `debug` / `test` / `refactor` keep the full engineering path. Tune casual LLM extraction via `casualExtraction` in `data/memory/memory-config.json`.
+
+Wall-clock timeout and cumulative token budget are **hard-coded** (24h / 50M tokens). `ICE_HARNESS_TIMEOUT_*` and `ICE_HARNESS_TOKEN_BUDGET` are no longer used.
+
+#### Context compaction
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_COMPACTION_RATIO` | Hard compaction trigger ratio (of context window) | `0.88` |
+| `ICE_MICRO_COMPACT_RATIO` | Micro-compaction trigger ratio | `0.72` |
+| `ICE_COMPACTION_RESERVE_TOKENS` | Reserve tokens kept during hard compaction | `15000` |
+
+#### Memory system
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_STANDARD_RECALL_COOLDOWN_SEC` | Skip duplicate standard recall when manifest+query unchanged (seconds) | `300`; `0` disables |
+| `ICE_EXTRACTION_MAX_MESSAGES` | Max user/assistant messages in one LLM extraction pass | `80` |
+| `ICE_MEMORY_DIMENSION_DOC` | Path to memory-dimension doc for extraction prompts | `docs/记忆系统调整.md` |
+
+**Hot config (not env):** `data/memory/memory-config.json` — recall budgets, Dream gates, extraction thresholds, relevance gate (`memory-remote-config.ts`).
+
+#### Tool output and read limits
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_MAX_TOOL_OUTPUT_CHARS` | Max chars for a tool result injected into context | `24000` (clamped 8k–200k) |
+| `ICE_READ_FILE_MAX_LINES` | `read_file` max lines without offset/limit | `420` |
+| `ICE_READ_FILE_MAX_CHARS` | `read_file` soft char cap without offset/limit | `18000` |
+| `ICE_DOC_PARSE_TEXT_MAX_CHARS` | Doc-parse plain-text soft char cap | `16000` |
+
+#### Sub-agent
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_SUBAGENT_TIMEOUT_MS` | `delegate_to_subagent` envelope timeout (ms) | `120000` |
+| `ICE_SUBAGENT_CACHE_MAX_ENTRIES` | Process LRU cache entry cap | `100` |
+
+#### MCP
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_MCP_CONFIG_PATH` | Absolute path to MCP JSON | `<cwd>/.iceCoder/mcp.json` |
+| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` timeout (ms) | `120000` (min 15000) |
+
+#### Quick Tunnel / remote access
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `TUNNEL_URL` | Fixed public tunnel URL; skips metrics probing when set | — |
+| `ICE_TUNNEL_WS_NOTIFY` | Set `0` to disable tunnel-ready WebSocket push | Enabled |
+| `ICE_TUNNEL_PROBE_MS` | Poll interval for cloudflared metrics (ms) | `2500` |
+| `ICE_TUNNEL_METRICS_HOST` | cloudflared `--metrics` host | `127.0.0.1` |
+| `ICE_TUNNEL_METRICS_PORT` | cloudflared `--metrics` port | `20241` |
+| `ICE_TUNNEL_METRICS_QUICKTUNNEL` | Full metrics URL (overrides host+port) | `http://{host}:{port}/quicktunnel` |
+| `CLOUDFLARED_BIN` | `cloudflared` binary for CLI `start` | Auto-detect |
+
+#### Scripts and eval (`scripts/`)
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `ICE_AGENT_EVAL_MODE` | `npm run eval:agent` mode | `mock` |
+| `ICE_RUNTIME_TELEMETRY` | Runtime telemetry JSONL path for eval | `data/runtime/telemetry.jsonl` |
+| `ICE_AGENT_EVAL_HISTORY` | Eval history JSONL path | `data/eval/agent-eval-history.jsonl` |
+
+#### Terminal and misc
+
+| Variable | Role | Default / notes |
+|----------|------|-----------------|
+| `NO_COLOR` | Any non-empty value disables CLI ANSI colors (`terminal-ui.ts`) | — |
+
+**Web UI (browser `localStorage`, not a server env var):** `ICE_PLAN_PANEL=0` hides the task-graph / plan panel (`chat-execution-plan.js`).
 
 ---
 
@@ -422,7 +583,8 @@ CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordanc
 src/
   cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
   core/             # Orchestrator (shared file parser + LLM adapter)
-  harness/          # Harness loop, compaction, task/repo state, sub-agent, tool planner
+  harness/          # Harness, compaction, task/repo state, TaskGraph, sub-agent, tool planner,
+                    # checkpoint + CheckpointEngine v2, branch budget
   llm/              # OpenAI / Anthropic adapters
   memory/file-memory/  # File-based memory, session notes, dream, eviction
   parser/           # FileParser strategies (HTML, Office, XMind)
@@ -431,9 +593,10 @@ src/
   mcp/              # MCP client manager
   web/              # Express server, routes, WebSocket chat
   public/           # Vite root: chat UI, Ice Bean (canvas + bridge), static assets
-  types/            # Shared types (e.g. runtime snapshot schema)
+  types/            # Shared types (runtime snapshot, task-graph, runtime-checkpoint schema)
+docs/               # Requirements archives, memory benchmarks, dual-mode specs, nextWork
 test/               # Vitest suites mirroring src areas
-data/               # config, sessions, optional MCP memory file
+data/               # Provider config templates, sessions, optional MCP-side memory sample
 ```
 
 ---
@@ -461,12 +624,27 @@ Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js`
 
 ---
 
+## Design documentation
+
+Higher-level prose (beyond this README):
+
+- [`docs/nextWork.md`](./docs/nextWork.md) — active roadmap and eval gaps
+- [`docs/requirement/任务图规划-finish.md`](./docs/requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
+- [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
+- [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
+- [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — memory system adjustments
+- [`docs/双模方案2.md`](./docs/双模方案2.md) — dual-mode supervisor spec (§8.10, §14–§21, appendices A/B normative; **not yet in `src/`**)
+- [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes
+
+---
+
 ## Roadmap
 
-The remaining work is tracked in `nextWork.md`. The next high-impact items are:
+The remaining work is tracked in [`docs/nextWork.md`](./docs/nextWork.md). Representative next items:
 
 1. Memory v2 structured levels and conflict arbitration
-2. Deeper compaction/session-notes integration (token accounting, tighter recovery budget units) — structured `icecoder-runtime` snapshots already exist; see `nextWork.md`
-3. real eval runner with pass/fail scoring
-4. telemetry persistence for runtime metrics
-5. Richer model-aware planning and failure recovery strategies (beyond the current intent-based tool planner)
+2. Deeper compaction / session-notes integration (token accounting, tighter recovery budgets) — `icecoder-runtime` snapshots already exist
+3. A real eval runner with pass/fail scoring (`scripts/eval-runner.ts` exists; `npm run eval:agent` is still a skeleton)
+4. Telemetry persistence for runtime metrics
+5. **Dual-mode supervisor** — selective critical-domain regulation per [`docs/双模方案2.md`](./docs/双模方案2.md)
+6. Stronger adaptive planning beyond the intent-based tool planner (see TaskGraph requirement docs)

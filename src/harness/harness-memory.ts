@@ -37,6 +37,10 @@ import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js'
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
+import {
+  evaluateCasualMemoryExtraction,
+  shouldApplyCasualHarness,
+} from './casual-mode.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
 import {
   MEMORY_MAX_RELEVANT,
@@ -50,12 +54,32 @@ import {
 /** 话题切换 Jaccard 阈值 */
 const TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2;
 
-function memoryFilesBubbleSummary(memories: { filename: string }[], maxNames = 3): string {
+function formatMemoryFilenameListForPet(memories: { filename: string }[], maxNames: number): string {
   if (!memories.length) return '';
   const parts = memories.slice(0, maxNames).map(m => m.filename.replace(/\.md$/i, ''));
-  let s = '想起了：' + parts.join('、');
-  if (memories.length > maxNames) s += ` 等 ${memories.length} 条`;
+  let s = parts.join('、');
+  if (memories.length > maxNames) s += ` 等共 ${memories.length} 条`;
   return s;
+}
+
+/**
+ * 生成冰豆气泡文案：明确表示记忆已作为本轮 **发给模型的 user 消息** 注入上下文（`buildCoNMemoryPrompt`）。
+ * 与回合末 WebSocket `memory_notice`（💾 被动提取写入磁盘）区分。
+ *
+ * @param phase `coarse` = 首轮 LLM 前粗召回；`standard` = 标准召回
+ */
+export function formatMemoryInjectionPetMessage(
+  memories: { filename: string }[],
+  phase: 'standard' | 'coarse',
+  maxNames = 3,
+): string {
+  const list = formatMemoryFilenameListForPet(memories, maxNames);
+  const head =
+    phase === 'coarse'
+      ? '首轮已把记忆并入本回合提示'
+      : '已把记忆并入本回合提示';
+  if (!list) return `${head}（模型将参考这些记忆）`;
+  return `${head}：${list}`;
 }
 
 function emitMemoryStep(
@@ -164,6 +188,7 @@ import {
   type ExtractionGuardState,
 } from '../memory/file-memory/memory-concurrency.js';
 import {
+  getCasualExtractionConfig,
   getExtractionConfig,
   getRecallConfig,
   getRelevanceGateConfig,
@@ -185,7 +210,39 @@ import {
   parsePersistedRuntime,
   type SessionMemoryState,
 } from '../memory/file-memory/session-memory.js';
-import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import {
+  parsePersistedPlan,
+  buildPlanFence,
+  ICECODER_PLAN_FENCE_LANG,
+} from '../memory/file-memory/execution-plan-fence.js';
+// ExecutionPlan type removed (Phase 11)
+
+/**
+ * 把 session-notes 文本中所有 `icecoder-plan` fence 移除（用于追加最新 plan 前去重）。
+ */
+function stripPlanFence(notes: string): string {
+  const open = `\`\`\`${ICECODER_PLAN_FENCE_LANG}`;
+  let cursor = 0;
+  let out = '';
+  while (cursor < notes.length) {
+    const idx = notes.indexOf(open, cursor);
+    if (idx === -1) {
+      out += notes.slice(cursor);
+      break;
+    }
+    out += notes.slice(cursor, idx);
+    const close = notes.indexOf('```', idx + open.length);
+    if (close === -1) {
+      out += notes.slice(idx);
+      break;
+    }
+    cursor = close + 3;
+    // 同时吃掉紧跟的换行（避免多余空行累积）
+    if (notes[cursor] === '\n') cursor++;
+  }
+  return out;
+}
+import type { TaskIntent, TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { TaskState } from './task-state.js';
 import type { RepoContext } from './repo-context.js';
 
@@ -202,7 +259,7 @@ export interface HarnessMemoryConfig {
 }
 
 /** 记忆注入模式 */
-export type InjectMemoryMode = 'default' | 'coarse_pre_llm';
+export type InjectMemoryMode = 'default' | 'coarse_pre_llm' | 'casual_light';
 
 // ─── 主代理写入检测 ───
 
@@ -523,6 +580,8 @@ export class HarnessMemoryIntegration {
   private lastStandardRecallCooldownKey = '';
   private lastStandardRecallCompleteAt = 0;
   private lastStandardRecallInjected = false;
+  /** onLoopEnd 时任务 intent，供 casual 提取门控 */
+  private loopEndTaskIntent?: TaskIntent;
 
   constructor(config: HarnessMemoryConfig) {
     this.memoryDir = config.memoryDir || 'data/memory-files';
@@ -620,8 +679,10 @@ export class HarnessMemoryIntegration {
     const latestUserMsg = getLatestUserMessage(messages) || this.currentUserMessage;
     const onStep = options?.onStep;
 
-    if (options?.mode === 'coarse_pre_llm') {
-      await this.injectCoarseKeywordRecall(messages, latestUserMsg, onStep);
+    if (options?.mode === 'coarse_pre_llm' || options?.mode === 'casual_light') {
+      const topK = options.mode === 'casual_light' ? 2 : 3;
+      const phase = options.mode === 'casual_light' ? 'casual_light' : 'coarse_pre_llm';
+      await this.injectCoarseKeywordRecall(messages, latestUserMsg, onStep, topK, phase);
       return;
     }
 
@@ -797,7 +858,7 @@ export class HarnessMemoryIntegration {
         const reminder = buildCoNMemoryPrompt(memoryItems, method);
         messages.push({ role: 'user', content: reminder });
         didInjectThisRecall = true;
-        emitMemoryStep(onStep, 'recall_hit', memoryFilesBubbleSummary(selectedMemories));
+        emitMemoryStep(onStep, 'recall_hit', formatMemoryInjectionPetMessage(selectedMemories, 'standard'));
         // 召回成功，重置空召回计数
         this.consecutiveEmptyRecalls = 0;
         this.emptyRecallCooldown = 0;
@@ -835,6 +896,8 @@ export class HarnessMemoryIntegration {
     messages: UnifiedMessage[],
     latestUserMsg: string,
     onStep?: (event: HarnessStepEvent) => void,
+    topK = 3,
+    recallPhase: 'coarse_pre_llm' | 'casual_light' = 'coarse_pre_llm',
   ): Promise<void> {
     if (!latestUserMsg.trim()) return;
     if (this.lastCoarsePreLlmMessage === latestUserMsg) return;
@@ -852,7 +915,6 @@ export class HarnessMemoryIntegration {
       return;
     }
 
-    const COARSE_TOP = 3;
     let dedupCount = 0;
 
     try {
@@ -871,7 +933,7 @@ export class HarnessMemoryIntegration {
         this.memoryDir,
         null,
         this.surfacedMemoryPaths,
-        COARSE_TOP,
+        topK,
         prefetchedPaths,
         false,
       );
@@ -884,7 +946,7 @@ export class HarnessMemoryIntegration {
         selectedFiles: recallResult.memories.map(m => m.filename),
         queryLength: latestUserMsg.length,
         dedupCount,
-        recallPhase: 'coarse_pre_llm',
+        recallPhase,
       }).catch(() => {});
 
       if (recallResult.memories.length === 0) {
@@ -892,7 +954,7 @@ export class HarnessMemoryIntegration {
       }
 
       let selectedMemories = filterMemoriesForExecutionIntent(latestUserMsg, recallResult.memories)
-        .slice(0, COARSE_TOP);
+        .slice(0, topK);
 
       const recallCfgForDedup = getRecallConfig();
       if (recallCfgForDedup.dedupInSession && this.injectedMemoryIds.size > 0) {
@@ -911,7 +973,7 @@ export class HarnessMemoryIntegration {
       }
       const reminder = buildCoNMemoryPrompt(memoryItems, 'keyword pre-LLM recall');
       messages.push({ role: 'user', content: reminder });
-      emitMemoryStep(onStep, 'recall_coarse_hit', memoryFilesBubbleSummary(selectedMemories));
+      emitMemoryStep(onStep, 'recall_coarse_hit', formatMemoryInjectionPetMessage(selectedMemories, 'coarse'));
     } catch (err) {
       console.debug('[harness-memory] coarse recall failed:', err instanceof Error ? err.message : err);
     } finally {
@@ -999,6 +1061,7 @@ ${candidateList}`;
       return;
     }
 
+    this.loopEndTaskIntent = runtimeSnapshots?.task.intent;
     this.currentMessages = messages;
 
     // ── 主代理互斥检测 ──
@@ -1035,6 +1098,78 @@ ${candidateList}`;
     repoContext.applySnapshot(parsed.repo);
     console.debug('[harness-memory] 已从 session-notes 恢复运行时快照');
     return true;
+  }
+
+  /**
+   * 从 session-notes.md 中的 plan fence 解析最近一次执行计划。
+   * 由 Harness 在需要解析笔记内 plan fence 时调用（ETL 当前始终开启）。
+   */
+  async hydratePlanFromSessionNotes(): Promise<any> {
+    try {
+      const raw = await getSessionMemoryContent(this.sessionMemoryState);
+      if (!raw) return null;
+      return parsePersistedPlan(raw);
+    } catch (err) {
+      console.debug(
+        '[harness-memory] plan hydrate failed:',
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 把当前 plan 追加写入 session-notes.md（独立 fence；不影响 runtime fence）。
+   * 文件不存在或目录创建失败时静默忽略，保持与现有 fire-and-forget 一致。
+   */
+  async persistPlanToSessionNotes(plan: any): Promise<void> {
+    try {
+      const notesPath = this.sessionMemoryState.notesPath;
+      let existing = '';
+      try {
+        existing = await fs.readFile(notesPath, 'utf-8');
+      } catch {
+        // file missing → write fresh
+      }
+      const fence = buildPlanFence(plan);
+      // 移除旧 plan fence（如果存在），再 append 最新的
+      const stripped = stripPlanFence(existing);
+      const next = stripped.endsWith('\n') || stripped.length === 0
+        ? `${stripped}${fence}\n`
+        : `${stripped}\n${fence}\n`;
+      await fs.mkdir(path.dirname(notesPath), { recursive: true });
+      await fs.writeFile(notesPath, next, 'utf-8');
+    } catch (err) {
+      console.debug(
+        '[harness-memory] plan persist failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * 从 session-notes.md 移除所有 `icecoder-plan` fence。
+   * 当本轮 Harness 判定不挂载恢复中的 plan 时调用，以免 REST `/plan` 仍返回上一轮计划。
+   */
+  async clearPlanFenceFromSessionNotes(): Promise<void> {
+    try {
+      const notesPath = this.sessionMemoryState.notesPath;
+      let existing = '';
+      try {
+        existing = await fs.readFile(notesPath, 'utf-8');
+      } catch {
+        return;
+      }
+      const stripped = stripPlanFence(existing).replace(/\s+$/, '');
+      const next = stripped.endsWith('\n') || stripped.length === 0 ? stripped : `${stripped}\n`;
+      await fs.mkdir(path.dirname(notesPath), { recursive: true });
+      await fs.writeFile(notesPath, next, 'utf-8');
+    } catch (err) {
+      console.debug(
+        '[harness-memory] clear plan fence failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /**
@@ -1273,21 +1408,50 @@ ${candidateList}`;
    * 2. 对话深度触发 — 轮次 >= minTurns 且对话中有工具调用（说明在做实际工作）
    * 3. 内容特征触发 — 用户消息暗示了编程语言/框架/工具偏好
    */
-  private shouldExtract(turnCount: number): boolean {
+  private sessionHasToolCalls(messages: UnifiedMessage[]): boolean {
+    return messages.some(
+      m => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0,
+    );
+  }
+
+  private shouldExtract(turnCount: number, messages: UnifiedMessage[]): boolean {
     if (!this.llmAdapter || !this.currentUserMessage) return false;
     // 记忆目录不存在时不触发提取（测试环境或未初始化）
     if (!this.memoryDirExists) return false;
 
     const cfg = getExtractionConfig();
     const msgLower = this.currentUserMessage.toLowerCase();
+    const hasSignal = EXTRACTION_SIGNAL_WORDS.some(w => msgLower.includes(w));
+    const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
+
+    const intent = this.loopEndTaskIntent;
+    if (intent && shouldApplyCasualHarness(intent)) {
+      const casualCfg = getCasualExtractionConfig();
+      if (hasSignal) return true;
+      if (hasContentSignal && turnCount >= 1 && casualCfg.allowContentSignalWithoutTools) {
+        return true;
+      }
+
+      this.extractionTurnCounter++;
+      const allow = evaluateCasualMemoryExtraction({
+        turnCount,
+        hasSignalWord: false,
+        hasContentSignal: false,
+        sessionHasToolCalls: this.sessionHasToolCalls(messages),
+        extractionTurnCounter: this.extractionTurnCounter,
+        turnThrottle: cfg.turnThrottle,
+        config: casualCfg,
+      });
+      if (allow) {
+        this.extractionTurnCounter = 0;
+      }
+      return allow;
+    }
 
     // 1. 信号词触发（优先级最高，不受节流限制）
-    const hasSignal = EXTRACTION_SIGNAL_WORDS.some(w => msgLower.includes(w));
     if (hasSignal) return true;
 
     // 2. 内容特征触发 — 检测编程语言/框架/工具相关的关键词
-    //    需要至少 1 轮对话才触发（首轮就有足够上下文时也应提取）
-    const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
     if (hasContentSignal && turnCount >= 1) return true;
 
     // 3. 轮次节流：每 N 个合格轮次提取一次
@@ -1309,7 +1473,7 @@ ${candidateList}`;
    */
   private async _extractMemoriesImpl(messages: UnifiedMessage[], turnCount: number): Promise<void> {
     if (!this.llmAdapter) return;
-    if (!this.shouldExtract(turnCount)) return;
+    if (!this.shouldExtract(turnCount, messages)) return;
 
     // inProgress 互斥
     if (this.extractionGuard.inProgress) {

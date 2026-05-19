@@ -32,7 +32,7 @@ import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 import {
@@ -40,6 +40,7 @@ import {
   looksLikeFileAnalysisIntent,
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
+// isExecutionPlanEnabled removed (Phase 11)
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
@@ -341,11 +342,13 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       chatClients.delete(ws);
     });
 
+    const features = { executionPlan: true };
     try {
       const meta = await resolveDefaultChatModelMeta();
       sendJSON(ws, {
         type: 'connected',
         message: '连接成功',
+        features,
         ...(meta ? { modelContext: meta } : {}),
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
@@ -354,6 +357,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       sendJSON(ws, {
         type: 'connected',
         message: '连接成功',
+        features,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
       });
@@ -576,7 +580,7 @@ async function handleChatMessage(
     loop: {
       maxRounds: getHarnessMaxRoundsFromEnv(),
       timeout: getHarnessTimeoutMsFromEnv(),
-      tokenBudget: getHarnessTokenBudgetFromEnv(),
+      tokenBudget: getHarnessTokenBudget(),
       signal: abortController.signal,
     },
     permissions: [

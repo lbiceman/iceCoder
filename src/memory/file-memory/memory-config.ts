@@ -198,6 +198,19 @@ export interface RecallConfig {
   topicSwitchWeight: Record<string, number>;
 }
 
+/**
+ * question/inspect 的 LLM 提取门槛（中间档，默认日常路径；见 memory-config.json）。
+ * 信号词仍立即提取；轮次深度路径默认要求会话内有过工具调用。
+ */
+export interface CasualExtractionConfig {
+  /** 对话深度触发最少轮次（高于普通 extraction.minTurns） */
+  minTurns: number;
+  /** 深度触发是否要求本会话已有工具调用 */
+  requireToolCalls: boolean;
+  /** 无工具时是否仍允许「技术关键词」内容特征触发 */
+  allowContentSignalWithoutTools: boolean;
+}
+
 /** 何时触发「对话中提取记忆」的远程门控（与 `EXTRACTION_SIGNAL_WORDS` 等并存） */
 export interface ExtractionRemoteConfig {
   /** 最少对话轮次 */
@@ -235,6 +248,7 @@ export interface FeedbackConfig {
 /** 动态配置完整结构（对应 memory-config.json） */
 export interface MemoryDynamicConfig {
   extraction: ExtractionRemoteConfig;
+  casualExtraction: CasualExtractionConfig;
   dream: DreamRemoteConfig;
   recall: RecallConfig;
   relevanceGate: RelevanceGateConfig;
@@ -355,6 +369,13 @@ export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
   turnThrottle: 1,
 };
 
+/** casual intent 提取：更严轮次 + 深度路径需工具（可在 memory-config.json 调） */
+export const DEFAULT_CASUAL_EXTRACTION_CONFIG: CasualExtractionConfig = {
+  minTurns: 5,
+  requireToolCalls: true,
+  allowContentSignalWithoutTools: true,
+};
+
 /** Dream 远程：最短间隔 6h、最少 3 次会话累计后才与时间门控联动 */
 export const DEFAULT_DREAM_REMOTE_CONFIG: DreamRemoteConfig = {
   minHours: 6,
@@ -373,6 +394,7 @@ export const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
 /** 合并 `DEFAULT_*_REMOTE_CONFIG` 的初始快照，供 `memory-remote-config` 未加载时回退 */
 export const DEFAULT_DYNAMIC_CONFIG: MemoryDynamicConfig = {
   extraction: { ...DEFAULT_EXTRACTION_REMOTE_CONFIG },
+  casualExtraction: { ...DEFAULT_CASUAL_EXTRACTION_CONFIG },
   dream: { ...DEFAULT_DREAM_REMOTE_CONFIG },
   recall: { ...DEFAULT_RECALL_CONFIG },
   relevanceGate: { ...DEFAULT_RELEVANCE_GATE_CONFIG },

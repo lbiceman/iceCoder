@@ -15,6 +15,13 @@
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { ContextAssemblyConfig } from './types.js';
 
+/** JSON 兼容的排序键遍历，便于 DeepSeek/OpenAI 前缀缓存稳定命中 */
+function sortedStringRecordEntries(record: Record<string, string>): [string, string][] {
+  return Object.keys(record)
+    .sort((a, b) => a.localeCompare(b))
+    .map((k) => [k, record[k]!]);
+}
+
 /**
  * ContextAssembler 将各种上下文源组装成发送给 LLM 的消息序列。
  */
@@ -62,7 +69,9 @@ export class ContextAssembler {
 
     // 环境信息
     if (this.config.environment && Object.keys(this.config.environment).length > 0) {
-      const envLines = Object.entries(this.config.environment)
+      const envLines = sortedStringRecordEntries(
+        this.config.environment as Record<string, string>,
+      )
         .map(([k, v]) => `- ${k}: ${v}`)
         .join('\n');
       parts.push(`# 环境信息\n${envLines}`);
@@ -85,24 +94,27 @@ export class ContextAssembler {
 
     // 用户偏好
     if (this.config.userPreferences && Object.keys(this.config.userPreferences).length > 0) {
-      const prefLines = Object.entries(this.config.userPreferences)
-        .map(([k, v]) => `- ${k}: ${JSON.stringify(v)}`)
+      const prefLines = Object.keys(this.config.userPreferences)
+        .sort((a, b) => a.localeCompare(b))
+        .map((k) => `- ${k}: ${JSON.stringify(this.config.userPreferences![k])}`)
         .join('\n');
       parts.push(`# 用户偏好\n${prefLines}`);
     }
 
     // 系统上下文（Git 状态等实时信息）
     if (this.config.systemContext && Object.keys(this.config.systemContext).length > 0) {
-      const ctxLines = Object.entries(this.config.systemContext)
-        .map(([k, v]) => `${k}: ${v}`)
+      const ctxLines = Object.keys(this.config.systemContext)
+        .sort((a, b) => a.localeCompare(b))
+        .map((k) => `${k}: ${this.config.systemContext![k]}`)
         .join('\n');
       parts.push(ctxLines);
     }
 
     // 自定义用户上下文（XXX.md等）
     if (this.config.userContext && Object.keys(this.config.userContext).length > 0) {
-      for (const [key, value] of Object.entries(this.config.userContext)) {
-        parts.push(`# ${key}\n${value}`);
+      const keys = Object.keys(this.config.userContext).sort((a, b) => a.localeCompare(b));
+      for (const key of keys) {
+        parts.push(`# ${key}\n${this.config.userContext[key]}`);
       }
     }
 

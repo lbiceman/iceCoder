@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+// ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
 
@@ -27,6 +29,7 @@ export interface TaskCheckpoint {
   };
   createdAt: string;
   updatedAt: string;
+  // plan field removed (Phase 11)
 }
 
 export interface TaskCheckpointUpdate {
@@ -38,6 +41,7 @@ export interface TaskCheckpointUpdate {
   messages: UnifiedMessage[];
   failedToolCalls?: string[];
   stopReason?: StopReason;
+  // plan field removed (Phase 11)
 }
 
 export class TaskCheckpointManager {
@@ -62,6 +66,8 @@ export class TaskCheckpointManager {
   async save(update: TaskCheckpointUpdate): Promise<TaskCheckpoint> {
     const existing = await this.readExisting();
     const now = new Date().toISOString();
+    // planField logic removed (Phase 11)
+
     const checkpoint: TaskCheckpoint = {
       version: 1,
       taskId: existing?.taskId ?? createTaskId(update.userGoal, now),
@@ -83,27 +89,31 @@ export class TaskCheckpointManager {
       },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      // ...planField removed (Phase 11)
     };
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
-    const tmpPath = `${this.checkpointPath}.tmp`;
+    const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
     await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
     await fs.rename(tmpPath, this.checkpointPath);
     return checkpoint;
   }
 
+  // clearEmbeddedPlan removed (Phase 11 — execution plan layer deleted)
+
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
-    return {
-      role: 'user',
-      content: [
-        '<resume-checkpoint>',
-        'A previous task was interrupted or left in progress. Treat this checkpoint as authoritative short-term task state.',
-        'If the latest user message is clearly a new unrelated task, ignore this checkpoint and focus on the latest user request.',
-        '',
-        JSON.stringify(checkpoint, null, 2),
-        '</resume-checkpoint>',
-      ].join('\n'),
-    };
+    const lines = [
+      '<resume-checkpoint>',
+      'A previous task was interrupted or left in progress. Treat this checkpoint as authoritative short-term task state.',
+      'If the latest user message is clearly a new unrelated task, ignore this checkpoint and focus on the latest user request.',
+      '',
+      JSON.stringify(checkpoint, null, 2),
+    ];
+
+    // Plan Recovery removed (Phase 11)
+
+    lines.push('</resume-checkpoint>');
+    return { role: 'user', content: lines.join('\n') };
   }
 
   private async readExisting(): Promise<TaskCheckpoint | null> {

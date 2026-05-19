@@ -12,9 +12,10 @@ import express, {
   type NextFunction,
 } from 'express';
 import fs from 'node:fs';
+import http, { type Server } from 'node:http';
+import type { ListenOptions } from 'node:net';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { Server } from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,37 +96,101 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   return app;
 }
 
+/** 用于 ::1 / 127.0.0.1 启动后自检，确认是本进程的 iceCoder 首页而非其它占用端口的程序 */
+const LOOPBACK_APP_MARKER = '<span class="logo-text">IceCoder</span>';
+
+async function probeOurApp(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(2500) });
+    if (!res.ok) return false;
+    const body = await res.text();
+    return body.includes(LOOPBACK_APP_MARKER);
+  } catch {
+    return false;
+  }
+}
+
+async function probeLoopbacks(actualPort: number): Promise<{ v4: boolean; v6: boolean }> {
+  const [v4, v6] = await Promise.all([
+    probeOurApp(`http://127.0.0.1:${actualPort}/`),
+    probeOurApp(`http://[::1]:${actualPort}/`),
+  ]);
+  return { v4, v6 };
+}
+
+function listenOnce(server: Server, opts: number | ListenOptions): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+    const onError = (err: NodeJS.ErrnoException): void => {
+      server.off('listening', onListening);
+      reject(err);
+    };
+    server.once('listening', onListening);
+    server.once('error', onError);
+    server.listen(opts);
+  });
+}
+
+function closeHttpServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
 /**
  * 在指定端口启动 Express 服务器。
+ *
+ * Windows 上 `localhost` 常解析为 ::1；若 [::1]:port 上另有进程占位，而本进程只监听 IPv4，会出现
+ * 「服务已启动但 http://localhost:port 404」。启动后自检 127.0.0.1 与 ::1 是否都返回本项目首页；
+ * 若只有 ::1 异常，日志会提示改用 127.0.0.1 或换端口（`-p`，如 3784）。
  */
 export function startServer(app: Express, port: number): Promise<Server> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
+  return startServerWithLoopbackProbe(app, port);
+}
 
-    const server = app.listen(port);
-
-    server.on('listening', () => {
-      if (!settled) {
-        settled = true;
-        const addr = server.address();
-        const actualPort = typeof addr === 'object' && addr ? addr.port : port;
-        console.log(`API server listening on http://localhost:${actualPort}`);
-        resolve(server);
+async function startServerWithLoopbackProbe(app: Express, port: number): Promise<Server> {
+  let server = http.createServer(app);
+  try {
+    await listenOnce(server, { port, host: '::', ipv6Only: false });
+  } catch {
+    await closeHttpServer(server).catch(() => {});
+    server = http.createServer(app);
+    try {
+      await listenOnce(server, { port });
+    } catch (err) {
+      await closeHttpServer(server).catch(() => {});
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === 'EADDRINUSE') {
+        const msg = `Port ${port} is already in use`;
+        console.error(msg);
+        process.exit(1);
+        throw new Error(msg);
       }
-    });
+      throw err;
+    }
+  }
 
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      if (!settled) {
-        settled = true;
-        if (err.code === 'EADDRINUSE') {
-          const error = new Error(`Port ${port} is already in use`);
-          console.error(error.message);
-          reject(error);
-          process.exit(1);
-        } else {
-          reject(err);
-        }
-      }
-    });
-  });
+  const addr = server.address();
+  const actualPort = typeof addr === 'object' && addr ? addr.port : port;
+
+  const { v4, v6 } = await probeLoopbacks(actualPort);
+
+  if (!v4) {
+    await closeHttpServer(server).catch(() => {});
+    throw new Error(`Web server started but loopback probe failed for 127.0.0.1:${actualPort}`);
+  }
+
+  console.log(`API server listening on http://127.0.0.1:${actualPort}`);
+
+  if (!v6) {
+    console.warn(
+      `[web] 「http://localhost:${actualPort}/」在本机 [::1]:${actualPort} 仍可能指向其它程序（你已看到 404）。`
+        + ` 请使用 http://127.0.0.1:${actualPort}/ ，或换一个端口绕过冲突：` + ` npm run iceCoder -- --port 3784`,
+    );
+  }
+
+  return server;
 }

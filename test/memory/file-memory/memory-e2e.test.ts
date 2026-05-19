@@ -134,6 +134,7 @@ describe('记忆系统端到端', () => {
     it('提取用户偏好并写入文件，然后通过召回找回', async () => {
       const extractionResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'user_preferred_languages.md',
           type: 'user',
           name: 'Preferred Languages',
@@ -154,7 +155,7 @@ describe('记忆系统端到端', () => {
       });
 
       const llm = createRoutingLLM([
-        { pattern: 'Extract memories', response: extractionResponse },
+        { pattern: '## Recent conversation', response: extractionResponse },
         { pattern: 'Available memories', response: recallResponse },
       ]);
 
@@ -201,6 +202,7 @@ describe('记忆系统端到端', () => {
       // 第一次提取
       const response1 = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'user_role.md',
           type: 'user',
           name: 'User Role',
@@ -218,6 +220,7 @@ describe('记忆系统端到端', () => {
       // 第二次提取：同名文件，应更新
       const response2 = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'user_role.md',
           type: 'user',
           name: 'User Role',
@@ -394,6 +397,7 @@ Designed 5 end-to-end test scenarios.
       // Step 2: Mock LLM 返回带 contradicts 的提取结果
       const extractionResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'user_preferred_lang_new.md',
           type: 'user',
           name: 'Preferred Language Updated',
@@ -408,7 +412,7 @@ Designed 5 end-to-end test scenarios.
       ]);
 
       const llm = createRoutingLLM([
-        { pattern: 'Extract memories', response: extractionResponse },
+        { pattern: '## Recent conversation', response: extractionResponse },
       ]);
 
       // Step 3: 提取
@@ -453,6 +457,7 @@ Designed 5 end-to-end test scenarios.
 
       const extractionResponse = JSON.stringify([
         {
+          memoryCategory: 'project_convention',
           filename: 'project_memory_system.md',
           type: 'project',
           name: 'Memory System Work',
@@ -473,7 +478,7 @@ Designed 5 end-to-end test scenarios.
       });
 
       const llm = createRoutingLLM([
-        { pattern: 'Extract memories', response: extractionResponse },
+        { pattern: '## Recent conversation', response: extractionResponse },
         { pattern: 'Available memories', response: recallResponse },
       ]);
 

@@ -1,0 +1,45 @@
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.4 [39m[90mD:/work/self/iceCoder[39m
+
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22mallowedTools 通过[32m 2[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22mforbiddenTools 拒绝[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22m不在白名单 + enforceToolBoundary=false → warn[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22m连续同工具超限[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22mrecordAfterToolCall 记录信号[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22midle 超限[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22mmaxRounds 超限[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22mcheckCompletion 缺少信号[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mContractValidator[2m > [22mreset 清除状态[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mDeviationDetector[2m > [22mtool_mismatch 检测[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mDeviationDetector[2m > [22mphase_mismatch 检测[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mDeviationDetector[2m > [22mscope_creep 检测[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mDeviationDetector[2m > [22m无偏离[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mtool_error / file_not_found[32m 1[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mtool_error / file_not_found (非 read_file)[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mpermission_denied[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mverification_fail / test_failed[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mverification_fail / type_error[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mcontext_missing[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mcontract_violation[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mhallucinated_path[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mbranch_exhausted → fatal[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mtimeout[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22mtoken_exhausted[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mFailureClassifier[2m > [22munknown → fallback[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mEscalationManager[2m > [22m连续 soft 偏离升级到 L1[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mEscalationManager[2m > [22mhard 偏离直接 L1[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mEscalationManager[2m > [22mcritical 偏离直接 L3[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mEscalationManager[2m > [22m升级链路：L1→L2→L3[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mEscalationManager[2m > [22mdeescalate 降级[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mEscalationManager[2m > [22mreset 完全重置[32m 1[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mNodeCostTracker[2m > [22mtoken 超限[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mNodeCostTracker[2m > [22m轮次超限[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mNodeCostTracker[2m > [22m工具调用超限[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mNodeCostTracker[2m > [22mutilizationRate 计算[32m 0[2mms[22m[39m
+ [32m✓[39m test/task-graph-review.test.ts[2m > [22mNodeCostTracker[2m > [22m未超限[32m 0[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m36 passed[39m[22m[90m (36)[39m
+[2m   Start at [22m 16:55:12
+[2m   Duration [22m 349ms[2m (transform 69ms, setup 0ms, import 121ms, tests 14ms, environment 0ms)[22m
+

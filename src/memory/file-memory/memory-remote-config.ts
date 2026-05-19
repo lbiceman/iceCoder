@@ -34,6 +34,7 @@ const REMOTE_CONFIG_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 export type {
   MemoryDynamicConfig,
   ExtractionRemoteConfig,
+  CasualExtractionConfig,
   DreamRemoteConfig,
   RecallConfig,
   RelevanceGateConfig,
@@ -94,6 +95,10 @@ export function getExtractionConfig(): MemoryDynamicConfig['extraction'] {
   return getDynamicConfig().extraction;
 }
 
+export function getCasualExtractionConfig(): MemoryDynamicConfig['casualExtraction'] {
+  return getDynamicConfig().casualExtraction;
+}
+
 export function getDreamConfig(): MemoryDynamicConfig['dream'] {
   return getDynamicConfig().dream;
 }
@@ -135,6 +140,7 @@ function mergeConfig(
 
   return {
     extraction: mergeSection(base.extraction, override.extraction),
+    casualExtraction: mergeSection(base.casualExtraction, override.casualExtraction),
     dream: mergeSection(base.dream, override.dream),
     recall: mergeSection(base.recall, override.recall),
     relevanceGate: mergeSection(base.relevanceGate, override.relevanceGate),

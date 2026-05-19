@@ -14,7 +14,7 @@
  */
 
 import type { UnifiedMessage, ToolDefinition, ToolCall } from '../llm/types.js';
-import { estimateStringTokens } from '../llm/token-estimator.js';
+import { estimateMessagesTokens, estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type {
   HarnessConfig,
@@ -28,17 +28,25 @@ import type {
 import { ContextAssembler, normalizeMessages } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
-import { HarnessLogger } from './logger.js';
+import { HarnessLogger, type LlmRoundLogMeta, type LlmRoundTokenUsage } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import { getToolMetadata, isDestructiveOperation, isDestructiveCommand } from '../tools/tool-metadata.js';
 import { HarnessMemoryIntegration } from './harness-memory.js';
-import { TaskState } from './task-state.js';
+import { inferIntent, TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
-import { TaskCheckpointManager, type TaskCheckpointStatus } from './checkpoint.js';
+import { TaskCheckpointManager, type TaskCheckpointStatus, type TaskCheckpointUpdate } from './checkpoint.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
+// Execution plan layer removed (Phase 11) — replaced by TaskGraph
+import { shouldUseTaskGraph } from './task-graph-config.js';
+import { shouldApplyCasualHarness, shouldSkipResilienceCheckpoint } from './casual-mode.js';
+import { BranchBudgetTracker } from './branch-budget.js';
+import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
+import { reviewStep, type StepReviewResult } from './step-review.js';
+import { GraphExecutor } from './task-graph-executor.js';
+import type { CheckpointSaveTrigger } from '../types/runtime-checkpoint.js';
 import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
 import {
   ensureDelegateToSubagentTool,
@@ -65,7 +73,7 @@ const LLM_MAX_RETRIES = 1;
 const LLM_RETRY_BASE_DELAY = 2000;
 const LLM_RETRY_MAX_DELAY = 2000;
 
-/** 工具执行阶段推给前端的简短说明（降低「长时间无反馈」焦虑） */
+/** 工具调用阶段发往 UI 的一步提示文案（缓解长时间无 SSE 体感）。 */
 function toolExecutionUserHint(toolName: string): string {
   const hints: Record<string, string> = {
     read_file: '正在读取文件（大文件将自动截断）…',
@@ -95,15 +103,32 @@ const OLD_SUBAGENT_SUMMARY_CHARS = 300;
 // ─── 任务切换检测 ───
 const TASK_SWITCH_JACCARD_THRESHOLD = 0.15;
 
-/** 硬压缩前等待会话笔记 LLM 更新的上限（毫秒）；超时则用磁盘已有内容继续。可用 ICE_SESSION_MEMORY_BEFORE_COMPACT_MS 覆盖。 */
-const DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS = 120_000;
+/** 硬压缩前等待会话笔记 LLM 更新的上限（毫秒）。超时则用磁盘已有内容继续。固定为 2 分钟。 */
+const PRE_COMPACT_SESSION_MEMORY_WAIT_MS = 120_000;
 const PRE_COMPACT_SESSION_TIMEOUT_MSG = 'pre_compact_session_memory_timeout';
 
-function preCompactSessionMemoryWaitMs(): number {
-  const raw = process.env.ICE_SESSION_MEMORY_BEFORE_COMPACT_MS;
-  if (raw == null || raw === '') return DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_PRE_COMPACT_SESSION_MEMORY_MS;
+/** 构造 LLM 轮次日志字段（provider usage 分项 + 本地上下文估算）。 */
+function buildLlmRoundLogFields(
+  messages: UnifiedMessage[],
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheMissTokens?: number;
+  },
+): { usage: LlmRoundTokenUsage; meta: LlmRoundLogMeta } {
+  return {
+    usage: {
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      cacheReadTokens: usage?.cacheReadTokens,
+      cacheMissTokens: usage?.cacheMissTokens,
+    },
+    meta: {
+      messageCount: messages.length,
+      estContextTokens: estimateMessagesTokens(messages),
+    },
+  };
 }
 
 /**
@@ -142,6 +167,10 @@ function getLastAssistantText(messages: UnifiedMessage[]): string {
   return '';
 }
 
+/**
+ * 识别「非真人用户」的 user 前缀（运行时状态、会话笔记摘要、工具规划等）。
+ * {@link getLatestRealUserText} 会跳过此类消息。
+ */
 function isSystemInjectedUserContent(content: string): boolean {
   const trimmed = content.trim();
   return trimmed.startsWith('<system-context>')
@@ -155,6 +184,7 @@ function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('Continue directly');
 }
 
+/** 倒序查找第一条未被 {@link isSystemInjectedUserContent} 排除的 user 文本。 */
 function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -165,10 +195,15 @@ function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): strin
   return fallback;
 }
 
+/** 是否已有 assistant 带 `toolCalls` 的轮次（任意位置）。 */
 function hasAssistantToolCallAttempt(messages: UnifiedMessage[]): boolean {
   return messages.some(m => m.role === 'assistant' && !!m.toolCalls?.length);
 }
 
+/**
+ * 自最近一条真实 user 起，后方是否出现过 assistant `toolCalls`。
+ * 用于判别「本条用户输入之后模型是否尝试过工具」。
+ */
 function hasAssistantToolCallAfterLatestRealUser(messages: UnifiedMessage[]): boolean {
   let latestRealUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -185,27 +220,48 @@ function hasAssistantToolCallAfterLatestRealUser(messages: UnifiedMessage[]): bo
     .some(m => m.role === 'assistant' && !!m.toolCalls?.length);
 }
 
+/**
+ * 是否适合首轮注入 Runtime Tool Planner，并可能与执行计划同开。
+ *
+ * - 第一层：中英文子串判断是否像「要动工具的工程诉求」；
+ * - 第二层：若以纯疑问措辞开头且无实现侧关键词，视为不可执行。
+ */
 function isActionableToolRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
+  const rawTrim = text.trim();
   if (!t) return false;
 
-  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|提交|创建.*pr/i.test(t)
+  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|生成|添加|提交|创建.*pr/i.test(t)
     || /\b(fix|debug|investigate|implement|modify|edit|update|refactor|search|read|create|delete|commit|check)\b/i.test(t)
     || /\b(run|execute)\s+\S+/i.test(t)
     || /\b(test|verify)\s+\S+|\S+\s+(tests?|verification)\b/i.test(t);
   if (!isActionable) return false;
 
-  const questionOnly = /^(为什么|如何|怎么|解释|说明|what|why|how)\b/i.test(t)
+  // 「分析一下…」等与英文 \b：JS 的词边界夹在汉字之间常为 false，需单独前缀或分隔符判别
+  const questionOnlyCn = rawTrim.startsWith('分析一下')
+    || rawTrim.startsWith('说明一下')
+    || rawTrim.startsWith('解释一下')
+    || rawTrim.startsWith('为什么')
+    || rawTrim.startsWith('如何')
+    || rawTrim.startsWith('怎么')
+    || /^解释([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^说明([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^分析([\s\u3000，。、！？]|$)/.test(rawTrim);
+  const questionOnly = (questionOnlyCn || /^(what|why|how)\b/i.test(t))
     && !/(修|改|解决|处理|运行|测试|fix|modify|run|test|implement)/i.test(t);
   return !questionOnly;
 }
 
+/** 子代理回灌的 tool 消息格式，供历史裁剪识别。 */
 function isSubAgentToolResult(msg: UnifiedMessage): msg is UnifiedMessage & { content: string } {
   return msg.role === 'tool'
     && typeof msg.content === 'string'
     && msg.content.startsWith('[SubAgent Result]');
 }
 
+/**
+ * 压缩过旧子代理 tool 结果正文；保留 `summary:\\n` 前头部，对摘要段单独限长。
+ */
 function truncateOldSubAgentResult(content: string): string {
   const marker = '\nsummary:\n';
   const markerIndex = content.indexOf(marker);
@@ -292,6 +348,14 @@ interface LoopState {
   runtimeStateHash: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
+  /** Resilience v2：分支预算 tracker */
+  branchBudget?: BranchBudgetTracker;
+  /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
+  branchBudgetWarnedThisRound: boolean;
+  /** Resilience v2：本轮是否已做过 step review（避免重复） */
+  stepReviewedThisRound: boolean;
+  /** Resilience v2：最近一次 step review 结果（供启发式参考） */
+  lastStepReview?: StepReviewResult;
 }
 
 /**
@@ -314,8 +378,18 @@ export class Harness {
   /** 用户中断信号（传递给工具执行器，实现跨层超时中断） */
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
+  /** 同一 checkpoint JSON 路径上串联 TaskCheckpointManager 与 CheckpointEngine 的磁盘写，消除交叉 rename 间歇读失效。 */
+  private checkpointPersistTail = Promise.resolve();
+  /** TaskGraph 执行器（Phase 11 始终开启） */
+  private graphExecutor: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
   private workspaceRoot: string;
+
+  /** Runtime Resilience v2（始终开启，与 isResilienceV2Enabled 一致） */
+  private resilienceV2Enabled: boolean;
+  /** Resilience v2：增强 checkpoint 引擎（无 sessionDir 时未创建） */
+  private checkpointEngine?: CheckpointEngine;
+
 
   constructor(
     config: HarnessConfig,
@@ -348,6 +422,16 @@ export class Harness {
       : undefined;
     this.runtimeTelemetry = new RuntimeTelemetry(config.sessionDir, config.sessionId);
 
+
+    // Resilience v2：无 sessionDir 时不创建 CheckpointEngine（v2 磁盘合并）；其余子逻辑仍开启
+    this.resilienceV2Enabled = isResilienceV2Enabled();
+    if (this.resilienceV2Enabled && config.sessionDir) {
+      this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
+    }
+
+    // TaskGraph 始终开启 (Phase 11)
+    this.graphExecutor = new GraphExecutor();
+
     // 记忆集成层
     this.memoryIntegration = new HarnessMemoryIntegration({
       memoryDir: config.memoryDir,
@@ -362,6 +446,20 @@ export class Harness {
         totalBudget: config.loop.tokenBudget,
       });
     }
+  }
+
+  /** 将 checkpoint/v2 磁盘更新串行化（仅在有持久化路径时生效）。 */
+  private enqueueCheckpointPersist<T>(task: () => Promise<T>): Promise<T> {
+    if (!this.checkpointManager && !this.checkpointEngine) {
+      return task();
+    }
+    const run = () => task();
+    const p = this.checkpointPersistTail.then(run, run);
+    this.checkpointPersistTail = p.then(
+      (): void => {},
+      (): void => {},
+    );
+    return p;
   }
 
   /**
@@ -411,6 +509,7 @@ export class Harness {
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
+
     // 保存用户消息用于记忆相关性检索
     this.memoryIntegration.onLoopStart(
       userMessage,
@@ -441,7 +540,31 @@ export class Harness {
       repoContext: new RepoContext(),
       runtimeStateHash: '',
       failedToolCallSignatures: new Map(),
+      branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
+      branchBudgetWarnedThisRound: false,
+      stepReviewedThisRound: false,
     };
+
+    if (this.resilienceV2Enabled && this.checkpointEngine) {
+      try {
+        const v2 = await this.checkpointEngine.loadV2();
+        if (v2) {
+          state.branchBudget?.applySnapshot(v2.branchBudget);
+          const pending = this.checkpointEngine.pendingRecoverySignals();
+          if (pending.length > 0) {
+            for (const sig of pending) {
+              messages.push({ role: 'user', content: sig.message });
+            }
+            this.checkpointEngine.markRecoverySignalsConsumed(s => !s.consumed);
+          }
+        }
+      } catch (err) {
+        console.debug(
+          '[harness] resilience v2 load failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
 
     if (existingMessages && existingMessages.length > 0) {
       try {
@@ -463,6 +586,8 @@ export class Harness {
         );
       }
     }
+
+    // checkpoint plan resume removed (Phase 11 — TaskGraph handles context)
 
     // ── 核心循环（while(true) 迭代模式）──
     // try/finally 确保无论哪条路径退出，记忆合并都会执行一次
@@ -495,12 +620,41 @@ export class Harness {
 
       this.upsertRuntimeContextMessage(msgs, state);
 
-      await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm', onStep });
+      // TaskGraph: init graph on first round — gated by TaskDomainGate
+      if (state.turnCount === 1 && this.graphExecutor) {
+        const taskSnapshot = state.taskState.snapshot();
+        if (shouldUseTaskGraph(taskSnapshot.intent)) {
+          this.graphExecutor.initGraph({
+            goal: taskSnapshot.goal || userMessage,
+            intent: taskSnapshot.intent,
+          });
+          onStep?.({ type: 'task_graph_init', graphGoal: taskSnapshot.goal || userMessage, graphIntent: taskSnapshot.intent });
+        }
+      }
+
+      // TaskGraph: inject node context before LLM call
+      if (this.graphExecutor?.hasGraph()) {
+        const ctx = this.graphExecutor.getCurrentNodeContext();
+        if (ctx) {
+          msgs.push({ role: 'user', content: ctx });
+        }
+        const snap = this.graphExecutor.toSnapshot();
+        if (snap?.cursor) {
+          onStep?.({ type: 'task_graph_node', nodeId: snap.cursor.nodeId, nodeIndex: snap.cursor.nodeIndex, graphStatus: snap.status });
+        }
+      }
+
+      {
+        const intent = state.taskState.snapshot().intent;
+        const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
+        await this.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+      }
 
       if (
         state.turnCount === 1
         && currentTools.length > 0
         && isActionableToolRequest(getLatestRealUserText(msgs, userMessage))
+        && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
       ) {
         msgs.push({
           role: 'user',
@@ -508,6 +662,17 @@ export class Harness {
             buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot()),
           ),
         });
+
+        // 首轮可执行：若检测到下面对话块会判定「与上一轮 assistant 无关」则延后初始化计划，
+        // 避免任务切换分支重复推送 plan 事件。
+        const preLatest = getLatestRealUserText(msgs, userMessage);
+        const preAssistant = getLastAssistantText(msgs);
+        const pendingUnrelatedAssistant = !!(
+          preLatest
+          && preAssistant
+          && bigramJaccard(preLatest, preAssistant) < TASK_SWITCH_JACCARD_THRESHOLD
+        );
+        // maybeInitExecutionPlan removed (Phase 11 — TaskGraph handles init)
       }
 
       // 消息规范化：合并连续 user 消息、去重 tool_use ID、清理空消息
@@ -529,9 +694,12 @@ export class Harness {
               content: '[System: You have received a new task request that appears unrelated to the current pending work. Completely pause any previous task and focus only on the new instruction. Do not resume previous actions unless explicitly asked.]',
             });
             state.taskSwitchInjected = true;
+            // Execution plan task-switch reset removed (Phase 11)
           }
         }
       }
+
+      // maybeRefreshExecutionPlanForContinuedWork removed (Phase 11)
 
       // 检查用户中断
       if (this.loopController.isAborted()) {
@@ -625,6 +793,7 @@ export class Harness {
         input: response.usage?.inputTokens ?? 0,
         output: response.usage?.outputTokens ?? 0,
       };
+      const llmRoundLog = buildLlmRoundLogFields(normalizedMsgs, response.usage);
       this.loopController.recordTokenUsage(tokenUsage.input, tokenUsage.output);
       this.runtimeTelemetry?.recordRound({
         round,
@@ -642,7 +811,7 @@ export class Harness {
       const hasToolCalls = !!response.toolCalls?.length;
 
       if (!hasToolCalls) {
-        logger.llmResponseFinal(tokenUsage);
+        logger.llmResponseFinal(llmRoundLog.usage, llmRoundLog.meta);
 
         // ── 5a. 压缩后失忆检测与自动补救 ──
         if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
@@ -822,6 +991,7 @@ export class Harness {
           && state.noToolExecutionRecoveryCount < 1
           && state.stopHookContinuationCount === 0
           && isActionableToolRequest(getLatestRealUserText(msgs, userMessage))
+          && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
         ) {
           state.noToolExecutionRecoveryCount++;
           if (response.content) {
@@ -852,6 +1022,8 @@ export class Harness {
               formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
             ].join('\n'),
           });
+          // currentPlanTracker.onVerificationRequired removed (Phase 11)
+          await this.resilienceSaveCheckpoint('verification_started', state);
           state.transition = 'stop_hook_continue';
           continue;
         }
@@ -860,10 +1032,20 @@ export class Harness {
         state.stopHookContinuationCount = 0;
 
         // ── 5d. 正常完成 → return ──
+        // TaskGraph: advance cursor before stop
+        if (this.graphExecutor?.hasGraph()) {
+          const ar = this.graphExecutor.advanceOrComplete();
+          if (ar.graphDone) {
+            onStep?.({ type: 'task_graph_done' });
+          }
+        }
+
         this.loopController.stop('model_done');
         const finalState = this.loopController.getState();
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
+        // currentPlanTracker.onFinal removed (Phase 11)
         await this.saveTaskCheckpoint('completed', userMessage, msgs, state, 'model_done');
+        await this.resilienceSaveCheckpoint('final_draft', state, 'model_done');
         this.recordTelemetrySummary('model_done', state);
 
         onStep?.({
@@ -889,7 +1071,7 @@ export class Harness {
 
       // 6. 有工具调用 → 执行工具（正常恢复，清除压缩标记）
       if (state.justCompacted) state.justCompacted = false;
-      logger.llmResponseToolCalls(response.toolCalls!.length, tokenUsage);
+      logger.llmResponseToolCalls(response.toolCalls!.length, llmRoundLog.usage, llmRoundLog.meta);
 
       // 推送思考内容（如果有）
       onStep?.({
@@ -912,8 +1094,30 @@ export class Harness {
       });
 
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
+      state.branchBudgetWarnedThisRound = false;
+      state.stepReviewedThisRound = false;
+
+      // TaskGraph: check tool calls before execution
+      if (this.graphExecutor?.hasGraph() && response.toolCalls) {
+        for (const tc of response.toolCalls) {
+          const check = this.graphExecutor.checkToolCall(tc.name);
+          if (check.action === 'block' && check.message) {
+            msgs.push({ role: 'user', content: check.message });
+          } else if (check.action === 'warn' && check.message) {
+            msgs.push({ role: 'user', content: check.message });
+          }
+        }
+      }
+
       const toolStats = await this.executeToolCallsStreaming(
         response.toolCalls!, msgs, logger, onStep, this.abortSignal, state.taskState, state.repoContext, chatFn, currentTools,
+      );
+
+      // 6a-resilience-v2. 把这一轮工具调用录入 branchBudget（仅 flag 启用时执行）
+      await this.resilienceRecordToolCalls(
+        response.toolCalls!,
+        new Set(toolStats.failedSignatures),
+        state,
       );
 
       const repeatedFailures = this.collectRepeatedFailures(response.toolCalls!, toolStats.failedSignatures, state.failedToolCallSignatures);
@@ -922,6 +1126,22 @@ export class Harness {
           role: 'user',
           content: `[System] Repeated failed tool call detected: ${repeatedFailures.join(', ')}. Do not retry the same tool with the same arguments. Change the path, parameters, command, or use a different tool; if blocked, explain the exact blocker and evidence.`,
         });
+      }
+
+      // 6a-resilience-v2. 分支预算超限 → 注入 recovery warning
+      this.resilienceMaybeBranchRecover(state, msgs);
+
+      // 6a-resilience-v2. 工具失败 → 触发 step review（启发式 + 可选 LLM）
+      if (toolStats.failedCount > 0) {
+        await this.resilienceMaybeReviewStep(state, 'tool_failure', chatFn);
+      }
+
+      // 6a-resilience-v2. 验证失败 → 单独 hook（与 tool_failure 区分，便于 checkpoint trigger 归类）
+      if (state.taskState.snapshot().verificationStatus === 'failed') {
+        await this.resilienceSaveCheckpoint('verification_failed', state);
+        if (!state.stepReviewedThisRound) {
+          await this.resilienceMaybeReviewStep(state, 'verification_failure', chatFn);
+        }
       }
 
       // 6a-abort. 工具执行后立即检查中断
@@ -940,6 +1160,7 @@ export class Harness {
           this.loopController.stop('circuit_breaker');
           const finalState = this.loopController.getState();
           logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
+          // currentPlanTracker.onFinal removed (Phase 11)
           await this.saveTaskCheckpoint('failed', userMessage, msgs, state, 'circuit_breaker');
           this.recordTelemetrySummary('circuit_breaker', state);
 
@@ -995,7 +1216,26 @@ export class Harness {
         state.consecutiveToolFailures = 0;
       }
 
+      // TaskGraph: record tool results and evaluate round
+      if (this.graphExecutor?.hasGraph() && response.toolCalls) {
+        for (const tc of response.toolCalls) {
+          const sig = this.toolCallSignature(tc);
+          const success = !toolStats.failedSignatures.includes(sig);
+          this.graphExecutor.recordToolResult(tc.name, success);
+        }
+        const evalResult = this.graphExecutor.evaluateRound(response.toolCalls.length);
+        if (evalResult.action === 'force_switch') {
+          onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
+          if (evalResult.message) {
+            msgs.push({ role: 'user', content: evalResult.message });
+          }
+        } else if (evalResult.message) {
+          msgs.push({ role: 'user', content: evalResult.message });
+        }
+      }
+
       await this.saveTaskCheckpoint('running', userMessage, msgs, state);
+      await this.resilienceSaveCheckpoint('step_completed', state);
 
       // 6a-readonly. 连续只读轮次跟踪（分析瘫痪检测）
       const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
@@ -1031,6 +1271,8 @@ export class Harness {
       // messages 和 tools 已就地更新，直接 continue
     }
     } finally {
+      // ETL persist & reset removed (Phase 11 — TaskGraph handles persistence)
+
       // 记忆合并：fire-and-forget，不阻塞主循环返回
       // 提取/Dream/会话记忆更新在后台异步完成，
       // 进程退出时由 drainExtractions 确保完成。
@@ -1107,6 +1349,10 @@ export class Harness {
 
   // ─── 记忆集成由 HarnessMemoryIntegration 处理 ───
 
+  /**
+   * LLM 调用前注入 `[System Runtime State]`：TaskState + RepoContext 快照。
+   * 无读/写/命令且无需验证时不注入；内容未变（hash）则去重旧块后覆盖。
+   */
   private upsertRuntimeContextMessage(messages: UnifiedMessage[], state: LoopState): void {
     const repoSnapshot = state.repoContext.snapshot();
     const taskSnapshot = state.taskState.snapshot();
@@ -1248,6 +1494,9 @@ export class Harness {
         });
         taskState?.recordToolResult(tc, { success, output, error });
         repoContext?.recordToolResult(tc, { success, output, error });
+        if (taskState && repoContext) {
+          // currentPlanTracker.onToolResult removed (Phase 11)
+        }
         this.loopController.recordToolCalls(1);
         submittedIds.add(tc.id);
         continue;
@@ -1360,6 +1609,9 @@ export class Harness {
 
       taskState?.recordToolResult(tc, result);
       repoContext?.recordToolResult(tc, result);
+      if (taskState && repoContext) {
+        // currentPlanTracker.onToolResult removed (Phase 11)
+      }
 
       processedIds.add(tc.id);
       this.loopController.recordToolCalls(1);
@@ -1398,6 +1650,12 @@ export class Harness {
     }
   }
 
+
+
+  // attachExecutionPlan + maybeInitExecutionPlan removed (Phase 11 — TaskGraph handles context)
+
+  // maybeRefreshExecutionPlanForContinuedWork removed (Phase 11 — TaskGraph replaces it)
+
   private async saveTaskCheckpoint(
     status: TaskCheckpointStatus,
     userGoal: string,
@@ -1411,24 +1669,27 @@ export class Harness {
   ): Promise<void> {
     if (!this.checkpointManager || !runtimeState) return;
 
-    try {
-      const failedToolCalls = [...runtimeState.failedToolCallSignatures.entries()]
-        .filter(([, count]) => count > 0)
-        .map(([signature, count]) => `${signature} (x${count})`);
+    await this.enqueueCheckpointPersist(async () => {
+      try {
+        const failedToolCalls = [...runtimeState.failedToolCallSignatures.entries()]
+          .filter(([, count]) => count > 0)
+          .map(([signature, count]) => `${signature} (x${count})`);
 
-      await this.checkpointManager.save({
-        status,
-        userGoal,
-        taskState: runtimeState.taskState.snapshot(),
-        repoContext: runtimeState.repoContext.snapshot(),
-        loopState: this.loopController.getState(),
-        messages,
-        failedToolCalls,
-        stopReason,
-      });
-    } catch (err) {
-      console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
-    }
+        const checkpointSave: TaskCheckpointUpdate = {
+          status,
+          userGoal,
+          taskState: runtimeState.taskState.snapshot(),
+          repoContext: runtimeState.repoContext.snapshot(),
+          loopState: this.loopController.getState(),
+          messages,
+          failedToolCalls,
+          stopReason,
+        };
+        await this.checkpointManager!.save(checkpointSave);
+      } catch (err) {
+        console.debug('[harness] checkpoint save failed:', err instanceof Error ? err.message : err);
+      }
+    });
   }
 
   private recordTelemetrySummary(
@@ -1469,11 +1730,13 @@ export class Harness {
       taskState: TaskState;
       repoContext: RepoContext;
       failedToolCallSignatures: Map<string, number>;
+      branchBudget?: BranchBudgetTracker;
     },
   ): Promise<HarnessResult> {
     this.loopController.stop(reason);
     const state = this.loopController.getState();
     logger.loopStop(reason, state.currentRound, state.totalToolCalls);
+    // currentPlanTracker.onFinal removed (Phase 11)
     await this.saveTaskCheckpoint(
       reason === 'user_abort' ? 'aborted' : reason === 'error' ? 'failed' : 'paused',
       getLatestRealUserText(messages, '') || '',
@@ -1481,6 +1744,7 @@ export class Harness {
       runtimeState,
       reason,
     );
+    await this.resilienceSaveCheckpoint('final_draft', runtimeState, reason);
     if (runtimeState) this.recordTelemetrySummary(reason, runtimeState);
 
     // 如果是用户中断，直接返回
@@ -1498,7 +1762,7 @@ export class Harness {
       const finalContent = [
         '任务因 token 预算耗尽而暂停，尚未确认完成。',
         `已执行 ${state.currentRound} 轮、${state.totalToolCalls} 次工具调用。`,
-        '请继续发送“继续”或提高/关闭 ICE_HARNESS_TOKEN_BUDGET 后重试。',
+        '请拆分任务或发起新会话后重试。',
       ].join('\n');
 
       onStep?.({
@@ -1533,17 +1797,13 @@ export class Harness {
           }
         }, { tools: [] });
         finalContent = finalResponse.content;
-        logger.llmResponseFinal({
-          input: finalResponse.usage?.inputTokens ?? 0,
-          output: finalResponse.usage?.outputTokens ?? 0,
-        });
+        const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
+        logger.llmResponseFinal(sumLog.usage, sumLog.meta);
       } else {
         const finalResponse = await chatFn(messages, { tools: [] });
         finalContent = finalResponse.content;
-        logger.llmResponseFinal({
-          input: finalResponse.usage?.inputTokens ?? 0,
-          output: finalResponse.usage?.outputTokens ?? 0,
-        });
+        const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
+        logger.llmResponseFinal(sumLog.usage, sumLog.meta);
       }
     } catch (err) {
       // 最终总结调用失败，用最后一条 assistant 消息作为回复
@@ -1591,11 +1851,13 @@ export class Harness {
     // ── 第一道防线：轻量微压缩（约 72% 阈值，纯本地，零 LLM 成本）──
     if (this.contextCompactor.needsMicroCompaction(messages) && !this.contextCompactor.needsCompaction(messages)) {
       const before = messages.length;
+      const beforeTok = this.contextCompactor.getEstimatedTokens(messages);
       const compacted = this.contextCompactor.doLightCompact(messages);
       messages.length = 0;
       messages.push(...compacted);
+      const afterTok = this.contextCompactor.getEstimatedTokens(messages);
       console.log(`[harness] 微压缩: ${before} → ${messages.length} 条消息 (纯本地，零 LLM 成本)`);
-      logger.compaction(before, messages.length);
+      logger.compaction(before, messages.length, beforeTok, afterTok);
       onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
       return; // 微压缩不注入恢复提示，对 LLM 透明
     }
@@ -1609,7 +1871,7 @@ export class Harness {
     // 压缩前备份任务目标到会话笔记：等待完成后再读盘，避免与硬压缩读到旧笔记竞态（带超时降级）
     const taskDesc = this.contextCompactor.getTaskDescription(messages);
     if (taskDesc) {
-      const waitMs = preCompactSessionMemoryWaitMs();
+      const waitMs = PRE_COMPACT_SESSION_MEMORY_WAIT_MS;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error(PRE_COMPACT_SESSION_TIMEOUT_MSG)), waitMs);
@@ -1717,14 +1979,16 @@ export class Harness {
       state.amnesiaRecoveryCount = 0;
     }
 
-    logger.compaction(before, messages.length);
+    const afterTokCompact = this.contextCompactor.getEstimatedTokens(messages);
+    logger.compaction(before, messages.length, beforeTokens, afterTokCompact);
     this.runtimeTelemetry?.recordCompaction({
       beforeMessages: before,
       afterMessages: messages.length,
       beforeTokens,
-      afterTokens: this.contextCompactor.getEstimatedTokens(messages),
+      afterTokens: afterTokCompact,
     });
     onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
+    await this.resilienceSaveCheckpoint('compaction', state);
   }
 
   /**
@@ -1733,6 +1997,8 @@ export class Harness {
   getLoopState() {
     return this.loopController.getState();
   }
+
+  // getExecutionPlan removed (Phase 11 — execution plan layer deleted)
 
   /**
    * 获取停止钩子管理器（用于注册自定义钩子）。
@@ -1750,19 +2016,9 @@ export class Harness {
   }
 
   /**
-   * 等待后台记忆任务完成并清理资源。
+   * 判断工具调用是否具有破坏性。
    *
-   * 在进程退出前调用，确保：
-   * - 进行中的 LLM 提取完成（不丢失记忆）
-   * - 进行中的 Dream 整合完成（不损坏记忆文件）
-   * - 会话记忆更新完成
-   *
-   * @param timeoutMs - 最大等待时间（默认 10 秒）
-   */
-  /**
-   * 判断工具调用是否需要用户确认。
-   * 对于 fs_operation 和 run_command，运行时分析具体参数来决定破坏性。
-   * 其他工具由元数据的 isDestructive 字段决定。
+   * `fs_operation` / `run_command` 在运行时解析参数；其余工具使用元数据 `isDestructive`。
    */
   private isDestructiveToolCall(tc: ToolCall): boolean {
     if (tc.name === 'fs_operation') {
@@ -1776,6 +2032,9 @@ export class Harness {
     return getToolMetadata(tc.name).isDestructive;
   }
 
+  /**
+   * 配置的 pattern 命中则直接采用规则权限；否则破坏性工具默认为 `confirm`。
+   */
   private resolveToolPermission(tc: ToolCall): { permission: 'allow' | 'confirm' | 'deny'; reason?: string } {
     for (const rule of this.permissionRules) {
       if (this.matchesPermissionPattern(rule.pattern, tc.name)) {
@@ -1789,6 +2048,7 @@ export class Harness {
     };
   }
 
+  /** Glob 风格：`*`、精确工具名或 `*` 展开的 `^escaped$` 正则。 */
   private matchesPermissionPattern(pattern: string, toolName: string): boolean {
     if (pattern === '*' || pattern === toolName) return true;
     const escaped = pattern
@@ -1797,10 +2057,14 @@ export class Harness {
     return new RegExp(`^${escaped}$`).test(toolName);
   }
 
+  /** 连续失败统计用的稳定键（工具名 + 序列化参数）。 */
   private toolCallSignature(tc: ToolCall): string {
     return `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
   }
 
+  /**
+   * 累加失败签名计数，返回本轮起已连续失败 ≥2 次的签名（供熔断/强提示）。
+   */
   private collectRepeatedFailures(
     _toolCalls: ToolCall[],
     failedSignatures: string[],
@@ -1834,8 +2098,263 @@ export class Harness {
     return tc.name;
   }
 
+  /**
+   * 等待后台记忆任务完成并释放资源，供进程退出前调用。
+   *
+   * @param timeoutMs - 最大等待毫秒数（默认 10s）
+   */
   async drainMemory(timeoutMs: number = 10_000): Promise<void> {
     await this.memoryIntegration.drain(timeoutMs);
     this.memoryIntegration.dispose();
   }
+
+  // ─── Resilience v2 集成（无 sessionDir 时 checkpointEngine 为 undefined，持久化相关为 no-op） ───
+
+  /**
+   * 记录一轮工具调用到 branchBudget 和 checkpointEngine。
+   * 关 flag 时 no-op。
+   *
+   * 磁盘写入必须经 enqueueCheckpointPersist，与 TaskCheckpointManager 串行，避免绕过队列与 v1 save 交叉 rename。
+   */
+  private async resilienceRecordToolCalls(
+    toolCalls: ToolCall[],
+    failedSignatures: Set<string>,
+    state: LoopState,
+  ): Promise<void> {
+    if (!this.resilienceV2Enabled || !state.branchBudget || !this.checkpointEngine) return;
+
+    const engine = this.checkpointEngine;
+
+    for (const tc of toolCalls) {
+      const sig = this.toolCallSignature(tc);
+      const failed = failedSignatures.has(sig);
+
+      const path = typeof tc.arguments?.path === 'string'
+        ? tc.arguments.path
+        : (typeof tc.arguments?.file_path === 'string' ? tc.arguments.file_path : undefined);
+      if (path && /^(edit_file|write_file|append_file|batch_edit_file|patch_file)$/.test(tc.name)) {
+        state.branchBudget.recordFileEdit(path);
+      }
+
+      if (tc.name === 'run_command' && failed) {
+        const cmd = typeof tc.arguments?.command === 'string' ? tc.arguments.command : '';
+        if (cmd) state.branchBudget.recordFailedCommandAttempt(cmd);
+      }
+
+      if (failed) {
+        state.branchBudget.recordError(sig);
+        await this.enqueueCheckpointPersist(async () => {
+          try {
+            await engine.save({
+              trigger: 'tool_failed',
+              branchBudget: state.branchBudget,
+              appendFailure: {
+                signature: sig,
+                count: 1,
+                at: Date.now(),
+              },
+            });
+          } catch (err) {
+            console.debug(
+              '[harness] resilience v2 save (tool_failed) failed:',
+              err instanceof Error ? err.message : err,
+            );
+          }
+        });
+      }
+
+      await this.enqueueCheckpointPersist(async () => {
+        try {
+          await engine.save({
+            trigger: failed ? 'tool_failed' : 'step_completed',
+            branchBudget: state.branchBudget,
+            appendTool: {
+              toolName: tc.name,
+              success: !failed,
+              signature: sig,
+              at: Date.now(),
+            },
+          });
+        } catch (err) {
+          console.debug(
+            '[harness] resilience v2 save (tool) failed:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      });
+    }
+  }
+
+  /**
+   * 检查分支预算是否触发，需要则注入 recovery warning 到对话。
+   * 每轮最多注入 1 次，避免与已有的 consecutiveToolFailures 提示叠加。
+   */
+  private resilienceMaybeBranchRecover(state: LoopState, msgs: UnifiedMessage[]): void {
+    if (!this.resilienceV2Enabled || !state.branchBudget || !this.checkpointEngine) return;
+    if (state.branchBudgetWarnedThisRound) return;
+
+    const decision = state.branchBudget.shouldBranchRecover();
+    if (!decision.triggered) return;
+
+    const signal = state.branchBudget.buildRecoverySignal(decision);
+    if (!signal) return;
+
+    msgs.push({ role: 'user', content: signal.message });
+    state.branchBudget.markRecoveryTriggered();
+    state.branchBudgetWarnedThisRound = true;
+
+    const engine = this.checkpointEngine;
+    void this.enqueueCheckpointPersist(async () => {
+      try {
+        await engine.save({
+          trigger: 'tool_failed',
+          branchBudget: state.branchBudget,
+          appendRecoverySignal: signal,
+        });
+      } catch (err) {
+        console.debug(
+          '[harness] resilience v2 save (recovery signal) failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    });
+  }
+
+  /**
+   * 在工具失败 / 验证失败时做一次 step review。
+   * 每轮最多 1 次；启发式给出明确结论时不触发 LLM。
+   */
+  private async resilienceMaybeReviewStep(
+    state: LoopState,
+    trigger: 'tool_failure' | 'verification_failure' | 'step_transition',
+    chatFn: ChatFunction,
+  ): Promise<void> {
+    if (!this.resilienceV2Enabled) return;
+    if (state.stepReviewedThisRound) return;
+    state.stepReviewedThisRound = true;
+
+    try {
+      const recentTools = collectRecentToolTraces(state.messages, 5);
+      const lastErrors = collectRecentErrors(state.messages, 3);
+      // planActive/activeStep removed (Phase 11 — currentPlanTracker deleted)
+
+      const result = await reviewStep({
+        goal: state.taskState.snapshot().goal,
+        currentStep: undefined, // activeStep removed (Phase 11)
+        recentTools,
+        lastErrors,
+        trigger,
+        taskSnapshot: state.taskState.snapshot(),
+        previousReview: state.lastStepReview,
+      }, chatFn);
+
+      state.lastStepReview = result;
+
+      // 仅当 step-review 给出"重复 + 建议 fallback"且 branchBudget 这轮没触发时，
+      // 才发出一条独立、温和的提示；否则交给现有 consecutiveToolFailures / branchBudget 流程。
+      if (
+        result.repeatedPattern
+        && result.fallbackSuggested
+        && !state.branchBudgetWarnedThisRound
+      ) {
+        state.messages.push({
+          role: 'user',
+          content: `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`,
+        });
+        state.branchBudgetWarnedThisRound = true;
+      }
+    } catch (err) {
+      console.debug(
+        '[harness] resilience v2 step-review failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * v2 checkpoint 合并保存。在以下 hook 点调用：
+   *   step_completed / tool_failed / verification_started / verification_failed
+   *   compaction / final_draft
+   */
+  private async resilienceSaveCheckpoint(
+    trigger: CheckpointSaveTrigger,
+    state: { taskState: TaskState; branchBudget?: BranchBudgetTracker } | undefined,
+    stopReason?: StopReason,
+  ): Promise<void> {
+    if (!this.resilienceV2Enabled || !this.checkpointEngine) return;
+    if (!state) return;
+    if (shouldSkipResilienceCheckpoint(state.taskState.snapshot().intent)) return;
+
+    const engine = this.checkpointEngine;
+
+    await this.enqueueCheckpointPersist(async () => {
+      try {
+        await engine.save({
+          trigger,
+          branchBudget: state.branchBudget,
+          verificationPending: state.taskState.shouldBlockFinalForVerification(),
+          lastStopReason: stopReason,
+        });
+      } catch (err) {
+        console.debug(
+          `[harness] resilience v2 save (${trigger}) failed:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    });
+  }
+}
+
+// ─── Resilience v2 内部辅助：从消息历史抽取 step-review 所需的最小上下文 ───
+
+/**
+ * 自尾部向前收集最近 `max` 条 tool 结果，并反向匹配对应 assistant `toolCalls` 得到名称与签名。
+ */
+function collectRecentToolTraces(
+  messages: UnifiedMessage[],
+  max: number,
+): Array<{ toolName: string; signature: string; success: boolean; error?: string }> {
+  const traces: Array<{ toolName: string; signature: string; success: boolean; error?: string }> = [];
+  // 倒序遍历，找最近 N 条 tool result
+  for (let i = messages.length - 1; i >= 0 && traces.length < max; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    const content = msg.content;
+    const failed = content.includes('Tool execution error:') || content.includes('工具执行错误');
+    const errorMatch = content.match(/(?:Tool execution error|工具执行错误)[:：]\s*([^\n]{1,200})/);
+    // 反向查找最近的 assistant tool_calls 以拿到 toolName 与 args
+    let toolName = 'unknown';
+    let signature = '';
+    for (let j = i - 1; j >= 0; j--) {
+      const m = messages[j];
+      if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+      const matchTC = m.toolCalls.find(tc => tc.id === msg.toolCallId);
+      if (matchTC) {
+        toolName = matchTC.name;
+        signature = `${matchTC.name}:${JSON.stringify(matchTC.arguments ?? {})}`;
+      }
+      break;
+    }
+    traces.unshift({
+      toolName,
+      signature: signature || toolName,
+      success: !failed,
+      error: failed ? (errorMatch?.[1] ?? content.slice(0, 200)) : undefined,
+    });
+  }
+  return traces;
+}
+
+/** 收集最近若干条 tool 错误摘要（中英错误前缀）。 */
+function collectRecentErrors(messages: UnifiedMessage[], max: number): string[] {
+  const errors: string[] = [];
+  for (let i = messages.length - 1; i >= 0 && errors.length < max; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+    const content = msg.content;
+    if (content.includes('Tool execution error:') || content.includes('工具执行错误')) {
+      errors.unshift(content.slice(0, 240));
+    }
+  }
+  return errors;
 }

@@ -141,6 +141,7 @@ window.ChatPage = (function () {
       resetTokenUsage();
       Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
       UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
       return;
     }
 
@@ -295,6 +296,9 @@ window.ChatPage = (function () {
     if (data && data.tunnelReady) {
       announceTunnelReadyFromPayload(data.tunnelReady);
     }
+    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
+      window.ChatExecutionPlanBridge.notifyConnected(data || {});
+    }
   }
 
   // ---- WebSocket 事件处理 ----
@@ -383,6 +387,16 @@ window.ChatPage = (function () {
       var resultStatus = step.toolSuccess ? 'success' : 'error';
       UI.updateLastToolAction(step.toolName, resultStatus);
       Session.updateToolBatchStatus(step.toolName, resultStatus);
+    }
+    if (window.ChatExecutionPlanBridge
+      && (step.type === 'execution_plan_init'
+        || step.type === 'execution_plan_update'
+        || step.type === 'execution_plan_clear'
+        || step.type === 'task_graph_init'
+        || step.type === 'task_graph_node'
+        || step.type === 'task_graph_branch'
+        || step.type === 'task_graph_done')) {
+      window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
   }
@@ -485,6 +499,13 @@ window.ChatPage = (function () {
     });
   }
 
+  function onWsSessionUpdated() {
+    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
+      window.ChatExecutionPlanBridge.notifySessionUpdated();
+    }
+    pullServerChatSnapshotAuthoritative();
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
     container = parentEl;
@@ -570,7 +591,7 @@ window.ChatPage = (function () {
     WS.on('confirm', onWsConfirm);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    WS.on('session_updated', pullServerChatSnapshotAuthoritative);
+    WS.on('session_updated', onWsSessionUpdated);
     WS.on('sync', syncMessages);
 
     // 连接 WebSocket

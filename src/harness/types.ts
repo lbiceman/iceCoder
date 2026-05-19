@@ -7,6 +7,7 @@
 import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import type { HarnessLogEntry } from './logger.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
+import type { TaskGraphView, TaskGraphPatch } from '../types/task-graph-view.js';
 
 // ─── 上下文组装 ───
 
@@ -51,6 +52,7 @@ export interface ToolPermissionRule {
   permission: ToolPermission;
   /** 规则描述 */
   reason?: string;
+  message?: string;
 }
 
 /**
@@ -96,10 +98,10 @@ export type StopReason =
   | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 
-/** 推送到前端的记忆子状态（冰豆 / Web 会话指示气泡） */
+/** 推送到前端的记忆子状态（冰豆 / Web 会话指示气泡）；hit/coarse_hit 仅在已注入本轮模型上下文时发出 */
 export type MemoryStepKind =
-  | 'recall_coarse_hit'  // 首轮 LLM 前粗召回命中
-  | 'recall_hit'         // 工具后轮次标准召回命中
+  | 'recall_coarse_hit'  // 首轮 LLM 前粗召回且已并入提示
+  | 'recall_hit'         // 标准召回且已并入提示
   | 'recall_empty'       // 标准召回无结果
   | 'recall_skipped'     // 跳过（空库、过滤、去重后无条等）
   | 'session_hydrate';   // 从 session-notes 恢复运行时快照
@@ -124,6 +126,14 @@ export interface LoopState {
   startTime: number;
   /** 停止原因（循环结束后设置） */
   stopReason?: StopReason;
+  /** TaskGraph (Phase 7) */
+  graphGoal?: string;
+  graphIntent?: string;
+  graphStatus?: string;
+  nodeId?: string;
+  nodeIndex?: number;
+  reason?: string;
+  message?: string;
 }
 
 // ─── Harness 核心 ───
@@ -164,9 +174,30 @@ export interface HarnessConfig {
 
 /**
  * Harness 循环中每一步的事件回调。
+ *
+ * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 保留给前端兼容（Phase 13）；
+ * 新事件 `task_graph_*` 由 TaskGraph 驱动。
  */
 export interface HarnessStepEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_denied' | 'tool_confirm' | 'tool_progress' | 'compaction' | 'final' | 'stream_delta' | 'tool_output' | 'memory_event';
+  type:
+    | 'thinking'
+    | 'tool_call'
+    | 'tool_result'
+    | 'tool_denied'
+    | 'tool_confirm'
+    | 'tool_progress'
+    | 'compaction'
+    | 'final'
+    | 'stream_delta'
+    | 'tool_output'
+    | 'memory_event'
+    | 'execution_plan_init'
+    | 'execution_plan_update'
+    | 'execution_plan_clear'
+    | 'task_graph_init'
+    | 'task_graph_node'
+    | 'task_graph_branch'
+    | 'task_graph_done';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */
@@ -180,6 +211,14 @@ export interface HarnessStepEvent {
   toolError?: string;
   totalToolCalls?: number;
   stopReason?: StopReason;
+  /** TaskGraph (Phase 7) */
+  graphGoal?: string;
+  graphIntent?: string;
+  graphStatus?: string;
+  nodeId?: string;
+  nodeIndex?: number;
+  reason?: string;
+  message?: string;
   /** 本轮 LLM 调用的 token 用量 */
   tokenUsage?: { inputTokens: number; outputTokens: number };
   /** 累计 token 用量 */
@@ -188,6 +227,12 @@ export interface HarnessStepEvent {
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */
   memoryDetail?: string;
+  /** TaskGraph 全量视图（仅 type === 'execution_plan_init'） */
+  plan?: TaskGraphView;
+  /** 执行计划 ID（仅 type === 'execution_plan_update'） */
+  planId?: string;
+  /** TaskGraph 增量补丁（仅 type === 'execution_plan_update'） */
+  patch?: TaskGraphPatch;
 }
 
 /**

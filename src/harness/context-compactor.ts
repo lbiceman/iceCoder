@@ -79,7 +79,7 @@ const MICRO_COMPACT_RATIO = (() => {
 /** 每会话最大微压缩次数 */
 const MAX_MICRO_COMPACTS_PER_SESSION = 3;
 
-/** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe / Claude Code 后缀锚点） */
+/** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe） */
 const MIN_REAL_USERS_IN_SUFFIX = 2;
 
 /** 硬压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */

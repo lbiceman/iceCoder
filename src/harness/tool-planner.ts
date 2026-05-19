@@ -1,5 +1,6 @@
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import { INTENT_TOOL_SUGGESTIONS } from './tool-plan-intent-map.js';
+import { inferIntent } from './task-state.js';
 
 export interface ToolPlan {
   intent: TaskIntent;
@@ -48,15 +49,4 @@ function recommendedFlow(intent: TaskIntent): string[] {
     default:
       return ['inspect if needed', 'answer directly if no code action is needed'];
   }
-}
-
-function inferIntent(text: string): TaskIntent {
-  const t = text.toLowerCase();
-  if (/测试|运行|verify|test|vitest|jest|pytest|tsc/.test(t)) return 'test';
-  if (/修复|失败|报错|错误|debug|fix|investigate/.test(t)) return 'debug';
-  if (/重构|refactor/.test(t)) return 'refactor';
-  if (/文档|readme|docs?/.test(t)) return 'docs';
-  if (/修改|改|实现|新增|创建|edit|modify|implement|create|update/.test(t)) return 'edit';
-  if (/查看|读取|搜索|解释|说明|read|search|explain|inspect/.test(t)) return 'inspect';
-  return 'question';
 }

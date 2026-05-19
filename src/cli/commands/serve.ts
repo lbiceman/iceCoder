@@ -73,7 +73,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
  * ice serve 命令入口。
  */
 export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
-  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
+  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3784', 10);
 
   const { cleanup } = await startWebServer(ctx, port);
 

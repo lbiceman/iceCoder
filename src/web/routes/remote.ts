@@ -131,7 +131,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
 
     // 获取访问 URL（优先公网隧道，回退局域网）
     const localIP = getLocalIP();
-    const port = process.env.PORT ?? '3000';
+    const port = process.env.PORT ?? '3784';
     const tunnelUrl = await getTunnelUrl();
     const baseUrl = tunnelUrl || `http://${localIP}:${port}`;
     const url = `${baseUrl}/?token=${token}`;

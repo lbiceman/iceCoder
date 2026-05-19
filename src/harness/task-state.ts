@@ -104,13 +104,50 @@ Run an appropriate verification command now (for example: focused tests, npm tes
   }
 }
 
-function inferIntent(text: string): TaskIntent {
+/** 纯分析/疑问口吻（无明确「请改/请跑测」侧信号） */
+function isQuestionOnlyPrefix(text: string): boolean {
+  const rawTrim = text.trim();
+  const t = rawTrim.toLowerCase();
+  return rawTrim.startsWith('分析一下')
+    || rawTrim.startsWith('说明一下')
+    || rawTrim.startsWith('解释一下')
+    || rawTrim.startsWith('为什么')
+    || rawTrim.startsWith('如何')
+    || rawTrim.startsWith('怎么')
+    || /^解释([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^说明([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^分析([\s\u3000，。、！？]|$)/.test(rawTrim)
+    || /^(what|why|how)\b/i.test(t);
+}
+
+/** 明确要动工具/改代码/跑测的信号（不含单独「报错」等分析词） */
+function hasExecutableSideSignal(text: string): boolean {
   const t = text.toLowerCase();
-  if (/测试|运行|verify|test|vitest|jest|pytest|tsc/.test(t)) return 'test';
+  return /修改|实现|新增|创建|生成|修复|排查|优化|重构|落地|执行/i.test(t)
+    || /运行\s*测试|跑测试|vitest|jest|pytest|mocha/i.test(t)
+    || /\b(edit|modify|implement|create|update|fix|investigate|refactor)\b/i.test(t)
+    || /\b(run|execute)\s+\S+/i.test(t)
+    || /(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b/i.test(t);
+}
+
+/** 由用户自然语言推断任务意图（与 TaskState 构造逻辑一致，供执行计划等复用） */
+export function inferIntent(text: string): TaskIntent {
+  const t = text.toLowerCase();
+  const rawTrim = text.trim();
+
+  if (isQuestionOnlyPrefix(text) && !hasExecutableSideSignal(text)) {
+    if (/查看|读取|搜索|解释|说明|read|search|explain|inspect/.test(t)) return 'inspect';
+    return 'question';
+  }
+
+  // 实现 / 新建 —— 避免路径中含 test（如 D:\work\test）被误判为跑测试
+  if (/修改|改|实现|新增|创建|生成|edit|modify|implement|create|update/.test(t)) return 'edit';
+  if (/测试|运行\s*测试|跑测试|verify|(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b|vitest|jest|pytest|\btsc\b/.test(t)) {
+    return 'test';
+  }
   if (/修复|失败|报错|错误|debug|fix|investigate/.test(t)) return 'debug';
   if (/重构|refactor/.test(t)) return 'refactor';
   if (/文档|readme|docs?/.test(t)) return 'docs';
-  if (/修改|改|实现|新增|创建|edit|modify|implement|create|update/.test(t)) return 'edit';
   if (/查看|读取|搜索|解释|说明|read|search|explain|inspect/.test(t)) return 'inspect';
   return 'question';
 }

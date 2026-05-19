@@ -48,7 +48,7 @@ export interface RecallTelemetry {
   /** 会话内去重过滤掉的记忆数 */
   dedupCount?: number;
   /** 召回阶段：首轮粗召回 vs 工具后标准召回 */
-  recallPhase?: 'coarse_pre_llm' | 'standard';
+  recallPhase?: 'coarse_pre_llm' | 'casual_light' | 'standard';
 }
 
 /**

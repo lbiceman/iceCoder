@@ -1,8 +1,7 @@
 /**
  * LLM 驱动的记忆自动提取。
  *
- * 替代硬编码正则规则，用 LLM 分析对话内容，
- * 判断什么值得记住并自动写入记忆文件。
+ * 维度细则见仓库 `docs/记忆系统调整.md`（运行时读入并注入提示词，避免代码内重复长文）。
  *
  * 支持 prompt cache 优化：接收主对话的消息历史前缀，
  * 只在末尾追加提取指令，共享 prompt cache 降低成本。
@@ -11,7 +10,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
-import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
+import { formatMemoryManifest } from './memory-scanner.js';
 import { getScannerCache } from './memory-scanner-cache.js';
 import type { MemoryHeader } from './types.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
@@ -23,12 +22,95 @@ import {
   DEFAULT_CONFIDENCE_FALLBACK,
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
+import { evictIfNeeded } from './memory-eviction.js';
 
 /** 消息内容截断字符数 */
 const EXTRACTION_MESSAGE_TRUNCATE = 2000;
 /** Tags Jaccard 阈值（去重） */
 const TAGS_JACCARD_DEDUP_THRESHOLD = 0.6;
-import { evictIfNeeded } from './memory-eviction.js';
+
+/** 提取维度全文来源（相对 `process.cwd()`） */
+const MEMORY_DIMENSION_DOC_RELATIVE = 'docs/记忆系统调整.md';
+/** 防止异常大文件撑爆上下文 */
+const MEMORY_DIMENSION_DOC_MAX_CHARS = 12_000;
+
+/** 文档缺失时的极简维度摘要（npm 包等无 docs 场景） */
+const FALLBACK_DIMENSION_BLURB = `User: stack, role, comms, rhythm, naming/code style, tests, git, docs, security, output, cost.
+Project: goals, arch, deps, dirs, build/deploy, tests, review, services, env names, commands (user-stated or non-obvious intent only).
+Feedback: corrections, confirmations, workflow, priority, interrupt/resume.
+Map memoryCategory: habit|hobby|recurring_mistake|stable_preference|explicit_rule|project_convention.`;
+
+/**
+ * 允许写入长期记忆的「类别」——与 habits / hobbies / 常犯错误 / 稳定偏好 对齐。
+ * 其它类别一律丢弃（宁可少记，不可垃圾进库）。
+ */
+export const ALLOWED_MEMORY_CATEGORIES = new Set([
+  'habit',
+  'hobby',
+  'recurring_mistake',
+  'stable_preference',
+  'explicit_rule',
+  /** 仓库级、且难以从代码一眼读出的约定（少用） */
+  'project_convention',
+]);
+
+/** 典型垃圾文件名片段（历史重复/元对话），与 white-list 无关，直接拒绝落盘 */
+const REJECT_FILENAME_SUBSTRINGS = [
+  'model_identity',
+  'identity_inquiry',
+  'identity_query',
+  'identity_question',
+  'current_model_identity',
+  'user_model_identity',
+  'who_are_you',
+  'knowledge_cutoff',
+];
+
+/**
+ * `type` 与 memoryCategory 须一致，避免 LLM 乱标产生垃圾条目。
+ * - project ↔ project_convention
+ * - project_convention 仅允许 project（或极罕 reference 指针，保守为仅 project）
+ */
+function isTypeCategoryCoherent(type: string, memoryCategory: string): boolean {
+  if (memoryCategory === 'project_convention') {
+    return type === 'project';
+  }
+  if (type === 'project') {
+    return memoryCategory === 'project_convention';
+  }
+  return true;
+}
+
+export function isAllowedMemoryCategory(cat: unknown): boolean {
+  if (typeof cat !== 'string') return false;
+  return ALLOWED_MEMORY_CATEGORIES.has(cat.trim().toLowerCase());
+}
+
+function shouldRejectFilenameForExtraction(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return REJECT_FILENAME_SUBSTRINGS.some(s => lower.includes(s.toLowerCase()));
+}
+
+/**
+ * 读取 `docs/记忆系统调整.md` 注入提取提示；失败或无文件时用极短 fallback。
+ */
+async function loadMemoryDimensionDocBlock(): Promise<string> {
+  const rel = process.env.ICE_MEMORY_DIMENSION_DOC?.trim() || MEMORY_DIMENSION_DOC_RELATIVE;
+  const abs = path.isAbsolute(rel) ? rel : path.join(process.cwd(), rel);
+  try {
+    let raw = (await fs.readFile(abs, 'utf-8')).trim();
+    if (!raw) {
+      return `\n## Dimension taxonomy (empty file — fallback)\n${FALLBACK_DIMENSION_BLURB}\n`;
+    }
+    if (raw.length > MEMORY_DIMENSION_DOC_MAX_CHARS) {
+      raw = raw.slice(0, MEMORY_DIMENSION_DOC_MAX_CHARS)
+        + `\n\n…[truncated at ${MEMORY_DIMENSION_DOC_MAX_CHARS} chars]\n`;
+    }
+    return `\n## Dimension taxonomy — \`${rel}\` (\`${abs}\`)\n\n${raw}\n`;
+  } catch {
+    return `\n## Dimension taxonomy (file missing — fallback)\n\n${FALLBACK_DIMENSION_BLURB}\n`;
+  }
+}
 
 /**
  * 提取配置。
@@ -71,60 +153,24 @@ export interface ExtractionResult {
 }
 
 /**
- * 提取当前对话的系统提示词片段。
+ * 精简指令：维度表从 `docs/记忆系统调整.md` 运行时拼接，见 `loadMemoryDimensionDocBlock`。
  */
-const EXTRACTION_SYSTEM_PROMPT = `You are a memory extraction subagent. Analyze the conversation and extract durable information worth remembering for future conversations. Be precise: noisy or weak memories are harmful because they can distract future coding tasks.
+const EXTRACTION_CORE_PROMPT = `Memory extraction subagent. Extract only **durable** facts for **future** sessions; **if unsure, return []**.
 
-## Memory types
-- user: User's role, goals, preferences, knowledge, habits, preferred programming languages, frameworks, work style, personal details (name, location, family, pets, hobbies)
-- feedback: Guidance on how to work — corrections AND confirmations
-- project: Ongoing work context not derivable from code/git
-- reference: Pointers to external systems/resources
+**Strictly map** what you extract to the dimension taxonomy in the next section (user / project / feedback tables).
 
-## Evidence threshold
-- Explicit "remember this" / "记住" requests should be saved.
-- Clear corrections or stable preferences may be saved.
-- A single weak signal, temporary debugging detail, or ordinary tool output should NOT become long-term memory.
-- If a fact only matters for the current task, prefer leaving it out; session notes can handle temporary state.
+- \`memoryCategory\` (required, exactly one): \`habit\` | \`hobby\` | \`recurring_mistake\` | \`stable_preference\` | \`explicit_rule\` | \`project_convention\`
+- \`type\`: \`user\` | \`feedback\` | \`project\` | \`reference\` — align with the taxonomy block (profile→user, repo conventions→project, corrections→feedback).
+- **Tags**: e.g. \`dimension:tech_stack\`, \`dimension:git\`, \`dimension:feedback_correction\`.
 
-## What NOT to save
-- Code patterns, architecture, file paths — derivable from reading the project
-- Git history, recent changes — git log/blame are authoritative
-- Debugging solutions — the fix is in the code
-- Tool call details, system prompts, ephemeral task state
+**Never**: model identity / knowledge cutoff meta-chat; one-off task blow-by-blow; pure chit-chat.
 
-## Contradiction detection / 矛盾检测
-When extracting, check if the new fact CONTRADICTS an existing memory:
-- If the user corrects a previously remembered fact (e.g., "I actually use Python now, not Java"), this is a contradiction
-- If the conversation reveals that a previous memory is outdated or wrong, this is a contradiction
-- Mark contradicted memories with the "contradicts" field pointing to the existing file
+**contradicts**: existing **filename** only when the user **explicitly** says prior memory is wrong.
 
-**Important**: Contradictions require user confirmation before updating. Only mark a contradiction when the user EXPLICITLY states the old information is wrong — not when you infer it might be outdated.
+**Output**: JSON array **only**. Each item: \`memoryCategory\`, \`filename\`, \`type\`, \`name\`, \`description\`, \`content\` (prefer <800 chars), \`tags\`[], \`confidence\` 0–1, \`source\` \`llm_extract\`, \`eventDate\`, \`contradicts\`, \`level\`, \`evidenceStrength\`. Merge same topic into one file.
 
-## Output format
-Return a JSON array of memories to save. Each memory object has:
-- "filename": string (e.g., "user_role.md", "feedback_testing.md", "user_preferred_languages.md")
-- "type": "user" | "feedback" | "project" | "reference"
-- "name": string (short name, include date if time-specific)
-- "description": string (one-line description for future relevance matching — be SPECIFIC, include names/dates/key details)
-- "content": string (the memory content — include ALL relevant details, not summaries)
-- "eventDate": string | null (YYYY-MM-DD format, when this event/fact occurred. null if not time-specific)
-- "contradicts": string | null (filename of existing memory that this new fact contradicts. null if no contradiction)
-- "level": "hard_rule" | "project_fact" | "preference" | "observation" | "session_state"
-- "evidenceStrength": "explicit" | "repeated" | "inferred" | "weak"
-
-If nothing is worth saving, return an empty array: []
-Return ONLY valid JSON, no other text.
-
-## CRITICAL COMPLETENESS RULES
-1. **Extract EVERY distinct fact.** Each fact = separate memory entry. Do NOT merge unrelated facts.
-2. **Preserve ALL list items.** If the conversation mentions 5 countries, extract all 5 — not just the first 2.
-3. **Include ALL names, dates, quantities, locations.** These are the most valuable recall anchors.
-4. **Capture personal details.** Family members, pets, hobbies, health, relationships, travel — these are frequently asked about.
-5. **Capture implicit preferences.** "I usually use..." or "Let's go with X again" = preference for X.
-6. **Convert relative dates to absolute dates.** "next Thursday" → "2024-03-07".
-7. **Preserve exact quotes when they matter.** Names, technical terms, specific wording.
-8. **When in doubt, do not extract.** Prefer fewer high-confidence memories over noisy long-term memory.`;
+If nothing qualifies: []
+`;
 
 /**
  * 基于 tags 重叠度查找重复记忆。
@@ -225,28 +271,26 @@ export class LLMMemoryExtractor {
         existingManifest = `\n\nExisting memory files (do not duplicate):\n${formatMemoryManifest(existing)}`;
       }
     } catch (err) {
-      console.debug('[LLMMemoryExtractor] scanMemoryFiles failed:', err instanceof Error ? err.message : err);
+      console.debug('[LLMMemoryExtractor] scan memoryDir failed:', err instanceof Error ? err.message : err);
     }
 
-    // 构建提取消息
-    const userContent = this.buildExtractionPrompt(recentMessages, existingManifest);
+    const dimensionBlock = await loadMemoryDimensionDocBlock();
+    const userPayload = this.buildExtractionUserPayload(dimensionBlock, recentMessages, existingManifest);
 
     // 构建消息列表（支持 prompt cache 优化）
     let messages: UnifiedMessage[];
     let usedPromptCache = false;
 
     if (this.config.enablePromptCache && conversationPrefix && conversationPrefix.length > 0) {
-      // prompt cache 优化：复用主对话的消息前缀
-      // LLM 提供商（如 Anthropic）会自动检测前缀匹配并复用 KV cache
       messages = [
         ...conversationPrefix,
-        { role: 'user', content: userContent },
+        { role: 'user', content: `${EXTRACTION_CORE_PROMPT}\n\n${userPayload}` },
       ];
       usedPromptCache = true;
     } else {
       messages = [
-        { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
-        { role: 'user', content: userContent },
+        { role: 'system', content: EXTRACTION_CORE_PROMPT },
+        { role: 'user', content: userPayload },
       ];
     }
 
@@ -282,14 +326,13 @@ export class LLMMemoryExtractor {
   }
 
   /**
-   * 构建提取提示词。
-   * 包含现有记忆清单用于去重，以及结构化去重指令。
+   * 拼接维度文档 + 去重说明 + 近期对话（不含 EXTRACTION_CORE_PROMPT，避免与 system 重复）。
    */
-  private buildExtractionPrompt(
+  private buildExtractionUserPayload(
+    dimensionBlock: string,
     recentMessages: UnifiedMessage[],
     existingManifest: string,
   ): string {
-    // 只提取 user 和 assistant 消息的文本内容
     const conversationText = recentMessages
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => {
@@ -298,30 +341,23 @@ export class LLMMemoryExtractor {
       })
       .join('\n\n');
 
-    return `${EXTRACTION_SYSTEM_PROMPT}
+    return `${dimensionBlock}
+## Dedup
+- **Manifest** below: UPDATE same topic / filename; do not duplicate.
+- **tags**: \`dimension:*\` + semantic tags (\`lang:ts\`等); **memoryCategory** + **confidence** + **source** \`llm_extract\` + **level** + **evidenceStrength**.
 
-## Deduplication rules
-- Check the existing memory list below CAREFULLY before creating new memories
-- If an existing memory covers the same topic, UPDATE it (use the same filename) instead of creating a new one
-- For user habits: if "user_preferred_languages.md" exists and user now also uses Go, update that file to add Go
-- Include "tags" field for semantic dedup: e.g., ["lang:typescript", "lang:python", "tool:vite"]
-- Include "confidence" field: 1.0 for user explicit statements ("I prefer X"), 0.5 for inferred patterns
-- Include "source" field: always "llm_extract"
-- Include "level": hard_rule only for explicit durable rules; project_fact for technical facts; preference for user preferences; observation for soft facts; session_state only for current-session state that should not become long-term user memory
-- Include "evidenceStrength": explicit for direct user statements, repeated for repeated behavior, inferred for model inference, weak for uncertain signals
-
-## Recent conversation to analyze
+## Recent conversation
 
 ${conversationText}${existingManifest}
 
-Extract memories worth saving from the conversation above. Return JSON array only.
-Each object must have: filename, type, name, description, content, tags (string[]), confidence (number 0-1), source ("llm_extract"), eventDate (string YYYY-MM-DD or null), level, evidenceStrength`;
+Return JSON array only. Required per object: memoryCategory, filename, type, name, description, content, tags[], confidence, source, eventDate, level, evidenceStrength, contradicts (optional).`;
   }
 
   /**
    * 解析 LLM 的提取响应。
    */
   private parseExtractionResponse(content: string): Array<{
+    memoryCategory: string;
     filename: string;
     type: string;
     name: string;
@@ -339,15 +375,25 @@ Each object must have: filename, type, name, description, content, tags (string[
     const parsed = parseLLMJsonArray<any[]>(content);
     if (!parsed) return [];
 
-    return parsed
-      .filter(
-        (m: any) =>
-          m.filename &&
-          m.type &&
-          m.name &&
-          m.content &&
-          ['user', 'feedback', 'project', 'reference'].includes(m.type)
-      )
+    const base = parsed.filter((m: any) => {
+      if (!m.filename || !m.type || !m.name || !m.content) return false;
+      if (typeof m.description !== 'string' || !m.description.trim()) return false;
+      return ['user', 'feedback', 'project', 'reference'].includes(m.type);
+    });
+
+    const gated = base.filter((m: any) => {
+      if (!isAllowedMemoryCategory(m.memoryCategory)) return false;
+      const cat = String(m.memoryCategory).trim().toLowerCase();
+      if (!isTypeCategoryCoherent(String(m.type), cat)) return false;
+      if (shouldRejectFilenameForExtraction(String(m.filename))) return false;
+      return true;
+    });
+
+    return gated
+      .map((m: any) => ({
+        ...m,
+        memoryCategory: String(m.memoryCategory).trim().toLowerCase(),
+      }))
       .slice(0, this.config.maxMemories);
   }
 
@@ -365,6 +411,7 @@ Each object must have: filename, type, name, description, content, tags (string[
    */
   private async saveMemories(
     memories: Array<{
+      memoryCategory: string;
       filename: string;
       type: string;
       name: string;
@@ -405,6 +452,11 @@ Each object must have: filename, type, name, description, content, tags (string[
         const safeFilename = memory.filename
           .replace(/[^a-zA-Z0-9_\-.\u4e00-\u9fa5]/g, '_')
           .replace(/\.{2,}/g, '_');
+
+        if (!safeFilename.trim() || shouldRejectFilenameForExtraction(safeFilename)) {
+          console.debug(`[LLMMemoryExtractor] Rejected filename after sanitize: ${memory.filename} → ${safeFilename}`);
+          continue;
+        }
 
         // 路径安全验证
         // user 类型 + 高置信度（用户明确声明）→ 用户级目录（跨项目共享）
@@ -472,6 +524,7 @@ Each object must have: filename, type, name, description, content, tags (string[
 name: ${memory.name}
 description: ${memory.description}
 type: ${memory.type}
+memoryCategory: ${memory.memoryCategory}
 level: ${level}
 evidenceStrength: ${evidenceStrength}
 source: ${source}

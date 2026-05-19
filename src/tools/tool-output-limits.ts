@@ -37,3 +37,5 @@ export function getReadFileDefaultMaxChars(): number {
 export function getDocParseTextMaxChars(): number {
   return clamp(intEnv('ICE_DOC_PARSE_TEXT_MAX_CHARS', 16_000), 2_000, 200_000);
 }
+
+/** test marker */

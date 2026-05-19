@@ -18,11 +18,12 @@ import { ToolExecutor } from '../../src/tools/tool-executor.js';
 import { isDestructiveOperation, isDestructiveCommand } from '../../src/tools/tool-metadata.js';
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
 import {
+  DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL,
   DEFAULT_LONG_RUNNING_MAX_ROUNDS,
   DEFAULT_LONG_RUNNING_TIMEOUT_MS,
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../../src/harness/token-budget-config.js';
 
 // ═══ 测试工具 ═══
@@ -41,6 +42,13 @@ function makeUsage(input = 100, output = 50) {
 
 function finalResponse(content: string, tokens = { input: 100, output: 50 }): LLMResponse {
   return { content, usage: makeUsage(tokens.input, tokens.output), finishReason: 'stop' };
+}
+
+/** step-review 启发式不确定时会额外消费一次 chatFn；队列中插入本桩避免抢走主对话的 mock。 */
+function stepReviewLlmStub(): LLMResponse {
+  return finalResponse(
+    '{"progressMade":false,"repeatedPattern":false,"fallbackSuggested":false,"reason":"test-stub"}',
+  );
 }
 
 function toolCallResponse(calls: { id: string; name: string; args?: Record<string, any> }[], content = ''): LLMResponse {
@@ -340,6 +348,7 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
       finalResponse('File does not exist'),
     ]);
 
@@ -1136,27 +1145,9 @@ describe('ContextCompactor - 微压缩', () => {
 // 15b. Harness token budget config
 // ═══════════════════════════════════════════════════════════════
 describe('Harness token budget config', () => {
-  const originalBudget = process.env.ICE_HARNESS_TOKEN_BUDGET;
-  const originalTimeoutHours = process.env.ICE_HARNESS_TIMEOUT_HOURS;
-  const originalTimeoutMs = process.env.ICE_HARNESS_TIMEOUT_MS;
   const originalMaxRounds = process.env.ICE_HARNESS_MAX_ROUNDS;
 
   afterEach(() => {
-    if (originalBudget === undefined) {
-      delete process.env.ICE_HARNESS_TOKEN_BUDGET;
-    } else {
-      process.env.ICE_HARNESS_TOKEN_BUDGET = originalBudget;
-    }
-    if (originalTimeoutHours === undefined) {
-      delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
-    } else {
-      process.env.ICE_HARNESS_TIMEOUT_HOURS = originalTimeoutHours;
-    }
-    if (originalTimeoutMs === undefined) {
-      delete process.env.ICE_HARNESS_TIMEOUT_MS;
-    } else {
-      process.env.ICE_HARNESS_TIMEOUT_MS = originalTimeoutMs;
-    }
     if (originalMaxRounds === undefined) {
       delete process.env.ICE_HARNESS_MAX_ROUNDS;
     } else {
@@ -1164,34 +1155,27 @@ describe('Harness token budget config', () => {
     }
   });
 
-  it('默认关闭累计 token 预算，仅显式配置时启用', () => {
+  it('累计 token 预算为硬编码常数；不再读取 ICE_HARNESS_TOKEN_BUDGET', () => {
     delete process.env.ICE_HARNESS_TOKEN_BUDGET;
-    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
-
+    expect(getHarnessTokenBudget()).toBe(DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL);
     process.env.ICE_HARNESS_TOKEN_BUDGET = 'off';
-    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
-
-    process.env.ICE_HARNESS_TOKEN_BUDGET = '0';
-    expect(getHarnessTokenBudgetFromEnv()).toBeUndefined();
-
+    expect(getHarnessTokenBudget()).toBe(DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL);
     process.env.ICE_HARNESS_TOKEN_BUDGET = '1200000';
-    expect(getHarnessTokenBudgetFromEnv()).toBe(1200000);
+    expect(getHarnessTokenBudget()).toBe(DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL);
   });
 
-  it('默认允许长时间连续工作，timeout 和 rounds 可显式覆盖', () => {
+  it('墙钟超时硬编码 24h；maxRounds 仍可由 ICE_HARNESS_MAX_ROUNDS 覆盖', () => {
     delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
     delete process.env.ICE_HARNESS_TIMEOUT_MS;
     delete process.env.ICE_HARNESS_MAX_ROUNDS;
 
+    expect(getHarnessTimeoutMsFromEnv()).toBe(24 * 60 * 60 * 1000);
     expect(getHarnessTimeoutMsFromEnv()).toBe(DEFAULT_LONG_RUNNING_TIMEOUT_MS);
     expect(getHarnessMaxRoundsFromEnv()).toBe(DEFAULT_LONG_RUNNING_MAX_ROUNDS);
 
     process.env.ICE_HARNESS_TIMEOUT_HOURS = '6';
-    expect(getHarnessTimeoutMsFromEnv()).toBe(6 * 60 * 60 * 1000);
-
-    delete process.env.ICE_HARNESS_TIMEOUT_HOURS;
     process.env.ICE_HARNESS_TIMEOUT_MS = '7200000';
-    expect(getHarnessTimeoutMsFromEnv()).toBe(7200000);
+    expect(getHarnessTimeoutMsFromEnv()).toBe(DEFAULT_LONG_RUNNING_TIMEOUT_MS);
 
     process.env.ICE_HARNESS_MAX_ROUNDS = '9000';
     expect(getHarnessMaxRoundsFromEnv()).toBe(9000);
@@ -1472,6 +1456,7 @@ describe('Harness - 连续工具失败熔断', () => {
     // 3 轮工具调用（全部失败）+ 1 次最终总结
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       finalResponse('summary'),
@@ -1491,6 +1476,7 @@ describe('Harness - 连续工具失败熔断', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'missing.ts' } }]),
+      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'missing.ts' } }]),
       finalResponse('blocked'),
     ]);
