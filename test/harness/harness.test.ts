@@ -221,6 +221,7 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      stepReviewLlmStub(),
       finalResponse('已修复'),
       toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
       finalResponse('已修复并通过测试'),
@@ -244,6 +245,7 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
       finalResponse('已修复并验证'),
     ]);
