@@ -1,6 +1,6 @@
 ﻿# iceCoder
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, optional **structured execution plans** for UI/resume (**Execution Transparency Layer**), resilient **checkpoint** persistence (including `CheckpointEngine` v2 fields layered on legacy checkpoints), file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole context injection source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (including `CheckpointEngine` v2 fields layered on legacy checkpoints), file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
 
 **Stack:** Node.js 18+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
@@ -54,7 +54,7 @@ User / CLI / Web / Remote
       -> ToolExecutor
       -> HarnessMemoryIntegration
       -> ContextCompactor
-      -> ExecutionPlanTracker (ETL) + TaskCheckpointManager / CheckpointEngine
+      -> GraphExecutor (TaskGraph) + TaskCheckpointManager / CheckpointEngine
   -> Harness.run()
 ```
 
@@ -111,15 +111,23 @@ Key runtime protections:
 
 On the first user turn of an executable engineering task, the Harness may inject a **tool planner** hint: a short list of **2–3 suggested tool names** derived from `taskState.intent` (see `src/harness/tool-plan-intent-map.ts` and `src/harness/tool-planner.ts`). This reduces hesitant openings where the model chats instead of acting.
 
-### Execution Transparency Layer (ETL)
+### TaskGraph (replaces Execution Transparency Layer)
 
-Above the Harness loop sits a **structured execution plan** (`ExecutionPlan` types in `src/types/execution-plan.ts`):
+The Harness loop integrates **TaskGraph** as the **sole context injection source** for LLM prompts (Phase 11–13). TaskGraph replaces the legacy Execution Transparency Layer (ETL).
 
-- **Generation / tracking**: `buildExecutionPlan()` (`execution-plan-generator.ts`) builds an initial step list; `ExecutionPlanTracker` advances steps as phases and tooling evolve and emits **`execution_plan_init`** / **`execution_plan_update`** / **`execution_plan_clear`** on the same `HarnessStepEvent` channel used by Ice Bean (see `src/harness/types.ts`).
-- **Persistence**: When `sessionDir` is set, an active **`plan`** is stored on **`TaskCheckpoint`** (`src/harness/checkpoint.ts`) beside task state so resume can reattach steps after crash or reconnect; Harness also aligns with fenced **session-note** payloads where applicable (hydration helpers in `session-plan-*` paths — see tests under `test/harness/execution-plan-*.test.ts`).
-- **Intent**: Visible X/N-style progress for the SPA, finer-grained UX, and recovery without repeating the goal — **not** a rigid judge of allowed tool calls; the LLM remains in the loop (`docs/execution-transparency-layer.md`).
+- **Generation**: `buildGraph()` (`task-graph-builder.ts`) constructs a multi-step task graph from intent snapshots; `GraphExecutor` (`task-graph-executor.ts`) manages graph lifecycle, node context injection, tool call validation, and round evaluation.
+- **Context injection**: `GraphExecutor.getCurrentNodeContext()` returns the **only** structured context appended to LLM prompts — no other execution plan data enters the model. Non-critical intents (`question`, `inspect`, `explain`) skip graph initialization via **TaskDomainGate** (`shouldUseTaskGraph()` in `task-graph-config.ts`), preserving free-mode operation.
+- **Events**: Graph lifecycle emits **`task_graph_init`** / **`task_graph_node`** / **`task_graph_branch`** / **`task_graph_done`** on the `HarnessStepEvent` channel. Legacy `execution_plan_*` event types are retained for frontend compatibility only.
+- **Persistence**: Legacy checkpoint `plan` field and `ExecutionPlan` types have been removed (Phase 11). TaskGraph state persists through `checkpoint-engine.ts` `runtimeV2` field.
 
-Execution plan tooling is **always enabled** today (`src/harness/execution-plan-config.ts`); there is **no** env flag to disable it.
+Key files:
+- `src/types/task-graph.ts` — core graph data model
+- `src/types/task-graph-view.ts` — UI view model types
+- `src/harness/task-graph.ts` — graph state machine
+- `src/harness/task-graph-builder.ts` — graph construction
+- `src/harness/task-graph-executor.ts` — Harness integration bridge
+- `src/harness/task-graph-review.ts` — contract validation, deviation detection, failure classification
+- `src/harness/task-graph-config.ts` — TaskDomainGate (`shouldUseTaskGraph`)
 
 ### CheckpointEngine (Runtime Resilience v2)
 

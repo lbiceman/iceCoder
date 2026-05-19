@@ -1,6 +1,6 @@
 ﻿# iceCoder 架构与运行时说明
 
-iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，整合提示词拼装、工具执行、任务状态、仓库上下文；叠加 **Execution Transparency Layer（执行透明层）** 的结构化 **`ExecutionPlan`**（步骤进度、会话恢复、`execution_plan_*` WebSocket）；以及 **CheckpointEngine（Runtime Resilience v2）** 在同一份 checkpoint JSON 上附加 `runtimeV2` 以增强长会话弹性；再配合文件化长期记忆、会话压缩与快照、CLI / HTTP API / WebSocket SPA，以及可选 **MCP** 工具接入，目标是接近 Claude Code / Codex CLI 等工具在「可靠执行工程任务」上的表现。
+iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，整合提示词拼装、工具执行、任务状态、仓库上下文；**TaskGraph** 是唯一上下文注入来源（已替代旧的 Execution Transparency Layer）；以及 **CheckpointEngine（Runtime Resilience v2）** 在同一份 checkpoint JSON 上附加 `runtimeV2` 以增强长会话弹性；再配合文件化长期记忆、会话压缩与快照、CLI / HTTP API / WebSocket SPA，以及可选 **MCP** 工具接入，目标是接近 Claude Code / Codex CLI 等工具在「可靠执行工程任务」上的表现。
 
 **技术栈：** Node.js 18+、TypeScript、Express（生产环境托管 SPA）、Vite（开发态独立端口）、WebSocket、Vitest。
 
@@ -12,7 +12,7 @@ iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harnes
 
 ## 1. 当前状态
 
-已接通 **Execution Transparency Layer**（结构化执行计划、`execution_plan_*` 推送与 checkpoint 附带 plan）、**CheckpointEngine（Runtime Resilience v2）**（同文件叠加 `runtimeV2`）。
+已接通 **TaskGraph**（唯一上下文注入源，替代旧 Execution Transparency Layer）、**CheckpointEngine（Runtime Resilience v2）**（同文件叠加 `runtimeV2`）、**TaskDomainGate**（选择性监督，非 critical intent 保持自由模式）。
 
 验证命令：
 
@@ -37,7 +37,7 @@ CLI / Web / Remote
       -> ToolExecutor
       -> HarnessMemoryIntegration
       -> ContextCompactor
-      -> ExecutionPlanTracker（ETL） + TaskCheckpointManager / CheckpointEngine
+      -> GraphExecutor（TaskGraph） + TaskCheckpointManager / CheckpointEngine
   -> Harness.run()
 ```
 
@@ -59,11 +59,15 @@ CLI / Web / Remote
 | `src/web/*` | Express、`/api/*` 路由、统一聊天 WebSocket |
 | `src/public/*` | Vite 前端根目录（聊天页、配置 UI、**冰豆** Canvas 与会话指示桥接脚本等） |
 | `src/types/runtime-snapshot.ts` | 会话笔记中 `icecoder-runtime` 块的版本化 JSON 模型 |
-| `src/types/execution-plan.ts` | ExecutionPlan 步骤结构与状态枚举 |
+| `src/types/task-graph.ts` | TaskGraph 核心数据模型 |
+| `src/types/task-graph-view.ts` | TaskGraph 前端视图模型（Phase 13） |
 | `src/types/runtime-checkpoint.ts` | `runtimeV2`、保存触发器等 Resilience schema |
-| `src/harness/execution-plan-generator.ts` | 首轮结构化计划生成 |
-| `src/harness/execution-plan-tracker.ts` | 步骤进度与 `execution_plan_*` 事件 |
-| `src/harness/checkpoint.ts` | `TaskCheckpoint` v1，`plan` 字段持久化 |
+| `src/harness/task-graph.ts` | TaskGraph 状态机 |
+| `src/harness/task-graph-builder.ts` | TaskGraph 构建 |
+| `src/harness/task-graph-executor.ts` | Harness 集成桥（唯一上下文注入源） |
+| `src/harness/task-graph-review.ts` | 契约校验、偏差检测、失败分类 |
+| `src/harness/task-graph-config.ts` | TaskDomainGate（选择性监督） |
+| `src/harness/checkpoint.ts` | `TaskCheckpoint` v1 |
 | `src/harness/checkpoint-engine.ts` | `CheckpointEngine`：合并写入 `runtimeV2` |
 | `src/harness/branch-budget.ts` | 分支预算快照供 checkpoint |
 
