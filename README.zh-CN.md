@@ -613,7 +613,7 @@ ICE_CONTEXT_WINDOW
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — 旧 ETL（已由 TaskGraph 替代）
 - [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — 长会话与 checkpoint
 - [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — 记忆系统调整说明
-- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格（§8.10、§14–§21、附录 A/B 为实现准绳；**尚未落地到 `src/`**）
+- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格 **V1.3.1**（§2.6–§2.7 架构公理、§14.0 `ToolGate`/`CorrectionPort`、§19.6 全相位互斥、§23 竞品对比；§14–§21、附录 A/B 为实现准绳；**尚未落地到 `src/`**）
 - [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — 记忆 benchmark 与召回优化
 
 ### 仓库目录（摘要）
