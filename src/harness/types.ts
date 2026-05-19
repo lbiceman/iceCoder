@@ -52,6 +52,7 @@ export interface ToolPermissionRule {
   permission: ToolPermission;
   /** 规则描述 */
   reason?: string;
+  message?: string;
 }
 
 /**
@@ -125,6 +126,14 @@ export interface LoopState {
   startTime: number;
   /** 停止原因（循环结束后设置） */
   stopReason?: StopReason;
+  /** TaskGraph (Phase 7) */
+  graphGoal?: string;
+  graphIntent?: string;
+  graphStatus?: string;
+  nodeId?: string;
+  nodeIndex?: number;
+  reason?: string;
+  message?: string;
 }
 
 // ─── Harness 核心 ───
@@ -184,7 +193,11 @@ export interface HarnessStepEvent {
     | 'memory_event'
     | 'execution_plan_init'
     | 'execution_plan_update'
-    | 'execution_plan_clear';
+    | 'execution_plan_clear'
+    | 'task_graph_init'
+    | 'task_graph_node'
+    | 'task_graph_branch'
+    | 'task_graph_done';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */
@@ -198,6 +211,14 @@ export interface HarnessStepEvent {
   toolError?: string;
   totalToolCalls?: number;
   stopReason?: StopReason;
+  /** TaskGraph (Phase 7) */
+  graphGoal?: string;
+  graphIntent?: string;
+  graphStatus?: string;
+  nodeId?: string;
+  nodeIndex?: number;
+  reason?: string;
+  message?: string;
   /** 本轮 LLM 调用的 token 用量 */
   tokenUsage?: { inputTokens: number; outputTokens: number };
   /** 累计 token 用量 */

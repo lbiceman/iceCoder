@@ -391,7 +391,11 @@ window.ChatPage = (function () {
     if (window.ChatExecutionPlanBridge
       && (step.type === 'execution_plan_init'
         || step.type === 'execution_plan_update'
-        || step.type === 'execution_plan_clear')) {
+        || step.type === 'execution_plan_clear'
+        || step.type === 'task_graph_init'
+        || step.type === 'task_graph_node'
+        || step.type === 'task_graph_branch'
+        || step.type === 'task_graph_done')) {
       window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());

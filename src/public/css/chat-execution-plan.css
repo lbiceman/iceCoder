@@ -6,8 +6,8 @@
   position: fixed;
   width: min(300px, calc(100vw - 24px));
   max-height: min(52vh, 420px);
-  background: var(--bg-card, #2d3447);
-  border: 1px solid var(--border-color, #404a62);
+  background-color: transparent;
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   color: var(--text-primary, #f2f4fa);
   font-size: 13px;
@@ -20,6 +20,18 @@
   transform: translateY(6px);
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
+}
+
+.exec-plan-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-card);
+  opacity: 0.66;
+  z-index: -1;
 }
 
 .exec-plan-panel.exec-plan-panel--popover.exec-plan-panel--open {
@@ -148,6 +160,13 @@
 }
 
 @keyframes ice-plan-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
 }

@@ -52,6 +52,8 @@ import {
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { reviewStep, type StepReviewResult } from './step-review.js';
+import { GraphExecutor } from './task-graph-executor.js';
+import { isTaskGraphEnabled } from './task-graph-config.js';
 import type { CheckpointSaveTrigger } from '../types/runtime-checkpoint.js';
 import { getMaxToolOutputChars } from '../tools/tool-output-limits.js';
 import {
@@ -386,6 +388,8 @@ export class Harness {
   private checkpointManager?: TaskCheckpointManager;
   /** 同一 checkpoint JSON 路径上串联 TaskCheckpointManager 与 CheckpointEngine 的磁盘写，消除交叉 rename 间歇读失效。 */
   private checkpointPersistTail = Promise.resolve();
+  /** TaskGraph 执行器（ICE_TASK_GRAPH 开关控制） */
+  private graphExecutor?: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
   private workspaceRoot: string;
   /** Execution Transparency Layer 开关（构造时一次性快照） */
@@ -436,6 +440,11 @@ export class Harness {
     this.resilienceV2Enabled = isResilienceV2Enabled();
     if (this.resilienceV2Enabled && config.sessionDir) {
       this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId);
+    }
+
+    // TaskGraph 集成（ICE_TASK_GRAPH 环境变量控制）
+    if (isTaskGraphEnabled()) {
+      this.graphExecutor = new GraphExecutor();
     }
 
     // 记忆集成层
@@ -660,6 +669,28 @@ export class Harness {
       logger.llmCall();
 
       this.upsertRuntimeContextMessage(msgs, state);
+
+      // TaskGraph: init graph on first round of new task
+      if (state.turnCount === 1 && this.graphExecutor) {
+        const taskSnapshot = state.taskState.snapshot();
+        this.graphExecutor.initGraph({
+          goal: taskSnapshot.goal || userMessage,
+          intent: taskSnapshot.intent,
+        });
+        onStep?.({ type: 'task_graph_init', graphGoal: taskSnapshot.goal || userMessage, graphIntent: taskSnapshot.intent });
+      }
+
+      // TaskGraph: inject node context before LLM call
+      if (this.graphExecutor?.hasGraph()) {
+        const ctx = this.graphExecutor.getCurrentNodeContext();
+        if (ctx) {
+          msgs.push({ role: 'user', content: ctx });
+        }
+        const snap = this.graphExecutor.toSnapshot();
+        if (snap?.cursor) {
+          onStep?.({ type: 'task_graph_node', nodeId: snap.cursor.nodeId, nodeIndex: snap.cursor.nodeIndex, graphStatus: snap.status });
+        }
+      }
 
       await this.memoryIntegration.injectMemoryContext(msgs, { mode: 'coarse_pre_llm', onStep });
 
@@ -1050,6 +1081,14 @@ export class Harness {
         state.stopHookContinuationCount = 0;
 
         // ── 5d. 正常完成 → return ──
+        // TaskGraph: advance cursor before stop
+        if (this.graphExecutor?.hasGraph()) {
+          const ar = this.graphExecutor.advanceOrComplete();
+          if (ar.graphDone) {
+            onStep?.({ type: 'task_graph_done' });
+          }
+        }
+
         this.loopController.stop('model_done');
         const finalState = this.loopController.getState();
         logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
@@ -1106,6 +1145,19 @@ export class Harness {
       // 6a. 执行工具调用（StreamingToolExecutor 并行 + 权限检查 + 中断检查 + 记忆记录）
       state.branchBudgetWarnedThisRound = false;
       state.stepReviewedThisRound = false;
+
+      // TaskGraph: check tool calls before execution
+      if (this.graphExecutor?.hasGraph() && response.toolCalls) {
+        for (const tc of response.toolCalls) {
+          const check = this.graphExecutor.checkToolCall(tc.name);
+          if (check.action === 'block' && check.message) {
+            msgs.push({ role: 'user', content: check.message });
+          } else if (check.action === 'warn' && check.message) {
+            msgs.push({ role: 'user', content: check.message });
+          }
+        }
+      }
+
       const toolStats = await this.executeToolCallsStreaming(
         response.toolCalls!, msgs, logger, onStep, this.abortSignal, state.taskState, state.repoContext, chatFn, currentTools,
       );
@@ -1211,6 +1263,24 @@ export class Harness {
       } else {
         // 有成功执行的工具，重置计数
         state.consecutiveToolFailures = 0;
+      }
+
+      // TaskGraph: record tool results and evaluate round
+      if (this.graphExecutor?.hasGraph() && response.toolCalls) {
+        for (const tc of response.toolCalls) {
+          const sig = this.toolCallSignature(tc);
+          const success = !toolStats.failedSignatures.includes(sig);
+          this.graphExecutor.recordToolResult(tc.name, success);
+        }
+        const evalResult = this.graphExecutor.evaluateRound(response.toolCalls.length);
+        if (evalResult.action === 'force_switch') {
+          onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
+          if (evalResult.message) {
+            msgs.push({ role: 'user', content: evalResult.message });
+          }
+        } else if (evalResult.message) {
+          msgs.push({ role: 'user', content: evalResult.message });
+        }
       }
 
       await this.saveTaskCheckpoint('running', userMessage, msgs, state);

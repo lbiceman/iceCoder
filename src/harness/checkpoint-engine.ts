@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import type { TaskGraphSnapshot, GraphMetrics, GraphSession } from '../types/task-graph.js';
 import type { TaskCheckpoint } from './checkpoint.js';
 import type { ExecutionPlan } from '../types/execution-plan.js';
 import {
@@ -40,6 +41,12 @@ import { BranchBudgetTracker } from './branch-budget.js';
 export interface CombinedCheckpointFile extends TaskCheckpoint {
   /** v2 附加字段（v1 进程读到时会忽略，不影响兼容） */
   runtimeV2?: RuntimeCheckpointV2;
+  /** TaskGraph 快照（Phase 6） */
+  taskGraph?: TaskGraphSnapshot;
+  /** TaskGraph 指标（Phase 6） */
+  graphMetrics?: GraphMetrics;
+  /** TaskGraph 会话边界（Phase 6） */
+  graphSession?: GraphSession;
 }
 
 /** Save 时调用方传入的「最新运行时状态」 */
@@ -62,6 +69,12 @@ export interface CheckpointSaveInput {
   plan?: ExecutionPlan;
   /** Harness loop 当前 stopReason（如果已停止） */
   lastStopReason?: TaskCheckpoint['stopReason'];
+  /** TaskGraph 快照（Phase 6） */
+  taskGraphSnapshot?: TaskGraphSnapshot;
+  /** TaskGraph 指标（Phase 6） */
+  graphMetrics?: GraphMetrics;
+  /** TaskGraph 会话边界（Phase 6） */
+  graphSession?: GraphSession;
 }
 
 /** 最大保留条目 */
@@ -117,6 +130,17 @@ export class CheckpointEngine {
     }
   }
 
+  /** 加载完整 CombinedCheckpointFile（含 taskGraph 等 Phase 6 字段） */
+  async loadCombined(): Promise<CombinedCheckpointFile | null> {
+    try {
+      const raw = await fs.readFile(this.checkpointPath, 'utf-8');
+      const parsed = JSON.parse(raw) as CombinedCheckpointFile;
+      return parsed ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * 合并保存：把 v2 附加字段写回到现有 checkpoint 文件。
    *
@@ -167,17 +191,20 @@ export class CheckpointEngine {
     let merged: CombinedCheckpointFile = {
       ...base,
       runtimeV2: cloneV2(this.v2State),
+      taskGraph: input.taskGraphSnapshot,
+      graphMetrics: input.graphMetrics,
+      graphSession: input.graphSession,
     };
 
     const peekC = await this.readExistingCheckpoint(8, 18);
     if (isTerminal(peekC)) {
-      merged = { ...peekC, runtimeV2: cloneV2(this.v2State) };
+      merged = { ...peekC, runtimeV2: cloneV2(this.v2State), taskGraph: input.taskGraphSnapshot, graphMetrics: input.graphMetrics, graphSession: input.graphSession };
     }
 
     // rename 前一拍：Manager 可能比 Engine 的快照更新；必须用最新磁盘快照做 v1 信封，否则会写回陈旧 running。
     const fence = await this.readExistingCheckpoint(12, 16);
     if (fence) {
-      merged = { ...fence, runtimeV2: cloneV2(this.v2State) };
+      merged = { ...fence, runtimeV2: cloneV2(this.v2State), taskGraph: input.taskGraphSnapshot, graphMetrics: input.graphMetrics, graphSession: input.graphSession };
     } else if (await this.checkpointMainPathProbablyExists()) {
       console.debug(
         '[checkpoint-engine] skip v2 merge write before rename: file exists but could not parse JSON reliably',

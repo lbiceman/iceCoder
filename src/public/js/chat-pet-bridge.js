@@ -175,6 +175,26 @@ window.ChatPetBridge = (function () {
         sessionPet.setState('focused');
         bubble(step.content || '整理上下文中…');
         break;
+      case 'task_graph_init':
+        sessionPet.setState('thinking');
+        bubble('任务图已启动');
+        break;
+      case 'task_graph_node':
+        if (step.graphStatus === 'failed') {
+          sessionPet.setState('alert');
+          bubble('节点失败');
+        } else {
+          sessionPet.setState('thinking');
+        }
+        break;
+      case 'task_graph_branch':
+        sessionPet.setState('alert');
+        bubble(step.message || '分支切换');
+        break;
+      case 'task_graph_done':
+        sessionPet.setState('happy');
+        bubble('任务图完成');
+        break;
       case 'final':
         {
           var sr = step.stopReason;

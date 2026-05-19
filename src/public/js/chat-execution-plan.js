@@ -16,6 +16,16 @@ window.ChatExecutionPlan = (function () {
     done: '已完成',
     failed: '失败',
     skipped: '已跳过',
+    fallback: '备选',
+  };
+
+  var STATE_ICONS = {
+    pending: '⬜',
+    running: '🔄',
+    done: '✅',
+    failed: '❌',
+    skipped: '⏭️',
+    fallback: '🔀',
   };
 
   var INTENT_LABELS = {
@@ -322,6 +332,55 @@ window.ChatExecutionPlan = (function () {
     return plan.steps[plan.steps.length - 1] || null;
   }
 
+  // ── TaskGraph methods (Phase 7) ──
+
+  function renderGraph(data) {
+    if (!data.graphGoal) return;
+    currentPlan = {
+      planId: 'graph-' + Date.now(),
+      intent: data.graphIntent || 'edit',
+      progress: 0,
+      steps: [],
+      activeStepId: null,
+    };
+    visible = true;
+    ensureMounted();
+    titleEl.textContent = '任务图 · ' + (INTENT_LABELS[data.graphIntent] || data.graphIntent || '');
+    progressEl.textContent = '0%';
+    listEl.innerHTML = '';
+    updateAnchorChrome();
+    notifyPetFoot();
+  }
+
+  function updateGraphNode(data) {
+    if (!currentPlan) return;
+    currentPlan.progress = Math.min(100, ((data.nodeIndex || 0) + 1) * 25);
+    currentPlan.activeStepId = data.nodeId || null;
+    progressEl.textContent = currentPlan.progress + '%';
+    if (listEl) {
+      var items = listEl.querySelectorAll('.exec-plan-step');
+      for (var i = 0; i < items.length; i++) {
+        items[i].classList.toggle('active', items[i].dataset.stepId === data.nodeId);
+      }
+    }
+    notifyPetFoot();
+  }
+
+  function highlightGraphBranch(data) {
+    if (!listEl) return;
+    var items = listEl.querySelectorAll('.exec-plan-step');
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.add('exec-plan-step--fallback');
+    }
+  }
+
+  function markGraphComplete() {
+    if (!currentPlan) return;
+    currentPlan.progress = 100;
+    progressEl.textContent = '100%';
+    visible = false;
+  }
+
   /** 底部一行摘要（供冰豆 #status-turn） */
   function formatFootSummary(plan) {
     if (!plan || !plan.steps || !plan.steps.length) return '';
@@ -350,8 +409,11 @@ window.ChatExecutionPlan = (function () {
 
   function renderStepNode(step, isActive) {
     var li = document.createElement('li');
-    li.className = 'exec-plan-step status-' + step.status + (isActive ? ' active' : '');
+    var branchClass = step.isFallback ? ' exec-plan-step--fallback' : (step.isResumed ? ' exec-plan-step--resumed' : '');
+    li.className = 'exec-plan-step status-' + step.status + (isActive ? ' active' : '') + branchClass;
     li.dataset.stepId = step.id;
+    if (step.isFallback) li.dataset.branch = 'fallback';
+    else if (step.isResumed) li.dataset.branch = 'resumed';
 
     var head = document.createElement('div');
     head.className = 'exec-plan-step-head';
@@ -538,5 +600,10 @@ window.ChatExecutionPlan = (function () {
     isVisible: isVisible,
     formatFootSummary: formatFootSummary,
     isPanelSuppressed: isPanelSuppressed,
+    // TaskGraph (Phase 7)
+    renderGraph: renderGraph,
+    updateGraphNode: updateGraphNode,
+    highlightGraphBranch: highlightGraphBranch,
+    markGraphComplete: markGraphComplete,
   };
 })();

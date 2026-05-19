@@ -89,6 +89,22 @@ window.ChatExecutionPlanBridge = (function () {
       }
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyPatch(step.patch);
     }
+
+    // ── TaskGraph events (Phase 7) ──
+    if (step.type === 'task_graph_init') {
+      enabled = true;
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.renderGraph(step);
+      return;
+    }
+    if (step.type === 'task_graph_node' && step.nodeId) {
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.updateGraphNode(step);
+    }
+    if (step.type === 'task_graph_branch') {
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.highlightGraphBranch(step);
+    }
+    if (step.type === 'task_graph_done') {
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.markGraphComplete();
+    }
   }
 
   function onSessionUpdated() {
