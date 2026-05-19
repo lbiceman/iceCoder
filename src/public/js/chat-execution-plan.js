@@ -334,7 +334,25 @@ window.ChatExecutionPlan = (function () {
 
   // ── TaskGraph methods (Phase 7) ──
 
+  function graphPlanToPanel(plan) {
+    if (!plan || !plan.steps) return null;
+    return {
+      planId: plan.planId,
+      intent: plan.intent,
+      progress: plan.progress || 0,
+      steps: plan.steps,
+      activeStepId: plan.activeStepId,
+    };
+  }
+
   function renderGraph(data) {
+    if (data.plan) {
+      var panelPlan = graphPlanToPanel(data.plan);
+      if (panelPlan) {
+        setPlan(panelPlan);
+        return;
+      }
+    }
     if (!data.graphGoal) return;
     currentPlan = {
       planId: 'graph-' + Date.now(),

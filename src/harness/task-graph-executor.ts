@@ -32,6 +32,8 @@ import {
   EscalationManager,
 } from './task-graph-review.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
+import type { TaskGraphView } from '../types/task-graph-view.js';
+import { taskGraphToView } from './task-graph-view-mapper.js';
 
 // ═══════════════════════════════════════════════
 // GraphExecutor
@@ -85,6 +87,12 @@ export class GraphExecutor {
 
   hasGraph(): boolean {
     return this.graph !== null;
+  }
+
+  /** 供 task_graph_init 推送步骤列表（实现/新增/创建等 edit 建图共用） */
+  toView(): TaskGraphView | null {
+    if (!this.graph) return null;
+    return taskGraphToView(this.graph);
   }
 
   isTerminal(): boolean {

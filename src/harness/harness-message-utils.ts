@@ -1,4 +1,5 @@
 import type { UnifiedMessage } from '../llm/types.js';
+import { hasExecutableSideSignal } from './task-state.js';
 
 /**
  * 基于字符 bigram 的 Jaccard 相似度（零外部依赖，纯 CPU 计算）。
@@ -93,14 +94,14 @@ export function hasAssistantToolCallAfterLatestRealUser(messages: UnifiedMessage
  * 是否适合首轮注入 Runtime Tool Planner，并可能与执行计划同开。
  *
  * - 第一层：中英文子串判断是否像「要动工具的工程诉求」；
- * - 第二层：若以纯疑问措辞开头且无实现侧关键词，视为不可执行。
+ * - 第二层：若以纯疑问措辞开头且无 edit 同义词（实现/新增/创建等），视为不可执行。
  */
 export function isActionableToolRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
   const rawTrim = text.trim();
   if (!t) return false;
 
-  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|创建|新增|删除|生成|添加|提交|创建.*pr/i.test(t)
+  const isActionable = /修(复|好|改)|改一下|解决|处理|排查|看看为什么|优化|重构|实现|落地|执行|运行|测试|检查|读取|搜索|新增|创建|删除|生成|添加|提交|创建.*pr/i.test(t)
     || /\b(fix|debug|investigate|implement|modify|edit|update|refactor|search|read|create|delete|commit|check)\b/i.test(t)
     || /\b(run|execute)\s+\S+/i.test(t)
     || /\b(test|verify)\s+\S+|\S+\s+(tests?|verification)\b/i.test(t);
@@ -117,7 +118,7 @@ export function isActionableToolRequest(text: string): boolean {
     || /^说明([\s\u3000，。、！？]|$)/.test(rawTrim)
     || /^分析([\s\u3000，。、！？]|$)/.test(rawTrim);
   const questionOnly = (questionOnlyCn || /^(what|why|how)\b/i.test(t))
-    && !/(修|改|解决|处理|运行|测试|fix|modify|run|test|implement)/i.test(t);
+    && !hasExecutableSideSignal(text);
   return !questionOnly;
 }
 

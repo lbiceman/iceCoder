@@ -227,7 +227,7 @@ export interface HarnessStepEvent {
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */
   memoryDetail?: string;
-  /** TaskGraph 全量视图（仅 type === 'execution_plan_init'） */
+  /** TaskGraph 全量视图（execution_plan_init / task_graph_init） */
   plan?: TaskGraphView;
   /** 执行计划 ID（仅 type === 'execution_plan_update'） */
   planId?: string;

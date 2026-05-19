@@ -101,7 +101,12 @@ export async function prepareHarnessRound(
         goal: taskSnapshot.goal || userMessage,
         intent: taskSnapshot.intent,
       });
-      onStep?.({ type: 'task_graph_init', graphGoal: taskSnapshot.goal || userMessage, graphIntent: taskSnapshot.intent });
+      onStep?.({
+        type: 'task_graph_init',
+        graphGoal: taskSnapshot.goal || userMessage,
+        graphIntent: taskSnapshot.intent,
+        plan: deps.graphExecutor.toView() ?? undefined,
+      });
     }
   }
 
