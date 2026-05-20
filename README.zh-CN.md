@@ -613,7 +613,7 @@ ICE_CONTEXT_WINDOW
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — 旧 ETL（已由 TaskGraph 替代）
 - [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — 长会话与 checkpoint
 - [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — 记忆系统调整说明
-- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格 **V1.3.6**（I10 forced min dwell、signal 优先级、`enteredBy`；至 Phase **5D**）
+- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格 **V1.3.7**（I10 forced min dwell、signal 优先级、`enteredBy`）
 - [`docs/运行时后续优化.md`](./docs/运行时后续优化.md) — Phase **5E**（benchmark / Learning / 验收自动化，**后续不做**）
 - [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — 记忆 benchmark 与召回优化
 
