@@ -190,6 +190,35 @@ describe('CheckpointEngine - restore', () => {
     expect(r.recoverySignals[0].message).toBe('switch strategy');
   });
 
+  it('save → loadV2 保留 supervisor execution-mode 扩展字段', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+
+    const saved = await engine.save({ trigger: 'manual' });
+    saved.supervisorState = {
+      executionMode: 'forced',
+      executionModeLockRemaining: 2,
+      executionModeEnteredBy: ['checkpoint_resumed'],
+      executionModeEnteredByPrimary: 'checkpoint_resumed',
+      executionModeEnteredAtRound: 4,
+      pendingModeSignals: ['tool_failure'],
+      forcedTaskBearingRoundsSinceEntry: 1,
+    };
+    await fs.writeFile(engine.checkpointPath, JSON.stringify({
+      ...buildV1Checkpoint(),
+      runtimeV2: saved,
+    }, null, 2), 'utf-8');
+
+    const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
+
+    expect(restored?.supervisorState).toMatchObject({
+      executionMode: 'forced',
+      executionModeLockRemaining: 2,
+      executionModeEnteredBy: ['checkpoint_resumed'],
+      pendingModeSignals: ['tool_failure'],
+      forcedTaskBearingRoundsSinceEntry: 1,
+    });
+  });
+
   it('损坏的 JSON → loadV2 返回 null 而不抛', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
     await fs.writeFile(engine.checkpointPath, '{not valid json', 'utf-8');

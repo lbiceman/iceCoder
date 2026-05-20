@@ -3,6 +3,13 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
 import type { TaskState } from './task-state.js';
+import type {
+  ExecutionMode,
+  ForcedDegradedTier,
+  ModeDecision,
+  ModeSignal,
+  SupervisorPhase,
+} from '../types/supervisor.js';
 
 /**
  * 循环 continue 的原因（用于调试和测试）。
@@ -64,4 +71,24 @@ export interface HarnessRunState {
   stepReviewedThisRound: boolean;
   /** Resilience v2：最近一次 step review 结果（供启发式参考） */
   lastStepReview?: StepReviewResult;
+  /** Batch 1 承载位：执行边界模式；默认由现有逻辑保持未设置。 */
+  executionMode?: ExecutionMode;
+  /** Batch 1 承载位：forced 进入后的防抖锁。 */
+  executionModeLockRemaining?: number;
+  /** Batch 1 承载位：进入 forced 的有序信号列表。 */
+  executionModeEnteredBy?: ModeSignal[];
+  /** Batch 1 承载位：进入 forced 的主信号。 */
+  executionModeEnteredByPrimary?: ModeSignal;
+  /** Batch 1 承载位：进入 forced 的 round。 */
+  executionModeEnteredAtRound?: number;
+  /** Batch 1 承载位：forced 下当前退化层。 */
+  forcedDegradedTier?: ForcedDegradedTier;
+  /** Batch 1 承载位：最近一次模式决策。 */
+  lastModeDecision?: ModeDecision;
+  /** Batch 1 承载位：本轮待评估 mode signals。 */
+  pendingModeSignals?: ModeSignal[];
+  /** Batch 1 承载位：I10 task-bearing round 计数。 */
+  forcedTaskBearingRoundsSinceEntry?: number;
+  /** Batch 1 承载位：Supervisor 运行时相位。 */
+  supervisorPhase?: SupervisorPhase;
 }

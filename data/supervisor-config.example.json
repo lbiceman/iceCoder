@@ -1,0 +1,66 @@
+{
+  "mode": "adaptive",
+  "shadow": false,
+  "params": {
+    "strict": {
+      "firstRoundGraph": true,
+      "riskThreshold": 0.5,
+      "maxRecoveryRounds": 5,
+      "recoveryTokenRatio": 0.3,
+      "maxRecoveryRetries": 2,
+      "stabilityWindowRounds": 2,
+      "handoffCooldownRounds": 2,
+      "evaluateRoundMode": "full",
+      "checkToolCall": true
+    },
+    "adaptiveFree": {
+      "firstRoundGraph": false,
+      "riskThreshold": 0.6
+    },
+    "adaptiveTakeover": {
+      "firstRoundGraph": false,
+      "riskThreshold": 0.6,
+      "maxRecoveryRounds": 3,
+      "recoveryTokenRatio": 0.25,
+      "maxRecoveryRetries": 2,
+      "stabilityWindowRounds": 3,
+      "handoffCooldownRounds": 3,
+      "evaluateRoundMode": "metrics_only",
+      "checkToolCall": true
+    }
+  },
+  "triggers": {
+    "toolRepeatFailMin": 2,
+    "noProgressRoundsMin": 3,
+    "fileLoopMin": 4,
+    "goalDriftEnabled": true,
+    "scopeCreepEnabled": true,
+    "userForceTakeoverEnabled": true
+  },
+  "goalDrift": {
+    "alignmentThreshold": 0.45,
+    "consecutiveRoundsBelow": 2,
+    "llmGrayZoneLow": 0.35,
+    "llmGrayZoneHigh": 0.55
+  },
+  "snapshotConfidence": {
+    "templateGraphMin": 0.65
+  },
+  "correctionBudget": {
+    "freeSegmentMaxPerTask": 1
+  },
+  "eventTimeline": {
+    "enabled": true,
+    "persistPath": "data/runtime/supervisor-events.jsonl"
+  },
+  "executionMode": {
+    "enabled": true,
+    "pendingStepsEnterThreshold": 2,
+    "writeTargetsEnterThreshold": 1,
+    "diffLinesEnterThreshold": 200,
+    "stableRoundsExitThreshold": 2,
+    "modeLockRounds": 2,
+    "forcedMinDwellRounds": 1,
+    "readonlyToolNames": ["read_file", "grep", "search", "list_dir"]
+  }
+}

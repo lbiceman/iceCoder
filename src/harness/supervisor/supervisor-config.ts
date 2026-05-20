@@ -1,0 +1,212 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+
+import type {
+  EventTimelineConfig,
+  ExecutionModeConfig,
+  ResolvedSupervisorConfig,
+  SupervisorConfigFile,
+} from '../../types/supervisor.js';
+import { resolveGlobalPolicy } from './mode-controller.js';
+
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends Array<infer U>
+    ? Array<U>
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K];
+};
+
+export interface LoadSupervisorConfigOptions {
+  /** Explicit config path. If omitted, ICE_SUPERVISOR_CONFIG_PATH then ICE_DATA_DIR/supervisor-config.json are used. */
+  configPath?: string;
+  /** Env source for Global-only keys; tests can pass an isolated object. */
+  env?: NodeJS.ProcessEnv;
+  /** Data directory fallback when ICE_DATA_DIR is not set. */
+  dataDir?: string;
+}
+
+const DEFAULT_EVENT_TIMELINE: EventTimelineConfig = {
+  enabled: true,
+  persistPath: 'data/runtime/supervisor-events.jsonl',
+};
+
+const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
+  enabled: true,
+  pendingStepsEnterThreshold: 2,
+  writeTargetsEnterThreshold: 1,
+  diffLinesEnterThreshold: 200,
+  stableRoundsExitThreshold: 2,
+  modeLockRounds: 2,
+  forcedMinDwellRounds: 1,
+  readonlyToolNames: ['read_file', 'grep', 'search', 'list_dir'],
+};
+
+/** Built-in §15/§17 defaults; not wired into the Harness loop until later batches. */
+export function defaultSupervisorConfig(): SupervisorConfigFile {
+  return {
+    mode: 'adaptive',
+    shadow: false,
+    params: {
+      strict: {
+        firstRoundGraph: true,
+        riskThreshold: 0.5,
+        maxRecoveryRounds: 5,
+        recoveryTokenRatio: 0.3,
+        maxRecoveryRetries: 2,
+        stabilityWindowRounds: 2,
+        handoffCooldownRounds: 2,
+        evaluateRoundMode: 'full',
+        checkToolCall: true,
+      },
+      adaptiveFree: {
+        firstRoundGraph: false,
+        riskThreshold: 0.6,
+      },
+      adaptiveTakeover: {
+        firstRoundGraph: false,
+        riskThreshold: 0.6,
+        maxRecoveryRounds: 3,
+        recoveryTokenRatio: 0.25,
+        maxRecoveryRetries: 2,
+        stabilityWindowRounds: 3,
+        handoffCooldownRounds: 3,
+        evaluateRoundMode: 'metrics_only',
+        checkToolCall: true,
+      },
+    },
+    triggers: {
+      toolRepeatFailMin: 2,
+      noProgressRoundsMin: 3,
+      fileLoopMin: 4,
+      goalDriftEnabled: true,
+      scopeCreepEnabled: true,
+      userForceTakeoverEnabled: true,
+    },
+    goalDrift: {
+      alignmentThreshold: 0.45,
+      consecutiveRoundsBelow: 2,
+      llmGrayZoneLow: 0.35,
+      llmGrayZoneHigh: 0.55,
+    },
+    snapshotConfidence: {
+      templateGraphMin: 0.65,
+    },
+    correctionBudget: {
+      freeSegmentMaxPerTask: 1,
+    },
+    eventTimeline: { ...DEFAULT_EVENT_TIMELINE },
+    executionMode: { ...DEFAULT_EXECUTION_MODE },
+  };
+}
+
+export function resolveSupervisorConfig(
+  config: DeepPartial<SupervisorConfigFile> = {},
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedSupervisorConfig {
+  const merged = mergeConfig(defaultSupervisorConfig(), config);
+  const resolved: ResolvedSupervisorConfig = {
+    ...merged,
+    eventTimeline: {
+      ...DEFAULT_EVENT_TIMELINE,
+      ...(merged.eventTimeline ?? {}),
+    },
+    executionMode: {
+      ...DEFAULT_EXECUTION_MODE,
+      ...(merged.executionMode ?? {}),
+    },
+    globalPolicy: resolveGlobalPolicy(merged, env),
+  };
+  return resolved;
+}
+
+/** Loads supervisor-config.json without applying any per-round behavior. */
+export async function loadSupervisorConfig(
+  options: LoadSupervisorConfigOptions = {},
+): Promise<ResolvedSupervisorConfig> {
+  const env = options.env ?? process.env;
+  const configPath = resolveConfigPath(options, env);
+  const loaded = await readConfigFile(configPath);
+  return resolveSupervisorConfig(loaded, env);
+}
+
+function resolveConfigPath(
+  options: LoadSupervisorConfigOptions,
+  env: NodeJS.ProcessEnv,
+): string {
+  const explicitPath = options.configPath ?? env.ICE_SUPERVISOR_CONFIG_PATH;
+  if (explicitPath) {
+    return path.resolve(explicitPath);
+  }
+  const dataDir = options.dataDir ?? env.ICE_DATA_DIR ?? path.join(process.cwd(), 'data');
+  return path.join(dataDir, 'supervisor-config.json');
+}
+
+async function readConfigFile(configPath: string): Promise<DeepPartial<SupervisorConfigFile>> {
+  try {
+    const raw = await fs.readFile(configPath, 'utf-8');
+    return JSON.parse(raw) as DeepPartial<SupervisorConfigFile>;
+  } catch (error) {
+    if (isMissingFile(error)) return {};
+    throw error;
+  }
+}
+
+function isMissingFile(error: unknown): boolean {
+  return !!error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'ENOENT';
+}
+
+function mergeConfig(
+  base: SupervisorConfigFile,
+  override: DeepPartial<SupervisorConfigFile>,
+): SupervisorConfigFile {
+  return {
+    ...base,
+    ...override,
+    params: {
+      strict: {
+        ...base.params.strict,
+        ...(override.params?.strict ?? {}),
+      },
+      adaptiveFree: {
+        ...base.params.adaptiveFree,
+        ...(override.params?.adaptiveFree ?? {}),
+      },
+      adaptiveTakeover: {
+        ...base.params.adaptiveTakeover,
+        ...(override.params?.adaptiveTakeover ?? {}),
+      },
+    },
+    triggers: {
+      ...base.triggers,
+      ...(override.triggers ?? {}),
+    },
+    goalDrift: {
+      ...base.goalDrift,
+      ...(override.goalDrift ?? {}),
+    },
+    snapshotConfidence: {
+      ...base.snapshotConfidence,
+      ...(override.snapshotConfidence ?? {}),
+    },
+    correctionBudget: {
+      ...base.correctionBudget,
+      ...(override.correctionBudget ?? {}),
+    },
+    riskEvaluator: {
+      ...(base.riskEvaluator ?? {}),
+      ...(override.riskEvaluator ?? {}),
+    },
+    eventTimeline: {
+      ...(base.eventTimeline ?? DEFAULT_EVENT_TIMELINE),
+      ...(override.eventTimeline ?? {}),
+    },
+    executionMode: {
+      ...(base.executionMode ?? DEFAULT_EXECUTION_MODE),
+      ...(override.executionMode ?? {}),
+    },
+  };
+}

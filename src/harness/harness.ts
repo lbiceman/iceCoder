@@ -82,6 +82,8 @@ export class Harness {
   private workspaceRoot: string;
   private resilienceV2Enabled: boolean;
   private checkpointEngine?: CheckpointEngine;
+  private globalPolicy?: HarnessConfig['globalPolicy'];
+  private supervisorConfig?: HarnessConfig['supervisorConfig'];
 
   constructor(
     config: HarnessConfig,
@@ -109,6 +111,8 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
+    this.globalPolicy = config.globalPolicy;
+    this.supervisorConfig = config.supervisorConfig;
     this.checkpointManager = config.sessionDir
       ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
       : undefined;

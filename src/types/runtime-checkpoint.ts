@@ -12,6 +12,12 @@
  */
 
 import type { StopReason } from '../harness/types.js';
+import type {
+  ExecutionMode,
+  ForcedDegradedTier,
+  ModeDecision,
+  ModeSignal,
+} from './supervisor.js';
 
 /** v2 schema 版本号；保留为字面量类型方便后续迁移判别。 */
 export const RUNTIME_CHECKPOINT_VERSION = 2 as const;
@@ -67,6 +73,28 @@ export interface RecoverySignal {
   consumed: boolean;
 }
 
+/** Supervisor runtime subset persisted in checkpoint v2; all fields are optional for old checkpoint compatibility. */
+export interface RuntimeSupervisorCheckpointState {
+  /** Current Execution Free/Forced boundary mode. */
+  executionMode: ExecutionMode;
+  /** Anti-flap lock remaining after entering forced. */
+  executionModeLockRemaining: number;
+  /** Signals that caused the last forced entry, sorted by §2.8.8 precedence. */
+  executionModeEnteredBy: ModeSignal[];
+  /** Primary entry signal; mirrors executionModeEnteredBy[0] when present. */
+  executionModeEnteredByPrimary?: ModeSignal;
+  /** Round where forced was entered; null while free or before Batch 2 persistence. */
+  executionModeEnteredAtRound: number | null;
+  /** Forced degraded tier, when graph/step queue/write-intent fallback is active. */
+  forcedDegradedTier?: ForcedDegradedTier;
+  /** Last mode decision for observability and later resume logic. */
+  lastModeDecision?: ModeDecision;
+  /** Append-only pending signals captured before evaluation. */
+  pendingModeSignals: ModeSignal[];
+  /** I10 dwell counter; persisted later when Harness accounting is connected. */
+  forcedTaskBearingRoundsSinceEntry: number;
+}
+
 /** v2 增强 checkpoint 的「附加运行时状态」部分。 */
 export interface RuntimeCheckpointV2 {
   /** schema 版本号，固定为 2 */
@@ -91,6 +119,8 @@ export interface RuntimeCheckpointV2 {
   lastTrigger: CheckpointSaveTrigger;
   /** 最后一次循环 stopReason（来自 Harness loopState） */
   lastStopReason?: StopReason;
+  /** Supervisor execution-mode state; optional so older runtimeV2 checkpoints remain valid. */
+  supervisorState?: RuntimeSupervisorCheckpointState;
   /** v2 写入时间 */
   v2UpdatedAt: string;
 }
@@ -127,7 +157,20 @@ export function emptyRuntimeCheckpointV2(
     verificationPending: false,
     recoverySignals: [],
     lastTrigger: trigger,
+    supervisorState: emptyRuntimeSupervisorCheckpointState(),
     v2UpdatedAt: new Date(0).toISOString(),
+  };
+}
+
+/** Inert defaults: Batch 1 only persists shape, it does not alter Harness execution. */
+export function emptyRuntimeSupervisorCheckpointState(): RuntimeSupervisorCheckpointState {
+  return {
+    executionMode: 'free',
+    executionModeLockRemaining: 0,
+    executionModeEnteredBy: [],
+    executionModeEnteredAtRound: null,
+    pendingModeSignals: [],
+    forcedTaskBearingRoundsSinceEntry: 0,
   };
 }
 

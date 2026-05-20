@@ -8,6 +8,16 @@ import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.j
 import type { HarnessLogEntry } from './logger.js';
 import type { FileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { TaskGraphView, TaskGraphPatch } from '../types/task-graph-view.js';
+import type {
+  ExecutionMode,
+  ExecutionModeTelemetryPayload,
+  ForcedDegradedTier,
+  GlobalModePolicy,
+  ModeDecision,
+  ModeSignal,
+  ResolvedSupervisorConfig,
+  SupervisorPhase,
+} from '../types/supervisor.js';
 
 // ─── 上下文组装 ───
 
@@ -93,6 +103,7 @@ export type StopReason =
   | 'task_recovery'      // 压缩后失忆恢复
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
+  | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（附录 A，尚未接入）
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
   | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
   | 'circuit_breaker'    // 连续工具失败熔断
@@ -134,6 +145,26 @@ export interface LoopState {
   nodeIndex?: number;
   reason?: string;
   message?: string;
+  /** Execution Free/Forced 执行边界；Batch 1 仅提供后续任务承载位，不改变运行逻辑。 */
+  executionMode?: ExecutionMode;
+  /** Forced enter 后的防抖锁剩余轮数。 */
+  executionModeLockRemaining?: number;
+  /** 上次进入 forced 的触发信号，按 §2.8.8 排序。 */
+  executionModeEnteredBy?: ModeSignal[];
+  /** 上次进入 forced 的主触发信号。 */
+  executionModeEnteredByPrimary?: ModeSignal;
+  /** 上次进入 forced 的 round。 */
+  executionModeEnteredAtRound?: number;
+  /** Forced 下当前退化层。 */
+  forcedDegradedTier?: ForcedDegradedTier;
+  /** 最近一次模式决策，供 telemetry/checkpoint 观察。 */
+  lastModeDecision?: ModeDecision;
+  /** 本轮待评估 ModeSignal；后续任务保持 append-only。 */
+  pendingModeSignals?: ModeSignal[];
+  /** I10：进入 forced 后已完成的 task-bearing round 数。 */
+  forcedTaskBearingRoundsSinceEntry?: number;
+  /** Supervisor 运行时相位承载位；由后续 RecoverySupervisor 任务使用。 */
+  supervisorPhase?: SupervisorPhase;
 }
 
 // ─── Harness 核心 ───
@@ -170,6 +201,10 @@ export interface HarnessConfig {
   workspaceRoot?: string;
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
+  /** Batch 1：可选注入的全局策略，只读承载位；本批不接入 Harness 主循环。 */
+  globalPolicy?: GlobalModePolicy;
+  /** Batch 1：可选 supervisor 配置依赖，只读承载位；本批不改变现有运行逻辑。 */
+  supervisorConfig?: ResolvedSupervisorConfig;
 }
 
 /**
@@ -197,7 +232,9 @@ export interface HarnessStepEvent {
     | 'task_graph_init'
     | 'task_graph_node'
     | 'task_graph_branch'
-    | 'task_graph_done';
+    | 'task_graph_done'
+    | 'execution_mode_enter'
+    | 'execution_mode_exit';
   iteration?: number;
   content?: string;
   /** 流式输出的增量文本（仅 stream_delta 类型） */
@@ -233,6 +270,8 @@ export interface HarnessStepEvent {
   planId?: string;
   /** TaskGraph 增量补丁（仅 type === 'execution_plan_update'） */
   patch?: TaskGraphPatch;
+  /** Execution Mode telemetry payload（仅 execution_mode_enter / execution_mode_exit） */
+  executionMode?: ExecutionModeTelemetryPayload;
 }
 
 /**

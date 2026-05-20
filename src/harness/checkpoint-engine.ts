@@ -396,6 +396,16 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     recoverySignals: v.recoverySignals.map(s => ({ ...s })),
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,
+    supervisorState: v.supervisorState
+      ? {
+          ...v.supervisorState,
+          executionModeEnteredBy: [...v.supervisorState.executionModeEnteredBy],
+          pendingModeSignals: [...v.supervisorState.pendingModeSignals],
+          lastModeDecision: v.supervisorState.lastModeDecision
+            ? { ...v.supervisorState.lastModeDecision }
+            : undefined,
+        }
+      : undefined,
     v2UpdatedAt: v.v2UpdatedAt,
   };
 }
