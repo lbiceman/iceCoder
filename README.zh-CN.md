@@ -613,7 +613,8 @@ ICE_CONTEXT_WINDOW
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — 旧 ETL（已由 TaskGraph 替代）
 - [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — 长会话与 checkpoint
 - [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — 记忆系统调整说明
-- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格 **V1.3.1**（§2.6–§2.7 架构公理、§14.0 `ToolGate`/`CorrectionPort`、§19.6 全相位互斥、§23 竞品对比；§14–§21、附录 A/B 为实现准绳；**尚未落地到 `src/`**）
+- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格 **V1.3.6**（I10 forced min dwell、signal 优先级、`enteredBy`；至 Phase **5D**）
+- [`docs/运行时后续优化.md`](./docs/运行时后续优化.md) — Phase **5E**（benchmark / Learning / 验收自动化，**后续不做**）
 - [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — 记忆 benchmark 与召回优化
 
 ### 仓库目录（摘要）
@@ -703,7 +704,7 @@ npx tsx src/cli/index.ts run "修复失败测试"
 2. 压缩与会话笔记的进一步耦合（如压缩前后 token 统计、恢复上下文预算裁剪等）——**结构化 `icecoder-runtime` 快照已可写入 `session-notes.md`**，细节见 [`docs/nextWork.md`](./docs/nextWork.md)。
 3. 正式 **Eval Runner**：真实执行、判分、输出趋势（`scripts/eval-runner.ts` 已有雏形；`npm run eval:agent` 仍为骨架）。
 4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
-5. **双模运行时监管**：按 [`docs/双模方案2.md`](./docs/双模方案2.md) 实现 Free / Adaptive / Strict / Supervised 等模式。
+5. **双模运行时监管**：按 [`docs/双模方案2.md`](./docs/双模方案2.md) 实现自由（`off`）/ 自适应 / 严格三档。
 6. 在现有 **Tool Planner** 之上，加强按失败模式动态规划与恢复策略（长期形态见 **`docs/requirement/任务图规划-finish.md`**）。
 7. 多 Agent 协同：主 Agent 按需编排子 Agent（与当前 **`delegate_to_subagent`** 只读探索子回路形成演进关系）。
 

@@ -160,6 +160,8 @@ window.ChatPage = (function () {
       UI.autoResizeInput();
       Cmd.hide();
       Pet.showThinking(false);
+      UI.resetLiveToolRoundTargets();
+      UI.setLiveToolRoundActive(true);
       WS.sendMessage(
         '~open\n\n' +
         '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
@@ -221,9 +223,9 @@ window.ChatPage = (function () {
     }
     File.removeUploadedFile();
 
+    UI.resetLiveToolRoundTargets();
+    UI.setLiveToolRoundActive(true);
     if (msgImages.length > 0) {
-      UI.resetLiveToolRoundTargets();
-      UI.setLiveToolRoundActive(true);
       WS.send({ type: 'message', content: msgText || '请分析这些图片', images: msgImages });
     } else {
       WS.sendMessage(msgText);

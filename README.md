@@ -633,7 +633,8 @@ Higher-level prose (beyond this README):
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — memory system adjustments
-- [`docs/双模方案2.md`](./docs/双模方案2.md) — dual-mode supervisor spec **V1.3.1** (§2.6–§2.7 axioms, §14.0 ToolGate/CorrectionPort, §19.6 mutex table, §23 vs CC/Codex; §14–§21, appendices A/B normative; **not yet in `src/`**)
+- [`docs/双模方案2.md`](./docs/双模方案2.md) — dual-mode supervisor spec **V1.3.6** (I10 forced min dwell, signal precedence, enteredBy telemetry)
+- [`docs/运行时后续优化.md`](./docs/运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
 - [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes
 
 ---
