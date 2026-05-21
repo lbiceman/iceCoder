@@ -150,7 +150,8 @@ export class GraphExecutor {
   // Tool Call Checking
   // ═══════════════════════════════════════════════
 
-  checkToolCall(toolName: string): ToolCheckResult {
+  checkToolCall(toolName: string, opts: { track?: boolean } = {}): ToolCheckResult {
+    const track = opts.track ?? true;
     if (!this.graph) return { action: 'allow' };
 
     // Lazy init contract validator for current node
@@ -161,11 +162,13 @@ export class GraphExecutor {
       this.contractValidator = new ContractValidator(contract);
     }
 
-    const result = this.contractValidator.checkBeforeToolCall(toolName);
-    this.currentRoundToolNames.push(toolName);
+    const result = this.contractValidator.checkBeforeToolCall(toolName, { track });
+    if (track) {
+      this.currentRoundToolNames.push(toolName);
+    }
 
     // Deviation check
-    if (result.action !== 'block') {
+    if (track && result.action !== 'block') {
       const node = getCurrentNode(this.graph)!;
       const devResult = this.deviationDetector.detect({
         toolNames: [...this.currentRoundToolNames],

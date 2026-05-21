@@ -22,12 +22,17 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
-import type { ExecutionModeConfig } from '../types/supervisor.js';
+import type { ExecutionModeConfig, GateContext } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
+  markForcedDegraded,
   recordTaskBearingRoundIfForced,
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
+import { MessageCorrectionPort } from './supervisor/correction-port.js';
+import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
+import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
+import { decideGraphHintRouting } from './supervisor/graph-hint-routing.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -40,6 +45,7 @@ export interface ToolRoundDeps extends ToolExecutorDeps, CheckpointDeps, Resilie
   memoryIntegration: HarnessMemoryIntegration;
   graphExecutor: GraphExecutor;
   executionModeConfig?: ExecutionModeConfig;
+  executionModeDecisionEnabled?: boolean;
   abortSignal?: AbortSignal;
 }
 
@@ -107,24 +113,37 @@ export async function runHarnessToolRound(
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
 
-  const blockedToolSignatures = new Set<string>();
+  const correctionPort = new MessageCorrectionPort(msgs);
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
-
-  if (deps.graphExecutor?.hasGraph() && response.toolCalls) {
-    for (const tc of response.toolCalls) {
+  const gateContext = buildGateContext(deps.graphExecutor, response.toolCalls!, state);
+  const gateResult = executeToolCallsThroughGate({
+    toolCalls: response.toolCalls!,
+    messages: msgs,
+    ctx: gateContext,
+  });
+  const executableToolCalls = gateResult.executableToolCalls;
+  const blockedToolSignatures = gateResult.skippedSignatures;
+  if (gateContext.executionMode === 'forced' && deps.graphExecutor?.hasGraph()) {
+    for (const tc of executableToolCalls) {
       const check = deps.graphExecutor.checkToolCall(tc.name);
-      if (check.action === 'block' && check.message) {
-        blockedToolSignatures.add(toolCallSignature(tc));
-        msgs.push({ role: 'user', content: check.message });
-      } else if (check.action === 'warn' && check.message) {
-        msgs.push({ role: 'user', content: check.message });
+      if (check.action === 'warn' && check.message) {
+        correctionPort.inject(
+          { kind: 'graph_hint', content: check.message },
+          { phase: gateContext.phase, source: 'supervisor' },
+        );
       }
+    }
+    if (executableToolCalls.length === 0 && response.toolCalls?.length) {
+      correctionPort.inject(
+        { kind: 'graph_hint', content: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.' },
+        { phase: gateContext.phase, source: 'supervisor' },
+      );
     }
   }
 
   const repoFilesChangedBefore = state.repoContext.snapshot().filesChanged.length;
   const toolStats = await executeToolCallsStreaming(deps, {
-    toolCalls: response.toolCalls!,
+    toolCalls: executableToolCalls,
     messages: msgs,
     logger,
     onStep,
@@ -139,7 +158,7 @@ export async function runHarnessToolRound(
     state.submitModeSignal?.('step_gate', 'tool_failure', { failedCount: toolStats.failedCount });
   }
   if (deps.executionModeConfig) {
-    const writeTargetsThisRound = countWriteTargets(response.toolCalls!, failedSignaturesForSignals);
+    const writeTargetsThisRound = countWriteTargets(executableToolCalls, failedSignaturesForSignals);
     if (writeTargetsThisRound > deps.executionModeConfig.writeTargetsEnterThreshold) {
       state.submitModeSignal?.('step_gate', 'multi_write', { writeTargetsThisRound });
     }
@@ -147,33 +166,53 @@ export async function runHarnessToolRound(
 
   await resilienceRecordToolCalls(
     deps,
-    response.toolCalls!,
+    executableToolCalls,
     new Set(toolStats.failedSignatures),
     state,
   );
 
   const repeatedFailures = collectRepeatedFailures(
-    response.toolCalls!,
+    executableToolCalls,
     toolStats.failedSignatures,
     state.failedToolCallSignatures,
   );
   if (repeatedFailures.length > 0) {
-    msgs.push({
-      role: 'user',
-      content: `[System] Repeated failed tool call detected: ${repeatedFailures.join(', ')}. Do not retry the same tool with the same arguments. Change the path, parameters, command, or use a different tool; if blocked, explain the exact blocker and evidence.`,
-    });
+    injectRecoveryMessage(
+      deps,
+      state,
+      msgs,
+      correctionPort,
+      `[System] Repeated failed tool call detected: ${repeatedFailures.join(', ')}. Do not retry the same tool with the same arguments. Change the path, parameters, command, or use a different tool; if blocked, explain the exact blocker and evidence.`,
+    );
   }
 
-  resilienceMaybeBranchRecover(deps, state, msgs);
+  resilienceMaybeBranchRecover(
+    deps,
+    state,
+    msgs,
+    deps.executionModeDecisionEnabled ? correctionPort : undefined,
+  );
 
   if (toolStats.failedCount > 0) {
-    await resilienceMaybeReviewStep(deps, state, 'tool_failure', chatFn);
+    await resilienceMaybeReviewStep(
+      deps,
+      state,
+      'tool_failure',
+      chatFn,
+      deps.executionModeDecisionEnabled ? correctionPort : undefined,
+    );
   }
 
   if (state.taskState.snapshot().verificationStatus === 'failed') {
     await resilienceSaveCheckpoint(deps, 'verification_failed', state);
     if (!state.stepReviewedThisRound) {
-      await resilienceMaybeReviewStep(deps, state, 'verification_failure', chatFn);
+      await resilienceMaybeReviewStep(
+        deps,
+        state,
+        'verification_failure',
+        chatFn,
+        deps.executionModeDecisionEnabled ? correctionPort : undefined,
+      );
     }
   }
 
@@ -225,10 +264,13 @@ export async function runHarnessToolRound(
     }
 
     if (failureCount >= 6) {
-      msgs.push({
-        role: 'user',
-        content: `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded.\n\nYou must:\n1. Stop retrying the same failed tool calls, commands, paths, or parameters\n2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input\n3. If blocked, explain the exact blocker and evidence to the user\n\nYou may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.`,
-      });
+      injectRecoveryMessage(
+        deps,
+        state,
+        msgs,
+        correctionPort,
+        `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded.\n\nYou must:\n1. Stop retrying the same failed tool calls, commands, paths, or parameters\n2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input\n3. If blocked, explain the exact blocker and evidence to the user\n\nYou may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.`,
+      );
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入换策略提示`);
     } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES) {
       const lastErrors = msgs
@@ -240,52 +282,82 @@ export async function runHarnessToolRound(
         ? `Recent errors:\n${lastErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
         : '';
 
-      msgs.push({
-        role: 'user',
-        content: `[System] Note: ${failureCount} consecutive rounds of tool calls have all failed.${errorSummary ? '\n' + errorSummary : ''}\n\nPlease analyze the failure reasons and adopt a completely different approach to complete the task. Possible adjustment directions:\n- Check if file paths are correct (use list_directory to confirm)\n- Check if command syntax is correct\n- Try using alternative tools\n- If execution is truly impossible, directly explain the reason to the user and do not continue trying the same operation.`,
-      });
+      injectRecoveryMessage(
+        deps,
+        state,
+        msgs,
+        correctionPort,
+        `[System] Note: ${failureCount} consecutive rounds of tool calls have all failed.${errorSummary ? '\n' + errorSummary : ''}\n\nPlease analyze the failure reasons and adopt a completely different approach to complete the task. Possible adjustment directions:\n- Check if file paths are correct (use list_directory to confirm)\n- Check if command syntax is correct\n- Try using alternative tools\n- If execution is truly impossible, directly explain the reason to the user and do not continue trying the same operation.`,
+      );
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入策略调整提示`);
     } else if (failureCount === 2) {
-      msgs.push({
-        role: 'user',
-        content: '[System] All tool calls in the previous round failed. Please check if parameters are correct and try adjusting your approach.',
-      });
+      injectRecoveryMessage(
+        deps,
+        state,
+        msgs,
+        correctionPort,
+        '[System] All tool calls in the previous round failed. Please check if parameters are correct and try adjusting your approach.',
+      );
     }
   } else {
     state.consecutiveToolFailures = 0;
   }
 
-  if (deps.graphExecutor?.hasGraph() && response.toolCalls) {
-    for (const tc of response.toolCalls) {
+  let evalForceSwitchTriggered = false;
+  if (deps.graphExecutor?.hasGraph() && executableToolCalls.length > 0) {
+    for (const tc of executableToolCalls) {
       const sig = toolCallSignature(tc);
       const success = !toolStats.failedSignatures.includes(sig);
       deps.graphExecutor.recordToolResult(tc.name, success);
     }
-    const evalResult = deps.graphExecutor.evaluateRound(response.toolCalls.length);
+    const evalResult = deps.graphExecutor.evaluateRound(executableToolCalls.length);
+    const routing = decideGraphHintRouting({
+      executionMode: gateContext.executionMode,
+      action: evalResult.action,
+      message: evalResult.message,
+    });
     if (evalResult.action === 'force_switch') {
-      onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
-      if (evalResult.message) {
-        msgs.push({ role: 'user', content: evalResult.message });
+      evalForceSwitchTriggered = true;
+      if (routing.emitTelemetry) {
+        onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
       }
-    } else if (evalResult.message) {
-      msgs.push({ role: 'user', content: evalResult.message });
+    }
+    if (routing.injectToCorrectionPort && evalResult.message) {
+      correctionPort.inject(
+        { kind: 'graph_hint', content: evalResult.message },
+        { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+      );
     }
   }
   const graphSnapshotAfter = deps.graphExecutor?.toSnapshot();
 
+  if (gateContext.executionMode === 'forced') {
+    const plannedToolCount = response.toolCalls?.length ?? 0;
+    const plannedHadWriteTool = response.toolCalls?.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)) ?? false;
+    const tier = computeForcedDegradedTier({
+      executionMode: 'forced',
+      graphInitFailed: false,
+      forceSwitchTriggered: evalForceSwitchTriggered,
+      plannedToolCount,
+      executableToolCount: executableToolCalls.length,
+      plannedHadWriteTool,
+    });
+    if (tier) markForcedDegraded(state, tier);
+  }
+
   if (deps.executionModeConfig) {
     const failedSignatures = new Set(toolStats.failedSignatures);
-    const successfulExecutableCalls = response.toolCalls?.filter(tc => {
+    const successfulExecutableCalls = executableToolCalls.filter(tc => {
       const sig = toolCallSignature(tc);
       return !failedSignatures.has(sig) && !blockedToolSignatures.has(sig);
-    }) ?? [];
+    });
     const hadSuccessfulToolExecute = toolStats.totalCount > toolStats.failedCount
       && successfulExecutableCalls.length > 0;
-    const writeToolSucceeded = (response.toolCalls?.some(tc => (
+    const writeToolSucceeded = executableToolCalls.some(tc => (
       TASK_BEARING_WRITE_TOOLS.has(tc.name)
         && !failedSignatures.has(toolCallSignature(tc))
         && !blockedToolSignatures.has(toolCallSignature(tc))
-    )) ?? false) && toolStats.totalCount > toolStats.failedCount;
+    )) && toolStats.totalCount > toolStats.failedCount;
     const repoFilesChangedAfter = state.repoContext.snapshot().filesChanged.length;
     recordTaskBearingRoundIfForced(state, {
       hadSuccessfulToolExecute,
@@ -299,16 +371,19 @@ export async function runHarnessToolRound(
   await resilienceSaveCheckpoint(deps, 'step_completed', state);
 
   const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
-  const hadWriteTool = response.toolCalls?.some(tc => WRITE_TOOLS.has(tc.name)) ?? false;
+  const hadWriteTool = executableToolCalls.some(tc => WRITE_TOOLS.has(tc.name));
   if (hadWriteTool) {
     state.consecutiveReadOnlyRounds = 0;
-  } else if (response.toolCalls?.length) {
+  } else if (executableToolCalls.length) {
     state.consecutiveReadOnlyRounds++;
     if (state.consecutiveReadOnlyRounds === 5) {
-      msgs.push({
-        role: 'user',
-        content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
-      });
+      correctionPort.inject(
+        {
+          kind: 'recovery',
+          content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
+        },
+        { phase: state.supervisorPhase ?? 'free', source: 'lifecycle' },
+      );
     }
   }
 
@@ -347,6 +422,47 @@ function didGraphStepAdvance(
   return before.cursor.nodeId !== after.cursor.nodeId
     || before.cursor.nodeIndex !== after.cursor.nodeIndex
     || before.cursor.completedNodeIds.length !== after.cursor.completedNodeIds.length;
+}
+
+function buildGateContext(
+  graphExecutor: GraphExecutor | undefined,
+  toolCalls: LLMResponse['toolCalls'],
+  state: HarnessRunState,
+): GateContext {
+  const executionMode = state.executionMode ?? 'free';
+  const graphHints: GateContext['graphHints'] = [];
+
+  if (executionMode === 'forced' && graphExecutor?.hasGraph() && toolCalls) {
+    for (const tc of toolCalls) {
+      const check = graphExecutor.checkToolCall(tc.name, { track: false });
+      graphHints.push({ toolName: tc.name, action: check.action, message: check.message });
+    }
+  }
+
+  return {
+    phase: state.supervisorPhase ?? 'free',
+    mode: 'adaptive',
+    executionMode,
+    graphHints,
+  };
+}
+
+function injectRecoveryMessage(
+  deps: ToolRoundDeps,
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  correctionPort: MessageCorrectionPort,
+  content: string,
+): void {
+  if (!deps.executionModeDecisionEnabled) {
+    msgs.push({ role: 'user', content });
+    return;
+  }
+
+  correctionPort.inject(
+    { kind: 'recovery', content, preserveOnCompaction: true },
+    { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+  );
 }
 
 function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures: Set<string>): number {

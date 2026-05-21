@@ -70,6 +70,15 @@ describe('GraphExecutor', () => {
     expect(r.action).toBe('allow');
   });
 
+  it('checkToolCall track=false 不污染本轮工具状态', () => {
+    ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
+    for (let i = 0; i < 6; i++) {
+      expect(ex.checkToolCall('read_file', { track: false }).action).toBe('allow');
+    }
+
+    expect(ex.checkToolCall('read_file').action).toBe('allow');
+  });
+
   it('recordToolResult 不抛异常', () => {
     ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
     ex.checkToolCall('read_file');

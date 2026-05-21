@@ -11,6 +11,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
+const staticDir = path.join(process.cwd(), 'src/public');
+
 // Helper to get a random port from a running server
 function getPort(server: Server): number {
   const addr = server.address();
@@ -99,7 +101,7 @@ describe('Config API Routes', () => {
     });
 
     const app = await createServer({
-      staticDir: path.join(__dirname, '../../public'),
+      staticDir,
       routes: [{ path: '/api/config', router }],
     });
     server = await startServer(app, 0);
@@ -272,7 +274,7 @@ describe('Chat upload API routes', () => {
 
   async function createUploadTestServer(): Promise<number> {
     const app = await createServer({
-      staticDir: path.join(__dirname, '../../public'),
+      staticDir,
       routes: [{ path: '/api/chat', router: createUploadRouter() }],
     });
     server = await startServer(app, 0);

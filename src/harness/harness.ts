@@ -72,6 +72,7 @@ export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & {
   stopHookManager: StopHookManager;
   tokenBudgetTracker?: TokenBudgetTracker;
   executionModeConfig?: ExecutionModeConfig;
+  executionModeDecisionEnabled?: boolean;
   abortSignal?: AbortSignal;
 };
 
@@ -180,6 +181,7 @@ export class Harness {
       workspaceRoot: this.workspaceRoot,
       tokenBudgetTracker: this.tokenBudgetTracker,
       executionModeConfig: this.supervisorConfig?.executionMode,
+      executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
       abortSignal: this.abortSignal,
     };
   }
@@ -242,15 +244,31 @@ export class Harness {
     });
     const decision = this.modeDecisionEngine.evaluate(ctx);
 
-    applyExecutionModeConstraints(deps, {
-      state,
-      decision,
-      round,
-      config,
-      onStep,
-    });
+    applyExecutionModeConstraints(
+      {
+        ...deps,
+        onExecutionModeChanged: (nextMode) => this.applyExecutionModeGates(state, nextMode),
+      },
+      {
+        state,
+        decision,
+        round,
+        config,
+        onStep,
+      },
+    );
     state.pendingModeSignals = [];
     syncExecutionModeLoopState(this.loopController, state);
+  }
+
+  /**
+   * §2.8 / T12 — execution mode 切换时同步 BranchBudget / CheckpointEngine forced policy。
+   * 唯一调用入口：applyExecutionModeConstraints 的 onExecutionModeChanged 回调。
+   */
+  private applyExecutionModeGates(state: HarnessRunState, nextMode: 'free' | 'forced'): void {
+    const forced = nextMode === 'forced';
+    state.branchBudget?.setEnabled(forced);
+    this.checkpointEngine?.setForcedPolicy(forced);
   }
 
   private submitModeSignal(
@@ -354,6 +372,10 @@ export class Harness {
     };
     state.submitModeSignal = (source, signal, payload) => this.submitModeSignal(state, source, signal, payload);
     syncExecutionModeLoopState(this.loopController, state);
+    // §2.8 / T12 — strict floor 默认 forced，把 BranchBudget / CheckpointEngine
+    // forced policy 同步到与初始 executionMode 一致的状态；后续切换由
+    // applyExecutionModeConstraints 的 onExecutionModeChanged 唯一驱动。
+    this.applyExecutionModeGates(state, state.executionMode ?? 'free');
 
     if (this.resilienceV2Enabled && this.checkpointEngine) {
       try {

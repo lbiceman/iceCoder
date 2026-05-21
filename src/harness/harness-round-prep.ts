@@ -25,6 +25,10 @@ import type { GraphExecutor } from './task-graph-executor.js';
 import { shouldUseTaskGraph } from './task-graph-config.js';
 import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
+import {
+  markForcedDegraded,
+  syncExecutionModeLoopState,
+} from './supervisor/execution-mode-constraints.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -97,16 +101,27 @@ export async function prepareHarnessRound(
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
     if (shouldUseTaskGraph(taskSnapshot.intent)) {
-      deps.graphExecutor.initGraph({
-        goal: taskSnapshot.goal || userMessage,
-        intent: taskSnapshot.intent,
-      });
-      onStep?.({
-        type: 'task_graph_init',
-        graphGoal: taskSnapshot.goal || userMessage,
-        graphIntent: taskSnapshot.intent,
-        plan: deps.graphExecutor.toView() ?? undefined,
-      });
+      try {
+        deps.graphExecutor.initGraph({
+          goal: taskSnapshot.goal || userMessage,
+          intent: taskSnapshot.intent,
+        });
+        onStep?.({
+          type: 'task_graph_init',
+          graphGoal: taskSnapshot.goal || userMessage,
+          graphIntent: taskSnapshot.intent,
+          plan: deps.graphExecutor.toView() ?? undefined,
+        });
+      } catch (err) {
+        if (!markForcedDegraded(state, 'graph')) {
+          throw err;
+        }
+        state.submitModeSignal?.('graph_executor', 'recovery_pending', {
+          reason: 'task_graph_init_failed',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        syncExecutionModeLoopState(deps.loopController, state);
+      }
     }
   }
 

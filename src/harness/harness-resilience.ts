@@ -11,6 +11,7 @@ import { toolCallSignature } from './harness-permission-runtime.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
 import type { ChatFunction, StopReason } from './types.js';
+import type { CorrectionPort } from '../types/supervisor.js';
 
 export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
@@ -104,6 +105,7 @@ export function resilienceMaybeBranchRecover(
   deps: ResilienceBridgeDeps,
   state: HarnessRunState,
   msgs: UnifiedMessage[],
+  correctionPort?: CorrectionPort,
 ): void {
   if (!deps.resilienceV2Enabled || !state.branchBudget || !deps.checkpointEngine) return;
   if (state.branchBudgetWarnedThisRound) return;
@@ -114,7 +116,14 @@ export function resilienceMaybeBranchRecover(
   const signal = state.branchBudget.buildRecoverySignal(decision);
   if (!signal) return;
 
-  msgs.push({ role: 'user', content: signal.message });
+  if (correctionPort) {
+    correctionPort.inject(
+      { kind: 'recovery', content: signal.message, preserveOnCompaction: true },
+      { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+    );
+  } else {
+    msgs.push({ role: 'user', content: signal.message });
+  }
   state.branchBudget.markRecoveryTriggered();
   state.submitModeSignal?.('branch_budget', 'recovery_pending', { dimension: decision.dimension, key: decision.key });
   state.branchBudgetWarnedThisRound = true;
@@ -146,6 +155,7 @@ export async function resilienceMaybeReviewStep(
   state: HarnessRunState,
   trigger: 'tool_failure' | 'verification_failure' | 'step_transition',
   chatFn: ChatFunction,
+  correctionPort?: CorrectionPort,
 ): Promise<void> {
   if (!deps.resilienceV2Enabled) return;
   if (state.stepReviewedThisRound) return;
@@ -175,10 +185,15 @@ export async function resilienceMaybeReviewStep(
       && result.fallbackSuggested
       && !state.branchBudgetWarnedThisRound
     ) {
-      state.messages.push({
-        role: 'user',
-        content: `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`,
-      });
+      const content = `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`;
+      if (correctionPort) {
+        correctionPort.inject(
+          { kind: 'recovery', content },
+          { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+        );
+      } else {
+        state.messages.push({ role: 'user', content });
+      }
       state.branchBudgetWarnedThisRound = true;
     }
   } catch (err) {

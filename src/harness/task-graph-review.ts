@@ -51,7 +51,8 @@ export class ContractValidator {
   }
 
   /** 工具调用前检查 */
-  checkBeforeToolCall(toolName: string): ContractCheckResult {
+  checkBeforeToolCall(toolName: string, opts: { track?: boolean } = {}): ContractCheckResult {
+    const track = opts.track ?? true;
     const violations: ContractViolation[] = [];
 
     // 硬边界：forbiddenTools 直接拒绝
@@ -78,7 +79,9 @@ export class ContractValidator {
 
     // 重复工具检查
     const streak = (this.sameToolStreak.get(toolName) ?? 0) + 1;
-    this.sameToolStreak.set(toolName, streak);
+    if (track) {
+      this.sameToolStreak.set(toolName, streak);
+    }
     if (streak > this.contract.nodeGuard.maxSameToolRepeat) {
       violations.push({
         type: 'repeat_tool',

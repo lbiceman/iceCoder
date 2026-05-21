@@ -5,6 +5,7 @@ import type { HarnessStepEvent } from '../types.js';
 import type {
   ExecutionModeConfig,
   ExecutionModeTelemetryPayload,
+  ForcedDegradedTier,
   ModeDecision,
   TaskBearingRoundOutcome,
 } from '../../types/supervisor.js';
@@ -13,6 +14,11 @@ import { formatForcedReasonHuman } from './mode-decision-engine.js';
 export interface ApplyExecutionModeConstraintsDeps {
   loopController: LoopController;
   runtimeTelemetry?: RuntimeTelemetry;
+  /**
+   * §2.8 / T12 — execution mode 切换时同步 branch budget / checkpoint forced policy。
+   * 实现方按 nextMode 启停子模块；仅由本函数调用，避免散落的 ExecutionMode 写入。
+   */
+  onExecutionModeChanged?: (nextMode: 'free' | 'forced') => void;
 }
 
 export interface ApplyExecutionModeConstraintsArgs {
@@ -42,6 +48,7 @@ export function applyExecutionModeConstraints(
     const payload = buildTelemetryPayload(state, round, config, decision.failSafe);
     onStep?.({ type: 'execution_mode_enter', iteration: round, executionMode: payload });
     deps.runtimeTelemetry?.recordExecutionMode('execution_mode_enter', payload);
+    deps.onExecutionModeChanged?.('forced');
     syncExecutionModeLoopState(deps.loopController, state);
     return;
   }
@@ -69,6 +76,7 @@ export function applyExecutionModeConstraints(
 
     onStep?.({ type: 'execution_mode_exit', iteration: round, executionMode: payload });
     deps.runtimeTelemetry?.recordExecutionMode('execution_mode_exit', payload);
+    deps.onExecutionModeChanged?.('free');
     syncExecutionModeLoopState(deps.loopController, state);
     return;
   }
@@ -96,6 +104,16 @@ export function recordTaskBearingRoundIfForced(
     return false;
   }
   state.forcedTaskBearingRoundsSinceEntry = (state.forcedTaskBearingRoundsSinceEntry ?? 0) + 1;
+  return true;
+}
+
+export function markForcedDegraded(state: HarnessRunState, tier: ForcedDegradedTier): boolean {
+  normalizeExecutionModeState(state);
+  if (state.executionMode !== 'forced') {
+    return false;
+  }
+
+  state.forcedDegradedTier = tier;
   return true;
 }
 

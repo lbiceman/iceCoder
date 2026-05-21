@@ -86,6 +86,23 @@ const MAX_RECENT_TOOLS = 20;
 const MAX_RECENT_FAILURES = 10;
 const MAX_RECOVERY_SIGNALS = 8;
 
+/**
+ * §2.8 / T12 — forced 段比 free 段需要更激进的 checkpoint：
+ * 包含 step_completed / verification_started 这类 free 段允许跳过的触发器。
+ * free 段保留原有触发器集合，避免在「轻读取」任务里频繁落盘。
+ */
+const FREE_PERSIST_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
+  'tool_failed',
+  'verification_failed',
+  'compaction',
+  'final_draft',
+]);
+
+const FORCED_EXTRA_TRIGGERS: ReadonlySet<CheckpointSaveTrigger> = new Set([
+  'step_completed',
+  'verification_started',
+]);
+
 /** 是否启用 Runtime Resilience v2（始终为 true，与 `isExecutionPlanEnabled` 策略一致） */
 export function isResilienceV2Enabled(): boolean {
   return true;
@@ -103,6 +120,8 @@ export class CheckpointEngine {
   readonly checkpointPath: string;
   /** 内存中保留的 v2 累积状态（save 之间增量更新） */
   private v2State: RuntimeCheckpointV2 = emptyRuntimeCheckpointV2();
+  /** §2.8 / T12 — forced 段是否启用更积极的 checkpoint policy。 */
+  private forcedPolicyActive = false;
 
   constructor(sessionDir: string, sessionId = 'default') {
     this.checkpointPath = path.join(sessionDir, `${sessionId}.checkpoint.json`);
@@ -111,6 +130,26 @@ export class CheckpointEngine {
   /** 暴露内存中的 v2 状态（测试 / 调试用） */
   getV2State(): RuntimeCheckpointV2 {
     return cloneV2(this.v2State);
+  }
+
+  /** §2.8 / T12 — 启停 forced 段强制策略；调用方按 ExecutionMode gate。 */
+  setForcedPolicy(active: boolean): void {
+    this.forcedPolicyActive = active;
+  }
+
+  isForcedPolicyActive(): boolean {
+    return this.forcedPolicyActive;
+  }
+
+  /**
+   * 给定保存触发器，返回是否应在当前 policy 下真实落盘。
+   * free 段：仅落 tool_failed / verification_failed / compaction / final_draft。
+   * forced 段：额外覆盖 step_completed / verification_started。
+   * 调用方仍可以无条件 save()——本方法用于上层 gating，避免不必要的磁盘开销。
+   */
+  shouldPersistOnTrigger(trigger: CheckpointSaveTrigger): boolean {
+    if (FREE_PERSIST_TRIGGERS.has(trigger)) return true;
+    return this.forcedPolicyActive && FORCED_EXTRA_TRIGGERS.has(trigger);
   }
 
   /**
