@@ -89,6 +89,23 @@ export class GraphExecutor {
     return this.graph !== null;
   }
 
+  /**
+   * 是否存在 pending/running 的 type='edit' 节点。
+   *
+   * 服务于 Execution Mode `explicit_impl` 信号判定（§2.8.4 表 8）：
+   * graph 中存在尚未完成的 implement 类节点 → 进入 forced 的依据之一。
+   * 与 §2.8.7 / §3.2 一致：节点 type 来自 graph 运行态，不读用户原文。
+   */
+  hasPendingImplementNode(): boolean {
+    if (!this.graph) return false;
+    for (const node of Object.values(this.graph.nodes)) {
+      if (node.type === 'edit' && (node.status === 'pending' || node.status === 'running')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** 供 task_graph_init 推送步骤列表（实现/新增/创建等 edit 建图共用） */
   toView(): TaskGraphView | null {
     if (!this.graph) return null;

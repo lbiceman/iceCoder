@@ -116,6 +116,37 @@ describe('ModeDecisionEngine - Batch 2', () => {
     }))).toEqual({ action: 'keep', mode: 'forced' });
   });
 
+  it('consumes submitted signals after one evaluation to prevent stale re-entry', () => {
+    const engine = new ModeDecisionEngine(cfg);
+
+    engine.submitSignal('checkpoint_engine', 'checkpoint_resumed');
+    expect(engine.getSubmittedSignals().map(entry => entry.signal)).toEqual(['checkpoint_resumed']);
+
+    expect(engine.evaluate(context())).toMatchObject({
+      action: 'enter_forced',
+      enteredBy: ['checkpoint_resumed'],
+      primaryReason: 'checkpoint_resumed',
+    });
+    expect(engine.getSubmittedSignals()).toEqual([]);
+    expect(engine.evaluate(context())).toEqual({ action: 'keep', mode: 'free' });
+  });
+
+  it('drops residual signals when resetSubmittedSignals is called between runs', () => {
+    const engine = new ModeDecisionEngine(cfg);
+
+    engine.submitSignal('checkpoint_engine', 'checkpoint_resumed');
+    engine.submitSignal('step_gate', 'tool_failure');
+    expect(engine.getSubmittedSignals().map(entry => entry.signal)).toEqual([
+      'checkpoint_resumed',
+      'tool_failure',
+    ]);
+
+    engine.resetSubmittedSignals();
+
+    expect(engine.getSubmittedSignals()).toEqual([]);
+    expect(engine.evaluate(context())).toEqual({ action: 'keep', mode: 'free' });
+  });
+
   it('exits forced only after lock, dwell, stability, no recovery, and no branch debt', () => {
     const engine = new ModeDecisionEngine(cfg);
 

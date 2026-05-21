@@ -1,5 +1,8 @@
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
-import type { CheckpointSaveTrigger } from '../types/runtime-checkpoint.js';
+import type {
+  CheckpointSaveTrigger,
+  RuntimeSupervisorCheckpointState,
+} from '../types/runtime-checkpoint.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import type { CheckpointEngine } from './checkpoint-engine.js';
 import { shouldSkipResilienceCheckpoint } from './casual-mode.js';
@@ -7,7 +10,6 @@ import type { HarnessRunState } from './harness-run-state.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
-import type { TaskState } from './task-state.js';
 import type { ChatFunction, StopReason } from './types.js';
 
 export interface ResilienceBridgeDeps {
@@ -55,6 +57,7 @@ export async function resilienceRecordToolCalls(
           await engine.save({
             trigger: 'tool_failed',
             branchBudget: state.branchBudget,
+            supervisorState: buildSupervisorCheckpointState(state),
             appendFailure: {
               signature: sig,
               count: 1,
@@ -75,6 +78,7 @@ export async function resilienceRecordToolCalls(
         await engine.save({
           trigger: failed ? 'tool_failed' : 'step_completed',
           branchBudget: state.branchBudget,
+          supervisorState: buildSupervisorCheckpointState(state),
           appendTool: {
             toolName: tc.name,
             success: !failed,
@@ -112,6 +116,7 @@ export function resilienceMaybeBranchRecover(
 
   msgs.push({ role: 'user', content: signal.message });
   state.branchBudget.markRecoveryTriggered();
+  state.submitModeSignal?.('branch_budget', 'recovery_pending', { dimension: decision.dimension, key: decision.key });
   state.branchBudgetWarnedThisRound = true;
 
   const engine = deps.checkpointEngine;
@@ -120,6 +125,7 @@ export function resilienceMaybeBranchRecover(
       await engine.save({
         trigger: 'tool_failed',
         branchBudget: state.branchBudget,
+        supervisorState: buildSupervisorCheckpointState(state),
         appendRecoverySignal: signal,
       });
     } catch (err) {
@@ -191,7 +197,7 @@ export async function resilienceMaybeReviewStep(
 export async function resilienceSaveCheckpoint(
   deps: ResilienceBridgeDeps,
   trigger: CheckpointSaveTrigger,
-  state: { taskState: TaskState; branchBudget?: BranchBudgetTracker } | undefined,
+  state: HarnessRunState | undefined,
   stopReason?: StopReason,
 ): Promise<void> {
   if (!deps.resilienceV2Enabled || !deps.checkpointEngine) return;
@@ -205,6 +211,7 @@ export async function resilienceSaveCheckpoint(
       await engine.save({
         trigger,
         branchBudget: state.branchBudget,
+        supervisorState: buildSupervisorCheckpointState(state),
         verificationPending: state.taskState.shouldBlockFinalForVerification(),
         lastStopReason: stopReason,
       });
@@ -215,4 +222,20 @@ export async function resilienceSaveCheckpoint(
       );
     }
   });
+}
+
+export function buildSupervisorCheckpointState(
+  state: HarnessRunState,
+): RuntimeSupervisorCheckpointState {
+  return {
+    executionMode: state.executionMode ?? 'free',
+    executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
+    executionModeEnteredBy: [...(state.executionModeEnteredBy ?? [])],
+    executionModeEnteredByPrimary: state.executionModeEnteredByPrimary,
+    executionModeEnteredAtRound: state.executionModeEnteredAtRound ?? null,
+    forcedDegradedTier: state.forcedDegradedTier,
+    lastModeDecision: state.lastModeDecision,
+    pendingModeSignals: [...(state.pendingModeSignals ?? [])],
+    forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
+  };
 }

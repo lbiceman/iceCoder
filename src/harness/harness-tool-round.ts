@@ -22,6 +22,12 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
+import type { ExecutionModeConfig } from '../types/supervisor.js';
+import type { TaskGraphSnapshot } from '../types/task-graph.js';
+import {
+  recordTaskBearingRoundIfForced,
+  syncExecutionModeLoopState,
+} from './supervisor/execution-mode-constraints.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -33,8 +39,11 @@ export interface ToolRoundDeps extends ToolExecutorDeps, CheckpointDeps, Resilie
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
   graphExecutor: GraphExecutor;
+  executionModeConfig?: ExecutionModeConfig;
   abortSignal?: AbortSignal;
 }
+
+const TASK_BEARING_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
 
 export interface RunHarnessToolRoundArgs {
   state: HarnessRunState;
@@ -98,10 +107,14 @@ export async function runHarnessToolRound(
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
 
+  const blockedToolSignatures = new Set<string>();
+  const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
+
   if (deps.graphExecutor?.hasGraph() && response.toolCalls) {
     for (const tc of response.toolCalls) {
       const check = deps.graphExecutor.checkToolCall(tc.name);
       if (check.action === 'block' && check.message) {
+        blockedToolSignatures.add(toolCallSignature(tc));
         msgs.push({ role: 'user', content: check.message });
       } else if (check.action === 'warn' && check.message) {
         msgs.push({ role: 'user', content: check.message });
@@ -109,6 +122,7 @@ export async function runHarnessToolRound(
     }
   }
 
+  const repoFilesChangedBefore = state.repoContext.snapshot().filesChanged.length;
   const toolStats = await executeToolCallsStreaming(deps, {
     toolCalls: response.toolCalls!,
     messages: msgs,
@@ -120,6 +134,16 @@ export async function runHarnessToolRound(
     chatFn,
     currentTools,
   });
+  const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
+  if (deps.executionModeConfig && toolStats.failedCount > 0) {
+    state.submitModeSignal?.('step_gate', 'tool_failure', { failedCount: toolStats.failedCount });
+  }
+  if (deps.executionModeConfig) {
+    const writeTargetsThisRound = countWriteTargets(response.toolCalls!, failedSignaturesForSignals);
+    if (writeTargetsThisRound > deps.executionModeConfig.writeTargetsEnterThreshold) {
+      state.submitModeSignal?.('step_gate', 'multi_write', { writeTargetsThisRound });
+    }
+  }
 
   await resilienceRecordToolCalls(
     deps,
@@ -247,6 +271,29 @@ export async function runHarnessToolRound(
       msgs.push({ role: 'user', content: evalResult.message });
     }
   }
+  const graphSnapshotAfter = deps.graphExecutor?.toSnapshot();
+
+  if (deps.executionModeConfig) {
+    const failedSignatures = new Set(toolStats.failedSignatures);
+    const successfulExecutableCalls = response.toolCalls?.filter(tc => {
+      const sig = toolCallSignature(tc);
+      return !failedSignatures.has(sig) && !blockedToolSignatures.has(sig);
+    }) ?? [];
+    const hadSuccessfulToolExecute = toolStats.totalCount > toolStats.failedCount
+      && successfulExecutableCalls.length > 0;
+    const writeToolSucceeded = (response.toolCalls?.some(tc => (
+      TASK_BEARING_WRITE_TOOLS.has(tc.name)
+        && !failedSignatures.has(toolCallSignature(tc))
+        && !blockedToolSignatures.has(toolCallSignature(tc))
+    )) ?? false) && toolStats.totalCount > toolStats.failedCount;
+    const repoFilesChangedAfter = state.repoContext.snapshot().filesChanged.length;
+    recordTaskBearingRoundIfForced(state, {
+      hadSuccessfulToolExecute,
+      graphStepAdvanced: didGraphStepAdvance(graphSnapshotBefore, graphSnapshotAfter),
+      writeToolSucceededWithFileChange: writeToolSucceeded && repoFilesChangedAfter > repoFilesChangedBefore,
+    }, deps.executionModeConfig);
+    syncExecutionModeLoopState(deps.loopController, state);
+  }
 
   await saveTaskCheckpoint(deps, 'running', userMessage, msgs, state);
   await resilienceSaveCheckpoint(deps, 'step_completed', state);
@@ -290,4 +337,28 @@ export async function runHarnessToolRound(
   state.transition = 'tool_calls';
 
   return { action: 'continue' };
+}
+
+function didGraphStepAdvance(
+  before: TaskGraphSnapshot | null | undefined,
+  after: TaskGraphSnapshot | null | undefined,
+): boolean {
+  if (!before || !after) return false;
+  return before.cursor.nodeId !== after.cursor.nodeId
+    || before.cursor.nodeIndex !== after.cursor.nodeIndex
+    || before.cursor.completedNodeIds.length !== after.cursor.completedNodeIds.length;
+}
+
+function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures: Set<string>): number {
+  const targets = new Set<string>();
+  for (const tc of toolCalls ?? []) {
+    if (!TASK_BEARING_WRITE_TOOLS.has(tc.name) || failedSignatures.has(toolCallSignature(tc))) continue;
+    const target = typeof tc.arguments?.path === 'string'
+      ? tc.arguments.path
+      : typeof tc.arguments?.file_path === 'string'
+        ? tc.arguments.file_path
+        : tc.id;
+    targets.add(target);
+  }
+  return targets.size;
 }

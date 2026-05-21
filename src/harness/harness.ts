@@ -17,6 +17,11 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type {
+  ExecutionModeConfig,
+  ModeSignal,
+  ModeSignalSource,
+} from '../types/supervisor.js';
+import type {
   HarnessConfig,
   HarnessResult,
   HarnessStepEvent,
@@ -38,6 +43,17 @@ import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { GraphExecutor } from './task-graph-executor.js';
 import { ensureDelegateToSubagentTool } from './sub-agent-runner.js';
+import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
+import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
+import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
+import {
+  buildModeDecisionContext,
+  buildRuntimeExecutionState,
+} from './supervisor/runtime-execution-state.js';
+import {
+  applyExecutionModeConstraints,
+  syncExecutionModeLoopState,
+} from './supervisor/execution-mode-constraints.js';
 import {
   DEFAULT_COMPACTION_KEEP_RECENT,
   DEFAULT_COMPACTION_THRESHOLD,
@@ -55,6 +71,7 @@ import type { ToolExecutorDeps } from './harness-tool-executor.js';
 export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & {
   stopHookManager: StopHookManager;
   tokenBudgetTracker?: TokenBudgetTracker;
+  executionModeConfig?: ExecutionModeConfig;
   abortSignal?: AbortSignal;
 };
 
@@ -84,6 +101,8 @@ export class Harness {
   private checkpointEngine?: CheckpointEngine;
   private globalPolicy?: HarnessConfig['globalPolicy'];
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
+  private modeDecisionEngine: ModeDecisionEngine;
+  private taskRiskClassifier: TaskRiskClassifier;
 
   constructor(
     config: HarnessConfig,
@@ -111,8 +130,12 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
-    this.globalPolicy = config.globalPolicy;
-    this.supervisorConfig = config.supervisorConfig;
+    // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
+    // 调用方需要启用双模决策时，应显式传入 supervisorConfig 或设置 ICE_SUPERVISOR_MODE。
+    this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
+    this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
+    this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
+    this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
     this.checkpointManager = config.sessionDir
       ? new TaskCheckpointManager(config.sessionDir, config.sessionId)
       : undefined;
@@ -156,6 +179,7 @@ export class Harness {
       onConfirm: this.onConfirm,
       workspaceRoot: this.workspaceRoot,
       tokenBudgetTracker: this.tokenBudgetTracker,
+      executionModeConfig: this.supervisorConfig?.executionMode,
       abortSignal: this.abortSignal,
     };
   }
@@ -174,6 +198,84 @@ export class Harness {
     return p;
   }
 
+  private evaluateExecutionModeBeforeLlm(
+    deps: HarnessRunDeps,
+    state: HarnessRunState,
+    round: number,
+    onStep?: (event: HarnessStepEvent) => void,
+  ): void {
+    // W3：信号生命周期为「上一轮事件 → 本轮 evaluate 消费」。
+    //   在 runHarnessToolRound 末段提交的 tool_failure / multi_write /
+    //   recovery_pending 等信号会写入 state.pendingModeSignals，
+    //   并在下一轮（即此处）被读取与清空，因此进入 forced 通常滞后 1 轮。
+    //   即时阻断由 Batch 5 的 ToolGate 在工具执行前单独处理，不在此 evaluate。
+    const config = this.supervisorConfig?.executionMode;
+    const policy = this.globalPolicy;
+    if (!config || !policy) return;
+
+    this.submitGraphModeSignals(deps, state);
+    const graphState = {
+      active: deps.graphExecutor?.hasGraph() ?? false,
+      pendingStepCount: 0,
+      activeGraphHasImplementNode: deps.graphExecutor?.hasPendingImplementNode() ?? false,
+    };
+    const runtimeState = buildRuntimeExecutionState({
+      round,
+      readonlyToolNames: config.readonlyToolNames,
+      plannedToolNames: [],
+      graphState,
+      forcedEntryRound: state.executionModeEnteredAtRound ?? null,
+      forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
+      stableRounds: state.consecutiveToolFailures === 0 ? config.stableRoundsExitThreshold : 0,
+      lastToolSuccess: state.consecutiveToolFailures === 0,
+    });
+    const riskLevel = this.taskRiskClassifier.classify(runtimeState);
+    const ctx = buildModeDecisionContext({
+      round,
+      executionMode: state.executionMode ?? policy.executionModeFloor,
+      executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
+      supervisorPhase: state.supervisorPhase ?? 'free',
+      supervisorMode: policy.supervisorMode,
+      riskLevel,
+      state: runtimeState,
+      signals: state.pendingModeSignals ?? [],
+    });
+    const decision = this.modeDecisionEngine.evaluate(ctx);
+
+    applyExecutionModeConstraints(deps, {
+      state,
+      decision,
+      round,
+      config,
+      onStep,
+    });
+    state.pendingModeSignals = [];
+    syncExecutionModeLoopState(this.loopController, state);
+  }
+
+  private submitModeSignal(
+    state: HarnessRunState,
+    source: ModeSignalSource,
+    signal: ModeSignal,
+    payload?: Record<string, unknown>,
+  ): void {
+    state.pendingModeSignals ??= [];
+    state.pendingModeSignals.push(signal);
+    this.modeDecisionEngine.submitSignal(source, signal, payload);
+  }
+
+  private submitGraphModeSignals(deps: HarnessRunDeps, state: HarnessRunState): void {
+    if (!deps.graphExecutor?.hasGraph()) return;
+    state.submitModeSignal?.('graph_executor', 'task_graph_active');
+    const snapshot = deps.graphExecutor.toSnapshot();
+    const hasPendingNode = snapshot
+      ? Object.values(snapshot.nodes).some(node => node.status === 'pending' || node.status === 'running')
+      : false;
+    if (hasPendingNode) {
+      state.submitModeSignal?.('graph_executor', 'pending_steps');
+    }
+  }
+
   /**
    * 执行核心循环（状态机模式）。
    */
@@ -187,6 +289,9 @@ export class Harness {
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
     const deps = this.buildRunDeps();
+    // W1: Harness 实例可被复用（cli/web）；清空上一次 run 残留的未消费信号，
+    // 避免熔断/abort/max_rounds 终止后引擎 submittedSignals 跨 run 泄漏。
+    this.modeDecisionEngine.resetSubmittedSignals();
 
     let messages: UnifiedMessage[];
     const messageContent = userContentBlocks ?? userMessage;
@@ -240,13 +345,22 @@ export class Harness {
       branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
       branchBudgetWarnedThisRound: false,
       stepReviewedThisRound: false,
+      executionMode: 'free',
+      executionModeLockRemaining: 0,
+      executionModeEnteredBy: [],
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 0,
+      supervisorPhase: 'free',
     };
+    state.submitModeSignal = (source, signal, payload) => this.submitModeSignal(state, source, signal, payload);
+    syncExecutionModeLoopState(this.loopController, state);
 
     if (this.resilienceV2Enabled && this.checkpointEngine) {
       try {
         const v2 = await this.checkpointEngine.loadV2();
         if (v2) {
           state.branchBudget?.applySnapshot(v2.branchBudget);
+          state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
           const pending = this.checkpointEngine.pendingRecoverySignals();
           if (pending.length > 0) {
             for (const sig of pending) {
@@ -295,6 +409,8 @@ export class Harness {
           streamFn,
         });
         if (prep.action === 'stop') return prep.result;
+
+        this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
 
         const llm = await callHarnessLlm(deps, {
           state,

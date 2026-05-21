@@ -101,6 +101,25 @@ export class LoopController {
   }
 
   /**
+   * 同步 Execution Mode 观察字段；模式裁决仍只由 ModeDecisionEngine 产生。
+   */
+  updateExecutionModeState(fields: Partial<Pick<
+    LoopState,
+    | 'executionMode'
+    | 'executionModeLockRemaining'
+    | 'executionModeEnteredBy'
+    | 'executionModeEnteredByPrimary'
+    | 'executionModeEnteredAtRound'
+    | 'forcedDegradedTier'
+    | 'lastModeDecision'
+    | 'pendingModeSignals'
+    | 'forcedTaskBearingRoundsSinceEntry'
+    | 'supervisorPhase'
+  >>): void {
+    this.state = { ...this.state, ...fields };
+  }
+
+  /**
    * 标记循环结束。
    */
   stop(reason: StopReason): void {

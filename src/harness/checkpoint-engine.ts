@@ -29,7 +29,9 @@ import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
   emptyRuntimeCheckpointV2,
+  emptyRuntimeSupervisorCheckpointState,
   type RuntimeCheckpointV2,
+  type RuntimeSupervisorCheckpointState,
   type CheckpointSaveTrigger,
   type ToolHistoryEntry,
   type FailureHistoryEntry,
@@ -75,6 +77,8 @@ export interface CheckpointSaveInput {
   graphMetrics?: GraphMetrics;
   /** TaskGraph 会话边界（Phase 6） */
   graphSession?: GraphSession;
+  /** Supervisor execution-mode snapshot; restore path may only convert it into signals. */
+  supervisorState?: RuntimeSupervisorCheckpointState;
 }
 
 /** 最大保留条目 */
@@ -232,6 +236,9 @@ export class CheckpointEngine {
     if (input.verificationPending !== undefined) state.verificationPending = input.verificationPending;
     if (input.lastStopReason !== undefined) state.lastStopReason = input.lastStopReason;
     if (input.plan?.version !== undefined) state.planVersion = input.plan.version;
+    if (input.supervisorState) {
+      state.supervisorState = cloneSupervisorState(input.supervisorState);
+    }
 
     if (input.branchBudget) {
       state.branchBudget = input.branchBudget.snapshot();
@@ -396,16 +403,25 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     recoverySignals: v.recoverySignals.map(s => ({ ...s })),
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,
-    supervisorState: v.supervisorState
-      ? {
-          ...v.supervisorState,
-          executionModeEnteredBy: [...v.supervisorState.executionModeEnteredBy],
-          pendingModeSignals: [...v.supervisorState.pendingModeSignals],
-          lastModeDecision: v.supervisorState.lastModeDecision
-            ? { ...v.supervisorState.lastModeDecision }
-            : undefined,
-        }
-      : undefined,
+    supervisorState: v.supervisorState ? cloneSupervisorState(v.supervisorState) : undefined,
     v2UpdatedAt: v.v2UpdatedAt,
+  };
+}
+
+function cloneSupervisorState(
+  state: Partial<RuntimeSupervisorCheckpointState>,
+): RuntimeSupervisorCheckpointState {
+  const defaults = emptyRuntimeSupervisorCheckpointState();
+  return {
+    executionMode: state.executionMode ?? defaults.executionMode,
+    executionModeLockRemaining: state.executionModeLockRemaining ?? defaults.executionModeLockRemaining,
+    executionModeEnteredBy: [...(state.executionModeEnteredBy ?? defaults.executionModeEnteredBy)],
+    executionModeEnteredByPrimary: state.executionModeEnteredByPrimary,
+    executionModeEnteredAtRound: state.executionModeEnteredAtRound ?? defaults.executionModeEnteredAtRound,
+    forcedDegradedTier: state.forcedDegradedTier,
+    lastModeDecision: state.lastModeDecision ? { ...state.lastModeDecision } : undefined,
+    pendingModeSignals: [...(state.pendingModeSignals ?? defaults.pendingModeSignals)],
+    forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry
+      ?? defaults.forcedTaskBearingRoundsSinceEntry,
   };
 }

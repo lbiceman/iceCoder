@@ -90,6 +90,8 @@ export class ModeDecisionEngine implements ModeDecisionEngineContract {
         primaryReason: 'engine_fail_safe',
         failSafe: true,
       };
+    } finally {
+      this.submittedSignals.length = 0;
     }
   }
 
@@ -99,6 +101,17 @@ export class ModeDecisionEngine implements ModeDecisionEngineContract {
 
   getSubmittedSignals(): readonly SubmittedModeSignal[] {
     return this.submittedSignals;
+  }
+
+  /**
+   * 清空尚未被 evaluate 消费的 submittedSignals。
+   *
+   * 仅在 Harness 实例跨 run() 复用、且上次 run 末尾未触发 evaluate
+   * (熔断 / max_rounds / abort) 时使用，避免上一次 run 的残留信号
+   * 污染下一次 run 的首轮 evaluate（W1 修复）。
+   */
+  resetSubmittedSignals(): void {
+    this.submittedSignals.length = 0;
   }
 
   protected evaluateOrThrow(ctx: ModeDecisionContext): ModeDecision {
@@ -112,7 +125,8 @@ export class ModeDecisionEngine implements ModeDecisionEngineContract {
     }
 
     if (ctx.executionMode !== 'forced') {
-      const enteredBy = shouldEnterForcedMode(ctx.state, this.config, signals);
+      const strictFloorSignals: ModeSignal[] = ctx.supervisorMode === 'strict' ? ['explicit_impl'] : [];
+      const enteredBy = shouldEnterForcedMode(ctx.state, this.config, [...signals, ...strictFloorSignals]);
       if (enteredBy.length > 0) {
         return {
           action: 'enter_forced',

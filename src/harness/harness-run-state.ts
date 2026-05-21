@@ -8,6 +8,7 @@ import type {
   ForcedDegradedTier,
   ModeDecision,
   ModeSignal,
+  ModeSignalSource,
   SupervisorPhase,
 } from '../types/supervisor.js';
 
@@ -91,4 +92,10 @@ export interface HarnessRunState {
   forcedTaskBearingRoundsSinceEntry?: number;
   /** Batch 1 承载位：Supervisor 运行时相位。 */
   supervisorPhase?: SupervisorPhase;
+  /** Batch 4：统一信号提交入口；子模块不得直接写 executionMode。 */
+  submitModeSignal?: (
+    source: ModeSignalSource,
+    signal: ModeSignal,
+    payload?: Record<string, unknown>,
+  ) => void;
 }

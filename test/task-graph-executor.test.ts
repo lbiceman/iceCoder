@@ -38,6 +38,15 @@ describe('GraphExecutor', () => {
     expect(ex.hasGraph()).toBe(false);
   });
 
+  it('hasPendingImplementNode: 无 graph 返回 false', () => {
+    expect(ex.hasPendingImplementNode()).toBe(false);
+  });
+
+  it('hasPendingImplementNode: edit intent 下的 graph 存在 pending edit 节点 → true', () => {
+    ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
+    expect(ex.hasPendingImplementNode()).toBe(true);
+  });
+
   // ── getCurrentNodeContext ──
 
   it('getCurrentNodeContext 返回节点信息', () => {
