@@ -1,6 +1,6 @@
 /**
  * 冰豆（Ice Bean）— iceCoder Web 会话状态指示器
- * 极简风格：固定黑底 + 胶囊眼睛；眼睛色在启动时从色板随机。
+ * 极简风格：固定黑底 + 胶囊眼睛；眼睛色对应当前 supervisorMode（见 session-pet-palette）。
  * 不区分昼夜模式，始终黑底白字。
  * 眨眼：1-3 秒随机间隔，闭眼 150ms。
  *
@@ -9,10 +9,12 @@
  */
 import {
   SESSION_PET_PALETTE_COLORS as COLORS,
-  pickRandomPaletteColor,
+  supervisorModeToEyeColor,
   buildSessionPetCanvasAriaLabel,
   SESSION_PET_DISPLAY_NAME,
 } from './session-pet-palette.js';
+
+window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
 (function () {
   'use strict';
@@ -745,7 +747,11 @@ import {
     var tokenUsed = 0;
     var tokenMax = 0;
     var tokenOutput = 0;
-    var eyeColor = pickRandomPaletteColor(COLORS);
+    var initialMode =
+      window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
+        ? window.AppRouter.getSupervisorMode()
+        : 'adaptive';
+    var eyeColor = supervisorModeToEyeColor(initialMode, COLORS);
     var tokenHintEl = document.createElement('span');
     tokenHintEl.className = 'pet-token-hint';
     tokenHintEl.setAttribute('aria-hidden', 'true');

@@ -228,15 +228,16 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   opacity: 0.85;
 }
 .supervisor-mode-toggle[data-mode="off"] {
-  color: var(--text-muted);
+  border-color: #88EDC7;
+  color: #88EDC7;
 }
 .supervisor-mode-toggle[data-mode="adaptive"] {
-  border-color: var(--accent, #5b9cff);
-  color: var(--accent, #5b9cff);
+  border-color: #86E0FF;
+  color: #86E0FF;
 }
 .supervisor-mode-toggle[data-mode="strict"] {
-  border-color: #e8a838;
-  color: #e8a838;
+  border-color: #F1A8B2;
+  color: #F1A8B2;
 }
 .supervisor-mode-toggle:disabled {
   opacity: 0.5;

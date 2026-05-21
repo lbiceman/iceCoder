@@ -485,7 +485,7 @@ The **chat page** embeds an optional **Ice Bean** (Chinese display name **冰豆
 
 | | |
 |---|---|
-| **Rendering** | ~120×120 logical px, dark body, capsule eyes; eye color is picked once per load from `session-pet-palette.js` (decorative, not tied to token %). |
+| **Rendering** | ~120×120 logical px, dark body, capsule eyes; eye color maps to **`supervisorMode`** (off / adaptive / strict — see `session-pet-palette.js`); nav toggle shows pet bubble「当前模式：…」. |
 | **Token ring** | Outer arc from top, clockwise — approximate **context / token usage** ratio (green → yellow → red). |
 | **Expressions** | Many (~20) named visual states (e.g. thinking, idle, tool/memory hints) driven by **`ChatPetBridge`** from WebSocket `HarnessStepEvent`-style updates in `chat-page.js`. |
 | **Interaction** | Drag to reposition (saved under `localStorage` key `ice-session-pet-position`); double-click resets placement. Canvas `aria-label` is built via `buildSessionPetCanvasAriaLabel` (starts with 冰豆). |

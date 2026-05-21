@@ -581,6 +581,9 @@ window.ChatPage = (function () {
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
+        Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
+      }
     }
 
     // 初始化会话：先从 localStorage 载入（本地页与远程页都需要内存里有消息再绘制）

@@ -20,6 +20,8 @@ window.ChatPetBridge = (function () {
   var MCP_READY_NOTICE_MS = 5200;
   var tunnelReadyResetTimer = null;
   var TUNNEL_READY_NOTICE_MS = 5200;
+  var supervisorModeResetTimer = null;
+  var SUPERVISOR_MODE_NOTICE_MS = 4500;
 
   function init(pet) {
     sessionPet = pet;
@@ -385,6 +387,29 @@ window.ChatPetBridge = (function () {
     }, MEMORY_NOTICE_MS);
   }
 
+  function syncSupervisorModeEye(mode) {
+    if (!sessionPet) return;
+    var eyeFn = window.IceSupervisorModeEyeColor;
+    if (typeof eyeFn === 'function') {
+      sessionPet.setEyeColor(eyeFn(mode));
+    }
+  }
+
+  function notifySupervisorMode(mode, label) {
+    if (!sessionPet) return;
+    syncSupervisorModeEye(mode);
+    sessionPet.setVisible(true);
+    sessionPet.setState('playful');
+    sessionPet.setBubbleText('当前模式：' + (label || mode));
+    if (supervisorModeResetTimer) clearTimeout(supervisorModeResetTimer);
+    supervisorModeResetTimer = setTimeout(function () {
+      supervisorModeResetTimer = null;
+      if (!sessionPet || !sessionPet.isVisible()) return;
+      sessionPet.setState(lastWsProcessing || lastIsStreaming ? 'read' : 'idle');
+      sessionPet.setBubbleText('');
+    }, SUPERVISOR_MODE_NOTICE_MS);
+  }
+
   return {
     init: init,
     showThinking: showThinking,
@@ -396,6 +421,8 @@ window.ChatPetBridge = (function () {
     applyMemoryNoticesToPet: applyMemoryNoticesToPet,
     applyMcpReadyToPet: applyMcpReadyToPet,
     applyTunnelReadyToPet: applyTunnelReadyToPet,
+    syncSupervisorModeEye: syncSupervisorModeEye,
+    notifySupervisorMode: notifySupervisorMode,
     getSessionPet: getSessionPet,
     isSessionActive: isSessionActive,
     syncExecPlanFoot: syncExecPlanFoot,

@@ -29,6 +29,17 @@
 
   // ---- 监管模式 ----
 
+  function syncSupervisorModeToPet(showBubble) {
+    var label = SUPERVISOR_LABELS[currentSupervisorMode] || currentSupervisorMode;
+    if (window.ChatPetBridge) {
+      if (showBubble && typeof window.ChatPetBridge.notifySupervisorMode === 'function') {
+        window.ChatPetBridge.notifySupervisorMode(currentSupervisorMode, label);
+      } else if (typeof window.ChatPetBridge.syncSupervisorModeEye === 'function') {
+        window.ChatPetBridge.syncSupervisorModeEye(currentSupervisorMode);
+      }
+    }
+  }
+
   function updateSupervisorModeButton() {
     if (!supervisorModeToggle || !supervisorModeLabel) return;
     supervisorModeLabel.textContent = SUPERVISOR_LABELS[currentSupervisorMode] || currentSupervisorMode;
@@ -42,6 +53,7 @@
       currentSupervisorMode = data.supervisorMode;
     }
     updateSupervisorModeButton();
+    syncSupervisorModeToPet(false);
   }
 
   function cycleSupervisorMode() {
@@ -59,6 +71,7 @@
         if (result.ok && result.body.success) {
           currentSupervisorMode = result.body.supervisorMode;
           updateSupervisorModeButton();
+          syncSupervisorModeToPet(true);
         }
       })
       .catch(function () { /* ignore */ })
@@ -207,7 +220,10 @@
   }
 
   window.AppRouter = {
-    refreshStatus: fetchSystemStatus
+    refreshStatus: fetchSystemStatus,
+    getSupervisorMode: function () {
+      return currentSupervisorMode;
+    },
   };
 
   // 检测 bfcache 恢复（移动端浏览器关闭后重新打开可能从缓存恢复页面）

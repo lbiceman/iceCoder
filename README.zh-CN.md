@@ -522,7 +522,7 @@ ICE_CONTEXT_WINDOW
 
 | 方面 | 说明 |
 |------|------|
-| **外观** | 约 120×120 逻辑像素、黑底胶囊眼；**眼睛颜色**在页面加载时从 `session-pet-palette.js` 色板随机选取，与 token 百分比无关（纯装饰）。 |
+| **外观** | 约 120×120 逻辑像素、黑底胶囊眼；**眼睛颜色**与 `config.json` 的 **`supervisorMode`** 三档对应（自由 `#88EDC7` / 自适应 `#86E0FF` / 严格 `#F1A8B2`）；切换顶栏模式时冰豆气泡提示「当前模式：…」。 |
 | **外圈圆环** | 自顶端顺时针，表示**上下文 / token 占用**大致比例（绿→黄→红渐变）。 |
 | **表情** | 对外约 **20** 种状态（含眨眼等），由 `chat-pet-bridge.js` 根据 WebSocket 推送的步骤事件（与 `HarnessStepEvent` 对应）在 `chat-page.js` 中更新。 |
 | **交互** | 可拖动改位置，位置存 `localStorage`（键 `ice-session-pet-position`）；**双击**恢复默认摆放；Canvas 的无障碍文案由 `buildSessionPetCanvasAriaLabel` 生成（前缀为「冰豆」）。 |
