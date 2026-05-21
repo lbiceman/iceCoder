@@ -1,5 +1,9 @@
 import type { UnifiedMessage } from '../../llm/types.js';
-import type { CorrectionBlock, CorrectionPort, CorrectionSource, SupervisorPhase } from '../../types/supervisor.js';
+import type {
+  CorrectionBlock,
+  CorrectionInjectContext,
+  CorrectionPort,
+} from '../../types/supervisor.js';
 import type { CorrectionBudgetTracker } from './correction-budget.js';
 import type { BoundaryRejectReason, RecoveryBoundary } from './recovery-boundary.js';
 
@@ -9,9 +13,10 @@ export interface MessageCorrectionPortOptions {
   /**
    * §11 / §19.6 — `RecoveryBoundary`：phase × source × kind 的硬门禁。
    * 缺省时退回历史 `shouldSuppress` 行为（free 段 supervisor 的 takeover 类静默 drop）。
-   * 提供时本 port 严格按 boundary.decide 路由：
+   * 提供时本 port 严格按 boundary 路由：
    *   - 拒绝 → drop 且不计 budget；调用方经 `onBoundaryRejected` 落 timeline；
-   *   - 允许 → 继续走 budget 检查与 msgs.push。
+   *   - 允许且 `budgetCountable` → 调用 `CorrectionBudgetTracker.tryConsume()` 扣减次数；
+   *   - 允许且非 budgetCountable → 直接写 msgs。
    */
   recoveryBoundary?: RecoveryBoundary;
   /**
@@ -20,7 +25,7 @@ export interface MessageCorrectionPortOptions {
    */
   onBudgetRejected?: (args: {
     block: CorrectionBlock;
-    ctx: { phase: SupervisorPhase; source: CorrectionSource };
+    ctx: CorrectionInjectContext;
   }) => void;
   /**
    * RecoveryBoundary 拒绝时的回调；上层把违规写 timeline 便于 §19.6 回归。
@@ -28,7 +33,7 @@ export interface MessageCorrectionPortOptions {
    */
   onBoundaryRejected?: (args: {
     block: CorrectionBlock;
-    ctx: { phase: SupervisorPhase; source: CorrectionSource };
+    ctx: CorrectionInjectContext;
     reason: BoundaryRejectReason;
   }) => void;
 }
@@ -49,7 +54,7 @@ export class MessageCorrectionPort implements CorrectionPort {
     this.onBoundaryRejected = options.onBoundaryRejected;
   }
 
-  inject(block: CorrectionBlock, ctx: { phase: SupervisorPhase; source: CorrectionSource }): void {
+  inject(block: CorrectionBlock, ctx: CorrectionInjectContext): void {
     if (this.recoveryBoundary) {
       const decision = this.recoveryBoundary.mayInjectCorrection({
         phase: ctx.phase,
@@ -60,14 +65,13 @@ export class MessageCorrectionPort implements CorrectionPort {
         this.onBoundaryRejected?.({ block, ctx, reason: decision.reason });
         return;
       }
+      if (decision.budgetCountable && this.budget && !this.budget.tryConsume()) {
+        // I4：boundary 已放行但 free 段次数超限 → drop inject；timeline 由 onBudgetRejected 上报。
+        this.onBudgetRejected?.({ block, ctx });
+        return;
+      }
     } else if (legacyShouldSuppress(block, ctx)) {
       // 历史调用方：保留 W7 兼容路径（free 段 supervisor 的 takeover 类静默 drop）。
-      return;
-    }
-
-    if (this.budget && !this.budget.tryConsume({ block, phase: ctx.phase, source: ctx.source })) {
-      // I4：free 段超限 → drop inject；timeline 由 onBudgetRejected 上报。
-      this.onBudgetRejected?.({ block, ctx });
       return;
     }
 
@@ -75,15 +79,10 @@ export class MessageCorrectionPort implements CorrectionPort {
   }
 }
 
-function legacyShouldSuppress(block: CorrectionBlock, ctx: { phase: SupervisorPhase; source: CorrectionSource }): boolean {
+function legacyShouldSuppress(block: CorrectionBlock, ctx: CorrectionInjectContext): boolean {
   if (ctx.source !== 'supervisor' || ctx.phase !== 'free') {
     return false;
   }
 
-  // W7：free 段仅抑制 takeover 类长策略（接管文案是 phase=takeover 的专属）。
-  //     recovery 类是熔断前的硬阈值提示（如 "Repeated failed tool call detected"、
-  //     branch budget warning、6 轮全失败警告），是 free 段最后的自纠偏路径，
-  //     在 CorrectionBudget 真正落地之前不应整类抑制；否则 adaptive 接通后
-  //     free 段会失去自我恢复能力。
   return block.kind === 'takeover';
 }

@@ -16,6 +16,7 @@ import { startTunnelReadyWatcher } from '../../web/tunnel-ready-watcher.js';
 import { createSessionsRouter } from '../../web/routes/sessions.js';
 import { createUploadRouter } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
+import { createSupervisorEventsRouter } from '../../web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import type { Server } from 'http';
@@ -48,6 +49,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/sessions', router: createSessionsRouter() },
       { path: '/api/chat', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
+      { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/memory', router: createMemoryExportRouter(llmAdapter) },
     ],

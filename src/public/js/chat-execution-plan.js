@@ -38,12 +38,33 @@ window.ChatExecutionPlan = (function () {
     question: '问答',
   };
 
+  var MODE_SIGNAL_LABELS = {
+    checkpoint_resumed: 'checkpoint 恢复',
+    task_graph_active: '任务图活跃',
+    branch_switched: '分支切换',
+    pending_steps: '待执行步骤',
+    tool_failure: '工具失败',
+    multi_write: '多文件写入',
+    large_diff: '大 diff',
+    explicit_impl: '明确实现',
+    recovery_pending: '恢复待定',
+    engine_fail_safe: '引擎 fail-safe',
+  };
+
+  var DEGRADED_LABELS = {
+    graph: '图构建降级',
+    step_queue: '步骤队列降级',
+    write_intent: '写入意图降级',
+  };
+
+  var currentPlan = null;
+  var currentExecutionMode = null;
+  var visible = false;
   var rootEl = null;
   var listEl = null;
   var progressEl = null;
   var titleEl = null;
-  var currentPlan = null;
-  var visible = false;
+  var modeBannerEl = null;
   var popoverOpen = false;
   var hoverShowTimer = null;
   var hoverHideTimer = null;
@@ -81,6 +102,7 @@ window.ChatExecutionPlan = (function () {
         '<span class="exec-plan-title" id="exec-plan-title">执行计划</span>' +
         '<span class="exec-plan-progress" id="exec-plan-progress">0%</span>' +
       '</header>' +
+      '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
       '<ol class="exec-plan-list" id="exec-plan-list"></ol>';
 
     var attachTo = document.body;
@@ -89,6 +111,7 @@ window.ChatExecutionPlan = (function () {
     listEl = rootEl.querySelector('#exec-plan-list');
     progressEl = rootEl.querySelector('#exec-plan-progress');
     titleEl = rootEl.querySelector('#exec-plan-title');
+    modeBannerEl = rootEl.querySelector('#exec-plan-mode-banner');
 
     rootEl.addEventListener('mouseenter', function () {
       cancelHidePopover();
@@ -287,9 +310,12 @@ window.ChatExecutionPlan = (function () {
   function updateAnchorChrome() {
     var el = getAnchorEl();
     if (!el) return;
-    var on = !!currentPlan && !isPanelSuppressed() && visible;
+    var hasPlan = !!currentPlan && !isPanelSuppressed() && visible;
+    var hasForced = !!(currentExecutionMode && currentExecutionMode.executionMode === 'forced');
+    var on = hasPlan || hasForced;
     if (on) {
       el.classList.add('exec-plan-anchor');
+      el.classList.toggle('exec-plan-anchor--forced', hasForced);
       el.setAttribute('tabindex', '0');
       el.setAttribute('role', 'button');
       el.setAttribute('aria-haspopup', 'dialog');
@@ -297,6 +323,7 @@ window.ChatExecutionPlan = (function () {
       bindAnchorEvents();
     } else {
       el.classList.remove('exec-plan-anchor');
+      el.classList.remove('exec-plan-anchor--forced');
       el.removeAttribute('tabindex');
       el.removeAttribute('role');
       el.removeAttribute('aria-haspopup');
@@ -400,6 +427,58 @@ window.ChatExecutionPlan = (function () {
   }
 
   /** 底部一行摘要（供冰豆 #status-turn） */
+  function formatExecutionModeChip(modeState) {
+    if (!modeState || modeState.executionMode !== 'forced') return '';
+    var primary = modeState.enteredByPrimary;
+    var label = primary ? (MODE_SIGNAL_LABELS[primary] || primary) : 'forced';
+    if (modeState.degradedTier) {
+      label += ' · ' + (DEGRADED_LABELS[modeState.degradedTier] || modeState.degradedTier);
+    }
+    return 'forced · ' + label;
+  }
+
+  function renderExecutionModeBanner() {
+    if (!modeBannerEl) return;
+    if (!currentExecutionMode || currentExecutionMode.executionMode !== 'forced') {
+      modeBannerEl.classList.add('hidden');
+      modeBannerEl.textContent = '';
+      return;
+    }
+    var lines = [];
+    lines.push(currentExecutionMode.primaryReasonHuman || 'forced');
+    if (currentExecutionMode.enteredBy && currentExecutionMode.enteredBy.length) {
+      var tags = currentExecutionMode.enteredBy.map(function (sig) {
+        return MODE_SIGNAL_LABELS[sig] || sig;
+      });
+      lines.push('信号：' + tags.join(' + '));
+    }
+    if (currentExecutionMode.degradedTier) {
+      lines.push('降级：' + (DEGRADED_LABELS[currentExecutionMode.degradedTier] || currentExecutionMode.degradedTier));
+    }
+    if (typeof currentExecutionMode.round === 'number') {
+      lines.push('轮次：' + currentExecutionMode.round);
+    }
+    modeBannerEl.textContent = lines.join('\n');
+    modeBannerEl.classList.remove('hidden');
+  }
+
+  function applyExecutionModeEvent(step) {
+    if (!step || !step.executionMode) return;
+    if (step.type === 'execution_mode_exit') {
+      currentExecutionMode = null;
+    } else {
+      currentExecutionMode = Object.assign({}, step.executionMode);
+    }
+    ensureMounted();
+    if (!currentPlan && titleEl) {
+      titleEl.textContent = 'Execution Mode';
+    }
+    renderExecutionModeBanner();
+    updateAnchorChrome();
+    notifyPetFoot();
+    if (popoverOpen) positionPopover();
+  }
+
   function formatFootSummary(plan) {
     if (!plan || !plan.steps || !plan.steps.length) return '';
     var done = countFinished(plan.steps);
@@ -580,6 +659,7 @@ window.ChatExecutionPlan = (function () {
 
   function clear() {
     currentPlan = null;
+    currentExecutionMode = null;
     visible = false;
     pinnedOpen = false;
     closePopover();
@@ -587,6 +667,7 @@ window.ChatExecutionPlan = (function () {
     if (rootEl) {
       listEl.innerHTML = '';
       if (progressEl) progressEl.textContent = '0%';
+      renderExecutionModeBanner();
       rootEl.classList.remove('exec-plan-panel--open', 'exec-plan-panel--suppressed');
     }
     notifyPetFoot();
@@ -609,6 +690,14 @@ window.ChatExecutionPlan = (function () {
     return visible;
   }
 
+  function getExecutionModeChip() {
+    return formatExecutionModeChip(currentExecutionMode);
+  }
+
+  function getExecutionModeState() {
+    return currentExecutionMode ? Object.assign({}, currentExecutionMode) : null;
+  }
+
   return {
     setPlan: setPlan,
     applyPatch: applyPatch,
@@ -617,6 +706,10 @@ window.ChatExecutionPlan = (function () {
     getPlan: getPlan,
     isVisible: isVisible,
     formatFootSummary: formatFootSummary,
+    formatExecutionModeChip: formatExecutionModeChip,
+    getExecutionModeChip: getExecutionModeChip,
+    getExecutionModeState: getExecutionModeState,
+    applyExecutionModeEvent: applyExecutionModeEvent,
     isPanelSuppressed: isPanelSuppressed,
     // TaskGraph (Phase 7)
     renderGraph: renderGraph,

@@ -31,7 +31,7 @@ export type BoundaryRejectReason =
   | 'handoff_phase_rejects_non_supervisor_recovery';
 
 export type BoundaryDecision =
-  | { allowed: true }
+  | { allowed: true; budgetCountable: boolean }
   | { allowed: false; reason: BoundaryRejectReason };
 
 export interface RecoveryBoundaryMayInjectArgs {
@@ -71,7 +71,11 @@ export class RecoveryBoundary {
       return { allowed: false, reason: 'handoff_phase_rejects_non_supervisor_recovery' };
     }
 
-    return { allowed: true };
+    // I4 计数权收口到 boundary：仅 free × supervisor × recovery/graph_hint 交给 budget。
+    const budgetCountable = args.phase === 'free'
+      && args.source === 'supervisor'
+      && (args.blockKind === 'recovery' || args.blockKind === 'graph_hint');
+    return { allowed: true, budgetCountable };
   }
 }
 

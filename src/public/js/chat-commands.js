@@ -13,6 +13,7 @@ window.ChatCommands = (function () {
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
+    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' },
     { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
   ];
 
@@ -20,6 +21,7 @@ window.ChatCommands = (function () {
     { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
+    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' },
     { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
   ];
 
@@ -224,6 +226,50 @@ window.ChatCommands = (function () {
       });
   }
 
+  function parseSupervisorCommandArgs(text) {
+    var args = { days: 7, event: '', limit: 10 };
+    var rest = text.substring('~supervisor'.length).trim();
+    if (!rest) return args;
+    var parts = rest.split(/\s+/);
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (p.indexOf('days=') === 0) args.days = parseInt(p.slice(5), 10) || args.days;
+      else if (p.indexOf('event=') === 0) args.event = p.slice(6);
+      else if (p.indexOf('limit=') === 0) args.limit = parseInt(p.slice(6), 10) || args.limit;
+    }
+    return args;
+  }
+
+  function handleSupervisor(text, messages, appendFn, saveFn) {
+    var opts = parseSupervisorCommandArgs(text);
+    messages.push({ role: 'agent', content: '正在获取 Supervisor 事件报告…' });
+    appendFn(messages[messages.length - 1]);
+    saveFn();
+
+    var qs = '?days=' + encodeURIComponent(String(opts.days))
+      + '&limit=' + encodeURIComponent(String(opts.limit));
+    if (opts.event) qs += '&event=' + encodeURIComponent(opts.event);
+
+    fetch('/api/supervisor/events' + qs)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        messages.pop();
+        if (data.success && data.report) {
+          messages.push({ role: 'agent', content: data.report });
+        } else {
+          messages.push({ role: 'agent', content: '获取 Supervisor 报告失败: ' + (data.error || '未知错误') });
+        }
+        appendFn(messages[messages.length - 1]);
+        saveFn();
+      })
+      .catch(function () {
+        messages.pop();
+        messages.push({ role: 'agent', content: '获取 Supervisor 报告失败，请检查服务器是否运行' });
+        appendFn(messages[messages.length - 1]);
+        saveFn();
+      });
+  }
+
   function handleMemory(text, messages, appendFn, saveFn) {
     var memArgs = text.substring(7).trim();
 
@@ -342,6 +388,7 @@ window.ChatCommands = (function () {
     handleScan: handleScan,
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
+    handleSupervisor: handleSupervisor,
     handleMemory: handleMemory,
   };
 })();

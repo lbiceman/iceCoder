@@ -146,6 +146,43 @@ Optional **Supervisor** regulation for engineering intents (`edit`, `debug`, `te
 - **Spec**: [`docs/双模方案2.md`](./docs/双模方案2.md) (V1.3.7); template: [`data/supervisor-config.example.json`](./data/supervisor-config.example.json).
 - **Implementation gaps**: [`docs/双模落地缺口.md`](./docs/双模落地缺口.md) — missing modules and features for the full dual-mode stack.
 
+#### `~supervisor` chat command (Supervisor events report)
+
+The Web chat input supports **`~supervisor`** (type `~` for the command palette). It aggregates **L2 Timeline** events and **Execution Mode** enter/exit records — same behavior as `GET /api/supervisor/events`.
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| (none) | Markdown text report for the last 7 days | — |
+| `days=N` | Include JSONL events from the last **N** days (**1–90**) | `7` |
+| `event=<type>` | Filter Timeline events by type | none (all types) |
+| `limit=N` | Show the **N** most recent Timeline rows at the end of the report (**1–50**) | `10` |
+
+Arguments are space-separated `key=value` pairs after the command name and can be combined.
+
+**Examples:**
+
+```text
+~supervisor
+~supervisor days=3
+~supervisor event=recover
+~supervisor days=7 limit=20
+~supervisor days=14 event=failure limit=15
+```
+
+**Valid `event=` values** (`SupervisorTimelineEventType`): `switch`, `recover`, `rollback`, `handoff`, `failure`, `drift`, `timeout`, `shadow_diagnostic`.
+
+**HTTP equivalents:**
+
+- Text report (JSON wrapper with `report` field): `GET /api/supervisor/events?days=7&limit=10`
+- Structured JSON: `GET /api/supervisor/events?days=7&event=recover&format=json` (`format=json` is HTTP-only; the chat command always returns the text report)
+
+**Data sources:**
+
+- L2 Timeline: `data/runtime/supervisor-events.jsonl` (matches `persistPath` in `supervisor-config.json`)
+- Execution Mode enter/exit: `execution_mode_enter` / `execution_mode_exit` in `data/runtime/telemetry.jsonl`
+
+The report includes recent forced-mode entries (`primaryReasonHuman`, `enteredBy` signals), Timeline aggregates, and recent detail rows capped by `limit`.
+
 ---
 
 ## Prompt System
@@ -435,7 +472,7 @@ See [`docs/nextWork.md`](./docs/nextWork.md) for the next implementation steps.
 - **CLI `web` / `start` / `chat`**: default port **`3784`** unless `PORT` or `--port` is set (`src/cli/commands/serve.ts`, `chat.ts`).
 - **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
 - **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients can use `/api/remote` and related routes.
-- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export).
+- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export), `/api/supervisor/events` (Supervisor / Execution Mode events report — see **`~supervisor`** under Dual-mode Supervisor).
 - **Frontend** lives under `src/public/` (e.g. chat UI scripts, Ice Bean indicator). Production build output: `dist/public/`.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).

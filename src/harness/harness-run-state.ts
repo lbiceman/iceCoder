@@ -91,8 +91,8 @@ export interface HarnessRunState {
   pendingModeSignals?: ModeSignal[];
   /** Batch 1 承载位：I10 task-bearing round 计数。 */
   forcedTaskBearingRoundsSinceEntry?: number;
-  /** Batch 1 承载位：Supervisor 运行时相位。 */
-  supervisorPhase?: SupervisorPhase;
+  /** Batch 1 承载位：Supervisor 运行时相位；run() 入口必填，子模块直接读取无需兜底。 */
+  supervisorPhase: SupervisorPhase;
   /** Batch 4：统一信号提交入口；子模块不得直接写 executionMode。 */
   submitModeSignal?: (
     source: ModeSignalSource,

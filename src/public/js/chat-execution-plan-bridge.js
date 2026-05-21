@@ -105,6 +105,10 @@ window.ChatExecutionPlanBridge = (function () {
     if (step.type === 'task_graph_done') {
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.markGraphComplete();
     }
+
+    if (step.type === 'execution_mode_enter' || step.type === 'execution_mode_exit') {
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyExecutionModeEvent(step);
+    }
   }
 
   function onSessionUpdated() {

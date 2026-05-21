@@ -183,6 +183,43 @@ Harness 在构造时**始终**创建 `GraphExecutor`（Phase 11–13）。是否
 - **规格文档**：[`docs/双模方案2.md`](./docs/双模方案2.md)（V1.3.7）；示例配置：[`data/supervisor-config.example.json`](./data/supervisor-config.example.json)。
 - **落地缺口（开发排期）**：[`docs/双模落地缺口.md`](./docs/双模落地缺口.md) — 完整双模仍缺的模块与功能清单。
 
+#### `~supervisor` 命令（Supervisor 事件报告）
+
+Web 聊天输入框支持 **`~supervisor`**（输入 `~` 可打开命令面板补全），汇总 **L2 Timeline** 与 **Execution Mode** 进入/退出记录，行为与 `GET /api/supervisor/events` 一致。
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| （无参） | 生成最近 7 天的 Markdown 文本报告 | — |
+| `days=N` | 统计最近 N 天内的 JSONL 事件（**1–90**） | `7` |
+| `event=<type>` | 仅保留指定类型的 Timeline 事件 | 无（全部类型） |
+| `limit=N` | 报告末尾展示最近 N 条 Timeline 明细（**1–50**） | `10` |
+
+参数以空格分隔的 `key=value` 形式追加在命令后，可组合使用。
+
+**示例：**
+
+```text
+~supervisor
+~supervisor days=3
+~supervisor event=recover
+~supervisor days=7 limit=20
+~supervisor days=14 event=failure limit=15
+```
+
+**`event=` 可选值**（`SupervisorTimelineEventType`）：`switch`、`recover`、`rollback`、`handoff`、`failure`、`drift`、`timeout`、`shadow_diagnostic`。
+
+**HTTP 等价接口：**
+
+- 文本报告（响应 JSON 的 `report` 字段）：`GET /api/supervisor/events?days=7&limit=10`
+- 结构化 JSON：`GET /api/supervisor/events?days=7&event=recover&format=json`（`format=json` 仅 HTTP 可用，聊天命令固定返回文本报告）
+
+**数据源：**
+
+- L2 Timeline：`data/runtime/supervisor-events.jsonl`（与 `supervisor-config.json` 中 `persistPath` 一致）
+- Execution Mode 进入/退出：`data/runtime/telemetry.jsonl` 中的 `execution_mode_enter` / `execution_mode_exit`
+
+报告内容包括：Execution Mode 进入 forced 的最近记录（含 `primaryReasonHuman`、`enteredBy` 信号）、Timeline 事件聚合统计，以及按 `limit` 截断的最近明细。
+
 ---
 
 ## 4. 提示词系统
@@ -475,7 +512,7 @@ ICE_CONTEXT_WINDOW
 | CLI `web` / `start` / `chat` | **3784**（`PORT` 或 `--port` 可覆盖） | `src/cli/commands/serve.ts`、`chat.ts` |
 | Vite 开发服务器（`vite.config.ts`） | **1025** | 开发态 UI；`/api` 与 WS 代理到 `localhost:1024` |
 
-主要 API 前缀：`/api/config`、`/api/tools`、`/api/remote`、`/api/sessions`、`/api/chat/upload`、`/api/memory/*`（遥测报告、文件管理、召回测试/导出）。提供者配置默认读取 **`data/config.json`**（可参考 `data/config.example.json`）；`src/index.ts` 支持对配置文件 **watch 热重载** 提供者。
+主要 API 前缀：`/api/config`、`/api/tools`、`/api/remote`、`/api/sessions`、`/api/chat/upload`、`/api/memory/*`（遥测报告、文件管理、召回测试/导出）、`/api/supervisor/events`（Supervisor / Execution Mode 事件报告，见 §3.6 **`~supervisor`**）。提供者配置默认读取 **`data/config.json`**（可参考 `data/config.example.json`）；`src/index.ts` 支持对配置文件 **watch 热重载** 提供者。
 
 ### 冰豆（Ice Bean · Web 聊天指示器）
 

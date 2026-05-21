@@ -46,6 +46,31 @@ description: |
 | L2-6 | §14.1 四钩子接入 + T08 checkpoint round-trip + T09 收口 + I4 CorrectionBudget | `correction-budget.ts` / `harness-tool-round.ts` / `harness.ts` |
 | L2-7 | RecoveryBoundary + composeGraphHint + shouldInitTaskGraphAtFirstRound | `recovery-boundary.ts` / bridge 扩展 / `harness-round-prep.ts` |
 | L2-8 | §11 DoD 全勾选 + off 回归 + 修订记录 | 缺口文档 |
+| P0-2 | RecoveryBoundary 独占 phase×source×kind；CorrectionBudget 只计数 | `recovery-boundary.ts` / `correction-budget.ts` |
+| P1 | round 落账 / composeGraphHint discriminated union / supervisorPhase 必填 / 缺口 §1 ASCII | `mode-gating.ts` / `supervisor-bridge.ts` / `harness-run-state.ts` |
+
+## P1 收口约定（审计清单 §2.3–§2.6）
+
+- **`createCorrectionPort(msgs, round?)`**：bridge 维护 `currentRound`；budget/boundary 失败 timeline 用 `ctx.round ?? currentRound`，禁止 `round: -1`。
+- **`composeGraphHint`**：入参为 `ComposeGraphHintArgs` + discriminated union `GraphHintInput`（`evaluate_round` | `forced_step`）；实现集中在 `mode-gating.ts` 的 `runComposeGraphHint`。
+- **`HarnessRunState.supervisorPhase`**：必填；子模块直接读，不写 `?? 'free'`。
+- **缺口文档 §1 ASCII**：须含 RecoveryBoundary + composeGraphHint 子框。
+
+## P2 测试收口（审计清单 §2.7–§2.10）
+
+| 项 | 文件 |
+|----|------|
+| P2-1 RecoveryBoundary 4×4×4 矩阵（64 用例） | `test/harness/recovery-boundary.test.ts` |
+| P2-2 任务执行文档 6 场景 e2e | `test/e2e/dual-mode-scenarios.test.ts` + `_fixtures/dual-mode-mocks.ts` |
+| P2-3 L2 流程图 | `docs/双模 L2 流程图.md` |
+| P2-4 firstRoundGraph 集成 | `test/harness/execution-mode-harness.test.ts` + `test/harness/harness-round-prep-first-graph.test.ts` |
+
+e2e fixture 必须注入 `supervisorBridge: createSupervisorRuntimeBridge(...)`，否则 adaptive §I3 门禁不生效。
+
+## P3-2 / P3-5 使用约定
+
+- **P3-2 实时 UI**：WebSocket `execution_mode_enter/exit` → `ChatExecutionPlan.applyExecutionModeEvent`；冰豆 `#status-turn` 显示 `forced · <主信号>`，hover/点击 popover 看 `primaryReasonHuman` + 信号列表。
+- **P3-5 历史报告**：聊天输入 `~supervisor`（同 `~telemetry` 模式）；API `GET /api/supervisor/events?days=7&event=recover&limit=10`；JSON 加 `format=json`。
 
 ## 实施步骤（新增/修改 L2 时遵循）
 

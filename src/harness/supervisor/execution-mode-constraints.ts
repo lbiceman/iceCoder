@@ -130,7 +130,7 @@ export function syncExecutionModeLoopState(loopController: LoopController, state
     lastModeDecision: state.lastModeDecision,
     pendingModeSignals: [...(state.pendingModeSignals ?? [])],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
-    supervisorPhase: state.supervisorPhase ?? 'free',
+    supervisorPhase: state.supervisorPhase,
   });
 }
 

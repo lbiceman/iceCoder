@@ -1022,6 +1022,31 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
     expect(failureEvents.some((e) => e.reason === 'correction_budget_exhausted:recovery')).toBe(true);
   });
 
+  it('createCorrectionPort: budget rejection timeline carries the supplied round', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages, 7);
+
+    port.inject(
+      { kind: 'recovery', content: '[Sys] first recovery' },
+      { phase: 'free', source: 'supervisor' },
+    );
+    port.inject(
+      { kind: 'recovery', content: '[Sys] second recovery (should be dropped)' },
+      { phase: 'free', source: 'supervisor', round: 9 },
+    );
+
+    const budgetFailure = bridge.eventTimeline
+      .getRecentEvents()
+      .find((e) => e.event === 'failure' && e.reason === 'correction_budget_exhausted:recovery');
+
+    expect(budgetFailure?.round).toBe(9);
+  });
+
   it('createCorrectionPort: takeover-phase recovery bypasses I4 budget (counted only on free)', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
@@ -1326,11 +1351,9 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
       const routing = bridge.composeGraphHint({
         round: 2,
         executionMode: 'free',
-        action: 'force_switch',
-        message: '[Graph] retry on fallback',
         port,
         phase: 'free',
-        reasonTag: 'evaluate_round',
+        input: { origin: 'evaluate_round', action: 'force_switch', message: '[Graph] retry on fallback' },
       });
 
       expect(routing.injectToCorrectionPort).toBe(false);
@@ -1351,11 +1374,13 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
       const routing = bridge.composeGraphHint({
         round: 5,
         executionMode: 'forced',
-        action: 'inject_hint',
-        message: '[Graph] Use read_file before edit_file.',
         port,
         phase: 'takeover',
-        reasonTag: 'evaluate_round',
+        input: {
+          origin: 'evaluate_round',
+          action: 'inject_hint',
+          message: '[Graph] Use read_file before edit_file.',
+        },
       });
 
       expect(routing.injectToCorrectionPort).toBe(true);
@@ -1379,17 +1404,42 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
       const routing = bridge.composeGraphHint({
         round: 1,
         executionMode: 'forced',
-        action: 'warn',
-        message: '[Graph] edit_file outside current step',
         port,
         phase: 'free',
-        reasonTag: 'forced_step_warn',
+        input: { origin: 'forced_step', kind: 'warn', message: '[Graph] edit_file outside current step' },
       });
 
       expect(routing.injectToCorrectionPort).toBe(true);
       expect(messages).toHaveLength(1);
       const recover = bridge.eventTimeline.getRecentEvents().filter((e) => e.event === 'recover');
       expect(recover[0]?.reason).toBe('graph_hint:forced_step_warn');
+    });
+
+    it('forced_step block origin records forced_step_block timeline reason', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'strict' },
+        { ICE_SUPERVISOR_MODE: 'strict' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      const routing = bridge.composeGraphHint({
+        round: 3,
+        executionMode: 'forced',
+        port,
+        phase: 'takeover',
+        input: {
+          origin: 'forced_step',
+          kind: 'block',
+          message: '[ToolGate] All tool calls were blocked.',
+        },
+      });
+
+      expect(routing.injectToCorrectionPort).toBe(true);
+      expect(messages).toHaveLength(1);
+      const recover = bridge.eventTimeline.getRecentEvents().filter((e) => e.event === 'recover');
+      expect(recover[0]?.reason).toBe('graph_hint:forced_step_block');
     });
 
     it('no message → no inject and no timeline write', () => {
@@ -1404,11 +1454,9 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
       const routing = bridge.composeGraphHint({
         round: 1,
         executionMode: 'forced',
-        action: 'none',
-        message: undefined,
         port,
         phase: 'free',
-        reasonTag: 'evaluate_round',
+        input: { origin: 'evaluate_round', action: 'none', message: undefined },
       });
 
       expect(routing).toEqual({ injectToCorrectionPort: false, emitTelemetry: false });

@@ -21,6 +21,10 @@ import { executeToolCallsStreaming } from './harness-tool-executor.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
+import {
+  normalizeGraphHintInput,
+  type ComposeGraphHintArgs,
+} from './supervisor/mode-gating.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { TokenBudgetTracker } from './token-budget.js';
 import type { CorrectionPort, ExecutionModeConfig, GateContext, TaskContext, TaskRiskLevel } from '../types/supervisor.js';
@@ -34,7 +38,6 @@ import { MessageCorrectionPort } from './supervisor/correction-port.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
 import { decideGraphHintRouting, type GraphHintRoutingDecision } from './supervisor/graph-hint-routing.js';
-import type { RoundEvalResult } from './task-graph-executor.js';
 import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import {
   maxFailedSignatureCount,
@@ -135,7 +138,7 @@ export async function runHarnessToolRound(
   // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
   //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
   const correctionPort: CorrectionPort = deps.supervisorBridge?.isActive()
-    ? deps.supervisorBridge.createCorrectionPort(msgs)
+    ? deps.supervisorBridge.createCorrectionPort(msgs, round)
     : new MessageCorrectionPort(msgs);
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
   const gateContext = buildGateContext(deps.graphExecutor, response.toolCalls!, state);
@@ -158,11 +161,9 @@ export async function runHarnessToolRound(
         composeGraphHint(deps, {
           round,
           executionMode: gateContext.executionMode,
-          action: 'warn',
-          message: hint.message,
           port: correctionPort,
           phase: gateContext.phase,
-          reasonTag: 'forced_step_warn',
+          input: { origin: 'forced_step', kind: 'warn', message: hint.message },
         });
       }
     }
@@ -170,11 +171,13 @@ export async function runHarnessToolRound(
       composeGraphHint(deps, {
         round,
         executionMode: gateContext.executionMode,
-        action: 'block',
-        message: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.',
         port: correctionPort,
         phase: gateContext.phase,
-        reasonTag: 'forced_step_block',
+        input: {
+          origin: 'forced_step',
+          kind: 'block',
+          message: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.',
+        },
       });
     }
   }
@@ -359,11 +362,13 @@ export async function runHarnessToolRound(
     const routing = composeGraphHint(deps, {
       round,
       executionMode: gateContext.executionMode,
-      action: evalResult.action,
-      message: evalResult.message,
       port: correctionPort,
-      phase: state.supervisorPhase ?? 'free',
-      reasonTag: 'evaluate_round',
+      phase: state.supervisorPhase,
+      input: {
+        origin: 'evaluate_round',
+        action: evalResult.action,
+        message: evalResult.message,
+      },
     });
     if (evalResult.action === 'force_switch') {
       evalForceSwitchTriggered = true;
@@ -425,7 +430,7 @@ export async function runHarnessToolRound(
           kind: 'recovery',
           content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
         },
-        { phase: state.supervisorPhase ?? 'free', source: 'lifecycle' },
+        { phase: state.supervisorPhase, source: 'lifecycle' },
       );
     }
   }
@@ -441,7 +446,7 @@ export async function runHarnessToolRound(
     };
 
     deps.supervisorBridge.observeAfterTools({
-      phase: state.supervisorPhase ?? 'free',
+      phase: state.supervisorPhase,
       round: runtimeRound,
       consecutiveToolFailures: state.consecutiveToolFailures,
       consecutiveReadOnlyRounds: state.consecutiveReadOnlyRounds,
@@ -540,7 +545,7 @@ function buildGateContext(
   }
 
   return {
-    phase: state.supervisorPhase ?? 'free',
+    phase: state.supervisorPhase,
     mode: 'adaptive',
     executionMode,
     graphHints,
@@ -555,37 +560,22 @@ function buildGateContext(
  */
 function composeGraphHint(
   deps: ToolRoundDeps,
-  args: {
-    round: number;
-    executionMode: 'free' | 'forced';
-    action: RoundEvalResult['action'] | 'warn' | 'block';
-    message: string | undefined;
-    port: CorrectionPort;
-    phase: HarnessRunState['supervisorPhase'];
-    reasonTag: string;
-  },
+  args: ComposeGraphHintArgs,
 ): GraphHintRoutingDecision {
   if (deps.supervisorBridge) {
-    return deps.supervisorBridge.composeGraphHint({
-      round: args.round,
-      executionMode: args.executionMode,
-      action: args.action,
-      message: args.message,
-      port: args.port,
-      phase: args.phase ?? 'free',
-      reasonTag: args.reasonTag,
-    });
+    return deps.supervisorBridge.composeGraphHint(args);
   }
 
+  const { message, action } = normalizeGraphHintInput(args.input);
   const routing = decideGraphHintRouting({
     executionMode: args.executionMode,
-    action: args.action === 'warn' ? 'inject_hint' : args.action === 'block' ? 'block' : args.action,
-    message: args.message,
+    action,
+    message,
   });
-  if (routing.injectToCorrectionPort && args.message) {
+  if (routing.injectToCorrectionPort && message) {
     args.port.inject(
-      { kind: 'graph_hint', content: args.message },
-      { phase: args.phase ?? 'free', source: 'supervisor' },
+      { kind: 'graph_hint', content: message },
+      { phase: args.phase, source: 'supervisor', round: args.round },
     );
   }
   return routing;
@@ -608,7 +598,7 @@ function injectRecoveryMessage(
 
   correctionPort.inject(
     { kind: 'recovery', content, preserveOnCompaction: true },
-    { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+    { phase: state.supervisorPhase, source: 'supervisor' },
   );
 }
 

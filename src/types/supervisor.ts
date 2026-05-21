@@ -426,8 +426,16 @@ export interface CorrectionBlock {
   preserveOnCompaction?: boolean;
 }
 
+/** §14.0 — 纠偏写入口 inject 上下文。 */
+export interface CorrectionInjectContext {
+  phase: SupervisorPhase;
+  source: CorrectionSource;
+  /** 可选轮号；timeline 落账时优先于 bridge.currentRound。 */
+  round?: number;
+}
+
 export interface CorrectionPort {
-  inject(block: CorrectionBlock, ctx: { phase: SupervisorPhase; source: CorrectionSource }): void;
+  inject(block: CorrectionBlock, ctx: CorrectionInjectContext): void;
 }
 
 /** §14.0 — 工具执行门禁。 */

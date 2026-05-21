@@ -128,7 +128,7 @@ export function resilienceMaybeBranchRecover(
     if (correctionPort) {
       correctionPort.inject(
         { kind: 'recovery', content: signal.message, preserveOnCompaction: true },
-        { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+        { phase: state.supervisorPhase, source: 'supervisor' },
       );
     } else {
       msgs.push({ role: 'user', content: signal.message });
@@ -201,7 +201,7 @@ export async function resilienceMaybeReviewStep(
         if (correctionPort) {
           correctionPort.inject(
             { kind: 'recovery', content },
-            { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+            { phase: state.supervisorPhase, source: 'supervisor' },
           );
         } else {
           state.messages.push({ role: 'user', content });
@@ -271,7 +271,7 @@ export function buildSupervisorCheckpointState(
     pendingModeSignals: [...(state.pendingModeSignals ?? [])],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
     // L2-6 / T08：bridge 持有的 phase / RecoverySupervisor snapshot / timeline tail / I4 budget。
-    supervisorPhase: bridgeSnapshot?.supervisorPhase ?? state.supervisorPhase ?? 'free',
+    supervisorPhase: bridgeSnapshot?.supervisorPhase ?? state.supervisorPhase,
     recoverySupervisorSnapshot: bridgeSnapshot?.recoverySupervisorSnapshot,
     timelineTail: bridgeSnapshot?.timelineTail,
     correctionBudgetUsed: bridgeSnapshot?.correctionBudgetUsed ?? 0,

@@ -178,6 +178,15 @@ window.ChatPage = (function () {
       return;
     }
 
+    // ~supervisor（P3-5：Supervisor timeline + execution mode 报告）
+    if (text === '~supervisor' || text.indexOf('~supervisor ') === 0) {
+      elInput.value = '';
+      UI.autoResizeInput();
+      Cmd.hide();
+      Cmd.handleSupervisor(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return;
+    }
+
     if (text === '~memory') {
       elInput.value = '';
       UI.autoResizeInput();
@@ -397,7 +406,9 @@ window.ChatPage = (function () {
         || step.type === 'task_graph_init'
         || step.type === 'task_graph_node'
         || step.type === 'task_graph_branch'
-        || step.type === 'task_graph_done')) {
+        || step.type === 'task_graph_done'
+        || step.type === 'execution_mode_enter'
+        || step.type === 'execution_mode_exit')) {
       window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());

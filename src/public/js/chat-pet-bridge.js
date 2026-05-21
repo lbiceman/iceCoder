@@ -38,19 +38,17 @@ window.ChatPetBridge = (function () {
    */
   function syncExecPlanFoot() {
     if (!sessionPet) return;
-    if (hasLiveExecutionPlan()) {
-      sessionPet.setTurnLabel(
-        ChatExecutionPlan.formatFootSummary(ChatExecutionPlan.getPlan()),
-      );
-      return;
+    var parts = [];
+    if (window.ChatExecutionPlan && typeof ChatExecutionPlan.getExecutionModeChip === 'function') {
+      var modeChip = ChatExecutionPlan.getExecutionModeChip();
+      if (modeChip) parts.push(modeChip);
     }
-    sessionPet.setTurnLabel(
-      petUiSessionActive || lastWsProcessing || lastIsStreaming
-        ? currentTurnCount
-          ? '第 ' + currentTurnCount + ' 轮'
-          : ''
-        : '',
-    );
+    if (hasLiveExecutionPlan()) {
+      parts.push(ChatExecutionPlan.formatFootSummary(ChatExecutionPlan.getPlan()));
+    } else if (petUiSessionActive || lastWsProcessing || lastIsStreaming) {
+      if (currentTurnCount) parts.push('第 ' + currentTurnCount + ' 轮');
+    }
+    sessionPet.setTurnLabel(parts.join(' · '));
   }
 
   function showThinking(withFile) {
@@ -72,15 +70,7 @@ window.ChatPetBridge = (function () {
       currentTurnCount = turn;
     }
     if (sessionPet) {
-      if (hasLiveExecutionPlan()) {
-        syncExecPlanFoot();
-        return;
-      }
-      sessionPet.setTurnLabel(
-        petUiSessionActive || wsProcessing || isStreaming
-          ? currentTurnCount ? '第 ' + currentTurnCount + ' 轮' : ''
-          : '',
-      );
+      syncExecPlanFoot();
     }
   }
 

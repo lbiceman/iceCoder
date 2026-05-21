@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Harness } from '../../src/harness/harness.js';
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
 import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
+import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 import type { ChatFunction, HarnessConfig, HarnessStepEvent } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition } from '../../src/llm/types.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -545,5 +546,58 @@ describe('Harness execution mode integration - W-series regressions', () => {
     engine.setForcedPolicy(true);
     expect(engine.shouldPersistOnTrigger('step_completed')).toBe(true);
     expect(engine.shouldPersistOnTrigger('verification_started')).toBe(true);
+  });
+});
+
+describe('execution-mode-harness · firstRoundGraph integration (L2-7 / P2-4)', () => {
+  it('strict + edit intent: emits task_graph_init at round 1', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('edit_file'), makeTool('write_file')];
+    const events: HarnessStepEvent[] = [];
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' }, {});
+    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+      supervisorBridge: bridge,
+    }), createToolExecutor(tools));
+
+    await harness.run(
+      '新增一个 logger 工具',
+      createChatFn([finalResponse('done')]),
+      event => events.push(event),
+    );
+
+    const initEvents = events.filter(e => e.type === 'task_graph_init');
+    expect(initEvents).toHaveLength(1);
+    expect(initEvents[0]?.graphIntent).toBe('edit');
+  });
+
+  it('adaptive + edit intent: no task_graph_init at round 1 (§I3)', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('edit_file'), makeTool('write_file')];
+    const events: HarnessStepEvent[] = [];
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+      supervisorBridge: bridge,
+    }), createToolExecutor(tools));
+
+    await harness.run(
+      '新增一个 logger 工具',
+      createChatFn([finalResponse('done')]),
+      event => events.push(event),
+    );
+
+    const initEvents = events.filter(e => e.type === 'task_graph_init');
+    expect(initEvents).toHaveLength(0);
   });
 });

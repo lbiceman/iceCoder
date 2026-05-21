@@ -883,6 +883,9 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   padding: 2px 4px;
   border-radius: 6px;
 }
+.session-pet-indicator .status-turn.exec-plan-anchor--forced {
+  color: #ffb347;
+}
 .session-pet-indicator .status-turn.exec-plan-anchor:hover,
 .session-pet-indicator .status-turn.exec-plan-anchor:focus-visible {
   color: var(--text-primary);

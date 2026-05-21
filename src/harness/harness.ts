@@ -278,7 +278,7 @@ export class Harness {
       round,
       executionMode: state.executionMode ?? policy.executionModeFloor,
       executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
-      supervisorPhase: state.supervisorPhase ?? 'free',
+      supervisorPhase: state.supervisorPhase,
       supervisorMode: policy.supervisorMode,
       riskLevel,
       state: runtimeState,
@@ -458,7 +458,7 @@ export class Harness {
             state.lastModeDecision = supervisor.lastModeDecision;
             // L2-6 / T08：把 supervisorPhase + RecoverySupervisor 内部快照 + timeline tail + I4 budget
             //              推回 bridge；bridge 自身会写 `failure:checkpoint_resumed` timeline 标记。
-            state.supervisorPhase = supervisor.supervisorPhase ?? state.supervisorPhase ?? 'free';
+            state.supervisorPhase = supervisor.supervisorPhase ?? state.supervisorPhase;
             this.supervisorBridge?.restoreFromCheckpoint(supervisor);
           }
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
