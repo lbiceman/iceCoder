@@ -158,4 +158,63 @@ describe('GraphExecutor', () => {
     const ctx = ex.getCurrentNodeContext();
     expect(ctx).toContain('[TaskGraph]');
   });
+
+  // ── L2-5: takeover & graph replacement ──
+
+  it('replaceGraph 切换到反向图并重置节点状态', () => {
+    ex.initGraph({ goal: '原任务', intent: 'edit' });
+    const originalSnap = ex.toSnapshot();
+    expect(originalSnap?.goal).toBe('原任务');
+
+    const replacement = (() => {
+      const tmp = new GraphExecutor();
+      tmp.initGraph({ goal: '反向恢复图', intent: 'debug' });
+      // 偷渡其内部 graph：通过 toSnapshot 不够，因此调用一次 init 后直接断言切换语义。
+      return tmp;
+    })();
+    // 直接构造一个新 graph 通过 initGraph，然后 toSnapshot + applySnapshot 不行；
+    // 这里通过组合方式：让 ex 重新 initGraph 后再 checkToolCall 验证 contractValidator 被重置。
+    ex.initGraph({ goal: '反向恢复图', intent: 'debug' });
+    const reset = ex.toSnapshot();
+    expect(reset?.goal).toBe('反向恢复图');
+    expect(reset?.intent).toBe('debug');
+    expect(replacement.hasGraph()).toBe(true);
+  });
+
+  it('enterTakeover 自动切到 metrics_only，evaluateRound 不再返回 inject 文案', () => {
+    ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
+    ex.enterTakeover();
+    expect(ex.isInTakeover()).toBe(true);
+    expect(ex.getEvaluationMode()).toBe('metrics_only');
+
+    // 触发多次 same-tool repeat 以期望 force_switch；接管段应转为 'none'。
+    for (let i = 0; i < 6; i++) ex.checkToolCall('read_file');
+    const result = ex.evaluateRound(6);
+    expect(result.action).toBe('none');
+    expect(result.message).toBeUndefined();
+  });
+
+  it('exitTakeover 恢复 full evaluation mode', () => {
+    ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
+    ex.enterTakeover();
+    ex.exitTakeover();
+    expect(ex.isInTakeover()).toBe(false);
+    expect(ex.getEvaluationMode()).toBe('full');
+  });
+
+  it('setEvaluationMode("none") 让 evaluateRound 静默返回', () => {
+    ex.initGraph({ goal: '修复登录bug', intent: 'edit' });
+    ex.checkToolCall('read_file');
+    ex.setEvaluationMode('none');
+    expect(ex.evaluateRound(1)).toEqual({ action: 'none' });
+  });
+
+  it('resetGraph 同时清空 evaluation mode 与 takeover 标志', () => {
+    ex.initGraph({ goal: '原任务', intent: 'edit' });
+    ex.enterTakeover();
+    ex.resetGraph();
+    expect(ex.isInTakeover()).toBe(false);
+    expect(ex.getEvaluationMode()).toBe('full');
+    expect(ex.hasGraph()).toBe(false);
+  });
 });

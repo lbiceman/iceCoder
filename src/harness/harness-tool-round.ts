@@ -22,7 +22,7 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
-import type { ExecutionModeConfig, GateContext } from '../types/supervisor.js';
+import type { ExecutionModeConfig, GateContext, TaskContext } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
   markForcedDegraded,
@@ -33,6 +33,12 @@ import { MessageCorrectionPort } from './supervisor/correction-port.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
 import { decideGraphHintRouting } from './supervisor/graph-hint-routing.js';
+import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
+import {
+  maxFailedSignatureCount,
+  topFileEditFromInspect,
+} from './supervisor/passive-observer.js';
+import type { BranchBudgetTracker } from './branch-budget.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -46,6 +52,7 @@ export interface ToolRoundDeps extends ToolExecutorDeps, CheckpointDeps, Resilie
   graphExecutor: GraphExecutor;
   executionModeConfig?: ExecutionModeConfig;
   executionModeDecisionEnabled?: boolean;
+  supervisorBridge?: SupervisorRuntimeBridge;
   abortSignal?: AbortSignal;
 }
 
@@ -181,7 +188,7 @@ export async function runHarnessToolRound(
     toolStats.failedSignatures,
     state.failedToolCallSignatures,
   );
-  if (repeatedFailures.length > 0) {
+  if (repeatedFailures.length > 0 && !deps.supervisorObserverSuppressInject) {
     injectRecoveryMessage(
       deps,
       state,
@@ -191,11 +198,14 @@ export async function runHarnessToolRound(
     );
   }
 
+  const branchRecoverDecision = state.branchBudget?.shouldBranchRecover();
   resilienceMaybeBranchRecover(
     deps,
     state,
     msgs,
-    deps.executionModeDecisionEnabled ? correctionPort : undefined,
+    deps.executionModeDecisionEnabled && !deps.supervisorObserverSuppressInject
+      ? correctionPort
+      : undefined,
   );
 
   if (toolStats.failedCount > 0) {
@@ -270,7 +280,7 @@ export async function runHarnessToolRound(
       };
     }
 
-    if (failureCount >= 6) {
+    if (failureCount >= 6 && !deps.supervisorObserverSuppressInject) {
       injectRecoveryMessage(
         deps,
         state,
@@ -279,7 +289,7 @@ export async function runHarnessToolRound(
         `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded.\n\nYou must:\n1. Stop retrying the same failed tool calls, commands, paths, or parameters\n2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input\n3. If blocked, explain the exact blocker and evidence to the user\n\nYou may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.`,
       );
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入换策略提示`);
-    } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES) {
+    } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES && !deps.supervisorObserverSuppressInject) {
       const lastErrors = msgs
         .slice(-6)
         .filter(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Tool execution error:'))
@@ -297,7 +307,7 @@ export async function runHarnessToolRound(
         `[System] Note: ${failureCount} consecutive rounds of tool calls have all failed.${errorSummary ? '\n' + errorSummary : ''}\n\nPlease analyze the failure reasons and adopt a completely different approach to complete the task. Possible adjustment directions:\n- Check if file paths are correct (use list_directory to confirm)\n- Check if command syntax is correct\n- Try using alternative tools\n- If execution is truly impossible, directly explain the reason to the user and do not continue trying the same operation.`,
       );
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入策略调整提示`);
-    } else if (failureCount === 2) {
+    } else if (failureCount === 2 && !deps.supervisorObserverSuppressInject) {
       injectRecoveryMessage(
         deps,
         state,
@@ -385,7 +395,7 @@ export async function runHarnessToolRound(
     state.consecutiveReadOnlyRounds = 0;
   } else if (executableToolCalls.length) {
     state.consecutiveReadOnlyRounds++;
-    if (state.consecutiveReadOnlyRounds === 5) {
+    if (state.consecutiveReadOnlyRounds === 5 && !deps.supervisorObserverSuppressInject) {
       correctionPort.inject(
         {
           kind: 'recovery',
@@ -394,6 +404,28 @@ export async function runHarnessToolRound(
         { phase: state.supervisorPhase ?? 'free', source: 'lifecycle' },
       );
     }
+  }
+
+  const allToolsFailedThisRound = toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount;
+  if (deps.supervisorBridge?.isActive()) {
+    deps.supervisorBridge.observeAfterTools({
+      phase: state.supervisorPhase ?? 'free',
+      round: {
+        round,
+        toolNames: executableToolCalls.map(tc => tc.name),
+        toolSuccess: executableToolCalls.map(tc => !toolStats.failedSignatures.includes(toolCallSignature(tc))),
+        hadWriteTool: executableToolCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)),
+      },
+      consecutiveToolFailures: state.consecutiveToolFailures,
+      consecutiveReadOnlyRounds: state.consecutiveReadOnlyRounds,
+      stableRoundsSinceLastFailure: state.stableRoundsSinceLastFailure ?? 0,
+      allToolsFailedThisRound,
+      repeatedToolSignatures: repeatedFailures,
+      maxFailedSignatureCount: maxFailedSignatureCount(state.failedToolCallSignatures),
+      topFileEdit: topFileEditFromBranchBudget(state.branchBudget),
+      branchRecoverTriggered: branchRecoverDecision?.triggered === true,
+      task: buildTaskContextForObserver(state, branchRecoverDecision?.triggered === true),
+    });
   }
 
   await deps.memoryIntegration.injectMemoryContext(msgs, { onStep });
@@ -463,6 +495,9 @@ function injectRecoveryMessage(
   correctionPort: MessageCorrectionPort,
   content: string,
 ): void {
+  if (deps.supervisorObserverSuppressInject) {
+    return;
+  }
   if (!deps.executionModeDecisionEnabled) {
     msgs.push({ role: 'user', content });
     return;
@@ -472,6 +507,33 @@ function injectRecoveryMessage(
     { kind: 'recovery', content, preserveOnCompaction: true },
     { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
   );
+}
+
+function topFileEditFromBranchBudget(
+  branchBudget: BranchBudgetTracker | undefined,
+): { path: string; count: number } | undefined {
+  if (!branchBudget) return undefined;
+  return topFileEditFromInspect(branchBudget.inspect().fileEdits);
+}
+
+function buildTaskContextForObserver(
+  state: HarnessRunState,
+  branchBudgetTriggered: boolean,
+): TaskContext {
+  const snap = state.taskState.snapshot();
+  const repo = state.repoContext.snapshot();
+  return {
+    goal: snap.goal,
+    intent: snap.intent,
+    domain: 'non_critical_read',
+    filesChanged: [...repo.filesChanged],
+    filesRead: [...repo.filesRead],
+    commandsRun: [...repo.commandsRun],
+    recentFailureCount: state.consecutiveToolFailures,
+    branchBudgetTriggers: branchBudgetTriggered
+      ? (state.branchBudget?.recoverTriggerCount ?? 1)
+      : 0,
+  };
 }
 
 function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures: Set<string>): number {

@@ -375,6 +375,31 @@ export type SupervisorDecision =
   | { action: 'handoff' }
   | { action: 'fail'; kind: 'checkpoint' | 'rollback' };
 
+/** §8.10 — `RecoverySupervisor.applyTakeover` 入参（V1 骨架仅经 CorrectionPort 注入接管块）。 */
+export interface TakeoverContext {
+  round: number;
+  reason: string;
+  signals: DeviationSignal[];
+  task: TaskContext;
+  /** L2-3 唯一向 msgs 注入 C 类纠偏的端口；后续 L2-5 反构图主路径仍复用本端口。 */
+  correctionPort: CorrectionPort;
+}
+
+/** §8.10 — `RecoverySupervisor.applyHandoff` 入参；冷却由 supervisor 内部维护。 */
+export interface HandoffContext {
+  round: number;
+  task: TaskContext;
+  correctionPort?: CorrectionPort;
+}
+
+export interface RecoverySupervisor {
+  evaluate(ctx: SupervisorEvaluateContext): SupervisorDecision;
+  applyTakeover(ctx: TakeoverContext): void;
+  applyHandoff(ctx: HandoffContext): void;
+  /** 状态机当前位（observer/timeline 查询）。 */
+  getPhase(): SupervisorPhase;
+}
+
 export interface SnapshotConfidenceInput {
   snapshot: WorkspaceSnapshot;
   repoFilesChanged: string[];

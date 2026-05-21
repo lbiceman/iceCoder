@@ -32,15 +32,9 @@ const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
 const SESSION_ID = 'default';
 
 /** F2 — supervisor runtime 进程级缓存：避免每个 WS 连接重复读盘。 */
-let supervisorRuntimePromise: Promise<{
-  supervisorConfig: ResolvedSupervisorConfig;
-  globalPolicy: ResolvedSupervisorConfig['globalPolicy'];
-}> | null = null;
+let supervisorRuntimePromise: ReturnType<typeof loadHarnessSupervisorRuntime> | null = null;
 
-function getSupervisorRuntime(): Promise<{
-  supervisorConfig: ResolvedSupervisorConfig;
-  globalPolicy: ResolvedSupervisorConfig['globalPolicy'];
-}> {
+function getSupervisorRuntime(): ReturnType<typeof loadHarnessSupervisorRuntime> {
   if (!supervisorRuntimePromise) {
     supervisorRuntimePromise = loadHarnessSupervisorRuntime({ dataDir: DATA_DIR });
   }
@@ -222,6 +216,7 @@ async function handleRemoteMessage(
     sessionDir: SESSIONS_DIR,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
+    supervisorBridge: supervisorRuntime.bridge,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, {

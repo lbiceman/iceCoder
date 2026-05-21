@@ -17,6 +17,11 @@ export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
   checkpointEngine?: CheckpointEngine;
   enqueueCheckpointPersist: <T>(task: () => Promise<T>) => Promise<T>;
+  /**
+   * L2-2：Supervisor PassiveObserver 活跃时关闭 free 段 recovery inject（§19.6）。
+   * 仍保留 branch 计数、checkpoint 与 submitModeSignal。
+   */
+  supervisorObserverSuppressInject?: boolean;
 }
 
 /**
@@ -118,13 +123,16 @@ export function resilienceMaybeBranchRecover(
   const signal = state.branchBudget.buildRecoverySignal(decision);
   if (!signal) return;
 
-  if (correctionPort) {
-    correctionPort.inject(
-      { kind: 'recovery', content: signal.message, preserveOnCompaction: true },
-      { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
-    );
-  } else {
-    msgs.push({ role: 'user', content: signal.message });
+  const suppressInject = deps.supervisorObserverSuppressInject === true;
+  if (!suppressInject) {
+    if (correctionPort) {
+      correctionPort.inject(
+        { kind: 'recovery', content: signal.message, preserveOnCompaction: true },
+        { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+      );
+    } else {
+      msgs.push({ role: 'user', content: signal.message });
+    }
   }
   state.branchBudget.markRecoveryTriggered();
   state.submitModeSignal?.('branch_budget', 'recovery_pending', { dimension: decision.dimension, key: decision.key });
@@ -187,14 +195,17 @@ export async function resilienceMaybeReviewStep(
       && result.fallbackSuggested
       && !state.branchBudgetWarnedThisRound
     ) {
-      const content = `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`;
-      if (correctionPort) {
-        correctionPort.inject(
-          { kind: 'recovery', content },
-          { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
-        );
-      } else {
-        state.messages.push({ role: 'user', content });
+      const suppressInject = deps.supervisorObserverSuppressInject === true;
+      if (!suppressInject) {
+        const content = `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`;
+        if (correctionPort) {
+          correctionPort.inject(
+            { kind: 'recovery', content },
+            { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
+          );
+        } else {
+          state.messages.push({ role: 'user', content });
+        }
       }
       state.branchBudgetWarnedThisRound = true;
     }

@@ -205,6 +205,8 @@ export interface HarnessConfig {
   globalPolicy?: GlobalModePolicy;
   /** Batch 1：可选 supervisor 配置依赖，只读承载位；本批不改变现有运行逻辑。 */
   supervisorConfig?: ResolvedSupervisorConfig;
+  /** L2-1+：SupervisorRuntimeBridge；工具轮末段调用 PassiveObserver。 */
+  supervisorBridge?: import('./supervisor/supervisor-bridge.js').SupervisorRuntimeBridge;
 }
 
 /**

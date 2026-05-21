@@ -147,9 +147,18 @@ describe('Execution mode acceptance - Batch 6 / T13', () => {
     const sourceFiles = await listSourceFiles();
     const forbiddenRefs: string[] = [];
 
+    // §19.1 / §8.3 / §8.7 明确允许下列「接管候选信号路径」消费 goal/intent（仅作为 takeover
+    // 候选信号 / 模板图建图输入，不直接切 executionMode）。这些文件不计入 T13 forced-entry 关键字扫描。
+    const goalDriftAllowed = new Set([
+      'src/harness/supervisor/goal-drift-detector.ts',
+      'src/harness/supervisor/supervisor-bridge.ts',
+      'src/harness/supervisor/retrospective-graph-builder.ts',
+    ]);
+
     for (const file of sourceFiles) {
       const rel = relativeSourcePath(file);
       if (!rel.startsWith('src/harness/supervisor/')) continue;
+      if (goalDriftAllowed.has(rel)) continue;
       const content = await fs.readFile(file, 'utf-8');
       if (/\b(userGoal|goal|intent|inferIntent)\b/.test(content)) {
         forbiddenRefs.push(rel);

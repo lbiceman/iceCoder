@@ -458,6 +458,7 @@ ${c.bold}终端内置命令:${c.reset}
         sessionDir: ctx.paths.sessionsDir,
         supervisorConfig: supervisorRuntime.supervisorConfig,
         globalPolicy: supervisorRuntime.globalPolicy,
+        supervisorBridge: supervisorRuntime.bridge,
         onConfirm: async (toolName, toolArgs) => {
           // 终端确认
           spinner.stop();

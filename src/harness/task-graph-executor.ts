@@ -60,6 +60,14 @@ export interface AdvanceResult {
   nextNodeTitle?: string;
 }
 
+/**
+ * §19.3 — Graph 评估输出口控制。
+ *   - 'full'：保留今日行为（仅 strict / off 内部使用，hint 仍经 CorrectionPort 转发）
+ *   - 'metrics_only'：接管段默认；evaluateRound 不再返回 inject 文案
+ *   - 'none'：完全静默；调试与单测兜底
+ */
+export type GraphEvaluationMode = 'full' | 'metrics_only' | 'none';
+
 export class GraphExecutor {
   private graph: TaskGraphData | null = null;
   private contractValidator: ContractValidator | null = null;
@@ -67,6 +75,8 @@ export class GraphExecutor {
   private escalationManager = new EscalationManager();
   private failureClassifier = new FailureClassifier();
   private currentRoundToolNames: string[] = [];
+  private evaluationMode: GraphEvaluationMode = 'full';
+  private inTakeover = false;
 
   // ═══════════════════════════════════════════════
   // Graph Lifecycle
@@ -77,16 +87,70 @@ export class GraphExecutor {
     this.resetNodeState();
   }
 
+  /**
+   * §19.3 / §10 — 接管期间中途换图。
+   *
+   * 调用方（通常是 RecoverySupervisor 经 SupervisorRuntimeBridge）应在已通过
+   * RecoverySafetyChecker / SnapshotConfidence 阈值后才调用本方法；本方法仅做
+   * 数据替换与节点状态机重置，不做任何安全检查。
+   *
+   * 副作用：
+   *   - 切换内部 `this.graph` 引用；
+   *   - 重置 contractValidator / escalation / failureClassifier；
+   *   - 清空当轮已采集的工具名列表。
+   */
+  replaceGraph(graph: TaskGraphData): void {
+    this.graph = graph;
+    this.resetNodeState();
+    this.failureClassifier.reset();
+    this.currentRoundToolNames = [];
+  }
+
   resetGraph(): void {
     this.graph = null;
     this.contractValidator = null;
     this.escalationManager.reset();
     this.failureClassifier.reset();
     this.currentRoundToolNames = [];
+    this.evaluationMode = 'full';
+    this.inTakeover = false;
   }
 
   hasGraph(): boolean {
     return this.graph !== null;
+  }
+
+  /**
+   * §19.3 — 切换 evaluateRound 的输出口。
+   *
+   * 接管段（adaptiveTakeover）默认 'metrics_only'：本方法被调用后
+   * `evaluateRound` 将只产出 metrics-only 结果，**不再** 返回 inject hint，
+   * 由 CorrectionPort 统一负责接管段的 C 类块写入（I1）。
+   */
+  setEvaluationMode(mode: GraphEvaluationMode): void {
+    this.evaluationMode = mode;
+  }
+
+  getEvaluationMode(): GraphEvaluationMode {
+    return this.evaluationMode;
+  }
+
+  /**
+   * §19.3 — 与 `supervisorPhase` 同步进入 takeover；
+   * 默认把评估模式压到 metrics_only，调用方仍可 `setEvaluationMode` 覆盖。
+   */
+  enterTakeover(): void {
+    this.inTakeover = true;
+    this.evaluationMode = 'metrics_only';
+  }
+
+  exitTakeover(): void {
+    this.inTakeover = false;
+    this.evaluationMode = 'full';
+  }
+
+  isInTakeover(): boolean {
+    return this.inTakeover;
   }
 
   /**
@@ -197,11 +261,19 @@ export class GraphExecutor {
 
   evaluateRound(toolCallsThisRound: number): RoundEvalResult {
     if (!this.graph || !this.contractValidator) return { action: 'none' };
+    if (this.evaluationMode === 'none') {
+      this.currentRoundToolNames = [];
+      return { action: 'none' };
+    }
 
     // Contract round-end check
     const cResult = this.contractValidator.checkRoundEnd(toolCallsThisRound);
     if (cResult.action === 'force_switch') {
       this.attemptFallback(cResult.message ?? 'contract violation');
+      if (this.evaluationMode === 'metrics_only') {
+        this.currentRoundToolNames = [];
+        return { action: 'none' };
+      }
       return { action: 'force_switch', message: cResult.message };
     }
 
@@ -223,6 +295,10 @@ export class GraphExecutor {
       }
 
       this.currentRoundToolNames = [];
+      if (this.evaluationMode === 'metrics_only') {
+        // §19.3 / §14.0 — 接管段禁止 GraphExecutor 直接 inject；只回 metrics。
+        return { action: 'none' };
+      }
       return { action: esc.action, message: esc.message };
     }
 

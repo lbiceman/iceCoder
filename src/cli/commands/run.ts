@@ -50,7 +50,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     });
     const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
-    const { supervisorConfig, globalPolicy } = await loadHarnessSupervisorRuntime({
+    const { supervisorConfig, globalPolicy, bridge: supervisorBridge } = await loadHarnessSupervisorRuntime({
       dataDir: ctx.paths.dataDir,
     });
 
@@ -74,6 +74,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       sessionDir: ctx.paths.sessionsDir,
       supervisorConfig,
       globalPolicy,
+      supervisorBridge,
     };
 
     const harness = new Harness(harnessConfig, ctx.toolExecutor);

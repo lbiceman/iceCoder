@@ -33,6 +33,24 @@ function stateWithBranchBudget(branchBudget: BranchBudgetTracker): HarnessRunSta
 }
 
 describe('harness resilience correction routing - Batch 5', () => {
+  it('skips branch recovery inject when supervisorObserverSuppressInject is set', () => {
+    const branchBudget = new BranchBudgetTracker({ commandRetryMax: 1 });
+    branchBudget.recordFailedCommandAttempt('npm test');
+    branchBudget.recordFailedCommandAttempt('npm test');
+    const messages: UnifiedMessage[] = [];
+    const state = stateWithBranchBudget(branchBudget);
+
+    resilienceMaybeBranchRecover({
+      resilienceV2Enabled: true,
+      checkpointEngine: { save: async () => undefined } as never,
+      enqueueCheckpointPersist: async task => task(),
+      supervisorObserverSuppressInject: true,
+    }, state, messages);
+
+    expect(messages).toHaveLength(0);
+    expect(state.branchBudgetWarnedThisRound).toBe(true);
+  });
+
   it('keeps legacy branch recovery injection when no CorrectionPort is supplied', () => {
     const branchBudget = new BranchBudgetTracker({ commandRetryMax: 1 });
     branchBudget.recordFailedCommandAttempt('npm test');

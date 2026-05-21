@@ -18,9 +18,11 @@ import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type {
   ExecutionModeConfig,
+  GlobalModePolicy,
   ModeSignal,
   ModeSignalSource,
 } from '../types/supervisor.js';
+import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 
 /** W1: 用于把 RepoContext 新增文件数粗略折算成 diff 行数，仅用于 large_diff 信号阈值参考。 */
@@ -81,12 +83,9 @@ import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
 
 /** run() 内各子模块共享的运行时依赖（由 Harness 实例字段组装）。 */
-export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & {
+export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
   stopHookManager: StopHookManager;
   tokenBudgetTracker?: TokenBudgetTracker;
-  executionModeConfig?: ExecutionModeConfig;
-  executionModeDecisionEnabled?: boolean;
-  abortSignal?: AbortSignal;
 };
 
 /**
@@ -115,6 +114,7 @@ export class Harness {
   private checkpointEngine?: CheckpointEngine;
   private globalPolicy?: HarnessConfig['globalPolicy'];
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
+  private supervisorBridge?: SupervisorRuntimeBridge;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
 
@@ -148,6 +148,7 @@ export class Harness {
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig 或设置 ICE_SUPERVISOR_MODE。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
     this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
+    this.supervisorBridge = config.supervisorBridge;
     this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
     this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
     this.checkpointManager = config.sessionDir
@@ -195,6 +196,8 @@ export class Harness {
       tokenBudgetTracker: this.tokenBudgetTracker,
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
+      supervisorBridge: this.supervisorBridge,
+      supervisorObserverSuppressInject: shouldSuppressObserverInject(this.globalPolicy),
       abortSignal: this.abortSignal,
     };
   }
@@ -577,4 +580,10 @@ export class Harness {
     await this.memoryIntegration.drain(timeoutMs);
     this.memoryIntegration.dispose();
   }
+}
+
+/** §19.6 — L2 观察活跃时 free 段不重复 inject C 类 recovery 文案。 */
+export function shouldSuppressObserverInject(policy: GlobalModePolicy | undefined): boolean {
+  if (!policy) return false;
+  return policy.observerEnabled && policy.recoverySupervisorEnabled;
 }
