@@ -116,4 +116,46 @@ describe('loadHarnessSupervisorRuntime - F2 entrypoint loader', () => {
     expect(globalPolicy.supervisorMode).toBe('off');
     expect(globalPolicy.modeDecisionEngineEnabled).toBe(false);
   });
+
+  it('returns an inactive bridge aligned with loaded global policy', async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-supervisor-load-'));
+    const { bridge, globalPolicy } = await loadHarnessSupervisorRuntime({
+      dataDir,
+      env: { ICE_SUPERVISOR_MODE: 'adaptive' },
+      memoryOnly: true,
+    });
+
+    expect(globalPolicy.recoverySupervisorEnabled).toBe(true);
+    expect(bridge.isActive()).toBe(true);
+    expect(bridge.globalPolicy).toBe(globalPolicy);
+
+    bridge.recordExecutionModeSwitch({
+      round: 1,
+      from: 'free',
+      to: 'forced',
+      reason: 'pending_steps',
+    });
+    expect(bridge.eventTimeline.getRecentEvents()).toHaveLength(1);
+  });
+
+  it('resolves timeline path from the same dataDir passed to loadHarnessSupervisorRuntime', async () => {
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-supervisor-load-'));
+    const { bridge } = await loadHarnessSupervisorRuntime({
+      dataDir,
+      env: {},
+      memoryOnly: false,
+    });
+
+    bridge.recordExecutionModeSwitch({
+      round: 1,
+      from: 'free',
+      to: 'forced',
+      reason: 'graph active',
+    });
+    await bridge.eventTimeline.flush();
+
+    const timelinePath = path.join(dataDir, 'runtime', 'supervisor-events.jsonl');
+    const raw = await fs.readFile(timelinePath, 'utf-8');
+    expect(JSON.parse(raw.trim()).event).toBe('switch');
+  });
 });

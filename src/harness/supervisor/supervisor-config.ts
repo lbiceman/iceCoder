@@ -8,6 +8,11 @@ import type {
   SupervisorConfigFile,
 } from '../../types/supervisor.js';
 import { resolveGlobalPolicy } from './mode-controller.js';
+import {
+  createSupervisorRuntimeBridge,
+  type SupervisorRuntimeBridge,
+  type SupervisorRuntimeBridgeOptions,
+} from './supervisor-bridge.js';
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends Array<infer U>
@@ -140,24 +145,28 @@ export async function loadSupervisorConfig(
  *   - 任意异常（解析错误、IO 失败）均**降级为 off**，绝不阻断 Harness 启动，
  *     以保证 dual-mode 接入不会让现有产品入口"启动失败"。
  *
- * 返回 { supervisorConfig, globalPolicy }，调用方直接塞进 HarnessConfig。
+ * 返回 { supervisorConfig, globalPolicy, bridge }；调用方将 config/policy 塞进 HarnessConfig，
+ * bridge 在 L2-6 接入四钩子前可先忽略。
  */
 export async function loadHarnessSupervisorRuntime(
-  options: LoadSupervisorConfigOptions = {},
+  options: LoadSupervisorConfigOptions & SupervisorRuntimeBridgeOptions = {},
 ): Promise<{
   supervisorConfig: ResolvedSupervisorConfig;
   globalPolicy: ResolvedSupervisorConfig['globalPolicy'];
+  bridge: SupervisorRuntimeBridge;
 }> {
   try {
     const supervisorConfig = await loadSupervisorConfig(options);
-    return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy };
+    const bridge = createSupervisorRuntimeBridge(supervisorConfig, options);
+    return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy, bridge };
   } catch (err) {
     console.debug(
       '[supervisor-config] load failed, fallback to off:',
       err instanceof Error ? err.message : err,
     );
     const supervisorConfig = resolveSupervisorConfig({ mode: 'off' }, options.env);
-    return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy };
+    const bridge = createSupervisorRuntimeBridge(supervisorConfig, options);
+    return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy, bridge };
   }
 }
 

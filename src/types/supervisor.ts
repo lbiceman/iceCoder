@@ -163,6 +163,32 @@ export interface EventTimelineConfig {
   maxEventsInCheckpoint?: number;
 }
 
+/** §8.9 EventTimeline 事件类型。 */
+export type SupervisorTimelineEventType =
+  | 'switch'
+  | 'recover'
+  | 'rollback'
+  | 'handoff'
+  | 'failure'
+  | 'drift'
+  | 'timeout'
+  | 'shadow_diagnostic';
+
+/** §8.9 JSONL 落盘结构。 */
+export interface RuntimeEvent {
+  ts: number;
+  round: number;
+  mode: string;
+  event: SupervisorTimelineEventType;
+  reason: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface EventTimeline {
+  record(event: Omit<RuntimeEvent, 'ts'> & { ts?: number }): void;
+  getRecentEvents(limit?: number): readonly RuntimeEvent[];
+}
+
 /** §15.5 executionMode。 */
 export interface ExecutionModeConfig {
   enabled: boolean;
