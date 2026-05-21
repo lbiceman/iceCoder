@@ -69,6 +69,10 @@ export async function prepareHarnessRound(
 
   deps.loopController.advanceRound();
   state.turnCount++;
+  // W1: 在轮次开始时锚定 filesChanged 基线 + 重置本轮 branchSwitched 标记，
+  // 供 evaluateExecutionModeBeforeLlm 派生 accumulatedDiffLines / branchSwitchedThisRound。
+  state.filesChangedAtRoundStart = state.repoContext.snapshot().filesChanged.length;
+  state.branchSwitchedThisRound = false;
   const round = deps.loopController.getState().currentRound;
   logger.roundStart(round, msgs.length);
   deps.runtimeTelemetry?.recordRound({

@@ -73,6 +73,8 @@ export function applyExecutionModeConstraints(
     state.executionModeEnteredAtRound = undefined;
     state.forcedDegradedTier = undefined;
     state.forcedTaskBearingRoundsSinceEntry = 0;
+    // W4: forced 退出意味着 supervisor 接管完成，清掉 recovery sticky。
+    state.recoveryPendingSticky = false;
 
     onStep?.({ type: 'execution_mode_exit', iteration: round, executionMode: payload });
     deps.runtimeTelemetry?.recordExecutionMode('execution_mode_exit', payload);

@@ -21,6 +21,19 @@ import type {
   ModeSignal,
   ModeSignalSource,
 } from '../types/supervisor.js';
+import type { TaskGraphSnapshot } from '../types/task-graph.js';
+
+/** W1: 用于把 RepoContext 新增文件数粗略折算成 diff 行数，仅用于 large_diff 信号阈值参考。 */
+const APPROX_LINES_PER_FILE_CHANGE = 60;
+
+function countPendingGraphSteps(snapshot: TaskGraphSnapshot | null): number {
+  if (!snapshot) return 0;
+  let count = 0;
+  for (const node of Object.values(snapshot.nodes)) {
+    if (node.status === 'pending' || node.status === 'running') count++;
+  }
+  return count;
+}
 import type {
   HarnessConfig,
   HarnessResult,
@@ -214,13 +227,25 @@ export class Harness {
     const config = this.supervisorConfig?.executionMode;
     const policy = this.globalPolicy;
     if (!config || !policy) return;
+    // W2: OFF 模式不应让 evaluate 产生任何副作用（不 submit signals、不写 state、不动 gates）。
+    if (!policy.modeDecisionEngineEnabled) return;
 
     this.submitGraphModeSignals(deps, state);
+    const graphSnapshot = deps.graphExecutor?.toSnapshot() ?? null;
+    const pendingStepCount = countPendingGraphSteps(graphSnapshot);
     const graphState = {
       active: deps.graphExecutor?.hasGraph() ?? false,
-      pendingStepCount: 0,
+      pendingStepCount,
       activeGraphHasImplementNode: deps.graphExecutor?.hasPendingImplementNode() ?? false,
     };
+    // W1: 真实派生 RuntimeExecutionState 字段，不再硬编码 stub。
+    const recoveryPending = (state.pendingModeSignals ?? []).includes('recovery_pending')
+      || !!state.recoveryPendingSticky;
+    const stableRounds = state.stableRoundsSinceLastFailure ?? 0;
+    const repoSnap = state.repoContext.snapshot();
+    const filesChangedSnapshot = state.filesChangedAtRoundStart ?? repoSnap.filesChanged.length;
+    const accumulatedDiffLines = Math.max(0, repoSnap.filesChanged.length - filesChangedSnapshot)
+      * APPROX_LINES_PER_FILE_CHANGE;
     const runtimeState = buildRuntimeExecutionState({
       round,
       readonlyToolNames: config.readonlyToolNames,
@@ -228,8 +253,12 @@ export class Harness {
       graphState,
       forcedEntryRound: state.executionModeEnteredAtRound ?? null,
       forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
-      stableRounds: state.consecutiveToolFailures === 0 ? config.stableRoundsExitThreshold : 0,
+      stableRounds,
       lastToolSuccess: state.consecutiveToolFailures === 0,
+      recoveryPending,
+      branchDebt: state.branchBudget?.recoverTriggerCount ?? 0,
+      accumulatedDiffLines,
+      branchSwitchedThisRound: !!state.branchSwitchedThisRound,
     });
     const riskLevel = this.taskRiskClassifier.classify(runtimeState);
     const ctx = buildModeDecisionContext({
@@ -279,6 +308,13 @@ export class Harness {
   ): void {
     state.pendingModeSignals ??= [];
     state.pendingModeSignals.push(signal);
+    // W4：recovery_pending 跨轮 sticky，直到 forced exit 才清；
+    // W1：branch_switched 写本轮 flag，下轮 prepareHarnessRound 重置。
+    if (signal === 'recovery_pending') {
+      state.recoveryPendingSticky = true;
+    } else if (signal === 'branch_switched') {
+      state.branchSwitchedThisRound = true;
+    }
     this.modeDecisionEngine.submitSignal(source, signal, payload);
   }
 
@@ -369,19 +405,40 @@ export class Harness {
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
       supervisorPhase: 'free',
+      recoveryPendingSticky: false,
+      stableRoundsSinceLastFailure: 0,
+      filesChangedAtRoundStart: 0,
+      branchSwitchedThisRound: false,
     };
     state.submitModeSignal = (source, signal, payload) => this.submitModeSignal(state, source, signal, payload);
     syncExecutionModeLoopState(this.loopController, state);
-    // §2.8 / T12 — strict floor 默认 forced，把 BranchBudget / CheckpointEngine
-    // forced policy 同步到与初始 executionMode 一致的状态；后续切换由
-    // applyExecutionModeConstraints 的 onExecutionModeChanged 唯一驱动。
-    this.applyExecutionModeGates(state, state.executionMode ?? 'free');
+    // F1 / §2.8 / T12 — 仅当 ModeDecisionEngine 启用时才让 ExecutionMode 控制
+    // BranchBudget / CheckpointEngine forced policy；OFF 模式保持子模块原 always-on 行为，
+    // 避免 ExecutionMode 接入回归掉原 Resilience v2 的分支预算保护。
+    if (this.globalPolicy?.modeDecisionEngineEnabled) {
+      this.applyExecutionModeGates(state, state.executionMode ?? 'free');
+    }
 
     if (this.resilienceV2Enabled && this.checkpointEngine) {
       try {
         const v2 = await this.checkpointEngine.loadV2();
         if (v2) {
           state.branchBudget?.applySnapshot(v2.branchBudget);
+          // W8: 恢复 supervisor 历史承载位（observability only），
+          //     真正的 enter forced 仍由下方 checkpoint_resumed signal 驱动 ModeDecisionEngine 裁决；
+          //     这样既能保留 enteredBy / forcedDegradedTier 等历史，又不绕过 I5 单写约束。
+          if (v2.supervisorState) {
+            const supervisor = v2.supervisorState;
+            // W8: 历史承载位只用于 observability（telemetry / UI 上下文），
+            //     真正的 enter forced 仍由下方 submit('checkpoint_resumed') 驱动 ModeDecisionEngine 裁决；
+            //     不直接复写 sticky，避免 resume 后 forced 永远无法 exit 的死锁。
+            state.executionModeEnteredBy = [...(supervisor.executionModeEnteredBy ?? [])];
+            state.executionModeEnteredByPrimary = supervisor.executionModeEnteredByPrimary;
+            state.executionModeEnteredAtRound = supervisor.executionModeEnteredAtRound ?? undefined;
+            state.forcedDegradedTier = supervisor.forcedDegradedTier;
+            state.forcedTaskBearingRoundsSinceEntry = supervisor.forcedTaskBearingRoundsSinceEntry ?? 0;
+            state.lastModeDecision = supervisor.lastModeDecision;
+          }
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
           const pending = this.checkpointEngine.pendingRecoverySignals();
           if (pending.length > 0) {

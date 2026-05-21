@@ -130,6 +130,37 @@ export async function loadSupervisorConfig(
   return resolveSupervisorConfig(loaded, env);
 }
 
+/**
+ * F2 — Harness 入口（cli/web/remote）统一调用的 supervisor runtime 加载器。
+ *
+ * 行为：
+ *   - 优先按 ICE_SUPERVISOR_CONFIG_PATH / dataDir/supervisor-config.json 加载磁盘配置；
+ *   - 加载失败或文件缺失时回落到 defaultSupervisorConfig()（mode=adaptive）；
+ *   - env (ICE_SUPERVISOR_MODE / ICE_SUPERVISOR_SHADOW) 仍可覆盖；
+ *   - 任意异常（解析错误、IO 失败）均**降级为 off**，绝不阻断 Harness 启动，
+ *     以保证 dual-mode 接入不会让现有产品入口"启动失败"。
+ *
+ * 返回 { supervisorConfig, globalPolicy }，调用方直接塞进 HarnessConfig。
+ */
+export async function loadHarnessSupervisorRuntime(
+  options: LoadSupervisorConfigOptions = {},
+): Promise<{
+  supervisorConfig: ResolvedSupervisorConfig;
+  globalPolicy: ResolvedSupervisorConfig['globalPolicy'];
+}> {
+  try {
+    const supervisorConfig = await loadSupervisorConfig(options);
+    return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy };
+  } catch (err) {
+    console.debug(
+      '[supervisor-config] load failed, fallback to off:',
+      err instanceof Error ? err.message : err,
+    );
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'off' }, options.env);
+    return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy };
+  }
+}
+
 function resolveConfigPath(
   options: LoadSupervisorConfigOptions,
   env: NodeJS.ProcessEnv,

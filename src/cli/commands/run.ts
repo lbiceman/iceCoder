@@ -22,6 +22,7 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
+import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
@@ -49,6 +50,9 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     });
     const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
+    const { supervisorConfig, globalPolicy } = await loadHarnessSupervisorRuntime({
+      dataDir: ctx.paths.dataDir,
+    });
 
     const harnessConfig: HarnessConfig = {
       context: {
@@ -68,6 +72,8 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       compactionEnableLLMSummary: true,
       memoryDir: memoryFilesDir,
       sessionDir: ctx.paths.sessionsDir,
+      supervisorConfig,
+      globalPolicy,
     };
 
     const harness = new Harness(harnessConfig, ctx.toolExecutor);

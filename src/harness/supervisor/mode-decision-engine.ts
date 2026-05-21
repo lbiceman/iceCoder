@@ -29,6 +29,14 @@ export function formatForcedReasonHuman(enteredBy: ModeSignal[]): string {
   return `forced because ${enteredBy.join(' + ')}`;
 }
 
+/**
+ * W3 — L0 短路时只保留外部硬信号（绕过 state 派生）。
+ * 复用 sortSignalsByPrecedence，但不读取 RuntimeExecutionState。
+ */
+function sortExternalEnterSignals(signals: ModeSignal[]): ModeSignal[] {
+  return sortSignalsByPrecedence(signals);
+}
+
 export function shouldEnterForcedMode(
   state: RuntimeExecutionState,
   config: ExecutionModeConfig,
@@ -126,7 +134,16 @@ export class ModeDecisionEngine implements ModeDecisionEngineContract {
 
     if (ctx.executionMode !== 'forced') {
       const strictFloorSignals: ModeSignal[] = ctx.supervisorMode === 'strict' ? ['explicit_impl'] : [];
-      const enteredBy = shouldEnterForcedMode(ctx.state, this.config, [...signals, ...strictFloorSignals]);
+      // W3: L0 只读计划在 adaptive 下不补任何"运行态派生"信号，
+      //     但**外部 submit 的硬信号**（checkpoint_resumed / branch_switched /
+      //     tool_failure / explicit_impl）仍然能触发 enter。
+      //     这样 classifier 真正影响"是否因 state 升级 forced"，
+      //     而不会越权屏蔽外部硬信号；strict floor 仍由专门通道注入。
+      const skipStateDerivedEnter = ctx.supervisorMode === 'adaptive'
+        && ctx.riskLevel === 'L0_observation';
+      const enteredBy = skipStateDerivedEnter
+        ? sortExternalEnterSignals([...signals, ...strictFloorSignals])
+        : shouldEnterForcedMode(ctx.state, this.config, [...signals, ...strictFloorSignals]);
       if (enteredBy.length > 0) {
         return {
           action: 'enter_forced',

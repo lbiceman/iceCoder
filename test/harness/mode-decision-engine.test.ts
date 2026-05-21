@@ -173,4 +173,56 @@ describe('ModeDecisionEngine - Batch 2', () => {
       failSafe: true,
     });
   });
+
+  it('W3: adaptive + L0 still enters forced on external hard signals (checkpoint_resumed)', () => {
+    const engine = new ModeDecisionEngine(cfg);
+    const decision = engine.evaluate(context({
+      supervisorMode: 'adaptive',
+      riskLevel: 'L0_observation',
+      state: state(), // 完全只读运行态
+      signals: ['checkpoint_resumed', 'tool_failure'],
+    }));
+
+    expect(decision.action).toBe('enter_forced');
+    if (decision.action === 'enter_forced') {
+      expect(decision.primaryReason).toBe('checkpoint_resumed');
+      expect(decision.enteredBy).toEqual(['checkpoint_resumed', 'tool_failure']);
+    }
+  });
+
+  it('W3: adaptive + L0 does NOT escalate to forced from state-derived noise only', () => {
+    const engine = new ModeDecisionEngine(cfg);
+    // 即使 state.pendingStepCount 达阈值，L0 + adaptive 也不该因 state 派生升级；
+    // 这是 L0 短路的真正语义：state 噪声不抬升，外部硬信号才抬升。
+    const decision = engine.evaluate(context({
+      supervisorMode: 'adaptive',
+      riskLevel: 'L0_observation',
+      state: state({ pendingStepCount: cfg.pendingStepsEnterThreshold }),
+    }));
+
+    expect(decision).toEqual({ action: 'keep', mode: 'free' });
+  });
+
+  it('W4: recovery_pending signal blocks exit even when other conditions are satisfied', () => {
+    const engine = new ModeDecisionEngine(cfg);
+    const decision = engine.evaluate(context({
+      executionMode: 'forced',
+      executionModeLockRemaining: 0,
+      state: state(),
+      signals: ['recovery_pending'],
+    }));
+
+    expect(decision).toEqual({ action: 'keep', mode: 'forced' });
+  });
+
+  it('W4: recoveryPending=true on state also blocks exit (sticky semantics)', () => {
+    const engine = new ModeDecisionEngine(cfg);
+    const decision = engine.evaluate(context({
+      executionMode: 'forced',
+      executionModeLockRemaining: 0,
+      state: state({ recoveryPending: true }),
+    }));
+
+    expect(decision).toEqual({ action: 'keep', mode: 'forced' });
+  });
 });

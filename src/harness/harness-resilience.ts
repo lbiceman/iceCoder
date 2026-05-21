@@ -74,10 +74,12 @@ export async function resilienceRecordToolCalls(
       });
     }
 
+    const perToolTrigger: CheckpointSaveTrigger = failed ? 'tool_failed' : 'step_completed';
+    if (!engine.shouldPersistOnTrigger(perToolTrigger)) continue;
     await deps.enqueueCheckpointPersist(async () => {
       try {
         await engine.save({
-          trigger: failed ? 'tool_failed' : 'step_completed',
+          trigger: perToolTrigger,
           branchBudget: state.branchBudget,
           supervisorState: buildSupervisorCheckpointState(state),
           appendTool: {
@@ -220,6 +222,9 @@ export async function resilienceSaveCheckpoint(
   if (shouldSkipResilienceCheckpoint(state.taskState.snapshot().intent)) return;
 
   const engine = deps.checkpointEngine;
+  // W6: free 段不落 step_completed / verification_started；forced 段才覆盖。
+  //     该 gating 仅作用于资源相对昂贵的"过程型"快照；tool_failed / final_draft 等仍按原行为。
+  if (!engine.shouldPersistOnTrigger(trigger)) return;
 
   await deps.enqueueCheckpointPersist(async () => {
     try {

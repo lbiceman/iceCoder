@@ -98,4 +98,12 @@ export interface HarnessRunState {
     signal: ModeSignal,
     payload?: Record<string, unknown>,
   ) => void;
+  /** W4：recovery 信号的「跨轮 sticky」标志；由 supervisor 接管完成时清除。仅阻塞 exit，不参与 enter。 */
+  recoveryPendingSticky?: boolean;
+  /** W1：连续无失败轮次计数（与 consecutiveToolFailures 互斥推进），用于 stableRounds 派生。 */
+  stableRoundsSinceLastFailure?: number;
+  /** W1：本轮开始时 RepoContext.filesChanged 长度的快照，用于派生 accumulatedDiffLines。 */
+  filesChangedAtRoundStart?: number;
+  /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
+  branchSwitchedThisRound?: boolean;
 }

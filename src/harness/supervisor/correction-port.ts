@@ -18,5 +18,10 @@ function shouldSuppress(block: CorrectionBlock, ctx: { phase: SupervisorPhase; s
     return false;
   }
 
-  return block.kind === 'takeover' || block.kind === 'recovery';
+  // W7：free 段仅抑制 takeover 类长策略（接管文案是 phase=takeover 的专属）。
+  //     recovery 类是熔断前的硬阈值提示（如 "Repeated failed tool call detected"、
+  //     branch budget warning、6 轮全失败警告），是 free 段最后的自纠偏路径，
+  //     在 CorrectionBudget 真正落地之前不应整类抑制；否则 adaptive 接通后
+  //     free 段会失去自我恢复能力。
+  return block.kind === 'takeover';
 }

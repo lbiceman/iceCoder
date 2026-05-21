@@ -123,12 +123,17 @@ export async function runHarnessToolRound(
   });
   const executableToolCalls = gateResult.executableToolCalls;
   const blockedToolSignatures = gateResult.skippedSignatures;
+  // W5: gate 决策已用 buildGateContext (track:false) 完成；这里只对真正会执行的
+  //     工具补一次 track:true 的 checkToolCall（推 currentRoundToolNames），
+  //     blocked 的工具不入 DeviationDetector，避免同名计数翻倍 / 误升级。
+  //     warn 文案直接复用 gateContext.graphHints，不再二次判定。
   if (gateContext.executionMode === 'forced' && deps.graphExecutor?.hasGraph()) {
     for (const tc of executableToolCalls) {
-      const check = deps.graphExecutor.checkToolCall(tc.name);
-      if (check.action === 'warn' && check.message) {
+      deps.graphExecutor.checkToolCall(tc.name, { track: true });
+      const hint = gateContext.graphHints.find(h => h.toolName === tc.name);
+      if (hint?.action === 'warn' && hint.message) {
         correctionPort.inject(
-          { kind: 'graph_hint', content: check.message },
+          { kind: 'graph_hint', content: hint.message },
           { phase: gateContext.phase, source: 'supervisor' },
         );
       }
@@ -234,6 +239,8 @@ export async function runHarnessToolRound(
 
   if (toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount) {
     state.consecutiveToolFailures++;
+    // W1: 本轮全失败 → 重置 stable 计数；evaluate 才能正确判定"连续 N 轮稳定"。
+    state.stableRoundsSinceLastFailure = 0;
     const failureCount = state.consecutiveToolFailures;
 
     if (failureCount >= CIRCUIT_BREAKER_THRESHOLD) {
@@ -301,6 +308,8 @@ export async function runHarnessToolRound(
     }
   } else {
     state.consecutiveToolFailures = 0;
+    // W1: 本轮非全失败 → 视为稳定一轮（含部分成功 / 无工具）。
+    state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
   }
 
   let evalForceSwitchTriggered = false;

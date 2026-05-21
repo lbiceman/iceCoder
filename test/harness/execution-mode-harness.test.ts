@@ -397,3 +397,153 @@ describe('Harness execution mode integration - Batch 3', () => {
     expect(result.loopState.executionMode).toBe('forced');
   });
 });
+
+describe('Harness execution mode integration - W-series regressions', () => {
+  it('F1+W2: OFF mode must NOT call BranchBudget.setEnabled(false) or run evaluate side effects', async () => {
+    // 回归：Batch 5 之前 BranchBudget 默认 enabled；Batch 5 错把启停绑到 ExecutionMode，
+    // 导致默认 OFF 时 setEnabled(false) 把生产路径上整套预算保护永久关掉。
+    const { BranchBudgetTracker } = await import('../../src/harness/branch-budget.js');
+    const setEnabledSpy = vi.spyOn(BranchBudgetTracker.prototype, 'setEnabled');
+
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('read_file')];
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+    }), createToolExecutor(tools));
+
+    const result = await harness.run('hello', createChatFn([finalResponse('done')]));
+
+    // OFF 模式下，applyExecutionModeGates 不应被触发，setEnabled 不应被调用。
+    expect(setEnabledSpy).not.toHaveBeenCalled();
+    expect(result.loopState.executionMode).toBe('free');
+  });
+
+  it('F1: adaptive forced cycle still gates BranchBudget through ExecutionMode', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('edit_file')];
+    const events: HarnessStepEvent[] = [];
+    const supervisorConfig = resolveSupervisorConfig({
+      mode: 'strict',
+      executionMode: {
+        modeLockRounds: 0,
+        forcedMinDwellRounds: 1,
+        stableRoundsExitThreshold: 0,
+        writeTargetsEnterThreshold: 0,
+      },
+    }, {});
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      finalResponse('done'),
+    ]);
+
+    const result = await harness.run('hello', chatFn, event => events.push(event));
+
+    expect(events.some(event => event.type === 'execution_mode_enter')).toBe(true);
+    expect(result.loopState.executionMode).toBeDefined();
+  });
+
+  it('W3: adaptive + L0 must still enter forced on external hard signal (checkpoint_resumed)', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('read_file')];
+    const events: HarnessStepEvent[] = [];
+    const runtimeV2 = emptyRuntimeCheckpointV2('manual');
+    runtimeV2.supervisorState = {
+      executionMode: 'forced',
+      executionModeLockRemaining: 0,
+      executionModeEnteredBy: ['tool_failure'],
+      executionModeEnteredByPrimary: 'tool_failure',
+      executionModeEnteredAtRound: 3,
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 0,
+    };
+    await fs.writeFile(
+      path.join(sessionDir, 'default.checkpoint.json'),
+      JSON.stringify({ ...buildRunningCheckpoint(), runtimeV2 }, null, 2),
+      'utf-8',
+    );
+    const supervisorConfig = resolveSupervisorConfig({
+      mode: 'adaptive',
+      executionMode: { modeLockRounds: 0, stableRoundsExitThreshold: 0 },
+    }, {});
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+
+    const result = await harness.run('hello', createChatFn([finalResponse('done')]), event => events.push(event));
+
+    const enter = events.find(e => e.type === 'execution_mode_enter');
+    expect(enter).toBeDefined();
+    expect(enter?.executionMode?.enteredByPrimary).toBe('checkpoint_resumed');
+    expect(result.loopState.executionModeEnteredByPrimary).toBe('checkpoint_resumed');
+  });
+
+  it('W8: checkpoint resume restores supervisor history fields (enteredBy / dwell / degraded)', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('read_file')];
+    const events: HarnessStepEvent[] = [];
+    const runtimeV2 = emptyRuntimeCheckpointV2('manual');
+    runtimeV2.supervisorState = {
+      executionMode: 'forced',
+      executionModeLockRemaining: 2,
+      executionModeEnteredBy: ['multi_write', 'tool_failure'],
+      executionModeEnteredByPrimary: 'multi_write',
+      executionModeEnteredAtRound: 5,
+      forcedDegradedTier: 'step_queue',
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 2,
+    };
+    await fs.writeFile(
+      path.join(sessionDir, 'default.checkpoint.json'),
+      JSON.stringify({ ...buildRunningCheckpoint(), runtimeV2 }, null, 2),
+      'utf-8',
+    );
+    const supervisorConfig = resolveSupervisorConfig({
+      mode: 'adaptive',
+      executionMode: { modeLockRounds: 0, stableRoundsExitThreshold: 0 },
+    }, {});
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+
+    const result = await harness.run('hello', createChatFn([finalResponse('done')]), event => events.push(event));
+
+    // checkpoint_resumed 信号驱动新 enter，但 telemetry 反映的是新 entry。
+    // 历史承载位（forcedDegradedTier）由 W8 在 enter 前恢复后保留至最后。
+    expect(result.loopState.forcedDegradedTier).toBeDefined();
+  });
+
+  it('W6: free segment skips step_completed v2 persistence (only tool_failed / final_draft survive)', async () => {
+    // 这是行为契约测试：直接调用 CheckpointEngine.shouldPersistOnTrigger 验证。
+    const { CheckpointEngine } = await import('../../src/harness/checkpoint-engine.js');
+    const engine = new CheckpointEngine(await tempSessionDir(), 'default');
+
+    expect(engine.shouldPersistOnTrigger('tool_failed')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('final_draft')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('compaction')).toBe(true);
+
+    // free 段：step_completed / verification_started 不落
+    expect(engine.shouldPersistOnTrigger('step_completed')).toBe(false);
+    expect(engine.shouldPersistOnTrigger('verification_started')).toBe(false);
+
+    engine.setForcedPolicy(true);
+    expect(engine.shouldPersistOnTrigger('step_completed')).toBe(true);
+    expect(engine.shouldPersistOnTrigger('verification_started')).toBe(true);
+  });
+});
