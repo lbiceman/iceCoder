@@ -6,7 +6,7 @@ import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supe
 
 describe('SupervisorRuntimeBridge - L2-1', () => {
   it('is inactive when ICE_SUPERVISOR_MODE=off and writes no timeline events', () => {
-    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     expect(bridge.isActive()).toBe(false);
@@ -27,7 +27,7 @@ describe('SupervisorRuntimeBridge - L2-1', () => {
   });
 
   it('records execution mode switch events when supervisor is active', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     bridge.recordExecutionModeSwitch({
@@ -50,7 +50,7 @@ describe('SupervisorRuntimeBridge - L2-1', () => {
   it('records shadow_diagnostic without changing phase semantics via applyDecision', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', shadow: true },
-      { ICE_SUPERVISOR_MODE: 'adaptive', ICE_SUPERVISOR_SHADOW: '1' },
+      { ICE_SUPERVISOR_SHADOW: '1' },
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -89,7 +89,7 @@ describe('SupervisorRuntimeBridge - L2-1', () => {
   it('does not record shadow events when shadow mode is disabled', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', shadow: false },
-      { ICE_SUPERVISOR_MODE: 'adaptive', ICE_SUPERVISOR_SHADOW: '0' },
+      { ICE_SUPERVISOR_SHADOW: '0' },
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -103,7 +103,7 @@ describe('SupervisorRuntimeBridge - L2-1', () => {
   });
 
   it('records non-shadow supervisor decisions to timeline', () => {
-    const config = resolveSupervisorConfig({ mode: 'strict' }, { ICE_SUPERVISOR_MODE: 'strict' });
+    const config = resolveSupervisorConfig({ mode: 'strict' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     bridge.applyDecision(
@@ -146,7 +146,7 @@ describe('SupervisorRuntimeBridge - L2-1', () => {
   });
 
   it('observeAfterTools records deviation signals to timeline without injecting messages', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const signals = bridge.observeAfterTools({
@@ -185,7 +185,7 @@ describe('SupervisorRuntimeBridge - L2-1', () => {
   });
 
   it('observeAfterTools is no-op when supervisor mode is off', () => {
-    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const signals = bridge.observeAfterTools({
@@ -294,7 +294,7 @@ describe('SupervisorRuntimeBridge - L2-3 takeover end-to-end', () => {
   }
 
   it('drives free→takeover and injects exactly one takeover block via CorrectionPort', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
 
@@ -320,7 +320,7 @@ describe('SupervisorRuntimeBridge - L2-3 takeover end-to-end', () => {
   it('does NOT mutate supervisorPhase under shadow mode but writes shadow_diagnostic', async () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', shadow: true },
-      { ICE_SUPERVISOR_MODE: 'adaptive', ICE_SUPERVISOR_SHADOW: '1' },
+      { ICE_SUPERVISOR_SHADOW: '1' },
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -343,7 +343,7 @@ describe('SupervisorRuntimeBridge - L2-3 takeover end-to-end', () => {
   });
 
   it('off mode short-circuits evaluateAfterRound even with strong signals', async () => {
-    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
 
@@ -362,7 +362,7 @@ describe('SupervisorRuntimeBridge - L2-3 takeover end-to-end', () => {
   });
 
   it('extraSignals augments observer-accumulated signals into the evaluator', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const decision = await bridge.evaluateAfterRound({
@@ -378,7 +378,7 @@ describe('SupervisorRuntimeBridge - L2-3 takeover end-to-end', () => {
   });
 
   it('progresses takeover → handoff_pending → handoff → cooldown across rounds', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     // Round 1: enter takeover via extraSignals (avoid stale observer accumulation across rounds).
@@ -448,7 +448,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   };
 
   it('escalates to fail{checkpoint} when recovery rounds budget is exhausted', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const r1 = await bridge.evaluateAfterRound({
@@ -489,7 +489,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('escalates to fail{checkpoint} when token ratio budget is exhausted', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const r1 = await bridge.evaluateAfterRound({
@@ -515,7 +515,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('escalates to fail{checkpoint} when retry budget is exhausted via recordRecoveryRetry', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     await bridge.evaluateAfterRound({
@@ -541,7 +541,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('does not consume budget while still in free phase', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     await bridge.evaluateAfterRound({
@@ -555,7 +555,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('resets budget when supervisor leaves takeover (handoff path)', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     await bridge.evaluateAfterRound({
@@ -588,7 +588,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   it('shadow mode does NOT consume recovery budget', async () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', shadow: true },
-      { ICE_SUPERVISOR_MODE: 'adaptive', ICE_SUPERVISOR_SHADOW: '1' },
+      { ICE_SUPERVISOR_SHADOW: '1' },
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -607,7 +607,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('observeAfterTools emits goal_drift after consecutive low-alignment rounds', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const driftTask = {
@@ -656,7 +656,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   it('respects goalDriftEnabled=false toggle', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', triggers: { goalDriftEnabled: false } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -689,7 +689,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('submitManualTrigger accumulates scope_creep / user_force_takeover when triggers enabled', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     expect(bridge.submitManualTrigger({ type: 'scope_creep' }, 1)).toBe(true);
@@ -712,7 +712,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
         mode: 'adaptive',
         triggers: { scopeCreepEnabled: false, userForceTakeoverEnabled: false },
       },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -722,7 +722,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('submitManualTrigger is no-op when supervisor mode is off', () => {
-    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     expect(bridge.submitManualTrigger({ type: 'user_force_takeover' }, 1)).toBe(false);
@@ -730,7 +730,7 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
   });
 
   it('resetObserverSignals clears both observer accumulation and drift streak', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const driftTask = {
@@ -825,7 +825,7 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
   }
 
   it('returns strong_hint when supervisor is off (no executor side-effect)', () => {
-    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const result = bridge.runRecoveryMainPath({
       round: 1,
@@ -841,7 +841,7 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
   });
 
   it('writes a failure timeline diagnostic when phase != takeover', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
     const result = bridge.runRecoveryMainPath({
@@ -865,7 +865,7 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
   });
 
   it('takes §10 main path with template_graph tier when all gates pass', async () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     forceTakeover(bridge);
 
@@ -893,7 +893,7 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
   });
 
   it('falls back to strong_hint and injects [System Recovery] when confidence is low', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     forceTakeover(bridge);
 
@@ -920,7 +920,7 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
   });
 
   it('falls back when safety check rejects the workspace', () => {
-    const config = resolveSupervisorConfig({ mode: 'adaptive' }, { ICE_SUPERVISOR_MODE: 'adaptive' });
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     forceTakeover(bridge);
 
@@ -944,7 +944,7 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
   it('shadow mode does not mutate executor nor inject correction messages', async () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', shadow: true },
-      { ICE_SUPERVISOR_MODE: 'adaptive', ICE_SUPERVISOR_SHADOW: '1' },
+      { ICE_SUPERVISOR_SHADOW: '1' },
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     forceTakeover(bridge);
@@ -994,7 +994,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('createCorrectionPort: drops free-segment supervisor recovery once freeSegmentMaxPerTask is reached', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -1025,7 +1025,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('createCorrectionPort: budget rejection timeline carries the supplied round', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -1050,7 +1050,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('createCorrectionPort: takeover-phase recovery bypasses I4 budget (counted only on free)', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -1070,7 +1070,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('createCorrectionPort: lifecycle source is not counted against the budget', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -1092,7 +1092,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('createCorrectionPort: off mode keeps inject untouched (no budget enforcement)', () => {
     const config = resolveSupervisorConfig(
       { mode: 'off', correctionBudget: { freeSegmentMaxPerTask: 1 } },
-      { ICE_SUPERVISOR_MODE: 'off' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     const messages: UnifiedMessage[] = [];
@@ -1120,7 +1120,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
           adaptiveTakeover: { maxRecoveryRounds: 1, recoveryTokenRatio: 0.5, maxRecoveryRetries: 1 },
         },
       },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -1180,7 +1180,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('snapshotForCheckpoint then restoreFromCheckpoint round-trips phase / timeline tail / budget', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 5 } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -1233,7 +1233,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   });
 
   it('restoreFromCheckpoint is a no-op when supervisor is off', () => {
-    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     bridge.restoreFromCheckpoint({
       executionMode: 'free',
@@ -1260,7 +1260,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
   it('resetForNewTask wipes phase / observer / budget for the next task', () => {
     const config = resolveSupervisorConfig(
       { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
-      { ICE_SUPERVISOR_MODE: 'adaptive' },
+      {},
     );
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
     bridge.recoverySupervisor.commit({
@@ -1287,7 +1287,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
 describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
   describe('shouldInitTaskGraphAtFirstRound', () => {
     it('off mode: backward compat — returns true for critical intents (= shouldUseTaskGraph)', () => {
-      const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+      const config = resolveSupervisorConfig({ mode: 'off' }, {});
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
       expect(bridge.shouldInitTaskGraphAtFirstRound('edit')).toBe(true);
@@ -1299,7 +1299,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('adaptive mode: §I3 — critical intents do NOT init at round 1 (adaptiveFree.firstRoundGraph=false)', () => {
       const config = resolveSupervisorConfig(
         { mode: 'adaptive' },
-        { ICE_SUPERVISOR_MODE: 'adaptive' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -1314,7 +1314,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('strict mode: critical intents init at round 1 (strict.firstRoundGraph=true)', () => {
       const config = resolveSupervisorConfig(
         { mode: 'strict' },
-        { ICE_SUPERVISOR_MODE: 'strict' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -1330,7 +1330,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('respects user override: strict can disable firstRoundGraph via config', () => {
       const config = resolveSupervisorConfig(
         { mode: 'strict', params: { strict: { firstRoundGraph: false } } },
-        { ICE_SUPERVISOR_MODE: 'strict' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -1342,7 +1342,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('drops graph hint in free mode (no inject / no timeline write)', () => {
       const config = resolveSupervisorConfig(
         { mode: 'adaptive' },
-        { ICE_SUPERVISOR_MODE: 'adaptive' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
@@ -1365,7 +1365,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('injects via CorrectionPort under forced mode and records `recover:graph_hint:*` timeline', () => {
       const config = resolveSupervisorConfig(
         { mode: 'adaptive' },
-        { ICE_SUPERVISOR_MODE: 'adaptive' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
@@ -1395,7 +1395,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('strict-style mapping: warn action is treated as inject_hint when forced', () => {
       const config = resolveSupervisorConfig(
         { mode: 'strict' },
-        { ICE_SUPERVISOR_MODE: 'strict' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
@@ -1418,7 +1418,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('forced_step block origin records forced_step_block timeline reason', () => {
       const config = resolveSupervisorConfig(
         { mode: 'strict' },
-        { ICE_SUPERVISOR_MODE: 'strict' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
@@ -1445,7 +1445,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('no message → no inject and no timeline write', () => {
       const config = resolveSupervisorConfig(
         { mode: 'adaptive' },
-        { ICE_SUPERVISOR_MODE: 'adaptive' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
@@ -1468,7 +1468,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     it('writes a `failure:recovery_boundary_rejected:*` timeline when boundary rejects', () => {
       const config = resolveSupervisorConfig(
         { mode: 'adaptive' },
-        { ICE_SUPERVISOR_MODE: 'adaptive' },
+        {},
       );
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
@@ -1489,7 +1489,7 @@ describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
     });
 
     it('off mode: boundary not attached, legacy shouldSuppress still drops free+takeover', () => {
-      const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+      const config = resolveSupervisorConfig({ mode: 'off' }, {});
       const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
       const messages: UnifiedMessage[] = [];
       const port = bridge.createCorrectionPort(messages);

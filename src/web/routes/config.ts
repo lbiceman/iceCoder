@@ -6,7 +6,14 @@
 import { Router, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
-import type { ProviderConfig, IceCoderConfigFile } from '../types.js';
+import {
+  DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
+  normalizeSupervisorMode,
+  readMainConfigFile,
+  writeSupervisorModeToMainConfig,
+} from '../../config/main-config-supervisor-mode.js';
+import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
+import type { IceCoderConfigFile, ProviderConfig } from '../types.js';
 
 /** 与 bootstrap / index 使用同一规则，避免 Web  API 读写错误的 config.json */
 function resolveConfigPath(explicit?: string): string {
@@ -196,10 +203,12 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
 
       // 读取现有配置，用于恢复被脱敏的 apiKey
       let existingProviders: ProviderConfig[] = [];
+      let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
+        existingSupervisorMode = existing.supervisorMode;
       } catch { /* 文件不存在，首次保存 */ }
 
       // 构建 id → 原始 apiKey 的映射
@@ -231,9 +240,17 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         }
       }
 
-      const configData = JSON.stringify({ providers: normalizedProviders }, null, 2);
+      const configData = JSON.stringify(
+        {
+          providers: normalizedProviders,
+          supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
+        },
+        null,
+        2,
+      );
       await fs.writeFile(configFile, configData, 'utf-8');
 
+      resetSupervisorRuntimeCache();
       // 触发热重载回调
       if (options?.onConfigSaved) {
         try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
@@ -262,14 +279,41 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),
       }));
 
-      res.json({ providers: maskedProviders });
+      res.json({
+        providers: maskedProviders,
+        supervisorMode: normalizeSupervisorMode(config.supervisorMode),
+      });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        res.json({ providers: [] });
+        res.json({ providers: [], supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE });
         return;
       }
       const message = err instanceof Error ? err.message : 'Unknown error';
       res.status(500).json({ error: `Failed to load configuration: ${message}` });
+    }
+  });
+
+  /**
+   * PATCH /api/config/supervisor-mode — 切换双模监管档位（写入 config.json）。
+   */
+  router.patch('/supervisor-mode', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { supervisorMode?: string })?.supervisorMode;
+      if (raw !== 'off' && raw !== 'adaptive' && raw !== 'strict') {
+        res.status(400).json({
+          error: 'supervisorMode must be one of: off, adaptive, strict',
+        });
+        return;
+      }
+      const saved = await writeSupervisorModeToMainConfig(configFile, raw);
+      resetSupervisorRuntimeCache();
+      if (options?.onConfigSaved) {
+        try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
+      }
+      res.json({ success: true, supervisorMode: saved });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      res.status(500).json({ error: `Failed to update supervisor mode: ${message}` });
     }
   });
 

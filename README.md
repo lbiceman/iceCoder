@@ -8,7 +8,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
-[中文文档](./README.zh-CN.md) | [Next Work](./docs/nextWork.md)
+[中文文档](./README.zh-CN.md) | [Environment variables](./docs/environment-variables.md) ([中文](./docs/环境变量.md)) | [Next Work](./docs/nextWork.md)
 
 ---
 
@@ -134,16 +134,18 @@ Key files:
 
 Optional **Supervisor** regulation for engineering intents (`edit`, `debug`, `test`, `refactor`):
 
-| Mode | `ICE_SUPERVISOR_MODE` / config `mode` | Summary |
+| Mode | `config.json` `supervisorMode` / `supervisor-config.json` `mode` | Summary |
 |------|--------------------------------------|---------|
 | **off** | `off` (Harness fallback when config not injected) | No supervision decision chain |
 | **adaptive** | `adaptive` (default in `supervisor-config.example.json`) | Switches between free and takeover segments by risk signals |
 | **strict** | `strict` | Strong constraints; `executionModeFloor` = `forced` |
 
-- **Loading**: `loadHarnessSupervisorRuntime()` from `chat`, `run`, `chat-ws`, `remote-ws`; path: `ICE_SUPERVISOR_CONFIG_PATH` → `{ICE_DATA_DIR}/supervisor-config.json`; failures **degrade to off** without blocking startup.
-- **Env parsed only at Global layer** (`mode-controller.ts`): `ICE_SUPERVISOR_MODE`, `ICE_SUPERVISOR_SHADOW` override file `mode` / `shadow`.
+- **Loading**: `loadHarnessSupervisorRuntime()` from `chat`, `run`, `chat-ws`, `remote-ws`; **mode** is stored in **`data/config.json`** field **`supervisorMode`** (Web nav tri-state toggle); advanced params stay in `supervisor-config.json`; failures **degrade to off**.
+- **Env (Global layer only)**: `ICE_SUPERVISOR_SHADOW` overrides shadow; `ICE_SUPERVISOR_CONFIG_PATH` points at supervisor params file.
+- **Web UI**: tri-state **Free / Adaptive / Strict** button left of the theme toggle (`PATCH /api/config/supervisor-mode`).
 - **Shadow**: `ICE_SUPERVISOR_SHADOW=1` runs evaluation without mutating `supervisorPhase`.
 - **Spec**: [`docs/双模方案2.md`](./docs/双模方案2.md) (V1.3.7); template: [`data/supervisor-config.example.json`](./data/supervisor-config.example.json).
+- **Env vars**: `ICE_SUPERVISOR_SHADOW`, `ICE_SUPERVISOR_CONFIG_PATH` — see [`docs/environment-variables.md`](./docs/environment-variables.md) §4.
 - **Implementation gaps**: [`docs/双模落地缺口.md`](./docs/双模落地缺口.md) — missing modules and features for the full dual-mode stack.
 
 #### `~supervisor` chat command (Supervisor events report)
@@ -505,187 +507,23 @@ CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordanc
 
 ## Configuration and environment variables
 
-All process environment variables read under `src/` and `scripts/` are listed below. Each row includes the **default when unset** and an **example value** you can copy into `.env` or your shell.
+Full documentation for **every** process environment variable and the browser `localStorage` key (purpose, valid values, defaults, code locations, `.env` template):
 
-#### Paths and data directories
+**[`docs/environment-variables.md`](./docs/environment-variables.md)** (detailed Chinese: [`docs/环境变量.md`](./docs/环境变量.md))
 
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_DATA_DIR` | CLI data root; derives `config.json`, `sessions`, `memory-files`, etc. | `./data` if `data/config.json` exists, else `~/.iceCoder` | `ICE_DATA_DIR=./data` |
-| `ICE_CONFIG_PATH` | LLM provider JSON (`providers[]`); **not** MCP | `{ICE_DATA_DIR}/config.json` or `data/config.json` | `ICE_CONFIG_PATH=./data/config.json` |
-| `ICE_SYSTEM_PROMPT_PATH` | Override assembled `system-prompt.md` | `{ICE_DATA_DIR}/system-prompt.md` | `ICE_SYSTEM_PROMPT_PATH=./data/system-prompt.md` |
-| `ICE_OUTPUT_DIR` | General output directory | `output` (`index.ts`) or `{ICE_DATA_DIR}/output` (CLI) | `ICE_OUTPUT_DIR=./output` |
-| `ICE_SESSIONS_DIR` | Sessions, checkpoints, `session-notes.md` | `data/sessions` | `ICE_SESSIONS_DIR=./data/sessions` |
-| `ICE_MEMORY_DIR` | Project-level memory root | `data/memory-files` | `ICE_MEMORY_DIR=./data/memory-files` |
-| `ICE_USER_MEMORY_DIR` | User-scoped memory directory | `data/user-memory` | `ICE_USER_MEMORY_DIR=./data/user-memory` |
-| `ICE_RUNTIME_DIR` | Runtime telemetry JSONL root (`runtime-telemetry.ts`) | Falls back to session directory | `ICE_RUNTIME_DIR=./data/runtime` |
+Quick reference:
 
-#### Dual-mode Supervisor
+| Variable | Role | Default | Valid values |
+|----------|------|---------|--------------|
+| `ICE_DATA_DIR` | CLI data root | `./data` or `~/.iceCoder` | directory path |
+| `ICE_CONFIG_PATH` | LLM provider config | `{dataDir}/config.json` | file path |
+| `PORT` | HTTP port | CLI **3784** / `index.ts` **1024** | port number |
+| `config.json` → `supervisorMode` | Dual-mode supervisor | `adaptive` | `off` \| `adaptive` \| `strict` |
+| `ICE_CONTEXT_WINDOW` | Context token cap | provider → **128000** | positive integer |
+| `ICE_EVAL_MODE` | Eval mode (skip extraction, etc.) | off | `1` |
+| `ICE_MCP_CONFIG_PATH` | MCP config | `<cwd>/.iceCoder/mcp.json` | file path |
 
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_SUPERVISOR_CONFIG_PATH` | Absolute path to `supervisor-config.json` | `{ICE_DATA_DIR}/supervisor-config.json` | `ICE_SUPERVISOR_CONFIG_PATH=./data/supervisor-config.json` |
-| `ICE_SUPERVISOR_MODE` | Global mode; overrides file `mode` | From config file (`adaptive` in example); Harness fallback `off` | `ICE_SUPERVISOR_MODE=adaptive` or `strict` or `off` |
-| `ICE_SUPERVISOR_SHADOW` | Shadow eval: run checks without changing `supervisorPhase` | File `shadow` (`false` in example) | `ICE_SUPERVISOR_SHADOW=1` |
-
-Valid `mode`: `off` | `adaptive` | `strict`. Valid `shadow`: `1`/`true`/`0`/`false`.
-
-#### HTTP server and Node
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `PORT` | HTTP/API listen port | `src/index.ts` / `dev:api`: **1024**; CLI `web`/`start`/`chat`: **3784** | `PORT=3784` (CLI) or `PORT=1024` (standalone API) |
-| `NODE_ENV` | `production` serves static SPA from `dist/public` | Non-production dev behavior | `NODE_ENV=production` |
-
-#### Prompts, eval, and LLM requests
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_EVAL_MODE` | `1` skips memory extraction paths | Off | `ICE_EVAL_MODE=1` |
-| `ICE_DISABLE_TOOLS` | `1` omits tool schemas and tool-oriented prompt sections | Off | `ICE_DISABLE_TOOLS=1` |
-| `ICE_CONTEXT_WINDOW` | Override context window token cap | Provider `maxContextTokens` → max provider → **128000** | `ICE_CONTEXT_WINDOW=200000` |
-| `ICE_OPENAI_REQUEST_TIMEOUT_MS` | OpenAI-compatible per-request timeout (ms); after `config.json` `requestTimeoutMs` | OpenAI adapter **120000** ms | `ICE_OPENAI_REQUEST_TIMEOUT_MS=180000` |
-| `ICE_SLIM_TOOL_DESCRIPTIONS` | `1`/`true` truncates tool descriptions | Off | `ICE_SLIM_TOOL_DESCRIPTIONS=1` |
-| `ICE_SLIM_TOOL_DESC_MAX_CHARS` | Max chars per truncated description | **384** | `ICE_SLIM_TOOL_DESC_MAX_CHARS=256` |
-
-#### Harness main loop
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_HARNESS_MAX_ROUNDS` | Max rounds per `Harness.run()` | **5000** | `ICE_HARNESS_MAX_ROUNDS=200` |
-| `ICE_TASK_GRAPH` | `isTaskGraphEnabled()`; main path gated by `shouldUseTaskGraph(intent)` | **false** | `ICE_TASK_GRAPH=1` (little effect on current main path) |
-
-**Hard-coded (no env var):**
-
-| Item | Value | Notes |
-|------|-------|-------|
-| Wall-clock timeout | **86400000** ms (24h) | `token-budget-config.ts`; `ICE_HARNESS_TIMEOUT_*` removed |
-| Cumulative token budget | **50000000** | Per-run input+output cap; `ICE_HARNESS_TOKEN_BUDGET` removed |
-
-**Built-in intent routing (no env):** `question` / `inspect` → casual path; `edit` / `debug` / `test` / `refactor` → full engineering path + TaskGraph.
-
-#### Context compaction
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_COMPACTION_RATIO` | Hard compaction trigger ratio (0–1) | **0.88** | `ICE_COMPACTION_RATIO=0.85` |
-| `ICE_MICRO_COMPACT_RATIO` | Micro-compaction trigger ratio | **0.72** | `ICE_MICRO_COMPACT_RATIO=0.70` |
-| `ICE_COMPACTION_RESERVE_TOKENS` | Reserve tokens during hard compaction | **15000** | `ICE_COMPACTION_RESERVE_TOKENS=12000` |
-
-#### Memory system
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_STANDARD_RECALL_COOLDOWN_SEC` | Standard recall cooldown (seconds); `0` disables | **300** | `ICE_STANDARD_RECALL_COOLDOWN_SEC=600` |
-| `ICE_EXTRACTION_MAX_MESSAGES` | Max user/assistant messages per LLM extraction (≥20) | **80** | `ICE_EXTRACTION_MAX_MESSAGES=60` |
-| `ICE_MEMORY_DIMENSION_DOC` | Memory-dimension doc for extraction prompts | **`docs/记忆系统调整.md`** (relative to cwd) | `ICE_MEMORY_DIMENSION_DOC=docs/记忆系统调整.md` |
-
-**Hot config (not env):** `data/memory/memory-config.json` — recall budgets, Dream gates, relevance gate (`memory-remote-config.ts`).
-
-#### Tool output and read limits
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_MAX_TOOL_OUTPUT_CHARS` | Max chars per tool result in context (clamped 8k–200k) | **24000** | `ICE_MAX_TOOL_OUTPUT_CHARS=32000` |
-| `ICE_READ_FILE_MAX_LINES` | `read_file` max lines without offset/limit (50–5000) | **420** | `ICE_READ_FILE_MAX_LINES=300` |
-| `ICE_READ_FILE_MAX_CHARS` | `read_file` soft char cap (2k–500k) | **18000** | `ICE_READ_FILE_MAX_CHARS=12000` |
-| `ICE_DOC_PARSE_TEXT_MAX_CHARS` | Doc-parse plain-text soft cap (2k–200k) | **16000** | `ICE_DOC_PARSE_TEXT_MAX_CHARS=12000` |
-
-#### Sub-agent
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_SUBAGENT_TIMEOUT_MS` | `delegate_to_subagent` envelope timeout (ms) | **120000** | `ICE_SUBAGENT_TIMEOUT_MS=90000` |
-| `ICE_SUBAGENT_CACHE_MAX_ENTRIES` | Process LRU cache entry cap (≥1) | **100** | `ICE_SUBAGENT_CACHE_MAX_ENTRIES=50` |
-
-#### MCP
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_MCP_CONFIG_PATH` | MCP config JSON | **`<cwd>/.iceCoder/mcp.json`** | `ICE_MCP_CONFIG_PATH=./.iceCoder/mcp.json` |
-| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` timeout (ms, min 15000) | **120000** | `ICE_MCP_INIT_TIMEOUT_MS=180000` |
-
-#### Quick Tunnel / remote access
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `TUNNEL_URL` | Fixed public URL; skips metrics probing | None (probe metrics) | `TUNNEL_URL=https://xxx.trycloudflare.com` |
-| `ICE_TUNNEL_WS_NOTIFY` | `0` disables tunnel-ready WebSocket push | **Enabled** (not `0`) | `ICE_TUNNEL_WS_NOTIFY=0` |
-| `ICE_TUNNEL_PROBE_MS` | Poll interval for cloudflared metrics (ms, ≥500) | **2500** | `ICE_TUNNEL_PROBE_MS=3000` |
-| `ICE_TUNNEL_METRICS_HOST` | cloudflared `--metrics` host | **127.0.0.1** | `ICE_TUNNEL_METRICS_HOST=127.0.0.1` |
-| `ICE_TUNNEL_METRICS_PORT` | cloudflared `--metrics` port | **20241** (`npm run dev` example uses **20341**) | `ICE_TUNNEL_METRICS_PORT=20341` |
-| `ICE_TUNNEL_METRICS_QUICKTUNNEL` | Full metrics URL (overrides host+port) | `http://127.0.0.1:20241/quicktunnel` | `ICE_TUNNEL_METRICS_QUICKTUNNEL=http://127.0.0.1:20341/quicktunnel` |
-| `CLOUDFLARED_BIN` | `cloudflared` binary for CLI `start` | Auto-detect PATH | `CLOUDFLARED_BIN=/usr/local/bin/cloudflared` |
-
-#### Scripts and eval (`scripts/`)
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `ICE_AGENT_EVAL_MODE` | `npm run eval:agent` mode | **mock** | `ICE_AGENT_EVAL_MODE=live` |
-| `ICE_RUNTIME_TELEMETRY` | Runtime telemetry JSONL for eval | **data/runtime/telemetry.jsonl** | `ICE_RUNTIME_TELEMETRY=./data/runtime/telemetry.jsonl` |
-| `ICE_AGENT_EVAL_HISTORY` | Eval history JSONL | **data/eval/agent-eval-history.jsonl** | `ICE_AGENT_EVAL_HISTORY=./data/eval/agent-eval-history.jsonl` |
-
-#### Terminal and system (read-only / auxiliary)
-
-| Variable | Role | Default (unset) | Example value |
-|----------|------|-----------------|---------------|
-| `NO_COLOR` | Any non-empty value disables CLI ANSI colors | Colors on (TTY) | `NO_COLOR=1` |
-| `COMSPEC` | Shell reported by `env_info` on Windows | System `cmd.exe` | (usually leave unset) |
-| `SHELL` | Shell reported by `env_info` on Unix | `/bin/sh`, etc. | (usually leave unset) |
-
-**Web UI (browser `localStorage`, not server env):** `ICE_PLAN_PANEL=0` hides the task-graph / plan panel.
-
-#### `.env` reference template (copy and trim as needed)
-
-```bash
-# --- Data paths ---
-ICE_DATA_DIR=./data
-ICE_CONFIG_PATH=./data/config.json
-ICE_SESSIONS_DIR=./data/sessions
-ICE_MEMORY_DIR=./data/memory-files
-ICE_USER_MEMORY_DIR=./data/user-memory
-
-# --- Dual-mode Supervisor ---
-ICE_SUPERVISOR_MODE=adaptive
-ICE_SUPERVISOR_SHADOW=0
-# ICE_SUPERVISOR_CONFIG_PATH=./data/supervisor-config.json
-
-# --- HTTP ---
-PORT=3784
-# NODE_ENV=production
-
-# --- LLM / context ---
-# ICE_CONTEXT_WINDOW=200000
-# ICE_OPENAI_REQUEST_TIMEOUT_MS=180000
-
-# --- Harness ---
-# ICE_HARNESS_MAX_ROUNDS=5000
-
-# --- Compaction ---
-# ICE_COMPACTION_RATIO=0.88
-# ICE_MICRO_COMPACT_RATIO=0.72
-# ICE_COMPACTION_RESERVE_TOKENS=15000
-
-# --- Memory ---
-# ICE_STANDARD_RECALL_COOLDOWN_SEC=300
-# ICE_EXTRACTION_MAX_MESSAGES=80
-
-# --- Tool output ---
-# ICE_MAX_TOOL_OUTPUT_CHARS=24000
-
-# --- Sub-agent ---
-# ICE_SUBAGENT_TIMEOUT_MS=120000
-# ICE_SUBAGENT_CACHE_MAX_ENTRIES=100
-
-# --- MCP ---
-# ICE_MCP_CONFIG_PATH=./.iceCoder/mcp.json
-# ICE_MCP_INIT_TIMEOUT_MS=120000
-
-# --- Tunnel (optional) ---
-# ICE_TUNNEL_METRICS_PORT=20241
-# TUNNEL_URL=https://xxx.trycloudflare.com
-# CLOUDFLARED_BIN=/path/to/cloudflared
-```
+**40+** process variables total. Removed vars (`ICE_HARNESS_TOKEN_BUDGET`, `ICE_HARNESS_TIMEOUT_*`, etc.) are listed in the doc. Browser `ICE_PLAN_PANEL=0` in `localStorage` hides the task-graph panel.
 
 ---
 
@@ -740,6 +578,8 @@ Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js`
 
 Higher-level prose (beyond this README):
 
+- [`docs/environment-variables.md`](./docs/environment-variables.md) — **full environment variable reference** (purpose, valid values, defaults)
+- [`docs/环境变量.md`](./docs/环境变量.md) — 环境变量（中文详版）
 - [`docs/nextWork.md`](./docs/nextWork.md) — active roadmap and eval gaps
 - [`docs/requirement/任务图规划-finish.md`](./docs/requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)

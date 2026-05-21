@@ -7,6 +7,10 @@ import type {
   ResolvedSupervisorConfig,
   SupervisorConfigFile,
 } from '../../types/supervisor.js';
+import {
+  readSupervisorModeFromMainConfig,
+  resolveMainConfigPath,
+} from '../../config/main-config-supervisor-mode.js';
 import { resolveGlobalPolicy } from './mode-controller.js';
 import {
   createSupervisorRuntimeBridge,
@@ -25,7 +29,9 @@ type DeepPartial<T> = {
 export interface LoadSupervisorConfigOptions {
   /** Explicit config path. If omitted, ICE_SUPERVISOR_CONFIG_PATH then ICE_DATA_DIR/supervisor-config.json are used. */
   configPath?: string;
-  /** Env source for Global-only keys; tests can pass an isolated object. */
+  /** Main LLM config path (data/config.json); `supervisorMode` field overrides supervisor-config `mode`. */
+  mainConfigPath?: string;
+  /** Env source for Global-only keys (ICE_SUPERVISOR_SHADOW); tests can pass an isolated object. */
   env?: NodeJS.ProcessEnv;
   /** Data directory fallback when ICE_DATA_DIR is not set. */
   dataDir?: string;
@@ -132,7 +138,10 @@ export async function loadSupervisorConfig(
   const env = options.env ?? process.env;
   const configPath = resolveConfigPath(options, env);
   const loaded = await readConfigFile(configPath);
-  return resolveSupervisorConfig(loaded, env);
+  const mainConfigPath = options.mainConfigPath ?? resolveMainConfigPath(env);
+  const modeFromMain = await readSupervisorModeFromMainConfig(mainConfigPath);
+  const merged = modeFromMain != null ? { ...loaded, mode: modeFromMain } : loaded;
+  return resolveSupervisorConfig(merged, env);
 }
 
 /**
@@ -141,7 +150,8 @@ export async function loadSupervisorConfig(
  * 行为：
  *   - 优先按 ICE_SUPERVISOR_CONFIG_PATH / dataDir/supervisor-config.json 加载磁盘配置；
  *   - 加载失败或文件缺失时回落到 defaultSupervisorConfig()（mode=adaptive）；
- *   - env (ICE_SUPERVISOR_MODE / ICE_SUPERVISOR_SHADOW) 仍可覆盖；
+ *   - `data/config.json` 的 `supervisorMode` 覆盖 supervisor-config.json 的 `mode`；
+ *   - env 仅 `ICE_SUPERVISOR_SHADOW` 可覆盖 shadow；
  *   - 任意异常（解析错误、IO 失败）均**降级为 off**，绝不阻断 Harness 启动，
  *     以保证 dual-mode 接入不会让现有产品入口"启动失败"。
  *

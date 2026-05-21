@@ -1,7 +1,7 @@
 import type { ToolCall } from '../llm/types.js';
 import type { TaskIntent } from './runtime-snapshot.js';
 
-/** 与 ICE_SUPERVISOR_MODE 一致；由 ModeController 解析，业务模块只读 GlobalModePolicy。 */
+/** 产品三档监管模式；由 config.json / supervisor-config 解析，业务模块只读 GlobalModePolicy。 */
 export type SupervisorMode = 'off' | 'adaptive' | 'strict';
 
 /** 与 TaskIntent 映射；§4 细粒度域可逐步扩展，不驱动 ExecutionMode。 */
@@ -51,7 +51,7 @@ export interface ModeController {
 
 /** 磁盘配置根类型；字段注释规范见 docs/双模方案2.md §15.2-§15.6。 */
 export interface SupervisorConfigFile {
-  /** 运行模式；可被环境变量 ICE_SUPERVISOR_MODE 覆盖。 */
+  /** 运行模式；由 config.json `supervisorMode` 或 supervisor-config.json `mode` 解析。 */
   mode: SupervisorMode;
   /** 影子评测：评估全跑但不改 supervisorPhase；可被 ICE_SUPERVISOR_SHADOW 覆盖。 */
   shadow: boolean;

@@ -11,7 +11,7 @@ export function resolveGlobalPolicy(
   config: Pick<SupervisorConfigFile, 'mode' | 'shadow'>,
   env: NodeJS.ProcessEnv = process.env,
 ): GlobalModePolicy {
-  const supervisorMode = resolveSupervisorMode(env.ICE_SUPERVISOR_MODE, config.mode);
+  const supervisorMode = coalesceSupervisorMode(config.mode);
   const shadow = supervisorMode === 'off'
     ? false
     : resolveBooleanEnv(env.ICE_SUPERVISOR_SHADOW, config.shadow);
@@ -45,11 +45,11 @@ export class ModeController implements ModeControllerContract {
   }
 }
 
-function resolveSupervisorMode(value: string | undefined, fallback: SupervisorMode): SupervisorMode {
-  if (value === 'off' || value === 'adaptive' || value === 'strict') {
-    return value;
+function coalesceSupervisorMode(mode: SupervisorMode | undefined): SupervisorMode {
+  if (mode === 'off' || mode === 'adaptive' || mode === 'strict') {
+    return mode;
   }
-  return fallback;
+  return 'adaptive';
 }
 
 function resolveBooleanEnv(value: string | undefined, fallback: boolean): boolean {

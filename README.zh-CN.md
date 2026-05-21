@@ -6,7 +6,7 @@ iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harnes
 
 **已从代码库移除：** 早期的**多阶段流水线**及按阶段注册的 **Agent** 抽象（如 `BaseAgent`、`executePipeline`、阶段报告生成等）。当前 `Orchestrator` 仅聚合 `FileParser` 与 `LLMAdapter`，供 WebSocket 聊天等入口共享实例。
 
-[English](./README.md) | [后续优化计划](./docs/nextWork.md)
+[English](./README.md) | [环境变量](./docs/环境变量.md) | [后续优化计划](./docs/nextWork.md)
 
 ---
 
@@ -169,7 +169,7 @@ Harness 在构造时**始终**创建 `GraphExecutor`（Phase 11–13）。是否
 
 在关键工程 intent（`edit` / `debug` / `test` / `refactor`）上，可选启用 **Supervisor** 在「自由执行」与「强约束接管」之间动态切换：
 
-| 档位 | `ICE_SUPERVISOR_MODE` / 配置文件 `mode` | 行为概要 |
+| 档位 | `config.json` 的 `supervisorMode` / `supervisor-config.json` 的 `mode` | 行为概要 |
 |------|----------------------------------------|----------|
 | **off** | `off`（Harness 未注入配置时的默认回落） | 不启用监管决策链 |
 | **adaptive** | `adaptive`（`supervisor-config.json` 默认） | 按风险信号在自由段与接管段间切换；`executionMode` 可在 `free` / `forced` 间升降 |
@@ -177,10 +177,12 @@ Harness 在构造时**始终**创建 `GraphExecutor`（Phase 11–13）。是否
 
 要点：
 
-- **配置加载**：`loadHarnessSupervisorRuntime()`（`supervisor-config.ts`）由 `chat` / `run` / `chat-ws` / `remote-ws` 调用；路径优先级：`ICE_SUPERVISOR_CONFIG_PATH` → `{ICE_DATA_DIR}/supervisor-config.json`；加载失败**降级为 off**，不阻断启动。
-- **环境变量仅 Global 层解析**（`mode-controller.ts`）：`ICE_SUPERVISOR_MODE`、`ICE_SUPERVISOR_SHADOW` 覆盖文件中的 `mode` / `shadow`；业务模块只读 `GlobalModePolicy`。
+- **配置加载**：`loadHarnessSupervisorRuntime()` 由 `chat` / `run` / `chat-ws` / `remote-ws` 调用；**档位**写入 `data/config.json` 的 **`supervisorMode`**（Web 顶栏三态按钮可切换）；细粒度参数仍在 `supervisor-config.json`；加载失败**降级为 off**。
+- **环境变量**：仅 `ICE_SUPERVISOR_SHADOW` 可在 Global 层覆盖影子模式；`ICE_SUPERVISOR_CONFIG_PATH` 指定监管参数文件路径。
+- **Web UI**：顶栏主题按钮左侧 **自由 / 自适应 / 严格** 三态切换（`PATCH /api/config/supervisor-mode`）。
 - **影子模式**：`ICE_SUPERVISOR_SHADOW=1` 时评估链路运行但不改写 `supervisorPhase`（用于对照实验）。
 - **规格文档**：[`docs/双模方案2.md`](./docs/双模方案2.md)（V1.3.7）；示例配置：[`data/supervisor-config.example.json`](./data/supervisor-config.example.json)。
+- **环境变量**：`ICE_SUPERVISOR_SHADOW`、`ICE_SUPERVISOR_CONFIG_PATH` — 见 [`docs/环境变量.md`](./docs/环境变量.md) §4。
 - **落地缺口（开发排期）**：[`docs/双模落地缺口.md`](./docs/双模落地缺口.md) — 完整双模仍缺的模块与功能清单。
 
 #### `~supervisor` 命令（Supervisor 事件报告）
@@ -536,202 +538,30 @@ ICE_CONTEXT_WINDOW
 
 **说明：** LLM 提供者仍在 `data/config.json`（或 `ICE_CONFIG_PATH`）；MCP 与主配置已拆分。
 
-### 环境变量（完整清单）
+### 环境变量
 
-下列为 `src/`、`scripts/` 中**实际读取**的进程环境变量。表格含**未设置时的默认值**与**示例取值**（可直接写入 `.env` 或 shell）；布尔型未列出时即「不设 = 关闭/回落默认」。
+进程环境变量与 Web 前端 `localStorage` 键的**完整说明**（用途、合法取值、默认值、读取位置、`.env` 模板）见独立文档：
 
-#### 路径与数据目录
+**[`docs/环境变量.md`](./docs/环境变量.md)**（英文精简版：[`docs/environment-variables.md`](./docs/environment-variables.md)）
 
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_DATA_DIR` | CLI 数据根；派生 `config.json`、`sessions`、`memory-files` 等 | cwd 有 `data/config.json` → `./data`；否则 `~/.iceCoder` | `ICE_DATA_DIR=./data` |
-| `ICE_CONFIG_PATH` | LLM 提供者 JSON（`providers[]`）；**不含** MCP | `{ICE_DATA_DIR}/config.json` 或 `data/config.json` | `ICE_CONFIG_PATH=./data/config.json` |
-| `ICE_SYSTEM_PROMPT_PATH` | 覆盖组装用 `system-prompt.md` | `{ICE_DATA_DIR}/system-prompt.md` | `ICE_SYSTEM_PROMPT_PATH=./data/system-prompt.md` |
-| `ICE_OUTPUT_DIR` | 通用输出目录 | `output`（`index.ts`）或 `{ICE_DATA_DIR}/output`（CLI） | `ICE_OUTPUT_DIR=./output` |
-| `ICE_SESSIONS_DIR` | 会话、checkpoint、`session-notes.md` | `data/sessions` | `ICE_SESSIONS_DIR=./data/sessions` |
-| `ICE_MEMORY_DIR` | 项目级记忆根 | `data/memory-files` | `ICE_MEMORY_DIR=./data/memory-files` |
-| `ICE_USER_MEMORY_DIR` | 用户级记忆目录 | `data/user-memory` | `ICE_USER_MEMORY_DIR=./data/user-memory` |
-| `ICE_RUNTIME_DIR` | 运行时遥测 JSONL 根（`runtime-telemetry.ts`） | 回退到当前会话目录 | `ICE_RUNTIME_DIR=./data/runtime` |
+常用变量速查：
 
-#### 双模监管（Supervisor）
+| 变量 | 作用 | 默认值 | 合法取值 |
+|------|------|--------|----------|
+| `ICE_DATA_DIR` | CLI 数据根 | `./data` 或 `~/.iceCoder` | 目录路径 |
+| `ICE_CONFIG_PATH` | LLM 提供者配置 | `{dataDir}/config.json` | 文件路径 |
+| `PORT` | HTTP 端口 | CLI **3784** / `index.ts` **1024** | 端口号 |
+| `config.json` → `supervisorMode` | 双模监管档位 | `adaptive` | `off` \| `adaptive` \| `strict` |
+| `ICE_CONTEXT_WINDOW` | 上下文 token 上限 | provider → **128000** | 正整数 |
+| `ICE_EVAL_MODE` | 评测模式（跳过提取等） | 关闭 | `1` |
+| `ICE_MCP_CONFIG_PATH` | MCP 配置 | `<cwd>/.iceCoder/mcp.json` | 文件路径 |
 
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_SUPERVISOR_CONFIG_PATH` | `supervisor-config.json` 绝对路径 | `{ICE_DATA_DIR}/supervisor-config.json` | `ICE_SUPERVISOR_CONFIG_PATH=./data/supervisor-config.json` |
-| `ICE_SUPERVISOR_MODE` | 全局监管档位；覆盖文件 `mode` | 以配置文件为准（示例文件为 `adaptive`）；Harness 无注入时为 `off` | `ICE_SUPERVISOR_MODE=adaptive` 或 `strict` 或 `off` |
-| `ICE_SUPERVISOR_SHADOW` | 影子评测：跑评估但不改 `supervisorPhase` | 配置文件 `shadow`（示例 `false`） | `ICE_SUPERVISOR_SHADOW=1` |
-
-`mode` 合法取值：`off` | `adaptive` | `strict`。`shadow` 合法取值：`1`/`true`/`0`/`false`。
-
-#### HTTP 服务与 Node
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `PORT` | HTTP/API 监听端口 | `src/index.ts` / `dev:api`：**1024**；CLI `web`/`start`/`chat`：**3784** | `PORT=3784`（CLI）或 `PORT=1024`（独立 API） |
-| `NODE_ENV` | `production` 时托管 `dist/public` 静态 SPA | 开发行为（非 production） | `NODE_ENV=production` |
-
-#### 提示词、评测、LLM 请求
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_EVAL_MODE` | `1`：跳过记忆提取等评测路径 | 关闭 | `ICE_EVAL_MODE=1` |
-| `ICE_DISABLE_TOOLS` | `1`：不提供 tool schema，并移除工具向提示段 | 关闭 | `ICE_DISABLE_TOOLS=1` |
-| `ICE_CONTEXT_WINDOW` | 覆盖上下文 token 上限（压缩、冰豆圆环） | provider `maxContextTokens` → 最大 provider → **128000** | `ICE_CONTEXT_WINDOW=200000` |
-| `ICE_OPENAI_REQUEST_TIMEOUT_MS` | OpenAI 兼容单次请求超时（ms）；次于 `config.json` 的 `requestTimeoutMs` | OpenAI 适配器 **120000** ms | `ICE_OPENAI_REQUEST_TIMEOUT_MS=180000` |
-| `ICE_SLIM_TOOL_DESCRIPTIONS` | `1`/`true` 截断工具 description | 关闭 | `ICE_SLIM_TOOL_DESCRIPTIONS=1` |
-| `ICE_SLIM_TOOL_DESC_MAX_CHARS` | 截断后单条 description 最大字符 | **384** | `ICE_SLIM_TOOL_DESC_MAX_CHARS=256` |
-
-#### Harness 主循环
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_HARNESS_MAX_ROUNDS` | 单次 `Harness.run()` 最大轮次 | **5000** | `ICE_HARNESS_MAX_ROUNDS=200` |
-| `ICE_TASK_GRAPH` | `isTaskGraphEnabled()`；主路径仍由 `shouldUseTaskGraph(intent)` 门控 | **false**（空或未设） | `ICE_TASK_GRAPH=1`（几乎不影响当前主路径） |
-
-**硬编码（无环境变量，代码常量）：**
-
-| 项 | 取值 | 说明 |
-|----|------|------|
-| 墙钟超时 | **86400000** ms（24h） | `token-budget-config.ts`；已移除 `ICE_HARNESS_TIMEOUT_*` |
-| 累计 token 预算 | **50000000** | 单次 run 的 input+output 累加上限；已移除 `ICE_HARNESS_TOKEN_BUDGET` |
-
-**内置 intent 分流（无环境变量）：** `question` / `inspect` → 日常减负；`edit` / `debug` / `test` / `refactor` → 完整工程路径 + TaskGraph。
-
-#### 上下文压缩
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_COMPACTION_RATIO` | 硬压缩触发比例（占上下文窗口，0–1） | **0.88** | `ICE_COMPACTION_RATIO=0.85` |
-| `ICE_MICRO_COMPACT_RATIO` | 微压缩触发比例 | **0.72** | `ICE_MICRO_COMPACT_RATIO=0.70` |
-| `ICE_COMPACTION_RESERVE_TOKENS` | 硬压缩保留 token 准备金 | **15000** | `ICE_COMPACTION_RESERVE_TOKENS=12000` |
-
-#### 记忆系统
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_STANDARD_RECALL_COOLDOWN_SEC` | 标准召回冷却（秒）；`0` 关闭 | **300** | `ICE_STANDARD_RECALL_COOLDOWN_SEC=600` |
-| `ICE_EXTRACTION_MAX_MESSAGES` | 单次 LLM 提取最大 user/assistant 条数（≥20） | **80** | `ICE_EXTRACTION_MAX_MESSAGES=60` |
-| `ICE_MEMORY_DIMENSION_DOC` | 提取用「记忆维度」文档路径 | **`docs/记忆系统调整.md`**（相对 cwd） | `ICE_MEMORY_DIMENSION_DOC=docs/记忆系统调整.md` |
-
-`memory-config.json` 片段（casual 提取，**非**环境变量）：
-
-```json
-"casualExtraction": {
-  "minTurns": 5,
-  "requireToolCalls": true,
-  "allowContentSignalWithoutTools": true
-}
-```
-
-**热配置（非 env）：** `data/memory/memory-config.json` — 召回预算、Dream、相关性门控（`memory-remote-config.ts` 热加载）。
-
-#### 工具输出与读文件上限
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_MAX_TOOL_OUTPUT_CHARS` | 注入上下文的单条 tool 结果字符上限（钳制 8k–200k） | **24000** | `ICE_MAX_TOOL_OUTPUT_CHARS=32000` |
-| `ICE_READ_FILE_MAX_LINES` | `read_file` 无 offset/limit 最大行数（50–5000） | **420** | `ICE_READ_FILE_MAX_LINES=300` |
-| `ICE_READ_FILE_MAX_CHARS` | `read_file` 正文字符软上限（2k–500k） | **18000** | `ICE_READ_FILE_MAX_CHARS=12000` |
-| `ICE_DOC_PARSE_TEXT_MAX_CHARS` | 文档解析纯文本软上限（2k–200k） | **16000** | `ICE_DOC_PARSE_TEXT_MAX_CHARS=12000` |
-
-#### 子代理（Sub-Agent）
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_SUBAGENT_TIMEOUT_MS` | `delegate_to_subagent` 整段超时（ms） | **120000** | `ICE_SUBAGENT_TIMEOUT_MS=90000` |
-| `ICE_SUBAGENT_CACHE_MAX_ENTRIES` | 进程级 LRU 缓存条目上限（≥1） | **100** | `ICE_SUBAGENT_CACHE_MAX_ENTRIES=50` |
-
-#### MCP
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_MCP_CONFIG_PATH` | MCP 配置 JSON | **`<cwd>/.iceCoder/mcp.json`** | `ICE_MCP_CONFIG_PATH=./.iceCoder/mcp.json` |
-| `ICE_MCP_INIT_TIMEOUT_MS` | MCP `initialize` 超时（ms，最小 15000） | **120000** | `ICE_MCP_INIT_TIMEOUT_MS=180000` |
-
-#### Quick Tunnel / 远程访问
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `TUNNEL_URL` | 固定公网 URL；设置后跳过 metrics 探测 | 无（走探测） | `TUNNEL_URL=https://xxx.trycloudflare.com` |
-| `ICE_TUNNEL_WS_NOTIFY` | `0` 关闭隧道就绪 WebSocket 推送 | **开启**（非 `0`） | `ICE_TUNNEL_WS_NOTIFY=0` |
-| `ICE_TUNNEL_PROBE_MS` | 探测 cloudflared metrics 间隔（ms，≥500） | **2500** | `ICE_TUNNEL_PROBE_MS=3000` |
-| `ICE_TUNNEL_METRICS_HOST` | cloudflared `--metrics` 主机 | **127.0.0.1** | `ICE_TUNNEL_METRICS_HOST=127.0.0.1` |
-| `ICE_TUNNEL_METRICS_PORT` | cloudflared `--metrics` 端口 | **20241**（`npm run dev` 脚本示例用 **20341**） | `ICE_TUNNEL_METRICS_PORT=20341` |
-| `ICE_TUNNEL_METRICS_QUICKTUNNEL` | 完整 metrics URL（覆盖 host+port） | `http://127.0.0.1:20241/quicktunnel` | `ICE_TUNNEL_METRICS_QUICKTUNNEL=http://127.0.0.1:20341/quicktunnel` |
-| `CLOUDFLARED_BIN` | CLI `start` 的 cloudflared 可执行文件 | 自动探测 PATH | `CLOUDFLARED_BIN=C:\tools\cloudflared\cloudflared.exe` |
-
-#### 脚本与评测（`scripts/`）
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `ICE_AGENT_EVAL_MODE` | `npm run eval:agent` 模式 | **mock** | `ICE_AGENT_EVAL_MODE=live` |
-| `ICE_RUNTIME_TELEMETRY` | eval 读取的运行时遥测 JSONL | **data/runtime/telemetry.jsonl** | `ICE_RUNTIME_TELEMETRY=./data/runtime/telemetry.jsonl` |
-| `ICE_AGENT_EVAL_HISTORY` | eval 历史 JSONL | **data/eval/agent-eval-history.jsonl** | `ICE_AGENT_EVAL_HISTORY=./data/eval/agent-eval-history.jsonl` |
-
-#### 终端与系统（只读/辅助）
-
-| 变量 | 作用 | 默认值（未设置） | 示例取值 |
-|------|------|------------------|----------|
-| `NO_COLOR` | 任意非空值禁用 CLI ANSI 颜色 | 启用颜色（TTY） | `NO_COLOR=1` |
-| `COMSPEC` | Windows 下 `env_info` 报告的 shell | 系统 `cmd.exe` 路径 | （通常无需改） |
-| `SHELL` | Unix 下 `env_info` 报告的 shell | `/bin/sh` 等 | （通常无需改） |
-
-**Web UI（浏览器 `localStorage`，非服务端 env）：** `ICE_PLAN_PANEL=0` 隐藏任务图/计划面板。
-
-#### `.env` 参考模板（复制后按需删减）
-
-```bash
-# --- 数据路径 ---
-ICE_DATA_DIR=./data
-ICE_CONFIG_PATH=./data/config.json
-ICE_SESSIONS_DIR=./data/sessions
-ICE_MEMORY_DIR=./data/memory-files
-ICE_USER_MEMORY_DIR=./data/user-memory
-
-# --- 双模监管 ---
-ICE_SUPERVISOR_MODE=adaptive
-ICE_SUPERVISOR_SHADOW=0
-# ICE_SUPERVISOR_CONFIG_PATH=./data/supervisor-config.json
-
-# --- HTTP ---
-PORT=3784
-# NODE_ENV=production
-
-# --- LLM / 上下文 ---
-# ICE_CONTEXT_WINDOW=200000
-# ICE_OPENAI_REQUEST_TIMEOUT_MS=180000
-
-# --- Harness ---
-# ICE_HARNESS_MAX_ROUNDS=5000
-
-# --- 压缩 ---
-# ICE_COMPACTION_RATIO=0.88
-# ICE_MICRO_COMPACT_RATIO=0.72
-# ICE_COMPACTION_RESERVE_TOKENS=15000
-
-# --- 记忆 ---
-# ICE_STANDARD_RECALL_COOLDOWN_SEC=300
-# ICE_EXTRACTION_MAX_MESSAGES=80
-
-# --- 工具输出 ---
-# ICE_MAX_TOOL_OUTPUT_CHARS=24000
-
-# --- 子代理 ---
-# ICE_SUBAGENT_TIMEOUT_MS=120000
-# ICE_SUBAGENT_CACHE_MAX_ENTRIES=100
-
-# --- MCP ---
-# ICE_MCP_CONFIG_PATH=./.iceCoder/mcp.json
-# ICE_MCP_INIT_TIMEOUT_MS=120000
-
-# --- 隧道（可选）---
-# ICE_TUNNEL_METRICS_PORT=20241
-# TUNNEL_URL=https://xxx.trycloudflare.com
-# CLOUDFLARED_BIN=/path/to/cloudflared
-```
+共 **40+** 项进程变量；已移除的 `ICE_HARNESS_TOKEN_BUDGET`、`ICE_HARNESS_TIMEOUT_*` 等见文档 §7。浏览器端 `ICE_PLAN_PANEL=0`（`localStorage`）控制任务图面板显隐。
 
 ### 设计与架构文档（推荐阅读）
 
+- [`docs/环境变量.md`](./docs/环境变量.md) — **环境变量完整参考**（用途、合法取值、默认值）
+- [`docs/environment-variables.md`](./docs/environment-variables.md) — Environment variables (English)
 - [`docs/nextWork.md`](./docs/nextWork.md) — 当前路线图与 eval 缺口
 - [`docs/requirement/任务图规划-finish.md`](./docs/requirement/任务图规划-finish.md) — TaskGraph / StepGraph（核心已实现）
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — 旧 ETL（已由 TaskGraph 替代）

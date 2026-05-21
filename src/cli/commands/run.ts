@@ -52,6 +52,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
     const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
     const { supervisorConfig, globalPolicy, bridge: supervisorBridge } = await loadHarnessSupervisorRuntime({
       dataDir: ctx.paths.dataDir,
+      mainConfigPath: ctx.paths.configPath,
     });
 
     const harnessConfig: HarnessConfig = {

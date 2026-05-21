@@ -151,7 +151,7 @@ export class Harness {
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
-    // 调用方需要启用双模决策时，应显式传入 supervisorConfig 或设置 ICE_SUPERVISOR_MODE。
+    // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
     this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
     this.supervisorBridge = config.supervisorBridge;

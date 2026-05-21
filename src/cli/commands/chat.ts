@@ -194,6 +194,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   // F2: dual-mode 全局策略一次性加载，每次对话复用，避免每轮多读磁盘。
   const supervisorRuntime = await loadHarnessSupervisorRuntime({
     dataDir: ctx.paths.dataDir,
+    mainConfigPath: ctx.paths.configPath,
   });
 
   // 初始化记忆系统

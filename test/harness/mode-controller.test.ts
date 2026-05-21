@@ -52,10 +52,21 @@ describe('ModeController - Batch 1 global policy', () => {
     expect(policy.strictCapabilityBundle).toBe(true);
   });
 
-  it('uses ICE_SUPERVISOR_MODE and ICE_SUPERVISOR_SHADOW only in global policy resolution', () => {
+  it('ignores legacy env ICE_SUPERVISOR_MODE and uses config.mode only', () => {
     const policy = resolveGlobalPolicy(
       { ...defaultSupervisorConfig(), mode: 'off', shadow: false },
       { ICE_SUPERVISOR_MODE: 'adaptive', ICE_SUPERVISOR_SHADOW: '1' },
+    );
+
+    expect(policy.supervisorMode).toBe('off');
+    expect(policy.shadow).toBe(false);
+    expect(policy.executionModeFloor).toBe('free');
+  });
+
+  it('still honors ICE_SUPERVISOR_SHADOW at global policy resolution', () => {
+    const policy = resolveGlobalPolicy(
+      { ...defaultSupervisorConfig(), mode: 'adaptive', shadow: false },
+      { ICE_SUPERVISOR_SHADOW: '1' },
     );
 
     expect(policy.supervisorMode).toBe('adaptive');
@@ -88,16 +99,22 @@ describe('loadHarnessSupervisorRuntime - F2 entrypoint loader', () => {
     expect(globalPolicy.executionModeFloor).toBe('free');
   });
 
-  it('honors ICE_SUPERVISOR_MODE=off override even when disk says adaptive', async () => {
+  it('honors config.json supervisorMode=off over supervisor-config adaptive', async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-supervisor-load-'));
     await fs.writeFile(
       path.join(dataDir, 'supervisor-config.json'),
       JSON.stringify({ mode: 'adaptive' }),
       'utf-8',
     );
+    await fs.writeFile(
+      path.join(dataDir, 'config.json'),
+      JSON.stringify({ providers: [], supervisorMode: 'off' }),
+      'utf-8',
+    );
     const { globalPolicy } = await loadHarnessSupervisorRuntime({
       dataDir,
-      env: { ICE_SUPERVISOR_MODE: 'off' },
+      mainConfigPath: path.join(dataDir, 'config.json'),
+      env: {},
     });
 
     expect(globalPolicy.supervisorMode).toBe('off');
@@ -121,7 +138,7 @@ describe('loadHarnessSupervisorRuntime - F2 entrypoint loader', () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-supervisor-load-'));
     const { bridge, globalPolicy } = await loadHarnessSupervisorRuntime({
       dataDir,
-      env: { ICE_SUPERVISOR_MODE: 'adaptive' },
+      env: {},
       memoryOnly: true,
     });
 
