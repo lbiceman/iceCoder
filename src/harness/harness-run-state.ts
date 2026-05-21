@@ -2,6 +2,7 @@ import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
+import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type { TaskState } from './task-state.js';
 import type {
   ExecutionMode,
@@ -106,4 +107,10 @@ export interface HarnessRunState {
   filesChangedAtRoundStart?: number;
   /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
   branchSwitchedThisRound?: boolean;
+  /**
+   * L2-6 — Harness 主循环持有的 SupervisorRuntimeBridge 引用（off 时缺省）。
+   * `harness-resilience.buildSupervisorCheckpointState` 与 after-round 钩子读取本字段，
+   * 避免把 bridge 经各子模块依赖链层层传递。
+   */
+  supervisorBridge?: SupervisorRuntimeBridge;
 }

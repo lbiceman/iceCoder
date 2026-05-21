@@ -79,6 +79,26 @@ export class EventTimeline implements EventTimelineContract {
     return this.recentEvents.slice(-limit);
   }
 
+  /**
+   * L2-6 / T08 — checkpoint resume 时把磁盘上的 timeline 尾部 N 条事件推回内存 recent。
+   * 不写 sink（避免重复落 JSONL）；仅恢复 in-memory 视图，便于 UI 续显与回放对账。
+   */
+  restoreRecentEvents(events: readonly RuntimeEvent[] | undefined): void {
+    this.recentEvents.length = 0;
+    if (!events || events.length === 0) return;
+    for (const ev of events) {
+      this.recentEvents.push({
+        ts: ev.ts,
+        round: ev.round,
+        mode: ev.mode,
+        event: ev.event,
+        reason: ev.reason,
+        ...(ev.payload ? { payload: { ...ev.payload } } : {}),
+      });
+    }
+    this.trimRecentEvents();
+  }
+
   async flush(): Promise<void> {
     await this.sink.flush?.();
   }

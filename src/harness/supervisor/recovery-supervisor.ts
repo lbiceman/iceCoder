@@ -101,6 +101,23 @@ export class RecoverySupervisor implements RecoverySupervisorContract {
     return { ...this.snapshot };
   }
 
+  /**
+   * L2-6 / T08 — 由 `SupervisorRuntimeBridge.restoreFromCheckpoint` 调用，将持久化的
+   * phase + 计数推回内部状态机。snapshot 缺省时回到 INITIAL（'free'）。
+   */
+  restoreSnapshot(snapshot: Partial<RecoverySupervisorSnapshot> | undefined): void {
+    if (!snapshot) {
+      this.snapshot = { ...INITIAL_SNAPSHOT };
+      return;
+    }
+    this.snapshot = {
+      phase: snapshot.phase ?? INITIAL_SNAPSHOT.phase,
+      takeoverStartRound: snapshot.takeoverStartRound ?? INITIAL_SNAPSHOT.takeoverStartRound,
+      stableRoundsInTakeover: snapshot.stableRoundsInTakeover ?? INITIAL_SNAPSHOT.stableRoundsInTakeover,
+      cooldownRemaining: snapshot.cooldownRemaining ?? INITIAL_SNAPSHOT.cooldownRemaining,
+    };
+  }
+
   applyTakeover(ctx: TakeoverContext): void {
     ctx.correctionPort.inject(
       { kind: 'takeover', content: formatTakeoverMessage(ctx), preserveOnCompaction: true },

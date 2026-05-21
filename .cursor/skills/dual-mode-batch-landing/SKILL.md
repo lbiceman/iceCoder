@@ -1,0 +1,78 @@
+---
+name: 双模 L2 批次收口落地
+description: |
+  本项目「双模方案 V1.3.7」L1（Execution Mode）/ L2（Runtime Supervisor）的批次收口约定。
+  触发词：双模、supervisor、ExecutionMode、RecoverySupervisor、PassiveObserver、CorrectionPort、
+  RecoveryBoundary、composeGraphHint、firstRoundGraph、ICE_SUPERVISOR_MODE、L2-1 ~ L2-8、
+  双模落地缺口、双模方案2、附录 B、I1/I3/I4/I5/I6/I10、shadow 模式。
+---
+
+# 双模 L2 批次收口落地（SKILL）
+
+## 触发场景
+
+修改 `src/harness/supervisor/`、`src/harness/harness-tool-round.ts`、`src/harness/harness-round-prep.ts`、`src/harness/harness-resilience.ts`、`src/types/supervisor.ts`、`src/types/runtime-checkpoint.ts`，或问到「双模 / L2 / 接管 / RecoveryBoundary / composeGraphHint」时使用。
+
+## 关键文件
+
+| 路径 | 角色 |
+|------|------|
+| [`docs/双模方案2.md`](../../../docs/双模方案2.md) | 设计与接口**权威来源**（V1.3.7 冻结） |
+| [`docs/双模落地缺口.md`](../../../docs/双模落地缺口.md) | 开发排期 / 缺口对照 / §10 批次表 / §11 DoD |
+| [`docs/任务执行文档.md`](../../../docs/任务执行文档.md) | Batch 1–6 历史 / 6 场景验收 prompt |
+| [`docs/双模 L2 审计与优化清单.md`](../../../docs/双模%20L2%20审计与优化清单.md) | L2-8 后审计：P0/P1/P2/P3 优化项 + 文件设计 + 代码骨架 |
+
+## 公理（任何修改都不得违反）
+
+| 公理 | 含义 |
+|------|------|
+| **I1** | C 类纠偏写 `msgs` 必须过 `RecoveryBoundary.mayInjectCorrection` + `CorrectionPort`，禁止旁路 `msgs.push` |
+| **I3** | `adaptive` 关键 intent 第 1 轮**不** init TaskGraph（由 RecoverySupervisor 接管后 replaceGraph 重建）；strict 才 init |
+| **I4** | free 段 supervisor 的 recovery/graph_hint 受 `CorrectionBudget.freeSegmentMaxPerTask` 约束 |
+| **I5** | 仅 `execution-mode-constraints.ts` 写 `state.executionMode`；其它模块只 `submitModeSignal` |
+| **I6** | `ICE_SUPERVISOR_*` env 仅在 `mode-controller.ts` 解析；业务模块不读 |
+| **I10** | forced 退出前必须达到 `forcedMinDwellRounds` 个 task-bearing round |
+| **T09** | GraphExecutor / CheckpointEngine / StopHook / resilience 都**只** submitSignal |
+
+## 已落地批次速查
+
+| 批次 | 关键产出 | 主要文件 |
+|------|----------|----------|
+| L2-1 | EventTimeline + bridge 骨架 + shadow 写 timeline | `event-timeline.ts` / `supervisor-bridge.ts` |
+| L2-2 | PassiveObserver 收口 free 段 inject | `passive-observer.ts` / `harness-resilience.ts` 改造 |
+| L2-3 | RecoverySupervisor evaluate/applyTakeover/applyHandoff + phase 状态机 | `recovery-supervisor.ts` |
+| L2-4 | RecoveryBudgetManager + GoalDriftDetector + 手动触发 trigger | `recovery-budget-manager.ts` / `goal-drift-detector.ts` |
+| L2-5 | §10 主路径 M5→M6→M7→M8 + GraphExecutor.replaceGraph + §19.2 二级强提示 | `workspace-state-extractor.ts` / `snapshot-confidence-evaluator.ts` / `recovery-safety-checker.ts` / `retrospective-graph-builder.ts` |
+| L2-6 | §14.1 四钩子接入 + T08 checkpoint round-trip + T09 收口 + I4 CorrectionBudget | `correction-budget.ts` / `harness-tool-round.ts` / `harness.ts` |
+| L2-7 | RecoveryBoundary + composeGraphHint + shouldInitTaskGraphAtFirstRound | `recovery-boundary.ts` / bridge 扩展 / `harness-round-prep.ts` |
+| L2-8 | §11 DoD 全勾选 + off 回归 + 修订记录 | 缺口文档 |
+
+## 实施步骤（新增/修改 L2 时遵循）
+
+1. **先读规格**：对照 [`双模方案2.md`](../../../docs/双模方案2.md) 找到对应 § 节；
+2. **再读缺口文档**：确认所在批次 / DoD 项；
+3. **改代码**：
+   - 信号只 `submitModeSignal`（I5/T09），不直写 `executionMode`；
+   - C 类 inject 必经 `bridge.createCorrectionPort` → 自动挂 boundary + budget；
+   - graph hint 必经 `bridge.composeGraphHint`，禁止直接 `port.inject({ kind: 'graph_hint', ... })`；
+   - off 模式分支必须保留（`bridge.isActive()===false` 早退，行为与旧 Harness 一致）。
+4. **测试**：每改一处必须能找到对应 `test/harness/*.test.ts`；
+5. **跑回归**：
+   - `npx tsc --noEmit`
+   - `npm test`
+   - **`ICE_SUPERVISOR_MODE=off` 跑 harness/execution-mode-harness/execution-mode-acceptance 三套**（off 兼容验收）。
+6. **更新文档**：
+   - 缺口文档 §2 / §3 / §4 / §10 批次表 / §11 DoD / §14 修订记录；
+   - 审计清单 §1（如发现新不合理点） / §5 修订记录。
+
+## 反模式（必须避免）
+
+- ❌ 在 `harness-tool-round.ts` / `harness-resilience.ts` 直接 `msgs.push({ role: 'user', content: '[System] ...' })`：违反 I1 / §19.6，必须经 CorrectionPort。
+- ❌ 在子模块（GraphExecutor / CheckpointEngine / StopHook / resilience）写 `state.executionMode = 'forced'`：违反 I5 / T09，应 submitModeSignal。
+- ❌ 读 `process.env.ICE_SUPERVISOR_MODE`：违反 I6，应从 `globalPolicy.supervisorMode` / `strictCapabilityBundle` 读。
+- ❌ 在 `adaptive` 关键 intent 上首轮 `initGraph`：违反 I3，应经 `bridge.shouldInitTaskGraphAtFirstRound(intent)` 门禁。
+- ❌ 在 `MessageCorrectionPort` 外另起 port 写 takeover/recovery：绕过 boundary + budget，违反 I1 / I4。
+
+## 敏感信息
+
+本 skill 不含任何凭据 / token / 内部 URL；所有路径都是仓库内相对路径。

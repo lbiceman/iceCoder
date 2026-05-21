@@ -258,6 +258,8 @@ export async function resilienceSaveCheckpoint(
 export function buildSupervisorCheckpointState(
   state: HarnessRunState,
 ): RuntimeSupervisorCheckpointState {
+  const bridge = state.supervisorBridge;
+  const bridgeSnapshot = bridge?.isActive() ? bridge.snapshotForCheckpoint() : undefined;
   return {
     executionMode: state.executionMode ?? 'free',
     executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
@@ -268,5 +270,10 @@ export function buildSupervisorCheckpointState(
     lastModeDecision: state.lastModeDecision,
     pendingModeSignals: [...(state.pendingModeSignals ?? [])],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
+    // L2-6 / T08：bridge 持有的 phase / RecoverySupervisor snapshot / timeline tail / I4 budget。
+    supervisorPhase: bridgeSnapshot?.supervisorPhase ?? state.supervisorPhase ?? 'free',
+    recoverySupervisorSnapshot: bridgeSnapshot?.recoverySupervisorSnapshot,
+    timelineTail: bridgeSnapshot?.timelineTail,
+    correctionBudgetUsed: bridgeSnapshot?.correctionBudgetUsed ?? 0,
   };
 }

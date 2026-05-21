@@ -969,3 +969,491 @@ describe('SupervisorRuntimeBridge - L2-5 recovery main path', () => {
     expect(messages).toEqual([]);
   });
 });
+
+describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () => {
+  const criticalTask = {
+    goal: 'fix critical bug in login module',
+    intent: 'debug' as const,
+    domain: 'critical_debug' as const,
+    filesChanged: ['src/login.ts'],
+    filesRead: [] as string[],
+    commandsRun: [] as string[],
+    recentFailureCount: 3,
+    branchBudgetTriggers: 0,
+  };
+
+  function buildRound(round: number) {
+    return {
+      round,
+      toolNames: ['edit_file'],
+      toolSuccess: [false],
+      hadWriteTool: true,
+    };
+  }
+
+  it('createCorrectionPort: drops free-segment supervisor recovery once freeSegmentMaxPerTask is reached', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages);
+
+    port.inject(
+      { kind: 'recovery', content: '[Sys] first recovery' },
+      { phase: 'free', source: 'supervisor' },
+    );
+    port.inject(
+      { kind: 'recovery', content: '[Sys] second recovery (should be dropped)' },
+      { phase: 'free', source: 'supervisor' },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toContain('first recovery');
+
+    const budget = bridge.getCorrectionBudgetUsage();
+    expect(budget.used).toBe(1);
+    expect(budget.rejected).toBe(1);
+
+    const failureEvents = bridge.eventTimeline
+      .getRecentEvents()
+      .filter((e) => e.event === 'failure');
+    expect(failureEvents.some((e) => e.reason === 'correction_budget_exhausted:recovery')).toBe(true);
+  });
+
+  it('createCorrectionPort: takeover-phase recovery bypasses I4 budget (counted only on free)', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages);
+
+    for (let i = 0; i < 3; i++) {
+      port.inject(
+        { kind: 'recovery', content: `[Sys] takeover ${i}` },
+        { phase: 'takeover', source: 'supervisor' },
+      );
+    }
+
+    expect(messages).toHaveLength(3);
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(0);
+  });
+
+  it('createCorrectionPort: lifecycle source is not counted against the budget', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages);
+
+    port.inject(
+      { kind: 'recovery', content: '[Lifecycle] read-only nag' },
+      { phase: 'free', source: 'lifecycle' },
+    );
+    port.inject(
+      { kind: 'recovery', content: '[Supervisor] free recovery' },
+      { phase: 'free', source: 'supervisor' },
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(1);
+  });
+
+  it('createCorrectionPort: off mode keeps inject untouched (no budget enforcement)', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'off', correctionBudget: { freeSegmentMaxPerTask: 1 } },
+      { ICE_SUPERVISOR_MODE: 'off' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages);
+
+    port.inject(
+      { kind: 'recovery', content: 'msg1' },
+      { phase: 'free', source: 'supervisor' },
+    );
+    port.inject(
+      { kind: 'recovery', content: 'msg2' },
+      { phase: 'free', source: 'supervisor' },
+    );
+
+    // off：bridge.createCorrectionPort 退回普通 port，无 budget。
+    expect(messages).toHaveLength(2);
+    expect(bridge.getCorrectionBudgetUsage().rejected).toBe(0);
+  });
+
+  it('evaluateAfterRound returns fail{checkpoint} when recovery budget is exhausted', async () => {
+    const config = resolveSupervisorConfig(
+      {
+        mode: 'adaptive',
+        params: {
+          adaptiveTakeover: { maxRecoveryRounds: 1, recoveryTokenRatio: 0.5, maxRecoveryRetries: 1 },
+        },
+      },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+    // 注入异常信号让首轮进入 takeover。
+    bridge.passiveObserver.observe({
+      phase: 'free',
+      round: buildRound(1),
+      consecutiveToolFailures: 3,
+      consecutiveReadOnlyRounds: 0,
+      stableRoundsSinceLastFailure: 0,
+      allToolsFailedThisRound: true,
+      repeatedToolSignatures: ['edit_file:abc', 'edit_file:abc', 'edit_file:abc'],
+      maxFailedSignatureCount: 3,
+      branchRecoverTriggered: true,
+      task: criticalTask,
+    });
+
+    const first = await bridge.evaluateAfterRound({
+      round: buildRound(1),
+      task: criticalTask,
+      riskScore: 1,
+    });
+    expect(first.action).toBe('takeover');
+    expect(bridge.getSupervisorPhase()).toBe('takeover');
+
+    // 第二轮 takeover 段：再 tick 一次预算 → 超过 maxRecoveryRounds (=1)。
+    bridge.passiveObserver.observe({
+      phase: 'takeover',
+      round: buildRound(2),
+      consecutiveToolFailures: 4,
+      consecutiveReadOnlyRounds: 0,
+      stableRoundsSinceLastFailure: 0,
+      allToolsFailedThisRound: true,
+      repeatedToolSignatures: ['edit_file:abc'],
+      maxFailedSignatureCount: 4,
+      branchRecoverTriggered: true,
+      task: criticalTask,
+    });
+
+    const second = await bridge.evaluateAfterRound({
+      round: buildRound(2),
+      task: criticalTask,
+      riskScore: 1,
+    });
+    expect(second.action).toBe('fail');
+    if (second.action === 'fail') expect(second.kind).toBe('checkpoint');
+
+    const failureReasons = bridge.eventTimeline
+      .getRecentEvents()
+      .filter((e) => e.event === 'failure')
+      .map((e) => e.reason);
+    expect(failureReasons).toEqual(
+      expect.arrayContaining([expect.stringContaining('budget_exhausted')]),
+    );
+  });
+
+  it('snapshotForCheckpoint then restoreFromCheckpoint round-trips phase / timeline tail / budget', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 5 } },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+    // 推进 phase 到 takeover、写一条 switch 到 timeline、并消耗 2 次 budget。
+    bridge.recoverySupervisor.commit({
+      phase: 'takeover',
+      takeoverStartRound: 4,
+      stableRoundsInTakeover: 1,
+      cooldownRemaining: 0,
+    });
+    bridge.recordExecutionModeSwitch({ round: 4, from: 'free', to: 'forced', reason: 'pending_steps' });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages);
+    port.inject({ kind: 'recovery', content: 'a' }, { phase: 'free', source: 'supervisor' });
+    port.inject({ kind: 'recovery', content: 'b' }, { phase: 'free', source: 'supervisor' });
+
+    const snap = bridge.snapshotForCheckpoint();
+    expect(snap.supervisorPhase).toBe('takeover');
+    expect(snap.recoverySupervisorSnapshot?.takeoverStartRound).toBe(4);
+    expect(snap.correctionBudgetUsed).toBe(2);
+    expect(Array.isArray(snap.timelineTail)).toBe(true);
+    expect((snap.timelineTail ?? []).some((e) => e.event === 'switch')).toBe(true);
+
+    // 复位另一个 bridge，恢复后断言状态被推回。
+    const restored = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    expect(restored.getSupervisorPhase()).toBe('free');
+
+    restored.restoreFromCheckpoint({
+      executionMode: 'forced',
+      executionModeLockRemaining: 0,
+      executionModeEnteredBy: [],
+      executionModeEnteredAtRound: 4,
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 0,
+      supervisorPhase: snap.supervisorPhase,
+      recoverySupervisorSnapshot: snap.recoverySupervisorSnapshot,
+      timelineTail: snap.timelineTail,
+      correctionBudgetUsed: snap.correctionBudgetUsed,
+    });
+
+    expect(restored.getSupervisorPhase()).toBe('takeover');
+    expect(restored.recoverySupervisor.getSnapshot().takeoverStartRound).toBe(4);
+    expect(restored.getCorrectionBudgetUsage().used).toBe(2);
+
+    // 恢复时应额外写一条 checkpoint_resumed timeline 标记。
+    const resumedMarkers = restored.eventTimeline
+      .getRecentEvents()
+      .filter((e) => e.event === 'failure' && e.reason === 'checkpoint_resumed');
+    expect(resumedMarkers).toHaveLength(1);
+  });
+
+  it('restoreFromCheckpoint is a no-op when supervisor is off', () => {
+    const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    bridge.restoreFromCheckpoint({
+      executionMode: 'free',
+      executionModeLockRemaining: 0,
+      executionModeEnteredBy: [],
+      executionModeEnteredAtRound: null,
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 0,
+      supervisorPhase: 'takeover',
+      recoverySupervisorSnapshot: {
+        phase: 'takeover',
+        takeoverStartRound: 1,
+        stableRoundsInTakeover: 0,
+        cooldownRemaining: 0,
+      },
+      correctionBudgetUsed: 7,
+    });
+
+    expect(bridge.getSupervisorPhase()).toBe('free');
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(0);
+    expect(bridge.eventTimeline.getRecentEvents()).toEqual([]);
+  });
+
+  it('resetForNewTask wipes phase / observer / budget for the next task', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 1 } },
+      { ICE_SUPERVISOR_MODE: 'adaptive' },
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    bridge.recoverySupervisor.commit({
+      phase: 'takeover',
+      takeoverStartRound: 1,
+      stableRoundsInTakeover: 0,
+      cooldownRemaining: 0,
+    });
+    const messages: UnifiedMessage[] = [];
+    bridge.createCorrectionPort(messages).inject(
+      { kind: 'recovery', content: 'one' },
+      { phase: 'free', source: 'supervisor' },
+    );
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(1);
+
+    bridge.resetForNewTask();
+
+    expect(bridge.getSupervisorPhase()).toBe('free');
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(0);
+    expect(bridge.passiveObserver.getAccumulated()).toEqual([]);
+  });
+});
+
+describe('SupervisorRuntimeBridge - L2-7 (mode & gating)', () => {
+  describe('shouldInitTaskGraphAtFirstRound', () => {
+    it('off mode: backward compat — returns true for critical intents (= shouldUseTaskGraph)', () => {
+      const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+      expect(bridge.shouldInitTaskGraphAtFirstRound('edit')).toBe(true);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('refactor')).toBe(true);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('inspect')).toBe(false);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('question')).toBe(false);
+    });
+
+    it('adaptive mode: §I3 — critical intents do NOT init at round 1 (adaptiveFree.firstRoundGraph=false)', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'adaptive' },
+        { ICE_SUPERVISOR_MODE: 'adaptive' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+      expect(bridge.shouldInitTaskGraphAtFirstRound('edit')).toBe(false);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('refactor')).toBe(false);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('debug')).toBe(false);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('test')).toBe(false);
+      // 非关键 intent 一律 false（不论 mode）
+      expect(bridge.shouldInitTaskGraphAtFirstRound('inspect')).toBe(false);
+    });
+
+    it('strict mode: critical intents init at round 1 (strict.firstRoundGraph=true)', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'strict' },
+        { ICE_SUPERVISOR_MODE: 'strict' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+      expect(bridge.shouldInitTaskGraphAtFirstRound('edit')).toBe(true);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('refactor')).toBe(true);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('debug')).toBe(true);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('test')).toBe(true);
+      // 非关键 intent 仍 false（strict 也不强制为非关键域建图）
+      expect(bridge.shouldInitTaskGraphAtFirstRound('inspect')).toBe(false);
+      expect(bridge.shouldInitTaskGraphAtFirstRound('question')).toBe(false);
+    });
+
+    it('respects user override: strict can disable firstRoundGraph via config', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'strict', params: { strict: { firstRoundGraph: false } } },
+        { ICE_SUPERVISOR_MODE: 'strict' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+      expect(bridge.shouldInitTaskGraphAtFirstRound('edit')).toBe(false);
+    });
+  });
+
+  describe('composeGraphHint', () => {
+    it('drops graph hint in free mode (no inject / no timeline write)', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'adaptive' },
+        { ICE_SUPERVISOR_MODE: 'adaptive' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      const routing = bridge.composeGraphHint({
+        round: 2,
+        executionMode: 'free',
+        action: 'force_switch',
+        message: '[Graph] retry on fallback',
+        port,
+        phase: 'free',
+        reasonTag: 'evaluate_round',
+      });
+
+      expect(routing.injectToCorrectionPort).toBe(false);
+      expect(messages).toEqual([]);
+      const recover = bridge.eventTimeline.getRecentEvents().filter((e) => e.event === 'recover');
+      expect(recover).toEqual([]);
+    });
+
+    it('injects via CorrectionPort under forced mode and records `recover:graph_hint:*` timeline', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'adaptive' },
+        { ICE_SUPERVISOR_MODE: 'adaptive' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      const routing = bridge.composeGraphHint({
+        round: 5,
+        executionMode: 'forced',
+        action: 'inject_hint',
+        message: '[Graph] Use read_file before edit_file.',
+        port,
+        phase: 'takeover',
+        reasonTag: 'evaluate_round',
+      });
+
+      expect(routing.injectToCorrectionPort).toBe(true);
+      expect(messages).toEqual([
+        { role: 'user', content: '[Graph] Use read_file before edit_file.' },
+      ]);
+      const recover = bridge.eventTimeline.getRecentEvents().filter((e) => e.event === 'recover');
+      expect(recover).toHaveLength(1);
+      expect(recover[0]?.reason).toBe('graph_hint:evaluate_round');
+    });
+
+    it('strict-style mapping: warn action is treated as inject_hint when forced', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'strict' },
+        { ICE_SUPERVISOR_MODE: 'strict' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      const routing = bridge.composeGraphHint({
+        round: 1,
+        executionMode: 'forced',
+        action: 'warn',
+        message: '[Graph] edit_file outside current step',
+        port,
+        phase: 'free',
+        reasonTag: 'forced_step_warn',
+      });
+
+      expect(routing.injectToCorrectionPort).toBe(true);
+      expect(messages).toHaveLength(1);
+      const recover = bridge.eventTimeline.getRecentEvents().filter((e) => e.event === 'recover');
+      expect(recover[0]?.reason).toBe('graph_hint:forced_step_warn');
+    });
+
+    it('no message → no inject and no timeline write', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'adaptive' },
+        { ICE_SUPERVISOR_MODE: 'adaptive' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      const routing = bridge.composeGraphHint({
+        round: 1,
+        executionMode: 'forced',
+        action: 'none',
+        message: undefined,
+        port,
+        phase: 'free',
+        reasonTag: 'evaluate_round',
+      });
+
+      expect(routing).toEqual({ injectToCorrectionPort: false, emitTelemetry: false });
+      expect(messages).toEqual([]);
+    });
+  });
+
+  describe('createCorrectionPort wires RecoveryBoundary', () => {
+    it('writes a `failure:recovery_boundary_rejected:*` timeline when boundary rejects', () => {
+      const config = resolveSupervisorConfig(
+        { mode: 'adaptive' },
+        { ICE_SUPERVISOR_MODE: 'adaptive' },
+      );
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      // free + supervisor + takeover-block → boundary 拒绝
+      port.inject(
+        { kind: 'takeover', content: 'should be dropped by boundary' },
+        { phase: 'free', source: 'supervisor' },
+      );
+
+      expect(messages).toEqual([]);
+      const failures = bridge.eventTimeline
+        .getRecentEvents()
+        .filter((e) => e.event === 'failure' && e.reason.startsWith('recovery_boundary_rejected:'));
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.reason).toBe('recovery_boundary_rejected:free_phase_rejects_takeover_block');
+    });
+
+    it('off mode: boundary not attached, legacy shouldSuppress still drops free+takeover', () => {
+      const config = resolveSupervisorConfig({ mode: 'off' }, { ICE_SUPERVISOR_MODE: 'off' });
+      const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+      const messages: UnifiedMessage[] = [];
+      const port = bridge.createCorrectionPort(messages);
+
+      port.inject(
+        { kind: 'takeover', content: 'legacy dropped' },
+        { phase: 'free', source: 'supervisor' },
+      );
+
+      expect(messages).toEqual([]);
+      // off：boundary 不挂，不会写 recovery_boundary_rejected timeline
+      expect(bridge.eventTimeline.getRecentEvents()).toEqual([]);
+    });
+  });
+});

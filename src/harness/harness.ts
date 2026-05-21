@@ -117,6 +117,12 @@ export class Harness {
   private supervisorBridge?: SupervisorRuntimeBridge;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
+  /**
+   * L2-6 — 最近一次 before-LLM evaluate 阶段算出的 risk score（0..1）。
+   * after-round 钩子 `bridge.evaluateAfterRound` 复用，避免在 tool-round 重复计算。
+   * 默认 0.5（中性），adaptive.riskThreshold 默认 0.6 不直接候选。
+   */
+  private lastRiskScore = 0.5;
 
   constructor(
     config: HarnessConfig,
@@ -198,6 +204,7 @@ export class Harness {
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
       supervisorBridge: this.supervisorBridge,
       supervisorObserverSuppressInject: shouldSuppressObserverInject(this.globalPolicy),
+      supervisorRiskScoreProvider: () => this.lastRiskScore,
       abortSignal: this.abortSignal,
     };
   }
@@ -264,6 +271,9 @@ export class Harness {
       branchSwitchedThisRound: !!state.branchSwitchedThisRound,
     });
     const riskLevel = this.taskRiskClassifier.classify(runtimeState);
+    // L2-6：把 TaskRiskLevel 映射为 [0,1] riskScore（adaptive.riskThreshold 默认 0.6，
+    //        L2 → 0.7 跨阈，L1 → 0.5 不跨阈，L0 → 0.2）。after-round 钩子复用。
+    this.lastRiskScore = riskScoreFromLevel(riskLevel);
     const ctx = buildModeDecisionContext({
       round,
       executionMode: state.executionMode ?? policy.executionModeFloor,
@@ -349,6 +359,9 @@ export class Harness {
     // W1: Harness 实例可被复用（cli/web）；清空上一次 run 残留的未消费信号，
     // 避免熔断/abort/max_rounds 终止后引擎 submittedSignals 跨 run 泄漏。
     this.modeDecisionEngine.resetSubmittedSignals();
+    // L2-6：新任务边界 — 复位 observer/drift/budget/RecoverySupervisor phase，
+    //       否则前一任务残留信号会让本任务首轮直接进入 takeover 候选。
+    this.supervisorBridge?.resetForNewTask();
 
     let messages: UnifiedMessage[];
     const messageContent = userContentBlocks ?? userMessage;
@@ -412,6 +425,8 @@ export class Harness {
       stableRoundsSinceLastFailure: 0,
       filesChangedAtRoundStart: 0,
       branchSwitchedThisRound: false,
+      // L2-6：让 resilience save 与 after-round 钩子能通过 state 访问 bridge，无需再串依赖链。
+      supervisorBridge: this.supervisorBridge,
     };
     state.submitModeSignal = (source, signal, payload) => this.submitModeSignal(state, source, signal, payload);
     syncExecutionModeLoopState(this.loopController, state);
@@ -441,6 +456,10 @@ export class Harness {
             state.forcedDegradedTier = supervisor.forcedDegradedTier;
             state.forcedTaskBearingRoundsSinceEntry = supervisor.forcedTaskBearingRoundsSinceEntry ?? 0;
             state.lastModeDecision = supervisor.lastModeDecision;
+            // L2-6 / T08：把 supervisorPhase + RecoverySupervisor 内部快照 + timeline tail + I4 budget
+            //              推回 bridge；bridge 自身会写 `failure:checkpoint_resumed` timeline 标记。
+            state.supervisorPhase = supervisor.supervisorPhase ?? state.supervisorPhase ?? 'free';
+            this.supervisorBridge?.restoreFromCheckpoint(supervisor);
           }
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
           const pending = this.checkpointEngine.pendingRecoverySignals();
@@ -586,4 +605,26 @@ export class Harness {
 export function shouldSuppressObserverInject(policy: GlobalModePolicy | undefined): boolean {
   if (!policy) return false;
   return policy.observerEnabled && policy.recoverySupervisorEnabled;
+}
+
+/**
+ * L2-6 — TaskRiskLevel → [0,1] 启发式映射。
+ *
+ * 与 `SupervisorParams.adaptiveFree.riskThreshold`（默认 0.6）相对：
+ *   - L0_observation → 0.2（远低于阈值）
+ *   - L1_minor_edit  → 0.5（贴近但低于阈值）
+ *   - L2_structural  → 0.7（跨阈值，成为候选）
+ *
+ * V2 可由 RiskEvaluator 用更细致权重替换；本映射只是 V1 启发式占位。
+ */
+function riskScoreFromLevel(level: ReturnType<TaskRiskClassifier['classify']>): number {
+  switch (level) {
+    case 'L2_structural':
+      return 0.7;
+    case 'L1_minor_edit':
+      return 0.5;
+    case 'L0_observation':
+    default:
+      return 0.2;
+  }
 }

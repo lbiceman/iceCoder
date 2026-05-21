@@ -29,6 +29,7 @@ import {
   markForcedDegraded,
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
+import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -40,6 +41,8 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   memoryIntegration: HarnessMemoryIntegration;
   graphExecutor: GraphExecutor;
   runtimeTelemetry?: RuntimeTelemetry;
+  /** L2-7 — strict 首轮 `task_graph_init` 门禁经此 bridge 判定；缺省回退 `shouldUseTaskGraph`。 */
+  supervisorBridge?: SupervisorRuntimeBridge;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -104,7 +107,16 @@ export async function prepareHarnessRound(
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
-    if (shouldUseTaskGraph(taskSnapshot.intent)) {
+    // L2-7 / §I3 — 首轮 init 门禁：
+    //   - bridge 活跃 (adaptive/strict)：由 `shouldInitTaskGraphAtFirstRound` 按 firstRoundGraph 判定；
+    //     · adaptive: false（首轮**不**init，由 RecoverySupervisor 接管后 replaceGraph 重建）；
+    //     · strict:   true（关键域第 1 轮 initGraph）；
+    //   - bridge 不存在 / off：保留历史行为 — 等同 `shouldUseTaskGraph(intent)`，避免回归
+    //     掉 cli/web 入口"关键 intent 首轮看见任务图"的体验。
+    const shouldInit = deps.supervisorBridge
+      ? deps.supervisorBridge.shouldInitTaskGraphAtFirstRound(taskSnapshot.intent)
+      : shouldUseTaskGraph(taskSnapshot.intent);
+    if (shouldInit) {
       try {
         deps.graphExecutor.initGraph({
           goal: taskSnapshot.goal || userMessage,

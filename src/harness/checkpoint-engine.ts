@@ -462,5 +462,17 @@ function cloneSupervisorState(
     pendingModeSignals: [...(state.pendingModeSignals ?? defaults.pendingModeSignals)],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry
       ?? defaults.forcedTaskBearingRoundsSinceEntry,
+    // L2-6 / T08：Supervisor phase + snapshot + timeline tail + I4 budget。
+    supervisorPhase: state.supervisorPhase ?? defaults.supervisorPhase,
+    recoverySupervisorSnapshot: state.recoverySupervisorSnapshot
+      ? { ...state.recoverySupervisorSnapshot }
+      : undefined,
+    timelineTail: state.timelineTail
+      ? state.timelineTail.map(ev => ({
+        ...ev,
+        ...(ev.payload ? { payload: { ...ev.payload } } : {}),
+      }))
+      : undefined,
+    correctionBudgetUsed: state.correctionBudgetUsed ?? defaults.correctionBudgetUsed,
   };
 }

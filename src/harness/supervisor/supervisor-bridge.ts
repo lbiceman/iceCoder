@@ -1,5 +1,6 @@
 import type { UnifiedMessage } from '../../llm/types.js';
 import type { TaskGraph as TaskGraphData } from '../../types/task-graph.js';
+import type { TaskIntent } from '../../types/runtime-snapshot.js';
 import type {
   CorrectionPort,
   DeviationSignal,
@@ -14,13 +15,20 @@ import type {
   TaskContext,
   WorkspaceSnapshot,
 } from '../../types/supervisor.js';
-import type { GraphExecutor } from '../task-graph-executor.js';
+import type { RuntimeSupervisorCheckpointState } from '../../types/runtime-checkpoint.js';
+import type { GraphExecutor, RoundEvalResult } from '../task-graph-executor.js';
+import { shouldUseTaskGraph } from '../task-graph-config.js';
+import {
+  CorrectionBudgetTracker,
+  type CorrectionBudgetUsage,
+} from './correction-budget.js';
 import { MessageCorrectionPort } from './correction-port.js';
 import { EventTimeline, type EventTimelineOptions } from './event-timeline.js';
 import {
   GoalDriftDetector,
   type GoalDriftEvaluateInput,
 } from './goal-drift-detector.js';
+import { decideGraphHintRouting, type GraphHintRoutingDecision } from './graph-hint-routing.js';
 import {
   formatDeviationSignalReason,
   PassiveObserver,
@@ -31,6 +39,7 @@ import {
   RecoveryBudgetManager,
   type RecoveryBudgetExhaustionReason,
 } from './recovery-budget-manager.js';
+import { RecoveryBoundary } from './recovery-boundary.js';
 import { RecoverySupervisor } from './recovery-supervisor.js';
 import {
   RecoverySafetyChecker,
@@ -143,6 +152,10 @@ export class SupervisorRuntimeBridge {
   readonly snapshotConfidenceEvaluator: SnapshotConfidenceEvaluator;
   readonly recoverySafetyChecker: RecoverySafetyChecker;
   readonly retrospectiveGraphBuilder: RetrospectiveGraphBuilder;
+  /** §2.6 I4 — free 段 C 类 inject 预算；通过 `createCorrectionPort` 注入到 MessageCorrectionPort。 */
+  readonly correctionBudget: CorrectionBudgetTracker;
+  /** §11 / §19.6 — phase × source × kind 单一硬门禁；createCorrectionPort 时注入到 port。 */
+  readonly recoveryBoundary: RecoveryBoundary;
 
   constructor(config: ResolvedSupervisorConfig, options: SupervisorRuntimeBridgeOptions = {}) {
     this.config = config;
@@ -156,11 +169,199 @@ export class SupervisorRuntimeBridge {
     this.snapshotConfidenceEvaluator = new SnapshotConfidenceEvaluator(config.snapshotConfidence);
     this.recoverySafetyChecker = new RecoverySafetyChecker();
     this.retrospectiveGraphBuilder = new RetrospectiveGraphBuilder();
+    this.correctionBudget = new CorrectionBudgetTracker(config.correctionBudget);
+    this.recoveryBoundary = new RecoveryBoundary();
+  }
+
+  /**
+   * L2-6 / §14.0 — 创建附带 I4 budget 与 §11 RecoveryBoundary 的 CorrectionPort。
+   * Harness 主循环与 bridge 自身（dispatchSideEffects / handleFallback）应统一使用本工厂，
+   * 避免散落构造未挂 budget / boundary 的 MessageCorrectionPort。
+   *
+   * - off 模式：返回不带 budget 的端口（兼容历史 free 段提示），boundary 仍接入以保 §19.6 兼容；
+   * - shadow 模式：仍带 budget（shadow 评估必须能观察 I4 是否会触发）。
+   */
+  createCorrectionPort(messages: UnifiedMessage[]): CorrectionPort {
+    if (!this.isActive()) {
+      // off：保持历史 W7 抑制（free 段 supervisor takeover 类 drop），不挂 boundary/budget。
+      return new MessageCorrectionPort(messages);
+    }
+    return new MessageCorrectionPort(messages, {
+      budget: this.correctionBudget,
+      recoveryBoundary: this.recoveryBoundary,
+      onBudgetRejected: ({ block, ctx }) => {
+        this.eventTimeline.recordTyped('failure', {
+          round: -1,
+          mode: this.globalPolicy.supervisorMode,
+          reason: `correction_budget_exhausted:${block.kind}`,
+          payload: {
+            phase: ctx.phase,
+            source: ctx.source,
+            budget: this.correctionBudget.snapshot(),
+          },
+        });
+      },
+      onBoundaryRejected: ({ block, ctx, reason }) => {
+        this.eventTimeline.recordTyped('failure', {
+          round: -1,
+          mode: this.globalPolicy.supervisorMode,
+          reason: `recovery_boundary_rejected:${reason}`,
+          payload: {
+            phase: ctx.phase,
+            source: ctx.source,
+            kind: block.kind,
+          },
+        });
+      },
+    });
+  }
+
+  /** L2-6 / I4 — 预算用量；供 telemetry / checkpoint 持久化使用。 */
+  getCorrectionBudgetUsage(): CorrectionBudgetUsage {
+    return this.correctionBudget.snapshot();
+  }
+
+  /** L2-6 — 新任务边界：复位 observer/drift/budget；Harness `run()` 入口调用。 */
+  resetForNewTask(): void {
+    this.passiveObserver.reset();
+    this.goalDriftDetector.reset();
+    this.recoveryBudgetManager.reset();
+    this.correctionBudget.reset();
+    this.recoverySupervisor.restoreSnapshot(undefined);
+  }
+
+  /**
+   * L2-6 / T08 — 把 supervisor 关键运行时状态打包成 checkpoint 子集，
+   * 与 harness-resilience `buildSupervisorCheckpointState` 合并后写入 v2。
+   *
+   * 仅返回 Bridge 拥有的字段：supervisorPhase / recoverySupervisorSnapshot / timelineTail /
+   * correctionBudgetUsed；executionMode 等仍由 HarnessRunState 提供。
+   */
+  snapshotForCheckpoint(): Pick<
+    RuntimeSupervisorCheckpointState,
+    'supervisorPhase' | 'recoverySupervisorSnapshot' | 'timelineTail' | 'correctionBudgetUsed'
+  > {
+    const phase = this.getSupervisorPhase();
+    const recoverySnapshot = this.recoverySupervisor.getSnapshot();
+    const recent = this.eventTimeline.getRecentEvents();
+    return {
+      supervisorPhase: phase,
+      recoverySupervisorSnapshot: { ...recoverySnapshot },
+      timelineTail: recent.length > 0 ? recent.map(ev => ({
+        ...ev,
+        ...(ev.payload ? { payload: { ...ev.payload } } : {}),
+      })) : undefined,
+      correctionBudgetUsed: this.correctionBudget.snapshot().used,
+    };
+  }
+
+  /**
+   * L2-6 / T08 — checkpoint 恢复时由 Harness 调用。
+   *
+   * 行为：
+   *   - 把 phase + RecoverySupervisor snapshot 推回内部状态机；
+   *   - 把 timeline tail 推回 in-memory recent buffer（不写 sink，避免重复落 JSONL）；
+   *   - 把 free 段 CorrectionBudget 计数推回，避免重启绕过 I4 上限；
+   *   - 写一条 `failure:checkpoint_resumed` timeline 作为可观测标记
+   *     （ModeDecisionEngine 的 `checkpoint_resumed` signal 由 Harness 单独 submit）。
+   *
+   * off 模式静默；shadow 模式按 non-shadow 完整恢复。
+   */
+  restoreFromCheckpoint(state: RuntimeSupervisorCheckpointState | undefined): void {
+    if (!this.isActive() || !state) return;
+
+    this.recoverySupervisor.restoreSnapshot(state.recoverySupervisorSnapshot ?? {
+      phase: state.supervisorPhase,
+    });
+    this.eventTimeline.restoreRecentEvents(state.timelineTail);
+    this.correctionBudget.restoreUsed(state.correctionBudgetUsed ?? 0);
+
+    this.eventTimeline.recordTyped('failure', {
+      round: -1,
+      mode: this.globalPolicy.supervisorMode,
+      reason: 'checkpoint_resumed',
+      payload: {
+        phase: this.getSupervisorPhase(),
+        budgetUsed: this.correctionBudget.snapshot().used,
+      },
+    });
   }
 
   /** off 模式早退：不写入 timeline、不跑 L2 钩子副作用。 */
   isActive(): boolean {
     return this.globalPolicy.recoverySupervisorEnabled;
+  }
+
+  /**
+   * L2-7 — strict 首轮 `task_graph_init` 端到端门禁。
+   *
+   * §I3 / §17：
+   *   - **strict**：`strict.firstRoundGraph=true`（关键域第 1 轮 initGraph，强制）；
+   *   - **adaptive**：`adaptiveFree.firstRoundGraph=false`（关键域**不**首轮 init，由
+   *     RecoverySupervisor 在 takeover 后经 `replaceGraph` 重建）；
+   *   - **off**：保留历史行为 — 等同 `shouldUseTaskGraph(intent)`，避免 cli/web 入口
+   *     默认配置回归掉「关键 intent 第 1 轮看到任务图」的旧体验。
+   *
+   * 实际是否 init 还要由 `shouldUseTaskGraph(intent)` 做关键域过滤；本方法返回 true 只表示
+   * 「按当前模式合规」。
+   */
+  shouldInitTaskGraphAtFirstRound(intent: TaskIntent): boolean {
+    const criticalDomain = shouldUseTaskGraph(intent);
+    if (!criticalDomain) return false;
+
+    if (!this.isActive()) {
+      return true;
+    }
+
+    if (this.globalPolicy.strictCapabilityBundle) {
+      return this.config.params.strict.firstRoundGraph;
+    }
+    return this.config.params.adaptiveFree.firstRoundGraph;
+  }
+
+  /**
+   * L2-7 / §14.0 / §19.6 — Graph hint 唯一收口。
+   *
+   * 调用方（`harness-tool-round` step warn、step block、evaluateRound force_switch）
+   * 都应经此方法，禁止直接 `port.inject({ kind: 'graph_hint', ... })`：
+   *   - 内部按 `decideGraphHintRouting` 决定 free 段是否 drop；
+   *   - 走 inject 时 `kind='graph_hint'`、`source='supervisor'`、phase 来自调用方；
+   *   - 走 inject 时同步落一条 `recover` 类 timeline（off 段不落、shadow 仍落，便于审计）。
+   *
+   * 返回 routing 决策，供调用方决定是否额外发 telemetry。
+   */
+  composeGraphHint(args: {
+    round: number;
+    executionMode: ExecutionMode;
+    action: RoundEvalResult['action'] | 'warn' | 'block';
+    message: string | undefined;
+    port: CorrectionPort;
+    phase: SupervisorPhase;
+    /** 便于 timeline 反查触发点：'evaluate_round' / 'forced_step_warn' / 'forced_step_block'。 */
+    reasonTag: string;
+  }): GraphHintRoutingDecision {
+    const routing = decideGraphHintRouting({
+      executionMode: args.executionMode,
+      action: routingActionFromRoundOrGate(args.action),
+      message: args.message,
+    });
+
+    if (routing.injectToCorrectionPort && args.message) {
+      args.port.inject(
+        { kind: 'graph_hint', content: args.message },
+        { phase: args.phase, source: 'supervisor' },
+      );
+      if (this.isActive()) {
+        this.eventTimeline.recordTyped('recover', {
+          round: args.round,
+          mode: this.globalPolicy.supervisorMode,
+          reason: `graph_hint:${args.reasonTag}`,
+          payload: { action: args.action, phase: args.phase },
+        });
+      }
+    }
+
+    return routing;
   }
 
   /** 监管层当前相位；off 永远返回 'free'。 */
@@ -207,7 +408,7 @@ export class SupervisorRuntimeBridge {
     });
 
     const port = params.correctionPort
-      ?? (params.messages ? new MessageCorrectionPort(params.messages) : undefined);
+      ?? (params.messages ? this.createCorrectionPort(params.messages) : undefined);
     port?.inject(
       { kind: 'shadow_diagnostic', content: `[Shadow] Would takeover: ${params.reason}` },
       { phase: params.phase, source: 'supervisor' },
@@ -525,7 +726,7 @@ export class SupervisorRuntimeBridge {
   private dispatchSideEffects(decision: SupervisorDecision, ctx: EvaluateAfterRoundContext): void {
     if (decision.action !== 'takeover' && decision.action !== 'handoff') return;
 
-    const port = resolveCorrectionPort(ctx);
+    const port = resolveCorrectionPort(this, ctx);
     if (!port) return;
 
     if (decision.action === 'takeover') {
@@ -632,7 +833,7 @@ export class SupervisorRuntimeBridge {
 
     if (!shadow) {
       const port = ctx.correctionPort
-        ?? (ctx.messages ? new MessageCorrectionPort(ctx.messages) : undefined);
+        ?? (ctx.messages ? this.createCorrectionPort(ctx.messages) : undefined);
       port?.inject(
         {
           kind: 'recovery',
@@ -732,9 +933,12 @@ function mergeSignals(
   return [...base, ...extra];
 }
 
-function resolveCorrectionPort(ctx: EvaluateAfterRoundContext): CorrectionPort | undefined {
+function resolveCorrectionPort(
+  bridge: SupervisorRuntimeBridge,
+  ctx: EvaluateAfterRoundContext,
+): CorrectionPort | undefined {
   if (ctx.correctionPort) return ctx.correctionPort;
-  if (ctx.messages) return new MessageCorrectionPort(ctx.messages);
+  if (ctx.messages) return bridge.createCorrectionPort(ctx.messages);
   return undefined;
 }
 
@@ -765,6 +969,22 @@ function formatFallbackReason(
     case 'no_executor':
       return 'no_executor';
   }
+}
+
+/**
+ * L2-7 composeGraphHint 入参支持两类调用方：
+ *   - GraphExecutor.evaluateRound 返回的 `RoundEvalResult.action`（'none'/'inject_hint'/'block'/'force_switch'）
+ *   - buildGateContext 内 step warn / block 直接传 'warn'/'block'
+ *
+ * `decideGraphHintRouting` 实际只关心是否有 message + executionMode；action 仅用于 telemetry。
+ * 这里做一次保守归一化，让 routing 输入类型对齐。
+ */
+function routingActionFromRoundOrGate(
+  action: RoundEvalResult['action'] | 'warn' | 'block',
+): RoundEvalResult['action'] {
+  if (action === 'warn') return 'inject_hint';
+  if (action === 'block') return 'block';
+  return action;
 }
 
 function formatStrongHintMessage(

@@ -22,7 +22,8 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
-import type { ExecutionModeConfig, GateContext, TaskContext } from '../types/supervisor.js';
+import type { TokenBudgetTracker } from './token-budget.js';
+import type { CorrectionPort, ExecutionModeConfig, GateContext, TaskContext, TaskRiskLevel } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
   markForcedDegraded,
@@ -32,7 +33,8 @@ import {
 import { MessageCorrectionPort } from './supervisor/correction-port.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
-import { decideGraphHintRouting } from './supervisor/graph-hint-routing.js';
+import { decideGraphHintRouting, type GraphHintRoutingDecision } from './supervisor/graph-hint-routing.js';
+import type { RoundEvalResult } from './task-graph-executor.js';
 import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import {
   maxFailedSignatureCount,
@@ -53,6 +55,16 @@ export interface ToolRoundDeps extends ToolExecutorDeps, CheckpointDeps, Resilie
   executionModeConfig?: ExecutionModeConfig;
   executionModeDecisionEnabled?: boolean;
   supervisorBridge?: SupervisorRuntimeBridge;
+  /**
+   * L2-6 — Harness 主循环侧 RiskClassifier 结果回放器。
+   *
+   * 实现挂在 Harness 上：将 before-LLM 已经算过的 TaskRiskLevel 映射到 0..1 的 riskScore（与
+   * §8.10 / `adaptiveFree.riskThreshold` 同标尺），供 bridge.evaluateAfterRound 复用，避免在
+   * after-round 再算一次。缺省时退回 0.5 中性值（adaptive 默认阈值 0.6，不直接进入候选）。
+   */
+  supervisorRiskScoreProvider?: () => number;
+  /** L2-6 — 任务级 token 总预算，用于 `RecoveryBudgetManager.recordTokenUsage`。 */
+  tokenBudgetTracker?: TokenBudgetTracker;
   abortSignal?: AbortSignal;
 }
 
@@ -120,7 +132,11 @@ export async function runHarnessToolRound(
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
 
-  const correctionPort = new MessageCorrectionPort(msgs);
+  // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
+  //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
+  const correctionPort: CorrectionPort = deps.supervisorBridge?.isActive()
+    ? deps.supervisorBridge.createCorrectionPort(msgs)
+    : new MessageCorrectionPort(msgs);
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
   const gateContext = buildGateContext(deps.graphExecutor, response.toolCalls!, state);
   const gateResult = executeToolCallsThroughGate({
@@ -139,17 +155,27 @@ export async function runHarnessToolRound(
       deps.graphExecutor.checkToolCall(tc.name, { track: true });
       const hint = gateContext.graphHints.find(h => h.toolName === tc.name);
       if (hint?.action === 'warn' && hint.message) {
-        correctionPort.inject(
-          { kind: 'graph_hint', content: hint.message },
-          { phase: gateContext.phase, source: 'supervisor' },
-        );
+        composeGraphHint(deps, {
+          round,
+          executionMode: gateContext.executionMode,
+          action: 'warn',
+          message: hint.message,
+          port: correctionPort,
+          phase: gateContext.phase,
+          reasonTag: 'forced_step_warn',
+        });
       }
     }
     if (executableToolCalls.length === 0 && response.toolCalls?.length) {
-      correctionPort.inject(
-        { kind: 'graph_hint', content: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.' },
-        { phase: gateContext.phase, source: 'supervisor' },
-      );
+      composeGraphHint(deps, {
+        round,
+        executionMode: gateContext.executionMode,
+        action: 'block',
+        message: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.',
+        port: correctionPort,
+        phase: gateContext.phase,
+        reasonTag: 'forced_step_block',
+      });
     }
   }
 
@@ -330,22 +356,20 @@ export async function runHarnessToolRound(
       deps.graphExecutor.recordToolResult(tc.name, success);
     }
     const evalResult = deps.graphExecutor.evaluateRound(executableToolCalls.length);
-    const routing = decideGraphHintRouting({
+    const routing = composeGraphHint(deps, {
+      round,
       executionMode: gateContext.executionMode,
       action: evalResult.action,
       message: evalResult.message,
+      port: correctionPort,
+      phase: state.supervisorPhase ?? 'free',
+      reasonTag: 'evaluate_round',
     });
     if (evalResult.action === 'force_switch') {
       evalForceSwitchTriggered = true;
       if (routing.emitTelemetry) {
         onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
       }
-    }
-    if (routing.injectToCorrectionPort && evalResult.message) {
-      correctionPort.inject(
-        { kind: 'graph_hint', content: evalResult.message },
-        { phase: state.supervisorPhase ?? 'free', source: 'supervisor' },
-      );
     }
   }
   const graphSnapshotAfter = deps.graphExecutor?.toSnapshot();
@@ -408,14 +432,17 @@ export async function runHarnessToolRound(
 
   const allToolsFailedThisRound = toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount;
   if (deps.supervisorBridge?.isActive()) {
+    const taskContext = buildTaskContextForObserver(state, branchRecoverDecision?.triggered === true);
+    const runtimeRound = {
+      round,
+      toolNames: executableToolCalls.map(tc => tc.name),
+      toolSuccess: executableToolCalls.map(tc => !toolStats.failedSignatures.includes(toolCallSignature(tc))),
+      hadWriteTool: executableToolCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)),
+    };
+
     deps.supervisorBridge.observeAfterTools({
       phase: state.supervisorPhase ?? 'free',
-      round: {
-        round,
-        toolNames: executableToolCalls.map(tc => tc.name),
-        toolSuccess: executableToolCalls.map(tc => !toolStats.failedSignatures.includes(toolCallSignature(tc))),
-        hadWriteTool: executableToolCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)),
-      },
+      round: runtimeRound,
       consecutiveToolFailures: state.consecutiveToolFailures,
       consecutiveReadOnlyRounds: state.consecutiveReadOnlyRounds,
       stableRoundsSinceLastFailure: state.stableRoundsSinceLastFailure ?? 0,
@@ -424,8 +451,40 @@ export async function runHarnessToolRound(
       maxFailedSignatureCount: maxFailedSignatureCount(state.failedToolCallSignatures),
       topFileEdit: topFileEditFromBranchBudget(state.branchBudget),
       branchRecoverTriggered: branchRecoverDecision?.triggered === true,
-      task: buildTaskContextForObserver(state, branchRecoverDecision?.triggered === true),
+      task: taskContext,
+      lastAssistantText: typeof response.content === 'string' ? response.content : undefined,
     });
+
+    // L2-6 §14.1 — after round：调用 bridge.evaluateAfterRound 推进 RecoverySupervisor 相位机。
+    //              shadow 段内部已做 phase 拦截，只写 timeline；off 段早退。
+    //              fail{checkpoint} → 升级为 Harness `user_checkpoint` 停止。
+    const decision = await deps.supervisorBridge.evaluateAfterRound({
+      round: runtimeRound,
+      task: taskContext,
+      riskScore: deps.supervisorRiskScoreProvider?.() ?? 0.5,
+      correctionPort,
+      tokenUsage: { used: tokenUsage.output, total: deps.tokenBudgetTracker?.getTotalBudget?.() ?? 0 },
+    });
+
+    // 同步 phase 到 HarnessRunState；后续 ToolGate / Resilience inject 都按新 phase 走 source。
+    state.supervisorPhase = deps.supervisorBridge.getSupervisorPhase();
+
+    if (decision.action === 'fail' && decision.kind === 'checkpoint') {
+      deps.loopController.stop('user_checkpoint');
+      return {
+        action: 'return',
+        result: await handleHarnessStop(deps, {
+          reason: 'user_checkpoint',
+          messages: msgs,
+          chatFn,
+          tools: currentTools,
+          logger,
+          onStep,
+          streamFn,
+          runtimeState: state,
+        }),
+      };
+    }
   }
 
   await deps.memoryIntegration.injectMemoryContext(msgs, { onStep });
@@ -488,11 +547,55 @@ function buildGateContext(
   };
 }
 
+/**
+ * L2-7 / §14.0 — graph hint 收口：bridge 活跃时全部经 `bridge.composeGraphHint`（含 timeline）；
+ * bridge 缺省（off 或未注入）时回退到 `decideGraphHintRouting` + 原 inject 行为，保 off 兼容。
+ * 任意来源（forced step warn / forced step block / evaluateRound）调用同一入口，避免 free 段
+ * 旁路直写 graph_hint。
+ */
+function composeGraphHint(
+  deps: ToolRoundDeps,
+  args: {
+    round: number;
+    executionMode: 'free' | 'forced';
+    action: RoundEvalResult['action'] | 'warn' | 'block';
+    message: string | undefined;
+    port: CorrectionPort;
+    phase: HarnessRunState['supervisorPhase'];
+    reasonTag: string;
+  },
+): GraphHintRoutingDecision {
+  if (deps.supervisorBridge) {
+    return deps.supervisorBridge.composeGraphHint({
+      round: args.round,
+      executionMode: args.executionMode,
+      action: args.action,
+      message: args.message,
+      port: args.port,
+      phase: args.phase ?? 'free',
+      reasonTag: args.reasonTag,
+    });
+  }
+
+  const routing = decideGraphHintRouting({
+    executionMode: args.executionMode,
+    action: args.action === 'warn' ? 'inject_hint' : args.action === 'block' ? 'block' : args.action,
+    message: args.message,
+  });
+  if (routing.injectToCorrectionPort && args.message) {
+    args.port.inject(
+      { kind: 'graph_hint', content: args.message },
+      { phase: args.phase ?? 'free', source: 'supervisor' },
+    );
+  }
+  return routing;
+}
+
 function injectRecoveryMessage(
   deps: ToolRoundDeps,
   state: HarnessRunState,
   msgs: HarnessRunState['messages'],
-  correctionPort: MessageCorrectionPort,
+  correctionPort: CorrectionPort,
   content: string,
 ): void {
   if (deps.supervisorObserverSuppressInject) {
