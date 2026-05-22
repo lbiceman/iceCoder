@@ -70,6 +70,7 @@ export class BranchBudgetTracker {
   private commandRetries = new Map<string, number>();
   private errorRepeats = new Map<string, number>();
   private recoverTriggers = 0;
+  private enabled = true;
   private readonly limits: BranchBudgetLimits;
 
   /**
@@ -91,6 +92,7 @@ export class BranchBudgetTracker {
    * @returns 当前累计编辑次数（用于即时决策）
    */
   recordFileEdit(path: string | undefined | null): number {
+    if (!this.enabled) return 0;
     if (!path) return 0;
     const next = (this.fileEdits.get(path) ?? 0) + 1;
     this.fileEdits.set(path, next);
@@ -105,6 +107,7 @@ export class BranchBudgetTracker {
    * @returns 本次失败计入后的该命令失败累计次数（空命令时返回 0）
    */
   recordFailedCommandAttempt(command: string | undefined | null): number {
+    if (!this.enabled) return 0;
     if (!command) return 0;
     const key = normalizeCommand(command);
     const next = (this.commandRetries.get(key) ?? 0) + 1;
@@ -117,6 +120,7 @@ export class BranchBudgetTracker {
    * @returns 同签名累计出现次数
    */
   recordError(signature: string | undefined | null): number {
+    if (!this.enabled) return 0;
     if (!signature) return 0;
     const key = normalizeErrorSignature(signature);
     const next = (this.errorRepeats.get(key) ?? 0) + 1;
@@ -136,6 +140,7 @@ export class BranchBudgetTracker {
    * 调用 `markRecoveryTriggered()` 避免下一轮重复触发。
    */
   shouldBranchRecover(): BranchRecoverDecision {
+    if (!this.enabled) return { triggered: false };
     const fileOver = this.findOverLimit(this.fileEdits, this.limits.fileEditMax);
     if (fileOver) {
       return {
@@ -199,6 +204,20 @@ export class BranchBudgetTracker {
   /** 标记一次 recovery 已触发，用于持久化与去重计数。 */
   markRecoveryTriggered(): void {
     this.recoverTriggers++;
+  }
+
+  /**
+   * §2.8 / T12 — 由 ExecutionMode 控制启停：forced 才记录 / 触发；
+   * free 段不消耗预算也不产出 recovery 文案。disabled 不清空已有计数，
+   * 重新启用后保留累积（避免短暂切换后丢失上下文）。
+   */
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+  }
+
+  /** 当前是否启用记录与判定。 */
+  isEnabled(): boolean {
+    return this.enabled;
   }
 
   /** 已触发的 recovery 次数 */

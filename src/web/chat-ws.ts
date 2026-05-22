@@ -34,6 +34,9 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
+import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
+import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
+import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 import {
   detectFileBrowserOpen,
@@ -44,7 +47,28 @@ import {
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
+const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
+const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
+  ? path.resolve(process.env.ICE_CONFIG_PATH)
+  : path.join(DATA_DIR, 'config.json');
 const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
+
+/** F2 — supervisor runtime 进程级缓存：避免每个 WS 连接重复读盘。 */
+let supervisorRuntimePromise: ReturnType<typeof loadHarnessSupervisorRuntime> | null = null;
+
+registerSupervisorRuntimeReset(() => {
+  supervisorRuntimePromise = null;
+});
+
+function getSupervisorRuntime(): ReturnType<typeof loadHarnessSupervisorRuntime> {
+  if (!supervisorRuntimePromise) {
+    supervisorRuntimePromise = loadHarnessSupervisorRuntime({
+      dataDir: DATA_DIR,
+      mainConfigPath: MAIN_CONFIG_PATH,
+    });
+  }
+  return supervisorRuntimePromise;
+}
 
 /**
  * 单会话消息缓存。
@@ -570,6 +594,8 @@ async function handleChatMessage(
   // 将中断信号传递给 LLMAdapter，支持重试等待期间中断
   llmAdapter.setAbortSignal?.(abortController.signal);
 
+  const supervisorRuntime = await getSupervisorRuntime();
+
   const harnessConfig: HarnessConfig = {
     context: {
       systemPrompt: assembled.systemPrompt,
@@ -592,6 +618,9 @@ async function handleChatMessage(
     memoryDir: MEMORY_DIR,
     fileMemoryManager: globalFileMemoryManager ?? undefined,
     sessionDir: SESSIONS_DIR,
+    supervisorConfig: supervisorRuntime.supervisorConfig,
+    globalPolicy: supervisorRuntime.globalPolicy,
+    supervisorBridge: supervisorRuntime.bridge,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, { type: 'confirm', toolName, args });

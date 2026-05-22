@@ -208,6 +208,42 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   background: var(--text-muted);
 }
 
+.supervisor-mode-toggle {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  transition: opacity 0.3s ease, border-color 0.2s ease, color 0.2s ease;
+  margin-right: 8px;
+}
+.supervisor-mode-toggle:hover {
+  opacity: 0.85;
+}
+.supervisor-mode-toggle[data-mode="off"] {
+  border-color: #88EDC7;
+  color: #88EDC7;
+}
+.supervisor-mode-toggle[data-mode="adaptive"] {
+  border-color: #86E0FF;
+  color: #86E0FF;
+}
+.supervisor-mode-toggle[data-mode="strict"] {
+  border-color: #F1A8B2;
+  color: #F1A8B2;
+}
+.supervisor-mode-toggle:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .theme-toggle {
   height: 28px;
   padding: 0 10px;
@@ -882,6 +918,9 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   text-underline-offset: 3px;
   padding: 2px 4px;
   border-radius: 6px;
+}
+.session-pet-indicator .status-turn.exec-plan-anchor--forced {
+  color: #ffb347;
 }
 .session-pet-indicator .status-turn.exec-plan-anchor:hover,
 .session-pet-indicator .status-turn.exec-plan-anchor:focus-visible {

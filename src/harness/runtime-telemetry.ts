@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import type { ExecutionModeTelemetryPayload } from '../types/supervisor.js';
 
 export type RuntimeTelemetryEvent =
   | {
@@ -24,6 +25,16 @@ export type RuntimeTelemetryEvent =
       permission?: string;
       outputLength?: number;
     }
+  | ({
+      type: 'execution_mode_enter';
+      timestamp: string;
+      sessionId: string;
+    } & ExecutionModeTelemetryPayload)
+  | ({
+      type: 'execution_mode_exit';
+      timestamp: string;
+      sessionId: string;
+    } & ExecutionModeTelemetryPayload)
   | {
       type: 'compaction';
       timestamp: string;
@@ -66,6 +77,13 @@ export class RuntimeTelemetry {
 
   recordTool(event: Omit<Extract<RuntimeTelemetryEvent, { type: 'tool' }>, 'type' | 'timestamp' | 'sessionId'>): void {
     this.append({ type: 'tool', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
+  }
+
+  recordExecutionMode(
+    type: 'execution_mode_enter' | 'execution_mode_exit',
+    event: ExecutionModeTelemetryPayload,
+  ): void {
+    this.append({ type, timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
   }
 
   recordCompaction(event: Omit<Extract<RuntimeTelemetryEvent, { type: 'compaction' }>, 'type' | 'timestamp' | 'sessionId' | 'savedTokens'>): void {

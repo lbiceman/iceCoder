@@ -12,6 +12,14 @@
  */
 
 import type { StopReason } from '../harness/types.js';
+import type {
+  ExecutionMode,
+  ForcedDegradedTier,
+  ModeDecision,
+  ModeSignal,
+  RuntimeEvent,
+  SupervisorPhase,
+} from './supervisor.js';
 
 /** v2 schema 版本号；保留为字面量类型方便后续迁移判别。 */
 export const RUNTIME_CHECKPOINT_VERSION = 2 as const;
@@ -67,6 +75,62 @@ export interface RecoverySignal {
   consumed: boolean;
 }
 
+/**
+ * L2-6 — RecoverySupervisor 内部相位机的可持久化快照。
+ *
+ * 与 `RecoverySupervisorSnapshot`（src/harness/supervisor/recovery-supervisor.ts）字段一一对应，
+ * 单独提取一份避免运行时类型反向依赖运行时模块。
+ */
+export interface SupervisorPhaseSnapshot {
+  phase: SupervisorPhase;
+  takeoverStartRound: number;
+  stableRoundsInTakeover: number;
+  cooldownRemaining: number;
+}
+
+/** Supervisor runtime subset persisted in checkpoint v2; all fields are optional for old checkpoint compatibility. */
+export interface RuntimeSupervisorCheckpointState {
+  /** Current Execution Free/Forced boundary mode. */
+  executionMode: ExecutionMode;
+  /** Anti-flap lock remaining after entering forced. */
+  executionModeLockRemaining: number;
+  /** Signals that caused the last forced entry, sorted by §2.8.8 precedence. */
+  executionModeEnteredBy: ModeSignal[];
+  /** Primary entry signal; mirrors executionModeEnteredBy[0] when present. */
+  executionModeEnteredByPrimary?: ModeSignal;
+  /** Round where forced was entered; null while free or before Batch 2 persistence. */
+  executionModeEnteredAtRound: number | null;
+  /** Forced degraded tier, when graph/step queue/write-intent fallback is active. */
+  forcedDegradedTier?: ForcedDegradedTier;
+  /** Last mode decision for observability and later resume logic. */
+  lastModeDecision?: ModeDecision;
+  /** Append-only pending signals captured before evaluation. */
+  pendingModeSignals: ModeSignal[];
+  /** I10 dwell counter; persisted later when Harness accounting is connected. */
+  forcedTaskBearingRoundsSinceEntry: number;
+  /**
+   * L2-6 / T08 — Supervisor 运行时相位；与 `HarnessRunState.supervisorPhase` 一致。
+   * 默认 'free'。恢复时由 `SupervisorRuntimeBridge.restoreFromCheckpoint` 推回内部相位机。
+   */
+  supervisorPhase?: SupervisorPhase;
+  /**
+   * L2-6 / T08 — RecoverySupervisor 内部状态机快照（takeoverStartRound / stableRounds / cooldown）。
+   * 仅在 phase ∈ {takeover,handoff_pending,cooldown} 时需要恢复关键字段；free 段允许缺省。
+   */
+  recoverySupervisorSnapshot?: SupervisorPhaseSnapshot;
+  /**
+   * L2-6 / T08 — `EventTimeline` 最近 N 条事件（N = `eventTimeline.maxEventsInCheckpoint`，
+   * 默认 50；缺省时不裁剪）。重启后用于将 in-memory recent buffer 推回，便于 UI 续显与回放，
+   * **不**作为决策依据；JSONL 持久化仍是事件真源。
+   */
+  timelineTail?: RuntimeEvent[];
+  /**
+   * L2-6 / I4 — free 段已用 `CorrectionBudget.freeSegmentMaxPerTask` 计数。
+   * 跨 checkpoint 持续，避免重启绕过预算上限。
+   */
+  correctionBudgetUsed?: number;
+}
+
 /** v2 增强 checkpoint 的「附加运行时状态」部分。 */
 export interface RuntimeCheckpointV2 {
   /** schema 版本号，固定为 2 */
@@ -91,6 +155,8 @@ export interface RuntimeCheckpointV2 {
   lastTrigger: CheckpointSaveTrigger;
   /** 最后一次循环 stopReason（来自 Harness loopState） */
   lastStopReason?: StopReason;
+  /** Supervisor execution-mode state; optional so older runtimeV2 checkpoints remain valid. */
+  supervisorState?: RuntimeSupervisorCheckpointState;
   /** v2 写入时间 */
   v2UpdatedAt: string;
 }
@@ -127,7 +193,22 @@ export function emptyRuntimeCheckpointV2(
     verificationPending: false,
     recoverySignals: [],
     lastTrigger: trigger,
+    supervisorState: emptyRuntimeSupervisorCheckpointState(),
     v2UpdatedAt: new Date(0).toISOString(),
+  };
+}
+
+/** Inert defaults: Batch 1 only persists shape, it does not alter Harness execution. */
+export function emptyRuntimeSupervisorCheckpointState(): RuntimeSupervisorCheckpointState {
+  return {
+    executionMode: 'free',
+    executionModeLockRemaining: 0,
+    executionModeEnteredBy: [],
+    executionModeEnteredAtRound: null,
+    pendingModeSignals: [],
+    forcedTaskBearingRoundsSinceEntry: 0,
+    supervisorPhase: 'free',
+    correctionBudgetUsed: 0,
   };
 }
 

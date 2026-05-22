@@ -34,6 +34,7 @@ import {
   buildCompactBoundaryContent,
   buildRecentDialogueFocusContent,
   isSyntheticUserBlockContent,
+  shouldPreserveMessageOnCompaction,
   truncateSessionNotesForCompact,
 } from './compaction-strategy.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
@@ -742,6 +743,12 @@ Continue the conversation from where it left off without asking the user any fur
         forcePreserve.add(i);
       }
     }
+    for (let i = contentStart; i < messages.length; i++) {
+      if (shouldPreserveMessageOnCompaction(messages[i])) {
+        forcePreserve.add(i);
+      }
+    }
+
     // 将 forcePreserve 中最小的索引作为新的切割点
     if (forcePreserve.size > 0) {
       const minPreserve = Math.min(...forcePreserve);

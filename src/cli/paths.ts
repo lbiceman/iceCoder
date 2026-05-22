@@ -103,6 +103,7 @@ export const MCP_SERVERS_TEMPLATE: Record<string, Record<string, unknown>> = {
 };
 
 const DEFAULT_CONFIG: IceCoderConfigFile = {
+  supervisorMode: 'adaptive',
   providers: [
     {
       id: 'default',

@@ -120,10 +120,13 @@ function isQuestionOnlyPrefix(text: string): boolean {
     || /^(what|why|how)\b/i.test(t);
 }
 
+/** edit 同义：实现、新增、创建、生成（与下方 inferIntent 分支一致） */
+const EDIT_GOAL_CN = /修改|改|编辑|实现|新增|创建|生成/;
+
 /** 明确要动工具/改代码/跑测的信号（不含单独「报错」等分析词） */
-function hasExecutableSideSignal(text: string): boolean {
+export function hasExecutableSideSignal(text: string): boolean {
   const t = text.toLowerCase();
-  return /修改|实现|新增|创建|生成|修复|排查|优化|重构|落地|执行/i.test(t)
+  return EDIT_GOAL_CN.test(t)
     || /运行\s*测试|跑测试|vitest|jest|pytest|mocha/i.test(t)
     || /\b(edit|modify|implement|create|update|fix|investigate|refactor)\b/i.test(t)
     || /\b(run|execute)\s+\S+/i.test(t)
@@ -140,8 +143,8 @@ export function inferIntent(text: string): TaskIntent {
     return 'question';
   }
 
-  // 实现 / 新建 —— 避免路径中含 test（如 D:\work\test）被误判为跑测试
-  if (/修改|改|实现|新增|创建|生成|edit|modify|implement|create|update/.test(t)) return 'edit';
+  // 实现 / 新增 / 创建 / 生成 同义 → edit（避免路径中含 test 被误判为跑测）
+  if (EDIT_GOAL_CN.test(t) || /\b(edit|modify|implement|create|update)\b/.test(t)) return 'edit';
   if (/测试|运行\s*测试|跑测试|verify|(?:^|[\s,;])(?:npm|pnpm|yarn|npx)\s+\S*test\b|vitest|jest|pytest|\btsc\b/.test(t)) {
     return 'test';
   }
@@ -164,9 +167,10 @@ function extractPathLikeArg(args: Record<string, any>): string | undefined {
   return undefined;
 }
 
-function looksLikeVerificationCommand(command: string): boolean {
+export function looksLikeVerificationCommand(command: string): boolean {
   const c = command.toLowerCase();
   return /\b(npm|pnpm|yarn)\s+(run\s+)?(test|lint|build|typecheck|check)\b/.test(c)
     || /\b(vitest|jest|mocha|pytest|go test|cargo test|npx tsc|tsc --noemit|tsc --noemit|tsc --no-emit|tsc --noEmit)\b/i.test(command)
+    || /\bnode\s+--check\b/.test(c)
     || /\b(lint|typecheck|test)\b/.test(c);
 }

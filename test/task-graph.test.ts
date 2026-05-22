@@ -26,6 +26,7 @@ import {
   getCurrentBranchId,
   markGraphDone,
   markGraphFailed,
+  syncCursorToTaskPhase,
   markGraphPaused,
   toSnapshot,
   applySnapshot,
@@ -272,6 +273,32 @@ describe('Cursor Operations', () => {
     startCurrentNode(graph); completeCurrentNode(graph); advanceCursor(graph);
     startCurrentNode(graph); completeCurrentNode(graph);
     expect(advanceCursor(graph)).toBeUndefined();
+  });
+
+  it('syncCursorToTaskPhase 随 phase 向前推进游标', () => {
+    tick = 0;
+    const phaseGraph = createTaskGraph({
+      goal: 't', intent: 'edit', graphId: 'g-phase', now: mockNow,
+      nodes: [
+        makeNode('p1', 'inspect', '理解目标', { phase: 'intent' }),
+        makeNode('p2', 'search', '查阅相关内容', { phase: 'context' }),
+        makeNode('p3', 'edit', '编写或修改代码', { phase: 'editing' }),
+        makeNode('p4', 'verify', '运行验证', { phase: 'verification' }),
+        makeNode('p5', 'summarize', '总结变更', { phase: 'final' }),
+      ],
+    });
+
+    expect(syncCursorToTaskPhase(phaseGraph, 'context').changed).toBe(true);
+    expect(phaseGraph.cursor.nodeId).toBe('p2');
+    expect(getNode(phaseGraph, 'p1')?.status).toBe('done');
+    expect(getNode(phaseGraph, 'p2')?.status).toBe('running');
+
+    expect(syncCursorToTaskPhase(phaseGraph, 'editing').changed).toBe(true);
+    expect(phaseGraph.cursor.nodeId).toBe('p3');
+    expect(getNode(phaseGraph, 'p2')?.status).toBe('done');
+    expect(getNode(phaseGraph, 'p3')?.title).toBe('编写或修改代码');
+
+    expect(syncCursorToTaskPhase(phaseGraph, 'context').changed).toBe(false);
   });
 });
 

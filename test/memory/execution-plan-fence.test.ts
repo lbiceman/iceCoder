@@ -5,15 +5,29 @@ import {
   serializePersistedPlan,
   ICECODER_PLAN_FENCE_LANG,
 } from '../../src/memory/file-memory/execution-plan-fence.js';
-import { buildExecutionPlan } from '../../src/harness/execution-plan-generator.js';
 
-describe('execution-plan-fence', () => {
-  const plan = buildExecutionPlan({
+/** Phase 11 后 harness plan 生成器已移除；fence 测试用最小合法 plan fixture。 */
+function minimalPersistedPlan(planId = 'plan-fence') {
+  return {
+    version: 1 as const,
+    planId,
     goal: '修 bug',
     intent: 'edit',
-    now: 1_000,
-    planId: 'plan-fence',
-  })!;
+    steps: [{
+      id: 'ctx',
+      title: 'Gather context',
+      phase: 'context',
+      requiresTool: false,
+      status: 'pending' as const,
+    }],
+    progress: 0,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  };
+}
+
+describe('execution-plan-fence', () => {
+  const plan = minimalPersistedPlan();
 
   it('buildPlanFence 输出以 fence 包裹的 JSON 字符串', () => {
     const fence = buildPlanFence(plan);

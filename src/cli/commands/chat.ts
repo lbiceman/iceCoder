@@ -31,6 +31,7 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
+import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 import {
   fetchQuickTunnelPublicUrl,
   resolveTunnelMetricsListenAddress,
@@ -189,6 +190,12 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       tunnelProcess = await startTunnel(port, getFlagStr(args.flags, 'tunnel-bin'));
     }
   }
+
+  // F2: dual-mode 全局策略一次性加载，每次对话复用，避免每轮多读磁盘。
+  const supervisorRuntime = await loadHarnessSupervisorRuntime({
+    dataDir: ctx.paths.dataDir,
+    mainConfigPath: ctx.paths.configPath,
+  });
 
   // 初始化记忆系统
   let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
@@ -450,6 +457,9 @@ ${c.bold}终端内置命令:${c.reset}
         memoryDir: memoryFilesDir,
         fileMemoryManager: fileMemoryManager ?? undefined,
         sessionDir: ctx.paths.sessionsDir,
+        supervisorConfig: supervisorRuntime.supervisorConfig,
+        globalPolicy: supervisorRuntime.globalPolicy,
+        supervisorBridge: supervisorRuntime.bridge,
         onConfirm: async (toolName, toolArgs) => {
           // 终端确认
           spinner.stop();

@@ -10,7 +10,7 @@
  */
 
 import type { TaskGraph as TaskGraphData, NodeContract, OutputSignal } from '../types/task-graph.js';
-import type { TaskIntent } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
 import { buildGraph } from './task-graph-builder.js';
 import {
   createTaskGraph,
@@ -24,6 +24,7 @@ import {
   applySnapshot,
   needsRecovery,
   switchToFallbackBranch,
+  syncCursorToTaskPhase as alignGraphCursorToPhase,
 } from './task-graph.js';
 import {
   ContractValidator,
@@ -32,6 +33,8 @@ import {
   EscalationManager,
 } from './task-graph-review.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
+import type { TaskGraphView } from '../types/task-graph-view.js';
+import { taskGraphToView } from './task-graph-view-mapper.js';
 
 // ═══════════════════════════════════════════════
 // GraphExecutor
@@ -58,6 +61,21 @@ export interface AdvanceResult {
   nextNodeTitle?: string;
 }
 
+export interface SyncCursorResult {
+  changed: boolean;
+  view?: TaskGraphView;
+  nodeId?: string;
+  nodeIndex?: number;
+}
+
+/**
+ * §19.3 — Graph 评估输出口控制。
+ *   - 'full'：保留今日行为（仅 strict / off 内部使用，hint 仍经 CorrectionPort 转发）
+ *   - 'metrics_only'：接管段默认；evaluateRound 不再返回 inject 文案
+ *   - 'none'：完全静默；调试与单测兜底
+ */
+export type GraphEvaluationMode = 'full' | 'metrics_only' | 'none';
+
 export class GraphExecutor {
   private graph: TaskGraphData | null = null;
   private contractValidator: ContractValidator | null = null;
@@ -65,6 +83,8 @@ export class GraphExecutor {
   private escalationManager = new EscalationManager();
   private failureClassifier = new FailureClassifier();
   private currentRoundToolNames: string[] = [];
+  private evaluationMode: GraphEvaluationMode = 'full';
+  private inTakeover = false;
 
   // ═══════════════════════════════════════════════
   // Graph Lifecycle
@@ -75,16 +95,93 @@ export class GraphExecutor {
     this.resetNodeState();
   }
 
+  /**
+   * §19.3 / §10 — 接管期间中途换图。
+   *
+   * 调用方（通常是 RecoverySupervisor 经 SupervisorRuntimeBridge）应在已通过
+   * RecoverySafetyChecker / SnapshotConfidence 阈值后才调用本方法；本方法仅做
+   * 数据替换与节点状态机重置，不做任何安全检查。
+   *
+   * 副作用：
+   *   - 切换内部 `this.graph` 引用；
+   *   - 重置 contractValidator / escalation / failureClassifier；
+   *   - 清空当轮已采集的工具名列表。
+   */
+  replaceGraph(graph: TaskGraphData): void {
+    this.graph = graph;
+    this.resetNodeState();
+    this.failureClassifier.reset();
+    this.currentRoundToolNames = [];
+  }
+
   resetGraph(): void {
     this.graph = null;
     this.contractValidator = null;
     this.escalationManager.reset();
     this.failureClassifier.reset();
     this.currentRoundToolNames = [];
+    this.evaluationMode = 'full';
+    this.inTakeover = false;
   }
 
   hasGraph(): boolean {
     return this.graph !== null;
+  }
+
+  /**
+   * §19.3 — 切换 evaluateRound 的输出口。
+   *
+   * 接管段（adaptiveTakeover）默认 'metrics_only'：本方法被调用后
+   * `evaluateRound` 将只产出 metrics-only 结果，**不再** 返回 inject hint，
+   * 由 CorrectionPort 统一负责接管段的 C 类块写入（I1）。
+   */
+  setEvaluationMode(mode: GraphEvaluationMode): void {
+    this.evaluationMode = mode;
+  }
+
+  getEvaluationMode(): GraphEvaluationMode {
+    return this.evaluationMode;
+  }
+
+  /**
+   * §19.3 — 与 `supervisorPhase` 同步进入 takeover；
+   * 默认把评估模式压到 metrics_only，调用方仍可 `setEvaluationMode` 覆盖。
+   */
+  enterTakeover(): void {
+    this.inTakeover = true;
+    this.evaluationMode = 'metrics_only';
+  }
+
+  exitTakeover(): void {
+    this.inTakeover = false;
+    this.evaluationMode = 'full';
+  }
+
+  isInTakeover(): boolean {
+    return this.inTakeover;
+  }
+
+  /**
+   * 是否存在 pending/running 的 type='edit' 节点。
+   *
+   * 服务于 Execution Mode `explicit_impl` 信号判定（§2.8.4 表 8）：
+   * graph 中存在尚未完成的 implement 类节点 → 进入 forced 的依据之一。
+   * 与 §2.8.7 / §3.2 一致：节点 type 来自 graph 运行态，不读用户原文。
+   */
+  hasPendingImplementNode(): boolean {
+    if (!this.graph) return false;
+    for (const node of Object.values(this.graph.nodes)) {
+      if (node.type === 'edit' && (node.status === 'pending' || node.status === 'running')) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 供 task_graph_init 推送步骤列表（实现/新增/创建等 edit 建图共用） */
+  toView(): TaskGraphView | null {
+    if (!this.graph) return null;
+    return taskGraphToView(this.graph);
   }
 
   isTerminal(): boolean {
@@ -125,7 +222,8 @@ export class GraphExecutor {
   // Tool Call Checking
   // ═══════════════════════════════════════════════
 
-  checkToolCall(toolName: string): ToolCheckResult {
+  checkToolCall(toolName: string, opts: { track?: boolean } = {}): ToolCheckResult {
+    const track = opts.track ?? true;
     if (!this.graph) return { action: 'allow' };
 
     // Lazy init contract validator for current node
@@ -136,11 +234,13 @@ export class GraphExecutor {
       this.contractValidator = new ContractValidator(contract);
     }
 
-    const result = this.contractValidator.checkBeforeToolCall(toolName);
-    this.currentRoundToolNames.push(toolName);
+    const result = this.contractValidator.checkBeforeToolCall(toolName, { track });
+    if (track) {
+      this.currentRoundToolNames.push(toolName);
+    }
 
     // Deviation check
-    if (result.action !== 'block') {
+    if (track && result.action !== 'block') {
       const node = getCurrentNode(this.graph)!;
       const devResult = this.deviationDetector.detect({
         toolNames: [...this.currentRoundToolNames],
@@ -169,11 +269,19 @@ export class GraphExecutor {
 
   evaluateRound(toolCallsThisRound: number): RoundEvalResult {
     if (!this.graph || !this.contractValidator) return { action: 'none' };
+    if (this.evaluationMode === 'none') {
+      this.currentRoundToolNames = [];
+      return { action: 'none' };
+    }
 
     // Contract round-end check
     const cResult = this.contractValidator.checkRoundEnd(toolCallsThisRound);
     if (cResult.action === 'force_switch') {
       this.attemptFallback(cResult.message ?? 'contract violation');
+      if (this.evaluationMode === 'metrics_only') {
+        this.currentRoundToolNames = [];
+        return { action: 'none' };
+      }
       return { action: 'force_switch', message: cResult.message };
     }
 
@@ -195,6 +303,10 @@ export class GraphExecutor {
       }
 
       this.currentRoundToolNames = [];
+      if (this.evaluationMode === 'metrics_only') {
+        // §19.3 / §14.0 — 接管段禁止 GraphExecutor 直接 inject；只回 metrics。
+        return { action: 'none' };
+      }
       return { action: esc.action, message: esc.message };
     }
 
@@ -226,6 +338,24 @@ export class GraphExecutor {
       markGraphDone(this.graph);
     }
     return { advanced: false, graphDone: true };
+  }
+
+  /**
+   * 工具轮结束后，将游标与 TaskState.phase 对齐并返回更新后的面板视图。
+   */
+  syncCursorToTaskPhase(taskPhase: TaskPhase): SyncCursorResult {
+    if (!this.graph) return { changed: false };
+
+    const result = alignGraphCursorToPhase(this.graph, taskPhase);
+    if (!result.changed) return { changed: false };
+
+    this.resetNodeState();
+    return {
+      changed: true,
+      view: taskGraphToView(this.graph),
+      nodeId: result.currentNodeId,
+      nodeIndex: this.graph.cursor.nodeIndex,
+    };
   }
 
   // ═══════════════════════════════════════════════

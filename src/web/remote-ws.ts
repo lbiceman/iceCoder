@@ -22,11 +22,35 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
+import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
+import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
+import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSIONS_DIR = path.resolve('data/sessions');
+const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
+const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
+  ? path.resolve(process.env.ICE_CONFIG_PATH)
+  : path.join(DATA_DIR, 'config.json');
 const SESSION_ID = 'default';
+
+/** F2 — supervisor runtime 进程级缓存：避免每个 WS 连接重复读盘。 */
+let supervisorRuntimePromise: ReturnType<typeof loadHarnessSupervisorRuntime> | null = null;
+
+registerSupervisorRuntimeReset(() => {
+  supervisorRuntimePromise = null;
+});
+
+function getSupervisorRuntime(): ReturnType<typeof loadHarnessSupervisorRuntime> {
+  if (!supervisorRuntimePromise) {
+    supervisorRuntimePromise = loadHarnessSupervisorRuntime({
+      dataDir: DATA_DIR,
+      mainConfigPath: MAIN_CONFIG_PATH,
+    });
+  }
+  return supervisorRuntimePromise;
+}
 
 async function appendToSession(userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
   try {
@@ -179,6 +203,7 @@ async function handleRemoteMessage(
   const toolDefs = shouldDisableRuntimeTools() ? [] : toolRegistry.getDefinitions();
   const assembled = await loadAssembledChatPrompt({ logPrefix: '[remote-ws]' });
   const harnessDynamic = harnessOverlayToContextFields(assembled);
+  const supervisorRuntime = await getSupervisorRuntime();
 
   const harnessConfig: HarnessConfig = {
     context: {
@@ -200,6 +225,9 @@ async function handleRemoteMessage(
     memoryDir: MEMORY_DIR,
     compactionEnableLLMSummary: true,
     sessionDir: SESSIONS_DIR,
+    supervisorConfig: supervisorRuntime.supervisorConfig,
+    globalPolicy: supervisorRuntime.globalPolicy,
+    supervisorBridge: supervisorRuntime.bridge,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         sendJSON(ws, {

@@ -71,6 +71,21 @@
   flex-shrink: 0;
 }
 
+.exec-plan-mode-banner {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: #ffd89a;
+  background: rgba(255, 180, 60, 0.12);
+  border-bottom: 1px solid var(--border-light, #363e54);
+}
+
+.exec-plan-mode-banner.hidden {
+  display: none;
+}
+
 .exec-plan-list {
   list-style: none;
   margin: 0;

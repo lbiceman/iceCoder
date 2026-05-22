@@ -20,6 +20,65 @@
   // var statusModel = document.getElementById('status-model');
   var themeToggle = document.getElementById('theme-toggle');
   var themeIcon = document.getElementById('theme-icon');
+  var supervisorModeToggle = document.getElementById('supervisor-mode-toggle');
+  var supervisorModeLabel = document.getElementById('supervisor-mode-label');
+
+  var SUPERVISOR_MODES = ['off', 'adaptive', 'strict'];
+  var SUPERVISOR_LABELS = { off: '自由', adaptive: '自适应', strict: '严格' };
+  var currentSupervisorMode = 'adaptive';
+
+  // ---- 监管模式 ----
+
+  function syncSupervisorModeToPet(showBubble) {
+    var label = SUPERVISOR_LABELS[currentSupervisorMode] || currentSupervisorMode;
+    if (window.ChatPetBridge) {
+      if (showBubble && typeof window.ChatPetBridge.notifySupervisorMode === 'function') {
+        window.ChatPetBridge.notifySupervisorMode(currentSupervisorMode, label);
+      } else if (typeof window.ChatPetBridge.syncSupervisorModeEye === 'function') {
+        window.ChatPetBridge.syncSupervisorModeEye(currentSupervisorMode);
+      }
+    }
+  }
+
+  function updateSupervisorModeButton() {
+    if (!supervisorModeToggle || !supervisorModeLabel) return;
+    supervisorModeLabel.textContent = SUPERVISOR_LABELS[currentSupervisorMode] || currentSupervisorMode;
+    supervisorModeToggle.setAttribute('data-mode', currentSupervisorMode);
+    supervisorModeToggle.title = '监管模式：' + (SUPERVISOR_LABELS[currentSupervisorMode] || '')
+      + '（点击切换；对新消息生效）';
+  }
+
+  function applySupervisorModeFromConfig(data) {
+    if (data && (data.supervisorMode === 'off' || data.supervisorMode === 'adaptive' || data.supervisorMode === 'strict')) {
+      currentSupervisorMode = data.supervisorMode;
+    }
+    updateSupervisorModeButton();
+    syncSupervisorModeToPet(false);
+  }
+
+  function cycleSupervisorMode() {
+    if (!supervisorModeToggle) return;
+    var idx = SUPERVISOR_MODES.indexOf(currentSupervisorMode);
+    var next = SUPERVISOR_MODES[(idx + 1) % SUPERVISOR_MODES.length];
+    supervisorModeToggle.disabled = true;
+    fetch('/api/config/supervisor-mode', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supervisorMode: next }),
+    })
+      .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
+      .then(function (result) {
+        if (result.ok && result.body.success) {
+          currentSupervisorMode = result.body.supervisorMode;
+          updateSupervisorModeButton();
+          syncSupervisorModeToPet(true);
+        }
+      })
+      .catch(function () { /* ignore */ })
+      .finally(function () {
+        supervisorModeToggle.disabled = false;
+      });
+  }
 
   // ---- 主题管理 ----
 
@@ -98,6 +157,7 @@
         statusDot.classList.remove('disconnected');
         statusDot.classList.add('connected');
         statusDot.title = '已连接';
+        applySupervisorModeFromConfig(data);
 
         var providers = data.providers || [];
         if (providers.length > 0) {
@@ -125,6 +185,7 @@
       setTheme(getStoredTheme());
       navConfig.style.display = 'none';
       themeToggle.addEventListener('click', toggleTheme);
+      if (supervisorModeToggle) supervisorModeToggle.addEventListener('click', cycleSupervisorMode);
       fetchSystemStatus();
       window.ChatPage.render(pageContainer);
       return;
@@ -135,6 +196,7 @@
 
     // 主题切换按钮
     themeToggle.addEventListener('click', toggleTheme);
+    if (supervisorModeToggle) supervisorModeToggle.addEventListener('click', cycleSupervisorMode);
 
     // 监听 hash 变化
     window.addEventListener('hashchange', function () {
@@ -158,7 +220,10 @@
   }
 
   window.AppRouter = {
-    refreshStatus: fetchSystemStatus
+    refreshStatus: fetchSystemStatus,
+    getSupervisorMode: function () {
+      return currentSupervisorMode;
+    },
   };
 
   // 检测 bfcache 恢复（移动端浏览器关闭后重新打开可能从缓存恢复页面）

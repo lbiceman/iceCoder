@@ -23,4 +23,11 @@ describe('inferIntent', () => {
   it('分析并查看代码 → inspect', () => {
     expect(inferIntent('解释一下 src/harness.ts 里这段逻辑')).toBe('inspect');
   });
+
+  it('实现 / 新增 / 创建 同义 → edit（与面板建图条件一致）', () => {
+    expect(inferIntent('实现用户登录')).toBe('edit');
+    expect(inferIntent('新增一个 API')).toBe('edit');
+    expect(inferIntent('创建一个组件')).toBe('edit');
+    expect(inferIntent('如何实现 OAuth')).toBe('edit');
+  });
 });

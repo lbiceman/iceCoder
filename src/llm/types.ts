@@ -22,6 +22,8 @@ export interface UnifiedMessage {
   toolCallId?: string;
   /** 思考过程内容（DeepSeek 等模型的 reasoning_content，需原样传回 API） */
   reasoningContent?: string;
+  /** C 类纠偏注入：硬压缩时保留在 recent 后缀，避免 lifecycle/recovery 提示被摘要丢弃 */
+  preserveOnCompaction?: boolean;
 }
 
 /**

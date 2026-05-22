@@ -107,6 +107,34 @@ describe('CheckpointEngine - save', () => {
     expect(raw.runtimeV2.branchBudget.recoverTriggers).toBe(1);
   });
 
+  it('保存调用方提供的 supervisor execution-mode 状态', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+
+    await engine.save({
+      trigger: 'step_completed',
+      supervisorState: {
+        executionMode: 'forced',
+        executionModeLockRemaining: 1,
+        executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
+        executionModeEnteredByPrimary: 'checkpoint_resumed',
+        executionModeEnteredAtRound: 7,
+        pendingModeSignals: ['tool_failure'],
+        forcedTaskBearingRoundsSinceEntry: 1,
+      },
+    });
+
+    const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
+    expect(raw.runtimeV2.supervisorState).toMatchObject({
+      executionMode: 'forced',
+      executionModeLockRemaining: 1,
+      executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
+      executionModeEnteredByPrimary: 'checkpoint_resumed',
+      executionModeEnteredAtRound: 7,
+      pendingModeSignals: ['tool_failure'],
+      forcedTaskBearingRoundsSinceEntry: 1,
+    });
+  });
+
   it('多次 appendTool 累积并限制最大条数', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
     for (let i = 0; i < 30; i++) {
@@ -188,6 +216,58 @@ describe('CheckpointEngine - restore', () => {
     expect(r.branchBudget.recoverTriggers).toBe(1);
     expect(r.recentTools[0].toolName).toBe('edit_file');
     expect(r.recoverySignals[0].message).toBe('switch strategy');
+  });
+
+  it('save → loadV2 保留 supervisor execution-mode 扩展字段', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+
+    const saved = await engine.save({ trigger: 'manual' });
+    saved.supervisorState = {
+      executionMode: 'forced',
+      executionModeLockRemaining: 2,
+      executionModeEnteredBy: ['checkpoint_resumed'],
+      executionModeEnteredByPrimary: 'checkpoint_resumed',
+      executionModeEnteredAtRound: 4,
+      pendingModeSignals: ['tool_failure'],
+      forcedTaskBearingRoundsSinceEntry: 1,
+    };
+    await fs.writeFile(engine.checkpointPath, JSON.stringify({
+      ...buildV1Checkpoint(),
+      runtimeV2: saved,
+    }, null, 2), 'utf-8');
+
+    const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
+
+    expect(restored?.supervisorState).toMatchObject({
+      executionMode: 'forced',
+      executionModeLockRemaining: 2,
+      executionModeEnteredBy: ['checkpoint_resumed'],
+      pendingModeSignals: ['tool_failure'],
+      forcedTaskBearingRoundsSinceEntry: 1,
+    });
+  });
+
+  it('部分 supervisorState 字段缺失时仍可 loadV2 并补安全默认值', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+    const saved = await engine.save({ trigger: 'manual' });
+    saved.supervisorState = {
+      executionMode: 'forced',
+    } as any;
+    await fs.writeFile(engine.checkpointPath, JSON.stringify({
+      ...buildV1Checkpoint(),
+      runtimeV2: saved,
+    }, null, 2), 'utf-8');
+
+    const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
+
+    expect(restored?.supervisorState).toMatchObject({
+      executionMode: 'forced',
+      executionModeLockRemaining: 0,
+      executionModeEnteredBy: [],
+      executionModeEnteredAtRound: null,
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 0,
+    });
   });
 
   it('损坏的 JSON → loadV2 返回 null 而不抛', async () => {

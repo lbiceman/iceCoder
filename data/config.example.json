@@ -14,5 +14,6 @@
       "requestTimeoutMs": 180000,
       "isDefault": true
     }
-  ]
+  ],
+  "supervisorMode": "adaptive"
 }

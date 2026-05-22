@@ -142,6 +142,7 @@ window.ChatPage = (function () {
       Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
       UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+      Pet.removeThinking(false, false);
       return;
     }
 
@@ -160,6 +161,8 @@ window.ChatPage = (function () {
       UI.autoResizeInput();
       Cmd.hide();
       Pet.showThinking(false);
+      UI.resetLiveToolRoundTargets();
+      UI.setLiveToolRoundActive(true);
       WS.sendMessage(
         '~open\n\n' +
         '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
@@ -173,6 +176,15 @@ window.ChatPage = (function () {
       UI.autoResizeInput();
       Cmd.hide();
       Cmd.handleTelemetry(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return;
+    }
+
+    // ~supervisor（P3-5：Supervisor timeline + execution mode 报告）
+    if (text === '~supervisor' || text.indexOf('~supervisor ') === 0) {
+      elInput.value = '';
+      UI.autoResizeInput();
+      Cmd.hide();
+      Cmd.handleSupervisor(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
       return;
     }
 
@@ -221,9 +233,9 @@ window.ChatPage = (function () {
     }
     File.removeUploadedFile();
 
+    UI.resetLiveToolRoundTargets();
+    UI.setLiveToolRoundActive(true);
     if (msgImages.length > 0) {
-      UI.resetLiveToolRoundTargets();
-      UI.setLiveToolRoundActive(true);
       WS.send({ type: 'message', content: msgText || '请分析这些图片', images: msgImages });
     } else {
       WS.sendMessage(msgText);
@@ -394,8 +406,11 @@ window.ChatPage = (function () {
         || step.type === 'execution_plan_clear'
         || step.type === 'task_graph_init'
         || step.type === 'task_graph_node'
+        || step.type === 'task_graph_update'
         || step.type === 'task_graph_branch'
-        || step.type === 'task_graph_done')) {
+        || step.type === 'task_graph_done'
+        || step.type === 'execution_mode_enter'
+        || step.type === 'execution_mode_exit')) {
       window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
@@ -568,6 +583,9 @@ window.ChatPage = (function () {
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
+        Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
+      }
     }
 
     // 初始化会话：先从 localStorage 载入（本地页与远程页都需要内存里有消息再绘制）

@@ -33,7 +33,12 @@ export interface ProviderConfig {
   maxContextTokens?: number;
 }
 
-/** `data/config.json` 顶层结构（仅存 providers 数组；未来可扩展其他键） */
+/** `data/config.json` 顶层结构 */
 export interface IceCoderConfigFile {
   providers: ProviderConfig[];
+  /**
+   * 双模监管档位（Web 顶栏与配置页可改）。
+   * `off` | `adaptive` | `strict`；未设置时由 supervisor-config.json 的 `mode` 兜底。
+   */
+  supervisorMode?: 'off' | 'adaptive' | 'strict';
 }
