@@ -415,9 +415,64 @@ UI 再发 **`~clear`**。**不删** `data/config.json`、`data/memory-files/`、
 | F 的 L2 信号 | 短任务常记 `tool_repeat_fail:2` 而非 `no_progress:3+` |
 | UI vs telemetry 轮次 | forced chip 显示轮次可能与 `telemetry.round` 差 1～3；以 telemetry 为准 |
 | checkpoint 污染 | 未清 `default.checkpoint.json` 时，无关新任务 R1 可能 `checkpoint_resumed` |
-| 工作区残留 | 测试后检查 `logger.ts`、`strict-probe*`、`*probe*` 等；建议 `git restore .` |
+| 工作区残留 | 测试后检查 `logger.ts`、`_l2probe-*`、`*probe*` 等；建议 `git restore .` |
+| L2 C 类 inject | `[System]…` 写入 Harness 内部 msgs，**Web 聊天气泡默认不展示**；以 Timeline 为准 |
+| 验证门禁 | `write`/`edit` 后须 Harness 认可的验证命令（如 `npx tsc --noEmit`）；`node --check` 不算 |
+| adaptive file_loop | free 段 branchBudget 不计数；forced 可能 R5 早退 → **L2-6 用 strict** |
 
-### 10.5 测试后清理
+### 10.5 L2 专项手工联调报告（2026-05-22）
+
+> 环境：Web · Windows · 模型 **z-ai/glm-5.1**（L2-1～L2-5 / A–H）· **minimax-m2.5**（L2-6 strict 终测）  
+> L2-7 仅自动化（见 §11.8）
+
+#### 10.5.1 总览
+
+| 场景 | 模式 | 结论 | 关键证据 |
+|------|------|------|----------|
+| **L2-1** no_progress | adaptive | ✅ | Timeline `failure · no_progress:3/4/5…` |
+| **L2-2** goal_drift | adaptive | ✅ | Timeline `drift · goal_drift:…` |
+| **L2-3** tool_repeat_fail | adaptive | ✅ | Timeline `tool_repeat_fail:2`；聊天 `[System]` 可能不可见 |
+| **L2-4** lifecycle | adaptive | ⚠️ 条件通过 | Timeline 有 no_progress；lifecycle inject Web 可能被 compaction 挤掉 |
+| **L2-5** graph_hint | **strict** | ✅ **最佳** | R1 forced；聊天可见「收到纠偏」；30+ `recover · graph_hint` |
+| **L2-6** file_loop | adaptive→**strict** | ✅（strict 终测） | 见 §10.5.2；adaptive 多轮 **未触发** |
+| **L2-7** takeover | 单测 | ✅ | supervisor-bridge `-t takeover` 11 + L2-7 11 + boundary 13 + e2e 7 |
+
+**套件结论**：L2-1～L2-6 Web 信号链路 **基本可用**；L2-6 需 **strict + 合并提示词 + tsc 出口**；L2-7 takeover Web 仍不测（domain 缺口）。
+
+#### 10.5.2 L2-6 file_loop 迭代记录
+
+| 轮次尝试 | 模式 | 模型 | 结论 | 要点 |
+|----------|------|------|------|------|
+| 1 | adaptive | glm-5.1 | ❌ 未触发 | free 段 5×edit；R9 `tool_failure` forced |
+| 2 | adaptive | glm-5.1 | ❌ 未触发 | 70+ 轮；`node --check` 不过验证门禁 |
+| 3 | adaptive | glm-5.1 | ❌ 未触发 | 前置单测「已完成」不停（缺 tsc） |
+| 4 | adaptive | glm-5.1 | ⚠️ Harness ✅ L2 ❌ | 合并提示词 **12 轮 model_done**；R5 forced 退出，仅 2 次 forced 内 edit |
+| 5 | **strict** | minimax-m2.5 | ✅ **通过** | **13 轮 model_done**；R7 起 `file_loop:4/5/6/7` |
+
+**strict 终测（2026-05-22）关键证据**
+
+- **telemetry**：R1 `execution_mode_enter`（`task_graph_active+pending_steps+explicit_impl`）；全程 forced；R13 `model_done`
+- **工具**：R1 write×2 · R2–R10 edit×7（logger）· R3 `search_codebase` · R4 `open_file`（**违令**）· R11 `npx tsc --noEmit` ✅
+- **supervisor-events**：R7 `file_loop:logger.ts:4` → R11 `:7`；R8+ 多次 `recover · graph_hint force_switch` + `correction_budget_exhausted:graph_hint`
+- **UI**：冰豆 **escalation L3 强制切换分支**（对应 `graph_hint` 升级 `force_switch`，非 file_loop 失败）
+
+#### 10.5.3 L2 跨项结论
+
+**已验证**
+
+- PassiveObserver：`no_progress`、`tool_repeat_fail`、`file_loop` 均可在 Timeline 落账
+- strict 下 TaskGraph + graph_hint 纠偏链（L2-5）与 I4 预算门禁（`correction_budget_exhausted`）
+- 验证门禁 + `npx tsc --noEmit` 可让 edit 类观测任务正常 `model_done`
+
+**注意**
+
+| 项 | 说明 |
+|----|------|
+| file_loop 前置条件 | **forced 段**内同文件 edit ≥4；adaptive 易 R5 exit free |
+| 模型遵循 | minimax-m2.5 仍会 search/open；不影响 strict 下 file_loop 触发，但不作「遵令」标杆 |
+| 宠物 L3 气泡 | strict + 偏离任务图 → `force_switch`；与 L2-6 通过不矛盾 |
+
+### 10.6 测试后清理
 
 ```powershell
 git status
@@ -477,7 +532,7 @@ Get-Content data/runtime/supervisor-events.jsonl -Wait
 | 3 | L2-4 lifecycle | adaptive | 5 轮只读系统纠偏块 |
 | 4 | L2-5 graph_hint | **strict** | forced 下 graph 纠偏（最接近「纠偏」） |
 | 5 | L2-2 goal_drift | adaptive | 目标漂移检测 |
-| 6 | L2-6 file_loop | adaptive | 前置 multi_write 进 forced，再 6 轮同文件 edit |
+| 6 | L2-6 file_loop | **strict** | v2 合并：2 write → 6×edit（禁 read）→ tsc |
 | 7 | L2-7 takeover | 单测/改码 | 完整接管链（Web 不测） |
 
 ### 11.2 L2-1 — no_progress（PassiveObserver）
@@ -660,57 +715,80 @@ Supervisor观测: 每 2 轮汇报一次当前轮次。
 
 ### 11.7 L2-6 — file_loop（同文件反复 edit）
 
-**模式**：`adaptive`
+**模式**：**`strict`（推荐）** · 备选 `adaptive`
 
-> **重要**：`file_loop` 依赖 **forced 段** 的 branchBudget 计数；free 段连续 edit **不会** 出信号。  
-> **重要**：`edit` 类任务会触发 Harness **验证门禁**；`node --check` 不算验证，易导致 70+ 轮不停止——本场景已拆成「前置进 forced + 主测 + 可选 tsc 出口」。
+> **重要**：`file_loop` 依赖 **forced 段** 的 branchBudget 计数；free 段 edit **不计数**。  
+> **2026-05-22 adaptive 实测**：R2 进 forced，**R5 即退出 free**，forced 内仅 2 次 logger edit → **无 file_loop**。  
+> **strict** 下 `executionModeFloor=forced`，6 次 edit 更易落在 forced 段内。  
+> **验证门禁**：必须 Part C 跑 **`npx tsc --noEmit`** 才能 `model_done`；禁止在 tsc 前只口头说「完成」。  
+> **一次发完**：合并提示词，不要分两条消息；不要中途停止。
+
+**为何「已完成」不停？（2026-05-22 前置单测）**
+
+1. R1 两个 `write_file` 成功后，`verificationRequired=true`  
+2. 模型 R3+ 只输出文字「完成」，无工具  
+3. Harness 每轮注入 `[System] You changed files but has not verified...`  
+4. 提示词若写「不要 run_command」→ 模型不敢跑 tsc → **死循环**  
+5. 合并提示词 + Part C tsc → **12 轮 model_done** ✅（但仍可能无 file_loop，见上 strict 说明）
 
 **步骤**
 
 1. 完成 §11.0 测前步骤。
-2. **先发「前置提示词」**，等到冰豆底部出现 **`forced · …`**（或 telemetry 有 `execution_mode_enter`）。
-3. **再发「主测提示词」**；确认 **连续 6 轮、每轮仅 1 次 `edit_file`**，且只改 `logger.ts`。
-4. 第 6 轮 edit 后应能文字总结并结束；若系统仍注入「必须验证」，按主测提示词 **仅跑一次** `npx tsc --noEmit`。
-5. （可选）测试前设 `ICE_HARNESS_MAX_ROUNDS=40`，防止再次跑飞。
+2. 顶栏切 **`strict`**（冰豆眼色 `#F1A8B2`）。
+3. （建议）`git restore src/harness/logger.ts` 清掉旧探针。
+4. **只发一次「合并提示词 v2」**。
+5. tail：`file_loop` 应在 **第 4 次 logger edit** 左右出现；整任务约 10–14 轮 `model_done`。
 
-**前置提示词**（先进 forced，约 1–3 轮）
-
-```text
-【L2-6·前置·进 forced】
-同一轮任务内依次 write_file 两个极小临时文件（不要 edit、不要 run_command）：
-1. src/harness/_l2probe-a.ts  内容：export const l2ProbeA = 1;
-2. src/harness/_l2probe-b.ts  内容：export const l2ProbeB = 2;
-写完后一句话确认即可，不要删文件、不要测、不要继续别的任务。
-```
-
-**主测提示词**（forced 段内 file_loop）
+**合并提示词 v2（strict · 一次发完）**
 
 ```text
-【L2-观测·file_loop】
-我已在 forced 段。本任务只观测 L2，不是正式改代码。
+【L2-6·file_loop·strict·单次任务】
+目标：在 forced 段对同一文件 edit 至少 4 次，触发 L2 file_loop 信号。
 
-只允许 edit_file，且只能改 src/harness/logger.ts。
-连续 6 轮：每轮恰好 1 次 edit_file，改一处极小注释或字符串，6 轮位置各不相同。
-禁止：read_file、write_file、run_command（含 node --check）、search_codebase、git、file_info、tsc、npm test。
+Part A（必须同一轮 LLM 回复内完成，共 2 次 write_file，禁止 read_file）：
+  write_file src/harness/_l2probe-a.ts  →  export const l2ProbeA = 1;
+  write_file src/harness/_l2probe-b.ts  →  export const l2ProbeB = 2;
 
-第 6 轮 edit 完成后，下一回复只写 5 行以内总结，不要调用任何工具。
-若系统仍注入「You changed files but has not verified」类消息，才允许额外运行一次：npx tsc --noEmit
-除此之外禁止任何命令。不要 git commit。
+Part B（紧接 Part A，不要 read_file，不要停顿，连续 6 轮、每轮恰好 1 次 edit_file）：
+  只改 src/harness/logger.ts。不要先 read logger.ts，直接 edit（小改注释/字符串即可）。
+  6 处各不相同。6 次 edit 必须连续完成。
+  中间禁止 read_file / write_file / search / git / run_command。
+
+Part C（6 次 edit 全部完成后才做）：
+  run_command: npx tsc --noEmit
+  然后 5 行以内文字总结。
+  不要 git commit。不要删 probe 文件。
 ```
+
+**adaptive 备选**（已知 forced 可能 R5 退出，file_loop 难触发，仅作对比）
+
+仍用 v2 同款提示词，顶栏 adaptive；若 telemetry 出现 `execution_mode_exit` 且 forced 内 edit <4，记 **未触发**。
 
 **如何观察**
 
-- 冰豆底部：前置后应有 **`forced · …`**；主测阶段保持 forced 更易触发
-- `supervisor-events.jsonl`：`failure · file_loop:src/harness/logger.ts:4`（或类似，`fileLoopMin=4`）
-- telemetry：主测阶段 **6 次** `edit_file`，不应出现大量 `run_command` 螺旋
-- branchBudget 在 **forced** 下才累计同文件 edit 次数
+- 冰豆：**strict** 下应持续 **`forced · …`**（勿在 Part B 中途变 free）
+- `supervisor-events.jsonl`：`failure · file_loop:src/harness/logger.ts:4`（第 4 次 forced 段 edit 后）
+- telemetry：Part B **6 次** `edit_file`（仅 logger.ts）；**0 次** Part B 内 `read_file`
+- Part C：`npx tsc --noEmit` → `verificationStatus=passed` → `model_done`
+- **失败征兆**：Part B 中出现 `execution_mode_exit` 或 `read_file` → file_loop 大概率无
 
 **预期结果**
 
-- Timeline 出现 **`file_loop`** ✅（forced 段第 4 次 edit 后应可见）
-- 任务能在 **约 10–15 轮** 内 `model_done` 结束（6 edit + 前置 + 总结；若多 1 轮 tsc 仍正常）
-- 若 free 全程 edit、无 forced：记 **未触发**，非 FAIL L1
-- 若 again 70+ 轮不停：查 telemetry 是否 `verificationStatus` 一直为 `required`（验证命令未识别）
+- Timeline **`file_loop`** ✅（strict + 连续 6 edit，第 4 次后应可见）
+- **约 10–14 轮** `model_done`
+- adaptive 下 forced 早退：记 **未触发**，非 FAIL L1
+
+**实测记录（2026-05-22 · strict · minimax-m2.5 · 合并 v2）**
+
+| 项 | 结果 |
+|----|------|
+| 结论 | ✅ **通过** |
+| 轮次 | R13 `model_done`；12 次工具 |
+| forced | R1 enter（`task_graph_active`），全程未 exit |
+| file_loop | R7 `:4` · R8 `:5` · R9 `:6` · R10–11 `:7` |
+| graph_hint | R8+ `force_switch` + I4 `correction_budget_exhausted`（宠物 L3 气泡） |
+| 违令工具 | R3 `search_codebase` · R4 `open_file`（仍触发 file_loop） |
+| Part C | R11 `npx tsc --noEmit` → `verificationStatus=passed` |
 
 ---
 
@@ -744,7 +822,9 @@ npm test -- test/e2e/dual-mode-scenarios.test.ts
 | `failure · no_progress:N` | PassiveObserver ✅ |
 | `drift · goal_drift:…` | GoalDriftDetector ✅ |
 | `failure · tool_repeat_fail:N` | 工具重复失败 ✅ |
+| `failure · file_loop:path:N` | 同文件反复 edit（**forced 段** branchBudget）✅ |
 | `recover · graph_hint:…` | **forced 段 graph 纠偏** ✅ |
+| `recover · graph_hint:… action=force_switch` | graph 纠偏升级为 **L3 强制切分支**（宠物气泡）✅ |
 | `failure · correction_budget_exhausted:graph_hint` | I4 预算门禁 ✅ |
 | 聊天 `[System] Repeated failed…` | C 类 recovery inject ✅ |
 | 聊天 `[System] You have been reading…5 rounds…` | lifecycle recovery ✅ |
@@ -753,6 +833,30 @@ npm test -- test/e2e/dual-mode-scenarios.test.ts
 ---
 
 ## 12. 手工记录（复制填空）
+
+**L2-6 strict 终测样例（2026-05-22，可直接归档）**
+
+```markdown
+## 双模手工记录
+
+- 日期：2026-05-22
+- 场景：L2-6 file_loop
+- supervisorMode：strict
+- 模型：minimax-m2.5
+- 新会话：是
+
+### 观测
+- [x] 冰豆 forced chip：全程 forced；后期 escalation L3 强制切换分支
+- [x] telemetry execution_mode_enter：R1 task_graph_active
+- [x] file_loop：R7 :4 → R11 :7
+- [x] model_done：R13；tsc passed
+
+### 结论
+- [x] 通过
+- 备注：R3 search_codebase、R4 open_file 违令；adaptive 历次未触发 file_loop
+```
+
+**空白模板**
 
 ```markdown
 ## 双模手工记录
@@ -815,4 +919,5 @@ npm test -- test/harness/execution-mode-harness.test.ts
 | 2026-05-21 | 改为「模式 + 可复制提示词 + 观测 + 结果」实操格式；补充 L2 no_progress 与 takeover 缺口说明 |
 | 2026-05-22 | 新增 §10 A–H 手工联调报告；F/G 预期口径修正；补充清缓存脚本、`~clear` 与 TaskGraph 面板说明 |
 | 2026-05-22 | 新增 §11 L2 纠偏专项 L2-1～L2-7（步骤 + 提示词 + 判定速查） |
-| 2026-05-22 | §11.7 L2-6 拆为前置进 forced + 主测 6 轮 edit；补充验证门禁死循环说明与 tsc 出口 |
+| 2026-05-22 | §11.7 L2-6 改 strict + v2 提示词（禁 read、forced 内连 edit）；记录 adaptive R5 早退 |
+| 2026-05-22 | 新增 §10.5 L2 专项报告；L2-6 strict 终测 ✅；§11.9 补充 file_loop / force_switch |
