@@ -1,1 +1,0 @@
-export const l2ProbeB = 2;
