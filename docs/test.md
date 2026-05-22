@@ -209,7 +209,7 @@ F12 → Network → WS → `/api/chat/ws` → Messages，搜 `execution_mode_ent
 
 - L1：工具失败轮可能 **forced**（视风险档而定；干净会话下常见 **R2 `tool_failure`**，R1 仍 free）
 - L2：**至少 1 条**失败信号写入 Timeline（**`no_progress` 或 `tool_repeat_fail` 均可**；任务 3 轮内结束时常为后者）
-- **已知缺口**：当前版本 L2 **takeover（recover）** 可能不出现（`TaskContext.domain` 暂为 `non_critical_read`）；**不以 recover 为必达**
+- **已知缺口**：L2 **takeover（recover）** Web 仍 **未手工验证**（`inferTaskDomain` 已映射 `critical_*`，可用 adaptive 堆信号再测）；**不以 recover 为必达**
 - **前置务必清 checkpoint**：否则 R1 可能被 **`checkpoint_resumed`** 抢先 forced，掩盖 `tool_failure` 路径
 
 ---
@@ -411,19 +411,20 @@ UI 再发 **`~clear`**。**不删** `data/config.json`、`data/memory-files/`、
 
 | 项 | 说明 |
 |----|------|
-| L2 takeover | `TaskContext.domain` 写死 `non_critical_read`，recover 难触发；不以 recover 为通过条件 |
+| L2 takeover | `inferTaskDomain` 已映射 `critical_*`；Web takeover **未手工验证**；自动化 ✅（§11.8） |
 | F 的 L2 信号 | 短任务常记 `tool_repeat_fail:2` 而非 `no_progress:3+` |
 | UI vs telemetry 轮次 | forced chip 显示轮次可能与 `telemetry.round` 差 1～3；以 telemetry 为准 |
 | checkpoint 污染 | 未清 `default.checkpoint.json` 时，无关新任务 R1 可能 `checkpoint_resumed` |
 | 工作区残留 | 测试后检查 `logger.ts`、`_l2probe-*`、`*probe*` 等；建议 `git restore .` |
 | L2 C 类 inject | `[System]…` 写入 Harness 内部 msgs，**Web 聊天气泡默认不展示**；以 Timeline 为准 |
-| 验证门禁 | `write`/`edit` 后须 Harness 认可的验证命令（如 `npx tsc --noEmit`）；`node --check` 不算 |
-| adaptive file_loop | free 段 branchBudget 不计数；forced 可能 R5 早退 → **L2-6 用 strict** |
+| lifecycle 压缩 | recovery / takeover / lifecycle 注入已设 `preserveOnCompaction`（2026-05-22）；L2-4 Web 仍 ⚠️ 待重测 |
+| 验证门禁 | `write`/`edit` 后须 Harness 认可的验证命令（如 `npx tsc --noEmit`）；`node --check` 亦认 |
+| adaptive file_loop | free 段 branchBudget 不计数；**R5 易 `execution_mode_exit`** → **L2-6 必须用 strict** |
 
 ### 10.5 L2 专项手工联调报告（2026-05-22）
 
-> 环境：Web · Windows · 模型 **z-ai/glm-5.1**（L2-1～L2-5 / A–H）· **minimax-m2.5**（L2-6 strict 终测）  
-> L2-7 仅自动化（见 §11.8）
+> 环境：Web · Windows · 模型 **z-ai/glm-5.1**（L2-1～L2-5 / A–H / L2-6 adaptive 对照）· **minimax-m2.5**（L2-6 strict）  
+> L2-7：自动化 ✅；Web takeover 待 adaptive 手工补测（domain 已修复，见 §11.8）
 
 #### 10.5.1 总览
 
@@ -434,10 +435,10 @@ UI 再发 **`~clear`**。**不删** `data/config.json`、`data/memory-files/`、
 | **L2-3** tool_repeat_fail | adaptive | ✅ | Timeline `tool_repeat_fail:2`；聊天 `[System]` 可能不可见 |
 | **L2-4** lifecycle | adaptive | ⚠️ 条件通过 | Timeline 有 no_progress；lifecycle inject Web 可能被 compaction 挤掉 |
 | **L2-5** graph_hint | **strict** | ✅ **最佳** | R1 forced；聊天可见「收到纠偏」；30+ `recover · graph_hint` |
-| **L2-6** file_loop | adaptive→**strict** | ✅（strict 终测） | 见 §10.5.2；adaptive 多轮 **未触发** |
-| **L2-7** takeover | 单测 | ✅ | supervisor-bridge `-t takeover` 11 + L2-7 11 + boundary 13 + e2e 7 |
+| **L2-6** file_loop | **strict**（adaptive ❌） | ✅ | strict ×2 通过；adaptive R5 exit → 无 file_loop（§10.5.2） |
+| **L2-7** takeover | 单测 + domain 已修 | ✅ 单测 / Web 待测 | `inferTaskDomain`；自动化 42 项绿 |
 
-**套件结论**：L2-1～L2-6 Web 信号链路 **基本可用**；L2-6 需 **strict + 合并提示词 + tsc 出口**；L2-7 takeover Web 仍不测（domain 缺口）。
+**套件结论**：L2-1～L2-6 Web 信号链路 **基本可用**；**L2-6 必须用 strict**（adaptive 两次实测 R5 forced 退出 → file_loop 未触发）；L2-7 takeover Web 仍待手工（domain 已映射 `critical_*`）。
 
 #### 10.5.2 L2-6 file_loop 迭代记录
 
@@ -448,13 +449,33 @@ UI 再发 **`~clear`**。**不删** `data/config.json`、`data/memory-files/`、
 | 3 | adaptive | glm-5.1 | ❌ 未触发 | 前置单测「已完成」不停（缺 tsc） |
 | 4 | adaptive | glm-5.1 | ⚠️ Harness ✅ L2 ❌ | 合并提示词 **12 轮 model_done**；R5 forced 退出，仅 2 次 forced 内 edit |
 | 5 | **strict** | minimax-m2.5 | ✅ **通过** | **13 轮 model_done**；R7 起 `file_loop:4/5/6/7` |
+| 6 | adaptive | （默认模型） | ❌ 未触发 | **11 轮** tsc passed；R2 `multi_write` enter · **R5 exit free**；supervisor-events **空**；forced 内 edit≈2 |
+| 7 | **strict** | （默认模型） | ✅ **通过** | **39 轮 model_done**；R5 `:4` → R38 `:25`；135 条 supervisor-events |
 
-**strict 终测（2026-05-22）关键证据**
+**strict 实测对比（尝试 5 vs 7）**
 
-- **telemetry**：R1 `execution_mode_enter`（`task_graph_active+pending_steps+explicit_impl`）；全程 forced；R13 `model_done`
-- **工具**：R1 write×2 · R2–R10 edit×7（logger）· R3 `search_codebase` · R4 `open_file`（**违令**）· R11 `npx tsc --noEmit` ✅
-- **supervisor-events**：R7 `file_loop:logger.ts:4` → R11 `:7`；R8+ 多次 `recover · graph_hint force_switch` + `correction_budget_exhausted:graph_hint`
-- **UI**：冰豆 **escalation L3 强制切换分支**（对应 `graph_hint` 升级 `force_switch`，非 file_loop 失败）
+| 项 | 尝试 5（minimax） | 尝试 7（strict 重测） |
+|----|-------------------|------------------------|
+| 轮次 | R13 `model_done` | R39 `model_done` |
+| forced | R1 enter，无 exit | R1 enter（`task_graph_active+…`），无 exit |
+| file_loop | R7 `:4` → R11 `:7` | R5 `:4` → R38 `:25` |
+| graph_hint / I4 | R8+ `force_switch` | R3+ 大量 `graph_hint` + 49× `correction_budget_exhausted` |
+| 违令 | R3 search · R4 open_file | R12/R32 `read_file` ×2；edit 过量（20+） |
+| Part C | R11 `npx tsc --noEmit` ✅ | tsc 多次失败后 **powershell** 成功 ✅ |
+
+**adaptive 对照（尝试 6 · 2026-05-22）**
+
+- **telemetry**：R2 `multi_write` enter → **R5 `execution_mode_exit`**（forced 仅 3 个 bearing 轮）
+- **工具**：R1 write×2 · R2–R9 edit×7 · R3 **read_file** · R10 tsc · R11 passed
+- **supervisor-events**：**0 行**（forced 段 logger edit 未达 4 次门槛）
+- **结论**：Harness ✅ · L2 file_loop ❌ — 与尝试 4 同型（R5 早退）
+
+**strict 终测关键证据（尝试 7 · 2026-05-22）**
+
+- **telemetry**：R1 `execution_mode_enter`（`task_graph_active+pending_steps+explicit_impl`）；**无** `execution_mode_exit`；R39 `model_done`
+- **工具**：R1 write×2 · R2–R23 edit×20+（logger）· R12/R32 read_file（违令）· R24+ 多次 tsc（powershell 终成功）
+- **supervisor-events**：R5 `file_loop:logger.ts:4` → R38 `:25`；R8+ `recover · graph_hint force_switch`；I4 预算拒绝 49 次
+- **UI**：冰豆全程 forced；后期 **L3 强制切换分支**（`force_switch`）
 
 #### 10.5.3 L2 跨项结论
 
@@ -468,8 +489,10 @@ UI 再发 **`~clear`**。**不删** `data/config.json`、`data/memory-files/`、
 
 | 项 | 说明 |
 |----|------|
-| file_loop 前置条件 | **forced 段**内同文件 edit ≥4；adaptive 易 R5 exit free |
-| 模型遵循 | minimax-m2.5 仍会 search/open；不影响 strict 下 file_loop 触发，但不作「遵令」标杆 |
+| file_loop 前置条件 | **forced 段**内同文件 edit ≥4；**adaptive 实测 R5 exit → 必失败** |
+| 模式选择 | **strict 必须**；adaptive 仅作 L1 对照，**不可**作为 L2-6 通过依据 |
+| 模型遵循 | 仍会 read_file / 过量 edit；不影响 strict 下 file_loop，但不作「遵令」标杆 |
+| tsc 执行 | Windows 下模型可能多次 `run_command` 失败，需 `powershell -Command "cd …; npx tsc --noEmit"` 才过 |
 | 宠物 L3 气泡 | strict + 偏离任务图 → `force_switch`；与 L2-6 通过不矛盾 |
 
 ### 10.6 测试后清理
@@ -485,7 +508,7 @@ git restore .
 ## 11. L2 纠偏专项（L2-1～L2-7）
 
 > **与 §1–8 的区别**：§1–8 主要验 **L1 Execution Mode**；本节验 **L2 Runtime Supervisor** 的 Timeline 信号、C 类 inject（recovery / graph_hint）、以及（可选）takeover 全路径。  
-> **Web 已知缺口**：`harness-tool-round.ts` 中 `TaskContext.domain` 暂为 `non_critical_read`，**L2-7 takeover 在 Web 聊天里几乎测不通**；L2-1～L2-6 仍可测。
+> **Web L2-7 说明**：`buildTaskContextForObserver` 已通过 `inferTaskDomain` 映射 `critical_*`（2026-05-22 代码修复）；Web takeover **仍待 adaptive 手工补测**，自动化已绿（§11.8）。
 
 ### 11.0 测前步骤（每项必做）
 
@@ -669,6 +692,7 @@ Supervisor观测: 每 2 轮汇报一次当前轮次。
 **预期结果**
 
 - 聊天中出现 **5 轮只读系统提示** ✅（本场景核心通过标准）
+- 2026-05-22 起 lifecycle 注入带 **`preserveOnCompaction`**，长会话下被硬压缩挤掉的概率降低；**建议 Web 重测一次** 更新 §10.5.1 结论
 
 ---
 
@@ -718,8 +742,11 @@ Supervisor观测: 每 2 轮汇报一次当前轮次。
 **模式**：**`strict`（推荐）** · 备选 `adaptive`
 
 > **重要**：`file_loop` 依赖 **forced 段** 的 branchBudget 计数；free 段 edit **不计数**。  
-> **2026-05-22 adaptive 实测**：R2 进 forced，**R5 即退出 free**，forced 内仅 2 次 logger edit → **无 file_loop**。  
-> **strict** 下 `executionModeFloor=forced`，6 次 edit 更易落在 forced 段内。  
+> **2026-05-22 模式对照（实测）**  
+> | 模式 | forced 行为 | file_loop |  
+> |------|-------------|-----------|  
+> | **adaptive** | R2 `multi_write` enter → **R5 exit free** | ❌ supervisor-events 空 |  
+> | **strict** | R1 `task_graph_active` enter → **全程无 exit** | ✅ R5 `:4` 起递增 |  
 > **验证门禁**：必须 Part C 跑 **`npx tsc --noEmit`** 才能 `model_done`；禁止在 tsc 前只口头说「完成」。  
 > **一次发完**：合并提示词，不要分两条消息；不要中途停止。
 
@@ -778,40 +805,62 @@ Part C（6 次 edit 全部完成后才做）：
 - **约 10–14 轮** `model_done`
 - adaptive 下 forced 早退：记 **未触发**，非 FAIL L1
 
-**实测记录（2026-05-22 · strict · minimax-m2.5 · 合并 v2）**
+**实测记录**
+
+**尝试 5 · strict · minimax-m2.5 · 2026-05-22**
 
 | 项 | 结果 |
 |----|------|
 | 结论 | ✅ **通过** |
-| 轮次 | R13 `model_done`；12 次工具 |
-| forced | R1 enter（`task_graph_active`），全程未 exit |
-| file_loop | R7 `:4` · R8 `:5` · R9 `:6` · R10–11 `:7` |
-| graph_hint | R8+ `force_switch` + I4 `correction_budget_exhausted`（宠物 L3 气泡） |
-| 违令工具 | R3 `search_codebase` · R4 `open_file`（仍触发 file_loop） |
-| Part C | R11 `npx tsc --noEmit` → `verificationStatus=passed` |
+| 轮次 | R13 `model_done` |
+| forced | R1 enter，全程未 exit |
+| file_loop | R7 `:4` → R11 `:7` |
+| 违令 | R3 `search_codebase` · R4 `open_file` |
+
+**尝试 6 · adaptive · 2026-05-22（对照）**
+
+| 项 | 结果 |
+|----|------|
+| 结论 | Harness ✅ · L2 ❌ |
+| 轮次 | R11 `model_done`；tsc passed |
+| forced | R2 enter → **R5 exit** |
+| file_loop | **无**（supervisor-events 0 行） |
+
+**尝试 7 · strict · 2026-05-22（重测）**
+
+| 项 | 结果 |
+|----|------|
+| 结论 | ✅ **通过** |
+| 轮次 | R39 `model_done` |
+| forced | R1 enter（`task_graph_active+pending_steps+explicit_impl`），无 exit |
+| file_loop | R5 `:4` → R38 `:25` |
+| graph_hint / I4 | R3+ `graph_hint`；49× `correction_budget_exhausted` |
+| 违令 | `read_file` ×2；edit 20+（超 Part B 6 次） |
+| Part C | tsc 多次失败后 powershell 成功 → `verificationStatus=passed` |
 
 ---
 
-### 11.8 L2-7 — takeover 全路径（Web 不测）
+### 11.8 L2-7 — takeover 全路径
 
 **§9 三条件**（RecoverySupervisor）：
 
-| 条件 | Web 聊天 |
-|------|----------|
-| `domain` 以 `critical_` 开头 | ❌ 现为 `non_critical_read` |
+| 条件 | 状态 |
+|------|------|
+| `domain` 以 `critical_` 开头 | ✅ `inferTaskDomain(intent)`（edit→`critical_edit` 等） |
 | `riskScore >= 0.6` | ✅ 编辑类任务通常满足 |
 | 有偏离信号 | ✅ L2-1～L2-3 可堆叠 |
 
-**Web 手工预期**：即使 L2-1～L2-3 信号齐全，也 **几乎不会** 出现 `recover · takeover`、takeover 消息块、handoff/cooldown 完整链。
+**Web 手工**：domain 缺口已修（2026-05-22）；**takeover 全链 Web 仍待 adaptive 手工验证**（须堆信号 + risk，非 L2-6 场景）。
 
-**若要验 takeover，用自动化**：
+**自动化（已通过）**：
 
 ```bash
-npm test -- test/harness/supervisor-bridge.test.ts -t takeover
+npm test -- test/harness/supervisor-bridge.test.ts -t "takeover|L2-7"
+npm test -- test/harness/recovery-boundary.test.ts
 npm test -- test/e2e/dual-mode-scenarios.test.ts
 ```
 
-**若要 Web 可测**：需改 `src/harness/harness-tool-round.ts` 的 `buildTaskContextForObserver`，按 intent/写文件映射 `critical_edit` / `critical_debug` 等（发版前单独 PR）。
+**实现位置**：`src/harness/task-domain.ts` · `buildTaskContextForObserver`（`harness-tool-round.ts`）。
 
 ---
 
@@ -828,13 +877,36 @@ npm test -- test/e2e/dual-mode-scenarios.test.ts
 | `failure · correction_budget_exhausted:graph_hint` | I4 预算门禁 ✅ |
 | 聊天 `[System] Repeated failed…` | C 类 recovery inject ✅ |
 | 聊天 `[System] You have been reading…5 rounds…` | lifecycle recovery ✅ |
-| `recover · takeover:…` | Web **当前预期 ❌**（domain 缺口） |
+| `recover · takeover:…` | 自动化 ✅；Web **待 adaptive 手工** |
 
 ---
 
 ## 12. 手工记录（复制填空）
 
-**L2-6 strict 终测样例（2026-05-22，可直接归档）**
+**L2-6 strict 终测样例（尝试 7 · 2026-05-22）**
+
+```markdown
+## 双模手工记录
+
+- 日期：2026-05-22
+- 场景：L2-6 file_loop（strict 重测）
+- supervisorMode：strict
+- 模型：（Web 默认）
+- 新会话：是
+
+### 观测
+- [x] 冰豆 forced chip：全程 forced；后期 L3 强制切换分支
+- [x] telemetry：R1 `task_graph_active+pending_steps+explicit_impl` enter；无 exit
+- [x] file_loop：R5 :4 → R38 :25
+- [x] graph_hint / I4：49× `correction_budget_exhausted`
+- [x] model_done：R39；tsc passed（powershell）
+
+### 结论
+- [x] 通过
+- 备注：adaptive 对照（尝试 6）R5 exit → file_loop 未触发；read_file ×2 违令
+```
+
+**L2-6 strict 样例（尝试 5 · minimax · 2026-05-22）**
 
 ```markdown
 ## 双模手工记录
@@ -853,7 +925,7 @@ npm test -- test/e2e/dual-mode-scenarios.test.ts
 
 ### 结论
 - [x] 通过
-- 备注：R3 search_codebase、R4 open_file 违令；adaptive 历次未触发 file_loop
+- 备注：R3 search_codebase、R4 open_file 违令
 ```
 
 **空白模板**
@@ -867,12 +939,12 @@ npm test -- test/e2e/dual-mode-scenarios.test.ts
 - 新会话：是 / 否
 
 ### 观测
-- [ ] 冰豆 forced chip：
-- [ ] telemetry execution_mode_enter 次数：
-- [ ] ~supervisor 摘要（粘贴）：
+- [X] 冰豆 forced chip：
+- [X] telemetry execution_mode_enter 次数：
+- [X] ~supervisor 摘要（粘贴）：
 
 ### 结论
-- [ ] 通过 / [ ] 未通过
+- [X] 通过 / [ ] 未通过
 - 备注：
 ```
 
@@ -921,3 +993,4 @@ npm test -- test/harness/execution-mode-harness.test.ts
 | 2026-05-22 | 新增 §11 L2 纠偏专项 L2-1～L2-7（步骤 + 提示词 + 判定速查） |
 | 2026-05-22 | §11.7 L2-6 改 strict + v2 提示词（禁 read、forced 内连 edit）；记录 adaptive R5 早退 |
 | 2026-05-22 | 新增 §10.5 L2 专项报告；L2-6 strict 终测 ✅；§11.9 补充 file_loop / force_switch |
+| 2026-05-22 | L2-6 尝试 6–7：adaptive R5 exit 对照 ❌；strict 重测 R39 `:4→:25` ✅；domain/`node --check`/`preserveOnCompaction` 文档同步；README 测试摘要 |

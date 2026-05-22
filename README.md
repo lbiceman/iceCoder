@@ -19,8 +19,9 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, verification gate, no-tool recovery, repeat-failure detection |
 | **TaskGraph** | Sole structured context injection for critical intents; `TaskDomainGate` keeps `question`/`inspect` in free mode |
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
-| **Dual-mode Supervisor** | **Partially shipped**: `loadHarnessSupervisorRuntime` in `chat`/`run`/WebSocket paths; `ModeController`, `ModeDecisionEngine`, `ToolGate`, execution-mode constraints wired into Harness; full spec in [`docs/双模方案2.md`](./docs/双模方案2.md) |
-| **Memory / compaction / sub-agent** | File-based memory, layered compaction, read-only sub-agent exploration |
+| **Dual-mode Supervisor** | **L2 largely validated** — L1/L2 wired; 15 Web manual scenarios in **Testing & validation**; spec [`docs/双模方案2.md`](./docs/双模方案2.md) |
+| **Memory system** | File-based long-term memory + session notes + Dream/eviction; **20** test files **~391** cases — see **Memory System** |
+| **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
 | **Eval** | `npm run eval:agent` is still a metric skeleton (no full scoring runner yet) |
 
 Verification:
@@ -31,7 +32,7 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth for counts and pass/fail. The suite lives under `test/**/*.test.ts` (on the order of **60+** test files; case counts drift as tests are added).
+Treat **`npm test`** as the source of truth. Baseline (2026-05-22): **93** test files, **1165** cases. Full breakdown in **Testing & validation** below.
 
 ---
 
@@ -130,23 +131,51 @@ Key files:
 - Older files without `runtimeV2` still load cleanly; saves merge v1 + v2 without conflicting renames (`checkpointPersistTail` serializes writes in Harness).
 - Triggers mirror the long-session design (step/tool/verification/compaction milestones — see `docs/requirement/长时间连续工作-finish.md`).
 
-### Dual-mode Supervisor
+### Dual-mode Supervisor (V1.3.7)
 
-Optional **Supervisor** regulation for engineering intents (`edit`, `debug`, `test`, `refactor`):
+Spec: [`docs/双模方案2.md`](./docs/双模方案2.md) · Manual playbook: [`docs/test.md`](./docs/test.md) · Flow chart: [`docs/双模 L2 流程图.md`](./docs/双模%20L2%20流程图.md)
 
-| Mode | `config.json` `supervisorMode` / `supervisor-config.json` `mode` | Summary |
-|------|--------------------------------------|---------|
-| **off** | `off` (Harness fallback when config not injected) | No supervision decision chain |
-| **adaptive** | `adaptive` (default in `supervisor-config.example.json`) | Switches between free and takeover segments by risk signals |
-| **strict** | `strict` | Strong constraints; `executionModeFloor` = `forced` |
+Dual-mode separates **user-selected supervision tier** from **runtime execution constraints**:
 
-- **Loading**: `loadHarnessSupervisorRuntime()` from `chat`, `run`, `chat-ws`, `remote-ws`; **mode** is stored in **`data/config.json`** field **`supervisorMode`** (Web nav tri-state toggle); advanced params stay in `supervisor-config.json`; failures **degrade to off**.
-- **Env (Global layer only)**: `ICE_SUPERVISOR_SHADOW` overrides shadow; `ICE_SUPERVISOR_CONFIG_PATH` points at supervisor params file.
-- **Web UI**: tri-state **Free / Adaptive / Strict** button left of the theme toggle (`PATCH /api/config/supervisor-mode`).
-- **Shadow**: `ICE_SUPERVISOR_SHADOW=1` runs evaluation without mutating `supervisorPhase`.
-- **Spec**: [`docs/双模方案2.md`](./docs/双模方案2.md) (V1.3.7); template: [`data/supervisor-config.example.json`](./data/supervisor-config.example.json).
-- **Env vars**: `ICE_SUPERVISOR_SHADOW`, `ICE_SUPERVISOR_CONFIG_PATH` — see [`docs/environment-variables.md`](./docs/environment-variables.md) §4.
-- **Implementation gaps**: [`docs/双模落地缺口.md`](./docs/双模落地缺口.md) — missing modules and features for the full dual-mode stack.
+```text
+L0 Policy tier (config.json · supervisorMode)
+  off / adaptive / strict          ← Web nav · Ice Bean eye color
+        ↓
+L1 Execution mode (Harness · executionMode)
+  free ↔ forced                    ← Ice Bean bottom forced · … chip
+  ModeController · ToolGate · TaskGraph · branchBudget
+        ↓
+L2 Runtime supervision (SupervisorRuntimeBridge)
+  PassiveObserver · GoalDriftDetector · RecoverySupervisor
+  CorrectionPort · RecoveryBoundary · EventTimeline → supervisor-events.jsonl
+```
+
+| Layer | Key modules | Role |
+|-------|-------------|------|
+| **L0** | `mode-controller.ts` · `supervisor-config.ts` | Load tier + global policy; degrade to `off` on failure |
+| **L1** | `execution-mode-constraints.ts` · `tool-gate.ts` · `mode-decision-engine.ts` | Enter/exit forced by signals; strict floor = forced |
+| **L1** | `task-graph-executor.ts` · `task-domain.ts` | Structured context; `inferTaskDomain()` → `critical_*` for takeover |
+| **L2** | `passive-observer.ts` · `goal-drift-detector.ts` | `no_progress` / `file_loop` / `tool_repeat_fail` / `goal_drift` |
+| **L2** | `recovery-supervisor.ts` · `correction-port.ts` · `recovery-boundary.ts` | takeover / handoff / graph_hint; I4 correction budget |
+| **L2** | `event-timeline.ts` · `supervisor-bridge.ts` | Timeline persistence; round-level evaluate + checkpoint |
+
+**L0 tiers**
+
+| Mode | `supervisorMode` | Summary |
+|------|------------------|---------|
+| **off** | `off` | No supervision chain; TaskGraph panel may still appear |
+| **adaptive** | `adaptive` (default) | Risk-based free ↔ forced; first-round graph off by default (§I3) |
+| **strict** | `strict` | Strong constraints; first-round graph + forced; **L2-6 file_loop requires this** |
+
+**Config & entrypoints**
+
+- **Tier**: `data/config.json` → `supervisorMode` (Web nav · `PATCH /api/config/supervisor-mode`)
+- **Params**: `data/supervisor-config.json` (template [`supervisor-config.example.json`](./data/supervisor-config.example.json))
+- **Loading**: `loadHarnessSupervisorRuntime()` from `chat` / `run` / `chat-ws` / `remote-ws`
+- **Shadow**: `ICE_SUPERVISOR_SHADOW=1` — evaluate without mutating `supervisorPhase`
+- **Env vars**: [`docs/environment-variables.md`](./docs/environment-variables.md) §4
+
+**Recent fixes (2026-05-22):** `inferTaskDomain()` · `node --check` verification · `preserveOnCompaction` for recovery injects
 
 #### `~supervisor` chat command (Supervisor events report)
 
@@ -250,9 +279,23 @@ Current tool categories:
 
 ## Memory System
 
-iceCoder uses file-based persistent memory. It does not require an external database.
+iceCoder uses **file-based** persistent memory (no external DB). Core code: `src/memory/file-memory/` (**26** source files), integrated via `HarnessMemoryIntegration` (`harness-memory.ts`).
 
-### Memory Types
+### Module map
+
+| Module | Files | Role |
+|--------|-------|------|
+| Storage | `file-memory-manager.ts` | Project + user memory directories |
+| Scan / index | `memory-scanner.ts` · `memory-fact-index.ts` | Directory scan, FactIndex cache |
+| Recall | `memory-recall.ts` | Coarse + standard recall (keyword / LLM branches) |
+| Extraction | `memory-llm-extractor.ts` | Post-turn LLM memory extraction |
+| Security | `memory-secret-scanner.ts` · `memory-security.ts` | Secret scan, write gates |
+| Dream | `memory-dream.ts` | Periodic consolidation / dedup / prune |
+| Eviction | `memory-eviction.ts` | Weighted scoring eviction (not pure LRU) |
+| Session notes | `session-memory.ts` | Structured `session-notes.md` |
+| Telemetry | `memory-telemetry.ts` | `data/memory/telemetry.jsonl` + HTTP report |
+
+### Memory types
 
 | Type | Purpose |
 |---|---|
@@ -361,6 +404,15 @@ Safety protections:
 - **HTTP:** `GET /api/memory/telemetry` aggregates recent days (LLM vs keyword recall rate, extract cache hits, Dream stats, store file counts).
 - **Recall metrics:** `usedLLM` reflects only `recallRelevantMemories()` — not harness rerank or relevance-gate rescue LLM calls.
 
+### Memory tests
+
+| Type | Files | Cases (~) | Coverage |
+|------|-------|-----------|----------|
+| Unit / integration | **20** | **~391** | recall, extract, Dream, eviction, security, concurrency |
+| E2E | included | **9** in `memory-e2e.test.ts` | extract → write → recall |
+
+Command: `npm test -- test/memory/` · Design: [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md)
+
 ---
 
 ## Session Memory and Compaction
@@ -442,6 +494,93 @@ This gives the model a stable view of what has happened even if conversation his
 
 ---
 
+---
+
+## Testing & validation
+
+> Manual steps + copy-paste prompts: [`docs/test.md`](./docs/test.md) · Dual-mode e2e: `test/e2e/dual-mode-scenarios.test.ts`
+
+### Automated tests (Vitest)
+
+**Baseline (2026-05-22):** **93** test files · **1165** cases · `npx tsc --noEmit` 0 errors
+
+| Directory | Files | Cases (~) | Notes |
+|-----------|-------|-----------|-------|
+| `test/harness/` | **45** | **~396** | Harness loop, compaction, checkpoint, **full supervisor stack** |
+| `test/memory/` | **20** | **~391** | File memory recall / extract / Dream / eviction |
+| `test/` (TaskGraph, etc.) | **7** | **~166** | Graph build, execute, persist, review |
+| `test/llm/` | 4 | ~34 | Adapters, token counting |
+| `test/web/` | 5 | ~26 | API, supervisor-events report |
+| `test/public/` | 2 | **12** | **Ice Bean** palette + expression cycle |
+| `test/e2e/` | **1** | **7** | **Dual-mode scenarios A–F** |
+| Other | 9 | ~139 | parser, cli, core, prompts, config |
+
+```bash
+npx tsc --noEmit
+npm test
+npm test -- test/harness/supervisor-bridge.test.ts    # 53 cases
+npm test -- test/harness/recovery-boundary.test.ts    # 13 cases
+npm test -- test/e2e/dual-mode-scenarios.test.ts      # 7 cases
+npm test -- test/memory/
+ICE_SUPERVISOR_MODE=off npm test -- test/harness/harness.test.ts
+```
+
+> If `data/config.json` has `supervisorMode: strict` left over from manual L2-6 runs, **2** cases in `mode-controller.test.ts` may fail until restored to `adaptive`.
+
+### End-to-end (dual-mode · P2-2)
+
+File: `test/e2e/dual-mode-scenarios.test.ts` — **7** cases:
+
+| # | Scenario | Mode | Assertion |
+|---|----------|------|-----------|
+| A | Read-only | adaptive | Stays `free`, no enter |
+| B | Small edit | adaptive | No first-round graph, may stay `free` |
+| C | New module | strict | First-round graph → `forced` |
+| D | Multi-file refactor | strict | `forced` + modeLock |
+| E | Checkpoint resume | adaptive | `checkpoint_resumed` → `forced` |
+| F | Graph build failure | adaptive | degraded forced |
+| F′ | Graph build failure | strict | First-round init error path |
+
+### Manual Web tests (2026-05-22)
+
+Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`docs/test.md`](./docs/test.md) §10–§11
+
+**L1 execution mode — scenarios A–H (8)**
+
+| Scenario | Mode | Result |
+|----------|------|--------|
+| A read-only | adaptive | ✅ |
+| B single-file edit | adaptive | ✅ |
+| C multi-file create | adaptive | ✅ |
+| D strict graph | strict | ✅ |
+| E checkpoint | adaptive | ✅ |
+| F tool failures | adaptive | ⚠️ L1 ✅; L2 logs `tool_repeat_fail` not `no_progress` |
+| G off control | off | ✅ |
+| H long session | adaptive | ✅ |
+
+**L2 supervision signals — L2-1–L2-7 (7)**
+
+| Scenario | Mode | Result |
+|----------|------|--------|
+| L2-1 no_progress | adaptive | ✅ |
+| L2-2 goal_drift | adaptive | ✅ |
+| L2-3 tool_repeat_fail | adaptive | ✅ |
+| L2-4 lifecycle | adaptive | ⚠️ conditional (Timeline OK; chat bubble may be hidden) |
+| L2-5 graph_hint | **strict** | ✅ best (30+ `recover · graph_hint`) |
+| L2-6 file_loop | **strict** | ✅ strict ×2; adaptive R5 exit → not triggered |
+| L2-7 takeover | adaptive + stacked signals | ✅ automation; **Web full chain pending** |
+
+**Manual total:** **15** Web scenarios (8 + 7) · **13 passed** · **2 partial/pending** (F signal semantics, L2-4 / L2-7 Web)
+
+### Release gate
+
+1. `npx tsc --noEmit` — 0 errors  
+2. `npm test` — 1165/1165 green (default config)  
+3. `ICE_SUPERVISOR_MODE=off` — harness suites zero regression  
+4. After `supervisor/` changes: rerun `dual-mode-scenarios` + `supervisor-bridge` + `recovery-boundary`
+
+---
+
 ## Runtime evaluation (eval harness)
 
 A minimal eval skeleton exists (script name `eval:agent` is legacy):
@@ -479,21 +618,34 @@ See [`docs/nextWork.md`](./docs/nextWork.md) for the next implementation steps.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
 
-### Ice Bean (session indicator, Web UI)
+### Ice Bean (session pet / Web indicator)
 
-The **chat page** embeds an optional **Ice Bean** (Chinese display name **冰豆**, `SESSION_PET_DISPLAY_NAME` in `session-pet-palette.js`): a small canvas-based indicator that reflects runtime activity **without** changing Harness or backend logic.
+The **chat page** embeds **Ice Bean** (display name **冰豆**, `SESSION_PET_DISPLAY_NAME`): a Canvas-based indicator mapping Harness runtime state to **expressions, bubbles, and a token ring** — decoupled from backend logic.
+
+**Architecture**
+
+```text
+WebSocket HarnessStepEvent
+  → chat-page.js
+  → ChatPetBridge (chat-pet-bridge.js)
+       ├─ SessionPet (session-pet.js)        Canvas render · expression FSM
+       ├─ session-pet-palette.js             Eye / ring colors
+       └─ ChatExecutionPlan                  forced · … chip · graph progress
+```
 
 | | |
 |---|---|
-| **Rendering** | ~120×120 logical px, dark body, capsule eyes; eye color maps to **`supervisorMode`** (off / adaptive / strict — see `session-pet-palette.js`); nav toggle shows pet bubble「当前模式：…」. |
-| **Token ring** | Outer arc from top, clockwise — approximate **context / token usage** ratio (green → yellow → red). |
-| **Expressions** | Many (~20) named visual states (e.g. thinking, idle, tool/memory hints) driven by **`ChatPetBridge`** from WebSocket `HarnessStepEvent`-style updates in `chat-page.js`. |
-| **Interaction** | Drag to reposition (saved under `localStorage` key `ice-session-pet-position`); double-click resets placement. Canvas `aria-label` is built via `buildSessionPetCanvasAriaLabel` (starts with 冰豆). |
-| **Key files** | `src/public/js/session-pet.js`, `session-pet-palette.js`, `chat-pet-bridge.js`; styles under `src/public/css/style.css`; wired in `chat-page.js` / `main.js`. |
-| **Demo** | `src/public/pet-expressions-demo.html` + `pet-expressions-demo.js` for manual expression checks. |
-| **Tests** | `test/public/session-pet-palette.test.ts`, `session-pet-expression-cycle.test.ts`. |
+| **Look** | ~120×120 px; **eye color = L0 tier** (off `#88EDC7` / adaptive `#86E0FF` / strict `#F1A8B2`) |
+| **Token ring** | Context usage arc (green → yellow → red) via `eyeColorForTokenPct()` |
+| **Foot label** | `forced · …` (L1) · graph step summary · turn count |
+| **Expressions** | ~**20** states (thinking, tools, memory, MCP, tunnel, **L3 force_switch**, etc.) |
+| **Dual-mode link** | Nav tier change → bubble「当前模式：…」; `graph_hint force_switch` → L3 pet bubble |
+| **Interaction** | Drag (`localStorage` `ice-session-pet-position`) · double-click reset · `aria-label` |
+| **Sources** | `session-pet.js` · `session-pet-palette.js` · `chat-pet-bridge.js` · `style.css` |
+| **Demo** | `pet-expressions-demo.html` — manual expression QA |
+| **Tests** | **2** files · **12** cases: `session-pet-palette.test.ts` · `session-pet-expression-cycle.test.ts` |
 
-CLI-only workflows do **not** include Ice Bean; it is a **browser UX** affordance for the SPA chat.
+CLI-only workflows have **no Ice Bean**; it is a browser UX layer only.
 
 ---
 
@@ -533,10 +685,10 @@ Quick reference:
 src/
   cli/              # CLI entry, bootstrap, commands (web, run, config, mcp, …)
   core/             # Orchestrator (shared file parser + LLM adapter)
-  harness/          # Harness, compaction, task/repo state, TaskGraph, sub-agent, tool planner,
+  harness/          # Harness, compaction, task/repo state, TaskGraph, task-domain, sub-agent, tool planner,
                     # checkpoint + CheckpointEngine v2, branch budget, supervisor/*
   llm/              # OpenAI / Anthropic adapters
-  memory/file-memory/  # File-based memory, session notes, dream, eviction
+  memory/file-memory/  # File-based memory (26 modules), session notes, dream, eviction
   parser/           # FileParser strategies (HTML, Office, XMind)
   prompts/          # Prompt assembly
   tools/            # Builtin tools, registry, executor
@@ -585,7 +737,7 @@ Higher-level prose (beyond this README):
 - [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — memory system adjustments
-- [`docs/test.md`](./docs/test.md) — **dual-mode test playbook** (automation commands, 6 manual scenarios, appendix B checklist)
+- [`docs/test.md`](./docs/test.md) — **dual-mode test playbook** (1165 automated + 15 manual Web scenarios)
 - [`docs/双模方案2.md`](./docs/双模方案2.md) — dual-mode supervisor spec **V1.3.7**
 - [`docs/运行时后续优化.md`](./docs/运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
 - [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes
