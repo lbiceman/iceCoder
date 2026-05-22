@@ -123,6 +123,31 @@ describe('GraphExecutor', () => {
     expect(ex.shouldForceStop()).toBe(true);
   });
 
+  it('syncCursorToTaskPhase 对齐 editing 并返回 view', () => {
+    ex.initGraph({
+      goal: '在 src/harness 下新增工具函数、补单测并 npm test 验证',
+      intent: 'edit',
+    });
+    const sync = ex.syncCursorToTaskPhase('editing');
+    expect(sync.changed).toBe(true);
+    const active = sync.view?.steps.find(s => s.id === sync.view?.activeStepId);
+    expect(active?.title).toBe('编写或修改代码');
+    expect(active?.status).toBe('running');
+    const doneSteps = sync.view?.steps.filter(s => s.status === 'done') ?? [];
+    expect(doneSteps.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('syncCursorToTaskPhase 相同 phase 不重复变更', () => {
+    ex.initGraph({
+      goal: '在 src/harness 下新增工具函数、补单测并 npm test 验证',
+      intent: 'edit',
+    });
+    ex.syncCursorToTaskPhase('editing');
+    const again = ex.syncCursorToTaskPhase('editing');
+    expect(again.changed).toBe(false);
+    expect(again.view).toBeUndefined();
+  });
+
   // ── Snapshot ──
 
   it('toSnapshot 返回快照', () => {

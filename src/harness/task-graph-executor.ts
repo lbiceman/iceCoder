@@ -10,7 +10,7 @@
  */
 
 import type { TaskGraph as TaskGraphData, NodeContract, OutputSignal } from '../types/task-graph.js';
-import type { TaskIntent } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
 import { buildGraph } from './task-graph-builder.js';
 import {
   createTaskGraph,
@@ -24,6 +24,7 @@ import {
   applySnapshot,
   needsRecovery,
   switchToFallbackBranch,
+  syncCursorToTaskPhase as alignGraphCursorToPhase,
 } from './task-graph.js';
 import {
   ContractValidator,
@@ -58,6 +59,13 @@ export interface AdvanceResult {
   advanced: boolean;
   graphDone: boolean;
   nextNodeTitle?: string;
+}
+
+export interface SyncCursorResult {
+  changed: boolean;
+  view?: TaskGraphView;
+  nodeId?: string;
+  nodeIndex?: number;
 }
 
 /**
@@ -330,6 +338,24 @@ export class GraphExecutor {
       markGraphDone(this.graph);
     }
     return { advanced: false, graphDone: true };
+  }
+
+  /**
+   * 工具轮结束后，将游标与 TaskState.phase 对齐并返回更新后的面板视图。
+   */
+  syncCursorToTaskPhase(taskPhase: TaskPhase): SyncCursorResult {
+    if (!this.graph) return { changed: false };
+
+    const result = alignGraphCursorToPhase(this.graph, taskPhase);
+    if (!result.changed) return { changed: false };
+
+    this.resetNodeState();
+    return {
+      changed: true,
+      view: taskGraphToView(this.graph),
+      nodeId: result.currentNodeId,
+      nodeIndex: this.graph.cursor.nodeIndex,
+    };
   }
 
   // ═══════════════════════════════════════════════

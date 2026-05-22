@@ -99,6 +99,18 @@ window.ChatExecutionPlanBridge = (function () {
     if (step.type === 'task_graph_node' && step.nodeId) {
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.updateGraphNode(step);
     }
+    if (step.type === 'task_graph_update' && step.plan) {
+      currentPlanId = step.plan.planId;
+      if (window.ChatExecutionPlan) {
+        window.ChatExecutionPlan.setPlan({
+          planId: step.plan.planId,
+          intent: step.plan.intent,
+          progress: step.plan.progress || 0,
+          steps: step.plan.steps,
+          activeStepId: step.plan.activeStepId,
+        });
+      }
+    }
     if (step.type === 'task_graph_branch') {
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.highlightGraphBranch(step);
     }

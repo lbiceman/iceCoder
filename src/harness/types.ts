@@ -233,6 +233,7 @@ export interface HarnessStepEvent {
     | 'execution_plan_clear'
     | 'task_graph_init'
     | 'task_graph_node'
+    | 'task_graph_update'
     | 'task_graph_branch'
     | 'task_graph_done'
     | 'execution_mode_enter'

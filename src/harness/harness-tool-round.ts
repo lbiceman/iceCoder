@@ -376,6 +376,17 @@ export async function runHarnessToolRound(
         onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
       }
     }
+
+    const syncResult = deps.graphExecutor.syncCursorToTaskPhase(state.taskState.snapshot().phase);
+    if (syncResult.changed && syncResult.view) {
+      onStep?.({
+        type: 'task_graph_update',
+        plan: syncResult.view,
+        nodeId: syncResult.nodeId,
+        nodeIndex: syncResult.nodeIndex,
+        graphStatus: deps.graphExecutor.toSnapshot()?.status,
+      });
+    }
   }
   const graphSnapshotAfter = deps.graphExecutor?.toSnapshot();
 
