@@ -657,6 +657,13 @@ window.ChatExecutionPlan = (function () {
     if (popoverOpen) positionPopover();
   }
 
+  function resetExecutionMode() {
+    currentExecutionMode = null;
+    renderExecutionModeBanner();
+    updateAnchorChrome();
+    notifyPetFoot();
+  }
+
   function clear() {
     currentPlan = null;
     currentExecutionMode = null;
@@ -702,6 +709,7 @@ window.ChatExecutionPlan = (function () {
     setPlan: setPlan,
     applyPatch: applyPatch,
     clear: clear,
+    resetExecutionMode: resetExecutionMode,
     setVisible: setVisible,
     getPlan: getPlan,
     isVisible: isVisible,

@@ -54,6 +54,9 @@ window.ChatPetBridge = (function () {
   }
 
   function showThinking(withFile) {
+    if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
+      ChatExecutionPlan.resetExecutionMode();
+    }
     currentTurnCount = 0;
     petUiSessionActive = true;
     lastIsStreaming = false;
