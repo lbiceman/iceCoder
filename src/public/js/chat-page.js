@@ -406,6 +406,7 @@ window.ChatPage = (function () {
         || step.type === 'execution_plan_clear'
         || step.type === 'task_graph_init'
         || step.type === 'task_graph_node'
+        || step.type === 'task_graph_update'
         || step.type === 'task_graph_branch'
         || step.type === 'task_graph_done'
         || step.type === 'execution_mode_enter'

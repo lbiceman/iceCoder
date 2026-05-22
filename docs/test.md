@@ -3,7 +3,7 @@
 > **规格**：[`双模方案2.md`](./双模方案2.md) V1.3.7 · **自动化用例**：`test/e2e/dual-mode-scenarios.test.ts`
 
 本文档给 **Web 聊天手工联调** 用：每项只有四块——**什么模式、复制什么提示词、怎么观察、预期什么结果**。  
-发版/改 `supervisor/` 前仍建议跑 §9 自动化回归。
+发版/改 `supervisor/` 前仍建议跑 §12 自动化回归。
 
 ---
 
@@ -11,8 +11,9 @@
 
 1. `npm run iceCoder`，浏览器打开聊天页，顶栏 **连接绿点** 亮。
 2. 顶栏切到本文档指定的 **自由 / 自适应 / 严格**（写入 `data/config.json` 的 `supervisorMode`）。
-3. **新建或清空会话**（场景 E 除外），避免旧 checkpoint 干扰。
+3. **新建或清空会话**（场景 E 除外），避免旧 checkpoint 干扰。聊天框发 **`~clear`** 可清前端会话；同时建议清磁盘缓存（见 §10.1）。
 4. 档位切换后 **下一条新消息** 才生效。
+5. **`~clear` 会重置**冰豆底部 `forced · …` 状态（新任务开始时也会自动清 L1 chip，避免上一轮残留）。
 
 ### 0.1 实时观测（开第二个终端）
 
@@ -41,7 +42,8 @@ Get-Content data/runtime/supervisor-events.jsonl -Wait
 |--------|------|----------|
 | 监管档位 | 顶栏按钮 + 冰豆**眼色** | 自由 `#88EDC7` / 自适应 `#86E0FF` / 严格 `#F1A8B2`（**手动选的**，不随 forced 变） |
 | L1 forced | 冰豆底部 **`forced · …`** | 已进入强约束执行；悬停看原因与信号 |
-| 执行计划 25% | 计划 popover | **任务图进度**，≠ 模式切换，别用它判断 forced |
+| 执行计划面板 | 透明 popover / 任务图 | **TaskGraph 进度 UI**，≠ L1 forced；**off 模式下仍可能出现** |
+| 执行计划 25% | 计划 popover 内进度 | **任务图进度**，≠ 模式切换，别用它判断 forced |
 | L2 汇总 | 聊天输入 `~supervisor` | 进入/退出次数 + Timeline |
 
 ### 0.3 浏览器 DevTools（可选，最准）
@@ -200,14 +202,15 @@ F12 → Network → WS → `/api/chat/ws` → Messages，搜 `execution_mode_ent
 **如何观察**
 
 - telemetry：可能出现 `execution_mode_enter`，`enteredBy` 含 **`tool_failure`**（若当轮被判为非 L0 只读）
-- `supervisor-events.jsonl`：连续出现 **`failure · no_progress:3/4/5…`**
+- `supervisor-events.jsonl`：出现 **`failure · no_progress:3/4/5…`** 或 **`tool_repeat_fail:2`**
 - `~supervisor event=failure days=1`
 
 **预期结果**
 
-- L1：工具失败轮可能 **forced**（视风险档而定）
-- L2：**至少 1 条** `no_progress` 写入 Timeline
-- **已知缺口**：当前版本 L2 **takeover（recover）** 可能不出现（`TaskContext.domain` 暂为 `non_critical_read`）；以 Timeline 有 `no_progress` 为通过，**不以 recover 为必达**
+- L1：工具失败轮可能 **forced**（视风险档而定；干净会话下常见 **R2 `tool_failure`**，R1 仍 free）
+- L2：**至少 1 条**失败信号写入 Timeline（**`no_progress` 或 `tool_repeat_fail` 均可**；任务 3 轮内结束时常为后者）
+- **已知缺口**：当前版本 L2 **takeover（recover）** 可能不出现（`TaskContext.domain` 暂为 `non_critical_read`）；**不以 recover 为必达**
+- **前置务必清 checkpoint**：否则 R1 可能被 **`checkpoint_resumed`** 抢先 forced，掩盖 `tool_failure` 路径
 
 ---
 
@@ -232,6 +235,7 @@ F12 → Network → WS → `/api/chat/ws` → Messages，搜 `execution_mode_ent
 **预期结果**
 
 - 与未接入双模前行为一致：只有普通 tool 流程，无 Execution Mode 切换
+- **TaskGraph 执行计划面板仍可能出现**（与 L1 无关）；通过标准只看 **无 forced chip、无 `execution_mode_enter`**
 
 ---
 
@@ -278,8 +282,8 @@ F12 → Network → WS → `/api/chat/ws` → Messages，搜 `execution_mode_ent
 | C | adaptive | `execution_mode_enter` + forced |
 | D | strict | 首轮 graph + forced + modeLock |
 | E | adaptive | `checkpoint_resumed` + forced |
-| F | adaptive | Timeline 有 `no_progress` |
-| G | off | 无 enter、无 forced chip |
+| F | adaptive | L1 可能 `tool_failure` forced；L2 有 `no_progress` 或 `tool_repeat_fail` |
+| G | off | 无 enter、无 forced chip（任务面板可出现） |
 | H | adaptive | Phase1 free；Phase3 至少 1 次 enter |
 
 **不算通过的情况**
@@ -291,7 +295,139 @@ F12 → Network → WS → `/api/chat/ws` → Messages，搜 `execution_mode_ent
 
 ---
 
-## 10. 手工记录（复制填空）
+## 10. A–H 手工联调报告（2026-05-22）
+
+> 环境：Web 聊天 · `npm run iceCoder` · Windows · 模型 z-ai/glm-5.1（NVIDIA API）  
+> 观测源：`data/runtime/telemetry.jsonl`、`data/runtime/supervisor-events.jsonl`、冰豆 UI、`~supervisor`
+
+### 10.1 测前清缓存（PowerShell）
+
+每项重跑前（场景 E 第二步除外）：
+
+```powershell
+@(
+  "data/runtime/telemetry.jsonl",
+  "data/runtime/supervisor-events.jsonl",
+  "data/memory/telemetry.jsonl"
+) | ForEach-Object { Set-Content -Path $_ -Value "" -Encoding UTF8 }
+
+Remove-Item -Force -ErrorAction SilentlyContinue @(
+  "data/sessions/default.checkpoint.json",
+  "data/sessions/default.json",
+  "data/sessions/default.structured.json",
+  "data/sessions/session-notes.md"
+)
+```
+
+UI 再发 **`~clear`**。**不删** `data/config.json`、`data/memory-files/`、`data/user-memory/`。
+
+### 10.2 总览
+
+| 场景 | 模式 | 结论 | 关键证据 |
+|------|------|------|----------|
+| **A** 纯读取 | adaptive | ✅ 通过 | 全程 free；无 `execution_mode_enter` |
+| **B** 单文件改 | adaptive | ✅ 通过 | 首轮无 graph；单 write 全程 free |
+| **C** 多文件新建 | adaptive | ✅ 通过 | R2 `multi_write` → forced；R8 `execution_mode_exit` → free |
+| **D** strict 建图 | strict | ✅ 通过 | R1 `task_graph_active+pending_steps+explicit_impl` forced；全程无 exit |
+| **E** checkpoint | adaptive | ✅ 通过 | R1 `checkpoint_resumed` forced；R4 exit free |
+| **F** 工具失败 | adaptive | ⚠️ 部分通过 | 重跑：R2 `tool_failure` forced ✅；L2 为 `tool_repeat_fail:2` 非 `no_progress` |
+| **G** off 对照 | off | ✅ 通过 | 无 enter / 无 forced；R1 出现 TaskGraph 面板（正常） |
+| **H** 长会话 | adaptive | ✅ 通过 | Phase1 R1–R5 free；Phase3 R9 `multi_write` enter → R12 exit；L2 `no_progress:3/4/5` |
+
+**套件结论**：L0/L1 主链路 **8 场景中 7 项完全通过、1 项（F）L2 信号口径差异**；L2 takeover（recover）全程未触发（已知缺口）。
+
+### 10.3 分场景摘要
+
+#### A — 纯读取
+
+- **UI**：冰豆底部无 `forced`
+- **telemetry**：0 次 enter
+- **备注**：L2 可能出现 drift / no_progress 类记录，不影响 L1 判定
+
+#### B — 单文件小编辑
+
+- **UI**：全程 free
+- **telemetry**：无 enter；adaptive 首轮无完整五步任务图（§I3）
+- **备注**：单文件单轮 write 不触发 `multi_write`
+
+#### C — 单轮多文件新建
+
+- **UI**：`forced · 多文件写入`
+- **telemetry**：`execution_mode_enter` → `enteredBy: multi_write`；任务收尾 `execution_mode_exit`
+- **备注**：forced 由 L1 信号触发，不一定先有任务图面板
+
+#### D — strict 首轮建图
+
+- **UI**：首轮任务面板 + 尽早 `forced`
+- **telemetry**：R1 enter，`enteredBy: task_graph_active, pending_steps, explicit_impl`；strict 下无 exit
+- **备注**：modeLock 生效，不因表面稳定立刻 free
+
+#### E — checkpoint 恢复
+
+- **前置**：场景 D 中途打断后恢复
+- **UI**：`forced · checkpoint 恢复`；约 2 轮后 chip 消失（对应 exit）
+- **telemetry**：R1 `checkpoint_resumed` enter；R4 exit free
+
+#### F — 工具连续失败
+
+| 轮次 | 首次（checkpoint 污染） | 重跑（干净会话） |
+|------|-------------------------|------------------|
+| R1 | `checkpoint_resumed` forced ❌ | free；`read_file` 失败 |
+| R2 | 第二次读失败 | **`tool_failure` forced** ✅ |
+| R3 | 文本总结 `model_done` | 同上 |
+| L2 | `tool_repeat_fail` + drift | `tool_repeat_fail:2` + drift（**无 `no_progress`**） |
+
+- **UI 观测（重跑）**：R2 出现 **`forced · 工具失败`**
+- **判定**：L1 ✅；L2 按现行实现记 **`tool_repeat_fail`** 而非 `no_progress`（见 §6 放宽口径）
+
+#### G — off 对照
+
+- **UI**：无 `forced`；**R1 出现 TaskGraph 透明任务面板**（≠ L1 forced，属正常）
+- **telemetry / supervisor-events**：全程无 `execution_mode_enter`；supervisor-events 为空
+- **业务**：读 harness → 改 logger → tsc → 总结，5 轮完成
+
+#### H — 长会话压测
+
+| Phase | 轮次 | Mode | 要点 |
+|-------|------|------|------|
+| Phase1 只读 | R1–R5 | free | L2：`no_progress:3/4/5` |
+| Phase2 单文件改 | R6–R7 | free | edit logger + tsc |
+| Phase3 多文件 | R8–R12 | R9 enter → R12 exit | R8 双 write；R9 `multi_write` forced；R11 删临时文件；R12 exit free |
+
+- **UI 观测**：约 R6–R12 见 **`forced · 多文件写入`**，R12 消失（telemetry enter 在 **R9**，冰豆轮次可能早 2～3 轮，**exit 轮次更准**）
+- **规模**：12 轮 / 20 次工具（未达提示词 40 轮，但三 Phase 均完成）
+
+### 10.4 跨场景结论
+
+**已验证**
+
+- L0 顶栏档位（off / adaptive / strict）与 L1 `executionMode`（free / forced）分层正确
+- 冰豆**眼色** = L0；冰豆**底部 chip** = L1
+- adaptive：只读可 free（A）；多写 forced（C/H）；工具失败可 forced（F）；checkpoint 必 forced（E）
+- strict：首轮建图 + 尽早 forced + modeLock（D）
+- off：无 L1 切换（G）；TaskGraph 面板仍可独立出现
+
+**已知缺口 / 注意**
+
+| 项 | 说明 |
+|----|------|
+| L2 takeover | `TaskContext.domain` 写死 `non_critical_read`，recover 难触发；不以 recover 为通过条件 |
+| F 的 L2 信号 | 短任务常记 `tool_repeat_fail:2` 而非 `no_progress:3+` |
+| UI vs telemetry 轮次 | forced chip 显示轮次可能与 `telemetry.round` 差 1～3；以 telemetry 为准 |
+| checkpoint 污染 | 未清 `default.checkpoint.json` 时，无关新任务 R1 可能 `checkpoint_resumed` |
+| 工作区残留 | 测试后检查 `logger.ts`、`strict-probe*`、`*probe*` 等；建议 `git restore .` |
+
+### 10.5 测试后清理
+
+```powershell
+git status
+git restore .
+# 如有未跟踪 probe 文件，手动删除 src/harness/_probe-*、test/harness/_probe-* 等
+```
+
+---
+
+## 11. 手工记录（复制填空）
 
 ```markdown
 ## 双模手工记录
@@ -313,7 +449,7 @@ F12 → Network → WS → `/api/chat/ws` → Messages，搜 `execution_mode_ent
 
 ---
 
-## 11. 自动化回归（开发/发版用）
+## 12. 自动化回归（开发/发版用）
 
 ```bash
 npx tsc --noEmit
@@ -334,7 +470,7 @@ npm test -- test/harness/execution-mode-harness.test.ts
 
 ---
 
-## 12. 相关索引
+## 13. 相关索引
 
 | 资源 | 路径 |
 |------|------|
@@ -346,9 +482,10 @@ npm test -- test/harness/execution-mode-harness.test.ts
 
 ---
 
-## 13. 版本
+## 14. 版本
 
 | 日期 | 说明 |
 |------|------|
 | 2026-05-21 | 初版 |
 | 2026-05-21 | 改为「模式 + 可复制提示词 + 观测 + 结果」实操格式；补充 L2 no_progress 与 takeover 缺口说明 |
+| 2026-05-22 | 新增 §10 A–H 手工联调报告；F/G 预期口径修正；补充清缓存脚本、`~clear` 与 TaskGraph 面板说明 |

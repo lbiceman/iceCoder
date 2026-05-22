@@ -182,6 +182,9 @@ window.ChatPetBridge = (function () {
           sessionPet.setState('thinking');
         }
         break;
+      case 'task_graph_update':
+        sessionPet.setState('thinking');
+        break;
       case 'task_graph_branch':
         sessionPet.setState('alert');
         bubble(step.message || '分支切换');

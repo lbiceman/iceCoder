@@ -25,7 +25,21 @@ import type {
   GraphSessionStatus,
 } from '../types/task-graph.js';
 import { TASK_GRAPH_SCHEMA_VERSION } from '../types/task-graph.js';
-import type { TaskIntent } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskPhase } from '../types/runtime-snapshot.js';
+
+const TASK_PHASE_RANK: Record<TaskPhase, number> = {
+  intent: 0,
+  context: 1,
+  editing: 2,
+  verification: 3,
+  final: 4,
+};
+
+export interface SyncCursorToPhaseResult {
+  changed: boolean;
+  previousNodeId?: string;
+  currentNodeId?: string;
+}
 
 // ═══════════════════════════════════════════════
 // Construction
@@ -234,6 +248,119 @@ export function incrementRetry(graph: TaskGraphData): boolean {
   node.retryCount++;
   graph.updatedAt = Date.now();
   return node.retryCount >= node.maxRetries;
+}
+
+/**
+ * 将图游标与 TaskState.phase 对齐（仅向前推进，不回退）。
+ * 供工具轮结束后同步任务面板当前步骤。
+ */
+export function syncCursorToTaskPhase(
+  graph: TaskGraphData,
+  taskPhase: TaskPhase,
+): SyncCursorToPhaseResult {
+  const branch = getCurrentBranch(graph);
+  if (!branch || branch.isFallback) return { changed: false };
+
+  const nodeIds = branch.nodeIds.filter(id => graph.nodes[id]?.type !== 'fallback');
+  if (nodeIds.length === 0) return { changed: false };
+
+  const nodes = nodeIds.map(id => graph.nodes[id]).filter(Boolean) as TaskNode[];
+  const targetIdx = resolveTargetNodeIndex(nodes, taskPhase);
+  if (targetIdx < 0) return { changed: false };
+
+  const previousNodeId = graph.cursor.nodeId;
+  const previousIndex = graph.cursor.nodeIndex;
+  const targetNodeId = nodeIds[targetIdx];
+  if (!targetNodeId) return { changed: false };
+
+  if (targetIdx < previousIndex) {
+    return { changed: false, previousNodeId, currentNodeId: previousNodeId };
+  }
+
+  const now = Date.now();
+  let changed = false;
+
+  for (let i = 0; i < targetIdx; i++) {
+    const node = graph.nodes[nodeIds[i]];
+    if (!node || node.status === 'done' || node.status === 'skipped' || node.status === 'failed') {
+      continue;
+    }
+    markNodeDoneForSync(graph, node, now);
+    changed = true;
+  }
+
+  if (previousIndex !== targetIdx || previousNodeId !== targetNodeId) {
+    graph.cursor.nodeIndex = targetIdx;
+    graph.cursor.nodeId = targetNodeId;
+    changed = true;
+  }
+
+  const targetNode = graph.nodes[targetNodeId];
+  if (targetNode && targetNode.status === 'pending') {
+    startCurrentNode(graph);
+    changed = true;
+  } else if (targetNode && targetNode.status === 'done' && targetIdx === nodeIds.length - 1) {
+    graph.updatedAt = now;
+  }
+
+  if (changed) {
+    recalcProgress(graph);
+  }
+
+  return {
+    changed,
+    previousNodeId,
+    currentNodeId: graph.cursor.nodeId,
+  };
+}
+
+function nodePhaseRank(node: TaskNode): number {
+  return TASK_PHASE_RANK[node.phase as TaskPhase] ?? 0;
+}
+
+function resolveTargetNodeIndex(nodes: TaskNode[], taskPhase: TaskPhase): number {
+  if (nodes.length === 0) return -1;
+
+  const taskRank = TASK_PHASE_RANK[taskPhase];
+
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodePhaseRank(nodes[i]) === taskRank) return i;
+  }
+
+  if (taskRank <= nodePhaseRank(nodes[0])) return 0;
+
+  let idx = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodePhaseRank(nodes[i]) <= taskRank) idx = i;
+  }
+
+  if (taskRank >= TASK_PHASE_RANK.verification) {
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodePhaseRank(nodes[i]) >= taskRank) return i;
+    }
+  }
+
+  return idx;
+}
+
+function markNodeDoneForSync(graph: TaskGraphData, node: TaskNode, now: number): void {
+  node.status = 'done';
+  node.startedAt = node.startedAt ?? now;
+  node.endedAt = now;
+  if (!graph.cursor.completedNodeIds.includes(node.id)) {
+    graph.cursor.completedNodeIds.push(node.id);
+  }
+  const alreadyRecorded = graph.nodeHistory.some(h => h.nodeId === node.id && h.status === 'done');
+  if (!alreadyRecorded) {
+    graph.nodeHistory.push({
+      nodeId: node.id,
+      status: 'done',
+      startedAt: node.startedAt,
+      endedAt: now,
+      retries: node.retryCount,
+    });
+  }
+  graph.updatedAt = now;
 }
 
 // ═══════════════════════════════════════════════
