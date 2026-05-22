@@ -167,9 +167,10 @@ function extractPathLikeArg(args: Record<string, any>): string | undefined {
   return undefined;
 }
 
-function looksLikeVerificationCommand(command: string): boolean {
+export function looksLikeVerificationCommand(command: string): boolean {
   const c = command.toLowerCase();
   return /\b(npm|pnpm|yarn)\s+(run\s+)?(test|lint|build|typecheck|check)\b/.test(c)
     || /\b(vitest|jest|mocha|pytest|go test|cargo test|npx tsc|tsc --noemit|tsc --noemit|tsc --no-emit|tsc --noEmit)\b/i.test(command)
+    || /\bnode\s+--check\b/.test(c)
     || /\b(lint|typecheck|test)\b/.test(c);
 }

@@ -27,6 +27,7 @@ import {
 } from './supervisor/mode-gating.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { TokenBudgetTracker } from './token-budget.js';
+import { inferTaskDomain } from './task-domain.js';
 import type { CorrectionPort, ExecutionModeConfig, GateContext, TaskContext, TaskRiskLevel } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
@@ -440,6 +441,7 @@ export async function runHarnessToolRound(
         {
           kind: 'recovery',
           content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
+          preserveOnCompaction: true,
         },
         { phase: state.supervisorPhase, source: 'lifecycle' },
       );
@@ -629,7 +631,7 @@ function buildTaskContextForObserver(
   return {
     goal: snap.goal,
     intent: snap.intent,
-    domain: 'non_critical_read',
+    domain: inferTaskDomain(snap.intent),
     filesChanged: [...repo.filesChanged],
     filesRead: [...repo.filesRead],
     commandsRun: [...repo.commandsRun],

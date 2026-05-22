@@ -35,6 +35,11 @@ export const FILE_TOOLS_NEVER_MICROCLEAR = new Set<string>([
 
 const OLD_TOOL_STUB = '[Old tool result cleared for context]';
 
+/** 硬压缩时必须保留在 recent 后缀的消息（C 类纠偏等） */
+export function shouldPreserveMessageOnCompaction(msg: UnifiedMessage): boolean {
+  return msg.preserveOnCompaction === true;
+}
+
 /** 不参与「真实用户轮次」计数的注入块 */
 export function isSyntheticUserBlockContent(content: string): boolean {
   const c = content.trimStart();

@@ -45,4 +45,26 @@ describe('CorrectionPort - Batch 5', () => {
       { role: 'user', content: '[System] Warning: repeated failures, switch strategy.' },
     ]);
   });
+
+  it('writes preserveOnCompaction metadata for lifecycle/recovery blocks', () => {
+    const messages: UnifiedMessage[] = [];
+    const port = new MessageCorrectionPort(messages);
+
+    port.inject(
+      {
+        kind: 'recovery',
+        content: '[System] lifecycle nudge',
+        preserveOnCompaction: true,
+      },
+      { phase: 'free', source: 'lifecycle' },
+    );
+
+    expect(messages).toEqual([
+      {
+        role: 'user',
+        content: '[System] lifecycle nudge',
+        preserveOnCompaction: true,
+      },
+    ]);
+  });
 });

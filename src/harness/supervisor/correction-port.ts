@@ -75,7 +75,11 @@ export class MessageCorrectionPort implements CorrectionPort {
       return;
     }
 
-    this.messages.push({ role: 'user', content: block.content });
+    this.messages.push({
+      role: 'user',
+      content: block.content,
+      ...(block.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
+    });
   }
 }
 
