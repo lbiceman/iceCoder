@@ -30,6 +30,13 @@ export interface ToolExecutorDeps {
   runtimeTelemetry?: RuntimeTelemetry;
 }
 
+function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
+  const message = error ?? 'Unknown error';
+  const body = rawOutput.trim();
+  if (body) return `工具执行错误: ${message}\n\n${body}`;
+  return `工具执行错误: ${message}`;
+}
+
 export interface ExecuteToolCallsStreamingArgs {
   toolCalls: ToolCall[];
   messages: UnifiedMessage[];
@@ -234,7 +241,9 @@ export async function executeToolCallsStreaming(
     if (deps.loopController.isAborted()) break;
 
     const { toolCall: tc, result } = sr;
-    const output = result.success ? result.output : `工具执行错误: ${result.error}`;
+    const output = result.success
+      ? result.output
+      : formatToolFailureOutput(result.error, result.output);
 
     if (!result.success) {
       failedCount++;

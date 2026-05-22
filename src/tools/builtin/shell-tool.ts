@@ -6,6 +6,10 @@
 import { spawn } from 'node:child_process';
 import type { RegisteredTool, ToolOutputCallback } from '../types.js';
 import { getBackgroundTaskManager } from '../background-task-manager.js';
+import {
+  formatNormalizedCommandOutput,
+  normalizeRunCommand,
+} from './shell-command-normalizer.js';
 
 /** 命令执行超时（毫秒） */
 const DEFAULT_TIMEOUT = 30000;
@@ -124,13 +128,15 @@ export function createShellTool(workDir: string): RegisteredTool {
         }
       }
 
+      const normalized = normalizeRunCommand(command, { workDir });
+
       return new Promise((resolve) => {
         const isWindows = process.platform === 'win32';
         const shell = isWindows ? 'cmd.exe' : '/bin/sh';
-        const shellArgs = isWindows ? ['/c', command] : ['-c', command];
+        const shellArgs = isWindows ? ['/c', normalized.command] : ['-c', normalized.command];
 
         const child = spawn(shell, shellArgs, {
-          cwd: workDir,
+          cwd: normalized.cwd,
           env: { ...process.env, NODE_ENV: 'production' },
           stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -163,6 +169,7 @@ export function createShellTool(workDir: string): RegisteredTool {
           let output = '';
           if (stdout) output += stdout;
           if (stderr) output += (output ? '\n\n[stderr]\n' : '[stderr]\n') + stderr;
+          output = formatNormalizedCommandOutput(normalized.fixes, output);
 
           if (killed) { resolve({ success: false, output, error: `Command timed out (${timeout}ms)` }); return; }
           if (code === 0) { resolve({ success: true, output: output || 'Command succeeded (no output)' }); }

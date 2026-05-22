@@ -1,0 +1,104 @@
+# 综合型 benchmark 任务 — 跨文件订单流水线修复与补全
+# 覆盖：复杂度 · 长时执行 · 失败恢复 · 探索 · 多文件联动
+
+task_id: multi-file-order-pipeline-01
+version: "1.0"
+created: "2026-05-22"
+
+# 对应评测文档分层（单任务复合型）
+layers:
+  - L2   # 定点修 bug
+  - L4   # 读失败日志 / 测试输出定位
+  - L5   # 跨 5+ 源文件联动
+
+tags:
+  - composite
+  - multi-file
+  - debug
+  - long-running
+  - recovery
+  - exploration
+
+# 预估各平台表现区间（用于后续校准，非硬性）
+estimated:
+  min_turns: 12
+  typical_turns: 18-28
+  max_turns: 30
+  duration_minutes: 15-35
+
+repo: benchmark/repos/multi-file-order-pipeline-01
+
+prompt: |
+  这是一个小型 TypeScript 订单处理服务项目，当前测试全部失败。请在不修改 `test/` 目录的前提下，修复并实现业务逻辑，使所有测试通过。
+
+  ## 背景
+  流水线顺序应为：**校验商品 → 预留库存 → 计价 → 扣款 → 提交库存**。支付模块对特定订单会模拟「前两次 transient 失败、第三次成功」，你需要让系统在扣款环节具备**有限次重试**能力。
+
+  ## 已知现象（供定位，不要只修表面）
+  1. `npm test` 报库存相关失败：在已有预留的情况下，仍可能错误地再次预留成功。
+  2. 同一订单同时命中 VIP 与 bulk 条件时，折扣被**叠加**而非取最优单项折扣。
+  3. 支付失败后库存没有被正确释放（reserved 泄漏）。
+  4. 带 `ORD-RETRY` 前缀的订单未能在第三次扣款时成功完成。
+  5. `src/inventory.ts` 里关于 `reserveStock` 的注释容易误导——请用测试行为反推真实缺陷，不要只按注释改一行。
+
+  ## 要求
+  - 只改 `src/` 下文件；不要改 `test/`、`package.json`、锁文件。
+  - 保持现有导出函数名与公开 API 不变（测试直接 import）。
+  - 修复完成后运行 `npm test` 与 `npm run build` 确认通过。
+  - 不要引入新依赖。
+  - 完成后用 5 条以内的 bullet 说明你改了哪些文件、各自解决什么问题。
+
+  从阅读 `README.md` 和失败测试输出开始，自行探索代码结构。
+
+acceptance:
+  commands:
+    - npm ci
+    - npm test
+    - npm run build
+  files_must_exist:
+    - src/pipeline.ts
+    - src/inventory.ts
+    - src/pricing.ts
+    - src/orders.ts
+    - src/payment.ts
+  files_must_not_change:
+    - test/pipeline.test.ts
+    - package.json
+    - vitest.config.ts
+  allowed_change_globs:
+    - src/**/*.ts
+  forbidden_change_globs:
+    - test/**
+    - node_modules/**
+    - dist/**
+
+timeout_minutes: 45
+max_turns: 30
+
+# Gate / 裁判观测点（写入 run 报告，非 yaml 执行逻辑）
+observability:
+  complexity:
+    - 至少涉及 inventory / pricing / orders / pipeline 四个模块
+    - 需理解 payment 模拟器与重试语义
+  long_running:
+    - 需先探索 catalog、types、多模块调用关系
+    - 典型路径：读 README → 跑测试 → 读 4-6 个源文件 → 多轮修 + 复测
+  recovery:
+    - 支付 double-fail 探针（ORD-RETRY-*）
+    - inventory 预留泄漏探针（支付失败后 reserved 回滚）
+    - 误导性注释探针（reserveStock 注释 vs 真实 available 逻辑）
+    - 折扣叠加陷阱（legacy 未使用函数 vs getDiscountPercent）
+  exploration:
+    - 需定位 pipeline 步骤顺序错误
+    - 需发现 orders.ts 缺少重试而不仅是 payment.ts 问题
+
+scoring_hints:
+  judge_focus:
+    - D2 正确性：available = stock - reserved；折扣取 max；rollback 完整
+    - D4 最小改动：勿重构 catalog/types；勿改测试凑过
+    - D5 验证意识：是否多轮 npm test 驱动修复
+  common_failure_modes:
+    - 只改 reserveStock 注释附近一行，未修 available 计算
+    - 在 pipeline 去掉支付重试要求或硬编码第三次成功
+    - 修改 test 文件或 package.json（Gate G2 扣分）
+    - 改依赖或引入 lodash 等（ forbidden ）
