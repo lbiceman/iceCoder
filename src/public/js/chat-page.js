@@ -142,6 +142,7 @@ window.ChatPage = (function () {
       Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
       UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+      Pet.removeThinking(false, false);
       return;
     }
 
