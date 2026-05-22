@@ -185,7 +185,7 @@ recovery prompt
 
 - 将 `.gitattributes` 和行尾归一化单独提交。
 - 检查所有新文件是否纳入 Git。
-- 将 `README.md` / `README.zh-CN.md` 与真实测试数量同步（当前 Vitest：33 files / 567 tests，以 `npm test` 为准）。
+- 将 [`docs/PROJECT-GUIDE.md`](./PROJECT-GUIDE.md) / [`docs/项目介绍.md`](./项目介绍.md) 与真实测试数量同步（以 `npm test` 为准）。
 - 运行：
 
 ```bash
