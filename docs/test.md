@@ -427,13 +427,338 @@ git restore .
 
 ---
 
-## 11. 手工记录（复制填空）
+## 11. L2 纠偏专项（L2-1～L2-7）
+
+> **与 §1–8 的区别**：§1–8 主要验 **L1 Execution Mode**；本节验 **L2 Runtime Supervisor** 的 Timeline 信号、C 类 inject（recovery / graph_hint）、以及（可选）takeover 全路径。  
+> **Web 已知缺口**：`harness-tool-round.ts` 中 `TaskContext.domain` 暂为 `non_critical_read`，**L2-7 takeover 在 Web 聊天里几乎测不通**；L2-1～L2-6 仍可测。
+
+### 11.0 测前步骤（每项必做）
+
+1. **清磁盘缓存**（PowerShell，项目根目录）：
+
+```powershell
+@(
+  "data/runtime/telemetry.jsonl",
+  "data/runtime/supervisor-events.jsonl",
+  "data/memory/telemetry.jsonl"
+) | ForEach-Object { Set-Content -Path $_ -Value "" -Encoding UTF8 }
+
+Remove-Item -Force -ErrorAction SilentlyContinue @(
+  "data/sessions/default.checkpoint.json",
+  "data/sessions/default.json",
+  "data/sessions/default.structured.json",
+  "data/sessions/session-notes.md"
+)
+```
+
+2. 浏览器聊天框发 **`~clear`**（清前端会话 + 冰豆 forced 状态）。
+3. 顶栏切到本节场景指定的 **自适应 / 严格**（写入 `data/config.json` 的 `supervisorMode`）。
+4. **开 tail 终端**（整段 L2 测试期间保持运行）：
+
+```powershell
+Get-Content data/runtime/supervisor-events.jsonl -Wait
+```
+
+5. 发送本节 **提示词**（整段复制）。
+6. 任务结束后在聊天框执行：
+
+```text
+~supervisor event=recover days=1 limit=20
+~supervisor event=failure days=1 limit=20
+~supervisor event=drift days=1 limit=20
+```
+
+### 11.1 推荐顺序
+
+| 顺序 | 场景 | 模式 | 证明什么 |
+|------|------|------|----------|
+| 1 | L2-1 no_progress | adaptive | L2 在记无进展信号 |
+| 2 | L2-3 tool_repeat_fail | adaptive | 信号 + recovery 文案注入 |
+| 3 | L2-4 lifecycle | adaptive | 5 轮只读系统纠偏块 |
+| 4 | L2-5 graph_hint | **strict** | forced 下 graph 纠偏（最接近「纠偏」） |
+| 5 | L2-2 goal_drift | adaptive | 目标漂移检测 |
+| 6 | L2-6 file_loop | adaptive | 前置 multi_write 进 forced，再 6 轮同文件 edit |
+| 7 | L2-7 takeover | 单测/改码 | 完整接管链（Web 不测） |
+
+### 11.2 L2-1 — no_progress（PassiveObserver）
+
+**模式**：`adaptive`
+
+**步骤**
+
+1. 完成 §11.0 测前步骤。
+2. 复制发送下面提示词。
+3. 等任务结束（模型总结后停止）。
+4. 看 tail：`supervisor-events.jsonl` 是否出现连续 `failure · no_progress:3/4/5…`。
+5. 执行 `~supervisor event=failure days=1`。
+
+**提示词**
+
+```text
+【L2-观测·no_progress】
+连续至少 6 轮工具调用，每轮只用 read_file / fs_operation(list) 读文件。
+禁止 write_file、edit_file、run_command。
+先读 docs/test.md，再读 src/harness/supervisor/ 下 4 个不同 .ts 文件。
+读完后用 5 行总结，不要改任何文件。
+Supervisor观测: 每 2 轮汇报一次当前轮次。
+```
+
+**如何观察**
+
+- `supervisor-events.jsonl`：`failure · no_progress:3` → `:4` → `:5` …
+- 冰豆底部：应 **无** forced（或全程 free）
+- 聊天内容：free 段 **通常无** graph_hint 注入
+
+**预期结果**
+
+- Timeline **至少 1 条** `no_progress` ✅
+- **无** takeover / `recover · takeover`（Web 缺口，不计 FAIL）
+
+---
+
+### 11.3 L2-2 — goal_drift（目标漂移）
+
+**模式**：`adaptive`
+
+**步骤**
+
+1. 完成 §11.0 测前步骤。
+2. 发送提示词；**前 4 轮模型应只读不写**（若模型提前写文件，可 stop 后重发并强调约束）。
+3. 任务结束后查 `~supervisor event=drift days=1`。
+
+**提示词**
+
+```text
+【L2-观测·goal_drift】
+任务：在 src/harness/logger.ts 的 loopStart 日志前加前缀 [drift-probe]。
+
+执行约束（故意偏离）：
+- 第 1～4 轮：只允许 read_file，读 docs/、src/harness/supervisor/ 里与 logger 无关的文件；禁止写文件。
+- 第 5 轮起：才开始 edit logger + npx tsc --noEmit。
+每 Phase 结束写：Supervisor观测: drift=? / no_progress=?
+```
+
+**如何观察**
+
+- `supervisor-events.jsonl`：`drift · goal_drift:0.xxx`
+- 可能叠加：`failure · no_progress:…`
+
+**预期结果**
+
+- **至少 1 条** `goal_drift` 写入 Timeline ✅
+- takeover 非必达
+
+---
+
+### 11.4 L2-3 — tool_repeat_fail + recovery 注入
+
+**模式**：`adaptive`
+
+**步骤**
+
+1. 完成 §11.0 测前步骤。
+2. 发送提示词；确认模型 **至少 2 轮同参 read_file 失败**。
+3. 在**聊天正文**里找是否出现 `[System] Repeated failed tool call detected`。
+4. 查 `~supervisor event=failure days=1` 与 telemetry 是否有 `tool_failure` enter。
+
+**提示词**
+
+```text
+【L2-观测·tool_repeat_fail】
+请用 read_file 读取 src/__l2_probe_missing__.ts。
+若失败，下一轮用完全相同参数再读一次；再失败再读一次（至少 3 轮同参失败）。
+第 4 轮起换策略：用 fs_operation list 确认路径不存在，然后总结 ENOENT 原因。
+不要写任何文件。
+```
+
+**如何观察**
+
+- `supervisor-events.jsonl`：`failure · tool_repeat_fail:2`（或更高）
+- 聊天：可能出现 **`[System] Repeated failed tool call detected…`** 纠偏块
+- telemetry（可选 tail）：R2 后可能有 `execution_mode_enter` · `tool_failure`
+- 冰豆：可能出现 **`forced · 工具失败`**
+
+**预期结果**
+
+- Timeline 有 **`tool_repeat_fail`** ✅
+- 聊天或 timeline 体现 **C 类 recovery 到达模型**（二选一即算观察到纠偏路径）✅
+
+---
+
+### 11.5 L2-4 — 5 轮只读 lifecycle recovery
+
+**模式**：`adaptive`
+
+**步骤**
+
+1. 完成 §11.0 测前步骤。
+2. 发送提示词；确认前 **5～6 轮只有 read_file**。
+3. 在模型回复里找 **`[System] You have been reading/analyzing for 5 rounds`** 原文（提示词要求模型引用）。
+4. 第 7 轮起应开始 edit + tsc。
+
+**提示词**
+
+```text
+【L2-观测·lifecycle_recovery】
+连续 6 轮，每轮只 read_file 读 src/harness/ 下一个不同 .ts 文件。
+禁止任何 write/edit/run_command。
+第 7 轮才开始：edit logger.ts 一处字符串 + tsc。
+若收到 [System] You have been reading/analyzing for 5 rounds… 请在回复里原文引用该句。
+```
+
+**如何观察**
+
+- 聊天：**约第 5 轮只读后** 出现 lifecycle 系统纠偏文案
+- `supervisor-events.jsonl`：可能有 `no_progress`；**不一定**有 `recover` 事件（lifecycle 源可能不进 recover timeline）
+
+**预期结果**
+
+- 聊天中出现 **5 轮只读系统提示** ✅（本场景核心通过标准）
+
+---
+
+### 11.6 L2-5 — graph_hint 纠偏（strict，重点）
+
+**模式**：`strict`（顶栏 **严格**，冰豆眼色 `#F1A8B2`）
+
+**步骤**
+
+1. 完成 §11.0 测前步骤；**务必切 strict**。
+2. 发送提示词；观察首轮是否出现 **任务图面板** + **forced chip**。
+3. 故意偏离计划时，看聊天是否收到 **graph 纠偏提示**，或工具是否被 **block**。
+4. 查 tail：`recover · graph_hint:evaluate_round`；预算用尽时可能有 `correction_budget_exhausted:graph_hint`。
+5. 执行 `~supervisor event=recover days=1`。
+
+**提示词**
+
+```text
+【L2-观测·graph_hint】
+在 src/harness/ 新增 export function l2GraphHintProbe(): string { return 'l2-probe'; } 及单测，npm test 跑单测，最后删临时文件。
+
+故意偏离执行计划（用于触发 graph_hint）：
+1. 不要按任务图顺序：先 write 单测文件，再 write 实现文件。
+2. 跳过「先 read 再写」的步骤。
+3. 每轮只调用工具，不要长篇解释。
+4. 若工具被 block 或收到 graph 提示，在回复里写「收到纠偏: …」并改按提示执行。
+```
+
+**如何观察**
+
+- 冰豆底部：尽早 **`forced · …`**
+- `supervisor-events.jsonl`：
+  - `recover · graph_hint:evaluate_round`（`inject_hint` 或 `block`）
+  - 可能：`failure · correction_budget_exhausted:graph_hint`
+- 聊天：forced 段出现 **graph 纠偏文案**（经 CorrectionPort）
+
+**预期结果**
+
+- **至少 1 条** `recover · graph_hint:…` ✅  
+- 或聊天/工具层可见 **纠偏提示或 block** ✅  
+- 这是 Web 端最接近「L2 纠偏」的场景
+
+---
+
+### 11.7 L2-6 — file_loop（同文件反复 edit）
+
+**模式**：`adaptive`
+
+> **重要**：`file_loop` 依赖 **forced 段** 的 branchBudget 计数；free 段连续 edit **不会** 出信号。  
+> **重要**：`edit` 类任务会触发 Harness **验证门禁**；`node --check` 不算验证，易导致 70+ 轮不停止——本场景已拆成「前置进 forced + 主测 + 可选 tsc 出口」。
+
+**步骤**
+
+1. 完成 §11.0 测前步骤。
+2. **先发「前置提示词」**，等到冰豆底部出现 **`forced · …`**（或 telemetry 有 `execution_mode_enter`）。
+3. **再发「主测提示词」**；确认 **连续 6 轮、每轮仅 1 次 `edit_file`**，且只改 `logger.ts`。
+4. 第 6 轮 edit 后应能文字总结并结束；若系统仍注入「必须验证」，按主测提示词 **仅跑一次** `npx tsc --noEmit`。
+5. （可选）测试前设 `ICE_HARNESS_MAX_ROUNDS=40`，防止再次跑飞。
+
+**前置提示词**（先进 forced，约 1–3 轮）
+
+```text
+【L2-6·前置·进 forced】
+同一轮任务内依次 write_file 两个极小临时文件（不要 edit、不要 run_command）：
+1. src/harness/_l2probe-a.ts  内容：export const l2ProbeA = 1;
+2. src/harness/_l2probe-b.ts  内容：export const l2ProbeB = 2;
+写完后一句话确认即可，不要删文件、不要测、不要继续别的任务。
+```
+
+**主测提示词**（forced 段内 file_loop）
+
+```text
+【L2-观测·file_loop】
+我已在 forced 段。本任务只观测 L2，不是正式改代码。
+
+只允许 edit_file，且只能改 src/harness/logger.ts。
+连续 6 轮：每轮恰好 1 次 edit_file，改一处极小注释或字符串，6 轮位置各不相同。
+禁止：read_file、write_file、run_command（含 node --check）、search_codebase、git、file_info、tsc、npm test。
+
+第 6 轮 edit 完成后，下一回复只写 5 行以内总结，不要调用任何工具。
+若系统仍注入「You changed files but has not verified」类消息，才允许额外运行一次：npx tsc --noEmit
+除此之外禁止任何命令。不要 git commit。
+```
+
+**如何观察**
+
+- 冰豆底部：前置后应有 **`forced · …`**；主测阶段保持 forced 更易触发
+- `supervisor-events.jsonl`：`failure · file_loop:src/harness/logger.ts:4`（或类似，`fileLoopMin=4`）
+- telemetry：主测阶段 **6 次** `edit_file`，不应出现大量 `run_command` 螺旋
+- branchBudget 在 **forced** 下才累计同文件 edit 次数
+
+**预期结果**
+
+- Timeline 出现 **`file_loop`** ✅（forced 段第 4 次 edit 后应可见）
+- 任务能在 **约 10–15 轮** 内 `model_done` 结束（6 edit + 前置 + 总结；若多 1 轮 tsc 仍正常）
+- 若 free 全程 edit、无 forced：记 **未触发**，非 FAIL L1
+- 若 again 70+ 轮不停：查 telemetry 是否 `verificationStatus` 一直为 `required`（验证命令未识别）
+
+---
+
+### 11.8 L2-7 — takeover 全路径（Web 不测）
+
+**§9 三条件**（RecoverySupervisor）：
+
+| 条件 | Web 聊天 |
+|------|----------|
+| `domain` 以 `critical_` 开头 | ❌ 现为 `non_critical_read` |
+| `riskScore >= 0.6` | ✅ 编辑类任务通常满足 |
+| 有偏离信号 | ✅ L2-1～L2-3 可堆叠 |
+
+**Web 手工预期**：即使 L2-1～L2-3 信号齐全，也 **几乎不会** 出现 `recover · takeover`、takeover 消息块、handoff/cooldown 完整链。
+
+**若要验 takeover，用自动化**：
+
+```bash
+npm test -- test/harness/supervisor-bridge.test.ts -t takeover
+npm test -- test/e2e/dual-mode-scenarios.test.ts
+```
+
+**若要 Web 可测**：需改 `src/harness/harness-tool-round.ts` 的 `buildTaskContextForObserver`，按 intent/写文件映射 `critical_edit` / `critical_debug` 等（发版前单独 PR）。
+
+---
+
+### 11.9 L2 判定速查
+
+| 现象 | 说明 |
+|------|------|
+| `failure · no_progress:N` | PassiveObserver ✅ |
+| `drift · goal_drift:…` | GoalDriftDetector ✅ |
+| `failure · tool_repeat_fail:N` | 工具重复失败 ✅ |
+| `recover · graph_hint:…` | **forced 段 graph 纠偏** ✅ |
+| `failure · correction_budget_exhausted:graph_hint` | I4 预算门禁 ✅ |
+| 聊天 `[System] Repeated failed…` | C 类 recovery inject ✅ |
+| 聊天 `[System] You have been reading…5 rounds…` | lifecycle recovery ✅ |
+| `recover · takeover:…` | Web **当前预期 ❌**（domain 缺口） |
+
+---
+
+## 12. 手工记录（复制填空）
 
 ```markdown
 ## 双模手工记录
 
 - 日期：
-- 场景：A / B / C / D / E / F / G / H
+- 场景：A / B / C / D / E / F / G / H / **L2-1～L2-7**
 - supervisorMode：
 - 新会话：是 / 否
 
@@ -449,7 +774,7 @@ git restore .
 
 ---
 
-## 12. 自动化回归（开发/发版用）
+## 13. 自动化回归（开发/发版用）
 
 ```bash
 npx tsc --noEmit
@@ -470,7 +795,7 @@ npm test -- test/harness/execution-mode-harness.test.ts
 
 ---
 
-## 13. 相关索引
+## 14. 相关索引
 
 | 资源 | 路径 |
 |------|------|
@@ -482,10 +807,12 @@ npm test -- test/harness/execution-mode-harness.test.ts
 
 ---
 
-## 14. 版本
+## 15. 版本
 
 | 日期 | 说明 |
 |------|------|
 | 2026-05-21 | 初版 |
 | 2026-05-21 | 改为「模式 + 可复制提示词 + 观测 + 结果」实操格式；补充 L2 no_progress 与 takeover 缺口说明 |
 | 2026-05-22 | 新增 §10 A–H 手工联调报告；F/G 预期口径修正；补充清缓存脚本、`~clear` 与 TaskGraph 面板说明 |
+| 2026-05-22 | 新增 §11 L2 纠偏专项 L2-1～L2-7（步骤 + 提示词 + 判定速查） |
+| 2026-05-22 | §11.7 L2-6 拆为前置进 forced + 主测 6 轮 edit；补充验证门禁死循环说明与 tsc 出口 |
