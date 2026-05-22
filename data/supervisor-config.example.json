@@ -15,24 +15,24 @@
     },
     "adaptiveFree": {
       "firstRoundGraph": false,
-      "riskThreshold": 0.6
+      "riskThreshold": 0.7
     },
     "adaptiveTakeover": {
       "firstRoundGraph": false,
       "riskThreshold": 0.6,
-      "maxRecoveryRounds": 3,
-      "recoveryTokenRatio": 0.25,
-      "maxRecoveryRetries": 2,
-      "stabilityWindowRounds": 3,
-      "handoffCooldownRounds": 3,
+      "maxRecoveryRounds": 10,
+      "recoveryTokenRatio": 0.4,
+      "maxRecoveryRetries": 3,
+      "stabilityWindowRounds": 2,
+      "handoffCooldownRounds": 2,
       "evaluateRoundMode": "metrics_only",
       "checkToolCall": true
     }
   },
   "triggers": {
-    "toolRepeatFailMin": 2,
-    "noProgressRoundsMin": 3,
-    "fileLoopMin": 4,
+    "toolRepeatFailMin": 3,
+    "noProgressRoundsMin": 6,
+    "fileLoopMin": 6,
     "goalDriftEnabled": true,
     "scopeCreepEnabled": true,
     "userForceTakeoverEnabled": true
