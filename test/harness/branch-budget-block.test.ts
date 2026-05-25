@@ -57,4 +57,31 @@ describe('BranchBudgetTracker - hard block gate', () => {
       extractRunCommand,
     ).blocked).toBe(false);
   });
+
+  it('grantWriteBypass allows one write at file edit limit', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 2 });
+    t.recordFileEdit('src/a.ts');
+    t.recordFileEdit('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(true);
+
+    t.grantWriteBypass('src/a.ts');
+    expect(t.wouldBlockFileEdit('src/a.ts')).toBe(false);
+
+    const allowed = t.checkToolBlock(
+      'write_file',
+      { path: 'src/a.ts' },
+      extractToolTargetPath,
+      extractRunCommand,
+    );
+    expect(allowed.blocked).toBe(false);
+    expect(t.hasWriteBypass('src/a.ts')).toBe(false);
+
+    const blocked = t.checkToolBlock(
+      'write_file',
+      { path: 'src/a.ts' },
+      extractToolTargetPath,
+      extractRunCommand,
+    );
+    expect(blocked.blocked).toBe(true);
+  });
 });

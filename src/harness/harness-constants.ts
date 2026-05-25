@@ -2,8 +2,9 @@
 export const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
 // ─── 连续工具失败提示干预阈值 ───
-// 第3轮开始注入强提示A，第6轮开始注入强提示B，第10轮触发熔断
+// 第3轮开始注入强提示A，第5轮注入整文件重建流程，第6轮开始注入强提示B，第10轮触发熔断
 export const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+export const REBUILD_ESCALATION_THRESHOLD = 5;
 export const CIRCUIT_BREAKER_THRESHOLD = 10;
 
 // ─── LLM 空响应重试最大次数 ───

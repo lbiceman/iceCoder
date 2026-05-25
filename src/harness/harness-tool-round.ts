@@ -4,6 +4,7 @@ import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint
 import {
   CIRCUIT_BREAKER_THRESHOLD,
   MAX_CONSECUTIVE_TOOL_FAILURES,
+  REBUILD_ESCALATION_THRESHOLD,
 } from './harness-constants.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import {
@@ -48,6 +49,11 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { computeRecoveryRoundEffective } from './recovery-round-progress.js';
 import { buildVerificationDigest, isVerificationCommand } from './verification-digest.js';
+import {
+  applyRebuildEscalationBypasses,
+  buildRebuildEscalationMessage,
+  collectRebuildEscalationContext,
+} from './rebuild-escalation.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -337,6 +343,27 @@ export async function runHarnessToolRound(
         `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded.\n\nYou must:\n1. Stop retrying the same failed tool calls, commands, paths, or parameters\n2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input\n3. If blocked, explain the exact blocker and evidence to the user\n\nYou may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.`,
       );
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入换策略提示`);
+    } else if (
+      failureCount === REBUILD_ESCALATION_THRESHOLD
+      && !state.rebuildEscalationInjected
+      && !deps.supervisorObserverSuppressInject
+    ) {
+      const topFile = topFileEditFromBranchBudget(state.branchBudget);
+      const rebuildCtx = collectRebuildEscalationContext(msgs, topFile);
+      const bypasses = applyRebuildEscalationBypasses(
+        state.branchBudget,
+        topFile,
+        rebuildCtx.lastVerificationCommand,
+      );
+      injectRecoveryMessage(
+        deps,
+        state,
+        msgs,
+        correctionPort,
+        buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }),
+      );
+      state.rebuildEscalationInjected = true;
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入整文件重建提示`);
     } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES && !deps.supervisorObserverSuppressInject) {
       const lastErrors = msgs
         .slice(-6)
@@ -366,6 +393,7 @@ export async function runHarnessToolRound(
     }
   } else {
     state.consecutiveToolFailures = 0;
+    state.rebuildEscalationInjected = false;
     // W1: 本轮非全失败 → 视为稳定一轮（含部分成功 / 无工具）。
     state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
   }

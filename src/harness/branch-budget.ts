@@ -87,6 +87,10 @@ export class BranchBudgetTracker {
   private commandRetries = new Map<string, number>();
   private errorRepeats = new Map<string, number>();
   private recoverTriggers = 0;
+  /** 平台 escalation 授予的单次 write 豁免（路径 → 待消费） */
+  private writeBypassPaths = new Set<string>();
+  /** 平台 escalation 授予的单次验收命令重试豁免（规范化命令 → 待消费） */
+  private commandRetryBypassKeys = new Set<string>();
   private enabled = true;
   private readonly limits: BranchBudgetLimits;
 
@@ -162,7 +166,22 @@ export class BranchBudgetTracker {
    */
   wouldBlockFileEdit(path: string | undefined | null): boolean {
     if (!this.enabled || !path) return false;
+    if (this.writeBypassPaths.has(path)) return false;
     return (this.fileEdits.get(path) ?? 0) >= this.limits.fileEditMax;
+  }
+
+  /**
+   * 连续失败 escalation 后授予目标路径一次 write/edit 机会（即使已达 fileEditMax）。
+   * 仅在下次对该路径的写工具通过 checkToolBlock 时消费。
+   */
+  grantWriteBypass(path: string | undefined | null): void {
+    if (!path) return;
+    this.writeBypassPaths.add(path);
+  }
+
+  /** 测试 / 诊断：是否仍持有未消费的 write 豁免 */
+  hasWriteBypass(path: string): boolean {
+    return this.writeBypassPaths.has(path);
   }
 
   /**
@@ -171,7 +190,20 @@ export class BranchBudgetTracker {
   wouldBlockCommandRetry(command: string | undefined | null): boolean {
     if (!this.enabled || !command) return false;
     const key = normalizeCommand(command);
+    if (this.commandRetryBypassKeys.has(key)) return false;
     return (this.commandRetries.get(key) ?? 0) >= this.limits.commandRetryMax;
+  }
+
+  /**
+   * 连续失败 escalation 后授予验收命令一次 run_command 机会（即使已达 commandRetryMax）。
+   */
+  grantCommandRetryBypass(command: string | undefined | null): void {
+    if (!command) return;
+    this.commandRetryBypassKeys.add(normalizeCommand(command));
+  }
+
+  hasCommandRetryBypass(command: string): boolean {
+    return this.commandRetryBypassKeys.has(normalizeCommand(command));
   }
 
   /**
@@ -190,7 +222,10 @@ export class BranchBudgetTracker {
     if (!this.enabled) return { blocked: false };
 
     const path = extractPath(toolName, args);
-    if (path && this.wouldBlockFileEdit(path)) {
+    if (path && (this.fileEdits.get(path) ?? 0) >= this.limits.fileEditMax) {
+      if (this.writeBypassPaths.delete(path)) {
+        return { blocked: false };
+      }
       const count = this.fileEdits.get(path) ?? 0;
       return {
         blocked: true,
@@ -202,14 +237,20 @@ export class BranchBudgetTracker {
 
     if (toolName === 'run_command') {
       const command = extractCommand(args);
-      if (command && this.wouldBlockCommandRetry(command)) {
-        const count = this.commandRetries.get(normalizeCommand(command)) ?? 0;
-        return {
-          blocked: true,
-          dimension: 'command_retry',
-          key: command,
-          message: this.buildCommandBlockMessage(command, count),
-        };
+      if (command) {
+        const key = normalizeCommand(command);
+        if ((this.commandRetries.get(key) ?? 0) >= this.limits.commandRetryMax) {
+          if (this.commandRetryBypassKeys.delete(key)) {
+            return { blocked: false };
+          }
+          const count = this.commandRetries.get(key) ?? 0;
+          return {
+            blocked: true,
+            dimension: 'command_retry',
+            key: command,
+            message: this.buildCommandBlockMessage(command, count),
+          };
+        }
       }
     }
 
@@ -339,6 +380,8 @@ export class BranchBudgetTracker {
     this.commandRetries.clear();
     this.errorRepeats.clear();
     this.recoverTriggers = 0;
+    this.writeBypassPaths.clear();
+    this.commandRetryBypassKeys.clear();
   }
 
   // ─── 持久化 ───

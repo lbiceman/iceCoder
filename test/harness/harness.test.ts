@@ -1517,6 +1517,32 @@ describe('Harness - 连续工具失败熔断', () => {
     // 不应触发熔断，因为第 3 轮成功重置了计数
     expect(result.loopState.stopReason).toBe('model_done');
   });
+
+  it('连续 5 轮工具全部失败后注入整文件重建提示', async () => {
+    const tools = [makeTool('read_file')];
+    const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;
+    const executor = createToolExecutor(tools, failHandler);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc5', name: 'read_file' }]),
+      finalResponse('summary'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('[System / Rebuild Escalation]')
+      && m.content.includes('Mandatory workflow')
+      && m.content.includes('write_file')
+    )).toBe(true);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════
