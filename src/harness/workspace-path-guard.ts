@@ -5,6 +5,7 @@ import {
   extractToolTargetPath,
   isFileWriteTool,
 } from './branch-budget-tool-path.js';
+import { parseLeadingCdCommand } from '../tools/shell-cd-parser.js';
 
 const READ_PATH_TOOLS = new Set([
   'read_file',
@@ -87,12 +88,25 @@ function extractPathArg(args: Record<string, unknown>): string | undefined {
 
 function extractOutsidePathsFromCommand(command: string, workspaceRoot: string): string[] {
   const outside: string[] = [];
+  let scanText = command;
+
+  const leadingCd = parseLeadingCdCommand(command);
+  if (leadingCd) {
+    const absCd = resolveAgainstWorkspace(leadingCd.cdPath, workspaceRoot);
+    if (!isUnderRoot(absCd, workspaceRoot)) {
+      outside.push(leadingCd.cdPath);
+      return outside;
+    }
+    scanText = leadingCd.remainder;
+  }
+
   const patterns = [
     /[A-Za-z]:[/\\][^\s"'`;&|]+/g,
-    /(?:^|\s)(\/[\w./-]+)/g,
+    // Unix 绝对路径：至少两段或段名 ≥2 字符，排除 Windows `cd /d` 里的 `/d`
+    /(?:^|\s)(\/(?:[\w.-]+\/|[\w.-]{2,})[\w./-]*)/g,
   ];
   for (const pattern of patterns) {
-    for (const match of command.matchAll(pattern)) {
+    for (const match of scanText.matchAll(pattern)) {
       const raw = (match[1] ?? match[0]).trim();
       const abs = resolveAgainstWorkspace(raw, workspaceRoot);
       if (!isUnderRoot(abs, workspaceRoot)) outside.push(raw);

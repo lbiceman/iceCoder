@@ -26,6 +26,7 @@ import {
   extractToolTargetPath,
 } from './branch-budget-tool-path.js';
 import { checkWorkspacePathViolation } from './workspace-path-guard.js';
+import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -273,7 +274,8 @@ export async function executeToolCallsStreaming(
       extractRunCommand,
     );
     if (branchBlock?.blocked) {
-      const blockMessage = branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.';
+      const baseMessage = branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.';
+      const blockMessage = appendVerificationEvidenceToBranchBlock(baseMessage, messages);
       logger.toolResult(tc.name, false, blockMessage.length, 'Branch budget block');
       onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
       messages.push({

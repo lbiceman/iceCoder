@@ -5,7 +5,7 @@ export function isVerificationCommand(command: string): boolean {
 }
 
 /**
- * 从 vitest / npm test 输出中提取简短失败摘要，供重复失败时注入模型上下文。
+ * 从 vitest / npm test 输出中提取简短失败摘要，供验收失败时注入模型上下文。
  */
 export function parseVitestFailureDigest(output: string): string | null {
   const body = output.trim();

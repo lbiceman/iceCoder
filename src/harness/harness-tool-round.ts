@@ -53,6 +53,8 @@ import {
   applyRebuildEscalationBypasses,
   buildRebuildEscalationMessage,
   collectRebuildEscalationContext,
+  shouldTriggerFileCapRebuild,
+  type RebuildEscalationTrigger,
 } from './rebuild-escalation.js';
 import type {
   ChatFunction,
@@ -237,6 +239,13 @@ export async function runHarnessToolRound(
     deps,
   });
 
+  maybeInjectFileCapRebuildEscalation({
+    state,
+    msgs,
+    correctionPort,
+    deps,
+  });
+
   const repeatedFailures = collectRepeatedFailures(
     executableToolCalls,
     toolStats.failedSignatures,
@@ -348,22 +357,14 @@ export async function runHarnessToolRound(
       && !state.rebuildEscalationInjected
       && !deps.supervisorObserverSuppressInject
     ) {
-      const topFile = topFileEditFromBranchBudget(state.branchBudget);
-      const rebuildCtx = collectRebuildEscalationContext(msgs, topFile);
-      const bypasses = applyRebuildEscalationBypasses(
-        state.branchBudget,
-        topFile,
-        rebuildCtx.lastVerificationCommand,
-      );
-      injectRecoveryMessage(
+      injectRebuildEscalation(
         deps,
         state,
         msgs,
         correctionPort,
-        buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }),
+        failureCount,
+        'consecutive_failures',
       );
-      state.rebuildEscalationInjected = true;
-      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入整文件重建提示`);
     } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES && !deps.supervisorObserverSuppressInject) {
       const lastErrors = msgs
         .slice(-6)
@@ -645,6 +646,63 @@ function composeGraphHint(
   return routing;
 }
 
+function maybeInjectFileCapRebuildEscalation(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+}): void {
+  const { state, msgs, correctionPort, deps } = args;
+  if (deps.supervisorObserverSuppressInject) return;
+
+  const shouldTrigger = shouldTriggerFileCapRebuild({
+    branchBudget: state.branchBudget,
+    verificationStatus: state.taskState.snapshot().verificationStatus,
+    rebuildEscalationInjected: state.rebuildEscalationInjected,
+  });
+  if (!shouldTrigger) return;
+
+  injectRebuildEscalation(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    state.consecutiveToolFailures,
+    'file_cap_verification_failed',
+  );
+  console.log('[harness] 文件编辑达上限且验收仍失败，注入整文件重建提示');
+}
+
+function injectRebuildEscalation(
+  deps: ToolRoundDeps,
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  correctionPort: CorrectionPort,
+  failureCount: number,
+  trigger: RebuildEscalationTrigger,
+): void {
+  if (state.rebuildEscalationInjected || deps.supervisorObserverSuppressInject) return;
+
+  const topFile = topFileEditFromBranchBudget(state.branchBudget);
+  const rebuildCtx = collectRebuildEscalationContext(msgs, topFile);
+  const bypasses = applyRebuildEscalationBypasses(
+    state.branchBudget,
+    topFile,
+    rebuildCtx.lastVerificationCommand,
+  );
+  injectRecoveryMessage(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }, trigger),
+  );
+  state.rebuildEscalationInjected = true;
+  if (trigger === 'consecutive_failures') {
+    console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入整文件重建提示`);
+  }
+}
+
 function maybeInjectVerificationDigest(args: {
   state: HarnessRunState;
   msgs: HarnessRunState['messages'];
@@ -676,7 +734,7 @@ function maybeInjectVerificationDigest(args: {
     const retries = state.branchBudget.inspect().commandRetries;
     const normalized = command.trim().replace(/\s+/g, ' ').slice(0, 200);
     const failCount = retries[normalized] ?? 0;
-    if (failCount < 2) continue;
+    if (failCount < 1) continue;
 
     const toolMsg = msgs.find(m => m.role === 'tool' && m.toolCallId === tc.id);
     const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';

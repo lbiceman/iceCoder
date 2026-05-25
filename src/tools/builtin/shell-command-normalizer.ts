@@ -4,9 +4,7 @@
 
 import path from 'node:path';
 
-/** 命令开头的 `cd ... &&` / `cd ... ;` */
-const LEADING_CD_RE =
-  /^\s*cd\s+(?:\/d\s+)?(?:"([^"]+)"|'([^']+)'|([^\s&;]+))\s*(?:&&|;)\s*(.+)$/s;
+import { parseLeadingCdCommand } from '../shell-cd-parser.js';
 
 export interface NormalizeRunCommandOptions {
   workDir: string;
@@ -28,26 +26,20 @@ export function normalizeRunCommand(
     return { command: trimmed, cwd: workDir, fixes: [] };
   }
 
-  const match = LEADING_CD_RE.exec(trimmed);
-  if (!match) {
-    return { command: trimmed, cwd: workDir, fixes: [] };
-  }
-
-  const cdPath = (match[1] ?? match[2] ?? match[3] ?? '').trim();
-  const remainder = match[4]?.trim() ?? '';
-  if (!cdPath || !remainder) {
+  const parsed = parseLeadingCdCommand(trimmed);
+  if (!parsed) {
     return { command: trimmed, cwd: workDir, fixes: [] };
   }
 
   const fixes: string[] = [];
-  if (match[1] || match[2]) {
+  if (parsed.quotedPath) {
     fixes.push('removed quotes from cd path');
   }
-  fixes.push(`extracted cd → cwd=${cdPath}`);
+  fixes.push(`extracted cd → cwd=${parsed.cdPath}`);
 
   return {
-    command: remainder,
-    cwd: path.resolve(cdPath),
+    command: parsed.remainder,
+    cwd: path.resolve(parsed.cdPath),
     fixes,
   };
 }

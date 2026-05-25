@@ -7,9 +7,11 @@ import {
 } from '../../src/harness/branch-budget-tool-path.js';
 import {
   applyRebuildEscalationBypasses,
+  appendVerificationEvidenceToBranchBlock,
   buildRebuildEscalationMessage,
   collectRebuildEscalationContext,
   parseFailingTestPaths,
+  shouldTriggerFileCapRebuild,
 } from '../../src/harness/rebuild-escalation.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 
@@ -57,6 +59,68 @@ describe('rebuild-escalation', () => {
     expect(msg).toContain('Last verification evidence');
     expect(msg).toContain('Platform:');
     expect(msg).toMatch(/Forbidden until step 4/);
+  });
+
+  it('buildRebuildEscalationMessage uses file-cap header when triggered by budget', () => {
+    const msg = buildRebuildEscalationMessage(2, {
+      topFile: { path: 'src/game/systems/tasks.ts', count: 4 },
+      failingTestPaths: ['test/unit/tasks.test.ts'],
+      verificationDigest: null,
+      lastVerificationCommand: 'npm test',
+      recentFailureSnippets: [],
+      writeBypassGranted: true,
+      commandBypassGranted: false,
+    }, 'file_cap_verification_failed');
+    expect(msg).toMatch(/BranchBudget file cap reached/);
+    expect(msg).not.toMatch(/consecutive rounds of tool calls have all failed/);
+  });
+
+  it('appendVerificationEvidenceToBranchBlock attaches digest and failing test paths', () => {
+    const messages: UnifiedMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc1', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'tc1',
+        content: '工具执行错误: Command failed (exit code: 1)\n\nFAIL test/unit/tasks.test.ts > random tasks > scheduler spawns\nAssertionError: expected 1 to be greater than or equal to 2',
+      },
+    ];
+    const enriched = appendVerificationEvidenceToBranchBlock(
+      '[BranchBudget / Blocked] 工具未执行：tasks.ts 已编辑 4 次',
+      messages,
+    );
+    expect(enriched).toContain('[BranchBudget / Blocked]');
+    expect(enriched).toContain('[Verification digest]');
+    expect(enriched).toContain('test/unit/tasks.test.ts');
+    expect(enriched).toMatch(/expected 1 to be greater than or equal to 2/);
+  });
+
+  it('shouldTriggerFileCapRebuild when file cap hit and verification still failed', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 3 });
+    t.recordFileEdit('src/game/systems/tasks.ts');
+    t.recordFileEdit('src/game/systems/tasks.ts');
+    t.recordFileEdit('src/game/systems/tasks.ts');
+
+    expect(shouldTriggerFileCapRebuild({
+      branchBudget: t,
+      verificationStatus: 'failed',
+      rebuildEscalationInjected: false,
+    })).toBe(true);
+
+    expect(shouldTriggerFileCapRebuild({
+      branchBudget: t,
+      verificationStatus: 'passed',
+      rebuildEscalationInjected: false,
+    })).toBe(false);
+
+    expect(shouldTriggerFileCapRebuild({
+      branchBudget: t,
+      verificationStatus: 'failed',
+      rebuildEscalationInjected: true,
+    })).toBe(false);
   });
 
   it('applyRebuildEscalationBypasses grants write and command retry', () => {

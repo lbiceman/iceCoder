@@ -173,4 +173,47 @@ describe('workspace-lock', () => {
     expect(preprocessWorkspaceMessage('D;//foo')).toBe('D://foo');
     expect(normalizeDetectedPath('D;//foo/bar')).toBe('D:\\foo\\bar');
   });
+
+  it('path guard allows cd /d into locked workspace then npm test', () => {
+    const locked = 'E:\\test\\agentToolTest\\implement-spellbrigade-survivor-second';
+    const violation = checkWorkspacePathViolation(
+      'run_command',
+      { command: `cd /d "${locked}" && npm test` },
+      locked,
+      [],
+    );
+    expect(violation).toBeUndefined();
+  });
+
+  it('path guard blocks cd /d outside locked workspace', () => {
+    const violation = checkWorkspacePathViolation(
+      'run_command',
+      { command: 'cd /d D:\\other && npm test' },
+      'E:\\proj',
+      [],
+    );
+    expect(violation).toMatch(/Workspace Lock/);
+    expect(violation).toMatch(/D:\\other/i);
+  });
+
+  it('path guard still blocks outside path in command remainder after in-root cd', () => {
+    const locked = 'E:\\proj';
+    const violation = checkWorkspacePathViolation(
+      'run_command',
+      { command: `cd /d ${locked} && copy D:\\outside\\a.txt .` },
+      locked,
+      [],
+    );
+    expect(violation).toMatch(/D:\\outside/i);
+  });
+
+  it('path guard still blocks unix absolute paths like /data/foo', () => {
+    const violation = checkWorkspacePathViolation(
+      'run_command',
+      { command: 'npm run build --output /data/out' },
+      'E:\\proj',
+      [],
+    );
+    expect(violation).toMatch(/\/data\/out/);
+  });
 });

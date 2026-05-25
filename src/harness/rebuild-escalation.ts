@@ -1,7 +1,10 @@
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
+import { topFileEditFromInspect } from './supervisor/passive-observer.js';
 import { buildVerificationDigest, isVerificationCommand } from './verification-digest.js';
+
+export type RebuildEscalationTrigger = 'consecutive_failures' | 'file_cap_verification_failed';
 
 export interface RebuildEscalationContext {
   topFile?: { path: string; count: number };
@@ -59,7 +62,8 @@ export function parseFailingTestPaths(output: string): string[] {
   return [...paths].slice(0, 4);
 }
 
-function findLastFailedVerification(messages: UnifiedMessage[]): {
+/** 从对话历史取最近一次失败的验收命令及其输出体（不含 BranchBudget 拦截文案）。 */
+export function findLastFailedVerification(messages: UnifiedMessage[]): {
   command: string;
   outputBody: string;
 } | null {
@@ -99,6 +103,39 @@ function collectRecentFailureSnippets(messages: UnifiedMessage[], max: number): 
     snippets.unshift(msg.content.slice(0, 280));
   }
   return snippets;
+}
+
+/** BranchBudget 拦截 write/edit/run 时，附带最近 vitest 失败摘要。 */
+export function appendVerificationEvidenceToBranchBlock(
+  baseMessage: string,
+  messages: UnifiedMessage[],
+): string {
+  const verification = findLastFailedVerification(messages);
+  if (!verification?.outputBody) return baseMessage;
+
+  const digest = buildVerificationDigest(verification.command, verification.outputBody);
+  if (!digest) return baseMessage;
+
+  const paths = parseFailingTestPaths(verification.outputBody);
+  const parts = [baseMessage, '', '**Last verification evidence:**', digest];
+  if (paths.length > 0) {
+    parts.push('', `**Failing tests (read first):** ${paths.map(p => `\`${p}\``).join(', ')}`);
+  }
+  return parts.join('\n');
+}
+
+/** 同一实现文件达 BranchBudget 上限且验收仍失败 → 触发 rebuild（不依赖连续全失败轮次）。 */
+export function shouldTriggerFileCapRebuild(args: {
+  branchBudget?: BranchBudgetTracker;
+  verificationStatus: string;
+  rebuildEscalationInjected: boolean;
+}): boolean {
+  if (args.rebuildEscalationInjected || !args.branchBudget) return false;
+  if (args.verificationStatus !== 'failed') return false;
+
+  const topFile = topFileEditFromInspect(args.branchBudget.inspect().fileEdits);
+  if (!topFile) return false;
+  return args.branchBudget.wouldBlockFileEdit(topFile.path);
 }
 
 /** 第 5 轮 escalation：收集验收证据、卡点文件与最近失败摘要。 */
@@ -148,6 +185,7 @@ export function applyRebuildEscalationBypasses(
 export function buildRebuildEscalationMessage(
   failureCount: number,
   ctx: RebuildEscalationContext,
+  trigger: RebuildEscalationTrigger = 'consecutive_failures',
 ): string {
   const implPath = ctx.topFile?.path;
   const readTestTargets = ctx.failingTestPaths.length > 0
@@ -178,8 +216,12 @@ export function buildRebuildEscalationMessage(
     platformActions.push(`one retry of \`${short}\` allowed despite BranchBudget command cap`);
   }
 
+  const header = trigger === 'file_cap_verification_failed'
+    ? `[System / Rebuild Escalation] Verification still failing after ${ctx.topFile?.count ?? 'multiple'} edits to the stuck implementation (BranchBudget file cap reached).`
+    : `[System / Rebuild Escalation] ${failureCount} consecutive rounds of tool calls have all failed.`;
+
   const parts = [
-    `[System / Rebuild Escalation] ${failureCount} consecutive rounds of tool calls have all failed.`,
+    header,
     'Patch-based fixes have not worked. **Mandatory workflow for the NEXT round:**',
     '',
     ...steps,
