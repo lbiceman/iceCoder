@@ -16,6 +16,7 @@ import {
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { upsertRuntimeContextMessage } from './harness-runtime-inject.js';
+import { upsertWorkspaceAnchorMessage } from './workspace-anchor.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -105,6 +106,7 @@ export async function prepareHarnessRound(
   logger.llmCall();
 
   upsertRuntimeContextMessage(msgs, state);
+  upsertWorkspaceAnchorMessage(msgs, state);
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();

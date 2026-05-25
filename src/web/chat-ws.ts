@@ -21,6 +21,8 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
+import { clearSessionWorkspace } from '../harness/session-workspace-store.js';
+import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../llm/types.js';
@@ -46,6 +48,7 @@ import {
 // isExecutionPlanEnabled removed (Phase 11)
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+const SESSION_ID = 'default';
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
 const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
@@ -252,6 +255,7 @@ async function clearSessionFile(): Promise<void> {
     await fsPromises.writeFile(SESSION_FILE, '[]', 'utf-8');
     // 同时清除结构化消息文件
     await fsPromises.writeFile(STRUCTURED_SESSION_FILE, '[]', 'utf-8').catch(() => {});
+    await clearSessionWorkspace(SESSIONS_DIR, SESSION_ID);
   } catch { /* ignore */ }
 }
 
@@ -476,7 +480,7 @@ async function handleChatMessage(
   inlineImages: string[] = [],
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
-  const toolDefs = toolRegistry.getDefinitions();
+  let toolDefs = toolRegistry.getDefinitions();
   const assembled = await loadAssembledPrompt();
   const harnessDynamic = harnessOverlayToContextFields(assembled);
 
@@ -596,6 +600,23 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
 
+  const workspaceMessage = typeof harnessUserMessage === 'string'
+    ? harnessUserMessage
+    : resolvedMessage;
+  const wsCtx = await resolveWorkspaceToolContext({
+    sessionDir: SESSIONS_DIR,
+    sessionId: SESSION_ID,
+    userMessage: workspaceMessage,
+    defaultWorkDir: process.cwd(),
+    defaultToolExecutor: toolExecutor,
+    defaultToolRegistry: toolRegistry,
+    fileParser: orchestrator.getFileParser(),
+    llmAdapter,
+  });
+  toolDefs = wsCtx.toolDefs;
+  const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
+  const runToolExecutor = wsCtx.toolExecutor;
+
   const harnessConfig: HarnessConfig = {
     context: {
       systemPrompt: assembled.systemPrompt,
@@ -618,6 +639,8 @@ async function handleChatMessage(
     memoryDir: MEMORY_DIR,
     fileMemoryManager: globalFileMemoryManager ?? undefined,
     sessionDir: SESSIONS_DIR,
+    sessionId: SESSION_ID,
+    workspaceRoot: effectiveWorkspace,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
     supervisorBridge: supervisorRuntime.bridge,
@@ -645,7 +668,7 @@ async function handleChatMessage(
     },
   };
 
-  const harness = new Harness(harnessConfig, toolExecutor);
+  const harness = new Harness(harnessConfig, runToolExecutor);
 
   // 注册默认停止钩子：检查模型是否过早停止
   harness.getStopHookManager().register(async (_messages, lastContent) => {

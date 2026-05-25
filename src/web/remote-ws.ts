@@ -25,7 +25,7 @@ import {
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
 import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
 import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
-import { resolveDefaultChatModelMeta } from './routes/config.js';
+import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const SESSIONS_DIR = path.resolve('data/sessions');
@@ -200,10 +200,22 @@ async function handleRemoteMessage(
   toolExecutor: ToolExecutor,
 ): Promise<void> {
   const llmAdapter = orchestrator.getLLMAdapter();
-  const toolDefs = shouldDisableRuntimeTools() ? [] : toolRegistry.getDefinitions();
+  let toolDefs = shouldDisableRuntimeTools() ? [] : toolRegistry.getDefinitions();
   const assembled = await loadAssembledChatPrompt({ logPrefix: '[remote-ws]' });
   const harnessDynamic = harnessOverlayToContextFields(assembled);
   const supervisorRuntime = await getSupervisorRuntime();
+
+  const wsCtx = await resolveWorkspaceToolContext({
+    sessionDir: SESSIONS_DIR,
+    sessionId: SESSION_ID,
+    userMessage: message,
+    defaultWorkDir: process.cwd(),
+    defaultToolExecutor: toolExecutor,
+    defaultToolRegistry: toolRegistry,
+    fileParser: orchestrator.getFileParser(),
+    llmAdapter,
+  });
+  toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
   const harnessConfig: HarnessConfig = {
     context: {
@@ -225,6 +237,8 @@ async function handleRemoteMessage(
     memoryDir: MEMORY_DIR,
     compactionEnableLLMSummary: true,
     sessionDir: SESSIONS_DIR,
+    sessionId: SESSION_ID,
+    workspaceRoot: wsCtx.effectiveWorkspaceRoot,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
     supervisorBridge: supervisorRuntime.bridge,
@@ -257,7 +271,7 @@ async function handleRemoteMessage(
     },
   };
 
-  const harness = new Harness(harnessConfig, toolExecutor);
+  const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
 
   // 先把用户消息立即写入会话文件
   await appendToSession(message, '', []);

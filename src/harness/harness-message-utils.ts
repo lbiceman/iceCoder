@@ -48,6 +48,8 @@ export function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('<session-notes>')
     || trimmed.startsWith('<context-summary>')
     || trimmed.startsWith('[System Runtime State]')
+    || trimmed.startsWith('[Workspace Anchor]')
+    || trimmed.startsWith('[System / Workspace Change]')
     || trimmed.startsWith('[System')
     || trimmed.startsWith('[Runtime Tool Planner]')
     || trimmed.startsWith('Please provide a final summary answer based on the tool call results above.')

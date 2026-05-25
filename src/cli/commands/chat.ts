@@ -16,6 +16,7 @@ import { startWebServer, type ServeResult } from './serve.js';
 import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
+import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
@@ -434,7 +435,19 @@ ${c.bold}终端内置命令:${c.reset}
 
     try {
       const assembled = await loadAssembledPrompt();
-      const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
+      let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
+
+      const wsCtx = await resolveWorkspaceToolContext({
+        sessionDir: ctx.paths.sessionsDir,
+        sessionId: 'default',
+        userMessage: input,
+        defaultWorkDir: process.cwd(),
+        defaultToolExecutor: ctx.toolExecutor,
+        defaultToolRegistry: ctx.toolRegistry,
+        fileParser: ctx.fileParser,
+        llmAdapter: ctx.llmAdapter,
+      });
+      toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
       const harnessConfig: HarnessConfig = {
         context: {
@@ -457,6 +470,8 @@ ${c.bold}终端内置命令:${c.reset}
         memoryDir: memoryFilesDir,
         fileMemoryManager: fileMemoryManager ?? undefined,
         sessionDir: ctx.paths.sessionsDir,
+        sessionId: 'default',
+        workspaceRoot: wsCtx.effectiveWorkspaceRoot,
         supervisorConfig: supervisorRuntime.supervisorConfig,
         globalPolicy: supervisorRuntime.globalPolicy,
         supervisorBridge: supervisorRuntime.bridge,
@@ -476,7 +491,7 @@ ${c.bold}终端内置命令:${c.reset}
         },
       };
 
-      const harness = new Harness(harnessConfig, ctx.toolExecutor);
+      const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
       latestHarness = harness;
 
       spinner.stop();

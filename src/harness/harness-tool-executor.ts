@@ -25,6 +25,7 @@ import {
   extractRunCommand,
   extractToolTargetPath,
 } from './branch-budget-tool-path.js';
+import { checkWorkspacePathViolation } from './workspace-path-guard.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -32,6 +33,8 @@ export interface ToolExecutorDeps {
   permissionRules: ToolPermissionRule[];
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   workspaceRoot: string;
+  lockedWorkspaceRoot?: string;
+  referenceReads?: string[];
   runtimeTelemetry?: RuntimeTelemetry;
   /** Resilience v2：超限时硬拦截 write / 失败命令重试。 */
   branchBudget?: BranchBudgetTracker;
@@ -221,6 +224,44 @@ export async function executeToolCallsStreaming(
         submittedIds.add(tc.id);
         continue;
       }
+    }
+
+    const workspaceBlock = checkWorkspacePathViolation(
+      tc.name,
+      tc.arguments,
+      deps.lockedWorkspaceRoot ?? '',
+      deps.referenceReads ?? [],
+    );
+    if (workspaceBlock) {
+      logger.toolResult(tc.name, false, workspaceBlock.length, 'Workspace lock block');
+      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+      messages.push({
+        role: 'tool',
+        content: workspaceBlock,
+        toolCallId: tc.id,
+      });
+      directTotalCount++;
+      directFailedCount++;
+      directFailedSignatures.push(toolCallSignature(tc));
+      deps.runtimeTelemetry?.recordTool({
+        round: iteration,
+        toolName: tc.name,
+        success: false,
+        outputLength: workspaceBlock.length,
+      });
+      onStep?.({
+        type: 'tool_result',
+        iteration,
+        toolName: tc.name,
+        toolSuccess: false,
+        toolOutput: workspaceBlock.substring(0, 500),
+        toolError: 'Workspace lock block',
+      });
+      taskState?.recordToolResult(tc, { success: false, output: workspaceBlock, error: 'Workspace lock block' });
+      repoContext?.recordToolResult(tc, { success: false, output: workspaceBlock, error: 'Workspace lock block' });
+      deps.loopController.recordToolCalls(1);
+      submittedIds.add(tc.id);
+      continue;
     }
 
     // BranchBudget 拦截：工具未真正执行。telemetry/toolStats 的 success:false 是策略拒绝，

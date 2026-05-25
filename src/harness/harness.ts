@@ -83,6 +83,8 @@ import { runHarnessToolRound } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
+import { getLatestRealUserText } from './harness-message-utils.js';
+import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
 
 /** run() 内各子模块共享的运行时依赖（由 Harness 实例字段组装）。 */
 export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
@@ -112,6 +114,8 @@ export class Harness {
   private graphExecutor: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
   private workspaceRoot: string;
+  private sessionDir?: string;
+  private sessionId: string;
   private resilienceV2Enabled: boolean;
   private checkpointEngine?: CheckpointEngine;
   private globalPolicy?: HarnessConfig['globalPolicy'];
@@ -152,6 +156,8 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
+    this.sessionDir = config.sessionDir;
+    this.sessionId = config.sessionId ?? 'default';
     // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
@@ -359,7 +365,6 @@ export class Harness {
     userContentBlocks?: import('../llm/types.js').ContentBlock[],
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
-    const deps = this.buildRunDeps();
     // W1: Harness 实例可被复用（cli/web）；清空上一次 run 残留的未消费信号，
     // 避免熔断/abort/max_rounds 终止后引擎 submittedSignals 跨 run 泄漏。
     this.modeDecisionEngine.resetSubmittedSignals();
@@ -385,6 +390,33 @@ export class Harness {
     if (activeCheckpoint) {
       messages.push(this.checkpointManager!.buildResumeMessage(activeCheckpoint));
     }
+
+    const plainUserText = typeof userMessage === 'string'
+      ? userMessage
+      : getLatestRealUserText(messages, '');
+    let lockedWorkspaceRoot: string | undefined;
+    let referenceReads: string[] = [];
+    if (this.sessionDir) {
+      const applied = await applyUserMessageWorkspaceLock({
+        sessionDir: this.sessionDir,
+        sessionId: this.sessionId,
+        userMessage: plainUserText,
+      });
+      lockedWorkspaceRoot = applied.state.lockedRoot;
+      referenceReads = applied.state.referenceReads;
+      if (applied.detection.changeNotice) {
+        messages.push({ role: 'user', content: applied.detection.changeNotice });
+      }
+      if (lockedWorkspaceRoot) {
+        this.workspaceRoot = lockedWorkspaceRoot;
+      }
+    }
+
+    const deps = this.buildRunDeps();
+    deps.workspaceRoot = this.workspaceRoot;
+    deps.lockedWorkspaceRoot = lockedWorkspaceRoot;
+    deps.referenceReads = referenceReads;
+
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
@@ -419,6 +451,9 @@ export class Harness {
       taskState: new TaskState(effectiveGoal),
       repoContext: new RepoContext(),
       runtimeStateHash: '',
+      lockedWorkspaceRoot,
+      referenceReads,
+      workspaceAnchorHash: '',
       failedToolCallSignatures: new Map(),
       branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
       branchBudgetWarnedThisRound: false,

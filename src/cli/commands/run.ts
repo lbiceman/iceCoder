@@ -23,6 +23,7 @@ import {
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
+import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
@@ -49,11 +50,23 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       systemPromptPath: ctx.paths.systemPromptPath,
       defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     });
-    const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
+    let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
     const { supervisorConfig, globalPolicy, bridge: supervisorBridge } = await loadHarnessSupervisorRuntime({
       dataDir: ctx.paths.dataDir,
       mainConfigPath: ctx.paths.configPath,
     });
+
+    const wsCtx = await resolveWorkspaceToolContext({
+      sessionDir: ctx.paths.sessionsDir,
+      sessionId: 'default',
+      userMessage: task,
+      defaultWorkDir: process.cwd(),
+      defaultToolExecutor: ctx.toolExecutor,
+      defaultToolRegistry: ctx.toolRegistry,
+      fileParser: ctx.fileParser,
+      llmAdapter: ctx.llmAdapter,
+    });
+    toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
     const harnessConfig: HarnessConfig = {
       context: {
@@ -73,12 +86,14 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       compactionEnableLLMSummary: true,
       memoryDir: memoryFilesDir,
       sessionDir: ctx.paths.sessionsDir,
+      sessionId: 'default',
+      workspaceRoot: wsCtx.effectiveWorkspaceRoot,
       supervisorConfig,
       globalPolicy,
       supervisorBridge,
     };
 
-    const harness = new Harness(harnessConfig, ctx.toolExecutor);
+    const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
 
     if (!jsonOutput) spinner.stop();
 
