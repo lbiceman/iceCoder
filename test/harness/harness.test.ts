@@ -1686,6 +1686,9 @@ describe('Harness - task checkpoint', () => {
         && m.content.includes('<resume-checkpoint>')
         && m.content.includes('Fix TypeScript errors')
       )).toBe(true);
+      expect(messages.every(m =>
+        typeof m.content !== 'string' || !m.content.includes('"version": 1'),
+      )).toBe(true);
       return finalResponse('resumed');
     });
 

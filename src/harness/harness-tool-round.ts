@@ -40,7 +40,7 @@ import { MessageCorrectionPort } from './supervisor/correction-port.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
 import { decideGraphHintRouting, type GraphHintRoutingDecision } from './supervisor/graph-hint-routing.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
+import type { SupervisorRuntimeBridge, PendingSegmentRenewal } from './supervisor/supervisor-bridge.js';
 import {
   maxFailedSignatureCount,
   topFileEditFromInspect,
@@ -539,6 +539,19 @@ export async function runHarnessToolRound(
     // 同步 phase 到 HarnessRunState；后续 ToolGate / Resilience inject 都按新 phase 走 source。
     state.supervisorPhase = deps.supervisorBridge.getSupervisorPhase();
 
+    const segmentRenewal = deps.supervisorBridge.consumePendingSegmentRenewal();
+    if (segmentRenewal) {
+      state.segmentRenewalCount = deps.supervisorBridge.getSegmentRenewalCount();
+      state.rebuildEscalationInjected = false;
+      maybeInjectSegmentRenewalRebuild({
+        deps,
+        state,
+        msgs,
+        correctionPort,
+        renewal: segmentRenewal,
+      });
+    }
+
     if (decision.action === 'fail' && decision.kind === 'checkpoint') {
       deps.loopController.stop('user_checkpoint');
       return {
@@ -671,6 +684,29 @@ function maybeInjectFileCapRebuildEscalation(args: {
     'file_cap_verification_failed',
   );
   console.log('[harness] 文件编辑达上限且验收仍失败，注入整文件重建提示');
+}
+
+function maybeInjectSegmentRenewalRebuild(args: {
+  deps: ToolRoundDeps;
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  renewal: PendingSegmentRenewal;
+}): void {
+  const { deps, state, msgs, correctionPort, renewal } = args;
+  if (deps.supervisorObserverSuppressInject) return;
+
+  injectRebuildEscalation(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    renewal.segmentIndex,
+    'segment_renewal_budget',
+  );
+  console.log(
+    `[harness] Recovery budget 续段 #${renewal.segmentIndex}（${renewal.reason}），注入 Rebuild Escalation`,
+  );
 }
 
 function injectRebuildEscalation(

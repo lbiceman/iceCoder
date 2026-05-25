@@ -129,6 +129,8 @@ export interface RuntimeSupervisorCheckpointState {
    * 跨 checkpoint 持续，避免重启绕过预算上限。
    */
   correctionBudgetUsed?: number;
+  /** Segment Renewal 续段计数；跨 checkpoint 恢复时延续，避免重启绕过段数上限。 */
+  segmentRenewalCount?: number;
 }
 
 /** v2 增强 checkpoint 的「附加运行时状态」部分。 */

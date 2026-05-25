@@ -6,6 +6,7 @@ import {
   PRE_COMPACT_SESSION_TIMEOUT_MSG,
 } from './harness-constants.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { shouldSkipCompactionOnPostForkRound } from './checkpoint-resume-compact.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessLogger } from './logger.js';
@@ -44,7 +45,11 @@ export async function maybeCompact(
 ): Promise<void> {
   const { messages, chatFn, logger, onStep, state } = args;
 
-  // ── 第一道防线：轻量微压缩（约 72% 阈值，纯本地，零 LLM 成本）──
+  if (state && shouldSkipCompactionOnPostForkRound(state)) {
+    return;
+  }
+
+  // ── 第一道防线：轻量微压缩
   if (deps.contextCompactor.needsMicroCompaction(messages) && !deps.contextCompactor.needsCompaction(messages)) {
     const before = messages.length;
     const beforeTok = deps.contextCompactor.getEstimatedTokens(messages);

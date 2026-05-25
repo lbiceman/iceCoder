@@ -30,6 +30,18 @@ function baseInput() {
 }
 
 describe('PassiveObserver - L2-2', () => {
+  it('does not emit tool_repeat_fail from cumulative history when this round succeeded', () => {
+    const observer = new PassiveObserver(DEFAULT_TRIGGERS);
+    const signals = observer.observe({
+      ...baseInput(),
+      maxFailedSignatureCount: 5,
+      repeatedToolSignatures: [],
+      allToolsFailedThisRound: false,
+      branchRecoverTriggered: false,
+    });
+    expect(signals).toEqual([]);
+  });
+
   it('emits tool_repeat_fail when max failed signature count reaches threshold', () => {
     const observer = new PassiveObserver(DEFAULT_TRIGGERS);
     const signals = observer.observe({
@@ -69,7 +81,12 @@ describe('PassiveObserver - L2-2', () => {
 
   it('reset clears accumulated signals', () => {
     const observer = new PassiveObserver(DEFAULT_TRIGGERS);
-    observer.observe({ ...baseInput(), maxFailedSignatureCount: 3 });
+    observer.observe({
+      ...baseInput(),
+      maxFailedSignatureCount: 3,
+      allToolsFailedThisRound: true,
+      consecutiveToolFailures: 3,
+    });
     observer.reset();
     expect(observer.getAccumulated()).toEqual([]);
   });

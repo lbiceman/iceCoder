@@ -39,11 +39,18 @@ export class PassiveObserver {
   observe(input: PassiveObserveInput): DeviationSignal[] {
     const roundSignals: DeviationSignal[] = [];
 
-    const repeatCount = Math.max(
-      input.maxFailedSignatureCount,
-      input.repeatedToolSignatures.length,
-      input.branchRecoverTriggered ? 1 : 0,
-    );
+    const thisRoundHasRepeatFailure =
+      input.repeatedToolSignatures.length > 0
+      || input.allToolsFailedThisRound
+      || input.branchRecoverTriggered;
+
+    const repeatCount = thisRoundHasRepeatFailure
+      ? Math.max(
+        input.maxFailedSignatureCount,
+        input.repeatedToolSignatures.length,
+        input.branchRecoverTriggered ? 1 : 0,
+      )
+      : 0;
     if (repeatCount >= this.triggers.toolRepeatFailMin) {
       roundSignals.push({ type: 'tool_repeat_fail', count: repeatCount });
     }

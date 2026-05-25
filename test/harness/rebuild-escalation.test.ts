@@ -75,6 +75,21 @@ describe('rebuild-escalation', () => {
     expect(msg).not.toMatch(/consecutive rounds of tool calls have all failed/);
   });
 
+  it('buildRebuildEscalationMessage uses segment renewal header when triggered by budget segment', () => {
+    const msg = buildRebuildEscalationMessage(3, {
+      topFile: { path: 'src/game/systems/tasks.ts', count: 4 },
+      failingTestPaths: ['test/unit/tasks.test.ts'],
+      verificationDigest: null,
+      lastVerificationCommand: 'npm test',
+      recentFailureSnippets: [],
+      writeBypassGranted: false,
+      commandBypassGranted: false,
+    }, 'segment_renewal_budget');
+    expect(msg).toMatch(/Recovery budget segment exhausted \(segment #3\)/);
+    expect(msg).toMatch(/Platform continues automatically/);
+    expect(msg).not.toMatch(/consecutive rounds of tool calls have all failed/);
+  });
+
   it('appendVerificationEvidenceToBranchBlock attaches digest and failing test paths', () => {
     const messages: UnifiedMessage[] = [
       {

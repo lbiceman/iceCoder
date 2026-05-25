@@ -6,11 +6,17 @@ import {
   LLM_RETRY_MAX_DELAY,
 } from './harness-constants.js';
 import { buildLlmRoundLogFields, isRetryableError } from './harness-llm-log.js';
+import {
+  applyCheckpointResumeFork,
+  buildEmergencyResumeSummaryMessage,
+  isContextWindowExceededError,
+} from './checkpoint-resume-compact.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { TokenBudgetTracker } from './token-budget.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
+import type { ContextCompactor } from './context-compactor.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -22,6 +28,7 @@ export interface LlmCallDeps {
   loopController: LoopController;
   tokenBudgetTracker?: TokenBudgetTracker;
   runtimeTelemetry?: RuntimeTelemetry;
+  contextCompactor?: ContextCompactor;
 }
 
 export interface CallHarnessLlmArgs {
@@ -82,6 +89,33 @@ export async function callHarnessLlm(
     }
     state.llmRetryCount = 0;
   } catch (error) {
+    if (
+      isContextWindowExceededError(error)
+      && !state.contextEmergencyCompactUsed
+      && deps.contextCompactor
+      && !deps.loopController.isAborted()
+    ) {
+      state.contextEmergencyCompactUsed = true;
+      state.checkpointResumeForkApplied = true;
+      const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
+      const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
+        aggressive: true,
+      });
+      logger.error(
+        `LLM context window exceeded; emergency compact ${fork.beforeMessages}→${fork.afterMessages} msgs, retrying`,
+      );
+      deps.runtimeTelemetry?.recordCompaction({
+        beforeMessages: fork.beforeMessages,
+        afterMessages: fork.afterMessages,
+        beforeTokens: fork.beforeTokens,
+        afterTokens: fork.afterTokens,
+      });
+      deps.loopController.rewindRound();
+      state.turnCount--;
+      state.transition = 'compaction_retry';
+      return { action: 'retry' };
+    }
+
     if (isRetryableError(error) && state.llmRetryCount < LLM_MAX_RETRIES && !deps.loopController.isAborted()) {
       state.llmRetryCount++;
       const delay = Math.min(

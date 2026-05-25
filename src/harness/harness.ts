@@ -46,6 +46,8 @@ import type {
 import { ContextAssembler } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
+import { applyCheckpointResumeFork, stripResumeCheckpointMessages } from './checkpoint-resume-compact.js';
+import { readCompactionContextWindowTokens } from './context-window-tier.js';
 import { HarnessLogger } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
@@ -387,9 +389,6 @@ export class Harness {
       }
     }
     const activeCheckpoint = await this.checkpointManager?.loadActive();
-    if (activeCheckpoint) {
-      messages.push(this.checkpointManager!.buildResumeMessage(activeCheckpoint));
-    }
 
     const plainUserText = typeof userMessage === 'string'
       ? userMessage
@@ -459,6 +458,9 @@ export class Harness {
       branchBudgetWarnedThisRound: false,
       verificationDigestInjectedThisRound: false,
       rebuildEscalationInjected: false,
+      segmentRenewalCount: 0,
+      checkpointResumeForkApplied: false,
+      contextEmergencyCompactUsed: false,
       stepReviewedThisRound: false,
       executionMode: 'free',
       executionModeLockRemaining: 0,
@@ -504,6 +506,7 @@ export class Harness {
             // L2-6 / T08：把 supervisorPhase + RecoverySupervisor 内部快照 + timeline tail + I4 budget
             //              推回 bridge；bridge 自身会写 `failure:checkpoint_resumed` timeline 标记。
             state.supervisorPhase = supervisor.supervisorPhase ?? state.supervisorPhase;
+            state.segmentRenewalCount = supervisor.segmentRenewalCount ?? 0;
             this.supervisorBridge?.restoreFromCheckpoint(supervisor);
           }
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
@@ -542,6 +545,35 @@ export class Harness {
           '[harness] session-notes 运行时恢复失败:',
           err instanceof Error ? err.message : err,
         );
+      }
+    }
+
+    if (activeCheckpoint) {
+      const resumeSummary = this.checkpointManager!.buildResumeMessage(activeCheckpoint);
+      state.activeCheckpointResumeSummary = resumeSummary;
+      if (existingMessages && existingMessages.length > 0) {
+        const est = this.contextCompactor.getEstimatedTokens(messages);
+        const forkThreshold = Math.floor(readCompactionContextWindowTokens() * 0.5);
+        if (existingMessages.length >= 60 || est > forkThreshold) {
+          const fork = applyCheckpointResumeFork(this.contextCompactor, messages, resumeSummary);
+          state.checkpointResumeForkApplied = true;
+          console.log(
+            `[harness] checkpoint resume fork: ${fork.beforeMessages}→${fork.afterMessages} msgs | `
+            + `~estCtxTok ${fork.beforeTokens}→${fork.afterTokens}`,
+          );
+          deps.runtimeTelemetry?.recordCompaction({
+            beforeMessages: fork.beforeMessages,
+            afterMessages: fork.afterMessages,
+            beforeTokens: fork.beforeTokens,
+            afterTokens: fork.afterTokens,
+          });
+        } else {
+          const filtered = stripResumeCheckpointMessages(messages);
+          messages.length = 0;
+          messages.push(...filtered, resumeSummary);
+        }
+      } else {
+        messages.push(resumeSummary);
       }
     }
 

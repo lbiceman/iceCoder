@@ -14,6 +14,7 @@ import {
   isActionableToolRequest,
 } from './harness-message-utils.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
+import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { upsertRuntimeContextMessage } from './harness-runtime-inject.js';
 import { upsertWorkspaceAnchorMessage } from './workspace-anchor.js';
@@ -157,8 +158,11 @@ export async function prepareHarnessRound(
 
   {
     const intent = state.taskState.snapshot().intent;
-    const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
-    await deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+    const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
+    if (!skipMemoryRecall) {
+      const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
+      await deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+    }
   }
 
   if (

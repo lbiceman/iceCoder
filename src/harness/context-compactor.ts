@@ -37,7 +37,12 @@ import {
   shouldPreserveMessageOnCompaction,
   truncateSessionNotesForCompact,
 } from './compaction-strategy.js';
-import { readEffectiveContextWindowTokens } from './context-window-tier.js';
+import {
+  findCheckpointAnchorIndex,
+  isResumeCheckpointContent,
+  stripResumeCheckpointMessages,
+} from './checkpoint-resume-compact.js';
+import { readCompactionContextWindowTokens, readEffectiveContextWindowTokens } from './context-window-tier.js';
 
 /**
  * 压缩配置。
@@ -228,6 +233,65 @@ export class ContextCompactor {
    */
   getConfig(): CompactionConfig {
     return this.config;
+  }
+
+  /**
+   * Checkpoint 续跑专用：纯本地 Fork，不调 LLM，不 reinject 文件。
+   */
+  compactForCheckpointResume(
+    messages: UnifiedMessage[],
+    resumeSummary: UnifiedMessage,
+    options: {
+      maxRecentMessages?: number;
+      targetTokenRatio?: number;
+      aggressive?: boolean;
+    } = {},
+  ): UnifiedMessage[] {
+    const maxRecent = options.maxRecentMessages ?? (options.aggressive ? 40 : 90);
+    const targetRatio = options.targetTokenRatio ?? (options.aggressive ? 0.45 : 0.55);
+    const targetTokens = Math.floor(readCompactionContextWindowTokens() * targetRatio);
+
+    let working = stripResumeCheckpointMessages(messages);
+    working = this.snip(working);
+    working = this.microcompact(working);
+    working = this.trimToolResults(working);
+
+    const systemMessages: UnifiedMessage[] = [];
+    let contentStart = 0;
+    if (working.length > 0 && working[0].role === 'system') {
+      systemMessages.push(working[0]);
+      contentStart = 1;
+    }
+
+    const anchorIdx = findCheckpointAnchorIndex(working);
+    const anchorMessages = anchorIdx >= contentStart ? [working[anchorIdx]] : [];
+
+    let recent = working.slice(Math.max(contentStart, working.length - maxRecent));
+    if (anchorIdx >= contentStart) {
+      recent = recent.filter(m => m !== working[anchorIdx]);
+    }
+
+    const assemble = (): UnifiedMessage[] => [
+      ...systemMessages,
+      ...anchorMessages,
+      resumeSummary,
+      ...recent,
+    ];
+
+    let result = assemble();
+    let shrinkPass = 0;
+    while (estimateTokens(result) > targetTokens && recent.length > 8 && shrinkPass < 12) {
+      const drop = Math.max(4, Math.ceil(recent.length * 0.12));
+      recent = recent.slice(drop);
+      result = assemble();
+      shrinkPass++;
+    }
+
+    if (options.aggressive) {
+      result = this.trimToolResults(this.microcompact(result));
+    }
+
+    return result;
   }
 
   /**
@@ -549,6 +613,7 @@ Continue the conversation from where it left off without asking the user any fur
     let lastContextIdx = -1;
     let lastBoundaryIdx = -1;
     let lastFocusIdx = -1;
+    let lastResumeIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       const content = typeof messages[i].content === 'string' ? messages[i].content as string : '';
       if (lastReminderIdx === -1 && content.startsWith('<system-reminder>')) lastReminderIdx = i;
@@ -556,6 +621,7 @@ Continue the conversation from where it left off without asking the user any fur
       if (lastContextIdx === -1 && content.startsWith('<system-context>')) lastContextIdx = i;
       if (lastBoundaryIdx === -1 && content.startsWith('<compact_boundary')) lastBoundaryIdx = i;
       if (lastFocusIdx === -1 && content.startsWith('<recent-dialogue-focus')) lastFocusIdx = i;
+      if (lastResumeIdx === -1 && isResumeCheckpointContent(content)) lastResumeIdx = i;
     }
 
     return messages.filter((msg, idx) => {
@@ -565,6 +631,7 @@ Continue the conversation from where it left off without asking the user any fur
       if (content.startsWith('<system-context>') && idx !== lastContextIdx) return false;
       if (content.startsWith('<compact_boundary') && idx !== lastBoundaryIdx) return false;
       if (content.startsWith('<recent-dialogue-focus') && idx !== lastFocusIdx) return false;
+      if (isResumeCheckpointContent(content) && idx !== lastResumeIdx) return false;
       if (msg.role === 'assistant' && !msg.toolCalls?.length && !content.trim()) return false;
       return true;
     });

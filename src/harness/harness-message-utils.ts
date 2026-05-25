@@ -47,6 +47,7 @@ export function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('<system-reminder>')
     || trimmed.startsWith('<session-notes>')
     || trimmed.startsWith('<context-summary>')
+    || trimmed.startsWith('<resume-checkpoint>')
     || trimmed.startsWith('[System Runtime State]')
     || trimmed.startsWith('[Workspace Anchor]')
     || trimmed.startsWith('[System / Workspace Change]')

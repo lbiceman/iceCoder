@@ -11,6 +11,14 @@ function readPositiveIntEnv(name: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function readIntEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 /** 单次 Harness run 墙钟超时（毫秒）。硬编码 24 小时，不再通过环境变量覆盖。 */
 export const DEFAULT_LONG_RUNNING_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_LONG_RUNNING_MAX_ROUNDS = 5000;
@@ -47,4 +55,18 @@ const DEFAULT_SUBAGENT_ENVELOPE_MS = 120_000;
  */
 export function getSubAgentTimeoutMsFromEnv(defaultMs = DEFAULT_SUBAGENT_ENVELOPE_MS): number {
   return readPositiveIntEnv('ICE_SUBAGENT_TIMEOUT_MS') ?? defaultMs;
+}
+
+/**
+ * Recovery budget 耗尽时是否走 Segment Renewal（同 run 内续段）而非 `user_checkpoint`。
+ * `ICE_HARNESS_SOFT_CHECKPOINT=0` 关闭，恢复 budget → checkpoint 旧行为。
+ */
+export function isSoftCheckpointEnabled(): boolean {
+  const raw = readIntEnv('ICE_HARNESS_SOFT_CHECKPOINT');
+  return raw === undefined ? true : raw !== 0;
+}
+
+/** 单次 run 内最多允许的续段次数；超出后仍走 `fail{checkpoint}`。 */
+export function getMaxSegmentRenewals(): number {
+  return readPositiveIntEnv('ICE_HARNESS_MAX_SEGMENT_RENEWALS') ?? 20;
 }

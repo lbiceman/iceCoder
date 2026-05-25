@@ -275,5 +275,6 @@ export function buildSupervisorCheckpointState(
     recoverySupervisorSnapshot: bridgeSnapshot?.recoverySupervisorSnapshot,
     timelineTail: bridgeSnapshot?.timelineTail,
     correctionBudgetUsed: bridgeSnapshot?.correctionBudgetUsed ?? 0,
+    segmentRenewalCount: bridgeSnapshot?.segmentRenewalCount ?? state.segmentRenewalCount ?? 0,
   };
 }

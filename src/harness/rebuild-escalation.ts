@@ -4,7 +4,10 @@ import { extractRunCommand } from './branch-budget-tool-path.js';
 import { topFileEditFromInspect } from './supervisor/passive-observer.js';
 import { buildVerificationDigest, isVerificationCommand } from './verification-digest.js';
 
-export type RebuildEscalationTrigger = 'consecutive_failures' | 'file_cap_verification_failed';
+export type RebuildEscalationTrigger =
+  | 'consecutive_failures'
+  | 'file_cap_verification_failed'
+  | 'segment_renewal_budget';
 
 export interface RebuildEscalationContext {
   topFile?: { path: string; count: number };
@@ -216,7 +219,9 @@ export function buildRebuildEscalationMessage(
     platformActions.push(`one retry of \`${short}\` allowed despite BranchBudget command cap`);
   }
 
-  const header = trigger === 'file_cap_verification_failed'
+  const header = trigger === 'segment_renewal_budget'
+    ? `[System / Rebuild Escalation] Recovery budget segment exhausted (segment #${failureCount}). Platform continues automatically — mandatory strategy change:`
+    : trigger === 'file_cap_verification_failed'
     ? `[System / Rebuild Escalation] Verification still failing after ${ctx.topFile?.count ?? 'multiple'} edits to the stuck implementation (BranchBudget file cap reached).`
     : `[System / Rebuild Escalation] ${failureCount} consecutive rounds of tool calls have all failed.`;
 

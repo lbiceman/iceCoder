@@ -83,6 +83,14 @@ export interface HarnessRunState {
   verificationDigestInjectedThisRound: boolean;
   /** 连续失败达 REBUILD_ESCALATION_THRESHOLD 后是否已注入整文件重建提示（成功轮次会重置） */
   rebuildEscalationInjected: boolean;
+  /** Segment Renewal：本 run 内已续段次数（与 supervisor bridge 同步） */
+  segmentRenewalCount: number;
+  /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
+  checkpointResumeForkApplied: boolean;
+  /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */
+  contextEmergencyCompactUsed: boolean;
+  /** 续跑 checkpoint 短摘要（emergency fork 复用） */
+  activeCheckpointResumeSummary?: UnifiedMessage;
   /** Resilience v2：本轮是否已做过 step review（避免重复） */
   stepReviewedThisRound: boolean;
   /** Resilience v2：最近一次 step review 结果（供启发式参考） */
