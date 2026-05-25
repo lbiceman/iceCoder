@@ -36,6 +36,7 @@ import {
   type ToolHistoryEntry,
   type FailureHistoryEntry,
   type RecoverySignal,
+  type VerificationOutputTailEntry,
 } from '../types/runtime-checkpoint.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 
@@ -79,6 +80,8 @@ export interface CheckpointSaveInput {
   graphSession?: GraphSession;
   /** Supervisor execution-mode snapshot; restore path may only convert it into signals. */
   supervisorState?: RuntimeSupervisorCheckpointState;
+  /** 最近验收失败 stderr tail（VerificationOutputBuffer.snapshot） */
+  verificationOutputTail?: VerificationOutputTailEntry[];
 }
 
 /** 最大保留条目 */
@@ -278,6 +281,9 @@ export class CheckpointEngine {
     if (input.supervisorState) {
       state.supervisorState = cloneSupervisorState(input.supervisorState);
     }
+    if (input.verificationOutputTail !== undefined) {
+      state.verificationOutputTail = input.verificationOutputTail.map(entry => ({ ...entry }));
+    }
 
     if (input.branchBudget) {
       state.branchBudget = input.branchBudget.snapshot();
@@ -443,6 +449,7 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,
     supervisorState: v.supervisorState ? cloneSupervisorState(v.supervisorState) : undefined,
+    verificationOutputTail: v.verificationOutputTail?.map(entry => ({ ...entry })),
     v2UpdatedAt: v.v2UpdatedAt,
   };
 }

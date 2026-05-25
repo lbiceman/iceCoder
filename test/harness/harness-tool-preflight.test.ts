@@ -9,6 +9,7 @@ import {
   isDistArtifactPath,
   shouldActivateBuildDiagnosticGate,
   shouldClearBuildDiagnosticGate,
+  taskMentionsBlockedVerificationPipeline,
 } from '../../src/harness/harness-tool-preflight.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
 
@@ -65,6 +66,24 @@ describe('harness-tool-preflight', () => {
     });
     expect(blocked.blocked).toBe(true);
     expect(blocked.reason).toBe('delegate_build_blocked');
+  });
+
+  it('blocks delegate tasks with implicit build intent when regex misses commands', () => {
+    expect(taskMentionsBlockedVerificationPipeline('Fix build until it passes')).toBe(true);
+    const blocked = checkDelegatePreflight({
+      task: 'Please fix the build pipeline until verification passes',
+      buildDiagnosticGateActive: true,
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toBe('delegate_build_blocked');
+  });
+
+  it('allows read-only delegate tasks under diagnostic gate', () => {
+    const allowed = checkDelegatePreflight({
+      task: 'Read-only inspect src/scenes/MainMenuScene.ts and explain the bug',
+      buildDiagnosticGateActive: true,
+    });
+    expect(allowed.blocked).toBe(false);
   });
 
   it('clears diagnostic gate after successful src edit', () => {

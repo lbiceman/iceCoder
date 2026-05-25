@@ -12,6 +12,7 @@ import { collectRecentErrors, collectRecentToolTraces } from './harness-step-con
 import { reviewStep } from './step-review.js';
 import type { ChatFunction, StopReason } from './types.js';
 import type { CorrectionPort } from '../types/supervisor.js';
+import type { VerificationOutputTailEntry } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
@@ -22,6 +23,10 @@ export interface ResilienceBridgeDeps {
    * 仍保留 branch 计数、checkpoint 与 submitModeSignal。
    */
   supervisorObserverSuppressInject?: boolean;
+}
+
+function checkpointVerificationOutputTail(state: HarnessRunState): VerificationOutputTailEntry[] | undefined {
+  return state.verificationOutputBuffer?.snapshot();
 }
 
 /**
@@ -64,6 +69,7 @@ export async function resilienceRecordToolCalls(
             trigger: 'tool_failed',
             branchBudget: state.branchBudget,
             supervisorState: buildSupervisorCheckpointState(state),
+            verificationOutputTail: checkpointVerificationOutputTail(state),
             appendFailure: {
               signature: sig,
               count: 1,
@@ -87,6 +93,7 @@ export async function resilienceRecordToolCalls(
           trigger: perToolTrigger,
           branchBudget: state.branchBudget,
           supervisorState: buildSupervisorCheckpointState(state),
+          verificationOutputTail: checkpointVerificationOutputTail(state),
           appendTool: {
             toolName: tc.name,
             success: !failed,
@@ -243,6 +250,7 @@ export async function resilienceSaveCheckpoint(
         trigger,
         branchBudget: state.branchBudget,
         supervisorState: buildSupervisorCheckpointState(state),
+        verificationOutputTail: checkpointVerificationOutputTail(state),
         verificationPending: state.taskState.shouldBlockFinalForVerification(),
         lastStopReason: stopReason,
       });

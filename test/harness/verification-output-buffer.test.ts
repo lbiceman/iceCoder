@@ -50,4 +50,17 @@ describe('verification-output-buffer', () => {
     );
     expect(commands.some(c => /npm run build/.test(c))).toBe(true);
   });
+
+  it('snapshot and restore roundtrip preserves failed verification tail', () => {
+    const buffer = new VerificationOutputBuffer();
+    buffer.recordFailed('npm run build 2>&1', '工具执行错误: exit 1\n\nerror TS2304');
+    buffer.recordFailed('npm run test:e2e', '工具执行错误: exit 1\n\ne2e failed');
+
+    const snapshot = buffer.snapshot();
+    const restored = new VerificationOutputBuffer();
+    restored.restore(snapshot);
+
+    expect(restored.findLastFailed('npm run test:e2e')?.outputBody).toMatch(/e2e failed/);
+    expect(restored.findLastFailed('npm run build 2>&1')?.outputBody).toMatch(/error TS2304/);
+  });
 });

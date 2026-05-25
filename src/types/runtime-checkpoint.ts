@@ -48,6 +48,13 @@ export interface FailureHistoryEntry {
   at: number;
 }
 
+/** 最近验收失败 stderr tail 条目（与 VerificationOutputBuffer 对齐，最多 3 条） */
+export interface VerificationOutputTailEntry {
+  command: string;
+  outputBody: string;
+  at: number;
+}
+
 /** 分支预算追踪器持久化快照 */
 export interface BranchBudgetSnapshot {
   /** 同一文件路径累计编辑次数 */
@@ -161,6 +168,8 @@ export interface RuntimeCheckpointV2 {
   supervisorState?: RuntimeSupervisorCheckpointState;
   /** v2 写入时间 */
   v2UpdatedAt: string;
+  /** 最近验收失败 stderr tail；跨 checkpoint 恢复 digest 注入 */
+  verificationOutputTail?: VerificationOutputTailEntry[];
 }
 
 /** Checkpoint 触发器类型 — 与 docs/长时间连续工作.md §Save Trigger 对齐 */

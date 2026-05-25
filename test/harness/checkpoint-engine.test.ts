@@ -165,6 +165,19 @@ describe('CheckpointEngine - save', () => {
     expect(raw.runtimeV2.recentFailures[0].count).toBe(2);
     expect(raw.runtimeV2.recentFailures[0].lastError).toBe('boom2');
   });
+
+  it('persists verificationOutputTail across save and loadV2', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+    const tail = [
+      { command: 'npm run build 2>&1', outputBody: 'error TS2304', at: 100 },
+      { command: 'npm run test:e2e', outputBody: 'e2e timeout', at: 200 },
+    ];
+
+    await engine.save({ trigger: 'verification_failed', verificationOutputTail: tail });
+
+    const loaded = await engine.loadV2();
+    expect(loaded?.verificationOutputTail).toEqual(tail);
+  });
 });
 
 describe('CheckpointEngine - restore', () => {

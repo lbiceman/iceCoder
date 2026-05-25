@@ -297,8 +297,7 @@ export async function executeToolCallsStreaming(
         toolCallId: tc.id,
       });
       directTotalCount++;
-      directFailedCount++;
-      directFailedSignatures.push(toolCallSignature(tc));
+      policyBlockedSignatures.push(toolCallSignature(tc));
       deps.runtimeTelemetry?.recordTool({
         round: iteration,
         toolName: tc.name,

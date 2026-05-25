@@ -517,6 +517,7 @@ export class Harness {
             state.segmentRenewalCount = supervisor.segmentRenewalCount ?? 0;
             this.supervisorBridge?.restoreFromCheckpoint(supervisor);
           }
+          state.verificationOutputBuffer.restore(v2.verificationOutputTail);
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
           const pending = this.checkpointEngine.pendingRecoverySignals();
           if (pending.length > 0) {
