@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import { checkpointHasPendingWork } from './incomplete-completion.js';
 // ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
@@ -56,7 +57,11 @@ export class TaskCheckpointManager {
       const raw = await fs.readFile(this.checkpointPath, 'utf-8');
       const checkpoint = JSON.parse(raw) as TaskCheckpoint;
       if (checkpoint.version !== 1) return null;
-      if (checkpoint.status === 'completed' || checkpoint.status === 'failed') return null;
+      if (checkpoint.status === 'failed') return null;
+      if (checkpoint.status === 'completed') {
+        if (!checkpointHasPendingWork(checkpoint)) return null;
+        return { ...checkpoint, status: 'paused' };
+      }
       return checkpoint;
     } catch {
       return null;

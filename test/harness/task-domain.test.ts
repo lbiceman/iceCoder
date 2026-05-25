@@ -15,4 +15,9 @@ describe('inferTaskDomain', () => {
     expect(inferTaskDomain('question')).toBe('non_critical_explain');
     expect(inferTaskDomain('docs')).toBe('non_critical_docs');
   });
+
+  it('promotes long-running implementation goals to critical_* even for question intent', () => {
+    const goal = 'implement-spellbrigade-survivor\n\n从零实现 Phase 1-5，验收 npm ci → npm test → npm run build。'.padEnd(120, '.');
+    expect(inferTaskDomain('question', goal)).toBe('critical_edit');
+  });
 });

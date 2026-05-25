@@ -202,6 +202,9 @@ export async function runHarnessToolRound(
     currentTools,
   });
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
+  // tool_failure 信号：本轮任意可执行工具 success:false 即提交（常见为 run_command/npm test 验收失败，
+  // 其次 BranchBudget 拦 write/edit，较少为 patch 对不上等真工具错误）。UI「forced · 工具失败」
+  // 是 enter_forced 主因标签，不表示 edit 工具坏了；详见 branch-budget.ts 文件头运维说明。
   if (deps.executionModeConfig && toolStats.failedCount > 0) {
     state.submitModeSignal?.('step_gate', 'tool_failure', { failedCount: toolStats.failedCount });
   }
@@ -695,7 +698,7 @@ function buildTaskContextForObserver(
   return {
     goal: snap.goal,
     intent: snap.intent,
-    domain: inferTaskDomain(snap.intent),
+    domain: inferTaskDomain(snap.intent, snap.goal),
     filesChanged: [...repo.filesChanged],
     filesRead: [...repo.filesRead],
     commandsRun: [...repo.commandsRun],

@@ -14,6 +14,7 @@ import {
   isActionableToolRequest,
 } from './harness-message-utils.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
+import { isResumeContinuationMessage } from './resume-goal.js';
 import { upsertRuntimeContextMessage } from './harness-runtime-inject.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
@@ -182,7 +183,11 @@ export async function prepareHarnessRound(
   if (!state.taskSwitchInjected) {
     const latestUserContent = getLatestRealUserText(msgs, userMessage);
     const lastAssistantText = getLastAssistantText(msgs);
-    if (latestUserContent && lastAssistantText) {
+    if (
+      latestUserContent
+      && lastAssistantText
+      && !isResumeContinuationMessage(latestUserContent)
+    ) {
       const similarity = bigramJaccard(latestUserContent, lastAssistantText);
       if (similarity < TASK_SWITCH_JACCARD_THRESHOLD) {
         msgs.push({

@@ -41,6 +41,10 @@ export interface HarnessRunState {
   llmRetryCount: number;
   /** LLM 空响应重试计数 */
   emptyResponseRetryCount: number;
+  /** 仅 reasoning 无 toolCalls 时的恢复次数 */
+  reasoningOnlyRecoveryCount: number;
+  /** 验收未清时拦截 model_done 的次数 */
+  prematureCompletionRecoveryCount: number;
   /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
   consecutiveToolFailures: number;
   /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */

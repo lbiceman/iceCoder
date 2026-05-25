@@ -10,6 +10,14 @@
  *     同时仍输出 `RecoverySignal` 注入 user message 提示换策略。
  *   - 支持序列化 / 反序列化，方便 v2 checkpoint 持久化。
  *
+ * 运维 / 评测读数（Spell Brigade 等长任务常见误判）：
+ *   - **验收失败**：write/edit 已成功，但 `npm test` 等 `run_command` exit≠0 —— 根因通常是
+ *     任务难或改法未对准断言，不是 edit 工具坏了。
+ *   - **本模块拦截**：同文件 edit 达 fileEditMax（默认 3）后，写工具 **未执行**，telemetry 仍
+ *     记 `success: false`（文案含 `[BranchBudget / Blocked]`、`必须先 read_file`）。
+ *   - **工具真坏**：patch 对不上、路径不存在等 —— 与 BranchBudget 无关，success:false 且无 Blocked 前缀。
+ *   典型链：验收失败 → tool_failure → forced → 本模块拦同文件第 4 次 edit（后果，非独立根因）。
+ *
  * 设计文档：docs/长时间连续工作.md §Part 2
  */
 
@@ -169,6 +177,9 @@ export class BranchBudgetTracker {
   /**
    * 统一工具拦截入口（write/edit 与 run_command）。
    * 返回 blocked=true 时不应执行工具，直接把 message 作为 tool_result 回给模型。
+   *
+   * 注意：blocked 时 harness-tool-executor 仍记 failedCount++ / telemetry success:false，
+   * 易与「edit_file 执行器故障」混淆；应以 message 是否含 `[BranchBudget / Blocked]` 区分。
    */
   checkToolBlock(
     toolName: string,
@@ -205,6 +216,7 @@ export class BranchBudgetTracker {
     return { blocked: false };
   }
 
+  /** UI 若截断「read_file」为「rea」，是展示宽度问题，完整工具名即 read_file。 */
   buildFileEditBlockMessage(path: string, currentCount: number): string {
     return [
       `[BranchBudget / Blocked] 工具未执行：${path} 已编辑 ${currentCount} 次（上限 ${this.limits.fileEditMax}）。`,

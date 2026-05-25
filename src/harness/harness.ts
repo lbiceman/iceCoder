@@ -52,6 +52,8 @@ import { TokenBudgetTracker } from './token-budget.js';
 import { HarnessMemoryIntegration } from './harness-memory.js';
 import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
+import { resolveEffectiveUserGoal } from './resume-goal.js';
+import { syncHydratedTaskState } from './resume-task-state.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
@@ -233,6 +235,8 @@ export class Harness {
     //   在 runHarnessToolRound 末段提交的 tool_failure / multi_write /
     //   recovery_pending 等信号会写入 state.pendingModeSignals，
     //   并在下一轮（即此处）被读取与清空，因此进入 forced 通常滞后 1 轮。
+    //   tool_failure 常见来源：npm test 等 run_command 验收失败（非 edit 工具坏）；
+    //   或 BranchBudget 拦 write（工具未执行）。见 branch-budget.ts 文件头。
     //   即时阻断由 Batch 5 的 ToolGate 在工具执行前单独处理，不在此 evaluate。
     const config = this.supervisorConfig?.executionMode;
     const policy = this.globalPolicy;
@@ -384,8 +388,10 @@ export class Harness {
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
+    const effectiveGoal = resolveEffectiveUserGoal(userMessage, messages);
+
     this.memoryIntegration.onLoopStart(
-      userMessage,
+      effectiveGoal,
       {
         chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
         stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
@@ -408,7 +414,9 @@ export class Harness {
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,
-      taskState: new TaskState(userMessage),
+      reasoningOnlyRecoveryCount: 0,
+      prematureCompletionRecoveryCount: 0,
+      taskState: new TaskState(effectiveGoal),
       repoContext: new RepoContext(),
       runtimeStateHash: '',
       failedToolCallSignatures: new Map(),
@@ -486,6 +494,7 @@ export class Harness {
           state.repoContext,
         );
         if (hydrated) {
+          syncHydratedTaskState(userMessage, messages, state.taskState, state.repoContext);
           onStep?.({
             type: 'memory_event',
             memoryKind: 'session_hydrate',

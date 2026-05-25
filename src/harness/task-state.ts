@@ -33,6 +33,17 @@ export class TaskState {
   }
 
   recordToolResult(toolCall: ToolCall, result: ToolResult): void {
+    if (toolCall.name === 'run_command') {
+      const command = String(toolCall.arguments?.command ?? '');
+      if (command) this.commandsRun.push(command);
+      if (looksLikeVerificationCommand(command)) {
+        this.phase = 'verification';
+        this.verificationRequired = true;
+        this.verificationStatus = result.success ? 'passed' : 'failed';
+      }
+      return;
+    }
+
     if (!result.success) return;
 
     if (FILE_READ_TOOLS.has(toolCall.name)) {
@@ -45,35 +56,57 @@ export class TaskState {
       this.phase = 'editing';
       const path = extractPathLikeArg(toolCall.arguments);
       if (path) this.filesChanged.add(path);
-      if (isExecutableIntent(this.intent)) {
-        this.verificationRequired = true;
+      this.verificationRequired = true;
+      if (this.verificationStatus !== 'failed') {
         this.verificationStatus = 'required';
-      }
-    }
-
-    if (toolCall.name === 'run_command') {
-      const command = String(toolCall.arguments?.command ?? '');
-      if (command) this.commandsRun.push(command);
-      if (looksLikeVerificationCommand(command)) {
-        this.phase = 'verification';
-        this.verificationStatus = result.success ? 'passed' : 'failed';
       }
     }
   }
 
   shouldBlockFinalForVerification(): boolean {
-    return this.verificationRequired && this.verificationStatus === 'required';
+    if (this.verificationStatus === 'failed') return true;
+    if (this.verificationRequired && this.verificationStatus === 'required') return true;
+    if (this.filesChanged.size > 0 && this.verificationStatus !== 'passed') {
+      this.verificationRequired = true;
+      return true;
+    }
+    return false;
   }
 
   buildVerificationPrompt(): string {
     const files = [...this.filesChanged];
     const fileList = files.length > 0 ? files.map(f => `- ${f}`).join('\n') : '- (changed files unknown)';
+
+    if (this.verificationStatus === 'failed') {
+      return `[System] Verification failed. The task is not complete.
+
+Changed files:
+${fileList}
+
+Read the failure output, fix the code or assets, then rerun verification (npm test, build, lint, or project-specific checks). Do not end the session until verification passes.`;
+    }
+
     return `[System] You changed files but has not verified the result yet.
 
 Changed files:
 ${fileList}
 
 Run an appropriate verification command now (for example: focused tests, npm test, npx tsc --noEmit, lint, or a project-specific check). If verification is impossible, state the exact blocker and evidence. Do not claim the task is complete before verification.`;
+  }
+
+  /** 续跑时覆盖被「继续」污染的 goal/intent */
+  rebindGoal(goal: string): void {
+    this.goal = goal;
+    this.intent = inferIntent(goal);
+  }
+
+  /** 与 RepoContext.recentDiagnostics 对齐 */
+  forceVerificationFailed(): void {
+    this.verificationRequired = true;
+    this.verificationStatus = 'failed';
+    if (this.filesChanged.size > 0) {
+      this.phase = 'verification';
+    }
   }
 
   snapshot(): TaskStateSnapshot {
@@ -153,10 +186,6 @@ export function inferIntent(text: string): TaskIntent {
   if (/文档|readme|docs?/.test(t)) return 'docs';
   if (/查看|读取|搜索|解释|说明|read|search|explain|inspect/.test(t)) return 'inspect';
   return 'question';
-}
-
-function isExecutableIntent(intent: TaskIntent): boolean {
-  return intent === 'edit' || intent === 'debug' || intent === 'test' || intent === 'refactor';
 }
 
 function extractPathLikeArg(args: Record<string, any>): string | undefined {

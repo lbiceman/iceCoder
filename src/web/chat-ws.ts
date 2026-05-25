@@ -649,12 +649,17 @@ async function handleChatMessage(
 
   // 注册默认停止钩子：检查模型是否过早停止
   harness.getStopHookManager().register(async (_messages, lastContent) => {
-    // 如果模型回复中包含"我需要"、"接下来"等未完成信号，提示继续
-    const incompleteSignals = ['我需要继续', '接下来我会', '下一步是', '还需要', '未完成'];
+    const incompleteSignals = [
+      '我需要继续', '接下来我会', '下一步是', '还需要', '未完成',
+      'I need to', 'next step', 'will update', 'will fix', 'need to update',
+      'Let me update', 'manifest', 'colorVariance', 'npm test',
+    ];
     const hasIncomplete = incompleteSignals.some(s => lastContent.includes(s));
     return {
       shouldContinue: hasIncomplete,
-      message: hasIncomplete ? '你提到了还有未完成的工作，请继续执行。' : undefined,
+      message: hasIncomplete
+        ? 'You identified unfinished work. Continue by calling tools now — do not stop with analysis only.'
+        : undefined,
       hookName: 'incomplete_task_check',
     };
   });

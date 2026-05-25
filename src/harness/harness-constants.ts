@@ -9,6 +9,12 @@ export const CIRCUIT_BREAKER_THRESHOLD = 10;
 // ─── LLM 空响应重试最大次数 ───
 export const MAX_EMPTY_RESPONSE_RETRIES = 2;
 
+// ─── 仅 reasoning、无 toolCalls 时的恢复次数 ───
+export const MAX_REASONING_ONLY_RECOVERY = 2;
+
+// ─── 验收/诊断未清时拦截 model_done 的最大次数 ───
+export const MAX_PREMATURE_COMPLETION_RECOVERY = 3;
+
 // ─── stop_hook 连续干预上限 ───
 export const MAX_STOP_HOOK_CONTINUATIONS = 3;
 

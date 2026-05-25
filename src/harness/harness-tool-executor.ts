@@ -223,6 +223,8 @@ export async function executeToolCallsStreaming(
       }
     }
 
+    // BranchBudget 拦截：工具未真正执行。telemetry/toolStats 的 success:false 是策略拒绝，
+    // 不是 edit_file/write_file 引擎故障；长任务里多在 npm test 反复失败后、forced 段出现。
     const branchBlock = deps.branchBudget?.checkToolBlock(
       tc.name,
       tc.arguments,
