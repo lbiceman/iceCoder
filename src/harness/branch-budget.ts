@@ -6,7 +6,8 @@
  *
  * 设计要点：
  *   - 纯本地、纯内存、零 LLM 成本；与现有 Harness 解耦。
- *   - 不主动 abort 循环，只输出 `RecoverySignal` 由调用方注入 user message。
+ *   - 超限时由 Harness 工具执行层 **硬拦截** 同类 write / 失败命令重试；
+ *     同时仍输出 `RecoverySignal` 注入 user message 提示换策略。
  *   - 支持序列化 / 反序列化，方便 v2 checkpoint 持久化。
  *
  * 设计文档：docs/长时间连续工作.md §Part 2
@@ -48,6 +49,14 @@ export interface BranchRecoverDecision {
   dimension?: 'file_edit' | 'command_retry' | 'error_repeat';
   /** 触发的具体键（文件路径 / 命令 / 错误签名） */
   key?: string;
+}
+
+/** Harness 工具执行前硬拦截判定。 */
+export interface BranchToolBlockDecision {
+  blocked: boolean;
+  dimension?: BranchRecoverDecision['dimension'];
+  key?: string;
+  message?: string;
 }
 
 /** 内部签名规范化 */
@@ -139,6 +148,80 @@ export class BranchBudgetTracker {
    * 注意：调用本方法**不消费**计数，调用方应在生成 RecoverySignal 后
    * 调用 `markRecoveryTriggered()` 避免下一轮重复触发。
    */
+  /**
+   * 工具执行前判定：同一文件已达编辑上限 → 拒绝下一次 write/edit。
+   * 与 shouldBranchRecover 不同：在 count === limit 时即拦截（最多允许 limit 次编辑）。
+   */
+  wouldBlockFileEdit(path: string | undefined | null): boolean {
+    if (!this.enabled || !path) return false;
+    return (this.fileEdits.get(path) ?? 0) >= this.limits.fileEditMax;
+  }
+
+  /**
+   * 工具执行前判定：同一命令失败重试达上限 → 拒绝再次 run_command。
+   */
+  wouldBlockCommandRetry(command: string | undefined | null): boolean {
+    if (!this.enabled || !command) return false;
+    const key = normalizeCommand(command);
+    return (this.commandRetries.get(key) ?? 0) >= this.limits.commandRetryMax;
+  }
+
+  /**
+   * 统一工具拦截入口（write/edit 与 run_command）。
+   * 返回 blocked=true 时不应执行工具，直接把 message 作为 tool_result 回给模型。
+   */
+  checkToolBlock(
+    toolName: string,
+    args: Record<string, unknown>,
+    extractPath: (name: string, a: Record<string, unknown>) => string | undefined,
+    extractCommand: (a: Record<string, unknown>) => string | undefined,
+  ): BranchToolBlockDecision {
+    if (!this.enabled) return { blocked: false };
+
+    const path = extractPath(toolName, args);
+    if (path && this.wouldBlockFileEdit(path)) {
+      const count = this.fileEdits.get(path) ?? 0;
+      return {
+        blocked: true,
+        dimension: 'file_edit',
+        key: path,
+        message: this.buildFileEditBlockMessage(path, count),
+      };
+    }
+
+    if (toolName === 'run_command') {
+      const command = extractCommand(args);
+      if (command && this.wouldBlockCommandRetry(command)) {
+        const count = this.commandRetries.get(normalizeCommand(command)) ?? 0;
+        return {
+          blocked: true,
+          dimension: 'command_retry',
+          key: command,
+          message: this.buildCommandBlockMessage(command, count),
+        };
+      }
+    }
+
+    return { blocked: false };
+  }
+
+  buildFileEditBlockMessage(path: string, currentCount: number): string {
+    return [
+      `[BranchBudget / Blocked] 工具未执行：${path} 已编辑 ${currentCount} 次（上限 ${this.limits.fileEditMax}）。`,
+      '禁止继续修改此文件。必须先 read_file 相关测试 / 设计文档，或改其他路径 / 换工具。',
+      'Do not rewrite this file again until you have read the failing test and documented expected vs actual behavior.',
+    ].join('\n');
+  }
+
+  buildCommandBlockMessage(command: string, failedAttempts: number): string {
+    const short = command.length > 120 ? `${command.slice(0, 117)}...` : command;
+    return [
+      `[BranchBudget / Blocked] 工具未执行：命令失败后已重试 ${failedAttempts} 次（上限 ${this.limits.commandRetryMax}）。`,
+      `命令: ${short}`,
+      '先 read_file 失败测试与源码，分析断言后再换命令或换修复策略；不要原样重跑。',
+    ].join('\n');
+  }
+
   shouldBranchRecover(): BranchRecoverDecision {
     if (!this.enabled) return { triggered: false };
     const fileOver = this.findOverLimit(this.fileEdits, this.limits.fileEditMax);

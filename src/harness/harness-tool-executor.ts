@@ -20,6 +20,11 @@ import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
+import type { BranchBudgetTracker } from './branch-budget.js';
+import {
+  extractRunCommand,
+  extractToolTargetPath,
+} from './branch-budget-tool-path.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -28,6 +33,8 @@ export interface ToolExecutorDeps {
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   workspaceRoot: string;
   runtimeTelemetry?: RuntimeTelemetry;
+  /** Resilience v2：超限时硬拦截 write / 失败命令重试。 */
+  branchBudget?: BranchBudgetTracker;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -214,6 +221,45 @@ export async function executeToolCallsStreaming(
         submittedIds.add(tc.id);
         continue;
       }
+    }
+
+    const branchBlock = deps.branchBudget?.checkToolBlock(
+      tc.name,
+      tc.arguments,
+      extractToolTargetPath,
+      extractRunCommand,
+    );
+    if (branchBlock?.blocked) {
+      const blockMessage = branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.';
+      logger.toolResult(tc.name, false, blockMessage.length, 'Branch budget block');
+      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+      messages.push({
+        role: 'tool',
+        content: blockMessage,
+        toolCallId: tc.id,
+      });
+      directTotalCount++;
+      directFailedCount++;
+      directFailedSignatures.push(toolCallSignature(tc));
+      deps.runtimeTelemetry?.recordTool({
+        round: iteration,
+        toolName: tc.name,
+        success: false,
+        outputLength: blockMessage.length,
+      });
+      onStep?.({
+        type: 'tool_result',
+        iteration,
+        toolName: tc.name,
+        toolSuccess: false,
+        toolOutput: blockMessage.substring(0, 500),
+        toolError: 'Branch budget block',
+      });
+      taskState?.recordToolResult(tc, { success: false, output: blockMessage, error: 'Branch budget block' });
+      repoContext?.recordToolResult(tc, { success: false, output: blockMessage, error: 'Branch budget block' });
+      deps.loopController.recordToolCalls(1);
+      submittedIds.add(tc.id);
+      continue;
     }
 
     // ── 提交到流式执行器 ──

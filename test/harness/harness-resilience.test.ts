@@ -27,6 +27,7 @@ function stateWithBranchBudget(branchBudget: BranchBudgetTracker): HarnessRunSta
     failedToolCallSignatures: new Map(),
     branchBudget,
     branchBudgetWarnedThisRound: false,
+    verificationDigestInjectedThisRound: false,
     stepReviewedThisRound: false,
     supervisorPhase: 'free',
   };

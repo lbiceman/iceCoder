@@ -414,6 +414,7 @@ export class Harness {
       failedToolCallSignatures: new Map(),
       branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
       branchBudgetWarnedThisRound: false,
+      verificationDigestInjectedThisRound: false,
       stepReviewedThisRound: false,
       executionMode: 'free',
       executionModeLockRemaining: 0,

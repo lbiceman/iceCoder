@@ -87,9 +87,9 @@ export class RecoveryBudgetManager {
     };
   }
 
-  /** takeover 中每轮调用一次；同轮幂等。off / 非 takeover 时静默。 */
-  tickRound(round: number): void {
-    if (!this.state.active) return;
+  /** takeover 中每轮调用一次；同轮幂等。effective=false 时不计数（无效空转轮）。 */
+  tickRound(round: number, effective = true): void {
+    if (!this.state.active || !effective) return;
     if (round <= this.state.lastTickedRound) return;
     this.state.lastTickedRound = round;
     this.state.roundsUsed += 1;

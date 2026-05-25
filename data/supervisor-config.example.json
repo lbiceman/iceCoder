@@ -20,7 +20,7 @@
     "adaptiveTakeover": {
       "firstRoundGraph": false,
       "riskThreshold": 0.6,
-      "maxRecoveryRounds": 10,
+      "maxRecoveryRounds": 25,
       "recoveryTokenRatio": 0.4,
       "maxRecoveryRetries": 3,
       "stabilityWindowRounds": 2,
@@ -31,8 +31,8 @@
   },
   "triggers": {
     "toolRepeatFailMin": 3,
-    "noProgressRoundsMin": 6,
-    "fileLoopMin": 6,
+    "noProgressRoundsMin": 4,
+    "fileLoopMin": 4,
     "goalDriftEnabled": true,
     "scopeCreepEnabled": true,
     "userForceTakeoverEnabled": true

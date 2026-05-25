@@ -45,6 +45,9 @@ import {
   topFileEditFromInspect,
 } from './supervisor/passive-observer.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
+import { extractRunCommand } from './branch-budget-tool-path.js';
+import { computeRecoveryRoundEffective } from './recovery-round-progress.js';
+import { buildVerificationDigest, isVerificationCommand } from './verification-digest.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -135,6 +138,9 @@ export async function runHarnessToolRound(
 
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
+  state.verificationDigestInjectedThisRound = false;
+
+  deps.branchBudget = state.branchBudget;
 
   // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
   //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
@@ -212,6 +218,15 @@ export async function runHarnessToolRound(
     new Set(toolStats.failedSignatures),
     state,
   );
+
+  maybeInjectVerificationDigest({
+    state,
+    msgs,
+    executableToolCalls,
+    failedSignatures: toolStats.failedSignatures,
+    correctionPort,
+    deps,
+  });
 
   const repeatedFailures = collectRepeatedFailures(
     executableToolCalls,
@@ -482,6 +497,11 @@ export async function runHarnessToolRound(
       riskScore: deps.supervisorRiskScoreProvider?.() ?? 0.5,
       correctionPort,
       tokenUsage: { used: tokenUsage.output, total: deps.tokenBudgetTracker?.getTotalBudget?.() ?? 0 },
+      recoveryRoundEffective: computeRecoveryRoundEffective({
+        executableToolCalls,
+        failedSignatures: toolStats.failedSignatures,
+        branchBudget: state.branchBudget,
+      }),
     });
 
     // 同步 phase 到 HarnessRunState；后续 ToolGate / Resilience inject 都按新 phase 走 source。
@@ -592,6 +612,50 @@ function composeGraphHint(
     );
   }
   return routing;
+}
+
+function maybeInjectVerificationDigest(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  executableToolCalls: import('../llm/types.js').ToolCall[];
+  failedSignatures: string[];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+}): void {
+  const {
+    state,
+    msgs,
+    executableToolCalls,
+    failedSignatures,
+    correctionPort,
+    deps,
+  } = args;
+
+  if (state.verificationDigestInjectedThisRound || deps.supervisorObserverSuppressInject) return;
+  if (!state.branchBudget) return;
+
+  const failed = new Set(failedSignatures);
+  for (const tc of executableToolCalls) {
+    if (tc.name !== 'run_command') continue;
+    if (!failed.has(toolCallSignature(tc))) continue;
+
+    const command = extractRunCommand(tc.arguments);
+    if (!command || !isVerificationCommand(command)) continue;
+
+    const retries = state.branchBudget.inspect().commandRetries;
+    const normalized = command.trim().replace(/\s+/g, ' ').slice(0, 200);
+    const failCount = retries[normalized] ?? 0;
+    if (failCount < 2) continue;
+
+    const toolMsg = msgs.find(m => m.role === 'tool' && m.toolCallId === tc.id);
+    const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';
+    const digest = buildVerificationDigest(command, rawOutput);
+    if (!digest) continue;
+
+    injectRecoveryMessage(deps, state, msgs, correctionPort, digest);
+    state.verificationDigestInjectedThisRound = true;
+    return;
+  }
 }
 
 function injectRecoveryMessage(

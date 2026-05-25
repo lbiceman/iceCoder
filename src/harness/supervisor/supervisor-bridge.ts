@@ -85,6 +85,11 @@ export interface EvaluateAfterRoundContext {
   messages?: UnifiedMessage[];
   /** L2-4：本轮 token 消耗（建议 outputTokens）与任务 token 总预算上限。用于 RecoveryBudgetManager。 */
   tokenUsage?: { used: number; total: number };
+  /**
+   * takeover 段是否计为有效恢复轮；false 时不增加 RecoveryBudgetManager 轮次计数。
+   * 默认 true（兼容旧调用方）。
+   */
+  recoveryRoundEffective?: boolean;
 }
 
 /** L2-4：scope_creep / user_force_takeover 注入入口。 */
@@ -519,9 +524,9 @@ export class SupervisorRuntimeBridge {
 
     if (enteringTakeover) {
       this.recoveryBudgetManager.beginTakeover(ctx.round.round, this.globalPolicy.supervisorMode);
-      this.recoveryBudgetManager.tickRound(ctx.round.round);
+      this.recoveryBudgetManager.tickRound(ctx.round.round, ctx.recoveryRoundEffective !== false);
     } else if (stayingInTakeover) {
-      this.recoveryBudgetManager.tickRound(ctx.round.round);
+      this.recoveryBudgetManager.tickRound(ctx.round.round, ctx.recoveryRoundEffective !== false);
     }
 
     if (ctx.tokenUsage && (enteringTakeover || stayingInTakeover)) {

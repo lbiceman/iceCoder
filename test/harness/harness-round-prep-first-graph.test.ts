@@ -39,6 +39,7 @@ function makeState(goal: string): HarnessRunState {
     runtimeStateHash: '',
     failedToolCallSignatures: new Map(),
     branchBudgetWarnedThisRound: false,
+    verificationDigestInjectedThisRound: false,
     stepReviewedThisRound: false,
     supervisorPhase: 'free',
   };

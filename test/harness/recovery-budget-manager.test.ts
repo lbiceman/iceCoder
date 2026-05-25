@@ -79,6 +79,15 @@ describe('RecoveryBudgetManager - round budget', () => {
     mgr.tickRound(1);
     expect(mgr.snapshot().roundsUsed).toBe(0);
   });
+
+  it('tickRound(effective=false) does not increment roundsUsed', () => {
+    const mgr = new RecoveryBudgetManager(params);
+    mgr.beginTakeover(1, 'adaptive');
+    mgr.tickRound(1, true);
+    mgr.tickRound(2, false);
+    mgr.tickRound(3, false);
+    expect(mgr.snapshot().roundsUsed).toBe(1);
+  });
 });
 
 describe('RecoveryBudgetManager - token ratio', () => {

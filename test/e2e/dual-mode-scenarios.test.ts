@@ -210,6 +210,7 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
       runtimeStateHash: '',
       failedToolCallSignatures: new Map(),
       branchBudgetWarnedThisRound: false,
+      verificationDigestInjectedThisRound: false,
       stepReviewedThisRound: false,
       supervisorPhase: 'free' as const,
       executionMode: 'forced' as const,

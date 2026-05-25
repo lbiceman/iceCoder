@@ -69,6 +69,8 @@ export interface HarnessRunState {
   branchBudget?: BranchBudgetTracker;
   /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
   branchBudgetWarnedThisRound: boolean;
+  /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
+  verificationDigestInjectedThisRound: boolean;
   /** Resilience v2：本轮是否已做过 step review（避免重复） */
   stepReviewedThisRound: boolean;
   /** Resilience v2：最近一次 step review 结果（供启发式参考） */
