@@ -1,0 +1,164 @@
+# 超高难 benchmark — 网页版幸存者 Roguelike（咒语旅团类复刻）
+# 从零实现 · 多系统 · 美术资源 · E2E · 预估单平台 3–6h
+
+task_id: implement-spellbrigade-survivor-01
+version: "1.1"
+created: "2026-05-22"
+updated: "2026-05-22"
+
+layers:
+  - L1   # 从零实现完整可玩网页游戏
+  - L5   # 30+ 源文件联动
+  - L6   # 超高难：实时战斗 + 元进度 + 美术 + E2E（见任务规格 §0）
+
+tags:
+  - ultra-hard
+  - greenfield
+  - game
+  - phaser
+  - survivor-roguelike
+  - spell-brigade-like
+  - assets
+  - e2e
+  - long-running
+  - visual-quality
+
+estimated:
+  min_turns: 80
+  typical_turns: 120-180
+  max_turns: 200
+  duration_minutes: 180-360
+
+repo: benchmark/repos/implement-spellbrigade-survivor-01
+
+prompt: |
+  这是一个**空壳 starter 仓库**（Vite + TypeScript + Phaser 3）。请在不修改 `test/`、`package.json`、锁文件的前提下，**从零实现**一款可在浏览器运行的 **2D 俯视角幸存者 Roguelike**（玩法气质对标《咒语旅团 / Spell Brigade》：单局内自动攻击 + 走位生存 + 升级三选一 + 局外金币商城）。
+
+  先快速浏览 `README.md`、`docs/REQUIREMENTS.md`、`docs/GAME-DESIGN.md`，**立即**跑 `npm test` 看失败探针，然后按下面阶段**连续实现**，不要停下来等人确认。
+
+  ## 执行纪律（必读，违反视为任务失败）
+
+  这是**长任务**（预计 80–200 轮工具调用、数小时）。你必须**一口气做到验收命令全过**，或直到平台强制超时/轮次上限。
+
+  **禁止以下行为（会导致模型自行中断）：**
+  - 做完 Phase 1/2 就输出「阶段性总结」「后续计划」然后**停止调用工具**
+  - 问用户「是否继续」「要不要下一步」「需要我接着做吗」
+  - 以「任务太大」「建议分多次完成」为由提前收尾
+  - 在 `npm test` / `npm run build` / `npm run test:e2e` **尚未全部 exit 0** 时，输出最终交付 bullet 并结束
+
+  **必须做到：**
+  - 每个 Phase 完成后**立刻**进入下一 Phase，继续 edit / shell / 下载素材，**不要**等人回复
+  - 测试失败 → 读输出 → 改代码 → **马上重跑**同一命令，循环直到通过
+  - 只有 **`npm ci` → `npm test` → `npm run build` → `npm run test:e2e` 全部成功** 后，才输出 ≤10 条交付 bullet 并结束
+  - 中间进度只允许用**一行**说明「当前 Phase N，刚跑完 xxx，下一步 yyy」，然后**继续调用工具**
+
+  ## 推荐实施顺序（按序执行，不得跳过后面的 Phase）
+
+  | Phase | 目标 | 完成标志 |
+  |-------|------|----------|
+  | **1** | `src/game/data/*.ts` + `src/game/systems/*.ts` 满足单测契约 | `npm test` 中 **unit/** 全绿 |
+  | **2** | Phaser Boot/Menu/Select/Map/Game/Shop 骨架 + `data-testid` | 能 `npm run dev` 点通菜单 |
+  | **3** | 战斗循环、10 技能可见表现、经验球/升级/随机任务 | 游戏可玩一局 |
+  | **4** | 下载免费素材 → `public/assets/` + `manifest.json` + `ASSETS.md` | `test/asset-audit.test.ts` 全绿 |
+  | **5** | `npm run build` + `npm run test:e2e` 修到全过 | 四条验收命令全 exit 0 |
+
+  Phase 1 通过后**不要停**；直接进入 Phase 2，依此类推。
+
+  ## 必须实现的核心玩法（10 条）
+
+  1. **开局选角**：主菜单进入「角色选择」，**10 名可玩角色**，每名有独立立绘/头像、名称、一句描述；选定后才能选地图并开始。
+  2. **差异化技能**：每名角色绑定**不同初始主动/被动技能**（至少覆盖：旋转飞刀、巨剑挥砍、陨石落点、毒气路径、穿透箭、连锁闪电、冰环、召唤物、治疗/护盾光环、影刺冲刺——见 `docs/GAME-DESIGN.md` 表 1）。技能须在战斗中**可见、可感知**，不是纯数值 buff。
+  3. **经验掉落**：击杀怪物按怪物等级掉落不同数值的经验球；**至少 4 档颜色**（绿 / 蓝 / 橙 / 紫或红），颜色与数值区间一一对应，拾取后增加经验。
+  4. **升级强化**：经验满升级时暂停并弹出 **3 选 1** 强化；强化幅度受 **幸运值（Luck）** 影响——同一强化在高幸运时数值更高（见 `src/game/systems/luck.ts` 契约与单测）。
+  5. **随机任务**：单局内每隔 **45–90 秒**（可配置）刷出随机限时任务（如「60 秒内击杀 20 只」「不受伤 30 秒」），完成给金币/经验/临时 buff 之一。
+  6. **整体气质**：俯视角、怪物自四周涌来、自动/半自动施法、越往后越密集——**网页可玩**，键鼠或 WASD+鼠标均可。
+  7. **美术资源**：**禁止**用 Canvas 画纯色方块糊弄。须从网络下载**免费可商用**素材（Kenney、OpenGameArt、itch.io free pack 等），放入 `public/assets/`，并在 `ASSETS.md` 列出来源与许可证。**不需要音效/音乐**。
+  8. **三张地图**：**沙漠、森林、雪山** 三张可选地图，各有不同地面贴图/配色与怪物池权重（见设计文档）；选图界面可预览缩略图。
+  9. **局外金币商城**：单局结束（死亡或胜利）结算金币写入 **localStorage 元进度**；主菜单「商城」可购买永久解锁项（至少 6 件：新皮肤/初始武器强化/幸运+1/开局护盾等），购买后下一局生效。
+  10. **观感要求**：角色、怪物、经验球、UI 按钮、商城图标均须为**精灵图或贴图**，尺寸与风格尽量统一；Gate 脚本会扫描素材分辨率与占位图。
+
+  ## 工程约束
+
+  - 只改 `src/`、`public/`、`index.html`（若需）、`ASSETS.md`；**禁止**改 `test/`、`package.json`、`vitest.config.ts`、`playwright.config.ts`。
+  - 使用仓库已有 **Phaser 3**（不得换成 Three.js 等需改 lockfile 的引擎）。
+  - 实现 `docs/GAME-DESIGN.md` 中列出的 **导出 API**（`src/game/data/*.ts`、`src/game/systems/*.ts`），单测直接 import。
+  - 验收命令（**全部 exit 0 才算完成**）：`npm ci` → `npm test` → `npm run build` → `npm run test:e2e`（E2E 针对 build 后的 dist）。
+
+  ## 其他提示
+
+  - 优先 Phase 1 单测，但**不要**在 Phase 1 完成后就结束会话。
+  - 子 Agent / 搜索可用于查 Phaser 3 示例；素材必须真实下载落盘。
+  - 仅当平台轮次或时间**硬性耗尽**时，才提交当前进度；此时说明已通过哪些 Phase、哪些测试仍失败。
+
+acceptance:
+  commands:
+    - npm ci
+    - npm test
+    - npm run build
+    - npm run test:e2e
+  files_must_exist:
+    - src/main.ts
+    - src/game/data/characters.ts
+    - src/game/data/maps.ts
+    - src/game/data/shop.ts
+    - src/game/systems/xp.ts
+    - src/game/systems/luck.ts
+    - src/game/systems/tasks.ts
+    - src/game/systems/meta-progress.ts
+    - ASSETS.md
+    - public/assets/manifest.json
+  files_must_not_change:
+    - test/**
+    - package.json
+    - package-lock.json
+    - vitest.config.ts
+    - playwright.config.ts
+  allowed_change_globs:
+    - src/**
+    - public/**
+    - index.html
+    - ASSETS.md
+  forbidden_change_globs:
+    - test/**
+    - node_modules/**
+
+timeout_minutes: 240
+max_turns: 200
+
+observability:
+  complexity:
+    - 10 角色 × 独立技能表现
+    - 4 档经验球 + 升级 3 选 1 + Luck 曲线
+    - 3 地图 × 不同怪物池
+    - 随机任务调度 + 局外商城 localStorage
+    - Phaser 场景 ≥ 5（Boot/Menu/Select/Game/Shop/GameOver）
+  long_running:
+    - 典型 120+ 轮：搭场景 → 战斗循环 → UI → 素材 → 元进度 → E2E 修 flaky
+  recovery:
+    - 素材缺失探针（manifest 与文件一致性）
+    - 占位图检测（过小 PNG / 纯色块）
+    - Luck 边界（0 与 100）
+    - 商城金币不足不可购买
+  exploration:
+    - 需读 REQUIREMENTS + GAME-DESIGN + ACCEPTANCE + 单测契约
+    - Phaser 加载与 dist 路径
+
+scoring_hints:
+  judge_focus:
+    - D1：10 角色、3 地图、商城、随机任务是否都可玩
+    - D2：Luck 影响升级、经验档、任务奖励是否正确
+    - D3：场景划分、Phaser 生命周期、元进度持久化
+    - D5：是否 npm test → build → test:e2e 迭代
+    - D6：ASSETS.md 与 manifest 是否完整
+  visual_judge_supplement:
+    - 截图或 Playwright 产物中角色/怪物是否为贴图而非色块
+    - UI 是否可读（字体、对比度、血条/经验条）
+    - 三地图视觉是否可区分
+  common_failure_modes:
+    - Phase 1 完成后输出总结并停止（违反执行纪律）
+    - 询问用户是否继续而非自动进入下一 Phase
+    - 仅 Canvas 色块，未下载素材（Gate 素材审计失败）
+    - 10 角色数据重复 skillId
+    - 改 test 或 package.json 凑过
+    - 无局外商城或金币不持久化
+    - E2E 未 build dist 就测

@@ -1,0 +1,137 @@
+# 超高难 benchmark 任务 — 多租户计费结算引擎跨文件逻辑 BUG 定位
+# 目标：55+ 源文件 · ~450KB 上下文 · 19 处跨模块隐性缺陷
+
+task_id: debug-billing-settlement-03
+version: "1.0"
+created: "2026-05-25"
+
+layers:
+  - L2   # 定点修 bug
+  - L4   # 读失败日志 / 测试输出定位
+  - L5   # 跨 19+ 模块联动
+
+tags:
+  - ultra-hard
+  - debug
+  - multi-file
+  - long-context
+  - billing
+  - revenue-recognition
+  - exploration
+  - recovery
+
+estimated:
+  min_turns: 40
+  typical_turns: 80-150
+  max_turns: 200
+  duration_minutes: 120-180
+  context_size_kb: 450
+  source_files: 97
+
+repo: benchmark/repos/debug-billing-settlement-03
+
+prompt: |
+  这是一个**多租户 SaaS 计费与收入确认** TypeScript 项目（55+ 源文件，约 450KB 源码）。当前 **19 项** Vitest 探针全部失败。请在**不修改 `test/`** 的前提下，仅修复 `src/` 中的逻辑缺陷，使 `npm test` 与 `npm run build` 全部通过。
+
+  ## 背景
+  系统涵盖：货币换算、税区判定、复合税、量价阶梯、忠诚度折扣、按日 proration、升级 credit、账期/试用、发票行聚合、税行舍入、付款分配、信用抵扣、递延收入、对账、催款 escalation、幂等、计费编排流水线等模块。
+
+  ## 已知现象（线索，勿只修单点）
+  1. 外币换算 `convertToBase` 结果与 handbook 示例不符（方向可能反了）。
+  2. 税区阈值「恰好等于门槛金额」时未征税。
+  3. 复合税 local 税基似乎包含了 state 税（应仅对 subtotal）。
+  4. 量价最高档在 `quantity === top.minQuantity` 时未命中。
+  5. 忠诚度 10% + 促销 15% 被**叠加**为 25%，而非取最优单项。
+  6. 1 月 proration 分母固定 30 天，与账期实际天数不符。
+  7. 升级 unused credit 符号反了（应为负值 credit）。
+  8. 账期结束日少算 1 天（末日本应 inclusive）。
+  9. 试用最后一天被判定为 inactive。
+  10. 升级时 setup fee 被重复计入行项。
+  11. 税行「逐行四舍五入再求和」与「整单一次舍入」 penny 不一致。
+  12. 部分付款分配到**低优先级**发票（应先高优先级）。
+  13. 信用抵扣后 `amountDue` 可为负（未封顶）。
+  14. 直线法递延收入 schedule 条数比 period 多 1。
+  15. 余数 cent 全堆在最后一期而非均匀分配。
+  16. 对账匹配忽略币种差异。
+  17. 催款 escalation 用日历日而非工作日。
+  18. 幂等缓存 `commandId` 跨 tenant 互相污染。
+  19. 计费编排**先税后折扣**（应先折扣后税）。
+
+  ## 要求
+  - 只改 `src/`；禁止改 `test/`、`package.json`、锁文件、`scripts/generate-all.mjs`。
+  - 保持现有导出函数名与公开 API 不变（测试直接 import）。
+  - `README.md` / `ARCHITECTURE.md` / 源码注释**可能故意误导**——以测试行为为准。
+  - 修复过程中多次运行 `npm test` 驱动迭代；不要引入新依赖。
+  - 完成后用 10 条以内 bullet 说明：修了哪些模块、各自对应哪类缺陷。
+  - 可选：`node scripts/size-report.mjs` 确认未误删大量文件。
+
+  从 `README.md` → `ARCHITECTURE.md` → 失败测试输出 → 按需探索 `src/` 各子目录开始。
+
+acceptance:
+  commands:
+    - npm ci
+    - npm test
+    - npm run build
+    - node scripts/size-report.mjs
+  files_must_exist:
+    - src/currency/currency-converter.ts
+    - src/tax/jurisdiction-resolver.ts
+    - src/tax/compound-tax-engine.ts
+    - src/pricing/volume-tier.ts
+    - src/pricing/loyalty-discount.ts
+    - src/proration/daily-proration.ts
+    - src/proration/upgrade-proration.ts
+    - src/subscription/billing-cycle.ts
+    - src/subscription/trial-manager.ts
+    - src/invoice/line-item-aggregator.ts
+    - src/invoice/tax-line-builder.ts
+    - src/payment/allocation-engine.ts
+    - src/credit/credit-applicator.ts
+    - src/revenue/deferred-revenue.ts
+    - src/revenue/recognition-schedule.ts
+    - src/reconciliation/ledger-matcher.ts
+    - src/dunning/escalation-ladder.ts
+    - src/idempotency/idempotency-guard.ts
+    - src/pipeline/billing-orchestrator.ts
+  files_must_not_change:
+    - test/billing-settlement.test.ts
+    - package.json
+    - vitest.config.ts
+    - scripts/generate-all.mjs
+  allowed_change_globs:
+    - src/**/*.ts
+  forbidden_change_globs:
+    - test/**
+    - node_modules/**
+    - scripts/generate-all.mjs
+
+timeout_minutes: 180
+max_turns: 200
+
+observability:
+  complexity:
+    - 97 源文件 / ~450KB / ~9200 行；显著超出 200K token 上下文
+    - 19 处跨 currency/tax/pricing/proration/subscription/invoice/payment/credit/revenue/reconciliation/dunning/idempotency/pipeline
+    - 注释与 ARCHITECTURE 含误导性「正确语义」描述
+  long_running:
+    - 典型 80+ 轮：全量读测试 → 分批探索模块 → 多轮 npm test 回归
+    - 单点修复无法通过全量（如只修 FX 仍剩 18 fail）
+  recovery:
+    - 每类 bug 独立探针；修错方向会引入新 fail 或仍 fail 原探针
+    - 需理解模块间编排顺序（billing-orchestrator vs tax-line-builder）
+  exploration:
+    - 需区分 domain/config/utils 噪音与真实缺陷文件
+    - legacy 参考文件与 audit 模块为干扰项
+
+scoring_hints:
+  judge_focus:
+    - D2 正确性：19 探针语义是否真正理解（非硬编码期望值）
+    - D4 最小改动：勿删 generate-all 产物、勿改测试凑过
+    - D5 验证意识：是否分批 npm test 而非一次性大范围重写
+    - D1 完成度：是否 19/19 全绿而非只修部分
+  common_failure_modes:
+    - 只修 3-5 个显眼 bug，忽略幂等/对账/escalation
+    - 按 ARCHITECTURE 改但与测试相反（文档故意偏差）
+    - 修改 test 或 package.json（Gate G2 扣分）
+    - 大范围重构 src/ 引入新 bug（Judge D3/D4 降分）
+    - 上下文截断导致漏读后半模块
