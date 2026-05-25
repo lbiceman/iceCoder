@@ -48,7 +48,13 @@ import {
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { computeRecoveryRoundEffective } from './recovery-round-progress.js';
-import { buildVerificationDigest, isVerificationCommand } from './verification-digest.js';
+import { buildVerificationDigest, isHarnessVerificationCommand } from './verification-digest.js';
+import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
+import {
+  buildDiagnosticGateMessage,
+  shouldActivateBuildDiagnosticGate,
+  shouldClearBuildDiagnosticGate,
+} from './harness-tool-preflight.js';
 import {
   applyRebuildEscalationBypasses,
   buildRebuildEscalationMessage,
@@ -208,6 +214,8 @@ export async function runHarnessToolRound(
     repoContext: state.repoContext,
     chatFn,
     currentTools,
+    buildDiagnosticGateActive: state.buildDiagnosticGateActive,
+    verificationOutputBuffer: state.verificationOutputBuffer,
   });
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
   // tool_failure 信号：本轮任意可执行工具 success:false 即提交（常见为 run_command/npm test 验收失败，
@@ -238,6 +246,8 @@ export async function runHarnessToolRound(
     correctionPort,
     deps,
   });
+
+  maybeUpdateBuildDiagnosticGate(state, msgs, executableToolCalls, toolStats, correctionPort, deps);
 
   maybeInjectFileCapRebuildEscalation({
     state,
@@ -321,7 +331,7 @@ export async function runHarnessToolRound(
       deps.loopController.stop('circuit_breaker');
       const finalState = deps.loopController.getState();
       logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
-      await saveTaskCheckpoint(deps, 'failed', userMessage, msgs, state, 'circuit_breaker');
+      await saveTaskCheckpoint(deps, 'failed', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'circuit_breaker');
       recordTelemetrySummary(deps, 'circuit_breaker', state);
 
       onStep?.({
@@ -474,7 +484,7 @@ export async function runHarnessToolRound(
     syncExecutionModeLoopState(deps.loopController, state);
   }
 
-  await saveTaskCheckpoint(deps, 'running', userMessage, msgs, state);
+  await saveTaskCheckpoint(deps, 'running', resolveCheckpointUserGoal(state, userMessage), msgs, state);
   await resilienceSaveCheckpoint(deps, 'step_completed', state);
 
   const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
@@ -501,7 +511,11 @@ export async function runHarnessToolRound(
     const runtimeRound = {
       round,
       toolNames: executableToolCalls.map(tc => tc.name),
-      toolSuccess: executableToolCalls.map(tc => !toolStats.failedSignatures.includes(toolCallSignature(tc))),
+      toolSuccess: executableToolCalls.map(tc => {
+        const sig = toolCallSignature(tc);
+        return !toolStats.failedSignatures.includes(sig)
+          && !toolStats.policyBlockedSignatures.includes(sig);
+      }),
       hadWriteTool: executableToolCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)),
     };
 
@@ -543,6 +557,8 @@ export async function runHarnessToolRound(
     if (segmentRenewal) {
       state.segmentRenewalCount = deps.supervisorBridge.getSegmentRenewalCount();
       state.rebuildEscalationInjected = false;
+      state.branchBudget?.resetCommandRetriesForVerificationCommands();
+      state.buildDiagnosticGateActive = false;
       maybeInjectSegmentRenewalRebuild({
         deps,
         state,
@@ -720,7 +736,7 @@ function injectRebuildEscalation(
   if (state.rebuildEscalationInjected || deps.supervisorObserverSuppressInject) return;
 
   const topFile = topFileEditFromBranchBudget(state.branchBudget);
-  const rebuildCtx = collectRebuildEscalationContext(msgs, topFile);
+  const rebuildCtx = collectRebuildEscalationContext(msgs, topFile, state.verificationOutputBuffer);
   const bypasses = applyRebuildEscalationBypasses(
     state.branchBudget,
     topFile,
@@ -765,7 +781,7 @@ function maybeInjectVerificationDigest(args: {
     if (!failed.has(toolCallSignature(tc))) continue;
 
     const command = extractRunCommand(tc.arguments);
-    if (!command || !isVerificationCommand(command)) continue;
+    if (!command || !isHarnessVerificationCommand(command)) continue;
 
     const retries = state.branchBudget.inspect().commandRetries;
     const normalized = command.trim().replace(/\s+/g, ' ').slice(0, 200);
@@ -774,12 +790,54 @@ function maybeInjectVerificationDigest(args: {
 
     const toolMsg = msgs.find(m => m.role === 'tool' && m.toolCallId === tc.id);
     const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';
-    const digest = buildVerificationDigest(command, rawOutput);
+    const buffered = state.verificationOutputBuffer.findLastFailed(command);
+    const outputForDigest = rawOutput.includes('[BranchBudget / Blocked]') && buffered
+      ? buffered.outputBody
+      : rawOutput;
+    const digest = buildVerificationDigest(command, outputForDigest);
     if (!digest) continue;
 
     injectRecoveryMessage(deps, state, msgs, correctionPort, digest);
     state.verificationDigestInjectedThisRound = true;
     return;
+  }
+}
+
+function maybeUpdateBuildDiagnosticGate(
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  executableToolCalls: import('../llm/types.js').ToolCall[],
+  toolStats: {
+    failedSignatures: string[];
+    policyBlockedSignatures: string[];
+  },
+  correctionPort: CorrectionPort,
+  deps: ToolRoundDeps,
+): void {
+  const hadSuccessfulSrcEdit = shouldClearBuildDiagnosticGate({
+    toolCalls: executableToolCalls,
+    failedSignatures: toolStats.failedSignatures,
+    signatureOf: toolCallSignature,
+  });
+
+  const shouldActivate = shouldActivateBuildDiagnosticGate({
+    branchBudget: state.branchBudget,
+    executionFailedSignatures: toolStats.failedSignatures,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+    toolCalls: executableToolCalls,
+    signatureOf: toolCallSignature,
+  });
+
+  if (shouldActivate && !hadSuccessfulSrcEdit) {
+    if (!state.buildDiagnosticGateActive && !deps.supervisorObserverSuppressInject) {
+      injectRecoveryMessage(deps, state, msgs, correctionPort, buildDiagnosticGateMessage());
+    }
+    state.buildDiagnosticGateActive = true;
+    return;
+  }
+
+  if (hadSuccessfulSrcEdit) {
+    state.buildDiagnosticGateActive = false;
   }
 }
 

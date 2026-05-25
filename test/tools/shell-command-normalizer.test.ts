@@ -50,6 +50,21 @@ describe('normalizeRunCommand', () => {
     expect(result.cwd).toBe(path.resolve(workDir));
     expect(result.fixes).toEqual([]);
   });
+
+  it('rewrites ls/grep on Windows', () => {
+    if (process.platform !== 'win32') return;
+
+    const lsResult = normalizeRunCommand('ls public/assets/', { workDir });
+    expect(lsResult.command).toMatch(/^dir\b/);
+    expect(lsResult.fixes).toContain('ls→dir');
+
+    const grepResult = normalizeRunCommand(
+      'grep -r "btn-start" dist/src/scenes/MapSelectScene.js',
+      { workDir },
+    );
+    expect(grepResult.command).toMatch(/findstr \/s \/i/);
+    expect(grepResult.fixes).toContain('grep -r→findstr /s /i');
+  });
 });
 
 describe('formatNormalizedCommandOutput', () => {

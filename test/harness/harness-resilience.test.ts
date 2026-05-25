@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
-import { resilienceMaybeBranchRecover } from '../../src/harness/harness-resilience.js';
-import type { UnifiedMessage } from '../../src/llm/types.js';
+import { resilienceMaybeBranchRecover, resilienceRecordToolCalls } from '../../src/harness/harness-resilience.js';
+import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
+import type { UnifiedMessage, ToolCall } from '../../src/llm/types.js';
 
 function stateWithBranchBudget(branchBudget: BranchBudgetTracker): HarnessRunState {
   return {
@@ -70,5 +71,33 @@ describe('harness resilience correction routing - Batch 5', () => {
       && typeof m.content === 'string'
       && m.content.includes('Current branch exhausted')
     )).toBe(true);
+  });
+
+  it('does not increment command retry budget for policy-blocked run_command signatures', async () => {
+    const branchBudget = new BranchBudgetTracker({ commandRetryMax: 2 });
+    branchBudget.recordFailedCommandAttempt('npm run build 2>&1');
+    branchBudget.recordFailedCommandAttempt('npm run build 2>&1');
+    const tc: ToolCall = {
+      id: 'tc-build',
+      name: 'run_command',
+      arguments: { command: 'npm run build 2>&1' },
+    };
+    const state = stateWithBranchBudget(branchBudget);
+
+    await resilienceRecordToolCalls(
+      {
+        resilienceV2Enabled: true,
+        checkpointEngine: {
+          save: async () => undefined,
+          shouldPersistOnTrigger: () => false,
+        } as never,
+        enqueueCheckpointPersist: async task => task(),
+      },
+      [tc],
+      new Set(),
+      state,
+    );
+
+    expect(branchBudget.inspect().commandRetries['npm run build 2>&1']).toBe(2);
   });
 });

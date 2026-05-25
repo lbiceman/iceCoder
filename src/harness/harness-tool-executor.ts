@@ -27,6 +27,9 @@ import {
 } from './branch-budget-tool-path.js';
 import { checkWorkspacePathViolation } from './workspace-path-guard.js';
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
+import { checkToolPreflight, checkDelegatePreflight } from './harness-tool-preflight.js';
+import { VerificationOutputBuffer } from './verification-output-buffer.js';
+import { isHarnessVerificationCommand } from './verification-digest.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -58,6 +61,17 @@ export interface ExecuteToolCallsStreamingArgs {
   repoContext?: RepoContext;
   chatFn?: ChatFunction;
   currentTools?: ToolDefinition[];
+  buildDiagnosticGateActive?: boolean;
+  verificationOutputBuffer?: VerificationOutputBuffer;
+}
+
+export interface ToolExecutionStats {
+  /** 真实执行失败（用于熔断 / BranchBudget 计次 / 重复失败统计） */
+  failedCount: number;
+  totalCount: number;
+  failedSignatures: string[];
+  /** Harness 策略拒绝（preflight / BranchBudget / delegate gate），不计入 failedCount */
+  policyBlockedSignatures: string[];
 }
 
 /**
@@ -73,7 +87,7 @@ export interface ExecuteToolCallsStreamingArgs {
 export async function executeToolCallsStreaming(
   deps: ToolExecutorDeps,
   args: ExecuteToolCallsStreamingArgs,
-): Promise<{ failedCount: number; totalCount: number; failedSignatures: string[] }> {
+): Promise<ToolExecutionStats> {
   const {
     toolCalls,
     messages,
@@ -84,6 +98,8 @@ export async function executeToolCallsStreaming(
     repoContext,
     chatFn,
     currentTools,
+    buildDiagnosticGateActive,
+    verificationOutputBuffer,
   } = args;
 
   const streamingExecutor = new StreamingToolExecutor(
@@ -101,6 +117,7 @@ export async function executeToolCallsStreaming(
   let directFailedCount = 0;
   let directTotalCount = 0;
   const directFailedSignatures: string[] = [];
+  const policyBlockedSignatures: string[] = [];
 
   // 第一遍：权限检查 + 提交到流式执行器
   const submittedIds = new Set<string>();
@@ -112,6 +129,44 @@ export async function executeToolCallsStreaming(
     }
 
     if (tc.name === 'delegate_to_subagent') {
+      const delegateTask = String(tc.arguments.task ?? '');
+      const delegatePreflight = checkDelegatePreflight({
+        task: delegateTask,
+        buildDiagnosticGateActive,
+        branchBudget: deps.branchBudget,
+      });
+      if (delegatePreflight.blocked) {
+        const blockMessage = delegatePreflight.message ?? '[Harness / Preflight] delegate_to_subagent denied.';
+        logger.toolResult(tc.name, false, blockMessage.length, delegatePreflight.reason ?? 'Preflight block');
+        onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+        messages.push({
+          role: 'tool',
+          content: blockMessage,
+          toolCallId: tc.id,
+        });
+        directTotalCount++;
+        policyBlockedSignatures.push(toolCallSignature(tc));
+        deps.runtimeTelemetry?.recordTool({
+          round: iteration,
+          toolName: tc.name,
+          success: false,
+          outputLength: blockMessage.length,
+        });
+        onStep?.({
+          type: 'tool_result',
+          iteration,
+          toolName: tc.name,
+          toolSuccess: false,
+          toolOutput: blockMessage.substring(0, 500),
+          toolError: delegatePreflight.reason ?? 'Preflight block',
+        });
+        taskState?.recordToolResult(tc, { success: false, output: blockMessage, error: delegatePreflight.reason ?? 'Preflight block' });
+        repoContext?.recordToolResult(tc, { success: false, output: blockMessage, error: delegatePreflight.reason ?? 'Preflight block' });
+        deps.loopController.recordToolCalls(1);
+        submittedIds.add(tc.id);
+        continue;
+      }
+
       logger.toolCall(tc.name, tc.arguments);
       onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
       onStep?.({
@@ -265,6 +320,46 @@ export async function executeToolCallsStreaming(
       continue;
     }
 
+    // Harness preflight：dist 读取 / build diagnostic gate
+    const preflight = checkToolPreflight({
+      toolName: tc.name,
+      args: tc.arguments,
+      branchBudget: deps.branchBudget,
+      taskState,
+      buildDiagnosticGateActive,
+    });
+    if (preflight.blocked) {
+      const blockMessage = preflight.message ?? '[Harness / Preflight] Tool execution denied.';
+      logger.toolResult(tc.name, false, blockMessage.length, preflight.reason ?? 'Preflight block');
+      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+      messages.push({
+        role: 'tool',
+        content: blockMessage,
+        toolCallId: tc.id,
+      });
+      directTotalCount++;
+      policyBlockedSignatures.push(toolCallSignature(tc));
+      deps.runtimeTelemetry?.recordTool({
+        round: iteration,
+        toolName: tc.name,
+        success: false,
+        outputLength: blockMessage.length,
+      });
+      onStep?.({
+        type: 'tool_result',
+        iteration,
+        toolName: tc.name,
+        toolSuccess: false,
+        toolOutput: blockMessage.substring(0, 500),
+        toolError: preflight.reason ?? 'Preflight block',
+      });
+      taskState?.recordToolResult(tc, { success: false, output: blockMessage, error: preflight.reason ?? 'Preflight block' });
+      repoContext?.recordToolResult(tc, { success: false, output: blockMessage, error: preflight.reason ?? 'Preflight block' });
+      deps.loopController.recordToolCalls(1);
+      submittedIds.add(tc.id);
+      continue;
+    }
+
     // BranchBudget 拦截：工具未真正执行。telemetry/toolStats 的 success:false 是策略拒绝，
     // 不是 edit_file/write_file 引擎故障；长任务里多在 npm test 反复失败后、forced 段出现。
     const branchBlock = deps.branchBudget?.checkToolBlock(
@@ -275,7 +370,11 @@ export async function executeToolCallsStreaming(
     );
     if (branchBlock?.blocked) {
       const baseMessage = branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.';
-      const blockMessage = appendVerificationEvidenceToBranchBlock(baseMessage, messages);
+      const blockMessage = appendVerificationEvidenceToBranchBlock(
+        baseMessage,
+        messages,
+        verificationOutputBuffer,
+      );
       logger.toolResult(tc.name, false, blockMessage.length, 'Branch budget block');
       onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
       messages.push({
@@ -284,8 +383,7 @@ export async function executeToolCallsStreaming(
         toolCallId: tc.id,
       });
       directTotalCount++;
-      directFailedCount++;
-      directFailedSignatures.push(toolCallSignature(tc));
+      policyBlockedSignatures.push(toolCallSignature(tc));
       deps.runtimeTelemetry?.recordTool({
         round: iteration,
         toolName: tc.name,
@@ -339,6 +437,12 @@ export async function executeToolCallsStreaming(
     if (!result.success) {
       failedCount++;
       failedSignatures.push(toolCallSignature(tc));
+      if (tc.name === 'run_command' && verificationOutputBuffer) {
+        const command = extractRunCommand(tc.arguments);
+        if (command && isHarnessVerificationCommand(command)) {
+          verificationOutputBuffer.recordFailed(command, output);
+        }
+      }
     }
 
     logger.toolResult(tc.name, result.success, output.length, result.error);
@@ -385,7 +489,12 @@ export async function executeToolCallsStreaming(
     yieldMissingToolResults(toolCalls, processedIds, messages);
   }
 
-  return { failedCount, totalCount: results.length + directTotalCount, failedSignatures };
+  return {
+    failedCount,
+    totalCount: results.length + directTotalCount,
+    failedSignatures,
+    policyBlockedSignatures,
+  };
 }
 
 /**

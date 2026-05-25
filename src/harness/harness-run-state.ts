@@ -4,6 +4,7 @@ import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
 import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type { TaskState } from './task-state.js';
+import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -85,6 +86,12 @@ export interface HarnessRunState {
   rebuildEscalationInjected: boolean;
   /** Segment Renewal：本 run 内已续段次数（与 supervisor bridge 同步） */
   segmentRenewalCount: number;
+  /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */
+  sessionGoalAnchor?: string;
+  /** build 反复失败后进入诊断模式，暂停 build 类 run_command */
+  buildDiagnosticGateActive?: boolean;
+  /** 最近验收命令失败输出（compaction / policy block 后仍可注入 digest） */
+  verificationOutputBuffer: VerificationOutputBuffer;
   /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
   checkpointResumeForkApplied: boolean;
   /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */

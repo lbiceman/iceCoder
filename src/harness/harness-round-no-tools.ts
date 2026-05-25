@@ -2,6 +2,7 @@ import type { LLMResponse } from '../llm/types.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
+import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import {
   MAX_EMPTY_RESPONSE_RETRIES,
   MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
@@ -346,7 +347,7 @@ export async function handleNoToolCalls(
         formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
       ].join('\n'),
     });
-    await saveTaskCheckpoint(deps, 'paused', userMessage, msgs, state, 'model_done');
+    await saveTaskCheckpoint(deps, 'paused', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
     await resilienceSaveCheckpoint(deps, 'verification_started', state);
     state.transition = 'no_tool_execution_recovery';
     return { action: 'continue' };
@@ -365,7 +366,7 @@ export async function handleNoToolCalls(
   deps.loopController.stop('model_done');
   const finalState = deps.loopController.getState();
   logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
-  await saveTaskCheckpoint(deps, checkpointStatus, userMessage, msgs, state, 'model_done');
+  await saveTaskCheckpoint(deps, checkpointStatus, resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
   await resilienceSaveCheckpoint(deps, 'final_draft', state, 'model_done');
   recordTelemetrySummary(deps, 'model_done', state);
 

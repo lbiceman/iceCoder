@@ -2,36 +2,31 @@ import type { UnifiedMessage } from '../llm/types.js';
 import type { RepoContext } from './repo-context.js';
 import type { TaskState } from './task-state.js';
 import { inferIntent } from './task-state.js';
-import {
-  isResumeContinuationMessage,
-  resolveEffectiveUserGoal,
-} from './resume-goal.js';
-
-const SHORT_GOAL_MAX_LEN = 12;
-
-function isPoisonedHydratedGoal(goal: string): boolean {
-  const t = goal.trim();
-  return t.length <= SHORT_GOAL_MAX_LEN || isResumeContinuationMessage(t);
-}
+import { isResumeContinuationMessage } from './resume-goal.js';
+import { isPoisonedGoal, resolveSessionGoalAnchor } from './session-goal-anchor.js';
 
 /**
  * session-notes 恢复后对齐 TaskState：修正「继续」污染、合并 Repo 证据、强制失败态。
+ * @returns 解析后的 session goal anchor（可能与入参不同，例如入参已污染时回退到历史 substantial goal）
  */
 export function syncHydratedTaskState(
   userMessage: string,
   messages: readonly UnifiedMessage[],
   taskState: TaskState,
   repoContext: RepoContext,
-): void {
-  const effectiveGoal = resolveEffectiveUserGoal(userMessage, messages);
+  sessionGoalAnchor?: string,
+): string {
+  const anchor = sessionGoalAnchor && !isPoisonedGoal(sessionGoalAnchor)
+    ? sessionGoalAnchor
+    : resolveSessionGoalAnchor(userMessage, messages, sessionGoalAnchor);
   const snap = taskState.snapshot();
   const repo = repoContext.snapshot();
 
   const shouldRebindGoal = isResumeContinuationMessage(userMessage)
-    || (isPoisonedHydratedGoal(snap.goal) && effectiveGoal.trim().length > snap.goal.trim().length);
+    || isPoisonedGoal(snap.goal);
 
-  if (shouldRebindGoal) {
-    taskState.rebindGoal(effectiveGoal);
+  if (shouldRebindGoal && !isPoisonedGoal(anchor)) {
+    taskState.rebindGoal(anchor);
   }
 
   const mergedFilesRead = [...new Set([...taskState.snapshot().filesRead, ...repo.filesRead])];
@@ -50,6 +45,8 @@ export function syncHydratedTaskState(
   if (repo.recentDiagnostics.length > 0) {
     taskState.forceVerificationFailed();
   }
+
+  return anchor;
 }
 
 /** @deprecated use syncHydratedTaskState */

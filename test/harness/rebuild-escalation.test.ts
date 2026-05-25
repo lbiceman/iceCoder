@@ -90,6 +90,27 @@ describe('rebuild-escalation', () => {
     expect(msg).not.toMatch(/consecutive rounds of tool calls have all failed/);
   });
 
+  it('appendVerificationEvidenceToBranchBlock attaches build digest and source paths', () => {
+    const messages: UnifiedMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc2', name: 'run_command', arguments: { command: 'npm run build 2>&1' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'tc2',
+        content: '工具执行错误: Command failed (exit code: 1)\n\nsrc/scenes/MapSelectScene.ts(10,1): error TS1005: \'}\' expected.',
+      },
+    ];
+    const enriched = appendVerificationEvidenceToBranchBlock(
+      '[BranchBudget / Blocked] 工具未执行：npm run build',
+      messages,
+    );
+    expect(enriched).toContain('[Build digest]');
+    expect(enriched).toContain('src/scenes/MapSelectScene.ts');
+  });
+
   it('appendVerificationEvidenceToBranchBlock attaches digest and failing test paths', () => {
     const messages: UnifiedMessage[] = [
       {

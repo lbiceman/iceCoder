@@ -126,6 +126,11 @@ describe('checkpoint-resume-compact', () => {
     expect(cleaned).toBe('(checkpoint goal unavailable)');
   });
 
+  it('sanitizeCheckpointGoal rejects short poisoned goals without resume blocks', () => {
+    expect(sanitizeCheckpointGoal('江西v')).toBe('(checkpoint goal unavailable)');
+    expect(sanitizeCheckpointGoal('继续')).toBe('(checkpoint goal unavailable)');
+  });
+
   it('buildCheckpointResumeSummary is short and does not embed full checkpoint JSON', () => {
     const nestedGoal = `Task ${'y'.repeat(200)}<resume-checkpoint>nested</resume-checkpoint>`;
     const summary = buildCheckpointResumeSummary(buildCheckpoint({

@@ -2,7 +2,8 @@ import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { topFileEditFromInspect } from './supervisor/passive-observer.js';
-import { buildVerificationDigest, isVerificationCommand } from './verification-digest.js';
+import type { VerificationOutputBuffer } from './verification-output-buffer.js';
+import { buildVerificationDigest, isBuildVerificationCommand, isHarnessVerificationCommand, parseBuildErrorSourcePaths } from './verification-digest.js';
 
 export type RebuildEscalationTrigger =
   | 'consecutive_failures'
@@ -66,7 +67,10 @@ export function parseFailingTestPaths(output: string): string[] {
 }
 
 /** 从对话历史取最近一次失败的验收命令及其输出体（不含 BranchBudget 拦截文案）。 */
-export function findLastFailedVerification(messages: UnifiedMessage[]): {
+export function findLastFailedVerification(
+  messages: UnifiedMessage[],
+  buffer?: VerificationOutputBuffer,
+): {
   command: string;
   outputBody: string;
 } | null {
@@ -81,7 +85,7 @@ export function findLastFailedVerification(messages: UnifiedMessage[]): {
     if (!tc || tc.name !== 'run_command') continue;
 
     const command = extractRunCommand(tc.arguments);
-    if (!command || !isVerificationCommand(command)) continue;
+    if (!command || !isHarnessVerificationCommand(command)) continue;
 
     if (!commandOnly) commandOnly = command;
 
@@ -89,6 +93,11 @@ export function findLastFailedVerification(messages: UnifiedMessage[]): {
     if (body) {
       return { command, outputBody: body };
     }
+  }
+
+  const buffered = buffer?.findLastFailed(commandOnly);
+  if (buffered) {
+    return { command: buffered.command, outputBody: buffered.outputBody };
   }
 
   if (commandOnly) {
@@ -112,17 +121,23 @@ function collectRecentFailureSnippets(messages: UnifiedMessage[], max: number): 
 export function appendVerificationEvidenceToBranchBlock(
   baseMessage: string,
   messages: UnifiedMessage[],
+  buffer?: VerificationOutputBuffer,
 ): string {
-  const verification = findLastFailedVerification(messages);
+  const verification = findLastFailedVerification(messages, buffer);
   if (!verification?.outputBody) return baseMessage;
 
   const digest = buildVerificationDigest(verification.command, verification.outputBody);
   if (!digest) return baseMessage;
 
-  const paths = parseFailingTestPaths(verification.outputBody);
+  const paths = isBuildVerificationCommand(verification.command)
+    ? parseBuildErrorSourcePaths(verification.outputBody)
+    : parseFailingTestPaths(verification.outputBody);
   const parts = [baseMessage, '', '**Last verification evidence:**', digest];
   if (paths.length > 0) {
-    parts.push('', `**Failing tests (read first):** ${paths.map(p => `\`${p}\``).join(', ')}`);
+    const label = isBuildVerificationCommand(verification.command)
+      ? 'Source files (read first)'
+      : 'Failing tests (read first)';
+    parts.push('', `**${label}:** ${paths.map(p => `\`${p}\``).join(', ')}`);
   }
   return parts.join('\n');
 }
@@ -145,8 +160,9 @@ export function shouldTriggerFileCapRebuild(args: {
 export function collectRebuildEscalationContext(
   messages: UnifiedMessage[],
   topFile: { path: string; count: number } | undefined,
+  buffer?: VerificationOutputBuffer,
 ): Omit<RebuildEscalationContext, 'writeBypassGranted' | 'commandBypassGranted'> {
-  const verification = findLastFailedVerification(messages);
+  const verification = findLastFailedVerification(messages, buffer);
   const lastVerificationCommand = verification?.command ?? null;
   const outputBody = verification?.outputBody ?? '';
   const failingFromOutput = outputBody ? parseFailingTestPaths(outputBody) : [];

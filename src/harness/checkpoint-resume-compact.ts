@@ -1,30 +1,50 @@
 import type { UnifiedMessage } from '../llm/types.js';
 import type { TaskCheckpoint } from './checkpoint.js';
 import type { ContextCompactor } from './context-compactor.js';
-import { isSystemInjectedUserContent } from './harness-message-utils.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
+import { isSystemInjectedUserContent } from './harness-message-utils.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { isPoisonedGoal } from './session-goal-anchor.js';
 import { hasExecutableSideSignal } from './task-state.js';
 
 const RESUME_CHECKPOINT_OPEN = '<resume-checkpoint>';
 const RESUME_CHECKPOINT_BLOCK_RE = /<resume-checkpoint>[\s\S]*?<\/resume-checkpoint>/gi;
+const SYNTHETIC_BLOCK_RES = /<(?:system-reminder|context-summary|compact_boundary|recent-dialogue-focus|runtime-recovery-context|recent-file-contents|system-context|resume-checkpoint)>[\s\S]*?<\/[^>]+>/gi;
 
 /** 与 {@link resolveEffectiveUserGoal} 对齐的 anchor 最小长度 */
 export const MIN_SUBSTANTIAL_ANCHOR_CHARS = 80;
 
-/** 去掉 goal 中嵌套的历史 resume-checkpoint 块，避免 checkpoint 文件越套越大。 */
+function stripSyntheticBlocks(goal: string): string {
+  let cleaned = goal.replace(RESUME_CHECKPOINT_BLOCK_RE, '').trim();
+  cleaned = cleaned.replace(SYNTHETIC_BLOCK_RES, '').trim();
+  if (isSyntheticUserBlockContent(cleaned)) return '';
+  return cleaned;
+}
+
+/** 去掉 goal 中嵌套的历史 resume-checkpoint / 合成块，避免 checkpoint 文件越套越大。 */
 export function sanitizeCheckpointGoal(goal: string): string {
-  if (!goal.includes(RESUME_CHECKPOINT_OPEN)) return goal;
+  const stripped = stripSyntheticBlocks(goal);
+  if (stripped && stripped.length >= MIN_SUBSTANTIAL_ANCHOR_CHARS) return stripped;
+  if (stripped && hasExecutableSideSignal(stripped)) return stripped.slice(0, 4000);
 
-  const cleaned = goal.replace(RESUME_CHECKPOINT_BLOCK_RE, '').trim();
-  if (cleaned.length >= MIN_SUBSTANTIAL_ANCHOR_CHARS) return cleaned;
+  if (!goal.includes(RESUME_CHECKPOINT_OPEN) && stripped === goal.trim()) {
+    if (isPoisonedGoal(goal)) return '(checkpoint goal unavailable)';
+    return goal.trim().slice(0, 4000);
+  }
 
-  const before = goal.slice(0, goal.indexOf(RESUME_CHECKPOINT_OPEN)).trim();
-  if (before.length >= MIN_SUBSTANTIAL_ANCHOR_CHARS) return before;
+  const before = goal.includes(RESUME_CHECKPOINT_OPEN)
+    ? goal.slice(0, goal.indexOf(RESUME_CHECKPOINT_OPEN)).trim()
+    : '';
+  const beforeClean = stripSyntheticBlocks(before);
+  if (beforeClean.length >= MIN_SUBSTANTIAL_ANCHOR_CHARS) return beforeClean;
+  if (beforeClean.length > 0 && hasExecutableSideSignal(beforeClean)) return beforeClean.slice(0, 4000);
 
-  // 绝不 fallback 到仍含 resume 块的原文
-  if (cleaned.length > 0) return cleaned.slice(0, 4000);
-  if (before.length > 0) return before.slice(0, 4000);
+  if (stripped.length > 0) {
+    return isPoisonedGoal(stripped) ? '(checkpoint goal unavailable)' : stripped.slice(0, 4000);
+  }
+  if (beforeClean.length > 0) {
+    return isPoisonedGoal(beforeClean) ? '(checkpoint goal unavailable)' : beforeClean.slice(0, 4000);
+  }
   return '(checkpoint goal unavailable)';
 }
 

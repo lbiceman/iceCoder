@@ -26,6 +26,7 @@ import type {
   RecoverySignal,
 } from '../types/runtime-checkpoint.js';
 import { emptyBranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
+import { isHarnessVerificationCommand } from './verification-digest.js';
 
 /** 默认预算上限（与文档 §Example 对齐） */
 export const DEFAULT_BRANCH_BUDGET = {
@@ -269,9 +270,10 @@ export class BranchBudgetTracker {
   buildCommandBlockMessage(command: string, failedAttempts: number): string {
     const short = command.length > 120 ? `${command.slice(0, 117)}...` : command;
     return [
-      `[BranchBudget / Blocked] 工具未执行：命令失败后已重试 ${failedAttempts} 次（上限 ${this.limits.commandRetryMax}）。`,
+      `[BranchBudget / Blocked] 工具未执行：该命令已失败 ${failedAttempts} 次（拦截阈值 ${this.limits.commandRetryMax}）。`,
       `命令: ${short}`,
-      '先 read_file 失败测试与源码，分析断言后再换命令或换修复策略；不要原样重跑。',
+      '先 read_file 失败输出中引用的源码/测试，分析错误后再改代码；可用 npx tsc --noEmit 收集编译错误。不要原样重跑 build/test。',
+      'Do not rerun the same command until you have new evidence from source or compiler output.',
     ].join('\n');
   }
 
@@ -381,6 +383,18 @@ export class BranchBudgetTracker {
     this.errorRepeats.clear();
     this.recoverTriggers = 0;
     this.writeBypassPaths.clear();
+    this.commandRetryBypassKeys.clear();
+  }
+
+  /**
+   * Segment Renewal / 续段后：清除验收命令失败计数，保留文件编辑计数。
+   */
+  resetCommandRetriesForVerificationCommands(): void {
+    for (const [key] of [...this.commandRetries.entries()]) {
+      if (isHarnessVerificationCommand(key)) {
+        this.commandRetries.delete(key);
+      }
+    }
     this.commandRetryBypassKeys.clear();
   }
 

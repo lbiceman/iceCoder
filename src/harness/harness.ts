@@ -54,8 +54,9 @@ import { TokenBudgetTracker } from './token-budget.js';
 import { HarnessMemoryIntegration } from './harness-memory.js';
 import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
-import { resolveEffectiveUserGoal } from './resume-goal.js';
+import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
 import { syncHydratedTaskState } from './resume-task-state.js';
+import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
@@ -419,10 +420,14 @@ export class Harness {
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
-    const effectiveGoal = resolveEffectiveUserGoal(userMessage, messages);
+    const sessionGoalAnchor = resolveSessionGoalAnchor(
+      userMessage,
+      messages,
+      activeCheckpoint?.userGoal,
+    );
 
     this.memoryIntegration.onLoopStart(
-      effectiveGoal,
+      sessionGoalAnchor,
       {
         chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
         stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
@@ -447,7 +452,7 @@ export class Harness {
       amnesiaRecoveryCount: 0,
       reasoningOnlyRecoveryCount: 0,
       prematureCompletionRecoveryCount: 0,
-      taskState: new TaskState(effectiveGoal),
+      taskState: new TaskState(sessionGoalAnchor),
       repoContext: new RepoContext(),
       runtimeStateHash: '',
       lockedWorkspaceRoot,
@@ -459,6 +464,9 @@ export class Harness {
       verificationDigestInjectedThisRound: false,
       rebuildEscalationInjected: false,
       segmentRenewalCount: 0,
+      sessionGoalAnchor,
+      buildDiagnosticGateActive: false,
+      verificationOutputBuffer: new VerificationOutputBuffer(),
       checkpointResumeForkApplied: false,
       contextEmergencyCompactUsed: false,
       stepReviewedThisRound: false,
@@ -533,7 +541,13 @@ export class Harness {
           state.repoContext,
         );
         if (hydrated) {
-          syncHydratedTaskState(userMessage, messages, state.taskState, state.repoContext);
+          state.sessionGoalAnchor = syncHydratedTaskState(
+            userMessage,
+            messages,
+            state.taskState,
+            state.repoContext,
+            state.sessionGoalAnchor,
+          );
           onStep?.({
             type: 'memory_event',
             memoryKind: 'session_hydrate',
@@ -574,6 +588,18 @@ export class Harness {
         }
       } else {
         messages.push(resumeSummary);
+      }
+
+      const refreshedAnchor = resolveSessionGoalAnchor(
+        userMessage,
+        messages,
+        activeCheckpoint.userGoal,
+      );
+      if (!isPoisonedGoal(refreshedAnchor)) {
+        state.sessionGoalAnchor = refreshedAnchor;
+        if (isPoisonedGoal(state.taskState.snapshot().goal)) {
+          state.taskState.rebindGoal(refreshedAnchor);
+        }
       }
     }
 

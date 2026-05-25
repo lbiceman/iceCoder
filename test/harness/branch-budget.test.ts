@@ -186,6 +186,22 @@ describe('BranchBudgetTracker - 维度优先级', () => {
   });
 });
 
+describe('BranchBudgetTracker - verification command reset', () => {
+  it('resetCommandRetriesForVerificationCommands clears build/test counters only', () => {
+    const t = new BranchBudgetTracker({ commandRetryMax: 2 });
+    t.recordFailedCommandAttempt('npm run build 2>&1');
+    t.recordFailedCommandAttempt('npm test');
+    t.recordFailedCommandAttempt('ls');
+    t.grantCommandRetryBypass('npm run build 2>&1');
+
+    t.resetCommandRetriesForVerificationCommands();
+
+    expect(t.inspect().commandRetries).toEqual({ ls: 1 });
+    expect(t.wouldBlockCommandRetry('npm run build 2>&1')).toBe(false);
+    expect(t.wouldBlockCommandRetry('npm test')).toBe(false);
+  });
+});
+
 describe('emptyBranchBudgetSnapshot', () => {
   it('返回零初始化的 snapshot', () => {
     expect(emptyBranchBudgetSnapshot()).toEqual({
