@@ -53,6 +53,10 @@ export class VerificationOutputBuffer {
   restore(entries: VerificationOutputEntry[] | undefined): void {
     this.entries = (entries ?? []).slice(-MAX_ENTRIES).map(entry => ({ ...entry }));
   }
+
+  clear(): void {
+    this.entries = [];
+  }
 }
 
 /** 从 delegate 任务文案中提取可能触发 diagnostic gate 的 run_command。 */

@@ -7,8 +7,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
-import { getReadFileDefaultMaxChars, getReadFileDefaultMaxLines } from '../tool-output-limits.js';
-import { findReplaceRange } from '../file-edit-fuzzy.js';
+import {
+  getReadFileDefaultMaxChars,
+  getReadFileDefaultMaxLines,
+  getWriteFileBlockChars,
+  getWriteFileWarnChars,
+  getWriteFileWarnLines,
+} from '../tool-output-limits.js';
+import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -103,7 +109,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'write_file',
         // 创建新文件或覆盖已有文件。修改部分内容用 edit_file。追加用 append_file。
-        description: 'Create new file or completely overwrite a SMALL existing file (prefer under ~150 lines). Auto-creates parent directories. For partial/large edits use patch_file or edit_file; for appending use append_file. Pass path and content as top-level JSON fields (never wrap in raw/arguments). If truncated or skipped due to max_tokens, switch to patch_file or smaller edits — do not retry the same full payload.',
+        description: 'Create new file or completely overwrite a SMALL existing file (prefer under ~150 lines). Auto-creates parent directories. For partial/large edits use patch_file or edit_file; for appending use append_file. Pass path and content as top-level JSON fields (never wrap in raw/arguments). Payloads over ~10k chars or ~150 lines trigger a warning; over ~22k chars are rejected — use patch_file or split writes. If truncated or skipped due to max_tokens, switch to patch_file or smaller edits — do not retry the same full payload.',
         parameters: {
           type: 'object',
           properties: {
@@ -117,11 +123,29 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       handler: async (args) => {
         const rawPath = args.path || args.filePath;
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const content = typeof args.content === 'string' ? args.content : String(args.content ?? '');
+        const blockChars = getWriteFileBlockChars();
+        if (content.length > blockChars) {
+          return {
+            success: false,
+            output: '',
+            error: `write_file payload too large (${content.length} chars, limit ${blockChars}). Use patch_file (small unified diff hunks), edit_file, append_file in chunks, or split into multiple files — do not retry the same full payload.`,
+          };
+        }
         const filePath = safePath(rawPath, workDir);
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, args.content, (args.encoding || 'utf-8') as BufferEncoding);
-        return { success: true, output: `File written: ${rawPath}` };
+        await fs.writeFile(filePath, content, (args.encoding || 'utf-8') as BufferEncoding);
+
+        const lineCount = content.split('\n').length;
+        const warnChars = getWriteFileWarnChars();
+        const warnLines = getWriteFileWarnLines();
+        const large = content.length > warnChars || lineCount > warnLines;
+        const warnNote = large
+          ? ` Warning: large payload (${content.length} chars, ${lineCount} lines). Prefer patch_file or edit_file for future changes to this file.`
+          : '';
+
+        return { success: true, output: `File written: ${rawPath}${warnNote}` };
       },
     },
 
@@ -173,25 +197,27 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         const content = await fs.readFile(filePath, 'utf-8');
 
         let newContent: string;
-        let matchedText: string | undefined;
+        let fuzzyMatch = false;
 
         if (args.isRegex) {
           const flags = args.replaceAll !== false ? 'g' : '';
           newContent = content.replace(new RegExp(args.search, flags), args.replace);
-        } else if (args.replaceAll !== false && content.includes(args.search)) {
-          const escaped = String(args.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          newContent = content.replace(new RegExp(escaped, 'g'), args.replace);
         } else {
-          const range = findReplaceRange(content, args.search);
-          if (!range) {
+          const result = applyNonRegexReplace(
+            content,
+            String(args.search),
+            String(args.replace),
+            args.replaceAll !== false,
+          );
+          if (!result.changed) {
             return {
               success: false,
               output: '',
               error: `No match found for search string in ${rawPath}. Try a shorter unique snippet, read_file to verify exact text, or use patch_file for larger edits.`,
             };
           }
-          matchedText = range.matched;
-          newContent = content.slice(0, range.start) + args.replace + content.slice(range.end);
+          newContent = result.content;
+          fuzzyMatch = result.fuzzy;
         }
 
         const changed = content !== newContent;
@@ -200,9 +226,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         }
         await fs.writeFile(filePath, newContent, 'utf-8');
 
-        const fuzzyNote = matchedText && matchedText !== args.search
-          ? ' (fuzzy whitespace/line match)'
-          : '';
+        const fuzzyNote = fuzzyMatch ? ' (fuzzy whitespace/line match)' : '';
 
         return {
           success: true,

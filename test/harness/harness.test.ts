@@ -1540,7 +1540,7 @@ describe('Harness - 连续工具失败熔断', () => {
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
-  it('连续 5 轮工具全部失败后注入整文件重建提示', async () => {
+  it('连续 5 轮工具全部失败后注入失败证据包', async () => {
     const tools = [makeTool('read_file')];
     const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;
     const executor = createToolExecutor(tools, failHandler);
@@ -1560,10 +1560,44 @@ describe('Harness - 连续工具失败熔断', () => {
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
-      && m.content.includes('[System / Rebuild Escalation]')
-      && m.content.includes('Mandatory workflow')
-      && m.content.includes('write_file')
+      && m.content.includes('[Failure Evidence — 5 consecutive')
+      && m.content.includes('Do NOT repeat')
     )).toBe(true);
+    expect(result.messages.some(m =>
+      typeof m.content === 'string'
+      && m.content.includes('[System / Rebuild Escalation]')
+    )).toBe(false);
+  });
+
+  it('实质进展后移除 ephemeral 失败恢复消息', async () => {
+    const tools = [makeTool('write_file')];
+    let calls = 0;
+    const handler = async () => {
+      calls++;
+      if (calls <= 4) return { success: false, output: '', error: 'fail' } as ToolResult;
+      return { success: true, output: 'ok' } as ToolResult;
+    };
+    const executor = createToolExecutor(tools, handler);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'w1', name: 'write_file', args: { path: 'a.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w2', name: 'write_file', args: { path: 'b.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w3', name: 'write_file', args: { path: 'c.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w4', name: 'write_file', args: { path: 'd.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w5', name: 'write_file', args: { path: 'e.ts', content: 'x' } }]),
+      finalResponse('done'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.messages.some(m => m.ephemeralFailureRecovery === 'evidence')).toBe(false);
+    expect(result.messages.some(m =>
+      typeof m.content === 'string' && m.content.includes('[Failure Evidence —')
+    )).toBe(false);
   });
 });
 

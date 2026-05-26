@@ -10,6 +10,7 @@ import {
   formatNormalizedCommandOutput,
   normalizeRunCommand,
 } from './shell-command-normalizer.js';
+import { analyzeInlineScriptCommand } from '../shell-inline-script-advisory.js';
 
 /** 命令执行超时（毫秒） */
 const DEFAULT_TIMEOUT = 30000;
@@ -40,7 +41,7 @@ export function createShellTool(workDir: string): RegisteredTool {
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Pass command as a top-level argument (not nested in a raw JSON string; alias: cmd). Foreground: waits for result (default 30s timeout). Background: set background:true for long commands, returns task_id immediately. Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks. Use task_id + action:"stop" to kill a running background task. Has dangerous command blocklist. Use immediately for any explicit shell command the user requests.',
+        'Execute shell commands (foreground or background). Pass command as a top-level argument (not nested in a raw JSON string; alias: cmd). Foreground: waits for result (default 30s timeout). Background: set background:true for long commands, returns task_id immediately. Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks. Use task_id + action:"stop" to kill a running background task. Has dangerous command blocklist. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead. Use immediately for any explicit shell command the user requests.',
       parameters: {
         type: 'object',
         properties: {
@@ -102,6 +103,10 @@ export function createShellTool(workDir: string): RegisteredTool {
       if (args.background) {
         const command = (args.command as string) || '';
         if (!command.trim()) return { success: false, output: '', error: 'Command cannot be empty' };
+        const inlineAdvisory = analyzeInlineScriptCommand(command);
+        if (inlineAdvisory?.block) {
+          return { success: false, output: '', error: inlineAdvisory.message };
+        }
         const timeoutSec = ((args.timeout as number) || 300000) / 1000;
         const label = (args.label as string) || '';
         const bgResult = bgManager.spawn(command, timeoutSec * 1000, label);
@@ -121,6 +126,11 @@ export function createShellTool(workDir: string): RegisteredTool {
       const command = (args.command as string) || '';
       if (!command.trim()) return { success: false, output: '', error: 'Command is required for foreground execution' };
       const timeout = (args.timeout as number) || DEFAULT_TIMEOUT;
+
+      const inlineAdvisory = analyzeInlineScriptCommand(command);
+      if (inlineAdvisory?.block) {
+        return { success: false, output: '', error: inlineAdvisory.message };
+      }
 
       for (const pattern of DANGEROUS_PATTERNS) {
         if (pattern.test(command)) {
@@ -170,6 +180,9 @@ export function createShellTool(workDir: string): RegisteredTool {
           if (stdout) output += stdout;
           if (stderr) output += (output ? '\n\n[stderr]\n' : '[stderr]\n') + stderr;
           output = formatNormalizedCommandOutput(normalized.fixes, output);
+          if (inlineAdvisory && !inlineAdvisory.block) {
+            output = `${inlineAdvisory.message}\n\n${output}`;
+          }
 
           if (killed) { resolve({ success: false, output, error: `Command timed out (${timeout}ms)` }); return; }
           if (code === 0) { resolve({ success: true, output: output || 'Command succeeded (no output)' }); }

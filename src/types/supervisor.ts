@@ -424,6 +424,7 @@ export interface CorrectionBlock {
   kind: 'takeover' | 'recovery' | 'graph_hint' | 'shadow_diagnostic';
   content: string;
   preserveOnCompaction?: boolean;
+  ephemeralFailureRecovery?: 'light' | 'evidence' | 'strong';
 }
 
 /** §14.0 — 纠偏写入口 inject 上下文。 */

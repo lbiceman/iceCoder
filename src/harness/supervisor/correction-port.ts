@@ -79,6 +79,7 @@ export class MessageCorrectionPort implements CorrectionPort {
       role: 'user',
       content: block.content,
       ...(block.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
+      ...(block.ephemeralFailureRecovery ? { ephemeralFailureRecovery: block.ephemeralFailureRecovery } : {}),
     });
   }
 }

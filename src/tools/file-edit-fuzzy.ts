@@ -124,3 +124,46 @@ export function findReplaceRange(content: string, search: string): ReplaceRange 
 
   return findNormalizedBlock(content, search) ?? findLineBlockFuzzy(content, search);
 }
+
+export interface ApplyNonRegexReplaceResult {
+  content: string;
+  changed: boolean;
+  fuzzy: boolean;
+}
+
+/**
+ * 非正则查找替换：精确 → 模糊；支持 replaceAll。
+ */
+export function applyNonRegexReplace(
+  content: string,
+  search: string,
+  replace: string,
+  replaceAll: boolean,
+): ApplyNonRegexReplaceResult {
+  if (replaceAll && content.includes(search)) {
+    const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const next = content.replace(new RegExp(escaped, 'g'), replace);
+    return { content: next, changed: next !== content, fuzzy: false };
+  }
+
+  if (replaceAll) {
+    let out = content;
+    let changed = false;
+    let fuzzy = false;
+    for (;;) {
+      const range = findReplaceRange(out, search);
+      if (!range) break;
+      fuzzy = fuzzy || range.matched !== search;
+      out = out.slice(0, range.start) + replace + out.slice(range.end);
+      changed = true;
+    }
+    return { content: out, changed, fuzzy };
+  }
+
+  const range = findReplaceRange(content, search);
+  if (!range) {
+    return { content, changed: false, fuzzy: false };
+  }
+  const next = content.slice(0, range.start) + replace + content.slice(range.end);
+  return { content: next, changed: true, fuzzy: range.matched !== search };
+}

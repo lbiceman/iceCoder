@@ -38,4 +38,19 @@ export function getDocParseTextMaxChars(): number {
   return clamp(intEnv('ICE_DOC_PARSE_TEXT_MAX_CHARS', 16_000), 2_000, 200_000);
 }
 
+/** write_file 正文超过此字符数时返回警告（仍写入） */
+export function getWriteFileWarnChars(): number {
+  return clamp(intEnv('ICE_WRITE_FILE_WARN_CHARS', 10_000), 2_000, 100_000);
+}
+
+/** write_file 正文超过此行数时返回警告（仍写入） */
+export function getWriteFileWarnLines(): number {
+  return clamp(intEnv('ICE_WRITE_FILE_WARN_LINES', 150), 50, 2_000);
+}
+
+/** write_file 正文超过此字符数时拒绝写入（防单次输出顶满导致不完整大文件） */
+export function getWriteFileBlockChars(): number {
+  return clamp(intEnv('ICE_WRITE_FILE_BLOCK_CHARS', 22_000), 5_000, 500_000);
+}
+
 /** test marker */

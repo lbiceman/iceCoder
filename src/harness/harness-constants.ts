@@ -2,12 +2,20 @@
 export const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
 // ─── 连续工具失败提示干预阈值 ───
-// 第3轮开始注入强提示A，第5轮注入整文件重建流程，第6轮开始注入强提示B，第10轮触发熔断
-export const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
-export const REBUILD_ESCALATION_THRESHOLD = 5;
-/** 连续失败 / 文件 cap / 续段等 Rebuild Escalation 每 run 最多注入次数 */
-export const MAX_REBUILD_ESCALATIONS_PER_RUN = 3;
+// 1 静默 | 2~3 轻提示 | 4~6 证据包 | 7~9 强警告 | ≥10 熔断
+export const LIGHT_HINT_FAILURE_THRESHOLD_START = 2;
+export const LIGHT_HINT_FAILURE_THRESHOLD_END = 3;
+export const FAILURE_EVIDENCE_THRESHOLD_START = 4;
+export const FAILURE_EVIDENCE_THRESHOLD_END = 6;
+export const STRONG_WARNING_FAILURE_THRESHOLD = 7;
 export const CIRCUIT_BREAKER_THRESHOLD = 10;
+
+/** @deprecated 连续失败不再在固定轮次触发 Rebuild；保留供 file-cap / segment 等路径引用 */
+export const REBUILD_ESCALATION_THRESHOLD = 5;
+/** @deprecated 使用 FAILURE_EVIDENCE_THRESHOLD_START */
+export const MAX_CONSECUTIVE_TOOL_FAILURES = FAILURE_EVIDENCE_THRESHOLD_START;
+/** 文件 cap / 续段等 Rebuild Escalation 每 run 最多注入次数 */
+export const MAX_REBUILD_ESCALATIONS_PER_RUN = 3;
 
 // ─── LLM 空响应重试最大次数 ───
 export const MAX_EMPTY_RESPONSE_RETRIES = 2;

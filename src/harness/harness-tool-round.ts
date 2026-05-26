@@ -3,10 +3,22 @@ import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
 import {
   CIRCUIT_BREAKER_THRESHOLD,
-  MAX_CONSECUTIVE_TOOL_FAILURES,
+  FAILURE_EVIDENCE_THRESHOLD_END,
+  FAILURE_EVIDENCE_THRESHOLD_START,
+  LIGHT_HINT_FAILURE_THRESHOLD_END,
+  LIGHT_HINT_FAILURE_THRESHOLD_START,
   MAX_REBUILD_ESCALATIONS_PER_RUN,
-  REBUILD_ESCALATION_THRESHOLD,
+  STRONG_WARNING_FAILURE_THRESHOLD,
 } from './harness-constants.js';
+import {
+  buildFailureEvidencePackMessage,
+  buildLightFailureHintMessage,
+  buildStrongFailureWarningMessage,
+  collectFailureEvidenceEntries,
+  purgeEphemeralFailureRecoveryMessagesInPlace,
+  roundHadSuccessfulVerification,
+  type EphemeralFailureRecoveryKind,
+} from './failure-evidence-recovery.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import {
   resilienceMaybeBranchRecover,
@@ -410,59 +422,57 @@ export async function runHarnessToolRound(
       };
     }
 
-    if (failureCount >= 6 && !deps.supervisorObserverSuppressInject) {
-      injectRecoveryMessage(
+    if (failureCount >= STRONG_WARNING_FAILURE_THRESHOLD && !deps.supervisorObserverSuppressInject) {
+      purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
+      injectEphemeralFailureRecovery(
         deps,
         state,
         msgs,
         correctionPort,
-        `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded.\n\nYou must:\n1. Stop retrying the same failed tool calls, commands, paths, or parameters\n2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input\n3. If blocked, explain the exact blocker and evidence to the user\n\nYou may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.`,
+        buildStrongFailureWarningMessage(failureCount),
+        'strong',
       );
-      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入换策略提示`);
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入强警告`);
     } else if (
-      failureCount === REBUILD_ESCALATION_THRESHOLD
-      && state.rebuildEscalationInjections < MAX_REBUILD_ESCALATIONS_PER_RUN
+      failureCount >= FAILURE_EVIDENCE_THRESHOLD_START
+      && failureCount <= FAILURE_EVIDENCE_THRESHOLD_END
       && !deps.supervisorObserverSuppressInject
     ) {
-      injectRebuildEscalation(
+      purgeEphemeralFailureRecoveryMessagesInPlace(msgs, 'light');
+      purgeEphemeralFailureRecoveryMessagesInPlace(msgs, 'evidence');
+      const entries = collectFailureEvidenceEntries(msgs, state.verificationOutputBuffer);
+      injectEphemeralFailureRecovery(
         deps,
         state,
         msgs,
         correctionPort,
-        failureCount,
-        'consecutive_failures',
+        buildFailureEvidencePackMessage(failureCount, entries),
+        'evidence',
       );
-    } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES && !deps.supervisorObserverSuppressInject) {
-      const lastErrors = msgs
-        .slice(-6)
-        .filter(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Tool execution error:'))
-        .map(m => (m.content as string).substring(0, 200));
-
-      const errorSummary = lastErrors.length > 0
-        ? `Recent errors:\n${lastErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
-        : '';
-
-      injectRecoveryMessage(
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入失败证据包`);
+    } else if (
+      failureCount >= LIGHT_HINT_FAILURE_THRESHOLD_START
+      && failureCount <= LIGHT_HINT_FAILURE_THRESHOLD_END
+      && !deps.supervisorObserverSuppressInject
+    ) {
+      injectEphemeralFailureRecovery(
         deps,
         state,
         msgs,
         correctionPort,
-        `[System] Note: ${failureCount} consecutive rounds of tool calls have all failed.${errorSummary ? '\n' + errorSummary : ''}\n\nPlease analyze the failure reasons and adopt a completely different approach to complete the task. Possible adjustment directions:\n- Check if file paths are correct (use list_directory to confirm)\n- Check if command syntax is correct\n- Try using alternative tools\n- If execution is truly impossible, directly explain the reason to the user and do not continue trying the same operation.`,
+        buildLightFailureHintMessage(failureCount),
+        'light',
       );
-      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入策略调整提示`);
-    } else if (failureCount === 2 && !deps.supervisorObserverSuppressInject) {
-      injectRecoveryMessage(
-        deps,
-        state,
-        msgs,
-        correctionPort,
-        '[System] All tool calls in the previous round failed. Please check if parameters are correct and try adjusting your approach.',
-      );
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入轻提示`);
     }
   } else if (roundProgress === 'meaningful_progress') {
     state.consecutiveToolFailures = 0;
     state.stopHookContinuationCount = 0;
     state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
+    purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
+    if (roundHadSuccessfulVerification(executableToolCalls, toolStats.failedSignatures)) {
+      state.verificationOutputBuffer.clear();
+    }
   } else {
     // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断/续段永远达不到阈值。
     state.stableRoundsSinceLastFailure = 0;
@@ -987,6 +997,28 @@ function injectRecoveryMessage(
 
   correctionPort.inject(
     { kind: 'recovery', content, preserveOnCompaction: true },
+    { phase: state.supervisorPhase, source: 'supervisor' },
+  );
+}
+
+function injectEphemeralFailureRecovery(
+  deps: ToolRoundDeps,
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  correctionPort: CorrectionPort,
+  content: string,
+  kind: EphemeralFailureRecoveryKind,
+): void {
+  if (deps.supervisorObserverSuppressInject) {
+    return;
+  }
+  if (!deps.executionModeDecisionEnabled) {
+    msgs.push({ role: 'user', content, ephemeralFailureRecovery: kind });
+    return;
+  }
+
+  correctionPort.inject(
+    { kind: 'recovery', content, ephemeralFailureRecovery: kind },
     { phase: state.supervisorPhase, source: 'supervisor' },
   );
 }
