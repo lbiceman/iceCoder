@@ -61,6 +61,19 @@ export function resolveMainConfigPath(env: NodeJS.ProcessEnv = process.env): str
   return 'data/config.json';
 }
 
+/** 仅当 config.json 显式 `"skipPermissionChecks": true` 时为 true。 */
+export function resolveSkipPermissionChecks(value: unknown): boolean {
+  return value === true;
+}
+
+/** 读取 config.json 中的 skipPermissionChecks；缺失或非 true 时返回 false。 */
+export async function readSkipPermissionChecksFromMainConfig(
+  configPath: string,
+): Promise<boolean> {
+  const config = await readMainConfigFile(configPath);
+  return resolveSkipPermissionChecks(config.skipPermissionChecks);
+}
+
 function isMissingFile(error: unknown): boolean {
   return !!error
     && typeof error === 'object'

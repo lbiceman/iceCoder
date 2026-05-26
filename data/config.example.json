@@ -15,5 +15,6 @@
       "isDefault": true
     }
   ],
-  "supervisorMode": "adaptive"
+  "supervisorMode": "adaptive",
+  "skipPermissionChecks": false
 }

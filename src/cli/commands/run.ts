@@ -23,6 +23,7 @@ import {
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
+import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
@@ -68,6 +69,8 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
+    const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+
     const harnessConfig: HarnessConfig = {
       context: {
         systemPrompt: assembled.systemPrompt,
@@ -81,6 +84,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
         tokenBudget: getHarnessTokenBudget(),
       },
       permissions: [],
+      skipPermissionChecks,
       compactionThreshold: 40,
       compactionKeepRecent: 10,
       compactionEnableLLMSummary: true,

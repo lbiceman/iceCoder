@@ -33,6 +33,7 @@ import {
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
+import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
 import {
   fetchQuickTunnelPublicUrl,
   resolveTunnelMetricsListenAddress,
@@ -449,6 +450,8 @@ ${c.bold}终端内置命令:${c.reset}
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
+      const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+
       const harnessConfig: HarnessConfig = {
         context: {
           systemPrompt: assembled.systemPrompt,
@@ -464,6 +467,7 @@ ${c.bold}终端内置命令:${c.reset}
         permissions: [
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },
         ],
+        skipPermissionChecks,
         compactionThreshold: 40,
         compactionKeepRecent: 10,
         compactionEnableLLMSummary: true,

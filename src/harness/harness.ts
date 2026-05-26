@@ -112,6 +112,7 @@ export class Harness {
   private stopHookManager: StopHookManager;
   private tokenBudgetTracker?: TokenBudgetTracker;
   private permissionRules: HarnessConfig['permissions'];
+  private skipPermissionChecks: boolean;
   private onConfirm?: HarnessConfig['onConfirm'];
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
@@ -159,6 +160,7 @@ export class Harness {
     this.toolExecutor = toolExecutor;
     this.stopHookManager = new StopHookManager();
     this.permissionRules = config.permissions ?? [];
+    this.skipPermissionChecks = config.skipPermissionChecks === true;
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
@@ -211,6 +213,7 @@ export class Harness {
       stopHookManager: this.stopHookManager,
       toolExecutor: this.toolExecutor,
       permissionRules: this.permissionRules ?? [],
+      skipPermissionChecks: this.skipPermissionChecks,
       onConfirm: this.onConfirm,
       workspaceRoot: this.workspaceRoot,
       tokenBudgetTracker: this.tokenBudgetTracker,

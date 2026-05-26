@@ -37,6 +37,8 @@ export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
   loopController: LoopController;
   permissionRules: ToolPermissionRule[];
+  /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
+  skipPermissionChecks?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   workspaceRoot: string;
   lockedWorkspaceRoot?: string;
@@ -321,46 +323,48 @@ export async function executeToolCallsStreaming(
     }
 
     // ── 权限检查：显式规则优先，破坏性工具兜底确认 ──
-    const permission = resolveToolPermission(tc, deps.permissionRules);
-    if (permission.permission === 'deny') {
-      logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
-      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-      messages.push({
-        role: 'tool',
-        content: `Tool ${tc.name} denied by policy${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
-        toolCallId: tc.id,
-      });
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (permission.permission === 'confirm' && !deps.onConfirm) {
-      const reason = permission.reason ?? 'Confirmation required but no confirmation handler is configured';
-      logger.toolResult(tc.name, false, 0, reason);
-      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-      messages.push({
-        role: 'tool',
-        content: `Tool ${tc.name} requires confirmation but no confirmation handler is configured${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
-        toolCallId: tc.id,
-      });
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (permission.permission === 'confirm' && deps.onConfirm) {
-      const confirmToolName = formatConfirmToolName(tc);
-      onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: tc.arguments });
-      const allowed = await deps.onConfirm(confirmToolName, tc.arguments);
-      if (!allowed) {
-        logger.toolResult(tc.name, false, 0, 'User denied execution');
+    if (!deps.skipPermissionChecks) {
+      const permission = resolveToolPermission(tc, deps.permissionRules);
+      if (permission.permission === 'deny') {
+        logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
         onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
         messages.push({
           role: 'tool',
-          content: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
+          content: `Tool ${tc.name} denied by policy${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
           toolCallId: tc.id,
         });
         submittedIds.add(tc.id);
         continue;
+      }
+
+      if (permission.permission === 'confirm' && !deps.onConfirm) {
+        const reason = permission.reason ?? 'Confirmation required but no confirmation handler is configured';
+        logger.toolResult(tc.name, false, 0, reason);
+        onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+        messages.push({
+          role: 'tool',
+          content: `Tool ${tc.name} requires confirmation but no confirmation handler is configured${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
+          toolCallId: tc.id,
+        });
+        submittedIds.add(tc.id);
+        continue;
+      }
+
+      if (permission.permission === 'confirm' && deps.onConfirm) {
+        const confirmToolName = formatConfirmToolName(tc);
+        onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: tc.arguments });
+        const allowed = await deps.onConfirm(confirmToolName, tc.arguments);
+        if (!allowed) {
+          logger.toolResult(tc.name, false, 0, 'User denied execution');
+          onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+          messages.push({
+            role: 'tool',
+            content: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
+            toolCallId: tc.id,
+          });
+          submittedIds.add(tc.id);
+          continue;
+        }
       }
     }
 

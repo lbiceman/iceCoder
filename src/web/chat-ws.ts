@@ -37,6 +37,7 @@ import {
   getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
+import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
 import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
 import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
@@ -599,6 +600,7 @@ async function handleChatMessage(
   llmAdapter.setAbortSignal?.(abortController.signal);
 
   const supervisorRuntime = await getSupervisorRuntime();
+  const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
 
   const workspaceMessage = typeof harnessUserMessage === 'string'
     ? harnessUserMessage
@@ -633,6 +635,7 @@ async function handleChatMessage(
     permissions: [
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
+    skipPermissionChecks,
     compactionThreshold: 40,
     compactionKeepRecent: 10,
     compactionEnableLLMSummary: true,

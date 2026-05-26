@@ -38,3 +38,5 @@ bin/
 
 # Test artifacts
 __test_*
+coverage/
+runtime/telemetry.jsonl

@@ -179,6 +179,8 @@ export interface HarnessConfig {
   loop: LoopControlConfig;
   /** 权限规则 */
   permissions?: ToolPermissionRule[];
+  /** 为 true 时跳过 deny/confirm/破坏性确认等全部权限检查 */
+  skipPermissionChecks?: boolean;
   /** 上下文压缩阈值（消息数量，向后兼容） */
   compactionThreshold?: number;
   /** 上下文压缩的 token 阈值（优先于消息数阈值，默认 80000） */

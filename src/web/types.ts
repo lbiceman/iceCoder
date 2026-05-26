@@ -41,4 +41,9 @@ export interface IceCoderConfigFile {
    * `off` | `adaptive` | `strict`；未设置时由 supervisor-config.json 的 `mode` 兜底。
    */
   supervisorMode?: 'off' | 'adaptive' | 'strict';
+  /**
+   * 为 `true` 时跳过 Harness 工具权限检查（deny/confirm/破坏性确认），直接执行工具。
+   * 字段缺失或为 `false` 时走默认权限规则。
+   */
+  skipPermissionChecks?: boolean;
 }

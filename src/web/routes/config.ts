@@ -10,6 +10,7 @@ import {
   DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
   normalizeSupervisorMode,
   readMainConfigFile,
+  resolveSkipPermissionChecks,
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
@@ -204,11 +205,13 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       // 读取现有配置，用于恢复被脱敏的 apiKey
       let existingProviders: ProviderConfig[] = [];
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
+      let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
         existingSupervisorMode = existing.supervisorMode;
+        existingSkipPermissionChecks = existing.skipPermissionChecks;
       } catch { /* 文件不存在，首次保存 */ }
 
       // 构建 id → 原始 apiKey 的映射
@@ -244,6 +247,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         {
           providers: normalizedProviders,
           supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
+          skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
         },
         null,
         2,
@@ -282,10 +286,15 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       res.json({
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
+        skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
       });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        res.json({ providers: [], supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE });
+        res.json({
+          providers: [],
+          supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
+          skipPermissionChecks: false,
+        });
         return;
       }
       const message = err instanceof Error ? err.message : 'Unknown error';
