@@ -11,23 +11,17 @@ import {
   normalizeRunCommand,
 } from './shell-command-normalizer.js';
 import { analyzeInlineScriptCommand } from '../shell-inline-script-advisory.js';
+import {
+  analyzeShellHostSafety,
+  buildShellChildEnv,
+  matchesDangerousShellPattern,
+} from '../shell-host-guard.js';
 
 /** 命令执行超时（毫秒） */
 const DEFAULT_TIMEOUT = 30000;
 
 /** 最大输出大小（字节） */
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
-
-/** 危险命令黑名单 */
-const DANGEROUS_PATTERNS = [
-  /\brm\s+-rf\s+\/(?!\w)/i,
-  /\bformat\b/i,
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /\b:>\s*\/etc\//i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-];
 
 /**
  * 创建 Shell 命令执行工具（含前台和后台任务管理）。
@@ -107,6 +101,10 @@ export function createShellTool(workDir: string): RegisteredTool {
         if (inlineAdvisory?.block) {
           return { success: false, output: '', error: inlineAdvisory.message };
         }
+        const bgHostGuard = analyzeShellHostSafety(command, { workDir });
+        if (bgHostGuard.blocked) {
+          return { success: false, output: '', error: bgHostGuard.message ?? '[HostGuard / Blocked]' };
+        }
         const timeoutSec = ((args.timeout as number) || 300000) / 1000;
         const label = (args.label as string) || '';
         const bgResult = bgManager.spawn(command, timeoutSec * 1000, label);
@@ -132,10 +130,13 @@ export function createShellTool(workDir: string): RegisteredTool {
         return { success: false, output: '', error: inlineAdvisory.message };
       }
 
-      for (const pattern of DANGEROUS_PATTERNS) {
-        if (pattern.test(command)) {
-          return { success: false, output: '', error: 'Security check failed: command matches dangerous pattern' };
-        }
+      const hostGuard = analyzeShellHostSafety(command, { workDir });
+      if (hostGuard.blocked) {
+        return { success: false, output: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
+      }
+
+      if (matchesDangerousShellPattern(command)) {
+        return { success: false, output: '', error: 'Security check failed: command matches dangerous pattern' };
       }
 
       const normalized = normalizeRunCommand(command, { workDir });
@@ -147,7 +148,7 @@ export function createShellTool(workDir: string): RegisteredTool {
 
         const child = spawn(shell, shellArgs, {
           cwd: normalized.cwd,
-          env: { ...process.env, NODE_ENV: 'production' },
+          env: buildShellChildEnv(),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
 

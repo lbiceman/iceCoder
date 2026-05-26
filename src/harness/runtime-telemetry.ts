@@ -50,6 +50,15 @@ export type RuntimeTelemetryEvent =
       savedTokens: number;
     }
   | {
+      type: 'host_guard_block';
+      timestamp: string;
+      sessionId: string;
+      round: number;
+      toolName: string;
+      matchLabel?: string;
+      source: 'preflight' | 'shell';
+    }
+  | {
       type: 'summary';
       timestamp: string;
       sessionId: string;
@@ -95,6 +104,12 @@ export class RuntimeTelemetry {
     const savedTokens = Math.max(0, event.beforeTokens - event.afterTokens);
     this.compactionSavedTokens += savedTokens;
     this.append({ type: 'compaction', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event, savedTokens });
+  }
+
+  recordHostGuardBlock(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'host_guard_block' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'host_guard_block', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
   }
 
   recordSummary(event: Omit<Extract<RuntimeTelemetryEvent, { type: 'summary' }>, 'type' | 'timestamp' | 'sessionId' | 'compactionSavedTokens'>): void {

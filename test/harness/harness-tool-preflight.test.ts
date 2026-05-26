@@ -159,6 +159,44 @@ describe('harness-tool-preflight', () => {
     expect(decision.blocked).toBe(false);
   });
 
+  it('blocks run_command that broad-kills node via script', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-preflight-'));
+    mkdirSync(join(root, 'scripts'), { recursive: true });
+    writeFileSync(
+      join(root, 'scripts', 'kill-all.cjs'),
+      "require('child_process').execSync('taskkill /F /IM node.exe');",
+      'utf-8',
+    );
+    const blocked = checkToolPreflight({
+      toolName: 'run_command',
+      args: { command: 'node scripts/kill-all.cjs 2>&1' },
+      workspaceRoot: root,
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toBe('host_kill');
+    expect(blocked.message).toMatch(/HostGuard/);
+  });
+
+  it('blocks write_file embedding taskkill /IM node', () => {
+    const blocked = checkToolPreflight({
+      toolName: 'write_file',
+      args: {
+        path: 'scripts/fix.cjs',
+        content: "execSync('taskkill /F /IM node.exe');",
+      },
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toBe('host_kill');
+  });
+
+  it('allows taskkill by PID in run_command', () => {
+    const allowed = checkToolPreflight({
+      toolName: 'run_command',
+      args: { command: 'taskkill /F /PID 12345' },
+    });
+    expect(allowed.blocked).toBe(false);
+  });
+
   it('diagnostic gate block can attach verification digest', () => {
     const messages: UnifiedMessage[] = [
       {

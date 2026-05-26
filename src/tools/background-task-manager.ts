@@ -13,6 +13,11 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import {
+  analyzeShellHostSafety,
+  buildShellChildEnv,
+  matchesDangerousShellPattern,
+} from './shell-host-guard.js';
 
 /** 任务状态 */
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'timeout' | 'killed';
@@ -53,17 +58,6 @@ const MAX_CONCURRENT = 8;
 /** 完成后自动清理延迟（毫秒） */
 const AUTO_CLEANUP_DELAY = 30 * 60 * 1000; // 30 分钟
 
-/** 危险命令黑名单（复用 shell-tool 的规则） */
-const DANGEROUS_PATTERNS = [
-  /\brm\s+-rf\s+\/(?!\w)/i,
-  /\bformat\b/i,
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /\b:>\s*\/etc\//i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-];
-
 /** 生成短 ID */
 function generateId(): string {
   return 'bg_' + Math.random().toString(36).substring(2, 8);
@@ -98,11 +92,12 @@ export class BackgroundTaskManager {
     taskId: string;
     error?: string;
   } {
-    // 安全检查
-    for (const pattern of DANGEROUS_PATTERNS) {
-      if (pattern.test(command)) {
-        return { taskId: '', error: '安全检查失败: 命令包含危险操作模式' };
-      }
+    const hostGuard = analyzeShellHostSafety(command, { workDir: this.workDir });
+    if (hostGuard.blocked) {
+      return { taskId: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
+    }
+    if (matchesDangerousShellPattern(command)) {
+      return { taskId: '', error: '安全检查失败: 命令包含危险操作模式' };
     }
 
     // 并发检查
@@ -122,7 +117,7 @@ export class BackgroundTaskManager {
 
     const child = spawn(shell, shellArgs, {
       cwd: this.workDir,
-      env: { ...process.env, NODE_ENV: 'production' },
+      env: buildShellChildEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

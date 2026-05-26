@@ -185,7 +185,9 @@ export function createShellGuideSection(): PromptSection {
     title: 'Shell',
     content: `# Shell
 
-Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.`,
+Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.
+
+**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev/preview server, find the port PID (\`netstat -ano | findstr :4173\`) and \`taskkill /F /PID <pid>\` only.`,
     isStatic: true,
     priority: 45,
     enabled: true,

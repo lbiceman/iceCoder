@@ -71,6 +71,7 @@ interface PolicyBlockContext {
   baseMessage: string;
   errorLabel: string;
   policyReason?: string;
+  hostKillLabel?: string;
   messages: UnifiedMessage[];
   onStep?: (event: HarnessStepEvent) => void;
   logger: HarnessLogger;
@@ -119,6 +120,14 @@ function emitHarnessPolicyBlock(
     policyReason: ctx.policyReason ?? ctx.errorLabel,
     outputLength: blockMessage.length,
   });
+  if (ctx.policyReason === 'host_kill') {
+    ctx.deps.runtimeTelemetry?.recordHostGuardBlock({
+      round: ctx.iteration,
+      toolName: ctx.tc.name,
+      matchLabel: ctx.hostKillLabel,
+      source: 'preflight',
+    });
+  }
   ctx.onStep?.({
     type: 'tool_result',
     iteration: ctx.iteration,
@@ -414,6 +423,7 @@ export async function executeToolCallsStreaming(
         baseMessage: preflight.message ?? '[Harness / Preflight] Tool execution denied.',
         errorLabel: preflight.reason ?? 'Preflight block',
         policyReason: preflight.reason ?? 'preflight',
+        hostKillLabel: preflight.hostKillLabel,
         messages,
         onStep,
         logger,
