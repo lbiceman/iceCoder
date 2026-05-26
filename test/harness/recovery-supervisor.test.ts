@@ -207,7 +207,27 @@ describe('RecoverySupervisor - §18 状态机推进', () => {
     });
   });
 
-  it('does not enter takeover again while in cooldown', () => {
+  it('stays in cooldown when only weak signals arrive', () => {
+    const supervisor = makeAndEnterTakeover();
+    supervisor.evaluate(ctxWith({ round: 2, signals: [] }));
+    supervisor.evaluate(ctxWith({ round: 3, signals: [] }));
+    supervisor.evaluate(ctxWith({ round: 4, signals: [] }));
+    supervisor.evaluate(ctxWith({ round: 5, signals: [] }));
+    expect(supervisor.getPhase()).toBe('cooldown');
+
+    // 调优 2026-05-26（B2）— 仅当 tool_repeat_fail.count >= 5 / no_progress.rounds >= 6 /
+    //                       user_force_takeover 这种「强信号」才允许跳出 cooldown；
+    //                       低于阈值的同名信号仍保持 cooldown。
+    const decision = supervisor.evaluate(ctxWith({
+      round: 6,
+      signals: [{ type: 'tool_repeat_fail', count: 4 }],
+      riskScore: 0.95,
+    }));
+    expect(decision).toEqual({ action: 'continue' });
+    expect(supervisor.getPhase()).toBe('cooldown');
+  });
+
+  it('breaks cooldown and re-enters takeover when a strong signal arrives (B2)', () => {
     const supervisor = makeAndEnterTakeover();
     supervisor.evaluate(ctxWith({ round: 2, signals: [] }));
     supervisor.evaluate(ctxWith({ round: 3, signals: [] }));
@@ -220,8 +240,8 @@ describe('RecoverySupervisor - §18 状态机推进', () => {
       signals: [{ type: 'tool_repeat_fail', count: 5 }],
       riskScore: 0.95,
     }));
-    expect(decision).toEqual({ action: 'continue' });
-    expect(supervisor.getPhase()).toBe('cooldown');
+    expect(decision.action).toBe('takeover');
+    expect(supervisor.getPhase()).toBe('takeover');
   });
 });
 
@@ -281,6 +301,62 @@ describe('RecoverySupervisor - applyTakeover / CorrectionPort', () => {
   it('applyHandoff is no-op when no correctionPort is supplied', () => {
     const supervisor = new RecoverySupervisor(params);
     expect(() => supervisor.applyHandoff({ round: 1, task: makeTask() })).not.toThrow();
+  });
+
+  it('调优 C: applyTakeover 携带 evidence 时输出失败签名 / 验收 / 后台行', () => {
+    const supervisor = new RecoverySupervisor(params);
+    const messages: UnifiedMessage[] = [];
+    const port = new MessageCorrectionPort(messages);
+
+    supervisor.evaluate(ctxWith({
+      riskScore: 0.7,
+      signals: [{ type: 'tool_repeat_fail', count: 3 }],
+    }));
+
+    supervisor.applyTakeover({
+      round: 2,
+      reason: 'tool_repeat_fail:3',
+      signals: [{ type: 'tool_repeat_fail', count: 3 }],
+      task: makeTask(),
+      correctionPort: port,
+      evidence: {
+        recentFailedSignatures: ['run_command:npm test (x4)', 'run_command:vitest (x3)'],
+        pendingAcceptanceCommands: ['npm test', 'npm run e2e'],
+        runningBackgroundTasks: ['npm test 2>&1 (running 3m)'],
+      },
+    });
+
+    const content = messages[0].content as string;
+    expect(content).toContain('[System Recovery]');
+    expect(content).toContain('Repeated failing tool calls: run_command:npm test (x4) | run_command:vitest (x3)');
+    expect(content).toContain('Acceptance pending: npm test, npm run e2e');
+    expect(content).toContain('Background tasks: npm test 2>&1 (running 3m)');
+    expect(content).toContain('Do NOT retry the failing tool with the same arguments.');
+  });
+
+  it('调优 C: evidence 缺省时退回原始文案（向后兼容）', () => {
+    const supervisor = new RecoverySupervisor(params);
+    const messages: UnifiedMessage[] = [];
+    const port = new MessageCorrectionPort(messages);
+
+    supervisor.evaluate(ctxWith({
+      riskScore: 0.7,
+      signals: [{ type: 'tool_repeat_fail', count: 3 }],
+    }));
+
+    supervisor.applyTakeover({
+      round: 2,
+      reason: 'tool_repeat_fail:3',
+      signals: [{ type: 'tool_repeat_fail', count: 3 }],
+      task: makeTask(),
+      correctionPort: port,
+    });
+
+    const content = messages[0].content as string;
+    expect(content).toContain('[System Recovery]');
+    expect(content).not.toContain('Repeated failing tool calls:');
+    expect(content).not.toContain('Acceptance pending:');
+    expect(content).not.toContain('Background tasks:');
   });
 });
 

@@ -94,6 +94,12 @@ export interface EvaluateAfterRoundContext {
    * 默认 true（兼容旧调用方）。
    */
   recoveryRoundEffective?: boolean;
+  /**
+   * 调优 2026-05-26（C）— 仅在决策为 takeover 时调用，按需采集 takeover 证据
+   * （失败签名 / 验收 pending / 后台任务）注入到 `[System Recovery]` 块。
+   * 缺省时 takeover 文案仍输出，但不带 evidence 行（与历史行为一致）。
+   */
+  takeoverEvidenceProvider?: () => import('../../types/supervisor.js').TakeoverEvidence | undefined;
 }
 
 /** L2-4：scope_creep / user_force_takeover 注入入口。 */
@@ -822,12 +828,14 @@ export class SupervisorRuntimeBridge {
     if (!port) return;
 
     if (decision.action === 'takeover') {
+      const evidence = ctx.takeoverEvidenceProvider?.();
       this.recoverySupervisor.applyTakeover({
         round: ctx.round.round,
         reason: decision.reason,
         signals: decision.signals,
         task: ctx.task,
         correctionPort: port,
+        ...(evidence ? { evidence } : {}),
       });
       return;
     }

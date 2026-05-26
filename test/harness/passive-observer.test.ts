@@ -90,6 +90,49 @@ describe('PassiveObserver - L2-2', () => {
     observer.reset();
     expect(observer.getAccumulated()).toEqual([]);
   });
+
+  it('调优 B1: 同 type signal 滑窗保留最近 3 条（observe）', () => {
+    const observer = new PassiveObserver(DEFAULT_TRIGGERS);
+    for (let i = 0; i < 5; i++) {
+      observer.observe({
+        ...baseInput(),
+        round: { round: i + 1, toolNames: ['edit_file'], toolSuccess: [false], hadWriteTool: false },
+        maxFailedSignatureCount: 2 + i,
+        repeatedToolSignatures: ['edit_file:x'],
+      });
+    }
+    const acc = observer.getAccumulated();
+    const repeatFails = acc.filter(s => s.type === 'tool_repeat_fail');
+    expect(repeatFails).toHaveLength(3);
+    // 保留的应该是后 3 条（count 4/5/6），最老的（count 2/3）被丢弃
+    expect(repeatFails.map(s => (s as { count: number }).count)).toEqual([4, 5, 6]);
+  });
+
+  it('调优 B1: pushSignal 多次 goal_drift 也仅保留 3 条', () => {
+    const observer = new PassiveObserver(DEFAULT_TRIGGERS);
+    const alignments = [0.42, 0.41, 0.40, 0.39, 0.38, 0.37];
+    for (const a of alignments) {
+      observer.pushSignal({ type: 'goal_drift', alignment: a });
+    }
+    const acc = observer.getAccumulated().filter(s => s.type === 'goal_drift');
+    expect(acc).toHaveLength(3);
+    expect(acc.map(s => (s as { alignment: number }).alignment)).toEqual([0.39, 0.38, 0.37]);
+  });
+
+  it('调优 B1: 不同 type 各自维护滑窗，互不影响', () => {
+    const observer = new PassiveObserver(DEFAULT_TRIGGERS);
+    for (let i = 0; i < 4; i++) {
+      observer.observe({
+        ...baseInput(),
+        maxFailedSignatureCount: 2,
+        repeatedToolSignatures: ['edit_file:x'],
+        consecutiveReadOnlyRounds: 3,
+      });
+    }
+    const acc = observer.getAccumulated();
+    expect(acc.filter(s => s.type === 'tool_repeat_fail')).toHaveLength(3);
+    expect(acc.filter(s => s.type === 'no_progress')).toHaveLength(3);
+  });
 });
 
 describe('PassiveObserver helpers', () => {

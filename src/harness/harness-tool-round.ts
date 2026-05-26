@@ -639,6 +639,10 @@ export async function runHarnessToolRound(
         policyBlockedSignatures: toolStats.policyBlockedSignatures,
         branchBudget: state.branchBudget,
       }),
+      // 调优 2026-05-26（C）— takeover 决策时附带证据，让 [System Recovery] 块带具体上下文。
+      //                       后台任务由 P0-B「每轮注入 Background Task Status」单独覆盖，
+      //                       此处不再重复，避免 prompt 冗余。
+      takeoverEvidenceProvider: () => buildTakeoverEvidence(state),
     });
 
     // 同步 phase 到 HarnessRunState；后续 ToolGate / Resilience inject 都按新 phase 走 source。
@@ -1082,4 +1086,39 @@ function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures
     targets.add(target);
   }
   return targets.size;
+}
+
+/**
+ * 调优 2026-05-26（C）— 为 takeover 决策点构造证据载荷。
+ *
+ * 数据源：
+ *   - `state.failedToolCallSignatures`：count ≥ 2 的同签名失败，取 top 3；
+ *   - `state.taskAcceptance.getPendingCommands()`：尚未通过的验收命令，取前 3 条。
+ *
+ * 设计取舍：
+ *   - 后台任务由 P0-B「每轮注入 Background Task Status」覆盖，此处不再列出避免冗余；
+ *   - 全部字段可选，evidence 为空时 `formatTakeoverMessage` 会自动退回到无证据版本，
+ *     保持向后兼容（含单测）。
+ */
+function buildTakeoverEvidence(state: HarnessRunState): {
+  recentFailedSignatures?: string[];
+  pendingAcceptanceCommands?: string[];
+} {
+  const evidence: { recentFailedSignatures?: string[]; pendingAcceptanceCommands?: string[] } = {};
+
+  if (state.failedToolCallSignatures && state.failedToolCallSignatures.size > 0) {
+    const top = [...state.failedToolCallSignatures.entries()]
+      .filter(([, count]) => count >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([sig, count]) => `${sig.length > 80 ? sig.slice(0, 77) + '...' : sig} (x${count})`);
+    if (top.length > 0) evidence.recentFailedSignatures = top;
+  }
+
+  if (state.taskAcceptance?.isActive()) {
+    const pending = state.taskAcceptance.getPendingCommands().slice(0, 3).map(c => c.label);
+    if (pending.length > 0) evidence.pendingAcceptanceCommands = pending;
+  }
+
+  return evidence;
 }
