@@ -147,6 +147,28 @@ export interface RuntimeSupervisorCheckpointState {
   segmentRenewalCount?: number;
 }
 
+/**
+ * 后台任务快照（Phase 5：用于 checkpoint resume 时展示「上次还在跑的任务」）。
+ *
+ * 注意：恢复时**不接管真实进程**（孤儿 child 无法跨进程接管），只标记为 stale 用于
+ * 提示 LLM 「上一轮启动过这些后台任务」。
+ */
+export interface BackgroundTaskSnapshot {
+  taskId: string;
+  command: string;
+  label: string;
+  /** 序列化时的 status；resume 后展示为 'stale' */
+  status: 'running' | 'completed' | 'failed' | 'timeout' | 'killed';
+  startedAt: number;
+  endedAt: number | null;
+  exitCode: number | null;
+  error: string | null;
+  /** 序列化时的 totalOutputLines，让 LLM 知道任务有过多少输出 */
+  totalOutputLines: number;
+  /** 落盘日志路径（绝对路径），便于用户事后查看 */
+  logPath: string | null;
+}
+
 /** v2 增强 checkpoint 的「附加运行时状态」部分。 */
 export interface RuntimeCheckpointV2 {
   /** schema 版本号，固定为 2 */
@@ -183,6 +205,13 @@ export interface RuntimeCheckpointV2 {
   rebuildEscalationInjections?: number;
   /** 并行 BranchBudget 拦截指引是否已注入（每 run 一次） */
   parallelBudgetBlockHintInjected?: boolean;
+  /**
+   * 后台任务快照（Phase 5）：序列化当前 session 仍在跑的后台任务清单，
+   * 让 checkpoint resume 后 LLM 知道「上一轮起过这些后台任务」。
+   *
+   * 注意：resume 不接管真实进程，仅 informational。
+   */
+  backgroundTasks?: BackgroundTaskSnapshot[];
 }
 
 /** Checkpoint 触发器类型 — 与 docs/长时间连续工作.md §Save Trigger 对齐 */

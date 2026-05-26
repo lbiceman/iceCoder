@@ -506,6 +506,28 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
   gap: 12px;
 }
 
+/* ── Background Task Ephemeral Chips (Phase 4b) ── */
+.bg-status-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+}
+.message-bg_status {
+  opacity: 0.75;
+  font-size: 0.85em;
+  border-left: 2px solid #888;
+  padding: 6px 10px;
+  background: rgba(120, 120, 120, 0.08);
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.message-bg_status .bg-status-label { font-weight: 600; }
+.message-bg_status .bg-status-id { opacity: 0.6; margin: 0 6px; }
+.message-bg_status.is-terminal-success { border-left-color: #4caf50; color: #2e7d32; }
+.message-bg_status.is-terminal-error   { border-left-color: #f44336; color: #c62828; }
+.message-bg_status.is-hang             { border-left-color: #ff9800; color: #e65100; }
+
 /* 顶部弹性 spacer：消息少时把内容推到底部 */
 .chat-messages::before {
   content: '';

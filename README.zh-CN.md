@@ -2,25 +2,59 @@
 
 **自主编码 Agent 在长任务里容易失控。** 偏离目标、反复调用同一工具、看似收尾实则没交付——在 **20～200+ 轮**工具调用后尤其常见。
 
-**iceCoder 是自托管的工具化 LLM 运行时治理层** — 含 Harness 主循环、漂移检测、自适应/强制双模、Checkpoint 恢复、TaskGraph、文件化长期记忆、**27** 个内置工具、MCP 扩展，以及 CLI / Web / WebSocket 全栈入口。
+**iceCoder 是自托管的工具化 LLM 运行时治理层**：真实任务中 Harness 已**稳定跑通 217 轮**工具调用（更高轮次尚未压测）；配合漂移检测、自适应/强制双模、Checkpoint 恢复、TaskGraph 计划注入、文件化长期记忆、**27** 个内置工具、MCP 扩展，以及 CLI / Web / WebSocket 全栈入口。
 
 [English README](./README.md) · [项目介绍](./docs/项目介绍.md) · [Project guide](./docs/PROJECT-GUIDE.md)
 
 ---
 
+## 30 秒跑起来
+
+```bash
+git clone <repo-url> && cd iceCoder
+npm install
+cp data/config.example.json data/config.json   # 填入 LLM API Key
+npm run dev                                     # API :1024 · UI :1025
+```
+
+```bash
+npx tsx src/cli/index.ts run "修复失败测试" --max-rounds 100
+npm test                                        # 1,372 条用例 · ~38 秒 · 100% 通过
+```
+
+**环境要求：** Node.js 18+
+
+---
+
 ## 一眼看数字
+
+> 实测日期 **2026-05-26** — 本地执行 `npm test` 与 `npm run test:coverage` 可复现。
 
 | | |
 |---|---|
-| **测试** | **1,340** 条用例 · **117** 个测试文件 · **100%** 通过（`npm test`，2026-05-26） |
-| **覆盖率** | 行 **75.6%** · 语句 **73.7%** · 函数 **76.9%** · 分支 **65.1%**（`npm run test:coverage`） |
-| **Harness 覆盖率** | 行 **82.1%** · 语句 **79.8%** · 专用测试文件 **67** 个 |
-| **代码规模** | `src/` 下 **~230** 个 TS/JS 模块 · **~4.7 万**行 · Harness **95** 个模块 · Supervisor **24** 个模块 |
-| **Agent 工具** | **27** 个注册工具（26 内置 + `delegate_to_subagent`）· 运行时还可挂载 **MCP** 工具 |
-| **运行时能力** | TaskGraph · CheckpointEngine v2 · BranchBudget · Step Review · 双模 Supervisor（L1/L2）· 文件记忆 **26** 模块 |
-| **入口** | CLI 7 子命令 · HTTP API **:1024** · Vite 开发 UI **:1025** · WebSocket 聊天 |
+| **长会话实测** | 生产任务中 Harness **稳定完成 217 轮**工具调用 · 更高轮次尚未压测 |
+| **测试** | **1,372** 条用例 · **123** 个测试文件 · **100%** 通过 · **~38 秒** |
+| **覆盖率（全 `src/`）** | 行 **74.9%** · 语句 **72.9%** · 函数 **77.1%** · 分支 **64.6%** |
+| **核心运行时覆盖率** | **Harness 82.5%** 行 · **Supervisor 95.0%** 行 · **Checkpoint 93%** 行 |
+| **代码规模** | **235** 个 TS/JS 模块 · **47,390** 行 · Harness **97** · Supervisor **24** · 文件记忆 **26** |
+| **Agent 工具** | **27** 个注册工具（26 内置 + `delegate_to_subagent`）· 运行时还可挂载 **MCP** |
+| **入口** | CLI 7 子命令 · HTTP **:1024** · Vite 开发 UI **:1025** · WebSocket · 可选 Cloudflare 隧道 |
 | **模型** | OpenAI 兼容 + Anthropic 适配 · 多提供者配置 |
 | **Benchmark** | 与 Claude Code **同模型**盲评 — 综合分 **86 vs 83**、**88 vs 85**（两项修复任务） |
+
+同样的工具、同样的模型 — **有治理的执行**。
+
+---
+
+## 为什么选 iceCoder？
+
+| 痛点 | iceCoder 的解法 |
+|------|----------------|
+| 同一文件或失败命令反复循环 | **BranchBudget** 硬拦截重复模式 |
+| 50+ 轮工具调用后开始跑偏 | **漂移检测** → 纠正或升级到 **forced** 模式 · 实测 **217 轮**稳定 |
+| 上下文压缩后任务状态丢失 | **CheckpointEngine v2** 从运行时快照恢复，不只靠聊天 |
+| 未经验证就宣告完成 | 验收门禁 + TaskGraph 完成条件 |
+| 绑定托管 IDE、无法自部署 | **自托管** CLI / Web / WebSocket / MCP，跑在你自己的仓库上 |
 
 ---
 
@@ -50,17 +84,9 @@ CLI / Web / WebSocket
 
 ---
 
-## 为什么重要
-
-多数 Agent 产品优化的是*模型调用*。真实工程任务需要的是能撑过 **20～200+ 轮**工具的*运行时*：识别卡住、约束鲁莽行为、在压缩或崩溃后恢复——而不是把任务直接丢掉。
-
-同样的工具、同样的模型 — **有治理的执行**。
-
----
-
 ## 工作原理
 
-### 1. 漂移检测
+### 漂移检测
 
 每一轮工具调用对照任务目标打分：
 
@@ -70,7 +96,7 @@ CLI / Web / WebSocket
 
 信号触发纠正或模式升级，而不是烧完整轮次预算。
 
-### 2. 自适应 vs 强制执行
+### 自适应 vs 强制执行
 
 | 模式 | 行为 |
 |------|------|
@@ -79,9 +105,13 @@ CLI / Web / WebSocket
 
 策略：`off` · `adaptive`（默认） · `strict`。漂移/失败/checkpoint 恢复时升级；稳定后降回。
 
-### 3. Checkpoint 恢复
+### Checkpoint 恢复
 
 任务状态、触达文件、已跑命令、验收结果及 `runtimeV2`（分支预算、监管态）持续落盘。压缩、刷新或进程重启后**从快照恢复** — 不只靠聊天记录。
+
+### 长会话耐久
+
+真实生产任务中，Harness 已连续完成 **217 轮**工具调用且全程稳定 — Supervisor 模式切换、Checkpoint 压缩、BranchBudget 拦截均正常工作，未出现崩溃、漂移中止或上下文崩溃。217 轮以上尚未压测；运行时面向 **20～200+ 轮**工程任务设计。
 
 ---
 
@@ -114,39 +144,45 @@ CLI / Web / WebSocket
 ## 质量与测试
 
 ```bash
-npm test                 # 1,340 条用例，约 36 秒
-npm run test:coverage    # V8 覆盖率 → coverage/
+npm test                 # 1,372 条用例 · 123 文件 · ~38 秒
+npm run test:coverage    # V8 覆盖率 → coverage/（HTML + JSON）
 npx tsc --noEmit         # 类型检查
 ```
 
-| 领域 | 测试文件数 | 说明 |
-|------|------------|------|
-| Harness + Supervisor | **67** | 主循环、checkpoint、分支预算、双模、恢复 |
-| 文件记忆 | **20** | 召回、Dream、淘汰、安全、并发 |
-| TaskGraph | **7** | 执行器、持久化、指标、契约审查 |
-| Web / LLM / 工具 / 解析 | **23** | API、适配器、规范化、文档策略 |
+**框架：** Vitest 4 · `@vitest/coverage-v8` · Node 环境
 
-覆盖率快照 **2026-05-26**：共插桩 **11,070** 条语句；Harness 核心行覆盖 **82.1%**。
+### 覆盖率快照（2026-05-26）
+
+| 范围 | 行 | 语句 | 函数 | 分支 |
+|------|-----|------|------|------|
+| **全 `src/`** | **74.9%**（7,770 / 10,374） | **72.9%**（8,488 / 11,642） | **77.1%**（1,442 / 1,870） | **64.6%**（5,676 / 8,793） |
+| **`src/harness/`** | **82.5%** | **80.1%** | **84.0%** | **71.0%** |
+| **`src/harness/supervisor/`** | **95.0%** | **92.8%** | **93.0%** | **87.2%** |
+| **`src/memory/file-memory/`** | **70.4%** | **68.8%** | **67.4%** | **59.9%** |
+
+### 测试分布（123 个文件）
+
+| 领域 | 文件数 | 覆盖内容 |
+|------|--------|----------|
+| **Harness + Supervisor** | **68** | 主循环、checkpoint、分支预算、双模 L1/L2、恢复、工具门禁 |
+| **文件记忆** | **20** | 召回、Dream、淘汰、安全、并发、E2E 流程 |
+| **TaskGraph** | **7** | 构建器、执行器、持久化、指标、审查、边界情况 |
+| **E2E 双模场景** | **1** | 六类 prompt：free/forced/degraded/checkpoint 恢复 |
+| **Web / LLM / 工具 / 解析 / core** | **27** | API、适配器、规范化、文档策略、CLI |
+
+Supervisor 与 Checkpoint 路径测试最密集 — 这正是长任务所依赖的治理层。
 
 ---
 
-## 快速开始
+## CLI 与开发
 
-**环境要求：** Node.js 18+
-
-```bash
-git clone <repo-url> && cd iceCoder
-npm install
-cp data/config.example.json data/config.json   # 填入 LLM 提供者
-npm run dev                                     # API :1024 · UI :1025 · 可选 tunnel
-```
-
-```bash
-npm test
-npx tsx src/cli/index.ts run "修复失败测试" --max-rounds 100
-npx tsx src/cli/index.ts web --port 3784      # 独立 Web（CLI 默认端口）
-npx tsx src/cli/index.ts tools                  # 列出 27 个工具
-```
+| 命令 | 用途 |
+|------|------|
+| `npm run dev` | API + Vite UI + 可选 Cloudflare 隧道 |
+| `npm run iceCoder` | CLI 全栈启动（`start`） |
+| `npx tsx src/cli/index.ts run "…"` | 单次任务（`--max-rounds`、`--json`） |
+| `npx tsx src/cli/index.ts tools` | 列出 27 个注册工具 |
+| `npx tsx src/cli/index.ts web --port 3784` | 独立 Web 服务 |
 
 Supervisor 模板：`data/supervisor-config.example.json` · 环境变量：[`docs/环境变量.md`](./docs/环境变量.md)
 

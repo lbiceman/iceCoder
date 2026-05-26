@@ -132,8 +132,14 @@ export function createToolUsageSection(): PromptSection {
 - Do NOT use run_command when a dedicated tool exists.
 - Independent tools in parallel; dependent tools in order.
 - Do not repeat tool calls unless data may have changed.
-- Background run_command → continue work; poll with action:"check" and task_id.
 - Use multiple tools per turn when useful.
+
+## Shell execution
+- run_command auto-picks foreground/background by command shape. Long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) → background, returns taskId immediately.
+- If a foreground command returns mode:'escalated' with a taskId, it has been moved to background after ~8s. Do NOT retry; poll later with action:'check'.
+- Polling: { action:'check', task_id, since:<prev cursor> } returns only new output. Always pass back the returned \`cursor\` next time.
+- The runtime may inject a [Background Task Status] block every ~5 minutes for any running task. Treat it as ground truth; don't echo it to the user verbatim.
+- Never set background:true for destructive commands (rm/del/git push -f …).
 
 ## MCP (Model Context Protocol)
 - Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.

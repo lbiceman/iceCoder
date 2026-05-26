@@ -143,6 +143,13 @@ window.ChatWebSocket = (function () {
       case 'pulse':
         emit('pulse', { hint: lastToolProgressHint || '处理中' });
         break;
+      case 'bg_task_update':
+        emit('bg_task_update', {
+          sessionId: data.sessionId || '',
+          timestamp: data.timestamp || '',
+          tasks: Array.isArray(data.tasks) ? data.tasks : [],
+        });
+        break;
     }
   }
 

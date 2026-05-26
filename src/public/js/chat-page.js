@@ -523,6 +523,15 @@ window.ChatPage = (function () {
     pullServerChatSnapshotAuthoritative();
   }
 
+  function onWsBgTaskUpdate(payload) {
+    if (!window.BgTaskChip || !elMessages) return;
+    // 当前 sessionId 来源：ChatSession.getActiveId 若存在则用；否则不过滤（兼容当前单 session 模型）
+    var activeId = (Session && typeof Session.getActiveId === 'function')
+      ? Session.getActiveId()
+      : '';
+    window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
     container = parentEl;
@@ -613,6 +622,7 @@ window.ChatPage = (function () {
     WS.on('pulse', onWsPulse);
     WS.on('session_updated', onWsSessionUpdated);
     WS.on('sync', syncMessages);
+    WS.on('bg_task_update', onWsBgTaskUpdate);
 
     // 连接 WebSocket
     WS.connect(remoteToken);
