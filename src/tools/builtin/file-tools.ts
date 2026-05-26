@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
 import { getReadFileDefaultMaxChars, getReadFileDefaultMaxLines } from '../tool-output-limits.js';
+import { findReplaceRange } from '../file-edit-fuzzy.js';
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -102,7 +103,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'write_file',
         // 创建新文件或覆盖已有文件。修改部分内容用 edit_file。追加用 append_file。
-        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file. Pass path and content as top-level arguments (not nested in a raw JSON string). For large files prefer edit_file/patch_file or split writes.',
+        description: 'Create new file or completely overwrite a SMALL existing file (prefer under ~150 lines). Auto-creates parent directories. For partial/large edits use patch_file or edit_file; for appending use append_file. Pass path and content as top-level JSON fields (never wrap in raw/arguments). If truncated or skipped due to max_tokens, switch to patch_file or smaller edits — do not retry the same full payload.',
         parameters: {
           type: 'object',
           properties: {
@@ -152,7 +153,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'edit_file',
         // 查找替换。search 必须精确匹配现有内容。多处修改用 batch_edit_file。大段修改用 patch_file。
-        description: 'Find and replace in existing file. search must exactly match existing content. Pass path, search, replace as top-level fields (alias: filePath). For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file.',
+        description: 'Find and replace in existing file. search matches exactly or with fuzzy whitespace/line trim. Keep search short and unique. Pass path, search, replace as top-level fields (alias: filePath). For multiple changes use batch_edit_file. For large/multi-hunk changes prefer patch_file. For new files use write_file.',
         parameters: {
           type: 'object',
           properties: {
@@ -169,28 +170,45 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         const rawPath = args.path || args.filePath;
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
         const filePath = safePath(rawPath, workDir);
-        let content = await fs.readFile(filePath, 'utf-8');
+        const content = await fs.readFile(filePath, 'utf-8');
 
-        let pattern: string | RegExp;
+        let newContent: string;
+        let matchedText: string | undefined;
+
         if (args.isRegex) {
           const flags = args.replaceAll !== false ? 'g' : '';
-          pattern = new RegExp(args.search, flags);
-        } else if (args.replaceAll !== false) {
-          pattern = new RegExp(args.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+          newContent = content.replace(new RegExp(args.search, flags), args.replace);
+        } else if (args.replaceAll !== false && content.includes(args.search)) {
+          const escaped = String(args.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          newContent = content.replace(new RegExp(escaped, 'g'), args.replace);
         } else {
-          pattern = args.search;
+          const range = findReplaceRange(content, args.search);
+          if (!range) {
+            return {
+              success: false,
+              output: '',
+              error: `No match found for search string in ${rawPath}. Try a shorter unique snippet, read_file to verify exact text, or use patch_file for larger edits.`,
+            };
+          }
+          matchedText = range.matched;
+          newContent = content.slice(0, range.start) + args.replace + content.slice(range.end);
         }
 
-        const newContent = content.replace(pattern, args.replace);
         const changed = content !== newContent;
         if (changed) {
           await getEditHistory().saveSnapshot(filePath, 'edit_file');
         }
         await fs.writeFile(filePath, newContent, 'utf-8');
 
+        const fuzzyNote = matchedText && matchedText !== args.search
+          ? ' (fuzzy whitespace/line match)'
+          : '';
+
         return {
           success: true,
-          output: changed ? `File modified: ${args.path}` : `No match found, file unchanged: ${args.path}`,
+          output: changed
+            ? `File modified: ${args.path}${fuzzyNote}`
+            : `No match found, file unchanged: ${args.path}`,
         };
       },
     },

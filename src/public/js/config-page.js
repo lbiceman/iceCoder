@@ -185,7 +185,7 @@ window.ConfigPage = (function () {
         '</div>' +
         '<div class="form-group">' +
           '<label for="maxTokens-' + index + '">Max Tokens</label>' +
-          '<input type="number" id="maxTokens-' + index + '" data-field="maxTokens" placeholder="4096" min="1" value="' + (prov.parameters && prov.parameters.maxTokens ? prov.parameters.maxTokens : '') + '">' +
+          '<input type="number" id="maxTokens-' + index + '" data-field="maxTokens" placeholder="8192" min="1" value="' + (prov.parameters && prov.parameters.maxTokens ? prov.parameters.maxTokens : '') + '">' +
         '</div>' +
       '</div>';
 

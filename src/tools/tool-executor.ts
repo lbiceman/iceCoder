@@ -11,7 +11,9 @@ import type { ToolResult, ToolExecutorConfig, ToolOutputCallback } from './types
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolValidator } from './tool-validator.js';
 import {
+  buildSalvageTruncatedError,
   buildWrappedArgumentFormatHint,
+  isSalvagedTruncatedArguments,
   isUnexpandedStringWrapper,
   normalizeToolArguments,
 } from './tool-arguments-normalizer.js';
@@ -48,6 +50,14 @@ export class ToolExecutor {
       ...toolCall,
       arguments: normalizeToolArguments(toolCall.arguments ?? {}) as Record<string, any>,
     };
+
+    if (isSalvagedTruncatedArguments(normalizedCall.arguments)) {
+      return {
+        success: false,
+        output: '',
+        error: `${buildSalvageTruncatedError(toolCall.name, normalizedCall.arguments)} ${buildWrappedArgumentFormatHint()}`,
+      };
+    }
 
     // 执行前验证输入参数
     if (this.validator) {

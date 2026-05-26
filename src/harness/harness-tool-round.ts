@@ -58,6 +58,10 @@ import {
   shouldClearBuildDiagnosticGate,
 } from './harness-tool-preflight.js';
 import {
+  hasTruncationSensitiveWriteTools,
+  planTruncatedWriteToolRecovery,
+} from './harness-tool-truncation-recovery.js';
+import {
   applyRebuildEscalationBypasses,
   buildRebuildEscalationMessage,
   canInjectRebuildEscalation,
@@ -154,6 +158,16 @@ export async function runHarnessToolRound(
     reasoningContent: response.reasoningContent,
   });
 
+  let toolCallsForGate = response.toolCalls ?? [];
+  if (response.finishReason === 'length' && hasTruncationSensitiveWriteTools(toolCallsForGate)) {
+    const recovery = planTruncatedWriteToolRecovery(toolCallsForGate);
+    msgs.push(...recovery.injectedMessages);
+    toolCallsForGate = recovery.toolCallsToRun;
+    if (toolCallsForGate.length === 0) {
+      return { action: 'continue' };
+    }
+  }
+
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
   state.verificationDigestInjectedThisRound = false;
@@ -170,9 +184,9 @@ export async function runHarnessToolRound(
     ? deps.supervisorBridge.createCorrectionPort(msgs, round)
     : new MessageCorrectionPort(msgs);
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
-  const gateContext = buildGateContext(deps.graphExecutor, response.toolCalls!, state);
+  const gateContext = buildGateContext(deps.graphExecutor, toolCallsForGate, state);
   const gateResult = executeToolCallsThroughGate({
-    toolCalls: response.toolCalls!,
+    toolCalls: toolCallsForGate,
     messages: msgs,
     ctx: gateContext,
   });
@@ -447,6 +461,7 @@ export async function runHarnessToolRound(
     }
   } else if (roundProgress === 'meaningful_progress') {
     state.consecutiveToolFailures = 0;
+    state.stopHookContinuationCount = 0;
     state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
   } else {
     // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断/续段永远达不到阈值。

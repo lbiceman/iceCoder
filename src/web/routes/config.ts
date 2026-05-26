@@ -137,6 +137,9 @@ function getModelMaxContext(modelName: string): number {
   return 8192;
 }
 
+/** Agent 运行时未配置 maxTokens 时的单次输出上限（未知/新模型兜底） */
+export const DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 8192;
+
 /**
  * 根据模型名称返回单次最大输出 token 数。
  * 用户不填 maxTokens 时，系统自动推算。
@@ -171,8 +174,8 @@ export function getModelMaxOutputTokens(modelName: string): number {
   // Mistral 系列
   if (name.includes('mistral') || name.includes('mixtral')) return 4096;
 
-  // 默认
-  return 4096;
+  // 未知模型：Agent 场景需容纳整文件 write_file 等长 tool 参数
+  return DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
 }
 
 /**

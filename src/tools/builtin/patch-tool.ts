@@ -135,7 +135,7 @@ export function createPatchTool(workDir: string): RegisteredTool {
       name: 'patch_file',
       // 应用 diff 补丁。大段修改用。小改动用 edit_file。
       description:
-        'Apply unified diff patch to file. For large code changes. Use edit_file for small changes. Supports fuzzy matching (auto-searches context when line numbers shift).',
+        'Apply unified diff patch to file. Preferred for large or multi-line edits and when max_tokens may truncate write_file. Use one or few small hunks. Use edit_file for tiny single replacements. Supports fuzzy line matching when context shifts.',
       parameters: {
         type: 'object',
         properties: {

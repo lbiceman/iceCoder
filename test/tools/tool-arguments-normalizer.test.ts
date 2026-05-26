@@ -52,10 +52,21 @@ describe('normalizeToolArguments', () => {
     });
   });
 
-  it('keeps truncated wrapper JSON unchanged when inner parse fails', () => {
+  it('salvages truncated wrapper JSON with path and partial content', () => {
     const args = { raw: '{"path":"a.ts","content":"unclosed' };
-    expect(normalizeToolArguments(args)).toEqual(args);
-    expect(isUnexpandedStringWrapper(args)).toBe(true);
+    const normalized = normalizeToolArguments(args);
+    expect(normalized).toEqual({
+      path: 'a.ts',
+      content: 'unclosed',
+      _salvageTruncated: true,
+    });
+    expect(isUnexpandedStringWrapper(normalized)).toBe(false);
+  });
+
+  it('unwraps nested raw wrappers', () => {
+    const inner = { path: 'b.ts', content: 'ok' };
+    const args = { raw: JSON.stringify({ raw: JSON.stringify(inner) }) };
+    expect(normalizeToolArguments(args)).toEqual(inner);
   });
 
   it('handles empty or invalid input', () => {

@@ -1571,7 +1571,7 @@ describe('Harness - 连续工具失败熔断', () => {
 // 18. 停止钩子连续干预上限
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 停止钩子连续干预上限', () => {
-  it('停止钩子连续干预超过 3 次后强制停止', async () => {
+  it('停止钩子连续干预超过 5 次后强制停止', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -1584,12 +1584,14 @@ describe('Harness - 停止钩子连续干预上限', () => {
     }));
 
     // 模型每次都回复 "done"，但钩子要求继续
-    // 4 次 finalResponse：初始 + 3 次钩子注入后 → 第 4 次钩子超限
+    // 6 次 finalResponse：初始 + 5 次钩子注入后 → 第 6 次钩子超限
     const chatFn = createChatFn([
       finalResponse('done 1'),
       finalResponse('done 2'),
       finalResponse('done 3'),
       finalResponse('done 4'),
+      finalResponse('done 5'),
+      finalResponse('done 6'),
       finalResponse('summary'),
     ]);
     const result = await harness.run('test', chatFn);
@@ -1622,6 +1624,39 @@ describe('Harness - 停止钩子连续干预上限', () => {
     const result = await harness.run('test', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
+  });
+
+  it('实质 write 成功后 stop_hook 计数清零', async () => {
+    const tools = [makeTool('write_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    harness.getStopHookManager().register(async () => ({
+      shouldContinue: true,
+      message: '请继续。',
+      hookName: 'always_continue',
+    }));
+
+    const writeRound = () => toolCallResponse([
+      { id: 'w', name: 'write_file', args: { path: 'src/game/scene.ts', content: 'export {}' } },
+    ]);
+
+    // 2 次空回复 + write 清零；再 6 次空回复才触发 stop_hook（>5）
+    const chatFn = createChatFn([
+      finalResponse('next step'),
+      finalResponse('next step'),
+      writeRound(),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.loopState.stopReason).toBe('stop_hook');
+    expect(result.loopState.currentRound).toBeGreaterThanOrEqual(8);
   });
 });
 

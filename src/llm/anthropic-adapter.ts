@@ -309,7 +309,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     options: LLMOptions,
   ): Anthropic.MessageCreateParams {
     const model = options.model || this.model;
-    const maxTokens = options.maxTokens ?? this.defaultParams.maxTokens ?? 4096;
+    const maxTokens = options.maxTokens ?? this.defaultParams.maxTokens ?? 8192;
 
     const params: Record<string, any> = {
       model,

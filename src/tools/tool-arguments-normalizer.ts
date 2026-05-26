@@ -1,10 +1,16 @@
 /**
  * 工具参数归一化（全 provider 通用）。
  *
- * 覆盖两类来源，不针对任何特定模型：
+ * 覆盖三类来源，不针对任何特定模型：
  * 1. function.arguments 字符串 parse 失败时，适配器兜底为 { raw: "<原始串>" }
  * 2. 模型/API 用单字段包裹整段 JSON：raw / arguments / input / params 等
+ * 3. 截断 JSON：parse 失败时 salvage path/content/search 等字段并标记 _salvageTruncated
  */
+
+import {
+  salvageTruncatedToolJson,
+  SALVAGE_TRUNCATED_KEY,
+} from './tool-arguments-salvage.js';
 
 /** 常见的「整段 JSON 字符串」包裹字段名 */
 const STRING_WRAPPER_KEYS = [
@@ -17,6 +23,8 @@ const STRING_WRAPPER_KEYS = [
 ] as const;
 
 type StringWrapperKey = (typeof STRING_WRAPPER_KEYS)[number];
+
+const MAX_UNWRAP_DEPTH = 4;
 
 function isStringWrapperKey(key: string): key is StringWrapperKey {
   return (STRING_WRAPPER_KEYS as readonly string[]).includes(key);
@@ -40,7 +48,8 @@ function tryUnwrapStringifiedPayload(
       return parsed as Record<string, unknown>;
     }
   } catch {
-    // 截断或非法 JSON：无法展开，保留原参数由工具层报错。
+    const salvaged = salvageTruncatedToolJson(value);
+    if (salvaged) return salvaged;
   }
 
   return null;
@@ -58,6 +67,16 @@ function applyCommonParameterAliases(args: Record<string, unknown>): Record<stri
   return out;
 }
 
+function unwrapLayers(args: Record<string, unknown>): Record<string, unknown> {
+  let current = args;
+  for (let depth = 0; depth < MAX_UNWRAP_DEPTH; depth++) {
+    const unwrapped = tryUnwrapStringifiedPayload(current);
+    if (!unwrapped) break;
+    current = applyCommonParameterAliases(unwrapped);
+  }
+  return current;
+}
+
 export function normalizeToolArguments(
   args: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -65,12 +84,27 @@ export function normalizeToolArguments(
     return {};
   }
 
-  const unwrapped = tryUnwrapStringifiedPayload(args);
-  return applyCommonParameterAliases(unwrapped ?? args);
+  const unwrapped = unwrapLayers(args);
+  if (unwrapped !== args) {
+    return applyCommonParameterAliases(unwrapped);
+  }
+
+  // 单字段 wrapper 且无法 unwrap：尝试直接 salvage wrapper 字符串
+  const keys = Object.keys(args);
+  if (keys.length === 1 && isStringWrapperKey(keys[0]!)) {
+    const value = args[keys[0]!];
+    if (typeof value === 'string') {
+      const salvaged = salvageTruncatedToolJson(value);
+      if (salvaged) return applyCommonParameterAliases(salvaged);
+    }
+  }
+
+  return applyCommonParameterAliases(args);
 }
 
-/** 参数仍为未展开的单字段字符串包裹（含 parse 失败后的 raw 兜底）。 */
+/** 参数仍为未展开的单字段字符串包裹（含 salvage 失败后的 raw 兜底）。 */
 export function isUnexpandedStringWrapper(args: Record<string, unknown>): boolean {
+  if (args[SALVAGE_TRUNCATED_KEY] === true) return false;
   const keys = Object.keys(args);
   if (keys.length !== 1) return false;
   const key = keys[0]!;
@@ -84,3 +118,5 @@ export function buildWrappedArgumentFormatHint(): string {
     'If the payload was truncated, use edit_file/patch_file or split into smaller writes.',
   ].join(' ');
 }
+
+export { isSalvagedTruncatedArguments, buildSalvageTruncatedError } from './tool-arguments-salvage.js';

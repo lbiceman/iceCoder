@@ -144,13 +144,17 @@ export function createToolUsageSection(): PromptSection {
 - **Correct** \`write_file\`: \`{ "path": "src/foo.ts", "content": "..." }\` — **Wrong**: \`{ "raw": "{\\"path\\":...}" }\` or any single-key string wrapper.
 - **Correct** \`run_command\`: \`{ "command": "npm test" }\` — \`command\` must be top-level, not inside a wrapper field.
 - Accepted aliases when supported: \`filePath\` → \`path\`; \`cmd\` → \`command\`. Prefer canonical names (\`path\`, \`content\`, \`command\`).
-- Large file bodies: use \`edit_file\`, \`patch_file\`, or \`append_file\` in chunks — avoid one huge \`write_file\` that may hit output limits and truncate mid-JSON.
+- Large file bodies: use \`patch_file\` (small diff hunks) or \`edit_file\` (short search/replace) in steps — avoid one huge \`write_file\` that may hit max_tokens and truncate mid-JSON.
+- If a tool error mentions **truncated JSON**, **finishReason: length**, or **Tool skipped** for write/edit: do **not** repeat the same full-file payload — switch to \`patch_file\` / smaller \`edit_file\` / \`append_file\` chunks.
 
 ## File reading
 read_file (offset/limit for large files). Outside cwd → open_file (absolute path).
 
 ## File editing
-edit_file (exact match). batch_edit_file, patch_file, write_file, append_file as appropriate.
+- **write_file**: new files or full replace of **small** files (roughly &lt;150 lines). Not for large scene/module rewrites.
+- **edit_file**: localized changes; search can be exact or fuzzy (whitespace/line trim). Keep \`search\` short and unique.
+- **patch_file**: preferred for multi-line / large edits; small unified diff hunks; tolerates line drift.
+- **append_file**: add to end of file. **batch_edit_file**: several search/replace ops in one call.
 
 ## Missing files & BranchBudget recovery
 - If \`read_file\` returns ENOENT, or Harness shows \`[Harness / Missing File]\`: **stop** read/patch on that path. Use \`write_file\` with the **full file body** (reference an existing sibling file as a template).
