@@ -66,7 +66,7 @@ window.ChatUI = (function () {
 
     var iconEl = document.createElement('span');
     iconEl.className = 'tool-icon ' + (status || 'pending');
-    iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+    iconEl.textContent = status === 'success' ? '✓' : status === 'warn' ? '⚠' : status === 'error' ? '✗' : '⟳';
     el.appendChild(iconEl);
 
     var nameEl = document.createElement('span');
@@ -202,7 +202,7 @@ window.ChatUI = (function () {
             var iconEl = rows[r].querySelector('.tool-icon');
             if (iconEl) {
               iconEl.className = 'tool-icon ' + status;
-              iconEl.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+              iconEl.textContent = status === 'success' ? '✓' : status === 'warn' ? '⚠' : status === 'error' ? '✗' : '⟳';
             }
             return;
           }

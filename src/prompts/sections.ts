@@ -152,6 +152,11 @@ read_file (offset/limit for large files). Outside cwd → open_file (absolute pa
 ## File editing
 edit_file (exact match). batch_edit_file, patch_file, write_file, append_file as appropriate.
 
+## Missing files & BranchBudget recovery
+- If \`read_file\` returns ENOENT, or Harness shows \`[Harness / Missing File]\`: **stop** read/patch on that path. Use \`write_file\` with the **full file body** (reference an existing sibling file as a template).
+- If \`[BranchBudget / Blocked]\` mentions the file **does not exist on disk**: use \`write_file\` to create it; wait for \`[System / Rebuild Escalation]\` if a write bypass is granted.
+- Do not loop \`read_file\` / \`patch_file\` on paths that are missing on disk.
+
 ## Search
 search_codebase (filename / content; skips node_modules). web_search, fetch_url.
 

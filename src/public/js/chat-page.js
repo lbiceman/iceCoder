@@ -396,7 +396,9 @@ window.ChatPage = (function () {
       Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: 'pending' });
     }
     if (step.type === 'tool_result' && step.toolName) {
-      var resultStatus = step.toolSuccess ? 'success' : 'error';
+      var resultStatus = step.toolOutcome === 'policy_block'
+        ? 'warn'
+        : (step.toolSuccess ? 'success' : 'error');
       UI.updateLastToolAction(step.toolName, resultStatus);
       Session.updateToolBatchStatus(step.toolName, resultStatus);
     }

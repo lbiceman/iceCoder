@@ -4,6 +4,7 @@ import type { ToolCall } from '../llm/types.js';
 import type { TaskState } from './task-state.js';
 import { isBuildVerificationCommand, isHarnessVerificationCommand } from './verification-digest.js';
 import { extractRunCommandsFromDelegateTask } from './verification-output-buffer.js';
+import { workspaceFileExists } from './workspace-path-guard.js';
 
 export interface ToolPreflightInput {
   toolName: string;
@@ -11,13 +12,19 @@ export interface ToolPreflightInput {
   branchBudget?: BranchBudgetTracker;
   taskState?: TaskState;
   buildDiagnosticGateActive?: boolean;
+  workspaceRoot?: string;
+  lockedWorkspaceRoot?: string;
+  /** 同路径 missing-file preflight 拦截次数（由 HarnessRunState 持有）。 */
+  missingFileAttempts?: Map<string, number>;
 }
 
 export interface ToolPreflightDecision {
   blocked: boolean;
-  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked';
+  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat';
   message?: string;
 }
+
+const MISSING_FILE_TARGET_TOOLS = new Set(['read_file', 'edit_file', 'patch_file', 'append_file']);
 const DIST_ARTIFACT_RE = /^(?:dist|build|out)\//i;
 const SOURCE_FILE_RE = /^src\/.*\.(ts|tsx|js|jsx)$/i;
 
@@ -63,10 +70,78 @@ export function isDiagnosticAllowedCommand(command: string | undefined): boolean
     || /\btsc\s+--noEmit\b/.test(c);
 }
 
+function extractTargetPath(args: Record<string, unknown>): string | undefined {
+  const raw = args.path ?? args.file_path;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+export function buildMissingFileBlockMessage(
+  toolName: string,
+  filePath: string,
+  attempt: number,
+): string {
+  const repeat = attempt >= 2;
+  const header = repeat
+    ? `[Harness / Missing File — STOP] ${filePath} still does not exist (attempt ${attempt}).`
+    : `[Harness / Missing File] ${filePath} does not exist on disk.`;
+
+  const lines = [
+    header,
+    repeat
+      ? 'Do NOT read_file or patch this path again in this session.'
+      : `Blocked ${toolName}: target file is missing.`,
+    '- Create it with write_file (full file body). Reference an existing file in the same directory as a template.',
+    '- Explore with run_command dir or read_file an existing sibling file.',
+    '- Do NOT patch_file / edit_file / append_file / read_file this missing path.',
+  ];
+  return lines.join('\n');
+}
+
+export function checkMissingFilePreflight(input: {
+  toolName: string;
+  path: string | undefined;
+  workspaceRoot?: string;
+  lockedWorkspaceRoot?: string;
+  missingFileAttempts?: Map<string, number>;
+}): ToolPreflightDecision {
+  const { toolName, path, workspaceRoot, lockedWorkspaceRoot, missingFileAttempts } = input;
+  if (!path || !workspaceRoot || !lockedWorkspaceRoot) {
+    return { blocked: false };
+  }
+  if (!MISSING_FILE_TARGET_TOOLS.has(toolName)) {
+    return { blocked: false };
+  }
+  if (workspaceFileExists(workspaceRoot, path)) {
+    return { blocked: false };
+  }
+
+  const priorAttempts = missingFileAttempts?.get(path) ?? 0;
+  // read_file：首次放行到执行器（mock/真 ENOENT 后再拦）；写类工具直接拦。
+  if (toolName === 'read_file' && priorAttempts === 0) {
+    return { blocked: false };
+  }
+
+  const attempt = priorAttempts + 1;
+  missingFileAttempts?.set(path, attempt);
+
+  return {
+    blocked: true,
+    reason: attempt >= 2 ? 'missing_file_repeat' : 'missing_file',
+    message: buildMissingFileBlockMessage(toolName, path, attempt),
+  };
+}
+
 export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDecision {
-  const path = typeof input.args.path === 'string'
-    ? input.args.path
-    : (typeof input.args.file_path === 'string' ? input.args.file_path : undefined);
+  const path = extractTargetPath(input.args);
+
+  const missing = checkMissingFilePreflight({
+    toolName: input.toolName,
+    path,
+    workspaceRoot: input.workspaceRoot,
+    lockedWorkspaceRoot: input.lockedWorkspaceRoot,
+    missingFileAttempts: input.missingFileAttempts,
+  });
+  if (missing.blocked) return missing;
 
   if (input.toolName === 'read_file' && isDistArtifactPath(path)) {
     const verification = input.taskState?.snapshot().verificationStatus;

@@ -987,6 +987,9 @@ button { cursor: pointer; font-family: inherit; font-size: inherit; }
 .tool-action .tool-icon.error {
   color: var(--danger, #e94560);
 }
+.tool-action .tool-icon.warn {
+  color: #e6a817;
+}
 .tool-action .tool-name {
   font-weight: 600;
   color: var(--text-secondary);

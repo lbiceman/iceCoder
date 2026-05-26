@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { ExecutionModeTelemetryPayload } from '../types/supervisor.js';
+import type { ToolOutcome } from './types.js';
+import type { HarnessPolicyStats } from './harness-policy-stats.js';
 
 export type RuntimeTelemetryEvent =
   | {
@@ -22,6 +24,8 @@ export type RuntimeTelemetryEvent =
       round: number;
       toolName: string;
       success: boolean;
+      outcome?: ToolOutcome;
+      policyReason?: string;
       permission?: string;
       outputLength?: number;
     }
@@ -58,6 +62,7 @@ export type RuntimeTelemetryEvent =
       noToolFinal: boolean;
       tokensPerSuccessfulTask?: number;
       compactionSavedTokens: number;
+      harnessPolicy?: HarnessPolicyStats;
     };
 
 export class RuntimeTelemetry {

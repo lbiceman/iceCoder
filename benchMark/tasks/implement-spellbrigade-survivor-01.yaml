@@ -162,3 +162,15 @@ scoring_hints:
     - 改 test 或 package.json 凑过
     - 无局外商城或金币不持久化
     - E2E 未 build dist 就测
+
+# Harness telemetry（P3）：跑完后读 data/runtime/telemetry.jsonl 的 summary.harnessPolicy
+telemetry:
+  summary_fields:
+    - policyBlockCount
+    - missingFileBlockCount
+    - enoentExecutionCount
+    - rebuildEscalationCount
+    - writeBypassUsedCount
+  tool_event_fields:
+    - outcome   # executed | policy_block | execution_fail
+    - policyReason

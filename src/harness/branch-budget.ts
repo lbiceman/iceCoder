@@ -27,6 +27,7 @@ import type {
 } from '../types/runtime-checkpoint.js';
 import { emptyBranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
+import { workspaceFileExists } from './workspace-path-guard.js';
 
 /** 默认预算上限（与文档 §Example 对齐） */
 export const DEFAULT_BRANCH_BUDGET = {
@@ -219,6 +220,7 @@ export class BranchBudgetTracker {
     args: Record<string, unknown>,
     extractPath: (name: string, a: Record<string, unknown>) => string | undefined,
     extractCommand: (a: Record<string, unknown>) => string | undefined,
+    context?: { workspaceRoot?: string },
   ): BranchToolBlockDecision {
     if (!this.enabled) return { blocked: false };
 
@@ -227,12 +229,23 @@ export class BranchBudgetTracker {
       if (this.writeBypassPaths.delete(path)) {
         return { blocked: false };
       }
+
+      const workspaceRoot = context?.workspaceRoot;
+      if (
+        workspaceRoot
+        && toolName === 'write_file'
+        && !workspaceFileExists(workspaceRoot, path)
+      ) {
+        return { blocked: false };
+      }
+
       const count = this.fileEdits.get(path) ?? 0;
+      const fileExists = workspaceRoot ? workspaceFileExists(workspaceRoot, path) : true;
       return {
         blocked: true,
         dimension: 'file_edit',
         key: path,
-        message: this.buildFileEditBlockMessage(path, count),
+        message: this.buildFileEditBlockMessage(path, count, fileExists),
       };
     }
 
@@ -259,7 +272,15 @@ export class BranchBudgetTracker {
   }
 
   /** UI 若截断「read_file」为「rea」，是展示宽度问题，完整工具名即 read_file。 */
-  buildFileEditBlockMessage(path: string, currentCount: number): string {
+  buildFileEditBlockMessage(path: string, currentCount: number, fileExists = true): string {
+    if (!fileExists) {
+      return [
+        `[BranchBudget / Blocked] 工具未执行：${path} 编辑计数 ${currentCount} 次（上限 ${this.limits.fileEditMax}），但磁盘上不存在该文件（多为 patch 失败仍计次）。`,
+        '用 write_file 写入完整文件以创建；可参考同目录已有文件作模板。',
+        '禁止 read_file / patch_file / edit_file 此路径。若见 [System / Rebuild Escalation]，按其中 write_file 步骤执行。',
+        'Do NOT read or patch a missing path — use write_file (full body) or wait for Rebuild write bypass.',
+      ].join('\n');
+    }
     return [
       `[BranchBudget / Blocked] 工具未执行：${path} 已编辑 ${currentCount} 次（上限 ${this.limits.fileEditMax}）。`,
       '禁止继续修改此文件。必须先 read_file 相关测试 / 设计文档，或改其他路径 / 换工具。',

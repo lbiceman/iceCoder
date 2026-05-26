@@ -59,6 +59,7 @@ import { syncHydratedTaskState } from './resume-task-state.js';
 import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
@@ -471,6 +472,8 @@ export class Harness {
       verificationOutputBuffer: new VerificationOutputBuffer(),
       taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
       consecutiveNoToolRounds: 0,
+      missingFileAttempts: new Map(),
+      harnessPolicyStats: emptyHarnessPolicyStats(),
       checkpointResumeForkApplied: false,
       contextEmergencyCompactUsed: false,
       stepReviewedThisRound: false,

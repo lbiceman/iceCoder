@@ -48,7 +48,7 @@ import {
 } from './supervisor/passive-observer.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
-import { computeRecoveryRoundEffective } from './recovery-round-progress.js';
+import { computeRecoveryRoundEffective, classifyToolRoundProgress } from './recovery-round-progress.js';
 import { buildVerificationDigest, isHarnessVerificationCommand } from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import {
@@ -60,7 +60,7 @@ import {
   applyRebuildEscalationBypasses,
   buildRebuildEscalationMessage,
   collectRebuildEscalationContext,
-  shouldTriggerFileCapRebuild,
+  shouldTriggerAnyFileCapRebuild,
   type RebuildEscalationTrigger,
 } from './rebuild-escalation.js';
 import type {
@@ -156,6 +156,8 @@ export async function runHarnessToolRound(
   state.verificationDigestInjectedThisRound = false;
 
   deps.branchBudget = state.branchBudget;
+  deps.missingFileAttempts = state.missingFileAttempts;
+  deps.harnessPolicyStats = state.harnessPolicyStats;
 
   // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
   //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
@@ -335,7 +337,14 @@ export async function runHarnessToolRound(
     };
   }
 
-  if (toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount) {
+  const roundProgress = classifyToolRoundProgress({
+    executableToolCalls,
+    failedSignatures: toolStats.failedSignatures,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+    branchBudget: state.branchBudget,
+  });
+
+  if (roundProgress === 'all_failed_or_blocked') {
     state.consecutiveToolFailures++;
     // W1: 本轮全失败 → 重置 stable 计数；evaluate 才能正确判定"连续 N 轮稳定"。
     state.stableRoundsSinceLastFailure = 0;
@@ -417,11 +426,13 @@ export async function runHarnessToolRound(
         '[System] All tool calls in the previous round failed. Please check if parameters are correct and try adjusting your approach.',
       );
     }
-  } else {
+  } else if (roundProgress === 'meaningful_progress') {
     state.consecutiveToolFailures = 0;
     state.rebuildEscalationInjected = false;
-    // W1: 本轮非全失败 → 视为稳定一轮（含部分成功 / 无工具）。
     state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
+  } else {
+    // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断/续段永远达不到阈值。
+    state.stableRoundsSinceLastFailure = 0;
   }
 
   let evalForceSwitchTriggered = false;
@@ -520,7 +531,7 @@ export async function runHarnessToolRound(
     }
   }
 
-  const allToolsFailedThisRound = toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount;
+  const allToolsFailedThisRound = roundProgress === 'all_failed_or_blocked';
   if (deps.supervisorBridge?.isActive()) {
     const taskContext = buildTaskContextForObserver(state, branchRecoverDecision?.triggered === true);
     const runtimeRound = {
@@ -562,6 +573,7 @@ export async function runHarnessToolRound(
       recoveryRoundEffective: computeRecoveryRoundEffective({
         executableToolCalls,
         failedSignatures: toolStats.failedSignatures,
+        policyBlockedSignatures: toolStats.policyBlockedSignatures,
         branchBudget: state.branchBudget,
       }),
     });
@@ -700,9 +712,10 @@ function maybeInjectFileCapRebuildEscalation(args: {
   const { state, msgs, correctionPort, deps } = args;
   if (deps.supervisorObserverSuppressInject) return;
 
-  const shouldTrigger = shouldTriggerFileCapRebuild({
+  const shouldTrigger = shouldTriggerAnyFileCapRebuild({
     branchBudget: state.branchBudget,
     verificationStatus: state.taskState.snapshot().verificationStatus,
+    workspaceRoot: deps.workspaceRoot,
     rebuildEscalationInjected: state.rebuildEscalationInjected,
   });
   if (!shouldTrigger) return;
@@ -713,9 +726,13 @@ function maybeInjectFileCapRebuildEscalation(args: {
     msgs,
     correctionPort,
     state.consecutiveToolFailures,
-    'file_cap_verification_failed',
+    shouldTrigger.trigger,
   );
-  console.log('[harness] 文件编辑达上限且验收仍失败，注入整文件重建提示');
+  console.log(
+    shouldTrigger.trigger === 'missing_file_budget_mismatch'
+      ? '[harness] 文件编辑达上限但磁盘无文件，注入整文件创建提示'
+      : '[harness] 文件编辑达上限且验收仍失败，注入整文件重建提示',
+  );
 }
 
 function maybeInjectSegmentRenewalRebuild(args: {
@@ -752,7 +769,12 @@ function injectRebuildEscalation(
   if (state.rebuildEscalationInjected || deps.supervisorObserverSuppressInject) return;
 
   const topFile = topFileEditFromBranchBudget(state.branchBudget);
-  const rebuildCtx = collectRebuildEscalationContext(msgs, topFile, state.verificationOutputBuffer);
+  const rebuildCtx = collectRebuildEscalationContext(
+    msgs,
+    topFile,
+    state.verificationOutputBuffer,
+    deps.workspaceRoot,
+  );
   const bypasses = applyRebuildEscalationBypasses(
     state.branchBudget,
     topFile,
@@ -766,6 +788,7 @@ function injectRebuildEscalation(
     buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }, trigger),
   );
   state.rebuildEscalationInjected = true;
+  state.harnessPolicyStats.rebuildEscalationCount += 1;
   if (trigger === 'consecutive_failures') {
     console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入整文件重建提示`);
   }

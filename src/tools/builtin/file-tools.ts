@@ -27,7 +27,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'read_file',
         description:
-          'Read file content. Returns full text by default. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used. Use immediately when you need to read a file\'s content.',
+          'Read file content. Returns full text by default. Use offset and limit to read a line range (ideal for large files). offset is 1-based start line, limit is max lines to return. Returns numbered lines when offset/limit is used. Use immediately when you need to read a file\'s content. If the file does not exist (ENOENT), use write_file to create it — do not retry read_file on the same missing path.',
         parameters: {
           type: 'object',
           properties: {

@@ -215,6 +215,8 @@ export interface HarnessConfig {
  * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 保留给前端兼容（Phase 13）；
  * 新事件 `task_graph_*` 由 TaskGraph 驱动。
  */
+export type ToolOutcome = 'executed' | 'policy_block' | 'user_denied' | 'execution_fail';
+
 export interface HarnessStepEvent {
   type:
     | 'thinking'
@@ -249,6 +251,8 @@ export interface HarnessStepEvent {
   toolSuccess?: boolean;
   toolOutput?: string;
   toolError?: string;
+  /** 工具结果语义：executed=真执行；policy_block=Harness 策略拦截；user_denied=用户拒绝；execution_fail=执行器失败 */
+  toolOutcome?: ToolOutcome;
   totalToolCalls?: number;
   stopReason?: StopReason;
   /** TaskGraph (Phase 7) */

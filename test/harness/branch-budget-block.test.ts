@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import {
@@ -83,5 +86,39 @@ describe('BranchBudgetTracker - hard block gate', () => {
       extractRunCommand,
     );
     expect(blocked.blocked).toBe(true);
+  });
+
+  it('allows write_file at file cap when path missing on disk', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-budget-'));
+    const t = new BranchBudgetTracker({ fileEditMax: 2 });
+    const path = 'src/scenes/MapSelectScene.ts';
+    t.recordFileEdit(path);
+    t.recordFileEdit(path);
+    const block = t.checkToolBlock(
+      'write_file',
+      { path },
+      extractToolTargetPath,
+      extractRunCommand,
+      { workspaceRoot: root },
+    );
+    expect(block.blocked).toBe(false);
+  });
+
+  it('file edit block message mentions write_file when file missing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-budget-'));
+    const t = new BranchBudgetTracker({ fileEditMax: 2 });
+    const path = 'src/scenes/Missing.ts';
+    t.recordFileEdit(path);
+    t.recordFileEdit(path);
+    const block = t.checkToolBlock(
+      'edit_file',
+      { path },
+      extractToolTargetPath,
+      extractRunCommand,
+      { workspaceRoot: root },
+    );
+    expect(block.blocked).toBe(true);
+    expect(block.message).toMatch(/write_file/);
+    expect(block.message).toMatch(/不存在/);
   });
 });

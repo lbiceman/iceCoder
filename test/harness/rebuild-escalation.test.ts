@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import {
@@ -12,6 +15,8 @@ import {
   collectRebuildEscalationContext,
   parseFailingTestPaths,
   shouldTriggerFileCapRebuild,
+  shouldTriggerMissingFileBudgetRebuild,
+  shouldTriggerAnyFileCapRebuild,
 } from '../../src/harness/rebuild-escalation.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 
@@ -135,10 +140,12 @@ describe('rebuild-escalation', () => {
   });
 
   it('shouldTriggerFileCapRebuild when file cap hit and verification still failed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-rebuild-'));
     const t = new BranchBudgetTracker({ fileEditMax: 3 });
-    t.recordFileEdit('src/game/systems/tasks.ts');
-    t.recordFileEdit('src/game/systems/tasks.ts');
-    t.recordFileEdit('src/game/systems/tasks.ts');
+    const path = 'src/game/systems/tasks.ts';
+    t.recordFileEdit(path);
+    t.recordFileEdit(path);
+    t.recordFileEdit(path);
 
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
@@ -157,6 +164,36 @@ describe('rebuild-escalation', () => {
       verificationStatus: 'failed',
       rebuildEscalationInjected: true,
     })).toBe(false);
+
+    expect(shouldTriggerMissingFileBudgetRebuild({
+      branchBudget: t,
+      workspaceRoot: root,
+      rebuildEscalationInjected: false,
+    })).toBe(true);
+
+    const any = shouldTriggerAnyFileCapRebuild({
+      branchBudget: t,
+      verificationStatus: 'required',
+      workspaceRoot: root,
+      rebuildEscalationInjected: false,
+    });
+    expect(any?.trigger).toBe('missing_file_budget_mismatch');
+  });
+
+  it('buildRebuildEscalationMessage for missing file budget mismatch', () => {
+    const msg = buildRebuildEscalationMessage(2, {
+      topFile: { path: 'src/scenes/MapSelectScene.ts', count: 11 },
+      failingTestPaths: [],
+      verificationDigest: null,
+      lastVerificationCommand: null,
+      recentFailureSnippets: [],
+      writeBypassGranted: true,
+      commandBypassGranted: false,
+      fileMissingOnDisk: true,
+    }, 'missing_file_budget_mismatch');
+    expect(msg).toMatch(/never persisted on disk/);
+    expect(msg).toMatch(/write_file.*create/i);
+    expect(msg).toMatch(/Do NOT.*read_file.*missing path/i);
   });
 
   it('applyRebuildEscalationBypasses grants write and command retry', () => {

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { TaskState } from '../../src/harness/task-state.js';
@@ -11,7 +14,9 @@ import {
   shouldClearBuildDiagnosticGate,
   taskMentionsBlockedVerificationPipeline,
 } from '../../src/harness/harness-tool-preflight.js';
+import { appendVerificationEvidenceToBranchBlock } from '../../src/harness/rebuild-escalation.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
+import type { UnifiedMessage } from '../../src/llm/types.js';
 
 describe('harness-tool-preflight', () => {
   it('blocks read_file on dist when verification failed', () => {
@@ -93,5 +98,87 @@ describe('harness-tool-preflight', () => {
       failedSignatures: [],
       signatureOf: toolCallSignature,
     })).toBe(true);
+  });
+
+  it('blocks repeated read_file when target missing on disk', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-preflight-'));
+    const attempts = new Map<string, number>();
+    attempts.set('src/scenes/MapSelectScene.ts', 1);
+
+    const blocked = checkToolPreflight({
+      toolName: 'read_file',
+      args: { path: 'src/scenes/MapSelectScene.ts' },
+      workspaceRoot: root,
+      lockedWorkspaceRoot: root,
+      missingFileAttempts: attempts,
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toBe('missing_file_repeat');
+    expect(blocked.message).toMatch(/STOP/);
+  });
+
+  it('allows first read_file on missing path (executor may ENOENT once)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-preflight-'));
+    const attempts = new Map<string, number>();
+    const first = checkToolPreflight({
+      toolName: 'read_file',
+      args: { path: 'src/scenes/MapSelectScene.ts' },
+      workspaceRoot: root,
+      lockedWorkspaceRoot: root,
+      missingFileAttempts: attempts,
+    });
+    expect(first.blocked).toBe(false);
+  });
+
+  it('blocks patch_file when target missing on disk', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-preflight-'));
+    const attempts = new Map<string, number>();
+    const decision = checkToolPreflight({
+      toolName: 'patch_file',
+      args: { path: 'src/scenes/MapSelectScene.ts' },
+      workspaceRoot: root,
+      lockedWorkspaceRoot: root,
+      missingFileAttempts: attempts,
+    });
+    expect(decision.blocked).toBe(true);
+    expect(decision.reason).toBe('missing_file');
+    expect(decision.message).toMatch(/write_file/);
+    expect(attempts.get('src/scenes/MapSelectScene.ts')).toBe(1);
+  });
+
+  it('allows read_file when file exists on disk', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-preflight-'));
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'ok.ts'), 'export {}');
+    const decision = checkToolPreflight({
+      toolName: 'read_file',
+      args: { path: 'src/ok.ts' },
+      workspaceRoot: root,
+      lockedWorkspaceRoot: root,
+    });
+    expect(decision.blocked).toBe(false);
+  });
+
+  it('diagnostic gate block can attach verification digest', () => {
+    const messages: UnifiedMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc1', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'tc1',
+        content: '工具执行错误: Command failed (exit code: 1)\n\nFAIL test/unit/tasks.test.ts',
+      },
+    ];
+    const gateMsg = checkToolPreflight({
+      toolName: 'run_command',
+      args: { command: 'npm run build 2>&1' },
+      buildDiagnosticGateActive: true,
+    }).message ?? '';
+    const enriched = appendVerificationEvidenceToBranchBlock(gateMsg, messages);
+    expect(enriched).toContain('[Verification digest]');
+    expect(enriched).toContain('test/unit/tasks.test.ts');
   });
 });

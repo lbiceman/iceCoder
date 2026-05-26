@@ -1493,28 +1493,26 @@ describe('Harness - 连续工具失败熔断', () => {
     )).toBe(true);
   });
 
-  it('工具失败后有成功则重置熔断计数', async () => {
-    const tools = [makeTool('read_file')];
-    let callCount = 0;
-    const mixedHandler = async () => {
-      callCount++;
-      // 前 2 次失败，第 3 次成功
-      if (callCount <= 2) return { success: false, output: '', error: 'fail' } as ToolResult;
-      return { success: true, output: 'ok' } as ToolResult;
+  it('写文件成功后重置熔断计数', async () => {
+    const tools = [makeTool('edit_file')];
+    let fails = 0;
+    const handler = async () => {
+      fails++;
+      if (fails <= 2) return { success: false, output: '', error: 'fail' } as ToolResult;
+      return { success: true, output: 'written' } as ToolResult;
     };
-    const executor = createToolExecutor(tools, mixedHandler);
+    const executor = createToolExecutor(tools, handler);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
     const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),  // fail (1/3)
-      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),  // fail (2/3)
-      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),  // success → reset
-      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),  // fail (1/3 again)
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc3', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc4', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       finalResponse('done'),
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 不应触发熔断，因为第 3 轮成功重置了计数
     expect(result.loopState.stopReason).toBe('model_done');
   });
 

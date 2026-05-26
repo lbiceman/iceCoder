@@ -58,6 +58,7 @@ export function recordTelemetrySummary(
   runtimeState: {
     taskState: TaskState;
     repoContext: RepoContext;
+    harnessPolicyStats?: import('./harness-policy-stats.js').HarnessPolicyStats;
   },
 ): void {
   const loopState = deps.loopController.getState();
@@ -73,5 +74,6 @@ export function recordTelemetrySummary(
     tokensPerSuccessfulTask: stopReason === 'model_done'
       ? loopState.totalInputTokens + loopState.totalOutputTokens
       : undefined,
+    harnessPolicy: runtimeState.harnessPolicyStats,
   });
 }

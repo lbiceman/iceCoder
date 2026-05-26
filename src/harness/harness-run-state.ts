@@ -6,6 +6,7 @@ import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js'
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -97,6 +98,10 @@ export interface HarnessRunState {
   taskAcceptance?: TaskAcceptanceTracker;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
+  /** missing-file preflight：同路径拦截次数 */
+  missingFileAttempts: Map<string, number>;
+  /** Harness 策略拦截 / 恢复统计（telemetry summary） */
+  harnessPolicyStats: HarnessPolicyStats;
   /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
   checkpointResumeForkApplied: boolean;
   /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -43,6 +44,12 @@ export function resolveAgainstWorkspace(rawPath: string, workspaceRoot: string):
   return path.isAbsolute(rawPath)
     ? path.resolve(rawPath)
     : path.resolve(workspaceRoot, rawPath);
+}
+
+/** 目标路径在工作区内是否已存在于磁盘（Harness 事实对齐用）。 */
+export function workspaceFileExists(workspaceRoot: string, rawPath: string | undefined): boolean {
+  if (!rawPath?.trim() || !workspaceRoot.trim()) return false;
+  return existsSync(resolveAgainstWorkspace(rawPath.trim(), workspaceRoot));
 }
 
 function isAllowedReferenceRead(
