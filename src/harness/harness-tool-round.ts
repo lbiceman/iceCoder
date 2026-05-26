@@ -4,6 +4,7 @@ import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint
 import {
   CIRCUIT_BREAKER_THRESHOLD,
   MAX_CONSECUTIVE_TOOL_FAILURES,
+  MAX_REBUILD_ESCALATIONS_PER_RUN,
   REBUILD_ESCALATION_THRESHOLD,
 } from './harness-constants.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
@@ -59,7 +60,9 @@ import {
 import {
   applyRebuildEscalationBypasses,
   buildRebuildEscalationMessage,
+  canInjectRebuildEscalation,
   collectRebuildEscalationContext,
+  shouldInjectParallelBudgetBlockHint,
   shouldTriggerAnyFileCapRebuild,
   type RebuildEscalationTrigger,
 } from './rebuild-escalation.js';
@@ -154,10 +157,12 @@ export async function runHarnessToolRound(
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
   state.verificationDigestInjectedThisRound = false;
+  state.rebuildEscalationInjectedThisRound = false;
 
   deps.branchBudget = state.branchBudget;
   deps.missingFileAttempts = state.missingFileAttempts;
   deps.harnessPolicyStats = state.harnessPolicyStats;
+  state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
 
   // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
   //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
@@ -252,8 +257,22 @@ export async function runHarnessToolRound(
     deps,
     executableToolCalls,
     new Set(toolStats.failedSignatures),
+    new Set(toolStats.policyBlockedSignatures),
     state,
+    deps.workspaceRoot,
   );
+
+  state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
+
+  maybeInjectParallelBudgetBlockHint({
+    state,
+    msgs,
+    correctionPort,
+    deps,
+    executableToolCalls,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+    budgetBlockedFilePaths: toolStats.budgetBlockedFilePaths,
+  });
 
   maybeInjectVerificationDigest({
     state,
@@ -388,7 +407,7 @@ export async function runHarnessToolRound(
       console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入换策略提示`);
     } else if (
       failureCount === REBUILD_ESCALATION_THRESHOLD
-      && !state.rebuildEscalationInjected
+      && state.rebuildEscalationInjections < MAX_REBUILD_ESCALATIONS_PER_RUN
       && !deps.supervisorObserverSuppressInject
     ) {
       injectRebuildEscalation(
@@ -428,7 +447,6 @@ export async function runHarnessToolRound(
     }
   } else if (roundProgress === 'meaningful_progress') {
     state.consecutiveToolFailures = 0;
-    state.rebuildEscalationInjected = false;
     state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
   } else {
     // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断/续段永远达不到阈值。
@@ -584,7 +602,6 @@ export async function runHarnessToolRound(
     const segmentRenewal = deps.supervisorBridge.consumePendingSegmentRenewal();
     if (segmentRenewal) {
       state.segmentRenewalCount = deps.supervisorBridge.getSegmentRenewalCount();
-      state.rebuildEscalationInjected = false;
       state.branchBudget?.resetCommandRetriesForVerificationCommands();
       state.buildDiagnosticGateActive = false;
       maybeInjectSegmentRenewalRebuild({
@@ -716,7 +733,7 @@ function maybeInjectFileCapRebuildEscalation(args: {
     branchBudget: state.branchBudget,
     verificationStatus: state.taskState.snapshot().verificationStatus,
     workspaceRoot: deps.workspaceRoot,
-    rebuildEscalationInjected: state.rebuildEscalationInjected,
+    rebuildEscalationInjections: state.rebuildEscalationInjections,
   });
   if (!shouldTrigger) return;
 
@@ -766,7 +783,11 @@ function injectRebuildEscalation(
   failureCount: number,
   trigger: RebuildEscalationTrigger,
 ): void {
-  if (state.rebuildEscalationInjected || deps.supervisorObserverSuppressInject) return;
+  if (!canInjectRebuildEscalation({
+    rebuildEscalationInjections: state.rebuildEscalationInjections,
+    rebuildEscalationInjectedThisRound: state.rebuildEscalationInjectedThisRound,
+    suppressInject: deps.supervisorObserverSuppressInject,
+  })) return;
 
   const topFile = topFileEditFromBranchBudget(state.branchBudget);
   const rebuildCtx = collectRebuildEscalationContext(
@@ -779,6 +800,9 @@ function injectRebuildEscalation(
     state.branchBudget,
     topFile,
     rebuildCtx.lastVerificationCommand,
+    msgs,
+    state.verificationOutputBuffer,
+    deps.workspaceRoot,
   );
   injectRecoveryMessage(
     deps,
@@ -787,11 +811,62 @@ function injectRebuildEscalation(
     correctionPort,
     buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }, trigger),
   );
-  state.rebuildEscalationInjected = true;
+  state.rebuildEscalationInjections += 1;
+  state.rebuildEscalationInjectedThisRound = true;
   state.harnessPolicyStats.rebuildEscalationCount += 1;
   if (trigger === 'consecutive_failures') {
     console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入整文件重建提示`);
   }
+}
+
+function maybeInjectParallelBudgetBlockHint(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+  executableToolCalls: import('../llm/types.js').ToolCall[];
+  policyBlockedSignatures: string[];
+  budgetBlockedFilePaths: string[];
+}): void {
+  const {
+    state,
+    msgs,
+    correctionPort,
+    deps,
+    executableToolCalls,
+    policyBlockedSignatures,
+    budgetBlockedFilePaths,
+  } = args;
+
+  const blocked = new Set(policyBlockedSignatures);
+  const blockedWriteTools = executableToolCalls.filter(tc =>
+    blocked.has(toolCallSignature(tc))
+    && /^(write_file|edit_file|append_file|patch_file|batch_edit_file)$/.test(tc.name),
+  );
+
+  if (!shouldInjectParallelBudgetBlockHint({
+    parallelBudgetBlockHintInjected: state.parallelBudgetBlockHintInjected,
+    budgetBlockedFilePathCount: budgetBlockedFilePaths.length,
+    blockedWriteToolCount: blockedWriteTools.length,
+    suppressInject: deps.supervisorObserverSuppressInject,
+  })) return;
+
+  const paths = budgetBlockedFilePaths.slice(0, 6);
+  injectRecoveryMessage(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    [
+      '[System / BranchBudget] Multiple write/edit tools were blocked in one round (file edit cap).',
+      `Blocked paths: ${paths.map(p => `\`${p}\``).join(', ')}.`,
+      'Do NOT retry all capped files in parallel. Pick ONE path per round:',
+      '1. read failing test / build output first',
+      '2. If [Rebuild Escalation] granted write bypass, use write_file on ONE bypass path only',
+      '3. Re-run verification before touching the next capped file',
+    ].join('\n'),
+  );
+  state.parallelBudgetBlockHintInjected = true;
 }
 
 function maybeInjectVerificationDigest(args: {

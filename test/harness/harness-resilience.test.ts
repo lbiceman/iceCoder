@@ -95,9 +95,66 @@ describe('harness resilience correction routing - Batch 5', () => {
       },
       [tc],
       new Set(),
+      new Set([toolCallSignature(tc)]),
       state,
     );
 
     expect(branchBudget.inspect().commandRetries['npm run build 2>&1']).toBe(2);
+  });
+
+  it('does not increment file edit budget for policy-blocked write_file', async () => {
+    const branchBudget = new BranchBudgetTracker({ fileEditMax: 3 });
+    branchBudget.recordFileEdit('src/a.ts');
+    branchBudget.recordFileEdit('src/a.ts');
+    const tc: ToolCall = {
+      id: 'tc-write',
+      name: 'write_file',
+      arguments: { path: 'src/a.ts', content: 'x' },
+    };
+    const state = stateWithBranchBudget(branchBudget);
+
+    await resilienceRecordToolCalls(
+      {
+        resilienceV2Enabled: true,
+        checkpointEngine: {
+          save: async () => undefined,
+          shouldPersistOnTrigger: () => false,
+        } as never,
+        enqueueCheckpointPersist: async task => task(),
+      },
+      [tc],
+      new Set(),
+      new Set([toolCallSignature(tc)]),
+      state,
+    );
+
+    expect(branchBudget.inspect().fileEdits['src/a.ts']).toBe(2);
+  });
+
+  it('increments file edit budget only when write_file actually succeeded', async () => {
+    const branchBudget = new BranchBudgetTracker({ fileEditMax: 3 });
+    const tc: ToolCall = {
+      id: 'tc-write',
+      name: 'write_file',
+      arguments: { path: 'src/a.ts', content: 'x' },
+    };
+    const state = stateWithBranchBudget(branchBudget);
+
+    await resilienceRecordToolCalls(
+      {
+        resilienceV2Enabled: true,
+        checkpointEngine: {
+          save: async () => undefined,
+          shouldPersistOnTrigger: () => false,
+        } as never,
+        enqueueCheckpointPersist: async task => task(),
+      },
+      [tc],
+      new Set(),
+      new Set(),
+      state,
+    );
+
+    expect(branchBudget.inspect().fileEdits['src/a.ts']).toBe(1);
   });
 });

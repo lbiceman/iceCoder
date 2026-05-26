@@ -178,6 +178,29 @@ describe('CheckpointEngine - save', () => {
     const loaded = await engine.loadV2();
     expect(loaded?.verificationOutputTail).toEqual(tail);
   });
+
+  it('persists rebuild escalation counters and branch bypass paths', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+    const budget = new BranchBudgetTracker({ fileEditMax: 2 });
+    budget.recordFileEdit('src/a.ts');
+    budget.recordFileEdit('src/a.ts');
+    budget.grantWriteBypass('src/a.ts');
+
+    await engine.save({
+      trigger: 'verification_failed',
+      branchBudget: budget,
+      rebuildEscalationInjections: 2,
+      parallelBudgetBlockHintInjected: true,
+    });
+
+    const loaded = await engine.loadV2();
+    expect(loaded?.rebuildEscalationInjections).toBe(2);
+    expect(loaded?.parallelBudgetBlockHintInjected).toBe(true);
+    expect(loaded?.branchBudget.writeBypassPaths).toEqual(['src/a.ts']);
+
+    const restored = BranchBudgetTracker.fromSnapshot(loaded!.branchBudget);
+    expect(restored.wouldBlockFileEdit('src/a.ts')).toBe(false);
+  });
 });
 
 describe('CheckpointEngine - restore', () => {

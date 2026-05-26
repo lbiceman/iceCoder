@@ -68,6 +68,10 @@ export interface BranchBudgetSnapshot {
   errorRepeats: Record<string, number>;
   /** 已触发过的 recover 信号（计数，用于"分支耗尽后切策略仍失败"时不再重复) */
   recoverTriggers: number;
+  /** 待消费的 write_file 豁免路径（canonical POSIX 相对路径） */
+  writeBypassPaths?: string[];
+  /** 待消费的验收命令重试豁免（规范化命令） */
+  commandRetryBypassKeys?: string[];
 }
 
 /**
@@ -175,6 +179,10 @@ export interface RuntimeCheckpointV2 {
   verificationOutputTail?: VerificationOutputTailEntry[];
   /** 长跑任务多命令验收进度 */
   acceptanceGate?: AcceptanceGateSnapshot;
+  /** Rebuild Escalation 已注入次数（跨 checkpoint 延续） */
+  rebuildEscalationInjections?: number;
+  /** 并行 BranchBudget 拦截指引是否已注入（每 run 一次） */
+  parallelBudgetBlockHintInjected?: boolean;
 }
 
 /** Checkpoint 触发器类型 — 与 docs/长时间连续工作.md §Save Trigger 对齐 */

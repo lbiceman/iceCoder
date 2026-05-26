@@ -1,5 +1,6 @@
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
+import { MAX_REBUILD_ESCALATIONS_PER_RUN } from './harness-constants.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { topFileEditFromInspect } from './supervisor/passive-observer.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
@@ -19,6 +20,8 @@ export interface RebuildEscalationContext {
   lastVerificationCommand: string | null;
   recentFailureSnippets: string[];
   writeBypassGranted: boolean;
+  /** 批量授予 write bypass 的路径（canonical） */
+  writeBypassPaths: string[];
   commandBypassGranted: boolean;
   /** 卡点文件在 workspace 磁盘上不存在（Budget 计数与事实脱节）。 */
   fileMissingOnDisk?: boolean;
@@ -146,13 +149,51 @@ export function appendVerificationEvidenceToBranchBlock(
   return parts.join('\n');
 }
 
+function rebuildEscalationBudgetExhausted(
+  injections: number,
+  maxPerRun = MAX_REBUILD_ESCALATIONS_PER_RUN,
+): boolean {
+  return injections >= maxPerRun;
+}
+
+/** P1：同轮 / 配额内是否允许注入 Rebuild Escalation。 */
+export function canInjectRebuildEscalation(args: {
+  rebuildEscalationInjections: number;
+  rebuildEscalationInjectedThisRound: boolean;
+  maxRebuildEscalationsPerRun?: number;
+  suppressInject?: boolean;
+}): boolean {
+  if (args.suppressInject) return false;
+  if (args.rebuildEscalationInjectedThisRound) return false;
+  return !rebuildEscalationBudgetExhausted(
+    args.rebuildEscalationInjections,
+    args.maxRebuildEscalationsPerRun,
+  );
+}
+
+/** P2：并行 BranchBudget 拦截指引是否应注入（每 run 一次）。 */
+export function shouldInjectParallelBudgetBlockHint(args: {
+  parallelBudgetBlockHintInjected: boolean;
+  budgetBlockedFilePathCount: number;
+  blockedWriteToolCount: number;
+  suppressInject?: boolean;
+}): boolean {
+  if (args.suppressInject) return false;
+  if (args.parallelBudgetBlockHintInjected) return false;
+  return args.budgetBlockedFilePathCount >= 2 && args.blockedWriteToolCount >= 2;
+}
+
 /** 同一实现文件达 BranchBudget 上限且验收仍失败 → 触发 rebuild（不依赖连续全失败轮次）。 */
 export function shouldTriggerFileCapRebuild(args: {
   branchBudget?: BranchBudgetTracker;
   verificationStatus: string;
-  rebuildEscalationInjected: boolean;
+  rebuildEscalationInjections: number;
+  maxRebuildEscalationsPerRun?: number;
 }): boolean {
-  if (args.rebuildEscalationInjected || !args.branchBudget) return false;
+  if (rebuildEscalationBudgetExhausted(
+    args.rebuildEscalationInjections,
+    args.maxRebuildEscalationsPerRun,
+  ) || !args.branchBudget) return false;
   if (args.verificationStatus !== 'failed') return false;
 
   const topFile = topFileEditFromInspect(args.branchBudget.inspect().fileEdits);
@@ -164,9 +205,17 @@ export function shouldTriggerFileCapRebuild(args: {
 export function shouldTriggerMissingFileBudgetRebuild(args: {
   branchBudget?: BranchBudgetTracker;
   workspaceRoot?: string;
-  rebuildEscalationInjected: boolean;
+  rebuildEscalationInjections: number;
+  maxRebuildEscalationsPerRun?: number;
 }): boolean {
-  if (args.rebuildEscalationInjected || !args.branchBudget || !args.workspaceRoot) return false;
+  if (
+    rebuildEscalationBudgetExhausted(
+      args.rebuildEscalationInjections,
+      args.maxRebuildEscalationsPerRun,
+    )
+    || !args.branchBudget
+    || !args.workspaceRoot
+  ) return false;
 
   const topFile = topFileEditFromInspect(args.branchBudget.inspect().fileEdits);
   if (!topFile) return false;
@@ -178,9 +227,16 @@ export function shouldTriggerAnyFileCapRebuild(args: {
   branchBudget?: BranchBudgetTracker;
   verificationStatus: string;
   workspaceRoot?: string;
-  rebuildEscalationInjected: boolean;
+  rebuildEscalationInjections: number;
+  maxRebuildEscalationsPerRun?: number;
 }): { trigger: RebuildEscalationTrigger; topFile?: { path: string; count: number } } | null {
-  if (args.rebuildEscalationInjected || !args.branchBudget) return null;
+  if (
+    rebuildEscalationBudgetExhausted(
+      args.rebuildEscalationInjections,
+      args.maxRebuildEscalationsPerRun,
+    )
+    || !args.branchBudget
+  ) return null;
 
   const topFile = topFileEditFromInspect(args.branchBudget.inspect().fileEdits);
   if (!topFile || !args.branchBudget.wouldBlockFileEdit(topFile.path)) return null;
@@ -226,18 +282,65 @@ export function collectRebuildEscalationContext(
   };
 }
 
-/** 授予一次 write / 验收命令重试豁免（第 5 轮 rebuild 专用）。 */
+const REBUILD_BYPASS_PATH_CAP = 4;
+
+/** 从 Budget 计数与最近验收输出收集需 write bypass 的实现路径（不含 test/）。 */
+export function collectRebuildBypassPaths(args: {
+  branchBudget: BranchBudgetTracker;
+  topFile?: { path: string; count: number };
+  messages: UnifiedMessage[];
+  buffer?: VerificationOutputBuffer;
+  maxPaths?: number;
+}): string[] {
+  const max = args.maxPaths ?? REBUILD_BYPASS_PATH_CAP;
+  const paths = new Set<string>();
+
+  if (args.topFile && args.branchBudget.wouldBlockFileEdit(args.topFile.path)) {
+    paths.add(args.topFile.path);
+  }
+
+  for (const p of Object.keys(args.branchBudget.inspect().fileEdits)) {
+    if (args.branchBudget.wouldBlockFileEdit(p)) paths.add(p);
+  }
+
+  const verification = findLastFailedVerification(args.messages, args.buffer);
+  if (verification?.outputBody) {
+    const fromBuild = parseBuildErrorSourcePaths(verification.outputBody);
+    const fromTests = parseFailingTestPaths(verification.outputBody);
+    for (const p of [...fromBuild, ...fromTests]) {
+      if (p.includes('.test.') || p.startsWith('test/')) continue;
+      if (args.branchBudget.wouldBlockFileEdit(p)) paths.add(p);
+    }
+  }
+
+  return [...paths].slice(0, max);
+}
+
+/** 授予 write / 验收命令重试豁免（验收失败时可批量 grant，默认最多 4 路径）。 */
 export function applyRebuildEscalationBypasses(
   branchBudget: BranchBudgetTracker | undefined,
   topFile: { path: string; count: number } | undefined,
   lastVerificationCommand: string | null,
-): Pick<RebuildEscalationContext, 'writeBypassGranted' | 'commandBypassGranted'> {
-  let writeBypassGranted = false;
+  messages?: UnifiedMessage[],
+  buffer?: VerificationOutputBuffer,
+  workspaceRoot?: string,
+): Pick<RebuildEscalationContext, 'writeBypassGranted' | 'writeBypassPaths' | 'commandBypassGranted'> {
+  let writeBypassPaths: string[] = [];
   let commandBypassGranted = false;
 
-  if (branchBudget && topFile) {
-    branchBudget.grantWriteBypass(topFile.path);
-    writeBypassGranted = true;
+  if (branchBudget) {
+    branchBudget.bindWorkspaceRoot(workspaceRoot);
+    const candidates = messages
+      ? collectRebuildBypassPaths({
+        branchBudget,
+        topFile,
+        messages,
+        buffer,
+      })
+      : topFile && branchBudget.wouldBlockFileEdit(topFile.path)
+      ? [topFile.path]
+      : [];
+    writeBypassPaths = branchBudget.grantWriteBypassMany(candidates);
   }
 
   if (branchBudget && lastVerificationCommand && branchBudget.wouldBlockCommandRetry(lastVerificationCommand)) {
@@ -245,7 +348,11 @@ export function applyRebuildEscalationBypasses(
     commandBypassGranted = true;
   }
 
-  return { writeBypassGranted, commandBypassGranted };
+  return {
+    writeBypassGranted: writeBypassPaths.length > 0,
+    writeBypassPaths,
+    commandBypassGranted,
+  };
 }
 
 export function buildRebuildEscalationMessage(
@@ -280,8 +387,15 @@ export function buildRebuildEscalationMessage(
     ];
 
   const platformActions: string[] = [];
-  if (ctx.writeBypassGranted && implPath) {
-    platformActions.push(`one \`write_file\` to \`${implPath}\` allowed despite BranchBudget file cap`);
+  const bypassPaths = ctx.writeBypassPaths.length > 0
+    ? ctx.writeBypassPaths
+    : (ctx.writeBypassGranted && implPath ? [implPath] : []);
+  if (bypassPaths.length === 1) {
+    platformActions.push(`one \`write_file\` to \`${bypassPaths[0]}\` allowed despite BranchBudget file cap`);
+  } else if (bypassPaths.length > 1) {
+    platformActions.push(
+      `one \`write_file\` each allowed despite BranchBudget file cap: ${bypassPaths.map(p => `\`${p}\``).join(', ')}`,
+    );
   }
   if (ctx.commandBypassGranted && ctx.lastVerificationCommand) {
     const short = ctx.lastVerificationCommand.length > 100

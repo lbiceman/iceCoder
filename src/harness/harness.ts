@@ -465,7 +465,9 @@ export class Harness {
       branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
       branchBudgetWarnedThisRound: false,
       verificationDigestInjectedThisRound: false,
-      rebuildEscalationInjected: false,
+      rebuildEscalationInjections: 0,
+      rebuildEscalationInjectedThisRound: false,
+      parallelBudgetBlockHintInjected: false,
       segmentRenewalCount: 0,
       sessionGoalAnchor,
       buildDiagnosticGateActive: false,
@@ -504,6 +506,8 @@ export class Harness {
         const v2 = await this.checkpointEngine.loadV2();
         if (v2) {
           state.branchBudget?.applySnapshot(v2.branchBudget);
+          state.rebuildEscalationInjections = v2.rebuildEscalationInjections ?? 0;
+          state.parallelBudgetBlockHintInjected = v2.parallelBudgetBlockHintInjected ?? false;
           // W8: 恢复 supervisor 历史承载位（observability only），
           //     真正的 enter forced 仍由下方 checkpoint_resumed signal 驱动 ModeDecisionEngine 裁决；
           //     这样既能保留 enteredBy / forcedDegradedTier 等历史，又不绕过 I5 单写约束。

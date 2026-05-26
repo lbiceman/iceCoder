@@ -28,6 +28,11 @@ import type {
 import { emptyBranchBudgetSnapshot } from '../types/runtime-checkpoint.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
+import {
+  canonicalBudgetPath,
+  mergeBudgetPathMap,
+  mergeBudgetPathSet,
+} from './branch-budget-path.js';
 
 /** 默认预算上限（与文档 §Example 对齐） */
 export const DEFAULT_BRANCH_BUDGET = {
@@ -95,6 +100,7 @@ export class BranchBudgetTracker {
   private commandRetryBypassKeys = new Set<string>();
   private enabled = true;
   private readonly limits: BranchBudgetLimits;
+  private budgetWorkspaceRoot?: string;
 
   /**
    * @param limits 可选自定义上限；默认使用 DEFAULT_BRANCH_BUDGET。
@@ -107,6 +113,20 @@ export class BranchBudgetTracker {
     };
   }
 
+  /** 绑定 workspace 并合并绝对/相对路径下的重复计数。 */
+  bindWorkspaceRoot(workspaceRoot: string | undefined): void {
+    if (!workspaceRoot?.trim()) return;
+    const root = workspaceRoot.trim();
+    if (this.budgetWorkspaceRoot === root) return;
+    this.budgetWorkspaceRoot = root;
+    this.fileEdits = mergeBudgetPathMap(this.fileEdits, root);
+    this.writeBypassPaths = mergeBudgetPathSet(this.writeBypassPaths, root);
+  }
+
+  private budgetKey(rawPath: string | undefined | null): string | undefined {
+    return canonicalBudgetPath(this.budgetWorkspaceRoot, rawPath);
+  }
+
   // ─── 记录维度 ───
 
   /**
@@ -116,9 +136,10 @@ export class BranchBudgetTracker {
    */
   recordFileEdit(path: string | undefined | null): number {
     if (!this.enabled) return 0;
-    if (!path) return 0;
-    const next = (this.fileEdits.get(path) ?? 0) + 1;
-    this.fileEdits.set(path, next);
+    const key = this.budgetKey(path);
+    if (!key) return 0;
+    const next = (this.fileEdits.get(key) ?? 0) + 1;
+    this.fileEdits.set(key, next);
     return next;
   }
 
@@ -168,8 +189,10 @@ export class BranchBudgetTracker {
    */
   wouldBlockFileEdit(path: string | undefined | null): boolean {
     if (!this.enabled || !path) return false;
-    if (this.writeBypassPaths.has(path)) return false;
-    return (this.fileEdits.get(path) ?? 0) >= this.limits.fileEditMax;
+    const key = this.budgetKey(path);
+    if (!key) return false;
+    if (this.writeBypassPaths.has(key)) return false;
+    return (this.fileEdits.get(key) ?? 0) >= this.limits.fileEditMax;
   }
 
   /**
@@ -177,13 +200,27 @@ export class BranchBudgetTracker {
    * 仅在下次对该路径的写工具通过 checkToolBlock 时消费。
    */
   grantWriteBypass(path: string | undefined | null): void {
-    if (!path) return;
-    this.writeBypassPaths.add(path);
+    const key = this.budgetKey(path);
+    if (!key) return;
+    this.writeBypassPaths.add(key);
+  }
+
+  /** 验收失败等多文件卡死时批量授予一次 write 机会（每路径各一次）。 */
+  grantWriteBypassMany(paths: Iterable<string | undefined | null>): string[] {
+    const granted: string[] = [];
+    for (const raw of paths) {
+      const key = this.budgetKey(raw);
+      if (!key || !this.wouldBlockFileEdit(raw)) continue;
+      this.writeBypassPaths.add(key);
+      granted.push(key);
+    }
+    return granted;
   }
 
   /** 测试 / 诊断：是否仍持有未消费的 write 豁免 */
   hasWriteBypass(path: string): boolean {
-    return this.writeBypassPaths.has(path);
+    const key = this.budgetKey(path) ?? path.replace(/\\/g, '/');
+    return this.writeBypassPaths.has(key);
   }
 
   /**
@@ -225,27 +262,32 @@ export class BranchBudgetTracker {
     if (!this.enabled) return { blocked: false };
 
     const path = extractPath(toolName, args);
-    if (path && (this.fileEdits.get(path) ?? 0) >= this.limits.fileEditMax) {
-      if (this.writeBypassPaths.delete(path)) {
+    const key = path ? this.budgetKey(path) : undefined;
+    if (key && (this.fileEdits.get(key) ?? 0) >= this.limits.fileEditMax) {
+      if (this.writeBypassPaths.delete(key)) {
         return { blocked: false };
       }
 
-      const workspaceRoot = context?.workspaceRoot;
+      const workspaceRoot = context?.workspaceRoot ?? this.budgetWorkspaceRoot;
       if (
         workspaceRoot
         && toolName === 'write_file'
+        && path
         && !workspaceFileExists(workspaceRoot, path)
       ) {
         return { blocked: false };
       }
 
-      const count = this.fileEdits.get(path) ?? 0;
-      const fileExists = workspaceRoot ? workspaceFileExists(workspaceRoot, path) : true;
+      const count = this.fileEdits.get(key) ?? 0;
+      const fileExists = workspaceRoot && path
+        ? workspaceFileExists(workspaceRoot, path)
+        : true;
+      const pendingBypass = this.writeBypassPaths.has(key);
       return {
         blocked: true,
         dimension: 'file_edit',
-        key: path,
-        message: this.buildFileEditBlockMessage(path, count, fileExists),
+        key,
+        message: this.buildFileEditBlockMessage(key, count, fileExists, pendingBypass),
       };
     }
 
@@ -272,7 +314,12 @@ export class BranchBudgetTracker {
   }
 
   /** UI 若截断「read_file」为「rea」，是展示宽度问题，完整工具名即 read_file。 */
-  buildFileEditBlockMessage(path: string, currentCount: number, fileExists = true): string {
+  buildFileEditBlockMessage(
+    path: string,
+    currentCount: number,
+    fileExists = true,
+    pendingBypass = false,
+  ): string {
     if (!fileExists) {
       return [
         `[BranchBudget / Blocked] 工具未执行：${path} 编辑计数 ${currentCount} 次（上限 ${this.limits.fileEditMax}），但磁盘上不存在该文件（多为 patch 失败仍计次）。`,
@@ -281,9 +328,15 @@ export class BranchBudgetTracker {
         'Do NOT read or patch a missing path — use write_file (full body) or wait for Rebuild write bypass.',
       ].join('\n');
     }
+
+    const bypassHint = pendingBypass
+      ? 'Platform has granted one pending write_file bypass for this path — your NEXT write_file to this path will be allowed once.'
+      : 'Rebuild write bypass already used or not granted — do NOT retry write/edit/patch on this path until verification passes or a new [Rebuild Escalation] grants bypass.';
+
     return [
       `[BranchBudget / Blocked] 工具未执行：${path} 已编辑 ${currentCount} 次（上限 ${this.limits.fileEditMax}）。`,
-      '禁止继续修改此文件。必须先 read_file 相关测试 / 设计文档，或改其他路径 / 换工具。',
+      bypassHint,
+      'Read failing e2e/test output first; fix only what verification requires. Do not bulk-rewrite capped scene files without bypass.',
       'Do not rewrite this file again until you have read the failing test and documented expected vs actual behavior.',
     ].join('\n');
   }
@@ -427,6 +480,12 @@ export class BranchBudgetTracker {
       commandRetries: Object.fromEntries(this.commandRetries),
       errorRepeats: Object.fromEntries(this.errorRepeats),
       recoverTriggers: this.recoverTriggers,
+      writeBypassPaths: this.writeBypassPaths.size > 0
+        ? [...this.writeBypassPaths]
+        : undefined,
+      commandRetryBypassKeys: this.commandRetryBypassKeys.size > 0
+        ? [...this.commandRetryBypassKeys]
+        : undefined,
     };
   }
 
@@ -436,6 +495,12 @@ export class BranchBudgetTracker {
     this.commandRetries = new Map(Object.entries(s.commandRetries ?? {}));
     this.errorRepeats = new Map(Object.entries(s.errorRepeats ?? {}));
     this.recoverTriggers = s.recoverTriggers ?? 0;
+    this.writeBypassPaths = new Set(s.writeBypassPaths ?? []);
+    this.commandRetryBypassKeys = new Set(s.commandRetryBypassKeys ?? []);
+    if (this.budgetWorkspaceRoot) {
+      this.fileEdits = mergeBudgetPathMap(this.fileEdits, this.budgetWorkspaceRoot);
+      this.writeBypassPaths = mergeBudgetPathSet(this.writeBypassPaths, this.budgetWorkspaceRoot);
+    }
   }
 
   static fromSnapshot(

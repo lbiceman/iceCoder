@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -102,6 +102,25 @@ describe('BranchBudgetTracker - hard block gate', () => {
       { workspaceRoot: root },
     );
     expect(block.blocked).toBe(false);
+  });
+
+  it('file edit block message mentions bypass state when file exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ice-budget-'));
+    const t = new BranchBudgetTracker({ fileEditMax: 2 });
+    const path = 'src/scenes/Existing.ts';
+    mkdirSync(join(root, 'src', 'scenes'), { recursive: true });
+    writeFileSync(join(root, path.replace(/\//g, '\\')), 'export {};\n');
+    t.recordFileEdit(path);
+    t.recordFileEdit(path);
+    const block = t.checkToolBlock(
+      'write_file',
+      { path },
+      extractToolTargetPath,
+      extractRunCommand,
+      { workspaceRoot: root },
+    );
+    expect(block.blocked).toBe(true);
+    expect(block.message).toMatch(/Rebuild write bypass already used or not granted/);
   });
 
   it('file edit block message mentions write_file when file missing', () => {

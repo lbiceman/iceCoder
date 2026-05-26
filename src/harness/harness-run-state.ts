@@ -84,8 +84,12 @@ export interface HarnessRunState {
   branchBudgetWarnedThisRound: boolean;
   /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
   verificationDigestInjectedThisRound: boolean;
-  /** 连续失败达 REBUILD_ESCALATION_THRESHOLD 后是否已注入整文件重建提示（成功轮次会重置） */
-  rebuildEscalationInjected: boolean;
+  /** 连续失败达 REBUILD_ESCALATION_THRESHOLD 后注入整文件重建提示的次数（每 run 上限见 harness-constants）。 */
+  rebuildEscalationInjections: number;
+  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / 连续失败去重） */
+  rebuildEscalationInjectedThisRound: boolean;
+  /** 本 run 是否已注入并行 BranchBudget 拦截指引（每 run 一次） */
+  parallelBudgetBlockHintInjected: boolean;
   /** Segment Renewal：本 run 内已续段次数（与 supervisor bridge 同步） */
   segmentRenewalCount: number;
   /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */

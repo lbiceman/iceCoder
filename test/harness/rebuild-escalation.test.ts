@@ -12,13 +12,54 @@ import {
   applyRebuildEscalationBypasses,
   appendVerificationEvidenceToBranchBlock,
   buildRebuildEscalationMessage,
+  canInjectRebuildEscalation,
   collectRebuildEscalationContext,
   parseFailingTestPaths,
   shouldTriggerFileCapRebuild,
   shouldTriggerMissingFileBudgetRebuild,
   shouldTriggerAnyFileCapRebuild,
+  shouldInjectParallelBudgetBlockHint,
 } from '../../src/harness/rebuild-escalation.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
+
+describe('rebuild-escalation guards (P1/P2)', () => {
+  it('canInjectRebuildEscalation blocks same-round second injection', () => {
+    expect(canInjectRebuildEscalation({
+      rebuildEscalationInjections: 0,
+      rebuildEscalationInjectedThisRound: false,
+    })).toBe(true);
+
+    expect(canInjectRebuildEscalation({
+      rebuildEscalationInjections: 0,
+      rebuildEscalationInjectedThisRound: true,
+    })).toBe(false);
+
+    expect(canInjectRebuildEscalation({
+      rebuildEscalationInjections: 3,
+      rebuildEscalationInjectedThisRound: false,
+    })).toBe(false);
+  });
+
+  it('shouldInjectParallelBudgetBlockHint fires once per run semantics', () => {
+    expect(shouldInjectParallelBudgetBlockHint({
+      parallelBudgetBlockHintInjected: false,
+      budgetBlockedFilePathCount: 3,
+      blockedWriteToolCount: 3,
+    })).toBe(true);
+
+    expect(shouldInjectParallelBudgetBlockHint({
+      parallelBudgetBlockHintInjected: true,
+      budgetBlockedFilePathCount: 3,
+      blockedWriteToolCount: 3,
+    })).toBe(false);
+
+    expect(shouldInjectParallelBudgetBlockHint({
+      parallelBudgetBlockHintInjected: false,
+      budgetBlockedFilePathCount: 1,
+      blockedWriteToolCount: 2,
+    })).toBe(false);
+  });
+});
 
 describe('rebuild-escalation', () => {
   it('parseFailingTestPaths extracts vitest FAIL lines', () => {
@@ -56,6 +97,7 @@ describe('rebuild-escalation', () => {
       lastVerificationCommand: 'npm test',
       recentFailureSnippets: ['工具执行错误: Command failed (exit code: 1)'],
       writeBypassGranted: true,
+      writeBypassPaths: ['src/game/systems/tasks.ts'],
       commandBypassGranted: true,
     });
     expect(msg).toContain('Mandatory workflow');
@@ -74,6 +116,7 @@ describe('rebuild-escalation', () => {
       lastVerificationCommand: 'npm test',
       recentFailureSnippets: [],
       writeBypassGranted: true,
+      writeBypassPaths: ['src/game/systems/tasks.ts'],
       commandBypassGranted: false,
     }, 'file_cap_verification_failed');
     expect(msg).toMatch(/BranchBudget file cap reached/);
@@ -88,6 +131,7 @@ describe('rebuild-escalation', () => {
       lastVerificationCommand: 'npm test',
       recentFailureSnippets: [],
       writeBypassGranted: false,
+      writeBypassPaths: [],
       commandBypassGranted: false,
     }, 'segment_renewal_budget');
     expect(msg).toMatch(/Recovery budget segment exhausted \(segment #3\)/);
@@ -150,32 +194,32 @@ describe('rebuild-escalation', () => {
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
       verificationStatus: 'failed',
-      rebuildEscalationInjected: false,
+      rebuildEscalationInjections: 0,
     })).toBe(true);
 
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
       verificationStatus: 'passed',
-      rebuildEscalationInjected: false,
+      rebuildEscalationInjections: 0,
     })).toBe(false);
 
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
       verificationStatus: 'failed',
-      rebuildEscalationInjected: true,
+      rebuildEscalationInjections: 3,
     })).toBe(false);
 
     expect(shouldTriggerMissingFileBudgetRebuild({
       branchBudget: t,
       workspaceRoot: root,
-      rebuildEscalationInjected: false,
+      rebuildEscalationInjections: 0,
     })).toBe(true);
 
     const any = shouldTriggerAnyFileCapRebuild({
       branchBudget: t,
       verificationStatus: 'required',
       workspaceRoot: root,
-      rebuildEscalationInjected: false,
+      rebuildEscalationInjections: 0,
     });
     expect(any?.trigger).toBe('missing_file_budget_mismatch');
   });
@@ -188,6 +232,7 @@ describe('rebuild-escalation', () => {
       lastVerificationCommand: null,
       recentFailureSnippets: [],
       writeBypassGranted: true,
+      writeBypassPaths: ['src/scenes/MapSelectScene.ts'],
       commandBypassGranted: false,
       fileMissingOnDisk: true,
     }, 'missing_file_budget_mismatch');
@@ -209,9 +254,49 @@ describe('rebuild-escalation', () => {
       'npm test',
     );
     expect(result.writeBypassGranted).toBe(true);
+    expect(result.writeBypassPaths).toEqual(['src/a.ts']);
     expect(result.commandBypassGranted).toBe(true);
     expect(t.wouldBlockFileEdit('src/a.ts')).toBe(false);
     expect(t.wouldBlockCommandRetry('npm test')).toBe(false);
+  });
+
+  it('applyRebuildEscalationBypasses grants multiple capped scene paths from build output', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 2 });
+    for (const p of [
+      'src/scenes/ShopScene.ts',
+      'src/scenes/MapSelectScene.ts',
+      'src/scenes/CharacterSelectScene.ts',
+    ]) {
+      t.recordFileEdit(p);
+      t.recordFileEdit(p);
+    }
+
+    const messages: UnifiedMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'tc1', name: 'run_command', arguments: { command: 'npm run build 2>&1' } }],
+      },
+      {
+        role: 'tool',
+        toolCallId: 'tc1',
+        content: [
+          '工具执行错误: Command failed (exit code: 1)',
+          'src/scenes/ShopScene.ts(1,1): error TS1005',
+          'src/scenes/MapSelectScene.ts(2,1): error TS1005',
+          'src/scenes/CharacterSelectScene.ts(3,1): error TS1005',
+        ].join('\n'),
+      },
+    ];
+
+    const result = applyRebuildEscalationBypasses(
+      t,
+      { path: 'src/scenes/ShopScene.ts', count: 2 },
+      null,
+      messages,
+    );
+    expect(result.writeBypassPaths.length).toBe(3);
+    expect(t.wouldBlockFileEdit('src/scenes/MapSelectScene.ts')).toBe(false);
   });
 });
 

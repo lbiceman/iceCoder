@@ -86,6 +86,10 @@ export interface CheckpointSaveInput {
   verificationOutputTail?: VerificationOutputTailEntry[];
   /** TaskAcceptanceTracker.snapshot */
   acceptanceGate?: AcceptanceGateSnapshot;
+  /** Rebuild Escalation 已注入次数 */
+  rebuildEscalationInjections?: number;
+  /** 并行 BranchBudget 拦截指引是否已注入 */
+  parallelBudgetBlockHintInjected?: boolean;
 }
 
 /** 最大保留条目 */
@@ -295,6 +299,13 @@ export class CheckpointEngine {
       };
     }
 
+    if (input.rebuildEscalationInjections !== undefined) {
+      state.rebuildEscalationInjections = input.rebuildEscalationInjections;
+    }
+    if (input.parallelBudgetBlockHintInjected !== undefined) {
+      state.parallelBudgetBlockHintInjected = input.parallelBudgetBlockHintInjected;
+    }
+
     if (input.branchBudget) {
       state.branchBudget = input.branchBudget.snapshot();
     }
@@ -450,6 +461,12 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
       commandRetries: { ...v.branchBudget.commandRetries },
       errorRepeats: { ...v.branchBudget.errorRepeats },
       recoverTriggers: v.branchBudget.recoverTriggers,
+      writeBypassPaths: v.branchBudget.writeBypassPaths
+        ? [...v.branchBudget.writeBypassPaths]
+        : undefined,
+      commandRetryBypassKeys: v.branchBudget.commandRetryBypassKeys
+        ? [...v.branchBudget.commandRetryBypassKeys]
+        : undefined,
     },
     recentTools: v.recentTools.map(t => ({ ...t })),
     recentFailures: v.recentFailures.map(f => ({ ...f })),
@@ -466,6 +483,8 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
         commands: v.acceptanceGate.commands.map(entry => ({ ...entry })),
       }
       : undefined,
+    rebuildEscalationInjections: v.rebuildEscalationInjections,
+    parallelBudgetBlockHintInjected: v.parallelBudgetBlockHintInjected,
     v2UpdatedAt: v.v2UpdatedAt,
   };
 }

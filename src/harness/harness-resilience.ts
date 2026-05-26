@@ -40,24 +40,43 @@ function checkpointAcceptanceGate(state: HarnessRunState): AcceptanceGateSnapsho
  *
  * 磁盘写入必须经 enqueueCheckpointPersist，与 TaskCheckpointManager 串行，避免绕过队列与 v1 save 交叉 rename。
  */
+function checkpointHarnessEscalationFields(state: HarnessRunState): {
+  rebuildEscalationInjections: number;
+  parallelBudgetBlockHintInjected: boolean;
+} {
+  return {
+    rebuildEscalationInjections: state.rebuildEscalationInjections,
+    parallelBudgetBlockHintInjected: state.parallelBudgetBlockHintInjected,
+  };
+}
+
 export async function resilienceRecordToolCalls(
   deps: ResilienceBridgeDeps,
   toolCalls: ToolCall[],
   failedSignatures: Set<string>,
+  policyBlockedSignatures: Set<string>,
   state: HarnessRunState,
+  workspaceRoot?: string,
 ): Promise<void> {
   if (!deps.resilienceV2Enabled || !state.branchBudget || !deps.checkpointEngine) return;
 
+  state.branchBudget.bindWorkspaceRoot(workspaceRoot);
   const engine = deps.checkpointEngine;
 
   for (const tc of toolCalls) {
     const sig = toolCallSignature(tc);
     const failed = failedSignatures.has(sig);
+    const policyBlocked = policyBlockedSignatures.has(sig);
 
     const path = typeof tc.arguments?.path === 'string'
       ? tc.arguments.path
       : (typeof tc.arguments?.file_path === 'string' ? tc.arguments.file_path : undefined);
-    if (path && /^(edit_file|write_file|append_file|batch_edit_file|patch_file)$/.test(tc.name)) {
+    if (
+      path
+      && /^(edit_file|write_file|append_file|batch_edit_file|patch_file)$/.test(tc.name)
+      && !failed
+      && !policyBlocked
+    ) {
       state.branchBudget.recordFileEdit(path);
     }
 
@@ -76,6 +95,7 @@ export async function resilienceRecordToolCalls(
             supervisorState: buildSupervisorCheckpointState(state),
             verificationOutputTail: checkpointVerificationOutputTail(state),
             acceptanceGate: checkpointAcceptanceGate(state),
+            ...checkpointHarnessEscalationFields(state),
             appendFailure: {
               signature: sig,
               count: 1,
@@ -101,6 +121,7 @@ export async function resilienceRecordToolCalls(
           supervisorState: buildSupervisorCheckpointState(state),
           verificationOutputTail: checkpointVerificationOutputTail(state),
           acceptanceGate: checkpointAcceptanceGate(state),
+          ...checkpointHarnessEscalationFields(state),
           appendTool: {
             toolName: tc.name,
             success: !failed,
@@ -159,6 +180,7 @@ export function resilienceMaybeBranchRecover(
         trigger: 'tool_failed',
         branchBudget: state.branchBudget,
         supervisorState: buildSupervisorCheckpointState(state),
+        ...checkpointHarnessEscalationFields(state),
         appendRecoverySignal: signal,
       });
     } catch (err) {
@@ -259,6 +281,7 @@ export async function resilienceSaveCheckpoint(
         supervisorState: buildSupervisorCheckpointState(state),
         verificationOutputTail: checkpointVerificationOutputTail(state),
         acceptanceGate: checkpointAcceptanceGate(state),
+        ...checkpointHarnessEscalationFields(state),
         verificationPending: state.taskState.shouldBlockFinalForVerification(
           state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
         ),

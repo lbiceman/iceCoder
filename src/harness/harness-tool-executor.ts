@@ -31,6 +31,7 @@ import { checkToolPreflight, checkDelegatePreflight } from './harness-tool-prefl
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
+import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -77,6 +78,7 @@ interface PolicyBlockContext {
   enrichWithVerification?: boolean;
   verificationOutputBuffer?: VerificationOutputBuffer;
   countAsMissingFile?: boolean;
+  budgetBlockPath?: string;
 }
 
 function emitHarnessPolicyBlock(
@@ -94,6 +96,9 @@ function emitHarnessPolicyBlock(
   ctx.deps.harnessPolicyStats && (ctx.deps.harnessPolicyStats.policyBlockCount += 1);
   if (ctx.countAsMissingFile && ctx.deps.harnessPolicyStats) {
     ctx.deps.harnessPolicyStats.missingFileBlockCount += 1;
+  }
+  if (ctx.policyReason === 'branch_budget_file') {
+    recordBudgetBlockByPath(ctx.deps.harnessPolicyStats, ctx.budgetBlockPath);
   }
 
   ctx.logger.toolResult(ctx.tc.name, false, blockMessage.length, ctx.errorLabel);
@@ -155,6 +160,8 @@ export interface ToolExecutionStats {
   failedSignatures: string[];
   /** Harness 策略拒绝（preflight / BranchBudget / delegate gate），不计入 failedCount */
   policyBlockedSignatures: string[];
+  /** 本轮 BranchBudget 文件 cap 拦截的路径（canonical，去重） */
+  budgetBlockedFilePaths: string[];
 }
 
 /**
@@ -201,6 +208,8 @@ export async function executeToolCallsStreaming(
   let directTotalCount = 0;
   const directFailedSignatures: string[] = [];
   const policyBlockedSignatures: string[] = [];
+  const budgetBlockedFilePaths: string[] = [];
+  const budgetBlockedPathSet = new Set<string>();
 
   // 第一遍：权限检查 + 提交到流式执行器
   const submittedIds = new Set<string>();
@@ -430,6 +439,11 @@ export async function executeToolCallsStreaming(
       { workspaceRoot: deps.workspaceRoot },
     );
     if (branchBlock?.blocked) {
+      const budgetKey = branchBlock.key ?? targetPath;
+      if (branchBlock.dimension === 'file_edit' && budgetKey && !budgetBlockedPathSet.has(budgetKey)) {
+        budgetBlockedPathSet.add(budgetKey);
+        budgetBlockedFilePaths.push(budgetKey);
+      }
       emitHarnessPolicyBlock({
         deps,
         tc,
@@ -447,6 +461,7 @@ export async function executeToolCallsStreaming(
         policyBlockedSignatures,
         enrichWithVerification: true,
         verificationOutputBuffer,
+        budgetBlockPath: budgetKey,
       });
       directTotalCount++;
       submittedIds.add(tc.id);
@@ -569,6 +584,7 @@ export async function executeToolCallsStreaming(
     totalCount: results.length + directTotalCount,
     failedSignatures,
     policyBlockedSignatures,
+    budgetBlockedFilePaths,
   };
 }
 
