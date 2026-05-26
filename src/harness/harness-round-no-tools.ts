@@ -21,6 +21,7 @@ import {
   hasPendingWork,
   isReasoningOnlyResponse,
 } from './incomplete-completion.js';
+import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import { resilienceSaveCheckpoint } from './harness-resilience.js';
@@ -35,6 +36,7 @@ import type {
   HarnessStepEvent,
 } from './types.js';
 import type { ToolDefinition } from '../llm/types.js';
+import type { UnifiedMessage } from '../llm/types.js';
 
 export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -57,6 +59,28 @@ export type HandleNoToolCallsResult =
   | { action: 'continue' }
   | { action: 'return'; result: HarnessResult };
 
+function injectContinuationUserMessage(
+  deps: NoToolRoundDeps,
+  state: HarnessRunState,
+  msgs: UnifiedMessage[],
+  content: string,
+): void {
+  const round = deps.loopController.getState().currentRound;
+  const bridge = state.supervisorBridge;
+  if (bridge?.isActive() && !deps.supervisorObserverSuppressInject) {
+    bridge.createCorrectionPort(msgs, round).inject(
+      {
+        kind: 'recovery',
+        content,
+        preserveOnCompaction: true,
+      },
+      { phase: state.supervisorPhase, source: 'lifecycle' },
+    );
+  } else {
+    msgs.push({ role: 'user', content });
+  }
+}
+
 /**
  * 无工具调用时的响应处理：失忆恢复、max-output-tokens、空响应、stop hook、验证拦截、正常完成。
  */
@@ -66,6 +90,7 @@ export async function handleNoToolCalls(
 ): Promise<HandleNoToolCallsResult> {
   const { state, response, userMessage, currentTools, tokenUsage, logger, onStep } = args;
   const msgs = state.messages;
+  state.consecutiveNoToolRounds++;
 
   if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
     const responseText = response.content || '';
@@ -273,7 +298,8 @@ export async function handleNoToolCalls(
 
   const taskSnap = state.taskState.snapshot();
   const repoSnap = state.repoContext.snapshot();
-  const pendingWork = hasPendingWork(taskSnap, repoSnap);
+  const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
+  const pendingWork = hasPendingWork(taskSnap, repoSnap, state.taskAcceptance);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
 
@@ -305,20 +331,20 @@ export async function handleNoToolCalls(
   }
 
   const canRunVerification = currentTools.some(t => t.name === 'run_command');
-  if (canRunVerification && state.taskState.shouldBlockFinalForVerification()) {
+  if (canRunVerification && state.taskState.shouldBlockFinalForVerification(acceptanceIncomplete)) {
     if (response.content) {
       msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
     } else if (response.reasoningContent) {
       msgs.push({ role: 'assistant', content: '', reasoningContent: response.reasoningContent });
     }
-    msgs.push({
-      role: 'user',
-      content: [
-        state.taskState.buildVerificationPrompt(),
-        '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-      ].join('\n'),
-    });
+    const prompt = acceptanceIncomplete && state.taskAcceptance
+      ? state.taskAcceptance.buildAcceptancePrompt()
+      : state.taskState.buildVerificationPrompt();
+    injectContinuationUserMessage(deps, state, msgs, [
+      prompt,
+      '',
+      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+    ].join('\n'));
     await resilienceSaveCheckpoint(deps, 'verification_started', state);
     state.transition = 'stop_hook_continue';
     return { action: 'continue' };
@@ -339,14 +365,11 @@ export async function handleNoToolCalls(
         reasoningContent: response.reasoningContent,
       });
     }
-    msgs.push({
-      role: 'user',
-      content: [
-        buildIncompleteContinuationPrompt(taskSnap, repoSnap),
-        '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
-      ].join('\n'),
-    });
+    injectContinuationUserMessage(deps, state, msgs, [
+      buildIncompleteContinuationPrompt(taskSnap, repoSnap, state.taskAcceptance),
+      '',
+      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
+    ].join('\n'));
     await saveTaskCheckpoint(deps, 'paused', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
     await resilienceSaveCheckpoint(deps, 'verification_started', state);
     state.transition = 'no_tool_execution_recovery';

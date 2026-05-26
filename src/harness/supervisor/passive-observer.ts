@@ -11,6 +11,8 @@ export interface PassiveObserveInput {
   round: RuntimeRound;
   consecutiveToolFailures: number;
   consecutiveReadOnlyRounds: number;
+  /** 连续无 toolCalls 的 LLM 轮（model 空转）。 */
+  consecutiveNoToolRounds?: number;
   stableRoundsSinceLastFailure: number;
   allToolsFailedThisRound: boolean;
   /** 本轮检测到的「同参重复失败」工具签名。 */
@@ -57,6 +59,7 @@ export class PassiveObserver {
 
     const noProgressRounds = Math.max(
       input.consecutiveReadOnlyRounds,
+      input.consecutiveNoToolRounds ?? 0,
       input.allToolsFailedThisRound ? input.consecutiveToolFailures : 0,
     );
     if (noProgressRounds >= this.triggers.noProgressRoundsMin) {

@@ -37,8 +37,10 @@ import {
   type FailureHistoryEntry,
   type RecoverySignal,
   type VerificationOutputTailEntry,
+  type AcceptanceGateSnapshot,
 } from '../types/runtime-checkpoint.js';
 import { BranchBudgetTracker } from './branch-budget.js';
+import type { AcceptanceCommandEntry } from './task-acceptance-tracker.js';
 
 /** 增强 checkpoint 在磁盘上的存储壳子 —— 与 TaskCheckpoint(v1) 共享同一个 JSON。 */
 export interface CombinedCheckpointFile extends TaskCheckpoint {
@@ -82,6 +84,8 @@ export interface CheckpointSaveInput {
   supervisorState?: RuntimeSupervisorCheckpointState;
   /** 最近验收失败 stderr tail（VerificationOutputBuffer.snapshot） */
   verificationOutputTail?: VerificationOutputTailEntry[];
+  /** TaskAcceptanceTracker.snapshot */
+  acceptanceGate?: AcceptanceGateSnapshot;
 }
 
 /** 最大保留条目 */
@@ -284,6 +288,12 @@ export class CheckpointEngine {
     if (input.verificationOutputTail !== undefined) {
       state.verificationOutputTail = input.verificationOutputTail.map(entry => ({ ...entry }));
     }
+    if (input.acceptanceGate !== undefined) {
+      state.acceptanceGate = {
+        active: input.acceptanceGate.active,
+        commands: input.acceptanceGate.commands.map((entry: AcceptanceCommandEntry) => ({ ...entry })),
+      };
+    }
 
     if (input.branchBudget) {
       state.branchBudget = input.branchBudget.snapshot();
@@ -450,6 +460,12 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     lastStopReason: v.lastStopReason,
     supervisorState: v.supervisorState ? cloneSupervisorState(v.supervisorState) : undefined,
     verificationOutputTail: v.verificationOutputTail?.map(entry => ({ ...entry })),
+    acceptanceGate: v.acceptanceGate
+      ? {
+        active: v.acceptanceGate.active,
+        commands: v.acceptanceGate.commands.map(entry => ({ ...entry })),
+      }
+      : undefined,
     v2UpdatedAt: v.v2UpdatedAt,
   };
 }

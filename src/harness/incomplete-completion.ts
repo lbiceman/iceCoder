@@ -1,12 +1,18 @@
 import type { LLMResponse } from '../llm/types.js';
 import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
+import type { TaskState } from './task-state.js';
 import type { TaskCheckpoint } from './checkpoint.js';
 
 /** 任务是否仍有未完成的工程/验证工作 */
 export function hasPendingWork(
   task: TaskStateSnapshot,
   repo: RepoContextSnapshot,
+  acceptance?: TaskAcceptanceTracker,
 ): boolean {
+  if (hasPendingAcceptanceWork(acceptance)) return true;
+
   if (task.verificationStatus === 'failed') return true;
 
   const verificationAttempted = repo.testCommands.length > 0
@@ -43,7 +49,12 @@ export function isReasoningOnlyResponse(response: LLMResponse): boolean {
 export function buildIncompleteContinuationPrompt(
   task: TaskStateSnapshot,
   repo: RepoContextSnapshot,
+  acceptance?: TaskAcceptanceTracker,
 ): string {
+  if (hasPendingAcceptanceWork(acceptance) && acceptance) {
+    return acceptance.buildAcceptancePrompt();
+  }
+
   const lines = [
     '[System] The task is NOT complete. Do not stop without calling tools.',
     '',
@@ -71,4 +82,19 @@ export function buildIncompleteContinuationPrompt(
   );
 
   return lines.join('\n');
+}
+
+/** 工具轮结束后，将 Acceptance Gate 进度同步回 TaskState.verificationStatus。 */
+export function syncTaskVerificationFromAcceptance(
+  taskState: TaskState,
+  acceptance: TaskAcceptanceTracker | undefined,
+): void {
+  if (!acceptance?.isActive()) return;
+  if (acceptance.isComplete()) {
+    taskState.markVerificationPassed();
+  } else if (acceptance.hasFailure()) {
+    taskState.forceVerificationFailed();
+  } else {
+    taskState.markVerificationRequired();
+  }
 }

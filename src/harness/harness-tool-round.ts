@@ -15,6 +15,7 @@ import {
 } from './harness-resilience.js';
 import { collectRepeatedFailures, toolCallSignature } from './harness-permission-runtime.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
@@ -217,6 +218,20 @@ export async function runHarnessToolRound(
     buildDiagnosticGateActive: state.buildDiagnosticGateActive,
     verificationOutputBuffer: state.verificationOutputBuffer,
   });
+  if (executableToolCalls.length > 0) {
+    state.consecutiveNoToolRounds = 0;
+  }
+  if (state.taskAcceptance?.isActive()) {
+    for (const tc of executableToolCalls) {
+      if (tc.name !== 'run_command') continue;
+      const command = String(tc.arguments?.command ?? '');
+      const sig = toolCallSignature(tc);
+      const success = !toolStats.failedSignatures.includes(sig)
+        && !toolStats.policyBlockedSignatures.includes(sig);
+      state.taskAcceptance.recordRunCommand(command, success);
+    }
+    syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
+  }
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
   // tool_failure 信号：本轮任意可执行工具 success:false 即提交（常见为 run_command/npm test 验收失败，
   // 其次 BranchBudget 拦 write/edit，较少为 patch 对不上等真工具错误）。UI「forced · 工具失败」
@@ -524,6 +539,7 @@ export async function runHarnessToolRound(
       round: runtimeRound,
       consecutiveToolFailures: state.consecutiveToolFailures,
       consecutiveReadOnlyRounds: state.consecutiveReadOnlyRounds,
+      consecutiveNoToolRounds: state.consecutiveNoToolRounds,
       stableRoundsSinceLastFailure: state.stableRoundsSinceLastFailure ?? 0,
       allToolsFailedThisRound,
       repeatedToolSignatures: repeatedFailures,

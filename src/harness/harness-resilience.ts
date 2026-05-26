@@ -12,7 +12,7 @@ import { collectRecentErrors, collectRecentToolTraces } from './harness-step-con
 import { reviewStep } from './step-review.js';
 import type { ChatFunction, StopReason } from './types.js';
 import type { CorrectionPort } from '../types/supervisor.js';
-import type { VerificationOutputTailEntry } from '../types/runtime-checkpoint.js';
+import type { VerificationOutputTailEntry, AcceptanceGateSnapshot } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
@@ -27,6 +27,11 @@ export interface ResilienceBridgeDeps {
 
 function checkpointVerificationOutputTail(state: HarnessRunState): VerificationOutputTailEntry[] | undefined {
   return state.verificationOutputBuffer?.snapshot();
+}
+
+function checkpointAcceptanceGate(state: HarnessRunState): AcceptanceGateSnapshot | undefined {
+  if (!state.taskAcceptance?.isActive()) return undefined;
+  return state.taskAcceptance.snapshot();
 }
 
 /**
@@ -70,6 +75,7 @@ export async function resilienceRecordToolCalls(
             branchBudget: state.branchBudget,
             supervisorState: buildSupervisorCheckpointState(state),
             verificationOutputTail: checkpointVerificationOutputTail(state),
+            acceptanceGate: checkpointAcceptanceGate(state),
             appendFailure: {
               signature: sig,
               count: 1,
@@ -94,6 +100,7 @@ export async function resilienceRecordToolCalls(
           branchBudget: state.branchBudget,
           supervisorState: buildSupervisorCheckpointState(state),
           verificationOutputTail: checkpointVerificationOutputTail(state),
+          acceptanceGate: checkpointAcceptanceGate(state),
           appendTool: {
             toolName: tc.name,
             success: !failed,
@@ -251,7 +258,10 @@ export async function resilienceSaveCheckpoint(
         branchBudget: state.branchBudget,
         supervisorState: buildSupervisorCheckpointState(state),
         verificationOutputTail: checkpointVerificationOutputTail(state),
-        verificationPending: state.taskState.shouldBlockFinalForVerification(),
+        acceptanceGate: checkpointAcceptanceGate(state),
+        verificationPending: state.taskState.shouldBlockFinalForVerification(
+          state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
+        ),
         lastStopReason: stopReason,
       });
     } catch (err) {

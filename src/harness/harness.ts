@@ -56,7 +56,9 @@ import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
 import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
 import { syncHydratedTaskState } from './resume-task-state.js';
+import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
+import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
@@ -467,6 +469,8 @@ export class Harness {
       sessionGoalAnchor,
       buildDiagnosticGateActive: false,
       verificationOutputBuffer: new VerificationOutputBuffer(),
+      taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
+      consecutiveNoToolRounds: 0,
       checkpointResumeForkApplied: false,
       contextEmergencyCompactUsed: false,
       stepReviewedThisRound: false,
@@ -518,6 +522,14 @@ export class Harness {
             this.supervisorBridge?.restoreFromCheckpoint(supervisor);
           }
           state.verificationOutputBuffer.restore(v2.verificationOutputTail);
+          if (v2.acceptanceGate?.active) {
+            if (state.taskAcceptance) {
+              state.taskAcceptance.restore(v2.acceptanceGate);
+            } else {
+              state.taskAcceptance = TaskAcceptanceTracker.fromSnapshot(v2.acceptanceGate);
+            }
+            syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
+          }
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
           const pending = this.checkpointEngine.pendingRecoverySignals();
           if (pending.length > 0) {

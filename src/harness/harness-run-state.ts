@@ -5,6 +5,7 @@ import type { StepReviewResult } from './step-review.js';
 import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
+import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -92,6 +93,10 @@ export interface HarnessRunState {
   buildDiagnosticGateActive?: boolean;
   /** 最近验收命令失败输出（compaction / policy block 后仍可注入 digest） */
   verificationOutputBuffer: VerificationOutputBuffer;
+  /** 长跑任务多命令验收门禁（npm ci → test → build → e2e） */
+  taskAcceptance?: TaskAcceptanceTracker;
+  /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
+  consecutiveNoToolRounds: number;
   /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
   checkpointResumeForkApplied: boolean;
   /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */

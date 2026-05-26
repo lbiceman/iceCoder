@@ -40,7 +40,7 @@ export function resolveEffectiveUserGoal(
 export function isLongRunningImplementationGoal(goal: string): boolean {
   const t = goal.trim();
   if (t.length < MIN_SUBSTANTIAL_GOAL_CHARS) return false;
-  return /implement-|从零实现|验收命令|npm ci|npm test.*npm run build|phase\s*[1-9]|benchMark/i.test(t);
+  return /implement-|从零实现|验收命令|npm ci|npm test.*npm run build|phase\s*[1-9]|benchMark|spellbrigade|survivor|roguelike/i.test(t);
 }
 
 export function effectiveIntentForGoal(goal: string) {

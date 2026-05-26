@@ -64,16 +64,6 @@ export class TaskState {
     }
   }
 
-  shouldBlockFinalForVerification(): boolean {
-    if (this.verificationStatus === 'failed') return true;
-    if (this.verificationRequired && this.verificationStatus === 'required') return true;
-    if (this.filesChanged.size > 0 && this.verificationStatus !== 'passed') {
-      this.verificationRequired = true;
-      return true;
-    }
-    return false;
-  }
-
   buildVerificationPrompt(): string {
     const files = [...this.filesChanged];
     const fileList = files.length > 0 ? files.map(f => `- ${f}`).join('\n') : '- (changed files unknown)';
@@ -108,6 +98,32 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     if (this.filesChanged.size > 0) {
       this.phase = 'verification';
     }
+  }
+
+  /** Acceptance Gate：全部验收命令通过后同步为 passed。 */
+  markVerificationPassed(): void {
+    this.verificationRequired = true;
+    this.verificationStatus = 'passed';
+    this.phase = 'verification';
+  }
+
+  /** Acceptance Gate：仍有未跑或未过的验收命令。 */
+  markVerificationRequired(): void {
+    this.verificationRequired = true;
+    if (this.verificationStatus !== 'failed') {
+      this.verificationStatus = 'required';
+    }
+  }
+
+  shouldBlockFinalForVerification(acceptanceIncomplete?: boolean): boolean {
+    if (acceptanceIncomplete) return true;
+    if (this.verificationStatus === 'failed') return true;
+    if (this.verificationRequired && this.verificationStatus === 'required') return true;
+    if (this.filesChanged.size > 0 && this.verificationStatus !== 'passed') {
+      this.verificationRequired = true;
+      return true;
+    }
+    return false;
   }
 
   snapshot(): TaskStateSnapshot {

@@ -12,6 +12,9 @@
  */
 
 import type { StopReason } from '../harness/types.js';
+import type { AcceptanceGateSnapshot } from '../harness/task-acceptance-tracker.js';
+
+export type { AcceptanceGateSnapshot };
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -170,6 +173,8 @@ export interface RuntimeCheckpointV2 {
   v2UpdatedAt: string;
   /** 最近验收失败 stderr tail；跨 checkpoint 恢复 digest 注入 */
   verificationOutputTail?: VerificationOutputTailEntry[];
+  /** 长跑任务多命令验收进度 */
+  acceptanceGate?: AcceptanceGateSnapshot;
 }
 
 /** Checkpoint 触发器类型 — 与 docs/长时间连续工作.md §Save Trigger 对齐 */
