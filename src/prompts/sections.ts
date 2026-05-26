@@ -139,6 +139,13 @@ export function createToolUsageSection(): PromptSection {
 - Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.
 - **Only** open MCP config files (e.g. \`.iceCoder/mcp.json\`) when the user asks **where** MCP is configured, wants an edit/review of that file, or you are debugging **why** a server is missing or failing — not for normal tool use.
 
+## Tool call arguments
+- Pass parameters as **top-level JSON fields** on the tool call (standard function-calling shape). Do **not** wrap the whole payload in one string field (\`raw\`, \`arguments\`, \`input\`, \`params\`, etc.) or nest JSON inside a single string.
+- **Correct** \`write_file\`: \`{ "path": "src/foo.ts", "content": "..." }\` — **Wrong**: \`{ "raw": "{\\"path\\":...}" }\` or any single-key string wrapper.
+- **Correct** \`run_command\`: \`{ "command": "npm test" }\` — \`command\` must be top-level, not inside a wrapper field.
+- Accepted aliases when supported: \`filePath\` → \`path\`; \`cmd\` → \`command\`. Prefer canonical names (\`path\`, \`content\`, \`command\`).
+- Large file bodies: use \`edit_file\`, \`patch_file\`, or \`append_file\` in chunks — avoid one huge \`write_file\` that may hit output limits and truncate mid-JSON.
+
 ## File reading
 read_file (offset/limit for large files). Outside cwd → open_file (absolute path).
 

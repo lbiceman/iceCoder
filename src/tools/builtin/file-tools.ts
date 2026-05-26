@@ -102,12 +102,12 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'write_file',
         // 创建新文件或覆盖已有文件。修改部分内容用 edit_file。追加用 append_file。
-        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file. Use directly when asked to create a new file.',
+        description: 'Create new file or completely overwrite existing file. Auto-creates parent directories. For partial modifications use edit_file. For appending use append_file. Pass path and content as top-level arguments (not nested in a raw JSON string). For large files prefer edit_file/patch_file or split writes.',
         parameters: {
           type: 'object',
           properties: {
-            path: { type: 'string', description: 'File path (relative to work directory)' },
-            content: { type: 'string', description: 'Content to write' },
+            path: { type: 'string', description: 'File path (relative to work directory). Top-level field; alias: filePath' },
+            content: { type: 'string', description: 'Content to write. Top-level string field alongside path' },
             encoding: { type: 'string', description: 'File encoding, default utf-8', default: 'utf-8' },
           },
           required: ['path', 'content'],
@@ -152,7 +152,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       definition: {
         name: 'edit_file',
         // 查找替换。search 必须精确匹配现有内容。多处修改用 batch_edit_file。大段修改用 patch_file。
-        description: 'Find and replace in existing file. search must exactly match existing content. For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file. Use this tool immediately when asked to modify code.',
+        description: 'Find and replace in existing file. search must exactly match existing content. Pass path, search, replace as top-level fields (alias: filePath). For multiple changes use batch_edit_file. For large changes use patch_file. For new files use write_file.',
         parameters: {
           type: 'object',
           properties: {

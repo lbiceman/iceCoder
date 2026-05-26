@@ -10,7 +10,11 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult, ToolExecutorConfig, ToolOutputCallback } from './types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolValidator } from './tool-validator.js';
-import { normalizeToolArguments } from './tool-arguments-normalizer.js';
+import {
+  buildWrappedArgumentFormatHint,
+  isUnexpandedStringWrapper,
+  normalizeToolArguments,
+} from './tool-arguments-normalizer.js';
 
 const DEFAULT_CONFIG: ToolExecutorConfig = {
   maxRetries: 3,
@@ -56,7 +60,10 @@ export class ToolExecutor {
         const hint = expectedParams.length > 0
           ? ` [accepted params: ${expectedParams.join(', ')}] [received params: ${receivedParams.join(', ') || '(none)'}]`
           : '';
-        return { success: false, output: '', error: `Input validation failed: ${validation.message}${hint}` };
+        const wrapHint = isUnexpandedStringWrapper(normalizedCall.arguments)
+          ? ` ${buildWrappedArgumentFormatHint()}`
+          : '';
+        return { success: false, output: '', error: `Input validation failed: ${validation.message}${hint}${wrapHint}` };
       }
     }
 
@@ -68,6 +75,13 @@ export class ToolExecutor {
           () => tool.handler(normalizedCall.arguments, onOutput),
           this.config.toolTimeout,
         );
+        if (!result.success && isUnexpandedStringWrapper(normalizedCall.arguments)) {
+          const wrapHint = buildWrappedArgumentFormatHint();
+          const error = result.error?.includes(wrapHint)
+            ? result.error
+            : `${result.error ?? 'Tool failed'}. ${wrapHint}`;
+          return { ...result, error };
+        }
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);

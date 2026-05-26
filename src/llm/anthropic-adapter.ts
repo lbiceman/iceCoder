@@ -22,6 +22,7 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import { estimateStringTokens } from './token-estimator.js';
+import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
 
 /** Anthropic cache_control 标记 */
 const CACHE_BREAKPOINT = { type: 'ephemeral' as const };
@@ -107,7 +108,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           toolCalls.push({
             id: block.id,
             name: block.name,
-            arguments: block.input as Record<string, any>,
+            arguments: normalizeToolArguments(block.input as Record<string, unknown>) as Record<string, any>,
           });
         }
       }
@@ -388,7 +389,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         toolCalls.push({
           id: block.id,
           name: block.name,
-          arguments: block.input as Record<string, any>,
+          arguments: normalizeToolArguments(block.input as Record<string, unknown>) as Record<string, any>,
         });
       }
     }
