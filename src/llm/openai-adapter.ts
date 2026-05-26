@@ -19,6 +19,7 @@ import type {
 import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
+import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
 
 /**
  * OpenAI 适配器的配置。
@@ -609,9 +610,9 @@ export class OpenAIAdapter implements ProviderAdapter {
    */
   private safeParseJSON(jsonStr: string): Record<string, any> {
     try {
-      return JSON.parse(jsonStr);
+      return normalizeToolArguments(JSON.parse(jsonStr)) as Record<string, any>;
     } catch {
-      return { raw: jsonStr };
+      return normalizeToolArguments({ raw: jsonStr }) as Record<string, any>;
     }
   }
 

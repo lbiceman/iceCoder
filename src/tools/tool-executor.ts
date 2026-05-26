@@ -10,6 +10,7 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult, ToolExecutorConfig, ToolOutputCallback } from './types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolValidator } from './tool-validator.js';
+import { normalizeToolArguments } from './tool-arguments-normalizer.js';
 
 const DEFAULT_CONFIG: ToolExecutorConfig = {
   maxRetries: 3,
@@ -39,14 +40,19 @@ export class ToolExecutor {
       return { success: false, output: '', error: `Unknown tool: ${toolCall.name}` };
     }
 
+    const normalizedCall: ToolCall = {
+      ...toolCall,
+      arguments: normalizeToolArguments(toolCall.arguments ?? {}) as Record<string, any>,
+    };
+
     // 执行前验证输入参数
     if (this.validator) {
-      const validation = this.validator.validate(toolCall);
+      const validation = this.validator.validate(normalizedCall);
       if (!validation.valid) {
         const expectedParams = tool.definition.parameters?.properties
           ? Object.keys(tool.definition.parameters.properties)
           : [];
-        const receivedParams = Object.keys(toolCall.arguments);
+        const receivedParams = Object.keys(normalizedCall.arguments);
         const hint = expectedParams.length > 0
           ? ` [accepted params: ${expectedParams.join(', ')}] [received params: ${receivedParams.join(', ') || '(none)'}]`
           : '';
@@ -59,7 +65,7 @@ export class ToolExecutor {
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
       try {
         const result = await this.executeWithTimeout(
-          () => tool.handler(toolCall.arguments, onOutput),
+          () => tool.handler(normalizedCall.arguments, onOutput),
           this.config.toolTimeout,
         );
         return result;
@@ -72,7 +78,7 @@ export class ToolExecutor {
           const expectedParams = tool.definition.parameters?.properties
             ? Object.keys(tool.definition.parameters.properties)
             : [];
-          const receivedParams = Object.keys(toolCall.arguments);
+          const receivedParams = Object.keys(normalizedCall.arguments);
           lastError = `${lastError} — Likely parameter name mismatch. Tool "${toolCall.name}" accepts: [${expectedParams.join(', ')}]. Received: [${receivedParams.join(', ') || '(none)'}].`;
         }
 
