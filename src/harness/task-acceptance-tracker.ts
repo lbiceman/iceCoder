@@ -72,6 +72,25 @@ export class TaskAcceptanceTracker {
     return true;
   }
 
+  /**
+   * P0-A — 区分「后台启动」与「真实完成」：
+   *   - kind:'background_start' / 'background_running' → 状态保持 pending，**不**调用 recordRunCommand
+   *   - kind:'background_completed'（exitCode===0）/ 'foreground' & success → mark passed
+   *   - kind:'background_failed' / exitCode!==0 → mark failed
+   *
+   * 调用方应在 run_command 工具结果落到 messages 后调用。
+   */
+  recordRunCommandToolResult(result: RunCommandResultClassification): boolean {
+    if (!this.isActive()) return false;
+    if (result.kind === 'background_start' || result.kind === 'background_running') return false;
+    if (!result.command.trim()) return false;
+    const completed = result.kind === 'foreground'
+      ? result.foregroundSuccess === true
+      : result.kind === 'background_completed'
+        && (result.exitCode === undefined || result.exitCode === 0);
+    return this.recordRunCommand(result.command, completed);
+  }
+
   buildAcceptancePrompt(): string {
     const lines = [
       '[System / Acceptance Gate] Task is NOT complete. Required verification commands must all exit 0 before you may stop.',
@@ -193,4 +212,79 @@ export function hasPendingAcceptanceWork(
   acceptance: TaskAcceptanceTracker | undefined,
 ): boolean {
   return !!acceptance?.isActive() && !acceptance.isComplete();
+}
+
+/**
+ * P0-A — `run_command` 工具结果分类。
+ *
+ * 历史问题：shell-tool 后台分支返回 `success: true` 表示「启动成功」，
+ * acceptance gate 直接据此把命令标 passed，但**进程往往还在跑**或已 exit ≠ 0。
+ *
+ * 本分类器解析 raw output 的 JSON 元数据（`mode` / `status` / `exitCode`），
+ * 让 acceptance / verification-buffer / branch-budget 等下游按真实结果判定。
+ */
+export type RunCommandResultClassification =
+  | { kind: 'foreground'; command: string; foregroundSuccess: boolean; exitCode?: number }
+  | { kind: 'background_start'; command: string }
+  | { kind: 'background_running'; command: string }
+  | { kind: 'background_completed'; command: string; exitCode?: number }
+  | { kind: 'background_failed'; command: string; exitCode?: number; statusLabel?: string };
+
+export function classifyRunCommandResult(
+  args: Record<string, unknown> | undefined | null,
+  rawOutput: string,
+  toolSuccess: boolean,
+): RunCommandResultClassification | null {
+  const a = args ?? {};
+  const action = typeof a.action === 'string' ? a.action.trim() : '';
+  const argCommand = typeof a.command === 'string'
+    ? a.command
+    : typeof a.cmd === 'string'
+      ? a.cmd
+      : '';
+
+  if (action === 'check' || action === 'list' || action === 'stop') {
+    const parsed = safeParseJson(rawOutput);
+    if (!parsed) return null;
+    const label = typeof parsed.label === 'string' ? parsed.label : '';
+    const status = typeof parsed.status === 'string' ? parsed.status : '';
+    const exitCode = typeof parsed.exitCode === 'number' ? parsed.exitCode : undefined;
+    if (!label) return null;
+    if (status === 'completed') {
+      const isExitNonZero = exitCode !== undefined && exitCode !== 0;
+      return isExitNonZero
+        ? { kind: 'background_failed', command: label, exitCode, statusLabel: 'completed_nonzero' }
+        : { kind: 'background_completed', command: label, exitCode };
+    }
+    if (status === 'failed' || status === 'timeout' || status === 'killed') {
+      return { kind: 'background_failed', command: label, exitCode, statusLabel: status };
+    }
+    if (status === 'running') {
+      return { kind: 'background_running', command: label };
+    }
+    return null;
+  }
+
+  if (!argCommand.trim()) return null;
+  if (toolSuccess) {
+    const parsed = safeParseJson(rawOutput);
+    if (parsed) {
+      const mode = typeof parsed.mode === 'string' ? parsed.mode : '';
+      if (mode === 'background' || mode === 'escalated') {
+        return { kind: 'background_start', command: argCommand };
+      }
+    }
+  }
+  return { kind: 'foreground', command: argCommand, foregroundSuccess: toolSuccess };
+}
+
+function safeParseJson(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }

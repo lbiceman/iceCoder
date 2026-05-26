@@ -29,6 +29,7 @@ import {
 import { collectRepeatedFailures, toolCallSignature } from './harness-permission-runtime.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
+import { classifyRunCommandResult } from './task-acceptance-tracker.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
@@ -254,16 +255,35 @@ export async function runHarnessToolRound(
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;
   }
-  if (state.taskAcceptance?.isActive()) {
+  // P0-A — acceptance gate / verification buffer：按工具结果**真实状态**而非「启动成功」判定。
+  //   - 后台启动 (`mode:'background'|'escalated'`) → acceptance 状态保持 pending
+  //   - check 返回 `status:'completed' && exitCode:0` → mark passed
+  //   - check 返回 `status:'failed'|'timeout'|'killed'` 或 exitCode≠0 → mark failed + 回写 verificationOutputBuffer
+  if (executableToolCalls.length > 0) {
+    const acceptanceActive = state.taskAcceptance?.isActive();
     for (const tc of executableToolCalls) {
       if (tc.name !== 'run_command') continue;
-      const command = String(tc.arguments?.command ?? '');
       const sig = toolCallSignature(tc);
       const success = !toolStats.failedSignatures.includes(sig)
         && !toolStats.policyBlockedSignatures.includes(sig);
-      state.taskAcceptance.recordRunCommand(command, success);
+      const toolMsg = msgs.find(m => m.role === 'tool' && m.toolCallId === tc.id);
+      const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';
+      const classified = classifyRunCommandResult(tc.arguments as Record<string, unknown>, rawOutput, success);
+      if (!classified) continue;
+
+      if (acceptanceActive && state.taskAcceptance) {
+        state.taskAcceptance.recordRunCommandToolResult(classified);
+      }
+
+      if (classified.kind === 'background_failed'
+        && isHarnessVerificationCommand(classified.command)
+        && state.verificationOutputBuffer) {
+        state.verificationOutputBuffer.recordFailed(classified.command, rawOutput);
+      }
     }
-    syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
+    if (acceptanceActive && state.taskAcceptance) {
+      syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
+    }
   }
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
   // tool_failure 信号：本轮任意可执行工具 success:false 即提交（常见为 run_command/npm test 验收失败，

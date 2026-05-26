@@ -3,6 +3,7 @@ import { normalizeMessages } from './context-assembler.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CompactionDeps } from './harness-compaction.js';
 import { maybeCompact } from './harness-compaction.js';
+import { takeBgStatusForInjection } from './harness-bg-summary.js';
 import {
   applySubAgentResultRetention,
   applyToolResultBudget,
@@ -46,6 +47,10 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   runtimeTelemetry?: RuntimeTelemetry;
   /** L2-7 — strict 首轮 `task_graph_init` 门禁经此 bridge 判定；缺省回退 `shouldUseTaskGraph`。 */
   supervisorBridge?: SupervisorRuntimeBridge;
+  /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
+  sessionId?: string;
+  /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
+  workspaceRoot?: string;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -153,6 +158,16 @@ export async function prepareHarnessRound(
     const snap = deps.graphExecutor.toSnapshot();
     if (snap?.cursor) {
       onStep?.({ type: 'task_graph_node', nodeId: snap.cursor.nodeId, nodeIndex: snap.cursor.nodeIndex, graphStatus: snap.status });
+    }
+  }
+
+  // Phase 4a — 后台任务摘要：仅在有 dirty / due running 任务时返回非空，
+  // BackgroundTaskManager 内部 5min 节流；本块帮助模型记住「有 npm test 在跑」而不是再起一份。
+  if (deps.workspaceRoot) {
+    const sessionId = deps.sessionId ?? 'default';
+    const bgStatus = takeBgStatusForInjection(sessionId, deps.workspaceRoot);
+    if (bgStatus) {
+      msgs.push({ role: 'user', content: bgStatus });
     }
   }
 

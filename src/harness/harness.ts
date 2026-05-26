@@ -216,6 +216,7 @@ export class Harness {
       skipPermissionChecks: this.skipPermissionChecks,
       onConfirm: this.onConfirm,
       workspaceRoot: this.workspaceRoot,
+      sessionId: this.sessionId,
       tokenBudgetTracker: this.tokenBudgetTracker,
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,

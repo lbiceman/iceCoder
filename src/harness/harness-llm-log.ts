@@ -51,9 +51,13 @@ export function buildLlmRoundLogFields(
 export function isRetryableError(error: unknown): boolean {
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
-    // 网络错误
+    // 网络错误（含 OpenAI / MiniMax 等流式 SDK 在 socket 断开时抛出的 "Connection error."）
     if (msg.includes('timeout') || msg.includes('econnreset') || msg.includes('econnrefused')
-      || msg.includes('fetch failed') || msg.includes('network')) return true;
+      || msg.includes('econnaborted') || msg.includes('epipe') || msg.includes('etimedout')
+      || msg.includes('enotfound') || msg.includes('socket hang up')
+      || msg.includes('fetch failed') || msg.includes('network')
+      || msg.includes('connection error') || msg.includes('connection reset')
+      || msg.includes('connection closed') || msg.includes('connection aborted')) return true;
     // 限流
     if (msg.includes('rate limit') || msg.includes('429') || msg.includes('too many requests')) return true;
     // 服务端错误
