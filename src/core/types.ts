@@ -9,5 +9,6 @@
 export interface LLMAdapter {
   chat(messages: any[], options?: any): Promise<any>;
   stream(messages: any[], callback: (chunk: string, done: boolean) => void, options?: any): Promise<any>;
+  countTokens(text: string): Promise<number>;
   setAbortSignal?(signal: AbortSignal | null): void;
 }

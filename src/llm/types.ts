@@ -24,6 +24,8 @@ export interface UnifiedMessage {
   reasoningContent?: string;
   /** C 类纠偏注入：硬压缩时保留在 recent 后缀，避免 lifecycle/recovery 提示被摘要丢弃 */
   preserveOnCompaction?: boolean;
+  /** 连续失败阶梯 ephemeral 注入；meaningful_progress 后由 Harness 移除 */
+  ephemeralFailureRecovery?: 'light' | 'evidence' | 'strong';
 }
 
 /**
@@ -64,7 +66,7 @@ export interface TokenUsage {
   outputTokens: number;
   totalTokens: number;
   provider: string;
-  /** prompt cache 读取的 token 数（DeepSeek prompt_cache_hit_tokens；Anthropic/OpenAI cached 分项） */
+  /** prompt cache 读取的 token 数（DeepSeek prompt_cache_hit_tokens；OpenAI cached 分项） */
   cacheReadTokens?: number;
   /** 未命中缓存的输入 token（DeepSeek prompt_cache_miss_tokens；OpenAI 可由 prompt_tokens - cached_tokens 推导） */
   cacheMissTokens?: number;
@@ -86,6 +88,11 @@ export interface LLMOptions {
   maxTokens?: number;
   topP?: number;
   tools?: ToolDefinition[];
+  /**
+   * 用户中断信号 — 触发时 provider 应尽快断开正在进行的 HTTP/流。
+   * 由 LLMAdapter.stream/chat 从 setAbortSignal() 注入；provider 不需要、也不应自行清理监听。
+   */
+  signal?: AbortSignal | null;
   [key: string]: any;
 }
 

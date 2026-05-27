@@ -1,679 +1,267 @@
-﻿# iceCoder 架构与运行时说明
+﻿# iceCoder
 
-iceCoder 是面向本地代码仓库的 **工具化 LLM 运行时**：以 Harness 为核心，整合提示词拼装、工具执行、任务状态、仓库上下文；**TaskGraph** 是唯一结构化执行上下文注入来源（已替代旧的 Execution Transparency Layer）；**CheckpointEngine（Runtime Resilience v2）** 在同一份 checkpoint JSON 上附加 `runtimeV2` 以增强长会话弹性；可选 **双模运行时监管（Supervisor）** 在 `off` / `adaptive` / `strict` 三档间切换自由与强约束执行；再配合文件化长期记忆、会话压缩与快照、CLI / HTTP API / WebSocket SPA，以及可选 **MCP** 工具接入，目标是接近 Claude Code / Codex CLI 等工具在「可靠执行工程任务」上的表现。
+**自主编码 Agent 在长任务里容易失控。** 偏离目标、反复调用同一工具、看似收尾实则没交付——在 **20～200+ 轮**工具调用后尤其常见。
 
-**技术栈：** Node.js 18+、TypeScript、Express（生产环境托管 SPA）、Vite（开发态独立端口）、WebSocket、Vitest。
+**iceCoder 是自托管的工具化 LLM 运行时治理层**：真实任务中 Harness 已**稳定跑通 217 轮**工具调用（更高轮次尚未压测）；配合 **L1/L2 双模监管**、Checkpoint 恢复、TaskGraph 计划注入、文件化长期记忆、Web **冰豆**指示器与 **PC/手机多端同步**、**27** 个内置工具、MCP 扩展，以及 CLI / Web / WebSocket 全栈入口。
 
-**已从代码库移除：** 早期的**多阶段流水线**及按阶段注册的 **Agent** 抽象（如 `BaseAgent`、`executePipeline`、阶段报告生成等）。当前 `Orchestrator` 仅聚合 `FileParser` 与 `LLMAdapter`，供 WebSocket 聊天等入口共享实例。
-
-[English](./README.md) | [环境变量](./docs/环境变量.md) | [后续优化计划](./docs/nextWork.md)
+[English README](./README.md) · [项目介绍](./docs/项目介绍.md) · [Project guide](./docs/PROJECT-GUIDE.md)
 
 ---
 
-## 1. 当前状态
-
-| 能力 | 状态 |
-|------|------|
-| **TaskGraph** | 已接通；`GraphExecutor` 为唯一结构化上下文注入源；`TaskDomainGate` 对 `question`/`inspect` 等保持自由模式 |
-| **CheckpointEngine v2** | 已在同一 `{sessionId}.checkpoint.json` 叠加 `runtimeV2` |
-| **双模 Supervisor** | **部分落地**：`loadHarnessSupervisorRuntime` 已在 `chat`/`run`/WebSocket 入口加载；`ModeController`、`ModeDecisionEngine`、`ToolGate`、执行模式约束等已接入 Harness；完整规格见 [`docs/双模方案2.md`](./docs/双模方案2.md) |
-| **记忆 / 压缩 / 子代理** | 文件化记忆、分层压缩、只读子代理探索均已可用 |
-| **Eval** | `npm run eval:agent` 仍为指标骨架，尚无完整判分 Runner |
-
-验证命令：
+## 30 秒跑起来
 
 ```bash
-npx tsc --noEmit
-npm test
-npm run eval:agent
-```
-
-**测试基线请以 `npm test` 终端输出为准。** 用例分布在 `test/**/*.test.ts`（约 **60+** 个测试文件；用例总数随提交变化，勿死记 README 中的数字）。
-
----
-
-## 2. 总体架构
-
-```text
-CLI / Web / Remote
-  -> loadAssembledChatPrompt()
-  -> HarnessConfig
-      -> ContextAssembler
-      -> LLMAdapter
-      -> ToolExecutor
-      -> HarnessMemoryIntegration
-      -> ContextCompactor
-      -> GraphExecutor（TaskGraph） + TaskCheckpointManager / CheckpointEngine
-  -> Harness.run()
-```
-
-核心模块：
-
-| 模块 | 职责 |
-|---|---|
-| `src/prompts/*` | 提示词分段、静态 system、动态 overlay、评测/禁工具模式 |
-| `src/harness/harness.ts` | 带工具调用的 LLM 主循环、执行、恢复、权限、验证门禁 |
-| `src/harness/task-state.ts` | 当前任务状态账本 |
-| `src/harness/repo-context.ts` | 仓库上下文账本 |
-| `src/harness/context-assembler.ts` | 组装 system prompt 与动态上下文 |
-| `src/harness/context-compactor.ts` | 微压缩、硬压缩、恢复提示、文件内容重注入 |
-| `src/harness/harness-memory.ts` | 长期记忆召回/注入/提取与会话记忆协作 |
-| `src/memory/file-memory/*` | 文件化长期记忆完整生命周期 |
-| `src/tools/*` | 工具注册、执行、元数据、权限辅助 |
-| `src/llm/*` | OpenAI / Anthropic 兼容适配器 |
-| `src/mcp/*` | MCP 子进程客户端，将外部 Server 工具并入 `ToolRegistry` |
-| `src/web/*` | Express、`/api/*` 路由、统一聊天 WebSocket |
-| `src/public/*` | Vite 前端根目录（聊天页、配置 UI、**冰豆** Canvas 与会话指示桥接脚本等） |
-| `src/types/runtime-snapshot.ts` | 会话笔记中 `icecoder-runtime` 块的版本化 JSON 模型 |
-| `src/types/task-graph.ts` | TaskGraph 核心数据模型 |
-| `src/types/task-graph-view.ts` | TaskGraph 前端视图模型（Phase 13） |
-| `src/types/runtime-checkpoint.ts` | `runtimeV2`、保存触发器等 Resilience schema |
-| `src/harness/task-graph.ts` | TaskGraph 状态机 |
-| `src/harness/task-graph-builder.ts` | TaskGraph 构建 |
-| `src/harness/task-graph-executor.ts` | Harness 集成桥（唯一上下文注入源） |
-| `src/harness/task-graph-review.ts` | 契约校验、偏差检测、失败分类 |
-| `src/harness/task-graph-config.ts` | TaskDomainGate（选择性监督） |
-| `src/harness/checkpoint.ts` | `TaskCheckpoint` v1 |
-| `src/harness/checkpoint-engine.ts` | `CheckpointEngine`：合并写入 `runtimeV2` |
-| `src/harness/branch-budget.ts` | 分支预算快照供 checkpoint |
-| `src/harness/supervisor/*` | 双模监管：全局策略、模式决策、ToolGate、风险分类、纠正预算 |
-| `src/types/supervisor.ts` | Supervisor 配置与 `GlobalModePolicy` 类型 |
-| `data/supervisor-config.example.json` | 监管参数模板（`mode`、`shadow`、`executionMode` 等） |
-
----
-
-## 3. Harness 运行流程
-
-Harness 是运行时核心。它负责把“模型想做什么”变成“实际执行了什么”。
-
-```text
-初始化消息
-初始化 TaskState
-初始化 RepoContext
-while running:
-  maybeCompact()
-  注入 Runtime State / Repo Context
-  粗召回记忆（pre-LLM，仅关键词，最多 3 条）
-  normalizeMessages()
-  调用 LLM(messages, tools)
-
-  if toolCalls:
-    权限裁决 allow/confirm/deny
-    执行工具
-    更新 TaskState / RepoContext
-    失败恢复与重复失败检测
-    注入相关记忆
-    continue
-
-  else:
-    no-tool recovery
-    verification gate
-    stop hooks
-    final
-```
-
-### 3.1 已完成的运行时保障
-
-| 能力 | 状态 |
-|---|---|
-| 无工具早停兜底 | 执行型任务没调用工具时会自动要求继续执行 |
-| 工具调用判定放宽 | 只要 `toolCalls` 非空就执行，不强依赖 `finishReason` |
-| 权限规则 | `allow / confirm / deny` 已进入工具执行前置裁决 |
-| confirm 缺省安全 | 需要确认但没有 UI 回调时默认拒绝 |
-| Task State v1 | 跟踪任务 intent、phase、改动文件、验证状态 |
-| Verification Gate v1 | 改过代码但未验证时不能直接完成 |
-| RepoContext v1 | 跟踪读过/改过文件、运行命令、测试命令、诊断 |
-| 压缩恢复 Runtime Context | 硬压缩后重新注入 `TaskState + RepoContext`，保留目标、改动文件和验证命令 |
-| 重复失败检测 | 同工具同参数重复失败时提示换策略 |
-| 短指令保护 | 微压缩不会删除“跑测试”“继续”等短执行指令 |
-| 会话记忆 force 更新 | 压缩前可强制备份当前会话状态 |
-| **TaskGraph** | **关键 intent 下由 `GraphExecutor` 注入节点上下文；`task_graph_*` WebSocket 事件** |
-| **CheckpointEngine（v2）** | **`runtimeV2` 叠加在同一 checkpoint JSON，串联写盘不破坏 v1** |
-
-### 3.2 子代理（Sub-Agent Runner）
-
-`src/harness/sub-agent-runner.ts` 提供**隔离的只读子代理**用于代码库探索。主模型调用 `delegate_to_subagent` 时，它会启动一个私有消息循环，使用白名单工具集（仅 `read_file`、`search_codebase`、`fs_operation list`）。子代理独立运行（60s 超时、上限 10 轮），读取文件、搜索代码后返回**结构化摘要**而非原始文件内容。
-
-这解决了"上下文污染"问题：以前每次探索任务都会把大量搜索结果和文件内容直接丢进会话历史，加速压缩并浪费 token。有了子代理后，主上下文只收到短摘要（约几百 token），探索引起的上下文膨胀降低约 60-80%。
-
-子代理还带有**进程级 LRU 缓存**（默认 100 条，按 task + filesRead + mtime 作为键），文件未变时跳过重复执行。
-
-关键组件：
-- `SubAgentRunner` — 带超时和轮次限制的隔离消息循环
-- `delegate_to_subagent` — 暴露给模型委派探索任务的工具
-- `formatSubAgentResult()` — 将结构化结果格式化为主会话可读的工具结果
-
-### 3.3 工具规划提示（Tool Planner）
-
-对首轮即判定为**可执行工程任务**的对话，Harness 可注入 **Tool Planner**：依据 `taskState.intent`（如 debug / edit / test）给出 **2～3 个优先建议工具名**（映射表见 `src/harness/tool-plan-intent-map.ts`，逻辑见 `src/harness/tool-planner.ts`），减少模型开场「只寒暄不调用工具」的情况。
-
-### 3.4 TaskGraph（替代 Execution Transparency Layer）
-
-Harness 在构造时**始终**创建 `GraphExecutor`（Phase 11–13）。是否初始化任务图由 **TaskDomainGate**（`src/harness/task-graph-config.ts`）按 intent 决定：
-
-- **启用图**：`edit`、`debug`、`test`、`refactor`
-- **自由模式**：`question`、`inspect`、`explain` 等 — 不初始化图，避免过度约束
-
-要点：
-
-- **上下文注入**：`GraphExecutor.getCurrentNodeContext()` 是写入 LLM 提示的**唯一**结构化执行上下文（不再注入独立 ExecutionPlan 正文）。
-- **事件**：`task_graph_init` / `task_graph_node` / `task_graph_branch` / `task_graph_done`（`HarnessStepEvent`）；前端与 **冰豆** 仍兼容旧的 `execution_plan_*` 类型名。
-- **持久化**：TaskGraph 状态经 `checkpoint-engine.ts` 的 **`runtimeV2`** 字段保存；`TaskCheckpoint.plan` 已移除。
-- **设计稿**：`docs/requirement/任务图规划-finish.md`、`docs/requirement/执行透明-finish.md`（历史 ETL 需求归档）。
-
-### 3.5 CheckpointEngine（Runtime Resilience v2）
-
-`CheckpointEngine`（`checkpoint-engine.ts`）在 **`TaskCheckpointManager` 负责的同一 `{sessionId}.checkpoint.json`** 上附加 **`runtimeV2`**：积累近期工具轨迹、失败、恢复信号、分支预算快照等（`branch-budget.ts`）。磁盘写入经 Harness 内 **`checkpointPersistTail`** 串行化，避免交错 rename。**无 `runtimeV2` 的旧文件仍可读**；新字段对老代码透明。触发与字段含义见 **`docs/requirement/长时间连续工作-finish.md`**。
-
-### 3.6 双模运行时监管（Supervisor）
-
-在关键工程 intent（`edit` / `debug` / `test` / `refactor`）上，可选启用 **Supervisor** 在「自由执行」与「强约束接管」之间动态切换：
-
-| 档位 | `config.json` 的 `supervisorMode` / `supervisor-config.json` 的 `mode` | 行为概要 |
-|------|----------------------------------------|----------|
-| **off** | `off`（Harness 未注入配置时的默认回落） | 不启用监管决策链 |
-| **adaptive** | `adaptive`（`supervisor-config.json` 默认） | 按风险信号在自由段与接管段间切换；`executionMode` 可在 `free` / `forced` 间升降 |
-| **strict** | `strict` | 全程强约束；`executionModeFloor` 为 `forced` |
-
-要点：
-
-- **配置加载**：`loadHarnessSupervisorRuntime()` 由 `chat` / `run` / `chat-ws` / `remote-ws` 调用；**档位**写入 `data/config.json` 的 **`supervisorMode`**（Web 顶栏三态按钮可切换）；细粒度参数仍在 `supervisor-config.json`；加载失败**降级为 off**。
-- **环境变量**：仅 `ICE_SUPERVISOR_SHADOW` 可在 Global 层覆盖影子模式；`ICE_SUPERVISOR_CONFIG_PATH` 指定监管参数文件路径。
-- **Web UI**：顶栏主题按钮左侧 **自由 / 自适应 / 严格** 三态切换（`PATCH /api/config/supervisor-mode`）。
-- **影子模式**：`ICE_SUPERVISOR_SHADOW=1` 时评估链路运行但不改写 `supervisorPhase`（用于对照实验）。
-- **规格文档**：[`docs/双模方案2.md`](./docs/双模方案2.md)（V1.3.7）；示例配置：[`data/supervisor-config.example.json`](./data/supervisor-config.example.json)。
-- **环境变量**：`ICE_SUPERVISOR_SHADOW`、`ICE_SUPERVISOR_CONFIG_PATH` — 见 [`docs/环境变量.md`](./docs/环境变量.md) §4。
-- **落地缺口（开发排期）**：[`docs/双模落地缺口.md`](./docs/双模落地缺口.md) — 完整双模仍缺的模块与功能清单。
-
-#### `~supervisor` 命令（Supervisor 事件报告）
-
-Web 聊天输入框支持 **`~supervisor`**（输入 `~` 可打开命令面板补全），汇总 **L2 Timeline** 与 **Execution Mode** 进入/退出记录，行为与 `GET /api/supervisor/events` 一致。
-
-| 参数 | 说明 | 默认 |
-|------|------|------|
-| （无参） | 生成最近 7 天的 Markdown 文本报告 | — |
-| `days=N` | 统计最近 N 天内的 JSONL 事件（**1–90**） | `7` |
-| `event=<type>` | 仅保留指定类型的 Timeline 事件 | 无（全部类型） |
-| `limit=N` | 报告末尾展示最近 N 条 Timeline 明细（**1–50**） | `10` |
-
-参数以空格分隔的 `key=value` 形式追加在命令后，可组合使用。
-
-**示例：**
-
-```text
-~supervisor
-~supervisor days=3
-~supervisor event=recover
-~supervisor days=7 limit=20
-~supervisor days=14 event=failure limit=15
-```
-
-**`event=` 可选值**（`SupervisorTimelineEventType`）：`switch`、`recover`、`rollback`、`handoff`、`failure`、`drift`、`timeout`、`shadow_diagnostic`。
-
-**HTTP 等价接口：**
-
-- 文本报告（响应 JSON 的 `report` 字段）：`GET /api/supervisor/events?days=7&limit=10`
-- 结构化 JSON：`GET /api/supervisor/events?days=7&event=recover&format=json`（`format=json` 仅 HTTP 可用，聊天命令固定返回文本报告）
-
-**数据源：**
-
-- L2 Timeline：`data/runtime/supervisor-events.jsonl`（与 `supervisor-config.json` 中 `persistPath` 一致）
-- Execution Mode 进入/退出：`data/runtime/telemetry.jsonl` 中的 `execution_mode_enter` / `execution_mode_exit`
-
-报告内容包括：Execution Mode 进入 forced 的最近记录（含 `primaryReasonHuman`、`enteredBy` 信号）、Timeline 事件聚合统计，以及按 `limit` 截断的最近明细。
-
----
-
-## 4. 提示词系统
-
-提示词系统采用静态层和动态层分离。
-
-### 4.1 静态 System Prompt
-
-由 `src/prompts/sections.ts` 定义，经 `PromptAssembler` 拼装。内容包括：
-
-- 身份与工作方式
-- action-first 行为
-- 执行规则
-- 修改规则
-- 工具使用原则
-- Shell/Git 规范
-- 上下文管理提醒
-
-静态层尽量稳定，便于 provider 侧 prompt cache 命中。
-
-### 4.2 动态上下文
-
-由 `ContextAssembler` 注入，包含：
-
-- 工作目录、平台、日期
-- 语言设置（仅显式配置时）
-- 记忆提示词
-- 项目说明
-- Runtime State
-- Repo Context
-- 相关长期记忆
-
-### 4.3 工具禁用模式
-
-`ICE_EVAL_MODE=1` 或 `ICE_DISABLE_TOOLS=1` 时：
-
-- 移除工具相关提示段
-- runtime 传入 `tools: []`
-
-这样评测/禁工具模式不会出现“提示词说不能用工具但 runtime 仍提供工具”的不一致。
-
----
-
-## 5. 工具系统
-
-工具系统位于 `src/tools/`。
-
-核心组件：
-
-| 组件 | 作用 |
-|---|---|
-| `ToolRegistry` | 注册和导出工具定义 |
-| `ToolExecutor` | 执行工具、超时、重试、参数校验 |
-| `StreamingToolExecutor` | 多工具执行与输出流转发 |
-| `tool-metadata` | 只读、破坏性、并发安全、结果大小等元信息 |
-| Harness permissions | 执行前权限裁决 |
-
-主要工具类别：
-
-- 文件读取、写入、编辑、patch
-- shell 命令
-- git
-- 代码搜索
-- 文档解析
-- Web 搜索/抓取
-- 环境信息、diff、撤销编辑
-
----
-
-## 6. Task State 与 Repo Context
-
-### 6.1 Task State
-
-`TaskState` 是当前任务的结构化账本，记录：
-
-```json
-{
-  "goal": "修复失败测试",
-  "intent": "debug",
-  "phase": "verification",
-  "filesRead": ["src/a.ts"],
-  "filesChanged": ["src/a.ts"],
-  "commandsRun": ["npm test"],
-  "verificationRequired": true,
-  "verificationStatus": "passed"
-}
-```
-
-作用：
-
-- 判断是否需要验证
-- 阻止“改完直接说完成”
-- 为压缩恢复提供结构化状态
-
-### 6.2 Repo Context
-
-`RepoContext` 是仓库上下文账本，记录：
-
-- 读过的文件
-- 改过的文件
-- 运行过的命令
-- 测试命令
-- 最近诊断/错误
-
-一旦有有效状态，Harness 会在下一轮 LLM 前注入：
-
-```text
-[System Runtime State]
-# Runtime State
-...
-# Repo Context
-...
-[/System Runtime State]
-```
-
-这样模型不必从长历史里重新推断当前任务状态。
-
----
-
-## 7. 记忆系统
-
-iceCoder 的长期记忆是文件化的，不依赖外部数据库。
-
-### 7.1 记忆类型
-
-| 类型 | 用途 |
-|---|---|
-| `user` | 用户角色、目标、明确偏好 |
-| `feedback` | 用户纠正或行为反馈 |
-| `project` | 项目事实、约定、目标 |
-| `reference` | 外部系统、链接、文档引用 |
-
-### 7.2 记忆生命周期
-
-```text
-对话
-  -> 触发提取
-  -> LLM 提取
-  -> 密钥扫描
-  -> 去重 / 冲突检测
-  -> 写入 memory-files
-  -> 后续召回
-  -> 相关性门控
-  -> CoN + JSON 注入
-  -> Dream 整合
-  -> 衰减 / 淘汰
-```
-
-### 7.3 召回流程（双阶段）
-
-`HarnessMemoryIntegration`（`src/harness/harness-memory.ts`）在两条路径上注入记忆：
-
-| 阶段 | 时机 | 是否调用 LLM | 遥测 `recallPhase` |
-|------|------|--------------|-------------------|
-| **粗召回（pre-LLM）** | 每轮主 LLM 调用前 | **否**（显式传入 `llmAdapter: null`） | `coarse_pre_llm` |
-| **标准召回** | 工具轮结束后、下一轮 LLM 前 | **视门槛而定** | `standard` |
-
-粗召回仅取关键词/TF-IDF **Top 3**，典型耗时约数秒；**不**设置 `injectedForCurrentMessage`，工具轮后仍可走标准召回。
-
-标准召回（`src/memory/file-memory/memory-recall.ts`）：
-
-```text
-用户查询
-  -> 扫描项目级 + 用户级记忆（扫描缓存）
-  -> 排除 alreadySurfaced（跨轮去重）
-  -> 置信度过滤（>= 0.3）
-  -> 按任务意图过滤 level（execute / inspect / question）
-  -> 冲突记忆去重
-  -> FactIndex 构建/缓存
-  -> 若 llmAdapter 存在且过滤后候选 >= 4（LLM_RECALL_MIN_CANDIDATES）：
-        LLM 选文件 + 精排 facts（30s 超时）-> usedLLM: true
-     否则或 LLM 空结果/超时/失败：
-        关键词回退（TF-IDF、否定展开、时间范围加权）-> usedLLM: false
-  -> 关联扩展（1 跳，最多 3）
-  -> Harness：候选 > 2×finalK 时可选 LLM 精排（不计入 usedLLM）
-  -> 相关性门控 + 执行意图过滤 + token 预算
-  -> CoN + JSON 注入
-```
-
-**遥测里 LLM 占比为 0% 的常见原因：** 粗召回事件恒为关键词；记忆库较小时 `alreadySurfaced` 后候选常 **&lt; 4** 从而跳过 LLM；Harness 二次精排用 LLM 但不写入 `usedLLM`。可查 `GET /api/memory/telemetry` 与 `data/memory/telemetry.jsonl`。
-
-**关键常量：** `LLM_RECALL_MIN_CANDIDATES = 4`、`CONFIDENCE_FILTER_THRESHOLD = 0.3`、标准召回冷却默认 **5 分钟**（`ICE_STANDARD_RECALL_COOLDOWN_SEC`，`0` 关闭）。热配置：`data/memory/memory-config.json`。
-
-### 7.4 已收紧的策略
-
-- 召回从“宽泛相关”改为“严格相关”。
-- 编码/调试/编辑任务优先注入项目事实和技术约束。
-- 用户偏好只有强匹配当前动作时才注入。
-- 记忆提取从“宁滥勿缺”改为“证据优先”。
-- 单次弱信号不应进入长期记忆，交给会话记忆处理。
-
-
-### 7.5 Dream 整合与记忆淘汰
-
-- 这块参考了claudeCode的创意
-
-`src/memory/file-memory/memory-dream.ts` 运行周期性"做梦"过程（类比人类睡眠记忆整合），对记忆文件进行审查、去重和修剪。触发条件：
-
-- 会话数达到阈值（每 5 次会话）
-- 记忆文件数超过阈值（默认 **10** 个，`DEFAULT_DREAM_CONFIG.fileCountThreshold`）
-- 上次 Dream 后有新文件 ≥ 10 个
-- 检测到过期记忆 ≥ 3 个
-- MEMORY.md 索引中存在死链接
-- 记忆数超过 Dream 后上限
-
-Dream 阶段：**定向** → **收集** → **整合** → **修剪**。整合后，如果配置了 `enforceMemoryCapAfterDream` / `enforceUserMemoryCapAfterDream`，会自动执行上限强制淘汰，分别作用于项目级和用户级记忆目录。
-
-`src/memory/file-memory/memory-eviction.ts` 实现**加权评分淘汰**（非纯 LRU）。评分因素：
-
-| 因素 | 范围 | 效果 |
-|---|---|---|
-| 新鲜度惩罚 | 0-100 | 越久不活跃分越高（更易淘汰） |
-| 置信度保护 | 0-30 | 高置信度记忆受保护 |
-| 召回频率保护 | 0-20 | 经常被召回的受保护 |
-| 类型保护 | 0 或 15 | `user` 类型受保护 |
-| 层级保护 | -18 到 35 | `hard_rule` > `preference` > `project_fact` > `observation` > `session_state` |
-| 证据强度保护 | -16 到 28 | `explicit` > `repeated` > `inferred` > `weak` |
-| 来源保护 | 0-30 | `user_explicit` > `manual` > `dream` > `llm_extract` |
-| 类型淘汰偏置 | 可配置 | `feedback` / `reference` 类型偏向淘汰 |
-
-安全保障：
-- `confidence >= 1.0` 的记忆永不淘汰（用户明确声明）
-- 保护期内的活跃记忆不淘汰
-- `MEMORY.md` 索引文件本身永不淘汰
-- 被淘汰文件移入 `evicted/` 目录（可通过 `restoreEvicted()` 恢复）
-- 淘汰日志写入 `evicted/eviction-log.jsonl`
-- 自动清理过旧归档文件
-
-### 7.6 记忆遥测
-
-- **进程内 + JSONL：** `memory-telemetry.ts` 记录 `memory_recall` / `memory_extract` / `memory_dream`；默认日志 `data/memory/telemetry.jsonl`。
-- **HTTP：** `GET /api/memory/telemetry` 汇总近 N 天（召回 LLM/关键词占比、提取 cache 命中、Dream 统计、库内文件数等）。
-- **口径说明：** `usedLLM` 仅表示 `recallRelevantMemories()` 是否走 LLM 选文件分支，**不包含** Harness 二次精排与相关性门控 rescue 的 LLM 调用。
-
----
-
-## 8. 会话记忆与压缩
-
-### 8.1 会话记忆
-
-会话记忆是当前会话的长期工作笔记，位于 `data/sessions/session-notes.md`。
-
-包含 10 个 section：
-
-1. Session Title
-2. Current State
-3. Task Specification
-4. Files and Functions
-5. Workflow
-6. Errors & Corrections
-7. Codebase Documentation
-8. Learnings
-9. Key Results
-10. Worklog
-
-当前实现：
-
-- 支持压缩前 force 更新
-- LLM 直接返回 Markdown
-- 写入前校验结构
-- 压缩后优先作为恢复上下文
-
-### 8.2 上下文压缩
-
-压缩器分层工作：
-
-1. snip 重复 reminder / summary
-2. microcompact 轻量压缩
-3. trimToolResults 裁剪工具输出
-4. structuralExtract 本地结构化摘要
-5. 可选 LLM summary
-6. 重注入最近文件内容与恢复提示
-
-上下文窗口优先级：
-
-```text
-ICE_CONTEXT_WINDOW
-  -> 默认 provider maxContextTokens
-  -> 最大 provider maxContextTokens
-  -> 128k 默认
-```
-
----
-
-## 9. Web 服务、MCP 与配置
-
-| 组件 | 默认端口 | 说明 |
-|------|----------|------|
-| Express（`src/index.ts` / `npm run dev:api`） | **1024**（`PORT`） | REST API；生产环境同时托管 `dist/public` 静态 SPA |
-| CLI `web` / `start` / `chat` | **3784**（`PORT` 或 `--port` 可覆盖） | `src/cli/commands/serve.ts`、`chat.ts` |
-| Vite 开发服务器（`vite.config.ts`） | **1025** | 开发态 UI；`/api` 与 WS 代理到 `localhost:1024` |
-
-主要 API 前缀：`/api/config`、`/api/tools`、`/api/remote`、`/api/sessions`、`/api/chat/upload`、`/api/memory/*`（遥测报告、文件管理、召回测试/导出）、`/api/supervisor/events`（Supervisor / Execution Mode 事件报告，见 §3.6 **`~supervisor`**）。提供者配置默认读取 **`data/config.json`**（可参考 `data/config.example.json`）；`src/index.ts` 支持对配置文件 **watch 热重载** 提供者。
-
-### 冰豆（Ice Bean · Web 聊天指示器）
-
-**仅 Web 聊天页**：在 `src/public` 中用 Canvas 绘制的会话状态角色 **「冰豆」**，用于把 **轮次、思考、工具进度、记忆提示** 等映射成表情与气泡；显示名常量见 `SESSION_PET_DISPLAY_NAME`（`session-pet-palette.js`），**不修改** Harness 与后端协议逻辑。
-
-| 方面 | 说明 |
-|------|------|
-| **外观** | 约 120×120 逻辑像素、黑底胶囊眼；**眼睛颜色**与 `config.json` 的 **`supervisorMode`** 三档对应（自由 `#88EDC7` / 自适应 `#86E0FF` / 严格 `#F1A8B2`）；切换顶栏模式时冰豆气泡提示「当前模式：…」。 |
-| **外圈圆环** | 自顶端顺时针，表示**上下文 / token 占用**大致比例（绿→黄→红渐变）。 |
-| **表情** | 对外约 **20** 种状态（含眨眼等），由 `chat-pet-bridge.js` 根据 WebSocket 推送的步骤事件（与 `HarnessStepEvent` 对应）在 `chat-page.js` 中更新。 |
-| **交互** | 可拖动改位置，位置存 `localStorage`（键 `ice-session-pet-position`）；**双击**恢复默认摆放；Canvas 的无障碍文案由 `buildSessionPetCanvasAriaLabel` 生成（前缀为「冰豆」）。 |
-| **相关文件** | `src/public/js/session-pet.js`、`session-pet-palette.js`、`chat-pet-bridge.js`；样式在 `src/public/css/style.css`；入口侧在 `chat-page.js`、`main.js`。 |
-| **联调页** | `src/public/pet-expressions-demo.html` 与 `pet-expressions-demo.js`，用于手动切换表情验收。 |
-| **测试** | `test/public/session-pet-palette.test.ts`、`session-pet-expression-cycle.test.ts`。 |
-
-**CLI / 纯终端模式没有冰豆**；它是 SPA 聊天的可选视觉反馈，与核心运行时解耦。
-
-### MCP
-
-`src/mcp/mcp-manager.ts` 从**项目工作目录**下的 **`.iceCoder/mcp.json`** 读取顶层 **`mcpServers`**（可用环境变量 **`ICE_MCP_CONFIG_PATH`** 指向其他文件）。为每个启用的 Server 拉起子进程并把其工具注册进主 **`ToolRegistry`**（工具名形如 `mcp_服务器名_工具名`）。初始化失败会打日志但不阻断核心服务。模板见 **`.iceCoder/mcp.example.json`**。命令行：`iceCoder mcp`。
-
-**说明：** LLM 提供者仍在 `data/config.json`（或 `ICE_CONFIG_PATH`）；MCP 与主配置已拆分。
-
-### 环境变量
-
-进程环境变量与 Web 前端 `localStorage` 键的**完整说明**（用途、合法取值、默认值、读取位置、`.env` 模板）见独立文档：
-
-**[`docs/环境变量.md`](./docs/环境变量.md)**（英文精简版：[`docs/environment-variables.md`](./docs/environment-variables.md)）
-
-常用变量速查：
-
-| 变量 | 作用 | 默认值 | 合法取值 |
-|------|------|--------|----------|
-| `ICE_DATA_DIR` | CLI 数据根 | `./data` 或 `~/.iceCoder` | 目录路径 |
-| `ICE_CONFIG_PATH` | LLM 提供者配置 | `{dataDir}/config.json` | 文件路径 |
-| `PORT` | HTTP 端口 | CLI **3784** / `index.ts` **1024** | 端口号 |
-| `config.json` → `supervisorMode` | 双模监管档位 | `adaptive` | `off` \| `adaptive` \| `strict` |
-| `ICE_CONTEXT_WINDOW` | 上下文 token 上限 | provider → **128000** | 正整数 |
-| `ICE_EVAL_MODE` | 评测模式（跳过提取等） | 关闭 | `1` |
-| `ICE_MCP_CONFIG_PATH` | MCP 配置 | `<cwd>/.iceCoder/mcp.json` | 文件路径 |
-
-共 **40+** 项进程变量；已移除的 `ICE_HARNESS_TOKEN_BUDGET`、`ICE_HARNESS_TIMEOUT_*` 等见文档 §7。浏览器端 `ICE_PLAN_PANEL=0`（`localStorage`）控制任务图面板显隐。
-
-### 设计与架构文档（推荐阅读）
-
-- [`docs/环境变量.md`](./docs/环境变量.md) — **环境变量完整参考**（用途、合法取值、默认值）
-- [`docs/environment-variables.md`](./docs/environment-variables.md) — Environment variables (English)
-- [`docs/nextWork.md`](./docs/nextWork.md) — 当前路线图与 eval 缺口
-- [`docs/requirement/任务图规划-finish.md`](./docs/requirement/任务图规划-finish.md) — TaskGraph / StepGraph（核心已实现）
-- [`docs/requirement/执行透明-finish.md`](./docs/requirement/执行透明-finish.md) — 旧 ETL（已由 TaskGraph 替代）
-- [`docs/requirement/长时间连续工作-finish.md`](./docs/requirement/长时间连续工作-finish.md) — 长会话与 checkpoint
-- [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) — 记忆系统调整说明
-- [`docs/test.md`](./docs/test.md) — **双模完整测试手册**（自动化命令 + 6 场景手工步骤 + 附录 B 勾选）
-- [`docs/双模方案2.md`](./docs/双模方案2.md) — 双模监管规格 **V1.3.7**（I10 forced min dwell、signal 优先级、`enteredBy`）
-- [`docs/运行时后续优化.md`](./docs/运行时后续优化.md) — Phase **5E**（benchmark / Learning / 验收自动化，**后续不做**）
-- [`docs/locomo/memory-optimization-roadmap.md`](./docs/locomo/memory-optimization-roadmap.md) — 记忆 benchmark 与召回优化
-
-### 仓库目录（摘要）
-
-```text
-src/cli/          CLI 与 bootstrap
-src/core/         Orchestrator
-src/harness/      Harness、压缩、TaskGraph、checkpoint/CheckpointEngine v2、branch-budget、supervisor/、子代理、Tool Planner、任务/仓库状态
-src/memory/       文件化记忆、会话笔记、Dream、淘汰
-src/tools/        内置工具与执行器
-src/mcp/          MCP 管理
-src/web/          Express、路由、WebSocket
-src/public/       前端（Vite root）：聊天页、冰豆 Canvas/桥接、静态资源
-src/types/        task-graph、runtime-snapshot、runtime-checkpoint 等共享类型
-docs/             架构与长篇设计稿
-test/             Vitest
-data/             提供者配置模板、会话数据等
-```
-
----
-
-## 10. 运行时评测（eval 骨架）
-
-`npm run eval:agent` 为**历史脚本名**；当前提供的是最小 eval 骨架（指标名与 case 分类），尚未实现完整判分 Runner。
-
-```bash
-npm run eval:agent
-```
-
-输出内容包括：
-
-- case 列表
-- 指标名
-- 基准任务类型
-
-当前指标名：
-
-- `task_success_rate`
-- `tool_call_rate`
-- `first_tool_latency`
-- `no_tool_final_rate`
-- `verification_rate`
-- `repeat_failure_rate`
-- `memory_interference_rate`
-- `tokens_per_successful_task`
-- `compaction_saved_tokens`
-
-这还是骨架，后续需要升级为真正可判分的 eval runner。
-
----
-
-## 11. 开发与验证
-
-```bash
+git clone <repo-url> && cd iceCoder
 npm install
-npx tsc --noEmit
-npm test
-npm run eval:agent
+cp data/config.example.json data/config.json   # 填入 LLM API Key
+npm run dev                                     # API :1024 · UI :1025
 ```
-
-常用运行方式：
 
 ```bash
-npm run dev
-npm run dev:api
-npm run dev:web
-npx tsx src/cli/index.ts run "修复失败测试"
+npx tsx src/cli/index.ts run "修复失败测试" --max-rounds 100
+npm test                                        # 1,623 条用例 · ~38 秒 · 100% 通过
 ```
 
----
-
-## 12. 会话压缩与恢复（Runtime 持久化）
-
-每次会话笔记（`session-notes.md`）在 **Runtime Evidence (auto)** 一节中除人类可读摘要外，会写入 fenced 块 \`\`\`icecoder-runtime：内含 `TaskState` 与 `RepoContext` 的结构化 JSON（带体积上限）。**续聊且已有消息历史时**，Harness 会优先从该块 **`applySnapshot` 到内存**，从而在进程或页面重载后仍能恢复目标、阶段、已读/已改文件与验证状态，而不必仅靠自然语言猜测。
-
-持久化 JSON 的 **schema**（`PersistedRuntimeV1`、`TaskStateSnapshot`、`RepoContextSnapshot` 等）统一定义在 **`src/types/runtime-snapshot.ts`**：`session-memory` 只依赖该公共模块，与 `task-state` / `repo-context` 实现类解耦，避免 memory 层反向引用 harness。
-
-（首轮任务时的 **Tool Planner** 见上文 §3.3；**TaskGraph** 与 checkpoint `runtimeV2` 见 §3.4–§3.5。）
+**环境要求：** Node.js 18+
 
 ---
 
-## 13. 当前仍需优化
+## 一眼看数字
 
-后续工作主要包括：
+> 实测日期 **2026-05-27** — 本地执行 `npm test` 与 `npm run test:coverage` 可复现。
 
-1. Memory v2 结构化分级：hard_rule / project_fact / preference / observation / session_state。
-2. 压缩与会话笔记的进一步耦合（如压缩前后 token 统计、恢复上下文预算裁剪等）——**结构化 `icecoder-runtime` 快照已可写入 `session-notes.md`**，细节见 [`docs/nextWork.md`](./docs/nextWork.md)。
-3. 正式 **Eval Runner**：真实执行、判分、输出趋势（`scripts/eval-runner.ts` 已有雏形；`npm run eval:agent` 仍为骨架）。
-4. Runtime Telemetry 落盘：工具调用率、验证率、token 成本、记忆干扰率。
-5. **双模运行时监管**：核心链路已接入；继续按 [`docs/双模方案2.md`](./docs/双模方案2.md) 补齐验收、遥测与边界场景。
-6. 在现有 **Tool Planner** 之上，加强按失败模式动态规划与恢复策略（长期形态见 **`docs/requirement/任务图规划-finish.md`**）。
-7. 多 Agent 协同：主 Agent 按需编排子 Agent（与当前 **`delegate_to_subagent`** 只读探索子回路形成演进关系）。
+| | |
+|---|---|
+| **长会话实测** | 生产任务中 Harness **稳定完成 217 轮**工具调用 · 更高轮次尚未压测 |
+| **测试** | **1,623** 条用例 · **141** 个测试文件 · **100%** 通过 · **~38 秒** |
+| **覆盖率（全 `src/`）** | 行 **75.7%** · 语句 **73.6%** · 函数 **77.7%** · 分支 **65.0%** |
+| **核心运行时覆盖率** | **Harness 82.4%** 行 · **Supervisor 95.1%** 行 · **Checkpoint ~93%** 行 |
+| **Agent 工具** | **27** 个注册工具（26 内置 + `delegate_to_subagent`）· 运行时还可挂载 **MCP** |
+| **入口** | CLI 7 子命令 · HTTP **:1024** · Vite 开发 UI **:1025** · WebSocket · 可选 Cloudflare 隧道 |
+| **Benchmark（同模盲评）** | 修复类 **86 vs 83**、**88 vs 85**（iceCoder 领先 CC）· 长周期实现类 **72 vs 59** |
+
+同样的工具、同样的模型 — **有治理的执行**。
 
 ---
 
-## 14. 项目目标
+## 为什么选 iceCoder？
 
-iceCoder 的目标不是“回答更像聊天机器人”，而是：
+| 痛点 | iceCoder 的解法 |
+|------|----------------|
+| 同一文件或失败命令反复循环 | **BranchBudget** 硬拦截重复模式 |
+| 50+ 轮工具调用后开始跑偏 | **L2 漂移检测** → 纠正或 **L1 forced** 升级 · 实测 **217 轮**稳定 |
+| 上下文压缩后任务状态丢失 | **CheckpointEngine v2** + `runningTurn` 快照 · 不只靠聊天 |
+| 切页 / F5 / 手机扫码后 UI 全丢 | **SPA keep-alive** + **按 session 广播** + 断点恢复 |
+| 未经验证就宣告完成 | 验收门禁 + TaskGraph 完成条件 |
+| 绑定托管 IDE、无法自部署 | **自托管** CLI / Web / WebSocket / MCP，跑在你自己的仓库上 |
+
+---
+
+## 项目是什么
+
+不是 IDE 替代品，而是跑在你本地仓库上的 **有治理的执行运行时**：
 
 ```text
-用户给任务
-  -> 系统稳定执行
-  -> 修改可验证
-  -> 上下文可恢复
-  -> 成本可度量
-  -> 回归可阻断
+CLI / Web / WebSocket（PC + 手机扫码）
+  → 提示词拼装 + 长期记忆召回
+  → Harness.run()（工具循环、验收门禁、上下文压缩）
+  → TaskGraph（结构化计划注入）
+  → Supervisor L1/L2（free ↔ forced · 漂移 · takeover · handoff）
+  → CheckpointEngine v2 + BranchBudget（长会话弹性）
+  → ToolExecutor（27 工具 + MCP）
+  → Web 冰豆 / 执行计划面板 / 多会话侧栏
 ```
+
+| 子系统 | 职责 |
+|--------|------|
+| **Harness** | Agent 主循环：LLM ↔ 工具、权限、验收、停止钩子、遥测 |
+| **Supervisor L1** | Execution Mode：`off` / `adaptive` / `strict` — 漂移/失败/checkpoint 恢复时 **forced** |
+| **Supervisor L2** | Runtime Supervisor：观察 → **takeover** → 纠偏 → **handoff** → cooldown |
+| **TaskGraph** | 唯一结构化执行上下文来源；问答/只读类任务可保持 free |
+| **Checkpoint v2** | 任务状态、分支预算、监管快照持久化 — 压缩/重启可续跑 |
+| **BranchBudget** | 同文件编辑 & 失败命令重试硬上限 — 防止无限循环 |
+| **文件记忆** | 长期事实 + 会话笔记 + Dream/淘汰；LLM 前关键词召回 |
+| **Web 体验** | 冰豆指示器、多会话侧栏、切页保活、F5/多端 `runningTurn` 恢复 |
+| **工具 & MCP** | 文件/Shell/Git/Patch/搜索/文档解析/网页/子 Agent 委托等 |
+
+---
+
+## 双模运行时（L1 + L2）
+
+| 层级 | 做什么 | Web 上怎么看 |
+|------|--------|--------------|
+| **L1 · Execution Mode** | `free` ↔ `forced`：工具门禁、BranchBudget、checkpoint 恢复必进 forced | 冰豆底部 `forced · …` chip · 顶栏 off/adaptive/strict |
+| **L2 · Runtime Supervisor** | 停滞 / 漂移 / 重复失败 → takeover 纠偏 → 稳定后 handoff | `~supervisor` 报告 · Timeline（`supervisor-events.jsonl`） |
+
+- **策略档**：`off`（纯 Harness）· `adaptive`（默认）· `strict`（首轮建图 + 更严门禁）
+- **checkpoint 恢复**：自动 submit `checkpoint_resumed` → 必须 forced（设计约束，非故障）
+- **遥测**：`GET /api/supervisor/events` · 聊天命令 `~supervisor` / `~supervisor event=recover days=3`
+
+---
+
+## Web 体验与多端同步
+
+| 能力 | 说明 |
+|------|------|
+| **冰豆（Session Pet）** | Canvas 会话指示器：~20 种表情 · token 圆环 · L1 forced chip · 眼色随 Supervisor 档位变化 |
+| **多会话侧栏** | 新建/切换/重命名/删除会话 · 按 session 隔离历史与 `session-notes` |
+| **切页 keep-alive** | 聊天 ↔ 配置 ↔ 记忆图谱切换不销毁 DOM · 流式/Stop/冰豆状态保留 |
+| **F5 / 断线恢复** | 服务端 `runningTurn` 快照 · 重连后还原流式文本、工具时间线、轮次、冰豆态 |
+| **PC + 手机** | `~scan` 扫码连同一 session · harness 事件 **按 session 广播** · 双端进度同步 |
+| **多端 confirm** | 危险操作 confirm 广播到所有订阅端 · **first-win** · 60s 超时 deny |
+| **命令快捷入口** | 输入框 `~` 补全 · 发送钮旁 **+** 直接列出本地命令并执行 |
+
+长任务进行中：切配置页回来、刷新浏览器、手机中途扫码，均可续看进度并继续 Stop/confirm — 详见 [`docs/requirement/聊天页状态保活与断点恢复-finish.md`](./docs/requirement/聊天页状态保活与断点恢复-finish.md)。
+
+---
+
+## 文件化记忆系统
+
+**不依赖外部数据库** — 记忆以 Markdown 文件落在 `data/user-memory/`（用户级）与项目工作区，经 `HarnessMemoryIntegration` 接入每轮 Harness 循环。核心实现：`src/memory/file-memory/`（**26** 模块 · 测试覆盖率 **70.3%** 行）。
+
+| 能力 | 说明 |
+|------|------|
+| **双阶段召回** | **粗召回**（每轮 LLM 前 · 关键词 Top 3 · 不调 LLM）+ **标准召回**（工具轮后 · 关键词或 LLM 精排 · 冷却 5min） |
+| **LLM 提取** | 对话后自动提取候选记忆 → 密钥扫描 → 去重/冲突检测 → 写入文件 |
+| **类型分级** | `user` / `feedback` / `project` / `reference` — 按任务意图（execute/inspect/question）过滤注入 |
+| **Dream 整合** | 周期性「做梦」去重、修剪、索引修复（参考 Claude Code 思路） |
+| **加权淘汰** | 非纯 LRU；结合引用频率、时效、相关性评分淘汰低价值记忆 |
+| **会话笔记** | 每 session 独立 `{id}.session-notes.md` · 含 `icecoder-runtime` 结构化快照（TaskState + RepoContext） |
+| **Web 图谱** | `#/memory` 记忆图谱页 · `~memory` / `~memory view` / `~memory delete` |
+| **遥测** | `GET /api/memory/telemetry` · `~telemetry` · 日志 `data/memory/telemetry.jsonl` |
+
+```text
+对话 → LLM 提取 → 安全扫描 → 写入 memory-files
+     → 粗召回(pre-LLM) / 标准召回(工具轮后) → 门控 + CoN 注入
+     → Dream 整合 → 衰减 / 淘汰
+```
+
+策略原则：**证据优先、严格相关** — 编码任务优先项目事实；弱信号不进长期记忆，留给会话笔记。详见 [`docs/项目介绍.md` §7](./docs/项目介绍.md) · [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md)。
+
+---
+
+## 工作原理
+
+### 漂移检测（L2）
+
+每一轮工具调用对照任务目标打分：
+
+- **停滞（no_progress）** — 多轮无文件变更、无验证进展
+- **工具循环** — 同一失败调用反复重试，或同一文件被反复修改
+- **目标漂移（goal_drift）** — 工具与输出不再匹配任务意图
+
+信号写入 Timeline，必要时 L2 takeover 纠偏或 L1 升级到 forced。
+
+### Checkpoint 恢复
+
+任务状态、触达文件、已跑命令、验收结果及 `runtimeV2`（分支预算、Supervisor 快照）持续落盘。压缩、刷新或进程重启后**从快照恢复** — 不只靠聊天记录；Web 端另有内存 `runningTurn` 供多端/F5 即时还原 UI。
+
+### 长会话耐久
+
+真实生产任务中，Harness 已连续完成 **217 轮**工具调用且全程稳定 — Supervisor 模式切换、Checkpoint 压缩、BranchBudget 拦截均正常工作。217 轮以上尚未压测；运行时面向 **20～200+ 轮**工程任务设计。Benchmark 长周期任务 iceCoder 曾跑至 **347 轮**（受控中断后仍可交付可玩产物）。
+
+---
+
+## 与 Agent 产品对比
+
+| | Cursor / Claude Code / Codex 类 | iceCoder |
+|---|--------------------------------|----------|
+| **漂移处理** | 多为隐式 | 显式 L2 信号 + L1 forced 升级 |
+| **循环控制** | 软提示为主 | **BranchBudget** 硬拦截 |
+| **恢复** | 依赖会话/聊天 | checkpoint + `runningTurn` + 多端广播 |
+| **长任务 UI** | 单端会话为主 | keep-alive + F5/扫码续进度 + 冰豆状态 |
+| **控制力** | 产品固定行为 | 可配 Supervisor + 工具门禁 |
+| **部署** | 托管或 IDE 绑定 | 自托管：CLI、Web、WebSocket、MCP |
+
+---
+
+## Benchmark（同模型盲评 vs Claude Code）
+
+统一参测模型：**`minimax-m2.5`** · 裁判：**Cursor Composer 2.5** · 评分体系：[`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)
+
+| 任务 | 类型 | 客观验收 (SR) | Composite | Gate | Judge | 等级 | iceCoder vs CC |
+|------|------|---------------|-----------|------|-------|------|----------------|
+| [多文件订单流水线](./benchMark/reports/multi-file-order-pipeline.md) | 多文件修复 | ✅ 9/9 | **86** vs 83 | 40 vs 38 | 46 vs 45 | A / A | **+3** · transient 重试更稳健 |
+| [Saga 仓库对账](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | 分布式修复 | ✅ 15/15 | **88** vs 85 | 40 vs 38 | 48 vs 47 | A / A | **+3** · 无 `.claude/` 越界 |
+| [Spell Brigade 幸存者](./benchMark/reports/implement-spellbrigade-survivor.md) | 长周期从零实现 | ❌ 均未全过 | **72** vs ≈59 | 32 vs ≈33 | 40 vs 26 | B / F | **+13** · E2E 1/5→5/5 · 347 轮 |
+
+**汇总**
+
+- **修复类（2/2）**：iceCoder 客观验收与综合分均 **领先 CC**；`adaptive` 下高风险任务自动进 forced，无需人工切换。
+- **实现类（1/1）**：双方 SR 均未达标；iceCoder 交付可玩战斗闭环 + 更高 Judge/Gate，但受 **347 轮上限**与验收命令未全过影响。
+- **共同短板（Judge D5/D6）**：部分 run 缺 run-manifest、README 未同步 — 冲 S 档（≥90）需补交付说明。
+
+任务定义与探针：[`benchMark/tasks/`](./benchMark/tasks/) · 完整报告：[`benchMark/reports/`](./benchMark/reports/)
+
+---
+
+## 质量与测试
+
+```bash
+npm test                 # 1,623 条用例 · 141 文件 · ~38 秒
+npm run test:coverage    # V8 覆盖率 → coverage/（HTML + JSON）
+npx tsc --noEmit         # 类型检查
+```
+
+**框架：** Vitest 4 · `@vitest/coverage-v8` · Node 环境
+
+### 覆盖率快照（2026-05-27）
+
+| 范围 | 行 | 语句 | 函数 | 分支 |
+|------|-----|------|------|------|
+| **全 `src/`** | **75.7%**（8,530 / 11,270） | **73.6%**（9,345 / 12,700） | **77.7%**（1,578 / 2,030） | **65.0%**（6,206 / 9,542） |
+| **`src/harness/`** | **82.4%** | **80.1%** | **83.8%** | **71.3%** |
+| **`src/harness/supervisor/`** | **95.1%** | **93.0%** | **93.1%** | **87.0%** |
+| **`src/memory/file-memory/`** | **70.3%** | **68.7%** | **66.7%** | **59.8%** |
+
+### 测试分布（141 个文件 · 1,623 用例）
+
+| 领域 | 文件数（约） | 覆盖内容 |
+|------|-------------|----------|
+| **Harness + Supervisor** | **73** | 主循环、checkpoint、分支预算、双模 L1/L2、恢复、工具门禁、RecoveryBoundary |
+| **文件记忆** | **20** | 召回、Dream、淘汰、安全、并发、E2E 流程 |
+| **Web / 会话 / WS** | **11** | sessions API、隔离、structured-io、supervisor-events、chat-ws 广播 |
+| **TaskGraph** | **7** | 构建器、执行器、持久化、指标、审查 |
+| **E2E 双模场景** | **1** | 七类 prompt：free/forced/degraded/checkpoint 恢复 |
+| **冰豆 / 公共 UI** | **2** | 色板、表情周期 |
+| **LLM / 工具 / 解析 / core** | **27** | 适配器、规范化、文档策略、CLI |
+
+Supervisor、Checkpoint 与 Web 断点恢复路径测试最密集 — 对应长任务与多端场景所依赖的治理层。
+
+---
+
+## CLI 与开发
+
+| 命令 | 用途 |
+|------|------|
+| `npm run dev` | API + Vite UI + 可选 Cloudflare 隧道 |
+| `npm run iceCoder` | CLI 全栈启动（`start`） |
+| `npx tsx src/cli/index.ts run "…"` | 单次任务（`--max-rounds`、`--json`） |
+| `npx tsx src/cli/index.ts tools` | 列出 27 个注册工具 |
+| `npx tsx src/cli/index.ts web --port 3784` | 独立 Web 服务 |
+
+Supervisor 模板：`data/supervisor-config.example.json` · 环境变量：[`docs/环境变量.md`](./docs/环境变量.md)
+
+---
+
+## 文档
+
+| 文档 | 内容 |
+|------|------|
+| [项目介绍](./docs/项目介绍.md) | 完整中文架构、模块、流程、验收 |
+| [Project guide](./docs/PROJECT-GUIDE.md) | English architecture reference |
+| [聊天页保活与断点恢复](./docs/requirement/聊天页状态保活与断点恢复-finish.md) | keep-alive · runningTurn · 多端同步 |
+| [多会话 Web 侧栏](./docs/requirement/多会话-web侧栏-finish.md) | 会话 CRUD · 隔离 · WS 切换 |
+| [L2 测试过程](./docs/requirement/L2测试过程.md) | 双模手工 / 自动化验收场景 |
+| [记忆系统调整](./docs/requirement/记忆系统调整-finish.md) | 召回/提取/Dream/淘汰策略 |
+| [环境变量](./docs/环境变量.md) | 配置参考（[English](./docs/environment-variables.md)） |
+| [Benchmark 评分体系](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | 跨平台评测方法 |
+| [后续优化计划](./docs/nextWork.md) | 路线图 |
+
+**技术栈：** TypeScript 6 · Node.js 18+ · Express 5 · Vite 8 · Vitest 4 · WebSocket
+
+---
+
+## 许可证
+
+ISC

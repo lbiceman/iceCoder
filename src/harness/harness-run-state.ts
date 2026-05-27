@@ -4,6 +4,9 @@ import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
 import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type { TaskState } from './task-state.js';
+import type { VerificationOutputBuffer } from './verification-output-buffer.js';
+import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -41,6 +44,10 @@ export interface HarnessRunState {
   llmRetryCount: number;
   /** LLM 空响应重试计数 */
   emptyResponseRetryCount: number;
+  /** 仅 reasoning 无 toolCalls 时的恢复次数 */
+  reasoningOnlyRecoveryCount: number;
+  /** 验收未清时拦截 model_done 的次数 */
+  prematureCompletionRecoveryCount: number;
   /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
   consecutiveToolFailures: number;
   /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */
@@ -63,12 +70,48 @@ export interface HarnessRunState {
   repoContext: RepoContext;
   /** 上次注入 runtime state 的内容 hash */
   runtimeStateHash: string;
+  /** 锁定的工作区根目录（延迟锁定；unset 时不设） */
+  lockedWorkspaceRoot?: string;
+  /** 允许只读访问的参考文件路径（不在 workspace 内） */
+  referenceReads?: string[];
+  /** 上次注入 Workspace Anchor 的内容 hash */
+  workspaceAnchorHash?: string;
   /** 连续失败的工具调用签名计数 */
   failedToolCallSignatures: Map<string, number>;
   /** Resilience v2：分支预算 tracker */
   branchBudget?: BranchBudgetTracker;
   /** Resilience v2：本轮是否已注入过 branch-budget warning（避免重复） */
   branchBudgetWarnedThisRound: boolean;
+  /** Resilience v2：本轮是否已注入验证失败 digest（避免重复） */
+  verificationDigestInjectedThisRound: boolean;
+  /** 文件 cap / 续段等 Rebuild Escalation 注入次数（每 run 上限见 MAX_REBUILD_ESCALATIONS_PER_RUN） */
+  rebuildEscalationInjections: number;
+  /** 本轮是否已注入 Rebuild Escalation（同轮 file-cap / 连续失败去重） */
+  rebuildEscalationInjectedThisRound: boolean;
+  /** 本 run 是否已注入并行 BranchBudget 拦截指引（每 run 一次） */
+  parallelBudgetBlockHintInjected: boolean;
+  /** Segment Renewal：本 run 内已续段次数（与 supervisor bridge 同步） */
+  segmentRenewalCount: number;
+  /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */
+  sessionGoalAnchor?: string;
+  /** build 反复失败后进入诊断模式，暂停 build 类 run_command */
+  buildDiagnosticGateActive?: boolean;
+  /** 最近验收命令失败输出（compaction / policy block 后仍可注入 digest） */
+  verificationOutputBuffer: VerificationOutputBuffer;
+  /** 长跑任务多命令验收门禁（npm ci → test → build → e2e） */
+  taskAcceptance?: TaskAcceptanceTracker;
+  /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
+  consecutiveNoToolRounds: number;
+  /** missing-file preflight：同路径拦截次数 */
+  missingFileAttempts: Map<string, number>;
+  /** Harness 策略拦截 / 恢复统计（telemetry summary） */
+  harnessPolicyStats: HarnessPolicyStats;
+  /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */
+  checkpointResumeForkApplied: boolean;
+  /** context window 超限后的 emergency compact 是否已用过（每 run 一次） */
+  contextEmergencyCompactUsed: boolean;
+  /** 续跑 checkpoint 短摘要（emergency fork 复用） */
+  activeCheckpointResumeSummary?: UnifiedMessage;
   /** Resilience v2：本轮是否已做过 step review（避免重复） */
   stepReviewedThisRound: boolean;
   /** Resilience v2：最近一次 step review 结果（供启发式参考） */

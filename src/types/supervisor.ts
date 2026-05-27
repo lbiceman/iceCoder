@@ -375,6 +375,21 @@ export type SupervisorDecision =
   | { action: 'handoff' }
   | { action: 'fail'; kind: 'checkpoint' | 'rollback' };
 
+/**
+ * 调优 2026-05-26（C）— takeover 块附带的证据，由 Harness 在 takeover 决策点按需采集。
+ *
+ * 用途：让 `[System Recovery]` 块不再只输出泛化 reason，而是把模型「再次踩坑」最需要
+ * 知道的事实摆出来：当前在重复失败哪些命令、验收门还差什么、有哪些后台任务在跑。
+ */
+export interface TakeoverEvidence {
+  /** 同签名失败次数最高的前若干工具调用签名（推荐 ≤3 条）。 */
+  recentFailedSignatures?: string[];
+  /** TaskAcceptanceTracker.getPendingCommands 文本（推荐 ≤3 条）。 */
+  pendingAcceptanceCommands?: string[];
+  /** 当前 session 仍在 running 的后台任务标签（推荐 ≤3 条）。 */
+  runningBackgroundTasks?: string[];
+}
+
 /** §8.10 — `RecoverySupervisor.applyTakeover` 入参（V1 骨架仅经 CorrectionPort 注入接管块）。 */
 export interface TakeoverContext {
   round: number;
@@ -383,6 +398,8 @@ export interface TakeoverContext {
   task: TaskContext;
   /** L2-3 唯一向 msgs 注入 C 类纠偏的端口；后续 L2-5 反构图主路径仍复用本端口。 */
   correctionPort: CorrectionPort;
+  /** 可选：调优 2026-05-26（C）— 由 Harness 按需提供的运行时证据。 */
+  evidence?: TakeoverEvidence;
 }
 
 /** §8.10 — `RecoverySupervisor.applyHandoff` 入参；冷却由 supervisor 内部维护。 */
@@ -424,6 +441,7 @@ export interface CorrectionBlock {
   kind: 'takeover' | 'recovery' | 'graph_hint' | 'shadow_diagnostic';
   content: string;
   preserveOnCompaction?: boolean;
+  ephemeralFailureRecovery?: 'light' | 'evidence' | 'strong';
 }
 
 /** §14.0 — 纠偏写入口 inject 上下文。 */

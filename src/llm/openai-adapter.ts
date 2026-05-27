@@ -19,6 +19,8 @@ import type {
 import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
+import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import { isAbortError, makeAbortedError } from './abort-error.js';
 
 /**
  * OpenAI 适配器的配置。
@@ -71,15 +73,13 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   /**
    * 根据模型名称自动检测是否支持视觉输入。
-   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), claude-3, qwen-vl 等。
+   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), qwen-vl 等。
    * 保守策略：未知模型默认不支持。
    */
   private detectVisionSupport(model: string): boolean {
     const m = model.toLowerCase();
     // OpenAI 视觉模型
     if (m.includes('gpt-4o') || m.includes('gpt-4-vision') || m.includes('gpt-4-turbo')) return true;
-    // Anthropic (通过 OpenAI 兼容层)
-    if (m.includes('claude-3') || m.includes('claude-4')) return true;
     // 通义千问视觉
     if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
     // Google Gemini
@@ -100,7 +100,9 @@ export class OpenAIAdapter implements ProviderAdapter {
       console.log(`[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
 
-      const response = await this.client.chat.completions.create(params);
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const response = await this.client.chat.completions.create(params, signal ? { signal } : undefined);
 
       const elapsed = Date.now() - startTime;
       const usage = (response as OpenAI.ChatCompletion).usage;
@@ -135,10 +137,12 @@ export class OpenAIAdapter implements ProviderAdapter {
       console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
 
-      const stream = await this.client.chat.completions.create({
-        ...params,
-        stream: true,
-      });
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const stream = await this.client.chat.completions.create(
+        { ...params, stream: true },
+        signal ? { signal } : undefined,
+      );
 
       let fullContent = '';
       let reasoningContent = '';
@@ -609,9 +613,9 @@ export class OpenAIAdapter implements ProviderAdapter {
    */
   private safeParseJSON(jsonStr: string): Record<string, any> {
     try {
-      return JSON.parse(jsonStr);
+      return normalizeToolArguments(JSON.parse(jsonStr)) as Record<string, any>;
     } catch {
-      return { raw: jsonStr };
+      return normalizeToolArguments({ raw: jsonStr }) as Record<string, any>;
     }
   }
 
@@ -638,6 +642,11 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 将 OpenAI API 错误转换为统一错误格式。
    */
   private convertError(error: unknown): Error {
+    if (isAbortError(error)) {
+      const aborted = makeAbortedError(this.name);
+      (aborted as any).provider = this.name;
+      return aborted;
+    }
     if (error instanceof OpenAI.APIError) {
       const message = `OpenAI API Error [${error.status}]: ${error.message}`;
       const unifiedError = new Error(message);

@@ -38,6 +38,8 @@ window.ChatExecutionPlan = (function () {
     question: '问答',
   };
 
+  // tool_failure：ModeSignal 名，UI 显示「forced · 工具失败」。多为 run_command 验收失败触发，
+  // 或 BranchBudget 拦 write（工具未执行）；不是 edit_file 引擎坏了。见 branch-budget.ts 文件头。
   var MODE_SIGNAL_LABELS = {
     checkpoint_resumed: 'checkpoint 恢复',
     task_graph_active: '任务图活跃',
@@ -426,7 +428,7 @@ window.ChatExecutionPlan = (function () {
     visible = false;
   }
 
-  /** 底部一行摘要（供冰豆 #status-turn） */
+  /** 底部一行摘要（供冰豆 #status-turn）；如 forced · 工具失败 = executionMode + enteredByPrimary 组合，非单一事件类型 */
   function formatExecutionModeChip(modeState) {
     if (!modeState || modeState.executionMode !== 'forced') return '';
     var primary = modeState.enteredByPrimary;

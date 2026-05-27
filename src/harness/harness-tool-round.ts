@@ -3,8 +3,22 @@ import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
 import {
   CIRCUIT_BREAKER_THRESHOLD,
-  MAX_CONSECUTIVE_TOOL_FAILURES,
+  FAILURE_EVIDENCE_THRESHOLD_END,
+  FAILURE_EVIDENCE_THRESHOLD_START,
+  LIGHT_HINT_FAILURE_THRESHOLD_END,
+  LIGHT_HINT_FAILURE_THRESHOLD_START,
+  MAX_REBUILD_ESCALATIONS_PER_RUN,
+  STRONG_WARNING_FAILURE_THRESHOLD,
 } from './harness-constants.js';
+import {
+  buildFailureEvidencePackMessage,
+  buildLightFailureHintMessage,
+  buildStrongFailureWarningMessage,
+  collectFailureEvidenceEntries,
+  purgeEphemeralFailureRecoveryMessagesInPlace,
+  roundHadSuccessfulVerification,
+  type EphemeralFailureRecoveryKind,
+} from './failure-evidence-recovery.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import {
   resilienceMaybeBranchRecover,
@@ -14,6 +28,8 @@ import {
 } from './harness-resilience.js';
 import { collectRepeatedFailures, toolCallSignature } from './harness-permission-runtime.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
+import { classifyRunCommandResult } from './task-acceptance-tracker.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
@@ -39,12 +55,34 @@ import { MessageCorrectionPort } from './supervisor/correction-port.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
 import { decideGraphHintRouting, type GraphHintRoutingDecision } from './supervisor/graph-hint-routing.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
+import type { SupervisorRuntimeBridge, PendingSegmentRenewal } from './supervisor/supervisor-bridge.js';
 import {
   maxFailedSignatureCount,
   topFileEditFromInspect,
 } from './supervisor/passive-observer.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
+import { extractRunCommand } from './branch-budget-tool-path.js';
+import { computeRecoveryRoundEffective, classifyToolRoundProgress } from './recovery-round-progress.js';
+import { buildVerificationDigest, isHarnessVerificationCommand } from './verification-digest.js';
+import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
+import {
+  buildDiagnosticGateMessage,
+  shouldActivateBuildDiagnosticGate,
+  shouldClearBuildDiagnosticGate,
+} from './harness-tool-preflight.js';
+import {
+  hasTruncationSensitiveWriteTools,
+  planTruncatedWriteToolRecovery,
+} from './harness-tool-truncation-recovery.js';
+import {
+  applyRebuildEscalationBypasses,
+  buildRebuildEscalationMessage,
+  canInjectRebuildEscalation,
+  collectRebuildEscalationContext,
+  shouldInjectParallelBudgetBlockHint,
+  shouldTriggerAnyFileCapRebuild,
+  type RebuildEscalationTrigger,
+} from './rebuild-escalation.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -133,8 +171,25 @@ export async function runHarnessToolRound(
     reasoningContent: response.reasoningContent,
   });
 
+  let toolCallsForGate = response.toolCalls ?? [];
+  if (response.finishReason === 'length' && hasTruncationSensitiveWriteTools(toolCallsForGate)) {
+    const recovery = planTruncatedWriteToolRecovery(toolCallsForGate);
+    msgs.push(...recovery.injectedMessages);
+    toolCallsForGate = recovery.toolCallsToRun;
+    if (toolCallsForGate.length === 0) {
+      return { action: 'continue' };
+    }
+  }
+
   state.branchBudgetWarnedThisRound = false;
   state.stepReviewedThisRound = false;
+  state.verificationDigestInjectedThisRound = false;
+  state.rebuildEscalationInjectedThisRound = false;
+
+  deps.branchBudget = state.branchBudget;
+  deps.missingFileAttempts = state.missingFileAttempts;
+  deps.harnessPolicyStats = state.harnessPolicyStats;
+  state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
 
   // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
   //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
@@ -142,9 +197,9 @@ export async function runHarnessToolRound(
     ? deps.supervisorBridge.createCorrectionPort(msgs, round)
     : new MessageCorrectionPort(msgs);
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
-  const gateContext = buildGateContext(deps.graphExecutor, response.toolCalls!, state);
+  const gateContext = buildGateContext(deps.graphExecutor, toolCallsForGate, state);
   const gateResult = executeToolCallsThroughGate({
-    toolCalls: response.toolCalls!,
+    toolCalls: toolCallsForGate,
     messages: msgs,
     ctx: gateContext,
   });
@@ -194,8 +249,46 @@ export async function runHarnessToolRound(
     repoContext: state.repoContext,
     chatFn,
     currentTools,
+    buildDiagnosticGateActive: state.buildDiagnosticGateActive,
+    verificationOutputBuffer: state.verificationOutputBuffer,
   });
+  if (executableToolCalls.length > 0) {
+    state.consecutiveNoToolRounds = 0;
+  }
+  // P0-A — acceptance gate / verification buffer：按工具结果**真实状态**而非「启动成功」判定。
+  //   - 后台启动 (`mode:'background'|'escalated'`) → acceptance 状态保持 pending
+  //   - check 返回 `status:'completed' && exitCode:0` → mark passed
+  //   - check 返回 `status:'failed'|'timeout'|'killed'` 或 exitCode≠0 → mark failed + 回写 verificationOutputBuffer
+  if (executableToolCalls.length > 0) {
+    const acceptanceActive = state.taskAcceptance?.isActive();
+    for (const tc of executableToolCalls) {
+      if (tc.name !== 'run_command') continue;
+      const sig = toolCallSignature(tc);
+      const success = !toolStats.failedSignatures.includes(sig)
+        && !toolStats.policyBlockedSignatures.includes(sig);
+      const toolMsg = msgs.find(m => m.role === 'tool' && m.toolCallId === tc.id);
+      const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';
+      const classified = classifyRunCommandResult(tc.arguments as Record<string, unknown>, rawOutput, success);
+      if (!classified) continue;
+
+      if (acceptanceActive && state.taskAcceptance) {
+        state.taskAcceptance.recordRunCommandToolResult(classified);
+      }
+
+      if (classified.kind === 'background_failed'
+        && isHarnessVerificationCommand(classified.command)
+        && state.verificationOutputBuffer) {
+        state.verificationOutputBuffer.recordFailed(classified.command, rawOutput);
+      }
+    }
+    if (acceptanceActive && state.taskAcceptance) {
+      syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
+    }
+  }
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
+  // tool_failure 信号：本轮任意可执行工具 success:false 即提交（常见为 run_command/npm test 验收失败，
+  // 其次 BranchBudget 拦 write/edit，较少为 patch 对不上等真工具错误）。UI「forced · 工具失败」
+  // 是 enter_forced 主因标签，不表示 edit 工具坏了；详见 branch-budget.ts 文件头运维说明。
   if (deps.executionModeConfig && toolStats.failedCount > 0) {
     state.submitModeSignal?.('step_gate', 'tool_failure', { failedCount: toolStats.failedCount });
   }
@@ -210,8 +303,40 @@ export async function runHarnessToolRound(
     deps,
     executableToolCalls,
     new Set(toolStats.failedSignatures),
+    new Set(toolStats.policyBlockedSignatures),
     state,
+    deps.workspaceRoot,
   );
+
+  state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
+
+  maybeInjectParallelBudgetBlockHint({
+    state,
+    msgs,
+    correctionPort,
+    deps,
+    executableToolCalls,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+    budgetBlockedFilePaths: toolStats.budgetBlockedFilePaths,
+  });
+
+  maybeInjectVerificationDigest({
+    state,
+    msgs,
+    executableToolCalls,
+    failedSignatures: toolStats.failedSignatures,
+    correctionPort,
+    deps,
+  });
+
+  maybeUpdateBuildDiagnosticGate(state, msgs, executableToolCalls, toolStats, correctionPort, deps);
+
+  maybeInjectFileCapRebuildEscalation({
+    state,
+    msgs,
+    correctionPort,
+    deps,
+  });
 
   const repeatedFailures = collectRepeatedFailures(
     executableToolCalls,
@@ -237,6 +362,24 @@ export async function runHarnessToolRound(
       ? correctionPort
       : undefined,
   );
+
+  // P2 — 用户中断早退：在可能调用 LLM 的 reviewStep / checkpoint 之前先检查 isAborted。
+  // 命中则跳过 resilience review (可能再发一次小模型请求) 与 verification_failed checkpoint。
+  if (deps.loopController.isAborted()) {
+    return {
+      action: 'return',
+      result: await handleHarnessStop(deps, {
+        reason: 'user_abort',
+        messages: msgs,
+        chatFn,
+        tools: currentTools,
+        logger,
+        onStep,
+        streamFn,
+        runtimeState: state,
+      }),
+    };
+  }
 
   if (toolStats.failedCount > 0) {
     await resilienceMaybeReviewStep(
@@ -277,7 +420,14 @@ export async function runHarnessToolRound(
     };
   }
 
-  if (toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount) {
+  const roundProgress = classifyToolRoundProgress({
+    executableToolCalls,
+    failedSignatures: toolStats.failedSignatures,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+    branchBudget: state.branchBudget,
+  });
+
+  if (roundProgress === 'all_failed_or_blocked') {
     state.consecutiveToolFailures++;
     // W1: 本轮全失败 → 重置 stable 计数；evaluate 才能正确判定"连续 N 轮稳定"。
     state.stableRoundsSinceLastFailure = 0;
@@ -288,7 +438,7 @@ export async function runHarnessToolRound(
       deps.loopController.stop('circuit_breaker');
       const finalState = deps.loopController.getState();
       logger.loopStop('circuit_breaker', finalState.currentRound, finalState.totalToolCalls);
-      await saveTaskCheckpoint(deps, 'failed', userMessage, msgs, state, 'circuit_breaker');
+      await saveTaskCheckpoint(deps, 'failed', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'circuit_breaker');
       recordTelemetrySummary(deps, 'circuit_breaker', state);
 
       onStep?.({
@@ -310,46 +460,60 @@ export async function runHarnessToolRound(
       };
     }
 
-    if (failureCount >= 6 && !deps.supervisorObserverSuppressInject) {
-      injectRecoveryMessage(
+    if (failureCount >= STRONG_WARNING_FAILURE_THRESHOLD && !deps.supervisorObserverSuppressInject) {
+      purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
+      injectEphemeralFailureRecovery(
         deps,
         state,
         msgs,
         correctionPort,
-        `[System] Warning: ${failureCount} consecutive rounds of tool calls have all failed. Multiple attempts have not succeeded.\n\nYou must:\n1. Stop retrying the same failed tool calls, commands, paths, or parameters\n2. Switch strategy: use a different tool, inspect paths/configuration, simplify the command, or ask for missing input\n3. If blocked, explain the exact blocker and evidence to the user\n\nYou may still use tools, but only with a changed strategy. Do not repeat an identical failed operation.`,
+        buildStrongFailureWarningMessage(failureCount),
+        'strong',
       );
-      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入换策略提示`);
-    } else if (failureCount >= MAX_CONSECUTIVE_TOOL_FAILURES && !deps.supervisorObserverSuppressInject) {
-      const lastErrors = msgs
-        .slice(-6)
-        .filter(m => m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Tool execution error:'))
-        .map(m => (m.content as string).substring(0, 200));
-
-      const errorSummary = lastErrors.length > 0
-        ? `Recent errors:\n${lastErrors.map((e, i) => `${i + 1}. ${e}`).join('\n')}`
-        : '';
-
-      injectRecoveryMessage(
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入强警告`);
+    } else if (
+      failureCount >= FAILURE_EVIDENCE_THRESHOLD_START
+      && failureCount <= FAILURE_EVIDENCE_THRESHOLD_END
+      && !deps.supervisorObserverSuppressInject
+    ) {
+      purgeEphemeralFailureRecoveryMessagesInPlace(msgs, 'light');
+      purgeEphemeralFailureRecoveryMessagesInPlace(msgs, 'evidence');
+      const entries = collectFailureEvidenceEntries(msgs, state.verificationOutputBuffer);
+      injectEphemeralFailureRecovery(
         deps,
         state,
         msgs,
         correctionPort,
-        `[System] Note: ${failureCount} consecutive rounds of tool calls have all failed.${errorSummary ? '\n' + errorSummary : ''}\n\nPlease analyze the failure reasons and adopt a completely different approach to complete the task. Possible adjustment directions:\n- Check if file paths are correct (use list_directory to confirm)\n- Check if command syntax is correct\n- Try using alternative tools\n- If execution is truly impossible, directly explain the reason to the user and do not continue trying the same operation.`,
+        buildFailureEvidencePackMessage(failureCount, entries),
+        'evidence',
       );
-      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入策略调整提示`);
-    } else if (failureCount === 2 && !deps.supervisorObserverSuppressInject) {
-      injectRecoveryMessage(
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入失败证据包`);
+    } else if (
+      failureCount >= LIGHT_HINT_FAILURE_THRESHOLD_START
+      && failureCount <= LIGHT_HINT_FAILURE_THRESHOLD_END
+      && !deps.supervisorObserverSuppressInject
+    ) {
+      injectEphemeralFailureRecovery(
         deps,
         state,
         msgs,
         correctionPort,
-        '[System] All tool calls in the previous round failed. Please check if parameters are correct and try adjusting your approach.',
+        buildLightFailureHintMessage(failureCount),
+        'light',
       );
+      console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入轻提示`);
+    }
+  } else if (roundProgress === 'meaningful_progress') {
+    state.consecutiveToolFailures = 0;
+    state.stopHookContinuationCount = 0;
+    state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
+    purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
+    if (roundHadSuccessfulVerification(executableToolCalls, toolStats.failedSignatures)) {
+      state.verificationOutputBuffer.clear();
     }
   } else {
-    state.consecutiveToolFailures = 0;
-    // W1: 本轮非全失败 → 视为稳定一轮（含部分成功 / 无工具）。
-    state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
+    // 只读空转（如读已有 src 模板）：不清零 consecutiveToolFailures，避免熔断/续段永远达不到阈值。
+    state.stableRoundsSinceLastFailure = 0;
   }
 
   let evalForceSwitchTriggered = false;
@@ -427,7 +591,7 @@ export async function runHarnessToolRound(
     syncExecutionModeLoopState(deps.loopController, state);
   }
 
-  await saveTaskCheckpoint(deps, 'running', userMessage, msgs, state);
+  await saveTaskCheckpoint(deps, 'running', resolveCheckpointUserGoal(state, userMessage), msgs, state);
   await resilienceSaveCheckpoint(deps, 'step_completed', state);
 
   const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
@@ -448,13 +612,17 @@ export async function runHarnessToolRound(
     }
   }
 
-  const allToolsFailedThisRound = toolStats.totalCount > 0 && toolStats.failedCount === toolStats.totalCount;
+  const allToolsFailedThisRound = roundProgress === 'all_failed_or_blocked';
   if (deps.supervisorBridge?.isActive()) {
     const taskContext = buildTaskContextForObserver(state, branchRecoverDecision?.triggered === true);
     const runtimeRound = {
       round,
       toolNames: executableToolCalls.map(tc => tc.name),
-      toolSuccess: executableToolCalls.map(tc => !toolStats.failedSignatures.includes(toolCallSignature(tc))),
+      toolSuccess: executableToolCalls.map(tc => {
+        const sig = toolCallSignature(tc);
+        return !toolStats.failedSignatures.includes(sig)
+          && !toolStats.policyBlockedSignatures.includes(sig);
+      }),
       hadWriteTool: executableToolCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)),
     };
 
@@ -463,6 +631,7 @@ export async function runHarnessToolRound(
       round: runtimeRound,
       consecutiveToolFailures: state.consecutiveToolFailures,
       consecutiveReadOnlyRounds: state.consecutiveReadOnlyRounds,
+      consecutiveNoToolRounds: state.consecutiveNoToolRounds,
       stableRoundsSinceLastFailure: state.stableRoundsSinceLastFailure ?? 0,
       allToolsFailedThisRound,
       repeatedToolSignatures: repeatedFailures,
@@ -482,10 +651,34 @@ export async function runHarnessToolRound(
       riskScore: deps.supervisorRiskScoreProvider?.() ?? 0.5,
       correctionPort,
       tokenUsage: { used: tokenUsage.output, total: deps.tokenBudgetTracker?.getTotalBudget?.() ?? 0 },
+      recoveryRoundEffective: computeRecoveryRoundEffective({
+        executableToolCalls,
+        failedSignatures: toolStats.failedSignatures,
+        policyBlockedSignatures: toolStats.policyBlockedSignatures,
+        branchBudget: state.branchBudget,
+      }),
+      // 调优 2026-05-26（C）— takeover 决策时附带证据，让 [System Recovery] 块带具体上下文。
+      //                       后台任务由 P0-B「每轮注入 Background Task Status」单独覆盖，
+      //                       此处不再重复，避免 prompt 冗余。
+      takeoverEvidenceProvider: () => buildTakeoverEvidence(state),
     });
 
     // 同步 phase 到 HarnessRunState；后续 ToolGate / Resilience inject 都按新 phase 走 source。
     state.supervisorPhase = deps.supervisorBridge.getSupervisorPhase();
+
+    const segmentRenewal = deps.supervisorBridge.consumePendingSegmentRenewal();
+    if (segmentRenewal) {
+      state.segmentRenewalCount = deps.supervisorBridge.getSegmentRenewalCount();
+      state.branchBudget?.resetCommandRetriesForVerificationCommands();
+      state.buildDiagnosticGateActive = false;
+      maybeInjectSegmentRenewalRebuild({
+        deps,
+        state,
+        msgs,
+        correctionPort,
+        renewal: segmentRenewal,
+      });
+    }
 
     if (decision.action === 'fail' && decision.kind === 'checkpoint') {
       deps.loopController.stop('user_checkpoint');
@@ -594,6 +787,241 @@ function composeGraphHint(
   return routing;
 }
 
+function maybeInjectFileCapRebuildEscalation(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+}): void {
+  const { state, msgs, correctionPort, deps } = args;
+  if (deps.supervisorObserverSuppressInject) return;
+
+  const shouldTrigger = shouldTriggerAnyFileCapRebuild({
+    branchBudget: state.branchBudget,
+    verificationStatus: state.taskState.snapshot().verificationStatus,
+    workspaceRoot: deps.workspaceRoot,
+    rebuildEscalationInjections: state.rebuildEscalationInjections,
+  });
+  if (!shouldTrigger) return;
+
+  injectRebuildEscalation(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    state.consecutiveToolFailures,
+    shouldTrigger.trigger,
+  );
+  console.log(
+    shouldTrigger.trigger === 'missing_file_budget_mismatch'
+      ? '[harness] 文件编辑达上限但磁盘无文件，注入整文件创建提示'
+      : '[harness] 文件编辑达上限且验收仍失败，注入整文件重建提示',
+  );
+}
+
+function maybeInjectSegmentRenewalRebuild(args: {
+  deps: ToolRoundDeps;
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  renewal: PendingSegmentRenewal;
+}): void {
+  const { deps, state, msgs, correctionPort, renewal } = args;
+  if (deps.supervisorObserverSuppressInject) return;
+
+  injectRebuildEscalation(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    renewal.segmentIndex,
+    'segment_renewal_budget',
+  );
+  console.log(
+    `[harness] Recovery budget 续段 #${renewal.segmentIndex}（${renewal.reason}），注入 Rebuild Escalation`,
+  );
+}
+
+function injectRebuildEscalation(
+  deps: ToolRoundDeps,
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  correctionPort: CorrectionPort,
+  failureCount: number,
+  trigger: RebuildEscalationTrigger,
+): void {
+  if (!canInjectRebuildEscalation({
+    rebuildEscalationInjections: state.rebuildEscalationInjections,
+    rebuildEscalationInjectedThisRound: state.rebuildEscalationInjectedThisRound,
+    suppressInject: deps.supervisorObserverSuppressInject,
+  })) return;
+
+  const topFile = topFileEditFromBranchBudget(state.branchBudget);
+  const rebuildCtx = collectRebuildEscalationContext(
+    msgs,
+    topFile,
+    state.verificationOutputBuffer,
+    deps.workspaceRoot,
+  );
+  const bypasses = applyRebuildEscalationBypasses(
+    state.branchBudget,
+    topFile,
+    rebuildCtx.lastVerificationCommand,
+    msgs,
+    state.verificationOutputBuffer,
+    deps.workspaceRoot,
+  );
+  injectRecoveryMessage(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    buildRebuildEscalationMessage(failureCount, { ...rebuildCtx, ...bypasses }, trigger),
+  );
+  state.rebuildEscalationInjections += 1;
+  state.rebuildEscalationInjectedThisRound = true;
+  state.harnessPolicyStats.rebuildEscalationCount += 1;
+  if (trigger === 'consecutive_failures') {
+    console.log(`[harness] 连续 ${failureCount} 轮工具全部失败，注入整文件重建提示`);
+  }
+}
+
+function maybeInjectParallelBudgetBlockHint(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+  executableToolCalls: import('../llm/types.js').ToolCall[];
+  policyBlockedSignatures: string[];
+  budgetBlockedFilePaths: string[];
+}): void {
+  const {
+    state,
+    msgs,
+    correctionPort,
+    deps,
+    executableToolCalls,
+    policyBlockedSignatures,
+    budgetBlockedFilePaths,
+  } = args;
+
+  const blocked = new Set(policyBlockedSignatures);
+  const blockedWriteTools = executableToolCalls.filter(tc =>
+    blocked.has(toolCallSignature(tc))
+    && /^(write_file|edit_file|append_file|patch_file|batch_edit_file)$/.test(tc.name),
+  );
+
+  if (!shouldInjectParallelBudgetBlockHint({
+    parallelBudgetBlockHintInjected: state.parallelBudgetBlockHintInjected,
+    budgetBlockedFilePathCount: budgetBlockedFilePaths.length,
+    blockedWriteToolCount: blockedWriteTools.length,
+    suppressInject: deps.supervisorObserverSuppressInject,
+  })) return;
+
+  const paths = budgetBlockedFilePaths.slice(0, 6);
+  injectRecoveryMessage(
+    deps,
+    state,
+    msgs,
+    correctionPort,
+    [
+      '[System / BranchBudget] Multiple write/edit tools were blocked in one round (file edit cap).',
+      `Blocked paths: ${paths.map(p => `\`${p}\``).join(', ')}.`,
+      'Do NOT retry all capped files in parallel. Pick ONE path per round:',
+      '1. read failing test / build output first',
+      '2. If [Rebuild Escalation] granted write bypass, use write_file on ONE bypass path only',
+      '3. Re-run verification before touching the next capped file',
+    ].join('\n'),
+  );
+  state.parallelBudgetBlockHintInjected = true;
+}
+
+function maybeInjectVerificationDigest(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  executableToolCalls: import('../llm/types.js').ToolCall[];
+  failedSignatures: string[];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+}): void {
+  const {
+    state,
+    msgs,
+    executableToolCalls,
+    failedSignatures,
+    correctionPort,
+    deps,
+  } = args;
+
+  if (state.verificationDigestInjectedThisRound || deps.supervisorObserverSuppressInject) return;
+  if (!state.branchBudget) return;
+
+  const failed = new Set(failedSignatures);
+  for (const tc of executableToolCalls) {
+    if (tc.name !== 'run_command') continue;
+    if (!failed.has(toolCallSignature(tc))) continue;
+
+    const command = extractRunCommand(tc.arguments);
+    if (!command || !isHarnessVerificationCommand(command)) continue;
+
+    const retries = state.branchBudget.inspect().commandRetries;
+    const normalized = command.trim().replace(/\s+/g, ' ').slice(0, 200);
+    const failCount = retries[normalized] ?? 0;
+    if (failCount < 1) continue;
+
+    const toolMsg = msgs.find(m => m.role === 'tool' && m.toolCallId === tc.id);
+    const rawOutput = typeof toolMsg?.content === 'string' ? toolMsg.content : '';
+    const buffered = state.verificationOutputBuffer.findLastFailed(command);
+    const outputForDigest = rawOutput.includes('[BranchBudget / Blocked]') && buffered
+      ? buffered.outputBody
+      : rawOutput;
+    const digest = buildVerificationDigest(command, outputForDigest);
+    if (!digest) continue;
+
+    injectRecoveryMessage(deps, state, msgs, correctionPort, digest);
+    state.verificationDigestInjectedThisRound = true;
+    return;
+  }
+}
+
+function maybeUpdateBuildDiagnosticGate(
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  executableToolCalls: import('../llm/types.js').ToolCall[],
+  toolStats: {
+    failedSignatures: string[];
+    policyBlockedSignatures: string[];
+  },
+  correctionPort: CorrectionPort,
+  deps: ToolRoundDeps,
+): void {
+  const hadSuccessfulSrcEdit = shouldClearBuildDiagnosticGate({
+    toolCalls: executableToolCalls,
+    failedSignatures: toolStats.failedSignatures,
+    signatureOf: toolCallSignature,
+  });
+
+  const shouldActivate = shouldActivateBuildDiagnosticGate({
+    branchBudget: state.branchBudget,
+    executionFailedSignatures: toolStats.failedSignatures,
+    policyBlockedSignatures: toolStats.policyBlockedSignatures,
+    toolCalls: executableToolCalls,
+    signatureOf: toolCallSignature,
+  });
+
+  if (shouldActivate && !hadSuccessfulSrcEdit) {
+    if (!state.buildDiagnosticGateActive && !deps.supervisorObserverSuppressInject) {
+      injectRecoveryMessage(deps, state, msgs, correctionPort, buildDiagnosticGateMessage());
+    }
+    state.buildDiagnosticGateActive = true;
+    return;
+  }
+
+  if (hadSuccessfulSrcEdit) {
+    state.buildDiagnosticGateActive = false;
+  }
+}
+
 function injectRecoveryMessage(
   deps: ToolRoundDeps,
   state: HarnessRunState,
@@ -615,6 +1043,28 @@ function injectRecoveryMessage(
   );
 }
 
+function injectEphemeralFailureRecovery(
+  deps: ToolRoundDeps,
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  correctionPort: CorrectionPort,
+  content: string,
+  kind: EphemeralFailureRecoveryKind,
+): void {
+  if (deps.supervisorObserverSuppressInject) {
+    return;
+  }
+  if (!deps.executionModeDecisionEnabled) {
+    msgs.push({ role: 'user', content, ephemeralFailureRecovery: kind });
+    return;
+  }
+
+  correctionPort.inject(
+    { kind: 'recovery', content, ephemeralFailureRecovery: kind },
+    { phase: state.supervisorPhase, source: 'supervisor' },
+  );
+}
+
 function topFileEditFromBranchBudget(
   branchBudget: BranchBudgetTracker | undefined,
 ): { path: string; count: number } | undefined {
@@ -631,7 +1081,7 @@ function buildTaskContextForObserver(
   return {
     goal: snap.goal,
     intent: snap.intent,
-    domain: inferTaskDomain(snap.intent),
+    domain: inferTaskDomain(snap.intent, snap.goal),
     filesChanged: [...repo.filesChanged],
     filesRead: [...repo.filesRead],
     commandsRun: [...repo.commandsRun],
@@ -654,4 +1104,39 @@ function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures
     targets.add(target);
   }
   return targets.size;
+}
+
+/**
+ * 调优 2026-05-26（C）— 为 takeover 决策点构造证据载荷。
+ *
+ * 数据源：
+ *   - `state.failedToolCallSignatures`：count ≥ 2 的同签名失败，取 top 3；
+ *   - `state.taskAcceptance.getPendingCommands()`：尚未通过的验收命令，取前 3 条。
+ *
+ * 设计取舍：
+ *   - 后台任务由 P0-B「每轮注入 Background Task Status」覆盖，此处不再列出避免冗余；
+ *   - 全部字段可选，evidence 为空时 `formatTakeoverMessage` 会自动退回到无证据版本，
+ *     保持向后兼容（含单测）。
+ */
+function buildTakeoverEvidence(state: HarnessRunState): {
+  recentFailedSignatures?: string[];
+  pendingAcceptanceCommands?: string[];
+} {
+  const evidence: { recentFailedSignatures?: string[]; pendingAcceptanceCommands?: string[] } = {};
+
+  if (state.failedToolCallSignatures && state.failedToolCallSignatures.size > 0) {
+    const top = [...state.failedToolCallSignatures.entries()]
+      .filter(([, count]) => count >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([sig, count]) => `${sig.length > 80 ? sig.slice(0, 77) + '...' : sig} (x${count})`);
+    if (top.length > 0) evidence.recentFailedSignatures = top;
+  }
+
+  if (state.taskAcceptance?.isActive()) {
+    const pending = state.taskAcceptance.getPendingCommands().slice(0, 3).map(c => c.label);
+    if (pending.length > 0) evidence.pendingAcceptanceCommands = pending;
+  }
+
+  return evidence;
 }

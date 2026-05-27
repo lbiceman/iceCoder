@@ -146,7 +146,10 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
     const { harness, sessionDir } = await buildDualModeHarnessAsync({
       tools,
       supervisorMode: 'adaptive',
-      executionModeOverrides: { modeLockRounds: 0 },
+      executionModeOverrides: {
+        modeLockRounds: 0,
+        stableRoundsExitThreshold: 0,
+      },
     });
     await seedCheckpointResume(sessionDir, {
       executionMode: 'forced',
@@ -160,7 +163,7 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
     const { events, push } = collectSteps();
 
     const result = await harness.run(
-      '从中断处继续实现',
+      'resume',
       createChatFn([finalResponse('已恢复。')]),
       push,
     );
@@ -210,6 +213,7 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
       runtimeStateHash: '',
       failedToolCallSignatures: new Map(),
       branchBudgetWarnedThisRound: false,
+      verificationDigestInjectedThisRound: false,
       stepReviewedThisRound: false,
       supervisorPhase: 'free' as const,
       executionMode: 'forced' as const,

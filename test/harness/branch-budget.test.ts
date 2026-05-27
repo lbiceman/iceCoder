@@ -186,6 +186,39 @@ describe('BranchBudgetTracker - 维度优先级', () => {
   });
 });
 
+describe('BranchBudgetTracker - verification command reset', () => {
+  it('resetCommandRetriesForVerificationCommands clears build/test counters only', () => {
+    const t = new BranchBudgetTracker({ commandRetryMax: 2 });
+    t.recordFailedCommandAttempt('npm run build 2>&1');
+    t.recordFailedCommandAttempt('npm test');
+    t.recordFailedCommandAttempt('ls');
+    t.grantCommandRetryBypass('npm run build 2>&1');
+
+    t.resetCommandRetriesForVerificationCommands();
+
+    expect(t.inspect().commandRetries).toEqual({ ls: 1 });
+    expect(t.wouldBlockCommandRetry('npm run build 2>&1')).toBe(false);
+    expect(t.wouldBlockCommandRetry('npm test')).toBe(false);
+  });
+  it('persists pending write/command bypass paths in snapshot', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 2, commandRetryMax: 2 });
+    t.recordFileEdit('src/a.ts');
+    t.recordFileEdit('src/a.ts');
+    t.recordFailedCommandAttempt('npm test');
+    t.recordFailedCommandAttempt('npm test');
+    t.grantWriteBypass('src/a.ts');
+    t.grantCommandRetryBypass('npm test');
+
+    const snap = t.snapshot();
+    expect(snap.writeBypassPaths).toEqual(['src/a.ts']);
+    expect(snap.commandRetryBypassKeys).toEqual(['npm test']);
+
+    const restored = BranchBudgetTracker.fromSnapshot(snap);
+    expect(restored.wouldBlockFileEdit('src/a.ts')).toBe(false);
+    expect(restored.wouldBlockCommandRetry('npm test')).toBe(false);
+  });
+});
+
 describe('emptyBranchBudgetSnapshot', () => {
   it('返回零初始化的 snapshot', () => {
     expect(emptyBranchBudgetSnapshot()).toEqual({

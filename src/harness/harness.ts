@@ -46,12 +46,20 @@ import type {
 import { ContextAssembler } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
+import { applyCheckpointResumeFork, stripResumeCheckpointMessages } from './checkpoint-resume-compact.js';
+import { readCompactionContextWindowTokens } from './context-window-tier.js';
 import { HarnessLogger } from './logger.js';
 import { StopHookManager } from './stop-hooks.js';
 import { TokenBudgetTracker } from './token-budget.js';
 import { HarnessMemoryIntegration } from './harness-memory.js';
 import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
+import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
+import { syncHydratedTaskState } from './resume-task-state.js';
+import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
+import { VerificationOutputBuffer } from './verification-output-buffer.js';
+import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
@@ -81,6 +89,8 @@ import { runHarnessToolRound } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
+import { getLatestRealUserText } from './harness-message-utils.js';
+import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
 
 /** run() 内各子模块共享的运行时依赖（由 Harness 实例字段组装）。 */
 export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
@@ -102,6 +112,7 @@ export class Harness {
   private stopHookManager: StopHookManager;
   private tokenBudgetTracker?: TokenBudgetTracker;
   private permissionRules: HarnessConfig['permissions'];
+  private skipPermissionChecks: boolean;
   private onConfirm?: HarnessConfig['onConfirm'];
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
@@ -110,6 +121,8 @@ export class Harness {
   private graphExecutor: GraphExecutor;
   private runtimeTelemetry?: RuntimeTelemetry;
   private workspaceRoot: string;
+  private sessionDir?: string;
+  private sessionId: string;
   private resilienceV2Enabled: boolean;
   private checkpointEngine?: CheckpointEngine;
   private globalPolicy?: HarnessConfig['globalPolicy'];
@@ -147,9 +160,12 @@ export class Harness {
     this.toolExecutor = toolExecutor;
     this.stopHookManager = new StopHookManager();
     this.permissionRules = config.permissions ?? [];
+    this.skipPermissionChecks = config.skipPermissionChecks === true;
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
+    this.sessionDir = config.sessionDir;
+    this.sessionId = config.sessionId ?? 'default';
     // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
@@ -173,6 +189,7 @@ export class Harness {
       memoryDir: config.memoryDir,
       fileMemoryManager: config.fileMemoryManager,
       sessionDir: config.sessionDir,
+      sessionId: config.sessionId,
       workspaceRoot: config.workspaceRoot,
     });
 
@@ -197,8 +214,10 @@ export class Harness {
       stopHookManager: this.stopHookManager,
       toolExecutor: this.toolExecutor,
       permissionRules: this.permissionRules ?? [],
+      skipPermissionChecks: this.skipPermissionChecks,
       onConfirm: this.onConfirm,
       workspaceRoot: this.workspaceRoot,
+      sessionId: this.sessionId,
       tokenBudgetTracker: this.tokenBudgetTracker,
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
@@ -233,6 +252,8 @@ export class Harness {
     //   在 runHarnessToolRound 末段提交的 tool_failure / multi_write /
     //   recovery_pending 等信号会写入 state.pendingModeSignals，
     //   并在下一轮（即此处）被读取与清空，因此进入 forced 通常滞后 1 轮。
+    //   tool_failure 常见来源：npm test 等 run_command 验收失败（非 edit 工具坏）；
+    //   或 BranchBudget 拦 write（工具未执行）。见 branch-budget.ts 文件头。
     //   即时阻断由 Batch 5 的 ToolGate 在工具执行前单独处理，不在此 evaluate。
     const config = this.supervisorConfig?.executionMode;
     const policy = this.globalPolicy;
@@ -355,7 +376,6 @@ export class Harness {
     userContentBlocks?: import('../llm/types.js').ContentBlock[],
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
-    const deps = this.buildRunDeps();
     // W1: Harness 实例可被复用（cli/web）；清空上一次 run 残留的未消费信号，
     // 避免熔断/abort/max_rounds 终止后引擎 submittedSignals 跨 run 泄漏。
     this.modeDecisionEngine.resetSubmittedSignals();
@@ -378,14 +398,44 @@ export class Harness {
       }
     }
     const activeCheckpoint = await this.checkpointManager?.loadActive();
-    if (activeCheckpoint) {
-      messages.push(this.checkpointManager!.buildResumeMessage(activeCheckpoint));
+
+    const plainUserText = typeof userMessage === 'string'
+      ? userMessage
+      : getLatestRealUserText(messages, '');
+    let lockedWorkspaceRoot: string | undefined;
+    let referenceReads: string[] = [];
+    if (this.sessionDir) {
+      const applied = await applyUserMessageWorkspaceLock({
+        sessionDir: this.sessionDir,
+        sessionId: this.sessionId,
+        userMessage: plainUserText,
+      });
+      lockedWorkspaceRoot = applied.state.lockedRoot;
+      referenceReads = applied.state.referenceReads;
+      if (applied.detection.changeNotice) {
+        messages.push({ role: 'user', content: applied.detection.changeNotice });
+      }
+      if (lockedWorkspaceRoot) {
+        this.workspaceRoot = lockedWorkspaceRoot;
+      }
     }
+
+    const deps = this.buildRunDeps();
+    deps.workspaceRoot = this.workspaceRoot;
+    deps.lockedWorkspaceRoot = lockedWorkspaceRoot;
+    deps.referenceReads = referenceReads;
+
     const tools = this.contextAssembler.getTools();
     logger.loopStart(tools.length, messages.length);
 
-    this.memoryIntegration.onLoopStart(
+    const sessionGoalAnchor = resolveSessionGoalAnchor(
       userMessage,
+      messages,
+      activeCheckpoint?.userGoal,
+    );
+
+    this.memoryIntegration.onLoopStart(
+      sessionGoalAnchor,
       {
         chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
         stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
@@ -408,12 +458,31 @@ export class Harness {
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,
-      taskState: new TaskState(userMessage),
+      reasoningOnlyRecoveryCount: 0,
+      prematureCompletionRecoveryCount: 0,
+      taskState: new TaskState(sessionGoalAnchor),
       repoContext: new RepoContext(),
       runtimeStateHash: '',
+      lockedWorkspaceRoot,
+      referenceReads,
+      workspaceAnchorHash: '',
       failedToolCallSignatures: new Map(),
       branchBudget: this.resilienceV2Enabled ? new BranchBudgetTracker() : undefined,
       branchBudgetWarnedThisRound: false,
+      verificationDigestInjectedThisRound: false,
+      rebuildEscalationInjections: 0,
+      rebuildEscalationInjectedThisRound: false,
+      parallelBudgetBlockHintInjected: false,
+      segmentRenewalCount: 0,
+      sessionGoalAnchor,
+      buildDiagnosticGateActive: false,
+      verificationOutputBuffer: new VerificationOutputBuffer(),
+      taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
+      consecutiveNoToolRounds: 0,
+      missingFileAttempts: new Map(),
+      harnessPolicyStats: emptyHarnessPolicyStats(),
+      checkpointResumeForkApplied: false,
+      contextEmergencyCompactUsed: false,
       stepReviewedThisRound: false,
       executionMode: 'free',
       executionModeLockRemaining: 0,
@@ -442,6 +511,8 @@ export class Harness {
         const v2 = await this.checkpointEngine.loadV2();
         if (v2) {
           state.branchBudget?.applySnapshot(v2.branchBudget);
+          state.rebuildEscalationInjections = v2.rebuildEscalationInjections ?? 0;
+          state.parallelBudgetBlockHintInjected = v2.parallelBudgetBlockHintInjected ?? false;
           // W8: 恢复 supervisor 历史承载位（observability only），
           //     真正的 enter forced 仍由下方 checkpoint_resumed signal 驱动 ModeDecisionEngine 裁决；
           //     这样既能保留 enteredBy / forcedDegradedTier 等历史，又不绕过 I5 单写约束。
@@ -459,7 +530,17 @@ export class Harness {
             // L2-6 / T08：把 supervisorPhase + RecoverySupervisor 内部快照 + timeline tail + I4 budget
             //              推回 bridge；bridge 自身会写 `failure:checkpoint_resumed` timeline 标记。
             state.supervisorPhase = supervisor.supervisorPhase ?? state.supervisorPhase;
+            state.segmentRenewalCount = supervisor.segmentRenewalCount ?? 0;
             this.supervisorBridge?.restoreFromCheckpoint(supervisor);
+          }
+          state.verificationOutputBuffer.restore(v2.verificationOutputTail);
+          if (v2.acceptanceGate?.active) {
+            if (state.taskAcceptance) {
+              state.taskAcceptance.restore(v2.acceptanceGate);
+            } else {
+              state.taskAcceptance = TaskAcceptanceTracker.fromSnapshot(v2.acceptanceGate);
+            }
+            syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
           }
           state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
           const pending = this.checkpointEngine.pendingRecoverySignals();
@@ -485,6 +566,13 @@ export class Harness {
           state.repoContext,
         );
         if (hydrated) {
+          state.sessionGoalAnchor = syncHydratedTaskState(
+            userMessage,
+            messages,
+            state.taskState,
+            state.repoContext,
+            state.sessionGoalAnchor,
+          );
           onStep?.({
             type: 'memory_event',
             memoryKind: 'session_hydrate',
@@ -496,6 +584,47 @@ export class Harness {
           '[harness] session-notes 运行时恢复失败:',
           err instanceof Error ? err.message : err,
         );
+      }
+    }
+
+    if (activeCheckpoint) {
+      const resumeSummary = this.checkpointManager!.buildResumeMessage(activeCheckpoint);
+      state.activeCheckpointResumeSummary = resumeSummary;
+      if (existingMessages && existingMessages.length > 0) {
+        const est = this.contextCompactor.getEstimatedTokens(messages);
+        const forkThreshold = Math.floor(readCompactionContextWindowTokens() * 0.5);
+        if (existingMessages.length >= 60 || est > forkThreshold) {
+          const fork = applyCheckpointResumeFork(this.contextCompactor, messages, resumeSummary);
+          state.checkpointResumeForkApplied = true;
+          console.log(
+            `[harness] checkpoint resume fork: ${fork.beforeMessages}→${fork.afterMessages} msgs | `
+            + `~estCtxTok ${fork.beforeTokens}→${fork.afterTokens}`,
+          );
+          deps.runtimeTelemetry?.recordCompaction({
+            beforeMessages: fork.beforeMessages,
+            afterMessages: fork.afterMessages,
+            beforeTokens: fork.beforeTokens,
+            afterTokens: fork.afterTokens,
+          });
+        } else {
+          const filtered = stripResumeCheckpointMessages(messages);
+          messages.length = 0;
+          messages.push(...filtered, resumeSummary);
+        }
+      } else {
+        messages.push(resumeSummary);
+      }
+
+      const refreshedAnchor = resolveSessionGoalAnchor(
+        userMessage,
+        messages,
+        activeCheckpoint.userGoal,
+      );
+      if (!isPoisonedGoal(refreshedAnchor)) {
+        state.sessionGoalAnchor = refreshedAnchor;
+        if (isPoisonedGoal(state.taskState.snapshot().goal)) {
+          state.taskState.rebindGoal(refreshedAnchor);
+        }
       }
     }
 

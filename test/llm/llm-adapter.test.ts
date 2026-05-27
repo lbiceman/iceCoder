@@ -1,6 +1,6 @@
 /**
  * Unit tests for LLM Adapter layer.
- * Tests LLMAdapter routing, retry logic, OpenAI/Anthropic adapter basics,
+ * Tests LLMAdapter routing, retry logic, OpenAI adapter basics,
  * and error handling for unregistered providers.
  *
  * Requirements: 19.1, 19.7, 19.8, 20.2, 20.6, 21.2, 21.6
@@ -9,7 +9,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LLMAdapter } from '../../src/llm/llm-adapter.js';
 import { OpenAIAdapter } from '../../src/llm/openai-adapter.js';
-import { AnthropicAdapter } from '../../src/llm/anthropic-adapter.js';
 import type {
   LLMOptions,
   LLMResponse,
@@ -49,12 +48,12 @@ function createMockProvider(
 describe('LLMAdapter', () => {
   let adapter: LLMAdapter;
   let mockOpenAI: ProviderAdapter;
-  let mockAnthropic: ProviderAdapter;
+  let mockSecondary: ProviderAdapter;
 
   beforeEach(() => {
     adapter = new LLMAdapter({ maxRetries: 3, baseDelay: 100, maxDelay: 5000 });
     mockOpenAI = createMockProvider('openai');
-    mockAnthropic = createMockProvider('anthropic');
+    mockSecondary = createMockProvider('deepseek');
   });
 
   const sampleMessages: UnifiedMessage[] = [
@@ -80,7 +79,7 @@ describe('LLMAdapter', () => {
   describe('chat() routing', () => {
     beforeEach(() => {
       adapter.registerProvider(mockOpenAI);
-      adapter.registerProvider(mockAnthropic);
+      adapter.registerProvider(mockSecondary);
       adapter.setDefaultProvider('openai');
     });
 
@@ -88,23 +87,23 @@ describe('LLMAdapter', () => {
       const result = await adapter.chat(sampleMessages);
 
       expect(mockOpenAI.chat).toHaveBeenCalledWith(sampleMessages, {});
-      expect(mockAnthropic.chat).not.toHaveBeenCalled();
+      expect(mockSecondary.chat).not.toHaveBeenCalled();
       expect(result.content).toBe('Response from openai');
     });
 
     it('should route to specified provider via options.provider', async () => {
-      const result = await adapter.chat(sampleMessages, { provider: 'anthropic' });
+      const result = await adapter.chat(sampleMessages, { provider: 'deepseek' });
 
-      expect(mockAnthropic.chat).toHaveBeenCalled();
+      expect(mockSecondary.chat).toHaveBeenCalled();
       expect(mockOpenAI.chat).not.toHaveBeenCalled();
-      expect(result.content).toBe('Response from anthropic');
+      expect(result.content).toBe('Response from deepseek');
     });
   });
 
   describe('stream() routing', () => {
     beforeEach(() => {
       adapter.registerProvider(mockOpenAI);
-      adapter.registerProvider(mockAnthropic);
+      adapter.registerProvider(mockSecondary);
       adapter.setDefaultProvider('openai');
     });
 
@@ -118,10 +117,10 @@ describe('LLMAdapter', () => {
 
     it('should route stream to specified provider via options.provider', async () => {
       const callback: StreamCallback = vi.fn();
-      const result = await adapter.stream(sampleMessages, callback, { provider: 'anthropic' });
+      const result = await adapter.stream(sampleMessages, callback, { provider: 'deepseek' });
 
-      expect(mockAnthropic.stream).toHaveBeenCalled();
-      expect(result.content).toBe('Stream from anthropic');
+      expect(mockSecondary.stream).toHaveBeenCalled();
+      expect(result.content).toBe('Stream from deepseek');
     });
   });
 
@@ -266,35 +265,6 @@ describe('OpenAIAdapter', () => {
     const adapter = new OpenAIAdapter({
       apiKey: 'fake-key',
       model: 'gpt-4',
-    });
-
-    // 20 characters → ceil(20/4) = 5 tokens
-    const count = await adapter.countTokens('12345678901234567890');
-    expect(count).toBe(5);
-
-    // 7 characters → ceil(7/4) = 2 tokens
-    const count2 = await adapter.countTokens('abcdefg');
-    expect(count2).toBe(2);
-
-    // Empty string → ceil(0/4) = 0 tokens
-    const count3 = await adapter.countTokens('');
-    expect(count3).toBe(0);
-  });
-});
-
-describe('AnthropicAdapter', () => {
-  it('should have the correct name', () => {
-    const adapter = new AnthropicAdapter({
-      apiKey: 'fake-key',
-      model: 'claude-3-sonnet-20240229',
-    });
-    expect(adapter.name).toBe('anthropic');
-  });
-
-  it('should estimate tokens using ~4 chars per token', async () => {
-    const adapter = new AnthropicAdapter({
-      apiKey: 'fake-key',
-      model: 'claude-3-sonnet-20240229',
     });
 
     // 20 characters → ceil(20/4) = 5 tokens

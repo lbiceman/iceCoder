@@ -145,7 +145,10 @@ window.ChatPetBridge = (function () {
         }
         break;
       case 'tool_result':
-        if (step.toolSuccess === false) {
+        if (step.toolOutcome === 'policy_block') {
+          sessionPet.setState('focused');
+          bubble(step.toolError || step.content || '策略拦截（未执行）');
+        } else if (step.toolSuccess === false) {
           sessionPet.setState('angry');
           bubble(step.toolError || step.content || '工具失败');
         } else {

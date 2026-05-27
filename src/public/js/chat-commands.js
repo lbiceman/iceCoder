@@ -1,6 +1,6 @@
 /**
  * 命令面板模块
- * 负责：~ 命令下拉框、本地命令处理（clear/open/scan/telemetry/memory）
+ * 负责：~ 命令下拉框、本地命令处理（open/scan/telemetry/memory）
  */
 
 /* exported ChatCommands */
@@ -9,7 +9,6 @@ window.ChatCommands = (function () {
   'use strict';
 
   var PC_LOCAL_COMMANDS = [
-    { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
@@ -18,7 +17,6 @@ window.ChatCommands = (function () {
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
-    { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' },
@@ -31,6 +29,27 @@ window.ChatCommands = (function () {
   var cmdFiltered = [];
   var cmdActivePrefix = '';
   var remoteMode = false;
+  var applyTargetFn = null;
+  var activeInputEl = null;
+
+  function updateActiveItem() {
+    if (!elCmdDropdown) return;
+    var items = elCmdDropdown.querySelectorAll('.cmd-item');
+    for (var j = 0; j < items.length; j++) {
+      items[j].classList.toggle('active', j === cmdSelectedIndex);
+    }
+  }
+
+  function dispatchInput(inputEl) {
+    if (!inputEl) return;
+    try {
+      inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (_err) {
+      var ev = document.createEvent('Event');
+      ev.initEvent('input', true, true);
+      inputEl.dispatchEvent(ev);
+    }
+  }
 
   function setRemoteMode(isRemote) {
     remoteMode = isRemote;
@@ -44,6 +63,15 @@ window.ChatCommands = (function () {
     var el = document.createElement('div');
     el.className = 'cmd-dropdown hidden';
     el.setAttribute('id', 'cmd-dropdown');
+    el.addEventListener('click', function (e) {
+      var item = e.target.closest('.cmd-item');
+      if (!item || !cmdVisible) return;
+      var idx = parseInt(item.getAttribute('data-index'), 10);
+      if (isNaN(idx)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applySelection(idx);
+    });
     return el;
   }
 
@@ -91,15 +119,7 @@ window.ChatCommands = (function () {
       (function (idx) {
         item.addEventListener('mouseenter', function () {
           cmdSelectedIndex = idx;
-          render();
-        });
-        item.addEventListener('mousedown', function (e) {
-          e.preventDefault();
-          select(idx);
-        });
-        item.addEventListener('touchend', function (e) {
-          e.preventDefault();
-          select(idx);
+          updateActiveItem();
         });
       })(i);
       elCmdDropdown.appendChild(item);
@@ -111,37 +131,50 @@ window.ChatCommands = (function () {
     return cmdFiltered[index];
   }
 
+  function setApplyTarget(fn) {
+    applyTargetFn = typeof fn === 'function' ? fn : null;
+  }
+
+  function mountDropdownTo(container) {
+    if (!elCmdDropdown || !container) return;
+    container.appendChild(elCmdDropdown);
+  }
+
+  function applySelection(index, inputEl) {
+    if (index < 0 || index >= cmdFiltered.length) return null;
+    var cmd = cmdFiltered[index];
+    var value = cmdActivePrefix + cmd.name;
+    var targetInput = inputEl || activeInputEl;
+    if (applyTargetFn) {
+      applyTargetFn(value);
+    } else if (targetInput) {
+      targetInput.value = value;
+      dispatchInput(targetInput);
+    }
+    hide();
+    return cmd;
+  }
+
   function handleKeydown(e, inputEl) {
     if (!cmdVisible) return false;
+    activeInputEl = inputEl || activeInputEl;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       cmdSelectedIndex = (cmdSelectedIndex + 1) % cmdFiltered.length;
-      render();
+      updateActiveItem();
       return true;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
       cmdSelectedIndex = (cmdSelectedIndex - 1 + cmdFiltered.length) % cmdFiltered.length;
-      render();
+      updateActiveItem();
       return true;
     }
     // Tab 或 Enter（非 Shift+换行）— 将当前高亮项写入输入框并关闭面板
     if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
       e.preventDefault();
-      if (inputEl && cmdFiltered.length) {
-        var cmd = cmdFiltered[cmdSelectedIndex];
-        if (cmd) {
-          inputEl.value = cmdActivePrefix + cmd.name;
-          hide();
-          try {
-            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-          } catch (_err) {
-            /* IE / 极旧环境可能无 Event 构造 */
-            var ev = document.createEvent('Event');
-            ev.initEvent('input', true, true);
-            inputEl.dispatchEvent(ev);
-          }
-        }
+      if (cmdFiltered.length) {
+        applySelection(cmdSelectedIndex, inputEl);
       }
       return true;
     }
@@ -153,7 +186,8 @@ window.ChatCommands = (function () {
     return false;
   }
 
-  function handleInput(val) {
+  function handleInput(val, inputEl) {
+    activeInputEl = inputEl || activeInputEl;
     if (val.indexOf('~') === 0) {
       var rest = val.slice(1);
       var restTrim = rest.trim();
@@ -182,11 +216,6 @@ window.ChatCommands = (function () {
   }
 
   // ---- 命令处理 ----
-
-  function handleClear(session, ui) {
-    session.clearMessages();
-    ui.renderMessagesOnly(session.getMessages(), session.getToolTraces(), session.stripStatusTag);
-  }
 
   function handleScan(qrModule, messages, appendFn, saveFn) {
     qrModule.showQrCode(messages, appendFn, saveFn);
@@ -380,11 +409,13 @@ window.ChatCommands = (function () {
     hide: hide,
     render: render,
     select: select,
+    setApplyTarget: setApplyTarget,
+    mountDropdownTo: mountDropdownTo,
+    applySelection: applySelection,
     handleKeydown: handleKeydown,
     handleInput: handleInput,
     getDropdownEl: getDropdownEl,
     setRemoteMode: setRemoteMode,
-    handleClear: handleClear,
     handleScan: handleScan,
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,

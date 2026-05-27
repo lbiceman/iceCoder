@@ -2,7 +2,6 @@
   "providers": [
     {
       "id": "default",
-      "providerName": "openai",
       "apiUrl": "https://api.deepseek.com",
       "apiKey": "sk-your-api-key-here",
       "modelName": "deepseek-chat",
@@ -15,5 +14,6 @@
       "isDefault": true
     }
   ],
-  "supervisorMode": "adaptive"
+  "supervisorMode": "adaptive",
+  "skipPermissionChecks": false
 }

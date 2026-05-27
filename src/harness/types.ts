@@ -179,6 +179,8 @@ export interface HarnessConfig {
   loop: LoopControlConfig;
   /** 权限规则 */
   permissions?: ToolPermissionRule[];
+  /** 为 true 时跳过 deny/confirm/破坏性确认等全部权限检查 */
+  skipPermissionChecks?: boolean;
   /** 上下文压缩阈值（消息数量，向后兼容） */
   compactionThreshold?: number;
   /** 上下文压缩的 token 阈值（优先于消息数阈值，默认 80000） */
@@ -215,6 +217,8 @@ export interface HarnessConfig {
  * `execution_plan_init` / `execution_plan_update` / `execution_plan_clear` 保留给前端兼容（Phase 13）；
  * 新事件 `task_graph_*` 由 TaskGraph 驱动。
  */
+export type ToolOutcome = 'executed' | 'policy_block' | 'user_denied' | 'execution_fail';
+
 export interface HarnessStepEvent {
   type:
     | 'thinking'
@@ -249,6 +253,8 @@ export interface HarnessStepEvent {
   toolSuccess?: boolean;
   toolOutput?: string;
   toolError?: string;
+  /** 工具结果语义：executed=真执行；policy_block=Harness 策略拦截；user_denied=用户拒绝；execution_fail=执行器失败 */
+  toolOutcome?: ToolOutcome;
   totalToolCalls?: number;
   stopReason?: StopReason;
   /** TaskGraph (Phase 7) */

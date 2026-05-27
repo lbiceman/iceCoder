@@ -11,6 +11,8 @@ export interface PassiveObserveInput {
   round: RuntimeRound;
   consecutiveToolFailures: number;
   consecutiveReadOnlyRounds: number;
+  /** 连续无 toolCalls 的 LLM 轮（model 空转）。 */
+  consecutiveNoToolRounds?: number;
   stableRoundsSinceLastFailure: number;
   allToolsFailedThisRound: boolean;
   /** 本轮检测到的「同参重复失败」工具签名。 */
@@ -26,7 +28,12 @@ export interface PassiveObserveInput {
 /**
  * §8.2 PassiveObserver — 后台采集偏离信号，不干预执行、不写 msgs。
  * 累积信号供 RecoverySupervisor.evaluate（L2-3）消费。
+ *
+ * 调优 2026-05-26（A+B）：accumulated 按 type 维持「最近 N 条」滑窗，避免长 benchmark
+ * 任务（如 Spellbrigade e2e）一次 takeover 携带 10+ 条同类型 signal 灌入 LLM prompt 噪声。
  */
+const MAX_SIGNALS_PER_TYPE = 3;
+
 export class PassiveObserver {
   private readonly triggers: SupervisorTriggers;
   private accumulated: DeviationSignal[] = [];
@@ -39,17 +46,25 @@ export class PassiveObserver {
   observe(input: PassiveObserveInput): DeviationSignal[] {
     const roundSignals: DeviationSignal[] = [];
 
-    const repeatCount = Math.max(
-      input.maxFailedSignatureCount,
-      input.repeatedToolSignatures.length,
-      input.branchRecoverTriggered ? 1 : 0,
-    );
+    const thisRoundHasRepeatFailure =
+      input.repeatedToolSignatures.length > 0
+      || input.allToolsFailedThisRound
+      || input.branchRecoverTriggered;
+
+    const repeatCount = thisRoundHasRepeatFailure
+      ? Math.max(
+        input.maxFailedSignatureCount,
+        input.repeatedToolSignatures.length,
+        input.branchRecoverTriggered ? 1 : 0,
+      )
+      : 0;
     if (repeatCount >= this.triggers.toolRepeatFailMin) {
       roundSignals.push({ type: 'tool_repeat_fail', count: repeatCount });
     }
 
     const noProgressRounds = Math.max(
       input.consecutiveReadOnlyRounds,
+      input.consecutiveNoToolRounds ?? 0,
       input.allToolsFailedThisRound ? input.consecutiveToolFailures : 0,
     );
     if (noProgressRounds >= this.triggers.noProgressRoundsMin) {
@@ -64,8 +79,8 @@ export class PassiveObserver {
       });
     }
 
-    if (roundSignals.length > 0) {
-      this.accumulated.push(...roundSignals);
+    for (const sig of roundSignals) {
+      this.appendWithDedupe(sig);
     }
 
     return roundSignals;
@@ -82,12 +97,30 @@ export class PassiveObserver {
    */
   pushSignal(signal: DeviationSignal): boolean {
     if (!this.isTriggerEnabled(signal)) return false;
-    this.accumulated.push(signal);
+    this.appendWithDedupe(signal);
     return true;
   }
 
   reset(): void {
     this.accumulated = [];
+  }
+
+  /**
+   * 同 type signal 滑窗：保留最近 `MAX_SIGNALS_PER_TYPE` 条，超出时丢弃最老的。
+   * 这样 `recordObserverSignal` / `formatTakeoverReason` 看到的 reason 字符串长度可控，
+   * `applyTakeover` 的 `[System Recovery]` 块不会被同类型 signal 灌爆。
+   */
+  private appendWithDedupe(signal: DeviationSignal): void {
+    const indices: number[] = [];
+    for (let i = 0; i < this.accumulated.length; i++) {
+      if (this.accumulated[i].type === signal.type) indices.push(i);
+    }
+    while (indices.length >= MAX_SIGNALS_PER_TYPE) {
+      const dropIdx = indices.shift()!;
+      this.accumulated.splice(dropIdx, 1);
+      for (let i = 0; i < indices.length; i++) indices[i]--;
+    }
+    this.accumulated.push(signal);
   }
 
   private isTriggerEnabled(signal: DeviationSignal): boolean {

@@ -2,15 +2,32 @@
 export const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3;
 
 // ─── 连续工具失败提示干预阈值 ───
-// 第3轮开始注入强提示A，第6轮开始注入强提示B，第10轮触发熔断
-export const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+// 1 静默 | 2~3 轻提示 | 4~6 证据包 | 7~9 强警告 | ≥10 熔断
+export const LIGHT_HINT_FAILURE_THRESHOLD_START = 2;
+export const LIGHT_HINT_FAILURE_THRESHOLD_END = 3;
+export const FAILURE_EVIDENCE_THRESHOLD_START = 4;
+export const FAILURE_EVIDENCE_THRESHOLD_END = 6;
+export const STRONG_WARNING_FAILURE_THRESHOLD = 7;
 export const CIRCUIT_BREAKER_THRESHOLD = 10;
+
+/** @deprecated 连续失败不再在固定轮次触发 Rebuild；保留供 file-cap / segment 等路径引用 */
+export const REBUILD_ESCALATION_THRESHOLD = 5;
+/** @deprecated 使用 FAILURE_EVIDENCE_THRESHOLD_START */
+export const MAX_CONSECUTIVE_TOOL_FAILURES = FAILURE_EVIDENCE_THRESHOLD_START;
+/** 文件 cap / 续段等 Rebuild Escalation 每 run 最多注入次数 */
+export const MAX_REBUILD_ESCALATIONS_PER_RUN = 3;
 
 // ─── LLM 空响应重试最大次数 ───
 export const MAX_EMPTY_RESPONSE_RETRIES = 2;
 
+// ─── 仅 reasoning、无 toolCalls 时的恢复次数 ───
+export const MAX_REASONING_ONLY_RECOVERY = 2;
+
+// ─── 验收/诊断未清时拦截 model_done 的最大次数 ───
+export const MAX_PREMATURE_COMPLETION_RECOVERY = 3;
+
 // ─── stop_hook 连续干预上限 ───
-export const MAX_STOP_HOOK_CONTINUATIONS = 3;
+export const MAX_STOP_HOOK_CONTINUATIONS = 5;
 
 // ─── LLM 调用重试配置（Harness 层仅做 1 次快速重试，主要重试由 LLMAdapter 负责） ───
 export const LLM_MAX_RETRIES = 1;

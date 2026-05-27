@@ -10,6 +10,7 @@ import {
   DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
   normalizeSupervisorMode,
   readMainConfigFile,
+  resolveSkipPermissionChecks,
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
@@ -82,13 +83,19 @@ export async function resolveDefaultChatModelMeta(
   }
 }
 
+/** 去掉旧版 config 中的 providerName 等遗留字段，统一为 OpenAI 兼容结构 */
+function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }): ProviderConfig {
+  const { providerName: _legacy, ...rest } = provider;
+  return rest;
+}
+
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
-    return 'API URL is required and cannot be empty';
+    return 'API 地址不能为空';
   }
   if (!provider.apiKey || provider.apiKey.trim() === '') {
-    return 'API Key is required and cannot be empty';
+    return 'API 密钥不能为空';
   }
   return null;
 }
@@ -112,11 +119,6 @@ function getModelMaxContext(modelName: string): number {
   if (name.includes('gpt-3.5')) return 4096;
   if (name.includes('o1') || name.includes('o3') || name.includes('o4')) return 200000;
 
-  // Claude 系列
-  if (name.includes('claude-3') || name.includes('claude-4')) return 200000;
-  if (name.includes('claude-2')) return 100000;
-  if (name.includes('claude')) return 200000;
-
   // GLM 系列
   if (name.includes('glm-4')) return 128000;
   if (name.includes('glm')) return 128000;
@@ -136,6 +138,9 @@ function getModelMaxContext(modelName: string): number {
   return 8192;
 }
 
+/** Agent 运行时未配置 maxTokens 时的单次输出上限（未知/新模型兜底） */
+export const DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 8192;
+
 /**
  * 根据模型名称返回单次最大输出 token 数。
  * 用户不填 maxTokens 时，系统自动推算。
@@ -154,10 +159,6 @@ export function getModelMaxOutputTokens(modelName: string): number {
   if (name.includes('gpt-4')) return 8192;
   if (name.includes('gpt-3.5')) return 4096;
 
-  // Claude 系列
-  if (name.includes('claude-3') || name.includes('claude-4')) return 8192;
-  if (name.includes('claude')) return 4096;
-
   // GLM 系列
   if (name.includes('glm')) return 8192;
 
@@ -170,8 +171,8 @@ export function getModelMaxOutputTokens(modelName: string): number {
   // Mistral 系列
   if (name.includes('mistral') || name.includes('mixtral')) return 4096;
 
-  // 默认
-  return 4096;
+  // 未知模型：Agent 场景需容纳整文件 write_file 等长 tool 参数
+  return DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
 }
 
 /**
@@ -197,18 +198,20 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const { providers } = req.body as { providers: ProviderConfig[] };
 
       if (!providers || !Array.isArray(providers)) {
-        res.status(400).json({ error: 'Request body must contain a providers array' });
+        res.status(400).json({ error: '请求体须包含 providers 数组' });
         return;
       }
 
       // 读取现有配置，用于恢复被脱敏的 apiKey
       let existingProviders: ProviderConfig[] = [];
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
+      let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
         existingSupervisorMode = existing.supervisorMode;
+        existingSkipPermissionChecks = existing.skipPermissionChecks;
       } catch { /* 文件不存在，首次保存 */ }
 
       // 构建 id → 原始 apiKey 的映射
@@ -226,7 +229,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           // 脱敏值，恢复原始 key
           apiKey = originalKeys.get(provider.id)!;
         }
-        return { ...provider, apiKey };
+        return sanitizeProvider({ ...provider, apiKey });
       });
 
       const normalizedProviders = normalizeDefaultFlags(resolvedProviders);
@@ -235,7 +238,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       for (let i = 0; i < normalizedProviders.length; i++) {
         const error = validateProvider(normalizedProviders[i]);
         if (error) {
-          res.status(400).json({ error: `Provider ${i}: ${error}` });
+          res.status(400).json({ error: `提供者 ${i + 1}：${error}` });
           return;
         }
       }
@@ -244,6 +247,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         {
           providers: normalizedProviders,
           supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
+          skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
         },
         null,
         2,
@@ -256,10 +260,10 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
       }
 
-      res.json({ success: true, message: 'Configuration saved successfully' });
+      res.json({ success: true, message: '配置已保存' });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: `Failed to save configuration: ${message}` });
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `保存配置失败：${message}` });
     }
   });
 
@@ -273,7 +277,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
 
       // 返回前遮蔽 API 密钥
       const maskedProviders = config.providers.map((provider: ProviderConfig) => ({
-        ...provider,
+        ...sanitizeProvider(provider),
         apiKey: maskApiKey(provider.apiKey),
         // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
         maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),
@@ -282,14 +286,19 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       res.json({
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
+        skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
       });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        res.json({ providers: [], supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE });
+        res.json({
+          providers: [],
+          supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
+          skipPermissionChecks: false,
+        });
         return;
       }
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: `Failed to load configuration: ${message}` });
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `加载配置失败：${message}` });
     }
   });
 
@@ -301,7 +310,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const raw = (req.body as { supervisorMode?: string })?.supervisorMode;
       if (raw !== 'off' && raw !== 'adaptive' && raw !== 'strict') {
         res.status(400).json({
-          error: 'supervisorMode must be one of: off, adaptive, strict',
+          error: 'supervisorMode 须为 off、adaptive 或 strict 之一',
         });
         return;
       }
@@ -312,8 +321,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       }
       res.json({ success: true, supervisorMode: saved });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: `Failed to update supervisor mode: ${message}` });
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新监管模式失败：${message}` });
     }
   });
 

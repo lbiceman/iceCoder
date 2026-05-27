@@ -34,6 +34,8 @@ export type RecoveryBudgetExhaustionReason =
 export interface RecoveryBudgetEvaluation {
   exhausted: boolean;
   reason?: RecoveryBudgetExhaustionReason;
+  /** 本轮 evaluate 是否刚授予了轮数扩展（进展感知 deferral）。 */
+  extended?: boolean;
   /** 触发耗尽时的具体计数，便于 timeline / UI 显示。 */
   detail?: {
     roundsUsed: number;
@@ -42,8 +44,18 @@ export interface RecoveryBudgetEvaluation {
     maxTokenRatio: number;
     maxRetryCount: number;
     maxRetries: number;
+    roundExtensionsGranted: number;
   };
 }
+
+/** 进展感知：最近 N 轮 effective 滑动窗口。 */
+const RECENT_EFFECTIVE_WINDOW = 5;
+/** token 低于此比例且仍有进展时，允许一次轮数扩展。 */
+const PROGRESS_TOKEN_RATIO_THRESHOLD = 0.1;
+/** 单次 takeover 最多扩展次数。 */
+const MAX_ROUND_EXTENSIONS = 1;
+/** 绝对硬顶 = maxRecoveryRounds × 此倍数（含扩展后）。 */
+const ABSOLUTE_ROUND_HARD_CAP_MULTIPLIER = 2;
 
 interface RecoveryBudgetState {
   active: boolean;
@@ -54,6 +66,9 @@ interface RecoveryBudgetState {
   tokenRatioUsed: number;
   retryCounts: Map<string, number>;
   budget: ModeParams;
+  /** 最近 tick 的 effective 标记（用于进展感知 exhaustion）。 */
+  recentEffective: boolean[];
+  roundExtensionsGranted: number;
 }
 
 const INITIAL_STATE: Omit<RecoveryBudgetState, 'budget'> = {
@@ -63,6 +78,8 @@ const INITIAL_STATE: Omit<RecoveryBudgetState, 'budget'> = {
   lastTickedRound: -1,
   tokenRatioUsed: 0,
   retryCounts: new Map(),
+  recentEffective: [],
+  roundExtensionsGranted: 0,
 };
 
 export class RecoveryBudgetManager {
@@ -83,13 +100,17 @@ export class RecoveryBudgetManager {
       lastTickedRound: -1,
       tokenRatioUsed: 0,
       retryCounts: new Map(),
+      recentEffective: [],
+      roundExtensionsGranted: 0,
       budget: pickModeBudget(mode, this.params),
     };
   }
 
-  /** takeover 中每轮调用一次；同轮幂等。off / 非 takeover 时静默。 */
-  tickRound(round: number): void {
+  /** takeover 中每轮调用一次；同轮幂等。effective=false 时不计数（无效空转轮）。 */
+  tickRound(round: number, effective = true): void {
     if (!this.state.active) return;
+    this.pushRecentEffective(effective);
+    if (!effective) return;
     if (round <= this.state.lastTickedRound) return;
     this.state.lastTickedRound = round;
     this.state.roundsUsed += 1;
@@ -127,15 +148,15 @@ export class RecoveryBudgetManager {
 
     const detail = this.snapshotDetail();
 
-    if (this.state.roundsUsed > this.state.budget.maxRecoveryRounds) {
-      return { exhausted: true, reason: 'max_recovery_rounds', detail };
-    }
     if (this.state.tokenRatioUsed > this.state.budget.recoveryTokenRatio) {
       return { exhausted: true, reason: 'recovery_token_ratio', detail };
     }
     if (this.maxRetryCount() > this.state.budget.maxRecoveryRetries) {
       return { exhausted: true, reason: 'max_recovery_retries', detail };
     }
+
+    const roundsResult = this.evaluateRecoveryRounds(detail);
+    if (roundsResult) return roundsResult;
 
     return { exhausted: false, detail };
   }
@@ -155,6 +176,7 @@ export class RecoveryBudgetManager {
     maxTokenRatio: number;
     maxRetryCount: number;
     maxRetries: number;
+    roundExtensionsGranted: number;
   } {
     return {
       active: this.state.active,
@@ -164,14 +186,65 @@ export class RecoveryBudgetManager {
   }
 
   private snapshotDetail(): NonNullable<RecoveryBudgetEvaluation['detail']> {
+    const baseMax = this.state.budget.maxRecoveryRounds;
+    const effectiveMax = baseMax * (1 + this.state.roundExtensionsGranted);
     return {
       roundsUsed: this.state.roundsUsed,
-      maxRounds: this.state.budget.maxRecoveryRounds,
+      maxRounds: effectiveMax,
       tokenRatioUsed: this.state.tokenRatioUsed,
       maxTokenRatio: this.state.budget.recoveryTokenRatio,
       maxRetryCount: this.maxRetryCount(),
       maxRetries: this.state.budget.maxRecoveryRetries,
+      roundExtensionsGranted: this.state.roundExtensionsGranted,
     };
+  }
+
+  /**
+   * 轮数维：超过 soft max 时，若仍有进展且 token 消耗低则扩展一次；
+   * 绝对硬顶 = maxRecoveryRounds × ABSOLUTE_ROUND_HARD_CAP_MULTIPLIER × (1 + extensions)。
+   */
+  private evaluateRecoveryRounds(
+    detail: NonNullable<RecoveryBudgetEvaluation['detail']>,
+  ): RecoveryBudgetEvaluation | null {
+    const baseMax = this.state.budget.maxRecoveryRounds;
+    if (this.state.roundsUsed <= baseMax) return null;
+
+    if (
+      this.state.roundExtensionsGranted < MAX_ROUND_EXTENSIONS
+      && this.state.tokenRatioUsed < PROGRESS_TOKEN_RATIO_THRESHOLD
+      && this.hasRecentProgress()
+    ) {
+      this.state.roundExtensionsGranted += 1;
+      return { exhausted: false, extended: true, detail: this.snapshotDetail() };
+    }
+
+    const hardCap = baseMax * ABSOLUTE_ROUND_HARD_CAP_MULTIPLIER * (1 + this.state.roundExtensionsGranted);
+    if (this.state.roundsUsed > hardCap) {
+      return { exhausted: true, reason: 'max_recovery_rounds', detail: this.snapshotDetail() };
+    }
+
+    const effectiveMax = baseMax * (1 + this.state.roundExtensionsGranted);
+    if (this.state.roundsUsed > effectiveMax && this.allRecentIneffective()) {
+      return { exhausted: true, reason: 'max_recovery_rounds', detail: this.snapshotDetail() };
+    }
+
+    return null;
+  }
+
+  private pushRecentEffective(effective: boolean): void {
+    this.state.recentEffective.push(effective);
+    if (this.state.recentEffective.length > RECENT_EFFECTIVE_WINDOW) {
+      this.state.recentEffective.shift();
+    }
+  }
+
+  private hasRecentProgress(): boolean {
+    return this.state.recentEffective.some(Boolean);
+  }
+
+  private allRecentIneffective(): boolean {
+    return this.state.recentEffective.length >= RECENT_EFFECTIVE_WINDOW
+      && this.state.recentEffective.every(v => !v);
   }
 
   private maxRetryCount(): number {

@@ -20,14 +20,134 @@ import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
+import type { BranchBudgetTracker } from './branch-budget.js';
+import {
+  extractRunCommand,
+  extractToolTargetPath,
+} from './branch-budget-tool-path.js';
+import { checkWorkspacePathViolation } from './workspace-path-guard.js';
+import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
+import { checkToolPreflight, checkDelegatePreflight } from './harness-tool-preflight.js';
+import { VerificationOutputBuffer } from './verification-output-buffer.js';
+import { isHarnessVerificationCommand } from './verification-digest.js';
+import type { HarnessPolicyStats } from './harness-policy-stats.js';
+import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
   loopController: LoopController;
   permissionRules: ToolPermissionRule[];
+  /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
+  skipPermissionChecks?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   workspaceRoot: string;
+  lockedWorkspaceRoot?: string;
+  referenceReads?: string[];
   runtimeTelemetry?: RuntimeTelemetry;
+  /** Resilience v2：超限时硬拦截 write / 失败命令重试。 */
+  branchBudget?: BranchBudgetTracker;
+  /** 同路径 missing-file preflight 拦截次数。 */
+  missingFileAttempts?: Map<string, number>;
+  /** Harness 策略拦截 / 恢复统计。 */
+  harnessPolicyStats?: HarnessPolicyStats;
+}
+
+function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
+  const message = error ?? 'Unknown error';
+  const body = rawOutput.trim();
+  if (body) return `工具执行错误: ${message}\n\n${body}`;
+  return `工具执行错误: ${message}`;
+}
+
+function isEnoentError(error: string | undefined, output: string): boolean {
+  const text = `${error ?? ''}\n${output}`.toLowerCase();
+  return /enoent|no such file|not found/.test(text);
+}
+
+interface PolicyBlockContext {
+  deps: ToolExecutorDeps;
+  tc: ToolCall;
+  iteration: number;
+  baseMessage: string;
+  errorLabel: string;
+  policyReason?: string;
+  hostKillLabel?: string;
+  messages: UnifiedMessage[];
+  onStep?: (event: HarnessStepEvent) => void;
+  logger: HarnessLogger;
+  taskState?: TaskState;
+  repoContext?: RepoContext;
+  policyBlockedSignatures: string[];
+  enrichWithVerification?: boolean;
+  verificationOutputBuffer?: VerificationOutputBuffer;
+  countAsMissingFile?: boolean;
+  budgetBlockPath?: string;
+}
+
+function emitHarnessPolicyBlock(
+  ctx: PolicyBlockContext,
+): void {
+  let blockMessage = ctx.baseMessage;
+  if (ctx.enrichWithVerification) {
+    blockMessage = appendVerificationEvidenceToBranchBlock(
+      blockMessage,
+      ctx.messages,
+      ctx.verificationOutputBuffer,
+    );
+  }
+
+  ctx.deps.harnessPolicyStats && (ctx.deps.harnessPolicyStats.policyBlockCount += 1);
+  if (ctx.countAsMissingFile && ctx.deps.harnessPolicyStats) {
+    ctx.deps.harnessPolicyStats.missingFileBlockCount += 1;
+  }
+  if (ctx.policyReason === 'branch_budget_file') {
+    recordBudgetBlockByPath(ctx.deps.harnessPolicyStats, ctx.budgetBlockPath);
+  }
+
+  ctx.logger.toolResult(ctx.tc.name, false, blockMessage.length, ctx.errorLabel);
+  ctx.onStep?.({ type: 'tool_denied', iteration: ctx.iteration, toolName: ctx.tc.name });
+  ctx.messages.push({
+    role: 'tool',
+    content: blockMessage,
+    toolCallId: ctx.tc.id,
+  });
+  ctx.policyBlockedSignatures.push(toolCallSignature(ctx.tc));
+  ctx.deps.runtimeTelemetry?.recordTool({
+    round: ctx.iteration,
+    toolName: ctx.tc.name,
+    success: false,
+    outcome: 'policy_block',
+    policyReason: ctx.policyReason ?? ctx.errorLabel,
+    outputLength: blockMessage.length,
+  });
+  if (ctx.policyReason === 'host_kill') {
+    ctx.deps.runtimeTelemetry?.recordHostGuardBlock({
+      round: ctx.iteration,
+      toolName: ctx.tc.name,
+      matchLabel: ctx.hostKillLabel,
+      source: 'preflight',
+    });
+  }
+  ctx.onStep?.({
+    type: 'tool_result',
+    iteration: ctx.iteration,
+    toolName: ctx.tc.name,
+    toolSuccess: false,
+    toolOutcome: 'policy_block',
+    toolOutput: blockMessage.substring(0, 500),
+    toolError: ctx.policyReason ?? ctx.errorLabel,
+  });
+  ctx.taskState?.recordToolResult(ctx.tc, {
+    success: false,
+    output: blockMessage,
+    error: ctx.policyReason ?? ctx.errorLabel,
+  });
+  ctx.repoContext?.recordToolResult(ctx.tc, {
+    success: false,
+    output: blockMessage,
+    error: ctx.policyReason ?? ctx.errorLabel,
+  });
+  ctx.deps.loopController.recordToolCalls(1);
 }
 
 export interface ExecuteToolCallsStreamingArgs {
@@ -40,6 +160,19 @@ export interface ExecuteToolCallsStreamingArgs {
   repoContext?: RepoContext;
   chatFn?: ChatFunction;
   currentTools?: ToolDefinition[];
+  buildDiagnosticGateActive?: boolean;
+  verificationOutputBuffer?: VerificationOutputBuffer;
+}
+
+export interface ToolExecutionStats {
+  /** 真实执行失败（用于熔断 / BranchBudget 计次 / 重复失败统计） */
+  failedCount: number;
+  totalCount: number;
+  failedSignatures: string[];
+  /** Harness 策略拒绝（preflight / BranchBudget / delegate gate），不计入 failedCount */
+  policyBlockedSignatures: string[];
+  /** 本轮 BranchBudget 文件 cap 拦截的路径（canonical，去重） */
+  budgetBlockedFilePaths: string[];
 }
 
 /**
@@ -55,7 +188,7 @@ export interface ExecuteToolCallsStreamingArgs {
 export async function executeToolCallsStreaming(
   deps: ToolExecutorDeps,
   args: ExecuteToolCallsStreamingArgs,
-): Promise<{ failedCount: number; totalCount: number; failedSignatures: string[] }> {
+): Promise<ToolExecutionStats> {
   const {
     toolCalls,
     messages,
@@ -66,6 +199,8 @@ export async function executeToolCallsStreaming(
     repoContext,
     chatFn,
     currentTools,
+    buildDiagnosticGateActive,
+    verificationOutputBuffer,
   } = args;
 
   const streamingExecutor = new StreamingToolExecutor(
@@ -83,6 +218,9 @@ export async function executeToolCallsStreaming(
   let directFailedCount = 0;
   let directTotalCount = 0;
   const directFailedSignatures: string[] = [];
+  const policyBlockedSignatures: string[] = [];
+  const budgetBlockedFilePaths: string[] = [];
+  const budgetBlockedPathSet = new Set<string>();
 
   // 第一遍：权限检查 + 提交到流式执行器
   const submittedIds = new Set<string>();
@@ -94,6 +232,34 @@ export async function executeToolCallsStreaming(
     }
 
     if (tc.name === 'delegate_to_subagent') {
+      const delegateTask = String(tc.arguments.task ?? '');
+      const delegatePreflight = checkDelegatePreflight({
+        task: delegateTask,
+        buildDiagnosticGateActive,
+        branchBudget: deps.branchBudget,
+      });
+      if (delegatePreflight.blocked) {
+        emitHarnessPolicyBlock({
+          deps,
+          tc,
+          iteration,
+          baseMessage: delegatePreflight.message ?? '[Harness / Preflight] delegate_to_subagent denied.',
+          errorLabel: delegatePreflight.reason ?? 'Preflight block',
+          policyReason: delegatePreflight.reason ?? 'delegate_preflight',
+          messages,
+          onStep,
+          logger,
+          taskState,
+          repoContext,
+          policyBlockedSignatures,
+          enrichWithVerification: delegatePreflight.reason === 'delegate_build_blocked',
+          verificationOutputBuffer,
+        });
+        directTotalCount++;
+        submittedIds.add(tc.id);
+        continue;
+      }
+
       logger.toolCall(tc.name, tc.arguments);
       onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
       onStep?.({
@@ -166,47 +332,163 @@ export async function executeToolCallsStreaming(
     }
 
     // ── 权限检查：显式规则优先，破坏性工具兜底确认 ──
-    const permission = resolveToolPermission(tc, deps.permissionRules);
-    if (permission.permission === 'deny') {
-      logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
-      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-      messages.push({
-        role: 'tool',
-        content: `Tool ${tc.name} denied by policy${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
-        toolCallId: tc.id,
-      });
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (permission.permission === 'confirm' && !deps.onConfirm) {
-      const reason = permission.reason ?? 'Confirmation required but no confirmation handler is configured';
-      logger.toolResult(tc.name, false, 0, reason);
-      onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
-      messages.push({
-        role: 'tool',
-        content: `Tool ${tc.name} requires confirmation but no confirmation handler is configured${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
-        toolCallId: tc.id,
-      });
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (permission.permission === 'confirm' && deps.onConfirm) {
-      const confirmToolName = formatConfirmToolName(tc);
-      onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: tc.arguments });
-      const allowed = await deps.onConfirm(confirmToolName, tc.arguments);
-      if (!allowed) {
-        logger.toolResult(tc.name, false, 0, 'User denied execution');
+    if (!deps.skipPermissionChecks) {
+      const permission = resolveToolPermission(tc, deps.permissionRules);
+      if (permission.permission === 'deny') {
+        logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
         onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
         messages.push({
           role: 'tool',
-          content: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
+          content: `Tool ${tc.name} denied by policy${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
           toolCallId: tc.id,
         });
         submittedIds.add(tc.id);
         continue;
       }
+
+      if (permission.permission === 'confirm' && !deps.onConfirm) {
+        const reason = permission.reason ?? 'Confirmation required but no confirmation handler is configured';
+        logger.toolResult(tc.name, false, 0, reason);
+        onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+        messages.push({
+          role: 'tool',
+          content: `Tool ${tc.name} requires confirmation but no confirmation handler is configured${permission.reason ? `: ${permission.reason}` : ''}. Please use a different approach or ask the user.`,
+          toolCallId: tc.id,
+        });
+        submittedIds.add(tc.id);
+        continue;
+      }
+
+      if (permission.permission === 'confirm' && deps.onConfirm) {
+        const confirmToolName = formatConfirmToolName(tc);
+        onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: tc.arguments });
+        const allowed = await deps.onConfirm(confirmToolName, tc.arguments);
+        if (!allowed) {
+          logger.toolResult(tc.name, false, 0, 'User denied execution');
+          onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+          messages.push({
+            role: 'tool',
+            content: `User denied tool ${tc.name}. Please try a different approach to complete the task, or ask the user.`,
+            toolCallId: tc.id,
+          });
+          submittedIds.add(tc.id);
+          continue;
+        }
+      }
+    }
+
+    const workspaceBlock = checkWorkspacePathViolation(
+      tc.name,
+      tc.arguments,
+      deps.lockedWorkspaceRoot ?? '',
+      deps.referenceReads ?? [],
+    );
+    if (workspaceBlock) {
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
+        iteration,
+        baseMessage: workspaceBlock,
+        errorLabel: 'Workspace lock block',
+        policyReason: 'workspace_lock',
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
+      });
+      directTotalCount++;
+      submittedIds.add(tc.id);
+      continue;
+    }
+
+    // Harness preflight：dist 读取 / missing file / build diagnostic gate
+    const preflight = checkToolPreflight({
+      toolName: tc.name,
+      args: tc.arguments,
+      branchBudget: deps.branchBudget,
+      taskState,
+      buildDiagnosticGateActive,
+      workspaceRoot: deps.workspaceRoot,
+      lockedWorkspaceRoot: deps.lockedWorkspaceRoot,
+      missingFileAttempts: deps.missingFileAttempts,
+    });
+    if (preflight.blocked) {
+      const enrichGate = preflight.reason === 'build_diagnostic_gate';
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
+        iteration,
+        baseMessage: preflight.message ?? '[Harness / Preflight] Tool execution denied.',
+        errorLabel: preflight.reason ?? 'Preflight block',
+        policyReason: preflight.reason ?? 'preflight',
+        hostKillLabel: preflight.hostKillLabel,
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
+        enrichWithVerification: enrichGate,
+        verificationOutputBuffer,
+        countAsMissingFile: preflight.reason === 'missing_file'
+          || preflight.reason === 'missing_file_repeat',
+      });
+      directTotalCount++;
+      submittedIds.add(tc.id);
+      continue;
+    }
+
+    const targetPath = extractToolTargetPath(tc.name, tc.arguments);
+    const hadWriteBypass = targetPath ? deps.branchBudget?.hasWriteBypass(targetPath) : false;
+
+    // BranchBudget 拦截：工具未真正执行。telemetry/toolStats 的 success:false 是策略拒绝，
+    // 不是 edit_file/write_file 引擎故障；长任务里多在 npm test 反复失败后、forced 段出现。
+    const branchBlock = deps.branchBudget?.checkToolBlock(
+      tc.name,
+      tc.arguments,
+      extractToolTargetPath,
+      extractRunCommand,
+      { workspaceRoot: deps.workspaceRoot },
+    );
+    if (branchBlock?.blocked) {
+      const budgetKey = branchBlock.key ?? targetPath;
+      if (branchBlock.dimension === 'file_edit' && budgetKey && !budgetBlockedPathSet.has(budgetKey)) {
+        budgetBlockedPathSet.add(budgetKey);
+        budgetBlockedFilePaths.push(budgetKey);
+      }
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
+        iteration,
+        baseMessage: branchBlock.message ?? '[BranchBudget / Blocked] Tool execution denied.',
+        errorLabel: 'Branch budget block',
+        policyReason: branchBlock.dimension === 'command_retry'
+          ? 'branch_budget_command'
+          : 'branch_budget_file',
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
+        enrichWithVerification: true,
+        verificationOutputBuffer,
+        budgetBlockPath: budgetKey,
+      });
+      directTotalCount++;
+      submittedIds.add(tc.id);
+      continue;
+    }
+
+    if (
+      hadWriteBypass
+      && targetPath
+      && deps.branchBudget
+      && !deps.branchBudget.hasWriteBypass(targetPath)
+    ) {
+      deps.harnessPolicyStats && (deps.harnessPolicyStats.writeBypassUsedCount += 1);
     }
 
     // ── 提交到流式执行器 ──
@@ -234,11 +516,35 @@ export async function executeToolCallsStreaming(
     if (deps.loopController.isAborted()) break;
 
     const { toolCall: tc, result } = sr;
-    const output = result.success ? result.output : `工具执行错误: ${result.error}`;
+    const output = result.success
+      ? result.output
+      : formatToolFailureOutput(result.error, result.output);
 
     if (!result.success) {
       failedCount++;
       failedSignatures.push(toolCallSignature(tc));
+      if (isEnoentError(result.error, result.output) && deps.harnessPolicyStats) {
+        deps.harnessPolicyStats.enoentExecutionCount += 1;
+      }
+      if (
+        isEnoentError(result.error, result.output)
+        && deps.missingFileAttempts
+        && tc.name === 'read_file'
+      ) {
+        const missingPath = typeof tc.arguments.path === 'string'
+          ? tc.arguments.path
+          : (typeof tc.arguments.file_path === 'string' ? tc.arguments.file_path : undefined);
+        if (missingPath) {
+          const next = (deps.missingFileAttempts.get(missingPath) ?? 0) + 1;
+          deps.missingFileAttempts.set(missingPath, next);
+        }
+      }
+      if (tc.name === 'run_command' && verificationOutputBuffer) {
+        const command = extractRunCommand(tc.arguments);
+        if (command && isHarnessVerificationCommand(command)) {
+          verificationOutputBuffer.recordFailed(command, output);
+        }
+      }
     }
 
     logger.toolResult(tc.name, result.success, output.length, result.error);
@@ -246,6 +552,7 @@ export async function executeToolCallsStreaming(
       round: iteration,
       toolName: tc.name,
       success: result.success,
+      outcome: result.success ? 'executed' : 'execution_fail',
       outputLength: output.length,
     });
     onStep?.({
@@ -253,6 +560,7 @@ export async function executeToolCallsStreaming(
       iteration,
       toolName: tc.name,
       toolSuccess: result.success,
+      toolOutcome: result.success ? 'executed' : 'execution_fail',
       toolOutput: output.substring(0, 500),
       toolError: result.success ? undefined : result.error,
     });
@@ -285,7 +593,13 @@ export async function executeToolCallsStreaming(
     yieldMissingToolResults(toolCalls, processedIds, messages);
   }
 
-  return { failedCount, totalCount: results.length + directTotalCount, failedSignatures };
+  return {
+    failedCount,
+    totalCount: results.length + directTotalCount,
+    failedSignatures,
+    policyBlockedSignatures,
+    budgetBlockedFilePaths,
+  };
 }
 
 /**

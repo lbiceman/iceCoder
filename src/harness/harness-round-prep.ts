@@ -3,6 +3,7 @@ import { normalizeMessages } from './context-assembler.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CompactionDeps } from './harness-compaction.js';
 import { maybeCompact } from './harness-compaction.js';
+import { takeBgStatusForInjection } from './harness-bg-summary.js';
 import {
   applySubAgentResultRetention,
   applyToolResultBudget,
@@ -14,7 +15,10 @@ import {
   isActionableToolRequest,
 } from './harness-message-utils.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
+import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
+import { isResumeContinuationMessage } from './resume-goal.js';
 import { upsertRuntimeContextMessage } from './harness-runtime-inject.js';
+import { upsertWorkspaceAnchorMessage } from './workspace-anchor.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -43,6 +47,10 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   runtimeTelemetry?: RuntimeTelemetry;
   /** L2-7 — strict 首轮 `task_graph_init` 门禁经此 bridge 判定；缺省回退 `shouldUseTaskGraph`。 */
   supervisorBridge?: SupervisorRuntimeBridge;
+  /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
+  sessionId?: string;
+  /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
+  workspaceRoot?: string;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -104,6 +112,7 @@ export async function prepareHarnessRound(
   logger.llmCall();
 
   upsertRuntimeContextMessage(msgs, state);
+  upsertWorkspaceAnchorMessage(msgs, state);
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
@@ -152,10 +161,23 @@ export async function prepareHarnessRound(
     }
   }
 
+  // Phase 4a — 后台任务摘要：仅在有 dirty / due running 任务时返回非空，
+  // BackgroundTaskManager 内部 5min 节流；本块帮助模型记住「有 npm test 在跑」而不是再起一份。
+  if (deps.workspaceRoot) {
+    const sessionId = deps.sessionId ?? 'default';
+    const bgStatus = takeBgStatusForInjection(sessionId, deps.workspaceRoot);
+    if (bgStatus) {
+      msgs.push({ role: 'user', content: bgStatus });
+    }
+  }
+
   {
     const intent = state.taskState.snapshot().intent;
-    const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
-    await deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+    const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
+    if (!skipMemoryRecall) {
+      const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
+      await deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+    }
   }
 
   if (
@@ -182,7 +204,11 @@ export async function prepareHarnessRound(
   if (!state.taskSwitchInjected) {
     const latestUserContent = getLatestRealUserText(msgs, userMessage);
     const lastAssistantText = getLastAssistantText(msgs);
-    if (latestUserContent && lastAssistantText) {
+    if (
+      latestUserContent
+      && lastAssistantText
+      && !isResumeContinuationMessage(latestUserContent)
+    ) {
       const similarity = bigramJaccard(latestUserContent, lastAssistantText);
       if (similarity < TASK_SWITCH_JACCARD_THRESHOLD) {
         msgs.push({

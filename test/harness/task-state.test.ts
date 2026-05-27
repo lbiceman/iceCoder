@@ -38,4 +38,31 @@ describe('TaskState verification via node --check', () => {
     expect(snap.verificationStatus).toBe('passed');
     expect(state.shouldBlockFinalForVerification()).toBe(false);
   });
+
+  it('records failed npm test and blocks final completion', () => {
+    const state = new TaskState('implement game');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'src/game/x.ts' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: '', error: 'exit 1' },
+    );
+
+    const snap = state.snapshot();
+    expect(snap.commandsRun).toContain('npm test');
+    expect(snap.verificationStatus).toBe('failed');
+    expect(state.shouldBlockFinalForVerification()).toBe(true);
+  });
+
+  it('sets verification required on any successful file write', () => {
+    const state = new TaskState('继续');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.snapshot().verificationRequired).toBe(true);
+    expect(state.snapshot().verificationStatus).toBe('required');
+  });
 });

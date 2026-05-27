@@ -30,6 +30,7 @@
     "dev:api": "tsx src/index.ts",
     "dev:web": "vite",
     "test": "vitest --run",
+    "test:coverage": "vitest run --coverage",
     "eval:agent": "tsx scripts/agent-eval.ts"
   },
   "engines": {
@@ -38,7 +39,6 @@
   "keywords": [],
   "license": "ISC",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.90.0",
     "@types/ws": "^8.18.1",
     "cheerio": "^1.2.0",
     "domhandler": "^6.0.1",
@@ -60,6 +60,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/uuid": "^10.0.0",
     "@types/xml2js": "^0.4.14",
+    "@vitest/coverage-v8": "^4.1.4",
     "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
     "jpeg-js": "^0.4.4",

@@ -53,6 +53,8 @@ export function shouldEnterForcedMode(
   }
   if (state.branchSwitchedThisRound) reasons.push('branch_switched');
   if (state.checkpointResumedThisSession) reasons.push('checkpoint_resumed');
+  // lastToolSuccess=false 当 consecutiveToolFailures>0（整轮可执行工具全失败）；benchmark 长任务里
+  // 往往先有 npm test 红，而非 edit 执行器故障。与 step_gate 显式 submit 的 tool_failure 可叠加。
   if (!state.lastToolSuccess) reasons.push('tool_failure');
   if (state.accumulatedDiffLines > config.diffLinesEnterThreshold) reasons.push('large_diff');
   if (state.activeGraphHasImplementNode) reasons.push('explicit_impl');

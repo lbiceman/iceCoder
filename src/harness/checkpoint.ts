@@ -4,6 +4,8 @@ import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import { checkpointHasPendingWork } from './incomplete-completion.js';
+import { buildCheckpointResumeSummary, sanitizeCheckpointGoal } from './checkpoint-resume-compact.js';
 // ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
@@ -56,7 +58,11 @@ export class TaskCheckpointManager {
       const raw = await fs.readFile(this.checkpointPath, 'utf-8');
       const checkpoint = JSON.parse(raw) as TaskCheckpoint;
       if (checkpoint.version !== 1) return null;
-      if (checkpoint.status === 'completed' || checkpoint.status === 'failed') return null;
+      if (checkpoint.status === 'failed') return null;
+      if (checkpoint.status === 'completed') {
+        if (!checkpointHasPendingWork(checkpoint)) return null;
+        return { ...checkpoint, status: 'paused' };
+      }
       return checkpoint;
     } catch {
       return null;
@@ -76,7 +82,10 @@ export class TaskCheckpointManager {
       phase: update.taskState.phase,
       lastCompletedStep: inferLastCompletedStep(update.repoContext),
       nextSuggestedStep: inferNextSuggestedStep(update.taskState, update.repoContext, update.status),
-      taskState: update.taskState,
+      taskState: {
+        ...update.taskState,
+        goal: sanitizeCheckpointGoal(update.taskState.goal),
+      },
       repoContext: update.repoContext,
       failedToolCalls: update.failedToolCalls ?? existing?.failedToolCalls ?? [],
       stopReason: update.stopReason,
@@ -102,18 +111,11 @@ export class TaskCheckpointManager {
   // clearEmbeddedPlan removed (Phase 11 — execution plan layer deleted)
 
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
-    const lines = [
-      '<resume-checkpoint>',
-      'A previous task was interrupted or left in progress. Treat this checkpoint as authoritative short-term task state.',
-      'If the latest user message is clearly a new unrelated task, ignore this checkpoint and focus on the latest user request.',
-      '',
-      JSON.stringify(checkpoint, null, 2),
-    ];
-
-    // Plan Recovery removed (Phase 11)
-
-    lines.push('</resume-checkpoint>');
-    return { role: 'user', content: lines.join('\n') };
+    return {
+      role: 'user',
+      content: buildCheckpointResumeSummary(checkpoint),
+      preserveOnCompaction: true,
+    };
   }
 
   private async readExisting(): Promise<TaskCheckpoint | null> {

@@ -263,9 +263,17 @@ describe('initSessionMemoryState', () => {
     expect(state2.tokensAtLastExtraction).toBe(0);
   });
 
-  it('notesPath 指向 session-notes.md', () => {
+  it('notesPath 指向 {sessionId}.session-notes.md（默认 default）', () => {
     const s = initSessionMemoryState('/my/session');
-    expect(s.notesPath).toBe(path.join('/my/session', 'session-notes.md'));
+    expect(s.notesPath).toBe(path.join('/my/session', 'default.session-notes.md'));
+  });
+
+  it('notesPath 按 sessionId 隔离', () => {
+    const a = initSessionMemoryState('/my/session', 'aaa');
+    const b = initSessionMemoryState('/my/session', 'bbb');
+    expect(a.notesPath).toBe(path.join('/my/session', 'aaa.session-notes.md'));
+    expect(b.notesPath).toBe(path.join('/my/session', 'bbb.session-notes.md'));
+    expect(a.notesPath).not.toBe(b.notesPath);
   });
 });
 

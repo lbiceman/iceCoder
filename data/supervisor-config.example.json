@@ -15,33 +15,33 @@
     },
     "adaptiveFree": {
       "firstRoundGraph": false,
-      "riskThreshold": 0.6
+      "riskThreshold": 0.5
     },
     "adaptiveTakeover": {
       "firstRoundGraph": false,
       "riskThreshold": 0.6,
-      "maxRecoveryRounds": 3,
-      "recoveryTokenRatio": 0.25,
-      "maxRecoveryRetries": 2,
-      "stabilityWindowRounds": 3,
+      "maxRecoveryRounds": 25,
+      "recoveryTokenRatio": 0.4,
+      "maxRecoveryRetries": 3,
+      "stabilityWindowRounds": 4,
       "handoffCooldownRounds": 3,
       "evaluateRoundMode": "metrics_only",
       "checkToolCall": true
     }
   },
   "triggers": {
-    "toolRepeatFailMin": 2,
-    "noProgressRoundsMin": 3,
+    "toolRepeatFailMin": 3,
+    "noProgressRoundsMin": 4,
     "fileLoopMin": 4,
     "goalDriftEnabled": true,
     "scopeCreepEnabled": true,
     "userForceTakeoverEnabled": true
   },
   "goalDrift": {
-    "alignmentThreshold": 0.45,
-    "consecutiveRoundsBelow": 2,
-    "llmGrayZoneLow": 0.35,
-    "llmGrayZoneHigh": 0.55
+    "alignmentThreshold": 0.35,
+    "consecutiveRoundsBelow": 3,
+    "llmGrayZoneLow": 0.25,
+    "llmGrayZoneHigh": 0.45
   },
   "snapshotConfidence": {
     "templateGraphMin": 0.65

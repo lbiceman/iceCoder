@@ -265,7 +265,7 @@ export class FailureClassifier {
     if (toolName === 'read_file' && /enoent|not.found/i.test(normalized)) {
       return { failureId: id, category: 'hallucinated_path', subType: 'file_not_found', severity: 'recoverable',
         nodeId: '', toolName, rawError: raw, at,
-        suggestedRecovery: { strategy: 'expand_context', method: 'search' } };
+        suggestedRecovery: { strategy: 'retry_with_hint', hint: '文件不存在。用 write_file 创建完整文件，或 read_file 同目录已有文件作模板；勿反复 read 缺失路径。' } };
     }
 
     // 2. tool_error: file not found（非 read_file 的 enoent）

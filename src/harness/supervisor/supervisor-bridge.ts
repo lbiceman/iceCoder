@@ -19,6 +19,10 @@ import type { RuntimeSupervisorCheckpointState } from '../../types/runtime-check
 import type { GraphExecutor } from '../task-graph-executor.js';
 import { shouldUseTaskGraph } from '../task-graph-config.js';
 import {
+  getMaxSegmentRenewals,
+  isSoftCheckpointEnabled,
+} from '../token-budget-config.js';
+import {
   CorrectionBudgetTracker,
   type CorrectionBudgetUsage,
 } from './correction-budget.js';
@@ -85,6 +89,17 @@ export interface EvaluateAfterRoundContext {
   messages?: UnifiedMessage[];
   /** L2-4：本轮 token 消耗（建议 outputTokens）与任务 token 总预算上限。用于 RecoveryBudgetManager。 */
   tokenUsage?: { used: number; total: number };
+  /**
+   * takeover 段是否计为有效恢复轮；false 时不增加 RecoveryBudgetManager 轮次计数。
+   * 默认 true（兼容旧调用方）。
+   */
+  recoveryRoundEffective?: boolean;
+  /**
+   * 调优 2026-05-26（C）— 仅在决策为 takeover 时调用，按需采集 takeover 证据
+   * （失败签名 / 验收 pending / 后台任务）注入到 `[System Recovery]` 块。
+   * 缺省时 takeover 文案仍输出，但不带 evidence 行（与历史行为一致）。
+   */
+  takeoverEvidenceProvider?: () => import('../../types/supervisor.js').TakeoverEvidence | undefined;
 }
 
 /** L2-4：scope_creep / user_force_takeover 注入入口。 */
@@ -126,6 +141,13 @@ export interface RecoveryMainPathContext {
 
 export type RecoveryMainPathTier = 'template_graph' | 'strong_hint' | 'manual_checkpoint';
 
+/** L2 Segment Renewal：budget 耗尽后续段时由 Harness 消费并注入 Rebuild。 */
+export interface PendingSegmentRenewal {
+  round: number;
+  reason: RecoveryBudgetExhaustionReason;
+  segmentIndex: number;
+}
+
 export interface RecoveryMainPathResult {
   tier: RecoveryMainPathTier;
   snapshot: WorkspaceSnapshot;
@@ -162,6 +184,12 @@ export class SupervisorRuntimeBridge {
 
   /** P1-1 — 当前轮号缓存；createCorrectionPort / observeAfterTools / evaluateAfterRound 写入。 */
   private currentRound = 0;
+  /** P0 — 最近一轮 observeAfterTools 产生的 deviation 信号；takeover 稳定窗口只看本轮。 */
+  private lastRoundDeviationSignals: DeviationSignal[] = [];
+  /** Segment Renewal：本 run 内已续段次数。 */
+  private segmentRenewalCount = 0;
+  /** 待 Harness 消费：续段后注入 Rebuild Escalation。 */
+  private pendingSegmentRenewal?: PendingSegmentRenewal;
 
   constructor(config: ResolvedSupervisorConfig, options: SupervisorRuntimeBridgeOptions = {}) {
     this.config = config;
@@ -232,6 +260,19 @@ export class SupervisorRuntimeBridge {
     this.recoveryBudgetManager.reset();
     this.correctionBudget.reset();
     this.recoverySupervisor.restoreSnapshot(undefined);
+    this.lastRoundDeviationSignals = [];
+    this.segmentRenewalCount = 0;
+    this.pendingSegmentRenewal = undefined;
+  }
+
+  getSegmentRenewalCount(): number {
+    return this.segmentRenewalCount;
+  }
+
+  consumePendingSegmentRenewal(): PendingSegmentRenewal | undefined {
+    const pending = this.pendingSegmentRenewal;
+    this.pendingSegmentRenewal = undefined;
+    return pending;
   }
 
   /**
@@ -243,7 +284,7 @@ export class SupervisorRuntimeBridge {
    */
   snapshotForCheckpoint(): Pick<
     RuntimeSupervisorCheckpointState,
-    'supervisorPhase' | 'recoverySupervisorSnapshot' | 'timelineTail' | 'correctionBudgetUsed'
+    'supervisorPhase' | 'recoverySupervisorSnapshot' | 'timelineTail' | 'correctionBudgetUsed' | 'segmentRenewalCount'
   > {
     const phase = this.getSupervisorPhase();
     const recoverySnapshot = this.recoverySupervisor.getSnapshot();
@@ -256,6 +297,7 @@ export class SupervisorRuntimeBridge {
         ...(ev.payload ? { payload: { ...ev.payload } } : {}),
       })) : undefined,
       correctionBudgetUsed: this.correctionBudget.snapshot().used,
+      segmentRenewalCount: this.segmentRenewalCount,
     };
   }
 
@@ -280,6 +322,19 @@ export class SupervisorRuntimeBridge {
     this.eventTimeline.restoreRecentEvents(state.timelineTail);
     this.correctionBudget.restoreUsed(state.correctionBudgetUsed ?? 0);
 
+    // P1 — 续跑时清累积 deviation，避免 handoff 稳定窗口被历史信号锁死；takeover 段给新 budget 周期。
+    this.resetObserverSignals();
+    this.lastRoundDeviationSignals = [];
+    const phase = this.getSupervisorPhase();
+    if (phase === 'takeover') {
+      const startRound = state.recoverySupervisorSnapshot?.takeoverStartRound ?? this.currentRound;
+      this.recoveryBudgetManager.beginTakeover(startRound, this.globalPolicy.supervisorMode);
+    } else {
+      this.recoveryBudgetManager.reset();
+    }
+    this.segmentRenewalCount = state.segmentRenewalCount ?? 0;
+    this.pendingSegmentRenewal = undefined;
+
     this.eventTimeline.recordTyped('failure', {
       round: this.currentRound,
       mode: this.globalPolicy.supervisorMode,
@@ -287,6 +342,7 @@ export class SupervisorRuntimeBridge {
       payload: {
         phase: this.getSupervisorPhase(),
         budgetUsed: this.correctionBudget.snapshot().used,
+        recoveryBudgetActive: this.recoveryBudgetManager.isActive(),
       },
     });
   }
@@ -409,6 +465,7 @@ export class SupervisorRuntimeBridge {
       signals.push(driftSignal);
     }
 
+    this.lastRoundDeviationSignals = [...signals];
     return signals;
   }
 
@@ -475,8 +532,8 @@ export class SupervisorRuntimeBridge {
       return { action: 'continue' };
     }
 
-    const signals = mergeSignals(this.passiveObserver.getAccumulated(), ctx.extraSignals);
     const phaseBefore = this.recoverySupervisor.getPhase();
+    const signals = this.resolveEvaluationSignals(phaseBefore, ctx.extraSignals);
     const supervisorCtx = this.buildEvaluateContext({
       phase: phaseBefore,
       round: ctx.round,
@@ -519,9 +576,9 @@ export class SupervisorRuntimeBridge {
 
     if (enteringTakeover) {
       this.recoveryBudgetManager.beginTakeover(ctx.round.round, this.globalPolicy.supervisorMode);
-      this.recoveryBudgetManager.tickRound(ctx.round.round);
+      this.recoveryBudgetManager.tickRound(ctx.round.round, ctx.recoveryRoundEffective !== false);
     } else if (stayingInTakeover) {
-      this.recoveryBudgetManager.tickRound(ctx.round.round);
+      this.recoveryBudgetManager.tickRound(ctx.round.round, ctx.recoveryRoundEffective !== false);
     }
 
     if (ctx.tokenUsage && (enteringTakeover || stayingInTakeover)) {
@@ -530,8 +587,21 @@ export class SupervisorRuntimeBridge {
 
     if (enteringTakeover || stayingInTakeover) {
       const evaluation = this.recoveryBudgetManager.evaluate();
+      if (evaluation.extended) {
+        this.recordBudgetExtension(ctx.round.round);
+      }
       if (evaluation.exhausted && evaluation.reason) {
         this.recordBudgetExhaustion(evaluation.reason, ctx.round.round);
+
+        const canRenewSegment = evaluation.reason === 'max_recovery_rounds'
+          && isSoftCheckpointEnabled()
+          && this.segmentRenewalCount < getMaxSegmentRenewals();
+
+        if (canRenewSegment) {
+          this.renewRecoverySegment(ctx, evaluation.reason);
+          return decision;
+        }
+
         this.recoveryBudgetManager.reset();
         return { action: 'fail', kind: 'checkpoint' };
       }
@@ -539,9 +609,61 @@ export class SupervisorRuntimeBridge {
 
     if (leavingTakeover) {
       this.recoveryBudgetManager.reset();
+      this.resetObserverSignals();
+      this.lastRoundDeviationSignals = [];
     }
 
     return decision;
+  }
+
+  /**
+   * Segment Renewal — recovery rounds budget 耗尽时在同 run 内续段：
+   * 重置 observer / budget 周期，保留 takeover phase，并标记 pending Rebuild inject。
+   */
+  private renewRecoverySegment(
+    ctx: EvaluateAfterRoundContext,
+    reason: RecoveryBudgetExhaustionReason,
+  ): void {
+    this.segmentRenewalCount += 1;
+    this.resetObserverSignals();
+    this.lastRoundDeviationSignals = [];
+
+    const round = ctx.round.round;
+    if (this.recoverySupervisor.getPhase() === 'takeover') {
+      this.recoveryBudgetManager.beginTakeover(round, this.globalPolicy.supervisorMode);
+    } else {
+      this.recoveryBudgetManager.reset();
+    }
+
+    this.pendingSegmentRenewal = {
+      round,
+      reason,
+      segmentIndex: this.segmentRenewalCount,
+    };
+
+    this.eventTimeline.recordTyped('recover', {
+      round,
+      mode: this.globalPolicy.supervisorMode,
+      reason: `segment_renewal:${formatBudgetExhaustionReason(reason)}`,
+      payload: {
+        segmentIndex: this.segmentRenewalCount,
+        budget: this.recoveryBudgetManager.snapshot(),
+      },
+    });
+  }
+
+  /**
+   * P0 — free→takeover 看累积信号；takeover/handoff_pending 稳定判定只看本轮 observe 信号。
+   */
+  private resolveEvaluationSignals(
+    phaseBefore: SupervisorPhase,
+    extraSignals?: readonly DeviationSignal[],
+  ): DeviationSignal[] {
+    const useLastRoundOnly = phaseBefore === 'takeover' || phaseBefore === 'handoff_pending';
+    const base = useLastRoundOnly
+      ? this.lastRoundDeviationSignals
+      : this.passiveObserver.getAccumulated();
+    return mergeSignals(base, extraSignals);
   }
 
   /**
@@ -706,12 +828,14 @@ export class SupervisorRuntimeBridge {
     if (!port) return;
 
     if (decision.action === 'takeover') {
+      const evidence = ctx.takeoverEvidenceProvider?.();
       this.recoverySupervisor.applyTakeover({
         round: ctx.round.round,
         reason: decision.reason,
         signals: decision.signals,
         task: ctx.task,
         correctionPort: port,
+        ...(evidence ? { evidence } : {}),
       });
       return;
     }
@@ -857,6 +981,15 @@ export class SupervisorRuntimeBridge {
       round,
       mode: this.globalPolicy.supervisorMode,
       reason: formatBudgetExhaustionReason(reason),
+      payload: { budget: this.recoveryBudgetManager.snapshot() },
+    });
+  }
+
+  private recordBudgetExtension(round: number): void {
+    this.eventTimeline.recordTyped('failure', {
+      round,
+      mode: this.globalPolicy.supervisorMode,
+      reason: 'budget_extended:rounds',
       payload: { budget: this.recoveryBudgetManager.snapshot() },
     });
   }

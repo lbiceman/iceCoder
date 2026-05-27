@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { UnifiedMessage } from '../../src/llm/types.js';
 import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
@@ -433,6 +433,56 @@ describe('SupervisorRuntimeBridge - L2-3 takeover end-to-end', () => {
     const events = bridge.eventTimeline.getRecentEvents().map(e => e.event);
     expect(events).toEqual(expect.arrayContaining(['recover', 'handoff']));
   });
+
+  it('handoffs after stable rounds when historical failures exist but this round succeeds (P0)', async () => {
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const criticalTask = {
+      goal: 'fix failing tests',
+      intent: 'debug' as const,
+      domain: 'critical_debug' as const,
+      filesChanged: [] as string[],
+      filesRead: [] as string[],
+      commandsRun: [] as string[],
+      recentFailureCount: 2,
+      branchBudgetTriggers: 0,
+    };
+
+    await bridge.evaluateAfterRound({
+      round: { round: 1, toolNames: ['run_command'], toolSuccess: [false], hadWriteTool: false },
+      task: criticalTask,
+      extraSignals: [{ type: 'tool_repeat_fail', count: 3 }],
+      riskScore: 0.7,
+    });
+    expect(bridge.getSupervisorPhase()).toBe('takeover');
+
+    for (const round of [2, 3, 4]) {
+      bridge.observeAfterTools({
+        phase: 'takeover',
+        round: { round, toolNames: ['write_file'], toolSuccess: [true], hadWriteTool: true },
+        consecutiveToolFailures: 0,
+        consecutiveReadOnlyRounds: 0,
+        stableRoundsSinceLastFailure: round,
+        allToolsFailedThisRound: false,
+        repeatedToolSignatures: [],
+        maxFailedSignatureCount: 5,
+        branchRecoverTriggered: false,
+        task: criticalTask,
+      });
+      const d = await bridge.evaluateAfterRound({
+        round: { round, toolNames: ['write_file'], toolSuccess: [true], hadWriteTool: true },
+        task: criticalTask,
+        riskScore: 0.2,
+      });
+      if (round < 4) {
+        expect(d).toEqual({ action: 'continue' });
+        expect(bridge.getSupervisorPhase()).toBe('takeover');
+      } else {
+        expect(d).toEqual({ action: 'handoff_pending' });
+        expect(bridge.getSupervisorPhase()).toBe('handoff_pending');
+      }
+    }
+  });
 });
 
 describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
@@ -447,7 +497,11 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
     branchBudgetTriggers: 0,
   };
 
-  it('escalates to fail{checkpoint} when recovery rounds budget is exhausted', async () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('renews segment instead of fail{checkpoint} when recovery rounds budget is exhausted', async () => {
     const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
 
@@ -461,12 +515,54 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
     expect(bridge.getSupervisorPhase()).toBe('takeover');
     expect(bridge.recoveryBudgetManager.isActive()).toBe(true);
 
-    // adaptiveTakeover.maxRecoveryRounds = 3. Keep injecting tool_repeat_fail every round so the
-    // supervisor remains in takeover; the budget should escalate to fail{checkpoint} on the round
-    // that pushes roundsUsed > 3.
+    // adaptiveTakeover.maxRecoveryRounds = 3 → extension at 4 → hard cap = 12 → 续段而非 checkpoint
+    let renewalDecision: Awaited<ReturnType<typeof bridge.evaluateAfterRound>> | undefined;
+    let renewedAtRound = -1;
+    for (let round = 2; round <= 15 && !renewalDecision; round++) {
+      const d = await bridge.evaluateAfterRound({
+        round: { round, toolNames: ['run_command'], toolSuccess: [false], hadWriteTool: false },
+        task: criticalTask,
+        extraSignals: [{ type: 'tool_repeat_fail', count: 3 }],
+        riskScore: 0.7,
+      });
+      if (bridge.getSegmentRenewalCount() > 0) {
+        renewalDecision = d;
+        renewedAtRound = round;
+      }
+    }
+
+    expect(renewalDecision?.action).not.toBe('fail');
+    expect(renewedAtRound).toBe(13);
+    expect(bridge.getSegmentRenewalCount()).toBe(1);
+    expect(bridge.recoveryBudgetManager.isActive()).toBe(true);
+
+    const pending = bridge.consumePendingSegmentRenewal();
+    expect(pending?.segmentIndex).toBe(1);
+    expect(pending?.reason).toBe('max_recovery_rounds');
+
+    const recoverEvents = bridge.eventTimeline.getRecentEvents().filter(e => e.event === 'recover');
+    expect(recoverEvents.some(e => e.reason === 'segment_renewal:budget_exhausted:rounds')).toBe(true);
+
+    const failureEvents = bridge.eventTimeline.getRecentEvents().filter(e => e.event === 'failure');
+    expect(failureEvents.some(e => e.reason === 'budget_exhausted:rounds')).toBe(true);
+  });
+
+  it('escalates to fail{checkpoint} when recovery rounds budget is exhausted and soft checkpoint is off', async () => {
+    vi.stubEnv('ICE_HARNESS_SOFT_CHECKPOINT', '0');
+
+    const config = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+    await bridge.evaluateAfterRound({
+      round: { round: 1, toolNames: ['run_command'], toolSuccess: [false], hadWriteTool: false },
+      task: criticalTask,
+      extraSignals: [{ type: 'tool_repeat_fail', count: 3 }],
+      riskScore: 0.7,
+    });
+
     let exhaustedDecision: Awaited<ReturnType<typeof bridge.evaluateAfterRound>> | undefined;
     let exhaustedAtRound = -1;
-    for (let round = 2; round <= 6 && !exhaustedDecision; round++) {
+    for (let round = 2; round <= 15 && !exhaustedDecision; round++) {
       const d = await bridge.evaluateAfterRound({
         round: { round, toolNames: ['run_command'], toolSuccess: [false], hadWriteTool: false },
         task: criticalTask,
@@ -480,12 +576,42 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
     }
 
     expect(exhaustedDecision).toEqual({ action: 'fail', kind: 'checkpoint' });
-    expect(exhaustedAtRound).toBe(4);
+    expect(exhaustedAtRound).toBe(13);
     expect(bridge.recoveryBudgetManager.isActive()).toBe(false);
+    expect(bridge.getSegmentRenewalCount()).toBe(0);
+  });
 
-    const failureEvents = bridge.eventTimeline.getRecentEvents().filter(e => e.event === 'failure');
-    expect(failureEvents.length).toBeGreaterThan(0);
-    expect(failureEvents.some(e => e.reason === 'budget_exhausted:rounds')).toBe(true);
+  it('fail{checkpoint} when segment renewal cap is reached', async () => {
+    vi.stubEnv('ICE_HARNESS_MAX_SEGMENT_RENEWALS', '1');
+
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', params: { adaptiveTakeover: { maxRecoveryRounds: 1 } } },
+      {},
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+    await bridge.evaluateAfterRound({
+      round: { round: 1, toolNames: ['run_command'], toolSuccess: [false], hadWriteTool: false },
+      task: criticalTask,
+      extraSignals: [{ type: 'tool_repeat_fail', count: 3 }],
+      riskScore: 0.7,
+    });
+
+    let failDecision: Awaited<ReturnType<typeof bridge.evaluateAfterRound>> | undefined;
+    for (let round = 2; round <= 20 && !failDecision; round++) {
+      const d = await bridge.evaluateAfterRound({
+        round: { round, toolNames: ['run_command'], toolSuccess: [false], hadWriteTool: false },
+        task: criticalTask,
+        extraSignals: [{ type: 'tool_repeat_fail', count: 3 }],
+        riskScore: 0.7,
+      });
+      if (d.action === 'fail') {
+        failDecision = d;
+      }
+    }
+
+    expect(bridge.getSegmentRenewalCount()).toBe(1);
+    expect(failDecision).toEqual({ action: 'fail', kind: 'checkpoint' });
   });
 
   it('escalates to fail{checkpoint} when token ratio budget is exhausted', async () => {
@@ -1112,7 +1238,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
     expect(bridge.getCorrectionBudgetUsage().rejected).toBe(0);
   });
 
-  it('evaluateAfterRound returns fail{checkpoint} when recovery budget is exhausted', async () => {
+  it('evaluateAfterRound renews segment when recovery rounds budget is exhausted (soft checkpoint)', async () => {
     const config = resolveSupervisorConfig(
       {
         mode: 'adaptive',
@@ -1164,9 +1290,37 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
       round: buildRound(2),
       task: criticalTask,
       riskScore: 1,
+      tokenUsage: { used: 200, total: 1000 },
     });
-    expect(second.action).toBe('fail');
-    if (second.action === 'fail') expect(second.kind).toBe('checkpoint');
+    // max=1 + 进展扩展；token>10% 阻止扩展 → 需到 hard cap(=4) 才触发 rounds 耗尽
+    expect(second.action).toBe('continue');
+
+    let final: Awaited<ReturnType<typeof bridge.evaluateAfterRound>> | undefined;
+    for (const round of [3, 4, 5]) {
+      bridge.passiveObserver.observe({
+        phase: 'takeover',
+        round: buildRound(round),
+        consecutiveToolFailures: round,
+        consecutiveReadOnlyRounds: 0,
+        stableRoundsSinceLastFailure: 0,
+        allToolsFailedThisRound: true,
+        repeatedToolSignatures: ['edit_file:abc'],
+        maxFailedSignatureCount: round,
+        branchRecoverTriggered: true,
+        task: criticalTask,
+      });
+      final = await bridge.evaluateAfterRound({
+        round: buildRound(round),
+        task: criticalTask,
+        riskScore: 1,
+        tokenUsage: { used: 200, total: 1000 },
+      });
+      if (bridge.getSegmentRenewalCount() > 0) break;
+    }
+
+    expect(bridge.getSegmentRenewalCount()).toBe(1);
+    expect(final?.action).not.toBe('fail');
+    expect(bridge.consumePendingSegmentRenewal()?.reason).toBe('max_recovery_rounds');
 
     const failureReasons = bridge.eventTimeline
       .getRecentEvents()
@@ -1175,6 +1329,65 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
     expect(failureReasons).toEqual(
       expect.arrayContaining([expect.stringContaining('budget_exhausted')]),
     );
+  });
+
+  it('evaluateAfterRound returns fail{checkpoint} when recovery budget is exhausted and soft checkpoint is off', async () => {
+    vi.stubEnv('ICE_HARNESS_SOFT_CHECKPOINT', '0');
+
+    const config = resolveSupervisorConfig(
+      {
+        mode: 'adaptive',
+        params: {
+          adaptiveTakeover: { maxRecoveryRounds: 1, recoveryTokenRatio: 0.5, maxRecoveryRetries: 1 },
+        },
+      },
+      {},
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+
+    bridge.passiveObserver.observe({
+      phase: 'free',
+      round: buildRound(1),
+      consecutiveToolFailures: 3,
+      consecutiveReadOnlyRounds: 0,
+      stableRoundsSinceLastFailure: 0,
+      allToolsFailedThisRound: true,
+      repeatedToolSignatures: ['edit_file:abc', 'edit_file:abc', 'edit_file:abc'],
+      maxFailedSignatureCount: 3,
+      branchRecoverTriggered: true,
+      task: criticalTask,
+    });
+
+    await bridge.evaluateAfterRound({
+      round: buildRound(1),
+      task: criticalTask,
+      riskScore: 1,
+    });
+
+    let third: Awaited<ReturnType<typeof bridge.evaluateAfterRound>> | undefined;
+    for (const round of [2, 3, 4, 5]) {
+      bridge.passiveObserver.observe({
+        phase: 'takeover',
+        round: buildRound(round),
+        consecutiveToolFailures: round,
+        consecutiveReadOnlyRounds: 0,
+        stableRoundsSinceLastFailure: 0,
+        allToolsFailedThisRound: true,
+        repeatedToolSignatures: ['edit_file:abc'],
+        maxFailedSignatureCount: round,
+        branchRecoverTriggered: true,
+        task: criticalTask,
+      });
+      third = await bridge.evaluateAfterRound({
+        round: buildRound(round),
+        task: criticalTask,
+        riskScore: 1,
+        tokenUsage: { used: 200, total: 1000 },
+      });
+      if (third.action === 'fail') break;
+    }
+    expect(third?.action).toBe('fail');
+    if (third?.action === 'fail') expect(third.kind).toBe('checkpoint');
   });
 
   it('snapshotForCheckpoint then restoreFromCheckpoint round-trips phase / timeline tail / budget', () => {
@@ -1201,6 +1414,7 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
     expect(snap.supervisorPhase).toBe('takeover');
     expect(snap.recoverySupervisorSnapshot?.takeoverStartRound).toBe(4);
     expect(snap.correctionBudgetUsed).toBe(2);
+    expect(snap.segmentRenewalCount).toBe(0);
     expect(Array.isArray(snap.timelineTail)).toBe(true);
     expect((snap.timelineTail ?? []).some((e) => e.event === 'switch')).toBe(true);
 
@@ -1224,6 +1438,8 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
     expect(restored.getSupervisorPhase()).toBe('takeover');
     expect(restored.recoverySupervisor.getSnapshot().takeoverStartRound).toBe(4);
     expect(restored.getCorrectionBudgetUsage().used).toBe(2);
+    expect(restored.recoveryBudgetManager.isActive()).toBe(true);
+    expect(restored.getAccumulatedDeviationSignals()).toEqual([]);
 
     // 恢复时应额外写一条 checkpoint_resumed timeline 标记。
     const resumedMarkers = restored.eventTimeline

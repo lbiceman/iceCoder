@@ -12,6 +12,7 @@ import { collectRecentErrors, collectRecentToolTraces } from './harness-step-con
 import { reviewStep } from './step-review.js';
 import type { ChatFunction, StopReason } from './types.js';
 import type { CorrectionPort } from '../types/supervisor.js';
+import type { VerificationOutputTailEntry, AcceptanceGateSnapshot } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
@@ -24,30 +25,58 @@ export interface ResilienceBridgeDeps {
   supervisorObserverSuppressInject?: boolean;
 }
 
+function checkpointVerificationOutputTail(state: HarnessRunState): VerificationOutputTailEntry[] | undefined {
+  return state.verificationOutputBuffer?.snapshot();
+}
+
+function checkpointAcceptanceGate(state: HarnessRunState): AcceptanceGateSnapshot | undefined {
+  if (!state.taskAcceptance?.isActive()) return undefined;
+  return state.taskAcceptance.snapshot();
+}
+
 /**
  * 记录一轮工具调用到 branchBudget 和 checkpointEngine。
  * 关 flag 时 no-op。
  *
  * 磁盘写入必须经 enqueueCheckpointPersist，与 TaskCheckpointManager 串行，避免绕过队列与 v1 save 交叉 rename。
  */
+function checkpointHarnessEscalationFields(state: HarnessRunState): {
+  rebuildEscalationInjections: number;
+  parallelBudgetBlockHintInjected: boolean;
+} {
+  return {
+    rebuildEscalationInjections: state.rebuildEscalationInjections,
+    parallelBudgetBlockHintInjected: state.parallelBudgetBlockHintInjected,
+  };
+}
+
 export async function resilienceRecordToolCalls(
   deps: ResilienceBridgeDeps,
   toolCalls: ToolCall[],
   failedSignatures: Set<string>,
+  policyBlockedSignatures: Set<string>,
   state: HarnessRunState,
+  workspaceRoot?: string,
 ): Promise<void> {
   if (!deps.resilienceV2Enabled || !state.branchBudget || !deps.checkpointEngine) return;
 
+  state.branchBudget.bindWorkspaceRoot(workspaceRoot);
   const engine = deps.checkpointEngine;
 
   for (const tc of toolCalls) {
     const sig = toolCallSignature(tc);
     const failed = failedSignatures.has(sig);
+    const policyBlocked = policyBlockedSignatures.has(sig);
 
     const path = typeof tc.arguments?.path === 'string'
       ? tc.arguments.path
       : (typeof tc.arguments?.file_path === 'string' ? tc.arguments.file_path : undefined);
-    if (path && /^(edit_file|write_file|append_file|batch_edit_file|patch_file)$/.test(tc.name)) {
+    if (
+      path
+      && /^(edit_file|write_file|append_file|batch_edit_file|patch_file)$/.test(tc.name)
+      && !failed
+      && !policyBlocked
+    ) {
       state.branchBudget.recordFileEdit(path);
     }
 
@@ -64,6 +93,9 @@ export async function resilienceRecordToolCalls(
             trigger: 'tool_failed',
             branchBudget: state.branchBudget,
             supervisorState: buildSupervisorCheckpointState(state),
+            verificationOutputTail: checkpointVerificationOutputTail(state),
+            acceptanceGate: checkpointAcceptanceGate(state),
+            ...checkpointHarnessEscalationFields(state),
             appendFailure: {
               signature: sig,
               count: 1,
@@ -87,6 +119,9 @@ export async function resilienceRecordToolCalls(
           trigger: perToolTrigger,
           branchBudget: state.branchBudget,
           supervisorState: buildSupervisorCheckpointState(state),
+          verificationOutputTail: checkpointVerificationOutputTail(state),
+          acceptanceGate: checkpointAcceptanceGate(state),
+          ...checkpointHarnessEscalationFields(state),
           appendTool: {
             toolName: tc.name,
             success: !failed,
@@ -145,6 +180,7 @@ export function resilienceMaybeBranchRecover(
         trigger: 'tool_failed',
         branchBudget: state.branchBudget,
         supervisorState: buildSupervisorCheckpointState(state),
+        ...checkpointHarnessEscalationFields(state),
         appendRecoverySignal: signal,
       });
     } catch (err) {
@@ -243,7 +279,12 @@ export async function resilienceSaveCheckpoint(
         trigger,
         branchBudget: state.branchBudget,
         supervisorState: buildSupervisorCheckpointState(state),
-        verificationPending: state.taskState.shouldBlockFinalForVerification(),
+        verificationOutputTail: checkpointVerificationOutputTail(state),
+        acceptanceGate: checkpointAcceptanceGate(state),
+        ...checkpointHarnessEscalationFields(state),
+        verificationPending: state.taskState.shouldBlockFinalForVerification(
+          state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
+        ),
         lastStopReason: stopReason,
       });
     } catch (err) {
@@ -275,5 +316,6 @@ export function buildSupervisorCheckpointState(
     recoverySupervisorSnapshot: bridgeSnapshot?.recoverySupervisorSnapshot,
     timelineTail: bridgeSnapshot?.timelineTail,
     correctionBudgetUsed: bridgeSnapshot?.correctionBudgetUsed ?? 0,
+    segmentRenewalCount: bridgeSnapshot?.segmentRenewalCount ?? state.segmentRenewalCount ?? 0,
   };
 }

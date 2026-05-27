@@ -29,12 +29,11 @@ async function showConfig(configPath: string): Promise<void> {
 
     const rows = config.providers.map((p: ProviderConfig) => [
       p.isDefault ? `${c.green}★${c.reset} ${p.id}` : `  ${p.id}`,
-      p.providerName,
       p.modelName,
       p.apiUrl.substring(0, 40),
     ]);
 
-    table(['ID', '类型', '模型', 'API URL'], rows);
+    table(['ID', '模型', 'API URL'], rows);
     console.log(`\n${c.dim}配置文件: ${configPath}${c.reset}`);
     console.log(`${c.dim}使用 "iceCoder config set default <id>" 切换默认提供者${c.reset}\n`);
   } catch (err) {

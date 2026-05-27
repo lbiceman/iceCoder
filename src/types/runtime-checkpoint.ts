@@ -12,6 +12,9 @@
  */
 
 import type { StopReason } from '../harness/types.js';
+import type { AcceptanceGateSnapshot } from '../harness/task-acceptance-tracker.js';
+
+export type { AcceptanceGateSnapshot };
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -48,6 +51,13 @@ export interface FailureHistoryEntry {
   at: number;
 }
 
+/** 最近验收失败 stderr tail 条目（与 VerificationOutputBuffer 对齐，最多 3 条） */
+export interface VerificationOutputTailEntry {
+  command: string;
+  outputBody: string;
+  at: number;
+}
+
 /** 分支预算追踪器持久化快照 */
 export interface BranchBudgetSnapshot {
   /** 同一文件路径累计编辑次数 */
@@ -58,6 +68,10 @@ export interface BranchBudgetSnapshot {
   errorRepeats: Record<string, number>;
   /** 已触发过的 recover 信号（计数，用于"分支耗尽后切策略仍失败"时不再重复) */
   recoverTriggers: number;
+  /** 待消费的 write_file 豁免路径（canonical POSIX 相对路径） */
+  writeBypassPaths?: string[];
+  /** 待消费的验收命令重试豁免（规范化命令） */
+  commandRetryBypassKeys?: string[];
 }
 
 /**
@@ -129,6 +143,30 @@ export interface RuntimeSupervisorCheckpointState {
    * 跨 checkpoint 持续，避免重启绕过预算上限。
    */
   correctionBudgetUsed?: number;
+  /** Segment Renewal 续段计数；跨 checkpoint 恢复时延续，避免重启绕过段数上限。 */
+  segmentRenewalCount?: number;
+}
+
+/**
+ * 后台任务快照（Phase 5：用于 checkpoint resume 时展示「上次还在跑的任务」）。
+ *
+ * 注意：恢复时**不接管真实进程**（孤儿 child 无法跨进程接管），只标记为 stale 用于
+ * 提示 LLM 「上一轮启动过这些后台任务」。
+ */
+export interface BackgroundTaskSnapshot {
+  taskId: string;
+  command: string;
+  label: string;
+  /** 序列化时的 status；resume 后展示为 'stale' */
+  status: 'running' | 'completed' | 'failed' | 'timeout' | 'killed';
+  startedAt: number;
+  endedAt: number | null;
+  exitCode: number | null;
+  error: string | null;
+  /** 序列化时的 totalOutputLines，让 LLM 知道任务有过多少输出 */
+  totalOutputLines: number;
+  /** 落盘日志路径（绝对路径），便于用户事后查看 */
+  logPath: string | null;
 }
 
 /** v2 增强 checkpoint 的「附加运行时状态」部分。 */
@@ -159,6 +197,21 @@ export interface RuntimeCheckpointV2 {
   supervisorState?: RuntimeSupervisorCheckpointState;
   /** v2 写入时间 */
   v2UpdatedAt: string;
+  /** 最近验收失败 stderr tail；跨 checkpoint 恢复 digest 注入 */
+  verificationOutputTail?: VerificationOutputTailEntry[];
+  /** 长跑任务多命令验收进度 */
+  acceptanceGate?: AcceptanceGateSnapshot;
+  /** Rebuild Escalation 已注入次数（跨 checkpoint 延续） */
+  rebuildEscalationInjections?: number;
+  /** 并行 BranchBudget 拦截指引是否已注入（每 run 一次） */
+  parallelBudgetBlockHintInjected?: boolean;
+  /**
+   * 后台任务快照（Phase 5）：序列化当前 session 仍在跑的后台任务清单，
+   * 让 checkpoint resume 后 LLM 知道「上一轮起过这些后台任务」。
+   *
+   * 注意：resume 不接管真实进程，仅 informational。
+   */
+  backgroundTasks?: BackgroundTaskSnapshot[];
 }
 
 /** Checkpoint 触发器类型 — 与 docs/长时间连续工作.md §Save Trigger 对齐 */

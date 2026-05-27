@@ -91,6 +91,7 @@ function minConfig(overrides?: Partial<HarnessConfig>): HarnessConfig {
     compactionTokenThreshold: overrides?.compactionTokenThreshold ?? 999999,
     // 使用不存在的目录，避免记忆系统扫描到真实文件并触发 LLM sideQuery
     memoryDir: overrides?.memoryDir ?? '__test_nonexistent_memory_dir__',
+    sessionDir: overrides?.sessionDir ?? '__test_nonexistent_session_dir__',
     ...overrides,
   };
 }
@@ -579,7 +580,8 @@ describe('Harness - 停止钩子', () => {
       finalResponse('Tests pass, truly done'),
     ]);
 
-    const result = await harness.run('Do work', chatFn);
+    // goal 必须是工程意图，否则状态门控会跳过 hook（详见 harness-round-no-tools.ts）
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.content).toBe('Tests pass, truly done');
     expect(result.loopState.stopReason).toBe('model_done');
@@ -748,6 +750,30 @@ describe('Harness - 破坏性工具权限确认', () => {
       && typeof m.content === 'string'
       && m.content.includes('requires confirmation')
     )).toBe(true);
+  });
+
+  it('skipPermissionChecks=true 时跳过 deny/confirm 并直接执行', async () => {
+    const tools = [makeTool('read_file')];
+    const handler = vi.fn().mockResolvedValue({ success: true, output: 'read' });
+    const executor = createToolExecutor(tools, handler);
+    const onConfirm = vi.fn().mockResolvedValue(false);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      permissions: [{ pattern: 'read_file', permission: 'deny', reason: 'readonly disabled' }],
+      skipPermissionChecks: true,
+      onConfirm,
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      finalResponse('Done'),
+    ]);
+
+    const result = await harness.run('Read file', chatFn);
+
+    expect(result.content).toBe('Done');
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
   it('用户允许时正常执行破坏性工具', async () => {
@@ -1492,29 +1518,87 @@ describe('Harness - 连续工具失败熔断', () => {
     )).toBe(true);
   });
 
-  it('工具失败后有成功则重置熔断计数', async () => {
-    const tools = [makeTool('read_file')];
-    let callCount = 0;
-    const mixedHandler = async () => {
-      callCount++;
-      // 前 2 次失败，第 3 次成功
-      if (callCount <= 2) return { success: false, output: '', error: 'fail' } as ToolResult;
-      return { success: true, output: 'ok' } as ToolResult;
+  it('写文件成功后重置熔断计数', async () => {
+    const tools = [makeTool('edit_file')];
+    let fails = 0;
+    const handler = async () => {
+      fails++;
+      if (fails <= 2) return { success: false, output: '', error: 'fail' } as ToolResult;
+      return { success: true, output: 'written' } as ToolResult;
     };
-    const executor = createToolExecutor(tools, mixedHandler);
+    const executor = createToolExecutor(tools, handler);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
     const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),  // fail (1/3)
-      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),  // fail (2/3)
-      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),  // success → reset
-      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),  // fail (1/3 again)
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc3', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc4', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       finalResponse('done'),
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 不应触发熔断，因为第 3 轮成功重置了计数
     expect(result.loopState.stopReason).toBe('model_done');
+  });
+
+  it('连续 5 轮工具全部失败后注入失败证据包', async () => {
+    const tools = [makeTool('read_file')];
+    const failHandler = async () => ({ success: false, output: '', error: 'tool failed' }) as ToolResult;
+    const executor = createToolExecutor(tools, failHandler);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc5', name: 'read_file' }]),
+      finalResponse('summary'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('[Failure Evidence — 5 consecutive')
+      && m.content.includes('Do NOT repeat')
+    )).toBe(true);
+    expect(result.messages.some(m =>
+      typeof m.content === 'string'
+      && m.content.includes('[System / Rebuild Escalation]')
+    )).toBe(false);
+  });
+
+  it('实质进展后移除 ephemeral 失败恢复消息', async () => {
+    const tools = [makeTool('write_file')];
+    let calls = 0;
+    const handler = async () => {
+      calls++;
+      if (calls <= 4) return { success: false, output: '', error: 'fail' } as ToolResult;
+      return { success: true, output: 'ok' } as ToolResult;
+    };
+    const executor = createToolExecutor(tools, handler);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'w1', name: 'write_file', args: { path: 'a.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w2', name: 'write_file', args: { path: 'b.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w3', name: 'write_file', args: { path: 'c.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w4', name: 'write_file', args: { path: 'd.ts', content: 'x' } }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'w5', name: 'write_file', args: { path: 'e.ts', content: 'x' } }]),
+      finalResponse('done'),
+    ]);
+    const result = await harness.run('test', chatFn);
+
+    expect(result.messages.some(m => m.ephemeralFailureRecovery === 'evidence')).toBe(false);
+    expect(result.messages.some(m =>
+      typeof m.content === 'string' && m.content.includes('[Failure Evidence —')
+    )).toBe(false);
   });
 });
 
@@ -1522,7 +1606,7 @@ describe('Harness - 连续工具失败熔断', () => {
 // 18. 停止钩子连续干预上限
 // ═══════════════════════════════════════════════════════════════
 describe('Harness - 停止钩子连续干预上限', () => {
-  it('停止钩子连续干预超过 3 次后强制停止', async () => {
+  it('停止钩子连续干预超过 5 次后强制停止', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -1535,15 +1619,18 @@ describe('Harness - 停止钩子连续干预上限', () => {
     }));
 
     // 模型每次都回复 "done"，但钩子要求继续
-    // 4 次 finalResponse：初始 + 3 次钩子注入后 → 第 4 次钩子超限
+    // 6 次 finalResponse：初始 + 5 次钩子注入后 → 第 6 次钩子超限
     const chatFn = createChatFn([
       finalResponse('done 1'),
       finalResponse('done 2'),
       finalResponse('done 3'),
       finalResponse('done 4'),
+      finalResponse('done 5'),
+      finalResponse('done 6'),
       finalResponse('summary'),
     ]);
-    const result = await harness.run('test', chatFn);
+    // goal 必须是工程意图，否则状态门控会跳过 hook
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.loopState.stopReason).toBe('stop_hook');
   });
@@ -1570,9 +1657,42 @@ describe('Harness - 停止钩子连续干预上限', () => {
       finalResponse('done 3'),   // hook says stop → model_done
       finalResponse('summary'),
     ]);
-    const result = await harness.run('test', chatFn);
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
+  });
+
+  it('实质 write 成功后 stop_hook 计数清零', async () => {
+    const tools = [makeTool('write_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+
+    harness.getStopHookManager().register(async () => ({
+      shouldContinue: true,
+      message: '请继续。',
+      hookName: 'always_continue',
+    }));
+
+    const writeRound = () => toolCallResponse([
+      { id: 'w', name: 'write_file', args: { path: 'src/game/scene.ts', content: 'export {}' } },
+    ]);
+
+    // 2 次空回复 + write 清零；再 6 次空回复才触发 stop_hook（>5）
+    const chatFn = createChatFn([
+      finalResponse('next step'),
+      finalResponse('next step'),
+      writeRound(),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+      finalResponse('next step'),
+    ]);
+    const result = await harness.run('实现登录功能', chatFn);
+
+    expect(result.loopState.stopReason).toBe('stop_hook');
+    expect(result.loopState.currentRound).toBeGreaterThanOrEqual(8);
   });
 });
 
@@ -1658,6 +1778,9 @@ describe('Harness - task checkpoint', () => {
         && typeof m.content === 'string'
         && m.content.includes('<resume-checkpoint>')
         && m.content.includes('Fix TypeScript errors')
+      )).toBe(true);
+      expect(messages.every(m =>
+        typeof m.content !== 'string' || !m.content.includes('"version": 1'),
       )).toBe(true);
       return finalResponse('resumed');
     });

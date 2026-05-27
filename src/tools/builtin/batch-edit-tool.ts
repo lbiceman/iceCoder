@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
+import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -21,7 +22,7 @@ export function createBatchEditTool(workDir: string): RegisteredTool {
       name: 'batch_edit_file',
       // 多处查找替换。比多次 edit_file 更高效。单处修改用 edit_file。
       description:
-        'Multiple find-and-replace on a single file. More efficient than multiple edit_file calls. Each replacement executes in order. For single changes use edit_file.',
+        'Multiple find-and-replace on a single file. More efficient than multiple edit_file calls. Each replacement executes in order; non-regex search supports fuzzy whitespace/line trim like edit_file. For single changes use edit_file.',
       parameters: {
         type: 'object',
         properties: {
@@ -74,23 +75,25 @@ export function createBatchEditTool(workDir: string): RegisteredTool {
         for (let i = 0; i < edits.length; i++) {
           const edit = edits[i];
           const before = content;
+          let fuzzy = false;
 
-          let pattern: string | RegExp;
           if (edit.isRegex) {
             const flags = edit.replaceAll !== false ? 'g' : '';
-            pattern = new RegExp(edit.search, flags);
-          } else if (edit.replaceAll !== false) {
-            pattern = new RegExp(
-              edit.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-              'g',
-            );
+            content = content.replace(new RegExp(edit.search, flags), edit.replace);
           } else {
-            pattern = edit.search;
+            const result = applyNonRegexReplace(
+              content,
+              edit.search,
+              edit.replace,
+              edit.replaceAll !== false,
+            );
+            content = result.content;
+            fuzzy = result.fuzzy;
           }
 
-          content = content.replace(pattern, edit.replace);
           const changed = before !== content;
-          results.push(`  ${i + 1}. "${edit.search}" → "${edit.replace}": ${changed ? '✅ 已替换' : '⚠️ 未匹配'}`);
+          const fuzzyTag = fuzzy ? ', fuzzy match' : '';
+          results.push(`  ${i + 1}. "${edit.search}" → "${edit.replace}": ${changed ? `✅ 已替换${fuzzyTag}` : '⚠️ 未匹配'}`);
         }
 
         const totalChanged = originalContent !== content;

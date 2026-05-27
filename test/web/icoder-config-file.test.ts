@@ -11,7 +11,7 @@ import { resolveDefaultChatModelMeta } from '../../src/web/routes/config.js';
 function isProviderShape(p: unknown): p is ProviderConfig {
   if (!p || typeof p !== 'object') return false;
   const o = p as Record<string, unknown>;
-  if (typeof o.id !== 'string' || typeof o.providerName !== 'string') return false;
+  if (typeof o.id !== 'string') return false;
   if (typeof o.apiUrl !== 'string' || typeof o.apiKey !== 'string') return false;
   if (typeof o.modelName !== 'string') return false;
   if (!o.parameters || typeof o.parameters !== 'object') return false;

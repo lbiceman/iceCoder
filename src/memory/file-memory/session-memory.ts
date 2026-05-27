@@ -303,15 +303,32 @@ export interface SessionMemoryState {
 }
 
 /**
- * 创建会话记忆状态（闭包隔离，每个会话独立）。
+ * 计算指定会话的 session-notes 路径。
+ *
+ * 多会话模式下每个会话独立存放（断点恢复需按会话隔离 runtime/plan fence）。
+ * 旧路径 `data/sessions/session-notes.md`（全局共享）由迁移逻辑迁到
+ * `data/sessions/default.session-notes.md`。
  */
-export function initSessionMemoryState(sessionDir: string): SessionMemoryState {
+export function sessionNotesPath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.session-notes.md`);
+}
+
+/**
+ * 创建会话记忆状态（闭包隔离，每个会话独立）。
+ *
+ * @param sessionDir 会话数据目录（默认 `data/sessions`）
+ * @param sessionId 会话 id（多会话隔离；未提供时回退 `default`，兼容老调用方）
+ */
+export function initSessionMemoryState(
+  sessionDir: string,
+  sessionId: string = 'default',
+): SessionMemoryState {
   return {
     initialized: false,
     tokensAtLastExtraction: 0,
     lastProcessedIndex: 0,
     extractionInProgress: false,
-    notesPath: path.join(sessionDir, 'session-notes.md'),
+    notesPath: sessionNotesPath(sessionDir, sessionId),
   };
 }
 

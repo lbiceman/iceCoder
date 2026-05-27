@@ -59,25 +59,51 @@ describe('RecoveryBudgetManager - round budget', () => {
     expect(mgr.snapshot().roundsUsed).toBe(1);
   });
 
-  it('exhausts when roundsUsed exceeds maxRecoveryRounds', () => {
+  it('exhausts at hard cap after one progress extension (adaptive maxRecoveryRounds=3)', () => {
     const mgr = new RecoveryBudgetManager(params);
     mgr.beginTakeover(1, 'adaptive');
-    // adaptiveTakeover.maxRecoveryRounds = 3
+    // soft max=3 → extension at 4 → hard cap=3*2*(1+1)=12; need roundsUsed>12
+    for (let r = 1; r <= 13; r++) {
+      mgr.tickRound(r, true);
+      const result = mgr.evaluate();
+      if (r < 13) {
+        expect(result.exhausted).toBe(false);
+      } else {
+        expect(result.exhausted).toBe(true);
+        expect(result.reason).toBe('max_recovery_rounds');
+      }
+    }
+    expect(mgr.snapshot().roundExtensionsGranted).toBe(1);
+  });
+
+  it('grants one extension when crossing soft max with recent progress and low token', () => {
+    const mgr = new RecoveryBudgetManager(params);
+    mgr.beginTakeover(1, 'adaptive');
     mgr.tickRound(1);
     mgr.tickRound(2);
     mgr.tickRound(3);
     expect(mgr.evaluate().exhausted).toBe(false);
     mgr.tickRound(4);
     const result = mgr.evaluate();
-    expect(result.exhausted).toBe(true);
-    expect(result.reason).toBe('max_recovery_rounds');
-    expect(result.detail?.roundsUsed).toBe(4);
+    expect(result.exhausted).toBe(false);
+    expect(result.extended).toBe(true);
+    expect(mgr.snapshot().roundExtensionsGranted).toBe(1);
+    expect(mgr.snapshot().maxRounds).toBe(6);
   });
 
   it('tickRound is no-op when budget is inactive', () => {
     const mgr = new RecoveryBudgetManager(params);
     mgr.tickRound(1);
     expect(mgr.snapshot().roundsUsed).toBe(0);
+  });
+
+  it('tickRound(effective=false) does not increment roundsUsed', () => {
+    const mgr = new RecoveryBudgetManager(params);
+    mgr.beginTakeover(1, 'adaptive');
+    mgr.tickRound(1, true);
+    mgr.tickRound(2, false);
+    mgr.tickRound(3, false);
+    expect(mgr.snapshot().roundsUsed).toBe(1);
   });
 });
 

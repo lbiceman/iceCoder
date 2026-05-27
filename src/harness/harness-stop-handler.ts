@@ -2,7 +2,7 @@ import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
 import { buildLlmRoundLogFields } from './harness-llm-log.js';
-import { getLatestRealUserText } from './harness-message-utils.js';
+import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -47,7 +47,7 @@ export async function handleHarnessStop(
   await saveTaskCheckpoint(
     deps,
     reason === 'user_abort' ? 'aborted' : reason === 'error' ? 'failed' : 'paused',
-    getLatestRealUserText(messages, '') || '',
+    resolveCheckpointUserGoal(runtimeState, ''),
     messages,
     runtimeState,
     reason,

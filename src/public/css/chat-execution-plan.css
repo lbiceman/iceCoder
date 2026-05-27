@@ -108,8 +108,8 @@
 }
 
 .exec-plan-step.active {
-  border-color: #6b9cff;
-  box-shadow: 0 0 0 1px rgba(107, 156, 255, 0.18);
+  border-color: var(--accent, #a78bfa);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.18);
 }
 
 .exec-plan-step-head {
@@ -134,8 +134,8 @@
 }
 
 .exec-plan-step.status-running .exec-plan-step-badge {
-  background: rgba(107, 156, 255, 0.18);
-  color: #6b9cff;
+  background: rgba(167, 139, 250, 0.18);
+  color: var(--accent, #a78bfa);
   animation: ice-plan-pulse 1.4s ease-in-out infinite;
 }
 

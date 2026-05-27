@@ -132,18 +132,40 @@ export function createToolUsageSection(): PromptSection {
 - Do NOT use run_command when a dedicated tool exists.
 - Independent tools in parallel; dependent tools in order.
 - Do not repeat tool calls unless data may have changed.
-- Background run_command → continue work; poll with action:"check" and task_id.
 - Use multiple tools per turn when useful.
+
+## Shell execution
+- run_command auto-picks foreground/background by command shape. Long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) → background, returns taskId immediately.
+- If a foreground command returns mode:'escalated' with a taskId, it has been moved to background after ~8s. Do NOT retry; poll later with action:'check'.
+- Polling: { action:'check', task_id, since:<prev cursor> } returns only new output. Always pass back the returned \`cursor\` next time.
+- The runtime may inject a [Background Task Status] block every ~5 minutes for any running task. Treat it as ground truth; don't echo it to the user verbatim.
+- Never set background:true for destructive commands (rm/del/git push -f …).
 
 ## MCP (Model Context Protocol)
 - Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.
 - **Only** open MCP config files (e.g. \`.iceCoder/mcp.json\`) when the user asks **where** MCP is configured, wants an edit/review of that file, or you are debugging **why** a server is missing or failing — not for normal tool use.
 
+## Tool call arguments
+- Pass parameters as **top-level JSON fields** on the tool call (standard function-calling shape). Do **not** wrap the whole payload in one string field (\`raw\`, \`arguments\`, \`input\`, \`params\`, etc.) or nest JSON inside a single string.
+- **Correct** \`write_file\`: \`{ "path": "src/foo.ts", "content": "..." }\` — **Wrong**: \`{ "raw": "{\\"path\\":...}" }\` or any single-key string wrapper.
+- **Correct** \`run_command\`: \`{ "command": "npm test" }\` — \`command\` must be top-level, not inside a wrapper field.
+- Accepted aliases when supported: \`filePath\` → \`path\`; \`cmd\` → \`command\`. Prefer canonical names (\`path\`, \`content\`, \`command\`).
+- Large file bodies: use \`patch_file\` (small diff hunks) or \`edit_file\` (short search/replace) in steps — avoid one huge \`write_file\` that may hit max_tokens and truncate mid-JSON.
+- If a tool error mentions **truncated JSON**, **finishReason: length**, or **Tool skipped** for write/edit: do **not** repeat the same full-file payload — switch to \`patch_file\` / smaller \`edit_file\` / \`append_file\` chunks.
+
 ## File reading
 read_file (offset/limit for large files). Outside cwd → open_file (absolute path).
 
 ## File editing
-edit_file (exact match). batch_edit_file, patch_file, write_file, append_file as appropriate.
+- **write_file**: new files or full replace of **small** files (roughly &lt;150 lines). Not for large scene/module rewrites.
+- **edit_file**: localized changes; search can be exact or fuzzy (whitespace/line trim). Keep \`search\` short and unique.
+- **patch_file**: preferred for multi-line / large edits; small unified diff hunks; tolerates line drift.
+- **append_file**: add to end of file. **batch_edit_file**: several search/replace ops in one call.
+
+## Missing files & BranchBudget recovery
+- If \`read_file\` returns ENOENT, or Harness shows \`[Harness / Missing File]\`: **stop** read/patch on that path. Use \`write_file\` with the **full file body** (reference an existing sibling file as a template).
+- If \`[BranchBudget / Blocked]\` mentions the file **does not exist on disk**: use \`write_file\` to create it; wait for \`[System / Rebuild Escalation]\` if a write bypass is granted.
+- Do not loop \`read_file\` / \`patch_file\` on paths that are missing on disk.
 
 ## Search
 search_codebase (filename / content; skips node_modules). web_search, fetch_url.
@@ -169,7 +191,9 @@ export function createShellGuideSection(): PromptSection {
     title: 'Shell',
     content: `# Shell
 
-Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.`,
+Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.
+
+**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev/preview server, find the port PID (\`netstat -ano | findstr :4173\`) and \`taskkill /F /PID <pid>\` only.`,
     isStatic: true,
     priority: 45,
     enabled: true,

@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { ExecutionModeTelemetryPayload } from '../types/supervisor.js';
+import type { ToolOutcome } from './types.js';
+import type { HarnessPolicyStats } from './harness-policy-stats.js';
 
 export type RuntimeTelemetryEvent =
   | {
@@ -22,6 +24,8 @@ export type RuntimeTelemetryEvent =
       round: number;
       toolName: string;
       success: boolean;
+      outcome?: ToolOutcome;
+      policyReason?: string;
       permission?: string;
       outputLength?: number;
     }
@@ -46,6 +50,15 @@ export type RuntimeTelemetryEvent =
       savedTokens: number;
     }
   | {
+      type: 'host_guard_block';
+      timestamp: string;
+      sessionId: string;
+      round: number;
+      toolName: string;
+      matchLabel?: string;
+      source: 'preflight' | 'shell';
+    }
+  | {
       type: 'summary';
       timestamp: string;
       sessionId: string;
@@ -58,6 +71,7 @@ export type RuntimeTelemetryEvent =
       noToolFinal: boolean;
       tokensPerSuccessfulTask?: number;
       compactionSavedTokens: number;
+      harnessPolicy?: HarnessPolicyStats;
     };
 
 export class RuntimeTelemetry {
@@ -90,6 +104,12 @@ export class RuntimeTelemetry {
     const savedTokens = Math.max(0, event.beforeTokens - event.afterTokens);
     this.compactionSavedTokens += savedTokens;
     this.append({ type: 'compaction', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event, savedTokens });
+  }
+
+  recordHostGuardBlock(
+    event: Omit<Extract<RuntimeTelemetryEvent, { type: 'host_guard_block' }>, 'type' | 'timestamp' | 'sessionId'>,
+  ): void {
+    this.append({ type: 'host_guard_block', timestamp: new Date().toISOString(), sessionId: this.sessionId, ...event });
   }
 
   recordSummary(event: Omit<Extract<RuntimeTelemetryEvent, { type: 'summary' }>, 'type' | 'timestamp' | 'sessionId' | 'compactionSavedTokens'>): void {

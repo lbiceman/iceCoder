@@ -1,0 +1,257 @@
+% iceCoder — arXiv-style short paper (compile with pdflatex or xelatex)
+% Suggested categories: cs.SE, cs.AI
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+
+\title{iceCoder: A Selective Dual-Mode Runtime Supervisor\\
+for Long-Horizon Tool-Using Coding Agents}
+
+\author{
+  \textbf{Anonymous Authors}\\
+  \textit{iceCoder Open Source Project}\\
+  \texttt{https://github.com/iceCoder-project}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Autonomous coding agents that invoke tools over dozens of rounds frequently exhibit \emph{goal drift}, \emph{tool loops}, and \emph{stalling} without producing verifiable deliverables.
+Productized assistants optimize model calls and chat UX, but offer limited, opaque runtime governance when sessions compress, crash, or exhaust context.
+We present \textbf{iceCoder}, a self-hosted \emph{runtime governance layer} that wraps a standard tool-using LLM harness with three mechanisms: (i) explicit \textbf{deviation signals} observed each round; (ii) a \textbf{selective dual-mode} policy that defaults to free execution and escalates to forced constraints only on critical task domains; and (iii) \textbf{checkpoint-backed recovery} that persists task state beyond chat transcripts.
+The design is formalized as a three-tier stack (policy tier L0, execution mode L1, runtime supervisor L2) with architectural axioms that centralize mode transitions and correction injection.
+On two multi-file repair benchmarks under controlled conditions (same model \texttt{minimax-m2.5}, blind LLM-as-judge scoring), iceCoder matches or exceeds a Claude Code baseline on objective success while improving composite quality scores (+3 on a 100-point rubric in both tasks).
+The system ships as TypeScript/Node.js with 1{,}165 unit tests and deployable via CLI, Web, WebSocket, and MCP.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Large language models (LLMs) embedded in \emph{agent harnesses}---loops that alternate between generation and tool execution---can repair repositories, run tests, and iterate for twenty or more rounds.
+In practice, failures are often \emph{runtime} failures: the model explores read-only tools during an edit task, retries identical failing commands, or edits the same file repeatedly without passing verification.
+Users discover these problems only after wasted tokens and time.
+
+iceCoder targets this gap.
+It is \textbf{not} an IDE replacement; it is an attachable layer that can run beneath or beside existing agent stacks (CLI, Web UI, WebSocket API, optional MCP tools).
+Our thesis is simple: \emph{trust the model by default, supervise selectively, recover from state on disk}.
+
+Contributions:
+\begin{enumerate}[nosep]
+  \item A \textbf{three-tier supervision architecture} (L0 global policy, L1 free/forced execution mode, L2 passive observation and recovery) with enforceable axioms (single correction port, single mode authority, bounded correction budget).
+  \item A \textbf{TaskGraph} integration that is the sole structured execution context injected into prompts for critical intents, plus domain gating that keeps Q\&A and inspection in free mode.
+  \item \textbf{CheckpointEngine v2}, merging legacy task checkpoints with additive \texttt{runtimeV2} telemetry for post-compaction and process restart.
+  \item An initial \textbf{controlled benchmark protocol} (same-model, blind judge, gate + six-dimensional rubric) with two published multi-file engineering tasks.
+\end{enumerate}
+
+\section{Background and Related Work}
+\label{sec:related}
+
+\textbf{Tool-using agents.}
+Systems such as ReAct, code interpreters, and IDE-integrated agents (e.g., Claude Code, Cursor Composer, Codex-class CLIs) share a common pattern: LLM $\rightarrow$ tool calls $\rightarrow$ observation $\rightarrow$ repeat.
+iceCoder assumes this pattern and adds governance around it.
+
+\textbf{Planning vs.\ supervision.}
+Classical workflow engines and explicit planners trade flexibility for control.
+iceCoder explicitly \emph{rejects} replacing the LLM with a rigid workflow; the TaskGraph supplies \emph{context and validation}, not a hard orchestrator.
+The dual-mode supervisor is a \textbf{runtime kernel}, not a planner.
+
+\textbf{Recovery and memory.}
+Session compaction and checkpointing appear in production agents, but often as opaque product features.
+iceCoder makes recovery a first-class file artifact (\texttt{\{sessionId\}.checkpoint.json}) and couples it with runtime recovery prompts after compaction.
+
+\textbf{Evaluation.}
+Prior agent benchmarks emphasize single-shot coding or human preference.
+We adopt a \textbf{dual-track} score: an objective gate (tests, build, file-scope compliance) plus blind LLM-as-judge dimensions (correctness, minimal change, verification discipline).
+
+\section{System Overview}
+\label{sec:system}
+
+\subsection{Harness loop}
+
+At the core is a \textbf{Harness} state machine: initialize task and repository ledgers; each round optionally compact context, inject runtime/repo state, recall file-based memories, call the LLM with tools, apply permissions, execute tools, update state, and enforce a verification gate before stop.
+Protections include no-tool recovery for executable tasks, repeat-failure signatures, consecutive-failure circuit breaking, and an isolated \textbf{sub-agent} for read-only exploration (returning summaries instead of polluting the main context).
+
+\subsection{Three-tier dual-mode supervision}
+\label{sec:dualmode}
+
+\begin{figure}[ht]
+\centering
+\fbox{\parbox{0.92\linewidth}{
+\small
+\textbf{L0 Policy} (\texttt{off} / \texttt{adaptive} / \texttt{strict}) --- user-facing tier\\
+$\downarrow$\\
+\textbf{L1 Execution Mode} (\texttt{free} $\leftrightarrow$ \texttt{forced}) --- ToolGate, TaskGraph, branch budget\\
+$\downarrow$\\
+\textbf{L2 Runtime Supervisor} --- PassiveObserver, GoalDriftDetector, RecoverySupervisor, CorrectionPort
+}}
+\caption{Supervision stack (V1.3.7). L0 configures whether automatic escalation is enabled; only L1's ModeDecisionEngine may switch execution mode.}
+\label{fig:stack}
+\end{figure}
+
+\textbf{L0} selects global policy: disable supervision, adapt by risk (default), or enforce strict constraints (including first-round graph initialization).
+
+\textbf{L1} implements \texttt{free} versus \texttt{forced} execution.
+In \texttt{free} mode the agent explores with lighter gates; in \texttt{forced} mode stricter tool gates, structured step context from TaskGraph, and verification expectations apply.
+Escalation is driven by \emph{signals}, not by parsing user keywords as triggers.
+
+\textbf{L2} observes without directly mutating messages.
+\texttt{PassiveObserver} accumulates deviation signals each tool round:
+\begin{itemize}[nosep]
+  \item \texttt{no\_progress} --- consecutive read-only or all-failed rounds;
+  \item \texttt{tool\_repeat\_fail} --- repeated identical failing tool signatures;
+  \item \texttt{file\_loop} --- excessive edits to one file (strict tier);
+  \item \texttt{goal\_drift} --- heuristic misalignment between intent, tools, files touched, and assistant text (GoalDriftDetector).
+\end{itemize}
+\texttt{RecoverySupervisor} may \emph{take over} with bounded corrections via a single \texttt{CorrectionPort}, respecting recovery budgets and minimum forced dwell time (axiom I10) to prevent mode flicker.
+
+Key axioms (abbreviated): corrections only through CorrectionPort (I1); ToolGate blocks are mandatory (I2); adaptive free segments skip graph init by default (I3); correction hints are budgeted (I4); only ModeDecisionEngine switches execution mode (I5); environment flags do not leak into per-task logic (I6).
+
+\subsection{TaskGraph as sole structured context}
+
+For critical intents (\texttt{edit}, \texttt{debug}, \texttt{refactor}, \texttt{test}, etc.), \texttt{GraphExecutor} builds a multi-step TaskGraph and injects \emph{only} the current node context into prompts.
+Non-critical intents (\texttt{question}, \texttt{inspect}, \texttt{explain}) bypass graph initialization via \textbf{TaskDomainGate}, preserving free-mode behavior for low-risk interactions.
+
+\subsection{CheckpointEngine v2}
+
+Checkpoints store authoritative task fields for resume plus an additive \texttt{runtimeV2} object: recent tools, failures, recovery signals, branch-budget snapshots.
+Writes are serialized to avoid torn JSON.
+Triggers align with long-session milestones (tool steps, verification, compaction).
+
+\subsection{File-based memory}
+
+A separate file-memory subsystem provides long-term recall, session notes for compaction survival, eviction/dream consolidation, and security scanning---integrated at pre-LLM recall and post-tool extraction hooks.
+
+\section{Evaluation}
+\label{sec:eval}
+
+\subsection{Protocol}
+
+We use a \textbf{controlled comparison} protocol (JUDGE\_RUBRIC v0.1):
+\begin{itemize}[nosep]
+  \item Fixed model: \texttt{minimax-m2.5} across platforms;
+  \item Identical prompts and sandbox repositories;
+  \item Objective \textbf{Gate} (0--40): tests, build, file-scope compliance, no secret leakage;
+  \item Blind \textbf{Judge} (0--60): six dimensions including requirement coverage, correctness, code quality, minimal change, verification discipline, and delivery notes;
+  \item Composite $=$ Gate $+$ Judge; tiers S/A/B/C from composite thresholds.
+\end{itemize}
+
+iceCoder runs with \texttt{adaptive} supervisor mode unless noted.
+
+\subsection{Tasks and results}
+
+\textbf{Task 1: multi-file order pipeline.}
+A TypeScript order-processing service with inventory, pricing, payment retry, and pipeline rollback bugs.
+Both iceCoder and Claude Code achieved 9/9 tests and full gate points; iceCoder scored composite \textbf{86} vs.\ \textbf{83}, with advantages on correctness (transient retry semantics) and minimal change (no out-of-scope session artifacts).
+
+\textbf{Task 2: saga warehouse reconciliation.}
+A saga/event-sourcing exercise requiring reconciliation engine, compensation, and timeout monitoring.
+Both platforms reached 15/15 tests; iceCoder scored \textbf{88} vs.\ \textbf{85}, with full gate credit (no auxiliary directory pollution) and comparable implementation depth.
+
+Table~\ref{tab:results} summarizes published runs (May 2026).
+
+\begin{table}[ht]
+\centering
+\caption{Benchmark summary (same model, blind judge). SR = objective success rate.}
+\label{tab:results}
+\begin{tabular}{lccc}
+\toprule
+Task & Platform & SR & Composite \\
+\midrule
+Order pipeline & iceCoder & \checkmark & 86 (A) \\
+Order pipeline & Claude Code & \checkmark & 83 (A) \\
+Saga reconciliation & iceCoder & \checkmark & 88 (A) \\
+Saga reconciliation & Claude Code & \checkmark & 85 (A) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Regression assurance}
+
+The open-source tree includes \textbf{93} Vitest files and \textbf{1{,}165} cases covering harness resilience, supervisor bridges, TaskGraph persistence, memory lifecycle, and web API routes---treated as the engineering source of truth alongside TypeScript type-checking.
+
+\section{Discussion and Limitations}
+\label{sec:limits}
+
+\textbf{Scope.}
+Results reflect two multi-file repair tasks and one model family; broader task suites (14-task rubric design) and cross-model studies remain future work.
+
+\textbf{Goal drift detection.}
+V1 uses lightweight heuristics (tool/intent consistency, file-touch alignment, bigram Jaccard on assistant text, progress factors); LLM-based gray-zone arbitration is specified but not the default path.
+
+\textbf{Eval harness.}
+\texttt{npm run eval:agent} remains a metric skeleton without a fully automated scoring runner in-tree.
+
+\textbf{Deployment.}
+iceCoder is self-hosted; operators must supply LLM provider configuration.
+Supervision adds latency only on escalation paths; shadow mode (\texttt{ICE\_SUPERVISOR\_SHADOW=1}) supports observe-only rollout.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Long-horizon coding agents need explicit runtime governance: detect drift early, constrain execution selectively, and recover state beyond chat logs.
+iceCoder instantiates this as a three-tier supervisor with architectural axioms, TaskGraph-gated structure, and checkpoint v2 resilience.
+Initial controlled benchmarks suggest that governance can improve quality scores without sacrificing objective success under the same frontier model.
+We release the implementation and benchmark reports to support reproducible agent-runtime research.
+
+\section*{Acknowledgments}
+We thank contributors to the iceCoder open-source repository and benchmark sandbox maintainers.
+
+\begin{thebibliography}{9}
+
+\bibitem{react}
+S.~Yao et al.,
+``ReAct: Synergizing Reasoning and Acting in Language Models,''
+ICLR, 2023.
+
+\bibitem{swelab}
+C.~Jimenez et al.,
+``SWE-bench: Can Language Models Resolve Real-World GitHub Issues?''
+ICLR, 2024.
+
+\bibitem{toolformer}
+T.~Schick et al.,
+``Toolformer: Language Models Can Teach Themselves to Use Tools,''
+NeurIPS, 2023.
+
+\bibitem{claude-code}
+Anthropic,
+``Claude Code --- agentic coding tool,''
+product documentation, 2025--2026.
+
+\bibitem{cursor}
+Cursor,
+``Composer / Agent mode,''
+product documentation, 2025--2026.
+
+\bibitem{icecoder-spec}
+iceCoder Project,
+``Dual-Mode Adaptive Runtime Supervisor (V1.3.7),''
+implementation specification,
+\url{docs/requirement/双模方案2-finish.md}, 2026.
+
+\bibitem{icecoder-bench}
+iceCoder Project,
+``Tri-Platform Same-Model Evaluation Rubric (v0.1),''
+\url{benchMark/md/三平台同模对比评测与裁判评分体系.md}, 2026.
+
+\end{thebibliography}
+
+\appendix
+\section{Artifact availability}
+\label{app:artifacts}
+
+\begin{itemize}[nosep]
+  \item Source: iceCoder repository (TypeScript, Node.js 18+).
+  \item Entry points: \texttt{npx tsx src/cli/index.ts run}, Web UI, WebSocket chat, optional MCP.
+  \item Benchmark reports: \texttt{benchMark/reports/multi-file-order-pipeline.md}, \texttt{saga-warehouse-reconciliation-basic.md}.
+  \item Reproduction: \texttt{npm test} (1{,}165 cases); configure \texttt{data/config.json} for LLM provider.
+\end{itemize}
+
+\end{document}

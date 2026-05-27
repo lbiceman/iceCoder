@@ -27,7 +27,7 @@ describe('TokenCounter', () => {
 
     it('should record multiple token usage entries', () => {
       counter.record({ inputTokens: 100, outputTokens: 50, totalTokens: 150, provider: 'openai' });
-      counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'anthropic' });
+      counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'deepseek' });
 
       const stats = counter.getStats();
       expect(stats).toHaveLength(2);
@@ -72,7 +72,7 @@ describe('TokenCounter', () => {
     it('should aggregate stats by provider', () => {
       counter.record({ inputTokens: 100, outputTokens: 50, totalTokens: 150, provider: 'openai' });
       counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'openai' });
-      counter.record({ inputTokens: 50, outputTokens: 30, totalTokens: 80, provider: 'anthropic' });
+      counter.record({ inputTokens: 50, outputTokens: 30, totalTokens: 80, provider: 'deepseek' });
 
       const cumulative = counter.getCumulativeStats();
       expect(cumulative).toHaveLength(2);
@@ -86,9 +86,9 @@ describe('TokenCounter', () => {
         callCount: 2,
       });
 
-      const anthropicStats = cumulative.find(s => s.provider === 'anthropic');
-      expect(anthropicStats).toEqual({
-        provider: 'anthropic',
+      const deepseekStats = cumulative.find(s => s.provider === 'deepseek');
+      expect(deepseekStats).toEqual({
+        provider: 'deepseek',
         totalInputTokens: 50,
         totalOutputTokens: 30,
         totalTokens: 80,
@@ -104,7 +104,7 @@ describe('TokenCounter', () => {
 
     it('should return the sum of all totalTokens across all records', () => {
       counter.record({ inputTokens: 100, outputTokens: 50, totalTokens: 150, provider: 'openai' });
-      counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'anthropic' });
+      counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'deepseek' });
 
       expect(counter.getTotalTokens()).toBe(430);
     });
@@ -113,7 +113,7 @@ describe('TokenCounter', () => {
   describe('reset()', () => {
     it('should clear all recorded data', () => {
       counter.record({ inputTokens: 100, outputTokens: 50, totalTokens: 150, provider: 'openai' });
-      counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'anthropic' });
+      counter.record({ inputTokens: 200, outputTokens: 80, totalTokens: 280, provider: 'deepseek' });
 
       counter.reset();
 

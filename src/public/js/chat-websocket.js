@@ -10,6 +10,8 @@ window.ChatWebSocket = (function () {
 
   var chatWs = null;
   var wsProcessing = false;
+  /** 用户主动 stop 后置为 true；阻止 'stream' chunk 把 wsProcessing 重置为 true，直到下次发新消息 */
+  var userStoppedFlag = false;
   var lastToolProgressHint = '';
   var wsReconnectTimer = null;
   var wsReconnectAttempts = 0;
@@ -91,10 +93,10 @@ window.ChatWebSocket = (function () {
         emit('connected', data || {});
         break;
       case 'session_updated':
-        emit('session_updated', {});
+        emit('session_updated', data || {});
         break;
       case 'stream':
-        if (!wsProcessing) wsProcessing = true;
+        if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
         emit('stream', { delta: data.delta || '' });
         break;
       case 'stream_end':
@@ -107,7 +109,12 @@ window.ChatWebSocket = (function () {
         emit('step', { step: data.step });
         break;
       case 'status':
-        wsProcessing = data.status === 'processing';
+        if (data.status === 'processing') {
+          if (!userStoppedFlag) wsProcessing = true;
+        } else {
+          wsProcessing = false;
+          userStoppedFlag = false;
+        }
         emit('status', { status: data.status });
         break;
       case 'error':
@@ -131,10 +138,27 @@ window.ChatWebSocket = (function () {
         emit('tunnel_ready', { url: data.url || '' });
         break;
       case 'confirm':
-        emit('confirm', { toolName: data.toolName, args: data.args });
+        emit('confirm', { confirmId: data.confirmId, toolName: data.toolName, args: data.args });
+        break;
+      case 'confirm_resolved':
+        emit('confirm_resolved', {
+          confirmId: data.confirmId || '',
+          toolName: data.toolName || '',
+          approved: !!data.approved,
+          reason: data.reason || 'reply',
+        });
+        break;
+      case 'confirm_timeout':
+        emit('confirm_timeout', { confirmId: data.confirmId || '', toolName: data.toolName || '' });
         break;
       case 'tokenUsage':
         emit('tokenUsage', { inputTokens: data.inputTokens || 0, outputTokens: data.outputTokens || 0 });
+        break;
+      case 'session_switched':
+        emit('session_switched', data);
+        break;
+      case 'active_session':
+        emit('active_session', data);
         break;
       case 'tool_output':
         break;
@@ -143,10 +167,20 @@ window.ChatWebSocket = (function () {
       case 'pulse':
         emit('pulse', { hint: lastToolProgressHint || '处理中' });
         break;
+      case 'bg_task_update':
+        emit('bg_task_update', {
+          sessionId: data.sessionId || '',
+          timestamp: data.timestamp || '',
+          tasks: Array.isArray(data.tasks) ? data.tasks : [],
+        });
+        break;
     }
   }
 
   function send(msg) {
+    if (msg && typeof msg === 'object' && msg.type === 'message') {
+      userStoppedFlag = false;
+    }
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify(msg));
     }
@@ -157,15 +191,15 @@ window.ChatWebSocket = (function () {
   }
 
   function sendStop() {
+    userStoppedFlag = true;
+    wsProcessing = false;
     send({ type: 'stop' });
   }
 
-  function sendConfirmReply(approved) {
-    send({ type: 'confirm_reply', approved: approved });
-  }
-
-  function sendClearSession() {
-    send({ type: 'clear_session' });
+  function sendConfirmReply(approved, confirmId) {
+    var payload = { type: 'confirm_reply', approved: approved };
+    if (confirmId) payload.confirmId = confirmId;
+    send(payload);
   }
 
   function scheduleReconnect() {
@@ -225,7 +259,6 @@ window.ChatWebSocket = (function () {
     sendMessage: sendMessage,
     sendStop: sendStop,
     sendConfirmReply: sendConfirmReply,
-    sendClearSession: sendClearSession,
     on: on,
     off: off,
     isConnected: isConnected,

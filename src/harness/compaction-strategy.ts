@@ -51,6 +51,7 @@ export function isSyntheticUserBlockContent(content: string): boolean {
     || c.startsWith('<runtime-recovery-context>')
     || c.startsWith('<recent-file-contents>')
     || c.startsWith('<system-context>')
+    || c.startsWith('<resume-checkpoint>')
   );
 }
 

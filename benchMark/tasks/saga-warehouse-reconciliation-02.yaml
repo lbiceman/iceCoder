@@ -1,0 +1,110 @@
+# 高难 benchmark 任务 — 事件溯源 + Saga 调拨 + 对账 + 超时回收
+# 目标工时 ~2h · 显著高于 pipeline-01
+
+task_id: saga-warehouse-reconciliation-02
+version: "1.0"
+created: "2026-05-22"
+
+layers:
+  - L1   # 实现 reconciliation-engine / saga-timeout-monitor
+  - L2   # 修 event-store / idempotency / saga 步进
+  - L3   # 补偿链与投影一致性（行为不变）
+  - L4   # 读 ARCHITECTURE + 测试定位
+  - L5   # 12+ 源文件联动
+
+tags:
+  - hard
+  - event-sourcing
+  - saga
+  - reconciliation
+  - long-running
+  - recovery
+  - distributed-patterns
+
+estimated:
+  min_turns: 35
+  typical_turns: 50-80
+  max_turns: 120
+  duration_minutes: 90-150
+
+repo: benchmark/repos/saga-warehouse-reconciliation-02
+
+prompt: |
+  这是一个**多租户仓库调拨** TypeScript 练习仓库（事件溯源 + Saga + 读模型投影）。当前大量测试失败。请在**不修改 `test/`** 的前提下修复并实现缺失模块，使 `npm test` 全部通过。
+
+  ## 系统语义（详见 `ARCHITECTURE.md`，若有冲突以测试为准）
+  - 命令幂等键为 **`(tenantId, commandId)`**。
+  - 调拨 Saga 5 步：ReserveSource → ValidateDestCapacity → DeductSource → CreditDest → ReleaseAndComplete。
+  - 任一步失败必须**补偿**，且库存投影与事件日志一致。
+  - `ReconciliationEngine.reconcile()` 须释放**孤儿预留**并修正 `reserved` 漂移。
+  - `SagaTimeoutMonitor.tick(now)` 须超时回收 `IN_PROGRESS` 且 `updatedAt` 超过 TTL 的 Saga。
+
+  ## 已知故障线索（勿只修单点）
+  1. 事件追加乐观并发校验逻辑错误，重复追加或丢版本。
+  2. 跨租户使用相同 `commandId` 时幂等缓存互相污染。
+  3. 自事件重放构建的库存与增量投影不一致（重放路径有重复计数）。
+  4. ValidateDestCapacity 成功后 Saga 时间戳未刷新，导致超时监控失效。
+  5. 补偿链未同步更新读模型，且部分失败场景未回滚源仓扣减/目标仓入账。
+  6. `reconciliation-engine.ts` 与 `saga-timeout-monitor.ts` 仍为**空壳，必须实现**。
+  7. `inventory-projection.legacy.ts` 为误导遗留，测试不使用。
+
+  ## 要求
+  - 只改 `src/`；禁止改 `test/`、`package.json`、锁文件。
+  - 保持现有导出 API；不要引入新依赖。
+  - 修复过程中多次运行 `npm test` 驱动迭代。
+  - 完成后运行 `npm test` 与 `npm run build`。
+  - 用 8 条以内 bullet 说明：实现了哪两个模块、修了哪些缺陷、如何验证补偿与对账。
+
+  从 `README.md` → `ARCHITECTURE.md` → 失败测试输出开始。
+
+acceptance:
+  commands:
+    - npm ci
+    - npm test
+    - npm run build
+  files_must_exist:
+    - src/reconciliation/reconciliation-engine.ts
+    - src/scheduler/saga-timeout-monitor.ts
+    - src/saga/transfer-saga.ts
+    - src/saga/compensation.ts
+    - src/store/event-store.ts
+    - src/idempotency/idempotency-guard.ts
+    - src/projections/inventory-projection.ts
+  files_must_not_change:
+    - test/saga-warehouse.test.ts
+    - package.json
+    - vitest.config.ts
+  allowed_change_globs:
+    - src/**/*.ts
+  forbidden_change_globs:
+    - test/**
+    - node_modules/**
+
+timeout_minutes: 150
+max_turns: 120
+
+observability:
+  complexity:
+    - 12+ 源文件；需理解 Saga 步进、事件流、投影、补偿顺序
+    - 两个模块从零实现（对账 + 超时）
+  long_running:
+    - 典型 50+ 轮：探索架构 → 分批修 store/idempotency/saga → 实现 monitor/reconcile → 全量回归
+  recovery:
+    - 容量失败补偿探针
+    - CreditDest 后 failSaga 全量回滚探针
+    - 超时 stale saga 探针
+    - 孤儿预留 / reserved 漂移对账探针
+  exploration:
+    - ARCHITECTURE vs 代码偏差
+    - legacy 投影误导
+
+scoring_hints:
+  judge_focus:
+    - D2：并发、幂等、补偿、重放一致性
+    - D1：两个空壳模块是否完整实现
+    - D5：是否分批 npm test 而非一次性瞎改
+  common_failure_modes:
+    - 只改 event-store 未实现 reconciliation / timeout
+    - 补偿只删 Map 不更新 inventory.reserved
+    - 重放双计数只修一半路径
+    - 改测试或加依赖

@@ -77,7 +77,7 @@ export class RecoverySupervisor implements RecoverySupervisorContract {
 
     switch (current.phase) {
       case 'cooldown':
-        return this.tickCooldown(current);
+        return this.tickCooldown(current, ctx);
       case 'handoff_pending':
         return this.tickHandoffPending(current, ctx);
       case 'takeover':
@@ -219,7 +219,21 @@ export class RecoverySupervisor implements RecoverySupervisorContract {
     };
   }
 
-  private tickCooldown(snapshot: RecoverySupervisorSnapshot): RecoverySupervisorEvaluation {
+  /**
+   * cooldown 段：默认仅 decrement remaining；
+   *
+   * 调优 2026-05-26 — 当 ctx 携带高强度 signal（同签名连续失败 ≥5、空转 ≥6 轮、
+   * 或 user_force_takeover）时，提前清零 cooldown 并立刻评估 tickFree，避免
+   * handoff 后陷入「Agent 反复同签名失败但 supervisor 卡在 cooldown 上无法重接」。
+   */
+  private tickCooldown(
+    snapshot: RecoverySupervisorSnapshot,
+    ctx: SupervisorEvaluateContext,
+  ): RecoverySupervisorEvaluation {
+    if (isStrongTakeoverSignal(ctx.signals)) {
+      const reseed: RecoverySupervisorSnapshot = { ...INITIAL_SNAPSHOT };
+      return this.tickFree(reseed, ctx);
+    }
     const remaining = Math.max(0, snapshot.cooldownRemaining - 1);
     if (remaining > 0) {
       return {
@@ -232,6 +246,23 @@ export class RecoverySupervisor implements RecoverySupervisorContract {
       nextSnapshot: { ...INITIAL_SNAPSHOT },
     };
   }
+}
+
+/**
+ * 强 takeover 信号定义（仅 cooldown 段提前唤醒用）：
+ *   - tool_repeat_fail.count ≥ 5：同签名工具连续失败已远超 trigger 下限
+ *   - no_progress.rounds ≥ 6：空转/只读轮远超 trigger 下限
+ *   - user_force_takeover：用户强制信号
+ *
+ * 阈值刻意比 §15.4 触发阈值（toolRepeatFailMin=3, noProgressRoundsMin=4）更高，
+ * 避免普通信号导致 cooldown 形同虚设。
+ */
+function isStrongTakeoverSignal(signals: readonly DeviationSignal[]): boolean {
+  return signals.some(s =>
+    (s.type === 'tool_repeat_fail' && s.count >= 5)
+    || (s.type === 'no_progress' && s.rounds >= 6)
+    || s.type === 'user_force_takeover',
+  );
 }
 
 /** §15.3 / §17 — 接管段稳定窗口轮数；adaptive 取 adaptiveTakeover，strict 取 strict。 */
@@ -268,14 +299,34 @@ function formatTakeoverMessage(ctx: TakeoverContext): string {
     ? `Signals: ${ctx.signals.map(formatDeviationSignalReason).join(', ')}`
     : 'Signals: (none)';
   const domainLine = `Domain: ${ctx.task.domain}`;
-  return [
+
+  const lines: string[] = [
     '[System Recovery]',
     'Supervisor is taking over to stabilize the task graph.',
     reasonLine,
     signalsLine,
     domainLine,
-    'Please follow the upcoming recovery hints; do not retry the failing tool with the same arguments.',
-  ].join('\n');
+  ];
+
+  // 调优 2026-05-26（C）— 证据化：把模型「再次踩坑」最需要看到的事实摆出来。
+  const evidence = ctx.evidence;
+  if (evidence) {
+    if (evidence.recentFailedSignatures && evidence.recentFailedSignatures.length > 0) {
+      lines.push(`Repeated failing tool calls: ${evidence.recentFailedSignatures.join(' | ')}`);
+    }
+    if (evidence.pendingAcceptanceCommands && evidence.pendingAcceptanceCommands.length > 0) {
+      lines.push(`Acceptance pending: ${evidence.pendingAcceptanceCommands.join(', ')}`);
+    }
+    if (evidence.runningBackgroundTasks && evidence.runningBackgroundTasks.length > 0) {
+      lines.push(`Background tasks: ${evidence.runningBackgroundTasks.join(', ')}`);
+    }
+  }
+
+  lines.push(
+    'Do NOT retry the failing tool with the same arguments.',
+    'Pick a different approach, inspect the failure output, or wait for pending background tasks before next attempt.',
+  );
+  return lines.join('\n');
 }
 
 export function createRecoverySupervisor(params: SupervisorParams): RecoverySupervisor {
