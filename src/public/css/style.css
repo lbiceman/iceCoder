@@ -895,6 +895,36 @@ body[data-page="chat"] .nav-sidebar-toggle {
   line-height: 1;
 }
 
+/* Command palette (+ button) */
+.cmd-palette-anchor {
+  position: relative;
+  flex-shrink: 0;
+}
+.cmd-palette {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: min(320px, calc(100vw - 32px));
+  z-index: 30;
+  outline: none;
+}
+.cmd-palette.hidden { display: none; }
+.cmd-palette .cmd-dropdown {
+  position: static;
+  margin: 0;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.cmd-palette .cmd-dropdown.hidden { display: none; }
+.btn-cmd-plus.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* 冰豆会话指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
 /* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏冰豆 */
 .session-pet-indicator {
@@ -1360,6 +1390,33 @@ body[data-page="chat"] .nav-sidebar-toggle {
   border: 2px solid currentColor;
   border-bottom: none;
   border-radius: 4px 4px 0 0;
+}
+
+/* Plus */
+.icon-plus {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+.icon-plus::before,
+.icon-plus::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  border-radius: 1px;
+}
+.icon-plus::before {
+  top: 6px;
+  left: 0;
+  width: 14px;
+  height: 2px;
+}
+.icon-plus::after {
+  top: 0;
+  left: 6px;
+  width: 2px;
+  height: 14px;
 }
 
 /* ===== Memory graph page (/ #/memory) ===== */

@@ -47,7 +47,10 @@ window.ChatPage = (function () {
   var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
   var elStatusBar, elStatusTurn;
+  var elCmdPlusBtn, elCmdPalette, mainInputWrapper;
   var sessionPet = null;
+  var cmdPaletteOpen = false;
+  var cmdBlurHideTimer = null;
 
   // ---- 辅助 ----
   function escapeHtml(str) {
@@ -145,8 +148,95 @@ window.ChatPage = (function () {
     }
   }
 
+  // ---- 命令面板（+ 按钮） ----
+  function closeCmdPalette() {
+    if (!elCmdPalette || !cmdPaletteOpen) return;
+    cmdPaletteOpen = false;
+    elCmdPalette.classList.add('hidden');
+    if (elCmdPlusBtn) elCmdPlusBtn.classList.remove('active');
+    Cmd.hide();
+    Cmd.setApplyTarget(null);
+    if (mainInputWrapper) Cmd.mountDropdownTo(mainInputWrapper);
+  }
+
+  function openCmdPalette() {
+    if (!elCmdPalette) return;
+    if (cmdBlurHideTimer) {
+      clearTimeout(cmdBlurHideTimer);
+      cmdBlurHideTimer = null;
+    }
+    cmdPaletteOpen = true;
+    elCmdPalette.classList.remove('hidden');
+    if (elCmdPlusBtn) elCmdPlusBtn.classList.add('active');
+    Cmd.mountDropdownTo(elCmdPalette);
+    Cmd.setApplyTarget(function (value) {
+      executeLocalCommand(value);
+      closeCmdPalette();
+    });
+    Cmd.show('~', '');
+    elCmdPalette.focus();
+  }
+
+  function toggleCmdPalette() {
+    if (cmdPaletteOpen) closeCmdPalette();
+    else openCmdPalette();
+  }
+
+  /** 本地 ~ 命令：选中即执行，返回 true 表示已处理 */
+  function executeLocalCommand(text) {
+    text = (text || '').trim();
+    if (!text) return false;
+
+    if (text === '~scan' && !remoteMode) {
+      Cmd.hide();
+      QR.showQrCode(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    if (text === '~open') {
+      Cmd.hide();
+      Pet.showThinking(false);
+      UI.resetLiveToolRoundTargets();
+      UI.setLiveToolRoundActive(true);
+      WS.sendMessage(
+        '~open\n\n' +
+        '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
+      );
+      return true;
+    }
+
+    if (text === '~telemetry') {
+      Cmd.hide();
+      Cmd.handleTelemetry(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    if (text === '~supervisor' || text.indexOf('~supervisor ') === 0) {
+      Cmd.hide();
+      Cmd.handleSupervisor(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    if (text === '~memory') {
+      Cmd.hide();
+      window.location.hash = '#/memory';
+      return true;
+    }
+
+    if (text.indexOf('~memory ') === 0) {
+      Cmd.hide();
+      Cmd.handleMemory(text, Session.getMessages(), function (msg) {
+        UI.appendMessageEl(msg, Session.stripStatusTag);
+      }, Session.saveMessages);
+      return true;
+    }
+
+    return false;
+  }
+
   // ---- 发送/停止 ----
   function handleSend() {
+    closeCmdPalette();
     if (isWorkloadActive()) {
       handleStop();
       return;
@@ -158,62 +248,9 @@ window.ChatPage = (function () {
 
     if (!text && !uploadedFile && pendingImages.length === 0) return;
 
-    // ~scan
-    if (text === '~scan' && !remoteMode) {
+    if (executeLocalCommand(text)) {
       elInput.value = '';
       UI.autoResizeInput();
-      Cmd.hide();
-      QR.showQrCode(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    // ~open：发给模型的指令为英文。中文含义——用户若只给文件名，须结合最近一次目录列表里的 `[当前路径]` 拼成绝对路径后再调用 parse_document / parse_pptx_deep / open_file。
-    if (text === '~open') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Pet.showThinking(false);
-      UI.resetLiveToolRoundTargets();
-      UI.setLiveToolRoundActive(true);
-      WS.sendMessage(
-        '~open\n\n' +
-        '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
-      );
-      return;
-    }
-
-    // ~telemetry
-    if (text === '~telemetry') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleTelemetry(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    // ~supervisor（P3-5：Supervisor timeline + execution mode 报告）
-    if (text === '~supervisor' || text.indexOf('~supervisor ') === 0) {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleSupervisor(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    if (text === '~memory') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      window.location.hash = '#/memory';
-      return;
-    }
-    if (text.indexOf('~memory ') === 0) {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleMemory(text, Session.getMessages(), function (msg) {
-        UI.appendMessageEl(msg, Session.stripStatusTag);
-      }, Session.saveMessages);
       return;
     }
 
@@ -794,6 +831,10 @@ window.ChatPage = (function () {
               '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
             '</div>' +
             '<button class="btn-icon btn-send" id="btn-send" title="Send"><span class="icon-send"></span></button>' +
+            '<div class="cmd-palette-anchor">' +
+              '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令"><span class="icon-plus"></span></button>' +
+              '<div class="cmd-palette hidden" id="cmd-palette" tabindex="-1" role="menu" aria-label="命令列表"></div>' +
+            '</div>' +
           '</div>' +
           '<input type="file" class="hidden-input" id="file-input">' +
         '</div>' +
@@ -812,6 +853,9 @@ window.ChatPage = (function () {
     elFileRemove = container.querySelector('#file-remove');
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusTurn = container.querySelector('#status-turn');
+    elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
+    elCmdPalette = container.querySelector('#cmd-palette');
+    mainInputWrapper = container.querySelector('.input-wrapper');
 
     // 初始化会话侧栏（PC 模式）
     if (!remoteMode && window.ChatSessionSidebar) {
@@ -861,8 +905,7 @@ window.ChatPage = (function () {
     File.init({ elFileStatus: elFileStatus, elFileName: elFileName, elFileInput: elFileInput });
     Cmd.setRemoteMode(remoteMode);
     var cmdDropdown = Cmd.init();
-    var inputWrapper = container.querySelector('.input-wrapper');
-    if (inputWrapper && cmdDropdown) inputWrapper.appendChild(cmdDropdown);
+    if (mainInputWrapper && cmdDropdown) mainInputWrapper.appendChild(cmdDropdown);
 
     // 初始化冰豆（会话指示器）
     if (window.SessionPet) {
@@ -913,10 +956,38 @@ window.ChatPage = (function () {
     });
     elInput.addEventListener('input', function () {
       UI.autoResizeInput();
-      Cmd.handleInput(elInput.value);
+      Cmd.handleInput(elInput.value, elInput);
     });
+    elInput.addEventListener('focus', closeCmdPalette);
     elInput.addEventListener('blur', function () {
-      setTimeout(Cmd.hide, 150);
+      if (cmdPaletteOpen) return;
+      if (cmdBlurHideTimer) clearTimeout(cmdBlurHideTimer);
+      cmdBlurHideTimer = setTimeout(function () {
+        cmdBlurHideTimer = null;
+        if (!cmdPaletteOpen) Cmd.hide();
+      }, 150);
+    });
+    if (elCmdPlusBtn) {
+      elCmdPlusBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        toggleCmdPalette();
+      });
+    }
+    if (elCmdPalette) {
+      elCmdPalette.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeCmdPalette();
+          return;
+        }
+        Cmd.handleKeydown(e, null);
+      });
+    }
+    document.addEventListener('click', function (e) {
+      if (!cmdPaletteOpen || !elCmdPalette) return;
+      var anchor = elCmdPalette.parentElement;
+      if (anchor && anchor.contains(e.target)) return;
+      closeCmdPalette();
     });
     elInput.addEventListener('paste', function (e) {
       var items = e.clipboardData && e.clipboardData.items;
