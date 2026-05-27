@@ -112,10 +112,10 @@ window.ConfigPage = (function () {
   function validateProvider(prov) {
     var errors = {};
     if (!prov.apiUrl || prov.apiUrl.trim() === '') {
-      errors.apiUrl = 'API URL is required';
+      errors.apiUrl = '请填写 API 地址';
     }
     if (!prov.apiKey || prov.apiKey.trim() === '') {
-      errors.apiKey = 'API Key is required';
+      errors.apiKey = '请填写 API 密钥';
     }
     return errors;
   }
@@ -153,39 +153,39 @@ window.ConfigPage = (function () {
     card.innerHTML =
       '<div class="provider-card-header">' +
         '<div class="provider-card-title-row">' +
-          '<span class="provider-card-title">Provider #' + (index + 1) + '</span>' +
-          '<label class="default-radio-label" title="Set as default model">' +
+          '<span class="provider-card-title">提供者 #' + (index + 1) + '</span>' +
+          '<label class="default-radio-label" title="设为默认模型">' +
             '<input type="radio" name="default-provider" data-action="set-default" ' + (isDefault ? 'checked' : '') + '>' +
-            '<span class="default-radio-text">' + (isDefault ? '✓ Default' : 'Set as Default') + '</span>' +
+            '<span class="default-radio-text">' + (isDefault ? '✓ 默认' : '设为默认') + '</span>' +
           '</label>' +
         '</div>' +
-        '<button class="btn-remove-provider" title="Remove provider" data-action="remove">&times;</button>' +
+        '<button class="btn-remove-provider" title="移除提供者" data-action="remove">&times;</button>' +
       '</div>' +
       '<div class="form-grid">' +
         '<div class="form-group full-width">' +
-          '<label for="apiUrl-' + index + '">API URL</label>' +
+          '<label for="apiUrl-' + index + '">API 地址</label>' +
           '<input type="url" id="apiUrl-' + index + '" data-field="apiUrl" placeholder="https://api.openai.com/v1" value="' + escapeAttr(prov.apiUrl || '') + '">' +
           '<span class="error-msg" data-error="apiUrl"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="apiKey-' + index + '">API Key</label>' +
+          '<label for="apiKey-' + index + '">API 密钥</label>' +
           '<input type="password" id="apiKey-' + index + '" data-field="apiKey" placeholder="sk-..." value="' + escapeAttr(prov.apiKey || '') + '">' +
           '<span class="error-msg" data-error="apiKey"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="modelName-' + index + '">Model Name</label>' +
-          '<input type="text" id="modelName-' + index + '" data-field="modelName" placeholder="gpt-4" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<label for="modelName-' + index + '">模型名称</label>' +
+          '<input type="text" id="modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o、deepseek-chat" value="' + escapeAttr(prov.modelName || '') + '">' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="temperature-' + index + '">Temperature</label>' +
+          '<label for="temperature-' + index + '">温度</label>' +
           '<div class="slider-group">' +
             '<input type="range" id="temperature-' + index + '" data-field="temperature" min="0" max="2" step="0.1" value="' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '">' +
             '<span class="slider-value" data-value="temperature">' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="maxTokens-' + index + '">Max Tokens</label>' +
-          '<input type="number" id="maxTokens-' + index + '" data-field="maxTokens" placeholder="8192" min="1" value="' + (prov.parameters && prov.parameters.maxTokens ? prov.parameters.maxTokens : '') + '">' +
+          '<label for="maxContextTokens-' + index + '">上下文上限（Token）</label>' +
+          '<input type="number" id="maxContextTokens-' + index + '" data-field="maxContextTokens" placeholder="例如 131072" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
         '</div>' +
       '</div>';
 
@@ -249,13 +249,12 @@ window.ConfigPage = (function () {
         apiUrl: card.querySelector('[data-field="apiUrl"]').value.trim(),
         apiKey: apiKey,
         modelName: card.querySelector('[data-field="modelName"]').value.trim(),
-        parameters: {
-          temperature: parseFloat(card.querySelector('[data-field="temperature"]').value),
-          maxTokens: parseInt(card.querySelector('[data-field="maxTokens"]').value, 10) || undefined
-        },
+        parameters: Object.assign({}, original.parameters || {}, {
+          temperature: parseFloat(card.querySelector('[data-field="temperature"]').value)
+        }),
         isDefault: i === defaultIndex,
         supportsVision: original.supportsVision,
-        maxContextTokens: original.maxContextTokens,
+        maxContextTokens: parseInt(card.querySelector('[data-field="maxContextTokens"]').value, 10) || undefined,
         requestTimeoutMs: original.requestTimeoutMs
       });
     }
@@ -283,9 +282,9 @@ window.ConfigPage = (function () {
 
     saveConfig(data, function (err) {
       if (err) {
-        showNotification('Failed to save: ' + err.message, 'error');
+        showNotification('保存失败：' + err.message, 'error');
       } else {
-        showNotification('Configuration saved successfully', 'success');
+        showNotification('配置已保存', 'success');
         // 从服务器刷新提供者以获取遮蔽的密钥
         loadConfig(function (_err, loaded) {
           if (!_err) {
@@ -328,12 +327,12 @@ window.ConfigPage = (function () {
 
     container.innerHTML =
       '<div class="config-page">' +
-        '<h1>Model Configuration</h1>' +
-        '<p class="subtitle">Manage your LLM provider settings. Select a default provider using the radio button.</p>' +
+        '<h1>模型配置</h1>' +
+        '<p class="subtitle">管理 LLM 提供者：填写 API 地址与密钥，选择默认模型后即可开始聊天。</p>' +
         '<div id="provider-list"></div>' +
         '<div class="config-actions">' +
-          '<button class="btn btn-primary" id="btn-save">Save Configuration</button>' +
-          '<button class="btn btn-secondary" id="btn-add">+ Add Provider</button>' +
+          '<button class="btn btn-primary" id="btn-save">保存配置</button>' +
+          '<button class="btn btn-secondary" id="btn-add">+ 添加提供者</button>' +
         '</div>' +
       '</div>';
 
@@ -343,7 +342,7 @@ window.ConfigPage = (function () {
     // 加载已有配置
     loadConfig(function (err, loaded) {
       if (err) {
-        showNotification('Failed to load configuration', 'error');
+        showNotification('加载配置失败', 'error');
         providers = [];
       } else {
         providers = loaded.map(function (p) { p._masked = true; return p; });

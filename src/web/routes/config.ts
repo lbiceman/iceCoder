@@ -86,10 +86,10 @@ export async function resolveDefaultChatModelMeta(
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
-    return 'API URL is required and cannot be empty';
+    return 'API 地址不能为空';
   }
   if (!provider.apiKey || provider.apiKey.trim() === '') {
-    return 'API Key is required and cannot be empty';
+    return 'API 密钥不能为空';
   }
   return null;
 }
@@ -201,7 +201,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const { providers } = req.body as { providers: ProviderConfig[] };
 
       if (!providers || !Array.isArray(providers)) {
-        res.status(400).json({ error: 'Request body must contain a providers array' });
+        res.status(400).json({ error: '请求体须包含 providers 数组' });
         return;
       }
 
@@ -241,7 +241,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       for (let i = 0; i < normalizedProviders.length; i++) {
         const error = validateProvider(normalizedProviders[i]);
         if (error) {
-          res.status(400).json({ error: `Provider ${i}: ${error}` });
+          res.status(400).json({ error: `提供者 ${i + 1}：${error}` });
           return;
         }
       }
@@ -263,10 +263,10 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
       }
 
-      res.json({ success: true, message: 'Configuration saved successfully' });
+      res.json({ success: true, message: '配置已保存' });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: `Failed to save configuration: ${message}` });
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `保存配置失败：${message}` });
     }
   });
 
@@ -300,8 +300,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         });
         return;
       }
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: `Failed to load configuration: ${message}` });
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `加载配置失败：${message}` });
     }
   });
 
@@ -313,7 +313,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const raw = (req.body as { supervisorMode?: string })?.supervisorMode;
       if (raw !== 'off' && raw !== 'adaptive' && raw !== 'strict') {
         res.status(400).json({
-          error: 'supervisorMode must be one of: off, adaptive, strict',
+          error: 'supervisorMode 须为 off、adaptive 或 strict 之一',
         });
         return;
       }
@@ -324,8 +324,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       }
       res.json({ success: true, supervisorMode: saved });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      res.status(500).json({ error: `Failed to update supervisor mode: ${message}` });
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新监管模式失败：${message}` });
     }
   });
 

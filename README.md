@@ -2,7 +2,7 @@
 
 **Long coding tasks break most agents** — they drift off-goal, loop the same tools, and declare victory without delivering.
 
-**iceCoder is a self-hosted runtime governance layer** that keeps tool-using LLM agents on track through long sessions — **217 tool rounds verified stable** in real runs (higher limits not yet tested): drift detection, adaptive/forced dual-mode execution, checkpoint recovery, TaskGraph planning, file memory, **27 built-in tools**, MCP, CLI, and Web UI.
+**iceCoder is a self-hosted runtime governance layer** that keeps tool-using LLM agents on track through long sessions — **217 tool rounds verified stable** in real runs (higher limits not yet tested): **L1/L2 dual-mode supervision**, checkpoint recovery, TaskGraph planning, file memory, Web **Session Pet** indicator, **PC/mobile multi-device sync**, **27 built-in tools**, MCP, CLI, and Web UI.
 
 [中文简介](./README.zh-CN.md) · [Full project guide](./docs/PROJECT-GUIDE.md) · [项目介绍](./docs/项目介绍.md)
 
@@ -19,7 +19,7 @@ npm run dev                                     # API :1024 · UI :1025
 
 ```bash
 npx tsx src/cli/index.ts run "fix failing tests" --max-rounds 100
-npm test                                        # 1,372 tests · ~38s · 100% pass
+npm test                                        # 1,623 tests · ~38s · 100% pass
 ```
 
 **Requirements:** Node.js 18+
@@ -28,19 +28,17 @@ npm test                                        # 1,372 tests · ~38s · 100% pa
 
 ## By the numbers
 
-> Verified **2026-05-26** — run `npm test` and `npm run test:coverage` locally to reproduce.
+> Verified **2026-05-27** — run `npm test` and `npm run test:coverage` locally to reproduce.
 
 | | |
 |---|---|
-| **Long-session run** | **217** tool rounds completed stably in production runs · higher limits not yet tested |
-| **Tests** | **1,372** cases · **123** files · **100%** pass · **~38s** |
-| **Coverage (all `src/`)** | Lines **74.9%** · Statements **72.9%** · Functions **77.1%** · Branches **64.6%** |
-| **Core runtime coverage** | **Harness 82.5%** lines · **Supervisor 95.0%** lines · **Checkpoint 93%** lines |
-| **Source scale** | **235** TS/JS modules · **47,390** lines under `src/` · **97** Harness · **24** Supervisor · **26** file-memory |
-| **Agent tools** | **27** registered (26 builtins + `delegate_to_subagent`) · **+ MCP** tools at runtime |
+| **Long-session run** | **217** tool rounds completed stably in production · higher limits not yet tested |
+| **Tests** | **1,623** cases · **141** files · **100%** pass · **~38s** |
+| **Coverage (all `src/`)** | Lines **75.7%** · Statements **73.6%** · Functions **77.7%** · Branches **65.0%** |
+| **Core runtime coverage** | **Harness 82.4%** lines · **Supervisor 95.1%** lines · **Checkpoint ~93%** lines |
+| **Agent tools** | **27** registered (26 builtins + `delegate_to_subagent`) · **+ MCP** at runtime |
 | **Surfaces** | CLI 7 subcommands · HTTP **:1024** · Vite dev UI **:1025** · WebSocket · optional Cloudflare tunnel |
-| **LLM** | OpenAI-compatible + Anthropic adapters · multi-provider config |
-| **Benchmarks** | Same model blind-judged vs Claude Code — **86 vs 83** and **88 vs 85** on two repair tasks |
+| **Benchmark (same-model blind judge)** | Repair tasks **86 vs 83**, **88 vs 85** (iceCoder ahead of CC) · long-horizon build **72 vs 59** |
 
 Same tools, same models — **governed execution**.
 
@@ -51,9 +49,10 @@ Same tools, same models — **governed execution**.
 | Problem | iceCoder answer |
 |---------|-----------------|
 | Agent loops on the same file or failing command | **BranchBudget** hard-blocks repeated patterns |
-| Agent wanders after 50+ tool rounds | **Drift detection** → correction or **forced** mode escalation · **217 rounds** verified stable |
-| Context compaction loses task state | **CheckpointEngine v2** restores runtime snapshot, not chat alone |
-| "Done" without verification | Verification gate + TaskGraph acceptance before completion |
+| Agent wanders after 50+ tool rounds | **L2 drift detection** → correction or **L1 forced** escalation · **217 rounds** verified |
+| Context compaction loses task state | **CheckpointEngine v2** + `runningTurn` snapshot — not chat alone |
+| Page switch / F5 / mobile join loses UI | **SPA keep-alive** + **per-session broadcast** + breakpoint restore |
+| "Done" without verification | Verification gate + TaskGraph acceptance |
 | Locked into a hosted IDE | **Self-hosted** CLI / Web / WebSocket / MCP on your repo |
 
 ---
@@ -63,55 +62,103 @@ Same tools, same models — **governed execution**.
 Not an IDE replacement — a **governed execution runtime** on your local repo:
 
 ```text
-CLI / Web / WebSocket
+CLI / Web / WebSocket (PC + mobile via ~scan)
   → Prompt assembly + file memory recall
   → Harness.run()  (tool loop, verification gate, compaction)
   → TaskGraph (structured plan injection)
-  → Supervisor (free ↔ forced, drift signals, tool gates)
+  → Supervisor L1/L2 (free ↔ forced · drift · takeover · handoff)
   → CheckpointEngine v2 + BranchBudget (long-session resilience)
   → ToolExecutor (27 tools + MCP)
+  → Web Session Pet / execution plan panel / multi-session sidebar
 ```
 
 | Subsystem | Role |
 |-----------|------|
 | **Harness** | Main agent loop: LLM ↔ tools, permissions, verification, stop hooks, telemetry |
-| **Supervisor** | `off` / `adaptive` / `strict` — escalates to **forced** on drift, failures, or resume |
+| **Supervisor L1** | Execution Mode: `off` / `adaptive` / `strict` — **forced** on drift, failures, resume |
+| **Supervisor L2** | Runtime Supervisor: observe → **takeover** → correct → **handoff** → cooldown |
 | **TaskGraph** | Single structured execution context; domain gate for low-risk Q&A |
 | **Checkpoint v2** | Persists task state, branch budget, supervisor snapshot — survives compact/restart |
-| **BranchBudget** | Hard caps on same-file edits & failed command retries — stops infinite loops |
+| **BranchBudget** | Hard caps on same-file edits & failed command retries |
 | **File memory** | Long-term facts + session notes + Dream/eviction; keyword recall pre-LLM |
-| **Tools & MCP** | Files, shell, git, patch, search, docs (Office/PPTX/XMind), web, sub-agent delegate |
+| **Web UX** | Session Pet, multi-session sidebar, keep-alive, F5/multi-device `runningTurn` restore |
+| **Tools & MCP** | Files, shell, git, patch, search, docs, web, sub-agent delegate |
+
+---
+
+## Dual-mode runtime (L1 + L2)
+
+| Layer | What it does | On the Web UI |
+|-------|--------------|---------------|
+| **L1 · Execution Mode** | `free` ↔ `forced`: tool gates, BranchBudget, checkpoint resume → forced | Pet footer `forced · …` chip · top bar off/adaptive/strict |
+| **L2 · Runtime Supervisor** | stall / drift / repeat failure → takeover → handoff | `~supervisor` report · Timeline (`supervisor-events.jsonl`) |
+
+- **Policy:** `off` · `adaptive` (default) · `strict`
+- **Checkpoint resume:** auto `checkpoint_resumed` signal → must enter forced (by design)
+- **Telemetry:** `GET /api/supervisor/events` · chat command `~supervisor`
+
+---
+
+## Web UX & multi-device sync
+
+| Feature | Description |
+|---------|-------------|
+| **Session Pet (Ice Bean)** | Canvas indicator: ~20 expressions · token ring · L1 forced chip · eye color by supervisor mode |
+| **Multi-session sidebar** | Create/switch/rename/delete sessions · isolated history & session-notes |
+| **Page keep-alive** | Chat ↔ config ↔ memory graph without destroying DOM · streaming/Stop/Pet state preserved |
+| **F5 / reconnect restore** | Server `runningTurn` snapshot · restore streaming text, tool timeline, round, Pet state |
+| **PC + mobile** | `~scan` QR join same session · harness events **broadcast per session** · synced progress |
+| **Multi-device confirm** | Dangerous ops broadcast to all subscribers · **first-win** · 60s timeout deny |
+| **Command palette** | `~` autocomplete in input · **+** button lists local commands and runs them immediately |
+
+Details: [`docs/requirement/聊天页状态保活与断点恢复-finish.md`](./docs/requirement/聊天页状态保活与断点恢复-finish.md)
+
+---
+
+## File-based memory system
+
+**No external database** — memories live as Markdown under `data/user-memory/` (user-level) and the project workspace, wired into every Harness round via `HarnessMemoryIntegration`. Core: `src/memory/file-memory/` (**26** modules · **70.3%** line coverage).
+
+| Capability | Description |
+|------------|-------------|
+| **Two-phase recall** | **Coarse** (pre-LLM · keyword Top 3 · no LLM) + **standard** (post-tool · keyword or LLM rerank · 5min cooldown) |
+| **LLM extraction** | Post-turn candidate extraction → secret scan → dedupe/conflict check → write files |
+| **Typed tiers** | `user` / `feedback` / `project` / `reference` — filtered by task intent (execute/inspect/question) |
+| **Dream consolidation** | Periodic dedupe, prune, index repair (inspired by Claude Code) |
+| **Weighted eviction** | Not pure LRU; scores by usage, recency, relevance |
+| **Session notes** | Per-session `{id}.session-notes.md` · includes `icecoder-runtime` snapshot (TaskState + RepoContext) |
+| **Web graph UI** | `#/memory` graph page · `~memory` / `~memory view` / `~memory delete` |
+| **Telemetry** | `GET /api/memory/telemetry` · `~telemetry` · log `data/memory/telemetry.jsonl` |
+
+```text
+Chat → LLM extract → security scan → write memory-files
+     → coarse recall (pre-LLM) / standard recall (post-tool) → gate + CoN inject
+     → Dream consolidate → decay / evict
+```
+
+Principles: **evidence-first, strict relevance** — project facts for coding tasks; weak signals stay in session notes. See [`docs/项目介绍.md` §7](./docs/项目介绍.md) · [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md).
 
 ---
 
 ## How it works
 
-### Drift detection
+### Drift detection (L2)
 
 Every tool round is scored against the stated goal:
 
-- **Stall** — many rounds with no file changes or verification progress
+- **Stall (no_progress)** — many rounds with no file changes or verification progress
 - **Tool loops** — same failing call repeated, or the same file edited over and over
 - **Goal drift** — tools and outputs no longer match task intent
 
-Signals trigger correction or mode escalation instead of burning the full round budget.
-
-### Adaptive vs forced execution
-
-| Mode | Behavior |
-|------|----------|
-| **Free** | Agent explores — Q&A, inspection, low-risk edits |
-| **Forced** | Stricter tool gates, BranchBudget enabled, verification before done |
-
-Policy: `off` · `adaptive` (default) · `strict`. Escalate on drift/failures/checkpoint resume; de-escalate when stable.
+Signals land in the Timeline; L2 may takeover or L1 may escalate to forced.
 
 ### Checkpoint recovery
 
-Task state, files touched, commands run, verification status, and `runtimeV2` (branch budget, supervisor) persist to disk. After compaction, browser reload, or process restart, the runtime **restores the snapshot** — not chat history alone.
+Task state, files touched, commands run, verification status, and `runtimeV2` (branch budget, supervisor) persist to disk. After compaction, browser reload, or process restart, the runtime **restores the snapshot**. The Web layer also keeps an in-memory `runningTurn` for instant F5/multi-device UI restore.
 
 ### Long-session endurance
 
-Real production runs have completed **217 consecutive tool rounds** without crash, drift-induced abort, or context collapse — with Supervisor mode switches, checkpoint compaction, and BranchBudget enforcement active throughout. Limits beyond 217 rounds have not been stress-tested yet; the runtime is designed for **20–200+** round engineering tasks.
+Production runs have completed **217 consecutive tool rounds** without crash or context collapse. The long-horizon benchmark run reached **347 rounds** (controlled stop; still delivered a playable build).
 
 ---
 
@@ -119,58 +166,67 @@ Real production runs have completed **217 consecutive tool rounds** without cras
 
 | | Cursor / Claude Code / Codex-style | iceCoder |
 |---|-----------------------------------|----------|
-| **Drift handling** | Mostly implicit | Explicit signals → correction or forced mode |
-| **Loop control** | Soft hints; loops reported in community issues | **BranchBudget** hard-blocks repeated file/command patterns |
-| **Recovery** | Session/chat dependent | Structured checkpoint + runtime snapshot restore |
+| **Drift handling** | Mostly implicit | Explicit L2 signals + L1 forced escalation |
+| **Loop control** | Soft hints | **BranchBudget** hard-blocks |
+| **Recovery** | Session/chat dependent | checkpoint + `runningTurn` + multi-device broadcast |
+| **Long-task UI** | Single-session focused | keep-alive + F5/QR resume + Pet state |
 | **Control** | Fixed product behavior | Configurable supervisor + tool gates |
 | **Deploy** | Hosted or IDE-bound | Self-hosted: CLI, Web, WebSocket, MCP |
 
 ---
 
-## Benchmarks
+## Benchmarks (same model, blind judge vs Claude Code)
 
-Same model (`minimax-m2.5`), same tasks, blind judge (Cursor Composer 2.5). Reports: [`benchMark/reports/`](./benchMark/reports/).
+Model: **`minimax-m2.5`** · Judge: **Cursor Composer 2.5** · Rubric: [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)
 
-| Task | Objective tests | Composite (iceCoder vs CC) | Grade |
-|------|-----------------|---------------------------|-------|
-| [Multi-file order pipeline](./benchMark/reports/multi-file-order-pipeline.md) | **9/9** pass | **86 vs 83** | A |
-| [Saga + warehouse reconciliation](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | **15/15** pass | **88 vs 85** | A |
-| [Spell Brigade survivor](./benchMark/reports/implement-spellbrigade-survivor.md) | long-horizon game build | in progress | — |
+| Task | Type | Objective (SR) | Composite | Gate | Judge | Grade | iceCoder vs CC |
+|------|------|------------------|-----------|------|-------|-------|----------------|
+| [Multi-file order pipeline](./benchMark/reports/multi-file-order-pipeline.md) | Multi-file repair | ✅ 9/9 | **86** vs 83 | 40 vs 38 | 46 vs 45 | A / A | **+3** · robust transient retry |
+| [Saga + warehouse reconciliation](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | Distributed repair | ✅ 15/15 | **88** vs 85 | 40 vs 38 | 48 vs 47 | A / A | **+3** · no `.claude/` spill |
+| [Spell Brigade survivor](./benchMark/reports/implement-spellbrigade-survivor.md) | Long-horizon greenfield | ❌ both incomplete | **72** vs ≈59 | 32 vs ≈33 | 40 vs 26 | B / F | **+13** · E2E 1/5→5/5 · 347 rounds |
 
-Both completed runs passed automated regression gates. In `adaptive` policy, high-risk tasks entered **forced** mode without manual intervention.
+**Summary**
+
+- **Repair (2/2):** iceCoder leads on objective pass rate and composite score; `adaptive` enters forced automatically on high-risk work.
+- **Greenfield (1/1):** neither platform fully passed SR; iceCoder delivered playable combat + higher Judge/Gate, stopped at **347-round** cap.
+- **Shared gap (Judge D5/D6):** some runs lack run-manifest / README sync — S tier (≥90) needs delivery docs.
+
+Task specs: [`benchMark/tasks/`](./benchMark/tasks/) · Reports: [`benchMark/reports/`](./benchMark/reports/)
 
 ---
 
 ## Quality & testing
 
 ```bash
-npm test                 # 1,372 cases · 123 files · ~38s
+npm test                 # 1,623 cases · 141 files · ~38s
 npm run test:coverage    # V8 report → coverage/ (HTML + JSON)
 npx tsc --noEmit         # typecheck
 ```
 
 **Framework:** Vitest 4 · `@vitest/coverage-v8` · Node environment
 
-### Coverage snapshot (2026-05-26)
+### Coverage snapshot (2026-05-27)
 
 | Scope | Lines | Statements | Functions | Branches |
 |-------|-------|------------|-----------|----------|
-| **All `src/`** | **74.9%** (7,770 / 10,374) | **72.9%** (8,488 / 11,642) | **77.1%** (1,442 / 1,870) | **64.6%** (5,676 / 8,793) |
-| **`src/harness/`** | **82.5%** | **80.1%** | **84.0%** | **71.0%** |
-| **`src/harness/supervisor/`** | **95.0%** | **92.8%** | **93.0%** | **87.2%** |
-| **`src/memory/file-memory/`** | **70.4%** | **68.8%** | **67.4%** | **59.9%** |
+| **All `src/`** | **75.7%** (8,530 / 11,270) | **73.6%** (9,345 / 12,700) | **77.7%** (1,578 / 2,030) | **65.0%** (6,206 / 9,542) |
+| **`src/harness/`** | **82.4%** | **80.1%** | **83.8%** | **71.3%** |
+| **`src/harness/supervisor/`** | **95.1%** | **93.0%** | **93.1%** | **87.0%** |
+| **`src/memory/file-memory/`** | **70.3%** | **68.7%** | **66.7%** | **59.8%** |
 
-### Test layout (123 files)
+### Test layout (141 files · 1,623 cases)
 
-| Area | Files | What is covered |
-|------|-------|-----------------|
-| **Harness + Supervisor** | **68** | Main loop, checkpoint, branch budget, dual-mode L1/L2, recovery, tool gates |
-| **File memory** | **20** | Recall, Dream, eviction, security, concurrency, E2E flows |
-| **TaskGraph** | **7** | Builder, executor, persistence, metrics, review, edge cases |
-| **E2E dual-mode** | **1** | Six scenario prompts: free/forced/degraded/checkpoint resume |
-| **Web / LLM / tools / parser / core** | **27** | API routes, adapters, normalizers, doc strategies, CLI |
+| Area | Files (approx.) | What is covered |
+|------|-----------------|-----------------|
+| **Harness + Supervisor** | **73** | Main loop, checkpoint, branch budget, dual-mode L1/L2, recovery, tool gates |
+| **File memory** | **20** | Recall, Dream, eviction, security, concurrency |
+| **Web / sessions / WS** | **11** | sessions API, isolation, structured-io, supervisor-events, chat-ws broadcast |
+| **TaskGraph** | **7** | Builder, executor, persistence, metrics, review |
+| **E2E dual-mode** | **1** | Seven scenario prompts: free/forced/degraded/checkpoint resume |
+| **Session Pet / public UI** | **2** | Palette, expression cycle |
+| **LLM / tools / parser / core** | **27** | Adapters, normalizers, doc strategies, CLI |
 
-Supervisor and checkpoint paths are the most heavily tested — the governance layer you rely on for long tasks.
+Supervisor, checkpoint, and Web resume paths are the most heavily tested — the governance layer long tasks rely on.
 
 ---
 
@@ -193,7 +249,11 @@ Supervisor template: `data/supervisor-config.example.json` · Env reference: [`d
 | Doc | What you'll find |
 |-----|------------------|
 | [Project guide](./docs/PROJECT-GUIDE.md) | Architecture, memory, tools, testing |
-| [项目介绍](./docs/项目介绍.md) | Full Chinese reference (modules, flows, acceptance) |
+| [项目介绍](./docs/项目介绍.md) | Full Chinese reference |
+| [Chat keep-alive & resume](./docs/requirement/聊天页状态保活与断点恢复-finish.md) | keep-alive · runningTurn · multi-device |
+| [Multi-session sidebar](./docs/requirement/多会话-web侧栏-finish.md) | Session CRUD · isolation · WS switch |
+| [L2 test playbook](./docs/requirement/L2测试过程.md) | Dual-mode manual & automated acceptance |
+| [Memory system](./docs/requirement/记忆系统调整-finish.md) | Recall / extract / Dream / eviction |
 | [Environment variables](./docs/environment-variables.md) | Configuration reference |
 | [Benchmark rubric](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | Cross-platform evaluation methodology |
 | [Next work](./docs/nextWork.md) | Roadmap |
