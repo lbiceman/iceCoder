@@ -254,6 +254,8 @@ export interface HarnessMemoryConfig {
   fileMemoryManager?: FileMemoryManager;
   /** 会话数据目录（会话笔记） */
   sessionDir?: string;
+  /** 会话 id（用于 session-notes 隔离；未提供回退 'default'） */
+  sessionId?: string;
   /** 工作区根目录（用于 package.json 锚定） */
   workspaceRoot?: string;
 }
@@ -594,6 +596,7 @@ export class HarnessMemoryIntegration {
     this.extractionGuard = initExtractionGuard();
     this.sessionMemoryState = initSessionMemoryState(
       config.sessionDir || 'data/sessions',
+      config.sessionId || 'default',
     );
     this.memoryDream = new MemoryDream();
     this.llmExtractor = new LLMMemoryExtractor({ enablePromptCache: true });

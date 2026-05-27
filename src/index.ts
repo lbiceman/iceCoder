@@ -38,9 +38,12 @@ import {
   broadcastMcpReady,
   broadcastTunnelReady,
   cleanupChatResources,
+  purgeSessionRuntimeCaches,
 } from './web/chat-ws.js';
 import { startTunnelReadyWatcher } from './web/tunnel-ready-watcher.js';
-import { createSessionsRouter } from './web/routes/sessions.js';
+import { createSessionsRouter, registerSessionCleanupHook } from './web/routes/sessions.js';
+
+registerSessionCleanupHook(purgeSessionRuntimeCaches);
 import { createUploadRouter } from './web/routes/upload.js';
 import { createMemoryTelemetryRouter } from './web/routes/memory-telemetry.js';
 import { createSupervisorEventsRouter } from './web/routes/supervisor-events.js';

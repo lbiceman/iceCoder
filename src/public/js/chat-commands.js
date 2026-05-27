@@ -1,6 +1,6 @@
 /**
  * 命令面板模块
- * 负责：~ 命令下拉框、本地命令处理（clear/open/scan/telemetry/memory）
+ * 负责：~ 命令下拉框、本地命令处理（open/scan/telemetry/memory）
  */
 
 /* exported ChatCommands */
@@ -9,7 +9,6 @@ window.ChatCommands = (function () {
   'use strict';
 
   var PC_LOCAL_COMMANDS = [
-    { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
@@ -18,7 +17,6 @@ window.ChatCommands = (function () {
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
-    { name: 'clear', description: '清空当前聊天显示（记忆保留）', prefix: '~' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' },
@@ -182,11 +180,6 @@ window.ChatCommands = (function () {
   }
 
   // ---- 命令处理 ----
-
-  function handleClear(session, ui) {
-    session.clearMessages();
-    ui.renderMessagesOnly(session.getMessages(), session.getToolTraces(), session.stripStatusTag);
-  }
 
   function handleScan(qrModule, messages, appendFn, saveFn) {
     qrModule.showQrCode(messages, appendFn, saveFn);
@@ -384,7 +377,6 @@ window.ChatCommands = (function () {
     handleInput: handleInput,
     getDropdownEl: getDropdownEl,
     setRemoteMode: setRemoteMode,
-    handleClear: handleClear,
     handleScan: handleScan,
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,

@@ -189,6 +189,7 @@ export class Harness {
       memoryDir: config.memoryDir,
       fileMemoryManager: config.fileMemoryManager,
       sessionDir: config.sessionDir,
+      sessionId: config.sessionId,
       workspaceRoot: config.workspaceRoot,
     });
 

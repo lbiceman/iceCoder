@@ -140,7 +140,7 @@ export async function tryDirectFileBrowserTurn(options: {
   lastBrowsedPath: string | null;
   platform: NodeJS.Platform;
   hasImages: boolean;
-  /** 当前是否在目录列举会话中（本进程内曾发送过 ~open，直至 clear_session；用于确定性导航） */
+  /** 当前是否在目录列举会话中（本进程内曾发送过 ~open，直至切换/删除会话；用于确定性导航） */
   active: boolean;
 }): Promise<DirectTurnResult> {
   const {

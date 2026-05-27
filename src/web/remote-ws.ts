@@ -9,6 +9,8 @@ import { URL } from 'url';
 import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
+import { resolveDefaultChatModelMeta } from './routes/config.js';
+import { getActiveSessionId, getSessionsDir } from './chat-ws.js';
 import { Harness } from '../harness/harness.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -29,12 +31,11 @@ import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
-const SESSIONS_DIR = path.resolve('data/sessions');
 const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
 const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
   ? path.resolve(process.env.ICE_CONFIG_PATH)
   : path.join(DATA_DIR, 'config.json');
-const SESSION_ID = 'default';
+// SESSION_ID now uses getActiveSessionId() from chat-ws.ts
 
 /** F2 — supervisor runtime 进程级缓存：避免每个 WS 连接重复读盘。 */
 let supervisorRuntimePromise: ReturnType<typeof loadHarnessSupervisorRuntime> | null = null;
@@ -55,8 +56,8 @@ function getSupervisorRuntime(): ReturnType<typeof loadHarnessSupervisorRuntime>
 
 async function appendToSession(userMsg: string, agentMsg: string, steps: string[]): Promise<void> {
   try {
-    await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    const sessionFile = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
+    await fsPromises.mkdir(getSessionsDir(), { recursive: true });
+    const sessionFile = path.join(getSessionsDir(), `${getActiveSessionId()}.json`);
 
     let existing: { role: string; content: string }[] = [];
     try {
@@ -208,8 +209,8 @@ async function handleRemoteMessage(
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
 
   const wsCtx = await resolveWorkspaceToolContext({
-    sessionDir: SESSIONS_DIR,
-    sessionId: SESSION_ID,
+    sessionDir: getSessionsDir(),
+    sessionId: getActiveSessionId(),
     userMessage: message,
     defaultWorkDir: process.cwd(),
     defaultToolExecutor: toolExecutor,
@@ -239,8 +240,8 @@ async function handleRemoteMessage(
     compactionKeepRecent: 10,
     memoryDir: MEMORY_DIR,
     compactionEnableLLMSummary: true,
-    sessionDir: SESSIONS_DIR,
-    sessionId: SESSION_ID,
+    sessionDir: getSessionsDir(),
+    sessionId: getActiveSessionId(),
     workspaceRoot: wsCtx.effectiveWorkspaceRoot,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
@@ -288,7 +289,7 @@ async function handleRemoteMessage(
     if (pendingSteps.length === 0) return;
     const batch = pendingSteps.splice(0);
     try {
-      const filePath = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
+      const filePath = path.join(getSessionsDir(), `${getActiveSessionId()}.json`);
       let existing: { role: string; content: string }[] = [];
       try {
         const data = await fsPromises.readFile(filePath, 'utf-8');
@@ -346,7 +347,7 @@ async function handleRemoteMessage(
   // 追加最终 AI 回复到会话文件
   if (result.content) {
     try {
-      const filePath = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
+      const filePath = path.join(getSessionsDir(), `${getActiveSessionId()}.json`);
       let existing: { role: string; content: string }[] = [];
       try {
         const data = await fsPromises.readFile(filePath, 'utf-8');

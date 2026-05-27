@@ -135,6 +135,7 @@
   }
 
   function renderPage(page) {
+    document.body.dataset.page = page;
     pageContainer.innerHTML = '';
     if (page === 'config') {
       window.ConfigPage.render(pageContainer);
@@ -187,6 +188,7 @@
       themeToggle.addEventListener('click', toggleTheme);
       if (supervisorModeToggle) supervisorModeToggle.addEventListener('click', cycleSupervisorMode);
       fetchSystemStatus();
+      document.body.dataset.page = 'chat';
       window.ChatPage.render(pageContainer);
       return;
     }

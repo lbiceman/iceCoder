@@ -133,19 +133,6 @@ window.ChatPage = (function () {
 
     if (!text && !uploadedFile && pendingImages.length === 0) return;
 
-    // ~clear
-    if (text === '~clear') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      resetTokenUsage();
-      Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-      Pet.removeThinking(false, false);
-      return;
-    }
-
     // ~scan
     if (text === '~scan' && !remoteMode) {
       elInput.value = '';
@@ -217,6 +204,17 @@ window.ChatPage = (function () {
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       Session.saveMessages();
+      var titlePrompt = displayParts.join('\n') || text || '';
+      if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
+        var userMsgCount = 0;
+        var allMsgs = Session.getMessages();
+        for (var ti = 0; ti < allMsgs.length; ti++) {
+          if (allMsgs[ti].role === 'user') userMsgCount++;
+        }
+        if (userMsgCount === 1) {
+          window.ChatSessionStore.maybeAutoTitleFromPrompt(Session.getActiveId(), titlePrompt);
+        }
+      }
     }
 
     elInput.value = '';
@@ -298,6 +296,41 @@ window.ChatPage = (function () {
     });
   }
 
+  /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId */
+  function onSessionSwitched(sessionId) {
+    if (Session && typeof Session.setSessionId === 'function') {
+      Session.setSessionId(sessionId);
+    }
+    if (elMessages) {
+      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+    }
+    Session.fetchServerMessages(function (serverMsgs) {
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
+      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+      Session.saveMessages();
+    });
+    resetTokenUsage();
+    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+      window.ChatSessionSidebar.renderList();
+    }
+  }
+
+  function syncActiveSessionFromServer(data) {
+    if (remoteMode || !data) return;
+    var serverId = data.activeSessionId || data.sessionId;
+    if (!serverId) return;
+    var clientId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
+      window.ChatSessionStore.setActiveSessionId(serverId);
+    }
+    if (serverId !== clientId) {
+      onSessionSwitched(serverId);
+    }
+  }
+
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
       fetchModelContext();
@@ -308,6 +341,7 @@ window.ChatPage = (function () {
     if (data && data.tunnelReady) {
       announceTunnelReadyFromPayload(data.tunnelReady);
     }
+    syncActiveSessionFromServer(data || {});
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
       window.ChatExecutionPlanBridge.notifyConnected(data || {});
     }
@@ -516,11 +550,17 @@ window.ChatPage = (function () {
     });
   }
 
-  function onWsSessionUpdated() {
+  function onWsSessionUpdated(data) {
+    if (data && data.sessionId && data.title && window.ChatSessionStore
+        && typeof window.ChatSessionStore.patchSession === 'function') {
+      window.ChatSessionStore.patchSession(data.sessionId, { title: data.title });
+    }
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
       window.ChatExecutionPlanBridge.notifySessionUpdated();
     }
-    pullServerChatSnapshotAuthoritative();
+    if (!data || !data.title) {
+      pullServerChatSnapshotAuthoritative();
+    }
   }
 
   function onWsBgTaskUpdate(payload) {
@@ -541,7 +581,8 @@ window.ChatPage = (function () {
     remoteMode = !!remoteToken;
 
     container.innerHTML =
-      '<div class="chat-page">' +
+      '<div class="chat-page chat-layout">' +
+        '<div class="chat-main">' +
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
@@ -567,6 +608,7 @@ window.ChatPage = (function () {
           '</div>' +
           '<input type="file" class="hidden-input" id="file-input">' +
         '</div>' +
+        '</div>' + /* /chat-main */
       '</div>';
 
     // 缓存 DOM
@@ -581,6 +623,46 @@ window.ChatPage = (function () {
     elFileRemove = container.querySelector('#file-remove');
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusTurn = container.querySelector('#status-turn');
+
+    // 初始化会话侧栏（PC 模式）
+    if (!remoteMode && window.ChatSessionSidebar) {
+      var chatLayout = container.querySelector('.chat-layout');
+      if (chatLayout) {
+        window.ChatSessionSidebar.create(chatLayout);
+        var navBrand = document.querySelector('.nav-brand');
+        if (navBrand && !document.getElementById('nav-sidebar-toggle')) {
+          var panelToggle = document.createElement('button');
+          panelToggle.type = 'button';
+          panelToggle.className = 'nav-sidebar-toggle is-expanded';
+          panelToggle.id = 'nav-sidebar-toggle';
+          panelToggle.title = '隐藏会话列表';
+          panelToggle.setAttribute('aria-label', '显示或隐藏会话列表');
+          panelToggle.setAttribute('aria-pressed', 'true');
+          panelToggle.innerHTML =
+            '<span class="nav-sidebar-toggle-icon" aria-hidden="true">' +
+              '<svg class="icon-panel-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
+                '<path d="M9 4v16"/>' +
+              '</svg>' +
+              '<svg class="icon-panel-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
+                '<path d="M9 4v16"/>' +
+                '<path d="M14 12h5"/>' +
+                '<path d="M17 9l3 3-3 3"/>' +
+              '</svg>' +
+            '</span>';
+          panelToggle.addEventListener('click', function () {
+            window.ChatSessionSidebar.togglePanel();
+          });
+          navBrand.insertBefore(panelToggle, navBrand.firstChild);
+          window.ChatSessionSidebar.bindNavToggle(panelToggle);
+        }
+      }
+      // 加载会话列表
+      if (window.ChatSessionStore) {
+        window.ChatSessionStore.fetchSessions();
+      }
+    }
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
@@ -728,5 +810,5 @@ window.ChatPage = (function () {
     });
   }
 
-  return { render: render };
+  return { render: render, onSessionSwitched: onSessionSwitched };
 })();

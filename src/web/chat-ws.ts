@@ -22,7 +22,6 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
-import { clearSessionWorkspace } from '../harness/session-workspace-store.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
@@ -39,7 +38,16 @@ import {
 } from '../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
 import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
-import { registerSupervisorRuntimeReset } from '../harness/supervisor/supervisor-runtime-cache.js';
+import {
+  registerSupervisorRuntimeReset,
+  resetSupervisorRuntimeCache,
+} from '../harness/supervisor/supervisor-runtime-cache.js';
+import {
+  flushStructuredSessionToDisk,
+  readStructuredMessagesFile,
+  writeStructuredMessagesFile,
+} from './session-structured-io.js';
+import { applyFirstPromptSessionTitle } from './session-title.js';
 import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 import {
@@ -50,13 +58,18 @@ import {
 // isExecutionPlanEnabled removed (Phase 11)
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
-const SESSION_ID = 'default';
+let activeSessionId = 'default';
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
 const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
   ? path.resolve(process.env.ICE_CONFIG_PATH)
   : path.join(DATA_DIR, 'config.json');
-const SESSION_FILE = path.join(SESSIONS_DIR, 'default.json');
+function getSessionFile(sessionId: string = activeSessionId): string {
+  return path.join(SESSIONS_DIR, `${sessionId}.json`);
+}
+function getStructuredSessionFile(sessionId: string = activeSessionId): string {
+  return path.join(SESSIONS_DIR, `${sessionId}.structured.json`);
+}
 
 /** F2 — supervisor runtime 进程级缓存：避免每个 WS 连接重复读盘。 */
 let supervisorRuntimePromise: ReturnType<typeof loadHarnessSupervisorRuntime> | null = null;
@@ -76,14 +89,75 @@ function getSupervisorRuntime(): ReturnType<typeof loadHarnessSupervisorRuntime>
 }
 
 /**
- * 单会话消息缓存。
+ * 单会话消息缓存（legacy，保留兼容）。
  * 跨轮次累积，包含完整的结构化对话历史（含 toolCalls/toolCallId）。
  * 同时持久化到磁盘，服务重启后自动恢复。
  */
 let cachedMessages: UnifiedMessage[] | undefined;
 
-/** 结构化消息持久化文件路径 */
-const STRUCTURED_SESSION_FILE = path.join(SESSIONS_DIR, 'default.structured.json');
+/** 多会话结构化消息缓存 Map<sessionId, UnifiedMessage[]> */
+const structuredCache = new Map<string, UnifiedMessage[]>();
+
+/** 获取指定会话的结构化消息缓存 */
+function getCachedMessages(sessionId: string = activeSessionId): UnifiedMessage[] | undefined {
+  return structuredCache.get(sessionId) ?? (sessionId === activeSessionId ? cachedMessages : undefined);
+}
+
+/** 设置指定会话的结构化消息缓存 */
+function setCachedMessages(sessionId: string, messages: UnifiedMessage[] | undefined): void {
+  if (messages === undefined) {
+    structuredCache.delete(sessionId);
+  } else {
+    structuredCache.set(sessionId, messages);
+  }
+  if (sessionId === activeSessionId) {
+    cachedMessages = messages;
+  }
+}
+
+/** 每个会话独立的 fileBrowser 状态 */
+interface FileBrowserState {
+  active: boolean;
+  lastBrowsedPath: string | null;
+}
+const fileBrowserStateBySession = new Map<string, FileBrowserState>();
+
+function getFileBrowserState(sessionId: string = activeSessionId): FileBrowserState {
+  let state = fileBrowserStateBySession.get(sessionId);
+  if (!state) {
+    state = { active: false, lastBrowsedPath: null };
+    fileBrowserStateBySession.set(sessionId, state);
+  }
+  return state;
+}
+
+/** 导出活跃会话 ID，供 remote-ws.ts 等模块使用 */
+export function getActiveSessionId(): string {
+  return activeSessionId;
+}
+
+/**
+ * 清理被删除会话在进程内的所有缓存。
+ * 由 sessions REST DELETE 通过 `registerSessionCleanupHook` 注入；
+ * 若删的是 active session，调用方应先 `switch_session` 到其它会话。
+ */
+export function purgeSessionRuntimeCaches(sessionId: string): void {
+  structuredCache.delete(sessionId);
+  fileBrowserStateBySession.delete(sessionId);
+  const pending = saveTimerMap.get(sessionId);
+  if (pending) {
+    clearTimeout(pending);
+    saveTimerMap.delete(sessionId);
+  }
+  if (sessionId === activeSessionId) {
+    cachedMessages = undefined;
+  }
+}
+
+/** 获取会话目录路径（供 remote-ws.ts 使用） */
+export function getSessionsDir(): string {
+  return SESSIONS_DIR;
+}
 
 /**
  * 当前活跃的 AbortController（用于用户中断正在执行的任务）。
@@ -91,35 +165,48 @@ const STRUCTURED_SESSION_FILE = path.join(SESSIONS_DIR, 'default.structured.json
  */
 let activeAbortController: AbortController | null = null;
 
-/** ~open 后启用目录列举快捷导航（进程级，仅随 clear_session / 进程退出重置；无单独「退出」命令） */
-let fileBrowserModeActive = false;
-/** 最近一次 browse_directory 成功的目录（Windows，以 \\ 结尾） */
-let fileBrowserLastBrowsedPath: string | null = null;
-
 /** 保存结构化消息到磁盘（防抖，避免频繁写入） */
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-function saveStructuredMessages(messages: UnifiedMessage[]): void {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
+const saveTimerMap = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** 立即将指定 session 的结构化缓存写入磁盘（switch_session 前须 await） */
+async function flushStructuredMessagesNow(sessionId: string): Promise<void> {
+  await flushStructuredSessionToDisk(
+    SESSIONS_DIR,
+    sessionId,
+    getCachedMessages(sessionId),
+    () => {
+      const pending = saveTimerMap.get(sessionId);
+      if (pending) {
+        clearTimeout(pending);
+        saveTimerMap.delete(sessionId);
+      }
+    },
+  );
+}
+
+function saveStructuredMessages(messages: UnifiedMessage[], sessionId?: string): void {
+  const id = sessionId || activeSessionId;
+  structuredCache.set(id, messages);
+  const existing = saveTimerMap.get(id);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(async () => {
     try {
-      await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-      await fsPromises.writeFile(STRUCTURED_SESSION_FILE, JSON.stringify(messages), 'utf-8');
+      await writeStructuredMessagesFile(SESSIONS_DIR, id, messages);
     } catch (err) {
       console.error('[chat-ws] 保存结构化消息失败:', err);
     }
   }, 1000);
+  saveTimerMap.set(id, timer);
 }
 
 /** 从磁盘加载结构化消息（启动时调用一次） */
-async function loadStructuredMessages(): Promise<UnifiedMessage[] | undefined> {
-  try {
-    const data = await fsPromises.readFile(STRUCTURED_SESSION_FILE, 'utf-8');
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      console.log(`[chat-ws] 恢复 ${parsed.length} 条结构化消息`);
-      return parsed;
-    }
-  } catch { /* 文件不存在或解析失败，正常情况 */ }
+async function loadStructuredMessages(sessionId?: string): Promise<UnifiedMessage[] | undefined> {
+  const id = sessionId || activeSessionId;
+  const parsed = await readStructuredMessagesFile(SESSIONS_DIR, id);
+  if (parsed && parsed.length > 0) {
+    console.log(`[chat-ws] 恢复 ${parsed.length} 条结构化消息`);
+    return parsed;
+  }
   return undefined;
 }
 
@@ -148,8 +235,9 @@ async function ensureMemoryInitialized(): Promise<void> {
   }
 
   // 恢复结构化消息（服务重启后恢复对话上下文）
-  if (!cachedMessages) {
-    cachedMessages = await loadStructuredMessages();
+  if (!getCachedMessages(activeSessionId)) {
+    const loaded = await loadStructuredMessages(activeSessionId);
+    setCachedMessages(activeSessionId, loaded);
   }
 
   memoryInitialized = true;
@@ -191,10 +279,15 @@ function sendToAllChatClients(jsonBody: string): void {
   }
 }
 
-function broadcastSessionUpdated(reason: string, except?: WebSocket): void {
-  const payload = JSON.stringify({ type: 'session_updated', reason });
+function broadcastSessionUpdated(
+  reason: string,
+  meta?: { sessionId?: string; title?: string },
+  except?: WebSocket,
+): void {
+  const payload = JSON.stringify({ type: 'session_updated', reason, ...meta });
+  const notifyAll = Boolean(meta?.title);
   for (const client of chatClients) {
-    if (client === except) continue;
+    if (!notifyAll && client === except) continue;
     if (client.readyState === WebSocket.OPEN) {
       try {
         client.send(payload);
@@ -231,34 +324,32 @@ export function broadcastTunnelReady(payload: { url: string }): void {
   }));
 }
 
-/** 追加消息到会话文件（后端是唯一写入者）；失败返回 false */
-async function appendMessages(msgs: { role: string; content?: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[]): Promise<boolean> {
+/**
+ * 追加消息到指定会话的消息文件。
+ *
+ * `sessionId` 必须由调用方传入（通常是 handleChatMessage 启动时锁定的 `runSessionId`），
+ * 这样即使用户在长任务中途切换 session，旧任务的 cleanup 仍写入正确的旧 session 文件。
+ */
+async function appendMessages(
+  msgs: { role: string; content?: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[],
+  sessionId: string = activeSessionId,
+): Promise<boolean> {
   if (msgs.length === 0) return true;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
+    const file = getSessionFile(sessionId);
     let existing: any[] = [];
     try {
-      const data = await fsPromises.readFile(SESSION_FILE, 'utf-8');
+      const data = await fsPromises.readFile(file, 'utf-8');
       existing = JSON.parse(data);
     } catch { /* file doesn't exist yet */ }
     existing.push(...msgs);
-    await fsPromises.writeFile(SESSION_FILE, JSON.stringify(existing), 'utf-8');
+    await fsPromises.writeFile(file, JSON.stringify(existing), 'utf-8');
     return true;
   } catch (err) {
     console.error('[chat-ws] appendMessages failed:', err);
     return false;
   }
-}
-
-/** 清空会话文件（~clear 时调用） */
-async function clearSessionFile(): Promise<void> {
-  try {
-    await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
-    await fsPromises.writeFile(SESSION_FILE, '[]', 'utf-8');
-    // 同时清除结构化消息文件
-    await fsPromises.writeFile(STRUCTURED_SESSION_FILE, '[]', 'utf-8').catch(() => {});
-    await clearSessionWorkspace(SESSIONS_DIR, SESSION_ID);
-  } catch { /* ignore */ }
 }
 
 /** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
@@ -269,13 +360,16 @@ async function finalizeDirectBrowserTurn(
     assistantContent: string;
     toolTraceBatch: { toolName: string; detail: string; status: string }[];
     syntheticTool?: { toolName: string; toolDetail: string; success: boolean };
+    sessionId: string;
   },
 ): Promise<void> {
-  const base = cachedMessages ? [...cachedMessages] : [];
+  const sid = opts.sessionId;
+  const cached = getCachedMessages(sid);
+  const base = cached ? [...cached] : [];
   base.push({ role: 'user', content: opts.userStructuredContent });
   base.push({ role: 'assistant', content: opts.assistantContent });
-  cachedMessages = base;
-  saveStructuredMessages(base);
+  setCachedMessages(sid, base);
+  saveStructuredMessages(base, sid);
 
   const agentMsgId = randomUUID();
   const entries: Parameters<typeof appendMessages>[0] = [];
@@ -289,7 +383,7 @@ async function finalizeDirectBrowserTurn(
     });
   }
   entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
-  await appendMessages(entries);
+  await appendMessages(entries, sid);
   broadcastSessionUpdated('turn_complete', ws);
 
   if (opts.syntheticTool) {
@@ -375,19 +469,21 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     const features = { executionPlan: true };
     try {
       const meta = await resolveDefaultChatModelMeta();
-      sendJSON(ws, {
-        type: 'connected',
-        message: '连接成功',
-        features,
-        ...(meta ? { modelContext: meta } : {}),
-        ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
-        ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
+        sendJSON(ws, {
+          type: 'connected',
+          message: '连接成功',
+          features,
+          activeSessionId,
+          ...(meta ? { modelContext: meta } : {}),
+          ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
+          ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
       });
     } catch {
       sendJSON(ws, {
         type: 'connected',
         message: '连接成功',
         features,
+        activeSessionId,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
       });
@@ -415,16 +511,44 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           return;
         }
 
-        if (msg.type === 'clear_session') {
-          // 前端 ~clear 命令：清除后端消息缓存和会话文件
-          cachedMessages = undefined;
-          fileBrowserModeActive = false;
-          fileBrowserLastBrowsedPath = null;
-          // 取消防抖写入，防止旧的 cachedMessages 覆盖清空操作
-          if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-          await clearSessionFile();
-          broadcastSessionUpdated('cleared', ws);
-          console.log('[chat-ws] 清除会话缓存和文件');
+        if (msg.type === 'switch_session') {
+          const targetId = String(msg.sessionId || '');
+          if (!targetId || targetId === activeSessionId) {
+            sendJSON(ws, { type: 'session_switched', ok: true, sessionId: activeSessionId });
+            return;
+          }
+          // 任务进行中切换：主动 abort 旧任务，让其 cleanup 写入旧 session（已被 runSessionId 锁定），
+          // 然后无阻塞切换到新 session。
+          if (isProcessing && activeAbortController) {
+            console.log('[chat-ws] switch_session 时中断当前任务');
+            activeAbortController.abort();
+            activeAbortController = null;
+          }
+          const oldSessionId = activeSessionId;
+          try {
+            await flushStructuredMessagesNow(oldSessionId);
+          } catch (err) {
+            console.error('[chat-ws] switch_session flush failed:', err);
+            sendJSON(ws, { type: 'session_switched', ok: false, reason: 'flush_failed' });
+            return;
+          }
+          let supervisorResetFailed = false;
+          try {
+            resetSupervisorRuntimeCache();
+          } catch (err) {
+            supervisorResetFailed = true;
+            console.warn('[chat-ws] supervisor reset on switch_session failed:', err);
+          }
+          activeSessionId = targetId;
+          const loaded = await loadStructuredMessages(activeSessionId);
+          setCachedMessages(activeSessionId, loaded ?? []);
+          sendJSON(ws, {
+            type: 'session_switched',
+            ok: true,
+            sessionId: activeSessionId,
+            ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
+          });
+          console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
           return;
         }
 
@@ -481,6 +605,10 @@ async function handleChatMessage(
   toolExecutor: ToolExecutor,
   inlineImages: string[] = [],
 ): Promise<void> {
+  // 关键：锁定本次运行的 sessionId。
+  // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
+  // 仍写入正确的旧 session 文件，不会污染新 session。
+  const runSessionId = activeSessionId;
   const llmAdapter = orchestrator.getLLMAdapter();
   let toolDefs = toolRegistry.getDefinitions();
   const assembled = await loadAssembledPrompt();
@@ -528,21 +656,32 @@ async function handleChatMessage(
   let harnessUserMessage =
     typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
 
+  const fbs = getFileBrowserState(runSessionId);
   const opensBrowser = detectFileBrowserOpen(message);
   if (opensBrowser) {
-    fileBrowserModeActive = true;
-    fileBrowserLastBrowsedPath = null;
+    fbs.active = true;
+    fbs.lastBrowsedPath = null;
   }
 
   // 确保记忆系统已初始化
   await ensureMemoryInitialized();
 
-  const existingMessages = cachedMessages;
+  const existingMessages = getCachedMessages(runSessionId);
 
   // 写入用户消息到会话文件
   const userMsgId = randomUUID();
-  const userPersisted = await appendMessages([{ role: 'user', content: message, id: userMsgId }]);
-  if (userPersisted) broadcastSessionUpdated('user_message', ws);
+  const userPersisted = await appendMessages(
+    [{ role: 'user', content: message, id: userMsgId }],
+    runSessionId,
+  );
+  if (userPersisted) {
+    const autoTitle = await applyFirstPromptSessionTitle(runSessionId, message);
+    broadcastSessionUpdated(
+      'user_message',
+      autoTitle ? { sessionId: runSessionId, title: autoTitle } : undefined,
+      ws,
+    );
+  }
 
   const resolvedForDirect =
     typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
@@ -552,14 +691,14 @@ async function handleChatMessage(
     toolExecutor,
     resolvedText: resolvedForDirect,
     opensBrowser,
-    lastBrowsedPath: fileBrowserLastBrowsedPath,
+    lastBrowsedPath: fbs.lastBrowsedPath,
     platform: process.platform,
     hasImages: inlineImages.length > 0 || Array.isArray(userMessageContent),
-    active: fileBrowserModeActive,
+    active: fbs.active,
   });
 
   if (direct.handled && direct.variant === 'deterministic') {
-    fileBrowserLastBrowsedPath = direct.newLastBrowsedPath;
+    fbs.lastBrowsedPath = direct.newLastBrowsedPath;
     console.log(`[chat-ws] file-browser-direct ${direct.toolName} ok=${direct.success}`);
     await finalizeDirectBrowserTurn(ws, {
       userStructuredContent: harnessUserMessage,
@@ -576,22 +715,23 @@ async function handleChatMessage(
         toolDetail: direct.toolDetail,
         success: direct.success,
       },
+      sessionId: runSessionId,
     });
     return;
   }
 
   if (direct.handled && direct.variant === 'harness_augment') {
-    fileBrowserLastBrowsedPath = direct.newLastBrowsedPath;
+    fbs.lastBrowsedPath = direct.newLastBrowsedPath;
     harnessUserMessage = direct.augmentedUserText;
     console.log('[chat-ws] file-browser-direct harness_augment (browse_directory output injected)');
   }
 
   if (
-    fileBrowserLastBrowsedPath
+    fbs.lastBrowsedPath
     && typeof harnessUserMessage === 'string'
     && looksLikeFileAnalysisIntent(message)
   ) {
-    harnessUserMessage += `\n\n（服务端提示：最近一次列出的文件夹为 \`${fileBrowserLastBrowsedPath}\`。用户若只给出文件名，请与该路径拼接为完整绝对路径后调用 parse_document / parse_pptx_deep / open_file。）`;
+    harnessUserMessage += `\n\n（服务端提示：最近一次列出的文件夹为 \`${fbs.lastBrowsedPath}\`。用户若只给出文件名，请与该路径拼接为完整绝对路径后调用 parse_document / parse_pptx_deep / open_file。）`;
   }
 
   // 创建 AbortController 用于用户中断
@@ -608,7 +748,7 @@ async function handleChatMessage(
     : resolvedMessage;
   const wsCtx = await resolveWorkspaceToolContext({
     sessionDir: SESSIONS_DIR,
-    sessionId: SESSION_ID,
+    sessionId: runSessionId,
     userMessage: workspaceMessage,
     defaultWorkDir: process.cwd(),
     defaultToolExecutor: toolExecutor,
@@ -643,7 +783,7 @@ async function handleChatMessage(
     memoryDir: MEMORY_DIR,
     fileMemoryManager: globalFileMemoryManager ?? undefined,
     sessionDir: SESSIONS_DIR,
-    sessionId: SESSION_ID,
+    sessionId: runSessionId,
     workspaceRoot: effectiveWorkspace,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
@@ -736,9 +876,10 @@ async function handleChatMessage(
     activeAbortController = null;
     llmAdapter.setAbortSignal?.(null);
 
-    // 缓存完整的结构化消息历史并持久化到磁盘
-    cachedMessages = result.messages;
-    saveStructuredMessages(result.messages);
+    // 缓存完整的结构化消息历史并持久化到磁盘（写入本次运行锁定的 sessionId，
+    // 即使用户在执行过程中切换了 activeSessionId，也确保历史归属正确的旧 session）
+    setCachedMessages(runSessionId, result.messages);
+    saveStructuredMessages(result.messages, runSessionId);
 
     // 写入 AI 回复 + 工具调用记录到会话文件
     const agentMsgId = randomUUID();
@@ -767,7 +908,7 @@ async function handleChatMessage(
     }
 
     if (sessionEntries.length > 0) {
-      const persisted = await appendMessages(sessionEntries);
+      const persisted = await appendMessages(sessionEntries, runSessionId);
       if (persisted) broadcastSessionUpdated('turn_complete', ws);
     }
 
@@ -816,9 +957,8 @@ export function cleanupChatResources(): void {
     activeAbortController.abort();
     activeAbortController = null;
   }
-  cachedMessages = undefined;
-  fileBrowserModeActive = false;
-  fileBrowserLastBrowsedPath = null;
+  setCachedMessages(activeSessionId, undefined);
+  fileBrowserStateBySession.delete(activeSessionId);
   chatClients.clear();
   mcpReadySnapshot = null;
   tunnelReadySnapshot = null;

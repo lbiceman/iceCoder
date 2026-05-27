@@ -7,6 +7,8 @@ import './config-page.js';
 import './session-pet.js';
 import './chat-websocket.js';
 import './chat-session.js';
+import './chat-session-store.js';
+import './chat-session-sidebar.js';
 import './chat-ui.js';
 import './chat-commands.js';
 import './chat-file.js';

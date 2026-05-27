@@ -63,7 +63,7 @@ const ERROR_RULES: Array<{
     test: (msg) => /context.*length|token.*limit|maximum.*context|too long/i.test(msg),
     result: {
       title: '上下文长度超限',
-      suggestion: '对话内容超过了模型的最大上下文窗口。请使用 ~clear 清空对话，或等待自动压缩生效。',
+      suggestion: '对话内容超过了模型的最大上下文窗口。请新建会话或删除旧会话，或等待自动压缩生效。',
     },
   },
 

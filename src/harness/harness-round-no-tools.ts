@@ -341,8 +341,14 @@ export async function handleNoToolCalls(
     return { action: 'continue' };
   }
 
+  // verification gate：当任务还有未验证的工程动作时拉回 LLM 调工具。
+  // 状态门控的关键防线在 `syncHydratedTaskState`（{@link isFreshQueryMessage}）：
+  // 新查询会清掉旧 filesChanged / verificationStatus，避免 gate 误把无关问答轮拉回。
   const canRunVerification = currentTools.some(t => t.name === 'run_command');
-  if (canRunVerification && state.taskState.shouldBlockFinalForVerification(acceptanceIncomplete)) {
+  if (
+    canRunVerification
+    && state.taskState.shouldBlockFinalForVerification(acceptanceIncomplete)
+  ) {
     if (response.content) {
       msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
     } else if (response.reasoningContent) {

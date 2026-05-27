@@ -140,6 +140,7 @@ export type { MemoryDynamicConfig } from './memory-remote-config.js';
 
 export {
   initSessionMemoryState,
+  sessionNotesPath,
   shouldUpdateSessionMemory,
   setupSessionMemoryFile,
   buildSessionMemoryUpdatePrompt,

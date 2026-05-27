@@ -11,7 +11,23 @@ window.ChatSession = (function () {
   var STORAGE_KEY_MESSAGES = 'ice-chat-messages';
   var SESSION_ID = 'default';
 
+  function getStorageKey() { return STORAGE_KEY_MESSAGES + ':' + SESSION_ID; }
+
   var messages = [];
+
+  // T1-7: 首次使用多会话时，将旧 localStorage key 迁移到 default session
+  (function migrateStorage() {
+    try {
+      var oldKey = STORAGE_KEY_MESSAGES;
+      var newKey = STORAGE_KEY_MESSAGES + ':default';
+      var oldData = localStorage.getItem(oldKey);
+      var newData = localStorage.getItem(newKey);
+      if (oldData && !newData) {
+        localStorage.setItem(newKey, oldData);
+        // 保留旧 key 以兼容降级回退，不删除
+      }
+    } catch (_e) { /* ignore */ }
+  })();
   var toolTraces = {};
   var currentToolBatch = [];
   var lastSessionSyncSig = '';
@@ -45,13 +61,13 @@ window.ChatSession = (function () {
   function saveSessionMessages() {
     var toSave = messages.map(function (m) { return serializeMessageForStorage(m); });
     try {
-      localStorage.setItem(STORAGE_KEY_MESSAGES, JSON.stringify(toSave));
+      localStorage.setItem(getStorageKey(), JSON.stringify(toSave));
     } catch (_e) { /* ignore */ }
   }
 
   function loadLocalMessages() {
     try {
-      var stored = localStorage.getItem(STORAGE_KEY_MESSAGES);
+      var stored = localStorage.getItem(getStorageKey());
       if (stored) {
         var parsed = JSON.parse(stored);
         if (!Array.isArray(parsed)) return [];
@@ -140,24 +156,6 @@ window.ChatSession = (function () {
     saveSessionMessages();
   }
 
-  function clearMessages(transport) {
-    messages = [];
-    toolTraces = {};
-    currentToolBatch = [];
-    lastSessionSyncSig = '';
-    saveMessages();
-    if (!transport || typeof transport.send !== 'function') return;
-    // 原生 WebSocket：send 只接受字符串
-    if (transport.readyState !== undefined) {
-      if (transport.readyState === WebSocket.OPEN) {
-        transport.send(JSON.stringify({ type: 'clear_session' }));
-      }
-    } else {
-      // ChatWebSocket 适配器 { send: WS.send }，内部已检查 OPEN 并 JSON 序列化
-      transport.send({ type: 'clear_session' });
-    }
-  }
-
   function flushToolBatchLocal() {
     currentToolBatch = [];
   }
@@ -210,10 +208,20 @@ window.ChatSession = (function () {
     }
   }
 
+  /** 切换会话 ID（前端侧栏切换时调用） */
+  function setSessionId(id) {
+    SESSION_ID = id || 'default';
+    messages = loadLocalMessages();
+    toolTraces = {};
+    currentToolBatch = [];
+    lastSessionSyncSig = '';
+  }
+
+  function getActiveId() { return SESSION_ID; }
+
   return {
     initSession: initSession,
     saveMessages: saveMessages,
-    clearMessages: clearMessages,
     loadLocalMessages: loadLocalMessages,
     fetchServerMessages: fetchServerMessages,
     separateToolTraces: separateToolTraces,
@@ -230,5 +238,7 @@ window.ChatSession = (function () {
     updateToolBatchStatus: updateToolBatchStatus,
     hasStreamingModelBubble: hasStreamingModelBubble,
     stripStatusTag: stripStatusTag,
+    setSessionId: setSessionId,
+    getActiveId: getActiveId,
   };
 })();
