@@ -63,7 +63,11 @@ import {
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { computeRecoveryRoundEffective, classifyToolRoundProgress } from './recovery-round-progress.js';
-import { buildVerificationDigest, isHarnessVerificationCommand } from './verification-digest.js';
+import {
+  buildVerificationDigest,
+  isHarnessVerificationCommand,
+  resolveVerificationSuccessSummary,
+} from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import {
   buildDiagnosticGateMessage,
@@ -259,8 +263,13 @@ export async function runHarnessToolRound(
   //   - 后台启动 (`mode:'background'|'escalated'`) → acceptance 状态保持 pending
   //   - check 返回 `status:'completed' && exitCode:0` → mark passed
   //   - check 返回 `status:'failed'|'timeout'|'killed'` 或 exitCode≠0 → mark failed + 回写 verificationOutputBuffer
+  // P1 — 验收项首次从 pending → passed 时对称注入 `[System / Acceptance ✓]` 反馈，
+  //       全部 passed 时再追加一条 stopping signal，让模型有客观信号决定收尾。
+  const newlyPassedAcceptance: Array<{ command: string; summary: string | null }> = [];
+  let acceptanceJustCompletedAll = false;
   if (executableToolCalls.length > 0) {
     const acceptanceActive = state.taskAcceptance?.isActive();
+    const wasCompleteBefore = state.taskAcceptance?.isComplete() ?? false;
     for (const tc of executableToolCalls) {
       if (tc.name !== 'run_command') continue;
       const sig = toolCallSignature(tc);
@@ -272,7 +281,17 @@ export async function runHarnessToolRound(
       if (!classified) continue;
 
       if (acceptanceActive && state.taskAcceptance) {
-        state.taskAcceptance.recordRunCommandToolResult(classified);
+        const transition = state.taskAcceptance.recordRunCommandToolResult(classified);
+        if (transition
+          && transition.newStatus === 'passed'
+          && transition.previousStatus !== 'passed') {
+          const summary = resolveVerificationSuccessSummary(
+            classified.command,
+            rawOutput,
+            tc.arguments as Record<string, unknown>,
+          );
+          newlyPassedAcceptance.push({ command: transition.command, summary });
+        }
       }
 
       if (classified.kind === 'background_failed'
@@ -283,6 +302,9 @@ export async function runHarnessToolRound(
     }
     if (acceptanceActive && state.taskAcceptance) {
       syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
+      if (!wasCompleteBefore && state.taskAcceptance.isComplete()) {
+        acceptanceJustCompletedAll = true;
+      }
     }
   }
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
@@ -327,6 +349,15 @@ export async function runHarnessToolRound(
     failedSignatures: toolStats.failedSignatures,
     correctionPort,
     deps,
+  });
+
+  maybeInjectAcceptanceSuccessFeedback({
+    state,
+    msgs,
+    correctionPort,
+    deps,
+    newlyPassed: newlyPassedAcceptance,
+    completedAll: acceptanceJustCompletedAll,
   });
 
   maybeUpdateBuildDiagnosticGate(state, msgs, executableToolCalls, toolStats, correctionPort, deps);
@@ -982,6 +1013,76 @@ function maybeInjectVerificationDigest(args: {
     state.verificationDigestInjectedThisRound = true;
     return;
   }
+}
+
+/**
+ * P1 — Acceptance ✓ 反馈注入。
+ *
+ * 两种触发：
+ *   - 某条验收命令从 pending → passed → 发一行 `[System / Acceptance ✓] cmd — summary (X/Y passed)`
+ *   - 全部验收命令通过 → 追加 stopping signal，告知模型可以输出 ≤10 条交付 bullet 并停止调工具
+ *
+ * 与失败侧 `maybeInjectVerificationDigest` 对称。
+ */
+function maybeInjectAcceptanceSuccessFeedback(args: {
+  state: HarnessRunState;
+  msgs: HarnessRunState['messages'];
+  correctionPort: CorrectionPort;
+  deps: ToolRoundDeps;
+  newlyPassed: Array<{ command: string; summary: string | null }>;
+  completedAll: boolean;
+}): void {
+  const { state, msgs, correctionPort, deps, newlyPassed, completedAll } = args;
+  if (deps.supervisorObserverSuppressInject) return;
+  if (!state.taskAcceptance?.isActive()) return;
+
+  const passedCount = state.taskAcceptance.getPassedCount();
+  const totalCount = state.taskAcceptance.snapshot().commands.length;
+
+  const message = buildAcceptanceSuccessFeedbackMessage({
+    newlyPassed,
+    completedAll,
+    passedCount,
+    totalCount,
+  });
+  if (!message) return;
+
+  injectRecoveryMessage(deps, state, msgs, correctionPort, message);
+}
+
+/**
+ * 纯函数：构造 Acceptance ✓ 反馈消息。
+ *
+ * 与 {@link maybeInjectAcceptanceSuccessFeedback} 拆解开，便于单测「文案 + stopping signal」生成逻辑。
+ * 返回 null 表示无需注入（既无新增 passed 也未完成全部）。
+ */
+export function buildAcceptanceSuccessFeedbackMessage(args: {
+  newlyPassed: Array<{ command: string; summary: string | null }>;
+  completedAll: boolean;
+  passedCount: number;
+  totalCount: number;
+}): string | null {
+  const { newlyPassed, completedAll, passedCount, totalCount } = args;
+  if (newlyPassed.length === 0 && !completedAll) return null;
+
+  const lines: string[] = [];
+  let runningPassed = passedCount - newlyPassed.length;
+  for (const item of newlyPassed) {
+    runningPassed += 1;
+    const cmd = item.command.length > 80 ? `${item.command.slice(0, 77)}...` : item.command;
+    const summary = item.summary ? ` — ${item.summary}` : '';
+    lines.push(`[System / Acceptance ✓] ${cmd}${summary} (${runningPassed}/${totalCount} passed)`);
+  }
+  if (completedAll) {
+    lines.push(
+      '',
+      `[System / Acceptance ✓] All ${totalCount} acceptance commands passed.`,
+      'Output ≤10 delivery bullets now and STOP calling tools.',
+      'Do not re-run verification or open new tool calls; the task is complete.',
+    );
+  }
+
+  return lines.join('\n');
 }
 
 function maybeUpdateBuildDiagnosticGate(

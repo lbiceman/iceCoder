@@ -164,3 +164,145 @@ export function buildVerificationDigest(command: string, output: string): string
     nextStep,
   ].join('\n');
 }
+
+/** Playwright / 通用 `\d+ passed` 风格的 e2e 命令判定。 */
+function isPlaywrightOrE2ECommand(command: string): boolean {
+  const c = command.toLowerCase();
+  return /\b(playwright|cypress)\b/.test(c)
+    || /\bnpm\s+run\s+test:e2e\b/.test(c)
+    || /\b(pnpm|yarn)\s+(run\s+)?test:e2e\b/.test(c);
+}
+
+/**
+ * 从 vitest 输出中提取成功摘要。
+ * 典型输出：
+ *   Test Files  8 passed (8)
+ *   Tests       22 passed (22)
+ * 返回 `8 files / 22 tests passed`，失败时返回 null（让调用方走 failure digest）。
+ */
+export function parseVitestSuccessSummary(output: string): string | null {
+  const body = output.trim();
+  if (!body) return null;
+  if (/\b(\d+\s+failed|FAIL\b|AssertionError)/i.test(body)) return null;
+
+  const filesMatch = body.match(/Test Files\s+(\d+)\s+passed\s*\((\d+)\)/i);
+  const testsMatch = body.match(/Tests\s+(\d+)\s+passed\s*\((\d+)\)/i);
+  if (!testsMatch) return null;
+
+  const tests = testsMatch[1];
+  if (filesMatch) {
+    return `${filesMatch[1]} files / ${tests} tests passed`;
+  }
+  return `${tests} tests passed`;
+}
+
+/**
+ * 从 Playwright / e2e 输出中提取成功摘要。
+ * 典型输出：`5 passed (4.4s)`、`Running 5 tests using 1 worker` + `5 passed`。
+ */
+export function parsePlaywrightSuccessSummary(output: string): string | null {
+  const body = output.trim();
+  if (!body) return null;
+  if (/\b(failed|timed out|Test timeout)\b/i.test(body) && !/\b0 failed\b/i.test(body)) {
+    return null;
+  }
+  const match = body.match(/(\d+)\s+passed\s*(?:\(([^)]+)\))?/i);
+  if (!match) return null;
+  const passed = match[1];
+  const duration = match[2] ? ` in ${match[2]}` : '';
+  return `${passed} e2e tests passed${duration}`;
+}
+
+/**
+ * 从 vite / tsc 构建输出中提取成功摘要。
+ * 典型：`✓ built in 7.49s` / `built in 7.49s`。
+ */
+export function parseBuildSuccessSummary(output: string): string | null {
+  const body = output.trim();
+  if (!body) return null;
+  if (/\b(error TS\d+|RollupError|Build failed|ERROR\b)/i.test(body)) return null;
+
+  const match = body.match(/built in\s+([0-9.]+\s*[a-z]+)/i);
+  if (match) return `build succeeded in ${match[1]}`;
+  if (/^\s*$/.test(body) || /Compiled successfully/i.test(body)) {
+    return 'build succeeded';
+  }
+  return null;
+}
+
+/**
+ * 从 `npm ci` / `npm install` 输出中提取成功摘要。
+ */
+export function parseNpmInstallSuccessSummary(output: string): string | null {
+  const body = output.trim();
+  if (!body) return null;
+  if (/\b(npm ERR!|EACCES|EBUSY)\b/i.test(body)) return null;
+  const match = body.match(/added\s+(\d+)\s+packages?(?:\s+in\s+([0-9.]+\s*[a-z]+))?/i);
+  if (!match) return null;
+  const duration = match[2] ? ` in ${match[2]}` : '';
+  return `added ${match[1]} packages${duration}`;
+}
+
+/**
+ * 构造验收命令「成功摘要」字符串（一行，几十字节）。
+ *
+ * 对**非失败**输出尽力解析；解析不出来时返回 `ok`，调用方仍可据此知道命令已成功。
+ * 返回 null 表示这不是 harness 关心的验收命令（不打扰）。
+ */
+export function buildVerificationSuccessSummary(command: string, output: string): string | null {
+  if (!isHarnessVerificationCommand(command) && !isPlaywrightOrE2ECommand(command)) {
+    if (!/\bnpm\s+(ci|install)\b/i.test(command)) return null;
+  }
+
+  const cmdLower = command.toLowerCase();
+  if (isBuildVerificationCommand(command)) {
+    return parseBuildSuccessSummary(output) ?? 'build succeeded';
+  }
+  if (isPlaywrightOrE2ECommand(command)) {
+    return parsePlaywrightSuccessSummary(output) ?? 'e2e passed';
+  }
+  if (/\b(npm\s+test|npm\s+run\s+test|vitest|jest|mocha)\b/i.test(cmdLower)) {
+    return parseVitestSuccessSummary(output) ?? 'tests passed';
+  }
+  if (/\bnpm\s+(ci|install)\b/i.test(cmdLower)) {
+    return parseNpmInstallSuccessSummary(output) ?? 'install ok';
+  }
+  return 'ok';
+}
+
+function safeParseToolOutputJson(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从 run_command 工具原始 output 解析成功摘要。
+ *
+ * - `action:check` 的 rawOutput 是 JSON：优先用其中的 `summary`，否则从 `output` 字段再解析
+ * - 前台命令 rawOutput 即 stdout，直接走 {@link buildVerificationSuccessSummary}
+ */
+export function resolveVerificationSuccessSummary(
+  command: string,
+  rawOutput: string,
+  toolArgs?: Record<string, unknown> | null,
+): string | null {
+  const action = typeof toolArgs?.action === 'string' ? toolArgs.action.trim() : '';
+  if (action === 'check') {
+    const parsed = safeParseToolOutputJson(rawOutput);
+    if (parsed) {
+      const embedded = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+      if (embedded) return embedded;
+      const nestedOutput = typeof parsed.output === 'string' ? parsed.output : '';
+      return buildVerificationSuccessSummary(command, nestedOutput);
+    }
+  }
+  return buildVerificationSuccessSummary(command, rawOutput);
+}

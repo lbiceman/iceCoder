@@ -23,6 +23,7 @@ import {
   HARD_TIMEOUT_LONG_MS,
   SOFT_TIMEOUT_MS,
 } from '../shell-runtime-classifier.js';
+import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
 import { isDestructiveCommand } from '../tool-metadata.js';
 
 /** 命令执行超时（毫秒） */
@@ -83,10 +84,13 @@ export function createShellTool(workDir: string): RegisteredTool {
           ? args.since
           : 0;
         const incremental = bgManager.getOutputSince(taskId, since);
+        const tailOutput = bgManager.getOutput(taskId, 100) || '';
         const result: Record<string, any> = {
           mode: 'check',
           taskId: status.taskId,
           label: status.label,
+          // P0: 暴露真实 command，让 Acceptance Gate 用命令而非 label 匹配验收项
+          command: status.command,
           status: status.status,
           elapsed: status.elapsed,
           cursor: incremental?.cursor ?? 0,
@@ -95,7 +99,12 @@ export function createShellTool(workDir: string): RegisteredTool {
         };
         if (status.exitCode !== null) result.exitCode = status.exitCode;
         if (status.error) result.error = status.error;
-        result.output = (incremental?.output || (since === 0 ? bgManager.getOutput(taskId, 50) : '')) || '(no new output)';
+        // P1: completed 且 exit 0 时附上一行成功摘要（即使 output 被截断也能看到结论）
+        if (status.status === 'completed' && (status.exitCode === null || status.exitCode === 0)) {
+          const summary = buildVerificationSuccessSummary(status.command, tailOutput);
+          if (summary) result.summary = summary;
+        }
+        result.output = (incremental?.output || (since === 0 ? tailOutput : '')) || '(no new output)';
         return {
           success: status.status === 'completed' || status.status === 'running',
           output: JSON.stringify(result, null, 2),

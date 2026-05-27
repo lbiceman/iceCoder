@@ -99,7 +99,16 @@ export function createDoingTasksSection(): PromptSection {
 
 ## Failure handling
 - Read errors; diagnose before retrying. Fix directly; do not explain why it failed unless the user asks.
-- No destructive shortcuts. Don't repeat the identical failed action blindly; don't give up a viable approach after one failure either.`,
+- No destructive shortcuts. Don't repeat the identical failed action blindly; don't give up a viable approach after one failure either.
+
+## Stopping rules
+- Stop calling tools and output a short delivery summary ONLY when one of:
+  1. The runtime injects \`[System / Acceptance ✓] All N acceptance commands passed.\` — output ≤10 delivery bullets and STOP.
+  2. The user explicitly closes the task (任务完成 / 就这样 / 可以了 / OK).
+  3. No verifiable work remains AND the latest verification command exited 0 (and no \`[System / Acceptance Gate]\` pending).
+- Do NOT stop just because you feel finished. Self-perceived completion is not evidence.
+- Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands, or while \`verificationStatus\` is \`required\` / \`failed\`.
+- A single \`[System / Acceptance ✓] cmd — summary\` line means **one** command passed; keep going until you see the final "All N passed" signal.`,
     isStatic: true,
     priority: 20,
     enabled: true,
