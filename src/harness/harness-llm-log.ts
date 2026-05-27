@@ -1,5 +1,6 @@
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateMessagesTokens } from '../llm/token-estimator.js';
+import { isAbortError } from '../llm/abort-error.js';
 import type { LlmRoundLogMeta, LlmRoundTokenUsage } from './logger.js';
 
 /** 工具调用阶段发往 UI 的一步提示文案（缓解长时间无 SSE 体感）。 */
@@ -49,6 +50,8 @@ export function buildLlmRoundLogFields(
 
 /** 判断错误是否可重试（网络超时、限流、服务端错误） */
 export function isRetryableError(error: unknown): boolean {
+  // 用户主动中断不重试 — 否则 Stop 后还会等指数退避 sleep
+  if (isAbortError(error)) return false;
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
     // 网络错误（含 OpenAI / MiniMax 等流式 SDK 在 socket 断开时抛出的 "Connection error."）

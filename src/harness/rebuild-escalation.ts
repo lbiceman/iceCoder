@@ -276,6 +276,7 @@ export function collectRebuildEscalationContext(
     verificationDigest,
     lastVerificationCommand,
     recentFailureSnippets: collectRecentFailureSnippets(messages, 3),
+    writeBypassPaths: [],
     fileMissingOnDisk: workspaceRoot && topFile
       ? !workspaceFileExists(workspaceRoot, topFile.path)
       : undefined,

@@ -23,6 +23,7 @@ import type {
 } from './types.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import { isAbortError, makeAbortedError } from './abort-error.js';
 
 /** Anthropic cache_control 标记 */
 const CACHE_BREAKPOINT = { type: 'ephemeral' as const };
@@ -68,7 +69,12 @@ export class AnthropicAdapter implements ProviderAdapter {
       const { systemBlocks, anthropicMessages } = this.convertToAnthropicMessages(messages);
       const params = this.buildRequestParams(systemBlocks, anthropicMessages, options);
 
-      const response = await this.client.messages.create(params);
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const response = await this.client.messages.create(
+        params,
+        signal ? { signal } : undefined,
+      );
       return this.convertResponse(response as Anthropic.Message);
     } catch (error) {
       throw this.convertError(error);
@@ -84,11 +90,22 @@ export class AnthropicAdapter implements ProviderAdapter {
     callback: StreamCallback,
     options: LLMOptions,
   ): Promise<LLMResponse> {
+    const signal = options.signal ?? undefined;
+    let abortHandler: (() => void) | null = null;
     try {
       const { systemBlocks, anthropicMessages } = this.convertToAnthropicMessages(messages);
       const params = this.buildRequestParams(systemBlocks, anthropicMessages, options);
 
+      if (signal?.aborted) throw makeAbortedError(this.name);
+
       const stream = this.client.messages.stream({ ...params });
+
+      if (signal) {
+        abortHandler = () => {
+          try { stream.controller.abort(); } catch { /* ignore */ }
+        };
+        signal.addEventListener('abort', abortHandler, { once: true });
+      }
 
       let fullContent = '';
 
@@ -134,6 +151,10 @@ export class AnthropicAdapter implements ProviderAdapter {
       };
     } catch (error) {
       throw this.convertError(error);
+    } finally {
+      if (signal && abortHandler) {
+        signal.removeEventListener('abort', abortHandler);
+      }
     }
   }
 
@@ -438,6 +459,11 @@ export class AnthropicAdapter implements ProviderAdapter {
    * 将 Anthropic API 错误转换为统一错误格式。
    */
   private convertError(error: unknown): Error {
+    if (isAbortError(error)) {
+      const aborted = makeAbortedError(this.name);
+      (aborted as any).provider = this.name;
+      return aborted;
+    }
     if (error instanceof Anthropic.APIError) {
       const message = `Anthropic API Error [${error.status}]: ${error.message}`;
       const unifiedError = new Error(message);

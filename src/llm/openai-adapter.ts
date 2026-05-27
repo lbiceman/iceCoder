@@ -20,6 +20,7 @@ import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
 import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import { isAbortError, makeAbortedError } from './abort-error.js';
 
 /**
  * OpenAI 适配器的配置。
@@ -101,7 +102,9 @@ export class OpenAIAdapter implements ProviderAdapter {
       console.log(`[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
 
-      const response = await this.client.chat.completions.create(params);
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const response = await this.client.chat.completions.create(params, signal ? { signal } : undefined);
 
       const elapsed = Date.now() - startTime;
       const usage = (response as OpenAI.ChatCompletion).usage;
@@ -136,10 +139,12 @@ export class OpenAIAdapter implements ProviderAdapter {
       console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
 
-      const stream = await this.client.chat.completions.create({
-        ...params,
-        stream: true,
-      });
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const stream = await this.client.chat.completions.create(
+        { ...params, stream: true },
+        signal ? { signal } : undefined,
+      );
 
       let fullContent = '';
       let reasoningContent = '';
@@ -639,6 +644,11 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 将 OpenAI API 错误转换为统一错误格式。
    */
   private convertError(error: unknown): Error {
+    if (isAbortError(error)) {
+      const aborted = makeAbortedError(this.name);
+      (aborted as any).provider = this.name;
+      return aborted;
+    }
     if (error instanceof OpenAI.APIError) {
       const message = `OpenAI API Error [${error.status}]: ${error.message}`;
       const unifiedError = new Error(message);

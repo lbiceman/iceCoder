@@ -56,9 +56,25 @@ window.ChatSessionSidebar = (function () {
     sidebar.classList.toggle('collapsed', !panelVisible);
   }
 
+  /** 离开聊天页时销毁侧栏（pageContainer 清空后旧节点已脱离文档，须重置引用） */
+  function destroy() {
+    if (sidebar) {
+      sidebar.remove();
+      sidebar = null;
+    }
+    if (backdrop) {
+      backdrop.classList.add('hidden');
+      backdrop.remove();
+      backdrop = null;
+    }
+    isOpen = false;
+    navToggleBtn = null;
+  }
+
   /** 创建侧栏 DOM（插入到 .chat-layout 内部、.chat-main 之前） */
   function create(chatContainer) {
-    if (sidebar) return sidebar;
+    if (sidebar && sidebar.isConnected) return sidebar;
+    destroy();
 
     // 侧栏
     sidebar = document.createElement('aside');
@@ -262,6 +278,7 @@ window.ChatSessionSidebar = (function () {
 
   return {
     create: create,
+    destroy: destroy,
     bindNavToggle: bindNavToggle,
     toggle: toggle,
     togglePanel: togglePanel,

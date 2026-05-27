@@ -120,9 +120,29 @@ window.ChatPage = (function () {
     return '' + n;
   }
 
+  /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
+  function isWorkloadActive() {
+    return WS.isProcessing()
+      || isStreaming
+      || (Session && typeof Session.hasStreamingModelBubble === 'function' && Session.hasStreamingModelBubble());
+  }
+
+  /** 切回聊天页或 WS 状态变化后，把发送钮与真实 workload 对齐（DOM 重建不会保留 btn-stop） */
+  function syncSendButtonWithWorkload() {
+    var busy = isWorkloadActive();
+    UI.setStreamingState(busy);
+    if (sessionPet) {
+      if (busy) {
+        sessionPet.setState(isStreaming ? 'read' : 'thinking');
+      } else if (!userStopped) {
+        sessionPet.setState('idle');
+      }
+    }
+  }
+
   // ---- 发送/停止 ----
   function handleSend() {
-    if (isStreaming) {
+    if (isWorkloadActive()) {
       handleStop();
       return;
     }
@@ -404,6 +424,11 @@ window.ChatPage = (function () {
     var step = data.step;
     if (!step) return;
 
+    // P3 — 用户已点 Stop：后端 harness 还在收尾（写 checkpoint / drain memory）期间会继续推
+    // step / stream_delta，UI 不再据此切冰豆状态，否则会出现「按钮变 Send 了但冰豆还在动」。
+    // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
+    if (userStopped) return;
+
     if (step.totalTokenUsage) {
       usedInputTokens = step.totalTokenUsage.inputTokens || 0;
       usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
@@ -457,13 +482,12 @@ window.ChatPage = (function () {
     WS.setProcessing(processing);
     if (!processing) {
       if (userStopped) userStopped = false;
-      Pet.removeThinking(isStreaming, WS.isProcessing());
-      UI.setStreamingState(false);
       isStreaming = false;
-    } else {
-      UI.setStreamingState(true);
+      Pet.removeThinking(isStreaming, WS.isProcessing());
+    } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }
+    syncSendButtonWithWorkload();
   }
 
   function onWsError(data) {
@@ -630,8 +654,9 @@ window.ChatPage = (function () {
       if (chatLayout) {
         window.ChatSessionSidebar.create(chatLayout);
         var navBrand = document.querySelector('.nav-brand');
-        if (navBrand && !document.getElementById('nav-sidebar-toggle')) {
-          var panelToggle = document.createElement('button');
+        var panelToggle = document.getElementById('nav-sidebar-toggle');
+        if (navBrand && !panelToggle) {
+          panelToggle = document.createElement('button');
           panelToggle.type = 'button';
           panelToggle.className = 'nav-sidebar-toggle is-expanded';
           panelToggle.id = 'nav-sidebar-toggle';
@@ -655,6 +680,8 @@ window.ChatPage = (function () {
             window.ChatSessionSidebar.togglePanel();
           });
           navBrand.insertBefore(panelToggle, navBrand.firstChild);
+        }
+        if (panelToggle) {
           window.ChatSessionSidebar.bindNavToggle(panelToggle);
         }
       }
@@ -785,6 +812,9 @@ window.ChatPage = (function () {
 
     // 渲染已有消息（远程模式先展示本地缓存；服务端返回后以快照为准刷新）
     UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+
+    // 从配置页等切回时 DOM 已重建，须按 WS 真实 processing 恢复 Stop 钮
+    syncSendButtonWithWorkload();
 
     if (remoteMode) {
       Session.fetchServerMessages(function (serverMsgs) {

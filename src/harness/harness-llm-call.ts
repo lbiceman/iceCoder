@@ -6,6 +6,7 @@ import {
   LLM_RETRY_MAX_DELAY,
 } from './harness-constants.js';
 import { buildLlmRoundLogFields, isRetryableError } from './harness-llm-log.js';
+import { isAbortError } from '../llm/abort-error.js';
 import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
@@ -89,6 +90,12 @@ export async function callHarnessLlm(
     }
     state.llmRetryCount = 0;
   } catch (error) {
+    // 用户中断：abort error 直接走 abort 路径，跳过重试 / 紧急压缩 / error final，
+    // 让上层 round 立刻进入 handleHarnessStop(reason='user_abort')。
+    if (isAbortError(error) || deps.loopController.isAborted()) {
+      return { action: 'abort' };
+    }
+
     if (
       isContextWindowExceededError(error)
       && !state.contextEmergencyCompactUsed

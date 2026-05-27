@@ -71,7 +71,7 @@
 
 ### 0.7 断点恢复隔离（v0.3 关键修复）
 
-- `session-notes.md` 改为 **`{sessionId}.session-notes.md`** 按会话隔离：
+- `session-notes.md` 改为 `**{sessionId}.session-notes.md`** 按会话隔离：
   - `src/memory/file-memory/session-memory.ts` 新增 `sessionNotesPath(dir, id)`，`initSessionMemoryState` 接受 `sessionId` 参数（缺省回退 `default`）；
   - `src/harness/harness-memory.ts` `HarnessMemoryConfig.sessionId` 传递；
   - `src/harness/harness.ts` 在构造 `HarnessMemoryIntegration` 时透传；
@@ -84,25 +84,27 @@
 
 - **同步刷盘**：`switch_session` 调用 `flushStructuredMessagesNow(oldId)` 在切之前 `await` 写盘（取消防抖 timer 后直写），不再依赖 1s 防抖；提取到 `src/web/session-structured-io.ts`；
 - **Supervisor reset**：切换前调用 `resetSupervisorRuntimeCache()`；失败不阻塞，回包附带 `reason: 'supervisor_reset_failed'`；
-- **`activeAbortController`**：策略 A — **不 abort 旧任务**；当前 streaming 时拒绝切换（返回 `processing`），由用户先停止或等待；
+- `**activeAbortController`**：策略 A — **不 abort 旧任务**；当前 streaming 时拒绝切换（返回 `processing`），由用户先停止或等待；
 - **fileBrowser 状态**：已迁到 `fileBrowserStateBySession: Map<sessionId, ...>`，切换不串。
 
 ### 0.9 单测覆盖（v0.3 新增）
 
-| 测试文件 | 覆盖 |
-|----------|------|
-| `test/web/sessions-api.test.ts` | CRUD、`:id` 动态路径、default 引导、删除 default |
-| `test/web/sessions-isolation.test.ts` | session-notes 按 id 隔离、旧文件迁移、DELETE 清理文件族 + runtime hook、`/plan` 不跨会话泄漏 |
-| `test/web/session-structured-io.test.ts` | 结构化历史读写、`flushStructuredSessionToDisk` 同步落盘与 timer 取消 |
-| `test/memory/file-memory/session-memory.test.ts` | `notesPath` 默认 `default.session-notes.md` 与按 id 隔离 |
+
+| 测试文件                                             | 覆盖                                                                     |
+| ------------------------------------------------ | ---------------------------------------------------------------------- |
+| `test/web/sessions-api.test.ts`                  | CRUD、`:id` 动态路径、default 引导、删除 default                                  |
+| `test/web/sessions-isolation.test.ts`            | session-notes 按 id 隔离、旧文件迁移、DELETE 清理文件族 + runtime hook、`/plan` 不跨会话泄漏 |
+| `test/web/session-structured-io.test.ts`         | 结构化历史读写、`flushStructuredSessionToDisk` 同步落盘与 timer 取消                  |
+| `test/memory/file-memory/session-memory.test.ts` | `notesPath` 默认 `default.session-notes.md` 与按 id 隔离                     |
+
 
 ### 0.10 未做 / 已知限制
 
 - **多 Tab 竞态**（§14 Issue-5）：仍未实现「踢旧连接」策略 A；当前进程级单例 `activeSessionId` 多 Tab 共享，最后操作生效。
-- **`index.json` 并发写**（§14 Issue-6）：仍为 read-modify-write，无文件锁。
-- **`messageCount` / `preview`**（§4.1 / §9.1）：侧栏未使用，未在 PUT / append 时增量更新。
+- `**index.json` 并发写**（§14 Issue-6）：仍为 read-modify-write，无文件锁。
+- `**messageCount` / `preview`**（§4.1 / §9.1）：侧栏未使用，未在 PUT / append 时增量更新。
 - **resize 跨断点**（§9.1）：未做 `matchMedia('change')` 监听强制清抽屉。
-- **`active_session` 独立推送**：见 §0.6，用 `connected` 包替代，未单独发。
+- `**active_session` 独立推送**：见 §0.6，用 `connected` 包替代，未单独发。
 
 ---
 
@@ -117,12 +119,14 @@
 
 ### 1.1 为什么做
 
-| 现状 | 问题 |
-|------|------|
-| 全局仅 `default` 单会话 | 多任务并行或切换上下文必须 `~clear`，易误删历史 |
-| `~clear` 清前端 + 后端缓存 + checkpoint/workspace | 操作隐蔽、不可恢复、与「保留历史」诉求冲突 |
-| Harness 已验证 **217 轮**稳定 | 长任务更需要「另开新会话」而非清空 |
-| `data/sessions/` 已按 `{sessionId}.*` 分文件 | 后端 schema 已预留 `sessionId`，缺索引与 UI |
+
+| 现状                                         | 问题                                |
+| ------------------------------------------ | --------------------------------- |
+| 全局仅 `default` 单会话                          | 多任务并行或切换上下文必须 `~clear`，易误删历史      |
+| `~clear` 清前端 + 后端缓存 + checkpoint/workspace | 操作隐蔽、不可恢复、与「保留历史」诉求冲突             |
+| Harness 已验证 **217 轮**稳定                    | 长任务更需要「另开新会话」而非清空                 |
+| `data/sessions/` 已按 `{sessionId}.`* 分文件    | 后端 schema 已预留 `sessionId`，缺索引与 UI |
+
 
 ### 1.2 非目标（本阶段不做）
 
@@ -138,14 +142,16 @@
 
 ### 2.1 前端（`src/public/`）
 
-| 模块 | 现状 | 多会话影响 |
-|------|------|------------|
-| `chat-session.js` | `SESSION_ID = 'default'` 硬编码；`localStorage` 键 `ice-chat-messages` 单份 | 须改为「当前 sessionId + 按 session 缓存」 |
-| `chat-page.js` | 单列布局 `.chat-page`；`~clear` 分支调用 `Session.clearMessages` | 增加侧栏布局；移除 `~clear` |
-| `chat-commands.js` | 命令列表含 `~clear` | 移除 Web 端 `clear` 命令 |
-| `chat-websocket.js` | 无 session 切换协议 | 增加 `switch_session` / `session_list` 等 |
-| `chat-execution-plan.js` | 按 `default` 拉 `/api/sessions/:id/plan` | 随当前 sessionId 切换 |
-| `memory-page.js` | 已有 `.memory-sidebar` 侧栏样式可参考 | 复用布局/token，不共用业务逻辑 |
+
+| 模块                       | 现状                                                                   | 多会话影响                                  |
+| ------------------------ | -------------------------------------------------------------------- | -------------------------------------- |
+| `chat-session.js`        | `SESSION_ID = 'default'` 硬编码；`localStorage` 键 `ice-chat-messages` 单份 | 须改为「当前 sessionId + 按 session 缓存」       |
+| `chat-page.js`           | 单列布局 `.chat-page`；`~clear` 分支调用 `Session.clearMessages`              | 增加侧栏布局；移除 `~clear`                     |
+| `chat-commands.js`       | 命令列表含 `~clear`                                                       | 移除 Web 端 `clear` 命令                    |
+| `chat-websocket.js`      | 无 session 切换协议                                                       | 增加 `switch_session` / `session_list` 等 |
+| `chat-execution-plan.js` | 按 `default` 拉 `/api/sessions/:id/plan`                               | 随当前 sessionId 切换                       |
+| `memory-page.js`         | 已有 `.memory-sidebar` 侧栏样式可参考                                         | 复用布局/token，不共用业务逻辑                     |
+
 
 ### 2.2 后端 API（`src/web/routes/sessions.ts`）
 
@@ -190,16 +196,18 @@ data/sessions/
 
 以下能力**从设计上已按 `sessionId` 分文件**，换 id 即可隔离，217 轮长任务所依赖的 checkpoint / 压缩 / 恢复逻辑可直接复用：
 
-| 能力 | 文件 / 配置 | 代码位置 |
-|------|-------------|----------|
-| TaskCheckpoint v1 | `{sessionId}.checkpoint.json` | `src/harness/checkpoint.ts` |
-| CheckpointEngine v2 / runtimeV2 | 合并写入同上 checkpoint 文件 | `src/harness/checkpoint-engine.ts` |
-| BranchBudget / Supervisor 快照 | checkpoint `runtimeV2` 字段 | `src/types/runtime-checkpoint.ts` |
-| Workspace 锁定 | `{sessionId}.workspace.json` | `src/harness/session-workspace-store.ts` |
-| 结构化 LLM 历史 | `{sessionId}.structured.json` | `src/web/chat-ws.ts`（持久化路径已按 id，但内存仅一份） |
-| UI 展示消息 | `{sessionId}.json` | `src/web/routes/sessions.ts` |
-| Harness 运行时 | `HarnessConfig.sessionId` | `src/harness/harness.ts`、`src/harness/types.ts` |
-| 运行时遥测 | `RuntimeTelemetry(sessionDir, sessionId)` | `src/harness/runtime-telemetry.ts` |
+
+| 能力                              | 文件 / 配置                                   | 代码位置                                            |
+| ------------------------------- | ----------------------------------------- | ----------------------------------------------- |
+| TaskCheckpoint v1               | `{sessionId}.checkpoint.json`             | `src/harness/checkpoint.ts`                     |
+| CheckpointEngine v2 / runtimeV2 | 合并写入同上 checkpoint 文件                      | `src/harness/checkpoint-engine.ts`              |
+| BranchBudget / Supervisor 快照    | checkpoint `runtimeV2` 字段                 | `src/types/runtime-checkpoint.ts`               |
+| Workspace 锁定                    | `{sessionId}.workspace.json`              | `src/harness/session-workspace-store.ts`        |
+| 结构化 LLM 历史                      | `{sessionId}.structured.json`             | `src/web/chat-ws.ts`（持久化路径已按 id，但内存仅一份）         |
+| UI 展示消息                         | `{sessionId}.json`                        | `src/web/routes/sessions.ts`                    |
+| Harness 运行时                     | `HarnessConfig.sessionId`                 | `src/harness/harness.ts`、`src/harness/types.ts` |
+| 运行时遥测                           | `RuntimeTelemetry(sessionDir, sessionId)` | `src/harness/runtime-telemetry.ts`              |
+
 
 Harness 构造示例（已支持动态 id，调用方写死 `'default'` 是问题所在）：
 
@@ -212,18 +220,20 @@ this.checkpointEngine = new CheckpointEngine(config.sessionDir, config.sessionId
 
 #### 不支持（Web / 连接 / 前端层）
 
-| 层级 | 现状 | 后果 |
-|------|------|------|
+
+| 层级            | 现状                                               | 后果                     |
+| ------------- | ------------------------------------------------ | ---------------------- |
 | **WebSocket** | 进程单例 `cachedMessages` + `SESSION_ID = 'default'` | 内存里只有一份 LLM 上下文，切换会话必串 |
-| **WebSocket** | `clear_session` 清空而非切换 | 与「保留历史、另开会话」目标相反 |
-| **WebSocket** | `broadcastSessionUpdated` 无 `sessionId` | 多端 tab 可能误刷非当前会话 UI |
-| **REST** | `GET /api/sessions/:id` 始终读 `default.json` | 路由有 `:id` 但未生效 |
-| **REST** | 无 `index.json`、无列表/创建 API | 前端无法管理多会话 |
-| **前端** | `chat-session.js` 硬编码 `SESSION_ID = 'default'` | 无法按 id 拉历史 |
-| **前端** | `localStorage` 单键 `ice-chat-messages` | 与服务端多文件模型不一致 |
-| **前端** | 无侧栏 UI | 用户无法新建/切换会话 |
-| **远程** | `remote-ws.ts` 硬编码 `default` | 手机端与 PC 会话不一致 |
-| **CLI** | `chat.ts` / `run.ts` 固定 `sessionId: 'default'` | CLI 不在本需求范围，保持即可 |
+| **WebSocket** | `clear_session` 清空而非切换                           | 与「保留历史、另开会话」目标相反       |
+| **WebSocket** | `broadcastSessionUpdated` 无 `sessionId`          | 多端 tab 可能误刷非当前会话 UI    |
+| **REST**      | `GET /api/sessions/:id` 始终读 `default.json`       | 路由有 `:id` 但未生效         |
+| **REST**      | 无 `index.json`、无列表/创建 API                        | 前端无法管理多会话              |
+| **前端**        | `chat-session.js` 硬编码 `SESSION_ID = 'default'`   | 无法按 id 拉历史             |
+| **前端**        | `localStorage` 单键 `ice-chat-messages`            | 与服务端多文件模型不一致           |
+| **前端**        | 无侧栏 UI                                           | 用户无法新建/切换会话            |
+| **远程**        | `remote-ws.ts` 硬编码 `default`                     | 手机端与 PC 会话不一致          |
+| **CLI**       | `chat.ts` / `run.ts` 固定 `sessionId: 'default'`   | CLI 不在本需求范围，保持即可       |
+
 
 WebSocket 单例（改造核心）：
 
@@ -235,12 +245,14 @@ const SESSION_ID = 'default';
 
 #### 全局共享、不按 session 隔离
 
-| 资源 | 路径 / 形态 | 多会话影响 | 本阶段策略 |
-|------|-------------|------------|------------|
-| **`session-notes.md`** | `data/sessions/session-notes.md`（全局一份） | TaskState / plan fence / 压缩恢复可能**串会话** — **实质隔离缺口** | v0.1 仍共享 + 文档标注；切换时 ExecutionPlan.clear；v0.2 改为 `{sessionId}.session-notes.md` |
-| **FileMemoryManager** | 进程单例 | 长期记忆全局共享 | 可接受（记忆本就不按会话切） |
-| **Supervisor runtime cache** | 进程级 | 切换 session 须 reset | `switch_session` 时调用 `registerSupervisorRuntimeReset` |
-| **fileBrowser 模式** | `chat-ws.ts` 进程变量 | `~open` 目录浏览状态串会话 | 改为 `Map<sessionId, state>`（见 §5.3） |
+
+| 资源                           | 路径 / 形态                                | 多会话影响                                               | 本阶段策略                                                                          |
+| ---------------------------- | -------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `**session-notes.md**`       | `data/sessions/session-notes.md`（全局一份） | TaskState / plan fence / 压缩恢复可能**串会话** — **实质隔离缺口** | v0.1 仍共享 + 文档标注；切换时 ExecutionPlan.clear；v0.2 改为 `{sessionId}.session-notes.md` |
+| **FileMemoryManager**        | 进程单例                                   | 长期记忆全局共享                                            | 可接受（记忆本就不按会话切）                                                                 |
+| **Supervisor runtime cache** | 进程级                                    | 切换 session 须 reset                                  | `switch_session` 时调用 `registerSupervisorRuntimeReset`                          |
+| **fileBrowser 模式**           | `chat-ws.ts` 进程变量                      | `~open` 目录浏览状态串会话                                   | 改为 `Map<sessionId, state>`（见 §5.3）                                             |
+
 
 `session-notes.md` 引用链（隔离时需一并改）：
 
@@ -257,25 +269,27 @@ const SESSION_ID = 'default';
 
 ### 2.7 实现难度分级
 
-| 难度 | 工作项 | 说明 |
-|------|--------|------|
-| **低** | `index.json` + migration（`default` → 首条会话） | 纯数据层，无 Harness 改动 |
-| **低** | 修复 `GET /api/sessions/:id` 读错文件 | 单行级 bug |
-| **低** | `GET/POST/PATCH /api/sessions` CRUD | Express router 扩展 |
-| **中** | `chat-ws` 多 session：`activeSessionId` + `structuredCache` Map | 改造核心；须处理刷盘顺序与 `switch_session` 协议 |
-| **中** | Harness 调用处 `sessionId` 动态化 | 参数已存在，替换硬编码即可 |
-| **中** | Web 侧栏 + `chat-session-store.js` | UI + 与 API/WS 编排 |
-| **中** | streaming 互斥（切换/新建时禁止） | 前后端双重校验 |
-| **中** | 多端 `session_updated` 带 `sessionId` 过滤 | 避免 tab 间误刷 |
-| **中** | 远程端跟随 PC `activeSessionId`（方案 A） | `remote-ws.ts` 对齐 |
-| **中高** | `session-notes.md` 按 session 隔离 | 动 `harness-memory`、`session-memory`、compaction、plan API；**若 v0.1 不做，须在验收中标注已知限制** |
-| **低** | 移除 Web 端 `~clear` | 删除分支 + 命令列表项 |
-| **低** | CLI `/clear` 保持不变 | 不在本需求范围 |
+
+| 难度     | 工作项                                                           | 说明                                                                                |
+| ------ | ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **低**  | `index.json` + migration（`default` → 首条会话）                    | 纯数据层，无 Harness 改动                                                                 |
+| **低**  | 修复 `GET /api/sessions/:id` 读错文件                               | 单行级 bug                                                                           |
+| **低**  | `GET/POST/PATCH /api/sessions` CRUD                           | Express router 扩展                                                                 |
+| **中**  | `chat-ws` 多 session：`activeSessionId` + `structuredCache` Map | 改造核心；须处理刷盘顺序与 `switch_session` 协议                                                 |
+| **中**  | Harness 调用处 `sessionId` 动态化                                   | 参数已存在，替换硬编码即可                                                                     |
+| **中**  | Web 侧栏 + `chat-session-store.js`                              | UI + 与 API/WS 编排                                                                  |
+| **中**  | streaming 互斥（切换/新建时禁止）                                        | 前后端双重校验                                                                           |
+| **中**  | 多端 `session_updated` 带 `sessionId` 过滤                         | 避免 tab 间误刷                                                                        |
+| **中**  | 远程端跟随 PC `activeSessionId`（方案 A）                              | `remote-ws.ts` 对齐                                                                 |
+| **中高** | `session-notes.md` 按 session 隔离                               | 动 `harness-memory`、`session-memory`、compaction、plan API；**若 v0.1 不做，须在验收中标注已知限制** |
+| **低**  | 移除 Web 端 `~clear`                                             | 删除分支 + 命令列表项                                                                      |
+| **低**  | CLI `/clear` 保持不变                                             | 不在本需求范围                                                                           |
+
 
 **最难的三块（按优先级）：**
 
-1. **`chat-ws` 单例缓存改造** — 从「一份 `cachedMessages`」到「按 sessionId 切换 + 刷盘」；
-2. **`session-notes.md` 全局共享** — 不隔离则 plan / 会话记忆可能串；隔离则触及 Harness 记忆子系统；
+1. `**chat-ws` 单例缓存改造** — 从「一份 `cachedMessages`」到「按 sessionId 切换 + 刷盘」；
+2. `**session-notes.md` 全局共享** — 不隔离则 plan / 会话记忆可能串；隔离则触及 Harness 记忆子系统；
 3. **切换时的 streaming 互斥与多端同步** — 产品正确性，实现量适中。
 
 **相对容易、可先做（Phase 1）：** API 修复 + index + migration，与 Harness 无耦合，可独立 PR 验证。
@@ -331,11 +345,13 @@ const SESSION_ID = 'default';
 
 #### 3.1.1 响应式断点
 
-| 视口宽度 | 侧栏 | 顶栏汉堡 |
-|----------|------|----------|
-| **> 768px** | 固定显示，宽度 **240px**，与主区域并排 | **隐藏**（`.chat-sidebar-toggle { display: none }`） |
-| **≤ 768px** | **默认隐藏**；不占主区域宽度 | **显示**（仅聊天页激活时，见 §3.1.2） |
-| **≤ 768px 且侧栏打开** | 抽屉 overlay，宽 **min(280px, 85vw)**，自左滑入 | 汉堡保持可见，再次点击关闭 |
+
+| 视口宽度              | 侧栏                                     | 顶栏汉堡                                             |
+| ----------------- | -------------------------------------- | ------------------------------------------------ |
+| **> 768px**       | 固定显示，宽度 **240px**，与主区域并排               | **隐藏**（`.chat-sidebar-toggle { display: none }`） |
+| **≤ 768px**       | **默认隐藏**；不占主区域宽度                       | **显示**（仅聊天页激活时，见 §3.1.2）                         |
+| **≤ 768px 且侧栏打开** | 抽屉 overlay，宽 **min(280px, 85vw)**，自左滑入 | 汉堡保持可见，再次点击关闭                                    |
+
 
 断点 **768px** 与现有 `@media (max-width: 640px)` 顶栏样式可并存；侧栏逻辑以 **768px** 为准。
 
@@ -365,7 +381,6 @@ const SESSION_ID = 'default';
   - `.chat-sidebar-toggle`：无边框按钮，`display: inline-flex; flex-direction: column; gap: 4px; padding: 6px;`
   - `.chat-sidebar-toggle-bar`：块级 span，`width: 18px; height: 2px; background: var(--text-secondary); border-radius: 1px;`
   - 打开态可选 `.chat-sidebar-toggle.is-open` 做轻微动画（P2，首版可静态三横）。
-
 - **可见性**：
   - 非聊天页（配置、记忆等）：汉堡 **始终 hidden**；
   - 聊天页 + 视口 **> 768px**：hidden；
@@ -373,13 +388,15 @@ const SESSION_ID = 'default';
 
 #### 3.1.3 切换交互
 
-| 操作 | 行为 |
-|------|------|
-| 点击汉堡（侧栏关闭 → 打开） | 侧栏滑入；显示 `.chat-sidebar-backdrop` 遮罩；`aria-expanded="true"`；`body` 可选 `overflow: hidden` 防背景滚动 |
-| 再次点击汉堡（侧栏打开 → 关闭） | 侧栏滑出；移除遮罩；`aria-expanded="false"` |
-| 点击遮罩 | 等同「关闭侧栏」 |
-| 在侧栏内选中某会话 | **自动关闭**抽屉（窄屏），便于阅读主区域 |
-| 视口从窄变宽（resize > 768px） | 强制关闭抽屉态；侧栏恢复为固定列布局；隐藏汉堡 |
+
+| 操作                     | 行为                                                                                            |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| 点击汉堡（侧栏关闭 → 打开）        | 侧栏滑入；显示 `.chat-sidebar-backdrop` 遮罩；`aria-expanded="true"`；`body` 可选 `overflow: hidden` 防背景滚动 |
+| 再次点击汉堡（侧栏打开 → 关闭）      | 侧栏滑出；移除遮罩；`aria-expanded="false"`                                                             |
+| 点击遮罩                   | 等同「关闭侧栏」                                                                                      |
+| 在侧栏内选中某会话              | **自动关闭**抽屉（窄屏），便于阅读主区域                                                                        |
+| 视口从窄变宽（resize > 768px） | 强制关闭抽屉态；侧栏恢复为固定列布局；隐藏汉堡                                                                       |
+
 
 - 侧栏位于**聊天页内部**（`.chat-layout`），顶栏汉堡为**全局 nav 与聊天页的桥接控件**；不影响「配置 / 记忆图谱」等其它页面布局。
 - **桌面**：侧栏固定宽度 **240px**；可折叠为 **48px** 图标条（P2，首版可不做折叠）。
@@ -409,23 +426,25 @@ const SESSION_ID = 'default';
 2. 若点击的已是当前会话 → 无操作；
 3. 若有 streaming 任务 → 阻止切换并 toast 提示；
 4. 流程：
-   - 前端：`GET /api/sessions/:id` 拉取 `{id}.json`；
-   - 分离 `tool_trace`、渲染消息列表；
-   - `GET /api/sessions/:id/plan` 刷新 ExecutionPlan；
-   - WebSocket：`switch_session` 通知后端加载 `{id}.structured.json`；
-   - 更新 `localStorage` 当前 sessionId；
-   - 重置 token 计数；冰豆状态随新会话 telemetry 更新。
+  - 前端：`GET /api/sessions/:id` 拉取 `{id}.json`；
+  - 分离 `tool_trace`、渲染消息列表；
+  - `GET /api/sessions/:id/plan` 刷新 ExecutionPlan；
+  - WebSocket：`switch_session` 通知后端加载 `{id}.structured.json`；
+  - 更新 `localStorage` 当前 sessionId；
+  - 重置 token 计数；冰豆状态随新会话 telemetry 更新。
 5. 切换后输入框 focus，滚动到底部锚点。
 
 ### 3.5 废弃 `~clear`
 
-| 位置 | 变更 |
-|------|------|
-| `chat-page.js` | 删除 `text === '~clear'` 分支 |
-| `chat-commands.js` | 从 Web 命令列表移除 `clear` |
-| `chat-ws.ts` | 删除或标记 deprecated `clear_session` WS 类型（保留 1 版本兼容 no-op + 日志） |
-| `friendly-errors.ts` | 错误提示改为「请新建会话或切换会话」 |
-| `docs/requirement/L2测试过程.md` | 后续手工测试改为「新建会话」（文档同步，非本 PR 阻塞） |
+
+| 位置                           | 变更                                                           |
+| ---------------------------- | ------------------------------------------------------------ |
+| `chat-page.js`               | 删除 `text === '~clear'` 分支                                    |
+| `chat-commands.js`           | 从 Web 命令列表移除 `clear`                                         |
+| `chat-ws.ts`                 | 删除或标记 deprecated `clear_session` WS 类型（保留 1 版本兼容 no-op + 日志） |
+| `friendly-errors.ts`         | 错误提示改为「请新建会话或切换会话」                                           |
+| `docs/requirement/L2测试过程.md` | 后续手工测试改为「新建会话」（文档同步，非本 PR 阻塞）                                |
+
 
 用户在输入框输入 `~clear` 时：**不再执行任何操作**，可显示一行 agent 提示「已支持多会话，请使用左侧「新建会话」」。
 
@@ -477,10 +496,12 @@ interface PersistedChatMessage {
 
 ### 4.3 前端 localStorage
 
-| 键 | 值 |
-|----|-----|
-| `ice-active-session-id` | 当前 sessionId |
+
+| 键                       | 值                               |
+| ----------------------- | ------------------------------- |
+| `ice-active-session-id` | 当前 sessionId                    |
 | ~~`ice-chat-messages`~~ | **废弃** — 改由服务端 `{id}.json` 为权威源 |
+
 
 可选：`ice-sidebar-collapsed` boolean。
 
@@ -490,15 +511,17 @@ interface PersistedChatMessage {
 
 ### 5.1 REST — `src/web/routes/sessions.ts` 扩展
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/api/sessions` | 返回 `{ sessions: SessionMeta[] }`，读 `index.json` |
-| `POST` | `/api/sessions` | Body: `{ title?: string }` → 创建 session + 空 `{id}.json` |
-| `GET` | `/api/sessions/:id` | 返回 `{ messages: [] }` — **修复为按 `:id` 读文件** |
-| `PUT` | `/api/sessions/:id` | 全量覆盖 messages（前端防抖保存，逻辑不变） |
-| `PATCH` | `/api/sessions/:id` | Body: `{ title: string }` — 仅更新 metadata |
-| `DELETE` | `/api/sessions/:id` | **P2 可选** — 删除 session 全套文件 |
-| `GET` | `/api/sessions/:id/plan` | 已有，确保 `:id` 正确 |
+
+| 方法       | 路径                       | 说明                                                      |
+| -------- | ------------------------ | ------------------------------------------------------- |
+| `GET`    | `/api/sessions`          | 返回 `{ sessions: SessionMeta[] }`，读 `index.json`         |
+| `POST`   | `/api/sessions`          | Body: `{ title?: string }` → 创建 session + 空 `{id}.json` |
+| `GET`    | `/api/sessions/:id`      | 返回 `{ messages: [] }` — **修复为按 `:id` 读文件**              |
+| `PUT`    | `/api/sessions/:id`      | 全量覆盖 messages（前端防抖保存，逻辑不变）                              |
+| `PATCH`  | `/api/sessions/:id`      | Body: `{ title: string }` — 仅更新 metadata                |
+| `DELETE` | `/api/sessions/:id`      | **P2 可选** — 删除 session 全套文件                             |
+| `GET`    | `/api/sessions/:id/plan` | 已有，确保 `:id` 正确                                          |
+
 
 **创建 session 时服务端须：**
 
@@ -568,12 +591,14 @@ sessionId: activeSessionId,  // 替代硬编码 'default'
 
 ### 5.4 共享资源说明
 
-| 资源 | 策略 |
-|------|------|
-| `session-notes.md` | **v0.1 仍全局共享**；ExecutionPlan fallback 可能串会话 — 已知限制，文档标注；v0.2 可改为 `{sessionId}.session-notes.md` |
-| `data/memory-files/` | 全局共享（长期记忆不按 session 切分） |
-| FileMemoryManager | 进程单例，不按 session 隔离 |
-| Supervisor runtime cache | `switch_session` 时调用已有 `registerSupervisorRuntimeReset` 或等价 reset |
+
+| 资源                       | 策略                                                                                              |
+| ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `session-notes.md`       | **v0.1 仍全局共享**；ExecutionPlan fallback 可能串会话 — 已知限制，文档标注；v0.2 可改为 `{sessionId}.session-notes.md` |
+| `data/memory-files/`     | 全局共享（长期记忆不按 session 切分）                                                                         |
+| FileMemoryManager        | 进程单例，不按 session 隔离                                                                              |
+| Supervisor runtime cache | `switch_session` 时调用已有 `registerSupervisorRuntimeReset` 或等价 reset                               |
+
 
 ---
 
@@ -589,16 +614,18 @@ src/public/js/
 
 ### 6.2 修改文件
 
-| 文件 | 变更 |
-|------|------|
-| `index.html` | `.nav-brand` 内 `logo-text` 后增加 `#chat-sidebar-toggle`（三 `<span>` 短横） |
-| `chat-page.js` | 布局改为 flex 双栏；挂载 sidebar；切换时 orchestrate；**窄屏抽屉开/关**；resize 监听 |
-| `chat-session.js` | 接受动态 sessionId；移除 clearMessages 对 clear_session 的依赖 |
-| `chat-commands.js` | 移除 `~clear` |
-| `chat-execution-plan.js` | plan API 使用当前 sessionId |
-| `chat-websocket.js` | 处理 `active_session` / `session_switched` |
-| `css/style.css` | `.chat-layout`、`.chat-session-sidebar`、`.chat-sidebar-toggle`、`.chat-sidebar-backdrop`、`@media (max-width: 768px)` |
-| `main.js` 或路由 | 进入聊天页时显示汉堡（窄屏）；离开聊天页时 hidden 并关闭抽屉 |
+
+| 文件                       | 变更                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `index.html`             | `.nav-brand` 内 `logo-text` 后增加 `#chat-sidebar-toggle`（三 `<span>` 短横）                                               |
+| `chat-page.js`           | 布局改为 flex 双栏；挂载 sidebar；切换时 orchestrate；**窄屏抽屉开/关**；resize 监听                                                      |
+| `chat-session.js`        | 接受动态 sessionId；移除 clearMessages 对 clear_session 的依赖                                                                |
+| `chat-commands.js`       | 移除 `~clear`                                                                                                        |
+| `chat-execution-plan.js` | plan API 使用当前 sessionId                                                                                            |
+| `chat-websocket.js`      | 处理 `active_session` / `session_switched`                                                                           |
+| `css/style.css`          | `.chat-layout`、`.chat-session-sidebar`、`.chat-sidebar-toggle`、`.chat-sidebar-backdrop`、`@media (max-width: 768px)` |
+| `main.js` 或路由            | 进入聊天页时显示汉堡（窄屏）；离开聊天页时 hidden 并关闭抽屉                                                                                 |
+
 
 ### 6.3 侧栏交互细节
 
@@ -650,7 +677,7 @@ function toggleSidebarDrawer() {
 2. 否则创建 `id = 'default'` 空会话；
 3. 写入 `index.json`，`activeSessionId = 'default'`。
 
-**不删除**现有 `default.*` 文件。
+**不删除**现有 `default.`* 文件。
 
 ### 7.2 旧 localStorage
 
@@ -690,6 +717,8 @@ sequenceDiagram
   end
 ```
 
+
+
 ### 8.2 用户发送消息
 
 与现有一致，但 `appendMessages` / Harness 使用 `activeSessionId` 写 `{id}.json` 与 `{id}.checkpoint.json`。
@@ -711,40 +740,44 @@ sequenceDiagram
   Sidebar->>Sidebar: render messages, reset plan/pet/tokens
 ```
 
+
+
 ---
 
 ## 9. 验收标准
 
 ### 9.1 功能
 
-- [ ] 侧栏展示所有会话，含标题、preview、相对时间（如「3 分钟前」）；
-- [ ] **宽屏（>768px）**：侧栏常显，顶栏汉堡隐藏；
-- [ ] **窄屏（≤768px）**：侧栏默认隐藏；顶栏 `IceCoder` 右侧显示三横线汉堡（三个 `<span>`）；
-- [ ] 窄屏下点击汉堡 → 侧栏滑出；再次点击汉堡 → 侧栏隐藏；
-- [ ] 窄屏下点击遮罩或切换会话后，侧栏自动关闭；
-- [ ] 窗口由窄拉宽超过 768px 时，侧栏恢复固定列、抽屉态清除；
-- [ ] 新建会话后主区域为空，旧会话历史可在侧栏点击恢复；
-- [ ] 编辑标题后刷新页面仍保留；
-- [ ] 切换会话后消息、tool_trace、ExecutionPlan 与对应 session 一致；
-- [ ] 会话 A 跑 Harness 到一半，切换到 B 再切回 A，可继续对话（structured 缓存正确）；
-- [ ] checkpoint / workspace 按 sessionId 隔离，切换后 resume 行为正确；
-- [ ] 输入 `~clear` 不再清空会话，并给出引导文案；
-- [ ] `~` 命令列表中无 `clear`；
-- [ ] 多端（两个浏览器 tab）切换 session 后 `session_updated` 不误刷其它 session 的 UI。
+- 侧栏展示所有会话，含标题、preview、相对时间（如「3 分钟前」）；
+- **宽屏（>768px）**：侧栏常显，顶栏汉堡隐藏；
+- **窄屏（≤768px）**：侧栏默认隐藏；顶栏 `IceCoder` 右侧显示三横线汉堡（三个 `<span>`）；
+- 窄屏下点击汉堡 → 侧栏滑出；再次点击汉堡 → 侧栏隐藏；
+- 窄屏下点击遮罩或切换会话后，侧栏自动关闭；
+- 窗口由窄拉宽超过 768px 时，侧栏恢复固定列、抽屉态清除；
+- 新建会话后主区域为空，旧会话历史可在侧栏点击恢复；
+- 编辑标题后刷新页面仍保留；
+- 切换会话后消息、tool_trace、ExecutionPlan 与对应 session 一致；
+- 会话 A 跑 Harness 到一半，切换到 B 再切回 A，可继续对话（structured 缓存正确）；
+- checkpoint / workspace 按 sessionId 隔离，切换后 resume 行为正确；
+- 输入 `~clear` 不再清空会话，并给出引导文案；
+- `~` 命令列表中无 `clear`；
+- 多端（两个浏览器 tab）切换 session 后 `session_updated` 不误刷其它 session 的 UI。
 
 ### 9.2 迁移
 
-- [ ] 现有 `default.json` 历史无损出现在侧栏「默认会话」；
-- [ ] 无 `index.json` 时首次启动自动 migration。
+- 现有 `default.json` 历史无损出现在侧栏「默认会话」；
+- 无 `index.json` 时首次启动自动 migration。
 
 ### 9.3 测试
 
-| 类型 | 要求 |
-|------|------|
-| 单元 | `sessions` router CRUD、index 读写、migration |
-| 单元 | `chat-ws` switch_session 加载/刷盘 structured cache |
-| 集成 | 创建 2 session → 各发 1 条消息 → 切换 → 消息不串 |
-| 手工 | L2 测试文档场景：「新建或清空会话」改为「新建会话」 |
+
+| 类型  | 要求                                              |
+| --- | ----------------------------------------------- |
+| 单元  | `sessions` router CRUD、index 读写、migration       |
+| 单元  | `chat-ws` switch_session 加载/刷盘 structured cache |
+| 集成  | 创建 2 session → 各发 1 条消息 → 切换 → 消息不串             |
+| 手工  | L2 测试文档场景：「新建或清空会话」改为「新建会话」                     |
+
 
 建议新增：
 
@@ -755,9 +788,9 @@ test/web/chat-ws-switch-session.test.ts
 
 ### 9.4 非回归
 
-- [ ] CLI `iceCoder:cli` 的 `/clear` 仍可用；
-- [ ] `npm test` 全绿；
-- [ ] 远程扫码页在 PC 切换 session 后消息同步（方案 A）。
+- CLI `iceCoder:cli` 的 `/clear` 仍可用；
+- `npm test` 全绿；
+- 远程扫码页在 PC 切换 session 后消息同步（方案 A）。
 
 ---
 
@@ -800,31 +833,35 @@ test/web/chat-ws-switch-session.test.ts
 
 ## 11. 风险与对策
 
-| 风险 | 对策 |
-|------|------|
-| 切换 session 时 streaming 未结束 | 前端禁止切换 + 后端拒绝 `switch_session` |
+
+| 风险                                 | 对策                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| 切换 session 时 streaming 未结束         | 前端禁止切换 + 后端拒绝 `switch_session`                                         |
 | `session-notes.md` 全局共享导致 plan 串会话 | v0.1 文档标注；切换时 ExecutionPlan.clear + 按 checkpoint 读 plan；v0.2 见 Phase 5 |
-| `cachedMessages` 竞态写错 session | switch 前先 await 刷盘；单线程 Node 内串行化 |
-| 远程端与 PC session 不一致 | `session_updated` 带 sessionId，前端忽略非当前 session 事件 |
-| index.json 并发写损坏 | 写 tmp + rename；或用 append-only log（首版 tmp 足够） |
+| `cachedMessages` 竞态写错 session      | switch 前先 await 刷盘；单线程 Node 内串行化                                       |
+| 远程端与 PC session 不一致                | `session_updated` 带 sessionId，前端忽略非当前 session 事件                       |
+| index.json 并发写损坏                   | 写 tmp + rename；或用 append-only log（首版 tmp 足够）                           |
+
 
 ---
 
 ## 12. 参考代码位置
 
-|  Concern | 路径 |
-|---------|------|
-| 单 session 硬编码 | `src/web/chat-ws.ts:52`, `src/public/js/chat-session.js:12` |
-| clear 逻辑 | `src/web/chat-ws.ts:417-427`, `src/public/js/chat-page.js:136-147` |
-| Sessions API | `src/web/routes/sessions.ts` |
-| Harness sessionId | `src/harness/types.ts` (`HarnessConfig.sessionId`) |
-| Checkpoint 路径 | `src/harness/checkpoint.ts` — `` `${sessionId}.checkpoint.json` `` |
-| 侧栏样式参考 | `src/public/css/style.css` — `.memory-sidebar` |
-| 顶栏品牌区 | `src/public/index.html` — `.nav-brand` / `.logo-text` |
-| 响应式断点参考 | `src/public/css/style.css` — `@media (max-width: 640px)`（顶栏）；侧栏以 **768px** 为准 |
-| ExecutionPlan | `src/public/js/chat-execution-plan.js` |
-| session-notes 全局共享 | `src/harness/harness-memory.ts`, `src/memory/file-memory/session-memory.ts` |
-| Supervisor reset | `src/harness/supervisor/supervisor-runtime-cache.ts` |
+
+| Concern            | 路径                                                                            |
+| ------------------ | ----------------------------------------------------------------------------- |
+| 单 session 硬编码      | `src/web/chat-ws.ts:52`, `src/public/js/chat-session.js:12`                   |
+| clear 逻辑           | `src/web/chat-ws.ts:417-427`, `src/public/js/chat-page.js:136-147`            |
+| Sessions API       | `src/web/routes/sessions.ts`                                                  |
+| Harness sessionId  | `src/harness/types.ts` (`HarnessConfig.sessionId`)                            |
+| Checkpoint 路径      | `src/harness/checkpoint.ts` — ``${sessionId}.checkpoint.json``                |
+| 侧栏样式参考             | `src/public/css/style.css` — `.memory-sidebar`                                |
+| 顶栏品牌区              | `src/public/index.html` — `.nav-brand` / `.logo-text`                         |
+| 响应式断点参考            | `src/public/css/style.css` — `@media (max-width: 640px)`（顶栏）；侧栏以 **768px** 为准 |
+| ExecutionPlan      | `src/public/js/chat-execution-plan.js`                                        |
+| session-notes 全局共享 | `src/harness/harness-memory.ts`, `src/memory/file-memory/session-memory.ts`   |
+| Supervisor reset   | `src/harness/supervisor/supervisor-runtime-cache.ts`                          |
+
 
 ---
 
@@ -942,20 +979,24 @@ test/web/chat-ws-switch-session.test.ts
 
 ### 14.3 小问题 / 文案修正
 
-| # | 位置 | 问题 | 建议 |
-|---|------|------|------|
-| S1 | §2.1 `chat-session.js` | 说 `localStorage` 键 `ice-chat-messages` 是"单份" — 准确，但未说明迁移策略 | 补充：多会话后 localStorage 键改为 `ice-chat-messages-{sessionId}`，旧 `ice-chat-messages` 数据在首次加载时迁移到 `ice-chat-messages-default` |
-| S2 | §2.1 `chat-websocket.js` | 说"无 session 切换协议" — 准确 | 无需修改 |
-| S3 | §5.3 进程内状态 | `structuredCache` 用 `Map<string, UnifiedMessage[]>`，但当前是 `let cachedMessages: UnifiedMessage[] \| undefined` | 建议说明：Map 的 value 类型沿用现有 `UnifiedMessage[]`，只从单变量升级为 Map |
-| S4 | §6.2 修改文件表 | `main.js 或路由"进入聊天页时显示汉堡（窄屏）；离开聊天页时 hidden"` — 用词模糊 | 明确：在 `app.js`（路由入口）的页面切换回调中控制汉堡按钮可见性 |
-| S5 | §11.3 Step 8 | 说"CSS 写在 style.css 顶部注释区块" — 项目现有 CSS 是按功能区块排列，没有"顶部注释区块"的惯例 | 建议改为"CSS 写在 `style.css` 末尾，用 `/* === Chat Session Sidebar === */` 注释分隔" |
+
+| #   | 位置                       | 问题                                                                                                          | 建议                                                                                                                     |
+| --- | ------------------------ | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| S1  | §2.1 `chat-session.js`   | 说 `localStorage` 键 `ice-chat-messages` 是"单份" — 准确，但未说明迁移策略                                                  | 补充：多会话后 localStorage 键改为 `ice-chat-messages-{sessionId}`，旧 `ice-chat-messages` 数据在首次加载时迁移到 `ice-chat-messages-default` |
+| S2  | §2.1 `chat-websocket.js` | 说"无 session 切换协议" — 准确                                                                                      | 无需修改                                                                                                                   |
+| S3  | §5.3 进程内状态               | `structuredCache` 用 `Map<string, UnifiedMessage[]>`，但当前是 `let cachedMessages: UnifiedMessage[] | undefined` | 建议说明：Map 的 value 类型沿用现有 `UnifiedMessage[]`，只从单变量升级为 Map                                                                |
+| S4  | §6.2 修改文件表               | `main.js 或路由"进入聊天页时显示汉堡（窄屏）；离开聊天页时 hidden"` — 用词模糊                                                          | 明确：在 `app.js`（路由入口）的页面切换回调中控制汉堡按钮可见性                                                                                   |
+| S5  | §11.3 Step 8             | 说"CSS 写在 style.css 顶部注释区块" — 项目现有 CSS 是按功能区块排列，没有"顶部注释区块"的惯例                                                | 建议改为"CSS 写在 `style.css` 末尾，用 `/* === Chat Session Sidebar === */` 注释分隔"                                                |
+
 
 ### 14.4 总结
 
-| 类别 | 数量 | 说明 |
-|------|------|------|
-| 已确认 Bug | 3 | Bug-1/2 是同一个 pattern（sessions.ts GET/PUT 忽略 :id），Bug-3 是 remote-ws.ts 硬编码 |
-| 设计遗漏 | 10 | Issue-2（刷盘失败丢数据）和 Issue-5（多 Tab 竞态）优先级最高 |
-| 文案/小问题 | 5 | 均为澄清性修改，不影响架构 |
+
+| 类别      | 数量  | 说明                                                                        |
+| ------- | --- | ------------------------------------------------------------------------- |
+| 已确认 Bug | 3   | Bug-1/2 是同一个 pattern（sessions.ts GET/PUT 忽略 :id），Bug-3 是 remote-ws.ts 硬编码 |
+| 设计遗漏    | 10  | Issue-2（刷盘失败丢数据）和 Issue-5（多 Tab 竞态）优先级最高                                  |
+| 文案/小问题  | 5   | 均为澄清性修改，不影响架构                                                             |
+
 
 **整体评价**：文档质量**较高**，架构分析（§2）准确，磁盘布局和 Harness 就绪度判断正确，API + WS 协议设计合理。主要缺失在**错误处理**（刷盘失败、reset 失败）和**并发安全**（多 Tab、index.json）两个维度，补充后即可进入实现阶段。

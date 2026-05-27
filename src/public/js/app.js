@@ -131,6 +131,15 @@
       window.MemoryPage.destroy();
     }
 
+    if (
+      prev === 'chat' &&
+      page !== 'chat' &&
+      window.ChatSessionSidebar &&
+      typeof window.ChatSessionSidebar.destroy === 'function'
+    ) {
+      window.ChatSessionSidebar.destroy();
+    }
+
     renderPage(page);
   }
 

@@ -363,6 +363,24 @@ export async function runHarnessToolRound(
       : undefined,
   );
 
+  // P2 — 用户中断早退：在可能调用 LLM 的 reviewStep / checkpoint 之前先检查 isAborted。
+  // 命中则跳过 resilience review (可能再发一次小模型请求) 与 verification_failed checkpoint。
+  if (deps.loopController.isAborted()) {
+    return {
+      action: 'return',
+      result: await handleHarnessStop(deps, {
+        reason: 'user_abort',
+        messages: msgs,
+        chatFn,
+        tools: currentTools,
+        logger,
+        onStep,
+        streamFn,
+        runtimeState: state,
+      }),
+    };
+  }
+
   if (toolStats.failedCount > 0) {
     await resilienceMaybeReviewStep(
       deps,

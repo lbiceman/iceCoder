@@ -88,6 +88,11 @@ export interface LLMOptions {
   maxTokens?: number;
   topP?: number;
   tools?: ToolDefinition[];
+  /**
+   * 用户中断信号 — 触发时 provider 应尽快断开正在进行的 HTTP/流。
+   * 由 LLMAdapter.stream/chat 从 setAbortSignal() 注入；provider 不需要、也不应自行清理监听。
+   */
+  signal?: AbortSignal | null;
   [key: string]: any;
 }
 
