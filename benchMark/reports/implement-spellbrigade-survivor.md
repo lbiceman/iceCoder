@@ -2,7 +2,7 @@
 
 > **task_id**：`implement-spellbrigade-survivor-01`  
 > **prompt 版本**：v1.1（2026-05-22，增加执行纪律防自行中断）  
-> **评测日期**：2026-05-25  
+> **评测日期**：2026-05-25（first）· 2026-05-26（second 复评）· **2026-05-27（forth / third 增补）**  
 > **裁判**：Cursor Composer 2.5（盲评）  
 > **rubric**：`JUDGE_RUBRIC_v0.1`
 
@@ -37,15 +37,18 @@
 |------|------|----------|------|
 | first | **CC**（Claude Code） | `E:\test\agentToolTest\implement-spellbrigade-survivor-first` | ✅ 已评 |
 | second | **iceCoder** | `E:\test\agentToolTest\implement-spellbrigade-survivor-second` | ✅ 已评 |
+| third | **iceCoder** | `E:\test\agentToolTest\implement-spellbrigade-survivor-third` | ✅ 已评 |
+| forth | **CC**（Claude Code） | `E:\test\agentToolTest\implement-spellbrigade-survivor-forth` | ✅ 已评 |
 
-> 两个参测产物目录结构相同，仅文件夹后缀不同。裁判阶段使用代号盲评；**平台身份已解盲**（**first = CC**，**second = iceCoder**）。
+> 参测产物目录结构相同，仅文件夹后缀不同。first / second 裁判阶段使用代号盲评；**平台身份已全部解盲**：**first = CC**，**second = iceCoder**，**third = iceCoder**，**forth = CC**。third / forth 为 **m2.5-pro 同模跨平台**批次（代号 third / forth 仅作目录后缀）。
 
 **参测约定**
 
 - 模型：**`minimax-m2.7`**（first、second **均使用 2.7**；与评分体系设计稿中的 `minimax-m2.5` 不一致，跨批次对比须标注）
-- iceCoder：`adaptive`（仅 second / iceCoder run 适用）
+- 模型：**`mimo2.5-pro`**（third = iceCoder、forth = CC **同模跨平台**；与 first/second 不可同模横向）
+- iceCoder：`adaptive`（**second、third** 适用）
 
-**模型控制说明**：first / second 同模（2.7），二者差异可归因于 **平台 / Harness / 受控中断**，而非模型版本。
+**模型控制说明**：first / second 同模（2.7），差异可归因于 **平台 / Harness / 受控中断**。third / forth 同模（2.5-pro）、**平台对调**（iceCoder vs CC），差异可归因于 **平台 / Harness / 实现策略**；亦可与各自同平台 m2.7 run 对照（second↔third、first↔forth）。
 
 **iceCoder run 执行上限**：会话 **347 轮**（达到 Harness 轮次上限）后 **受控中断**；恢复后继续至交付。
 
@@ -316,15 +319,295 @@ Playwright `webServer.url` 探针为 `http://127.0.0.1:4173`，而 `vite preview
 
 ---
 
-## 跨平台对比
+## Run: third / iceCoder / implement-spellbrigade-survivor-01
 
-| 代号 | 平台 | SR | Composite | 等级 | Gate | Judge | Turns | Duration | 备注 |
-|------|------|-----|-----------|------|------|-------|-------|----------|------|
-| first | **CC** | 0 | ≈59 | F | ≈33 | 26 | — | 1h 22m | 实机不可玩；E2E 1/5 |
-| second | **iceCoder** | 0 | 72 | B | 32 | 40 | **347** | — | 347 轮受控中断；战斗可玩；E2E 探针 5/5（server 可达时） |
+> **评测日期**：2026-05-27（复测 + 实机反馈）  
+> **平台**：**iceCoder**（`adaptive`）· **代号**：third · **模型**：`mimo2.5-pro` · **工时**：**≈120 min**
 
-**iceCoder（second）相对 CC（first）要点**：完成战斗闭环与全量单测；E2E 从 1/5 提升至探针 5/5；综合分 +13。仍共享 SR=0（CC 验收失败；iceCoder 验收命令未全过 + 347 轮受控中断）。
+### 实现摘要（≤150 字）
+
+`main.ts`（≈143 行）DOM 菜单 + 独立 **`GameScene.ts`**（≈412 行）战斗逻辑。10 技能 switch 齐全；刷怪/击杀/四档经验球/升级 3 选 1/Luck/TaskScheduler 完整接入。**800×600 + Phaser.CANVAS** 渲染，实机 **较流畅**。商城 **4/6** effect 接入。**角色 / 怪物均无贴图**（玩家绿圈、怪物橙/红圈）；`public/assets/` PNG 仅过 audit，未 `load.image`。缺口：`survive_no_damage` bug；死亡 `scene.restart` 无 Game Over。
+
+### 变更文件
+
+| 文件 | 变更类型 | 一行说明 |
+|------|----------|----------|
+| `src/game/data/*.ts` | 新增 | 10 角色、3 地图、6 商城项 |
+| `src/game/systems/*.ts` | 新增 | XP/Luck/元进度/TaskScheduler（增量计数 + 超时取消） |
+| `src/game/scenes/GameScene.ts` | 新增 | 完整战斗循环 + 10 技能 |
+| `src/game/scenes/BootScene.ts` | 新增 | 空壳（未接入启动链） |
+| `src/main.ts` | 重写 | DOM 菜单 + CANVAS Phaser 启动 GameScene |
+| `public/assets/**` | 新增 | 32 张程序生成 PNG + `manifest.json` |
+| `ASSETS.md` | 新增 | 程序化 Kenney 风格声明 |
+| `scripts/gen-assets.cjs` 等 | 新增 | 素材生成 + E2E 辅助脚本（略超白名单） |
+| `vite.config.ts` | 修改 | `server`/`preview.host: '127.0.0.1'` |
+
+**未改动**：`test/`、`package.json`、`package-lock.json`、`playwright.config.ts`
+
+### Phase 完成度
+
+| Phase | 目标 | 状态 | 说明 |
+|-------|------|------|------|
+| 1 | 数据 + 单测 | **100%** | 22/22；`tasks.test.ts` mock 随机 |
+| 2 | 场景骨架 + testid | **≈85%** | DOM `data-testid` 齐全；BootScene 未用；菜单无 PNG 预览 |
+| 3 | 战斗循环 + 10 技能 | **≈85%** | 10 技能几何特效；**角色/怪物无 sprite 贴图** |
+| 4 | 素材 + manifest | **通过审计** | 程序生成，非网络下载 |
+| 5 | build + E2E | **100%** | 四条验收本机全 exit 0 |
+
+### 实机观察（2026-05-27）
+
+- 主菜单 → 选角 → 选图 → 战斗 **流程可通**；**游玩较流畅**（相对 forth/CC 无明显 1–2 min 后卡顿）
+- **10 角色技能均可触发**；击杀四色经验球、拾取吸附、升级 3 选 1、任务 HUD 可用
+- **贴图（实机确认）**：**角色无贴图**（选角纯文字、战斗内玩家为绿圈）；**怪物无贴图**（橙/红几何圈）；经验球为彩色圈。`public/assets/` 虽有 PNG 文件，**运行时未载入画布**
+- 死亡后直接 **scene.restart**，无结算面板 / 回主菜单
+
+### 验收结果
+
+| 命令 | 结果 | 说明 |
+|------|------|------|
+| `npm ci` | **未单独复跑** | 依赖已安装，推断可过 |
+| `npm test` | **PASS** (exit 0) | 22/22 |
+| `npm run build` | **PASS** (exit 0) | tsc + vite build 成功 |
+| `npm run test:e2e` | **PASS** (exit 0) | 5/5（4.8s） |
+
+**SR_objective = 通过**（四条验收全部 exit 0）
+
+| 探针 | 结果 |
+|------|------|
+| boot | ✓ |
+| character-select | ✓ |
+| map-select | ✓ |
+| game-start | ✓ |
+| shop | ✓ |
+
+### 执行统计
+
+| 字段 | 值 |
+|------|-----|
+| platform | iceCoder（adaptive） |
+| codename | third |
+| model | **mimo2.5-pro** |
+| turns | —（未记录 run-manifest） |
+| duration | **≈120 min** |
+| tool_calls | — |
+| human_assist | false（假定） |
+
+### Gate 客观门禁（0–40）
+
+| 子项 | 分值 | 判定 |
+|------|------|------|
+| G1a 单元测试 | 12/12 | 22/22 |
+| G1b 构建 | 5/5 | `npm run build` exit 0 |
+| G1c E2E | 8/8 | 5/5 通过 |
+| G2 素材合规 | 8/8 | `asset-audit.test.ts` 全绿 |
+| G3 可构建 | 4/4 | 同上 |
+| G4 无致命泄漏 | 3/3 | 无密钥 / `.env` |
+
+**Gate 合计：40/40**
+
+### Composer 2.5 裁判评分（0–60）
+
+| 维度 | 分 | evidence（摘要） |
+|------|-----|------------------|
+| D1 需求完成度 | 7 | 主路径可玩流畅；10 技能全；商城 4/6 接入；**角色/怪物无贴图**（prompt 重大偏差）；无 Game Over |
+| D2 正确性 | 7 | 单测/E2E 全绿；`survive_no_damage` 未受伤即 instant 完成；任务超时正确取消 |
+| D3 代码质量 | 8 | GameScene 独立拆分；CANVAS 性能取向；BootScene 冗余；`CONTINUE_*` 拼接痕迹 |
+| D4 最小改动 | 5 | 主要在允许路径；改 `vite.config.ts`；`scripts/` 略超白名单 |
+| D5 验证意识 | 9 | 四条验收全过；preview host 对齐 Playwright |
+| D6 实现说明 | 5 | ASSETS.md 写 Kenney 风格 procedural；manifest 元数据同理 |
+
+**Judge 合计：41/60**
+
+### 综合分与等级
+
+| 指标 | 值 |
+|------|-----|
+| Gate | 40/40 |
+| Judge | 41/60 |
+| **Composite** | **81** |
+| **等级** | **A**（SR=1；**流畅度最佳**；**视觉贴图弱于 forth**） |
+
+### 关键差异与剩余缺口
+
+1. **相对 forth（同模 m2.5-pro、平台 CC）**：third（iceCoder）**更流畅**、**工程拆分更好**、**商城 meta 更完整**；forth（CC）**角色/怪物 PNG 进战斗**、87 min 更快但卡顿。
+2. **相对 second（同平台 iceCoder、m2.7）**：third SR=1、无受控中断、更流畅；second 有 scenes/overlay 拆分但 SR=0；third **同样未用 PNG 贴图**（几何体）。
+3. **性能策略**：800×600 CANVAS、特效短生命周期、召唤物 cap(3)——解释实机流畅 vs forth 卡顿。
+4. **贴图缺口**：audit 有 PNG 文件，**角色/怪物/选角立绘均未挂载**，与 prompt「精灵图或贴图」不符。
+5. **任务 bug**：`survive_no_damage` 用 `!damageTaken` 作完成条件，任务刚刷出即可判完成。
+
+### 与任务 prompt 偏差一览
+
+| 要求 | third（iceCoder）现状 |
+|------|------------|
+| 10 角色立绘/头像 | **✗** 选角纯文字 |
+| 10 技能战斗中可见可感知 | ✓ 几何特效（**非贴图**） |
+| 怪物精灵图 | **✗** 橙/红几何圈 |
+| 经验拾取 + 4 档颜色 | ✓ |
+| 升级 3 选 1 + Luck 影响 | ✓（含 damage 升级） |
+| 随机任务 45–90 秒 | 部分（固定 60s；survive 逻辑 bug） |
+| 网络下载免费素材 | ✗ 程序生成 |
+| 四条验收全 exit 0 | **达成** |
+| 网页可玩、键鼠流畅 | **✓**（实机较流畅） |
+| 商城购买下一局生效 | 部分（4/6；皮肤未接入） |
 
 ---
 
-*评分依据：[`../md/三平台同模对比评测与裁判评分体系.md`](../md/三平台同模对比评测与裁判评分体系.md) · 任务 yaml：[`../tasks/implement-spellbrigade-survivor-01.yaml`](../tasks/implement-spellbrigade-survivor-01.yaml) · 平台映射：**first = CC（Claude Code）**，**second = iceCoder***
+## Run: forth / CC / implement-spellbrigade-survivor-01
+
+> **评测日期**：2026-05-27（复测 + 实机反馈）  
+> **平台**：**CC**（Claude Code）· **代号**：forth · **模型**：`mimo2.5-pro` · **工时**：**87 min**
+
+### 实现摘要（≤150 字）
+
+在 Phaser 3 空壳上完成数据层 + **单体 `main.ts`（≈930 行）** 承载 Boot/Game 与 DOM 菜单全流程。**完整战斗循环**（10 技能、刷怪/击杀/四档经验球/升级/Luck/精英怪）。**PNG 载入画布**（角色肖像、怪物、经验球），**SR=1 批次中视觉贴图最好**。34 张程序生成 PNG 过 audit；`vite.config.ts` 修 E2E host。缺口：实机卡顿；商城除 luck 外大半未接入；`main.ts` 单体过大。
+
+### 变更文件
+
+| 文件 | 变更类型 | 一行说明 |
+|------|----------|----------|
+| `src/game/data/*.ts` | 新增 | 10 角色、3 地图、6 商城项 |
+| `src/game/systems/*.ts` | 新增 | XP/Luck/元进度/TaskScheduler（单测 mock 随机） |
+| `src/main.ts` | 重写 | Boot + GameScene + DOM 菜单/商城/选角/选图 全集中 |
+| `public/assets/**` | 新增 | 34 张程序生成 PNG + `manifest.json` |
+| `ASSETS.md` | 新增 | 声称 Kenney CC0（实为 procedural，与事实不符） |
+| `scripts/generate-assets.mjs` | 新增 | zlib 程序生成 PNG（略超 yaml 白名单） |
+| `vite.config.ts` | 修改 | `preview.host: '127.0.0.1'`，对齐 Playwright 探针 |
+
+**未改动**：`test/`、`package.json`、`package-lock.json`、`playwright.config.ts`
+
+**与 second 结构差异**：无 `src/game/scenes/` 拆分；菜单为 DOM `clearRoot()` 单页切换，非 Phaser 多场景。
+
+### Phase 完成度
+
+| Phase | 目标 | 状态 | 说明 |
+|-------|------|------|------|
+| 1 | 数据 + 单测 | **100%** | 22/22；`tasks.test.ts` mock `Math.random` |
+| 2 | 场景骨架 + testid | **≈85%** | DOM 菜单含 `data-testid`；仅 Boot/Game 两个 Phaser Scene |
+| 3 | 战斗循环 + 10 技能 | **≈90%** | 10 技能 + PNG 精灵；性能未优化 |
+| 4 | 素材 + manifest | **通过审计** | 程序生成，非 prompt 要求的网络下载 |
+| 5 | build + E2E | **100%** | 四条验收命令本机全 exit 0 |
+
+### 实机观察（2026-05-27）
+
+- 主菜单 → 选角 → 选图 → 战斗 **流程可通**，无 UI 叠层；**角色 / 怪物 PNG 贴图进战斗**，SR=1 批次中视觉最好
+- 默认刀舞士：**旋转飞刀**可见；击杀四色经验球、拾取升级 3 选 1、任务 HUD、精英怪（橙 tint）均可用
+- **性能问题（用户反馈 + 代码审查）**：游玩 **1–2 分钟后明显卡顿、掉帧**；同屏怪物无上限（刷怪间隔最低 500ms）、技能大量 `add.arc`/`add.circle` 矢量对象、手写 O(M×P) 碰撞、频繁 `delayedCall`/`getData` 是主因
+- 商城仅 **幸运护符** 写入 `luckBonus`；护盾/金币加成/武器等级/皮肤未接入开局
+
+### 验收结果
+
+| 命令 | 结果 | 说明 |
+|------|------|------|
+| `npm ci` | **未单独复跑** | 依赖已安装，推断可过 |
+| `npm test` | **PASS** (exit 0) | 22/22 |
+| `npm run build` | **PASS** (exit 0) | tsc + vite build 成功 |
+| `npm run test:e2e` | **PASS** (exit 0) | 5/5（4.2s）；`vite preview` 已绑定 `127.0.0.1` |
+
+**SR_objective = 通过**（四条验收全部 exit 0；与 third 同为 **SR=1** 批次）
+
+| 探针 | 结果 |
+|------|------|
+| boot | ✓ |
+| character-select | ✓ |
+| map-select | ✓ |
+| game-start | ✓ |
+| shop | ✓ |
+
+### 执行统计
+
+| 字段 | 值 |
+|------|-----|
+| platform | CC（Claude Code） |
+| codename | forth |
+| model | **mimo2.5-pro** |
+| turns | —（未记录 run-manifest） |
+| duration | **87 min** |
+| tool_calls | — |
+| human_assist | false（假定） |
+
+### Gate 客观门禁（0–40）
+
+| 子项 | 分值 | 判定 |
+|------|------|------|
+| G1a 单元测试 | 12/12 | 22/22 |
+| G1b 构建 | 5/5 | `npm run build` exit 0 |
+| G1c E2E | 8/8 | 5/5 通过 |
+| G2 素材合规 | 8/8 | `asset-audit.test.ts` 全绿 |
+| G3 可构建 | 4/4 | 同上 |
+| G4 无致命泄漏 | 3/3 | 无密钥 / `.env` |
+
+**Gate 合计：40/40**
+
+### Composer 2.5 裁判评分（0–60）
+
+| 维度 | 分 | evidence（摘要） |
+|------|-----|------------------|
+| D1 需求完成度 | 8 | 主路径可玩；10 技能 + PNG 进战斗；精英怪/任务较 complete；实机卡顿降体验；商城 effect 大半未接入 |
+| D2 正确性 | 7 | 单测/E2E 全绿；任务超时仍记完成；`survive_no_damage` 的 `damageTaken` 不重置；`damage_up` 升级未生效 |
+| D3 代码质量 | 6 | data/systems 分层 OK；≈930 行单体 `main.ts`；无对象池/Physics；性能反模式集中 |
+| D4 最小改动 | 5 | 主要在允许路径；改 `vite.config.ts`；`scripts/` 略超白名单 |
+| D5 验证意识 | 9 | 四条验收链全过；主动修 preview host；单测 mock 随机 |
+| D6 实现说明 | 5 | ASSETS.md 写 Kenney 与 procedural 事实不符；manifest `sourceUrl` 亦不实 |
+
+**Judge 合计：40/60**
+
+> 若计入实机性能（非 rubric 正式项）：玩家体感 **功能 A / 性能 C** → Judge 可调至 **≈38**，Composite **≈78（A-）**。
+
+### 综合分与等级
+
+| 指标 | 值 |
+|------|-----|
+| Gate | 40/40 |
+| Judge | 40/60 |
+| **Composite** | **80** |
+| **等级** | **A**（SR=1；实机性能扣分见上） |
+
+### 关键差异与剩余缺口
+
+1. **相对 first（同平台 CC、m2.7）**：forth SR=1、战斗闭环、PNG 贴图；first 不可玩、SR=0。
+2. **相对 third（同模 m2.5-pro、平台 iceCoder）**：forth（CC）胜 **角色/怪物贴图 / 工时**；third（iceCoder）胜 **流畅 / 工程拆分 / 商城 meta / Composite**。
+3. **实机卡顿根因**：刷怪无 cap + 矢量特效泛滥 + 手写全量碰撞 + Timer/`getData` 热路径。
+4. **素材策略偏离 prompt**：程序生成过 audit，文档声称 Kenney 下载。
+5. **商城半接入**：仅 `luck` effect 持久化并影响局内 Luck。
+
+### 与任务 prompt 偏差一览
+
+| 要求 | forth（CC）现状 |
+|------|------------|
+| 10 技能战斗中可见可感知 | ✓ PNG 角色 + 矢量/区域技能特效 |
+| 经验拾取 + 4 档颜色 | ✓ |
+| 升级 3 选 1 + Luck 影响 | ✓（`damage_up` 未生效） |
+| 随机任务 45–90 秒 | 部分（固定 60s 刷任务；超时判完成） |
+| 网络下载免费素材 | ✗ 程序生成 |
+| 四条验收全 exit 0 | **达成** |
+| 网页可玩、键鼠流畅 | **部分**（能玩但后期卡顿） |
+| 商城购买下一局生效 | 部分（仅 luck） |
+
+### 性能改进建议（非交付项）
+
+1. 弹道/特效改用 **sprite 对象池**，禁止无上限 `add.arc`/`add.circle`。
+2. 同屏怪物 **上限（如 40）** + 刷怪率封顶。
+3. 启用 Phaser **Arcade Physics** overlap，替代手写双重循环。
+
+---
+
+## 跨平台对比
+
+| 代号 | 平台 | 模型 | SR | Composite | 等级 | Gate | Judge | Turns | Duration | 备注 |
+|------|------|------|-----|-----------|------|------|-------|-------|----------|------|
+| first | **CC** | m2.7 | 0 | ≈59 | F | ≈33 | 26 | — | 1h 22m | 实机不可玩；E2E 1/5 |
+| second | **iceCoder** | m2.7 | 0 | 72 | B | 32 | 40 | **347** | — | 347 轮受控中断；战斗可玩；E2E 命令失败 |
+| **third** | **iceCoder** | **m2.5-pro** | **1** | **81** | **A** | **40** | **41** | — | **≈120 min** | SR=1；流畅；**角色/怪物无贴图** |
+| **forth** | **CC** | **m2.5-pro** | **1** | **80** | **A** | **40** | **40** | — | **87 min** | SR=1；**PNG 进战斗**；卡顿 |
+
+**横向要点（同任务、跨批次，须标注模型 / 平台）：**
+
+- **iceCoder（second, m2.7）相对 CC（first, m2.7）**：战斗闭环 + 全量单测；E2E 探针 5/5；综合分 +13；二者 SR=0（second 另有 `human_assist=true`）。
+- **m2.5-pro 同模跨平台：iceCoder（third）vs CC（forth）**：均 **SR=1**。third 胜 **流畅 / 工程 / 商城 / Composite（81）**；forth 胜 **角色·怪物贴图 / 工时（87 min）**。差异可归因 **平台 Harness + 实现策略**。
+- **同平台跨模：iceCoder second（m2.7）↔ third（m2.5-pro）**：third SR=1、无中断、更流畅；second 有 scenes 拆分但 SR=0；**二者战斗均未用贴图（second/third 均为几何体；贴图仅 forth 进画布）**。
+- **同平台跨模：CC first（m2.7）↔ forth（m2.5-pro）**：forth 质变（SR=1、可玩、PNG 贴图）；first 不可玩。
+- **玩家体感**：third = **功能 A + 流畅 A + 视觉 C**；forth = **功能 A + 视觉 A + 性能 C**。
+
+---
+
+*评分依据：[`../md/三平台同模对比评测与裁判评分体系.md`](../md/三平台同模对比评测与裁判评分体系.md) · 任务 yaml：[`../tasks/implement-spellbrigade-survivor-01.yaml`](../tasks/implement-spellbrigade-survivor-01.yaml) · 平台映射：**first = CC**，**second = iceCoder**，**third = iceCoder（m2.5-pro）**，**forth = CC（m2.5-pro）***
