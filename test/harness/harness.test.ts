@@ -580,7 +580,8 @@ describe('Harness - 停止钩子', () => {
       finalResponse('Tests pass, truly done'),
     ]);
 
-    const result = await harness.run('Do work', chatFn);
+    // goal 必须是工程意图，否则状态门控会跳过 hook（详见 harness-round-no-tools.ts）
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.content).toBe('Tests pass, truly done');
     expect(result.loopState.stopReason).toBe('model_done');
@@ -1628,7 +1629,8 @@ describe('Harness - 停止钩子连续干预上限', () => {
       finalResponse('done 6'),
       finalResponse('summary'),
     ]);
-    const result = await harness.run('test', chatFn);
+    // goal 必须是工程意图，否则状态门控会跳过 hook
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.loopState.stopReason).toBe('stop_hook');
   });
@@ -1655,7 +1657,7 @@ describe('Harness - 停止钩子连续干预上限', () => {
       finalResponse('done 3'),   // hook says stop → model_done
       finalResponse('summary'),
     ]);
-    const result = await harness.run('test', chatFn);
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
   });
@@ -1687,7 +1689,7 @@ describe('Harness - 停止钩子连续干预上限', () => {
       finalResponse('next step'),
       finalResponse('next step'),
     ]);
-    const result = await harness.run('test', chatFn);
+    const result = await harness.run('实现登录功能', chatFn);
 
     expect(result.loopState.stopReason).toBe('stop_hook');
     expect(result.loopState.currentRound).toBeGreaterThanOrEqual(8);

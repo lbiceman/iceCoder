@@ -259,7 +259,25 @@ export async function handleNoToolCalls(
 
   state.emptyResponseRetryCount = 0;
 
-  if (deps.stopHookManager.count > 0) {
+  const taskSnap = state.taskState.snapshot();
+  const repoSnap = state.repoContext.snapshot();
+  const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
+  const pendingWork = hasPendingWork(taskSnap, repoSnap, state.taskAcceptance);
+  const latestUserText = getLatestRealUserText(msgs, userMessage);
+  const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
+  const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
+
+  // 状态门控：以下任一成立 → 跳过 stop hook
+  // 1) 问答 / 查看类意图（casual harness）
+  // 2) 文档类意图（写 README / 总结类）
+  // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
+  // prematureCompletionRecovery 会接管真正有 pendingWork 的早停场景。
+  const skipStopHook =
+    shouldApplyCasualHarness(taskSnap.intent)
+    || taskSnap.intent === 'docs'
+    || (!pendingWork && hasToolCallSinceUser);
+
+  if (deps.stopHookManager.count > 0 && !skipStopHook) {
     const hookText = [response.content, response.reasoningContent].filter(Boolean).join('\n');
     const hookResult = await deps.stopHookManager.execute(msgs, hookText);
     if (hookResult.shouldContinue && hookResult.message) {
@@ -295,13 +313,6 @@ export async function handleNoToolCalls(
       return { action: 'continue' };
     }
   }
-
-  const taskSnap = state.taskState.snapshot();
-  const repoSnap = state.repoContext.snapshot();
-  const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
-  const pendingWork = hasPendingWork(taskSnap, repoSnap, state.taskAcceptance);
-  const latestUserText = getLatestRealUserText(msgs, userMessage);
-  const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
 
   if (
     currentTools.length > 0

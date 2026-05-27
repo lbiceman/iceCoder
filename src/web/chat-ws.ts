@@ -17,6 +17,7 @@ import { formatFriendlyError } from '../cli/friendly-errors.js';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
+import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
@@ -673,22 +674,10 @@ async function handleChatMessage(
 
   const harness = new Harness(harnessConfig, runToolExecutor);
 
-  // 注册默认停止钩子：检查模型是否过早停止
-  harness.getStopHookManager().register(async (_messages, lastContent) => {
-    const incompleteSignals = [
-      '我需要继续', '接下来我会', '下一步是', '还需要', '未完成',
-      'I need to', 'next step', 'will update', 'will fix', 'need to update',
-      'Let me update', 'manifest', 'colorVariance', 'npm test',
-    ];
-    const hasIncomplete = incompleteSignals.some(s => lastContent.includes(s));
-    return {
-      shouldContinue: hasIncomplete,
-      message: hasIncomplete
-        ? 'You identified unfinished work. Continue by calling tools now — do not stop with analysis only.'
-        : undefined,
-      hookName: 'incomplete_task_check',
-    };
-  });
+  // 注册默认停止钩子：模型自承未完成时拉回工具调用（意图过滤由 Harness 状态门控承担）
+  harness.getStopHookManager().register(async (messages, lastContent) =>
+    evaluateIncompleteTaskStopHook(messages, lastContent),
+  );
 
   // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
   const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];

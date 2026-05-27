@@ -35,19 +35,23 @@
 
 | 代号 | 平台 | 工作目录 | 状态 |
 |------|------|----------|------|
-| first | 待揭晓 | `E:\test\agentToolTest\implement-spellbrigade-survivor-first` | ✅ 已评 |
-| second | 待揭晓 | `E:\test\agentToolTest\implement-spellbrigade-survivor-second` | 待评 |
+| first | **CC**（Claude Code） | `E:\test\agentToolTest\implement-spellbrigade-survivor-first` | ✅ 已评 |
+| second | **iceCoder** | `E:\test\agentToolTest\implement-spellbrigade-survivor-second` | ✅ 已评 |
+
+> 两个参测产物目录结构相同，仅文件夹后缀不同。裁判阶段使用代号盲评；**平台身份已解盲**（**first = CC**，**second = iceCoder**）。
 
 **参测约定**
 
 - 模型：**`minimax-m2.7`**（first、second **均使用 2.7**；与评分体系设计稿中的 `minimax-m2.5` 不一致，跨批次对比须标注）
-- iceCoder：`adaptive`（若适用）
+- iceCoder：`adaptive`（仅 second / iceCoder run 适用）
 
-**模型控制说明**：first / second 同模（2.7），二者差异可归因于 **平台 / Harness / 人工介入**，而非模型版本。
+**模型控制说明**：first / second 同模（2.7），二者差异可归因于 **平台 / Harness / 受控中断**，而非模型版本。
+
+**iceCoder run 执行上限**：会话 **347 轮**（达到 Harness 轮次上限）后 **受控中断**；恢复后继续至交付。
 
 ---
 
-## Run: first / implement-spellbrigade-survivor-01
+## Run: first / CC / implement-spellbrigade-survivor-01
 
 ### 实现摘要（≤150 字）
 
@@ -106,7 +110,7 @@
 
 | 字段 | 值 |
 |------|-----|
-| platform | 待揭晓 |
+| platform | CC（Claude Code） |
 | turns | —（未记录 run-manifest） |
 | duration | **1h 22m**（82 min） |
 | tool_calls | — |
@@ -162,7 +166,7 @@
 
 ### 与任务 prompt 偏差一览
 
-| 要求 | first 现状 |
+| 要求 | CC（first）现状 |
 |------|-----------|
 | 10 技能战斗中可见可感知 | 仅文字标签 |
 | 经验拾取 + 4 档颜色 | 球会刷，不可拾取 |
@@ -173,21 +177,154 @@
 
 ---
 
-## Run: second / implement-spellbrigade-survivor-01
+## Run: second / iceCoder / implement-spellbrigade-survivor-01
 
-（待填）
+> **评测日期**：2026-05-26（复评）  
+> **`human_assist=true`**：run 在 **347 轮**达到 Harness 轮次上限后 **受控中断**；恢复后继续完成 Phase 3–5。
 
-> second 中间中断一次，用户手动输入「继续」——若参测，须记 `human_assist=true` 并在分档旁标注。
+### 实现摘要（≤150 字）
+
+完成 Phaser 3 全流程：数据层 + 6 场景、**完整战斗循环**（10 技能自动攻击、刷怪/击杀/四档经验球拾取/升级 3 选 1/Luck 加成、TaskScheduler 接入 GameScene）。各菜单场景按需挂载 **HTML overlay**（含 `data-testid`），避免 CC（first）的全屏叠层。29 张程序生成 PNG 过 asset-audit。缺口：素材未网络下载；场景仍用几何图形非 PNG；商城部分 effect 未接入战斗；`elite_kill` 任务不可完成。
+
+### 变更文件
+
+| 文件 | 变更类型 | 一行说明 |
+|------|----------|----------|
+| `src/game/data/*.ts` | 新增 | 10 角色、3 地图、6 商城项 |
+| `src/game/systems/*.ts` | 新增 | XP/Luck/元进度/TaskScheduler（单测可 mock 随机） |
+| `src/game/scenes/*.ts` | 新增 | Boot/Menu/Select/Map/Game/Shop 六场景 + 场景级 E2E overlay |
+| `src/main.ts` | 重写 | 标准 Phaser bootstrap，无 `showAllScreens` |
+| `public/assets/**` | 新增 | 29 张程序生成 PNG + `manifest.json` |
+| `ASSETS.md` | 新增 | 声明 pngjs 程序生成（与 manifest sourceUrl 不一致） |
+| `scripts/final.mjs` | 新增 | 清理临时验证脚本（略超 yaml 白名单） |
+
+**未改动**：`test/`、`package.json`、`package-lock.json`、`vitest.config.ts`、`playwright.config.ts`
+
+**遗留**：工作区含 `node_modules_old/`（依赖调试残留，非交付必需）
+
+### Phase 完成度
+
+| Phase | 目标 | 状态 | 说明 |
+|-------|------|------|------|
+| 1 | 数据 + 单测 | **100%** | 22/22 全绿；`tasks.test.ts` 用 `vi.spyOn(Math.random)` 稳定 kill_count 路径 |
+| 2 | 场景骨架 + testid | **≈90%** | 各场景独立 overlay；Shop 用隐藏 div testid |
+| 3 | 战斗循环 + 10 技能 | **≈85%** | `GameScene` 完整 loop；10 技能均有几何特效；PNG 未载入画布 |
+| 4 | 素材 + manifest | **通过审计** | 程序生成，非 prompt 要求的网络下载 |
+| 5 | build + E2E | **部分** | build ✓；E2E 探针 5/5（server 可达时）；`npm run test:e2e` 命令 webServer 超时 |
+
+### 实机观察（2026-05-26）
+
+- 主菜单 → 选角 → 选图 → 战斗 **流程可通**，无 UI 叠层
+- 默认刀舞士：**旋转飞刀**可见；击杀掉四色经验球、靠近吸附拾取、升级弹出 3 选 1 面板
+- 随机任务标题会出现在 HUD；`elite_kill` / `survive_no_damage` 类型逻辑不完整
+- 战斗内仍为 **Circle/Rect 占位**，未使用 `public/assets/` 中 PNG
+
+### 验收结果
+
+| 命令 | 结果 | 说明 |
+|------|------|------|
+| `npm ci` | **PASS** (exit 0) | 复跑 `npm ci` 成功 |
+| `npm test` | **PASS** (exit 0) | 22/22 |
+| `npm run build` | **PASS** (exit 0) | tsc + vite build 成功 |
+| `npm run test:e2e` | **FAIL** (exit 1) | webServer 120s 超时；根因见下 |
+
+**SR_objective = 失败**（`npm run test:e2e` 未 exit 0；且 **`human_assist=true`**）
+
+#### E2E 超时根因（评测环境复现）
+
+Playwright `webServer.url` 探针为 `http://127.0.0.1:4173`，而 `vite preview --port 4173` 默认仅监听 `localhost`（本机 `http://localhost:4173/` 返回 200，`http://127.0.0.1:4173/` 不可达）。`playwright.config.ts` **未被 agent 修改**。
+
+**探针复测**（手动 `npx vite preview --host 127.0.0.1 --port 4173 --strictPort` 后执行 `npx playwright test`）：**5/5 通过**（4.8s）。
+
+| 探针 | 结果 |
+|------|------|
+| boot | ✓ |
+| character-select | ✓ |
+| map-select | ✓ |
+| game-start | ✓ |
+| shop | ✓ |
+
+### 执行统计
+
+| 字段 | 值 |
+|------|-----|
+| platform | iceCoder（adaptive） |
+| turns | **347**（达 Harness 轮次上限） |
+| duration | — |
+| tool_calls | — |
+| human_assist | **true**（**受控中断**后恢复） |
+| abort_reason | **受控中断**（max turns） |
+
+### Gate 客观门禁（0–40）
+
+| 子项 | 分值 | 判定 |
+|------|------|------|
+| G1a 单元测试 | 12/12 | 22/22 |
+| G1b 构建 | 5/5 | `npm run build` exit 0 |
+| G1c E2E | **0/8** | `npm run test:e2e` 命令 exit 1（webServer 超时，0 用例执行） |
+| G2 素材合规 | 8/8 | `asset-audit.test.ts` 全绿 |
+| G3 可构建 | 4/4 | 同上 |
+| G4 无致命泄漏 | 3/3 | 无密钥 / `.env` |
+
+**Gate 合计：32/40**
+
+> G1 按四条命令计 **3/4 通过 → ≈18.75/25**；G1c 按探针实质能力可记 **8/8**，但严格以命令 exit code 计为 0。
+
+### Composer 2.5 裁判评分（0–60）
+
+| 维度 | 分 | evidence（摘要） |
+|------|-----|------------------|
+| D1 需求完成度 | 7 | 主路径可玩；10 技能有战斗表现；升级/拾取/任务 HUD 接入；缺网络素材、商城 effect 未全接入、精英任务不可完成 |
+| D2 正确性 | 7 | 单测全绿；TaskScheduler 单测 mock 随机；`damageTaken` 不重置致 survive 任务失真；`eliteKills` 恒 0 |
+| D3 代码质量 | 7 | data/systems/scenes 分层清晰；场景级 overlay 优于 CC（first）；`GameScene` 偏大但 switch 技能可读 |
+| D4 最小改动 | 5 | 主要在允许路径；`scripts/`、`node_modules_old/` 有调试残留 |
+| D5 验证意识 | 8 | 单测/E2E 迭代明显；最终四条验收链在 E2E webServer 环节未自修 |
+| D6 实现说明 | 6 | ASSETS.md 诚实写 procedural；manifest `sourceUrl` 仍写 opengameart |
+
+**Judge 合计：40/60**
+
+### 综合分与等级
+
+| 指标 | 值 |
+|------|-----|
+| Gate | 32/40 |
+| Judge | 40/60 |
+| **Composite** | **72** |
+| **等级** | **B**（质量可用；SR 因验收命令 + human_assist 记失败） |
+
+> 标注 **`human_assist=true`**，不参与同档横向 SR 排名。若 E2E webServer 按 starter 缺陷豁免且四条全过 → Gate≈40、Composite≈**80（A）**。
+
+### 关键差异与剩余缺口
+
+1. **相对 CC（first）的质变**：战斗闭环完整（技能/击杀/拾取/升级/任务调度），E2E 探针逻辑正确。
+2. **E2E 命令失败**：非用例逻辑问题，而是 vite preview 绑定地址与 Playwright 探针不一致（starter 级配置问题）。
+3. **任务系统半接入**：`elite_kill` 无精英怪；`survive_no_damage` 的 `damageTaken` 未按 tick 重置。
+4. **素材策略偏离 prompt**：程序生成过 audit，manifest 元数据与 ASSETS.md 不一致。
+5. **受控中断**：347 轮触顶后 Harness 中断；恢复后才跑完 Phase 3–5，记 `human_assist=true`，违反 v1.1 零介入纪律。
+
+### 与任务 prompt 偏差一览
+
+| 要求 | iceCoder（second）现状 |
+|------|------------|
+| 10 技能战斗中可见可感知 | ✓ 几何特效（非 PNG 精灵） |
+| 经验拾取 + 4 档颜色 | ✓ |
+| 升级 3 选 1 + Luck 影响 | ✓ |
+| 随机任务 45–90 秒 | 部分（调度有，elite/survive 类型未完成） |
+| 网络下载免费素材 | ✗ 程序生成 |
+| 四条验收全 exit 0 | **未达成**（E2E 命令） |
+| 零人工介入 | **未达成**（347 轮受控中断，`human_assist=true`） |
 
 ---
 
-## 跨平台对比（待 second 完成后汇总）
+## 跨平台对比
 
-| 代号 | SR | Composite | 等级 | Gate | Judge | Duration | 备注 |
-|------|-----|-----------|------|------|-------|----------|------|
-| first | 0 | ≈59 | F | ≈33 | 26 | 1h 22m | 实机不可玩；E2E 1/5 |
-| second | — | — | — | — | — | — | 待评 |
+| 代号 | 平台 | SR | Composite | 等级 | Gate | Judge | Turns | Duration | 备注 |
+|------|------|-----|-----------|------|------|-------|-------|----------|------|
+| first | **CC** | 0 | ≈59 | F | ≈33 | 26 | — | 1h 22m | 实机不可玩；E2E 1/5 |
+| second | **iceCoder** | 0 | 72 | B | 32 | 40 | **347** | — | 347 轮受控中断；战斗可玩；E2E 探针 5/5（server 可达时） |
+
+**iceCoder（second）相对 CC（first）要点**：完成战斗闭环与全量单测；E2E 从 1/5 提升至探针 5/5；综合分 +13。仍共享 SR=0（CC 验收失败；iceCoder 验收命令未全过 + 347 轮受控中断）。
 
 ---
 
-*评分依据：[`../md/三平台同模对比评测与裁判评分体系.md`](../md/三平台同模对比评测与裁判评分体系.md) · 任务 yaml：[`../tasks/implement-spellbrigade-survivor-01.yaml`](../tasks/implement-spellbrigade-survivor-01.yaml)*
+*评分依据：[`../md/三平台同模对比评测与裁判评分体系.md`](../md/三平台同模对比评测与裁判评分体系.md) · 任务 yaml：[`../tasks/implement-spellbrigade-survivor-01.yaml`](../tasks/implement-spellbrigade-survivor-01.yaml) · 平台映射：**first = CC（Claude Code）**，**second = iceCoder***
