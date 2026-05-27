@@ -854,7 +854,7 @@ test/web/chat-ws-switch-session.test.ts
 | clear 逻辑           | `src/web/chat-ws.ts:417-427`, `src/public/js/chat-page.js:136-147`            |
 | Sessions API       | `src/web/routes/sessions.ts`                                                  |
 | Harness sessionId  | `src/harness/types.ts` (`HarnessConfig.sessionId`)                            |
-| Checkpoint 路径      | `src/harness/checkpoint.ts` — ``${sessionId}.checkpoint.json``                |
+| Checkpoint 路径      | `src/harness/checkpoint.ts` — `${sessionId}.checkpoint.json`                  |
 | 侧栏样式参考             | `src/public/css/style.css` — `.memory-sidebar`                                |
 | 顶栏品牌区              | `src/public/index.html` — `.nav-brand` / `.logo-text`                         |
 | 响应式断点参考            | `src/public/css/style.css` — `@media (max-width: 640px)`（顶栏）；侧栏以 **768px** 为准 |
@@ -980,13 +980,13 @@ test/web/chat-ws-switch-session.test.ts
 ### 14.3 小问题 / 文案修正
 
 
-| #   | 位置                       | 问题                                                                                                          | 建议                                                                                                                     |
-| --- | ------------------------ | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| S1  | §2.1 `chat-session.js`   | 说 `localStorage` 键 `ice-chat-messages` 是"单份" — 准确，但未说明迁移策略                                                  | 补充：多会话后 localStorage 键改为 `ice-chat-messages-{sessionId}`，旧 `ice-chat-messages` 数据在首次加载时迁移到 `ice-chat-messages-default` |
-| S2  | §2.1 `chat-websocket.js` | 说"无 session 切换协议" — 准确                                                                                      | 无需修改                                                                                                                   |
-| S3  | §5.3 进程内状态               | `structuredCache` 用 `Map<string, UnifiedMessage[]>`，但当前是 `let cachedMessages: UnifiedMessage[] | undefined` | 建议说明：Map 的 value 类型沿用现有 `UnifiedMessage[]`，只从单变量升级为 Map                                                                |
-| S4  | §6.2 修改文件表               | `main.js 或路由"进入聊天页时显示汉堡（窄屏）；离开聊天页时 hidden"` — 用词模糊                                                          | 明确：在 `app.js`（路由入口）的页面切换回调中控制汉堡按钮可见性                                                                                   |
-| S5  | §11.3 Step 8             | 说"CSS 写在 style.css 顶部注释区块" — 项目现有 CSS 是按功能区块排列，没有"顶部注释区块"的惯例                                                | 建议改为"CSS 写在 `style.css` 末尾，用 `/* === Chat Session Sidebar === */` 注释分隔"                                                |
+| #   | 位置                       | 问题                                                                                             | 建议                                                                                                                     |
+| --- | ------------------------ | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| S1  | §2.1 `chat-session.js`   | 说 `localStorage` 键 `ice-chat-messages` 是"单份" — 准确，但未说明迁移策略                                     | 补充：多会话后 localStorage 键改为 `ice-chat-messages-{sessionId}`，旧 `ice-chat-messages` 数据在首次加载时迁移到 `ice-chat-messages-default` |
+| S2  | §2.1 `chat-websocket.js` | 说"无 session 切换协议" — 准确                                                                         | 无需修改                                                                                                                   |
+| S3  | §5.3 进程内状态               | `structuredCache` 用 `Map<string, UnifiedMessage[]>`，但当前是 `let cachedMessages: UnifiedMessage[] | undefined`                                                                                                             |
+| S4  | §6.2 修改文件表               | `main.js 或路由"进入聊天页时显示汉堡（窄屏）；离开聊天页时 hidden"` — 用词模糊                                             | 明确：在 `app.js`（路由入口）的页面切换回调中控制汉堡按钮可见性                                                                                   |
+| S5  | §11.3 Step 8             | 说"CSS 写在 style.css 顶部注释区块" — 项目现有 CSS 是按功能区块排列，没有"顶部注释区块"的惯例                                   | 建议改为"CSS 写在 `style.css` 末尾，用 `/* === Chat Session Sidebar === */` 注释分隔"                                                |
 
 
 ### 14.4 总结

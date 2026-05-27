@@ -138,7 +138,18 @@ window.ChatWebSocket = (function () {
         emit('tunnel_ready', { url: data.url || '' });
         break;
       case 'confirm':
-        emit('confirm', { toolName: data.toolName, args: data.args });
+        emit('confirm', { confirmId: data.confirmId, toolName: data.toolName, args: data.args });
+        break;
+      case 'confirm_resolved':
+        emit('confirm_resolved', {
+          confirmId: data.confirmId || '',
+          toolName: data.toolName || '',
+          approved: !!data.approved,
+          reason: data.reason || 'reply',
+        });
+        break;
+      case 'confirm_timeout':
+        emit('confirm_timeout', { confirmId: data.confirmId || '', toolName: data.toolName || '' });
         break;
       case 'tokenUsage':
         emit('tokenUsage', { inputTokens: data.inputTokens || 0, outputTokens: data.outputTokens || 0 });
@@ -185,8 +196,10 @@ window.ChatWebSocket = (function () {
     send({ type: 'stop' });
   }
 
-  function sendConfirmReply(approved) {
-    send({ type: 'confirm_reply', approved: approved });
+  function sendConfirmReply(approved, confirmId) {
+    var payload = { type: 'confirm_reply', approved: approved };
+    if (confirmId) payload.confirmId = confirmId;
+    send(payload);
   }
 
   function scheduleReconnect() {

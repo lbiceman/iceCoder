@@ -228,6 +228,15 @@ window.ChatUI = (function () {
     liveToolRoundCount = 0;
   }
 
+  /** 移除当前 live 工具区 DOM（F5 还原前清掉缓存占位，避免重复） */
+  function clearLiveToolRoundDom() {
+    liveToolRoundActive = false;
+    if (liveToolRoundRoot && liveToolRoundRoot.parentNode) {
+      liveToolRoundRoot.parentNode.removeChild(liveToolRoundRoot);
+    }
+    resetLiveToolRoundTargets();
+  }
+
   function setLiveToolRoundActive(active) {
     liveToolRoundActive = active;
   }
@@ -449,6 +458,7 @@ window.ChatUI = (function () {
     appendToolAction: appendToolAction,
     updateLastToolAction: updateLastToolAction,
     resetLiveToolRoundTargets: resetLiveToolRoundTargets,
+    clearLiveToolRoundDom: clearLiveToolRoundDom,
     setLiveToolRoundActive: setLiveToolRoundActive,
     setStreamingState: setStreamingState,
     getInputValue: getInputValue,

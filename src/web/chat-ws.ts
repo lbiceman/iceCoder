@@ -165,6 +165,36 @@ export function getSessionsDir(): string {
  */
 let activeAbortController: AbortController | null = null;
 
+// ─────────────────────────────────────────────────────────────
+// 方案 B4 — 多端 confirm：first-win 协议
+// confirm 广播给所有订阅者，任意端 reply 一次即生效，并向所有端广播 confirm_resolved 关闭对话框。
+// ─────────────────────────────────────────────────────────────
+interface PendingConfirm {
+  sessionId: string;
+  toolName: string;
+  resolve: (approved: boolean) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+const pendingConfirms = new Map<string, PendingConfirm>();
+let nextConfirmIdCounter = 1;
+function nextConfirmId(): string {
+  return `c-${Date.now().toString(36)}-${(nextConfirmIdCounter++).toString(36)}`;
+}
+function resolveConfirm(confirmId: string, approved: boolean, reason: 'reply' | 'timeout'): void {
+  const entry = pendingConfirms.get(confirmId);
+  if (!entry) return;
+  pendingConfirms.delete(confirmId);
+  clearTimeout(entry.timer);
+  broadcastToSession(entry.sessionId, {
+    type: 'confirm_resolved',
+    confirmId,
+    toolName: entry.toolName,
+    approved,
+    reason,
+  });
+  entry.resolve(approved);
+}
+
 /** 保存结构化消息到磁盘（防抖，避免频繁写入） */
 const saveTimerMap = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -255,6 +285,227 @@ export interface ChatWSOptions {
 
 /** 当前所有聊天 WebSocket 客户端（PC + 移动端），用于会话持久化后通知其它端拉取 default.json */
 const chatClients = new Set<WebSocket>();
+
+/**
+ * 方案 B：按 sessionId 订阅的实时事件分发集合。
+ * - 每个 WS 连上时默认订阅 `activeSessionId`
+ * - `switch_session` 时换订阅
+ * - WS 关闭时从所有订阅集移除
+ *
+ * 与 `chatClients` 并存：`chatClients` 用于全局通知（mcp_ready / tunnel_ready / session_updated），
+ * `sessionSubscribers` 用于实时任务事件（step / stream / stream_end / response / pulse / tokenUsage / confirm 等）。
+ */
+const sessionSubscribers = new Map<string, Set<WebSocket>>();
+/** WS → 当前订阅的 sessionId，便于 close / switch 时反查清理 */
+const wsToSubscribedSession = new WeakMap<WebSocket, string>();
+
+function subscribeWsToSession(ws: WebSocket, sessionId: string): void {
+  const prev = wsToSubscribedSession.get(ws);
+  if (prev === sessionId) return;
+  if (prev) {
+    const prevSet = sessionSubscribers.get(prev);
+    if (prevSet) {
+      prevSet.delete(ws);
+      if (prevSet.size === 0) sessionSubscribers.delete(prev);
+    }
+  }
+  let set = sessionSubscribers.get(sessionId);
+  if (!set) {
+    set = new Set();
+    sessionSubscribers.set(sessionId, set);
+  }
+  set.add(ws);
+  wsToSubscribedSession.set(ws, sessionId);
+}
+
+function unsubscribeWsFromAll(ws: WebSocket): void {
+  const sid = wsToSubscribedSession.get(ws);
+  if (!sid) return;
+  const set = sessionSubscribers.get(sid);
+  if (set) {
+    set.delete(ws);
+    if (set.size === 0) sessionSubscribers.delete(sid);
+  }
+  wsToSubscribedSession.delete(ws);
+}
+
+/**
+ * 向某 session 的所有订阅者广播一条 JSON。
+ * 任务事件（step / stream 等）必须通过此函数下发，
+ * 否则 F5 / 移动端扫码 / 切页面后新连上的 WS 将收不到当前任务进度。
+ */
+function broadcastToSession(sessionId: string, data: unknown): void {
+  const set = sessionSubscribers.get(sessionId);
+  if (!set || set.size === 0) return;
+  const body = JSON.stringify(data);
+  for (const ws of set) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(body);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 方案 B2 — 运行中回合快照（per session）
+// 新 WS 连上时随 `connected` 包发回，供前端无缝还原 UI（流式文本 / 冰豆 / 工具时间线 / 执行计划等）。
+// ─────────────────────────────────────────────────────────────
+interface RunningTurnSnapshot {
+  isProcessing: boolean;
+  iteration: number;
+  streamingText: string;
+  toolTimeline: { toolName: string; detail: string; status: string }[];
+  petState: string;
+  petBubble: string;
+  petStatusText: string;
+  lastInputTokens: number;
+  lastOutputTokens: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  startedAt: number;
+  /** 重放的执行计划 / 任务图 / 执行模式相关 step 事件，前端按现有 bridge 喂回即可重建 UI */
+  planEvents: Array<{ type: string; [k: string]: unknown }>;
+}
+
+const runningTurns = new Map<string, RunningTurnSnapshot>();
+
+function createEmptyRunningTurn(): RunningTurnSnapshot {
+  return {
+    isProcessing: true,
+    iteration: 0,
+    streamingText: '',
+    toolTimeline: [],
+    petState: 'thinking',
+    petBubble: '',
+    petStatusText: '',
+    lastInputTokens: 0,
+    lastOutputTokens: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    startedAt: Date.now(),
+    planEvents: [],
+  };
+}
+
+function getRunningTurn(sessionId: string): RunningTurnSnapshot | undefined {
+  return runningTurns.get(sessionId);
+}
+
+function ensureRunningTurn(sessionId: string): RunningTurnSnapshot {
+  let t = runningTurns.get(sessionId);
+  if (!t) {
+    t = createEmptyRunningTurn();
+    runningTurns.set(sessionId, t);
+  }
+  return t;
+}
+
+function toolArgsDetailPreview(toolArgs: Record<string, unknown> | undefined): string {
+  if (!toolArgs || typeof toolArgs !== 'object') return '';
+  const direct = toolArgs.path || toolArgs.file || toolArgs.command || toolArgs.query;
+  if (typeof direct === 'string' && direct) return direct;
+  try {
+    const argsStr = JSON.stringify(toolArgs);
+    return argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+  } catch {
+    return '';
+  }
+}
+
+function snapshotRunningTurn(sessionId: string): RunningTurnSnapshot | null {
+  const t = getRunningTurn(sessionId);
+  if (!t) return null;
+  return {
+    ...t,
+    toolTimeline: t.toolTimeline.map((row) => ({ ...row })),
+    planEvents: t.planEvents.map((ev) => ({ ...ev })),
+  };
+}
+
+function clearRunningTurn(sessionId: string): void {
+  runningTurns.delete(sessionId);
+}
+
+/** 把一条 step 事件 fold 进运行中快照，便于新订阅者重建 UI */
+function foldStepIntoRunningTurn(sessionId: string, event: any): void {
+  const t = ensureRunningTurn(sessionId);
+  if (!event || typeof event !== 'object') return;
+
+  if (typeof event.iteration === 'number' && event.iteration > t.iteration) {
+    t.iteration = event.iteration;
+  }
+  if (event.totalTokenUsage) {
+    if (typeof event.totalTokenUsage.inputTokens === 'number') {
+      t.lastInputTokens = event.totalTokenUsage.inputTokens;
+    }
+    if (typeof event.totalTokenUsage.outputTokens === 'number') {
+      t.lastOutputTokens = event.totalTokenUsage.outputTokens;
+    }
+  }
+
+  switch (event.type) {
+    case 'stream_delta':
+      if (typeof event.delta === 'string') {
+        t.streamingText += event.delta;
+        t.petState = 'read';
+      }
+      break;
+    case 'thinking':
+      t.petState = 'thinking';
+      if (typeof event.content === 'string') t.petBubble = event.content;
+      break;
+    case 'tool_call':
+      if (event.toolName) {
+        t.toolTimeline.push({
+          toolName: String(event.toolName),
+          detail: toolArgsDetailPreview(event.toolArgs),
+          status: 'pending',
+        });
+        t.petState = 'working';
+      }
+      break;
+    case 'tool_result':
+      if (event.toolName) {
+        for (let i = t.toolTimeline.length - 1; i >= 0; i--) {
+          const row = t.toolTimeline[i];
+          if (row.toolName === event.toolName && row.status === 'pending') {
+            row.status = event.toolOutcome === 'policy_block'
+              ? 'warn'
+              : (event.toolSuccess ? 'success' : 'error');
+            break;
+          }
+        }
+      }
+      break;
+    case 'tool_progress':
+      if (typeof event.content === 'string') {
+        t.petBubble = event.content;
+        t.petStatusText = event.content;
+      }
+      t.petState = 'working';
+      break;
+    case 'execution_plan_init':
+    case 'execution_plan_update':
+    case 'execution_plan_clear':
+    case 'task_graph_init':
+    case 'task_graph_node':
+    case 'task_graph_update':
+    case 'task_graph_branch':
+    case 'task_graph_done':
+    case 'execution_mode_enter':
+    case 'execution_mode_exit':
+      t.planEvents.push({ ...event });
+      if (t.planEvents.length > 200) {
+        t.planEvents.splice(0, t.planEvents.length - 200);
+      }
+      break;
+    default:
+      break;
+  }
+}
 
 /** MCP 后台初始化完成后的最新状态（晚到的 WS 连接可从 connected 包中补齐） */
 let mcpReadySnapshot: {
@@ -384,10 +635,10 @@ async function finalizeDirectBrowserTurn(
   }
   entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
   await appendMessages(entries, sid);
-  broadcastSessionUpdated('turn_complete', ws);
+  broadcastSessionUpdated('turn_complete', undefined, ws);
 
   if (opts.syntheticTool) {
-    sendJSON(ws, {
+    broadcastToSession(sid, {
       type: 'step',
       step: {
         type: 'tool_call',
@@ -395,7 +646,7 @@ async function finalizeDirectBrowserTurn(
         toolArgs: opts.syntheticTool.toolDetail ? { path: opts.syntheticTool.toolDetail } : {},
       },
     });
-    sendJSON(ws, {
+    broadcastToSession(sid, {
       type: 'step',
       step: {
         type: 'tool_result',
@@ -406,15 +657,17 @@ async function finalizeDirectBrowserTurn(
     });
   }
 
-  sendJSON(ws, { type: 'stream_end' });
-  sendJSON(ws, { type: 'response', content: opts.assistantContent });
-  sendJSON(ws, {
+  broadcastToSession(sid, { type: 'stream_end' });
+  broadcastToSession(sid, { type: 'response', content: opts.assistantContent });
+  broadcastToSession(sid, {
     type: 'tokenUsage',
     inputTokens: 0,
     outputTokens: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
   });
+  // 确定性短路不进入 handleChatMessage 的 lifecycle，必须显式清理快照
+  clearRunningTurn(sid);
 }
 
 /**
@@ -462,11 +715,14 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
   // 处理 WebSocket 连接（PC 和移动端统一处理）
   wss.on('connection', async (ws: WebSocket) => {
     chatClients.add(ws);
+    subscribeWsToSession(ws, activeSessionId);
     ws.once('close', () => {
       chatClients.delete(ws);
+      unsubscribeWsFromAll(ws);
     });
 
     const features = { executionPlan: true };
+    const runningTurn = snapshotRunningTurn(activeSessionId);
     try {
       const meta = await resolveDefaultChatModelMeta();
         sendJSON(ws, {
@@ -477,6 +733,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           ...(meta ? { modelContext: meta } : {}),
           ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
           ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
+          ...(runningTurn ? { runningTurn } : {}),
       });
     } catch {
       sendJSON(ws, {
@@ -486,7 +743,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         activeSessionId,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
+        ...(runningTurn ? { runningTurn } : {}),
       });
+    }
+    if (runningTurn?.isProcessing) {
+      sendJSON(ws, { type: 'status', status: 'processing' });
     }
 
     let isProcessing = false;
@@ -499,6 +760,24 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
         if (msg.type === 'ping') {
           sendJSON(ws, { type: 'pong' });
+          return;
+        }
+
+        // 方案 B4：confirm 多端 first-win
+        if (msg.type === 'confirm_reply') {
+          const cid = typeof msg.confirmId === 'string' ? msg.confirmId : '';
+          if (cid && pendingConfirms.has(cid)) {
+            resolveConfirm(cid, !!msg.approved, 'reply');
+          } else if (!cid && pendingConfirms.size > 0) {
+            // 兼容旧客户端（不带 confirmId）：取该 session 下最早的一个 pending
+            const subscribedSid = wsToSubscribedSession.get(ws) || activeSessionId;
+            for (const [k, entry] of pendingConfirms) {
+              if (entry.sessionId === subscribedSid) {
+                resolveConfirm(k, !!msg.approved, 'reply');
+                break;
+              }
+            }
+          }
           return;
         }
 
@@ -542,11 +821,15 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           activeSessionId = targetId;
           const loaded = await loadStructuredMessages(activeSessionId);
           setCachedMessages(activeSessionId, loaded ?? []);
+          // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
+          subscribeWsToSession(ws, activeSessionId);
+          const newRunningTurn = snapshotRunningTurn(activeSessionId);
           sendJSON(ws, {
             type: 'session_switched',
             ok: true,
             sessionId: activeSessionId,
             ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
+            ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
           });
           console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
           return;
@@ -561,28 +844,33 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           }
 
           isProcessing = true;
-          sendJSON(ws, { type: 'status', status: 'processing' });
+          const runSid = activeSessionId;
+          ensureRunningTurn(runSid);
+          broadcastToSession(runSid, { type: 'status', status: 'processing' });
 
           try {
             const inlineImages: string[] = Array.isArray(msg.images) ? msg.images : [];
             await handleChatMessage(ws, msg.content || '', orchestrator, toolRegistry, toolExecutor, inlineImages);
           } catch (err) {
-            sendJSON(ws, { type: 'error', message: formatFriendlyError(err) });
+            broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
           }
 
           // 处理队列中的待发消息
           while (pendingMessages.length > 0) {
             const pending = pendingMessages.shift()!;
-            sendJSON(ws, { type: 'status', status: 'processing' });
+            const nextSid = activeSessionId;
+            ensureRunningTurn(nextSid);
+            broadcastToSession(nextSid, { type: 'status', status: 'processing' });
             try {
               await handleChatMessage(ws, pending.content, orchestrator, toolRegistry, toolExecutor, pending.images);
             } catch (err) {
-              sendJSON(ws, { type: 'error', message: formatFriendlyError(err) });
+              broadcastToSession(nextSid, { type: 'error', message: formatFriendlyError(err) });
             }
           }
 
           isProcessing = false;
-          sendJSON(ws, { type: 'status', status: 'idle' });
+          // 整批结束：runningTurn 已在每条任务 finally 中清空；广播 idle 给该批起始的订阅者
+          broadcastToSession(runSid, { type: 'status', status: 'idle' });
         }
       } catch {
         sendJSON(ws, { type: 'error', message: '消息格式错误' });
@@ -790,24 +1078,21 @@ async function handleChatMessage(
     supervisorBridge: supervisorRuntime.bridge,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
-        sendJSON(ws, { type: 'confirm', toolName, args });
-
-        const handler = (data: Buffer | string) => {
-          try {
-            const reply = JSON.parse(data.toString());
-            if (reply.type === 'confirm_reply') {
-              ws.off('message', handler);
-              resolve(!!reply.approved);
-            }
-          } catch { /* ignore */ }
-        };
-        ws.on('message', handler);
-
-        setTimeout(() => {
-          ws.off('message', handler);
-          sendJSON(ws, { type: 'confirm_timeout', toolName });
-          resolve(false);
+        const confirmId = nextConfirmId();
+        const timer = setTimeout(() => {
+          if (pendingConfirms.has(confirmId)) {
+            broadcastToSession(runSessionId, { type: 'confirm_timeout', confirmId, toolName });
+            resolveConfirm(confirmId, false, 'timeout');
+          }
         }, 60_000);
+        pendingConfirms.set(confirmId, {
+          sessionId: runSessionId,
+          toolName,
+          resolve,
+          timer,
+        });
+        // 广播给该 session 所有订阅者（PC + 移动端），任何一端回复即生效
+        broadcastToSession(runSessionId, { type: 'confirm', confirmId, toolName, args });
       });
     },
   };
@@ -822,8 +1107,11 @@ async function handleChatMessage(
   // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
   const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];
 
+  // 方案 B2：本次任务的快照锚点（每条 message 一个）
+  ensureRunningTurn(runSessionId);
+
   const pulseTimer = setInterval(() => {
-    sendJSON(ws, { type: 'pulse', ts: Date.now() });
+    broadcastToSession(runSessionId, { type: 'pulse', ts: Date.now() });
   }, 10_000);
 
   try {
@@ -831,17 +1119,20 @@ async function handleChatMessage(
       harnessUserMessage,
       (msgs, opts) => llmAdapter.chat(msgs, opts),
       (event) => {
-        // 推送 step 到 WebSocket
-        sendJSON(ws, { type: 'step', step: event });
+        // 同步 fold 进 runningTurn 快照（供 F5/扫码后新订阅者还原）
+        foldStepIntoRunningTurn(runSessionId, event);
+
+        // 推送 step 到 WebSocket（按 session 广播给所有订阅者）
+        broadcastToSession(runSessionId, { type: 'step', step: event });
 
         // 流式增量文本直接推送
         if (event.type === 'stream_delta' && event.delta) {
-          sendJSON(ws, { type: 'stream', delta: event.delta });
+          broadcastToSession(runSessionId, { type: 'stream', delta: event.delta });
         }
 
         // 工具实时输出推送
         if (event.type === 'tool_output' && event.content) {
-          sendJSON(ws, { type: 'tool_output', toolName: event.toolName, content: event.content });
+          broadcastToSession(runSessionId, { type: 'tool_output', toolName: event.toolName, content: event.content });
         }
 
         // 收集工具调用记录
@@ -909,27 +1200,27 @@ async function handleChatMessage(
 
     if (sessionEntries.length > 0) {
       const persisted = await appendMessages(sessionEntries, runSessionId);
-      if (persisted) broadcastSessionUpdated('turn_complete', ws);
+      if (persisted) broadcastSessionUpdated('turn_complete', undefined, ws);
     }
 
     // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
-    sendJSON(ws, { type: 'stream_end' });
+    broadcastToSession(runSessionId, { type: 'stream_end' });
 
     // v4 被动确认：附加记忆提取通知
     const extractionNotices = harness.flushExtractionNotices();
     if (extractionNotices.length > 0) {
-      sendJSON(ws, { type: 'memory_notice', notices: extractionNotices });
+      broadcastToSession(runSessionId, { type: 'memory_notice', notices: extractionNotices });
     }
 
     if (result.content) {
-      sendJSON(ws, { type: 'response', content: result.content });
+      broadcastToSession(runSessionId, { type: 'response', content: result.content });
     }
     if (result.loopState.stopReason === 'user_abort') {
-      sendJSON(ws, { type: 'info', message: '任务已被用户中断' });
+      broadcastToSession(runSessionId, { type: 'info', message: '任务已被用户中断' });
     } else if (result.loopState.totalToolCalls > 0) {
-      sendJSON(ws, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
+      broadcastToSession(runSessionId, { type: 'info', message: `共调用 ${result.loopState.totalToolCalls} 次工具` });
     }
-    sendJSON(ws, {
+    broadcastToSession(runSessionId, {
       type: 'tokenUsage',
       inputTokens: result.loopState.lastInputTokens,
       outputTokens: result.loopState.lastOutputTokens,
@@ -940,6 +1231,8 @@ async function handleChatMessage(
     clearInterval(pulseTimer);
     activeAbortController = null;
     llmAdapter.setAbortSignal?.(null);
+    // 任务（或本次 abort）落幕：清空运行中快照
+    clearRunningTurn(runSessionId);
   }
 }
 
@@ -960,6 +1253,14 @@ export function cleanupChatResources(): void {
   setCachedMessages(activeSessionId, undefined);
   fileBrowserStateBySession.delete(activeSessionId);
   chatClients.clear();
+  sessionSubscribers.clear();
+  runningTurns.clear();
+  // pending confirms：解决为 false，让任何挂起的 promise 不会泄漏
+  for (const [cid, entry] of pendingConfirms) {
+    clearTimeout(entry.timer);
+    pendingConfirms.delete(cid);
+    try { entry.resolve(false); } catch { /* ignore */ }
+  }
   mcpReadySnapshot = null;
   tunnelReadySnapshot = null;
   console.log('[chat-ws] Resources cleaned up');

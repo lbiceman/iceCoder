@@ -20,6 +20,11 @@ window.ChatPage = (function () {
 
   // ---- 状态 ----
   var container = null;
+  /**
+   * 方案 A keep-alive：ChatPage.render 只执行一次；
+   * 切到配置 / 记忆页再切回来不会重建 DOM、不重连 WS、不丢失流式状态。
+   */
+  var mounted = false;
   var isStreaming = false;
   var userStopped = false;
   var streamFinalized = false;
@@ -316,8 +321,8 @@ window.ChatPage = (function () {
     });
   }
 
-  /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId */
-  function onSessionSwitched(sessionId) {
+  /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。第二个参数 runningTurn 由服务端 session_switched 包带回。 */
+  function onSessionSwitched(sessionId, runningTurn) {
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
@@ -330,12 +335,16 @@ window.ChatPage = (function () {
       Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
       UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
       Session.saveMessages();
+      // 服务端消息渲染后再叠加 runningTurn（流式 bubble 永远位于消息列表尾）
+      if (runningTurn) restoreFromRunningTurn(runningTurn);
     });
     resetTokenUsage();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
+    // 即使 fetch 还没回来，先按 runningTurn 设置好按钮/冰豆，避免短暂闪烁
+    if (runningTurn) restoreFromRunningTurn(runningTurn);
   }
 
   function syncActiveSessionFromServer(data) {
@@ -351,10 +360,105 @@ window.ChatPage = (function () {
     }
   }
 
+  /**
+   * 把工具时间线渲染到 live 工具区（F5 / runningTurn / localStorage 共用）
+   */
+  function applyLiveToolTimelineToUI(timeline) {
+    if (!timeline || !timeline.length || !elMessages) return;
+    if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+    UI.setLiveToolRoundActive(true);
+    for (var i = 0; i < timeline.length; i++) {
+      var row = timeline[i];
+      UI.appendToolAction(row.toolName, row.detail || '', row.status || 'pending');
+    }
+  }
+
+  function pickToolTimelineForRestore(runningTurn) {
+    var serverTimeline = runningTurn && Array.isArray(runningTurn.toolTimeline)
+      ? runningTurn.toolTimeline
+      : [];
+    if (serverTimeline.length > 0) {
+      if (Session.replaceLiveToolBatch) Session.replaceLiveToolBatch(serverTimeline);
+      return serverTimeline;
+    }
+    var localTimeline = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+    if (localTimeline.length > 0) return localTimeline;
+    return [];
+  }
+
+  /**
+   * 方案 B3 还原：F5 / 移动端扫码 / 网络重连 / 切 session 等场景下
+   * 服务端在 `connected` 或 `session_switched` 包里附带 runningTurn 快照，
+   * 这里把流式文本、工具时间线、冰豆、按钮、token、计划重放一遍，使 UI 看起来「跟没断过」。
+   * 多次调用安全。runningTurn 为空时退化为 no-op（并把 isStreaming 复位）。
+   */
+  function restoreFromRunningTurn(runningTurn) {
+    if (!runningTurn || !runningTurn.isProcessing) {
+      // 无服务端 runningTurn 时保留 localStorage 占位（初始 render 已绘制），由 status:idle 清理
+      isStreaming = false;
+      userStopped = false;
+      streamFinalized = false;
+      streamChunksReceived = false;
+      WS.setProcessing(false);
+      UI.setStreamingState(false);
+      if (sessionPet) {
+        sessionPet.setState('idle');
+        sessionPet.setBubbleText('');
+        sessionPet.setTurnLabel('');
+      }
+      return;
+    }
+
+    // 1. 流式文本：先收尾上一段残留，再用累积文本重建 streaming bubble
+    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (runningTurn.streamingText) {
+      UI.appendStreamChunk(runningTurn.streamingText, Session.getMessages(), Session.stripStatusTag);
+      streamChunksReceived = true;
+    }
+
+    // 2. 标记 streaming 中
+    isStreaming = !!runningTurn.streamingText;
+    userStopped = false;
+    streamFinalized = false;
+    WS.setProcessing(true);
+    UI.setStreamingState(true);
+
+    // 3. 工具时间线：服务端 runningTurn 优先，否则 localStorage 缓存
+    var toolTimeline = pickToolTimelineForRestore(runningTurn);
+    applyLiveToolTimelineToUI(toolTimeline);
+
+    // 4. token 用量 & 轮次
+    if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
+      updateTokenUsage(runningTurn.lastInputTokens || 0, runningTurn.lastOutputTokens || 0);
+    }
+    if (runningTurn.iteration > 0) {
+      Pet.updateTurnCounter(runningTurn.iteration, isStreaming, true);
+    }
+
+    // 5. 冰豆状态 & 气泡
+    if (sessionPet) {
+      sessionPet.setVisible(true);
+      if (runningTurn.petState) sessionPet.setState(runningTurn.petState);
+      if (runningTurn.petBubble) sessionPet.setBubbleText(runningTurn.petBubble);
+      else if (runningTurn.petStatusText) sessionPet.setBubbleText(runningTurn.petStatusText);
+    }
+
+    // 6. 执行计划 / 任务图：重放保存的 step 事件
+    if (Array.isArray(runningTurn.planEvents) && window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.handleStep === 'function') {
+      for (var j = 0; j < runningTurn.planEvents.length; j++) {
+        try { window.ChatExecutionPlanBridge.handleStep(runningTurn.planEvents[j]); }
+        catch (_e) { /* ignore */ }
+      }
+    }
+  }
+
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
       fetchModelContext();
     }
+    // 先还原 runningTurn，避免 syncActiveSessionFromServer / notifyConnected 触发重绘清掉工具区
+    if (data) restoreFromRunningTurn(data.runningTurn || null);
     if (data && data.mcpReady) {
       announceMcpReadyFromPayload(data.mcpReady);
     }
@@ -365,12 +469,16 @@ window.ChatPage = (function () {
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
       window.ChatExecutionPlanBridge.notifyConnected(data || {});
     }
+    // 任务进行中（runningTurn）时跳过服务端快照合并，避免覆盖刚还原的 live 工具区
+    var rt = data && data.runningTurn;
+    if (!rt || !rt.isProcessing) {
+      syncMessages();
+    }
   }
 
   // ---- WebSocket 事件处理 ----
   function onWsOpen() {
     updateNavStatus(true);
-    syncMessages();
     WS.startSyncPolling();
   }
 
@@ -484,6 +592,7 @@ window.ChatPage = (function () {
       if (userStopped) userStopped = false;
       isStreaming = false;
       Pet.removeThinking(isStreaming, WS.isProcessing());
+      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }
@@ -521,14 +630,33 @@ window.ChatPage = (function () {
     });
   }
 
+  /** 当前正在显示的 confirm 对话框（用于其它端 first-win 后关闭本地弹窗） */
+  var activeConfirmId = null;
+  var activeConfirmResolved = false;
+
   function onWsConfirm(data) {
     if (sessionPet) {
       sessionPet.setState('alert');
       sessionPet.setBubbleText('请在弹窗中确认危险操作');
     }
+    activeConfirmId = data.confirmId || null;
+    activeConfirmResolved = false;
     var argsText = data.args ? JSON.stringify(data.args) : '';
+    // 注意：window.confirm 是同步阻塞，单端用户必须先选择；
+    // 但只要服务端已经 first-win 关闭，我们丢弃本地结果即可。
     var ok = window.confirm('AI 请求执行危险操作：\n\n工具: ' + data.toolName + '\n参数: ' + argsText + '\n\n是否允许？');
-    WS.sendConfirmReply(ok);
+    if (activeConfirmResolved) {
+      // 其它端已经回复，丢弃本地选择
+      activeConfirmId = null;
+      activeConfirmResolved = false;
+      if (sessionPet) {
+        sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
+        sessionPet.setBubbleText('');
+      }
+      return;
+    }
+    WS.sendConfirmReply(ok, activeConfirmId);
+    activeConfirmId = null;
     var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
     Session.appendMessage(confirmMsg);
     UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
@@ -536,6 +664,14 @@ window.ChatPage = (function () {
     if (sessionPet) {
       sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
       sessionPet.setBubbleText('');
+    }
+  }
+
+  function onWsConfirmResolved(data) {
+    if (!data) return;
+    // 标记本地弹窗的回复已被服务端 first-win
+    if (!activeConfirmId || data.confirmId === activeConfirmId) {
+      activeConfirmResolved = true;
     }
   }
 
@@ -549,9 +685,16 @@ window.ChatPage = (function () {
     Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
   }
 
+  function shouldSkipServerSnapshotSync() {
+    return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
+  }
+
   function syncMessages() {
-    if (WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble()) return;
+    if (shouldSkipServerSnapshotSync()) return;
     Session.fetchServerMessages(function (serverMsgs) {
+      // F5 重连：onWsOpen 发起的 fetch 可能在 connected+restore 之后才返回；
+      // 此时若仍 renderMessagesOnly 会清掉 runningTurn 刚还原的工具时间线/流式气泡。
+      if (shouldSkipServerSnapshotSync()) return;
       if (!serverMsgs || serverMsgs.length === 0) return;
       var separated = Session.separateToolTraces(serverMsgs);
       var updated = Session.applyServerChatSnapshot(separated, { fullRender: false }, isStreaming, WS.isProcessing());
@@ -563,8 +706,9 @@ window.ChatPage = (function () {
   }
 
   function pullServerChatSnapshotAuthoritative() {
-    if (WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble()) return;
+    if (shouldSkipServerSnapshotSync()) return;
     Session.fetchServerMessages(function (serverMsgs) {
+      if (shouldSkipServerSnapshotSync()) return;
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
       if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
@@ -596,8 +740,29 @@ window.ChatPage = (function () {
     window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
   }
 
+  /**
+   * 方案 A keep-alive：app.js navigate 回聊天页时调用。
+   * 此时 DOM、WS、流式状态都还在，仅做一次轻量级同步（拉服务端快照、对齐按钮态）。
+   */
+  function onActivate() {
+    if (!mounted) return;
+    if (WS && typeof WS.isConnected === 'function' && !WS.isConnected()) {
+      WS.connect(remoteToken);
+    }
+    syncSendButtonWithWorkload();
+    if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
+      syncMessages();
+    }
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
+    if (mounted) {
+      // 方案 A：已经挂载，切页面回来不再重建
+      onActivate();
+      return;
+    }
+    mounted = true;
     container = parentEl;
 
     var params = new URLSearchParams(window.location.search);
@@ -727,6 +892,7 @@ window.ChatPage = (function () {
     WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
     WS.on('confirm', onWsConfirm);
+    WS.on('confirm_resolved', onWsConfirmResolved);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
     WS.on('session_updated', onWsSessionUpdated);
@@ -813,6 +979,12 @@ window.ChatPage = (function () {
     // 渲染已有消息（远程模式先展示本地缓存；服务端返回后以快照为准刷新）
     UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
 
+    // F5 后 WS 尚未连上：先用 localStorage 里的 live 工具缓存占位，connected 后以 runningTurn 为准覆盖
+    var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+    if (cachedLiveTools.length > 0) {
+      applyLiveToolTimelineToUI(cachedLiveTools);
+    }
+
     // 从配置页等切回时 DOM 已重建，须按 WS 真实 processing 恢复 Stop 钮
     syncSendButtonWithWorkload();
 
@@ -840,5 +1012,5 @@ window.ChatPage = (function () {
     });
   }
 
-  return { render: render, onSessionSwitched: onSessionSwitched };
+  return { render: render, onActivate: onActivate, onSessionSwitched: onSessionSwitched };
 })();

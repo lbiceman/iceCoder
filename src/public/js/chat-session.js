@@ -32,6 +32,70 @@ window.ChatSession = (function () {
   var currentToolBatch = [];
   var lastSessionSyncSig = '';
 
+  function getLiveToolStorageKey() {
+    return 'ice-chat-live-tools:' + SESSION_ID;
+  }
+
+  function saveLiveToolBatch() {
+    try {
+      if (!currentToolBatch.length) {
+        localStorage.removeItem(getLiveToolStorageKey());
+        return;
+      }
+      localStorage.setItem(getLiveToolStorageKey(), JSON.stringify({
+        tools: currentToolBatch.map(function (t) {
+          return {
+            toolName: t.toolName || '',
+            detail: t.detail || '',
+            status: t.status || 'pending',
+          };
+        }),
+        savedAt: Date.now(),
+      }));
+    } catch (_e) { /* ignore */ }
+  }
+
+  function loadLiveToolBatch() {
+    try {
+      var raw = localStorage.getItem(getLiveToolStorageKey());
+      if (!raw) return [];
+      var parsed = JSON.parse(raw);
+      if (!parsed || !Array.isArray(parsed.tools)) return [];
+      return parsed.tools.filter(function (t) {
+        return t && typeof t.toolName === 'string' && t.toolName;
+      }).map(function (t) {
+        return {
+          toolName: t.toolName,
+          detail: typeof t.detail === 'string' ? t.detail : '',
+          status: t.status || 'pending',
+        };
+      });
+    } catch (_e) {
+      return [];
+    }
+  }
+
+  function clearLiveToolBatch() {
+    currentToolBatch = [];
+    try {
+      localStorage.removeItem(getLiveToolStorageKey());
+    } catch (_e) { /* ignore */ }
+  }
+
+  function replaceLiveToolBatch(tools) {
+    currentToolBatch = Array.isArray(tools)
+      ? tools.map(function (t) {
+        return {
+          toolName: t.toolName || '',
+          detail: t.detail || '',
+          status: t.status || 'pending',
+        };
+      })
+      : [];
+    saveLiveToolBatch();
+    return currentToolBatch;
+  }
+
   function stripStatusTag(text) {
     if (!text || typeof text !== 'string') return text;
     return text
@@ -149,6 +213,7 @@ window.ChatSession = (function () {
   function initSession() {
     messages = loadLocalMessages();
     toolTraces = {};
+    currentToolBatch = loadLiveToolBatch();
     return messages;
   }
 
@@ -157,7 +222,7 @@ window.ChatSession = (function () {
   }
 
   function flushToolBatchLocal() {
-    currentToolBatch = [];
+    clearLiveToolBatch();
   }
 
   function appendMessage(msg) {
@@ -197,6 +262,7 @@ window.ChatSession = (function () {
 
   function pushToolBatch(item) {
     currentToolBatch.push(item);
+    saveLiveToolBatch();
   }
 
   function updateToolBatchStatus(toolName, status) {
@@ -206,6 +272,7 @@ window.ChatSession = (function () {
         break;
       }
     }
+    saveLiveToolBatch();
   }
 
   /** 切换会话 ID（前端侧栏切换时调用） */
@@ -213,7 +280,7 @@ window.ChatSession = (function () {
     SESSION_ID = id || 'default';
     messages = loadLocalMessages();
     toolTraces = {};
-    currentToolBatch = [];
+    currentToolBatch = loadLiveToolBatch();
     lastSessionSyncSig = '';
   }
 
@@ -236,6 +303,10 @@ window.ChatSession = (function () {
     getCurrentToolBatch: getCurrentToolBatch,
     pushToolBatch: pushToolBatch,
     updateToolBatchStatus: updateToolBatchStatus,
+    loadLiveToolBatch: loadLiveToolBatch,
+    replaceLiveToolBatch: replaceLiveToolBatch,
+    clearLiveToolBatch: clearLiveToolBatch,
+    saveLiveToolBatch: saveLiveToolBatch,
     hasStreamingModelBubble: hasStreamingModelBubble,
     stripStatusTag: stripStatusTag,
     setSessionId: setSessionId,

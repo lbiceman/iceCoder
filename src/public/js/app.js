@@ -11,6 +11,16 @@
 
   // ---- 状态 ----
   var currentPage = null;
+  /**
+   * 页面 keep-alive：每个页面独立的子容器 + mount 标志位。
+   * 切页只是 display 切换，不销毁聊天 DOM 与其 WS / sessionPet / 流式状态。
+   * 见 docs/requirement 关于「切页面状态丢失」的根因分析。
+   */
+  var pages = {
+    chat: { root: null, mounted: false },
+    config: { root: null, mounted: false },
+    memory: { root: null, mounted: false },
+  };
 
   // ---- DOM 引用 ----
   var pageContainer = document.getElementById('page-container');
@@ -106,6 +116,19 @@
     return 'chat';
   }
 
+  function ensurePageRoot(page) {
+    var entry = pages[page];
+    if (!entry) return null;
+    if (!entry.root) {
+      entry.root = document.createElement('div');
+      entry.root.className = 'page-root page-root-' + page;
+      entry.root.dataset.pageRoot = page;
+      entry.root.style.display = 'none';
+      pageContainer.appendChild(entry.root);
+    }
+    return entry.root;
+  }
+
   function navigate(page) {
     if (page === currentPage) return;
     var prev = currentPage;
@@ -122,6 +145,7 @@
     navChat.classList.toggle('active', page === 'chat');
     navConfig.classList.toggle('active', page === 'config');
 
+    // 离开 memory：必须停掉 fetch/AbortController/resize/popover；DOM 子树保留隐藏以备复用
     if (
       prev === 'memory' &&
       page !== 'memory' &&
@@ -129,29 +153,37 @@
       typeof window.MemoryPage.destroy === 'function'
     ) {
       window.MemoryPage.destroy();
+      pages.memory.mounted = false;
     }
 
-    if (
-      prev === 'chat' &&
-      page !== 'chat' &&
-      window.ChatSessionSidebar &&
-      typeof window.ChatSessionSidebar.destroy === 'function'
-    ) {
-      window.ChatSessionSidebar.destroy();
-    }
-
+    // 聊天页/配置页保持 keep-alive：不调用 destroy，子树仅切 display
     renderPage(page);
   }
 
   function renderPage(page) {
     document.body.dataset.page = page;
-    pageContainer.innerHTML = '';
-    if (page === 'config') {
-      window.ConfigPage.render(pageContainer);
+    for (var k in pages) {
+      var entry = pages[k];
+      if (entry.root) entry.root.style.display = (k === page) ? '' : 'none';
+    }
+    var root = ensurePageRoot(page);
+    if (!root) return;
+    root.style.display = '';
+    var entry = pages[page];
+    if (!entry.mounted) {
+      if (page === 'config') {
+        window.ConfigPage.render(root);
+      } else if (page === 'memory' && window.MemoryPage) {
+        window.MemoryPage.render(root);
+      } else {
+        window.ChatPage.render(root);
+      }
+      entry.mounted = true;
     } else if (page === 'memory' && window.MemoryPage) {
-      window.MemoryPage.render(pageContainer);
-    } else {
-      window.ChatPage.render(pageContainer);
+      // memory 因 destroy 已重置内部状态，每次进入重新 render
+      window.MemoryPage.render(root);
+    } else if (page === 'chat' && window.ChatPage && typeof window.ChatPage.onActivate === 'function') {
+      window.ChatPage.onActivate();
     }
   }
 
@@ -198,7 +230,10 @@
       if (supervisorModeToggle) supervisorModeToggle.addEventListener('click', cycleSupervisorMode);
       fetchSystemStatus();
       document.body.dataset.page = 'chat';
-      window.ChatPage.render(pageContainer);
+      var chatRoot = ensurePageRoot('chat');
+      window.ChatPage.render(chatRoot);
+      pages.chat.mounted = true;
+      currentPage = 'chat';
       return;
     }
 

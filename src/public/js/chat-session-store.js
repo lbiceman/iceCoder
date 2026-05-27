@@ -140,17 +140,19 @@ window.ChatSessionStore = (function () {
       return;
     }
     var settled = false;
+    var lastRunningTurn = null;
     function finish(ok) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched');
-      if (callback) callback(!!ok);
+      if (callback) callback(!!ok, lastRunningTurn);
     }
     var handler = function (data) {
       if (!data) return;
       if (data.ok) {
         activeSessionId = data.sessionId || sessionId;
+        if (data.runningTurn) lastRunningTurn = data.runningTurn;
         emit();
       }
       finish(!!data.ok);

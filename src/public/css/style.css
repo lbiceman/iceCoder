@@ -326,6 +326,22 @@ body[data-page="chat"] .nav-sidebar-toggle {
   flex-direction: column;
 }
 
+/* keep-alive 子页根节点：须占满 page-container，否则 .chat-page height:100% 失效、输入框会顶到上方 */
+.page-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-root > .chat-page,
+.page-root > .config-page,
+.page-root > .memory-root {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ===== Config Page ===== */
 .config-page {
   max-width: 680px;

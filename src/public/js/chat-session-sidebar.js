@@ -203,12 +203,12 @@ window.ChatSessionSidebar = (function () {
   function selectSession(sessionId) {
     if (sessionId === Store.getActiveSessionId()) return;
     // 处理中也允许切换：后端会 abort 旧任务并 flush 到旧 session
-    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok) {
+    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn) {
       if (ok) {
         if (isNarrow()) close();
         renderList();
         if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-          window.ChatPage.onSessionSwitched(sessionId);
+          window.ChatPage.onSessionSwitched(sessionId, runningTurn);
         }
       }
     });
