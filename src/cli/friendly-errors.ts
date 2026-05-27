@@ -56,7 +56,7 @@ const ERROR_RULES: Array<{
     test: (msg) => /model.*not.*found|does not exist|invalid.*model|model_not_found/i.test(msg),
     result: {
       title: '模型不存在',
-      suggestion: '请检查 data/config.json 中的 modelName 是否拼写正确。常见模型：gpt-4o、claude-sonnet-4-20250514、deepseek-chat。',
+      suggestion: '请检查 data/config.json 中的 modelName 是否拼写正确。常见模型：gpt-4o、deepseek-chat、MiniMax-M2.7。',
     },
   },
   {

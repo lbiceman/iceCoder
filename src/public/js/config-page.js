@@ -245,7 +245,6 @@ window.ConfigPage = (function () {
 
       result.push({
         id: original.id || generateId(),
-        providerName: original.providerName || 'openai',
         apiUrl: card.querySelector('[data-field="apiUrl"]').value.trim(),
         apiKey: apiKey,
         modelName: card.querySelector('[data-field="modelName"]').value.trim(),
@@ -311,7 +310,6 @@ window.ConfigPage = (function () {
   function handleAddProvider() {
     providers.push({
       id: generateId(),
-      providerName: 'openai',
       apiUrl: '',
       apiKey: '',
       modelName: '',
@@ -359,7 +357,6 @@ window.ConfigPage = (function () {
         // 默认添加一个空的提供者卡片
         providers.push({
           id: generateId(),
-          providerName: 'openai',
           apiUrl: '',
           apiKey: '',
           modelName: '',

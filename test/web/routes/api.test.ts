@@ -113,7 +113,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: 'https://api.openai.com/v1',
         apiKey: 'sk-test1234567890abcdef',
         modelName: 'gpt-4',
@@ -143,7 +142,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: '',
         apiKey: 'sk-test1234567890abcdef',
         modelName: 'gpt-4',
@@ -167,7 +165,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: 'https://api.openai.com/v1',
         apiKey: '',
         modelName: 'gpt-4',
@@ -194,7 +191,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: 'https://api.openai.com/v1',
         apiKey,
         modelName: 'gpt-4',
@@ -238,7 +234,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test',
-        providerName: 'openai',
         apiUrl: 'https://api.example.com',
         apiKey,
         modelName: 'gpt-4',

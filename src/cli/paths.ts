@@ -107,7 +107,6 @@ const DEFAULT_CONFIG: IceCoderConfigFile = {
   providers: [
     {
       id: 'default',
-      providerName: 'openai',
       apiUrl: 'https://api.openai.com/v1',
       apiKey: 'sk-your-api-key-here',
       modelName: 'gpt-4o',

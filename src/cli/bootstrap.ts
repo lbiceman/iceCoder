@@ -13,7 +13,6 @@ import path from 'path';
 
 import { LLMAdapter } from '../llm/llm-adapter.js';
 import { OpenAIAdapter } from '../llm/openai-adapter.js';
-import { AnthropicAdapter } from '../llm/anthropic-adapter.js';
 import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
@@ -59,27 +58,17 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
 
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    if (provider.providerName === 'openai') {
-      const rt = resolveOpenAiRequestTimeoutMs(provider);
-      llmAdapter.registerProvider(new OpenAIAdapter({
-        name: provider.id,
-        apiKey: provider.apiKey,
-        baseURL: provider.apiUrl,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-        ...(rt !== undefined ? { timeout: rt } : {}),
-      }));
-    } else if (provider.providerName === 'anthropic') {
-      llmAdapter.registerProvider(new AnthropicAdapter({
-        apiKey: provider.apiKey,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-      }));
-    }
+    const rt = resolveOpenAiRequestTimeoutMs(provider);
+    llmAdapter.registerProvider(new OpenAIAdapter({
+      name: provider.id,
+      apiKey: provider.apiKey,
+      baseURL: provider.apiUrl,
+      model: provider.modelName,
+      temperature: provider.parameters.temperature,
+      maxTokens,
+      topP: provider.parameters.topP,
+      ...(rt !== undefined ? { timeout: rt } : {}),
+    }));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);
@@ -101,27 +90,17 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
 
   for (const provider of providers) {
     const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    if (provider.providerName === 'openai') {
-      const rt = resolveOpenAiRequestTimeoutMs(provider);
-      llmAdapter.registerProvider(new OpenAIAdapter({
-        name: provider.id,
-        apiKey: provider.apiKey,
-        baseURL: provider.apiUrl,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-        ...(rt !== undefined ? { timeout: rt } : {}),
-      }));
-    } else if (provider.providerName === 'anthropic') {
-      llmAdapter.registerProvider(new AnthropicAdapter({
-        apiKey: provider.apiKey,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-      }));
-    }
+    const rt = resolveOpenAiRequestTimeoutMs(provider);
+    llmAdapter.registerProvider(new OpenAIAdapter({
+      name: provider.id,
+      apiKey: provider.apiKey,
+      baseURL: provider.apiUrl,
+      model: provider.modelName,
+      temperature: provider.parameters.temperature,
+      maxTokens,
+      topP: provider.parameters.topP,
+      ...(rt !== undefined ? { timeout: rt } : {}),
+    }));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);

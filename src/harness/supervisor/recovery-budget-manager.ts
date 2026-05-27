@@ -44,7 +44,7 @@ export interface RecoveryBudgetEvaluation {
     maxTokenRatio: number;
     maxRetryCount: number;
     maxRetries: number;
-    roundExtensionsGranted?: number;
+    roundExtensionsGranted: number;
   };
 }
 

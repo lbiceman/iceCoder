@@ -73,15 +73,13 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   /**
    * 根据模型名称自动检测是否支持视觉输入。
-   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), claude-3, qwen-vl 等。
+   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), qwen-vl 等。
    * 保守策略：未知模型默认不支持。
    */
   private detectVisionSupport(model: string): boolean {
     const m = model.toLowerCase();
     // OpenAI 视觉模型
     if (m.includes('gpt-4o') || m.includes('gpt-4-vision') || m.includes('gpt-4-turbo')) return true;
-    // Anthropic (通过 OpenAI 兼容层)
-    if (m.includes('claude-3') || m.includes('claude-4')) return true;
     // 通义千问视觉
     if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
     // Google Gemini

@@ -83,6 +83,12 @@ export async function resolveDefaultChatModelMeta(
   }
 }
 
+/** 去掉旧版 config 中的 providerName 等遗留字段，统一为 OpenAI 兼容结构 */
+function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }): ProviderConfig {
+  const { providerName: _legacy, ...rest } = provider;
+  return rest;
+}
+
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
@@ -112,11 +118,6 @@ function getModelMaxContext(modelName: string): number {
   if (name.includes('gpt-3.5-turbo-16k')) return 16384;
   if (name.includes('gpt-3.5')) return 4096;
   if (name.includes('o1') || name.includes('o3') || name.includes('o4')) return 200000;
-
-  // Claude 系列
-  if (name.includes('claude-3') || name.includes('claude-4')) return 200000;
-  if (name.includes('claude-2')) return 100000;
-  if (name.includes('claude')) return 200000;
 
   // GLM 系列
   if (name.includes('glm-4')) return 128000;
@@ -157,10 +158,6 @@ export function getModelMaxOutputTokens(modelName: string): number {
   if (name.includes('gpt-4-turbo')) return 4096;
   if (name.includes('gpt-4')) return 8192;
   if (name.includes('gpt-3.5')) return 4096;
-
-  // Claude 系列
-  if (name.includes('claude-3') || name.includes('claude-4')) return 8192;
-  if (name.includes('claude')) return 4096;
 
   // GLM 系列
   if (name.includes('glm')) return 8192;
@@ -232,7 +229,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           // 脱敏值，恢复原始 key
           apiKey = originalKeys.get(provider.id)!;
         }
-        return { ...provider, apiKey };
+        return sanitizeProvider({ ...provider, apiKey });
       });
 
       const normalizedProviders = normalizeDefaultFlags(resolvedProviders);
@@ -280,7 +277,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
 
       // 返回前遮蔽 API 密钥
       const maskedProviders = config.providers.map((provider: ProviderConfig) => ({
-        ...provider,
+        ...sanitizeProvider(provider),
         apiKey: maskApiKey(provider.apiKey),
         // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
         maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),

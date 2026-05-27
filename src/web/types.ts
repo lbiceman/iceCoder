@@ -8,7 +8,6 @@
  */
 export interface ProviderConfig {
   id: string;
-  providerName: string;
   apiUrl: string;
   apiKey: string;
   modelName: string;
