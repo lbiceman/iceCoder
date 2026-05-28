@@ -2,6 +2,9 @@ import type { LLMResponse } from '../llm/types.js';
 import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
+import {
+  classifyChangedFiles,
+} from './document-deliverable.js';
 import type { TaskState } from './task-state.js';
 import type { TaskCheckpoint } from './checkpoint.js';
 
@@ -14,6 +17,11 @@ export function hasPendingWork(
   if (hasPendingAcceptanceWork(acceptance)) return true;
 
   if (task.verificationStatus === 'failed') return true;
+  if (task.verificationStatus === 'passed') return false;
+
+  if (classifyChangedFiles(task.filesChanged) === 'file_deliverable') {
+    return task.verificationStatus === 'required';
+  }
 
   const verificationAttempted = repo.testCommands.length > 0
     || repo.recentDiagnostics.some(d => /\b(test|vitest|jest|build|lint|typecheck)\b/i.test(d));

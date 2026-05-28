@@ -208,7 +208,7 @@ window.ChatPetBridge = (function () {
           } else if (sr === 'user_abort') {
             recoverThinkingOrIdle();
             sessionPet.setBubbleText('');
-          } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds') {
+          } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds' || sr === 'verification_exhausted') {
             sessionPet.setState('weary');
             if (step.content) bubble(step.content);
           } else if (sr === 'task_recovery') {

@@ -29,6 +29,9 @@ export const MAX_PREMATURE_COMPLETION_RECOVERY = 3;
 // ─── stop_hook 连续干预上限 ───
 export const MAX_STOP_HOOK_CONTINUATIONS = 5;
 
+// ─── verification gate 连续注入上限（无工具响应时熔断） ───
+export const MAX_VERIFICATION_GATE_CONTINUATIONS = 5;
+
 // ─── LLM 调用重试配置（Harness 层仅做 1 次快速重试，主要重试由 LLMAdapter 负责） ───
 export const LLM_MAX_RETRIES = 1;
 export const LLM_RETRY_BASE_DELAY = 2000;

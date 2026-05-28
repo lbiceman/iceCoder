@@ -49,6 +49,36 @@ describe('hasPendingWork', () => {
       },
     )).toBe(false);
   });
+
+  it('is false for file deliverable when verification already passed', () => {
+    expect(hasPendingWork(
+      {
+        goal: 'x', intent: 'edit', phase: 'verification',
+        filesRead: ['C:\\Desktop\\doc.md'],
+        filesChanged: ['C:\\Desktop\\doc.md'],
+        commandsRun: [], verificationRequired: true, verificationStatus: 'passed',
+      },
+      {
+        filesRead: ['C:\\Desktop\\doc.md'], filesChanged: ['C:\\Desktop\\doc.md'],
+        commandsRun: [], testCommands: [], recentDiagnostics: [],
+      },
+    )).toBe(false);
+  });
+
+  it('is true for file deliverable while verification still required', () => {
+    expect(hasPendingWork(
+      {
+        goal: 'x', intent: 'edit', phase: 'editing',
+        filesRead: ['C:\\Desktop\\doc.md'],
+        filesChanged: ['C:\\Desktop\\doc.md'],
+        commandsRun: [], verificationRequired: true, verificationStatus: 'required',
+      },
+      {
+        filesRead: ['C:\\Desktop\\doc.md'], filesChanged: ['C:\\Desktop\\doc.md'],
+        commandsRun: [], testCommands: [], recentDiagnostics: [],
+      },
+    )).toBe(true);
+  });
 });
 
 describe('checkpointHasPendingWork', () => {

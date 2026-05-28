@@ -106,6 +106,7 @@ export type StopReason =
   | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（附录 A，尚未接入）
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
   | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
+  | 'verification_exhausted' // verification gate 连续注入超限
   | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 

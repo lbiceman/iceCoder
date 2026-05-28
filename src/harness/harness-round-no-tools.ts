@@ -9,7 +9,13 @@ import {
   MAX_PREMATURE_COMPLETION_RECOVERY,
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
+  MAX_VERIFICATION_GATE_CONTINUATIONS,
 } from './harness-constants.js';
+import {
+  canVerifyDeliverableKind,
+  classifyChangedFiles,
+  isFileDeliverableOrientedTask,
+} from './document-deliverable.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import {
   getLatestRealUserText,
@@ -283,12 +289,12 @@ export async function handleNoToolCalls(
 
   // 状态门控：以下任一成立 → 跳过 stop hook
   // 1) 问答 / 查看类意图（casual harness）
-  // 2) 文档类意图（写 README / 总结类）
+  // 2) 文档导向任务（按 goal / 已变更文件扩展名判定，非 intent=docs）
   // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
   // prematureCompletionRecovery 会接管真正有 pendingWork 的早停场景。
   const skipStopHook =
     shouldApplyCasualHarness(taskSnap.intent)
-    || taskSnap.intent === 'docs'
+    || isFileDeliverableOrientedTask(taskSnap.goal, taskSnap.filesChanged)
     || (!pendingWork && hasToolCallSinceUser);
 
   if (deps.stopHookManager.count > 0 && !skipStopHook) {
@@ -356,28 +362,80 @@ export async function handleNoToolCalls(
     return { action: 'continue' };
   }
 
-  // verification gate：当任务还有未验证的工程动作时拉回 LLM 调工具。
-  // 状态门控的关键防线在 `syncHydratedTaskState`（{@link isFreshQueryMessage}）：
-  // 新查询会清掉旧 filesChanged / verificationStatus，避免 gate 误把无关问答轮拉回。
-  const canRunVerification = currentTools.some(t => t.name === 'run_command');
-  if (
-    canRunVerification
-    && state.taskState.shouldBlockFinalForVerification(acceptanceIncomplete)
-  ) {
+  // verification gate：当任务还有未验证的工程/文档交付动作时拉回 LLM 调工具。
+  const deliverableKind = classifyChangedFiles(taskSnap.filesChanged);
+  const toolNames = currentTools.map(t => t.name);
+  const canVerifyDeliverable = canVerifyDeliverableKind(deliverableKind, toolNames);
+  state.taskState.tryMarkFileDeliverablesVerified();
+  let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
+
+  const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
+    const suffix = detail ? `\n${detail}` : '';
+    const content = sanitizeAssistantContentForUser(response.content)
+      + (suffix || '\n任务因验收无法继续而暂停：缺少可用的验收工具或连续未执行验收。');
     if (response.content || response.reasoningContent) {
       pushAssistantForHistory(msgs, response);
     }
-    const prompt = acceptanceIncomplete && state.taskAcceptance
-      ? state.taskAcceptance.buildAcceptancePrompt()
-      : state.taskState.buildVerificationPrompt();
-    injectContinuationUserMessage(deps, state, msgs, [
-      prompt,
-      '',
-      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-    ].join('\n'));
-    await resilienceSaveCheckpoint(deps, 'verification_started', state);
-    state.transition = 'stop_hook_continue';
-    return { action: 'continue' };
+    deps.loopController.stop('verification_exhausted');
+    const finalState = deps.loopController.getState();
+    logger.loopStop('verification_exhausted', finalState.currentRound, finalState.totalToolCalls);
+    onStep?.({
+      type: 'final',
+      iteration: finalState.currentRound,
+      totalToolCalls: finalState.totalToolCalls,
+      content,
+      stopReason: 'verification_exhausted',
+    });
+    return {
+      action: 'return',
+      result: {
+        content,
+        loopState: finalState,
+        messages: [...msgs],
+        log: logger.getEntries(),
+      },
+    };
+  };
+
+  if (!blockVerification) {
+    state.verificationGateContinuationCount = 0;
+  } else if (!canVerifyDeliverable) {
+    console.log('[harness] 验收仍 pending 但当前轮次无可用验收工具，强制结束');
+    return returnVerificationExhausted(
+      deliverableKind === 'file_deliverable'
+        ? '文件交付物需要 file_info 或 read_file 确认，但当前工具集不可用。'
+        : '工程变更需要 run_command 验收，但当前工具集不可用。',
+    );
+  } else {
+    if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
+      if (deliverableKind === 'file_deliverable') {
+        state.taskState.reconcileFileDeliverablesAfterWrite();
+      }
+      state.taskState.tryMarkFileDeliverablesVerified();
+      blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
+      state.verificationGateContinuationCount = 0;
+      if (blockVerification) {
+        console.log('[harness] verification gate 连续注入已达上限，强制结束');
+        return returnVerificationExhausted();
+      }
+      console.log('[harness] 文件交付物 verification gate 熔断：已自动通过验收');
+    } else {
+      state.verificationGateContinuationCount++;
+      if (response.content || response.reasoningContent) {
+        pushAssistantForHistory(msgs, response);
+      }
+      const prompt = acceptanceIncomplete && state.taskAcceptance
+        ? state.taskAcceptance.buildAcceptancePrompt()
+        : state.taskState.buildVerificationPrompt();
+      injectContinuationUserMessage(deps, state, msgs, [
+        prompt,
+        '',
+        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+      ].join('\n'));
+      await resilienceSaveCheckpoint(deps, 'verification_started', state);
+      state.transition = 'stop_hook_continue';
+      return { action: 'continue' };
+    }
   }
 
   if (
@@ -403,6 +461,7 @@ export async function handleNoToolCalls(
   }
 
   state.stopHookContinuationCount = 0;
+  state.taskState.tryMarkFileDeliverablesVerified();
 
   if (deps.graphExecutor?.hasGraph()) {
     const ar = deps.graphExecutor.advanceOrComplete();

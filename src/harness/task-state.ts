@@ -1,5 +1,15 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
+import {
+  classifyChangedFiles,
+  fileDeliverablePaths,
+  isFileDeliverableConfirmationTool,
+  isNonEmptyFileInfoOutput,
+  isNonEmptyReadOutput,
+  normalizeDeliverablePath,
+  pathsReferToSameFile,
+  type DeliverableKind,
+} from './document-deliverable.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
 import type {
   TaskIntent,
@@ -27,6 +37,10 @@ export class TaskState {
   private commandsRun: string[] = [];
   private verificationRequired = false;
   private verificationStatus: VerificationStatus = 'not_required';
+  /** 文档交付物写操作版本（归一化路径 → 版本号，写后递增） */
+  private documentWriteVersion = new Map<string, number>();
+  /** 文档交付物确认时对应的写版本（须与 writeVersion 一致才算验收） */
+  private documentConfirmVersion = new Map<string, number>();
 
   constructor(goal: string) {
     this.goal = goal;
@@ -50,13 +64,19 @@ export class TaskState {
     if (FILE_READ_TOOLS.has(toolCall.name)) {
       this.phase = this.phase === 'intent' ? 'context' : this.phase;
       const path = extractPathLikeArg(toolCall.arguments);
-      if (path) this.filesRead.add(path);
+      if (path) {
+        this.filesRead.add(path);
+        this.tryConfirmFileDeliverable(toolCall.name, path, result);
+      }
     }
 
     if (FILE_WRITE_TOOLS.has(toolCall.name)) {
       this.phase = 'editing';
       const path = extractPathLikeArg(toolCall.arguments);
-      if (path) this.filesChanged.add(path);
+      if (path) {
+        this.filesChanged.add(path);
+        this.bumpFileDeliverableWriteVersion(path);
+      }
       this.verificationRequired = true;
       if (this.verificationStatus !== 'failed') {
         this.verificationStatus = 'required';
@@ -64,17 +84,39 @@ export class TaskState {
     }
   }
 
+  deliverableKind(): DeliverableKind {
+    return classifyChangedFiles([...this.filesChanged]);
+  }
+
   buildVerificationPrompt(): string {
     const files = [...this.filesChanged];
     const fileList = files.length > 0 ? files.map(f => `- ${f}`).join('\n') : '- (changed files unknown)';
 
     if (this.verificationStatus === 'failed') {
+      if (this.deliverableKind() === 'file_deliverable') {
+        return `[System] File deliverable verification failed. The task is not complete.
+
+Changed files:
+${fileList}
+
+Use file_info or read_file on each changed file to confirm it exists and is non-empty. Fix or rewrite the deliverable if needed. Do not run npm test for non-engineering file deliverables.`;
+      }
+
       return `[System] Verification failed. The task is not complete.
 
 Changed files:
 ${fileList}
 
 Read the failure output, fix the code or assets, then rerun verification (npm test, build, lint, or project-specific checks). Do not end the session until verification passes.`;
+    }
+
+    if (this.deliverableKind() === 'file_deliverable') {
+      return `[System] You changed file deliverables but have not confirmed them yet.
+
+Changed files:
+${fileList}
+
+Run file_info (preferred) or read_file on each file above to confirm it exists and is non-empty. Do NOT run npm test, wc, or shell grep for non-engineering file deliverables. Do not claim the task is complete before confirmation.`;
     }
 
     return `[System] You changed files but has not verified the result yet.
@@ -115,15 +157,115 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     }
   }
 
-  shouldBlockFinalForVerification(acceptanceIncomplete?: boolean): boolean {
+  /**
+   * 纯查询：是否应拦截 model_done（无副作用）。
+   * 文件交付物全部确认后请先调用 {@link tryMarkFileDeliverablesVerified}。
+   */
+  isVerificationBlockingFinal(acceptanceIncomplete?: boolean): boolean {
     if (acceptanceIncomplete) return true;
+    if (this.verificationStatus === 'passed') return false;
     if (this.verificationStatus === 'failed') return true;
+
+    if (this.deliverableKind() === 'file_deliverable') {
+      if (this.areAllFileDeliverablesConfirmed()) return false;
+      this.verificationRequired = true;
+      return true;
+    }
+
     if (this.verificationRequired && this.verificationStatus === 'required') return true;
     if (this.filesChanged.size > 0 && this.verificationStatus !== 'passed') {
       this.verificationRequired = true;
       return true;
     }
     return false;
+  }
+
+  /** @deprecated 请用 isVerificationBlockingFinal + tryMarkFileDeliverablesVerified */
+  shouldBlockFinalForVerification(acceptanceIncomplete?: boolean): boolean {
+    this.tryMarkFileDeliverablesVerified();
+    return this.isVerificationBlockingFinal(acceptanceIncomplete);
+  }
+
+  /** 文件交付物已全部写后确认时，同步 verificationStatus → passed */
+  tryMarkFileDeliverablesVerified(): boolean {
+    if (this.verificationStatus === 'passed' || this.verificationStatus === 'failed') {
+      return this.verificationStatus === 'passed';
+    }
+    if (this.deliverableKind() !== 'file_deliverable') return false;
+    if (!this.areAllFileDeliverablesConfirmed()) return false;
+    this.markVerificationPassed();
+    return true;
+  }
+
+  /** @deprecated 使用 {@link tryMarkFileDeliverablesVerified} */
+  tryMarkDocumentDeliverablesVerified(): boolean {
+    return this.tryMarkFileDeliverablesVerified();
+  }
+
+  areAllFileDeliverablesConfirmed(): boolean {
+    const paths = fileDeliverablePaths([...this.filesChanged]);
+    if (paths.length === 0) return false;
+    return paths.every(path => {
+      const norm = normalizeDeliverablePath(path);
+      const writeVer = this.documentWriteVersion.get(norm) ?? 0;
+      const confirmVer = this.documentConfirmVersion.get(norm) ?? 0;
+      return writeVer > 0 && confirmVer === writeVer;
+    });
+  }
+
+  /** @deprecated 使用 {@link areAllFileDeliverablesConfirmed} */
+  areAllDocumentDeliverablesConfirmed(): boolean {
+    return this.areAllFileDeliverablesConfirmed();
+  }
+
+  /** verification gate 熔断：写后版本均已确认时自动 passed */
+  reconcileFileDeliverablesAfterWrite(): boolean {
+    if (this.deliverableKind() !== 'file_deliverable') return false;
+    if (!this.areAllFileDeliverablesConfirmed()) return false;
+    this.markVerificationPassed();
+    return true;
+  }
+
+  /** @deprecated 使用 {@link reconcileFileDeliverablesAfterWrite} */
+  reconcileDocumentDeliverablesAfterWrite(): boolean {
+    return this.reconcileFileDeliverablesAfterWrite();
+  }
+
+  private bumpFileDeliverableWriteVersion(path: string): void {
+    const norm = normalizeDeliverablePath(path);
+    const next = (this.documentWriteVersion.get(norm) ?? 0) + 1;
+    this.documentWriteVersion.set(norm, next);
+    this.documentConfirmVersion.delete(norm);
+    if (this.verificationStatus === 'passed') {
+      this.verificationStatus = 'required';
+    }
+  }
+
+  private tryConfirmFileDeliverable(
+    toolName: string,
+    path: string,
+    result: ToolResult,
+  ): void {
+    if (this.deliverableKind() !== 'file_deliverable') return;
+    if (!isFileDeliverableConfirmationTool(toolName)) return;
+
+    const matched = [...this.filesChanged].find(changed => pathsReferToSameFile(changed, path));
+    if (!matched) return;
+
+    const norm = normalizeDeliverablePath(matched);
+    const writeVer = this.documentWriteVersion.get(norm) ?? 0;
+    if (writeVer === 0) return;
+
+    const confirmed =
+      toolName === 'file_info'
+        ? isNonEmptyFileInfoOutput(result.output)
+        : isNonEmptyReadOutput(result.output);
+    if (!confirmed) return;
+
+    this.documentConfirmVersion.set(norm, writeVer);
+    if (this.areAllFileDeliverablesConfirmed()) {
+      this.markVerificationPassed();
+    }
   }
 
   snapshot(): TaskStateSnapshot {
@@ -151,6 +293,17 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     this.commandsRun = [...snapshot.commandsRun];
     this.verificationRequired = snapshot.verificationRequired;
     this.verificationStatus = snapshot.verificationStatus;
+    this.documentWriteVersion.clear();
+    this.documentConfirmVersion.clear();
+    if (this.deliverableKind() === 'file_deliverable') {
+      for (const path of fileDeliverablePaths([...this.filesChanged])) {
+        const norm = normalizeDeliverablePath(path);
+        this.documentWriteVersion.set(norm, 1);
+        if (snapshot.verificationStatus === 'passed') {
+          this.documentConfirmVersion.set(norm, 1);
+        }
+      }
+    }
   }
 }
 

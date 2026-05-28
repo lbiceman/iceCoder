@@ -457,6 +457,7 @@ export class Harness {
       noToolExecutionRecoveryCount: 0,
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
+      verificationGateContinuationCount: 0,
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,

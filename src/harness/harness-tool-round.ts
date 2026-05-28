@@ -259,6 +259,7 @@ export async function runHarnessToolRound(
   });
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;
+    state.verificationGateContinuationCount = 0;
   }
   // P0-A — acceptance gate / verification buffer：按工具结果**真实状态**而非「启动成功」判定。
   //   - 后台启动 (`mode:'background'|'escalated'`) → acceptance 状态保持 pending

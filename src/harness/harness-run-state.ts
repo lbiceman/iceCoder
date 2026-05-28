@@ -58,6 +58,8 @@ export interface HarnessRunState {
   taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */
   stopHookContinuationCount: number;
+  /** verification gate 连续注入计数（模型未调工具时熔断） */
+  verificationGateContinuationCount: number;
   /** 上一次 continue 的原因 */
   transition: Transition;
   /** 本轮是否刚刚完成上下文压缩 */
