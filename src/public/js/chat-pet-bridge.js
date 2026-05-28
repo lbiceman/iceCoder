@@ -43,6 +43,10 @@ window.ChatPetBridge = (function () {
    */
   function syncExecPlanFoot() {
     if (!sessionPet) return;
+    if (userCheckpointNoticeActive) {
+      sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
+      return;
+    }
     var parts = [];
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.getExecutionModeChip === 'function') {
       var modeChip = ChatExecutionPlan.getExecutionModeChip();
@@ -125,6 +129,7 @@ window.ChatPetBridge = (function () {
 
   function applyHarnessStepToPet(step, isStreaming, wsProcessing) {
     if (!sessionPet || !step) return;
+    if (userCheckpointNoticeActive && step.type !== 'final') return;
 
     function recoverThinkingOrIdle() {
       sessionPet.setState(isStreaming || wsProcessing ? 'thinking' : 'idle');
@@ -321,6 +326,7 @@ window.ChatPetBridge = (function () {
    * MCP 后台加载完成（WebSocket mcp_ready）：表情 + 气泡，数秒后复原
    */
   function applyMcpReadyToPet(payload, ctx) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet) return;
     ctx = ctx || {};
     if (mcpReadyResetTimer) {
@@ -357,6 +363,7 @@ window.ChatPetBridge = (function () {
    * Cloudflare Quick Tunnel 就绪（WebSocket tunnel_ready）
    */
   function applyTunnelReadyToPet(payload, ctx) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet || !payload || !payload.url) return;
     ctx = ctx || {};
     if (tunnelReadyResetTimer) {
@@ -388,6 +395,7 @@ window.ChatPetBridge = (function () {
    * 回合结束 passive 记忆提取（WebSocket memory_notice）：表情 + 气泡，数秒后复原
    */
   function applyMemoryNoticesToPet(notices, ctx) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet || !notices || !notices.length) return;
     ctx = ctx || {};
     var isStreaming = !!ctx.isStreaming;
@@ -424,6 +432,7 @@ window.ChatPetBridge = (function () {
   }
 
   function notifySupervisorMode(mode, label) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet) return;
     syncSupervisorModeEye(mode);
     sessionPet.setVisible(true);

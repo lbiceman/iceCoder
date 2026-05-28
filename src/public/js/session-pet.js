@@ -493,17 +493,35 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
-  /** 10b. crying — 哭泣（sad 眼 + 泪滴） */
+  /** 10b. crying — 哭泣（sad 眼 + 泪滴 + 撇嘴） */
   function expressionCrying(ctx, leftX, rightX, y, ec) {
     expressionSad(ctx, leftX, rightX, y, ec);
-    var tearY = y + 10;
-    ctx.fillStyle = ec === '#ffffff' || ec === '#fff' ? 'rgba(147, 197, 253, 0.9)' : 'rgba(59, 130, 246, 0.65)';
+    var tearY = y + 8;
+    var tearColor = ec === '#ffffff' || ec === '#fff'
+      ? 'rgba(147, 197, 253, 0.95)'
+      : 'rgba(59, 130, 246, 0.78)';
+    ctx.fillStyle = tearColor;
     ctx.beginPath();
-    ctx.ellipse(leftX - 1, tearY, 2.2, 3.4, 0, 0, Math.PI * 2);
+    ctx.ellipse(leftX - 1, tearY, 3.2, 5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.ellipse(rightX + 1, tearY + 1, 2, 3.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(leftX - 0.5, tearY + 7, 2, 3.2, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1, tearY + 1, 3, 4.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1.5, tearY + 8, 1.8, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 撇嘴
+    var mouthY = y + 22;
+    ctx.beginPath();
+    ctx.moveTo(leftX - 4, mouthY);
+    ctx.quadraticCurveTo((leftX + rightX) / 2, mouthY + 5, rightX + 4, mouthY);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
   }
 
   /** 11. angry — 生气（眼睛斜向上） */
@@ -921,8 +939,17 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       isBlinking = false;
 
       function nextBlink() {
+        if (state === 'crying') {
+          isBlinking = false;
+          blinkTimer = setTimeout(nextBlink, BLINK_MAX);
+          return;
+        }
         var delay = BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN);
         blinkTimer = setTimeout(function () {
+          if (state === 'crying') {
+            nextBlink();
+            return;
+          }
           isBlinking = true;
           blinkCloseTimer = setTimeout(function () {
             isBlinking = false;
