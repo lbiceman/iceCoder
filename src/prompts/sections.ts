@@ -105,10 +105,9 @@ export function createDoingTasksSection(): PromptSection {
 - Stop calling tools and output a short delivery summary ONLY when one of:
   1. The runtime injects \`[System / Acceptance ✓] All N acceptance commands passed.\` — output ≤10 delivery bullets and STOP.
   2. The user explicitly closes the task (任务完成 / 就这样 / 可以了 / OK).
-  3. For engineering/code changes only: no verifiable work remains AND the latest verification command exited 0 (and no \`[System / Acceptance Gate]\` pending).
-  4. Non-engineering file deliverables (.md, .txt, scripts, unknown extensions, extensionless files): run \`file_info\` or \`read_file\` on each changed file to confirm it exists and is non-empty — no npm test required.
+  3. You have run \`file_info\` or \`read_file\` on **each changed file** (including code: .java, .py, .ts, etc.) to confirm it exists and is non-empty — tests are optional, write confirmation is required.
 - Do NOT stop just because you feel finished. Self-perceived completion is not evidence.
-- Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands, or while \`verificationStatus\` is \`required\` / \`failed\`.
+- Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands, or while any changed file is still unconfirmed.
 - A single \`[System / Acceptance ✓] cmd — summary\` line means **one** command passed; keep going until you see the final "All N passed" signal.`,
     isStatic: true,
     priority: 20,

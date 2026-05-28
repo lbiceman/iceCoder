@@ -2,12 +2,13 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
-  fileDeliverablePaths,
+  hasUnconfirmedFileDeliverables,
   isFileDeliverableConfirmationTool,
   isNonEmptyFileInfoOutput,
   isNonEmptyReadOutput,
   normalizeDeliverablePath,
   pathsReferToSameFile,
+  writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
@@ -89,42 +90,17 @@ export class TaskState {
   }
 
   buildVerificationPrompt(): string {
-    const files = [...this.filesChanged];
-    const fileList = files.length > 0 ? files.map(f => `- ${f}`).join('\n') : '- (changed files unknown)';
+    const paths = writeConfirmationPaths([...this.filesChanged]);
+    const fileList = paths.length > 0
+      ? paths.map(f => `- ${f}`).join('\n')
+      : '- (changed files unknown)';
 
-    if (this.verificationStatus === 'failed') {
-      if (this.deliverableKind() === 'file_deliverable') {
-        return `[System] File deliverable verification failed. The task is not complete.
-
-Changed files:
-${fileList}
-
-Use file_info or read_file on each changed file to confirm it exists and is non-empty. Fix or rewrite the deliverable if needed. Do not run npm test for non-engineering file deliverables.`;
-      }
-
-      return `[System] Verification failed. The task is not complete.
+    return `[System] You changed files but have not confirmed them yet.
 
 Changed files:
 ${fileList}
 
-Read the failure output, fix the code or assets, then rerun verification (npm test, build, lint, or project-specific checks). Do not end the session until verification passes.`;
-    }
-
-    if (this.deliverableKind() === 'file_deliverable') {
-      return `[System] You changed file deliverables but have not confirmed them yet.
-
-Changed files:
-${fileList}
-
-Run file_info (preferred) or read_file on each file above to confirm it exists and is non-empty. Do NOT run npm test, wc, or shell grep for non-engineering file deliverables. Do not claim the task is complete before confirmation.`;
-    }
-
-    return `[System] You changed files but has not verified the result yet.
-
-Changed files:
-${fileList}
-
-Run an appropriate verification command now (for example: focused tests, npm test, npx tsc --noEmit, lint, or a project-specific check). If verification is impossible, state the exact blocker and evidence. Do not claim the task is complete before verification.`;
+Run file_info (preferred) or read_file on each file above to confirm it exists and is non-empty. Do not claim the task is complete before confirmation.`;
   }
 
   /** 续跑时覆盖被「继续」污染的 goal/intent */
@@ -159,20 +135,12 @@ Run an appropriate verification command now (for example: focused tests, npm tes
 
   /**
    * 纯查询：是否应拦截 model_done（无副作用）。
-   * 文件交付物全部确认后请先调用 {@link tryMarkFileDeliverablesVerified}。
+   * Acceptance Gate 或任一变更文件未写后确认时可 block；run_command 验收不作为 Gate 条件。
    */
   isVerificationBlockingFinal(acceptanceIncomplete?: boolean): boolean {
     if (acceptanceIncomplete) return true;
-    if (this.verificationStatus === 'passed') return false;
-    if (this.verificationStatus === 'failed') return true;
-
-    if (this.deliverableKind() === 'file_deliverable') {
-      return !this.areAllFileDeliverablesConfirmed();
-    }
-
-    if (this.verificationRequired && this.verificationStatus === 'required') return true;
-    if (this.filesChanged.size > 0 && this.verificationStatus !== 'passed') return true;
-    return false;
+    if (this.filesChanged.size === 0) return false;
+    return !this.areAllFileDeliverablesConfirmed();
   }
 
   /** 查询前同步 file_deliverable 验收状态（checkpoint / resilience 用） */
@@ -183,29 +151,23 @@ Run an appropriate verification command now (for example: focused tests, npm tes
 
   /** 文件交付物已全部写后确认时，同步 verificationStatus → passed */
   tryMarkFileDeliverablesVerified(): boolean {
-    if (this.verificationStatus === 'passed' || this.verificationStatus === 'failed') {
-      return this.verificationStatus === 'passed';
-    }
-    if (this.deliverableKind() !== 'file_deliverable') return false;
+    if (this.filesChanged.size === 0) return false;
     if (!this.areAllFileDeliverablesConfirmed()) return false;
     this.markVerificationPassed();
     return true;
   }
 
   areAllFileDeliverablesConfirmed(): boolean {
-    const paths = fileDeliverablePaths([...this.filesChanged]);
-    if (paths.length === 0) return false;
-    return paths.every(path => {
-      const norm = normalizeDeliverablePath(path);
-      const writeVer = this.fileDeliverableWriteVersion.get(norm) ?? 0;
-      const confirmVer = this.fileDeliverableConfirmVersion.get(norm) ?? 0;
-      return writeVer > 0 && confirmVer === writeVer;
-    });
+    return !hasUnconfirmedFileDeliverables(
+      [...this.filesChanged],
+      mapToVersionRecord(this.fileDeliverableWriteVersion),
+      mapToVersionRecord(this.fileDeliverableConfirmVersion),
+    );
   }
 
   /** verification gate 熔断：写后版本均已确认时自动 passed */
   reconcileFileDeliverablesAfterWrite(): boolean {
-    if (this.deliverableKind() !== 'file_deliverable') return false;
+    if (this.filesChanged.size === 0) return false;
     if (!this.areAllFileDeliverablesConfirmed()) return false;
     this.markVerificationPassed();
     return true;
@@ -226,7 +188,6 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     path: string,
     result: ToolResult,
   ): void {
-    if (this.deliverableKind() !== 'file_deliverable') return;
     if (!isFileDeliverableConfirmationTool(toolName)) return;
 
     const matched = [...this.filesChanged].find(changed => pathsReferToSameFile(changed, path));
@@ -280,8 +241,8 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     this.verificationStatus = snapshot.verificationStatus;
     this.fileDeliverableWriteVersion = recordToVersionMap(snapshot.fileDeliverableWriteVersions);
     this.fileDeliverableConfirmVersion = recordToVersionMap(snapshot.fileDeliverableConfirmVersions);
-    if (this.fileDeliverableWriteVersion.size === 0 && this.deliverableKind() === 'file_deliverable') {
-      for (const path of fileDeliverablePaths([...this.filesChanged])) {
+    if (this.fileDeliverableWriteVersion.size === 0) {
+      for (const path of writeConfirmationPaths([...this.filesChanged])) {
         const norm = normalizeDeliverablePath(path);
         this.fileDeliverableWriteVersion.set(norm, 1);
         if (snapshot.verificationStatus === 'passed') {

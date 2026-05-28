@@ -13,7 +13,6 @@ import {
 } from './harness-constants.js';
 import {
   canVerifyDeliverableKind,
-  classifyChangedFiles,
 } from './document-deliverable.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import {
@@ -281,19 +280,18 @@ export async function handleNoToolCalls(
   const taskSnap = state.taskState.snapshot();
   const repoSnap = state.repoContext.snapshot();
   const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
-  const pendingWork = hasPendingWork(taskSnap, repoSnap, state.taskAcceptance);
+  const pendingWork = hasPendingWork(taskSnap, state.taskAcceptance);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
   const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
 
   // 状态门控：以下任一成立 → 跳过 stop hook
   // 1) 问答 / 查看类意图（casual harness）
-  // 2) 已写入的非工程 file 交付物（按 filesChanged 判定）
+  // 2) 已有写文件变更（Gate / prematureCompletion 接管写后读确认）
   // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
-  // prematureCompletionRecovery 会接管真正有 pendingWork 的早停场景。
   const skipStopHook =
     shouldApplyCasualHarness(taskSnap.intent)
-    || classifyChangedFiles(taskSnap.filesChanged) === 'file_deliverable'
+    || taskSnap.filesChanged.length > 0
     || (!pendingWork && hasToolCallSinceUser);
 
   if (deps.stopHookManager.count > 0 && !skipStopHook) {
@@ -333,13 +331,12 @@ export async function handleNoToolCalls(
     }
   }
 
-  // verification gate：验收 pending 时优先于 no_tool recovery
-  const deliverableKind = classifyChangedFiles(taskSnap.filesChanged);
+  // verification gate：写后读确认 / Acceptance Gate pending 时优先于 no_tool recovery
   const toolNames = currentTools.map(t => t.name);
   const canVerifyDeliverable = canVerifyDeliverableKind(
-    deliverableKind,
+    taskSnap.filesChanged,
     toolNames,
-    taskSnap.verificationStatus,
+    acceptanceIncomplete,
   );
   state.taskState.tryMarkFileDeliverablesVerified();
   let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
@@ -377,15 +374,13 @@ export async function handleNoToolCalls(
   } else if (!canVerifyDeliverable) {
     console.log('[harness] 验收仍 pending 但当前轮次无可用验收工具，强制结束');
     return returnVerificationExhausted(
-      deliverableKind === 'file_deliverable'
-        ? '文件交付物需要 file_info 或 read_file 确认，但当前工具集不可用。'
-        : deliverableKind === 'engineering'
-          ? '工程变更需要 run_command 验收，但当前工具集不可用。'
-          : '验收命令需要 run_command 重试，但当前工具集不可用。',
+      acceptanceIncomplete
+        ? 'Acceptance Gate 需要 run_command，但当前工具集不可用。'
+        : '文件变更需要 file_info 或 read_file 确认，但当前工具集不可用。',
     );
   } else if (blockVerification) {
     if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
-      if (deliverableKind === 'file_deliverable') {
+      if (taskSnap.filesChanged.length > 0) {
         state.taskState.reconcileFileDeliverablesAfterWrite();
       }
       state.taskState.tryMarkFileDeliverablesVerified();
@@ -395,8 +390,8 @@ export async function handleNoToolCalls(
         console.log('[harness] verification gate 连续注入已达上限，强制结束');
         return returnVerificationExhausted();
       }
-      if (deliverableKind === 'file_deliverable') {
-        console.log('[harness] 文件交付物 verification gate 熔断：已自动通过验收');
+      if (taskSnap.filesChanged.length > 0) {
+        console.log('[harness] 写后读 verification gate 熔断：已自动通过验收');
       }
     } else {
       state.verificationGateContinuationCount++;

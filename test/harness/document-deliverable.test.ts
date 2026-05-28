@@ -4,11 +4,14 @@ import {
   canVerifyDeliverableKind,
   classifyChangedFiles,
   fileDeliverablePaths,
+  hasUnconfirmedFileDeliverables,
   hasUnfulfilledFileDeliverableGoal,
   isEngineeringDeliverablePath,
   isFileDeliverableOrientedTask,
   isNonEmptyFileInfoOutput,
   pathsReferToSameFile,
+  snapshotHasUnconfirmedFileDeliverables,
+  writeConfirmationPaths,
 } from '../../src/harness/document-deliverable.js';
 import { TaskState } from '../../src/harness/task-state.js';
 
@@ -40,9 +43,24 @@ describe('document-deliverable', () => {
     expect(classifyChangedFiles(['src/a.ts', 'package.json'])).toBe('engineering');
   });
 
-  it('fileDeliverablePaths includes all non-engineering changed files', () => {
-    expect(fileDeliverablePaths(['a.md', 'b.tmp'])).toEqual(['a.md', 'b.tmp']);
-    expect(fileDeliverablePaths(['src/a.ts', 'notes.bak'])).toEqual([]);
+  it('writeConfirmationPaths includes all changed files for gate', () => {
+    expect(writeConfirmationPaths(['a.md', 'b.tmp'])).toEqual(['a.md', 'b.tmp']);
+    expect(writeConfirmationPaths(['src/a.ts', 'notes.bak'])).toEqual(['src/a.ts', 'notes.bak']);
+    expect(writeConfirmationPaths(['src/a.ts', 'README.md'])).toEqual(['src/a.ts', 'README.md']);
+    expect(writeConfirmationPaths(['src/a.ts'])).toEqual(['src/a.ts']);
+    expect(writeConfirmationPaths([])).toEqual([]);
+  });
+
+  it('fileDeliverablePaths still excludes engineering for deliverable classification', () => {
+    expect(fileDeliverablePaths(['src/a.ts', 'notes.bak'])).toEqual(['notes.bak']);
+    expect(fileDeliverablePaths(['src/a.ts'])).toEqual([]);
+  });
+
+  it('file deliverable verification uses read tools not run_command', () => {
+    expect(canVerifyDeliverableKind(['a.md'], ['file_info', 'read_file'])).toBe(true);
+    expect(canVerifyDeliverableKind(['a.md'], ['run_command'])).toBe(false);
+    expect(canVerifyDeliverableKind(['src/a.ts'], ['run_command'])).toBe(false);
+    expect(canVerifyDeliverableKind(['src/a.ts'], ['file_info'])).toBe(true);
   });
 
   it('matches paths across separators and casing', () => {
@@ -52,17 +70,25 @@ describe('document-deliverable', () => {
     )).toBe(true);
   });
 
-  it('file_deliverable verification uses read tools not run_command', () => {
-    expect(canVerifyDeliverableKind('file_deliverable', ['file_info', 'read_file'])).toBe(true);
-    expect(canVerifyDeliverableKind('file_deliverable', ['run_command'])).toBe(false);
-    expect(canVerifyDeliverableKind('engineering', ['run_command'])).toBe(true);
+  it('acceptance gate pending requires run_command', () => {
+    expect(canVerifyDeliverableKind([], ['run_command'], true)).toBe(true);
+    expect(canVerifyDeliverableKind(['a.md'], ['file_info'], true)).toBe(false);
   });
 
-  it('none kind allows run_command retry when verification pending or failed', () => {
-    expect(canVerifyDeliverableKind('none', ['run_command'], 'failed')).toBe(true);
-    expect(canVerifyDeliverableKind('none', ['run_command'], 'required')).toBe(true);
-    expect(canVerifyDeliverableKind('none', ['run_command'], 'not_required')).toBe(false);
-    expect(canVerifyDeliverableKind('none', ['file_info'], 'failed')).toBe(false);
+  it('hasUnconfirmedFileDeliverables uses write/confirm version maps', () => {
+    expect(hasUnconfirmedFileDeliverables(['a.md'], { 'a.md': 1 }, { 'a.md': 1 })).toBe(false);
+    expect(hasUnconfirmedFileDeliverables(['a.md'], { 'a.md': 1 }, {})).toBe(true);
+    expect(hasUnconfirmedFileDeliverables(['a.md'], { 'a.md': 2 }, { 'a.md': 1 })).toBe(true);
+    expect(hasUnconfirmedFileDeliverables(['src/a.ts'], { 'src/a.ts': 1 }, {})).toBe(true);
+    expect(hasUnconfirmedFileDeliverables(['src/a.ts'], { 'src/a.ts': 1 }, { 'src/a.ts': 1 })).toBe(false);
+
+    expect(snapshotHasUnconfirmedFileDeliverables({
+      goal: 'g', intent: 'edit', phase: 'editing',
+      filesRead: [], filesChanged: ['README.md'],
+      commandsRun: ['npm test'], verificationRequired: true, verificationStatus: 'passed',
+      fileDeliverableWriteVersions: { 'readme.md': 1 },
+      fileDeliverableConfirmVersions: {},
+    })).toBe(true);
   });
 
   it('parses non-empty file_info output', () => {
@@ -218,7 +244,7 @@ describe('TaskState file deliverable verification', () => {
     expect(state.snapshot().verificationStatus).toBe('passed');
   });
 
-  it('still requires npm test when code and doc both changed', () => {
+  it('mixed code and doc changes require all paths confirmed', () => {
     const state = new TaskState('fix bug and update readme');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'README.md' } },
@@ -235,7 +261,36 @@ describe('TaskState file deliverable verification', () => {
       { id: 'f1', name: 'file_info', arguments: { path: 'README.md' } },
       { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
     );
-    expect(state.snapshot().verificationStatus).toBe('required');
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      { id: 'f2', name: 'read_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'export function foo() {}' },
+    );
+    expect(state.snapshot().verificationStatus).toBe('passed');
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
+
+  it('engineering-only changes block until read after write', () => {
+    const state = new TaskState('fix bug');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'export const x = 1;' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+
+    state.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: '', error: 'exit 1' },
+    );
+    expect(state.snapshot().verificationStatus).toBe('failed');
+    expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
   it('reconcileFileDeliverablesAfterWrite passes when write followed by read', () => {

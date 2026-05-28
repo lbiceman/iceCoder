@@ -9,104 +9,86 @@ import {
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
 
 describe('hasPendingWork', () => {
-  it('is true when verification failed after test command', () => {
-    expect(hasPendingWork(
-      {
-        goal: 'x', intent: 'edit', phase: 'verification',
-        filesRead: [], filesChanged: ['a.ts'],
-        commandsRun: ['npm test'], verificationRequired: true, verificationStatus: 'failed',
-      },
-      {
-        filesRead: [], filesChanged: ['a.ts'], commandsRun: ['npm test'],
-        testCommands: ['npm test'], recentDiagnostics: ['run_command: exit 1'],
-      },
-    )).toBe(true);
+  it('is true when engineering test failed but write not confirmed', () => {
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'verification',
+      filesRead: [], filesChanged: ['a.ts'],
+      commandsRun: ['npm test'], verificationRequired: true, verificationStatus: 'failed',
+    })).toBe(true);
   });
 
-  it('is true when verification failed', () => {
-    expect(hasPendingWork(
-      {
-        goal: 'x', intent: 'edit', phase: 'verification',
-        filesRead: [], filesChanged: ['a.ts'],
-        commandsRun: [], verificationRequired: true, verificationStatus: 'failed',
-      },
-      {
-        filesRead: [], filesChanged: [], commandsRun: [],
-        testCommands: [], recentDiagnostics: [],
-      },
-    )).toBe(true);
+  it('is false for engineering-only when all changes confirmed', () => {
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'verification',
+      filesRead: [], filesChanged: ['src/a.ts'],
+      commandsRun: [], verificationRequired: true, verificationStatus: 'passed',
+      fileDeliverableWriteVersions: { 'src/a.ts': 1 },
+      fileDeliverableConfirmVersions: { 'src/a.ts': 1 },
+    })).toBe(false);
   });
 
-  it('is false when verification passed and no diagnostics', () => {
-    expect(hasPendingWork(
-      {
-        goal: 'x', intent: 'edit', phase: 'verification',
-        filesRead: [], filesChanged: ['a.ts'],
-        commandsRun: [], verificationRequired: true, verificationStatus: 'passed',
-      },
-      {
-        filesRead: [], filesChanged: [], commandsRun: [],
-        testCommands: [], recentDiagnostics: [],
-      },
-    )).toBe(false);
+  it('is true for engineering-only while write not confirmed', () => {
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'verification',
+      filesRead: [], filesChanged: ['src/a.ts'],
+      commandsRun: [], verificationRequired: true, verificationStatus: 'required',
+    })).toBe(true);
   });
 
-  it('is false for file deliverable when verification already passed', () => {
-    expect(hasPendingWork(
-      {
-        goal: 'x', intent: 'edit', phase: 'verification',
-        filesRead: ['C:\\Desktop\\doc.md'],
-        filesChanged: ['C:\\Desktop\\doc.md'],
-        commandsRun: [], verificationRequired: true, verificationStatus: 'passed',
-      },
-      {
-        filesRead: ['C:\\Desktop\\doc.md'], filesChanged: ['C:\\Desktop\\doc.md'],
-        commandsRun: [], testCommands: [], recentDiagnostics: [],
-      },
-    )).toBe(false);
+  it('is false when all changes confirmed even if verificationStatus passed', () => {
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'verification',
+      filesRead: [], filesChanged: ['a.ts'],
+      commandsRun: [], verificationRequired: true, verificationStatus: 'passed',
+      fileDeliverableWriteVersions: { 'a.ts': 1 },
+      fileDeliverableConfirmVersions: { 'a.ts': 1 },
+    })).toBe(false);
+  });
+
+  it('is false for file deliverable when all deliverables confirmed', () => {
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'verification',
+      filesRead: ['C:\\Desktop\\doc.md'],
+      filesChanged: ['C:\\Desktop\\doc.md'],
+      commandsRun: [], verificationRequired: true, verificationStatus: 'passed',
+      fileDeliverableWriteVersions: { 'c:/desktop/doc.md': 1 },
+      fileDeliverableConfirmVersions: { 'c:/desktop/doc.md': 1 },
+    })).toBe(false);
+  });
+
+  it('is true when npm test passed but file deliverable still unconfirmed', () => {
+    expect(hasPendingWork({
+      goal: 'update readme', intent: 'edit', phase: 'verification',
+      filesRead: [], filesChanged: ['README.md', 'src/a.ts'],
+      commandsRun: ['npm test'], verificationRequired: true, verificationStatus: 'passed',
+      fileDeliverableWriteVersions: { 'readme.md': 1, 'src/a.ts': 1 },
+      fileDeliverableConfirmVersions: {},
+    })).toBe(true);
   });
 
   it('is true for file deliverable while verification still required', () => {
-    expect(hasPendingWork(
-      {
-        goal: 'x', intent: 'edit', phase: 'editing',
-        filesRead: ['C:\\Desktop\\doc.md'],
-        filesChanged: ['C:\\Desktop\\doc.md'],
-        commandsRun: [], verificationRequired: true, verificationStatus: 'required',
-      },
-      {
-        filesRead: ['C:\\Desktop\\doc.md'], filesChanged: ['C:\\Desktop\\doc.md'],
-        commandsRun: [], testCommands: [], recentDiagnostics: [],
-      },
-    )).toBe(true);
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'editing',
+      filesRead: ['C:\\Desktop\\doc.md'],
+      filesChanged: ['C:\\Desktop\\doc.md'],
+      commandsRun: [], verificationRequired: true, verificationStatus: 'required',
+    })).toBe(true);
   });
 
   it('is true when write deliverable goal has no files yet', () => {
-    expect(hasPendingWork(
-      {
-        goal: '整理 ant design 成 md 文档放到桌面', intent: 'docs', phase: 'intent',
-        filesRead: [], filesChanged: [],
-        commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
-      },
-      {
-        filesRead: [], filesChanged: [], commandsRun: [],
-        testCommands: [], recentDiagnostics: [],
-      },
-    )).toBe(true);
+    expect(hasPendingWork({
+      goal: '整理 ant design 成 md 文档放到桌面', intent: 'docs', phase: 'intent',
+      filesRead: [], filesChanged: [],
+      commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
+    })).toBe(true);
   });
 
   it('is false for chat-only report goal without file deliverable intent', () => {
-    expect(hasPendingWork(
-      {
-        goal: '生成测试报告', intent: 'edit', phase: 'intent',
-        filesRead: [], filesChanged: [],
-        commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
-      },
-      {
-        filesRead: [], filesChanged: [], commandsRun: [],
-        testCommands: [], recentDiagnostics: [],
-      },
-    )).toBe(false);
+    expect(hasPendingWork({
+      goal: '生成测试报告', intent: 'edit', phase: 'intent',
+      filesRead: [], filesChanged: [],
+      commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
+    })).toBe(false);
   });
 });
 
@@ -143,7 +125,7 @@ describe('buildIncompleteContinuationPrompt', () => {
     expect(prompt).not.toMatch(/Run tests/i);
   });
 
-  it('prompts run tests for engineering pending work', () => {
+  it('prompts file_info for engineering-only unconfirmed changes', () => {
     const prompt = buildIncompleteContinuationPrompt(
       {
         goal: 'fix bug', intent: 'edit', phase: 'editing',
@@ -152,12 +134,13 @@ describe('buildIncompleteContinuationPrompt', () => {
       },
       emptyRepo,
     );
-    expect(prompt).toMatch(/Run tests/i);
+    expect(prompt).toMatch(/file_info|read_file/i);
+    expect(prompt).not.toMatch(/Run tests/i);
   });
 });
 
 describe('checkpointHasPendingWork', () => {
-  it('reopens completed checkpoints with pending diagnostics', () => {
+  it('reopens completed checkpoints when write not confirmed', () => {
     const cp = {
       version: 1,
       taskId: 't',

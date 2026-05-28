@@ -342,11 +342,93 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     }
   });
 
-  it('工程变更 verification gate 熔断后仍 pending → verification_exhausted', async () => {
+  it('工程变更未读确认 → verification gate 拦截', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } }],
+      },
     ];
     const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(1);
+    expect(messages.at(-1)?.content).toMatch(/file_info|read_file/i);
+  });
+
+  it('工程变更读确认后 → model_done', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } }],
+      },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } }],
+      },
+    ];
+    const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    state.taskState.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'export const x = 1;' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+  });
+
+  it('工程变更 verification gate 熔断计数仍 pending → verification_exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } }],
+      },
+    ];
+    const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
     state.verificationGateContinuationCount = 5;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
@@ -371,11 +453,21 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     }
   });
 
-  it('无写文件但 npm test 失败 → verification gate 继续而非立刻 exhausted', async () => {
+  it('npm test 失败但未读确认 → verification gate 继续', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '跑测试' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 't1', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
     ];
     const state = makeState(messages, '跑测试');
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/Main.java' } },
+      { success: true, output: 'ok' },
+    );
     state.taskState.recordToolResult(
       { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
       { success: false, output: '', error: 'exit 1' },

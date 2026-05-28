@@ -6,7 +6,7 @@
  * - none：无写文件
  */
 
-import type { TaskIntent, VerificationStatus } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 
 export type DeliverableKind = 'file_deliverable' | 'engineering' | 'none';
 
@@ -66,10 +66,14 @@ export function classifyChangedFiles(filesChanged: readonly string[]): Deliverab
   return 'file_deliverable';
 }
 
-/** file_deliverable 模式下需写后确认的全部路径 */
+/** 需 file_info/read_file 写后确认的非工程路径（交付物分类 / 文案用） */
 export function fileDeliverablePaths(filesChanged: readonly string[]): string[] {
-  if (classifyChangedFiles(filesChanged) !== 'file_deliverable') return [];
   return filesChanged.filter(file => !isEngineeringDeliverablePath(file));
+}
+
+/** Gate 写后须 read 确认的全部路径（含 .java/.py/.ts 等，与 filesChanged 一致） */
+export function writeConfirmationPaths(filesChanged: readonly string[]): string[] {
+  return [...filesChanged];
 }
 
 export function pathsReferToSameFile(a: string, b: string): boolean {
@@ -80,20 +84,65 @@ export function isFileDeliverableConfirmationTool(toolName: string): boolean {
   return FILE_DELIVERABLE_CONFIRM_TOOLS.has(toolName);
 }
 
+/**
+ * Gate 是否具备验收所需工具。
+ * - Acceptance Gate pending → run_command
+ * - 有未写后确认的变更文件 → file_info / read_file
+ */
 export function canVerifyDeliverableKind(
-  kind: DeliverableKind,
+  filesChanged: readonly string[],
   toolNames: readonly string[],
-  verificationStatus: VerificationStatus = 'not_required',
+  acceptanceIncomplete?: boolean,
 ): boolean {
-  const hasRunCommand = toolNames.some(name => name === 'run_command');
-  const hasFileConfirm = toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
-
-  if (kind === 'file_deliverable') return hasFileConfirm;
-  if (kind === 'engineering') return hasRunCommand;
-  if (verificationStatus === 'required' || verificationStatus === 'failed') {
-    return hasRunCommand;
+  if (acceptanceIncomplete) {
+    return toolNames.some(name => name === 'run_command');
   }
-  return false;
+  if (filesChanged.length === 0) return true;
+  return toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
+}
+
+/** 在版本 Map 中查找路径对应的版本号（兼容归一化键与原始路径） */
+export function versionForDeliverablePath(
+  path: string,
+  versions: Record<string, number> | undefined,
+): number {
+  if (!versions) return 0;
+  const norm = normalizeDeliverablePath(path);
+  if (versions[norm] !== undefined) return versions[norm]!;
+  for (const [key, ver] of Object.entries(versions)) {
+    if (pathsReferToSameFile(key, path)) return ver;
+  }
+  return 0;
+}
+
+/**
+ * 是否存在尚未写后确认的变更文件（与 TaskState.areAllFileDeliverablesConfirmed 同标尺）。
+ * 无版本 Map 时保守视为 pending（兼容旧 checkpoint）。
+ */
+export function hasUnconfirmedFileDeliverables(
+  filesChanged: readonly string[],
+  writeVersions?: Record<string, number>,
+  confirmVersions?: Record<string, number>,
+): boolean {
+  const paths = writeConfirmationPaths(filesChanged);
+  if (paths.length === 0) return false;
+
+  const hasWriteMaps = writeVersions && Object.keys(writeVersions).length > 0;
+  if (!hasWriteMaps) return true;
+
+  return paths.some(path => {
+    const writeVer = versionForDeliverablePath(path, writeVersions);
+    const confirmVer = versionForDeliverablePath(path, confirmVersions);
+    return writeVer === 0 || confirmVer !== writeVer;
+  });
+}
+
+export function snapshotHasUnconfirmedFileDeliverables(task: TaskStateSnapshot): boolean {
+  return hasUnconfirmedFileDeliverables(
+    task.filesChanged,
+    task.fileDeliverableWriteVersions,
+    task.fileDeliverableConfirmVersions,
+  );
 }
 
 /** file_info 成功结果是否表明非空文件 */

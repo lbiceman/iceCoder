@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import { snapshotHasUnconfirmedFileDeliverables, writeConfirmationPaths } from './document-deliverable.js';
 import { checkpointHasPendingWork } from './incomplete-completion.js';
 import { buildCheckpointResumeSummary, sanitizeCheckpointGoal } from './checkpoint-resume-compact.js';
 // ExecutionPlan type removed (Phase 11)
@@ -163,15 +164,16 @@ function inferNextSuggestedStep(
   status: TaskCheckpointStatus,
 ): string | undefined {
   if (status === 'completed') return 'Task completed; no resume action required.';
-  if (taskState.verificationRequired && taskState.verificationStatus !== 'passed') {
-    const lastTest = repoContext.testCommands.at(-1);
-    return lastTest
-      ? `Fix any remaining issues, then rerun verification: ${lastTest}`
-      : 'Run an appropriate verification command before claiming completion.';
+  if (snapshotHasUnconfirmedFileDeliverables(taskState)) {
+    const paths = writeConfirmationPaths(taskState.filesChanged);
+    if (paths.length === 1) {
+      return `Confirm the deliverable with file_info or read_file: ${paths[0]}`;
+    }
+    return `Confirm ${paths.length} file deliverables with file_info or read_file before finishing.`;
   }
   if (repoContext.recentDiagnostics.length > 0) {
     return `Investigate latest diagnostic: ${repoContext.recentDiagnostics.at(-1)}`;
   }
-  if (repoContext.filesChanged.length > 0) return 'Continue implementation from changed files and verify the result.';
+  if (repoContext.filesChanged.length > 0) return 'Continue implementation from changed files.';
   return 'Continue the current task from the saved conversation and session notes.';
 }
