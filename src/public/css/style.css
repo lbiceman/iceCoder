@@ -1014,6 +1014,9 @@ body[data-page="chat"] .nav-sidebar-toggle {
 .pet-canvas.pet-wobble {
   animation: pet-wobble 0.5s ease-in-out infinite;
 }
+.pet-canvas.pet-crying {
+  filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.45));
+}
 @keyframes pet-wobble {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-4px); }

@@ -542,6 +542,13 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
         t.planEvents.splice(0, t.planEvents.length - 200);
       }
       break;
+    case 'final':
+      if (event.stopReason === 'user_checkpoint') {
+        t.petState = 'crying';
+        t.petBubble = '监管已暂停，需要你介入啦';
+        t.petStatusText = '监管已暂停，需要你介入啦';
+      }
+      break;
     default:
       break;
   }

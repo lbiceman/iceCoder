@@ -139,7 +139,7 @@ window.ChatPage = (function () {
   function syncSendButtonWithWorkload() {
     var busy = isWorkloadActive();
     UI.setStreamingState(busy);
-    if (sessionPet) {
+    if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
         sessionPet.setState(isStreaming ? 'read' : 'thinking');
       } else if (!userStopped) {

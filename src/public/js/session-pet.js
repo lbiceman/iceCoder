@@ -493,33 +493,50 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
-  /** 10b. crying — 哭泣（sad 眼 + 泪滴 + 撇嘴） */
+  /** 10b. crying — 哭泣（>X 形皱眼 + 大泪滴 + 撇嘴，与 idle 胶囊眼明显区分） */
   function expressionCrying(ctx, leftX, rightX, y, ec) {
-    expressionSad(ctx, leftX, rightX, y, ec);
-    var tearY = y + 8;
-    var tearColor = ec === '#ffffff' || ec === '#fff'
-      ? 'rgba(147, 197, 253, 0.95)'
-      : 'rgba(59, 130, 246, 0.78)';
-    ctx.fillStyle = tearColor;
+    var w = EYE_W / 2;
+    // 皱眉 X 形眼（与 idle 竖胶囊完全不同）
     ctx.beginPath();
-    ctx.ellipse(leftX - 1, tearY, 3.2, 5, 0, 0, Math.PI * 2);
+    ctx.moveTo(leftX - w * 0.75, y - 5);
+    ctx.lineTo(leftX + w * 0.75, y + 5);
+    ctx.moveTo(leftX + w * 0.75, y - 5);
+    ctx.lineTo(leftX - w * 0.75, y + 5);
+    ctx.moveTo(rightX - w * 0.75, y - 5);
+    ctx.lineTo(rightX + w * 0.75, y + 5);
+    ctx.moveTo(rightX + w * 0.75, y - 5);
+    ctx.lineTo(rightX - w * 0.75, y + 5);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    // 大泪滴（高对比蓝，黑底上易辨认）
+    var tearY = y + 10;
+    ctx.fillStyle = 'rgba(96, 165, 250, 0.95)';
+    ctx.beginPath();
+    ctx.ellipse(leftX - 1, tearY, 4, 6.5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.ellipse(leftX - 0.5, tearY + 7, 2, 3.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(leftX, tearY + 9, 2.8, 4.5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.ellipse(rightX + 1, tearY + 1, 3, 4.8, 0, 0, Math.PI * 2);
+    ctx.ellipse(rightX + 1, tearY + 1, 4, 6.5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.ellipse(rightX + 1.5, tearY + 8, 1.8, 3, 0, 0, Math.PI * 2);
+    ctx.ellipse(rightX + 1, tearY + 10, 2.8, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.arc(leftX - 2, tearY - 2, 1.2, 0, Math.PI * 2);
+    ctx.arc(rightX, tearY - 1, 1.2, 0, Math.PI * 2);
     ctx.fill();
     // 撇嘴
-    var mouthY = y + 22;
+    var mouthY = y + 24;
     ctx.beginPath();
-    ctx.moveTo(leftX - 4, mouthY);
-    ctx.quadraticCurveTo((leftX + rightX) / 2, mouthY + 5, rightX + 4, mouthY);
+    ctx.moveTo(leftX - 5, mouthY);
+    ctx.quadraticCurveTo((leftX + rightX) / 2, mouthY + 6, rightX + 5, mouthY);
     ctx.strokeStyle = ec;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.lineCap = 'round';
     ctx.stroke();
   }
@@ -969,7 +986,10 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
     function setState(s) {
       state = s || 'idle';
-      if (canvas) canvas.classList.remove('pet-wobble');
+      if (canvas) {
+        canvas.classList.remove('pet-wobble', 'pet-crying');
+        if (state === 'crying') canvas.classList.add('pet-crying');
+      }
     }
 
     function setBubbleText(text) {

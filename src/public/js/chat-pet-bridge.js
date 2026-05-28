@@ -41,9 +41,15 @@ window.ChatPetBridge = (function () {
   /**
    * 有执行计划时底部显示步骤进度摘要；否则回退为「第 N 轮」。
    */
+  function isUserCheckpointActive() {
+    return userCheckpointNoticeActive;
+  }
+
   function syncExecPlanFoot() {
     if (!sessionPet) return;
     if (userCheckpointNoticeActive) {
+      sessionPet.setState('crying');
+      sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
       sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
       return;
     }
@@ -99,7 +105,7 @@ window.ChatPetBridge = (function () {
     }
     if (!sessionPet) return;
     if (userCheckpointNoticeActive) {
-      syncExecPlanFoot();
+      applyUserCheckpointNotice();
       return;
     }
     sessionPet.setState('idle');
@@ -463,5 +469,6 @@ window.ChatPetBridge = (function () {
     getSessionPet: getSessionPet,
     isSessionActive: isSessionActive,
     syncExecPlanFoot: syncExecPlanFoot,
+    isUserCheckpointActive: isUserCheckpointActive,
   };
 })();
