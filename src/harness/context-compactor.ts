@@ -68,6 +68,8 @@ export interface CompactionConfig {
   maxReinjectFiles: number;
   /** 重新注入最近文件内容的总 token 预算 */
   maxReinjectTokens: number;
+  /** 会话 id，用于压缩截断提示中的 session-notes 路径 */
+  sessionId?: string;
 }
 
 /** 用户消息内容长度超过此阈值时强制保留，防止任务描述被压缩丢弃 */
@@ -349,7 +351,7 @@ export class ContextCompactor {
 
     if (droppedMessages.length === 0) return compacted;
 
-    const { text: notesBody } = truncateSessionNotesForCompact(sessionNotes);
+    const { text: notesBody } = truncateSessionNotesForCompact(sessionNotes, undefined, this.config.sessionId);
 
     // 用会话记忆作为摘要（替代 LLM 调用）；过长会话笔记截断以免占满预算（D）
     const summaryContent = [
@@ -502,7 +504,7 @@ export class ContextCompactor {
       : '';
 
     const sessionNotesDirective = hasSessionNotes
-      ? '\n\n**CRITICAL**: Session notes include narrative sections plus a machine-readable `icecoder-runtime` JSON block under Runtime Evidence for exact task/repo state. Use that for resuming work after restarts. Also check data/sessions/session-notes.md path when applicable. If a task was in progress, continue from session notes + structured state. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
+      ? '\n\n**CRITICAL**: Session notes include narrative sections plus a machine-readable `icecoder-runtime` JSON block under Runtime Evidence for exact task/repo state. Use that for resuming work after restarts. Notes live at `data/sessions/{sessionId}.session-notes.md` (per-session). If a task was in progress, continue from session notes + structured state. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
       : '';
 
     return {
@@ -555,7 +557,7 @@ Continue the conversation from where it left off without asking the user any fur
     // 第五层：优先使用会话记忆，否则 LLM 精炼
     let finalSummary: string;
     if (sessionNotes) {
-      finalSummary = truncateSessionNotesForCompact(sessionNotes).text;
+      finalSummary = truncateSessionNotesForCompact(sessionNotes, undefined, this.config.sessionId).text;
     } else if (this.config.enableLLMSummary && chatFn) {
       finalSummary = await this.llmSummarize(structuralSummary, droppedMessages, chatFn);
     } else {

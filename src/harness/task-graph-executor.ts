@@ -188,6 +188,11 @@ export class GraphExecutor {
     return this.graph?.status === 'done' || this.graph?.status === 'failed';
   }
 
+  /** Harness 强制 stop 闸门：仅 graph 成功完成时触发，不含 failed。 */
+  isGraphDoneForHarnessStop(): boolean {
+    return this.graph?.status === 'done';
+  }
+
   shouldForceStop(): boolean {
     if (!this.graph) return false;
     if (this.isTerminal()) return true;

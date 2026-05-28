@@ -86,6 +86,8 @@ import type { HarnessRunState } from './harness-run-state.js';
 import { callHarnessLlm } from './harness-llm-call.js';
 import { prepareHarnessRound } from './harness-round-prep.js';
 import { handleNoToolCalls } from './harness-round-no-tools.js';
+import { tryGraphTerminalStop } from './harness-graph-stop.js';
+import { evaluateSupervisorAfterNoToolRound } from './harness-supervisor-round.js';
 import { runHarnessToolRound } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
@@ -152,11 +154,13 @@ export class Harness {
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
     this.agentMaxOutputTokens = config.loop.maxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
+    this.sessionId = config.sessionId ?? 'default';
     const compactionPartial: Partial<CompactionConfig> = {
       threshold: config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
       tokenThreshold: config.compactionTokenThreshold,
       keepRecent: config.compactionKeepRecent ?? DEFAULT_COMPACTION_KEEP_RECENT,
       enableLLMSummary: config.compactionEnableLLMSummary,
+      sessionId: this.sessionId,
     };
     if (config.compactionMaxReinjectFiles != null) {
       compactionPartial.maxReinjectFiles = config.compactionMaxReinjectFiles;
@@ -170,7 +174,6 @@ export class Harness {
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.sessionDir = config.sessionDir;
-    this.sessionId = config.sessionId ?? 'default';
     // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
@@ -647,6 +650,16 @@ export class Harness {
         });
         if (prep.action === 'stop') return prep.result;
 
+        const graphStopBeforeRound = await tryGraphTerminalStop(deps, {
+          state,
+          graphExecutor: deps.graphExecutor,
+          userMessage,
+          currentTools: state.tools,
+          logger,
+          onStep,
+        });
+        if (graphStopBeforeRound) return graphStopBeforeRound;
+
         this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
 
         const toolsForLlm = resolveLlmToolsForRound(state.tools, prep.round, plainUserText);
@@ -694,7 +707,32 @@ export class Harness {
             logger,
             onStep,
           });
-          if (noTools.action === 'continue') continue;
+          if (noTools.action === 'continue') {
+            const supervisorResult = await evaluateSupervisorAfterNoToolRound(deps, {
+              state,
+              round: prep.round,
+              response,
+              currentTools: state.tools,
+              tokenUsage,
+              chatFn,
+              logger,
+              onStep,
+              streamFn,
+            });
+            if (supervisorResult.action === 'return') return supervisorResult.result;
+
+            const graphStopAfterNoTool = await tryGraphTerminalStop(deps, {
+              state,
+              graphExecutor: deps.graphExecutor,
+              userMessage,
+              currentTools: state.tools,
+              logger,
+              onStep,
+            });
+            if (graphStopAfterNoTool) return graphStopAfterNoTool;
+
+            continue;
+          }
           return noTools.result;
         }
 
@@ -712,6 +750,16 @@ export class Harness {
           streamFn,
         });
         if (toolRound.action === 'return') return toolRound.result;
+
+        const graphStopAfterTools = await tryGraphTerminalStop(deps, {
+          state,
+          graphExecutor: deps.graphExecutor,
+          userMessage,
+          currentTools: state.tools,
+          logger,
+          onStep,
+        });
+        if (graphStopAfterTools) return graphStopAfterTools;
       }
     } finally {
       this.memoryIntegration.onLoopEnd(

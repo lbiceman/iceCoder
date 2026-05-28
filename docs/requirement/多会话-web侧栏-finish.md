@@ -178,7 +178,7 @@ data/sessions/
   {sessionId}.structured.json   ← LLM 结构化历史（chat-ws 缓存持久化）
   {sessionId}.checkpoint.json   ← TaskCheckpoint + runtimeV2
   {sessionId}.workspace.json    ← 工作区锁定状态
-  session-notes.md              ← 当前全局共享（本阶段仍共享，见 §5.4）
+  {sessionId}.session-notes.md   ← 按 sessionId 隔离（v0.3）
 ```
 
 ### 2.5 移动端 / 远程（`src/web/remote-ws.ts`）
@@ -243,23 +243,25 @@ let cachedMessages: UnifiedMessage[] | undefined;
 const SESSION_ID = 'default';
 ```
 
-#### 全局共享、不按 session 隔离
+#### 全局共享、不按 session 隔离（**v0.3 已修复 session-notes**）
 
 
-| 资源                           | 路径 / 形态                                | 多会话影响                                               | 本阶段策略                                                                          |
-| ---------------------------- | -------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `**session-notes.md**`       | `data/sessions/session-notes.md`（全局一份） | TaskState / plan fence / 压缩恢复可能**串会话** — **实质隔离缺口** | v0.1 仍共享 + 文档标注；切换时 ExecutionPlan.clear；v0.2 改为 `{sessionId}.session-notes.md` |
-| **FileMemoryManager**        | 进程单例                                   | 长期记忆全局共享                                            | 可接受（记忆本就不按会话切）                                                                 |
-| **Supervisor runtime cache** | 进程级                                    | 切换 session 须 reset                                  | `switch_session` 时调用 `registerSupervisorRuntimeReset`                          |
-| **fileBrowser 模式**           | `chat-ws.ts` 进程变量                      | `~open` 目录浏览状态串会话                                   | 改为 `Map<sessionId, state>`（见 §5.3）                                             |
+| 资源                           | 路径 / 形态                                | 多会话影响                                               | 状态 |
+| ---------------------------- | -------------------------------------- | --------------------------------------------------- | ---- |
+| **`{sessionId}.session-notes.md`** | `data/sessions/{id}.session-notes.md` | TaskState / plan fence / 压缩恢复 **按会话隔离** | ✅ v0.3 已完成（见 §0.7） |
+| **FileMemoryManager**        | 进程单例                                   | 长期记忆全局共享                                            | 可接受（记忆本就不按会话切） |
+| **Supervisor runtime cache** | 进程级                                    | 切换 session 须 reset                                  | `switch_session` 时 `resetSupervisorRuntimeCache` |
+| **fileBrowser 模式**           | `Map<sessionId, state>`                      | 按会话隔离                                   | ✅ v0.3 已完成 |
 
 
-`session-notes.md` 引用链（隔离时需一并改）：
+`session-notes` 引用链（v0.3 已按 id 隔离）：
 
-- `src/harness/harness-memory.ts` — 快照恢复、plan fence 读写
-- `src/memory/file-memory/session-memory.ts` — `notesPath: sessionDir/session-notes.md`
-- `src/web/routes/sessions.ts` — plan API fallback
-- `src/harness/context-compactor.ts` / `compaction-strategy.ts` — 压缩提示中的路径
+- `src/memory/file-memory/session-memory.ts` — `sessionNotesPath(dir, id)`
+- `src/harness/harness-memory.ts` — `HarnessMemoryConfig.sessionId`
+- `src/web/routes/sessions.ts` — plan API 读 `{id}.session-notes.md`
+- 旧全局 `session-notes.md` → 首次 `GET /api/sessions` 迁移为 `default.session-notes.md`
+
+**剩余已知限制（非 session-notes）**：多 Tab 竞态（§0.10）、`index.json` 无文件锁。
 
 #### 运行时约束（产品层，非架构缺陷）
 
@@ -281,7 +283,7 @@ const SESSION_ID = 'default';
 | **中**  | streaming 互斥（切换/新建时禁止）                                        | 前后端双重校验                                                                           |
 | **中**  | 多端 `session_updated` 带 `sessionId` 过滤                         | 避免 tab 间误刷                                                                        |
 | **中**  | 远程端跟随 PC `activeSessionId`（方案 A）                              | `remote-ws.ts` 对齐                                                                 |
-| **中高** | `session-notes.md` 按 session 隔离                               | 动 `harness-memory`、`session-memory`、compaction、plan API；**若 v0.1 不做，须在验收中标注已知限制** |
+| **中高** | ~~`session-notes.md` 按 session 隔离~~                               | ✅ **v0.3 已完成** |
 | **低**  | 移除 Web 端 `~clear`                                             | 删除分支 + 命令列表项                                                                      |
 | **低**  | CLI `/clear` 保持不变                                             | 不在本需求范围                                                                           |
 
@@ -289,7 +291,7 @@ const SESSION_ID = 'default';
 **最难的三块（按优先级）：**
 
 1. `**chat-ws` 单例缓存改造** — 从「一份 `cachedMessages`」到「按 sessionId 切换 + 刷盘」；
-2. `**session-notes.md` 全局共享** — 不隔离则 plan / 会话记忆可能串；隔离则触及 Harness 记忆子系统；
+2. ~~**`session-notes.md` 全局共享**~~ — ✅ v0.3 已按 `{sessionId}.session-notes.md` 隔离；
 3. **切换时的 streaming 互斥与多端同步** — 产品正确性，实现量适中。
 
 **相对容易、可先做（Phase 1）：** API 修复 + index + migration，与 Harness 无耦合，可独立 PR 验证。
@@ -594,7 +596,7 @@ sessionId: activeSessionId,  // 替代硬编码 'default'
 
 | 资源                       | 策略                                                                                              |
 | ------------------------ | ----------------------------------------------------------------------------------------------- |
-| `session-notes.md`       | **v0.1 仍全局共享**；ExecutionPlan fallback 可能串会话 — 已知限制，文档标注；v0.2 可改为 `{sessionId}.session-notes.md` |
+| `{sessionId}.session-notes.md` | **v0.3 已按 session 隔离**；plan / runtime fence 不串会话 |
 | `data/memory-files/`     | 全局共享（长期记忆不按 session 切分）                                                                         |
 | FileMemoryManager        | 进程单例，不按 session 隔离                                                                              |
 | Supervisor runtime cache | `switch_session` 时调用已有 `registerSupervisorRuntimeReset` 或等价 reset                               |
@@ -837,7 +839,7 @@ test/web/chat-ws-switch-session.test.ts
 | 风险                                 | 对策                                                                     |
 | ---------------------------------- | ---------------------------------------------------------------------- |
 | 切换 session 时 streaming 未结束         | 前端禁止切换 + 后端拒绝 `switch_session`                                         |
-| `session-notes.md` 全局共享导致 plan 串会话 | v0.1 文档标注；切换时 ExecutionPlan.clear + 按 checkpoint 读 plan；v0.2 见 Phase 5 |
+| `{sessionId}.session-notes` 串会话 | ✅ v0.3 已隔离；切换时 ExecutionPlan.clear + 按 session checkpoint 读 plan |
 | `cachedMessages` 竞态写错 session      | switch 前先 await 刷盘；单线程 Node 内串行化                                       |
 | 远程端与 PC session 不一致                | `session_updated` 带 sessionId，前端忽略非当前 session 事件                       |
 | index.json 并发写损坏                   | 写 tmp + rename；或用 append-only log（首版 tmp 足够）                           |
@@ -859,7 +861,7 @@ test/web/chat-ws-switch-session.test.ts
 | 顶栏品牌区              | `src/public/index.html` — `.nav-brand` / `.logo-text`                         |
 | 响应式断点参考            | `src/public/css/style.css` — `@media (max-width: 640px)`（顶栏）；侧栏以 **768px** 为准 |
 | ExecutionPlan      | `src/public/js/chat-execution-plan.js`                                        |
-| session-notes 全局共享 | `src/harness/harness-memory.ts`, `src/memory/file-memory/session-memory.ts`   |
+| session-notes 按 session | `session-memory.ts` → `{sessionId}.session-notes.md`（v0.3） |
 | Supervisor reset   | `src/harness/supervisor/supervisor-runtime-cache.ts`                          |
 
 

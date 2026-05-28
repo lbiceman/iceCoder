@@ -55,17 +55,25 @@ export function isSyntheticUserBlockContent(content: string): boolean {
   );
 }
 
+export function sessionNotesPathHint(sessionId?: string): string {
+  return sessionId
+    ? `data/sessions/${sessionId}.session-notes.md`
+    : 'data/sessions/{sessionId}.session-notes.md';
+}
+
 export function truncateSessionNotesForCompact(
   sessionNotes: string,
   maxChars: number = MAX_SESSION_NOTES_COMPACT_CHARS,
+  sessionId?: string,
 ): { text: string; truncated: boolean } {
   if (sessionNotes.length <= maxChars) {
     return { text: sessionNotes, truncated: false };
   }
+  const notesPath = sessionNotesPathHint(sessionId);
   return {
     text:
       sessionNotes.slice(0, maxChars)
-      + `\n\n...(session notes truncated for compaction, original ${sessionNotes.length} chars; see data/sessions/session-notes.md for full file when applicable)`,
+      + `\n\n...(session notes truncated for compaction, original ${sessionNotes.length} chars; see ${notesPath} for full file when applicable)`,
     truncated: true,
   };
 }
