@@ -135,6 +135,8 @@ export interface SessionRuntimeEvidenceInput {
     commandsRun: string[];
     verificationRequired: boolean;
     verificationStatus: string;
+    fileDeliverableWriteVersions?: Record<string, number>;
+    fileDeliverableConfirmVersions?: Record<string, number>;
   };
   repo: {
     filesRead: string[];
@@ -162,6 +164,15 @@ const VERIFICATION_STATUSES = new Set<string>([
   'not_required', 'required', 'passed', 'failed',
 ]);
 
+function parseOptionalVersionRecord(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) out[key] = raw;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function capPaths(paths: string[]): string[] {
   return paths.slice(0, MAX_PERSIST_PATHS);
 }
@@ -186,7 +197,7 @@ function capRepoSnapshot(r: RepoContextSnapshot): RepoContextSnapshot {
 }
 
 function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskStateSnapshot {
-  return {
+  const snap: TaskStateSnapshot = {
     goal: input.goal,
     intent: input.intent as TaskIntent,
     phase: input.phase as TaskPhase,
@@ -196,6 +207,13 @@ function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskSt
     verificationRequired: input.verificationRequired,
     verificationStatus: input.verificationStatus as VerificationStatus,
   };
+  if (input.fileDeliverableWriteVersions) {
+    snap.fileDeliverableWriteVersions = { ...input.fileDeliverableWriteVersions };
+  }
+  if (input.fileDeliverableConfirmVersions) {
+    snap.fileDeliverableConfirmVersions = { ...input.fileDeliverableConfirmVersions };
+  }
+  return snap;
 }
 
 function inputToRepoSnapshot(input: SessionRuntimeEvidenceInput['repo']): RepoContextSnapshot {
@@ -267,6 +285,9 @@ export function parsePersistedRuntime(notes: string): {
   }
   if (!Array.isArray(rr.testCommands) || !Array.isArray(rr.recentDiagnostics)) return null;
 
+  const writeVersions = parseOptionalVersionRecord(tt.fileDeliverableWriteVersions);
+  const confirmVersions = parseOptionalVersionRecord(tt.fileDeliverableConfirmVersions);
+
   const outTask: TaskStateSnapshot = {
     goal: tt.goal,
     intent: tt.intent as TaskIntent,
@@ -276,6 +297,8 @@ export function parsePersistedRuntime(notes: string): {
     commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
     verificationRequired: tt.verificationRequired,
     verificationStatus: tt.verificationStatus as VerificationStatus,
+    ...(writeVersions ? { fileDeliverableWriteVersions: writeVersions } : {}),
+    ...(confirmVersions ? { fileDeliverableConfirmVersions: confirmVersions } : {}),
   };
   const outRepo: RepoContextSnapshot = {
     filesRead: rr.filesRead.filter((x): x is string => typeof x === 'string'),

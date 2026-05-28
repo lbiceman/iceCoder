@@ -282,7 +282,7 @@ export async function resilienceSaveCheckpoint(
         verificationOutputTail: checkpointVerificationOutputTail(state),
         acceptanceGate: checkpointAcceptanceGate(state),
         ...checkpointHarnessEscalationFields(state),
-        verificationPending: state.taskState.shouldBlockFinalForVerification(
+        verificationPending: state.taskState.isVerificationBlockingFinalAfterSync(
           state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
         ),
         lastStopReason: stopReason,

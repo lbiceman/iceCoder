@@ -66,7 +66,7 @@ export interface CheckpointSaveInput {
   appendTool?: ToolHistoryEntry;
   /** 增量的 recent failure 记录 */
   appendFailure?: FailureHistoryEntry;
-  /** 当前是否有 verification pending（来自 TaskState.shouldBlockFinalForVerification） */
+  /** 当前是否有 verification pending（来自 TaskState.isVerificationBlockingFinalAfterSync） */
   verificationPending?: boolean;
   /** 待注入的 recovery signal（新触发的） */
   appendRecoverySignal?: RecoverySignal;

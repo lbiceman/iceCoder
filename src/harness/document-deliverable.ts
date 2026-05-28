@@ -1,17 +1,16 @@
 /**
  * 交付物类型判定 — 与 TaskIntent 解耦。
  *
- * - engineering：工程源码/配置白名单 → npm test / tsc / lint
- * - file_deliverable：其余一切写文件（含未知扩展名、无扩展名、脚本）→ file_info / read_file
+ * - engineering：源码/样式白名单 → npm test / tsc / lint
+ * - file_deliverable：其余一切写文件（含未知扩展名、无扩展名、脚本、数据/json/sql）→ file_info / read_file
  * - none：无写文件
  */
 
+import type { TaskIntent, VerificationStatus } from '../types/runtime-snapshot.js';
+
 export type DeliverableKind = 'file_deliverable' | 'engineering' | 'none';
 
-/** @deprecated 使用 {@link DeliverableKind} 的 file_deliverable */
-export type LegacyDocumentKind = 'document';
-
-/** 含任一即走工程验收；shell 脚本不在此列，走 file_deliverable */
+/** 含任一即走工程验收；json/yaml/sql 等配置/数据扩展名不在此列（单独修改时用 file_info 验收） */
 const ENGINEERING_EXTENSIONS = new Set([
   'ts',
   'tsx',
@@ -34,12 +33,6 @@ const ENGINEERING_EXTENSIONS = new Set([
   'cs',
   'rb',
   'php',
-  'sql',
-  'json',
-  'yaml',
-  'yml',
-  'toml',
-  'xml',
   'css',
   'scss',
   'less',
@@ -66,7 +59,6 @@ export function isEngineeringDeliverablePath(path: string): boolean {
 
 /**
  * 变更列表为空 → none；含工程白名单扩展名 → engineering；否则 → file_deliverable。
- * 未知扩展名、无扩展名（LICENSE/Makefile）一律 file_deliverable。
  */
 export function classifyChangedFiles(filesChanged: readonly string[]): DeliverableKind {
   if (filesChanged.length === 0) return 'none';
@@ -74,25 +66,10 @@ export function classifyChangedFiles(filesChanged: readonly string[]): Deliverab
   return 'file_deliverable';
 }
 
-/** file_deliverable 模式下需写后确认的全部路径（非 engineering 的 filesChanged） */
+/** file_deliverable 模式下需写后确认的全部路径 */
 export function fileDeliverablePaths(filesChanged: readonly string[]): string[] {
   if (classifyChangedFiles(filesChanged) !== 'file_deliverable') return [];
   return filesChanged.filter(file => !isEngineeringDeliverablePath(file));
-}
-
-/** @deprecated 使用 {@link fileDeliverablePaths} */
-export function documentDeliverablePaths(filesChanged: readonly string[]): string[] {
-  return fileDeliverablePaths(filesChanged);
-}
-
-/** @deprecated 仅用于旧测试；未知扩展名现属 file_deliverable 而非 document 子集 */
-export function isDocumentDeliverablePath(path: string): boolean {
-  const ext = fileExtension(path);
-  if (!ext) return false;
-  const docLike = new Set([
-    'md', 'markdown', 'txt', 'doc', 'docx', 'pdf', 'html', 'htm', 'mdx', 'log',
-  ]);
-  return docLike.has(ext);
 }
 
 export function pathsReferToSameFile(a: string, b: string): boolean {
@@ -103,20 +80,20 @@ export function isFileDeliverableConfirmationTool(toolName: string): boolean {
   return FILE_DELIVERABLE_CONFIRM_TOOLS.has(toolName);
 }
 
-/** @deprecated 使用 {@link isFileDeliverableConfirmationTool} */
-export function isDocumentConfirmationTool(toolName: string): boolean {
-  return isFileDeliverableConfirmationTool(toolName);
-}
-
 export function canVerifyDeliverableKind(
   kind: DeliverableKind,
   toolNames: readonly string[],
+  verificationStatus: VerificationStatus = 'not_required',
 ): boolean {
-  if (kind === 'none') return false;
-  if (kind === 'file_deliverable') {
-    return toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
+  const hasRunCommand = toolNames.some(name => name === 'run_command');
+  const hasFileConfirm = toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
+
+  if (kind === 'file_deliverable') return hasFileConfirm;
+  if (kind === 'engineering') return hasRunCommand;
+  if (verificationStatus === 'required' || verificationStatus === 'failed') {
+    return hasRunCommand;
   }
-  return toolNames.some(name => name === 'run_command');
+  return false;
 }
 
 /** file_info 成功结果是否表明非空文件 */
@@ -143,16 +120,26 @@ export function isFileDeliverableOrientedTask(
 ): boolean {
   if (classifyChangedFiles(filesChanged) === 'file_deliverable') return true;
   if (filesChanged.length > 0) return false;
-
-  const g = goal.toLowerCase();
-  return /readme|文档|markdown|\.md\b|docx|\.pdf\b|报告|report|pptx|xlsx|整理.*md|写成.*文档|生成.*文档|清理|cleanup/i.test(g)
-    || /write.*readme|documentation|markdown file/i.test(g);
+  return hasUnfulfilledFileDeliverableGoal(goal, filesChanged);
 }
 
-/** @deprecated 使用 {@link isFileDeliverableOrientedTask} */
-export function isDocumentOrientedTask(
+/** 目标要求写文件交付物但尚未写入（拦截无交付物早停） */
+export function hasUnfulfilledFileDeliverableGoal(
   goal: string,
-  filesChanged: readonly string[],
+  filesChanged: readonly string[] = [],
+  intent?: TaskIntent,
 ): boolean {
-  return isFileDeliverableOrientedTask(goal, filesChanged);
+  if (filesChanged.length > 0) return false;
+  if (intent === 'question' || intent === 'inspect') return false;
+
+  const g = goal.trim();
+  if (!g) return false;
+
+  if (/整理.*(?:md|文档)|写成.*(?:文档|md|file)|生成.*(?:文档|md|file)|输出.*文件|导出.*文件|保存.*文件|放到/i.test(g)) {
+    return true;
+  }
+
+  const hasFileNoun = /readme|文档|markdown|\.md\b|docx|\.pdf\b|pptx|xlsx|\.txt\b|\bfile\b/i.test(g);
+  const hasWriteVerb = /写|生成|整理|放到|保存|导出|输出|write|save|export|create|put/i.test(g);
+  return hasFileNoun && hasWriteVerb;
 }

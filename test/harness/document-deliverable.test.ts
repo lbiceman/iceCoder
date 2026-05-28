@@ -4,7 +4,7 @@ import {
   canVerifyDeliverableKind,
   classifyChangedFiles,
   fileDeliverablePaths,
-  isDocumentDeliverablePath,
+  hasUnfulfilledFileDeliverableGoal,
   isEngineeringDeliverablePath,
   isFileDeliverableOrientedTask,
   isNonEmptyFileInfoOutput,
@@ -26,10 +26,18 @@ describe('document-deliverable', () => {
     expect(classifyChangedFiles(['backup.bak'])).toBe('file_deliverable');
   });
 
+  it('classifies data/config extensions as file_deliverable not engineering', () => {
+    expect(classifyChangedFiles(['/tmp/output.json'])).toBe('file_deliverable');
+    expect(classifyChangedFiles(['/tmp/dump.sql'])).toBe('file_deliverable');
+    expect(classifyChangedFiles(['config.yaml'])).toBe('file_deliverable');
+    expect(isEngineeringDeliverablePath('package.json')).toBe(false);
+  });
+
   it('classifies mixed or code changes as engineering', () => {
     expect(classifyChangedFiles(['src/a.ts', 'README.md'])).toBe('engineering');
     expect(classifyChangedFiles(['src/a.ts'])).toBe('engineering');
     expect(classifyChangedFiles(['src/a.ts', 'notes.bak'])).toBe('engineering');
+    expect(classifyChangedFiles(['src/a.ts', 'package.json'])).toBe('engineering');
   });
 
   it('fileDeliverablePaths includes all non-engineering changed files', () => {
@@ -50,6 +58,13 @@ describe('document-deliverable', () => {
     expect(canVerifyDeliverableKind('engineering', ['run_command'])).toBe(true);
   });
 
+  it('none kind allows run_command retry when verification pending or failed', () => {
+    expect(canVerifyDeliverableKind('none', ['run_command'], 'failed')).toBe(true);
+    expect(canVerifyDeliverableKind('none', ['run_command'], 'required')).toBe(true);
+    expect(canVerifyDeliverableKind('none', ['run_command'], 'not_required')).toBe(false);
+    expect(canVerifyDeliverableKind('none', ['file_info'], 'failed')).toBe(false);
+  });
+
   it('parses non-empty file_info output', () => {
     expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 50143, type: 'file' }))).toBe(true);
     expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 0, type: 'file' }))).toBe(false);
@@ -66,9 +81,17 @@ describe('document-deliverable', () => {
     expect(isFileDeliverableOrientedTask('fix login bug', [])).toBe(false);
   });
 
-  it('isDocumentDeliverablePath remains for legacy doc-like check only', () => {
-    expect(isDocumentDeliverablePath('a.md')).toBe(true);
-    expect(isDocumentDeliverablePath('a.tmp')).toBe(false);
+  it('hasUnfulfilledFileDeliverableGoal blocks write goals without files', () => {
+    expect(hasUnfulfilledFileDeliverableGoal('整理成 md 放到桌面', [], 'edit')).toBe(true);
+    expect(hasUnfulfilledFileDeliverableGoal('解释一下 markdown 语法', [], 'inspect')).toBe(false);
+    expect(hasUnfulfilledFileDeliverableGoal('清理 C 盘', [], 'edit')).toBe(false);
+    expect(hasUnfulfilledFileDeliverableGoal('整理成 md', ['/tmp/a.md'], 'edit')).toBe(false);
+  });
+
+  it('hasUnfulfilledFileDeliverableGoal ignores chat-only report goals', () => {
+    expect(hasUnfulfilledFileDeliverableGoal('生成测试报告', [], 'edit')).toBe(false);
+    expect(hasUnfulfilledFileDeliverableGoal('write a summary report', [], 'edit')).toBe(false);
+    expect(hasUnfulfilledFileDeliverableGoal('帮我写 readme 文档', [], 'docs')).toBe(true);
   });
 });
 
@@ -170,6 +193,31 @@ describe('TaskState file deliverable verification', () => {
     expect(state.isVerificationBlockingFinal()).toBe(true);
   });
 
+  it('requires all multi-file deliverables confirmed', () => {
+    const state = new TaskState('写两份报告');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/a.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'w2', name: 'write_file', arguments: { path: '/tmp/b.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'f1', name: 'file_info', arguments: { path: '/tmp/a.md' } },
+      { success: true, output: JSON.stringify({ size: 10, type: 'file' }) },
+    );
+
+    expect(state.areAllFileDeliverablesConfirmed()).toBe(false);
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      { id: 'f2', name: 'file_info', arguments: { path: '/tmp/b.md' } },
+      { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
+    );
+    expect(state.snapshot().verificationStatus).toBe('passed');
+  });
+
   it('still requires npm test when code and doc both changed', () => {
     const state = new TaskState('fix bug and update readme');
     state.recordToolResult(
@@ -204,10 +252,14 @@ describe('TaskState file deliverable verification', () => {
     expect(state.snapshot().verificationStatus).toBe('passed');
   });
 
-  it('applySnapshot restores write version and passed confirm for file deliverable task', () => {
+  it('snapshot persists write versions across restore', () => {
     const state = new TaskState('doc task');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'w2', name: 'append_file', arguments: { path: '/tmp/out.md' } },
       { success: true, output: 'ok' },
     );
     state.recordToolResult(
@@ -215,10 +267,24 @@ describe('TaskState file deliverable verification', () => {
       { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
     );
     const snap = state.snapshot();
+    expect(snap.fileDeliverableWriteVersions?.['/tmp/out.md']).toBe(2);
+    expect(snap.fileDeliverableConfirmVersions?.['/tmp/out.md']).toBe(2);
 
     const restored = new TaskState('other');
     restored.applySnapshot(snap);
     expect(restored.snapshot().verificationStatus).toBe('passed');
     expect(restored.isVerificationBlockingFinal()).toBe(false);
+    expect(restored.areAllFileDeliverablesConfirmed()).toBe(true);
+  });
+
+  it('isVerificationBlockingFinal is side-effect free', () => {
+    const state = new TaskState('写文档');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
+      { success: true, output: 'ok' },
+    );
+    const before = state.snapshot();
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+    expect(state.snapshot()).toEqual(before);
   });
 });

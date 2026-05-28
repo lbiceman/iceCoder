@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildIncompleteContinuationPrompt,
   checkpointHasPendingWork,
   hasPendingWork,
   isReasoningOnlyResponse,
@@ -78,6 +79,80 @@ describe('hasPendingWork', () => {
         commandsRun: [], testCommands: [], recentDiagnostics: [],
       },
     )).toBe(true);
+  });
+
+  it('is true when write deliverable goal has no files yet', () => {
+    expect(hasPendingWork(
+      {
+        goal: '整理 ant design 成 md 文档放到桌面', intent: 'docs', phase: 'intent',
+        filesRead: [], filesChanged: [],
+        commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
+      },
+      {
+        filesRead: [], filesChanged: [], commandsRun: [],
+        testCommands: [], recentDiagnostics: [],
+      },
+    )).toBe(true);
+  });
+
+  it('is false for chat-only report goal without file deliverable intent', () => {
+    expect(hasPendingWork(
+      {
+        goal: '生成测试报告', intent: 'edit', phase: 'intent',
+        filesRead: [], filesChanged: [],
+        commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
+      },
+      {
+        filesRead: [], filesChanged: [], commandsRun: [],
+        testCommands: [], recentDiagnostics: [],
+      },
+    )).toBe(false);
+  });
+});
+
+describe('buildIncompleteContinuationPrompt', () => {
+  const emptyRepo = {
+    filesRead: [], filesChanged: [], commandsRun: [],
+    testCommands: [], recentDiagnostics: [],
+  };
+
+  it('prompts write_file + file_info when deliverable not written yet', () => {
+    const prompt = buildIncompleteContinuationPrompt(
+      {
+        goal: '整理 ant design 成 md 文档放到桌面', intent: 'docs', phase: 'intent',
+        filesRead: [], filesChanged: [],
+        commandsRun: [], verificationRequired: false, verificationStatus: 'not_required',
+      },
+      emptyRepo,
+    );
+    expect(prompt).toMatch(/write_file|edit_file/i);
+    expect(prompt).toMatch(/file_info|read_file/i);
+    expect(prompt).not.toMatch(/Run tests/i);
+  });
+
+  it('prompts file_info for pending file_deliverable changes', () => {
+    const prompt = buildIncompleteContinuationPrompt(
+      {
+        goal: '写文档', intent: 'docs', phase: 'editing',
+        filesRead: [], filesChanged: ['/tmp/out.md'],
+        commandsRun: [], verificationRequired: true, verificationStatus: 'required',
+      },
+      emptyRepo,
+    );
+    expect(prompt).toMatch(/file_info|read_file/i);
+    expect(prompt).not.toMatch(/Run tests/i);
+  });
+
+  it('prompts run tests for engineering pending work', () => {
+    const prompt = buildIncompleteContinuationPrompt(
+      {
+        goal: 'fix bug', intent: 'edit', phase: 'editing',
+        filesRead: [], filesChanged: ['src/a.ts'],
+        commandsRun: [], verificationRequired: true, verificationStatus: 'required',
+      },
+      emptyRepo,
+    );
+    expect(prompt).toMatch(/Run tests/i);
   });
 });
 

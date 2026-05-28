@@ -14,7 +14,6 @@ import {
 import {
   canVerifyDeliverableKind,
   classifyChangedFiles,
-  isFileDeliverableOrientedTask,
 } from './document-deliverable.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import {
@@ -289,12 +288,12 @@ export async function handleNoToolCalls(
 
   // 状态门控：以下任一成立 → 跳过 stop hook
   // 1) 问答 / 查看类意图（casual harness）
-  // 2) 文档导向任务（按 goal / 已变更文件扩展名判定，非 intent=docs）
+  // 2) 已写入的非工程 file 交付物（按 filesChanged 判定）
   // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
   // prematureCompletionRecovery 会接管真正有 pendingWork 的早停场景。
   const skipStopHook =
     shouldApplyCasualHarness(taskSnap.intent)
-    || isFileDeliverableOrientedTask(taskSnap.goal, taskSnap.filesChanged)
+    || classifyChangedFiles(taskSnap.filesChanged) === 'file_deliverable'
     || (!pendingWork && hasToolCallSinceUser);
 
   if (deps.stopHookManager.count > 0 && !skipStopHook) {
@@ -334,38 +333,14 @@ export async function handleNoToolCalls(
     }
   }
 
-  if (
-    currentTools.length > 0
-    && !hasAssistantToolCallAfterLatestRealUser(msgs)
-    && state.noToolExecutionRecoveryCount < 1
-    && state.stopHookContinuationCount === 0
-    && (
-      containsEmbeddedToolCalls(response.content)
-      || (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
-      || resumeWithPending
-      || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
-    )
-  ) {
-    state.noToolExecutionRecoveryCount++;
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
-    msgs.push({
-      role: 'user',
-      content: [
-        '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
-        '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-      ].join('\n'),
-    });
-    state.transition = 'no_tool_execution_recovery';
-    return { action: 'continue' };
-  }
-
-  // verification gate：当任务还有未验证的工程/文档交付动作时拉回 LLM 调工具。
+  // verification gate：验收 pending 时优先于 no_tool recovery
   const deliverableKind = classifyChangedFiles(taskSnap.filesChanged);
   const toolNames = currentTools.map(t => t.name);
-  const canVerifyDeliverable = canVerifyDeliverableKind(deliverableKind, toolNames);
+  const canVerifyDeliverable = canVerifyDeliverableKind(
+    deliverableKind,
+    toolNames,
+    taskSnap.verificationStatus,
+  );
   state.taskState.tryMarkFileDeliverablesVerified();
   let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
 
@@ -404,9 +379,11 @@ export async function handleNoToolCalls(
     return returnVerificationExhausted(
       deliverableKind === 'file_deliverable'
         ? '文件交付物需要 file_info 或 read_file 确认，但当前工具集不可用。'
-        : '工程变更需要 run_command 验收，但当前工具集不可用。',
+        : deliverableKind === 'engineering'
+          ? '工程变更需要 run_command 验收，但当前工具集不可用。'
+          : '验收命令需要 run_command 重试，但当前工具集不可用。',
     );
-  } else {
+  } else if (blockVerification) {
     if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
       if (deliverableKind === 'file_deliverable') {
         state.taskState.reconcileFileDeliverablesAfterWrite();
@@ -418,7 +395,9 @@ export async function handleNoToolCalls(
         console.log('[harness] verification gate 连续注入已达上限，强制结束');
         return returnVerificationExhausted();
       }
-      console.log('[harness] 文件交付物 verification gate 熔断：已自动通过验收');
+      if (deliverableKind === 'file_deliverable') {
+        console.log('[harness] 文件交付物 verification gate 熔断：已自动通过验收');
+      }
     } else {
       state.verificationGateContinuationCount++;
       if (response.content || response.reasoningContent) {
@@ -436,6 +415,34 @@ export async function handleNoToolCalls(
       state.transition = 'stop_hook_continue';
       return { action: 'continue' };
     }
+  }
+
+  if (
+    currentTools.length > 0
+    && !hasAssistantToolCallAfterLatestRealUser(msgs)
+    && state.noToolExecutionRecoveryCount < 1
+    && state.stopHookContinuationCount === 0
+    && (
+      containsEmbeddedToolCalls(response.content)
+      || (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
+      || resumeWithPending
+      || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
+    )
+  ) {
+    state.noToolExecutionRecoveryCount++;
+    if (response.content || response.reasoningContent) {
+      pushAssistantForHistory(msgs, response);
+    }
+    msgs.push({
+      role: 'user',
+      content: [
+        '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
+        '',
+        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+      ].join('\n'),
+    });
+    state.transition = 'no_tool_execution_recovery';
+    return { action: 'continue' };
   }
 
   if (

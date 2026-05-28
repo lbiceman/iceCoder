@@ -20,6 +20,10 @@ export interface TaskStateSnapshot {
   commandsRun: string[];
   verificationRequired: boolean;
   verificationStatus: VerificationStatus;
+  /** file_deliverable 写后版本（归一化路径 → 版本号） */
+  fileDeliverableWriteVersions?: Record<string, number>;
+  /** file_deliverable 确认时对应的写版本 */
+  fileDeliverableConfirmVersions?: Record<string, number>;
 }
 
 /** 与 RepoContext.snapshot() 形状一致 */

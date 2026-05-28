@@ -144,7 +144,7 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
     expect(state.noToolExecutionRecoveryCount).toBe(0);
   });
 
-  it('docs 意图即使回复含未完成关键词也跳过 hook 直接 model_done', async () => {
+  it('docs 意图无写文件且模型自承未完成 → stop hook 拦截', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '帮我写 readme 文档' },
     ];
@@ -166,11 +166,8 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
       },
     );
 
-    expect(result.action).toBe('return');
-    if (result.action === 'return') {
-      expect(result.result.loopState.stopReason).toBe('model_done');
-    }
-    expect(state.stopHookContinuationCount).toBe(0);
+    expect(result.action).toBe('continue');
+    expect(state.stopHookContinuationCount).toBe(1);
   });
 
   it('工程任务已动过工具且 verification 通过 → 跳过 hook 直接 model_done', async () => {
@@ -343,5 +340,60 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('verification_exhausted');
     }
+  });
+
+  it('工程变更 verification gate 熔断后仍 pending → verification_exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+    ];
+    const state = makeState(messages, 'fix bug');
+    state.verificationGateContinuationCount = 5;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+    }
+  });
+
+  it('无写文件但 npm test 失败 → verification gate 继续而非立刻 exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '跑测试' },
+    ];
+    const state = makeState(messages, '跑测试');
+    state.taskState.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: '', error: 'exit 1' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '测试失败了，我先总结。', finishReason: 'stop' },
+        userMessage: '跑测试',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(1);
   });
 });

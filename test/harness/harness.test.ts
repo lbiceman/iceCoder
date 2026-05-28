@@ -193,21 +193,22 @@ describe('Harness - 工具调用循环', () => {
   });
 
   it('执行型任务首轮未调用工具时会自动继续执行', async () => {
-    const tools = [makeTool('edit_file')];
+    const tools = [makeTool('edit_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
     const chatFn = createChatFn([
       finalResponse('我会先修改这个问题。'),
-      toolCallResponse([{ id: 'tc1', name: 'edit_file' }]),
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
       finalResponse('已修复'),
-    ]);
+    ], finalResponse('已修复'));
 
     const result = await harness.run('修复这个失败用例', chatFn);
 
     expect(result.content).toBe('已修复');
-    expect(result.loopState.totalToolCalls).toBe(1);
-    expect(chatFn).toHaveBeenCalledTimes(3);
+    expect(result.loopState.totalToolCalls).toBe(2);
+    expect(chatFn).toHaveBeenCalledTimes(4);
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
@@ -224,7 +225,9 @@ describe('Harness - 工具调用循环', () => {
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       stepReviewLlmStub(),
       finalResponse('已修复'),
+      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
+      stepReviewLlmStub(),
       finalResponse('已修复并通过测试'),
     ]);
 
@@ -246,10 +249,9 @@ describe('Harness - 工具调用循环', () => {
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
       finalResponse('已修复并验证'),
-    ]);
+    ], finalResponse('已修复并验证'));
 
     const result = await harness.run('修复失败用例', chatFn);
 
@@ -1519,7 +1521,7 @@ describe('Harness - 连续工具失败熔断', () => {
   });
 
   it('写文件成功后重置熔断计数', async () => {
-    const tools = [makeTool('edit_file')];
+    const tools = [makeTool('edit_file'), makeTool('run_command')];
     let fails = 0;
     const handler = async () => {
       fails++;
@@ -1534,6 +1536,10 @@ describe('Harness - 连续工具失败熔断', () => {
       toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc3', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc4', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+      stepReviewLlmStub(),
+      finalResponse('done'),
+      toolCallResponse([{ id: 'tc5', name: 'run_command', args: { command: 'npm test' } }]),
+      stepReviewLlmStub(),
       finalResponse('done'),
     ]);
     const result = await harness.run('test', chatFn);

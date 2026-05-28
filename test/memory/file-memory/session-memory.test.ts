@@ -361,6 +361,36 @@ describe('persisted runtime (icecoder-runtime)', () => {
     expect(parsePersistedRuntime(md)?.task.intent).toBe('edit');
   });
 
+  it('buildRuntimeEvidenceSection preserves file deliverable write versions', () => {
+    const md = buildRuntimeEvidenceSection(
+      {
+        task: {
+          goal: '写文档',
+          intent: 'docs',
+          phase: 'editing',
+          filesRead: [],
+          filesChanged: ['/tmp/out.md'],
+          commandsRun: [],
+          verificationRequired: true,
+          verificationStatus: 'required',
+          fileDeliverableWriteVersions: { '/tmp/out.md': 2 },
+          fileDeliverableConfirmVersions: { '/tmp/out.md': 1 },
+        },
+        repo: {
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      },
+      null,
+    );
+    const parsed = parsePersistedRuntime(md);
+    expect(parsed?.task.fileDeliverableWriteVersions?.['/tmp/out.md']).toBe(2);
+    expect(parsed?.task.fileDeliverableConfirmVersions?.['/tmp/out.md']).toBe(1);
+  });
+
   it('truncateSessionMemoryForCompact 保留 Runtime Evidence 内长 JSON', () => {
     const evidence = buildRuntimeEvidenceSection(
       {

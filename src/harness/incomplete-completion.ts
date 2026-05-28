@@ -4,6 +4,7 @@ import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
   classifyChangedFiles,
+  hasUnfulfilledFileDeliverableGoal,
 } from './document-deliverable.js';
 import type { TaskState } from './task-state.js';
 import type { TaskCheckpoint } from './checkpoint.js';
@@ -23,6 +24,10 @@ export function hasPendingWork(
     return task.verificationStatus === 'required';
   }
 
+  if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
+    return true;
+  }
+
   const verificationAttempted = repo.testCommands.length > 0
     || repo.recentDiagnostics.some(d => /\b(test|vitest|jest|build|lint|typecheck)\b/i.test(d));
 
@@ -32,7 +37,6 @@ export function hasPendingWork(
 
   if (
     task.filesChanged.length > 0
-    && task.verificationStatus !== 'passed'
     && verificationAttempted
     && repo.recentDiagnostics.length > 0
   ) {
@@ -80,14 +84,35 @@ export function buildIncompleteContinuationPrompt(
     lines.push(`- Last verification command: ${lastTest}`);
   }
   if (task.filesChanged.length > 0) {
-    lines.push(`- Changed files (${task.filesChanged.length}): continue from these and re-run verification.`);
+    if (classifyChangedFiles(task.filesChanged) === 'file_deliverable') {
+      lines.push(`- Changed files (${task.filesChanged.length}): confirm each with file_info or read_file.`);
+    } else {
+      lines.push(`- Changed files (${task.filesChanged.length}): continue from these and re-run verification.`);
+    }
+  } else if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
+    lines.push('- Expected file deliverable has not been written yet.');
   }
 
-  lines.push(
-    '',
-    'Continue NOW by calling tools (run_command, edit_file, write_file, read_file).',
-    'Do not output plans or thinking-only replies. Run tests, fix failures, then proceed.',
-  );
+  const awaitsFileWrite = hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent);
+  if (classifyChangedFiles(task.filesChanged) === 'file_deliverable') {
+    lines.push(
+      '',
+      'Continue NOW: run file_info or read_file on each changed file to confirm it exists and is non-empty.',
+      'Do not run npm test, wc, or shell grep for non-engineering file deliverables.',
+    );
+  } else if (awaitsFileWrite) {
+    lines.push(
+      '',
+      'Continue NOW: write the deliverable with write_file (or edit_file), then run file_info or read_file to confirm it exists and is non-empty.',
+      'Do not stop with a chat summary. Do not run npm test for file-only deliverables.',
+    );
+  } else {
+    lines.push(
+      '',
+      'Continue NOW by calling tools (run_command, edit_file, write_file, read_file).',
+      'Do not output plans or thinking-only replies. Run tests, fix failures, then proceed.',
+    );
+  }
 
   return lines.join('\n');
 }

@@ -36,7 +36,7 @@ describe('TaskState verification via node --check', () => {
     const snap = state.snapshot();
     expect(snap.phase).toBe('verification');
     expect(snap.verificationStatus).toBe('passed');
-    expect(state.shouldBlockFinalForVerification()).toBe(false);
+    expect(state.isVerificationBlockingFinalAfterSync()).toBe(false);
   });
 
   it('records failed npm test and blocks final completion', () => {
@@ -53,10 +53,10 @@ describe('TaskState verification via node --check', () => {
     const snap = state.snapshot();
     expect(snap.commandsRun).toContain('npm test');
     expect(snap.verificationStatus).toBe('failed');
-    expect(state.shouldBlockFinalForVerification()).toBe(true);
+    expect(state.isVerificationBlockingFinal()).toBe(true);
   });
 
-  it('sets verification required on any successful file write', () => {
+  it('sets verification required on successful file write with path', () => {
     const state = new TaskState('继续');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
@@ -64,5 +64,15 @@ describe('TaskState verification via node --check', () => {
     );
     expect(state.snapshot().verificationRequired).toBe(true);
     expect(state.snapshot().verificationStatus).toBe('required');
+  });
+
+  it('does not set verification required when write tool lacks path', () => {
+    const state = new TaskState('继续');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: {} },
+      { success: true, output: 'ok' },
+    );
+    expect(state.snapshot().filesChanged).toEqual([]);
+    expect(state.snapshot().verificationStatus).toBe('not_required');
   });
 });
