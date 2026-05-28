@@ -19,7 +19,7 @@ import {
   containsEmbeddedToolCalls,
   sanitizeAssistantContentForUser,
   salvageTextToolCallsInResponse,
-  TextToolCallStreamFilter,
+  AssistantVisibleStreamFilter,
 } from './text-tool-call-salvage.js';
 
 export interface StopHandlerDeps extends CheckpointDeps, ResilienceBridgeDeps {
@@ -105,7 +105,7 @@ export async function handleHarnessStop(
   try {
     // 优先使用流式调用，让前端实时看到总结内容
     if (streamFn) {
-      const streamFilter = new TextToolCallStreamFilter();
+      const streamFilter = new AssistantVisibleStreamFilter();
       const finalResponse = await streamFn(messages, (chunk, done) => {
         if (!done && chunk) {
           const safe = streamFilter.feed(chunk);

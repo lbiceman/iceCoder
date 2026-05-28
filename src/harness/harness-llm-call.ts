@@ -7,7 +7,7 @@ import {
 } from './harness-constants.js';
 import { buildLlmRoundLogFields, isRetryableError } from './harness-llm-log.js';
 import { isAbortError } from '../llm/abort-error.js';
-import { TextToolCallStreamFilter } from './text-tool-call-salvage.js';
+import { TextToolCallStreamFilter, AssistantVisibleStreamFilter } from './text-tool-call-salvage.js';
 import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
@@ -67,7 +67,7 @@ export async function callHarnessLlm(
   let response: LLMResponse;
   try {
     if (streamFn) {
-      const streamFilter = new TextToolCallStreamFilter();
+      const streamFilter = new AssistantVisibleStreamFilter();
       try {
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;

@@ -12,6 +12,10 @@ import {
   prepareAssistantContentForHistory,
   stripEmbeddedToolCalls,
 } from './text-format-tool-call-parsers.js';
+import {
+  EmbeddedThinkingStreamFilter,
+  stripEmbeddedThinking,
+} from './thinking-content-strip.js';
 
 export {
   containsEmbeddedToolCalls,
@@ -33,12 +37,25 @@ export const stripTextFormatToolCalls = stripEmbeddedToolCalls;
 
 /** 无原生 tool_calls 时，从 content 抢救为结构化 toolCalls。 */
 export function salvageTextToolCallsInResponse(response: LLMResponse): LLMResponse {
-  if (response.toolCalls?.length) return response;
-  const raw = response.content?.trim();
-  if (!raw || !containsEmbeddedToolCalls(raw)) return response;
+  if (response.toolCalls?.length) {
+    const cleaned = stripEmbeddedThinking(response.content ?? '');
+    if (cleaned !== (response.content ?? '')) {
+      return { ...response, content: cleaned };
+    }
+    return response;
+  }
+  const raw = stripEmbeddedThinking(response.content?.trim() ?? '');
+  if (!raw || !containsEmbeddedToolCalls(raw)) {
+    if (raw !== (response.content?.trim() ?? '')) {
+      return { ...response, content: raw };
+    }
+    return response;
+  }
 
   const { calls } = parseEmbeddedToolCallsFromText(raw);
-  if (calls.length === 0) return response;
+  if (calls.length === 0) {
+    return raw !== (response.content?.trim() ?? '') ? { ...response, content: raw } : response;
+  }
 
   const cleaned = stripEmbeddedToolCalls(raw);
   return {
@@ -49,11 +66,12 @@ export function salvageTextToolCallsInResponse(response: LLMResponse): LLMRespon
   };
 }
 
-/** 用户可见 assistant 正文：去掉嵌入的工具调用片段。 */
+/** 用户可见 assistant 正文：去掉思考块与嵌入的工具调用片段。 */
 export function sanitizeAssistantContentForUser(content: string | undefined): string {
   if (!content) return '';
-  if (!containsEmbeddedToolCalls(content)) return content;
-  const stripped = stripEmbeddedToolCalls(content);
+  const withoutThinking = stripEmbeddedThinking(content);
+  if (!containsEmbeddedToolCalls(withoutThinking)) return withoutThinking;
+  const stripped = stripEmbeddedToolCalls(withoutThinking);
   return stripped || '（模型以文本形式输出了工具调用，已尝试解析并执行；无额外文字说明。）';
 }
 
@@ -141,5 +159,24 @@ export class TextToolCallStreamFilter {
       }
     }
     return null;
+  }
+}
+
+/** 流式用户可见正文：先剥离思考块，再剥离嵌入 tool_call。 */
+export class AssistantVisibleStreamFilter {
+  private readonly thinking = new EmbeddedThinkingStreamFilter();
+  private readonly tools = new TextToolCallStreamFilter();
+
+  feed(chunk: string): string {
+    if (!chunk) return '';
+    const afterThinking = this.thinking.feed(chunk);
+    return afterThinking ? this.tools.feed(afterThinking) : '';
+  }
+
+  flush(): string {
+    const thinkingTail = this.thinking.flush();
+    const throughTools = thinkingTail ? this.tools.feed(thinkingTail) : '';
+    const toolTail = this.tools.flush();
+    return throughTools + toolTail;
   }
 }

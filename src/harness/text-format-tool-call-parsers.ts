@@ -5,6 +5,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ToolCall } from '../llm/types.js';
+import { stripEmbeddedThinking } from './thinking-content-strip.js';
 
 export interface TextSpan {
   start: number;
@@ -321,7 +322,7 @@ function stripLikelyToolJsonObjects(text: string): string {
 /** 写入会话 history 前的 assistant 正文净化。 */
 export function prepareAssistantContentForHistory(content: string | undefined): string {
   if (!content) return '';
-  return stripEmbeddedToolCalls(content);
+  return stripEmbeddedToolCalls(stripEmbeddedThinking(content));
 }
 
 /** 流式过滤：需识别的开放前缀（小写）。 */
