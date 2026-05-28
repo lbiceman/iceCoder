@@ -194,3 +194,64 @@ npm test
 npm run eval:agent
 git diff --check
 ```
+
+---
+
+## 7. L2 反构图对接主循环（`runRecoveryMainPath`）— **已完成（2026-05-28）**
+
+### 背景（勿忘）
+
+- **L2-5 已落地**：`SupervisorRuntimeBridge.runRecoveryMainPath()` 串联 M5→M6→M7→M8（`WorkspaceStateExtractor` → 置信度 → 安全检查 → `RetrospectiveGraphBuilder` → `GraphExecutor.replaceGraph`）。见 [`双模方案2-finish.md`](./requirement/双模方案2-finish.md) §10。
+- **L2-6 主循环只接了一半**：`harness-tool-round.ts` 在工具轮末调用 `bridge.evaluateAfterRound()`；决策为 `takeover` 时仅 `applyTakeover` 注入 `[System Recovery]` 文案，**未**调用 `runRecoveryMainPath`。
+- **全仓 `src/` 零调用**：`runRecoveryMainPath` 仅在 `test/harness/supervisor-bridge.test.ts` 等单测中使用。
+- **影响**：adaptive 下 critical 任务即使进入 `supervisorPhase=takeover`，也**没有**反构图重建 TaskGraph，模型仍按旧上下文自由试；与规格 §10 不一致。
+- **不触发 takeover 的任务**（如 `non_critical_docs`）与此无关；本条针对 **edit/debug/test/refactor** 等 critical 域。
+
+### 目标
+
+takeover 决策后，Harness 主循环自动走 §10 恢复主路径；成功则 `replaceGraph`，失败则 §19.2 二级强提示（不 silent fail）。
+
+### 需要做什么
+
+1. 在 `harness-tool-round.ts`（或独立 helper）中：当 `evaluateAfterRound` 返回 `decision.action === 'takeover'` 且 **非 shadow** 时，调用 `bridge.runRecoveryMainPath(...)`。
+2. 封装 `RecoveryMainPathContext` 构建（从 `HarnessRunState` / `RepoContext` / `TaskState` / 本轮 signals 组装）：
+   - `extractInput`（workspace 快照输入）
+   - `confidenceInput`（`roundsSinceExtract`、`lastVerifyPassed`、`repoFilesChanged`）
+   - `graphExecutor`、`correctionPort`、`messages`
+   - `signals`（来自 `bridge.getAccumulatedDeviationSignals()` 或本轮 decision）
+3. 处理与 `applyTakeover` 的 **inject 顺序**：先 takeover 块，再主路径；主路径成功不再重复长 recovery；失败时 §19.2 降级 inject 仅一条。
+4. **shadow 模式**：只写 timeline / 诊断，不 `replaceGraph`、不额外写 msgs（与 L2-5 行为一致）。
+5. 主路径 `tier=template_graph` 成功后，确认 `GraphExecutor` 与 forced ToolGate / `composeGraphHint` 行为一致。
+6. 可选：takeover 后首轮 `task_graph_init` 类 WS 事件是否与 strict 对齐（前端 execution plan）。
+
+### 建议触点
+
+| 文件 | 变更要点 |
+|------|----------|
+| `src/harness/harness-tool-round.ts` | `evaluateAfterRound` 后判断 takeover → `runRecoveryMainPath` |
+| `src/harness/supervisor/supervisor-bridge.ts` | 已有 API；必要时加 `buildRecoveryMainPathContext` 工厂 |
+| `src/harness/supervisor/workspace-state-extractor.ts` | `extractInput` 字段对照 |
+| `src/harness/task-graph-executor.ts` | `replaceGraph` / `enterTakeover` |
+| `test/harness/supervisor-bridge.test.ts` | 已有单测；补 **Harness 集成** 用例（mock takeover → 断言 replaceGraph） |
+| `docs/harness/Harness-L2与Gate工作逻辑.md` | §4.3 补充「主循环已接 / 未接」状态 |
+
+### 验收标准
+
+- critical 任务在 Web/adaptive 下 **人为堆信号触发 takeover** 后，timeline 出现 `recover` 且 `GraphExecutor.hasGraph()` 为 true（confidence/safety 通过时）。
+- confidence 低于 `templateGraphMin` 或 safety 失败时：不 replaceGraph，但有 §19.2 二级 `[System Recovery]` inject（经 CorrectionPort）。
+- `ICE_SUPERVISOR_SHADOW=1` 时不 replaceGraph、不改 phase 行为与现网一致。
+- `npm test` 新增/扩展用例绿；`npx tsc --noEmit` 通过。
+- 与 [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) 中「takeover Web 未验证」缺口可关闭一条手工场景。
+
+### 参考
+
+- 规格：[`双模方案2-finish.md`](./requirement/双模方案2-finish.md) §9（三条件）、§10（主路径）、§19.2（降级）
+- 缺口/批次：[`双模落地缺口-finish.md`](./requirement/双模落地缺口-finish.md) L2-5 / L2-6
+- 流程图：[`双模 L2 流程图-finish.md`](./requirement/双模%20L2%20流程图-finish.md) §3
+- bridge 注释：`runRecoveryMainPath` — 「在 evaluateAfterRound 决策为 takeover 后，由 Harness 调用」
+
+### 落地摘要
+
+- `harness-tool-round.ts`：`evaluateAfterRound` 返回 `takeover` 后调用 `applyTakeoverRecoveryMainPath`。
+- `harness-recovery-main-path.ts`：组装 M5 入参、`replaceGraph` / §19.2 降级、`task_graph_init` WS。
+- 置信度门槛：`data/supervisor-config.json` → `snapshotConfidence.templateGraphMin`（默认 0.65，可调权重）。

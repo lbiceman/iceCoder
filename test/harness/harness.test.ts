@@ -25,6 +25,8 @@ import {
   getHarnessTimeoutMsFromEnv,
   getHarnessTokenBudget,
 } from '../../src/harness/token-budget-config.js';
+import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
+import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 
 // ═══ 测试工具 ═══
 
@@ -56,6 +58,18 @@ function toolCallResponse(calls: { id: string; name: string; args?: Record<strin
     content,
     toolCalls: calls.map(c => ({ id: c.id, name: c.name, arguments: c.args ?? {} })),
     usage: makeUsage(),
+    finishReason: 'tool_calls',
+  };
+}
+
+function toolCallResponseAtOutputCeiling(
+  calls: { id: string; name: string; args?: Record<string, any> }[],
+  outputTokens = 16384,
+): LLMResponse {
+  return {
+    content: '',
+    toolCalls: calls.map(c => ({ id: c.id, name: c.name, arguments: c.args ?? {} })),
+    usage: makeUsage(100, outputTokens),
     finishReason: 'tool_calls',
   };
 }
@@ -445,6 +459,37 @@ describe('Harness - max-output-tokens 恢复', () => {
     const result = await harness.run('Very long text', chatFn);
 
     expect(result.loopState.stopReason).toBe('max_output_tokens');
+  });
+});
+
+describe('Harness - write 工具截断恢复', () => {
+  it('output 顶满且 write_file 缺 path 时跳过执行并注入恢复提示', async () => {
+    const tools = [makeTool('write_file'), makeTool('read_file')];
+    const executor = createToolExecutor(tools);
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      loop: { maxRounds: 10, maxOutputTokens: 16384 },
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponseAtOutputCeiling([
+        { id: 'w1', name: 'write_file', args: { content: 'x'.repeat(600) } },
+      ]),
+      finalResponse('will retry smaller'),
+    ]);
+
+    const result = await harness.run('Write doc', chatFn);
+
+    expect(result.messages.some(m =>
+      m.role === 'tool'
+      && typeof m.content === 'string'
+      && m.content.includes('[Tool skipped]')
+    )).toBe(true);
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('Continue NOW with a smaller strategy')
+    )).toBe(true);
   });
 });
 
@@ -1564,6 +1609,79 @@ describe('Harness - 连续工具失败熔断', () => {
       typeof m.content === 'string'
       && m.content.includes('[System / Rebuild Escalation]')
     )).toBe(false);
+  });
+
+  it('adaptive L2 开启时 non_critical 连续失败仍注入证据包（不受 suppressInject）', async () => {
+    const tools = [makeTool('read_file')];
+    const failHandler = async () => ({ success: false, output: '', error: 'path is required' }) as ToolResult;
+    const executor = createToolExecutor(tools, failHandler);
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+      supervisorBridge: bridge,
+    }), executor);
+
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc4', name: 'read_file' }]),
+      toolCallResponse([{ id: 'tc5', name: 'read_file' }]),
+      finalResponse('summary'),
+    ]);
+
+    const result = await harness.run(
+      '整理 Ant Design 文档成 md 放到桌面',
+      chatFn,
+    );
+
+    expect(bridge.getSupervisorPhase()).toBe('free');
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.includes('[Failure Evidence — 5 consecutive')
+    )).toBe(true);
+  });
+
+  it('adaptive takeover 后 runRecoveryMainPath 重建 TaskGraph', async () => {
+    const tools = [makeTool('edit_file')];
+    const failHandler = async () => ({ success: false, output: '', error: 'compile error' }) as ToolResult;
+    const executor = createToolExecutor(tools, failHandler);
+    const supervisorConfig = resolveSupervisorConfig({
+      mode: 'adaptive',
+      snapshotConfidence: { templateGraphMin: 0.5 },
+    }, {});
+    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+      supervisorBridge: bridge,
+    }), executor);
+
+    const sameArgs = { path: 'src/login.ts', content: 'fix' };
+    const chatFn = createChatFn([
+      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: sameArgs }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'tc2', name: 'edit_file', args: sameArgs }]),
+      stepReviewLlmStub(),
+      toolCallResponse([{ id: 'tc3', name: 'edit_file', args: sameArgs }]),
+      stepReviewLlmStub(),
+      finalResponse('recovery'),
+    ]);
+
+    await harness.run('fix failing unit tests in src/login.ts', chatFn);
+
+    expect(bridge.getSupervisorPhase()).toBe('takeover');
+    expect(bridge.eventTimeline.getRecentEvents().some(
+      e => e.event === 'recover' && e.reason?.includes('template_graph'),
+    )).toBe(true);
   });
 
   it('实质进展后移除 ephemeral 失败恢复消息', async () => {

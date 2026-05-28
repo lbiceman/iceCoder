@@ -152,6 +152,8 @@ export interface HarnessRunState {
   filesChangedAtRoundStart?: number;
   /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
   branchSwitchedThisRound?: boolean;
+  /** L2 §10 — 最近一次 runRecoveryMainPath 所在轮次；用于 roundsSinceExtract 与 handoff 回退重跑。 */
+  lastRecoveryExtractRound?: number;
   /**
    * L2-6 — Harness 主循环持有的 SupervisorRuntimeBridge 引用（off 时缺省）。
    * `harness-resilience.buildSupervisorCheckpointState` 与 after-round 钩子读取本字段，

@@ -112,7 +112,7 @@ const DEFAULT_CONFIG: IceCoderConfigFile = {
       modelName: 'gpt-4o',
       parameters: {
         temperature: 0.7,
-        maxTokens: 8192,
+        maxTokens: 16384,
       },
       isDefault: true,
     },

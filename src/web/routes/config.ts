@@ -66,7 +66,7 @@ export function resolveOpenAiRequestTimeoutMs(provider: ProviderConfig): number 
  */
 export async function resolveDefaultChatModelMeta(
   explicitConfigPath?: string,
-): Promise<{ modelName: string; maxContextTokens: number } | null> {
+): Promise<{ modelName: string; maxContextTokens: number; maxOutputTokens: number } | null> {
   const configFile = resolveConfigPath(explicitConfigPath);
   try {
     const raw = await fs.readFile(configFile, 'utf-8');
@@ -77,6 +77,7 @@ export async function resolveDefaultChatModelMeta(
     return {
       modelName: p.modelName || '',
       maxContextTokens: p.maxContextTokens ?? getModelMaxContext(p.modelName),
+      maxOutputTokens: p.parameters?.maxTokens ?? getModelMaxOutputTokens(p.modelName),
     };
   } catch {
     return null;
@@ -139,7 +140,7 @@ function getModelMaxContext(modelName: string): number {
 }
 
 /** Agent 运行时未配置 maxTokens 时的单次输出上限（未知/新模型兜底） */
-export const DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 8192;
+export const DEFAULT_AGENT_MAX_OUTPUT_TOKENS = 16384;
 
 /**
  * 根据模型名称返回单次最大输出 token 数。
@@ -150,20 +151,23 @@ export function getModelMaxOutputTokens(modelName: string): number {
 
   // DeepSeek 系列
   if (name.includes('deepseek-v4')) return 16384;
-  if (name.includes('deepseek')) return 8192;
+  if (name.includes('deepseek')) return 16384;
 
   // OpenAI 系列
   if (name.includes('o1') || name.includes('o3') || name.includes('o4')) return 100000;
   if (name.includes('gpt-4o')) return 16384;
   if (name.includes('gpt-4-turbo')) return 4096;
-  if (name.includes('gpt-4')) return 8192;
+  if (name.includes('gpt-4')) return 16384;
   if (name.includes('gpt-3.5')) return 4096;
 
   // GLM 系列
-  if (name.includes('glm')) return 8192;
+  if (name.includes('glm')) return 16384;
 
   // Qwen 系列
-  if (name.includes('qwen')) return 8192;
+  if (name.includes('qwen')) return 16384;
+
+  // MiniMax / MiMo 系列
+  if (name.includes('minimax') || name.includes('mimo')) return 16384;
 
   // Llama 系列
   if (name.includes('llama')) return 4096;

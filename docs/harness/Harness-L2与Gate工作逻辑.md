@@ -93,6 +93,8 @@ callHarnessLlm
 | Build Diagnostic Gate | 同上 | build 失败后暂停 build 类 `run_command` |
 | BranchBudget | `branch-budget.ts` | 限制重复失败命令/文件编辑 |
 | verification digest | `harness-tool-round.ts` | 验收命令多次失败后 inject 摘要 |
+| **连续工具失败阶梯** | `failure-evidence-recovery.ts` | 2~3 轻提示 / 4~6 证据包 / 7~9 强警告；**L2 开启时仍注入**（`source=lifecycle`，不占 I4 budget） |
+| **write 截断恢复** | `harness-tool-truncation-recovery.ts` | `finishReason=length` 或 output 顶满且 write 缺 `path` 时 skip + 换策略提示 |
 | step-review | `step-review.ts` | `verificationStatus=failed` 时不计为「有进展」 |
 
 ---
@@ -236,6 +238,7 @@ L2 由 `SupervisorRuntimeBridge` 承载，`ICE_SUPERVISOR_MODE` 控制 off / sha
 |------|------|------|
 | **每工具轮末** | `observeAfterTools` | 累积 signal + timeline，**不直接拦 model_done** |
 | **每工具轮末** | `evaluateAfterRound` | 相位机决策；takeover/handoff inject |
+| **takeover 进入 / handoff 回退** | `applyTakeoverRecoveryMainPath` | §10 M5→M8；`replaceGraph` 或 §19.2 降级（新图下轮 prep 注入） |
 | **工具轮内** | `composeGraphHint` | forced 模式下 graph hint |
 | **无工具 continuation** | `createCorrectionPort` | Gate / recovery 消息走 CorrectionPort |
 | **首轮 prep** | `shouldInitTaskGraphAtFirstRound` | adaptive 首轮不 init 图；strict 首轮 init |
@@ -252,7 +255,9 @@ free ──(§9 三条件满足)──► takeover ──(稳定窗口)──►
 | 相位 | 行为 |
 |------|------|
 | **free** | 观察 signal，满足条件则进入 takeover |
-| **takeover** | inject `[System Recovery]`；可 `replaceGraph` 重建任务图 |
+| **takeover** | inject `[System Recovery]`；**已**调用 `runRecoveryMainPath` → `replaceGraph` 或 strong_hint 降级 |
+
+**时序说明：** 进入 takeover 当轮先跑完旧图 `evaluateRound`，`replaceGraph` 在 after-round 末尾执行；**新图节点上下文从下一轮 prep 注入**。
 | **handoff_pending** | 准备交还 L1 执行权 |
 | **cooldown** | 冷却若干轮后回 free |
 

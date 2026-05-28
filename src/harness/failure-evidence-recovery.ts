@@ -3,6 +3,8 @@
  *
  * 阶梯（consecutiveToolFailures）：
  *   1 静默 | 2~3 轻提示 | 4~6 证据包（刷新） | 7~9 强警告 | ≥10 熔断
+ *
+ * L2 adaptive 开启时仍注入（harness-tool-round → injectToolFailureEscalation，source=lifecycle）。
  */
 
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';

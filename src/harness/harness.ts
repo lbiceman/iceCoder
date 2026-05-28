@@ -69,6 +69,7 @@ import { ensureDelegateToSubagentTool } from './sub-agent-runner.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
 import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
 import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
+import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../web/routes/config.js';
 import {
   buildModeDecisionContext,
   buildRuntimeExecutionState,
@@ -138,6 +139,7 @@ export class Harness {
    * 默认 0.5（中性），adaptive.riskThreshold 默认 0.6 不直接候选。
    */
   private lastRiskScore = 0.5;
+  private agentMaxOutputTokens: number;
 
   constructor(
     config: HarnessConfig,
@@ -149,6 +151,7 @@ export class Harness {
     };
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
+    this.agentMaxOutputTokens = config.loop.maxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
     const compactionPartial: Partial<CompactionConfig> = {
       threshold: config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
       tokenThreshold: config.compactionTokenThreshold,
@@ -226,6 +229,7 @@ export class Harness {
       supervisorBridge: this.supervisorBridge,
       supervisorObserverSuppressInject: shouldSuppressObserverInject(this.globalPolicy),
       supervisorRiskScoreProvider: () => this.lastRiskScore,
+      agentMaxOutputTokens: this.agentMaxOutputTokens,
       abortSignal: this.abortSignal,
     };
   }
@@ -739,7 +743,11 @@ export class Harness {
   }
 }
 
-/** §19.6 — L2 观察活跃时 free 段不重复 inject C 类 recovery 文案。 */
+/**
+ * §19.6 — L2 观察活跃时 free 段不重复 inject supervisor 侧 C 类 recovery（branch recover、
+ * rebuild escalation、verification digest 等）。
+ * 连续工具失败阶梯（轻提示/证据包/强警告）不受此开关影响，始终经 lifecycle source 注入。
+ */
 export function shouldSuppressObserverInject(policy: GlobalModePolicy | undefined): boolean {
   if (!policy) return false;
   return policy.observerEnabled && policy.recoverySupervisorEnabled;

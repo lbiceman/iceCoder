@@ -1082,6 +1082,7 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
+  const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
   const workspaceMessage = typeof harnessUserMessage === 'string'
     ? harnessUserMessage
@@ -1120,6 +1121,7 @@ async function handleChatMessage(
       maxRounds: getHarnessMaxRoundsFromEnv(),
       timeout: getHarnessTimeoutMsFromEnv(),
       tokenBudget: getHarnessTokenBudget(),
+      maxOutputTokens: modelMeta?.maxOutputTokens,
       signal: abortController.signal,
     },
     permissions: [

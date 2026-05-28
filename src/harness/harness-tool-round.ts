@@ -45,7 +45,7 @@ import {
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { TokenBudgetTracker } from './token-budget.js';
 import { inferTaskDomain } from './task-domain.js';
-import type { CorrectionPort, ExecutionModeConfig, GateContext, TaskContext, TaskRiskLevel } from '../types/supervisor.js';
+import type { CorrectionPort, CorrectionSource, ExecutionModeConfig, GateContext, TaskContext, TaskRiskLevel } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
   markForcedDegraded,
@@ -76,9 +76,10 @@ import {
   shouldClearBuildDiagnosticGate,
 } from './harness-tool-preflight.js';
 import {
-  hasTruncationSensitiveWriteTools,
   planTruncatedWriteToolRecovery,
+  shouldPlanTruncatedWriteToolRecovery,
 } from './harness-tool-truncation-recovery.js';
+import { applyTakeoverRecoveryMainPath, resolveRecoveryMainPathSignals, shouldRunRecoveryMainPath } from './harness-recovery-main-path.js';
 import {
   applyRebuildEscalationBypasses,
   buildRebuildEscalationMessage,
@@ -112,6 +113,8 @@ export interface ToolRoundDeps extends ToolExecutorDeps, CheckpointDeps, Resilie
   supervisorRiskScoreProvider?: () => number;
   /** L2-6 — 任务级 token 总预算，用于 `RecoveryBudgetManager.recordTokenUsage`。 */
   tokenBudgetTracker?: TokenBudgetTracker;
+  /** 单次 LLM max_tokens 上限（与 adapter 对齐，供 write 截断检测）。 */
+  agentMaxOutputTokens?: number;
   abortSignal?: AbortSignal;
 }
 
@@ -177,7 +180,12 @@ export async function runHarnessToolRound(
   });
 
   let toolCallsForGate = response.toolCalls ?? [];
-  if (response.finishReason === 'length' && hasTruncationSensitiveWriteTools(toolCallsForGate)) {
+  if (shouldPlanTruncatedWriteToolRecovery({
+    toolCalls: toolCallsForGate,
+    finishReason: response.finishReason,
+    outputTokens: tokenUsage.output,
+    maxOutputTokens: deps.agentMaxOutputTokens,
+  })) {
     const recovery = planTruncatedWriteToolRecovery(toolCallsForGate);
     msgs.push(...recovery.injectedMessages);
     toolCallsForGate = recovery.toolCallsToRun;
@@ -376,13 +384,14 @@ export async function runHarnessToolRound(
     toolStats.failedSignatures,
     state.failedToolCallSignatures,
   );
-  if (repeatedFailures.length > 0 && !deps.supervisorObserverSuppressInject) {
-    injectRecoveryMessage(
+  if (repeatedFailures.length > 0) {
+    injectToolFailureEscalation(
       deps,
       state,
       msgs,
       correctionPort,
       `[System] Repeated failed tool call detected: ${repeatedFailures.join(', ')}. Do not retry the same tool with the same arguments. Change the path, parameters, command, or use a different tool; if blocked, explain the exact blocker and evidence.`,
+      { preserveOnCompaction: true },
     );
   }
 
@@ -493,7 +502,7 @@ export async function runHarnessToolRound(
       };
     }
 
-    if (failureCount >= STRONG_WARNING_FAILURE_THRESHOLD && !deps.supervisorObserverSuppressInject) {
+    if (failureCount >= STRONG_WARNING_FAILURE_THRESHOLD) {
       purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
       injectEphemeralFailureRecovery(
         deps,
@@ -507,7 +516,6 @@ export async function runHarnessToolRound(
     } else if (
       failureCount >= FAILURE_EVIDENCE_THRESHOLD_START
       && failureCount <= FAILURE_EVIDENCE_THRESHOLD_END
-      && !deps.supervisorObserverSuppressInject
     ) {
       purgeEphemeralFailureRecoveryMessagesInPlace(msgs, 'light');
       purgeEphemeralFailureRecoveryMessagesInPlace(msgs, 'evidence');
@@ -524,7 +532,6 @@ export async function runHarnessToolRound(
     } else if (
       failureCount >= LIGHT_HINT_FAILURE_THRESHOLD_START
       && failureCount <= LIGHT_HINT_FAILURE_THRESHOLD_END
-      && !deps.supervisorObserverSuppressInject
     ) {
       injectEphemeralFailureRecovery(
         deps,
@@ -647,6 +654,7 @@ export async function runHarnessToolRound(
 
   const allToolsFailedThisRound = roundProgress === 'all_failed_or_blocked';
   if (deps.supervisorBridge?.isActive()) {
+    const supervisorPhaseBefore = state.supervisorPhase;
     const taskContext = buildTaskContextForObserver(state, branchRecoverDecision?.triggered === true);
     const runtimeRound = {
       round,
@@ -698,6 +706,27 @@ export async function runHarnessToolRound(
 
     // 同步 phase 到 HarnessRunState；后续 ToolGate / Resilience inject 都按新 phase 走 source。
     state.supervisorPhase = deps.supervisorBridge.getSupervisorPhase();
+
+    // L2-6 §10 — 进入 takeover 或 handoff_pending 失败回退 takeover 时走恢复主路径。
+    if (shouldRunRecoveryMainPath(supervisorPhaseBefore, state.supervisorPhase, decision)) {
+      const freshTakeoverEntry = decision.action === 'takeover';
+      if (freshTakeoverEntry) {
+        state.lastRecoveryExtractRound = undefined;
+      }
+      applyTakeoverRecoveryMainPath({
+        bridge: deps.supervisorBridge,
+        state,
+        task: taskContext,
+        round: runtimeRound,
+        signals: resolveRecoveryMainPathSignals(decision, deps.supervisorBridge),
+        graphExecutor: deps.graphExecutor,
+        correctionPort,
+        messages: msgs,
+        loopController: deps.loopController,
+        onStep,
+        freshTakeoverEntry,
+      });
+    }
 
     const segmentRenewal = deps.supervisorBridge.consumePendingSegmentRenewal();
     if (segmentRenewal) {
@@ -1146,6 +1175,46 @@ function injectRecoveryMessage(
   );
 }
 
+function failureEscalationCorrectionSource(
+  phase: HarnessRunState['supervisorPhase'],
+): CorrectionSource {
+  return phase === 'free' ? 'lifecycle' : 'supervisor';
+}
+
+/**
+ * 连续工具失败阶梯 / 同参重复失败提示。
+ * L2 adaptive 开启时仍注入（与 branch recover / rebuild 等 C 类 inject 的 suppress 解耦）；
+ * free 段经 lifecycle source（不占 I4 budget）；takeover/handoff/cooldown 经 supervisor source。
+ */
+function injectToolFailureEscalation(
+  deps: ToolRoundDeps,
+  state: HarnessRunState,
+  msgs: HarnessRunState['messages'],
+  correctionPort: CorrectionPort,
+  content: string,
+  options?: { ephemeralFailureRecovery?: EphemeralFailureRecoveryKind; preserveOnCompaction?: boolean },
+): void {
+  if (!deps.executionModeDecisionEnabled) {
+    msgs.push({
+      role: 'user',
+      content,
+      ...(options?.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
+      ...(options?.ephemeralFailureRecovery ? { ephemeralFailureRecovery: options.ephemeralFailureRecovery } : {}),
+    });
+    return;
+  }
+
+  correctionPort.inject(
+    {
+      kind: 'recovery',
+      content,
+      ...(options?.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
+      ...(options?.ephemeralFailureRecovery ? { ephemeralFailureRecovery: options.ephemeralFailureRecovery } : {}),
+    },
+    { phase: state.supervisorPhase, source: failureEscalationCorrectionSource(state.supervisorPhase) },
+  );
+}
+
 function injectEphemeralFailureRecovery(
   deps: ToolRoundDeps,
   state: HarnessRunState,
@@ -1154,18 +1223,7 @@ function injectEphemeralFailureRecovery(
   content: string,
   kind: EphemeralFailureRecoveryKind,
 ): void {
-  if (deps.supervisorObserverSuppressInject) {
-    return;
-  }
-  if (!deps.executionModeDecisionEnabled) {
-    msgs.push({ role: 'user', content, ephemeralFailureRecovery: kind });
-    return;
-  }
-
-  correctionPort.inject(
-    { kind: 'recovery', content, ephemeralFailureRecovery: kind },
-    { phase: state.supervisorPhase, source: 'supervisor' },
-  );
+  injectToolFailureEscalation(deps, state, msgs, correctionPort, content, { ephemeralFailureRecovery: kind });
 }
 
 function topFileEditFromBranchBudget(
