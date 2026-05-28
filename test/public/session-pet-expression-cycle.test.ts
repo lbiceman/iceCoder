@@ -21,6 +21,7 @@ export const PET_EXPRESSION_CYCLE = [
   'rest',
   'surprised',
   'sad',
+  'crying',
   'angry',
   'curious',
   'dizzy',

@@ -103,7 +103,7 @@ export type StopReason =
   | 'task_recovery'      // 压缩后失忆恢复
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
-  | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（附录 A，尚未接入）
+  | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（Web 冰豆 crying + 固定 final 文案）
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
   | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
   | 'verification_exhausted' // verification gate 连续注入超限

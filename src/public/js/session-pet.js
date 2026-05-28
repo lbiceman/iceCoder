@@ -493,6 +493,19 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
+  /** 10b. crying — 哭泣（sad 眼 + 泪滴） */
+  function expressionCrying(ctx, leftX, rightX, y, ec) {
+    expressionSad(ctx, leftX, rightX, y, ec);
+    var tearY = y + 10;
+    ctx.fillStyle = ec === '#ffffff' || ec === '#fff' ? 'rgba(147, 197, 253, 0.9)' : 'rgba(59, 130, 246, 0.65)';
+    ctx.beginPath();
+    ctx.ellipse(leftX - 1, tearY, 2.2, 3.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1, tearY + 1, 2, 3.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   /** 11. angry — 生气（眼睛斜向上） */
   function expressionAngry(ctx, leftX, rightX, y, ec) {
     ctx.beginPath();
@@ -714,6 +727,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     rest: expressionRest,
     surprised: expressionSurprised,
     sad: expressionSad,
+    crying: expressionCrying,
     angry: expressionAngry,
     curious: expressionCurious,
     dizzy: expressionDizzy,
@@ -876,6 +890,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
         case 'surprised':
           return { lx: 0, ly: -4, rx: 0, ry: -4 };
         case 'sad':
+        case 'crying':
           return { lx: 0, ly: 3, rx: 0, ry: 3 };
         case 'anxious':
           return { lx: 1, ly: 1, rx: -1, ry: 1 };

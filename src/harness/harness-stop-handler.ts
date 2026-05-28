@@ -94,6 +94,28 @@ export async function handleHarnessStop(
     };
   }
 
+  if (reason === 'user_checkpoint') {
+    const finalContent = [
+      'Supervisor 已暂停自动恢复（恢复预算用尽或需人工决策）。',
+      `已执行 ${state.currentRound} 轮、${state.totalToolCalls} 次工具调用。`,
+      '任务已保存为 paused，你可以补充说明后继续对话，或调整思路后重试。',
+    ].join('\n');
+
+    onStep?.({
+      type: 'final',
+      totalToolCalls: state.totalToolCalls,
+      content: finalContent,
+      stopReason: reason,
+    });
+
+    return {
+      content: finalContent,
+      loopState: state,
+      messages: [...messages],
+      log: logger.getEntries(),
+    };
+  }
+
   // 其他原因：请求 LLM 总结
   logger.llmCall();
   messages.push({

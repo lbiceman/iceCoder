@@ -22,6 +22,9 @@ window.ChatPetBridge = (function () {
   var TUNNEL_READY_NOTICE_MS = 5200;
   var supervisorModeResetTimer = null;
   var SUPERVISOR_MODE_NOTICE_MS = 4500;
+  var userCheckpointNoticeActive = false;
+  var USER_CHECKPOINT_BUBBLE = '监管已暂停，需要你介入啦';
+  var USER_CHECKPOINT_TURN = '监管暂停 · 请接管';
 
   function init(pet) {
     sessionPet = pet;
@@ -54,6 +57,7 @@ window.ChatPetBridge = (function () {
   }
 
   function showThinking(withFile) {
+    userCheckpointNoticeActive = false;
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
       ChatExecutionPlan.resetExecutionMode();
     }
@@ -90,10 +94,23 @@ window.ChatPetBridge = (function () {
       memoryNoticeResetTimer = null;
     }
     if (!sessionPet) return;
+    if (userCheckpointNoticeActive) {
+      syncExecPlanFoot();
+      return;
+    }
     sessionPet.setState('idle');
     sessionPet.setBubbleText('');
     sessionPet.setTurnLabel('');
     syncExecPlanFoot();
+  }
+
+  function applyUserCheckpointNotice() {
+    userCheckpointNoticeActive = true;
+    if (!sessionPet) return;
+    sessionPet.setVisible(true);
+    sessionPet.setState('crying');
+    sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
+    sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
   }
 
   function updateStatusText(text, isStreaming, wsProcessing) {
@@ -214,6 +231,8 @@ window.ChatPetBridge = (function () {
           } else if (sr === 'task_recovery') {
             sessionPet.setState('dizzy');
             if (step.content) bubble(step.content);
+          } else if (sr === 'user_checkpoint') {
+            applyUserCheckpointNotice();
           } else if (sr === 'stop_hook') {
             sessionPet.setState('alert');
             if (step.content) bubble(step.content);
