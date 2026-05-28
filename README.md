@@ -38,7 +38,7 @@ npm test                                        # 1,623 tests · ~38s · 100% pa
 | **Core runtime coverage** | **Harness 82.4%** lines · **Supervisor 95.1%** lines · **Checkpoint ~93%** lines |
 | **Agent tools** | **27** registered (26 builtins + `delegate_to_subagent`) · **+ MCP** at runtime |
 | **Surfaces** | CLI 7 subcommands · HTTP **:1024** · Vite dev UI **:1025** · WebSocket · optional Cloudflare tunnel |
-| **Benchmark (same-model blind judge)** | Repair tasks **86 vs 83**, **88 vs 85** (iceCoder ahead of CC) · long-horizon build **72 vs 59** |
+| **Benchmark (blind judge vs CC)** | Repair **86/88 vs 83/85** · long-horizon m2.7 **72 vs 59** · m2.5-pro **81 vs 80** (both SR=1) |
 
 Same tools, same models — **governed execution**.
 
@@ -158,7 +158,7 @@ Task state, files touched, commands run, verification status, and `runtimeV2` (b
 
 ### Long-session endurance
 
-Production runs have completed **217 consecutive tool rounds** without crash or context collapse. The long-horizon benchmark run reached **347 rounds** (controlled stop; still delivered a playable build).
+Production runs have completed **217 consecutive tool rounds** without crash or context collapse. The m2.7 long-horizon benchmark reached **347 rounds** (controlled stop; still delivered a playable build). The **m2.5-pro / third** iceCoder run passed **all four acceptance commands (SR=1)** in **~120 min** with no controlled interrupt.
 
 ---
 
@@ -175,21 +175,43 @@ Production runs have completed **217 consecutive tool rounds** without crash or 
 
 ---
 
-## Benchmarks (same model, blind judge vs Claude Code)
+## Benchmarks (blind judge vs Claude Code)
 
-Model: **`minimax-m2.5`** · Judge: **Cursor Composer 2.5** · Rubric: [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)
+Judge: **Cursor Composer 2.5** · Rubric: [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)
 
-| Task | Type | Objective (SR) | Composite | Gate | Judge | Grade | iceCoder vs CC |
-|------|------|------------------|-----------|------|-------|-------|----------------|
-| [Multi-file order pipeline](./benchMark/reports/multi-file-order-pipeline.md) | Multi-file repair | ✅ 9/9 | **86** vs 83 | 40 vs 38 | 46 vs 45 | A / A | **+3** · robust transient retry |
-| [Saga + warehouse reconciliation](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | Distributed repair | ✅ 15/15 | **88** vs 85 | 40 vs 38 | 48 vs 47 | A / A | **+3** · no `.claude/` spill |
-| [Spell Brigade survivor](./benchMark/reports/implement-spellbrigade-survivor.md) | Long-horizon greenfield | ❌ both incomplete | **72** vs ≈59 | 32 vs ≈33 | 40 vs 26 | B / F | **+13** · E2E 1/5→5/5 · 347 rounds |
+> Models vary by batch: **`minimax-m2.7`** (first/second) · **`mimo2.5-pro`** (third/forth). Do not mix batches when comparing platforms.
+
+### Repair tasks (same model m2.7)
+
+| Task | Objective (SR) | Composite | Gate | Judge | Grade | iceCoder vs CC |
+|------|------------------|-----------|------|-------|-------|----------------|
+| [Multi-file order pipeline](./benchMark/reports/multi-file-order-pipeline.md) | ✅ 9/9 | **86** vs 83 | 40 vs 38 | 46 vs 45 | A / A | **+3** · robust transient retry |
+| [Saga + warehouse reconciliation](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | ✅ 15/15 | **88** vs 85 | 40 vs 38 | 48 vs 47 | A / A | **+3** · no `.claude/` spill |
+
+### Long-horizon greenfield (Spell Brigade survivor)
+
+Full four-run report: [`implement-spellbrigade-survivor.md`](./benchMark/reports/implement-spellbrigade-survivor.md)
+
+| Batch | Platform | Model | SR | Composite | Grade | Duration | Field notes |
+|-------|----------|-------|-----|-----------|-------|----------|-------------|
+| second / first | iceCoder vs **CC** | **m2.7** | 0 / 0 | **72** vs ≈59 | B / F | — / 82 min | iceCoder playable combat, E2E probes 5/5; CC unplayable · second **347-round** cap |
+| **third / forth** | **iceCoder** vs **CC** | **m2.5-pro** | **1 / 1** | **81** vs **80** | A / A | ≈120 / **87 min** | iceCoder **smoother**, richer shop meta; CC **PNG in combat**, faster but **lags from the start** |
+
+### iceCoder vs CC — how to read this
+
+| Dimension | iceCoder | Claude Code (CC) |
+|-----------|----------|------------------|
+| **Same model m2.7 (second vs first)** | Playable combat loop, correct tests/E2E · **+13 Composite** | DOM overlay hack, empty combat · unplayable |
+| **Same model m2.5-pro (third vs forth)** | SR=1 · **smooth** · GameScene split · 4/6 shop effects | SR=1 · **87 min faster** · character/monster PNG · **lags from the first frame** |
+| **Long-task governance** | Harness + L2/L1 · playable delivery even at 347 rounds | Risk of “fake done” (UI without gameplay) · perf / monolith risks |
+| **Shared gaps** | Visual last mile (third has PNG files but not loaded in canvas) | forth has sprites but **lags from the first frame** (1024×768 + no pooling / spawn cap) |
 
 **Summary**
 
-- **Repair (2/2):** iceCoder leads on objective pass rate and composite score; `adaptive` enters forced automatically on high-risk work.
-- **Greenfield (1/1):** neither platform fully passed SR; iceCoder delivered playable combat + higher Judge/Gate, stopped at **347-round** cap.
-- **Shared gap (Judge D5/D6):** some runs lack run-manifest / README sync — S tier (≥90) needs delivery docs.
+- **Repair (2/2, m2.7):** iceCoder leads on objective pass rate and composite; `adaptive` enters forced on high-risk work.
+- **Long-horizon m2.7:** both SR=0; iceCoder **playable + higher Judge/Gate**, but **347-round cap**, E2E command miss, `human_assist=true`.
+- **Long-horizon m2.5-pro:** both **SR=1**; iceCoder (third) **edges on composite / smoothness / structure**; CC (forth) **edges on speed / combat sprites**.
+- **Rule of thumb:** **complex long tasks with acceptance gates** → lean iceCoder; **time-boxed demos needing sprites fast** → CC (m2.5-pro) works, plan for perf/refactor cost.
 
 Task specs: [`benchMark/tasks/`](./benchMark/tasks/) · Reports: [`benchMark/reports/`](./benchMark/reports/)
 

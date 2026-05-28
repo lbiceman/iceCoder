@@ -38,7 +38,7 @@ npm test                                        # 1,623 条用例 · ~38 秒 · 
 | **核心运行时覆盖率** | **Harness 82.4%** 行 · **Supervisor 95.1%** 行 · **Checkpoint ~93%** 行 |
 | **Agent 工具** | **27** 个注册工具（26 内置 + `delegate_to_subagent`）· 运行时还可挂载 **MCP** |
 | **入口** | CLI 7 子命令 · HTTP **:1024** · Vite 开发 UI **:1025** · WebSocket · 可选 Cloudflare 隧道 |
-| **Benchmark（同模盲评）** | 修复类 **86 vs 83**、**88 vs 85**（iceCoder 领先 CC）· 长周期实现类 **72 vs 59** |
+| **Benchmark（盲评 vs CC）** | 修复类 **86/88 vs 83/85** · 长周期 m2.7 **72 vs 59** · 长周期 m2.5-pro **81 vs 80**（均 SR=1） |
 
 同样的工具、同样的模型 — **有治理的执行**。
 
@@ -158,7 +158,7 @@ CLI / Web / WebSocket（PC + 手机扫码）
 
 ### 长会话耐久
 
-真实生产任务中，Harness 已连续完成 **217 轮**工具调用且全程稳定 — Supervisor 模式切换、Checkpoint 压缩、BranchBudget 拦截均正常工作。217 轮以上尚未压测；运行时面向 **20～200+ 轮**工程任务设计。Benchmark 长周期任务 iceCoder 曾跑至 **347 轮**（受控中断后仍可交付可玩产物）。
+真实生产任务中，Harness 已连续完成 **217 轮**工具调用且全程稳定 — Supervisor 模式切换、Checkpoint 压缩、BranchBudget 拦截均正常工作。217 轮以上尚未压测；运行时面向 **20～200+ 轮**工程任务设计。Benchmark 长周期任务 iceCoder 曾跑至 **347 轮**（m2.7 / second，受控中断后仍可交付可玩产物）；**m2.5-pro / third** 约 **120 min** 内 **四条验收全过（SR=1）** 且无受控中断。
 
 ---
 
@@ -175,21 +175,42 @@ CLI / Web / WebSocket（PC + 手机扫码）
 
 ---
 
-## Benchmark（同模型盲评 vs Claude Code）
+## Benchmark（盲评 vs Claude Code）
 
-统一参测模型：**`minimax-m2.5`** · 裁判：**Cursor Composer 2.5** · 评分体系：[`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)
+统一裁判：**Cursor Composer 2.5** · 评分体系：[`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)
 
-| 任务 | 类型 | 客观验收 (SR) | Composite | Gate | Judge | 等级 | iceCoder vs CC |
-|------|------|---------------|-----------|------|-------|------|----------------|
-| [多文件订单流水线](./benchMark/reports/multi-file-order-pipeline.md) | 多文件修复 | ✅ 9/9 | **86** vs 83 | 40 vs 38 | 46 vs 45 | A / A | **+3** · transient 重试更稳健 |
-| [Saga 仓库对账](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | 分布式修复 | ✅ 15/15 | **88** vs 85 | 40 vs 38 | 48 vs 47 | A / A | **+3** · 无 `.claude/` 越界 |
-| [Spell Brigade 幸存者](./benchMark/reports/implement-spellbrigade-survivor.md) | 长周期从零实现 | ❌ 均未全过 | **72** vs ≈59 | 32 vs ≈33 | 40 vs 26 | B / F | **+13** · E2E 1/5→5/5 · 347 轮 |
+> 参测模型因批次而异：**`minimax-m2.7`**（first/second）· **`mimo2.5-pro`**（third/forth）。跨批次对比须标注模型，不可混为一谈。
+
+### 修复类（同模 m2.7）
+
+| 任务 | 客观验收 (SR) | Composite | Gate | Judge | 等级 | iceCoder vs CC |
+|------|---------------|-----------|------|-------|------|----------------|
+| [多文件订单流水线](./benchMark/reports/multi-file-order-pipeline.md) | ✅ 9/9 | **86** vs 83 | 40 vs 38 | 46 vs 45 | A / A | **+3** · transient 重试更稳健 |
+| [Saga 仓库对账](./benchMark/reports/saga-warehouse-reconciliation-basic.md) | ✅ 15/15 | **88** vs 85 | 40 vs 38 | 48 vs 47 | A / A | **+3** · 无 `.claude/` 越界 |
+
+### 长周期从零实现（Spell Brigade 幸存者）
+
+完整四 run 报告：[`implement-spellbrigade-survivor.md`](./benchMark/reports/implement-spellbrigade-survivor.md)
+
+| 批次 | 平台 | 模型 | SR | Composite | 等级 | 工时 | 实机要点 |
+|------|------|------|-----|-----------|------|------|----------|
+| second / first | iceCoder vs **CC** | **m2.7** | 0 / 0 | **72** vs ≈59 | B / F | — / 82 min | iceCoder 战斗可玩、E2E 探针 5/5；CC 不可玩 · second **347 轮**受控中断 |
+| **third / forth** | **iceCoder** vs **CC** | **m2.5-pro** | **1 / 1** | **81** vs **80** | A / A | ≈120 / **87 min** | iceCoder **更流畅**、商城 meta 更全；CC **PNG 进战斗**、更快但 **开局即卡顿** |
+
+### iceCoder vs CC — 怎么读这些数
+
+| 维度 | iceCoder | Claude Code（CC） |
+|------|----------|-------------------|
+| **同模 m2.7（second vs first）** | 战斗闭环、单测/E2E 逻辑正确 · **+13 Composite** | DOM 叠层 hack、战斗空壳 · 实机不可玩 |
+| **同模 m2.5-pro（third vs forth）** | SR=1 · **流畅** · GameScene 拆分 · 商城 4/6 effect | SR=1 · **87 min 更快** · 角色/怪物 PNG · **开局即卡顿** |
+| **长任务治理** | Harness + L2/L1 · 347 轮仍可交付可玩产物 | 易「假完成」（UI 有、玩法无）· 性能/单体文件风险 |
+| **共同短板** | 视觉最后一公里（third 有 PNG 文件但未载入画布） | forth 贴图好但 **开局即卡顿**（1024×768 + 无对象池/刷怪 cap） |
 
 **汇总**
 
-- **修复类（2/2）**：iceCoder 客观验收与综合分均 **领先 CC**；`adaptive` 下高风险任务自动进 forced，无需人工切换。
-- **实现类（1/1）**：双方 SR 均未达标；iceCoder 交付可玩战斗闭环 + 更高 Judge/Gate，但受 **347 轮上限**与验收命令未全过影响。
-- **共同短板（Judge D5/D6）**：部分 run 缺 run-manifest、README 未同步 — 冲 S 档（≥90）需补交付说明。
+- **修复类（2/2，m2.7）**：iceCoder 客观验收与综合分均 **领先 CC**；`adaptive` 下高风险任务自动进 forced。
+- **长周期 m2.7**：双方 SR=0；iceCoder **可玩 + Judge/Gate 更高**，但 **347 轮上限** + E2E 命令未全过 + `human_assist=true`。
+- **长周期 m2.5-pro**：双方 **SR=1**；iceCoder（third）**综合分 + 体验/工程略胜**；CC（forth）**工时与战斗贴图略胜**。
 
 任务定义与探针：[`benchMark/tasks/`](./benchMark/tasks/) · 完整报告：[`benchMark/reports/`](./benchMark/reports/)
 
