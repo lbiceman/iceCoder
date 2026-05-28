@@ -211,7 +211,7 @@ describe('Harness - 工具调用循环', () => {
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
-      && m.content.includes('did not call any tools')
+      && m.content.includes('did not invoke tools')
     )).toBe(true);
   });
 
@@ -1390,7 +1390,7 @@ describe('Harness - 边界情况', () => {
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
-      && m.content.includes('did not call any tools')
+      && m.content.includes('did not invoke tools')
     )).toBe(true);
   });
 

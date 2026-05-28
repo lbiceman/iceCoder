@@ -55,6 +55,27 @@ export async function clearSessionWorkspace(
   }
 }
 
+export interface ResolvedSessionWorkspace {
+  workspaceRoot: string;
+  defaultWorkDir: string;
+  lockedRoot?: string;
+}
+
+/** 会话有效工作目录：已锁定则用 lockedRoot，否则回退 defaultWorkDir（通常为 process.cwd()）。 */
+export async function resolveEffectiveWorkspaceRoot(
+  sessionDir: string,
+  sessionId: string,
+  defaultWorkDir: string = process.cwd(),
+): Promise<ResolvedSessionWorkspace> {
+  const state = await loadSessionWorkspace(sessionDir, sessionId);
+  const workspaceRoot = state.lockedRoot ?? defaultWorkDir;
+  return {
+    workspaceRoot,
+    defaultWorkDir,
+    ...(state.lockedRoot ? { lockedRoot: state.lockedRoot } : {}),
+  };
+}
+
 export interface ApplyWorkspaceLockResult {
   state: SessionWorkspaceState;
   detection: WorkspaceDetectionResult;

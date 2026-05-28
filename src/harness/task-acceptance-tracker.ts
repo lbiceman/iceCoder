@@ -2,6 +2,14 @@ import { isLongRunningImplementationGoal } from './resume-goal.js';
 
 export type AcceptanceCommandStatus = 'pending' | 'passed' | 'failed';
 
+/** {@link TaskAcceptanceTracker.recordRunCommand} 的 transition 报告。 */
+export interface AcceptanceTransition {
+  /** 匹配到的验收项标签（人类可读原文）。 */
+  command: string;
+  previousStatus: AcceptanceCommandStatus;
+  newStatus: AcceptanceCommandStatus;
+}
+
 export interface AcceptanceCommandEntry {
   /** 规范化后的命令键（用于匹配） */
   key: string;
@@ -62,14 +70,20 @@ export class TaskAcceptanceTracker {
     return this.commands.filter(c => c.status === 'passed').length;
   }
 
-  /** 记录 run_command 结果；匹配第一条语义相同的验收项。 */
-  recordRunCommand(rawCommand: string, success: boolean): boolean {
-    if (!this.isActive() || !rawCommand.trim()) return false;
+  /**
+   * 记录 run_command 结果；匹配第一条语义相同的验收项。
+   * 返回 transition 详情（命令、前后状态），方便上层注入「刚刚 ✓ / ✗」的反馈消息。
+   * 返回 null 表示未匹配到任何验收项。
+   */
+  recordRunCommand(rawCommand: string, success: boolean): AcceptanceTransition | null {
+    if (!this.isActive() || !rawCommand.trim()) return null;
     const entry = matchAcceptanceEntry(this.commands, rawCommand);
-    if (!entry) return false;
-    entry.status = success ? 'passed' : 'failed';
+    if (!entry) return null;
+    const previousStatus = entry.status;
+    const newStatus: AcceptanceCommandStatus = success ? 'passed' : 'failed';
+    entry.status = newStatus;
     entry.lastRunAt = Date.now();
-    return true;
+    return { command: entry.label, previousStatus, newStatus };
   }
 
   /**
@@ -79,11 +93,12 @@ export class TaskAcceptanceTracker {
    *   - kind:'background_failed' / exitCode!==0 → mark failed
    *
    * 调用方应在 run_command 工具结果落到 messages 后调用。
+   * 返回 transition 详情（同 {@link recordRunCommand}），未匹配返回 null。
    */
-  recordRunCommandToolResult(result: RunCommandResultClassification): boolean {
-    if (!this.isActive()) return false;
-    if (result.kind === 'background_start' || result.kind === 'background_running') return false;
-    if (!result.command.trim()) return false;
+  recordRunCommandToolResult(result: RunCommandResultClassification): AcceptanceTransition | null {
+    if (!this.isActive()) return null;
+    if (result.kind === 'background_start' || result.kind === 'background_running') return null;
+    if (!result.command.trim()) return null;
     const completed = result.kind === 'foreground'
       ? result.foregroundSuccess === true
       : result.kind === 'background_completed'
@@ -175,13 +190,57 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
   return unique;
 }
 
+/**
+ * 剥离 Windows / POSIX 常见的 `cd ... && <real-cmd>` 前缀，仅保留真实命令体。
+ * 例如：
+ *   `cd /d E:\\foo && npm run build` → `npm run build`
+ *   `cd ./pkg && npm test`           → `npm test`
+ * 仅当 `&&` 后还存在非空命令时才剥离，避免把 `cd somewhere` 单独剥成空串。
+ */
+export function stripLeadingCdPrefix(command: string): string {
+  const re = /^cd\s+(?:\/d\s+)?(?:"[^"]+"|'[^']+'|[^\s&|;]+)\s*&&\s*(.+)$/i;
+  const m = command.trim().match(re);
+  return m && m[1].trim() ? m[1].trim() : command.trim();
+}
+
+/**
+ * Acceptance 命令归一化：用于 goal 解析键与 run_command 实际命令的稳定匹配。
+ *
+ * 处理：
+ * - 剥离 `cd ... && ` 前缀（Windows `cd /d` / Unix 通用）
+ * - 去掉常见尾缀 `2>&1`、`| tail …`、`| head …`、`| less` 等
+ * - 折叠空白，转小写
+ * - `npx playwright test` ↔ `npm run test:e2e` 等价归一化
+ * - `npm run test` → `npm test`（同义脚本）
+ */
 export function normalizeAcceptanceCommandKey(command: string): string {
-  return command
-    .trim()
+  let key = stripLeadingCdPrefix(command);
+
+  key = key
     .replace(/\s+/g, ' ')
     .replace(/\s2>&1\s*$/i, '')
-    .replace(/\s\|\s*head\s+-[^\s]+/i, '')
+    .replace(/\s\|\s*(head|tail|less|more|grep)\b[^|]*$/i, '')
+    .replace(/\s>\s*\S+(?:\s+2>&1)?\s*$/i, '')
+    .trim()
     .toLowerCase();
+
+  // 等价归一化：playwright/cypress e2e 视作 `npm run test:e2e`
+  if (/\bnpx\s+playwright\s+test\b/.test(key) || /\bplaywright\s+test\b/.test(key)) {
+    return 'npm run test:e2e';
+  }
+  if (/\bnpx\s+cypress\s+run\b/.test(key)) {
+    return 'npm run test:e2e';
+  }
+  // `npm run test` ↔ `npm test`
+  if (/^npm\s+run\s+test(?:\s|$)/.test(key) && !/\btest:/.test(key)) {
+    key = key.replace(/^npm\s+run\s+test\b/, 'npm test');
+  }
+  // `npx vitest run` / `npx vitest` 视作 `npm test`（针对 vitest 单测仓库）
+  if (/^npx\s+vitest(?:\s+run)?\b/.test(key)) {
+    return 'npm test';
+  }
+
+  return key;
 }
 
 function matchAcceptanceEntry(
@@ -247,20 +306,25 @@ export function classifyRunCommandResult(
     const parsed = safeParseJson(rawOutput);
     if (!parsed) return null;
     const label = typeof parsed.label === 'string' ? parsed.label : '';
+    // P0: 优先用 check 响应里的 `command`（shell-tool 已暴露真实命令）；
+    // 旧 checkpoint / 早期响应可能只有 label，回退到 label。
+    const cmdFromResponse = typeof parsed.command === 'string' && parsed.command.trim()
+      ? parsed.command.trim()
+      : label;
     const status = typeof parsed.status === 'string' ? parsed.status : '';
     const exitCode = typeof parsed.exitCode === 'number' ? parsed.exitCode : undefined;
-    if (!label) return null;
+    if (!cmdFromResponse) return null;
     if (status === 'completed') {
       const isExitNonZero = exitCode !== undefined && exitCode !== 0;
       return isExitNonZero
-        ? { kind: 'background_failed', command: label, exitCode, statusLabel: 'completed_nonzero' }
-        : { kind: 'background_completed', command: label, exitCode };
+        ? { kind: 'background_failed', command: cmdFromResponse, exitCode, statusLabel: 'completed_nonzero' }
+        : { kind: 'background_completed', command: cmdFromResponse, exitCode };
     }
     if (status === 'failed' || status === 'timeout' || status === 'killed') {
-      return { kind: 'background_failed', command: label, exitCode, statusLabel: status };
+      return { kind: 'background_failed', command: cmdFromResponse, exitCode, statusLabel: status };
     }
     if (status === 'running') {
-      return { kind: 'background_running', command: label };
+      return { kind: 'background_running', command: cmdFromResponse };
     }
     return null;
   }
