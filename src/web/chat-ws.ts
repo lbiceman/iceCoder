@@ -23,6 +23,7 @@ import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
+import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../llm/types.js';
@@ -347,6 +348,12 @@ function broadcastToSession(sessionId: string, data: unknown): void {
       }
     }
   }
+}
+
+const DEFAULT_WORK_DIR = process.cwd();
+
+async function resolveSessionWorkspacePayload(sessionId: string) {
+  return resolveEffectiveWorkspaceRoot(SESSIONS_DIR, sessionId, DEFAULT_WORK_DIR);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -724,13 +731,17 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     const features = { executionPlan: true };
     const runningTurn = snapshotRunningTurn(activeSessionId);
     try {
-      const meta = await resolveDefaultChatModelMeta();
+      const [meta, workspace] = await Promise.all([
+        resolveDefaultChatModelMeta(),
+        resolveSessionWorkspacePayload(activeSessionId),
+      ]);
         sendJSON(ws, {
           type: 'connected',
           message: '连接成功',
           features,
           activeSessionId,
           ...(meta ? { modelContext: meta } : {}),
+          ...workspace,
           ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
           ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
           ...(runningTurn ? { runningTurn } : {}),
@@ -741,6 +752,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         message: '连接成功',
         features,
         activeSessionId,
+        workspaceRoot: DEFAULT_WORK_DIR,
+        defaultWorkDir: DEFAULT_WORK_DIR,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
         ...(runningTurn ? { runningTurn } : {}),
@@ -824,10 +837,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
           subscribeWsToSession(ws, activeSessionId);
           const newRunningTurn = snapshotRunningTurn(activeSessionId);
+          const workspace = await resolveSessionWorkspacePayload(activeSessionId);
           sendJSON(ws, {
             type: 'session_switched',
             ok: true,
             sessionId: activeSessionId,
+            ...workspace,
             ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
             ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
           });
@@ -1047,6 +1062,15 @@ async function handleChatMessage(
   toolDefs = wsCtx.toolDefs;
   const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
   const runToolExecutor = wsCtx.toolExecutor;
+
+  if (wsCtx.workspace.detection.changed) {
+    broadcastToSession(runSessionId, {
+      type: 'workspace_updated',
+      sessionId: runSessionId,
+      workspaceRoot: effectiveWorkspace,
+      defaultWorkDir: DEFAULT_WORK_DIR,
+    });
+  }
 
   const harnessConfig: HarnessConfig = {
     context: {

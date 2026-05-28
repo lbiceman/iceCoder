@@ -16,6 +16,9 @@ window.ChatSessionStore = (function () {
   var STORAGE_KEY_PREFIX = 'ice-chat-messages:';
   var TITLE_MAX_LEN = 20;
   var PLACEHOLDER_TITLES = { '新会话': true, '默认会话': true, '未命名': true };
+  var defaultWorkDir = '';
+  /** sessionId → workspaceRoot */
+  var workspacesBySession = {};
 
   function deriveTitleFromPrompt(prompt) {
     var t = (prompt || '').replace(/\s+/g, ' ').trim();
@@ -27,6 +30,53 @@ window.ChatSessionStore = (function () {
   function onChange(fn) { listeners.push(fn); }
   function offChange(fn) { listeners = listeners.filter(function (f) { return f !== fn; }); }
   function emit() { for (var i = 0; i < listeners.length; i++) { try { listeners[i](); } catch (_e) { /* */ } } }
+
+  function normalizePath(p) {
+    return String(p || '').replace(/\\/g, '/').toLowerCase();
+  }
+
+  function applySessionsListPayload(data) {
+    sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    if (typeof data.defaultWorkDir === 'string' && data.defaultWorkDir) {
+      defaultWorkDir = data.defaultWorkDir;
+    }
+    if (data.workspaces && typeof data.workspaces === 'object') {
+      workspacesBySession = data.workspaces;
+    }
+  }
+
+  function getDefaultWorkDir() { return defaultWorkDir; }
+
+  function getSessionWorkspace(sessionId) {
+    var root = workspacesBySession[sessionId];
+    if (root) return root;
+    return defaultWorkDir || '';
+  }
+
+  function isDefaultWorkspace(sessionId) {
+    var root = getSessionWorkspace(sessionId);
+    if (!root || !defaultWorkDir) return true;
+    return normalizePath(root) === normalizePath(defaultWorkDir);
+  }
+
+  /** 更新单个会话的工作目录缓存（WS / 切换会话后） */
+  function setSessionWorkspace(sessionId, payload) {
+    if (!sessionId || !payload) return;
+    if (typeof payload.defaultWorkDir === 'string' && payload.defaultWorkDir) {
+      defaultWorkDir = payload.defaultWorkDir;
+    }
+    if (typeof payload.workspaceRoot === 'string' && payload.workspaceRoot) {
+      workspacesBySession[sessionId] = payload.workspaceRoot;
+    } else if (defaultWorkDir) {
+      workspacesBySession[sessionId] = defaultWorkDir;
+    }
+    emit();
+  }
+
+  function removeSessionWorkspace(sessionId) {
+    if (!sessionId || !workspacesBySession[sessionId]) return;
+    delete workspacesBySession[sessionId];
+  }
 
   function getActiveSessionId() { return activeSessionId; }
 
@@ -47,7 +97,7 @@ window.ChatSessionStore = (function () {
     fetch('/api/sessions')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        applySessionsListPayload(data || {});
         if (callback) callback(sessions);
         emit();
       })
@@ -69,6 +119,7 @@ window.ChatSessionStore = (function () {
       .then(function (data) {
         if (data.success && data.session) {
           sessions.unshift(data.session);
+          if (defaultWorkDir) workspacesBySession[data.session.id] = defaultWorkDir;
           emit();
           if (callback) callback(data.session);
         }
@@ -141,19 +192,29 @@ window.ChatSessionStore = (function () {
     }
     var settled = false;
     var lastRunningTurn = null;
+    var lastWorkspace = null;
     function finish(ok) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched');
-      if (callback) callback(!!ok, lastRunningTurn);
+      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace);
     }
     var handler = function (data) {
       if (!data) return;
       if (data.ok) {
         activeSessionId = data.sessionId || sessionId;
         if (data.runningTurn) lastRunningTurn = data.runningTurn;
-        emit();
+        if (data.workspaceRoot || data.defaultWorkDir) {
+          lastWorkspace = {
+            sessionId: activeSessionId,
+            workspaceRoot: data.workspaceRoot,
+            defaultWorkDir: data.defaultWorkDir,
+          };
+          setSessionWorkspace(activeSessionId, lastWorkspace);
+        } else {
+          emit();
+        }
       }
       finish(!!data.ok);
     };
@@ -189,6 +250,7 @@ window.ChatSessionStore = (function () {
             return;
           }
           sessions = sessions.filter(function (s) { return s.id !== sessionId; });
+          removeSessionWorkspace(sessionId);
           try { localStorage.removeItem(STORAGE_KEY_PREFIX + sessionId); } catch (_e) { /* */ }
           emit();
           if (callback) callback(true, switchedTo ? { switchedTo: switchedTo } : null);
@@ -249,6 +311,10 @@ window.ChatSessionStore = (function () {
     deleteSession: deleteSession,
     switchSession: switchSession,
     getSessions: getSessions,
+    getDefaultWorkDir: getDefaultWorkDir,
+    getSessionWorkspace: getSessionWorkspace,
+    isDefaultWorkspace: isDefaultWorkspace,
+    setSessionWorkspace: setSessionWorkspace,
     onChange: onChange,
     offChange: offChange,
   };

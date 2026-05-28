@@ -18,6 +18,32 @@ window.ChatSessionSidebar = (function () {
   var panelVisible = true;
   var navToggleBtn = null;
 
+  function normalizePath(p) {
+    return String(p || '').replace(/\\/g, '/').toLowerCase();
+  }
+
+  function compactPath(p) {
+    var norm = String(p || '').replace(/\\/g, '/');
+    var parts = norm.split('/').filter(function (x) { return x && x !== '.'; });
+    if (parts.length <= 2) return p || '';
+    return '\u2026/' + parts.slice(-2).join('/');
+  }
+
+  function formatWorkspaceSubtitle(sessionId) {
+    var root = Store.getSessionWorkspace ? Store.getSessionWorkspace(sessionId) : '';
+    var def = Store.getDefaultWorkDir ? Store.getDefaultWorkDir() : '';
+    if (!root && !def) return '';
+    if (Store.isDefaultWorkspace && Store.isDefaultWorkspace(sessionId)) return '默认工作区';
+    if (def && root && normalizePath(root) === normalizePath(def)) return '默认工作区';
+    return compactPath(root || def);
+  }
+
+  function fullWorkspacePath(sessionId) {
+    var root = Store.getSessionWorkspace ? Store.getSessionWorkspace(sessionId) : '';
+    var def = Store.getDefaultWorkDir ? Store.getDefaultWorkDir() : '';
+    return root || def || '';
+  }
+
   function readPanelVisible() {
     try {
       return localStorage.getItem(STORAGE_KEY_PANEL) !== '0';
@@ -76,22 +102,21 @@ window.ChatSessionSidebar = (function () {
     if (sidebar && sidebar.isConnected) return sidebar;
     destroy();
 
-    // 侧栏
     sidebar = document.createElement('aside');
     sidebar.className = 'chat-session-sidebar';
     sidebar.innerHTML =
       '<div class="chat-sidebar-header">' +
-        '<span class="chat-sidebar-title">会话</span>' +
-        '<button class="chat-sidebar-new-btn" title="新建会话">＋</button>' +
-        '<button class="chat-sidebar-close-btn" title="关闭侧栏">✕</button>' +
+        '<div class="chat-sidebar-header-top">' +
+          '<span class="chat-sidebar-title">会话</span>' +
+          '<button class="chat-sidebar-new-btn" title="新建会话">＋</button>' +
+          '<button class="chat-sidebar-close-btn" title="关闭侧栏">✕</button>' +
+        '</div>' +
       '</div>' +
       '<div class="chat-sidebar-list"></div>';
 
-    // 窄屏遮罩
     backdrop = document.createElement('div');
     backdrop.className = 'chat-sidebar-backdrop hidden';
 
-    // 插入到 chatContainer 内部
     chatContainer.insertBefore(sidebar, chatContainer.firstChild);
     document.body.appendChild(backdrop);
 
@@ -103,7 +128,6 @@ window.ChatSessionSidebar = (function () {
     return sidebar;
   }
 
-  /** 绑定顶部 nav-brand 旁的显示/隐藏按钮（由 ChatPage 注入） */
   function bindNavToggle(buttonEl) {
     if (!buttonEl || navToggleBtn === buttonEl) return;
     navToggleBtn = buttonEl;
@@ -111,7 +135,6 @@ window.ChatSessionSidebar = (function () {
   }
 
   function bindEvents() {
-    // 新建
     sidebar.querySelector('.chat-sidebar-new-btn').addEventListener('click', function () {
       Store.createSession('新会话', function (session) {
         if (session) {
@@ -121,17 +144,14 @@ window.ChatSessionSidebar = (function () {
       });
     });
 
-    // 关闭按钮（窄屏）
     sidebar.querySelector('.chat-sidebar-close-btn').addEventListener('click', function () {
       close();
     });
 
-    // backdrop 点击关闭
     backdrop.addEventListener('click', function () {
       close();
     });
 
-    // 监听 store 变化
     Store.onChange(function () { renderList(); });
   }
 
@@ -149,12 +169,14 @@ window.ChatSessionSidebar = (function () {
       item.className = 'chat-sidebar-item' + (s.id === activeId ? ' active' : '');
       item.setAttribute('data-id', s.id);
 
+      var body = document.createElement('div');
+      body.className = 'chat-sidebar-item-body';
+
       var titleSpan = document.createElement('span');
       titleSpan.className = 'chat-sidebar-item-title';
       titleSpan.textContent = s.title || '未命名';
       titleSpan.title = s.title || '未命名';
 
-      // 双击重命名
       (function (sid, titleEl) {
         titleEl.addEventListener('dblclick', function (e) {
           e.stopPropagation();
@@ -162,7 +184,18 @@ window.ChatSessionSidebar = (function () {
         });
       })(s.id, titleSpan);
 
-      item.appendChild(titleSpan);
+      body.appendChild(titleSpan);
+
+      var subtitle = document.createElement('span');
+      subtitle.className = 'chat-sidebar-item-subtitle';
+      var fullPath = fullWorkspacePath(s.id);
+      var subtitleText = formatWorkspaceSubtitle(s.id);
+      subtitle.textContent = subtitleText;
+      if (subtitleText === '默认工作区') subtitle.classList.add('is-default');
+      if (fullPath) subtitle.title = fullPath;
+      body.appendChild(subtitle);
+
+      item.appendChild(body);
 
       var delBtn = document.createElement('button');
       delBtn.type = 'button';
@@ -178,13 +211,20 @@ window.ChatSessionSidebar = (function () {
       })(s.id);
       item.appendChild(delBtn);
 
-      // 点击切换
       (function (sid) {
         item.addEventListener('click', function () { selectSession(sid); });
       })(s.id);
 
       list.appendChild(item);
     }
+  }
+
+  function applyWorkspaceForSession(sessionId, workspacePayload) {
+    if (workspacePayload && Store.setSessionWorkspace) {
+      Store.setSessionWorkspace(sessionId, workspacePayload);
+      return;
+    }
+    Store.fetchSessions(function () { renderList(); });
   }
 
   function deleteSessionItem(sessionId) {
@@ -202,9 +242,9 @@ window.ChatSessionSidebar = (function () {
 
   function selectSession(sessionId) {
     if (sessionId === Store.getActiveSessionId()) return;
-    // 处理中也允许切换：后端会 abort 旧任务并 flush 到旧 session
-    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn) {
+    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload) {
       if (ok) {
+        applyWorkspaceForSession(sessionId, workspacePayload);
         if (isNarrow()) close();
         renderList();
         if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
@@ -241,7 +281,6 @@ window.ChatSessionSidebar = (function () {
     syncToggleButtonState();
   }
 
-  /** 显示/隐藏会话列表：桌面折叠侧栏，窄屏开关抽屉 */
   function togglePanel() {
     if (isNarrow()) {
       toggle();
@@ -276,6 +315,14 @@ window.ChatSessionSidebar = (function () {
 
   function isOpenState() { return isOpen; }
 
+  /** WS / connected 推送的工作区更新 */
+  function notifyWorkspaceUpdated(data) {
+    if (!data) return;
+    var sid = data.sessionId || data.activeSessionId;
+    if (!sid || !Store.setSessionWorkspace) return;
+    Store.setSessionWorkspace(sid, data);
+  }
+
   return {
     create: create,
     destroy: destroy,
@@ -287,5 +334,6 @@ window.ChatSessionSidebar = (function () {
     isOpen: isOpenState,
     isPanelVisible: function () { return isNarrow() ? isOpen : panelVisible; },
     renderList: renderList,
+    notifyWorkspaceUpdated: notifyWorkspaceUpdated,
   };
 })();

@@ -11,6 +11,7 @@ import path from 'path';
 import { parsePersistedPlan } from '../../memory/file-memory/execution-plan-fence.js';
 // ExecutionPlan type removed (Phase 11)
 import type { TaskCheckpoint } from '../../harness/checkpoint.js';
+import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
 import { backfillPlaceholderSessionTitles } from '../session-title.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
@@ -103,6 +104,21 @@ async function ensureDir(): Promise<void> {
   await fs.mkdir(SESSIONS_DIR, { recursive: true });
 }
 
+async function buildWorkspaceIndex(sessionIds: string[]): Promise<{
+  defaultWorkDir: string;
+  workspaces: Record<string, string>;
+}> {
+  const defaultWorkDir = process.cwd();
+  const workspaces: Record<string, string> = {};
+  await Promise.all(
+    sessionIds.map(async (id) => {
+      const ws = await resolveEffectiveWorkspaceRoot(SESSIONS_DIR, id, defaultWorkDir);
+      workspaces[id] = ws.workspaceRoot;
+    }),
+  );
+  return { defaultWorkDir, workspaces };
+}
+
 /**
  * 读取指定 session 当前的执行计划。
  * 优先从 checkpoint 中取（最新），退化到 session-notes plan fence。
@@ -177,7 +193,8 @@ export function createSessionsRouter(): Router {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     let index = await ensureDefaultInIndex();
     index = await backfillPlaceholderSessionTitles(index);
-    res.json({ sessions: index });
+    const { defaultWorkDir, workspaces } = await buildWorkspaceIndex(index.map(s => s.id));
+    res.json({ sessions: index, defaultWorkDir, workspaces });
   });
 
   /**
@@ -195,6 +212,18 @@ export function createSessionsRouter(): Router {
     await ensureDir();
     await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
     res.json({ success: true, session: meta });
+  });
+
+  /**
+   * GET /api/sessions/workspace/:id - 获取会话有效工作目录
+   * 使用 /workspace/:id 避免与 /:id 动态段冲突；须在 /:id 之前注册。
+   */
+  router.get('/workspace/:id', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const id = String(req.params.id || SESSION_ID);
+    const defaultWorkDir = process.cwd();
+    const workspace = await resolveEffectiveWorkspaceRoot(SESSIONS_DIR, id, defaultWorkDir);
+    res.json(workspace);
   });
 
   /**

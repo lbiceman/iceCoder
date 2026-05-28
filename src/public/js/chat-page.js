@@ -358,6 +358,14 @@ window.ChatPage = (function () {
     });
   }
 
+  function syncSidebarWorkspace(data) {
+    if (!data || !window.ChatSessionSidebar) return;
+    var sid = data.sessionId || data.activeSessionId;
+    if (sid && typeof window.ChatSessionSidebar.notifyWorkspaceUpdated === 'function') {
+      window.ChatSessionSidebar.notifyWorkspaceUpdated(Object.assign({ sessionId: sid }, data));
+    }
+  }
+
   /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。第二个参数 runningTurn 由服务端 session_switched 包带回。 */
   function onSessionSwitched(sessionId, runningTurn) {
     if (Session && typeof Session.setSessionId === 'function') {
@@ -493,6 +501,10 @@ window.ChatPage = (function () {
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
       fetchModelContext();
+    }
+    syncSidebarWorkspace(data);
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
+      window.ChatSessionStore.fetchSessions();
     }
     // 先还原 runningTurn，避免 syncActiveSessionFromServer / notifyConnected 触发重绘清掉工具区
     if (data) restoreFromRunningTurn(data.runningTurn || null);
@@ -939,6 +951,7 @@ window.ChatPage = (function () {
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
     WS.on('session_updated', onWsSessionUpdated);
+    WS.on('workspace_updated', syncSidebarWorkspace);
     WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);
 

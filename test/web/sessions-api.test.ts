@@ -9,6 +9,7 @@ import type { Server } from 'node:http';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { createServer as createWebApp, startServer } from '../../src/web/server.js';
 
 function getPort(server: Server): number {
   const addr = server.address();
@@ -55,10 +56,16 @@ describe('Sessions API (multi-session)', () => {
 
     const res = await fetch(`${baseUrl}/`);
     expect(res.ok).toBe(true);
-    const body = await res.json() as { sessions: { id: string; title: string }[] };
+    const body = await res.json() as {
+      sessions: { id: string; title: string }[];
+      defaultWorkDir: string;
+      workspaces: Record<string, string>;
+    };
     const def = body.sessions.find((s) => s.id === 'default');
     expect(def).toBeTruthy();
     expect(def?.title).toBe('legacy');
+    expect(body.defaultWorkDir).toBe(process.cwd());
+    expect(body.workspaces.default).toBe(process.cwd());
 
     const indexRaw = await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8');
     const index = JSON.parse(indexRaw) as { id: string; title: string }[];
@@ -136,5 +143,50 @@ describe('Sessions API (multi-session)', () => {
       .then(() => true)
       .catch(() => false);
     expect(defaultFileExists).toBe(false);
+  });
+
+  it('GET /workspace/:id returns locked root or default cwd', async () => {
+    const sessionId = 'ws001';
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, `${sessionId}.workspace.json`),
+      JSON.stringify({ lockedRoot: 'E:\\\\locked\\\\repo', changeCount: 1 }),
+      'utf-8',
+    );
+
+    const lockedRes = await fetch(`${baseUrl}/workspace/${sessionId}`);
+    expect(lockedRes.ok).toBe(true);
+    const lockedBody = await lockedRes.json() as {
+      workspaceRoot: string;
+      defaultWorkDir: string;
+      lockedRoot?: string;
+    };
+    expect(lockedBody.workspaceRoot).toBe('E:\\\\locked\\\\repo');
+    expect(lockedBody.lockedRoot).toBe('E:\\\\locked\\\\repo');
+    expect(lockedBody.defaultWorkDir).toBe(process.cwd());
+
+    const defaultRes = await fetch(`${baseUrl}/workspace/default`);
+    expect(defaultRes.ok).toBe(true);
+    const defaultBody = await defaultRes.json() as { workspaceRoot: string; defaultWorkDir: string };
+    expect(defaultBody.workspaceRoot).toBe(process.cwd());
+    expect(defaultBody.defaultWorkDir).toBe(process.cwd());
+  });
+
+  it('GET /workspace/:id works through full web createServer stack', async () => {
+    vi.resetModules();
+    const { createSessionsRouter } = await import('../../src/web/routes/sessions.js');
+    const app = await createWebApp({
+      routes: [{ path: '/api/sessions', router: createSessionsRouter() }],
+    });
+    const fullServer = await startServer(app, 0);
+    const fullBase = `http://127.0.0.1:${getPort(fullServer)}/api/sessions`;
+    try {
+      const res = await fetch(`${fullBase}/workspace/default`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { workspaceRoot: string; defaultWorkDir: string };
+      expect(body.workspaceRoot).toBe(process.cwd());
+    } finally {
+      await new Promise<void>((resolve) => fullServer.close(() => resolve()));
+    }
   });
 });

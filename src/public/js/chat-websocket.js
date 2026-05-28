@@ -157,6 +157,9 @@ window.ChatWebSocket = (function () {
       case 'session_switched':
         emit('session_switched', data);
         break;
+      case 'workspace_updated':
+        emit('workspace_updated', data);
+        break;
       case 'active_session':
         emit('active_session', data);
         break;
