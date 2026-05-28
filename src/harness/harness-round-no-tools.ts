@@ -37,6 +37,24 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../llm/types.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import {
+  containsEmbeddedToolCalls,
+  prepareAssistantContentForHistory,
+  sanitizeAssistantContentForUser,
+} from './text-tool-call-salvage.js';
+
+function pushAssistantForHistory(
+  msgs: UnifiedMessage[],
+  response: LLMResponse,
+): void {
+  const content = prepareAssistantContentForHistory(response.content);
+  if (!content && !response.reasoningContent) return;
+  msgs.push({
+    role: 'assistant',
+    content,
+    reasoningContent: response.reasoningContent,
+  });
+}
 
 export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -104,7 +122,7 @@ export async function handleNoToolCalls(
       state.amnesiaRecoveryCount++;
       console.log('[harness] 检测到压缩后失忆，自动注入任务上下文...');
       if (response.content) {
-        msgs.push({ role: 'assistant', content: response.content });
+        msgs.push({ role: 'assistant', content: prepareAssistantContentForHistory(response.content) });
       }
       try {
         const sessionNotes = await deps.memoryIntegration.getSessionMemoryForCompact();
@@ -140,8 +158,8 @@ export async function handleNoToolCalls(
       `[harness] max-output-tokens 恢复 (${state.maxOutputTokensRecoveryCount}/${MAX_OUTPUT_TOKENS_RECOVERY_LIMIT})`,
     );
 
-    if (response.content) {
-      msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
+    if (response.content || response.reasoningContent) {
+      pushAssistantForHistory(msgs, response);
     }
     msgs.push({
       role: 'user',
@@ -163,7 +181,7 @@ export async function handleNoToolCalls(
       type: 'final',
       iteration: finalState.currentRound,
       totalToolCalls: finalState.totalToolCalls,
-      content: response.content,
+      content: sanitizeAssistantContentForUser(response.content),
       stopReason: 'max_output_tokens',
       tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
       totalTokenUsage: {
@@ -175,7 +193,7 @@ export async function handleNoToolCalls(
     return {
       action: 'return',
       result: {
-        content: response.content,
+        content: sanitizeAssistantContentForUser(response.content),
         loopState: finalState,
         messages: [...msgs],
         log: logger.getEntries(),
@@ -192,11 +210,7 @@ export async function handleNoToolCalls(
       `[harness] LLM 空响应/仅思考重试 (${state.emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES})`,
     );
     if (response.content || response.reasoningContent) {
-      msgs.push({
-        role: 'assistant',
-        content: response.content || '',
-        reasoningContent: response.reasoningContent,
-      });
+      pushAssistantForHistory(msgs, response);
     }
     msgs.push({
       role: 'user',
@@ -216,7 +230,7 @@ export async function handleNoToolCalls(
     );
     msgs.push({
       role: 'assistant',
-      content: response.content || '',
+      content: prepareAssistantContentForHistory(response.content) || '',
       reasoningContent: response.reasoningContent,
     });
     msgs.push({
@@ -292,14 +306,14 @@ export async function handleNoToolCalls(
           type: 'final',
           iteration: finalState.currentRound,
           totalToolCalls: finalState.totalToolCalls,
-          content: response.content,
+          content: sanitizeAssistantContentForUser(response.content),
           stopReason: 'stop_hook',
         });
 
         return {
           action: 'return',
           result: {
-            content: response.content,
+            content: sanitizeAssistantContentForUser(response.content),
             loopState: finalState,
             messages: [...msgs],
             log: logger.getEntries(),
@@ -320,19 +334,20 @@ export async function handleNoToolCalls(
     && state.noToolExecutionRecoveryCount < 1
     && state.stopHookContinuationCount === 0
     && (
-      (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
+      containsEmbeddedToolCalls(response.content)
+      || (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
       || resumeWithPending
       || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
     )
   ) {
     state.noToolExecutionRecoveryCount++;
-    if (response.content) {
-      msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
+    if (response.content || response.reasoningContent) {
+      pushAssistantForHistory(msgs, response);
     }
     msgs.push({
       role: 'user',
       content: [
-        '[System] The user asked for an executable software-engineering action, but you did not call any tools. Continue now by calling the appropriate tool(s) to inspect, modify, run, test, or verify as needed. Do not answer with a plan or promise unless the task is impossible.',
+        '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
         '',
         formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
       ].join('\n'),
@@ -349,10 +364,8 @@ export async function handleNoToolCalls(
     canRunVerification
     && state.taskState.shouldBlockFinalForVerification(acceptanceIncomplete)
   ) {
-    if (response.content) {
-      msgs.push({ role: 'assistant', content: response.content, reasoningContent: response.reasoningContent });
-    } else if (response.reasoningContent) {
-      msgs.push({ role: 'assistant', content: '', reasoningContent: response.reasoningContent });
+    if (response.content || response.reasoningContent) {
+      pushAssistantForHistory(msgs, response);
     }
     const prompt = acceptanceIncomplete && state.taskAcceptance
       ? state.taskAcceptance.buildAcceptancePrompt()
@@ -376,11 +389,7 @@ export async function handleNoToolCalls(
       `[harness] 验收/诊断未清，拦截 model_done (${state.prematureCompletionRecoveryCount}/${MAX_PREMATURE_COMPLETION_RECOVERY})`,
     );
     if (response.content || response.reasoningContent) {
-      msgs.push({
-        role: 'assistant',
-        content: response.content || '',
-        reasoningContent: response.reasoningContent,
-      });
+      pushAssistantForHistory(msgs, response);
     }
     injectContinuationUserMessage(deps, state, msgs, [
       buildIncompleteContinuationPrompt(taskSnap, repoSnap, state.taskAcceptance),
@@ -414,7 +423,7 @@ export async function handleNoToolCalls(
     type: 'final',
     iteration: finalState.currentRound,
     totalToolCalls: finalState.totalToolCalls,
-    content: response.content,
+    content: sanitizeAssistantContentForUser(response.content),
     stopReason: 'model_done',
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
     totalTokenUsage: {
@@ -426,7 +435,7 @@ export async function handleNoToolCalls(
   return {
     action: 'return',
     result: {
-      content: response.content,
+      content: sanitizeAssistantContentForUser(response.content),
       loopState: finalState,
       messages: [...msgs],
       log: logger.getEntries(),

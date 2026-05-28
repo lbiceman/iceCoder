@@ -27,6 +27,7 @@ import {
   resilienceSaveCheckpoint,
 } from './harness-resilience.js';
 import { collectRepeatedFailures, toolCallSignature } from './harness-permission-runtime.js';
+import { stripEmbeddedToolCalls, prepareAssistantContentForHistory } from './text-tool-call-salvage.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
 import { classifyRunCommandResult } from './task-acceptance-tracker.js';
@@ -160,7 +161,7 @@ export async function runHarnessToolRound(
   onStep?.({
     type: 'thinking',
     iteration: round,
-    content: response.content || undefined,
+    content: prepareAssistantContentForHistory(response.content) || undefined,
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
     totalTokenUsage: {
       inputTokens: deps.loopController.getState().lastInputTokens,
@@ -170,7 +171,7 @@ export async function runHarnessToolRound(
 
   msgs.push({
     role: 'assistant',
-    content: response.content || '',
+    content: prepareAssistantContentForHistory(response.content || ''),
     toolCalls: response.toolCalls,
     reasoningContent: response.reasoningContent,
   });

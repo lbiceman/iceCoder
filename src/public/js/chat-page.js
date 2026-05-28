@@ -906,10 +906,6 @@ window.ChatPage = (function () {
           window.ChatSessionSidebar.bindNavToggle(panelToggle);
         }
       }
-      // 加载会话列表
-      if (window.ChatSessionStore) {
-        window.ChatSessionStore.fetchSessions();
-      }
     }
 
     // 初始化子模块
@@ -1060,17 +1056,22 @@ window.ChatPage = (function () {
       elFileRemove.addEventListener('click', File.removeUploadedFile);
     }
 
-    // 渲染已有消息（远程模式先展示本地缓存；服务端返回后以快照为准刷新）
-    UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-
-    // F5 后 WS 尚未连上：先用 localStorage 里的 live 工具缓存占位，connected 后以 runningTurn 为准覆盖
-    var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
-    if (cachedLiveTools.length > 0) {
-      applyLiveToolTimelineToUI(cachedLiveTools);
+    function paintInitialChatView() {
+      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+      var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+      if (cachedLiveTools.length > 0) {
+        applyLiveToolTimelineToUI(cachedLiveTools);
+      }
+      syncSendButtonWithWorkload();
     }
 
-    // 从配置页等切回时 DOM 已重建，须按 WS 真实 processing 恢复 Stop 钮
-    syncSendButtonWithWorkload();
+    if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
+      window.ChatSessionStore.bootstrapInitialSession(function () {
+        paintInitialChatView();
+      });
+    } else {
+      paintInitialChatView();
+    }
 
     if (remoteMode) {
       Session.fetchServerMessages(function (serverMsgs) {

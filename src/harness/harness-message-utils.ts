@@ -57,6 +57,17 @@ export function isSystemInjectedUserContent(content: string): boolean {
     || trimmed.startsWith('Continue directly');
 }
 
+/** 统计真实用户消息条数（不含 system 注入块）。 */
+export function countRealUserMessages(messages: UnifiedMessage[]): number {
+  let count = 0;
+  for (const msg of messages) {
+    if (msg.role !== 'user' || typeof msg.content !== 'string') continue;
+    if (isSystemInjectedUserContent(msg.content)) continue;
+    count++;
+  }
+  return count;
+}
+
 /** 倒序查找第一条未被 {@link isSystemInjectedUserContent} 排除的 user 文本。 */
 export function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): string {
   for (let i = messages.length - 1; i >= 0; i--) {

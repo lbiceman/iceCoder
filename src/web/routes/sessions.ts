@@ -94,6 +94,14 @@ async function ensureDefaultInIndex(): Promise<SessionMeta[]> {
   return index;
 }
 
+/** 进程/页面冷启动时选用最近更新的会话（index 按 updatedAt 降序）。 */
+export async function bootstrapActiveSessionIdFromIndex(): Promise<string> {
+  const index = await ensureDefaultInIndex();
+  if (index.length === 0) return SESSION_ID;
+  const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
+  return sorted[0]!.id;
+}
+
 interface ChatMessage {
   role: string;
   content: string;
@@ -194,7 +202,8 @@ export function createSessionsRouter(): Router {
     let index = await ensureDefaultInIndex();
     index = await backfillPlaceholderSessionTitles(index);
     const { defaultWorkDir, workspaces } = await buildWorkspaceIndex(index.map(s => s.id));
-    res.json({ sessions: index, defaultWorkDir, workspaces });
+    const activeSessionId = await bootstrapActiveSessionIdFromIndex();
+    res.json({ sessions: index, defaultWorkDir, workspaces, activeSessionId });
   });
 
   /**

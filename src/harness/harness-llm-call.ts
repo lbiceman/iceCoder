@@ -7,6 +7,7 @@ import {
 } from './harness-constants.js';
 import { buildLlmRoundLogFields, isRetryableError } from './harness-llm-log.js';
 import { isAbortError } from '../llm/abort-error.js';
+import { TextToolCallStreamFilter } from './text-tool-call-salvage.js';
 import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
@@ -66,13 +67,21 @@ export async function callHarnessLlm(
   let response: LLMResponse;
   try {
     if (streamFn) {
+      const streamFilter = new TextToolCallStreamFilter();
       try {
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
           if (!done && chunk) {
-            onStep?.({ type: 'stream_delta', iteration: round, delta: chunk });
+            const safe = streamFilter.feed(chunk);
+            if (safe) {
+              onStep?.({ type: 'stream_delta', iteration: round, delta: safe });
+            }
           }
         }, { tools: currentTools });
+        const tail = streamFilter.flush();
+        if (tail) {
+          onStep?.({ type: 'stream_delta', iteration: round, delta: tail });
+        }
       } catch (streamError) {
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
         if (errMsg.includes('reasoning_content') || errMsg.includes('Failed to deserialize')) {

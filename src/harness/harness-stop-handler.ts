@@ -15,6 +15,12 @@ import type {
   StopReason,
   StreamFunction,
 } from './types.js';
+import {
+  containsEmbeddedToolCalls,
+  sanitizeAssistantContentForUser,
+  salvageTextToolCallsInResponse,
+  TextToolCallStreamFilter,
+} from './text-tool-call-salvage.js';
 
 export interface StopHandlerDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -99,17 +105,25 @@ export async function handleHarnessStop(
   try {
     // 优先使用流式调用，让前端实时看到总结内容
     if (streamFn) {
+      const streamFilter = new TextToolCallStreamFilter();
       const finalResponse = await streamFn(messages, (chunk, done) => {
         if (!done && chunk) {
-          onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: chunk });
+          const safe = streamFilter.feed(chunk);
+          if (safe) {
+            onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: safe });
+          }
         }
       }, { tools: [] });
-      finalContent = finalResponse.content;
+      const tail = streamFilter.flush();
+      if (tail) {
+        onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: tail });
+      }
+      finalContent = salvageTextToolCallsInResponse(finalResponse).content ?? finalResponse.content;
       const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
       logger.llmResponseFinal(sumLog.usage, sumLog.meta);
     } else {
       const finalResponse = await chatFn(messages, { tools: [] });
-      finalContent = finalResponse.content;
+      finalContent = salvageTextToolCallsInResponse(finalResponse).content ?? finalResponse.content;
       const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
       logger.llmResponseFinal(sumLog.usage, sumLog.meta);
     }
@@ -120,6 +134,16 @@ export async function handleHarnessStop(
       ? lastAssistant.content
       : `任务因 ${reason} 停止，最终总结生成失败。`;
     logger.error(`最终总结 LLM 调用失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (containsEmbeddedToolCalls(finalContent)) {
+    const lastAssistant = [...messages].reverse().find(
+      m => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()
+        && !containsEmbeddedToolCalls(m.content),
+    );
+    finalContent = lastAssistant
+      ? sanitizeAssistantContentForUser(lastAssistant.content as string)
+      : sanitizeAssistantContentForUser(finalContent);
   }
 
   onStep?.({

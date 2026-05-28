@@ -90,20 +90,84 @@ window.ChatSessionStore = (function () {
 
   var SWITCH_TIMEOUT_MS = 10000;
 
+  function pickMostRecentSessionId() {
+    if (!sessions.length) return DEFAULT_SESSION_ID;
+    var sorted = sessions.slice().sort(function (a, b) {
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+    return sorted[0].id;
+  }
+
+  /** 解析初始选中：API 推荐 id 无效时回退到最近更新的会话。 */
+  function resolveInitialActiveSessionId(apiActiveId) {
+    var candidate = apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
+    if (!sessions.some(function (s) { return s.id === candidate; })) {
+      candidate = pickMostRecentSessionId();
+    }
+    return candidate;
+  }
+
   /**
    * 拉取会话列表（GET /api/sessions）
+   * @param {function(Array, string=)} callback (sessions, resolvedActiveId)
    */
   function fetchSessions(callback) {
     fetch('/api/sessions')
       .then(function (res) { return res.json(); })
       .then(function (data) {
         applySessionsListPayload(data || {});
-        if (callback) callback(sessions);
+        var resolvedId = resolveInitialActiveSessionId(data && data.activeSessionId);
+        if (resolvedId !== activeSessionId) {
+          activeSessionId = resolvedId;
+        }
+        if (callback) callback(sessions, resolvedId);
         emit();
       })
       .catch(function () {
-        if (callback) callback(sessions);
+        if (callback) callback(sessions, activeSessionId);
       });
+  }
+
+  /**
+   * 首屏/重启：对齐最近会话并加载消息（WS 已连则 switch_session，否则仅拉 REST）。
+   * @param {function(string)} onReady
+   */
+  function bootstrapInitialSession(onReady) {
+    fetchSessions(function (_sessions, resolvedId) {
+      var id = resolvedId || activeSessionId || DEFAULT_SESSION_ID;
+      activeSessionId = id;
+
+      function complete(runningTurn) {
+        if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
+          window.ChatPage.onSessionSwitched(id, runningTurn);
+        } else if (window.ChatSession && typeof window.ChatSession.setSessionId === 'function') {
+          window.ChatSession.setSessionId(id);
+          if (typeof window.ChatSession.fetchServerMessages === 'function') {
+            window.ChatSession.fetchServerMessages(function () {
+              emit();
+              if (onReady) onReady(id);
+            });
+            return;
+          }
+        }
+        emit();
+        if (onReady) onReady(id);
+      }
+
+      var ws = window.ChatWebSocket;
+      var wsSend = ws && typeof ws.send === 'function' ? ws.send.bind(ws) : null;
+      if (ws && typeof ws.isConnected === 'function' && ws.isConnected() && wsSend) {
+        switchSession(id, wsSend, function (ok, runningTurn) {
+          complete(ok ? runningTurn : undefined);
+        });
+        return;
+      }
+
+      if (window.ChatSession && typeof window.ChatSession.setSessionId === 'function') {
+        window.ChatSession.setSessionId(id);
+      }
+      complete();
+    });
   }
 
   /**
@@ -304,6 +368,7 @@ window.ChatSessionStore = (function () {
     getActiveSessionId: getActiveSessionId,
     setActiveSessionId: setActiveSessionId,
     fetchSessions: fetchSessions,
+    bootstrapInitialSession: bootstrapInitialSession,
     createSession: createSession,
     patchSession: patchSession,
     maybeAutoTitleFromPrompt: maybeAutoTitleFromPrompt,

@@ -90,6 +90,8 @@ import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
 import { getLatestRealUserText } from './harness-message-utils.js';
+import { resolveLlmToolsForRound } from './casual-mode.js';
+import { salvageTextToolCallsInResponse } from './text-tool-call-salvage.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
 
 /** run() 内各子模块共享的运行时依赖（由 Harness 实例字段组装）。 */
@@ -642,10 +644,12 @@ export class Harness {
 
         this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
 
+        const toolsForLlm = resolveLlmToolsForRound(state.tools, prep.round, plainUserText);
+
         const llm = await callHarnessLlm(deps, {
           state,
           normalizedMsgs: prep.normalizedMsgs,
-          currentTools: state.tools,
+          currentTools: toolsForLlm,
           round: prep.round,
           chatFn,
           streamFn,
@@ -667,7 +671,11 @@ export class Harness {
         }
         if (llm.action === 'error') return llm.result;
 
-        const { response, llmRoundLog, tokenUsage } = llm;
+        const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
+        const response = salvageTextToolCallsInResponse(rawResponse);
+        if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
+          console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
+        }
         const hasToolCalls = !!response.toolCalls?.length;
 
         if (!hasToolCalls) {

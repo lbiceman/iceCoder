@@ -22,6 +22,7 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
+import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
@@ -49,6 +50,10 @@ import {
   writeStructuredMessagesFile,
 } from './session-structured-io.js';
 import { applyFirstPromptSessionTitle } from './session-title.js';
+import {
+  getOrLoadAssembledChatPrompt,
+  prewarmChatRuntime,
+} from './chat-ws-prewarm.js';
 import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
 import { resolveDefaultChatModelMeta } from './routes/config.js';
 import {
@@ -60,6 +65,26 @@ import {
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 let activeSessionId = 'default';
+let activeSessionBootstrapPromise: Promise<void> | null = null;
+
+/** 冷启动：选中 index 中 updatedAt 最近的会话，并预载 structured 缓存。 */
+async function ensureActiveSessionBootstrapped(): Promise<void> {
+  if (activeSessionBootstrapPromise) return activeSessionBootstrapPromise;
+  activeSessionBootstrapPromise = (async () => {
+    try {
+      const id = await bootstrapActiveSessionIdFromIndex();
+      if (id) activeSessionId = id;
+      if (!getCachedMessages(activeSessionId)) {
+        const loaded = await loadStructuredMessages(activeSessionId);
+        setCachedMessages(activeSessionId, loaded ?? []);
+      }
+      console.log(`[chat-ws] 活跃会话: ${activeSessionId}`);
+    } catch (err) {
+      console.warn('[chat-ws] 启动会话 bootstrap 失败:', err);
+    }
+  })();
+  return activeSessionBootstrapPromise;
+}
 const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
 const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
 const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
@@ -275,7 +300,15 @@ async function ensureMemoryInitialized(): Promise<void> {
 }
 
 async function loadAssembledPrompt(): Promise<AssembledPrompt> {
-  return loadAssembledChatPrompt({ logPrefix: '[chat-ws]' });
+  return getOrLoadAssembledChatPrompt('[chat-ws]');
+}
+
+function startChatRuntimePrewarm(): void {
+  prewarmChatRuntime({
+    ensureMemoryInitialized,
+    getSupervisorRuntime,
+    loadAssembledPrompt,
+  });
 }
 
 export interface ChatWSOptions {
@@ -684,6 +717,8 @@ async function finalizeDirectBrowserTurn(
 export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
   const { orchestrator, toolRegistry, toolExecutor } = options;
 
+  void ensureActiveSessionBootstrapped();
+
   const wss = new WebSocketServer({ noServer: true });
 
   // 处理 HTTP 升级请求
@@ -721,8 +756,10 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
   wss.on('connection', async (ws: WebSocket) => {
+    await ensureActiveSessionBootstrapped();
     chatClients.add(ws);
     subscribeWsToSession(ws, activeSessionId);
+    startChatRuntimePrewarm();
     ws.once('close', () => {
       chatClients.delete(ws);
       unsubscribeWsFromAll(ws);
