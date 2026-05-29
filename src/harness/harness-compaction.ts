@@ -272,11 +272,16 @@ export async function maybeCompact(
       return c.startsWith('<system-reminder>') && c.includes('Recalled Memories');
     });
     if (!hasMemoryInCompacted) {
-      messages.splice(
-        messages.length - Math.min(deps.contextCompactor.getConfig().keepRecent, messages.length),
-        0,
-        ...recentMemoryMessages,
-      );
+      // 插在 system 之后、recent 尾段之前；勿用 length-keepRecent（短消息时会变成 0，把记忆插到 system 前 → MiniMax 400）
+      let insertAt = 0;
+      while (insertAt < messages.length && messages[insertAt].role === 'system') {
+        insertAt++;
+      }
+      const keepRecent = deps.contextCompactor.getConfig().keepRecent;
+      if (keepRecent > 0 && messages.length > insertAt) {
+        insertAt = Math.max(insertAt, messages.length - keepRecent);
+      }
+      messages.splice(insertAt, 0, ...recentMemoryMessages);
     }
   }
 
