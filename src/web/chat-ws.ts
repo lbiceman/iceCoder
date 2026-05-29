@@ -63,6 +63,11 @@ import {
 } from './file-browser-direct.js';
 import { BgTaskPusher } from './bg-task-pusher.js';
 import { getBackgroundTaskManagerFor } from '../tools/background-task-manager.js';
+import {
+  formatToolArgsDetailPreview,
+  resolveToolCallInitialStatus,
+  resolveToolTraceResultStatus,
+} from './tool-trace-format.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
@@ -487,16 +492,17 @@ function ensureRunningTurn(sessionId: string): RunningTurnSnapshot {
   return t;
 }
 
-function toolArgsDetailPreview(toolArgs: Record<string, unknown> | undefined): string {
-  if (!toolArgs || typeof toolArgs !== 'object') return '';
-  const direct = toolArgs.path || toolArgs.file || toolArgs.command || toolArgs.query;
-  if (typeof direct === 'string' && direct) return direct;
-  try {
-    const argsStr = JSON.stringify(toolArgs);
-    return argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
-  } catch {
-    return '';
-  }
+function toolArgsDetailPreview(toolName: string, toolArgs: Record<string, unknown> | undefined): string {
+  return formatToolArgsDetailPreview(toolName, toolArgs);
+}
+
+function toolResultStatusPreview(
+  toolName: string,
+  toolSuccess: boolean | undefined,
+  toolOutcome: string | undefined,
+  toolOutput: string | undefined,
+): string {
+  return resolveToolTraceResultStatus(toolName, toolSuccess, toolOutcome, toolOutput);
 }
 
 function snapshotRunningTurn(sessionId: string): RunningTurnSnapshot | null {
@@ -545,8 +551,8 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (event.toolName) {
         t.toolTimeline.push({
           toolName: String(event.toolName),
-          detail: toolArgsDetailPreview(event.toolArgs),
-          status: 'pending',
+          detail: toolArgsDetailPreview(String(event.toolName), event.toolArgs),
+          status: resolveToolCallInitialStatus(String(event.toolName), event.toolArgs),
         });
         t.petState = 'working';
       }
@@ -555,10 +561,13 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (event.toolName) {
         for (let i = t.toolTimeline.length - 1; i >= 0; i--) {
           const row = t.toolTimeline[i];
-          if (row.toolName === event.toolName && row.status === 'pending') {
-            row.status = event.toolOutcome === 'policy_block'
-              ? 'warn'
-              : (event.toolSuccess ? 'success' : 'error');
+          if (row.toolName === event.toolName && (row.status === 'pending' || row.status === 'background')) {
+            row.status = toolResultStatusPreview(
+              String(event.toolName),
+              event.toolSuccess,
+              event.toolOutcome,
+              event.toolOutput,
+            );
             break;
           }
         }
@@ -1260,21 +1269,28 @@ async function handleChatMessage(
 
         // 收集工具调用记录
         if (event.type === 'tool_call' && event.toolName) {
+          const detail = toolArgsDetailPreview(event.toolName, event.toolArgs);
+          const callStatus = resolveToolCallInitialStatus(event.toolName, event.toolArgs);
+          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: callStatus });
           const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
-          const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
-            || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
-          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
           const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
           console.log(`[step] [call] ${event.toolName}(${truncated})`);
         } else if (event.type === 'tool_result' && event.toolName) {
+          const resultStatus = toolResultStatusPreview(
+            event.toolName,
+            event.toolSuccess,
+            event.toolOutcome,
+            event.toolOutput,
+          );
           // 更新批次中最后一个匹配的工具状态
           for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
-            if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
-              toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
+            if (toolTraceBatch[i].toolName === event.toolName
+              && (toolTraceBatch[i].status === 'pending' || toolTraceBatch[i].status === 'background')) {
+              toolTraceBatch[i].status = resultStatus;
               break;
             }
           }
-          const icon = event.toolSuccess ? '[ok]' : '[err]';
+          const icon = resultStatus === 'error' ? '[err]' : resultStatus === 'background' ? '[bg]' : '[ok]';
           const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
           console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
         }

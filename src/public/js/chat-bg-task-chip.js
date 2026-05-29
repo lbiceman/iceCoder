@@ -13,7 +13,16 @@
   var CHIP_CLASS = 'message-bg_status';
 
   /** ChipStore：跟踪当前活跃 chip 元素 + 自动移除定时器 */
-  var chips = new Map(); // taskId → { el, removeTimer | null }
+  var chips = new Map(); // taskId → { el, removeTimer, lastTask, viaCheck }
+
+  function terminalConfirmSuffix(task) {
+    if (!task.isTerminal || !task.viaCheck) return '';
+    if (task.status === 'completed') return ' · confirmed via check';
+    if (task.status === 'failed' || task.status === 'timeout' || task.status === 'killed') {
+      return ' · confirmed failed via check';
+    }
+    return ' · confirmed via check';
+  }
 
   function ensureContainer(messagesEl) {
     if (!messagesEl) return null;
@@ -36,7 +45,7 @@
                : task.status === 'timeout' ? 'timed out'
                : 'killed';
       var exitPart = (typeof task.exitCode === 'number') ? (' · exit=' + task.exitCode) : '';
-      statusText = verb + ' · ' + task.elapsed + exitPart;
+      statusText = verb + ' · ' + task.elapsed + exitPart + terminalConfirmSuffix(task);
     } else {
       var newPart = task.newLines > 0 ? (' · +' + task.newLines + ' lines') : ' · no new output';
       statusText = 'running · ' + task.elapsed + newPart;
@@ -101,20 +110,40 @@
 
   function upsertChip(container, task) {
     var entry = chips.get(task.taskId);
+    if (entry && entry.viaCheck) {
+      task = Object.assign({}, task, { viaCheck: true });
+    }
     if (entry && entry.el) {
       entry.el.className = classForTask(task);
       entry.el.innerHTML = buildChipHtml(task);
+      entry.lastTask = task;
+      entry.viaCheck = entry.viaCheck || !!task.viaCheck;
     } else {
       var el = document.createElement('div');
       el.className = classForTask(task);
       el.setAttribute('data-task-id', task.taskId);
       el.innerHTML = buildChipHtml(task);
       container.appendChild(el);
-      chips.set(task.taskId, { el: el, removeTimer: null });
+      chips.set(task.taskId, { el: el, removeTimer: null, lastTask: task, viaCheck: !!task.viaCheck });
+      entry = chips.get(task.taskId);
     }
 
     if (task.isTerminal) {
       scheduleRemoval(task.taskId, TERMINAL_LINGER_MS);
+    }
+  }
+
+  /** check 轮询确认终态后，为 chip 追加说明文案 */
+  function markConfirmedViaCheck(messagesEl, taskId) {
+    if (!taskId) return;
+    var entry = chips.get(taskId);
+    if (!entry || !entry.el) return;
+    entry.viaCheck = true;
+    if (entry.lastTask) {
+      var container = entry.el.parentNode;
+      if (container) {
+        upsertChip(container, Object.assign({}, entry.lastTask, { viaCheck: true }));
+      }
     }
   }
 
@@ -136,6 +165,7 @@
 
   global.BgTaskChip = {
     handleUpdate: handleUpdate,
+    markConfirmedViaCheck: markConfirmedViaCheck,
     clearAll: clearAll,
     getActiveCount: getActiveCount,
     /** 暴露用于单测：构造 chip 文本 */

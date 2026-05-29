@@ -267,7 +267,8 @@ window.ChatSession = (function () {
 
   function updateToolBatchStatus(toolName, status) {
     for (var i = currentToolBatch.length - 1; i >= 0; i--) {
-      if (currentToolBatch[i].toolName === toolName && currentToolBatch[i].status === 'pending') {
+      if (currentToolBatch[i].toolName === toolName
+        && (currentToolBatch[i].status === 'pending' || currentToolBatch[i].status === 'background')) {
         currentToolBatch[i].status = status;
         break;
       }

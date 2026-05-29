@@ -41,11 +41,28 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../llm/types.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import type { TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import {
   containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
   sanitizeAssistantContentForUser,
 } from './text-tool-call-salvage.js';
+
+function verificationGateHalfPoint(): number {
+  return Math.ceil(MAX_VERIFICATION_GATE_CONTINUATIONS / 2);
+}
+
+function buildNoToolExecutionRecoveryPrompt(
+  msgs: UnifiedMessage[],
+  userMessage: string,
+  taskSnap: TaskStateSnapshot,
+): string {
+  return [
+    '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
+    '',
+    formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
+  ].join('\n');
+}
 
 function pushAssistantForHistory(
   msgs: UnifiedMessage[],
@@ -395,17 +412,25 @@ export async function handleNoToolCalls(
       }
     } else {
       state.verificationGateContinuationCount++;
+      console.log(
+        `[harness] verification gate 注入 (${state.verificationGateContinuationCount}/${MAX_VERIFICATION_GATE_CONTINUATIONS})`,
+      );
       if (response.content || response.reasoningContent) {
         pushAssistantForHistory(msgs, response);
       }
       const prompt = acceptanceIncomplete && state.taskAcceptance
         ? state.taskAcceptance.buildAcceptancePrompt()
         : state.taskState.buildVerificationPrompt();
-      injectContinuationUserMessage(deps, state, msgs, [
+      const injectionParts = [
         prompt,
         '',
         formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-      ].join('\n'));
+      ];
+      if (state.verificationGateContinuationCount === verificationGateHalfPoint()) {
+        console.log('[harness] verification gate 半程叠加 no_tool 强提示');
+        injectionParts.push('', buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap));
+      }
+      injectContinuationUserMessage(deps, state, msgs, injectionParts.join('\n'));
       await resilienceSaveCheckpoint(deps, 'verification_started', state);
       state.transition = 'stop_hook_continue';
       return { action: 'continue' };
@@ -430,11 +455,7 @@ export async function handleNoToolCalls(
     }
     msgs.push({
       role: 'user',
-      content: [
-        '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
-        '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-      ].join('\n'),
+      content: buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap),
     });
     state.transition = 'no_tool_execution_recovery';
     return { action: 'continue' };

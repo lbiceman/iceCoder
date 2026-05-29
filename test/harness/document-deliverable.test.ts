@@ -7,6 +7,7 @@ import {
   hasUnconfirmedFileDeliverables,
   hasUnfulfilledFileDeliverableGoal,
   isEngineeringDeliverablePath,
+  extractDeletedPathsFromCommand,
   isFileDeliverableOrientedTask,
   isNonEmptyFileInfoOutput,
   pathsReferToSameFile,
@@ -68,6 +69,19 @@ describe('document-deliverable', () => {
       'C:\\Users\\tpln\\Desktop\\doc.md',
       'c:/users/tpln/desktop/doc.md',
     )).toBe(true);
+  });
+
+  it('extracts deleted paths from shell delete commands', () => {
+    expect(extractDeletedPathsFromCommand(
+      'del "E:\\test\\proj\\generate-assets.mjs" 2>nul || echo done',
+    )).toEqual(['E:\\test\\proj\\generate-assets.mjs']);
+    expect(extractDeletedPathsFromCommand(
+      'rm E:/test/proj/generate-assets.mjs 2>&1 && echo OK',
+    )).toEqual(['E:/test/proj/generate-assets.mjs']);
+    expect(extractDeletedPathsFromCommand(
+      'cd /d E:\\test\\proj && del generate-assets.mjs',
+    )).toEqual(['generate-assets.mjs']);
+    expect(extractDeletedPathsFromCommand('npm test')).toEqual([]);
   });
 
   it('acceptance gate pending requires run_command', () => {
@@ -341,5 +355,44 @@ describe('TaskState file deliverable verification', () => {
     const before = state.snapshot();
     expect(state.isVerificationBlockingFinal()).toBe(true);
     expect(state.snapshot()).toEqual(before);
+  });
+
+  it('removes changed file from verification gate after fs_operation delete', () => {
+    const state = new TaskState('cleanup temp script');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      { id: 'd1', name: 'fs_operation', arguments: { operation: 'delete', path: 'generate-assets.mjs' } },
+      { success: true, output: 'File deleted: generate-assets.mjs' },
+    );
+
+    expect(state.snapshot().filesChanged).toEqual([]);
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
+
+  it('removes changed file from verification gate after run_command del', () => {
+    const state = new TaskState('cleanup temp script');
+    const path = 'E:\\test\\proj\\generate-assets.mjs';
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      {
+        id: 'd1',
+        name: 'run_command',
+        arguments: { command: `del "${path}" 2>nul || echo done` },
+      },
+      { success: true, output: 'done' },
+    );
+
+    expect(state.snapshot().filesChanged).toEqual([]);
+    expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 });

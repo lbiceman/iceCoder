@@ -2,6 +2,7 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
+  extractDeletedPathsFromCommand,
   hasUnconfirmedFileDeliverables,
   isFileDeliverableConfirmationTool,
   isNonEmptyFileInfoOutput,
@@ -51,11 +52,27 @@ export class TaskState {
   recordToolResult(toolCall: ToolCall, result: ToolResult): void {
     if (toolCall.name === 'run_command') {
       const command = String(toolCall.arguments?.command ?? '');
-      if (command) this.commandsRun.push(command);
-      if (looksLikeVerificationCommand(command)) {
-        this.phase = 'verification';
-        this.verificationRequired = true;
-        this.verificationStatus = result.success ? 'passed' : 'failed';
+      if (command) {
+        this.commandsRun.push(command);
+        if (looksLikeVerificationCommand(command)) {
+          this.phase = 'verification';
+          this.verificationRequired = true;
+          this.verificationStatus = result.success ? 'passed' : 'failed';
+        }
+        if (result.success) {
+          for (const deletedPath of extractDeletedPathsFromCommand(command)) {
+            this.removeChangedFileDeliverable(deletedPath);
+          }
+        }
+      }
+      return;
+    }
+
+    if (toolCall.name === 'fs_operation') {
+      const op = String(toolCall.arguments?.operation ?? '');
+      if (op === 'delete' && result.success) {
+        const path = extractPathLikeArg(toolCall.arguments);
+        if (path) this.removeChangedFileDeliverable(path);
       }
       return;
     }
@@ -170,6 +187,21 @@ Run file_info (preferred) or read_file on each file above to confirm it exists a
     if (this.filesChanged.size === 0) return false;
     if (!this.areAllFileDeliverablesConfirmed()) return false;
     this.markVerificationPassed();
+    return true;
+  }
+
+  private removeChangedFileDeliverable(path: string): boolean {
+    const matched = [...this.filesChanged].find(changed => pathsReferToSameFile(changed, path));
+    if (!matched) return false;
+
+    const norm = normalizeDeliverablePath(matched);
+    this.filesChanged.delete(matched);
+    this.fileDeliverableWriteVersion.delete(norm);
+    this.fileDeliverableConfirmVersion.delete(norm);
+
+    if (this.filesChanged.size === 0 || this.areAllFileDeliverablesConfirmed()) {
+      this.markVerificationPassed();
+    }
     return true;
   }
 

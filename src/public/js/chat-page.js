@@ -196,7 +196,7 @@ window.ChatPage = (function () {
     if (text === '~open') {
       Cmd.hide();
       Pet.showThinking(false);
-      UI.resetLiveToolRoundTargets();
+      UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
       WS.sendMessage(
         '~open\n\n' +
@@ -293,7 +293,7 @@ window.ChatPage = (function () {
     }
     File.removeUploadedFile();
 
-    UI.resetLiveToolRoundTargets();
+    UI.clearLiveToolRoundDom();
     UI.setLiveToolRoundActive(true);
     if (msgImages.length > 0) {
       WS.send({ type: 'message', content: msgText || '请分析这些图片', images: msgImages });
@@ -416,6 +416,7 @@ window.ChatPage = (function () {
       var row = timeline[i];
       UI.appendToolAction(row.toolName, row.detail || '', row.status || 'pending');
     }
+    if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
   }
 
   function pickToolTimelineForRestore(runningTurn) {
@@ -600,23 +601,43 @@ window.ChatPage = (function () {
       Pet.updateStatusText(step.content, isStreaming, WS.isProcessing());
     }
     if (step.type === 'tool_call' && step.toolName) {
-      var detail = '';
-      if (step.toolArgs) {
-        detail = step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query || '';
-        if (!detail) {
-          var argsStr = JSON.stringify(step.toolArgs);
-          detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
-        }
+      if (WS.isProcessing() && UI.isLiveToolRoundActive && !UI.isLiveToolRoundActive()) {
+        UI.setLiveToolRoundActive(true);
       }
-      UI.appendToolAction(step.toolName, detail, 'pending');
-      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: 'pending' });
+      var fmt = window.ToolTraceFormat;
+      var detail = fmt
+        ? fmt.formatToolArgsDetailPreview(step.toolName, step.toolArgs)
+        : (step.toolArgs && (step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query)) || '';
+      if (!detail && step.toolArgs) {
+        var argsStr = JSON.stringify(step.toolArgs);
+        detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+      }
+      var callStatus = fmt && fmt.resolveToolCallInitialStatus
+        ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
+        : 'pending';
+      UI.appendToolAction(step.toolName, detail, callStatus);
+      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: callStatus });
     }
     if (step.type === 'tool_result' && step.toolName) {
-      var resultStatus = step.toolOutcome === 'policy_block'
-        ? 'warn'
-        : (step.toolSuccess ? 'success' : 'error');
+      var fmtResult = window.ToolTraceFormat;
+      var resultStatus = fmtResult
+        ? fmtResult.resolveToolTraceResultStatus(
+          step.toolName,
+          step.toolSuccess,
+          step.toolOutcome,
+          step.toolOutput,
+        )
+        : (step.toolOutcome === 'policy_block'
+          ? 'warn'
+          : (step.toolSuccess ? 'success' : 'error'));
       UI.updateLastToolAction(step.toolName, resultStatus);
       Session.updateToolBatchStatus(step.toolName, resultStatus);
+      if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
+        var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
+        if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
+          window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
+        }
+      }
     }
     if (window.ChatExecutionPlanBridge
       && (step.type === 'execution_plan_init'
@@ -642,6 +663,7 @@ window.ChatPage = (function () {
       isStreaming = false;
       Pet.removeThinking(isStreaming, WS.isProcessing());
       if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
+      if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }

@@ -7,6 +7,7 @@
  */
 
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import { stripLeadingCdPrefix } from './task-acceptance-tracker.js';
 
 export type DeliverableKind = 'file_deliverable' | 'engineering' | 'none';
 
@@ -78,6 +79,39 @@ export function writeConfirmationPaths(filesChanged: readonly string[]): string[
 
 export function pathsReferToSameFile(a: string, b: string): boolean {
   return normalizeDeliverablePath(a) === normalizeDeliverablePath(b);
+}
+
+/** 从 shell 删除命令片段中提取目标路径（del / rm / Remove-Item）。 */
+export function extractDeletedPathsFromCommand(command: string): string[] {
+  const stripped = stripLeadingCdPrefix(command);
+  const paths: string[] = [];
+  const segments = stripped.split(/\s*(?:&&|\|\||;)\s*/);
+
+  for (const segment of segments) {
+    const s = segment.trim();
+    if (!s) continue;
+
+    const quotedOrBare = '(?:"([^"]+)"|\'([^\']+)\'|([^\\s>]+))';
+
+    let match = s.match(new RegExp(`^(?:rm|rmdir)\\s+(?:(?:-[a-zA-Z]+\\s+)*)?${quotedOrBare}`, 'i'));
+    if (match) {
+      paths.push(match[1] ?? match[2] ?? match[3]!);
+      continue;
+    }
+
+    match = s.match(new RegExp(`^(?:del|erase)\\s+(?:(?:\\/[a-zA-Z]+\\s+)*)?${quotedOrBare}`, 'i'));
+    if (match) {
+      paths.push(match[1] ?? match[2] ?? match[3]!);
+      continue;
+    }
+
+    match = s.match(new RegExp(`^Remove-Item\\s+(?:(?:-[a-zA-Z]+\\s+)*)?${quotedOrBare}`, 'i'));
+    if (match) {
+      paths.push(match[1] ?? match[2] ?? match[3]!);
+    }
+  }
+
+  return paths;
 }
 
 export function isFileDeliverableConfirmationTool(toolName: string): boolean {

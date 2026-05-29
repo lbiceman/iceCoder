@@ -16,6 +16,7 @@ import './chat-qr.js';
 import './chat-pet-bridge.js';
 import './chat-execution-plan.js';
 import './chat-execution-plan-bridge.js';
+import './tool-trace-format.js';
 import './chat-bg-task-chip.js';
 import './chat-page.js';
 import './memory-page.js';

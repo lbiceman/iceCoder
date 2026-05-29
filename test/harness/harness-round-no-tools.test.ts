@@ -258,6 +258,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
   });
 
   it('仅 md 变更未确认 → verification gate 拦截一次', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '写一份 md 报告' },
     ];
@@ -282,6 +283,40 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     expect(result.action).toBe('continue');
     expect(state.verificationGateContinuationCount).toBe(1);
     expect(messages.at(-1)?.content).toMatch(/file_info|read_file/i);
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (1/10)');
+    logSpy.mockRestore();
+  });
+
+  it('verification gate 半程叠加一次 no_tool 强提示', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '写一份 md 报告' },
+    ];
+    const state = makeState(messages, '写一份 md 报告');
+    state.verificationGateContinuationCount = 4;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/report.md' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '报告写好了。', finishReason: 'stop' },
+        userMessage: '写一份 md 报告',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(5);
+    expect(messages.at(-1)?.content).toMatch(/native function-calling \(tool_calls\)/i);
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (5/10)');
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 半程叠加 no_tool 强提示');
+    logSpy.mockRestore();
   });
 
   it('无 file_info 工具时 verification pending → verification_exhausted', async () => {
@@ -318,7 +353,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
       { role: 'user', content: '写 md' },
     ];
     const state = makeState(messages, '写 md');
-    state.verificationGateContinuationCount = 5;
+    state.verificationGateContinuationCount = 10;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: '/tmp/x.md' } },
       { success: true, output: 'ok' },
@@ -429,7 +464,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     ];
     const state = makeState(messages, 'fix bug');
     state.noToolExecutionRecoveryCount = 1;
-    state.verificationGateContinuationCount = 5;
+    state.verificationGateContinuationCount = 10;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },

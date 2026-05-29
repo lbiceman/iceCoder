@@ -538,6 +538,7 @@
   margin-left: 4px;
   max-width: 78%;
   overflow: hidden;
+  flex-shrink: 0;
 }
 .tool-action .tool-icon {
   flex-shrink: 0;
@@ -547,12 +548,25 @@
 }
 .tool-action .tool-icon.pending {
   color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;
+}
+.tool-action .tool-icon.pending::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
 }
 .tool-action .tool-icon.success { color: var(--success); }
 .tool-action .tool-icon.error {
   color: var(--danger, #e94560);
 }
 .tool-action .tool-icon.warn { color: var(--warning); }
+.tool-action .tool-icon.background { color: var(--accent, #6b9cff); }
 .tool-action .tool-name {
   font-weight: 600;
   color: var(--text-secondary);
@@ -571,6 +585,7 @@
   gap: 2px;
   margin: 4px 0 6px 0;
   max-width: 92%;
+  flex-shrink: 0;
 }
 .tool-trace-visible {
   display: flex;
