@@ -566,7 +566,7 @@
   color: var(--danger, #e94560);
 }
 .tool-action .tool-icon.warn { color: var(--warning); }
-.tool-action .tool-icon.background { color: var(--accent, #6b9cff); }
+.tool-action .tool-icon.background { color: #6b9cff; }
 .tool-action .tool-name {
   font-weight: 600;
   color: var(--text-secondary);

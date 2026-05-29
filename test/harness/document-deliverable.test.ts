@@ -6,15 +6,24 @@ import {
   fileDeliverablePaths,
   hasUnconfirmedFileDeliverables,
   hasUnfulfilledFileDeliverableGoal,
+  isDotPrefixedDirPath,
   isEngineeringDeliverablePath,
+  isGenericTempPath,
+  isVerificationExemptPath,
   extractDeletedPathsFromCommand,
   isFileDeliverableOrientedTask,
   isNonEmptyFileInfoOutput,
   pathsReferToSameFile,
   snapshotHasUnconfirmedFileDeliverables,
+  verificationConfirmationStats,
   writeConfirmationPaths,
 } from '../../src/harness/document-deliverable.js';
 import { TaskState } from '../../src/harness/task-state.js';
+import { resetVerificationExemptRuntime } from '../../src/harness/verification-exempt-config.js';
+
+afterEach(() => {
+  resetVerificationExemptRuntime();
+});
 
 describe('document-deliverable', () => {
   it('classifies known document extensions as file_deliverable', () => {
@@ -44,12 +53,50 @@ describe('document-deliverable', () => {
     expect(classifyChangedFiles(['src/a.ts', 'package.json'])).toBe('engineering');
   });
 
-  it('writeConfirmationPaths includes all changed files for gate', () => {
-    expect(writeConfirmationPaths(['a.md', 'b.tmp'])).toEqual(['a.md', 'b.tmp']);
-    expect(writeConfirmationPaths(['src/a.ts', 'notes.bak'])).toEqual(['src/a.ts', 'notes.bak']);
+  it('writeConfirmationPaths excludes temp/scratch paths from gate', () => {
+    expect(writeConfirmationPaths(['a.md', 'b.tmp'])).toEqual(['a.md']);
+    expect(writeConfirmationPaths(['src/a.ts', 'notes.bak'])).toEqual(['src/a.ts']);
     expect(writeConfirmationPaths(['src/a.ts', 'README.md'])).toEqual(['src/a.ts', 'README.md']);
     expect(writeConfirmationPaths(['src/a.ts'])).toEqual(['src/a.ts']);
     expect(writeConfirmationPaths([])).toEqual([]);
+  });
+
+  it('isVerificationExemptPath: generic temp suffixes and workspace tmp/', () => {
+    expect(isGenericTempPath('backup.bak')).toBe(true);
+    expect(isGenericTempPath('scratch.tmp')).toBe(true);
+    expect(isGenericTempPath('/tmp/out.md')).toBe(false);
+    expect(isGenericTempPath('tmp/draft/out.md')).toBe(true);
+    expect(isVerificationExemptPath('README.md')).toBe(false);
+  });
+
+  it('isVerificationExemptPath: dot-prefixed directory segments', () => {
+    expect(isDotPrefixedDirPath('E:/proj/.scratch/draft.md')).toBe(true);
+    expect(isDotPrefixedDirPath('E:/proj/src/.cache/x.ts')).toBe(true);
+    expect(isVerificationExemptPath('E:/proj/.scratch/draft.md')).toBe(true);
+    expect(isDotPrefixedDirPath('E:/proj/scripts/fix-tasks.cjs')).toBe(false);
+    expect(isVerificationExemptPath('E:/proj/scripts/fix-tasks.cjs')).toBe(false);
+    expect(isDotPrefixedDirPath('E:/proj/.env')).toBe(false);
+  });
+
+  it('verificationConfirmationStats counts only required paths', () => {
+    const files = [
+      'src/a.ts',
+      '.scratch/draft.md',
+      'scripts/fix-tasks.cjs',
+    ];
+    const stats = verificationConfirmationStats(
+      files,
+      { 'src/a.ts': 1, 'scripts/fix-tasks.cjs': 1 },
+      {},
+    );
+    expect(stats.exempt).toBe(1);
+    expect(stats.required).toBe(2);
+    expect(stats.pending).toBe(2);
+    expect(hasUnconfirmedFileDeliverables(files, { 'src/a.ts': 1, 'scripts/fix-tasks.cjs': 1 }, {})).toBe(true);
+  });
+
+  it('canVerifyDeliverableKind passes when only dot-dir exempt files changed', () => {
+    expect(canVerifyDeliverableKind(['.scratch/out.md'], ['file_info'])).toBe(true);
   });
 
   it('fileDeliverablePaths still excludes engineering for deliverable classification', () => {

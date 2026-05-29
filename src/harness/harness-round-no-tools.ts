@@ -359,9 +359,11 @@ export async function handleNoToolCalls(
   let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
 
   const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
-    const suffix = detail ? `\n${detail}` : '';
-    const content = sanitizeAssistantContentForUser(response.content)
-      + (suffix || '\n任务因验收无法继续而暂停：缺少可用的验收工具或连续未执行验收。');
+    const defaultSuffix = canVerifyDeliverable
+      ? '\n任务因验收无法继续而暂停：已连续多轮未调用 file_info/read_file（或 run_command）完成写后确认。'
+      : '\n任务因验收无法继续而暂停：当前工具集缺少验收所需工具。';
+    const suffix = detail ? `\n${detail}` : defaultSuffix;
+    const content = sanitizeAssistantContentForUser(response.content) + suffix;
     if (response.content || response.reasoningContent) {
       pushAssistantForHistory(msgs, response);
     }

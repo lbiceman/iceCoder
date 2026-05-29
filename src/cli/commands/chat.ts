@@ -34,6 +34,7 @@ import {
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
+import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import {
   fetchQuickTunnelPublicUrl,
   resolveTunnelMetricsListenAddress,
@@ -461,6 +462,7 @@ ${c.bold}终端内置命令:${c.reset}
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
       const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+      const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
       const harnessConfig: HarnessConfig = {
         context: {
@@ -486,6 +488,7 @@ ${c.bold}终端内置命令:${c.reset}
         sessionDir: ctx.paths.sessionsDir,
         sessionId: 'default',
         workspaceRoot: wsCtx.effectiveWorkspaceRoot,
+        verificationExemptDirs,
         supervisorConfig: supervisorRuntime.supervisorConfig,
         globalPolicy: supervisorRuntime.globalPolicy,
         supervisorBridge: supervisorRuntime.bridge,

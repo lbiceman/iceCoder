@@ -94,6 +94,10 @@ import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
 import { getLatestRealUserText } from './harness-message-utils.js';
+import {
+  resolveVerificationExemptDirPrefixes,
+  setVerificationExemptRuntime,
+} from './verification-exempt-config.js';
 import { resolveLlmToolsForRound } from './casual-mode.js';
 import { salvageTextToolCallsInResponse } from './text-tool-call-salvage.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
@@ -136,6 +140,7 @@ export class Harness {
   private checkpointEngine?: CheckpointEngine;
   private globalPolicy?: HarnessConfig['globalPolicy'];
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
+  private verificationExemptDirs?: string[];
   private supervisorBridge?: SupervisorRuntimeBridge;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
@@ -181,6 +186,7 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
+    this.verificationExemptDirs = config.verificationExemptDirs;
     this.sessionDir = config.sessionDir;
     // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
@@ -451,6 +457,16 @@ export class Harness {
         this.workspaceRoot = lockedWorkspaceRoot;
       }
     }
+
+    const exemptPrefixes = await resolveVerificationExemptDirPrefixes({
+      workspaceRoot: this.workspaceRoot,
+      globalDirs: this.verificationExemptDirs,
+      mainConfigPath: process.env.ICE_CONFIG_PATH,
+    });
+    setVerificationExemptRuntime({
+      workspaceRoot: this.workspaceRoot,
+      prefixes: exemptPrefixes,
+    });
 
     const deps = this.buildRunDeps();
     deps.workspaceRoot = this.workspaceRoot;

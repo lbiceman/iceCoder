@@ -5,6 +5,7 @@ import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
   hasUnfulfilledFileDeliverableGoal,
   snapshotHasUnconfirmedFileDeliverables,
+  verificationConfirmationStats,
   writeConfirmationPaths,
 } from './document-deliverable.js';
 import type { TaskState } from './task-state.js';
@@ -59,12 +60,20 @@ export function buildIncompleteContinuationPrompt(
     lines.push(`- Recent tool failures: ${repo.recentDiagnostics.slice(-3).join('; ')}`);
   }
   const filePaths = writeConfirmationPaths(task.filesChanged);
+  const fileStats = verificationConfirmationStats(
+    task.filesChanged,
+    task.fileDeliverableWriteVersions,
+    task.fileDeliverableConfirmVersions,
+  );
   const filePending = snapshotHasUnconfirmedFileDeliverables(task);
-  if (filePending && filePaths.length > 0) {
-    lines.push(`- Changed files pending confirmation (${filePaths.length} file(s))`);
+  if (filePending && fileStats.required > 0) {
+    lines.push(
+      `- Changed files pending confirmation: ${fileStats.pending} of ${fileStats.required}`
+      + (fileStats.exempt > 0 ? ` (${fileStats.exempt} dot-dir/temp exempt)` : ''),
+    );
   }
-  if (task.filesChanged.length > 0) {
-    lines.push(`- Changed files (${filePaths.length}): confirm each with file_info or read_file.`);
+  if (fileStats.required > 0) {
+    lines.push(`- Confirm each required path with file_info or read_file (${fileStats.required} file(s)).`);
   } else if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
     lines.push('- Expected file deliverable has not been written yet.');
   }

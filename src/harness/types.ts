@@ -202,6 +202,11 @@ export interface HarnessConfig {
   sessionDir?: string;
   /** 工作区根目录（会话笔记 package.json 锚定；默认 process.cwd()） */
   workspaceRoot?: string;
+  /**
+   * 写后读 Gate 豁免目录（相对工作区）；与工作区 `.icecoder.json` 合并。
+   * 未设置时仅使用全局 config 与工作区项目文件。
+   */
+  verificationExemptDirs?: string[];
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
   /** Batch 1：可选注入的全局策略，只读承载位；本批不接入 Harness 主循环。 */

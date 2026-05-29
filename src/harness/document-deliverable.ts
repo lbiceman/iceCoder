@@ -8,6 +8,7 @@
 
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import { stripLeadingCdPrefix } from './task-acceptance-tracker.js';
+import { isProjectCustomExemptPath } from './verification-exempt-config.js';
 
 export type DeliverableKind = 'file_deliverable' | 'engineering' | 'none';
 
@@ -72,9 +73,74 @@ export function fileDeliverablePaths(filesChanged: readonly string[]): string[] 
   return filesChanged.filter(file => !isEngineeringDeliverablePath(file));
 }
 
-/** Gate 写后须 read 确认的全部路径（含 .java/.py/.ts 等，与 filesChanged 一致） */
+/**
+ * 通用临时路径：tmp/temp/cache 目录段，或 .tmp/.temp/.bak / 尾随 ~ 文件名。
+ * 仍会计入 filesChanged 审计，但不要求 file_info/read_file。
+ */
+export function isGenericTempPath(path: string): boolean {
+  const norm = normalizeDeliverablePath(path);
+  const segments = norm.split('/').filter(Boolean);
+  const base = segments[segments.length - 1] ?? norm;
+  if (/\.(tmp|temp|bak)$/.test(base)) return true;
+  if (base.endsWith('~')) return true;
+  // 工作区相对 tmp/、temp/（不以 /tmp/ 开头，避免与 Unix 绝对临时路径混淆）
+  if (norm.startsWith('tmp/') || norm.startsWith('temp/')) return true;
+  return false;
+}
+
+/**
+ * 路径位于以 `.` 开头的目录之下（如 `.scratch/out.md`、`src/.cache/x.ts`）。
+ * 根目录单文件（如 `.env`）不算目录豁免。
+ */
+export function isDotPrefixedDirPath(path: string): boolean {
+  const norm = normalizeDeliverablePath(path);
+  const segments = norm.split('/').filter(Boolean);
+  if (segments.length < 2) return false;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i]!;
+    if (seg.startsWith('.') && seg !== '.' && seg !== '..') return true;
+  }
+  return false;
+}
+
+/**
+ * 写后读 Gate 豁免路径。判定顺序：
+ * 1. isGenericTempPath — .tmp/.bak 后缀或工作区相对 tmp/、temp/
+ * 2. isDotPrefixedDirPath — 任意父级目录段以 `.` 开头
+ * 3. isProjectCustomExemptPath — config.json / .icecoder.json 的 verificationExemptDirs
+ */
+export function isVerificationExemptPath(path: string): boolean {
+  return isGenericTempPath(path)
+    || isDotPrefixedDirPath(path)
+    || isProjectCustomExemptPath(path);
+}
+
+/** Gate 写后须 read 确认的路径（排除临时/草稿，其余与 filesChanged 同标尺） */
 export function writeConfirmationPaths(filesChanged: readonly string[]): string[] {
-  return [...filesChanged];
+  return filesChanged.filter(path => !isVerificationExemptPath(path));
+}
+
+/** 写后读待确认统计（prompt / 日志用） */
+export function verificationConfirmationStats(
+  filesChanged: readonly string[],
+  writeVersions?: Record<string, number>,
+  confirmVersions?: Record<string, number>,
+): { required: number; pending: number; exempt: number } {
+  const requiredPaths = writeConfirmationPaths(filesChanged);
+  const exempt = filesChanged.length - requiredPaths.length;
+  if (requiredPaths.length === 0) {
+    return { required: 0, pending: 0, exempt };
+  }
+  const hasWriteMaps = writeVersions && Object.keys(writeVersions).length > 0;
+  if (!hasWriteMaps) {
+    return { required: requiredPaths.length, pending: requiredPaths.length, exempt };
+  }
+  const pending = requiredPaths.filter(path => {
+    const writeVer = versionForDeliverablePath(path, writeVersions);
+    const confirmVer = versionForDeliverablePath(path, confirmVersions);
+    return writeVer === 0 || confirmVer !== writeVer;
+  }).length;
+  return { required: requiredPaths.length, pending, exempt };
 }
 
 export function pathsReferToSameFile(a: string, b: string): boolean {
@@ -131,7 +197,7 @@ export function canVerifyDeliverableKind(
   if (acceptanceIncomplete) {
     return toolNames.some(name => name === 'run_command');
   }
-  if (filesChanged.length === 0) return true;
+  if (writeConfirmationPaths(filesChanged).length === 0) return true;
   return toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
 }
 

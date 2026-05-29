@@ -40,6 +40,7 @@ import {
 } from '../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
 import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
+import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import {
   registerSupervisorRuntimeReset,
   resetSupervisorRuntimeCache,
@@ -1151,6 +1152,7 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
+  const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
   const workspaceMessage = typeof harnessUserMessage === 'string'
@@ -1205,6 +1207,7 @@ async function handleChatMessage(
     sessionDir: SESSIONS_DIR,
     sessionId: runSessionId,
     workspaceRoot: effectiveWorkspace,
+    verificationExemptDirs,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
     supervisorBridge: supervisorRuntime.bridge,

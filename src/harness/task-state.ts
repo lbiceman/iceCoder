@@ -9,6 +9,7 @@ import {
   isNonEmptyReadOutput,
   normalizeDeliverablePath,
   pathsReferToSameFile,
+  verificationConfirmationStats,
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
@@ -107,17 +108,37 @@ export class TaskState {
   }
 
   buildVerificationPrompt(): string {
-    const paths = writeConfirmationPaths([...this.filesChanged]);
-    const fileList = paths.length > 0
-      ? paths.map(f => `- ${f}`).join('\n')
+    const all = [...this.filesChanged];
+    const paths = writeConfirmationPaths(all);
+    const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
+    const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
+    const { pending, required, exempt } = verificationConfirmationStats(
+      all,
+      writeVersions,
+      confirmVersions,
+    );
+
+    const maxList = 12;
+    const listed = paths.slice(0, maxList);
+    const fileList = listed.length > 0
+      ? listed.map(f => `- ${f}`).join('\n')
       : '- (changed files unknown)';
+    const more = paths.length > maxList
+      ? `\n- … and ${paths.length - maxList} more (use file_info on each before finishing)`
+      : '';
+
+    const exemptNote = exempt > 0
+      ? `\n(${exempt} file(s) exempt: dot-dir (.foo/...), temp suffix, or verificationExemptDirs — no confirmation required)`
+      : '';
 
     return `[System] You changed files but have not confirmed them yet.
 
-Changed files:
-${fileList}
+Pending confirmation: ${pending} of ${required} file(s)${exemptNote}
 
-Run file_info (preferred) or read_file on each file above to confirm it exists and is non-empty. Do not claim the task is complete before confirmation.`;
+Changed files (confirm each with file_info or read_file):
+${fileList}${more}
+
+Do not claim the task is complete before confirmation.`;
   }
 
   /** 续跑时覆盖被「继续」污染的 goal/intent */
