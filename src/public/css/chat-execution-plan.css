@@ -61,14 +61,6 @@
   text-overflow: ellipsis;
   font-weight: 600;
   flex: 1;
-  margin-right: 8px;
-}
-
-.exec-plan-progress {
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-  color: var(--text-secondary, #b9c0d4);
-  flex-shrink: 0;
 }
 
 .exec-plan-mode-banner {

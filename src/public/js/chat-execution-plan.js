@@ -64,7 +64,6 @@ window.ChatExecutionPlan = (function () {
   var visible = false;
   var rootEl = null;
   var listEl = null;
-  var progressEl = null;
   var titleEl = null;
   var modeBannerEl = null;
   var popoverOpen = false;
@@ -102,7 +101,6 @@ window.ChatExecutionPlan = (function () {
     rootEl.innerHTML =
       '<header class="exec-plan-header">' +
         '<span class="exec-plan-title" id="exec-plan-title">执行计划</span>' +
-        '<span class="exec-plan-progress" id="exec-plan-progress">0%</span>' +
       '</header>' +
       '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
       '<ol class="exec-plan-list" id="exec-plan-list"></ol>';
@@ -111,7 +109,6 @@ window.ChatExecutionPlan = (function () {
     attachTo.appendChild(rootEl);
 
     listEl = rootEl.querySelector('#exec-plan-list');
-    progressEl = rootEl.querySelector('#exec-plan-progress');
     titleEl = rootEl.querySelector('#exec-plan-title');
     modeBannerEl = rootEl.querySelector('#exec-plan-mode-banner');
 
@@ -393,7 +390,6 @@ window.ChatExecutionPlan = (function () {
     visible = true;
     ensureMounted();
     titleEl.textContent = '任务图 · ' + (INTENT_LABELS[data.graphIntent] || data.graphIntent || '');
-    progressEl.textContent = '0%';
     listEl.innerHTML = '';
     updateAnchorChrome();
     notifyPetFoot();
@@ -403,7 +399,6 @@ window.ChatExecutionPlan = (function () {
     if (!currentPlan) return;
     currentPlan.progress = Math.min(100, ((data.nodeIndex || 0) + 1) * 25);
     currentPlan.activeStepId = data.nodeId || null;
-    progressEl.textContent = currentPlan.progress + '%';
     if (listEl) {
       var items = listEl.querySelectorAll('.exec-plan-step');
       for (var i = 0; i < items.length; i++) {
@@ -424,7 +419,6 @@ window.ChatExecutionPlan = (function () {
   function markGraphComplete() {
     if (!currentPlan) return;
     currentPlan.progress = 100;
-    progressEl.textContent = '100%';
     visible = false;
   }
 
@@ -557,7 +551,6 @@ window.ChatExecutionPlan = (function () {
     ensureMounted();
     var intentLabel = INTENT_LABELS[currentPlan.intent] || currentPlan.intent;
     titleEl.textContent = '执行计划 · ' + intentLabel;
-    progressEl.textContent = (currentPlan.progress || 0) + '%';
     listEl.innerHTML = '';
     for (var i = 0; i < currentPlan.steps.length; i++) {
       var step = currentPlan.steps[i];
@@ -650,7 +643,6 @@ window.ChatExecutionPlan = (function () {
 
     if (typeof patch.progress === 'number') {
       currentPlan.progress = patch.progress;
-      progressEl.textContent = patch.progress + '%';
     }
     if (typeof patch.updatedAt === 'number') {
       currentPlan.updatedAt = patch.updatedAt;
@@ -675,7 +667,6 @@ window.ChatExecutionPlan = (function () {
     updateAnchorChrome();
     if (rootEl) {
       listEl.innerHTML = '';
-      if (progressEl) progressEl.textContent = '0%';
       renderExecutionModeBanner();
       rootEl.classList.remove('exec-plan-panel--open', 'exec-plan-panel--suppressed');
     }
