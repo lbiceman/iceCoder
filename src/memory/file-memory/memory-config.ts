@@ -17,16 +17,17 @@
 
 import type { FileMemoryConfig } from './types.js';
 import path from 'node:path';
+import { getRuntimeMemoryAuxPath } from '../../cli/paths.js';
 
 // ══════════════════════════════════════════════════════════════════
 // 目录与路径
 // ══════════════════════════════════════════════════════════════════
 
 /** 默认记忆文件存储目录 */
-export const DEFAULT_MEMORY_DIR = './data/memory-files';
+export const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
 
 /** 默认用户级记忆目录 */
-export const DEFAULT_USER_MEMORY_DIR = './data/user-memory';
+export const DEFAULT_USER_MEMORY_DIR = process.env.ICE_USER_MEMORY_DIR!;
 
 /** 默认索引文件名 */
 export const DEFAULT_ENTRYPOINT_NAME = 'MEMORY.md';
@@ -273,7 +274,7 @@ export const DEFAULT_FILE_MEMORY_CONFIG: FileMemoryConfig = {
 export const DEFAULT_MULTI_LEVEL_CONFIG: MultiLevelMemoryConfig = {
   ...DEFAULT_FILE_MEMORY_CONFIG,
   projectRoot: '.',
-  userMemoryDir: process.env.ICE_USER_MEMORY_DIR ?? './data/user-memory',
+  userMemoryDir: process.env.ICE_USER_MEMORY_DIR!,
   currentDir: '.',
 };
 
@@ -305,7 +306,7 @@ export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   maxIndexBytes: 25000,
   maxOutputTokens: 4096,
   enableBackup: true,
-  backupDir: 'data/memory/dream-backups',
+  backupDir: getRuntimeMemoryAuxPath('dream-backups'),
   maxBackups: 3,
   enforceMemoryCapAfterDream: true,
   /** 项目 `.md` 条数上限（不含 MEMORY.md），与 `DEFAULT_FILE_MEMORY_CONFIG.maxMemoryFiles` 常一致 */
@@ -318,7 +319,7 @@ export const DEFAULT_DREAM_CONFIG: DreamConfig = {
 
 /** 遥测 JSONL 默认路径与体积上限 */
 export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
-  logPath: 'data/memory/telemetry.jsonl',
+  logPath: getRuntimeMemoryAuxPath('telemetry.jsonl'),
   enableFileLog: true,
   enableConsoleLog: false,
   maxLogSize: 5 * 1024 * 1024, // 5MB
@@ -328,7 +329,7 @@ export const DEFAULT_EVICTION_CONFIG: EvictionConfig = {
   enabled: true,
   softLimit: 100,
   evictionTarget: 100,
-  evictedDir: 'data/memory/evicted',
+  evictedDir: getRuntimeMemoryAuxPath('evicted'),
   maxEvictedFiles: 100,
   protectionDays: 3,
 };

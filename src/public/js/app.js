@@ -37,6 +37,23 @@
   var SUPERVISOR_MODES = ['off', 'adaptive', 'strict'];
   var SUPERVISOR_LABELS = { off: '自由', adaptive: '自适应', strict: '严格' };
   var currentSupervisorMode = 'adaptive';
+  var setupRequired = false;
+
+  function applySetupMode(required) {
+    setupRequired = !!required;
+    document.body.classList.toggle('setup-required', setupRequired);
+    if (navChat) navChat.style.display = setupRequired ? 'none' : '';
+    if (navMemory) navMemory.style.display = setupRequired ? 'none' : '';
+    if (supervisorModeToggle) supervisorModeToggle.style.display = setupRequired ? 'none' : '';
+    if (setupRequired && getRouteFromHash() !== 'config') {
+      window.location.replace('#/config');
+    }
+  }
+
+  function exitSetupMode() {
+    applySetupMode(false);
+    navigate('chat');
+  }
 
   // ---- 监管模式 ----
 
@@ -131,6 +148,9 @@
   }
 
   function navigate(page) {
+    if (setupRequired && page !== 'config') {
+      page = 'config';
+    }
     if (page === currentPage) return;
     var prev = currentPage;
     currentPage = page;
@@ -192,12 +212,13 @@
   // ---- 系统状态 ----
 
   function fetchSystemStatus() {
-    fetch('/api/config')
+    return fetch('/api/config')
       .then(function (res) {
         if (!res.ok) throw new Error('获取配置失败');
         return res.json();
       })
       .then(function (data) {
+        applySetupMode(!!data.setupRequired);
         statusDot.classList.remove('disconnected');
         statusDot.classList.add('connected');
         statusDot.title = '已连接';
@@ -210,12 +231,14 @@
         } else {
           // statusModel.textContent = '—';
         }
+        return data;
       })
       .catch(function () {
         statusDot.classList.remove('connected');
         statusDot.classList.add('disconnected');
         statusDot.title = '未连接';
         // statusModel.textContent = '—';
+        return null;
       });
   }
 
@@ -248,6 +271,10 @@
 
     // 监听 hash 变化
     window.addEventListener('hashchange', function () {
+      if (setupRequired && getRouteFromHash() !== 'config') {
+        window.location.replace('#/config');
+        return;
+      }
       navigate(getRouteFromHash());
     });
 
@@ -263,8 +290,9 @@
       window.location.hash = '#/config';
     });
 
-    fetchSystemStatus();
-    navigate(getRouteFromHash());
+    fetchSystemStatus().then(function () {
+      navigate(setupRequired ? 'config' : getRouteFromHash());
+    });
     window.addEventListener('visibilitychange', function onVis () {
       if (document.visibilityState === 'visible') {
         fetchSystemStatus();
@@ -274,6 +302,10 @@
 
   window.AppRouter = {
     refreshStatus: fetchSystemStatus,
+    exitSetupMode: exitSetupMode,
+    isSetupRequired: function () {
+      return setupRequired;
+    },
     getSupervisorMode: function () {
       return currentSupervisorMode;
     },

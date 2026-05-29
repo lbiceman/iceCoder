@@ -29,6 +29,7 @@ import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
+import { c, warn } from '../utils/terminal-ui.js';
 
 export interface ServeResult {
   server: Server;
@@ -41,14 +42,20 @@ export interface ServeResult {
  */
 export async function startWebServer(ctx: BootstrapResult, port: number): Promise<ServeResult> {
   const { orchestrator, toolRegistry, toolExecutor, llmAdapter, paths } = ctx;
+  const setupState = { required: ctx.needsSetup };
 
   const app = await createServer({
+    setupGate: () => setupState.required,
     routes: [
       { path: '/api/config', router: createConfigRouter({
         configPath: paths.configPath,
-        onConfigSaved: () => {
+        setSetupRequired: (required) => { setupState.required = required; },
+        onConfigSaved: (ready) => {
           reloadLLMAdapter(llmAdapter, paths.configPath).catch(err =>
             console.error('[serve] Failed to reload LLM adapter:', err));
+          if (ready) {
+            console.log('[iceCoder] 模型配置已完成，聊天功能已启用');
+          }
         },
       }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
@@ -63,7 +70,12 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
   });
 
   const server = await startServer(app, port);
-  attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
+  attachChatWebSocket(server, {
+    orchestrator,
+    toolRegistry,
+    toolExecutor,
+    isSetupRequired: () => setupState.required,
+  });
 
   const stopTunnelWatcher = startTunnelReadyWatcher({
     onReady: (url) => broadcastTunnelReady({ url }),
@@ -85,6 +97,11 @@ export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<
   const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3784', 10);
 
   const { cleanup } = await startWebServer(ctx, port);
+
+  if (ctx.needsSetup) {
+    warn('首次使用：请在浏览器中完成模型配置');
+    console.log(`  ${c.cyan}http://127.0.0.1:${port}/#/config${c.reset}`);
+  }
 
   registerGracefulShutdown({
     message: 'iceCoder 正在退出...',

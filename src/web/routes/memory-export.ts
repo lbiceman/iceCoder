@@ -10,8 +10,9 @@ import path from 'node:path';
 import { recallRelevantMemories } from '../../memory/file-memory/memory-recall.js';
 import { MEMORY_MAX_RELEVANT } from '../../memory/file-memory/memory-config.js';
 import type { LLMAdapter } from '../../llm/llm-adapter.js';
+import '../../cli/paths.js';
 
-const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR || './data/memory-files';
+const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
 
 /** 创建挂载于 /api/memory 的路由（当前仅 recall 测试）。 */
 export function createMemoryExportRouter(llmAdapter?: LLMAdapter): Router {

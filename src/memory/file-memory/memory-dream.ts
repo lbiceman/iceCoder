@@ -25,9 +25,14 @@ import {
   resolveUserMemoryDir,
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
+import { getRuntimeMemoryAuxPath } from '../../cli/paths.js';
 import { computeEvictionScore, evictIfNeeded, type EvictionResult } from './memory-eviction.js';
 import { getScannerCache } from './memory-scanner-cache.js';
 import type { MemoryHeader } from './types.js';
+import { ConsolidationLock } from './memory-concurrency.js';
+import { getDreamConfig } from './memory-remote-config.js';
+import { getExpiredMemories, getStaleMemories } from './memory-age.js';
+import { countDeadLinksInMemoryIndex, repairDeadLinksInMemoryIndex } from './memory-index-health.js';
 
 /** Dream 读取文件数上限 */
 const DREAM_READ_LIMIT = 80;
@@ -38,13 +43,9 @@ const DREAM_NEW_FILES_TRIGGER = 10;
 /** Dream 过期记忆触发阈值 */
 const DREAM_EXPIRED_TRIGGER = 3;
 /** Dream 状态文件路径 */
-const DREAM_STATE_FILE_PATH = 'data/memory/dream-state.json';
+const DREAM_STATE_FILE_PATH = getRuntimeMemoryAuxPath('dream-state.json');
 /** 因 stale_index 跑完 Dream 后，在此时间内不再仅因死链再次触发（避免 LLM 未修好索引时连打） */
 const STALE_INDEX_DREAM_COOLDOWN_MS = 12 * 60 * 1000;
-import { ConsolidationLock } from './memory-concurrency.js';
-import { getDreamConfig } from './memory-remote-config.js';
-import { getExpiredMemories, getStaleMemories } from './memory-age.js';
-import { countDeadLinksInMemoryIndex, repairDeadLinksInMemoryIndex } from './memory-index-health.js';
 
 /**
  * Dream 触发原因（用于遥测与门控）。

@@ -14,13 +14,15 @@ import {
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
+import { isAppConfigReady, isPlaceholderApiKey } from '../../config/config-readiness.js';
+import { applyRuntimeDataEnvDefaults } from '../../cli/paths.js';
 import type { IceCoderConfigFile, ProviderConfig } from '../types.js';
 
-/** 与 bootstrap / index 使用同一规则，避免 Web  API 读写错误的 config.json */
+/** 与 bootstrap / index 使用同一规则，避免 Web API 读写错误的 config.json */
 function resolveConfigPath(explicit?: string): string {
   if (explicit) return path.resolve(explicit);
-  if (process.env.ICE_CONFIG_PATH) return path.resolve(process.env.ICE_CONFIG_PATH);
-  return path.resolve('data/config.json');
+  applyRuntimeDataEnvDefaults();
+  return path.resolve(process.env.ICE_CONFIG_PATH!);
 }
 
 /** 恰好一个 isDefault: true，避免前端或旧配置出现全 false 时默默地用「第一条」当默认 */
@@ -97,6 +99,12 @@ function validateProvider(provider: ProviderConfig): string | null {
   }
   if (!provider.apiKey || provider.apiKey.trim() === '') {
     return 'API 密钥不能为空';
+  }
+  if (isPlaceholderApiKey(provider.apiKey)) {
+    return '请填写有效的 API 密钥，不能使用占位符';
+  }
+  if (!provider.modelName || provider.modelName.trim() === '') {
+    return '模型名称不能为空';
   }
   return null;
 }
@@ -184,9 +192,11 @@ export function getModelMaxOutputTokens(modelName: string): number {
  */
 export interface ConfigRouterOptions {
   /** 配置保存成功后的回调（用于触发 LLM adapter 热重载） */
-  onConfigSaved?: () => void;
+  onConfigSaved?: (ready: boolean) => void;
   /** 配置文件路径（须与 LLM bootstrap 的 configPath 一致，例如 CLI 下的 ~/.iceCoder/config.json） */
   configPath?: string;
+  /** 配置保存后更新「待配置」状态 */
+  setSetupRequired?: (required: boolean) => void;
 }
 
 export function createConfigRouter(options?: ConfigRouterOptions): Router {
@@ -259,12 +269,15 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       await fs.writeFile(configFile, configData, 'utf-8');
 
       resetSupervisorRuntimeCache();
+      const setupComplete = isAppConfigReady({ providers: normalizedProviders });
+      options?.setSetupRequired?.(!setupComplete);
+
       // 触发热重载回调
       if (options?.onConfigSaved) {
-        try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
+        try { options.onConfigSaved(setupComplete); } catch { /* 不阻塞响应 */ }
       }
 
-      res.json({ success: true, message: '配置已保存' });
+      res.json({ success: true, message: '配置已保存', setupComplete, setupRequired: !setupComplete });
     } catch (err) {
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `保存配置失败：${message}` });
@@ -291,6 +304,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
+        setupRequired: !isAppConfigReady(config),
       });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -298,6 +312,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: [],
           supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
+          setupRequired: true,
         });
         return;
       }
@@ -321,7 +336,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const saved = await writeSupervisorModeToMainConfig(configFile, raw);
       resetSupervisorRuntimeCache();
       if (options?.onConfigSaved) {
-        try { options.onConfigSaved(); } catch { /* 不阻塞响应 */ }
+        try { options.onConfigSaved(true); } catch { /* 不阻塞响应 */ }
       }
       res.json({ success: true, supervisorMode: saved });
     } catch (err) {

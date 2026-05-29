@@ -16,6 +16,7 @@ import http, { type Server } from 'node:http';
 import type { ListenOptions } from 'node:net';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createSetupGateMiddleware } from './setup-gate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,8 @@ export interface ServerConfig {
   staticDir?: string;
   /** 要挂载到应用的 API 路由。 */
   routes?: { path: string; router: Router }[];
+  /** 未完成主配置时拦截非配置类 API */
+  setupGate?: () => boolean;
 }
 
 /**
@@ -39,6 +42,10 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   // 解析 JSON 和 URL 编码的请求体
   app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ extended: true }));
+
+  if (config?.setupGate) {
+    app.use(createSetupGateMiddleware(config.setupGate));
+  }
 
   // 挂载 API 路由
   if (config?.routes) {

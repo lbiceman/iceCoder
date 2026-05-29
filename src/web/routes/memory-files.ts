@@ -10,10 +10,10 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { scanMemoryFiles } from '../../memory/file-memory/memory-scanner.js';
 import { validatePath, PathTraversalError } from '../../memory/file-memory/memory-security.js';
+import '../../cli/paths.js';
 
-/** 默认记忆目录 */
-const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR || 'data/memory-files';
-const DEFAULT_USER_MEMORY_DIR = process.env.ICE_USER_MEMORY_DIR || 'data/user-memory';
+const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
+const DEFAULT_USER_MEMORY_DIR = process.env.ICE_USER_MEMORY_DIR!;
 
 /**
  * 创建记忆文件管理 API 路由。

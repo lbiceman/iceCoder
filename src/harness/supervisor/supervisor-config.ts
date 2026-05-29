@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { getRuntimeDataDir } from '../../cli/paths.js';
 
 import type {
   EventTimelineConfig,
@@ -181,7 +182,7 @@ function resolveConfigPath(
   if (explicitPath) {
     return path.resolve(explicitPath);
   }
-  const dataDir = options.dataDir ?? env.ICE_DATA_DIR ?? path.join(process.cwd(), 'data');
+  const dataDir = options.dataDir ?? env.ICE_DATA_DIR ?? getRuntimeDataDir();
   return path.join(dataDir, 'supervisor-config.json');
 }
 

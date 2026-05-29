@@ -188,28 +188,10 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
     info(`Web 服务器已启动: ${c.underline}http://127.0.0.1:${port}${c.reset}`);
 
     // 启动 Cloudflare Tunnel（start 模式）
-    if (withTunnel && !hasFlag(args.flags, 'no-tunnel')) {
+    if (withTunnel && !hasFlag(args.flags, 'no-tunnel') && !ctx.needsSetup) {
       tunnelProcess = await startTunnel(port, getFlagStr(args.flags, 'tunnel-bin'));
     }
   }
-
-  // F2: dual-mode 全局策略一次性加载，每次对话复用，避免每轮多读磁盘。
-  const supervisorRuntime = await loadHarnessSupervisorRuntime({
-    dataDir: ctx.paths.dataDir,
-    mainConfigPath: ctx.paths.configPath,
-  });
-
-  // 初始化记忆系统
-  let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
-
-  try {
-    fileMemoryManager = createFileMemoryManager({
-      memory: { memoryDir: memoryFilesDir },
-      enableAutoExtraction: true,
-      enableAsyncPrefetch: true,
-    });
-    await fileMemoryManager.initialize();
-  } catch { fileMemoryManager = null; }
 
   // 注册优雅退出（Ctrl+C / SIGTERM）
   // latestHarness 追踪最近一次对话的 Harness 实例，
@@ -231,6 +213,34 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       () => ctx.mcpManager.shutdown(),
     ],
   });
+
+  if (ctx.needsSetup) {
+    if (!noServe) {
+      warn('首次使用：请在浏览器中完成模型配置');
+      console.log(`  ${c.cyan}http://127.0.0.1:${port}/#/config${c.reset}`);
+      return;
+    }
+    error('请先完成模型配置后再使用终端对话');
+    process.exit(1);
+  }
+
+  // F2: dual-mode 全局策略一次性加载，每次对话复用，避免每轮多读磁盘。
+  const supervisorRuntime = await loadHarnessSupervisorRuntime({
+    dataDir: ctx.paths.dataDir,
+    mainConfigPath: ctx.paths.configPath,
+  });
+
+  // 初始化记忆系统
+  let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
+
+  try {
+    fileMemoryManager = createFileMemoryManager({
+      memory: { memoryDir: memoryFilesDir },
+      enableAutoExtraction: true,
+      enableAsyncPrefetch: true,
+    });
+    await fileMemoryManager.initialize();
+  } catch { fileMemoryManager = null; }
 
   // 会话消息历史（跨轮次累积）
   let sessionMessages: UnifiedMessage[] | undefined;

@@ -6,11 +6,9 @@ dist/
 
 # 数据目录（LanceDB 文件、上传文件等）
 data/*
-!data/config.example.json
 !data/.gitkeep
-!data/supervisor-config.example.json
+!data/supervisor-config.json
 LoCoMo/
-claude-code/
 
 # Pipeline 输出
 output/

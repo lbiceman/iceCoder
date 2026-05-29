@@ -9,7 +9,9 @@
       "recoveryTokenRatio": 0.3,
       "maxRecoveryRetries": 2,
       "stabilityWindowRounds": 2,
-      "handoffCooldownRounds": 2
+      "handoffCooldownRounds": 2,
+      "evaluateRoundMode": "full",
+      "checkToolCall": true
     },
     "adaptiveFree": {
       "firstRoundGraph": false,
@@ -22,7 +24,9 @@
       "recoveryTokenRatio": 0.4,
       "maxRecoveryRetries": 3,
       "stabilityWindowRounds": 4,
-      "handoffCooldownRounds": 3
+      "handoffCooldownRounds": 3,
+      "evaluateRoundMode": "metrics_only",
+      "checkToolCall": true
     }
   },
   "triggers": {
@@ -35,10 +39,17 @@
   },
   "goalDrift": {
     "alignmentThreshold": 0.35,
-    "consecutiveRoundsBelow": 3
+    "consecutiveRoundsBelow": 3,
+    "llmGrayZoneLow": 0.25,
+    "llmGrayZoneHigh": 0.45
   },
   "snapshotConfidence": {
-    "templateGraphMin": 0.65
+    "templateGraphMin": 0.65,
+    "weightGitClean": 0.25,
+    "weightSnapshotAge": 0.15,
+    "weightVerifyPassed": 0.2,
+    "weightRepoContextMatch": 0.25,
+    "weightBuildSignal": 0.15
   },
   "correctionBudget": {
     "freeSegmentMaxPerTask": 1
@@ -48,6 +59,7 @@
     "persistPath": "data/runtime/supervisor-events.jsonl"
   },
   "executionMode": {
+    "enabled": true,
     "pendingStepsEnterThreshold": 2,
     "writeTargetsEnterThreshold": 1,
     "diffLinesEnterThreshold": 200,

@@ -5,6 +5,7 @@
  * 并启动 Express Web 服务器与 WebSocket 聊天。
  */
 
+import './cli/paths.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -52,10 +53,11 @@ import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 // 类型
 import type { ProviderConfig, IceCoderConfigFile } from './web/types.js';
 import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
+import { isAppConfigReady } from './config/config-readiness.js';
 
-const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
-const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH!);
+const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR!);
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 
 /**
  * 从 data/config.json 读取提供者配置。
@@ -208,13 +210,17 @@ async function main(): Promise<void> {
 
   // 5. 创建带所有 API 路由的 Express 服务器
   const port = parseInt(process.env.PORT ?? '1024', 10);
+  const setupState = { required: !isAppConfigReady({ providers }) };
 
   const app = await createServer({
+    setupGate: () => setupState.required,
     routes: [
       { path: '/api/config', router: createConfigRouter({
         configPath: CONFIG_PATH,
-        onConfigSaved: () => {
+        setSetupRequired: (required) => { setupState.required = required; },
+        onConfigSaved: (ready) => {
           reloadLLMAdapterFromConfig(llmAdapter).catch(err => console.error('Failed to reload LLM adapter:', err));
+          if (ready) console.log('[iceCoder] 模型配置已完成，聊天功能已启用');
         },
       }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
@@ -232,7 +238,12 @@ async function main(): Promise<void> {
   const server = await startServer(app, port);
 
   // 7. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
-  attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
+  attachChatWebSocket(server, {
+    orchestrator,
+    toolRegistry,
+    toolExecutor,
+    isSetupRequired: () => setupState.required,
+  });
 
   // 7b. MCP 后台初始化（不阻塞监听）；完成后广播 mcp_ready，并由宠物提示
   startMcpBackgroundInit(mcpManager, toolRegistry, (r) => {

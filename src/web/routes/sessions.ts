@@ -8,13 +8,14 @@ import { Router, type Request, type Response } from 'express';
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'path';
+import '../../cli/paths.js';
 import { parsePersistedPlan } from '../../memory/file-memory/execution-plan-fence.js';
 // ExecutionPlan type removed (Phase 11)
 import type { TaskCheckpoint } from '../../harness/checkpoint.js';
 import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
 import { backfillPlaceholderSessionTitles } from '../session-title.js';
 
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
 const INDEX_FILE = path.join(SESSIONS_DIR, 'index.json');
 

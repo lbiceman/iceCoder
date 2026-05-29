@@ -65,7 +65,10 @@ import { BgTaskPusher } from './bg-task-pusher.js';
 import { getBackgroundTaskManagerFor } from '../tools/background-task-manager.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
+
+applyRuntimeDataEnvDefaults();
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 let activeSessionId = 'default';
 let activeSessionBootstrapPromise: Promise<void> | null = null;
 
@@ -93,11 +96,9 @@ async function ensureActiveSessionBootstrapped(): Promise<void> {
   })();
   return activeSessionBootstrapPromise;
 }
-const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
-const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
-const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
-  ? path.resolve(process.env.ICE_CONFIG_PATH)
-  : path.join(DATA_DIR, 'config.json');
+const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR!);
+const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR!);
+const MAIN_CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH!);
 function getSessionFile(sessionId: string = activeSessionId): string {
   return path.join(SESSIONS_DIR, `${sessionId}.json`);
 }
@@ -323,6 +324,8 @@ export interface ChatWSOptions {
   orchestrator: Orchestrator;
   toolRegistry: ToolRegistry;
   toolExecutor: ToolExecutor;
+  /** 未完成主配置时拒绝 WebSocket 连接 */
+  isSetupRequired?: () => boolean;
 }
 
 /** 当前所有聊天 WebSocket 客户端（PC + 移动端），用于会话持久化后通知其它端拉取 default.json */
@@ -777,6 +780,13 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
       // 同时支持旧路径（兼容）和新路径
       if (url.pathname !== '/api/chat/ws' && url.pathname !== '/api/remote/ws') {
+        return;
+      }
+
+      if (options.isSetupRequired?.()) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n\r\n');
+        socket.write(JSON.stringify({ error: '请先完成模型配置', setupRequired: true }));
+        socket.destroy();
         return;
       }
 

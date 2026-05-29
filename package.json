@@ -18,7 +18,7 @@
     "build": "tsc --listEmittedFiles && vite build && npm pack",
     "build:server": "tsc",
     "build:web": "vite build",
-    "start": "NODE_ENV=production node dist/index.js",
+    "start": "cross-env NODE_ENV=production node dist/index.js",
     "iceCoder": "tsx src/cli/index.ts start",
     "iceCoder:cli": "tsx src/cli/index.ts cli",
     "iceCoder:web": "tsx src/cli/index.ts web",
