@@ -659,8 +659,8 @@ Playwright `webServer.url` 探针为 `http://127.0.0.1:4173`，而 `vite preview
 | codename | fifth |
 | model | **mimo2.5-pro** |
 | harness_notes | 门控优化 · Harness 循环优化 · 上下文压缩优化 |
-| turns | —（未记录 run-manifest） |
-| duration | — |
+| turns | **52** |
+| duration | **1652166 ms（≈27.5 min）** |
 | tool_calls | — |
 | human_assist | **false**（优化 Harness 下未触发 347 轮受控中断） |
 
@@ -702,7 +702,7 @@ Playwright `webServer.url` 探针为 `http://127.0.0.1:4173`，而 `vite preview
 ### 关键差异与剩余缺口
 
 1. **相对 third（同平台同模、优化前 iceCoder）**：fifth **+2 Composite（83 vs 81）**；工程更整（7 场景 + GameOver）；`survive_no_damage` / 精英任务更完整；**商城 meta 更弱（0/6 vs 4/6）**；贴图同样未进画布。
-2. **相对 forth（同模 m2.5-pro、CC）**：fifth 胜 **工程拆分 / 流畅 / Composite**；forth 胜 **角色·怪物 PNG 进战斗 / 工时**。
+2. **相对 forth（同模 m2.5-pro、CC）**：fifth 胜 **工程拆分 / 流畅 / Composite / 工时（≈28 min vs 87 min）**；forth 胜 **角色·怪物 PNG 进战斗**。
 3. **Harness 优化效果**：未触发 second 的 347 轮受控中断；SR=1 且 `human_assist=false`，可作为 **优化后 iceCoder 标杆 run**。
 4. **贴图缺口**：audit 有 PNG，画布全几何体——与 prompt「精灵图或贴图」不符。
 5. **商城空壳**：`purchaseItem` 仅记 `purchasedItemIds`，`luckBonus` 等 effect 未解析；GameScene 写死 `DEFAULT_LUCK`。
@@ -732,13 +732,13 @@ Playwright `webServer.url` 探针为 `http://127.0.0.1:4173`，而 `vite preview
 | second | **iceCoder** | m2.7 | 0 | 72 | B | 32 | 40 | **347** | — | 347 轮受控中断；战斗可玩；E2E 命令失败 |
 | **third** | **iceCoder** | **m2.5-pro** | **1** | **81** | **A** | **40** | **41** | — | **≈120 min** | SR=1；流畅；**角色/怪物无贴图** |
 | **forth** | **CC** | **m2.5-pro** | **1** | **80** | **A** | **40** | **40** | — | **87 min** | SR=1；**PNG 进战斗**；**开局即卡顿** |
-| **fifth** | **iceCoder** | **m2.5-pro** | **1** | **83** | **A** | **40** | **43** | — | — | **门控/Harness/压缩优化后**；SR=1 批次 **Composite 最高**；商城 0/6 |
+| **fifth** | **iceCoder** | **m2.5-pro** | **1** | **83** | **A** | **40** | **43** | **52** | **≈28 min** | **门控/Harness/压缩优化后**；SR=1 批次 **Composite 最高**；商城 0/6 |
 
 **横向要点（同任务、跨批次，须标注模型 / 平台）：**
 
 - **iceCoder（second, m2.7）相对 CC（first, m2.7）**：战斗闭环 + 全量单测；E2E 探针 5/5；综合分 +13；二者 SR=0（second 另有 `human_assist=true`）。
 - **m2.5-pro 同模跨平台：iceCoder（third）vs CC（forth）**：均 **SR=1**。third 胜 **流畅 / 工程 / 商城 / Composite（81）**；forth 胜 **角色·怪物贴图 / 工时（87 min）**。差异可归因 **平台 Harness + 实现策略**。
-- **iceCoder 同模前后：third（优化前）↔ fifth（门控/Harness/压缩优化后）**：均 **m2.5-pro · SR=1**；fifth **Composite +2（83 vs 81）**、7 场景 + GameOver 更整、无受控中断；**商城 meta 退步（0/6 vs 4/6）**；贴图同样未进画布。
+- **iceCoder 同模前后：third（优化前）↔ fifth（门控/Harness/压缩优化后）**：均 **m2.5-pro · SR=1**；fifth **Composite +2（83 vs 81）**、**52 轮 / ≈28 min**（third ≈120 min）、7 场景 + GameOver 更整、无受控中断；**商城 meta 退步（0/6 vs 4/6）**；贴图同样未进画布。
 - **同平台跨模：iceCoder second（m2.7）↔ third/fifth（m2.5-pro）**：third/fifth SR=1、无中断、更流畅；second 有 scenes 拆分但 SR=0；**second/third/fifth 战斗均未用贴图（贴图仅 forth 进画布）**。
 - **同平台跨模：CC first（m2.7）↔ forth（m2.5-pro）**：forth 质变（SR=1、可玩、PNG 贴图）；first 不可玩。
 - **玩家体感**：third = **功能 A + 流畅 A + 视觉 C**；forth = **功能 A + 视觉 A + 性能 C**；**fifth = 功能 A + 流畅 A− + 视觉 C + 工程 A**。
