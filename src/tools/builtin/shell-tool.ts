@@ -5,7 +5,7 @@
 
 import { spawn } from 'node:child_process';
 import type { RegisteredTool, ToolOutputCallback } from '../types.js';
-import { getBackgroundTaskManager } from '../background-task-manager.js';
+import { getBackgroundTaskManagerFor } from '../background-task-manager.js';
 import {
   formatNormalizedCommandOutput,
   normalizeRunCommand,
@@ -36,9 +36,8 @@ const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
  * 创建 Shell 命令执行工具（含前台和后台任务管理）。
  * @param workDir - 命令执行的工作目录
  */
-export function createShellTool(workDir: string): RegisteredTool {
-  // 确保 BackgroundTaskManager 已初始化
-  const bgManager = getBackgroundTaskManager(workDir);
+export function createShellTool(workDir: string, sessionId = 'default'): RegisteredTool {
+  const bgManager = getBackgroundTaskManagerFor(sessionId, workDir);
 
   return {
     definition: {

@@ -1025,7 +1025,7 @@ body[data-page="chat"] .nav-sidebar-toggle {
   pointer-events: none;
 }
 .session-pet-indicator .status-turn {
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
   opacity: 0.85;
@@ -1045,7 +1045,7 @@ body[data-page="chat"] .nav-sidebar-toggle {
   border-radius: 6px;
 }
 .session-pet-indicator .status-turn.exec-plan-anchor--forced {
-  color: #ffb347;
+  color: #ADD12E;
 }
 .session-pet-indicator .status-turn.exec-plan-anchor:hover,
 .session-pet-indicator .status-turn.exec-plan-anchor:focus-visible {

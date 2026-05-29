@@ -60,7 +60,6 @@ export { createTaskGraph, getCurrentNode, advanceCursor, markGraphDone, toSnapsh
 export { buildGraph, discoverRepoShape } from './task-graph-builder.js';
 export { ContractValidator, DeviationDetector, FailureClassifier, EscalationManager, NodeCostTrackerImpl } from './task-graph-review.js';
 export { GraphExecutor } from './task-graph-executor.js';
-// isTaskGraphEnabled removed (Phase 11 — TaskGraph always on)
 export {
   serializeGraphSnapshot,
   deserializeGraphSnapshot,

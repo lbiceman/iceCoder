@@ -39,38 +39,28 @@ recovery prompt
 
 ---
 
-## 2. Memory v2 结构化分级
+## 2. Memory v2 结构化分级（部分已完成）
 
 ### 目标
 
 记忆只辅助当前任务，不抢占当前任务。
 
-### 需要做什么
+### 已完成（2026-05）
 
-1. 给记忆增加层级字段：
-   - `hard_rule`
-   - `project_fact`
-   - `preference`
-   - `observation`
-   - `session_state`
-2. 增加 `evidenceStrength`：
-   - `explicit`
-   - `repeated`
-   - `inferred`
-   - `weak`
-3. 召回阶段按任务类型过滤记忆。
-4. 冲突记忆同轮只注入一侧。
+1. 记忆层级字段 `memoryLevel` / `level`：`hard_rule`、`project_fact`、`preference`、`observation`、`session_state` 等已在 extract / recall / eviction 管线使用。
+2. `evidenceStrength`（`explicit` / `repeated` / `inferred` / `weak`）已写入 frontmatter 并参与召回排序。
+3. 召回阶段按 intent 过滤（`memory-recall.ts`）。
+4. Web 记忆图谱页（`#/memory`）+ 顶栏「记忆」入口。
 
-### 如何做
+### 仍需加强
 
-- 扩展 memory frontmatter 或派生索引，不必一次性迁移旧文件。
-- 在 `memory-recall.ts` 中加入 `filterByMemoryLevelForIntent()`。
-- 在 `memory-llm-extractor.ts` 输出中增加层级推断。
-- Dream 整合时合并同主题偏好，降低旧偏好置信度。
+1. 冲突记忆同轮只注入一侧的策略与自动化测试。
+2. Dream 整合时合并同主题偏好、降低旧偏好置信度。
+3. Eval 量化：执行型任务 token 下降、噪声记忆新增下降等指标。
 
 ### 验收标准
 
-- 旧偏好“不要改代码”不能阻止当前明确“请修改代码”。
+- 旧偏好「不要改代码」不能阻止当前明确「请修改代码」。（部分场景已覆盖，需 Eval 固化）
 - 同主题冲突记忆不会同轮同时注入。
 - 执行型任务记忆注入 token 下降 `20-50%`。
 - 噪声记忆新增下降 `30-60%`。
@@ -83,12 +73,15 @@ recovery prompt
 
 用数据证明系统变强，而不是凭感觉调 prompt。
 
+### 已完成（骨架）
+
+- `npm run eval:agent` 可跑；mock 模式输出 case 与聚合指标；real 模式可读取已有 `telemetry.jsonl`。
+
 ### 需要做什么
 
-1. 把 `scripts/agent-eval.ts` 从指标骨架升级为可执行 runner。
-2. 支持 mock LLM 和真实 LLM 两种模式。
-3. 为每个 case 输出 pass/fail 和指标。
-4. 支持 JSONL 历史记录，便于趋势对比。
+1. 把 `scripts/agent-eval.ts` 升级为**驱动 Harness 跑 case** 的可执行 runner（非 mock 恒绿）。
+2. 支持 JSONL 历史记录，便于趋势对比。
+3. 与 `scripts/eval-runner.ts`（TaskGraph 指标）纳入统一 CI 入口（可选 `npm run eval:taskgraph`）。
 
 ### Eval Case
 
@@ -116,7 +109,7 @@ recovery prompt
 
 ### 验收标准
 
-- `npm run eval:agent` 可执行并输出每个 case 的结果。
+- `npm run eval:agent` 真实模式对每个 case 输出 pass/fail。
 - P0 指标下降时能返回非 0 exit code。
 - 每次 Harness/Prompt/Memory 改动都能跑 eval 对比。
 
@@ -133,6 +126,7 @@ recovery prompt
 1. `src/harness/runtime-telemetry.ts` 已实现，`Harness` 构造时启用。
 2. JSONL 默认路径：`data/runtime/telemetry.jsonl`（或通过 `ICE_RUNTIME_DIR` 指定根目录下的 `telemetry.jsonl`）。
 3. 事件类型包括：`round`、`tool`、`compaction`、`summary`（含部分 token 与验证相关字段）。
+4. 部分 execution_mode 事件经 `GET /api/supervisor/events` 可读。
 
 ### 仍需加强
 
@@ -149,35 +143,20 @@ recovery prompt
 
 ---
 
-## 5. Tool Planner
+## 5. Tool Planner（已完成）
 
 ### 目标
 
 让工具选择更像软件工程流程，而不是完全靠模型自由发挥。
 
-### 需要做什么
+### 已完成（2026-05）
 
-按 intent 给出推荐工具链：
+- `src/harness/tool-planner.ts` 已接入 `harness-round-prep.ts` 与 `harness-round-no-tools.ts`。
+- 按 intent 注入推荐工具链提示（debug / edit / test / refactor / inspect），不强制覆盖 LLM。
 
-| Intent | 推荐流程 |
-|---|---|
-| `debug` | read error -> search/read files -> edit -> run focused test |
-| `edit` | inspect related files -> edit -> verify |
-| `test` | run test -> inspect failure -> edit -> rerun |
-| `refactor` | inspect references -> batch/patch edit -> run tests |
-| `inspect` | search/read only |
+### 后续（可选）
 
-### 如何做
-
-- 新增 `src/harness/tool-planner.ts`。
-- 在 no-tool recovery 和 verification gate 中引用 planner 建议。
-- 不强制覆盖 LLM，只提供 Runtime Policy 提示。
-
-### 验收标准
-
-- 首轮工具命中率提升 `20-40%`。
-- 无效探索工具调用下降 `20-30%`。
-- 重复失败调用下降 `50%+`。
+- 用 Eval 量化首轮工具命中率、无效探索下降幅度。
 
 ---
 
@@ -197,61 +176,26 @@ git diff --check
 
 ---
 
-## 7. L2 反构图对接主循环（`runRecoveryMainPath`）— **已完成（2026-05-28）**
+## 7. L2 反构图对接主循环 — **已完成（2026-05-28）**
 
-### 背景（勿忘）
+### 已完成
 
-- **L2-5 已落地**：`SupervisorRuntimeBridge.runRecoveryMainPath()` 串联 M5→M6→M7→M8（`WorkspaceStateExtractor` → 置信度 → 安全检查 → `RetrospectiveGraphBuilder` → `GraphExecutor.replaceGraph`）。见 [`双模方案2-finish.md`](./requirement/双模方案2-finish.md) §10。
-- **L2-6 主循环只接了一半**：`harness-tool-round.ts` 在工具轮末调用 `bridge.evaluateAfterRound()`；决策为 `takeover` 时仅 `applyTakeover` 注入 `[System Recovery]` 文案，**未**调用 `runRecoveryMainPath`。
-- **全仓 `src/` 零调用**：`runRecoveryMainPath` 仅在 `test/harness/supervisor-bridge.test.ts` 等单测中使用。
-- **影响**：adaptive 下 critical 任务即使进入 `supervisorPhase=takeover`，也**没有**反构图重建 TaskGraph，模型仍按旧上下文自由试；与规格 §10 不一致。
-- **不触发 takeover 的任务**（如 `non_critical_docs`）与此无关；本条针对 **edit/debug/test/refactor** 等 critical 域。
-
-### 目标
-
-takeover 决策后，Harness 主循环自动走 §10 恢复主路径；成功则 `replaceGraph`，失败则 §19.2 二级强提示（不 silent fail）。
-
-### 需要做什么
-
-1. 在 `harness-tool-round.ts`（或独立 helper）中：当 `evaluateAfterRound` 返回 `decision.action === 'takeover'` 且 **非 shadow** 时，调用 `bridge.runRecoveryMainPath(...)`。
-2. 封装 `RecoveryMainPathContext` 构建（从 `HarnessRunState` / `RepoContext` / `TaskState` / 本轮 signals 组装）：
-   - `extractInput`（workspace 快照输入）
-   - `confidenceInput`（`roundsSinceExtract`、`lastVerifyPassed`、`repoFilesChanged`）
-   - `graphExecutor`、`correctionPort`、`messages`
-   - `signals`（来自 `bridge.getAccumulatedDeviationSignals()` 或本轮 decision）
-3. 处理与 `applyTakeover` 的 **inject 顺序**：先 takeover 块，再主路径；主路径成功不再重复长 recovery；失败时 §19.2 降级 inject 仅一条。
-4. **shadow 模式**：只写 timeline / 诊断，不 `replaceGraph`、不额外写 msgs（与 L2-5 行为一致）。
-5. 主路径 `tier=template_graph` 成功后，确认 `GraphExecutor` 与 forced ToolGate / `composeGraphHint` 行为一致。
-6. 可选：takeover 后首轮 `task_graph_init` 类 WS 事件是否与 strict 对齐（前端 execution plan）。
-
-### 建议触点
-
-| 文件 | 变更要点 |
-|------|----------|
-| `src/harness/harness-tool-round.ts` | `evaluateAfterRound` 后判断 takeover → `runRecoveryMainPath` |
-| `src/harness/supervisor/supervisor-bridge.ts` | 已有 API；必要时加 `buildRecoveryMainPathContext` 工厂 |
-| `src/harness/supervisor/workspace-state-extractor.ts` | `extractInput` 字段对照 |
-| `src/harness/task-graph-executor.ts` | `replaceGraph` / `enterTakeover` |
-| `test/harness/supervisor-bridge.test.ts` | 已有单测；补 **Harness 集成** 用例（mock takeover → 断言 replaceGraph） |
-| `docs/harness/Harness-L2与Gate工作逻辑.md` | §4.3 补充「主循环已接 / 未接」状态 |
-
-### 验收标准
-
-- critical 任务在 Web/adaptive 下 **人为堆信号触发 takeover** 后，timeline 出现 `recover` 且 `GraphExecutor.hasGraph()` 为 true（confidence/safety 通过时）。
-- confidence 低于 `templateGraphMin` 或 safety 失败时：不 replaceGraph，但有 §19.2 二级 `[System Recovery]` inject（经 CorrectionPort）。
-- `ICE_SUPERVISOR_SHADOW=1` 时不 replaceGraph、不改 phase 行为与现网一致。
-- `npm test` 新增/扩展用例绿；`npx tsc --noEmit` 通过。
-- 与 [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) 中「takeover Web 未验证」缺口可关闭一条手工场景。
+- `harness-tool-round.ts` / `harness-supervisor-round.ts`：`evaluateAfterRound` 返回 `takeover` 后调用 `applyTakeoverRecoveryMainPath`。
+- `harness-recovery-main-path.ts`：M5→M8 主路径、`replaceGraph` / §19.2 降级、`task_graph_init` WS。
+- 置信度门槛：`snapshotConfidence.templateGraphMin`（默认 0.65）。
+- shadow：`ICE_SUPERVISOR_SHADOW` 或 `supervisor-config.json` 的 `shadow` 字段（`off` 模式下强制 false）。
 
 ### 参考
 
-- 规格：[`双模方案2-finish.md`](./requirement/双模方案2-finish.md) §9（三条件）、§10（主路径）、§19.2（降级）
-- 缺口/批次：[`双模落地缺口-finish.md`](./requirement/双模落地缺口-finish.md) L2-5 / L2-6
-- 流程图：[`双模 L2 流程图-finish.md`](./requirement/双模%20L2%20流程图-finish.md) §3
-- bridge 注释：`runRecoveryMainPath` — 「在 evaluateAfterRound 决策为 takeover 后，由 Harness 调用」
+- 规格：[`双模方案2-finish.md`](./requirement/双模方案2-finish.md) §9、§10、§19.2
+- 流程：[`双模 L2 流程图-finish.md`](./requirement/双模%20L2%20流程图-finish.md) §3
 
-### 落地摘要
+---
 
-- `harness-tool-round.ts`：`evaluateAfterRound` 返回 `takeover` 后调用 `applyTakeoverRecoveryMainPath`。
-- `harness-recovery-main-path.ts`：组装 M5 入参、`replaceGraph` / §19.2 降级、`task_graph_init` WS。
-- 置信度门槛：`data/supervisor-config.json` → `snapshotConfidence.templateGraphMin`（默认 0.65，可调权重）。
+## 8. Web 后台任务进度 chip — **已接入**
+
+### 已完成
+
+- `chat-ws.ts`：`BgTaskPusher` + `rebindBgTaskPusher(sessionId)`（切换会话 / 每轮消息前绑定）。
+- `run_command` 按 `sessionId` 隔离 `BackgroundTaskManager`（`resolveWorkspaceToolContext` 传入 session）。
+- 聊天消息区底部 `.bg-status-container` 显示 running / 终态 chip（`bg_task_update`）。

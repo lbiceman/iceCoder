@@ -39,31 +39,19 @@ export async function resolveWorkspaceToolContext(
     userMessage: params.userMessage,
   });
 
-  let toolExecutor = params.defaultToolExecutor;
-  let toolRegistry = params.defaultToolRegistry;
-  let toolDefs = toolRegistry.getDefinitions();
   const effectiveWorkspaceRoot = workspace.state.lockedRoot ?? params.defaultWorkDir;
-
-  if (
-    workspace.state.lockedRoot
-    && path.resolve(workspace.state.lockedRoot).toLowerCase()
-      !== path.resolve(params.defaultWorkDir).toLowerCase()
-  ) {
-    const toolSystem = initializeToolSystem({
-      workDir: workspace.state.lockedRoot,
-      fileParser: params.fileParser,
-      llmAdapter: params.llmAdapter,
-    });
-    toolExecutor = toolSystem.executor;
-    toolRegistry = toolSystem.registry;
-    toolDefs = toolRegistry.getDefinitions();
-  }
+  const toolSystem = initializeToolSystem({
+    workDir: effectiveWorkspaceRoot,
+    sessionId: params.sessionId,
+    fileParser: params.fileParser,
+    llmAdapter: params.llmAdapter,
+  });
 
   return {
     workspace,
     effectiveWorkspaceRoot,
-    toolExecutor,
-    toolRegistry,
-    toolDefs,
+    toolExecutor: toolSystem.executor,
+    toolRegistry: toolSystem.registry,
+    toolDefs: toolSystem.registry.getDefinitions(),
   };
 }

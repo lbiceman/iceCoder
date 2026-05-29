@@ -43,7 +43,6 @@ const DEFAULT_EVENT_TIMELINE: EventTimelineConfig = {
 };
 
 const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
-  enabled: true,
   pendingStepsEnterThreshold: 2,
   writeTargetsEnterThreshold: 1,
   diffLinesEnterThreshold: 200,
@@ -67,8 +66,6 @@ export function defaultSupervisorConfig(): SupervisorConfigFile {
         maxRecoveryRetries: 2,
         stabilityWindowRounds: 2,
         handoffCooldownRounds: 2,
-        evaluateRoundMode: 'full',
-        checkToolCall: true,
       },
       adaptiveFree: {
         firstRoundGraph: false,
@@ -82,8 +79,6 @@ export function defaultSupervisorConfig(): SupervisorConfigFile {
         maxRecoveryRetries: 2,
         stabilityWindowRounds: 3,
         handoffCooldownRounds: 3,
-        evaluateRoundMode: 'metrics_only',
-        checkToolCall: true,
       },
     },
     triggers: {
@@ -97,8 +92,6 @@ export function defaultSupervisorConfig(): SupervisorConfigFile {
     goalDrift: {
       alignmentThreshold: 0.45,
       consecutiveRoundsBelow: 2,
-      llmGrayZoneLow: 0.35,
-      llmGrayZoneHigh: 0.55,
     },
     snapshotConfidence: {
       templateGraphMin: 0.65,
@@ -245,10 +238,6 @@ function mergeConfig(
     correctionBudget: {
       ...base.correctionBudget,
       ...(override.correctionBudget ?? {}),
-    },
-    riskEvaluator: {
-      ...(base.riskEvaluator ?? {}),
-      ...(override.riskEvaluator ?? {}),
     },
     eventTimeline: {
       ...(base.eventTimeline ?? DEFAULT_EVENT_TIMELINE),

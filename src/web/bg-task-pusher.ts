@@ -101,7 +101,7 @@ export class BgTaskPusher {
   attach(manager: BackgroundTaskManager): void {
     if (this.manager) this.detach();
     this.manager = manager;
-    this.statusChangedHandler = (s) => this.emitTerminal(s);
+    this.statusChangedHandler = (s) => this.emitStatusChange(s);
     manager.on('taskStatusChanged', this.statusChangedHandler);
     this.timer = setInterval(() => this.tick(), this.intervalMs);
   }
@@ -137,11 +137,10 @@ export class BgTaskPusher {
     this.manager.markSummaryEmitted(running.map((s) => s.taskId));
   }
 
-  /** 终态状态变更立刻推送（不等下个 tick） */
-  private emitTerminal(s: RunningTaskSummary): void {
-    if (!this.manager || !s.isTerminal) return;
-    const entry = toEntry(s, this.hangThresholdMs);
-    this.broadcast([entry]);
+  /** 任务状态变更立刻推送（spawn / 终态；不等心跳 tick） */
+  private emitStatusChange(s: RunningTaskSummary): void {
+    if (!this.manager) return;
+    this.broadcast([toEntry(s, this.hangThresholdMs)]);
   }
 
   /** 组装 payload 并交给 broadcaster */

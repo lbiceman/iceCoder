@@ -61,11 +61,19 @@ import {
   looksLikeFileAnalysisIntent,
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
+import { BgTaskPusher } from './bg-task-pusher.js';
+import { getBackgroundTaskManagerFor } from '../tools/background-task-manager.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
 let activeSessionId = 'default';
 let activeSessionBootstrapPromise: Promise<void> | null = null;
+
+/** 后台 shell 任务 → WebSocket chip 推送（Phase 4b） */
+let bgTaskPusher: BgTaskPusher | null = null;
+
+/** UI 心跳间隔（比 LLM 摘要 5min 更密，便于聊天区看到 running 状态） */
+const BG_TASK_UI_PUSH_INTERVAL_MS = 30_000;
 
 /** 冷启动：选中 index 中 updatedAt 最近的会话，并预载 structured 缓存。 */
 async function ensureActiveSessionBootstrapped(): Promise<void> {
@@ -157,7 +165,7 @@ function getFileBrowserState(sessionId: string = activeSessionId): FileBrowserSt
   return state;
 }
 
-/** 导出活跃会话 ID，供 remote-ws.ts 等模块使用 */
+/** 导出活跃会话 ID，供会话路由等模块使用 */
 export function getActiveSessionId(): string {
   return activeSessionId;
 }
@@ -180,7 +188,7 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   }
 }
 
-/** 获取会话目录路径（供 remote-ws.ts 使用） */
+/** 获取会话目录路径 */
 export function getSessionsDir(): string {
   return SESSIONS_DIR;
 }
@@ -381,6 +389,39 @@ function broadcastToSession(sessionId: string, data: unknown): void {
       }
     }
   }
+}
+
+/** 向订阅者发送已序列化的 bg_task_update JSON（BgTaskPusher 回调） */
+function broadcastBgTaskJson(sessionId: string, jsonBody: string): void {
+  const set = sessionSubscribers.get(sessionId);
+  if (!set || set.size === 0) return;
+  for (const ws of set) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(jsonBody);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function ensureBgTaskPusher(): BgTaskPusher {
+  if (!bgTaskPusher) {
+    bgTaskPusher = new BgTaskPusher(broadcastBgTaskJson, {
+      intervalMs: BG_TASK_UI_PUSH_INTERVAL_MS,
+    });
+  }
+  return bgTaskPusher;
+}
+
+/** 将推送器绑定到指定 session 的后台任务管理器（切换会话 / 开跑前调用） */
+async function rebindBgTaskPusher(sessionId: string): Promise<void> {
+  const workspace = await resolveSessionWorkspacePayload(sessionId);
+  const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+  const mgr = getBackgroundTaskManagerFor(sessionId, workDir);
+  ensureBgTaskPusher().attach(mgr);
+  ensureBgTaskPusher().tick();
 }
 
 const DEFAULT_WORK_DIR = process.cwd();
@@ -724,7 +765,7 @@ async function finalizeDirectBrowserTurn(
 export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
   const { orchestrator, toolRegistry, toolExecutor } = options;
 
-  void ensureActiveSessionBootstrapped();
+  void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(activeSessionId).catch(() => {}));
 
   const wss = new WebSocketServer({ noServer: true });
 
@@ -880,6 +921,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           setCachedMessages(activeSessionId, loaded ?? []);
           // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
           subscribeWsToSession(ws, activeSessionId);
+          await rebindBgTaskPusher(activeSessionId);
           const newRunningTurn = snapshotRunningTurn(activeSessionId);
           const workspace = await resolveSessionWorkspacePayload(activeSessionId);
           sendJSON(ws, {
@@ -956,6 +998,7 @@ async function handleChatMessage(
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
   // 仍写入正确的旧 session 文件，不会污染新 session。
   const runSessionId = activeSessionId;
+  await rebindBgTaskPusher(runSessionId);
   const llmAdapter = orchestrator.getLLMAdapter();
   let toolDefs = toolRegistry.getDefinitions();
   const assembled = await loadAssembledPrompt();
@@ -1316,6 +1359,10 @@ function sendJSON(ws: WebSocket, data: unknown): void {
  * 清理聊天系统资源（优雅关闭时调用）。
  */
 export function cleanupChatResources(): void {
+  if (bgTaskPusher) {
+    bgTaskPusher.detach();
+    bgTaskPusher = null;
+  }
   if (activeAbortController) {
     activeAbortController.abort();
     activeAbortController = null;

@@ -25,6 +25,7 @@
   // ---- DOM 引用 ----
   var pageContainer = document.getElementById('page-container');
   var navChat = document.getElementById('nav-chat');
+  var navMemory = document.getElementById('nav-memory');
   var navConfig = document.getElementById('nav-config');
   var statusDot = document.getElementById('status-dot');
   // var statusModel = document.getElementById('status-model');
@@ -143,6 +144,7 @@
     }
 
     navChat.classList.toggle('active', page === 'chat');
+    if (navMemory) navMemory.classList.toggle('active', page === 'memory');
     navConfig.classList.toggle('active', page === 'config');
 
     // 离开 memory：必须停掉 fetch/AbortController/resize/popover；DOM 子树保留隐藏以备复用
@@ -252,6 +254,11 @@
     navChat.addEventListener('click', function () {
       window.location.hash = '#/chat';
     });
+    if (navMemory) {
+      navMemory.addEventListener('click', function () {
+        window.location.hash = '#/memory';
+      });
+    }
     navConfig.addEventListener('click', function () {
       window.location.hash = '#/config';
     });

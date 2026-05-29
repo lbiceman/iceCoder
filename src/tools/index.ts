@@ -47,6 +47,8 @@ export type { ToolMetadata, ToolTag } from './tool-metadata.js';
 export interface ToolSystemOptions {
   /** 工作目录（文件操作和命令执行的根目录）*/
   workDir: string;
+  /** 会话 ID（后台 shell 任务隔离；默认 default） */
+  sessionId?: string;
   /** 文件解析器实例*/
   fileParser: FileParser;
   /** LLM 适配器（用于 image_read 等需要 LLM 的工具）*/
@@ -69,7 +71,7 @@ export interface ToolSystem {
  * 注册所有内置工具并返回 registry、executor �?validator�?
  */
 export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
-  const { workDir, fileParser, llmAdapter, executorConfig } = options;
+  const { workDir, fileParser, llmAdapter, executorConfig, sessionId = 'default' } = options;
 
   const registry = new ToolRegistry();
 
@@ -92,7 +94,7 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   }
 
   // 注册 Shell 命令工具（含前台和后台任务管理）
-  registry.register(createShellTool(workDir));
+  registry.register(createShellTool(workDir, sessionId));
 
   // 注册 PPTX 深度解析工具
   registry.register(createPptxParseTool(workDir));

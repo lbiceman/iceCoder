@@ -23,7 +23,7 @@ import type { TaskIntent } from '../../types/runtime-snapshot.js';
  *
  * **连续 N 轮**（`consecutiveRoundsBelow`）低于 `alignmentThreshold` → 产 `goal_drift` signal。
  *
- * V2 LLM 灰区（`llmGrayZoneLow/High`）留待 M4 RiskEvaluator 介入；V1 仅启发式。
+ * V1 仅启发式对齐分；LLM 灰区与 RiskEvaluator 权重留待后续版本。
  */
 
 export interface GoalDriftEvaluateInput {
