@@ -1,3 +1,4 @@
+import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
@@ -33,7 +34,7 @@ export async function tryGraphTerminalStop(
   deps: GraphStopDeps,
   args: TryGraphTerminalStopArgs,
 ): Promise<HarnessResult | null> {
-  const { state, graphExecutor, userMessage, logger, onStep } = args;
+  const { state, graphExecutor, userMessage, currentTools, logger, onStep } = args;
   if (!graphExecutor.isGraphDoneForHarnessStop()) {
     return null;
   }
@@ -70,10 +71,10 @@ export async function tryGraphTerminalStop(
     totalToolCalls: finalState.totalToolCalls,
     content: finalContent,
     stopReason: 'model_done',
-    totalTokenUsage: {
-      inputTokens: finalState.lastInputTokens,
-      outputTokens: finalState.lastOutputTokens,
-    },
+    totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+      lastInputTokens: finalState.lastInputTokens,
+      lastOutputTokens: finalState.lastOutputTokens,
+    }),
   });
 
   console.log('[harness] 任务图已 terminal 且无 pendingWork，强制 model_done 停止');

@@ -1,10 +1,10 @@
 /**
  * 上下文压缩器 — 参考 claude-code 的分层策略。
  *
- * 压缩触发阈值为动态计算：contextWindow × compactionRatio。
- * - contextWindow：ICE_CONTEXT_WINDOW > readEffectiveContextWindowTokens()（默认 provider 的 maxContextTokens，见 context-window-tier.ts）> 默认 128K
- * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.88，即 88%）
- * - 1M 窗口 → 阈值 880K，128K 窗口 → 阈值 112K
+ * 压缩触发（写死常量，见 compaction-constants.ts）：
+ * - 硬压缩：effectiveUsed ≥ contextWindow × 0.85，或剩余 < 18K
+ * - 微压缩：effectiveUsed ≥ contextWindow × 0.72（且未达硬压缩线）
+ * - effectiveUsed = max(本地 messages + tools schema 估算, 上一轮 API prompt_tokens)
  *
  * 两条压缩路径：
  * - 会话记忆路径（compactWithSessionMemory）：0 LLM 成本，会话记忆作为摘要
@@ -24,8 +24,8 @@
  * 最近消息保留使用 token 预算（≥10K token, ≥5 条消息, ≤40K token）。
  */
 
-import type { UnifiedMessage } from '../llm/types.js';
-import { estimateMessagesTokens } from '../llm/token-estimator.js';
+import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
+import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
@@ -43,6 +43,26 @@ import {
   stripResumeCheckpointMessages,
 } from './checkpoint-resume-compact.js';
 import { readCompactionContextWindowTokens, readEffectiveContextWindowTokens } from './context-window-tier.js';
+import {
+  COMPACTION_RESERVE_TOKENS,
+  HARD_COMPACTION_RATIO,
+  MICRO_COMPACTION_RATIO,
+  MICRO_MAX_PER_ROUND,
+  MICRO_MAX_PER_SESSION,
+} from './compaction-constants.js';
+
+/** 压缩判定时可选的双轨占用输入 */
+export interface CompactionUsageOptions {
+  lastApiPromptTokens?: number;
+  tools?: ToolDefinition[];
+}
+
+/** {@link compact} / {@link compactWithSessionMemory} 运行时选项 */
+export interface CompactRunOptions {
+  usageOptions?: CompactionUsageOptions;
+  /** 双轨/API 已判定需硬压缩：跳过层间本地-only 早退，split 无丢弃时强制摘要 */
+  forceFullCompact?: boolean;
+}
 
 /**
  * 压缩配置。
@@ -78,38 +98,14 @@ const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
 /** 简短用户消息阈值：长度低于此值的确认消息在轻量压缩中可丢弃 */
 const SHORT_USER_MSG_MAX_LENGTH = 50;
 
-/** 轻量微压缩触发比例（可通过 ICE_MICRO_COMPACT_RATIO 环境变量覆盖；默认略低于硬压缩，减少误删短指令） */
-const MICRO_COMPACT_RATIO = (() => {
-  const env = parseFloat(process.env.ICE_MICRO_COMPACT_RATIO || '');
-  return Number.isFinite(env) && env > 0 && env <= 1 ? env : 0.72;
-})();
-
-/** 每会话最大微压缩次数 */
-const MAX_MICRO_COMPACTS_PER_SESSION = 3;
-
 /** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe） */
 const MIN_REAL_USERS_IN_SUFFIX = 2;
-
-/** 硬压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */
-const DEFAULT_COMPACTION_RATIO = 0.88;
-
-/** 硬压缩准备金 token 数（可通过 ICE_COMPACTION_RESERVE_TOKENS 环境变量覆盖） */
-const COMPACTION_RESERVE_TOKENS = (() => {
-  const env = parseInt(process.env.ICE_COMPACTION_RESERVE_TOKENS || '', 10);
-  return Number.isFinite(env) && env > 0 ? env : 15000;
-})();
 
 /**
  * 读取上下文窗口大小（委托 {@link readEffectiveContextWindowTokens}）。
  */
 function getContextWindow(): number {
   return readEffectiveContextWindowTokens();
-}
-
-/** 从环境变量读取压缩触发比例（0-1 之间） */
-function getCompactionRatio(): number {
-  const env = parseFloat(process.env.ICE_COMPACTION_RATIO || '');
-  return Number.isFinite(env) && env > 0 && env <= 1 ? env : DEFAULT_COMPACTION_RATIO;
 }
 
 const DEFAULT_CONFIG: CompactionConfig = {
@@ -141,12 +137,14 @@ export function estimateTokens(messages: UnifiedMessage[]): number {
  */
 export class ContextCompactor {
   private config: CompactionConfig;
-  /** 微压缩计数器（每会话最多 MAX_MICRO_COMPACTS_PER_SESSION 次） */
-  private microCompactCount = 0;
+  /** 微压缩会话计数（单会话最多 MICRO_MAX_PER_SESSION 次） */
+  private microCompactSessionCount = 0;
+  /** 微压缩本轮计数（每轮 prep 最多 MICRO_MAX_PER_ROUND 次） */
+  private microCompactRoundCount = 0;
 
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.config.tokenThreshold ??= Math.floor(getContextWindow() * getCompactionRatio());
+    this.config.tokenThreshold ??= Math.floor(getContextWindow() * HARD_COMPACTION_RATIO);
     const reinjectCap = this.config.maxReinjectFiles;
     this.config.maxReinjectFiles =
       typeof reinjectCap === 'number' &&
@@ -156,16 +154,35 @@ export class ContextCompactor {
         : DEFAULT_CONFIG.maxReinjectFiles;
   }
 
+  /** 每轮 prep 开始时重置本轮微压缩计数 */
+  resetMicroCompactRound(): void {
+    this.microCompactRoundCount = 0;
+  }
+
+  /** 是否仍可执行微压缩（会话 + 本轮配额） */
+  canMicroCompact(): boolean {
+    return this.microCompactSessionCount < MICRO_MAX_PER_SESSION
+      && this.microCompactRoundCount < MICRO_MAX_PER_ROUND;
+  }
+
+  private resolveEffectiveUsed(messages: UnifiedMessage[], options?: CompactionUsageOptions): number {
+    return resolveCompactionUsage({
+      messages,
+      tools: options?.tools,
+      lastApiPromptTokens: options?.lastApiPromptTokens,
+    }).effectiveUsed;
+  }
+
   /**
    * 检查是否需要轻量微压缩（在硬压缩之前）。
-   * 微压缩在默认约 72% 上下文使用量时触发（可 ICE_MICRO_COMPACT_RATIO 覆盖），纯本地操作，零 LLM 成本。
+   * 微压缩在 72% 有效占用时触发，纯本地操作，零 LLM 成本。
    */
-  needsMicroCompaction(messages: UnifiedMessage[]): boolean {
-    if (this.microCompactCount >= MAX_MICRO_COMPACTS_PER_SESSION) return false;
+  needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
+    if (!this.canMicroCompact()) return false;
     const ctxWindow = getContextWindow();
-    const currentTokens = estimateTokens(messages);
-    const microThreshold = Math.floor(ctxWindow * MICRO_COMPACT_RATIO);
-    return currentTokens > microThreshold;
+    const effectiveUsed = this.resolveEffectiveUsed(messages, options);
+    const microThreshold = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
+    return effectiveUsed >= microThreshold;
   }
 
   /**
@@ -177,7 +194,8 @@ export class ContextCompactor {
    * 微压缩后不注入恢复提示，对 LLM 近似透明。
    */
   doLightCompact(messages: UnifiedMessage[]): UnifiedMessage[] {
-    this.microCompactCount++;
+    this.microCompactSessionCount++;
+    this.microCompactRoundCount++;
 
     let assistantRound = 0;
     const msgAssistantRound = new Map<number, number>();
@@ -206,21 +224,71 @@ export class ContextCompactor {
    * 检查是否需要硬压缩（双重校验）。
    *
    * 条件：
-   * 1. 当前使用量达到 tokenThreshold（默认 contextWindow × compactionRatio），或
+   * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.85），或
    * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
-  needsCompaction(messages: UnifiedMessage[]): boolean {
+  needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     const ctxWindow = getContextWindow();
-    const currentTokens = estimateTokens(messages);
-    const remaining = ctxWindow - currentTokens;
-    const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * getCompactionRatio());
+    const effectiveUsed = this.resolveEffectiveUsed(messages, options);
+    const remaining = ctxWindow - effectiveUsed;
+    const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * HARD_COMPACTION_RATIO);
 
-    if (currentTokens >= tokenThreshold) return true;
+    if (effectiveUsed >= tokenThreshold) return true;
     if (remaining < COMPACTION_RESERVE_TOKENS) return true;
 
     // 向后兼容：未配置 token 阈值时也检查旧的消息数阈值逻辑。
     if (this.config.tokenThreshold) return false;
     return messages.length > this.config.threshold;
+  }
+
+  /** 双轨有效占用（供日志 / 主动收缩判定） */
+  getEffectiveUsed(messages: UnifiedMessage[], options?: CompactionUsageOptions): number {
+    return this.resolveEffectiveUsed(messages, options);
+  }
+
+  /** 层间早退：forceFullCompact 时继续走完硬压缩流水线 */
+  private shouldContinueCompactLayers(
+    messages: UnifiedMessage[],
+    runOptions?: CompactRunOptions,
+  ): boolean {
+    if (runOptions?.forceFullCompact) return true;
+    return this.needsCompaction(messages, runOptions?.usageOptions);
+  }
+
+  /**
+   * 分离丢弃/保留消息；API 触线但本地 split 无丢弃时，forceFullCompact 强制保留尾部摘要。
+   */
+  private resolveSplitForCompact(
+    compacted: UnifiedMessage[],
+    runOptions?: CompactRunOptions,
+  ): {
+    systemMessages: UnifiedMessage[];
+    droppedMessages: UnifiedMessage[];
+    recentMessages: UnifiedMessage[];
+  } {
+    const split = this.splitMessages(compacted);
+    if (split.droppedMessages.length > 0 || !runOptions?.forceFullCompact) {
+      return split;
+    }
+
+    const systemMessages: UnifiedMessage[] = [];
+    let contentStart = 0;
+    if (compacted.length > 0 && compacted[0].role === 'system') {
+      systemMessages.push(compacted[0]);
+      contentStart = 1;
+    }
+
+    const minRecent = Math.max(this.config.keepRecentMinMessages, 2);
+    if (compacted.length <= contentStart + minRecent) {
+      return split;
+    }
+
+    const splitAt = compacted.length - minRecent;
+    return {
+      systemMessages,
+      droppedMessages: compacted.slice(contentStart, splitAt),
+      recentMessages: compacted.slice(splitAt),
+    };
   }
 
   /**
@@ -331,6 +399,7 @@ export class ContextCompactor {
   compactWithSessionMemory(
     messages: UnifiedMessage[],
     sessionNotes: string,
+    runOptions?: CompactRunOptions,
   ): UnifiedMessage[] {
     const preCompactMessages = messages.slice();
     const beforeTokens = estimateTokens(messages);
@@ -347,7 +416,7 @@ export class ContextCompactor {
 
     // 分离消息（使用 token 预算）
     const { systemMessages, droppedMessages, recentMessages } =
-      this.splitMessages(compacted);
+      this.resolveSplitForCompact(compacted, runOptions);
 
     if (droppedMessages.length === 0) return compacted;
 
@@ -528,6 +597,7 @@ Continue the conversation from where it left off without asking the user any fur
     messages: UnifiedMessage[],
     chatFn?: ChatFunction,
     sessionNotes?: string,
+    runOptions?: CompactRunOptions,
   ): Promise<UnifiedMessage[]> {
     const preCompactMessages = messages.slice();
     const beforeTokens = estimateTokens(messages);
@@ -535,19 +605,19 @@ Continue the conversation from where it left off without asking the user any fur
 
     // 第一层：snip — 裁剪冗余段落
     let compacted = this.snip(messages);
-    if (!this.needsCompaction(compacted)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return compacted;
 
     // 第二层：microcompact — 压缩旧工具调用细节
     compacted = this.microcompact(compacted);
-    if (!this.needsCompaction(compacted)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return compacted;
 
     // 第三层：裁剪工具结果
     compacted = this.trimToolResults(compacted);
-    if (!this.needsCompaction(compacted)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return compacted;
 
     // 分离消息
     const { systemMessages, droppedMessages, recentMessages } =
-      this.splitMessages(compacted);
+      this.resolveSplitForCompact(compacted, runOptions);
 
     if (droppedMessages.length === 0) return compacted;
 

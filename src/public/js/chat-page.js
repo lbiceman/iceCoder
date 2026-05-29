@@ -104,10 +104,30 @@ window.ChatPage = (function () {
       .catch(function () { /* ignore */ });
   }
 
-  function updateTokenUsage(inputTokens, outputTokens) {
-    usedInputTokens = inputTokens;
+  function updateTokenUsage(inputTokens, outputTokens, contextOpts) {
+    contextOpts = contextOpts || {};
+    if (typeof contextOpts.effectiveUsed === 'number' && contextOpts.effectiveUsed > 0) {
+      usedInputTokens = contextOpts.effectiveUsed;
+    } else {
+      usedInputTokens = inputTokens;
+    }
     usedOutputTokens = outputTokens;
+    if (typeof contextOpts.contextWindow === 'number' && contextOpts.contextWindow > 0) {
+      maxContextTokens = contextOpts.contextWindow;
+    }
     updatePetTokenUsage();
+  }
+
+  function applyTotalTokenUsageFromStep(totalTokenUsage) {
+    if (!totalTokenUsage) return;
+    updateTokenUsage(
+      totalTokenUsage.inputTokens || 0,
+      totalTokenUsage.outputTokens || 0,
+      {
+        effectiveUsed: totalTokenUsage.effectiveUsed,
+        contextWindow: totalTokenUsage.contextWindow,
+      },
+    );
   }
 
   function resetTokenUsage() {
@@ -474,7 +494,16 @@ window.ChatPage = (function () {
     applyLiveToolTimelineToUI(toolTimeline);
 
     // 4. token 用量 & 轮次
-    if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
+    if (typeof runningTurn.lastEffectiveUsed === 'number' && runningTurn.lastEffectiveUsed > 0) {
+      updateTokenUsage(
+        runningTurn.lastInputTokens || 0,
+        runningTurn.lastOutputTokens || 0,
+        {
+          effectiveUsed: runningTurn.lastEffectiveUsed,
+          contextWindow: runningTurn.contextWindow,
+        },
+      );
+    } else if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
       updateTokenUsage(runningTurn.lastInputTokens || 0, runningTurn.lastOutputTokens || 0);
     }
     if (runningTurn.iteration > 0) {
@@ -588,9 +617,7 @@ window.ChatPage = (function () {
     if (userStopped) return;
 
     if (step.totalTokenUsage) {
-      usedInputTokens = step.totalTokenUsage.inputTokens || 0;
-      usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
-      updatePetTokenUsage();
+      applyTotalTokenUsageFromStep(step.totalTokenUsage);
     }
     if (step.iteration) {
       Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
@@ -747,7 +774,10 @@ window.ChatPage = (function () {
   }
 
   function onWsTokenUsage(data) {
-    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0);
+    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
+      effectiveUsed: data.effectiveUsed,
+      contextWindow: data.contextWindow,
+    });
   }
 
   function onWsPulse(data) {

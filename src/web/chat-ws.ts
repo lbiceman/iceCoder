@@ -17,6 +17,7 @@ import { formatFriendlyError } from '../cli/friendly-errors.js';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
+import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -453,6 +454,10 @@ interface RunningTurnSnapshot {
   petStatusText: string;
   lastInputTokens: number;
   lastOutputTokens: number;
+  /** 与压缩判定一致的有效占用（圆环分子） */
+  lastEffectiveUsed: number;
+  /** 上下文窗口上限（圆环分母） */
+  contextWindow: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   startedAt: number;
@@ -473,6 +478,8 @@ function createEmptyRunningTurn(): RunningTurnSnapshot {
     petStatusText: '',
     lastInputTokens: 0,
     lastOutputTokens: 0,
+    lastEffectiveUsed: 0,
+    contextWindow: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     startedAt: Date.now(),
@@ -534,6 +541,12 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
     }
     if (typeof event.totalTokenUsage.outputTokens === 'number') {
       t.lastOutputTokens = event.totalTokenUsage.outputTokens;
+    }
+    if (typeof event.totalTokenUsage.effectiveUsed === 'number') {
+      t.lastEffectiveUsed = event.totalTokenUsage.effectiveUsed;
+    }
+    if (typeof event.totalTokenUsage.contextWindow === 'number') {
+      t.contextWindow = event.totalTokenUsage.contextWindow;
     }
   }
 
@@ -1364,8 +1377,10 @@ async function handleChatMessage(
     }
     broadcastToSession(runSessionId, {
       type: 'tokenUsage',
-      inputTokens: result.loopState.lastInputTokens,
-      outputTokens: result.loopState.lastOutputTokens,
+      ...buildTotalTokenUsageWithContext(result.messages, harnessConfig.context.tools ?? [], {
+        lastInputTokens: result.loopState.lastInputTokens,
+        lastOutputTokens: result.loopState.lastOutputTokens,
+      }),
       totalInputTokens: result.loopState.totalInputTokens,
       totalOutputTokens: result.loopState.totalOutputTokens,
     });

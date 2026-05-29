@@ -1,4 +1,5 @@
 import type { LLMResponse } from '../llm/types.js';
+import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
@@ -205,10 +206,10 @@ export async function handleNoToolCalls(
       content: sanitizeAssistantContentForUser(response.content),
       stopReason: 'max_output_tokens',
       tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-      totalTokenUsage: {
-        inputTokens: finalState.lastInputTokens,
-        outputTokens: finalState.lastOutputTokens,
-      },
+      totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+        lastInputTokens: finalState.lastInputTokens,
+        lastOutputTokens: finalState.lastOutputTokens,
+      }),
     });
 
     return {
@@ -510,10 +511,10 @@ export async function handleNoToolCalls(
     content: sanitizeAssistantContentForUser(response.content),
     stopReason: 'model_done',
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-    totalTokenUsage: {
-      inputTokens: finalState.lastInputTokens,
-      outputTokens: finalState.lastOutputTokens,
-    },
+    totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+      lastInputTokens: finalState.lastInputTokens,
+      lastOutputTokens: finalState.lastOutputTokens,
+    }),
   });
 
   return {

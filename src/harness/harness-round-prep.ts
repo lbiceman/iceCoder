@@ -76,7 +76,16 @@ export async function prepareHarnessRound(
   const { state, userMessage, chatFn, logger, onStep, streamFn } = args;
   const { messages: msgs, tools: currentTools } = state;
 
-  await maybeCompact(deps, { messages: msgs, chatFn, logger, onStep, state });
+  applyToolResultBudget(msgs);
+  await maybeCompact(deps, {
+    messages: msgs,
+    chatFn,
+    logger,
+    onStep,
+    state,
+    lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+    tools: currentTools,
+  });
 
   deps.loopController.advanceRound();
   state.turnCount++;

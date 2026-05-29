@@ -152,7 +152,14 @@ window.ChatWebSocket = (function () {
         emit('confirm_timeout', { confirmId: data.confirmId || '', toolName: data.toolName || '' });
         break;
       case 'tokenUsage':
-        emit('tokenUsage', { inputTokens: data.inputTokens || 0, outputTokens: data.outputTokens || 0 });
+        emit('tokenUsage', {
+          inputTokens: data.inputTokens || 0,
+          outputTokens: data.outputTokens || 0,
+          effectiveUsed: data.effectiveUsed,
+          contextWindow: data.contextWindow,
+          totalInputTokens: data.totalInputTokens,
+          totalOutputTokens: data.totalOutputTokens,
+        });
         break;
       case 'session_switched':
         emit('session_switched', data);

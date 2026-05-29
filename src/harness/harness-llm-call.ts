@@ -13,6 +13,9 @@ import {
   buildEmergencyResumeSummaryMessage,
   isContextWindowExceededError,
 } from './checkpoint-resume-compact.js';
+import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
+import { resolveCompactionUsage } from '../llm/token-estimator.js';
+import { readEffectiveContextWindowTokens } from './context-window-tier.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
@@ -63,6 +66,42 @@ export async function callHarnessLlm(
   args: CallHarnessLlmArgs,
 ): Promise<CallHarnessLlmResult> {
   const { state, normalizedMsgs, currentTools, round, chatFn, streamFn, logger, onStep } = args;
+
+  // 注入后 token 可能再次逼近窗口 — 调用 API 前主动收缩（与 emergency fork 共用一次性配额）
+  if (
+    deps.contextCompactor
+    && !state.contextEmergencyCompactUsed
+    && !deps.loopController.isAborted()
+  ) {
+    const ctxWindow = readEffectiveContextWindowTokens();
+    const proactiveLine = Math.floor(ctxWindow * PROACTIVE_FORK_RATIO);
+    const usage = resolveCompactionUsage({
+      messages: normalizedMsgs,
+      tools: currentTools,
+      lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
+    });
+    if (usage.effectiveUsed >= proactiveLine) {
+      state.contextEmergencyCompactUsed = true;
+      state.checkpointResumeForkApplied = true;
+      const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
+      const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
+        aggressive: true,
+      });
+      logger.error(
+        `Context near limit before LLM call; proactive compact ${fork.beforeMessages}→${fork.afterMessages} msgs, retrying`,
+      );
+      deps.runtimeTelemetry?.recordCompaction({
+        beforeMessages: fork.beforeMessages,
+        afterMessages: fork.afterMessages,
+        beforeTokens: fork.beforeTokens,
+        afterTokens: fork.afterTokens,
+      });
+      deps.loopController.rewindRound();
+      state.turnCount--;
+      state.transition = 'compaction_retry';
+      return { action: 'retry' };
+    }
+  }
 
   let response: LLMResponse;
   try {

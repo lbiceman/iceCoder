@@ -225,6 +225,16 @@ export interface HarnessConfig {
  */
 export type ToolOutcome = 'executed' | 'policy_block' | 'user_denied' | 'execution_fail';
 
+/** step / WS 共用的 token 用量（圆环与压缩判定对齐） */
+export interface TokenUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  /** max(本地 messages + tools 估算, 上一轮 API prompt_tokens) */
+  effectiveUsed?: number;
+  /** provider maxContextTokens（上下文窗口上限） */
+  contextWindow?: number;
+}
+
 export interface HarnessStepEvent {
   type:
     | 'thinking'
@@ -234,6 +244,7 @@ export interface HarnessStepEvent {
     | 'tool_confirm'
     | 'tool_progress'
     | 'compaction'
+    | 'context_usage'
     | 'final'
     | 'stream_delta'
     | 'tool_output'
@@ -273,8 +284,8 @@ export interface HarnessStepEvent {
   message?: string;
   /** 本轮 LLM 调用的 token 用量 */
   tokenUsage?: { inputTokens: number; outputTokens: number };
-  /** 累计 token 用量 */
-  totalTokenUsage?: { inputTokens: number; outputTokens: number };
+  /** 累计 token 用量（含 effectiveUsed / contextWindow 供圆环对齐） */
+  totalTokenUsage?: TokenUsageTotals;
   /** 记忆子状态（仅 type === 'memory_event'） */
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */

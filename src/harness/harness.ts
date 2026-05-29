@@ -47,6 +47,7 @@ import type {
 import { ContextAssembler } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
+import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { applyCheckpointResumeFork, stripResumeCheckpointMessages } from './checkpoint-resume-compact.js';
 import { readCompactionContextWindowTokens } from './context-window-tier.js';
 import { HarnessLogger } from './logger.js';
@@ -700,6 +701,15 @@ export class Harness {
         if (graphStopBeforeRound) return graphStopBeforeRound;
 
         this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
+
+        onStep?.({
+          type: 'context_usage',
+          iteration: prep.round,
+          totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
+            lastInputTokens: deps.loopController.getState().lastInputTokens,
+            lastOutputTokens: deps.loopController.getState().lastOutputTokens,
+          }),
+        });
 
         const toolsForLlm = resolveLlmToolsForRound(state.tools, prep.round, plainUserText);
 

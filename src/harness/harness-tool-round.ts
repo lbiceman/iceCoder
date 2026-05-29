@@ -1,4 +1,5 @@
 import type { LLMResponse, ToolDefinition } from '../llm/types.js';
+import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
 import {
@@ -159,10 +160,10 @@ export async function runHarnessToolRound(
     iteration: round,
     content: prepareAssistantContentForHistory(response.content) || undefined,
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-    totalTokenUsage: {
-      inputTokens: deps.loopController.getState().lastInputTokens,
-      outputTokens: deps.loopController.getState().lastOutputTokens,
-    },
+    totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+      lastInputTokens: deps.loopController.getState().lastInputTokens,
+      lastOutputTokens: deps.loopController.getState().lastOutputTokens,
+    }),
   });
 
   msgs.push({
@@ -626,6 +627,15 @@ export async function runHarnessToolRound(
 
   await saveTaskCheckpoint(deps, 'running', resolveCheckpointUserGoal(state, userMessage), msgs, state);
   await resilienceSaveCheckpoint(deps, 'step_completed', state);
+
+  onStep?.({
+    type: 'context_usage',
+    iteration: round,
+    totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+      lastInputTokens: deps.loopController.getState().lastInputTokens,
+      lastOutputTokens: deps.loopController.getState().lastOutputTokens,
+    }),
+  });
 
   const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'patch_file', 'run_command']);
   const hadWriteTool = executableToolCalls.some(tc => WRITE_TOOLS.has(tc.name));
