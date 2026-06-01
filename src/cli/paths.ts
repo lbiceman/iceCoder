@@ -65,6 +65,31 @@ export function getRuntimeDataDir(): string {
   return path.resolve(process.env.ICE_DATA_DIR!);
 }
 
+/** 生产环境：OS 用户缓存根（与 ~/.iceCoder 数据目录分离） */
+export function getUserCacheDir(): string {
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA
+      ?? path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(localAppData, 'iceCoder', 'cache');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches', 'iceCoder');
+  }
+  const xdg = process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache');
+  return path.join(xdg, 'iceCoder');
+}
+
+/** 聊天粘贴图落盘根：开发 `data/`，生产 OS 用户缓存目录 */
+export function getImagesCacheStorageRoot(): string {
+  applyRuntimeDataEnvDefaults();
+  return isProductionRuntime() ? getUserCacheDir() : getRuntimeDataDir();
+}
+
+/** `{storageRoot}/imagesCache/{sessionId}` */
+export function getImagesCacheSessionDir(sessionId: string): string {
+  return path.join(getImagesCacheStorageRoot(), 'imagesCache', sessionId);
+}
+
 /** `{dataDir}/memory` 下的子路径（telemetry、dream-state 等） */
 export function getRuntimeMemoryAuxPath(...segments: string[]): string {
   return path.join(getRuntimeDataDir(), 'memory', ...segments);
@@ -217,6 +242,9 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });
   await fs.mkdir(paths.userMemoryDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
+  if (!isProductionRuntime()) {
+    await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
+  }
 
   if (!(await exists(paths.configPath))) {
     await fs.writeFile(paths.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');

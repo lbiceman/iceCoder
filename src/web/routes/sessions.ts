@@ -14,6 +14,9 @@ import { parsePersistedPlan } from '../../memory/file-memory/execution-plan-fenc
 import type { TaskCheckpoint } from '../../harness/checkpoint.js';
 import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
 import { backfillPlaceholderSessionTitles } from '../session-title.js';
+import {
+  resolveSessionImageFile,
+} from '../images-cache.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -106,6 +109,8 @@ export async function bootstrapActiveSessionIdFromIndex(): Promise<string> {
 interface ChatMessage {
   role: string;
   content: string;
+  id?: string;
+  images?: string[];
 }
 
 /** 确保目录存在 */
@@ -267,6 +272,27 @@ export function createSessionsRouter(): Router {
     await writeSessionIndex(index);
     await purgeSessionFiles(sessionId);
     res.json({ success: true });
+  });
+
+  /**
+   * GET /api/sessions/:id/images/:fileName - 会话 imagesCache 图片（UI 刷新后展示）
+   */
+  router.get('/:id/images/:fileName', async (req: Request, res: Response): Promise<void> => {
+    const sessionId = String(req.params.id || SESSION_ID);
+    const fileName = String(req.params.fileName || '');
+    const abs = resolveSessionImageFile(sessionId, fileName);
+    if (!abs) {
+      res.status(400).json({ error: 'invalid image path' });
+      return;
+    }
+    try {
+      await fs.access(abs);
+    } catch {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.sendFile(abs);
   });
 
   /**

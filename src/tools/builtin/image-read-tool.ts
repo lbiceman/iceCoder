@@ -40,7 +40,8 @@ export function createImageReadTool(
         properties: {
           path: {
             type: 'string',
-            description: 'Image file path (relative to work directory)',
+            description:
+              'Image file path. Use the exact absolute path from the user message (e.g. .../imagesCache/<sessionId>/<uuid>.png). Do NOT use placeholders like user_uploaded_image.',
           },
           prompt: {
             type: 'string',

@@ -105,6 +105,8 @@ export class OpenAIAdapter implements ProviderAdapter {
     if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
     // Google Gemini
     if (m.includes('gemini')) return true;
+    // Xiaomi MiMo Omni 等多模态
+    if (m.includes('omni') || m.includes('-vl') || m.includes('_vl')) return true;
     // 默认不支持（DeepSeek、GLM 等纯文本模型）
     return false;
   }
@@ -405,7 +407,11 @@ export class OpenAIAdapter implements ProviderAdapter {
                 }
               }
               if (imageCount > 0) {
-                textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+                const combined = textParts.join('\n');
+                const hasPersistedImageHint = /image_read|imagesCache/i.test(combined);
+                if (!hasPersistedImageHint) {
+                  textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+                }
               }
               return { role: 'user', content: textParts.join('\n') };
             }

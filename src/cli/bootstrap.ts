@@ -13,11 +13,11 @@ import path from 'path';
 
 import { LLMAdapter } from '../llm/llm-adapter.js';
 import { OpenAIAdapter } from '../llm/openai-adapter.js';
+import { openAiAdapterConfigFromProvider } from '../llm/provider-adapter-config.js';
 import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
 import { XMindParserStrategy } from '../parser/xmind-strategy.js';
-import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager, startMcpBackgroundInit } from '../mcp/index.js';
@@ -60,18 +60,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   const llmAdapter = new LLMAdapter();
 
   for (const provider of providers) {
-    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    const rt = resolveOpenAiRequestTimeoutMs(provider);
-    llmAdapter.registerProvider(new OpenAIAdapter({
-      name: provider.id,
-      apiKey: provider.apiKey,
-      baseURL: provider.apiUrl,
-      model: provider.modelName,
-      temperature: provider.parameters.temperature,
-      maxTokens,
-      topP: provider.parameters.topP,
-      ...(rt !== undefined ? { timeout: rt } : {}),
-    }));
+    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);
@@ -92,18 +81,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
   const providers = await loadConfig(configPath);
 
   for (const provider of providers) {
-    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    const rt = resolveOpenAiRequestTimeoutMs(provider);
-    llmAdapter.registerProvider(new OpenAIAdapter({
-      name: provider.id,
-      apiKey: provider.apiKey,
-      baseURL: provider.apiUrl,
-      model: provider.modelName,
-      temperature: provider.parameters.temperature,
-      maxTokens,
-      topP: provider.parameters.topP,
-      ...(rt !== undefined ? { timeout: rt } : {}),
-    }));
+    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);

@@ -86,6 +86,25 @@ export async function resolveDefaultChatModelMeta(
   }
 }
 
+/** 默认聊天 provider 是否支持 vision（与 OpenAIAdapter 启发式一致）。 */
+export async function resolveDefaultSupportsVision(
+  explicitConfigPath?: string,
+): Promise<boolean> {
+  const configFile = resolveConfigPath(explicitConfigPath);
+  try {
+    const raw = await fs.readFile(configFile, 'utf-8');
+    const parsed = JSON.parse(raw) as IceCoderConfigFile;
+    const providers = normalizeDefaultFlags(parsed.providers ?? []);
+    const p = providers.find(pp => pp.isDefault) ?? providers[0];
+    if (!p) return false;
+    if (p.supportsVision !== undefined) return p.supportsVision;
+    const model = (p.modelName || '').toLowerCase();
+    return /gpt-4o|gpt-4-vision|gpt-4-turbo|claude-3|gemini.*pro.*vision|qwen.*vl|glm-4v|deepseek-vl|llava|minicpm-v|pixtral|vision|omni/i.test(model);
+  } catch {
+    return false;
+  }
+}
+
 /** 去掉旧版 config 中的 providerName 等遗留字段，统一为 OpenAI 兼容结构 */
 function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }): ProviderConfig {
   const { providerName: _legacy, ...rest } = provider;

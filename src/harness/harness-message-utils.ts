@@ -1,5 +1,14 @@
-import type { UnifiedMessage } from '../llm/types.js';
+import type { ContentBlock, UnifiedMessage } from '../llm/types.js';
 import { hasExecutableSideSignal } from './task-state.js';
+
+/** 从 user 消息 content 提取纯文本（含多模态消息中的 text 块）。 */
+export function extractUserMessageText(content: string | ContentBlock[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((b) => b.type === 'text' && b.text)
+    .map((b) => b.text!)
+    .join('\n');
+}
 
 /**
  * 基于字符 bigram 的 Jaccard 相似度（零外部依赖，纯 CPU 计算）。
@@ -72,9 +81,11 @@ export function countRealUserMessages(messages: UnifiedMessage[]): number {
 export function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role !== 'user' || typeof msg.content !== 'string') continue;
-    if (isSystemInjectedUserContent(msg.content)) continue;
-    return msg.content;
+    if (msg.role !== 'user') continue;
+    const text = extractUserMessageText(msg.content);
+    if (!text.trim()) continue;
+    if (isSystemInjectedUserContent(text)) continue;
+    return text;
   }
   return fallback;
 }
@@ -92,8 +103,10 @@ export function hasAssistantToolCallAfterLatestRealUser(messages: UnifiedMessage
   let latestRealUserIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg.role !== 'user' || typeof msg.content !== 'string') continue;
-    if (isSystemInjectedUserContent(msg.content)) continue;
+    if (msg.role !== 'user') continue;
+    const text = extractUserMessageText(msg.content);
+    if (!text.trim()) continue;
+    if (isSystemInjectedUserContent(text)) continue;
     latestRealUserIndex = i;
     break;
   }

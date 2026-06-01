@@ -108,6 +108,9 @@ window.ChatSession = (function () {
     if (m.role === 'agent' && typeof c === 'string') c = stripStatusTag(c);
     var o = { role: m.role, content: c };
     if (m.id) o.id = m.id;
+    if (Array.isArray(m.images) && m.images.length > 0) {
+      o.images = m.images.slice();
+    }
     return o;
   }
 
@@ -119,6 +122,9 @@ window.ChatSession = (function () {
     var content = role === 'agent' ? stripStatusTag(rawContent) : rawContent;
     var o = { role: role, content: content };
     if (raw.id) o.id = raw.id;
+    if (Array.isArray(raw.images) && raw.images.length > 0) {
+      o.images = raw.images.filter(function (u) { return typeof u === 'string' && u; });
+    }
     return o;
   }
 
@@ -176,6 +182,9 @@ window.ChatSession = (function () {
         var cloned = Object.assign({}, m);
         if ((m.role === 'agent' || m.role === 'assistant') && typeof m.content === 'string') {
           cloned.content = stripStatusTag(m.content);
+        }
+        if (Array.isArray(m.images) && m.images.length > 0) {
+          cloned.images = m.images.slice();
         }
         msgs.push(cloned);
       }

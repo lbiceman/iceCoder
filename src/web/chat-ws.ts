@@ -25,6 +25,7 @@ import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
+import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
@@ -57,7 +58,14 @@ import {
   prewarmChatRuntime,
 } from './chat-ws-prewarm.js';
 import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
-import { resolveDefaultChatModelMeta } from './routes/config.js';
+import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
+import {
+  buildUserMessageWithImages,
+  deleteSessionImagesCache,
+  persistInlineImages,
+  persistUploadedImageFiles,
+  buildSessionImageApiUrl,
+} from './images-cache.js';
 import {
   detectFileBrowserOpen,
   looksLikeFileAnalysisIntent,
@@ -194,6 +202,7 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   if (sessionId === activeSessionId) {
     cachedMessages = undefined;
   }
+  void deleteSessionImagesCache(sessionId).catch(() => {});
 }
 
 /** 获取会话目录路径 */
@@ -696,7 +705,16 @@ export function broadcastTunnelReady(payload: { url: string }): void {
  * 这样即使用户在长任务中途切换 session，旧任务的 cleanup 仍写入正确的旧 session 文件。
  */
 async function appendMessages(
-  msgs: { role: string; content?: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[],
+  msgs: {
+    role: string;
+    content?: string;
+    id?: string;
+    parentId?: string;
+    toolName?: string;
+    detail?: string;
+    status?: string;
+    images?: string[];
+  }[],
   sessionId: string = activeSessionId,
 ): Promise<boolean> {
   if (msgs.length === 0) return true;
@@ -1040,44 +1058,47 @@ async function handleChatMessage(
   // 解析消息中的文件引用 [file:xxx]，替换为实际文件路径
   const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
 
-  // 构建用户消息（可能包含图片的多模态消息）
-  let userMessageContent: string | import('../llm/types.js').ContentBlock[];
+  const supportsVision = await resolveDefaultSupportsVision(MAIN_CONFIG_PATH);
 
-  // 合并所有图片来源：文件上传的图片 + 前端直接发送的 base64 图片
-  const allImageDataUrls: string[] = [...inlineImages]; // 前端粘贴/拖拽的 base64 图片
+  const persistedInline = await persistInlineImages(inlineImages, runSessionId);
+  const persistedUploads = await persistUploadedImageFiles(imageUrls, runSessionId);
+  const allPersistedImages = [...persistedInline, ...persistedUploads];
+  const imageAbsolutePaths = allPersistedImages.map((p) => p.absolutePath);
 
-  // 处理文件上传中的图片（读取文件转 base64）
-  for (const imgPath of imageUrls) {
-    try {
-      const imgData = await fsPromises.readFile(imgPath);
-      const ext = path.extname(imgPath).toLowerCase().replace('.', '');
-      const mimeType = ext === 'jpg' ? 'jpeg' : ext;
-      const dataUrl = `data:image/${mimeType};base64,${imgData.toString('base64')}`;
-      allImageDataUrls.push(dataUrl);
-    } catch (err) {
-      console.error('[chat-ws] 读取图片失败:', err);
+  if (imageAbsolutePaths.length > 0) {
+    await addSessionReferenceReads({
+      sessionDir: SESSIONS_DIR,
+      sessionId: runSessionId,
+      paths: imageAbsolutePaths,
+    });
+  }
+
+  const uiImageUrls = allPersistedImages.map((p) => buildSessionImageApiUrl(runSessionId, p.absolutePath));
+
+  const visionDataUrls: string[] = [...inlineImages];
+  if (supportsVision) {
+    for (const img of persistedUploads) {
+      try {
+        const imgData = await fsPromises.readFile(img.absolutePath);
+        const ext = path.extname(img.absolutePath).toLowerCase().replace('.', '');
+        const mimeType = ext === 'jpg' ? 'jpeg' : ext;
+        visionDataUrls.push(`data:image/${mimeType};base64,${imgData.toString('base64')}`);
+      } catch (err) {
+        console.error('[chat-ws] 读取图片失败:', err);
+      }
     }
   }
 
-  if (allImageDataUrls.length > 0) {
-    // 多模态消息：文本 + 图片
-    const blocks: import('../llm/types.js').ContentBlock[] = [];
-    const textPart = filePaths.length > 0
-      ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
-      : resolvedMessage || '请分析这些图片';
-    blocks.push({ type: 'text', text: textPart });
+  const { content: userMessageContent, harnessUserMessage: builtHarnessUserMessage } =
+    buildUserMessageWithImages({
+      userText: resolvedMessage,
+      filePaths,
+      imageAbsolutePaths,
+      imageDataUrls: supportsVision ? visionDataUrls : [],
+      supportsVision,
+    });
 
-    for (const dataUrl of allImageDataUrls) {
-      blocks.push({ type: 'image', imageUrl: dataUrl });
-    }
-    userMessageContent = blocks;
-  } else {
-    userMessageContent = filePaths.length > 0
-      ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
-      : resolvedMessage;
-  }
-  let harnessUserMessage =
-    typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
+  let harnessUserMessage = builtHarnessUserMessage;
 
   const fbs = getFileBrowserState(runSessionId);
   const opensBrowser = detectFileBrowserOpen(message);
@@ -1094,7 +1115,12 @@ async function handleChatMessage(
   // 写入用户消息到会话文件
   const userMsgId = randomUUID();
   const userPersisted = await appendMessages(
-    [{ role: 'user', content: message, id: userMsgId }],
+    [{
+      role: 'user',
+      content: message,
+      id: userMsgId,
+      ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
+    }],
     runSessionId,
   );
   if (userPersisted) {
@@ -1116,7 +1142,7 @@ async function handleChatMessage(
     opensBrowser,
     lastBrowsedPath: fbs.lastBrowsedPath,
     platform: process.platform,
-    hasImages: inlineImages.length > 0 || Array.isArray(userMessageContent),
+    hasImages: inlineImages.length > 0 || imageUrls.length > 0 || imageAbsolutePaths.length > 0,
     active: fbs.active,
   });
 
