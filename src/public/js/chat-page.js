@@ -242,20 +242,6 @@ window.ChatPage = (function () {
       return true;
     }
 
-    if (text === '~memory') {
-      Cmd.hide();
-      window.location.hash = '#/memory';
-      return true;
-    }
-
-    if (text.indexOf('~memory ') === 0) {
-      Cmd.hide();
-      Cmd.handleMemory(text, Session.getMessages(), function (msg) {
-        UI.appendMessageEl(msg, Session.stripStatusTag);
-      }, Session.saveMessages);
-      return true;
-    }
-
     return false;
   }
 
