@@ -609,6 +609,9 @@ export class Harness {
       }
     }
 
+    // 每次用户发送触发的 harness.run：文件编辑上限按新任务归零（不继承 checkpoint fileEdits）
+    state.branchBudget?.resetFileEditBudget();
+
     if (existingMessages && existingMessages.length > 0) {
       try {
         const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(

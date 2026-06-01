@@ -78,6 +78,7 @@ import {
   resolveToolCallInitialStatus,
   resolveToolTraceResultStatus,
 } from './tool-trace-format.js';
+import { extractDiffSource } from './tool-display-extract.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
@@ -179,6 +180,13 @@ function getFileBrowserState(sessionId: string = activeSessionId): FileBrowserSt
     fileBrowserStateBySession.set(sessionId, state);
   }
   return state;
+}
+
+interface ToolTraceBatchEntry {
+  toolName: string;
+  detail: string;
+  status: string;
+  toolCallId?: string;
 }
 
 /** 导出活跃会话 ID，供会话路由等模块使用 */
@@ -457,7 +465,7 @@ interface RunningTurnSnapshot {
   isProcessing: boolean;
   iteration: number;
   streamingText: string;
-  toolTimeline: { toolName: string; detail: string; status: string }[];
+  toolTimeline: { toolName: string; detail: string; status: string; toolCallId?: string; diffSource?: string | null }[];
   petState: string;
   petBubble: string;
   petStatusText: string;
@@ -572,10 +580,13 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       break;
     case 'tool_call':
       if (event.toolName) {
+        const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : '';
         t.toolTimeline.push({
           toolName: String(event.toolName),
           detail: toolArgsDetailPreview(String(event.toolName), event.toolArgs),
           status: resolveToolCallInitialStatus(String(event.toolName), event.toolArgs),
+          toolCallId,
+          diffSource: extractDiffSource(String(event.toolName), undefined, event.toolArgs as Record<string, unknown> | undefined),
         });
         t.petState = 'working';
       }
@@ -584,13 +595,21 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (event.toolName) {
         for (let i = t.toolTimeline.length - 1; i >= 0; i--) {
           const row = t.toolTimeline[i];
-          if (row.toolName === event.toolName && (row.status === 'pending' || row.status === 'background')) {
+          const idMatch = typeof event.toolCallId === 'string' && event.toolCallId && row.toolCallId === event.toolCallId;
+          const nameMatch = row.toolName === event.toolName && (row.status === 'pending' || row.status === 'background');
+          if (idMatch || (!event.toolCallId && nameMatch)) {
             row.status = toolResultStatusPreview(
               String(event.toolName),
               event.toolSuccess,
               event.toolOutcome,
               event.toolOutput,
             );
+            const fromOutput = extractDiffSource(
+              String(event.toolName),
+              typeof event.toolOutput === 'string' ? event.toolOutput : undefined,
+              event.toolArgs as Record<string, unknown> | undefined,
+            );
+            if (fromOutput) row.diffSource = fromOutput;
             break;
           }
         }
@@ -713,6 +732,7 @@ async function appendMessages(
     toolName?: string;
     detail?: string;
     status?: string;
+    toolCallId?: string;
     images?: string[];
   }[],
   sessionId: string = activeSessionId,
@@ -741,7 +761,7 @@ async function finalizeDirectBrowserTurn(
   opts: {
     userStructuredContent: string;
     assistantContent: string;
-    toolTraceBatch: { toolName: string; detail: string; status: string }[];
+    toolTraceBatch: ToolTraceBatchEntry[];
     syntheticTool?: { toolName: string; toolDetail: string; success: boolean };
     sessionId: string;
   },
@@ -757,13 +777,14 @@ async function finalizeDirectBrowserTurn(
   const agentMsgId = randomUUID();
   const entries: Parameters<typeof appendMessages>[0] = [];
   for (const t of opts.toolTraceBatch) {
-    entries.push({
-      role: 'tool_trace',
-      parentId: agentMsgId,
-      toolName: t.toolName,
-      detail: t.detail,
-      status: t.status,
-    });
+      entries.push({
+        role: 'tool_trace',
+        parentId: agentMsgId,
+        toolName: t.toolName,
+        detail: t.detail,
+        status: t.status,
+        toolCallId: t.toolCallId,
+      });
   }
   entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
   await appendMessages(entries, sid);
@@ -1279,7 +1300,7 @@ async function handleChatMessage(
   );
 
   // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
-  const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];
+  const toolTraceBatch: ToolTraceBatchEntry[] = [];
 
   // 方案 B2：本次任务的快照锚点（每条 message 一个）
   ensureRunningTurn(runSessionId);
@@ -1306,14 +1327,24 @@ async function handleChatMessage(
 
         // 工具实时输出推送
         if (event.type === 'tool_output' && event.content) {
-          broadcastToSession(runSessionId, { type: 'tool_output', toolName: event.toolName, content: event.content });
+          broadcastToSession(runSessionId, {
+            type: 'tool_output',
+            toolCallId: event.toolCallId || '',
+            toolName: event.toolName,
+            content: event.content,
+          });
         }
 
         // 收集工具调用记录
         if (event.type === 'tool_call' && event.toolName) {
           const detail = toolArgsDetailPreview(event.toolName, event.toolArgs);
           const callStatus = resolveToolCallInitialStatus(event.toolName, event.toolArgs);
-          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: callStatus });
+          toolTraceBatch.push({
+            toolName: event.toolName,
+            detail: detail || '',
+            status: callStatus,
+            toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : '',
+          });
           const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
           const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
           console.log(`[step] [call] ${event.toolName}(${truncated})`);
@@ -1326,8 +1357,14 @@ async function handleChatMessage(
           );
           // 更新批次中最后一个匹配的工具状态
           for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
-            if (toolTraceBatch[i].toolName === event.toolName
-              && (toolTraceBatch[i].status === 'pending' || toolTraceBatch[i].status === 'background')) {
+            const row = toolTraceBatch[i];
+            const idMatch = typeof event.toolCallId === 'string'
+              && event.toolCallId
+              && row.toolCallId === event.toolCallId;
+            if (idMatch
+              || (!event.toolCallId
+                && row.toolName === event.toolName
+                && (row.status === 'pending' || row.status === 'background'))) {
               toolTraceBatch[i].status = resultStatus;
               break;
             }
@@ -1351,6 +1388,7 @@ async function handleChatMessage(
     // 缓存完整的结构化消息历史并持久化到磁盘（写入本次运行锁定的 sessionId，
     // 即使用户在执行过程中切换了 activeSessionId，也确保历史归属正确的旧 session）
     setCachedMessages(runSessionId, result.messages);
+    await flushStructuredSessionToDisk(SESSIONS_DIR, runSessionId, result.messages);
     saveStructuredMessages(result.messages, runSessionId);
 
     // 写入 AI 回复 + 工具调用记录到会话文件
@@ -1365,6 +1403,7 @@ async function handleChatMessage(
         toolName: trace.toolName,
         detail: trace.detail,
         status: trace.status,
+        toolCallId: trace.toolCallId,
       });
     }
 

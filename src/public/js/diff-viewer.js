@@ -1,5 +1,5 @@
 /**
- * Diff Viewer — CC 风格：仅展示变更行（+ / -），无上下文、无 hunk 头
+ * Diff Viewer — Git 风格：左侧文档行号 + 红删 / 绿增逐行展示
  */
 
 /* exported DiffViewer */
@@ -7,7 +7,9 @@ var DiffViewer = (function () {
   'use strict';
 
   var TOOL_PREFIX_RE = /^\[[^\]]+\]\n?/;
-  var MAX_LINES_PER_FILE = 120;
+  /** 超大 diff：展示前 N 行 + 省略 + 后 N 行 */
+  var PREVIEW_HEAD_LINES = 50;
+  var PREVIEW_TAIL_LINES = 50;
 
   /**
    * 从工具输出中提取 unified diff 文本
@@ -18,20 +20,43 @@ var DiffViewer = (function () {
     if (!text || typeof text !== 'string') return null;
 
     var cleaned = text.replace(TOOL_PREFIX_RE, '');
-    var start = cleaned.search(/^(?:diff --git |--- )/m);
-    if (start < 0) return null;
-    cleaned = cleaned.slice(start);
 
-    if (!/^@@\s/m.test(cleaned) && !/^(?:\+(?!\+)|-(?!-))/m.test(cleaned)) return null;
-    return cleaned;
+    var headerStart = cleaned.search(/^(?:diff --git |--- )/m);
+    if (headerStart >= 0) {
+      var slice = cleaned.slice(headerStart);
+      if (/^@@\s/m.test(slice) || /^(?:\+(?!\+)|-(?!-))/m.test(slice)) return slice;
+    }
+
+    var hunkStart = cleaned.search(/^@@\s/m);
+    if (hunkStart >= 0) {
+      var hunkSlice = cleaned.slice(hunkStart);
+      if (/^(?:\+(?!\+)|-(?!-))/m.test(hunkSlice)) return hunkSlice;
+    }
+
+    return null;
+  }
+
+  function looksLikeUnifiedDiffText(text) {
+    return extractUnifiedDiff(text) != null;
   }
 
   /**
-   * @typedef {{ fileName: string, changes: Array<{ type: string, content: string }> }} DiffFile
+   * @typedef {{ type: string, content: string, lineNum: number|null }} DiffChange
+   * @typedef {{ fileName: string, changes: DiffChange[] }} DiffFile
    */
 
   /**
-   * 解析 unified diff → 按文件分组，仅保留 add/del 行
+   * @param {string} line
+   * @returns {{ oldLine: number, newLine: number }|null}
+   */
+  function parseHunkHeader(line) {
+    var m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (!m) return null;
+    return { oldLine: parseInt(m[1], 10), newLine: parseInt(m[2], 10) };
+  }
+
+  /**
+   * 解析 unified diff → 按文件分组，保留 add/del 行及文档行号
    * @param {string} text
    * @returns {DiffFile[]}
    */
@@ -41,6 +66,9 @@ var DiffViewer = (function () {
     var lines = text.split(/\r?\n/);
     var files = [];
     var current = null;
+    var oldLine = 0;
+    var newLine = 0;
+    var inHunk = false;
 
     function ensureFile(name) {
       if (current && current.fileName === name) return current;
@@ -57,34 +85,98 @@ var DiffViewer = (function () {
         if (gitMatch) {
           current = ensureFile(gitMatch[2]);
         }
+        inHunk = false;
         continue;
       }
 
       if (line.startsWith('+++ ')) {
         var name = line.substring(4).replace(/^b\//, '').replace(/^a\//, '').trim();
         if (name !== '/dev/null') ensureFile(name);
+        inHunk = false;
         continue;
       }
 
-      if (line.startsWith('--- ') || line.startsWith('index ') || line.startsWith('@@')) continue;
+      if (line.startsWith('--- ') || line.startsWith('index ')) continue;
       if (line.startsWith('new file mode') || line.startsWith('deleted file mode')) continue;
       if (line.startsWith('similarity index') || line.startsWith('rename from')) continue;
+
+      if (line.startsWith('@@')) {
+        var header = parseHunkHeader(line);
+        if (header) {
+          oldLine = header.oldLine;
+          newLine = header.newLine;
+          inHunk = true;
+        }
+        continue;
+      }
+
+      if (!inHunk) continue;
 
       if (!current) {
         current = { fileName: '', changes: [] };
         files.push(current);
       }
 
+      if (line.startsWith(' ')) {
+        oldLine++;
+        newLine++;
+        continue;
+      }
+
       if (line.startsWith('+') && !line.startsWith('+++')) {
-        current.changes.push({ type: 'add', content: line.substring(1) });
+        current.changes.push({ type: 'add', content: line.substring(1), lineNum: newLine });
+        newLine++;
       } else if (line.startsWith('-') && !line.startsWith('---')) {
-        current.changes.push({ type: 'del', content: line.substring(1) });
+        current.changes.push({ type: 'del', content: line.substring(1), lineNum: oldLine });
+        oldLine++;
+      } else if (line.startsWith('\\')) {
+        continue;
       }
     }
 
     return files.filter(function (f) {
       return f.changes.length > 0;
+    }).map(function (f) {
+      return { fileName: f.fileName, changes: interleaveChangeBlocks(f.changes) };
     });
+  }
+
+  /**
+   * 连续 delete 块 + insert 块 → 逐行配对（红 / 绿交替）
+   * @param {DiffChange[]} changes
+   * @returns {DiffChange[]}
+   */
+  function interleaveChangeBlocks(changes) {
+    var result = [];
+    var i = 0;
+    while (i < changes.length) {
+      if (changes[i].type !== 'del' && changes[i].type !== 'add') {
+        result.push(changes[i]);
+        i++;
+        continue;
+      }
+      var dels = [];
+      while (i < changes.length && changes[i].type === 'del') {
+        dels.push(changes[i]);
+        i++;
+      }
+      var adds = [];
+      while (i < changes.length && changes[i].type === 'add') {
+        adds.push(changes[i]);
+        i++;
+      }
+      if (dels.length > 0 && adds.length > 0) {
+        var max = Math.max(dels.length, adds.length);
+        for (var k = 0; k < max; k++) {
+          if (k < dels.length) result.push(dels[k]);
+          if (k < adds.length) result.push(adds[k]);
+        }
+      } else {
+        for (var d = 0; d < dels.length; d++) result.push(dels[d]);
+        for (var a = 0; a < adds.length; a++) result.push(adds[a]);
+      }
+    }
+    return result;
   }
 
   function countFileChanges(file) {
@@ -97,8 +189,70 @@ var DiffViewer = (function () {
     return { add: add, del: del };
   }
 
+  function createChangeRow(ch) {
+    var row = document.createElement('div');
+    row.className = 'diff-change-row diff-change-' + ch.type;
+
+    var gutter = document.createElement('span');
+    gutter.className = 'diff-line-gutter';
+    gutter.textContent = ch.lineNum != null ? String(ch.lineNum) : '';
+    row.appendChild(gutter);
+
+    var sign = document.createElement('span');
+    sign.className = 'diff-line-sign';
+    sign.textContent = ch.type === 'add' ? '+' : '-';
+    row.appendChild(sign);
+
+    var code = document.createElement('span');
+    code.className = 'diff-line-code';
+    code.textContent = ch.content;
+    row.appendChild(code);
+
+    return row;
+  }
+
+  function createOmitRow(omittedCount) {
+    var row = document.createElement('div');
+    row.className = 'diff-change-omit';
+    row.textContent = '… 省略 ' + omittedCount + ' 行 …';
+    return row;
+  }
+
   /**
-   * CC 风格渲染
+   * 超大 diff 折叠为：前 N + 省略 + 后 N
+   * @param {DiffChange[]} changes
+   * @returns {Array<{ change?: DiffChange, omit?: boolean, omitted?: number }>}
+   */
+  function buildDisplayItems(changes) {
+    var total = changes.length;
+    var head = PREVIEW_HEAD_LINES;
+    var tail = PREVIEW_TAIL_LINES;
+    if (total <= head + tail) {
+      var all = [];
+      for (var i = 0; i < total; i++) all.push({ change: changes[i] });
+      return all;
+    }
+    var items = [];
+    for (var h = 0; h < head; h++) items.push({ change: changes[h] });
+    items.push({ omit: true, omitted: total - head - tail });
+    for (var t = total - tail; t < total; t++) items.push({ change: changes[t] });
+    return items;
+  }
+
+  function appendChangeItemsToBody(body, changes) {
+    var items = buildDisplayItems(changes);
+    for (var di = 0; di < items.length; di++) {
+      var item = items[di];
+      if (item.omit) {
+        body.appendChild(createOmitRow(item.omitted || 0));
+      } else if (item.change) {
+        body.appendChild(createChangeRow(item.change));
+      }
+    }
+  }
+
+  /**
+   * Git 风格渲染
    * @param {DiffFile[]} files
    * @param {{ compact?: boolean }} opts
    * @returns {HTMLElement}
@@ -146,23 +300,7 @@ var DiffViewer = (function () {
       var body = document.createElement('div');
       body.className = 'diff-file-body expanded';
 
-      var total = file.changes.length;
-      var showCount = total > MAX_LINES_PER_FILE ? MAX_LINES_PER_FILE : total;
-
-      for (var li = 0; li < showCount; li++) {
-        var ch = file.changes[li];
-        var row = document.createElement('div');
-        row.className = 'diff-change-line diff-change-' + ch.type;
-        row.textContent = ch.content;
-        body.appendChild(row);
-      }
-
-      if (total > MAX_LINES_PER_FILE) {
-        var more = document.createElement('div');
-        more.className = 'diff-change-more';
-        more.textContent = '… 还有 ' + (total - MAX_LINES_PER_FILE) + ' 行变更';
-        body.appendChild(more);
-      }
+      appendChangeItemsToBody(body, file.changes);
 
       head.addEventListener('click', function (b, c) {
         return function () {
@@ -196,9 +334,6 @@ var DiffViewer = (function () {
    */
   function renderFromText(rawText, opts) {
     var diffText = extractUnifiedDiff(rawText);
-    if (!diffText && rawText && /^@@\s/m.test(rawText)) {
-      diffText = rawText;
-    }
     if (!diffText) return null;
 
     var files = parseChangesOnly(diffText);
@@ -214,7 +349,12 @@ var DiffViewer = (function () {
     return {
       fileName: f.fileName,
       hunks: [{ header: '', lines: f.changes.map(function (c) {
-        return { type: c.type, oldNum: null, newNum: null, content: c.content };
+        return {
+          type: c.type,
+          oldNum: c.type === 'del' ? c.lineNum : null,
+          newNum: c.type === 'add' ? c.lineNum : null,
+          content: c.content,
+        };
       }) }],
     };
   }
@@ -235,7 +375,10 @@ var DiffViewer = (function () {
 
   return {
     extractUnifiedDiff: extractUnifiedDiff,
+    looksLikeUnifiedDiffText: looksLikeUnifiedDiffText,
     parseChangesOnly: parseChangesOnly,
+    interleaveChangeBlocks: interleaveChangeBlocks,
+    buildDisplayItems: buildDisplayItems,
     parse: parse,
     render: render,
     renderFromText: renderFromText,

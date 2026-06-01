@@ -578,6 +578,21 @@
   text-overflow: ellipsis;
 }
 
+.tool-action .tool-name.tool-diff-toggle {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.tool-action .tool-name.tool-diff-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tool-action .tool-name.tool-diff-toggle.is-diff-open {
+  color: var(--accent, #6b9cff);
+}
+
 /* 工具调用折叠组（历史 + 实时） */
 .tool-trace-group {
   display: flex;

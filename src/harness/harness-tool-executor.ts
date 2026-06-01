@@ -19,6 +19,7 @@ import {
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
+import { stepToolOutputPreview } from './tool-step-preview.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import {
@@ -131,11 +132,13 @@ function emitHarnessPolicyBlock(
   ctx.onStep?.({
     type: 'tool_result',
     iteration: ctx.iteration,
+    toolCallId: ctx.tc.id,
     toolName: ctx.tc.name,
     toolSuccess: false,
     toolOutcome: 'policy_block',
-    toolOutput: blockMessage.substring(0, 500),
+    toolOutput: stepToolOutputPreview(ctx.tc.name, blockMessage),
     toolError: ctx.policyReason ?? ctx.errorLabel,
+    toolArgs: ctx.tc.arguments,
   });
   ctx.taskState?.recordToolResult(ctx.tc, {
     success: false,
@@ -208,6 +211,7 @@ export async function executeToolCallsStreaming(
     onStep ? (toolCallId, toolName, chunk) => {
       onStep({
         type: 'tool_output',
+        toolCallId,
         toolName,
         content: chunk,
       });
@@ -261,7 +265,7 @@ export async function executeToolCallsStreaming(
       }
 
       logger.toolCall(tc.name, tc.arguments);
-      onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
+      onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
       onStep?.({
         type: 'tool_progress',
         iteration,
@@ -311,10 +315,12 @@ export async function executeToolCallsStreaming(
       onStep?.({
         type: 'tool_result',
         iteration,
+        toolCallId: tc.id,
         toolName: tc.name,
         toolSuccess: success,
-        toolOutput: output.substring(0, 500),
+        toolOutput: stepToolOutputPreview(tc.name, output),
         toolError: success ? undefined : error,
+        toolArgs: tc.arguments,
       });
       messages.push({
         role: 'tool',
@@ -493,7 +499,7 @@ export async function executeToolCallsStreaming(
 
     // ── 提交到流式执行器 ──
     logger.toolCall(tc.name, tc.arguments);
-    onStep?.({ type: 'tool_call', iteration, toolName: tc.name, toolArgs: tc.arguments });
+    onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
     onStep?.({
       type: 'tool_progress',
       iteration,
@@ -558,11 +564,13 @@ export async function executeToolCallsStreaming(
     onStep?.({
       type: 'tool_result',
       iteration,
+      toolCallId: tc.id,
       toolName: tc.name,
       toolSuccess: result.success,
       toolOutcome: result.success ? 'executed' : 'execution_fail',
-      toolOutput: output.substring(0, 500),
+      toolOutput: stepToolOutputPreview(tc.name, output),
       toolError: result.success ? undefined : result.error,
+      toolArgs: tc.arguments,
     });
 
     const toolMeta = getToolMetadata(tc.name);

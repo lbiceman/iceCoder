@@ -37,10 +37,36 @@ window.ChatPage = (function () {
   /** 本页仅提示一次公网隧道就绪 */
   var tunnelReadyAnnounced = false;
 
-  /** 可能输出 unified diff 的工具 */
-  var DIFF_CAPABLE_TOOLS = { run_command: true, git: true, diff_files: true };
   /** run_command 流式 stdout 累积（tool_result 到达后会清空） */
-  var streamingDiffBuffer = { toolName: '', text: '' };
+  var streamingDiffBuffer = { toolCallId: '', text: '' };
+
+  function buildDisplayMap(structured) {
+    if (!window.ToolDisplayHistory) return {};
+    return window.ToolDisplayHistory.buildAgentDisplayMap(
+      structured || Session.getStructuredMessages(),
+      Session.getMessages(),
+      Session.getToolTraces(),
+    );
+  }
+
+  /** 方案 B：拉 structured messages 并重绘聊天历史（含 diff） */
+  function renderChatHistory(shouldScroll, structured) {
+    var displayMap = buildDisplayMap(structured);
+    UI.renderMessagesOnly(
+      Session.getMessages(),
+      Session.getToolTraces(),
+      Session.stripStatusTag,
+      shouldScroll,
+      displayMap,
+    );
+  }
+
+  function renderChatHistoryWithFetch(shouldScroll, done) {
+    Session.fetchStructuredMessages(function (structured) {
+      renderChatHistory(shouldScroll, structured);
+      if (done) done();
+    });
+  }
 
   // Token 用量
   var maxContextTokens = 0;
@@ -382,25 +408,24 @@ window.ChatPage = (function () {
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
-    if (elMessages) {
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-    }
     Session.fetchServerMessages(function (serverMsgs) {
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
       Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-      Session.saveMessages();
-      // 服务端消息渲染后再叠加 runningTurn（流式 bubble 永远位于消息列表尾）
-      if (runningTurn) restoreFromRunningTurn(runningTurn);
+      if (shouldSkipServerSnapshotSync()) {
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+        return;
+      }
+      renderChatHistoryWithFetch(false, function () {
+        Session.saveMessages();
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+      });
     });
     resetTokenUsage();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
-    // 即使 fetch 还没回来，先按 runningTurn 设置好按钮/冰豆，避免短暂闪烁
-    if (runningTurn) restoreFromRunningTurn(runningTurn);
   }
 
   function syncActiveSessionFromServer(data) {
@@ -425,7 +450,13 @@ window.ChatPage = (function () {
     UI.setLiveToolRoundActive(true);
     for (var i = 0; i < timeline.length; i++) {
       var row = timeline[i];
-      UI.appendToolAction(row.toolName, row.detail || '', row.status || 'pending');
+      UI.appendToolAction(
+        row.toolName,
+        row.detail || '',
+        row.status || 'pending',
+        row.toolCallId || '',
+        row.diffSource || null,
+      );
     }
     if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
   }
@@ -581,6 +612,14 @@ window.ChatPage = (function () {
     UI.setStreamingState(false);
   }
 
+  function scheduleRefreshAfterTurn() {
+    setTimeout(function () {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn(false);
+      }
+    }, 50);
+  }
+
   function onWsResponse(data) {
     if (userStopped) {
       userStopped = false;
@@ -588,6 +627,7 @@ window.ChatPage = (function () {
     }
     if (streamFinalized) {
       streamFinalized = false;
+      scheduleRefreshAfterTurn();
       return;
     }
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
@@ -596,6 +636,7 @@ window.ChatPage = (function () {
     Session.flushToolBatchLocal();
     UI.appendMessageEl(msg, Session.stripStatusTag);
     Session.saveMessages();
+    scheduleRefreshAfterTurn();
   }
 
   function onWsStep(data) {
@@ -633,10 +674,19 @@ window.ChatPage = (function () {
       var callStatus = fmt && fmt.resolveToolCallInitialStatus
         ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
         : 'pending';
-      UI.appendToolAction(step.toolName, detail, callStatus);
-      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: callStatus });
-      if (DIFF_CAPABLE_TOOLS[step.toolName]) {
-        streamingDiffBuffer = { toolName: step.toolName, text: '' };
+      var toolCallId = step.toolCallId || '';
+      var diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
+        ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
+        : null;
+      UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs);
+      Session.pushToolBatch({
+        toolName: step.toolName,
+        detail: detail,
+        status: callStatus,
+        toolCallId: toolCallId,
+      });
+      if (toolCallId) {
+        streamingDiffBuffer = { toolCallId: toolCallId, text: '' };
       }
     }
     if (step.type === 'tool_result' && step.toolName) {
@@ -651,16 +701,26 @@ window.ChatPage = (function () {
         : (step.toolOutcome === 'policy_block'
           ? 'warn'
           : (step.toolSuccess ? 'success' : 'error'));
-      UI.updateLastToolAction(step.toolName, resultStatus);
-      Session.updateToolBatchStatus(step.toolName, resultStatus);
+      UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus);
+      Session.updateToolBatchStatus(step.toolName, resultStatus, step.toolCallId || '');
       if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
         var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
         if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
           window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
         }
       }
-      tryRenderToolDiff(step.toolName, step.toolOutput);
-      streamingDiffBuffer = { toolName: '', text: '' };
+      if (window.ToolDisplayHistory) {
+        var diffSource = window.ToolDisplayHistory.extractDiffSource(
+          step.toolName,
+          step.toolOutput,
+          step.toolArgs,
+        );
+        if (!diffSource && window.DiffViewer && step.toolOutput) {
+          diffSource = DiffViewer.extractUnifiedDiff(step.toolOutput);
+        }
+        tryMountToolDiff(step.toolCallId || '', diffSource);
+      }
+      streamingDiffBuffer = { toolCallId: '', text: '' };
     }
     if (window.ChatExecutionPlanBridge
       && (step.type === 'execution_plan_init'
@@ -687,6 +747,8 @@ window.ChatPage = (function () {
       Pet.removeThinking(isStreaming, WS.isProcessing());
       if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
       if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
+      // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
+      refreshChatHistoryAfterTurn(false);
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }
@@ -792,6 +854,32 @@ window.ChatPage = (function () {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
   }
 
+  function refreshChatHistoryAfterTurn(shouldScroll, done) {
+    if (shouldSkipServerSnapshotSync()) {
+      if (done) done();
+      return;
+    }
+    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
+    Session.fetchServerMessages(function (serverMsgs) {
+      if (shouldSkipServerSnapshotSync()) {
+        if (done) done();
+        return;
+      }
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      renderChatHistoryWithFetch(shouldScroll !== false, function () {
+        Session.saveMessages();
+        if (done) done();
+      });
+    });
+  }
+
   function syncMessages() {
     if (shouldSkipServerSnapshotSync()) return;
     Session.fetchServerMessages(function (serverMsgs) {
@@ -802,7 +890,7 @@ window.ChatPage = (function () {
       var separated = Session.separateToolTraces(serverMsgs);
       var updated = Session.applyServerChatSnapshot(separated, { fullRender: false }, isStreaming, WS.isProcessing());
       if (updated) {
-        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
     });
@@ -815,7 +903,7 @@ window.ChatPage = (function () {
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
       if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
     });
@@ -828,6 +916,12 @@ window.ChatPage = (function () {
     }
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
       window.ChatExecutionPlanBridge.notifySessionUpdated();
+    }
+    if (data && data.reason === 'turn_complete') {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn(false);
+      }
+      return;
     }
     if (!data || !data.title) {
       pullServerChatSnapshotAuthoritative();
@@ -842,24 +936,32 @@ window.ChatPage = (function () {
     window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
   }
 
-  /** 工具输出含 unified diff 时渲染到对应工具行下方 */
-  function tryRenderToolDiff(toolName, output) {
-    if (!DIFF_CAPABLE_TOOLS[toolName] || !output || !window.DiffViewer || !UI.showDiffAfterToolAction) return;
-    var diffEl = DiffViewer.renderFromText(String(output), { compact: true });
-    if (!diffEl) return;
-    UI.showDiffAfterToolAction(toolName, diffEl);
+  function tryMountToolDiff(toolCallId, diffSource) {
+    if (!toolCallId || !diffSource || !UI.mountDiffForToolCallId) return;
+    UI.mountDiffForToolCallId(toolCallId, diffSource);
   }
 
-  /** run_command 流式输出：累积 chunk 并尝试实时预览 */
+  /** run_command 流式输出：按 toolCallId 累积并实时预览 */
   function onWsToolOutput(data) {
-    if (!data || !data.content || !DIFF_CAPABLE_TOOLS[data.toolName]) return;
-    if (streamingDiffBuffer.toolName && streamingDiffBuffer.toolName !== data.toolName) {
-      streamingDiffBuffer = { toolName: data.toolName, text: '' };
+    if (!data || !data.content || !data.toolCallId) return;
+    if (streamingDiffBuffer.toolCallId && streamingDiffBuffer.toolCallId !== data.toolCallId) {
+      streamingDiffBuffer = { toolCallId: data.toolCallId, text: '' };
     }
-    if (!streamingDiffBuffer.toolName) streamingDiffBuffer.toolName = data.toolName;
+    if (!streamingDiffBuffer.toolCallId) streamingDiffBuffer.toolCallId = data.toolCallId;
     streamingDiffBuffer.text += data.content;
-    if (!/^@@\s/m.test(streamingDiffBuffer.text)) return;
-    tryRenderToolDiff(streamingDiffBuffer.toolName, streamingDiffBuffer.text);
+    var diffSource = null;
+    if (window.DiffViewer && typeof DiffViewer.extractUnifiedDiff === 'function') {
+      diffSource = DiffViewer.extractUnifiedDiff(streamingDiffBuffer.text);
+    } else if (window.DiffViewer && typeof DiffViewer.looksLikeUnifiedDiffText === 'function') {
+      if (!DiffViewer.looksLikeUnifiedDiffText(streamingDiffBuffer.text)) return;
+      diffSource = streamingDiffBuffer.text;
+    } else if (!/^@@\s/m.test(streamingDiffBuffer.text) && !/^diff --git /m.test(streamingDiffBuffer.text)) {
+      return;
+    } else {
+      diffSource = streamingDiffBuffer.text;
+    }
+    if (!diffSource) return;
+    tryMountToolDiff(streamingDiffBuffer.toolCallId, diffSource);
   }
 
   /**
@@ -1131,12 +1233,13 @@ window.ChatPage = (function () {
     }
 
     function paintInitialChatView() {
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-      var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
-      if (cachedLiveTools.length > 0) {
-        applyLiveToolTimelineToUI(cachedLiveTools);
-      }
-      syncSendButtonWithWorkload();
+      renderChatHistoryWithFetch(false, function () {
+        var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+        if (cachedLiveTools.length > 0) {
+          applyLiveToolTimelineToUI(cachedLiveTools);
+        }
+        syncSendButtonWithWorkload();
+      });
     }
 
     if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
@@ -1152,7 +1255,7 @@ window.ChatPage = (function () {
         var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
         var separated = Session.separateToolTraces(raw);
         if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-          UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+          renderChatHistoryWithFetch(false);
           Session.saveMessages();
         }
       });

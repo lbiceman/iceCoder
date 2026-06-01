@@ -30,8 +30,13 @@ export const FILE_TOOLS_NEVER_MICROCLEAR = new Set<string>([
   'write_file',
   'edit_file',
   'append_file',
+  'batch_edit_file',
   'patch_file',
+  'diff_files',
 ]);
+
+/** 压缩/摘要时保留完整 tool output（含 embedded unified diff，供 Web UI F5 还原） */
+export const FILE_TOOLS_PRESERVE_FULL_OUTPUT = FILE_TOOLS_NEVER_MICROCLEAR;
 
 const OLD_TOOL_STUB = '[Old tool result cleared for context]';
 

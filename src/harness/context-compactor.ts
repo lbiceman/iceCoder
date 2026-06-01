@@ -33,6 +33,7 @@ import {
   applyLightMicrocompactToolClear,
   buildCompactBoundaryContent,
   buildRecentDialogueFocusContent,
+  FILE_TOOLS_PRESERVE_FULL_OUTPUT,
   isSyntheticUserBlockContent,
   shouldPreserveMessageOnCompaction,
   truncateSessionNotesForCompact,
@@ -732,7 +733,7 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // 文件操作工具 — 结果保留完整内容（源码是编码 agent 的核心上下文）
-    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+    const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     return messages.map((msg, idx) => {
       if (idx >= recentStart) return msg;
@@ -780,7 +781,7 @@ Continue the conversation from where it left off without asking the user any fur
       }
     }
 
-    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+    const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     return messages.map(msg => {
       if (msg.role === 'tool' && typeof msg.content === 'string') {
@@ -966,7 +967,7 @@ Continue the conversation from where it left off without asking the user any fur
       }
     }
 
-    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+    const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     const lines: string[] = [];
     lines.push(`以下是之前 ${messages.length} 条对话的结构化摘要：`);

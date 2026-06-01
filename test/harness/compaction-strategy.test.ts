@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 import {
   MAX_SESSION_NOTES_COMPACT_CHARS,
+  FILE_TOOLS_PRESERVE_FULL_OUTPUT,
   buildCompactBoundaryContent,
   buildRecentDialogueFocusContent,
   truncateSessionNotesForCompact,
@@ -58,5 +59,11 @@ describe('compaction-strategy', () => {
     expect(focus).toContain('Real task: fix login bug');
     expect(focus).toContain('grep_file');
     expect(focus).not.toContain('context-summary');
+  });
+
+  it('FILE_TOOLS_PRESERVE_FULL_OUTPUT includes batch_edit_file and diff_files for Web UI diff', () => {
+    expect(FILE_TOOLS_PRESERVE_FULL_OUTPUT.has('batch_edit_file')).toBe(true);
+    expect(FILE_TOOLS_PRESERVE_FULL_OUTPUT.has('diff_files')).toBe(true);
+    expect(FILE_TOOLS_PRESERVE_FULL_OUTPUT.has('patch_file')).toBe(true);
   });
 });

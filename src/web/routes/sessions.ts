@@ -17,6 +17,8 @@ import { backfillPlaceholderSessionTitles } from '../session-title.js';
 import {
   resolveSessionImageFile,
 } from '../images-cache.js';
+import { readStructuredMessagesFile } from '../session-structured-io.js';
+import { isSafeSessionId } from '../session-id-guard.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -197,6 +199,12 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
   }
 }
 
+function rejectUnsafeSessionId(res: Response, sessionId: string): boolean {
+  if (isSafeSessionId(sessionId)) return false;
+  res.status(400).json({ error: 'invalid session id' });
+  return true;
+}
+
 export function createSessionsRouter(): Router {
   const router = Router();
 
@@ -236,6 +244,7 @@ export function createSessionsRouter(): Router {
   router.get('/workspace/:id', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
     const defaultWorkDir = process.cwd();
     const workspace = await resolveEffectiveWorkspaceRoot(SESSIONS_DIR, id, defaultWorkDir);
     res.json(workspace);
@@ -246,6 +255,7 @@ export function createSessionsRouter(): Router {
    */
   router.patch('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const { title } = req.body as { title?: string };
     if (!title) { res.status(400).json({ error: 'title required' }); return; }
     const index = await readSessionIndex();
@@ -265,6 +275,7 @@ export function createSessionsRouter(): Router {
    */
   router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     let index = await readSessionIndex();
     const entry = index.find(s => s.id === sessionId);
     if (!entry) { res.status(404).json({ error: 'not found' }); return; }
@@ -279,6 +290,7 @@ export function createSessionsRouter(): Router {
    */
   router.get('/:id/images/:fileName', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const fileName = String(req.params.fileName || '');
     const abs = resolveSessionImageFile(sessionId, fileName);
     if (!abs) {
@@ -302,8 +314,20 @@ export function createSessionsRouter(): Router {
   router.get('/:id/plan', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
     const plan = await readSessionPlan(id);
     res.json({ plan });
+  });
+
+  /**
+   * GET /api/sessions/:id/structured - harness 结构化消息（UI diff 历史还原）
+   */
+  router.get('/:id/structured', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const messages = await readStructuredMessagesFile(SESSIONS_DIR, sessionId);
+    res.json({ messages: messages ?? [] });
   });
 
   /**
@@ -312,6 +336,7 @@ export function createSessionsRouter(): Router {
   router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
     try {
       const data = await fs.readFile(file, 'utf-8');
@@ -326,6 +351,7 @@ export function createSessionsRouter(): Router {
    */
   router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
     const { messages } = req.body as { messages: ChatMessage[] };
     await ensureDir();

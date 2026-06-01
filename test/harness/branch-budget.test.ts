@@ -162,6 +162,23 @@ describe('BranchBudgetTracker - snapshot / 恢复', () => {
     expect(t.inspect()).toEqual({ fileEdits: {}, commandRetries: {}, errorRepeats: {} });
     expect(t.recoverTriggerCount).toBe(0);
   });
+
+  it('resetFileEditBudget 仅清空文件编辑计数与 write 豁免', () => {
+    const t = new BranchBudgetTracker({ fileEditMax: 2, commandRetryMax: 2 });
+    t.recordFileEdit('a.ts');
+    t.recordFileEdit('a.ts');
+    t.recordFailedCommandAttempt('npm test');
+    t.grantWriteBypass('a.ts');
+    expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
+
+    t.resetFileEditBudget();
+
+    expect(t.inspect().fileEdits).toEqual({});
+    expect(t.inspect().commandRetries).toEqual({ 'npm test': 1 });
+    expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
+    t.recordFileEdit('a.ts');
+    expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
+  });
 });
 
 describe('BranchBudgetTracker - 维度优先级', () => {

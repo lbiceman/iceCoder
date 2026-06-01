@@ -145,6 +145,13 @@ describe('Sessions API (multi-session)', () => {
     expect(defaultFileExists).toBe(false);
   });
 
+  it('GET /:id/structured rejects unsafe session id', async () => {
+    const res = await fetch(`${baseUrl}/foo..bar/structured`);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe('invalid session id');
+  });
+
   it('GET /workspace/:id returns locked root or default cwd', async () => {
     const sessionId = 'ws001';
     await fs.mkdir(tempDir, { recursive: true });

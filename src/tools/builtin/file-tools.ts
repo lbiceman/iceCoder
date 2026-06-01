@@ -15,6 +15,11 @@ import {
   getWriteFileWarnLines,
 } from '../tool-output-limits.js';
 import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
+import {
+  buildFileChangeDiff,
+  formatToolOutputWithDiff,
+  readFileTextOrEmpty,
+} from '../file-change-diff.js';
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -133,6 +138,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
           };
         }
         const filePath = safePath(rawPath, workDir);
+        const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, content, (args.encoding || 'utf-8') as BufferEncoding);
@@ -145,7 +151,11 @@ export function createFileTools(workDir: string): RegisteredTool[] {
           ? ` Warning: large payload (${content.length} chars, ${lineCount} lines). Prefer patch_file or edit_file for future changes to this file.`
           : '';
 
-        return { success: true, output: `File written: ${rawPath}${warnNote}` };
+        const diff = buildFileChangeDiff(oldContent, content, rawPath);
+        return {
+          success: true,
+          output: formatToolOutputWithDiff(`File written: ${rawPath}${warnNote}`, diff),
+        };
       },
     },
 
@@ -166,9 +176,16 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       },
       handler: async (args) => {
         const filePath = safePath(args.path, workDir);
+        const appendContent = String(args.content ?? '');
+        const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
         await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.appendFile(filePath, args.content, 'utf-8');
-        return { success: true, output: `Content appended to: ${args.path}` };
+        await fs.appendFile(filePath, appendContent, 'utf-8');
+        const newContent = oldContent + appendContent;
+        const diff = buildFileChangeDiff(oldContent, newContent, args.path);
+        return {
+          success: true,
+          output: formatToolOutputWithDiff(`Content appended to: ${args.path}`, diff),
+        };
       },
     },
 
@@ -228,11 +245,14 @@ export function createFileTools(workDir: string): RegisteredTool[] {
 
         const fuzzyNote = fuzzyMatch ? ' (fuzzy whitespace/line match)' : '';
 
+        const summary = changed
+          ? `File modified: ${rawPath}${fuzzyNote}`
+          : `No match found, file unchanged: ${rawPath}`;
+        const diff = changed ? buildFileChangeDiff(content, newContent, rawPath) : null;
+
         return {
           success: true,
-          output: changed
-            ? `File modified: ${args.path}${fuzzyNote}`
-            : `No match found, file unchanged: ${args.path}`,
+          output: formatToolOutputWithDiff(summary, diff),
         };
       },
     },

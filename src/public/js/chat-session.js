@@ -31,6 +31,7 @@ window.ChatSession = (function () {
   var toolTraces = {};
   var currentToolBatch = [];
   var lastSessionSyncSig = '';
+  var structuredMessagesCache = null;
 
   function getLiveToolStorageKey() {
     return 'ice-chat-live-tools:' + SESSION_ID;
@@ -48,6 +49,7 @@ window.ChatSession = (function () {
             toolName: t.toolName || '',
             detail: t.detail || '',
             status: t.status || 'pending',
+            toolCallId: t.toolCallId || '',
           };
         }),
         savedAt: Date.now(),
@@ -68,6 +70,7 @@ window.ChatSession = (function () {
           toolName: t.toolName,
           detail: typeof t.detail === 'string' ? t.detail : '',
           status: t.status || 'pending',
+          toolCallId: t.toolCallId || '',
         };
       });
     } catch (_e) {
@@ -89,6 +92,7 @@ window.ChatSession = (function () {
           toolName: t.toolName || '',
           detail: t.detail || '',
           status: t.status || 'pending',
+          toolCallId: t.toolCallId || '',
         };
       })
       : [];
@@ -165,6 +169,54 @@ window.ChatSession = (function () {
       });
   }
 
+  var structuredEmptyWarned = false;
+
+  function warnStructuredEmptyOnce(sessionId) {
+    if (structuredEmptyWarned) return;
+    structuredEmptyWarned = true;
+    console.warn(
+      '[ChatSession] structured messages 为空（session=' + sessionId + '）。'
+      + '历史 diff 无法还原；新任务完成后会自动生成 .structured.json。',
+    );
+  }
+
+  function syncSessionIdFromStore() {
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
+      var sid = window.ChatSessionStore.getActiveSessionId();
+      if (sid && sid !== SESSION_ID) {
+        SESSION_ID = sid;
+        structuredMessagesCache = null;
+        lastSessionSyncSig = '';
+      }
+    }
+  }
+
+  function fetchStructuredMessages(callback) {
+    syncSessionIdFromStore();
+    var url = '/api/sessions/' + SESSION_ID + '/structured?_t=' + Date.now();
+    fetch(url)
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        structuredMessagesCache = Array.isArray(data.messages) ? data.messages : [];
+        if (structuredMessagesCache.length === 0) {
+          warnStructuredEmptyOnce(SESSION_ID);
+        }
+        if (callback) callback(structuredMessagesCache);
+      })
+      .catch(function () {
+        structuredMessagesCache = [];
+        if (callback) callback([]);
+      });
+  }
+
+  function getStructuredMessages() {
+    return structuredMessagesCache || [];
+  }
+
+  function invalidateStructuredCache() {
+    structuredMessagesCache = null;
+  }
+
   function hasStreamingModelBubble() {
     var last = messages[messages.length - 1];
     return !!(last && last.role === 'agent' && last._streaming);
@@ -177,7 +229,12 @@ window.ChatSession = (function () {
       var m = serverMsgs[i];
       if (m.role === 'tool_trace' && m.parentId) {
         if (!traces[m.parentId]) traces[m.parentId] = [];
-        traces[m.parentId].push({ toolName: m.toolName || '', detail: m.detail || '', status: m.status || 'pending' });
+        traces[m.parentId].push({
+          toolName: m.toolName || '',
+          detail: m.detail || '',
+          status: m.status || 'pending',
+          toolCallId: m.toolCallId || '',
+        });
       } else {
         var cloned = Object.assign({}, m);
         if ((m.role === 'agent' || m.role === 'assistant') && typeof m.content === 'string') {
@@ -274,8 +331,12 @@ window.ChatSession = (function () {
     saveLiveToolBatch();
   }
 
-  function updateToolBatchStatus(toolName, status) {
+  function updateToolBatchStatus(toolName, status, toolCallId) {
     for (var i = currentToolBatch.length - 1; i >= 0; i--) {
+      if (toolCallId && currentToolBatch[i].toolCallId === toolCallId) {
+        currentToolBatch[i].status = status;
+        break;
+      }
       if (currentToolBatch[i].toolName === toolName
         && (currentToolBatch[i].status === 'pending' || currentToolBatch[i].status === 'background')) {
         currentToolBatch[i].status = status;
@@ -292,6 +353,8 @@ window.ChatSession = (function () {
     toolTraces = {};
     currentToolBatch = loadLiveToolBatch();
     lastSessionSyncSig = '';
+    structuredMessagesCache = null;
+    structuredEmptyWarned = false;
   }
 
   function getActiveId() { return SESSION_ID; }
@@ -301,6 +364,9 @@ window.ChatSession = (function () {
     saveMessages: saveMessages,
     loadLocalMessages: loadLocalMessages,
     fetchServerMessages: fetchServerMessages,
+    fetchStructuredMessages: fetchStructuredMessages,
+    getStructuredMessages: getStructuredMessages,
+    invalidateStructuredCache: invalidateStructuredCache,
     separateToolTraces: separateToolTraces,
     applyServerChatSnapshot: applyServerChatSnapshot,
     flushToolBatchLocal: flushToolBatchLocal,

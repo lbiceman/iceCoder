@@ -25,6 +25,7 @@ window.ChatUI = (function () {
   var liveToolRoundCollapsed = null;
   var liveToolRoundToggle = null;
   var liveToolRoundCount = 0;
+  var diffOutsideCloseBound = false;
 
   function init(els) {
     elMessages = els.elMessages;
@@ -38,6 +39,20 @@ window.ChatUI = (function () {
         userScrolledUp = !atBottom;
       });
     }
+    ensureDiffOutsideClose();
+  }
+
+  function ensureDiffOutsideClose() {
+    if (diffOutsideCloseBound) return;
+    diffOutsideCloseBound = true;
+    document.addEventListener('click', function (e) {
+      if (!elMessages) return;
+      if (!elMessages.querySelector('.tool-diff-wrap.is-open')) return;
+      var target = e.target;
+      if (target.closest && target.closest('.tool-diff-wrap.is-open')) return;
+      if (target.closest && target.closest('.tool-name.tool-diff-toggle')) return;
+      closeAllDiffPanels(null);
+    });
   }
 
   function scrollToBottom() {
@@ -67,10 +82,11 @@ window.ChatUI = (function () {
     return '';
   }
 
-  function createToolActionRow(toolName, detail, status) {
+  function createToolActionRow(toolName, detail, status, toolCallId) {
     var el = document.createElement('div');
     el.className = 'tool-action';
     el.setAttribute('data-tool', toolName);
+    if (toolCallId) el.setAttribute('data-tool-call-id', toolCallId);
 
     var iconEl = document.createElement('span');
     iconEl.className = 'tool-icon ' + (status || 'pending');
@@ -89,6 +105,153 @@ window.ChatUI = (function () {
       el.appendChild(detailEl);
     }
     return el;
+  }
+
+  function isDiffCapableToolName(toolName) {
+    if (window.ToolDisplayHistory && typeof window.ToolDisplayHistory.isDiffCapableTool === 'function') {
+      return window.ToolDisplayHistory.isDiffCapableTool(toolName);
+    }
+    return false;
+  }
+
+  function hideDiffWrap(wrap, block) {
+    if (!wrap) return;
+    wrap.classList.add('is-hidden');
+    wrap.classList.remove('is-open');
+    if (block) {
+      var nameEl = block.querySelector('.tool-action .tool-name');
+      if (nameEl) nameEl.classList.remove('is-diff-open');
+    }
+  }
+
+  function closeAllDiffPanels(exceptBlock) {
+    if (!elMessages) return;
+    var openWraps = elMessages.querySelectorAll('.tool-diff-wrap.is-open');
+    for (var i = 0; i < openWraps.length; i++) {
+      var wrap = openWraps[i];
+      var block = wrap.closest('.tool-action-row-block');
+      if (block !== exceptBlock) hideDiffWrap(wrap, block);
+    }
+  }
+
+  function showDiffWrap(wrap, block) {
+    if (!wrap || !block) return;
+    closeAllDiffPanels(block);
+    wrap.classList.remove('is-hidden');
+    wrap.classList.add('is-open');
+    var nameEl = block.querySelector('.tool-action .tool-name');
+    if (nameEl) nameEl.classList.add('is-diff-open');
+  }
+
+  function renderDiffElementFromSource(diffSource) {
+    if (!diffSource) return null;
+    var diffEl = null;
+    if (window.ToolDisplayHistory && typeof window.ToolDisplayHistory.renderDiffElement === 'function') {
+      diffEl = window.ToolDisplayHistory.renderDiffElement(diffSource);
+    }
+    if (!diffEl && window.DiffViewer && typeof DiffViewer.renderFromText === 'function') {
+      diffEl = DiffViewer.renderFromText(diffSource, { compact: true });
+    }
+    return diffEl;
+  }
+
+  function wrapDiffWithPanel(diffEl) {
+    var panel = document.createElement('div');
+    panel.className = 'tool-diff-panel';
+    panel.appendChild(diffEl);
+    return panel;
+  }
+
+  /** 挂载 diff 内容但默认隐藏 */
+  function mountHiddenDiffInBlock(block, diffSource) {
+    if (!block || !diffSource) return false;
+    var diffEl = renderDiffElementFromSource(diffSource);
+    if (!diffEl) return false;
+
+    block.setAttribute('data-has-diff', '1');
+    block._diffSource = diffSource;
+
+    var wrap = block.querySelector('.tool-diff-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.className = 'tool-diff-wrap is-hidden';
+      block.appendChild(wrap);
+    } else {
+      hideDiffWrap(wrap, block);
+      wrap.innerHTML = '';
+    }
+    wrap.appendChild(wrapDiffWithPanel(diffEl));
+    return true;
+  }
+
+  function bindDiffToggleRow(block, toolName) {
+    if (!isDiffCapableToolName(toolName)) return;
+    var nameEl = block.querySelector('.tool-action .tool-name');
+    if (!nameEl) return;
+
+    if (block.getAttribute('data-has-diff') === '1') {
+      nameEl.classList.add('tool-diff-toggle');
+      nameEl.setAttribute('title', '点击查看/关闭文件变更');
+    }
+
+    if (nameEl.getAttribute('data-diff-toggle-bound') === '1') return;
+    nameEl.setAttribute('data-diff-toggle-bound', '1');
+    nameEl.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (block.getAttribute('data-has-diff') !== '1') return;
+      var wrap = block.querySelector('.tool-diff-wrap');
+      if (!wrap) return;
+      if (wrap.classList.contains('is-open')) {
+        hideDiffWrap(wrap, block);
+      } else {
+        showDiffWrap(wrap, block);
+      }
+    });
+  }
+
+  function appendDiffToRowBlock(block, diffEl) {
+    if (!block || !diffEl) return;
+    var wrap = block.querySelector('.tool-diff-wrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.className = 'tool-diff-wrap is-hidden';
+      block.appendChild(wrap);
+    } else {
+      hideDiffWrap(wrap, block);
+      wrap.innerHTML = '';
+    }
+    wrap.appendChild(wrapDiffWithPanel(diffEl));
+    block.setAttribute('data-has-diff', '1');
+    var row = block.querySelector('.tool-action');
+    var toolName = row ? row.getAttribute('data-tool') : '';
+    bindDiffToggleRow(block, toolName || '');
+  }
+
+  function createToolRowBlock(toolName, detail, status, toolCallId, diffSource) {
+    var block = document.createElement('div');
+    block.className = 'tool-action-row-block';
+    if (toolCallId) block.setAttribute('data-tool-call-id', toolCallId);
+
+    var row = createToolActionRow(toolName, detail, status, toolCallId);
+    block.appendChild(row);
+
+    if (diffSource) {
+      mountHiddenDiffInBlock(block, diffSource);
+    }
+    bindDiffToggleRow(block, toolName);
+    return block;
+  }
+
+  function isToolRowBlock(node) {
+    return node && node.nodeType === 1 && node.classList && node.classList.contains('tool-action-row-block');
+  }
+
+  function isToolTraceContainer(node) {
+    return node && node.nodeType === 1 && node.classList && (
+      node.classList.contains('tool-action')
+      || node.classList.contains('tool-action-row-block')
+      || node.classList.contains('tool-trace-group')
+    );
   }
 
   function bindToolTraceToggle(btn, collapsedEl) {
@@ -137,7 +300,7 @@ window.ChatUI = (function () {
         node = node.previousElementSibling;
         continue;
       }
-      if (node.classList && (node.classList.contains('tool-action') || node.classList.contains('tool-trace-group'))) {
+      if (node.classList && isToolTraceContainer(node)) {
         var rm = node;
         node = node.previousElementSibling;
         rm.parentNode.removeChild(rm);
@@ -157,7 +320,7 @@ window.ChatUI = (function () {
         node = node.previousElementSibling;
         continue;
       }
-      if (node.classList && node.classList.contains('tool-action')) {
+      if (node.classList && (node.classList.contains('tool-action') || isToolRowBlock(node))) {
         flats.unshift(node);
         node = node.previousElementSibling;
         continue;
@@ -173,8 +336,22 @@ window.ChatUI = (function () {
     rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
   }
 
-  function insertFoldableToolTraceGroup(traces, insertBeforeNode) {
+  function insertFoldableToolTraceGroup(traces, displays, insertBeforeNode) {
     if (!elMessages || !traces || traces.length === 0) return;
+    displays = displays || [];
+
+    function appendTraceRow(parent, tr, idx) {
+      var disp = displays[idx];
+      var diffSource = disp && disp.diffSource ? disp.diffSource : null;
+      var toolCallId = (disp && disp.toolCallId) || tr.toolCallId || '';
+      parent.appendChild(createToolRowBlock(
+        tr.toolName || '',
+        tr.detail || '',
+        tr.status || 'pending',
+        toolCallId,
+        diffSource,
+      ));
+    }
 
     var wrap = document.createElement('div');
     wrap.className = 'tool-trace-group';
@@ -184,8 +361,7 @@ window.ChatUI = (function () {
     var max = TOOL_TRACE_VISIBLE_MAX;
     if (traces.length <= max) {
       for (var i = 0; i < traces.length; i++) {
-        var tr = traces[i];
-        visible.appendChild(createToolActionRow(tr.toolName || '', tr.detail || '', tr.status || 'pending'));
+        appendTraceRow(visible, traces[i], i);
       }
       wrap.appendChild(visible);
       elMessages.insertBefore(wrap, insertBeforeNode);
@@ -197,8 +373,7 @@ window.ChatUI = (function () {
     collapsed.className = 'tool-trace-collapsed';
     collapsed.style.display = 'none';
     for (var j = 0; j < olderCount; j++) {
-      var tOld = traces[j];
-      collapsed.appendChild(createToolActionRow(tOld.toolName || '', tOld.detail || '', tOld.status || 'pending'));
+      appendTraceRow(collapsed, traces[j], j);
     }
     var toggle = document.createElement('button');
     toggle.type = 'button';
@@ -207,8 +382,7 @@ window.ChatUI = (function () {
     bindToolTraceToggle(toggle, collapsed);
 
     for (var k = olderCount; k < traces.length; k++) {
-      var tNew = traces[k];
-      visible.appendChild(createToolActionRow(tNew.toolName || '', tNew.detail || '', tNew.status || 'pending'));
+      appendTraceRow(visible, traces[k], k);
     }
 
     wrap.appendChild(collapsed);
@@ -258,21 +432,21 @@ window.ChatUI = (function () {
     elMessages.insertBefore(liveToolRoundRoot, elAnchor);
   }
 
-  function appendToolAction(toolName, detail, status) {
+  function appendToolAction(toolName, detail, status, toolCallId, diffSource) {
     if (!elMessages) return null;
     coalesceFlatToolActionsBeforeAnchor();
-    var row = createToolActionRow(toolName, detail, status);
+    var block = createToolRowBlock(toolName, detail, status || 'pending', toolCallId || '', diffSource || null);
 
     if (liveToolRoundActive) {
       adoptOrCreateLiveToolGroupDom();
       liveToolRoundCount++;
-      liveToolRoundVisible.appendChild(row);
+      liveToolRoundVisible.appendChild(block);
       rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
-      return row;
+      return block;
     }
 
-    elMessages.insertBefore(row, elAnchor);
-    return row;
+    elMessages.insertBefore(block, elAnchor);
+    return block;
   }
 
   /** 批量还原 / 竞态修复后，重新折叠 live 工具区 */
@@ -280,6 +454,29 @@ window.ChatUI = (function () {
     coalesceFlatToolActionsBeforeAnchor();
     if (liveToolRoundRoot && liveToolRoundVisible && liveToolRoundCollapsed) {
       rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
+    }
+  }
+
+  function findToolRowBlockByCallId(toolCallId) {
+    if (!elMessages || !toolCallId) return null;
+    var escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(toolCallId) : toolCallId.replace(/"/g, '\\"');
+    var blocks = elMessages.querySelectorAll('.tool-action-row-block[data-tool-call-id="' + escaped + '"]');
+    if (blocks.length > 0) return blocks[blocks.length - 1];
+    return null;
+  }
+
+  function updateToolActionByCallId(toolCallId, toolName, status) {
+    if (!elMessages) return;
+    var block = toolCallId ? findToolRowBlockByCallId(toolCallId) : null;
+    var row = block ? block.querySelector('.tool-action') : null;
+    if (!row) {
+      updateLastToolAction(toolName, status);
+      return;
+    }
+    var iconEl = row.querySelector('.tool-icon');
+    if (iconEl) {
+      iconEl.className = 'tool-icon ' + status;
+      iconEl.textContent = iconTextForStatus(status);
     }
   }
 
@@ -298,6 +495,17 @@ window.ChatUI = (function () {
             }
             return;
           }
+        }
+      }
+      if (node.nodeType === 1 && isToolRowBlock(node)) {
+        var rowInBlock = node.querySelector('.tool-action');
+        if (rowInBlock && rowInBlock.getAttribute('data-tool') === toolName) {
+          var iconEl3 = rowInBlock.querySelector('.tool-icon');
+          if (iconEl3) {
+            iconEl3.className = 'tool-icon ' + status;
+            iconEl3.textContent = iconTextForStatus(status);
+          }
+          return;
         }
       }
       if (node.nodeType === 1 && node.classList && node.classList.contains('tool-action') && node.getAttribute('data-tool') === toolName) {
@@ -369,7 +577,36 @@ window.ChatUI = (function () {
     return el;
   }
 
-  function renderMessagesOnly(messages, toolTraces, stripStatusTagFn, shouldScroll) {
+  /** 挂载 diff（默认隐藏）；tool_result 后更新 diff 源 */
+  function mountDiffForToolCallId(toolCallId, diffSource) {
+    if (!elMessages || !toolCallId || !diffSource) return false;
+    var block = findToolRowBlockByCallId(toolCallId);
+    if (!block) return false;
+    var ok = mountHiddenDiffInBlock(block, diffSource);
+    if (ok) {
+      var row = block.querySelector('.tool-action');
+      var toolName = row ? row.getAttribute('data-tool') : '';
+      bindDiffToggleRow(block, toolName || '');
+    }
+    return ok;
+  }
+
+  /** @deprecated 使用 mountDiffForToolCallId（不再自动展开） */
+  function showDiffForToolCallId(toolCallId, diffEl) {
+    if (!elMessages || !diffEl || !toolCallId) return;
+    var block = findToolRowBlockByCallId(toolCallId);
+    if (block) {
+      appendDiffToRowBlock(block, diffEl);
+      return;
+    }
+    var fallback = document.createElement('div');
+    fallback.className = 'tool-action-row-block';
+    fallback.setAttribute('data-tool-call-id', toolCallId);
+    appendDiffToRowBlock(fallback, diffEl);
+    if (elAnchor) elMessages.insertBefore(fallback, elAnchor);
+  }
+
+  function renderMessagesOnly(messages, toolTraces, stripStatusTagFn, shouldScroll, displayMap) {
     liveToolRoundActive = false;
     resetLiveToolRoundTargets();
 
@@ -381,7 +618,8 @@ window.ChatUI = (function () {
       var msg = messages[i];
       var traces = msg.id ? toolTraces[msg.id] : null;
       if (traces && traces.length > 0) {
-        insertFoldableToolTraceGroup(traces, elAnchor);
+        var displays = (displayMap && msg.id && displayMap[msg.id]) ? displayMap[msg.id] : [];
+        insertFoldableToolTraceGroup(traces, displays, elAnchor);
       }
       elMessages.insertBefore(createMessageEl(msg, stripStatusTagFn), elAnchor);
     }
@@ -564,25 +802,16 @@ window.ChatUI = (function () {
     return null;
   }
 
-  /**
-   * 在工具行下方展示 diff（兄弟节点，避免 flex 裁切）
-   * @param {string} toolName
-   * @param {HTMLElement} diffEl
-   */
+  /** @deprecated 使用 showDiffForToolCallId */
   function showDiffAfterToolAction(toolName, diffEl) {
     if (!elMessages || !diffEl) return;
     var row = findLastToolActionRow(toolName);
-    if (!row || !row.parentNode) {
-      var fallback = document.createElement('div');
-      fallback.className = 'tool-diff-wrap';
-      fallback.appendChild(diffEl);
-      if (elAnchor) elMessages.insertBefore(fallback, elAnchor);
-      return;
-    }
-    var sibling = row.nextElementSibling;
-    if (sibling && sibling.classList && sibling.classList.contains('tool-diff-wrap')) {
-      sibling.innerHTML = '';
-      sibling.appendChild(diffEl);
+    if (!row) return;
+    var block = row.parentNode && row.parentNode.classList.contains('tool-action-row-block')
+      ? row.parentNode
+      : null;
+    if (block) {
+      appendDiffToRowBlock(block, diffEl);
       return;
     }
     var wrap = document.createElement('div');
@@ -613,6 +842,9 @@ window.ChatUI = (function () {
     getInputValue: getInputValue,
     setInputValue: setInputValue,
     focusInput: focusInput,
+    updateToolActionByCallId: updateToolActionByCallId,
+    mountDiffForToolCallId: mountDiffForToolCallId,
+    showDiffForToolCallId: showDiffForToolCallId,
     showDiffAfterToolAction: showDiffAfterToolAction,
   };
 })();
