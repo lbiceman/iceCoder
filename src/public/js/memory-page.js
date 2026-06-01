@@ -479,27 +479,35 @@ window.MemoryPage = (function () {
         var fn = file.filename;
         if (!fn || !containerEl) return;
         var label = file.name || fn;
-        if (!confirm('确定删除记忆「' + label + '」？删除后不可恢复。')) return;
-        deleteBtn.disabled = true;
-        fetch('/api/memory/files/' + encodeURIComponent(fn), { method: 'DELETE' })
-          .then(function (r) {
-            return r.json().then(function (json) {
-              return { ok: r.ok, json: json };
+        Modal.confirm({
+          title: '删除记忆',
+          message: '确定删除记忆「' + label + '」？删除后不可恢复。',
+          type: 'danger',
+          confirmText: '删除',
+          cancelText: '取消',
+        }).then(function (ok) {
+          if (!ok) return;
+          deleteBtn.disabled = true;
+          fetch('/api/memory/files/' + encodeURIComponent(fn), { method: 'DELETE' })
+            .then(function (r) {
+              return r.json().then(function (json) {
+                return { ok: r.ok, json: json };
+              });
+            })
+            .then(function (res) {
+              deleteBtn.disabled = false;
+              if (!res.ok || !res.json.success) {
+                Modal.alert({ title: '删除失败', message: res.json.error || res.json.message || '删除失败', type: 'danger' });
+                return;
+              }
+              closePopover();
+              render(containerEl);
+            })
+            .catch(function () {
+              deleteBtn.disabled = false;
+              Modal.alert({ title: '请求失败', message: '删除请求失败', type: 'danger' });
             });
-          })
-          .then(function (res) {
-            deleteBtn.disabled = false;
-            if (!res.ok || !res.json.success) {
-              window.alert(res.json.error || res.json.message || '删除失败');
-              return;
-            }
-            closePopover();
-            render(containerEl);
-          })
-          .catch(function () {
-            deleteBtn.disabled = false;
-            window.alert('删除请求失败');
-          });
+        });
       });
     }
 

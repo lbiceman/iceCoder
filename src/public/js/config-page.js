@@ -204,15 +204,24 @@ window.ConfigPage = (function () {
 
     // 连接移除按钮
     card.querySelector('[data-action="remove"]').addEventListener('click', function () {
-      // 如果删除的是默认提供者之前的，调整 defaultIndex
-      if (index < defaultIndex) {
-        defaultIndex--;
-      } else if (index === defaultIndex) {
-        defaultIndex = 0;
-      }
-      providers.splice(index, 1);
-      if (providers.length === 0) defaultIndex = 0;
-      renderProviders();
+      Modal.confirm({
+        title: '移除提供者',
+        message: '确定要移除该 LLM 提供者吗？',
+        type: 'warning',
+        confirmText: '移除',
+        cancelText: '取消',
+      }).then(function (confirmed) {
+        if (!confirmed) return;
+        // 如果删除的是默认提供者之前的，调整 defaultIndex
+        if (index < defaultIndex) {
+          defaultIndex--;
+        } else if (index === defaultIndex) {
+          defaultIndex = 0;
+        }
+        providers.splice(index, 1);
+        if (providers.length === 0) defaultIndex = 0;
+        renderProviders();
+      });
     });
 
     // 连接默认选择按钮

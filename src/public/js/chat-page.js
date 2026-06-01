@@ -740,29 +740,35 @@ window.ChatPage = (function () {
     activeConfirmId = data.confirmId || null;
     activeConfirmResolved = false;
     var argsText = data.args ? JSON.stringify(data.args) : '';
-    // 注意：window.confirm 是同步阻塞，单端用户必须先选择；
-    // 但只要服务端已经 first-win 关闭，我们丢弃本地结果即可。
-    var ok = window.confirm('AI 请求执行危险操作：\n\n工具: ' + data.toolName + '\n参数: ' + argsText + '\n\n是否允许？');
-    if (activeConfirmResolved) {
-      // 其它端已经回复，丢弃本地选择
+
+    Modal.confirm({
+      title: '危险操作确认',
+      message: '工具: ' + data.toolName + '\n参数: ' + argsText,
+      type: 'danger',
+      dangerConfirm: true,
+      confirmText: '允许',
+      cancelText: '拒绝',
+    }).then(function (ok) {
+      if (activeConfirmResolved) {
+        activeConfirmId = null;
+        activeConfirmResolved = false;
+        if (sessionPet) {
+          sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
+          sessionPet.setBubbleText('');
+        }
+        return;
+      }
+      WS.sendConfirmReply(ok, activeConfirmId);
       activeConfirmId = null;
-      activeConfirmResolved = false;
+      var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
+      Session.appendMessage(confirmMsg);
+      UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
+      Session.saveMessages();
       if (sessionPet) {
         sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
         sessionPet.setBubbleText('');
       }
-      return;
-    }
-    WS.sendConfirmReply(ok, activeConfirmId);
-    activeConfirmId = null;
-    var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
-    Session.appendMessage(confirmMsg);
-    UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
-    Session.saveMessages();
-    if (sessionPet) {
-      sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-      sessionPet.setBubbleText('');
-    }
+    });
   }
 
   function onWsConfirmResolved(data) {

@@ -228,15 +228,24 @@ window.ChatSessionSidebar = (function () {
   }
 
   function deleteSessionItem(sessionId) {
-    var wasActive = Store.getActiveSessionId() === sessionId;
-    var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
-    Store.deleteSession(sessionId, wsSend, function (ok, info) {
+    Modal.confirm({
+      title: '删除会话',
+      message: '确定要删除该会话吗？此操作不可撤销。',
+      type: 'warning',
+      confirmText: '删除',
+      cancelText: '取消',
+    }).then(function (ok) {
       if (!ok) return;
-      renderList();
-      if (wasActive && info && info.switchedTo
-          && window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-        window.ChatPage.onSessionSwitched(info.switchedTo);
-      }
+      var wasActive = Store.getActiveSessionId() === sessionId;
+      var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
+      Store.deleteSession(sessionId, wsSend, function (ok, info) {
+        if (!ok) return;
+        renderList();
+        if (wasActive && info && info.switchedTo
+            && window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
+          window.ChatPage.onSessionSwitched(info.switchedTo);
+        }
+      });
     });
   }
 
