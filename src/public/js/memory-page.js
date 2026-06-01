@@ -1041,12 +1041,7 @@ window.MemoryPage = (function () {
       '<p class="memory-sidebar-hint">' +
       '圆点表示一条记忆，<strong>共用标签</strong>的会用线连起来。左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。' +
       '</p>' +
-      '</div>' +
-      '<button type="button" class="memory-back-chat">返回聊天</button>';
-
-    header.querySelector('.memory-back-chat').addEventListener('click', function () {
-      window.location.hash = '#/chat';
-    });
+      '</div>';
 
     var main = document.createElement('main');
     main.className = 'memory-main';
