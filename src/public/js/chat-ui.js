@@ -541,6 +541,56 @@ window.ChatUI = (function () {
     if (elInput) elInput.focus();
   }
 
+  /** 从后往前找匹配 toolName 的工具行 */
+  function findLastToolActionRow(toolName) {
+    if (!elMessages) return null;
+    var node = elAnchor ? elAnchor.previousSibling : elMessages.lastChild;
+    while (node) {
+      if (node.nodeType === 1 && node.classList && node.classList.contains('tool-trace-group')) {
+        var rows = node.querySelectorAll('.tool-action');
+        for (var r = rows.length - 1; r >= 0; r--) {
+          if (!toolName || rows[r].getAttribute('data-tool') === toolName) {
+            return rows[r];
+          }
+        }
+      }
+      if (node.nodeType === 1 && node.classList && node.classList.contains('tool-action')) {
+        if (!toolName || node.getAttribute('data-tool') === toolName) {
+          return node;
+        }
+      }
+      node = node.previousSibling;
+    }
+    return null;
+  }
+
+  /**
+   * 在工具行下方展示 diff（兄弟节点，避免 flex 裁切）
+   * @param {string} toolName
+   * @param {HTMLElement} diffEl
+   */
+  function showDiffAfterToolAction(toolName, diffEl) {
+    if (!elMessages || !diffEl) return;
+    var row = findLastToolActionRow(toolName);
+    if (!row || !row.parentNode) {
+      var fallback = document.createElement('div');
+      fallback.className = 'tool-diff-wrap';
+      fallback.appendChild(diffEl);
+      if (elAnchor) elMessages.insertBefore(fallback, elAnchor);
+      return;
+    }
+    var sibling = row.nextElementSibling;
+    if (sibling && sibling.classList && sibling.classList.contains('tool-diff-wrap')) {
+      sibling.innerHTML = '';
+      sibling.appendChild(diffEl);
+      return;
+    }
+    var wrap = document.createElement('div');
+    wrap.className = 'tool-diff-wrap';
+    wrap.appendChild(diffEl);
+    row.parentNode.insertBefore(wrap, row.nextSibling);
+  }
+
   return {
     init: init,
     scrollToBottom: scrollToBottom,
@@ -563,5 +613,6 @@ window.ChatUI = (function () {
     getInputValue: getInputValue,
     setInputValue: setInputValue,
     focusInput: focusInput,
+    showDiffAfterToolAction: showDiffAfterToolAction,
   };
 })();

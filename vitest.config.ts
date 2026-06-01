@@ -1,3 +1,4 @@
+// iceCoder vitest config — last updated 2026-06-01
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({

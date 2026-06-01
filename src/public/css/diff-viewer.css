@@ -1,0 +1,123 @@
+/* ===== Diff Viewer — CC 风格（仅变更行） ===== */
+
+.tool-diff-wrap {
+  margin: 4px 0 8px 22px;
+  max-width: 88%;
+}
+
+.diff-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diff-file-block {
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+  background: var(--bg-card);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid transparent;
+}
+
+.diff-file-head:hover {
+  background: var(--bg-hover);
+}
+
+.diff-file-block:has(.diff-file-body.expanded) .diff-file-head {
+  border-bottom-color: var(--border-light);
+}
+
+.diff-file-chevron {
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+
+.diff-file-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.diff-file-name {
+  flex: 1;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-stats {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-file-stats .diff-stat-add {
+  color: var(--success);
+}
+
+.diff-file-stats .diff-stat-del {
+  color: var(--danger);
+}
+
+.diff-file-body {
+  display: none;
+  overflow-x: auto;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.diff-file-body.expanded {
+  display: block;
+}
+
+.diff-change-line {
+  padding: 1px 10px 1px 12px;
+  white-space: pre;
+  border-left: 3px solid transparent;
+}
+
+.diff-change-add {
+  background: var(--diff-add-bg);
+  color: var(--diff-add-text);
+  border-left-color: var(--success);
+}
+
+.diff-change-del {
+  background: var(--diff-del-bg);
+  color: var(--diff-del-text);
+  border-left-color: var(--danger);
+}
+
+.diff-change-more {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  background: var(--bg-primary);
+}
+
+/* 聊天内嵌：默认展开变更内容 */
+.diff-changes.compact .diff-file-body {
+  display: block;
+}
+
+.diff-changes.compact .diff-file-body:not(.expanded) {
+  display: none;
+}

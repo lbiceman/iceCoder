@@ -37,6 +37,11 @@ window.ChatPage = (function () {
   /** 本页仅提示一次公网隧道就绪 */
   var tunnelReadyAnnounced = false;
 
+  /** 可能输出 unified diff 的工具 */
+  var DIFF_CAPABLE_TOOLS = { run_command: true, git: true, diff_files: true };
+  /** run_command 流式 stdout 累积（tool_result 到达后会清空） */
+  var streamingDiffBuffer = { toolName: '', text: '' };
+
   // Token 用量
   var maxContextTokens = 0;
   var usedInputTokens = 0;
@@ -644,6 +649,9 @@ window.ChatPage = (function () {
         : 'pending';
       UI.appendToolAction(step.toolName, detail, callStatus);
       Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: callStatus });
+      if (DIFF_CAPABLE_TOOLS[step.toolName]) {
+        streamingDiffBuffer = { toolName: step.toolName, text: '' };
+      }
     }
     if (step.type === 'tool_result' && step.toolName) {
       var fmtResult = window.ToolTraceFormat;
@@ -665,6 +673,8 @@ window.ChatPage = (function () {
           window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
         }
       }
+      tryRenderToolDiff(step.toolName, step.toolOutput);
+      streamingDiffBuffer = { toolName: '', text: '' };
     }
     if (window.ChatExecutionPlanBridge
       && (step.type === 'execution_plan_init'
@@ -840,11 +850,30 @@ window.ChatPage = (function () {
 
   function onWsBgTaskUpdate(payload) {
     if (!window.BgTaskChip || !elMessages) return;
-    // 当前 sessionId 来源：ChatSession.getActiveId 若存在则用；否则不过滤（兼容当前单 session 模型）
     var activeId = (Session && typeof Session.getActiveId === 'function')
       ? Session.getActiveId()
       : '';
     window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
+  }
+
+  /** 工具输出含 unified diff 时渲染到对应工具行下方 */
+  function tryRenderToolDiff(toolName, output) {
+    if (!DIFF_CAPABLE_TOOLS[toolName] || !output || !window.DiffViewer || !UI.showDiffAfterToolAction) return;
+    var diffEl = DiffViewer.renderFromText(String(output), { compact: true });
+    if (!diffEl) return;
+    UI.showDiffAfterToolAction(toolName, diffEl);
+  }
+
+  /** run_command 流式输出：累积 chunk 并尝试实时预览 */
+  function onWsToolOutput(data) {
+    if (!data || !data.content || !DIFF_CAPABLE_TOOLS[data.toolName]) return;
+    if (streamingDiffBuffer.toolName && streamingDiffBuffer.toolName !== data.toolName) {
+      streamingDiffBuffer = { toolName: data.toolName, text: '' };
+    }
+    if (!streamingDiffBuffer.toolName) streamingDiffBuffer.toolName = data.toolName;
+    streamingDiffBuffer.text += data.content;
+    if (!/^@@\s/m.test(streamingDiffBuffer.text)) return;
+    tryRenderToolDiff(streamingDiffBuffer.toolName, streamingDiffBuffer.text);
   }
 
   /**
@@ -1008,6 +1037,7 @@ window.ChatPage = (function () {
     WS.on('workspace_updated', syncSidebarWorkspace);
     WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);
+    WS.on('tool_output', onWsToolOutput);
 
     // 连接 WebSocket
     WS.connect(remoteToken);

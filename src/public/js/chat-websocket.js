@@ -171,6 +171,7 @@ window.ChatWebSocket = (function () {
         emit('active_session', data);
         break;
       case 'tool_output':
+        emit('tool_output', { toolName: data.toolName || '', content: data.content || '' });
         break;
       case 'pong':
         break;
