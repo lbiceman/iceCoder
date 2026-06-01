@@ -94,6 +94,7 @@ describe('BgTaskPusher — heartbeat tick payload', () => {
   it('tick() sends bg_task_update with running tasks', () => {
     mgr.spawn(sleepCmd(30), 60_000, 'aaa');
     mgr.spawn(sleepCmd(30), 60_000, 'bbb');
+    broadcasts.length = 0;
 
     pusher.tick();
     expect(broadcasts.length).toBe(1);
@@ -120,6 +121,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       'utf-8',
     );
     mgr.spawn('node burst.cjs', 30_000, 'burst-task');
+    broadcasts.length = 0;
 
     // 等到 node 启动 + 至少一行输出已 flush
     await new Promise((r) => setTimeout(r, 1_500));

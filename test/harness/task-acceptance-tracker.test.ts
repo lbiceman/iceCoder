@@ -305,13 +305,6 @@ describe('task-acceptance-tracker', () => {
         verificationRequired: true,
         verificationStatus: 'passed',
       },
-      {
-        filesRead: [],
-        filesChanged: ['a.ts'],
-        commandsRun: ['npm test 2>&1'],
-        testCommands: ['npm test 2>&1'],
-        recentDiagnostics: [],
-      },
       tracker,
     )).toBe(true);
   });

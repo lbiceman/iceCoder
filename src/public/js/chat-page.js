@@ -104,10 +104,30 @@ window.ChatPage = (function () {
       .catch(function () { /* ignore */ });
   }
 
-  function updateTokenUsage(inputTokens, outputTokens) {
-    usedInputTokens = inputTokens;
+  function updateTokenUsage(inputTokens, outputTokens, contextOpts) {
+    contextOpts = contextOpts || {};
+    if (typeof contextOpts.effectiveUsed === 'number' && contextOpts.effectiveUsed > 0) {
+      usedInputTokens = contextOpts.effectiveUsed;
+    } else {
+      usedInputTokens = inputTokens;
+    }
     usedOutputTokens = outputTokens;
+    if (typeof contextOpts.contextWindow === 'number' && contextOpts.contextWindow > 0) {
+      maxContextTokens = contextOpts.contextWindow;
+    }
     updatePetTokenUsage();
+  }
+
+  function applyTotalTokenUsageFromStep(totalTokenUsage) {
+    if (!totalTokenUsage) return;
+    updateTokenUsage(
+      totalTokenUsage.inputTokens || 0,
+      totalTokenUsage.outputTokens || 0,
+      {
+        effectiveUsed: totalTokenUsage.effectiveUsed,
+        contextWindow: totalTokenUsage.contextWindow,
+      },
+    );
   }
 
   function resetTokenUsage() {
@@ -139,7 +159,7 @@ window.ChatPage = (function () {
   function syncSendButtonWithWorkload() {
     var busy = isWorkloadActive();
     UI.setStreamingState(busy);
-    if (sessionPet) {
+    if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
         sessionPet.setState(isStreaming ? 'read' : 'thinking');
       } else if (!userStopped) {
@@ -196,7 +216,7 @@ window.ChatPage = (function () {
     if (text === '~open') {
       Cmd.hide();
       Pet.showThinking(false);
-      UI.resetLiveToolRoundTargets();
+      UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
       WS.sendMessage(
         '~open\n\n' +
@@ -293,7 +313,7 @@ window.ChatPage = (function () {
     }
     File.removeUploadedFile();
 
-    UI.resetLiveToolRoundTargets();
+    UI.clearLiveToolRoundDom();
     UI.setLiveToolRoundActive(true);
     if (msgImages.length > 0) {
       WS.send({ type: 'message', content: msgText || '请分析这些图片', images: msgImages });
@@ -416,6 +436,7 @@ window.ChatPage = (function () {
       var row = timeline[i];
       UI.appendToolAction(row.toolName, row.detail || '', row.status || 'pending');
     }
+    if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
   }
 
   function pickToolTimelineForRestore(runningTurn) {
@@ -473,7 +494,16 @@ window.ChatPage = (function () {
     applyLiveToolTimelineToUI(toolTimeline);
 
     // 4. token 用量 & 轮次
-    if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
+    if (typeof runningTurn.lastEffectiveUsed === 'number' && runningTurn.lastEffectiveUsed > 0) {
+      updateTokenUsage(
+        runningTurn.lastInputTokens || 0,
+        runningTurn.lastOutputTokens || 0,
+        {
+          effectiveUsed: runningTurn.lastEffectiveUsed,
+          contextWindow: runningTurn.contextWindow,
+        },
+      );
+    } else if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
       updateTokenUsage(runningTurn.lastInputTokens || 0, runningTurn.lastOutputTokens || 0);
     }
     if (runningTurn.iteration > 0) {
@@ -587,9 +617,7 @@ window.ChatPage = (function () {
     if (userStopped) return;
 
     if (step.totalTokenUsage) {
-      usedInputTokens = step.totalTokenUsage.inputTokens || 0;
-      usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
-      updatePetTokenUsage();
+      applyTotalTokenUsageFromStep(step.totalTokenUsage);
     }
     if (step.iteration) {
       Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
@@ -600,23 +628,43 @@ window.ChatPage = (function () {
       Pet.updateStatusText(step.content, isStreaming, WS.isProcessing());
     }
     if (step.type === 'tool_call' && step.toolName) {
-      var detail = '';
-      if (step.toolArgs) {
-        detail = step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query || '';
-        if (!detail) {
-          var argsStr = JSON.stringify(step.toolArgs);
-          detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
-        }
+      if (WS.isProcessing() && UI.isLiveToolRoundActive && !UI.isLiveToolRoundActive()) {
+        UI.setLiveToolRoundActive(true);
       }
-      UI.appendToolAction(step.toolName, detail, 'pending');
-      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: 'pending' });
+      var fmt = window.ToolTraceFormat;
+      var detail = fmt
+        ? fmt.formatToolArgsDetailPreview(step.toolName, step.toolArgs)
+        : (step.toolArgs && (step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query)) || '';
+      if (!detail && step.toolArgs) {
+        var argsStr = JSON.stringify(step.toolArgs);
+        detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+      }
+      var callStatus = fmt && fmt.resolveToolCallInitialStatus
+        ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
+        : 'pending';
+      UI.appendToolAction(step.toolName, detail, callStatus);
+      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: callStatus });
     }
     if (step.type === 'tool_result' && step.toolName) {
-      var resultStatus = step.toolOutcome === 'policy_block'
-        ? 'warn'
-        : (step.toolSuccess ? 'success' : 'error');
+      var fmtResult = window.ToolTraceFormat;
+      var resultStatus = fmtResult
+        ? fmtResult.resolveToolTraceResultStatus(
+          step.toolName,
+          step.toolSuccess,
+          step.toolOutcome,
+          step.toolOutput,
+        )
+        : (step.toolOutcome === 'policy_block'
+          ? 'warn'
+          : (step.toolSuccess ? 'success' : 'error'));
       UI.updateLastToolAction(step.toolName, resultStatus);
       Session.updateToolBatchStatus(step.toolName, resultStatus);
+      if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
+        var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
+        if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
+          window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
+        }
+      }
     }
     if (window.ChatExecutionPlanBridge
       && (step.type === 'execution_plan_init'
@@ -642,6 +690,7 @@ window.ChatPage = (function () {
       isStreaming = false;
       Pet.removeThinking(isStreaming, WS.isProcessing());
       if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
+      if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }
@@ -725,7 +774,10 @@ window.ChatPage = (function () {
   }
 
   function onWsTokenUsage(data) {
-    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0);
+    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
+      effectiveUsed: data.effectiveUsed,
+      contextWindow: data.contextWindow,
+    });
   }
 
   function onWsPulse(data) {

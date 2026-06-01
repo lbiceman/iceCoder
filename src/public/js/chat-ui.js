@@ -59,6 +59,14 @@ window.ChatUI = (function () {
 
   // ---- 工具调用行 ----
 
+  function iconTextForStatus(status) {
+    if (status === 'success') return '✓';
+    if (status === 'error') return '✗';
+    if (status === 'warn') return '⚠';
+    if (status === 'background') return '→';
+    return '';
+  }
+
   function createToolActionRow(toolName, detail, status) {
     var el = document.createElement('div');
     el.className = 'tool-action';
@@ -66,7 +74,7 @@ window.ChatUI = (function () {
 
     var iconEl = document.createElement('span');
     iconEl.className = 'tool-icon ' + (status || 'pending');
-    iconEl.textContent = status === 'success' ? '✓' : status === 'warn' ? '⚠' : status === 'error' ? '✗' : '⟳';
+    iconEl.textContent = iconTextForStatus(status || 'pending');
     el.appendChild(iconEl);
 
     var nameEl = document.createElement('span');
@@ -102,6 +110,67 @@ window.ChatUI = (function () {
   function refreshCollapsedToggleLabel(btn, collapsedEl) {
     if (!btn || !collapsedEl || collapsedEl.children.length === 0) return;
     btn.textContent = btn.getAttribute('aria-expanded') === 'true' ? '收起' : '还有 ' + collapsedEl.children.length + ' 条历史 · 展开';
+  }
+
+  function rebalanceToolTraceVisible(visibleEl, collapsedEl, toggleEl) {
+    if (!visibleEl || !collapsedEl) return;
+    while (visibleEl.children.length > TOOL_TRACE_VISIBLE_MAX) {
+      var oldest = visibleEl.firstChild;
+      if (oldest) collapsedEl.appendChild(oldest);
+    }
+    if (!toggleEl) return;
+    if (collapsedEl.children.length > 0) {
+      toggleEl.style.display = '';
+      refreshCollapsedToggleLabel(toggleEl, collapsedEl);
+    } else {
+      toggleEl.style.display = 'none';
+      toggleEl.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  /** 清掉 anchor 前连续的平铺工具行 / 工具组（F5 还原或新一轮发送前） */
+  function clearTrailingToolDomBeforeAnchor() {
+    if (!elAnchor) return;
+    var node = elAnchor.previousElementSibling;
+    while (node) {
+      if (node.id === 'streaming-msg') {
+        node = node.previousElementSibling;
+        continue;
+      }
+      if (node.classList && (node.classList.contains('tool-action') || node.classList.contains('tool-trace-group'))) {
+        var rm = node;
+        node = node.previousElementSibling;
+        rm.parentNode.removeChild(rm);
+        continue;
+      }
+      break;
+    }
+  }
+
+  /** 把 anchor 前平铺的 tool-action 收进 live 折叠组 */
+  function coalesceFlatToolActionsBeforeAnchor() {
+    if (!elAnchor) return;
+    var flats = [];
+    var node = elAnchor.previousElementSibling;
+    while (node) {
+      if (node.id === 'streaming-msg') {
+        node = node.previousElementSibling;
+        continue;
+      }
+      if (node.classList && node.classList.contains('tool-action')) {
+        flats.unshift(node);
+        node = node.previousElementSibling;
+        continue;
+      }
+      break;
+    }
+    if (flats.length === 0) return;
+    liveToolRoundActive = true;
+    adoptOrCreateLiveToolGroupDom();
+    for (var i = 0; i < flats.length; i++) {
+      liveToolRoundVisible.appendChild(flats[i]);
+    }
+    rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
   }
 
   function insertFoldableToolTraceGroup(traces, insertBeforeNode) {
@@ -148,8 +217,29 @@ window.ChatUI = (function () {
     elMessages.insertBefore(wrap, insertBeforeNode);
   }
 
-  function ensureLiveToolGroupDom() {
-    if (liveToolRoundRoot) return;
+  function adoptOrCreateLiveToolGroupDom() {
+    if (liveToolRoundRoot) {
+      rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
+      return;
+    }
+    var prev = elAnchor ? elAnchor.previousElementSibling : null;
+    while (prev && prev.id === 'streaming-msg') {
+      prev = prev.previousElementSibling;
+    }
+    if (prev && prev.classList && prev.classList.contains('tool-trace-group')) {
+      liveToolRoundRoot = prev;
+      liveToolRoundCollapsed = prev.querySelector('.tool-trace-collapsed');
+      liveToolRoundToggle = prev.querySelector('.tool-trace-toggle');
+      liveToolRoundVisible = prev.querySelector('.tool-trace-visible');
+      if (liveToolRoundCollapsed && liveToolRoundVisible && liveToolRoundToggle) {
+        rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
+        return;
+      }
+      liveToolRoundRoot = null;
+      liveToolRoundCollapsed = null;
+      liveToolRoundToggle = null;
+      liveToolRoundVisible = null;
+    }
     liveToolRoundRoot = document.createElement('div');
     liveToolRoundRoot.className = 'tool-trace-group';
     liveToolRoundCollapsed = document.createElement('div');
@@ -170,25 +260,27 @@ window.ChatUI = (function () {
 
   function appendToolAction(toolName, detail, status) {
     if (!elMessages) return null;
+    coalesceFlatToolActionsBeforeAnchor();
     var row = createToolActionRow(toolName, detail, status);
 
     if (liveToolRoundActive) {
-      ensureLiveToolGroupDom();
+      adoptOrCreateLiveToolGroupDom();
       liveToolRoundCount++;
       liveToolRoundVisible.appendChild(row);
-      while (liveToolRoundVisible.children.length > TOOL_TRACE_VISIBLE_MAX) {
-        var oldest = liveToolRoundVisible.firstChild;
-        if (oldest) liveToolRoundCollapsed.appendChild(oldest);
-      }
-      if (liveToolRoundCollapsed.children.length > 0) {
-        liveToolRoundToggle.style.display = '';
-        refreshCollapsedToggleLabel(liveToolRoundToggle, liveToolRoundCollapsed);
-      }
+      rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
       return row;
     }
 
     elMessages.insertBefore(row, elAnchor);
     return row;
+  }
+
+  /** 批量还原 / 竞态修复后，重新折叠 live 工具区 */
+  function repairLiveToolGroupFold() {
+    coalesceFlatToolActionsBeforeAnchor();
+    if (liveToolRoundRoot && liveToolRoundVisible && liveToolRoundCollapsed) {
+      rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
+    }
   }
 
   function updateLastToolAction(toolName, status) {
@@ -202,7 +294,7 @@ window.ChatUI = (function () {
             var iconEl = rows[r].querySelector('.tool-icon');
             if (iconEl) {
               iconEl.className = 'tool-icon ' + status;
-              iconEl.textContent = status === 'success' ? '✓' : status === 'warn' ? '⚠' : status === 'error' ? '✗' : '⟳';
+              iconEl.textContent = iconTextForStatus(status);
             }
             return;
           }
@@ -212,7 +304,7 @@ window.ChatUI = (function () {
         var iconEl2 = node.querySelector('.tool-icon');
         if (iconEl2) {
           iconEl2.className = 'tool-icon ' + status;
-          iconEl2.textContent = status === 'success' ? '✓' : status === 'error' ? '✗' : '⟳';
+          iconEl2.textContent = iconTextForStatus(status);
         }
         return;
       }
@@ -235,10 +327,15 @@ window.ChatUI = (function () {
       liveToolRoundRoot.parentNode.removeChild(liveToolRoundRoot);
     }
     resetLiveToolRoundTargets();
+    clearTrailingToolDomBeforeAnchor();
   }
 
   function setLiveToolRoundActive(active) {
     liveToolRoundActive = active;
+  }
+
+  function isLiveToolRoundActive() {
+    return liveToolRoundActive;
   }
 
   // ---- 消息渲染 ----
@@ -460,6 +557,8 @@ window.ChatUI = (function () {
     resetLiveToolRoundTargets: resetLiveToolRoundTargets,
     clearLiveToolRoundDom: clearLiveToolRoundDom,
     setLiveToolRoundActive: setLiveToolRoundActive,
+    isLiveToolRoundActive: isLiveToolRoundActive,
+    repairLiveToolGroupFold: repairLiveToolGroupFold,
     setStreamingState: setStreamingState,
     getInputValue: getInputValue,
     setInputValue: setInputValue,

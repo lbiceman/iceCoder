@@ -17,6 +17,7 @@ import { formatFriendlyError } from '../cli/friendly-errors.js';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
+import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
 import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
@@ -24,6 +25,7 @@ import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
+import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../memory/file-memory/file-memory-manager.js';
@@ -40,6 +42,7 @@ import {
 } from '../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
 import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
+import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import {
   registerSupervisorRuntimeReset,
   resetSupervisorRuntimeCache,
@@ -55,17 +58,40 @@ import {
   prewarmChatRuntime,
 } from './chat-ws-prewarm.js';
 import type { ResolvedSupervisorConfig } from '../types/supervisor.js';
-import { resolveDefaultChatModelMeta } from './routes/config.js';
+import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
+import {
+  buildUserMessageWithImages,
+  deleteSessionImagesCache,
+  persistInlineImages,
+  persistUploadedImageFiles,
+  buildSessionImageApiUrl,
+} from './images-cache.js';
 import {
   detectFileBrowserOpen,
   looksLikeFileAnalysisIntent,
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
+import { BgTaskPusher } from './bg-task-pusher.js';
+import { getBackgroundTaskManagerFor } from '../tools/background-task-manager.js';
+import {
+  formatToolArgsDetailPreview,
+  resolveToolCallInitialStatus,
+  resolveToolTraceResultStatus,
+} from './tool-trace-format.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
+
+applyRuntimeDataEnvDefaults();
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 let activeSessionId = 'default';
 let activeSessionBootstrapPromise: Promise<void> | null = null;
+
+/** 后台 shell 任务 → WebSocket chip 推送（Phase 4b） */
+let bgTaskPusher: BgTaskPusher | null = null;
+
+/** UI 心跳间隔（比 LLM 摘要 5min 更密，便于聊天区看到 running 状态） */
+const BG_TASK_UI_PUSH_INTERVAL_MS = 30_000;
 
 /** 冷启动：选中 index 中 updatedAt 最近的会话，并预载 structured 缓存。 */
 async function ensureActiveSessionBootstrapped(): Promise<void> {
@@ -85,11 +111,9 @@ async function ensureActiveSessionBootstrapped(): Promise<void> {
   })();
   return activeSessionBootstrapPromise;
 }
-const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR ?? 'data/memory-files');
-const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR ?? 'data');
-const MAIN_CONFIG_PATH = process.env.ICE_CONFIG_PATH
-  ? path.resolve(process.env.ICE_CONFIG_PATH)
-  : path.join(DATA_DIR, 'config.json');
+const MEMORY_DIR = path.resolve(process.env.ICE_MEMORY_DIR!);
+const DATA_DIR = path.resolve(process.env.ICE_DATA_DIR!);
+const MAIN_CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH!);
 function getSessionFile(sessionId: string = activeSessionId): string {
   return path.join(SESSIONS_DIR, `${sessionId}.json`);
 }
@@ -157,7 +181,7 @@ function getFileBrowserState(sessionId: string = activeSessionId): FileBrowserSt
   return state;
 }
 
-/** 导出活跃会话 ID，供 remote-ws.ts 等模块使用 */
+/** 导出活跃会话 ID，供会话路由等模块使用 */
 export function getActiveSessionId(): string {
   return activeSessionId;
 }
@@ -178,9 +202,10 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   if (sessionId === activeSessionId) {
     cachedMessages = undefined;
   }
+  void deleteSessionImagesCache(sessionId).catch(() => {});
 }
 
-/** 获取会话目录路径（供 remote-ws.ts 使用） */
+/** 获取会话目录路径 */
 export function getSessionsDir(): string {
   return SESSIONS_DIR;
 }
@@ -315,6 +340,8 @@ export interface ChatWSOptions {
   orchestrator: Orchestrator;
   toolRegistry: ToolRegistry;
   toolExecutor: ToolExecutor;
+  /** 未完成主配置时拒绝 WebSocket 连接 */
+  isSetupRequired?: () => boolean;
 }
 
 /** 当前所有聊天 WebSocket 客户端（PC + 移动端），用于会话持久化后通知其它端拉取 default.json */
@@ -383,6 +410,39 @@ function broadcastToSession(sessionId: string, data: unknown): void {
   }
 }
 
+/** 向订阅者发送已序列化的 bg_task_update JSON（BgTaskPusher 回调） */
+function broadcastBgTaskJson(sessionId: string, jsonBody: string): void {
+  const set = sessionSubscribers.get(sessionId);
+  if (!set || set.size === 0) return;
+  for (const ws of set) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(jsonBody);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+function ensureBgTaskPusher(): BgTaskPusher {
+  if (!bgTaskPusher) {
+    bgTaskPusher = new BgTaskPusher(broadcastBgTaskJson, {
+      intervalMs: BG_TASK_UI_PUSH_INTERVAL_MS,
+    });
+  }
+  return bgTaskPusher;
+}
+
+/** 将推送器绑定到指定 session 的后台任务管理器（切换会话 / 开跑前调用） */
+async function rebindBgTaskPusher(sessionId: string): Promise<void> {
+  const workspace = await resolveSessionWorkspacePayload(sessionId);
+  const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+  const mgr = getBackgroundTaskManagerFor(sessionId, workDir);
+  ensureBgTaskPusher().attach(mgr);
+  ensureBgTaskPusher().tick();
+}
+
 const DEFAULT_WORK_DIR = process.cwd();
 
 async function resolveSessionWorkspacePayload(sessionId: string) {
@@ -403,6 +463,10 @@ interface RunningTurnSnapshot {
   petStatusText: string;
   lastInputTokens: number;
   lastOutputTokens: number;
+  /** 与压缩判定一致的有效占用（圆环分子） */
+  lastEffectiveUsed: number;
+  /** 上下文窗口上限（圆环分母） */
+  contextWindow: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   startedAt: number;
@@ -423,6 +487,8 @@ function createEmptyRunningTurn(): RunningTurnSnapshot {
     petStatusText: '',
     lastInputTokens: 0,
     lastOutputTokens: 0,
+    lastEffectiveUsed: 0,
+    contextWindow: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     startedAt: Date.now(),
@@ -443,16 +509,17 @@ function ensureRunningTurn(sessionId: string): RunningTurnSnapshot {
   return t;
 }
 
-function toolArgsDetailPreview(toolArgs: Record<string, unknown> | undefined): string {
-  if (!toolArgs || typeof toolArgs !== 'object') return '';
-  const direct = toolArgs.path || toolArgs.file || toolArgs.command || toolArgs.query;
-  if (typeof direct === 'string' && direct) return direct;
-  try {
-    const argsStr = JSON.stringify(toolArgs);
-    return argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
-  } catch {
-    return '';
-  }
+function toolArgsDetailPreview(toolName: string, toolArgs: Record<string, unknown> | undefined): string {
+  return formatToolArgsDetailPreview(toolName, toolArgs);
+}
+
+function toolResultStatusPreview(
+  toolName: string,
+  toolSuccess: boolean | undefined,
+  toolOutcome: string | undefined,
+  toolOutput: string | undefined,
+): string {
+  return resolveToolTraceResultStatus(toolName, toolSuccess, toolOutcome, toolOutput);
 }
 
 function snapshotRunningTurn(sessionId: string): RunningTurnSnapshot | null {
@@ -484,6 +551,12 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
     if (typeof event.totalTokenUsage.outputTokens === 'number') {
       t.lastOutputTokens = event.totalTokenUsage.outputTokens;
     }
+    if (typeof event.totalTokenUsage.effectiveUsed === 'number') {
+      t.lastEffectiveUsed = event.totalTokenUsage.effectiveUsed;
+    }
+    if (typeof event.totalTokenUsage.contextWindow === 'number') {
+      t.contextWindow = event.totalTokenUsage.contextWindow;
+    }
   }
 
   switch (event.type) {
@@ -501,8 +574,8 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (event.toolName) {
         t.toolTimeline.push({
           toolName: String(event.toolName),
-          detail: toolArgsDetailPreview(event.toolArgs),
-          status: 'pending',
+          detail: toolArgsDetailPreview(String(event.toolName), event.toolArgs),
+          status: resolveToolCallInitialStatus(String(event.toolName), event.toolArgs),
         });
         t.petState = 'working';
       }
@@ -511,10 +584,13 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (event.toolName) {
         for (let i = t.toolTimeline.length - 1; i >= 0; i--) {
           const row = t.toolTimeline[i];
-          if (row.toolName === event.toolName && row.status === 'pending') {
-            row.status = event.toolOutcome === 'policy_block'
-              ? 'warn'
-              : (event.toolSuccess ? 'success' : 'error');
+          if (row.toolName === event.toolName && (row.status === 'pending' || row.status === 'background')) {
+            row.status = toolResultStatusPreview(
+              String(event.toolName),
+              event.toolSuccess,
+              event.toolOutcome,
+              event.toolOutput,
+            );
             break;
           }
         }
@@ -540,6 +616,13 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       t.planEvents.push({ ...event });
       if (t.planEvents.length > 200) {
         t.planEvents.splice(0, t.planEvents.length - 200);
+      }
+      break;
+    case 'final':
+      if (event.stopReason === 'user_checkpoint') {
+        t.petState = 'crying';
+        t.petBubble = '监管已暂停，需要你介入啦';
+        t.petStatusText = '监管已暂停，需要你介入啦';
       }
       break;
     default:
@@ -622,7 +705,16 @@ export function broadcastTunnelReady(payload: { url: string }): void {
  * 这样即使用户在长任务中途切换 session，旧任务的 cleanup 仍写入正确的旧 session 文件。
  */
 async function appendMessages(
-  msgs: { role: string; content?: string; id?: string; parentId?: string; toolName?: string; detail?: string; status?: string }[],
+  msgs: {
+    role: string;
+    content?: string;
+    id?: string;
+    parentId?: string;
+    toolName?: string;
+    detail?: string;
+    status?: string;
+    images?: string[];
+  }[],
   sessionId: string = activeSessionId,
 ): Promise<boolean> {
   if (msgs.length === 0) return true;
@@ -717,7 +809,7 @@ async function finalizeDirectBrowserTurn(
 export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
   const { orchestrator, toolRegistry, toolExecutor } = options;
 
-  void ensureActiveSessionBootstrapped();
+  void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(activeSessionId).catch(() => {}));
 
   const wss = new WebSocketServer({ noServer: true });
 
@@ -729,6 +821,13 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
       // 同时支持旧路径（兼容）和新路径
       if (url.pathname !== '/api/chat/ws' && url.pathname !== '/api/remote/ws') {
+        return;
+      }
+
+      if (options.isSetupRequired?.()) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n\r\n');
+        socket.write(JSON.stringify({ error: '请先完成模型配置', setupRequired: true }));
+        socket.destroy();
         return;
       }
 
@@ -873,6 +972,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           setCachedMessages(activeSessionId, loaded ?? []);
           // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
           subscribeWsToSession(ws, activeSessionId);
+          await rebindBgTaskPusher(activeSessionId);
           const newRunningTurn = snapshotRunningTurn(activeSessionId);
           const workspace = await resolveSessionWorkspacePayload(activeSessionId);
           sendJSON(ws, {
@@ -949,6 +1049,7 @@ async function handleChatMessage(
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
   // 仍写入正确的旧 session 文件，不会污染新 session。
   const runSessionId = activeSessionId;
+  await rebindBgTaskPusher(runSessionId);
   const llmAdapter = orchestrator.getLLMAdapter();
   let toolDefs = toolRegistry.getDefinitions();
   const assembled = await loadAssembledPrompt();
@@ -957,44 +1058,47 @@ async function handleChatMessage(
   // 解析消息中的文件引用 [file:xxx]，替换为实际文件路径
   const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
 
-  // 构建用户消息（可能包含图片的多模态消息）
-  let userMessageContent: string | import('../llm/types.js').ContentBlock[];
+  const supportsVision = await resolveDefaultSupportsVision(MAIN_CONFIG_PATH);
 
-  // 合并所有图片来源：文件上传的图片 + 前端直接发送的 base64 图片
-  const allImageDataUrls: string[] = [...inlineImages]; // 前端粘贴/拖拽的 base64 图片
+  const persistedInline = await persistInlineImages(inlineImages, runSessionId);
+  const persistedUploads = await persistUploadedImageFiles(imageUrls, runSessionId);
+  const allPersistedImages = [...persistedInline, ...persistedUploads];
+  const imageAbsolutePaths = allPersistedImages.map((p) => p.absolutePath);
 
-  // 处理文件上传中的图片（读取文件转 base64）
-  for (const imgPath of imageUrls) {
-    try {
-      const imgData = await fsPromises.readFile(imgPath);
-      const ext = path.extname(imgPath).toLowerCase().replace('.', '');
-      const mimeType = ext === 'jpg' ? 'jpeg' : ext;
-      const dataUrl = `data:image/${mimeType};base64,${imgData.toString('base64')}`;
-      allImageDataUrls.push(dataUrl);
-    } catch (err) {
-      console.error('[chat-ws] 读取图片失败:', err);
+  if (imageAbsolutePaths.length > 0) {
+    await addSessionReferenceReads({
+      sessionDir: SESSIONS_DIR,
+      sessionId: runSessionId,
+      paths: imageAbsolutePaths,
+    });
+  }
+
+  const uiImageUrls = allPersistedImages.map((p) => buildSessionImageApiUrl(runSessionId, p.absolutePath));
+
+  const visionDataUrls: string[] = [...inlineImages];
+  if (supportsVision) {
+    for (const img of persistedUploads) {
+      try {
+        const imgData = await fsPromises.readFile(img.absolutePath);
+        const ext = path.extname(img.absolutePath).toLowerCase().replace('.', '');
+        const mimeType = ext === 'jpg' ? 'jpeg' : ext;
+        visionDataUrls.push(`data:image/${mimeType};base64,${imgData.toString('base64')}`);
+      } catch (err) {
+        console.error('[chat-ws] 读取图片失败:', err);
+      }
     }
   }
 
-  if (allImageDataUrls.length > 0) {
-    // 多模态消息：文本 + 图片
-    const blocks: import('../llm/types.js').ContentBlock[] = [];
-    const textPart = filePaths.length > 0
-      ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
-      : resolvedMessage || '请分析这些图片';
-    blocks.push({ type: 'text', text: textPart });
+  const { content: userMessageContent, harnessUserMessage: builtHarnessUserMessage } =
+    buildUserMessageWithImages({
+      userText: resolvedMessage,
+      filePaths,
+      imageAbsolutePaths,
+      imageDataUrls: supportsVision ? visionDataUrls : [],
+      supportsVision,
+    });
 
-    for (const dataUrl of allImageDataUrls) {
-      blocks.push({ type: 'image', imageUrl: dataUrl });
-    }
-    userMessageContent = blocks;
-  } else {
-    userMessageContent = filePaths.length > 0
-      ? `${resolvedMessage}\n\n请使用 parse_document 或 read_file 工具读取上述文件路径来分析文件内容。`
-      : resolvedMessage;
-  }
-  let harnessUserMessage =
-    typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
+  let harnessUserMessage = builtHarnessUserMessage;
 
   const fbs = getFileBrowserState(runSessionId);
   const opensBrowser = detectFileBrowserOpen(message);
@@ -1011,7 +1115,12 @@ async function handleChatMessage(
   // 写入用户消息到会话文件
   const userMsgId = randomUUID();
   const userPersisted = await appendMessages(
-    [{ role: 'user', content: message, id: userMsgId }],
+    [{
+      role: 'user',
+      content: message,
+      id: userMsgId,
+      ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
+    }],
     runSessionId,
   );
   if (userPersisted) {
@@ -1033,7 +1142,7 @@ async function handleChatMessage(
     opensBrowser,
     lastBrowsedPath: fbs.lastBrowsedPath,
     platform: process.platform,
-    hasImages: inlineImages.length > 0 || Array.isArray(userMessageContent),
+    hasImages: inlineImages.length > 0 || imageUrls.length > 0 || imageAbsolutePaths.length > 0,
     active: fbs.active,
   });
 
@@ -1082,6 +1191,8 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
+  const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
+  const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
   const workspaceMessage = typeof harnessUserMessage === 'string'
     ? harnessUserMessage
@@ -1120,6 +1231,7 @@ async function handleChatMessage(
       maxRounds: getHarnessMaxRoundsFromEnv(),
       timeout: getHarnessTimeoutMsFromEnv(),
       tokenBudget: getHarnessTokenBudget(),
+      maxOutputTokens: modelMeta?.maxOutputTokens,
       signal: abortController.signal,
     },
     permissions: [
@@ -1134,6 +1246,7 @@ async function handleChatMessage(
     sessionDir: SESSIONS_DIR,
     sessionId: runSessionId,
     workspaceRoot: effectiveWorkspace,
+    verificationExemptDirs,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
     supervisorBridge: supervisorRuntime.bridge,
@@ -1198,21 +1311,28 @@ async function handleChatMessage(
 
         // 收集工具调用记录
         if (event.type === 'tool_call' && event.toolName) {
+          const detail = toolArgsDetailPreview(event.toolName, event.toolArgs);
+          const callStatus = resolveToolCallInitialStatus(event.toolName, event.toolArgs);
+          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: callStatus });
           const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
-          const detail = event.toolArgs?.path || event.toolArgs?.file || event.toolArgs?.command || event.toolArgs?.query
-            || (argsPreview.length > 80 ? argsPreview.substring(0, 80) + '…' : argsPreview);
-          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: 'pending' });
           const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
           console.log(`[step] [call] ${event.toolName}(${truncated})`);
         } else if (event.type === 'tool_result' && event.toolName) {
+          const resultStatus = toolResultStatusPreview(
+            event.toolName,
+            event.toolSuccess,
+            event.toolOutcome,
+            event.toolOutput,
+          );
           // 更新批次中最后一个匹配的工具状态
           for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
-            if (toolTraceBatch[i].toolName === event.toolName && toolTraceBatch[i].status === 'pending') {
-              toolTraceBatch[i].status = event.toolSuccess ? 'success' : 'error';
+            if (toolTraceBatch[i].toolName === event.toolName
+              && (toolTraceBatch[i].status === 'pending' || toolTraceBatch[i].status === 'background')) {
+              toolTraceBatch[i].status = resultStatus;
               break;
             }
           }
-          const icon = event.toolSuccess ? '[ok]' : '[err]';
+          const icon = resultStatus === 'error' ? '[err]' : resultStatus === 'background' ? '[bg]' : '[ok]';
           const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
           console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
         }
@@ -1283,8 +1403,10 @@ async function handleChatMessage(
     }
     broadcastToSession(runSessionId, {
       type: 'tokenUsage',
-      inputTokens: result.loopState.lastInputTokens,
-      outputTokens: result.loopState.lastOutputTokens,
+      ...buildTotalTokenUsageWithContext(result.messages, harnessConfig.context.tools ?? [], {
+        lastInputTokens: result.loopState.lastInputTokens,
+        lastOutputTokens: result.loopState.lastOutputTokens,
+      }),
       totalInputTokens: result.loopState.totalInputTokens,
       totalOutputTokens: result.loopState.totalOutputTokens,
     });
@@ -1307,6 +1429,10 @@ function sendJSON(ws: WebSocket, data: unknown): void {
  * 清理聊天系统资源（优雅关闭时调用）。
  */
 export function cleanupChatResources(): void {
+  if (bgTaskPusher) {
+    bgTaskPusher.detach();
+    bgTaskPusher = null;
+  }
   if (activeAbortController) {
     activeAbortController.abort();
     activeAbortController = null;

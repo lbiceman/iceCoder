@@ -1,5 +1,6 @@
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import { INTENT_TOOL_SUGGESTIONS } from './tool-plan-intent-map.js';
+import { snapshotHasUnconfirmedFileDeliverables } from './document-deliverable.js';
 import { inferIntent } from './task-state.js';
 
 export interface ToolPlan {
@@ -13,8 +14,8 @@ export interface ToolPlan {
 export function buildToolPlan(goal: string, snapshot?: TaskStateSnapshot): ToolPlan {
   const intent = snapshot?.intent ?? inferIntent(goal);
   const flow = recommendedFlow(intent);
-  const verificationHint = snapshot?.verificationRequired && snapshot.verificationStatus !== 'passed'
-    ? 'Because files changed, finish with a focused verification command before final response.'
+  const verificationHint = snapshot && snapshotHasUnconfirmedFileDeliverables(snapshot)
+    ? 'Confirm each changed file with file_info or read_file before final response.'
     : undefined;
   const suggestedTools = [...(INTENT_TOOL_SUGGESTIONS[intent] ?? INTENT_TOOL_SUGGESTIONS.question)];
   return { intent, recommendedFlow: flow, verificationHint, suggestedTools };
@@ -35,17 +36,17 @@ export function formatToolPlan(plan: ToolPlan): string {
 function recommendedFlow(intent: TaskIntent): string[] {
   switch (intent) {
     case 'debug':
-      return ['read the error/output', 'search and read related files', 'edit the smallest relevant code path', 'run a focused test or typecheck'];
+      return ['read the error/output', 'search and read related files', 'edit the smallest relevant code path', 'run a focused test or typecheck when useful'];
     case 'edit':
-      return ['inspect related files', 'make the edit with file tools', 'run an appropriate verification command'];
+      return ['inspect related files', 'make the edit with file tools', 'run tests or checks when practical (optional before finishing)'];
     case 'test':
       return ['run the failing test or check', 'inspect the failure and related files', 'edit the implementation or test', 'rerun the focused test'];
     case 'refactor':
-      return ['inspect references/usages', 'apply batch or patch edits', 'run tests/typecheck'];
+      return ['inspect references/usages', 'apply batch or patch edits', 'run tests/typecheck when practical'];
     case 'inspect':
       return ['search or read relevant files only', 'answer from evidence'];
     case 'docs':
-      return ['inspect existing docs/source', 'edit documentation', 'run docs/typecheck if available'];
+      return ['inspect existing docs/source', 'edit documentation', 'confirm deliverables with file_info or read_file when applicable'];
     default:
       return ['inspect if needed', 'answer directly if no code action is needed'];
   }

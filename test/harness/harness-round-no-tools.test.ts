@@ -16,7 +16,11 @@ function makeState(
   const loopController = new LoopController({ maxRounds: 10 });
   return {
     messages,
-    tools: [{ name: 'run_command', description: 'run', parameters: { type: 'object', properties: {} } }],
+    tools: [
+      { name: 'run_command', description: 'run', parameters: { type: 'object', properties: {} } },
+      { name: 'file_info', description: 'info', parameters: { type: 'object', properties: {} } },
+      { name: 'read_file', description: 'read', parameters: { type: 'object', properties: {} } },
+    ],
     turnCount: 1,
     maxOutputTokensRecoveryCount: 0,
     llmRetryCount: 0,
@@ -28,6 +32,7 @@ function makeState(
     noToolExecutionRecoveryCount: 0,
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
+    verificationGateContinuationCount: 0,
     transition: 'initial',
     justCompacted: false,
     amnesiaRecoveryCount: 0,
@@ -139,7 +144,7 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
     expect(state.noToolExecutionRecoveryCount).toBe(0);
   });
 
-  it('docs 意图即使回复含未完成关键词也跳过 hook 直接 model_done', async () => {
+  it('docs 意图无写文件且模型自承未完成 → stop hook 拦截', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '帮我写 readme 文档' },
     ];
@@ -161,11 +166,8 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
       },
     );
 
-    expect(result.action).toBe('return');
-    if (result.action === 'return') {
-      expect(result.result.loopState.stopReason).toBe('model_done');
-    }
-    expect(state.stopHookContinuationCount).toBe(0);
+    expect(result.action).toBe('continue');
+    expect(state.stopHookContinuationCount).toBe(1);
   });
 
   it('工程任务已动过工具且 verification 通过 → 跳过 hook 直接 model_done', async () => {
@@ -218,5 +220,307 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
 
     expect(result.action).toBe('continue');
     expect(state.stopHookContinuationCount).toBe(1);
+  });
+});
+
+describe('handleNoToolCalls — 文档交付物验收', () => {
+  it('仅 md 变更且 file_info 已确认 → model_done', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '整理 ant design 组件到桌面 md' },
+    ];
+    const state = makeState(messages, '整理 ant design 组件到桌面 md');
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\Desktop\\doc.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.taskState.recordToolResult(
+      { id: 'f1', name: 'file_info', arguments: { path: 'C:\\Desktop\\doc.md' } },
+      { success: true, output: JSON.stringify({ size: 1000, type: 'file' }) },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '文档已生成完成。', finishReason: 'stop' },
+        userMessage: '整理 ant design 组件到桌面 md',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+    expect(state.verificationGateContinuationCount).toBe(0);
+  });
+
+  it('仅 md 变更未确认 → verification gate 拦截一次', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '写一份 md 报告' },
+    ];
+    const state = makeState(messages, '写一份 md 报告');
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/report.md' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '报告写好了。', finishReason: 'stop' },
+        userMessage: '写一份 md 报告',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(1);
+    expect(messages.at(-1)?.content).toMatch(/file_info|read_file/i);
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (1/10)');
+    logSpy.mockRestore();
+  });
+
+  it('verification gate 半程叠加一次 no_tool 强提示', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '写一份 md 报告' },
+    ];
+    const state = makeState(messages, '写一份 md 报告');
+    state.verificationGateContinuationCount = 4;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/report.md' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '报告写好了。', finishReason: 'stop' },
+        userMessage: '写一份 md 报告',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(5);
+    expect(messages.at(-1)?.content).toMatch(/native function-calling \(tool_calls\)/i);
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (5/10)');
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 半程叠加 no_tool 强提示');
+    logSpy.mockRestore();
+  });
+
+  it('无 file_info 工具时 verification pending → verification_exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '写一份 md 报告' },
+    ];
+    const state = makeState(messages, '写一份 md 报告');
+    state.tools = [{ name: 'run_command', description: 'run', parameters: { type: 'object', properties: {} } }];
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/report.md' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '报告写好了。', finishReason: 'stop' },
+        userMessage: '写一份 md 报告',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+    }
+  });
+
+  it('verification gate 熔断后仍 pending → verification_exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '写 md' },
+    ];
+    const state = makeState(messages, '写 md');
+    state.verificationGateContinuationCount = 10;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/x.md' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: '写 md',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+    }
+  });
+
+  it('工程变更未读确认 → verification gate 拦截', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } }],
+      },
+    ];
+    const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(1);
+    expect(messages.at(-1)?.content).toMatch(/file_info|read_file/i);
+  });
+
+  it('工程变更读确认后 → model_done', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } }],
+      },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } }],
+      },
+    ];
+    const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    state.taskState.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'export const x = 1;' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+  });
+
+  it('工程变更 verification gate 熔断计数仍 pending → verification_exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } }],
+      },
+    ];
+    const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
+    state.verificationGateContinuationCount = 10;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '完成', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+    }
+  });
+
+  it('npm test 失败但未读确认 → verification gate 继续', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '跑测试' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 't1', name: 'run_command', arguments: { command: 'npm test' } }],
+      },
+    ];
+    const state = makeState(messages, '跑测试');
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/Main.java' } },
+      { success: true, output: 'ok' },
+    );
+    state.taskState.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: '', error: 'exit 1' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '测试失败了，我先总结。', finishReason: 'stop' },
+        userMessage: '跑测试',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('continue');
+    expect(state.verificationGateContinuationCount).toBe(1);
   });
 });

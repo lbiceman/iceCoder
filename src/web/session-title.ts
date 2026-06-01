@@ -4,8 +4,9 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import '../cli/paths.js';
 
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const INDEX_FILE = path.join(SESSIONS_DIR, 'index.json');
 
 export const SESSION_TITLE_MAX_LEN = 20;

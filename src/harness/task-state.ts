@@ -1,5 +1,18 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
+import {
+  classifyChangedFiles,
+  extractDeletedPathsFromCommand,
+  hasUnconfirmedFileDeliverables,
+  isFileDeliverableConfirmationTool,
+  isNonEmptyFileInfoOutput,
+  isNonEmptyReadOutput,
+  normalizeDeliverablePath,
+  pathsReferToSameFile,
+  verificationConfirmationStats,
+  writeConfirmationPaths,
+  type DeliverableKind,
+} from './document-deliverable.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
 import type {
   TaskIntent,
@@ -27,6 +40,10 @@ export class TaskState {
   private commandsRun: string[] = [];
   private verificationRequired = false;
   private verificationStatus: VerificationStatus = 'not_required';
+  /** 文件交付物写操作版本（归一化路径 → 版本号，写后递增） */
+  private fileDeliverableWriteVersion = new Map<string, number>();
+  /** 文件交付物确认时对应的写版本（须与 writeVersion 一致才算验收） */
+  private fileDeliverableConfirmVersion = new Map<string, number>();
 
   constructor(goal: string) {
     this.goal = goal;
@@ -36,11 +53,27 @@ export class TaskState {
   recordToolResult(toolCall: ToolCall, result: ToolResult): void {
     if (toolCall.name === 'run_command') {
       const command = String(toolCall.arguments?.command ?? '');
-      if (command) this.commandsRun.push(command);
-      if (looksLikeVerificationCommand(command)) {
-        this.phase = 'verification';
-        this.verificationRequired = true;
-        this.verificationStatus = result.success ? 'passed' : 'failed';
+      if (command) {
+        this.commandsRun.push(command);
+        if (looksLikeVerificationCommand(command)) {
+          this.phase = 'verification';
+          this.verificationRequired = true;
+          this.verificationStatus = result.success ? 'passed' : 'failed';
+        }
+        if (result.success) {
+          for (const deletedPath of extractDeletedPathsFromCommand(command)) {
+            this.removeChangedFileDeliverable(deletedPath);
+          }
+        }
+      }
+      return;
+    }
+
+    if (toolCall.name === 'fs_operation') {
+      const op = String(toolCall.arguments?.operation ?? '');
+      if (op === 'delete' && result.success) {
+        const path = extractPathLikeArg(toolCall.arguments);
+        if (path) this.removeChangedFileDeliverable(path);
       }
       return;
     }
@@ -50,39 +83,62 @@ export class TaskState {
     if (FILE_READ_TOOLS.has(toolCall.name)) {
       this.phase = this.phase === 'intent' ? 'context' : this.phase;
       const path = extractPathLikeArg(toolCall.arguments);
-      if (path) this.filesRead.add(path);
+      if (path) {
+        this.filesRead.add(path);
+        this.tryConfirmFileDeliverable(toolCall.name, path, result);
+      }
     }
 
     if (FILE_WRITE_TOOLS.has(toolCall.name)) {
       this.phase = 'editing';
       const path = extractPathLikeArg(toolCall.arguments);
-      if (path) this.filesChanged.add(path);
-      this.verificationRequired = true;
-      if (this.verificationStatus !== 'failed') {
-        this.verificationStatus = 'required';
+      if (path) {
+        this.filesChanged.add(path);
+        this.bumpFileDeliverableWriteVersion(path);
+        this.verificationRequired = true;
+        if (this.verificationStatus !== 'failed') {
+          this.verificationStatus = 'required';
+        }
       }
     }
   }
 
+  deliverableKind(): DeliverableKind {
+    return classifyChangedFiles([...this.filesChanged]);
+  }
+
   buildVerificationPrompt(): string {
-    const files = [...this.filesChanged];
-    const fileList = files.length > 0 ? files.map(f => `- ${f}`).join('\n') : '- (changed files unknown)';
+    const all = [...this.filesChanged];
+    const paths = writeConfirmationPaths(all);
+    const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
+    const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
+    const { pending, required, exempt } = verificationConfirmationStats(
+      all,
+      writeVersions,
+      confirmVersions,
+    );
 
-    if (this.verificationStatus === 'failed') {
-      return `[System] Verification failed. The task is not complete.
+    const maxList = 12;
+    const listed = paths.slice(0, maxList);
+    const fileList = listed.length > 0
+      ? listed.map(f => `- ${f}`).join('\n')
+      : '- (changed files unknown)';
+    const more = paths.length > maxList
+      ? `\n- … and ${paths.length - maxList} more (use file_info on each before finishing)`
+      : '';
 
-Changed files:
-${fileList}
+    const exemptNote = exempt > 0
+      ? `\n(${exempt} file(s) exempt: dot-dir (.foo/...), temp suffix, or verificationExemptDirs — no confirmation required)`
+      : '';
 
-Read the failure output, fix the code or assets, then rerun verification (npm test, build, lint, or project-specific checks). Do not end the session until verification passes.`;
-    }
+    return `[System] You changed files but have not confirmed them yet.
 
-    return `[System] You changed files but has not verified the result yet.
+Pending confirmation: ${pending} of ${required} file(s)${exemptNote}
 
-Changed files:
-${fileList}
+Changed files (confirm each with file_info or read_file):
+${fileList}${more}
 
-Run an appropriate verification command now (for example: focused tests, npm test, npx tsc --noEmit, lint, or a project-specific check). If verification is impossible, state the exact blocker and evidence. Do not claim the task is complete before verification.`;
+Do not claim the task is complete before confirmation.`;
   }
 
   /** 续跑时覆盖被「继续」污染的 goal/intent */
@@ -115,19 +171,99 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     }
   }
 
-  shouldBlockFinalForVerification(acceptanceIncomplete?: boolean): boolean {
+  /**
+   * 纯查询：是否应拦截 model_done（无副作用）。
+   * Acceptance Gate 或任一变更文件未写后确认时可 block；run_command 验收不作为 Gate 条件。
+   */
+  isVerificationBlockingFinal(acceptanceIncomplete?: boolean): boolean {
     if (acceptanceIncomplete) return true;
-    if (this.verificationStatus === 'failed') return true;
-    if (this.verificationRequired && this.verificationStatus === 'required') return true;
-    if (this.filesChanged.size > 0 && this.verificationStatus !== 'passed') {
-      this.verificationRequired = true;
-      return true;
+    if (this.filesChanged.size === 0) return false;
+    return !this.areAllFileDeliverablesConfirmed();
+  }
+
+  /** 查询前同步 file_deliverable 验收状态（checkpoint / resilience 用） */
+  isVerificationBlockingFinalAfterSync(acceptanceIncomplete?: boolean): boolean {
+    this.tryMarkFileDeliverablesVerified();
+    return this.isVerificationBlockingFinal(acceptanceIncomplete);
+  }
+
+  /** 文件交付物已全部写后确认时，同步 verificationStatus → passed */
+  tryMarkFileDeliverablesVerified(): boolean {
+    if (this.filesChanged.size === 0) return false;
+    if (!this.areAllFileDeliverablesConfirmed()) return false;
+    this.markVerificationPassed();
+    return true;
+  }
+
+  areAllFileDeliverablesConfirmed(): boolean {
+    return !hasUnconfirmedFileDeliverables(
+      [...this.filesChanged],
+      mapToVersionRecord(this.fileDeliverableWriteVersion),
+      mapToVersionRecord(this.fileDeliverableConfirmVersion),
+    );
+  }
+
+  /** verification gate 熔断：写后版本均已确认时自动 passed */
+  reconcileFileDeliverablesAfterWrite(): boolean {
+    if (this.filesChanged.size === 0) return false;
+    if (!this.areAllFileDeliverablesConfirmed()) return false;
+    this.markVerificationPassed();
+    return true;
+  }
+
+  private removeChangedFileDeliverable(path: string): boolean {
+    const matched = [...this.filesChanged].find(changed => pathsReferToSameFile(changed, path));
+    if (!matched) return false;
+
+    const norm = normalizeDeliverablePath(matched);
+    this.filesChanged.delete(matched);
+    this.fileDeliverableWriteVersion.delete(norm);
+    this.fileDeliverableConfirmVersion.delete(norm);
+
+    if (this.filesChanged.size === 0 || this.areAllFileDeliverablesConfirmed()) {
+      this.markVerificationPassed();
     }
-    return false;
+    return true;
+  }
+
+  private bumpFileDeliverableWriteVersion(path: string): void {
+    const norm = normalizeDeliverablePath(path);
+    const next = (this.fileDeliverableWriteVersion.get(norm) ?? 0) + 1;
+    this.fileDeliverableWriteVersion.set(norm, next);
+    this.fileDeliverableConfirmVersion.delete(norm);
+    if (this.verificationStatus === 'passed') {
+      this.verificationStatus = 'required';
+    }
+  }
+
+  private tryConfirmFileDeliverable(
+    toolName: string,
+    path: string,
+    result: ToolResult,
+  ): void {
+    if (!isFileDeliverableConfirmationTool(toolName)) return;
+
+    const matched = [...this.filesChanged].find(changed => pathsReferToSameFile(changed, path));
+    if (!matched) return;
+
+    const norm = normalizeDeliverablePath(matched);
+    const writeVer = this.fileDeliverableWriteVersion.get(norm) ?? 0;
+    if (writeVer === 0) return;
+
+    const confirmed =
+      toolName === 'file_info'
+        ? isNonEmptyFileInfoOutput(result.output)
+        : isNonEmptyReadOutput(result.output);
+    if (!confirmed) return;
+
+    this.fileDeliverableConfirmVersion.set(norm, writeVer);
+    if (this.areAllFileDeliverablesConfirmed()) {
+      this.markVerificationPassed();
+    }
   }
 
   snapshot(): TaskStateSnapshot {
-    return {
+    const snap: TaskStateSnapshot = {
       goal: this.goal,
       intent: this.intent,
       phase: this.phase,
@@ -137,6 +273,11 @@ Run an appropriate verification command now (for example: focused tests, npm tes
       verificationRequired: this.verificationRequired,
       verificationStatus: this.verificationStatus,
     };
+    const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
+    const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
+    if (writeVersions) snap.fileDeliverableWriteVersions = writeVersions;
+    if (confirmVersions) snap.fileDeliverableConfirmVersions = confirmVersions;
+    return snap;
   }
 
   /**
@@ -151,7 +292,28 @@ Run an appropriate verification command now (for example: focused tests, npm tes
     this.commandsRun = [...snapshot.commandsRun];
     this.verificationRequired = snapshot.verificationRequired;
     this.verificationStatus = snapshot.verificationStatus;
+    this.fileDeliverableWriteVersion = recordToVersionMap(snapshot.fileDeliverableWriteVersions);
+    this.fileDeliverableConfirmVersion = recordToVersionMap(snapshot.fileDeliverableConfirmVersions);
+    if (this.fileDeliverableWriteVersion.size === 0) {
+      for (const path of writeConfirmationPaths([...this.filesChanged])) {
+        const norm = normalizeDeliverablePath(path);
+        this.fileDeliverableWriteVersion.set(norm, 1);
+        if (snapshot.verificationStatus === 'passed') {
+          this.fileDeliverableConfirmVersion.set(norm, 1);
+        }
+      }
+    }
   }
+}
+
+function mapToVersionRecord(map: Map<string, number>): Record<string, number> | undefined {
+  if (map.size === 0) return undefined;
+  return Object.fromEntries(map);
+}
+
+function recordToVersionMap(record: Record<string, number> | undefined): Map<string, number> {
+  if (!record) return new Map();
+  return new Map(Object.entries(record));
 }
 
 /** 纯分析/疑问口吻（无明确「请改/请跑测」侧信号） */

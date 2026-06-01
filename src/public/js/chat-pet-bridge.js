@@ -22,6 +22,9 @@ window.ChatPetBridge = (function () {
   var TUNNEL_READY_NOTICE_MS = 5200;
   var supervisorModeResetTimer = null;
   var SUPERVISOR_MODE_NOTICE_MS = 4500;
+  var userCheckpointNoticeActive = false;
+  var USER_CHECKPOINT_BUBBLE = '监管已暂停，需要你介入啦';
+  var USER_CHECKPOINT_TURN = '监管暂停 · 请接管';
 
   function init(pet) {
     sessionPet = pet;
@@ -38,8 +41,18 @@ window.ChatPetBridge = (function () {
   /**
    * 有执行计划时底部显示步骤进度摘要；否则回退为「第 N 轮」。
    */
+  function isUserCheckpointActive() {
+    return userCheckpointNoticeActive;
+  }
+
   function syncExecPlanFoot() {
     if (!sessionPet) return;
+    if (userCheckpointNoticeActive) {
+      sessionPet.setState('crying');
+      sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
+      sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
+      return;
+    }
     var parts = [];
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.getExecutionModeChip === 'function') {
       var modeChip = ChatExecutionPlan.getExecutionModeChip();
@@ -54,6 +67,7 @@ window.ChatPetBridge = (function () {
   }
 
   function showThinking(withFile) {
+    userCheckpointNoticeActive = false;
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
       ChatExecutionPlan.resetExecutionMode();
     }
@@ -90,10 +104,23 @@ window.ChatPetBridge = (function () {
       memoryNoticeResetTimer = null;
     }
     if (!sessionPet) return;
+    if (userCheckpointNoticeActive) {
+      applyUserCheckpointNotice();
+      return;
+    }
     sessionPet.setState('idle');
     sessionPet.setBubbleText('');
     sessionPet.setTurnLabel('');
     syncExecPlanFoot();
+  }
+
+  function applyUserCheckpointNotice() {
+    userCheckpointNoticeActive = true;
+    if (!sessionPet) return;
+    sessionPet.setVisible(true);
+    sessionPet.setState('crying');
+    sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
+    sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
   }
 
   function updateStatusText(text, isStreaming, wsProcessing) {
@@ -108,6 +135,7 @@ window.ChatPetBridge = (function () {
 
   function applyHarnessStepToPet(step, isStreaming, wsProcessing) {
     if (!sessionPet || !step) return;
+    if (userCheckpointNoticeActive && step.type !== 'final') return;
 
     function recoverThinkingOrIdle() {
       sessionPet.setState(isStreaming || wsProcessing ? 'thinking' : 'idle');
@@ -208,12 +236,14 @@ window.ChatPetBridge = (function () {
           } else if (sr === 'user_abort') {
             recoverThinkingOrIdle();
             sessionPet.setBubbleText('');
-          } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds') {
+          } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds' || sr === 'verification_exhausted') {
             sessionPet.setState('weary');
             if (step.content) bubble(step.content);
           } else if (sr === 'task_recovery') {
             sessionPet.setState('dizzy');
             if (step.content) bubble(step.content);
+          } else if (sr === 'user_checkpoint') {
+            applyUserCheckpointNotice();
           } else if (sr === 'stop_hook') {
             sessionPet.setState('alert');
             if (step.content) bubble(step.content);
@@ -302,6 +332,7 @@ window.ChatPetBridge = (function () {
    * MCP 后台加载完成（WebSocket mcp_ready）：表情 + 气泡，数秒后复原
    */
   function applyMcpReadyToPet(payload, ctx) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet) return;
     ctx = ctx || {};
     if (mcpReadyResetTimer) {
@@ -338,6 +369,7 @@ window.ChatPetBridge = (function () {
    * Cloudflare Quick Tunnel 就绪（WebSocket tunnel_ready）
    */
   function applyTunnelReadyToPet(payload, ctx) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet || !payload || !payload.url) return;
     ctx = ctx || {};
     if (tunnelReadyResetTimer) {
@@ -369,6 +401,7 @@ window.ChatPetBridge = (function () {
    * 回合结束 passive 记忆提取（WebSocket memory_notice）：表情 + 气泡，数秒后复原
    */
   function applyMemoryNoticesToPet(notices, ctx) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet || !notices || !notices.length) return;
     ctx = ctx || {};
     var isStreaming = !!ctx.isStreaming;
@@ -405,6 +438,7 @@ window.ChatPetBridge = (function () {
   }
 
   function notifySupervisorMode(mode, label) {
+    if (userCheckpointNoticeActive) return;
     if (!sessionPet) return;
     syncSupervisorModeEye(mode);
     sessionPet.setVisible(true);
@@ -435,5 +469,6 @@ window.ChatPetBridge = (function () {
     getSessionPet: getSessionPet,
     isSessionActive: isSessionActive,
     syncExecPlanFoot: syncExecPlanFoot,
+    isUserCheckpointActive: isUserCheckpointActive,
   };
 })();

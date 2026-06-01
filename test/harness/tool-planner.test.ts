@@ -23,4 +23,60 @@ describe('buildToolPlan', () => {
     expect(text).toContain('Suggested tools');
     expect(text).toContain('[Runtime Tool Planner]');
   });
+
+  it('adds file deliverable hint only when confirmation pending', () => {
+    const pending = buildToolPlan('write doc', {
+      goal: 'write doc',
+      intent: 'docs',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['/tmp/out.md'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+      fileDeliverableWriteVersions: { '/tmp/out.md': 1 },
+    });
+    expect(pending.verificationHint).toMatch(/file_info|read_file/i);
+
+    const confirmed = buildToolPlan('write doc', {
+      goal: 'write doc',
+      intent: 'docs',
+      phase: 'verification',
+      filesRead: [],
+      filesChanged: ['/tmp/out.md'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'passed',
+      fileDeliverableWriteVersions: { '/tmp/out.md': 1 },
+      fileDeliverableConfirmVersions: { '/tmp/out.md': 1 },
+    });
+    expect(confirmed.verificationHint).toBeUndefined();
+
+    const engineering = buildToolPlan('fix bug', {
+      goal: 'fix bug',
+      intent: 'edit',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['src/a.ts'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+    });
+    expect(engineering.verificationHint).toMatch(/file_info|read_file/i);
+  });
+
+  it('recommended flow treats verification as optional for edit intent', () => {
+    const plan = buildToolPlan('fix bug', {
+      goal: 'fix bug',
+      intent: 'edit',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['src/a.ts'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+    });
+    expect(plan.recommendedFlow.join(' ')).toMatch(/optional before finishing/i);
+    expect(plan.recommendedFlow.join(' ')).not.toMatch(/appropriate verification command/i);
+  });
 });

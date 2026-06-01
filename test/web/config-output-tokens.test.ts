@@ -7,7 +7,7 @@ import {
 describe('getModelMaxOutputTokens', () => {
   it('未知模型使用 Agent 默认输出上限', () => {
     expect(getModelMaxOutputTokens('MiniMax-M2.7')).toBe(DEFAULT_AGENT_MAX_OUTPUT_TOKENS);
-    expect(getModelMaxOutputTokens('some-new-model')).toBe(8192);
+    expect(getModelMaxOutputTokens('some-new-model')).toBe(DEFAULT_AGENT_MAX_OUTPUT_TOKENS);
   });
 
   it('已知老模型仍保留保守上限', () => {

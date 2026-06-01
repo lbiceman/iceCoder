@@ -5,6 +5,7 @@ import {
   detectWorkspaceFromUserMessage,
   emptySessionWorkspaceState,
   mergeWorkspaceDetection,
+  normalizeDetectedPath,
   type SessionWorkspaceState,
   type WorkspaceDetectionResult,
 } from './workspace-lock.js';
@@ -94,4 +95,35 @@ export async function applyUserMessageWorkspaceLock(params: {
     await saveSessionWorkspace(params.sessionDir, params.sessionId, next);
   }
   return { state: next, detection };
+}
+
+/** 将 imagesCache 等会话外挂载路径登记为 referenceReads（供 image_read 等工作区外只读）。 */
+export async function addSessionReferenceReads(params: {
+  sessionDir: string;
+  sessionId: string;
+  paths: string[];
+}): Promise<SessionWorkspaceState> {
+  const current = await loadSessionWorkspace(params.sessionDir, params.sessionId);
+  const refs = new Set(current.referenceReads.map((r) => normalizeDetectedPath(r)));
+  let changed = false;
+
+  for (const raw of params.paths) {
+    if (!raw?.trim()) continue;
+    const normalized = normalizeDetectedPath(raw);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (![...refs].some((r) => r.toLowerCase() === key)) {
+      refs.add(normalized);
+      changed = true;
+    }
+  }
+
+  if (!changed) return current;
+
+  const next: SessionWorkspaceState = {
+    ...current,
+    referenceReads: [...refs],
+  };
+  await saveSessionWorkspace(params.sessionDir, params.sessionId, next);
+  return next;
 }

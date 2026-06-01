@@ -18,6 +18,13 @@ describe('compaction-strategy', () => {
     expect(truncated).toBe(true);
     expect(text.length).toBeLessThan(long.length);
     expect(text).toContain('session notes truncated for compaction');
+    expect(text).toContain('data/sessions/{sessionId}.session-notes.md');
+  });
+
+  it('truncateSessionNotesForCompact 带 sessionId 时使用具体路径', () => {
+    const long = 'x'.repeat(MAX_SESSION_NOTES_COMPACT_CHARS + 100);
+    const { text } = truncateSessionNotesForCompact(long, undefined, 'sess-abc');
+    expect(text).toContain('data/sessions/sess-abc.session-notes.md');
   });
 
   it('buildCompactBoundaryContent 包含 token / 消息计数（A）', () => {

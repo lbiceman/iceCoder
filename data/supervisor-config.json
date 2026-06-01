@@ -44,7 +44,12 @@
     "llmGrayZoneHigh": 0.45
   },
   "snapshotConfidence": {
-    "templateGraphMin": 0.65
+    "templateGraphMin": 0.65,
+    "weightGitClean": 0.25,
+    "weightSnapshotAge": 0.15,
+    "weightVerifyPassed": 0.2,
+    "weightRepoContextMatch": 0.25,
+    "weightBuildSignal": 0.15
   },
   "correctionBudget": {
     "freeSegmentMaxPerTask": 1

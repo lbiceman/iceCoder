@@ -24,6 +24,7 @@ import {
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
+import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
@@ -70,6 +71,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
     const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+    const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
     const harnessConfig: HarnessConfig = {
       context: {
@@ -92,6 +94,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       sessionDir: ctx.paths.sessionsDir,
       sessionId: 'default',
       workspaceRoot: wsCtx.effectiveWorkspaceRoot,
+      verificationExemptDirs,
       supervisorConfig,
       globalPolicy,
       supervisorBridge,

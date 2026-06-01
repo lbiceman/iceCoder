@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { getRuntimeDataDir } from '../../cli/paths.js';
 
 import type {
   EventTimeline as EventTimelineContract,
@@ -117,7 +118,7 @@ export function resolveTimelinePath(persistPath: string, dataDir?: string): stri
     return persistPath;
   }
 
-  const base = dataDir ?? process.env.ICE_DATA_DIR ?? path.join(process.cwd(), 'data');
+  const base = dataDir ?? process.env.ICE_DATA_DIR ?? getRuntimeDataDir();
 
   // Default `data/runtime/...` → `{ICE_DATA_DIR}/runtime/...`, aligned with supervisor-config.json root.
   if (persistPath.startsWith('data/') || persistPath.startsWith('data\\')) {

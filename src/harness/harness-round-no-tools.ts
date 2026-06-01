@@ -1,4 +1,5 @@
 import type { LLMResponse } from '../llm/types.js';
+import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CheckpointDeps } from './harness-checkpoint.js';
 import { recordTelemetrySummary, saveTaskCheckpoint } from './harness-checkpoint.js';
@@ -9,7 +10,11 @@ import {
   MAX_PREMATURE_COMPLETION_RECOVERY,
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
+  MAX_VERIFICATION_GATE_CONTINUATIONS,
 } from './harness-constants.js';
+import {
+  canVerifyDeliverableKind,
+} from './document-deliverable.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import {
   getLatestRealUserText,
@@ -37,11 +42,28 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../llm/types.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import type { TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import {
   containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
   sanitizeAssistantContentForUser,
 } from './text-tool-call-salvage.js';
+
+function verificationGateHalfPoint(): number {
+  return Math.ceil(MAX_VERIFICATION_GATE_CONTINUATIONS / 2);
+}
+
+function buildNoToolExecutionRecoveryPrompt(
+  msgs: UnifiedMessage[],
+  userMessage: string,
+  taskSnap: TaskStateSnapshot,
+): string {
+  return [
+    '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
+    '',
+    formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
+  ].join('\n');
+}
 
 function pushAssistantForHistory(
   msgs: UnifiedMessage[],
@@ -184,10 +206,10 @@ export async function handleNoToolCalls(
       content: sanitizeAssistantContentForUser(response.content),
       stopReason: 'max_output_tokens',
       tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-      totalTokenUsage: {
-        inputTokens: finalState.lastInputTokens,
-        outputTokens: finalState.lastOutputTokens,
-      },
+      totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+        lastInputTokens: finalState.lastInputTokens,
+        lastOutputTokens: finalState.lastOutputTokens,
+      }),
     });
 
     return {
@@ -276,19 +298,18 @@ export async function handleNoToolCalls(
   const taskSnap = state.taskState.snapshot();
   const repoSnap = state.repoContext.snapshot();
   const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
-  const pendingWork = hasPendingWork(taskSnap, repoSnap, state.taskAcceptance);
+  const pendingWork = hasPendingWork(taskSnap, state.taskAcceptance);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
   const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
 
   // 状态门控：以下任一成立 → 跳过 stop hook
   // 1) 问答 / 查看类意图（casual harness）
-  // 2) 文档类意图（写 README / 总结类）
+  // 2) 已有写文件变更（Gate / prematureCompletion 接管写后读确认）
   // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
-  // prematureCompletionRecovery 会接管真正有 pendingWork 的早停场景。
   const skipStopHook =
     shouldApplyCasualHarness(taskSnap.intent)
-    || taskSnap.intent === 'docs'
+    || taskSnap.filesChanged.length > 0
     || (!pendingWork && hasToolCallSinceUser);
 
   if (deps.stopHookManager.count > 0 && !skipStopHook) {
@@ -328,6 +349,97 @@ export async function handleNoToolCalls(
     }
   }
 
+  // verification gate：写后读确认 / Acceptance Gate pending 时优先于 no_tool recovery
+  const toolNames = currentTools.map(t => t.name);
+  const canVerifyDeliverable = canVerifyDeliverableKind(
+    taskSnap.filesChanged,
+    toolNames,
+    acceptanceIncomplete,
+  );
+  state.taskState.tryMarkFileDeliverablesVerified();
+  let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
+
+  const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
+    const defaultSuffix = canVerifyDeliverable
+      ? '\n任务因验收无法继续而暂停：已连续多轮未调用 file_info/read_file（或 run_command）完成写后确认。'
+      : '\n任务因验收无法继续而暂停：当前工具集缺少验收所需工具。';
+    const suffix = detail ? `\n${detail}` : defaultSuffix;
+    const content = sanitizeAssistantContentForUser(response.content) + suffix;
+    if (response.content || response.reasoningContent) {
+      pushAssistantForHistory(msgs, response);
+    }
+    deps.loopController.stop('verification_exhausted');
+    const finalState = deps.loopController.getState();
+    logger.loopStop('verification_exhausted', finalState.currentRound, finalState.totalToolCalls);
+    onStep?.({
+      type: 'final',
+      iteration: finalState.currentRound,
+      totalToolCalls: finalState.totalToolCalls,
+      content,
+      stopReason: 'verification_exhausted',
+    });
+    return {
+      action: 'return',
+      result: {
+        content,
+        loopState: finalState,
+        messages: [...msgs],
+        log: logger.getEntries(),
+      },
+    };
+  };
+
+  if (!blockVerification) {
+    state.verificationGateContinuationCount = 0;
+  } else if (!canVerifyDeliverable) {
+    console.log('[harness] 验收仍 pending 但当前轮次无可用验收工具，强制结束');
+    return returnVerificationExhausted(
+      acceptanceIncomplete
+        ? 'Acceptance Gate 需要 run_command，但当前工具集不可用。'
+        : '文件变更需要 file_info 或 read_file 确认，但当前工具集不可用。',
+    );
+  } else if (blockVerification) {
+    if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
+      if (taskSnap.filesChanged.length > 0) {
+        state.taskState.reconcileFileDeliverablesAfterWrite();
+      }
+      state.taskState.tryMarkFileDeliverablesVerified();
+      blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
+      state.verificationGateContinuationCount = 0;
+      if (blockVerification) {
+        console.log('[harness] verification gate 连续注入已达上限，强制结束');
+        return returnVerificationExhausted();
+      }
+      if (taskSnap.filesChanged.length > 0) {
+        console.log('[harness] 写后读 verification gate 熔断：已自动通过验收');
+      }
+    } else {
+      state.verificationGateContinuationCount++;
+      console.log(
+        `[harness] verification gate 注入 (${state.verificationGateContinuationCount}/${MAX_VERIFICATION_GATE_CONTINUATIONS})`,
+      );
+      if (response.content || response.reasoningContent) {
+        pushAssistantForHistory(msgs, response);
+      }
+      const prompt = acceptanceIncomplete && state.taskAcceptance
+        ? state.taskAcceptance.buildAcceptancePrompt()
+        : state.taskState.buildVerificationPrompt();
+      const injectionParts = [
+        prompt,
+        '',
+        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+      ];
+      if (state.verificationGateContinuationCount === verificationGateHalfPoint()) {
+        console.log('[harness] verification gate 半程叠加 no_tool 强提示');
+        injectionParts.push('', buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap));
+      }
+      injectContinuationUserMessage(deps, state, msgs, injectionParts.join('\n'));
+      await resilienceSaveCheckpoint(deps, 'verification_started', state);
+      state.transition = 'stop_hook_continue';
+      return { action: 'continue' };
+    }
+  }
+
   if (
     currentTools.length > 0
     && !hasAssistantToolCallAfterLatestRealUser(msgs)
@@ -346,37 +458,9 @@ export async function handleNoToolCalls(
     }
     msgs.push({
       role: 'user',
-      content: [
-        '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
-        '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-      ].join('\n'),
+      content: buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap),
     });
     state.transition = 'no_tool_execution_recovery';
-    return { action: 'continue' };
-  }
-
-  // verification gate：当任务还有未验证的工程动作时拉回 LLM 调工具。
-  // 状态门控的关键防线在 `syncHydratedTaskState`（{@link isFreshQueryMessage}）：
-  // 新查询会清掉旧 filesChanged / verificationStatus，避免 gate 误把无关问答轮拉回。
-  const canRunVerification = currentTools.some(t => t.name === 'run_command');
-  if (
-    canRunVerification
-    && state.taskState.shouldBlockFinalForVerification(acceptanceIncomplete)
-  ) {
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
-    const prompt = acceptanceIncomplete && state.taskAcceptance
-      ? state.taskAcceptance.buildAcceptancePrompt()
-      : state.taskState.buildVerificationPrompt();
-    injectContinuationUserMessage(deps, state, msgs, [
-      prompt,
-      '',
-      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
-    ].join('\n'));
-    await resilienceSaveCheckpoint(deps, 'verification_started', state);
-    state.transition = 'stop_hook_continue';
     return { action: 'continue' };
   }
 
@@ -403,6 +487,7 @@ export async function handleNoToolCalls(
   }
 
   state.stopHookContinuationCount = 0;
+  state.taskState.tryMarkFileDeliverablesVerified();
 
   if (deps.graphExecutor?.hasGraph()) {
     const ar = deps.graphExecutor.advanceOrComplete();
@@ -426,10 +511,10 @@ export async function handleNoToolCalls(
     content: sanitizeAssistantContentForUser(response.content),
     stopReason: 'model_done',
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
-    totalTokenUsage: {
-      inputTokens: finalState.lastInputTokens,
-      outputTokens: finalState.lastOutputTokens,
-    },
+    totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
+      lastInputTokens: finalState.lastInputTokens,
+      lastOutputTokens: finalState.lastOutputTokens,
+    }),
   });
 
   return {

@@ -493,6 +493,54 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
+  /** 10b. crying — 哭泣（>X 形皱眼 + 大泪滴 + 撇嘴，与 idle 胶囊眼明显区分） */
+  function expressionCrying(ctx, leftX, rightX, y, ec) {
+    var w = EYE_W / 2;
+    // 皱眉 X 形眼（与 idle 竖胶囊完全不同）
+    ctx.beginPath();
+    ctx.moveTo(leftX - w * 0.75, y - 5);
+    ctx.lineTo(leftX + w * 0.75, y + 5);
+    ctx.moveTo(leftX + w * 0.75, y - 5);
+    ctx.lineTo(leftX - w * 0.75, y + 5);
+    ctx.moveTo(rightX - w * 0.75, y - 5);
+    ctx.lineTo(rightX + w * 0.75, y + 5);
+    ctx.moveTo(rightX + w * 0.75, y - 5);
+    ctx.lineTo(rightX - w * 0.75, y + 5);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    // 大泪滴（高对比蓝，黑底上易辨认）
+    var tearY = y + 10;
+    ctx.fillStyle = 'rgba(96, 165, 250, 0.95)';
+    ctx.beginPath();
+    ctx.ellipse(leftX - 1, tearY, 4, 6.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(leftX, tearY + 9, 2.8, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1, tearY + 1, 4, 6.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1, tearY + 10, 2.8, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.arc(leftX - 2, tearY - 2, 1.2, 0, Math.PI * 2);
+    ctx.arc(rightX, tearY - 1, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    // 撇嘴
+    var mouthY = y + 24;
+    ctx.beginPath();
+    ctx.moveTo(leftX - 5, mouthY);
+    ctx.quadraticCurveTo((leftX + rightX) / 2, mouthY + 6, rightX + 5, mouthY);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
   /** 11. angry — 生气（眼睛斜向上） */
   function expressionAngry(ctx, leftX, rightX, y, ec) {
     ctx.beginPath();
@@ -714,6 +762,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     rest: expressionRest,
     surprised: expressionSurprised,
     sad: expressionSad,
+    crying: expressionCrying,
     angry: expressionAngry,
     curious: expressionCurious,
     dizzy: expressionDizzy,
@@ -876,6 +925,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
         case 'surprised':
           return { lx: 0, ly: -4, rx: 0, ry: -4 };
         case 'sad':
+        case 'crying':
           return { lx: 0, ly: 3, rx: 0, ry: 3 };
         case 'anxious':
           return { lx: 1, ly: 1, rx: -1, ry: 1 };
@@ -906,8 +956,17 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       isBlinking = false;
 
       function nextBlink() {
+        if (state === 'crying') {
+          isBlinking = false;
+          blinkTimer = setTimeout(nextBlink, BLINK_MAX);
+          return;
+        }
         var delay = BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN);
         blinkTimer = setTimeout(function () {
+          if (state === 'crying') {
+            nextBlink();
+            return;
+          }
           isBlinking = true;
           blinkCloseTimer = setTimeout(function () {
             isBlinking = false;
@@ -927,7 +986,10 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
     function setState(s) {
       state = s || 'idle';
-      if (canvas) canvas.classList.remove('pet-wobble');
+      if (canvas) {
+        canvas.classList.remove('pet-wobble', 'pet-crying');
+        if (state === 'crying') canvas.classList.add('pet-crying');
+      }
     }
 
     function setBubbleText(text) {

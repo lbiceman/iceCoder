@@ -121,7 +121,7 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     expect(snap.intent === 'question' || snap.intent === 'inspect').toBe(true);
     expect(snap.filesChanged).toEqual([]);
     expect(snap.verificationStatus).toBe('not_required');
-    expect(taskState.shouldBlockFinalForVerification(false)).toBe(false);
+    expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
   });
 
   it('syncHydratedTaskState keeps sticky state when resume continuation', () => {

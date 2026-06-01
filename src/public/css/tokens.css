@@ -1,0 +1,123 @@
+/* ===== Reset & Base ===== */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== Design Tokens ===== */
+:root {
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 9999px;
+  --transition: 180ms ease;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* ── Dark Theme (default): 中性暖灰底 + 蓝绿 accent ── */
+[data-theme="dark"] {
+  --bg-primary: #18181b;
+  --bg-secondary: #1e1e22;
+  --bg-card: #27272a;
+  --bg-input: #232326;
+  --bg-nav: rgba(24, 24, 27, 0.94);
+  --bg-hover: rgba(255, 255, 255, 0.08);
+
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+
+  --border-color: #3f3f46;
+  --border-light: #323238;
+
+  --accent: #5eead4;
+  --accent-hover: #99f6e4;
+  --accent-light: rgba(94, 234, 212, 0.16);
+  --accent-glow: rgba(94, 234, 212, 0.24);
+
+  /* 右下角发送：单独降亮，不与导航/链接强 accent 同色 */
+  --btn-send-bg: #0d9488;
+  --btn-send-hover: #2dd4bf;
+
+  /* 输入聚焦：弱化冷色描边光晕（略偏灰蓝，与对话框一体） */
+  --focus-ring-color: #2dd4bf;
+  --focus-ring-glow: rgba(45, 212, 191, 0.25);
+
+  --success: #34d399;
+  --success-light: rgba(52, 211, 153, 0.14);
+  --warning: #fbbf24;
+  --warning-light: rgba(251, 191, 36, 0.14);
+  --danger: #fb7185;
+  --danger-light: rgba(251, 113, 133, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  --msg-user-bg: #0d9488;
+  --msg-agent-bg: var(--bg-card);
+  --msg-agent-border: var(--border-color);
+
+  --pet-body: #27272a;
+}
+
+/* ── Light Theme ── */
+[data-theme="light"] {
+  --bg-primary: #f8f9fb;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-input: #f1f3f6;
+  --bg-nav: rgba(255, 255, 255, 0.96);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+
+  --text-primary: #1a1a2e;
+  --text-secondary: #5a5a7a;
+  --text-muted: #9a9ab0;
+
+  --border-color: #e4e4ee;
+  --border-light: #f0f0f6;
+
+  --accent: #0d9488;
+  --accent-hover: #0f766e;
+  --accent-light: rgba(13, 148, 136, 0.08);
+  --accent-glow: rgba(13, 148, 136, 0.15);
+
+  /* 发送按钮 & 输入聚焦：与暗色模式对称 */
+  --btn-send-bg: #0d9488;
+  --btn-send-hover: #0f766e;
+  --focus-ring-color: #0d9488;
+  --focus-ring-glow: rgba(13, 148, 136, 0.2);
+
+  --success: #16a34a;
+  --success-light: rgba(22, 163, 74, 0.08);
+  --warning: #d97706;
+  --warning-light: rgba(217, 119, 6, 0.08);
+  --danger: #dc2626;
+  --danger-light: rgba(220, 38, 38, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.08);
+
+  --msg-user-bg: #0d9488;
+  --msg-agent-bg: #ffffff;
+  --msg-agent-border: #e4e4ee;
+
+  --pet-body: #0a0a0c;
+}
+
+/* ===== Global ===== */
+html, body {
+  height: 100%;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  transition: background 0.25s ease, color 0.25s ease;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { cursor: pointer; font-family: inherit; font-size: inherit; }

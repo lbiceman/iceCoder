@@ -45,4 +45,9 @@ export interface IceCoderConfigFile {
    * 字段缺失或为 `false` 时走默认权限规则。
    */
   skipPermissionChecks?: boolean;
+  /**
+   * 写后读验收豁免目录前缀（相对工作区根），如 `.scratch`、`tmp/agent`。
+   * 与工作区根目录 `.icecoder.json` 中同名字段合并。
+   */
+  verificationExemptDirs?: string[];
 }

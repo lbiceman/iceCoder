@@ -65,8 +65,6 @@ export interface SupervisorConfigFile {
   snapshotConfidence: SnapshotConfidenceConfig;
   /** §2.6 I4：free 段 C 类 inject 预算。 */
   correctionBudget: CorrectionBudgetConfig;
-  /** §6 风险因子权重（可选）。 */
-  riskEvaluator?: RiskEvaluatorWeights;
   /** §8.9 事件时间线落盘（可选）。 */
   eventTimeline?: EventTimelineConfig;
   /** §2.8 / §8.11 Execution Free/Forced 阈值。 */
@@ -104,10 +102,6 @@ export interface ModeParams {
   stabilityWindowRounds: number;
   /** 交还后禁止再次接管的冷却轮数（§12.3）。 */
   handoffCooldownRounds: number;
-  /** GraphExecutor.evaluateRound 是否注入 msgs。 */
-  evaluateRoundMode: 'full' | 'metrics_only' | 'none';
-  /** 是否 checkToolCall 并送入 ToolGate。 */
-  checkToolCall: boolean;
 }
 
 /** §15.4 异常触发阈值。 */
@@ -124,8 +118,6 @@ export interface SupervisorTriggers {
 export interface GoalDriftConfig {
   alignmentThreshold: number;
   consecutiveRoundsBelow: number;
-  llmGrayZoneLow: number;
-  llmGrayZoneHigh: number;
   jaccardMinGoalOverlap?: number;
 }
 
@@ -143,17 +135,6 @@ export interface SnapshotConfidenceConfig {
 /** §15.5 correctionBudget。 */
 export interface CorrectionBudgetConfig {
   freeSegmentMaxPerTask: number;
-  shadowDiagnosticMaxPerRound?: number;
-}
-
-/** §15.5 riskEvaluator。 */
-export interface RiskEvaluatorWeights {
-  weightFilesChanged?: number;
-  weightDependencyDepth?: number;
-  weightModuleBlastRadius?: number;
-  weightIrreversibleOps?: number;
-  weightCompileImpact?: number;
-  weightRecentFailures?: number;
 }
 
 /** §15.5 eventTimeline。 */
@@ -191,7 +172,6 @@ export interface EventTimeline {
 
 /** §15.5 executionMode。 */
 export interface ExecutionModeConfig {
-  enabled: boolean;
   pendingStepsEnterThreshold: number;
   writeTargetsEnterThreshold: number;
   diffLinesEnterThreshold: number;

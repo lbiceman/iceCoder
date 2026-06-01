@@ -15,6 +15,7 @@ var EXPRESSIONS = [
   'rest',
   'surprised',
   'sad',
+  'crying',
   'angry',
   'curious',
   'dizzy',

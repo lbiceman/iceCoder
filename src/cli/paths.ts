@@ -1,12 +1,12 @@
 /**
  * 统一路径解析模块。
  *
- * 路径查找优先级：
- * 1. 环境变量（ICE_CONFIG_PATH 等）
- * 2. 当前工作目录下的 data/（开发模式）
- * 3. ~/.iceCoder/（全局安装模式）
+ * 运行时数据根目录规则：
+ * - **开发**（NODE_ENV !== 'production'）：当前项目下的 `data/`
+ * - **生产**（NODE_ENV === 'production'）：用户主目录 `~/.iceCoder/`
  *
- * 首次运行时自动创建 ~/.iceCoder/ 并生成默认配置文件。
+ * 显式设置 `ICE_DATA_DIR` 等环境变量时始终优先。
+ * 模块加载时会调用 `applyRuntimeDataEnvDefaults()`，保证 Web/CLI 子模块读到一致路径。
  */
 
 import { promises as fs } from 'node:fs';
@@ -14,40 +14,85 @@ import path from 'node:path';
 import os from 'node:os';
 import type { IceCoderConfigFile } from '../web/types.js';
 
-/** 用户主目录下的 iceCoder 数据目录 */
-const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
+/** 用户主目录下的 iceCoder 数据目录（生产环境） */
+export const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
 
-/** 当前工作目录下的 data 目录 */
-const LOCAL_DATA_DIR = path.resolve('data');
+/** 当前工作目录下的 data 目录（开发环境） */
+export const LOCAL_DATA_DIR = path.resolve('data');
 
-/**
- * 判断文件是否存在。
- */
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
+/** 生产环境：NODE_ENV=production */
+export function isProductionRuntime(): boolean {
+  return process.env.NODE_ENV === 'production';
+}
+
+function defaultDataDirForRuntime(): string {
+  return isProductionRuntime() ? USER_DATA_DIR : LOCAL_DATA_DIR;
 }
 
 /**
- * 解析数据目录：优先本地 data/，回退 ~/.iceCoder/。
+ * 在未显式指定时，同步写入 ICE_* 环境变量。
+ * 须在依赖 `data/` 硬编码路径的模块 import 之前加载本文件。
  */
-async function resolveDataDir(): Promise<string> {
-  // 环境变量优先
-  if (process.env.ICE_DATA_DIR) {
-    return path.resolve(process.env.ICE_DATA_DIR);
+export function applyRuntimeDataEnvDefaults(): void {
+  if (!process.env.ICE_DATA_DIR?.trim()) {
+    process.env.ICE_DATA_DIR = defaultDataDirForRuntime();
   }
 
-  // 本地 data/ 存在（开发模式）
-  if (await exists(path.join(LOCAL_DATA_DIR, 'config.json'))) {
-    return LOCAL_DATA_DIR;
-  }
+  const dataDir = path.resolve(process.env.ICE_DATA_DIR);
 
-  // 回退到 ~/.iceCoder/
-  return USER_DATA_DIR;
+  if (!process.env.ICE_CONFIG_PATH?.trim()) {
+    process.env.ICE_CONFIG_PATH = path.join(dataDir, 'config.json');
+  }
+  if (!process.env.ICE_SESSIONS_DIR?.trim()) {
+    process.env.ICE_SESSIONS_DIR = path.join(dataDir, 'sessions');
+  }
+  if (!process.env.ICE_MEMORY_DIR?.trim()) {
+    process.env.ICE_MEMORY_DIR = path.join(dataDir, 'memory-files');
+  }
+  if (!process.env.ICE_OUTPUT_DIR?.trim()) {
+    process.env.ICE_OUTPUT_DIR = path.join(dataDir, 'output');
+  }
+  if (!process.env.ICE_USER_MEMORY_DIR?.trim()) {
+    process.env.ICE_USER_MEMORY_DIR = path.join(dataDir, 'user-memory');
+  }
+  if (!process.env.ICE_MCP_CONFIG_PATH?.trim()) {
+    process.env.ICE_MCP_CONFIG_PATH = path.join(dataDir, 'mcp.json');
+  }
+}
+
+export function getRuntimeDataDir(): string {
+  applyRuntimeDataEnvDefaults();
+  return path.resolve(process.env.ICE_DATA_DIR!);
+}
+
+/** 生产环境：OS 用户缓存根（与 ~/.iceCoder 数据目录分离） */
+export function getUserCacheDir(): string {
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA
+      ?? path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(localAppData, 'iceCoder', 'cache');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches', 'iceCoder');
+  }
+  const xdg = process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache');
+  return path.join(xdg, 'iceCoder');
+}
+
+/** 聊天粘贴图落盘根：开发 `data/`，生产 OS 用户缓存目录 */
+export function getImagesCacheStorageRoot(): string {
+  applyRuntimeDataEnvDefaults();
+  return isProductionRuntime() ? getUserCacheDir() : getRuntimeDataDir();
+}
+
+/** `{storageRoot}/imagesCache/{sessionId}` */
+export function getImagesCacheSessionDir(sessionId: string): string {
+  return path.join(getImagesCacheStorageRoot(), 'imagesCache', sessionId);
+}
+
+/** `{dataDir}/memory` 下的子路径（telemetry、dream-state 等） */
+export function getRuntimeMemoryAuxPath(...segments: string[]): string {
+  return path.join(getRuntimeDataDir(), 'memory', ...segments);
 }
 
 /**
@@ -61,22 +106,29 @@ export interface DataPaths {
   memoryDir: string;
   memoryFilesDir: string;
   outputDir: string;
+  userMemoryDir: string;
+  mcpConfigPath: string;
 }
 
 /**
  * 解析所有数据路径。
  */
 export async function resolveDataPaths(): Promise<DataPaths> {
-  const dataDir = await resolveDataDir();
+  applyRuntimeDataEnvDefaults();
+  const dataDir = getRuntimeDataDir();
 
   return {
     dataDir,
-    configPath: process.env.ICE_CONFIG_PATH ?? path.join(dataDir, 'config.json'),
-    systemPromptPath: process.env.ICE_SYSTEM_PROMPT_PATH ?? path.join(dataDir, 'system-prompt.md'),
-    sessionsDir: process.env.ICE_SESSIONS_DIR ?? path.join(dataDir, 'sessions'),
+    configPath: path.resolve(process.env.ICE_CONFIG_PATH!),
+    systemPromptPath: process.env.ICE_SYSTEM_PROMPT_PATH
+      ? path.resolve(process.env.ICE_SYSTEM_PROMPT_PATH)
+      : path.join(dataDir, 'system-prompt.md'),
+    sessionsDir: path.resolve(process.env.ICE_SESSIONS_DIR!),
     memoryDir: path.join(dataDir, 'memory'),
-    memoryFilesDir: process.env.ICE_MEMORY_DIR ?? path.join(dataDir, 'memory-files'),
-    outputDir: process.env.ICE_OUTPUT_DIR ?? path.join(dataDir, 'output'),
+    memoryFilesDir: path.resolve(process.env.ICE_MEMORY_DIR!),
+    outputDir: path.resolve(process.env.ICE_OUTPUT_DIR!),
+    userMemoryDir: path.resolve(process.env.ICE_USER_MEMORY_DIR!),
+    mcpConfigPath: resolveMcpConfigPath(),
   };
 }
 
@@ -112,7 +164,7 @@ const DEFAULT_CONFIG: IceCoderConfigFile = {
       modelName: 'gpt-4o',
       parameters: {
         temperature: 0.7,
-        maxTokens: 8192,
+        maxTokens: 16384,
       },
       isDefault: true,
     },
@@ -125,17 +177,33 @@ export const DEFAULT_SYSTEM_PROMPT = `你是 iceCoder，一个智能编程助手
 
 自然语言由你与用户共同选择，无强制回复语种。`;
 
-/** MCP 独立配置文件路径（相对当前工作目录，可用 ICE_MCP_CONFIG_PATH 覆盖） */
+/**
+ * MCP 独立配置文件路径。
+ * 开发/生产均落在数据根目录下的 `mcp.json`（可用 ICE_MCP_CONFIG_PATH 覆盖）。
+ */
 export function resolveMcpConfigPath(): string {
+  applyRuntimeDataEnvDefaults();
   if (process.env.ICE_MCP_CONFIG_PATH?.trim()) {
     return path.resolve(process.env.ICE_MCP_CONFIG_PATH.trim());
   }
-  return path.join(process.cwd(), '.iceCoder', 'mcp.json');
+  return path.join(getRuntimeDataDir(), 'mcp.json');
 }
 
 /**
- * 若不存在则创建 `.iceCoder/mcp.json`。
- * 首次创建时：若 `mainConfigPath`（如 data/config.json）中仍有 `mcpServers`，则迁移至该文件；否则写入占位模板。
+ * 判断文件是否存在。
+ */
+async function exists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 若不存在则创建 `mcp.json`。
+ * 首次创建时：若主配置中仍有 `mcpServers`，则迁移；否则写入占位模板。
  */
 export async function ensureMcpConfigFile(mainConfigPath?: string): Promise<void> {
   const mcpPath = resolveMcpConfigPath();
@@ -162,19 +230,22 @@ export async function ensureMcpConfigFile(mainConfigPath?: string): Promise<void
 }
 
 /**
- * 首次运行初始化：创建 ~/.iceCoder/ 及默认配置。
+ * 首次运行初始化：创建数据目录及默认配置。
  * 返回 true 表示是首次初始化（需要提示用户配置 API Key）。
  */
 export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   let isFirstRun = false;
 
-  // 创建数据目录
   await fs.mkdir(paths.dataDir, { recursive: true });
   await fs.mkdir(paths.sessionsDir, { recursive: true });
+  await fs.mkdir(paths.memoryDir, { recursive: true });
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });
+  await fs.mkdir(paths.userMemoryDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
+  if (!isProductionRuntime()) {
+    await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
+  }
 
-  // 创建默认配置文件
   if (!(await exists(paths.configPath))) {
     await fs.writeFile(paths.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
     isFirstRun = true;
@@ -182,10 +253,11 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
 
   await ensureMcpConfigFile(paths.configPath);
 
-  // 创建默认系统提示词
   if (!(await exists(paths.systemPromptPath))) {
     await fs.writeFile(paths.systemPromptPath, DEFAULT_SYSTEM_PROMPT, 'utf-8');
   }
 
   return isFirstRun;
 }
+
+applyRuntimeDataEnvDefaults();

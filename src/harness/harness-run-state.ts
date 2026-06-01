@@ -58,6 +58,8 @@ export interface HarnessRunState {
   taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */
   stopHookContinuationCount: number;
+  /** verification gate 连续注入计数（模型未调工具时熔断） */
+  verificationGateContinuationCount: number;
   /** 上一次 continue 的原因 */
   transition: Transition;
   /** 本轮是否刚刚完成上下文压缩 */
@@ -150,6 +152,8 @@ export interface HarnessRunState {
   filesChangedAtRoundStart?: number;
   /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
   branchSwitchedThisRound?: boolean;
+  /** L2 §10 — 最近一次 runRecoveryMainPath 所在轮次；用于 roundsSinceExtract 与 handoff 回退重跑。 */
+  lastRecoveryExtractRound?: number;
   /**
    * L2-6 — Harness 主循环持有的 SupervisorRuntimeBridge 引用（off 时缺省）。
    * `harness-resilience.buildSupervisorCheckpointState` 与 after-round 钩子读取本字段，

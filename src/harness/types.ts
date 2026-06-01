@@ -103,9 +103,10 @@ export type StopReason =
   | 'task_recovery'      // 压缩后失忆恢复
   | 'timeout'            // 超时
   | 'user_abort'         // 用户中断
-  | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（附录 A，尚未接入）
+  | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（Web 冰豆 crying + 固定 final 文案）
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
   | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
+  | 'verification_exhausted' // verification gate 连续注入超限
   | 'circuit_breaker'    // 连续工具失败熔断
   | 'error';             // 错误
 
@@ -201,6 +202,11 @@ export interface HarnessConfig {
   sessionDir?: string;
   /** 工作区根目录（会话笔记 package.json 锚定；默认 process.cwd()） */
   workspaceRoot?: string;
+  /**
+   * 写后读 Gate 豁免目录（相对工作区）；与工作区 `.icecoder.json` 合并。
+   * 未设置时仅使用全局 config 与工作区项目文件。
+   */
+  verificationExemptDirs?: string[];
   /** 会话 ID，用于多会话 checkpoint 文件名（默认 default） */
   sessionId?: string;
   /** Batch 1：可选注入的全局策略，只读承载位；本批不接入 Harness 主循环。 */
@@ -219,6 +225,16 @@ export interface HarnessConfig {
  */
 export type ToolOutcome = 'executed' | 'policy_block' | 'user_denied' | 'execution_fail';
 
+/** step / WS 共用的 token 用量（圆环与压缩判定对齐） */
+export interface TokenUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  /** max(本地 messages + tools 估算, 上一轮 API prompt_tokens) */
+  effectiveUsed?: number;
+  /** provider maxContextTokens（上下文窗口上限） */
+  contextWindow?: number;
+}
+
 export interface HarnessStepEvent {
   type:
     | 'thinking'
@@ -228,6 +244,7 @@ export interface HarnessStepEvent {
     | 'tool_confirm'
     | 'tool_progress'
     | 'compaction'
+    | 'context_usage'
     | 'final'
     | 'stream_delta'
     | 'tool_output'
@@ -267,8 +284,8 @@ export interface HarnessStepEvent {
   message?: string;
   /** 本轮 LLM 调用的 token 用量 */
   tokenUsage?: { inputTokens: number; outputTokens: number };
-  /** 累计 token 用量 */
-  totalTokenUsage?: { inputTokens: number; outputTokens: number };
+  /** 累计 token 用量（含 effectiveUsed / contextWindow 供圆环对齐） */
+  totalTokenUsage?: TokenUsageTotals;
   /** 记忆子状态（仅 type === 'memory_event'） */
   memoryKind?: MemoryStepKind;
   /** 给用户看的短说明（气泡） */

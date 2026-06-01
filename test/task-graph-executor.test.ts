@@ -6,6 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { GraphExecutor } from '../src/harness/task-graph-executor.js';
+import { markGraphFailed } from '../src/harness/task-graph.js';
 
 // ═══════════════════════════════════════════════
 
@@ -121,6 +122,17 @@ describe('GraphExecutor', () => {
     expect(allDone).toBe(true);
     expect(ex.isTerminal()).toBe(true);
     expect(ex.shouldForceStop()).toBe(true);
+    expect(ex.isGraphDoneForHarnessStop()).toBe(true);
+  });
+
+  it('isGraphDoneForHarnessStop：failed 不算完成', () => {
+    ex.initGraph({ goal: 'x', intent: 'edit' });
+    const internal = ex as unknown as { graph: { status: string } };
+    if (internal.graph) {
+      markGraphFailed(internal.graph as any, 'fail');
+    }
+    expect(ex.isTerminal()).toBe(true);
+    expect(ex.isGraphDoneForHarnessStop()).toBe(false);
   });
 
   it('syncCursorToTaskPhase 对齐 editing 并返回 view', () => {

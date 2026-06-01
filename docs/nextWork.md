@@ -39,38 +39,28 @@ recovery prompt
 
 ---
 
-## 2. Memory v2 结构化分级
+## 2. Memory v2 结构化分级（部分已完成）
 
 ### 目标
 
 记忆只辅助当前任务，不抢占当前任务。
 
-### 需要做什么
+### 已完成（2026-05）
 
-1. 给记忆增加层级字段：
-   - `hard_rule`
-   - `project_fact`
-   - `preference`
-   - `observation`
-   - `session_state`
-2. 增加 `evidenceStrength`：
-   - `explicit`
-   - `repeated`
-   - `inferred`
-   - `weak`
-3. 召回阶段按任务类型过滤记忆。
-4. 冲突记忆同轮只注入一侧。
+1. 记忆层级字段 `memoryLevel` / `level`：`hard_rule`、`project_fact`、`preference`、`observation`、`session_state` 等已在 extract / recall / eviction 管线使用。
+2. `evidenceStrength`（`explicit` / `repeated` / `inferred` / `weak`）已写入 frontmatter 并参与召回排序。
+3. 召回阶段按 intent 过滤（`memory-recall.ts`）。
+4. Web 记忆图谱页（`#/memory`）+ 顶栏「记忆」入口。
 
-### 如何做
+### 仍需加强
 
-- 扩展 memory frontmatter 或派生索引，不必一次性迁移旧文件。
-- 在 `memory-recall.ts` 中加入 `filterByMemoryLevelForIntent()`。
-- 在 `memory-llm-extractor.ts` 输出中增加层级推断。
-- Dream 整合时合并同主题偏好，降低旧偏好置信度。
+1. 冲突记忆同轮只注入一侧的策略与自动化测试。
+2. Dream 整合时合并同主题偏好、降低旧偏好置信度。
+3. Eval 量化：执行型任务 token 下降、噪声记忆新增下降等指标。
 
 ### 验收标准
 
-- 旧偏好“不要改代码”不能阻止当前明确“请修改代码”。
+- 旧偏好「不要改代码」不能阻止当前明确「请修改代码」。（部分场景已覆盖，需 Eval 固化）
 - 同主题冲突记忆不会同轮同时注入。
 - 执行型任务记忆注入 token 下降 `20-50%`。
 - 噪声记忆新增下降 `30-60%`。
@@ -83,12 +73,15 @@ recovery prompt
 
 用数据证明系统变强，而不是凭感觉调 prompt。
 
+### 已完成（骨架）
+
+- `npm run eval:agent` 可跑；mock 模式输出 case 与聚合指标；real 模式可读取已有 `telemetry.jsonl`。
+
 ### 需要做什么
 
-1. 把 `scripts/agent-eval.ts` 从指标骨架升级为可执行 runner。
-2. 支持 mock LLM 和真实 LLM 两种模式。
-3. 为每个 case 输出 pass/fail 和指标。
-4. 支持 JSONL 历史记录，便于趋势对比。
+1. 把 `scripts/agent-eval.ts` 升级为**驱动 Harness 跑 case** 的可执行 runner（非 mock 恒绿）。
+2. 支持 JSONL 历史记录，便于趋势对比。
+3. 与 `scripts/eval-runner.ts`（TaskGraph 指标）纳入统一 CI 入口（可选 `npm run eval:taskgraph`）。
 
 ### Eval Case
 
@@ -116,7 +109,7 @@ recovery prompt
 
 ### 验收标准
 
-- `npm run eval:agent` 可执行并输出每个 case 的结果。
+- `npm run eval:agent` 真实模式对每个 case 输出 pass/fail。
 - P0 指标下降时能返回非 0 exit code。
 - 每次 Harness/Prompt/Memory 改动都能跑 eval 对比。
 
@@ -133,6 +126,7 @@ recovery prompt
 1. `src/harness/runtime-telemetry.ts` 已实现，`Harness` 构造时启用。
 2. JSONL 默认路径：`data/runtime/telemetry.jsonl`（或通过 `ICE_RUNTIME_DIR` 指定根目录下的 `telemetry.jsonl`）。
 3. 事件类型包括：`round`、`tool`、`compaction`、`summary`（含部分 token 与验证相关字段）。
+4. 部分 execution_mode 事件经 `GET /api/supervisor/events` 可读。
 
 ### 仍需加强
 
@@ -149,35 +143,20 @@ recovery prompt
 
 ---
 
-## 5. Tool Planner
+## 5. Tool Planner（已完成）
 
 ### 目标
 
 让工具选择更像软件工程流程，而不是完全靠模型自由发挥。
 
-### 需要做什么
+### 已完成（2026-05）
 
-按 intent 给出推荐工具链：
+- `src/harness/tool-planner.ts` 已接入 `harness-round-prep.ts` 与 `harness-round-no-tools.ts`。
+- 按 intent 注入推荐工具链提示（debug / edit / test / refactor / inspect），不强制覆盖 LLM。
 
-| Intent | 推荐流程 |
-|---|---|
-| `debug` | read error -> search/read files -> edit -> run focused test |
-| `edit` | inspect related files -> edit -> verify |
-| `test` | run test -> inspect failure -> edit -> rerun |
-| `refactor` | inspect references -> batch/patch edit -> run tests |
-| `inspect` | search/read only |
+### 后续（可选）
 
-### 如何做
-
-- 新增 `src/harness/tool-planner.ts`。
-- 在 no-tool recovery 和 verification gate 中引用 planner 建议。
-- 不强制覆盖 LLM，只提供 Runtime Policy 提示。
-
-### 验收标准
-
-- 首轮工具命中率提升 `20-40%`。
-- 无效探索工具调用下降 `20-30%`。
-- 重复失败调用下降 `50%+`。
+- 用 Eval 量化首轮工具命中率、无效探索下降幅度。
 
 ---
 
@@ -194,3 +173,29 @@ npm test
 npm run eval:agent
 git diff --check
 ```
+
+---
+
+## 7. L2 反构图对接主循环 — **已完成（2026-05-28）**
+
+### 已完成
+
+- `harness-tool-round.ts` / `harness-supervisor-round.ts`：`evaluateAfterRound` 返回 `takeover` 后调用 `applyTakeoverRecoveryMainPath`。
+- `harness-recovery-main-path.ts`：M5→M8 主路径、`replaceGraph` / §19.2 降级、`task_graph_init` WS。
+- 置信度门槛：`snapshotConfidence.templateGraphMin`（默认 0.65）。
+- shadow：`ICE_SUPERVISOR_SHADOW` 或 `supervisor-config.json` 的 `shadow` 字段（`off` 模式下强制 false）。
+
+### 参考
+
+- 规格：[`双模方案2-finish.md`](./requirement/双模方案2-finish.md) §9、§10、§19.2
+- 流程：[`双模 L2 流程图-finish.md`](./requirement/双模%20L2%20流程图-finish.md) §3
+
+---
+
+## 8. Web 后台任务进度 chip — **已接入**
+
+### 已完成
+
+- `chat-ws.ts`：`BgTaskPusher` + `rebindBgTaskPusher(sessionId)`（切换会话 / 每轮消息前绑定）。
+- `run_command` 按 `sessionId` 隔离 `BackgroundTaskManager`（`resolveWorkspaceToolContext` 传入 session）。
+- 聊天消息区底部 `.bg-status-container` 显示 running / 终态 chip（`bg_task_update`）。

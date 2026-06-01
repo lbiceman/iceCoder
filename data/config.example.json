@@ -15,5 +15,6 @@
     }
   ],
   "supervisorMode": "adaptive",
-  "skipPermissionChecks": false
+  "skipPermissionChecks": false,
+  "verificationExemptDirs": [".scratch", "tmp/agent"]
 }

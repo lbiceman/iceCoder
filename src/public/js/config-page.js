@@ -81,10 +81,10 @@ window.ConfigPage = (function () {
     fetch('/api/config')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        callback(null, data.providers || []);
+        callback(null, data.providers || [], data);
       })
       .catch(function (err) {
-        callback(err, []);
+        callback(err, [], null);
       });
   }
 
@@ -94,12 +94,12 @@ window.ConfigPage = (function () {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ providers: providerList })
     })
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.error) {
-          callback(new Error(data.error));
+      .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
+      .then(function (result) {
+        if (!result.ok || result.body.error) {
+          callback(new Error(result.body.error || '保存失败'));
         } else {
-          callback(null, data);
+          callback(null, result.body);
         }
       })
       .catch(function (err) {
@@ -116,6 +116,11 @@ window.ConfigPage = (function () {
     }
     if (!prov.apiKey || prov.apiKey.trim() === '') {
       errors.apiKey = '请填写 API 密钥';
+    } else if (/your-api-key/i.test(prov.apiKey)) {
+      errors.apiKey = '请填写有效的 API 密钥';
+    }
+    if (!prov.modelName || prov.modelName.trim() === '') {
+      errors.modelName = '请填写模型名称';
     }
     return errors;
   }
@@ -175,6 +180,7 @@ window.ConfigPage = (function () {
         '<div class="form-group">' +
           '<label for="modelName-' + index + '">模型名称</label>' +
           '<input type="text" id="modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o、deepseek-chat" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<span class="error-msg" data-error="modelName"></span>' +
         '</div>' +
         '<div class="form-group">' +
           '<label for="temperature-' + index + '">温度</label>' +
@@ -279,11 +285,14 @@ window.ConfigPage = (function () {
 
     if (hasErrors) return;
 
-    saveConfig(data, function (err) {
+    saveConfig(data, function (err, result) {
       if (err) {
         showNotification('保存失败：' + err.message, 'error');
       } else {
         showNotification('配置已保存', 'success');
+        if (result && result.setupComplete && window.AppRouter && window.AppRouter.exitSetupMode) {
+          window.AppRouter.exitSetupMode();
+        }
         // 从服务器刷新提供者以获取遮蔽的密钥
         loadConfig(function (_err, loaded) {
           if (!_err) {
@@ -325,6 +334,9 @@ window.ConfigPage = (function () {
 
     container.innerHTML =
       '<div class="config-page">' +
+        '<div class="setup-banner" id="setup-banner" hidden>' +
+          '<strong>首次使用</strong>：请填写 AI 服务商提供的 API 地址、密钥和模型名称，保存后即可开始聊天。' +
+        '</div>' +
         '<h1>模型配置</h1>' +
         '<p class="subtitle">管理 LLM 提供者：填写 API 地址与密钥，选择默认模型后即可开始聊天。</p>' +
         '<div id="provider-list"></div>' +
@@ -337,13 +349,21 @@ window.ConfigPage = (function () {
     container.querySelector('#btn-save').addEventListener('click', handleSave);
     container.querySelector('#btn-add').addEventListener('click', handleAddProvider);
 
+    var setupBanner = container.querySelector('#setup-banner');
+    if (setupBanner && window.AppRouter && window.AppRouter.isSetupRequired && window.AppRouter.isSetupRequired()) {
+      setupBanner.hidden = false;
+    }
+
     // 加载已有配置
-    loadConfig(function (err, loaded) {
+    loadConfig(function (err, loaded, meta) {
       if (err) {
         showNotification('加载配置失败', 'error');
         providers = [];
       } else {
         providers = loaded.map(function (p) { p._masked = true; return p; });
+        if (setupBanner && meta && meta.setupRequired) {
+          setupBanner.hidden = false;
+        }
         // 找到标记为默认的提供者
         defaultIndex = 0;
         for (var i = 0; i < providers.length; i++) {

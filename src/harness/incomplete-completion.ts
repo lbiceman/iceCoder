@@ -2,32 +2,27 @@ import type { LLMResponse } from '../llm/types.js';
 import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
+import {
+  hasUnfulfilledFileDeliverableGoal,
+  snapshotHasUnconfirmedFileDeliverables,
+  verificationConfirmationStats,
+  writeConfirmationPaths,
+} from './document-deliverable.js';
 import type { TaskState } from './task-state.js';
 import type { TaskCheckpoint } from './checkpoint.js';
 
-/** 任务是否仍有未完成的工程/验证工作 */
+/** 任务是否仍有未完成的验收工作（Acceptance Gate + file 交付物 + 未写交付物 goal） */
 export function hasPendingWork(
   task: TaskStateSnapshot,
-  repo: RepoContextSnapshot,
   acceptance?: TaskAcceptanceTracker,
 ): boolean {
   if (hasPendingAcceptanceWork(acceptance)) return true;
 
-  if (task.verificationStatus === 'failed') return true;
-
-  const verificationAttempted = repo.testCommands.length > 0
-    || repo.recentDiagnostics.some(d => /\b(test|vitest|jest|build|lint|typecheck)\b/i.test(d));
-
-  if (task.verificationRequired && task.verificationStatus === 'required' && verificationAttempted) {
+  if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
     return true;
   }
 
-  if (
-    task.filesChanged.length > 0
-    && task.verificationStatus !== 'passed'
-    && verificationAttempted
-    && repo.recentDiagnostics.length > 0
-  ) {
+  if (snapshotHasUnconfirmedFileDeliverables(task)) {
     return true;
   }
 
@@ -35,7 +30,7 @@ export function hasPendingWork(
 }
 
 export function checkpointHasPendingWork(checkpoint: TaskCheckpoint): boolean {
-  return hasPendingWork(checkpoint.taskState, checkpoint.repoContext);
+  return hasPendingWork(checkpoint.taskState);
 }
 
 /** 仅 reasoning、无可见 content、无 toolCalls */
@@ -64,22 +59,44 @@ export function buildIncompleteContinuationPrompt(
   if (repo.recentDiagnostics.length > 0) {
     lines.push(`- Recent tool failures: ${repo.recentDiagnostics.slice(-3).join('; ')}`);
   }
-  if (task.verificationStatus === 'failed' || task.verificationStatus === 'required') {
-    lines.push(`- Verification status: ${task.verificationStatus}`);
+  const filePaths = writeConfirmationPaths(task.filesChanged);
+  const fileStats = verificationConfirmationStats(
+    task.filesChanged,
+    task.fileDeliverableWriteVersions,
+    task.fileDeliverableConfirmVersions,
+  );
+  const filePending = snapshotHasUnconfirmedFileDeliverables(task);
+  if (filePending && fileStats.required > 0) {
+    lines.push(
+      `- Changed files pending confirmation: ${fileStats.pending} of ${fileStats.required}`
+      + (fileStats.exempt > 0 ? ` (${fileStats.exempt} dot-dir/temp exempt)` : ''),
+    );
   }
-  const lastTest = repo.testCommands.at(-1);
-  if (lastTest) {
-    lines.push(`- Last verification command: ${lastTest}`);
-  }
-  if (task.filesChanged.length > 0) {
-    lines.push(`- Changed files (${task.filesChanged.length}): continue from these and re-run verification.`);
+  if (fileStats.required > 0) {
+    lines.push(`- Confirm each required path with file_info or read_file (${fileStats.required} file(s)).`);
+  } else if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
+    lines.push('- Expected file deliverable has not been written yet.');
   }
 
-  lines.push(
-    '',
-    'Continue NOW by calling tools (run_command, edit_file, write_file, read_file).',
-    'Do not output plans or thinking-only replies. Run tests, fix failures, then proceed.',
-  );
+  const awaitsFileWrite = hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent);
+  if (filePending && filePaths.length > 0) {
+    lines.push(
+      '',
+      'Continue NOW: run file_info or read_file on each changed file to confirm it exists and is non-empty.',
+    );
+  } else if (awaitsFileWrite) {
+    lines.push(
+      '',
+      'Continue NOW: write the deliverable with write_file (or edit_file), then run file_info or read_file to confirm it exists and is non-empty.',
+      'Do not stop with a chat summary.',
+    );
+  } else {
+    lines.push(
+      '',
+      'Continue NOW by calling tools (run_command, edit_file, write_file, read_file) as needed.',
+      'Do not output plans or thinking-only replies.',
+    );
+  }
 
   return lines.join('\n');
 }

@@ -3,9 +3,9 @@
  * 抽取初始化逻辑为可复用函数，供 CLI 和 Web 入口共享。
  *
  * 路径解析优先级：
- * 1. 环境变量
- * 2. 当前目录 data/（开发模式）
- * 3. ~/.iceCoder/（全局安装模式，首次运行自动创建）
+ * 1. 环境变量（ICE_DATA_DIR / ICE_CONFIG_PATH 等）
+ * 2. 开发环境（NODE_ENV !== 'production'）：项目 `data/`
+ * 3. 生产环境（NODE_ENV === 'production'）：`~/.iceCoder/`
  */
 
 import fs from 'fs/promises';
@@ -13,16 +13,17 @@ import path from 'path';
 
 import { LLMAdapter } from '../llm/llm-adapter.js';
 import { OpenAIAdapter } from '../llm/openai-adapter.js';
+import { openAiAdapterConfigFromProvider } from '../llm/provider-adapter-config.js';
 import { FileParser } from '../parser/file-parser.js';
 import { HtmlParserStrategy } from '../parser/html-strategy.js';
 import { OfficeParserStrategy } from '../parser/office-strategy.js';
 import { XMindParserStrategy } from '../parser/xmind-strategy.js';
-import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/routes/config.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager, startMcpBackgroundInit } from '../mcp/index.js';
 import { broadcastMcpReady } from '../web/chat-ws.js';
 import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
+import { isAppConfigReady } from '../config/config-readiness.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ProviderConfig, IceCoderConfigFile } from '../web/types.js';
@@ -39,6 +40,8 @@ export interface BootstrapResult {
   mcpManager: MCPManager;
   /** 解析后的数据路径（供其他模块使用） */
   paths: DataPaths;
+  /** 主配置未完成（缺 API Key 等），Web 应仅开放配置页 */
+  needsSetup: boolean;
 }
 
 /**
@@ -57,18 +60,7 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   const llmAdapter = new LLMAdapter();
 
   for (const provider of providers) {
-    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    const rt = resolveOpenAiRequestTimeoutMs(provider);
-    llmAdapter.registerProvider(new OpenAIAdapter({
-      name: provider.id,
-      apiKey: provider.apiKey,
-      baseURL: provider.apiUrl,
-      model: provider.modelName,
-      temperature: provider.parameters.temperature,
-      maxTokens,
-      topP: provider.parameters.topP,
-      ...(rt !== undefined ? { timeout: rt } : {}),
-    }));
+    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);
@@ -89,18 +81,7 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
   const providers = await loadConfig(configPath);
 
   for (const provider of providers) {
-    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    const rt = resolveOpenAiRequestTimeoutMs(provider);
-    llmAdapter.registerProvider(new OpenAIAdapter({
-      name: provider.id,
-      apiKey: provider.apiKey,
-      baseURL: provider.apiUrl,
-      model: provider.modelName,
-      temperature: provider.parameters.temperature,
-      maxTokens,
-      topP: provider.parameters.topP,
-      ...(rt !== undefined ? { timeout: rt } : {}),
-    }));
+    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);
@@ -126,17 +107,18 @@ export function initializeFileParser(): FileParser {
 
 /**
  * 完整引导：解析路径 → 自动初始化 → 加载配置 → 初始化所有组件。
- * 返回 isFirstRun 表示是否首次运行（需要提示用户配置 API Key）。
+ * 返回 needsSetup 表示主配置未完成（需在 Web 配置页填写 API Key 等）。
  */
-export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boolean }> {
+export async function bootstrap(): Promise<BootstrapResult> {
   // 解析数据路径
   const paths = await resolveDataPaths();
 
   // 确保数据目录和默认配置存在
-  const isFirstRun = await ensureDataDir(paths);
+  await ensureDataDir(paths);
 
   // 加载配置
   const providers = await loadConfig(paths.configPath);
+  const needsSetup = !isAppConfigReady({ providers });
 
   // 初始化 LLM
   const llmAdapter = initializeLLMAdapter(providers);
@@ -169,6 +151,6 @@ export async function bootstrap(): Promise<BootstrapResult & { isFirstRun: boole
   return {
     llmAdapter, fileParser, orchestrator,
     toolRegistry: registry, toolExecutor: executor,
-    mcpManager, paths, isFirstRun,
+    mcpManager, paths, needsSetup,
   };
 }

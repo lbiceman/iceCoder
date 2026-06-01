@@ -28,6 +28,7 @@ import type { TaskGraphSnapshot } from '../types/task-graph.js';
 /** W1: 用于把 RepoContext 新增文件数粗略折算成 diff 行数，仅用于 large_diff 信号阈值参考。 */
 const APPROX_LINES_PER_FILE_CHANGE = 60;
 
+/** 统计任务图中仍为 pending 或 running 的节点数，供 ExecutionMode 决策与图状态上报使用。 */
 function countPendingGraphSteps(snapshot: TaskGraphSnapshot | null): number {
   if (!snapshot) return 0;
   let count = 0;
@@ -46,6 +47,7 @@ import type {
 import { ContextAssembler } from './context-assembler.js';
 import { LoopController } from './loop-controller.js';
 import { ContextCompactor, type CompactionConfig } from './context-compactor.js';
+import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
 import { applyCheckpointResumeFork, stripResumeCheckpointMessages } from './checkpoint-resume-compact.js';
 import { readCompactionContextWindowTokens } from './context-window-tier.js';
 import { HarnessLogger } from './logger.js';
@@ -69,6 +71,7 @@ import { ensureDelegateToSubagentTool } from './sub-agent-runner.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
 import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
 import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
+import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../web/routes/config.js';
 import {
   buildModeDecisionContext,
   buildRuntimeExecutionState,
@@ -85,16 +88,25 @@ import type { HarnessRunState } from './harness-run-state.js';
 import { callHarnessLlm } from './harness-llm-call.js';
 import { prepareHarnessRound } from './harness-round-prep.js';
 import { handleNoToolCalls } from './harness-round-no-tools.js';
+import { tryGraphTerminalStop } from './harness-graph-stop.js';
+import { evaluateSupervisorAfterNoToolRound } from './harness-supervisor-round.js';
 import { runHarnessToolRound } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
 import { getLatestRealUserText } from './harness-message-utils.js';
+import {
+  resolveVerificationExemptDirPrefixes,
+  setVerificationExemptRuntime,
+} from './verification-exempt-config.js';
 import { resolveLlmToolsForRound } from './casual-mode.js';
 import { salvageTextToolCallsInResponse } from './text-tool-call-salvage.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
 
-/** run() 内各子模块共享的运行时依赖（由 Harness 实例字段组装）。 */
+/**
+ * run() 内各子模块共享的运行时依赖（由 Harness.buildRunDeps 从实例字段组装）。
+ * 包含：循环控制、压缩、图执行、检查点、工具执行、双模 bridge、token 预算等。
+ */
 export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
   stopHookManager: StopHookManager;
   tokenBudgetTracker?: TokenBudgetTracker;
@@ -129,6 +141,7 @@ export class Harness {
   private checkpointEngine?: CheckpointEngine;
   private globalPolicy?: HarnessConfig['globalPolicy'];
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
+  private verificationExemptDirs?: string[];
   private supervisorBridge?: SupervisorRuntimeBridge;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
@@ -138,7 +151,12 @@ export class Harness {
    * 默认 0.5（中性），adaptive.riskThreshold 默认 0.6 不直接候选。
    */
   private lastRiskScore = 0.5;
+  private agentMaxOutputTokens: number;
 
+  /**
+   * 根据 HarnessConfig 组装循环所需子模块：上下文、压缩、工具执行、检查点、双模决策引擎等。
+   * 未显式传入 supervisorConfig 时默认为 off，避免 CLI/Web 入口行为被悄悄改变。
+   */
   constructor(
     config: HarnessConfig,
     toolExecutor: ToolExecutor,
@@ -149,11 +167,14 @@ export class Harness {
     };
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
+    this.agentMaxOutputTokens = config.loop.maxOutputTokens ?? DEFAULT_AGENT_MAX_OUTPUT_TOKENS;
+    this.sessionId = config.sessionId ?? 'default';
     const compactionPartial: Partial<CompactionConfig> = {
       threshold: config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
       tokenThreshold: config.compactionTokenThreshold,
       keepRecent: config.compactionKeepRecent ?? DEFAULT_COMPACTION_KEEP_RECENT,
       enableLLMSummary: config.compactionEnableLLMSummary,
+      sessionId: this.sessionId,
     };
     if (config.compactionMaxReinjectFiles != null) {
       compactionPartial.maxReinjectFiles = config.compactionMaxReinjectFiles;
@@ -166,8 +187,8 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
+    this.verificationExemptDirs = config.verificationExemptDirs;
     this.sessionDir = config.sessionDir;
-    this.sessionId = config.sessionId ?? 'default';
     // Batch 3：未显式注入 supervisorConfig 时回落到 off，避免悄悄改变 cli/web 入口的旧行为。
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
@@ -202,6 +223,7 @@ export class Harness {
     }
   }
 
+  /** 把本实例上的子模块引用打包成一次 run() 内各轮共用的依赖对象（prep / LLM / 工具 / 停止等）。 */
   private buildRunDeps(): HarnessRunDeps {
     return {
       loopController: this.loopController,
@@ -226,11 +248,15 @@ export class Harness {
       supervisorBridge: this.supervisorBridge,
       supervisorObserverSuppressInject: shouldSuppressObserverInject(this.globalPolicy),
       supervisorRiskScoreProvider: () => this.lastRiskScore,
+      agentMaxOutputTokens: this.agentMaxOutputTokens,
       abortSignal: this.abortSignal,
     };
   }
 
-  /** 将 checkpoint/v2 磁盘更新串行化（仅在有持久化路径时生效）。 */
+  /**
+   * 将 checkpoint / resilience v2 的磁盘写入串行化，避免并发 run 或并行工具轮互相覆盖。
+   * 无 checkpointManager 且无 checkpointEngine 时直接执行 task，不加队列。
+   */
   enqueueCheckpointPersist<T>(task: () => Promise<T>): Promise<T> {
     if (!this.checkpointManager && !this.checkpointEngine) {
       return task();
@@ -244,6 +270,11 @@ export class Harness {
     return p;
   }
 
+  /**
+   * 每轮调用 LLM 之前：汇总图/仓库/失败等信号，经 ModeDecisionEngine 裁决 free/forced，
+   * 并同步 BranchBudget、CheckpointEngine 的 forced 策略与 loopController 状态。
+   * modeDecisionEngineEnabled 为 false 时直接返回（OFF 模式无副作用）。
+   */
   private evaluateExecutionModeBeforeLlm(
     deps: HarnessRunDeps,
     state: HarnessRunState,
@@ -336,6 +367,10 @@ export class Harness {
     this.checkpointEngine?.setForcedPolicy(forced);
   }
 
+  /**
+   * 向本轮待消费信号队列写入一条 ModeSignal，并转发给 ModeDecisionEngine。
+   * recovery_pending 会设跨轮 sticky；branch_switched 仅标记本轮，下轮 prep 时重置。
+   */
   private submitModeSignal(
     state: HarnessRunState,
     source: ModeSignalSource,
@@ -354,6 +389,7 @@ export class Harness {
     this.modeDecisionEngine.submitSignal(source, signal, payload);
   }
 
+  /** 若当前存在任务图，向模式决策提交 task_graph_active / pending_steps 等图相关信号。 */
   private submitGraphModeSignals(deps: HarnessRunDeps, state: HarnessRunState): void {
     if (!deps.graphExecutor?.hasGraph()) return;
     state.submitModeSignal?.('graph_executor', 'task_graph_active');
@@ -367,7 +403,8 @@ export class Harness {
   }
 
   /**
-   * 执行核心循环（状态机模式）。
+   * 执行核心 while 循环：prep →（可选）图终止 → 模式评估 → LLM → 无工具/有工具分支 → 直至 stop。
+   * 负责会话初始化、工作区锁定、检查点/resilience 恢复、记忆 hydrate，并在 finally 中收尾记忆写入。
    */
   async run(
     userMessage: string,
@@ -422,6 +459,16 @@ export class Harness {
       }
     }
 
+    const exemptPrefixes = await resolveVerificationExemptDirPrefixes({
+      workspaceRoot: this.workspaceRoot,
+      globalDirs: this.verificationExemptDirs,
+      mainConfigPath: process.env.ICE_CONFIG_PATH,
+    });
+    setVerificationExemptRuntime({
+      workspaceRoot: this.workspaceRoot,
+      prefixes: exemptPrefixes,
+    });
+
     const deps = this.buildRunDeps();
     deps.workspaceRoot = this.workspaceRoot;
     deps.lockedWorkspaceRoot = lockedWorkspaceRoot;
@@ -457,6 +504,7 @@ export class Harness {
       noToolExecutionRecoveryCount: 0,
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
+      verificationGateContinuationCount: 0,
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,
@@ -642,7 +690,26 @@ export class Harness {
         });
         if (prep.action === 'stop') return prep.result;
 
+        const graphStopBeforeRound = await tryGraphTerminalStop(deps, {
+          state,
+          graphExecutor: deps.graphExecutor,
+          userMessage,
+          currentTools: state.tools,
+          logger,
+          onStep,
+        });
+        if (graphStopBeforeRound) return graphStopBeforeRound;
+
         this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
+
+        onStep?.({
+          type: 'context_usage',
+          iteration: prep.round,
+          totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
+            lastInputTokens: deps.loopController.getState().lastInputTokens,
+            lastOutputTokens: deps.loopController.getState().lastOutputTokens,
+          }),
+        });
 
         const toolsForLlm = resolveLlmToolsForRound(state.tools, prep.round, plainUserText);
 
@@ -689,7 +756,32 @@ export class Harness {
             logger,
             onStep,
           });
-          if (noTools.action === 'continue') continue;
+          if (noTools.action === 'continue') {
+            const supervisorResult = await evaluateSupervisorAfterNoToolRound(deps, {
+              state,
+              round: prep.round,
+              response,
+              currentTools: state.tools,
+              tokenUsage,
+              chatFn,
+              logger,
+              onStep,
+              streamFn,
+            });
+            if (supervisorResult.action === 'return') return supervisorResult.result;
+
+            const graphStopAfterNoTool = await tryGraphTerminalStop(deps, {
+              state,
+              graphExecutor: deps.graphExecutor,
+              userMessage,
+              currentTools: state.tools,
+              logger,
+              onStep,
+            });
+            if (graphStopAfterNoTool) return graphStopAfterNoTool;
+
+            continue;
+          }
           return noTools.result;
         }
 
@@ -707,6 +799,16 @@ export class Harness {
           streamFn,
         });
         if (toolRound.action === 'return') return toolRound.result;
+
+        const graphStopAfterTools = await tryGraphTerminalStop(deps, {
+          state,
+          graphExecutor: deps.graphExecutor,
+          userMessage,
+          currentTools: state.tools,
+          logger,
+          onStep,
+        });
+        if (graphStopAfterTools) return graphStopAfterTools;
       }
     } finally {
       this.memoryIntegration.onLoopEnd(
@@ -720,25 +822,33 @@ export class Harness {
     }
   }
 
+  /** 返回 LoopController 的累计轮次、token 用量等统计，供外部 UI 或测试观测。 */
   getLoopState() {
     return this.loopController.getState();
   }
 
+  /** 暴露 StopHook 管理器，供路由层注册「停止后继续」等钩子。 */
   getStopHookManager(): StopHookManager {
     return this.stopHookManager;
   }
 
+  /** 取出并清空记忆子系统在循环中积累的提取提示，通常在一次 run 结束后由调用方展示。 */
   flushExtractionNotices(): string[] {
     return this.memoryIntegration.flushExtractionNotices();
   }
 
+  /** 等待记忆后台任务在超时内完成，然后释放 memoryIntegration 资源。 */
   async drainMemory(timeoutMs: number = 10_000): Promise<void> {
     await this.memoryIntegration.drain(timeoutMs);
     this.memoryIntegration.dispose();
   }
 }
 
-/** §19.6 — L2 观察活跃时 free 段不重复 inject C 类 recovery 文案。 */
+/**
+ * §19.6 — L2 观察活跃时 free 段不重复 inject supervisor 侧 C 类 recovery（branch recover、
+ * rebuild escalation、verification digest 等）。
+ * 连续工具失败阶梯（轻提示/证据包/强警告）不受此开关影响，始终经 lifecycle source 注入。
+ */
 export function shouldSuppressObserverInject(policy: GlobalModePolicy | undefined): boolean {
   if (!policy) return false;
   return policy.observerEnabled && policy.recoverySupervisorEnabled;

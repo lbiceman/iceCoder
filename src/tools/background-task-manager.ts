@@ -385,6 +385,7 @@ export class BackgroundTaskManager extends EventEmitter {
     };
 
     this.tasks.set(taskId, task);
+    this.markSummaryDirty(taskId);
 
     child.stdout?.on('data', (data: Buffer) => this.appendOutput(task, data, ''));
     child.stderr?.on('data', (data: Buffer) => this.appendOutput(task, data, '[stderr] '));

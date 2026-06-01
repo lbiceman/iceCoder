@@ -10,9 +10,10 @@ import path from 'node:path';
 import { getMemoryTelemetry } from '../../memory/file-memory/memory-telemetry.js';
 import { scanMemoryFiles } from '../../memory/file-memory/memory-scanner.js';
 import { memoryAgeDays } from '../../memory/file-memory/memory-age.js';
+import { getRuntimeMemoryAuxPath } from '../../cli/paths.js';
 
-const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR || 'data/memory-files';
-const DEFAULT_TELEMETRY_LOG = 'data/memory/telemetry.jsonl';
+const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
+const DEFAULT_TELEMETRY_LOG = getRuntimeMemoryAuxPath('telemetry.jsonl');
 
 // ─── JSONL 日志解析 ───
 

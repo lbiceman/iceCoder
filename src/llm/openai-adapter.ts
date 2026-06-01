@@ -22,6 +22,27 @@ import { prepareToolsForChatCompletions } from './tool-offering.js';
 import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
 import { isAbortError, makeAbortedError } from './abort-error.js';
 
+/** 合并全部 system 为一条并置于首位（供 MiniMax 等严格 OpenAI 兼容端点使用）。 */
+export function collapseUnifiedSystemMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
+  const systemParts: string[] = [];
+  const rest: UnifiedMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      const text = typeof msg.content === 'string'
+        ? msg.content
+        : msg.content
+          .filter((b) => b.type === 'text' && b.text)
+          .map((b) => b.text!)
+          .join('\n');
+      if (text) systemParts.push(text);
+    } else {
+      rest.push(msg);
+    }
+  }
+  if (systemParts.length === 0) return messages;
+  return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
+}
+
 /**
  * OpenAI 适配器的配置。
  */
@@ -84,6 +105,8 @@ export class OpenAIAdapter implements ProviderAdapter {
     if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
     // Google Gemini
     if (m.includes('gemini')) return true;
+    // Xiaomi MiMo Omni 等多模态
+    if (m.includes('omni') || m.includes('-vl') || m.includes('_vl')) return true;
     // 默认不支持（DeepSeek、GLM 等纯文本模型）
     return false;
   }
@@ -261,7 +284,8 @@ export class OpenAIAdapter implements ProviderAdapter {
         })
       : messages;
 
-    const converted = normalized.map((msg) => this.convertSingleMessage(msg));
+    const withCollapsedSystem = collapseUnifiedSystemMessages(normalized);
+    const converted = withCollapsedSystem.map((msg) => this.convertSingleMessage(msg));
     return this.validateToolCallPairing(converted);
   }
 
@@ -383,7 +407,11 @@ export class OpenAIAdapter implements ProviderAdapter {
                 }
               }
               if (imageCount > 0) {
-                textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+                const combined = textParts.join('\n');
+                const hasPersistedImageHint = /image_read|imagesCache/i.test(combined);
+                if (!hasPersistedImageHint) {
+                  textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+                }
               }
               return { role: 'user', content: textParts.join('\n') };
             }
