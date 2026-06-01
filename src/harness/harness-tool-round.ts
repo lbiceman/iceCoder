@@ -192,7 +192,7 @@ export async function runHarnessToolRound(
   state.stepReviewedThisRound = false;
   state.verificationDigestInjectedThisRound = false;
   state.rebuildEscalationInjectedThisRound = false;
-  state.branchBudget?.resetFileEditBudget();
+  state.branchBudget?.resetRoundBudget();
 
   deps.branchBudget = state.branchBudget;
   deps.missingFileAttempts = state.missingFileAttempts;

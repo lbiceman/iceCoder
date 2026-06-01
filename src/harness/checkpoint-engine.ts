@@ -355,6 +355,16 @@ export class CheckpointEngine {
     return this.v2State.recoverySignals.filter(s => !s.consumed);
   }
 
+  /**
+   * 新用户消息：丢弃未消费 recovery signals，避免跨 run 重复注入对话。
+   * checkpoint 仍会持久化历史条目，但标记 consumed 后 pendingRecoverySignals 为空。
+   */
+  discardPendingRecoverySignals(): void {
+    for (const sig of this.v2State.recoverySignals) {
+      if (!sig.consumed) sig.consumed = true;
+    }
+  }
+
   /** 重置内存 v2 状态（任务切换时调用） */
   resetMemory(): void {
     this.v2State = emptyRuntimeCheckpointV2();

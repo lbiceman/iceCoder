@@ -265,6 +265,16 @@ export class SupervisorRuntimeBridge {
     this.pendingSegmentRenewal = undefined;
   }
 
+  /**
+   * 新一次 harness.run()：I4 correctionBudget 与 segmentRenewal 不继承 checkpoint。
+   * restoreFromCheckpoint 可能已写回 used/续段计数；Harness 在 v2 load 之后调用本方法归零。
+   */
+  resetPerRunInjectionBudget(): void {
+    this.correctionBudget.reset();
+    this.segmentRenewalCount = 0;
+    this.pendingSegmentRenewal = undefined;
+  }
+
   getSegmentRenewalCount(): number {
     return this.segmentRenewalCount;
   }

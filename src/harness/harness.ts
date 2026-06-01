@@ -58,7 +58,6 @@ import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
 import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
 import { syncHydratedTaskState } from './resume-task-state.js';
-import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
@@ -421,6 +420,7 @@ export class Harness {
     // L2-6：新任务边界 — 复位 observer/drift/budget/RecoverySupervisor phase，
     //       否则前一任务残留信号会让本任务首轮直接进入 takeover 候选。
     this.supervisorBridge?.resetForNewTask();
+    this.graphExecutor.resetGraph();
 
     let messages: UnifiedMessage[];
     const messageContent = userContentBlocks ?? userMessage;
@@ -561,45 +561,18 @@ export class Harness {
         const v2 = await this.checkpointEngine.loadV2();
         if (v2) {
           state.branchBudget?.applySnapshot(v2.branchBudget);
-          state.rebuildEscalationInjections = v2.rebuildEscalationInjections ?? 0;
-          state.parallelBudgetBlockHintInjected = v2.parallelBudgetBlockHintInjected ?? false;
-          // W8: 恢复 supervisor 历史承载位（observability only），
-          //     真正的 enter forced 仍由下方 checkpoint_resumed signal 驱动 ModeDecisionEngine 裁决；
-          //     这样既能保留 enteredBy / forcedDegradedTier 等历史，又不绕过 I5 单写约束。
+          // execution-mode 历史承载位（observability only）；phase / takeover / checkpoint_resumed 不跨用户发送恢复
           if (v2.supervisorState) {
             const supervisor = v2.supervisorState;
-            // W8: 历史承载位只用于 observability（telemetry / UI 上下文），
-            //     真正的 enter forced 仍由下方 submit('checkpoint_resumed') 驱动 ModeDecisionEngine 裁决；
-            //     不直接复写 sticky，避免 resume 后 forced 永远无法 exit 的死锁。
             state.executionModeEnteredBy = [...(supervisor.executionModeEnteredBy ?? [])];
             state.executionModeEnteredByPrimary = supervisor.executionModeEnteredByPrimary;
             state.executionModeEnteredAtRound = supervisor.executionModeEnteredAtRound ?? undefined;
             state.forcedDegradedTier = supervisor.forcedDegradedTier;
             state.forcedTaskBearingRoundsSinceEntry = supervisor.forcedTaskBearingRoundsSinceEntry ?? 0;
             state.lastModeDecision = supervisor.lastModeDecision;
-            // L2-6 / T08：把 supervisorPhase + RecoverySupervisor 内部快照 + timeline tail + I4 budget
-            //              推回 bridge；bridge 自身会写 `failure:checkpoint_resumed` timeline 标记。
-            state.supervisorPhase = supervisor.supervisorPhase ?? state.supervisorPhase;
-            state.segmentRenewalCount = supervisor.segmentRenewalCount ?? 0;
-            this.supervisorBridge?.restoreFromCheckpoint(supervisor);
           }
-          state.verificationOutputBuffer.restore(v2.verificationOutputTail);
-          if (v2.acceptanceGate?.active) {
-            if (state.taskAcceptance) {
-              state.taskAcceptance.restore(v2.acceptanceGate);
-            } else {
-              state.taskAcceptance = TaskAcceptanceTracker.fromSnapshot(v2.acceptanceGate);
-            }
-            syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
-          }
-          state.submitModeSignal?.('checkpoint_engine', 'checkpoint_resumed');
-          const pending = this.checkpointEngine.pendingRecoverySignals();
-          if (pending.length > 0) {
-            for (const sig of pending) {
-              messages.push({ role: 'user', content: sig.message });
-            }
-            this.checkpointEngine.markRecoverySignalsConsumed(s => !s.consumed);
-          }
+          // verificationOutputBuffer / acceptanceGate / pending recoverySignals 不跨用户发送恢复
+          this.checkpointEngine.discardPendingRecoverySignals();
         }
       } catch (err) {
         console.debug(
@@ -609,8 +582,14 @@ export class Harness {
       }
     }
 
-    // 每次用户发送触发的 harness.run：文件编辑上限按新任务归零（不继承 checkpoint fileEdits）
-    state.branchBudget?.resetFileEditBudget();
+    // 每次用户发送：门控计数与上下文不继承 checkpoint
+    state.branchBudget?.resetRoundBudget();
+    state.rebuildEscalationInjections = 0;
+    state.rebuildEscalationInjectedThisRound = false;
+    state.parallelBudgetBlockHintInjected = false;
+    state.segmentRenewalCount = 0;
+    state.verificationOutputBuffer.clear();
+    this.supervisorBridge?.resetPerRunInjectionBudget();
 
     if (existingMessages && existingMessages.length > 0) {
       try {
@@ -682,6 +661,8 @@ export class Harness {
     }
 
     try {
+      this.loopController.resetForNewRun();
+      syncExecutionModeLoopState(this.loopController, state);
       while (true) {
         const prep = await prepareHarnessRound(deps, {
           state,

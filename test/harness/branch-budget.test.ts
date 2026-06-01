@@ -163,19 +163,21 @@ describe('BranchBudgetTracker - snapshot / 恢复', () => {
     expect(t.recoverTriggerCount).toBe(0);
   });
 
-  it('resetFileEditBudget 仅清空文件编辑计数与 write 豁免', () => {
+  it('resetRoundBudget 清空 file/command/error 三维计数与豁免', () => {
     const t = new BranchBudgetTracker({ fileEditMax: 2, commandRetryMax: 2 });
     t.recordFileEdit('a.ts');
     t.recordFileEdit('a.ts');
     t.recordFailedCommandAttempt('npm test');
+    t.recordError('boom');
     t.grantWriteBypass('a.ts');
+    t.grantCommandRetryBypass('npm test');
     expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
 
-    t.resetFileEditBudget();
+    t.resetRoundBudget();
 
-    expect(t.inspect().fileEdits).toEqual({});
-    expect(t.inspect().commandRetries).toEqual({ 'npm test': 1 });
+    expect(t.inspect()).toEqual({ fileEdits: {}, commandRetries: {}, errorRepeats: {} });
     expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
+    expect(t.wouldBlockCommandRetry('npm test')).toBe(false);
     t.recordFileEdit('a.ts');
     expect(t.wouldBlockFileEdit('a.ts')).toBe(false);
   });
