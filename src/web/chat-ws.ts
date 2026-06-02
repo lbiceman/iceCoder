@@ -80,6 +80,11 @@ import {
   resolveToolTraceResultStatus,
 } from './tool-trace-format.js';
 import { extractDiffSource } from './tool-display-extract.js';
+import {
+  capToolTraceDiffSource,
+  persistToolTraceDiff,
+  resolveToolDiffForSession,
+} from './session-tool-trace-diffs.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
@@ -192,12 +197,13 @@ interface ToolTraceBatchEntry {
   diffSource?: string | null;
 }
 
-const MAX_TOOL_TRACE_DIFF_CHARS = 80_000;
-
-function capToolTraceDiffSource(diff: string | null | undefined): string | null {
-  if (!diff || typeof diff !== 'string') return null;
-  if (diff.length <= MAX_TOOL_TRACE_DIFF_CHARS) return diff;
-  return diff.slice(0, MAX_TOOL_TRACE_DIFF_CHARS) + '\n...[diff truncated for session storage]';
+function recordPersistedToolTraceDiff(
+  sessionId: string,
+  toolCallId: string | undefined,
+  diffSource: string | null | undefined,
+): void {
+  if (!toolCallId || !diffSource) return;
+  void persistToolTraceDiff(SESSIONS_DIR, sessionId, toolCallId, diffSource);
 }
 
 /** 导出活跃会话 ID，供会话路由等模块使用 */
@@ -680,7 +686,10 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
               typeof event.toolOutput === 'string' ? event.toolOutput : undefined,
               event.toolArgs as Record<string, unknown> | undefined,
             );
-            if (fromOutput) row.diffSource = fromOutput;
+            if (fromOutput) {
+              row.diffSource = fromOutput;
+              recordPersistedToolTraceDiff(sessionId, row.toolCallId, fromOutput);
+            }
             break;
           }
         }
@@ -1455,7 +1464,9 @@ async function handleChatMessage(
                 event.toolArgs as Record<string, unknown> | undefined,
               );
               if (fromOutput) {
-                toolTraceBatch[i].diffSource = capToolTraceDiffSource(fromOutput);
+                const capped = capToolTraceDiffSource(fromOutput);
+                toolTraceBatch[i].diffSource = capped;
+                recordPersistedToolTraceDiff(runSessionId, toolTraceBatch[i].toolCallId, capped);
               }
               break;
             }
@@ -1485,6 +1496,25 @@ async function handleChatMessage(
     // 写入 AI 回复 + 工具调用记录到会话文件
     const agentMsgId = randomUUID();
     const sessionEntries: any[] = [];
+
+    // write_file 输出常无 unified diff：从工作区合成并持久化索引，供历史区 F5 还原
+    for (const trace of toolTraceBatch) {
+      if (trace.toolName !== 'write_file' || trace.diffSource || !trace.toolCallId || !trace.detail) {
+        continue;
+      }
+      const synthesized = await resolveToolDiffForSession({
+        sessionsDir: SESSIONS_DIR,
+        sessionId: runSessionId,
+        defaultWorkDir: process.cwd(),
+        toolCallId: trace.toolCallId,
+        relPath: trace.detail,
+        toolName: 'write_file',
+      });
+      if (!synthesized) continue;
+      const capped = capToolTraceDiffSource(synthesized);
+      trace.diffSource = capped;
+      recordPersistedToolTraceDiff(runSessionId, trace.toolCallId, capped);
+    }
 
     // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
     for (const trace of toolTraceBatch) {

@@ -306,6 +306,15 @@ window.ChatPage = (function () {
       Session.appendMessage(userMsg);
       UI.enableAutoScroll();
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
+      if (UI.maybeRepartitionTailIfNeeded) {
+        UI.maybeRepartitionTailIfNeeded(
+          Session.getMessages(),
+          Session.getToolTraces(),
+          Session.stripStatusTag,
+          false,
+          buildDisplayMap(),
+        );
+      }
       Session.saveMessages();
       var titlePrompt = displayParts.join('\n') || text || '';
       if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {

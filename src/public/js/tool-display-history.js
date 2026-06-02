@@ -125,11 +125,11 @@ window.ToolDisplayHistory = (function () {
   }
 
   function resolveTraceDiffSource(tr, matched, diffByCallId) {
-    if (tr.diffSource) return tr.diffSource;
-    if (tr.toolCallId && diffByCallId && diffByCallId[tr.toolCallId]) {
+    if (tr && tr.diffSource) return tr.diffSource;
+    if (matched && matched.diffSource) return matched.diffSource;
+    if (tr && tr.toolCallId && diffByCallId && diffByCallId[tr.toolCallId]) {
       return diffByCallId[tr.toolCallId];
     }
-    if (matched && matched.diffSource) return matched.diffSource;
     return null;
   }
 
@@ -138,13 +138,199 @@ window.ToolDisplayHistory = (function () {
    * 同一 agent 消息下的多条 tool_trace 可对应 structured 中多轮 assistant tool_calls。
    * @returns {Object<string, Array>} agentMsgId → display entries
    */
+  /**
+   * 按 structured 时间顺序的 tool 结果行（与 flattenStructuredToolEntries 下标一致）。
+   */
+  function buildOrderedToolOutputs(structured) {
+    var rows = [];
+    if (!Array.isArray(structured)) return rows;
+    for (var i = 0; i < structured.length; i++) {
+      var msg = structured[i];
+      if (!msg || msg.role !== 'tool' || typeof msg.content !== 'string') continue;
+      var toolCallId = msg.toolCallId || '';
+      var toolName = '';
+      for (var j = i - 1; j >= 0; j--) {
+        var prev = structured[j];
+        if (!prev || prev.role !== 'assistant' || !Array.isArray(prev.toolCalls)) continue;
+        for (var t = 0; t < prev.toolCalls.length; t++) {
+          var tc = prev.toolCalls[t];
+          if (tc && tc.id === toolCallId) {
+            toolName = tc.name || '';
+            break;
+          }
+        }
+        break;
+      }
+      rows.push({
+        toolCallId: toolCallId,
+        toolName: toolName,
+        content: msg.content,
+        diffSource: extractDiffSource(toolName, msg.content, null),
+      });
+    }
+    return rows;
+  }
+
+  function computeTraceFlatOffset(uiMessages, toolTraces, agentMsgId) {
+    if (!Array.isArray(uiMessages) || !toolTraces || !agentMsgId) return 0;
+    var offset = 0;
+    for (var m = 0; m < uiMessages.length; m++) {
+      var uiMsg = uiMessages[m];
+      if (!uiMsg || !uiMsg.id) continue;
+      if (uiMsg.id === agentMsgId) break;
+      var prevTraces = toolTraces[uiMsg.id];
+      if (prevTraces && prevTraces.length) offset += prevTraces.length;
+    }
+    return offset;
+  }
+
+  /**
+   * 将单条 agent 的 tool_trace 与 structured tool 输出对齐。
+   * UI 中可能有 fs_operation 等未进入 structured 的条目，按 toolName 顺序贪婪匹配，避免 write_file 整体错位。
+   */
+  var cachedStructuredRef = null;
+  var cachedOrderedOutputs = null;
+  var cachedFlatByCallId = null;
+
+  function invalidateStructuredCaches() {
+    cachedStructuredRef = null;
+    cachedOrderedOutputs = null;
+    cachedFlatByCallId = null;
+  }
+
+  function getOrderedToolOutputs(structured) {
+    if (structured === cachedStructuredRef && cachedOrderedOutputs) {
+      return cachedOrderedOutputs;
+    }
+    cachedStructuredRef = structured;
+    cachedOrderedOutputs = buildOrderedToolOutputs(structured);
+    cachedFlatByCallId = null;
+    return cachedOrderedOutputs;
+  }
+
+  function getFlatDiffByCallId(structured) {
+    if (structured !== cachedStructuredRef) getOrderedToolOutputs(structured);
+    if (cachedFlatByCallId) return cachedFlatByCallId;
+    var flat = flattenStructuredToolEntries(structured);
+    var map = {};
+    for (var fi = 0; fi < flat.length; fi++) {
+      var fe = flat[fi];
+      if (fe.toolCallId && fe.diffSource) map[fe.toolCallId] = fe.diffSource;
+    }
+    cachedFlatByCallId = map;
+    return map;
+  }
+
+  function normalizeRelPath(p) {
+    return (p || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  }
+
+  function pathFromWriteDetail(detail) {
+    return normalizeRelPath((detail || '').trim());
+  }
+
+  function pathFromToolOutput(content) {
+    if (!content) return '';
+    var m = /^File written:\s*(.+?)(?:\r?\n|\n|$)/m.exec(content);
+    return m ? normalizeRelPath(m[1].trim()) : '';
+  }
+
+  function pathsMatchForToolAlign(traceDetail, outputContent) {
+    var tr = pathFromWriteDetail(traceDetail);
+    var op = pathFromToolOutput(outputContent);
+    if (!tr || !op) return true;
+    return tr === op;
+  }
+
+  function alignAgentTracesToOutputs(traces, structured, flatOffset) {
+    var outputs = getOrderedToolOutputs(structured);
+    var flatByCallId = null;
+    var usedOut = {};
+    var aligned = [];
+
+    for (var ti = 0; ti < traces.length; ti++) {
+      var tr = traces[ti] || {};
+      var wantName = tr.toolName || '';
+      var row = null;
+      var pickIdx = -1;
+
+      if (tr.toolCallId) {
+        for (var idScan = 0; idScan < outputs.length; idScan++) {
+          if (usedOut[idScan]) continue;
+          if (outputs[idScan].toolCallId === tr.toolCallId) {
+            row = outputs[idScan];
+            pickIdx = idScan;
+            break;
+          }
+        }
+      }
+
+      if (!row && wantName) {
+        for (var scan = 0; scan < outputs.length; scan++) {
+          if (usedOut[scan]) continue;
+          if (outputs[scan].toolName !== wantName) continue;
+          if (!pathsMatchForToolAlign(tr.detail, outputs[scan].content)) continue;
+          row = outputs[scan];
+          pickIdx = scan;
+          break;
+        }
+      }
+
+      if (pickIdx >= 0) usedOut[pickIdx] = true;
+
+      var diffSource = tr.diffSource || null;
+      var traceCallId = tr.toolCallId || '';
+      if (row) {
+        if (!diffSource) {
+          diffSource = row.diffSource
+            || extractDiffSource(row.toolName || wantName, row.content, null);
+        }
+        if (!diffSource && row.toolCallId) {
+          if (!flatByCallId) flatByCallId = getFlatDiffByCallId(structured);
+          diffSource = flatByCallId[row.toolCallId] || null;
+        }
+      }
+      if (!diffSource && traceCallId) {
+        if (!flatByCallId) flatByCallId = getFlatDiffByCallId(structured);
+        diffSource = flatByCallId[traceCallId] || null;
+      }
+
+      aligned.push({
+        toolCallId: traceCallId,
+        toolName: wantName || (row && row.toolName) || '',
+        diffSource: diffSource,
+      });
+    }
+
+    return aligned;
+  }
+
+  function resolveDiffByTraceFlatIndex(structured, flatOffset, traceIndex, tr, diffByCallId, traces) {
+    if (tr && tr.diffSource) return tr.diffSource;
+    if (Array.isArray(traces) && traces.length > 0) {
+      var aligned = alignAgentTracesToOutputs(traces, structured, flatOffset);
+      if (traceIndex >= 0 && traceIndex < aligned.length && aligned[traceIndex].diffSource) {
+        return aligned[traceIndex].diffSource;
+      }
+    }
+    var pos = flatOffset + traceIndex;
+    var outputs = getOrderedToolOutputs(structured);
+    if (pos >= 0 && pos < outputs.length) {
+      var row = outputs[pos];
+      if (row.diffSource) return row.diffSource;
+      if (tr && tr.toolName && row.toolName && tr.toolName !== row.toolName) return null;
+      var fromContent = extractDiffSource(row.toolName || (tr && tr.toolName) || '', row.content, null);
+      if (fromContent) return fromContent;
+    }
+    if (tr && tr.toolCallId && diffByCallId && diffByCallId[tr.toolCallId]) {
+      return diffByCallId[tr.toolCallId];
+    }
+    return null;
+  }
+
   function buildAgentDisplayMap(structured, uiMessages, toolTraces) {
     var map = {};
     if (!Array.isArray(uiMessages) || !toolTraces) return map;
-
-    var flat = flattenStructuredToolEntries(structured);
-    var diffByCallId = buildToolCallDiffIndex(structured);
-    var flatIdx = 0;
 
     for (var m = 0; m < uiMessages.length; m++) {
       var uiMsg = uiMessages[m];
@@ -152,32 +338,8 @@ window.ToolDisplayHistory = (function () {
       var traces = toolTraces[uiMsg.id];
       if (!traces || traces.length === 0) continue;
 
-      var displays = [];
-      for (var k = 0; k < traces.length; k++) {
-        var tr = traces[k];
-        var matched = null;
-
-        if (tr.toolCallId) {
-          for (var fi = flatIdx; fi < flat.length; fi++) {
-            if (flat[fi].toolCallId === tr.toolCallId) {
-              matched = flat[fi];
-              flatIdx = fi + 1;
-              break;
-            }
-          }
-        }
-        if (!matched && flatIdx < flat.length) {
-          matched = flat[flatIdx];
-          flatIdx++;
-        }
-
-        displays.push({
-          toolCallId: (matched && matched.toolCallId) || tr.toolCallId || '',
-          toolName: tr.toolName || (matched && matched.toolName) || '',
-          diffSource: resolveTraceDiffSource(tr, matched, diffByCallId),
-        });
-      }
-      map[uiMsg.id] = displays;
+      var flatOffset = computeTraceFlatOffset(uiMessages, toolTraces, uiMsg.id);
+      map[uiMsg.id] = alignAgentTracesToOutputs(traces, structured, flatOffset);
     }
 
     return map;
@@ -211,7 +373,12 @@ window.ToolDisplayHistory = (function () {
     parseStructuredToolRounds: parseStructuredToolRounds,
     flattenStructuredToolEntries: flattenStructuredToolEntries,
     buildToolCallDiffIndex: buildToolCallDiffIndex,
+    buildOrderedToolOutputs: buildOrderedToolOutputs,
+    alignAgentTracesToOutputs: alignAgentTracesToOutputs,
+    computeTraceFlatOffset: computeTraceFlatOffset,
+    resolveDiffByTraceFlatIndex: resolveDiffByTraceFlatIndex,
     buildAgentDisplayMap: buildAgentDisplayMap,
+    invalidateStructuredCaches: invalidateStructuredCaches,
     renderDiffElement: renderDiffElement,
   };
 })();

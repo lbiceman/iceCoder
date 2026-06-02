@@ -31,7 +31,15 @@
     if (!container) {
       container = document.createElement('div');
       container.className = 'bg-status-container';
-      messagesEl.appendChild(container);
+      var tailRoot = messagesEl.querySelector('.chat-tail-root');
+      var tailAnchor = messagesEl.querySelector('.chat-tail-anchor');
+      var insertParent = (tailRoot && tailAnchor) ? tailRoot : messagesEl;
+      var insertRef = (tailRoot && tailAnchor) ? tailAnchor : messagesEl.querySelector('.chat-messages-anchor');
+      if (insertRef) {
+        insertParent.insertBefore(container, insertRef);
+      } else {
+        messagesEl.appendChild(container);
+      }
     }
     return container;
   }
