@@ -15,6 +15,7 @@ window.ChatVirtualHistory = (function () {
   var OVERSCAN_ITEMS = 5;
   var SCROLL_RENDER_DEBOUNCE_MS = 32;
   var RO_DEBOUNCE_MS = 50;
+  var CONTAINER_RESIZE_DEBOUNCE_MS = 500;
   var DEFAULT_MESSAGE_HEIGHT = 96;
   var DEFAULT_TOOLS_ROW_HEIGHT = 36;
   var DEFAULT_TOOLS_GROUP_EXTRA = 8;
@@ -97,8 +98,12 @@ window.ChatVirtualHistory = (function () {
     var layerEl = null;
     var roDebounceTimer = 0;
     var roDirtyFrom = -1;
-    var heightCommitRaf = 0;
+    var heightCommitTimer = 0;
     var heightDirtyFrom = -1;
+    var containerResizeObserver = null;
+    var containerResizeTimer = 0;
+    var lastContainerWidth = 0;
+    var suppressSlotResize = false;
     var rafPending = 0;
     var pendingRender = false;
     var scrollDebounceTimer = 0;
@@ -239,29 +244,37 @@ window.ChatVirtualHistory = (function () {
     /**
      * 更新偏移/总高前后用 DOM 锚点保持视口稳定（避免 F5 后首次遇到长消息时 scrollHeight 跳变）。
      */
-    function applyHeightDirty(dirtyFrom) {
+    function applyHeightDirty(dirtyFrom, opts) {
       if (dirtyFrom < 0 || !units.length) return;
+      opts = opts || {};
       var coords = getViewCoords();
-      var anchor = isViewingHistoryContent(coords.viewTop) && !isNearChatBottom()
-        ? captureScrollAnchor(coords.viewTop)
+      var useContentAnchor = !!opts.contentAnchor;
+      var contentViewTop = coords.viewTop;
+      var domAnchor = !useContentAnchor && isViewingHistoryContent(contentViewTop) && !isNearChatBottom()
+        ? captureScrollAnchor(contentViewTop)
         : null;
       rebuildOffsets(dirtyFrom);
       applyHeights();
       repositionMountedSlots();
-      if (anchor) applyScrollCompensation(anchor);
+      if (useContentAnchor && isViewingHistoryContent(contentViewTop)) {
+        applyContentOffsetAnchor(contentViewTop);
+      } else if (domAnchor) {
+        applyScrollCompensation(domAnchor);
+      }
     }
 
     function scheduleHeightCommit(dirtyFrom) {
+      if (suppressSlotResize) return;
       if (dirtyFrom >= 0 && (heightDirtyFrom < 0 || dirtyFrom < heightDirtyFrom)) {
         heightDirtyFrom = dirtyFrom;
       }
-      if (heightCommitRaf) return;
-      heightCommitRaf = requestAnimationFrame(function () {
-        heightCommitRaf = 0;
+      if (heightCommitTimer) clearTimeout(heightCommitTimer);
+      heightCommitTimer = setTimeout(function () {
+        heightCommitTimer = 0;
         var from = heightDirtyFrom;
         heightDirtyFrom = -1;
         if (from >= 0) applyHeightDirty(from);
-      });
+      }, RO_DEBOUNCE_MS);
     }
 
     function scheduleRoFlush() {
@@ -279,21 +292,93 @@ window.ChatVirtualHistory = (function () {
     }
 
     function onSlotResize(slot, key) {
+      if (suppressSlotResize) return;
       var idx = indexOfKey(key);
       if (idx < 0) return;
       if (measureSlotIntoCache(slot, key, idx) >= 0) scheduleHeightCommit(idx);
     }
 
     function flushPendingHeightCommit() {
-      if (heightCommitRaf) {
-        cancelAnimationFrame(heightCommitRaf);
-        heightCommitRaf = 0;
+      if (heightCommitTimer) {
+        clearTimeout(heightCommitTimer);
+        heightCommitTimer = 0;
       }
       if (heightDirtyFrom >= 0) {
         var from = heightDirtyFrom;
         heightDirtyFrom = -1;
         applyHeightDirty(from);
       }
+    }
+
+    function cancelPendingHeightCommit() {
+      if (heightCommitTimer) {
+        clearTimeout(heightCommitTimer);
+        heightCommitTimer = 0;
+      }
+      heightDirtyFrom = -1;
+    }
+
+    /** 侧栏展开、页面缩放等导致聊天区变窄时，批量重测避免逐条 RO 连续补偿抖动 */
+    function remeasureMountedSlotsBatch() {
+      if (!layerEl || !units.length) return false;
+      var coords = getViewCoords();
+      var keepContentTop = isViewingHistoryContent(coords.viewTop) && !isNearChatBottom();
+      var contentViewTop = coords.viewTop;
+      var dirtyFrom = -1;
+      var slots = layerEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
+      for (var i = 0; i < slots.length; i++) {
+        var key = slots[i].getAttribute('data-vkey') || '';
+        var idx = indexOfKey(key);
+        if (idx < 0) continue;
+        var measured = measureSlotHeight(slots[i]);
+        if (measured <= 0) continue;
+        heightCache[key] = measured;
+        if (dirtyFrom < 0 || idx < dirtyFrom) dirtyFrom = idx;
+      }
+      if (dirtyFrom < 0) return false;
+      rebuildOffsets(dirtyFrom);
+      applyHeights();
+      repositionMountedSlots();
+      if (keepContentTop) applyContentOffsetAnchor(contentViewTop);
+      return true;
+    }
+
+    function handleContainerResize() {
+      containerResizeTimer = 0;
+      if (!units.length) return;
+      cancelPendingHeightCommit();
+      if (roDebounceTimer) {
+        clearTimeout(roDebounceTimer);
+        roDebounceTimer = 0;
+        roDirtyFrom = -1;
+      }
+      suppressSlotResize = true;
+      remeasureMountedSlotsBatch();
+      suppressSlotResize = false;
+      scheduleRenderImmediate();
+    }
+
+    function scheduleContainerResize() {
+      if (containerResizeTimer) clearTimeout(containerResizeTimer);
+      containerResizeTimer = setTimeout(handleContainerResize, CONTAINER_RESIZE_DEBOUNCE_MS);
+    }
+
+    function ensureContainerResizeObserver() {
+      if (containerResizeObserver || typeof ResizeObserver === 'undefined' || !scrollRoot) return;
+      lastContainerWidth = scrollRoot.clientWidth;
+      containerResizeObserver = new ResizeObserver(function (entries) {
+        var entry = entries[0];
+        if (!entry) return;
+        var w = entry.contentRect.width;
+        if (lastContainerWidth <= 0) {
+          lastContainerWidth = w;
+          return;
+        }
+        if (Math.abs(w - lastContainerWidth) < 1) return;
+        lastContainerWidth = w;
+        scheduleContainerResize();
+      });
+      containerResizeObserver.observe(scrollRoot);
     }
 
     function attachSlotResizeObserver(slot, key) {
@@ -362,9 +447,19 @@ window.ChatVirtualHistory = (function () {
       var rootRect = scrollRoot.getBoundingClientRect();
       var currentOffset = anchorSlot.getBoundingClientRect().top - rootRect.top;
       var drift = currentOffset - anchor.offsetFromViewport;
-      if (Math.abs(drift) <= 2) return;
+      if (Math.abs(drift) <= 1) return;
       restoringScroll = true;
       scrollRoot.scrollTop += drift;
+      requestAnimationFrame(function () {
+        restoringScroll = false;
+      });
+    }
+
+    /** 按历史区内容坐标锚定，布局批量更新后比逐帧 getBoundingClientRect 更稳 */
+    function applyContentOffsetAnchor(contentViewTop) {
+      if (!scrollRoot || !outerEl || isNearChatBottom()) return;
+      restoringScroll = true;
+      scrollRoot.scrollTop = outerEl.offsetTop + contentViewTop;
       requestAnimationFrame(function () {
         restoringScroll = false;
       });
@@ -647,9 +742,13 @@ window.ChatVirtualHistory = (function () {
         clearTimeout(roDebounceTimer);
         roDebounceTimer = 0;
       }
-      if (heightCommitRaf) {
-        cancelAnimationFrame(heightCommitRaf);
-        heightCommitRaf = 0;
+      if (heightCommitTimer) {
+        clearTimeout(heightCommitTimer);
+        heightCommitTimer = 0;
+      }
+      if (containerResizeTimer) {
+        clearTimeout(containerResizeTimer);
+        containerResizeTimer = 0;
       }
     }
 
@@ -665,6 +764,7 @@ window.ChatVirtualHistory = (function () {
           stickyThresholdPx = opts.stickyThresholdPx;
         }
         ensureDomShell();
+        ensureContainerResizeObserver();
       },
       setUnits: function (nextUnits) {
         units = Array.isArray(nextUnits) ? nextUnits : [];
