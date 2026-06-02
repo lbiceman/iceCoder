@@ -14,6 +14,7 @@
 
   /** ChipStore：跟踪当前活跃 chip 元素 + 自动移除定时器 */
   var chips = new Map(); // taskId → { el, removeTimer, lastTask, viaCheck }
+  var stopHandler = null;
 
   function terminalConfirmSuffix(task) {
     if (!task.isTerminal || !task.viaCheck) return '';
@@ -35,9 +36,11 @@
     return container;
   }
 
-  function buildChipHtml(task) {
+  function buildChipHtml(task, isStopping) {
     var statusText;
-    if (task.isHang) {
+    if (isStopping) {
+      statusText = 'stopping…';
+    } else if (task.isHang) {
       statusText = 'no output for >30min, may be hung';
     } else if (task.isTerminal) {
       var verb = task.status === 'completed' ? 'completed'
@@ -65,6 +68,42 @@
       else cls += ' is-terminal-error';
     }
     return cls;
+  }
+
+  function setStopHandler(fn) {
+    stopHandler = typeof fn === 'function' ? fn : null;
+  }
+
+  function renderChipEl(el, task) {
+    var isStopping = el.classList.contains('is-stopping') && !task.isTerminal;
+    el.className = classForTask(task);
+    if (isStopping) el.classList.add('is-stopping');
+    el.innerHTML = '';
+    var body = document.createElement('div');
+    body.className = 'bg-status-body';
+    body.innerHTML = buildChipHtml(task, isStopping);
+    el.appendChild(body);
+    var canStop = !task.isTerminal && task.status === 'running';
+    if (canStop) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'bg-status-stop-btn';
+      btn.setAttribute('aria-label', '终止后台任务');
+      btn.title = '终止';
+      btn.textContent = '\u00d7';
+      if (el.classList.contains('is-stopping')) btn.disabled = true;
+      btn.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!stopHandler || btn.disabled) return;
+        btn.disabled = true;
+        el.classList.add('is-stopping');
+        stopHandler(task.taskId, btn, el);
+      });
+      el.appendChild(btn);
+    } else {
+      el.classList.remove('is-stopping');
+    }
   }
 
   function scheduleRemoval(taskId, delayMs) {
@@ -114,15 +153,13 @@
       task = Object.assign({}, task, { viaCheck: true });
     }
     if (entry && entry.el) {
-      entry.el.className = classForTask(task);
-      entry.el.innerHTML = buildChipHtml(task);
+      renderChipEl(entry.el, task);
       entry.lastTask = task;
       entry.viaCheck = entry.viaCheck || !!task.viaCheck;
     } else {
       var el = document.createElement('div');
-      el.className = classForTask(task);
       el.setAttribute('data-task-id', task.taskId);
-      el.innerHTML = buildChipHtml(task);
+      renderChipEl(el, task);
       container.appendChild(el);
       chips.set(task.taskId, { el: el, removeTimer: null, lastTask: task, viaCheck: !!task.viaCheck });
       entry = chips.get(task.taskId);
@@ -147,6 +184,15 @@
     }
   }
 
+  /** 终止请求失败时恢复关闭按钮（任务仍在运行） */
+  function resetStopPending(taskId) {
+    var entry = chips.get(taskId);
+    if (!entry || !entry.el || !entry.lastTask) return;
+    entry.el.classList.remove('is-stopping');
+    var container = entry.el.parentNode;
+    if (container) upsertChip(container, entry.lastTask);
+  }
+
   /** 切换 session / 清屏时调用 */
   function clearAll() {
     chips.forEach(function (entry, taskId) {
@@ -166,6 +212,8 @@
   global.BgTaskChip = {
     handleUpdate: handleUpdate,
     markConfirmedViaCheck: markConfirmedViaCheck,
+    setStopHandler: setStopHandler,
+    resetStopPending: resetStopPending,
     clearAll: clearAll,
     getActiveCount: getActiveCount,
     /** 暴露用于单测：构造 chip 文本 */

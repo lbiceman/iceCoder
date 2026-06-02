@@ -73,7 +73,7 @@ import {
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
 import { BgTaskPusher } from './bg-task-pusher.js';
-import { getBackgroundTaskManagerFor } from '../tools/background-task-manager.js';
+import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning } from '../tools/background-task-manager.js';
 import {
   formatToolArgsDetailPreview,
   resolveToolCallInitialStatus,
@@ -451,6 +451,65 @@ async function rebindBgTaskPusher(sessionId: string): Promise<void> {
   const mgr = getBackgroundTaskManagerFor(sessionId, workDir);
   ensureBgTaskPusher().attach(mgr);
   ensureBgTaskPusher().tick();
+}
+
+/** 用户从 UI 终止后台任务（bg task chip 关闭按钮） */
+async function handleBgTaskStop(
+  ws: WebSocket,
+  taskId: string,
+  fallbackSessionId: string,
+): Promise<void> {
+  const sid = wsToSubscribedSession.get(ws) || fallbackSessionId;
+  console.log(`[chat-ws] 收到 bg_task_stop taskId=${taskId || '(empty)'} wsSession=${sid}`);
+
+  if (!taskId) {
+    sendJSON(ws, { type: 'bg_task_stop_result', ok: false, error: 'missing taskId' });
+    return;
+  }
+  try {
+    const workspace = await resolveSessionWorkspacePayload(sid);
+    const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+    let mgr = getBackgroundTaskManagerFor(sid, workDir);
+    let ok = mgr.kill(taskId);
+    if (!ok) {
+      const owner = findBackgroundTaskManagerOwning(taskId);
+      if (owner) {
+        console.log(
+          `[chat-ws] bg_task_stop 在 session=${owner.sessionId} 找到任务（WS session=${sid}）`,
+        );
+        mgr = owner;
+        ensureBgTaskPusher().attach(mgr);
+        ok = mgr.kill(taskId);
+      }
+    } else {
+      ensureBgTaskPusher().attach(mgr);
+    }
+    if (!ok) {
+      console.warn(`[chat-ws] 终止后台任务失败 ${taskId} session=${sid}（未找到或已结束）`);
+      sendJSON(ws, {
+        type: 'bg_task_stop_result',
+        ok: false,
+        taskId,
+        sessionId: sid,
+        error: 'Task not found or not running',
+      });
+      return;
+    }
+    const stopped = mgr.getStatus(taskId);
+    console.log(
+      `[chat-ws] 用户终止后台任务 ${taskId}${stopped?.label ? ` (${stopped.label})` : ''} session=${mgr.sessionId}`,
+    );
+    ensureBgTaskPusher().tick();
+    sendJSON(ws, { type: 'bg_task_stop_result', ok: true, taskId, sessionId: mgr.sessionId });
+  } catch (err) {
+    console.error('[chat-ws] bg_task_stop 异常:', err);
+    sendJSON(ws, {
+      type: 'bg_task_stop_result',
+      ok: false,
+      taskId,
+      error: formatFriendlyError(err),
+    });
+  }
 }
 
 const DEFAULT_WORK_DIR = process.cwd();
@@ -960,6 +1019,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             activeAbortController.abort();
             console.log('[chat-ws] 用户请求中断任务');
           }
+          return;
+        }
+
+        if (msg.type === 'bg_task_stop') {
+          const taskId = typeof msg.taskId === 'string' ? msg.taskId.trim() : '';
+          await handleBgTaskStop(ws, taskId, activeSessionId);
           return;
         }
 

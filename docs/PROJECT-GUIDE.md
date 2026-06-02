@@ -252,6 +252,8 @@ Injected by `ContextAssembler`:
 
 This separation keeps the stable prompt cache-friendly while allowing changing runtime state to flow into the model.
 
+中文版设计文档：[`前缀缓存优化方案`](./harness/Prompt-Caching-优化方案.md)（双轨上下文 + 封存裁剪，待实施；含实施难度、用户体验、缓存命中率、费用节约估算）。
+
 ### Tool Disable Semantics
 
 `ICE_EVAL_MODE=1` or `ICE_DISABLE_TOOLS=1` disables runtime tools and removes tool-oriented prompt sections. This avoids the earlier split where some entrypoints removed tool instructions but still passed tools to the model.

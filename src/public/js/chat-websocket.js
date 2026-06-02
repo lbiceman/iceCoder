@@ -189,6 +189,14 @@ window.ChatWebSocket = (function () {
           tasks: Array.isArray(data.tasks) ? data.tasks : [],
         });
         break;
+      case 'bg_task_stop_result':
+        emit('bg_task_stop_result', {
+          ok: !!data.ok,
+          taskId: data.taskId || '',
+          sessionId: data.sessionId || '',
+          error: data.error || '',
+        });
+        break;
     }
   }
 

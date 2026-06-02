@@ -26,6 +26,10 @@
   margin: 4px 0;
 }
 .message-bg_status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   opacity: 0.75;
   font-size: 0.85em;
   border-left: 2px solid var(--text-muted);
@@ -34,8 +38,39 @@
   border-radius: 4px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
+.message-bg_status .bg-status-body {
+  flex: 1;
+  min-width: 0;
+}
+.message-bg_status .bg-status-stop-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.message-bg_status .bg-status-stop-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: var(--bg-active, rgba(255, 255, 255, 0.08));
+  color: var(--danger);
+}
+.message-bg_status .bg-status-stop-btn:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
 .message-bg_status .bg-status-label { font-weight: 600; }
 .message-bg_status .bg-status-id { opacity: 0.6; margin: 0 6px; }
+.message-bg_status.is-stopping { opacity: 0.55; }
 .message-bg_status.is-terminal-success { border-left-color: var(--success); color: var(--success); }
 .message-bg_status.is-terminal-error { border-left-color: var(--danger); color: var(--danger); }
 .message-bg_status.is-hang { border-left-color: var(--warning); color: var(--warning); }

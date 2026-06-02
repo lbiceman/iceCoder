@@ -933,6 +933,13 @@ window.ChatPage = (function () {
     }
   }
 
+  function onWsBgTaskStopResult(payload) {
+    if (!window.BgTaskChip || !payload || payload.ok) return;
+    if (window.BgTaskChip.resetStopPending && payload.taskId) {
+      window.BgTaskChip.resetStopPending(payload.taskId);
+    }
+  }
+
   function onWsBgTaskUpdate(payload) {
     if (!window.BgTaskChip || !elMessages) return;
     var activeId = (Session && typeof Session.getActiveId === 'function')
@@ -1109,6 +1116,13 @@ window.ChatPage = (function () {
 
     fetchSupportedFormats();
 
+    if (window.BgTaskChip && window.BgTaskChip.setStopHandler) {
+      window.BgTaskChip.setStopHandler(function (taskId) {
+        if (!WS.isConnected || !WS.isConnected()) return;
+        WS.send({ type: 'bg_task_stop', taskId: taskId });
+      });
+    }
+
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
     WS.on('connected', onWsConnected);
@@ -1130,6 +1144,7 @@ window.ChatPage = (function () {
     WS.on('workspace_updated', syncSidebarWorkspace);
     WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);
+    WS.on('bg_task_stop_result', onWsBgTaskStopResult);
     WS.on('tool_output', onWsToolOutput);
 
     // 连接 WebSocket
