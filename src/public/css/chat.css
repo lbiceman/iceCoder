@@ -101,24 +101,39 @@
 .chat-history-window {
   position: relative;
   width: 100%;
-  display: flex;
-  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
   contain: layout style;
 }
-.chat-vhistory-spacer {
-  flex-shrink: 0;
+/* 占位撑开历史区总高度（滚动条由外层 .chat-messages 承担） */
+.chat-vhistory-phantom {
   width: 100%;
+  pointer-events: none;
+  visibility: hidden;
   overflow: hidden;
   overflow-anchor: none;
 }
+.chat-vhistory-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  pointer-events: none;
+  overflow-anchor: none;
+}
 .chat-vhistory-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   pointer-events: auto;
-  flex-shrink: 0;
   overflow-anchor: none;
+  will-change: transform;
 }
 /* 虚拟槽内复刻 .chat-messages 的气泡左右对齐 */
 .chat-vhistory-slot .message.user {
