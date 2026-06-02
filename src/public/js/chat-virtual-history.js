@@ -97,6 +97,10 @@ window.ChatVirtualHistory = (function () {
     var topSpacerEl = null;
     var bottomSpacerEl = null;
     var resizeObserver = null;
+    var restoringScroll = false;
+    var layoutSyncPending = false;
+    /** 与 chat-ui.js SCROLL_STICKY_THRESHOLD_PX 一致：贴底时不改写 scrollTop */
+    var stickyThresholdPx = 80;
 
     function getHeight(unit) {
       if (!unit || !unit.key) return DEFAULT_MESSAGE_HEIGHT;
@@ -122,6 +126,84 @@ window.ChatVirtualHistory = (function () {
       return y;
     }
 
+    function isNearChatBottom() {
+      if (!scrollRoot) return false;
+      var dist = scrollRoot.scrollHeight - scrollRoot.scrollTop - scrollRoot.clientHeight;
+      return dist < stickyThresholdPx;
+    }
+
+    /** 视口是否仍落在虚拟历史内容内（不含尾部真实 DOM） */
+    function isViewingHistoryContent(viewTop) {
+      if (!units.length) return false;
+      return viewTop < totalContentHeight();
+    }
+
+    function isViewingHistoryRegion(viewTop) {
+      if (!units.length) return false;
+      return viewTop < totalContentHeight() + OVERSCAN_PX;
+    }
+
+    /** 视口顶边落在的第一个单元，用作滚动锚点 */
+    function findAnchorIndex(viewTop) {
+      if (!units.length) return 0;
+      for (var i = 0; i < units.length; i++) {
+        var top = offsetTopForIndex(i);
+        var bottom = top + getHeight(units[i]);
+        if (bottom > viewTop) return i;
+      }
+      return units.length - 1;
+    }
+
+    function findSlotByKey(key) {
+      if (!windowEl || !key) return null;
+      var slots = windowEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
+      for (var si = 0; si < slots.length; si++) {
+        if (slots[si].getAttribute('data-vkey') === key) return slots[si];
+      }
+      return null;
+    }
+
+    /** 捕获视口内锚点：优先用 DOM 实测位置（抵消 flex ::before 导致的 offsetTop 漂移） */
+    function captureScrollAnchor(viewTop) {
+      if (!scrollRoot || !units.length || !isViewingHistoryContent(viewTop)) return null;
+      var idx = findAnchorIndex(viewTop);
+      var key = units[idx].key;
+      var slot = findSlotByKey(key);
+      var offsetFromViewport = viewTop - offsetTopForIndex(idx);
+      if (slot) {
+        var rootRect = scrollRoot.getBoundingClientRect();
+        offsetFromViewport = slot.getBoundingClientRect().top - rootRect.top;
+      }
+      return {
+        key: key,
+        offsetFromViewport: offsetFromViewport,
+        fallbackOffsetPx: viewTop - offsetTopForIndex(idx),
+      };
+    }
+
+    /**
+     * 仅修正虚拟历史区布局漂移（视觉锚点）。
+     * 不对 scrollRoot 做 scrollHeight 差值补偿：尾部流式增高也会改变 scrollHeight，
+     * 误用「顶部插入」公式会把已上滚的视口拽向中间。
+     */
+    function applyScrollCompensation(anchor) {
+      if (!scrollRoot || !anchor || isNearChatBottom()) return;
+
+      var anchorSlot = findSlotByKey(anchor.key);
+      if (!anchorSlot) return;
+
+      var rootRect = scrollRoot.getBoundingClientRect();
+      var currentOffset = anchorSlot.getBoundingClientRect().top - rootRect.top;
+      var drift = currentOffset - anchor.offsetFromViewport;
+      if (Math.abs(drift) <= 2) return;
+
+      restoringScroll = true;
+      scrollRoot.scrollTop += drift;
+      requestAnimationFrame(function () {
+        restoringScroll = false;
+      });
+    }
+
     function findIndexRange(viewTop, viewBottom) {
       if (!units.length) return { start: 0, end: -1 };
       var start = 0;
@@ -144,20 +226,6 @@ window.ChatVirtualHistory = (function () {
       return { start: start, end: Math.max(start, end) };
     }
 
-    function findUnitByKey(key) {
-      if (!key) return null;
-      for (var ui = 0; ui < units.length; ui++) {
-        if (units[ui].key === key) return units[ui];
-      }
-      return null;
-    }
-
-    function resetHeightCacheToEstimate(key) {
-      var unit = findUnitByKey(key);
-      if (!unit || !key) return;
-      heightCache[key] = estimateUnitHeight(unit);
-    }
-
     function applyOuterHeight() {
       if (!outerEl) return;
       var h = totalContentHeight();
@@ -177,6 +245,7 @@ window.ChatVirtualHistory = (function () {
 
     function cacheSlotHeight(slot, key) {
       if (!slot || !key) return false;
+      if (isScrolling) return false;
       var measured = measureSlotHeight(slot);
       if (measured <= 0) return false;
       if (heightCache[key] === measured) return false;
@@ -184,14 +253,44 @@ window.ChatVirtualHistory = (function () {
       return true;
     }
 
+    function clearSlotMinHeights() {
+      if (!windowEl) return;
+      var slots = windowEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
+      for (var i = 0; i < slots.length; i++) slots[i].style.minHeight = '';
+    }
+
+    /** 滚动中仅用缓存高度占位，停止后再实测写入 heightCache */
+    function finalizeSlotAfterRender(slot, unit) {
+      if (!slot || !unit) return;
+      if (isScrolling) {
+        applySlotMinHeight(slot, unit);
+        return;
+      }
+      cacheSlotHeight(slot, unit.key);
+      slot.style.minHeight = '';
+    }
+
+    function runLayoutSettle(allowScrollCompensation) {
+      if (!scrollRoot || !outerEl) return;
+      var viewTop = scrollRoot.scrollTop - outerEl.offsetTop;
+      var anchor = allowScrollCompensation && isViewingHistoryContent(viewTop)
+        ? captureScrollAnchor(viewTop)
+        : null;
+      measureMountedRows(true);
+      applyOuterHeight();
+      updateSpacerHeights();
+      clearSlotMinHeights();
+      if (anchor) applyScrollCompensation(anchor);
+    }
+
     function ensureResizeObserver() {
       if (resizeObserver || typeof ResizeObserver === 'undefined' || !windowEl) return;
       resizeObserver = new ResizeObserver(function () {
-        if (isScrolling) return;
-        if (measureMountedRows(true)) {
-          applyOuterHeight();
-          updateSpacerHeights();
+        if (isScrolling) {
+          layoutSyncPending = true;
+          return;
         }
+        runLayoutSettle(false);
       });
       resizeObserver.observe(windowEl);
     }
@@ -248,6 +347,12 @@ window.ChatVirtualHistory = (function () {
       });
     }
 
+    function applySlotMinHeight(slot, unit) {
+      if (!slot || !unit || !unit.key) return;
+      var h = getHeight(unit);
+      if (h > 0) slot.style.minHeight = h + 'px';
+    }
+
     function createSlotForUnit(unit, idx) {
       var slot = document.createElement('div');
       slot.className = 'chat-vhistory-slot';
@@ -255,10 +360,66 @@ window.ChatVirtualHistory = (function () {
       slot.setAttribute('data-vindex', String(idx));
       slot.style.width = '100%';
       slot.style.boxSizing = 'border-box';
+      applySlotMinHeight(slot, unit);
       if (idx < units.length - 1) slot.style.marginBottom = UNIT_GAP_PX + 'px';
       renderUnitFn(unit, slot);
-      cacheSlotHeight(slot, unit.key);
+      finalizeSlotAfterRender(slot, unit);
       return slot;
+    }
+
+    function ensureDomShell() {
+      ensureSpacers();
+      if (!topSpacerEl.parentNode) windowEl.appendChild(topSpacerEl);
+      if (!bottomSpacerEl.parentNode) windowEl.appendChild(bottomSpacerEl);
+      if (windowEl.firstChild !== topSpacerEl) {
+        windowEl.insertBefore(topSpacerEl, windowEl.firstChild);
+      }
+    }
+
+    function wouldRangeChange(viewTop, viewBottom) {
+      if (!units.length) return lastRangeStart >= 0;
+      if (viewBottom < -OVERSCAN_PX || viewTop > totalContentHeight() + OVERSCAN_PX) {
+        return lastRangeStart >= 0 || lastRangeEnd >= 0;
+      }
+      var range = findIndexRange(viewTop, viewBottom);
+      if (range.end < range.start) return false;
+      return range.start !== lastRangeStart || range.end !== lastRangeEnd;
+    }
+
+    /** 增量更新可见槽，避免 innerHTML 清空造成一帧空白 */
+    function patchVisibleRange(range, recycle) {
+      ensureDomShell();
+
+      var needed = {};
+      for (var ni = range.start; ni <= range.end; ni++) {
+        needed[units[ni].key] = true;
+      }
+
+      var existing = windowEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
+      for (var ex = 0; ex < existing.length; ex++) {
+        var exKey = existing[ex].getAttribute('data-vkey') || '';
+        if (!needed[exKey]) existing[ex].remove();
+      }
+
+      var insertRef = bottomSpacerEl;
+      for (var idx = range.end; idx >= range.start; idx--) {
+        var unit = units[idx];
+        var slot = recycle[unit.key] || createSlotForUnit(unit, idx);
+        slot.setAttribute('data-vindex', String(idx));
+        applySlotMinHeight(slot, unit);
+        if (idx < units.length - 1) slot.style.marginBottom = UNIT_GAP_PX + 'px';
+        else slot.style.marginBottom = '';
+        finalizeSlotAfterRender(slot, unit);
+        if (slot.nextElementSibling !== insertRef) {
+          windowEl.insertBefore(slot, insertRef);
+        }
+        insertRef = slot;
+        mountedKeys[unit.key] = true;
+      }
+
+      if (windowEl.lastChild !== bottomSpacerEl) {
+        windowEl.appendChild(bottomSpacerEl);
+      }
     }
 
     function renderVisible() {
@@ -273,10 +434,12 @@ window.ChatVirtualHistory = (function () {
       var viewBottom = viewTop + scrollRoot.clientHeight;
 
       if (viewBottom < -OVERSCAN_PX || viewTop > totalContentHeight() + OVERSCAN_PX) {
-        windowEl.innerHTML = '';
+        while (windowEl.firstChild) windowEl.removeChild(windowEl.firstChild);
         topSpacerEl = null;
         bottomSpacerEl = null;
         mountedKeys = {};
+        lastRangeStart = -1;
+        lastRangeEnd = -2;
         return;
       }
 
@@ -287,60 +450,31 @@ window.ChatVirtualHistory = (function () {
 
       if (!rangeChanged) {
         updateSpacerHeights();
-        if (!isScrolling && measureMountedRows(false)) {
-          applyOuterHeight();
-          updateSpacerHeights();
-        }
+        if (!isScrolling) runLayoutSettle(false);
         return;
       }
 
-      var needed = {};
-      for (var ni = range.start; ni <= range.end; ni++) {
-        needed[units[ni].key] = true;
+      var neededKeys = {};
+      for (var nk = range.start; nk <= range.end; nk++) {
+        neededKeys[units[nk].key] = true;
       }
 
       var prevSlots = windowEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
       var recycle = {};
+      mountedKeys = {};
       for (var ps = 0; ps < prevSlots.length; ps++) {
         var prev = prevSlots[ps];
         var pk = prev.getAttribute('data-vkey');
-        if (needed[pk]) {
-          recycle[pk] = prev;
-        } else {
-          resetHeightCacheToEstimate(pk);
-        }
+        if (neededKeys[pk]) recycle[pk] = prev;
       }
 
-      windowEl.innerHTML = '';
-      ensureSpacers();
-      windowEl.appendChild(topSpacerEl);
-      mountedKeys = {};
-
-      for (var idx = range.start; idx <= range.end; idx++) {
-        var unit = units[idx];
-        var slot = recycle[unit.key] || createSlotForUnit(unit, idx);
-        if (recycle[unit.key]) {
-          slot.setAttribute('data-vindex', String(idx));
-          if (idx < units.length - 1) slot.style.marginBottom = UNIT_GAP_PX + 'px';
-          else slot.style.marginBottom = '';
-          cacheSlotHeight(slot, unit.key);
-        }
-        mountedKeys[unit.key] = true;
-        windowEl.appendChild(slot);
-      }
-
-      windowEl.appendChild(bottomSpacerEl);
+      patchVisibleRange(range, recycle);
 
       lastRangeStart = range.start;
       lastRangeEnd = range.end;
       updateSpacerHeights();
 
-      if (measureMountedRows(false)) {
-        applyOuterHeight();
-        updateSpacerHeights();
-      } else {
-        applyOuterHeight();
-      }
+      if (!isScrolling) runLayoutSettle(false);
 
       if (typeof onAfterVisibleRender === 'function' && rangeChanged) {
         onAfterVisibleRender(range.start, range.end);
@@ -348,12 +482,23 @@ window.ChatVirtualHistory = (function () {
     }
 
     function remeasureLayout() {
-      measureMountedRows(true);
-      applyOuterHeight();
-      updateSpacerHeights();
+      if (isScrolling) {
+        layoutSyncPending = true;
+        return;
+      }
+      runLayoutSettle(true);
     }
 
     function scheduleRender() {
+      if (scrollRoot && outerEl && units.length) {
+        var historyTop = outerEl.offsetTop;
+        var viewTopNow = scrollRoot.scrollTop - historyTop;
+        var viewBottomNow = viewTopNow + scrollRoot.clientHeight;
+        if (wouldRangeChange(viewTopNow, viewBottomNow)) {
+          scheduleRenderImmediate();
+          return;
+        }
+      }
       if (scrollDebounceTimer) clearTimeout(scrollDebounceTimer);
       scrollDebounceTimer = setTimeout(function () {
         scrollDebounceTimer = 0;
@@ -371,10 +516,9 @@ window.ChatVirtualHistory = (function () {
 
     function onScrollIdle() {
       isScrolling = false;
-      if (measureMountedRows(true)) {
-        applyOuterHeight();
-        updateSpacerHeights();
-      }
+      if (!scrollRoot || !outerEl) return;
+      layoutSyncPending = false;
+      runLayoutSettle(true);
     }
 
     return {
@@ -385,6 +529,9 @@ window.ChatVirtualHistory = (function () {
         scrollRoot = opts.scrollRoot || null;
         renderUnitFn = opts.renderUnit || null;
         onAfterVisibleRender = opts.onAfterVisibleRender || null;
+        if (typeof opts.stickyThresholdPx === 'number' && opts.stickyThresholdPx > 0) {
+          stickyThresholdPx = opts.stickyThresholdPx;
+        }
       },
       setUnits: function (nextUnits) {
         units = Array.isArray(nextUnits) ? nextUnits : [];
@@ -417,6 +564,7 @@ window.ChatVirtualHistory = (function () {
         }
       },
       handleScroll: function () {
+        if (restoringScroll) return;
         isScrolling = true;
         if (scrollIdleTimer) clearTimeout(scrollIdleTimer);
         scrollIdleTimer = setTimeout(onScrollIdle, 120);
@@ -447,4 +595,4 @@ window.ChatVirtualHistory = (function () {
     createScroller: createScroller,
   };
 })();
-
+

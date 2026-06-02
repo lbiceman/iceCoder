@@ -26,6 +26,8 @@ window.ChatUI = (function () {
   /** 距底部小于该值时视为「贴底」，新内容会自动跟随滚动 */
   var SCROLL_STICKY_THRESHOLD_PX = 80;
   var autoScrollEnabled = true;
+  /** 用户主动离开底部后保持，避免阈值附近误恢复贴底跟滚 */
+  var userPinnedScroll = false;
   var scrollRafId = 0;
   var suppressScrollSync = false;
   var elJumpBottom = null;
@@ -53,6 +55,14 @@ window.ChatUI = (function () {
     ensureJumpBottomButton();
     setupContentResizeObserver();
     ensureDiffOutsideClose();
+    updateFollowBottomClass();
+  }
+
+  /** 贴底跟随时才启用底部 overflow-anchor，避免 LLM 流式输出时误拽滚动条 */
+  function updateFollowBottomClass() {
+    if (!elMessages) return;
+    if (autoScrollEnabled) elMessages.classList.add('is-follow-bottom');
+    else elMessages.classList.remove('is-follow-bottom');
   }
 
   function ensureChatLayout() {
@@ -102,6 +112,7 @@ window.ChatUI = (function () {
         windowEl: elHistoryWindow,
         scrollRoot: elMessages,
         renderUnit: renderHistoryUnit,
+        stickyThresholdPx: SCROLL_STICKY_THRESHOLD_PX,
       });
     }
 
@@ -450,6 +461,7 @@ window.ChatUI = (function () {
   }
 
   function notifyTailLayoutChange() {
+    if (!autoScrollEnabled) return;
     scheduleScrollIfSticky();
   }
 
@@ -509,7 +521,18 @@ window.ChatUI = (function () {
   }
 
   function syncAutoScrollFromViewport() {
-    autoScrollEnabled = isNearBottom();
+    var dist = distanceFromBottom();
+    if (dist > SCROLL_STICKY_THRESHOLD_PX) {
+      userPinnedScroll = true;
+    } else if (dist <= 4) {
+      userPinnedScroll = false;
+    }
+    if (userPinnedScroll) {
+      autoScrollEnabled = false;
+    } else {
+      autoScrollEnabled = dist < SCROLL_STICKY_THRESHOLD_PX;
+    }
+    updateFollowBottomClass();
     updateJumpBottomButton();
   }
 
@@ -538,19 +561,22 @@ window.ChatUI = (function () {
       elMessages.scrollTop = elMessages.scrollHeight;
       suppressScrollSync = false;
       autoScrollEnabled = true;
+      updateFollowBottomClass();
       updateJumpBottomButton();
     });
   }
 
   /** 用户发送等场景：强制恢复贴底并滚到底 */
   function enableAutoScroll() {
+    userPinnedScroll = false;
     autoScrollEnabled = true;
+    updateFollowBottomClass();
     scrollToBottom(true);
   }
 
   function scheduleScrollIfSticky() {
     if (!elMessages) return;
-    if (!autoScrollEnabled && !isNearBottom()) {
+    if (userPinnedScroll || (!autoScrollEnabled && !isNearBottom())) {
       updateJumpBottomButton();
       return;
     }
@@ -558,7 +584,7 @@ window.ChatUI = (function () {
     scrollRafId = requestAnimationFrame(function () {
       scrollRafId = 0;
       if (!elMessages) return;
-      if (!autoScrollEnabled && !isNearBottom()) {
+      if (userPinnedScroll || (!autoScrollEnabled && !isNearBottom())) {
         updateJumpBottomButton();
         return;
       }
@@ -568,7 +594,9 @@ window.ChatUI = (function () {
         if (!elMessages) return;
         elMessages.scrollTop = elMessages.scrollHeight;
         suppressScrollSync = false;
+        userPinnedScroll = false;
         autoScrollEnabled = true;
+        updateFollowBottomClass();
         updateJumpBottomButton();
       });
     });
@@ -593,6 +621,7 @@ window.ChatUI = (function () {
   function setupContentResizeObserver() {
     if (typeof ResizeObserver === 'undefined' || !elMessages || contentResizeObserver) return;
     contentResizeObserver = new ResizeObserver(function () {
+      if (userPinnedScroll || (!autoScrollEnabled && !isNearBottom())) return;
       scheduleScrollIfSticky();
     });
     contentResizeObserver.observe(elMessages);
@@ -1419,7 +1448,7 @@ window.ChatUI = (function () {
     ensureChatLayout();
     if (!elTailRoot) return;
     insertTailBefore(createMessageEl(msg, stripStatusTagFn));
-    scheduleScrollIfSticky();
+    if (autoScrollEnabled) scheduleScrollIfSticky();
   }
 
   /**
@@ -1462,7 +1491,7 @@ window.ChatUI = (function () {
       el._streamContentEl = contentDiv;
 
       insertTailBefore(el);
-      scheduleScrollIfSticky();
+      if (autoScrollEnabled) scheduleScrollIfSticky();
       return;
     }
 
@@ -1480,7 +1509,7 @@ window.ChatUI = (function () {
       wrap.appendChild(contentDiv);
       wrap._streamContentEl = contentDiv;
       insertTailBefore(wrap);
-      scheduleScrollIfSticky();
+      if (autoScrollEnabled) scheduleScrollIfSticky();
       return;
     }
     if (streamEl && streamEl._streamContentEl) {
@@ -1492,7 +1521,7 @@ window.ChatUI = (function () {
         streamEl._streamContentEl = contentEl;
       }
     }
-    scheduleScrollIfSticky();
+    if (autoScrollEnabled) scheduleScrollIfSticky();
   }
 
   function finalizeStreamResponse(messages, stripStatusTagFn) {
@@ -1513,7 +1542,7 @@ window.ChatUI = (function () {
     } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
       appendMessageEl(lastMsg, stripStatusTagFn);
     }
-    scheduleScrollIfSticky();
+    if (autoScrollEnabled) scheduleScrollIfSticky();
   }
 
   function getStreamingBubbleBodyText(streamEl) {
