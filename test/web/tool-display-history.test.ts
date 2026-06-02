@@ -25,6 +25,7 @@ function loadToolDisplayHistory() {
       uiMessages: { id: string }[],
       toolTraces: Record<string, { toolName: string; toolCallId?: string }[]>,
     ) => Record<string, { toolCallId: string; toolName: string; diffSource: string | null }[]>;
+    buildToolCallDiffIndex: (structured: unknown[]) => Record<string, string>;
   };
 }
 
@@ -81,5 +82,43 @@ describe('tool-display-history buildAgentDisplayMap', () => {
       { [agentId]: [{ toolName: 'patch_file' }] },
     );
     expect(map[agentId][0].diffSource).toBe(patch);
+  });
+
+  it('prefers diffSource persisted on tool_trace over structured alignment', () => {
+    const TDH = loadToolDisplayHistory();
+    const persisted = '--- a.ts\n+++ a.ts\n@@ -1 +1 @@\n-old\n+new';
+    const structured = [
+      {
+        role: 'assistant',
+        toolCalls: [{ id: 'c1', name: 'edit_file', arguments: { path: 'a.ts' } }],
+      },
+      { role: 'tool', toolCallId: 'c1', content: 'File modified (no diff in structured)' },
+    ];
+    const agentId = 'agent-3';
+    const map = TDH.buildAgentDisplayMap(
+      structured,
+      [{ id: agentId }],
+      { [agentId]: [{ toolName: 'edit_file', toolCallId: 'c1', diffSource: persisted }] },
+    );
+    expect(map[agentId][0].diffSource).toBe(persisted);
+  });
+
+  it('buildToolCallDiffIndex maps toolCallId to diff regardless of trace order', () => {
+    const TDH = loadToolDisplayHistory();
+    const diff = '--- x\n+++ x\n@@ -1 +1 @@\n-a\n+b';
+    const structured = [
+      {
+        role: 'assistant',
+        toolCalls: [
+          { id: 'call_1', name: 'edit_file', arguments: { path: 'a.ts' } },
+          { id: 'call_2', name: 'edit_file', arguments: { path: 'b.ts' } },
+        ],
+      },
+      { role: 'tool', toolCallId: 'call_1', content: 'File modified: a.ts\n\n' + diff },
+      { role: 'tool', toolCallId: 'call_2', content: 'ok only' },
+    ];
+    const index = TDH.buildToolCallDiffIndex(structured);
+    expect(index.call_1).toContain('+b');
+    expect(index.call_2).toBeUndefined();
   });
 });

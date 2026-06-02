@@ -59,6 +59,9 @@ window.ChatPage = (function () {
       shouldScroll,
       displayMap,
     );
+    if (UI.repairMissingDiffMountsFromStructured) {
+      UI.repairMissingDiffMountsFromStructured(structured);
+    }
   }
 
   function renderChatHistoryWithFetch(shouldScroll, done) {
@@ -301,6 +304,7 @@ window.ChatPage = (function () {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       Session.appendMessage(userMsg);
+      UI.enableAutoScroll();
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       Session.saveMessages();
       var titlePrompt = displayParts.join('\n') || text || '';
@@ -418,6 +422,7 @@ window.ChatPage = (function () {
       }
       renderChatHistoryWithFetch(false, function () {
         Session.saveMessages();
+        UI.enableAutoScroll();
         if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
       });
     });
@@ -548,6 +553,8 @@ window.ChatPage = (function () {
         catch (_e) { /* ignore */ }
       }
     }
+
+    UI.scheduleScrollIfSticky();
   }
 
   function onWsConnected(data) {
@@ -946,6 +953,7 @@ window.ChatPage = (function () {
       ? Session.getActiveId()
       : '';
     window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
+    UI.scheduleScrollIfSticky();
   }
 
   function tryMountToolDiff(toolCallId, diffSource) {
@@ -1253,12 +1261,27 @@ window.ChatPage = (function () {
     }
 
     function paintInitialChatView() {
-      renderChatHistoryWithFetch(false, function () {
+      function afterHistoryPainted() {
         var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
         if (cachedLiveTools.length > 0) {
           applyLiveToolTimelineToUI(cachedLiveTools);
         }
+        UI.enableAutoScroll();
         syncSendButtonWithWorkload();
+      }
+      // 先拉服务端会话（含 tool_trace），再 fetch structured 重绘，避免 F5 后工具行无 diff
+      Session.fetchServerMessages(function (serverMsgs) {
+        var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+        if (raw.length > 0) {
+          var separated = Session.separateToolTraces(raw);
+          Session.applyServerChatSnapshot(
+            separated,
+            { fullRender: false, authoritative: true },
+            isStreaming,
+            WS.isProcessing(),
+          );
+        }
+        renderChatHistoryWithFetch(false, afterHistoryPainted);
       });
     }
 

@@ -16,7 +16,14 @@ window.ChatUI = (function () {
   var elSendBtn = null;
 
   var streamReplyBuffer = '';
-  var userScrolledUp = false;
+
+  /** 距底部小于该值时视为「贴底」，新内容会自动跟随滚动 */
+  var SCROLL_STICKY_THRESHOLD_PX = 80;
+  var autoScrollEnabled = true;
+  var scrollRafId = 0;
+  var suppressScrollSync = false;
+  var elJumpBottom = null;
+  var contentResizeObserver = null;
 
   // 实时工具区 DOM
   var liveToolRoundActive = false;
@@ -34,12 +41,113 @@ window.ChatUI = (function () {
     elSendBtn = els.elSendBtn;
 
     if (elMessages) {
-      elMessages.addEventListener('scroll', function () {
-        var atBottom = elMessages.scrollHeight - elMessages.scrollTop - elMessages.clientHeight < 80;
-        userScrolledUp = !atBottom;
-      });
+      elMessages.addEventListener('scroll', onMessagesScroll, { passive: true });
     }
+    ensureJumpBottomButton();
+    setupContentResizeObserver();
     ensureDiffOutsideClose();
+  }
+
+  function distanceFromBottom() {
+    if (!elMessages) return 0;
+    return elMessages.scrollHeight - elMessages.scrollTop - elMessages.clientHeight;
+  }
+
+  function isNearBottom() {
+    return distanceFromBottom() < SCROLL_STICKY_THRESHOLD_PX;
+  }
+
+  function syncAutoScrollFromViewport() {
+    autoScrollEnabled = isNearBottom();
+    updateJumpBottomButton();
+  }
+
+  function updateJumpBottomButton() {
+    if (!elJumpBottom) return;
+    if (autoScrollEnabled) {
+      elJumpBottom.classList.add('hidden');
+    } else {
+      elJumpBottom.classList.remove('hidden');
+    }
+  }
+
+  function onMessagesScroll() {
+    if (suppressScrollSync) return;
+    syncAutoScrollFromViewport();
+  }
+
+  function scrollToBottom(force) {
+    if (!elMessages) return;
+    if (force !== true && !autoScrollEnabled) return;
+    suppressScrollSync = true;
+    elMessages.scrollTop = elMessages.scrollHeight;
+    requestAnimationFrame(function () {
+      if (!elMessages) return;
+      elMessages.scrollTop = elMessages.scrollHeight;
+      suppressScrollSync = false;
+      autoScrollEnabled = true;
+      updateJumpBottomButton();
+    });
+  }
+
+  /** 用户发送等场景：强制恢复贴底并滚到底 */
+  function enableAutoScroll() {
+    autoScrollEnabled = true;
+    scrollToBottom(true);
+  }
+
+  function scheduleScrollIfSticky() {
+    if (!elMessages) return;
+    if (!autoScrollEnabled && !isNearBottom()) {
+      updateJumpBottomButton();
+      return;
+    }
+    if (scrollRafId) return;
+    scrollRafId = requestAnimationFrame(function () {
+      scrollRafId = 0;
+      if (!elMessages) return;
+      if (!autoScrollEnabled && !isNearBottom()) {
+        updateJumpBottomButton();
+        return;
+      }
+      suppressScrollSync = true;
+      elMessages.scrollTop = elMessages.scrollHeight;
+      requestAnimationFrame(function () {
+        if (!elMessages) return;
+        elMessages.scrollTop = elMessages.scrollHeight;
+        suppressScrollSync = false;
+        autoScrollEnabled = true;
+        updateJumpBottomButton();
+      });
+    });
+  }
+
+  function ensureJumpBottomButton() {
+    if (elJumpBottom || !elMessages) return;
+    var host = elMessages.parentElement;
+    if (!host) return;
+    elJumpBottom = document.createElement('button');
+    elJumpBottom.type = 'button';
+    elJumpBottom.className = 'chat-jump-bottom hidden';
+    elJumpBottom.setAttribute('aria-label', '回到底部');
+    elJumpBottom.title = '回到底部';
+    elJumpBottom.innerHTML = '<span class="chat-jump-bottom-icon" aria-hidden="true">↓</span>';
+    elJumpBottom.addEventListener('click', function () {
+      enableAutoScroll();
+    });
+    host.appendChild(elJumpBottom);
+  }
+
+  function setupContentResizeObserver() {
+    if (typeof ResizeObserver === 'undefined' || !elMessages || contentResizeObserver) return;
+    contentResizeObserver = new ResizeObserver(function () {
+      scheduleScrollIfSticky();
+    });
+    contentResizeObserver.observe(elMessages);
+  }
+
+  function notifyContentLayoutChange() {
+    scheduleScrollIfSticky();
   }
 
   function ensureDiffOutsideClose() {
@@ -53,17 +161,6 @@ window.ChatUI = (function () {
       if (target.closest && target.closest('.tool-name.tool-diff-toggle')) return;
       closeAllDiffPanels(null);
     });
-  }
-
-  function scrollToBottom() {
-    if (elMessages) {
-      elMessages.scrollTop = elMessages.scrollHeight;
-    }
-  }
-
-  function isNearBottom() {
-    if (!elMessages) return true;
-    return elMessages.scrollHeight - elMessages.scrollTop - elMessages.clientHeight < 150;
   }
 
   function autoResizeInput() {
@@ -184,29 +281,128 @@ window.ChatUI = (function () {
     return true;
   }
 
+  function lookupDiffSourceForBlock(block, toolName) {
+    if (!block) return null;
+    if (block._diffSource) return block._diffSource;
+    var toolCallId = block.getAttribute('data-tool-call-id') || '';
+    if (!toolCallId || !window.ToolDisplayHistory) return null;
+    var structured = window.ChatSession && window.ChatSession.getStructuredMessages
+      ? window.ChatSession.getStructuredMessages()
+      : [];
+    if (structured.length > 0 && typeof window.ToolDisplayHistory.buildToolCallDiffIndex === 'function') {
+      var idx = window.ToolDisplayHistory.buildToolCallDiffIndex(structured);
+      if (idx[toolCallId]) return idx[toolCallId];
+    }
+    if (structured.length > 0 && typeof window.ToolDisplayHistory.flattenStructuredToolEntries === 'function') {
+      var flat = window.ToolDisplayHistory.flattenStructuredToolEntries(structured);
+      for (var i = 0; i < flat.length; i++) {
+        if (flat[i].toolCallId === toolCallId && flat[i].diffSource) return flat[i].diffSource;
+      }
+    }
+    return null;
+  }
+
+  function tryLazyMountDiffForBlock(block, toolName, done) {
+    if (!block || block.getAttribute('data-has-diff') === '1') {
+      if (done) done(true);
+      return;
+    }
+    var toolCallId = block.getAttribute('data-tool-call-id') || '';
+    var resolved = lookupDiffSourceForBlock(block, toolName);
+
+    function finish(ds) {
+      if (!ds || !mountHiddenDiffInBlock(block, ds)) {
+        if (done) done(false);
+        return;
+      }
+      var nameEl = block.querySelector('.tool-action .tool-name');
+      if (nameEl) {
+        nameEl.classList.add('tool-diff-toggle');
+        nameEl.classList.remove('tool-diff-toggle-pending');
+        nameEl.setAttribute('title', '点击查看/关闭文件变更');
+      }
+      if (done) done(true);
+    }
+
+    if (resolved) {
+      finish(resolved);
+      return;
+    }
+
+    if (!toolCallId || !window.ChatSession || typeof window.ChatSession.fetchStructuredMessages !== 'function') {
+      if (done) done(false);
+      return;
+    }
+
+    window.ChatSession.fetchStructuredMessages(function (structured) {
+      if (structured.length > 0 && window.ToolDisplayHistory
+          && typeof window.ToolDisplayHistory.buildToolCallDiffIndex === 'function') {
+        var index = window.ToolDisplayHistory.buildToolCallDiffIndex(structured);
+        if (index[toolCallId]) {
+          finish(index[toolCallId]);
+          return;
+        }
+      }
+      if (done) done(false);
+    });
+  }
+
+  function toggleDiffPanelForBlock(block) {
+    var wrap = block.querySelector('.tool-diff-wrap');
+    if (!wrap) return;
+    if (wrap.classList.contains('is-open')) {
+      hideDiffWrap(wrap, block);
+    } else {
+      showDiffWrap(wrap, block);
+    }
+    notifyContentLayoutChange();
+  }
+
   function bindDiffToggleRow(block, toolName) {
     if (!isDiffCapableToolName(toolName)) return;
     var nameEl = block.querySelector('.tool-action .tool-name');
     if (!nameEl) return;
 
+    nameEl.classList.add('tool-diff-toggle');
     if (block.getAttribute('data-has-diff') === '1') {
-      nameEl.classList.add('tool-diff-toggle');
+      nameEl.classList.remove('tool-diff-toggle-pending');
       nameEl.setAttribute('title', '点击查看/关闭文件变更');
+    } else {
+      nameEl.classList.add('tool-diff-toggle-pending');
+      nameEl.setAttribute('title', '点击加载文件变更');
     }
 
     if (nameEl.getAttribute('data-diff-toggle-bound') === '1') return;
     nameEl.setAttribute('data-diff-toggle-bound', '1');
     nameEl.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (block.getAttribute('data-has-diff') !== '1') return;
-      var wrap = block.querySelector('.tool-diff-wrap');
-      if (!wrap) return;
-      if (wrap.classList.contains('is-open')) {
-        hideDiffWrap(wrap, block);
-      } else {
-        showDiffWrap(wrap, block);
+      if (block.getAttribute('data-has-diff') === '1') {
+        toggleDiffPanelForBlock(block);
+        return;
       }
+      tryLazyMountDiffForBlock(block, toolName, function (ok) {
+        if (ok) toggleDiffPanelForBlock(block);
+      });
     });
+  }
+
+  /** 历史重绘后：按 toolCallId 补挂 structured / tool_trace 中的 diff */
+  function repairMissingDiffMounts(diffByCallId) {
+    if (!elMessages || !diffByCallId) return;
+    var blocks = elMessages.querySelectorAll('.tool-action-row-block[data-tool-call-id]');
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      if (block.getAttribute('data-has-diff') === '1') continue;
+      var toolCallId = block.getAttribute('data-tool-call-id') || '';
+      var diffSource = diffByCallId[toolCallId];
+      if (!diffSource) continue;
+      var row = block.querySelector('.tool-action');
+      var toolName = row ? row.getAttribute('data-tool') : '';
+      if (!toolName || !isDiffCapableToolName(toolName)) continue;
+      if (mountHiddenDiffInBlock(block, diffSource)) {
+        bindDiffToggleRow(block, toolName);
+      }
+    }
   }
 
   function appendDiffToRowBlock(block, diffEl) {
@@ -225,6 +421,7 @@ window.ChatUI = (function () {
     var row = block.querySelector('.tool-action');
     var toolName = row ? row.getAttribute('data-tool') : '';
     bindDiffToggleRow(block, toolName || '');
+    notifyContentLayoutChange();
   }
 
   function createToolRowBlock(toolName, detail, status, toolCallId, diffSource) {
@@ -266,6 +463,7 @@ window.ChatUI = (function () {
         btn.setAttribute('aria-expanded', 'true');
         btn.textContent = '收起';
       }
+      notifyContentLayoutChange();
     });
     btn.setAttribute('aria-expanded', 'false');
   }
@@ -342,7 +540,7 @@ window.ChatUI = (function () {
 
     function appendTraceRow(parent, tr, idx) {
       var disp = displays[idx];
-      var diffSource = disp && disp.diffSource ? disp.diffSource : null;
+      var diffSource = (tr.diffSource) || (disp && disp.diffSource) || null;
       var toolCallId = (disp && disp.toolCallId) || tr.toolCallId || '';
       parent.appendChild(createToolRowBlock(
         tr.toolName || '',
@@ -442,10 +640,12 @@ window.ChatUI = (function () {
       liveToolRoundCount++;
       liveToolRoundVisible.appendChild(block);
       rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
+      notifyContentLayoutChange();
       return block;
     }
 
     elMessages.insertBefore(block, elAnchor);
+    notifyContentLayoutChange();
     return block;
   }
 
@@ -454,6 +654,7 @@ window.ChatUI = (function () {
     coalesceFlatToolActionsBeforeAnchor();
     if (liveToolRoundRoot && liveToolRoundVisible && liveToolRoundCollapsed) {
       rebalanceToolTraceVisible(liveToolRoundVisible, liveToolRoundCollapsed, liveToolRoundToggle);
+      notifyContentLayoutChange();
     }
   }
 
@@ -478,6 +679,7 @@ window.ChatUI = (function () {
       iconEl.className = 'tool-icon ' + status;
       iconEl.textContent = iconTextForStatus(status);
     }
+    notifyContentLayoutChange();
   }
 
   function updateLastToolAction(toolName, status) {
@@ -493,6 +695,7 @@ window.ChatUI = (function () {
               iconEl.className = 'tool-icon ' + status;
               iconEl.textContent = iconTextForStatus(status);
             }
+            notifyContentLayoutChange();
             return;
           }
         }
@@ -505,6 +708,7 @@ window.ChatUI = (function () {
             iconEl3.className = 'tool-icon ' + status;
             iconEl3.textContent = iconTextForStatus(status);
           }
+          notifyContentLayoutChange();
           return;
         }
       }
@@ -514,6 +718,7 @@ window.ChatUI = (function () {
           iconEl2.className = 'tool-icon ' + status;
           iconEl2.textContent = iconTextForStatus(status);
         }
+        notifyContentLayoutChange();
         return;
       }
       node = node.previousSibling;
@@ -587,6 +792,7 @@ window.ChatUI = (function () {
       var row = block.querySelector('.tool-action');
       var toolName = row ? row.getAttribute('data-tool') : '';
       bindDiffToggleRow(block, toolName || '');
+      notifyContentLayoutChange();
     }
     return ok;
   }
@@ -604,6 +810,7 @@ window.ChatUI = (function () {
     fallback.setAttribute('data-tool-call-id', toolCallId);
     appendDiffToRowBlock(fallback, diffEl);
     if (elAnchor) elMessages.insertBefore(fallback, elAnchor);
+    notifyContentLayoutChange();
   }
 
   function renderMessagesOnly(messages, toolTraces, stripStatusTagFn, shouldScroll, displayMap) {
@@ -624,14 +831,25 @@ window.ChatUI = (function () {
       elMessages.insertBefore(createMessageEl(msg, stripStatusTagFn), elAnchor);
     }
 
-    if (shouldScroll !== false) {
-      scrollToBottom();
+    if (shouldScroll === 'force') {
+      enableAutoScroll();
+    } else if (shouldScroll !== false) {
+      scheduleScrollIfSticky();
     }
+  }
+
+  function repairMissingDiffMountsFromStructured(structured) {
+    if (!window.ToolDisplayHistory
+        || typeof window.ToolDisplayHistory.buildToolCallDiffIndex !== 'function') {
+      return;
+    }
+    repairMissingDiffMounts(window.ToolDisplayHistory.buildToolCallDiffIndex(structured || []));
   }
 
   function appendMessageEl(msg, stripStatusTagFn) {
     if (!elMessages) return;
     elMessages.insertBefore(createMessageEl(msg, stripStatusTagFn), elAnchor);
+    scheduleScrollIfSticky();
   }
 
   // ---- 流式输出 ----
@@ -661,6 +879,7 @@ window.ChatUI = (function () {
       el._streamContentEl = contentDiv;
 
       elMessages.insertBefore(el, elAnchor);
+      scheduleScrollIfSticky();
       return;
     }
 
@@ -678,6 +897,7 @@ window.ChatUI = (function () {
       wrap.appendChild(contentDiv);
       wrap._streamContentEl = contentDiv;
       elMessages.insertBefore(wrap, elAnchor);
+      scheduleScrollIfSticky();
       return;
     }
     if (streamEl && streamEl._streamContentEl) {
@@ -689,6 +909,7 @@ window.ChatUI = (function () {
         streamEl._streamContentEl = contentEl;
       }
     }
+    scheduleScrollIfSticky();
   }
 
   function finalizeStreamResponse(messages, stripStatusTagFn) {
@@ -709,6 +930,7 @@ window.ChatUI = (function () {
     } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
       appendMessageEl(lastMsg, stripStatusTagFn);
     }
+    scheduleScrollIfSticky();
   }
 
   function getStreamingBubbleBodyText(streamEl) {
@@ -823,7 +1045,11 @@ window.ChatUI = (function () {
   return {
     init: init,
     scrollToBottom: scrollToBottom,
+    enableAutoScroll: enableAutoScroll,
+    scheduleScrollIfSticky: scheduleScrollIfSticky,
     isNearBottom: isNearBottom,
+    isAutoScrollEnabled: function () { return autoScrollEnabled; },
+    getScrollStickyThresholdPx: function () { return SCROLL_STICKY_THRESHOLD_PX; },
     autoResizeInput: autoResizeInput,
     renderMessagesOnly: renderMessagesOnly,
     appendMessageEl: appendMessageEl,
@@ -844,6 +1070,7 @@ window.ChatUI = (function () {
     focusInput: focusInput,
     updateToolActionByCallId: updateToolActionByCallId,
     mountDiffForToolCallId: mountDiffForToolCallId,
+    repairMissingDiffMountsFromStructured: repairMissingDiffMountsFromStructured,
     showDiffForToolCallId: showDiffForToolCallId,
     showDiffAfterToolAction: showDiffAfterToolAction,
   };

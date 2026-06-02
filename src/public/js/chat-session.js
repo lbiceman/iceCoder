@@ -230,12 +230,16 @@ window.ChatSession = (function () {
       var m = serverMsgs[i];
       if (m.role === 'tool_trace' && m.parentId) {
         if (!traces[m.parentId]) traces[m.parentId] = [];
-        traces[m.parentId].push({
+        var traceRow = {
           toolName: m.toolName || '',
           detail: m.detail || '',
           status: m.status || 'pending',
           toolCallId: m.toolCallId || '',
-        });
+        };
+        if (typeof m.diffSource === 'string' && m.diffSource) {
+          traceRow.diffSource = m.diffSource;
+        }
+        traces[m.parentId].push(traceRow);
       } else {
         var cloned = Object.assign({}, m);
         if ((m.role === 'agent' || m.role === 'assistant') && typeof m.content === 'string') {

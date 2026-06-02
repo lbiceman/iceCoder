@@ -188,6 +188,16 @@ interface ToolTraceBatchEntry {
   detail: string;
   status: string;
   toolCallId?: string;
+  /** 供刷新后 UI 还原 diff 面板（不依赖 .structured.json 对齐） */
+  diffSource?: string | null;
+}
+
+const MAX_TOOL_TRACE_DIFF_CHARS = 80_000;
+
+function capToolTraceDiffSource(diff: string | null | undefined): string | null {
+  if (!diff || typeof diff !== 'string') return null;
+  if (diff.length <= MAX_TOOL_TRACE_DIFF_CHARS) return diff;
+  return diff.slice(0, MAX_TOOL_TRACE_DIFF_CHARS) + '\n...[diff truncated for session storage]';
 }
 
 /** 导出活跃会话 ID，供会话路由等模块使用 */
@@ -1412,6 +1422,11 @@ async function handleChatMessage(
             detail: detail || '',
             status: callStatus,
             toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : '',
+            diffSource: capToolTraceDiffSource(extractDiffSource(
+              String(event.toolName),
+              undefined,
+              event.toolArgs as Record<string, unknown> | undefined,
+            )),
           });
           const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
           const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
@@ -1434,6 +1449,14 @@ async function handleChatMessage(
                 && row.toolName === event.toolName
                 && (row.status === 'pending' || row.status === 'background'))) {
               toolTraceBatch[i].status = resultStatus;
+              const fromOutput = extractDiffSource(
+                String(event.toolName),
+                typeof event.toolOutput === 'string' ? event.toolOutput : undefined,
+                event.toolArgs as Record<string, unknown> | undefined,
+              );
+              if (fromOutput) {
+                toolTraceBatch[i].diffSource = capToolTraceDiffSource(fromOutput);
+              }
               break;
             }
           }
@@ -1465,14 +1488,16 @@ async function handleChatMessage(
 
     // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
     for (const trace of toolTraceBatch) {
-      sessionEntries.push({
+      const entry: Record<string, unknown> = {
         role: 'tool_trace',
         parentId: agentMsgId,
         toolName: trace.toolName,
         detail: trace.detail,
         status: trace.status,
         toolCallId: trace.toolCallId,
-      });
+      };
+      if (trace.diffSource) entry.diffSource = trace.diffSource;
+      sessionEntries.push(entry as (typeof sessionEntries)[number]);
     }
 
     // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）

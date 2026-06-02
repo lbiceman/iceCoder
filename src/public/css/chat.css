@@ -619,9 +619,14 @@
   padding: 0 2px;
 }
 
-.tool-action .tool-name.tool-diff-toggle:hover {
+.tool-action .tool-name.tool-diff-toggle:hover,
+.tool-action .tool-name.tool-diff-toggle-pending:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.tool-action .tool-name.tool-diff-toggle-pending {
+  opacity: 0.92;
 }
 
 .tool-action .tool-name.tool-diff-toggle.is-diff-open {
@@ -1016,6 +1021,38 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+/* 用户上滑阅读历史时显示，点击恢复贴底 */
+.chat-jump-bottom {
+  position: absolute;
+  right: 20px;
+  bottom: 96px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.chat-jump-bottom:hover {
+  transform: translateY(-3px);
+}
+.chat-jump-bottom.hidden {
+  display: none;
+}
+.chat-jump-bottom-icon {
+  font-size: 18px;
+  line-height: 1;
 }
 
 @media (max-width: 768px) {

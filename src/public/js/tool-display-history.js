@@ -7,10 +7,25 @@
 window.ToolDisplayHistory = (function () {
   'use strict';
 
+  function normalizeToolArgs(toolArgs) {
+    if (!toolArgs) return null;
+    if (typeof toolArgs === 'object') return toolArgs;
+    if (typeof toolArgs === 'string') {
+      try {
+        var parsed = JSON.parse(toolArgs);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch (_e) {
+        return null;
+      }
+    }
+    return null;
+  }
+
   function extractFromToolArgs(toolName, toolArgs) {
-    if (!toolArgs || typeof toolArgs !== 'object') return null;
-    if (toolName === 'patch_file' && typeof toolArgs.patch === 'string' && /^@@\s/m.test(toolArgs.patch)) {
-      return toolArgs.patch;
+    var args = normalizeToolArgs(toolArgs);
+    if (!args) return null;
+    if (toolName === 'patch_file' && typeof args.patch === 'string' && /^@@\s/m.test(args.patch)) {
+      return args.patch;
     }
     return null;
   }
@@ -58,7 +73,7 @@ window.ToolDisplayHistory = (function () {
         var entry = {
           toolCallId: tc.id || '',
           toolName: tc.name || '',
-          diffSource: extractFromToolArgs(tc.name, tc.arguments),
+          diffSource: extractFromToolArgs(tc.name, normalizeToolArgs(tc.arguments)),
         };
         entries.push(entry);
         if (entry.toolCallId) byId[entry.toolCallId] = entry;
@@ -96,6 +111,29 @@ window.ToolDisplayHistory = (function () {
   }
 
   /**
+   * toolCallId → diffSource（刷新后按 id 还原，不依赖顺序对齐）。
+   * @returns {Object<string, string>}
+   */
+  function buildToolCallDiffIndex(structured) {
+    var index = {};
+    var flat = flattenStructuredToolEntries(structured);
+    for (var i = 0; i < flat.length; i++) {
+      var e = flat[i];
+      if (e.toolCallId && e.diffSource) index[e.toolCallId] = e.diffSource;
+    }
+    return index;
+  }
+
+  function resolveTraceDiffSource(tr, matched, diffByCallId) {
+    if (tr.diffSource) return tr.diffSource;
+    if (tr.toolCallId && diffByCallId && diffByCallId[tr.toolCallId]) {
+      return diffByCallId[tr.toolCallId];
+    }
+    if (matched && matched.diffSource) return matched.diffSource;
+    return null;
+  }
+
+  /**
    * 将 structured 工具条目与 UI agent 消息（含 tool_trace）按顺序对齐。
    * 同一 agent 消息下的多条 tool_trace 可对应 structured 中多轮 assistant tool_calls。
    * @returns {Object<string, Array>} agentMsgId → display entries
@@ -105,6 +143,7 @@ window.ToolDisplayHistory = (function () {
     if (!Array.isArray(uiMessages) || !toolTraces) return map;
 
     var flat = flattenStructuredToolEntries(structured);
+    var diffByCallId = buildToolCallDiffIndex(structured);
     var flatIdx = 0;
 
     for (var m = 0; m < uiMessages.length; m++) {
@@ -135,7 +174,7 @@ window.ToolDisplayHistory = (function () {
         displays.push({
           toolCallId: (matched && matched.toolCallId) || tr.toolCallId || '',
           toolName: tr.toolName || (matched && matched.toolName) || '',
-          diffSource: matched ? matched.diffSource : null,
+          diffSource: resolveTraceDiffSource(tr, matched, diffByCallId),
         });
       }
       map[uiMsg.id] = displays;
@@ -171,6 +210,7 @@ window.ToolDisplayHistory = (function () {
     isDiffCapableTool: isDiffCapableTool,
     parseStructuredToolRounds: parseStructuredToolRounds,
     flattenStructuredToolEntries: flattenStructuredToolEntries,
+    buildToolCallDiffIndex: buildToolCallDiffIndex,
     buildAgentDisplayMap: buildAgentDisplayMap,
     renderDiffElement: renderDiffElement,
   };
