@@ -12,7 +12,9 @@ import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
   isContextWindowExceededError,
+  isToolCallPairingError,
 } from './checkpoint-resume-compact.js';
+import { finalizeMessagesForApi } from './context-assembler.js';
 import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
 import { resolveCompactionUsage } from '../llm/token-estimator.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
@@ -144,27 +146,37 @@ export async function callHarnessLlm(
       return { action: 'abort' };
     }
 
+    const pairingBroken = isToolCallPairingError(error);
     if (
-      isContextWindowExceededError(error)
+      (isContextWindowExceededError(error) || pairingBroken)
       && !state.contextEmergencyCompactUsed
       && deps.contextCompactor
       && !deps.loopController.isAborted()
     ) {
       state.contextEmergencyCompactUsed = true;
       state.checkpointResumeForkApplied = true;
-      const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
-      const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
-        aggressive: true,
-      });
-      logger.error(
-        `LLM context window exceeded; emergency compact ${fork.beforeMessages}→${fork.afterMessages} msgs, retrying`,
-      );
-      deps.runtimeTelemetry?.recordCompaction({
-        beforeMessages: fork.beforeMessages,
-        afterMessages: fork.afterMessages,
-        beforeTokens: fork.beforeTokens,
-        afterTokens: fork.afterTokens,
-      });
+      if (pairingBroken) {
+        const repaired = finalizeMessagesForApi(state.messages);
+        state.messages.length = 0;
+        state.messages.push(...repaired);
+        logger.error(
+          `LLM tool-call pairing error; repaired message list (${repaired.length} msgs), retrying`,
+        );
+      } else {
+        const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
+        const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
+          aggressive: true,
+        });
+        logger.error(
+          `LLM context window exceeded; emergency compact ${fork.beforeMessages}→${fork.afterMessages} msgs, retrying`,
+        );
+        deps.runtimeTelemetry?.recordCompaction({
+          beforeMessages: fork.beforeMessages,
+          afterMessages: fork.afterMessages,
+          beforeTokens: fork.beforeTokens,
+          afterTokens: fork.afterTokens,
+        });
+      }
       deps.loopController.rewindRound();
       state.turnCount--;
       state.transition = 'compaction_retry';

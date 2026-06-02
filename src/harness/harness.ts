@@ -94,12 +94,13 @@ import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
 import type { ToolExecutorDeps } from './harness-tool-executor.js';
 import { getLatestRealUserText } from './harness-message-utils.js';
+import { finalizeMessagesForApi } from './context-assembler.js';
 import {
   resolveVerificationExemptDirPrefixes,
   setVerificationExemptRuntime,
 } from './verification-exempt-config.js';
 import { resolveLlmToolsForRound } from './casual-mode.js';
-import { salvageTextToolCallsInResponse } from './text-tool-call-salvage.js';
+import { resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
 
 /**
@@ -425,7 +426,7 @@ export class Harness {
     let messages: UnifiedMessage[];
     const messageContent = userContentBlocks ?? userMessage;
     if (existingMessages && existingMessages.length > 0) {
-      messages = existingMessages;
+      messages = finalizeMessagesForApi(existingMessages.slice());
       messages.push({ role: 'user', content: messageContent });
     } else {
       messages = this.contextAssembler.assembleInitialMessages(userMessage);
@@ -723,7 +724,7 @@ export class Harness {
         if (llm.action === 'error') return llm.result;
 
         const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
-        const response = salvageTextToolCallsInResponse(rawResponse);
+        const response = resolveSalvagedLlmResponse(rawResponse);
         if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
           console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
         }
@@ -734,6 +735,7 @@ export class Harness {
           const noTools = await handleNoToolCalls(deps, {
             state,
             response,
+            rawAssistantContent: rawResponse.content,
             userMessage,
             currentTools: state.tools,
             tokenUsage,

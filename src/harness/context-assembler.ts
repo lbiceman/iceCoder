@@ -14,6 +14,7 @@
 
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { ContextAssemblyConfig } from './types.js';
+import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
 
 /** JSON 兼容的排序键遍历，便于 DeepSeek/OpenAI 前缀缓存稳定命中 */
 function sortedStringRecordEntries(record: Record<string, string>): [string, string][] {
@@ -242,6 +243,14 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
       if (dedupedCalls.length !== msg.toolCalls.length) {
         msg = { ...msg, toolCalls: dedupedCalls };
       }
+      if (msg.role === 'assistant') {
+        const cleaned = prepareAssistantContentForHistory(
+          typeof msg.content === 'string' ? msg.content : '',
+        );
+        if (cleaned !== msg.content) {
+          msg = { ...msg, content: cleaned };
+        }
+      }
     }
 
     // 合并连续 user 消息
@@ -262,8 +271,60 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
     result.push(msg);
   }
 
-  // 第二遍：兜底校验 — 确保每个 assistant(tool_calls) 后面都有对应的 tool 消息
-  return ensureToolCallPairing(result);
+  // 第二遍：收拢 tool 结果到 assistant 后，再兜底配对（避免 resume 块等 user 插在中间 → 各厂商 400/2013）
+  return finalizeMessagesForApi(result);
+}
+
+/** 发送 API / 压缩 / 会话恢复前统一整理 tool 消息顺序与配对。 */
+export function finalizeMessagesForApi(messages: UnifiedMessage[]): UnifiedMessage[] {
+  return ensureToolCallPairing(coalesceToolResultsAfterAssistants(messages));
+}
+
+/**
+ * 将属于同一轮 assistant(tool_calls) 的 tool 消息紧挨 assistant 之后。
+ * checkpoint fork / 注入 resume 后可能出现 assistant → user → tool，需重排以满足 API 顺序。
+ */
+export function coalesceToolResultsAfterAssistants(messages: UnifiedMessage[]): UnifiedMessage[] {
+  const out: UnifiedMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
+    if (msg.role !== 'assistant' || !msg.toolCalls?.length) {
+      out.push(msg);
+      continue;
+    }
+
+    const idOrder = msg.toolCalls.map(tc => tc.id);
+    const idSet = new Set(idOrder);
+    out.push(msg);
+
+    const toolsById = new Map<string, UnifiedMessage>();
+    const middle: UnifiedMessage[] = [];
+    let j = i + 1;
+
+    for (; j < messages.length; j++) {
+      const m = messages[j]!;
+      if (m.role === 'tool' && m.toolCallId && idSet.has(m.toolCallId)) {
+        if (!toolsById.has(m.toolCallId)) {
+          toolsById.set(m.toolCallId, m);
+        }
+        continue;
+      }
+      if (m.role === 'assistant' && m.toolCalls?.length) {
+        break;
+      }
+      middle.push(m);
+    }
+
+    for (const id of idOrder) {
+      const t = toolsById.get(id);
+      if (t) out.push(t);
+    }
+    out.push(...middle);
+    i = j - 1;
+  }
+
+  return out;
 }
 
 /**

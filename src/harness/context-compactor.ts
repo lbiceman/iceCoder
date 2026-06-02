@@ -25,6 +25,8 @@
  */
 
 import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
+import { finalizeMessagesForApi } from './context-assembler.js';
+import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
 import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
@@ -51,6 +53,15 @@ import {
   MICRO_MAX_PER_ROUND,
   MICRO_MAX_PER_SESSION,
 } from './compaction-constants.js';
+
+/** 去掉 recent 前缀中无前置 assistant(tool_calls) 的孤立 tool 消息（fork 切片可能留下）。 */
+function trimLeadingOrphanToolMessages(recent: UnifiedMessage[]): UnifiedMessage[] {
+  let start = 0;
+  while (start < recent.length && recent[start]?.role === 'tool') {
+    start++;
+  }
+  return start > 0 ? recent.slice(start) : recent;
+}
 
 /** 压缩判定时可选的双轨占用输入 */
 export interface CompactionUsageOptions {
@@ -338,6 +349,7 @@ export class ContextCompactor {
     const anchorMessages = anchorIdx >= contentStart ? [working[anchorIdx]] : [];
 
     let recent = working.slice(Math.max(contentStart, working.length - maxRecent));
+    recent = trimLeadingOrphanToolMessages(recent);
     if (anchorIdx >= contentStart) {
       recent = recent.filter(m => m !== working[anchorIdx]);
     }
@@ -353,7 +365,7 @@ export class ContextCompactor {
     let shrinkPass = 0;
     while (estimateTokens(result) > targetTokens && recent.length > 8 && shrinkPass < 12) {
       const drop = Math.max(4, Math.ceil(recent.length * 0.12));
-      recent = recent.slice(drop);
+      recent = trimLeadingOrphanToolMessages(recent.slice(drop));
       result = assemble();
       shrinkPass++;
     }
@@ -362,7 +374,12 @@ export class ContextCompactor {
       result = this.trimToolResults(this.microcompact(result));
     }
 
-    return result;
+    return finalizeMessagesForApi(result);
+  }
+
+  /** 压缩/fork 产出在写回 messages 前统一修复 tool 配对。 */
+  private finalizeCompacted(messages: UnifiedMessage[]): UnifiedMessage[] {
+    return finalizeMessagesForApi(messages);
   }
 
   /**
@@ -419,7 +436,7 @@ export class ContextCompactor {
     const { systemMessages, droppedMessages, recentMessages } =
       this.resolveSplitForCompact(compacted, runOptions);
 
-    if (droppedMessages.length === 0) return compacted;
+    if (droppedMessages.length === 0) return this.finalizeCompacted(compacted);
 
     const { text: notesBody } = truncateSessionNotesForCompact(sessionNotes, undefined, this.config.sessionId);
 
@@ -451,7 +468,7 @@ export class ContextCompactor {
       { role: 'user', content: buildRecentDialogueFocusContent(preCompactMessages) },
     ];
 
-    return [...systemMessages, summaryMsg, ...anchors, ...recentMessages];
+    return this.finalizeCompacted([...systemMessages, summaryMsg, ...anchors, ...recentMessages]);
   }
 
   /**
@@ -606,21 +623,21 @@ Continue the conversation from where it left off without asking the user any fur
 
     // 第一层：snip — 裁剪冗余段落
     let compacted = this.snip(messages);
-    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return this.finalizeCompacted(compacted);
 
     // 第二层：microcompact — 压缩旧工具调用细节
     compacted = this.microcompact(compacted);
-    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return this.finalizeCompacted(compacted);
 
     // 第三层：裁剪工具结果
     compacted = this.trimToolResults(compacted);
-    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return this.finalizeCompacted(compacted);
 
     // 分离消息
     const { systemMessages, droppedMessages, recentMessages } =
       this.resolveSplitForCompact(compacted, runOptions);
 
-    if (droppedMessages.length === 0) return compacted;
+    if (droppedMessages.length === 0) return this.finalizeCompacted(compacted);
 
     // 第四层：结构化摘要
     const structuralSummary = this.extractStructuralSummary(droppedMessages);
@@ -652,7 +669,7 @@ Continue the conversation from where it left off without asking the user any fur
       { role: 'user', content: buildRecentDialogueFocusContent(preCompactMessages) },
     ];
 
-    return [...systemMessages, summaryMsg, ...anchors, ...recentMessages];
+    return this.finalizeCompacted([...systemMessages, summaryMsg, ...anchors, ...recentMessages]);
   }
 
   /**
@@ -740,10 +757,12 @@ Continue the conversation from where it left off without asking the user any fur
 
       // 压缩旧的 assistant tool_calls（保留工具名，清除参数）
       if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-        const toolNames = msg.toolCalls.map(tc => tc.name).join(', ');
+        const cleaned = prepareAssistantContentForHistory(
+          typeof msg.content === 'string' ? msg.content : '',
+        );
         return {
           ...msg,
-          content: `[调用工具: ${toolNames}]`,
+          content: cleaned,
           toolCalls: msg.toolCalls.map(tc => ({ ...tc, arguments: {} })),
         };
       }

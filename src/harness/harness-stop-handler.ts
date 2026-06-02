@@ -16,9 +16,8 @@ import type {
   StreamFunction,
 } from './types.js';
 import {
-  containsEmbeddedToolCalls,
+  resolveSalvagedLlmResponse,
   sanitizeAssistantContentForUser,
-  salvageTextToolCallsInResponse,
   AssistantVisibleStreamFilter,
 } from './text-tool-call-salvage.js';
 
@@ -140,12 +139,12 @@ export async function handleHarnessStop(
       if (tail) {
         onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: tail });
       }
-      finalContent = salvageTextToolCallsInResponse(finalResponse).content ?? finalResponse.content;
+      finalContent = resolveSalvagedLlmResponse(finalResponse).content ?? finalResponse.content;
       const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
       logger.llmResponseFinal(sumLog.usage, sumLog.meta);
     } else {
       const finalResponse = await chatFn(messages, { tools: [] });
-      finalContent = salvageTextToolCallsInResponse(finalResponse).content ?? finalResponse.content;
+      finalContent = resolveSalvagedLlmResponse(finalResponse).content ?? finalResponse.content;
       const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);
       logger.llmResponseFinal(sumLog.usage, sumLog.meta);
     }
@@ -153,20 +152,12 @@ export async function handleHarnessStop(
     // 最终总结调用失败，用最后一条 assistant 消息作为回复
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant' && m.content);
     finalContent = typeof lastAssistant?.content === 'string'
-      ? lastAssistant.content
+      ? sanitizeAssistantContentForUser(lastAssistant.content)
       : `任务因 ${reason} 停止，最终总结生成失败。`;
     logger.error(`最终总结 LLM 调用失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  if (containsEmbeddedToolCalls(finalContent)) {
-    const lastAssistant = [...messages].reverse().find(
-      m => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()
-        && !containsEmbeddedToolCalls(m.content),
-    );
-    finalContent = lastAssistant
-      ? sanitizeAssistantContentForUser(lastAssistant.content as string)
-      : sanitizeAssistantContentForUser(finalContent);
-  }
+  finalContent = sanitizeAssistantContentForUser(finalContent);
 
   onStep?.({
     type: 'final',

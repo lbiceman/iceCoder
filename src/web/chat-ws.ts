@@ -17,6 +17,7 @@ import { formatFriendlyError } from '../cli/friendly-errors.js';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
+import { finalizeMessagesForApi } from '../harness/context-assembler.js';
 import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
 import type { HarnessConfig } from '../harness/types.js';
@@ -293,8 +294,9 @@ async function loadStructuredMessages(sessionId?: string): Promise<UnifiedMessag
   const id = sessionId || activeSessionId;
   const parsed = await readStructuredMessagesFile(SESSIONS_DIR, id);
   if (parsed && parsed.length > 0) {
-    console.log(`[chat-ws] 恢复 ${parsed.length} 条结构化消息`);
-    return parsed;
+    const repaired = finalizeMessagesForApi(parsed);
+    console.log(`[chat-ws] 恢复 ${repaired.length} 条结构化消息`);
+    return repaired;
   }
   return undefined;
 }
@@ -952,7 +954,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'stop') {
-          // 中断正在执行的任务
+          // 中断正在执行的任务；同时丢弃排队中的待发消息，避免 abort 后自动再起一轮
+          pendingMessages.length = 0;
           if (activeAbortController) {
             activeAbortController.abort();
             console.log('[chat-ws] 用户请求中断任务');

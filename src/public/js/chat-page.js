@@ -742,13 +742,18 @@ window.ChatPage = (function () {
     var processing = data.status === 'processing';
     WS.setProcessing(processing);
     if (!processing) {
+      // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
+      // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
+      var skipRefreshAfterUserStop = userStopped;
       if (userStopped) userStopped = false;
       isStreaming = false;
       Pet.removeThinking(isStreaming, WS.isProcessing());
       if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
       if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
       // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
-      refreshChatHistoryAfterTurn(false);
+      if (!skipRefreshAfterUserStop) {
+        refreshChatHistoryAfterTurn(false);
+      }
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }

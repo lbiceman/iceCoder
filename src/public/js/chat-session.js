@@ -157,6 +157,7 @@ window.ChatSession = (function () {
   }
 
   function fetchServerMessages(callback) {
+    syncSessionIdFromStore();
     var url = '/api/sessions/' + SESSION_ID + '?_t=' + Date.now();
     fetch(url)
       .then(function (res) { return res.json(); })
@@ -263,6 +264,8 @@ window.ChatSession = (function () {
   function applyServerChatSnapshot(separated, options, isStreaming, wsProcessing) {
     var opts = options || {};
     if (hasStreamingModelBubble() || wsProcessing || isStreaming) return false;
+    // 服务端空响应（读文件失败 / 会话 id 错位）不得覆盖本地已有历史
+    if (separated.msgs.length === 0 && messages.length > 0) return false;
     if (!opts.authoritative && separated.msgs.length < messages.length) return false;
 
     var sig = sessionPayloadSig(separated);

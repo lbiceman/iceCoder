@@ -78,7 +78,13 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       if (action === 'check') {
         if (!taskId) return { success: false, output: '', error: 'task_id is required for check action' };
         const status = bgManager.getStatus(taskId);
-        if (!status) return { success: false, output: '', error: `Task ${taskId} not found` };
+        if (!status) {
+          return {
+            success: false,
+            output: '',
+            error: `Task ${taskId} not found. Background tasks do not survive a server/session restart — run action=list for active tasks, or start the command again with background:true (omit task_id).`,
+          };
+        }
         const since = typeof args.since === 'number' && args.since >= 0
           ? args.since
           : 0;
@@ -114,7 +120,13 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       if (action === 'stop') {
         if (!taskId) return { success: false, output: '', error: 'task_id is required for stop action' };
         const status = bgManager.getStatus(taskId);
-        if (!status) return { success: false, output: '', error: `Task ${taskId} not found` };
+        if (!status) {
+          return {
+            success: false,
+            output: '',
+            error: `Task ${taskId} not found. Background tasks do not survive a server/session restart — run action=list for active tasks, or start the command again with background:true (omit task_id).`,
+          };
+        }
         if (status.status !== 'running') return { success: false, output: '', error: `Task ${taskId} is not running (status: ${status.status})` };
         const killed = bgManager.kill(taskId);
         return killed
