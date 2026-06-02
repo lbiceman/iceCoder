@@ -50,25 +50,6 @@
 
   overflow: hidden;
 
-  scrollbar-width: thin;
-
-}
-
-
-
-/* 横向滚动条高度减半（全局 6px → 3px） */
-.tool-diff-panel ::-webkit-scrollbar {
-
-  height: 3px;
-
-}
-
-
-
-.tool-diff-panel ::-webkit-scrollbar-thumb {
-
-  border-radius: 2px;
-
 }
 
 

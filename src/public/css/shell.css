@@ -211,15 +211,33 @@ body[data-page="chat"] .nav-sidebar-toggle {
   min-height: 0;
 }
 
-/* ===== Scrollbar ===== */
-/* ===== Scrollbar ===== */
-::-webkit-scrollbar { width: 5px; }
+/* ===== Scrollbar（全站统一 8px） ===== */
+/* Blink/WebKit：精确 8px（勿在 * 上设 scrollbar-width，Chrome 121+ 会覆盖 ::-webkit-scrollbar） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--border-color);
-  border-radius: 3px;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+.chat-messages::-webkit-scrollbar,
+.diff-file-body::-webkit-scrollbar,
+.cmd-palette .cmd-dropdown::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+/* Firefox：无 ::-webkit-scrollbar，用标准属性近似 */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-color) transparent;
+  }
+}
 
 /* ===== Responsive (shell) ===== */
 /* ===== Responsive ===== */
