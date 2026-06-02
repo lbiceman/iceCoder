@@ -171,8 +171,10 @@ window.ChatUI = (function () {
     elHistoryWindow._toolDiffClickHandler = function (e) {
       var target = eventTargetElement(e);
       if (!target || !target.closest) return;
-      var row = target.closest('.tool-action');
-      if (!row || !elHistoryWindow.contains(row)) return;
+      var nameEl = target.closest('.tool-name');
+      if (!nameEl || !elHistoryWindow.contains(nameEl)) return;
+      var row = nameEl.closest('.tool-action');
+      if (!row) return;
       var block = row.closest('.tool-action-row-block');
       if (!block) return;
       var toolName = row.getAttribute('data-tool') || '';
@@ -866,7 +868,6 @@ window.ChatUI = (function () {
     var nameEl = block.querySelector('.tool-action .tool-name');
     if (!nameEl) return;
 
-    var row = block.querySelector('.tool-action');
     nameEl.classList.add('tool-diff-toggle');
     if (block.getAttribute('data-has-diff') === '1') {
       nameEl.classList.remove('tool-diff-toggle-pending');
@@ -878,21 +879,12 @@ window.ChatUI = (function () {
       nameEl.classList.add('tool-diff-toggle-pending');
       nameEl.setAttribute('title', '点击加载文件变更');
     }
-    if (row) {
-      row.classList.add('tool-action-diff-clickable');
-      if (block.getAttribute('data-has-diff') === '1' || block._diffSource) {
-        row.setAttribute('title', '点击查看/关闭文件变更');
-      } else {
-        row.setAttribute('title', '点击加载文件变更');
-      }
-    }
 
     if (forHistory || isNodeInHistoryRegion(block)) return;
 
-    if (!row || row.getAttribute('data-diff-toggle-bound') === '1') return;
-    row.setAttribute('data-diff-toggle-bound', '1');
-    row.classList.add('tool-action-diff-clickable');
-    row.addEventListener('click', function (e) {
+    if (nameEl.getAttribute('data-diff-toggle-bound') === '1') return;
+    nameEl.setAttribute('data-diff-toggle-bound', '1');
+    nameEl.addEventListener('click', function (e) {
       e.stopPropagation();
       if (block.getAttribute('data-has-diff') === '1') {
         toggleDiffPanelForBlock(block);
