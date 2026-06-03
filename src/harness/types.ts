@@ -266,6 +266,8 @@ export interface HarnessStepEvent {
   /** 工具执行中给用户看的提示（仅 tool_progress） */
   phase?: 'running';
   toolName?: string;
+  /** 与 assistant tool_calls.id 对应，供 UI 按调用挂载 diff */
+  toolCallId?: string;
   toolArgs?: Record<string, any>;
   toolSuccess?: boolean;
   toolOutput?: string;

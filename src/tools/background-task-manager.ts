@@ -11,7 +11,7 @@
  * 设计为进程级单例，所有工具共享同一个实例。
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { mkdirSync, createWriteStream, type WriteStream } from 'node:fs';
 import path from 'node:path';
@@ -50,6 +50,10 @@ export interface BackgroundTask {
   logStream: WriteStream | null;
   /** 落盘日志路径（绝对路径） */
   logPath: string | null;
+  /** spawn 时的根 PID（Windows 进程树 kill 用；child 句柄失效时仍可杀） */
+  rootPid: number | null;
+  /** 从输出中解析到的 dev server 监听端口（Windows 兜底 kill） */
+  detectedPort: number | null;
 }
 
 /** 任务状态摘要（返回给调用方，不含 child 引用） */
@@ -119,6 +123,89 @@ function formatElapsed(ms: number): string {
   return `${minutes}m${remainSeconds}s`;
 }
 
+/** 从 dev server 输出中解析监听端口（Vite / webpack-dev-server 等） */
+function detectListenPort(text: string): number | null {
+  const patterns = [
+    /Local:\s*(?:https?:\/\/)?(?:[\w.]+:)?(\d{2,5})/i,
+    /localhost:(\d{2,5})/i,
+    /127\.0\.0\.1:(\d{2,5})/i,
+    /:\s*(\d{4,5})\s*(?:\n|$)/,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) {
+      const port = parseInt(m[1], 10);
+      if (port > 0 && port < 65536) return port;
+    }
+  }
+  return null;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    const code = err && typeof err === 'object' && 'code' in err ? (err as NodeJS.ErrnoException).code : '';
+    return code !== 'ESRCH';
+  }
+}
+
+/** Windows：递归终止进程树（taskkill + PowerShell 子进程扫描） */
+function killWindowsProcessTree(rootPid: number): void {
+  try {
+    execFileSync('taskkill', ['/PID', String(rootPid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'pipe',
+    });
+    console.log(`[bg-task] taskkill /T /F 成功 pid=${rootPid}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[bg-task] taskkill 失败 pid=${rootPid}: ${msg}`);
+  }
+  try {
+    execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$root=${rootPid};$seen=@{};$q=[Collections.Queue]::new();$q.Enqueue($root);`
+          + 'while($q.Count -gt 0){$p=$q.Dequeue();if($seen[$p]){continue};$seen[$p]=$true;'
+          + 'Get-CimInstance Win32_Process -Filter "ParentProcessId=$p" | ForEach-Object {$q.Enqueue([int]$_.ProcessId)}};'
+          + 'foreach($p in $seen.Keys){try{Stop-Process -Id $p -Force -ErrorAction SilentlyContinue}catch{}}',
+      ],
+      { windowsHide: true, stdio: 'pipe' },
+    );
+    console.log(`[bg-task] PowerShell 进程树 kill 完成 rootPid=${rootPid}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[bg-task] PowerShell 进程树 kill 失败 rootPid=${rootPid}: ${msg}`);
+  }
+}
+
+/** Windows：按监听端口终止 dev server（pnpm/vite 脱离 cmd 进程树时的兜底） */
+function killProcessesOnPortWindows(port: number): void {
+  try {
+    execFileSync(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$p=${port};Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue `
+          + '| Select-Object -ExpandProperty OwningProcess -Unique '
+          + '| ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }',
+      ],
+      { windowsHide: true, stdio: 'pipe' },
+    );
+    console.log(`[bg-task] 已按端口 ${port} 终止监听进程`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[bg-task] 按端口 ${port} 终止失败: ${msg}`);
+  }
+}
+
 /**
  * 后台任务管理器。
  *
@@ -179,37 +266,44 @@ export class BackgroundTaskManager extends EventEmitter {
   }
 
   /**
-   * 跨平台进程树 kill。
+   * 跨平台进程树 kill（POSIX）。
    *
-   * - Windows：`taskkill /T /F /pid <PID>`
-   * - POSIX：`kill -SIGTERM -<PID>`（进程组），2s 后 SIGKILL
-   *
-   * 要求 spawn 时 POSIX 走 `detached: true` 才能用进程组 kill。
+   * Windows 请用 {@link killTaskProcesses}。
    */
-  private killTree(child: ChildProcess): void {
+  private killTreePosix(child: ChildProcess): void {
     if (!child.pid) return;
-    if (process.platform === 'win32') {
-      try {
-        const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
-          windowsHide: true,
-          stdio: 'ignore',
-        });
-        killer.on('error', () => { /* ignore — fallback below */ });
-      } catch {
-        try { child.kill('SIGTERM'); } catch { /* ignore */ }
-      }
-      // Fallback：taskkill 偶尔权限失败，再走 child.kill
+    const pid = child.pid;
+    try { process.kill(-pid, 'SIGTERM'); } catch {
       try { child.kill('SIGTERM'); } catch { /* ignore */ }
-    } else {
-      try { process.kill(-child.pid, 'SIGTERM'); } catch {
-        try { child.kill('SIGTERM'); } catch { /* ignore */ }
+    }
+    setTimeout(() => {
+      if (!child.pid) return;
+      try { process.kill(-pid, 'SIGKILL'); } catch {
+        try { child.kill('SIGKILL'); } catch { /* ignore */ }
       }
-      setTimeout(() => {
-        if (!child.pid) return;
-        try { process.kill(-child.pid, 'SIGKILL'); } catch {
-          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    }, 2000);
+    console.log(`[bg-task] 已发送 SIGTERM 至进程组 pid=${pid}`);
+  }
+
+  /** 终止任务关联的全部 OS 进程（含 Windows 端口兜底） */
+  private killTaskProcesses(task: BackgroundTask): void {
+    const rootPid = task.rootPid ?? task.child?.pid ?? null;
+    if (process.platform === 'win32') {
+      if (rootPid) {
+        killWindowsProcessTree(rootPid);
+        if (isPidAlive(rootPid)) {
+          console.warn(`[bg-task] rootPid=${rootPid} 仍存活，尝试按端口兜底`);
         }
-      }, 2000);
+      } else {
+        console.warn(`[bg-task] kill ${task.taskId}: 无 rootPid，无法杀 OS 进程`);
+      }
+      if (task.detectedPort) {
+        killProcessesOnPortWindows(task.detectedPort);
+      }
+      return;
+    }
+    if (task.child) {
+      this.killTreePosix(task.child);
     }
   }
 
@@ -268,6 +362,8 @@ export class BackgroundTaskManager extends EventEmitter {
       summaryDirty: false,
       logStream,
       logPath,
+      rootPid: child.pid ?? null,
+      detectedPort: null,
     };
 
     // 把前台已收集的输出灌入环形缓冲 + 落盘（不丢历史）
@@ -311,7 +407,7 @@ export class BackgroundTaskManager extends EventEmitter {
         task.status = 'timeout';
         task.error = `执行超时 (${formatElapsed(hardTimeoutMs)})`;
         task.endTime = Date.now();
-        this.killTree(child);
+        this.killTaskProcesses(task);
         this.closeLogStream(task);
         this.markSummaryDirty(taskId);
         setTimeout(() => {
@@ -382,6 +478,8 @@ export class BackgroundTaskManager extends EventEmitter {
       summaryDirty: false,
       logStream,
       logPath,
+      rootPid: child.pid ?? null,
+      detectedPort: null,
     };
 
     this.tasks.set(taskId, task);
@@ -421,7 +519,7 @@ export class BackgroundTaskManager extends EventEmitter {
         task.status = 'timeout';
         task.error = `执行超时 (${formatElapsed(timeoutMs)})`;
         task.endTime = Date.now();
-        this.killTree(child);
+        this.killTaskProcesses(task);
         this.closeLogStream(task);
         this.markSummaryDirty(taskId);
         setTimeout(() => {
@@ -442,6 +540,14 @@ export class BackgroundTaskManager extends EventEmitter {
   private appendOutput(task: BackgroundTask, data: Buffer, prefix: string): void {
     const text = prefix + data.toString();
     task.lastOutputAt = Date.now();
+
+    if (!task.detectedPort) {
+      const port = detectListenPort(text);
+      if (port) {
+        task.detectedPort = port;
+        console.log(`[bg-task] ${task.taskId} 检测到监听端口 ${port}`);
+      }
+    }
 
     // 落盘（同步追加）— 失败由 stream.error 自行处理
     if (task.logStream) {
@@ -722,6 +828,8 @@ export class BackgroundTaskManager extends EventEmitter {
         summaryDirty: false,
         logStream: null,
         logPath: s.logPath,
+        rootPid: null,
+        detectedPort: null,
       };
       this.tasks.set(s.taskId, task);
     }
@@ -734,10 +842,25 @@ export class BackgroundTaskManager extends EventEmitter {
     const task = this.tasks.get(taskId);
     if (!task || task.status !== 'running') return false;
 
+    const rootPid = task.rootPid ?? task.child?.pid ?? null;
+    const label = task.label;
+    const commandPreview = task.command.length > 80
+      ? `${task.command.slice(0, 77)}...`
+      : task.command;
+
     task.status = 'killed';
     task.endTime = Date.now();
     task.error = '被用户终止';
-    if (task.child) this.killTree(task.child);
+    if (!task.detectedPort && task.outputLines.length > 0) {
+      const port = detectListenPort(task.outputLines.join('\n'));
+      if (port) task.detectedPort = port;
+    }
+    this.appendOutput(task, Buffer.from('[terminated by user]\n'), '');
+    this.killTaskProcesses(task);
+    console.log(
+      `[bg-task] 用户终止后台任务 ${taskId}${rootPid ? ` rootPid=${rootPid}` : ''}`
+        + `${task.detectedPort ? ` port=${task.detectedPort}` : ''} label="${label}" command="${commandPreview}"`,
+    );
     this.closeLogStream(task);
     this.markSummaryDirty(taskId);
     setTimeout(() => {
@@ -768,8 +891,8 @@ export class BackgroundTaskManager extends EventEmitter {
    */
   dispose(): void {
     for (const task of this.tasks.values()) {
-      if (task.status === 'running' && task.child) {
-        this.killTree(task.child);
+      if (task.status === 'running') {
+        this.killTaskProcesses(task);
       }
     }
     for (const timer of this.cleanupTimers.values()) {
@@ -821,6 +944,15 @@ export function getBackgroundTaskManagerFor(
     m.setWorkDir(resolved);
   }
   return m;
+}
+
+/** 在所有 session 的 manager 中查找拥有该 taskId 的实例（UI stop 与 spawn session 不一致时兜底） */
+export function findBackgroundTaskManagerOwning(taskId: string): BackgroundTaskManager | null {
+  for (const mgr of managersBySession.values()) {
+    const status = mgr.getStatus(taskId);
+    if (status?.status === 'running') return mgr;
+  }
+  return null;
 }
 
 /**

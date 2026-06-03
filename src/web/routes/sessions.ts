@@ -17,6 +17,13 @@ import { backfillPlaceholderSessionTitles } from '../session-title.js';
 import {
   resolveSessionImageFile,
 } from '../images-cache.js';
+import { readStructuredMessagesFile } from '../session-structured-io.js';
+import {
+  collectWorkspaceRoots,
+  readToolTraceDiffIndex,
+  resolveToolDiffForSession,
+} from '../session-tool-trace-diffs.js';
+import { isSafeSessionId } from '../session-id-guard.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -182,6 +189,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
     '.checkpoint.json',
     '.workspace.json',
     '.session-notes.md',
+    '.tool-trace-diffs.json',
   ];
   await Promise.all(
     suffixes.map((suffix) =>
@@ -195,6 +203,12 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
       console.warn('[sessions] cleanup hook failed:', err);
     }
   }
+}
+
+function rejectUnsafeSessionId(res: Response, sessionId: string): boolean {
+  if (isSafeSessionId(sessionId)) return false;
+  res.status(400).json({ error: 'invalid session id' });
+  return true;
 }
 
 export function createSessionsRouter(): Router {
@@ -236,6 +250,7 @@ export function createSessionsRouter(): Router {
   router.get('/workspace/:id', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
     const defaultWorkDir = process.cwd();
     const workspace = await resolveEffectiveWorkspaceRoot(SESSIONS_DIR, id, defaultWorkDir);
     res.json(workspace);
@@ -246,6 +261,7 @@ export function createSessionsRouter(): Router {
    */
   router.patch('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const { title } = req.body as { title?: string };
     if (!title) { res.status(400).json({ error: 'title required' }); return; }
     const index = await readSessionIndex();
@@ -265,6 +281,7 @@ export function createSessionsRouter(): Router {
    */
   router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     let index = await readSessionIndex();
     const entry = index.find(s => s.id === sessionId);
     if (!entry) { res.status(404).json({ error: 'not found' }); return; }
@@ -279,6 +296,7 @@ export function createSessionsRouter(): Router {
    */
   router.get('/:id/images/:fileName', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const fileName = String(req.params.fileName || '');
     const abs = resolveSessionImageFile(sessionId, fileName);
     if (!abs) {
@@ -302,8 +320,89 @@ export function createSessionsRouter(): Router {
   router.get('/:id/plan', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
     const plan = await readSessionPlan(id);
     res.json({ plan });
+  });
+
+  /**
+   * GET /api/sessions/:id/tool-trace-diffs - toolCallId → diff 索引（不受 structured 压缩影响）
+   */
+  router.get('/:id/tool-trace-diffs', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const index = await readToolTraceDiffIndex(SESSIONS_DIR, sessionId);
+    res.json({ index });
+  });
+
+  /**
+   * GET /api/sessions/:id/tool-diff - 按 toolCallId / 相对路径解析 diff（含工作区读文件回退）
+   */
+  router.get('/:id/tool-diff', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const toolCallId = typeof req.query.toolCallId === 'string' ? req.query.toolCallId : '';
+    const relPath = typeof req.query.path === 'string' ? req.query.path : '';
+    const toolName = typeof req.query.toolName === 'string' ? req.query.toolName : 'write_file';
+    const structuredRaw = await readStructuredMessagesFile(SESSIONS_DIR, sessionId);
+    const structured = structuredRaw?.map((m) => ({
+      role: m.role,
+      toolCallId: m.toolCallId,
+      content: typeof m.content === 'string' ? m.content : undefined,
+    }));
+    const roots = await collectWorkspaceRoots(SESSIONS_DIR, sessionId, process.cwd());
+    const workspaceOverride = typeof req.query.workspaceRoot === 'string'
+      ? req.query.workspaceRoot.trim()
+      : '';
+    let safeOverride: string | undefined;
+    if (workspaceOverride) {
+      const resolvedOverride = path.resolve(workspaceOverride);
+      const inKnownRoots = roots.some((r) => path.resolve(r) === resolvedOverride);
+      if (inKnownRoots) {
+        safeOverride = resolvedOverride;
+      } else {
+        try {
+          const st = await fs.stat(resolvedOverride);
+          if (st.isDirectory()) safeOverride = resolvedOverride;
+        } catch {
+          /* ignore invalid override */
+        }
+      }
+    }
+    const diffSource = await resolveToolDiffForSession({
+      sessionsDir: SESSIONS_DIR,
+      sessionId,
+      defaultWorkDir: process.cwd(),
+      toolCallId: toolCallId || undefined,
+      relPath: relPath || undefined,
+      toolName,
+      structured,
+      workspaceRootOverride: safeOverride,
+    });
+    if (!diffSource) {
+      res.status(404).json({
+        error: 'diff not found',
+        relPath: relPath || undefined,
+        hint: roots.length > 0
+          ? 'file not found under session workspace roots'
+          : 'no workspace root for session',
+      });
+      return;
+    }
+    res.json({ diffSource });
+  });
+
+  /**
+   * GET /api/sessions/:id/structured - harness 结构化消息（UI diff 历史还原）
+   */
+  router.get('/:id/structured', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const messages = await readStructuredMessagesFile(SESSIONS_DIR, sessionId);
+    res.json({ messages: messages ?? [] });
   });
 
   /**
@@ -312,6 +411,7 @@ export function createSessionsRouter(): Router {
   router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
     try {
       const data = await fs.readFile(file, 'utf-8');
@@ -326,6 +426,7 @@ export function createSessionsRouter(): Router {
    */
   router.put('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
     const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
     const { messages } = req.body as { messages: ChatMessage[] };
     await ensureDir();

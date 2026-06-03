@@ -1448,6 +1448,36 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
     expect(resumedMarkers).toHaveLength(1);
   });
 
+  it('resetPerRunInjectionBudget clears correctionBudget and segmentRenewal after checkpoint restore', () => {
+    const config = resolveSupervisorConfig(
+      { mode: 'adaptive', correctionBudget: { freeSegmentMaxPerTask: 5 } },
+      {},
+    );
+    const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });
+    const messages: UnifiedMessage[] = [];
+    const port = bridge.createCorrectionPort(messages);
+    port.inject({ kind: 'recovery', content: 'a' }, { phase: 'free', source: 'supervisor' });
+
+    bridge.restoreFromCheckpoint({
+      executionMode: 'free',
+      executionModeLockRemaining: 0,
+      executionModeEnteredBy: [],
+      executionModeEnteredAtRound: null,
+      pendingModeSignals: [],
+      forcedTaskBearingRoundsSinceEntry: 0,
+      supervisorPhase: 'takeover',
+      correctionBudgetUsed: 4,
+      segmentRenewalCount: 3,
+    });
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(4);
+    expect(bridge.getSegmentRenewalCount()).toBe(3);
+
+    bridge.resetPerRunInjectionBudget();
+    expect(bridge.getCorrectionBudgetUsage().used).toBe(0);
+    expect(bridge.getSegmentRenewalCount()).toBe(0);
+    expect(bridge.consumePendingSegmentRenewal()).toBeUndefined();
+  });
+
   it('restoreFromCheckpoint is a no-op when supervisor is off', () => {
     const config = resolveSupervisorConfig({ mode: 'off' }, {});
     const bridge = createSupervisorRuntimeBridge(config, { memoryOnly: true });

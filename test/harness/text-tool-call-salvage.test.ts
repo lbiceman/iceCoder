@@ -70,11 +70,39 @@ describe('embedded tool call parsers', () => {
   });
 });
 
+const CHANNEL_BRACKET_SAMPLE = `[调用工具: run_command]]<]minimax[>[<task_id>bg_46rq7i]<]minimax[>[</task_id>]<]minimax[>[<action>check]<]minimax[>[</action>]<]minimax[>[<since>0]<]minimax[>[</since>]<]minimax[>[</invoke>]<]minimax[>[</tool_call>`;
+
+describe('channel-delimiter / bracket-param tool markup', () => {
+  it('parses bracket-param run_command check from tail fragment', () => {
+    const { calls } = parseEmbeddedToolCallsFromText(CHANNEL_BRACKET_SAMPLE);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(calls[0]?.name).toBe('run_command');
+    expect(calls[0]?.arguments.task_id).toBe('bg_46rq7i');
+    expect(calls[0]?.arguments.action).toBe('check');
+  });
+
+  it('strips channel-delimiter markup from display text', () => {
+    expect(stripEmbeddedToolCalls(CHANNEL_BRACKET_SAMPLE)).toBe('');
+    expect(prepareAssistantContentForHistory(CHANNEL_BRACKET_SAMPLE)).toBe('');
+  });
+});
+
 describe('text-tool-call-salvage orchestration', () => {
   it('backward-compatible aliases work', () => {
     expect(parseTextFormatToolCalls(XML_SAMPLE)).toHaveLength(2);
     expect(stripTextFormatToolCalls(XML_SAMPLE)).toBe('前缀说明');
     expect(containsEmbeddedToolCalls(XML_SAMPLE)).toBe(true);
+  });
+
+  it('strips embedded markup when native tool_calls already present', () => {
+    const out = salvageTextToolCallsInResponse({
+      content: CHANNEL_BRACKET_SAMPLE,
+      toolCalls: [{ id: 'tc-native', name: 'run_command', arguments: { task_id: 'bg_46rq7i', action: 'check' } }],
+      finishReason: 'tool_calls',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, provider: 'test' },
+    });
+    expect(out.toolCalls).toHaveLength(1);
+    expect(out.content).toBe('');
   });
 
   it('salvageTextToolCallsInResponse attaches toolCalls and strips content', () => {

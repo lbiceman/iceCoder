@@ -1,6 +1,6 @@
 /**
  * 命令面板模块
- * 负责：~ 命令下拉框、本地命令处理（open/scan/telemetry/memory）
+ * 负责：~ 命令下拉框、本地命令处理（open/scan/telemetry）
  */
 
 /* exported ChatCommands */
@@ -12,15 +12,13 @@ window.ChatCommands = (function () {
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' },
-    { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
+    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' },
-    { name: 'memory', description: '~memory：打开图谱页；后缀 view/delete 仍在聊天执行', prefix: '~' }
+    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' }
   ];
 
   var elCmdDropdown = null;
@@ -299,110 +297,6 @@ window.ChatCommands = (function () {
       });
   }
 
-  function handleMemory(text, messages, appendFn, saveFn) {
-    var memArgs = text.substring(7).trim();
-
-    if (memArgs.indexOf('view ') === 0) {
-      var viewFilename = memArgs.substring(5).trim();
-      if (!viewFilename) {
-        messages.push({ role: 'agent', content: '用法: ~memory view <文件名>' });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-        return;
-      }
-      messages.push({ role: 'agent', content: '正在读取: ' + viewFilename + '…' });
-      appendFn(messages[messages.length - 1]);
-      saveFn();
-
-      fetch('/api/memory/files/' + encodeURIComponent(viewFilename))
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          messages.pop();
-          if (data.success) {
-            messages.push({ role: 'agent', content: '📄 **' + viewFilename + '** (' + data.level + '级)\n\n```markdown\n' + data.content + '\n```' });
-          } else {
-            messages.push({ role: 'agent', content: '❌ 读取失败: ' + (data.error || '未知错误') });
-          }
-          appendFn(messages[messages.length - 1]);
-          saveFn();
-        })
-        .catch(function (err) {
-          messages.pop();
-          messages.push({ role: 'agent', content: '❌ 读取失败: ' + (err.message || '网络错误') });
-          appendFn(messages[messages.length - 1]);
-          saveFn();
-        });
-      return;
-    }
-
-    if (memArgs.indexOf('delete ') === 0) {
-      var delFilename = memArgs.substring(7).trim();
-      if (!delFilename) {
-        messages.push({ role: 'agent', content: '用法: ~memory delete <文件名>' });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-        return;
-      }
-      messages.push({ role: 'agent', content: '正在删除记忆: ' + delFilename + '…' });
-      appendFn(messages[messages.length - 1]);
-      saveFn();
-
-      fetch('/api/memory/files/' + encodeURIComponent(delFilename), { method: 'DELETE' })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          messages.pop();
-          if (data.success) {
-            messages.push({ role: 'agent', content: '✅ 已删除记忆: ' + delFilename });
-          } else {
-            messages.push({ role: 'agent', content: '❌ 删除失败: ' + (data.error || '未知错误') });
-          }
-          appendFn(messages[messages.length - 1]);
-          saveFn();
-        })
-        .catch(function (err) {
-          messages.pop();
-          messages.push({ role: 'agent', content: '❌ 删除失败: ' + (err.message || '网络错误') });
-          appendFn(messages[messages.length - 1]);
-          saveFn();
-        });
-      return;
-    }
-
-    // 无参数：列出所有记忆
-    messages.push({ role: 'agent', content: '正在加载记忆列表…' });
-    appendFn(messages[messages.length - 1]);
-    saveFn();
-
-    fetch('/api/memory/files')
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        messages.pop();
-        if (!data.success || !data.files || data.files.length === 0) {
-          messages.push({ role: 'agent', content: '📭 暂无记忆文件。' });
-          appendFn(messages[messages.length - 1]);
-          saveFn();
-          return;
-        }
-        var lines = ['📋 **记忆文件** (' + data.files.length + ' 个)\n'];
-        for (var fi = 0; fi < data.files.length; fi++) {
-          var f = data.files[fi];
-          var typeTag = f.type ? '[' + f.type + '] ' : '';
-          var desc = f.description ? ' — ' + f.description : '';
-          lines.push((fi + 1) + '. ' + typeTag + '`' + f.filename + '`' + desc);
-        }
-        lines.push('\n查看记忆: `~memory view <文件名>` | 删除记忆: `~memory delete <文件名>`');
-        messages.push({ role: 'agent', content: lines.join('\n') });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      })
-      .catch(function (err) {
-        messages.pop();
-        messages.push({ role: 'agent', content: '加载记忆列表失败: ' + (err.message || '网络错误') });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      });
-  }
-
   return {
     init: init,
     show: show,
@@ -420,6 +314,5 @@ window.ChatCommands = (function () {
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
     handleSupervisor: handleSupervisor,
-    handleMemory: handleMemory,
   };
 })();

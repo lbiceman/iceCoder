@@ -5,7 +5,7 @@
  * B 小编辑 → 可 free
  * C 新增模块 → 应 forced
  * D 多文件重构 → 应 forced + modeLock
- * E checkpoint 恢复 → 必须 forced（checkpoint_resumed）
+ * E checkpoint 文件存在 → 新用户消息仍从 free 开始（不 submit checkpoint_resumed）
  * F graph 构建失败 → degraded forced（forcedDegradedTier=graph）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -141,7 +141,7 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
     expect(result.loopState.executionModeLockRemaining).toBeGreaterThan(0);
   });
 
-  it('E · checkpoint 恢复：必须 forced（checkpoint_resumed signal）', async () => {
+  it('E · checkpoint 文件存在时新用户消息仍从 free 段开始（不 submit checkpoint_resumed）', async () => {
     const tools = [makeTool('read_file')];
     const { harness, sessionDir } = await buildDualModeHarnessAsync({
       tools,
@@ -159,6 +159,7 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
       executionModeEnteredAtRound: 3,
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
+      supervisorPhase: 'takeover',
     });
     const { events, push } = collectSteps();
 
@@ -168,15 +169,8 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
       push,
     );
 
-    const enter = events.find(e => e.type === 'execution_mode_enter');
-    expect(enter).toMatchObject({
-      executionMode: {
-        executionMode: 'forced',
-        enteredByPrimary: 'checkpoint_resumed',
-      },
-    });
-    expect(result.loopState.executionMode).toBe('forced');
-    expect(result.loopState.executionModeEnteredByPrimary).toBe('checkpoint_resumed');
+    expect(events.some(e => e.type === 'execution_mode_enter')).toBe(false);
+    expect(result.loopState.executionMode).toBe('free');
   });
 
   it('F · graph 构建失败：forced 下 init 失败 → degraded tier + recovery_pending', async () => {

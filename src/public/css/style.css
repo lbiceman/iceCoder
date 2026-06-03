@@ -4,3 +4,5 @@
 @import url('./config.css');
 @import url('./chat.css');
 @import url('./memory.css');
+@import url('./modal.css');
+@import url('./diff-viewer.css');

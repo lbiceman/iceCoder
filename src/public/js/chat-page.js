@@ -37,6 +37,40 @@ window.ChatPage = (function () {
   /** 本页仅提示一次公网隧道就绪 */
   var tunnelReadyAnnounced = false;
 
+  /** run_command 流式 stdout 累积（tool_result 到达后会清空） */
+  var streamingDiffBuffer = { toolCallId: '', text: '' };
+
+  function buildDisplayMap(structured) {
+    if (!window.ToolDisplayHistory) return {};
+    return window.ToolDisplayHistory.buildAgentDisplayMap(
+      structured || Session.getStructuredMessages(),
+      Session.getMessages(),
+      Session.getToolTraces(),
+    );
+  }
+
+  /** 方案 B：拉 structured messages 并重绘聊天历史（含 diff） */
+  function renderChatHistory(shouldScroll, structured) {
+    var displayMap = buildDisplayMap(structured);
+    UI.renderMessagesOnly(
+      Session.getMessages(),
+      Session.getToolTraces(),
+      Session.stripStatusTag,
+      shouldScroll,
+      displayMap,
+    );
+    if (UI.repairMissingDiffMountsFromStructured) {
+      UI.repairMissingDiffMountsFromStructured(structured);
+    }
+  }
+
+  function renderChatHistoryWithFetch(shouldScroll, done) {
+    Session.fetchStructuredMessages(function (structured) {
+      renderChatHistory(shouldScroll, structured);
+      if (done) done();
+    });
+  }
+
   // Token 用量
   var maxContextTokens = 0;
   var usedInputTokens = 0;
@@ -237,20 +271,6 @@ window.ChatPage = (function () {
       return true;
     }
 
-    if (text === '~memory') {
-      Cmd.hide();
-      window.location.hash = '#/memory';
-      return true;
-    }
-
-    if (text.indexOf('~memory ') === 0) {
-      Cmd.hide();
-      Cmd.handleMemory(text, Session.getMessages(), function (msg) {
-        UI.appendMessageEl(msg, Session.stripStatusTag);
-      }, Session.saveMessages);
-      return true;
-    }
-
     return false;
   }
 
@@ -284,7 +304,17 @@ window.ChatPage = (function () {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       Session.appendMessage(userMsg);
+      UI.enableAutoScroll();
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
+      if (UI.maybeRepartitionTailIfNeeded) {
+        UI.maybeRepartitionTailIfNeeded(
+          Session.getMessages(),
+          Session.getToolTraces(),
+          Session.stripStatusTag,
+          false,
+          buildDisplayMap(),
+        );
+      }
       Session.saveMessages();
       var titlePrompt = displayParts.join('\n') || text || '';
       if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
@@ -391,25 +421,25 @@ window.ChatPage = (function () {
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
-    if (elMessages) {
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-    }
     Session.fetchServerMessages(function (serverMsgs) {
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
       Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-      Session.saveMessages();
-      // 服务端消息渲染后再叠加 runningTurn（流式 bubble 永远位于消息列表尾）
-      if (runningTurn) restoreFromRunningTurn(runningTurn);
+      if (shouldSkipServerSnapshotSync()) {
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+        return;
+      }
+      renderChatHistoryWithFetch(false, function () {
+        Session.saveMessages();
+        UI.enableAutoScroll();
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+      });
     });
     resetTokenUsage();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
-    // 即使 fetch 还没回来，先按 runningTurn 设置好按钮/冰豆，避免短暂闪烁
-    if (runningTurn) restoreFromRunningTurn(runningTurn);
   }
 
   function syncActiveSessionFromServer(data) {
@@ -434,7 +464,13 @@ window.ChatPage = (function () {
     UI.setLiveToolRoundActive(true);
     for (var i = 0; i < timeline.length; i++) {
       var row = timeline[i];
-      UI.appendToolAction(row.toolName, row.detail || '', row.status || 'pending');
+      UI.appendToolAction(
+        row.toolName,
+        row.detail || '',
+        row.status || 'pending',
+        row.toolCallId || '',
+        row.diffSource || null,
+      );
     }
     if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
   }
@@ -526,6 +562,8 @@ window.ChatPage = (function () {
         catch (_e) { /* ignore */ }
       }
     }
+
+    UI.scheduleScrollIfSticky();
   }
 
   function onWsConnected(data) {
@@ -590,6 +628,14 @@ window.ChatPage = (function () {
     UI.setStreamingState(false);
   }
 
+  function scheduleRefreshAfterTurn() {
+    setTimeout(function () {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn(false);
+      }
+    }, 50);
+  }
+
   function onWsResponse(data) {
     if (userStopped) {
       userStopped = false;
@@ -597,6 +643,7 @@ window.ChatPage = (function () {
     }
     if (streamFinalized) {
       streamFinalized = false;
+      scheduleRefreshAfterTurn();
       return;
     }
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
@@ -605,6 +652,7 @@ window.ChatPage = (function () {
     Session.flushToolBatchLocal();
     UI.appendMessageEl(msg, Session.stripStatusTag);
     Session.saveMessages();
+    scheduleRefreshAfterTurn();
   }
 
   function onWsStep(data) {
@@ -642,8 +690,20 @@ window.ChatPage = (function () {
       var callStatus = fmt && fmt.resolveToolCallInitialStatus
         ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
         : 'pending';
-      UI.appendToolAction(step.toolName, detail, callStatus);
-      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: callStatus });
+      var toolCallId = step.toolCallId || '';
+      var diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
+        ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
+        : null;
+      UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs);
+      Session.pushToolBatch({
+        toolName: step.toolName,
+        detail: detail,
+        status: callStatus,
+        toolCallId: toolCallId,
+      });
+      if (toolCallId) {
+        streamingDiffBuffer = { toolCallId: toolCallId, text: '' };
+      }
     }
     if (step.type === 'tool_result' && step.toolName) {
       var fmtResult = window.ToolTraceFormat;
@@ -657,14 +717,26 @@ window.ChatPage = (function () {
         : (step.toolOutcome === 'policy_block'
           ? 'warn'
           : (step.toolSuccess ? 'success' : 'error'));
-      UI.updateLastToolAction(step.toolName, resultStatus);
-      Session.updateToolBatchStatus(step.toolName, resultStatus);
+      UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus);
+      Session.updateToolBatchStatus(step.toolName, resultStatus, step.toolCallId || '');
       if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
         var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
         if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
           window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
         }
       }
+      if (window.ToolDisplayHistory) {
+        var diffSource = window.ToolDisplayHistory.extractDiffSource(
+          step.toolName,
+          step.toolOutput,
+          step.toolArgs,
+        );
+        if (!diffSource && window.DiffViewer && step.toolOutput) {
+          diffSource = DiffViewer.extractUnifiedDiff(step.toolOutput);
+        }
+        tryMountToolDiff(step.toolCallId || '', diffSource);
+      }
+      streamingDiffBuffer = { toolCallId: '', text: '' };
     }
     if (window.ChatExecutionPlanBridge
       && (step.type === 'execution_plan_init'
@@ -686,11 +758,18 @@ window.ChatPage = (function () {
     var processing = data.status === 'processing';
     WS.setProcessing(processing);
     if (!processing) {
+      // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
+      // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
+      var skipRefreshAfterUserStop = userStopped;
       if (userStopped) userStopped = false;
       isStreaming = false;
       Pet.removeThinking(isStreaming, WS.isProcessing());
       if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
       if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
+      // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
+      if (!skipRefreshAfterUserStop) {
+        refreshChatHistoryAfterTurn(false);
+      }
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }
@@ -740,29 +819,35 @@ window.ChatPage = (function () {
     activeConfirmId = data.confirmId || null;
     activeConfirmResolved = false;
     var argsText = data.args ? JSON.stringify(data.args) : '';
-    // 注意：window.confirm 是同步阻塞，单端用户必须先选择；
-    // 但只要服务端已经 first-win 关闭，我们丢弃本地结果即可。
-    var ok = window.confirm('AI 请求执行危险操作：\n\n工具: ' + data.toolName + '\n参数: ' + argsText + '\n\n是否允许？');
-    if (activeConfirmResolved) {
-      // 其它端已经回复，丢弃本地选择
+
+    Modal.confirm({
+      title: '危险操作确认',
+      message: '工具: ' + data.toolName + '\n参数: ' + argsText,
+      type: 'danger',
+      dangerConfirm: true,
+      confirmText: '允许',
+      cancelText: '拒绝',
+    }).then(function (ok) {
+      if (activeConfirmResolved) {
+        activeConfirmId = null;
+        activeConfirmResolved = false;
+        if (sessionPet) {
+          sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
+          sessionPet.setBubbleText('');
+        }
+        return;
+      }
+      WS.sendConfirmReply(ok, activeConfirmId);
       activeConfirmId = null;
-      activeConfirmResolved = false;
+      var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
+      Session.appendMessage(confirmMsg);
+      UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
+      Session.saveMessages();
       if (sessionPet) {
         sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
         sessionPet.setBubbleText('');
       }
-      return;
-    }
-    WS.sendConfirmReply(ok, activeConfirmId);
-    activeConfirmId = null;
-    var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
-    Session.appendMessage(confirmMsg);
-    UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
-    Session.saveMessages();
-    if (sessionPet) {
-      sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-      sessionPet.setBubbleText('');
-    }
+    });
   }
 
   function onWsConfirmResolved(data) {
@@ -790,6 +875,32 @@ window.ChatPage = (function () {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
   }
 
+  function refreshChatHistoryAfterTurn(shouldScroll, done) {
+    if (shouldSkipServerSnapshotSync()) {
+      if (done) done();
+      return;
+    }
+    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
+    Session.fetchServerMessages(function (serverMsgs) {
+      if (shouldSkipServerSnapshotSync()) {
+        if (done) done();
+        return;
+      }
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      renderChatHistoryWithFetch(shouldScroll !== false, function () {
+        Session.saveMessages();
+        if (done) done();
+      });
+    });
+  }
+
   function syncMessages() {
     if (shouldSkipServerSnapshotSync()) return;
     Session.fetchServerMessages(function (serverMsgs) {
@@ -800,7 +911,7 @@ window.ChatPage = (function () {
       var separated = Session.separateToolTraces(serverMsgs);
       var updated = Session.applyServerChatSnapshot(separated, { fullRender: false }, isStreaming, WS.isProcessing());
       if (updated) {
-        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
     });
@@ -813,7 +924,7 @@ window.ChatPage = (function () {
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
       if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
     });
@@ -827,18 +938,59 @@ window.ChatPage = (function () {
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
       window.ChatExecutionPlanBridge.notifySessionUpdated();
     }
+    if (data && data.reason === 'turn_complete') {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn(false);
+      }
+      return;
+    }
     if (!data || !data.title) {
       pullServerChatSnapshotAuthoritative();
     }
   }
 
+  function onWsBgTaskStopResult(payload) {
+    if (!window.BgTaskChip || !payload || payload.ok) return;
+    if (window.BgTaskChip.resetStopPending && payload.taskId) {
+      window.BgTaskChip.resetStopPending(payload.taskId);
+    }
+  }
+
   function onWsBgTaskUpdate(payload) {
     if (!window.BgTaskChip || !elMessages) return;
-    // 当前 sessionId 来源：ChatSession.getActiveId 若存在则用；否则不过滤（兼容当前单 session 模型）
     var activeId = (Session && typeof Session.getActiveId === 'function')
       ? Session.getActiveId()
       : '';
     window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
+    UI.scheduleScrollIfSticky();
+  }
+
+  function tryMountToolDiff(toolCallId, diffSource) {
+    if (!toolCallId || !diffSource || !UI.mountDiffForToolCallId) return;
+    UI.mountDiffForToolCallId(toolCallId, diffSource);
+  }
+
+  /** run_command 流式输出：按 toolCallId 累积并实时预览 */
+  function onWsToolOutput(data) {
+    if (!data || !data.content || !data.toolCallId) return;
+    if (streamingDiffBuffer.toolCallId && streamingDiffBuffer.toolCallId !== data.toolCallId) {
+      streamingDiffBuffer = { toolCallId: data.toolCallId, text: '' };
+    }
+    if (!streamingDiffBuffer.toolCallId) streamingDiffBuffer.toolCallId = data.toolCallId;
+    streamingDiffBuffer.text += data.content;
+    var diffSource = null;
+    if (window.DiffViewer && typeof DiffViewer.extractUnifiedDiff === 'function') {
+      diffSource = DiffViewer.extractUnifiedDiff(streamingDiffBuffer.text);
+    } else if (window.DiffViewer && typeof DiffViewer.looksLikeUnifiedDiffText === 'function') {
+      if (!DiffViewer.looksLikeUnifiedDiffText(streamingDiffBuffer.text)) return;
+      diffSource = streamingDiffBuffer.text;
+    } else if (!/^@@\s/m.test(streamingDiffBuffer.text) && !/^diff --git /m.test(streamingDiffBuffer.text)) {
+      return;
+    } else {
+      diffSource = streamingDiffBuffer.text;
+    }
+    if (!diffSource) return;
+    tryMountToolDiff(streamingDiffBuffer.toolCallId, diffSource);
   }
 
   /**
@@ -981,6 +1133,13 @@ window.ChatPage = (function () {
 
     fetchSupportedFormats();
 
+    if (window.BgTaskChip && window.BgTaskChip.setStopHandler) {
+      window.BgTaskChip.setStopHandler(function (taskId) {
+        if (!WS.isConnected || !WS.isConnected()) return;
+        WS.send({ type: 'bg_task_stop', taskId: taskId });
+      });
+    }
+
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
     WS.on('connected', onWsConnected);
@@ -1002,6 +1161,8 @@ window.ChatPage = (function () {
     WS.on('workspace_updated', syncSidebarWorkspace);
     WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);
+    WS.on('bg_task_stop_result', onWsBgTaskStopResult);
+    WS.on('tool_output', onWsToolOutput);
 
     // 连接 WebSocket
     WS.connect(remoteToken);
@@ -1109,12 +1270,28 @@ window.ChatPage = (function () {
     }
 
     function paintInitialChatView() {
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-      var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
-      if (cachedLiveTools.length > 0) {
-        applyLiveToolTimelineToUI(cachedLiveTools);
+      function afterHistoryPainted() {
+        var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+        if (cachedLiveTools.length > 0) {
+          applyLiveToolTimelineToUI(cachedLiveTools);
+        }
+        UI.enableAutoScroll();
+        syncSendButtonWithWorkload();
       }
-      syncSendButtonWithWorkload();
+      // 先拉服务端会话（含 tool_trace），再 fetch structured 重绘，避免 F5 后工具行无 diff
+      Session.fetchServerMessages(function (serverMsgs) {
+        var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+        if (raw.length > 0) {
+          var separated = Session.separateToolTraces(raw);
+          Session.applyServerChatSnapshot(
+            separated,
+            { fullRender: false, authoritative: true },
+            isStreaming,
+            WS.isProcessing(),
+          );
+        }
+        renderChatHistoryWithFetch(false, afterHistoryPainted);
+      });
     }
 
     if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
@@ -1130,7 +1307,7 @@ window.ChatPage = (function () {
         var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
         var separated = Session.separateToolTraces(raw);
         if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-          UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+          renderChatHistoryWithFetch(false);
           Session.saveMessages();
         }
       });

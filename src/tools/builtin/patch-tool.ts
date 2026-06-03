@@ -7,6 +7,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
+import { formatToolOutputWithDiff } from '../file-change-diff.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -184,13 +185,13 @@ export function createPatchTool(workDir: string): RegisteredTool {
         }
 
         const status = dryRun ? '[预览模式] ' : '';
-        let output = `${status}补丁已应用到 ${args.path}\n`;
-        output += `  成功: ${applied}/${hunks.length} 个 hunk`;
+        let summary = `${status}补丁已应用到 ${args.path}\n`;
+        summary += `  成功: ${applied}/${hunks.length} 个 hunk`;
         if (failed > 0) {
-          output += `\n  失败: ${failed} 个 hunk（上下文不匹配）`;
+          summary += `\n  失败: ${failed} 个 hunk（上下文不匹配）`;
         }
 
-        return { success: true, output };
+        return { success: true, output: formatToolOutputWithDiff(summary, patch) };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { success: false, output: '', error: `补丁应用失败: ${message}` };

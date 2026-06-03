@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
 import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
+import { buildFileChangeDiff, formatToolOutputWithDiff } from '../file-change-diff.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -106,9 +107,11 @@ export function createBatchEditTool(workDir: string): RegisteredTool {
           ? `[预览模式] ${args.path} (${edits.length} 处编辑)`
           : `${args.path} (${edits.length} 处编辑${totalChanged ? ', 已保存' : ', 无变更'})`;
 
+        const diff = totalChanged ? buildFileChangeDiff(originalContent, content, args.path as string) : null;
+
         return {
           success: true,
-          output: `${header}\n${results.join('\n')}`,
+          output: formatToolOutputWithDiff(`${header}\n${results.join('\n')}`, diff),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

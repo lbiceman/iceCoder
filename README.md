@@ -19,24 +19,36 @@ npm run dev                                     # API :1024 · UI :1025
 
 ```bash
 npx tsx src/cli/index.ts run "fix failing tests" --max-rounds 100
-npm test                                        # 1,623 tests · ~38s · 100% pass
+npm test                                        # 1,844 tests · ~39s · 100% pass
 ```
 
-**Requirements:** Node.js 18+
+**Requirements:** Node.js 18+ (**22+** recommended; some deps warn on Node 20)
+
+### Configuration & data paths
+
+| | Development (`npm run dev`) | Production (`npm start` / `iceCoder start`) |
+|---|---|---|
+| **Data root** | `./data/` in the project | `~/.iceCoder/` |
+| **Config file** | `data/config.json` | `~/.iceCoder/config.json` |
+| **First launch** | Web shows **config page only** until a valid API key is saved; hot-reloads after save | Same |
+
+Override paths with `ICE_DATA_DIR` and related env vars — see [`docs/environment-variables.md`](./docs/environment-variables.md).
+
+**Distribution:** `npm run build` produces `ice-coder-1.0.0.tgz` — see [`PACKAGE_USAGE.md`](./PACKAGE_USAGE.md).
 
 ---
 
 ## By the numbers
 
-> Verified **2026-05-27** — run `npm test` and `npm run test:coverage` locally to reproduce.
+> Verified **2026-06-01** — run `npm test` and `npm run test:coverage` locally to reproduce.
 
 | | |
 |---|---|
 | **Long-session run** | **217** tool rounds completed stably in production · higher limits not yet tested |
-| **Tests** | **1,623** cases · **141** files · **100%** pass · **~38s** |
-| **Coverage (all `src/`)** | Lines **75.7%** · Statements **73.6%** · Functions **77.7%** · Branches **65.0%** |
-| **Core runtime coverage** | **Harness 82.4%** lines · **Supervisor 95.1%** lines · **Checkpoint ~93%** lines |
-| **Agent tools** | **27** registered (26 builtins + `delegate_to_subagent`) · **+ MCP** at runtime |
+| **Tests** | **1,844** cases · **173** files · **100%** pass · **~39s** |
+| **Coverage (all `src/`)** | Lines **78.5%** · Statements **76.1%** · Functions **80.2%** · Branches **67.3%** |
+| **Core runtime coverage** | **Harness 84.3%** lines · **Supervisor 95.4%** lines · **File memory 70.5%** lines |
+| **Agent tools** | **27** at runtime (**26** built-in + Harness `delegate_to_subagent`; `image_read` needs vision model) · **+ MCP** |
 | **Surfaces** | CLI 7 subcommands · HTTP **:1024** · Vite dev UI **:1025** · WebSocket · optional Cloudflare tunnel |
 | **Benchmark (blind judge vs CC)** | Repair **86/88 vs 83/85** · long-horizon m2.7 **72 vs 59** · m2.5-pro **81 vs 80** (both SR=1) |
 
@@ -82,7 +94,8 @@ CLI / Web / WebSocket (PC + mobile via ~scan)
 | **BranchBudget** | Hard caps on same-file edits & failed command retries |
 | **File memory** | Long-term facts + session notes + Dream/eviction; keyword recall pre-LLM |
 | **Web UX** | Session Pet, multi-session sidebar, keep-alive, F5/multi-device `runningTurn` restore |
-| **Tools & MCP** | Files, shell, git, patch, search, docs, web, sub-agent delegate |
+| **Tools & MCP** | Files, shell, git, patch, search, docs, web, sub-agent delegate; **Shell dual-track** auto-routes long/short commands |
+| **Diff Viewer** | Git-style diff for edit tool output, inline expand/collapse in chat |
 
 ---
 
@@ -109,7 +122,8 @@ CLI / Web / WebSocket (PC + mobile via ~scan)
 | **F5 / reconnect restore** | Server `runningTurn` snapshot · restore streaming text, tool timeline, round, Pet state |
 | **PC + mobile** | `~scan` QR join same session · harness events **broadcast per session** · synced progress |
 | **Multi-device confirm** | Dangerous ops broadcast to all subscribers · **first-win** · 60s timeout deny |
-| **Command palette** | `~` autocomplete in input · **+** button lists local commands and runs them immediately |
+| **Command palette** | `~` autocomplete (`open` / `scan` / `telemetry` / `supervisor`) · **+** button menu |
+| **Diff panel** | Expand `edit_file` / `patch_file` output as Git-style diff (line numbers, red/green) |
 
 Details: [`docs/requirement/聊天页状态保活与断点恢复-finish.md`](./docs/requirement/聊天页状态保活与断点恢复-finish.md)
 
@@ -127,8 +141,8 @@ Details: [`docs/requirement/聊天页状态保活与断点恢复-finish.md`](./d
 | **Dream consolidation** | Periodic dedupe, prune, index repair (inspired by Claude Code) |
 | **Weighted eviction** | Not pure LRU; scores by usage, recency, relevance |
 | **Session notes** | Per-session `{id}.session-notes.md` · includes `icecoder-runtime` snapshot (TaskState + RepoContext) |
-| **Web graph UI** | `#/memory` graph page · `~memory` / `~memory view` / `~memory delete` |
-| **Telemetry** | `GET /api/memory/telemetry` · `~telemetry` · log `data/memory/telemetry.jsonl` |
+| **Web graph UI** | Top nav **Memory** page `#/memory` · graph browse/delete · CLI still supports `/memory` |
+| **Telemetry** | `GET /api/memory/telemetry` · chat `~telemetry` · log `data/memory/telemetry.jsonl` |
 
 ```text
 Chat → LLM extract → security scan → write memory-files
@@ -151,6 +165,16 @@ Every tool round is scored against the stated goal:
 - **Goal drift** — tools and outputs no longer match task intent
 
 Signals land in the Timeline; L2 may takeover or L1 may escalate to forced.
+
+### Shell dual-track execution
+
+`run_command` includes a runtime classifier that routes long vs short commands:
+
+- **Long jobs** (`npm test/build`, vitest, tsc -w, docker build, …) → background, immediate `task_id`, 24h hard timeout
+- **Short commands** (`git status`, `ls`, tsc --noEmit, …) → foreground, 10s cap; 8s soft timeout can escalate to background
+- Poll/manage with `action:"check"` / `"list"` / `"stop"`
+
+See [`docs/requirement/shell-双轨执行-finish.md`](./docs/requirement/shell-双轨执行-finish.md).
 
 ### Checkpoint recovery
 
@@ -220,33 +244,35 @@ Task specs: [`benchMark/tasks/`](./benchMark/tasks/) · Reports: [`benchMark/rep
 ## Quality & testing
 
 ```bash
-npm test                 # 1,623 cases · 141 files · ~38s
+npm test                 # 1,844 cases · 173 files · ~39s
 npm run test:coverage    # V8 report → coverage/ (HTML + JSON)
 npx tsc --noEmit         # typecheck
+npm run eval:agent       # Agent eval skeleton (mock/real)
 ```
 
 **Framework:** Vitest 4 · `@vitest/coverage-v8` · Node environment
 
-### Coverage snapshot (2026-05-27)
+### Coverage snapshot (2026-06-01)
 
 | Scope | Lines | Statements | Functions | Branches |
 |-------|-------|------------|-----------|----------|
-| **All `src/`** | **75.7%** (8,530 / 11,270) | **73.6%** (9,345 / 12,700) | **77.7%** (1,578 / 2,030) | **65.0%** (6,206 / 9,542) |
-| **`src/harness/`** | **82.4%** | **80.1%** | **83.8%** | **71.3%** |
-| **`src/harness/supervisor/`** | **95.1%** | **93.0%** | **93.1%** | **87.0%** |
-| **`src/memory/file-memory/`** | **70.3%** | **68.7%** | **66.7%** | **59.8%** |
+| **All `src/`** | **78.5%** (9,934 / 12,650) | **76.1%** (10,908 / 14,331) | **80.2%** (1,804 / 2,250) | **67.3%** (7,177 / 10,661) |
+| **`src/harness/`** | **84.3%** | **81.5%** | **85.4%** | **72.3%** |
+| **`src/harness/supervisor/`** | **95.4%** | **93.6%** | **93.5%** | **88.1%** |
+| **`src/memory/file-memory/`** | **70.5%** | **68.9%** | **67.1%** | **60.1%** |
 
-### Test layout (141 files · 1,623 cases)
+### Test layout (173 files · 1,844 cases)
 
 | Area | Files (approx.) | What is covered |
 |------|-----------------|-----------------|
-| **Harness + Supervisor** | **73** | Main loop, checkpoint, branch budget, dual-mode L1/L2, recovery, tool gates |
+| **Harness + Supervisor** | **90** | Main loop, checkpoint, branch budget, dual-mode L1/L2, recovery, tool gates, Shell dual-track |
 | **File memory** | **20** | Recall, Dream, eviction, security, concurrency |
-| **Web / sessions / WS** | **11** | sessions API, isolation, structured-io, supervisor-events, chat-ws broadcast |
-| **TaskGraph** | **7** | Builder, executor, persistence, metrics, review |
+| **Web / sessions / WS** | **19** | sessions API, setup gate, isolation, structured-io, supervisor-events, chat-ws broadcast |
+| **Tools** | **14** | Shell classifier, background tasks, git, patch, doc parsers |
+| **TaskGraph** | (in harness) | Builder, executor, persistence, metrics, review |
 | **E2E dual-mode** | **1** | Seven scenario prompts: free/forced/degraded/checkpoint resume |
-| **Session Pet / public UI** | **2** | Palette, expression cycle |
-| **LLM / tools / parser / core** | **27** | Adapters, normalizers, doc strategies, CLI |
+| **Session Pet / public UI / Diff** | **4** | Palette, expression cycle, diff viewer |
+| **LLM / parser / core / CLI** | **~15** | Adapters, normalizers, doc strategies, CLI paths |
 
 Supervisor, checkpoint, and Web resume paths are the most heavily tested — the governance layer long tasks rely on.
 
@@ -256,13 +282,20 @@ Supervisor, checkpoint, and Web resume paths are the most heavily tested — the
 
 | Command | Purpose |
 |---------|---------|
-| `npm run dev` | API + Vite UI + optional Cloudflare tunnel |
+| `npm run dev` | API :1024 + Vite UI :1025 + optional Cloudflare tunnel (tunnel path is machine-specific; use `dev:api` + `dev:web` instead) |
+| `npm run dev:api` / `dev:web` | API or frontend only |
+| `npm run build` | tsc + Vite + `npm pack` → tgz |
+| `npm start` | Production (`NODE_ENV=production`, data under `~/.iceCoder/`) |
 | `npm run iceCoder` | CLI full stack (`start`) |
-| `npx tsx src/cli/index.ts run "…"` | One-shot task (`--max-rounds`, `--json`) |
-| `npx tsx src/cli/index.ts tools` | List 27 registered tools |
-| `npx tsx src/cli/index.ts web --port 3784` | Standalone web server |
+| `npm run iceCoder:cli` | Terminal-only chat |
+| `npm run iceCoder:web` | Web server only |
+| `npm run iceCoder:run` | One-shot task (`--max-rounds`, `--json`) |
+| `npm run iceCoder:tools` | List registered tools |
+| `npm run iceCoder:mcp` | MCP server status |
+| `npm run iceCoder:config` | View/switch LLM provider |
+| `npx tsx src/cli/index.ts run "…"` | One-shot task shortcut |
 
-Supervisor template: `data/supervisor-config.example.json` · Env reference: [`docs/environment-variables.md`](./docs/environment-variables.md)
+Supervisor config: `data/supervisor-config.json` (tracked in repo) · Env reference: [`docs/environment-variables.md`](./docs/environment-variables.md)
 
 ---
 
@@ -272,18 +305,20 @@ Supervisor template: `data/supervisor-config.example.json` · Env reference: [`d
 |-----|------------------|
 | [Project guide](./docs/PROJECT-GUIDE.md) | Architecture, memory, tools, testing |
 | [项目介绍](./docs/项目介绍.md) | Full Chinese reference |
+| [PACKAGE_USAGE.md](./PACKAGE_USAGE.md) | tgz install & command cheat sheet |
 | [Chat keep-alive & resume](./docs/requirement/聊天页状态保活与断点恢复-finish.md) | keep-alive · runningTurn · multi-device |
 | [Multi-session sidebar](./docs/requirement/多会话-web侧栏-finish.md) | Session CRUD · isolation · WS switch |
+| [Shell dual-track](./docs/requirement/shell-双轨执行-finish.md) | Long/short command routing |
 | [L2 test playbook](./docs/requirement/L2测试过程.md) | Dual-mode manual & automated acceptance |
 | [Memory system](./docs/requirement/记忆系统调整-finish.md) | Recall / extract / Dream / eviction |
 | [Environment variables](./docs/environment-variables.md) | Configuration reference |
 | [Benchmark rubric](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | Cross-platform evaluation methodology |
 | [Next work](./docs/nextWork.md) | Roadmap |
 
-**Stack:** TypeScript 6 · Node.js 18+ · Express 5 · Vite 8 · Vitest 4 · WebSocket
+**Stack:** TypeScript 6 · Node.js 18+ (22+ recommended) · Express 5 · Vite 8 · Vitest 4 · WebSocket
 
 ---
 
 ## License
 
-ISC
+MIT — see [LICENSE](./LICENSE)

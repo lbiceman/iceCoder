@@ -63,7 +63,7 @@ export function createGitTool(workDir: string): RegisteredTool {
       name: 'git',
       // Git 操作。比 run_command 更安全（禁止交互式、force push）。
       description:
-        'Execute Git operations. Safer than run_command (blocks interactive prompts and force push). Common subcommands: status, diff, log, add, commit, branch, checkout, stash, push, pull, reset, show.',
+        'Execute Git operations. Safer than run_command (blocks interactive prompts and force push). Common subcommands: status, diff, log, add, commit, branch, checkout, stash, push, pull, reset, show. Default `diff` returns unified diff (use args e.g. `--stat` for summary only).',
       parameters: {
         type: 'object',
         properties: {
@@ -134,7 +134,7 @@ export function createGitTool(workDir: string): RegisteredTool {
       if (subcommand === 'log' && !args) {
         finalArgs = '--oneline -20';
       } else if (subcommand === 'diff' && !args) {
-        finalArgs = '--stat';
+        finalArgs = '--no-color';
       } else if (subcommand === 'status' && !args) {
         finalArgs = '--short --branch';
       } else if (subcommand === 'branch' && !args) {

@@ -24,6 +24,9 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Dual-mode Supervisor** | **L2 largely validated** — L1/L2 wired; 15 Web manual scenarios in **Testing & validation**; spec [`docs/双模方案2.md`](./双模方案2.md) |
 | **Memory system** | File-based long-term memory + session notes + Dream/eviction; **20** test files **~391** cases — see **Memory System** |
 | **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
+| **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
+| **Shell dual-track** | `run_command` runtime classifier: long jobs → background, short → foreground with soft-timeout escalate |
+| **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
 | **Eval** | `npm run eval:agent` is still a metric skeleton (no full scoring runner yet) |
 
 Verification:
@@ -34,7 +37,7 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth. Baseline (2026-05-22): **93** test files, **1165** cases. Full breakdown in **Testing & validation** below.
+Treat **`npm test`** as the source of truth. Baseline (2026-06-01): **173** test files, **1844** cases, **~39s**. Full breakdown in **Testing & validation** below.
 
 ---
 
@@ -248,6 +251,8 @@ Injected by `ContextAssembler`:
 - memory context
 
 This separation keeps the stable prompt cache-friendly while allowing changing runtime state to flow into the model.
+
+中文版设计文档：[`前缀缓存优化方案`](./harness/Prompt-Caching-优化方案.md)（双轨上下文 + 封存裁剪，待实施；含实施难度、用户体验、缓存命中率、费用节约估算）。
 
 ### Tool Disable Semantics
 
@@ -504,18 +509,18 @@ This gives the model a stable view of what has happened even if conversation his
 
 ### Automated tests (Vitest)
 
-**Baseline (2026-05-22):** **93** test files · **1165** cases · `npx tsc --noEmit` 0 errors
+**Baseline (2026-06-01):** **173** test files · **1844** cases · **~39s** · `npx tsc --noEmit` 0 errors
 
-| Directory | Files | Cases (~) | Notes |
-|-----------|-------|-----------|-------|
-| `test/harness/` | **45** | **~396** | Harness loop, compaction, checkpoint, **full supervisor stack** |
-| `test/memory/` | **20** | **~391** | File memory recall / extract / Dream / eviction |
-| `test/` (TaskGraph, etc.) | **7** | **~166** | Graph build, execute, persist, review |
-| `test/llm/` | 4 | ~34 | Adapters, token counting |
-| `test/web/` | 5 | ~26 | API, supervisor-events report |
-| `test/public/` | 2 | **12** | **Ice Bean** palette + expression cycle |
-| `test/e2e/` | **1** | **7** | **Dual-mode scenarios A–F** |
-| Other | 9 | ~139 | parser, cli, core, prompts, config |
+| Directory | Files | Notes |
+|-----------|-------|-------|
+| `test/harness/` | **90** | Harness loop, compaction, checkpoint, **full supervisor stack**, Shell dual-track |
+| `test/memory/` | **20** | File memory recall / extract / Dream / eviction |
+| `test/web/` | **19** | API, sessions, setup gate, supervisor-events, chat-ws |
+| `test/tools/` | **14** | Shell classifier, background tasks, git, patch, parsers |
+| `test/llm/` | **7** | Adapters, token counting |
+| `test/public/` | **4** | Ice Bean palette, diff viewer |
+| `test/e2e/` | **1** | **7** dual-mode scenarios A–F |
+| Other | **~18** | parser, cli, core, prompts, config |
 
 ```bash
 npx tsc --noEmit
@@ -577,7 +582,7 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 ### Release gate
 
 1. `npx tsc --noEmit` — 0 errors  
-2. `npm test` — 1165/1165 green (default config)  
+2. `npm test` — 1844/1844 green (default config)  
 3. `ICE_SUPERVISOR_MODE=off` — harness suites zero regression  
 4. After `supervisor/` changes: rerun `dual-mode-scenarios` + `supervisor-bridge` + `recovery-boundary`
 
@@ -739,7 +744,7 @@ Higher-level prose (beyond this README):
 - [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments
-- [`docs/test.md`](./test.md) — **dual-mode test playbook** (1165 automated + 15 manual Web scenarios)
+- [`docs/test.md`](./test.md) — **dual-mode test playbook** (1844 automated + 15 manual Web scenarios)
 - [`docs/双模方案2.md`](./双模方案2.md) — dual-mode supervisor spec **V1.3.7**
 - [`docs/运行时后续优化.md`](./运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
 - [`docs/locomo/memory-optimization-roadmap.md`](./locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes

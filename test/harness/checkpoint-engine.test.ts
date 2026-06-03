@@ -353,6 +353,20 @@ describe('CheckpointEngine - recovery signals', () => {
     expect(engine.pendingRecoverySignals().map(s => s.message)).toEqual(['b']);
   });
 
+  it('discardPendingRecoverySignals marks all unconsumed without returning them', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+    await engine.save({
+      trigger: 'tool_failed',
+      appendRecoverySignal: { source: 'branch_budget', message: 'a', at: 1, consumed: false },
+    });
+    await engine.save({
+      trigger: 'tool_failed',
+      appendRecoverySignal: { source: 'branch_budget', message: 'b', at: 2, consumed: false },
+    });
+    engine.discardPendingRecoverySignals();
+    expect(engine.pendingRecoverySignals()).toEqual([]);
+  });
+
   it('resetMemory 清空内存状态但不影响磁盘文件', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
     await engine.save({

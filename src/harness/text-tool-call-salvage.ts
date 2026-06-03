@@ -35,14 +35,13 @@ export function parseTextFormatToolCalls(content: string) {
 /** @deprecated 使用 {@link stripEmbeddedToolCalls} */
 export const stripTextFormatToolCalls = stripEmbeddedToolCalls;
 
-/** 无原生 tool_calls 时，从 content 抢救为结构化 toolCalls。 */
+/**
+ * 统一抢救入口：原生 tool_calls 时净化正文；否则从嵌入文本解析 toolCalls。
+ * 净化后若仍像工具正文但未解析出调用，由 harness 走 no_tool 恢复（见 handleNoToolCalls）。
+ */
 export function salvageTextToolCallsInResponse(response: LLMResponse): LLMResponse {
   if (response.toolCalls?.length) {
-    const cleaned = stripEmbeddedThinking(response.content ?? '');
-    if (cleaned !== (response.content ?? '')) {
-      return { ...response, content: cleaned };
-    }
-    return response;
+    return { ...response, content: prepareAssistantContentForHistory(response.content ?? '') };
   }
   const raw = stripEmbeddedThinking(response.content?.trim() ?? '');
   if (!raw || !containsEmbeddedToolCalls(raw)) {
@@ -66,6 +65,25 @@ export function salvageTextToolCallsInResponse(response: LLMResponse): LLMRespon
   };
 }
 
+/** 供 harness 主循环使用：在 {@link salvageTextToolCallsInResponse} 之后再尝试一次嵌入解析。 */
+export function resolveSalvagedLlmResponse(raw: LLMResponse): LLMResponse {
+  let response = salvageTextToolCallsInResponse(raw);
+  if (response.toolCalls?.length) return response;
+
+  const rawText = stripEmbeddedThinking(raw.content?.trim() ?? '');
+  if (!rawText || !containsEmbeddedToolCalls(rawText)) return response;
+
+  const { calls } = parseEmbeddedToolCallsFromText(rawText);
+  if (calls.length === 0) return response;
+
+  return {
+    ...response,
+    toolCalls: calls,
+    content: prepareAssistantContentForHistory(raw.content ?? ''),
+    finishReason: 'tool_calls',
+  };
+}
+
 /** 用户可见 assistant 正文：去掉思考块与嵌入的工具调用片段。 */
 export function sanitizeAssistantContentForUser(content: string | undefined): string {
   if (!content) return '';
@@ -75,7 +93,7 @@ export function sanitizeAssistantContentForUser(content: string | undefined): st
   return stripped || '（模型以文本形式输出了工具调用，已尝试解析并执行；无额外文字说明。）';
 }
 
-const XML_TOOL_OPEN = /<tool[_-]?call>/i;
+const XML_TOOL_OPEN = /<tool[_-]?call>|<invoke\b|<\][a-zA-Z]|\[<[a-zA-Z_]/i;
 
 /** 流式侧栏：增量剥离嵌入工具调用，避免泄露给用户。 */
 export class TextToolCallStreamFilter {

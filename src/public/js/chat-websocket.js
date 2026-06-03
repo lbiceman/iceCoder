@@ -171,6 +171,11 @@ window.ChatWebSocket = (function () {
         emit('active_session', data);
         break;
       case 'tool_output':
+        emit('tool_output', {
+          toolCallId: data.toolCallId || '',
+          toolName: data.toolName || '',
+          content: data.content || '',
+        });
         break;
       case 'pong':
         break;
@@ -182,6 +187,14 @@ window.ChatWebSocket = (function () {
           sessionId: data.sessionId || '',
           timestamp: data.timestamp || '',
           tasks: Array.isArray(data.tasks) ? data.tasks : [],
+        });
+        break;
+      case 'bg_task_stop_result':
+        emit('bg_task_stop_result', {
+          ok: !!data.ok,
+          taskId: data.taskId || '',
+          sessionId: data.sessionId || '',
+          error: data.error || '',
         });
         break;
     }

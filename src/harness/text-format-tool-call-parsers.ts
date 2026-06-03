@@ -31,6 +31,15 @@ const XML_FUNCTION_NAME_RES: readonly RegExp[] = [
 
 const XML_PARAM_RES = /<parameter=([\w.-]+)>([\s\S]*?)<\/parameter>/gi;
 const XML_ARG_PAIR_RES = /<(?:arg|parameter)\s+name=["']([\w.-]+)["'][^>]*>([\s\S]*?)<\/(?:arg|parameter)>/gi;
+/** 部分模型用方括号包裹参数，如 [<task_id>bg_xxx]（排除 [</tag>] 闭合行） */
+const BRACKET_PARAM_RE = /\[<(?!\/)([a-zA-Z_][\w.-]*)>([^\]]*)\]/gi;
+/** 通道分隔符（各厂商命名不同，形态多为 <]token[>） */
+const CHANNEL_DELIMITER_RE = /<\][a-zA-Z][\w.-]*\[>/g;
+/** 完整工具调用区域（闭合块） */
+const TOOL_INVOCATION_REGION_RE =
+  /(?:<tool[_-]?call>|<invoke\b|<\][a-zA-Z][\w.-]*\[>)([\s\S]*?)(?:<\/tool[_-]?call>|<\/invoke>)/gi;
+/** 压缩/展示用的「调用工具」摘要前缀（后常粘连未剥离的嵌入片段） */
+const COMPACT_TOOL_SUMMARY_RE = /\[调用工具:\s*[\w.,\s-]+\]+/g;
 
 const TOOL_JSON_KEY_HINT =
   /"(?:name|tool|function_name)"\s*:\s*"|"tool_calls"\s*:\s*\[|"function"\s*:\s*\{/;
@@ -71,7 +80,6 @@ function parseXmlInner(inner: string): ToolCall | null {
       break;
     }
   }
-  if (!toolName) return null;
 
   const args: Record<string, unknown> = {};
   XML_PARAM_RES.lastIndex = 0;
@@ -87,6 +95,16 @@ function parseXmlInner(inner: string): ToolCall | null {
     const value = (param[2] ?? '').trim();
     if (key && !(key in args)) args[key] = value;
   }
+  BRACKET_PARAM_RE.lastIndex = 0;
+  while ((param = BRACKET_PARAM_RE.exec(inner)) !== null) {
+    const key = param[1];
+    const value = (param[2] ?? '').trim();
+    if (key && !(key in args)) args[key] = value;
+  }
+  if (!toolName && (args.task_id != null || args.action != null)) {
+    toolName = 'run_command';
+  }
+  if (!toolName) return null;
   return newSalvagedCall(toolName, args);
 }
 
@@ -120,6 +138,49 @@ function parseXmlToolBlocks(text: string): ParsedEmbeddedToolCalls {
   }
 
   return { calls, spans };
+}
+
+/** 识别带通道分隔符 / 方括号参数的闭合工具块（不绑定单一厂商）。 */
+function parseDelimitedToolInvocationRegions(text: string): ParsedEmbeddedToolCalls {
+  const calls: ToolCall[] = [];
+  const spans: TextSpan[] = [];
+
+  TOOL_INVOCATION_REGION_RE.lastIndex = 0;
+  let block: RegExpExecArray | null;
+  while ((block = TOOL_INVOCATION_REGION_RE.exec(text)) !== null) {
+    const inner = (block[1] ?? '').replace(CHANNEL_DELIMITER_RE, '');
+    const call = parseXmlInner(inner);
+    if (!call) continue;
+    calls.push(call);
+    spans.push({ start: block.index, end: block.index + block[0].length });
+  }
+
+  return { calls, spans };
+}
+
+/** 无标准 XML 头、仅方括号/通道分隔参数块（常见于流式尾块）。 */
+function parseBracketChannelToolFragment(text: string): ParsedEmbeddedToolCalls {
+  if (!/\[<[a-zA-Z_][\w.-]*>/i.test(text) && !/<\][a-zA-Z][\w.-]*\[>/i.test(text)) {
+    return { calls: [], spans: [] };
+  }
+  const inner = text.replace(CHANNEL_DELIMITER_RE, '');
+  const call = parseXmlInner(inner);
+  if (!call) return { calls: [], spans: [] };
+  return { calls: [call], spans: [{ start: 0, end: text.length }] };
+}
+
+/** 去掉通道分隔符、方括号参数残片、压缩摘要粘连等。 */
+export function stripResidualToolChannelMarkup(content: string): string {
+  let result = content;
+  result = result.replace(COMPACT_TOOL_SUMMARY_RE, '');
+  result = result.replace(TOOL_INVOCATION_REGION_RE, '');
+  result = result.replace(CHANNEL_DELIMITER_RE, '');
+  result = result.replace(/\[<\/?[a-zA-Z_][\w.-]*>[^\]]*\]/g, '');
+  result = result.replace(/\[<\/?[a-zA-Z_][\w.-]*>\]/g, '');
+  result = result.replace(/^\s*\]+\s*$/g, '');
+  result = result.replace(/<tool[_-]?call>[\s\S]*$/i, '');
+  result = result.replace(/<invoke\b[\s\S]*$/i, '');
+  return result.replace(/\n{2,}/g, '\n').trim();
 }
 
 function extractBalancedJson(text: string, openBraceIndex: number): { json: string; end: number } | null {
@@ -256,7 +317,13 @@ function parseFencedJsonBlocks(text: string): ParsedEmbeddedToolCalls {
 
 /** 从正文中解析所有可识别的嵌入工具调用（去重重叠区间）。 */
 export function parseEmbeddedToolCallsFromText(text: string): ParsedEmbeddedToolCalls {
-  const parsers = [parseXmlToolBlocks, parseJsonToolObjects, parseFencedJsonBlocks];
+  const parsers = [
+    parseXmlToolBlocks,
+    parseDelimitedToolInvocationRegions,
+    parseBracketChannelToolFragment,
+    parseJsonToolObjects,
+    parseFencedJsonBlocks,
+  ];
   const calls: ToolCall[] = [];
   const spans: TextSpan[] = [];
 
@@ -284,7 +351,10 @@ export function containsEmbeddedToolCalls(content: string | undefined): boolean 
   return parseEmbeddedToolCallsFromText(content).calls.length > 0
     || TOOL_JSON_KEY_HINT.test(content)
     || /<tool[_-]?call>/i.test(content)
-    || /<invoke\b/i.test(content);
+    || /<invoke\b/i.test(content)
+    || /<\][a-zA-Z][\w.-]*\[>/i.test(content)
+    || /\[<[a-zA-Z_][\w.-]*>/i.test(content)
+    || COMPACT_TOOL_SUMMARY_RE.test(content);
 }
 
 /** 移除正文中所有嵌入工具调用片段。 */
@@ -302,7 +372,7 @@ export function stripEmbeddedToolCalls(content: string): string {
     cursor = span.end;
   }
   out += content.slice(cursor);
-  return out.replace(/\n{2,}/g, '\n').trim();
+  return stripResidualToolChannelMarkup(out);
 }
 
 function stripLikelyToolJsonObjects(text: string): string {
@@ -316,7 +386,7 @@ function stripLikelyToolJsonObjects(text: string): string {
     result = result.slice(0, i) + result.slice(extracted.end);
     i--;
   }
-  return result.replace(/<tool[_-]?call>[\s\S]*$/i, '').trim();
+  return stripResidualToolChannelMarkup(result);
 }
 
 /** 写入会话 history 前的 assistant 正文净化。 */
@@ -330,6 +400,9 @@ export const EMBEDDED_TOOL_OPEN_MARKERS = [
   '<tool_call>',
   '<tool-call>',
   '<invoke',
+  '<]',
+  '[<',
+  '[调用工具:',
   '{"name"',
   '{"tool"',
   '{"function"',

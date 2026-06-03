@@ -479,27 +479,35 @@ window.MemoryPage = (function () {
         var fn = file.filename;
         if (!fn || !containerEl) return;
         var label = file.name || fn;
-        if (!confirm('确定删除记忆「' + label + '」？删除后不可恢复。')) return;
-        deleteBtn.disabled = true;
-        fetch('/api/memory/files/' + encodeURIComponent(fn), { method: 'DELETE' })
-          .then(function (r) {
-            return r.json().then(function (json) {
-              return { ok: r.ok, json: json };
+        Modal.confirm({
+          title: '删除记忆',
+          message: '确定删除记忆「' + label + '」？删除后不可恢复。',
+          type: 'danger',
+          confirmText: '删除',
+          cancelText: '取消',
+        }).then(function (ok) {
+          if (!ok) return;
+          deleteBtn.disabled = true;
+          fetch('/api/memory/files/' + encodeURIComponent(fn), { method: 'DELETE' })
+            .then(function (r) {
+              return r.json().then(function (json) {
+                return { ok: r.ok, json: json };
+              });
+            })
+            .then(function (res) {
+              deleteBtn.disabled = false;
+              if (!res.ok || !res.json.success) {
+                Modal.alert({ title: '删除失败', message: res.json.error || res.json.message || '删除失败', type: 'danger' });
+                return;
+              }
+              closePopover();
+              render(containerEl);
+            })
+            .catch(function () {
+              deleteBtn.disabled = false;
+              Modal.alert({ title: '请求失败', message: '删除请求失败', type: 'danger' });
             });
-          })
-          .then(function (res) {
-            deleteBtn.disabled = false;
-            if (!res.ok || !res.json.success) {
-              window.alert(res.json.error || res.json.message || '删除失败');
-              return;
-            }
-            closePopover();
-            render(containerEl);
-          })
-          .catch(function () {
-            deleteBtn.disabled = false;
-            window.alert('删除请求失败');
-          });
+        });
       });
     }
 
@@ -1033,12 +1041,7 @@ window.MemoryPage = (function () {
       '<p class="memory-sidebar-hint">' +
       '圆点表示一条记忆，<strong>共用标签</strong>的会用线连起来。左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。' +
       '</p>' +
-      '</div>' +
-      '<button type="button" class="memory-back-chat">返回聊天</button>';
-
-    header.querySelector('.memory-back-chat').addEventListener('click', function () {
-      window.location.hash = '#/chat';
-    });
+      '</div>';
 
     var main = document.createElement('main');
     main.className = 'memory-main';

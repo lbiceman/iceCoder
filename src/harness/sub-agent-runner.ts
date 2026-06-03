@@ -9,6 +9,7 @@ import type { ToolCall, ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ChatFunction } from './types.js';
 import { normalizeMessages } from './context-assembler.js';
+import { prepareAssistantContentForHistory, resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
 import { getSubAgentTimeoutMsFromEnv } from './token-budget-config.js';
 
 /** 单次委派请求：任务描述与可选约束。 */
@@ -231,15 +232,17 @@ export class SubAgentRunner {
           return this.partialResult('timeout', lastAssistantContent, filesRead, toolCallCount, roundsUsed, tokensUsed);
         }
 
-        const response = await this.chatFn(normalizeMessages(messages), { tools });
+        const raw = await this.chatFn(normalizeMessages(messages), { tools });
+        const response = resolveSalvagedLlmResponse(raw);
         tokensUsed += response.usage?.totalTokens ?? 0;
 
-        if (response.content) lastAssistantContent = response.content;
+        const visible = prepareAssistantContentForHistory(response.content) || response.content || '';
+        if (visible) lastAssistantContent = visible;
 
         const toolCalls = response.toolCalls ?? [];
         if (toolCalls.length === 0) {
           return {
-            summary: response.content || this.buildFallbackSummary(filesRead),
+            summary: visible || this.buildFallbackSummary(filesRead),
             filesRead: [...filesRead],
             toolCallCount,
             roundsUsed,
@@ -251,7 +254,7 @@ export class SubAgentRunner {
 
         messages.push({
           role: 'assistant',
-          content: response.content || '',
+          content: prepareAssistantContentForHistory(response.content || ''),
           toolCalls,
           reasoningContent: response.reasoningContent,
         });

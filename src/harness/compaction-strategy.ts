@@ -3,6 +3,7 @@
  */
 
 import type { UnifiedMessage } from '../llm/types.js';
+import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
 
 /** 硬压缩注入会话笔记的最大字符（防止摘要独占 post-compact 预算） */
 export const MAX_SESSION_NOTES_COMPACT_CHARS = 120_000;
@@ -30,8 +31,13 @@ export const FILE_TOOLS_NEVER_MICROCLEAR = new Set<string>([
   'write_file',
   'edit_file',
   'append_file',
+  'batch_edit_file',
   'patch_file',
+  'diff_files',
 ]);
+
+/** 压缩/摘要时保留完整 tool output（含 embedded unified diff，供 Web UI F5 还原） */
+export const FILE_TOOLS_PRESERVE_FULL_OUTPUT = FILE_TOOLS_NEVER_MICROCLEAR;
 
 const OLD_TOOL_STUB = '[Old tool result cleared for context]';
 
@@ -103,13 +109,15 @@ export function buildCompactBoundaryContent(meta: CompactBoundaryMeta): string {
 function assistantExcerpt(msg: UnifiedMessage): string {
   if (msg.toolCalls?.length) {
     const names = msg.toolCalls.map(tc => tc.name).join(', ');
-    const tail =
-      typeof msg.content === 'string' && msg.content.trim()
-        ? ` ${msg.content.trim().slice(0, 200)}`
-        : '';
+    const cleaned = prepareAssistantContentForHistory(
+      typeof msg.content === 'string' ? msg.content : '',
+    );
+    const tail = cleaned ? ` ${cleaned.slice(0, 200)}` : '';
     return `[assistant tool_calls: ${names}]${tail}`;
   }
-  const t = typeof msg.content === 'string' ? msg.content.trim() : '';
+  const t = prepareAssistantContentForHistory(
+    typeof msg.content === 'string' ? msg.content : '',
+  );
   if (!t) return '[assistant empty]';
   return t.length > 2_500 ? `${t.slice(0, 2_500)}\n…(truncated)` : t;
 }

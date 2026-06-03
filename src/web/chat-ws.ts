@@ -17,6 +17,7 @@ import { formatFriendlyError } from '../cli/friendly-errors.js';
 import path from 'path';
 import { getSession, markSessionConnected } from './routes/remote.js';
 import { Harness } from '../harness/harness.js';
+import { finalizeMessagesForApi } from '../harness/context-assembler.js';
 import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
 import type { HarnessConfig } from '../harness/types.js';
@@ -72,12 +73,18 @@ import {
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
 import { BgTaskPusher } from './bg-task-pusher.js';
-import { getBackgroundTaskManagerFor } from '../tools/background-task-manager.js';
+import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning } from '../tools/background-task-manager.js';
 import {
   formatToolArgsDetailPreview,
   resolveToolCallInitialStatus,
   resolveToolTraceResultStatus,
 } from './tool-trace-format.js';
+import { extractDiffSource } from './tool-display-extract.js';
+import {
+  capToolTraceDiffSource,
+  persistToolTraceDiff,
+  resolveToolDiffForSession,
+} from './session-tool-trace-diffs.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
@@ -179,6 +186,24 @@ function getFileBrowserState(sessionId: string = activeSessionId): FileBrowserSt
     fileBrowserStateBySession.set(sessionId, state);
   }
   return state;
+}
+
+interface ToolTraceBatchEntry {
+  toolName: string;
+  detail: string;
+  status: string;
+  toolCallId?: string;
+  /** 供刷新后 UI 还原 diff 面板（不依赖 .structured.json 对齐） */
+  diffSource?: string | null;
+}
+
+function recordPersistedToolTraceDiff(
+  sessionId: string,
+  toolCallId: string | undefined,
+  diffSource: string | null | undefined,
+): void {
+  if (!toolCallId || !diffSource) return;
+  void persistToolTraceDiff(SESSIONS_DIR, sessionId, toolCallId, diffSource);
 }
 
 /** 导出活跃会话 ID，供会话路由等模块使用 */
@@ -285,8 +310,9 @@ async function loadStructuredMessages(sessionId?: string): Promise<UnifiedMessag
   const id = sessionId || activeSessionId;
   const parsed = await readStructuredMessagesFile(SESSIONS_DIR, id);
   if (parsed && parsed.length > 0) {
-    console.log(`[chat-ws] 恢复 ${parsed.length} 条结构化消息`);
-    return parsed;
+    const repaired = finalizeMessagesForApi(parsed);
+    console.log(`[chat-ws] 恢复 ${repaired.length} 条结构化消息`);
+    return repaired;
   }
   return undefined;
 }
@@ -443,6 +469,65 @@ async function rebindBgTaskPusher(sessionId: string): Promise<void> {
   ensureBgTaskPusher().tick();
 }
 
+/** 用户从 UI 终止后台任务（bg task chip 关闭按钮） */
+async function handleBgTaskStop(
+  ws: WebSocket,
+  taskId: string,
+  fallbackSessionId: string,
+): Promise<void> {
+  const sid = wsToSubscribedSession.get(ws) || fallbackSessionId;
+  console.log(`[chat-ws] 收到 bg_task_stop taskId=${taskId || '(empty)'} wsSession=${sid}`);
+
+  if (!taskId) {
+    sendJSON(ws, { type: 'bg_task_stop_result', ok: false, error: 'missing taskId' });
+    return;
+  }
+  try {
+    const workspace = await resolveSessionWorkspacePayload(sid);
+    const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+    let mgr = getBackgroundTaskManagerFor(sid, workDir);
+    let ok = mgr.kill(taskId);
+    if (!ok) {
+      const owner = findBackgroundTaskManagerOwning(taskId);
+      if (owner) {
+        console.log(
+          `[chat-ws] bg_task_stop 在 session=${owner.sessionId} 找到任务（WS session=${sid}）`,
+        );
+        mgr = owner;
+        ensureBgTaskPusher().attach(mgr);
+        ok = mgr.kill(taskId);
+      }
+    } else {
+      ensureBgTaskPusher().attach(mgr);
+    }
+    if (!ok) {
+      console.warn(`[chat-ws] 终止后台任务失败 ${taskId} session=${sid}（未找到或已结束）`);
+      sendJSON(ws, {
+        type: 'bg_task_stop_result',
+        ok: false,
+        taskId,
+        sessionId: sid,
+        error: 'Task not found or not running',
+      });
+      return;
+    }
+    const stopped = mgr.getStatus(taskId);
+    console.log(
+      `[chat-ws] 用户终止后台任务 ${taskId}${stopped?.label ? ` (${stopped.label})` : ''} session=${mgr.sessionId}`,
+    );
+    ensureBgTaskPusher().tick();
+    sendJSON(ws, { type: 'bg_task_stop_result', ok: true, taskId, sessionId: mgr.sessionId });
+  } catch (err) {
+    console.error('[chat-ws] bg_task_stop 异常:', err);
+    sendJSON(ws, {
+      type: 'bg_task_stop_result',
+      ok: false,
+      taskId,
+      error: formatFriendlyError(err),
+    });
+  }
+}
+
 const DEFAULT_WORK_DIR = process.cwd();
 
 async function resolveSessionWorkspacePayload(sessionId: string) {
@@ -457,7 +542,7 @@ interface RunningTurnSnapshot {
   isProcessing: boolean;
   iteration: number;
   streamingText: string;
-  toolTimeline: { toolName: string; detail: string; status: string }[];
+  toolTimeline: { toolName: string; detail: string; status: string; toolCallId?: string; diffSource?: string | null }[];
   petState: string;
   petBubble: string;
   petStatusText: string;
@@ -572,10 +657,13 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       break;
     case 'tool_call':
       if (event.toolName) {
+        const toolCallId = typeof event.toolCallId === 'string' ? event.toolCallId : '';
         t.toolTimeline.push({
           toolName: String(event.toolName),
           detail: toolArgsDetailPreview(String(event.toolName), event.toolArgs),
           status: resolveToolCallInitialStatus(String(event.toolName), event.toolArgs),
+          toolCallId,
+          diffSource: extractDiffSource(String(event.toolName), undefined, event.toolArgs as Record<string, unknown> | undefined),
         });
         t.petState = 'working';
       }
@@ -584,13 +672,24 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (event.toolName) {
         for (let i = t.toolTimeline.length - 1; i >= 0; i--) {
           const row = t.toolTimeline[i];
-          if (row.toolName === event.toolName && (row.status === 'pending' || row.status === 'background')) {
+          const idMatch = typeof event.toolCallId === 'string' && event.toolCallId && row.toolCallId === event.toolCallId;
+          const nameMatch = row.toolName === event.toolName && (row.status === 'pending' || row.status === 'background');
+          if (idMatch || (!event.toolCallId && nameMatch)) {
             row.status = toolResultStatusPreview(
               String(event.toolName),
               event.toolSuccess,
               event.toolOutcome,
               event.toolOutput,
             );
+            const fromOutput = extractDiffSource(
+              String(event.toolName),
+              typeof event.toolOutput === 'string' ? event.toolOutput : undefined,
+              event.toolArgs as Record<string, unknown> | undefined,
+            );
+            if (fromOutput) {
+              row.diffSource = fromOutput;
+              recordPersistedToolTraceDiff(sessionId, row.toolCallId, fromOutput);
+            }
             break;
           }
         }
@@ -713,6 +812,7 @@ async function appendMessages(
     toolName?: string;
     detail?: string;
     status?: string;
+    toolCallId?: string;
     images?: string[];
   }[],
   sessionId: string = activeSessionId,
@@ -741,7 +841,7 @@ async function finalizeDirectBrowserTurn(
   opts: {
     userStructuredContent: string;
     assistantContent: string;
-    toolTraceBatch: { toolName: string; detail: string; status: string }[];
+    toolTraceBatch: ToolTraceBatchEntry[];
     syntheticTool?: { toolName: string; toolDetail: string; success: boolean };
     sessionId: string;
   },
@@ -757,13 +857,14 @@ async function finalizeDirectBrowserTurn(
   const agentMsgId = randomUUID();
   const entries: Parameters<typeof appendMessages>[0] = [];
   for (const t of opts.toolTraceBatch) {
-    entries.push({
-      role: 'tool_trace',
-      parentId: agentMsgId,
-      toolName: t.toolName,
-      detail: t.detail,
-      status: t.status,
-    });
+      entries.push({
+        role: 'tool_trace',
+        parentId: agentMsgId,
+        toolName: t.toolName,
+        detail: t.detail,
+        status: t.status,
+        toolCallId: t.toolCallId,
+      });
   }
   entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
   await appendMessages(entries, sid);
@@ -931,11 +1032,18 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'stop') {
-          // 中断正在执行的任务
+          // 中断正在执行的任务；同时丢弃排队中的待发消息，避免 abort 后自动再起一轮
+          pendingMessages.length = 0;
           if (activeAbortController) {
             activeAbortController.abort();
             console.log('[chat-ws] 用户请求中断任务');
           }
+          return;
+        }
+
+        if (msg.type === 'bg_task_stop') {
+          const taskId = typeof msg.taskId === 'string' ? msg.taskId.trim() : '';
+          await handleBgTaskStop(ws, taskId, activeSessionId);
           return;
         }
 
@@ -1279,7 +1387,7 @@ async function handleChatMessage(
   );
 
   // 收集本轮工具调用记录（用于持久化到会话文件，不发送给 LLM）
-  const toolTraceBatch: { toolName: string; detail: string; status: string }[] = [];
+  const toolTraceBatch: ToolTraceBatchEntry[] = [];
 
   // 方案 B2：本次任务的快照锚点（每条 message 一个）
   ensureRunningTurn(runSessionId);
@@ -1306,14 +1414,29 @@ async function handleChatMessage(
 
         // 工具实时输出推送
         if (event.type === 'tool_output' && event.content) {
-          broadcastToSession(runSessionId, { type: 'tool_output', toolName: event.toolName, content: event.content });
+          broadcastToSession(runSessionId, {
+            type: 'tool_output',
+            toolCallId: event.toolCallId || '',
+            toolName: event.toolName,
+            content: event.content,
+          });
         }
 
         // 收集工具调用记录
         if (event.type === 'tool_call' && event.toolName) {
           const detail = toolArgsDetailPreview(event.toolName, event.toolArgs);
           const callStatus = resolveToolCallInitialStatus(event.toolName, event.toolArgs);
-          toolTraceBatch.push({ toolName: event.toolName, detail: detail || '', status: callStatus });
+          toolTraceBatch.push({
+            toolName: event.toolName,
+            detail: detail || '',
+            status: callStatus,
+            toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : '',
+            diffSource: capToolTraceDiffSource(extractDiffSource(
+              String(event.toolName),
+              undefined,
+              event.toolArgs as Record<string, unknown> | undefined,
+            )),
+          });
           const argsPreview = event.toolArgs ? JSON.stringify(event.toolArgs) : '';
           const truncated = argsPreview.length > 100 ? argsPreview.substring(0, 100) + '…' : argsPreview;
           console.log(`[step] [call] ${event.toolName}(${truncated})`);
@@ -1326,9 +1449,25 @@ async function handleChatMessage(
           );
           // 更新批次中最后一个匹配的工具状态
           for (let i = toolTraceBatch.length - 1; i >= 0; i--) {
-            if (toolTraceBatch[i].toolName === event.toolName
-              && (toolTraceBatch[i].status === 'pending' || toolTraceBatch[i].status === 'background')) {
+            const row = toolTraceBatch[i];
+            const idMatch = typeof event.toolCallId === 'string'
+              && event.toolCallId
+              && row.toolCallId === event.toolCallId;
+            if (idMatch
+              || (!event.toolCallId
+                && row.toolName === event.toolName
+                && (row.status === 'pending' || row.status === 'background'))) {
               toolTraceBatch[i].status = resultStatus;
+              const fromOutput = extractDiffSource(
+                String(event.toolName),
+                typeof event.toolOutput === 'string' ? event.toolOutput : undefined,
+                event.toolArgs as Record<string, unknown> | undefined,
+              );
+              if (fromOutput) {
+                const capped = capToolTraceDiffSource(fromOutput);
+                toolTraceBatch[i].diffSource = capped;
+                recordPersistedToolTraceDiff(runSessionId, toolTraceBatch[i].toolCallId, capped);
+              }
               break;
             }
           }
@@ -1351,21 +1490,44 @@ async function handleChatMessage(
     // 缓存完整的结构化消息历史并持久化到磁盘（写入本次运行锁定的 sessionId，
     // 即使用户在执行过程中切换了 activeSessionId，也确保历史归属正确的旧 session）
     setCachedMessages(runSessionId, result.messages);
+    await flushStructuredSessionToDisk(SESSIONS_DIR, runSessionId, result.messages);
     saveStructuredMessages(result.messages, runSessionId);
 
     // 写入 AI 回复 + 工具调用记录到会话文件
     const agentMsgId = randomUUID();
     const sessionEntries: any[] = [];
 
+    // write_file 输出常无 unified diff：从工作区合成并持久化索引，供历史区 F5 还原
+    for (const trace of toolTraceBatch) {
+      if (trace.toolName !== 'write_file' || trace.diffSource || !trace.toolCallId || !trace.detail) {
+        continue;
+      }
+      const synthesized = await resolveToolDiffForSession({
+        sessionsDir: SESSIONS_DIR,
+        sessionId: runSessionId,
+        defaultWorkDir: process.cwd(),
+        toolCallId: trace.toolCallId,
+        relPath: trace.detail,
+        toolName: 'write_file',
+      });
+      if (!synthesized) continue;
+      const capped = capToolTraceDiffSource(synthesized);
+      trace.diffSource = capped;
+      recordPersistedToolTraceDiff(runSessionId, trace.toolCallId, capped);
+    }
+
     // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
     for (const trace of toolTraceBatch) {
-      sessionEntries.push({
+      const entry: Record<string, unknown> = {
         role: 'tool_trace',
         parentId: agentMsgId,
         toolName: trace.toolName,
         detail: trace.detail,
         status: trace.status,
-      });
+        toolCallId: trace.toolCallId,
+      };
+      if (trace.diffSource) entry.diffSource = trace.diffSource;
+      sessionEntries.push(entry as (typeof sessionEntries)[number]);
     }
 
     // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）

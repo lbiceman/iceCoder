@@ -127,6 +127,19 @@ export function isContextWindowExceededError(error: unknown): boolean {
   return CONTEXT_WINDOW_ERROR_PATTERNS.some(pattern => pattern.test(msg));
 }
 
+/** OpenAI 兼容 API：tool 结果未紧跟 tool_calls（MiniMax 2013、DeepSeek 等文案不同）。 */
+const TOOL_PAIRING_ERROR_PATTERNS: readonly RegExp[] = [
+  /tool call result does not follow tool call/i,
+  /tool_calls must be followed by tool messages/i,
+  /messages with role ['"]tool['"] must be a response to a preceding message with tool_calls/i,
+  /invalid params.*tool/i,
+];
+
+export function isToolCallPairingError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return TOOL_PAIRING_ERROR_PATTERNS.some(pattern => pattern.test(msg));
+}
+
 /** Fork / emergency 后首轮：maybeCompact 在 turnCount 递增前调用 */
 export function shouldSkipCompactionOnPostForkRound(state: HarnessRunState): boolean {
   return (state.checkpointResumeForkApplied || state.contextEmergencyCompactUsed) && state.turnCount === 0;

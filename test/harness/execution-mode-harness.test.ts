@@ -13,6 +13,7 @@ import { ToolExecutor } from '../../src/tools/tool-executor.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import type { ToolResult } from '../../src/tools/types.js';
 import { emptyRuntimeCheckpointV2 } from '../../src/types/runtime-checkpoint.js';
+import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
 
 function makeTool(name: string): ToolDefinition {
   return {
@@ -247,7 +248,7 @@ describe('Harness execution mode integration - Batch 3', () => {
     expect(result.loopState.executionMode).toBe('free');
   });
 
-  it('submits checkpoint_resumed on v2 restore without directly restoring executionMode', async () => {
+  it('does not enter forced from v2 checkpoint alone on new user message', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
     const events: HarnessStepEvent[] = [];
@@ -260,6 +261,7 @@ describe('Harness execution mode integration - Batch 3', () => {
       executionModeEnteredAtRound: 3,
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 1,
+      supervisorPhase: 'takeover',
     };
     await fs.writeFile(
       path.join(sessionDir, 'default.checkpoint.json'),
@@ -282,17 +284,78 @@ describe('Harness execution mode integration - Batch 3', () => {
 
     const result = await harness.run('resume', createChatFn([finalResponse('done')]), event => events.push(event));
 
-    const enterEvent = events.find(event => event.type === 'execution_mode_enter');
-    expect(enterEvent).toMatchObject({
-      executionMode: {
-        executionMode: 'forced',
-        enteredBy: ['checkpoint_resumed'],
-        enteredByPrimary: 'checkpoint_resumed',
-        primaryReasonHuman: 'forced because checkpoint_resumed',
-        round: 1,
-      },
-    });
-    expect(result.loopState.executionModeEnteredByPrimary).toBe('checkpoint_resumed');
+    expect(events.some(event => event.type === 'execution_mode_enter')).toBe(false);
+    expect(result.loopState.executionMode).toBe('free');
+    expect(result.loopState.supervisorPhase).toBe('free');
+  });
+
+  it('discards pending recovery signals and stale verification buffer on new user message', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('read_file')];
+    const runtimeV2 = emptyRuntimeCheckpointV2('manual');
+    runtimeV2.verificationOutputTail = [{
+      command: 'npm test',
+      outputBody: 'FAIL old-task.test.ts',
+      at: Date.now(),
+    }];
+    await fs.writeFile(
+      path.join(sessionDir, 'default.checkpoint.json'),
+      JSON.stringify({
+        ...buildRunningCheckpoint(),
+        runtimeV2: {
+          ...runtimeV2,
+          recoverySignals: [{
+            source: 'branch_budget',
+            message: '[System / BranchBudget] stale warning from previous run',
+            at: 1,
+            consumed: false,
+          }],
+        },
+      }, null, 2),
+      'utf-8',
+    );
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+
+    const result = await harness.run('new task', createChatFn([finalResponse('ok')]));
+
+    const userContents = result.messages
+      .filter(m => m.role === 'user')
+      .map(m => (typeof m.content === 'string' ? m.content : ''));
+    expect(userContents.some(c => c.includes('stale warning'))).toBe(false);
+    expect(userContents.some(c => c.includes('old-task.test.ts'))).toBe(false);
+  });
+
+  it('resetGraph on run() clears task graph from previous run (adaptive)', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('read_file'), makeTool('edit_file')];
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+
+    const graph = (harness as unknown as { graphExecutor: GraphExecutor }).graphExecutor;
+    graph.initGraph({ goal: 'old goal from previous run', intent: 'edit' });
+    expect(graph.hasGraph()).toBe(true);
+
+    const events: HarnessStepEvent[] = [];
+    await harness.run(
+      'completely new feature',
+      createChatFn([finalResponse('done')]),
+      e => events.push(e),
+      [{ role: 'user', content: 'fix auth bug' }, { role: 'assistant', content: 'done' }],
+    );
+
+    expect(graph.hasGraph()).toBe(false);
+    expect(events.some(e => e.type === 'task_graph_node')).toBe(false);
   });
 
   it('records successful tool execution as task-bearing dwell before exiting forced mode', async () => {
@@ -452,7 +515,7 @@ describe('Harness execution mode integration - W-series regressions', () => {
     expect(result.loopState.executionMode).toBeDefined();
   });
 
-  it('W3: adaptive + L0 must still enter forced on external hard signal (checkpoint_resumed)', async () => {
+  it('W3: v2 checkpoint file does not bypass adaptive L0 — new user message stays free', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
     const events: HarnessStepEvent[] = [];
@@ -465,6 +528,7 @@ describe('Harness execution mode integration - W-series regressions', () => {
       executionModeEnteredAtRound: 3,
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
+      supervisorPhase: 'takeover',
     };
     await fs.writeFile(
       path.join(sessionDir, 'default.checkpoint.json'),
@@ -485,10 +549,8 @@ describe('Harness execution mode integration - W-series regressions', () => {
 
     const result = await harness.run('hello', createChatFn([finalResponse('done')]), event => events.push(event));
 
-    const enter = events.find(e => e.type === 'execution_mode_enter');
-    expect(enter).toBeDefined();
-    expect(enter?.executionMode?.enteredByPrimary).toBe('checkpoint_resumed');
-    expect(result.loopState.executionModeEnteredByPrimary).toBe('checkpoint_resumed');
+    expect(events.some(event => event.type === 'execution_mode_enter')).toBe(false);
+    expect(result.loopState.executionMode).toBe('free');
   });
 
   it('W8: checkpoint resume restores supervisor history fields (enteredBy / dwell / degraded)', async () => {
@@ -525,8 +587,7 @@ describe('Harness execution mode integration - W-series regressions', () => {
 
     const result = await harness.run('hello', createChatFn([finalResponse('done')]), event => events.push(event));
 
-    // checkpoint_resumed 信号驱动新 enter，但 telemetry 反映的是新 entry。
-    // 历史承载位（forcedDegradedTier）由 W8 在 enter 前恢复后保留至最后。
+    // W8: execution-mode 历史承载位仍可从 checkpoint 恢复（observability）；不触发 checkpoint_resumed enter。
     expect(result.loopState.forcedDegradedTier).toBeDefined();
   });
 

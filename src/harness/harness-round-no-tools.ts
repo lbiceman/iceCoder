@@ -88,6 +88,8 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
 export interface HandleNoToolCallsArgs {
   state: HarnessRunState;
   response: LLMResponse;
+  /** API 原始 assistant 正文（净化前），用于识别「嵌入工具文本」避免误判空响应 / 提前结束 */
+  rawAssistantContent?: string | undefined;
   userMessage: string;
   currentTools: ToolDefinition[];
   tokenUsage: { input: number; output: number };
@@ -128,9 +130,41 @@ export async function handleNoToolCalls(
   deps: NoToolRoundDeps,
   args: HandleNoToolCallsArgs,
 ): Promise<HandleNoToolCallsResult> {
-  const { state, response, userMessage, currentTools, tokenUsage, logger, onStep } = args;
+  const { state, response, rawAssistantContent, userMessage, currentTools, tokenUsage, logger, onStep } = args;
   const msgs = state.messages;
   state.consecutiveNoToolRounds++;
+
+  const rawTextForEmbedded =
+    (typeof rawAssistantContent === 'string' ? rawAssistantContent : '')
+    || (typeof response.content === 'string' ? response.content : '');
+  const hasEmbeddedToolText = containsEmbeddedToolCalls(rawTextForEmbedded);
+
+  // 模型在 API tool_calls 之后又用正文输出工具（各厂商格式不同）→ 必须继续，不能 model_done / 空响应退出
+  if (
+    hasEmbeddedToolText
+    && currentTools.length > 0
+    && state.noToolExecutionRecoveryCount < 1
+    && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
+  ) {
+    state.noToolExecutionRecoveryCount++;
+    console.log('[harness] 检测到正文中嵌入工具调用（未走 API），注入恢复提示并继续');
+    if (response.content || response.reasoningContent || rawTextForEmbedded) {
+      pushAssistantForHistory(msgs, {
+        ...response,
+        content: rawTextForEmbedded || response.content,
+      });
+    }
+    msgs.push({
+      role: 'user',
+      content: [
+        buildNoToolExecutionRecoveryPrompt(msgs, userMessage, state.taskState.snapshot()),
+        '',
+        'The previous reply contained tool-like XML/text in the message body. Use native function-calling only — do not repeat tool syntax in plain text.',
+      ].join('\n'),
+    });
+    state.transition = 'no_tool_execution_recovery';
+    return { action: 'continue' };
+  }
 
   if (state.justCompacted && state.amnesiaRecoveryCount < 1) {
     const responseText = response.content || '';
@@ -225,6 +259,7 @@ export async function handleNoToolCalls(
 
   if (
     ((!response.content || !response.content.trim()) || isReasoningOnlyResponse(response))
+    && !hasEmbeddedToolText
     && state.emptyResponseRetryCount < MAX_EMPTY_RESPONSE_RETRIES
   ) {
     state.emptyResponseRetryCount++;
@@ -269,6 +304,7 @@ export async function handleNoToolCalls(
   if (
     (!response.content || !response.content.trim())
     && !response.reasoningContent?.trim()
+    && !hasEmbeddedToolText
   ) {
     deps.loopController.stop('error');
     const finalState = deps.loopController.getState();
@@ -442,14 +478,19 @@ export async function handleNoToolCalls(
 
   if (
     currentTools.length > 0
-    && !hasAssistantToolCallAfterLatestRealUser(msgs)
     && state.noToolExecutionRecoveryCount < 1
     && state.stopHookContinuationCount === 0
     && (
-      containsEmbeddedToolCalls(response.content)
-      || (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
-      || resumeWithPending
-      || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
+      hasEmbeddedToolText
+      || (
+        !hasAssistantToolCallAfterLatestRealUser(msgs)
+        && (
+          containsEmbeddedToolCalls(response.content)
+          || (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
+          || resumeWithPending
+          || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
+        )
+      )
     )
   ) {
     state.noToolExecutionRecoveryCount++;

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { Harness } from '../../src/harness/harness.js';
 import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
+import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
 import type { HarnessConfig, HarnessStepEvent, ChatFunction } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition } from '../../src/llm/types.js';
 import type { ToolResult } from '../../src/tools/types.js';
@@ -69,6 +70,10 @@ function createChatFn(responses: LLMResponse[]): ChatFunction {
 
 function finishGraph(graphExecutor: GraphExecutor): void {
   graphExecutor.initGraph({ goal: 'run unit tests', intent: 'test' });
+  markGraphDone(graphExecutor);
+}
+
+function markGraphDone(graphExecutor: GraphExecutor): void {
   for (let n = 0; n < 12; n++) {
     if (graphExecutor.advanceOrComplete().graphDone) break;
   }
@@ -81,15 +86,24 @@ function harnessGraph(harness: Harness): GraphExecutor {
 describe('Harness graph terminal stop (integration)', () => {
   it('图已 done 且无 pendingWork：首轮 prep 后即 model_done，不调 LLM', async () => {
     const tools = [makeTool('read_file')];
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), createToolExecutor(tools));
-    finishGraph(harnessGraph(harness));
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' }, {});
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+    const ge = harnessGraph(harness);
+    vi.spyOn(ge, 'initGraph').mockImplementation(function (this: GraphExecutor, opts) {
+      GraphExecutor.prototype.initGraph.call(this, opts);
+      markGraphDone(this);
+    });
 
     const chatFn = vi.fn(createChatFn([
       toolCallResponse([{ id: 't1', name: 'read_file' }]),
     ]));
     const events: HarnessStepEvent[] = [];
 
-    const result = await harness.run('run unit tests', chatFn, e => events.push(e));
+    const result = await harness.run('implement auth module', chatFn, e => events.push(e));
 
     expect(chatFn).not.toHaveBeenCalled();
     expect(result.loopState.stopReason).toBe('model_done');

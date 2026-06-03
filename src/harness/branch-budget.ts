@@ -13,8 +13,9 @@
  * 运维 / 评测读数（Spell Brigade 等长任务常见误判）：
  *   - **验收失败**：write/edit 已成功，但 `npm test` 等 `run_command` exit≠0 —— 根因通常是
  *     任务难或改法未对准断言，不是 edit 工具坏了。
- *   - **本模块拦截**：同文件 edit 达 fileEditMax（默认 3）后，写工具 **未执行**，telemetry 仍
- *     记 `success: false`（文案含 `[BranchBudget / Blocked]`、`必须先 read_file`）。
+ *   - **本模块拦截**：同文件 edit 达 fileEditMax（默认 3）后，写工具 **未执行**（telemetry 仍
+ *     记 `success: false`）。file/command/error 三维计数在 **每次用户发送** 与 **每轮 harness 工具轮**
+ *     开始时归零（不继承 checkpoint 计数）。
  *   - **工具真坏**：patch 对不上、路径不存在等 —— 与 BranchBudget 无关，success:false 且无 Blocked 前缀。
  *   典型链：验收失败 → tool_failure → forced → 本模块拦同文件第 4 次 edit（后果，非独立根因）。
  *
@@ -458,6 +459,23 @@ export class BranchBudgetTracker {
     this.recoverTriggers = 0;
     this.writeBypassPaths.clear();
     this.commandRetryBypassKeys.clear();
+  }
+
+  /**
+   * 新用户消息 / 新 harness 工具轮 — file/command/error 三维计数与豁免归零。
+   * recoverTriggers 保留（跨轮 recovery 去重用）。
+   */
+  resetRoundBudget(): void {
+    this.fileEdits.clear();
+    this.commandRetries.clear();
+    this.errorRepeats.clear();
+    this.writeBypassPaths.clear();
+    this.commandRetryBypassKeys.clear();
+  }
+
+  /** @deprecated 使用 resetRoundBudget */
+  resetFileEditBudget(): void {
+    this.resetRoundBudget();
   }
 
   /**

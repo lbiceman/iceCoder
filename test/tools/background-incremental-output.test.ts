@@ -330,10 +330,24 @@ describe('BackgroundTaskManager — taskStatusChanged event', () => {
     mgr.on('taskStatusChanged', (s) => events.push(s));
 
     const r = mgr.spawn('node quick.cjs', 10_000);
-    await new Promise((res) => setTimeout(res, 2_500));
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 12_000;
+      const poll = () => {
+        const match = events.find((e) => e.taskId === r.taskId && e.isTerminal);
+        if (match) {
+          resolve();
+          return;
+        }
+        if (Date.now() > deadline) {
+          reject(new Error('taskStatusChanged terminal event not received in time'));
+          return;
+        }
+        setTimeout(poll, 50);
+      };
+      poll();
+    });
 
-    expect(events.length).toBeGreaterThanOrEqual(1);
-    const match = events.find((e) => e.taskId === r.taskId);
+    const match = events.find((e) => e.taskId === r.taskId && e.isTerminal);
     expect(match).toBeDefined();
     expect(match.isTerminal).toBe(true);
     expect(['completed', 'failed']).toContain(match.status);
