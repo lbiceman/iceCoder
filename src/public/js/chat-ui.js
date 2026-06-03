@@ -22,6 +22,7 @@ window.ChatUI = (function () {
   var elSendBtn = null;
 
   var streamReplyBuffer = '';
+  var streamReasoningBuffer = '';
 
   /** 距底部小于该值时视为「贴底」，新内容会自动跟随滚动 */
   var SCROLL_STICKY_THRESHOLD_PX = 80;
@@ -1457,6 +1458,37 @@ window.ChatUI = (function () {
 
   // ---- 流式输出 ----
 
+  function clearReasoningStream() {
+    streamReasoningBuffer = '';
+    var el = document.getElementById('streaming-reasoning-msg');
+    if (el) el.remove();
+  }
+
+  function appendReasoningStreamChunk(text) {
+    ensureChatLayout();
+    if (!text) return;
+    streamReasoningBuffer += text;
+    var el = document.getElementById('streaming-reasoning-msg');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'message assistant message-thinking';
+      el.setAttribute('id', 'streaming-reasoning-msg');
+      var label = document.createElement('div');
+      label.className = 'msg-label';
+      label.textContent = 'Thinking';
+      el.appendChild(label);
+      var body = document.createElement('div');
+      body.className = 'msg-thinking-body';
+      el.appendChild(body);
+      el._streamContentEl = body;
+      insertTailBefore(el);
+    }
+    if (el._streamContentEl) {
+      el._streamContentEl.textContent = streamReasoningBuffer;
+    }
+    if (autoScrollEnabled) scheduleScrollIfSticky();
+  }
+
   function appendStreamChunk(text, messages, stripStatusTagFn) {
     ensureChatLayout();
     var lastMsg = messages[messages.length - 1];
@@ -1517,6 +1549,7 @@ window.ChatUI = (function () {
   }
 
   function finalizeStreamResponse(messages, stripStatusTagFn) {
+    clearReasoningStream();
     var lastMsg = messages[messages.length - 1];
     var wasStreaming = !!(lastMsg && lastMsg._streaming);
     if (lastMsg && lastMsg._streaming) {
@@ -1659,6 +1692,8 @@ window.ChatUI = (function () {
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
     appendStreamChunk: appendStreamChunk,
+    appendReasoningStreamChunk: appendReasoningStreamChunk,
+    clearReasoningStream: clearReasoningStream,
     finalizeStreamResponse: finalizeStreamResponse,
     finalizeBeforeUserMessage: finalizeBeforeUserMessage,
     repairOrphanStreamingIfAny: repairOrphanStreamingIfAny,

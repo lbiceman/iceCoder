@@ -513,6 +513,9 @@ window.ChatPage = (function () {
 
     // 1. 流式文本：先收尾上一段残留，再用累积文本重建 streaming bubble
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (runningTurn.streamingReasoningText) {
+      UI.appendReasoningStreamChunk(runningTurn.streamingReasoningText);
+    }
     if (runningTurn.streamingText) {
       UI.appendStreamChunk(runningTurn.streamingText, Session.getMessages(), Session.stripStatusTag);
       streamChunksReceived = true;
@@ -603,6 +606,16 @@ window.ChatPage = (function () {
     updateNavStatus(false);
     isStreaming = false;
     UI.setStreamingState(false);
+  }
+
+  function onWsReasoningStream(data) {
+    if (userStopped) return;
+    if (!isStreaming) {
+      isStreaming = true;
+      UI.setStreamingState(true);
+    }
+    if (sessionPet) sessionPet.setState('thinking');
+    UI.appendReasoningStreamChunk(data.delta || '');
   }
 
   function onWsStream(data) {
@@ -1145,6 +1158,7 @@ window.ChatPage = (function () {
     WS.on('connected', onWsConnected);
     WS.on('close', onWsClose);
     WS.on('stream', onWsStream);
+    WS.on('reasoning_stream', onWsReasoningStream);
     WS.on('stream_end', onWsStreamEnd);
     WS.on('response', onWsResponse);
     WS.on('step', onWsStep);

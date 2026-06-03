@@ -256,7 +256,6 @@ export class SubAgentRunner {
           role: 'assistant',
           content: prepareAssistantContentForHistory(response.content || ''),
           toolCalls,
-          reasoningContent: response.reasoningContent,
         });
 
         for (const toolCall of toolCalls) {

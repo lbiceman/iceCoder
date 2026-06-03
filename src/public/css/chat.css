@@ -1,3 +1,23 @@
+/* 流式思考块（仅当轮展示，不入库） */
+.message-thinking {
+  opacity: 0.72;
+  border-left: 2px solid var(--text-muted, #888);
+  padding-left: 10px;
+}
+.message-thinking .msg-label {
+  font-size: 0.8em;
+  color: var(--text-muted, #888);
+  letter-spacing: 0.02em;
+}
+.message-thinking .msg-thinking-body {
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
 /* ===== Chat Page ===== */
 .chat-page {
   display: flex;

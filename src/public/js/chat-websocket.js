@@ -99,6 +99,10 @@ window.ChatWebSocket = (function () {
         if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
         emit('stream', { delta: data.delta || '' });
         break;
+      case 'reasoning_stream':
+        if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
+        emit('reasoning_stream', { delta: data.delta || '' });
+        break;
       case 'stream_end':
         emit('stream_end', {});
         break;

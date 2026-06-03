@@ -275,9 +275,22 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
   return finalizeMessagesForApi(result);
 }
 
+/** 剥离 assistant 上的 reasoningContent（旧 checkpoint / 结构化会话兼容；思考链仅当轮流式 UI）。 */
+export function stripReasoningContentFromMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
+  return messages.map((m) => {
+    if (m.role === 'assistant' && m.reasoningContent !== undefined) {
+      const { reasoningContent: _omit, ...rest } = m;
+      return rest;
+    }
+    return m;
+  });
+}
+
 /** 发送 API / 压缩 / 会话恢复前统一整理 tool 消息顺序与配对。 */
 export function finalizeMessagesForApi(messages: UnifiedMessage[]): UnifiedMessage[] {
-  return ensureToolCallPairing(coalesceToolResultsAfterAssistants(messages));
+  return ensureToolCallPairing(
+    coalesceToolResultsAfterAssistants(stripReasoningContentFromMessages(messages)),
+  );
 }
 
 /**

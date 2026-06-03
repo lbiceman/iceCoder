@@ -1361,7 +1361,7 @@ describe('Harness - 边界情况', () => {
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
-  it('工具调用带 reasoningContent 时正确保存到消息', async () => {
+  it('工具调用带 reasoningContent 时不写入会话历史', async () => {
     const tools = [makeTool('read_file')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -1379,8 +1379,10 @@ describe('Harness - 边界情况', () => {
     const result = await harness.run('test', chatFn);
 
     expect(result.loopState.stopReason).toBe('model_done');
-    const assistantMsg = result.messages.find(m => m.role === 'assistant' && m.reasoningContent);
-    expect(assistantMsg?.reasoningContent).toBe('I need to read the file first');
+    const withReasoning = result.messages.filter(
+      (m) => m.role === 'assistant' && (m as { reasoningContent?: string }).reasoningContent,
+    );
+    expect(withReasoning.length).toBe(0);
   });
 
   it('finishReason=stop 且有空 toolCalls 数组时视为无工具调用', async () => {

@@ -91,7 +91,7 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 
 与 **Claude Code** 等同模型、同 prompt、同沙箱的盲评对比（裁判 Cursor Composer 2.5）；强调 **验收通过率（SR）** + **Composite（Gate 40 + Judge 60）**，不只比轮次。
 
-- 任务分层 L1–L6 与 **L4+**（如 97 文件、19 跨模块逻辑 BUG 的 billing）；修复类 iceCoder 常见 **+3** Composite，长周期游戏与 L4+ 见下表。
+- 任务分层 L1–L7 与 **L4+ / L7**（billing 97 文件 19 BUG；**L7 融合** 142 文件 33 探针）；修复类 iceCoder 常见 **+3** Composite，长周期游戏与 L4+ 见下表。
 - 跑法与目录约定：[`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md) · 体系 [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)。
 
 **深入阅读：** 双模 → [`docs/requirement/L2测试过程.md`](./docs/requirement/L2测试过程.md) · 全貌 → [`docs/项目介绍.md`](./docs/项目介绍.md) · 记忆 → [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) · 多会话 → [`docs/requirement/多会话-web侧栏-finish.md`](./docs/requirement/多会话-web侧栏-finish.md)

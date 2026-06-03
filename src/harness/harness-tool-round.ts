@@ -170,7 +170,6 @@ export async function runHarnessToolRound(
     role: 'assistant',
     content: prepareAssistantContentForHistory(response.content || ''),
     toolCalls: response.toolCalls,
-    reasoningContent: response.reasoningContent,
   });
 
   let toolCallsForGate = response.toolCalls ?? [];

@@ -542,6 +542,8 @@ interface RunningTurnSnapshot {
   isProcessing: boolean;
   iteration: number;
   streamingText: string;
+  /** 当轮思考流（仅 UI，不入库） */
+  streamingReasoningText: string;
   toolTimeline: { toolName: string; detail: string; status: string; toolCallId?: string; diffSource?: string | null }[];
   petState: string;
   petBubble: string;
@@ -566,6 +568,7 @@ function createEmptyRunningTurn(): RunningTurnSnapshot {
     isProcessing: true,
     iteration: 0,
     streamingText: '',
+    streamingReasoningText: '',
     toolTimeline: [],
     petState: 'thinking',
     petBubble: '',
@@ -649,6 +652,12 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       if (typeof event.delta === 'string') {
         t.streamingText += event.delta;
         t.petState = 'read';
+      }
+      break;
+    case 'reasoning_stream_delta':
+      if (typeof event.delta === 'string') {
+        t.streamingReasoningText += event.delta;
+        t.petState = 'thinking';
       }
       break;
     case 'thinking':
@@ -1410,6 +1419,9 @@ async function handleChatMessage(
         // 流式增量文本直接推送
         if (event.type === 'stream_delta' && event.delta) {
           broadcastToSession(runSessionId, { type: 'stream', delta: event.delta });
+        }
+        if (event.type === 'reasoning_stream_delta' && event.delta) {
+          broadcastToSession(runSessionId, { type: 'reasoning_stream', delta: event.delta });
         }
 
         // 工具实时输出推送

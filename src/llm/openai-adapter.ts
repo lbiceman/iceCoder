@@ -186,12 +186,11 @@ export class OpenAIAdapter implements ProviderAdapter {
             callback(delta.content, false);
           }
 
-          // Handle reasoning_content for thinking models (e.g., DeepSeek)
-          // 不推送到 callback — reasoning_content 是内部思考过程，不直接展示给用户
-          // 但必须保留并回传给 API，否则 DeepSeek thinking 模式会报 400
+          // reasoning_content：累积进 LLMResponse，经独立 channel 推前端；不回传 API
           const deltaAny = delta as any;
           if (deltaAny.reasoning_content) {
             reasoningContent += deltaAny.reasoning_content;
+            callback({ channel: 'reasoning', delta: deltaAny.reasoning_content }, false);
           }
 
           // Handle tool calls in streaming
@@ -272,19 +271,15 @@ export class OpenAIAdapter implements ProviderAdapter {
   private convertToOpenAIMessages(
     messages: UnifiedMessage[],
   ): OpenAI.ChatCompletionMessageParam[] {
-    // DeepSeek thinking 模式修复：如果会话中任何 assistant 消息有 reasoningContent，
-    // 则所有 assistant 消息都必须有 reasoning_content 字段，缺失的补空字符串。
-    const hasAnyReasoning = messages.some(m => m.role === 'assistant' && m.reasoningContent);
-    const normalized = hasAnyReasoning
-      ? messages.map(m => {
-          if (m.role === 'assistant' && !m.reasoningContent) {
-            return { ...m, reasoningContent: '' };
-          }
-          return m;
-        })
-      : messages;
+    const stripped = messages.map((m) => {
+      if (m.role === 'assistant' && m.reasoningContent !== undefined) {
+        const { reasoningContent: _r, ...rest } = m;
+        return rest;
+      }
+      return m;
+    });
 
-    const withCollapsedSystem = collapseUnifiedSystemMessages(normalized);
+    const withCollapsedSystem = collapseUnifiedSystemMessages(stripped);
     const converted = withCollapsedSystem.map((msg) => this.convertSingleMessage(msg));
     return this.validateToolCallPairing(converted);
   }
@@ -437,10 +432,6 @@ export class OpenAIAdapter implements ProviderAdapter {
           role: 'assistant',
           content: this.resolveContent(msg.content),
         };
-        // 传回 reasoning_content（DeepSeek thinking 模式要求）
-        if (msg.reasoningContent !== undefined) {
-          assistantMsg.reasoning_content = msg.reasoningContent;
-        }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           assistantMsg.tool_calls = msg.toolCalls.map((tc) => ({
             id: tc.id,
