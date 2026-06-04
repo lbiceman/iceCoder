@@ -30,6 +30,7 @@ import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
 import { c, warn } from '../utils/terminal-ui.js';
+import { resolveDefaultApiPort } from '../serve-port.js';
 
 export interface ServeResult {
   server: Server;
@@ -94,7 +95,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
  * ice serve 命令入口。
  */
 export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
-  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3784', 10);
+  const port = getFlagNum(args.flags, 'port', 'p') ?? resolveDefaultApiPort();
 
   const { cleanup } = await startWebServer(ctx, port);
 

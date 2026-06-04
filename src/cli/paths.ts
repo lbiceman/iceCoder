@@ -2,8 +2,9 @@
  * 统一路径解析模块。
  *
  * 运行时数据根目录规则：
- * - **开发**（NODE_ENV !== 'production'）：当前项目下的 `data/`
- * - **生产**（NODE_ENV === 'production'）：用户主目录 `~/.iceCoder/`
+ * - **全局 / tgz 安装**（`node_modules/ice-coder/dist/cli/` 入口）：`~/.iceCoder/`，与启动 cwd 无关
+ * - **源码本地开发**（`tsx src/cli/index.ts`、`npm run dev` 等）：当前项目下的 `data/`
+ * - **`NODE_ENV=production`**（如 `npm start`）：`~/.iceCoder/`
  *
  * 显式设置 `ICE_DATA_DIR` 等环境变量时始终优先。
  * 模块加载时会调用 `applyRuntimeDataEnvDefaults()`，保证 Web/CLI 子模块读到一致路径。
@@ -25,8 +26,19 @@ export function isProductionRuntime(): boolean {
   return process.env.NODE_ENV === 'production';
 }
 
+/** 从 `npm install -g` / tgz 安装的 `iceCoder` CLI 入口（含 npm link 到包目录）。 */
+export function isPackagedCliEntry(): boolean {
+  const entry = (process.argv[1] ?? '').replace(/\\/g, '/');
+  return entry.includes('/node_modules/ice-coder/dist/cli/');
+}
+
+/** 数据根使用 `~/.iceCoder`（全局安装或 production），否则用项目 `data/`。 */
+export function usesUserDataRoot(): boolean {
+  return isProductionRuntime() || isPackagedCliEntry();
+}
+
 function defaultDataDirForRuntime(): string {
-  return isProductionRuntime() ? USER_DATA_DIR : LOCAL_DATA_DIR;
+  return usesUserDataRoot() ? USER_DATA_DIR : LOCAL_DATA_DIR;
 }
 
 /**
@@ -79,10 +91,10 @@ export function getUserCacheDir(): string {
   return path.join(xdg, 'iceCoder');
 }
 
-/** 聊天粘贴图落盘根：开发 `data/`，生产 OS 用户缓存目录 */
+/** 聊天粘贴图落盘根：与 `getRuntimeDataDir()` 一致（`{dataDir}/imagesCache/...`）。 */
 export function getImagesCacheStorageRoot(): string {
   applyRuntimeDataEnvDefaults();
-  return isProductionRuntime() ? getUserCacheDir() : getRuntimeDataDir();
+  return getRuntimeDataDir();
 }
 
 /** `{storageRoot}/imagesCache/{sessionId}` */
@@ -242,9 +254,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });
   await fs.mkdir(paths.userMemoryDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
-  if (!isProductionRuntime()) {
-    await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
-  }
+  await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
 
   if (!(await exists(paths.configPath))) {
     await fs.writeFile(paths.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');

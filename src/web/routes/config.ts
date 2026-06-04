@@ -15,6 +15,7 @@ import {
 } from '../../config/main-config-supervisor-mode.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
 import { isAppConfigReady, isPlaceholderApiKey } from '../../config/config-readiness.js';
+import { normalizeProvider } from '../../config/normalize-provider.js';
 import { applyRuntimeDataEnvDefaults } from '../../cli/paths.js';
 import type { IceCoderConfigFile, ProviderConfig } from '../types.js';
 
@@ -105,10 +106,9 @@ export async function resolveDefaultSupportsVision(
   }
 }
 
-/** 去掉旧版 config 中的 providerName 等遗留字段，统一为 OpenAI 兼容结构 */
-function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }): ProviderConfig {
-  const { providerName: _legacy, ...rest } = provider;
-  return rest;
+/** 去掉旧版 providerName 并保证 id 存在 */
+function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }, index: number): ProviderConfig {
+  return normalizeProvider(provider, index);
 }
 
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null */
@@ -256,13 +256,13 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       }
 
       // 处理每个 provider：如果 apiKey 是脱敏值，恢复原始 key
-      const resolvedProviders = providers.map(provider => {
+      const resolvedProviders = providers.map((provider, index) => {
         let apiKey = provider.apiKey;
         if (apiKey && apiKey.includes('*') && provider.id && originalKeys.has(provider.id)) {
           // 脱敏值，恢复原始 key
           apiKey = originalKeys.get(provider.id)!;
         }
-        return sanitizeProvider({ ...provider, apiKey });
+        return sanitizeProvider({ ...provider, apiKey }, index);
       });
 
       const normalizedProviders = normalizeDefaultFlags(resolvedProviders);
@@ -312,8 +312,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const config = JSON.parse(data) as IceCoderConfigFile;
 
       // 返回前遮蔽 API 密钥
-      const maskedProviders = config.providers.map((provider: ProviderConfig) => ({
-        ...sanitizeProvider(provider),
+      const maskedProviders = config.providers.map((provider: ProviderConfig, index: number) => ({
+        ...sanitizeProvider(provider, index),
         apiKey: maskApiKey(provider.apiKey),
         // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
         maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),

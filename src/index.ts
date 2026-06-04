@@ -55,6 +55,7 @@ import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 import type { ProviderConfig, IceCoderConfigFile } from './web/types.js';
 import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
 import { isAppConfigReady } from './config/config-readiness.js';
+import { normalizeProviders } from './config/normalize-provider.js';
 
 const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH!);
 const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR!);
@@ -66,7 +67,7 @@ const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 async function loadConfig(): Promise<ProviderConfig[]> {
   const data = await fs.readFile(CONFIG_PATH, 'utf-8');
   const config = JSON.parse(data) as IceCoderConfigFile;
-  return config.providers;
+  return normalizeProviders(config.providers);
 }
 
 /**

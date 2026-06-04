@@ -24,6 +24,7 @@ import { MCPManager, startMcpBackgroundInit } from '../mcp/index.js';
 import { broadcastMcpReady } from '../web/chat-ws.js';
 import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import { isAppConfigReady } from '../config/config-readiness.js';
+import { normalizeProviders } from '../config/normalize-provider.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ProviderConfig, IceCoderConfigFile } from '../web/types.js';
@@ -50,7 +51,21 @@ export interface BootstrapResult {
 export async function loadConfig(configPath: string): Promise<ProviderConfig[]> {
   const data = await fs.readFile(configPath, 'utf-8');
   const config = JSON.parse(data) as IceCoderConfigFile;
-  return config.providers;
+  return normalizeProviders(config.providers);
+}
+
+function resolveDefaultProviderId(providers: ProviderConfig[]): string {
+  const pick = providers.find((p) => p.isDefault) ?? providers[0];
+  const id = pick?.id?.trim();
+  if (!id) {
+    if (providers.length === 0) {
+      throw new Error('config.json 中未配置任何 LLM provider');
+    }
+    throw new Error(
+      '默认 LLM provider 缺少 id。请在 Web 配置页保存一次，或检查 data/config.json / ~/.iceCoder/config.json',
+    );
+  }
+  return id;
 }
 
 /**
@@ -63,11 +78,8 @@ export function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
     llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
-  const defaultProvider = providers.find((p) => p.isDefault);
-  if (defaultProvider) {
-    llmAdapter.setDefaultProvider(defaultProvider.id);
-  } else if (providers.length > 0) {
-    llmAdapter.setDefaultProvider(providers[0].id);
+  if (providers.length > 0) {
+    llmAdapter.setDefaultProvider(resolveDefaultProviderId(providers));
   }
 
   return llmAdapter;
@@ -84,11 +96,8 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
     llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
-  const defaultProvider = providers.find((p) => p.isDefault);
-  if (defaultProvider) {
-    llmAdapter.setDefaultProvider(defaultProvider.id);
-  } else if (providers.length > 0) {
-    llmAdapter.setDefaultProvider(providers[0].id);
+  if (providers.length > 0) {
+    llmAdapter.setDefaultProvider(resolveDefaultProviderId(providers));
   }
 
   console.log('LLM adapter configuration reloaded');

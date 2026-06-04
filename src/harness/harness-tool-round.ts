@@ -90,7 +90,12 @@ import type {
   StreamFunction,
 } from './types.js';
 
-export interface ToolRoundDeps extends ToolExecutorDeps, CheckpointDeps, ResilienceBridgeDeps, StopHandlerDeps {
+export interface ToolRoundDeps
+  extends Omit<ToolExecutorDeps, 'workspaceRoot'>,
+    CheckpointDeps,
+    ResilienceBridgeDeps,
+    StopHandlerDeps {
+  workspaceRoot: string;
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
   graphExecutor: GraphExecutor;
