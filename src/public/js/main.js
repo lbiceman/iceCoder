@@ -3,6 +3,8 @@
  * 导入所有页面模块。
  * CSS 通过 index.html 的 <link> 标签加载，兼容非 Vite 环境。
  */
+import './modal.js';
+import './diff-viewer.js';
 import './config-page.js';
 import './session-pet.js';
 import './chat-websocket.js';

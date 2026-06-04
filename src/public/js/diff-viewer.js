@@ -385,3 +385,6 @@ var DiffViewer = (function () {
     countChanges: countChanges,
   };
 })();
+
+/** Vite 打包后由 main.js 以 module 导入，须显式挂到 window 供其它脚本使用 */
+window.DiffViewer = DiffViewer;
