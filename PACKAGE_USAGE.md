@@ -116,7 +116,14 @@ npm start
 # 等价：cross-env NODE_ENV=production node dist/index.js
 ```
 
-默认提供 API + 内置静态 Web（端口见启动日志，常见为 **1024**）。
+默认提供 API + 内置静态 Web，监听 **1024**（与 `npm run dev` 的 API 一致）。
+
+| 场景 | API 端口 | 前端端口 |
+|------|----------|----------|
+| **全局安装** `iceCoder web` / `start` | **1024**（`PORT` / `-p` 可改） | 生产模式静态资源与 API 同端口，无需 1025 |
+| **`npm start`**（`NODE_ENV=production`） | **1024** | 同上 |
+| **源码开发** `npm run dev` | **1024**（`PORT` 可改） | Vite **1025**（`VITE_PORT` 可改，代理到 API） |
+| **源码 CLI** `tsx src/cli/index.ts web` | 默认 **3784**（不锁死，`-p` / `PORT` 任意） | — |
 
 ### CLI 子命令（`iceCoder` 入口）
 
@@ -145,10 +152,13 @@ iceCoder run "修复失败测试并跑通 npm test" --max-rounds 100
 
 | 环境 | 数据根 | 说明 |
 |------|--------|------|
-| **生产**（`NODE_ENV=production` 或 `npm start`） | `~/.iceCoder/` | 记忆、会话、checkpoint、上传等 |
-| **开发**（源码 `npm run dev`） | 项目内 `./data/` | 仅克隆仓库开发时 |
+| **`npm install -g` / tgz 安装的 `iceCoder`** | `~/.iceCoder/`（Windows：`%USERPROFILE%\.iceCoder`） | 与在哪个目录执行命令无关；会话在 `sessions/` |
+| **`npm start` / `NODE_ENV=production`** | 同上 | |
+| **源码开发**（`npm run dev`、`tsx src/cli/index.ts`） | 项目内 `./data/` | 仅仓库内开发 |
 
 可用 **`ICE_DATA_DIR`** 覆盖数据根路径。
+
+> 若曾在用户主目录下生成过 `~/data/sessions`（旧行为），请手动迁移到 `~/.iceCoder/sessions`。
 
 打包分发时**不要**把使用者的 `data/` 打进 tgz；首次运行会在数据根下自动创建 `memory-files/`、`sessions/` 等子目录。
 
@@ -166,6 +176,13 @@ npm test
 ```bash
 iceCoder tools
 iceCoder config
+```
+
+若 `iceCoder web` 报 `Provider adapter "undefined" is not registered`，多半是 **全局 `ice-coder` 版本过旧**（仍按 `providerName` 注册），而 `data/config.json` 已改为 `id` 字段。在源码仓执行 `npm run build:server` 后重新安装：
+
+```bash
+npm install -g ./ice-coder-1.0.0.tgz
+# 或开发期：npm link
 ```
 
 能列出工具且无配置报错即说明 `dist/` 与依赖正常；完整能力需配置有效 API Key 后执行 `iceCoder web` 或 `iceCoder run`。

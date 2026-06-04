@@ -127,4 +127,5 @@ export interface LLMAdapterInterface {
   chat(messages: UnifiedMessage[], options?: LLMOptions): Promise<LLMResponse>;
   stream(messages: UnifiedMessage[], callback: StreamCallback, options?: LLMOptions): Promise<LLMResponse>;
   countTokens(text: string): Promise<number>;
+  setAbortSignal?(signal: AbortSignal | null): void;
 }

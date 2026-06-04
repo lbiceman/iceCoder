@@ -18,6 +18,7 @@ import { parseArgs } from './utils/args-parser.js';
 import { hasFlag } from './utils/args-parser.js';
 import { c, error } from './utils/terminal-ui.js';
 import { bootstrap } from './bootstrap.js';
+import { defaultApiPortHelpText, resolveDefaultApiPort } from './serve-port.js';
 
 const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
@@ -34,7 +35,7 @@ ${c.bold}用法:${c.reset}
   iceCoder help                     显示此帮助
 
 ${c.bold}start/cli/web 选项:${c.reset}
-  --port, -p <n>       Web 服务器端口 (默认 3784，可用环境变量 PORT 覆盖)
+  --port, -p <n>       Web 服务器端口 (默认 ${defaultApiPortHelpText()}，可用环境变量 PORT 覆盖)
   --no-tunnel          不启动 Cloudflare Tunnel (仅 start)
   --tunnel-bin <path>  cloudflared 可执行文件路径
 
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
     console.log(`
 ${c.bold}下一步：${c.reset}
   1. 运行 ${c.green}iceCoder web${c.reset} 或 ${c.green}iceCoder start${c.reset}
-  2. 在浏览器打开 ${c.cyan}http://127.0.0.1:3784/#/config${c.reset}
+  2. 在浏览器打开 ${c.cyan}http://127.0.0.1:${resolveDefaultApiPort()}/#/config${c.reset}
   3. 填写 API Key 并保存
 `);
     process.exit(1);

@@ -195,7 +195,7 @@ async function startServerWithLoopbackProbe(app: Express, port: number): Promise
   if (!v6) {
     console.warn(
       `[web] 「http://localhost:${actualPort}/」在本机 [::1]:${actualPort} 仍可能指向其它程序（你已看到 404）。`
-        + ` 请使用 http://127.0.0.1:${actualPort}/ ，或换一个端口绕过冲突：` + ` npm run iceCoder -- --port 3784`,
+        + ` 请使用 http://127.0.0.1:${actualPort}/ ，或换端口：iceCoder web -p <port> 或设置 PORT`,
     );
   }
 

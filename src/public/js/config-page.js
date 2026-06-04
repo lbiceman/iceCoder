@@ -348,6 +348,7 @@ window.ConfigPage = (function () {
         '</div>' +
         '<h1>模型配置</h1>' +
         '<p class="subtitle">管理 LLM 提供者：填写 API 地址与密钥，选择默认模型后即可开始聊天。</p>' +
+        '<p class="subtitle">仅支持openAI协议，不支持A社的！！！</p>' +
         '<div id="provider-list"></div>' +
         '<div class="config-actions">' +
           '<button class="btn btn-primary" id="btn-save">保存配置</button>' +

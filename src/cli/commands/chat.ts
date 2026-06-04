@@ -13,6 +13,7 @@ import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
+import { resolveDefaultApiPort } from '../serve-port.js';
 import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
@@ -168,7 +169,7 @@ async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProce
 export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const noServe = hasFlag(args.flags, 'no-serve');
   const withTunnel = hasFlag(args.flags, 'with-tunnel');
-  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3784', 10);
+  const port = getFlagNum(args.flags, 'port', 'p') ?? resolveDefaultApiPort();
   const { memoryFilesDir } = ctx.paths;
 
   /** 加载提示词（与 WebSocket 共用逻辑；不绑定固定自然语言）。 */
