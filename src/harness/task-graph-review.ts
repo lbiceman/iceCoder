@@ -208,7 +208,7 @@ export class DeviationDetector {
     }
 
     // 范围蔓延检查（先于 phase 检查：edit 节点大量只读属 scope_creep）
-    const isReadTool = (n: string) => n.startsWith('read') || n === 'search_codebase' || n === 'fs_operation';
+    const isReadTool = (n: string) => n.startsWith('read') || n === 'glob' || n === 'grep' || n === 'fs_operation';
     if (nodePhase === 'editing' && allowedTools.includes('write_file') && toolNames.every(isReadTool)) {
       if (toolNames.length > nodeGuard.maxSameToolRepeat) {
         return {
@@ -272,14 +272,14 @@ export class FailureClassifier {
     if (toolName && normalized.includes('enoent')) {
       return { failureId: id, category: 'tool_error', subType: 'file_not_found', severity: 'recoverable',
         nodeId: '', toolName, toolSignature: '', rawError: raw, at,
-        suggestedRecovery: { strategy: 'retry_with_hint', hint: '文件不存在。请使用 search_codebase 查找正确的文件路径。' } };
+        suggestedRecovery: { strategy: 'retry_with_hint', hint: '文件不存在。请使用 glob 或 grep 查找正确的文件路径。' } };
     }
 
     // 2. permission_denied
     if (toolName && /eacces|eperm|access denied/i.test(normalized)) {
       return { failureId: id, category: 'permission_denied', subType: 'file_permission', severity: 'recoverable',
         nodeId: '', toolName, toolSignature: '', rawError: raw, at,
-        suggestedRecovery: { strategy: 'alternative_tool', suggestedTools: ['read_file', 'search_codebase'] } };
+        suggestedRecovery: { strategy: 'alternative_tool', suggestedTools: ['read_file', 'glob', 'grep'] } };
     }
 
     // 3. syntax error

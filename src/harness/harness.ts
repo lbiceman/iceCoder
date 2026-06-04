@@ -16,6 +16,7 @@
 import type { UnifiedMessage } from '../llm/types.js';
 import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
+import { clearReadBeforeEditScope } from '../tools/read-before-edit.js';
 import type {
   ExecutionModeConfig,
   GlobalModePolicy,
@@ -459,6 +460,8 @@ export class Harness {
         this.workspaceRoot = lockedWorkspaceRoot;
       }
     }
+
+    clearReadBeforeEditScope(this.workspaceRoot, this.sessionId);
 
     const exemptPrefixes = await resolveVerificationExemptDirPrefixes({
       workspaceRoot: this.workspaceRoot,

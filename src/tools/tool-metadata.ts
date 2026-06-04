@@ -100,13 +100,20 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     tags: ['file_read'],
   },
 
-  // ── 搜索 ──
-  search_codebase: {
-    name: 'search_codebase',
+  glob: {
+    name: 'glob',
     isConcurrencySafe: true,
     isReadOnly: true,
     isDestructive: false,
-    maxResultSizeChars: 32_000,
+    maxResultSizeChars: 24_000,
+    tags: ['search', 'file_read'],
+  },
+  grep: {
+    name: 'grep',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 24_000,
     tags: ['search', 'file_read'],
   },
 

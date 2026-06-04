@@ -9,6 +9,7 @@ import type { RegisteredTool } from '../types.js';
 import { getEditHistory } from './undo-edit-tool.js';
 import { applyNonRegexReplace } from '../file-edit-fuzzy.js';
 import { buildFileChangeDiff, formatToolOutputWithDiff } from '../file-change-diff.js';
+import { checkReadBeforeEdit } from '../read-before-edit.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -17,7 +18,7 @@ function safePath(filePath: string, baseDir: string): string {
 /**
  * 创建批量编辑工具。
  */
-export function createBatchEditTool(workDir: string): RegisteredTool {
+export function createBatchEditTool(workDir: string, sessionId = 'default'): RegisteredTool {
   return {
     definition: {
       name: 'batch_edit_file',
@@ -52,7 +53,10 @@ export function createBatchEditTool(workDir: string): RegisteredTool {
       },
     },
     handler: async (args) => {
-      const filePath = safePath(args.path, workDir);
+      const rawPath = args.path as string;
+      const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
+      if (readErr) return { success: false, output: '', error: readErr };
+      const filePath = safePath(rawPath, workDir);
       const edits = args.edits as Array<{
         search: string;
         replace: string;

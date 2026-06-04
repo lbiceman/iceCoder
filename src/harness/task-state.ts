@@ -31,7 +31,7 @@ export type {
   VerificationStatus,
 } from '../types/runtime-snapshot.js';
 
-const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'search_codebase', 'git', 'file_info']);
+const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'glob', 'grep', 'git', 'file_info']);
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
 
 export class TaskState {

@@ -1,5 +1,5 @@
 /**
- * 上下文压缩器 — 参考 claude-code 的分层策略。
+ * 上下文压缩器
  *
  * 压缩触发（写死常量，见 compaction-constants.ts）：
  * - 硬压缩：effectiveUsed ≥ contextWindow × 0.85，或剩余 < 18K
@@ -86,9 +86,9 @@ export interface CompactionConfig {
   tokenThreshold?: number;
   /** 压缩后保留的最近消息数上限 */
   keepRecent: number;
-  /** 保留最近消息的最小 token 数（参考 claude-code: 10000） */
+  /** 保留最近消息的最小 token 数 */
   keepRecentMinTokens: number;
-  /** 保留最近消息的最大 token 数（参考 claude-code: 40000） */
+  /** 保留最近消息的最大 token 数 */
   keepRecentMaxTokens: number;
   /** 保留最近消息的最小条数 */
   keepRecentMinMessages: number;
@@ -409,7 +409,7 @@ export class ContextCompactor {
   }
 
   /**
-   * 会话记忆压缩路径（参考 claude-code sessionMemoryCompact）。
+   * 会话记忆压缩路径。
    *
    * 会话记忆已在后台持续更新，直接作为压缩摘要，不需要额外 LLM 调用。
    * 保留最近消息（token 预算），会话记忆作为摘要注入。
@@ -475,7 +475,6 @@ export class ContextCompactor {
    * 从消息历史中提取最近读取的文件内容。
    *
    * 压缩后重新注入，确保 LLM 不丢失已读的源码。
-   * 参考 claude-code 的 createPostCompactFileAttachments。
    *
    * 唯一路径条数上限取自 {@link CompactionConfig.maxReinjectFiles}；
    * 传入 maxFiles 时在单次调用上覆盖该配置。
@@ -539,12 +538,13 @@ export class ContextCompactor {
       if (fileResults.length >= dynamicFileLimit) break;
     }
 
-    // 搜索结果保护：收集最近 3 轮内 search_codebase 的结果
+    // 搜索结果保护：收集最近 3 轮内 glob/grep 的结果
     const searchResults: string[] = [];
     for (let i = messages.length - 1; i >= 0 && searchResults.length < 3; i--) {
       const msg = messages[i];
       if (msg.role !== 'tool' || !msg.toolCallId) continue;
-      if (toolCallIdToName.get(msg.toolCallId) !== 'search_codebase') continue;
+      const tname = toolCallIdToName.get(msg.toolCallId);
+      if (tname !== 'grep' && tname !== 'glob') continue;
       if (typeof msg.content !== 'string' || !msg.content.trim()) continue;
       searchResults.unshift(msg.content.substring(0, 300));
     }
@@ -857,7 +857,7 @@ Continue the conversation from where it left off without asking the user any fur
       contentStart = 1;
     }
 
-    // 计算初始切割点（token 预算优先，参考 claude-code: ≥10K token, ≥5 条消息, ≤40K token）
+    // 计算初始切割点（token 预算优先，≥10K token, ≥5 条消息, ≤40K token）
     let splitAt = this.findSplitByTokenBudget(messages, contentStart);
 
     // 保护长篇分析文本（assistant 无 toolCalls 且 content > 500 字符），

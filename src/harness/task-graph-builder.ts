@@ -365,7 +365,7 @@ export function buildGraph(input: GraphBuildInput): TaskGraphData {
     suggestedTools: s.type === 'verify' && repoShape?.testFramework !== 'none' ? ['run_command'] : undefined,
     evidence: s.phase === 'context' && preflight?.discoveredFiles.length ? preflight.discoveredFiles[0] : undefined,
     delegate: s.type === 'delegate'
-      ? { task: `探索 ${goal} 相关的代码结构`, tools: ['read_file', 'search_codebase', 'fs_operation'], maxRounds: 6 }
+      ? { task: `探索 ${goal} 相关的代码结构`, tools: ['glob', 'grep', 'read_file', 'fs_operation'], maxRounds: 6 }
       : undefined,
   }));
 

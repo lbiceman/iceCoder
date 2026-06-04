@@ -1,212 +1,225 @@
 /**
- * 搜索工具集。
- * 提供文件内容搜索、文件名搜索、glob 模式搜索能力。
+ * 搜索工具集：Glob 按路径找文件，Grep 搜内容（ripgrep）。
  */
 
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
+import { resolveRipgrepSearchScope } from '../../shared/path-scope.js';
+import { getMaxToolOutputChars } from '../tool-output-limits.js';
+import {
+  appendTruncationNotice,
+  DEFAULT_GLOB_MAX_FILES,
+  DEFAULT_GREP_CONTENT_MATCHES,
+  DEFAULT_GREP_MAX_RESULTS,
+  formatGrepContentBlocks,
+  isRipgrepNoMatch,
+  parseRipgrepJsonMatches,
+  resolveRipgrepPath,
+  runGlobFiles,
+  runRipgrep,
+} from './ripgrep-runner.js';
 
-function safePath(filePath: string, baseDir: string): string {
-  return path.resolve(baseDir, filePath);
+function capMaxResults(n: unknown, fallback: number, ceiling: number): number {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return fallback;
+  return Math.min(Math.floor(v), ceiling);
 }
 
 /**
- * 创建搜索工具集（合并 search_in_files, find_files, glob_files）。
- * @param workDir - 工作目录根路径
+ * 创建 Glob + Grep 工具。
  */
 export function createSearchTools(workDir: string): RegisteredTool[] {
+  const maxOut = () => getMaxToolOutputChars();
+
   return [
-    // ---- 统一搜索工具 ----
     {
       definition: {
-        name: 'search_codebase',
+        name: 'glob',
         description:
-          'Search the codebase. Default mode searches file content with regex/text pattern. Set mode:"filename" to find files by glob pattern (e.g. "**/*.ts", "src/**/*.test.js"). Set mode:"content" for explicit content search. Auto-skips node_modules and hidden directories. Use immediately when asked to find or search for code.',
+          'Find files by path/name glob (e.g. "**/*.ts", "src/**/*.test.js"). Sorted by modification time when supported. Does not search file contents — use grep for that. Prefer this before read_file when you do not know exact paths.',
         parameters: {
           type: 'object',
           properties: {
-            pattern: { type: 'string', description: 'Search pattern. For content mode: text or regex. For filename mode: glob pattern.' },
-            mode: { type: 'string', description: 'Search mode: "content" (default, search inside files), "filename" (glob match file paths)', default: 'content' },
-            directory: { type: 'string', description: 'Search directory relative to work dir, default root', default: '.' },
-            filePattern: { type: 'string', description: 'Filter files by name pattern for content mode (e.g. *.ts)', default: '*' },
-            isRegex: { type: 'boolean', description: 'Treat pattern as regex for content mode', default: false },
-            maxResults: { type: 'number', description: 'Maximum results', default: 40 },
-            contextLines: { type: 'number', description: 'Context lines around matches for content mode', default: 2 },
+            pattern: { type: 'string', description: 'Glob pattern relative to search directory' },
+            path: { type: 'string', description: 'Directory to search (relative to work dir or absolute), default "."' },
+            directory: { type: 'string', description: 'Alias for path' },
+            maxResults: { type: 'number', description: 'Max file paths to return', default: DEFAULT_GLOB_MAX_FILES },
           },
           required: ['pattern'],
         },
       },
       handler: async (args) => {
-        // Normalize: query/keyword are accepted aliases for pattern
-        if (args.pattern === undefined) args.pattern = args.query || args.keyword;
-        const mode = (args.mode as string) || 'content';
-        const maxResults = (args.maxResults as number) || 40;
-
-        if (mode === 'filename') {
-          // ── Glob filename search (merged from search_codebase) ──
-          const pattern = args.pattern as string;
-          const searchDir = args.directory
-            ? path.resolve(workDir, args.directory as string)
-            : workDir;
-
-          const allFiles = await walkDir(searchDir, maxResults * 5);
-          const matched: string[] = [];
-          for (const file of allFiles) {
-            if (matched.length >= maxResults) break;
-            const relativePath = path.relative(searchDir, file).replace(/\\/g, '/');
-            if (matchesGlob(relativePath, pattern)) {
-              matched.push(relativePath);
-            }
-          }
-
-          if (matched.length === 0) {
-            return { success: true, output: `No files matched pattern: ${pattern}` };
-          }
-          const truncated = matched.length >= maxResults ? `\n... (truncated at ${maxResults})` : '';
-          return {
-            success: true,
-            output: `Found ${matched.length} files matching "${pattern}":\n${matched.join('\n')}${truncated}`,
-          };
+        const pattern = String(args.pattern ?? args.glob ?? '').trim();
+        if (!pattern) {
+          return { success: false, output: '', error: 'pattern is required' };
+        }
+        const rg = await resolveRipgrepPath();
+        if (!rg) {
+          return { success: false, output: '', error: 'ripgrep (rg) is not available. Install ripgrep or add @vscode/ripgrep.' };
         }
 
-        // ── Content search (merged from search_codebase) ──
-        const dir = safePath(args.directory || '.', workDir);
-        const pattern = args.isRegex ? new RegExp(args.pattern, 'gi') : args.pattern.toLowerCase();
-        const contextLines = args.contextLines || 2;
-        const filePattern = args.filePattern || '*';
-
-        const results: string[] = [];
-        await searchDir(dir, workDir, pattern, filePattern, maxResults, contextLines, results);
-
-        if (results.length === 0) {
-          return { success: true, output: 'No matches found.' };
+        const scope = await resolveRipgrepSearchScope(
+          workDir,
+          (args.path ?? args.directory) as string | undefined,
+        );
+        if (!scope.ok) {
+          return { success: false, output: '', error: scope.error };
         }
-        return { success: true, output: results.join('\n\n') };
+        const maxResults = capMaxResults(args.maxResults, DEFAULT_GLOB_MAX_FILES, 500);
+        const limit = maxOut();
+
+        const result = await runGlobFiles(scope.cwd, pattern, limit);
+
+        if (result.timedOut) {
+          return { success: false, output: '', error: 'glob search timed out' };
+        }
+        if (result.exitCode !== 0 && result.exitCode !== null && !isRipgrepNoMatch(result.exitCode, result.stderr)) {
+          return { success: false, output: '', error: result.stderr || `rg exited ${result.exitCode}` };
+        }
+
+        let paths = result.stdout
+          .split('\n')
+          .map((p) => p.trim().replace(/\\/g, '/'))
+          .filter(Boolean);
+        const truncatedList = paths.length > maxResults;
+        if (truncatedList) paths = paths.slice(0, maxResults);
+
+        if (paths.length === 0) {
+          return { success: true, output: `No files matched pattern: ${pattern}` };
+        }
+
+        const rel = (p: string) => {
+          const abs = path.isAbsolute(p) ? p : path.join(scope.cwd, p);
+          return path.relative(scope.cwd, abs).replace(/\\/g, '/');
+        };
+
+        const display = paths.map((p) => rel(p));
+        const tail = truncatedList ? `\n... (truncated at ${maxResults} files)` : '';
+        const body = `Found ${display.length} files matching "${pattern}":\n${display.join('\n')}${tail}`;
+        return {
+          success: true,
+          output: appendTruncationNotice(body, result.truncated, false),
+        };
+      },
+    },
+
+    {
+      definition: {
+        name: 'grep',
+        description:
+          'Search file contents with ripgrep. Default output_mode is files_with_matches (paths only) — use read_file next. Use output_mode "content" for line matches; "count" for per-file match counts. Respects .gitignore.',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Search pattern (regex unless fixed_strings:true)' },
+            path: { type: 'string', description: 'Directory or file to search, default "."' },
+            directory: { type: 'string', description: 'Alias for path' },
+            glob: { type: 'string', description: 'Filter files, e.g. "**/*.ts"' },
+            output_mode: {
+              type: 'string',
+              description: 'files_with_matches (default) | content | count',
+              default: 'files_with_matches',
+            },
+            fixed_strings: { type: 'boolean', description: 'Literal match (no regex)', default: false },
+            case_insensitive: { type: 'boolean', description: 'Case insensitive', default: false },
+            context_lines: { type: 'number', description: 'Lines of context for content mode', default: 2 },
+            maxResults: { type: 'number', description: 'Max paths or match blocks', default: DEFAULT_GREP_MAX_RESULTS },
+            multiline: { type: 'boolean', description: 'Multiline match (. matches newline)', default: false },
+          },
+          required: ['pattern'],
+        },
+      },
+      handler: async (args) => {
+        const pattern = String(args.pattern ?? args.query ?? args.keyword ?? '').trim();
+        if (!pattern) {
+          return { success: false, output: '', error: 'pattern is required' };
+        }
+        const rg = await resolveRipgrepPath();
+        if (!rg) {
+          return { success: false, output: '', error: 'ripgrep (rg) is not available. Install ripgrep or add @vscode/ripgrep.' };
+        }
+
+        const scope = await resolveRipgrepSearchScope(
+          workDir,
+          (args.path ?? args.directory) as string | undefined,
+        );
+        if (!scope.ok) {
+          return { success: false, output: '', error: scope.error };
+        }
+        const rgTarget = scope.rgTarget;
+        const outputMode = String(args.output_mode ?? 'files_with_matches').toLowerCase();
+        const maxResults = capMaxResults(
+          args.maxResults,
+          outputMode === 'content' ? DEFAULT_GREP_CONTENT_MATCHES : DEFAULT_GREP_MAX_RESULTS,
+          500,
+        );
+        const limit = maxOut();
+
+        const rgArgs: string[] = [];
+        if (args.fixed_strings) rgArgs.push('-F');
+        if (args.case_insensitive) rgArgs.push('-i');
+        if (args.multiline) rgArgs.push('-U', '--multiline-dotall');
+
+        if (typeof args.glob === 'string' && args.glob.trim()) {
+          rgArgs.push('-g', args.glob.trim());
+        }
+        if (typeof args.filePattern === 'string' && args.filePattern.trim()) {
+          rgArgs.push('-g', args.filePattern.trim());
+        }
+
+        let body: string;
+        let truncated = false;
+        let timedOut = false;
+
+        if (outputMode === 'count') {
+          rgArgs.push('-c', '--', pattern, rgTarget);
+          const result = await runRipgrep({ cwd: scope.cwd, args: rgArgs, maxOutputChars: limit });
+          truncated = result.truncated;
+          timedOut = result.timedOut;
+          if (timedOut) return { success: false, output: '', error: 'grep timed out' };
+          if (result.exitCode !== 0 && result.exitCode !== null && !isRipgrepNoMatch(result.exitCode, result.stderr)) {
+            return { success: false, output: '', error: result.stderr || `rg exited ${result.exitCode}` };
+          }
+          const lines = result.stdout.split('\n').filter(Boolean).slice(0, maxResults);
+          body = lines.length ? lines.join('\n') : 'No matches found.';
+        } else if (outputMode === 'content') {
+          const ctx = capMaxResults(args.context_lines, 2, 10);
+          rgArgs.push('--json', '-C', String(ctx), '-m', String(maxResults), '--', pattern, rgTarget);
+          const result = await runRipgrep({ cwd: scope.cwd, args: rgArgs, maxOutputChars: limit });
+          truncated = result.truncated;
+          timedOut = result.timedOut;
+          if (timedOut) return { success: false, output: '', error: 'grep timed out' };
+          if (result.exitCode !== 0 && result.exitCode !== null && !isRipgrepNoMatch(result.exitCode, result.stderr)) {
+            return { success: false, output: '', error: result.stderr || `rg exited ${result.exitCode}` };
+          }
+          const blocks = parseRipgrepJsonMatches(result.stdout, maxResults);
+          body = formatGrepContentBlocks(blocks, maxResults);
+          if (!body.trim()) body = 'No matches found.';
+        } else {
+          rgArgs.push('-l', '--', pattern, rgTarget);
+          const result = await runRipgrep({ cwd: scope.cwd, args: rgArgs, maxOutputChars: limit });
+          truncated = result.truncated;
+          timedOut = result.timedOut;
+          if (timedOut) return { success: false, output: '', error: 'grep timed out' };
+          if (result.exitCode !== 0 && result.exitCode !== null && !isRipgrepNoMatch(result.exitCode, result.stderr)) {
+            return { success: false, output: '', error: result.stderr || `rg exited ${result.exitCode}` };
+          }
+          let paths = result.stdout.split('\n').map((p) => p.trim().replace(/\\/g, '/')).filter(Boolean);
+          const truncatedList = paths.length > maxResults;
+          if (truncatedList) paths = paths.slice(0, maxResults);
+          if (paths.length === 0) {
+            body = 'No matches found.';
+          } else {
+            const tail = truncatedList ? `\n... (truncated at ${maxResults} paths)` : '';
+            body = `Found ${paths.length} files:\n${paths.join('\n')}${tail}`;
+          }
+        }
+
+        return {
+          success: true,
+          output: appendTruncationNotice(body, truncated, timedOut),
+        };
       },
     },
   ];
-}
-
-// ═══════════════════════════════════════════════════════════
-// Content search helpers
-// ═══════════════════════════════════════════════════════════
-
-async function searchDir(
-  dir: string,
-  baseDir: string,
-  pattern: RegExp | string,
-  filePattern: string,
-  maxResults: number,
-  contextLines: number,
-  results: string[],
-): Promise<void> {
-  if (results.length >= maxResults) return;
-  let items;
-  try { items = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
-  for (const item of items) {
-    if (results.length >= maxResults) break;
-    const fullPath = path.join(dir, item.name);
-    if (item.name.startsWith('.') || item.name === 'node_modules') continue;
-    if (item.isDirectory()) {
-      await searchDir(fullPath, baseDir, pattern, filePattern, maxResults, contextLines, results);
-    } else if (item.isFile() && matchGlob(item.name, filePattern)) {
-      await searchFile(fullPath, baseDir, pattern, contextLines, maxResults, results);
-    }
-  }
-}
-
-async function searchFile(
-  filePath: string,
-  baseDir: string,
-  pattern: RegExp | string,
-  contextLines: number,
-  maxResults: number,
-  results: string[],
-): Promise<void> {
-  try {
-    const content = await fs.readFile(filePath, 'utf-8');
-    const lines = content.split('\n');
-    const relativePath = path.relative(baseDir, filePath);
-    for (let i = 0; i < lines.length && results.length < maxResults; i++) {
-      const line = lines[i];
-      const isMatch = pattern instanceof RegExp ? pattern.test(line) : line.toLowerCase().includes(pattern);
-      if (isMatch) {
-        const start = Math.max(0, i - contextLines);
-        const end = Math.min(lines.length - 1, i + contextLines);
-        const context = lines.slice(start, end + 1).map((l, idx) => {
-          const lineNum = start + idx + 1;
-          const marker = start + idx === i ? '>' : ' ';
-          return `${marker} ${lineNum}: ${l}`;
-        }).join('\n');
-        results.push(`${relativePath}:${i + 1}\n${context}`);
-      }
-    }
-  } catch { /* skip binary files */ }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Glob filename search helpers (merged from glob-tool.ts)
-// ═══════════════════════════════════════════════════════════
-
-function globSegmentToRegex(segment: string): RegExp {
-  let regexStr = '';
-  for (let i = 0; i < segment.length; i++) {
-    const ch = segment[i];
-    if (ch === '*') regexStr += '[^/\\\\]*';
-    else if (ch === '?') regexStr += '[^/\\\\]';
-    else if ('.+^${}()|[]\\'.includes(ch)) regexStr += '\\' + ch;
-    else regexStr += ch;
-  }
-  return new RegExp(`^${regexStr}$`, 'i');
-}
-
-async function walkDir(dir: string, maxResults: number): Promise<string[]> {
-  const results: string[] = [];
-  async function walk(current: string): Promise<void> {
-    if (results.length >= maxResults) return;
-    let entries;
-    try { entries = await fs.readdir(current, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      if (results.length >= maxResults) return;
-      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) await walk(fullPath);
-      else if (entry.isFile()) results.push(fullPath);
-    }
-  }
-  await walk(dir);
-  return results;
-}
-
-function matchesGlob(filePath: string, pattern: string): boolean {
-  const normalizedPath = filePath.replace(/\\/g, '/');
-  const normalizedPattern = pattern.replace(/\\/g, '/');
-  return matchSegments(normalizedPath.split('/'), 0, normalizedPattern.split('/'), 0);
-}
-
-function matchSegments(
-  pathSegs: string[], pathIdx: number,
-  patternSegs: string[], patternIdx: number,
-): boolean {
-  if (pathIdx >= pathSegs.length && patternIdx >= patternSegs.length) return true;
-  if (patternIdx >= patternSegs.length) return false;
-  const pat = patternSegs[patternIdx];
-  if (pat === '**') {
-    for (let i = pathIdx; i <= pathSegs.length; i++) {
-      if (matchSegments(pathSegs, i, patternSegs, patternIdx + 1)) return true;
-    }
-    return false;
-  }
-  if (pathIdx >= pathSegs.length) return false;
-  if (globSegmentToRegex(pat).test(pathSegs[pathIdx])) {
-    return matchSegments(pathSegs, pathIdx + 1, patternSegs, patternIdx + 1);
-  }
-  return false;
-}
-
-function matchGlob(filename: string, pattern: string): boolean {
-  if (pattern === '*') return true;
-  const regexStr = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
-  return new RegExp(`^${regexStr}$`, 'i').test(filename);
 }

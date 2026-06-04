@@ -8,7 +8,8 @@ export function toolExecutionUserHint(toolName: string): string {
   const hints: Record<string, string> = {
     read_file: '正在读取文件（大文件将自动截断）…',
     edit_file: '正在编辑文件, 请稍后...',
-    search_codebase: '正在搜索代码库，可能需要几秒…',
+    glob: '正在按路径匹配文件…',
+    grep: '正在搜索代码内容…',
     parse_document: '正在解析文档，较大文件可能较慢…',
     run_command: '正在执行命令…',
     fs_operation: '正在操作文件或目录…',

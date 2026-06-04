@@ -20,6 +20,7 @@ import {
   formatToolOutputWithDiff,
   readFileTextOrEmpty,
 } from '../file-change-diff.js';
+import { checkReadBeforeEdit, markFileRead } from '../read-before-edit.js';
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -32,7 +33,7 @@ function safePath(filePath: string, baseDir: string): string {
  * 创建文件工具集。
  * @param workDir - 工作目录根路径，所有文件操作限制在此目录内
  */
-export function createFileTools(workDir: string): RegisteredTool[] {
+export function createFileTools(workDir: string, sessionId = 'default'): RegisteredTool[] {
   return [
     // ---- 读取文件 ----
     {
@@ -74,6 +75,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
           const numbered = selectedLines
             .map((line, idx) => `${start + idx}: ${line}`)
             .join('\n');
+          markFileRead(workDir, rawPath, sessionId);
           return {
             success: true,
             output: `${rawPath} (lines ${start}-${end}, total ${totalLines})\n${'─'.repeat(40)}\n${numbered}`,
@@ -98,6 +100,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
           truncated = true;
         }
         if (!truncated) {
+          markFileRead(workDir, rawPath, sessionId);
           return { success: true, output: content };
         }
         const totalLines = allLines.length;
@@ -105,6 +108,7 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         const header =
           `${rawPath} (partial read: lines 1–${lines.length}/${totalLines}, chars ~${body.length}/${totalChars} — use offset and limit to read more)\n` +
           `${'─'.repeat(40)}`;
+        markFileRead(workDir, rawPath, sessionId);
         return { success: true, output: `${header}\n${body}` };
       },
     },
@@ -139,6 +143,10 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         }
         const filePath = safePath(rawPath, workDir);
         const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
+        if (oldContent.length > 0) {
+          const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
+          if (readErr) return { success: false, output: '', error: readErr };
+        }
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, content, (args.encoding || 'utf-8') as BufferEncoding);
@@ -175,7 +183,17 @@ export function createFileTools(workDir: string): RegisteredTool[] {
         },
       },
       handler: async (args) => {
-        const filePath = safePath(args.path, workDir);
+        const rawPath = args.path;
+        const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
+        if (readErr) {
+          try {
+            await fs.access(safePath(rawPath, workDir));
+            return { success: false, output: '', error: readErr };
+          } catch {
+            /* new file via append — no prior read required */
+          }
+        }
+        const filePath = safePath(rawPath, workDir);
         const appendContent = String(args.content ?? '');
         const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
         await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -210,6 +228,8 @@ export function createFileTools(workDir: string): RegisteredTool[] {
       handler: async (args) => {
         const rawPath = args.path || args.filePath;
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
+        if (readErr) return { success: false, output: '', error: readErr };
         const filePath = safePath(rawPath, workDir);
         const content = await fs.readFile(filePath, 'utf-8');
 

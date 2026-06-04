@@ -8,10 +8,10 @@ import { prepareAssistantContentForHistory } from './text-format-tool-call-parse
 /** 硬压缩注入会话笔记的最大字符（防止摘要独占 post-compact 预算） */
 export const MAX_SESSION_NOTES_COMPACT_CHARS = 120_000;
 
-/** 微压缩（light）时，超过若干轮后可清空正文的工具（对齐 claude-code microcompact 思想） */
+/** 微压缩（light）时，超过若干轮后可清空正文的工具 */
 export const LIGHT_MICROCLEAR_TOOLS = new Set<string>([
-  'search_codebase',
-  'grep_file',
+  'glob',
+  'grep',
   'run_command',
   'web_search',
   'fetch_url',

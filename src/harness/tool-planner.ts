@@ -46,9 +46,9 @@ function recommendedFlow(intent: TaskIntent): string[] {
     case 'test':
       return ['run the failing test or check', 'inspect the failure and related files', 'edit the implementation or test', 'rerun the focused test'];
     case 'refactor':
-      return ['inspect references/usages', 'apply batch or patch edits', 'run tests/typecheck when practical'];
+      return ['glob/grep for references', 'read_file targets', 'apply batch or patch edits', 'run tests/typecheck when practical'];
     case 'inspect':
-      return ['search or read relevant files only', 'answer from evidence'];
+      return ['glob/grep then read_file as needed', 'answer from evidence'];
     case 'docs':
       return ['inspect existing docs/source', 'edit documentation', 'confirm deliverables with file_info or read_file when applicable'];
     default:
