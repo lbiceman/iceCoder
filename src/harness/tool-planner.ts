@@ -11,11 +11,15 @@ export interface ToolPlan {
   suggestedTools: string[];
 }
 
-export function buildToolPlan(goal: string, snapshot?: TaskStateSnapshot): ToolPlan {
+export function buildToolPlan(
+  goal: string,
+  snapshot?: TaskStateSnapshot,
+  workspaceRoot?: string,
+): ToolPlan {
   const intent = snapshot?.intent ?? inferIntent(goal);
   const flow = recommendedFlow(intent);
-  const verificationHint = snapshot && snapshotHasUnconfirmedFileDeliverables(snapshot)
-    ? 'Confirm each changed file with file_info or read_file before final response.'
+  const verificationHint = snapshot && snapshotHasUnconfirmedFileDeliverables(snapshot, workspaceRoot)
+    ? 'Confirm each existing changed file with file_info or read_file before final response.'
     : undefined;
   const suggestedTools = [...(INTENT_TOOL_SUGGESTIONS[intent] ?? INTENT_TOOL_SUGGESTIONS.question)];
   return { intent, recommendedFlow: flow, verificationHint, suggestedTools };

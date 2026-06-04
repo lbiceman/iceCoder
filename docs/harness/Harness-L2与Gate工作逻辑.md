@@ -1,7 +1,8 @@
 # Harness、L2 监管与 Gate 收尾工作逻辑
 
-> 版本：2026-05-28  
-> 适用范围：iceCoder Harness 主循环、Supervisor（L2）、Verification Gate / Acceptance Gate  
+> 版本：2026-06-04  
+> 适用范围：iceCoder Harness 主循环、Verification Gate / Acceptance Gate  
+> **L2 监管层专题**（相位机、纠偏、takeover、公理 I1–I6）已迁至 [`../L2监管层详解.md`](../L2监管层详解.md)；本文 §4 保留精简索引。  
 > 相关源码：`src/harness/harness.ts`、`harness-round-no-tools.ts`、`harness-tool-round.ts`、`supervisor/*`、`incomplete-completion.ts`、`document-deliverable.ts`
 
 ---
@@ -218,9 +219,11 @@ Stop Hook 本身只识别模型回复中的**前向未完成承诺**（如「我
 
 ---
 
-## 4. L2 Supervisor 监管逻辑
+## 4. L2 Supervisor 监管逻辑（精简）
 
-L2 由 `SupervisorRuntimeBridge` 承载，`ICE_SUPERVISOR_MODE` 控制 off / shadow / 活跃。
+> 完整说明见 [`../L2监管层详解.md`](../L2监管层详解.md)。
+
+L2 由 `SupervisorRuntimeBridge` 承载；档位见 `data/config.json` 的 `supervisorMode`（`ICE_SUPERVISOR_MODE` 已废弃）。
 
 ### 4.1 核心组件
 

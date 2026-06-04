@@ -70,12 +70,8 @@ function pushAssistantForHistory(
   response: LLMResponse,
 ): void {
   const content = prepareAssistantContentForHistory(response.content);
-  if (!content && !response.reasoningContent) return;
-  msgs.push({
-    role: 'assistant',
-    content,
-    reasoningContent: response.reasoningContent,
-  });
+  if (!content) return;
+  msgs.push({ role: 'assistant', content });
 }
 
 export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
@@ -83,6 +79,7 @@ export interface NoToolRoundDeps extends CheckpointDeps, ResilienceBridgeDeps {
   memoryIntegration: HarnessMemoryIntegration;
   stopHookManager: StopHookManager;
   graphExecutor: GraphExecutor;
+  workspaceRoot?: string;
 }
 
 export interface HandleNoToolCallsArgs {
@@ -148,7 +145,7 @@ export async function handleNoToolCalls(
   ) {
     state.noToolExecutionRecoveryCount++;
     console.log('[harness] 检测到正文中嵌入工具调用（未走 API），注入恢复提示并继续');
-    if (response.content || response.reasoningContent || rawTextForEmbedded) {
+    if (rawTextForEmbedded || response.content) {
       pushAssistantForHistory(msgs, {
         ...response,
         content: rawTextForEmbedded || response.content,
@@ -214,9 +211,7 @@ export async function handleNoToolCalls(
       `[harness] max-output-tokens 恢复 (${state.maxOutputTokensRecoveryCount}/${MAX_OUTPUT_TOKENS_RECOVERY_LIMIT})`,
     );
 
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
+    pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
       content: 'Continue directly — do not apologize, do not restate previous content. If the last response was cut off mid-way, continue from where it left off. Split remaining work into smaller steps.',
@@ -266,9 +261,7 @@ export async function handleNoToolCalls(
     console.log(
       `[harness] LLM 空响应/仅思考重试 (${state.emptyResponseRetryCount}/${MAX_EMPTY_RESPONSE_RETRIES})`,
     );
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
+    pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
       content: 'You must call tools to continue the task. Do not stop with thinking only — run verification or edit files now.',
@@ -286,15 +279,12 @@ export async function handleNoToolCalls(
       `[harness] reasoning-only 恢复 (${state.reasoningOnlyRecoveryCount}/${MAX_REASONING_ONLY_RECOVERY})`,
     );
     msgs.push({
-      role: 'assistant',
-      content: prepareAssistantContentForHistory(response.content) || '',
-      reasoningContent: response.reasoningContent,
-    });
-    msgs.push({
       role: 'user',
       content: buildIncompleteContinuationPrompt(
         state.taskState.snapshot(),
         state.repoContext.snapshot(),
+        undefined,
+        deps.workspaceRoot,
       ),
     });
     state.transition = 'no_tool_execution_recovery';
@@ -331,10 +321,15 @@ export async function handleNoToolCalls(
 
   state.emptyResponseRetryCount = 0;
 
+  // 删除/cleanup 后同步 filesChanged，避免 Gate 仍要求 read 已不存在的文件
+  state.taskState.reconcileMissingChangedFiles(deps.workspaceRoot);
+  state.repoContext.reconcileMissingChangedFiles(deps.workspaceRoot);
+
   const taskSnap = state.taskState.snapshot();
   const repoSnap = state.repoContext.snapshot();
+  const workspaceRoot = deps.workspaceRoot;
   const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
-  const pendingWork = hasPendingWork(taskSnap, state.taskAcceptance);
+  const pendingWork = hasPendingWork(taskSnap, state.taskAcceptance, workspaceRoot);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
   const hasToolCallSinceUser = hasAssistantToolCallAfterLatestRealUser(msgs);
@@ -391,9 +386,10 @@ export async function handleNoToolCalls(
     taskSnap.filesChanged,
     toolNames,
     acceptanceIncomplete,
+    workspaceRoot,
   );
-  state.taskState.tryMarkFileDeliverablesVerified();
-  let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
+  state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
+  let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
 
   const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
     const defaultSuffix = canVerifyDeliverable
@@ -401,9 +397,7 @@ export async function handleNoToolCalls(
       : '\n任务因验收无法继续而暂停：当前工具集缺少验收所需工具。';
     const suffix = detail ? `\n${detail}` : defaultSuffix;
     const content = sanitizeAssistantContentForUser(response.content) + suffix;
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
+    pushAssistantForHistory(msgs, response);
     deps.loopController.stop('verification_exhausted');
     const finalState = deps.loopController.getState();
     logger.loopStop('verification_exhausted', finalState.currentRound, finalState.totalToolCalls);
@@ -437,10 +431,10 @@ export async function handleNoToolCalls(
   } else if (blockVerification) {
     if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
       if (taskSnap.filesChanged.length > 0) {
-        state.taskState.reconcileFileDeliverablesAfterWrite();
+        state.taskState.reconcileFileDeliverablesAfterWrite(workspaceRoot);
       }
-      state.taskState.tryMarkFileDeliverablesVerified();
-      blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete);
+      state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
+      blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
       state.verificationGateContinuationCount = 0;
       if (blockVerification) {
         console.log('[harness] verification gate 连续注入已达上限，强制结束');
@@ -454,16 +448,14 @@ export async function handleNoToolCalls(
       console.log(
         `[harness] verification gate 注入 (${state.verificationGateContinuationCount}/${MAX_VERIFICATION_GATE_CONTINUATIONS})`,
       );
-      if (response.content || response.reasoningContent) {
-        pushAssistantForHistory(msgs, response);
-      }
+      pushAssistantForHistory(msgs, response);
       const prompt = acceptanceIncomplete && state.taskAcceptance
         ? state.taskAcceptance.buildAcceptancePrompt()
-        : state.taskState.buildVerificationPrompt();
+        : state.taskState.buildVerificationPrompt(workspaceRoot);
       const injectionParts = [
         prompt,
         '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot())),
+        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot(), workspaceRoot)),
       ];
       if (state.verificationGateContinuationCount === verificationGateHalfPoint()) {
         console.log('[harness] verification gate 半程叠加 no_tool 强提示');
@@ -494,9 +486,7 @@ export async function handleNoToolCalls(
     )
   ) {
     state.noToolExecutionRecoveryCount++;
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
+    pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
       content: buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap),
@@ -513,13 +503,11 @@ export async function handleNoToolCalls(
     console.log(
       `[harness] 验收/诊断未清，拦截 model_done (${state.prematureCompletionRecoveryCount}/${MAX_PREMATURE_COMPLETION_RECOVERY})`,
     );
-    if (response.content || response.reasoningContent) {
-      pushAssistantForHistory(msgs, response);
-    }
+    pushAssistantForHistory(msgs, response);
     injectContinuationUserMessage(deps, state, msgs, [
-      buildIncompleteContinuationPrompt(taskSnap, repoSnap, state.taskAcceptance),
+      buildIncompleteContinuationPrompt(taskSnap, repoSnap, state.taskAcceptance, workspaceRoot),
       '',
-      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
+      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap, workspaceRoot)),
     ].join('\n'));
     await saveTaskCheckpoint(deps, 'paused', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
     await resilienceSaveCheckpoint(deps, 'verification_started', state);
@@ -528,7 +516,7 @@ export async function handleNoToolCalls(
   }
 
   state.stopHookContinuationCount = 0;
-  state.taskState.tryMarkFileDeliverablesVerified();
+  state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
 
   if (deps.graphExecutor?.hasGraph()) {
     const ar = deps.graphExecutor.advanceOrComplete();

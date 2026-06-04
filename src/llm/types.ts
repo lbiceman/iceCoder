@@ -20,7 +20,7 @@ export interface UnifiedMessage {
   content: string | ContentBlock[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
-  /** 思考过程内容（DeepSeek 等模型的 reasoning_content，需原样传回 API） */
+  /** @deprecated 历史兼容；发送 API 前会剥离，不再写入新消息 */
   reasoningContent?: string;
   /** C 类纠偏注入：硬压缩时保留在 recent 后缀，避免 lifecycle/recovery 提示被摘要丢弃 */
   preserveOnCompaction?: boolean;
@@ -54,7 +54,7 @@ export interface LLMResponse {
   toolCalls?: ToolCall[];
   usage: TokenUsage;
   finishReason: 'stop' | 'tool_calls' | 'length' | 'error';
-  /** 思考过程内容（DeepSeek 等模型） */
+  /** 当轮 API 返回的思考文本；仅运行时/前端展示，不入历史、不回传 API */
   reasoningContent?: string;
 }
 
@@ -75,9 +75,14 @@ export interface TokenUsage {
 }
 
 /**
+ * 流式分片：content 为可见正文；reasoning 为思考链（仅展示，不进历史）。
+ */
+export type StreamCallbackChunk = string | { channel: 'reasoning'; delta: string };
+
+/**
  * LLM 流式响应的回调类型。
  */
-export type StreamCallback = (chunk: string, done: boolean) => void;
+export type StreamCallback = (chunk: StreamCallbackChunk, done: boolean) => void;
 
 /**
  * LLM 调用选项，支持通用参数和提供者特定参数。

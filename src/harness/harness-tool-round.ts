@@ -170,7 +170,6 @@ export async function runHarnessToolRound(
     role: 'assistant',
     content: prepareAssistantContentForHistory(response.content || ''),
     toolCalls: response.toolCalls,
-    reasoningContent: response.reasoningContent,
   });
 
   let toolCallsForGate = response.toolCalls ?? [];
@@ -336,6 +335,10 @@ export async function runHarnessToolRound(
   );
 
   state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
+
+  // cleanup/删除命令执行后，从 filesChanged 剔除已不存在的路径，避免下轮 Gate 要求重读
+  state.taskState.reconcileMissingChangedFiles(deps.workspaceRoot);
+  state.repoContext.reconcileMissingChangedFiles(deps.workspaceRoot);
 
   maybeInjectParallelBudgetBlockHint({
     state,

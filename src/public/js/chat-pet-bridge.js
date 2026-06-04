@@ -256,6 +256,9 @@ window.ChatPetBridge = (function () {
       case 'stream_delta':
         sessionPet.setState('read');
         break;
+      case 'reasoning_stream_delta':
+        sessionPet.setState('thinking');
+        break;
       case 'tool_output':
         break;
       case 'memory_event':

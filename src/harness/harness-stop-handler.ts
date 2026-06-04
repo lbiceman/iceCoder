@@ -20,6 +20,7 @@ import {
   sanitizeAssistantContentForUser,
   AssistantVisibleStreamFilter,
 } from './text-tool-call-salvage.js';
+import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
 
 export interface StopHandlerDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -128,12 +129,13 @@ export async function handleHarnessStop(
     if (streamFn) {
       const streamFilter = new AssistantVisibleStreamFilter();
       const finalResponse = await streamFn(messages, (chunk, done) => {
-        if (!done && chunk) {
-          const safe = streamFilter.feed(chunk);
-          if (safe) {
-            onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: safe });
-          }
-        }
+        dispatchStreamChunkToStep(
+          chunk,
+          done,
+          streamFilter,
+          state.currentRound,
+          onStep,
+        );
       }, { tools: [] });
       const tail = streamFilter.flush();
       if (tail) {

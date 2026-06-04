@@ -1,3 +1,23 @@
+/* 流式思考块（仅当轮展示，不入库） */
+.message-thinking {
+  opacity: 0.72;
+  border-left: 2px solid var(--text-muted, #888);
+  padding-left: 10px;
+}
+.message-thinking .msg-label {
+  font-size: 0.8em;
+  color: var(--text-muted, #888);
+  letter-spacing: 0.02em;
+}
+.message-thinking .msg-thinking-body {
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
 /* ===== Chat Page ===== */
 .chat-page {
   display: flex;
@@ -133,6 +153,10 @@
   align-items: stretch;
   pointer-events: auto;
   overflow-anchor: none;
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+/* 仅滚动过程中提升合成层，静止后由 JS 切回 top 定位以保持文字锐利 */
+.chat-vhistory-layer.is-scrolling .chat-vhistory-slot {
   will-change: transform;
 }
 /* 虚拟槽内复刻 .chat-messages 的气泡左右对齐 */

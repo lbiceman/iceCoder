@@ -20,6 +20,23 @@ describe('finalizeMessagesForApi', () => {
     expect(out[1]?.toolCallId).toBe('tc-1');
     expect(out[2]?.role).toBe('user');
   });
+
+  it('strips reasoningContent from assistant messages', () => {
+    const input: UnifiedMessage[] = [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: 'ok',
+        reasoningContent: 'internal chain of thought',
+        toolCalls: [{ id: 'tc-1', name: 'read_file', arguments: { path: 'a.ts' } }],
+      },
+      { role: 'tool', toolCallId: 'tc-1', content: 'file body' },
+    ];
+    const out = finalizeMessagesForApi(input);
+    const assistant = out.find((m) => m.role === 'assistant');
+    expect(assistant?.content).toBe('ok');
+    expect(assistant && 'reasoningContent' in assistant).toBe(false);
+  });
 });
 
 describe('isToolCallPairingError', () => {

@@ -3,10 +3,13 @@ import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
   extractDeletedPathsFromCommand,
+  gateConfirmationPaths,
   hasUnconfirmedFileDeliverables,
   isFileDeliverableConfirmationTool,
+  isMissingFileToolResult,
   isNonEmptyFileInfoOutput,
   isNonEmptyReadOutput,
+  missingChangedFilePaths,
   normalizeDeliverablePath,
   pathsReferToSameFile,
   verificationConfirmationStats,
@@ -78,11 +81,21 @@ export class TaskState {
       return;
     }
 
+    const path = extractPathLikeArg(toolCall.arguments);
+    if (
+      !result.success
+      && path
+      && FILE_READ_TOOLS.has(toolCall.name)
+      && isMissingFileToolResult(result)
+    ) {
+      this.removeChangedFileDeliverable(path);
+      return;
+    }
+
     if (!result.success) return;
 
     if (FILE_READ_TOOLS.has(toolCall.name)) {
       this.phase = this.phase === 'intent' ? 'context' : this.phase;
-      const path = extractPathLikeArg(toolCall.arguments);
       if (path) {
         this.filesRead.add(path);
         this.tryConfirmFileDeliverable(toolCall.name, path, result);
@@ -91,7 +104,6 @@ export class TaskState {
 
     if (FILE_WRITE_TOOLS.has(toolCall.name)) {
       this.phase = 'editing';
-      const path = extractPathLikeArg(toolCall.arguments);
       if (path) {
         this.filesChanged.add(path);
         this.bumpFileDeliverableWriteVersion(path);
@@ -107,15 +119,16 @@ export class TaskState {
     return classifyChangedFiles([...this.filesChanged]);
   }
 
-  buildVerificationPrompt(): string {
+  buildVerificationPrompt(workspaceRoot?: string): string {
     const all = [...this.filesChanged];
-    const paths = writeConfirmationPaths(all);
+    const paths = gateConfirmationPaths(all, workspaceRoot);
     const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
     const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
     const { pending, required, exempt } = verificationConfirmationStats(
       all,
       writeVersions,
       confirmVersions,
+      workspaceRoot,
     );
 
     const maxList = 12;
@@ -128,7 +141,7 @@ export class TaskState {
       : '';
 
     const exemptNote = exempt > 0
-      ? `\n(${exempt} file(s) exempt: dot-dir (.foo/...), temp suffix, or verificationExemptDirs — no confirmation required)`
+      ? `\n(${exempt} file(s) exempt: temp/ephemeral script, dot-dir (.foo/...), or verificationExemptDirs — no confirmation required)`
       : '';
 
     return `[System] You changed files but have not confirmed them yet.
@@ -175,40 +188,57 @@ Do not claim the task is complete before confirmation.`;
    * 纯查询：是否应拦截 model_done（无副作用）。
    * Acceptance Gate 或任一变更文件未写后确认时可 block；run_command 验收不作为 Gate 条件。
    */
-  isVerificationBlockingFinal(acceptanceIncomplete?: boolean): boolean {
+  isVerificationBlockingFinal(acceptanceIncomplete?: boolean, workspaceRoot?: string): boolean {
     if (acceptanceIncomplete) return true;
     if (this.filesChanged.size === 0) return false;
-    return !this.areAllFileDeliverablesConfirmed();
+    return !this.areAllFileDeliverablesConfirmed(workspaceRoot);
   }
 
   /** 查询前同步 file_deliverable 验收状态（checkpoint / resilience 用） */
-  isVerificationBlockingFinalAfterSync(acceptanceIncomplete?: boolean): boolean {
-    this.tryMarkFileDeliverablesVerified();
-    return this.isVerificationBlockingFinal(acceptanceIncomplete);
+  isVerificationBlockingFinalAfterSync(
+    acceptanceIncomplete?: boolean,
+    workspaceRoot?: string,
+  ): boolean {
+    this.tryMarkFileDeliverablesVerified(workspaceRoot);
+    return this.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
   }
 
   /** 文件交付物已全部写后确认时，同步 verificationStatus → passed */
-  tryMarkFileDeliverablesVerified(): boolean {
+  tryMarkFileDeliverablesVerified(workspaceRoot?: string): boolean {
     if (this.filesChanged.size === 0) return false;
-    if (!this.areAllFileDeliverablesConfirmed()) return false;
+    if (!this.areAllFileDeliverablesConfirmed(workspaceRoot)) return false;
     this.markVerificationPassed();
     return true;
   }
 
-  areAllFileDeliverablesConfirmed(): boolean {
+  areAllFileDeliverablesConfirmed(workspaceRoot?: string): boolean {
     return !hasUnconfirmedFileDeliverables(
       [...this.filesChanged],
       mapToVersionRecord(this.fileDeliverableWriteVersion),
       mapToVersionRecord(this.fileDeliverableConfirmVersion),
+      workspaceRoot,
     );
   }
 
   /** verification gate 熔断：写后版本均已确认时自动 passed */
-  reconcileFileDeliverablesAfterWrite(): boolean {
+  reconcileFileDeliverablesAfterWrite(workspaceRoot?: string): boolean {
     if (this.filesChanged.size === 0) return false;
-    if (!this.areAllFileDeliverablesConfirmed()) return false;
+    if (!this.areAllFileDeliverablesConfirmed(workspaceRoot)) return false;
     this.markVerificationPassed();
     return true;
+  }
+
+  /**
+   * 清理已删除的变更路径（cleanup 脚本 / fs delete 后磁盘不存在）。
+   * 返回移除的路径数。
+   */
+  reconcileMissingChangedFiles(workspaceRoot?: string): number {
+    const missing = missingChangedFilePaths([...this.filesChanged], workspaceRoot);
+    let removed = 0;
+    for (const path of missing) {
+      if (this.removeChangedFileDeliverable(path)) removed++;
+    }
+    return removed;
   }
 
   private removeChangedFileDeliverable(path: string): boolean {

@@ -7,7 +7,8 @@ import {
 } from './harness-constants.js';
 import { buildLlmRoundLogFields, isRetryableError } from './harness-llm-log.js';
 import { isAbortError } from '../llm/abort-error.js';
-import { TextToolCallStreamFilter, AssistantVisibleStreamFilter } from './text-tool-call-salvage.js';
+import { AssistantVisibleStreamFilter } from './text-tool-call-salvage.js';
+import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
 import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
@@ -112,12 +113,7 @@ export async function callHarnessLlm(
       try {
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
-          if (!done && chunk) {
-            const safe = streamFilter.feed(chunk);
-            if (safe) {
-              onStep?.({ type: 'stream_delta', iteration: round, delta: safe });
-            }
-          }
+          dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep);
         }, { tools: currentTools });
         const tail = streamFilter.flush();
         if (tail) {

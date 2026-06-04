@@ -17,6 +17,8 @@ description: |
 
 | 路径 | 角色 |
 |------|------|
+| [`docs/双模机制详解.md`](../../../docs/双模机制详解.md) | 双模 L0/L1/L2、任务图、反构图**总览** |
+| [`docs/L2监管层详解.md`](../../../docs/L2监管层详解.md) | L2 流程、相位机、纠偏机制**专题**（实现对照） |
 | [`docs/双模方案2.md`](../../../docs/双模方案2.md) | 设计与接口**权威来源**（V1.3.7 冻结） |
 | [`docs/双模落地缺口.md`](../../../docs/双模落地缺口.md) | 开发排期 / 缺口对照 / §10 批次表 / §11 DoD |
 | [`docs/任务执行文档.md`](../../../docs/任务执行文档.md) | Batch 1–6 历史 / 6 场景验收 prompt |
@@ -64,7 +66,7 @@ description: |
 |----|------|
 | P2-1 RecoveryBoundary 4×4×4 矩阵（64 用例） | `test/harness/recovery-boundary.test.ts` |
 | P2-2 任务执行文档 6 场景 e2e | `test/e2e/dual-mode-scenarios.test.ts` + `_fixtures/dual-mode-mocks.ts` |
-| P2-3 L2 流程图 | `docs/双模 L2 流程图.md` |
+| P2-3 L2 流程图 | `docs/L2监管层详解.md` §5、§7.2（原 `双模 L2 流程图` 已合并） |
 | P2-4 firstRoundGraph 集成 | `test/harness/execution-mode-harness.test.ts` + `test/harness/harness-round-prep-first-graph.test.ts` |
 
 e2e fixture 必须注入 `supervisorBridge: createSupervisorRuntimeBridge(...)`，否则 adaptive §I3 门禁不生效。

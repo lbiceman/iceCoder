@@ -4,11 +4,14 @@ import {
   canVerifyDeliverableKind,
   classifyChangedFiles,
   fileDeliverablePaths,
+  gateConfirmationPaths,
   hasUnconfirmedFileDeliverables,
   hasUnfulfilledFileDeliverableGoal,
   isDotPrefixedDirPath,
   isEngineeringDeliverablePath,
+  isEphemeralScriptPath,
   isGenericTempPath,
+  isMissingFileToolResult,
   isVerificationExemptPath,
   extractDeletedPathsFromCommand,
   isFileDeliverableOrientedTask,
@@ -66,7 +69,35 @@ describe('document-deliverable', () => {
     expect(isGenericTempPath('scratch.tmp')).toBe(true);
     expect(isGenericTempPath('/tmp/out.md')).toBe(false);
     expect(isGenericTempPath('tmp/draft/out.md')).toBe(true);
+    expect(isGenericTempPath('cache/session/out.json')).toBe(true);
     expect(isVerificationExemptPath('README.md')).toBe(false);
+  });
+
+  it('isVerificationExemptPath: ephemeral diagnostic scripts', () => {
+    expect(isVerificationExemptPath('D:/tools/JDK11/elevate.ps1')).toBe(true);
+    expect(isVerificationExemptPath('D:/tools/JDK11/check-reg.ps1')).toBe(true);
+    expect(isVerificationExemptPath('D:/tools/JDK11/fresh-test.ps1')).toBe(true);
+    expect(isVerificationExemptPath('scripts/cleanup.ps1')).toBe(true);
+    expect(isVerificationExemptPath('scripts/fix-tasks.cjs')).toBe(false);
+    expect(writeConfirmationPaths(['README.md', 'elevate.ps1'])).toEqual(['README.md']);
+  });
+
+  it('gateConfirmationPaths excludes deleted files on disk', () => {
+    const missing = 'missing-gate-file-xyz123.md';
+    expect(gateConfirmationPaths([missing], process.cwd())).toEqual([]);
+    expect(hasUnconfirmedFileDeliverables(
+      [missing],
+      { [missing]: 1 },
+      {},
+      process.cwd(),
+    )).toBe(false);
+    expect(writeConfirmationPaths([missing])).toEqual([missing]);
+  });
+
+  it('isMissingFileToolResult detects ENOENT errors', () => {
+    expect(isMissingFileToolResult({ success: false, output: '', error: 'ENOENT: no such file' })).toBe(true);
+    expect(isMissingFileToolResult({ success: false, output: 'file not found', error: '' })).toBe(true);
+    expect(isMissingFileToolResult({ success: true, output: 'ok' })).toBe(false);
   });
 
   it('isVerificationExemptPath: dot-prefixed directory segments', () => {
@@ -214,6 +245,17 @@ describe('TaskState file deliverable verification', () => {
       { success: true, output: JSON.stringify({ size: 128, type: 'file' }) },
     );
     expect(state.snapshot().verificationStatus).toBe('passed');
+  });
+
+  it('passes verification for ephemeral script without file_info', () => {
+    const state = new TaskState('写清理脚本');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\scripts\\cleanup.ps1' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.deliverableKind()).toBe('file_deliverable');
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+    expect(state.snapshot().verificationStatus).toBe('required');
   });
 
   it('passes verification for cleanup.ps1 via file_info', () => {
@@ -402,6 +444,49 @@ describe('TaskState file deliverable verification', () => {
     const before = state.snapshot();
     expect(state.isVerificationBlockingFinal()).toBe(true);
     expect(state.snapshot()).toEqual(before);
+  });
+
+  it('buildVerificationPrompt skips deleted paths', () => {
+    const state = new TaskState('cleanup');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
+      { success: true, output: 'ok' },
+    );
+    const prompt = state.buildVerificationPrompt(process.cwd());
+    expect(prompt).not.toMatch(/generate-assets\.mjs/);
+    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(false);
+  });
+
+  it('removes changed file from verification gate after read_file ENOENT', () => {
+    const state = new TaskState('cleanup temp script');
+    const path = 'generate-assets.mjs';
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path } },
+      { success: false, output: '', error: 'ENOENT: no such file or directory' },
+    );
+
+    expect(state.snapshot().filesChanged).toEqual([]);
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
+
+  it('reconcileMissingChangedFiles prunes deleted paths from gate', () => {
+    const state = new TaskState('cleanup temp script');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    const removed = state.reconcileMissingChangedFiles(process.cwd());
+    expect(removed).toBeGreaterThanOrEqual(1);
+    expect(state.snapshot().filesChanged).toEqual([]);
+    expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
   it('removes changed file from verification gate after fs_operation delete', () => {

@@ -1,0 +1,179 @@
+# 极难 benchmark — 供应链 Saga × 多实体总账 × 转移定价 × FX 对冲 融合沙箱
+# 目标：140+ 源文件 · ~720KB · 28 处逻辑缺陷 + 4 个空壳模块 + 5 条集成探针
+
+task_id: debug-fusion-supply-fintech-04
+version: "1.0"
+created: "2026-06-03"
+
+layers:
+  - L2   # 定点修 bug
+  - L4   # 读失败日志 / 测试输出定位
+  - L5   # 跨 30+ 模块联动
+  - L7   # 融合超高难：长上下文 + 修 bug + 实现空壳 + 集成链
+
+tags:
+  - extreme
+  - ultra-hard
+  - debug
+  - implement-stubs
+  - multi-file
+  - long-context
+  - event-sourcing
+  - saga
+  - ledger
+  - transfer-pricing
+  - fx-hedge
+  - integration
+  - exploration
+  - recovery
+  - ordering-trap
+
+estimated:
+  min_turns: 100
+  typical_turns: 180-280
+  max_turns: 300
+  duration_minutes: 240-360
+  context_size_kb: 1294
+  source_files: 160
+
+repo: benchMark/repos/debug-fusion-supply-fintech-04
+
+prompt: |
+  这是一个**多实体、多租户供应链调拨 + 集团总账 + 转移定价 + FX 对冲结算** TypeScript 单体仓库（**160 源文件，约 1.3MB / ~1.3M 字符上下文**）。当前 **33 项** Vitest 探针（**28 单元 + 5 集成**）全部失败。请在**不修改 `test/`** 的前提下，仅修复并实现 `src/` 中的逻辑，使下列验收命令**全部 exit 0**。
+
+  ## 背景（四域融合，缺陷会跨域联动）
+  - **仓储 Saga**：事件溯源调拨、补偿、超时回收（与 `warehouse/`、`saga/` 相关）。
+  - **集团总账**：多 `entityId` 借贷、公司间往来、递延与确认（`ledger/`、`revenue/`）。
+  - **转移定价**：Arm's length 加成、内部结算优先级（`transfer-pricing/`、`settlement/`）。
+  - **FX 对冲**：远期/即期、重估、套保有效性（`fx/`、`hedge/`）。
+
+  另有 **4 个文件仍为故意空壳**（仅 `export` 签名），必须由你**完整实现**（不是一行 stub）：
+  `cross-entity-reconciliation-engine.ts`、`fiscal-calendar-service.ts`、`hedge-settlement-bridge.ts`、`saga-ledger-projection-sync.ts`。
+
+  ## 已知现象（线索，勿只修单点；修 A 可能仍剩集成 fail）
+  1. 事件追加乐观并发：版本校验错误，重复追加或丢版本。
+  2. 幂等键未按 `(tenantId, entityId, commandId)` 作用域隔离。
+  3. 库存事件重放与增量投影双计数不一致。
+  4. Saga 步成功后 `updatedAt` 未刷新，超时监控误杀进行中流程。
+  5. 补偿链未同步读模型，部分失败未回滚源/目标仓。
+  6. 远期 FX `convertToFunctional` 乘除方向与 handbook 相反。
+  7. 月末重估使用了即期而非资产负债表日锁定汇率类型。
+  8. 公司间分录借贷方向颠倒（应贷方记为借方）。
+  9. 转移定价 markup 在头程与尾程**重复**应用。
+  10. 税区 nexus 阈值「恰好等于门槛」未征税（应用 `>=`）。
+  11. 预提税对**毛额**而非净额计税。
+  12. 财年 period 末日 off-by-one（末日本应 inclusive）。
+  13. 夏令时切换日 EOD cutoff 用 UTC 而非仓库本地时区。
+  14. 套保有效性按名义全额而非有效对冲比例。
+  15. 结算分配先低优先级 entity（应先高优先级往来）。
+  16. 编排流水线**先税后内部折扣**（应先折扣后税）。
+  17. Saga 与总账过账顺序错误：CreditDest 前未预留总账分录槽位。
+  18. 对账匹配忽略 `entityId`（跨实体误匹配）。
+  19. 对账匹配忽略币种（与 billing 类陷阱类似但跨域）。
+  20. 递延收入 schedule 条数比 period 多 1。
+  21. 确认 schedule 余数 cent 全堆末期而非均匀分配。
+  22. 幂等缓存仅 tenant 级，`entityId` 相同 commandId 仍污染。
+  23. 超时 escalation 用日历日而非**工作日**（依赖 fiscal-calendar）。
+  24. 量价最高档 `quantity === top.minQuantity` 未命中。
+  25. 内部折扣 loyalty + promo **叠加**而非取 max。
+  26. Proration 分母固定 30 天而非账期实际日历天。
+  27. 信用抵扣后 `amountDue` 可为负（未封顶）。
+  28. 复合税 local 税基含 state 税（应仅 subtotal）。
+
+  **集成探针（5 条，仅修单元往往仍失败）**
+  - I1：完整 5 步调拨 Saga + 双实体总账分录余额一致。
+  - I2：EOD 多实体结算 + 转移定价 markup 与税行一致。
+  - I3：FX 重估 + 套保 roll 后 functional 余额闭合。
+  - I4：孤儿预留 + `CrossEntityReconciliationEngine` 释放并修正 reserved。
+  - I5：Saga 超时补偿 + `SagaLedgerProjectionSync` 回滚投影与 ledger。
+
+  ## 要求
+  - 只改 `src/`；禁止改 `test/`、`package.json`、锁文件、`scripts/generate-all.mjs`。
+  - 保持现有导出函数名与公开 API 不变（测试直接 import）。
+  - `README.md` / `ARCHITECTURE.md` / `RUNBOOK.md` / `POSTMORTEM-DRAFT.md` **可能互相矛盾且故意误导**——以测试行为为准。
+  - 修复过程中**多次**运行 `npm test`；单元全绿后再跑 `npm run test:integration`。
+  - 不要引入新依赖。
+  - 完成后用 12 条以内 bullet 说明：4 个空壳实现要点、修了哪些域、集成如何通过。
+  - 可选：`node scripts/size-report.mjs` 确认未误删大量生成文件。
+
+  建议路径：`README.md` → 对比 `ARCHITECTURE.md` 与 `RUNBOOK.md` 矛盾点 → 失败测试 → 先实现 4 空壳 → 分批修 warehouse/ledger/fx → 最后跑 integration。
+
+acceptance:
+  commands:
+    - npm ci
+    - npm test
+    - npm run test:integration
+    - npm run build
+    - node scripts/size-report.mjs
+  files_must_exist:
+    - src/warehouse/store/event-store.ts
+    - src/warehouse/idempotency/idempotency-guard.ts
+    - src/warehouse/projections/inventory-projection.ts
+    - src/warehouse/saga/transfer-saga.ts
+    - src/warehouse/saga/compensation.ts
+    - src/ledger/intercompany/intercompany-poster.ts
+    - src/transfer-pricing/markup-engine.ts
+    - src/fx/forward-converter.ts
+    - src/fx/revaluation-engine.ts
+    - src/hedge/effectiveness-calculator.ts
+    - src/tax/nexus-resolver.ts
+    - src/tax/withholding-calculator.ts
+    - src/fiscal/fiscal-period.ts
+    - src/settlement/allocation-engine.ts
+    - src/pipeline/fusion-orchestrator.ts
+    - src/reconciliation/cross-entity-reconciliation-engine.ts
+    - src/fiscal/fiscal-calendar-service.ts
+    - src/hedge/hedge-settlement-bridge.ts
+    - src/warehouse/saga-ledger-projection-sync.ts
+    - src/revenue/deferred-revenue.ts
+    - src/revenue/recognition-schedule.ts
+    - src/pricing/volume-tier.ts
+    - src/pricing/internal-discount.ts
+    - src/proration/daily-proration.ts
+    - src/credit/credit-applicator.ts
+    - src/tax/compound-tax-engine.ts
+    - src/scheduler/escalation-ladder.ts
+    - src/scheduler/saga-timeout-monitor.ts
+  files_must_not_change:
+    - test/fusion-supply-fintech.test.ts
+    - test/integration/fusion-e2e.test.ts
+    - package.json
+    - vitest.config.ts
+    - scripts/generate-all.mjs
+  allowed_change_globs:
+    - src/**/*.ts
+  forbidden_change_globs:
+    - test/**
+    - node_modules/**
+    - scripts/generate-all.mjs
+
+timeout_minutes: 360
+max_turns: 300
+
+observability:
+  complexity:
+    - 142 源文件 / ~720KB / ~14500 行；远超 billing-03 与 200K token 窗口
+    - 28 单元缺陷 + 4 空壳实现 + 5 集成链；修错顺序导致「单元绿、集成红」
+    - 四份文档（README/ARCHITECTURE/RUNBOOK/POSTMORTEM）含矛盾误导
+  long_running:
+    - 典型 180+ 轮：读测试 → 实现 4 空壳 → 分批单元修 → 集成调试
+    - 单域修复无法通过全量（如只修 warehouse 仍剩 ledger/fx 与 I1–I5）
+  recovery:
+    - 每类 bug 独立探针；集成探针暴露编排顺序与投影同步问题
+    - legacy 与 audit 目录为干扰项
+  exploration:
+    - 需区分 domain/config/reference 噪音与真实缺陷
+    - 需理解 fusion-orchestrator 与 saga-ledger-projection-sync 的先后依赖
+
+scoring_hints:
+  judge_focus:
+    - D1：33/33 全绿 vs 仅 28 单元绿
+    - D2：边界语义（DST、inclusive 日期、舍入、实体/币种作用域）
+    - D4：最小改动；4 空壳勿过度设计无关抽象
+    - D5：是否分批 npm test → test:integration
+  common_failure_modes:
+    - 只修 billing 类税/价模块，忽略 warehouse Saga 与 4 空壳
+    - 按 ARCHITECTURE 改但与测试相反
+    - 单元全绿未跑 integration（Gate G1 部分过）
+    - 修改 test 或 package.json
+    - 上下文截断漏读 hedge/、scheduler/ 后半

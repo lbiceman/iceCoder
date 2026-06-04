@@ -247,6 +247,7 @@ export interface HarnessStepEvent {
     | 'context_usage'
     | 'final'
     | 'stream_delta'
+    | 'reasoning_stream_delta'
     | 'tool_output'
     | 'memory_event'
     | 'execution_plan_init'
@@ -261,7 +262,7 @@ export interface HarnessStepEvent {
     | 'execution_mode_exit';
   iteration?: number;
   content?: string;
-  /** 流式输出的增量文本（仅 stream_delta 类型） */
+  /** 流式输出的增量文本（stream_delta / reasoning_stream_delta） */
   delta?: string;
   /** 工具执行中给用户看的提示（仅 tool_progress） */
   phase?: 'running';
@@ -331,6 +332,6 @@ export type ChatFunction = (
  */
 export type StreamFunction = (
   messages: UnifiedMessage[],
-  callback: (chunk: string, done: boolean) => void,
+  callback: import('../llm/types.js').StreamCallback,
   options: { tools: ToolDefinition[] },
 ) => Promise<LLMResponse>;

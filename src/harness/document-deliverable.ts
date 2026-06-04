@@ -6,9 +6,11 @@
  * - none：无写文件
  */
 
+import type { ToolResult } from '../tools/types.js';
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import { stripLeadingCdPrefix } from './task-acceptance-tracker.js';
 import { isProjectCustomExemptPath } from './verification-exempt-config.js';
+import { workspaceFileExists } from './workspace-path-guard.js';
 
 export type DeliverableKind = 'file_deliverable' | 'engineering' | 'none';
 
@@ -83,9 +85,32 @@ export function isGenericTempPath(path: string): boolean {
   const base = segments[segments.length - 1] ?? norm;
   if (/\.(tmp|temp|bak)$/.test(base)) return true;
   if (base.endsWith('~')) return true;
-  // 工作区相对 tmp/、temp/（不以 /tmp/ 开头，避免与 Unix 绝对临时路径混淆）
-  if (norm.startsWith('tmp/') || norm.startsWith('temp/')) return true;
+  // 工作区相对 tmp/、temp/、cache/（不以 /tmp/ 开头，避免与 Unix 绝对临时路径混淆）
+  if (norm.startsWith('tmp/') || norm.startsWith('temp/') || norm.startsWith('cache/')) return true;
   return false;
+}
+
+/**
+ * 一次性诊断/验证脚本（如 check-*.ps1、cleanup.ps1），仍记入 filesChanged 审计，但不要求写后读 Gate。
+ */
+export function isEphemeralScriptPath(path: string): boolean {
+  const norm = normalizeDeliverablePath(path);
+  const base = norm.split('/').filter(Boolean).pop() ?? norm;
+  const dot = base.lastIndexOf('.');
+  const name = dot > 0 ? base.slice(0, dot) : base;
+  if (/^(verify|check|fresh|elevate|probe|temp|scratch|cleanup)([-_.]|$)/i.test(name)) return true;
+  if (/-(test|probe|temp|scratch)$/i.test(name)) return true;
+  return false;
+}
+
+/** 工具结果是否表明目标路径不存在（ENOENT / file not found）。 */
+export function isMissingFileToolResult(result: ToolResult): boolean {
+  if (result.success) return false;
+  const text = `${result.error ?? ''} ${result.output ?? ''}`;
+  return /\benoent\b/i.test(text)
+    || /no such file or directory/i.test(text)
+    || /file not found/i.test(text)
+    || /找不到文件|文件不存在/.test(text);
 }
 
 /**
@@ -111,8 +136,18 @@ export function isDotPrefixedDirPath(path: string): boolean {
  */
 export function isVerificationExemptPath(path: string): boolean {
   return isGenericTempPath(path)
+    || isEphemeralScriptPath(path)
     || isDotPrefixedDirPath(path)
     || isProjectCustomExemptPath(path);
+}
+
+/** 磁盘上已不存在的 filesChanged 路径（清理/删除后同步 Gate 用）。 */
+export function missingChangedFilePaths(
+  filesChanged: readonly string[],
+  workspaceRoot?: string,
+): string[] {
+  if (!workspaceRoot?.trim() || filesChanged.length === 0) return [];
+  return filesChanged.filter(path => !workspaceFileExists(workspaceRoot, path));
 }
 
 /** Gate 写后须 read 确认的路径（排除临时/草稿，其余与 filesChanged 同标尺） */
@@ -120,13 +155,27 @@ export function writeConfirmationPaths(filesChanged: readonly string[]): string[
   return filesChanged.filter(path => !isVerificationExemptPath(path));
 }
 
+/**
+ * 门控实际待确认路径：在 writeConfirmationPaths 基础上排除磁盘已不存在的文件。
+ * 文件被 cleanup/删除后不应再要求 read_file/file_info。
+ */
+export function gateConfirmationPaths(
+  filesChanged: readonly string[],
+  workspaceRoot?: string,
+): string[] {
+  const paths = writeConfirmationPaths(filesChanged);
+  if (!workspaceRoot?.trim()) return paths;
+  return paths.filter(path => workspaceFileExists(workspaceRoot, path));
+}
+
 /** 写后读待确认统计（prompt / 日志用） */
 export function verificationConfirmationStats(
   filesChanged: readonly string[],
   writeVersions?: Record<string, number>,
   confirmVersions?: Record<string, number>,
+  workspaceRoot?: string,
 ): { required: number; pending: number; exempt: number } {
-  const requiredPaths = writeConfirmationPaths(filesChanged);
+  const requiredPaths = gateConfirmationPaths(filesChanged, workspaceRoot);
   const exempt = filesChanged.length - requiredPaths.length;
   if (requiredPaths.length === 0) {
     return { required: 0, pending: 0, exempt };
@@ -193,11 +242,12 @@ export function canVerifyDeliverableKind(
   filesChanged: readonly string[],
   toolNames: readonly string[],
   acceptanceIncomplete?: boolean,
+  workspaceRoot?: string,
 ): boolean {
   if (acceptanceIncomplete) {
     return toolNames.some(name => name === 'run_command');
   }
-  if (writeConfirmationPaths(filesChanged).length === 0) return true;
+  if (gateConfirmationPaths(filesChanged, workspaceRoot).length === 0) return true;
   return toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
 }
 
@@ -223,8 +273,9 @@ export function hasUnconfirmedFileDeliverables(
   filesChanged: readonly string[],
   writeVersions?: Record<string, number>,
   confirmVersions?: Record<string, number>,
+  workspaceRoot?: string,
 ): boolean {
-  const paths = writeConfirmationPaths(filesChanged);
+  const paths = gateConfirmationPaths(filesChanged, workspaceRoot);
   if (paths.length === 0) return false;
 
   const hasWriteMaps = writeVersions && Object.keys(writeVersions).length > 0;
@@ -237,11 +288,15 @@ export function hasUnconfirmedFileDeliverables(
   });
 }
 
-export function snapshotHasUnconfirmedFileDeliverables(task: TaskStateSnapshot): boolean {
+export function snapshotHasUnconfirmedFileDeliverables(
+  task: TaskStateSnapshot,
+  workspaceRoot?: string,
+): boolean {
   return hasUnconfirmedFileDeliverables(
     task.filesChanged,
     task.fileDeliverableWriteVersions,
     task.fileDeliverableConfirmVersions,
+    workspaceRoot,
   );
 }
 

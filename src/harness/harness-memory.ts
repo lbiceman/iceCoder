@@ -1507,10 +1507,7 @@ ${candidateList}`;
   }
 
   /**
-   * 清理消息前缀，移除会导致 DeepSeek thinking 模式报错的字段。
-   * DeepSeek 要求 reasoning_content 必须回传，但 tool 消息被过滤后
-   * 消息结构不完整，会触发 400 错误。
-   * 解决方案：移除 reasoningContent 和 toolCalls，只保留纯文本对话。
+   * 记忆提取用：只保留纯文本 user/assistant，去掉 toolCalls 与历史 reasoningContent。
    */
   private sanitizeConversationPrefix(messages: UnifiedMessage[]): UnifiedMessage[] {
     return messages
@@ -1806,7 +1803,7 @@ ${candidateList}`;
       const currentNotes = await setupSessionMemoryFile(this.sessionMemoryState);
       const prompt = buildSessionMemoryUpdatePrompt(currentNotes, this.sessionMemoryState.notesPath);
 
-      // 使用 LLM 更新会话笔记（清理 reasoningContent/toolCalls 防止 DeepSeek 报错）
+      // 使用 LLM 更新会话笔记（清理 toolCalls；reasoningContent 由 finalizeMessagesForApi 剥离）
       const sanitizedPrefix = this.sanitizeConversationPrefix(messages).slice(-SESSION_MEMORY_SANITIZED_PREFIX_LIMIT);
       const baseChatMessages: UnifiedMessage[] = [
         ...sanitizedPrefix,
