@@ -56,7 +56,7 @@
   },
   "eventTimeline": {
     "enabled": true,
-    "persistPath": "data/runtime/supervisor-events.jsonl"
+    "persistPath": "runtime/supervisor-events.jsonl"
   },
   "executionMode": {
     "enabled": true,
