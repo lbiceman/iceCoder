@@ -310,8 +310,15 @@ window.ChatUI = (function () {
     getSessionWorkspaceRoot(null);
   }
 
-  function fetchToolDiffFromServer(block, toolName, toolCallId, done) {
-    var sid = getActiveSessionIdForApi();
+  /** 服务端 tool-diff 仅对 write_file 有磁盘回退；其它工具与本地同样只查 index/structured */
+  function shouldFetchToolDiffFromServer(toolName, relPath, block) {
+    if (toolName === 'write_file') return true;
+    if (block && block.getAttribute('data-diff-rel-path')) return true;
+    if (relPath && !/\s/.test(relPath) && /\.[A-Za-z0-9]{1,8}$/.test(relPath)) return true;
+    return false;
+  }
+
+  function resolveDiffRelPathForBlock(block) {
     var group = block && block.closest ? block.closest('.tool-trace-group') : null;
     var relPath = block ? (block.getAttribute('data-diff-rel-path') || '') : '';
     var row = block ? block.querySelector('.tool-action') : null;
@@ -328,6 +335,16 @@ window.ChatUI = (function () {
       if (traceIdx >= 0 && traces[traceIdx] && traces[traceIdx].detail) {
         relPath = traces[traceIdx].detail;
       }
+    }
+    return relPath;
+  }
+
+  function fetchToolDiffFromServer(block, toolName, toolCallId, done) {
+    var sid = getActiveSessionIdForApi();
+    var relPath = resolveDiffRelPathForBlock(block);
+    if (!shouldFetchToolDiffFromServer(toolName, relPath, block)) {
+      if (done) done(null);
+      return;
     }
     function doFetch(workspaceRoot) {
       var qs = '?toolName=' + encodeURIComponent(toolName || 'write_file');
@@ -826,12 +843,17 @@ window.ChatUI = (function () {
     function afterStructuredFetch() {
       var retry = lookupDiffSourceForBlock(block, toolName);
       if (finishMounted(retry)) return;
-      fetchFromApi(null);
+      var relPath = resolveDiffRelPathForBlock(block);
+      if (!shouldFetchToolDiffFromServer(toolName, relPath, block)) {
+        if (done) done(false);
+        return;
+      }
+      fetchFromApi(function () { if (done) done(false); });
     }
 
-    function fetchStructuredThenApi() {
+    function fetchStructuredThenTryApi() {
       if (!window.ChatSession || typeof window.ChatSession.fetchStructuredMessages !== 'function') {
-        if (done) done(false);
+        afterStructuredFetch();
         return;
       }
       window.ChatSession.fetchStructuredMessages(function (structured) {
@@ -849,7 +871,7 @@ window.ChatUI = (function () {
     var resolved = lookupDiffSourceForBlock(block, toolName);
     if (finishMounted(resolved)) return;
 
-    fetchFromApi(fetchStructuredThenApi);
+    fetchStructuredThenTryApi();
   }
 
   function toggleDiffPanelForBlock(block) {

@@ -382,13 +382,7 @@ export function createSessionsRouter(): Router {
       workspaceRootOverride: safeOverride,
     });
     if (!diffSource) {
-      res.status(404).json({
-        error: 'diff not found',
-        relPath: relPath || undefined,
-        hint: roots.length > 0
-          ? 'file not found under session workspace roots'
-          : 'no workspace root for session',
-      });
+      res.json({ diffSource: null });
       return;
     }
     res.json({ diffSource });

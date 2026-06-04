@@ -15,6 +15,7 @@ import type { HarnessResult, HarnessStepEvent } from './types.js';
 
 export interface GraphStopDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
+  workspaceRoot?: string;
 }
 
 export interface TryGraphTerminalStopArgs {
@@ -40,12 +41,12 @@ export async function tryGraphTerminalStop(
   }
 
   const taskSnap = state.taskState.snapshot();
-  if (hasPendingWork(taskSnap, state.taskAcceptance)) {
+  if (hasPendingWork(taskSnap, state.taskAcceptance, deps.workspaceRoot)) {
     return null;
   }
 
   onStep?.({ type: 'task_graph_done' });
-  state.taskState.tryMarkFileDeliverablesVerified();
+  state.taskState.tryMarkFileDeliverablesVerified(deps.workspaceRoot);
 
   deps.loopController.stop('model_done');
   const finalState = deps.loopController.getState();

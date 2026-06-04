@@ -18,6 +18,7 @@ export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
   checkpointEngine?: CheckpointEngine;
   enqueueCheckpointPersist: <T>(task: () => Promise<T>) => Promise<T>;
+  workspaceRoot?: string;
   /**
    * L2-2：Supervisor PassiveObserver 活跃时关闭 free 段 recovery inject（§19.6）。
    * 仍保留 branch 计数、checkpoint 与 submitModeSignal。
@@ -284,6 +285,7 @@ export async function resilienceSaveCheckpoint(
         ...checkpointHarnessEscalationFields(state),
         verificationPending: state.taskState.isVerificationBlockingFinalAfterSync(
           state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
+          deps.workspaceRoot,
         ),
         lastStopReason: stopReason,
       });

@@ -3,10 +3,10 @@ import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-sn
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
+  gateConfirmationPaths,
   hasUnfulfilledFileDeliverableGoal,
   snapshotHasUnconfirmedFileDeliverables,
   verificationConfirmationStats,
-  writeConfirmationPaths,
 } from './document-deliverable.js';
 import type { TaskState } from './task-state.js';
 import type { TaskCheckpoint } from './checkpoint.js';
@@ -15,6 +15,7 @@ import type { TaskCheckpoint } from './checkpoint.js';
 export function hasPendingWork(
   task: TaskStateSnapshot,
   acceptance?: TaskAcceptanceTracker,
+  workspaceRoot?: string,
 ): boolean {
   if (hasPendingAcceptanceWork(acceptance)) return true;
 
@@ -22,7 +23,7 @@ export function hasPendingWork(
     return true;
   }
 
-  if (snapshotHasUnconfirmedFileDeliverables(task)) {
+  if (snapshotHasUnconfirmedFileDeliverables(task, workspaceRoot)) {
     return true;
   }
 
@@ -45,6 +46,7 @@ export function buildIncompleteContinuationPrompt(
   task: TaskStateSnapshot,
   repo: RepoContextSnapshot,
   acceptance?: TaskAcceptanceTracker,
+  workspaceRoot?: string,
 ): string {
   if (hasPendingAcceptanceWork(acceptance) && acceptance) {
     return acceptance.buildAcceptancePrompt();
@@ -59,13 +61,14 @@ export function buildIncompleteContinuationPrompt(
   if (repo.recentDiagnostics.length > 0) {
     lines.push(`- Recent tool failures: ${repo.recentDiagnostics.slice(-3).join('; ')}`);
   }
-  const filePaths = writeConfirmationPaths(task.filesChanged);
+  const filePaths = gateConfirmationPaths(task.filesChanged, workspaceRoot);
   const fileStats = verificationConfirmationStats(
     task.filesChanged,
     task.fileDeliverableWriteVersions,
     task.fileDeliverableConfirmVersions,
+    workspaceRoot,
   );
-  const filePending = snapshotHasUnconfirmedFileDeliverables(task);
+  const filePending = snapshotHasUnconfirmedFileDeliverables(task, workspaceRoot);
   if (filePending && fileStats.required > 0) {
     lines.push(
       `- Changed files pending confirmation: ${fileStats.pending} of ${fileStats.required}`
