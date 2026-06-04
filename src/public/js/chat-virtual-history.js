@@ -224,10 +224,24 @@ window.ChatVirtualHistory = (function () {
       if (layerEl) layerEl.style.height = px;
     }
 
+    /** 滚动中用 transform（性能）；静止后用 top（避免合成层导致文字发糊） */
     function positionSlot(slot, idx) {
       if (!slot || idx < 0 || idx >= units.length) return;
-      slot.style.transform = 'translate3d(0,' + offsets[idx] + 'px,0)';
+      var y = Math.round(offsets[idx]);
+      if (isScrolling) {
+        slot.style.top = '0';
+        slot.style.transform = 'translateY(' + y + 'px)';
+      } else {
+        slot.style.transform = '';
+        slot.style.top = y + 'px';
+      }
       slot.setAttribute('data-vindex', String(idx));
+    }
+
+    function setLayerScrollingClass(active) {
+      if (!layerEl) return;
+      if (active) layerEl.classList.add('is-scrolling');
+      else layerEl.classList.remove('is-scrolling');
     }
 
     function measureSlotHeight(slot) {
@@ -720,6 +734,8 @@ window.ChatVirtualHistory = (function () {
 
     function onScrollIdle() {
       isScrolling = false;
+      setLayerScrollingClass(false);
+      repositionMountedSlots();
       if (!scrollRoot || !outerEl) return;
       if (roDebounceTimer) {
         clearTimeout(roDebounceTimer);
@@ -731,6 +747,8 @@ window.ChatVirtualHistory = (function () {
 
     function resetScrollerState() {
       teardownAllSlots();
+      isScrolling = false;
+      setLayerScrollingClass(false);
       heightCache = {};
       offsets = [];
       totalHeight = 0;
@@ -790,7 +808,10 @@ window.ChatVirtualHistory = (function () {
       },
       handleScroll: function () {
         if (restoringScroll) return;
-        isScrolling = true;
+        if (!isScrolling) {
+          isScrolling = true;
+          setLayerScrollingClass(true);
+        }
         if (scrollIdleTimer) clearTimeout(scrollIdleTimer);
         scrollIdleTimer = setTimeout(onScrollIdle, 120);
         scheduleRender();
