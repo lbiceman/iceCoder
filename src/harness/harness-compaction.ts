@@ -105,7 +105,7 @@ function emitContextUsageStep(
 }
 
 /**
- * 如果需要，执行上下文压缩（参考 claude-code 的压缩策略）。
+ * 如果需要，执行上下文压缩
  *
  * 两条路径：
  * 1. 会话记忆可用 → compactWithSessionMemory（0 LLM 成本）

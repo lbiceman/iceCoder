@@ -53,8 +53,8 @@ export interface GoalDriftEvaluation {
 
 const READ_ONLY_TOOLS = new Set([
   'read_file',
+  'glob',
   'grep',
-  'search',
   'list_dir',
   'codebase_search',
   'fetch_url',

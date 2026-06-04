@@ -137,7 +137,8 @@ export function createToolUsageSection(): PromptSection {
     content: `# Tools
 
 ## Principles
-- When you need to explore a directory, understand module structure, or search across multiple files, use delegate_to_subagent. Reserve direct read_file/search_codebase for single-file lookups.
+- When you need to explore a directory, understand module structure, or search across multiple files, use delegate_to_subagent. Reserve direct glob/grep/read_file for targeted lookups.
+- Code search flow: **glob** (find paths) → **grep** with output_mode files_with_matches (default) → **read_file** (2–3 files) → edit tools.
 - Do NOT use run_command when a dedicated tool exists.
 - Independent tools in parallel; dependent tools in order.
 - Do not repeat tool calls unless data may have changed.
@@ -177,7 +178,7 @@ read_file (offset/limit for large files). Outside cwd → open_file (absolute pa
 - Do not loop \`read_file\` / \`patch_file\` on paths that are missing on disk.
 
 ## Search
-search_codebase (filename / content; skips node_modules). web_search, fetch_url.
+**glob** — file paths by pattern. **grep** — content search (ripgrep); default returns paths only; use output_mode content when you need lines. web_search, fetch_url.
 
 ## Commands
 run_command; git tool for git (safer than raw shell).

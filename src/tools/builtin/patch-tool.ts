@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { formatToolOutputWithDiff } from '../file-change-diff.js';
+import { checkReadBeforeEdit } from '../read-before-edit.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -130,7 +131,7 @@ function findMatch(fileLines: string[], searchLines: string[], startPos: number)
 /**
  * 创建 Patch 应用工具。
  */
-export function createPatchTool(workDir: string): RegisteredTool {
+export function createPatchTool(workDir: string, sessionId = 'default'): RegisteredTool {
   return {
     definition: {
       name: 'patch_file',
@@ -155,7 +156,10 @@ export function createPatchTool(workDir: string): RegisteredTool {
       },
     },
     handler: async (args) => {
-      const filePath = safePath(args.path, workDir);
+      const rawPath = args.path as string;
+      const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
+      if (readErr) return { success: false, output: '', error: readErr };
+      const filePath = safePath(rawPath, workDir);
       const patch = args.patch as string;
       const dryRun = args.dryRun || false;
 

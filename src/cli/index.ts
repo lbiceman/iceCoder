@@ -19,6 +19,7 @@ import { hasFlag } from './utils/args-parser.js';
 import { c, error } from './utils/terminal-ui.js';
 import { bootstrap } from './bootstrap.js';
 import { defaultApiPortHelpText, resolveDefaultApiPort } from './serve-port.js';
+import { isTunnelDevEnabled } from '../runtime/tunnel-feature.js';
 
 const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
@@ -36,8 +37,8 @@ ${c.bold}用法:${c.reset}
 
 ${c.bold}start/cli/web 选项:${c.reset}
   --port, -p <n>       Web 服务器端口 (默认 ${defaultApiPortHelpText()}，可用环境变量 PORT 覆盖)
-  --no-tunnel          不启动 Cloudflare Tunnel (仅 start)
-  --tunnel-bin <path>  cloudflared 可执行文件路径
+  --no-tunnel          不启动 Cloudflare Tunnel (仅 start，需 ICE_TUNNEL_DEV=1)
+  --tunnel-bin <path>  cloudflared 可执行文件路径（本地开发）
 
 ${c.bold}run 选项:${c.reset}
   --max-rounds <n>   最大循环轮次 (默认 100)
@@ -92,9 +93,10 @@ ${c.bold}下一步：${c.reset}
 
   switch (command) {
     case 'start': {
-      // CLI + Web + Cloudflare Tunnel 三合一
       const { runChat } = await import('./commands/chat.js');
-      args.flags['with-tunnel'] = true;
+      if (isTunnelDevEnabled()) {
+        args.flags['with-tunnel'] = true;
+      }
       await runChat(ctx, args);
       break;
     }

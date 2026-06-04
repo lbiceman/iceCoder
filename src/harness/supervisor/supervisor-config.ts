@@ -50,7 +50,7 @@ const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
   stableRoundsExitThreshold: 2,
   modeLockRounds: 2,
   forcedMinDwellRounds: 1,
-  readonlyToolNames: ['read_file', 'grep', 'search', 'list_dir'],
+  readonlyToolNames: ['read_file', 'glob', 'grep', 'list_dir'],
 };
 
 /** Built-in §15/§17 defaults; not wired into the Harness loop until later batches. */

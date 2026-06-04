@@ -19,7 +19,7 @@ import {
 function makeContract(overrides?: Partial<NodeContract>): NodeContract {
   return {
     nodeId: 'node-01',
-    allowedTools: ['read_file', 'search_codebase'],
+    allowedTools: ['read_file', 'glob', 'grep'],
     forbiddenTools: ['run_command'],
     preferredTools: ['read_file'],
     requiredOutputSignals: ['file_read'],
@@ -105,7 +105,7 @@ describe('DeviationDetector', () => {
   it('tool_mismatch 检测', () => {
     const r = dd.detect({
       toolNames: ['run_command', 'write_file'],
-      allowedTools: ['read_file', 'search_codebase'],
+      allowedTools: ['read_file', 'glob', 'grep'],
       nodePhase: 'context',
       nodeGuard: { maxSameToolRepeat: 3 },
     });
@@ -126,7 +126,7 @@ describe('DeviationDetector', () => {
 
   it('scope_creep 检测', () => {
     const r = dd.detect({
-      toolNames: ['read_file', 'search_codebase', 'read_file', 'fs_operation'],
+      toolNames: ['read_file', 'grep', 'read_file', 'fs_operation'],
       allowedTools: ['write_file', 'read_file'],
       nodePhase: 'editing',
       nodeGuard: { maxSameToolRepeat: 2 },
@@ -138,7 +138,7 @@ describe('DeviationDetector', () => {
   it('无偏离', () => {
     const r = dd.detect({
       toolNames: ['read_file'],
-      allowedTools: ['read_file', 'search_codebase'],
+      allowedTools: ['read_file', 'glob', 'grep'],
       nodePhase: 'context',
       nodeGuard: { maxSameToolRepeat: 3 },
     });

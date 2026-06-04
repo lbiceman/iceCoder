@@ -636,7 +636,7 @@ export class BackgroundTaskManager extends EventEmitter {
   /**
    * 获取任务的增量输出（自上次 cursor 起）。
    *
-   * 学 Claude Code BashOutput 的 diff-only 模型：
+   * diff-only 模型：
    * - since 是上一次 check 返回的 cursor（即当时的 totalOutputLines）
    * - 返回新行 + 新 cursor
    * - 如果 since 早于当前环形缓冲起点 → truncated=true（淘汰部分丢失）

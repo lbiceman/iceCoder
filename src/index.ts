@@ -42,6 +42,7 @@ import {
   purgeSessionRuntimeCaches,
 } from './web/chat-ws.js';
 import { startTunnelReadyWatcher } from './web/tunnel-ready-watcher.js';
+import { isTunnelDevEnabled } from './runtime/tunnel-feature.js';
 import { createSessionsRouter, registerSessionCleanupHook } from './web/routes/sessions.js';
 
 registerSessionCleanupHook(purgeSessionRuntimeCaches);
@@ -235,10 +236,11 @@ async function main(): Promise<void> {
     });
   });
 
-  // 7c. Cloudflare Quick Tunnel 后台探测（与 concurrently 启动的 cloudflared 对齐）；就绪后 WS 推送 + 宠物提示
-  const stopTunnelReadyWatcher = startTunnelReadyWatcher({
-    onReady: (url) => broadcastTunnelReady({ url }),
-  });
+  const stopTunnelReadyWatcher = isTunnelDevEnabled()
+    ? startTunnelReadyWatcher({
+        onReady: (url) => broadcastTunnelReady({ url }),
+      })
+    : () => {};
 
   // 8. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);

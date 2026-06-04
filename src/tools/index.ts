@@ -76,7 +76,7 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   const registry = new ToolRegistry();
 
   // 注册文件操作工具
-  for (const tool of createFileTools(workDir)) {
+  for (const tool of createFileTools(workDir, sessionId)) {
     registry.register(tool);
   }
 
@@ -118,7 +118,7 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   registry.register(createDiffTool(workDir));
 
   // 注册批量编辑工具
-  registry.register(createBatchEditTool(workDir));
+  registry.register(createBatchEditTool(workDir, sessionId));
 
   // 注册网页搜索工具
   registry.register(createWebSearchTool());
@@ -127,7 +127,7 @@ export function initializeToolSystem(options: ToolSystemOptions): ToolSystem {
   registry.register(createGitTool(workDir));
 
   // 注册 Patch 应用工具
-  registry.register(createPatchTool(workDir));
+  registry.register(createPatchTool(workDir, sessionId));
 
   // 注册图片读取工具（需要 LLM 视觉能力）
   if (llmAdapter) {

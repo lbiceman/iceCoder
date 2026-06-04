@@ -39,7 +39,7 @@ export interface ContextAssemblyConfig {
   memories?: string[];
   /** 用户偏好 */
   userPreferences?: Record<string, any>;
-  /** 用户上下文（CLAUDE.md 内容等，以 key-value 形式注入到 <system-reminder>） */
+  /** 用户上下文（以 key-value 形式注入到 <system-reminder>） */
   userContext?: Record<string, string>;
   /** 系统上下文（Git 状态等实时信息，追加到系统提示词末尾） */
   systemContext?: Record<string, string>;

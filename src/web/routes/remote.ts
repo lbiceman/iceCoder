@@ -13,6 +13,7 @@ import type { Orchestrator } from '../../core/orchestrator.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
 import { fetchQuickTunnelPublicUrl } from '../quicktunnel-url.js';
+import { isTunnelDevEnabled } from '../../runtime/tunnel-feature.js';
 
 // ---- 类型定义 ----
 
@@ -56,9 +57,12 @@ let cachedTunnelUrl: string | null = null;
 let tunnelCheckTime = 0;
 
 async function getTunnelUrl(): Promise<string | null> {
-  // 环境变量优先
   if (process.env.TUNNEL_URL) {
     return process.env.TUNNEL_URL;
+  }
+
+  if (!isTunnelDevEnabled()) {
+    return null;
   }
 
   // 缓存 30 秒

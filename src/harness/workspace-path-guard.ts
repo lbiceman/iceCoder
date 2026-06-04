@@ -7,15 +7,19 @@ import {
   isFileWriteTool,
 } from './branch-budget-tool-path.js';
 import { parseLeadingCdCommand } from '../tools/shell-cd-parser.js';
+import { isUnderRoot, resolveAgainstWorkspace } from '../shared/path-scope.js';
+
+export { isUnderRoot, resolveAgainstWorkspace } from '../shared/path-scope.js';
 
 const READ_PATH_TOOLS = new Set([
   'read_file',
+  'glob',
+  'grep',
   'parse_document',
   'open_file',
   'image_read',
   'notebook_read',
   'doc_parse',
-  'grep_file',
   'file_info',
   'parse_xmind_deep',
   'parse_pptx_deep',
@@ -30,20 +34,6 @@ const READ_FS_OPERATIONS = new Set(['list']);
 
 export function pathsEqual(a: string, b: string): boolean {
   return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
-}
-
-export function isUnderRoot(absPath: string, root: string): boolean {
-  const resolvedRoot = path.resolve(root);
-  const resolvedTarget = path.resolve(absPath);
-  const rel = path.relative(resolvedRoot, resolvedTarget);
-  if (rel === '') return true;
-  return !rel.startsWith('..') && !path.isAbsolute(rel);
-}
-
-export function resolveAgainstWorkspace(rawPath: string, workspaceRoot: string): string {
-  return path.isAbsolute(rawPath)
-    ? path.resolve(rawPath)
-    : path.resolve(workspaceRoot, rawPath);
 }
 
 /** 目标路径在工作区内是否已存在于磁盘（Harness 事实对齐用）。 */
@@ -215,16 +205,19 @@ export function checkWorkspacePathViolation(
     return `[Workspace Lock] list_drives is disabled while workspace is locked to ${lockedRoot}. Use fs_operation/list or relative paths within the workspace.`;
   }
 
-  if (toolName === 'search_codebase' && typeof args.directory === 'string' && args.directory.trim()) {
-    const dir = args.directory.trim();
-    if (path.isAbsolute(dir)) {
-      return checkResolvedPath({
-        rawPath: dir,
-        lockedRoot,
-        referenceReads,
-        write: false,
-      });
-    }
+  if (toolName === 'glob' || toolName === 'grep') {
+    const searchRoot = typeof args.path === 'string' && args.path.trim()
+      ? args.path.trim()
+      : typeof args.directory === 'string' && args.directory.trim()
+        ? args.directory.trim()
+        : '.';
+    const violation = checkResolvedPath({
+      rawPath: searchRoot,
+      lockedRoot,
+      referenceReads,
+      write: false,
+    });
+    if (violation) return violation;
   }
 
   if (READ_PATH_TOOLS.has(toolName)) {
