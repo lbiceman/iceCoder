@@ -1,10 +1,15 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   LOCAL_DATA_DIR,
   USER_DATA_DIR,
   applyRuntimeDataEnvDefaults,
+  ensureSupervisorConfigFile,
   getRuntimeDataDir,
   isPackagedCliEntry,
+  resolvePackagedDataExamplePath,
   usesUserDataRoot,
 } from '../../src/cli/paths.js';
 
@@ -46,5 +51,24 @@ describe('usesUserDataRoot / data dir', () => {
     process.argv[1] = 'D:/work/self/iceCoder/dist/cli/index.js';
     applyRuntimeDataEnvDefaults();
     expect(getRuntimeDataDir()).toBe(USER_DATA_DIR);
+  });
+});
+
+describe('ensureSupervisorConfigFile', () => {
+  it('从包内示例写入 dataDir/supervisor-config.json', async () => {
+    const bundled = resolvePackagedDataExamplePath('supervisor-config.example.json');
+    expect(bundled).toContain('supervisor-config.example.json');
+
+    const tmp = await mkdtemp(path.join(os.tmpdir(), 'ice-supervisor-'));
+    try {
+      await ensureSupervisorConfigFile(tmp);
+      const target = path.join(tmp, 'supervisor-config.json');
+      const raw = await readFile(target, 'utf-8');
+      const parsed = JSON.parse(raw) as { mode?: string; eventTimeline?: { persistPath?: string } };
+      expect(parsed.mode).toBe('adaptive');
+      expect(parsed.eventTimeline?.persistPath).toBe('runtime/supervisor-events.jsonl');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });

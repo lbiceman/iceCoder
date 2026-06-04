@@ -54,7 +54,7 @@ import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 
 // 类型
 import type { ProviderConfig, IceCoderConfigFile } from './web/types.js';
-import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
+import { ensureDataDir, resolveDataPaths, resolveMcpConfigPath } from './cli/paths.js';
 import { isAppConfigReady } from './config/config-readiness.js';
 import { normalizeProviders } from './config/normalize-provider.js';
 
@@ -174,7 +174,8 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
 async function main(): Promise<void> {
   console.log('iceCoder starting...');
 
-  await ensureMcpConfigFile(CONFIG_PATH);
+  const paths = await resolveDataPaths();
+  await ensureDataDir(paths);
 
   // 1. 加载提供者配置
   const providers = await loadConfig();
