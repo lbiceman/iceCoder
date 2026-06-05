@@ -119,6 +119,7 @@ window.ChatUI = (function () {
 
     setupToolClickDelegation();
     setupToolTraceToggleDelegation();
+    setupThinkingToggleDelegation();
   }
 
   function isNodeInHistoryRegion(node) {
@@ -216,6 +217,59 @@ window.ChatUI = (function () {
       notifyHistoryLayoutChange(group);
     };
     elHistoryWindow.addEventListener('click', elHistoryWindow._toolTraceClickHandler, true);
+  }
+
+  function createThinkingToggleButton(footer) {
+    var label = document.createElement('button');
+    label.type = 'button';
+    label.className = 'msg-label msg-thinking-toggle'
+      + (footer ? ' msg-thinking-toggle-footer' : ' msg-thinking-toggle-header');
+    label.setAttribute('aria-expanded', 'true');
+    label.setAttribute('aria-label', '折叠思考内容');
+    var labelText = document.createElement('span');
+    labelText.className = 'msg-thinking-toggle-text';
+    labelText.textContent = 'Thinking';
+    label.appendChild(labelText);
+    var labelIcon = document.createElement('span');
+    labelIcon.className = 'msg-thinking-toggle-icon';
+    labelIcon.setAttribute('aria-hidden', 'true');
+    labelIcon.textContent = '▾';
+    label.appendChild(labelIcon);
+    return label;
+  }
+
+  function setThinkingBlockCollapsed(block, collapsed) {
+    if (!block) return;
+    if (collapsed) block.classList.add('is-collapsed');
+    else block.classList.remove('is-collapsed');
+    var toggles = block.querySelectorAll('.msg-thinking-toggle');
+    for (var i = 0; i < toggles.length; i++) {
+      var t = toggles[i];
+      t.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      t.setAttribute('aria-label', collapsed ? '展开思考内容' : '折叠思考内容');
+    }
+  }
+
+  /** 思考块头/尾 Thinking 行折叠（尾部真实 DOM，委托在 chat-messages） */
+  function setupThinkingToggleDelegation() {
+    if (!elMessages) return;
+    if (elMessages._thinkingToggleHandler) {
+      elMessages.removeEventListener('click', elMessages._thinkingToggleHandler);
+    }
+    elMessages._thinkingToggleHandler = function (e) {
+      var target = eventTargetElement(e);
+      if (!target || !target.closest) return;
+      var btn = target.closest('.msg-thinking-toggle');
+      if (!btn || !elMessages.contains(btn)) return;
+      var block = btn.closest('.message-thinking');
+      if (!block) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var isExpanded = btn.getAttribute('aria-expanded') !== 'false';
+      setThinkingBlockCollapsed(block, isExpanded);
+      notifyTailLayoutChange();
+    };
+    elMessages.addEventListener('click', elMessages._thinkingToggleHandler);
   }
 
   var cachedToolCallDiffIndex = null;
@@ -1066,7 +1120,7 @@ window.ChatUI = (function () {
     if (!elTailRoot || !elTailAnchor) return;
     var node = elTailAnchor.previousElementSibling;
     while (node) {
-      if (node.id === 'streaming-msg') {
+      if (node.id === 'streaming-msg' || node.id === 'streaming-reasoning-msg') {
         node = node.previousElementSibling;
         continue;
       }
@@ -1086,7 +1140,7 @@ window.ChatUI = (function () {
     var flats = [];
     var node = elTailAnchor.previousElementSibling;
     while (node) {
-      if (node.id === 'streaming-msg') {
+      if (node.id === 'streaming-msg' || node.id === 'streaming-reasoning-msg') {
         node = node.previousElementSibling;
         continue;
       }
@@ -1185,7 +1239,7 @@ window.ChatUI = (function () {
       return;
     }
     var prev = elTailAnchor ? elTailAnchor.previousElementSibling : null;
-    while (prev && prev.id === 'streaming-msg') {
+    while (prev && (prev.id === 'streaming-msg' || prev.id === 'streaming-reasoning-msg')) {
       prev = prev.previousElementSibling;
     }
     if (prev && prev.classList && prev.classList.contains('tool-trace-group')) {
@@ -1486,6 +1540,37 @@ window.ChatUI = (function () {
     if (el) el.remove();
   }
 
+  /** 将误落入 Assistant 正文的规划/推理气泡转为 Thinking 样式（并合并进思考流缓冲）。 */
+  function promoteAssistantBubbleToThinking(stripStatusTagFn) {
+    var stripFn = stripStatusTagFn || lastStripStatusTagFn;
+    var el = document.getElementById('streaming-msg');
+    if (!el && elTailRoot) {
+      var nodes = elTailRoot.querySelectorAll('.message.assistant:not(.message-thinking), .message.agent:not(.message-thinking)');
+      if (nodes.length) el = nodes[nodes.length - 1];
+    }
+    if (!el || el.classList.contains('message-thinking')) return;
+
+    var bodyText = stripFn(getStreamingBubbleBodyText(el));
+    if (!bodyText) return;
+
+    var wasStreaming = el.id === 'streaming-msg';
+    if (el.parentNode) el.parentNode.removeChild(el);
+    if (wasStreaming) streamReplyBuffer = '';
+
+    if (streamReasoningBuffer && bodyText.length <= streamReasoningBuffer.length
+        && streamReasoningBuffer.indexOf(bodyText) >= 0) {
+      return;
+    }
+    appendReasoningStreamChunk(bodyText);
+  }
+
+  /** 非流式 / 流式回退时，由 harness thinking step 补齐思考块 */
+  function appendReasoningStreamIfAbsent(text) {
+    if (!text) return;
+    if (streamReasoningBuffer && streamReasoningBuffer.indexOf(text) >= 0) return;
+    appendReasoningStreamChunk(text);
+  }
+
   function appendReasoningStreamChunk(text) {
     ensureChatLayout();
     if (!text) return;
@@ -1495,20 +1580,18 @@ window.ChatUI = (function () {
       el = document.createElement('div');
       el.className = 'message assistant message-thinking';
       el.setAttribute('id', 'streaming-reasoning-msg');
-      var label = document.createElement('div');
-      label.className = 'msg-label';
-      label.textContent = 'Thinking';
-      el.appendChild(label);
+      el.appendChild(createThinkingToggleButton(false));
       var body = document.createElement('div');
       body.className = 'msg-thinking-body';
       el.appendChild(body);
+      el.appendChild(createThinkingToggleButton(true));
       el._streamContentEl = body;
       insertTailBefore(el);
     }
     if (el._streamContentEl) {
       el._streamContentEl.textContent = streamReasoningBuffer;
     }
-    if (autoScrollEnabled) scheduleScrollIfSticky();
+    notifyTailLayoutChange();
   }
 
   function appendStreamChunk(text, messages, stripStatusTagFn) {
@@ -1571,7 +1654,6 @@ window.ChatUI = (function () {
   }
 
   function finalizeStreamResponse(messages, stripStatusTagFn) {
-    clearReasoningStream();
     var lastMsg = messages[messages.length - 1];
     var wasStreaming = !!(lastMsg && lastMsg._streaming);
     if (lastMsg && lastMsg._streaming) {
@@ -1623,6 +1705,7 @@ window.ChatUI = (function () {
   }
 
   function finalizeBeforeUserMessage(messages, stripStatusTagFn) {
+    clearReasoningStream();
     var last = messages[messages.length - 1];
     if (last && last.role === 'agent' && last._streaming) {
       finalizeStreamResponse(messages, stripStatusTagFn);
@@ -1715,7 +1798,9 @@ window.ChatUI = (function () {
     appendMessageEl: appendMessageEl,
     appendStreamChunk: appendStreamChunk,
     appendReasoningStreamChunk: appendReasoningStreamChunk,
+    appendReasoningStreamIfAbsent: appendReasoningStreamIfAbsent,
     clearReasoningStream: clearReasoningStream,
+    promoteAssistantBubbleToThinking: promoteAssistantBubbleToThinking,
     finalizeStreamResponse: finalizeStreamResponse,
     finalizeBeforeUserMessage: finalizeBeforeUserMessage,
     repairOrphanStreamingIfAny: repairOrphanStreamingIfAny,

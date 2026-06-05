@@ -12,9 +12,12 @@ export function dispatchStreamChunkToStep(
 ): void {
   if (done || chunk === '' || chunk == null) return;
   if (typeof chunk === 'string') {
-    const safe = streamFilter.feed(chunk);
-    if (safe) {
-      onStep?.({ type: 'stream_delta', iteration: round, delta: safe });
+    const parts = streamFilter.feed(chunk);
+    if (parts.thinking) {
+      onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: parts.thinking });
+    }
+    if (parts.visible) {
+      onStep?.({ type: 'stream_delta', iteration: round, delta: parts.visible });
     }
     return;
   }

@@ -517,7 +517,7 @@ window.ChatPage = (function () {
       UI.appendReasoningStreamChunk(runningTurn.streamingReasoningText);
     }
     if (runningTurn.streamingText) {
-      UI.appendStreamChunk(runningTurn.streamingText, Session.getMessages(), Session.stripStatusTag);
+      UI.appendReasoningStreamChunk(runningTurn.streamingText);
       streamChunksReceived = true;
     }
 
@@ -625,6 +625,12 @@ window.ChatPage = (function () {
       isStreaming = true;
       UI.setStreamingState(true);
     }
+    // Harness 多轮工具任务期间 stream_delta 多为规划/推理，进 Thinking 块而非 Assistant 正文
+    if (WS.isProcessing()) {
+      if (sessionPet) sessionPet.setState('thinking');
+      UI.appendReasoningStreamChunk(data.delta || '');
+      return;
+    }
     if (sessionPet) sessionPet.setState('read');
     UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
   }
@@ -634,6 +640,8 @@ window.ChatPage = (function () {
       UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
       if (streamChunksReceived) {
         streamFinalized = true;
+        // 任务结束：过程思考仅作流式展示，最终答复由 refresh / response 写入 Assistant
+        UI.clearReasoningStream();
       }
     }
     streamChunksReceived = false;
@@ -660,6 +668,7 @@ window.ChatPage = (function () {
       return;
     }
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    UI.clearReasoningStream();
     var msg = { role: 'agent', content: Session.stripStatusTag(data.content || '') };
     Session.appendMessage(msg);
     Session.flushToolBatchLocal();
@@ -687,6 +696,29 @@ window.ChatPage = (function () {
       Pet.setLastToolProgressHint(step.content);
       WS.setLastToolProgressHint(step.content);
       Pet.updateStatusText(step.content, isStreaming, WS.isProcessing());
+    }
+    if (step.type === 'thinking') {
+      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
+      if (step.content) {
+        UI.appendReasoningStreamIfAbsent(Session.stripStatusTag(step.content));
+      }
+      var msgsThink = Session.getMessages();
+      for (var mti = msgsThink.length - 1; mti >= 0; mti--) {
+        if (msgsThink[mti].role === 'agent' && msgsThink[mti]._streaming) {
+          msgsThink.splice(mti, 1);
+          break;
+        }
+      }
+    }
+    if (step.type === 'tool_call') {
+      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
+      var msgs = Session.getMessages();
+      for (var mi = msgs.length - 1; mi >= 0; mi--) {
+        if (msgs[mi].role === 'agent' && msgs[mi]._streaming) {
+          msgs.splice(mi, 1);
+          break;
+        }
+      }
     }
     if (step.type === 'tool_call' && step.toolName) {
       if (WS.isProcessing() && UI.isLiveToolRoundActive && !UI.isLiveToolRoundActive()) {

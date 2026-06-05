@@ -186,11 +186,12 @@ export class OpenAIAdapter implements ProviderAdapter {
             callback(delta.content, false);
           }
 
-          // reasoning_content：累积进 LLMResponse，经独立 channel 推前端；不回传 API
+          // reasoning_content / reasoning_details：经独立 channel 推前端；不回传 API
           const deltaAny = delta as any;
-          if (deltaAny.reasoning_content) {
-            reasoningContent += deltaAny.reasoning_content;
-            callback({ channel: 'reasoning', delta: deltaAny.reasoning_content }, false);
+          const reasoningDelta = this.extractStreamReasoningDelta(deltaAny);
+          if (reasoningDelta) {
+            reasoningContent += reasoningDelta;
+            callback({ channel: 'reasoning', delta: reasoningDelta }, false);
           }
 
           // Handle tool calls in streaming
@@ -553,7 +554,53 @@ export class OpenAIAdapter implements ProviderAdapter {
       params.stream_options = { include_usage: true };
     }
 
+    // MiniMax：拆分思考链到 reasoning 字段，供 Web 思考块展示
+    if (this.shouldUseReasoningSplit(model)) {
+      params.extra_body = {
+        ...(params.extra_body ?? {}),
+        reasoning_split: true,
+      };
+    }
+
     return params as OpenAI.ChatCompletionCreateParams;
+  }
+
+  /** MiniMax M2/M3 等：启用 reasoning_split 将思考从 content 分离。 */
+  private shouldUseReasoningSplit(model: string): boolean {
+    return model.toLowerCase().includes('minimax');
+  }
+
+  /** 流式 delta 中的思考增量（DeepSeek reasoning_content / MiniMax reasoning_details）。 */
+  private extractStreamReasoningDelta(deltaAny: Record<string, unknown>): string {
+    if (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content) {
+      return deltaAny.reasoning_content;
+    }
+    const details = deltaAny.reasoning_details;
+    if (!Array.isArray(details)) return '';
+    let parts = '';
+    for (const detail of details) {
+      if (detail && typeof detail === 'object' && typeof (detail as { text?: string }).text === 'string') {
+        parts += (detail as { text: string }).text;
+      }
+    }
+    return parts;
+  }
+
+  /** 非流式 message 中的思考全文。 */
+  private extractMessageReasoningContent(messageAny: Record<string, unknown>): string | undefined {
+    if (typeof messageAny.reasoning_content === 'string' && messageAny.reasoning_content) {
+      return messageAny.reasoning_content;
+    }
+    const details = messageAny.reasoning_details;
+    if (!Array.isArray(details)) return undefined;
+    const parts = details
+      .map((detail) => (
+        detail && typeof detail === 'object' && typeof (detail as { text?: string }).text === 'string'
+          ? (detail as { text: string }).text
+          : ''
+      ))
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join('') : undefined;
   }
 
   /**
@@ -579,9 +626,8 @@ export class OpenAIAdapter implements ProviderAdapter {
 
     const content = message?.content || '';
 
-    // 提取 reasoning_content（DeepSeek 等 thinking 模型）
-    const messageAny = message as any;
-    const reasoningContent = messageAny?.reasoning_content || undefined;
+    const messageAny = message as unknown as Record<string, unknown>;
+    const reasoningContent = this.extractMessageReasoningContent(messageAny);
 
     const toolCalls = this.parseToolCalls(message?.tool_calls);
 

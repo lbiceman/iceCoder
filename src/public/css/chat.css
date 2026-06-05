@@ -1,21 +1,82 @@
-/* 流式思考块（仅当轮展示，不入库） */
-.message-thinking {
-  opacity: 0.72;
-  border-left: 2px solid var(--text-muted, #888);
-  padding-left: 10px;
+/* 流式思考块（仅当轮展示，不入库）— 特异性须高于 .message.assistant */
+.message.assistant.message-thinking,
+.message.agent.message-thinking {
+  color: var(--msg-thinking-text);
+  border: 1px solid var(--msg-agent-border);
+  border-left: 2px solid var(--msg-thinking-border);
+  padding: 8px 10px;
 }
-.message-thinking .msg-label {
+.message.assistant.message-thinking .msg-label,
+.message.agent.message-thinking .msg-label,
+.message.assistant.message-thinking .msg-thinking-toggle,
+.message.agent.message-thinking .msg-thinking-toggle {
   font-size: 0.8em;
-  color: var(--text-muted, #888);
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  color: var(--msg-thinking-label);
+  opacity: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
-.message-thinking .msg-thinking-body {
+.message.assistant.message-thinking .msg-thinking-toggle,
+.message.agent.message-thinking .msg-thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  line-height: 1.4;
+  border-radius: 4px;
+  transition: color var(--transition), background var(--transition);
+}
+.message.assistant.message-thinking .msg-thinking-toggle-header,
+.message.agent.message-thinking .msg-thinking-toggle-header {
+  margin: 0 0 4px;
+}
+.message.assistant.message-thinking .msg-thinking-toggle-footer,
+.message.agent.message-thinking .msg-thinking-toggle-footer {
+  margin: 4px 0 0;
+}
+.message.assistant.message-thinking .msg-thinking-toggle:hover,
+.message.agent.message-thinking .msg-thinking-toggle:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+.message.assistant.message-thinking .msg-thinking-toggle-icon,
+.message.agent.message-thinking .msg-thinking-toggle-icon {
+  font-size: 1.85em;
+  line-height: 1;
+  transition: none;
+}
+.message.assistant.message-thinking .msg-thinking-toggle-footer .msg-thinking-toggle-icon,
+.message.agent.message-thinking .msg-thinking-toggle-footer .msg-thinking-toggle-icon {
+  transform: rotate(180deg);
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-toggle-icon,
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-toggle-icon,
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-footer .msg-thinking-toggle-icon,
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-footer .msg-thinking-toggle-icon {
+  transform: rotate(-90deg);
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-body,
+.message.agent.message-thinking.is-collapsed .msg-thinking-body {
+  display: none;
+}
+/* 不设 max-height / 内层滚动，高度随内容增长，由 .chat-messages 统一贴底跟滚（80px 阈值） */
+.message.assistant.message-thinking .msg-thinking-body,
+.message.agent.message-thinking .msg-thinking-body,
+.message.assistant.message-thinking > :not(.msg-label):not(.msg-images),
+.message.agent.message-thinking > :not(.msg-label):not(.msg-images) {
+  color: var(--msg-thinking-text);
   font-size: 0.9em;
+  line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 12rem;
-  overflow-y: auto;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font);
 }
 
 /* ===== Chat Page ===== */
