@@ -497,6 +497,10 @@ describe('SupervisorRuntimeBridge - L2-4 budget & drift', () => {
     branchBudgetTriggers: 0,
   };
 
+  beforeEach(() => {
+    vi.stubEnv('ICE_HARNESS_SOFT_CHECKPOINT', '1');
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -1116,6 +1120,14 @@ describe('SupervisorRuntimeBridge - L2-6 hooks · checkpoint · I4 budget', () =
       hadWriteTool: true,
     };
   }
+
+  beforeEach(() => {
+    vi.stubEnv('ICE_HARNESS_SOFT_CHECKPOINT', '1');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   it('createCorrectionPort: drops free-segment supervisor recovery once freeSegmentMaxPerTask is reached', () => {
     const config = resolveSupervisorConfig(

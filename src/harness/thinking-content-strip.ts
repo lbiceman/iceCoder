@@ -53,65 +53,109 @@ export function partialEmbeddedThinkingPrefixSuffix(text: string): string {
 
 const THINKING_OPEN = /<(?:redacted_)?think(?:ing)?>/i;
 const REASONING_OPEN = /<reasoning>/i;
+const THINKING_CLOSE_MARKERS = ['</think>', '</thinking>', '</think>'] as const;
+const REASONING_CLOSE_MARKERS = ['</reasoning>'] as const;
 
-/** 流式侧：增量剥离嵌入思考块，避免泄露给用户。 */
+export type StreamSplitChunk = { visible: string; thinking: string };
+
+const EMPTY_STREAM_SPLIT: StreamSplitChunk = { visible: '', thinking: '' };
+
+function partialEmbeddedCloseSuffix(text: string, mode: 'think' | 'reason'): string {
+  const markers = mode === 'think' ? THINKING_CLOSE_MARKERS : REASONING_CLOSE_MARKERS;
+  const lower = text.toLowerCase();
+  let longest = '';
+  for (const marker of markers) {
+    const m = marker.toLowerCase();
+    for (let len = 1; len <= m.length; len++) {
+      const prefix = m.slice(0, len);
+      if (lower.endsWith(prefix) && prefix.length > longest.length) {
+        longest = text.slice(text.length - len);
+      }
+    }
+  }
+  return longest;
+}
+
+/** 流式侧：正文与嵌入思考块分流（思考进 reasoning UI，不进用户可见正文）。 */
 export class EmbeddedThinkingStreamFilter {
   private hold = '';
+  private mode: 'outside' | 'in_think' | 'in_reason' = 'outside';
 
-  feed(chunk: string): string {
-    if (!chunk) return '';
+  feed(chunk: string): StreamSplitChunk {
+    if (!chunk) return EMPTY_STREAM_SPLIT;
     this.hold += chunk;
     return this.drainSafe();
   }
 
-  flush(): string {
-    const rest = stripEmbeddedThinking(this.hold);
+  flush(): StreamSplitChunk {
+    if (this.mode !== 'outside') {
+      const thinking = this.hold;
+      this.hold = '';
+      this.mode = 'outside';
+      return { visible: '', thinking };
+    }
+    const visible = stripEmbeddedThinking(this.hold);
     this.hold = '';
-    return rest;
+    return { visible, thinking: '' };
   }
 
-  private drainSafe(): string {
-    let emit = '';
-    while (true) {
-      THINKING_OPEN.lastIndex = 0;
-      REASONING_OPEN.lastIndex = 0;
-      const thinkMatch = THINKING_OPEN.exec(this.hold);
-      THINKING_OPEN.lastIndex = 0;
-      const reasonMatch = REASONING_OPEN.exec(this.hold);
-      const thinkIdx = thinkMatch?.index ?? -1;
-      const reasonIdx = reasonMatch?.index ?? -1;
-      let openIdx = -1;
-      let kind: 'think' | 'reason' | null = null;
-      if (thinkIdx >= 0 && (reasonIdx < 0 || thinkIdx <= reasonIdx)) {
-        openIdx = thinkIdx;
-        kind = 'think';
-      } else if (reasonIdx >= 0) {
-        openIdx = reasonIdx;
-        kind = 'reason';
+  private drainSafe(): StreamSplitChunk {
+    let visible = '';
+    let thinking = '';
+    while (this.hold.length > 0) {
+      if (this.mode === 'outside') {
+        THINKING_OPEN.lastIndex = 0;
+        REASONING_OPEN.lastIndex = 0;
+        const thinkMatch = THINKING_OPEN.exec(this.hold);
+        THINKING_OPEN.lastIndex = 0;
+        const reasonMatch = REASONING_OPEN.exec(this.hold);
+        const thinkIdx = thinkMatch?.index ?? -1;
+        const reasonIdx = reasonMatch?.index ?? -1;
+        let openIdx = -1;
+        let kind: 'think' | 'reason' | null = null;
+        if (thinkIdx >= 0 && (reasonIdx < 0 || thinkIdx <= reasonIdx)) {
+          openIdx = thinkIdx;
+          kind = 'think';
+        } else if (reasonIdx >= 0) {
+          openIdx = reasonIdx;
+          kind = 'reason';
+        }
+
+        if (openIdx < 0) {
+          const partial = partialEmbeddedThinkingPrefixSuffix(this.hold);
+          visible += this.hold.slice(0, this.hold.length - partial.length);
+          this.hold = partial;
+          break;
+        }
+
+        visible += this.hold.slice(0, openIdx);
+        const openMatch = kind === 'think'
+          ? this.hold.slice(openIdx).match(THINKING_OPEN)
+          : this.hold.slice(openIdx).match(REASONING_OPEN);
+        const openLen = openMatch?.[0].length ?? 0;
+        this.hold = this.hold.slice(openIdx + openLen);
+        this.mode = kind === 'think' ? 'in_think' : 'in_reason';
+        continue;
       }
 
-      if (openIdx < 0) {
-        const partial = partialEmbeddedThinkingPrefixSuffix(this.hold);
-        emit += this.hold.slice(0, this.hold.length - partial.length);
+      const closeRe = this.mode === 'in_think'
+        ? /<\/(?:redacted_)?think(?:ing)?>/i
+        : /<\/reasoning>/i;
+      const closeMatch = closeRe.exec(this.hold);
+      if (!closeMatch || closeMatch.index === undefined) {
+        const partial = partialEmbeddedCloseSuffix(
+          this.hold,
+          this.mode === 'in_think' ? 'think' : 'reason',
+        );
+        thinking += this.hold.slice(0, this.hold.length - partial.length);
         this.hold = partial;
         break;
       }
 
-      emit += this.hold.slice(0, openIdx);
-      this.hold = this.hold.slice(openIdx);
-
-      if (kind === 'think') {
-        const closeIdx = this.hold.search(/<\/(?:redacted_)?think(?:ing)?>/i);
-        if (closeIdx < 0) break;
-        const closeMatch = this.hold.match(/<\/(?:redacted_)?think(?:ing)?>/i);
-        this.hold = this.hold.slice(closeIdx + (closeMatch?.[0].length ?? 0));
-        continue;
-      }
-
-      const closeIdx = this.hold.search(/<\/reasoning>/i);
-      if (closeIdx < 0) break;
-      this.hold = this.hold.slice(closeIdx + '</reasoning>'.length);
+      thinking += this.hold.slice(0, closeMatch.index);
+      this.hold = this.hold.slice(closeMatch.index + closeMatch[0].length);
+      this.mode = 'outside';
     }
-    return emit;
+    return { visible, thinking };
   }
 }

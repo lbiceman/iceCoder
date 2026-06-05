@@ -14,6 +14,7 @@ import {
 } from './text-format-tool-call-parsers.js';
 import {
   EmbeddedThinkingStreamFilter,
+  type StreamSplitChunk,
   stripEmbeddedThinking,
 } from './thinking-content-strip.js';
 
@@ -185,16 +186,18 @@ export class AssistantVisibleStreamFilter {
   private readonly thinking = new EmbeddedThinkingStreamFilter();
   private readonly tools = new TextToolCallStreamFilter();
 
-  feed(chunk: string): string {
-    if (!chunk) return '';
+  feed(chunk: string): StreamSplitChunk {
+    if (!chunk) return { visible: '', thinking: '' };
     const afterThinking = this.thinking.feed(chunk);
-    return afterThinking ? this.tools.feed(afterThinking) : '';
+    const visible = afterThinking.visible ? this.tools.feed(afterThinking.visible) : '';
+    return { visible, thinking: afterThinking.thinking };
   }
 
-  flush(): string {
+  flush(): StreamSplitChunk {
     const thinkingTail = this.thinking.flush();
-    const throughTools = thinkingTail ? this.tools.feed(thinkingTail) : '';
-    const toolTail = this.tools.flush();
-    return throughTools + toolTail;
+    let visible = '';
+    if (thinkingTail.visible) visible += this.tools.feed(thinkingTail.visible);
+    visible += this.tools.flush();
+    return { visible, thinking: thinkingTail.thinking };
   }
 }

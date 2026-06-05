@@ -138,8 +138,11 @@ export async function handleHarnessStop(
         );
       }, { tools: [] });
       const tail = streamFilter.flush();
-      if (tail) {
-        onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: tail });
+      if (tail.thinking) {
+        onStep?.({ type: 'reasoning_stream_delta', iteration: state.currentRound, delta: tail.thinking });
+      }
+      if (tail.visible) {
+        onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: tail.visible });
       }
       finalContent = resolveSalvagedLlmResponse(finalResponse).content ?? finalResponse.content;
       const sumLog = buildLlmRoundLogFields(messages, finalResponse.usage);

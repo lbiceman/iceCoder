@@ -387,7 +387,10 @@ export async function handleNoToolCalls(
     toolNames,
     acceptanceIncomplete,
     workspaceRoot,
+    taskSnap.fileDeliverableWriteVersions,
+    taskSnap.fileDeliverableConfirmVersions,
   );
+  state.taskState.reconcileOrphanFileDeliverableWriteVersions(workspaceRoot);
   state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
   let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
 
@@ -430,28 +433,20 @@ export async function handleNoToolCalls(
     );
   } else if (blockVerification) {
     if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
-      if (taskSnap.filesChanged.length > 0) {
-        state.taskState.reconcileFileDeliverablesAfterWrite(workspaceRoot);
-      }
-      state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
-      blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
-      state.verificationGateContinuationCount = 0;
-      if (blockVerification) {
-        console.log('[harness] verification gate 连续注入已达上限，强制结束');
-        return returnVerificationExhausted();
-      }
-      if (taskSnap.filesChanged.length > 0) {
-        console.log('[harness] 写后读 verification gate 熔断：已自动通过验收');
-      }
+      console.log('[harness] verification gate 连续注入已达上限，强制结束');
+      return returnVerificationExhausted();
     } else {
       state.verificationGateContinuationCount++;
       console.log(
         `[harness] verification gate 注入 (${state.verificationGateContinuationCount}/${MAX_VERIFICATION_GATE_CONTINUATIONS})`,
       );
       pushAssistantForHistory(msgs, response);
-      const prompt = acceptanceIncomplete && state.taskAcceptance
-        ? state.taskAcceptance.buildAcceptancePrompt()
-        : state.taskState.buildVerificationPrompt(workspaceRoot);
+      let prompt: string;
+      if (acceptanceIncomplete && state.taskAcceptance) {
+        prompt = state.taskAcceptance.buildAcceptancePrompt();
+      } else {
+        prompt = state.taskState.buildVerificationPrompt(workspaceRoot);
+      }
       const injectionParts = [
         prompt,
         '',
@@ -513,6 +508,11 @@ export async function handleNoToolCalls(
     await resilienceSaveCheckpoint(deps, 'verification_started', state);
     state.transition = 'no_tool_execution_recovery';
     return { action: 'continue' };
+  }
+
+  if (pendingWork) {
+    console.log('[harness] 验收未清，拒绝 model_done');
+    return returnVerificationExhausted('任务仍有未完成的验收项。');
   }
 
   state.stopHookContinuationCount = 0;

@@ -63,7 +63,7 @@ describe('runtime data paths', () => {
     expect(paths.sessionsDir).toBe(path.join(path.resolve(custom), 'sessions'));
   });
 
-  it('inline images: dev under data/, prod under user cache', async () => {
+  it('inline images: dev and prod under runtime data dir (imagesCache)', async () => {
     process.env.NODE_ENV = 'development';
     const devMod = await loadPathsModule();
     expect(devMod.getImagesCacheSessionDir('s1')).toBe(
@@ -73,10 +73,11 @@ describe('runtime data paths', () => {
     process.env.NODE_ENV = 'production';
     delete process.env.ICE_DATA_DIR;
     const prodMod = await loadPathsModule();
-    const cacheRoot = prodMod.getUserCacheDir();
+    const dataRoot = prodMod.getRuntimeDataDir();
     expect(prodMod.getImagesCacheSessionDir('s1')).toBe(
-      path.join(cacheRoot, 'imagesCache', 's1'),
+      path.join(dataRoot, 'imagesCache', 's1'),
     );
-    expect(cacheRoot).not.toBe(path.join(os.homedir(), '.iceCoder'));
+    expect(dataRoot).toBe(path.join(os.homedir(), '.iceCoder'));
+    expect(prodMod.getUserCacheDir()).not.toBe(dataRoot);
   });
 });

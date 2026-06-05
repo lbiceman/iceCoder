@@ -3,12 +3,14 @@ import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
   extractDeletedPathsFromCommand,
+  deliverableVersionFromMap,
   gateConfirmationPaths,
   hasUnconfirmedFileDeliverables,
   isFileDeliverableConfirmationTool,
   isMissingFileToolResult,
   isNonEmptyFileInfoOutput,
   isNonEmptyReadOutput,
+  listPendingConfirmationPaths,
   missingChangedFilePaths,
   normalizeDeliverablePath,
   pathsReferToSameFile,
@@ -121,7 +123,6 @@ export class TaskState {
 
   buildVerificationPrompt(workspaceRoot?: string): string {
     const all = [...this.filesChanged];
-    const paths = gateConfirmationPaths(all, workspaceRoot);
     const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
     const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
     const { pending, required, exempt } = verificationConfirmationStats(
@@ -131,13 +132,20 @@ export class TaskState {
       workspaceRoot,
     );
 
+    const pendingPaths = listPendingConfirmationPaths(
+      all,
+      writeVersions,
+      confirmVersions,
+      workspaceRoot,
+    );
+
     const maxList = 12;
-    const listed = paths.slice(0, maxList);
+    const listed = pendingPaths.slice(0, maxList);
     const fileList = listed.length > 0
       ? listed.map(f => `- ${f}`).join('\n')
-      : '- (changed files unknown)';
-    const more = paths.length > maxList
-      ? `\n- … and ${paths.length - maxList} more (use file_info on each before finishing)`
+      : '- (pending paths unknown — use file_info on each changed file before finishing)';
+    const more = pendingPaths.length > maxList
+      ? `\n- … and ${pendingPaths.length - maxList} more (use file_info on each before finishing)`
       : '';
 
     const exemptNote = exempt > 0
@@ -148,10 +156,41 @@ export class TaskState {
 
 Pending confirmation: ${pending} of ${required} file(s)${exemptNote}
 
-Changed files (confirm each with file_info or read_file):
+Still pending (confirm each with file_info or read_file):
 ${fileList}${more}
 
 Do not claim the task is complete before confirmation.`;
+  }
+
+  /** filesChanged 中缺少 writeVersion 的路径补版本（checkpoint 恢复或历史审计遗留） */
+  reconcileOrphanFileDeliverableWriteVersions(workspaceRoot?: string): number {
+    let fixed = 0;
+    for (const path of gateConfirmationPaths(
+      [...this.filesChanged],
+      workspaceRoot,
+      mapToVersionRecord(this.fileDeliverableWriteVersion),
+      mapToVersionRecord(this.fileDeliverableConfirmVersion),
+    )) {
+      const norm = normalizeDeliverablePath(path);
+      if ((this.fileDeliverableWriteVersion.get(norm) ?? 0) !== 0) continue;
+      this.fileDeliverableWriteVersion.set(
+        norm,
+        resolveOrphanWriteVersion(this.fileDeliverableConfirmVersion, path),
+      );
+      fixed++;
+    }
+    return fixed;
+  }
+
+  pendingFileDeliverableCount(workspaceRoot?: string): number {
+    const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
+    const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
+    return verificationConfirmationStats(
+      [...this.filesChanged],
+      writeVersions,
+      confirmVersions,
+      workspaceRoot,
+    ).pending;
   }
 
   /** 续跑时覆盖被「继续」污染的 goal/intent */
@@ -233,7 +272,12 @@ Do not claim the task is complete before confirmation.`;
    * 返回移除的路径数。
    */
   reconcileMissingChangedFiles(workspaceRoot?: string): number {
-    const missing = missingChangedFilePaths([...this.filesChanged], workspaceRoot);
+    const missing = missingChangedFilePaths(
+      [...this.filesChanged],
+      workspaceRoot,
+      mapToVersionRecord(this.fileDeliverableWriteVersion),
+      mapToVersionRecord(this.fileDeliverableConfirmVersion),
+    );
     let removed = 0;
     for (const path of missing) {
       if (this.removeChangedFileDeliverable(path)) removed++;
@@ -327,13 +371,27 @@ Do not claim the task is complete before confirmation.`;
     if (this.fileDeliverableWriteVersion.size === 0) {
       for (const path of writeConfirmationPaths([...this.filesChanged])) {
         const norm = normalizeDeliverablePath(path);
-        this.fileDeliverableWriteVersion.set(norm, 1);
+        this.fileDeliverableWriteVersion.set(
+          norm,
+          resolveOrphanWriteVersion(this.fileDeliverableConfirmVersion, path),
+        );
         if (snapshot.verificationStatus === 'passed') {
           this.fileDeliverableConfirmVersion.set(norm, 1);
         }
       }
     }
+    this.reconcileOrphanFileDeliverableWriteVersions();
   }
+}
+
+function resolveOrphanWriteVersion(
+  confirmVersions: Map<string, number>,
+  path: string,
+): number {
+  const confirmVer = deliverableVersionFromMap(confirmVersions, path);
+  // 已有 confirm 但缺 write → 升一档 write，强制重新 file_info/read（避免恢复态假确认）
+  if (confirmVer > 0) return confirmVer + 1;
+  return 1;
 }
 
 function mapToVersionRecord(map: Map<string, number>): Record<string, number> | undefined {

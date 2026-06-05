@@ -80,7 +80,7 @@ callHarnessLlm
 | 工具执行 | 更新 `TaskState`、`RepoContext`；Acceptance Gate 进度；file 写后版本 Map |
 | 工具执行后 | BranchBudget、rebuild escalation、verification digest inject（软提示） |
 | **L2 接入** | `observeAfterTools` → `evaluateAfterRound`（见 §4） |
-| 收尾 | 记忆注入；`verificationGateContinuationCount = 0`（有工具则重置 Gate 计数） |
+| 收尾 | 记忆注入；**仅当 file/Acceptance pending 净减少或 blocking 解除**时 `verificationGateContinuationCount = 0` |
 
 工具轮 **不** 调用 Verification Gate；Gate 仅在「无 tool_calls」时触发。
 
@@ -169,9 +169,17 @@ file_info / read_file   → fileDeliverableConfirmVersion[path] = writeVersion
 | Acceptance Gate | `run_command` |
 | 任一未确认变更 | `file_info` / `read_file` / `open_file` |
 
-**Gate 注入：** L2 活跃时经 `CorrectionPort`（`kind: recovery`），否则裸 `msgs.push`。
+**Gate 注入：** 注入前 `reconcileOrphanFileDeliverableWriteVersions`（缺 write 时：无 confirm→v1，有 confirm→confirm+1 强制重读）；prompt / incomplete 恢复均只列 **Still pending** 路径。
 
-**熔断：** `verificationGateContinuationCount >= MAX` → 尝试 `reconcileFileDeliverablesAfterWrite`；仍 pending → `verification_exhausted`。
+**工具轮 Gate 计数：** `maybeResetVerificationGateCounter` — file pending 或 Acceptance pending 净减少、或 blocking 解除时归零。
+
+**图 terminal 停止：** `shouldBlockGraphTerminalStop` 与 Verification Gate 同标尺；另经 `hasPendingWork` 拦截 `verificationStatus=failed`（写后读已确认但测试仍失败时图 done 不强制停）。**工具轮后不再 graph-stop**。
+
+**磁盘过滤：** `gateConfirmationPaths` / `missingChangedFilePaths` 对写后读 pending（write≠confirm）保留路径，不因落盘延迟或 mock 误清；已确认后磁盘不存在则排除。
+
+**prematureCompletion：** 达上限后若仍有 `pendingWork`，走 `verification_exhausted`，不允许 `model_done`。
+
+**熔断：** `verificationGateContinuationCount >= MAX`（默认 **5**）→ 直接 `verification_exhausted`（**不** auto-pass 写后读）。
 
 ### 3.3 Acceptance Gate（独立硬验收）
 

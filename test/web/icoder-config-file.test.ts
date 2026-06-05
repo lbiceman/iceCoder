@@ -4,9 +4,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import type { IceCoderConfigFile, ProviderConfig } from '../../src/web/types.js';
 import { resolveDefaultChatModelMeta } from '../../src/web/routes/config.js';
+import { resolvePackagedDataExamplePath } from '../../src/cli/paths.js';
+
+const configExamplePath = resolvePackagedDataExamplePath('config.example.json');
 
 function isProviderShape(p: unknown): p is ProviderConfig {
   if (!p || typeof p !== 'object') return false;
@@ -31,16 +33,14 @@ function assertIceCoderConfigFile(parsed: unknown): asserts parsed is IceCoderCo
 
 describe('IceCoderConfigFile vs data/config.example.json', () => {
   it('example file parses as IceCoderConfigFile', () => {
-    const raw = readFileSync(path.join(process.cwd(), 'data/config.example.json'), 'utf-8');
+    const raw = readFileSync(configExamplePath, 'utf-8');
     const parsed = JSON.parse(raw);
     assertIceCoderConfigFile(parsed);
     expect(parsed.providers.length).toBeGreaterThan(0);
   });
 
   it('resolveDefaultChatModelMeta succeeds on example path', async () => {
-    const meta = await resolveDefaultChatModelMeta(
-      path.join(process.cwd(), 'data/config.example.json'),
-    );
+    const meta = await resolveDefaultChatModelMeta(configExamplePath);
     expect(meta?.modelName).toBeTruthy();
     expect(meta?.maxContextTokens).toBeGreaterThan(0);
   });

@@ -58,6 +58,7 @@ export function isSyntheticUserBlockContent(content: string): boolean {
     || c.startsWith('<recent-file-contents>')
     || c.startsWith('<system-context>')
     || c.startsWith('<resume-checkpoint>')
+    || c.startsWith('[Background Task Status]')
   );
 }
 

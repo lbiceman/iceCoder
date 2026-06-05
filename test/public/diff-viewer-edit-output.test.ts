@@ -8,9 +8,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function loadDiffViewer() {
   const src = readFileSync(path.join(__dirname, '../../src/public/js/diff-viewer.js'), 'utf-8');
-  const ctx: { DiffViewer?: { renderFromText: (t: string, o?: object) => unknown; parseChangesOnly: (t: string) => unknown[] } } = {};
+  const ctx: {
+    window: { DiffViewer?: unknown };
+    DiffViewer?: { renderFromText: (t: string, o?: object) => unknown; parseChangesOnly: (t: string) => unknown[] };
+  } = { window: {} };
   runInNewContext(src, ctx);
-  return ctx.DiffViewer!;
+  return ctx.window.DiffViewer as NonNullable<typeof ctx.window.DiffViewer> & {
+    extractUnifiedDiff: (t: string) => string | null;
+    buildDisplayItems: (c: unknown[]) => Array<{ change?: unknown; omit?: boolean; omitted?: number }>;
+  };
 }
 
 describe('diff-viewer edit_file output', () => {

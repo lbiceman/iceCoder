@@ -789,15 +789,7 @@ export class Harness {
         });
         if (toolRound.action === 'return') return toolRound.result;
 
-        const graphStopAfterTools = await tryGraphTerminalStop(deps, {
-          state,
-          graphExecutor: deps.graphExecutor,
-          userMessage,
-          currentTools: state.tools,
-          logger,
-          onStep,
-        });
-        if (graphStopAfterTools) return graphStopAfterTools;
+        // 工具轮后不 graph-stop：写后读须走 Verification Gate，避免图 done 绕过验收
       }
     } finally {
       this.memoryIntegration.onLoopEnd(

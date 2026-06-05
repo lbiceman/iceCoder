@@ -59,6 +59,11 @@
   --msg-agent-bg: var(--bg-card);
   --msg-agent-border: var(--border-color);
 
+  /* 流式思考块：accent 同系弱化，与正文主色区分 */
+  --msg-thinking-text: #98CBCB;
+  --msg-thinking-label: #5a8f96;
+  --msg-thinking-border: rgba(57, 209, 224, 0.38);
+
   --pet-body: #27272a;
 
   /* Diff Viewer */
@@ -115,6 +120,10 @@
   --msg-user-bg: #2ab3c0;
   --msg-agent-bg: #ffffff;
   --msg-agent-border: #e4e4ee;
+
+  --msg-thinking-text: #5a7579;
+  --msg-thinking-label: #7a9599;
+  --msg-thinking-border: rgba(42, 179, 192, 0.42);
 
   --pet-body: #0a0a0c;
 

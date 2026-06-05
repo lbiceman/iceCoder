@@ -20,6 +20,10 @@ describe('session-goal-anchor', () => {
     expect(isPoisonedGoal('继续')).toBe(true);
   });
 
+  it('treats background task status blocks as poisoned goals', () => {
+    expect(isPoisonedGoal('[Background Task Status]\n- bg_abc: running\n[/Background Task Status]')).toBe(true);
+  });
+
   it('resolveSessionGoalAnchor prefers substantial persisted goal', () => {
     const anchor = resolveSessionGoalAnchor(
       '继续',

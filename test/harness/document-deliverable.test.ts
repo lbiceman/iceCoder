@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canVerifyDeliverableKind,
   classifyChangedFiles,
+  deliverableVersionFromMap,
   fileDeliverablePaths,
   gateConfirmationPaths,
   hasUnconfirmedFileDeliverables,
@@ -82,16 +83,32 @@ describe('document-deliverable', () => {
     expect(writeConfirmationPaths(['README.md', 'elevate.ps1'])).toEqual(['README.md']);
   });
 
-  it('gateConfirmationPaths excludes deleted files on disk', () => {
+  it('gateConfirmationPaths keeps pending write paths even when file missing on disk', () => {
     const missing = 'missing-gate-file-xyz123.md';
     expect(gateConfirmationPaths([missing], process.cwd())).toEqual([]);
+    expect(gateConfirmationPaths(
+      [missing],
+      process.cwd(),
+      { [missing]: 1 },
+      {},
+    )).toEqual([missing]);
     expect(hasUnconfirmedFileDeliverables(
       [missing],
       { [missing]: 1 },
       {},
       process.cwd(),
-    )).toBe(false);
+    )).toBe(true);
     expect(writeConfirmationPaths([missing])).toEqual([missing]);
+  });
+
+  it('gateConfirmationPaths excludes confirmed-then-deleted files on disk', () => {
+    const missing = 'missing-gate-file-xyz123.md';
+    expect(gateConfirmationPaths(
+      [missing],
+      process.cwd(),
+      { [missing]: 1 },
+      { [missing]: 1 },
+    )).toEqual([]);
   });
 
   it('isMissingFileToolResult detects ENOENT errors', () => {
@@ -183,9 +200,28 @@ describe('document-deliverable', () => {
     })).toBe(true);
   });
 
-  it('parses non-empty file_info output', () => {
+  it('parses file_info output including zero-byte files', () => {
     expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 50143, type: 'file' }))).toBe(true);
-    expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 0, type: 'file' }))).toBe(false);
+    expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 0, type: 'file' }))).toBe(true);
+    expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 0, type: 'directory' }))).toBe(false);
+  });
+
+  it('empty read_file output still confirms deliverable', () => {
+    const state = new TaskState('写占位文件');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'empty.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path: 'empty.md' } },
+      { success: true, output: '' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
+
+  it('deliverableVersionFromMap matches non-normalized map keys', () => {
+    const map = new Map<string, number>([['README.md', 3]]);
+    expect(deliverableVersionFromMap(map, 'readme.md')).toBe(3);
   });
 
   it('shell scripts are file_deliverable not engineering', () => {
@@ -446,11 +482,26 @@ describe('TaskState file deliverable verification', () => {
     expect(state.snapshot()).toEqual(before);
   });
 
-  it('buildVerificationPrompt skips deleted paths', () => {
+  it('buildVerificationPrompt still lists pending paths missing on disk', () => {
     const state = new TaskState('cleanup');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
       { success: true, output: 'ok' },
+    );
+    const prompt = state.buildVerificationPrompt(process.cwd());
+    expect(prompt).toMatch(/generate-assets\.mjs/);
+    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(true);
+  });
+
+  it('buildVerificationPrompt skips confirmed-then-deleted paths', () => {
+    const state = new TaskState('cleanup');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path: 'generate-assets.mjs' } },
+      { success: true, output: '// ok' },
     );
     const prompt = state.buildVerificationPrompt(process.cwd());
     expect(prompt).not.toMatch(/generate-assets\.mjs/);
@@ -475,18 +526,25 @@ describe('TaskState file deliverable verification', () => {
     expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
-  it('reconcileMissingChangedFiles prunes deleted paths from gate', () => {
+  it('reconcileMissingChangedFiles prunes only confirmed deleted paths', () => {
     const state = new TaskState('cleanup temp script');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
       { success: true, output: 'ok' },
     );
-    expect(state.isVerificationBlockingFinal()).toBe(true);
+    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(true);
 
+    expect(state.reconcileMissingChangedFiles(process.cwd())).toBe(0);
+    expect(state.snapshot().filesChanged).toEqual(['generate-assets.mjs']);
+
+    state.recordToolResult(
+      { id: 'r1', name: 'read_file', arguments: { path: 'generate-assets.mjs' } },
+      { success: true, output: '// ok' },
+    );
     const removed = state.reconcileMissingChangedFiles(process.cwd());
     expect(removed).toBeGreaterThanOrEqual(1);
     expect(state.snapshot().filesChanged).toEqual([]);
-    expect(state.isVerificationBlockingFinal()).toBe(false);
+    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(false);
   });
 
   it('removes changed file from verification gate after fs_operation delete', () => {
@@ -526,5 +584,94 @@ describe('TaskState file deliverable verification', () => {
 
     expect(state.snapshot().filesChanged).toEqual([]);
     expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
+
+  it('reconcileOrphanFileDeliverableWriteVersions backfills missing write versions', () => {
+    const state = new TaskState('doc task');
+    state.applySnapshot({
+      goal: 'doc task',
+      intent: 'edit',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['README.md', 'e2e/run6.mjs', 'vendor/three.min.js'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+      fileDeliverableWriteVersions: { 'vendor/three.min.js': 2 },
+      fileDeliverableConfirmVersions: { 'readme.md': 1 },
+    });
+
+    expect(state.snapshot().fileDeliverableWriteVersions?.['readme.md']).toBe(2);
+    expect(state.snapshot().fileDeliverableWriteVersions?.['e2e/run6.mjs']).toBe(1);
+    expect(state.pendingFileDeliverableCount()).toBe(3);
+
+    state.recordToolResult(
+      { id: 'f1', name: 'file_info', arguments: { path: 'e2e/run6.mjs' } },
+      { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
+    );
+    expect(state.pendingFileDeliverableCount()).toBe(2);
+  });
+
+  it('reconcileOrphan bumps write above restored confirm to force re-read', () => {
+    const state = new TaskState('edit task');
+    state.applySnapshot({
+      goal: 'edit task',
+      intent: 'edit',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['js/main.js'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+      fileDeliverableConfirmVersions: { 'js/main.js': 8 },
+    });
+
+    expect(state.snapshot().fileDeliverableWriteVersions?.['js/main.js']).toBe(9);
+    expect(state.pendingFileDeliverableCount()).toBe(1);
+
+    state.recordToolResult(
+      { id: 'f1', name: 'file_info', arguments: { path: 'js/main.js' } },
+      { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
+    );
+    expect(state.pendingFileDeliverableCount()).toBe(0);
+  });
+
+  it('buildVerificationPrompt does not mutate TaskState', () => {
+    const state = new TaskState('doc task');
+    state.applySnapshot({
+      goal: 'doc task',
+      intent: 'edit',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['README.md'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+    });
+    const before = state.snapshot();
+    state.buildVerificationPrompt();
+    expect(state.snapshot().fileDeliverableWriteVersions).toEqual(before.fileDeliverableWriteVersions);
+    expect(state.pendingFileDeliverableCount()).toBe(before.filesChanged.length);
+  });
+
+  it('buildVerificationPrompt lists only pending paths', () => {
+    const state = new TaskState('doc task');
+    state.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'README.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'w2', name: 'write_file', arguments: { path: 'notes.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'f1', name: 'file_info', arguments: { path: 'README.md' } },
+      { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
+    );
+
+    const prompt = state.buildVerificationPrompt();
+    expect(prompt).toMatch(/Still pending/);
+    expect(prompt).toMatch(/notes\.md/);
+    expect(prompt).not.toMatch(/^- README\.md/m);
   });
 });

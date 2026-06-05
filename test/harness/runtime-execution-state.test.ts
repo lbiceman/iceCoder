@@ -13,7 +13,7 @@ describe('RuntimeExecutionState - Batch 2', () => {
     const state = buildRuntimeExecutionState({
       round: 3,
       readonlyToolNames: cfg.readonlyToolNames,
-      plannedToolNames: ['read_file', 'search'],
+      plannedToolNames: ['read_file', 'glob'],
     });
 
     expect(state).toMatchObject({
@@ -23,7 +23,7 @@ describe('RuntimeExecutionState - Batch 2', () => {
       plannedWriteTargets: 0,
       writeTargetsThisRound: 0,
       activeGraphHasImplementNode: false,
-      plannedToolNames: ['read_file', 'search'],
+      plannedToolNames: ['read_file', 'glob'],
     });
   });
 

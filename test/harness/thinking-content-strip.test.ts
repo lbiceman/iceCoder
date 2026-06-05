@@ -22,17 +22,17 @@ describe('thinking-content-strip', () => {
     expect(stripped).toContain('iceCoder');
   });
 
-  it('EmbeddedThinkingStreamFilter strips incrementally', () => {
+  it('EmbeddedThinkingStreamFilter strips incrementally and routes thinking', () => {
     const filter = new EmbeddedThinkingStreamFilter();
-    expect(filter.feed('<think>内部')).toBe('');
-    expect(filter.feed('推理</think>\n\n你好')).toBe('\n\n你好');
-    expect(filter.flush()).toBe('');
+    expect(filter.feed('<think>内部')).toEqual({ visible: '', thinking: '内部' });
+    expect(filter.feed('推理</think>\n\n你好')).toEqual({ visible: '\n\n你好', thinking: '推理' });
+    expect(filter.flush()).toEqual({ visible: '', thinking: '' });
   });
 
   it('AssistantVisibleStreamFilter applies thinking before tool stripping', () => {
     const filter = new AssistantVisibleStreamFilter();
-    expect(filter.feed('<think>x</think>可见')).toBe('可见');
-    expect(filter.flush()).toBe('');
+    expect(filter.feed('<think>x</think>可见')).toEqual({ visible: '可见', thinking: 'x' });
+    expect(filter.flush()).toEqual({ visible: '', thinking: '' });
   });
 
   it('sanitizeAssistantContentForUser removes thinking for display', () => {

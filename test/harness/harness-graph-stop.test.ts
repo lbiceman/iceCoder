@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { tryGraphTerminalStop } from '../../src/harness/harness-graph-stop.js';
+import { shouldBlockGraphTerminalStop, tryGraphTerminalStop } from '../../src/harness/harness-graph-stop.js';
 import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
 import { markGraphFailed } from '../../src/harness/task-graph.js';
 import { TaskState } from '../../src/harness/task-state.js';
@@ -113,6 +113,69 @@ describe('tryGraphTerminalStop', () => {
       verificationRequired: true,
       verificationStatus: 'required',
     });
+
+    const result = await tryGraphTerminalStop(
+      {
+        loopController,
+        enqueueCheckpointPersist: async (t) => t(),
+        resilienceV2Enabled: false,
+      },
+      {
+        state,
+        graphExecutor: executor,
+        userMessage: 'fix tests',
+        currentTools: [],
+        logger: { loopStop: vi.fn(), getEntries: vi.fn(() => []) } as any,
+      },
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('写后读 pending（有 writeVersion 无 confirm）时不强制停止', async () => {
+    const loopController = new LoopController({ maxRounds: 10 });
+    const executor = new GraphExecutor();
+    finishGraph(executor);
+
+    const state = makeState();
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'write_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    expect(shouldBlockGraphTerminalStop(state)).toBe(true);
+
+    const result = await tryGraphTerminalStop(
+      {
+        loopController,
+        enqueueCheckpointPersist: async (t) => t(),
+        resilienceV2Enabled: false,
+      },
+      {
+        state,
+        graphExecutor: executor,
+        userMessage: 'fix tests',
+        currentTools: [],
+        logger: { loopStop: vi.fn(), getEntries: vi.fn(() => []) } as any,
+      },
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('verificationStatus=failed 时 hasPendingWork 拦截 graph-stop', async () => {
+    const loopController = new LoopController({ maxRounds: 10 });
+    const executor = new GraphExecutor();
+    finishGraph(executor);
+
+    const state = makeState();
+    const snap = state.taskState.snapshot();
+    state.taskState.applySnapshot({
+      ...snap,
+      filesChanged: [],
+      verificationRequired: true,
+      verificationStatus: 'failed',
+    });
+    expect(shouldBlockGraphTerminalStop(state)).toBe(true);
 
     const result = await tryGraphTerminalStop(
       {

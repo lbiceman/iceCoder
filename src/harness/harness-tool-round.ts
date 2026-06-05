@@ -67,6 +67,7 @@ import {
   resolveVerificationSuccessSummary,
 } from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
+import { maybeResetVerificationGateCounter } from './harness-verification-gate.js';
 import {
   buildDiagnosticGateMessage,
   shouldActivateBuildDiagnosticGate,
@@ -250,6 +251,12 @@ export async function runHarnessToolRound(
     }
   }
 
+  const acceptancePendingBefore = state.taskAcceptance?.isActive()
+    ? state.taskAcceptance.getPendingCount()
+    : 0;
+  const pendingDeliverablesBefore = state.taskState.pendingFileDeliverableCount(deps.workspaceRoot);
+  state.taskState.reconcileOrphanFileDeliverableWriteVersions(deps.workspaceRoot);
+
   const repoFilesChangedBefore = state.repoContext.snapshot().filesChanged.length;
   const toolStats = await executeToolCallsStreaming(deps, {
     toolCalls: executableToolCalls,
@@ -266,7 +273,25 @@ export async function runHarnessToolRound(
   });
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;
-    state.verificationGateContinuationCount = 0;
+    const acceptanceIncompleteAfter = Boolean(
+      state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
+    );
+    const acceptancePendingAfter = state.taskAcceptance?.isActive()
+      ? state.taskAcceptance.getPendingCount()
+      : 0;
+    const pendingDeliverablesAfter = state.taskState.pendingFileDeliverableCount(deps.workspaceRoot);
+    const blockingAfter = state.taskState.isVerificationBlockingFinal(
+      acceptanceIncompleteAfter,
+      deps.workspaceRoot,
+    );
+    maybeResetVerificationGateCounter(
+      state,
+      pendingDeliverablesBefore,
+      pendingDeliverablesAfter,
+      blockingAfter,
+      acceptancePendingBefore,
+      acceptancePendingAfter,
+    );
   }
   // P0-A — acceptance gate / verification buffer：按工具结果**真实状态**而非「启动成功」判定。
   //   - 后台启动 (`mode:'background'|'escalated'`) → acceptance 状态保持 pending

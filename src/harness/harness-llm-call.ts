@@ -116,8 +116,11 @@ export async function callHarnessLlm(
           dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep);
         }, { tools: currentTools });
         const tail = streamFilter.flush();
-        if (tail) {
-          onStep?.({ type: 'stream_delta', iteration: round, delta: tail });
+        if (tail.thinking) {
+          onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
+        }
+        if (tail.visible) {
+          onStep?.({ type: 'stream_delta', iteration: round, delta: tail.visible });
         }
       } catch (streamError) {
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);

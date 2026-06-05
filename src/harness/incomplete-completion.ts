@@ -5,6 +5,7 @@ import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
   gateConfirmationPaths,
   hasUnfulfilledFileDeliverableGoal,
+  listPendingConfirmationPaths,
   snapshotHasUnconfirmedFileDeliverables,
   verificationConfirmationStats,
 } from './document-deliverable.js';
@@ -18,6 +19,8 @@ export function hasPendingWork(
   workspaceRoot?: string,
 ): boolean {
   if (hasPendingAcceptanceWork(acceptance)) return true;
+
+  if (task.verificationStatus === 'failed') return true;
 
   if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
     return true;
@@ -61,7 +64,12 @@ export function buildIncompleteContinuationPrompt(
   if (repo.recentDiagnostics.length > 0) {
     lines.push(`- Recent tool failures: ${repo.recentDiagnostics.slice(-3).join('; ')}`);
   }
-  const filePaths = gateConfirmationPaths(task.filesChanged, workspaceRoot);
+  const filePaths = gateConfirmationPaths(
+    task.filesChanged,
+    workspaceRoot,
+    task.fileDeliverableWriteVersions,
+    task.fileDeliverableConfirmVersions,
+  );
   const fileStats = verificationConfirmationStats(
     task.filesChanged,
     task.fileDeliverableWriteVersions,
@@ -74,6 +82,23 @@ export function buildIncompleteContinuationPrompt(
       `- Changed files pending confirmation: ${fileStats.pending} of ${fileStats.required}`
       + (fileStats.exempt > 0 ? ` (${fileStats.exempt} dot-dir/temp exempt)` : ''),
     );
+    const pendingPaths = listPendingConfirmationPaths(
+      task.filesChanged,
+      task.fileDeliverableWriteVersions,
+      task.fileDeliverableConfirmVersions,
+      workspaceRoot,
+    );
+    const maxList = 12;
+    const listed = pendingPaths.slice(0, maxList);
+    if (listed.length > 0) {
+      lines.push('', 'Still pending (confirm each with file_info or read_file):');
+      for (const p of listed) {
+        lines.push(`- ${p}`);
+      }
+      if (pendingPaths.length > maxList) {
+        lines.push(`- … and ${pendingPaths.length - maxList} more`);
+      }
+    }
   }
   if (fileStats.required > 0) {
     lines.push(`- Confirm each required path with file_info or read_file (${fileStats.required} file(s)).`);

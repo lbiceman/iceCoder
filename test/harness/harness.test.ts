@@ -1779,34 +1779,48 @@ describe('Harness - 停止钩子连续干预上限', () => {
   });
 
   it('有文件变更时跳过 stop hook，读确认后正常收尾', async () => {
-    const tools = [makeTool('write_file'), makeTool('read_file')];
-    const executor = createToolExecutor(tools);
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-stop-hook-'));
+    try {
+      const tools = [makeTool('write_file'), makeTool('read_file')];
+      const executor = createToolExecutor(tools, async (args) => {
+        if (args.path) {
+          const abs = path.join(workspaceRoot, String(args.path));
+          await fs.mkdir(path.dirname(abs), { recursive: true });
+          await fs.writeFile(abs, String(args.content ?? 'ok'), 'utf8');
+        }
+        return { success: true, output: String(args.content ?? 'ok') };
+      });
+      const harness = new Harness(minConfig({
+        context: { systemPrompt: 'test', tools },
+        workspaceRoot,
+      }), executor);
 
-    harness.getStopHookManager().register(async () => ({
-      shouldContinue: true,
-      message: '请继续。',
-      hookName: 'always_continue',
-    }));
+      harness.getStopHookManager().register(async () => ({
+        shouldContinue: true,
+        message: '请继续。',
+        hookName: 'always_continue',
+      }));
 
-    const writeRound = () => toolCallResponse([
-      { id: 'w', name: 'write_file', args: { path: 'src/game/scene.ts', content: 'export {}' } },
-    ]);
-    const readRound = () => toolCallResponse([
-      { id: 'r', name: 'read_file', args: { path: 'src/game/scene.ts' } },
-    ]);
+      const writeRound = () => toolCallResponse([
+        { id: 'w', name: 'write_file', args: { path: 'src/game/scene.ts', content: 'export {}' } },
+      ]);
+      const readRound = () => toolCallResponse([
+        { id: 'r', name: 'read_file', args: { path: 'src/game/scene.ts' } },
+      ]);
 
-    // 写前 stop hook 可累计；write+read 后 filesChanged>0 → 跳过 stop hook → model_done
-    const chatFn = createChatFn([
-      finalResponse('next step'),
-      finalResponse('next step'),
-      writeRound(),
-      readRound(),
-      finalResponse('done'),
-    ], finalResponse('done'));
-    const result = await harness.run('实现登录功能', chatFn);
+      const chatFn = createChatFn([
+        finalResponse('next step'),
+        finalResponse('next step'),
+        writeRound(),
+        readRound(),
+        finalResponse('done'),
+      ], finalResponse('done'));
+      const result = await harness.run('实现登录功能', chatFn);
 
-    expect(result.loopState.stopReason).toBe('model_done');
+      expect(result.loopState.stopReason).toBe('model_done');
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 });
 

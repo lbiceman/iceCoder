@@ -92,6 +92,7 @@ export function syncHydratedTaskState(
     filesChanged: mergedFilesChanged,
     commandsRun: mergedCommands,
   });
+  taskState.reconcileOrphanFileDeliverableWriteVersions();
 
   if (repo.recentDiagnostics.length > 0) {
     taskState.forceVerificationFailed();
