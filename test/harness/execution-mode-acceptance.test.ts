@@ -74,7 +74,7 @@ function relativeSourcePath(file: string): string {
 describe('Execution mode acceptance - Batch 6 / T13', () => {
   it('keeps L0 readonly plans in free mode and away from step-gated forced execution', () => {
     const readonlyState = state({
-      plannedToolNames: ['read_file', 'search'],
+      plannedToolNames: ['read_file', 'glob'],
       plannedWriteTargets: 0,
       writeTargetsThisRound: 0,
     });
@@ -172,6 +172,7 @@ describe('Execution mode acceptance - Batch 6 / T13', () => {
     const allowed = new Set([
       'src/harness/supervisor/mode-controller.ts',
       'src/harness/supervisor/supervisor-config.ts',
+      'src/cli/paths.ts',
     ]);
     const directReads: string[] = [];
 

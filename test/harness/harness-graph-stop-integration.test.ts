@@ -2,6 +2,9 @@
  * Harness 全链路：任务图 done 强制 stop 闸门。
  */
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { Harness } from '../../src/harness/harness.js';
 import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
@@ -37,12 +40,20 @@ function toolCallResponse(calls: { id: string; name: string; args?: Record<strin
   };
 }
 
-function createToolExecutor(tools: ToolDefinition[]): ToolExecutor {
+function createToolExecutor(tools: ToolDefinition[], workspaceRoot = process.cwd()): ToolExecutor {
   const registry = new ToolRegistry();
   for (const t of tools) {
     registry.register({
       definition: t,
-      handler: async () => ({ success: true, output: 'ok' }) as ToolResult,
+      handler: async (args) => {
+        if (t.name === 'write_file') {
+          const rel = String(args.path ?? '');
+          const abs = join(workspaceRoot, rel);
+          await mkdir(dirname(abs), { recursive: true });
+          await writeFile(abs, String(args.content ?? ''), 'utf8');
+        }
+        return { success: true, output: 'ok' } as ToolResult;
+      },
     });
   }
   return new ToolExecutor(registry, { maxRetries: 0, retryBaseDelay: 0, retryMaxDelay: 0, toolTimeout: 5000 });
@@ -137,23 +148,31 @@ describe('Harness graph terminal stop (integration)', () => {
   });
 
   it('图 done 但有 pendingWork：继续跑，不因闸门误停', async () => {
-    const tools = [makeTool('write_file')];
-    const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), createToolExecutor(tools));
-    const ge = harnessGraph(harness);
-    ge.initGraph({ goal: 'run unit tests', intent: 'test' });
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'ice-graph-stop-'));
+    try {
+      const tools = [makeTool('write_file')];
+      const harness = new Harness(minConfig({
+        context: { systemPrompt: 'test', tools },
+        workspaceRoot,
+      }), createToolExecutor(tools, workspaceRoot));
+      const ge = harnessGraph(harness);
+      ge.initGraph({ goal: 'run unit tests', intent: 'test' });
 
-    const chatFn = vi.fn(createChatFn([
-      toolCallResponse([{ id: 'w1', name: 'write_file', args: { path: 'src/a.ts', content: 'x' } }]),
-      finalResponse('continuing verification'),
-    ]));
+      const chatFn = vi.fn(createChatFn([
+        toolCallResponse([{ id: 'w1', name: 'write_file', args: { path: 'src/a.ts', content: 'x' } }]),
+        finalResponse('continuing verification'),
+      ]));
 
-    const result = await harness.run('run unit tests and fix src/a.ts', chatFn, (e) => {
-      if (e.type === 'tool_result' && !ge.isGraphDoneForHarnessStop()) {
-        finishGraph(ge);
-      }
-    });
+      const result = await harness.run('run unit tests and fix src/a.ts', chatFn, (e) => {
+        if (e.type === 'tool_result' && !ge.isGraphDoneForHarnessStop()) {
+          finishGraph(ge);
+        }
+      });
 
-    expect(chatFn).toHaveBeenCalledTimes(2);
-    expect(result.content).toContain('continuing verification');
+      expect(chatFn).toHaveBeenCalledTimes(2);
+      expect(result.content).toContain('continuing verification');
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 });

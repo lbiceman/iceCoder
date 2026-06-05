@@ -66,6 +66,10 @@ export class TaskAcceptanceTracker {
     return this.commands.filter(c => c.status === 'pending');
   }
 
+  getPendingCount(): number {
+    return this.getPendingCommands().length;
+  }
+
   getPassedCount(): number {
     return this.commands.filter(c => c.status === 'passed').length;
   }

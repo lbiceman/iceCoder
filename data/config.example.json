@@ -1,0 +1,17 @@
+{
+  "supervisorMode": "adaptive",
+  "providers": [
+    {
+      "id": "default",
+      "apiUrl": "https://api.openai.com/v1",
+      "apiKey": "sk-your-api-key-here",
+      "modelName": "gpt-4o",
+      "parameters": {
+        "temperature": 0.7,
+        "maxTokens": 16384
+      },
+      "isDefault": true,
+      "maxContextTokens": 128000
+    }
+  ]
+}

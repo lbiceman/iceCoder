@@ -145,9 +145,20 @@ export function isVerificationExemptPath(path: string): boolean {
 export function missingChangedFilePaths(
   filesChanged: readonly string[],
   workspaceRoot?: string,
+  writeVersions?: Record<string, number>,
+  confirmVersions?: Record<string, number>,
 ): string[] {
   if (!workspaceRoot?.trim() || filesChanged.length === 0) return [];
-  return filesChanged.filter(path => !workspaceFileExists(workspaceRoot, path));
+  return filesChanged.filter(path => {
+    if (workspaceFileExists(workspaceRoot, path)) return false;
+    if (writeVersions) {
+      const writeVer = versionForDeliverablePath(path, writeVersions);
+      const confirmVer = versionForDeliverablePath(path, confirmVersions);
+      // 写后读 pending：即使磁盘暂未可见也不从 filesChanged 剔除（避免 mock/落盘延迟误清）
+      if (writeVer > 0 && confirmVer !== writeVer) return false;
+    }
+    return true;
+  });
 }
 
 /** Gate 写后须 read 确认的路径（排除临时/草稿，其余与 filesChanged 同标尺） */
@@ -157,15 +168,26 @@ export function writeConfirmationPaths(filesChanged: readonly string[]): string[
 
 /**
  * 门控实际待确认路径：在 writeConfirmationPaths 基础上排除磁盘已不存在的文件。
- * 文件被 cleanup/删除后不应再要求 read_file/file_info。
+ * 写后读 pending（writeVersion>0 且 confirm≠write）始终保留，避免落盘延迟/mock 绕过 Gate。
+ * 已确认后磁盘不存在的路径排除（cleanup/删除后不再要求 read_file/file_info）。
  */
 export function gateConfirmationPaths(
   filesChanged: readonly string[],
   workspaceRoot?: string,
+  writeVersions?: Record<string, number>,
+  confirmVersions?: Record<string, number>,
 ): string[] {
   const paths = writeConfirmationPaths(filesChanged);
   if (!workspaceRoot?.trim()) return paths;
-  return paths.filter(path => workspaceFileExists(workspaceRoot, path));
+  return paths.filter(path => {
+    if (writeVersions) {
+      const writeVer = versionForDeliverablePath(path, writeVersions);
+      const confirmVer = versionForDeliverablePath(path, confirmVersions);
+      if (writeVer > 0 && confirmVer !== writeVer) return true;
+      if (writeVer > 0 && confirmVer === writeVer) return false;
+    }
+    return workspaceFileExists(workspaceRoot, path);
+  });
 }
 
 /** 写后读待确认统计（prompt / 日志用） */
@@ -175,7 +197,7 @@ export function verificationConfirmationStats(
   confirmVersions?: Record<string, number>,
   workspaceRoot?: string,
 ): { required: number; pending: number; exempt: number } {
-  const requiredPaths = gateConfirmationPaths(filesChanged, workspaceRoot);
+  const requiredPaths = gateConfirmationPaths(filesChanged, workspaceRoot, writeVersions, confirmVersions);
   const exempt = filesChanged.length - requiredPaths.length;
   if (requiredPaths.length === 0) {
     return { required: 0, pending: 0, exempt };
@@ -243,11 +265,15 @@ export function canVerifyDeliverableKind(
   toolNames: readonly string[],
   acceptanceIncomplete?: boolean,
   workspaceRoot?: string,
+  writeVersions?: Record<string, number>,
+  confirmVersions?: Record<string, number>,
 ): boolean {
   if (acceptanceIncomplete) {
     return toolNames.some(name => name === 'run_command');
   }
-  if (gateConfirmationPaths(filesChanged, workspaceRoot).length === 0) return true;
+  if (gateConfirmationPaths(filesChanged, workspaceRoot, writeVersions, confirmVersions).length === 0) {
+    return true;
+  }
   return toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
 }
 
@@ -275,7 +301,7 @@ export function hasUnconfirmedFileDeliverables(
   confirmVersions?: Record<string, number>,
   workspaceRoot?: string,
 ): boolean {
-  const paths = gateConfirmationPaths(filesChanged, workspaceRoot);
+  const paths = gateConfirmationPaths(filesChanged, workspaceRoot, writeVersions, confirmVersions);
   if (paths.length === 0) return false;
 
   const hasWriteMaps = writeVersions && Object.keys(writeVersions).length > 0;
@@ -300,21 +326,54 @@ export function snapshotHasUnconfirmedFileDeliverables(
   );
 }
 
-/** file_info 成功结果是否表明非空文件 */
+/** file_info 成功结果是否表明目标为可读文件（含 0 字节占位文件） */
 export function isNonEmptyFileInfoOutput(output: string | undefined): boolean {
   if (!output?.trim()) return false;
   try {
     const parsed = JSON.parse(output) as { size?: unknown; type?: unknown };
     if (parsed.type === 'directory') return false;
-    if (typeof parsed.size === 'number') return parsed.size > 0;
+    if (typeof parsed.size === 'number') return parsed.size >= 0;
   } catch {
     // 非 JSON 但调用成功时仍视为已确认
   }
   return true;
 }
 
+/** read_file 成功即可确认存在（允许空文件内容） */
 export function isNonEmptyReadOutput(output: string | undefined): boolean {
-  return (output?.trim().length ?? 0) > 0;
+  return output !== undefined && output !== null;
+}
+
+/** 从版本 Map 查路径版本（与 versionForDeliverablePath 同标尺，支持非归一化键） */
+export function deliverableVersionFromMap(
+  versions: Map<string, number> | Record<string, number> | undefined,
+  path: string,
+): number {
+  if (!versions) return 0;
+  if (!(versions instanceof Map)) {
+    return versionForDeliverablePath(path, versions);
+  }
+  const norm = normalizeDeliverablePath(path);
+  if (versions.has(norm)) return versions.get(norm)!;
+  for (const [key, ver] of versions) {
+    if (pathsReferToSameFile(key, path)) return ver;
+  }
+  return 0;
+}
+
+/** Gate / prompt 用：仍待写后确认的路径列表 */
+export function listPendingConfirmationPaths(
+  filesChanged: readonly string[],
+  writeVersions?: Record<string, number>,
+  confirmVersions?: Record<string, number>,
+  workspaceRoot?: string,
+): string[] {
+  const paths = gateConfirmationPaths(filesChanged, workspaceRoot, writeVersions, confirmVersions);
+  return paths.filter(path => {
+    const writeVer = versionForDeliverablePath(path, writeVersions);
+    const confirmVer = versionForDeliverablePath(path, confirmVersions);
+    return writeVer === 0 || confirmVer !== writeVer;
+  });
 }
 
 /** 任务目标或已变更文件表明为文件交付类（stop hook 减负） */

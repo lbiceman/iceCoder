@@ -22,7 +22,7 @@ function state(overrides: Partial<RuntimeExecutionState> = {}): RuntimeExecution
     stableRounds: 0,
     activeGraphHasImplementNode: false,
     readonlyToolNames: cfg.readonlyToolNames,
-    plannedToolNames: ['read_file', 'search'],
+    plannedToolNames: ['read_file', 'glob'],
     forcedEntryRound: null,
     forcedTaskBearingRoundsSinceEntry: 0,
     ...overrides,

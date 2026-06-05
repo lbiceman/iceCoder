@@ -10,12 +10,25 @@ import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
 import { hasPendingWork } from './incomplete-completion.js';
+import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import { sanitizeAssistantContentForUser } from './text-tool-call-salvage.js';
 import type { HarnessResult, HarnessStepEvent } from './types.js';
 
 export interface GraphStopDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
   workspaceRoot?: string;
+}
+
+/** 图 terminal 时是否应继续跑（与 Verification Gate 同标尺 + pendingWork） */
+export function shouldBlockGraphTerminalStop(
+  state: HarnessRunState,
+  workspaceRoot?: string,
+): boolean {
+  const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
+  if (state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot)) {
+    return true;
+  }
+  return hasPendingWork(state.taskState.snapshot(), state.taskAcceptance, workspaceRoot);
 }
 
 export interface TryGraphTerminalStopArgs {
@@ -28,8 +41,8 @@ export interface TryGraphTerminalStopArgs {
 }
 
 /**
- * 任务图已 terminal 且无 pendingWork 时强制以 model_done 结束，避免图完成后空转。
- * pendingWork 仍 true 时不拦截（验收未清继续跑）。
+ * 任务图已 terminal 且无 pending 验收工作时强制以 model_done 结束，避免图完成后空转。
+ * 写后读 / Acceptance Gate pending 时不拦截（与 Verification Gate 同标尺）。
  */
 export async function tryGraphTerminalStop(
   deps: GraphStopDeps,
@@ -40,13 +53,11 @@ export async function tryGraphTerminalStop(
     return null;
   }
 
-  const taskSnap = state.taskState.snapshot();
-  if (hasPendingWork(taskSnap, state.taskAcceptance, deps.workspaceRoot)) {
+  if (shouldBlockGraphTerminalStop(state, deps.workspaceRoot)) {
     return null;
   }
 
   onStep?.({ type: 'task_graph_done' });
-  state.taskState.tryMarkFileDeliverablesVerified(deps.workspaceRoot);
 
   deps.loopController.stop('model_done');
   const finalState = deps.loopController.getState();
@@ -78,7 +89,7 @@ export async function tryGraphTerminalStop(
     }),
   });
 
-  console.log('[harness] 任务图已 terminal 且无 pendingWork，强制 model_done 停止');
+  console.log('[harness] 任务图已 terminal 且无 pending 验收工作，强制 model_done 停止');
 
   return {
     content: finalContent,

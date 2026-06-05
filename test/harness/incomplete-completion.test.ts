@@ -27,6 +27,16 @@ describe('hasPendingWork', () => {
     })).toBe(false);
   });
 
+  it('is true when verificationStatus failed even if deliverables confirmed', () => {
+    expect(hasPendingWork({
+      goal: 'x', intent: 'edit', phase: 'verification',
+      filesRead: [], filesChanged: ['src/a.ts'],
+      commandsRun: ['npm test'], verificationRequired: true, verificationStatus: 'failed',
+      fileDeliverableWriteVersions: { 'src/a.ts': 1 },
+      fileDeliverableConfirmVersions: { 'src/a.ts': 1 },
+    })).toBe(true);
+  });
+
   it('is true for engineering-only while write not confirmed', () => {
     expect(hasPendingWork({
       goal: 'x', intent: 'edit', phase: 'verification',

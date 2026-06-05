@@ -283,7 +283,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     expect(result.action).toBe('continue');
     expect(state.verificationGateContinuationCount).toBe(1);
     expect(messages.at(-1)?.content).toMatch(/file_info|read_file/i);
-    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (1/10)');
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (1/5)');
     logSpy.mockRestore();
   });
 
@@ -293,7 +293,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
       { role: 'user', content: '写一份 md 报告' },
     ];
     const state = makeState(messages, '写一份 md 报告');
-    state.verificationGateContinuationCount = 4;
+    state.verificationGateContinuationCount = 2;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: '/tmp/report.md' } },
       { success: true, output: 'ok' },
@@ -312,9 +312,9 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     );
 
     expect(result.action).toBe('continue');
-    expect(state.verificationGateContinuationCount).toBe(5);
+    expect(state.verificationGateContinuationCount).toBe(3);
     expect(messages.at(-1)?.content).toMatch(/native function-calling \(tool_calls\)/i);
-    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (5/10)');
+    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (3/5)');
     expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 半程叠加 no_tool 强提示');
     logSpy.mockRestore();
   });
@@ -353,7 +353,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
       { role: 'user', content: '写 md' },
     ];
     const state = makeState(messages, '写 md');
-    state.verificationGateContinuationCount = 10;
+    state.verificationGateContinuationCount = 5;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: '/tmp/x.md' } },
       { success: true, output: 'ok' },
@@ -464,7 +464,7 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
     ];
     const state = makeState(messages, 'fix bug');
     state.noToolExecutionRecoveryCount = 1;
-    state.verificationGateContinuationCount = 10;
+    state.verificationGateContinuationCount = 5;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
@@ -522,5 +522,31 @@ describe('handleNoToolCalls — 文档交付物验收', () => {
 
     expect(result.action).toBe('continue');
     expect(state.verificationGateContinuationCount).toBe(1);
+  });
+
+  it('premature completion 上限后 pendingWork 仍 true → verification_exhausted', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: '整理成 md 文档放到桌面' },
+    ];
+    const state = makeState(messages, '整理成 md 文档放到桌面');
+    state.prematureCompletionRecoveryCount = 3;
+    state.noToolExecutionRecoveryCount = 1;
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '文档已经整理好了。', finishReason: 'stop' },
+        userMessage: '整理成 md 文档放到桌面',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+    }
   });
 });

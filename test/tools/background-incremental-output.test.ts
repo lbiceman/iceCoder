@@ -284,16 +284,21 @@ describe('BackgroundTaskManager — formatRunningSummaryBlock', () => {
     expect(block!).toMatch(/running/);
   });
 
-  it('respects maxChars (truncates with `...more tasks` hint)', () => {
-    // 起 10 个 sleeper（其中 8 个能成功，8 是 MAX_CONCURRENT）
-    for (let i = 0; i < 8; i++) {
-      mgr.spawn(sleepCmd(30), 60_000, `task-with-a-longer-label-${i}`);
+  it('respects maxChars (truncates with `...more tasks` hint)', async () => {
+    const longLabel = 'task-with-a-very-long-label-padding-'.repeat(3);
+    for (let i = 0; i < 4; i++) {
+      const spawned = mgr.spawn(sleepCmd(30), 60_000, `${longLabel}${i}`);
+      expect(spawned.taskId, spawned.error).toBeTruthy();
     }
-    const block = mgr.formatRunningSummaryBlock({ intervalMs: 1, maxChars: 200 });
-    expect(block).not.toBeNull();
-    expect(block!.length).toBeLessThanOrEqual(300);  // 包括 truncation hint
-    expect(block!).toMatch(/more tasks/);
-  });
+
+    await expect.poll(
+      () => mgr.formatRunningSummaryBlock({ intervalMs: 1, maxChars: 120 }),
+      { timeout: 10_000 },
+    ).toMatch(/\.\.\. more tasks; use action:"list" to see all/);
+
+    const block = mgr.formatRunningSummaryBlock({ intervalMs: 1, maxChars: 120 });
+    expect(block!.length).toBeLessThanOrEqual(200);
+  }, 15_000);
 
   it('after markSummaryEmitted, subsequent block is null until next interval', () => {
     mgr.spawn(sleepCmd(30), 60_000, 'one-shot');

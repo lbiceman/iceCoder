@@ -63,8 +63,14 @@
   transform: rotate(-90deg);
 }
 .message.assistant.message-thinking.is-collapsed .msg-thinking-body,
-.message.agent.message-thinking.is-collapsed .msg-thinking-body {
+.message.agent.message-thinking.is-collapsed .msg-thinking-body,
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-footer,
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-footer {
   display: none;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header,
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header {
+  margin: 0;
 }
 /* 不设 max-height / 内层滚动，高度随内容增长，由 .chat-messages 统一贴底跟滚（80px 阈值） */
 .message.assistant.message-thinking .msg-thinking-body,
