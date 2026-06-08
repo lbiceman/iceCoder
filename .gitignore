@@ -40,3 +40,9 @@ bin/
 __test_*
 coverage/
 runtime/telemetry.jsonl
+
+# Electron 桌面构建产物
+desktop/server-bundle/
+desktop/release/
+desktop/.cache/
+desktop/package-lock.json

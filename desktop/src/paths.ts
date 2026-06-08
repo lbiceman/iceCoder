@@ -1,0 +1,75 @@
+/**
+ * 桌面端路径解析（与 src/cli/paths.ts 解耦，独立编译）。
+ */
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { app } from 'electron';
+import { getServerRoot } from './constants';
+
+const WORKSPACE_FILE = 'workspace.json';
+const PET_POS_FILE = 'pet-floating-position.json';
+
+/** 用户选定的工作区目录（绝对路径），未设置时返回 null。 */
+export function readWorkspace(): string | null {
+  const file = path.join(app.getPath('userData'), WORKSPACE_FILE);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const ws = typeof raw?.workspace === 'string' ? raw.workspace : null;
+    if (!ws) return null;
+    if (!fs.existsSync(ws)) return null;
+    return path.resolve(ws);
+  } catch {
+    return null;
+  }
+}
+
+export function writeWorkspace(workspace: string | null): void {
+  const file = path.join(app.getPath('userData'), WORKSPACE_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ workspace }, null, 2));
+}
+
+export interface PetFloatingPosition {
+  x: number;
+  y: number;
+}
+
+export function readPetFloatingPosition(): PetFloatingPosition | null {
+  const file = path.join(app.getPath('userData'), PET_POS_FILE);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (typeof raw?.x === 'number' && typeof raw?.y === 'number') {
+      return { x: raw.x, y: raw.y };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function writePetFloatingPosition(pos: PetFloatingPosition): void {
+  const file = path.join(app.getPath('userData'), PET_POS_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(pos, null, 2));
+}
+
+/** 启动 server 的子进程 cwd 解析：优先用户工作区，回退到 home。 */
+export function resolveServerCwd(): string {
+  const ws = readWorkspace();
+  if (ws) return ws;
+  return os.homedir();
+}
+
+/** 复制示例数据文件到用户数据目录（首次启动）。 */
+export function ensureDataDirSeeded(): void {
+  // 简化：实际配置由 server 子进程通过 ICE_DATA_DIR 控制；此处仅占位。
+}
+
+/** server-bundle 是否就绪（dist/index.js 存在）。 */
+export function isServerBundleReady(): boolean {
+  const entry = path.join(getServerRoot(), 'dist', 'index.js');
+  return fs.existsSync(entry);
+}

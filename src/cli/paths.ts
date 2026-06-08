@@ -33,9 +33,14 @@ export function isPackagedCliEntry(): boolean {
   return entry.includes('/node_modules/ice-coder/dist/cli/');
 }
 
+/** Electron 打包应用内嵌 server（由主进程设置 ICE_ELECTRON=1）。 */
+export function isElectronRuntime(): boolean {
+  return process.env.ICE_ELECTRON === '1';
+}
+
 /** 数据根使用 `~/.iceCoder`（全局安装或 production），否则用项目 `data/`。 */
 export function usesUserDataRoot(): boolean {
-  return isProductionRuntime() || isPackagedCliEntry();
+  return isProductionRuntime() || isPackagedCliEntry() || isElectronRuntime();
 }
 
 function defaultDataDirForRuntime(): string {
