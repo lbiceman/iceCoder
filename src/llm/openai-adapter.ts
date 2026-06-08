@@ -604,7 +604,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       };
     }
 
-    return orderRequestParams(params) as OpenAI.ChatCompletionCreateParams;
+    return orderRequestParams(params) as unknown as OpenAI.ChatCompletionCreateParams;
   }
 
   /** MiniMax M2/M3 等：启用 reasoning_split 将思考从 content 分离。 */
