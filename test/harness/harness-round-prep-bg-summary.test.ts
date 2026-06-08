@@ -102,30 +102,37 @@ describe('harness-round-prep · bg-summary injection (P0-B)', () => {
     expect(spawn.taskId).toBeTruthy();
 
     const state = makeState('long task');
-    await prepareHarnessRound(buildDeps(sessionId, workDir), {
+    const prep = await prepareHarnessRound(buildDeps(sessionId, workDir), {
       state,
       userMessage: 'long task',
       chatFn,
       logger: new HarnessLogger(),
     });
+    expect(prep.action).toBe('continue');
 
-    const injected = state.messages.find(
+    const injected = prep.normalizedMsgs.find(
       (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
     );
-    expect(injected, 'bg-summary user message should be appended').toBeTruthy();
+    expect(injected, 'bg-summary should appear in API view').toBeTruthy();
     expect(injected!.content).toMatch(/pending-build/);
+
+    const inCanonical = state.messages.find(
+      (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
+    );
+    expect(inCanonical, 'bg-summary should not pollute canonical history').toBeUndefined();
   });
 
   it('does NOT inject when there is no running task', async () => {
     const state = makeState('quick task');
-    await prepareHarnessRound(buildDeps(sessionId, workDir), {
+    const prep = await prepareHarnessRound(buildDeps(sessionId, workDir), {
       state,
       userMessage: 'quick task',
       chatFn,
       logger: new HarnessLogger(),
     });
+    expect(prep.action).toBe('continue');
 
-    const injected = state.messages.find(
+    const injected = prep.normalizedMsgs.find(
       (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
     );
     expect(injected).toBeUndefined();
@@ -138,26 +145,34 @@ describe('harness-round-prep · bg-summary injection (P0-B)', () => {
     const state = makeState('long task');
     const deps = buildDeps(sessionId, workDir);
 
-    await prepareHarnessRound(deps, {
+    const prep1 = await prepareHarnessRound(deps, {
       state,
       userMessage: 'long task',
       chatFn,
       logger: new HarnessLogger(),
     });
-    const firstCount = state.messages.filter(
+    expect(prep1.action).toBe('continue');
+    expect(prep1.normalizedMsgs.some(
       (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
-    ).length;
-    expect(firstCount).toBe(1);
+    )).toBe(true);
+    expect(state.messages.some(
+      (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
+    )).toBe(false);
 
-    await prepareHarnessRound(deps, {
+    const prep2 = await prepareHarnessRound(deps, {
       state,
       userMessage: 'long task',
       chatFn,
       logger: new HarnessLogger(),
     });
-    const secondCount = state.messages.filter(
+    expect(prep2.action).toBe('continue');
+    const secondInCanonical = state.messages.filter(
       (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
     ).length;
-    expect(secondCount).toBe(1);
+    expect(secondInCanonical).toBe(0);
+    const secondInApi = prep2.normalizedMsgs.filter(
+      (m) => typeof m.content === 'string' && m.content.includes('[Background Task Status]'),
+    ).length;
+    expect(secondInApi).toBe(0);
   });
 });

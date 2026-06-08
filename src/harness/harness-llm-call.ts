@@ -16,6 +16,7 @@ import {
   isToolCallPairingError,
 } from './checkpoint-resume-compact.js';
 import { finalizeMessagesForApi } from './context-assembler.js';
+import { logCacheSegmentReset } from './harness-cache-segment.js';
 import { PROACTIVE_FORK_RATIO } from './compaction-constants.js';
 import { resolveCompactionUsage } from '../llm/token-estimator.js';
 import { readEffectiveContextWindowTokens } from './context-window-tier.js';
@@ -99,6 +100,7 @@ export async function callHarnessLlm(
         beforeTokens: fork.beforeTokens,
         afterTokens: fork.afterTokens,
       });
+      logCacheSegmentReset(state.turnCount, 'proactive-fork-pre-llm');
       deps.loopController.rewindRound();
       state.turnCount--;
       state.transition = 'compaction_retry';
@@ -161,6 +163,7 @@ export async function callHarnessLlm(
         logger.error(
           `LLM tool-call pairing error; repaired message list (${repaired.length} msgs), retrying`,
         );
+        logCacheSegmentReset(state.turnCount, 'emergency-pairing-repair');
       } else {
         const summary = buildEmergencyResumeSummaryMessage(state.activeCheckpointResumeSummary);
         const fork = applyCheckpointResumeFork(deps.contextCompactor, state.messages, summary, {
@@ -175,6 +178,7 @@ export async function callHarnessLlm(
           beforeTokens: fork.beforeTokens,
           afterTokens: fork.afterTokens,
         });
+        logCacheSegmentReset(state.turnCount, 'emergency-fork');
       }
       deps.loopController.rewindRound();
       state.turnCount--;
