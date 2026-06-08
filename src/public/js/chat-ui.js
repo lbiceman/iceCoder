@@ -219,6 +219,17 @@ window.ChatUI = (function () {
     elHistoryWindow.addEventListener('click', elHistoryWindow._toolTraceClickHandler, true);
   }
 
+  function fillThinkingToggleText(container, text) {
+    container.textContent = '';
+    var word = text || 'Thinking';
+    for (var i = 0; i < word.length; i++) {
+      var ch = document.createElement('span');
+      ch.className = 'msg-thinking-char';
+      ch.textContent = word.charAt(i);
+      container.appendChild(ch);
+    }
+  }
+
   function createThinkingToggleButton(footer) {
     var label = document.createElement('button');
     label.type = 'button';
@@ -228,7 +239,7 @@ window.ChatUI = (function () {
     label.setAttribute('aria-label', '折叠思考内容');
     var labelText = document.createElement('span');
     labelText.className = 'msg-thinking-toggle-text';
-    labelText.textContent = 'Thinking';
+    fillThinkingToggleText(labelText, 'Thinking');
     label.appendChild(labelText);
     var labelIcon = document.createElement('span');
     labelIcon.className = 'msg-thinking-toggle-icon';
