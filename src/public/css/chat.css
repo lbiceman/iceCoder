@@ -645,6 +645,11 @@
 .session-pet-indicator.active {
   display: flex;
 }
+.session-pet-indicator.session-pet-indicator--desktop-hidden {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
 .pet-bubble {
   position: absolute;
   left: 50%;
@@ -687,34 +692,29 @@
   pointer-events: auto;
   -webkit-user-select: none;
   user-select: none;
+  -webkit-tap-highlight-color: transparent;
   border: none;
   background: transparent;
   box-sizing: border-box;
   line-height: 0;
   border-radius: 50%;
-  transition: transform 0.15s ease;
+  outline: none;
+  box-shadow: none;
+  filter: none;
+  transition: none;
 }
-[data-theme="dark"] .pet-canvas {
-  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.4));
-}
-[data-theme="light"] .pet-canvas {
-  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.12));
+.pet-canvas:focus,
+.pet-canvas:focus-visible,
+.pet-canvas:active {
+  outline: none;
+  box-shadow: none;
+  filter: none;
 }
 .pet-canvas.pet-dragging {
   cursor: grabbing;
-  transform: scale(1.06);
-}
-[data-theme="dark"] .pet-canvas.pet-dragging {
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.5));
-}
-[data-theme="light"] .pet-canvas.pet-dragging {
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.18));
 }
 .pet-canvas.pet-wobble {
   animation: pet-wobble 0.5s ease-in-out infinite;
-}
-.pet-canvas.pet-crying {
-  filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.45));
 }
 @keyframes pet-wobble {
   0%, 100% { transform: translateY(0); }

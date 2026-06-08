@@ -1,77 +1,82 @@
 /**
  * pet-window-manager.ts — 冰豆 embedded ↔ floating 状态机
- *
- * 规则（方案 §11.2）：
- * - embedded 模式：主窗可见，主窗内嵌冰豆可见，悬浮窗隐藏。
- * - floating 模式：主窗最小化/隐藏/收托盘，悬浮窗可见，主窗内嵌冰豆隐藏。
- * - hidden   模式：用户主动关闭悬浮（不常用；预留）。
- *
- * 互斥：切换时**先 hide 一侧再 show 另一侧**，并用 PetDisplayMode 锁。
  */
 import { BrowserWindow } from 'electron';
-import { createPetFloatingWindow } from './pet-window';
+import {
+  applyFloatingWindowPosition,
+  createPetFloatingWindow,
+  PET_FLOATING_HEIGHT,
+  PET_FLOATING_WIDTH,
+} from './pet-window';
 import { PetDisplayMode } from './constants';
 import { writePetFloatingPosition } from './paths';
 
 export class PetWindowManager {
   private mode: PetDisplayMode = 'hidden';
   private floating: BrowserWindow | null = null;
+  private mainWindow: BrowserWindow | null = null;
+  private serverBaseUrl = 'http://127.0.0.1:1024';
   private transitionLock = false;
-  /** 来自主窗的最近一次冰豆状态快照（用于 floating 启动时立刻应用）。 */
   private lastSnapshot: unknown = null;
-  private onSnapshotToFloating: ((s: unknown) => void) | null = null;
+
+  setContext(mainWindow: BrowserWindow, serverBaseUrl: string): void {
+    this.mainWindow = mainWindow;
+    this.serverBaseUrl = serverBaseUrl.replace(/\/$/, '');
+  }
 
   getMode(): PetDisplayMode {
     return this.mode;
   }
 
-  /** 主窗可见时调用：embedded 模式。 */
-  async enterEmbeddedMode(mainWindow: BrowserWindow): Promise<void> {
+  /** 主窗可见时：embedded 模式。 */
+  async enterEmbeddedMode(mainWindow?: BrowserWindow): Promise<void> {
+    if (mainWindow) this.mainWindow = mainWindow;
     if (this.transitionLock) return;
     this.transitionLock = true;
     try {
-      // 1) 先 hide 悬浮
       if (this.floating && !this.floating.isDestroyed()) {
         this.floating.hide();
       }
-      // 2) 再让主窗冰豆可见
-      mainWindow.webContents.send('pet:force-visible', true);
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('pet:force-visible', true);
+      }
       this.mode = 'embedded';
     } finally {
       this.transitionLock = false;
     }
   }
 
-  /** 主窗最小化/隐藏/收托盘时调用：floating 模式。 */
-  async enterFloatingMode(): Promise<void> {
+  /** 主窗最小化/隐藏/收托盘时：floating 模式。 */
+  async enterFloatingMode(mainWindow?: BrowserWindow): Promise<void> {
+    if (mainWindow) this.mainWindow = mainWindow;
     if (this.transitionLock) return;
     this.transitionLock = true;
     try {
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('pet:force-visible', false);
+      }
+
       if (!this.floating || this.floating.isDestroyed()) {
-        this.floating = createPetFloatingWindow();
+        this.floating = createPetFloatingWindow({ serverBaseUrl: this.serverBaseUrl });
         this.attachFloatingHandlers(this.floating);
-        // 等待 ready 后再 show（避免白闪）
         await new Promise<void>((resolve) => {
           this.floating!.webContents.once('did-finish-load', () => resolve());
         });
       }
-      // 1) 先让主窗冰豆隐藏
-      this.floating.webContents.send('pet:mode', this.mode); // 通知主窗当前模式
-      // 主窗冰豆隐藏由 main 广播
-      // 2) 再 show 悬浮
-      this.floating.show();
-      this.floating.focus();
-      // 把最近一次快照推给新启动的悬浮窗
-      if (this.lastSnapshot && this.onSnapshotToFloating) {
-        this.onSnapshotToFloating(this.lastSnapshot);
+
+      applyFloatingWindowPosition(this.floating);
+
+      if (this.lastSnapshot) {
+        this.floating.webContents.send('pet:state-snapshot', this.lastSnapshot);
       }
+      this.floating.webContents.send('pet:mode', 'floating');
+      this.floating.show();
       this.mode = 'floating';
     } finally {
       this.transitionLock = false;
     }
   }
 
-  /** 完全隐藏两侧。 */
   hide(): void {
     if (this.floating && !this.floating.isDestroyed()) {
       this.floating.hide();
@@ -79,7 +84,17 @@ export class PetWindowManager {
     this.mode = 'hidden';
   }
 
-  /** 主窗冰豆上报状态快照。 */
+  /** 退出应用时销毁悬浮窗。 */
+  destroy(): void {
+    if (this.floating && !this.floating.isDestroyed()) {
+      this.floating.removeAllListeners('moved');
+      this.floating.removeAllListeners('closed');
+      this.floating.destroy();
+      this.floating = null;
+    }
+    this.mode = 'hidden';
+  }
+
   pushSnapshot(snapshot: unknown): void {
     this.lastSnapshot = snapshot;
     if (this.mode === 'floating' && this.floating && !this.floating.isDestroyed()) {
@@ -87,14 +102,21 @@ export class PetWindowManager {
     }
   }
 
-  setSnapshotSink(fn: (s: unknown) => void): void {
-    this.onSnapshotToFloating = fn;
+  moveFloatingBy(dx: number, dy: number): void {
+    if (!this.floating || this.floating.isDestroyed()) return;
+    const [x, y] = this.floating.getPosition();
+    this.floating.setPosition(Math.round(x + dx), Math.round(y + dy));
   }
 
   private attachFloatingHandlers(win: BrowserWindow): void {
     win.on('moved', () => {
       const [x, y] = win.getPosition();
-      writePetFloatingPosition({ x, y });
+      writePetFloatingPosition({
+        x,
+        y,
+        w: PET_FLOATING_WIDTH,
+        h: PET_FLOATING_HEIGHT,
+      });
     });
     win.on('closed', () => {
       this.floating = null;

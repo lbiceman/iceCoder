@@ -1,10 +1,7 @@
 /**
  * menu.ts — 应用菜单
  */
-import { app, dialog, Menu, MenuItemConstructorOptions, shell, BrowserWindow } from 'electron';
-import path from 'node:path';
-import os from 'node:os';
-import { IPC } from './constants';
+import { app, dialog, Menu, MenuItemConstructorOptions, shell } from 'electron';
 
 export interface MenuCallbacks {
   pickWorkspace: () => Promise<string | null>;
@@ -13,61 +10,8 @@ export interface MenuCallbacks {
   quit: () => void;
 }
 
-export function buildAppMenu(cb: MenuCallbacks): Menu {
-  const isMac = process.platform === 'darwin';
+export function buildAppMenu(_cb: MenuCallbacks): Menu {
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac
-      ? [
-          {
-            label: app.name,
-            submenu: [
-              { role: 'about' as const },
-              { type: 'separator' as const },
-              { role: 'services' as const },
-              { type: 'separator' as const },
-              { role: 'hide' as const },
-              { role: 'hideOthers' as const },
-              { role: 'unhide' as const },
-              { type: 'separator' as const },
-              { role: 'quit' as const },
-            ],
-          },
-        ]
-      : []),
-    {
-      label: '文件(&F)',
-      submenu: [
-        {
-          label: '打开文件夹…',
-          accelerator: 'CmdOrCtrl+O',
-          click: () => { void cb.pickWorkspace(); },
-        },
-        {
-          label: '打开数据目录',
-          click: () => cb.openDataDir(),
-        },
-        { type: 'separator' },
-        isMac ? { role: 'close' } : { label: '退出', click: () => cb.quit() },
-      ],
-    },
-    {
-      label: '编辑(&E)',
-      submenu: [
-        { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
-        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
-      ],
-    },
-    {
-      label: '视图(&V)',
-      submenu: [
-        { role: 'reload' },
-        { label: '开发者工具', accelerator: 'F12', click: () => cb.openDevTools() },
-        { type: 'separator' },
-        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
-      ],
-    },
     {
       label: '帮助(&H)',
       submenu: [
@@ -84,7 +28,7 @@ export function buildAppMenu(cb: MenuCallbacks): Menu {
         },
         {
           label: '访问 GitHub',
-          click: () => { void shell.openExternal('https://github.com/'); },
+          click: () => { void shell.openExternal('https://github.com/lbiceman/iceCoder'); },
         },
       ],
     },

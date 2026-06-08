@@ -34,6 +34,9 @@ export function writeWorkspace(workspace: string | null): void {
 export interface PetFloatingPosition {
   x: number;
   y: number;
+  /** 记录时的窗口宽，用于尺寸变更后作废旧坐标 */
+  w?: number;
+  h?: number;
 }
 
 export function readPetFloatingPosition(): PetFloatingPosition | null {
@@ -42,7 +45,12 @@ export function readPetFloatingPosition(): PetFloatingPosition | null {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (typeof raw?.x === 'number' && typeof raw?.y === 'number') {
-      return { x: raw.x, y: raw.y };
+      return {
+        x: raw.x,
+        y: raw.y,
+        w: typeof raw.w === 'number' ? raw.w : undefined,
+        h: typeof raw.h === 'number' ? raw.h : undefined,
+      };
     }
   } catch {
     // ignore

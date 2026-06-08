@@ -39,7 +39,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   // 固定颜色：黑底；眼睛线色见 create() 闭包内 eyeColor（每实例独立）
   var BODY_BG = '#000000';
   var READ_GLASSES_STROKE = 'rgba(255,255,255,0.55)';
-  var GLOW_COLOR = 'rgba(107,156,255,0.10)';
 
   /** token 圆环线宽（逻辑像素） */
   var TOKEN_RING_LINE_WIDTH = 3.25 * PET_SCALE;
@@ -116,11 +115,13 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
   var DRAG_STORE_KEY = 'ice-session-pet-position';
   var DRAG_MARGIN = 8;
+  var DRAG_THRESHOLD = 5;
 
   function initPetDrag(rootEl, dragHandleEl) {
     if (!rootEl || !dragHandleEl) return { afterShow: function () { } };
 
     var dragPointerId = null;
+    var dragActive = false;
     var startClientX = 0;
     var startClientY = 0;
     var startLeft = 0;
@@ -202,9 +203,15 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
     function onPointerMove(e) {
       if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-      e.preventDefault();
       var dx = e.clientX - startClientX;
       var dy = e.clientY - startClientY;
+      if (!dragActive) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        dragActive = true;
+        dragHandleEl.classList.add('pet-dragging');
+        applyPosition(startLeft, startTop);
+      }
+      e.preventDefault();
       applyPosition(startLeft + dx, startTop + dy);
     }
 
@@ -212,6 +219,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       if (dragPointerId === null) return;
       if (e && e.pointerId !== dragPointerId) return;
       dragPointerId = null;
+      dragActive = false;
       dragHandleEl.classList.remove('pet-dragging');
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', endDrag);
@@ -230,13 +238,12 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       function (e) {
         if (e.button !== undefined && e.button !== 0) return;
         dragPointerId = e.pointerId;
+        dragActive = false;
         startClientX = e.clientX;
         startClientY = e.clientY;
         var rect = rootEl.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
-        applyPosition(startLeft, startTop);
-        dragHandleEl.classList.add('pet-dragging');
         window.addEventListener('pointermove', onPointerMove, { passive: false });
         window.addEventListener('pointerup', endDrag);
         window.addEventListener('pointercancel', endDrag);
@@ -778,12 +785,15 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
   /**
    * @param {HTMLElement} rootEl
+   * @param {{ enableDrag?: boolean }} [options] — enableDrag 默认 true；桌面悬浮窗传 false
    */
-  function create(rootEl) {
+  function create(rootEl, options) {
+    options = options || {};
     var canvas = rootEl.querySelector('.pet-canvas');
     var bubbleEl = rootEl.querySelector('.pet-bubble');
     var turnEl = rootEl.querySelector('.status-turn');
-    var dragApi = initPetDrag(rootEl, canvas);
+    var dragApi =
+      options.enableDrag === false ? { afterShow: function () {} } : initPetDrag(rootEl, canvas);
     var ctx = null;
     var state = 'idle';
     var visible = true;
@@ -848,12 +858,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       ctx.translate(-cx, -cy);
 
       var bodyY = cy + breath;
-
-      // 外圈光晕
-      ctx.beginPath();
-      ctx.arc(cx, bodyY, PET_SIZE / 2 - 4, 0, Math.PI * 2);
-      ctx.fillStyle = GLOW_COLOR;
-      ctx.fill();
 
       // 机身：固定黑底
       ctx.beginPath();

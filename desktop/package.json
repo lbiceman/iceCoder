@@ -6,6 +6,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "icons:generate": "npm run desktop:icons --prefix ..",
     "dev": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
@@ -20,26 +21,29 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "get-port": "^5.1.1"
+    "get-port": "^5.1.1",
+    "iconv-lite": "^0.6.3"
   },
   "build": {
     "appId": "com.icecoder.app",
     "productName": "iceCoder",
     "asar": true,
+    "icon": "assets/icon.png",
     "directories": {
       "output": "release",
       "buildResources": "assets"
     },
     "files": [
       "dist/**/*",
-      "pet-renderer/**/*",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "server-bundle",
         "to": "server",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asarUnpack": [
@@ -47,7 +51,11 @@
       "**/node_modules/@vscode/ripgrep/**"
     ],
     "win": {
-      "target": [{ "target": "nsis" }],
+      "target": [
+        {
+          "target": "nsis"
+        }
+      ],
       "icon": "assets/icon.ico"
     },
     "nsis": {
@@ -57,11 +65,14 @@
     },
     "mac": {
       "target": "dmg",
-      "icon": "assets/icon.icns",
+      "icon": "assets/icon.png",
       "category": "public.app-category.developer-tools"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "assets/icon.png",
       "category": "Development"
     }

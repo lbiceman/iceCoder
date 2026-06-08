@@ -44,6 +44,7 @@ import {
 import { startTunnelReadyWatcher } from './web/tunnel-ready-watcher.js';
 import { isTunnelDevEnabled } from './runtime/tunnel-feature.js';
 import { createSessionsRouter, registerSessionCleanupHook } from './web/routes/sessions.js';
+import { disposeAllBackgroundTaskManagers } from './tools/background-task-manager.js';
 
 registerSessionCleanupHook(purgeSessionRuntimeCaches);
 import { createUploadRouter } from './web/routes/upload.js';
@@ -247,16 +248,24 @@ async function main(): Promise<void> {
   watchConfigChanges(llmAdapter);
 
   // 9. 优雅关闭处理
-  const shutdown = () => {
-    console.log('Shutting down...');
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Shutting down... (${signal})`);
     stopTunnelReadyWatcher();
     cleanupChatResources();
-    mcpManager.shutdown().catch((err) => console.error('MCP shutdown error:', err));
+    disposeAllBackgroundTaskManagers();
+    try {
+      await mcpManager.shutdown();
+    } catch (err) {
+      console.error('MCP shutdown error:', err);
+    }
     server.close();
-    process.exit(0);
+    setTimeout(() => process.exit(0), 500).unref();
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
   console.log('iceCoder is ready');
 }

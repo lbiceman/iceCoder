@@ -1,22 +1,41 @@
 /**
  * main.ts — Electron 主进程入口
  */
-import { app, BrowserWindow, dialog, ipcMain, shell, Menu } from 'electron';
+import { writeConsole } from './console-output';
+import { ensureWinConsoleUtf8 } from './win-console-utf8';
+import { app, BrowserWindow, dialog, ipcMain, shell, Menu, Tray, nativeImage } from 'electron';
+
+ensureWinConsoleUtf8();
 import path from 'node:path';
 import os from 'node:os';
 import { IPC, APP_NAME, DEFAULT_HTTP_PORT } from './constants';
 import { getAvailablePort } from './port-utils';
 import { startServerProcess, ServerProcessHandle } from './server-process';
-import { readWorkspace, writeWorkspace, resolveServerCwd } from './paths';
-import { buildAppMenu } from './menu';
+import { readWorkspace, writeWorkspace, resolveServerCwd, isServerBundleReady } from './paths';
 import { buildTray } from './tray';
 import { PetWindowManager } from './pet-window-manager';
 
 let mainWindow: BrowserWindow | null = null;
 let serverHandle: ServerProcessHandle | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
 const petManager = new PetWindowManager();
 
+function resolveAppIcon(): Electron.NativeImage {
+  const assetsDir = path.join(__dirname, '..', 'assets');
+  const candidates =
+    process.platform === 'win32'
+      ? ['icon.ico', 'icon.png']
+      : ['icon.png', 'icon.ico'];
+  for (const name of candidates) {
+    const image = nativeImage.createFromPath(path.join(assetsDir, name));
+    if (!image.isEmpty()) return image;
+  }
+  return nativeImage.createEmpty();
+}
+
 async function createMainWindow(url: string): Promise<BrowserWindow> {
+  const appIcon = resolveAppIcon();
   const win = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -25,6 +44,7 @@ async function createMainWindow(url: string): Promise<BrowserWindow> {
     show: false,
     backgroundColor: '#0e0f12',
     title: APP_NAME,
+    ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -73,9 +93,11 @@ function registerIpcHandlers(): void {
   ipcMain.on(IPC.PET_REQUEST_SHOW_MAIN, () => {
     showAndFocusMain();
   });
-  ipcMain.on(IPC.PET_DRAG_MOVE, () => {
-    // floating-renderer 自行通过 -webkit-app-region: drag 处理拖动；
-    // 此处保留通道位便于将来支持 programmatic move。
+  ipcMain.on(IPC.PET_DRAG_MOVE, (_e: Electron.IpcMainEvent, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    const { dx, dy } = payload as { dx?: unknown; dy?: unknown };
+    if (typeof dx !== 'number' || typeof dy !== 'number') return;
+    petManager.moveFloatingBy(dx, dy);
   });
   ipcMain.on(IPC.PET_DRAG_END, (_e: Electron.IpcMainEvent, pos: unknown) => {
     if (
@@ -116,12 +138,36 @@ function showAndFocusMain(): void {
 }
 
 async function gracefulShutdown(): Promise<void> {
-  try { petManager.hide(); } catch { /* ignore */ }
-  try { if (serverHandle) await serverHandle.stop(); } catch { /* ignore */ }
-  app.quit();
+  if (isQuitting) return;
+  isQuitting = true;
+
+  try { petManager.destroy(); } catch { /* ignore */ }
+
+  if (tray && !tray.isDestroyed()) {
+    try { tray.destroy(); } catch { /* ignore */ }
+    tray = null;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.removeAllListeners('close');
+    try { mainWindow.destroy(); } catch { /* ignore */ }
+    mainWindow = null;
+  }
+
+  if (serverHandle) {
+    try { await serverHandle.stop(); } catch { /* ignore */ }
+    serverHandle = null;
+  }
+
+  app.exit(0);
 }
 
 async function bootstrap(): Promise<void> {
+  if (!isServerBundleReady()) {
+    throw new Error(
+      '未找到 desktop/server-bundle。请在仓库根目录执行：npm run build:desktop:server',
+    );
+  }
   // 1) 探测端口
   const port = await getAvailablePort(DEFAULT_HTTP_PORT, 50);
   // 2) 启动 server 子进程
@@ -135,56 +181,40 @@ async function bootstrap(): Promise<void> {
   mainWindow = await createMainWindow(url);
   registerIpcHandlers();
 
-  // 4) 冰豆模式：默认 embedded
-  petManager.setSnapshotSink((s) => {
-    // 由 floating-renderer 通过 pet:state-snapshot 接收
-    if (s) { /* 状态已转发到 floating.webContents.send('pet:state-snapshot', s) */ }
-  });
+  petManager.setContext(mainWindow, url);
   void petManager.enterEmbeddedMode(mainWindow);
 
   // 5) 主窗生命周期 ↔ pet 状态机
-  mainWindow.on('minimize', () => { void petManager.enterFloatingMode(); });
-  mainWindow.on('hide', () => { void petManager.enterFloatingMode(); });
+  mainWindow.on('minimize', () => { if (mainWindow) void petManager.enterFloatingMode(mainWindow); });
+  mainWindow.on('hide', () => { if (mainWindow) void petManager.enterFloatingMode(mainWindow); });
   mainWindow.on('restore', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
   mainWindow.on('show', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
-  mainWindow.on('close', () => { void petManager.enterFloatingMode(); });
-
-  // 6) 菜单 + 托盘
-  const menu = buildAppMenu({
-    pickWorkspace: async (): Promise<string | null> => {
-      const ws = await pickWorkspaceInteractive();
-      broadcastWorkspace(ws);
-      return ws;
-    },
-    openDataDir: () => {
-      const dataDir = path.join(os.homedir(), '.iceCoder');
-      void shell.openPath(dataDir);
-    },
-    openDevTools: () => mainWindow?.webContents.openDevTools({ mode: 'detach' }),
-    quit: () => { void gracefulShutdown(); },
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return;
+    e.preventDefault();
+    void gracefulShutdown();
   });
-  Menu.setApplicationMenu(menu);
 
-  buildTray(mainWindow, {
+  // 6) 顶栏原生菜单暂隐藏（原仅「帮助」一项）
+  Menu.setApplicationMenu(null);
+
+  tray = buildTray(mainWindow, {
     showMain: () => showAndFocusMain(),
     quit: () => { void gracefulShutdown(); },
   });
 }
 
 app.on('window-all-closed', () => {
-  // macOS 习惯：所有窗口关闭后保留 dock 入口
+  if (isQuitting) return;
   if (process.platform !== 'darwin') {
     void gracefulShutdown();
   }
 });
 
-app.on('before-quit', async (e: Electron.Event) => {
-  if (serverHandle) {
-    e.preventDefault();
-    try { await serverHandle.stop(); } catch { /* ignore */ }
-    serverHandle = null;
-    app.exit(0);
-  }
+app.on('before-quit', (e) => {
+  if (isQuitting) return;
+  e.preventDefault();
+  void gracefulShutdown();
 });
 
 app.on('activate', () => {
@@ -196,8 +226,12 @@ app.on('activate', () => {
 });
 
 app.whenReady().then(() => {
+  const appIcon = resolveAppIcon();
+  if (!appIcon.isEmpty() && process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(appIcon);
+  }
   bootstrap().catch((err) => {
-    process.stderr.write(`[main] bootstrap failed: ${err && err.stack || err}\n`);
+    writeConsole(process.stderr, `[main] bootstrap failed: ${err && err.stack || err}\n`);
     void dialog.showErrorBox('iceCoder 启动失败', String(err?.message || err));
     app.exit(1);
   });

@@ -28,7 +28,7 @@ import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
-import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
+import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
 import { c, warn } from '../utils/terminal-ui.js';
 import { resolveDefaultApiPort } from '../serve-port.js';
 
@@ -108,7 +108,7 @@ export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<
     message: 'iceCoder 正在退出...',
     cleanups: [
       () => { cleanup(); },
-      () => { getBackgroundTaskManager().dispose(); },
+      () => { disposeAllBackgroundTaskManagers(); },
       () => ctx.mcpManager.shutdown(),
     ],
   });

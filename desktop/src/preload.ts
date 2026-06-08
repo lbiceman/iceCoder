@@ -44,6 +44,11 @@ const api = {
     ipcRenderer.on('pet:mode', listener);
     return () => ipcRenderer.removeListener('pet:mode', listener);
   },
+  onPetStateSnapshot: (cb: (snapshot: unknown) => void) => {
+    const listener = (_e: IpcRendererEvent, snapshot: unknown) => cb(snapshot);
+    ipcRenderer.on('pet:state-snapshot', listener);
+    return () => ipcRenderer.removeListener('pet:state-snapshot', listener);
+  },
   onPetForceVisible: (cb: (visible: boolean) => void) => {
     const listener = (_e: IpcRendererEvent, visible: boolean) => cb(visible);
     ipcRenderer.on('pet:force-visible', listener);

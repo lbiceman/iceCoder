@@ -1,0 +1,9 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="favicon-title">
+  <title id="favicon-title">IceCoder</title>
+  <circle cx="50" cy="50" r="48" fill="#2C3440"/>
+  <circle cx="50" cy="50" r="41" fill="#000000"/>
+  <g fill="none" stroke="#00D8FF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 21 37 A 9 9 0 0 1 39 37 L 39 59 A 9 9 0 0 1 21 59 Z"/>
+    <path d="M 61 37 A 9 9 0 0 1 79 37 L 79 59 A 9 9 0 0 1 61 59 Z"/>
+  </g>
+</svg>

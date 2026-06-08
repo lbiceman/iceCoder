@@ -965,13 +965,20 @@ export function getBackgroundTaskManager(workDir?: string): BackgroundTaskManage
 }
 
 /**
+ * 清理全部 session 的后台任务管理器（优雅关闭时调用）。
+ */
+export function disposeAllBackgroundTaskManagers(): void {
+  for (const m of managersBySession.values()) {
+    try { m.dispose(); } catch { /* ignore */ }
+  }
+  managersBySession.clear();
+}
+
+/**
  * 重置全部 session 的 manager 缓存（仅测试使用）。
  *
  * @internal
  */
 export function __resetBackgroundTaskManagers(): void {
-  for (const m of managersBySession.values()) {
-    try { m.dispose(); } catch { /* ignore */ }
-  }
-  managersBySession.clear();
+  disposeAllBackgroundTaskManagers();
 }

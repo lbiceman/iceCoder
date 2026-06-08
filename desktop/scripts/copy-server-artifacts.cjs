@@ -62,6 +62,28 @@ function copyFile(src, dst) {
   fs.copyFileSync(src, dst);
 }
 
+/** Vite 只产出 SPA 入口；pet-floating 等仍依赖 src/public 原始 js/css。 */
+const PUBLIC_STATIC_DIRS = ['js', 'css'];
+const PUBLIC_STATIC_FILES = ['pet-floating.html', 'favicon.svg'];
+
+function mergePublicStaticExtras(repoRoot, targetDistPublic) {
+  const srcPublic = path.join(repoRoot, 'src', 'public');
+  if (!fs.existsSync(srcPublic)) return;
+  fs.mkdirSync(targetDistPublic, { recursive: true });
+  for (const rel of PUBLIC_STATIC_FILES) {
+    const src = path.join(srcPublic, rel);
+    if (!fs.existsSync(src)) continue;
+    copyFile(src, path.join(targetDistPublic, rel));
+    log(`mergePublic ${rel}`);
+  }
+  for (const rel of PUBLIC_STATIC_DIRS) {
+    const src = path.join(srcPublic, rel);
+    if (!fs.existsSync(src)) continue;
+    copyDir(src, path.join(targetDistPublic, rel));
+    log(`mergePublic ${rel}/`);
+  }
+}
+
 function main() {
   log(`repoRoot  = ${repoRoot}`);
   log(`target    = ${targetRoot}`);
@@ -85,6 +107,8 @@ function main() {
     }
   }
 
+  mergePublicStaticExtras(repoRoot, path.join(targetRoot, 'dist', 'public'));
+
   // 复制生产依赖子集 node_modules
   const repoNm = path.join(repoRoot, 'node_modules');
   const tgtNm = path.join(targetRoot, 'node_modules');
@@ -107,7 +131,7 @@ function main() {
     version: srcPkg.version,
     description: 'iceCoder server bundle for Electron desktop',
     main: 'dist/index.js',
-    type: 'commonjs',
+    type: 'module',
     dependencies: Object.fromEntries(
       PROD_DEPS.map((d) => [d, (srcPkg.dependencies || {})[d] || '*']),
     ),

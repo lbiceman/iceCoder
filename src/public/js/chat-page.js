@@ -1168,6 +1168,9 @@ window.ChatPage = (function () {
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
+        window.DesktopPetBridge.attach(sessionPet);
+      }
       if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
         Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
       }
