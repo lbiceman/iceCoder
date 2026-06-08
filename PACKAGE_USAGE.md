@@ -39,7 +39,7 @@ npm run build
 | `package.json` | 依赖与 `bin` |
 | `README.md` | 英文简要说明 |
 
-安装后可通过 `npm run iceCoder:config` 或复制模板生成真实配置。
+安装后执行 `iceCoder config` 或复制模板生成真实配置。
 
 ## 安装方式（使用者）
 
@@ -127,7 +127,7 @@ npm start
 
 ### CLI 子命令（`iceCoder` 入口）
 
-与源码仓库中 `npm run iceCoder:*` 对应（打包环境用全局 `iceCoder` 或 `npx iceCoder`）：
+与源码仓库 `package.json` 的 **`npm run dev`**（本地开发）不同；打包环境用全局 **`iceCoder`** 或 `npx iceCoder`：
 
 | 命令 | 说明 |
 |------|------|
