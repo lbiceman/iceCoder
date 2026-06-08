@@ -239,7 +239,6 @@ describe('Harness - 工具调用循环', () => {
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
       toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'src/a.ts' } }]),
-      stepReviewLlmStub(),
       finalResponse('已修复'),
     ], finalResponse('已修复'));
 
@@ -269,20 +268,41 @@ describe('Harness - 工具调用循环', () => {
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
-  it('工具执行后注入 Runtime State 和 Repo Context', async () => {
+  it('工具执行后通过发送管道注入 Runtime State 和 Repo Context', async () => {
     const tools = [makeTool('read_file'), makeTool('edit_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc3', name: 'run_command', args: { command: 'npm test' } }]),
-      finalResponse('done'),
-    ]);
+    const capturedMessages: import('../../src/llm/types.js').UnifiedMessage[][] = [];
+    const chatFn = vi.fn().mockImplementation(async (msgs) => {
+      capturedMessages.push(msgs);
+      const queue = [
+        toolCallResponse([{ id: 'tc1', name: 'read_file', args: { path: 'src/a.ts' } }]),
+        toolCallResponse([{ id: 'tc2', name: 'edit_file', args: { path: 'src/a.ts' } }]),
+        toolCallResponse([{ id: 'tc3', name: 'run_command', args: { command: 'npm test' } }]),
+        finalResponse('done'),
+      ];
+      return queue[capturedMessages.length - 1] ?? finalResponse('done');
+    });
 
     const result = await harness.run('修复 src/a.ts', chatFn);
-    const runtimeStateMessage = result.messages.find(m =>
+
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && m.content.startsWith('[System Runtime State]')
+    )).toBe(false);
+
+    const llmWithRuntime = capturedMessages.find(msgs =>
+      msgs.some(m =>
+        m.role === 'user'
+        && typeof m.content === 'string'
+        && m.content.startsWith('[System Runtime State]')
+        && m.content.includes('npm test')
+      ),
+    );
+    expect(llmWithRuntime, 'runtime block should include run_command history').toBeDefined();
+    const runtimeStateMessage = llmWithRuntime!.find(m =>
       m.role === 'user'
       && typeof m.content === 'string'
       && m.content.startsWith('[System Runtime State]')

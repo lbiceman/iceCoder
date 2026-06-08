@@ -19,7 +19,7 @@ import {
   PRE_COMPACT_SESSION_TIMEOUT_MSG,
 } from './harness-constants.js';
 import { buildTotalTokenUsageWithContext } from './context-usage-display.js';
-import { applyToolResultBudget } from './harness-message-budget.js';
+import { logCacheSegmentReset } from './harness-cache-segment.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import { resilienceSaveCheckpoint } from './harness-resilience.js';
@@ -89,6 +89,7 @@ function applyProactiveForkIfNeeded(
   onStep?.({ type: 'compaction', content: `proactive: ${fork.beforeMessages} → ${fork.afterMessages}` });
   state.justCompacted = true;
   state.amnesiaRecoveryCount = 0;
+  logCacheSegmentReset(state.turnCount, 'proactive-fork');
   emitContextUsageStep(onStep, messages, tools);
   return true;
 }
@@ -126,7 +127,6 @@ export async function maybeCompact(
     return;
   }
 
-  applyToolResultBudget(messages);
   deps.contextCompactor.resetMicroCompactRound();
 
   const usageOptions = buildUsageOptions(args);
@@ -163,6 +163,7 @@ export async function maybeCompact(
       );
       logger.compaction(before, messages.length, beforeEffective, afterTok);
       onStep?.({ type: 'compaction', content: `micro: ${before} → ${messages.length}` });
+      logCacheSegmentReset(state?.turnCount, 'micro-compact');
       applyProactiveForkIfNeeded(deps, messages, state, tools, logger, usageOptions, onStep);
       if (!state?.contextEmergencyCompactUsed) {
         emitContextUsageStep(onStep, messages, tools);
@@ -320,6 +321,7 @@ export async function maybeCompact(
     afterTokens: afterTokCompact,
   });
   onStep?.({ type: 'compaction', content: `${before} → ${messages.length}` });
+  logCacheSegmentReset(state?.turnCount, 'hard-compact');
   await resilienceSaveCheckpoint(deps, 'compaction', state);
 
   emitContextUsageStep(onStep, messages, tools);

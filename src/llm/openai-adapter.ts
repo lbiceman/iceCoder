@@ -22,6 +22,48 @@ import { prepareToolsForChatCompletions } from './tool-offering.js';
 import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
 import { isAbortError, makeAbortedError } from './abort-error.js';
 
+/** 顶层请求参数字段顺序 — 保证同配置多轮 JSON 字节一致 */
+const FIXED_CHAT_PARAM_KEYS = [
+  'model',
+  'messages',
+  'stream',
+  'tools',
+  'temperature',
+  'max_tokens',
+  'top_p',
+  'frequency_penalty',
+  'presence_penalty',
+  'stream_options',
+  'chat_template_kwargs',
+  'extra_body',
+] as const;
+
+/** 移除 undefined/null 并按固定 key 顺序整理请求体 */
+export function orderRequestParams(params: Record<string, unknown>): Record<string, unknown> {
+  const ordered: Record<string, unknown> = {};
+  const seen = new Set<string>();
+
+  for (const key of FIXED_CHAT_PARAM_KEYS) {
+    const value = params[key];
+    if (value !== undefined && value !== null) {
+      ordered[key] = value;
+      seen.add(key);
+    }
+  }
+
+  const extraKeys = Object.keys(params)
+    .filter((k) => !seen.has(k))
+    .sort((a, b) => a.localeCompare(b));
+  for (const key of extraKeys) {
+    const value = params[key];
+    if (value !== undefined && value !== null) {
+      ordered[key] = value;
+    }
+  }
+
+  return ordered;
+}
+
 /** 合并全部 system 为一条并置于首位（供 MiniMax 等严格 OpenAI 兼容端点使用）。 */
 export function collapseUnifiedSystemMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
   const systemParts: string[] = [];
@@ -562,7 +604,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       };
     }
 
-    return params as OpenAI.ChatCompletionCreateParams;
+    return orderRequestParams(params) as OpenAI.ChatCompletionCreateParams;
   }
 
   /** MiniMax M2/M3 等：启用 reasoning_split 将思考从 content 分离。 */

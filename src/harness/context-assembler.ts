@@ -9,7 +9,7 @@
  * Prompt Caching 优化原则：
  * - system prompt 内容跨轮次完全一致 → DeepSeek/OpenAI 自动前缀缓存命中
  * - 动态内容（记忆、日期等）放在 system prompt 之后的独立消息中
- * - 已发送的消息内容不做就地修改（由 harness 在发送副本上裁剪）
+ * - 已发送的消息正文不在主历史就地修改（封存裁剪经 buildMessagesForLlm 发送管道）
  */
 
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';

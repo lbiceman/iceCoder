@@ -15,6 +15,9 @@ export interface ContentBlock {
 /**
  * 所有 LLM 交互中使用的统一消息格式。
  */
+/** 发送管道封存来源（tool 结果 budget / 子代理摘要） */
+export type ApiSealedBy = 'toolBudget' | 'subAgent';
+
 export interface UnifiedMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | ContentBlock[];
@@ -22,6 +25,10 @@ export interface UnifiedMessage {
   toolCallId?: string;
   /** @deprecated 历史兼容；发送 API 前会剥离，不再写入新消息 */
   reasoningContent?: string;
+  /** 首次送入 API 时封存的正文；之后字节不变，保证前缀缓存 */
+  apiSealedContent?: string;
+  /** 封存来源；与 {@link apiSealedContent} 成对写入，避免靠正文 marker 推断 */
+  apiSealedBy?: ApiSealedBy;
   /** C 类纠偏注入：硬压缩时保留在 recent 后缀，避免 lifecycle/recovery 提示被摘要丢弃 */
   preserveOnCompaction?: boolean;
   /** 连续失败阶梯 ephemeral 注入；meaningful_progress 后由 Harness 移除 */

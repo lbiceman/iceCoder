@@ -1,13 +1,9 @@
 import type { UnifiedMessage } from '../llm/types.js';
-import { normalizeMessages } from './context-assembler.js';
+import { buildMessagesForLlm } from './harness-api-messages.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
 import type { CompactionDeps } from './harness-compaction.js';
 import { maybeCompact } from './harness-compaction.js';
 import { takeBgStatusForInjection } from './harness-bg-summary.js';
-import {
-  applySubAgentResultRetention,
-  applyToolResultBudget,
-} from './harness-message-budget.js';
 import {
   bigramJaccard,
   getLastAssistantText,
@@ -17,8 +13,8 @@ import {
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
 import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
-import { upsertRuntimeContextMessage } from './harness-runtime-inject.js';
-import { upsertWorkspaceAnchorMessage } from './workspace-anchor.js';
+import { prepareRuntimeContextEphemeral } from './harness-runtime-inject.js';
+import { prepareWorkspaceAnchorEphemeral } from './workspace-anchor.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -76,7 +72,6 @@ export async function prepareHarnessRound(
   const { state, userMessage, chatFn, logger, onStep, streamFn } = args;
   const { messages: msgs, tools: currentTools } = state;
 
-  applyToolResultBudget(msgs);
   await maybeCompact(deps, {
     messages: msgs,
     chatFn,
@@ -120,8 +115,12 @@ export async function prepareHarnessRound(
 
   logger.llmCall();
 
-  upsertRuntimeContextMessage(msgs, state);
-  upsertWorkspaceAnchorMessage(msgs, state);
+  const ephemeralBlocks: string[] = [];
+  const runtimeContext = prepareRuntimeContextEphemeral(state);
+  if (runtimeContext) ephemeralBlocks.push(runtimeContext);
+
+  const workspaceAnchor = prepareWorkspaceAnchorEphemeral(state);
+  if (workspaceAnchor) ephemeralBlocks.push(workspaceAnchor);
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
@@ -162,7 +161,7 @@ export async function prepareHarnessRound(
   if (deps.graphExecutor?.hasGraph()) {
     const ctx = deps.graphExecutor.getCurrentNodeContext();
     if (ctx) {
-      msgs.push({ role: 'user', content: ctx });
+      ephemeralBlocks.push(ctx);
     }
     const snap = deps.graphExecutor.toSnapshot();
     if (snap?.cursor) {
@@ -176,7 +175,7 @@ export async function prepareHarnessRound(
     const sessionId = deps.sessionId ?? 'default';
     const bgStatus = takeBgStatusForInjection(sessionId, deps.workspaceRoot);
     if (bgStatus) {
-      msgs.push({ role: 'user', content: bgStatus });
+      ephemeralBlocks.push(bgStatus);
     }
   }
 
@@ -195,20 +194,12 @@ export async function prepareHarnessRound(
     && isActionableToolRequest(getLatestRealUserText(msgs, userMessage))
     && !shouldApplyCasualHarness(state.taskState.snapshot().intent)
   ) {
-    msgs.push({
-      role: 'user',
-      content: formatToolPlan(
+    ephemeralBlocks.push(
+      formatToolPlan(
         buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot()),
       ),
-    });
-
-    // 首轮可执行：若检测到下面对话块会判定「与上一轮 assistant 无关」则延后初始化计划，
-    // 避免任务切换分支重复推送 plan 事件（maybeInitExecutionPlan removed Phase 11）。
+    );
   }
-
-  const normalizedMsgs = normalizeMessages(msgs);
-  applySubAgentResultRetention(normalizedMsgs);
-  applyToolResultBudget(normalizedMsgs);
 
   if (!state.taskSwitchInjected) {
     const latestUserContent = getLatestRealUserText(msgs, userMessage);
@@ -228,6 +219,8 @@ export async function prepareHarnessRound(
       }
     }
   }
+
+  const normalizedMsgs = buildMessagesForLlm(msgs, { blocks: ephemeralBlocks });
 
   if (deps.loopController.isAborted()) {
     return {

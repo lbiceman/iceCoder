@@ -1,4 +1,3 @@
-import type { UnifiedMessage } from '../llm/types.js';
 import type { HarnessRunState } from './harness-run-state.js';
 
 export const WORKSPACE_ANCHOR_OPEN = '[Workspace Anchor]';
@@ -24,34 +23,18 @@ export function buildWorkspaceAnchorContent(
   return lines.join('\n');
 }
 
-/** 每轮 LLM 调用前 upsert Sticky Workspace Anchor（压缩时保留）。 */
-export function upsertWorkspaceAnchorMessage(
-  messages: UnifiedMessage[],
-  state: HarnessRunState,
-): void {
-  if (!state.lockedWorkspaceRoot) return;
+/** 构建 Sticky Workspace Anchor 易变块（发送管道注入，不进主历史）。 */
+export function prepareWorkspaceAnchorEphemeral(state: HarnessRunState): string | null {
+  if (!state.lockedWorkspaceRoot) return null;
 
   const content = buildWorkspaceAnchorContent(
     state.lockedWorkspaceRoot,
     state.referenceReads ?? [],
   );
-  if (content === state.workspaceAnchorHash) return;
-  state.workspaceAnchorHash = content;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (
-      msg.role === 'user'
-      && typeof msg.content === 'string'
-      && msg.content.startsWith(WORKSPACE_ANCHOR_OPEN)
-    ) {
-      messages.splice(i, 1);
-    }
+  // ephemeral 不进主历史：内容未变时每轮仍注入同一块，供模型可见
+  if (content === state.workspaceAnchorHash) {
+    return content;
   }
-
-  messages.push({
-    role: 'user',
-    content,
-    preserveOnCompaction: true,
-  });
+  state.workspaceAnchorHash = content;
+  return content;
 }
