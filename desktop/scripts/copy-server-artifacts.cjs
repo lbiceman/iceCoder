@@ -62,6 +62,34 @@ function copyFile(src, dst) {
   fs.copyFileSync(src, dst);
 }
 
+/** 从 PROD_DEPS 出发，收集 npm 扁平 node_modules 中的全部传递依赖。 */
+function collectTransitiveDependencies(rootNames, nodeModulesDir) {
+  const collected = new Set();
+  const queue = [...rootNames];
+
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (collected.has(name)) continue;
+    collected.add(name);
+
+    const pkgJsonPath = path.join(nodeModulesDir, name, 'package.json');
+    if (!fs.existsSync(pkgJsonPath)) continue;
+
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+
+    for (const depName of Object.keys(pkg.dependencies || {})) {
+      if (!collected.has(depName)) queue.push(depName);
+    }
+  }
+
+  return [...collected].sort();
+}
+
 /** Vite 只产出 SPA 入口；pet-floating 等仍依赖 src/public 原始 js/css。 */
 const PUBLIC_STATIC_DIRS = ['js', 'css'];
 const PUBLIC_STATIC_FILES = ['pet-floating.html', 'favicon.svg'];
@@ -109,20 +137,26 @@ function main() {
 
   mergePublicStaticExtras(repoRoot, path.join(targetRoot, 'dist', 'public'));
 
-  // 复制生产依赖子集 node_modules
+  // 复制生产依赖及其传递依赖（cheerio 等 ESM 包会 import 顶层 node_modules 中的子依赖）
   const repoNm = path.join(repoRoot, 'node_modules');
   const tgtNm = path.join(targetRoot, 'node_modules');
   fs.mkdirSync(tgtNm, { recursive: true });
-  for (const dep of PROD_DEPS) {
+  const depsToCopy = collectTransitiveDependencies(PROD_DEPS, repoNm);
+  log(`copyDeps ${depsToCopy.length} packages (roots=${PROD_DEPS.length})`);
+  let copied = 0;
+  let skipped = 0;
+  for (const dep of depsToCopy) {
     const src = path.join(repoNm, dep);
     const dst = path.join(tgtNm, dep);
     if (!fs.existsSync(src)) {
       log(`SKIP dep ${dep} (not installed)`);
+      skipped += 1;
       continue;
     }
-    log(`copyDep  ${dep}`);
     copyDir(src, dst);
+    copied += 1;
   }
+  log(`copyDeps done: copied=${copied} skipped=${skipped}`);
 
   // 写一个 server-bundle 专属 package.json，type=commonjs 让 Node 顺利 require dist
   const srcPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
@@ -155,8 +189,17 @@ function main() {
     ].join('\n'),
   );
 
+  const verify = spawnSync(
+    process.execPath,
+    ['-e', "import('cheerio').then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); })"],
+    { cwd: targetRoot, env: process.env, stdio: 'pipe' },
+  );
+  if (verify.status !== 0) {
+    const err = (verify.stderr || '').toString().trim();
+    throw new Error(`server-bundle dependency verify failed${err ? `: ${err}` : ''}`);
+  }
+  log('verify: cheerio import ok');
   log('done.');
-  log('verify:   node -e "require(\'./server-bundle/dist/index.js\')" (must not throw)');
 }
 
 if (require.main === module) {

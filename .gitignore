@@ -47,3 +47,5 @@ desktop/server-bundle/
 desktop/release/
 desktop/.cache/
 desktop/package-lock.json
+
+# 公开发布安装包纳入版本库：releases/windows/*.exe
