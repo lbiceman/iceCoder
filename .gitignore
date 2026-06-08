@@ -11,7 +11,8 @@ data/*
 !data/supervisor-config.json
 !data/supervisor-config.example.json
 LoCoMo/
-
+.iceCoder/
+.cursor/
 # Pipeline 输出
 output/
 
