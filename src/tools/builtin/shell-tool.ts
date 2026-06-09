@@ -25,6 +25,7 @@ import {
 } from '../shell-runtime-classifier.js';
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
 import { isDestructiveCommand } from '../tool-metadata.js';
+import { readSkipSandboxFromMainConfigSync } from '../../config/main-config-supervisor-mode.js';
 
 /** 命令执行超时（毫秒） */
 const DEFAULT_TIMEOUT = 30000;
@@ -162,9 +163,11 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (inlineAdvisory?.block) {
           return { success: false, output: '', error: inlineAdvisory.message };
         }
-        const bgHostGuard = analyzeShellHostSafety(command, { workDir });
-        if (bgHostGuard.blocked) {
-          return { success: false, output: '', error: bgHostGuard.message ?? '[HostGuard / Blocked]' };
+        if (!readSkipSandboxFromMainConfigSync()) {
+          const bgHostGuard = analyzeShellHostSafety(command, { workDir });
+          if (bgHostGuard.blocked) {
+            return { success: false, output: '', error: bgHostGuard.message ?? '[HostGuard / Blocked]' };
+          }
         }
         const userTimeoutMs = (args.timeout as number) || 0;
         const hardTimeoutMs = userTimeoutMs > 0
@@ -204,9 +207,11 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         return { success: false, output: '', error: inlineAdvisory.message };
       }
 
-      const hostGuard = analyzeShellHostSafety(command, { workDir });
-      if (hostGuard.blocked) {
-        return { success: false, output: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
+      if (!readSkipSandboxFromMainConfigSync()) {
+        const hostGuard = analyzeShellHostSafety(command, { workDir });
+        if (hostGuard.blocked) {
+          return { success: false, output: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
+        }
       }
 
       if (matchesDangerousShellPattern(command)) {

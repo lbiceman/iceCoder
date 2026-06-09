@@ -321,7 +321,28 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     drawCapsuleEye(ctx, rightX, y, EYE_W / 2, EYE_H / 2, ec);
   }
 
-  /** 2. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
+  /** 2. success — 任务完成（字面 ^ ^ 笑眼，尖顶 caret） */
+  function expressionSuccess(ctx, leftX, rightX, y, ec) {
+    var w = EYE_W / 2;
+    var peak = -6;
+
+    function drawCaret(cx) {
+      ctx.beginPath();
+      ctx.moveTo(cx - w * 0.72, y + 2);
+      ctx.lineTo(cx, y + peak);
+      ctx.lineTo(cx + w * 0.72, y + 2);
+      ctx.strokeStyle = ec;
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+
+    drawCaret(leftX);
+    drawCaret(rightX);
+  }
+
+  /** 3. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
   function expressionHappy(ctx, leftX, rightX, y, ec) {
     var w = EYE_W / 2;
     ctx.beginPath();
@@ -341,7 +362,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
-  /** 3. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
+  /** 4. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
   function expressionThinking(ctx, leftX, rightX, y, ec) {
     var hw = EYE_W / 2;
     var hh = EYE_H * 0.38;
@@ -376,7 +397,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   var WORKING_GAZE_PERIOD_MS = 3800;
 
   /**
-   * 4. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
+   * 5. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
    * @param {number} timestamp requestAnimationFrame 时间戳
    */
   function expressionWorking(ctx, leftX, rightX, y, timestamp, ec) {
@@ -760,6 +781,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   // 表情映射表（对外 20 种 + 内部 blink）
   var EXPRESSIONS = {
     idle: expressionIdle,
+    success: expressionSuccess,
     happy: expressionHappy,
     thinking: expressionThinking,
     working: expressionWorking,
@@ -849,7 +871,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
       var breath = state === 'working' ? 0 : Math.sin(timestamp / 800) * 1.5;
       var scale = 1;
-      if (state === 'happy') scale *= 1.02;
+      if (state === 'happy' || state === 'success') scale *= 1.02;
       if (state === 'playful') scale *= 1 + Math.sin(timestamp / 350) * 0.012;
 
       ctx.save();
@@ -925,6 +947,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
         case 'alert':
           return { lx: 0, ly: -3, rx: 0, ry: -3 };
         case 'happy':
+        case 'success':
           return { lx: -1, ly: -2, rx: 1, ry: -2 };
         case 'surprised':
           return { lx: 0, ly: -4, rx: 0, ry: -4 };

@@ -1,5 +1,6 @@
 {
   "supervisorMode": "adaptive",
+  "skipSandbox": false,
   "providers": [
     {
       "id": "default",

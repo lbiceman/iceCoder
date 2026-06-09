@@ -16,6 +16,7 @@ import type { ChildProcess } from 'node:child_process';
 import { mkdirSync, createWriteStream, type WriteStream } from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { readSkipSandboxFromMainConfigSync } from '../config/main-config-supervisor-mode.js';
 import {
   analyzeShellHostSafety,
   buildShellChildEnv,
@@ -428,9 +429,11 @@ export class BackgroundTaskManager extends EventEmitter {
     taskId: string;
     error?: string;
   } {
-    const hostGuard = analyzeShellHostSafety(command, { workDir: this.workDir });
-    if (hostGuard.blocked) {
-      return { taskId: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
+    if (!readSkipSandboxFromMainConfigSync()) {
+      const hostGuard = analyzeShellHostSafety(command, { workDir: this.workDir });
+      if (hostGuard.blocked) {
+        return { taskId: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
+      }
     }
     if (matchesDangerousShellPattern(command)) {
       return { taskId: '', error: '安全检查失败: 命令包含危险操作模式' };

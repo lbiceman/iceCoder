@@ -196,7 +196,10 @@ window.ChatPage = (function () {
     if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
         sessionPet.setState(isStreaming ? 'read' : 'thinking');
-      } else if (!userStopped) {
+      } else if (
+        !userStopped
+        && !(Pet.isModelDoneNoticeActive && Pet.isModelDoneNoticeActive())
+      ) {
         sessionPet.setState('idle');
       }
     }

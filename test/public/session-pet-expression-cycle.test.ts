@@ -12,6 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** 与 SessionPet EXPRESSIONS 对外键一致（不含 blink） */
 export const PET_EXPRESSION_CYCLE = [
   'idle',
+  'success',
   'happy',
   'thinking',
   'working',

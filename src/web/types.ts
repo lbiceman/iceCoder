@@ -47,6 +47,11 @@ export interface IceCoderConfigFile {
    */
   skipPermissionChecks?: boolean;
   /**
+   * 为 `true` 时跳过 HostGuard 沙箱检查（Shell 命令与写入预检），直接执行。
+   * 字段缺失或为 `false` 时走默认 HostGuard 规则。
+   */
+  skipSandbox?: boolean;
+  /**
    * 写后读验收豁免目录前缀（相对工作区根），如 `.scratch`、`tmp/agent`。
    * 与工作区根目录 `.icecoder.json` 中同名字段合并。
    */

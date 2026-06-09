@@ -11,6 +11,7 @@ import {
   normalizeSupervisorMode,
   readMainConfigFile,
   resolveSkipPermissionChecks,
+  resolveSkipSandbox,
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
@@ -242,12 +243,14 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       let existingProviders: ProviderConfig[] = [];
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
+      let existingSkipSandbox: IceCoderConfigFile['skipSandbox'];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
         existingSupervisorMode = existing.supervisorMode;
         existingSkipPermissionChecks = existing.skipPermissionChecks;
+        existingSkipSandbox = existing.skipSandbox;
       } catch { /* 文件不存在，首次保存 */ }
 
       // 构建 id → 原始 apiKey 的映射
@@ -284,6 +287,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: normalizedProviders,
           supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
           skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
+          skipSandbox: resolveSkipSandbox(existingSkipSandbox),
         },
         null,
         2,
@@ -326,6 +330,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
+        skipSandbox: resolveSkipSandbox(config.skipSandbox),
         setupRequired: !isAppConfigReady(config),
       });
     } catch (err) {
@@ -334,6 +339,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: [],
           supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
+          skipSandbox: false,
           setupRequired: true,
         });
         return;

@@ -34,7 +34,10 @@ import {
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
-import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
+import {
+  readSkipPermissionChecksFromMainConfig,
+  readSkipSandboxFromMainConfig,
+} from '../../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { fetchQuickTunnelPublicUrl } from '../../web/quicktunnel-url.js';
 import { startTunnel } from '../tunnel/cloudflared-tunnel.js';
@@ -382,6 +385,7 @@ ${c.bold}终端内置命令:${c.reset}
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
       const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+      const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
       const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
       const harnessConfig: HarnessConfig = {
@@ -400,6 +404,7 @@ ${c.bold}终端内置命令:${c.reset}
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },
         ],
         skipPermissionChecks,
+        skipSandbox,
         compactionThreshold: 40,
         compactionKeepRecent: 10,
         compactionEnableLLMSummary: true,

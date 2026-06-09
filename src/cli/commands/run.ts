@@ -23,7 +23,10 @@ import {
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
-import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
+import {
+  readSkipPermissionChecksFromMainConfig,
+  readSkipSandboxFromMainConfig,
+} from '../../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 
@@ -71,6 +74,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
     const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+    const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
     const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
     const harnessConfig: HarnessConfig = {
@@ -87,6 +91,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       },
       permissions: [],
       skipPermissionChecks,
+      skipSandbox,
       compactionThreshold: 40,
       compactionKeepRecent: 10,
       compactionEnableLLMSummary: true,

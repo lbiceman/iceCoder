@@ -40,6 +40,8 @@ export interface ToolExecutorDeps {
   permissionRules: ToolPermissionRule[];
   /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
   skipPermissionChecks?: boolean;
+  /** 为 true 时跳过 HostGuard 沙箱预检 */
+  skipSandbox?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   workspaceRoot: string;
   lockedWorkspaceRoot?: string;
@@ -419,6 +421,7 @@ export async function executeToolCallsStreaming(
       workspaceRoot: deps.workspaceRoot,
       lockedWorkspaceRoot: deps.lockedWorkspaceRoot,
       missingFileAttempts: deps.missingFileAttempts,
+      skipSandbox: deps.skipSandbox,
     });
     if (preflight.blocked) {
       const enrichGate = preflight.reason === 'build_diagnostic_gate';
