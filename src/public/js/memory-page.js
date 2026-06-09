@@ -1044,19 +1044,27 @@ window.MemoryPage = (function () {
       '</div>' +
       '<div class="memory-header-actions">' +
       '<span class="memory-count" id="memory-total-count" aria-live="polite">载入中…</span>' +
+      '<span class="memory-health-capsule" id="memory-health-capsule" aria-live="polite">' +
+      '<span class="memory-health-dot"></span>' +
+      '<span class="memory-health-text">检查中…</span>' +
+      '</span>' +
       '<button type="button" class="nav-link active memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
       '</div>';
 
     var consolidateBtn = header.querySelector('#memory-consolidate-btn');
+    var deepMode = false; // 首次点击规则修复，再次点击深度 LLM
+
     if (consolidateBtn) {
       consolidateBtn.addEventListener('click', function () {
         if (!containerEl || consolidateBtn.disabled) return;
         var btn = /** @type {HTMLButtonElement} */ (consolidateBtn);
-        var label = btn.textContent || '手动整合';
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
-        btn.textContent = '整合中...';
-        fetch('/api/memory/dream', { method: 'POST' })
+
+        var url = deepMode ? '/api/memory/dream?deep=true' : '/api/memory/dream';
+        btn.textContent = deepMode ? '深度整合中...' : '修复中...';
+
+        fetch(url, { method: 'POST' })
           .then(function (res) {
             return res.json().then(function (body) {
               return { ok: res.ok, body: body };
@@ -1064,28 +1072,85 @@ window.MemoryPage = (function () {
           })
           .then(function (out) {
             if (!out.ok || !out.body.success) {
-              var errMsg = (out.body && out.body.error) || '整合失败';
+              var errMsg = (out.body && out.body.error) || '操作失败';
               window.alert(errMsg);
               return;
             }
-            var summary = out.body.summary || '整合完成';
+            var summary = out.body.summary || '操作完成';
             var detail =
               '修改 ' + (out.body.filesModified || 0) +
               ' · 删除 ' + (out.body.filesDeleted || 0) +
+              (out.body.ruleFixed ? ' · 索引修复 ' + (out.body.ruleEntryCount || 0) + ' 条' : '') +
               (out.body.filesEvicted ? ' · 归档 ' + out.body.filesEvicted : '');
             window.alert(summary + '\n' + detail);
+            // 刷新健康状态
+            fetchHealthCapsule();
             if (containerEl) render(containerEl);
+            // 如果有深度整合可用，下次不自动降级
+            if (!out.body.deep && out.body.success) {
+              deepMode = true;
+              btn.textContent = '深度整合（LLM）';
+            }
           })
           .catch(function () {
-            window.alert('整合请求失败，请稍后重试。');
+            window.alert('请求失败，请稍后重试。');
           })
           .finally(function () {
             btn.disabled = false;
             btn.removeAttribute('aria-busy');
-            btn.textContent = label;
           });
       });
     }
+
+    /** 2.5: 拉取索引健康报告并更新胶囊 */
+    var healthCapsuleEl = /** @type {HTMLElement | null} */ (
+      header.querySelector('#memory-health-capsule')
+    );
+
+    function fetchHealthCapsule() {
+      if (!healthCapsuleEl) return;
+      fetch('/api/memory/dream', { method: 'GET' })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (!data.success || !data.health) {
+            healthCapsuleEl.setAttribute('data-status', 'warn');
+            var textEl = healthCapsuleEl.querySelector('.memory-health-text');
+            if (textEl) textEl.textContent = '无法获取';
+            return;
+          }
+          var h = data.health;
+          var status = 'ok';
+          var label = '';
+          if (h.dead > 3 || h.orphans > 10) {
+            status = 'bad';
+            label = '死链 ' + h.dead + ' · 孤儿 ' + h.orphans;
+          } else if (h.dead > 0 || h.orphans > 5) {
+            status = 'warn';
+            label = '死链 ' + h.dead + ' · 孤儿 ' + h.orphans;
+          } else {
+            label = '健康 (' + h.indexed + ' 条索引, ' + h.onDisk + ' 磁盘)';
+          }
+          healthCapsuleEl.setAttribute('data-status', status);
+          var textEl = healthCapsuleEl.querySelector('.memory-health-text');
+          if (textEl) textEl.textContent = label;
+
+          // 有异常时 offer LLM 深度整合
+          if (status !== 'ok' && consolidateBtn && !deepMode) {
+            deepMode = true;
+            consolidateBtn.textContent = '深度整合（LLM）';
+          }
+        })
+        .catch(function () {
+          if (healthCapsuleEl) {
+            healthCapsuleEl.setAttribute('data-status', 'warn');
+            var textEl = healthCapsuleEl.querySelector('.memory-health-text');
+            if (textEl) textEl.textContent = '离线';
+          }
+        });
+    }
+
+    // 初始拉取
+    fetchHealthCapsule();
 
     var main = document.createElement('main');
     main.className = 'memory-main';

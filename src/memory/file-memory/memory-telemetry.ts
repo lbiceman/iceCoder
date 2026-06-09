@@ -115,6 +115,8 @@ export interface DreamTelemetry {
     | 'index_drift'
     | 'over_cap'
     | 'manual';
+  /** skipReason — 未执行 Dream 时记录跳过原因 */
+  skipReason?: string;
 }
 
 /** 仅条数淘汰（无 Dream LLM） */

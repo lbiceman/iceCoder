@@ -1681,6 +1681,7 @@ ${candidateList}`;
     try {
       const dreamGate = await this.memoryDream.evaluateDreamGate(this.memoryDir);
       if (!dreamGate.shouldRun) {
+        // Phase 1.4: index_drift 已由 evaluateDreamGate 内部规则层重建索引，无需 LLM
         await this.evictMemoryOverCap();
         return;
       }
@@ -1705,7 +1706,7 @@ ${candidateList}`;
         getScannerCache().invalidate(this.memoryDir);
       }
       if (
-        (dreamGate.trigger === 'stale_index' || dreamGate.trigger === 'index_drift')
+        dreamGate.trigger === 'stale_index'
         && dreamResult.executed
       ) {
         this.memoryDream.notifyStaleIndexDreamCompleted();

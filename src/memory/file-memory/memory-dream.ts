@@ -42,6 +42,8 @@ import {
   repairDeadLinksInMemoryIndex,
   type MemoryIndexHealthReport,
 } from './memory-index-health.js';
+import { removeIndexRows, rebuildIndexIfDrifted } from './memory-index-maintainer.js';
+import { isProtectedFromAutoDelete, findMergeCandidates, performRuleMerge } from './memory-dedup.js';
 
 /** Dream 读取文件数上限 */
 const DREAM_READ_LIMIT = 80;
@@ -85,6 +87,8 @@ export interface DreamResult {
   filesEvicted?: number;
   /** 耗时（毫秒） */
   duration: number;
+  /** 跳过原因（executed=false 时记录） */
+  skipReason?: string;
 }
 
 /**
@@ -159,6 +163,59 @@ Return ONLY valid JSON.`;
 }
 
 /**
+ * 两阶段 LLM：Index pass prompt（仅输出 new_index）。
+ */
+function buildIndexPassPrompt(_memoryDir: string, currentIndex: string, indexHealthBlock: string): string {
+  return `# Memory Index Rebuild (Index Pass)
+
+You are doing a lightweight index-only pass. Do NOT produce file_writes or file_deletes.
+
+## Index Health
+${indexHealthBlock}
+
+## Current MEMORY.md
+${currentIndex || '(empty)'}
+
+## Instructions
+Rebuild a clean MEMORY.md from the index health report. Remove dead references. Keep only valid entries.
+Use table rows: \`| filename.md | one-line summary |\`
+
+Return ONLY: { "new_index": "<full MEMORY.md content>" }`;
+}
+
+/**
+ * 两阶段 LLM：Content pass prompt（基于已建好的 new_index，做语义合并）。
+ */
+function buildContentPassPrompt(memoryDir: string, memoryContents: string, expiryInfo: string, newIndex: string | null): string {
+  return `# Memory Content Consolidation (Content Pass)
+
+Memory directory: \`${memoryDir}\`
+
+## Key rule
+You MUST NOT modify the index unless absolutely necessary (it was already rebuilt). Focus on content merges, updates, and file_writes/file_deletes.
+
+## Existing Index (reference only — do not include in output)
+${newIndex || '(not yet rebuilt)'}
+
+## Memory files
+${memoryContents}${expiryInfo}
+
+## Instructions
+1. Merge duplicate/near-duplicate memories into one file (use file_writes + file_deletes)
+2. Update outdated information (file_writes)
+3. Delete obsolete memories (file_deletes)
+4. Analyze user behavior patterns for new user memories
+
+## Output format
+{
+  "actions": [{ "type": "merge", "files": ["fileA.md", "fileB.md"], "newFile": "merged.md" }],
+  "file_writes": [{ "filename": "...", "content": "...", "promote_to_user": false }],
+  "file_deletes": ["old-file.md"],
+  "summary": "..."
+}`;
+}
+
+/**
  * MemoryDream 记忆整合器。
  */
 export class MemoryDream {
@@ -167,6 +224,10 @@ export class MemoryDream {
   private lastDreamTime: number = 0;
   /** 最近一次因 MEMORY.md 死链（stale_index）成功跑完 Dream 的时间戳（用于防抖） */
   private staleIndexDreamCompletedAt: number = 0;
+  /** 最近一次因索引问题尝试 Dream 失败或 no-op 的时间戳（退避用） */
+  private lastIndexDreamAttemptAt: number = 0;
+  /** 索引类 Dream 连续失败/空跑次数（指数退避基数） */
+  private indexDreamBackoffCount: number = 0;
   /** 状态持久化文件路径 */
   private stateFilePath: string;
   /** 整合锁 */
@@ -205,11 +266,22 @@ export class MemoryDream {
   }
 
   /**
-   * Dream 门控：返回是否运行及触发原因（遥测用）。超条数上限先触发 Dream，让 LLM 有机会合并/修正，再由 Dream 后淘汰收敛到上限。
+   * Dream 门控 v2：返回是否运行、触发原因、skipReason。
+   *
+   * 分流量：
+   * - expired / over_cap → 直接 LLM
+   * - index_drift（纯孤儿、无死链）→ 规则层 rebuild，不调 LLM
+   * - stale_index（有死链）→ 先 repair；仍不健康才 LLM（有条件）
+   * - session_and_files / new_files → LLM
+   * - 退避：索引类门控连续失败/空跑时指数退避 1–30min
    */
-  async evaluateDreamGate(memoryDir: string): Promise<{ shouldRun: boolean; trigger: DreamTrigger | null }> {
+  async evaluateDreamGate(memoryDir: string): Promise<{
+    shouldRun: boolean;
+    trigger: DreamTrigger | null;
+    skipReason?: string;
+  }> {
     const remoteCfg = getDreamConfig();
-    if (!remoteCfg.enabled) return { shouldRun: false, trigger: null };
+    if (!remoteCfg.enabled) return { shouldRun: false, trigger: null, skipReason: 'disabled' };
 
     await this.restoreState();
 
@@ -222,7 +294,7 @@ export class MemoryDream {
       memories = await scanMemoryFiles(memoryDir, 500);
     } catch (err) {
       console.debug('[MemoryDream] scanMemoryFiles failed:', err instanceof Error ? err.message : err);
-      return { shouldRun: false, trigger: null };
+      return { shouldRun: false, trigger: null, skipReason: 'scan_failed' };
     }
 
     const expired = getExpiredMemories(memories);
@@ -240,35 +312,88 @@ export class MemoryDream {
       memoryDir,
       memories.map(m => m.filename),
     );
-    const indexDrift = indexHealth.onDisk >= INDEX_ORPHAN_MIN_ON_DISK
-      && indexHealth.orphans >= INDEX_ORPHAN_TRIGGER;
-    const staleIndex = indexHealth.dead >= this.config.staleIndexDeadLinksThreshold || indexDrift;
 
+    // Phase 1.7: 按比例判定孤儿飘移（替代固定阈值）
+    const orphanRatio = indexHealth.onDisk > 0
+      ? indexHealth.orphans / indexHealth.onDisk
+      : 0;
+    const orphanAbsoluteEnough = indexHealth.orphans >= this.config.indexOrphanMinCount
+      && orphanRatio >= this.config.indexOrphanRatioThreshold;
+    const indexDrift = orphanAbsoluteEnough && indexHealth.dead === 0;
+    const staleIndex = indexHealth.dead >= this.config.staleIndexDeadLinksThreshold || orphanAbsoluteEnough;
+
+    // Phase 1.4: index_drift（纯孤儿、无死链）→ 规则层重建，零 LLM
+    if (indexDrift) {
+      console.log(
+        `[MemoryDream] index_drift: ${indexHealth.orphans} orphans (${Math.round(orphanRatio * 100)}%), 0 dead → rule rebuild, no LLM`,
+      );
+      try {
+        const rebuild = await rebuildIndexIfDrifted(memoryDir, { maxEntries: this.config.maxIndexLines });
+        console.log(`[MemoryDream] index_drift rebuilt: ${rebuild.entryCount} entries`);
+      } catch (e) {
+        console.debug('[MemoryDream] index_drift rebuild failed:', e instanceof Error ? e.message : e);
+      }
+      this.indexDreamBackoffCount = 0;
+      return { shouldRun: false, trigger: null, skipReason: 'index_drift_rule_rebuild' };
+    }
+
+    // Phase 1.5: stale_index（有死链）→ 先修复，仍不健康才 LLM
     if (staleIndex) {
       const sinceStaleDream = Date.now() - this.staleIndexDreamCompletedAt;
-      if (
-        this.staleIndexDreamCompletedAt > 0
+      const inCooldown = this.staleIndexDreamCompletedAt > 0
         && sinceStaleDream >= 0
-        && sinceStaleDream < STALE_INDEX_DREAM_COOLDOWN_MS
-      ) {
+        && sinceStaleDream < STALE_INDEX_DREAM_COOLDOWN_MS;
+
+      if (inCooldown) {
         console.debug(
-          `[MemoryDream] index unhealthy (dead=${indexHealth.dead}, orphans=${indexHealth.orphans}) but stale_index cooldown active (${Math.round(sinceStaleDream / 1000)}s since last)`,
+          `[MemoryDream] index unhealthy (dead=${indexHealth.dead}, orphans=${indexHealth.orphans}) but stale_index cooldown active`,
         );
-      } else if (indexDrift && indexHealth.dead < this.config.staleIndexDeadLinksThreshold) {
-        console.log(
-          `[MemoryDream] MEMORY.md drift: ${indexHealth.orphans} orphan(s) / ${indexHealth.onDisk} on disk, triggering dream`,
-        );
-        return { shouldRun: true, trigger: 'index_drift' };
-      } else {
-        console.log(`[MemoryDream] MEMORY.md has ${indexHealth.dead} dead ref(s), triggering dream`);
-        return { shouldRun: true, trigger: 'stale_index' };
+        return { shouldRun: false, trigger: null, skipReason: 'stale_index_cooldown' };
       }
+
+      // Phase 1.6: 退避检查
+      const backoffResult = this.checkIndexDreamBackoff();
+      if (!backoffResult.ok) {
+        console.debug(`[MemoryDream] ${backoffResult.reason}`);
+        return { shouldRun: false, trigger: null, skipReason: backoffResult.reason };
+      }
+
+      // 先规则修复
+      let repairFixed = false;
+      try {
+        const repair = await repairDeadLinksInMemoryIndex(memoryDir);
+        if (repair.removedLinks > 0) {
+          console.log(`[MemoryDream] stale_index rule repair: removed ${repair.removedLinks} dead link(s)`);
+        }
+        // 修复后若死链已清零 → 仅孤儿问题走 rebuild
+        const recheck = await auditMemoryIndexHealth(memoryDir, memories.map(m => m.filename));
+        if (recheck.dead === 0 && recheck.orphans > 0) {
+          const rebuild = await rebuildIndexIfDrifted(memoryDir, { maxEntries: this.config.maxIndexLines });
+          console.log(`[MemoryDream] stale_index: repair + rebuild → ${rebuild.entryCount} entries`);
+          if (rebuild.wrote && recheck.dead === 0 && recheck.orphans - rebuild.entryCount <= 10) {
+            repairFixed = true;
+          }
+        } else if (recheck.dead === 0 && recheck.orphans === 0) {
+          repairFixed = true;
+        }
+      } catch (e) {
+        console.debug('[MemoryDream] stale_index rule repair failed:', e instanceof Error ? e.message : e);
+      }
+
+      if (repairFixed) {
+        this.indexDreamBackoffCount = 0;
+        return { shouldRun: false, trigger: null, skipReason: 'stale_index_rule_repaired' };
+      }
+
+      console.log(`[MemoryDream] stale_index: rule repair insufficient (dead=${indexHealth.dead}), triggering LLM dream`);
+      this.lastIndexDreamAttemptAt = Date.now();
+      return { shouldRun: true, trigger: 'stale_index' };
     }
 
     const lastConsolidatedAt = await this.lock.readLastConsolidatedAt();
     const hoursSince = (Date.now() - lastConsolidatedAt) / 3_600_000;
     const minHours = remoteCfg.minHours || 4;
-    if (hoursSince < minHours) return { shouldRun: false, trigger: null };
+    if (hoursSince < minHours) return { shouldRun: false, trigger: null, skipReason: 'time_interval' };
 
     const minSessions = remoteCfg.minSessions || this.config.sessionInterval;
     if (this.sessionCount >= minSessions && memories.length >= this.config.fileCountThreshold) {
@@ -281,7 +406,27 @@ export class MemoryDream {
       return { shouldRun: true, trigger: 'new_files' };
     }
 
-    return { shouldRun: false, trigger: null };
+    return { shouldRun: false, trigger: null, skipReason: 'no_trigger' };
+  }
+
+  /**
+   * Phase 1.6: 检查索引类 Dream 是否处于指数退避中。
+   * 前 N 次连续失败/空跑后，退避间隔 = min(backoffBaseMs * 2^(N-1), backoffMaxMs)
+   */
+  private checkIndexDreamBackoff(): { ok: boolean; reason: string } {
+    if (this.indexDreamBackoffCount < 1) return { ok: true, reason: '' };
+    const sinceLastAttempt = Date.now() - this.lastIndexDreamAttemptAt;
+    const backoffMs = Math.min(
+      this.config.indexBackoffBaseMs * Math.pow(2, this.indexDreamBackoffCount - 1),
+      this.config.indexBackoffMaxMs,
+    );
+    if (sinceLastAttempt < backoffMs) {
+      return {
+        ok: false,
+        reason: `index_backoff: attempt ${this.indexDreamBackoffCount}, wait ${Math.round((backoffMs - sinceLastAttempt) / 1000)}s more`,
+      };
+    }
+    return { ok: true, reason: '' };
   }
 
   /**
@@ -370,6 +515,7 @@ export class MemoryDream {
         filesModified: 0,
         filesDeleted: 0,
         duration: Date.now() - startTime,
+        skipReason: 'mutex',
       };
     }
 
@@ -403,6 +549,7 @@ export class MemoryDream {
         filesModified: 0,
         filesDeleted: 0,
         duration: Date.now() - startTime,
+        skipReason: 'lock_acquire_failed',
       };
     }
 
@@ -413,6 +560,7 @@ export class MemoryDream {
         filesModified: 0,
         filesDeleted: 0,
         duration: Date.now() - startTime,
+        skipReason: 'lock_held',
       };
     }
 
@@ -484,31 +632,55 @@ export class MemoryDream {
     );
     const indexHealthBlock = formatIndexHealthForDream(indexHealth);
 
+    // 构建消息辅助
+    const buildMessages = (prefix: UnifiedMessage[] | undefined, content: string): UnifiedMessage[] => {
+      if (prefix && prefix.length > 0) return [...prefix, { role: 'user', content }];
+      return [
+        { role: 'system', content: 'You are a memory consolidation agent. Follow the instructions precisely and return only valid JSON.' },
+        { role: 'user', content },
+      ];
+    };
+
     // 构建 LLM 请求
     const dreamPrompt = buildDreamPrompt(memoryDir, this.config.maxIndexLines, this.config.postDreamMemoryCap);
     const userContent = `${dreamPrompt}\n\n## Index Health\n\n${indexHealthBlock}\n\n## Current MEMORY.md\n\n${currentIndex || '(empty)'}\n\n## Memory files\n\n${memoryContents}${expiryInfo}`;
+    const messages = buildMessages(conversationPrefix, userContent);
 
-    // 构建消息（支持 prompt cache）
-    let messages: UnifiedMessage[];
-    if (conversationPrefix && conversationPrefix.length > 0) {
-      messages = [
-        ...conversationPrefix,
-        { role: 'user', content: userContent },
-      ];
+    // 2.2: 两阶段 LLM（ICE_DREAM_TWO_PHASE=true 时启用 index pass + content pass）
+    const twoPhase = this.config.twoPhase && process.env.ICE_DREAM_TWO_PHASE === 'true';
+    let parsed: any;
+    let responseContent: string;
+
+    if (twoPhase) {
+      // Phase A: Index pass — 仅输出 new_index
+      const indexPrompt = buildIndexPassPrompt(memoryDir, currentIndex, indexHealthBlock);
+      const indexMessages = buildMessages(conversationPrefix, indexPrompt);
+      const indexResponse = await llmAdapter.chat(indexMessages, {
+        maxTokens: 2048,
+        temperature: 0,
+      });
+      const indexParsed = parseLLMJsonObject<any>(indexResponse.content);
+      const newIndex = indexParsed?.new_index || null;
+
+      // Phase B: Content pass — 基于已产生的索引做 file_writes/deletes
+      const contentPrompt = buildContentPassPrompt(memoryDir, memoryContents, expiryInfo, newIndex);
+      const contentMessages = buildMessages(conversationPrefix, contentPrompt);
+      const contentResponse = await llmAdapter.chat(contentMessages, {
+        maxTokens: this.config.maxOutputTokens,
+        temperature: 0,
+      });
+      const contentParsed = parseLLMJsonObject<any>(contentResponse.content);
+      responseContent = contentResponse.content;
+
+      parsed = { ...contentParsed, new_index: newIndex || contentParsed?.new_index };
     } else {
-      messages = [
-        { role: 'system', content: 'You are a memory consolidation agent. Follow the instructions precisely and return only valid JSON.' },
-        { role: 'user', content: userContent },
-      ];
+      const response = await llmAdapter.chat(messages, {
+        maxTokens: this.config.maxOutputTokens,
+        temperature: 0,
+      });
+      responseContent = response.content;
+      parsed = parseLLMJsonObject<any>(response.content);
     }
-
-    const response = await llmAdapter.chat(messages, {
-      maxTokens: this.config.maxOutputTokens,
-      temperature: 0,
-    });
-
-    // 解析响应并执行操作
-    const parsed = parseLLMJsonObject<any>(response.content);
 
     // ── Dream 前备份 ──
     if (parsed && this.config.enableBackup) {
@@ -518,7 +690,7 @@ export class MemoryDream {
     }
 
     const wroteFullIndex = !!(parsed?.new_index && typeof parsed.new_index === 'string');
-    let result = await this.executeDreamActions(memoryDir, response.content, parsed);
+    let result = await this.executeDreamActions(memoryDir, responseContent, parsed);
 
     const promoted = await this.autoPromoteUserCandidates(memoryDir, memories);
     if (promoted > 0) {
@@ -527,6 +699,26 @@ export class MemoryDream {
         filesModified: result.filesModified + promoted,
         summary: `${result.summary} Promoted ${promoted} user memory(ies) to user-level.`,
       };
+    }
+
+    // 3.12: 规则重复合并（Dream 后扫相似对，shadow/merge 模式）
+    if (process.env.ICE_RULE_MERGE !== 'off') {
+      const mergeMode = (process.env.ICE_RULE_MERGE || 'shadow') as 'shadow' | 'merge';
+      const candidates = await findMergeCandidates(
+        memoryDir,
+        0.88, // ruleMergeSimilarityThreshold
+      );
+      for (const c of candidates) {
+        const mr = await performRuleMerge(c, mergeMode);
+        if (mr.performed) {
+          result.filesModified++;
+          result.filesDeleted++;
+          getScannerCache().invalidate(memoryDir);
+        }
+      }
+      if (candidates.length > 0 && mergeMode === 'shadow') {
+        console.log(`[MemoryDream] rule_merge shadow: ${candidates.length} candidate pairs found`);
+      }
     }
 
     if (!wroteFullIndex && (indexHealth.dead > 0 || indexHealth.orphans > 10)) {
@@ -648,7 +840,45 @@ export class MemoryDream {
     let filesModified = 0;
     let filesDeleted = 0;
 
-    // 写入文件
+    // 2.3: actions[] 映射器（ICE_DREAM_ACTIONS_EXEC=true 时执行）
+    if (process.env.ICE_DREAM_ACTIONS_EXEC === 'true' && Array.isArray(parsed.actions)) {
+      for (const action of parsed.actions) {
+        if (action.type === 'merge' && Array.isArray(action.filenames) && action.filenames.length >= 2) {
+          const [keepFile, ...removeFiles] = action.filenames;
+          try {
+            const keepPath = validatePath(keepFile, memoryDir);
+            let keepContent = await fs.readFile(keepPath, 'utf-8');
+            for (const rmFile of removeFiles) {
+              try {
+                const rmPath = validatePath(rmFile, memoryDir);
+                const rmContent = await fs.readFile(rmPath, 'utf-8');
+                const rmHeaderEnd = rmContent.indexOf('\n\n');
+                const rmBody = rmHeaderEnd > 0 ? rmContent.slice(rmHeaderEnd + 2).trim() : rmContent;
+                if (rmBody && !keepContent.includes(rmBody)) {
+                  const now = new Date().toISOString();
+                  keepContent += `\n\n## Merged from ${rmFile} (${now})\n\n${rmBody}`;
+                }
+                await fs.unlink(rmPath);
+                filesDeleted++;
+                console.log(`[MemoryDream] action merge: deleted "${rmFile}" into "${keepFile}"`);
+              } catch { /* 源文件不存在，跳过 */ }
+            }
+            if (!keepContent.match(/^merged-from:/m)) {
+              keepContent = keepContent.replace(
+                /^(confidence:\s*\S+)\s*$/m,
+                `$1\nmerged-from: [${JSON.stringify(removeFiles)}]\nmerged-at: ${new Date().toISOString()}`,
+              );
+            }
+            await fs.writeFile(keepPath, keepContent, 'utf-8');
+            filesModified++;
+          } catch (e) {
+            console.error(`[MemoryDream] action merge failed for ${keepFile}:`, e);
+          }
+        }
+      }
+    }
+
+    // 写入文件（2.7: 如果已有同名文件，添加 merged-from）
     const userMemoryDir = path.resolve(process.env.ICE_USER_MEMORY_DIR ?? 'data/user-memory');
     if (Array.isArray(parsed.file_writes)) {
       for (const fw of parsed.file_writes) {
@@ -658,7 +888,19 @@ export class MemoryDream {
           const writeDir = fw.promote_to_user ? userMemoryDir : memoryDir;
           await fs.mkdir(writeDir, { recursive: true });
           const filePath = validatePath(fw.filename, writeDir);
-          await fs.writeFile(filePath, fw.content, 'utf-8');
+          // 2.7: 若已有同名文件，注入 merged-from 元数据
+          let writeContent = fw.content;
+          try {
+            const oldContent = await fs.readFile(filePath, 'utf-8');
+            const mergedAt = new Date().toISOString();
+            if (!writeContent.match(/^merged-from:\s*\[/m)) {
+              writeContent = writeContent.replace(
+                /^(confidence:\s*\S+)\s*$/m,
+                `$1\nmerged-from: ["${fw.filename}"]\nmerged-at: ${mergedAt}`,
+              );
+            }
+          } catch { /* 文件不存在，正常 */ }
+          await fs.writeFile(filePath, writeContent, 'utf-8');
           filesModified++;
 
           if (fw.promote_to_user) {
@@ -680,11 +922,19 @@ export class MemoryDream {
       }
     }
 
-    // 删除文件
+    // 删除文件（2.6 安全闸：禁止自动删除 feedback / 高置信 / 高召回）
     const deletedFilenames: string[] = [];
     if (Array.isArray(parsed.file_deletes)) {
+      // 预扫描被删文件以实施安全闸
+      const allMemories = await scanMemoryFiles(memoryDir, 500);
+      const memMap = new Map(allMemories.map(m => [m.filename, m]));
       for (const filename of parsed.file_deletes) {
         if (!filename || filename === 'MEMORY.md') continue;
+        const header = memMap.get(filename);
+        if (header && isProtectedFromAutoDelete(header)) {
+          console.log(`[MemoryDream] Safety gate: blocked auto-delete of "${filename}" (protected: type=${header.type}, confidence=${header.confidence}, recallCount=${header.recallCount})`);
+          continue;
+        }
         try {
           const filePath = validatePath(filename, memoryDir);
           await fs.unlink(filePath);
@@ -694,22 +944,16 @@ export class MemoryDream {
           if (e instanceof PathTraversalError) {
             console.error(`[MemoryDream] Path security violation: ${e.message}`);
           }
-          // 文件不存在等错误静默处理
         }
       }
     }
 
     const wroteFullIndex = !!(parsed.new_index && typeof parsed.new_index === 'string');
     if (deletedFilenames.length > 0 && !wroteFullIndex) {
-      try {
-        const repair = await repairDeadLinksInMemoryIndex(memoryDir);
-        if (repair.wrote) {
-          console.debug(`[MemoryDream] MEMORY.md stripped ${repair.removedLinks} dead link(s) after deletes`);
-          getScannerCache().invalidate(memoryDir);
-        }
-      } catch (e) {
-        console.debug('[MemoryDream] repair MEMORY.md links failed:', e instanceof Error ? e.message : e);
-      }
+      // Phase 1: 用 removeIndexRows 维护索引，而非仅修死链
+      removeIndexRows(memoryDir, deletedFilenames).catch(e => {
+        console.debug('[MemoryDream] removeIndexRows failed:', e instanceof Error ? e.message : e);
+      });
     }
 
     // 更新索引
@@ -1023,6 +1267,8 @@ export class MemoryDream {
         sessionCount: this.sessionCount,
         lastDreamTime: this.lastDreamTime,
         staleIndexDreamCompletedAt: this.staleIndexDreamCompletedAt,
+        lastIndexDreamAttemptAt: this.lastIndexDreamAttemptAt,
+        indexDreamBackoffCount: this.indexDreamBackoffCount,
         updatedAt: new Date().toISOString(),
       };
       await fs.writeFile(this.stateFilePath, JSON.stringify(state), 'utf-8');
@@ -1077,6 +1323,18 @@ export class MemoryDream {
         this.staleIndexDreamCompletedAt = Math.max(
           this.staleIndexDreamCompletedAt,
           state.staleIndexDreamCompletedAt,
+        );
+      }
+      if (typeof state.lastIndexDreamAttemptAt === 'number') {
+        this.lastIndexDreamAttemptAt = Math.max(
+          this.lastIndexDreamAttemptAt,
+          state.lastIndexDreamAttemptAt,
+        );
+      }
+      if (typeof state.indexDreamBackoffCount === 'number') {
+        this.indexDreamBackoffCount = Math.max(
+          this.indexDreamBackoffCount,
+          state.indexDreamBackoffCount,
         );
       }
     } catch {

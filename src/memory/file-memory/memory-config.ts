@@ -121,6 +121,8 @@ export interface DreamConfig {
   maxIndexBytes: number;
   /** Dream LLM 调用 `maxTokens` 上限 */
   maxOutputTokens: number;
+  /** Dream 两阶段 LLM：是否启用 index pass + content pass 拆分 */
+  twoPhase: boolean;
   /** 是否在改写前写入备份目录 */
   enableBackup: boolean;
   /** Dream 备份根目录 */
@@ -143,6 +145,28 @@ export interface DreamConfig {
   userMemoryPostDreamCap: number;
   /** 用户级淘汰传入 `evictIfNeeded` 的覆盖项；默认归档目录为 `resolveUserMemoryEvictedDir()` */
   afterUserDreamEviction?: Partial<EvictionConfig>;
+  /** 索引孤儿比例阈值（orphans/onDisk ≥ 此值触发 index_drift）；默认 0.5 */
+  indexOrphanRatioThreshold: number;
+  /** 索引孤儿绝对数下限（onDisk 不足时用此值）；默认 10 */
+  indexOrphanMinCount: number;
+  /** 索引退避基础间隔（ms），默认 60s */
+  indexBackoffBaseMs: number;
+  /** 索引退避最大间隔（ms），默认 30min */
+  indexBackoffMaxMs: number;
+}
+
+/**
+ * Extract 写时去重 & 规则重复合并配置。
+ */
+export interface DedupConfig {
+  /** Extract 写入时描述相似度阈值（0-1），超过则更新已有文件而非新建 */
+  extractSimilarityThreshold: number;
+  /** 规则重复合并相似度阈值 */
+  ruleMergeSimilarityThreshold: number;
+  /** 运行模式：'off' | 'shadow' | 'merge' */
+  mode: 'off' | 'shadow' | 'merge';
+  /** 规则合并最小候选对数量 */
+  ruleMergeMinCandidates: number;
 }
 
 /** 记忆遥测落盘与控制台开关（`memory-telemetry.ts`） */
@@ -289,7 +313,7 @@ export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
 /** `memory-llm-extractor` 单次提取规模默认 */
 export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
   maxMemories: 15,
-  maxOutputTokens: 4096,
+  maxOutputTokens: 8192,
   enablePromptCache: true,
 };
 
@@ -300,11 +324,12 @@ export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
 export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   /** 与 `recordSession` 叠加：`sessionCount >= sessionInterval` 时才可能触发 */
   sessionInterval: 5,
+  twoPhase: true,
   /** 与门控组合：记忆文件数至少此值才考虑「会话+文件」类触发 */
   fileCountThreshold: 10,
   maxIndexLines: 200,
   maxIndexBytes: 25000,
-  maxOutputTokens: 4096,
+  maxOutputTokens: 8192,
   enableBackup: true,
   backupDir: getRuntimeMemoryAuxPath('dream-backups'),
   maxBackups: 3,
@@ -315,6 +340,10 @@ export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   enforceUserMemoryCapAfterDream: true,
   /** 用户目录同样维持 100 条话题文件规模 */
   userMemoryPostDreamCap: 100,
+  indexOrphanRatioThreshold: 0.5,
+  indexOrphanMinCount: 10,
+  indexBackoffBaseMs: 60_000,
+  indexBackoffMaxMs: 30 * 60 * 1000,
 };
 
 /** 遥测 JSONL 默认路径与体积上限 */

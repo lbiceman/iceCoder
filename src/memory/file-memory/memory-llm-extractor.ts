@@ -23,6 +23,8 @@ import {
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
 import { evictIfNeeded } from './memory-eviction.js';
+import { upsertIndexRow } from './memory-index-maintainer.js';
+import { checkExtractDedupSync } from './memory-dedup.js';
 
 /** 消息内容截断字符数 */
 const EXTRACTION_MESSAGE_TRUNCATE = 2000;
@@ -483,12 +485,30 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
           isUpdate = true;
         } catch { /* 文件不存在，正常创建 */ }
 
-        // v4: tags 重叠度硬去重 — 新文件时检查是否与已有记忆高度重复
+        // v4: tags 重叠度硬去重 + Phase 2.1 描述相似度去重
+        if (!isUpdate) {
+          // 2.1: 描述相似度去重（环境变量 ICE_EXTRACT_DEDUP 控制：off | shadow | merge）
+          const dedupMode = (process.env.ICE_EXTRACT_DEDUP || 'shadow') as 'off' | 'shadow' | 'merge';
+          const dedupDecision = checkExtractDedupSync(
+            existingByDir.get(targetDir) || [],
+            { filename: safeFilename, name: memory.name, description: memory.description, type: memory.type, tags: memory.tags },
+            0.85,
+            dedupMode,
+          );
+          if (dedupDecision.wouldMergeInfo) {
+            console.log(`[LLMMemoryExtractor] ${dedupDecision.wouldMergeInfo}`);
+          }
+          if (dedupDecision.shouldUpdate && dedupDecision.existingFile) {
+            filePath = dedupDecision.existingFile.filePath;
+            isUpdate = true;
+          }
+        }
+
+        // v4: tags 重叠度硬去重（fallback 优先级低）
         if (!isUpdate && memory.tags && memory.tags.length > 0) {
           const existing = existingByDir.get(targetDir) || [];
           const duplicate = findDuplicateByTags(memory.tags, memory.type, existing);
           if (duplicate) {
-            // 重定向到已有文件（合并而非新建）
             console.log(
               `[LLMMemoryExtractor] Tags dedup: "${safeFilename}" → merging into "${duplicate.filename}" (overlap ≥60%)`,
             );
@@ -553,6 +573,16 @@ ${memory.content}
 
         await fs.writeFile(filePath, safeContent, 'utf-8');
         writtenPaths.push(filePath);
+
+        // Phase 1: 写后维护 MEMORY.md 索引
+        const indexDir = isExplicitUser ? userMemoryDir : memoryDir;
+        upsertIndexRow(indexDir, {
+          filename: path.basename(filePath),
+          description: memory.description || memory.name,
+          type: memory.type as any,
+        }).catch(err => {
+          console.debug('[LLMMemoryExtractor] upsertIndexRow failed:', err instanceof Error ? err.message : err);
+        });
 
         if (isUpdate) {
           console.log(`[LLMMemoryExtractor] Updated existing memory: ${path.basename(filePath)}`);

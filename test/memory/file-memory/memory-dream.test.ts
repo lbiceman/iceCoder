@@ -173,7 +173,7 @@ describe('shouldDream', () => {
 // ─── evaluateDreamGate（触发原因 / 与条数解耦） ───
 
 describe('evaluateDreamGate', () => {
-  it('MEMORY.md 死链达到阈值时 stale_index', async () => {
+  it('MEMORY.md 死链达到阈值时规则修复后不再触发 LLM', async () => {
     await fs.writeFile(
       path.join(tempDir, 'MEMORY.md'),
       '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
@@ -182,11 +182,12 @@ describe('evaluateDreamGate', () => {
     await writeMemoryFile(tempDir, 'only.md', 'n');
     const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
     const gate = await dream.evaluateDreamGate(tempDir);
-    expect(gate.shouldRun).toBe(true);
-    expect(gate.trigger).toBe('stale_index');
+    // Phase 1.5: rule repair strips dead links, no LLM needed
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('stale_index_rule_repaired');
   });
 
-  it('表格死链达到阈值时 stale_index', async () => {
+  it('表格死链达到阈值时规则修复', async () => {
     await fs.writeFile(
       path.join(tempDir, 'MEMORY.md'),
       '| a.md | x |\n| b.md | y |\n| c.md | z |\n',
@@ -195,11 +196,11 @@ describe('evaluateDreamGate', () => {
     await writeMemoryFile(tempDir, 'only.md', 'n');
     const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
     const gate = await dream.evaluateDreamGate(tempDir);
-    expect(gate.shouldRun).toBe(true);
-    expect(gate.trigger).toBe('stale_index');
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('stale_index_rule_repaired');
   });
 
-  it('孤儿文件过多时 index_drift', async () => {
+  it('孤儿文件过多时 index_drift 规则重建不调 LLM', async () => {
     await fs.writeFile(path.join(tempDir, 'MEMORY.md'), '| listed.md | x |\n', 'utf-8');
     await writeMemoryFile(tempDir, 'listed.md', 'listed');
     for (let i = 0; i < 20; i++) {
@@ -207,11 +208,12 @@ describe('evaluateDreamGate', () => {
     }
     const dream = createMemoryDream();
     const gate = await dream.evaluateDreamGate(tempDir);
-    expect(gate.shouldRun).toBe(true);
-    expect(gate.trigger).toBe('index_drift');
+    // Phase 1.4: index_drift → rule rebuild, no LLM
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('index_drift_rule_rebuild');
   });
 
-  it('stale_index 在 notify 后冷却期内不重复触发', async () => {
+  it('stale_index 规则修复后不再触发', async () => {
     await fs.writeFile(
       path.join(tempDir, 'MEMORY.md'),
       '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
@@ -219,12 +221,9 @@ describe('evaluateDreamGate', () => {
     );
     await writeMemoryFile(tempDir, 'only.md', 'n');
     const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
-    const gate1 = await dream.evaluateDreamGate(tempDir);
-    expect(gate1.trigger).toBe('stale_index');
-    dream.notifyStaleIndexDreamCompleted();
-    const gate2 = await dream.evaluateDreamGate(tempDir);
-    expect(gate2.shouldRun).toBe(false);
-    expect(gate2.trigger).toBeNull();
+    const gate = await dream.evaluateDreamGate(tempDir);
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('stale_index_rule_repaired');
   });
 
   it('超过条数上限时触发 Dream，先整合再淘汰', async () => {

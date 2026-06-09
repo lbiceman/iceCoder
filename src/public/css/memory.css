@@ -34,10 +34,49 @@
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
-  padding: 8px 12px;
+  padding: 5px 12px;
   border-radius: var(--radius-pill);
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
+}
+
+/* 2.5: 索引健康胶囊 */
+.memory-health-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.memory-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* 健康：绿 */
+.memory-health-capsule[data-status='ok'] .memory-health-dot {
+  background: #22c55e;
+}
+
+/* 警告：橙（orphans>5 或 dead>0） */
+.memory-health-capsule[data-status='warn'] .memory-health-dot {
+  background: #f59e0b;
+}
+
+/* 异常：红（orphans>10 或 dead>3） */
+.memory-health-capsule[data-status='bad'] .memory-health-dot {
+  background: #ef4444;
+}
+
+.memory-health-text {
+  color: var(--text-secondary);
 }
 
 /* 与顶栏 .nav-link.active 一致：accent 字色 + accent-light 胶囊底 */
