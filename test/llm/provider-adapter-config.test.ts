@@ -18,8 +18,8 @@ describe('openAiAdapterConfigFromProvider', () => {
     expect(cfg.supportsVision).toBe(true);
   });
 
-  it('omits supportsVision when unset (adapter auto-detects omni)', () => {
+  it('defaults supportsVision to true when unset', () => {
     const cfg = openAiAdapterConfigFromProvider(base);
-    expect(cfg.supportsVision).toBeUndefined();
+    expect(cfg.supportsVision).toBe(true);
   });
 });

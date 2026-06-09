@@ -24,6 +24,7 @@ export interface ProviderConfig {
     [key: string]: any;
   };
   isDefault?: boolean;
+  /** 是否支持图片/视觉输入；未设置时默认为 `true` */
   supportsVision?: boolean;
   /**
    * 上下文窗口上限（token）；默认 provider 此值参与计算生效窗口（见 `readEffectiveContextWindowTokens`）

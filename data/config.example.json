@@ -11,6 +11,7 @@
         "maxTokens": 16384
       },
       "isDefault": true,
+      "supportsVision": true,
       "maxContextTokens": 128000
     }
   ]

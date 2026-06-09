@@ -252,13 +252,12 @@ window.ChatSessionSidebar = (function () {
   function selectSession(sessionId) {
     if (sessionId === Store.getActiveSessionId()) return;
     Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload) {
-      if (ok) {
-        applyWorkspaceForSession(sessionId, workspacePayload);
-        if (isNarrow()) close();
-        renderList();
-        if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-          window.ChatPage.onSessionSwitched(sessionId, runningTurn);
-        }
+      if (!ok) return;
+      applyWorkspaceForSession(sessionId, workspacePayload);
+      if (isNarrow()) close();
+      renderList();
+      if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn);
       }
     });
   }

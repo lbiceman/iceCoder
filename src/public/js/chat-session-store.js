@@ -257,34 +257,70 @@ window.ChatSessionStore = (function () {
     var settled = false;
     var lastRunningTurn = null;
     var lastWorkspace = null;
-    function finish(ok) {
+    var sendAttempts = 0;
+    var maxSendAttempts = 5;
+
+    function finish(ok, degraded) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched');
-      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace);
+      if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched', handler);
+      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace, !!degraded);
     }
+
+    function applySwitchPayload(data) {
+      activeSessionId = data.sessionId || sessionId;
+      if (data.runningTurn) lastRunningTurn = data.runningTurn;
+      if (data.workspaceRoot || data.defaultWorkDir) {
+        lastWorkspace = {
+          sessionId: activeSessionId,
+          workspaceRoot: data.workspaceRoot,
+          defaultWorkDir: data.defaultWorkDir,
+        };
+        setSessionWorkspace(activeSessionId, lastWorkspace);
+      } else {
+        emit();
+      }
+    }
+
+    function fallbackLocalSwitch(degraded) {
+      activeSessionId = sessionId;
+      emit();
+      finish(true, degraded);
+      if (wsSend) wsSend({ type: 'switch_session', sessionId: sessionId });
+    }
+
     var handler = function (data) {
       if (!data) return;
       if (data.ok) {
-        activeSessionId = data.sessionId || sessionId;
-        if (data.runningTurn) lastRunningTurn = data.runningTurn;
-        if (data.workspaceRoot || data.defaultWorkDir) {
-          lastWorkspace = {
-            sessionId: activeSessionId,
-            workspaceRoot: data.workspaceRoot,
-            defaultWorkDir: data.defaultWorkDir,
-          };
-          setSessionWorkspace(activeSessionId, lastWorkspace);
-        } else {
-          emit();
-        }
+        if (data.sessionId && data.sessionId !== sessionId) return;
+        applySwitchPayload(data);
+        finish(true, false);
+        return;
       }
-      finish(!!data.ok);
+      if (data.reason === 'flush_failed') {
+        finish(false, false);
+        return;
+      }
+      fallbackLocalSwitch(true);
     };
-    var timer = setTimeout(function () { finish(false); }, SWITCH_TIMEOUT_MS);
+
+    function trySendSwitch() {
+      sendAttempts += 1;
+      if (wsSend({ type: 'switch_session', sessionId: sessionId })) return;
+      if (sendAttempts < maxSendAttempts) {
+        setTimeout(trySendSwitch, 80 * sendAttempts);
+        return;
+      }
+      fallbackLocalSwitch(true);
+    }
+
+    var timer = setTimeout(function () {
+      fallbackLocalSwitch(true);
+    }, SWITCH_TIMEOUT_MS);
+
     if (window.ChatWebSocket) window.ChatWebSocket.on('session_switched', handler);
-    wsSend({ type: 'switch_session', sessionId: sessionId });
+    trySendSwitch();
   }
 
   function pickFallbackSessionId(excludeId) {

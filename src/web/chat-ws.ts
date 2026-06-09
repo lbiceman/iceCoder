@@ -1074,7 +1074,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             await flushStructuredMessagesNow(oldSessionId);
           } catch (err) {
             console.error('[chat-ws] switch_session flush failed:', err);
-            sendJSON(ws, { type: 'session_switched', ok: false, reason: 'flush_failed' });
+            sendJSON(ws, { type: 'session_switched', ok: false, reason: 'flush_failed', sessionId: oldSessionId });
             return;
           }
           let supervisorResetFailed = false;
@@ -1084,23 +1084,44 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             supervisorResetFailed = true;
             console.warn('[chat-ws] supervisor reset on switch_session failed:', err);
           }
-          activeSessionId = targetId;
-          const loaded = await loadStructuredMessages(activeSessionId);
-          setCachedMessages(activeSessionId, loaded ?? []);
-          // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
-          subscribeWsToSession(ws, activeSessionId);
-          await rebindBgTaskPusher(activeSessionId);
-          const newRunningTurn = snapshotRunningTurn(activeSessionId);
-          const workspace = await resolveSessionWorkspacePayload(activeSessionId);
-          sendJSON(ws, {
-            type: 'session_switched',
-            ok: true,
-            sessionId: activeSessionId,
-            ...workspace,
-            ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
-            ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
-          });
-          console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
+          try {
+            activeSessionId = targetId;
+            let loaded: UnifiedMessage[] | undefined;
+            try {
+              loaded = await loadStructuredMessages(activeSessionId);
+            } catch (loadErr) {
+              console.warn('[chat-ws] switch_session load structured failed, starting empty:', loadErr);
+              loaded = undefined;
+            }
+            setCachedMessages(activeSessionId, loaded ?? []);
+            // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
+            subscribeWsToSession(ws, activeSessionId);
+            try {
+              await rebindBgTaskPusher(activeSessionId);
+            } catch (rebindErr) {
+              console.warn('[chat-ws] switch_session rebind bg task failed:', rebindErr);
+            }
+            const newRunningTurn = snapshotRunningTurn(activeSessionId);
+            const workspace = await resolveSessionWorkspacePayload(activeSessionId);
+            sendJSON(ws, {
+              type: 'session_switched',
+              ok: true,
+              sessionId: activeSessionId,
+              ...workspace,
+              ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
+              ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
+            });
+            console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
+          } catch (err) {
+            activeSessionId = oldSessionId;
+            console.error('[chat-ws] switch_session failed:', err);
+            sendJSON(ws, {
+              type: 'session_switched',
+              ok: false,
+              reason: 'switch_failed',
+              sessionId: oldSessionId,
+            });
+          }
           return;
         }
 

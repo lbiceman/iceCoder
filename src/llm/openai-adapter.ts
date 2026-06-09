@@ -128,8 +128,8 @@ export class OpenAIAdapter implements ProviderAdapter {
       maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
     });
     this.model = config.model;
-    // 视觉支持：显式配置 > 自动检测
-    this.supportsVision = config.supportsVision ?? this.detectVisionSupport(config.model);
+    // 视觉支持：显式配置 > 默认开启
+    this.supportsVision = config.supportsVision ?? true;
     const { apiKey, baseURL, organization, model, timeout, supportsVision, ...rest } = config;
     this.defaultParams = rest;
   }
