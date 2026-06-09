@@ -1041,7 +1041,51 @@ window.MemoryPage = (function () {
       '<p class="memory-sidebar-hint">' +
       '圆点表示一条记忆，<strong>共用标签</strong>的会用线连起来。左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。' +
       '</p>' +
+      '</div>' +
+      '<div class="memory-header-actions">' +
+      '<span class="memory-count" id="memory-total-count" aria-live="polite">载入中…</span>' +
+      '<button type="button" class="nav-link active memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
       '</div>';
+
+    var consolidateBtn = header.querySelector('#memory-consolidate-btn');
+    if (consolidateBtn) {
+      consolidateBtn.addEventListener('click', function () {
+        if (!containerEl || consolidateBtn.disabled) return;
+        var btn = /** @type {HTMLButtonElement} */ (consolidateBtn);
+        var label = btn.textContent || '手动整合';
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = '整合中...';
+        fetch('/api/memory/dream', { method: 'POST' })
+          .then(function (res) {
+            return res.json().then(function (body) {
+              return { ok: res.ok, body: body };
+            });
+          })
+          .then(function (out) {
+            if (!out.ok || !out.body.success) {
+              var errMsg = (out.body && out.body.error) || '整合失败';
+              window.alert(errMsg);
+              return;
+            }
+            var summary = out.body.summary || '整合完成';
+            var detail =
+              '修改 ' + (out.body.filesModified || 0) +
+              ' · 删除 ' + (out.body.filesDeleted || 0) +
+              (out.body.filesEvicted ? ' · 归档 ' + out.body.filesEvicted : '');
+            window.alert(summary + '\n' + detail);
+            if (containerEl) render(containerEl);
+          })
+          .catch(function () {
+            window.alert('整合请求失败，请稍后重试。');
+          })
+          .finally(function () {
+            btn.disabled = false;
+            btn.removeAttribute('aria-busy');
+            btn.textContent = label;
+          });
+      });
+    }
 
     var main = document.createElement('main');
     main.className = 'memory-main';
@@ -1074,6 +1118,12 @@ window.MemoryPage = (function () {
         var loadingEl = graphArea.querySelector('.memory-loading');
         var scrollWrap = graphArea.querySelector('.memory-graph-scroll');
         var innerGraph = graphArea.querySelector('.memory-graph-inner');
+
+        var countEl = header.querySelector('#memory-total-count');
+        if (countEl) {
+          var totalN = typeof data.total === 'number' ? data.total : (data.files ? data.files.length : 0);
+          countEl.textContent = '共 ' + totalN + ' 条记忆';
+        }
 
         if (
           !loadingEl ||
@@ -1129,6 +1179,8 @@ window.MemoryPage = (function () {
         )
           return;
         loadingEl.classList.remove('hidden');
+        var countElErr = header.querySelector('#memory-total-count');
+        if (countElErr) countElErr.textContent = '—';
         loadingEl.innerHTML =
           '<span style="color:var(--danger)">载入失败。</span>';
       });

@@ -33,7 +33,7 @@ import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
-import type { MemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
+import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
@@ -746,6 +746,7 @@ export class HarnessMemoryIntegration {
     }
 
     let didInjectThisRecall = false;
+    let recallResult: Awaited<ReturnType<typeof recallRelevantMemories>> | null = null;
 
     try {
       // 获取预取结果（如果有的话）
@@ -759,7 +760,7 @@ export class HarnessMemoryIntegration {
         } catch { /* 预取结果获取失败不影响主流程 */ }
       }
 
-      const recallResult = await recallRelevantMemories(
+      recallResult = await recallRelevantMemories(
         latestUserMsg,
         this.memoryDir,
         this.llmAdapter,
@@ -768,17 +769,6 @@ export class HarnessMemoryIntegration {
         prefetchedPaths,
         topicSwitched,
       );
-
-      await this.telemetry.logRecall({
-        candidateCount: recallResult.memories.length + this.surfacedMemoryPaths.size,
-        selectedCount: recallResult.memories.length,
-        usedLLM: recallResult.usedLLM,
-        durationMs: recallResult.duration,
-        selectedFiles: recallResult.memories.map(m => m.filename),
-        queryLength: latestUserMsg.length,
-        dedupCount,
-        recallPhase: 'standard',
-      }).catch(() => {});
 
       if (recallResult.memories.length > 0) {
         // ── 二级召回：LLM 精排 ──
@@ -811,6 +801,7 @@ export class HarnessMemoryIntegration {
         if (selectedMemories.length === 0) {
           console.debug('[harness-memory] All memories filtered by relevance gate, skipping injection');
           emitMemoryStep(onStep, 'recall_skipped', '记忆与当前对话相关性不足，已跳过');
+          await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', [], dedupCount);
           return;
         }
 
@@ -826,6 +817,7 @@ export class HarnessMemoryIntegration {
           if (selectedMemories.length === 0) {
             console.debug('[harness-memory] All memories deduped, skipping injection');
             emitMemoryStep(onStep, 'recall_skipped', '本轮记忆已注入过');
+            await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', [], dedupCount);
             return;
           }
         }
@@ -862,10 +854,12 @@ export class HarnessMemoryIntegration {
         messages.push({ role: 'user', content: reminder });
         didInjectThisRecall = true;
         emitMemoryStep(onStep, 'recall_hit', formatMemoryInjectionPetMessage(selectedMemories, 'standard'));
+        await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', selectedMemories, dedupCount);
         // 召回成功，重置空召回计数
         this.consecutiveEmptyRecalls = 0;
         this.emptyRecallCooldown = 0;
       } else {
+        await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', [], dedupCount);
         // 空召回 → 累计计数，连续 3 次空召回后冷却 3 轮
         emitMemoryStep(onStep, 'recall_empty', '未找到可注入的相关记忆');
         this.consecutiveEmptyRecalls++;
@@ -877,6 +871,7 @@ export class HarnessMemoryIntegration {
       }
     } catch (err) {
       console.debug('[harness-memory] recall failed:', err instanceof Error ? err.message : err);
+      await this.logRecallTelemetry(recallResult, latestUserMsg, 'standard', [], dedupCount);
     } finally {
       this.lastStandardRecallCooldownKey = recallCooldownKey;
       this.lastStandardRecallCompleteAt = Date.now();
@@ -919,6 +914,7 @@ export class HarnessMemoryIntegration {
     }
 
     let dedupCount = 0;
+    let recallResult: Awaited<ReturnType<typeof recallRelevantMemories>> | null = null;
 
     try {
       const prefetchedPaths = new Set<string>();
@@ -931,7 +927,7 @@ export class HarnessMemoryIntegration {
         } catch { /* ignore */ }
       }
 
-      const recallResult = await recallRelevantMemories(
+      recallResult = await recallRelevantMemories(
         latestUserMsg,
         this.memoryDir,
         null,
@@ -939,20 +935,11 @@ export class HarnessMemoryIntegration {
         topK,
         prefetchedPaths,
         false,
+        { relaxed: true },
       );
 
-      await this.telemetry.logRecall({
-        candidateCount: recallResult.memories.length + this.surfacedMemoryPaths.size,
-        selectedCount: recallResult.memories.length,
-        usedLLM: recallResult.usedLLM,
-        durationMs: recallResult.duration,
-        selectedFiles: recallResult.memories.map(m => m.filename),
-        queryLength: latestUserMsg.length,
-        dedupCount,
-        recallPhase,
-      }).catch(() => {});
-
       if (recallResult.memories.length === 0) {
+        await this.logRecallTelemetry(recallResult, latestUserMsg, recallPhase, [], dedupCount);
         return;
       }
 
@@ -966,6 +953,7 @@ export class HarnessMemoryIntegration {
         dedupCount = beforeCount - selectedMemories.length;
       }
       if (selectedMemories.length === 0) {
+        await this.logRecallTelemetry(recallResult, latestUserMsg, recallPhase, [], dedupCount);
         return;
       }
 
@@ -977,8 +965,10 @@ export class HarnessMemoryIntegration {
       const reminder = buildCoNMemoryPrompt(memoryItems, 'keyword pre-LLM recall');
       messages.push({ role: 'user', content: reminder });
       emitMemoryStep(onStep, 'recall_coarse_hit', formatMemoryInjectionPetMessage(selectedMemories, 'coarse'));
+      await this.logRecallTelemetry(recallResult, latestUserMsg, recallPhase, selectedMemories, dedupCount);
     } catch (err) {
       console.debug('[harness-memory] coarse recall failed:', err instanceof Error ? err.message : err);
+      await this.logRecallTelemetry(recallResult, latestUserMsg, recallPhase, [], dedupCount);
     } finally {
       this.lastCoarsePreLlmMessage = latestUserMsg;
     }
@@ -1082,7 +1072,7 @@ ${candidateList}`;
     }
 
     // ── autoDream 整合 ──
-    this.memoryDream.recordSession();
+    await this.memoryDream.recordSession();
     await this.maybeDream();
   }
 
@@ -1219,6 +1209,25 @@ ${candidateList}`;
   }
 
   // ─── 私有方法 ───
+
+  private async logRecallTelemetry(
+    recallResult: { memories: MemoryHeader[]; usedLLM: boolean; duration: number } | null,
+    latestUserMsg: string,
+    recallPhase: NonNullable<RecallTelemetry['recallPhase']>,
+    selectedMemories: MemoryHeader[],
+    dedupCount: number,
+  ): Promise<void> {
+    await this.telemetry.logRecall({
+      candidateCount: (recallResult?.memories.length ?? 0) + this.surfacedMemoryPaths.size,
+      selectedCount: selectedMemories.length,
+      usedLLM: recallResult?.usedLLM ?? false,
+      durationMs: recallResult?.duration ?? 0,
+      selectedFiles: selectedMemories.map(m => m.filename),
+      queryLength: latestUserMsg.length,
+      dedupCount,
+      recallPhase,
+    }).catch(() => {});
+  }
 
   /**
    * 检测用户对被动确认的反馈（否定/肯定），调整记忆置信度。
@@ -1695,7 +1704,10 @@ ${candidateList}`;
       if (this.memoryDir) {
         getScannerCache().invalidate(this.memoryDir);
       }
-      if (dreamGate.trigger === 'stale_index' && dreamResult.executed) {
+      if (
+        (dreamGate.trigger === 'stale_index' || dreamGate.trigger === 'index_drift')
+        && dreamResult.executed
+      ) {
         this.memoryDream.notifyStaleIndexDreamCompleted();
       }
 

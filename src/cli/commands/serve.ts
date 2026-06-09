@@ -33,6 +33,7 @@ import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.j
 import { createSupervisorEventsRouter } from '../../web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
+import { createMemoryDreamRouter } from '../../web/routes/memory-dream.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
@@ -73,6 +74,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
+      { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter(llmAdapter) },
     ],
   });

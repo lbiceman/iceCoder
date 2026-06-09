@@ -20,6 +20,30 @@ const HOLDER_STALE_MS = 60 * 60 * 1000; // 1 小时
 /** drainExtractions 默认超时（毫秒） */
 const DRAIN_TIMEOUT_MS = 60_000;
 
+/** 同进程内正在执行的整合（按记忆目录路径） */
+const consolidationInFlight = new Set<string>();
+
+/**
+ * 尝试进入整合临界区（同进程、同 memoryDir 互斥）。
+ * 成功返回 true；已有整合在执行则返回 false。
+ */
+export function tryEnterConsolidation(memoryDir: string): boolean {
+  const key = path.resolve(memoryDir);
+  if (consolidationInFlight.has(key)) return false;
+  consolidationInFlight.add(key);
+  return true;
+}
+
+/** 离开整合临界区。 */
+export function exitConsolidation(memoryDir: string): void {
+  consolidationInFlight.delete(path.resolve(memoryDir));
+}
+
+/** 测试用：清空同进程整合飞行状态。 */
+export function resetConsolidationFlightState(): void {
+  consolidationInFlight.clear();
+}
+
 // ─── sequential 包装器 ───
 
 /**
@@ -96,15 +120,19 @@ export class ConsolidationLock {
       // ENOENT — 无锁文件
     }
 
-    // 锁未过期且持有者存活 → 获取失败
+    // 锁未过期且持有者存活 → 仅阻塞其他进程；本进程可重入（长驻 dev 需连跑 Dream）
     if (mtimeMs !== undefined && Date.now() - mtimeMs < HOLDER_STALE_MS) {
-      if (holderPid !== undefined && this.isProcessRunning(holderPid)) {
+      if (
+        holderPid !== undefined
+        && holderPid !== process.pid
+        && this.isProcessRunning(holderPid)
+      ) {
         console.debug(
           `[ConsolidationLock] held by live PID ${holderPid} (${Math.round((Date.now() - mtimeMs) / 1000)}s ago)`,
         );
         return null;
       }
-      // 死 PID 或无法解析 → 回收
+      // 死 PID、无法解析或本进程重入 → 继续获取
     }
 
     // 写入当前 PID

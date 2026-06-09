@@ -9,11 +9,49 @@
 
 .memory-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   padding: 10px 20px;
   flex-shrink: 0;
+}
+
+.memory-header-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.memory-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  padding: 8px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+}
+
+/* 与顶栏 .nav-link.active 一致：accent 字色 + accent-light 胶囊底 */
+.memory-consolidate-btn {
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.memory-consolidate-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: var(--accent-light);
+  color: var(--accent);
 }
 
 .memory-title {

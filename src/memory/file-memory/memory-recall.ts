@@ -84,6 +84,12 @@ const TAGS_JACCARD_THRESHOLD = 0.2;
 /**
  * 召回结果。
  */
+/** 召回选项 */
+export interface RecallOptions {
+  /** 粗召回：降低过滤阈值，零命中时按活跃度兜底 */
+  relaxed?: boolean;
+}
+
 export interface RecallResult {
   /** 选中的记忆文件 */
   memories: MemoryHeader[];
@@ -195,7 +201,11 @@ export async function recallRelevantMemories(
   maxResults: number = 5,
   prefetchedPaths: Set<string> = new Set(),
   topicSwitched: boolean = false,
+  options?: RecallOptions,
 ): Promise<RecallResult> {
+  const relaxed = options?.relaxed === true;
+  const confidenceThreshold = relaxed ? 0.2 : CONFIDENCE_FILTER_THRESHOLD;
+  const scoreThreshold = relaxed ? 0.01 : SCORE_FILTER_THRESHOLD;
   const startTime = Date.now();
 
   // ── 空目录快速跳过 ──
@@ -229,7 +239,7 @@ export async function recallRelevantMemories(
   // 过滤极低置信度和不适合当前任务类型的记忆（减少噪声，降低幻觉）
   const filteredMemories = dedupeConflictingMemories(
     filterByMemoryLevelForIntent(
-      memories.filter(m => m.confidence >= CONFIDENCE_FILTER_THRESHOLD),
+      memories.filter(m => m.confidence >= confidenceThreshold),
       inferRecallIntent(query),
     ),
   );
@@ -290,7 +300,19 @@ export async function recallRelevantMemories(
   }
 
   // 回退：关键词匹配
-  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange, prefetchedPaths, topicSwitched);
+  let fallbackResults = keywordFallback(
+    query,
+    filteredMemories,
+    maxResults,
+    negationExpansions,
+    timeRange,
+    prefetchedPaths,
+    topicSwitched,
+    scoreThreshold,
+  );
+  if (relaxed && fallbackResults.length === 0 && filteredMemories.length > 0) {
+    fallbackResults = recallActivityFallback(filteredMemories, maxResults);
+  }
   // ── 关联扩展（关键词回退路径也支持）──
   const fallbackExpanded = expandRelatedMemories(fallbackResults, filteredMemories, alreadySurfaced);
   const allFallback = [...fallbackResults, ...fallbackExpanded];
@@ -813,6 +835,17 @@ export function invalidateIdfCache(): void {
  * - TF-IDF 加权：稀有 token 命中权重更高（"typescript" > "the"）
  * - description/filename 命中权重 ×2（比 contentPreview 更重要）
  */
+/** 粗召回零命中时按活跃度兜底 */
+function recallActivityFallback(memories: MemoryHeader[], maxResults: number): MemoryHeader[] {
+  return [...memories]
+    .sort((a, b) => {
+      const scoreA = (a.recallCount || 0) * 2 + (a.confidence || 0.5) + (a.type === 'user' ? 1.5 : 0);
+      const scoreB = (b.recallCount || 0) * 2 + (b.confidence || 0.5) + (b.type === 'user' ? 1.5 : 0);
+      return scoreB - scoreA;
+    })
+    .slice(0, maxResults);
+}
+
 function keywordFallback(
   query: string,
   memories: MemoryHeader[],
@@ -821,6 +854,7 @@ function keywordFallback(
   timeRange: TimeRange | null = null,
   prefetchedPaths: Set<string> = new Set(),
   topicSwitched: boolean = false,
+  scoreFilterThreshold: number = SCORE_FILTER_THRESHOLD,
 ): MemoryHeader[] {
   const queryLower = query.toLowerCase();
   const queryTokens = tokenize(query);
@@ -926,7 +960,7 @@ function keywordFallback(
   });
 
   const coarseResults = scored
-    .filter(item => item.score > SCORE_FILTER_THRESHOLD)
+    .filter(item => item.score > scoreFilterThreshold)
     .sort((a, b) => b.score - a.score)
     .slice(0, COARSE_LIMIT);
 

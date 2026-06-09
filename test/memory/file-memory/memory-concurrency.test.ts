@@ -15,8 +15,28 @@ import {
   ConsolidationLock,
   initExtractionGuard,
   drainExtractions,
+  tryEnterConsolidation,
+  exitConsolidation,
+  resetConsolidationFlightState,
   type ExtractionGuardState,
 } from '../../../src/memory/file-memory/memory-concurrency.js';
+
+// ─── consolidation flight mutex ───
+
+describe('consolidation flight mutex', () => {
+  afterEach(() => {
+    resetConsolidationFlightState();
+  });
+
+  it('同目录同时只能进入一个整合临界区', () => {
+    const dir = path.join(os.tmpdir(), 'flight-a');
+    expect(tryEnterConsolidation(dir)).toBe(true);
+    expect(tryEnterConsolidation(dir)).toBe(false);
+    exitConsolidation(dir);
+    expect(tryEnterConsolidation(dir)).toBe(true);
+    exitConsolidation(dir);
+  });
+});
 
 // ─── sequential ───
 
@@ -113,18 +133,12 @@ describe('ConsolidationLock', () => {
       expect(parseInt(content.trim(), 10)).toBe(process.pid);
     });
 
-    it('自己持有的锁可以重新获取', async () => {
-      // 第一次获取
+    it('自己持有的锁可以重入（同进程连跑 Dream）', async () => {
       const first = await lock.tryAcquire();
       expect(first).toBe(0);
 
-      // 第二次获取（自己的 PID，但锁未过期）
-      // 由于 isProcessRunning(process.pid) 返回 true，
-      // 但持有者就是自己，所以行为取决于实现
-      // 当前实现：如果 PID 存活则返回 null（被阻塞）
       const second = await lock.tryAcquire();
-      // 当前进程的 PID 是存活的，所以会被阻塞
-      expect(second).toBeNull();
+      expect(second).not.toBeNull();
     });
 
     it('死进程的锁可以回收', async () => {

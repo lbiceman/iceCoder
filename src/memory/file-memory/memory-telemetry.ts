@@ -112,7 +112,9 @@ export interface DreamTelemetry {
     | 'session_and_files'
     | 'new_files'
     | 'stale_index'
-    | 'over_cap';
+    | 'index_drift'
+    | 'over_cap'
+    | 'manual';
 }
 
 /** 仅条数淘汰（无 Dream LLM） */
