@@ -1166,6 +1166,30 @@
   opacity: 0.58;
 }
 
+.chat-sidebar-list.is-switch-locked .chat-sidebar-item:not(.active) {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.chat-sidebar-list.is-switch-locked .chat-sidebar-item:not(.active):hover {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+
+.chat-sidebar-new-btn.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.chat-sidebar-new-btn.is-disabled:hover {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border-color: var(--border-light);
+}
+
 .chat-sidebar-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);

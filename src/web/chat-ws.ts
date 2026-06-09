@@ -25,6 +25,7 @@ import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
+import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
@@ -109,7 +110,10 @@ async function ensureActiveSessionBootstrapped(): Promise<void> {
   activeSessionBootstrapPromise = (async () => {
     try {
       const id = await bootstrapActiveSessionIdFromIndex();
-      if (id) activeSessionId = id;
+      if (id) {
+        activeSessionId = id;
+        void persistLastActiveSessionId(id);
+      }
       if (!getCachedMessages(activeSessionId)) {
         const loaded = await loadStructuredMessages(activeSessionId);
         setCachedMessages(activeSessionId, loaded ?? []);
@@ -212,6 +216,15 @@ function recordPersistedToolTraceDiff(
 /** 导出活跃会话 ID，供会话路由等模块使用 */
 export function getActiveSessionId(): string {
   return activeSessionId;
+}
+
+/** 正在执行任务的会话 id 列表（供 bootstrap 优先选中「最近工作」会话）。 */
+export function getProcessingSessionIds(): string[] {
+  const ids: string[] = [];
+  for (const [sid, snap] of runningTurns) {
+    if (snap.isProcessing) ids.push(sid);
+  }
+  return ids;
 }
 
 /**
@@ -1093,6 +1106,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           }
           try {
             activeSessionId = targetId;
+            void persistLastActiveSessionId(targetId);
             let loaded: UnifiedMessage[] | undefined;
             try {
               loaded = await loadStructuredMessages(activeSessionId);
@@ -1141,7 +1155,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           }
 
           isProcessing = true;
-          const runSid = activeSessionId;
+          const runSid = wsToSubscribedSession.get(ws) || activeSessionId;
+          void persistLastActiveSessionId(runSid);
           ensureRunningTurn(runSid);
           broadcastToSession(runSid, { type: 'status', status: 'processing' });
 
