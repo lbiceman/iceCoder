@@ -116,20 +116,23 @@ export class OpenAIAdapter implements ProviderAdapter {
   private client: OpenAI;
   private model: string;
   private supportsVision: boolean;
+  /** 构造时写入 SDK 的默认超时；单次请求可用更大的 requestTimeoutMs 覆盖 */
+  private defaultRequestTimeoutMs: number;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
+    this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
       organization: config.organization,
-      timeout: config.timeout ?? 120_000,       // 2 分钟超时，防止无限挂起
+      timeout: this.defaultRequestTimeoutMs,
       maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
     });
     this.model = config.model;
-    // 视觉支持：显式配置 > 自动检测
-    this.supportsVision = config.supportsVision ?? this.detectVisionSupport(config.model);
+    // 视觉支持：显式配置 > 默认开启
+    this.supportsVision = config.supportsVision ?? true;
     const { apiKey, baseURL, organization, model, timeout, supportsVision, ...rest } = config;
     this.defaultParams = rest;
   }
@@ -153,6 +156,25 @@ export class OpenAIAdapter implements ProviderAdapter {
     return false;
   }
 
+  private buildRequestOptions(
+    options: LLMOptions,
+    signal?: AbortSignal,
+  ): { signal?: AbortSignal; timeout: number } {
+    const perCall =
+      typeof options.requestTimeoutMs === 'number'
+      && Number.isFinite(options.requestTimeoutMs)
+      && options.requestTimeoutMs > 0
+        ? Math.floor(options.requestTimeoutMs)
+        : undefined;
+    const timeout = perCall !== undefined
+      ? Math.max(this.defaultRequestTimeoutMs, perCall)
+      : this.defaultRequestTimeoutMs;
+    return {
+      ...(signal ? { signal } : {}),
+      timeout,
+    };
+  }
+
   /**
    * 向 OpenAI Chat Completions API 发送聊天请求。
    * 将 UnifiedMessage[] 转换为 OpenAI 格式，发送请求，再将响应转换回来。
@@ -162,12 +184,14 @@ export class OpenAIAdapter implements ProviderAdapter {
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, false);
 
-      console.log(`[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
-      const startTime = Date.now();
-
       const signal = options.signal ?? undefined;
       if (signal?.aborted) throw makeAbortedError(this.name);
-      const response = await this.client.chat.completions.create(params, signal ? { signal } : undefined);
+      const reqOpts = this.buildRequestOptions(options, signal);
+      console.log(
+        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms`,
+      );
+      const startTime = Date.now();
+      const response = await this.client.chat.completions.create(params, reqOpts);
 
       const elapsed = Date.now() - startTime;
       const usage = (response as OpenAI.ChatCompletion).usage;
@@ -204,9 +228,10 @@ export class OpenAIAdapter implements ProviderAdapter {
 
       const signal = options.signal ?? undefined;
       if (signal?.aborted) throw makeAbortedError(this.name);
+      const reqOpts = this.buildRequestOptions(options, signal);
       const stream = await this.client.chat.completions.create(
         { ...params, stream: true },
-        signal ? { signal } : undefined,
+        reqOpts,
       );
 
       let fullContent = '';

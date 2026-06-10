@@ -10,7 +10,7 @@
  * - 召回频率（经常被召回的记忆受保护）
  * - 记忆类型（user 受保护；feedback/reference 更易淘汰）
  *
- * 被淘汰的文件移动到 evicted/ 目录（可恢复），不是直接删除。
+ * 被淘汰的文件移动到 `memory-evicted/{memory-files|user-memory}/`（可恢复），不是直接删除。
  */
 
 import { promises as fs } from 'node:fs';

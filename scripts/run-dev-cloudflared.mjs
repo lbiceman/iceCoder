@@ -12,7 +12,7 @@ if (!bin) {
   process.exit(0);
 }
 
-const apiPort = process.env.PORT?.trim() || '3784';
+const apiPort = process.env.PORT?.trim() || '1024';
 const metricsPort = process.env.ICE_TUNNEL_METRICS_PORT?.trim() || '20341';
 const metricsHost = process.env.ICE_TUNNEL_METRICS_HOST?.trim() || '127.0.0.1';
 

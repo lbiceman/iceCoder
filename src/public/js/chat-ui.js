@@ -33,6 +33,7 @@ window.ChatUI = (function () {
   var suppressScrollSync = false;
   var elJumpBottom = null;
   var contentResizeObserver = null;
+  var tailResizeObserver = null;
 
   // 实时工具区 DOM
   var liveToolRoundActive = false;
@@ -55,6 +56,7 @@ window.ChatUI = (function () {
     ensureChatLayout();
     ensureJumpBottomButton();
     setupContentResizeObserver();
+    setupTailResizeObserver();
     ensureDiffOutsideClose();
     updateFollowBottomClass();
   }
@@ -101,6 +103,8 @@ window.ChatUI = (function () {
       elMessages.insertBefore(elHistoryOuter, elAnchor);
       elMessages.insertBefore(elTailRoot, elAnchor);
     }
+
+    ensureTailResizeObserver();
 
     if (window.ChatVirtualHistory
         && typeof window.ChatVirtualHistory.createScroller === 'function'
@@ -219,6 +223,17 @@ window.ChatUI = (function () {
     elHistoryWindow.addEventListener('click', elHistoryWindow._toolTraceClickHandler, true);
   }
 
+  function fillThinkingToggleText(container, text) {
+    container.textContent = '';
+    var word = text || 'Thinking';
+    for (var i = 0; i < word.length; i++) {
+      var ch = document.createElement('span');
+      ch.className = 'msg-thinking-char';
+      ch.textContent = word.charAt(i);
+      container.appendChild(ch);
+    }
+  }
+
   function createThinkingToggleButton(footer) {
     var label = document.createElement('button');
     label.type = 'button';
@@ -228,7 +243,7 @@ window.ChatUI = (function () {
     label.setAttribute('aria-label', '折叠思考内容');
     var labelText = document.createElement('span');
     labelText.className = 'msg-thinking-toggle-text';
-    labelText.textContent = 'Thinking';
+    fillThinkingToggleText(labelText, 'Thinking');
     label.appendChild(labelText);
     var labelIcon = document.createElement('span');
     labelIcon.className = 'msg-thinking-toggle-icon';
@@ -535,7 +550,6 @@ window.ChatUI = (function () {
   }
 
   function notifyTailLayoutChange() {
-    if (!autoScrollEnabled) return;
     scheduleScrollIfSticky();
   }
 
@@ -619,6 +633,22 @@ window.ChatUI = (function () {
     }
   }
 
+  function getMaxScrollTop() {
+    if (!elMessages) return 0;
+    return Math.max(0, elMessages.scrollHeight - elMessages.clientHeight);
+  }
+
+  function applyScrollToBottom() {
+    if (!elMessages) return;
+    elMessages.scrollTop = getMaxScrollTop();
+    if (elAnchor && typeof elAnchor.scrollIntoView === 'function') {
+      try {
+        elAnchor.scrollIntoView({ block: 'end', inline: 'nearest' });
+      } catch (_e) { /* ignore */ }
+    }
+    elMessages.scrollTop = getMaxScrollTop();
+  }
+
   function onMessagesScroll() {
     if (suppressScrollSync) return;
     syncAutoScrollFromViewport();
@@ -628,15 +658,36 @@ window.ChatUI = (function () {
   function scrollToBottom(force) {
     if (!elMessages) return;
     if (force !== true && !autoScrollEnabled) return;
-    suppressScrollSync = true;
-    elMessages.scrollTop = elMessages.scrollHeight;
-    requestAnimationFrame(function () {
-      if (!elMessages) return;
-      elMessages.scrollTop = elMessages.scrollHeight;
-      suppressScrollSync = false;
+    if (force === true) {
+      userPinnedScroll = false;
       autoScrollEnabled = true;
       updateFollowBottomClass();
-      updateJumpBottomButton();
+    }
+    suppressScrollSync = true;
+
+    function runPass() {
+      if (virtualScroller && typeof virtualScroller.remeasureLayout === 'function') {
+        virtualScroller.remeasureLayout();
+      }
+      applyScrollToBottom();
+    }
+
+    runPass();
+    requestAnimationFrame(function () {
+      runPass();
+      requestAnimationFrame(function () {
+        runPass();
+        setTimeout(function () {
+          runPass();
+          suppressScrollSync = false;
+          if (force === true) {
+            autoScrollEnabled = true;
+            userPinnedScroll = false;
+          }
+          updateFollowBottomClass();
+          updateJumpBottomButton();
+        }, 0);
+      });
     });
   }
 
@@ -663,10 +714,10 @@ window.ChatUI = (function () {
         return;
       }
       suppressScrollSync = true;
-      elMessages.scrollTop = elMessages.scrollHeight;
+      applyScrollToBottom();
       requestAnimationFrame(function () {
         if (!elMessages) return;
-        elMessages.scrollTop = elMessages.scrollHeight;
+        applyScrollToBottom();
         suppressScrollSync = false;
         userPinnedScroll = false;
         autoScrollEnabled = true;
@@ -699,6 +750,28 @@ window.ChatUI = (function () {
       scheduleScrollIfSticky();
     });
     contentResizeObserver.observe(elMessages);
+  }
+
+  /** tail / 历史区增高时（新消息、图片、虚拟历史 remeasure）跟随贴底 */
+  function setupTailResizeObserver() {
+    if (typeof ResizeObserver === 'undefined' || tailResizeObserver) return;
+    tailResizeObserver = new ResizeObserver(function () {
+      if (userPinnedScroll) return;
+      if (!autoScrollEnabled && !isNearBottom()) return;
+      scheduleScrollIfSticky();
+    });
+    if (elTailRoot) tailResizeObserver.observe(elTailRoot);
+    if (elHistoryOuter) tailResizeObserver.observe(elHistoryOuter);
+  }
+
+  function ensureTailResizeObserver() {
+    if (!tailResizeObserver) setupTailResizeObserver();
+    else if (elTailRoot && tailResizeObserver) {
+      try { tailResizeObserver.observe(elTailRoot); } catch (_e) { /* already observing */ }
+      if (elHistoryOuter) {
+        try { tailResizeObserver.observe(elHistoryOuter); } catch (_e2) { /* ignore */ }
+      }
+    }
   }
 
   function notifyContentLayoutChange() {
@@ -1498,9 +1571,14 @@ window.ChatUI = (function () {
       insertTailBefore(createMessageEl(msg, stripStatusTagFn));
     }
 
+    followBottomAfterContentPatch(shouldScroll);
+  }
+
+  /** 内容增删改后跟随到底（含虚拟历史 remeasure / diff 挂载后的二次对齐） */
+  function followBottomAfterContentPatch(shouldScroll) {
     if (shouldScroll === 'force') {
       enableAutoScroll();
-    } else if (shouldScroll !== false) {
+    } else {
       scheduleScrollIfSticky();
     }
   }
@@ -1517,7 +1595,7 @@ window.ChatUI = (function () {
     ensureChatLayout();
     if (!elTailRoot) return;
     insertTailBefore(createMessageEl(msg, stripStatusTagFn));
-    if (autoScrollEnabled) scheduleScrollIfSticky();
+    notifyTailLayoutChange();
   }
 
   /**
@@ -1788,6 +1866,7 @@ window.ChatUI = (function () {
     init: init,
     scrollToBottom: scrollToBottom,
     enableAutoScroll: enableAutoScroll,
+    followBottomAfterContentPatch: followBottomAfterContentPatch,
     scheduleScrollIfSticky: scheduleScrollIfSticky,
     isNearBottom: isNearBottom,
     isAutoScrollEnabled: function () { return autoScrollEnabled; },

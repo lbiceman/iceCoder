@@ -22,7 +22,7 @@ import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
-import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
+import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
 import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
@@ -34,7 +34,10 @@ import {
   getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
-import { readSkipPermissionChecksFromMainConfig } from '../../config/main-config-supervisor-mode.js';
+import {
+  readSkipPermissionChecksFromMainConfig,
+  readSkipSandboxFromMainConfig,
+} from '../../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { fetchQuickTunnelPublicUrl } from '../../web/quicktunnel-url.js';
 import { startTunnel } from '../tunnel/cloudflared-tunnel.js';
@@ -128,7 +131,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
           latestHarness = null;
         }
       },
-      () => { getBackgroundTaskManager().dispose(); },
+      () => { disposeAllBackgroundTaskManagers(); },
       () => { tunnelProcess?.kill(); },
       () => { serveResult?.cleanup(); },
       () => ctx.mcpManager.shutdown(),
@@ -382,6 +385,7 @@ ${c.bold}终端内置命令:${c.reset}
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
       const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+      const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
       const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
       const harnessConfig: HarnessConfig = {
@@ -400,6 +404,7 @@ ${c.bold}终端内置命令:${c.reset}
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },
         ],
         skipPermissionChecks,
+        skipSandbox,
         compactionThreshold: 40,
         compactionKeepRecent: 10,
         compactionEnableLLMSummary: true,

@@ -7,6 +7,7 @@ import './modal.js';
 import './diff-viewer.js';
 import './config-page.js';
 import './session-pet.js';
+import './desktop-pet-bridge.js';
 import './chat-websocket.js';
 import './chat-session.js';
 import './chat-session-store.js';

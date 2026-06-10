@@ -267,7 +267,7 @@ window.ConfigPage = (function () {
           temperature: parseFloat(card.querySelector('[data-field="temperature"]').value)
         }),
         isDefault: i === defaultIndex,
-        supportsVision: original.supportsVision,
+        supportsVision: original.supportsVision !== undefined ? original.supportsVision : true,
         maxContextTokens: parseInt(card.querySelector('[data-field="maxContextTokens"]').value, 10) || undefined,
         requestTimeoutMs: original.requestTimeoutMs
       });
@@ -331,7 +331,8 @@ window.ConfigPage = (function () {
       apiUrl: '',
       apiKey: '',
       modelName: '',
-      parameters: { temperature: 1 }
+      parameters: { temperature: 1 },
+      supportsVision: true
     });
     renderProviders();
   }
@@ -390,7 +391,8 @@ window.ConfigPage = (function () {
           apiUrl: '',
           apiKey: '',
           modelName: '',
-          parameters: { temperature: 1 }
+          parameters: { temperature: 1 },
+          supportsVision: true
         });
       }
       renderProviders();

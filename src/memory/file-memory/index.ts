@@ -60,10 +60,18 @@ export type { RecallResult, TimeRange } from './memory-recall.js';
 export { LLMMemoryExtractor, createLLMMemoryExtractor, ALLOWED_MEMORY_CATEGORIES, isAllowedMemoryCategory } from './memory-llm-extractor.js';
 export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
 
-export { MemoryDream, createMemoryDream } from './memory-dream.js';
+export { MemoryDream, createMemoryDream, shouldAutoPromoteToUserLevel } from './memory-dream.js';
 export type { DreamResult, DreamTrigger } from './memory-dream.js';
 
-export { countDeadLinksInMemoryIndex, repairDeadLinksInMemoryIndex } from './memory-index-health.js';
+export {
+  auditMemoryIndexHealth,
+  countDeadLinksInMemoryIndex,
+  extractIndexedMarkdownRefs,
+  rebuildMemoryIndexFromMemories,
+  repairDeadLinksInMemoryIndex,
+} from './memory-index-health.js';
+export type { MemoryIndexHealthReport } from './memory-index-health.js';
+export type { RecallOptions } from './memory-recall.js';
 
 // ─── 安全模块 ───
 

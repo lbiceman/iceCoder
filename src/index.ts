@@ -39,18 +39,27 @@ import {
   broadcastMcpReady,
   broadcastTunnelReady,
   cleanupChatResources,
+  getActiveSessionId,
+  getProcessingSessionIds,
   purgeSessionRuntimeCaches,
 } from './web/chat-ws.js';
+import { registerBootstrapSessionHints } from './web/last-active-session.js';
 import { startTunnelReadyWatcher } from './web/tunnel-ready-watcher.js';
 import { isTunnelDevEnabled } from './runtime/tunnel-feature.js';
 import { createSessionsRouter, registerSessionCleanupHook } from './web/routes/sessions.js';
+import { disposeAllBackgroundTaskManagers } from './tools/background-task-manager.js';
 
 registerSessionCleanupHook(purgeSessionRuntimeCaches);
+registerBootstrapSessionHints({
+  getRuntimeActiveId: getActiveSessionId,
+  getProcessingSessionIds,
+});
 import { createUploadRouter } from './web/routes/upload.js';
 import { createMemoryTelemetryRouter } from './web/routes/memory-telemetry.js';
 import { createSupervisorEventsRouter } from './web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from './web/routes/memory-export.js';
 import { createMemoryFilesRouter } from './web/routes/memory-files.js';
+import { createMemoryDreamRouter } from './web/routes/memory-dream.js';
 
 // 类型
 import type { ProviderConfig, IceCoderConfigFile } from './web/types.js';
@@ -212,6 +221,7 @@ async function main(): Promise<void> {
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
+      { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter() },
     ],
   });
@@ -247,16 +257,24 @@ async function main(): Promise<void> {
   watchConfigChanges(llmAdapter);
 
   // 9. 优雅关闭处理
-  const shutdown = () => {
-    console.log('Shutting down...');
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Shutting down... (${signal})`);
     stopTunnelReadyWatcher();
     cleanupChatResources();
-    mcpManager.shutdown().catch((err) => console.error('MCP shutdown error:', err));
+    disposeAllBackgroundTaskManagers();
+    try {
+      await mcpManager.shutdown();
+    } catch (err) {
+      console.error('MCP shutdown error:', err);
+    }
     server.close();
-    process.exit(0);
+    setTimeout(() => process.exit(0), 500).unref();
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
   console.log('iceCoder is ready');
 }

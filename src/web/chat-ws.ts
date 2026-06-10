@@ -25,6 +25,7 @@ import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
+import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
 import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
@@ -42,7 +43,10 @@ import {
   getHarnessTokenBudget,
 } from '../harness/token-budget-config.js';
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
-import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
+import {
+  readSkipPermissionChecksFromMainConfig,
+  readSkipSandboxFromMainConfig,
+} from '../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import {
   registerSupervisorRuntimeReset,
@@ -106,7 +110,10 @@ async function ensureActiveSessionBootstrapped(): Promise<void> {
   activeSessionBootstrapPromise = (async () => {
     try {
       const id = await bootstrapActiveSessionIdFromIndex();
-      if (id) activeSessionId = id;
+      if (id) {
+        activeSessionId = id;
+        void persistLastActiveSessionId(id);
+      }
       if (!getCachedMessages(activeSessionId)) {
         const loaded = await loadStructuredMessages(activeSessionId);
         setCachedMessages(activeSessionId, loaded ?? []);
@@ -209,6 +216,15 @@ function recordPersistedToolTraceDiff(
 /** 导出活跃会话 ID，供会话路由等模块使用 */
 export function getActiveSessionId(): string {
   return activeSessionId;
+}
+
+/** 正在执行任务的会话 id 列表（供 bootstrap 优先选中「最近工作」会话）。 */
+export function getProcessingSessionIds(): string[] {
+  const ids: string[] = [];
+  for (const [sid, snap] of runningTurns) {
+    if (snap.isProcessing) ids.push(sid);
+  }
+  return ids;
 }
 
 /**
@@ -731,6 +747,10 @@ function foldStepIntoRunningTurn(sessionId: string, event: any): void {
         t.petState = 'crying';
         t.petBubble = '监管已暂停，需要你介入啦';
         t.petStatusText = '监管已暂停，需要你介入啦';
+      } else if (event.stopReason === 'model_done') {
+        t.petState = 'success';
+        t.petBubble = '已完成';
+        t.petStatusText = '已完成';
       }
       break;
     default:
@@ -1074,7 +1094,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             await flushStructuredMessagesNow(oldSessionId);
           } catch (err) {
             console.error('[chat-ws] switch_session flush failed:', err);
-            sendJSON(ws, { type: 'session_switched', ok: false, reason: 'flush_failed' });
+            sendJSON(ws, { type: 'session_switched', ok: false, reason: 'flush_failed', sessionId: oldSessionId });
             return;
           }
           let supervisorResetFailed = false;
@@ -1084,23 +1104,45 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             supervisorResetFailed = true;
             console.warn('[chat-ws] supervisor reset on switch_session failed:', err);
           }
-          activeSessionId = targetId;
-          const loaded = await loadStructuredMessages(activeSessionId);
-          setCachedMessages(activeSessionId, loaded ?? []);
-          // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
-          subscribeWsToSession(ws, activeSessionId);
-          await rebindBgTaskPusher(activeSessionId);
-          const newRunningTurn = snapshotRunningTurn(activeSessionId);
-          const workspace = await resolveSessionWorkspacePayload(activeSessionId);
-          sendJSON(ws, {
-            type: 'session_switched',
-            ok: true,
-            sessionId: activeSessionId,
-            ...workspace,
-            ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
-            ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
-          });
-          console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
+          try {
+            activeSessionId = targetId;
+            void persistLastActiveSessionId(targetId);
+            let loaded: UnifiedMessage[] | undefined;
+            try {
+              loaded = await loadStructuredMessages(activeSessionId);
+            } catch (loadErr) {
+              console.warn('[chat-ws] switch_session load structured failed, starting empty:', loadErr);
+              loaded = undefined;
+            }
+            setCachedMessages(activeSessionId, loaded ?? []);
+            // 把请求方的订阅切到新 session；其他端不动（保持原有视图）
+            subscribeWsToSession(ws, activeSessionId);
+            try {
+              await rebindBgTaskPusher(activeSessionId);
+            } catch (rebindErr) {
+              console.warn('[chat-ws] switch_session rebind bg task failed:', rebindErr);
+            }
+            const newRunningTurn = snapshotRunningTurn(activeSessionId);
+            const workspace = await resolveSessionWorkspacePayload(activeSessionId);
+            sendJSON(ws, {
+              type: 'session_switched',
+              ok: true,
+              sessionId: activeSessionId,
+              ...workspace,
+              ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
+              ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
+            });
+            console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
+          } catch (err) {
+            activeSessionId = oldSessionId;
+            console.error('[chat-ws] switch_session failed:', err);
+            sendJSON(ws, {
+              type: 'session_switched',
+              ok: false,
+              reason: 'switch_failed',
+              sessionId: oldSessionId,
+            });
+          }
           return;
         }
 
@@ -1113,7 +1155,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           }
 
           isProcessing = true;
-          const runSid = activeSessionId;
+          const runSid = wsToSubscribedSession.get(ws) || activeSessionId;
+          void persistLastActiveSessionId(runSid);
           ensureRunningTurn(runSid);
           broadcastToSession(runSid, { type: 'status', status: 'processing' });
 
@@ -1308,6 +1351,7 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
+  const skipSandbox = await readSkipSandboxFromMainConfig(MAIN_CONFIG_PATH);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
@@ -1355,6 +1399,7 @@ async function handleChatMessage(
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
     skipPermissionChecks,
+    skipSandbox,
     compactionThreshold: 40,
     compactionKeepRecent: 10,
     compactionEnableLLMSummary: true,

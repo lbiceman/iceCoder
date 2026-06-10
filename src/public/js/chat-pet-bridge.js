@@ -25,6 +25,10 @@ window.ChatPetBridge = (function () {
   var userCheckpointNoticeActive = false;
   var USER_CHECKPOINT_BUBBLE = '监管已暂停，需要你介入啦';
   var USER_CHECKPOINT_TURN = '监管暂停 · 请接管';
+  var modelDoneNoticeActive = false;
+  var modelDoneResetTimer = null;
+  var MODEL_DONE_NOTICE_MS = 5200;
+  var MODEL_DONE_BUBBLE = '已完成';
 
   function init(pet) {
     sessionPet = pet;
@@ -43,6 +47,10 @@ window.ChatPetBridge = (function () {
    */
   function isUserCheckpointActive() {
     return userCheckpointNoticeActive;
+  }
+
+  function isModelDoneNoticeActive() {
+    return modelDoneNoticeActive;
   }
 
   function syncExecPlanFoot() {
@@ -66,8 +74,35 @@ window.ChatPetBridge = (function () {
     sessionPet.setTurnLabel(parts.join(' · '));
   }
 
+  function clearModelDoneNotice() {
+    modelDoneNoticeActive = false;
+    if (modelDoneResetTimer) {
+      clearTimeout(modelDoneResetTimer);
+      modelDoneResetTimer = null;
+    }
+  }
+
+  function applyModelDoneNotice() {
+    clearModelDoneNotice();
+    modelDoneNoticeActive = true;
+    if (!sessionPet) return;
+    sessionPet.setVisible(true);
+    sessionPet.setState('success');
+    sessionPet.setBubbleText(MODEL_DONE_BUBBLE);
+    sessionPet.setTurnLabel('');
+    modelDoneResetTimer = setTimeout(function () {
+      modelDoneResetTimer = null;
+      modelDoneNoticeActive = false;
+      if (!sessionPet || !sessionPet.isVisible()) return;
+      sessionPet.setState('idle');
+      sessionPet.setBubbleText('');
+      syncExecPlanFoot();
+    }, MODEL_DONE_NOTICE_MS);
+  }
+
   function showThinking(withFile) {
     userCheckpointNoticeActive = false;
+    clearModelDoneNotice();
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
       ChatExecutionPlan.resetExecutionMode();
     }
@@ -106,6 +141,9 @@ window.ChatPetBridge = (function () {
     if (!sessionPet) return;
     if (userCheckpointNoticeActive) {
       applyUserCheckpointNotice();
+      return;
+    }
+    if (modelDoneNoticeActive) {
       return;
     }
     sessionPet.setState('idle');
@@ -247,6 +285,8 @@ window.ChatPetBridge = (function () {
           } else if (sr === 'stop_hook') {
             sessionPet.setState('alert');
             if (step.content) bubble(step.content);
+          } else if (sr === 'model_done') {
+            applyModelDoneNotice();
           } else {
             sessionPet.setState('happy');
             if (step.content) bubble(step.content);
@@ -404,7 +444,7 @@ window.ChatPetBridge = (function () {
    * 回合结束 passive 记忆提取（WebSocket memory_notice）：表情 + 气泡，数秒后复原
    */
   function applyMemoryNoticesToPet(notices, ctx) {
-    if (userCheckpointNoticeActive) return;
+    if (userCheckpointNoticeActive || modelDoneNoticeActive) return;
     if (!sessionPet || !notices || !notices.length) return;
     ctx = ctx || {};
     var isStreaming = !!ctx.isStreaming;
@@ -473,5 +513,6 @@ window.ChatPetBridge = (function () {
     isSessionActive: isSessionActive,
     syncExecPlanFoot: syncExecPlanFoot,
     isUserCheckpointActive: isUserCheckpointActive,
+    isModelDoneNoticeActive: isModelDoneNoticeActive,
   };
 })();

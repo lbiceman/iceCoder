@@ -14,7 +14,7 @@ export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenA
     temperature: provider.parameters.temperature,
     maxTokens,
     topP: provider.parameters.topP,
-    ...(provider.supportsVision !== undefined ? { supportsVision: provider.supportsVision } : {}),
+    supportsVision: provider.supportsVision ?? true,
     ...(rt !== undefined ? { timeout: rt } : {}),
   };
 }

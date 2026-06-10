@@ -210,7 +210,9 @@ window.ChatWebSocket = (function () {
     }
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }
 
   function sendMessage(text) {

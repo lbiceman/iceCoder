@@ -39,7 +39,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   // 固定颜色：黑底；眼睛线色见 create() 闭包内 eyeColor（每实例独立）
   var BODY_BG = '#000000';
   var READ_GLASSES_STROKE = 'rgba(255,255,255,0.55)';
-  var GLOW_COLOR = 'rgba(107,156,255,0.10)';
 
   /** token 圆环线宽（逻辑像素） */
   var TOKEN_RING_LINE_WIDTH = 3.25 * PET_SCALE;
@@ -116,11 +115,13 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
   var DRAG_STORE_KEY = 'ice-session-pet-position';
   var DRAG_MARGIN = 8;
+  var DRAG_THRESHOLD = 5;
 
   function initPetDrag(rootEl, dragHandleEl) {
     if (!rootEl || !dragHandleEl) return { afterShow: function () { } };
 
     var dragPointerId = null;
+    var dragActive = false;
     var startClientX = 0;
     var startClientY = 0;
     var startLeft = 0;
@@ -202,9 +203,15 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
     function onPointerMove(e) {
       if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-      e.preventDefault();
       var dx = e.clientX - startClientX;
       var dy = e.clientY - startClientY;
+      if (!dragActive) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        dragActive = true;
+        dragHandleEl.classList.add('pet-dragging');
+        applyPosition(startLeft, startTop);
+      }
+      e.preventDefault();
       applyPosition(startLeft + dx, startTop + dy);
     }
 
@@ -212,6 +219,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       if (dragPointerId === null) return;
       if (e && e.pointerId !== dragPointerId) return;
       dragPointerId = null;
+      dragActive = false;
       dragHandleEl.classList.remove('pet-dragging');
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', endDrag);
@@ -230,13 +238,12 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       function (e) {
         if (e.button !== undefined && e.button !== 0) return;
         dragPointerId = e.pointerId;
+        dragActive = false;
         startClientX = e.clientX;
         startClientY = e.clientY;
         var rect = rootEl.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
-        applyPosition(startLeft, startTop);
-        dragHandleEl.classList.add('pet-dragging');
         window.addEventListener('pointermove', onPointerMove, { passive: false });
         window.addEventListener('pointerup', endDrag);
         window.addEventListener('pointercancel', endDrag);
@@ -314,7 +321,28 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     drawCapsuleEye(ctx, rightX, y, EYE_W / 2, EYE_H / 2, ec);
   }
 
-  /** 2. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
+  /** 2. success — 任务完成（字面 ^ ^ 笑眼，尖顶 caret） */
+  function expressionSuccess(ctx, leftX, rightX, y, ec) {
+    var w = EYE_W / 2;
+    var peak = -6;
+
+    function drawCaret(cx) {
+      ctx.beginPath();
+      ctx.moveTo(cx - w * 0.72, y + 2);
+      ctx.lineTo(cx, y + peak);
+      ctx.lineTo(cx + w * 0.72, y + 2);
+      ctx.strokeStyle = ec;
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+
+    drawCaret(leftX);
+    drawCaret(rightX);
+  }
+
+  /** 3. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
   function expressionHappy(ctx, leftX, rightX, y, ec) {
     var w = EYE_W / 2;
     ctx.beginPath();
@@ -334,7 +362,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
-  /** 3. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
+  /** 4. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
   function expressionThinking(ctx, leftX, rightX, y, ec) {
     var hw = EYE_W / 2;
     var hh = EYE_H * 0.38;
@@ -369,7 +397,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   var WORKING_GAZE_PERIOD_MS = 3800;
 
   /**
-   * 4. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
+   * 5. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
    * @param {number} timestamp requestAnimationFrame 时间戳
    */
   function expressionWorking(ctx, leftX, rightX, y, timestamp, ec) {
@@ -753,6 +781,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   // 表情映射表（对外 20 种 + 内部 blink）
   var EXPRESSIONS = {
     idle: expressionIdle,
+    success: expressionSuccess,
     happy: expressionHappy,
     thinking: expressionThinking,
     working: expressionWorking,
@@ -778,12 +807,15 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
   /**
    * @param {HTMLElement} rootEl
+   * @param {{ enableDrag?: boolean }} [options] — enableDrag 默认 true；桌面悬浮窗传 false
    */
-  function create(rootEl) {
+  function create(rootEl, options) {
+    options = options || {};
     var canvas = rootEl.querySelector('.pet-canvas');
     var bubbleEl = rootEl.querySelector('.pet-bubble');
     var turnEl = rootEl.querySelector('.status-turn');
-    var dragApi = initPetDrag(rootEl, canvas);
+    var dragApi =
+      options.enableDrag === false ? { afterShow: function () {} } : initPetDrag(rootEl, canvas);
     var ctx = null;
     var state = 'idle';
     var visible = true;
@@ -839,7 +871,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
       var breath = state === 'working' ? 0 : Math.sin(timestamp / 800) * 1.5;
       var scale = 1;
-      if (state === 'happy') scale *= 1.02;
+      if (state === 'happy' || state === 'success') scale *= 1.02;
       if (state === 'playful') scale *= 1 + Math.sin(timestamp / 350) * 0.012;
 
       ctx.save();
@@ -848,12 +880,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       ctx.translate(-cx, -cy);
 
       var bodyY = cy + breath;
-
-      // 外圈光晕
-      ctx.beginPath();
-      ctx.arc(cx, bodyY, PET_SIZE / 2 - 4, 0, Math.PI * 2);
-      ctx.fillStyle = GLOW_COLOR;
-      ctx.fill();
 
       // 机身：固定黑底
       ctx.beginPath();
@@ -921,6 +947,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
         case 'alert':
           return { lx: 0, ly: -3, rx: 0, ry: -3 };
         case 'happy':
+        case 'success':
           return { lx: -1, ly: -2, rx: 1, ry: -2 };
         case 'surprised':
           return { lx: 0, ly: -4, rx: 0, ry: -4 };

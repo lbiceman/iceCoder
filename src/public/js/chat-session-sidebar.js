@@ -134,8 +134,32 @@ window.ChatSessionSidebar = (function () {
     syncToggleButtonState();
   }
 
+  function isSwitchLocked() {
+    if (window.ChatPage && typeof window.ChatPage.isWorkloadActive === 'function') {
+      return window.ChatPage.isWorkloadActive();
+    }
+    var WS = window.ChatWebSocket;
+    return !!(WS && typeof WS.isProcessing === 'function' && WS.isProcessing());
+  }
+
+  function syncSwitchLockState() {
+    if (!sidebar) return;
+    var locked = isSwitchLocked();
+    var list = sidebar.querySelector('.chat-sidebar-list');
+    if (list) {
+      list.classList.toggle('is-switch-locked', locked);
+      list.title = locked ? '任务进行中，请先停止后再切换会话' : '';
+    }
+    var newBtn = sidebar.querySelector('.chat-sidebar-new-btn');
+    if (newBtn) {
+      newBtn.classList.toggle('is-disabled', locked);
+      newBtn.title = locked ? '任务进行中，请先停止后再新建会话' : '新建会话';
+    }
+  }
+
   function bindEvents() {
     sidebar.querySelector('.chat-sidebar-new-btn').addEventListener('click', function () {
+      if (isSwitchLocked()) return;
       Store.createSession('新会话', function (session) {
         if (session) {
           renderList();
@@ -217,6 +241,7 @@ window.ChatSessionSidebar = (function () {
 
       list.appendChild(item);
     }
+    syncSwitchLockState();
   }
 
   function applyWorkspaceForSession(sessionId, workspacePayload) {
@@ -250,15 +275,15 @@ window.ChatSessionSidebar = (function () {
   }
 
   function selectSession(sessionId) {
+    if (isSwitchLocked()) return;
     if (sessionId === Store.getActiveSessionId()) return;
     Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload) {
-      if (ok) {
-        applyWorkspaceForSession(sessionId, workspacePayload);
-        if (isNarrow()) close();
-        renderList();
-        if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-          window.ChatPage.onSessionSwitched(sessionId, runningTurn);
-        }
+      if (!ok) return;
+      applyWorkspaceForSession(sessionId, workspacePayload);
+      if (isNarrow()) close();
+      renderList();
+      if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn);
       }
     });
   }
@@ -343,6 +368,7 @@ window.ChatSessionSidebar = (function () {
     isOpen: isOpenState,
     isPanelVisible: function () { return isNarrow() ? isOpen : panelVisible; },
     renderList: renderList,
+    syncSwitchLockState: syncSwitchLockState,
     notifyWorkspaceUpdated: notifyWorkspaceUpdated,
   };
 })();

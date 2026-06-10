@@ -20,6 +20,8 @@ export interface ToolPreflightInput {
   lockedWorkspaceRoot?: string;
   /** 同路径 missing-file preflight 拦截次数（由 HarnessRunState 持有）。 */
   missingFileAttempts?: Map<string, number>;
+  /** 为 true 时跳过 HostGuard 沙箱预检 */
+  skipSandbox?: boolean;
 }
 
 export interface ToolPreflightDecision {
@@ -183,29 +185,31 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
     }
   }
 
-  if (input.toolName === 'run_command') {
-    const command = extractRunCommand(input.args);
-    if (command) {
-      const hostGuard = analyzeShellHostSafety(command, { workDir: input.workspaceRoot });
-      if (hostGuard.blocked) {
-        return {
-          blocked: true,
-          reason: 'host_kill',
-          hostKillLabel: hostGuard.matchLabel,
-          message: hostGuard.message ?? '[HostGuard / Blocked]',
-        };
+  if (!input.skipSandbox) {
+    if (input.toolName === 'run_command') {
+      const command = extractRunCommand(input.args);
+      if (command) {
+        const hostGuard = analyzeShellHostSafety(command, { workDir: input.workspaceRoot });
+        if (hostGuard.blocked) {
+          return {
+            blocked: true,
+            reason: 'host_kill',
+            hostKillLabel: hostGuard.matchLabel,
+            message: hostGuard.message ?? '[HostGuard / Blocked]',
+          };
+        }
       }
     }
-  }
 
-  const hostWrite = checkHostGuardWritePreflight(input.toolName, input.args);
-  if (hostWrite.blocked) {
-    return {
-      blocked: true,
-      reason: 'host_kill',
-      hostKillLabel: hostWrite.matchLabel,
-      message: hostWrite.message ?? '[HostGuard / Blocked]',
-    };
+    const hostWrite = checkHostGuardWritePreflight(input.toolName, input.args);
+    if (hostWrite.blocked) {
+      return {
+        blocked: true,
+        reason: 'host_kill',
+        hostKillLabel: hostWrite.matchLabel,
+        message: hostWrite.message ?? '[HostGuard / Blocked]',
+      };
+    }
   }
 
   return { blocked: false };

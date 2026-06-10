@@ -6,6 +6,7 @@ import { SESSION_PET_PALETTE_COLORS } from './session-pet-palette.js';
 
 var EXPRESSIONS = [
   'idle',
+  'success',
   'happy',
   'thinking',
   'working',

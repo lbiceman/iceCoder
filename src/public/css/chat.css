@@ -72,6 +72,63 @@
 .message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header {
   margin: 0;
 }
+/* 收起态：Thinking 逐字从左到右跳动（展开时不播放） */
+@keyframes msg-thinking-char-bounce {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+  }
+  20% {
+    transform: translateY(-0.28em);
+  }
+  35% {
+    transform: translateY(0);
+  }
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char,
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
+  display: inline-block;
+  animation: msg-thinking-char-bounce 1.35s ease-in-out infinite;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(1),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(1) {
+  animation-delay: 0s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(2),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(2) {
+  animation-delay: 0.08s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(3),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(3) {
+  animation-delay: 0.16s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(4),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(4) {
+  animation-delay: 0.24s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(5),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(5) {
+  animation-delay: 0.32s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(6),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(6) {
+  animation-delay: 0.4s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(7),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(7) {
+  animation-delay: 0.48s;
+}
+.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(8),
+.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(8) {
+  animation-delay: 0.56s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char,
+  .message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
+    animation: none;
+  }
+}
 /* 不设 max-height / 内层滚动，高度随内容增长，由 .chat-messages 统一贴底跟滚（80px 阈值） */
 .message.assistant.message-thinking .msg-thinking-body,
 .message.agent.message-thinking .msg-thinking-body,
@@ -588,6 +645,11 @@
 .session-pet-indicator.active {
   display: flex;
 }
+.session-pet-indicator.session-pet-indicator--desktop-hidden {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
 .pet-bubble {
   position: absolute;
   left: 50%;
@@ -630,34 +692,29 @@
   pointer-events: auto;
   -webkit-user-select: none;
   user-select: none;
+  -webkit-tap-highlight-color: transparent;
   border: none;
   background: transparent;
   box-sizing: border-box;
   line-height: 0;
   border-radius: 50%;
-  transition: transform 0.15s ease;
+  outline: none;
+  box-shadow: none;
+  filter: none;
+  transition: none;
 }
-[data-theme="dark"] .pet-canvas {
-  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.4));
-}
-[data-theme="light"] .pet-canvas {
-  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.12));
+.pet-canvas:focus,
+.pet-canvas:focus-visible,
+.pet-canvas:active {
+  outline: none;
+  box-shadow: none;
+  filter: none;
 }
 .pet-canvas.pet-dragging {
   cursor: grabbing;
-  transform: scale(1.06);
-}
-[data-theme="dark"] .pet-canvas.pet-dragging {
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.5));
-}
-[data-theme="light"] .pet-canvas.pet-dragging {
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.18));
 }
 .pet-canvas.pet-wobble {
   animation: pet-wobble 0.5s ease-in-out infinite;
-}
-.pet-canvas.pet-crying {
-  filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.45));
 }
 @keyframes pet-wobble {
   0%, 100% { transform: translateY(0); }
@@ -1107,6 +1164,30 @@
 .chat-sidebar-item-subtitle.is-default {
   font-style: normal;
   opacity: 0.58;
+}
+
+.chat-sidebar-list.is-switch-locked .chat-sidebar-item:not(.active) {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.chat-sidebar-list.is-switch-locked .chat-sidebar-item:not(.active):hover {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+
+.chat-sidebar-new-btn.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.chat-sidebar-new-btn.is-disabled:hover {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border-color: var(--border-light);
 }
 
 .chat-sidebar-item:hover {

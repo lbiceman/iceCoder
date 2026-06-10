@@ -182,6 +182,8 @@ export interface HarnessConfig {
   permissions?: ToolPermissionRule[];
   /** 为 true 时跳过 deny/confirm/破坏性确认等全部权限检查 */
   skipPermissionChecks?: boolean;
+  /** 为 true 时跳过 HostGuard 沙箱预检（Shell 命令与写入内容扫描） */
+  skipSandbox?: boolean;
   /** 上下文压缩阈值（消息数量，向后兼容） */
   compactionThreshold?: number;
   /** 上下文压缩的 token 阈值（优先于消息数阈值，默认 80000） */

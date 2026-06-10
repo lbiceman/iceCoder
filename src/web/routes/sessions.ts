@@ -24,6 +24,7 @@ import {
   resolveToolDiffForSession,
 } from '../session-tool-trace-diffs.js';
 import { isSafeSessionId } from '../session-id-guard.js';
+import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -105,12 +106,10 @@ async function ensureDefaultInIndex(): Promise<SessionMeta[]> {
   return index;
 }
 
-/** 进程/页面冷启动时选用最近更新的会话（index 按 updatedAt 降序）。 */
+/** 进程/页面冷启动时选用最近工作的会话（见 last-active-session.ts）。 */
 export async function bootstrapActiveSessionIdFromIndex(): Promise<string> {
   const index = await ensureDefaultInIndex();
-  if (index.length === 0) return SESSION_ID;
-  const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
-  return sorted[0]!.id;
+  return resolveBootstrapActiveSessionId(index);
 }
 
 interface ChatMessage {

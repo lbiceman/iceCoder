@@ -17,12 +17,16 @@ import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
 import {
+  DEFAULT_DREAM_CONFIG,
   DEFAULT_LLM_EXTRACTION_CONFIG,
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
+  MIN_EXTRACTION_CONFIDENCE,
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
 import { evictIfNeeded } from './memory-eviction.js';
+import { upsertIndexRow } from './memory-index-maintainer.js';
+import { checkExtractDedupSync } from './memory-dedup.js';
 
 /** 消息内容截断字符数 */
 const EXTRACTION_MESSAGE_TRUNCATE = 2000;
@@ -89,6 +93,16 @@ export function isAllowedMemoryCategory(cat: unknown): boolean {
 function shouldRejectFilenameForExtraction(filename: string): boolean {
   const lower = filename.toLowerCase();
   return REJECT_FILENAME_SUBSTRINGS.some(s => lower.includes(s.toLowerCase()));
+}
+
+function parseMemoryConfidence(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  return Math.max(0, Math.min(1, raw));
+}
+
+export function meetsExtractionConfidenceThreshold(confidence: unknown): boolean {
+  const parsed = parseMemoryConfidence(confidence);
+  return parsed !== null && parsed >= MIN_EXTRACTION_CONFIDENCE;
 }
 
 /**
@@ -163,7 +177,11 @@ const EXTRACTION_CORE_PROMPT = `Memory extraction subagent. Extract only **durab
 - \`type\`: \`user\` | \`feedback\` | \`project\` | \`reference\` — align with the taxonomy block (profile→user, repo conventions→project, corrections→feedback).
 - **Tags**: e.g. \`dimension:tech_stack\`, \`dimension:git\`, \`dimension:feedback_correction\`.
 
-**Never**: model identity / knowledge cutoff meta-chat; one-off task blow-by-blow; pure chit-chat.
+**Never**: model identity / knowledge cutoff meta-chat; one-off task blow-by-blow; pure chit-chat; facts that only apply to **this session** or **this one task**.
+
+**Reusability** (required): extract only facts likely useful across **≥3 future sessions**. Session-local context, one-off implementation details, or generic common knowledge → **omit** (do not emit with a low score).
+
+**Confidence calibration** (required on every item): ≥0.75 = user stated explicitly or pattern **repeated**; 0.6–0.74 = strong inference only; **<0.6 → omit item entirely**. Missing \`confidence\` is rejected at save time.
 
 **contradicts**: existing **filename** only when the user **explicitly** says prior memory is wrong.
 
@@ -386,6 +404,7 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
       const cat = String(m.memoryCategory).trim().toLowerCase();
       if (!isTypeCategoryCoherent(String(m.type), cat)) return false;
       if (shouldRejectFilenameForExtraction(String(m.filename))) return false;
+      if (!meetsExtractionConfidenceThreshold(m.confidence)) return false;
       return true;
     });
 
@@ -483,12 +502,29 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
           isUpdate = true;
         } catch { /* 文件不存在，正常创建 */ }
 
-        // v4: tags 重叠度硬去重 — 新文件时检查是否与已有记忆高度重复
+        // v4: tags 重叠度硬去重 + Phase 2.1 描述相似度去重
+        if (!isUpdate) {
+          // 2.1: 描述相似度去重（merge 模式：相似则合并到已有文件）
+          const dedupDecision = checkExtractDedupSync(
+            existingByDir.get(targetDir) || [],
+            { filename: safeFilename, name: memory.name, description: memory.description, type: memory.type, tags: memory.tags },
+            0.85,
+            'merge',
+          );
+          if (dedupDecision.wouldMergeInfo) {
+            console.log(`[LLMMemoryExtractor] ${dedupDecision.wouldMergeInfo}`);
+          }
+          if (dedupDecision.shouldUpdate && dedupDecision.existingFile) {
+            filePath = dedupDecision.existingFile.filePath;
+            isUpdate = true;
+          }
+        }
+
+        // v4: tags 重叠度硬去重（fallback 优先级低）
         if (!isUpdate && memory.tags && memory.tags.length > 0) {
           const existing = existingByDir.get(targetDir) || [];
           const duplicate = findDuplicateByTags(memory.tags, memory.type, existing);
           if (duplicate) {
-            // 重定向到已有文件（合并而非新建）
             console.log(
               `[LLMMemoryExtractor] Tags dedup: "${safeFilename}" → merging into "${duplicate.filename}" (overlap ≥60%)`,
             );
@@ -554,6 +590,16 @@ ${memory.content}
         await fs.writeFile(filePath, safeContent, 'utf-8');
         writtenPaths.push(filePath);
 
+        // Phase 1: 写后维护 MEMORY.md 索引
+        const indexDir = isExplicitUser ? userMemoryDir : memoryDir;
+        upsertIndexRow(indexDir, {
+          filename: path.basename(filePath),
+          description: memory.description || memory.name,
+          type: memory.type as any,
+        }).catch(err => {
+          console.debug('[LLMMemoryExtractor] upsertIndexRow failed:', err instanceof Error ? err.message : err);
+        });
+
         if (isUpdate) {
           console.log(`[LLMMemoryExtractor] Updated existing memory: ${path.basename(filePath)}`);
         }
@@ -567,11 +613,16 @@ ${memory.content}
       // 使扫描缓存失效（新文件已写入）
       scannerCache.invalidate(memoryDir);
       scannerCache.invalidate(userMemoryDir);
-      evictIfNeeded(memoryDir).catch(err => {
+      evictIfNeeded(memoryDir, {
+        softLimit: DEFAULT_DREAM_CONFIG.postDreamMemoryCap,
+        evictionTarget: DEFAULT_DREAM_CONFIG.postDreamMemoryCap,
+      }).catch(err => {
         console.debug('[LLMMemoryExtractor] Eviction check failed:', err instanceof Error ? err.message : err);
       });
       evictIfNeeded(userMemoryDir, {
         evictedDir: resolveUserMemoryEvictedDir(),
+        softLimit: DEFAULT_DREAM_CONFIG.userMemoryPostDreamCap,
+        evictionTarget: DEFAULT_DREAM_CONFIG.userMemoryPostDreamCap,
       }).catch(err => {
         console.debug('[LLMMemoryExtractor] User memory eviction failed:', err instanceof Error ? err.message : err);
       });

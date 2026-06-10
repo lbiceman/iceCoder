@@ -14,6 +14,7 @@ window.ChatSessionStore = (function () {
   var sessions = [];
   var listeners = [];
   var STORAGE_KEY_PREFIX = 'ice-chat-messages:';
+  var STORAGE_KEY_LAST_ACTIVE = 'ice-chat-last-active-session';
   var TITLE_MAX_LEN = 20;
   var PLACEHOLDER_TITLES = { '新会话': true, '默认会话': true, '未命名': true };
   var defaultWorkDir = '';
@@ -78,6 +79,22 @@ window.ChatSessionStore = (function () {
     delete workspacesBySession[sessionId];
   }
 
+  function readLastActiveSessionIdFromStorage() {
+    try {
+      var stored = localStorage.getItem(STORAGE_KEY_LAST_ACTIVE);
+      return stored || '';
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  function persistLastActiveSessionId(sessionId) {
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_ACTIVE, sessionId);
+    } catch (_e) { /* ignore */ }
+  }
+
   function getActiveSessionId() { return activeSessionId; }
 
   /** 与服务端 activeSessionId 对齐（不重发 switch_session） */
@@ -85,6 +102,7 @@ window.ChatSessionStore = (function () {
     var id = sessionId || 'default';
     if (id === activeSessionId) return;
     activeSessionId = id;
+    persistLastActiveSessionId(id);
     emit();
   }
 
@@ -98,9 +116,10 @@ window.ChatSessionStore = (function () {
     return sorted[0].id;
   }
 
-  /** 解析初始选中：API 推荐 id 无效时回退到最近更新的会话。 */
+  /** 解析初始选中：本地最近工作 > API 推荐 > 内存 active > updatedAt 最近。 */
   function resolveInitialActiveSessionId(apiActiveId) {
-    var candidate = apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
+    var stored = readLastActiveSessionIdFromStorage();
+    var candidate = stored || apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
     if (!sessions.some(function (s) { return s.id === candidate; })) {
       candidate = pickMostRecentSessionId();
     }
@@ -136,6 +155,7 @@ window.ChatSessionStore = (function () {
     fetchSessions(function (_sessions, resolvedId) {
       var id = resolvedId || activeSessionId || DEFAULT_SESSION_ID;
       activeSessionId = id;
+      persistLastActiveSessionId(id);
 
       function complete(runningTurn) {
         if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
@@ -243,6 +263,7 @@ window.ChatSessionStore = (function () {
     }
     if (!wsSend) {
       activeSessionId = sessionId;
+      persistLastActiveSessionId(activeSessionId);
       emit();
       if (callback) callback(true);
       return;
@@ -250,6 +271,7 @@ window.ChatSessionStore = (function () {
     if (window.ChatWebSocket && typeof window.ChatWebSocket.isConnected === 'function'
         && !window.ChatWebSocket.isConnected()) {
       activeSessionId = sessionId;
+      persistLastActiveSessionId(activeSessionId);
       emit();
       if (callback) callback(true);
       return;
@@ -257,34 +279,72 @@ window.ChatSessionStore = (function () {
     var settled = false;
     var lastRunningTurn = null;
     var lastWorkspace = null;
-    function finish(ok) {
+    var sendAttempts = 0;
+    var maxSendAttempts = 5;
+
+    function finish(ok, degraded) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched');
-      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace);
+      if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched', handler);
+      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace, !!degraded);
     }
+
+    function applySwitchPayload(data) {
+      activeSessionId = data.sessionId || sessionId;
+      persistLastActiveSessionId(activeSessionId);
+      if (data.runningTurn) lastRunningTurn = data.runningTurn;
+      if (data.workspaceRoot || data.defaultWorkDir) {
+        lastWorkspace = {
+          sessionId: activeSessionId,
+          workspaceRoot: data.workspaceRoot,
+          defaultWorkDir: data.defaultWorkDir,
+        };
+        setSessionWorkspace(activeSessionId, lastWorkspace);
+      } else {
+        emit();
+      }
+    }
+
+    function fallbackLocalSwitch(degraded) {
+      activeSessionId = sessionId;
+      persistLastActiveSessionId(activeSessionId);
+      emit();
+      finish(true, degraded);
+      if (wsSend) wsSend({ type: 'switch_session', sessionId: sessionId });
+    }
+
     var handler = function (data) {
       if (!data) return;
       if (data.ok) {
-        activeSessionId = data.sessionId || sessionId;
-        if (data.runningTurn) lastRunningTurn = data.runningTurn;
-        if (data.workspaceRoot || data.defaultWorkDir) {
-          lastWorkspace = {
-            sessionId: activeSessionId,
-            workspaceRoot: data.workspaceRoot,
-            defaultWorkDir: data.defaultWorkDir,
-          };
-          setSessionWorkspace(activeSessionId, lastWorkspace);
-        } else {
-          emit();
-        }
+        if (data.sessionId && data.sessionId !== sessionId) return;
+        applySwitchPayload(data);
+        finish(true, false);
+        return;
       }
-      finish(!!data.ok);
+      if (data.reason === 'flush_failed') {
+        finish(false, false);
+        return;
+      }
+      fallbackLocalSwitch(true);
     };
-    var timer = setTimeout(function () { finish(false); }, SWITCH_TIMEOUT_MS);
+
+    function trySendSwitch() {
+      sendAttempts += 1;
+      if (wsSend({ type: 'switch_session', sessionId: sessionId })) return;
+      if (sendAttempts < maxSendAttempts) {
+        setTimeout(trySendSwitch, 80 * sendAttempts);
+        return;
+      }
+      fallbackLocalSwitch(true);
+    }
+
+    var timer = setTimeout(function () {
+      fallbackLocalSwitch(true);
+    }, SWITCH_TIMEOUT_MS);
+
     if (window.ChatWebSocket) window.ChatWebSocket.on('session_switched', handler);
-    wsSend({ type: 'switch_session', sessionId: sessionId });
+    trySendSwitch();
   }
 
   function pickFallbackSessionId(excludeId) {

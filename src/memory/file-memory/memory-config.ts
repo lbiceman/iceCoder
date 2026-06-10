@@ -17,7 +17,7 @@
 
 import type { FileMemoryConfig } from './types.js';
 import path from 'node:path';
-import { getRuntimeMemoryAuxPath } from '../../cli/paths.js';
+import { getRuntimeDataDir, getRuntimeMemoryAuxPath } from '../../cli/paths.js';
 
 // ══════════════════════════════════════════════════════════════════
 // 目录与路径
@@ -37,9 +37,29 @@ export function resolveUserMemoryDir(): string {
   return path.resolve(process.env.ICE_USER_MEMORY_DIR ?? DEFAULT_USER_MEMORY_DIR);
 }
 
-/** 用户记忆淘汰归档目录（默认同级 evicted/） */
+/** 统一归档根目录：`{dataDir}/memory-evicted` */
+export function resolveMemoryEvictedRoot(): string {
+  return path.join(getRuntimeDataDir(), 'memory-evicted');
+}
+
+/** 项目级记忆归档目录：`memory-evicted/memory-files` */
+export function resolveProjectMemoryEvictedDir(): string {
+  return path.join(resolveMemoryEvictedRoot(), 'memory-files');
+}
+
+/** 用户级记忆归档目录：`memory-evicted/user-memory` */
 export function resolveUserMemoryEvictedDir(): string {
-  return path.join(resolveUserMemoryDir(), 'evicted');
+  return path.join(resolveMemoryEvictedRoot(), 'user-memory');
+}
+
+/**
+ * 活跃记忆扫描时排除的路径（遗留的 `evicted/` 子目录等）。
+ * 新归档在 `memory-evicted/` 独立目录，不在活跃目录内。
+ */
+export function isExcludedFromActiveMemoryScan(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, '/');
+  if (normalized === 'evicted' || normalized.startsWith('evicted/')) return true;
+  return false;
 }
 
 /**
@@ -121,6 +141,8 @@ export interface DreamConfig {
   maxIndexBytes: number;
   /** Dream LLM 调用 `maxTokens` 上限 */
   maxOutputTokens: number;
+  /** Dream 两阶段 LLM：是否启用 index pass + content pass 拆分 */
+  twoPhase: boolean;
   /** 是否在改写前写入备份目录 */
   enableBackup: boolean;
   /** Dream 备份根目录 */
@@ -143,6 +165,30 @@ export interface DreamConfig {
   userMemoryPostDreamCap: number;
   /** 用户级淘汰传入 `evictIfNeeded` 的覆盖项；默认归档目录为 `resolveUserMemoryEvictedDir()` */
   afterUserDreamEviction?: Partial<EvictionConfig>;
+  /** 索引孤儿比例阈值（orphans/onDisk ≥ 此值触发 index_drift）；默认 0.5 */
+  indexOrphanRatioThreshold: number;
+  /** 索引孤儿绝对数下限（onDisk 不足时用此值）；默认 10 */
+  indexOrphanMinCount: number;
+  /** 索引退避基础间隔（ms），默认 60s */
+  indexBackoffBaseMs: number;
+  /** 索引退避最大间隔（ms），默认 30min */
+  indexBackoffMaxMs: number;
+  /** Dream LLM 单次 API 请求超时（ms），默认 10 分钟 */
+  llmRequestTimeoutMs: number;
+}
+
+/**
+ * Extract 写时去重 & 规则重复合并配置。
+ */
+export interface DedupConfig {
+  /** Extract 写入时描述相似度阈值（0-1），超过则更新已有文件而非新建 */
+  extractSimilarityThreshold: number;
+  /** 规则重复合并相似度阈值 */
+  ruleMergeSimilarityThreshold: number;
+  /** 运行模式：'off' | 'shadow' | 'merge' */
+  mode: 'off' | 'shadow' | 'merge';
+  /** 规则合并最小候选对数量 */
+  ruleMergeMinCandidates: number;
 }
 
 /** 记忆遥测落盘与控制台开关（`memory-telemetry.ts`） */
@@ -267,7 +313,7 @@ export const DEFAULT_FILE_MEMORY_CONFIG: FileMemoryConfig = {
   entrypointName: DEFAULT_ENTRYPOINT_NAME,
   maxEntrypointLines: 200,
   maxEntrypointBytes: 25000,
-  maxMemoryFiles: 100,
+  maxMemoryFiles: 60,
 };
 
 /** 多层级加载器默认路径占位（实际运行时由 bootstrap 传入真实根目录） */
@@ -289,9 +335,46 @@ export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
 /** `memory-llm-extractor` 单次提取规模默认 */
 export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
   maxMemories: 15,
-  maxOutputTokens: 4096,
+  maxOutputTokens: 8192,
   enablePromptCache: true,
 };
+
+/**
+ * Dream LLM 时效常量（对齐市面 OpenAI 兼容网关常见上限）。
+ *
+ * | 来源 | 典型上限 |
+ * |------|----------|
+ * | OpenAI 官方 SDK 默认 | 600s（客户端，服务端可更长） |
+ * | MiniMax / 国内代理网关 | **~300s 服务端处理**（错误码 1001） |
+ * | DeepSeek / 多数中转 | 120–300s 不等 |
+ *
+ * Dream 按 **280s 客户端 + 轻量输入** 设计，避免触达 300s 服务端墙。
+ */
+export const DREAM_LLM_PROVIDER_CAP_MS = 300_000;
+export const DEFAULT_DREAM_LLM_TIMEOUT_MS = 280_000;
+/** 分批整合时单轮累计 LLM 耗时软上限（后台任务可自动衔接多轮） */
+export const DREAM_LLM_TIME_BUDGET_MS = 420_000;
+/** 预算用尽后自动衔接的最大轮数（含首轮） */
+export const DREAM_BATCH_MAX_ROUNDS = 6;
+/** 单批 LLM 瞬时错误（529/500 等）最大重试次数 */
+export const DREAM_BATCH_LLM_MAX_RETRIES = 3;
+/** 单批 LLM 重试基础退避（ms） */
+export const DREAM_BATCH_RETRY_BASE_MS = 8_000;
+/** 衔接轮之间的常规等待（ms） */
+export const DREAM_CONTINUATION_DELAY_MS = 8_000;
+/** 529 高峰错误后衔接轮等待（ms） */
+export const DREAM_CONTINUATION_PEAK_DELAY_MS = 90_000;
+
+/** 超过此条数：改用 manifest 元数据（不全文读盘），单次 LLM */
+export const DREAM_MANIFEST_MODE_THRESHOLD = 20;
+/** 超过此条数：拆多批 LLM（每批 manifest） */
+export const DREAM_BATCH_MODE_THRESHOLD = 80;
+/** 每批文件数（过大易超时；97 条 ≈ 9 批） */
+export const DREAM_BATCH_FILE_COUNT = 12;
+/** 大库单次 LLM maxOutputTokens 上限（降低生成耗时） */
+export const DREAM_LARGE_LIB_MAX_OUTPUT_TOKENS = 1536;
+/** 写入 Dream prompt 的 MEMORY.md 最大字符（索引可规则重建） */
+export const DREAM_INDEX_PROMPT_MAX_CHARS = 12_000;
 
 /**
  * Dream 整合默认：触发门槛、索引大小、备份与 Dream 后条数上限。
@@ -300,21 +383,33 @@ export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
 export const DEFAULT_DREAM_CONFIG: DreamConfig = {
   /** 与 `recordSession` 叠加：`sessionCount >= sessionInterval` 时才可能触发 */
   sessionInterval: 5,
+  twoPhase: true,
   /** 与门控组合：记忆文件数至少此值才考虑「会话+文件」类触发 */
   fileCountThreshold: 10,
   maxIndexLines: 200,
   maxIndexBytes: 25000,
-  maxOutputTokens: 4096,
+  maxOutputTokens: 8192,
   enableBackup: true,
   backupDir: getRuntimeMemoryAuxPath('dream-backups'),
   maxBackups: 3,
   enforceMemoryCapAfterDream: true,
   /** 项目 `.md` 条数上限（不含 MEMORY.md），与 `DEFAULT_FILE_MEMORY_CONFIG.maxMemoryFiles` 常一致 */
-  postDreamMemoryCap: 100,
+  postDreamMemoryCap: 60,
+  /**
+   * Dream 后条数淘汰：跳过「新建保护期」，仅把低活跃条目归档到 evicted/（非删除）。
+   * 语义整合（LLM）与条数压顶（规则）分工：LLM 不负责压到 60 条。
+   */
+  afterDreamEviction: { protectionDays: 0 },
   staleIndexDeadLinksThreshold: 3,
   enforceUserMemoryCapAfterDream: true,
-  /** 用户目录同样维持 100 条话题文件规模 */
-  userMemoryPostDreamCap: 100,
+  /** 用户目录话题文件条数上限（不含 MEMORY.md） */
+  userMemoryPostDreamCap: 20,
+  afterUserDreamEviction: { protectionDays: 0 },
+  indexOrphanRatioThreshold: 0.5,
+  indexOrphanMinCount: 10,
+  indexBackoffBaseMs: 60_000,
+  indexBackoffMaxMs: 30 * 60 * 1000,
+  llmRequestTimeoutMs: DEFAULT_DREAM_LLM_TIMEOUT_MS,
 };
 
 /** 遥测 JSONL 默认路径与体积上限 */
@@ -327,9 +422,9 @@ export const DEFAULT_TELEMETRY_CONFIG: TelemetryConfig = {
 
 export const DEFAULT_EVICTION_CONFIG: EvictionConfig = {
   enabled: true,
-  softLimit: 100,
-  evictionTarget: 100,
-  evictedDir: getRuntimeMemoryAuxPath('evicted'),
+  softLimit: 60,
+  evictionTarget: 60,
+  evictedDir: resolveProjectMemoryEvictedDir(),
   maxEvictedFiles: 100,
   protectionDays: 3,
 };
@@ -469,6 +564,9 @@ export const DECAY_FACTOR_EXPIRED = 0.1;
 
 /** 默认置信度回退值 */
 export const DEFAULT_CONFIDENCE_FALLBACK = 0.5;
+
+/** LLM 提取落盘最低置信度（缺失或低于此值的条目直接丢弃） */
+export const MIN_EXTRACTION_CONFIDENCE = 0.6;
 
 /** 用户级记忆路由的置信度阈值 */
 export const USER_LEVEL_CONFIDENCE_THRESHOLD = 1.0;

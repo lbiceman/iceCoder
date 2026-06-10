@@ -62,6 +62,9 @@ window.ChatPage = (function () {
     if (UI.repairMissingDiffMountsFromStructured) {
       UI.repairMissingDiffMountsFromStructured(structured);
     }
+    if (UI.followBottomAfterContentPatch) {
+      UI.followBottomAfterContentPatch(shouldScroll);
+    }
   }
 
   function renderChatHistoryWithFetch(shouldScroll, done) {
@@ -193,10 +196,16 @@ window.ChatPage = (function () {
   function syncSendButtonWithWorkload() {
     var busy = isWorkloadActive();
     UI.setStreamingState(busy);
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.syncSwitchLockState === 'function') {
+      window.ChatSessionSidebar.syncSwitchLockState();
+    }
     if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
         sessionPet.setState(isStreaming ? 'read' : 'thinking');
-      } else if (!userStopped) {
+      } else if (
+        !userStopped
+        && !(Pet.isModelDoneNoticeActive && Pet.isModelDoneNoticeActive())
+      ) {
         sessionPet.setState('idle');
       }
     }
@@ -300,21 +309,22 @@ window.ChatPage = (function () {
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
+    var didAppendUserMessage = false;
     if (displayParts.length > 0 || msgImages.length > 0) {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       Session.appendMessage(userMsg);
-      UI.enableAutoScroll();
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       if (UI.maybeRepartitionTailIfNeeded) {
         UI.maybeRepartitionTailIfNeeded(
           Session.getMessages(),
           Session.getToolTraces(),
           Session.stripStatusTag,
-          false,
+          'force',
           buildDisplayMap(),
         );
       }
+      didAppendUserMessage = true;
       Session.saveMessages();
       var titlePrompt = displayParts.join('\n') || text || '';
       if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
@@ -351,6 +361,10 @@ window.ChatPage = (function () {
       WS.sendMessage(msgText);
     }
     File.clearPendingImages();
+
+    if (didAppendUserMessage) {
+      UI.enableAutoScroll();
+    }
   }
 
   function handleStop() {
@@ -418,6 +432,8 @@ window.ChatPage = (function () {
 
   /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。第二个参数 runningTurn 由服务端 session_switched 包带回。 */
   function onSessionSwitched(sessionId, runningTurn) {
+    UI.clearReasoningStream();
+    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
@@ -496,6 +512,8 @@ window.ChatPage = (function () {
    */
   function restoreFromRunningTurn(runningTurn) {
     if (!runningTurn || !runningTurn.isProcessing) {
+      // 无服务端 runningTurn 时清掉上一会话残留的流式思考 UI
+      UI.clearReasoningStream();
       // 无服务端 runningTurn 时保留 localStorage 占位（初始 render 已绘制），由 status:idle 清理
       isStreaming = false;
       userStopped = false;
@@ -577,8 +595,14 @@ window.ChatPage = (function () {
     if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
       window.ChatSessionStore.fetchSessions();
     }
-    // 先还原 runningTurn，避免 syncActiveSessionFromServer / notifyConnected 触发重绘清掉工具区
-    if (data) restoreFromRunningTurn(data.runningTurn || null);
+    // 仅当服务端活跃会话与当前选中一致时才还原 runningTurn，避免 A 的思考串到 B
+    var clientSid = Session.getActiveId ? Session.getActiveId() : 'default';
+    var serverSid = data && (data.activeSessionId || data.sessionId);
+    if (data && serverSid === clientSid) {
+      restoreFromRunningTurn(data.runningTurn || null);
+    } else if (data && data.runningTurn && data.runningTurn.isProcessing) {
+      restoreFromRunningTurn(null);
+    }
     if (data && data.mcpReady) {
       announceMcpReadyFromPayload(data.mcpReady);
     }
@@ -652,7 +676,7 @@ window.ChatPage = (function () {
   function scheduleRefreshAfterTurn() {
     setTimeout(function () {
       if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn(false);
+        refreshChatHistoryAfterTurn('force');
       }
     }, 50);
   }
@@ -674,6 +698,7 @@ window.ChatPage = (function () {
     Session.flushToolBatchLocal();
     UI.appendMessageEl(msg, Session.stripStatusTag);
     Session.saveMessages();
+    UI.enableAutoScroll();
     scheduleRefreshAfterTurn();
   }
 
@@ -813,7 +838,7 @@ window.ChatPage = (function () {
       if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
       // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
       if (!skipRefreshAfterUserStop) {
-        refreshChatHistoryAfterTurn(false);
+        refreshChatHistoryAfterTurn('force');
       }
     } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
@@ -939,7 +964,7 @@ window.ChatPage = (function () {
         isStreaming,
         WS.isProcessing(),
       );
-      renderChatHistoryWithFetch(shouldScroll !== false, function () {
+      renderChatHistoryWithFetch(shouldScroll, function () {
         Session.saveMessages();
         if (done) done();
       });
@@ -985,7 +1010,7 @@ window.ChatPage = (function () {
     }
     if (data && data.reason === 'turn_complete') {
       if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn(false);
+        refreshChatHistoryAfterTurn('force');
       }
       return;
     }
@@ -1168,6 +1193,9 @@ window.ChatPage = (function () {
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
+        window.DesktopPetBridge.attach(sessionPet);
+      }
       if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
         Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
       }
@@ -1372,5 +1400,10 @@ window.ChatPage = (function () {
     });
   }
 
-  return { render: render, onActivate: onActivate, onSessionSwitched: onSessionSwitched };
+  return {
+    render: render,
+    onActivate: onActivate,
+    onSessionSwitched: onSessionSwitched,
+    isWorkloadActive: isWorkloadActive,
+  };
 })();

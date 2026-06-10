@@ -15,20 +15,28 @@ import {
   attachChatWebSocket,
   broadcastTunnelReady,
   cleanupChatResources,
+  getActiveSessionId,
+  getProcessingSessionIds,
   purgeSessionRuntimeCaches,
 } from '../../web/chat-ws.js';
+import { registerBootstrapSessionHints } from '../../web/last-active-session.js';
 import { startTunnelReadyWatcher } from '../../web/tunnel-ready-watcher.js';
 import { createSessionsRouter, registerSessionCleanupHook } from '../../web/routes/sessions.js';
 
 registerSessionCleanupHook(purgeSessionRuntimeCaches);
+registerBootstrapSessionHints({
+  getRuntimeActiveId: getActiveSessionId,
+  getProcessingSessionIds,
+});
 import { createUploadRouter } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
 import { createSupervisorEventsRouter } from '../../web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
+import { createMemoryDreamRouter } from '../../web/routes/memory-dream.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
-import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
+import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
 import { c, warn } from '../utils/terminal-ui.js';
 import { resolveDefaultApiPort } from '../serve-port.js';
 
@@ -66,6 +74,7 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
+      { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter(llmAdapter) },
     ],
   });
@@ -108,7 +117,7 @@ export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<
     message: 'iceCoder 正在退出...',
     cleanups: [
       () => { cleanup(); },
-      () => { getBackgroundTaskManager().dispose(); },
+      () => { disposeAllBackgroundTaskManagers(); },
       () => ctx.mcpManager.shutdown(),
     ],
   });

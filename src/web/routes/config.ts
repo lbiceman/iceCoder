@@ -11,6 +11,7 @@ import {
   normalizeSupervisorMode,
   readMainConfigFile,
   resolveSkipPermissionChecks,
+  resolveSkipSandbox,
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
@@ -87,7 +88,7 @@ export async function resolveDefaultChatModelMeta(
   }
 }
 
-/** 默认聊天 provider 是否支持 vision（与 OpenAIAdapter 启发式一致）。 */
+/** 默认聊天 provider 是否支持 vision；未显式配置时默认为 `true`。 */
 export async function resolveDefaultSupportsVision(
   explicitConfigPath?: string,
 ): Promise<boolean> {
@@ -99,8 +100,7 @@ export async function resolveDefaultSupportsVision(
     const p = providers.find(pp => pp.isDefault) ?? providers[0];
     if (!p) return false;
     if (p.supportsVision !== undefined) return p.supportsVision;
-    const model = (p.modelName || '').toLowerCase();
-    return /gpt-4o|gpt-4-vision|gpt-4-turbo|claude-3|gemini.*pro.*vision|qwen.*vl|glm-4v|deepseek-vl|llava|minicpm-v|pixtral|vision|omni/i.test(model);
+    return true;
   } catch {
     return false;
   }
@@ -108,7 +108,11 @@ export async function resolveDefaultSupportsVision(
 
 /** 去掉旧版 providerName 并保证 id 存在 */
 function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }, index: number): ProviderConfig {
-  return normalizeProvider(provider, index);
+  const normalized = normalizeProvider(provider, index);
+  return {
+    ...normalized,
+    supportsVision: normalized.supportsVision ?? true,
+  };
 }
 
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null */
@@ -239,12 +243,14 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       let existingProviders: ProviderConfig[] = [];
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
+      let existingSkipSandbox: IceCoderConfigFile['skipSandbox'];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
         existingProviders = existing.providers || [];
         existingSupervisorMode = existing.supervisorMode;
         existingSkipPermissionChecks = existing.skipPermissionChecks;
+        existingSkipSandbox = existing.skipSandbox;
       } catch { /* 文件不存在，首次保存 */ }
 
       // 构建 id → 原始 apiKey 的映射
@@ -281,6 +287,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: normalizedProviders,
           supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
           skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
+          skipSandbox: resolveSkipSandbox(existingSkipSandbox),
         },
         null,
         2,
@@ -323,6 +330,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
+        skipSandbox: resolveSkipSandbox(config.skipSandbox),
         setupRequired: !isAppConfigReady(config),
       });
     } catch (err) {
@@ -331,6 +339,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: [],
           supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
+          skipSandbox: false,
           setupRequired: true,
         });
         return;

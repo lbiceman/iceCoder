@@ -112,7 +112,11 @@ export interface DreamTelemetry {
     | 'session_and_files'
     | 'new_files'
     | 'stale_index'
-    | 'over_cap';
+    | 'index_drift'
+    | 'over_cap'
+    | 'manual';
+  /** skipReason — 未执行 Dream 时记录跳过原因 */
+  skipReason?: string;
 }
 
 /** 仅条数淘汰（无 Dream LLM） */

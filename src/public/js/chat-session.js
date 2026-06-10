@@ -9,7 +9,21 @@ window.ChatSession = (function () {
   'use strict';
 
   var STORAGE_KEY_MESSAGES = 'ice-chat-messages';
-  var SESSION_ID = 'default';
+  var STORAGE_KEY_LAST_ACTIVE = 'ice-chat-last-active-session';
+
+  function readInitialSessionId() {
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
+      var fromStore = window.ChatSessionStore.getActiveSessionId();
+      if (fromStore) return fromStore;
+    }
+    try {
+      return localStorage.getItem(STORAGE_KEY_LAST_ACTIVE) || 'default';
+    } catch (_e) {
+      return 'default';
+    }
+  }
+
+  var SESSION_ID = readInitialSessionId();
 
   function getStorageKey() { return STORAGE_KEY_MESSAGES + ':' + SESSION_ID; }
 
@@ -284,6 +298,7 @@ window.ChatSession = (function () {
   }
 
   function initSession() {
+    SESSION_ID = readInitialSessionId();
     messages = loadLocalMessages();
     toolTraces = {};
     currentToolBatch = loadLiveToolBatch();

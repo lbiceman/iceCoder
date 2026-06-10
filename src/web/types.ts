@@ -24,6 +24,7 @@ export interface ProviderConfig {
     [key: string]: any;
   };
   isDefault?: boolean;
+  /** 是否支持图片/视觉输入；未设置时默认为 `true` */
   supportsVision?: boolean;
   /**
    * 上下文窗口上限（token）；默认 provider 此值参与计算生效窗口（见 `readEffectiveContextWindowTokens`）
@@ -45,6 +46,11 @@ export interface IceCoderConfigFile {
    * 字段缺失或为 `false` 时走默认权限规则。
    */
   skipPermissionChecks?: boolean;
+  /**
+   * 为 `true` 时跳过 HostGuard 沙箱检查（Shell 命令与写入预检），直接执行。
+   * 字段缺失或为 `false` 时走默认 HostGuard 规则。
+   */
+  skipSandbox?: boolean;
   /**
    * 写后读验收豁免目录前缀（相对工作区根），如 `.scratch`、`tmp/agent`。
    * 与工作区根目录 `.icecoder.json` 中同名字段合并。

@@ -152,6 +152,14 @@ window.MemoryPage = (function () {
   var memoryPageEpoch = 0;
   /** @type {AbortController | null} */
   var listFetchAbort = null;
+  var dreamPollTimer = null;
+
+  function stopDreamPoll() {
+    if (dreamPollTimer) {
+      clearInterval(dreamPollTimer);
+      dreamPollTimer = null;
+    }
+  }
   var finishBusyRaf1 = 0;
   var finishBusyRaf2 = 0;
   var finishBusyRaf3 = 0;
@@ -183,6 +191,7 @@ window.MemoryPage = (function () {
   }
 
   function teardownMemoryPageRuntime() {
+    stopDreamPoll();
     cancelFinishBusyRafs();
     abortListFetch();
     closePopover();
@@ -1041,7 +1050,141 @@ window.MemoryPage = (function () {
       '<p class="memory-sidebar-hint">' +
       '圆点表示一条记忆，<strong>共用标签</strong>的会用线连起来。左侧可点标签筛选画布；滚轮缩放、拖动画布平移；点圆打开详情，双击空白取消筛选。' +
       '</p>' +
+      '</div>' +
+      '<div class="memory-header-actions">' +
+      '<span class="memory-count" id="memory-total-count" aria-live="polite">载入中…</span>' +
+      '<span class="memory-health-capsule" id="memory-health-capsule" aria-live="polite">' +
+      '<span class="memory-health-dot"></span>' +
+      '<span class="memory-health-text">检查中…</span>' +
+      '</span>' +
+      '<button type="button" class="nav-link active memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
       '</div>';
+
+    var consolidateBtn = header.querySelector('#memory-consolidate-btn');
+
+    function startDreamPoll() {
+      stopDreamPoll();
+      dreamPollTimer = setInterval(function () {
+        fetchHealthCapsule(function (data) {
+          if (!data || !data.job || !data.job.running) {
+            stopDreamPoll();
+            if (containerEl) render(containerEl);
+          }
+        });
+      }, 5000);
+    }
+
+    if (consolidateBtn) {
+      consolidateBtn.addEventListener('click', function () {
+        if (!containerEl || consolidateBtn.disabled) return;
+        var btn = /** @type {HTMLButtonElement} */ (consolidateBtn);
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = '提交中...';
+
+        fetch('/api/memory/dream', { method: 'POST' })
+          .then(function (res) {
+            return res.json().then(function (body) {
+              return { ok: res.ok, status: res.status, body: body };
+            });
+          })
+          .then(function (out) {
+            btn.disabled = false;
+            btn.removeAttribute('aria-busy');
+            btn.textContent = '手动整合';
+
+            if (!out.ok || !out.body.success) {
+              var errMsg = (out.body && out.body.error) || '操作失败';
+              window.alert(errMsg);
+              return;
+            }
+            var summary = out.body.summary || '操作完成';
+            var detail =
+              '修改 ' + (out.body.filesModified || 0) +
+              ' · 删除 ' + (out.body.filesDeleted || 0) +
+              (out.body.ruleFixed ? ' · 索引修复 ' + (out.body.ruleEntryCount || 0) + ' 条' : '') +
+              (out.body.filesEvicted ? ' · 归档 ' + out.body.filesEvicted : '');
+            window.alert(summary + (detail.trim() ? '\n' + detail : ''));
+
+            if (out.body.background) {
+              fetchHealthCapsule();
+              startDreamPoll();
+            } else if (containerEl) {
+              render(containerEl);
+            }
+          })
+          .catch(function () {
+            btn.disabled = false;
+            btn.removeAttribute('aria-busy');
+            btn.textContent = '手动整合';
+            window.alert('请求失败，请稍后重试。');
+          });
+      });
+    }
+
+    /** 2.5: 拉取索引健康报告并更新胶囊 */
+    var healthCapsuleEl = /** @type {HTMLElement | null} */ (
+      header.querySelector('#memory-health-capsule')
+    );
+
+    function fetchHealthCapsule(done) {
+      if (!healthCapsuleEl) return;
+      fetch('/api/memory/dream', { method: 'GET' })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (typeof done === 'function') done(data);
+
+          if (!data.success || !data.health) {
+            healthCapsuleEl.setAttribute('data-status', 'warn');
+            var textEl = healthCapsuleEl.querySelector('.memory-health-text');
+            if (textEl) textEl.textContent = '无法获取';
+            return;
+          }
+
+          if (data.job && data.job.running) {
+            healthCapsuleEl.setAttribute('data-status', 'warn');
+            var busyEl = healthCapsuleEl.querySelector('.memory-health-text');
+            if (busyEl) busyEl.textContent = '后台整合中…';
+            if (consolidateBtn) {
+              consolidateBtn.textContent = '后台整合中…';
+              consolidateBtn.setAttribute('aria-busy', 'true');
+            }
+            return;
+          }
+
+          if (consolidateBtn) {
+            consolidateBtn.textContent = '手动整合';
+            consolidateBtn.removeAttribute('aria-busy');
+          }
+
+          var h = data.health;
+          var status = 'ok';
+          var label = '';
+          if (h.dead > 3 || h.orphans > 10) {
+            status = 'bad';
+            label = '死链 ' + h.dead + ' · 孤儿 ' + h.orphans;
+          } else if (h.dead > 0 || h.orphans > 5) {
+            status = 'warn';
+            label = '死链 ' + h.dead + ' · 孤儿 ' + h.orphans;
+          } else {
+            label = '健康 (' + h.indexed + ' 条索引, ' + h.onDisk + ' 磁盘)';
+          }
+          healthCapsuleEl.setAttribute('data-status', status);
+          var textEl = healthCapsuleEl.querySelector('.memory-health-text');
+          if (textEl) textEl.textContent = label;
+
+        })
+        .catch(function () {
+          if (healthCapsuleEl) {
+            healthCapsuleEl.setAttribute('data-status', 'warn');
+            var textEl = healthCapsuleEl.querySelector('.memory-health-text');
+            if (textEl) textEl.textContent = '离线';
+          }
+        });
+    }
+
+    // 初始拉取
+    fetchHealthCapsule();
 
     var main = document.createElement('main');
     main.className = 'memory-main';
@@ -1074,6 +1217,12 @@ window.MemoryPage = (function () {
         var loadingEl = graphArea.querySelector('.memory-loading');
         var scrollWrap = graphArea.querySelector('.memory-graph-scroll');
         var innerGraph = graphArea.querySelector('.memory-graph-inner');
+
+        var countEl = header.querySelector('#memory-total-count');
+        if (countEl) {
+          var totalN = typeof data.total === 'number' ? data.total : (data.files ? data.files.length : 0);
+          countEl.textContent = '共 ' + totalN + ' 条记忆';
+        }
 
         if (
           !loadingEl ||
@@ -1129,6 +1278,8 @@ window.MemoryPage = (function () {
         )
           return;
         loadingEl.classList.remove('hidden');
+        var countElErr = header.querySelector('#memory-total-count');
+        if (countElErr) countElErr.textContent = '—';
         loadingEl.innerHTML =
           '<span style="color:var(--danger)">载入失败。</span>';
       });

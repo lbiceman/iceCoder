@@ -16,6 +16,9 @@ import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../../
 let tempDir: string;
 let userMemoryTempDir: string;
 
+/** 满足 MIN_EXTRACTION_CONFIDENCE (0.6) 的测试用置信度 */
+const TEST_CONFIDENCE = 0.75;
+
 function createMockLLM(response: string, cacheReadTokens = 0): LLMAdapterInterface {
   return {
     chat: vi.fn(async () => ({
@@ -63,6 +66,7 @@ describe('LLMMemoryExtractor', () => {
           name: '用户角色',
           description: '用户是前端开发者',
           content: '用户是一名前端开发者，偏好 React。',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -123,7 +127,7 @@ describe('LLMMemoryExtractor', () => {
   describe('extract — 响应解析', () => {
     it('过滤无效的记忆类型', async () => {
       const llmResponse = JSON.stringify([
-        { memoryCategory: 'stable_preference', filename: 'valid.md', type: 'user', name: 'v', description: 'd', content: 'c' },
+        { memoryCategory: 'stable_preference', filename: 'valid.md', type: 'user', name: 'v', description: 'd', content: 'c', confidence: TEST_CONFIDENCE },
         { filename: 'invalid.md', type: 'unknown_type', name: 'i', description: 'd', content: 'c' },
       ]);
 
@@ -166,6 +170,7 @@ describe('LLMMemoryExtractor', () => {
         name: `记忆${i}`,
         description: `描述${i}`,
         content: `内容${i}`,
+        confidence: TEST_CONFIDENCE,
       }));
 
       const mockLLM = createMockLLM(JSON.stringify(memories));
@@ -181,7 +186,7 @@ describe('LLMMemoryExtractor', () => {
     });
 
     it('解析 markdown 代码块包裹的 JSON', async () => {
-      const llmResponse = '```json\n[{"memoryCategory":"stable_preference","filename":"note.md","type":"feedback","name":"n","description":"d","content":"c"}]\n```';
+      const llmResponse = '```json\n[{"memoryCategory":"stable_preference","filename":"note.md","type":"feedback","name":"n","description":"d","content":"c","confidence":0.75}]\n```';
 
       const mockLLM = createMockLLM(llmResponse);
       const extractor = createLLMMemoryExtractor();
@@ -337,6 +342,49 @@ describe('LLMMemoryExtractor', () => {
 
       expect(result.writtenPaths).toEqual([]);
     });
+
+    it('confidence 缺失或低于 0.6 时不写入', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'missing.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'low.md',
+          type: 'user',
+          name: 'n2',
+          description: 'd2',
+          content: 'c2',
+          confidence: 0.55,
+        },
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'ok.md',
+          type: 'user',
+          name: 'n3',
+          description: 'd3',
+          content: 'c3',
+          confidence: TEST_CONFIDENCE,
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths.length).toBe(1);
+      expect(path.basename(result.writtenPaths[0])).toBe('ok.md');
+    });
   });
 
   describe('extract — 文件名安全', () => {
@@ -349,6 +397,7 @@ describe('LLMMemoryExtractor', () => {
           name: 'test',
           description: 'test',
           content: 'test',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -377,6 +426,7 @@ describe('LLMMemoryExtractor', () => {
           name: 'hack',
           description: 'hack',
           content: 'hack',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -389,7 +439,7 @@ describe('LLMMemoryExtractor', () => {
         mockLLM,
       );
 
-      // 路径遍历应该被阻止（文件名中的 .. 被清洗为 __）
+      // 路径遍历应该被阻止
       // 不应该写到 tempDir 之外
       for (const p of result.writtenPaths) {
         expect(p.startsWith(tempDir)).toBe(true);
@@ -526,6 +576,7 @@ type: user
         name: `n${i}`,
         description: `d${i}`,
         content: `c${i}`,
+        confidence: TEST_CONFIDENCE,
       }));
 
       const mockLLM = createMockLLM(JSON.stringify(memories));
@@ -550,6 +601,7 @@ type: user
           name: 'API 配置',
           description: 'API 密钥信息',
           content: '用户的 AWS Key 是 AKIAIOSFODNN7EXAMPLE，用于访问 S3。',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -580,6 +632,7 @@ type: user
           name: 'GitHub',
           description: 'GitHub 访问信息',
           content: `GitHub token: ${fakePat}`,
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -606,6 +659,7 @@ type: user
           name: '安全内容',
           description: '无敏感信息',
           content: '用户偏好使用 TypeScript 和 React。',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
