@@ -27,11 +27,24 @@ function hasChineseExplicitRememberRequest(message: string): boolean {
     let idx = 0;
     while ((idx = lower.indexOf(word, idx)) !== -1) {
       const before = lower.slice(Math.max(0, idx - 24), idx);
+      const after = lower.slice(idx + word.length, idx + word.length + 48);
+
       if (/(?:不要|别用|别|不用|禁止|never|don't|无需|勿|不应).{0,12}$/.test(before)) {
         idx += word.length;
         continue;
       }
-      if (/[「『"'']$/.test(before) || /(?:说|写|提|含|出现|包含)[「『"'']?$/.test(before.slice(-8))) {
+
+      // 元说明：说「记住」、含「记住」—— 但「记住，Git commit…」是直接引语，应放行
+      if (/[「『"'']$/.test(before)) {
+        if (/^[,，]/.test(after) && /[^\s，,「」"'']{2,}/.test(after)) {
+          return true;
+        }
+        if (/^[」』"']/.test(after) || /^[,，]?\s*[」』"']/.test(after)) {
+          idx += word.length;
+          continue;
+        }
+      }
+      if (/(?:说|写|提|含|出现|包含)[「『"'']?$/.test(before.slice(-8))) {
         idx += word.length;
         continue;
       }
@@ -66,6 +79,21 @@ function hasEnglishExplicitRememberRequest(message: string): boolean {
   return false;
 }
 
+/**
+ * E6 写盘授权：从候选用户消息中选取含 remember 信号的一条（优先本轮 trigger）。
+ */
+export function resolveMessageForRememberWriteGuard(candidates: readonly string[]): string {
+  for (const msg of candidates) {
+    const t = msg?.trim();
+    if (t && hasExplicitRememberWriteRequest(t)) return t;
+  }
+  for (const msg of candidates) {
+    const t = msg?.trim();
+    if (t) return t;
+  }
+  return '';
+}
+
 export type AgentMemoryWriteGuardFn = () => string | null;
 
 let agentMemoryWriteGuard: AgentMemoryWriteGuardFn | null = null;
@@ -80,6 +108,106 @@ function memoryRoots(): string[] {
     path.resolve(process.env.ICE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR),
     path.resolve(resolveUserMemoryDir()),
   ];
+}
+
+const USER_MEMORY_PATH_ALIASES = /^(?:data\/)?user-memory(?:[/\\]|$)/i;
+const PROJECT_MEMORY_PATH_ALIASES = /^(?:data\/)?memory-files(?:[/\\]|$)/i;
+
+/**
+ * 将 Agent 工具路径规范到 ICE 配置的记忆目录。
+ * 例如 `user-memory/foo.md` → `{dataDir}/user-memory/foo.md`（而非仓库根 `user-memory/`）。
+ */
+export function canonicalizeMemoryToolPath(rawPath: string, workDir: string): string {
+  const abs = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(workDir, rawPath);
+  if (resolveMemoryRootForPath(abs)) return abs;
+
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^\.\/+/, '');
+
+  if (USER_MEMORY_PATH_ALIASES.test(normalized)) {
+    const rest = normalized.replace(/^data\/user-memory\/?|^user-memory\/?/i, '');
+    const root = path.resolve(resolveUserMemoryDir());
+    return rest ? path.join(root, ...rest.split('/').filter(Boolean)) : root;
+  }
+
+  if (PROJECT_MEMORY_PATH_ALIASES.test(normalized)) {
+    const rest = normalized.replace(/^data\/memory-files\/?|^memory-files\/?/i, '');
+    const root = path.resolve(process.env.ICE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR);
+    return rest ? path.join(root, ...rest.split('/').filter(Boolean)) : root;
+  }
+
+  return abs;
+}
+
+/** 工具参数路径是否指向长期记忆（含别名路径） */
+export function isMemoryToolPath(rawPath: string, workDir: string): boolean {
+  return resolveMemoryRootForPath(canonicalizeMemoryToolPath(rawPath, workDir)) !== null;
+}
+
+/** frontmatter 中 type: user */
+export function isUserTypeMemoryMarkdown(content: string): boolean {
+  return parseFrontmatterField(content, 'type').toLowerCase() === 'user';
+}
+
+/**
+ * type:user 记忆必须落在 user-memory 目录；若 Agent 误写 memory-files，自动改到 user-memory。
+ */
+export function enforceUserTypeMemoryLocation(absolutePath: string, markdownContent?: string): string {
+  if (!markdownContent || !isUserTypeMemoryMarkdown(markdownContent)) {
+    return absolutePath;
+  }
+
+  const userRoot = path.resolve(resolveUserMemoryDir());
+  const projectRoot = path.resolve(process.env.ICE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR);
+  const normalized = path.resolve(absolutePath);
+
+  if (isWithinMemoryDir(normalized, userRoot)) return normalized;
+  if (isWithinMemoryDir(normalized, projectRoot)) {
+    const redirected = path.join(userRoot, path.basename(normalized));
+    if (redirected !== normalized) {
+      console.warn(
+        `[memory-write] type:user must live under user-memory; redirecting ${path.basename(normalized)}`,
+      );
+    }
+    return redirected;
+  }
+  return normalized;
+}
+
+/** 记忆写盘目标路径：别名归一化 + type:user 目录强制 */
+export function resolveMemoryWritePath(
+  rawPath: string,
+  workDir: string,
+  markdownContent?: string,
+): string {
+  const canonical = canonicalizeMemoryToolPath(rawPath, workDir);
+  return enforceUserTypeMemoryLocation(canonical, markdownContent);
+}
+
+/** shell 命令是否试图写长期记忆目录（含 seed 脚本等绕行） */
+export function shellCommandTargetsMemoryWrite(command: string): boolean {
+  const cmd = command.trim();
+  if (!cmd) return false;
+  if (/\b(?:seed_memory|verify_memory_seed)\b/i.test(cmd)) return true;
+  if (/(?:^|[\s"'`]|\\|\/)((?:data[\\/])?(?:memory-files|user-memory)(?:[\\/]|\.md))/i.test(cmd)) {
+    if (/(?:>|>>|writefilesync|writefile|echo\s+.+\s+>|cp\s+|mv\s+|tee\s+|node\s+)/i.test(cmd)) return true;
+    if (/\bnode\s+[^\s]*(?:seed|memory)[^\s]*/i.test(cmd)) return true;
+  }
+  return false;
+}
+
+/**
+ * run_command 写记忆目录前的硬门控（REQ-E6 扩展，防脚本绕行 file-tools）。
+ */
+export function assertAgentMemoryShellCommandAllowed(command: string): string | null {
+  if (!shellCommandTargetsMemoryWrite(command)) return null;
+  if (!agentMemoryWriteGuard) {
+    return 'Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
+  }
+  const err = agentMemoryWriteGuard();
+  if (err) {
+    console.warn(`[memory-write] Blocked shell write to memory: ${err}`);
+  }
+  return err;
 }
 
 /** 绝对路径若落在记忆目录内，返回该根目录；否则 null */

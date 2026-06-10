@@ -548,13 +548,10 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
           continue;
         }
 
-        // 路径安全验证
-        // user 类型 + 高置信度（用户明确声明）→ 用户级目录（跨项目共享）
-        // user 类型 + 低置信度（LLM 推断）→ 项目级目录（候选，等 Dream 提升）
-        // 其他类型 → 项目级目录
+        // user 类型 → 用户级目录（跨项目共享）
         const memConfidence = memory.confidence ?? DEFAULT_CONFIDENCE_FALLBACK;
         const isExplicitUser = memory.type === 'user' && memConfidence >= USER_LEVEL_CONFIDENCE_THRESHOLD;
-        const targetDir = isExplicitUser ? userMemoryDir : memoryDir;
+        const targetDir = memory.type === 'user' ? userMemoryDir : memoryDir;
         let filePath: string;
         try {
           filePath = validatePath(safeFilename, targetDir);

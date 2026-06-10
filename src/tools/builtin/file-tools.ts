@@ -26,6 +26,8 @@ import {
   afterMemoryMarkdownWritten,
   resolveMemoryRootForPath,
   assertAgentMemoryWriteAllowed,
+  canonicalizeMemoryToolPath,
+  resolveMemoryWritePath,
 } from '../../memory/file-memory/memory-write-pipeline.js';
 
 async function applyMemoryWriteGuard(filePath: string): Promise<string | null> {
@@ -42,6 +44,23 @@ async function postProcessMemoryFileWrite(filePath: string, content: string): Pr
  */
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
+}
+
+/** 文件工具路径：记忆别名归一化后 resolve */
+function resolveToolFilePath(filePath: string, workDir: string): string {
+  return canonicalizeMemoryToolPath(filePath, workDir);
+}
+
+/** type:user 从 memory-files 迁到 user-memory 后删除旧文件 */
+async function removeStaleMemoryFileIfMoved(fromPath: string, toPath: string): Promise<void> {
+  if (path.resolve(fromPath) === path.resolve(toPath)) return;
+  if (!resolveMemoryRootForPath(fromPath)) return;
+  try {
+    await fs.unlink(fromPath);
+    console.warn(`[memory-write] Removed misplaced memory file: ${path.basename(fromPath)}`);
+  } catch {
+    /* already gone */
+  }
 }
 
 /**
@@ -156,10 +175,17 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
             error: `write_file payload too large (${content.length} chars, limit ${blockChars}). Use patch_file (small unified diff hunks), edit_file, append_file in chunks, or split into multiple files — do not retry the same full payload.`,
           };
         }
-        const filePath = safePath(rawPath, workDir);
+        const sourcePath = resolveToolFilePath(rawPath, workDir);
+        const filePath = resolveMemoryWritePath(rawPath, workDir, content);
         const guardErr = await applyMemoryWriteGuard(filePath);
         if (guardErr) return { success: false, output: '', error: guardErr };
-        const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
+        const oldContent = await (async () => {
+          try {
+            return await fs.readFile(filePath, 'utf-8');
+          } catch {
+            return readFileTextOrEmpty(() => fs.readFile(sourcePath, 'utf-8'));
+          }
+        })();
         if (oldContent.length > 0) {
           const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
           if (readErr) return { success: false, output: '', error: readErr };
@@ -171,6 +197,7 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
           writeContent = sanitizeMemoryContentBeforeWrite(content).content;
         }
         await fs.writeFile(filePath, writeContent, (args.encoding || 'utf-8') as BufferEncoding);
+        await removeStaleMemoryFileIfMoved(sourcePath, filePath);
         if (resolveMemoryRootForPath(filePath)) {
           await afterMemoryMarkdownWritten(filePath, writeContent);
         }
@@ -208,27 +235,29 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       },
       handler: async (args) => {
         const rawPath = args.path;
-        const filePath = safePath(rawPath, workDir);
-        const guardErr = await applyMemoryWriteGuard(filePath);
-        if (guardErr) return { success: false, output: '', error: guardErr };
+        const sourcePath = resolveToolFilePath(rawPath, workDir);
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) {
           try {
-            await fs.access(filePath);
+            await fs.access(sourcePath);
             return { success: false, output: '', error: readErr };
           } catch {
             /* new file via append — no prior read required */
           }
         }
+        const oldContent = await readFileTextOrEmpty(() => fs.readFile(sourcePath, 'utf-8'));
+        const filePath = resolveMemoryWritePath(rawPath, workDir, oldContent || undefined);
+        const guardErr = await applyMemoryWriteGuard(filePath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
         const appendContent = String(args.content ?? '');
         let safeAppend = appendContent;
         if (resolveMemoryRootForPath(filePath)) {
           safeAppend = sanitizeMemoryContentBeforeWrite(appendContent).content;
         }
-        const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.appendFile(filePath, safeAppend, 'utf-8');
         const newContent = oldContent + safeAppend;
+        await removeStaleMemoryFileIfMoved(sourcePath, filePath);
         await postProcessMemoryFileWrite(filePath, newContent);
         const diff = buildFileChangeDiff(oldContent, newContent, args.path);
         return {
@@ -261,10 +290,13 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) return { success: false, output: '', error: readErr };
-        const filePath = safePath(rawPath, workDir);
-        const guardErr = await applyMemoryWriteGuard(filePath);
-        if (guardErr) return { success: false, output: '', error: guardErr };
-        const content = await fs.readFile(filePath, 'utf-8');
+        const sourcePath = resolveToolFilePath(rawPath, workDir);
+        let content: string;
+        try {
+          content = await fs.readFile(sourcePath, 'utf-8');
+        } catch {
+          return { success: false, output: '', error: `File not found: ${rawPath}` };
+        }
 
         let newContent: string;
         let fuzzyMatch = false;
@@ -290,6 +322,10 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
           fuzzyMatch = result.fuzzy;
         }
 
+        const filePath = resolveMemoryWritePath(rawPath, workDir, newContent);
+        const guardErr = await applyMemoryWriteGuard(filePath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
+
         const changed = content !== newContent;
         if (changed) {
           await getEditHistory().saveSnapshot(filePath, 'edit_file');
@@ -298,7 +334,9 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         if (resolveMemoryRootForPath(filePath)) {
           writeContent = sanitizeMemoryContentBeforeWrite(newContent).content;
         }
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, writeContent, 'utf-8');
+        await removeStaleMemoryFileIfMoved(sourcePath, filePath);
         if (changed) {
           await postProcessMemoryFileWrite(filePath, writeContent);
         }

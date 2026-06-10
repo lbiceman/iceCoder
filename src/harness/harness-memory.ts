@@ -35,7 +35,6 @@ import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { scheduleAutoDream } from '../memory/file-memory/memory-dream-runner.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/memory-telemetry.js';
-import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
@@ -54,6 +53,9 @@ import {
 import {
   registerAgentMemoryWriteGuard,
   createRememberSignalWriteGuard,
+  isMemoryToolPath,
+  shellCommandTargetsMemoryWrite,
+  resolveMessageForRememberWriteGuard,
 } from '../memory/file-memory/memory-write-pipeline.js';
 
 /** 话题切换 Jaccard 阈值 */
@@ -237,28 +239,46 @@ function extractToolMemoryPath(args: Record<string, unknown> | undefined): strin
   return undefined;
 }
 
-function isMemoryPath(filePath: string, projectMemoryDir: string, userMemoryDir: string): boolean {
-  return isWithinMemoryDir(filePath, projectMemoryDir) || isWithinMemoryDir(filePath, userMemoryDir);
+function toolMemoryWriteAttemptSucceeded(
+  messages: UnifiedMessage[],
+  toolCallId: string,
+): boolean {
+  const toolResult = messages.find(m => m.role === 'tool' && m.toolCallId === toolCallId);
+  if (!toolResult) return false;
+  const content = typeof toolResult.content === 'string' ? toolResult.content : '';
+  if (!content.trim()) return false;
+  if (/工具执行错误|Tool .* failed|policy_block|\[HostGuard\s\/\sBlocked\]/i.test(content)) {
+    return false;
+  }
+  if (/\b(?:success|成功):\s*false/i.test(content)) return false;
+  return true;
 }
 
 function hasMemoryWritesSince(
   messages: UnifiedMessage[],
   sinceIndex: number,
-  projectMemoryDir: string,
-  userMemoryDir: string,
+  workspaceRoot: string,
 ): boolean {
   for (let i = sinceIndex; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'assistant' || !msg.toolCalls) continue;
     for (const tc of msg.toolCalls) {
-      if (
-        (tc.name === 'write_file' || tc.name === 'edit_file' ||
-         tc.name === 'append_file') &&
-        tc.arguments
-      ) {
-        const filePath = extractToolMemoryPath(tc.arguments as Record<string, unknown>);
-        if (filePath && isMemoryPath(filePath, projectMemoryDir, userMemoryDir)) {
-          return true;
+      if (tc.arguments) {
+        const args = tc.arguments as Record<string, unknown>;
+        if (
+          tc.name === 'write_file' || tc.name === 'edit_file' ||
+          tc.name === 'append_file'
+        ) {
+          const filePath = extractToolMemoryPath(args);
+          if (filePath && isMemoryToolPath(filePath, workspaceRoot)) {
+            if (toolMemoryWriteAttemptSucceeded(messages, tc.id)) return true;
+          }
+        }
+        if (tc.name === 'run_command') {
+          const command = String(args.command ?? args.cmd ?? '');
+          if (command && shellCommandTargetsMemoryWrite(command)) {
+            if (toolMemoryWriteAttemptSucceeded(messages, tc.id)) return true;
+          }
         }
       }
     }
@@ -507,6 +527,8 @@ export class HarnessMemoryIntegration {
   // ── 运行时状态 ──
   private llmAdapter: LLMAdapterInterface | null = null;
   private currentUserMessage = '';
+  /** 本轮用户原始消息（非 sessionGoalAnchor，供 E6 / Extract 门控） */
+  private triggerUserMessage = '';
   /** 已展示过的记忆文件路径（跨轮次去重） */
   private surfacedMemoryPaths = new Set<string>();
   /** 上次记忆注入时的用户消息（用于话题切换检测） */
@@ -584,7 +606,7 @@ export class HarnessMemoryIntegration {
     this.llmExtractor = new LLMMemoryExtractor({ enablePromptCache: true });
 
     registerAgentMemoryWriteGuard(
-      createRememberSignalWriteGuard(() => this.currentUserMessage),
+      createRememberSignalWriteGuard(() => this.messageForRememberWriteGuard()),
     );
 
     // 并发控制：sequential 包装确保提取不重叠
@@ -600,6 +622,21 @@ export class HarnessMemoryIntegration {
     );
   }
 
+  private messageForRememberWriteGuard(): string {
+    return resolveMessageForRememberWriteGuard([
+      this.triggerUserMessage,
+      getLatestUserMessage(this.currentMessages),
+      this.currentUserMessage,
+    ]);
+  }
+
+  /** Extract / feedback 门控用：优先本轮 trigger，避免 sessionGoalAnchor 覆盖「记住」 */
+  private activeUserMessageForGate(): string {
+    return this.triggerUserMessage.trim()
+      || getLatestUserMessage(this.currentMessages)
+      || this.currentUserMessage;
+  }
+
   get enabled(): boolean {
     return !!(this.memoryDir || this.fileMemoryManager);
   }
@@ -608,9 +645,20 @@ export class HarnessMemoryIntegration {
 
   /**
    * 循环开始时调用。保存用户消息，启动异步预取。
+   * @param sessionGoalAnchor 会话级 goal（召回/任务态用，可能来自历史 Turn）
+   * @param llmAdapter sideQuery 用 LLM
+   * @param options.triggerUserMessage 本轮用户原始输入（E6 remember 门控必须用它）
    */
-  onLoopStart(userMessage: string, llmAdapter: LLMAdapterInterface | null): void {
-    this.currentUserMessage = userMessage;
+  onLoopStart(
+    sessionGoalAnchor: string,
+    llmAdapter: LLMAdapterInterface | null,
+    options?: { triggerUserMessage?: string; messages?: UnifiedMessage[] },
+  ): void {
+    this.currentUserMessage = sessionGoalAnchor;
+    this.triggerUserMessage = options?.triggerUserMessage?.trim() || sessionGoalAnchor;
+    if (options?.messages) {
+      this.currentMessages = options.messages;
+    }
     this.llmAdapter = llmAdapter;
     this.injectedForCurrentMessage = false;
     this.lastCoarsePreLlmMessage = '';
@@ -636,11 +684,11 @@ export class HarnessMemoryIntegration {
     }
 
     // ── 用户反馈检测 ──
-    this.detectFeedback(userMessage);
+    this.detectFeedback(this.triggerUserMessage);
 
     // 异步预取（fire-and-forget，记忆库为空时跳过）
     if (this.fileMemoryManager && this.hasMemories !== false) {
-      this.fileMemoryManager.prefetchMemories(userMessage).catch((err) => {
+      this.fileMemoryManager.prefetchMemories(this.triggerUserMessage).catch((err) => {
         console.debug('[harness-memory] prefetch failed:', err instanceof Error ? err.message : err);
       });
     }
@@ -1049,8 +1097,7 @@ ${candidateList}`;
     if (hasMemoryWritesSince(
       messages,
       this.lastExtractionMessageIndex,
-      this.memoryDir,
-      resolveUserMemoryDir(),
+      this.workspaceRoot,
     )) {
       console.debug('[harness-memory] 跳过提取 — 主代理已直接写入记忆文件');
       this.lastExtractionMessageIndex = messages.length;
@@ -1420,7 +1467,8 @@ ${candidateList}`;
   }
 
   private shouldExtract(turnCount: number, messages: UnifiedMessage[]): boolean {
-    if (!this.llmAdapter || !this.currentUserMessage) return false;
+    const gateUserMessage = this.activeUserMessageForGate();
+    if (!this.llmAdapter || !gateUserMessage) return false;
     if (!this.memoryDirExists) return false;
 
     const cfg = getExtractionConfig();
@@ -1429,7 +1477,7 @@ ${candidateList}`;
 
     const gate = evaluateMemoryExtractionGate({
       turnCount,
-      currentUserMessage: this.currentUserMessage,
+      currentUserMessage: gateUserMessage,
       totalInputTokens: this.loopEndTotalInputTokens,
       sessionHasToolCalls: this.sessionHasToolCalls(messages),
       toolCallsSinceLastExtract: toolCallsSince,

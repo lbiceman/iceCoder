@@ -497,6 +497,7 @@ export class Harness {
         stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
         countTokens: async (text) => estimateStringTokens(text),
       },
+      { triggerUserMessage: userMessage, messages: [...messages] },
     );
 
     const state: HarnessRunState = {
