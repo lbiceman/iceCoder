@@ -5,6 +5,7 @@ import os from 'node:os';
 import {
   assertAgentMemoryWriteAllowed,
   createRememberSignalWriteGuard,
+  hasExplicitRememberWriteRequest,
   registerAgentMemoryWriteGuard,
   resolveMemoryRootForPath,
 } from '../../../src/memory/file-memory/memory-write-pipeline.js';
@@ -33,6 +34,26 @@ describe('memory-write-pipeline', () => {
     registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '记住，commit 用中文'));
     const target = path.join(memoryRoot, 'user_commit_style.md');
     expect(assertAgentMemoryWriteAllowed(target)).toBeNull();
+  });
+
+  it('验收提示词中的否定/元说明「记住」不误放行', () => {
+    expect(hasExplicitRememberWriteRequest('本轮用户侧不使用记忆指令（验收说明，非记忆请求）')).toBe(false);
+    expect(hasExplicitRememberWriteRequest('本轮用户侧不使用 remember 类指令（验收说明，非记忆请求）')).toBe(false);
+    expect(hasExplicitRememberWriteRequest('帮我装 mysql，不要写长期记忆')).toBe(false);
+    expect(hasExplicitRememberWriteRequest(
+      'Long-term memory writes are only allowed when the user explicitly asks you to remember something',
+    )).toBe(false);
+  });
+
+  it('英文 remember 祈使句仍放行', () => {
+    expect(hasExplicitRememberWriteRequest('remember, commit messages must be in Chinese')).toBe(true);
+    expect(hasExplicitRememberWriteRequest('Please remember this workflow for Smart Mode blocks')).toBe(true);
+  });
+
+  it('「不要」单独出现不授权写盘', () => {
+    registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '不要 write_file 到 memory-files'));
+    const memoryRoot = path.resolve(process.env.ICE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR);
+    expect(assertAgentMemoryWriteAllowed(path.join(memoryRoot, 'x.md'))).toMatch(/remember/i);
   });
 });
 

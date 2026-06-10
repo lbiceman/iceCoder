@@ -3,16 +3,67 @@
  */
 
 import path from 'node:path';
-import { DEFAULT_MEMORY_DIR, resolveUserMemoryDir, EXTRACTION_SIGNAL_WORDS } from './memory-config.js';
+import { DEFAULT_MEMORY_DIR, resolveUserMemoryDir } from './memory-config.js';
 import { isWithinMemoryDir } from './memory-security.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
 import { upsertIndexRow, ensureMemoryIndexBootstrapped } from './memory-index-maintainer.js';
 import { getScannerCache } from './memory-scanner-cache.js';
 import type { MemoryHeader } from './types.js';
 
-function hasRememberSignal(message: string): boolean {
+/**
+ * 用户是否在本轮明确要求写入长期记忆（REQ-E6）。
+ * 不用 EXTRACTION_SIGNAL_WORDS 全集——其中的「不要」「偏好」「不对」等会误放行。
+ */
+export function hasExplicitRememberWriteRequest(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  if (hasChineseExplicitRememberRequest(trimmed)) return true;
+  return hasEnglishExplicitRememberRequest(trimmed);
+}
+
+function hasChineseExplicitRememberRequest(message: string): boolean {
   const lower = message.toLowerCase();
-  return EXTRACTION_SIGNAL_WORDS.some(w => lower.includes(w.toLowerCase()));
+  for (const word of ['记住', '记下'] as const) {
+    let idx = 0;
+    while ((idx = lower.indexOf(word, idx)) !== -1) {
+      const before = lower.slice(Math.max(0, idx - 24), idx);
+      if (/(?:不要|别用|别|不用|禁止|never|don't|无需|勿|不应).{0,12}$/.test(before)) {
+        idx += word.length;
+        continue;
+      }
+      if (/[「『"'']$/.test(before) || /(?:说|写|提|含|出现|包含)[「『"'']?$/.test(before.slice(-8))) {
+        idx += word.length;
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 英文 remember 须为祈使/请求语气，排除「remember 类指令」等验收/说明语境 */
+function hasEnglishExplicitRememberRequest(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (/\b(?:save this|keep in mind)\b/.test(lower)) return true;
+
+  const rememberRe = /\bremember\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = rememberRe.exec(message)) !== null) {
+    const before = lower.slice(Math.max(0, match.index - 28), match.index);
+    const after = lower.slice(match.index + match[0].length, match.index + match[0].length + 28);
+
+    if (/(?:don't|do not|never|without|not to|不使用|勿|不应|非|无)\s*$/.test(before)) continue;
+    if (/(?:to ask you|when the user|explicitly asks|e\.g\.|for example|allowed when)\s*$/.test(before)) continue;
+
+    // 元说明：remember 类/指令/信号、remember something (模板句)
+    if (/^\s*(?:类|指令|信号|keyword|command|writes?|类指令|信号词)\b/.test(after)) continue;
+    if (/^\s*something\b/.test(after)) continue;
+
+    // 明确请求：remember, / remember this / remember to / remember my …
+    if (/^\s*[,，]/.test(after)) return true;
+    if (/^\s+(?:this|that|it|to|my|the|please|commit|git|what|how|when|if|all|always)\b/.test(after)) return true;
+  }
+  return false;
 }
 
 export type AgentMemoryWriteGuardFn = () => string | null;
@@ -46,8 +97,14 @@ export function resolveMemoryRootForPath(absolutePath: string): string | null {
  */
 export function assertAgentMemoryWriteAllowed(absolutePath: string): string | null {
   if (!resolveMemoryRootForPath(absolutePath)) return null;
-  if (!agentMemoryWriteGuard) return null;
-  return agentMemoryWriteGuard();
+  if (!agentMemoryWriteGuard) {
+    return 'Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
+  }
+  const err = agentMemoryWriteGuard();
+  if (err) {
+    console.warn(`[memory-write] Blocked write to ${path.basename(absolutePath)}: ${err}`);
+  }
+  return err;
 }
 
 /** 写盘前秘密扫描（与 Extract 一致） */
@@ -94,7 +151,7 @@ export function createRememberSignalWriteGuard(getUserMessage: () => string): Ag
     if (!msg) {
       return 'Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
     }
-    if (hasRememberSignal(msg)) return null;
+    if (hasExplicitRememberWriteRequest(msg)) return null;
     return 'Long-term memory writes are only allowed when the user explicitly asks you to remember something (e.g. 记住 / remember). Use session-notes for task progress.';
   };
 }
