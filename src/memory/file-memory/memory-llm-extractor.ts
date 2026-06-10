@@ -21,6 +21,7 @@ import {
   DEFAULT_LLM_EXTRACTION_CONFIG,
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
+  MIN_EXTRACTION_CONFIDENCE,
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
 import { evictIfNeeded } from './memory-eviction.js';
@@ -92,6 +93,16 @@ export function isAllowedMemoryCategory(cat: unknown): boolean {
 function shouldRejectFilenameForExtraction(filename: string): boolean {
   const lower = filename.toLowerCase();
   return REJECT_FILENAME_SUBSTRINGS.some(s => lower.includes(s.toLowerCase()));
+}
+
+function parseMemoryConfidence(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  return Math.max(0, Math.min(1, raw));
+}
+
+export function meetsExtractionConfidenceThreshold(confidence: unknown): boolean {
+  const parsed = parseMemoryConfidence(confidence);
+  return parsed !== null && parsed >= MIN_EXTRACTION_CONFIDENCE;
 }
 
 /**
@@ -166,7 +177,11 @@ const EXTRACTION_CORE_PROMPT = `Memory extraction subagent. Extract only **durab
 - \`type\`: \`user\` | \`feedback\` | \`project\` | \`reference\` — align with the taxonomy block (profile→user, repo conventions→project, corrections→feedback).
 - **Tags**: e.g. \`dimension:tech_stack\`, \`dimension:git\`, \`dimension:feedback_correction\`.
 
-**Never**: model identity / knowledge cutoff meta-chat; one-off task blow-by-blow; pure chit-chat.
+**Never**: model identity / knowledge cutoff meta-chat; one-off task blow-by-blow; pure chit-chat; facts that only apply to **this session** or **this one task**.
+
+**Reusability** (required): extract only facts likely useful across **≥3 future sessions**. Session-local context, one-off implementation details, or generic common knowledge → **omit** (do not emit with a low score).
+
+**Confidence calibration** (required on every item): ≥0.75 = user stated explicitly or pattern **repeated**; 0.6–0.74 = strong inference only; **<0.6 → omit item entirely**. Missing \`confidence\` is rejected at save time.
 
 **contradicts**: existing **filename** only when the user **explicitly** says prior memory is wrong.
 
@@ -389,6 +404,7 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
       const cat = String(m.memoryCategory).trim().toLowerCase();
       if (!isTypeCategoryCoherent(String(m.type), cat)) return false;
       if (shouldRejectFilenameForExtraction(String(m.filename))) return false;
+      if (!meetsExtractionConfidenceThreshold(m.confidence)) return false;
       return true;
     });
 
@@ -488,13 +504,12 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
 
         // v4: tags 重叠度硬去重 + Phase 2.1 描述相似度去重
         if (!isUpdate) {
-          // 2.1: 描述相似度去重（环境变量 ICE_EXTRACT_DEDUP 控制：off | shadow | merge）
-          const dedupMode = (process.env.ICE_EXTRACT_DEDUP || 'shadow') as 'off' | 'shadow' | 'merge';
+          // 2.1: 描述相似度去重（merge 模式：相似则合并到已有文件）
           const dedupDecision = checkExtractDedupSync(
             existingByDir.get(targetDir) || [],
             { filename: safeFilename, name: memory.name, description: memory.description, type: memory.type, tags: memory.tags },
             0.85,
-            dedupMode,
+            'merge',
           );
           if (dedupDecision.wouldMergeInfo) {
             console.log(`[LLMMemoryExtractor] ${dedupDecision.wouldMergeInfo}`);

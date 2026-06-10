@@ -118,7 +118,7 @@
 
 | # | 任务 | 主要文件 | 说明 |
 |---|------|----------|------|
-| 2.1 | **Extract 写时去重** | `memory-llm-extractor.ts` + 新 `memory-dedup.ts` | 同 type + 描述相似度 > 0.85 → 更新已有文件而非新建；先 **shadow 模式** |
+| 2.1 | **Extract 写时去重** | `memory-llm-extractor.ts` + 新 `memory-dedup.ts` | 同 type + 描述相似度 > 0.85 → 更新已有文件而非新建；**merge 模式写死** |
 | 2.2 | **LLM 两阶段拆分** | `memory-dream.ts` | Index pass（`new_index` only，8192 tokens）/ Content pass（`file_writes/deletes`，4096 tokens） |
 | 2.3 | **actions[] 映射器** | `memory-dream.ts` | `type: merge` → 读两文件拼写 + 删其一；默认 **关闭**，需 flag |
 | 2.4 | 手动 Dream 分流 | `web/routes/memory-dream.ts` + `memory-page.js` | 先规则修索引 → 可选「深度 LLM 整合」 |
@@ -129,7 +129,7 @@
 **验收标准**：
 
 - 手动整合 UI：一步可见「索引已修复 N 条」+ 可选 LLM  
-- shadow 去重运行 1 周，`would_merge` 日志无高危误并  
+- Extract 去重已默认 merge；规则合并 shadow 运行 1 周，`would_merge` 日志无高危误并  
 - LLM 整合空产出率 < 20%
 
 ---
@@ -277,7 +277,6 @@ if (health.dead >= staleIndexDeadLinksThreshold) {
 | `ICE_INDEX_WRITE_THROUGH` | `true` | P1 写时维护索引 |
 | `ICE_INDEX_DRIFT_RULE_ONLY` | `true` | P1 漂移零 LLM |
 | `ICE_DREAM_FAILURE_BACKOFF` | `true` | P1 失败退避 |
-| `ICE_EXTRACT_DEDUP` | `shadow` | P2 去重：`off` / `shadow` / `merge` |
 | `ICE_RULE_MERGE` | `shadow` | P3.12：`off` / `shadow` / `merge` |
 | `ICE_DREAM_TWO_PHASE` | `false` | P2 两阶段 LLM |
 | `ICE_DREAM_ACTIONS_EXEC` | `false` | P2 actions 映射执行 |
@@ -325,7 +324,8 @@ if (health.dead >= staleIndexDeadLinksThreshold) {
 
 - 自动删除 **禁止**：`type: feedback`、任意 `confidence ≥ 0.9`、`recallCount ≥ 3`  
 - 自动合并前：Dream 备份（现有 `enableBackup`）+ 合并写 `merged-from`  
-- Extract 去重 / 规则合并：先 **shadow 1 周**，人工抽查 `would_merge` 日志
+- Extract 去重：**merge 写死**（无环境变量）  
+- 规则合并：先 **shadow 1 周**，人工抽查 `would_merge` 日志
 
 ### 8.3 回滚策略
 
@@ -374,7 +374,6 @@ if (health.dead >= staleIndexDeadLinksThreshold) {
 Week 1  开 P1 全部（1.1–1.8）→ 观察遥测 3 天
 Week 2  开 P2 的 2.4、2.5、2.6（UI + 安全闸 + 手动分流）
 Week 2  开 P2 的 2.2（两阶段 LLM，flag 默认 false → true）
-Week 3  ICE_EXTRACT_DEDUP=shadow → 抽查 → merge
 Week 3  ICE_RULE_MERGE=shadow → 抽查 → merge
 Week 4  ICE_DREAM_ACTIONS_EXEC=true（最后开）
 Week 4  P3.13 按需调高 maxTokens 或指定 side model

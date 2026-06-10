@@ -565,6 +565,9 @@ export const DECAY_FACTOR_EXPIRED = 0.1;
 /** 默认置信度回退值 */
 export const DEFAULT_CONFIDENCE_FALLBACK = 0.5;
 
+/** LLM 提取落盘最低置信度（缺失或低于此值的条目直接丢弃） */
+export const MIN_EXTRACTION_CONFIDENCE = 0.6;
+
 /** 用户级记忆路由的置信度阈值 */
 export const USER_LEVEL_CONFIDENCE_THRESHOLD = 1.0;
 
