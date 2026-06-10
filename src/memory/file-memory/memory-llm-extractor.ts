@@ -22,6 +22,7 @@ import {
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
   MIN_EXTRACTION_CONFIDENCE,
+  INFERRED_PREFERENCE_MIN_CONFIDENCE,
   resolveUserMemoryEvictedDir,
 } from './memory-config.js';
 import { evictIfNeeded } from './memory-eviction.js';
@@ -68,7 +69,17 @@ const REJECT_FILENAME_SUBSTRINGS = [
   'user_model_identity',
   'who_are_you',
   'knowledge_cutoff',
+  'current-state',
+  'current_state',
 ];
+
+/** 安装进度快照文件名（含日期且像状态/进度快照） */
+const REJECT_PROGRESS_SNAPSHOT_FILENAME_RE =
+  /(?:current[-_]?state|snapshot|progress|install[-_]?log).*\d{4}[-_]\d{2}[-_]\d{2}|\d{4}[-_]\d{2}[-_]\d{2}.*(?:current[-_]?state|snapshot|progress)/i;
+
+const INSTALL_PROGRESS_CONTENT_RE = /(?:安装到第|step\s*\d+\s*\/\s*\d+|正在下载|download(?:ing)?\s+\d+%|解压中|extracting)/i;
+
+const COMMAND_LIST_PROJECT_RE = /^(?:[-*]\s*(?:npm|pnpm|yarn|npx|docker|mysql|curl|wget|apt|brew)\b[^\n]*\n?){3,}/im;
 
 /**
  * `type` 与 memoryCategory 须一致，避免 LLM 乱标产生垃圾条目。
@@ -92,7 +103,49 @@ export function isAllowedMemoryCategory(cat: unknown): boolean {
 
 function shouldRejectFilenameForExtraction(filename: string): boolean {
   const lower = filename.toLowerCase();
-  return REJECT_FILENAME_SUBSTRINGS.some(s => lower.includes(s.toLowerCase()));
+  if (REJECT_FILENAME_SUBSTRINGS.some(s => lower.includes(s.toLowerCase()))) {
+    return true;
+  }
+  if (REJECT_PROGRESS_SNAPSHOT_FILENAME_RE.test(filename)) {
+    return true;
+  }
+  return false;
+}
+
+export interface ExtractedMemoryCandidate {
+  memoryCategory: string;
+  filename: string;
+  type: string;
+  name: string;
+  description: string;
+  content: string;
+  confidence?: number;
+}
+
+/**
+ * 写盘前二次拒绝（REQ-E5）：进度快照、纯命令列表型 project、低置信推断偏好。
+ */
+export function shouldRejectExtractedMemory(memory: ExtractedMemoryCandidate): string | null {
+  if (shouldRejectFilenameForExtraction(memory.filename)) {
+    return 'filename_pattern';
+  }
+  const body = `${memory.content}\n${memory.description}`;
+  if (INSTALL_PROGRESS_CONTENT_RE.test(body)) {
+    return 'install_progress_snapshot';
+  }
+  if (memory.type === 'project' && COMMAND_LIST_PROJECT_RE.test(memory.content.trim())) {
+    return 'command_list_project';
+  }
+  const conf = parseMemoryConfidence(memory.confidence);
+  if (
+    memory.type === 'user'
+    && conf !== null
+    && conf < INFERRED_PREFERENCE_MIN_CONFIDENCE
+    && conf < USER_LEVEL_CONFIDENCE_THRESHOLD
+  ) {
+    return 'inferred_preference_low_confidence';
+  }
+  return null;
 }
 
 function parseMemoryConfidence(raw: unknown): number | null {
@@ -171,21 +224,26 @@ export interface ExtractionResult {
  */
 const EXTRACTION_CORE_PROMPT = `Memory extraction subagent. Extract only **durable** facts for **future** sessions; **if unsure, return []**.
 
-**Strictly map** what you extract to the dimension taxonomy in the next section (user / project / feedback tables).
+Long-term memory whitelist (ONLY these three):
+1. **User habits** (\`type: user\`) — preferences stated explicitly or repeated across sessions (comms, code, Git, tests). Mentioning mysql/react once is NOT a habit.
+2. **Reusable troubleshooting patterns** (\`type: feedback\`) — user corrections/confirmations as workflows ("when X, expect Y"). NOT this session's error stack or install step N.
+3. **Project overview** (\`type: project\`, ONE \`*-overview.md\` per project) — goals, architecture, user intent not in README. NOT directory trees, package.json scripts, or install instances (paths/versions/progress).
 
-- \`memoryCategory\` (required, exactly one): \`habit\` | \`hobby\` | \`recurring_mistake\` | \`stable_preference\` | \`explicit_rule\` | \`project_convention\`
-- \`type\`: \`user\` | \`feedback\` | \`project\` | \`reference\` — align with the taxonomy block (profile→user, repo conventions→project, corrections→feedback).
-- **Tags**: e.g. \`dimension:tech_stack\`, \`dimension:git\`, \`dimension:feedback_correction\`.
+**Strictly map** to the dimension taxonomy in the next section.
 
-**Never**: model identity / knowledge cutoff meta-chat; one-off task blow-by-blow; pure chit-chat; facts that only apply to **this session** or **this one task**.
+- \`memoryCategory\` (required): \`habit\` | \`hobby\` | \`recurring_mistake\` | \`stable_preference\` | \`explicit_rule\` | \`project_convention\`
+- \`type: project\` MUST use \`memoryCategory: project_convention\`.
+- Session task progress, install logs, command transcripts → **omit** (session-notes handles those).
 
-**Reusability** (required): extract only facts likely useful across **≥3 future sessions**. Session-local context, one-off implementation details, or generic common knowledge → **omit** (do not emit with a low score).
+**Never**: model identity; one-off task blow-by-blow; ops/install/deploy progress; pure chit-chat; keyword-triggered guesses (docker/mysql/vite mentioned ≠ preference).
 
-**Confidence calibration** (required on every item): ≥0.75 = user stated explicitly or pattern **repeated**; 0.6–0.74 = strong inference only; **<0.6 → omit item entirely**. Missing \`confidence\` is rejected at save time.
+**Reusability**: only facts useful across **≥3 future sessions**.
 
-**contradicts**: existing **filename** only when the user **explicitly** says prior memory is wrong.
+**Confidence**: ≥0.75 = explicit or repeated; 0.6–0.74 = strong inference only; **<0.6 → omit**. Inferred user preferences need ≥0.75 or use \`type: feedback\`.
 
-**Output**: JSON array **only**. Each item: \`memoryCategory\`, \`filename\`, \`type\`, \`name\`, \`description\`, \`content\` (prefer <800 chars), \`tags\`[], \`confidence\` 0–1, \`source\` \`llm_extract\`, \`eventDate\`, \`contradicts\`, \`level\`, \`evidenceStrength\`. Merge same topic into one file.
+**contradicts**: existing filename only when user **explicitly** says prior memory is wrong.
+
+**Output**: JSON array only. Each item: memoryCategory, filename, type, name, description, content (<800 chars), tags[], confidence, source \`llm_extract\`, eventDate, contradicts, level, evidenceStrength. Merge same topic into one file.
 
 If nothing qualifies: []
 `;
@@ -405,6 +463,19 @@ Return JSON array only. Required per object: memoryCategory, filename, type, nam
       if (!isTypeCategoryCoherent(String(m.type), cat)) return false;
       if (shouldRejectFilenameForExtraction(String(m.filename))) return false;
       if (!meetsExtractionConfidenceThreshold(m.confidence)) return false;
+      const rejectReason = shouldRejectExtractedMemory({
+        memoryCategory: cat,
+        filename: String(m.filename),
+        type: String(m.type),
+        name: String(m.name),
+        description: String(m.description),
+        content: String(m.content),
+        confidence: m.confidence,
+      });
+      if (rejectReason) {
+        console.debug(`[LLMMemoryExtractor] Rejected ${m.filename}: ${rejectReason}`);
+        return false;
+      }
       return true;
     });
 
@@ -592,7 +663,7 @@ ${memory.content}
 
         // Phase 1: 写后维护 MEMORY.md 索引
         const indexDir = isExplicitUser ? userMemoryDir : memoryDir;
-        upsertIndexRow(indexDir, {
+        await upsertIndexRow(indexDir, {
           filename: path.basename(filePath),
           description: memory.description || memory.name,
           type: memory.type as any,

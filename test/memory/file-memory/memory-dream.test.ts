@@ -145,6 +145,25 @@ describe('shouldDream', () => {
     expect(should).toBe(true);
   });
 
+  it('LLM Dream 空跑退避独立于 indexDreamBackoffCount', async () => {
+    const dream = createMemoryDream({
+      sessionInterval: 2,
+      fileCountThreshold: 1,
+      indexBackoffBaseMs: 60_000,
+    });
+    for (let i = 0; i < 5; i++) dream.recordSession();
+    await writeMemoryFile(tempDir, 'note1.md', '笔记1');
+
+    dream.notifyDreamEmptyRun();
+    const blocked = await dream.evaluateDreamGate(tempDir);
+    expect(blocked.shouldRun).toBe(false);
+    expect(blocked.skipReason).toMatch(/dream_empty_backoff/);
+
+    dream.notifyDreamSubstantiveRun();
+    const allowed = await dream.evaluateDreamGate(tempDir);
+    expect(allowed.shouldRun).toBe(true);
+  });
+
   it('空记忆目录返回 false', async () => {
     const dream = createMemoryDream({ sessionInterval: 1 });
     dream.recordSession();

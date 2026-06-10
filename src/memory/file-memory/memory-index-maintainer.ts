@@ -21,6 +21,7 @@ import {
 } from './memory-index-health.js';
 import { scanMemoryFiles } from './memory-scanner.js';
 import { getScannerCache } from './memory-scanner-cache.js';
+import { getMemoryTelemetry } from './memory-telemetry.js';
 
 /** 索引写入串行化锁（同进程内） */
 let indexWriteChain: Promise<void> = Promise.resolve();
@@ -46,10 +47,40 @@ export interface RebuildOpts {
 }
 
 /**
+ * MEMORY.md 缺失或为空时，从磁盘扫描结果 bootstrap 索引。
+ */
+export async function ensureMemoryIndexBootstrapped(memoryDir: string): Promise<boolean> {
+  const root = path.resolve(memoryDir);
+  const indexPath = path.join(root, 'MEMORY.md');
+
+  let needsBootstrap = false;
+  try {
+    const content = await fs.readFile(indexPath, 'utf-8');
+    if (!content.trim()) needsBootstrap = true;
+  } catch {
+    needsBootstrap = true;
+  }
+
+  if (!needsBootstrap) return false;
+
+  const memories = await scanMemoryFiles(root, 500);
+  const result = await rebuildMemoryIndexFromMemories(root, memories, 120);
+  if (result.wrote) {
+    getScannerCache().invalidate(root);
+    getMemoryTelemetry().logIndexRebuild({
+      memoryDir: root,
+      entryCount: result.entryCount,
+      trigger: 'bootstrap',
+    }).catch(() => {});
+  }
+  return result.wrote;
+}
+
+/**
  * 从 MEMORY.md 中更新或新增一条索引行。
  * 文件名已存在 → 更新描述；不存在 → 追加到对应类型分区末尾。
  *
- * 若 MEMORY.md 不存在或为空 → 不执行（由 rebuild / Dream 统一初始化）。
+ * 若 MEMORY.md 不存在或为空 → 先 bootstrap 再 upsert。
  */
 export async function upsertIndexRow(
   memoryDir: string,
@@ -59,11 +90,12 @@ export async function upsertIndexRow(
     const root = path.resolve(memoryDir);
     const indexPath = path.join(root, 'MEMORY.md');
 
+    await ensureMemoryIndexBootstrapped(root);
+
     let content: string;
     try {
       content = await fs.readFile(indexPath, 'utf-8');
     } catch {
-      // MEMORY.md 不存在 — 留给 rebuild 或 Dream 统一创建
       return;
     }
 
@@ -234,6 +266,11 @@ export async function rebuildIndexIfDrifted(
   const result = await rebuildMemoryIndexFromMemories(memoryDir, memories, maxEntries);
   if (result.wrote) {
     getScannerCache().invalidate(memoryDir);
+    getMemoryTelemetry().logIndexRebuild({
+      memoryDir: path.resolve(memoryDir),
+      entryCount: result.entryCount,
+      trigger: 'drift',
+    }).catch(() => {});
   }
   return result;
 }

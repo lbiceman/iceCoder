@@ -21,6 +21,21 @@ import {
   readFileTextOrEmpty,
 } from '../file-change-diff.js';
 import { checkReadBeforeEdit, markFileRead } from '../read-before-edit.js';
+import {
+  sanitizeMemoryContentBeforeWrite,
+  afterMemoryMarkdownWritten,
+  resolveMemoryRootForPath,
+  assertAgentMemoryWriteAllowed,
+} from '../../memory/file-memory/memory-write-pipeline.js';
+
+async function applyMemoryWriteGuard(filePath: string): Promise<string | null> {
+  return assertAgentMemoryWriteAllowed(filePath);
+}
+
+async function postProcessMemoryFileWrite(filePath: string, content: string): Promise<void> {
+  if (!resolveMemoryRootForPath(filePath)) return;
+  await afterMemoryMarkdownWritten(filePath, content);
+}
 
 /**
  * 路径解析：相对路径基于工作目录解析，绝对路径直接使用。
@@ -142,6 +157,8 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
           };
         }
         const filePath = safePath(rawPath, workDir);
+        const guardErr = await applyMemoryWriteGuard(filePath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
         const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
         if (oldContent.length > 0) {
           const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
@@ -149,17 +166,24 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         }
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, content, (args.encoding || 'utf-8') as BufferEncoding);
+        let writeContent = content;
+        if (resolveMemoryRootForPath(filePath)) {
+          writeContent = sanitizeMemoryContentBeforeWrite(content).content;
+        }
+        await fs.writeFile(filePath, writeContent, (args.encoding || 'utf-8') as BufferEncoding);
+        if (resolveMemoryRootForPath(filePath)) {
+          await afterMemoryMarkdownWritten(filePath, writeContent);
+        }
 
-        const lineCount = content.split('\n').length;
+        const lineCount = writeContent.split('\n').length;
         const warnChars = getWriteFileWarnChars();
         const warnLines = getWriteFileWarnLines();
-        const large = content.length > warnChars || lineCount > warnLines;
+        const large = writeContent.length > warnChars || lineCount > warnLines;
         const warnNote = large
-          ? ` Warning: large payload (${content.length} chars, ${lineCount} lines). Prefer patch_file or edit_file for future changes to this file.`
+          ? ` Warning: large payload (${writeContent.length} chars, ${lineCount} lines). Prefer patch_file or edit_file for future changes to this file.`
           : '';
 
-        const diff = buildFileChangeDiff(oldContent, content, rawPath);
+        const diff = buildFileChangeDiff(oldContent, writeContent, rawPath);
         return {
           success: true,
           output: formatToolOutputWithDiff(`File written: ${rawPath}${warnNote}`, diff),
@@ -184,21 +208,28 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       },
       handler: async (args) => {
         const rawPath = args.path;
+        const filePath = safePath(rawPath, workDir);
+        const guardErr = await applyMemoryWriteGuard(filePath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) {
           try {
-            await fs.access(safePath(rawPath, workDir));
+            await fs.access(filePath);
             return { success: false, output: '', error: readErr };
           } catch {
             /* new file via append — no prior read required */
           }
         }
-        const filePath = safePath(rawPath, workDir);
         const appendContent = String(args.content ?? '');
+        let safeAppend = appendContent;
+        if (resolveMemoryRootForPath(filePath)) {
+          safeAppend = sanitizeMemoryContentBeforeWrite(appendContent).content;
+        }
         const oldContent = await readFileTextOrEmpty(() => fs.readFile(filePath, 'utf-8'));
         await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.appendFile(filePath, appendContent, 'utf-8');
-        const newContent = oldContent + appendContent;
+        await fs.appendFile(filePath, safeAppend, 'utf-8');
+        const newContent = oldContent + safeAppend;
+        await postProcessMemoryFileWrite(filePath, newContent);
         const diff = buildFileChangeDiff(oldContent, newContent, args.path);
         return {
           success: true,
@@ -231,6 +262,8 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) return { success: false, output: '', error: readErr };
         const filePath = safePath(rawPath, workDir);
+        const guardErr = await applyMemoryWriteGuard(filePath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
         const content = await fs.readFile(filePath, 'utf-8');
 
         let newContent: string;
@@ -261,7 +294,14 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         if (changed) {
           await getEditHistory().saveSnapshot(filePath, 'edit_file');
         }
-        await fs.writeFile(filePath, newContent, 'utf-8');
+        let writeContent = newContent;
+        if (resolveMemoryRootForPath(filePath)) {
+          writeContent = sanitizeMemoryContentBeforeWrite(newContent).content;
+        }
+        await fs.writeFile(filePath, writeContent, 'utf-8');
+        if (changed) {
+          await postProcessMemoryFileWrite(filePath, writeContent);
+        }
 
         const fuzzyNote = fuzzyMatch ? ' (fuzzy whitespace/line match)' : '';
 

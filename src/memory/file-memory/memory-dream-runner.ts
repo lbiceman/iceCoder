@@ -277,6 +277,10 @@ export function scheduleAutoDream(params: AutoDreamBackgroundParams): boolean {
 
       if (result.executed && dreamGateTrigger === 'stale_index') {
         dream.notifyStaleIndexDreamCompleted();
+      } else if (result.executed) {
+        dream.notifyDreamSubstantiveRun();
+      } else if (!result.executed) {
+        dream.notifyDreamEmptyRun();
       }
 
       await getMemoryTelemetry().logDream({
@@ -287,6 +291,7 @@ export function scheduleAutoDream(params: AutoDreamBackgroundParams): boolean {
         filesEvicted: result.filesEvicted,
         durationMs: result.duration,
         trigger: dreamGateTrigger ?? 'session_interval',
+        skipReason: result.executed ? undefined : (result.skipReason ?? 'empty_run'),
       }).catch(() => {});
 
       if (result.executed) {

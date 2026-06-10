@@ -27,13 +27,13 @@ describe('evaluateCasualMemoryExtraction', () => {
     ).toBe(true);
   });
 
-  it('技术内容特征可在无工具时提取', () => {
+  it('技术内容特征在无工具时不再触发（allowContentSignalWithoutTools=false）', () => {
     expect(
       evaluateCasualMemoryExtraction({
         ...base,
         turnCount: 1,
         hasContentSignal: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

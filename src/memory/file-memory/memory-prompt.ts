@@ -85,16 +85,17 @@ export function buildMemoryInstructions(memoryDir: string): string {
 
 You have a file-based persistent memory system at \`${memoryDir}\`. Use it as background context, not as a replacement for the user's current task.
 
-Save immediately with write_file only when the user explicitly asks you to remember something. Remove the entry when asked to forget. If told to ignore memory, treat MEMORY.md as empty.
+**Do NOT write long-term memory files** unless the user explicitly asks you to remember something (e.g. "记住", "remember"). Install/deploy/download/config progress, command transcripts, and one-off task state belong in **session-notes** only — not in \`${memoryDir}\`.
 
-## Memory Types
+Remove the entry when asked to forget. If told to ignore memory, treat MEMORY.md as empty.
 
-- **user**: User role, goals, responsibilities, knowledge. Save when learning about the user. Use when tailoring behavior.
-- **feedback**: User corrections ("don't do X") and confirmations ("yes, exactly"). Record both failures and successes.
-- **project**: Ongoing work, goals, deadlines not derivable from code or git. Convert relative dates to absolute (e.g. "Thursday" → "2026-03-05").
-- **reference**: Pointers to external systems (links, docs, tools).
+## Memory Types (whitelist)
 
-## How to Save
+- **user**: Stable habits — comms, code style, Git, tests — only when explicit or repeated. Mentioning a tool once is NOT a habit.
+- **feedback**: Reusable troubleshooting patterns — user corrections ("when X, expect Y"). NOT this session's error log.
+- **project**: ONE overview per project — goals, architecture, intent not in README. NOT install paths/versions or command lists from package.json.
+
+## How to Save (explicit request only)
 
 Write a .md file with frontmatter, then add an index line in MEMORY.md:
 
@@ -102,7 +103,8 @@ Write a .md file with frontmatter, then add an index line in MEMORY.md:
 ---
 name: {{memory name}}
 description: {{one-line, specific, used for relevance matching}}
-type: {{user | feedback | project | reference}}
+type: {{user | feedback | project}}
+memoryCategory: {{stable_preference | explicit_rule | recurring_mistake | project_convention}}
 ---
 
 {{content}}
@@ -110,7 +112,7 @@ type: {{user | feedback | project | reference}}
 
 MEMORY.md index: one line per entry, ≤150 chars — \`- [Title](file.md) — summary\`
 
-For ordinary coding/debugging tasks, focus on the task. Background extraction can handle incidental memories after the response; do not pause implementation just to maintain memory files.
+For ordinary coding/debugging/ops tasks, focus on the task. Background extraction handles incidental durable memories after the response; do not pause implementation to maintain memory files.
 
 ## Multi-level Memory
 
