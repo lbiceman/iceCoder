@@ -1,13 +1,44 @@
 const VERIFICATION_TEST_CMD = /\b(npm\s+test|npm\s+run\s+test|vitest|npx\s+vitest)\b/i;
 
-/** 与 TaskState.looksLikeVerificationCommand 对齐的 harness 验收命令判定。 */
+/** 宽泛 harness 验收命令（digest / branch-budget / 输出缓冲等） */
 export function isHarnessVerificationCommand(command: string): boolean {
   const c = command.toLowerCase();
   return /\b(npm|pnpm|yarn)\s+(run\s+)?(test:e2e|test|lint|build|typecheck|check)\b/.test(c)
     || /\b(npm|pnpm|yarn)\s+test\b/.test(c)
     || /\b(vitest|jest|mocha|pytest|go test|cargo test)\b/.test(c)
+    || /\b(mvn(w)?\s+test|mvn(w)?\s+-pl\s+\S+\s+test)\b/.test(c)
+    || /\b(\.\/)?gradlew(\.bat)?\s+test\b/.test(c)
+    || /\bdotnet\s+test\b/.test(c)
+    || /\b(bundle exec rspec|bundle exec rake test|phpunit|vendor\/bin\/phpunit)\b/.test(c)
     || /\b(npx\s+vitest|npx\s+tsc|tsc\s+--no-?emit)\b/i.test(command)
     || /\bnode\s+--check\b/.test(c);
+}
+
+/**
+ * 单元测试 Gate 专用：lint/build/tsc/e2e 不算「单测已通过」。
+ * 与 {@link TaskState.recordToolResult} / Verification Gate 对齐。
+ */
+export function isUnitTestVerificationCommand(command: string): boolean {
+  const c = command.trim().toLowerCase();
+  if (!c) return false;
+  if (isBuildVerificationCommand(command)) return false;
+  if (/\b(npm|pnpm|yarn)\s+(run\s+)?(lint|typecheck|check)\b/.test(c) && !/\btest\b/.test(c)) return false;
+  if (/\bnpx\s+tsc\b/.test(c) || /\btsc\s+--no-?emit\b/.test(c)) return false;
+  if (/\bnode\s+--check\b/.test(c)) return false;
+  if (/\btest:e2e\b/.test(c)) return false;
+
+  return /\b(npm|pnpm|yarn)\s+test\b/.test(c)
+    || /\b(npm|pnpm|yarn)\s+run\s+test\b/.test(c)
+    || /\b(vitest|jest|mocha|pytest)\b/.test(c)
+    || /\bgo test\b/.test(c)
+    || /\bcargo test\b/.test(c)
+    || /\bmvn(w)?\s+test\b/.test(c)
+    || /\bmvn(w)?\s+-pl\s+\S+\s+test\b/.test(c)
+    || /\b(\.\/)?gradlew(\.bat)?\s+test\b/.test(c)
+    || /\bdotnet\s+test\b/.test(c)
+    || /\b(bundle exec rspec|bundle exec rake test)\b/.test(c)
+    || /\b(phpunit|vendor\/bin\/phpunit)\b/.test(c)
+    || /\bnpx\s+vitest\b/.test(c);
 }
 
 /** @deprecated 使用 {@link isHarnessVerificationCommand} */

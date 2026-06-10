@@ -9,11 +9,11 @@ import { TaskState } from '../../src/harness/task-state.js';
 import { StopHookManager } from '../../src/harness/stop-hooks.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
 
-function makeState(messages: UnifiedMessage[], goal = '写 md'): HarnessRunState {
+function makeState(messages: UnifiedMessage[], goal = 'fix bug'): HarnessRunState {
   return {
     messages,
     tools: [
-      { name: 'file_info', description: 'info', parameters: { type: 'object', properties: {} } },
+      { name: 'run_command', description: 'run', parameters: { type: 'object', properties: {} } },
       { name: 'read_file', description: 'read', parameters: { type: 'object', properties: {} } },
     ],
     turnCount: 1,
@@ -28,6 +28,7 @@ function makeState(messages: UnifiedMessage[], goal = '写 md'): HarnessRunState
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
     verificationGateContinuationCount: 1,
+    failedUnitTestReminderInjected: false,
     transition: 'initial',
     justCompacted: false,
     amnesiaRecoveryCount: 0,
@@ -69,77 +70,60 @@ function makeLogger() {
 }
 
 describe('verification gate counter integration', () => {
-  it('ineffective file_info keeps counter; next gate inject increments to 2/5', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const messages: UnifiedMessage[] = [{ role: 'user', content: '写两份 md' }];
-    const state = makeState(messages, '写两份 md');
+  it('failed npm test triggers failed-test reminder inject', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: 'fix bug' }];
+    const state = makeState(messages, 'fix bug');
+    state.noToolExecutionRecoveryCount = 1;
     state.taskState.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'notes.md' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
     state.taskState.recordToolResult(
-      { id: 'w2', name: 'write_file', arguments: { path: 'report.md' } },
-      { success: true, output: 'ok' },
-    );
-    state.taskState.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'notes.md' } },
-      { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: 'FAIL', error: 'exit 1' },
     );
 
-    const pendingBefore = state.taskState.pendingFileDeliverableCount();
-    state.taskState.reconcileOrphanFileDeliverableWriteVersions();
-    state.taskState.recordToolResult(
-      { id: 'f2', name: 'file_info', arguments: { path: 'notes.md' } },
-      { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
-    );
-    const pendingAfter = state.taskState.pendingFileDeliverableCount();
-    const blockingAfter = state.taskState.isVerificationBlockingFinal();
-
-    maybeResetVerificationGateCounter(state, pendingBefore, pendingAfter, blockingAfter);
-    expect(state.verificationGateContinuationCount).toBe(1);
-    expect(pendingBefore).toBe(1);
-    expect(pendingAfter).toBe(1);
+    expect(state.taskState.pendingFileDeliverableCount()).toBe(0);
+    expect(state.taskState.isVerificationBlockingFinal()).toBe(false);
 
     const result = await handleNoToolCalls(makeDeps(), {
       state,
-      response: { content: '两份文档都写好了。', finishReason: 'stop' },
-      userMessage: '写两份 md',
+      response: { content: '测试失败，总结。', finishReason: 'stop' },
+      userMessage: 'fix bug',
       currentTools: state.tools,
       tokenUsage: { input: 1, output: 1 },
       logger: makeLogger(),
     });
 
     expect(result.action).toBe('continue');
-    expect(state.verificationGateContinuationCount).toBe(2);
-    expect(logSpy).toHaveBeenCalledWith('[harness] verification gate 注入 (2/5)');
-    logSpy.mockRestore();
+    expect(state.failedUnitTestReminderInjected).toBe(true);
+    expect(state.verificationGateContinuationCount).toBe(0);
   });
 
-  it('effective file_info reduces pending and resets counter', () => {
-    const state = makeState([{ role: 'user', content: '写 md' }], '写 md');
+  it('passing npm test clears pending and resets counter', () => {
+    const state = makeState([{ role: 'user', content: 'fix bug' }], 'fix bug');
     state.verificationGateContinuationCount = 4;
     state.taskState.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'notes.md' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
     state.taskState.recordToolResult(
-      { id: 'w2', name: 'write_file', arguments: { path: 'report.md' } },
+      { id: 'w2', name: 'edit_file', arguments: { path: 'src/b.ts' } },
       { success: true, output: 'ok' },
     );
 
     const pendingBefore = state.taskState.pendingFileDeliverableCount();
-    state.taskState.reconcileOrphanFileDeliverableWriteVersions();
     state.taskState.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'notes.md' } },
-      { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'ok' },
     );
     const pendingAfter = state.taskState.pendingFileDeliverableCount();
     const blockingAfter = state.taskState.isVerificationBlockingFinal();
 
     maybeResetVerificationGateCounter(state, pendingBefore, pendingAfter, blockingAfter);
-    expect(pendingBefore).toBe(2);
-    expect(pendingAfter).toBe(1);
+    expect(pendingBefore).toBe(1);
+    expect(pendingAfter).toBe(0);
     expect(state.verificationGateContinuationCount).toBe(0);
-    expect(blockingAfter).toBe(true);
+    expect(blockingAfter).toBe(false);
   });
 });

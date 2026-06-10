@@ -5,6 +5,7 @@ import {
   buildVerificationSuccessSummary,
   isBuildVerificationCommand,
   isHarnessVerificationCommand,
+  isUnitTestVerificationCommand,
   isVerificationCommand,
   parseBuildFailureDigest,
   parseBuildErrorSourcePaths,
@@ -28,6 +29,19 @@ describe('verification-digest', () => {
     expect(isBuildVerificationCommand('npm run build 2>&1')).toBe(true);
     expect(isHarnessVerificationCommand('echo hello')).toBe(false);
     expect(isHarnessVerificationCommand('echo test')).toBe(false);
+  });
+
+  it('isUnitTestVerificationCommand excludes lint/build/tsc/e2e', () => {
+    expect(isUnitTestVerificationCommand('npm test')).toBe(true);
+    expect(isUnitTestVerificationCommand('npm run test')).toBe(true);
+    expect(isUnitTestVerificationCommand('npx vitest run')).toBe(true);
+    expect(isUnitTestVerificationCommand('mvn test')).toBe(true);
+    expect(isUnitTestVerificationCommand('npm run lint')).toBe(false);
+    expect(isUnitTestVerificationCommand('npm run build')).toBe(false);
+    expect(isUnitTestVerificationCommand('npm run typecheck')).toBe(false);
+    expect(isUnitTestVerificationCommand('npx tsc --noEmit')).toBe(false);
+    expect(isUnitTestVerificationCommand('npm run test:e2e')).toBe(false);
+    expect(isUnitTestVerificationCommand('node --check src/a.js')).toBe(false);
   });
 
   it('parses vitest FAIL headers and assertions', () => {

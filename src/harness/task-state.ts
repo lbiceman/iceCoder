@@ -2,6 +2,7 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
+  engineeringTestTargetPaths,
   extractDeletedPathsFromCommand,
   deliverableVersionFromMap,
   gateConfirmationPaths,
@@ -10,15 +11,18 @@ import {
   isMissingFileToolResult,
   isNonEmptyFileInfoOutput,
   isNonEmptyReadOutput,
-  listPendingConfirmationPaths,
   missingChangedFilePaths,
   normalizeDeliverablePath,
   pathsReferToSameFile,
-  verificationConfirmationStats,
+  hasEngineeringTestTargets,
+  isEngineeringUnitTestTargetPath,
+  shouldInjectFailedUnitTestReminder,
+  shouldPromptEngineeringUnitTest,
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
-import { isHarnessVerificationCommand } from './verification-digest.js';
+import { classifyRunCommandResult } from './task-acceptance-tracker.js';
+import { isUnitTestVerificationCommand } from './verification-digest.js';
 import type {
   TaskIntent,
   TaskPhase,
@@ -57,16 +61,20 @@ export class TaskState {
 
   recordToolResult(toolCall: ToolCall, result: ToolResult): void {
     if (toolCall.name === 'run_command') {
-      const command = String(toolCall.arguments?.command ?? '');
-      if (command) {
-        this.commandsRun.push(command);
-        if (looksLikeVerificationCommand(command)) {
+      const args = (toolCall.arguments ?? {}) as Record<string, unknown>;
+      const command = String(args.command ?? args.cmd ?? '');
+      const rawOutput = `${result.output ?? ''}`;
+      const classified = classifyRunCommandResult(args, rawOutput, result.success);
+      const effectiveCommand = classified?.command ?? command;
+      if (effectiveCommand) {
+        this.commandsRun.push(effectiveCommand);
+        if (looksLikeVerificationCommand(effectiveCommand)) {
           this.phase = 'verification';
           this.verificationRequired = true;
-          this.verificationStatus = result.success ? 'passed' : 'failed';
+          this.applyUnitTestVerificationFromRunResult(args, effectiveCommand, result);
         }
         if (result.success) {
-          for (const deletedPath of extractDeletedPathsFromCommand(command)) {
+          for (const deletedPath of extractDeletedPathsFromCommand(effectiveCommand)) {
             this.removeChangedFileDeliverable(deletedPath);
           }
         }
@@ -110,56 +118,83 @@ export class TaskState {
         this.filesChanged.add(path);
         this.bumpFileDeliverableWriteVersion(path);
         this.verificationRequired = true;
-        if (this.verificationStatus !== 'failed') {
-          this.verificationStatus = 'required';
-        }
+        this.verificationStatus = 'required';
       }
     }
+  }
+
+  /** 按 run_command 真实完成态更新单测验收（跳过后台启动 / 运行中） */
+  private applyUnitTestVerificationFromRunResult(
+    args: Record<string, unknown>,
+    _command: string,
+    result: ToolResult,
+  ): void {
+    const rawOutput = `${result.output ?? ''}`;
+    const classified = classifyRunCommandResult(args, rawOutput, result.success);
+    if (classified) {
+      switch (classified.kind) {
+        case 'background_start':
+        case 'background_running':
+          if (this.verificationStatus !== 'passed') {
+            this.verificationStatus = 'required';
+          }
+          return;
+        case 'background_completed':
+          this.verificationStatus = (classified.exitCode ?? 0) === 0 ? 'passed' : 'failed';
+          return;
+        case 'background_failed':
+          this.verificationStatus = 'failed';
+          return;
+        case 'foreground':
+          this.verificationStatus = classified.foregroundSuccess ? 'passed' : 'failed';
+          return;
+        default:
+          break;
+      }
+    }
+    this.verificationStatus = result.success ? 'passed' : 'failed';
   }
 
   deliverableKind(): DeliverableKind {
     return classifyChangedFiles([...this.filesChanged]);
   }
 
-  buildVerificationPrompt(workspaceRoot?: string): string {
-    const all = [...this.filesChanged];
-    const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
-    const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
-    const { pending, required, exempt } = verificationConfirmationStats(
-      all,
-      writeVersions,
-      confirmVersions,
-      workspaceRoot,
-    );
-
-    const pendingPaths = listPendingConfirmationPaths(
-      all,
-      writeVersions,
-      confirmVersions,
-      workspaceRoot,
-    );
-
+  buildVerificationPrompt(): string {
+    const targets = engineeringTestTargetPaths([...this.filesChanged]);
     const maxList = 12;
-    const listed = pendingPaths.slice(0, maxList);
+    const listed = targets.slice(0, maxList);
     const fileList = listed.length > 0
       ? listed.map(f => `- ${f}`).join('\n')
-      : '- (pending paths unknown — use file_info on each changed file before finishing)';
-    const more = pendingPaths.length > maxList
-      ? `\n- … and ${pendingPaths.length - maxList} more (use file_info on each before finishing)`
+      : '- (no engineering source paths — skip unit tests)';
+    const more = targets.length > maxList
+      ? `\n- … and ${targets.length - maxList} more`
       : '';
 
-    const exemptNote = exempt > 0
-      ? `\n(${exempt} file(s) exempt: temp/ephemeral script, dot-dir (.foo/...), or verificationExemptDirs — no confirmation required)`
-      : '';
+    return `[System] You changed source code but have not run unit tests yet.
 
-    return `[System] You changed files but have not confirmed them yet.
-
-Pending confirmation: ${pending} of ${required} file(s)${exemptNote}
-
-Still pending (confirm each with file_info or read_file):
+Run unit tests covering these changed files (pick the command for this project — mvn test, pytest, go test, cargo test, npm test, etc.):
 ${fileList}${more}
 
-Do not claim the task is complete before confirmation.`;
+Use run_command, then fix failures before claiming the task is complete.`;
+  }
+
+  buildFailedUnitTestReminderPrompt(): string {
+    const targets = engineeringTestTargetPaths([...this.filesChanged]);
+    const maxList = 8;
+    const listed = targets.slice(0, maxList);
+    const fileList = listed.map(f => `- ${f}`).join('\n');
+    const more = targets.length > maxList
+      ? `\n- … and ${targets.length - maxList} more`
+      : '';
+
+    return `[System] Unit tests failed for your recent changes.
+
+Please complete unit tests: fix the failures, re-run tests via run_command, and only then finish.
+
+Changed source files:
+${fileList}${more}
+
+You may stop after this reminder if you cannot fix tests — but state the failure plainly in your summary.`;
   }
 
   /** filesChanged 中缺少 writeVersion 的路径补版本（checkpoint 恢复或历史审计遗留） */
@@ -183,14 +218,7 @@ Do not claim the task is complete before confirmation.`;
   }
 
   pendingFileDeliverableCount(workspaceRoot?: string): number {
-    const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
-    const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
-    return verificationConfirmationStats(
-      [...this.filesChanged],
-      writeVersions,
-      confirmVersions,
-      workspaceRoot,
-    ).pending;
+    return this.isVerificationBlockingFinal(false, workspaceRoot) ? 1 : 0;
   }
 
   /** 续跑时覆盖被「继续」污染的 goal/intent */
@@ -224,30 +252,23 @@ Do not claim the task is complete before confirmation.`;
   }
 
   /**
-   * 纯查询：是否应拦截 model_done（无副作用）。
-   * Acceptance Gate 或任一变更文件未写后确认时可 block；run_command 验收不作为 Gate 条件。
+   * 纯查询：是否应 inject 单元测试提示并 continue（无副作用）。
+   * Acceptance Gate 或工程变更未跑单测时可 block；测失败不 block（仅加强提示）。
    */
   isVerificationBlockingFinal(acceptanceIncomplete?: boolean, workspaceRoot?: string): boolean {
     if (acceptanceIncomplete) return true;
-    if (this.filesChanged.size === 0) return false;
-    return !this.areAllFileDeliverablesConfirmed(workspaceRoot);
+    return shouldPromptEngineeringUnitTest(
+      [...this.filesChanged],
+      this.verificationStatus,
+    );
   }
 
-  /** 查询前同步 file_deliverable 验收状态（checkpoint / resilience 用） */
+  /** 查询前同步（checkpoint / resilience 用） */
   isVerificationBlockingFinalAfterSync(
     acceptanceIncomplete?: boolean,
     workspaceRoot?: string,
   ): boolean {
-    this.tryMarkFileDeliverablesVerified(workspaceRoot);
     return this.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
-  }
-
-  /** 文件交付物已全部写后确认时，同步 verificationStatus → passed */
-  tryMarkFileDeliverablesVerified(workspaceRoot?: string): boolean {
-    if (this.filesChanged.size === 0) return false;
-    if (!this.areAllFileDeliverablesConfirmed(workspaceRoot)) return false;
-    this.markVerificationPassed();
-    return true;
   }
 
   areAllFileDeliverablesConfirmed(workspaceRoot?: string): boolean {
@@ -259,12 +280,29 @@ Do not claim the task is complete before confirmation.`;
     );
   }
 
-  /** verification gate 熔断：写后版本均已确认时自动 passed */
-  reconcileFileDeliverablesAfterWrite(workspaceRoot?: string): boolean {
-    if (this.filesChanged.size === 0) return false;
-    if (!this.areAllFileDeliverablesConfirmed(workspaceRoot)) return false;
-    this.markVerificationPassed();
-    return true;
+  /** verification gate 熔断：工程变更均已测过时不 block */
+  reconcileFileDeliverablesAfterWrite(_workspaceRoot?: string): boolean {
+    return !shouldPromptEngineeringUnitTest(
+      [...this.filesChanged],
+      this.verificationStatus,
+    );
+  }
+
+  shouldInjectFailedUnitTestReminder(): boolean {
+    return shouldInjectFailedUnitTestReminder(
+      [...this.filesChanged],
+      this.verificationStatus,
+    );
+  }
+
+  /** 本轮是否成功写入工程源码（供 Harness 重置失败提醒） */
+  isEngineeringWriteToolCall(toolCall: ToolCall, result: ToolResult): boolean {
+    if (!result.success) return false;
+    const writeTools = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
+    if (!writeTools.has(toolCall.name)) return false;
+    const path = extractPathLikeArg(toolCall.arguments);
+    if (!path) return false;
+    return isEngineeringUnitTestTargetPath(path);
   }
 
   /**
@@ -294,8 +332,14 @@ Do not claim the task is complete before confirmation.`;
     this.fileDeliverableWriteVersion.delete(norm);
     this.fileDeliverableConfirmVersion.delete(norm);
 
-    if (this.filesChanged.size === 0 || this.areAllFileDeliverablesConfirmed()) {
-      this.markVerificationPassed();
+    if (this.filesChanged.size === 0) {
+      if (this.verificationStatus === 'required') {
+        this.verificationStatus = 'not_required';
+      }
+    } else if (!hasEngineeringTestTargets([...this.filesChanged])) {
+      if (this.verificationStatus === 'required') {
+        this.verificationStatus = 'not_required';
+      }
     }
     return true;
   }
@@ -331,9 +375,6 @@ Do not claim the task is complete before confirmation.`;
     if (!confirmed) return;
 
     this.fileDeliverableConfirmVersion.set(norm, writeVer);
-    if (this.areAllFileDeliverablesConfirmed()) {
-      this.markVerificationPassed();
-    }
   }
 
   snapshot(): TaskStateSnapshot {
@@ -464,5 +505,5 @@ function extractPathLikeArg(args: Record<string, any>): string | undefined {
 }
 
 export function looksLikeVerificationCommand(command: string): boolean {
-  return isHarnessVerificationCommand(command);
+  return isUnitTestVerificationCommand(command);
 }

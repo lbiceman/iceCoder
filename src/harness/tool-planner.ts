@@ -1,6 +1,6 @@
 import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import { INTENT_TOOL_SUGGESTIONS } from './tool-plan-intent-map.js';
-import { snapshotHasUnconfirmedFileDeliverables } from './document-deliverable.js';
+import { shouldPromptEngineeringUnitTest } from './document-deliverable.js';
 import { inferIntent } from './task-state.js';
 
 export interface ToolPlan {
@@ -18,8 +18,11 @@ export function buildToolPlan(
 ): ToolPlan {
   const intent = snapshot?.intent ?? inferIntent(goal);
   const flow = recommendedFlow(intent);
-  const verificationHint = snapshot && snapshotHasUnconfirmedFileDeliverables(snapshot, workspaceRoot)
-    ? 'Confirm each existing changed file with file_info or read_file before final response.'
+  const verificationHint = snapshot && shouldPromptEngineeringUnitTest(
+    snapshot.filesChanged,
+    snapshot.verificationStatus,
+  )
+    ? 'Run unit tests for changed source files via run_command before final response.'
     : undefined;
   const suggestedTools = [...(INTENT_TOOL_SUGGESTIONS[intent] ?? INTENT_TOOL_SUGGESTIONS.question)];
   return { intent, recommendedFlow: flow, verificationHint, suggestedTools };
@@ -42,7 +45,7 @@ function recommendedFlow(intent: TaskIntent): string[] {
     case 'debug':
       return ['read the error/output', 'search and read related files', 'edit the smallest relevant code path', 'run a focused test or typecheck when useful'];
     case 'edit':
-      return ['inspect related files', 'make the edit with file tools', 'run tests or checks when practical (optional before finishing)'];
+      return ['inspect related files', 'make the edit with file tools', 'run unit tests before finishing when you changed source code'];
     case 'test':
       return ['run the failing test or check', 'inspect the failure and related files', 'edit the implementation or test', 'rerun the focused test'];
     case 'refactor':
@@ -50,7 +53,7 @@ function recommendedFlow(intent: TaskIntent): string[] {
     case 'inspect':
       return ['glob/grep then read_file as needed', 'answer from evidence'];
     case 'docs':
-      return ['inspect existing docs/source', 'edit documentation', 'confirm deliverables with file_info or read_file when applicable'];
+      return ['inspect existing docs/source', 'edit documentation'];
     default:
       return ['inspect if needed', 'answer directly if no code action is needed'];
   }

@@ -42,7 +42,7 @@ export interface TryGraphTerminalStopArgs {
 
 /**
  * 任务图已 terminal 且无 pending 验收工作时强制以 model_done 结束，避免图完成后空转。
- * 写后读 / Acceptance Gate pending 时不拦截（与 Verification Gate 同标尺）。
+ * 工程变更未跑单测 / Acceptance Gate pending 时不拦截（与 Verification Gate 同标尺）。
  */
 export async function tryGraphTerminalStop(
   deps: GraphStopDeps,

@@ -162,7 +162,7 @@ describe('tryGraphTerminalStop', () => {
     expect(result).toBeNull();
   });
 
-  it('verificationStatus=failed 时 hasPendingWork 拦截 graph-stop', async () => {
+  it('verificationStatus=failed 时不拦截 graph-stop', async () => {
     const loopController = new LoopController({ maxRounds: 10 });
     const executor = new GraphExecutor();
     finishGraph(executor);
@@ -171,11 +171,11 @@ describe('tryGraphTerminalStop', () => {
     const snap = state.taskState.snapshot();
     state.taskState.applySnapshot({
       ...snap,
-      filesChanged: [],
+      filesChanged: ['src/a.ts'],
       verificationRequired: true,
       verificationStatus: 'failed',
     });
-    expect(shouldBlockGraphTerminalStop(state)).toBe(true);
+    expect(shouldBlockGraphTerminalStop(state)).toBe(false);
 
     const result = await tryGraphTerminalStop(
       {
@@ -192,7 +192,7 @@ describe('tryGraphTerminalStop', () => {
       },
     );
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 
   it('graph failed 时不强制 model_done', async () => {
