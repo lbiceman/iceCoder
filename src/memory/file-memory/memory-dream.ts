@@ -15,12 +15,21 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
+import type { LLMAdapterInterface, LLMOptions, UnifiedMessage } from '../../llm/types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonObject } from './json-parser.js';
 import {
   DEFAULT_DREAM_CONFIG,
+  DEFAULT_DREAM_LLM_TIMEOUT_MS,
+  DREAM_BATCH_FILE_COUNT,
+  DREAM_BATCH_LLM_MAX_RETRIES,
+  DREAM_BATCH_MODE_THRESHOLD,
+  DREAM_BATCH_RETRY_BASE_MS,
+  DREAM_INDEX_PROMPT_MAX_CHARS,
+  DREAM_LARGE_LIB_MAX_OUTPUT_TOKENS,
+  DREAM_LLM_TIME_BUDGET_MS,
+  DREAM_MANIFEST_MODE_THRESHOLD,
   type DreamConfig,
   resolveUserMemoryDir,
   resolveUserMemoryEvictedDir,
@@ -89,6 +98,10 @@ export interface DreamResult {
   duration: number;
   /** 跳过原因（executed=false 时记录） */
   skipReason?: string;
+  /** 分批整合：剩余未处理批次数（>0 时可断点续跑） */
+  batchesRemaining?: number;
+  batchesCompleted?: number;
+  batchesTotal?: number;
 }
 
 /**
@@ -141,7 +154,7 @@ Update MEMORY.md to stay under ${maxIndexLines} lines:
 
 **If the Index Health section shows orphans > 10 OR dead refs > 0, you MUST return a complete \`new_index\` string.** Do not return null for new_index in that case.
 
-After this pass, the runtime may move excess topic memory files (over ~${memoryFileCap} \`.md\` entries, excluding MEMORY.md) to an \`evicted/\` archive using age, low confidence, and low recall — prioritize merging duplicates and removing stale content in your JSON actions; do not delete files solely to hit a number.
+After this pass, the runtime may move excess topic memory files (over ~${memoryFileCap} \`.md\` entries, excluding MEMORY.md) to \`memory-evicted/\` archive using age, low confidence, and low recall — prioritize merging duplicates and removing stale content in your JSON actions; do not delete files solely to hit a number.
 
 ## Output format
 Return a JSON object with:
@@ -161,6 +174,63 @@ If the index is healthy (no dead refs, orphans <= 10) and content needs no merge
 
 Return ONLY valid JSON.`;
 }
+
+/** 大库 manifest/分批模式：短 prompt，侧重去重删冗，不要求 new_index（规则层已可重建） */
+function buildDreamPromptCompact(memoryDir: string, memoryFileCap: number): string {
+  return `# Memory Consolidation (Compact)
+
+Memory directory: \`${memoryDir}\`
+You receive a **metadata manifest only** (filename, type, description, 150-char preview). No full file bodies.
+
+## Goals (priority order)
+1. Merge obvious duplicate/near-duplicate memories (same topic, overlapping descriptions)
+2. Delete clearly obsolete or superseded memories via \`file_deletes\`
+3. Update only when manifest previews show factual conflict (use \`file_writes\` sparingly)
+
+## Constraints
+- Do NOT return \`new_index\` (set null). Index is maintained by rules separately.
+- Do NOT create user-habit memories in compact mode.
+- Do NOT delete high-value items: type feedback, confidence≥0.9, recallCount≥3.
+- Runtime may archive excess files over ~${memoryFileCap}; focus on semantic dedup, not count.
+
+Return ONLY JSON:
+{ "actions": [], "new_index": null, "file_writes": [], "file_deletes": [], "summary": "..." }
+
+Keep \`summary\` to **one short line** (≤80 chars, Chinese preferred). No per-file narration.`;
+}
+
+/** 分批 LLM 可重试的瞬时错误（不含整请求超时，避免 280s×N 雪崩） */
+export function isDreamBatchRetryableError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const status = (error as { status?: number }).status;
+    if (status !== undefined && [429, 500, 502, 503, 504, 520, 529].includes(status)) return true;
+    const msg = error.message.toLowerCase();
+    if (msg.includes('529') || msg.includes('520') || msg.includes('高峰') || msg.includes('繁忙')) return true;
+    if (msg.includes('500 unknown') || msg.includes('internal server error')) return true;
+    if (msg.includes('rate limit') || msg.includes('too many requests')) return true;
+    if (msg.includes('timed out') || msg.includes('request timeout') || msg.includes('timeout')) return false;
+  }
+  return false;
+}
+
+function buildDreamBatchPrompt(
+  memoryDir: string,
+  batchIndex: number,
+  batchTotal: number,
+  memoryFileCap: number,
+): string {
+  return `${buildDreamPromptCompact(memoryDir, memoryFileCap)}
+
+## Batch ${batchIndex}/${batchTotal}
+Process **only** the files listed in this batch manifest. Ignore files from other batches.`;
+}
+
+function truncateDreamIndexPrompt(content: string): string {
+  if (content.length <= DREAM_INDEX_PROMPT_MAX_CHARS) return content;
+  return `${content.substring(0, DREAM_INDEX_PROMPT_MAX_CHARS)}\n...[MEMORY.md truncated — use manifest for filenames]`;
+}
+
+type DreamInputMode = 'full' | 'manifest' | 'batch';
 
 /**
  * 两阶段 LLM：Index pass prompt（仅输出 new_index）。
@@ -456,6 +526,7 @@ export class MemoryDream {
       softLimit: cap,
       evictionTarget: cap,
     });
+    this.logPostDreamEviction('project pre-dream', out, cap);
     if (out.executed) getScannerCache().invalidate(memoryDir);
     return out;
   }
@@ -608,8 +679,26 @@ export class MemoryDream {
       };
     }
 
-    // 读取所有记忆文件内容
-    const memoryContents = await this.readMemoryContents(memoryDir, memories);
+    const inputMode = this.resolveDreamInputMode(memories.length);
+    console.log(
+      `[MemoryDream] LLM consolidate: ${memories.length} files, mode=${inputMode}, ` +
+      `clientTimeout=${DEFAULT_DREAM_LLM_TIMEOUT_MS}ms (provider cap ~300s)`,
+    );
+
+    if (inputMode === 'batch') {
+      return this.executeDreamBatched(
+        memoryDir,
+        llmAdapter,
+        conversationPrefix,
+        memories,
+        startTime,
+      );
+    }
+
+    const sorted = this.sortMemoriesForDream(memories);
+    const memoryContents = inputMode === 'manifest'
+      ? `### Memory manifest (${memories.length} files, metadata only)\n\n${formatMemoryManifest(sorted)}`
+      : await this.readMemoryContents(memoryDir, sorted, this.resolveDreamReadBudget(memories.length));
 
     // 分析过期和陈旧记忆
     const expired = getExpiredMemories(memories);
@@ -618,10 +707,12 @@ export class MemoryDream {
       ? `\n\n## Expired/Stale memories\n\nExpired (should be deleted or archived):\n${expired.map(m => `- ${m.filename} (last active: ${new Date(Math.max(m.lastRecalledMs || 0, m.mtimeMs)).toISOString()}, confidence: ${m.confidence})`).join('\n') || '(none)'}\n\nStale (consider updating or removing):\n${stale.map(m => `- ${m.filename} (last active: ${new Date(Math.max(m.lastRecalledMs || 0, m.mtimeMs)).toISOString()}, recallCount: ${m.recallCount})`).join('\n') || '(none)'}`
       : '';
 
-    // 读取当前 MEMORY.md
+    // 读取当前 MEMORY.md（大库截断，避免 prompt 膨胀）
     let currentIndex = '';
     try {
-      currentIndex = await fs.readFile(path.join(memoryDir, 'MEMORY.md'), 'utf-8');
+      currentIndex = truncateDreamIndexPrompt(
+        await fs.readFile(path.join(memoryDir, 'MEMORY.md'), 'utf-8'),
+      );
     } catch {
       // 索引不存在（正常情况，首次运行）
     }
@@ -632,7 +723,6 @@ export class MemoryDream {
     );
     const indexHealthBlock = formatIndexHealthForDream(indexHealth);
 
-    // 构建消息辅助
     const buildMessages = (prefix: UnifiedMessage[] | undefined, content: string): UnifiedMessage[] => {
       if (prefix && prefix.length > 0) return [...prefix, { role: 'user', content }];
       return [
@@ -641,43 +731,48 @@ export class MemoryDream {
       ];
     };
 
-    // 构建 LLM 请求
-    const dreamPrompt = buildDreamPrompt(memoryDir, this.config.maxIndexLines, this.config.postDreamMemoryCap);
-    const userContent = `${dreamPrompt}\n\n## Index Health\n\n${indexHealthBlock}\n\n## Current MEMORY.md\n\n${currentIndex || '(empty)'}\n\n## Memory files\n\n${memoryContents}${expiryInfo}`;
+    const maxOut = inputMode === 'manifest'
+      ? DREAM_LARGE_LIB_MAX_OUTPUT_TOKENS
+      : this.config.maxOutputTokens;
+    const dreamPrompt = inputMode === 'manifest'
+      ? buildDreamPromptCompact(memoryDir, this.config.postDreamMemoryCap)
+      : buildDreamPrompt(memoryDir, this.config.maxIndexLines, this.config.postDreamMemoryCap);
+
+    const indexSection = inputMode === 'manifest'
+      ? ''
+      : `\n\n## Index Health\n\n${indexHealthBlock}\n\n## Current MEMORY.md\n\n${currentIndex || '(empty)'}`;
+    const userContent = `${dreamPrompt}${indexSection}\n\n## Memory files\n\n${memoryContents}${expiryInfo}`;
     const messages = buildMessages(conversationPrefix, userContent);
 
-    // 2.2: 两阶段 LLM（ICE_DREAM_TWO_PHASE=true 时启用 index pass + content pass）
-    const twoPhase = this.config.twoPhase && process.env.ICE_DREAM_TWO_PHASE === 'true';
+    // 大库不走两阶段（两次 LLM 易超 300s 网关）；小库可选 ICE_DREAM_TWO_PHASE
+    const twoPhase = inputMode === 'full'
+      && this.config.twoPhase
+      && process.env.ICE_DREAM_TWO_PHASE === 'true';
     let parsed: any;
     let responseContent: string;
 
     if (twoPhase) {
-      // Phase A: Index pass — 仅输出 new_index
       const indexPrompt = buildIndexPassPrompt(memoryDir, currentIndex, indexHealthBlock);
       const indexMessages = buildMessages(conversationPrefix, indexPrompt);
-      const indexResponse = await llmAdapter.chat(indexMessages, {
+      const indexResponse = await llmAdapter.chat(indexMessages, this.dreamLlmOptions({
         maxTokens: 2048,
-        temperature: 0,
-      });
+      }));
       const indexParsed = parseLLMJsonObject<any>(indexResponse.content);
       const newIndex = indexParsed?.new_index || null;
 
-      // Phase B: Content pass — 基于已产生的索引做 file_writes/deletes
       const contentPrompt = buildContentPassPrompt(memoryDir, memoryContents, expiryInfo, newIndex);
       const contentMessages = buildMessages(conversationPrefix, contentPrompt);
-      const contentResponse = await llmAdapter.chat(contentMessages, {
-        maxTokens: this.config.maxOutputTokens,
-        temperature: 0,
-      });
+      const contentResponse = await llmAdapter.chat(contentMessages, this.dreamLlmOptions({
+        maxTokens: maxOut,
+      }));
       const contentParsed = parseLLMJsonObject<any>(contentResponse.content);
       responseContent = contentResponse.content;
 
       parsed = { ...contentParsed, new_index: newIndex || contentParsed?.new_index };
     } else {
-      const response = await llmAdapter.chat(messages, {
-        maxTokens: this.config.maxOutputTokens,
-        temperature: 0,
-      });
+      const response = await llmAdapter.chat(messages, this.dreamLlmOptions({
+        maxTokens: maxOut,
+      }));
       responseContent = response.content;
       parsed = parseLLMJsonObject<any>(response.content);
     }
@@ -749,9 +844,8 @@ export class MemoryDream {
         evictionTarget: cap,
       });
       filesEvicted += evictOutcome.evictedFiles.length;
-      if (evictOutcome.executed) {
-        getScannerCache().invalidate(memoryDir);
-      }
+      this.logPostDreamEviction('project', evictOutcome, cap);
+      if (evictOutcome.executed) getScannerCache().invalidate(memoryDir);
     }
     if (this.config.enforceUserMemoryCapAfterDream) {
       const userDir = resolveUserMemoryDir();
@@ -763,9 +857,8 @@ export class MemoryDream {
         evictedDir: this.config.afterUserDreamEviction?.evictedDir ?? resolveUserMemoryEvictedDir(),
       });
       filesEvicted += userEvict.evictedFiles.length;
-      if (userEvict.executed) {
-        getScannerCache().invalidate(userDir);
-      }
+      this.logPostDreamEviction('user', userEvict, uCap);
+      if (userEvict.executed) getScannerCache().invalidate(userDir);
     }
 
     return {
@@ -774,6 +867,262 @@ export class MemoryDream {
       filesEvicted,
       duration: Date.now() - startTime,
     };
+  }
+
+  private resolveDreamInputMode(fileCount: number): DreamInputMode {
+    if (fileCount >= DREAM_BATCH_MODE_THRESHOLD) return 'batch';
+    if (fileCount >= DREAM_MANIFEST_MODE_THRESHOLD) return 'manifest';
+    return 'full';
+  }
+
+  private sortMemoriesForDream(memories: MemoryHeader[]): MemoryHeader[] {
+    return [...memories].sort((a, b) => this.computeDreamPriority(a) - this.computeDreamPriority(b));
+  }
+
+  private dreamBatchProgressPath(memoryDir: string): string {
+    return path.join(memoryDir, '.dream-batch-progress.json');
+  }
+
+  private async readDreamBatchProgress(memoryDir: string, totalBatches: number): Promise<number> {
+    try {
+      const raw = await fs.readFile(this.dreamBatchProgressPath(memoryDir), 'utf-8');
+      const saved = JSON.parse(raw) as { nextBatch?: number; totalBatches?: number; updatedAt?: number };
+      const ageMs = Date.now() - (saved.updatedAt ?? 0);
+      if (ageMs > 2 * 60 * 60 * 1000) return 0;
+      const next = saved.nextBatch ?? 0;
+      if (saved.totalBatches === totalBatches && next > 0 && next < totalBatches) return next;
+    } catch {
+      /* no saved progress */
+    }
+    return 0;
+  }
+
+  private async writeDreamBatchProgress(
+    memoryDir: string,
+    nextBatch: number,
+    totalBatches: number,
+  ): Promise<void> {
+    await fs.writeFile(
+      this.dreamBatchProgressPath(memoryDir),
+      JSON.stringify({ nextBatch, totalBatches, updatedAt: Date.now() }),
+      'utf-8',
+    );
+  }
+
+  private async clearDreamBatchProgress(memoryDir: string): Promise<void> {
+    await fs.unlink(this.dreamBatchProgressPath(memoryDir)).catch(() => {});
+  }
+
+  /** 超大库：多批 compact LLM，每批 ≤20 文件 manifest；支持断点续跑与预算用尽后衔接 */
+  private async executeDreamBatched(
+    memoryDir: string,
+    llmAdapter: LLMAdapterInterface,
+    conversationPrefix: UnifiedMessage[] | undefined,
+    memories: MemoryHeader[],
+    startTime: number,
+  ): Promise<DreamResult> {
+    const sorted = this.sortMemoriesForDream(memories);
+    const batches: MemoryHeader[][] = [];
+    for (let i = 0; i < sorted.length; i += DREAM_BATCH_FILE_COUNT) {
+      batches.push(sorted.slice(i, i + DREAM_BATCH_FILE_COUNT));
+    }
+
+    let filesModified = 0;
+    let filesDeleted = 0;
+    const summaries: string[] = [];
+    let anyLlmOk = false;
+    let batchesRemaining = 0;
+    const startBatch = await this.readDreamBatchProgress(memoryDir, batches.length);
+    const llmBudgetStart = Date.now();
+
+    const buildMessages = (prefix: UnifiedMessage[] | undefined, content: string): UnifiedMessage[] => {
+      if (prefix && prefix.length > 0) return [...prefix, { role: 'user', content }];
+      return [
+        { role: 'system', content: 'You are a memory consolidation agent. Return only valid JSON.' },
+        { role: 'user', content },
+      ];
+    };
+
+    const resumeNote = startBatch > 0 ? `, resume@${startBatch + 1}` : '';
+    console.log(
+      `[MemoryDream] batched dream: ${batches.length} batches × ≤${DREAM_BATCH_FILE_COUNT} files` +
+      `${resumeNote}, llmBudget=${DREAM_LLM_TIME_BUDGET_MS}ms`,
+    );
+
+    let completedThrough = startBatch;
+    for (let i = startBatch; i < batches.length; i++) {
+      if (Date.now() - llmBudgetStart > DREAM_LLM_TIME_BUDGET_MS) {
+        batchesRemaining = batches.length - i;
+        await this.writeDreamBatchProgress(memoryDir, i, batches.length);
+        summaries.push(`时间预算用尽，剩余 ${batchesRemaining} 批未处理（将自动续跑）`);
+        break;
+      }
+
+      const batch = batches[i]!;
+      const prompt = buildDreamBatchPrompt(memoryDir, i + 1, batches.length, this.config.postDreamMemoryCap);
+      const userContent = `${prompt}\n\n## Memory files\n\n${formatMemoryManifest(batch)}`;
+      const messages = buildMessages(conversationPrefix, userContent);
+
+      try {
+        const response = await this.callDreamBatchLlm(
+          llmAdapter,
+          messages,
+          DREAM_LARGE_LIB_MAX_OUTPUT_TOKENS,
+        );
+        const parsed = parseLLMJsonObject<any>(response.content);
+        if (!parsed) {
+          summaries.push(`Batch ${i + 1}: empty JSON`);
+          continue;
+        }
+        anyLlmOk = true;
+
+        if (this.config.enableBackup) {
+          await this.backupBeforeDream(memoryDir, parsed).catch(() => {});
+        }
+
+        const batchResult = await this.executeDreamActions(memoryDir, response.content, {
+          ...parsed,
+          new_index: null,
+        });
+        filesModified += batchResult.filesModified;
+        filesDeleted += batchResult.filesDeleted;
+        if (parsed.summary) summaries.push(String(parsed.summary));
+        completedThrough = i + 1;
+        await this.writeDreamBatchProgress(memoryDir, completedThrough, batches.length);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[MemoryDream] batch ${i + 1}/${batches.length} failed:`, msg);
+        summaries.push(`Batch ${i + 1} 失败: ${msg}`);
+        batchesRemaining = batches.length - i;
+        await this.writeDreamBatchProgress(memoryDir, i, batches.length);
+        break;
+      }
+    }
+
+    if (batchesRemaining === 0 && completedThrough >= batches.length) {
+      await this.clearDreamBatchProgress(memoryDir);
+    }
+
+    let result = {
+      executed: anyLlmOk,
+      summary: summaries.join(' ') || '分批整合未产生变更',
+      filesModified,
+      filesDeleted,
+      duration: Date.now() - startTime,
+      batchesRemaining,
+      batchesCompleted: completedThrough - startBatch,
+      batchesTotal: batches.length,
+    };
+
+    const promoted = await this.autoPromoteUserCandidates(memoryDir, memories);
+    if (promoted > 0) {
+      result = {
+        ...result,
+        filesModified: result.filesModified + promoted,
+        summary: `${result.summary} Promoted ${promoted} user memory(ies).`,
+      };
+    }
+
+    try {
+      const freshMemories = await scanMemoryFiles(memoryDir, 500);
+      const rebuilt = await rebuildMemoryIndexFromMemories(memoryDir, freshMemories);
+      if (rebuilt.wrote) {
+        result.filesModified++;
+        getScannerCache().invalidate(memoryDir);
+      }
+    } catch {
+      /* index rebuild best-effort */
+    }
+
+    let filesEvicted = 0;
+    if (this.config.enforceMemoryCapAfterDream) {
+      const cap = this.config.postDreamMemoryCap;
+      const evictOutcome = await evictIfNeeded(memoryDir, {
+        ...(this.config.afterDreamEviction ?? {}),
+        softLimit: cap,
+        evictionTarget: cap,
+      });
+      filesEvicted += evictOutcome.evictedFiles.length;
+      this.logPostDreamEviction('project', evictOutcome, cap);
+      if (evictOutcome.executed) getScannerCache().invalidate(memoryDir);
+    }
+    if (this.config.enforceUserMemoryCapAfterDream) {
+      const userDir = resolveUserMemoryDir();
+      const uCap = this.config.userMemoryPostDreamCap;
+      const userEvict = await evictIfNeeded(userDir, {
+        ...(this.config.afterUserDreamEviction ?? {}),
+        softLimit: uCap,
+        evictionTarget: uCap,
+        evictedDir: this.config.afterUserDreamEviction?.evictedDir ?? resolveUserMemoryEvictedDir(),
+      });
+      filesEvicted += userEvict.evictedFiles.length;
+      this.logPostDreamEviction('user', userEvict, uCap);
+      if (userEvict.executed) getScannerCache().invalidate(userDir);
+    }
+
+    return {
+      ...result,
+      filesEvicted,
+      executed: anyLlmOk || filesModified > 0 || filesDeleted > 0 || filesEvicted > 0,
+    };
+  }
+
+  private logPostDreamEviction(label: string, outcome: EvictionResult, cap: number): void {
+    if (outcome.executed) {
+      console.log(
+        `[MemoryDream] post-dream ${label} eviction: ${outcome.fileCountBefore} → ${outcome.fileCountAfter} ` +
+        `(cap ${cap}, archived ${outcome.evictedFiles.length})`,
+      );
+      return;
+    }
+    if (outcome.fileCountBefore > cap) {
+      console.warn(
+        `[MemoryDream] post-dream ${label} eviction skipped: ${outcome.fileCountBefore} > cap ${cap} — ${outcome.summary}`,
+      );
+    }
+  }
+
+  /** 单批 LLM：瞬时错误有限重试；整请求超时不重试（由衔接轮断点续跑） */
+  private async callDreamBatchLlm(
+    llmAdapter: LLMAdapterInterface,
+    messages: UnifiedMessage[],
+    maxTokens: number,
+  ): Promise<Awaited<ReturnType<LLMAdapterInterface['chat']>>> {
+    const opts = this.dreamLlmOptions({ maxTokens });
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= DREAM_BATCH_LLM_MAX_RETRIES; attempt++) {
+      try {
+        return await llmAdapter.chat(messages, opts);
+      } catch (err) {
+        lastErr = err;
+        if (attempt >= DREAM_BATCH_LLM_MAX_RETRIES || !isDreamBatchRetryableError(err)) throw err;
+        const delay = DREAM_BATCH_RETRY_BASE_MS * Math.pow(2, attempt);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[MemoryDream] batch LLM retry ${attempt + 1}/${DREAM_BATCH_LLM_MAX_RETRIES} ` +
+          `in ${delay}ms: ${errMsg}`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr;
+  }
+
+  /** Dream LLM 调用选项（280s 客户端超时；adapter 层 skipRetry，分批重试由 callDreamBatchLlm 控制） */
+  private dreamLlmOptions(overrides: Partial<LLMOptions> & Pick<LLMOptions, 'maxTokens'>): LLMOptions {
+    return {
+      temperature: 0,
+      requestTimeoutMs: DEFAULT_DREAM_LLM_TIMEOUT_MS,
+      skipRetry: true,
+      ...overrides,
+    };
+  }
+
+  /** 记忆条数越多，Dream 读取预算越小，降低 LLM 超时概率 */
+  private resolveDreamReadBudget(fileCount: number): { readLimit: number; truncateChars: number } {
+    if (fileCount > 60) return { readLimit: 35, truncateChars: 800 };
+    if (fileCount > 40) return { readLimit: 50, truncateChars: 1000 };
+    return { readLimit: DREAM_READ_LIMIT, truncateChars: DREAM_TRUNCATE_CHARS };
   }
 
   /**
@@ -786,6 +1135,10 @@ export class MemoryDream {
   private async readMemoryContents(
     memoryDir: string,
     memories: MemoryHeader[],
+    budget: { readLimit: number; truncateChars: number } = {
+      readLimit: DREAM_READ_LIMIT,
+      truncateChars: DREAM_TRUNCATE_CHARS,
+    },
   ): Promise<string> {
     // 按重要性排序：evictionScore 越低越重要（不该被淘汰 = 应该优先整合）
     const sorted = [...memories].sort((a, b) => {
@@ -796,11 +1149,11 @@ export class MemoryDream {
 
     const parts: string[] = [];
 
-    for (const mem of sorted.slice(0, DREAM_READ_LIMIT)) {
+    for (const mem of sorted.slice(0, budget.readLimit)) {
       try {
         const content = await fs.readFile(mem.filePath, 'utf-8');
-        const truncated = content.length > DREAM_TRUNCATE_CHARS
-          ? content.substring(0, DREAM_TRUNCATE_CHARS) + '\n...[truncated]'
+        const truncated = content.length > budget.truncateChars
+          ? content.substring(0, budget.truncateChars) + '\n...[truncated]'
           : content;
         parts.push(`### ${mem.filename}\n\n${truncated}`);
       } catch (err) {
@@ -808,8 +1161,8 @@ export class MemoryDream {
       }
     }
 
-    if (memories.length > DREAM_READ_LIMIT) {
-      parts.push(`\n> Note: ${memories.length - DREAM_READ_LIMIT} additional memory files were not included (sorted by importance, least important omitted).`);
+    if (memories.length > budget.readLimit) {
+      parts.push(`\n> Note: ${memories.length - budget.readLimit} additional memory files were not included (sorted by importance, least important omitted).`);
     }
 
     return parts.join('\n\n---\n\n');

@@ -36,7 +36,7 @@ const RETRYABLE_ERROR_CODES = ['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTF
 /**
  * 触发重试的 HTTP 状态码（服务器错误 + 速率限制）。
  */
-const RETRYABLE_STATUS_CODES = [429, 500, 502, 503, 504, 408];
+const RETRYABLE_STATUS_CODES = [429, 500, 502, 503, 504, 408, 520, 529];
 
 /**
  * 表示可重试错误的错误消息模式。
@@ -52,6 +52,9 @@ const RETRYABLE_MESSAGE_PATTERNS = [
   'bad gateway',
   'gateway timeout',
   'request timeout',
+  'timed out',
+  '高峰时段',
+  '短暂繁忙',
   'connection reset',
   'socket hang up',
   'ECONNABORTED',
@@ -139,7 +142,9 @@ export class LLMAdapter implements LLMAdapterInterface {
     const provider = this.resolveProvider(options);
     const merged = this.mergeAbortSignal(options);
 
-    const response = await this.withRetry(() => provider.chat(messages, merged));
+    const response = merged.skipRetry
+      ? await provider.chat(messages, merged)
+      : await this.withRetry(() => provider.chat(messages, merged));
 
     this.tokenCounter.record(response.usage);
     return response;
@@ -159,7 +164,9 @@ export class LLMAdapter implements LLMAdapterInterface {
     const provider = this.resolveProvider(options);
     const merged = this.mergeAbortSignal(options);
 
-    const response = await this.withRetry(() => provider.stream(messages, callback, merged));
+    const response = merged.skipRetry
+      ? await provider.stream(messages, callback, merged)
+      : await this.withRetry(() => provider.stream(messages, callback, merged));
 
     this.tokenCounter.record(response.usage);
     return response;

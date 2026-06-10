@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { MemoryHeader, FileMemoryType, FileMemoryConfig, MemoryLevel, EvidenceStrength } from './types.js';
 import { EVIDENCE_STRENGTHS, FILE_MEMORY_TYPES, MEMORY_LEVELS } from './types.js';
 import { extractBodyFromMarkdown } from './memory-parser.js';
-import { DEFAULT_CONFIDENCE_FALLBACK } from './memory-config.js';
+import { DEFAULT_CONFIDENCE_FALLBACK, isExcludedFromActiveMemoryScan } from './memory-config.js';
 
 /** frontmatter 最大读取行数 */
 const FRONTMATTER_MAX_LINES = 30;
@@ -87,7 +87,10 @@ export async function scanMemoryFiles(
   try {
     const entries = await fs.readdir(memoryDir, { recursive: true });
     const mdFiles = entries.filter(
-      f => typeof f === 'string' && f.endsWith('.md') && path.basename(f) !== 'MEMORY.md',
+      f => typeof f === 'string'
+        && f.endsWith('.md')
+        && path.basename(f) !== 'MEMORY.md'
+        && !isExcludedFromActiveMemoryScan(f),
     );
 
     const headerResults = await Promise.allSettled(

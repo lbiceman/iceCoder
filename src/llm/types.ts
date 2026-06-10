@@ -105,6 +105,10 @@ export interface LLMOptions {
    * 由 LLMAdapter.stream/chat 从 setAbortSignal() 注入；provider 不需要、也不应自行清理监听。
    */
   signal?: AbortSignal | null;
+  /** 单次 HTTP 请求超时（ms）；未设置时使用适配器构造时的默认值 */
+  requestTimeoutMs?: number;
+  /** 为 true 时跳过上层 LLMAdapter 的指数退避重试（Dream 等长请求用） */
+  skipRetry?: boolean;
   [key: string]: any;
 }
 

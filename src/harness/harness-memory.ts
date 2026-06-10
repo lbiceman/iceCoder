@@ -32,6 +32,7 @@ import { recallRelevantMemories, filterByContextRelevance, filterByBudget, inval
 import { getMemoryDecayStatus } from '../memory/file-memory/memory-age.js';
 import { LLMMemoryExtractor } from '../memory/file-memory/memory-llm-extractor.js';
 import { MemoryDream } from '../memory/file-memory/memory-dream.js';
+import { scheduleAutoDream } from '../memory/file-memory/memory-dream-runner.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
@@ -1071,9 +1072,11 @@ ${candidateList}`;
       await this.maybeUpdateSessionMemory(messages, totalInputTokens, false, runtimeSnapshots);
     }
 
-    // ── autoDream 整合 ──
+    // ── autoDream 整合（后台，不阻塞 onLoopEnd） ──
     await this.memoryDream.recordSession();
-    await this.maybeDream();
+    void this.maybeDream().catch((err) => {
+      console.debug('[harness-memory] maybeDream failed:', err instanceof Error ? err.message : err);
+    });
   }
 
   /**
@@ -1696,45 +1699,20 @@ ${candidateList}`;
         console.debug('[harness-memory] scan before dream failed:', err instanceof Error ? err.message : err);
       }
 
-      const dreamResult = await this.memoryDream.dream(
-        this.memoryDir,
-        this.llmAdapter,
-        conversationPrefix.length > 0 ? conversationPrefix : undefined,
-      );
-
-      if (this.memoryDir) {
-        getScannerCache().invalidate(this.memoryDir);
-      }
-      if (
-        dreamGate.trigger === 'stale_index'
-        && dreamResult.executed
-      ) {
-        this.memoryDream.notifyStaleIndexDreamCompleted();
-      }
-
-      this.telemetry.logDream({
-        executed: dreamResult.executed,
+      const accepted = scheduleAutoDream({
+        memoryDir: this.memoryDir,
+        llmAdapter: this.llmAdapter,
+        conversationPrefix: conversationPrefix.length > 0 ? conversationPrefix : undefined,
+        dreamGateTrigger: dreamGate.trigger,
         fileCountBefore,
-        filesModified: dreamResult.filesModified,
-        filesDeleted: dreamResult.filesDeleted,
-        filesEvicted: dreamResult.filesEvicted,
-        durationMs: dreamResult.duration,
-        trigger: dreamGate.trigger ?? 'session_interval',
-      }).catch(() => {});
+        onAfterDream: () => this.evictMemoryOverCap({ project: false, user: true }),
+      });
 
-      if (dreamResult.executed) {
-        console.log(
-          `[harness-memory] autoDream: ${dreamResult.summary} ` +
-          `(${dreamResult.filesModified} 修改, ${dreamResult.filesDeleted} 删除` +
-          `${dreamResult.filesEvicted ? `, ${dreamResult.filesEvicted} 淘汰归档` : ''}) ` +
-          `${dreamResult.duration}ms)`,
-        );
+      if (!accepted) {
+        console.debug('[harness-memory] autoDream deferred: background consolidation already running');
       }
-
-      // 用户级记忆不参与项目 Dream 输入，仍在 Dream 后单独做上限兜底。
-      await this.evictMemoryOverCap({ project: false, user: true });
     } catch (err) {
-      console.debug('[harness-memory] dream failed:', err instanceof Error ? err.message : err);
+      console.debug('[harness-memory] dream gate failed:', err instanceof Error ? err.message : err);
     }
   }
 

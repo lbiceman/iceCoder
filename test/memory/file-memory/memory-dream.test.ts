@@ -17,7 +17,12 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createMemoryDream, shouldAutoPromoteToUserLevel, type MemoryDream } from '../../../src/memory/file-memory/memory-dream.js';
+import {
+  createMemoryDream,
+  isDreamBatchRetryableError,
+  shouldAutoPromoteToUserLevel,
+  type MemoryDream,
+} from '../../../src/memory/file-memory/memory-dream.js';
 import { resetConsolidationFlightState } from '../../../src/memory/file-memory/memory-concurrency.js';
 import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../../src/llm/types.js';
@@ -754,6 +759,23 @@ describe('备份与恢复', () => {
     const dream = createMemoryDream({ backupDir });
     const backups = await dream.listBackups();
     expect(backups).toEqual([]);
+  });
+});
+
+// ─── isDreamBatchRetryableError ───
+
+describe('isDreamBatchRetryableError', () => {
+  it('529/500 可重试，整请求超时不重试', () => {
+    const peak = new Error('OpenAI API Error [529]: 高峰繁忙');
+    (peak as any).status = 529;
+    expect(isDreamBatchRetryableError(peak)).toBe(true);
+
+    const server = new Error('OpenAI API Error [500]: unknown');
+    (server as any).status = 500;
+    expect(isDreamBatchRetryableError(server)).toBe(true);
+
+    const timeout = new Error('OpenAI API Error [undefined]: Request timed out.');
+    expect(isDreamBatchRetryableError(timeout)).toBe(false);
   });
 });
 

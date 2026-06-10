@@ -17,6 +17,7 @@ import { validatePath, PathTraversalError } from './memory-security.js';
 import { parseLLMJsonArray } from './json-parser.js';
 import { scanForSecrets, redactSecrets } from './memory-secret-scanner.js';
 import {
+  DEFAULT_DREAM_CONFIG,
   DEFAULT_LLM_EXTRACTION_CONFIG,
   USER_LEVEL_CONFIDENCE_THRESHOLD,
   DEFAULT_CONFIDENCE_FALLBACK,
@@ -597,11 +598,16 @@ ${memory.content}
       // 使扫描缓存失效（新文件已写入）
       scannerCache.invalidate(memoryDir);
       scannerCache.invalidate(userMemoryDir);
-      evictIfNeeded(memoryDir).catch(err => {
+      evictIfNeeded(memoryDir, {
+        softLimit: DEFAULT_DREAM_CONFIG.postDreamMemoryCap,
+        evictionTarget: DEFAULT_DREAM_CONFIG.postDreamMemoryCap,
+      }).catch(err => {
         console.debug('[LLMMemoryExtractor] Eviction check failed:', err instanceof Error ? err.message : err);
       });
       evictIfNeeded(userMemoryDir, {
         evictedDir: resolveUserMemoryEvictedDir(),
+        softLimit: DEFAULT_DREAM_CONFIG.userMemoryPostDreamCap,
+        evictionTarget: DEFAULT_DREAM_CONFIG.userMemoryPostDreamCap,
       }).catch(err => {
         console.debug('[LLMMemoryExtractor] User memory eviction failed:', err instanceof Error ? err.message : err);
       });

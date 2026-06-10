@@ -170,6 +170,16 @@ content`, 'utf-8');
     expect(results[0].filename).toBe('note.md');
   });
 
+  it('跳过活跃目录内遗留的 evicted/ 子目录', async () => {
+    await fs.mkdir(path.join(tempDir, 'evicted'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'active.md'), '---\nname: active\n---\n', 'utf-8');
+    await fs.writeFile(path.join(tempDir, 'evicted', 'archived.md'), '---\nname: archived\n---\n', 'utf-8');
+
+    const results = await scanMemoryFiles(tempDir);
+    expect(results).toHaveLength(1);
+    expect(results[0].filename).toBe('active.md');
+  });
+
   it('空目录返回空数组', async () => {
     const results = await scanMemoryFiles(tempDir);
     expect(results).toEqual([]);

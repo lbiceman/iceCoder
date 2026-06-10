@@ -152,6 +152,14 @@ window.MemoryPage = (function () {
   var memoryPageEpoch = 0;
   /** @type {AbortController | null} */
   var listFetchAbort = null;
+  var dreamPollTimer = null;
+
+  function stopDreamPoll() {
+    if (dreamPollTimer) {
+      clearInterval(dreamPollTimer);
+      dreamPollTimer = null;
+    }
+  }
   var finishBusyRaf1 = 0;
   var finishBusyRaf2 = 0;
   var finishBusyRaf3 = 0;
@@ -183,6 +191,7 @@ window.MemoryPage = (function () {
   }
 
   function teardownMemoryPageRuntime() {
+    stopDreamPoll();
     cancelFinishBusyRafs();
     abortListFetch();
     closePopover();
@@ -1052,7 +1061,18 @@ window.MemoryPage = (function () {
       '</div>';
 
     var consolidateBtn = header.querySelector('#memory-consolidate-btn');
-    var deepMode = false; // 首次点击规则修复，再次点击深度 LLM
+
+    function startDreamPoll() {
+      stopDreamPoll();
+      dreamPollTimer = setInterval(function () {
+        fetchHealthCapsule(function (data) {
+          if (!data || !data.job || !data.job.running) {
+            stopDreamPoll();
+            if (containerEl) render(containerEl);
+          }
+        });
+      }, 5000);
+    }
 
     if (consolidateBtn) {
       consolidateBtn.addEventListener('click', function () {
@@ -1060,17 +1080,19 @@ window.MemoryPage = (function () {
         var btn = /** @type {HTMLButtonElement} */ (consolidateBtn);
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
+        btn.textContent = '提交中...';
 
-        var url = deepMode ? '/api/memory/dream?deep=true' : '/api/memory/dream';
-        btn.textContent = deepMode ? '深度整合中...' : '修复中...';
-
-        fetch(url, { method: 'POST' })
+        fetch('/api/memory/dream', { method: 'POST' })
           .then(function (res) {
             return res.json().then(function (body) {
-              return { ok: res.ok, body: body };
+              return { ok: res.ok, status: res.status, body: body };
             });
           })
           .then(function (out) {
+            btn.disabled = false;
+            btn.removeAttribute('aria-busy');
+            btn.textContent = '手动整合';
+
             if (!out.ok || !out.body.success) {
               var errMsg = (out.body && out.body.error) || '操作失败';
               window.alert(errMsg);
@@ -1082,22 +1104,20 @@ window.MemoryPage = (function () {
               ' · 删除 ' + (out.body.filesDeleted || 0) +
               (out.body.ruleFixed ? ' · 索引修复 ' + (out.body.ruleEntryCount || 0) + ' 条' : '') +
               (out.body.filesEvicted ? ' · 归档 ' + out.body.filesEvicted : '');
-            window.alert(summary + '\n' + detail);
-            // 刷新健康状态
-            fetchHealthCapsule();
-            if (containerEl) render(containerEl);
-            // 如果有深度整合可用，下次不自动降级
-            if (!out.body.deep && out.body.success) {
-              deepMode = true;
-              btn.textContent = '深度整合（LLM）';
+            window.alert(summary + (detail.trim() ? '\n' + detail : ''));
+
+            if (out.body.background) {
+              fetchHealthCapsule();
+              startDreamPoll();
+            } else if (containerEl) {
+              render(containerEl);
             }
           })
           .catch(function () {
-            window.alert('请求失败，请稍后重试。');
-          })
-          .finally(function () {
             btn.disabled = false;
             btn.removeAttribute('aria-busy');
+            btn.textContent = '手动整合';
+            window.alert('请求失败，请稍后重试。');
           });
       });
     }
@@ -1107,17 +1127,36 @@ window.MemoryPage = (function () {
       header.querySelector('#memory-health-capsule')
     );
 
-    function fetchHealthCapsule() {
+    function fetchHealthCapsule(done) {
       if (!healthCapsuleEl) return;
       fetch('/api/memory/dream', { method: 'GET' })
         .then(function (res) { return res.json(); })
         .then(function (data) {
+          if (typeof done === 'function') done(data);
+
           if (!data.success || !data.health) {
             healthCapsuleEl.setAttribute('data-status', 'warn');
             var textEl = healthCapsuleEl.querySelector('.memory-health-text');
             if (textEl) textEl.textContent = '无法获取';
             return;
           }
+
+          if (data.job && data.job.running) {
+            healthCapsuleEl.setAttribute('data-status', 'warn');
+            var busyEl = healthCapsuleEl.querySelector('.memory-health-text');
+            if (busyEl) busyEl.textContent = '后台整合中…';
+            if (consolidateBtn) {
+              consolidateBtn.textContent = '后台整合中…';
+              consolidateBtn.setAttribute('aria-busy', 'true');
+            }
+            return;
+          }
+
+          if (consolidateBtn) {
+            consolidateBtn.textContent = '手动整合';
+            consolidateBtn.removeAttribute('aria-busy');
+          }
+
           var h = data.health;
           var status = 'ok';
           var label = '';
@@ -1134,11 +1173,6 @@ window.MemoryPage = (function () {
           var textEl = healthCapsuleEl.querySelector('.memory-health-text');
           if (textEl) textEl.textContent = label;
 
-          // 有异常时 offer LLM 深度整合
-          if (status !== 'ok' && consolidateBtn && !deepMode) {
-            deepMode = true;
-            consolidateBtn.textContent = '深度整合（LLM）';
-          }
         })
         .catch(function () {
           if (healthCapsuleEl) {
