@@ -90,13 +90,6 @@ window.ChatPage = (function () {
   var cmdPaletteOpen = false;
   var cmdBlurHideTimer = null;
 
-  // ---- 辅助 ----
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-  }
-
   function updateNavStatus(connected) {
     var dot = document.getElementById('status-dot');
     if (dot) {
@@ -131,8 +124,60 @@ window.ChatPage = (function () {
           modelName = defaultProvider.modelName || '';
           updatePetTokenUsage();
         }
+        // 同步把默认模型名 (isDefault=true) 的 modelName 显示到底部 chip-model
+        updateChipModelLabel(providers);
       })
-      .catch(function () { /* ignore */ });
+      .catch(function () {
+        // 接口失败也回填 chip，避免一直停在"加载中…"
+        updateChipModelLabel(null);
+      });
+  }
+
+  // 把 /api/config 的默认模型 (isDefault=true) 的 modelName 同步到底部 chip
+  // 没有 provider 或请求失败时回退到"未配置"
+  // DOM 还没渲染好时（chat 页面异步插入 chip-model-label）轮询重试，避免卡在"加载中…"
+  function updateChipModelLabel(providers) {
+    function apply() {
+      var el = document.getElementById('chip-model-label');
+      if (!el) return false;
+      if (!providers || !providers.length) {
+        el.textContent = '未配置';
+        return true;
+      }
+      var def = providers.find(function (p) { return p.isDefault; }) || providers[0];
+      el.textContent = def && def.modelName ? def.modelName : '未配置';
+      return true;
+    }
+    if (apply()) return;
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      if (apply() || tries >= 10) clearInterval(timer);
+    }, 50);
+  }
+
+  // 从 WS 初始连接 payload 同步 chip（避免再走一次 fetch）
+  // 兼容两种结构：data.providers (数组) 或 data.modelName (单值)
+  function syncChipModelLabelFromWs(data) {
+    var providers = null;
+    if (data && data.providers && data.providers.length) {
+      providers = data.providers;
+    } else if (data && data.modelName) {
+      providers = [{ isDefault: true, modelName: data.modelName }];
+    }
+    updateChipModelLabel(providers);
+  }
+
+  // 主动 fetch /api/config 同步 chip（兜底：WS payload 拿不到 providers 时用）
+  function loadChipModelLabel() {
+    fetch('/api/config')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        updateChipModelLabel((data && data.providers) || []);
+      })
+      .catch(function () {
+        updateChipModelLabel(null);
+      });
   }
 
   function fetchSupportedFormats() {
@@ -178,12 +223,6 @@ window.ChatPage = (function () {
     if (sessionPet && sessionPet.setTokenUsage) {
       sessionPet.setTokenUsage(usedInputTokens, maxContextTokens, usedOutputTokens);
     }
-  }
-
-  function formatTokenCount(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-    return '' + n;
   }
 
   /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
@@ -255,22 +294,6 @@ window.ChatPage = (function () {
     if (top < 8) top = 8;
     elCmdPalette.style.left = left + 'px';
     elCmdPalette.style.top = top + 'px';
-  }
-
-  function startCmdPaletteObserver() {
-    if (!elCmdPalette || typeof ResizeObserver === 'undefined') return;
-    if (cmdPaletteResizeObserver) cmdPaletteResizeObserver.disconnect();
-    cmdPaletteResizeObserver = new ResizeObserver(function () {
-      if (cmdPaletteOpen) positionCmdPalette();
-    });
-    cmdPaletteResizeObserver.observe(elCmdPalette);
-  }
-
-  function stopCmdPaletteObserver() {
-    if (cmdPaletteResizeObserver) {
-      cmdPaletteResizeObserver.disconnect();
-      cmdPaletteResizeObserver = null;
-    }
   }
 
   function onCmdPaletteDocClick(e) {
@@ -661,6 +684,14 @@ window.ChatPage = (function () {
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
       fetchModelContext();
+    }
+    // 无论 model context 来源是 WS 还是 fetch，都主动同步一次 chip label
+    // （applyModelContextFromWs / fetchModelContext 拿到的 modelName 只用于 token 用量，
+    //  不会回填到 #chip-model-label。这里独立保证 chip 显示真实默认模型。）
+    if (data && (data.providers || data.modelName)) {
+      syncChipModelLabelFromWs(data);
+    } else {
+      loadChipModelLabel();
     }
     syncSidebarWorkspace(data);
     if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
@@ -1147,6 +1178,8 @@ window.ChatPage = (function () {
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
       syncMessages();
     }
+    // 切回 chat 页面时也重新同步 chip（不依赖 WS 状态，避免卡在"加载中…"）
+    loadChipModelLabel();
   }
 
   // ---- 渲染 ----
@@ -1193,7 +1226,7 @@ window.ChatPage = (function () {
                 '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
               '</button>' +
               '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型">' +
-                '<span class="chip-label">GPT-5.3-Codex</span>' +
+                '<span class="chip-label" id="chip-model-label"></span>' +
               '</button>' +
               '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
                 '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
@@ -1491,6 +1524,14 @@ window.ChatPage = (function () {
     });
   }
 
+  // 兜底：DOM 就绪后主动同步一次 chip label（不依赖 WS / render 时序）
+  // 必须放在 return 之前，否则 return 之后代码 unreachable 永远不跑
+  // 模板已留空 id="chip-model-label"，loadChipModelLabel 内部自带轮询重试
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadChipModelLabel);
+  } else {
+    loadChipModelLabel();
+  }
   return {
     render: render,
     onActivate: onActivate,

@@ -745,7 +745,8 @@
 .session-pet-indicator {
   display: flex;
   position: fixed;
-  bottom: 76px;
+  /* 抬到聊天输入框（composer + toolbar ≈ 140px）上方，避免双击复位后盖住聊天框 */
+  bottom: 180px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
