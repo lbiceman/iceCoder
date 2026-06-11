@@ -1194,7 +1194,6 @@ window.ChatPage = (function () {
               '</button>' +
               '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型">' +
                 '<span class="chip-label">GPT-5.3-Codex</span>' +
-                '<svg class="chip-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>' +
               '</button>' +
               '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
                 '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
