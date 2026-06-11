@@ -34,9 +34,13 @@ body.setup-required .nav-link[data-page="config"] {
 }
 
 .config-page .subtitle {
-  color: var(--text-muted);
+  color: color-mix(in srgb, var(--text-primary) 70%, var(--text-muted) 30%);
   margin-bottom: 24px;
   font-size: 13px;
+}
+
+.setup-banner {
+  color: color-mix(in srgb, var(--text-primary) 65%, var(--text-muted) 35%);
 }
 
 .provider-card {
