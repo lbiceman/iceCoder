@@ -7,7 +7,7 @@
 
 /* ===== Design Tokens ===== */
 :root {
-  --radius: 12px;
+  --radius: 8px;
   --radius-lg: 16px;
   --radius-pill: 9999px;
   --transition: 180ms ease;
