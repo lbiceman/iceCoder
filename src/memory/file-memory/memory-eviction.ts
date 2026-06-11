@@ -18,6 +18,7 @@ import path from 'node:path';
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
 import { repairDeadLinksInMemoryIndex } from './memory-index-health.js';
+import { removeIndexRows } from './memory-index-maintainer.js';
 import { getScannerCache } from './memory-scanner-cache.js';
 import {
   type EvictionConfig,
@@ -268,6 +269,11 @@ export async function evictIfNeeded(
 
   if (evictedFiles.length > 0) {
     console.log(`[memory-eviction] ${summary}`);
+    try {
+      await removeIndexRows(memoryDir, evictedFiles);
+    } catch (err) {
+      console.debug('[memory-eviction] removeIndexRows failed:', err instanceof Error ? err.message : err);
+    }
     try {
       const repair = await repairDeadLinksInMemoryIndex(memoryDir);
       if (repair.wrote) {

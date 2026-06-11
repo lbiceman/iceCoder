@@ -9,6 +9,7 @@ import { buildLlmRoundLogFields, isRetryableError } from './harness-llm-log.js';
 import { isAbortError } from '../llm/abort-error.js';
 import { AssistantVisibleStreamFilter } from './text-tool-call-salvage.js';
 import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
+import { ReasoningSystemTagStreamFilter } from './thinking-content-strip.js';
 import {
   applyCheckpointResumeFork,
   buildEmergencyResumeSummaryMessage,
@@ -112,14 +113,19 @@ export async function callHarnessLlm(
   try {
     if (streamFn) {
       const streamFilter = new AssistantVisibleStreamFilter();
+      const reasoningSanitizer = new ReasoningSystemTagStreamFilter();
       try {
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
-          dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep);
+          dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep, reasoningSanitizer);
         }, { tools: currentTools });
         const tail = streamFilter.flush();
         if (tail.thinking) {
           onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
+        }
+        const reasoningTail = reasoningSanitizer.flush();
+        if (reasoningTail) {
+          onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: reasoningTail });
         }
         if (tail.visible) {
           onStep?.({ type: 'stream_delta', iteration: round, delta: tail.visible });

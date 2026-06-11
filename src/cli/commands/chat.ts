@@ -372,6 +372,10 @@ ${c.bold}终端内置命令:${c.reset}
       const assembled = await loadAssembledPrompt();
       let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
 
+      const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+      const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
+      const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
+
       const wsCtx = await resolveWorkspaceToolContext({
         sessionDir: ctx.paths.sessionsDir,
         sessionId: 'default',
@@ -383,10 +387,6 @@ ${c.bold}终端内置命令:${c.reset}
         llmAdapter: ctx.llmAdapter,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
-
-      const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
-      const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
-      const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
       const harnessConfig: HarnessConfig = {
         context: {

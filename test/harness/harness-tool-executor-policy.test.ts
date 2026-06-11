@@ -43,48 +43,38 @@ describe('harness-tool-executor policy blocks', () => {
     expect(stats.policyBlockedSignatures).toEqual([toolCallSignature(tc)]);
   });
 
-  it('blocks repeated missing read_file as policy_block', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'ice-exec-'));
+  it('allows paths outside locked workspace when skipSandbox is true', async () => {
     const tc: ToolCall = {
-      id: 'tc-missing',
+      id: 'tc-outside-open',
       name: 'read_file',
-      arguments: { path: 'src/scenes/MapSelectScene.ts' },
+      arguments: { path: 'C:/outside/project/foo.ts' },
     };
     const messages: UnifiedMessage[] = [];
     const loopController = new LoopController({ maxRounds: 1 });
-    const execute = vi.fn();
-    const statsObj = emptyHarnessPolicyStats();
-    const attempts = new Map<string, number>([[tc.arguments.path as string, 1]]);
-    const steps: Array<{ toolOutcome?: string }> = [];
+    const executeTool = vi.fn().mockResolvedValue({ success: true, output: 'ok' });
 
     const stats = await executeToolCallsStreaming(
       {
-        toolExecutor: { execute } as never,
+        toolExecutor: { executeTool } as never,
         loopController,
         permissionRules: [],
-        workspaceRoot: root,
-        lockedWorkspaceRoot: root,
-        missingFileAttempts: attempts,
-        harnessPolicyStats: statsObj,
+        skipSandbox: true,
+        workspaceRoot: 'E:/locked/project',
+        lockedWorkspaceRoot: 'E:/locked/project',
+        referenceReads: [],
       },
       {
         toolCalls: [tc],
         messages,
         logger: { toolCall: () => {}, toolResult: () => {} } as never,
-        onStep: (event) => {
-          if (event.type === 'tool_result') steps.push(event);
-        },
       },
     );
 
-    expect(execute).not.toHaveBeenCalled();
-    expect(stats.failedCount).toBe(0);
-    expect(statsObj.missingFileBlockCount).toBe(1);
-    expect(steps[0]?.toolOutcome).toBe('policy_block');
-    expect(messages[0]?.content).toMatch(/Missing File/);
+    expect(executeTool).toHaveBeenCalledOnce();
+    expect(stats.policyBlockedSignatures).toHaveLength(0);
   });
 
-  it('records budgetBlockByPath for BranchBudget file cap blocks', async () => {
+  it('blocks repeated missing read_file as policy_block', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ice-exec-budget-'));
     const relPath = 'src/scenes/ShopScene.ts';
     mkdirSync(join(root, 'src', 'scenes'), { recursive: true });

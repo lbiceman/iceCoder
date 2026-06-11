@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AssistantVisibleStreamFilter } from '../../src/harness/text-tool-call-salvage.js';
 import { dispatchStreamChunkToStep } from '../../src/harness/stream-step-dispatch.js';
+import { ReasoningSystemTagStreamFilter } from '../../src/harness/thinking-content-strip.js';
 import type { HarnessStepEvent } from '../../src/harness/types.js';
 
 describe('stream-step-dispatch (no-thinking models)', () => {
@@ -30,6 +31,7 @@ describe('stream-step-dispatch (no-thinking models)', () => {
 
   it('reasoning channel only fires when adapter provides reasoning delta', () => {
     const filter = new AssistantVisibleStreamFilter();
+    const sanitizer = new ReasoningSystemTagStreamFilter();
     const steps: HarnessStepEvent[] = [];
 
     dispatchStreamChunkToStep(
@@ -38,11 +40,29 @@ describe('stream-step-dispatch (no-thinking models)', () => {
       filter,
       2,
       (e) => steps.push(e),
+      sanitizer,
     );
 
     expect(steps).toEqual([
       { type: 'reasoning_stream_delta', iteration: 2, delta: 'chain of thought' },
     ]);
+  });
+
+  it('reasoning channel strips leaked system tags', () => {
+    const filter = new AssistantVisibleStreamFilter();
+    const sanitizer = new ReasoningSystemTagStreamFilter();
+    const steps: HarnessStepEvent[] = [];
+
+    dispatchStreamChunkToStep(
+      { channel: 'reasoning', delta: '分析<system>\n</system>继续' },
+      false,
+      filter,
+      2,
+      (e) => steps.push(e),
+      sanitizer,
+    );
+
+    expect(steps[0]?.delta).toBe('分析继续');
   });
 
   it('flush with no embedded thinking yields no reasoning tail', () => {

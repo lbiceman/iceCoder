@@ -4,6 +4,7 @@ import {
   canVerifyDeliverableKind,
   classifyChangedFiles,
   deliverableVersionFromMap,
+  engineeringTestTargetPaths,
   fileDeliverablePaths,
   gateConfirmationPaths,
   hasUnconfirmedFileDeliverables,
@@ -152,11 +153,11 @@ describe('document-deliverable', () => {
     expect(fileDeliverablePaths(['src/a.ts'])).toEqual([]);
   });
 
-  it('file deliverable verification uses read tools not run_command', () => {
-    expect(canVerifyDeliverableKind(['a.md'], ['file_info', 'read_file'])).toBe(true);
-    expect(canVerifyDeliverableKind(['a.md'], ['run_command'])).toBe(false);
-    expect(canVerifyDeliverableKind(['src/a.ts'], ['run_command'])).toBe(false);
-    expect(canVerifyDeliverableKind(['src/a.ts'], ['file_info'])).toBe(true);
+  it('canVerifyDeliverableKind for engineering pending requires run_command', () => {
+    expect(canVerifyDeliverableKind(['a.md'], ['run_command'], false, 'required')).toBe(true);
+    expect(canVerifyDeliverableKind(['src/a.ts'], ['run_command'], false, 'required')).toBe(true);
+    expect(canVerifyDeliverableKind(['src/a.ts'], ['read_file'], false, 'required')).toBe(false);
+    expect(canVerifyDeliverableKind(['src/a.ts'], ['run_command'], false, 'passed')).toBe(true);
   });
 
   it('matches paths across separators and casing', () => {
@@ -206,7 +207,7 @@ describe('document-deliverable', () => {
     expect(isNonEmptyFileInfoOutput(JSON.stringify({ size: 0, type: 'directory' }))).toBe(false);
   });
 
-  it('empty read_file output still confirms deliverable', () => {
+  it('empty read_file output still tracks deliverable confirm version', () => {
     const state = new TaskState('写占位文件');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'empty.md' } },
@@ -216,6 +217,7 @@ describe('document-deliverable', () => {
       { id: 'r1', name: 'read_file', arguments: { path: 'empty.md' } },
       { success: true, output: '' },
     );
+    expect(state.areAllFileDeliverablesConfirmed()).toBe(true);
     expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
@@ -249,141 +251,154 @@ describe('document-deliverable', () => {
   });
 });
 
-describe('TaskState file deliverable verification', () => {
-  it('passes verification after file_info confirms written md', () => {
+describe('TaskState engineering unit test gate', () => {
+  it('md-only changes do not block verification gate', () => {
     const state = new TaskState('整理成 md 放到桌面');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\Desktop\\AntDesignVue组件文档.md' } },
+      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\Desktop\\doc.md' } },
       { success: true, output: 'ok' },
     );
-    expect(state.snapshot().verificationStatus).toBe('required');
     expect(state.deliverableKind()).toBe('file_deliverable');
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
 
+  it('file_info on md does not auto-pass verificationStatus', () => {
+    const state = new TaskState('整理成 md 放到桌面');
     state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'C:\\Desktop\\AntDesignVue组件文档.md' } },
+      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\Desktop\\doc.md' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'f1', name: 'file_info', arguments: { path: 'C:\\Desktop\\doc.md' } },
       { success: true, output: JSON.stringify({ size: 50143, type: 'file' }) },
     );
+    expect(state.snapshot().verificationStatus).toBe('required');
+    expect(state.areAllFileDeliverablesConfirmed()).toBe(true);
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
 
+  it('engineering changes block until unit test passes', () => {
+    const state = new TaskState('fix bug');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+
+    state.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'all passed' },
+    );
     expect(state.snapshot().verificationStatus).toBe('passed');
     expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
-  it('passes verification for unknown extension via file_info', () => {
-    const state = new TaskState('写临时文件');
+  it('read_file after engineering edit does not unblock gate', () => {
+    const state = new TaskState('fix bug');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\temp\\cache.tmp' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.deliverableKind()).toBe('file_deliverable');
-
     state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'C:\\temp\\cache.tmp' } },
-      { success: true, output: JSON.stringify({ size: 128, type: 'file' }) },
+      { id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'export const x = 1;' },
     );
-    expect(state.snapshot().verificationStatus).toBe('passed');
+    expect(state.isVerificationBlockingFinal()).toBe(true);
   });
 
-  it('passes verification for ephemeral script without file_info', () => {
-    const state = new TaskState('写清理脚本');
+  it('failed unit test does not block gate (soft reminder only)', () => {
+    const state = new TaskState('fix bug');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\scripts\\cleanup.ps1' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.deliverableKind()).toBe('file_deliverable');
+    state.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: '', error: 'exit 1' },
+    );
+    expect(state.snapshot().verificationStatus).toBe('failed');
     expect(state.isVerificationBlockingFinal()).toBe(false);
+    expect(state.shouldInjectFailedUnitTestReminder()).toBe(true);
+  });
+
+  it('rewrite after failed test resets to required', () => {
+    const state = new TaskState('fix bug');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: false, output: 'FAIL', error: 'exit 1' },
+    );
+    expect(state.snapshot().verificationStatus).toBe('failed');
+    state.recordToolResult(
+      { id: 'w2', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
     expect(state.snapshot().verificationStatus).toBe('required');
-  });
-
-  it('passes verification for cleanup.ps1 via file_info', () => {
-    const state = new TaskState('写清理脚本');
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'C:\\scripts\\cleanup.ps1' } },
-      { success: true, output: 'ok' },
-    );
-    expect(state.deliverableKind()).toBe('file_deliverable');
-
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'C:\\scripts\\cleanup.ps1' } },
-      { success: true, output: JSON.stringify({ size: 512, type: 'file' }) },
-    );
-    expect(state.snapshot().verificationStatus).toBe('passed');
-  });
-
-  it('passes verification for extensionless LICENSE via file_info', () => {
-    const state = new TaskState('添加 LICENSE');
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/repo/LICENSE' } },
-      { success: true, output: 'ok' },
-    );
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: '/repo/LICENSE' } },
-      { success: true, output: JSON.stringify({ size: 200, type: 'file' }) },
-    );
-    expect(state.snapshot().verificationStatus).toBe('passed');
-  });
-
-  it('does not pass when read happened before write', () => {
-    const state = new TaskState('更新文档');
-    state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: '# old content' },
-    );
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: 'ok' },
-    );
-
-    expect(state.snapshot().verificationStatus).toBe('required');
-    expect(state.areAllFileDeliverablesConfirmed()).toBe(false);
     expect(state.isVerificationBlockingFinal()).toBe(true);
+    expect(state.shouldInjectFailedUnitTestReminder()).toBe(false);
   });
 
-  it('requires re-confirm after rewrite', () => {
-    const state = new TaskState('更新文档');
+  it('npm run lint success does not mark verification passed', () => {
+    const state = new TaskState('fix');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
     state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: JSON.stringify({ size: 10, type: 'file' }) },
-    );
-    expect(state.snapshot().verificationStatus).toBe('passed');
-
-    state.recordToolResult(
-      { id: 'w2', name: 'append_file', arguments: { path: '/tmp/out.md' } },
+      { id: 't1', name: 'run_command', arguments: { command: 'npm run lint' } },
       { success: true, output: 'ok' },
     );
     expect(state.snapshot().verificationStatus).toBe('required');
     expect(state.isVerificationBlockingFinal()).toBe(true);
   });
 
-  it('requires all multi-file deliverables confirmed', () => {
-    const state = new TaskState('写两份报告');
+  it('background npm test start keeps verification required', () => {
+    const state = new TaskState('fix');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/a.md' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
+    const bgOutput = JSON.stringify({ mode: 'background', task_id: 'bg_1' });
     state.recordToolResult(
-      { id: 'w2', name: 'write_file', arguments: { path: '/tmp/b.md' } },
-      { success: true, output: 'ok' },
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: bgOutput },
     );
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: '/tmp/a.md' } },
-      { success: true, output: JSON.stringify({ size: 10, type: 'file' }) },
-    );
-
-    expect(state.areAllFileDeliverablesConfirmed()).toBe(false);
+    expect(state.snapshot().verificationStatus).toBe('required');
     expect(state.isVerificationBlockingFinal()).toBe(true);
-
-    state.recordToolResult(
-      { id: 'f2', name: 'file_info', arguments: { path: '/tmp/b.md' } },
-      { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
-    );
-    expect(state.snapshot().verificationStatus).toBe('passed');
   });
 
-  it('mixed code and doc changes require all paths confirmed', () => {
+  it('css-only changes do not trigger unit test gate', () => {
+    const state = new TaskState('style');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.css' } },
+      { success: true, output: 'ok' },
+    );
+    expect(engineeringTestTargetPaths(state.snapshot().filesChanged)).toEqual([]);
+    expect(state.isVerificationBlockingFinal()).toBe(false);
+  });
+
+  it('rewrite after passed test resets to required', () => {
+    const state = new TaskState('fix bug');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'w2', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    expect(state.snapshot().verificationStatus).toBe('required');
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+  });
+
+  it('mixed code and doc: blocks until test passes not read confirm', () => {
     const state = new TaskState('fix bug and update readme');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'README.md' } },
@@ -393,7 +408,6 @@ describe('TaskState file deliverable verification', () => {
       { id: 'w2', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.deliverableKind()).toBe('engineering');
     expect(state.isVerificationBlockingFinal()).toBe(true);
 
     state.recordToolResult(
@@ -403,78 +417,45 @@ describe('TaskState file deliverable verification', () => {
     expect(state.isVerificationBlockingFinal()).toBe(true);
 
     state.recordToolResult(
-      { id: 'f2', name: 'read_file', arguments: { path: 'src/a.ts' } },
-      { success: true, output: 'export function foo() {}' },
+      { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'ok' },
     );
-    expect(state.snapshot().verificationStatus).toBe('passed');
     expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
-  it('engineering-only changes block until read after write', () => {
-    const state = new TaskState('fix bug');
+  it('buildVerificationPrompt lists engineering targets', () => {
+    const state = new TaskState('fix');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.isVerificationBlockingFinal()).toBe(true);
-
     state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: 'src/a.ts' } },
-      { success: true, output: 'export const x = 1;' },
+      { id: 'w2', name: 'write_file', arguments: { path: 'notes.md' } },
+      { success: true, output: 'ok' },
     );
-    expect(state.isVerificationBlockingFinal()).toBe(false);
+    const prompt = state.buildVerificationPrompt();
+    expect(prompt).toMatch(/unit tests/i);
+    expect(prompt).toMatch(/src\/a\.ts/);
+    expect(prompt).not.toMatch(/notes\.md/);
+  });
 
+  it('buildFailedUnitTestReminderPrompt mentions failure', () => {
+    const state = new TaskState('fix');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
     state.recordToolResult(
       { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },
-      { success: false, output: '', error: 'exit 1' },
+      { success: false, output: 'FAIL', error: 'exit 1' },
     );
-    expect(state.snapshot().verificationStatus).toBe('failed');
-    expect(state.isVerificationBlockingFinal()).toBe(false);
-  });
-
-  it('reconcileFileDeliverablesAfterWrite passes when write followed by read', () => {
-    const state = new TaskState('生成报告');
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: 'ok' },
-    );
-    state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: '# Title\n\nbody' },
-    );
-    expect(state.reconcileFileDeliverablesAfterWrite()).toBe(true);
-    expect(state.snapshot().verificationStatus).toBe('passed');
-  });
-
-  it('snapshot persists write versions across restore', () => {
-    const state = new TaskState('doc task');
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: 'ok' },
-    );
-    state.recordToolResult(
-      { id: 'w2', name: 'append_file', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: 'ok' },
-    );
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: '/tmp/out.md' } },
-      { success: true, output: JSON.stringify({ size: 12, type: 'file' }) },
-    );
-    const snap = state.snapshot();
-    expect(snap.fileDeliverableWriteVersions?.['/tmp/out.md']).toBe(2);
-    expect(snap.fileDeliverableConfirmVersions?.['/tmp/out.md']).toBe(2);
-
-    const restored = new TaskState('other');
-    restored.applySnapshot(snap);
-    expect(restored.snapshot().verificationStatus).toBe('passed');
-    expect(restored.isVerificationBlockingFinal()).toBe(false);
-    expect(restored.areAllFileDeliverablesConfirmed()).toBe(true);
+    expect(state.buildFailedUnitTestReminderPrompt()).toMatch(/Unit tests failed/i);
   });
 
   it('isVerificationBlockingFinal is side-effect free', () => {
-    const state = new TaskState('写文档');
+    const state = new TaskState('fix');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: '/tmp/out.md' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
     const before = state.snapshot();
@@ -482,37 +463,22 @@ describe('TaskState file deliverable verification', () => {
     expect(state.snapshot()).toEqual(before);
   });
 
-  it('buildVerificationPrompt still lists pending paths missing on disk', () => {
-    const state = new TaskState('cleanup');
+  it('buildVerificationPrompt lists engineering path missing on disk', () => {
+    const state = new TaskState('fix');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/missing.ts' } },
       { success: true, output: 'ok' },
     );
-    const prompt = state.buildVerificationPrompt(process.cwd());
-    expect(prompt).toMatch(/generate-assets\.mjs/);
-    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(true);
+    const prompt = state.buildVerificationPrompt();
+    expect(prompt).toMatch(/src\/missing\.ts/);
+    expect(state.isVerificationBlockingFinal()).toBe(true);
   });
 
-  it('buildVerificationPrompt skips confirmed-then-deleted paths', () => {
+  it('removes engineering path after read_file ENOENT clears gate when no targets left', () => {
     const state = new TaskState('cleanup');
+    const path = 'src/missing.ts';
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
-      { success: true, output: 'ok' },
-    );
-    state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: 'generate-assets.mjs' } },
-      { success: true, output: '// ok' },
-    );
-    const prompt = state.buildVerificationPrompt(process.cwd());
-    expect(prompt).not.toMatch(/generate-assets\.mjs/);
-    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(false);
-  });
-
-  it('removes changed file from verification gate after read_file ENOENT', () => {
-    const state = new TaskState('cleanup temp script');
-    const path = 'generate-assets.mjs';
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path } },
+      { id: 'w1', name: 'edit_file', arguments: { path } },
       { success: true, output: 'ok' },
     );
     expect(state.isVerificationBlockingFinal()).toBe(true);
@@ -526,93 +492,21 @@ describe('TaskState file deliverable verification', () => {
     expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
-  it('reconcileMissingChangedFiles prunes only confirmed deleted paths', () => {
-    const state = new TaskState('cleanup temp script');
+  it('removes changed file after fs_operation delete', () => {
+    const state = new TaskState('cleanup');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(true);
-
-    expect(state.reconcileMissingChangedFiles(process.cwd())).toBe(0);
-    expect(state.snapshot().filesChanged).toEqual(['generate-assets.mjs']);
-
     state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: 'generate-assets.mjs' } },
-      { success: true, output: '// ok' },
+      { id: 'd1', name: 'fs_operation', arguments: { operation: 'delete', path: 'src/a.ts' } },
+      { success: true, output: 'File deleted: src/a.ts' },
     );
-    const removed = state.reconcileMissingChangedFiles(process.cwd());
-    expect(removed).toBeGreaterThanOrEqual(1);
-    expect(state.snapshot().filesChanged).toEqual([]);
-    expect(state.isVerificationBlockingFinal(undefined, process.cwd())).toBe(false);
-  });
-
-  it('removes changed file from verification gate after fs_operation delete', () => {
-    const state = new TaskState('cleanup temp script');
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'generate-assets.mjs' } },
-      { success: true, output: 'ok' },
-    );
-    expect(state.isVerificationBlockingFinal()).toBe(true);
-
-    state.recordToolResult(
-      { id: 'd1', name: 'fs_operation', arguments: { operation: 'delete', path: 'generate-assets.mjs' } },
-      { success: true, output: 'File deleted: generate-assets.mjs' },
-    );
-
     expect(state.snapshot().filesChanged).toEqual([]);
     expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
-  it('removes changed file from verification gate after run_command del', () => {
-    const state = new TaskState('cleanup temp script');
-    const path = 'E:\\test\\proj\\generate-assets.mjs';
-    state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path } },
-      { success: true, output: 'ok' },
-    );
-    expect(state.isVerificationBlockingFinal()).toBe(true);
-
-    state.recordToolResult(
-      {
-        id: 'd1',
-        name: 'run_command',
-        arguments: { command: `del "${path}" 2>nul || echo done` },
-      },
-      { success: true, output: 'done' },
-    );
-
-    expect(state.snapshot().filesChanged).toEqual([]);
-    expect(state.isVerificationBlockingFinal()).toBe(false);
-  });
-
-  it('reconcileOrphanFileDeliverableWriteVersions backfills missing write versions', () => {
-    const state = new TaskState('doc task');
-    state.applySnapshot({
-      goal: 'doc task',
-      intent: 'edit',
-      phase: 'editing',
-      filesRead: [],
-      filesChanged: ['README.md', 'e2e/run6.mjs', 'vendor/three.min.js'],
-      commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'required',
-      fileDeliverableWriteVersions: { 'vendor/three.min.js': 2 },
-      fileDeliverableConfirmVersions: { 'readme.md': 1 },
-    });
-
-    expect(state.snapshot().fileDeliverableWriteVersions?.['readme.md']).toBe(2);
-    expect(state.snapshot().fileDeliverableWriteVersions?.['e2e/run6.mjs']).toBe(1);
-    expect(state.pendingFileDeliverableCount()).toBe(3);
-
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'e2e/run6.mjs' } },
-      { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
-    );
-    expect(state.pendingFileDeliverableCount()).toBe(2);
-  });
-
-  it('reconcileOrphan bumps write above restored confirm to force re-read', () => {
+  it('reconcileOrphanFileDeliverableWriteVersions still backfills write versions', () => {
     const state = new TaskState('edit task');
     state.applySnapshot({
       goal: 'edit task',
@@ -625,53 +519,31 @@ describe('TaskState file deliverable verification', () => {
       verificationStatus: 'required',
       fileDeliverableConfirmVersions: { 'js/main.js': 8 },
     });
-
     expect(state.snapshot().fileDeliverableWriteVersions?.['js/main.js']).toBe(9);
-    expect(state.pendingFileDeliverableCount()).toBe(1);
-
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'js/main.js' } },
-      { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
-    );
-    expect(state.pendingFileDeliverableCount()).toBe(0);
   });
 
   it('buildVerificationPrompt does not mutate TaskState', () => {
-    const state = new TaskState('doc task');
-    state.applySnapshot({
-      goal: 'doc task',
-      intent: 'edit',
-      phase: 'editing',
-      filesRead: [],
-      filesChanged: ['README.md'],
-      commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'required',
-    });
+    const state = new TaskState('fix');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
     const before = state.snapshot();
     state.buildVerificationPrompt();
-    expect(state.snapshot().fileDeliverableWriteVersions).toEqual(before.fileDeliverableWriteVersions);
-    expect(state.pendingFileDeliverableCount()).toBe(before.filesChanged.length);
+    expect(state.snapshot()).toEqual(before);
   });
 
-  it('buildVerificationPrompt lists only pending paths', () => {
-    const state = new TaskState('doc task');
+  it('mvn test counts as verification command', () => {
+    const state = new TaskState('fix java');
     state.recordToolResult(
-      { id: 'w1', name: 'write_file', arguments: { path: 'README.md' } },
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/Main.java' } },
       { success: true, output: 'ok' },
     );
     state.recordToolResult(
-      { id: 'w2', name: 'write_file', arguments: { path: 'notes.md' } },
-      { success: true, output: 'ok' },
+      { id: 't1', name: 'run_command', arguments: { command: 'mvn test' } },
+      { success: true, output: 'BUILD SUCCESS' },
     );
-    state.recordToolResult(
-      { id: 'f1', name: 'file_info', arguments: { path: 'README.md' } },
-      { success: true, output: JSON.stringify({ size: 100, type: 'file' }) },
-    );
-
-    const prompt = state.buildVerificationPrompt();
-    expect(prompt).toMatch(/Still pending/);
-    expect(prompt).toMatch(/notes\.md/);
-    expect(prompt).not.toMatch(/^- README\.md/m);
+    expect(state.snapshot().verificationStatus).toBe('passed');
+    expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 });

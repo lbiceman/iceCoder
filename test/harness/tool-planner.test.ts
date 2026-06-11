@@ -24,35 +24,8 @@ describe('buildToolPlan', () => {
     expect(text).toContain('[Runtime Tool Planner]');
   });
 
-  it('adds file deliverable hint only when confirmation pending', () => {
-    const pending = buildToolPlan('write doc', {
-      goal: 'write doc',
-      intent: 'docs',
-      phase: 'editing',
-      filesRead: [],
-      filesChanged: ['/tmp/out.md'],
-      commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'required',
-      fileDeliverableWriteVersions: { '/tmp/out.md': 1 },
-    });
-    expect(pending.verificationHint).toMatch(/file_info|read_file/i);
-
-    const confirmed = buildToolPlan('write doc', {
-      goal: 'write doc',
-      intent: 'docs',
-      phase: 'verification',
-      filesRead: [],
-      filesChanged: ['/tmp/out.md'],
-      commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'passed',
-      fileDeliverableWriteVersions: { '/tmp/out.md': 1 },
-      fileDeliverableConfirmVersions: { '/tmp/out.md': 1 },
-    });
-    expect(confirmed.verificationHint).toBeUndefined();
-
-    const engineering = buildToolPlan('fix bug', {
+  it('adds unit test hint when engineering changes pending tests', () => {
+    const pending = buildToolPlan('fix bug', {
       goal: 'fix bug',
       intent: 'edit',
       phase: 'editing',
@@ -62,10 +35,34 @@ describe('buildToolPlan', () => {
       verificationRequired: true,
       verificationStatus: 'required',
     });
-    expect(engineering.verificationHint).toMatch(/file_info|read_file/i);
+    expect(pending.verificationHint).toMatch(/unit tests/i);
+
+    const passed = buildToolPlan('fix bug', {
+      goal: 'fix bug',
+      intent: 'edit',
+      phase: 'verification',
+      filesRead: [],
+      filesChanged: ['src/a.ts'],
+      commandsRun: ['npm test'],
+      verificationRequired: true,
+      verificationStatus: 'passed',
+    });
+    expect(passed.verificationHint).toBeUndefined();
+
+    const mdOnly = buildToolPlan('write doc', {
+      goal: 'write doc',
+      intent: 'docs',
+      phase: 'editing',
+      filesRead: [],
+      filesChanged: ['/tmp/out.md'],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+    });
+    expect(mdOnly.verificationHint).toBeUndefined();
   });
 
-  it('recommended flow treats verification as optional for edit intent', () => {
+  it('recommended flow asks for unit tests before finishing on edit intent', () => {
     const plan = buildToolPlan('fix bug', {
       goal: 'fix bug',
       intent: 'edit',
@@ -76,7 +73,6 @@ describe('buildToolPlan', () => {
       verificationRequired: true,
       verificationStatus: 'required',
     });
-    expect(plan.recommendedFlow.join(' ')).toMatch(/optional before finishing/i);
-    expect(plan.recommendedFlow.join(' ')).not.toMatch(/appropriate verification command/i);
+    expect(plan.recommendedFlow.join(' ')).toMatch(/unit tests before finishing/i);
   });
 });

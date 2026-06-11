@@ -1,13 +1,13 @@
 /**
  * 交付物类型判定 — 与 TaskIntent 解耦。
  *
- * - engineering：源码/样式白名单 → npm test / tsc / lint
- * - file_deliverable：其余一切写文件（含未知扩展名、无扩展名、脚本、数据/json/sql）→ file_info / read_file
+ * - engineering：源码/样式白名单 → 收尾 Gate 提示跑单元测试
+ * - file_deliverable：其余一切写文件（含未知扩展名、无扩展名、脚本、数据/json/sql）
  * - none：无写文件
  */
 
 import type { ToolResult } from '../tools/types.js';
-import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskStateSnapshot, VerificationStatus } from '../types/runtime-snapshot.js';
 import { stripLeadingCdPrefix } from './task-acceptance-tracker.js';
 import { isProjectCustomExemptPath } from './verification-exempt-config.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
@@ -37,9 +37,6 @@ const ENGINEERING_EXTENSIONS = new Set([
   'cs',
   'rb',
   'php',
-  'css',
-  'scss',
-  'less',
   'wasm',
 ]);
 
@@ -59,6 +56,11 @@ function fileExtension(path: string): string {
 export function isEngineeringDeliverablePath(path: string): boolean {
   const ext = fileExtension(path);
   return ext.length > 0 && ENGINEERING_EXTENSIONS.has(ext);
+}
+
+/** Gate 单测提示目标：工程源码，不含纯样式扩展名 */
+export function isEngineeringUnitTestTargetPath(path: string): boolean {
+  return isEngineeringDeliverablePath(path);
 }
 
 /**
@@ -91,7 +93,7 @@ export function isGenericTempPath(path: string): boolean {
 }
 
 /**
- * 一次性诊断/验证脚本（如 check-*.ps1、cleanup.ps1），仍记入 filesChanged 审计，但不要求写后读 Gate。
+ * 一次性诊断/验证脚本（如 check-*.ps1、cleanup.ps1），仍记入 filesChanged 审计，但豁免单测 Gate。
  */
 export function isEphemeralScriptPath(path: string): boolean {
   const norm = normalizeDeliverablePath(path);
@@ -139,6 +141,11 @@ export function isVerificationExemptPath(path: string): boolean {
     || isEphemeralScriptPath(path)
     || isDotPrefixedDirPath(path)
     || isProjectCustomExemptPath(path);
+}
+
+/** 变更列表是否全部为 Gate 豁免路径（记忆 / session-notes 等） */
+export function areAllVerificationExemptPaths(paths: readonly string[]): boolean {
+  return paths.length > 0 && paths.every(isVerificationExemptPath);
 }
 
 /** 磁盘上已不存在的 filesChanged 路径（清理/删除后同步 Gate 用）。 */
@@ -255,26 +262,53 @@ export function isFileDeliverableConfirmationTool(toolName: string): boolean {
   return FILE_DELIVERABLE_CONFIRM_TOOLS.has(toolName);
 }
 
+/** 参与单元测试 Gate 提示的工程源码路径（排除 temp/dot-dir/豁免路径） */
+export function engineeringTestTargetPaths(filesChanged: readonly string[]): string[] {
+  return filesChanged.filter(
+    path => isEngineeringUnitTestTargetPath(path) && !isVerificationExemptPath(path),
+  );
+}
+
+export function hasEngineeringTestTargets(filesChanged: readonly string[]): boolean {
+  return engineeringTestTargetPaths(filesChanged).length > 0;
+}
+
+/** 收尾时应 inject「请跑单元测试」（工程变更且尚未跑过验收命令） */
+export function shouldPromptEngineeringUnitTest(
+  filesChanged: readonly string[],
+  verificationStatus: VerificationStatus,
+): boolean {
+  if (!hasEngineeringTestTargets(filesChanged)) return false;
+  return verificationStatus === 'required';
+}
+
+/** 单测已跑但失败：仅加强提示，不 hard block */
+export function shouldInjectFailedUnitTestReminder(
+  filesChanged: readonly string[],
+  verificationStatus: VerificationStatus,
+): boolean {
+  if (!hasEngineeringTestTargets(filesChanged)) return false;
+  return verificationStatus === 'failed';
+}
+
 /**
  * Gate 是否具备验收所需工具。
  * - Acceptance Gate pending → run_command
- * - 有未写后确认的变更文件 → file_info / read_file
+ * - 工程变更待跑单测 → run_command
  */
 export function canVerifyDeliverableKind(
   filesChanged: readonly string[],
   toolNames: readonly string[],
   acceptanceIncomplete?: boolean,
-  workspaceRoot?: string,
-  writeVersions?: Record<string, number>,
-  confirmVersions?: Record<string, number>,
+  verificationStatus: VerificationStatus = 'not_required',
 ): boolean {
   if (acceptanceIncomplete) {
     return toolNames.some(name => name === 'run_command');
   }
-  if (gateConfirmationPaths(filesChanged, workspaceRoot, writeVersions, confirmVersions).length === 0) {
-    return true;
+  if (shouldPromptEngineeringUnitTest(filesChanged, verificationStatus)) {
+    return toolNames.some(name => name === 'run_command');
   }
-  return toolNames.some(name => FILE_DELIVERABLE_CONFIRM_TOOLS.has(name));
+  return true;
 }
 
 /** 在版本 Map 中查找路径对应的版本号（兼容归一化键与原始路径） */

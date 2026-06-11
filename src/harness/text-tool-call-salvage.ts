@@ -14,8 +14,10 @@ import {
 } from './text-format-tool-call-parsers.js';
 import {
   EmbeddedThinkingStreamFilter,
+  ReasoningSystemTagStreamFilter,
   type StreamSplitChunk,
   stripEmbeddedThinking,
+  stripSystemTagsFromReasoning,
 } from './thinking-content-strip.js';
 
 export {
@@ -85,12 +87,13 @@ export function resolveSalvagedLlmResponse(raw: LLMResponse): LLMResponse {
   };
 }
 
-/** 用户可见 assistant 正文：去掉思考块与嵌入的工具调用片段。 */
+/** 用户可见 assistant 正文：去掉思考块、system 标签与嵌入的工具调用片段。 */
 export function sanitizeAssistantContentForUser(content: string | undefined): string {
   if (!content) return '';
   const withoutThinking = stripEmbeddedThinking(content);
-  if (!containsEmbeddedToolCalls(withoutThinking)) return withoutThinking;
-  const stripped = stripEmbeddedToolCalls(withoutThinking);
+  const withoutSystem = stripSystemTagsFromReasoning(withoutThinking);
+  if (!containsEmbeddedToolCalls(withoutSystem)) return withoutSystem;
+  const stripped = stripEmbeddedToolCalls(withoutSystem);
   return stripped || '（模型以文本形式输出了工具调用，已尝试解析并执行；无额外文字说明。）';
 }
 
@@ -181,23 +184,39 @@ export class TextToolCallStreamFilter {
   }
 }
 
-/** 流式用户可见正文：先剥离思考块，再剥离嵌入 tool_call。 */
+/** 流式用户可见正文：先剥离思考块，再剥离 system 标签与嵌入 tool_call。 */
 export class AssistantVisibleStreamFilter {
   private readonly thinking = new EmbeddedThinkingStreamFilter();
   private readonly tools = new TextToolCallStreamFilter();
+  private readonly thinkingSanitizer = new ReasoningSystemTagStreamFilter();
+  private readonly visibleSanitizer = new ReasoningSystemTagStreamFilter();
+
+  private sanitizeThinking(text: string): string {
+    if (!text) return '';
+    return this.thinkingSanitizer.feed(text);
+  }
+
+  private sanitizeVisible(text: string): string {
+    if (!text) return '';
+    return this.visibleSanitizer.feed(text);
+  }
 
   feed(chunk: string): StreamSplitChunk {
     if (!chunk) return { visible: '', thinking: '' };
     const afterThinking = this.thinking.feed(chunk);
-    const visible = afterThinking.visible ? this.tools.feed(afterThinking.visible) : '';
-    return { visible, thinking: afterThinking.thinking };
+    const visibleRaw = afterThinking.visible ? this.sanitizeVisible(afterThinking.visible) : '';
+    const visible = visibleRaw ? this.tools.feed(visibleRaw) : '';
+    return { visible, thinking: this.sanitizeThinking(afterThinking.thinking) };
   }
 
   flush(): StreamSplitChunk {
     const thinkingTail = this.thinking.flush();
     let visible = '';
-    if (thinkingTail.visible) visible += this.tools.feed(thinkingTail.visible);
+    if (thinkingTail.visible) visible += this.sanitizeVisible(thinkingTail.visible);
+    visible += this.visibleSanitizer.flush();
+    if (visible) visible = this.tools.feed(visible);
     visible += this.tools.flush();
-    return { visible, thinking: thinkingTail.thinking };
+    const thinking = this.sanitizeThinking(thinkingTail.thinking) + this.thinkingSanitizer.flush();
+    return { visible, thinking };
   }
 }

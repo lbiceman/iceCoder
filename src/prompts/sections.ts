@@ -71,8 +71,8 @@ export function createDoingTasksSection(): PromptSection {
 ## Workflow
 1. Task is ambiguous → ask the user first. Do not assume.
 2. Modify a file you have NOT read yet → read_file first. If you already read it in this conversation, do NOT re-read — use what you know.
-3. Complete a step → verify (test, output). Do NOT re-read files only to confirm saves — trust the tool result.
-4. Test fails → say it fails. Do not sugarcoat.
+3. Complete a step → verify with tests or observable output when you changed code.
+4. Test fails → fix or report plainly. Do not sugarcoat or stop on a failing suite without saying so.
 5. Unclear or generic instruction → interpret in software-engineering context and the working directory (e.g. rename a method in code, not just answer with a string).
 
 ## User intent
@@ -105,9 +105,11 @@ export function createDoingTasksSection(): PromptSection {
 - Stop calling tools and output a short delivery summary ONLY when one of:
   1. The runtime injects \`[System / Acceptance ✓] All N acceptance commands passed.\` — output ≤10 delivery bullets and STOP.
   2. The user explicitly closes the task (任务完成 / 就这样 / 可以了 / OK).
-  3. You have run \`file_info\` or \`read_file\` on **each changed file** (including code: .java, .py, .ts, etc.) to confirm it exists and is non-empty — tests are optional, write confirmation is required.
+  3. **No source-code changes** in this task, OR you changed source code and **unit tests passed** (via run_command), OR you explicitly skipped tests with reason (docs-only, no harness).
+- If the runtime injects \`[System] You changed source code but have not run unit tests yet\`, run tests for the listed changed files before stopping (pick the command for the project).
+- If the runtime injects a failed-test reminder, fix and re-run when you can; you may stop after that reminder but must state failures plainly.
 - Do NOT stop just because you feel finished. Self-perceived completion is not evidence.
-- Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands, or while any changed file is still unconfirmed.
+- Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands.
 - A single \`[System / Acceptance ✓] cmd — summary\` line means **one** command passed; keep going until you see the final "All N passed" signal.`,
     isStatic: true,
     priority: 20,

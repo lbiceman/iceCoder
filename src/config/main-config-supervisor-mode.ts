@@ -75,7 +75,7 @@ export async function readSkipPermissionChecksFromMainConfig(
   return resolveSkipPermissionChecks(config.skipPermissionChecks);
 }
 
-/** 仅当 config.json 显式 `"skipSandbox": true` 时为 true。 */
+/** 仅当 config.json 显式 `"skipSandbox": true` 时为 true；跳过 HostGuard 与工作区路径拦截（检测/锁定仍生效）。 */
 export function resolveSkipSandbox(value: unknown): boolean {
   return value === true;
 }

@@ -497,6 +497,7 @@ export class Harness {
         stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
         countTokens: async (text) => estimateStringTokens(text),
       },
+      { triggerUserMessage: userMessage, messages: [...messages] },
     );
 
     const state: HarnessRunState = {
@@ -512,6 +513,7 @@ export class Harness {
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
       verificationGateContinuationCount: 0,
+      failedUnitTestReminderInjected: false,
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,
@@ -792,7 +794,7 @@ export class Harness {
         });
         if (toolRound.action === 'return') return toolRound.result;
 
-        // 工具轮后不 graph-stop：写后读须走 Verification Gate，避免图 done 绕过验收
+        // 工具轮后不 graph-stop：工程变更须走 Verification Gate（单测提示），避免图 done 绕过验收
       }
     } finally {
       this.memoryIntegration.onLoopEnd(

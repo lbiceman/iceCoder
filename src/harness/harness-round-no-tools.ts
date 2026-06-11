@@ -336,7 +336,7 @@ export async function handleNoToolCalls(
 
   // 状态门控：以下任一成立 → 跳过 stop hook
   // 1) 问答 / 查看类意图（casual harness）
-  // 2) 已有写文件变更（Gate / prematureCompletion 接管写后读确认）
+  // 2) 已有写文件变更（Gate / prematureCompletion 接管收尾验收）
   // 3) 没有遗留工作且本轮已经动过工具 → 任务自然完成
   const skipStopHook =
     shouldApplyCasualHarness(taskSnap.intent)
@@ -380,23 +380,19 @@ export async function handleNoToolCalls(
     }
   }
 
-  // verification gate：写后读确认 / Acceptance Gate pending 时优先于 no_tool recovery
+  // verification gate：单元测试提示 / Acceptance Gate pending 时优先于 no_tool recovery
   const toolNames = currentTools.map(t => t.name);
   const canVerifyDeliverable = canVerifyDeliverableKind(
     taskSnap.filesChanged,
     toolNames,
     acceptanceIncomplete,
-    workspaceRoot,
-    taskSnap.fileDeliverableWriteVersions,
-    taskSnap.fileDeliverableConfirmVersions,
+    taskSnap.verificationStatus,
   );
-  state.taskState.reconcileOrphanFileDeliverableWriteVersions(workspaceRoot);
-  state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
   let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
 
   const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
     const defaultSuffix = canVerifyDeliverable
-      ? '\n任务因验收无法继续而暂停：已连续多轮未调用 file_info/read_file（或 run_command）完成写后确认。'
+      ? '\n任务因验收无法继续而暂停：已连续多轮未调用 run_command 完成单元测试。'
       : '\n任务因验收无法继续而暂停：当前工具集缺少验收所需工具。';
     const suffix = detail ? `\n${detail}` : defaultSuffix;
     const content = sanitizeAssistantContentForUser(response.content) + suffix;
@@ -429,7 +425,7 @@ export async function handleNoToolCalls(
     return returnVerificationExhausted(
       acceptanceIncomplete
         ? 'Acceptance Gate 需要 run_command，但当前工具集不可用。'
-        : '文件变更需要 file_info 或 read_file 确认，但当前工具集不可用。',
+        : '工程源码变更需要 run_command 跑单元测试，但当前工具集不可用。',
     );
   } else if (blockVerification) {
     if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
@@ -445,7 +441,7 @@ export async function handleNoToolCalls(
       if (acceptanceIncomplete && state.taskAcceptance) {
         prompt = state.taskAcceptance.buildAcceptancePrompt();
       } else {
-        prompt = state.taskState.buildVerificationPrompt(workspaceRoot);
+        prompt = state.taskState.buildVerificationPrompt();
       }
       const injectionParts = [
         prompt,
@@ -461,6 +457,23 @@ export async function handleNoToolCalls(
       state.transition = 'stop_hook_continue';
       return { action: 'continue' };
     }
+  }
+
+  if (
+    !blockVerification
+    && !state.failedUnitTestReminderInjected
+    && state.taskState.shouldInjectFailedUnitTestReminder()
+  ) {
+    state.failedUnitTestReminderInjected = true;
+    console.log('[harness] 单测失败加强提示 inject（不 hard block）');
+    pushAssistantForHistory(msgs, response);
+    injectContinuationUserMessage(deps, state, msgs, [
+      state.taskState.buildFailedUnitTestReminderPrompt(),
+      '',
+      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot(), workspaceRoot)),
+    ].join('\n'));
+    state.transition = 'stop_hook_continue';
+    return { action: 'continue' };
   }
 
   if (
@@ -516,7 +529,6 @@ export async function handleNoToolCalls(
   }
 
   state.stopHookContinuationCount = 0;
-  state.taskState.tryMarkFileDeliverablesVerified(workspaceRoot);
 
   if (deps.graphExecutor?.hasGraph()) {
     const ar = deps.graphExecutor.advanceOrComplete();

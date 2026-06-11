@@ -26,6 +26,7 @@ import {
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
 import { isDestructiveCommand } from '../tool-metadata.js';
 import { readSkipSandboxFromMainConfigSync } from '../../config/main-config-supervisor-mode.js';
+import { assertAgentMemoryShellCommandAllowed } from '../../memory/file-memory/memory-write-pipeline.js';
 
 /** 命令执行超时（毫秒） */
 const DEFAULT_TIMEOUT = 30000;
@@ -159,6 +160,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       if (shouldBackground) {
         const command = trimmedCommand;
         if (!command) return { success: false, output: '', error: 'Command cannot be empty' };
+        const memoryShellErr = assertAgentMemoryShellCommandAllowed(command);
+        if (memoryShellErr) return { success: false, output: '', error: memoryShellErr };
         const inlineAdvisory = analyzeInlineScriptCommand(command);
         if (inlineAdvisory?.block) {
           return { success: false, output: '', error: inlineAdvisory.message };
@@ -195,6 +198,8 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       // ── Foreground execution ──
       const command = trimmedCommand;
       if (!command) return { success: false, output: '', error: 'Command is required for foreground execution' };
+      const memoryShellErr = assertAgentMemoryShellCommandAllowed(command);
+      if (memoryShellErr) return { success: false, output: '', error: memoryShellErr };
       // classifier 收紧 short 命令前台 timeout 上限到 10s
       const timeout = pickForegroundTimeout(
         shellClass,

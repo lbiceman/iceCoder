@@ -118,6 +118,11 @@ window.ChatSession = (function () {
     if (!text || typeof text !== 'string') return text;
     return text
       .replace(/<status>\s*(?:complete|incomplete)\s*<\/status>/gi, '')
+      .replace(/<system-context>[\s\S]*?<\/system-context>/gi, '')
+      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '')
+      .replace(/<system>[\s\S]*?<\/system>/gi, '')
+      .replace(/<\/?system(?:-(?:reminder|context))?\s*>/gi, '')
+      .replace(/^\s*\n+/, '')
       .replace(/\s*$/, '');
   }
 

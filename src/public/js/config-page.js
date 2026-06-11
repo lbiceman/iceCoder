@@ -16,6 +16,15 @@ window.ConfigPage = (function () {
   var defaultIndex = 0; // 当前选中的默认提供者索引
   var autoSaveDefaultTimer = null;
 
+  // 10 套卡片主题色（与 config.css 中 .theme-0 ~ .theme-9 一一对应）
+  var CARD_THEMES = [
+    'theme-0', 'theme-1', 'theme-2', 'theme-3', 'theme-4',
+    'theme-5', 'theme-6', 'theme-7', 'theme-8', 'theme-9'
+  ];
+  function pickTheme(index) {
+    return CARD_THEMES[((index % CARD_THEMES.length) + CARD_THEMES.length) % CARD_THEMES.length];
+  }
+
   function tryAutoSaveDefault() {
     if (autoSaveDefaultTimer) clearTimeout(autoSaveDefaultTimer);
     autoSaveDefaultTimer = setTimeout(function () {
@@ -148,7 +157,7 @@ window.ConfigPage = (function () {
 
   function createProviderCard(prov, index) {
     var card = document.createElement('div');
-    card.className = 'provider-card';
+    card.className = 'provider-card ' + pickTheme(index);
     card.setAttribute('data-index', index);
 
     var displayKey = prov._masked ? prov.apiKey : (prov.apiKey ? maskApiKey(prov.apiKey) : '');

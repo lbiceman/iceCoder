@@ -231,14 +231,15 @@ describe('Harness - 工具调用循环', () => {
     )).toBe(true);
   });
 
-  it('修改代码后读确认允许完成（不要求跑测）', async () => {
+  it('修改代码未跑测时 verification gate inject', async () => {
     const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'src/a.ts' } }]),
+      finalResponse('已修复'),
+      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
       finalResponse('已修复'),
     ], finalResponse('已修复'));
 
@@ -247,24 +248,28 @@ describe('Harness - 工具调用循环', () => {
     expect(result.content).toBe('已修复');
     expect(result.loopState.totalToolCalls).toBe(2);
     expect(result.loopState.stopReason).toBe('model_done');
+    expect(result.messages.some(m =>
+      m.role === 'user'
+      && typeof m.content === 'string'
+      && /unit tests/i.test(m.content)
+    )).toBe(true);
   });
 
-  it('修改代码后读确认与跑测均允许完成', async () => {
+  it('修改代码且 npm test 通过后允许完成', async () => {
     const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
 
     const chatFn = createChatFn([
       toolCallResponse([{ id: 'tc1', name: 'edit_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc2', name: 'read_file', args: { path: 'src/a.ts' } }]),
-      toolCallResponse([{ id: 'tc3', name: 'run_command', args: { command: 'npm test' } }]),
+      toolCallResponse([{ id: 'tc2', name: 'run_command', args: { command: 'npm test' } }]),
       finalResponse('已修复并验证'),
     ], finalResponse('已修复并验证'));
 
     const result = await harness.run('修复失败用例', chatFn);
 
     expect(result.content).toBe('已修复并验证');
-    expect(result.loopState.totalToolCalls).toBe(3);
+    expect(result.loopState.totalToolCalls).toBe(2);
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
@@ -1798,7 +1803,7 @@ describe('Harness - 停止钩子连续干预上限', () => {
     expect(result.loopState.stopReason).toBe('model_done');
   });
 
-  it('有文件变更时跳过 stop hook，读确认后正常收尾', async () => {
+  it('有文件变更时跳过 stop hook，md 变更后直接收尾', async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-stop-hook-'));
     try {
       const tools = [makeTool('write_file'), makeTool('read_file')];
@@ -1822,20 +1827,16 @@ describe('Harness - 停止钩子连续干预上限', () => {
       }));
 
       const writeRound = () => toolCallResponse([
-        { id: 'w', name: 'write_file', args: { path: 'src/game/scene.ts', content: 'export {}' } },
-      ]);
-      const readRound = () => toolCallResponse([
-        { id: 'r', name: 'read_file', args: { path: 'src/game/scene.ts' } },
+        { id: 'w', name: 'write_file', args: { path: 'docs/readme.md', content: '# doc' } },
       ]);
 
       const chatFn = createChatFn([
         finalResponse('next step'),
         finalResponse('next step'),
         writeRound(),
-        readRound(),
         finalResponse('done'),
       ], finalResponse('done'));
-      const result = await harness.run('实现登录功能', chatFn);
+      const result = await harness.run('写文档', chatFn);
 
       expect(result.loopState.stopReason).toBe('model_done');
     } finally {

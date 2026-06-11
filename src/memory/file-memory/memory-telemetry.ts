@@ -25,7 +25,8 @@ export type TelemetryEventType =
   | 'memory_dream'
   | 'memory_cap_evict'
   | 'memory_store'
-  | 'memory_stats';
+  | 'memory_stats'
+  | 'memory_index_rebuild';
 
 /**
  * 召回遥测数据。
@@ -129,6 +130,15 @@ export interface MemoryCapEvictTelemetry {
   durationMs: number;
 }
 
+/** MEMORY.md 索引重建遥测 */
+export interface IndexRebuildTelemetry {
+  type: 'memory_index_rebuild';
+  timestamp: string;
+  memoryDir: string;
+  entryCount: number;
+  trigger: 'bootstrap' | 'drift' | 'dream' | 'manual';
+}
+
 /**
  * 记忆库统计遥测。
  */
@@ -156,7 +166,8 @@ export type TelemetryEvent =
   | DreamTelemetry
   | MemoryCapEvictTelemetry
   | StatsTelemetry
-  | SessionMemoryTelemetry;
+  | SessionMemoryTelemetry
+  | IndexRebuildTelemetry;
 
 /**
  * 遥测配置。
@@ -282,6 +293,18 @@ export class MemoryTelemetry extends EventEmitter {
   }
 
   /**
+   * 记录 MEMORY.md 索引重建。
+   */
+  async logIndexRebuild(data: Omit<IndexRebuildTelemetry, 'type' | 'timestamp'>): Promise<void> {
+    const event: IndexRebuildTelemetry = {
+      type: 'memory_index_rebuild',
+      timestamp: new Date().toISOString(),
+      ...data,
+    };
+    await this.writeEvent(event);
+  }
+
+  /**
    * 记录记忆库统计。
    */
   async logStats(data: Omit<StatsTelemetry, 'type' | 'timestamp'>): Promise<void> {
@@ -380,6 +403,8 @@ export class MemoryTelemetry extends EventEmitter {
         return `stats: ${event.totalFiles} files, avg age ${event.avgAgeDays}d, index ${event.indexLineCount} lines`;
       case 'session_memory':
         return `session_memory: wrote=${event.wrote}, anchored=${event.evidenceAnchored}, warn=${event.contradictionWarning}${event.rejectReason ? ` (${event.rejectReason})` : ''}`;
+      case 'memory_index_rebuild':
+        return `index_rebuild: ${event.entryCount} entries [${event.trigger}] @ ${event.memoryDir}`;
     }
   }
 

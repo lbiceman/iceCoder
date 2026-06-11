@@ -334,7 +334,7 @@ export const DEFAULT_PREFETCH_CONFIG: PrefetchConfig = {
 
 /** `memory-llm-extractor` 单次提取规模默认 */
 export const DEFAULT_LLM_EXTRACTION_CONFIG: LLMExtractionConfig = {
-  maxMemories: 15,
+  maxMemories: 3,
   maxOutputTokens: 8192,
   enablePromptCache: true,
 };
@@ -469,7 +469,7 @@ export const DEFAULT_EXTRACTION_REMOTE_CONFIG: ExtractionRemoteConfig = {
 export const DEFAULT_CASUAL_EXTRACTION_CONFIG: CasualExtractionConfig = {
   minTurns: 5,
   requireToolCalls: true,
-  allowContentSignalWithoutTools: true,
+  allowContentSignalWithoutTools: false,
 };
 
 /** Dream 远程：最短间隔 6h、最少 3 次会话累计后才与时间门控联动 */
@@ -567,6 +567,18 @@ export const DEFAULT_CONFIDENCE_FALLBACK = 0.5;
 
 /** LLM 提取落盘最低置信度（缺失或低于此值的条目直接丢弃） */
 export const MIN_EXTRACTION_CONFIDENCE = 0.6;
+
+/** 推断类 user 偏好写盘最低置信度（非 feedback） */
+export const INFERRED_PREFERENCE_MIN_CONFIDENCE = 0.75;
+
+/** 每会话最多成功 Extract 次数（含信号词路径） */
+export const SESSION_MAX_SUCCESSFUL_EXTRACTS = 1;
+
+/** 每会话 Extract 写盘条数上限 */
+export const SESSION_MAX_EXTRACT_WRITES = 1;
+
+/** 单次 Extract 最多处理的消息分块数 */
+export const EXTRACTION_MAX_CHUNKS_PER_RUN = 1;
 
 /** 用户级记忆路由的置信度阈值 */
 export const USER_LEVEL_CONFIDENCE_THRESHOLD = 1.0;

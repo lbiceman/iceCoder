@@ -9,6 +9,11 @@ import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
 import { formatToolOutputWithDiff } from '../file-change-diff.js';
 import { checkReadBeforeEdit } from '../read-before-edit.js';
+import {
+  assertAgentMemoryWriteAllowed,
+  canonicalizeMemoryToolPath,
+  resolveMemoryRootForPath,
+} from '../../memory/file-memory/memory-write-pipeline.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -157,6 +162,11 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
     },
     handler: async (args) => {
       const rawPath = args.path as string;
+      const resolvedMemoryPath = canonicalizeMemoryToolPath(rawPath, workDir);
+      if (resolveMemoryRootForPath(resolvedMemoryPath)) {
+        const guardErr = await assertAgentMemoryWriteAllowed(resolvedMemoryPath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
+      }
       const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
       if (readErr) return { success: false, output: '', error: readErr };
       const filePath = safePath(rawPath, workDir);

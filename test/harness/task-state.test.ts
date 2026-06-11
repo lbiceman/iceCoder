@@ -3,15 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { looksLikeVerificationCommand, TaskState } from '../../src/harness/task-state.js';
 
 describe('looksLikeVerificationCommand', () => {
-  it('recognizes node --check as verification', () => {
-    expect(looksLikeVerificationCommand('node --check src/harness/logger.ts')).toBe(true);
-    expect(looksLikeVerificationCommand('NODE --check foo.ts')).toBe(true);
-  });
-
-  it('still recognizes existing verification commands', () => {
-    expect(looksLikeVerificationCommand('npx tsc --noEmit')).toBe(true);
+  it('recognizes unit test commands only', () => {
     expect(looksLikeVerificationCommand('npm test')).toBe(true);
     expect(looksLikeVerificationCommand('vitest run')).toBe(true);
+    expect(looksLikeVerificationCommand('mvn test')).toBe(true);
+  });
+
+  it('does not treat lint/build/tsc/node --check as unit test verification', () => {
+    expect(looksLikeVerificationCommand('node --check src/harness/logger.ts')).toBe(false);
+    expect(looksLikeVerificationCommand('npx tsc --noEmit')).toBe(false);
+    expect(looksLikeVerificationCommand('npm run lint')).toBe(false);
+    expect(looksLikeVerificationCommand('npm run build')).toBe(false);
   });
 
   it('does not treat arbitrary node commands as verification', () => {
@@ -19,8 +21,8 @@ describe('looksLikeVerificationCommand', () => {
   });
 });
 
-describe('TaskState verification via node --check', () => {
-  it('marks verification passed after successful node --check and read confirm', () => {
+describe('TaskState unit test verification', () => {
+  it('marks verification passed after successful npm test', () => {
     const state = new TaskState('edit logger.ts');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/harness/logger.ts' } },
@@ -29,12 +31,8 @@ describe('TaskState verification via node --check', () => {
     expect(state.snapshot().verificationStatus).toBe('required');
 
     state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: 'src/harness/logger.ts' } },
-      { success: true, output: 'export {}' },
-    );
-    state.recordToolResult(
-      { id: 'c1', name: 'run_command', arguments: { command: 'node --check src/harness/logger.ts' } },
-      { success: true, output: '' },
+      { id: 'c1', name: 'run_command', arguments: { command: 'npm test' } },
+      { success: true, output: 'ok' },
     );
 
     const snap = state.snapshot();
@@ -43,15 +41,25 @@ describe('TaskState verification via node --check', () => {
     expect(state.isVerificationBlockingFinalAfterSync()).toBe(false);
   });
 
-  it('records failed npm test but does not block after read confirm', () => {
+  it('node --check success leaves verification required', () => {
+    const state = new TaskState('edit');
+    state.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+    state.recordToolResult(
+      { id: 'c1', name: 'run_command', arguments: { command: 'node --check src/a.ts' } },
+      { success: true, output: '' },
+    );
+    expect(state.snapshot().verificationStatus).toBe('required');
+    expect(state.isVerificationBlockingFinal()).toBe(true);
+  });
+
+  it('records failed npm test but does not block gate', () => {
     const state = new TaskState('implement game');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'src/game/x.ts' } },
       { success: true, output: 'ok' },
-    );
-    state.recordToolResult(
-      { id: 'r1', name: 'read_file', arguments: { path: 'src/game/x.ts' } },
-      { success: true, output: 'export {}' },
     );
     state.recordToolResult(
       { id: 't1', name: 'run_command', arguments: { command: 'npm test' } },

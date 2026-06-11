@@ -60,6 +60,8 @@ export interface HarnessRunState {
   stopHookContinuationCount: number;
   /** verification gate 连续注入计数（模型未调工具时熔断） */
   verificationGateContinuationCount: number;
+  /** 单测失败时是否已 inject 加强提示（每 run 一次，不 hard block） */
+  failedUnitTestReminderInjected: boolean;
   /** 上一次 continue 的原因 */
   transition: Transition;
   /** 本轮是否刚刚完成上下文压缩 */

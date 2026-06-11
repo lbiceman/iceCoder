@@ -10,6 +10,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { scanMemoryFiles } from '../../memory/file-memory/memory-scanner.js';
 import { validatePath, PathTraversalError } from '../../memory/file-memory/memory-security.js';
+import { removeIndexRows } from '../../memory/file-memory/memory-index-maintainer.js';
+import { getScannerCache } from '../../memory/file-memory/memory-scanner-cache.js';
 import '../../cli/paths.js';
 
 const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
@@ -140,6 +142,8 @@ export function createMemoryFilesRouter(): Router {
         const filePath = validatePath(filename, dir);
         await fs.access(filePath);
         await fs.unlink(filePath);
+        await removeIndexRows(dir, [filename]);
+        getScannerCache().invalidate(dir);
         console.log(`[memory-files] Deleted: ${filePath}`);
         res.json({ success: true, deleted: filename });
         return;

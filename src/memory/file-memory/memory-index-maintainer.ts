@@ -21,6 +21,7 @@ import {
 } from './memory-index-health.js';
 import { scanMemoryFiles } from './memory-scanner.js';
 import { getScannerCache } from './memory-scanner-cache.js';
+import { getMemoryTelemetry } from './memory-telemetry.js';
 
 /** 索引写入串行化锁（同进程内） */
 let indexWriteChain: Promise<void> = Promise.resolve();
@@ -46,10 +47,83 @@ export interface RebuildOpts {
 }
 
 /**
+ * MEMORY.md 缺失或为空时，从磁盘扫描结果 bootstrap 索引。
+ */
+export async function ensureMemoryIndexBootstrapped(memoryDir: string): Promise<boolean> {
+  const root = path.resolve(memoryDir);
+  const indexPath = path.join(root, 'MEMORY.md');
+
+  let needsBootstrap = false;
+  try {
+    const content = await fs.readFile(indexPath, 'utf-8');
+    if (!content.trim()) needsBootstrap = true;
+  } catch {
+    needsBootstrap = true;
+  }
+
+  if (!needsBootstrap) return false;
+
+  const memories = await scanMemoryFiles(root, 500);
+  const result = await rebuildMemoryIndexFromMemories(root, memories, 120);
+  if (result.wrote) {
+    getScannerCache().invalidate(root);
+    getMemoryTelemetry().logIndexRebuild({
+      memoryDir: root,
+      entryCount: result.entryCount,
+      trigger: 'bootstrap',
+    }).catch(() => {});
+  }
+  return result.wrote;
+}
+
+const isTableHeaderLine = (line: string) => /^\|\s*文件\s*\|/i.test(line.trim());
+const isTableSepLine = (line: string) => /^\|[\s-|]+\|$/.test(line.trim());
+
+/**
+ * 在已有分区末尾插入一行；分区不存在返回 null。
+ * 使用下标扫描，避免空分区或相邻 ## 时 for 索引死循环。
+ */
+function insertIndexRowIntoSection(
+  lines: string[],
+  sectionTitle: string,
+  newLine: string,
+): string[] | null {
+  const sectionHeader = `## ${sectionTitle}`;
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === sectionHeader) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return null;
+
+  let endIdx = headerIdx + 1;
+  while (endIdx < lines.length && !lines[endIdx].trim().startsWith('##')) {
+    endIdx++;
+  }
+
+  const sectionBody = lines.slice(headerIdx + 1, endIdx);
+  const hasTableHeader = sectionBody.some(l => isTableHeaderLine(l));
+
+  const rebuilt: string[] = [];
+  if (!hasTableHeader) {
+    rebuilt.push('| 文件 | 要点 |', '|------|------|');
+  }
+  rebuilt.push(...sectionBody, newLine);
+
+  return [
+    ...lines.slice(0, headerIdx + 1),
+    ...rebuilt,
+    ...lines.slice(endIdx),
+  ];
+}
+
+/**
  * 从 MEMORY.md 中更新或新增一条索引行。
  * 文件名已存在 → 更新描述；不存在 → 追加到对应类型分区末尾。
  *
- * 若 MEMORY.md 不存在或为空 → 不执行（由 rebuild / Dream 统一初始化）。
+ * 若 MEMORY.md 不存在或为空 → 先 bootstrap 再 upsert。
  */
 export async function upsertIndexRow(
   memoryDir: string,
@@ -59,11 +133,12 @@ export async function upsertIndexRow(
     const root = path.resolve(memoryDir);
     const indexPath = path.join(root, 'MEMORY.md');
 
+    await ensureMemoryIndexBootstrapped(root);
+
     let content: string;
     try {
       content = await fs.readFile(indexPath, 'utf-8');
     } catch {
-      // MEMORY.md 不存在 — 留给 rebuild 或 Dream 统一创建
       return;
     }
 
@@ -115,38 +190,20 @@ export async function upsertIndexRow(
       const sectionTitle = SECTION_TITLES[type] || type;
       const newLine = `| ${filename} | ${hint} |`;
 
-      // 找对应分区插入
-      const sectionHeader = `## ${sectionTitle}`;
-      let inserted = false;
-      const outLines: string[] = [];
-
-      for (let i = 0; i < lines.length; i++) {
-        outLines.push(lines[i]);
-        if (lines[i].trim() === sectionHeader) {
-          // 在分区标题后插入（跳过标题后的表头两行）
-          if (i + 2 < lines.length && lines[i + 1].trim().startsWith('|') && lines[i + 2].trim().startsWith('|')) {
-            outLines.push(newLine);
-            inserted = true;
-          } else {
-            // 没有表头则直接在标题后追加
-            outLines.push('| 文件 | 要点 |');
-            outLines.push('|------|------|');
-            outLines.push(newLine);
-            inserted = true;
-          }
-        }
+      const insertedLines = insertIndexRowIntoSection(lines, sectionTitle, newLine);
+      if (insertedLines) {
+        await fs.writeFile(indexPath, insertedLines.join('\n'), 'utf-8');
+      } else {
+        const outLines = [
+          ...lines,
+          '',
+          `## ${sectionTitle}`,
+          '| 文件 | 要点 |',
+          '|------|------|',
+          newLine,
+        ];
+        await fs.writeFile(indexPath, outLines.join('\n'), 'utf-8');
       }
-
-      if (!inserted) {
-        // 没有对应分区 — 追加到末尾
-        outLines.push('');
-        outLines.push(`## ${sectionTitle}`);
-        outLines.push('| 文件 | 要点 |');
-        outLines.push('|------|------|');
-        outLines.push(newLine);
-      }
-
-      await fs.writeFile(indexPath, outLines.join('\n'), 'utf-8');
     }
 
     getScannerCache().invalidate(memoryDir);
@@ -234,6 +291,11 @@ export async function rebuildIndexIfDrifted(
   const result = await rebuildMemoryIndexFromMemories(memoryDir, memories, maxEntries);
   if (result.wrote) {
     getScannerCache().invalidate(memoryDir);
+    getMemoryTelemetry().logIndexRebuild({
+      memoryDir: path.resolve(memoryDir),
+      entryCount: result.entryCount,
+      trigger: 'drift',
+    }).catch(() => {});
   }
   return result;
 }

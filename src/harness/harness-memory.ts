@@ -35,22 +35,28 @@ import { MemoryDream } from '../memory/file-memory/memory-dream.js';
 import { scheduleAutoDream } from '../memory/file-memory/memory-dream-runner.js';
 import { getMemoryTelemetry } from '../memory/file-memory/memory-telemetry.js';
 import type { MemoryTelemetry, RecallTelemetry } from '../memory/file-memory/memory-telemetry.js';
-import { isWithinMemoryDir } from '../memory/file-memory/memory-security.js';
 import { tokenize, extractEntities } from '../memory/file-memory/memory-tokenizer.js';
 import { extractBodyFromMarkdown } from '../memory/file-memory/memory-parser.js';
-import {
-  evaluateCasualMemoryExtraction,
-  shouldApplyCasualHarness,
-} from './casual-mode.js';
 import { isSyntheticUserBlockContent } from './compaction-strategy.js';
+import { evaluateMemoryExtractionGate } from './memory-extraction-gate.js';
 import {
   MEMORY_MAX_RELEVANT,
-  EXTRACTION_SIGNAL_WORDS,
   STALE_THRESHOLD_DAYS,
   EXPIRED_THRESHOLD_DAYS,
   HIGH_CONFIDENCE_THRESHOLD,
   HIGH_CONFIDENCE_DECAY_MULTIPLIER,
+  SESSION_MAX_EXTRACT_WRITES,
+  EXTRACTION_MAX_CHUNKS_PER_RUN,
+  DEFAULT_LLM_EXTRACTION_CONFIG,
+  resolveUserMemoryDir,
 } from '../memory/file-memory/memory-config.js';
+import {
+  registerAgentMemoryWriteGuard,
+  createRememberSignalWriteGuard,
+  isMemoryToolPath,
+  shellCommandTargetsMemoryWrite,
+  resolveMessageForRememberWriteGuard,
+} from '../memory/file-memory/memory-write-pipeline.js';
 
 /** 话题切换 Jaccard 阈值 */
 const TOPIC_SHIFT_JACCARD_THRESHOLD = 0.2;
@@ -137,56 +143,12 @@ function standardRecallCooldownKey(manifestHash: string, userMsg: string, topicS
   return `${manifestHash}\n${userMsg}\n${topicSwitched ? '1' : '0'}`;
 }
 
-/**
- * 内容启发式模式 — 检测用户消息中暗示偏好/习惯的关键词。
- * 匹配到这些模式时，即使消息很短也触发提取。
- * 覆盖：编程语言、框架、工具链、工作流偏好。
- */
-const CONTENT_HEURISTIC_PATTERNS: RegExp[] = [
-  // 编程语言（"用 TS 写"、"python 脚本"、"java 项目"）
-  /\b(typescript|javascript|python|java|golang|rust|ruby|swift|kotlin|dart|php|c\+\+|c#)\b/i,
-  /\b(ts|js|py|go|rb)\b/,
-  // 框架/库（"react 组件"、"vue 页面"、"express 路由"）
-  /\b(react|vue|angular|svelte|next\.?js|nuxt|express|fastify|django|flask|spring|nest\.?js)\b/i,
-  // 工具链（"用 vite"、"webpack 配置"、"docker 部署"）
-  /\b(vite|webpack|rollup|esbuild|docker|kubernetes|nginx|pm2|jest|vitest|mocha|pytest)\b/i,
-  // 数据库（"mysql 查询"、"redis 缓存"）
-  /\b(mysql|postgres|mongodb|redis|sqlite|elasticsearch)\b/i,
-  // 工作流偏好（"我喜欢"、"我习惯"、"我一般"、"我通常"）
-  /我(喜欢|习惯|一般|通常|倾向|偏好|想|要|需要)/,
-  // 角色/身份（"我是前端"、"我做后端"、"我负责"）
-  /我(是|做|负责|在做|主要|叫|名字)/,
-  // 英文偏好表达
-  /\b(i prefer|i usually|i always|i like to|my workflow|my name)\b/i,
-
-  // ── 祈使句 + 否定偏好 + 风格偏好 ──
-
-  // 祈使句偏好（"别用分号"、"不要用 var"、"以后不要加注释"、"每次都加 JSDoc"）
-  /(?:别|不要|不用|禁止|停止|以后不要?|以后别).{0,15}(?:用|写|加|做|改|放|搞|弄)/,
-  /(?:每次|总是|一定要?|务必|必须|始终).{0,15}(?:用|写|加|做|改|放|检查|确认)/,
-  // 风格偏好（"代码要简洁"、"注释用中文"、"变量名用驼峰"）
-  /(?:代码|注释|变量名?|函数名?|文件名?|命名|缩进|格式).{0,10}(?:要|用|写|改成|换成|统一)/,
-  // 否定反馈（"这样不好"、"不是这样"、"别这么做"、"太啰嗦了"）
-  /(?:不好|不对|不是这样|别这么|太啰嗦|太复杂|太简单|太长了|太短了)/,
-  // 英文祈使偏好（"don't use semicolons"、"always add types"、"never use var"）
-  /\b(don'?t use|never use|always use|always add|stop using|no more)\b/i,
-  /\b(use .{1,20} instead|switch to|prefer .{1,20} over)\b/i,
-
-  // ── 日常对话中的隐含偏好/事实 ──
-  // 个人信息（"我在北京"、"我们团队"、"我们公司"）
-  /(?:我在|我们|我的|团队|公司|项目|产品).{0,10}(?:用|做|负责|叫|叫作|是)/,
-  // 生活偏好（"我喜欢喝"、"我最爱"、"我经常"）
-  /(?:我|我们).{0,5}(?:喜欢|最爱|经常|每天|每周|每月|去过|住|养)/,
-  // 事件/经历（"昨天"、"上周"、"去年"、"我买了"、"我去了"）
-  /(?:昨天|今天|上周|本月|去年|今年|前天|明天|下周|下个月).{0,15}(?:我|我们)/,
-  /(?:我|我们).{0,10}(?:买了|去了|开始|学了|试了|发现|决定|完成)/,
-];
-// 新增：并发控制、远程配置、闭包隔离、会话记忆
 import {
   sequential,
   initExtractionGuard,
   drainExtractions,
   type ExtractionGuardState,
+  type ExtractionQueueContext,
 } from '../memory/file-memory/memory-concurrency.js';
 import {
   getCasualExtractionConfig,
@@ -266,28 +228,63 @@ export type InjectMemoryMode = 'default' | 'coarse_pre_llm' | 'casual_light';
 
 // ─── 主代理写入检测 ───
 
+/** 提取游标：仅统计 user/assistant（与 _doExtract 切片轴一致，勿用 messages.length） */
+export function countExtractionConversationMessages(messages: UnifiedMessage[]): number {
+  return messages.filter(m => m.role === 'user' || m.role === 'assistant').length;
+}
+
 /**
- * 检测主代理是否在 sinceIndex 之后直接写入了记忆文件。
- * 扫描 assistant 消息中的 tool_use，检查 write_file/edit_file
- * 的 file_path 是否在记忆目录内。
+ * 检测主代理是否在 sinceIndex 之后直接写入了记忆文件（项目级 + 用户级）。
  */
+function extractToolMemoryPath(args: Record<string, unknown> | undefined): string | undefined {
+  if (!args) return undefined;
+  for (const key of ['file_path', 'filePath', 'path']) {
+    const v = args[key];
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  return undefined;
+}
+
+function toolMemoryWriteAttemptSucceeded(
+  messages: UnifiedMessage[],
+  toolCallId: string,
+): boolean {
+  const toolResult = messages.find(m => m.role === 'tool' && m.toolCallId === toolCallId);
+  if (!toolResult) return false;
+  const content = typeof toolResult.content === 'string' ? toolResult.content : '';
+  if (!content.trim()) return false;
+  if (/工具执行错误|Tool .* failed|policy_block|\[HostGuard\s\/\sBlocked\]/i.test(content)) {
+    return false;
+  }
+  if (/\b(?:success|成功):\s*false/i.test(content)) return false;
+  return true;
+}
+
 function hasMemoryWritesSince(
   messages: UnifiedMessage[],
   sinceIndex: number,
-  memoryDir: string,
+  workspaceRoot: string,
 ): boolean {
   for (let i = sinceIndex; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role !== 'assistant' || !msg.toolCalls) continue;
     for (const tc of msg.toolCalls) {
-      if (
-        (tc.name === 'write_file' || tc.name === 'edit_file' ||
-         tc.name === 'append_file') &&
-        tc.arguments?.file_path
-      ) {
-        const filePath = String(tc.arguments.file_path);
-        if (isWithinMemoryDir(filePath, memoryDir)) {
-          return true;
+      if (tc.arguments) {
+        const args = tc.arguments as Record<string, unknown>;
+        if (
+          tc.name === 'write_file' || tc.name === 'edit_file' ||
+          tc.name === 'append_file'
+        ) {
+          const filePath = extractToolMemoryPath(args);
+          if (filePath && isMemoryToolPath(filePath, workspaceRoot)) {
+            if (toolMemoryWriteAttemptSucceeded(messages, tc.id)) return true;
+          }
+        }
+        if (tc.name === 'run_command') {
+          const command = String(args.command ?? args.cmd ?? '');
+          if (command && shellCommandTargetsMemoryWrite(command)) {
+            if (toolMemoryWriteAttemptSucceeded(messages, tc.id)) return true;
+          }
         }
       }
     }
@@ -536,6 +533,8 @@ export class HarnessMemoryIntegration {
   // ── 运行时状态 ──
   private llmAdapter: LLMAdapterInterface | null = null;
   private currentUserMessage = '';
+  /** 本轮用户原始消息（非 sessionGoalAnchor，供 E6 / Extract 门控） */
+  private triggerUserMessage = '';
   /** 已展示过的记忆文件路径（跨轮次去重） */
   private surfacedMemoryPaths = new Set<string>();
   /** 上次记忆注入时的用户消息（用于话题切换检测） */
@@ -572,7 +571,7 @@ export class HarnessMemoryIntegration {
   } | null = null;
 
   // ── sequential 包装的函数 ──
-  private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
+  private sequentialExtract: (ctx: ExtractionQueueContext) => Promise<void>;
   private sequentialAdjustConfidence: (filenames: string[], delta: number) => Promise<void>;
 
   /** 连续会话记忆校验失败次数（用于退避） */
@@ -585,6 +584,16 @@ export class HarnessMemoryIntegration {
   private lastStandardRecallInjected = false;
   /** onLoopEnd 时任务 intent，供 casual 提取门控 */
   private loopEndTaskIntent?: TaskIntent;
+  /** onLoopEnd 累计输入 token（提取 minTokens 门控） */
+  private loopEndTotalInputTokens?: number;
+  /** onLoopEnd 时已运行命令（ops 门控） */
+  private loopEndCommandsRun: string[] = [];
+  /** 本会话已成功 Extract 写盘次数（≤1） */
+  private sessionSuccessfulExtractCount = 0;
+  /** 本会话 Extract 累计写盘条数 */
+  private sessionExtractWrittenCount = 0;
+  /** 上次提取时的工具调用计数 cursor */
+  private toolCallsAtLastExtract = 0;
 
   constructor(config: HarnessMemoryConfig) {
     this.memoryDir = config.memoryDir || 'data/memory-files';
@@ -602,10 +611,14 @@ export class HarnessMemoryIntegration {
     this.memoryDream = new MemoryDream();
     this.llmExtractor = new LLMMemoryExtractor({ enablePromptCache: true });
 
+    registerAgentMemoryWriteGuard(
+      createRememberSignalWriteGuard(() => this.messageForRememberWriteGuard()),
+    );
+
     // 并发控制：sequential 包装确保提取不重叠
     this.sequentialExtract = sequential(
-      async (messages: UnifiedMessage[], turnCount: number) => {
-        await this._extractMemoriesImpl(messages, turnCount);
+      async (ctx: ExtractionQueueContext) => {
+        await this._extractMemoriesImpl(ctx);
       },
     );
     this.sequentialAdjustConfidence = sequential(
@@ -613,6 +626,21 @@ export class HarnessMemoryIntegration {
         await this._adjustConfidenceImpl(filenames, delta);
       },
     );
+  }
+
+  private messageForRememberWriteGuard(): string {
+    return resolveMessageForRememberWriteGuard([
+      this.triggerUserMessage,
+      getLatestUserMessage(this.currentMessages),
+      this.currentUserMessage,
+    ]);
+  }
+
+  /** Extract / feedback 门控用：优先本轮 trigger，避免 sessionGoalAnchor 覆盖「记住」 */
+  private activeUserMessageForGate(): string {
+    return this.triggerUserMessage.trim()
+      || getLatestUserMessage(this.currentMessages)
+      || this.currentUserMessage;
   }
 
   get enabled(): boolean {
@@ -623,9 +651,20 @@ export class HarnessMemoryIntegration {
 
   /**
    * 循环开始时调用。保存用户消息，启动异步预取。
+   * @param sessionGoalAnchor 会话级 goal（召回/任务态用，可能来自历史 Turn）
+   * @param llmAdapter sideQuery 用 LLM
+   * @param options.triggerUserMessage 本轮用户原始输入（E6 remember 门控必须用它）
    */
-  onLoopStart(userMessage: string, llmAdapter: LLMAdapterInterface | null): void {
-    this.currentUserMessage = userMessage;
+  onLoopStart(
+    sessionGoalAnchor: string,
+    llmAdapter: LLMAdapterInterface | null,
+    options?: { triggerUserMessage?: string; messages?: UnifiedMessage[] },
+  ): void {
+    this.currentUserMessage = sessionGoalAnchor;
+    this.triggerUserMessage = options?.triggerUserMessage?.trim() || sessionGoalAnchor;
+    if (options?.messages) {
+      this.currentMessages = options.messages;
+    }
     this.llmAdapter = llmAdapter;
     this.injectedForCurrentMessage = false;
     this.lastCoarsePreLlmMessage = '';
@@ -651,11 +690,11 @@ export class HarnessMemoryIntegration {
     }
 
     // ── 用户反馈检测 ──
-    this.detectFeedback(userMessage);
+    this.detectFeedback(this.triggerUserMessage);
 
     // 异步预取（fire-and-forget，记忆库为空时跳过）
     if (this.fileMemoryManager && this.hasMemories !== false) {
-      this.fileMemoryManager.prefetchMemories(userMessage).catch((err) => {
+      this.fileMemoryManager.prefetchMemories(this.triggerUserMessage).catch((err) => {
         console.debug('[harness-memory] prefetch failed:', err instanceof Error ? err.message : err);
       });
     }
@@ -1056,24 +1095,49 @@ ${candidateList}`;
     }
 
     this.loopEndTaskIntent = runtimeSnapshots?.task.intent;
+    this.loopEndTotalInputTokens = totalInputTokens;
+    this.loopEndCommandsRun = runtimeSnapshots?.repo.commandsRun ?? [];
     this.currentMessages = messages;
 
     // ── 主代理互斥检测 ──
-    if (hasMemoryWritesSince(messages, this.lastExtractionMessageIndex, this.memoryDir)) {
+    const conversationEndIndex = countExtractionConversationMessages(messages);
+    if (hasMemoryWritesSince(
+      messages,
+      this.lastExtractionMessageIndex,
+      this.workspaceRoot,
+    )) {
       console.debug('[harness-memory] 跳过提取 — 主代理已直接写入记忆文件');
-      this.lastExtractionMessageIndex = messages.length;
+      this.lastExtractionMessageIndex = Math.max(
+        this.lastExtractionMessageIndex,
+        conversationEndIndex,
+      );
     } else {
-      // ── 条件触发 LLM 提取（sequential 包装，防止重叠） ──
-      await this.sequentialExtract(messages, turnCount);
+      // 冻结门控与游标：后台提取完成前下一 Turn 不得覆盖 triggerUserMessage / 游标
+      const extractCtx: ExtractionQueueContext = {
+        messages: [...messages],
+        turnCount,
+        gateUserMessage: this.activeUserMessageForGate(),
+        conversationStartIndex: this.lastExtractionMessageIndex,
+        taskIntent: this.loopEndTaskIntent,
+        totalInputTokens: this.loopEndTotalInputTokens,
+        commandsRun: [...this.loopEndCommandsRun],
+      };
+      void this.sequentialExtract(extractCtx).catch((err) => {
+        console.debug('[harness-memory] sequentialExtract failed:', err instanceof Error ? err.message : err);
+      });
     }
 
-    // ── 会话记忆更新（上下文压缩前的连续性保障） ──
+    // ── 会话记忆更新（后台；单次 LLM 可达 60s+，勿阻塞 loop 返回） ──
     if (totalInputTokens !== undefined) {
-      await this.maybeUpdateSessionMemory(messages, totalInputTokens, false, runtimeSnapshots);
+      void this.maybeUpdateSessionMemory(messages, totalInputTokens, false, runtimeSnapshots).catch((err) => {
+        console.debug('[harness-memory] maybeUpdateSessionMemory failed:', err instanceof Error ? err.message : err);
+      });
     }
 
     // ── autoDream 整合（后台，不阻塞 onLoopEnd） ──
-    await this.memoryDream.recordSession();
+    void this.memoryDream.recordSession().catch((err) => {
+      console.debug('[harness-memory] recordSession failed:', err instanceof Error ? err.message : err);
+    });
     void this.maybeDream().catch((err) => {
       console.debug('[harness-memory] maybeDream failed:', err instanceof Error ? err.message : err);
     });
@@ -1194,6 +1258,7 @@ ${candidateList}`;
    * 清理资源。
    */
   dispose(): void {
+    registerAgentMemoryWriteGuard(null);
     this.currentMessages = [];
     this.surfacedMemoryPaths.clear();
     this.injectedMemoryIds.clear();
@@ -1417,11 +1482,8 @@ ${candidateList}`;
   /**
    * 判断是否应该触发 LLM 提取。
    *
-   * 基于对话内容的启发式判断，不再依赖消息长度硬编码阈值。
-   * 触发条件（任一满足）：
-   * 1. 信号词触发 — 用户消息包含"记住"、"偏好"等词
-   * 2. 对话深度触发 — 轮次 >= minTurns 且对话中有工具调用（说明在做实际工作）
-   * 3. 内容特征触发 — 用户消息暗示了编程语言/框架/工具偏好
+   * 默认不写 → 信号词 / 用户 feedback → 长对话 + 工具轮 + 节流。
+   * 禁止名词启发式；ops 类任务默认跳过。
    */
   private sessionHasToolCalls(messages: UnifiedMessage[]): boolean {
     return messages.some(
@@ -1429,56 +1491,51 @@ ${candidateList}`;
     );
   }
 
-  private shouldExtract(turnCount: number, messages: UnifiedMessage[]): boolean {
-    if (!this.llmAdapter || !this.currentUserMessage) return false;
-    // 记忆目录不存在时不触发提取（测试环境或未初始化）
+  private shouldExtract(ctx: ExtractionQueueContext): boolean {
+    const gateUserMessage = ctx.gateUserMessage.trim();
+    if (!this.llmAdapter || !gateUserMessage) return false;
     if (!this.memoryDirExists) return false;
 
     const cfg = getExtractionConfig();
-    const msgLower = this.currentUserMessage.toLowerCase();
-    const hasSignal = EXTRACTION_SIGNAL_WORDS.some(w => msgLower.includes(w));
-    const hasContentSignal = CONTENT_HEURISTIC_PATTERNS.some(p => p.test(msgLower));
+    const casualCfg = getCasualExtractionConfig();
+    const toolCallsSince = countToolCallsSince(ctx.messages, this.toolCallsAtLastExtract);
 
-    const intent = this.loopEndTaskIntent;
-    if (intent && shouldApplyCasualHarness(intent)) {
-      const casualCfg = getCasualExtractionConfig();
-      if (hasSignal) return true;
-      if (hasContentSignal && turnCount >= 1 && casualCfg.allowContentSignalWithoutTools) {
-        return true;
-      }
+    const gate = evaluateMemoryExtractionGate({
+      turnCount: ctx.turnCount,
+      currentUserMessage: gateUserMessage,
+      totalInputTokens: ctx.totalInputTokens,
+      sessionHasToolCalls: this.sessionHasToolCalls(ctx.messages),
+      toolCallsSinceLastExtract: toolCallsSince,
+      extractionTurnCounter: this.extractionTurnCounter,
+      sessionSuccessfulExtractCount: this.sessionSuccessfulExtractCount,
+      sessionExtractWrittenCount: this.sessionExtractWrittenCount,
+      taskIntent: ctx.taskIntent,
+      commandsRun: ctx.commandsRun,
+      extractionConfig: cfg,
+      casualConfig: casualCfg,
+    });
 
-      this.extractionTurnCounter++;
-      const allow = evaluateCasualMemoryExtraction({
-        turnCount,
-        hasSignalWord: false,
-        hasContentSignal: false,
-        sessionHasToolCalls: this.sessionHasToolCalls(messages),
-        extractionTurnCounter: this.extractionTurnCounter,
-        turnThrottle: cfg.turnThrottle,
-        config: casualCfg,
-      });
-      if (allow) {
+    if (gate.allow) {
+      if (gate.resetTurnCounter) {
         this.extractionTurnCounter = 0;
       }
-      return allow;
-    }
-
-    // 1. 信号词触发（优先级最高，不受节流限制）
-    if (hasSignal) return true;
-
-    // 2. 内容特征触发 — 检测编程语言/框架/工具相关的关键词
-    if (hasContentSignal && turnCount >= 1) return true;
-
-    // 3. 轮次节流：每 N 个合格轮次提取一次
-    this.extractionTurnCounter++;
-    if (this.extractionTurnCounter < cfg.turnThrottle) return false;
-
-    // 4. 对话深度触发 — 轮次够了就提取（不再要求消息长度）
-    if (turnCount >= cfg.minTurns) {
-      this.extractionTurnCounter = 0;
       return true;
     }
 
+    if (
+      gate.reason === 'turn_throttle'
+      || gate.reason === 'casual_depth_blocked'
+      || gate.reason === 'min_turns'
+      || gate.reason === 'min_tokens'
+      || gate.reason === 'no_tool_calls'
+      || gate.reason === 'tool_call_interval'
+    ) {
+      this.extractionTurnCounter++;
+    }
+
+    if (gate.reason) {
+      console.debug(`[harness-memory] 跳过提取 — ${gate.reason}`);
+    }
     return false;
   }
 
@@ -1486,20 +1543,20 @@ ${candidateList}`;
    * 实际执行 LLM 记忆提取（由 sequential 包装调用）。
    * 带 inProgress 互斥 + trailing run 机制。
    */
-  private async _extractMemoriesImpl(messages: UnifiedMessage[], turnCount: number): Promise<void> {
+  private async _extractMemoriesImpl(ctx: ExtractionQueueContext): Promise<void> {
     if (!this.llmAdapter) return;
-    if (!this.shouldExtract(turnCount, messages)) return;
+    if (!this.shouldExtract(ctx)) return;
 
     // inProgress 互斥
     if (this.extractionGuard.inProgress) {
       // 暂存为 trailing run
-      this.extractionGuard.pendingContext = { messages: [...messages], turnCount };
+      this.extractionGuard.pendingContext = { ...ctx, messages: [...ctx.messages] };
       console.debug('[harness-memory] 提取进行中 — 暂存为尾随请求');
       return;
     }
 
     this.extractionGuard.inProgress = true;
-    const p = this._doExtract(messages, turnCount);
+    const p = this._doExtract(ctx);
     this.extractionGuard.inFlightExtractions.add(p);
 
     try {
@@ -1513,7 +1570,7 @@ ${candidateList}`;
       this.extractionGuard.pendingContext = null;
       if (trailing) {
         console.debug('[harness-memory] 执行尾随提取');
-        await this._extractMemoriesImpl(trailing.messages, trailing.turnCount);
+        await this._extractMemoriesImpl(trailing);
       }
     }
   }
@@ -1565,8 +1622,10 @@ ${candidateList}`;
    * 每块都走完整的 extract → saveMemories 流程（自动去重）。
    * 长对话首次提取最多处理 3 块（60 条消息），避免过长等待。
    */
-  private async _doExtract(messages: UnifiedMessage[], _turnCount: number): Promise<void> {
+  private async _doExtract(ctx: ExtractionQueueContext): Promise<void> {
     if (!this.llmAdapter) return;
+
+    const { messages, conversationStartIndex } = ctx;
 
     try {
       const conversationPrefix = this.sanitizeConversationPrefix(messages);
@@ -1575,9 +1634,14 @@ ${candidateList}`;
 
       if (allConversation.length === 0) return;
 
-      // 只提取上次提取之后的新消息
-      const newMessagesRaw = allConversation.slice(this.lastExtractionMessageIndex);
-      if (newMessagesRaw.length === 0) return;
+      // 只提取入队时冻结游标之后的新消息（勿读 this.lastExtractionMessageIndex 实时值）
+      const newMessagesRaw = allConversation.slice(conversationStartIndex);
+      if (newMessagesRaw.length === 0) {
+        console.debug(
+          `[harness-memory] 提取跳过 — 无新对话片段 (start=${conversationStartIndex}, total=${allConversation.length})`,
+        );
+        return;
+      }
 
       const newMessages = this.clipMessagesForExtraction(newMessagesRaw);
       const clippedCount = newMessagesRaw.length - newMessages.length;
@@ -1587,9 +1651,12 @@ ${candidateList}`;
         );
       }
 
-      // 分块：每块最多 CHUNK_SIZE 条消息，首次最多 MAX_CHUNKS 块
+      // 分块：每会话仅 1 块，且写盘条数受 SESSION_MAX_EXTRACT_WRITES 约束
       const CHUNK_SIZE = EXTRACTION_CHUNK_SIZE;
-      const MAX_CHUNKS = EXTRACTION_MAX_CHUNKS;
+      const MAX_CHUNKS = EXTRACTION_MAX_CHUNKS_PER_RUN;
+      const writeBudget = Math.max(0, SESSION_MAX_EXTRACT_WRITES - this.sessionExtractWrittenCount);
+      if (writeBudget <= 0) return;
+
       const chunks: UnifiedMessage[][] = [];
       for (let i = 0; i < newMessages.length && chunks.length < MAX_CHUNKS; i += CHUNK_SIZE) {
         chunks.push(newMessages.slice(i, i + CHUNK_SIZE));
@@ -1604,6 +1671,9 @@ ${candidateList}`;
 
       for (const chunk of chunks) {
         if (chunk.length === 0) continue;
+        if (totalWritten >= writeBudget) break;
+
+        this.llmExtractor.updateConfig({ maxMemories: writeBudget - totalWritten });
 
         const result = await this.llmExtractor.extract(
           chunk,
@@ -1620,8 +1690,15 @@ ${candidateList}`;
         allContradictions.push(...result.contradictions);
       }
 
-      // 推进 cursor：对齐 user/assistant 轴（勿用含 tool 的 messages.length）
-      this.lastExtractionMessageIndex = allConversation.length;
+      this.llmExtractor.updateConfig({
+        maxMemories: DEFAULT_LLM_EXTRACTION_CONFIG.maxMemories,
+      });
+
+      // 推进 cursor：对齐 user/assistant 轴，且不低于入队前已处理位置
+      this.lastExtractionMessageIndex = Math.max(
+        this.lastExtractionMessageIndex,
+        allConversation.length,
+      );
 
       this.telemetry.logExtract({
         messageCount: newMessages.length,
@@ -1633,6 +1710,9 @@ ${candidateList}`;
       }).catch(() => {});
 
       if (totalWritten > 0) {
+        this.sessionSuccessfulExtractCount++;
+        this.sessionExtractWrittenCount += totalWritten;
+        this.toolCallsAtLastExtract = countToolCallsSince(messages, 0);
         const cacheNote = usedPromptCache
           ? `(prefix=${conversationPrefix.length} msgs, cache ${cacheActuallyHit ? 'HIT' : 'MISS'})`
           : '';
@@ -1659,6 +1739,10 @@ ${candidateList}`;
           timestamp: Date.now(),
           turnCount: 0,
         };
+      } else {
+        console.debug(
+          `[harness-memory] LLM 提取完成但未写盘（0 条，gate="${ctx.gateUserMessage.slice(0, 40)}…"）`,
+        );
       }
 
       // 矛盾通知：告知用户哪些旧记忆与新信息冲突，需要确认
@@ -1684,6 +1768,19 @@ ${candidateList}`;
     try {
       const dreamGate = await this.memoryDream.evaluateDreamGate(this.memoryDir);
       if (!dreamGate.shouldRun) {
+        let fileCountBefore = 0;
+        try {
+          fileCountBefore = (await scanMemoryFiles(this.memoryDir, 500)).length;
+        } catch { /* ignore */ }
+        await this.telemetry.logDream({
+          executed: false,
+          fileCountBefore,
+          filesModified: 0,
+          filesDeleted: 0,
+          durationMs: 0,
+          trigger: dreamGate.trigger ?? 'session_interval',
+          skipReason: dreamGate.skipReason,
+        }).catch(() => {});
         // Phase 1.4: index_drift 已由 evaluateDreamGate 内部规则层重建索引，无需 LLM
         await this.evictMemoryOverCap();
         return;

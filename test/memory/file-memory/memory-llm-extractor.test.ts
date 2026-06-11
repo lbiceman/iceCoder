@@ -10,7 +10,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createLLMMemoryExtractor, LLMMemoryExtractor } from '../../../src/memory/file-memory/memory-llm-extractor.js';
+import { createLLMMemoryExtractor, LLMMemoryExtractor, shouldRejectExtractedMemory } from '../../../src/memory/file-memory/memory-llm-extractor.js';
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../../src/llm/types.js';
 
 let tempDir: string;
@@ -676,6 +676,92 @@ type: user
       expect(content).toContain('TypeScript 和 React');
       expect(content).toContain('memoryCategory: stable_preference');
       expect(content).not.toContain('[REDACTED]');
+    });
+  });
+
+  describe('shouldRejectExtractedMemory — 写盘拒绝', () => {
+    it('拒绝 current-state 类文件名', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'project_current-state.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: 'overview',
+          confidence: 0.8,
+        }),
+      ).toBe('filename_pattern');
+    });
+
+    it('拒绝安装进度快照', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'mysql_install.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '安装到第 3/5 步，正在下载 45%',
+          confidence: 0.8,
+        }),
+      ).toBe('install_progress_snapshot');
+    });
+
+    it('拒绝纯命令列表型 project', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'cmds.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '- npm install mysql\n- docker pull mysql\n- npm run dev',
+          confidence: 0.8,
+        }),
+      ).toBe('command_list_project');
+    });
+
+    it('拒绝低置信推断 user 偏好', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'stable_preference',
+          filename: 'user_guess.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: '可能喜欢 React',
+          confidence: 0.7,
+        }),
+      ).toBe('inferred_preference_low_confidence');
+    });
+
+    it('拒绝含日期的进度快照文件名', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'project_current-state_2026-06-10.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '安装进度',
+          confidence: 0.8,
+        }),
+      ).toBe('filename_pattern');
+    });
+
+    it('允许普通带日期的 changelog 文件名', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'release_notes_2026-06-10.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '版本发布说明',
+          confidence: 0.8,
+        }),
+      ).toBeNull();
     });
   });
 });

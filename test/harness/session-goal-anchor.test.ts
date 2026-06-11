@@ -128,6 +128,33 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
   });
 
+  it('syncHydratedTaskState 不因 read-before-edit 软错误强制 verification failed', () => {
+    const taskState = new TaskState(editGoal);
+    const repoContext = new RepoContext();
+    repoContext.applySnapshot({
+      filesRead: [],
+      filesChanged: ['data/session-notes.md'],
+      commandsRun: [],
+      testCommands: [],
+      recentDiagnostics: [
+        'edit_file: read-before-edit: read_file "data/session-notes.md" in this session before editing.',
+      ],
+    });
+    taskState.applySnapshot({
+      ...taskState.snapshot(),
+      filesChanged: ['data/session-notes.md'],
+      verificationRequired: false,
+      verificationStatus: 'not_required',
+    });
+
+    const turn3 = '记住，Git commit message 一律用中文，subject 不超过 50 字。';
+    syncHydratedTaskState(turn3, [], taskState, repoContext, editGoal);
+
+    expect(taskState.snapshot().goal).toBe(turn3);
+    expect(taskState.snapshot().verificationStatus).toBe('not_required');
+    expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
+  });
+
   it('syncHydratedTaskState keeps sticky state when resume continuation', () => {
     const taskState = new TaskState(editGoal);
     const repoContext = new RepoContext();

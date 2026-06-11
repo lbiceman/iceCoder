@@ -19,7 +19,7 @@ body.setup-required .nav-link[data-page="config"] {
 }
 
 .config-page {
-  max-width: 680px;
+  max-width: 960px;
   margin: 32px auto;
   padding: 0 24px 120px;
   overflow-y: auto;
@@ -46,7 +46,38 @@ body.setup-required .nav-link[data-page="config"] {
   padding: 20px;
   margin-bottom: 16px;
   box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+  transition: transform var(--transition), box-shadow var(--transition);
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 720px;
 }
+.provider-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: var(--card-accent, var(--accent));
+}
+.provider-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* 10 套主题背景色（基于深色卡片底色，叠加柔和渐变） */
+.provider-card.theme-0 { --card-accent: #38bdf8; background: linear-gradient(135deg, rgba(56,189,248,0.10), rgba(56,189,248,0.02) 60%), var(--bg-card); border-color: rgba(56,189,248,0.28); }
+.provider-card.theme-1 { --card-accent: #a78bfa; background: linear-gradient(135deg, rgba(167,139,250,0.10), rgba(167,139,250,0.02) 60%), var(--bg-card); border-color: rgba(167,139,250,0.28); }
+.provider-card.theme-2 { --card-accent: #f472b6; background: linear-gradient(135deg, rgba(244,114,182,0.10), rgba(244,114,182,0.02) 60%), var(--bg-card); border-color: rgba(244,114,182,0.28); }
+.provider-card.theme-3 { --card-accent: #fb923c; background: linear-gradient(135deg, rgba(251,146,60,0.10), rgba(251,146,60,0.02) 60%), var(--bg-card); border-color: rgba(251,146,60,0.28); }
+.provider-card.theme-4 { --card-accent: #facc15; background: linear-gradient(135deg, rgba(250,204,21,0.10), rgba(250,204,21,0.02) 60%), var(--bg-card); border-color: rgba(250,204,21,0.28); }
+.provider-card.theme-5 { --card-accent: #34d399; background: linear-gradient(135deg, rgba(52,211,153,0.10), rgba(52,211,153,0.02) 60%), var(--bg-card); border-color: rgba(52,211,153,0.28); }
+.provider-card.theme-6 { --card-accent: #2dd4bf; background: linear-gradient(135deg, rgba(45,212,191,0.10), rgba(45,212,191,0.02) 60%), var(--bg-card); border-color: rgba(45,212,191,0.28); }
+.provider-card.theme-7 { --card-accent: #60a5fa; background: linear-gradient(135deg, rgba(96,165,250,0.10), rgba(96,165,250,0.02) 60%), var(--bg-card); border-color: rgba(96,165,250,0.28); }
+.provider-card.theme-8 { --card-accent: #e879f9; background: linear-gradient(135deg, rgba(232,121,249,0.10), rgba(232,121,249,0.02) 60%), var(--bg-card); border-color: rgba(232,121,249,0.28); }
+.provider-card.theme-9 { --card-accent: #fb7185; background: linear-gradient(135deg, rgba(251,113,133,0.10), rgba(251,113,133,0.02) 60%), var(--bg-card); border-color: rgba(251,113,133,0.28); }
 
 .provider-card-header {
   display: flex;

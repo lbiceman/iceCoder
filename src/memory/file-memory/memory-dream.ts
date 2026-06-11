@@ -83,8 +83,19 @@ export type DreamTrigger = 'expired' | 'session_and_files' | 'new_files' | 'stal
 /**
  * Dream 结果。
  */
+/** Dream 是否有实质磁盘变更（空跑退避仅统计无变更的 LLM 整合） */
+export function dreamRunWasSubstantive(result: {
+  filesModified?: number;
+  filesDeleted?: number;
+  filesEvicted?: number;
+}): boolean {
+  return (result.filesModified ?? 0) > 0
+    || (result.filesDeleted ?? 0) > 0
+    || (result.filesEvicted ?? 0) > 0;
+}
+
 export interface DreamResult {
-  /** 是否执行了整合 */
+  /** 是否执行了整合（有实质文件变更；LLM 空跑为 false） */
   executed: boolean;
   /** 整合摘要 */
   summary: string;
@@ -298,6 +309,9 @@ export class MemoryDream {
   private lastIndexDreamAttemptAt: number = 0;
   /** 索引类 Dream 连续失败/空跑次数（指数退避基数） */
   private indexDreamBackoffCount: number = 0;
+  /** LLM Dream 空跑退避（与索引退避分离） */
+  private dreamEmptyRunBackoffCount: number = 0;
+  private lastDreamEmptyRunAt: number = 0;
   /** 状态持久化文件路径 */
   private stateFilePath: string;
   /** 整合锁 */
@@ -370,11 +384,15 @@ export class MemoryDream {
     const expired = getExpiredMemories(memories);
     if (expired.length >= DREAM_EXPIRED_TRIGGER) {
       console.log(`[MemoryDream] ${expired.length} expired memories detected, triggering dream`);
+      const gated = this.gateLlmDreamTrigger('expired');
+      if (!gated.shouldRun) return gated;
       return { shouldRun: true, trigger: 'expired' };
     }
 
     if (this.config.enforceMemoryCapAfterDream && memories.length > this.config.postDreamMemoryCap) {
       console.log(`[MemoryDream] ${memories.length} memories exceed cap ${this.config.postDreamMemoryCap}, triggering dream before eviction`);
+      const gated = this.gateLlmDreamTrigger('over_cap');
+      if (!gated.shouldRun) return gated;
       return { shouldRun: true, trigger: 'over_cap' };
     }
 
@@ -457,6 +475,8 @@ export class MemoryDream {
 
       console.log(`[MemoryDream] stale_index: rule repair insufficient (dead=${indexHealth.dead}), triggering LLM dream`);
       this.lastIndexDreamAttemptAt = Date.now();
+      const gated = this.gateLlmDreamTrigger('stale_index');
+      if (!gated.shouldRun) return gated;
       return { shouldRun: true, trigger: 'stale_index' };
     }
 
@@ -467,16 +487,46 @@ export class MemoryDream {
 
     const minSessions = remoteCfg.minSessions || this.config.sessionInterval;
     if (this.sessionCount >= minSessions && memories.length >= this.config.fileCountThreshold) {
+      const gated = this.gateLlmDreamTrigger('session_and_files');
+      if (!gated.shouldRun) return gated;
       return { shouldRun: true, trigger: 'session_and_files' };
     }
 
     const newFilesSinceDream = memories.filter(m => m.createdMs > lastConsolidatedAt).length;
     if (newFilesSinceDream >= DREAM_NEW_FILES_TRIGGER) {
       console.log(`[MemoryDream] ${newFilesSinceDream} new files since last dream, triggering`);
+      const gated = this.gateLlmDreamTrigger('new_files');
+      if (!gated.shouldRun) return gated;
       return { shouldRun: true, trigger: 'new_files' };
     }
 
     return { shouldRun: false, trigger: null, skipReason: 'no_trigger' };
+  }
+
+  private checkDreamEmptyRunBackoff(): { ok: boolean; reason: string } {
+    if (this.dreamEmptyRunBackoffCount < 1) return { ok: true, reason: '' };
+    const since = Date.now() - this.lastDreamEmptyRunAt;
+    const backoffMs = Math.min(
+      this.config.indexBackoffBaseMs * Math.pow(2, this.dreamEmptyRunBackoffCount - 1),
+      this.config.indexBackoffMaxMs,
+    );
+    if (since < backoffMs) {
+      return {
+        ok: false,
+        reason: `dream_empty_backoff: attempt ${this.dreamEmptyRunBackoffCount}, wait ${Math.round((backoffMs - since) / 1000)}s more`,
+      };
+    }
+    return { ok: true, reason: '' };
+  }
+
+  private gateLlmDreamTrigger(
+    trigger: DreamTrigger,
+  ): { shouldRun: boolean; trigger: DreamTrigger | null; skipReason?: string } {
+    const empty = this.checkDreamEmptyRunBackoff();
+    if (!empty.ok) {
+      return { shouldRun: false, trigger: null, skipReason: empty.reason };
+    }
+    return { shouldRun: true, trigger };
   }
 
   /**
@@ -861,11 +911,13 @@ export class MemoryDream {
       if (userEvict.executed) getScannerCache().invalidate(userDir);
     }
 
+    const substantive = dreamRunWasSubstantive({ ...result, filesEvicted });
     return {
-      executed: true,
       ...result,
       filesEvicted,
       duration: Date.now() - startTime,
+      executed: substantive,
+      skipReason: substantive ? undefined : 'empty_run',
     };
   }
 
@@ -930,7 +982,6 @@ export class MemoryDream {
     let filesModified = 0;
     let filesDeleted = 0;
     const summaries: string[] = [];
-    let anyLlmOk = false;
     let batchesRemaining = 0;
     const startBatch = await this.readDreamBatchProgress(memoryDir, batches.length);
     const llmBudgetStart = Date.now();
@@ -974,8 +1025,6 @@ export class MemoryDream {
           summaries.push(`Batch ${i + 1}: empty JSON`);
           continue;
         }
-        anyLlmOk = true;
-
         if (this.config.enableBackup) {
           await this.backupBeforeDream(memoryDir, parsed).catch(() => {});
         }
@@ -1004,7 +1053,7 @@ export class MemoryDream {
     }
 
     let result = {
-      executed: anyLlmOk,
+      executed: false,
       summary: summaries.join(' ') || '分批整合未产生变更',
       filesModified,
       filesDeleted,
@@ -1060,10 +1109,12 @@ export class MemoryDream {
       if (userEvict.executed) getScannerCache().invalidate(userDir);
     }
 
+    const substantive = dreamRunWasSubstantive({ ...result, filesEvicted });
     return {
       ...result,
       filesEvicted,
-      executed: anyLlmOk || filesModified > 0 || filesDeleted > 0 || filesEvicted > 0,
+      executed: substantive,
+      skipReason: substantive ? undefined : 'empty_run',
     };
   }
 
@@ -1590,6 +1641,36 @@ export class MemoryDream {
     void this.enqueuePersistState().catch(() => {});
   }
 
+  /** 手动/自动 Dream 启动前：检查 LLM 空跑退避（与 indexDreamBackoff 独立） */
+  peekDreamEmptyRunBackoff(): { ok: boolean; reason: string } {
+    return this.checkDreamEmptyRunBackoff();
+  }
+
+  /** LLM Dream 空跑（无修改/删除/淘汰）时递增独立退避计数 */
+  notifyDreamEmptyRun(): void {
+    this.dreamEmptyRunBackoffCount = Math.min(this.dreamEmptyRunBackoffCount + 1, 8);
+    this.lastDreamEmptyRunAt = Date.now();
+    void this.enqueuePersistState().catch(() => {});
+  }
+
+  /** 等待 dream-state.json 写盘完成（连续手动 Dream 前必须 await） */
+  async flushPersistedState(): Promise<void> {
+    await this.enqueuePersistState();
+  }
+
+  /** 从磁盘加载退避/会话计数（手动 Dream 链式任务启动前） */
+  async loadPersistedState(): Promise<void> {
+    await this.restoreState();
+  }
+
+  /** LLM Dream 有实质产出时清零空跑退避 */
+  notifyDreamSubstantiveRun(): void {
+    if (this.dreamEmptyRunBackoffCount > 0) {
+      this.dreamEmptyRunBackoffCount = 0;
+      void this.enqueuePersistState().catch(() => {});
+    }
+  }
+
   /**
    * 更新配置。
    */
@@ -1622,6 +1703,8 @@ export class MemoryDream {
         staleIndexDreamCompletedAt: this.staleIndexDreamCompletedAt,
         lastIndexDreamAttemptAt: this.lastIndexDreamAttemptAt,
         indexDreamBackoffCount: this.indexDreamBackoffCount,
+        dreamEmptyRunBackoffCount: this.dreamEmptyRunBackoffCount,
+        lastDreamEmptyRunAt: this.lastDreamEmptyRunAt,
         updatedAt: new Date().toISOString(),
       };
       await fs.writeFile(this.stateFilePath, JSON.stringify(state), 'utf-8');
@@ -1689,6 +1772,15 @@ export class MemoryDream {
           this.indexDreamBackoffCount,
           state.indexDreamBackoffCount,
         );
+      }
+      if (typeof state.dreamEmptyRunBackoffCount === 'number') {
+        this.dreamEmptyRunBackoffCount = Math.max(
+          this.dreamEmptyRunBackoffCount,
+          state.dreamEmptyRunBackoffCount,
+        );
+      }
+      if (typeof state.lastDreamEmptyRunAt === 'number') {
+        this.lastDreamEmptyRunAt = Math.max(this.lastDreamEmptyRunAt, state.lastDreamEmptyRunAt);
       }
     } catch {
       // 文件不存在或解析失败，使用内存中的值（正常情况）

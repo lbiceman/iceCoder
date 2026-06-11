@@ -14,14 +14,14 @@ Harness 运行时分为 **三条并行线**，职责互不替代：
 | 层级 | 名称 | 职责 | 典型停止原因 |
 |------|------|------|--------------|
 | **L1 主循环** | Harness Core | 消息预处理 → LLM → 工具执行 → 无工具收尾 | `model_done`、`max_output_tokens`、`user_abort` |
-| **L1 验收** | Verification Gate + Acceptance Gate | **收尾硬门槛**：全部变更文件写后读确认、benchmark 多步命令 | `verification_exhausted`（熔断） |
+| **L1 验收** | Verification Gate + Acceptance Gate | **收尾门槛**：工程源码变更提示跑单测；benchmark 多步命令 | `verification_exhausted`（熔断） |
 | **L2** | SupervisorRuntimeBridge | **过程监管**：偏离检测、takeover/handoff、纠偏 inject | `user_checkpoint`（预算/监管） |
 
 **定调（当前实现）：**
 
-- **Gate** 只管收尾是否放行：**凡有 `filesChanged` 须写后读确认**；npm test / engineering 测试**不再**作为 Gate 硬条件。
+- **Gate** 只管收尾是否放行：**工程源码变更**须跑过单元测试（`verificationStatus=passed`）；纯文档/样式变更不 inject。
 - **L2** 只管执行过程是否跑偏；**不扩展**为验收层。
-- `verificationStatus` 仍由工具结果更新，供 telemetry、checkpoint、L2 只读、执行期软约束使用。
+- `verificationStatus` 由单测类 `run_command` 结果更新；lint/build/tsc **不算**单测通过。
 
 ```mermaid
 flowchart TB
@@ -133,53 +133,53 @@ flowchart TD
   I -->|通过| K[model_done]
 ```
 
-### 3.2 Verification Gate（硬验收）
+### 3.2 Verification Gate（工程单测）
 
 **判定函数：** `TaskState.isVerificationBlockingFinal(acceptanceIncomplete)`
 
 | 条件 | 是否 block |
 |------|-----------|
 | `acceptanceIncomplete === true` | ✅ |
-| 存在未确认的 `filesChanged` 路径 | ✅ |
-| 全部变更已 `file_info`/`read_file` 确认 | ❌ |
-| `verificationStatus === failed`（npm test 失败） | ❌ |
+| 工程源码变更 && `verificationStatus === 'required'` | ✅ |
+| 工程源码变更 && `verificationStatus === 'passed'` | ❌ |
+| `verificationStatus === 'failed'`（单测失败） | ❌（仅 inject 一次加强提示） |
+| 仅 `.md` / 样式等非单测目标 | ❌ |
 | 无写文件 | ❌ |
 
-**写后确认路径：** `writeConfirmationPaths(filesChanged)` = **全部** `filesChanged` 条目（含 `.ts`、`.py`、`.java`、`.md` 等）。
+**单测目标路径：** `engineeringTestTargetPaths(filesChanged)` — 工程白名单扩展名（`.ts/.py/.java` 等），**不含** `.css/.scss/.less`。
 
-**交付物分类（仅 telemetry / 软提示）：** `fileDeliverablePaths(filesChanged)` = 变更列表中**非工程白名单扩展名**的路径（`.md`、`.json`、无扩展名等），**不**再单独决定 Gate 是否拦截。
+**验收命令识别：** `isUnitTestVerificationCommand`（`npm test` / `vitest` / `pytest` / `mvn test` 等）；**不含** `lint` / `build` / `tsc` / `test:e2e`。
 
-**写后确认机制（版本 Map）：**
+**`verificationStatus` 更新（`TaskState.recordToolResult`）：**
 
 ```
-write_file / edit_file  → fileDeliverableWriteVersion[path]++
-file_info / read_file   → fileDeliverableConfirmVersion[path] = writeVersion
-全部 path 确认          → tryMarkFileDeliverablesVerified() → verificationStatus = passed
+write_file / edit_file（工程源码） → verificationStatus = 'required'
+run_command 单测类命令：
+  前台成功/失败           → passed / failed
+  后台 mode:background    → 保持 required（等 action:check 完成）
+  check completed exit 0  → passed
+  check completed 非 0    → failed
+再次 edit 工程源码        → required（并重置 failedUnitTestReminderInjected）
 ```
 
-**共享查询（Gate / prematureCompletion / tool-planner / checkpoint 一致）：**
-
-- `hasUnconfirmedFileDeliverables(filesChanged, writeVersions, confirmVersions)` — 基于 `writeConfirmationPaths`
-- `snapshotHasUnconfirmedFileDeliverables(taskSnapshot)`
-
-**工具可用性：** `canVerifyDeliverableKind(filesChanged, toolNames, acceptanceIncomplete)`
+**工具可用性：** `canVerifyDeliverableKind(filesChanged, toolNames, acceptanceIncomplete, verificationStatus)`
 
 | pending 类型 | 需要工具 |
 |--------------|----------|
 | Acceptance Gate | `run_command` |
-| 任一未确认变更 | `file_info` / `read_file` / `open_file` |
+| 工程变更待跑单测 | `run_command` |
 
-**Gate 注入：** 注入前 `reconcileOrphanFileDeliverableWriteVersions`（缺 write 时：无 confirm→v1，有 confirm→confirm+1 强制重读）；prompt / incomplete 恢复均只列 **Still pending** 路径。
+**Gate 注入：** `buildVerificationPrompt()` — 列出变更工程文件，命令由模型自选。
 
-**工具轮 Gate 计数：** `maybeResetVerificationGateCounter` — file pending 或 Acceptance pending 净减少、或 blocking 解除时归零。
+**工具轮 Gate 计数：** `maybeResetVerificationGateCounter` — 工程 pending 或 Acceptance pending 净减少、或 blocking 解除时归零。
 
-**图 terminal 停止：** `shouldBlockGraphTerminalStop` 与 Verification Gate 同标尺；另经 `hasPendingWork` 拦截 `verificationStatus=failed`（写后读已确认但测试仍失败时图 done 不强制停）。**工具轮后不再 graph-stop**。
-
-**磁盘过滤：** `gateConfirmationPaths` / `missingChangedFilePaths` 对写后读 pending（write≠confirm）保留路径，不因落盘延迟或 mock 误清；已确认后磁盘不存在则排除。
+**图 terminal 停止：** `shouldBlockGraphTerminalStop` 与 Verification Gate 同标尺；`verificationStatus=failed` **不**拦截。**工具轮后不再 graph-stop**。
 
 **prematureCompletion：** 达上限后若仍有 `pendingWork`，走 `verification_exhausted`，不允许 `model_done`。
 
-**熔断：** `verificationGateContinuationCount >= MAX`（默认 **5**）→ 直接 `verification_exhausted`（**不** auto-pass 写后读）。
+**熔断：** `verificationGateContinuationCount >= MAX`（默认 **5**）→ 直接 `verification_exhausted`。
+
+**遗留 write/confirm 版本 Map：** 仍写入 checkpoint 供兼容；**不再**驱动 Gate 放行。
 
 ### 3.3 Acceptance Gate（独立硬验收）
 
@@ -198,29 +198,27 @@ file_info / read_file   → fileDeliverableConfirmVersion[path] = writeVersion
 **判定：** `hasPendingWork(task, acceptance?)`
 
 ```typescript
-// 三者任一成立 → pendingWork = true
+// 二者任一成立 → pendingWork = true
 hasPendingAcceptanceWork(acceptance)
 hasUnfulfilledFileDeliverableGoal(goal, filesChanged, intent)  // goal 要求写文件但未写
-snapshotHasUnconfirmedFileDeliverables(task)                     // 与 Gate 同标尺
 ```
 
 Gate 通过后若仍 `pendingWork`，inject `buildIncompleteContinuationPrompt` → `continue`（有上限 `MAX_PREMATURE_COMPLETION_RECOVERY`）。
 
-**注意：** npm test 失败、`verificationStatus=required` **不再**单独触发 pendingWork；但**未写后读确认**仍会。
+**注意：** 单测未跑 / 测失败 **不**触发 `pendingWork`（由 Verification Gate 或失败提醒 inject 处理）。
 
 ### 3.5 Stop Hook 跳过条件
 
-避免与写后读 Gate 叠层拦截：
+避免与 Verification Gate 叠层拦截：
 
 1. casual 意图（question / inspect）
-2. `filesChanged.length > 0`（凡有变更即进入写后读阶段，跳过 Stop Hook）
+2. 工程源码变更且 `verificationStatus === 'required'`（单测 Gate 阶段，跳过 Stop Hook）
 3. `!pendingWork && 本轮已调过工具`
 
 Stop Hook 本身只识别模型回复中的**前向未完成承诺**（如「我还需要继续」「next step」）。
 
 ### 3.6 model_done 收尾
 
-- `tryMarkFileDeliverablesVerified()` 最后一次同步
 - TaskGraph `advanceOrComplete`（若有）
 - checkpoint：`pendingWork ? 'paused' : 'completed'`
 - `stopReason: 'model_done'`
@@ -349,5 +347,6 @@ free ──(§9 三条件满足)──► takeover ──(稳定窗口)──►
 
 | 日期 | 变更 |
 |------|------|
+| 2026-06-10 | Verification Gate 改为工程单测提示：去掉写后读硬拦；`isUnitTestVerificationCommand`；样式扩展名不 inject；失败后改代码回到 `required` |
 | 2026-05-28 | 统一写后读：Gate / pendingWork / stop hook 均基于全部 `filesChanged`；engineering 测试仍非硬条件 |
 | 2026-05-28 | 初版：弱化 Verification Gate（仅 file 验收 + Acceptance）；统一 `snapshotHasUnconfirmedFileDeliverables`；P3 stop hook / tool-planner 对齐 |

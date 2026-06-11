@@ -273,6 +273,14 @@ export async function runHarnessToolRound(
   });
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;
+    for (const tc of executableToolCalls) {
+      const sig = toolCallSignature(tc);
+      const writeSucceeded = !toolStats.failedSignatures.includes(sig)
+        && !toolStats.policyBlockedSignatures.includes(sig);
+      if (writeSucceeded && state.taskState.isEngineeringWriteToolCall(tc, { success: true, output: '' })) {
+        state.failedUnitTestReminderInjected = false;
+      }
+    }
     const acceptanceIncompleteAfter = Boolean(
       state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
     );

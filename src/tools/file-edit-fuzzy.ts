@@ -150,12 +150,19 @@ export function applyNonRegexReplace(
     let out = content;
     let changed = false;
     let fuzzy = false;
-    for (;;) {
-      const range = findReplaceRange(out, search);
+    let scanFrom = 0;
+    const maxPasses = 10_000;
+    for (let pass = 0; pass < maxPasses; pass++) {
+      const slice = out.slice(scanFrom);
+      const range = findReplaceRange(slice, search);
       if (!range) break;
+      const absStart = scanFrom + range.start;
+      const absEnd = scanFrom + range.end;
       fuzzy = fuzzy || range.matched !== search;
-      out = out.slice(0, range.start) + replace + out.slice(range.end);
+      out = out.slice(0, absStart) + replace + out.slice(absEnd);
       changed = true;
+      // replace 常以 search 为前缀；不前进会在同一位置反复匹配导致挂死
+      scanFrom = absStart + replace.length;
     }
     return { content: out, changed, fuzzy };
   }

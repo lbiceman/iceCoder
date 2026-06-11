@@ -214,13 +214,24 @@ export class ConsolidationLock {
  *   当前提取完成后自动执行一次尾随提取
  * - cursor 追踪：记录上次处理到的消息位置
  */
+/** onLoopEnd 入队时冻结的提取上下文（避免下一 Turn 覆盖 trigger / 游标） */
+export interface ExtractionQueueContext {
+  messages: any[];
+  turnCount: number;
+  gateUserMessage: string;
+  conversationStartIndex: number;
+  taskIntent?: import('../../types/runtime-snapshot.js').TaskIntent;
+  totalInputTokens?: number;
+  commandsRun: string[];
+}
+
 export interface ExtractionGuardState {
   /** 是否正在提取 */
   inProgress: boolean;
   /** 上次处理到的消息索引 */
   lastProcessedIndex: number;
   /** 暂存的尾随请求上下文 */
-  pendingContext: { messages: any[]; turnCount: number } | null;
+  pendingContext: ExtractionQueueContext | null;
   /** 进行中的 Promise 集合（用于 drain） */
   inFlightExtractions: Set<Promise<void>>;
 }
