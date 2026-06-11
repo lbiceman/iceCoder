@@ -20,7 +20,7 @@ export interface ToolPreflightInput {
   lockedWorkspaceRoot?: string;
   /** 同路径 missing-file preflight 拦截次数（由 HarnessRunState 持有）。 */
   missingFileAttempts?: Map<string, number>;
-  /** 为 true 时跳过 HostGuard 沙箱预检 */
+  /** 为 true 时跳过 HostGuard；工作区路径拦截在 harness-tool-executor 层跳过 */
   skipSandbox?: boolean;
 }
 

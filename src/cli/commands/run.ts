@@ -61,6 +61,10 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       mainConfigPath: ctx.paths.configPath,
     });
 
+    const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+    const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
+    const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
+
     const wsCtx = await resolveWorkspaceToolContext({
       sessionDir: ctx.paths.sessionsDir,
       sessionId: 'default',
@@ -72,10 +76,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       llmAdapter: ctx.llmAdapter,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
-
-    const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
-    const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
-    const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
     const harnessConfig: HarnessConfig = {
       context: {

@@ -385,30 +385,32 @@ export async function executeToolCallsStreaming(
       }
     }
 
-    const workspaceBlock = checkWorkspacePathViolation(
-      tc.name,
-      tc.arguments,
-      deps.lockedWorkspaceRoot ?? '',
-      deps.referenceReads ?? [],
-    );
-    if (workspaceBlock) {
-      emitHarnessPolicyBlock({
-        deps,
-        tc,
-        iteration,
-        baseMessage: workspaceBlock,
-        errorLabel: 'Workspace lock block',
-        policyReason: 'workspace_lock',
-        messages,
-        onStep,
-        logger,
-        taskState,
-        repoContext,
-        policyBlockedSignatures,
-      });
-      directTotalCount++;
-      submittedIds.add(tc.id);
-      continue;
+    if (!deps.skipSandbox) {
+      const workspaceBlock = checkWorkspacePathViolation(
+        tc.name,
+        tc.arguments,
+        deps.lockedWorkspaceRoot ?? '',
+        deps.referenceReads ?? [],
+      );
+      if (workspaceBlock) {
+        emitHarnessPolicyBlock({
+          deps,
+          tc,
+          iteration,
+          baseMessage: workspaceBlock,
+          errorLabel: 'Workspace lock block',
+          policyReason: 'workspace_lock',
+          messages,
+          onStep,
+          logger,
+          taskState,
+          repoContext,
+          policyBlockedSignatures,
+        });
+        directTotalCount++;
+        submittedIds.add(tc.id);
+        continue;
+      }
     }
 
     // Harness preflight：dist 读取 / missing file / build diagnostic gate
