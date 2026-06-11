@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   containsEmbeddedThinking,
   EmbeddedThinkingStreamFilter,
+  ReasoningSystemTagStreamFilter,
   stripEmbeddedThinking,
+  stripSystemTagsFromReasoning,
 } from '../../src/harness/thinking-content-strip.js';
 import {
   AssistantVisibleStreamFilter,
@@ -35,9 +37,31 @@ describe('thinking-content-strip', () => {
     expect(filter.flush()).toEqual({ visible: '', thinking: '' });
   });
 
+  it('AssistantVisibleStreamFilter strips system tags from visible stream', () => {
+    const filter = new AssistantVisibleStreamFilter();
+    expect(filter.feed('<system>\n</system>\n\n正文')).toEqual({ visible: '\n\n正文', thinking: '' });
+    expect(filter.flush()).toEqual({ visible: '', thinking: '' });
+  });
+
   it('sanitizeAssistantContentForUser removes thinking for display', () => {
     expect(sanitizeAssistantContentForUser(MIMO_SAMPLE)).toBe(
       '我是 **iceCoder**，一个智能编程助手，由 Cursor AI 提供支持。',
     );
+  });
+
+  it('sanitizeAssistantContentForUser removes leaked system tags from reply', () => {
+    expect(sanitizeAssistantContentForUser('<system>\n</system>\n\n## 标题')).toBe('## 标题');
+  });
+
+  it('stripSystemTagsFromReasoning removes empty and filled system blocks', () => {
+    const raw = '先分析路径<system>\n</system>再读 Controller<system-reminder>secret</system-reminder>继续';
+    expect(stripSystemTagsFromReasoning(raw)).toBe('先分析路径再读 Controller继续');
+  });
+
+  it('ReasoningSystemTagStreamFilter strips system tags incrementally', () => {
+    const filter = new ReasoningSystemTagStreamFilter();
+    expect(filter.feed('思路<sys')).toBe('思路');
+    expect(filter.feed('tem>\nmeta</system>继续')).toBe('继续');
+    expect(filter.flush()).toBe('');
   });
 });

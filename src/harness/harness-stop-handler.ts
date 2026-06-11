@@ -21,6 +21,7 @@ import {
   AssistantVisibleStreamFilter,
 } from './text-tool-call-salvage.js';
 import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
+import { ReasoningSystemTagStreamFilter } from './thinking-content-strip.js';
 
 export interface StopHandlerDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -128,6 +129,7 @@ export async function handleHarnessStop(
     // 优先使用流式调用，让前端实时看到总结内容
     if (streamFn) {
       const streamFilter = new AssistantVisibleStreamFilter();
+      const reasoningSanitizer = new ReasoningSystemTagStreamFilter();
       const finalResponse = await streamFn(messages, (chunk, done) => {
         dispatchStreamChunkToStep(
           chunk,
@@ -135,11 +137,16 @@ export async function handleHarnessStop(
           streamFilter,
           state.currentRound,
           onStep,
+          reasoningSanitizer,
         );
       }, { tools: [] });
       const tail = streamFilter.flush();
       if (tail.thinking) {
         onStep?.({ type: 'reasoning_stream_delta', iteration: state.currentRound, delta: tail.thinking });
+      }
+      const reasoningTail = reasoningSanitizer.flush();
+      if (reasoningTail) {
+        onStep?.({ type: 'reasoning_stream_delta', iteration: state.currentRound, delta: reasoningTail });
       }
       if (tail.visible) {
         onStep?.({ type: 'stream_delta', iteration: state.currentRound, delta: tail.visible });

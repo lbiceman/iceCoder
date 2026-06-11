@@ -15,6 +15,28 @@ const REASONING_BLOCK_RE = /<reasoning>[\s\S]*?<\/reasoning>/gi;
 const THINKING_TAIL_RE = /<(?:redacted_)?think(?:ing)?>[\s\S]*$/i;
 const REASONING_TAIL_RE = /<reasoning>[\s\S]*$/i;
 
+/** 思考链中泄漏的 system / system-reminder / system-context 块。 */
+const SYSTEM_TAG_BLOCK_RES: RegExp[] = [
+  /<system-context>[\s\S]*?<\/system-context>/gi,
+  /<system-reminder>[\s\S]*?<\/system-reminder>/gi,
+  /<system>[\s\S]*?<\/system>/gi,
+];
+
+const SYSTEM_TAG_OPEN_RE = /<system(?:-(?:reminder|context))?\s*>/i;
+const SYSTEM_TAG_CLOSE_RE = /<\/system(?:-(?:reminder|context))?\s*>/i;
+
+const SYSTEM_TAG_OPEN_MARKERS = [
+  '<system-context>',
+  '<system-reminder>',
+  '<system>',
+] as const;
+
+const SYSTEM_TAG_CLOSE_MARKERS = [
+  '</system-context>',
+  '</system-reminder>',
+  '</system>',
+] as const;
+
 export function containsEmbeddedThinking(content: string): boolean {
   if (!content) return false;
   THINKING_BLOCK_RE.lastIndex = 0;
@@ -33,7 +55,108 @@ export function stripEmbeddedThinking(content: string): string {
     .replace(REASONING_BLOCK_RE, '')
     .replace(THINKING_TAIL_RE, '')
     .replace(REASONING_TAIL_RE, '');
+  result = stripSystemTagsFromReasoning(result);
   return result.replace(/^\s*\n+/, '').trimEnd();
+}
+
+/** 去掉泄漏的 system / system-reminder / system-context 标签（思考链与可见正文共用）。 */
+export function stripSystemTagsFromReasoning(content: string): string {
+  if (!content) return '';
+  let result = content;
+  for (const re of SYSTEM_TAG_BLOCK_RES) {
+    re.lastIndex = 0;
+    result = result.replace(re, '');
+  }
+  result = result.replace(SYSTEM_TAG_OPEN_RE, '');
+  result = result.replace(SYSTEM_TAG_CLOSE_RE, '');
+  return result;
+}
+
+function partialSystemTagOpenSuffix(text: string): string {
+  const lower = text.toLowerCase();
+  let longestPrefix = '';
+  for (const marker of SYSTEM_TAG_OPEN_MARKERS) {
+    const m = marker.toLowerCase();
+    for (let len = 1; len <= m.length; len++) {
+      const prefix = m.slice(0, len);
+      if (lower.endsWith(prefix) && prefix.length > longestPrefix.length) {
+        longestPrefix = text.slice(text.length - len);
+      }
+    }
+  }
+  return longestPrefix;
+}
+
+function partialSystemTagCloseSuffix(text: string): string {
+  const lower = text.toLowerCase();
+  let longest = '';
+  for (const marker of SYSTEM_TAG_CLOSE_MARKERS) {
+    const m = marker.toLowerCase();
+    for (let len = 1; len <= m.length; len++) {
+      const prefix = m.slice(0, len);
+      if (lower.endsWith(prefix) && prefix.length > longest.length) {
+        longest = text.slice(text.length - len);
+      }
+    }
+  }
+  return longest;
+}
+
+/** @deprecated 使用 {@link stripSystemTagsFromReasoning} */
+export const stripSystemTagsFromContent = stripSystemTagsFromReasoning;
+
+/** 流式侧：剥离 system 系标签（reasoning 与可见正文共用）。 */
+export class ReasoningSystemTagStreamFilter {
+  private hold = '';
+  private mode: 'outside' | 'in_system' = 'outside';
+
+  feed(chunk: string): string {
+    if (!chunk) return '';
+    this.hold += chunk;
+    return this.drain();
+  }
+
+  flush(): string {
+    if (this.mode === 'in_system') {
+      this.hold = '';
+      this.mode = 'outside';
+      return '';
+    }
+    const out = stripSystemTagsFromReasoning(this.hold);
+    this.hold = '';
+    return out;
+  }
+
+  private drain(): string {
+    let emit = '';
+    while (this.hold.length > 0) {
+      if (this.mode === 'outside') {
+        SYSTEM_TAG_OPEN_RE.lastIndex = 0;
+        const openMatch = SYSTEM_TAG_OPEN_RE.exec(this.hold);
+        if (!openMatch || openMatch.index === undefined) {
+          const partial = partialSystemTagOpenSuffix(this.hold);
+          emit += this.hold.slice(0, this.hold.length - partial.length);
+          this.hold = partial;
+          break;
+        }
+        emit += this.hold.slice(0, openMatch.index);
+        this.hold = this.hold.slice(openMatch.index + openMatch[0].length);
+        this.mode = 'in_system';
+        continue;
+      }
+
+      SYSTEM_TAG_CLOSE_RE.lastIndex = 0;
+      const closeMatch = SYSTEM_TAG_CLOSE_RE.exec(this.hold);
+      if (!closeMatch || closeMatch.index === undefined) {
+        const partial = partialSystemTagCloseSuffix(this.hold);
+        this.hold = this.hold.slice(this.hold.length - partial.length);
+        break;
+      }
+      this.hold = this.hold.slice(closeMatch.index + closeMatch[0].length);
+      this.mode = 'outside';
+    }
+    return emit;
+  }
 }
 
 export function partialEmbeddedThinkingPrefixSuffix(text: string): string {
