@@ -201,7 +201,7 @@ export function shellCommandTargetsMemoryWrite(command: string): boolean {
 export function assertAgentMemoryShellCommandAllowed(command: string): string | null {
   if (!shellCommandTargetsMemoryWrite(command)) return null;
   if (!agentMemoryWriteGuard) {
-    return 'Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
+    return 'remember_required: Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
   }
   const err = agentMemoryWriteGuard();
   if (err) {
@@ -226,7 +226,7 @@ export function resolveMemoryRootForPath(absolutePath: string): string | null {
 export function assertAgentMemoryWriteAllowed(absolutePath: string): string | null {
   if (!resolveMemoryRootForPath(absolutePath)) return null;
   if (!agentMemoryWriteGuard) {
-    return 'Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
+    return 'remember_required: Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
   }
   const err = agentMemoryWriteGuard();
   if (err) {
@@ -277,9 +277,9 @@ export function createRememberSignalWriteGuard(getUserMessage: () => string): Ag
   return () => {
     const msg = getUserMessage().trim();
     if (!msg) {
-      return 'Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
+      return 'remember_required: Long-term memory writes require the user to explicitly ask you to remember something in the current turn.';
     }
     if (hasExplicitRememberWriteRequest(msg)) return null;
-    return 'Long-term memory writes are only allowed when the user explicitly asks you to remember something (e.g. 记住 / remember). Use session-notes for task progress.';
+    return 'remember_required: Long-term memory writes are only allowed when the user explicitly asks you to remember something (e.g. 记住 / remember). Use session-notes for task progress.';
   };
 }

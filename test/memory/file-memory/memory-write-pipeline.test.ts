@@ -32,7 +32,7 @@ describe('memory-write-pipeline', () => {
     registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '帮我装 mysql'));
     const target = path.join(memoryRoot, 'project_overview.md');
     expect(resolveMemoryRootForPath(target)).not.toBeNull();
-    expect(assertAgentMemoryWriteAllowed(target)).toMatch(/remember/i);
+    expect(assertAgentMemoryWriteAllowed(target)).toMatch(/remember_required:/i);
   });
 
   it('记忆路径含 remember 信号时允许', () => {
@@ -59,7 +59,7 @@ describe('memory-write-pipeline', () => {
   it('「不要」单独出现不授权写盘', () => {
     registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => '不要 write_file 到 memory-files'));
     const memoryRoot = path.resolve(process.env.ICE_MEMORY_DIR ?? DEFAULT_MEMORY_DIR);
-    expect(assertAgentMemoryWriteAllowed(path.join(memoryRoot, 'x.md'))).toMatch(/remember/i);
+    expect(assertAgentMemoryWriteAllowed(path.join(memoryRoot, 'x.md'))).toMatch(/remember_required:/i);
   });
 
   it('user-memory 别名归一化到 data/user-memory', () => {
@@ -80,7 +80,7 @@ describe('memory-write-pipeline', () => {
 
   it('run_command seed 脚本无 remember 时被拒', () => {
     registerAgentMemoryWriteGuard(createRememberSignalWriteGuard(() => 'Turn 3 验收'));
-    expect(assertAgentMemoryShellCommandAllowed('node scripts/verify_memory_seed.cjs')).toMatch(/remember/i);
+    expect(assertAgentMemoryShellCommandAllowed('node scripts/verify_memory_seed.cjs')).toMatch(/remember_required:/i);
     expect(shellCommandTargetsMemoryWrite('node scripts/seed_memory.cjs')).toBe(true);
   });
 
@@ -134,6 +134,24 @@ describe('file-tools memory write guard', () => {
     registerAgentMemoryWriteGuard(null);
     delete process.env.ICE_MEMORY_DIR;
     await rm(workDir, { recursive: true, force: true });
+  });
+
+  it('edit_file 记忆路径无 remember 时先于 read-before-edit 返回 remember_required', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    await mkdir(memoryDir, { recursive: true });
+    const memFile = path.join(memoryDir, 'probe.md');
+    await writeFile(memFile, '# title\n', 'utf-8');
+    const { createFileTools } = await import('../../../src/tools/builtin/file-tools.js');
+    const tools = createFileTools(workDir);
+    const editTool = tools.find(t => t.definition.name === 'edit_file')!;
+    const result = await editTool.handler({
+      path: path.join('memory-files', 'probe.md'),
+      search: '# title',
+      replace: '# changed',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/remember_required:/);
+    expect(result.error).not.toMatch(/read-before-edit/);
   });
 
   it('write_file type:user 误写 memory-files 时重定向到 user-memory', async () => {

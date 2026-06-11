@@ -34,6 +34,13 @@ async function applyMemoryWriteGuard(filePath: string): Promise<string | null> {
   return assertAgentMemoryWriteAllowed(filePath);
 }
 
+/** 记忆路径先过 E6，避免 read-before-edit 掩盖 remember 拒绝原因（Turn 5b 探针） */
+async function applyMemoryWriteGuardEarly(rawPath: string, workDir: string): Promise<string | null> {
+  const resolved = resolveToolFilePath(rawPath, workDir);
+  if (!resolveMemoryRootForPath(resolved)) return null;
+  return applyMemoryWriteGuard(resolved);
+}
+
 async function postProcessMemoryFileWrite(filePath: string, content: string): Promise<void> {
   if (!resolveMemoryRootForPath(filePath)) return;
   await afterMemoryMarkdownWritten(filePath, content);
@@ -177,8 +184,8 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
         }
         const sourcePath = resolveToolFilePath(rawPath, workDir);
         const filePath = resolveMemoryWritePath(rawPath, workDir, content);
-        const guardErr = await applyMemoryWriteGuard(filePath);
-        if (guardErr) return { success: false, output: '', error: guardErr };
+        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir);
+        if (earlyGuardErr) return { success: false, output: '', error: earlyGuardErr };
         const oldContent = await (async () => {
           try {
             return await fs.readFile(filePath, 'utf-8');
@@ -190,6 +197,8 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
           const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
           if (readErr) return { success: false, output: '', error: readErr };
         }
+        const guardErr = await applyMemoryWriteGuard(filePath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
         await getEditHistory().saveSnapshot(filePath, 'write_file');
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         let writeContent = content;
@@ -235,6 +244,8 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       },
       handler: async (args) => {
         const rawPath = args.path;
+        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir);
+        if (earlyGuardErr) return { success: false, output: '', error: earlyGuardErr };
         const sourcePath = resolveToolFilePath(rawPath, workDir);
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) {
@@ -288,9 +299,20 @@ export function createFileTools(workDir: string, sessionId = 'default'): Registe
       handler: async (args) => {
         const rawPath = args.path || args.filePath;
         if (!rawPath) return { success: false, output: '', error: 'path is required (accepted names: path, filePath)' };
+        const earlyGuardErr = await applyMemoryWriteGuardEarly(rawPath, workDir);
+        if (earlyGuardErr) return { success: false, output: '', error: earlyGuardErr };
+        const sourcePath = resolveToolFilePath(rawPath, workDir);
+        if (
+          resolveMemoryRootForPath(sourcePath)
+          && path.basename(sourcePath).toLowerCase() === 'memory.md'
+        ) {
+          return {
+            success: true,
+            output: 'MEMORY.md index rows are maintained automatically when topic memory files are written or updated. No manual edit is required.',
+          };
+        }
         const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
         if (readErr) return { success: false, output: '', error: readErr };
-        const sourcePath = resolveToolFilePath(rawPath, workDir);
         let content: string;
         try {
           content = await fs.readFile(sourcePath, 'utf-8');

@@ -12,6 +12,15 @@ function normalizePath(path: string): string {
 
 export const WORKSPACE_ICECODER_CONFIG_NAMES = ['.icecoder.json', 'icecoder.json'] as const;
 
+/** 记忆 / 会话笔记目录：不参与写后读 Gate，避免验收续跑把模型拉回循环 */
+export const DEFAULT_VERIFICATION_EXEMPT_PREFIXES = [
+  'data/session-notes',
+  'data/memory-files',
+  'data/user-memory',
+  'data/sessions',
+  '.icecoder/session-notes',
+] as const;
+
 let runtimeExemptPrefixes: string[] = [];
 let runtimeWorkspaceRoot: string | undefined;
 
@@ -117,7 +126,10 @@ export async function resolveVerificationExemptDirPrefixes(options: {
   mainConfigPath?: string;
   envDirs?: string;
 }): Promise<string[]> {
-  const merged: string[] = [...(options.globalDirs ?? [])];
+  const merged: string[] = [
+    ...DEFAULT_VERIFICATION_EXEMPT_PREFIXES,
+    ...(options.globalDirs ?? []),
+  ];
 
   if (options.mainConfigPath) {
     merged.push(...await readVerificationExemptDirsFromMainConfig(options.mainConfigPath));

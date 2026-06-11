@@ -16,7 +16,6 @@ import { scanMemoryFiles } from '../../memory/file-memory/memory-scanner.js';
 import { getMemoryTelemetry } from '../../memory/file-memory/memory-telemetry.js';
 import {
   getDreamJobStatus,
-  isDreamJobRunning,
   scheduleManualDreamLlm,
 } from '../../memory/file-memory/memory-dream-runner.js';
 import '../../cli/paths.js';
@@ -162,15 +161,6 @@ export function createMemoryDreamRouter(llmAdapter?: LLMAdapterInterface): Route
     // LLM 整合（后台异步，不阻塞 HTTP）
     if (!llmAdapter) {
       res.status(503).json({ success: false, error: 'LLM 未配置，无法执行深度整合' });
-      return;
-    }
-
-    if (isDreamJobRunning()) {
-      res.status(409).json({
-        success: false,
-        error: '已有记忆整合任务在后台运行，请稍后再试',
-        job: getDreamJobStatus(),
-      });
       return;
     }
 

@@ -6,6 +6,44 @@ import { isResumeContinuationMessage } from './resume-goal.js';
 import { isPoisonedGoal, resolveSessionGoalAnchor } from './session-goal-anchor.js';
 import { bigramJaccard } from './harness-message-utils.js';
 import { shouldApplyCasualHarness } from './casual-mode.js';
+import {
+  areAllVerificationExemptPaths,
+  hasEngineeringTestTargets,
+} from './document-deliverable.js';
+
+/** Harness 软失败：不应在下一轮 hydrate 时触发 verification failed */
+export function isSoftHarnessDiagnostic(diag: string): boolean {
+  const d = diag.trim();
+  if (!d) return true;
+  if (/read-before-edit:/i.test(d)) return true;
+  if (/remember_required:/i.test(d)) return true;
+  if (/no match found for search string/i.test(d)) return true;
+  if (/\benoent\b|no such file or directory|file not found/i.test(d)) {
+    if (/memory-files|user-memory|session-notes/i.test(d)) return true;
+  }
+  return false;
+}
+
+function shouldForceVerificationFailedAfterHydrate(
+  diagnostics: readonly string[],
+  filesChanged: readonly string[],
+): boolean {
+  if (diagnostics.length === 0) return false;
+  if (diagnostics.every(isSoftHarnessDiagnostic)) return false;
+  if (!hasEngineeringTestTargets(filesChanged)) return false;
+  return true;
+}
+
+function clearVerificationForExemptOnlyWork(taskState: TaskState): void {
+  const snap = taskState.snapshot();
+  if (!areAllVerificationExemptPaths(snap.filesChanged)) return;
+  taskState.applySnapshot({
+    ...snap,
+    verificationRequired: false,
+    verificationStatus: 'not_required',
+    phase: snap.phase === 'verification' ? 'editing' : snap.phase,
+  });
+}
 
 /**
  * 当前用户消息是否是「与旧任务无关的新查询」。
@@ -73,11 +111,17 @@ export function syncHydratedTaskState(
     return isPoisonedGoal(anchor) ? freshGoal : anchor;
   }
 
-  const shouldRebindGoal = isResumeContinuationMessage(userMessage)
-    || isPoisonedGoal(snap.goal);
-
-  if (shouldRebindGoal && !isPoisonedGoal(anchor)) {
-    taskState.rebindGoal(anchor);
+  if (isResumeContinuationMessage(userMessage)) {
+    if (!isPoisonedGoal(anchor)) {
+      taskState.rebindGoal(anchor);
+    }
+  } else {
+    const trimmed = userMessage.trim();
+    if (trimmed && !isPoisonedGoal(trimmed)) {
+      taskState.rebindGoal(trimmed);
+    } else if (isPoisonedGoal(snap.goal) && !isPoisonedGoal(anchor)) {
+      taskState.rebindGoal(anchor);
+    }
   }
 
   const mergedFilesRead = [...new Set([...taskState.snapshot().filesRead, ...repo.filesRead])];
@@ -93,8 +137,9 @@ export function syncHydratedTaskState(
     commandsRun: mergedCommands,
   });
   taskState.reconcileOrphanFileDeliverableWriteVersions();
+  clearVerificationForExemptOnlyWork(taskState);
 
-  if (repo.recentDiagnostics.length > 0) {
+  if (shouldForceVerificationFailedAfterHydrate(repo.recentDiagnostics, mergedFilesChanged)) {
     taskState.forceVerificationFailed();
   }
 

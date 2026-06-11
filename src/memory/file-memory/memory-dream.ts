@@ -83,8 +83,19 @@ export type DreamTrigger = 'expired' | 'session_and_files' | 'new_files' | 'stal
 /**
  * Dream 结果。
  */
+/** Dream 是否有实质磁盘变更（空跑退避仅统计无变更的 LLM 整合） */
+export function dreamRunWasSubstantive(result: {
+  filesModified?: number;
+  filesDeleted?: number;
+  filesEvicted?: number;
+}): boolean {
+  return (result.filesModified ?? 0) > 0
+    || (result.filesDeleted ?? 0) > 0
+    || (result.filesEvicted ?? 0) > 0;
+}
+
 export interface DreamResult {
-  /** 是否执行了整合 */
+  /** 是否执行了整合（有实质文件变更；LLM 空跑为 false） */
   executed: boolean;
   /** 整合摘要 */
   summary: string;
@@ -900,11 +911,13 @@ export class MemoryDream {
       if (userEvict.executed) getScannerCache().invalidate(userDir);
     }
 
+    const substantive = dreamRunWasSubstantive({ ...result, filesEvicted });
     return {
-      executed: true,
       ...result,
       filesEvicted,
       duration: Date.now() - startTime,
+      executed: substantive,
+      skipReason: substantive ? undefined : 'empty_run',
     };
   }
 
@@ -969,7 +982,6 @@ export class MemoryDream {
     let filesModified = 0;
     let filesDeleted = 0;
     const summaries: string[] = [];
-    let anyLlmOk = false;
     let batchesRemaining = 0;
     const startBatch = await this.readDreamBatchProgress(memoryDir, batches.length);
     const llmBudgetStart = Date.now();
@@ -1013,8 +1025,6 @@ export class MemoryDream {
           summaries.push(`Batch ${i + 1}: empty JSON`);
           continue;
         }
-        anyLlmOk = true;
-
         if (this.config.enableBackup) {
           await this.backupBeforeDream(memoryDir, parsed).catch(() => {});
         }
@@ -1043,7 +1053,7 @@ export class MemoryDream {
     }
 
     let result = {
-      executed: anyLlmOk,
+      executed: false,
       summary: summaries.join(' ') || '分批整合未产生变更',
       filesModified,
       filesDeleted,
@@ -1099,13 +1109,12 @@ export class MemoryDream {
       if (userEvict.executed) getScannerCache().invalidate(userDir);
     }
 
+    const substantive = dreamRunWasSubstantive({ ...result, filesEvicted });
     return {
       ...result,
       filesEvicted,
-      executed: anyLlmOk || filesModified > 0 || filesDeleted > 0 || filesEvicted > 0,
-      skipReason: (anyLlmOk || filesModified > 0 || filesDeleted > 0 || filesEvicted > 0)
-        ? undefined
-        : 'empty_run',
+      executed: substantive,
+      skipReason: substantive ? undefined : 'empty_run',
     };
   }
 
@@ -1632,11 +1641,26 @@ export class MemoryDream {
     void this.enqueuePersistState().catch(() => {});
   }
 
+  /** 手动/自动 Dream 启动前：检查 LLM 空跑退避（与 indexDreamBackoff 独立） */
+  peekDreamEmptyRunBackoff(): { ok: boolean; reason: string } {
+    return this.checkDreamEmptyRunBackoff();
+  }
+
   /** LLM Dream 空跑（无修改/删除/淘汰）时递增独立退避计数 */
   notifyDreamEmptyRun(): void {
     this.dreamEmptyRunBackoffCount = Math.min(this.dreamEmptyRunBackoffCount + 1, 8);
     this.lastDreamEmptyRunAt = Date.now();
     void this.enqueuePersistState().catch(() => {});
+  }
+
+  /** 等待 dream-state.json 写盘完成（连续手动 Dream 前必须 await） */
+  async flushPersistedState(): Promise<void> {
+    await this.enqueuePersistState();
+  }
+
+  /** 从磁盘加载退避/会话计数（手动 Dream 链式任务启动前） */
+  async loadPersistedState(): Promise<void> {
+    await this.restoreState();
   }
 
   /** LLM Dream 有实质产出时清零空跑退避 */

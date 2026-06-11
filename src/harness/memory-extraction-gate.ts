@@ -8,12 +8,20 @@
 import type { TaskIntent } from '../types/runtime-snapshot.js';
 import type { CasualExtractionConfig, ExtractionRemoteConfig } from '../memory/file-memory/memory-config.js';
 import { EXTRACTION_SIGNAL_WORDS } from '../memory/file-memory/memory-config.js';
+import { hasExplicitRememberWriteRequest } from '../memory/file-memory/memory-write-pipeline.js';
 import { evaluateCasualMemoryExtraction, shouldApplyCasualHarness } from './casual-mode.js';
 
-/** 用户纠正 / 反馈类表述（可升格为 feedback 记忆；不与信号词完全重叠） */
+/** 用户纠正 / 反馈类表述（可升格为 feedback 记忆；突破 ops 门控） */
 const USER_FEEDBACK_PATTERNS: RegExp[] = [
+  /^不对[，,]/,
+  /^错了[，,]/,
+  /** 引号/书名号内的纠正（Turn 2 验收：纠正句前有场景说明） */
+  /[「『"']不对[，,]/,
+  /[「『"']错了[，,]/,
+  /不对[，,].{0,120}(?:以后|下次|必须|不要|务必)/,
   /(?:这样|这么做)(?:不好|不对)/,
   /(?:wrong|incorrect)\s+(?:approach|way)/i,
+  /(?:以后|下次|今后|from now on|next time).{0,60}(?:不要|别|不用|禁止|never|don't|必须|务必|should|must)/i,
   /(?:别|不要|不用|禁止|never|don't).{0,20}(?:用|写|加|做).{0,20}(?:了|吧|啊)/,
 ];
 
@@ -48,8 +56,18 @@ export function hasExtractionSignalWord(message: string): boolean {
 export function isUserFeedbackSignal(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed) return false;
-  if (hasExtractionSignalWord(trimmed)) return false;
+  if (hasExplicitRememberWriteRequest(trimmed)) return false;
   return USER_FEEDBACK_PATTERNS.some(p => p.test(trimmed));
+}
+
+/**
+ * 可立即触发 Extract 的窄信号（突破 ops、跳过深度门控）。
+ * 不用 EXTRACTION_SIGNAL_WORDS 全集——「不要写长期记忆」等验收说明会误触 Turn 1 Extract 并占满 cap。
+ */
+export function hasImmediateExtractSignal(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed) return false;
+  return hasExplicitRememberWriteRequest(trimmed) || isUserFeedbackSignal(trimmed);
 }
 
 export function isOpsTaskContext(
@@ -145,20 +163,23 @@ export function evaluateMemoryExtractionGate(input: MemoryExtractionGateInput): 
     return { allow: false, reason: 'session_extract_cap' };
   }
 
-  const hasSignal = hasExtractionSignalWord(msg);
-  const hasFeedback = isUserFeedbackSignal(msg);
+  const hasImmediate = hasImmediateExtractSignal(msg);
+  const hasBroadSignal = hasExtractionSignalWord(msg);
 
   const opsTask = isOpsTaskContext(msg, input.commandsRun ?? [], input.taskIntent);
-  if (opsTask && !hasSignal && !hasFeedback) {
+  if (opsTask && !hasImmediate) {
     return { allow: false, reason: 'ops_task' };
   }
 
-  if (hasSignal) {
-    return { allow: true, reason: 'signal_word' };
+  if (hasImmediate) {
+    return {
+      allow: true,
+      reason: hasExplicitRememberWriteRequest(msg) ? 'signal_word' : 'user_feedback',
+    };
   }
 
-  if (hasFeedback) {
-    return { allow: true, reason: 'user_feedback' };
+  if (hasBroadSignal) {
+    return { allow: true, reason: 'signal_word' };
   }
 
   const intent = input.taskIntent;

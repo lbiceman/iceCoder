@@ -155,13 +155,12 @@ describe('shouldDream', () => {
     await writeMemoryFile(tempDir, 'note1.md', '笔记1');
 
     dream.notifyDreamEmptyRun();
-    const blocked = await dream.evaluateDreamGate(tempDir);
-    expect(blocked.shouldRun).toBe(false);
-    expect(blocked.skipReason).toMatch(/dream_empty_backoff/);
+    const backoff = dream.peekDreamEmptyRunBackoff();
+    expect(backoff.ok).toBe(false);
+    expect(backoff.reason).toMatch(/dream_empty_backoff/);
 
     dream.notifyDreamSubstantiveRun();
-    const allowed = await dream.evaluateDreamGate(tempDir);
-    expect(allowed.shouldRun).toBe(true);
+    expect(dream.peekDreamEmptyRunBackoff().ok).toBe(true);
   });
 
   it('空记忆目录返回 false', async () => {
@@ -450,7 +449,8 @@ describe('dream 同进程互斥', () => {
 
     release();
     const firstResult = await first;
-    expect(firstResult.executed).toBe(true);
+    expect(firstResult.executed).toBe(false);
+    expect(firstResult.skipReason).toBe('empty_run');
   });
 });
 
@@ -492,7 +492,8 @@ describe('Dream readMemoryContents（v5 优化）', () => {
     const dream = createMemoryDream({ enableBackup: false });
     const result = await dream.forceDream(tempDir, mockLLM);
 
-    expect(result.executed).toBe(true);
+    expect(result.executed).toBe(false);
+    expect(result.skipReason).toBe('empty_run');
     // 验证 LLM 收到了记忆文件内容
     const chatCall = (mockLLM.chat as any).mock.calls[0];
     const userMessage = chatCall[0].find((m: UnifiedMessage) => m.role === 'user');
@@ -710,8 +711,24 @@ describe('Dream 执行', () => {
     const dream = createMemoryDream({ enableBackup: false });
     const result = await dream.forceDream(tempDir, mockLLM);
 
-    expect(result.executed).toBe(true);
+    expect(result.executed).toBe(false);
     expect(result.summary).toContain('Failed to parse');
+    expect(result.skipReason).toBe('empty_run');
+  });
+
+  it('LLM 无实质变更时记为空跑（empty_run）', async () => {
+    await writeMemoryFile(tempDir, 'note.md', '笔记');
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'Memories are already well-organized.',
+    }));
+    const dream = createMemoryDream({ enableBackup: false });
+    const result = await dream.forceDream(tempDir, mockLLM);
+    expect(result.executed).toBe(false);
+    expect(result.skipReason).toBe('empty_run');
   });
 });
 

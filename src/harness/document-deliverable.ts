@@ -143,6 +143,11 @@ export function isVerificationExemptPath(path: string): boolean {
     || isProjectCustomExemptPath(path);
 }
 
+/** 变更列表是否全部为 Gate 豁免路径（记忆 / session-notes 等） */
+export function areAllVerificationExemptPaths(paths: readonly string[]): boolean {
+  return paths.length > 0 && paths.every(isVerificationExemptPath);
+}
+
 /** 磁盘上已不存在的 filesChanged 路径（清理/删除后同步 Gate 用）。 */
 export function missingChangedFilePaths(
   filesChanged: readonly string[],

@@ -71,6 +71,12 @@ export function isDreamJobRunning(): boolean {
   return jobStatus.running;
 }
 
+/** 测试用：清空串行队列与 job 状态 */
+export function resetDreamRunnerChainForTests(): void {
+  runChain = Promise.resolve();
+  jobStatus = idleStatus();
+}
+
 /** 最近一次 / 正在进行的整合任务状态（供 GET /api/memory/dream 轮询） */
 export function getDreamJobStatus(): Readonly<DreamJobStatus> {
   return { ...jobStatus };
@@ -188,67 +194,127 @@ export function enqueueDreamJob(trigger: DreamJobTrigger, work: () => Promise<vo
   return true;
 }
 
-/** 手动整合：LLM 阶段放后台（规则修复与归档应在调用前同步完成） */
-export function scheduleManualDreamLlm(params: ManualDreamBackgroundParams): boolean {
+/** 执行一次手动 Dream（由 runChain 串行调度） */
+async function runManualDreamLlmJob(params: ManualDreamBackgroundParams): Promise<void> {
   const { memoryDir, llmAdapter, fileCountBefore, preEvicted } = params;
+  beginJob('manual');
+  const startMs = Date.now();
 
-  return enqueueDreamJob('manual', async () => {
-    const dream = createMemoryDream();
-    const gate = await dream.evaluateDreamGate(memoryDir);
-    const startMs = Date.now();
+  const dream = createMemoryDream();
+  await dream.loadPersistedState();
+  const gate = await dream.evaluateDreamGate(memoryDir);
 
-    try {
-      const result: DreamResult = await runDreamWithBatchContinuations(() =>
-        dream.forceDream(memoryDir, llmAdapter),
-      );
-      const totalEvicted = preEvicted + (result.filesEvicted ?? 0);
-
-      if (result.executed && gate.trigger === 'stale_index') {
-        dream.notifyStaleIndexDreamCompleted();
-      }
+  try {
+    const emptyBackoff = dream.peekDreamEmptyRunBackoff();
+    if (!emptyBackoff.ok) {
+      const durationMs = Date.now() - startMs;
+      const summary = emptyBackoff.reason;
 
       getScannerCache().invalidate(memoryDir);
 
-      await getMemoryTelemetry().logDream({
-        executed: result.executed,
-        fileCountBefore,
-        filesModified: result.filesModified,
-        filesDeleted: result.filesDeleted,
-        filesEvicted: totalEvicted,
-        durationMs: result.duration,
-        trigger: 'manual',
-      }).catch(() => {});
-
-      const summary =
-        preEvicted > 0
-          ? `${result.summary}${result.summary.endsWith('.') ? '' : '。'} LLM 前已归档 ${preEvicted} 条。`
-          : result.summary;
-
-      finishJob('manual', {
-        lastExecuted: result.executed,
-        lastSummary: summary,
-        filesModified: result.filesModified,
-        filesDeleted: result.filesDeleted,
-        filesEvicted: totalEvicted,
-        durationMs: result.duration,
-      });
-
-      console.log(
-        `[MemoryDreamRunner] manual dream ${result.executed ? 'done' : 'skipped'}: ${summary} (${result.duration}ms)`,
-      );
-    } catch (err) {
       await getMemoryTelemetry().logDream({
         executed: false,
         fileCountBefore,
         filesModified: 0,
         filesDeleted: 0,
         filesEvicted: preEvicted,
-        durationMs: Date.now() - startMs,
+        durationMs,
         trigger: 'manual',
+        skipReason: emptyBackoff.reason,
       }).catch(() => {});
-      throw err;
+
+      finishJob('manual', {
+        lastExecuted: false,
+        lastSummary: summary,
+        filesModified: 0,
+        filesDeleted: 0,
+        filesEvicted: preEvicted,
+        durationMs,
+      });
+
+      console.log(
+        `[MemoryDreamRunner] manual dream skipped: ${summary} (${durationMs}ms)`,
+      );
+      return;
     }
-  });
+
+    const result: DreamResult = await runDreamWithBatchContinuations(() =>
+      dream.forceDream(memoryDir, llmAdapter),
+    );
+    const totalEvicted = preEvicted + (result.filesEvicted ?? 0);
+
+    if (result.executed && gate.trigger === 'stale_index') {
+      dream.notifyStaleIndexDreamCompleted();
+    } else if (result.executed) {
+      dream.notifyDreamSubstantiveRun();
+    } else if (!result.executed) {
+      dream.notifyDreamEmptyRun();
+      await dream.flushPersistedState();
+    }
+
+    getScannerCache().invalidate(memoryDir);
+
+    const manualSkipReason = result.executed
+      ? undefined
+      : (result.skipReason
+        ?? (result.summary.includes('No memories to consolidate')
+          ? 'no_memories'
+          : 'empty_run'));
+
+    await getMemoryTelemetry().logDream({
+      executed: result.executed,
+      fileCountBefore,
+      filesModified: result.filesModified,
+      filesDeleted: result.filesDeleted,
+      filesEvicted: totalEvicted,
+      durationMs: result.duration,
+      trigger: 'manual',
+      skipReason: manualSkipReason,
+    }).catch(() => {});
+
+    const summary =
+      preEvicted > 0
+        ? `${result.summary}${result.summary.endsWith('.') ? '' : '。'} LLM 前已归档 ${preEvicted} 条。`
+        : result.summary;
+
+    finishJob('manual', {
+      lastExecuted: result.executed,
+      lastSummary: summary,
+      filesModified: result.filesModified,
+      filesDeleted: result.filesDeleted,
+      filesEvicted: totalEvicted,
+      durationMs: result.duration,
+    });
+
+    console.log(
+      `[MemoryDreamRunner] manual dream ${result.executed ? 'done' : 'skipped'}: ${summary} (${result.duration}ms)`,
+    );
+  } catch (err) {
+    await getMemoryTelemetry().logDream({
+      executed: false,
+      fileCountBefore,
+      filesModified: 0,
+      filesDeleted: 0,
+      filesEvicted: preEvicted,
+      durationMs: Date.now() - startMs,
+      trigger: 'manual',
+    }).catch(() => {});
+    failJob('manual', err);
+    throw err;
+  }
+}
+
+/**
+ * 手动整合：LLM 阶段放后台（规则修复与归档应在调用前同步完成）。
+ * 连续 POST 会串行入队（不返回 409），便于 Turn 7 验收 POST ×2。
+ */
+export function scheduleManualDreamLlm(params: ManualDreamBackgroundParams): boolean {
+  runChain = runChain
+    .then(() => runManualDreamLlmJob(params))
+    .catch((err) => {
+      console.error('[MemoryDreamRunner] manual dream chain error:', err);
+    });
+  return true;
 }
 
 /** autoDream：门控通过后 LLM 整合放后台 */
@@ -281,6 +347,7 @@ export function scheduleAutoDream(params: AutoDreamBackgroundParams): boolean {
         dream.notifyDreamSubstantiveRun();
       } else if (!result.executed) {
         dream.notifyDreamEmptyRun();
+        await dream.flushPersistedState();
       }
 
       await getMemoryTelemetry().logDream({

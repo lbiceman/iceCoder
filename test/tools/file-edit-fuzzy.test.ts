@@ -43,4 +43,31 @@ describe('applyNonRegexReplace', () => {
     expect(result.changed).toBe(true);
     expect(result.fuzzy).toBe(true);
   });
+
+  it('fuzzy replaceAll does not loop when replace extends search prefix', () => {
+    const content = '  line1\n  line2\nrest';
+    const search = 'line1\nline2';
+    const replace = 'line1\nline2\nnew line';
+    const result = applyNonRegexReplace(content, search, replace, true);
+    expect(result.changed).toBe(true);
+    expect(result.content).toBe('line1\nline2\nnew line\nrest');
+    expect(result.content.match(/new line/g)).toHaveLength(1);
+  });
+
+  it('handles MEMORY.md index row insert without hanging', () => {
+    const content = `## 用户偏好
+| 文件 | 要点 |
+|------|------|
+
+| user_commit_style.md | desc |`;
+    const search = '## 用户偏好\n| 文件 | 要点 |\n|------|------|';
+    const replace = `## 用户偏好
+| 文件 | 要点 |
+|------|------|
+| [Git commit](user_commit_style.md) — desc |`;
+    const result = applyNonRegexReplace(content, search, replace, true);
+    expect(result.changed).toBe(true);
+    expect(result.content).toContain('[Git commit](user_commit_style.md)');
+    expect(result.content.match(/\[Git commit\]/g)).toHaveLength(1);
+  });
 });

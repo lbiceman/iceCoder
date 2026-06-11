@@ -148,6 +148,7 @@ import {
   initExtractionGuard,
   drainExtractions,
   type ExtractionGuardState,
+  type ExtractionQueueContext,
 } from '../memory/file-memory/memory-concurrency.js';
 import {
   getCasualExtractionConfig,
@@ -226,6 +227,11 @@ export interface HarnessMemoryConfig {
 export type InjectMemoryMode = 'default' | 'coarse_pre_llm' | 'casual_light';
 
 // ─── 主代理写入检测 ───
+
+/** 提取游标：仅统计 user/assistant（与 _doExtract 切片轴一致，勿用 messages.length） */
+export function countExtractionConversationMessages(messages: UnifiedMessage[]): number {
+  return messages.filter(m => m.role === 'user' || m.role === 'assistant').length;
+}
 
 /**
  * 检测主代理是否在 sinceIndex 之后直接写入了记忆文件（项目级 + 用户级）。
@@ -565,7 +571,7 @@ export class HarnessMemoryIntegration {
   } | null = null;
 
   // ── sequential 包装的函数 ──
-  private sequentialExtract: (messages: UnifiedMessage[], turnCount: number) => Promise<void>;
+  private sequentialExtract: (ctx: ExtractionQueueContext) => Promise<void>;
   private sequentialAdjustConfidence: (filenames: string[], delta: number) => Promise<void>;
 
   /** 连续会话记忆校验失败次数（用于退避） */
@@ -611,8 +617,8 @@ export class HarnessMemoryIntegration {
 
     // 并发控制：sequential 包装确保提取不重叠
     this.sequentialExtract = sequential(
-      async (messages: UnifiedMessage[], turnCount: number) => {
-        await this._extractMemoriesImpl(messages, turnCount);
+      async (ctx: ExtractionQueueContext) => {
+        await this._extractMemoriesImpl(ctx);
       },
     );
     this.sequentialAdjustConfidence = sequential(
@@ -1094,25 +1100,44 @@ ${candidateList}`;
     this.currentMessages = messages;
 
     // ── 主代理互斥检测 ──
+    const conversationEndIndex = countExtractionConversationMessages(messages);
     if (hasMemoryWritesSince(
       messages,
       this.lastExtractionMessageIndex,
       this.workspaceRoot,
     )) {
       console.debug('[harness-memory] 跳过提取 — 主代理已直接写入记忆文件');
-      this.lastExtractionMessageIndex = messages.length;
+      this.lastExtractionMessageIndex = Math.max(
+        this.lastExtractionMessageIndex,
+        conversationEndIndex,
+      );
     } else {
-      // ── 条件触发 LLM 提取（sequential 包装，防止重叠） ──
-      await this.sequentialExtract(messages, turnCount);
+      // 冻结门控与游标：后台提取完成前下一 Turn 不得覆盖 triggerUserMessage / 游标
+      const extractCtx: ExtractionQueueContext = {
+        messages: [...messages],
+        turnCount,
+        gateUserMessage: this.activeUserMessageForGate(),
+        conversationStartIndex: this.lastExtractionMessageIndex,
+        taskIntent: this.loopEndTaskIntent,
+        totalInputTokens: this.loopEndTotalInputTokens,
+        commandsRun: [...this.loopEndCommandsRun],
+      };
+      void this.sequentialExtract(extractCtx).catch((err) => {
+        console.debug('[harness-memory] sequentialExtract failed:', err instanceof Error ? err.message : err);
+      });
     }
 
-    // ── 会话记忆更新（上下文压缩前的连续性保障） ──
+    // ── 会话记忆更新（后台；单次 LLM 可达 60s+，勿阻塞 loop 返回） ──
     if (totalInputTokens !== undefined) {
-      await this.maybeUpdateSessionMemory(messages, totalInputTokens, false, runtimeSnapshots);
+      void this.maybeUpdateSessionMemory(messages, totalInputTokens, false, runtimeSnapshots).catch((err) => {
+        console.debug('[harness-memory] maybeUpdateSessionMemory failed:', err instanceof Error ? err.message : err);
+      });
     }
 
     // ── autoDream 整合（后台，不阻塞 onLoopEnd） ──
-    await this.memoryDream.recordSession();
+    void this.memoryDream.recordSession().catch((err) => {
+      console.debug('[harness-memory] recordSession failed:', err instanceof Error ? err.message : err);
+    });
     void this.maybeDream().catch((err) => {
       console.debug('[harness-memory] maybeDream failed:', err instanceof Error ? err.message : err);
     });
@@ -1466,26 +1491,26 @@ ${candidateList}`;
     );
   }
 
-  private shouldExtract(turnCount: number, messages: UnifiedMessage[]): boolean {
-    const gateUserMessage = this.activeUserMessageForGate();
+  private shouldExtract(ctx: ExtractionQueueContext): boolean {
+    const gateUserMessage = ctx.gateUserMessage.trim();
     if (!this.llmAdapter || !gateUserMessage) return false;
     if (!this.memoryDirExists) return false;
 
     const cfg = getExtractionConfig();
     const casualCfg = getCasualExtractionConfig();
-    const toolCallsSince = countToolCallsSince(messages, this.toolCallsAtLastExtract);
+    const toolCallsSince = countToolCallsSince(ctx.messages, this.toolCallsAtLastExtract);
 
     const gate = evaluateMemoryExtractionGate({
-      turnCount,
+      turnCount: ctx.turnCount,
       currentUserMessage: gateUserMessage,
-      totalInputTokens: this.loopEndTotalInputTokens,
-      sessionHasToolCalls: this.sessionHasToolCalls(messages),
+      totalInputTokens: ctx.totalInputTokens,
+      sessionHasToolCalls: this.sessionHasToolCalls(ctx.messages),
       toolCallsSinceLastExtract: toolCallsSince,
       extractionTurnCounter: this.extractionTurnCounter,
       sessionSuccessfulExtractCount: this.sessionSuccessfulExtractCount,
       sessionExtractWrittenCount: this.sessionExtractWrittenCount,
-      taskIntent: this.loopEndTaskIntent,
-      commandsRun: this.loopEndCommandsRun,
+      taskIntent: ctx.taskIntent,
+      commandsRun: ctx.commandsRun,
       extractionConfig: cfg,
       casualConfig: casualCfg,
     });
@@ -1518,20 +1543,20 @@ ${candidateList}`;
    * 实际执行 LLM 记忆提取（由 sequential 包装调用）。
    * 带 inProgress 互斥 + trailing run 机制。
    */
-  private async _extractMemoriesImpl(messages: UnifiedMessage[], turnCount: number): Promise<void> {
+  private async _extractMemoriesImpl(ctx: ExtractionQueueContext): Promise<void> {
     if (!this.llmAdapter) return;
-    if (!this.shouldExtract(turnCount, messages)) return;
+    if (!this.shouldExtract(ctx)) return;
 
     // inProgress 互斥
     if (this.extractionGuard.inProgress) {
       // 暂存为 trailing run
-      this.extractionGuard.pendingContext = { messages: [...messages], turnCount };
+      this.extractionGuard.pendingContext = { ...ctx, messages: [...ctx.messages] };
       console.debug('[harness-memory] 提取进行中 — 暂存为尾随请求');
       return;
     }
 
     this.extractionGuard.inProgress = true;
-    const p = this._doExtract(messages, turnCount);
+    const p = this._doExtract(ctx);
     this.extractionGuard.inFlightExtractions.add(p);
 
     try {
@@ -1545,7 +1570,7 @@ ${candidateList}`;
       this.extractionGuard.pendingContext = null;
       if (trailing) {
         console.debug('[harness-memory] 执行尾随提取');
-        await this._extractMemoriesImpl(trailing.messages, trailing.turnCount);
+        await this._extractMemoriesImpl(trailing);
       }
     }
   }
@@ -1597,8 +1622,10 @@ ${candidateList}`;
    * 每块都走完整的 extract → saveMemories 流程（自动去重）。
    * 长对话首次提取最多处理 3 块（60 条消息），避免过长等待。
    */
-  private async _doExtract(messages: UnifiedMessage[], _turnCount: number): Promise<void> {
+  private async _doExtract(ctx: ExtractionQueueContext): Promise<void> {
     if (!this.llmAdapter) return;
+
+    const { messages, conversationStartIndex } = ctx;
 
     try {
       const conversationPrefix = this.sanitizeConversationPrefix(messages);
@@ -1607,9 +1634,14 @@ ${candidateList}`;
 
       if (allConversation.length === 0) return;
 
-      // 只提取上次提取之后的新消息
-      const newMessagesRaw = allConversation.slice(this.lastExtractionMessageIndex);
-      if (newMessagesRaw.length === 0) return;
+      // 只提取入队时冻结游标之后的新消息（勿读 this.lastExtractionMessageIndex 实时值）
+      const newMessagesRaw = allConversation.slice(conversationStartIndex);
+      if (newMessagesRaw.length === 0) {
+        console.debug(
+          `[harness-memory] 提取跳过 — 无新对话片段 (start=${conversationStartIndex}, total=${allConversation.length})`,
+        );
+        return;
+      }
 
       const newMessages = this.clipMessagesForExtraction(newMessagesRaw);
       const clippedCount = newMessagesRaw.length - newMessages.length;
@@ -1662,8 +1694,11 @@ ${candidateList}`;
         maxMemories: DEFAULT_LLM_EXTRACTION_CONFIG.maxMemories,
       });
 
-      // 推进 cursor：对齐 user/assistant 轴（勿用含 tool 的 messages.length）
-      this.lastExtractionMessageIndex = allConversation.length;
+      // 推进 cursor：对齐 user/assistant 轴，且不低于入队前已处理位置
+      this.lastExtractionMessageIndex = Math.max(
+        this.lastExtractionMessageIndex,
+        allConversation.length,
+      );
 
       this.telemetry.logExtract({
         messageCount: newMessages.length,
@@ -1704,6 +1739,10 @@ ${candidateList}`;
           timestamp: Date.now(),
           turnCount: 0,
         };
+      } else {
+        console.debug(
+          `[harness-memory] LLM 提取完成但未写盘（0 条，gate="${ctx.gateUserMessage.slice(0, 40)}…"）`,
+        );
       }
 
       // 矛盾通知：告知用户哪些旧记忆与新信息冲突，需要确认

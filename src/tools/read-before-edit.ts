@@ -56,9 +56,21 @@ export function hasFileBeenRead(workDir: string, rawPath: string, sessionId?: st
   return readsByScope.get(scopeKey(workDir, sessionId))?.has(normalizeWorkRelPath(workDir, rawPath)) ?? false;
 }
 
+/** session-notes / 长期记忆路径：允许直接 edit/append，避免验收场景多耗一轮 */
+export function isSessionOrMemoryNotesPath(workDir: string, rawPath: string): boolean {
+  const rel = normalizeWorkRelPath(workDir, rawPath).toLowerCase();
+  return /(?:^|\/)(?:session-notes(?:\.md)?|memory\.md)$/.test(rel)
+    || rel.includes('/session-notes')
+    || rel.startsWith('data/memory-files/')
+    || rel.startsWith('data/user-memory/')
+    || rel.startsWith('data/sessions/')
+    || rel.startsWith('.icecoder/session-notes');
+}
+
 /** 未读过则返回错误文案；否则 null。 */
 export function checkReadBeforeEdit(workDir: string, rawPath: string, sessionId?: string): string | null {
   if (!readBeforeEditEnabled()) return null;
+  if (isSessionOrMemoryNotesPath(workDir, rawPath)) return null;
   if (hasFileBeenRead(workDir, rawPath, sessionId)) return null;
   const rel = normalizeWorkRelPath(workDir, rawPath);
   return `read-before-edit: read_file "${rel}" in this session before editing. New files: use write_file instead.`;
