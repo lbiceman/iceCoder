@@ -85,16 +85,10 @@ window.ChatPage = (function () {
   var elFileStatus, elFileName, elFileRemove;
   var elStatusBar, elStatusTurn;
   var elCmdPlusBtn, elCmdPalette, mainInputWrapper;
+  var cmdPaletteResizeObserver = null;
   var sessionPet = null;
   var cmdPaletteOpen = false;
   var cmdBlurHideTimer = null;
-
-  // ---- 辅助 ----
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-  }
 
   function updateNavStatus(connected) {
     var dot = document.getElementById('status-dot');
@@ -118,8 +112,11 @@ window.ChatPage = (function () {
     return true;
   }
 
-  // ---- Token 用量 ----
-  function fetchModelContext() {
+  // 拉取一次即可覆盖两件事：
+  //   1) Token 用量（maxContextTokens / modelName → 冰豆）
+  //   2) 底部 #chip-model-label 显示当前默认 provider 的 modelName
+  // 失败时也要回填 chip，避免一直停在"加载中…"
+  function loadModelConfig() {
     fetch('/api/config')
       .then(function (res) { return res.json(); })
       .then(function (data) {
@@ -130,8 +127,45 @@ window.ChatPage = (function () {
           modelName = defaultProvider.modelName || '';
           updatePetTokenUsage();
         }
+        updateChipModelLabel(providers);
       })
-      .catch(function () { /* ignore */ });
+      .catch(function () {
+        updateChipModelLabel(null);
+      });
+  }
+
+  // 没有 provider 或请求失败时回退到"未配置"
+  // DOM 还没渲染好时（chat 页面异步插入 chip-model-label）轮询重试，避免卡在"加载中…"
+  function updateChipModelLabel(providers) {
+    function apply() {
+      var el = document.getElementById('chip-model-label');
+      if (!el) return false;
+      if (!providers || !providers.length) {
+        el.textContent = '未配置';
+        return true;
+      }
+      var def = providers.find(function (p) { return p.isDefault; }) || providers[0];
+      el.textContent = def && def.modelName ? def.modelName : '未配置';
+      return true;
+    }
+    if (apply()) return;
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      if (apply() || tries >= 10) clearInterval(timer);
+    }, 50);
+  }
+
+  // 从 WS 初始连接 payload 同步 chip（避免再走一次 fetch）
+  // 兼容两种结构：data.providers (数组) 或 data.modelName (单值)
+  function syncChipModelLabelFromWs(data) {
+    var providers = null;
+    if (data && data.providers && data.providers.length) {
+      providers = data.providers;
+    } else if (data && data.modelName) {
+      providers = [{ isDefault: true, modelName: data.modelName }];
+    }
+    updateChipModelLabel(providers);
   }
 
   function fetchSupportedFormats() {
@@ -179,12 +213,6 @@ window.ChatPage = (function () {
     }
   }
 
-  function formatTokenCount(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-    return '' + n;
-  }
-
   /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
   function isWorkloadActive() {
     return WS.isProcessing()
@@ -222,6 +250,47 @@ window.ChatPage = (function () {
     if (mainInputWrapper) Cmd.mountDropdownTo(mainInputWrapper);
   }
 
+  function positionCmdPalette() {
+    if (!elCmdPalette || !elCmdPlusBtn) return;
+    // 关键：把面板挂到 document.body 顶层 + position: fixed，
+    // 完全脱离 chat-main / chat-composer 的 stacking context，
+    // 任何高度变化都不会被工具栏行绘制顺序盖住。
+    if (elCmdPalette.parentElement !== document.body) {
+      document.body.appendChild(elCmdPalette);
+    }
+    var plusRect = elCmdPlusBtn.getBoundingClientRect();
+    var toolbar = elCmdPlusBtn.closest('.composer-toolbar');
+    var toolbarRect = toolbar ? toolbar.getBoundingClientRect() : plusRect;
+    var margin = 8;
+    var panelWidth = Math.min(320, window.innerWidth - 32);
+    elCmdPalette.style.position = 'fixed';
+    elCmdPalette.style.width = panelWidth + 'px';
+    elCmdPalette.style.visibility = 'hidden';
+    elCmdPalette.style.left = '0px';
+    elCmdPalette.style.top = '0px';
+    // 强制回流
+    void elCmdPalette.offsetHeight;
+    var panelHeight = elCmdPalette.offsetHeight;
+    elCmdPalette.style.visibility = '';
+    // 面板底端 = 工具栏行顶端之上 margin（不依赖 panelHeight 是否已经包含 dropdown）
+    var left = plusRect.right - panelWidth;
+    if (left < 8) left = 8;
+    if (left + panelWidth > window.innerWidth - 8) {
+      left = window.innerWidth - panelWidth - 8;
+    }
+    var top = toolbarRect.top - panelHeight - margin;
+    if (top < 8) top = 8;
+    elCmdPalette.style.left = left + 'px';
+    elCmdPalette.style.top = top + 'px';
+  }
+
+  function onCmdPaletteDocClick(e) {
+    if (!cmdPaletteOpen || !elCmdPalette || !elCmdPlusBtn) return;
+    var t = e.target;
+    if (elCmdPalette.contains(t) || elCmdPlusBtn.contains(t)) return;
+    closeCmdPalette();
+  }
+
   function openCmdPalette() {
     if (!elCmdPalette) return;
     if (cmdBlurHideTimer) {
@@ -238,6 +307,19 @@ window.ChatPage = (function () {
     });
     Cmd.show('~', '');
     elCmdPalette.focus();
+    // Cmd.show 会在面板里注入命令列表（panelHeight 此时才撑高）。
+    // 必须等 dropdown DOM 落地 + reflow 后再算位置，否则 panelHeight≈0，
+    // 面板会跑到按钮下方被 composer-toolbar 行盖住。
+    // Cmd 内部用 microtask 同步注入 DOM，但 reflow 要等下一帧——
+    // 双 rAF 确保 list DOM 已布局完成。
+    requestAnimationFrame(function () {
+      positionCmdPalette();
+      requestAnimationFrame(positionCmdPalette);
+    });
+    // 延一帧再绑 doc click，避免本次点击立刻被它关闭
+    setTimeout(function () {
+      document.addEventListener('mousedown', onCmdPaletteDocClick, true);
+    }, 0);
   }
 
   function toggleCmdPalette() {
@@ -589,7 +671,13 @@ window.ChatPage = (function () {
 
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
-      fetchModelContext();
+      loadModelConfig();
+    } else if (data && (data.providers || data.modelName)) {
+      // applyModelContextFromWs 已同步 token 用量；chip label 仍需单独刷一次
+      syncChipModelLabelFromWs(data);
+    } else {
+      // WS payload 没带 providers / modelName，兜底走 fetch
+      loadModelConfig();
     }
     syncSidebarWorkspace(data);
     if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
@@ -1076,6 +1164,8 @@ window.ChatPage = (function () {
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
       syncMessages();
     }
+    // 切回 chat 页面时也重新同步默认模型 / chip（不依赖 WS 状态，避免卡在"加载中…"）
+    loadModelConfig();
   }
 
   // ---- 渲染 ----
@@ -1111,17 +1201,37 @@ window.ChatPage = (function () {
             '<span class="file-name" id="file-name"></span>' +
             '<button class="file-remove" id="file-remove" title="Remove file">&times;</button>' +
           '</div>' +
-          '<div class="chat-input-row">' +
-            '<button class="btn-icon" id="btn-file" title="Upload file"><span class="icon-clip"></span></button>' +
-            '<div class="input-wrapper">' +
-              '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
+          '<div class="chat-composer">' +
+            '<div class="composer-input">' +
+              '<div class="input-wrapper">' +
+                '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
+              '</div>' +
             '</div>' +
-            '<button class="btn-icon btn-send" id="btn-send" title="Send"><span class="icon-send"></span></button>' +
-            '<div class="cmd-palette-anchor">' +
-              '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令"><span class="icon-plus"></span></button>' +
-              '<div class="cmd-palette hidden" id="cmd-palette" tabindex="-1" role="menu" aria-label="命令列表"></div>' +
+            '<div class="composer-toolbar">' +
+              '<button class="btn-icon btn-icon-ghost" id="btn-file" title="Upload file" aria-label="Upload file">' +
+                '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+              '</button>' +
+              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型">' +
+                '<span class="chip-label" id="chip-model-label"></span>' +
+              '</button>' +
+              '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
+                '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
+              '</button>' +
+              '<div class="cmd-palette-anchor">' +
+                '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
+                  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+                    '<line x1="4" y1="6" x2="14" y2="6"/>' +
+                    '<line x1="4" y1="12" x2="20" y2="12"/>' +
+                    '<line x1="4" y1="18" x2="10" y2="18"/>' +
+                    '<circle cx="16" cy="6" r="1.6" fill="currentColor" stroke="none"/>' +
+                    '<circle cx="6" cy="12" r="1.6" fill="currentColor" stroke="none"/>' +
+                    '<circle cx="14" cy="18" r="1.6" fill="currentColor" stroke="none"/>' +
+                  '</svg>' +
+                '</button>' +
+              '</div>' +
             '</div>' +
           '</div>' +
+          '<div class="cmd-palette hidden" id="cmd-palette" tabindex="-1" role="menu" aria-label="命令列表"></div>' +
           '<input type="file" class="hidden-input" id="file-input">' +
         '</div>' +
         '</div>' + /* /chat-main */
