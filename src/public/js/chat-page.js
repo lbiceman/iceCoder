@@ -112,8 +112,11 @@ window.ChatPage = (function () {
     return true;
   }
 
-  // ---- Token 用量 ----
-  function fetchModelContext() {
+  // 拉取一次即可覆盖两件事：
+  //   1) Token 用量（maxContextTokens / modelName → 冰豆）
+  //   2) 底部 #chip-model-label 显示当前默认 provider 的 modelName
+  // 失败时也要回填 chip，避免一直停在"加载中…"
+  function loadModelConfig() {
     fetch('/api/config')
       .then(function (res) { return res.json(); })
       .then(function (data) {
@@ -124,16 +127,13 @@ window.ChatPage = (function () {
           modelName = defaultProvider.modelName || '';
           updatePetTokenUsage();
         }
-        // 同步把默认模型名 (isDefault=true) 的 modelName 显示到底部 chip-model
         updateChipModelLabel(providers);
       })
       .catch(function () {
-        // 接口失败也回填 chip，避免一直停在"加载中…"
         updateChipModelLabel(null);
       });
   }
 
-  // 把 /api/config 的默认模型 (isDefault=true) 的 modelName 同步到底部 chip
   // 没有 provider 或请求失败时回退到"未配置"
   // DOM 还没渲染好时（chat 页面异步插入 chip-model-label）轮询重试，避免卡在"加载中…"
   function updateChipModelLabel(providers) {
@@ -166,18 +166,6 @@ window.ChatPage = (function () {
       providers = [{ isDefault: true, modelName: data.modelName }];
     }
     updateChipModelLabel(providers);
-  }
-
-  // 主动 fetch /api/config 同步 chip（兜底：WS payload 拿不到 providers 时用）
-  function loadChipModelLabel() {
-    fetch('/api/config')
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        updateChipModelLabel((data && data.providers) || []);
-      })
-      .catch(function () {
-        updateChipModelLabel(null);
-      });
   }
 
   function fetchSupportedFormats() {
@@ -683,15 +671,13 @@ window.ChatPage = (function () {
 
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
-      fetchModelContext();
-    }
-    // 无论 model context 来源是 WS 还是 fetch，都主动同步一次 chip label
-    // （applyModelContextFromWs / fetchModelContext 拿到的 modelName 只用于 token 用量，
-    //  不会回填到 #chip-model-label。这里独立保证 chip 显示真实默认模型。）
-    if (data && (data.providers || data.modelName)) {
+      loadModelConfig();
+    } else if (data && (data.providers || data.modelName)) {
+      // applyModelContextFromWs 已同步 token 用量；chip label 仍需单独刷一次
       syncChipModelLabelFromWs(data);
     } else {
-      loadChipModelLabel();
+      // WS payload 没带 providers / modelName，兜底走 fetch
+      loadModelConfig();
     }
     syncSidebarWorkspace(data);
     if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
@@ -1178,8 +1164,8 @@ window.ChatPage = (function () {
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
       syncMessages();
     }
-    // 切回 chat 页面时也重新同步 chip（不依赖 WS 状态，避免卡在"加载中…"）
-    loadChipModelLabel();
+    // 切回 chat 页面时也重新同步默认模型 / chip（不依赖 WS 状态，避免卡在"加载中…"）
+    loadModelConfig();
   }
 
   // ---- 渲染 ----
@@ -1524,14 +1510,6 @@ window.ChatPage = (function () {
     });
   }
 
-  // 兜底：DOM 就绪后主动同步一次 chip label（不依赖 WS / render 时序）
-  // 必须放在 return 之前，否则 return 之后代码 unreachable 永远不跑
-  // 模板已留空 id="chip-model-label"，loadChipModelLabel 内部自带轮询重试
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', loadChipModelLabel);
-  } else {
-    loadChipModelLabel();
-  }
   return {
     render: render,
     onActivate: onActivate,
