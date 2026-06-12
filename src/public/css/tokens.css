@@ -140,6 +140,34 @@
   --diff-hunk-text: var(--text-secondary);
 }
 
+/* ── Surface Layer Tokens（产品级层次感）
+   目的：让 顶栏 / 左侧栏 / 主工作区 / Tool 区域 用肉眼可分辨的底色差分层
+   顺序（由浅至深或由冷至暖）：surface-page < surface-sidebar < surface-panel < surface-raised */
+[data-theme="dark"] {
+  --surface-page: var(--bg-primary);            /* 工作区底色（主背景） */
+  --surface-sidebar: #1b1b1f;                  /* 左侧栏：比主区略深 */
+  --surface-panel: #1f1f23;                    /* 卡片/侧栏内部面板 */
+  --surface-raised: #2a2a30;                   /* 浮起卡片（Tool 卡片、session-item 选中态） */
+  --surface-tool: #1c2128;                     /* Tool Trace 卡片：冷调偏蓝灰，与主区分离 */
+  --surface-tool-border: #2a3340;
+  --surface-tool-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.25);
+  --surface-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --surface-card-shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--border-light);
+  --surface-nav-border: #2a2a30;
+}
+[data-theme="light"] {
+  --surface-page: #ffffff;                     /* 工作区纯白 */
+  --surface-sidebar: #fafafa;                  /* 左侧栏：极淡灰，区分主区 */
+  --surface-panel: #f5f7fa;                    /* 侧栏内部面板 / Tool 区 */
+  --surface-raised: #ffffff;                   /* 浮起卡片 */
+  --surface-tool: #f8fafc;                     /* Tool Trace 卡片：冷调极淡蓝 */
+  --surface-tool-border: #e2e8f0;
+  --surface-tool-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --surface-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --surface-card-shadow-hover: 0 2px 6px rgba(15, 23, 42, 0.08), 0 0 0 1px var(--border-light);
+  --surface-nav-border: #e5e7eb;
+}
+
 /* ===== Global ===== */
 html, body {
   height: 100%;
@@ -150,6 +178,13 @@ html, body {
   background: var(--bg-primary);
   transition: background 0.25s ease, color 0.25s ease;
   -webkit-font-smoothing: antialiased;
+}
+
+/* 主工作区底色：与左侧栏/顶栏形成可分辨的层级差 */
+.chat-page,
+.config-page,
+.memory-root {
+  background: var(--surface-page);
 }
 
 a { color: var(--accent); text-decoration: none; }
