@@ -640,22 +640,6 @@
   align-items: flex-end;
 }
 
-/* Command dropdown */
-.cmd-dropdown {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  margin-bottom: 4px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-  z-index: 20;
-}
-.cmd-dropdown.hidden { display: none; }
-
 .cmd-item {
   display: flex;
   align-items: center;
@@ -714,9 +698,124 @@
   top: 0;
 }
 .cmd-palette.hidden { display: none; }
-.cmd-palette .cmd-dropdown {
+
+/* Model picker palette (与命令面板同款)，fixed 浮在 chip 上方 */
+.model-palette {
+  position: fixed;
+  width: min(320px, calc(100vw - 32px));
+  z-index: 9999;
+  /* left / top 由 JS 在打开时根据 chip 位置计算 */
+  left: 0;
+  top: 0;
+}
+.model-palette.hidden { display: none; }
+
+/* 底部模型 chip：点击后显示下拉指示。
+   flex item 默认 min-width:auto=min(content)，会突破 max-width；
+   必须显式设 min-width:0 且给 chip 自身一个 flex-basis，
+   text-overflow:ellipsis 才能真正生效。 */
+.chip.chip-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 8px;
+  height: 28px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  flex: 0 1 160px;       /* 默认 160px，可被父 flex 容器压缩 */
+  max-width: 160px;
+  min-width: 0;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.chip.chip-select:hover {
+  background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
+  color: var(--text-primary);
+}
+.chip.chip-select.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.chip.chip-select .chip-caret {
+  width: 10px;
+  height: 10px;
+  margin-left: 2px;
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+.chip.chip-select.active .chip-caret {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+.chip.chip-select .chip-label {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 命令下拉：默认挂到 body 顶层时也是可见的（与命令面板内嵌的样式保持一致） */
+.cmd-dropdown {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow:
+    0 1px 0 0 color-mix(in srgb, #ffffff 5%, transparent) inset,
+    0 10px 30px -10px rgba(0, 0, 0, 0.45),
+    0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  padding: 4px;
+  min-width: 220px;
+  max-width: 420px;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  overflow: hidden;
+  z-index: 20;
+  /* 默认不限制高度，按内容展开；条目很多时由各调用方按需加上限 */
+}
+
+.cmd-dropdown.hidden { display: none; }
+
+.cmd-dropdown.is-scrollable {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.cmd-palette .cmd-dropdown,
+.model-palette .cmd-dropdown {
   position: static;
   margin: 0;
+  min-width: 0;
+  max-width: none;
+}
+.btn-cmd-plus {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+}
+.btn-cmd-plus.active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.model-dropdown {
+  position: fixed;
+  z-index: 9999;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 12px;
@@ -727,17 +826,50 @@
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
+  min-width: 180px;
 }
-.cmd-palette .cmd-dropdown.hidden { display: none; }
-.btn-cmd-plus {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius);
+.model-dropdown.hidden { display: none; }
+.model-dropdown-empty {
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
 }
-.btn-cmd-plus.active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+.model-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 120ms ease, color 120ms ease;
+}
+.model-dropdown-item:hover {
+  background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
+}
+.model-dropdown-item.is-current {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  cursor: default;
+}
+.model-dropdown-item-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-dropdown-item-check {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent);
 }
 
 /* 冰豆会话指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */

@@ -127,9 +127,15 @@ window.ChatPage = (function () {
           modelName = defaultProvider.modelName || '';
           updatePetTokenUsage();
         }
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders(providers);
+        }
         updateChipModelLabel(providers);
       })
       .catch(function () {
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders([]);
+        }
         updateChipModelLabel(null);
       });
   }
@@ -1211,8 +1217,9 @@ window.ChatPage = (function () {
               '<button class="btn-icon btn-icon-ghost" id="btn-file" title="Upload file" aria-label="Upload file">' +
                 '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
               '</button>' +
-              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型">' +
-                '<span class="chip-label" id="chip-model-label"></span>' +
+              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
+                '<span class="chip-label" id="chip-model-label">加载中…</span>' +
+                '<svg class="chip-caret" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 4 6 8 10 4"/></svg>' +
               '</button>' +
               '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
                 '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
@@ -1252,6 +1259,17 @@ window.ChatPage = (function () {
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elCmdPalette = container.querySelector('#cmd-palette');
     mainInputWrapper = container.querySelector('.input-wrapper');
+
+    // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
+    // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
+    if (window.ChatModelPicker && typeof window.ChatModelPicker.init === 'function') {
+      window.ChatModelPicker.init({
+        chipEl: container.querySelector('#chip-model'),
+        labelEl: container.querySelector('#chip-model-label'),
+      });
+      // 初次拉取 providers 缓存，供下拉渲染使用
+      window.ChatModelPicker.refreshFromServer();
+    }
 
     // 初始化会话侧栏（PC 模式）
     if (!remoteMode && window.ChatSessionSidebar) {

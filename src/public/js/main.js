@@ -14,6 +14,7 @@ import './chat-session-store.js';
 import './chat-session-sidebar.js';
 import './chat-ui.js';
 import './chat-commands.js';
+import './chat-model-picker.js';
 import './chat-file.js';
 import './chat-qr.js';
 import './chat-pet-bridge.js';
