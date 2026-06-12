@@ -8,7 +8,6 @@
  */
 export interface ProviderConfig {
   id: string;
-  providerName: string;
   apiUrl: string;
   apiKey: string;
   modelName: string;
@@ -25,12 +24,36 @@ export interface ProviderConfig {
     [key: string]: any;
   };
   isDefault?: boolean;
+  /** 是否支持图片/视觉输入；未设置时默认为 `true` */
   supportsVision?: boolean;
-  /** 冰豆（Web 会话指示器）与压缩器参考的上下文窗口上限（token） */
+  /**
+   * 上下文窗口上限（token）；默认 provider 此值参与计算生效窗口（见 `readEffectiveContextWindowTokens`）
+   * 并映射档位：≤128K→S，≤256K→M，≤512K→L，>512K→XL（`tierFromMaxContextTokens`）。
+   */
   maxContextTokens?: number;
 }
 
-/** `data/config.json` 顶层结构（仅存 providers 数组；未来可扩展其他键） */
+/** `data/config.json` 顶层结构 */
 export interface IceCoderConfigFile {
   providers: ProviderConfig[];
+  /**
+   * 双模监管档位（Web 顶栏与配置页可改）。
+   * `off` | `adaptive` | `strict`；未设置时由 supervisor-config.json 的 `mode` 兜底。
+   */
+  supervisorMode?: 'off' | 'adaptive' | 'strict';
+  /**
+   * 为 `true` 时跳过 Harness 工具权限检查（deny/confirm/破坏性确认），直接执行工具。
+   * 字段缺失或为 `false` 时走默认权限规则。
+   */
+  skipPermissionChecks?: boolean;
+  /**
+   * 为 `true` 时跳过 HostGuard 沙箱检查（Shell 命令与写入预检），直接执行。
+   * 字段缺失或为 `false` 时走默认 HostGuard 规则。
+   */
+  skipSandbox?: boolean;
+  /**
+   * 写后读验收豁免目录前缀（相对工作区根），如 `.scratch`、`tmp/agent`。
+   * 与工作区根目录 `.icecoder.json` 中同名字段合并。
+   */
+  verificationExemptDirs?: string[];
 }

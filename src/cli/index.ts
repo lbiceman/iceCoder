@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './paths.js';
 /**
  * iceCoder CLI 入口。
  *
@@ -17,6 +18,8 @@ import { parseArgs } from './utils/args-parser.js';
 import { hasFlag } from './utils/args-parser.js';
 import { c, error } from './utils/terminal-ui.js';
 import { bootstrap } from './bootstrap.js';
+import { defaultApiPortHelpText, resolveDefaultApiPort } from './serve-port.js';
+import { isTunnelDevEnabled } from '../runtime/tunnel-feature.js';
 
 const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
@@ -33,9 +36,9 @@ ${c.bold}用法:${c.reset}
   iceCoder help                     显示此帮助
 
 ${c.bold}start/cli/web 选项:${c.reset}
-  --port, -p <n>       Web 服务器端口 (默认 1024)
-  --no-tunnel          不启动 Cloudflare Tunnel (仅 start)
-  --tunnel-bin <path>  cloudflared 可执行文件路径
+  --port, -p <n>       Web 服务器端口 (默认 ${defaultApiPortHelpText()}，可用环境变量 PORT 覆盖)
+  --no-tunnel          不启动 Cloudflare Tunnel (仅 start，需 ICE_TUNNEL_DEV=1)
+  --tunnel-bin <path>  cloudflared 可执行文件路径（本地开发）
 
 ${c.bold}run 选项:${c.reset}
   --max-rounds <n>   最大循环轮次 (默认 100)
@@ -77,27 +80,23 @@ async function main(): Promise<void> {
   // 需要完整引导的命令
   const ctx = await bootstrap();
 
-  // 首次运行提示
-  if (ctx.isFirstRun) {
+  if (ctx.needsSetup && (command === 'run' || command === 'tools' || command === 'mcp')) {
+    error('请先完成模型配置');
     console.log(`
-${c.bold}${c.yellow}首次运行！${c.reset}
-
-已在 ${c.underline}${ctx.paths.dataDir}${c.reset} 创建默认配置。
-
 ${c.bold}下一步：${c.reset}
-  1. 编辑 ${c.cyan}${ctx.paths.configPath}${c.reset}
-  2. 将 ${c.yellow}sk-your-api-key-here${c.reset} 替换为你的 API Key
-  3. 可选：修改 apiUrl 和 modelName 使用其他模型（如 DeepSeek）
-  4. 重新运行 ${c.green}iceCoder start${c.reset}
+  1. 运行 ${c.green}iceCoder web${c.reset} 或 ${c.green}iceCoder start${c.reset}
+  2. 在浏览器打开 ${c.cyan}http://127.0.0.1:${resolveDefaultApiPort()}/#/config${c.reset}
+  3. 填写 API Key 并保存
 `);
-    process.exit(0);
+    process.exit(1);
   }
 
   switch (command) {
     case 'start': {
-      // CLI + Web + Cloudflare Tunnel 三合一
       const { runChat } = await import('./commands/chat.js');
-      args.flags['with-tunnel'] = true;
+      if (isTunnelDevEnabled()) {
+        args.flags['with-tunnel'] = true;
+      }
       await runChat(ctx, args);
       break;
     }

@@ -33,6 +33,22 @@ export class LoopController {
   }
 
   /**
+   * 新一次 harness.run()：轮次与累计 token/工具计数归零（maxRounds / tokenBudget / timeout 按本次 run 计量）。
+   * Execution Mode 观察字段由后续 syncExecutionModeLoopState 重新写入。
+   */
+  resetForNewRun(): void {
+    this.state = {
+      currentRound: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      lastInputTokens: 0,
+      lastOutputTokens: 0,
+      totalToolCalls: 0,
+      startTime: Date.now(),
+    };
+  }
+
+  /**
    * 检查是否应该继续循环。
    * 返回 null 表示继续，返回 StopReason 表示应该停止。
    */
@@ -98,6 +114,25 @@ export class LoopController {
    */
   recordToolCalls(count: number): void {
     this.state.totalToolCalls += count;
+  }
+
+  /**
+   * 同步 Execution Mode 观察字段；模式裁决仍只由 ModeDecisionEngine 产生。
+   */
+  updateExecutionModeState(fields: Partial<Pick<
+    LoopState,
+    | 'executionMode'
+    | 'executionModeLockRemaining'
+    | 'executionModeEnteredBy'
+    | 'executionModeEnteredByPrimary'
+    | 'executionModeEnteredAtRound'
+    | 'forcedDegradedTier'
+    | 'lastModeDecision'
+    | 'pendingModeSignals'
+    | 'forcedTaskBearingRoundsSinceEntry'
+    | 'supervisorPhase'
+  >>): void {
+    this.state = { ...this.state, ...fields };
   }
 
   /**

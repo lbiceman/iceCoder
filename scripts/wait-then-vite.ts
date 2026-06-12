@@ -4,7 +4,7 @@
  */
 import { execSync } from 'child_process';
 
-const API_URL = `http://localhost:${process.env.PORT ?? 3000}/api/config`;
+const API_URL = `http://localhost:${process.env.PORT ?? 1024}/api/config`;
 const MAX_WAIT = 30_000;
 const INTERVAL = 500;
 

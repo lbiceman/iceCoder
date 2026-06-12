@@ -12,6 +12,8 @@ import os from 'os';
 import type { Orchestrator } from '../../core/orchestrator.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
+import { fetchQuickTunnelPublicUrl } from '../quicktunnel-url.js';
+import { isTunnelDevEnabled } from '../../runtime/tunnel-feature.js';
 
 // ---- 类型定义 ----
 
@@ -55,9 +57,12 @@ let cachedTunnelUrl: string | null = null;
 let tunnelCheckTime = 0;
 
 async function getTunnelUrl(): Promise<string | null> {
-  // 环境变量优先
   if (process.env.TUNNEL_URL) {
     return process.env.TUNNEL_URL;
+  }
+
+  if (!isTunnelDevEnabled()) {
+    return null;
   }
 
   // 缓存 30 秒
@@ -65,19 +70,11 @@ async function getTunnelUrl(): Promise<string | null> {
     return cachedTunnelUrl;
   }
 
-  try {
-    // cloudflared metrics 默认在 127.0.0.1:20241
-    const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: AbortSignal.timeout(2000) });
-    if (res.ok) {
-      const data = await res.json() as { hostname?: string };
-      if (data.hostname) {
-        cachedTunnelUrl = `https://${data.hostname}`;
-        tunnelCheckTime = Date.now();
-        return cachedTunnelUrl;
-      }
-    }
-  } catch {
-    // cloudflared 未运行或不可达
+  const fresh = await fetchQuickTunnelPublicUrl();
+  if (fresh) {
+    cachedTunnelUrl = fresh;
+    tunnelCheckTime = Date.now();
+    return cachedTunnelUrl;
   }
 
   cachedTunnelUrl = null;
@@ -138,7 +135,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
 
     // 获取访问 URL（优先公网隧道，回退局域网）
     const localIP = getLocalIP();
-    const port = process.env.PORT ?? '3000';
+    const port = process.env.PORT ?? '3784';
     const tunnelUrl = await getTunnelUrl();
     const baseUrl = tunnelUrl || `http://${localIP}:${port}`;
     const url = `${baseUrl}/?token=${token}`;

@@ -17,6 +17,7 @@ import type {
 } from './types.js';
 import { TokenCounter } from './token-counter.js';
 import { estimateStringTokens } from './token-estimator.js';
+import { isAbortError } from './abort-error.js';
 
 /**
  * 默认重试配置。
@@ -35,7 +36,7 @@ const RETRYABLE_ERROR_CODES = ['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTF
 /**
  * 触发重试的 HTTP 状态码（服务器错误 + 速率限制）。
  */
-const RETRYABLE_STATUS_CODES = [429, 500, 502, 503, 504, 408];
+const RETRYABLE_STATUS_CODES = [429, 500, 502, 503, 504, 408, 520, 529];
 
 /**
  * 表示可重试错误的错误消息模式。
@@ -51,6 +52,9 @@ const RETRYABLE_MESSAGE_PATTERNS = [
   'bad gateway',
   'gateway timeout',
   'request timeout',
+  'timed out',
+  '高峰时段',
+  '短暂繁忙',
   'connection reset',
   'socket hang up',
   'ECONNABORTED',
@@ -62,6 +66,7 @@ const RETRYABLE_MESSAGE_PATTERNS = [
  * 判断错误是否可重试（网络错误、服务器错误、速率限制）。
  */
 function isRetryableError(error: unknown): boolean {
+  if (isAbortError(error)) return false;
   if (error instanceof Error) {
     // 检查错误代码（Node.js 网络错误）
     const code = (error as NodeJS.ErrnoException).code;
@@ -135,8 +140,11 @@ export class LLMAdapter implements LLMAdapterInterface {
    */
   async chat(messages: UnifiedMessage[], options?: LLMOptions): Promise<LLMResponse> {
     const provider = this.resolveProvider(options);
+    const merged = this.mergeAbortSignal(options);
 
-    const response = await this.withRetry(() => provider.chat(messages, options ?? {}));
+    const response = merged.skipRetry
+      ? await provider.chat(messages, merged)
+      : await this.withRetry(() => provider.chat(messages, merged));
 
     this.tokenCounter.record(response.usage);
     return response;
@@ -154,11 +162,26 @@ export class LLMAdapter implements LLMAdapterInterface {
     options?: LLMOptions,
   ): Promise<LLMResponse> {
     const provider = this.resolveProvider(options);
+    const merged = this.mergeAbortSignal(options);
 
-    const response = await this.withRetry(() => provider.stream(messages, callback, options ?? {}));
+    const response = merged.skipRetry
+      ? await provider.stream(messages, callback, merged)
+      : await this.withRetry(() => provider.stream(messages, callback, merged));
 
     this.tokenCounter.record(response.usage);
     return response;
+  }
+
+  /**
+   * 把当前 setAbortSignal() 设的 signal 合并进 options，供 provider 直接消费。
+   * 调用方显式传了 options.signal 时优先使用调用方的（保持可单元测试）。
+   */
+  private mergeAbortSignal(options?: LLMOptions): LLMOptions {
+    const next: LLMOptions = { ...(options ?? {}) };
+    if (next.signal === undefined && this._abortSignal) {
+      next.signal = this._abortSignal;
+    }
+    return next;
   }
 
   /**

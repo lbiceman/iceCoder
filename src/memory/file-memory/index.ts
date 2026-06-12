@@ -57,13 +57,21 @@ export type { PrefetchConfig, PrefetchResult } from './async-prefetch.js';
 export { recallRelevantMemories, expandRelatedMemories, expandNegationQuery, parseTimeRange, LLM_RECALL_MIN_CANDIDATES } from './memory-recall.js';
 export type { RecallResult, TimeRange } from './memory-recall.js';
 
-export { LLMMemoryExtractor, createLLMMemoryExtractor } from './memory-llm-extractor.js';
+export { LLMMemoryExtractor, createLLMMemoryExtractor, ALLOWED_MEMORY_CATEGORIES, isAllowedMemoryCategory } from './memory-llm-extractor.js';
 export type { LLMExtractionConfig, ExtractionResult } from './memory-llm-extractor.js';
 
-export { MemoryDream, createMemoryDream } from './memory-dream.js';
+export { MemoryDream, createMemoryDream, shouldAutoPromoteToUserLevel } from './memory-dream.js';
 export type { DreamResult, DreamTrigger } from './memory-dream.js';
 
-export { countDeadLinksInMemoryIndex } from './memory-index-health.js';
+export {
+  auditMemoryIndexHealth,
+  countDeadLinksInMemoryIndex,
+  extractIndexedMarkdownRefs,
+  rebuildMemoryIndexFromMemories,
+  repairDeadLinksInMemoryIndex,
+} from './memory-index-health.js';
+export type { MemoryIndexHealthReport } from './memory-index-health.js';
+export type { RecallOptions } from './memory-recall.js';
 
 // ─── 安全模块 ───
 
@@ -128,6 +136,7 @@ export {
   refreshConfig,
   saveConfig,
   getExtractionConfig,
+  getCasualExtractionConfig,
   getDreamConfig,
   getRecallConfig,
   getSessionMemoryConfig,
@@ -139,6 +148,7 @@ export type { MemoryDynamicConfig } from './memory-remote-config.js';
 
 export {
   initSessionMemoryState,
+  sessionNotesPath,
   shouldUpdateSessionMemory,
   setupSessionMemoryFile,
   buildSessionMemoryUpdatePrompt,

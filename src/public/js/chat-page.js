@@ -20,6 +20,11 @@ window.ChatPage = (function () {
 
   // ---- 状态 ----
   var container = null;
+  /**
+   * 方案 A keep-alive：ChatPage.render 只执行一次；
+   * 切到配置 / 记忆页再切回来不会重建 DOM、不重连 WS、不丢失流式状态。
+   */
+  var mounted = false;
   var isStreaming = false;
   var userStopped = false;
   var streamFinalized = false;
@@ -27,6 +32,47 @@ window.ChatPage = (function () {
   var streamChunksReceived = false;
   var remoteMode = false;
   var remoteToken = null;
+  /** 本页仅提示一次 MCP 就绪（含 WS 晚连时 connected.mcpReady 补发） */
+  var mcpReadyAnnounced = false;
+  /** 本页仅提示一次公网隧道就绪 */
+  var tunnelReadyAnnounced = false;
+
+  /** run_command 流式 stdout 累积（tool_result 到达后会清空） */
+  var streamingDiffBuffer = { toolCallId: '', text: '' };
+
+  function buildDisplayMap(structured) {
+    if (!window.ToolDisplayHistory) return {};
+    return window.ToolDisplayHistory.buildAgentDisplayMap(
+      structured || Session.getStructuredMessages(),
+      Session.getMessages(),
+      Session.getToolTraces(),
+    );
+  }
+
+  /** 方案 B：拉 structured messages 并重绘聊天历史（含 diff） */
+  function renderChatHistory(shouldScroll, structured) {
+    var displayMap = buildDisplayMap(structured);
+    UI.renderMessagesOnly(
+      Session.getMessages(),
+      Session.getToolTraces(),
+      Session.stripStatusTag,
+      shouldScroll,
+      displayMap,
+    );
+    if (UI.repairMissingDiffMountsFromStructured) {
+      UI.repairMissingDiffMountsFromStructured(structured);
+    }
+    if (UI.followBottomAfterContentPatch) {
+      UI.followBottomAfterContentPatch(shouldScroll);
+    }
+  }
+
+  function renderChatHistoryWithFetch(shouldScroll, done) {
+    Session.fetchStructuredMessages(function (structured) {
+      renderChatHistory(shouldScroll, structured);
+      if (done) done();
+    });
+  }
 
   // Token 用量
   var maxContextTokens = 0;
@@ -38,14 +84,9 @@ window.ChatPage = (function () {
   var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
   var elStatusBar, elStatusTurn;
+  var elCmdPlusBtn, mainInputWrapper;
+  var cmdPaletteResizeObserver = null;
   var sessionPet = null;
-
-  // ---- 辅助 ----
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
-  }
 
   function updateNavStatus(connected) {
     var dot = document.getElementById('status-dot');
@@ -69,8 +110,11 @@ window.ChatPage = (function () {
     return true;
   }
 
-  // ---- Token 用量 ----
-  function fetchModelContext() {
+  // 拉取一次即可覆盖两件事：
+  //   1) Token 用量（maxContextTokens / modelName → 冰豆）
+  //   2) 底部 #chip-model-label 显示当前默认 provider 的 modelName
+  // 失败时也要回填 chip，避免一直停在"加载中…"
+  function loadModelConfig() {
     fetch('/api/config')
       .then(function (res) { return res.json(); })
       .then(function (data) {
@@ -81,8 +125,51 @@ window.ChatPage = (function () {
           modelName = defaultProvider.modelName || '';
           updatePetTokenUsage();
         }
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders(providers);
+        }
+        updateChipModelLabel(providers);
       })
-      .catch(function () { /* ignore */ });
+      .catch(function () {
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders([]);
+        }
+        updateChipModelLabel(null);
+      });
+  }
+
+  // 没有 provider 或请求失败时回退到"未配置"
+  // DOM 还没渲染好时（chat 页面异步插入 chip-model-label）轮询重试，避免卡在"加载中…"
+  function updateChipModelLabel(providers) {
+    function apply() {
+      var el = document.getElementById('chip-model-label');
+      if (!el) return false;
+      if (!providers || !providers.length) {
+        el.textContent = '未配置';
+        return true;
+      }
+      var def = providers.find(function (p) { return p.isDefault; }) || providers[0];
+      el.textContent = def && def.modelName ? def.modelName : '未配置';
+      return true;
+    }
+    if (apply()) return;
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      if (apply() || tries >= 10) clearInterval(timer);
+    }, 50);
+  }
+
+  // 从 WS 初始连接 payload 同步 chip（避免再走一次 fetch）
+  // 兼容两种结构：data.providers (数组) 或 data.modelName (单值)
+  function syncChipModelLabelFromWs(data) {
+    var providers = null;
+    if (data && data.providers && data.providers.length) {
+      providers = data.providers;
+    } else if (data && data.modelName) {
+      providers = [{ isDefault: true, modelName: data.modelName }];
+    }
+    updateChipModelLabel(providers);
   }
 
   function fetchSupportedFormats() {
@@ -92,10 +179,30 @@ window.ChatPage = (function () {
       .catch(function () { /* ignore */ });
   }
 
-  function updateTokenUsage(inputTokens, outputTokens) {
-    usedInputTokens = inputTokens;
+  function updateTokenUsage(inputTokens, outputTokens, contextOpts) {
+    contextOpts = contextOpts || {};
+    if (typeof contextOpts.effectiveUsed === 'number' && contextOpts.effectiveUsed > 0) {
+      usedInputTokens = contextOpts.effectiveUsed;
+    } else {
+      usedInputTokens = inputTokens;
+    }
     usedOutputTokens = outputTokens;
+    if (typeof contextOpts.contextWindow === 'number' && contextOpts.contextWindow > 0) {
+      maxContextTokens = contextOpts.contextWindow;
+    }
     updatePetTokenUsage();
+  }
+
+  function applyTotalTokenUsageFromStep(totalTokenUsage) {
+    if (!totalTokenUsage) return;
+    updateTokenUsage(
+      totalTokenUsage.inputTokens || 0,
+      totalTokenUsage.outputTokens || 0,
+      {
+        effectiveUsed: totalTokenUsage.effectiveUsed,
+        contextWindow: totalTokenUsage.contextWindow,
+      },
+    );
   }
 
   function resetTokenUsage() {
@@ -110,15 +217,89 @@ window.ChatPage = (function () {
     }
   }
 
-  function formatTokenCount(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-    return '' + n;
+  /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
+  function isWorkloadActive() {
+    return WS.isProcessing()
+      || isStreaming
+      || (Session && typeof Session.hasStreamingModelBubble === 'function' && Session.hasStreamingModelBubble());
+  }
+
+  /** 切回聊天页或 WS 状态变化后，把发送钮与真实 workload 对齐（DOM 重建不会保留 btn-stop） */
+  function syncSendButtonWithWorkload() {
+    var busy = isWorkloadActive();
+    UI.setStreamingState(busy);
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.syncSwitchLockState === 'function') {
+      window.ChatSessionSidebar.syncSwitchLockState();
+    }
+    if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
+      if (busy) {
+        sessionPet.setState(isStreaming ? 'read' : 'thinking');
+      } else if (
+        !userStopped
+        && !(Pet.isModelDoneNoticeActive && Pet.isModelDoneNoticeActive())
+      ) {
+        sessionPet.setState('idle');
+      }
+    }
+  }
+
+  // ---- 命令面板（+ 按钮）：浮层已统一为 ChatDropdown ----
+  function openCmdPalette() {
+    if (!elCmdPlusBtn) return;
+    Cmd.setApplyTarget(function (value) {
+      executeLocalCommand(value);
+      Cmd.hide();
+    });
+    Cmd.show('~', '');
+  }
+
+  function toggleCmdPalette() {
+    if (Cmd.isOpen && Cmd.isOpen()) Cmd.hide();
+    else openCmdPalette();
+  }
+
+  /** 本地 ~ 命令：选中即执行，返回 true 表示已处理 */
+  function executeLocalCommand(text) {
+    text = (text || '').trim();
+    if (!text) return false;
+
+    if (text === '~scan' && !remoteMode) {
+      Cmd.hide();
+      QR.showQrCode(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    if (text === '~open') {
+      Cmd.hide();
+      Pet.showThinking(false);
+      UI.clearLiveToolRoundDom();
+      UI.setLiveToolRoundActive(true);
+      WS.sendMessage(
+        '~open\n\n' +
+        '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
+      );
+      return true;
+    }
+
+    if (text === '~telemetry') {
+      Cmd.hide();
+      Cmd.handleTelemetry(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    if (text === '~supervisor' || text.indexOf('~supervisor ') === 0) {
+      Cmd.hide();
+      Cmd.handleSupervisor(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      return true;
+    }
+
+    return false;
   }
 
   // ---- 发送/停止 ----
   function handleSend() {
-    if (isStreaming) {
+    Cmd.hide();
+    if (isWorkloadActive()) {
       handleStop();
       return;
     }
@@ -129,72 +310,9 @@ window.ChatPage = (function () {
 
     if (!text && !uploadedFile && pendingImages.length === 0) return;
 
-    // ~clear
-    if (text === '~clear') {
+    if (executeLocalCommand(text)) {
       elInput.value = '';
       UI.autoResizeInput();
-      Cmd.hide();
-      resetTokenUsage();
-      Session.clearMessages(WS.isConnected() ? { send: WS.send } : null);
-      UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
-      return;
-    }
-
-    // ~scan
-    if (text === '~scan' && !remoteMode) {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      QR.showQrCode(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    // ~open
-    if (text === '~open') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Pet.showThinking(false);
-      WS.sendMessage('~open\n\n' +
-        '【文件浏览器模式】忽略之前对话中的所有任务和主题。你现在是文件浏览器。\n\n' +
-        '核心规则：\n' +
-        '- 每次调用工具后，必须把工具返回的内容（驱动器列表、目录内容）完整展示给用户。\n' +
-        '- 展示完内容后等待用户下一条指令。\n' +
-        '- 禁止分析、总结、评价、修改任何文件或项目。只做导航和展示。\n\n' +
-        '导航规则：\n' +
-        '1. 现在立即调用 list_drives，然后把所有驱动器列出来。\n' +
-        '2. 用户说"进入 X:"时，调用 browse_directory 浏览该路径，然后列出目录内容。\n' +
-        '3. 用户说"进入 XXX"时，拼接到当前路径，调用 browse_directory，然后列出目录内容。\n' +
-        '4. 用户说"返回"时，浏览当前目录的父目录，然后列出目录内容。\n' +
-        '5. 记住当前路径。\n\n' +
-        '展示格式：目录用 [DIR]，文件用 [FILE]，驱动器用 [DRIVE]。');
-      return;
-    }
-
-    // ~telemetry
-    if (text === '~telemetry') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleTelemetry(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    // ~export
-    if (text === '~export') {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleExport(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-      return;
-    }
-
-    // ~memory
-    if (text === '~memory' || text.indexOf('~memory ') === 0) {
-      elInput.value = '';
-      UI.autoResizeInput();
-      Cmd.hide();
-      Cmd.handleMemory(text, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
       return;
     }
 
@@ -204,12 +322,34 @@ window.ChatPage = (function () {
     if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
+    var didAppendUserMessage = false;
     if (displayParts.length > 0 || msgImages.length > 0) {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
+      if (UI.maybeRepartitionTailIfNeeded) {
+        UI.maybeRepartitionTailIfNeeded(
+          Session.getMessages(),
+          Session.getToolTraces(),
+          Session.stripStatusTag,
+          'force',
+          buildDisplayMap(),
+        );
+      }
+      didAppendUserMessage = true;
       Session.saveMessages();
+      var titlePrompt = displayParts.join('\n') || text || '';
+      if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
+        var userMsgCount = 0;
+        var allMsgs = Session.getMessages();
+        for (var ti = 0; ti < allMsgs.length; ti++) {
+          if (allMsgs[ti].role === 'user') userMsgCount++;
+        }
+        if (userMsgCount === 1) {
+          window.ChatSessionStore.maybeAutoTitleFromPrompt(Session.getActiveId(), titlePrompt);
+        }
+      }
     }
 
     elInput.value = '';
@@ -226,14 +366,18 @@ window.ChatPage = (function () {
     }
     File.removeUploadedFile();
 
+    UI.clearLiveToolRoundDom();
+    UI.setLiveToolRoundActive(true);
     if (msgImages.length > 0) {
-      UI.resetLiveToolRoundTargets();
-      UI.setLiveToolRoundActive(true);
       WS.send({ type: 'message', content: msgText || '请分析这些图片', images: msgImages });
     } else {
       WS.sendMessage(msgText);
     }
     File.clearPendingImages();
+
+    if (didAppendUserMessage) {
+      UI.enableAutoScroll();
+    }
   }
 
   function handleStop() {
@@ -273,16 +417,231 @@ window.ChatPage = (function () {
     Session.saveMessages();
   }
 
+  function announceTunnelReadyFromPayload(payload) {
+    if (!payload || !payload.url || tunnelReadyAnnounced) return;
+    tunnelReadyAnnounced = true;
+    Pet.applyTunnelReadyToPet(payload, {
+      isStreaming: isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
+  function announceMcpReadyFromPayload(payload) {
+    if (!payload || mcpReadyAnnounced) return;
+    mcpReadyAnnounced = true;
+    Pet.applyMcpReadyToPet(payload, {
+      isStreaming: isStreaming,
+      wsProcessing: WS.isProcessing(),
+    });
+  }
+
+  function syncSidebarWorkspace(data) {
+    if (!data || !window.ChatSessionSidebar) return;
+    var sid = data.sessionId || data.activeSessionId;
+    if (sid && typeof window.ChatSessionSidebar.notifyWorkspaceUpdated === 'function') {
+      window.ChatSessionSidebar.notifyWorkspaceUpdated(Object.assign({ sessionId: sid }, data));
+    }
+  }
+
+  /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。第二个参数 runningTurn 由服务端 session_switched 包带回。 */
+  function onSessionSwitched(sessionId, runningTurn) {
+    UI.clearReasoningStream();
+    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (Session && typeof Session.setSessionId === 'function') {
+      Session.setSessionId(sessionId);
+    }
+    Session.fetchServerMessages(function (serverMsgs) {
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
+      if (shouldSkipServerSnapshotSync()) {
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+        return;
+      }
+      renderChatHistoryWithFetch(false, function () {
+        Session.saveMessages();
+        UI.enableAutoScroll();
+        if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+      });
+    });
+    resetTokenUsage();
+    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+      window.ChatSessionSidebar.renderList();
+    }
+  }
+
+  function syncActiveSessionFromServer(data) {
+    if (remoteMode || !data) return;
+    var serverId = data.activeSessionId || data.sessionId;
+    if (!serverId) return;
+    var clientId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
+      window.ChatSessionStore.setActiveSessionId(serverId);
+    }
+    if (serverId !== clientId) {
+      onSessionSwitched(serverId);
+    }
+  }
+
+  /**
+   * 把工具时间线渲染到 live 工具区（F5 / runningTurn / localStorage 共用）
+   */
+  function applyLiveToolTimelineToUI(timeline) {
+    if (!timeline || !timeline.length || !elMessages) return;
+    if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+    UI.setLiveToolRoundActive(true);
+    for (var i = 0; i < timeline.length; i++) {
+      var row = timeline[i];
+      UI.appendToolAction(
+        row.toolName,
+        row.detail || '',
+        row.status || 'pending',
+        row.toolCallId || '',
+        row.diffSource || null,
+      );
+    }
+    if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
+  }
+
+  function pickToolTimelineForRestore(runningTurn) {
+    var serverTimeline = runningTurn && Array.isArray(runningTurn.toolTimeline)
+      ? runningTurn.toolTimeline
+      : [];
+    if (serverTimeline.length > 0) {
+      if (Session.replaceLiveToolBatch) Session.replaceLiveToolBatch(serverTimeline);
+      return serverTimeline;
+    }
+    var localTimeline = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+    if (localTimeline.length > 0) return localTimeline;
+    return [];
+  }
+
+  /**
+   * 方案 B3 还原：F5 / 移动端扫码 / 网络重连 / 切 session 等场景下
+   * 服务端在 `connected` 或 `session_switched` 包里附带 runningTurn 快照，
+   * 这里把流式文本、工具时间线、冰豆、按钮、token、计划重放一遍，使 UI 看起来「跟没断过」。
+   * 多次调用安全。runningTurn 为空时退化为 no-op（并把 isStreaming 复位）。
+   */
+  function restoreFromRunningTurn(runningTurn) {
+    if (!runningTurn || !runningTurn.isProcessing) {
+      // 无服务端 runningTurn 时清掉上一会话残留的流式思考 UI
+      UI.clearReasoningStream();
+      // 无服务端 runningTurn 时保留 localStorage 占位（初始 render 已绘制），由 status:idle 清理
+      isStreaming = false;
+      userStopped = false;
+      streamFinalized = false;
+      streamChunksReceived = false;
+      WS.setProcessing(false);
+      UI.setStreamingState(false);
+      if (sessionPet) {
+        sessionPet.setState('idle');
+        sessionPet.setBubbleText('');
+        sessionPet.setTurnLabel('');
+      }
+      return;
+    }
+
+    // 1. 流式文本：先收尾上一段残留，再用累积文本重建 streaming bubble
+    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (runningTurn.streamingReasoningText) {
+      UI.appendReasoningStreamChunk(runningTurn.streamingReasoningText);
+    }
+    if (runningTurn.streamingText) {
+      UI.appendReasoningStreamChunk(runningTurn.streamingText);
+      streamChunksReceived = true;
+    }
+
+    // 2. 标记 streaming 中
+    isStreaming = !!runningTurn.streamingText;
+    userStopped = false;
+    streamFinalized = false;
+    WS.setProcessing(true);
+    UI.setStreamingState(true);
+
+    // 3. 工具时间线：服务端 runningTurn 优先，否则 localStorage 缓存
+    var toolTimeline = pickToolTimelineForRestore(runningTurn);
+    applyLiveToolTimelineToUI(toolTimeline);
+
+    // 4. token 用量 & 轮次
+    if (typeof runningTurn.lastEffectiveUsed === 'number' && runningTurn.lastEffectiveUsed > 0) {
+      updateTokenUsage(
+        runningTurn.lastInputTokens || 0,
+        runningTurn.lastOutputTokens || 0,
+        {
+          effectiveUsed: runningTurn.lastEffectiveUsed,
+          contextWindow: runningTurn.contextWindow,
+        },
+      );
+    } else if (typeof runningTurn.lastInputTokens === 'number' || typeof runningTurn.lastOutputTokens === 'number') {
+      updateTokenUsage(runningTurn.lastInputTokens || 0, runningTurn.lastOutputTokens || 0);
+    }
+    if (runningTurn.iteration > 0) {
+      Pet.updateTurnCounter(runningTurn.iteration, isStreaming, true);
+    }
+
+    // 5. 冰豆状态 & 气泡
+    if (sessionPet) {
+      sessionPet.setVisible(true);
+      if (runningTurn.petState) sessionPet.setState(runningTurn.petState);
+      if (runningTurn.petBubble) sessionPet.setBubbleText(runningTurn.petBubble);
+      else if (runningTurn.petStatusText) sessionPet.setBubbleText(runningTurn.petStatusText);
+    }
+
+    // 6. 执行计划 / 任务图：重放保存的 step 事件
+    if (Array.isArray(runningTurn.planEvents) && window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.handleStep === 'function') {
+      for (var j = 0; j < runningTurn.planEvents.length; j++) {
+        try { window.ChatExecutionPlanBridge.handleStep(runningTurn.planEvents[j]); }
+        catch (_e) { /* ignore */ }
+      }
+    }
+
+    UI.scheduleScrollIfSticky();
+  }
+
   function onWsConnected(data) {
     if (!applyModelContextFromWs(data)) {
-      fetchModelContext();
+      loadModelConfig();
+    } else if (data && (data.providers || data.modelName)) {
+      // applyModelContextFromWs 已同步 token 用量；chip label 仍需单独刷一次
+      syncChipModelLabelFromWs(data);
+    } else {
+      // WS payload 没带 providers / modelName，兜底走 fetch
+      loadModelConfig();
+    }
+    syncSidebarWorkspace(data);
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
+      window.ChatSessionStore.fetchSessions();
+    }
+    // 仅当服务端活跃会话与当前选中一致时才还原 runningTurn，避免 A 的思考串到 B
+    var clientSid = Session.getActiveId ? Session.getActiveId() : 'default';
+    var serverSid = data && (data.activeSessionId || data.sessionId);
+    if (data && serverSid === clientSid) {
+      restoreFromRunningTurn(data.runningTurn || null);
+    } else if (data && data.runningTurn && data.runningTurn.isProcessing) {
+      restoreFromRunningTurn(null);
+    }
+    if (data && data.mcpReady) {
+      announceMcpReadyFromPayload(data.mcpReady);
+    }
+    if (data && data.tunnelReady) {
+      announceTunnelReadyFromPayload(data.tunnelReady);
+    }
+    syncActiveSessionFromServer(data || {});
+    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
+      window.ChatExecutionPlanBridge.notifyConnected(data || {});
+    }
+    // 任务进行中（runningTurn）时跳过服务端快照合并，避免覆盖刚还原的 live 工具区
+    var rt = data && data.runningTurn;
+    if (!rt || !rt.isProcessing) {
+      syncMessages();
     }
   }
 
   // ---- WebSocket 事件处理 ----
   function onWsOpen() {
     updateNavStatus(true);
-    syncMessages();
     WS.startSyncPolling();
   }
 
@@ -292,12 +651,28 @@ window.ChatPage = (function () {
     UI.setStreamingState(false);
   }
 
+  function onWsReasoningStream(data) {
+    if (userStopped) return;
+    if (!isStreaming) {
+      isStreaming = true;
+      UI.setStreamingState(true);
+    }
+    if (sessionPet) sessionPet.setState('thinking');
+    UI.appendReasoningStreamChunk(data.delta || '');
+  }
+
   function onWsStream(data) {
     if (userStopped) return;
     streamChunksReceived = true;
     if (!isStreaming) {
       isStreaming = true;
       UI.setStreamingState(true);
+    }
+    // Harness 多轮工具任务期间 stream_delta 多为规划/推理，进 Thinking 块而非 Assistant 正文
+    if (WS.isProcessing()) {
+      if (sessionPet) sessionPet.setState('thinking');
+      UI.appendReasoningStreamChunk(data.delta || '');
+      return;
     }
     if (sessionPet) sessionPet.setState('read');
     UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
@@ -308,11 +683,21 @@ window.ChatPage = (function () {
       UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
       if (streamChunksReceived) {
         streamFinalized = true;
+        // 任务结束：过程思考仅作流式展示，最终答复由 refresh / response 写入 Assistant
+        UI.clearReasoningStream();
       }
     }
     streamChunksReceived = false;
     isStreaming = false;
     UI.setStreamingState(false);
+  }
+
+  function scheduleRefreshAfterTurn() {
+    setTimeout(function () {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn('force');
+      }
+    }, 50);
   }
 
   function onWsResponse(data) {
@@ -322,24 +707,31 @@ window.ChatPage = (function () {
     }
     if (streamFinalized) {
       streamFinalized = false;
+      scheduleRefreshAfterTurn();
       return;
     }
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    UI.clearReasoningStream();
     var msg = { role: 'agent', content: Session.stripStatusTag(data.content || '') };
     Session.appendMessage(msg);
     Session.flushToolBatchLocal();
     UI.appendMessageEl(msg, Session.stripStatusTag);
     Session.saveMessages();
+    UI.enableAutoScroll();
+    scheduleRefreshAfterTurn();
   }
 
   function onWsStep(data) {
     var step = data.step;
     if (!step) return;
 
+    // P3 — 用户已点 Stop：后端 harness 还在收尾（写 checkpoint / drain memory）期间会继续推
+    // step / stream_delta，UI 不再据此切冰豆状态，否则会出现「按钮变 Send 了但冰豆还在动」。
+    // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
+    if (userStopped) return;
+
     if (step.totalTokenUsage) {
-      usedInputTokens = step.totalTokenUsage.inputTokens || 0;
-      usedOutputTokens = step.totalTokenUsage.outputTokens || 0;
-      updatePetTokenUsage();
+      applyTotalTokenUsageFromStep(step.totalTokenUsage);
     }
     if (step.iteration) {
       Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
@@ -349,22 +741,104 @@ window.ChatPage = (function () {
       WS.setLastToolProgressHint(step.content);
       Pet.updateStatusText(step.content, isStreaming, WS.isProcessing());
     }
-    if (step.type === 'tool_call' && step.toolName) {
-      var detail = '';
-      if (step.toolArgs) {
-        detail = step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query || '';
-        if (!detail) {
-          var argsStr = JSON.stringify(step.toolArgs);
-          detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+    if (step.type === 'thinking') {
+      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
+      if (step.content) {
+        UI.appendReasoningStreamIfAbsent(Session.stripStatusTag(step.content));
+      }
+      var msgsThink = Session.getMessages();
+      for (var mti = msgsThink.length - 1; mti >= 0; mti--) {
+        if (msgsThink[mti].role === 'agent' && msgsThink[mti]._streaming) {
+          msgsThink.splice(mti, 1);
+          break;
         }
       }
-      UI.appendToolAction(step.toolName, detail, 'pending');
-      Session.pushToolBatch({ toolName: step.toolName, detail: detail, status: 'pending' });
+    }
+    if (step.type === 'tool_call') {
+      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
+      var msgs = Session.getMessages();
+      for (var mi = msgs.length - 1; mi >= 0; mi--) {
+        if (msgs[mi].role === 'agent' && msgs[mi]._streaming) {
+          msgs.splice(mi, 1);
+          break;
+        }
+      }
+    }
+    if (step.type === 'tool_call' && step.toolName) {
+      if (WS.isProcessing() && UI.isLiveToolRoundActive && !UI.isLiveToolRoundActive()) {
+        UI.setLiveToolRoundActive(true);
+      }
+      var fmt = window.ToolTraceFormat;
+      var detail = fmt
+        ? fmt.formatToolArgsDetailPreview(step.toolName, step.toolArgs)
+        : (step.toolArgs && (step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query)) || '';
+      if (!detail && step.toolArgs) {
+        var argsStr = JSON.stringify(step.toolArgs);
+        detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
+      }
+      var callStatus = fmt && fmt.resolveToolCallInitialStatus
+        ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
+        : 'pending';
+      var toolCallId = step.toolCallId || '';
+      var diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
+        ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
+        : null;
+      UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs);
+      Session.pushToolBatch({
+        toolName: step.toolName,
+        detail: detail,
+        status: callStatus,
+        toolCallId: toolCallId,
+      });
+      if (toolCallId) {
+        streamingDiffBuffer = { toolCallId: toolCallId, text: '' };
+      }
     }
     if (step.type === 'tool_result' && step.toolName) {
-      var resultStatus = step.toolSuccess ? 'success' : 'error';
-      UI.updateLastToolAction(step.toolName, resultStatus);
-      Session.updateToolBatchStatus(step.toolName, resultStatus);
+      var fmtResult = window.ToolTraceFormat;
+      var resultStatus = fmtResult
+        ? fmtResult.resolveToolTraceResultStatus(
+          step.toolName,
+          step.toolSuccess,
+          step.toolOutcome,
+          step.toolOutput,
+        )
+        : (step.toolOutcome === 'policy_block'
+          ? 'warn'
+          : (step.toolSuccess ? 'success' : 'error'));
+      UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus);
+      Session.updateToolBatchStatus(step.toolName, resultStatus, step.toolCallId || '');
+      if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
+        var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
+        if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
+          window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
+        }
+      }
+      if (window.ToolDisplayHistory) {
+        var diffSource = window.ToolDisplayHistory.extractDiffSource(
+          step.toolName,
+          step.toolOutput,
+          step.toolArgs,
+        );
+        if (!diffSource && window.DiffViewer && step.toolOutput) {
+          diffSource = DiffViewer.extractUnifiedDiff(step.toolOutput);
+        }
+        tryMountToolDiff(step.toolCallId || '', diffSource);
+      }
+      streamingDiffBuffer = { toolCallId: '', text: '' };
+    }
+    if (window.ChatExecutionPlanBridge
+      && (step.type === 'execution_plan_init'
+        || step.type === 'execution_plan_update'
+        || step.type === 'execution_plan_clear'
+        || step.type === 'task_graph_init'
+        || step.type === 'task_graph_node'
+        || step.type === 'task_graph_update'
+        || step.type === 'task_graph_branch'
+        || step.type === 'task_graph_done'
+        || step.type === 'execution_mode_enter'
+        || step.type === 'execution_mode_exit')) {
+      window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
   }
@@ -373,14 +847,22 @@ window.ChatPage = (function () {
     var processing = data.status === 'processing';
     WS.setProcessing(processing);
     if (!processing) {
+      // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
+      // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
+      var skipRefreshAfterUserStop = userStopped;
       if (userStopped) userStopped = false;
-      Pet.removeThinking(isStreaming, WS.isProcessing());
-      UI.setStreamingState(false);
       isStreaming = false;
-    } else {
-      UI.setStreamingState(true);
+      Pet.removeThinking(isStreaming, WS.isProcessing());
+      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
+      if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
+      // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
+      if (!skipRefreshAfterUserStop) {
+        refreshChatHistoryAfterTurn('force');
+      }
+    } else if (!userStopped) {
       if (sessionPet) sessionPet.setState('thinking');
     }
+    syncSendButtonWithWorkload();
   }
 
   function onWsError(data) {
@@ -390,6 +872,14 @@ window.ChatPage = (function () {
     UI.appendMessageEl(msg, Session.stripStatusTag);
     Session.saveMessages();
     Pet.removeThinking(isStreaming, WS.isProcessing());
+  }
+
+  function onWsMcpReady(data) {
+    announceMcpReadyFromPayload(data || {});
+  }
+
+  function onWsTunnelReady(data) {
+    announceTunnelReadyFromPayload(data || {});
   }
 
   function onWsMemoryNotice(data) {
@@ -406,26 +896,62 @@ window.ChatPage = (function () {
     });
   }
 
+  /** 当前正在显示的 confirm 对话框（用于其它端 first-win 后关闭本地弹窗） */
+  var activeConfirmId = null;
+  var activeConfirmResolved = false;
+
   function onWsConfirm(data) {
     if (sessionPet) {
       sessionPet.setState('alert');
       sessionPet.setBubbleText('请在弹窗中确认危险操作');
     }
+    activeConfirmId = data.confirmId || null;
+    activeConfirmResolved = false;
     var argsText = data.args ? JSON.stringify(data.args) : '';
-    var ok = window.confirm('AI 请求执行危险操作：\n\n工具: ' + data.toolName + '\n参数: ' + argsText + '\n\n是否允许？');
-    WS.sendConfirmReply(ok);
-    var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
-    Session.appendMessage(confirmMsg);
-    UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
-    Session.saveMessages();
-    if (sessionPet) {
-      sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-      sessionPet.setBubbleText('');
+
+    Modal.confirm({
+      title: '危险操作确认',
+      message: '工具: ' + data.toolName + '\n参数: ' + argsText,
+      type: 'danger',
+      dangerConfirm: true,
+      confirmText: '允许',
+      cancelText: '拒绝',
+    }).then(function (ok) {
+      if (activeConfirmResolved) {
+        activeConfirmId = null;
+        activeConfirmResolved = false;
+        if (sessionPet) {
+          sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
+          sessionPet.setBubbleText('');
+        }
+        return;
+      }
+      WS.sendConfirmReply(ok, activeConfirmId);
+      activeConfirmId = null;
+      var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
+      Session.appendMessage(confirmMsg);
+      UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
+      Session.saveMessages();
+      if (sessionPet) {
+        sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
+        sessionPet.setBubbleText('');
+      }
+    });
+  }
+
+  function onWsConfirmResolved(data) {
+    if (!data) return;
+    // 标记本地弹窗的回复已被服务端 first-win
+    if (!activeConfirmId || data.confirmId === activeConfirmId) {
+      activeConfirmResolved = true;
     }
   }
 
   function onWsTokenUsage(data) {
-    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0);
+    updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
+      effectiveUsed: data.effectiveUsed,
+      contextWindow: data.contextWindow,
+    });
   }
 
   function onWsPulse(data) {
@@ -434,33 +960,153 @@ window.ChatPage = (function () {
     Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
   }
 
-  function syncMessages() {
-    if (WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble()) return;
+  function shouldSkipServerSnapshotSync() {
+    return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
+  }
+
+  function refreshChatHistoryAfterTurn(shouldScroll, done) {
+    if (shouldSkipServerSnapshotSync()) {
+      if (done) done();
+      return;
+    }
+    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
     Session.fetchServerMessages(function (serverMsgs) {
+      if (shouldSkipServerSnapshotSync()) {
+        if (done) done();
+        return;
+      }
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      renderChatHistoryWithFetch(shouldScroll, function () {
+        Session.saveMessages();
+        if (done) done();
+      });
+    });
+  }
+
+  function syncMessages() {
+    if (shouldSkipServerSnapshotSync()) return;
+    Session.fetchServerMessages(function (serverMsgs) {
+      // F5 重连：onWsOpen 发起的 fetch 可能在 connected+restore 之后才返回；
+      // 此时若仍 renderMessagesOnly 会清掉 runningTurn 刚还原的工具时间线/流式气泡。
+      if (shouldSkipServerSnapshotSync()) return;
       if (!serverMsgs || serverMsgs.length === 0) return;
       var separated = Session.separateToolTraces(serverMsgs);
       var updated = Session.applyServerChatSnapshot(separated, { fullRender: false }, isStreaming, WS.isProcessing());
       if (updated) {
-        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
     });
   }
 
   function pullServerChatSnapshotAuthoritative() {
-    if (WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble()) return;
+    if (shouldSkipServerSnapshotSync()) return;
     Session.fetchServerMessages(function (serverMsgs) {
+      if (shouldSkipServerSnapshotSync()) return;
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
       if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-        UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+        renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
     });
   }
 
+  function onWsSessionUpdated(data) {
+    if (data && data.sessionId && data.title && window.ChatSessionStore
+        && typeof window.ChatSessionStore.patchSession === 'function') {
+      window.ChatSessionStore.patchSession(data.sessionId, { title: data.title });
+    }
+    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
+      window.ChatExecutionPlanBridge.notifySessionUpdated();
+    }
+    if (data && data.reason === 'turn_complete') {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn('force');
+      }
+      return;
+    }
+    if (!data || !data.title) {
+      pullServerChatSnapshotAuthoritative();
+    }
+  }
+
+  function onWsBgTaskStopResult(payload) {
+    if (!window.BgTaskChip || !payload || payload.ok) return;
+    if (window.BgTaskChip.resetStopPending && payload.taskId) {
+      window.BgTaskChip.resetStopPending(payload.taskId);
+    }
+  }
+
+  function onWsBgTaskUpdate(payload) {
+    if (!window.BgTaskChip || !elMessages) return;
+    var activeId = (Session && typeof Session.getActiveId === 'function')
+      ? Session.getActiveId()
+      : '';
+    window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
+    UI.scheduleScrollIfSticky();
+  }
+
+  function tryMountToolDiff(toolCallId, diffSource) {
+    if (!toolCallId || !diffSource || !UI.mountDiffForToolCallId) return;
+    UI.mountDiffForToolCallId(toolCallId, diffSource);
+  }
+
+  /** run_command 流式输出：按 toolCallId 累积并实时预览 */
+  function onWsToolOutput(data) {
+    if (!data || !data.content || !data.toolCallId) return;
+    if (streamingDiffBuffer.toolCallId && streamingDiffBuffer.toolCallId !== data.toolCallId) {
+      streamingDiffBuffer = { toolCallId: data.toolCallId, text: '' };
+    }
+    if (!streamingDiffBuffer.toolCallId) streamingDiffBuffer.toolCallId = data.toolCallId;
+    streamingDiffBuffer.text += data.content;
+    var diffSource = null;
+    if (window.DiffViewer && typeof DiffViewer.extractUnifiedDiff === 'function') {
+      diffSource = DiffViewer.extractUnifiedDiff(streamingDiffBuffer.text);
+    } else if (window.DiffViewer && typeof DiffViewer.looksLikeUnifiedDiffText === 'function') {
+      if (!DiffViewer.looksLikeUnifiedDiffText(streamingDiffBuffer.text)) return;
+      diffSource = streamingDiffBuffer.text;
+    } else if (!/^@@\s/m.test(streamingDiffBuffer.text) && !/^diff --git /m.test(streamingDiffBuffer.text)) {
+      return;
+    } else {
+      diffSource = streamingDiffBuffer.text;
+    }
+    if (!diffSource) return;
+    tryMountToolDiff(streamingDiffBuffer.toolCallId, diffSource);
+  }
+
+  /**
+   * 方案 A keep-alive：app.js navigate 回聊天页时调用。
+   * 此时 DOM、WS、流式状态都还在，仅做一次轻量级同步（拉服务端快照、对齐按钮态）。
+   */
+  function onActivate() {
+    if (!mounted) return;
+    if (WS && typeof WS.isConnected === 'function' && !WS.isConnected()) {
+      WS.connect(remoteToken);
+    }
+    syncSendButtonWithWorkload();
+    if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
+      syncMessages();
+    }
+    // 切回 chat 页面时也重新同步默认模型 / chip（不依赖 WS 状态，避免卡在"加载中…"）
+    loadModelConfig();
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
+    if (mounted) {
+      // 方案 A：已经挂载，切页面回来不再重建
+      onActivate();
+      return;
+    }
+    mounted = true;
     container = parentEl;
 
     var params = new URLSearchParams(window.location.search);
@@ -468,7 +1114,8 @@ window.ChatPage = (function () {
     remoteMode = !!remoteToken;
 
     container.innerHTML =
-      '<div class="chat-page">' +
+      '<div class="chat-page chat-layout">' +
+        '<div class="chat-main">' +
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
@@ -485,15 +1132,40 @@ window.ChatPage = (function () {
             '<span class="file-name" id="file-name"></span>' +
             '<button class="file-remove" id="file-remove" title="Remove file">&times;</button>' +
           '</div>' +
-          '<div class="chat-input-row">' +
-            '<button class="btn-icon" id="btn-file" title="Upload file"><span class="icon-clip"></span></button>' +
-            '<div class="input-wrapper">' +
-              '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
+          '<div class="chat-composer">' +
+            '<div class="composer-input">' +
+              '<div class="input-wrapper">' +
+                '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
+              '</div>' +
             '</div>' +
-            '<button class="btn-icon btn-send" id="btn-send" title="Send"><span class="icon-send"></span></button>' +
+            '<div class="composer-toolbar">' +
+              '<button class="btn-icon btn-icon-ghost" id="btn-file" title="Upload file" aria-label="Upload file">' +
+                '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+              '</button>' +
+              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
+                '<span class="chip-label" id="chip-model-label">加载中…</span>' +
+                '<svg class="chip-caret" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 4 6 8 10 4"/></svg>' +
+              '</button>' +
+              '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
+                '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
+              '</button>' +
+              '<div class="cmd-palette-anchor">' +
+                '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
+                  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+                    '<line x1="4" y1="6" x2="14" y2="6"/>' +
+                    '<line x1="4" y1="12" x2="20" y2="12"/>' +
+                    '<line x1="4" y1="18" x2="10" y2="18"/>' +
+                    '<circle cx="16" cy="6" r="1.6" fill="currentColor" stroke="none"/>' +
+                    '<circle cx="6" cy="12" r="1.6" fill="currentColor" stroke="none"/>' +
+                    '<circle cx="14" cy="18" r="1.6" fill="currentColor" stroke="none"/>' +
+                  '</svg>' +
+                '</button>' +
+              '</div>' +
+            '</div>' +
           '</div>' +
           '<input type="file" class="hidden-input" id="file-input">' +
         '</div>' +
+        '</div>' + /* /chat-main */
       '</div>';
 
     // 缓存 DOM
@@ -508,19 +1180,77 @@ window.ChatPage = (function () {
     elFileRemove = container.querySelector('#file-remove');
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusTurn = container.querySelector('#status-turn');
+    elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
+    mainInputWrapper = container.querySelector('.input-wrapper');
+    if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
+
+    // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
+    // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
+    if (window.ChatModelPicker && typeof window.ChatModelPicker.init === 'function') {
+      window.ChatModelPicker.init({
+        chipEl: container.querySelector('#chip-model'),
+        labelEl: container.querySelector('#chip-model-label'),
+      });
+      // 初次拉取 providers 缓存，供下拉渲染使用
+      window.ChatModelPicker.refreshFromServer();
+    }
+
+    // 初始化会话侧栏（PC 模式）
+    if (!remoteMode && window.ChatSessionSidebar) {
+      var chatLayout = container.querySelector('.chat-layout');
+      if (chatLayout) {
+        window.ChatSessionSidebar.create(chatLayout);
+        var navBrand = document.querySelector('.nav-brand');
+        var panelToggle = document.getElementById('nav-sidebar-toggle');
+        if (navBrand && !panelToggle) {
+          panelToggle = document.createElement('button');
+          panelToggle.type = 'button';
+          panelToggle.className = 'nav-sidebar-toggle is-expanded';
+          panelToggle.id = 'nav-sidebar-toggle';
+          panelToggle.title = '隐藏会话列表';
+          panelToggle.setAttribute('aria-label', '显示或隐藏会话列表');
+          panelToggle.setAttribute('aria-pressed', 'true');
+          panelToggle.innerHTML =
+            '<span class="nav-sidebar-toggle-icon" aria-hidden="true">' +
+              '<svg class="icon-panel-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
+                '<path d="M9 4v16"/>' +
+              '</svg>' +
+              '<svg class="icon-panel-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
+                '<path d="M9 4v16"/>' +
+                '<path d="M14 12h5"/>' +
+                '<path d="M17 9l3 3-3 3"/>' +
+              '</svg>' +
+            '</span>';
+          panelToggle.addEventListener('click', function () {
+            window.ChatSessionSidebar.togglePanel();
+          });
+          navBrand.insertBefore(panelToggle, navBrand.firstChild);
+        }
+        if (panelToggle) {
+          window.ChatSessionSidebar.bindNavToggle(panelToggle);
+        }
+      }
+    }
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
     File.init({ elFileStatus: elFileStatus, elFileName: elFileName, elFileInput: elFileInput });
     Cmd.setRemoteMode(remoteMode);
     var cmdDropdown = Cmd.init();
-    var inputWrapper = container.querySelector('.input-wrapper');
-    if (inputWrapper && cmdDropdown) inputWrapper.appendChild(cmdDropdown);
+    if (mainInputWrapper && cmdDropdown) mainInputWrapper.appendChild(cmdDropdown);
 
     // 初始化冰豆（会话指示器）
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
+        window.DesktopPetBridge.attach(sessionPet);
+      }
+      if (window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function') {
+        Pet.syncSupervisorModeEye(window.AppRouter.getSupervisorMode());
+      }
     }
 
     // 初始化会话：先从 localStorage 载入（本地页与远程页都需要内存里有消息再绘制）
@@ -528,22 +1258,37 @@ window.ChatPage = (function () {
 
     fetchSupportedFormats();
 
+    if (window.BgTaskChip && window.BgTaskChip.setStopHandler) {
+      window.BgTaskChip.setStopHandler(function (taskId) {
+        if (!WS.isConnected || !WS.isConnected()) return;
+        WS.send({ type: 'bg_task_stop', taskId: taskId });
+      });
+    }
+
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
     WS.on('connected', onWsConnected);
     WS.on('close', onWsClose);
     WS.on('stream', onWsStream);
+    WS.on('reasoning_stream', onWsReasoningStream);
     WS.on('stream_end', onWsStreamEnd);
     WS.on('response', onWsResponse);
     WS.on('step', onWsStep);
     WS.on('status', onWsStatus);
     WS.on('error', onWsError);
+    WS.on('mcp_ready', onWsMcpReady);
+    WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
     WS.on('confirm', onWsConfirm);
+    WS.on('confirm_resolved', onWsConfirmResolved);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    WS.on('session_updated', pullServerChatSnapshotAuthoritative);
+    WS.on('session_updated', onWsSessionUpdated);
+    WS.on('workspace_updated', syncSidebarWorkspace);
     WS.on('sync', syncMessages);
+    WS.on('bg_task_update', onWsBgTaskUpdate);
+    WS.on('bg_task_stop_result', onWsBgTaskStopResult);
+    WS.on('tool_output', onWsToolOutput);
 
     // 连接 WebSocket
     WS.connect(remoteToken);
@@ -559,11 +1304,16 @@ window.ChatPage = (function () {
     });
     elInput.addEventListener('input', function () {
       UI.autoResizeInput();
-      Cmd.handleInput(elInput.value);
+      Cmd.handleInput(elInput.value, elInput);
     });
-    elInput.addEventListener('blur', function () {
-      setTimeout(Cmd.hide, 150);
-    });
+    // 命令面板的 outside-click / escape / focus-blur 关闭由 ChatDropdown 统一处理
+    if (elCmdPlusBtn) {
+      elCmdPlusBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        toggleCmdPalette();
+      });
+    }
+    // 命令面板的 keydown / outside-click / escape 由 ChatDropdown 统一处理
     elInput.addEventListener('paste', function (e) {
       var items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
@@ -622,15 +1372,45 @@ window.ChatPage = (function () {
       elFileRemove.addEventListener('click', File.removeUploadedFile);
     }
 
-    // 渲染已有消息（远程模式先展示本地缓存；服务端返回后以快照为准刷新）
-    UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+    function paintInitialChatView() {
+      function afterHistoryPainted() {
+        var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+        if (cachedLiveTools.length > 0) {
+          applyLiveToolTimelineToUI(cachedLiveTools);
+        }
+        UI.enableAutoScroll();
+        syncSendButtonWithWorkload();
+      }
+      // 先拉服务端会话（含 tool_trace），再 fetch structured 重绘，避免 F5 后工具行无 diff
+      Session.fetchServerMessages(function (serverMsgs) {
+        var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+        if (raw.length > 0) {
+          var separated = Session.separateToolTraces(raw);
+          Session.applyServerChatSnapshot(
+            separated,
+            { fullRender: false, authoritative: true },
+            isStreaming,
+            WS.isProcessing(),
+          );
+        }
+        renderChatHistoryWithFetch(false, afterHistoryPainted);
+      });
+    }
+
+    if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
+      window.ChatSessionStore.bootstrapInitialSession(function () {
+        paintInitialChatView();
+      });
+    } else {
+      paintInitialChatView();
+    }
 
     if (remoteMode) {
       Session.fetchServerMessages(function (serverMsgs) {
         var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
         var separated = Session.separateToolTraces(raw);
         if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-          UI.renderMessagesOnly(Session.getMessages(), Session.getToolTraces(), Session.stripStatusTag);
+          renderChatHistoryWithFetch(false);
           Session.saveMessages();
         }
       });
@@ -649,5 +1429,10 @@ window.ChatPage = (function () {
     });
   }
 
-  return { render: render };
+  return {
+    render: render,
+    onActivate: onActivate,
+    onSessionSwitched: onSessionSwitched,
+    isWorkloadActive: isWorkloadActive,
+  };
 })();

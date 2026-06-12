@@ -1,8 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { LoopState, StopReason } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import { engineeringTestTargetPaths, writeConfirmationPaths } from './document-deliverable.js';
+import { checkpointHasPendingWork } from './incomplete-completion.js';
+import { buildCheckpointResumeSummary, sanitizeCheckpointGoal } from './checkpoint-resume-compact.js';
+// ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
 
@@ -27,6 +32,7 @@ export interface TaskCheckpoint {
   };
   createdAt: string;
   updatedAt: string;
+  // plan field removed (Phase 11)
 }
 
 export interface TaskCheckpointUpdate {
@@ -38,6 +44,7 @@ export interface TaskCheckpointUpdate {
   messages: UnifiedMessage[];
   failedToolCalls?: string[];
   stopReason?: StopReason;
+  // plan field removed (Phase 11)
 }
 
 export class TaskCheckpointManager {
@@ -52,7 +59,11 @@ export class TaskCheckpointManager {
       const raw = await fs.readFile(this.checkpointPath, 'utf-8');
       const checkpoint = JSON.parse(raw) as TaskCheckpoint;
       if (checkpoint.version !== 1) return null;
-      if (checkpoint.status === 'completed' || checkpoint.status === 'failed') return null;
+      if (checkpoint.status === 'failed') return null;
+      if (checkpoint.status === 'completed') {
+        if (!checkpointHasPendingWork(checkpoint)) return null;
+        return { ...checkpoint, status: 'paused' };
+      }
       return checkpoint;
     } catch {
       return null;
@@ -62,6 +73,8 @@ export class TaskCheckpointManager {
   async save(update: TaskCheckpointUpdate): Promise<TaskCheckpoint> {
     const existing = await this.readExisting();
     const now = new Date().toISOString();
+    // planField logic removed (Phase 11)
+
     const checkpoint: TaskCheckpoint = {
       version: 1,
       taskId: existing?.taskId ?? createTaskId(update.userGoal, now),
@@ -70,7 +83,10 @@ export class TaskCheckpointManager {
       phase: update.taskState.phase,
       lastCompletedStep: inferLastCompletedStep(update.repoContext),
       nextSuggestedStep: inferNextSuggestedStep(update.taskState, update.repoContext, update.status),
-      taskState: update.taskState,
+      taskState: {
+        ...update.taskState,
+        goal: sanitizeCheckpointGoal(update.taskState.goal),
+      },
       repoContext: update.repoContext,
       failedToolCalls: update.failedToolCalls ?? existing?.failedToolCalls ?? [],
       stopReason: update.stopReason,
@@ -83,26 +99,23 @@ export class TaskCheckpointManager {
       },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      // ...planField removed (Phase 11)
     };
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
-    const tmpPath = `${this.checkpointPath}.tmp`;
+    const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
     await fs.writeFile(tmpPath, JSON.stringify(checkpoint, null, 2), 'utf-8');
     await fs.rename(tmpPath, this.checkpointPath);
     return checkpoint;
   }
 
+  // clearEmbeddedPlan removed (Phase 11 — execution plan layer deleted)
+
   buildResumeMessage(checkpoint: TaskCheckpoint): UnifiedMessage {
     return {
       role: 'user',
-      content: [
-        '<resume-checkpoint>',
-        'A previous task was interrupted or left in progress. Treat this checkpoint as authoritative short-term task state.',
-        'If the latest user message is clearly a new unrelated task, ignore this checkpoint and focus on the latest user request.',
-        '',
-        JSON.stringify(checkpoint, null, 2),
-        '</resume-checkpoint>',
-      ].join('\n'),
+      content: buildCheckpointResumeSummary(checkpoint),
+      preserveOnCompaction: true,
     };
   }
 
@@ -151,15 +164,19 @@ function inferNextSuggestedStep(
   status: TaskCheckpointStatus,
 ): string | undefined {
   if (status === 'completed') return 'Task completed; no resume action required.';
-  if (taskState.verificationRequired && taskState.verificationStatus !== 'passed') {
-    const lastTest = repoContext.testCommands.at(-1);
-    return lastTest
-      ? `Fix any remaining issues, then rerun verification: ${lastTest}`
-      : 'Run an appropriate verification command before claiming completion.';
+  const testTargets = engineeringTestTargetPaths(taskState.filesChanged);
+  if (
+    testTargets.length > 0
+    && taskState.verificationStatus !== 'passed'
+  ) {
+    if (testTargets.length === 1) {
+      return `Run unit tests covering: ${testTargets[0]}`;
+    }
+    return `Run unit tests covering ${testTargets.length} changed source files before finishing.`;
   }
   if (repoContext.recentDiagnostics.length > 0) {
     return `Investigate latest diagnostic: ${repoContext.recentDiagnostics.at(-1)}`;
   }
-  if (repoContext.filesChanged.length > 0) return 'Continue implementation from changed files and verify the result.';
+  if (repoContext.filesChanged.length > 0) return 'Continue implementation from changed files.';
   return 'Continue the current task from the saved conversation and session notes.';
 }

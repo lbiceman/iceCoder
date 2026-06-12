@@ -34,7 +34,9 @@ export class ToolRegistry implements IToolRegistry {
    * 获取所有工具的定义（用于传递给 LLM）。
    */
   getDefinitions(): ToolDefinition[] {
-    return this.getAll().map((t) => t.definition);
+    return [...this.getAll()]
+      .sort((a, b) => a.definition.name.localeCompare(b.definition.name))
+      .map((t) => t.definition);
   }
 
   /**

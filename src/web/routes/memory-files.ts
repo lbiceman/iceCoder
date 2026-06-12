@@ -10,10 +10,12 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { scanMemoryFiles } from '../../memory/file-memory/memory-scanner.js';
 import { validatePath, PathTraversalError } from '../../memory/file-memory/memory-security.js';
+import { removeIndexRows } from '../../memory/file-memory/memory-index-maintainer.js';
+import { getScannerCache } from '../../memory/file-memory/memory-scanner-cache.js';
+import '../../cli/paths.js';
 
-/** 默认记忆目录 */
-const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR || 'data/memory-files';
-const DEFAULT_USER_MEMORY_DIR = process.env.ICE_USER_MEMORY_DIR || 'data/user-memory';
+const DEFAULT_MEMORY_DIR = process.env.ICE_MEMORY_DIR!;
+const DEFAULT_USER_MEMORY_DIR = process.env.ICE_USER_MEMORY_DIR!;
 
 /**
  * 创建记忆文件管理 API 路由。
@@ -38,26 +40,36 @@ export function createMemoryFilesRouter(): Router {
       const allMemories = [
         ...projMemories.map(m => ({
           filename: m.filename,
+          name: m.name || '',
           type: m.type || 'unknown',
           description: m.description || '',
+          contentPreview: m.contentPreview || '',
           confidence: m.confidence,
           recallCount: m.recallCount,
+          memoryLevel: m.level,
+          evidenceStrength: m.evidenceStrength,
           source: m.source || '',
           tags: m.tags,
           level: 'project' as const,
+          createdAt: new Date(m.createdMs).toISOString(),
           modifiedAt: new Date(m.mtimeMs).toISOString(),
         })),
         ...userMemories
           .filter(m => !seenFilenames.has(m.filename))
           .map(m => ({
             filename: m.filename,
+            name: m.name || '',
             type: m.type || 'unknown',
             description: m.description || '',
+            contentPreview: m.contentPreview || '',
             confidence: m.confidence,
             recallCount: m.recallCount,
+            memoryLevel: m.level,
+            evidenceStrength: m.evidenceStrength,
             source: m.source || '',
             tags: m.tags,
             level: 'user' as const,
+            createdAt: new Date(m.createdMs).toISOString(),
             modifiedAt: new Date(m.mtimeMs).toISOString(),
           })),
       ];
@@ -130,6 +142,8 @@ export function createMemoryFilesRouter(): Router {
         const filePath = validatePath(filename, dir);
         await fs.access(filePath);
         await fs.unlink(filePath);
+        await removeIndexRows(dir, [filename]);
+        getScannerCache().invalidate(dir);
         console.log(`[memory-files] Deleted: ${filePath}`);
         res.json({ success: true, deleted: filename });
         return;

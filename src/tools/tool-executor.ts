@@ -10,6 +10,13 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult, ToolExecutorConfig, ToolOutputCallback } from './types.js';
 import type { ToolRegistry } from './tool-registry.js';
 import type { ToolValidator } from './tool-validator.js';
+import {
+  buildSalvageTruncatedError,
+  buildWrappedArgumentFormatHint,
+  isSalvagedTruncatedArguments,
+  isUnexpandedStringWrapper,
+  normalizeToolArguments,
+} from './tool-arguments-normalizer.js';
 
 const DEFAULT_CONFIG: ToolExecutorConfig = {
   maxRetries: 3,
@@ -39,18 +46,34 @@ export class ToolExecutor {
       return { success: false, output: '', error: `Unknown tool: ${toolCall.name}` };
     }
 
+    const normalizedCall: ToolCall = {
+      ...toolCall,
+      arguments: normalizeToolArguments(toolCall.arguments ?? {}) as Record<string, any>,
+    };
+
+    if (isSalvagedTruncatedArguments(normalizedCall.arguments)) {
+      return {
+        success: false,
+        output: '',
+        error: `${buildSalvageTruncatedError(toolCall.name, normalizedCall.arguments)} ${buildWrappedArgumentFormatHint()}`,
+      };
+    }
+
     // 执行前验证输入参数
     if (this.validator) {
-      const validation = this.validator.validate(toolCall);
+      const validation = this.validator.validate(normalizedCall);
       if (!validation.valid) {
         const expectedParams = tool.definition.parameters?.properties
           ? Object.keys(tool.definition.parameters.properties)
           : [];
-        const receivedParams = Object.keys(toolCall.arguments);
+        const receivedParams = Object.keys(normalizedCall.arguments);
         const hint = expectedParams.length > 0
           ? ` [accepted params: ${expectedParams.join(', ')}] [received params: ${receivedParams.join(', ') || '(none)'}]`
           : '';
-        return { success: false, output: '', error: `Input validation failed: ${validation.message}${hint}` };
+        const wrapHint = isUnexpandedStringWrapper(normalizedCall.arguments)
+          ? ` ${buildWrappedArgumentFormatHint()}`
+          : '';
+        return { success: false, output: '', error: `Input validation failed: ${validation.message}${hint}${wrapHint}` };
       }
     }
 
@@ -59,9 +82,16 @@ export class ToolExecutor {
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
       try {
         const result = await this.executeWithTimeout(
-          () => tool.handler(toolCall.arguments, onOutput),
+          () => tool.handler(normalizedCall.arguments, onOutput),
           this.config.toolTimeout,
         );
+        if (!result.success && isUnexpandedStringWrapper(normalizedCall.arguments)) {
+          const wrapHint = buildWrappedArgumentFormatHint();
+          const error = result.error?.includes(wrapHint)
+            ? result.error
+            : `${result.error ?? 'Tool failed'}. ${wrapHint}`;
+          return { ...result, error };
+        }
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
@@ -72,7 +102,7 @@ export class ToolExecutor {
           const expectedParams = tool.definition.parameters?.properties
             ? Object.keys(tool.definition.parameters.properties)
             : [];
-          const receivedParams = Object.keys(toolCall.arguments);
+          const receivedParams = Object.keys(normalizedCall.arguments);
           lastError = `${lastError} — Likely parameter name mismatch. Tool "${toolCall.name}" accepts: [${expectedParams.join(', ')}]. Received: [${receivedParams.join(', ') || '(none)'}].`;
         }
 

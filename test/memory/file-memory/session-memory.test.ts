@@ -263,9 +263,17 @@ describe('initSessionMemoryState', () => {
     expect(state2.tokensAtLastExtraction).toBe(0);
   });
 
-  it('notesPath 指向 session-notes.md', () => {
+  it('notesPath 指向 {sessionId}.session-notes.md（默认 default）', () => {
     const s = initSessionMemoryState('/my/session');
-    expect(s.notesPath).toBe(path.join('/my/session', 'session-notes.md'));
+    expect(s.notesPath).toBe(path.join('/my/session', 'default.session-notes.md'));
+  });
+
+  it('notesPath 按 sessionId 隔离', () => {
+    const a = initSessionMemoryState('/my/session', 'aaa');
+    const b = initSessionMemoryState('/my/session', 'bbb');
+    expect(a.notesPath).toBe(path.join('/my/session', 'aaa.session-notes.md'));
+    expect(b.notesPath).toBe(path.join('/my/session', 'bbb.session-notes.md'));
+    expect(a.notesPath).not.toBe(b.notesPath);
   });
 });
 
@@ -351,6 +359,36 @@ describe('persisted runtime (icecoder-runtime)', () => {
     );
     expect(md).toContain(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`);
     expect(parsePersistedRuntime(md)?.task.intent).toBe('edit');
+  });
+
+  it('buildRuntimeEvidenceSection preserves file deliverable write versions', () => {
+    const md = buildRuntimeEvidenceSection(
+      {
+        task: {
+          goal: '写文档',
+          intent: 'docs',
+          phase: 'editing',
+          filesRead: [],
+          filesChanged: ['/tmp/out.md'],
+          commandsRun: [],
+          verificationRequired: true,
+          verificationStatus: 'required',
+          fileDeliverableWriteVersions: { '/tmp/out.md': 2 },
+          fileDeliverableConfirmVersions: { '/tmp/out.md': 1 },
+        },
+        repo: {
+          filesRead: [],
+          filesChanged: [],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      },
+      null,
+    );
+    const parsed = parsePersistedRuntime(md);
+    expect(parsed?.task.fileDeliverableWriteVersions?.['/tmp/out.md']).toBe(2);
+    expect(parsed?.task.fileDeliverableConfirmVersions?.['/tmp/out.md']).toBe(1);
   });
 
   it('truncateSessionMemoryForCompact 保留 Runtime Evidence 内长 JSON', () => {

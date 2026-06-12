@@ -71,8 +71,8 @@ export function createDoingTasksSection(): PromptSection {
 ## Workflow
 1. Task is ambiguous → ask the user first. Do not assume.
 2. Modify a file you have NOT read yet → read_file first. If you already read it in this conversation, do NOT re-read — use what you know.
-3. Complete a step → verify (test, output). Do NOT re-read files only to confirm saves — trust the tool result.
-4. Test fails → say it fails. Do not sugarcoat.
+3. Complete a step → verify with tests or observable output when you changed code.
+4. Test fails → fix or report plainly. Do not sugarcoat or stop on a failing suite without saying so.
 5. Unclear or generic instruction → interpret in software-engineering context and the working directory (e.g. rename a method in code, not just answer with a string).
 
 ## User intent
@@ -99,7 +99,18 @@ export function createDoingTasksSection(): PromptSection {
 
 ## Failure handling
 - Read errors; diagnose before retrying. Fix directly; do not explain why it failed unless the user asks.
-- No destructive shortcuts. Don't repeat the identical failed action blindly; don't give up a viable approach after one failure either.`,
+- No destructive shortcuts. Don't repeat the identical failed action blindly; don't give up a viable approach after one failure either.
+
+## Stopping rules
+- Stop calling tools and output a short delivery summary ONLY when one of:
+  1. The runtime injects \`[System / Acceptance ✓] All N acceptance commands passed.\` — output ≤10 delivery bullets and STOP.
+  2. The user explicitly closes the task (任务完成 / 就这样 / 可以了 / OK).
+  3. **No source-code changes** in this task, OR you changed source code and **unit tests passed** (via run_command), OR you explicitly skipped tests with reason (docs-only, no harness).
+- If the runtime injects \`[System] You changed source code but have not run unit tests yet\`, run tests for the listed changed files before stopping (pick the command for the project).
+- If the runtime injects a failed-test reminder, fix and re-run when you can; you may stop after that reminder but must state failures plainly.
+- Do NOT stop just because you feel finished. Self-perceived completion is not evidence.
+- Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands.
+- A single \`[System / Acceptance ✓] cmd — summary\` line means **one** command passed; keep going until you see the final "All N passed" signal.`,
     isStatic: true,
     priority: 20,
     enabled: true,
@@ -128,25 +139,48 @@ export function createToolUsageSection(): PromptSection {
     content: `# Tools
 
 ## Principles
-- When you need to explore a directory, understand module structure, or search across multiple files, use delegate_to_subagent. Reserve direct read_file/search_codebase for single-file lookups.
+- When you need to explore a directory, understand module structure, or search across multiple files, use delegate_to_subagent. Reserve direct glob/grep/read_file for targeted lookups.
+- Code search flow: **glob** (find paths) → **grep** with output_mode files_with_matches (default) → **read_file** (2–3 files) → edit tools.
 - Do NOT use run_command when a dedicated tool exists.
 - Independent tools in parallel; dependent tools in order.
 - Do not repeat tool calls unless data may have changed.
-- Background run_command → continue work; poll with action:"check" and task_id.
 - Use multiple tools per turn when useful.
+
+## Shell execution
+- run_command auto-picks foreground/background by command shape. Long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) → background, returns taskId immediately.
+- If a foreground command returns mode:'escalated' with a taskId, it has been moved to background after ~8s. Do NOT retry; poll later with action:'check'.
+- Polling: { action:'check', task_id, since:<prev cursor> } returns only new output. Always pass back the returned \`cursor\` next time.
+- The runtime may inject a [Background Task Status] block every ~5 minutes for any running task. Treat it as ground truth; don't echo it to the user verbatim.
+- Never set background:true for destructive commands (rm/del/git push -f …).
 
 ## MCP (Model Context Protocol)
 - Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.
 - **Only** open MCP config files (e.g. \`.iceCoder/mcp.json\`) when the user asks **where** MCP is configured, wants an edit/review of that file, or you are debugging **why** a server is missing or failing — not for normal tool use.
 
+## Tool call arguments
+- Pass parameters as **top-level JSON fields** on the tool call (standard function-calling shape). Do **not** wrap the whole payload in one string field (\`raw\`, \`arguments\`, \`input\`, \`params\`, etc.) or nest JSON inside a single string.
+- **Correct** \`write_file\`: \`{ "path": "src/foo.ts", "content": "..." }\` — **Wrong**: \`{ "raw": "{\\"path\\":...}" }\` or any single-key string wrapper.
+- **Correct** \`run_command\`: \`{ "command": "npm test" }\` — \`command\` must be top-level, not inside a wrapper field.
+- Accepted aliases when supported: \`filePath\` → \`path\`; \`cmd\` → \`command\`. Prefer canonical names (\`path\`, \`content\`, \`command\`).
+- Large file bodies: use \`patch_file\` (small diff hunks) or \`edit_file\` (short search/replace) in steps — avoid one huge \`write_file\` that may hit max_tokens and truncate mid-JSON.
+- If a tool error mentions **truncated JSON**, **finishReason: length**, or **Tool skipped** for write/edit: do **not** repeat the same full-file payload — switch to \`patch_file\` / smaller \`edit_file\` / \`append_file\` chunks.
+
 ## File reading
 read_file (offset/limit for large files). Outside cwd → open_file (absolute path).
 
 ## File editing
-edit_file (exact match). batch_edit_file, patch_file, write_file, append_file as appropriate.
+- **write_file**: new files or full replace of **small** files (roughly &lt;150 lines). Not for large scene/module rewrites.
+- **edit_file**: localized changes; search can be exact or fuzzy (whitespace/line trim). Keep \`search\` short and unique.
+- **patch_file**: preferred for multi-line / large edits; small unified diff hunks; tolerates line drift.
+- **append_file**: add to end of file. **batch_edit_file**: several search/replace ops in one call.
+
+## Missing files & BranchBudget recovery
+- If \`read_file\` returns ENOENT, or Harness shows \`[Harness / Missing File]\`: **stop** read/patch on that path. Use \`write_file\` with the **full file body** (reference an existing sibling file as a template).
+- If \`[BranchBudget / Blocked]\` mentions the file **does not exist on disk**: use \`write_file\` to create it; wait for \`[System / Rebuild Escalation]\` if a write bypass is granted.
+- Do not loop \`read_file\` / \`patch_file\` on paths that are missing on disk.
 
 ## Search
-search_codebase (filename / content; skips node_modules). web_search, fetch_url.
+**glob** — file paths by pattern. **grep** — content search (ripgrep); default returns paths only; use output_mode content when you need lines. web_search, fetch_url.
 
 ## Commands
 run_command; git tool for git (safer than raw shell).
@@ -169,7 +203,9 @@ export function createShellGuideSection(): PromptSection {
     title: 'Shell',
     content: `# Shell
 
-Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.`,
+Quote paths with spaces. Chain with \`&&\`. Diagnose failed commands instead of blind retry. New commits, not amend. Do not skip hooks.
+
+**Never** broad-kill Node processes (\`taskkill /IM node\`, \`killall node\`, \`pkill node\`) — that terminates the running iceCoder agent. To stop a dev/preview server, find the port PID (\`netstat -ano | findstr :4173\`) and \`taskkill /F /PID <pid>\` only.`,
     isStatic: true,
     priority: 45,
     enabled: true,

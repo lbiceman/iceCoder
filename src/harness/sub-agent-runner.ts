@@ -9,6 +9,7 @@ import type { ToolCall, ToolDefinition, UnifiedMessage } from '../llm/types.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ChatFunction } from './types.js';
 import { normalizeMessages } from './context-assembler.js';
+import { prepareAssistantContentForHistory, resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
 import { getSubAgentTimeoutMsFromEnv } from './token-budget-config.js';
 
 /** 单次委派请求：任务描述与可选约束。 */
@@ -55,15 +56,15 @@ interface SubAgentRunnerOptions {
 /** 子循环默认最大推理轮次 */
 const DEFAULT_MAX_ROUNDS = 10;
 /** MVP 默认只允许读文件、搜代码、列目录 */
-const DEFAULT_ALLOWED_TOOLS = new Set(['read_file', 'search_codebase', 'fs_operation']);
+const DEFAULT_ALLOWED_TOOLS = new Set(['read_file', 'glob', 'grep', 'fs_operation']);
 /** 子代理侧单条工具结果字符上限（与 read 截断共用） */
 const MAX_TOOL_RESULT_CHARS = 8_000;
 /** 子代理侧 read_file 注入上下文的最多行数 */
 const MAX_READ_FILE_LINES = 200;
-/** 子代理侧 search_codebase 最多保留的匹配块数 */
-const MAX_SEARCH_RESULTS = 20;
-/** 子代理侧每条搜索匹配块最多字符数 */
-const MAX_SEARCH_RESULT_CHARS = 500;
+/** 子代理侧 grep content 最多保留的匹配块数 */
+const MAX_GREP_CONTENT_BLOCKS = 20;
+/** 子代理侧每条 grep 匹配块最多字符数 */
+const MAX_GREP_BLOCK_CHARS = 500;
 
 /** 内存缓存中的一条记录：按 task 维度分组，组内可按 filesRead 区分多条。 */
 interface SubAgentCacheEntry {
@@ -134,7 +135,7 @@ export function createDelegateToSubagentToolDefinition(): ToolDefinition {
       'Delegate a read-only codebase exploration task to an isolated sub-agent.',
       'Use this when you need to search or read multiple files but only need a concise structured summary back.',
       'The sub-agent can only use read-only tools and cannot write files, run commands, or delegate again.',
-      'Prefer this tool over read_file/search_codebase when exploring unfamiliar code. It isolates context and returns a clean summary.',
+      'Prefer this tool over read_file/glob/grep when exploring unfamiliar code. It isolates context and returns a clean summary.',
     ].join(' '),
     parameters: {
       type: 'object',
@@ -231,15 +232,17 @@ export class SubAgentRunner {
           return this.partialResult('timeout', lastAssistantContent, filesRead, toolCallCount, roundsUsed, tokensUsed);
         }
 
-        const response = await this.chatFn(normalizeMessages(messages), { tools });
+        const raw = await this.chatFn(normalizeMessages(messages), { tools });
+        const response = resolveSalvagedLlmResponse(raw);
         tokensUsed += response.usage?.totalTokens ?? 0;
 
-        if (response.content) lastAssistantContent = response.content;
+        const visible = prepareAssistantContentForHistory(response.content) || response.content || '';
+        if (visible) lastAssistantContent = visible;
 
         const toolCalls = response.toolCalls ?? [];
         if (toolCalls.length === 0) {
           return {
-            summary: response.content || this.buildFallbackSummary(filesRead),
+            summary: visible || this.buildFallbackSummary(filesRead),
             filesRead: [...filesRead],
             toolCallCount,
             roundsUsed,
@@ -251,9 +254,8 @@ export class SubAgentRunner {
 
         messages.push({
           role: 'assistant',
-          content: response.content || '',
+          content: prepareAssistantContentForHistory(response.content || ''),
           toolCalls,
-          reasoningContent: response.reasoningContent,
         });
 
         for (const toolCall of toolCalls) {
@@ -296,7 +298,7 @@ export class SubAgentRunner {
       .map(tool => tool.name === 'fs_operation' ? restrictFsOperationToList(tool) : tool);
   }
 
-  /** 先做路径与白名单校验，再委托 `ToolExecutor`；`search_codebase` 会先收紧 `maxResults`。 */
+  /** 先做路径与白名单校验，再委托 `ToolExecutor`；grep/glob 会先收紧 `maxResults`。 */
   private async executeReadOnlyTool(
     toolCall: ToolCall,
     allowedTools: Set<string>,
@@ -518,25 +520,26 @@ function restrictFsOperationToList(tool: ToolDefinition): ToolDefinition {
   };
 }
 
-/** 子代理内强制收紧 `search_codebase` 的 `maxResults` 上限。 */
+/** 子代理内强制收紧 grep/glob 的 `maxResults` 上限。 */
 function normalizeSubAgentToolCall(toolCall: ToolCall): ToolCall {
-  if (toolCall.name !== 'search_codebase') return toolCall;
+  if (toolCall.name !== 'grep' && toolCall.name !== 'glob') return toolCall;
+  const cap = toolCall.name === 'grep' ? MAX_GREP_CONTENT_BLOCKS : 50;
   const currentMax = Number(toolCall.arguments.maxResults);
-  return {
-    ...toolCall,
-    arguments: {
-      ...toolCall.arguments,
-      maxResults: Number.isFinite(currentMax) && currentMax > 0
-        ? Math.min(currentMax, MAX_SEARCH_RESULTS)
-        : MAX_SEARCH_RESULTS,
-    },
-  };
+  const next: Record<string, unknown> = { ...toolCall.arguments };
+  if (toolCall.name === 'grep' && !next.output_mode) {
+    next.output_mode = 'files_with_matches';
+  }
+  next.maxResults = Number.isFinite(currentMax) && currentMax > 0
+    ? Math.min(currentMax, cap)
+    : cap;
+  return { ...toolCall, arguments: next };
 }
 
 /** 按工具类型分路由到不同截断策略，仅影响注入子上下文的 tool 消息。 */
 function truncateSubAgentToolOutput(toolName: string, output: string): string {
   if (toolName === 'read_file') return truncateReadFileOutput(output);
-  if (toolName === 'search_codebase') return truncateSearchOutput(output);
+  if (toolName === 'grep') return truncateGrepOutput(output);
+  if (toolName === 'glob') return truncateGenericToolOutput(output);
   return truncateGenericToolOutput(output);
 }
 
@@ -560,17 +563,17 @@ function truncateReadFileOutput(output: string): string {
     : output;
 }
 
-/** 按空行分块视为搜索匹配块，限制块数与每块长度。 */
-function truncateSearchOutput(output: string): string {
+/** 按空行分块视为 grep content 匹配块，限制块数与每块长度。 */
+function truncateGrepOutput(output: string): string {
   const blocks = output.split(/\n{2,}/);
-  const kept = blocks.slice(0, MAX_SEARCH_RESULTS).map(block => (
-    block.length > MAX_SEARCH_RESULT_CHARS
-      ? `${block.slice(0, MAX_SEARCH_RESULT_CHARS)}\n[... truncated by SubAgent: search match limited to ${MAX_SEARCH_RESULT_CHARS} chars ...]`
+  const kept = blocks.slice(0, MAX_GREP_CONTENT_BLOCKS).map(block => (
+    block.length > MAX_GREP_BLOCK_CHARS
+      ? `${block.slice(0, MAX_GREP_BLOCK_CHARS)}\n[... truncated by SubAgent: grep match limited to ${MAX_GREP_BLOCK_CHARS} chars ...]`
       : block
   ));
   const truncated = blocks.length > kept.length || kept.some((block, index) => block !== blocks[index]);
   return truncated
-    ? `${kept.join('\n\n')}\n\n[... truncated by SubAgent: search_codebase output limited to ${MAX_SEARCH_RESULTS} matches ...]`
+    ? `${kept.join('\n\n')}\n\n[... truncated by SubAgent: grep output limited to ${MAX_GREP_CONTENT_BLOCKS} blocks ...]`
     : output;
 }
 

@@ -6,7 +6,7 @@
  * 2. 项目级记忆 (project-level): 项目根目录下的共享记忆
  * 3. 目录级记忆 (directory-level): 当前工作目录下的项目私有配置（最高优先级）
  *
- * 参考 claude-code 的优先级设计：越靠后的文件模型注意力越高。
+ * 越靠后的文件模型注意力越高。
  * 用户级 → 项目共享 → 项目私有（最后加载 = 最高优先级）。
  */
 
@@ -55,7 +55,7 @@ export class MultiLevelMemoryLoader {
    * 加载所有级别的记忆。
    *
    * 顺序：USER → PROJECT → DIRECTORY（越靠后优先级越高）。
-   * 参考 claude-code：later files = higher priority。
+   * later files = higher priority。
    */
   async loadAllLevels(): Promise<Record<MemoryLevel, MemoryHeader[]>> {
     const levels = [

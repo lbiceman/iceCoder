@@ -17,6 +17,8 @@ import { MultiLevelMemoryLoader, type MultiLevelMemoryConfig, MemoryLevel } from
 import { AsyncMemoryPrefetcher, type PrefetchConfig } from './async-prefetch.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { loadMemoryPrompt } from './memory-prompt.js';
+import { upsertIndexRow } from './memory-index-maintainer.js';
+import { sanitizeMemoryContentBeforeWrite } from './memory-write-pipeline.js';
 import {
   DEFAULT_FILE_MEMORY_CONFIG,
   DEFAULT_MULTI_LEVEL_CONFIG,
@@ -191,7 +193,14 @@ ${content}
 *保存时间: ${new Date().toISOString()}*
 *手动保存*`;
 
-      await fs.writeFile(filePath, memoryContent, 'utf-8');
+      const safe = sanitizeMemoryContentBeforeWrite(memoryContent);
+      await fs.writeFile(filePath, safe.content, 'utf-8');
+
+      await upsertIndexRow(memoryDir, {
+        filename,
+        description: description || name,
+        type,
+      });
 
       // 清除缓存
       this.memoryLoader.clearCache();

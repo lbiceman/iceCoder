@@ -17,7 +17,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createMemoryDream, type MemoryDream } from '../../../src/memory/file-memory/memory-dream.js';
+import {
+  createMemoryDream,
+  isDreamBatchRetryableError,
+  shouldAutoPromoteToUserLevel,
+  type MemoryDream,
+} from '../../../src/memory/file-memory/memory-dream.js';
+import { resetConsolidationFlightState } from '../../../src/memory/file-memory/memory-concurrency.js';
+import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../../src/llm/types.js';
 
 let tempDir: string;
@@ -74,13 +81,22 @@ function createMockLLM(response: string): LLMAdapterInterface {
   };
 }
 
+const defaultDreamStatePath = path.join(process.cwd(), 'data', 'memory', 'dream-state.json');
+
 beforeEach(async () => {
   tempDir = path.join(os.tmpdir(), `dream-test-${randomUUID()}`);
   backupDir = path.join(os.tmpdir(), `dream-backup-${randomUUID()}`);
   await fs.mkdir(tempDir, { recursive: true });
+  await fs.mkdir(path.dirname(defaultDreamStatePath), { recursive: true });
+  await fs.writeFile(
+    defaultDreamStatePath,
+    JSON.stringify({ sessionCount: 0, lastDreamTime: 0, staleIndexDreamCompletedAt: 0 }),
+    'utf-8',
+  );
 });
 
 afterEach(async () => {
+  resetConsolidationFlightState();
   await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   await fs.rm(backupDir, { recursive: true, force: true }).catch(() => {});
 });
@@ -129,6 +145,24 @@ describe('shouldDream', () => {
     expect(should).toBe(true);
   });
 
+  it('LLM Dream 空跑退避独立于 indexDreamBackoffCount', async () => {
+    const dream = createMemoryDream({
+      sessionInterval: 2,
+      fileCountThreshold: 1,
+      indexBackoffBaseMs: 60_000,
+    });
+    for (let i = 0; i < 5; i++) dream.recordSession();
+    await writeMemoryFile(tempDir, 'note1.md', '笔记1');
+
+    dream.notifyDreamEmptyRun();
+    const backoff = dream.peekDreamEmptyRunBackoff();
+    expect(backoff.ok).toBe(false);
+    expect(backoff.reason).toMatch(/dream_empty_backoff/);
+
+    dream.notifyDreamSubstantiveRun();
+    expect(dream.peekDreamEmptyRunBackoff().ok).toBe(true);
+  });
+
   it('空记忆目录返回 false', async () => {
     const dream = createMemoryDream({ sessionInterval: 1 });
     dream.recordSession();
@@ -162,7 +196,7 @@ describe('shouldDream', () => {
 // ─── evaluateDreamGate（触发原因 / 与条数解耦） ───
 
 describe('evaluateDreamGate', () => {
-  it('MEMORY.md 死链达到阈值时 stale_index', async () => {
+  it('MEMORY.md 死链达到阈值时规则修复后不再触发 LLM', async () => {
     await fs.writeFile(
       path.join(tempDir, 'MEMORY.md'),
       '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
@@ -171,11 +205,38 @@ describe('evaluateDreamGate', () => {
     await writeMemoryFile(tempDir, 'only.md', 'n');
     const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
     const gate = await dream.evaluateDreamGate(tempDir);
-    expect(gate.shouldRun).toBe(true);
-    expect(gate.trigger).toBe('stale_index');
+    // Phase 1.5: rule repair strips dead links, no LLM needed
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('stale_index_rule_repaired');
   });
 
-  it('stale_index 在 notify 后冷却期内不重复触发', async () => {
+  it('表格死链达到阈值时规则修复', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'MEMORY.md'),
+      '| a.md | x |\n| b.md | y |\n| c.md | z |\n',
+      'utf-8',
+    );
+    await writeMemoryFile(tempDir, 'only.md', 'n');
+    const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
+    const gate = await dream.evaluateDreamGate(tempDir);
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('stale_index_rule_repaired');
+  });
+
+  it('孤儿文件过多时 index_drift 规则重建不调 LLM', async () => {
+    await fs.writeFile(path.join(tempDir, 'MEMORY.md'), '| listed.md | x |\n', 'utf-8');
+    await writeMemoryFile(tempDir, 'listed.md', 'listed');
+    for (let i = 0; i < 20; i++) {
+      await writeMemoryFile(tempDir, `orphan_${i}.md`, `o${i}`);
+    }
+    const dream = createMemoryDream();
+    const gate = await dream.evaluateDreamGate(tempDir);
+    // Phase 1.4: index_drift → rule rebuild, no LLM
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('index_drift_rule_rebuild');
+  });
+
+  it('stale_index 规则修复后不再触发', async () => {
     await fs.writeFile(
       path.join(tempDir, 'MEMORY.md'),
       '- [x](a.md)\n- [y](b.md)\n- [z](c.md)\n',
@@ -183,12 +244,9 @@ describe('evaluateDreamGate', () => {
     );
     await writeMemoryFile(tempDir, 'only.md', 'n');
     const dream = createMemoryDream({ staleIndexDeadLinksThreshold: 3 });
-    const gate1 = await dream.evaluateDreamGate(tempDir);
-    expect(gate1.trigger).toBe('stale_index');
-    dream.notifyStaleIndexDreamCompleted();
-    const gate2 = await dream.evaluateDreamGate(tempDir);
-    expect(gate2.shouldRun).toBe(false);
-    expect(gate2.trigger).toBeNull();
+    const gate = await dream.evaluateDreamGate(tempDir);
+    expect(gate.shouldRun).toBe(false);
+    expect(gate.skipReason).toBe('stale_index_rule_repaired');
   });
 
   it('超过条数上限时触发 Dream，先整合再淘汰', async () => {
@@ -213,35 +271,205 @@ describe('evaluateDreamGate', () => {
   });
 });
 
+// ─── shouldAutoPromoteToUserLevel ───
+
+describe('shouldAutoPromoteToUserLevel', () => {
+  function header(partial: Partial<MemoryHeader> & Pick<MemoryHeader, 'filename' | 'type'>): MemoryHeader {
+    return {
+      filePath: `/tmp/${partial.filename}`,
+      name: partial.filename.replace('.md', ''),
+      description: '',
+      confidence: 0.9,
+      recallCount: 5,
+      mtimeMs: Date.now(),
+      createdMs: Date.now(),
+      lastRecalledMs: 0,
+      tags: [],
+      contentPreview: '',
+      eventDateMs: 0,
+      ...partial,
+    };
+  }
+
+  it('晋升全局 user- 前缀且无 project 标签', () => {
+    expect(shouldAutoPromoteToUserLevel(header({
+      filename: 'user-git-commit-chinese-msg.md',
+      type: 'user',
+      tags: ['dimension:git', 'lang:zh'],
+    }))).toBe(true);
+  });
+
+  it('不晋升项目前缀命名 javastudy-user-*', () => {
+    expect(shouldAutoPromoteToUserLevel(header({
+      filename: 'javastudy-user-prefers-simple-concise-explanations.md',
+      type: 'user',
+    }))).toBe(false);
+  });
+
+  it('不晋升带 project: 标签的 user- 文件', () => {
+    expect(shouldAutoPromoteToUserLevel(header({
+      filename: 'user-merge-web-merge-concept-recurring-misconception.md',
+      type: 'user',
+      tags: ['project:english-book-merge-web'],
+    }))).toBe(false);
+  });
+
+  it('不晋升非 user 类型', () => {
+    expect(shouldAutoPromoteToUserLevel(header({
+      filename: 'user-git-commit-chinese-msg.md',
+      type: 'project',
+    }))).toBe(false);
+  });
+});
+
 // ─── recordSession ───
 
 describe('recordSession', () => {
-  it('递增会话计数', () => {
+  it('递增会话计数', async () => {
     const dream = createMemoryDream();
     expect(dream.getState().sessionCount).toBe(0);
-    dream.recordSession();
+    await dream.recordSession();
     expect(dream.getState().sessionCount).toBe(1);
-    dream.recordSession();
+    await dream.recordSession();
     expect(dream.getState().sessionCount).toBe(2);
+  });
+
+  it('写盘前合并磁盘时间戳，不覆盖其他实例持久化的 lastDreamTime', async () => {
+    const dataDir = path.join(tempDir, 'dream-state-data');
+    await fs.mkdir(path.join(dataDir, 'memory'), { recursive: true });
+    const prevDataDir = process.env.ICE_DATA_DIR;
+    process.env.ICE_DATA_DIR = dataDir;
+
+    vi.resetModules();
+    const { createMemoryDream: createDreamWithFreshPaths } = await import(
+      '../../../src/memory/file-memory/memory-dream.js'
+    );
+
+    const dreamTime = 1_700_000_000_000;
+    const statePath = path.join(dataDir, 'memory', 'dream-state.json');
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        sessionCount: 0,
+        lastDreamTime: dreamTime,
+        staleIndexDreamCompletedAt: 0,
+      }),
+      'utf-8',
+    );
+
+    const dream = createDreamWithFreshPaths();
+    await dream.recordSession();
+
+    const state = JSON.parse(await fs.readFile(statePath, 'utf-8')) as {
+      sessionCount: number;
+      lastDreamTime: number;
+    };
+    expect(state.lastDreamTime).toBe(dreamTime);
+    expect(state.sessionCount).toBe(1);
+
+    vi.resetModules();
+    if (prevDataDir) process.env.ICE_DATA_DIR = prevDataDir;
+    else delete process.env.ICE_DATA_DIR;
+  });
+
+  it('外部 Dream 重置 sessionCount 后 recordSession 从磁盘值递增而非累加旧内存', async () => {
+    const dataDir = path.join(tempDir, 'dream-state-session-sync');
+    await fs.mkdir(path.join(dataDir, 'memory'), { recursive: true });
+    const prevDataDir = process.env.ICE_DATA_DIR;
+    process.env.ICE_DATA_DIR = dataDir;
+
+    vi.resetModules();
+    const { createMemoryDream: createDreamWithFreshPaths } = await import(
+      '../../../src/memory/file-memory/memory-dream.js'
+    );
+
+    const statePath = path.join(dataDir, 'memory', 'dream-state.json');
+    const dream = createDreamWithFreshPaths();
+    for (let i = 0; i < 5; i++) await dream.recordSession();
+    expect(dream.getState().sessionCount).toBe(5);
+
+    const newerDreamTime = Date.now() + 60_000;
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({
+        sessionCount: 0,
+        lastDreamTime: newerDreamTime,
+        staleIndexDreamCompletedAt: 0,
+      }),
+      'utf-8',
+    );
+
+    await dream.recordSession();
+    expect(dream.getState().sessionCount).toBe(1);
+
+    const state = JSON.parse(await fs.readFile(statePath, 'utf-8')) as { sessionCount: number };
+    expect(state.sessionCount).toBe(1);
+
+    vi.resetModules();
+    if (prevDataDir) process.env.ICE_DATA_DIR = prevDataDir;
+    else delete process.env.ICE_DATA_DIR;
+  });
+});
+
+describe('dream 同进程互斥', () => {
+  it('并发 forceDream 时第二次返回 executed=false', async () => {
+    await writeMemoryFile(tempDir, 'note.md', '笔记');
+    let release!: () => void;
+    const block = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const mockLLM: LLMAdapterInterface = {
+      chat: vi.fn(async () => {
+        await block;
+        return {
+          content: JSON.stringify({
+            actions: [],
+            new_index: null,
+            file_writes: [],
+            file_deletes: [],
+            summary: 'All good.',
+          }),
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, provider: 'test' },
+          finishReason: 'stop',
+        };
+      }),
+      stream: vi.fn(),
+      countTokens: vi.fn(async () => 10),
+    };
+
+    const dream1 = createMemoryDream({ enableBackup: false });
+    const dream2 = createMemoryDream({ enableBackup: false });
+    const first = dream1.forceDream(tempDir, mockLLM);
+    await new Promise((r) => setTimeout(r, 30));
+    const second = await dream2.forceDream(tempDir, mockLLM);
+
+    expect(second.executed).toBe(false);
+    expect(second.summary).toContain('in progress');
+
+    release();
+    const firstResult = await first;
+    expect(firstResult.executed).toBe(false);
+    expect(firstResult.skipReason).toBe('empty_run');
   });
 });
 
 // ─── getState / updateConfig ───
 
 describe('getState / updateConfig', () => {
-  it('getState 返回当前状态', () => {
+  it('getState 返回当前状态', async () => {
     const dream = createMemoryDream();
-    dream.recordSession();
+    await dream.recordSession();
     const state = dream.getState();
     expect(state.sessionCount).toBe(1);
     expect(typeof state.lastDreamTime).toBe('number');
   });
 
-  it('updateConfig 更新配置', () => {
+  it('updateConfig 更新配置', async () => {
     const dream = createMemoryDream({ sessionInterval: 5 });
     dream.updateConfig({ sessionInterval: 2 });
-    dream.recordSession();
-    dream.recordSession();
+    await dream.recordSession();
+    await dream.recordSession();
     expect(dream.getState().sessionCount).toBe(2);
   });
 });
@@ -264,7 +492,8 @@ describe('Dream readMemoryContents（v5 优化）', () => {
     const dream = createMemoryDream({ enableBackup: false });
     const result = await dream.forceDream(tempDir, mockLLM);
 
-    expect(result.executed).toBe(true);
+    expect(result.executed).toBe(false);
+    expect(result.skipReason).toBe('empty_run');
     // 验证 LLM 收到了记忆文件内容
     const chatCall = (mockLLM.chat as any).mock.calls[0];
     const userMessage = chatCall[0].find((m: UnifiedMessage) => m.role === 'user');
@@ -482,8 +711,24 @@ describe('Dream 执行', () => {
     const dream = createMemoryDream({ enableBackup: false });
     const result = await dream.forceDream(tempDir, mockLLM);
 
-    expect(result.executed).toBe(true);
+    expect(result.executed).toBe(false);
     expect(result.summary).toContain('Failed to parse');
+    expect(result.skipReason).toBe('empty_run');
+  });
+
+  it('LLM 无实质变更时记为空跑（empty_run）', async () => {
+    await writeMemoryFile(tempDir, 'note.md', '笔记');
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'Memories are already well-organized.',
+    }));
+    const dream = createMemoryDream({ enableBackup: false });
+    const result = await dream.forceDream(tempDir, mockLLM);
+    expect(result.executed).toBe(false);
+    expect(result.skipReason).toBe('empty_run');
   });
 });
 
@@ -550,6 +795,23 @@ describe('备份与恢复', () => {
     const dream = createMemoryDream({ backupDir });
     const backups = await dream.listBackups();
     expect(backups).toEqual([]);
+  });
+});
+
+// ─── isDreamBatchRetryableError ───
+
+describe('isDreamBatchRetryableError', () => {
+  it('529/500 可重试，整请求超时不重试', () => {
+    const peak = new Error('OpenAI API Error [529]: 高峰繁忙');
+    (peak as any).status = 529;
+    expect(isDreamBatchRetryableError(peak)).toBe(true);
+
+    const server = new Error('OpenAI API Error [500]: unknown');
+    (server as any).status = 500;
+    expect(isDreamBatchRetryableError(server)).toBe(true);
+
+    const timeout = new Error('OpenAI API Error [undefined]: Request timed out.');
+    expect(isDreamBatchRetryableError(timeout)).toBe(false);
   });
 });
 

@@ -1,0 +1,178 @@
+/**
+ * 执行透明层 — 宠物锚定悬停弹层（原右上角卡片改为 popover）。
+ */
+
+.exec-plan-panel {
+  position: fixed;
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(52vh, 420px);
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-primary, #f2f4fa);
+  font-size: 13px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+  z-index: 125;
+  flex-direction: column;
+  overflow: hidden;
+  display: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+.exec-plan-panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-card);
+  opacity: 0.66;
+  z-index: -1;
+}
+
+.exec-plan-panel.exec-plan-panel--popover.exec-plan-panel--open {
+  display: flex;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.exec-plan-panel.exec-plan-panel--suppressed {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+.exec-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light, #363e54);
+  background: var(--bg-secondary, #242a3a);
+}
+
+.exec-plan-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  flex: 1;
+}
+
+.exec-plan-mode-banner {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: #ffd89a;
+  background: rgba(255, 180, 60, 0.12);
+  border-bottom: 1px solid var(--border-light, #363e54);
+}
+
+.exec-plan-mode-banner.hidden {
+  display: none;
+}
+
+.exec-plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.exec-plan-step {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-input, #282f42);
+  border: 1px solid transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.45;
+}
+
+.exec-plan-step.active {
+  border-color: var(--accent, #a78bfa);
+  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.18);
+}
+
+.exec-plan-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.exec-plan-step-title {
+  flex: 1;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.exec-plan-step-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.09));
+  color: var(--text-secondary);
+}
+
+.exec-plan-step.status-running .exec-plan-step-badge {
+  background: rgba(167, 139, 250, 0.18);
+  color: var(--accent, #a78bfa);
+  animation: ice-plan-pulse 1.4s ease-in-out infinite;
+}
+
+.exec-plan-step.status-done .exec-plan-step-badge {
+  background: rgba(30, 207, 180, 0.16);
+  color: #1ecfb4;
+}
+
+.exec-plan-step.status-failed .exec-plan-step-badge {
+  background: rgba(252, 90, 118, 0.16);
+  color: #fc5a76;
+}
+
+.exec-plan-step.status-skipped {
+  opacity: 0.55;
+}
+
+.exec-plan-step.status-skipped .exec-plan-step-title {
+  text-decoration: line-through;
+}
+
+.exec-plan-step-tools,
+.exec-plan-step-evidence {
+  font-size: 11.5px;
+  color: var(--text-secondary, #b9c0d4);
+  word-break: break-all;
+}
+.exec-plan-step-evidence {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.exec-plan-step-error {
+  font-size: 11.5px;
+  color: #fc5a76;
+  word-break: break-all;
+}
+
+@keyframes ice-plan-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}

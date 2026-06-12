@@ -25,7 +25,8 @@ export type TelemetryEventType =
   | 'memory_dream'
   | 'memory_cap_evict'
   | 'memory_store'
-  | 'memory_stats';
+  | 'memory_stats'
+  | 'memory_index_rebuild';
 
 /**
  * 召回遥测数据。
@@ -48,7 +49,7 @@ export interface RecallTelemetry {
   /** 会话内去重过滤掉的记忆数 */
   dedupCount?: number;
   /** 召回阶段：首轮粗召回 vs 工具后标准召回 */
-  recallPhase?: 'coarse_pre_llm' | 'standard';
+  recallPhase?: 'coarse_pre_llm' | 'casual_light' | 'standard';
 }
 
 /**
@@ -61,6 +62,8 @@ export interface SessionMemoryTelemetry {
   rejectReason?: string;
   evidenceAnchored: boolean;
   contradictionWarning: boolean;
+  /** 是否在校验失败后执行了第二轮生成 */
+  retried?: boolean;
 }
 
 /**
@@ -110,7 +113,11 @@ export interface DreamTelemetry {
     | 'session_and_files'
     | 'new_files'
     | 'stale_index'
-    | 'over_cap';
+    | 'index_drift'
+    | 'over_cap'
+    | 'manual';
+  /** skipReason — 未执行 Dream 时记录跳过原因 */
+  skipReason?: string;
 }
 
 /** 仅条数淘汰（无 Dream LLM） */
@@ -121,6 +128,15 @@ export interface MemoryCapEvictTelemetry {
   fileCountBefore: number;
   filesEvicted: number;
   durationMs: number;
+}
+
+/** MEMORY.md 索引重建遥测 */
+export interface IndexRebuildTelemetry {
+  type: 'memory_index_rebuild';
+  timestamp: string;
+  memoryDir: string;
+  entryCount: number;
+  trigger: 'bootstrap' | 'drift' | 'dream' | 'manual';
 }
 
 /**
@@ -150,7 +166,8 @@ export type TelemetryEvent =
   | DreamTelemetry
   | MemoryCapEvictTelemetry
   | StatsTelemetry
-  | SessionMemoryTelemetry;
+  | SessionMemoryTelemetry
+  | IndexRebuildTelemetry;
 
 /**
  * 遥测配置。
@@ -276,6 +293,18 @@ export class MemoryTelemetry extends EventEmitter {
   }
 
   /**
+   * 记录 MEMORY.md 索引重建。
+   */
+  async logIndexRebuild(data: Omit<IndexRebuildTelemetry, 'type' | 'timestamp'>): Promise<void> {
+    const event: IndexRebuildTelemetry = {
+      type: 'memory_index_rebuild',
+      timestamp: new Date().toISOString(),
+      ...data,
+    };
+    await this.writeEvent(event);
+  }
+
+  /**
    * 记录记忆库统计。
    */
   async logStats(data: Omit<StatsTelemetry, 'type' | 'timestamp'>): Promise<void> {
@@ -374,6 +403,8 @@ export class MemoryTelemetry extends EventEmitter {
         return `stats: ${event.totalFiles} files, avg age ${event.avgAgeDays}d, index ${event.indexLineCount} lines`;
       case 'session_memory':
         return `session_memory: wrote=${event.wrote}, anchored=${event.evidenceAnchored}, warn=${event.contradictionWarning}${event.rejectReason ? ` (${event.rejectReason})` : ''}`;
+      case 'memory_index_rebuild':
+        return `index_rebuild: ${event.entryCount} entries [${event.trigger}] @ ${event.memoryDir}`;
     }
   }
 

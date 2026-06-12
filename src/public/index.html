@@ -7,7 +7,10 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>iceCoder</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="/favicon.ico">
   <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/chat-execution-plan.css">
 </head>
 <body>
   <div id="app">
@@ -17,10 +20,14 @@
         <span class="logo-text">IceCoder</span>
       </div>
       <div class="nav-links">
-        <button class="nav-link" data-page="chat" id="nav-chat">聊天</button>
+        <button class="nav-link" data-page="chat" id="nav-chat">工作</button>
+        <button class="nav-link" data-page="memory" id="nav-memory">记忆</button>
         <button class="nav-link" data-page="config" id="nav-config">配置</button>
       </div>
       <div class="nav-right">
+        <button class="supervisor-mode-toggle" id="supervisor-mode-toggle" type="button" title="监管模式（点击切换）">
+          <span class="supervisor-mode-label" id="supervisor-mode-label">自适应</span>
+        </button>
         <button class="theme-toggle" id="theme-toggle" title="切换主题">
           <span class="theme-icon" id="theme-icon">Light</span>
         </button>

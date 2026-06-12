@@ -87,8 +87,11 @@ function makeHeader(overrides: Partial<MemoryHeader> & { filename: string }): Me
   return {
     filePath: `/tmp/${overrides.filename}`,
     mtimeMs: Date.now(),
+    name: null,
     description: null,
     type: undefined,
+    level: 'observation',
+    evidenceStrength: 'inferred',
     confidence: 0.5,
     recallCount: 0,
     lastRecalledMs: 0,

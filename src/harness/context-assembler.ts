@@ -9,11 +9,19 @@
  * Prompt Caching 优化原则：
  * - system prompt 内容跨轮次完全一致 → DeepSeek/OpenAI 自动前缀缓存命中
  * - 动态内容（记忆、日期等）放在 system prompt 之后的独立消息中
- * - 已发送的消息内容不做就地修改（由 harness 在发送副本上裁剪）
+ * - 已发送的消息正文不在主历史就地修改（封存裁剪经 buildMessagesForLlm 发送管道）
  */
 
 import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { ContextAssemblyConfig } from './types.js';
+import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
+
+/** JSON 兼容的排序键遍历，便于 DeepSeek/OpenAI 前缀缓存稳定命中 */
+function sortedStringRecordEntries(record: Record<string, string>): [string, string][] {
+  return Object.keys(record)
+    .sort((a, b) => a.localeCompare(b))
+    .map((k) => [k, record[k]!]);
+}
 
 /**
  * ContextAssembler 将各种上下文源组装成发送给 LLM 的消息序列。
@@ -62,7 +70,9 @@ export class ContextAssembler {
 
     // 环境信息
     if (this.config.environment && Object.keys(this.config.environment).length > 0) {
-      const envLines = Object.entries(this.config.environment)
+      const envLines = sortedStringRecordEntries(
+        this.config.environment as Record<string, string>,
+      )
         .map(([k, v]) => `- ${k}: ${v}`)
         .join('\n');
       parts.push(`# 环境信息\n${envLines}`);
@@ -85,24 +95,27 @@ export class ContextAssembler {
 
     // 用户偏好
     if (this.config.userPreferences && Object.keys(this.config.userPreferences).length > 0) {
-      const prefLines = Object.entries(this.config.userPreferences)
-        .map(([k, v]) => `- ${k}: ${JSON.stringify(v)}`)
+      const prefLines = Object.keys(this.config.userPreferences)
+        .sort((a, b) => a.localeCompare(b))
+        .map((k) => `- ${k}: ${JSON.stringify(this.config.userPreferences![k])}`)
         .join('\n');
       parts.push(`# 用户偏好\n${prefLines}`);
     }
 
     // 系统上下文（Git 状态等实时信息）
     if (this.config.systemContext && Object.keys(this.config.systemContext).length > 0) {
-      const ctxLines = Object.entries(this.config.systemContext)
-        .map(([k, v]) => `${k}: ${v}`)
+      const ctxLines = Object.keys(this.config.systemContext)
+        .sort((a, b) => a.localeCompare(b))
+        .map((k) => `${k}: ${this.config.systemContext![k]}`)
         .join('\n');
       parts.push(ctxLines);
     }
 
     // 自定义用户上下文（XXX.md等）
     if (this.config.userContext && Object.keys(this.config.userContext).length > 0) {
-      for (const [key, value] of Object.entries(this.config.userContext)) {
-        parts.push(`# ${key}\n${value}`);
+      const keys = Object.keys(this.config.userContext).sort((a, b) => a.localeCompare(b));
+      for (const key of keys) {
+        parts.push(`# ${key}\n${this.config.userContext[key]}`);
       }
     }
 
@@ -230,6 +243,14 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
       if (dedupedCalls.length !== msg.toolCalls.length) {
         msg = { ...msg, toolCalls: dedupedCalls };
       }
+      if (msg.role === 'assistant') {
+        const cleaned = prepareAssistantContentForHistory(
+          typeof msg.content === 'string' ? msg.content : '',
+        );
+        if (cleaned !== msg.content) {
+          msg = { ...msg, content: cleaned };
+        }
+      }
     }
 
     // 合并连续 user 消息
@@ -250,8 +271,73 @@ export function normalizeMessages(messages: UnifiedMessage[]): UnifiedMessage[] 
     result.push(msg);
   }
 
-  // 第二遍：兜底校验 — 确保每个 assistant(tool_calls) 后面都有对应的 tool 消息
-  return ensureToolCallPairing(result);
+  // 第二遍：收拢 tool 结果到 assistant 后，再兜底配对（避免 resume 块等 user 插在中间 → 各厂商 400/2013）
+  return finalizeMessagesForApi(result);
+}
+
+/** 剥离 assistant 上的 reasoningContent（旧 checkpoint / 结构化会话兼容；思考链仅当轮流式 UI）。 */
+export function stripReasoningContentFromMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
+  return messages.map((m) => {
+    if (m.role === 'assistant' && m.reasoningContent !== undefined) {
+      const { reasoningContent: _omit, ...rest } = m;
+      return rest;
+    }
+    return m;
+  });
+}
+
+/** 发送 API / 压缩 / 会话恢复前统一整理 tool 消息顺序与配对。 */
+export function finalizeMessagesForApi(messages: UnifiedMessage[]): UnifiedMessage[] {
+  return ensureToolCallPairing(
+    coalesceToolResultsAfterAssistants(stripReasoningContentFromMessages(messages)),
+  );
+}
+
+/**
+ * 将属于同一轮 assistant(tool_calls) 的 tool 消息紧挨 assistant 之后。
+ * checkpoint fork / 注入 resume 后可能出现 assistant → user → tool，需重排以满足 API 顺序。
+ */
+export function coalesceToolResultsAfterAssistants(messages: UnifiedMessage[]): UnifiedMessage[] {
+  const out: UnifiedMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
+    if (msg.role !== 'assistant' || !msg.toolCalls?.length) {
+      out.push(msg);
+      continue;
+    }
+
+    const idOrder = msg.toolCalls.map(tc => tc.id);
+    const idSet = new Set(idOrder);
+    out.push(msg);
+
+    const toolsById = new Map<string, UnifiedMessage>();
+    const middle: UnifiedMessage[] = [];
+    let j = i + 1;
+
+    for (; j < messages.length; j++) {
+      const m = messages[j]!;
+      if (m.role === 'tool' && m.toolCallId && idSet.has(m.toolCallId)) {
+        if (!toolsById.has(m.toolCallId)) {
+          toolsById.set(m.toolCallId, m);
+        }
+        continue;
+      }
+      if (m.role === 'assistant' && m.toolCalls?.length) {
+        break;
+      }
+      middle.push(m);
+    }
+
+    for (const id of idOrder) {
+      const t = toolsById.get(id);
+      if (t) out.push(t);
+    }
+    out.push(...middle);
+    i = j - 1;
+  }
+
+  return out;
 }
 
 /**

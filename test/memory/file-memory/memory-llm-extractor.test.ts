@@ -10,11 +10,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { createLLMMemoryExtractor, LLMMemoryExtractor } from '../../../src/memory/file-memory/memory-llm-extractor.js';
+import { createLLMMemoryExtractor, LLMMemoryExtractor, shouldRejectExtractedMemory } from '../../../src/memory/file-memory/memory-llm-extractor.js';
 import type { LLMAdapterInterface, LLMResponse, UnifiedMessage } from '../../../src/llm/types.js';
 
 let tempDir: string;
 let userMemoryTempDir: string;
+
+/** 满足 MIN_EXTRACTION_CONFIDENCE (0.6) 的测试用置信度 */
+const TEST_CONFIDENCE = 0.75;
 
 function createMockLLM(response: string, cacheReadTokens = 0): LLMAdapterInterface {
   return {
@@ -57,11 +60,13 @@ describe('LLMMemoryExtractor', () => {
     it('成功提取并保存记忆文件', async () => {
       const llmResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'user_role.md',
           type: 'user',
           name: '用户角色',
           description: '用户是前端开发者',
           content: '用户是一名前端开发者，偏好 React。',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -82,6 +87,7 @@ describe('LLMMemoryExtractor', () => {
       const content = await fs.readFile(result.writtenPaths[0], 'utf-8');
       expect(content).toContain('用户角色');
       expect(content).toContain('user');
+      expect(content).toContain('memoryCategory: stable_preference');
       expect(content).toContain('前端开发者');
     });
 
@@ -121,7 +127,7 @@ describe('LLMMemoryExtractor', () => {
   describe('extract — 响应解析', () => {
     it('过滤无效的记忆类型', async () => {
       const llmResponse = JSON.stringify([
-        { filename: 'valid.md', type: 'user', name: 'v', description: 'd', content: 'c' },
+        { memoryCategory: 'stable_preference', filename: 'valid.md', type: 'user', name: 'v', description: 'd', content: 'c', confidence: TEST_CONFIDENCE },
         { filename: 'invalid.md', type: 'unknown_type', name: 'i', description: 'd', content: 'c' },
       ]);
 
@@ -158,11 +164,13 @@ describe('LLMMemoryExtractor', () => {
 
     it('限制最大提取数量', async () => {
       const memories = Array.from({ length: 10 }, (_, i) => ({
+        memoryCategory: 'stable_preference',
         filename: `mem_${i}.md`,
         type: 'user',
         name: `记忆${i}`,
         description: `描述${i}`,
         content: `内容${i}`,
+        confidence: TEST_CONFIDENCE,
       }));
 
       const mockLLM = createMockLLM(JSON.stringify(memories));
@@ -178,7 +186,7 @@ describe('LLMMemoryExtractor', () => {
     });
 
     it('解析 markdown 代码块包裹的 JSON', async () => {
-      const llmResponse = '```json\n[{"filename":"note.md","type":"feedback","name":"n","description":"d","content":"c"}]\n```';
+      const llmResponse = '```json\n[{"memoryCategory":"stable_preference","filename":"note.md","type":"feedback","name":"n","description":"d","content":"c","confidence":0.75}]\n```';
 
       const mockLLM = createMockLLM(llmResponse);
       const extractor = createLLMMemoryExtractor();
@@ -191,17 +199,205 @@ describe('LLMMemoryExtractor', () => {
 
       expect(result.writtenPaths.length).toBe(1);
     });
+
+    it('缺少 memoryCategory 时不写入', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          filename: 'orphan.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it('非法 memoryCategory 时不写入', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'meta_dialogue',
+          filename: 'bad.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it('拦截含 model_identity 等垃圾文件名的条目', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'user_model_identity_foo.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it('type=project 时必须 memoryCategory=project_convention', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'incoherent.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it('memoryCategory=project_convention 时 type 须为 project', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'project_convention',
+          filename: 'incoherent2.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it('空或仅空白的 description 不写入', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'nodesc.md',
+          type: 'user',
+          name: 'n',
+          description: '  ',
+          content: 'c',
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it('confidence 缺失或低于 0.6 时不写入', async () => {
+      const llmResponse = JSON.stringify([
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'missing.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: 'c',
+        },
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'low.md',
+          type: 'user',
+          name: 'n2',
+          description: 'd2',
+          content: 'c2',
+          confidence: 0.55,
+        },
+        {
+          memoryCategory: 'stable_preference',
+          filename: 'ok.md',
+          type: 'user',
+          name: 'n3',
+          description: 'd3',
+          content: 'c3',
+          confidence: TEST_CONFIDENCE,
+        },
+      ]);
+
+      const mockLLM = createMockLLM(llmResponse);
+      const extractor = createLLMMemoryExtractor();
+
+      const result = await extractor.extract(
+        [{ role: 'user', content: '测试' }],
+        tempDir,
+        mockLLM,
+      );
+
+      expect(result.writtenPaths.length).toBe(1);
+      expect(path.basename(result.writtenPaths[0])).toBe('ok.md');
+    });
   });
 
   describe('extract — 文件名安全', () => {
     it('清洗特殊字符', async () => {
       const llmResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'file<>:"/\\|?*.md',
           type: 'user',
           name: 'test',
           description: 'test',
           content: 'test',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -224,11 +420,13 @@ describe('LLMMemoryExtractor', () => {
     it('拒绝路径遍历攻击', async () => {
       const llmResponse = JSON.stringify([
         {
+          memoryCategory: 'project_convention',
           filename: '../../../etc/passwd',
           type: 'project',
           name: 'hack',
           description: 'hack',
           content: 'hack',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -241,7 +439,7 @@ describe('LLMMemoryExtractor', () => {
         mockLLM,
       );
 
-      // 路径遍历应该被阻止（文件名中的 .. 被清洗为 __）
+      // 路径遍历应该被阻止
       // 不应该写到 tempDir 之外
       for (const p of result.writtenPaths) {
         expect(p.startsWith(tempDir)).toBe(true);
@@ -372,11 +570,13 @@ type: user
       extractor.updateConfig({ maxMemories: 1 });
 
       const memories = Array.from({ length: 5 }, (_, i) => ({
+        memoryCategory: 'stable_preference',
         filename: `mem_${i}.md`,
         type: 'user',
         name: `n${i}`,
         description: `d${i}`,
         content: `c${i}`,
+        confidence: TEST_CONFIDENCE,
       }));
 
       const mockLLM = createMockLLM(JSON.stringify(memories));
@@ -395,11 +595,13 @@ type: user
     it('包含 API Key 的记忆内容被自动脱敏', async () => {
       const llmResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'api_ref.md',
           type: 'reference',
           name: 'API 配置',
           description: 'API 密钥信息',
           content: '用户的 AWS Key 是 AKIAIOSFODNN7EXAMPLE，用于访问 S3。',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -424,11 +626,13 @@ type: user
       const fakePat = 'ghp_' + 'a'.repeat(36);
       const llmResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'github_ref.md',
           type: 'reference',
           name: 'GitHub',
           description: 'GitHub 访问信息',
           content: `GitHub token: ${fakePat}`,
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -449,11 +653,13 @@ type: user
     it('无秘密的记忆内容原样写入', async () => {
       const llmResponse = JSON.stringify([
         {
+          memoryCategory: 'stable_preference',
           filename: 'safe.md',
           type: 'user',
           name: '安全内容',
           description: '无敏感信息',
           content: '用户偏好使用 TypeScript 和 React。',
+          confidence: TEST_CONFIDENCE,
         },
       ]);
 
@@ -468,7 +674,94 @@ type: user
 
       const content = await fs.readFile(result.writtenPaths[0], 'utf-8');
       expect(content).toContain('TypeScript 和 React');
+      expect(content).toContain('memoryCategory: stable_preference');
       expect(content).not.toContain('[REDACTED]');
+    });
+  });
+
+  describe('shouldRejectExtractedMemory — 写盘拒绝', () => {
+    it('拒绝 current-state 类文件名', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'project_current-state.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: 'overview',
+          confidence: 0.8,
+        }),
+      ).toBe('filename_pattern');
+    });
+
+    it('拒绝安装进度快照', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'mysql_install.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '安装到第 3/5 步，正在下载 45%',
+          confidence: 0.8,
+        }),
+      ).toBe('install_progress_snapshot');
+    });
+
+    it('拒绝纯命令列表型 project', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'cmds.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '- npm install mysql\n- docker pull mysql\n- npm run dev',
+          confidence: 0.8,
+        }),
+      ).toBe('command_list_project');
+    });
+
+    it('拒绝低置信推断 user 偏好', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'stable_preference',
+          filename: 'user_guess.md',
+          type: 'user',
+          name: 'n',
+          description: 'd',
+          content: '可能喜欢 React',
+          confidence: 0.7,
+        }),
+      ).toBe('inferred_preference_low_confidence');
+    });
+
+    it('拒绝含日期的进度快照文件名', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'project_current-state_2026-06-10.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '安装进度',
+          confidence: 0.8,
+        }),
+      ).toBe('filename_pattern');
+    });
+
+    it('允许普通带日期的 changelog 文件名', () => {
+      expect(
+        shouldRejectExtractedMemory({
+          memoryCategory: 'project_convention',
+          filename: 'release_notes_2026-06-10.md',
+          type: 'project',
+          name: 'n',
+          description: 'd',
+          content: '版本发布说明',
+          confidence: 0.8,
+        }),
+      ).toBeNull();
     });
   });
 });

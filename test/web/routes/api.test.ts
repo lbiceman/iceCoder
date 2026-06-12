@@ -11,6 +11,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
+const staticDir = path.join(process.cwd(), 'src/public');
+
 // Helper to get a random port from a running server
 function getPort(server: Server): number {
   const addr = server.address();
@@ -99,7 +101,7 @@ describe('Config API Routes', () => {
     });
 
     const app = await createServer({
-      staticDir: path.join(__dirname, '../../public'),
+      staticDir,
       routes: [{ path: '/api/config', router }],
     });
     server = await startServer(app, 0);
@@ -111,7 +113,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: 'https://api.openai.com/v1',
         apiKey: 'sk-test1234567890abcdef',
         modelName: 'gpt-4',
@@ -141,7 +142,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: '',
         apiKey: 'sk-test1234567890abcdef',
         modelName: 'gpt-4',
@@ -165,7 +165,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: 'https://api.openai.com/v1',
         apiKey: '',
         modelName: 'gpt-4',
@@ -192,7 +191,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test-provider',
-        providerName: 'openai',
         apiUrl: 'https://api.openai.com/v1',
         apiKey,
         modelName: 'gpt-4',
@@ -236,7 +234,6 @@ describe('Config API Routes', () => {
     const providers = [
       {
         id: 'test',
-        providerName: 'openai',
         apiUrl: 'https://api.example.com',
         apiKey,
         modelName: 'gpt-4',
@@ -272,7 +269,7 @@ describe('Chat upload API routes', () => {
 
   async function createUploadTestServer(): Promise<number> {
     const app = await createServer({
-      staticDir: path.join(__dirname, '../../public'),
+      staticDir,
       routes: [{ path: '/api/chat', router: createUploadRouter() }],
     });
     server = await startServer(app, 0);

@@ -441,10 +441,22 @@ async function scenario4_agingAndDream() {
 
   for (const test of decayTests) {
     const header = {
-      filename: 'test.md', filePath: '', mtimeMs: test.mtimeMs,
-      description: '', type: 'user' as const, confidence: test.confidence,
-      recallCount: test.recallCount, lastRecalledMs: test.lastRecalledMs,
-      createdMs: test.mtimeMs, tags: [], source: undefined,
+      filename: 'test.md',
+      filePath: '',
+      mtimeMs: test.mtimeMs,
+      name: null,
+      description: null,
+      type: 'user' as const,
+      level: 'observation' as const,
+      evidenceStrength: 'weak' as const,
+      confidence: test.confidence,
+      recallCount: test.recallCount,
+      lastRecalledMs: test.lastRecalledMs,
+      createdMs: test.mtimeMs,
+      tags: [] as string[],
+      source: undefined,
+      contentPreview: '',
+      eventDateMs: 0,
     };
     const status = getMemoryDecayStatus(header);
     if (status === test.expected) {

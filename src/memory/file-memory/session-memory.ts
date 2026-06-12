@@ -135,6 +135,8 @@ export interface SessionRuntimeEvidenceInput {
     commandsRun: string[];
     verificationRequired: boolean;
     verificationStatus: string;
+    fileDeliverableWriteVersions?: Record<string, number>;
+    fileDeliverableConfirmVersions?: Record<string, number>;
   };
   repo: {
     filesRead: string[];
@@ -162,6 +164,15 @@ const VERIFICATION_STATUSES = new Set<string>([
   'not_required', 'required', 'passed', 'failed',
 ]);
 
+function parseOptionalVersionRecord(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) out[key] = raw;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function capPaths(paths: string[]): string[] {
   return paths.slice(0, MAX_PERSIST_PATHS);
 }
@@ -186,7 +197,7 @@ function capRepoSnapshot(r: RepoContextSnapshot): RepoContextSnapshot {
 }
 
 function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskStateSnapshot {
-  return {
+  const snap: TaskStateSnapshot = {
     goal: input.goal,
     intent: input.intent as TaskIntent,
     phase: input.phase as TaskPhase,
@@ -196,6 +207,13 @@ function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskSt
     verificationRequired: input.verificationRequired,
     verificationStatus: input.verificationStatus as VerificationStatus,
   };
+  if (input.fileDeliverableWriteVersions) {
+    snap.fileDeliverableWriteVersions = { ...input.fileDeliverableWriteVersions };
+  }
+  if (input.fileDeliverableConfirmVersions) {
+    snap.fileDeliverableConfirmVersions = { ...input.fileDeliverableConfirmVersions };
+  }
+  return snap;
 }
 
 function inputToRepoSnapshot(input: SessionRuntimeEvidenceInput['repo']): RepoContextSnapshot {
@@ -267,6 +285,9 @@ export function parsePersistedRuntime(notes: string): {
   }
   if (!Array.isArray(rr.testCommands) || !Array.isArray(rr.recentDiagnostics)) return null;
 
+  const writeVersions = parseOptionalVersionRecord(tt.fileDeliverableWriteVersions);
+  const confirmVersions = parseOptionalVersionRecord(tt.fileDeliverableConfirmVersions);
+
   const outTask: TaskStateSnapshot = {
     goal: tt.goal,
     intent: tt.intent as TaskIntent,
@@ -276,6 +297,8 @@ export function parsePersistedRuntime(notes: string): {
     commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
     verificationRequired: tt.verificationRequired,
     verificationStatus: tt.verificationStatus as VerificationStatus,
+    ...(writeVersions ? { fileDeliverableWriteVersions: writeVersions } : {}),
+    ...(confirmVersions ? { fileDeliverableConfirmVersions: confirmVersions } : {}),
   };
   const outRepo: RepoContextSnapshot = {
     filesRead: rr.filesRead.filter((x): x is string => typeof x === 'string'),
@@ -303,15 +326,32 @@ export interface SessionMemoryState {
 }
 
 /**
- * 创建会话记忆状态（闭包隔离，每个会话独立）。
+ * 计算指定会话的 session-notes 路径。
+ *
+ * 多会话模式下每个会话独立存放（断点恢复需按会话隔离 runtime/plan fence）。
+ * 旧路径 `data/sessions/session-notes.md`（全局共享）由迁移逻辑迁到
+ * `data/sessions/default.session-notes.md`。
  */
-export function initSessionMemoryState(sessionDir: string): SessionMemoryState {
+export function sessionNotesPath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.session-notes.md`);
+}
+
+/**
+ * 创建会话记忆状态（闭包隔离，每个会话独立）。
+ *
+ * @param sessionDir 会话数据目录（默认 `data/sessions`）
+ * @param sessionId 会话 id（多会话隔离；未提供时回退 `default`，兼容老调用方）
+ */
+export function initSessionMemoryState(
+  sessionDir: string,
+  sessionId: string = 'default',
+): SessionMemoryState {
   return {
     initialized: false,
     tokensAtLastExtraction: 0,
     lastProcessedIndex: 0,
     extractionInProgress: false,
-    notesPath: path.join(sessionDir, 'session-notes.md'),
+    notesPath: sessionNotesPath(sessionDir, sessionId),
   };
 }
 
@@ -788,4 +828,27 @@ function stripRuntimeEvidenceSection(notes: string): string {
     }
   }
   return [...lines.slice(0, startIdx), ...lines.slice(endIdx)].join('\n');
+}
+
+// ═══════════════════════════════════════════════
+// TaskGraph Fence Helpers (Phase 6)
+// ═══════════════════════════════════════════════
+
+export const ICECODER_GRAPH_FENCE_LANG = 'icecoder-graph';
+export const ICECODER_METRICS_FENCE_LANG = 'icecoder-metrics';
+export const ICECODER_DEBUG_FENCE_LANG = 'icecoder-debug';
+
+/** 将 TaskGraph 快照写入 session notes（追加 fence block） */
+export function writeGraphFence(notes: string, fence: string): string {
+  return notes.trimEnd() + '\n\n' + fence + '\n';
+}
+
+/** 将 GraphMetrics 写入 session notes */
+export function writeMetricsFence(notes: string, fence: string): string {
+  return notes.trimEnd() + '\n\n' + fence + '\n';
+}
+
+/** 将 GraphDebugDump 写入 session notes */
+export function writeDebugFence(notes: string, fence: string): string {
+  return notes.trimEnd() + '\n\n' + fence + '\n';
 }

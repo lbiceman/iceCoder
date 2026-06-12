@@ -7,6 +7,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { RegisteredTool } from '../types.js';
+import { formatToolOutputWithDiff } from '../file-change-diff.js';
+import { checkReadBeforeEdit } from '../read-before-edit.js';
+import {
+  assertAgentMemoryWriteAllowed,
+  canonicalizeMemoryToolPath,
+  resolveMemoryRootForPath,
+} from '../../memory/file-memory/memory-write-pipeline.js';
 
 function safePath(filePath: string, baseDir: string): string {
   return path.resolve(baseDir, filePath);
@@ -129,13 +136,13 @@ function findMatch(fileLines: string[], searchLines: string[], startPos: number)
 /**
  * 创建 Patch 应用工具。
  */
-export function createPatchTool(workDir: string): RegisteredTool {
+export function createPatchTool(workDir: string, sessionId = 'default'): RegisteredTool {
   return {
     definition: {
       name: 'patch_file',
       // 应用 diff 补丁。大段修改用。小改动用 edit_file。
       description:
-        'Apply unified diff patch to file. For large code changes. Use edit_file for small changes. Supports fuzzy matching (auto-searches context when line numbers shift).',
+        'Apply unified diff patch to file. Preferred for large or multi-line edits and when max_tokens may truncate write_file. Use one or few small hunks. Use edit_file for tiny single replacements. Supports fuzzy line matching when context shifts.',
       parameters: {
         type: 'object',
         properties: {
@@ -154,7 +161,15 @@ export function createPatchTool(workDir: string): RegisteredTool {
       },
     },
     handler: async (args) => {
-      const filePath = safePath(args.path, workDir);
+      const rawPath = args.path as string;
+      const resolvedMemoryPath = canonicalizeMemoryToolPath(rawPath, workDir);
+      if (resolveMemoryRootForPath(resolvedMemoryPath)) {
+        const guardErr = await assertAgentMemoryWriteAllowed(resolvedMemoryPath);
+        if (guardErr) return { success: false, output: '', error: guardErr };
+      }
+      const readErr = checkReadBeforeEdit(workDir, rawPath, sessionId);
+      if (readErr) return { success: false, output: '', error: readErr };
+      const filePath = safePath(rawPath, workDir);
       const patch = args.patch as string;
       const dryRun = args.dryRun || false;
 
@@ -184,13 +199,13 @@ export function createPatchTool(workDir: string): RegisteredTool {
         }
 
         const status = dryRun ? '[预览模式] ' : '';
-        let output = `${status}补丁已应用到 ${args.path}\n`;
-        output += `  成功: ${applied}/${hunks.length} 个 hunk`;
+        let summary = `${status}补丁已应用到 ${args.path}\n`;
+        summary += `  成功: ${applied}/${hunks.length} 个 hunk`;
         if (failed > 0) {
-          output += `\n  失败: ${failed} 个 hunk（上下文不匹配）`;
+          summary += `\n  失败: ${failed} 个 hunk（上下文不匹配）`;
         }
 
-        return { success: true, output };
+        return { success: true, output: formatToolOutputWithDiff(summary, patch) };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { success: false, output: '', error: `补丁应用失败: ${message}` };

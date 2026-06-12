@@ -124,9 +124,21 @@ export function createDefaultValidationRules(): ValidationRule[] {
       return { valid: true };
     },
 
-    // 空命令检测
+    // 空命令检测（后台管理 action 不需要 command）
     (toolName, args) => {
-      if (toolName === 'run_command' && (!args.command || args.command.trim() === '')) {
+      if (toolName !== 'run_command') return { valid: true };
+
+      const action = typeof args.action === 'string' ? args.action.trim() : '';
+      if (action === 'check' || action === 'list' || action === 'stop') {
+        return { valid: true };
+      }
+
+      const command = typeof args.command === 'string'
+        ? args.command
+        : typeof args.cmd === 'string'
+          ? args.cmd
+          : '';
+      if (!command.trim()) {
         return {
           valid: false,
           message: '命令不能为空',

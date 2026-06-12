@@ -105,7 +105,7 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
           const lines = drives.map(d => `💾 ${d}`);
           return {
             success: true,
-            output: `[当前路径] /\n电脑磁盘驱动器:\n${lines.join('\n')}\n\n用户说 "打开 X:" 时，直接调用 browse_directory({ path: "X:\\\\" }) 即可。`,
+            output: `[当前路径] /\n电脑磁盘驱动器:\n${lines.join('\n')}\n\n用户说「进入」或「打开」某盘时，请使用 browse_directory({ path: "X:\\\\" })（务必含反斜杠根路径）；服务端也会在 Windows 上自动解析常见口令。`,
           };
         } else {
           // macOS / Linux

@@ -1,18 +1,18 @@
 /**
- * 上下文压缩器 — 参考 claude-code 的分层策略。
+ * 上下文压缩器
  *
- * 压缩触发阈值为动态计算：contextWindow × compactionRatio。
- * - contextWindow：ICE_CONTEXT_WINDOW 环境变量 > 默认 provider maxContextTokens > 最大 provider maxContextTokens > 默认 128K
- * - compactionRatio：通过 ICE_COMPACTION_RATIO 环境变量配置（默认 0.88，即 88%）
- * - 1M 窗口 → 阈值 880K，128K 窗口 → 阈值 112K
+ * 压缩触发（写死常量，见 compaction-constants.ts）：
+ * - 硬压缩：effectiveUsed ≥ contextWindow × 0.85，或剩余 < 18K
+ * - 微压缩：effectiveUsed ≥ contextWindow × 0.72（且未达硬压缩线）
+ * - effectiveUsed = max(本地 messages + tools schema 估算, 上一轮 API prompt_tokens)
  *
  * 两条压缩路径：
  * - 会话记忆路径（compactWithSessionMemory）：0 LLM 成本，会话记忆作为摘要
  * - LLM 路径（compact）：五层递进，可选 LLM 精炼
  *
  * 五层压缩：
- * 1. snip — 裁剪冗余段落（重复的 system-reminder、context-summary）
- * 2. microcompact — 压缩旧工具调用细节（文件操作结果保留完整）
+ * 1. snip — 裁剪冗余段落（重复的 system-reminder、context-summary、compact_boundary、recent-dialogue-focus）
+ * 2. microcompact — 压缩旧工具调用细节（硬压缩路径）；微压缩（doLightCompact）侧清空白名单工具的过时正文，不删短 user
  * 3. toolResultTrim — 裁剪超长工具结果（文件操作上限 15K 字符）
  * 4. structuralExtract — 从被删消息提取结构化摘要（不调 LLM）
  * 5. llmSummarize — 用 LLM 精炼摘要（可选，会话记忆路径跳过）
@@ -24,13 +24,57 @@
  * 最近消息保留使用 token 预算（≥10K token, ≥5 条消息, ≤40K token）。
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import type { UnifiedMessage } from '../llm/types.js';
-import { estimateMessagesTokens } from '../llm/token-estimator.js';
-import type { IceCoderConfigFile } from '../web/types.js';
+import type { ToolDefinition, UnifiedMessage } from '../llm/types.js';
+import { finalizeMessagesForApi } from './context-assembler.js';
+import { prepareAssistantContentForHistory } from './text-format-tool-call-parsers.js';
+import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import type { CompactBoundaryMeta } from './compaction-strategy.js';
+import {
+  applyLightMicrocompactToolClear,
+  buildCompactBoundaryContent,
+  buildRecentDialogueFocusContent,
+  FILE_TOOLS_PRESERVE_FULL_OUTPUT,
+  isSyntheticUserBlockContent,
+  shouldPreserveMessageOnCompaction,
+  truncateSessionNotesForCompact,
+} from './compaction-strategy.js';
+import {
+  findCheckpointAnchorIndex,
+  isResumeCheckpointContent,
+  stripResumeCheckpointMessages,
+} from './checkpoint-resume-compact.js';
+import { readCompactionContextWindowTokens, readEffectiveContextWindowTokens } from './context-window-tier.js';
+import {
+  COMPACTION_RESERVE_TOKENS,
+  HARD_COMPACTION_RATIO,
+  MICRO_COMPACTION_RATIO,
+  MICRO_MAX_PER_ROUND,
+  MICRO_MAX_PER_SESSION,
+} from './compaction-constants.js';
+
+/** 去掉 recent 前缀中无前置 assistant(tool_calls) 的孤立 tool 消息（fork 切片可能留下）。 */
+function trimLeadingOrphanToolMessages(recent: UnifiedMessage[]): UnifiedMessage[] {
+  let start = 0;
+  while (start < recent.length && recent[start]?.role === 'tool') {
+    start++;
+  }
+  return start > 0 ? recent.slice(start) : recent;
+}
+
+/** 压缩判定时可选的双轨占用输入 */
+export interface CompactionUsageOptions {
+  lastApiPromptTokens?: number;
+  tools?: ToolDefinition[];
+}
+
+/** {@link compact} / {@link compactWithSessionMemory} 运行时选项 */
+export interface CompactRunOptions {
+  usageOptions?: CompactionUsageOptions;
+  /** 双轨/API 已判定需硬压缩：跳过层间本地-only 早退，split 无丢弃时强制摘要 */
+  forceFullCompact?: boolean;
+}
 
 /**
  * 压缩配置。
@@ -42,9 +86,9 @@ export interface CompactionConfig {
   tokenThreshold?: number;
   /** 压缩后保留的最近消息数上限 */
   keepRecent: number;
-  /** 保留最近消息的最小 token 数（参考 claude-code: 10000） */
+  /** 保留最近消息的最小 token 数 */
   keepRecentMinTokens: number;
-  /** 保留最近消息的最大 token 数（参考 claude-code: 40000） */
+  /** 保留最近消息的最大 token 数 */
   keepRecentMaxTokens: number;
   /** 保留最近消息的最小条数 */
   keepRecentMinMessages: number;
@@ -52,14 +96,13 @@ export interface CompactionConfig {
   maxToolResultLength: number;
   /** 是否启用 LLM 摘要（需要在 compact 时传入 chatFn） */
   enableLLMSummary?: boolean;
-  /** 重新注入最近文件内容的最大文件数 */
+  /** 硬压缩后再注入的 read_file 结果最多保留几条唯一路径（构造时钳制在 1–64，默认 12 与历史行为一致） */
   maxReinjectFiles: number;
   /** 重新注入最近文件内容的总 token 预算 */
   maxReinjectTokens: number;
+  /** 会话 id，用于压缩截断提示中的 session-notes 路径 */
+  sessionId?: string;
 }
-
-/** 默认上下文窗口大小（未配置时的兜底值） */
-const DEFAULT_CONTEXT_WINDOW = 128_000;
 
 /** 用户消息内容长度超过此阈值时强制保留，防止任务描述被压缩丢弃 */
 const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
@@ -67,61 +110,14 @@ const MIN_USER_MSG_LENGTH_TO_PRESERVE = 200;
 /** 简短用户消息阈值：长度低于此值的确认消息在轻量压缩中可丢弃 */
 const SHORT_USER_MSG_MAX_LENGTH = 50;
 
-/** 轻量微压缩触发比例（可通过 ICE_MICRO_COMPACT_RATIO 环境变量覆盖） */
-const MICRO_COMPACT_RATIO = (() => {
-  const env = parseFloat(process.env.ICE_MICRO_COMPACT_RATIO || '');
-  return Number.isFinite(env) && env > 0 && env <= 1 ? env : 0.65;
-})();
-
-/** 每会话最大微压缩次数 */
-const MAX_MICRO_COMPACTS_PER_SESSION = 3;
-
-/** 硬压缩触发比例（可通过 ICE_COMPACTION_RATIO 环境变量覆盖） */
-const DEFAULT_COMPACTION_RATIO = 0.88;
-
-/** 硬压缩准备金 token 数（可通过 ICE_COMPACTION_RESERVE_TOKENS 环境变量覆盖） */
-const COMPACTION_RESERVE_TOKENS = (() => {
-  const env = parseInt(process.env.ICE_COMPACTION_RESERVE_TOKENS || '', 10);
-  return Number.isFinite(env) && env > 0 ? env : 15000;
-})();
+/** 硬分割后缀中至少保留的非注入 user 条数（对齐 round-safe） */
+const MIN_REAL_USERS_IN_SUFFIX = 2;
 
 /**
- * 读取上下文窗口大小。优先级：
- * 1. ICE_CONTEXT_WINDOW 环境变量（手动覆盖）
- * 2. data/config.json 中当前 provider 的 maxContextTokens（自动获取）
- * 3. 默认 128K
+ * 读取上下文窗口大小（委托 {@link readEffectiveContextWindowTokens}）。
  */
 function getContextWindow(): number {
-  // 1. 环境变量优先
-  const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
-  if (Number.isFinite(env) && env > 0) return env;
-
-  // 2. 从 provider 配置读取当前默认 provider 的 maxContextTokens；未标记默认时回退最大值。
-  try {
-    const configPath = path.resolve('data/config.json');
-    const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as IceCoderConfigFile;
-    const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
-    if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
-      return defaultProvider.maxContextTokens;
-    }
-    let maxCtx = 0;
-    for (const p of config.providers ?? []) {
-      if (p.maxContextTokens && p.maxContextTokens > maxCtx) {
-        maxCtx = p.maxContextTokens;
-      }
-    }
-    if (maxCtx > 0) return maxCtx;
-  } catch { /* 配置文件不存在或解析失败，使用默认值 */ }
-
-  // 3. 兜底
-  return DEFAULT_CONTEXT_WINDOW;
-}
-
-/** 从环境变量读取压缩触发比例（0-1 之间） */
-function getCompactionRatio(): number {
-  const env = parseFloat(process.env.ICE_COMPACTION_RATIO || '');
-  return Number.isFinite(env) && env > 0 && env <= 1 ? env : DEFAULT_COMPACTION_RATIO;
+  return readEffectiveContextWindowTokens();
 }
 
 const DEFAULT_CONFIG: CompactionConfig = {
@@ -132,9 +128,13 @@ const DEFAULT_CONFIG: CompactionConfig = {
   keepRecentMinMessages: 5,
   maxToolResultLength: 3000,
   enableLLMSummary: true,
-  maxReinjectFiles: 8,
+  maxReinjectFiles: 12,
   maxReinjectTokens: 50000,
 };
+
+/** 再注入唯一文件数上限（构造参数钳制） */
+const MIN_REINJECT_FILES_CAP = 1;
+const MAX_REINJECT_FILES_CAP = 64;
 
 /**
  * 估算消息列表的 token 数。
@@ -144,76 +144,91 @@ export function estimateTokens(messages: UnifiedMessage[]): number {
   return estimateMessagesTokens(messages);
 }
 
-function isShortActionInstruction(content: string): boolean {
-  const trimmed = content.trim().toLowerCase();
-  return /^(跑|运行|执行|测|测试|修|修改|改|继续|提交|检查|验证)/.test(trimmed)
-    || /\b(run|test|fix|edit|continue|commit|check|verify)\b/i.test(trimmed);
-}
-
 /**
  * ContextCompactor 管理对话历史的压缩，防止 token 溢出。
  */
 export class ContextCompactor {
   private config: CompactionConfig;
-  /** 微压缩计数器（每会话最多 MAX_MICRO_COMPACTS_PER_SESSION 次） */
-  private microCompactCount = 0;
+  /** 微压缩会话计数（单会话最多 MICRO_MAX_PER_SESSION 次） */
+  private microCompactSessionCount = 0;
+  /** 微压缩本轮计数（每轮 prep 最多 MICRO_MAX_PER_ROUND 次） */
+  private microCompactRoundCount = 0;
 
   constructor(config?: Partial<CompactionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
-    this.config.tokenThreshold ??= Math.floor(getContextWindow() * getCompactionRatio());
+    this.config.tokenThreshold ??= Math.floor(getContextWindow() * HARD_COMPACTION_RATIO);
+    const reinjectCap = this.config.maxReinjectFiles;
+    this.config.maxReinjectFiles =
+      typeof reinjectCap === 'number' &&
+      Number.isFinite(reinjectCap) &&
+      reinjectCap >= MIN_REINJECT_FILES_CAP
+        ? Math.min(Math.floor(reinjectCap), MAX_REINJECT_FILES_CAP)
+        : DEFAULT_CONFIG.maxReinjectFiles;
+  }
+
+  /** 每轮 prep 开始时重置本轮微压缩计数 */
+  resetMicroCompactRound(): void {
+    this.microCompactRoundCount = 0;
+  }
+
+  /** 是否仍可执行微压缩（会话 + 本轮配额） */
+  canMicroCompact(): boolean {
+    return this.microCompactSessionCount < MICRO_MAX_PER_SESSION
+      && this.microCompactRoundCount < MICRO_MAX_PER_ROUND;
+  }
+
+  private resolveEffectiveUsed(messages: UnifiedMessage[], options?: CompactionUsageOptions): number {
+    return resolveCompactionUsage({
+      messages,
+      tools: options?.tools,
+      lastApiPromptTokens: options?.lastApiPromptTokens,
+    }).effectiveUsed;
   }
 
   /**
    * 检查是否需要轻量微压缩（在硬压缩之前）。
-   * 微压缩在 65% 上下文使用量时触发，纯本地操作，零 LLM 成本。
+   * 微压缩在 72% 有效占用时触发，纯本地操作，零 LLM 成本。
    */
-  needsMicroCompaction(messages: UnifiedMessage[]): boolean {
-    if (this.microCompactCount >= MAX_MICRO_COMPACTS_PER_SESSION) return false;
+  needsMicroCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
+    if (!this.canMicroCompact()) return false;
     const ctxWindow = getContextWindow();
-    const currentTokens = estimateTokens(messages);
-    const microThreshold = Math.floor(ctxWindow * MICRO_COMPACT_RATIO);
-    return currentTokens > microThreshold;
+    const effectiveUsed = this.resolveEffectiveUsed(messages, options);
+    const microThreshold = Math.floor(ctxWindow * MICRO_COMPACTION_RATIO);
+    return effectiveUsed >= microThreshold;
   }
 
   /**
    * 执行轻量微压缩（预防层）。
    *
    * 纯本地操作，不调用 LLM：
-   * - 截断超过 5 轮的工具结果为最多 500 字符
-   * - 丢弃长度 < 50 字符的简短确认消息
-   * 微压缩后不注入恢复提示，对 LLM 完全透明。
+   * - **不丢弃**短 user（B：避免误伤导航/确认句）
+   * - 对「白名单」内、超过最近 5 个 tool-calling assistant 轮的工具结果，清空正文为占位 stub（节省 token）
+   * 微压缩后不注入恢复提示，对 LLM 近似透明。
    */
   doLightCompact(messages: UnifiedMessage[]): UnifiedMessage[] {
-    this.microCompactCount++;
+    this.microCompactSessionCount++;
+    this.microCompactRoundCount++;
 
-    // 统计 assistant 消息轮次（每个 assistant 消息算一轮）
-    let assistantTurnCount = 0;
-    const msgTurnMap = new Map<number, number>();
+    let assistantRound = 0;
+    const msgAssistantRound = new Map<number, number>();
+    const toolCallIdToName = new Map<string, string>();
+
     for (let i = 0; i < messages.length; i++) {
-      if (messages[i].role === 'assistant' && messages[i].toolCalls?.length) {
-        assistantTurnCount++;
-      }
-      msgTurnMap.set(i, assistantTurnCount);
-    }
-    const currentTurn = assistantTurnCount;
-
-    return messages.filter((msg, idx) => {
-      // 丢弃简短确认消息，但保留短执行指令（如“跑测试”“继续”“fix it”）。
-      if (msg.role === 'user' && typeof msg.content === 'string' && msg.content.length < SHORT_USER_MSG_MAX_LENGTH) {
-        if (isShortActionInstruction(msg.content)) return true;
-        return false;
-      }
-
-      // 截断旧工具结果（超过 5 轮的非文件操作工具结果）
-      if (msg.role === 'tool' && typeof msg.content === 'string') {
-        const msgTurn = msgTurnMap.get(idx) ?? 0;
-        if (currentTurn - msgTurn > 5 && msg.content.length > 500) {
-          // 保留工具名和状态，截断内容
-          return true; // 保留消息但会在后续被 trimToolResults 裁剪
+      const m = messages[i];
+      if (m.role === 'assistant' && m.toolCalls?.length) {
+        assistantRound++;
+        for (const tc of m.toolCalls) {
+          toolCallIdToName.set(tc.id, tc.name);
         }
       }
+      msgAssistantRound.set(i, assistantRound);
+    }
 
-      return true;
+    return applyLightMicrocompactToolClear(messages, {
+      keepLastAssistantToolRounds: 5,
+      toolCallIdToName,
+      msgAssistantRound,
+      currentAssistantRound: assistantRound,
     });
   }
 
@@ -221,21 +236,71 @@ export class ContextCompactor {
    * 检查是否需要硬压缩（双重校验）。
    *
    * 条件：
-   * 1. 当前使用量达到 tokenThreshold（默认 contextWindow × compactionRatio），或
+   * 1. effectiveUsed 达到 tokenThreshold（默认 contextWindow × 0.85），或
    * 2. 剩余空间不足 COMPACTION_RESERVE_TOKENS token
    */
-  needsCompaction(messages: UnifiedMessage[]): boolean {
+  needsCompaction(messages: UnifiedMessage[], options?: CompactionUsageOptions): boolean {
     const ctxWindow = getContextWindow();
-    const currentTokens = estimateTokens(messages);
-    const remaining = ctxWindow - currentTokens;
-    const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * getCompactionRatio());
+    const effectiveUsed = this.resolveEffectiveUsed(messages, options);
+    const remaining = ctxWindow - effectiveUsed;
+    const tokenThreshold = this.config.tokenThreshold ?? Math.floor(ctxWindow * HARD_COMPACTION_RATIO);
 
-    if (currentTokens >= tokenThreshold) return true;
+    if (effectiveUsed >= tokenThreshold) return true;
     if (remaining < COMPACTION_RESERVE_TOKENS) return true;
 
     // 向后兼容：未配置 token 阈值时也检查旧的消息数阈值逻辑。
     if (this.config.tokenThreshold) return false;
     return messages.length > this.config.threshold;
+  }
+
+  /** 双轨有效占用（供日志 / 主动收缩判定） */
+  getEffectiveUsed(messages: UnifiedMessage[], options?: CompactionUsageOptions): number {
+    return this.resolveEffectiveUsed(messages, options);
+  }
+
+  /** 层间早退：forceFullCompact 时继续走完硬压缩流水线 */
+  private shouldContinueCompactLayers(
+    messages: UnifiedMessage[],
+    runOptions?: CompactRunOptions,
+  ): boolean {
+    if (runOptions?.forceFullCompact) return true;
+    return this.needsCompaction(messages, runOptions?.usageOptions);
+  }
+
+  /**
+   * 分离丢弃/保留消息；API 触线但本地 split 无丢弃时，forceFullCompact 强制保留尾部摘要。
+   */
+  private resolveSplitForCompact(
+    compacted: UnifiedMessage[],
+    runOptions?: CompactRunOptions,
+  ): {
+    systemMessages: UnifiedMessage[];
+    droppedMessages: UnifiedMessage[];
+    recentMessages: UnifiedMessage[];
+  } {
+    const split = this.splitMessages(compacted);
+    if (split.droppedMessages.length > 0 || !runOptions?.forceFullCompact) {
+      return split;
+    }
+
+    const systemMessages: UnifiedMessage[] = [];
+    let contentStart = 0;
+    if (compacted.length > 0 && compacted[0].role === 'system') {
+      systemMessages.push(compacted[0]);
+      contentStart = 1;
+    }
+
+    const minRecent = Math.max(this.config.keepRecentMinMessages, 2);
+    if (compacted.length <= contentStart + minRecent) {
+      return split;
+    }
+
+    const splitAt = compacted.length - minRecent;
+    return {
+      systemMessages,
+      droppedMessages: compacted.slice(contentStart, splitAt),
+      recentMessages: compacted.slice(splitAt),
+    };
   }
 
   /**
@@ -250,6 +315,71 @@ export class ContextCompactor {
    */
   getConfig(): CompactionConfig {
     return this.config;
+  }
+
+  /**
+   * Checkpoint 续跑专用：纯本地 Fork，不调 LLM，不 reinject 文件。
+   */
+  compactForCheckpointResume(
+    messages: UnifiedMessage[],
+    resumeSummary: UnifiedMessage,
+    options: {
+      maxRecentMessages?: number;
+      targetTokenRatio?: number;
+      aggressive?: boolean;
+    } = {},
+  ): UnifiedMessage[] {
+    const maxRecent = options.maxRecentMessages ?? (options.aggressive ? 40 : 90);
+    const targetRatio = options.targetTokenRatio ?? (options.aggressive ? 0.45 : 0.55);
+    const targetTokens = Math.floor(readCompactionContextWindowTokens() * targetRatio);
+
+    let working = stripResumeCheckpointMessages(messages);
+    working = this.snip(working);
+    working = this.microcompact(working);
+    working = this.trimToolResults(working);
+
+    const systemMessages: UnifiedMessage[] = [];
+    let contentStart = 0;
+    if (working.length > 0 && working[0].role === 'system') {
+      systemMessages.push(working[0]);
+      contentStart = 1;
+    }
+
+    const anchorIdx = findCheckpointAnchorIndex(working);
+    const anchorMessages = anchorIdx >= contentStart ? [working[anchorIdx]] : [];
+
+    let recent = working.slice(Math.max(contentStart, working.length - maxRecent));
+    recent = trimLeadingOrphanToolMessages(recent);
+    if (anchorIdx >= contentStart) {
+      recent = recent.filter(m => m !== working[anchorIdx]);
+    }
+
+    const assemble = (): UnifiedMessage[] => [
+      ...systemMessages,
+      ...anchorMessages,
+      resumeSummary,
+      ...recent,
+    ];
+
+    let result = assemble();
+    let shrinkPass = 0;
+    while (estimateTokens(result) > targetTokens && recent.length > 8 && shrinkPass < 12) {
+      const drop = Math.max(4, Math.ceil(recent.length * 0.12));
+      recent = trimLeadingOrphanToolMessages(recent.slice(drop));
+      result = assemble();
+      shrinkPass++;
+    }
+
+    if (options.aggressive) {
+      result = this.trimToolResults(this.microcompact(result));
+    }
+
+    return finalizeMessagesForApi(result);
+  }
+
+  /** 压缩/fork 产出在写回 messages 前统一修复 tool 配对。 */
+  private finalizeCompacted(messages: UnifiedMessage[]): UnifiedMessage[] {
+    return finalizeMessagesForApi(messages);
   }
 
   /**
@@ -279,7 +409,7 @@ export class ContextCompactor {
   }
 
   /**
-   * 会话记忆压缩路径（参考 claude-code sessionMemoryCompact）。
+   * 会话记忆压缩路径。
    *
    * 会话记忆已在后台持续更新，直接作为压缩摘要，不需要额外 LLM 调用。
    * 保留最近消息（token 预算），会话记忆作为摘要注入。
@@ -287,7 +417,12 @@ export class ContextCompactor {
   compactWithSessionMemory(
     messages: UnifiedMessage[],
     sessionNotes: string,
+    runOptions?: CompactRunOptions,
   ): UnifiedMessage[] {
+    const preCompactMessages = messages.slice();
+    const beforeTokens = estimateTokens(messages);
+    const beforeMessages = messages.length;
+
     // 第一层：snip
     let compacted = this.snip(messages);
 
@@ -299,11 +434,13 @@ export class ContextCompactor {
 
     // 分离消息（使用 token 预算）
     const { systemMessages, droppedMessages, recentMessages } =
-      this.splitMessages(compacted);
+      this.resolveSplitForCompact(compacted, runOptions);
 
-    if (droppedMessages.length === 0) return compacted;
+    if (droppedMessages.length === 0) return this.finalizeCompacted(compacted);
 
-    // 用会话记忆作为摘要（替代 LLM 调用）
+    const { text: notesBody } = truncateSessionNotesForCompact(sessionNotes, undefined, this.config.sessionId);
+
+    // 用会话记忆作为摘要（替代 LLM 调用）；过长会话笔记截断以免占满预算（D）
     const summaryContent = [
       '<context-summary>',
       'This session is being continued from a previous conversation. Session notes below are the authoritative source for current session state.',
@@ -313,22 +450,34 @@ export class ContextCompactor {
       '2. If session notes contradict long-term memory, trust session notes',
       '3. If you detect a contradiction that matters, mention it to the user',
       '',
-      sessionNotes,
+      notesBody,
       '</context-summary>',
     ].join('\n');
 
-    return [
-      ...systemMessages,
-      { role: 'user' as const, content: summaryContent },
-      ...recentMessages,
+    const summaryMsg = { role: 'user' as const, content: summaryContent };
+    const core = [...systemMessages, summaryMsg, ...recentMessages];
+    const meta: CompactBoundaryMeta = {
+      beforeTokens,
+      beforeMessages,
+      afterTokens: estimateTokens(core),
+      afterMessages: core.length,
+    };
+
+    const anchors: UnifiedMessage[] = [
+      { role: 'user', content: buildCompactBoundaryContent(meta) },
+      { role: 'user', content: buildRecentDialogueFocusContent(preCompactMessages) },
     ];
+
+    return this.finalizeCompacted([...systemMessages, summaryMsg, ...anchors, ...recentMessages]);
   }
 
   /**
    * 从消息历史中提取最近读取的文件内容。
    *
    * 压缩后重新注入，确保 LLM 不丢失已读的源码。
-   * 参考 claude-code 的 createPostCompactFileAttachments。
+   *
+   * 唯一路径条数上限取自 {@link CompactionConfig.maxReinjectFiles}；
+   * 传入 maxFiles 时在单次调用上覆盖该配置。
    */
   extractRecentFileContents(
     messages: UnifiedMessage[],
@@ -336,6 +485,7 @@ export class ContextCompactor {
     maxTotalTokens?: number,
   ): UnifiedMessage[] {
     const tokenLimit = maxTotalTokens ?? this.config.maxReinjectTokens;
+    const maxCap = this.config.maxReinjectFiles;
 
     // 构建 toolCallId → toolName 映射
     const toolCallIdToName = new Map<string, string>();
@@ -363,9 +513,11 @@ export class ContextCompactor {
     }
     const currentTurn = assistantTurn;
 
-    // 动态文件上限：最近 10 轮内 read_file 的唯一文件数，上限 12
+    // 动态文件上限：最近 10 轮内 read_file 轮次数（无则沿用 ≤8 的启发上限），且不超过 maxReinjectFiles
     const recentReadFileTurns = readFileTurns.filter(t => currentTurn - t < 10);
-    const dynamicFileLimit = maxFiles ?? Math.min(recentReadFileTurns.length || 8, 12);
+    const fallbackHint = Math.min(8, maxCap);
+    const dynamicFileLimit =
+      maxFiles ?? Math.min(recentReadFileTurns.length || fallbackHint, maxCap);
 
     // 从后往前找最近的 read_file 结果
     const fileResults: { path: string; content: string }[] = [];
@@ -386,12 +538,13 @@ export class ContextCompactor {
       if (fileResults.length >= dynamicFileLimit) break;
     }
 
-    // 搜索结果保护：收集最近 3 轮内 search_codebase 的结果
+    // 搜索结果保护：收集最近 3 轮内 glob/grep 的结果
     const searchResults: string[] = [];
     for (let i = messages.length - 1; i >= 0 && searchResults.length < 3; i--) {
       const msg = messages[i];
       if (msg.role !== 'tool' || !msg.toolCallId) continue;
-      if (toolCallIdToName.get(msg.toolCallId) !== 'search_codebase') continue;
+      const tname = toolCallIdToName.get(msg.toolCallId);
+      if (tname !== 'grep' && tname !== 'glob') continue;
       if (typeof msg.content !== 'string' || !msg.content.trim()) continue;
       searchResults.unshift(msg.content.substring(0, 300));
     }
@@ -438,7 +591,7 @@ export class ContextCompactor {
       : '';
 
     const sessionNotesDirective = hasSessionNotes
-      ? '\n\n**CRITICAL**: Session notes include narrative sections plus a machine-readable `icecoder-runtime` JSON block under Runtime Evidence for exact task/repo state. Use that for resuming work after restarts. Also check data/sessions/session-notes.md path when applicable. If a task was in progress, continue from session notes + structured state. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
+      ? '\n\n**CRITICAL**: Session notes include narrative sections plus a machine-readable `icecoder-runtime` JSON block under Runtime Evidence for exact task/repo state. Use that for resuming work after restarts. Notes live at `data/sessions/{sessionId}.session-notes.md` (per-session). If a task was in progress, continue from session notes + structured state. Do NOT ask the user to repeat their request unless neither the context nor the session notes contain the task.'
       : '';
 
     return {
@@ -462,24 +615,29 @@ Continue the conversation from where it left off without asking the user any fur
     messages: UnifiedMessage[],
     chatFn?: ChatFunction,
     sessionNotes?: string,
+    runOptions?: CompactRunOptions,
   ): Promise<UnifiedMessage[]> {
+    const preCompactMessages = messages.slice();
+    const beforeTokens = estimateTokens(messages);
+    const beforeMessages = messages.length;
+
     // 第一层：snip — 裁剪冗余段落
     let compacted = this.snip(messages);
-    if (!this.needsCompaction(compacted)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return this.finalizeCompacted(compacted);
 
     // 第二层：microcompact — 压缩旧工具调用细节
     compacted = this.microcompact(compacted);
-    if (!this.needsCompaction(compacted)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return this.finalizeCompacted(compacted);
 
     // 第三层：裁剪工具结果
     compacted = this.trimToolResults(compacted);
-    if (!this.needsCompaction(compacted)) return compacted;
+    if (!this.shouldContinueCompactLayers(compacted, runOptions)) return this.finalizeCompacted(compacted);
 
     // 分离消息
     const { systemMessages, droppedMessages, recentMessages } =
-      this.splitMessages(compacted);
+      this.resolveSplitForCompact(compacted, runOptions);
 
-    if (droppedMessages.length === 0) return compacted;
+    if (droppedMessages.length === 0) return this.finalizeCompacted(compacted);
 
     // 第四层：结构化摘要
     const structuralSummary = this.extractStructuralSummary(droppedMessages);
@@ -487,18 +645,31 @@ Continue the conversation from where it left off without asking the user any fur
     // 第五层：优先使用会话记忆，否则 LLM 精炼
     let finalSummary: string;
     if (sessionNotes) {
-      finalSummary = sessionNotes;
+      finalSummary = truncateSessionNotesForCompact(sessionNotes, undefined, this.config.sessionId).text;
     } else if (this.config.enableLLMSummary && chatFn) {
       finalSummary = await this.llmSummarize(structuralSummary, droppedMessages, chatFn);
     } else {
       finalSummary = structuralSummary;
     }
 
-    return [
-      ...systemMessages,
-      { role: 'user' as const, content: `<context-summary>\n${finalSummary}\n</context-summary>` },
-      ...recentMessages,
+    const summaryMsg = {
+      role: 'user' as const,
+      content: `<context-summary>\n${finalSummary}\n</context-summary>`,
+    };
+    const core = [...systemMessages, summaryMsg, ...recentMessages];
+    const meta: CompactBoundaryMeta = {
+      beforeTokens,
+      beforeMessages,
+      afterTokens: estimateTokens(core),
+      afterMessages: core.length,
+    };
+
+    const anchors: UnifiedMessage[] = [
+      { role: 'user', content: buildCompactBoundaryContent(meta) },
+      { role: 'user', content: buildRecentDialogueFocusContent(preCompactMessages) },
     ];
+
+    return this.finalizeCompacted([...systemMessages, summaryMsg, ...anchors, ...recentMessages]);
   }
 
   /**
@@ -523,17 +694,24 @@ Continue the conversation from where it left off without asking the user any fur
    * - 删除重复的 <system-reminder>（只保留最后一个）
    * - 删除重复的 <system-context>（只保留最后一个）
    * - 删除旧的 <context-summary>（被新的替代）
+   * - 删除重复的 <compact_boundary> / <recent-dialogue-focus>（各只保留最后一条）
    * - 删除空内容的 assistant 消息
    */
   private snip(messages: UnifiedMessage[]): UnifiedMessage[] {
     let lastReminderIdx = -1;
     let lastSummaryIdx = -1;
     let lastContextIdx = -1;
+    let lastBoundaryIdx = -1;
+    let lastFocusIdx = -1;
+    let lastResumeIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       const content = typeof messages[i].content === 'string' ? messages[i].content as string : '';
       if (lastReminderIdx === -1 && content.startsWith('<system-reminder>')) lastReminderIdx = i;
       if (lastSummaryIdx === -1 && content.startsWith('<context-summary>')) lastSummaryIdx = i;
       if (lastContextIdx === -1 && content.startsWith('<system-context>')) lastContextIdx = i;
+      if (lastBoundaryIdx === -1 && content.startsWith('<compact_boundary')) lastBoundaryIdx = i;
+      if (lastFocusIdx === -1 && content.startsWith('<recent-dialogue-focus')) lastFocusIdx = i;
+      if (lastResumeIdx === -1 && isResumeCheckpointContent(content)) lastResumeIdx = i;
     }
 
     return messages.filter((msg, idx) => {
@@ -541,6 +719,9 @@ Continue the conversation from where it left off without asking the user any fur
       if (content.startsWith('<system-reminder>') && idx !== lastReminderIdx) return false;
       if (content.startsWith('<context-summary>') && idx !== lastSummaryIdx) return false;
       if (content.startsWith('<system-context>') && idx !== lastContextIdx) return false;
+      if (content.startsWith('<compact_boundary') && idx !== lastBoundaryIdx) return false;
+      if (content.startsWith('<recent-dialogue-focus') && idx !== lastFocusIdx) return false;
+      if (isResumeCheckpointContent(content) && idx !== lastResumeIdx) return false;
       if (msg.role === 'assistant' && !msg.toolCalls?.length && !content.trim()) return false;
       return true;
     });
@@ -569,17 +750,19 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // 文件操作工具 — 结果保留完整内容（源码是编码 agent 的核心上下文）
-    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+    const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     return messages.map((msg, idx) => {
       if (idx >= recentStart) return msg;
 
       // 压缩旧的 assistant tool_calls（保留工具名，清除参数）
       if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
-        const toolNames = msg.toolCalls.map(tc => tc.name).join(', ');
+        const cleaned = prepareAssistantContentForHistory(
+          typeof msg.content === 'string' ? msg.content : '',
+        );
         return {
           ...msg,
-          content: `[调用工具: ${toolNames}]`,
+          content: cleaned,
           toolCalls: msg.toolCalls.map(tc => ({ ...tc, arguments: {} })),
         };
       }
@@ -617,7 +800,7 @@ Continue the conversation from where it left off without asking the user any fur
       }
     }
 
-    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+    const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     return messages.map(msg => {
       if (msg.role === 'tool' && typeof msg.content === 'string') {
@@ -674,7 +857,7 @@ Continue the conversation from where it left off without asking the user any fur
       contentStart = 1;
     }
 
-    // 计算初始切割点（token 预算优先，参考 claude-code: ≥10K token, ≥5 条消息, ≤40K token）
+    // 计算初始切割点（token 预算优先，≥10K token, ≥5 条消息, ≤40K token）
     let splitAt = this.findSplitByTokenBudget(messages, contentStart);
 
     // 保护长篇分析文本（assistant 无 toolCalls 且 content > 500 字符），
@@ -719,6 +902,12 @@ Continue the conversation from where it left off without asking the user any fur
         forcePreserve.add(i);
       }
     }
+    for (let i = contentStart; i < messages.length; i++) {
+      if (shouldPreserveMessageOnCompaction(messages[i])) {
+        forcePreserve.add(i);
+      }
+    }
+
     // 将 forcePreserve 中最小的索引作为新的切割点
     if (forcePreserve.size > 0) {
       const minPreserve = Math.min(...forcePreserve);
@@ -726,6 +915,14 @@ Continue the conversation from where it left off without asking the user any fur
         splitAt = minPreserve;
       }
     }
+
+    // C：后缀中至少保留若干条「真实 user」轮次，避免只剩工具噪声
+    splitAt = this.ensureMinimumRealUsersInSuffix(
+      messages,
+      contentStart,
+      splitAt,
+      MIN_REAL_USERS_IN_SUFFIX,
+    );
 
     // 消息对完整性修正：
     // 如果 splitAt 处是 tool 消息，说明它的 assistant(tool_calls) 在前面，
@@ -789,7 +986,7 @@ Continue the conversation from where it left off without asking the user any fur
       }
     }
 
-    const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'append_file', 'patch_file']);
+    const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     const lines: string[] = [];
     lines.push(`以下是之前 ${messages.length} 条对话的结构化摘要：`);
@@ -797,7 +994,13 @@ Continue the conversation from where it left off without asking the user any fur
     for (const msg of messages) {
       if (msg.role === 'user') {
         const content = typeof msg.content === 'string' ? msg.content : '[多模态内容]';
-        if (content.startsWith('<system-reminder>') || content.startsWith('<context-summary>')) continue;
+        if (
+          content.startsWith('<system-reminder>')
+          || content.startsWith('<context-summary>')
+          || isSyntheticUserBlockContent(content)
+        ) {
+          continue;
+        }
         const truncated = content.length > 100 ? content.substring(0, 100) + '...' : content;
         lines.push(`- 用户: ${truncated}`);
       } else if (msg.role === 'assistant') {
@@ -903,6 +1106,31 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     return contentStart;
+  }
+
+  /** 从索引 fromIdx 起后缀中的非注入 user 条数 */
+  private countNonSyntheticUsersFrom(messages: UnifiedMessage[], fromIdx: number): number {
+    let n = 0;
+    for (let i = fromIdx; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== 'user' || typeof m.content !== 'string') continue;
+      if (isSyntheticUserBlockContent(m.content)) continue;
+      if (m.content.trim().length > 0) n++;
+    }
+    return n;
+  }
+
+  private ensureMinimumRealUsersInSuffix(
+    messages: UnifiedMessage[],
+    contentStart: number,
+    splitAt: number,
+    minUsers: number,
+  ): number {
+    let s = splitAt;
+    while (s > contentStart && this.countNonSyntheticUsersFrom(messages, s) < minUsers) {
+      s--;
+    }
+    return s;
   }
 
   /**

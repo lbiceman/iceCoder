@@ -1,5 +1,6 @@
 import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
+import { extractDeletedPathsFromCommand, isMissingFileToolResult, missingChangedFilePaths } from './document-deliverable.js';
 import type { RepoContextSnapshot } from '../types/runtime-snapshot.js';
 
 export type { RepoContextSnapshot } from '../types/runtime-snapshot.js';
@@ -17,14 +18,32 @@ export class RepoContext {
   recordToolResult(toolCall: ToolCall, result: ToolResult): void {
     const path = extractPathLikeArg(toolCall.arguments);
 
-    if (path && READ_TOOLS.has(toolCall.name)) this.filesRead.add(path);
+    if (path && READ_TOOLS.has(toolCall.name)) {
+      if (result.success) {
+        this.filesRead.add(path);
+      } else if (isMissingFileToolResult(result)) {
+        this.removeChangedFile(path);
+      }
+    }
     if (path && WRITE_TOOLS.has(toolCall.name)) this.filesChanged.add(path);
+
+    if (toolCall.name === 'fs_operation') {
+      const op = String(toolCall.arguments?.operation ?? '');
+      if (op === 'delete' && result.success && path) {
+        this.removeChangedFile(path);
+      }
+    }
 
     if (toolCall.name === 'run_command') {
       const command = String(toolCall.arguments?.command ?? '');
       if (command) {
         this.commandsRun.push(command);
         if (looksLikeTestCommand(command)) this.testCommands.push(command);
+        if (result.success) {
+          for (const deletedPath of extractDeletedPathsFromCommand(command)) {
+            this.removeChangedFile(deletedPath);
+          }
+        }
       }
     }
 
@@ -60,6 +79,30 @@ export class RepoContext {
       || s.commandsRun.length > 0
       || s.recentDiagnostics.length > 0;
   }
+
+  /** 同步已删除的变更路径（与 TaskState.reconcileMissingChangedFiles 对齐）。 */
+  reconcileMissingChangedFiles(workspaceRoot?: string): number {
+    const missing = missingChangedFilePaths([...this.filesChanged], workspaceRoot);
+    let removed = 0;
+    for (const path of missing) {
+      const before = this.filesChanged.size;
+      this.removeChangedFile(path);
+      if (this.filesChanged.size < before) removed++;
+    }
+    return removed;
+  }
+
+  private removeChangedFile(path: string): void {
+    for (const changed of [...this.filesChanged]) {
+      if (normalizeRepoPath(changed) === normalizeRepoPath(path)) {
+        this.filesChanged.delete(changed);
+      }
+    }
+  }
+}
+
+function normalizeRepoPath(path: string): string {
+  return path.trim().replace(/\\/g, '/').toLowerCase();
 }
 
 function extractPathLikeArg(args: Record<string, any>): string | undefined {

@@ -47,7 +47,7 @@ const readFileTool = tool('read_file', {
   required: ['path'],
 });
 
-const searchTool = tool('search_codebase', {
+const grepTool = tool('grep', {
   type: 'object',
   properties: { pattern: { type: 'string' } },
   required: ['pattern'],
@@ -69,7 +69,7 @@ describe('SubAgentRunner', () => {
   });
 
   it('runs a read-only exploration loop and returns a structured result', async () => {
-    const definitions = [readFileTool, searchTool, fsTool];
+    const definitions = [readFileTool, grepTool, fsTool];
     const executor = executorFor(definitions, async (name, args) => ({
       success: true,
       output: `${name} ok: ${args.path ?? args.pattern ?? ''}`,
@@ -128,8 +128,8 @@ describe('SubAgentRunner', () => {
     expect(secondMessages.some(m => m.role === 'tool' && String(m.content).includes('只允许 fs_operation 的 list 操作'))).toBe(true);
   });
 
-  it('truncates large read_file and search_codebase outputs inside the sub-agent context', async () => {
-    const definitions = [readFileTool, searchTool];
+  it('truncates large read_file and grep outputs inside the sub-agent context', async () => {
+    const definitions = [readFileTool, grepTool];
     const executor = executorFor(definitions, async (name) => {
       if (name === 'read_file') {
         return { success: true, output: Array.from({ length: 260 }, (_, i) => `line ${i + 1}`).join('\n') };
@@ -142,7 +142,7 @@ describe('SubAgentRunner', () => {
     const chatFn = vi.fn<ChatFunction>()
       .mockResolvedValueOnce(response('read and search', [
         { id: 'read-1', name: 'read_file', arguments: { path: 'src/large.ts' } },
-        { id: 'search-1', name: 'search_codebase', arguments: { pattern: 'needle', maxResults: 100 } },
+        { id: 'search-1', name: 'grep', arguments: { pattern: 'needle', maxResults: 100, output_mode: 'content' } },
       ]))
       .mockResolvedValueOnce(response('Core findings: truncated safely.'));
 
@@ -153,7 +153,7 @@ describe('SubAgentRunner', () => {
     const toolMessages = secondMessages.filter(m => m.role === 'tool').map(m => String(m.content));
     expect(toolMessages[0]).toContain('[... truncated by SubAgent: read_file output limited');
     expect(toolMessages[0]).not.toContain('line 260');
-    expect(toolMessages[1]).toContain('[... truncated by SubAgent: search_codebase output limited to 20 matches ...]');
+    expect(toolMessages[1]).toContain('[... truncated by SubAgent: grep output limited to 20 blocks ...]');
     expect(toolMessages[1]).not.toContain('file24.ts');
   });
 

@@ -16,6 +16,15 @@ window.ConfigPage = (function () {
   var defaultIndex = 0; // 当前选中的默认提供者索引
   var autoSaveDefaultTimer = null;
 
+  // 10 套卡片主题色（与 config.css 中 .theme-0 ~ .theme-9 一一对应）
+  var CARD_THEMES = [
+    'theme-0', 'theme-1', 'theme-2', 'theme-3', 'theme-4',
+    'theme-5', 'theme-6', 'theme-7', 'theme-8', 'theme-9'
+  ];
+  function pickTheme(index) {
+    return CARD_THEMES[((index % CARD_THEMES.length) + CARD_THEMES.length) % CARD_THEMES.length];
+  }
+
   function tryAutoSaveDefault() {
     if (autoSaveDefaultTimer) clearTimeout(autoSaveDefaultTimer);
     autoSaveDefaultTimer = setTimeout(function () {
@@ -81,10 +90,10 @@ window.ConfigPage = (function () {
     fetch('/api/config')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        callback(null, data.providers || []);
+        callback(null, data.providers || [], data);
       })
       .catch(function (err) {
-        callback(err, []);
+        callback(err, [], null);
       });
   }
 
@@ -94,12 +103,12 @@ window.ConfigPage = (function () {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ providers: providerList })
     })
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.error) {
-          callback(new Error(data.error));
+      .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
+      .then(function (result) {
+        if (!result.ok || result.body.error) {
+          callback(new Error(result.body.error || '保存失败'));
         } else {
-          callback(null, data);
+          callback(null, result.body);
         }
       })
       .catch(function (err) {
@@ -112,10 +121,15 @@ window.ConfigPage = (function () {
   function validateProvider(prov) {
     var errors = {};
     if (!prov.apiUrl || prov.apiUrl.trim() === '') {
-      errors.apiUrl = 'API URL is required';
+      errors.apiUrl = '请填写 API 地址';
     }
     if (!prov.apiKey || prov.apiKey.trim() === '') {
-      errors.apiKey = 'API Key is required';
+      errors.apiKey = '请填写 API 密钥';
+    } else if (/your-api-key/i.test(prov.apiKey)) {
+      errors.apiKey = '请填写有效的 API 密钥';
+    }
+    if (!prov.modelName || prov.modelName.trim() === '') {
+      errors.modelName = '请填写模型名称';
     }
     return errors;
   }
@@ -143,7 +157,7 @@ window.ConfigPage = (function () {
 
   function createProviderCard(prov, index) {
     var card = document.createElement('div');
-    card.className = 'provider-card';
+    card.className = 'provider-card ' + pickTheme(index);
     card.setAttribute('data-index', index);
 
     var displayKey = prov._masked ? prov.apiKey : (prov.apiKey ? maskApiKey(prov.apiKey) : '');
@@ -153,39 +167,40 @@ window.ConfigPage = (function () {
     card.innerHTML =
       '<div class="provider-card-header">' +
         '<div class="provider-card-title-row">' +
-          '<span class="provider-card-title">Provider #' + (index + 1) + '</span>' +
-          '<label class="default-radio-label" title="Set as default model">' +
+          '<span class="provider-card-title">提供者 #' + (index + 1) + '</span>' +
+          '<label class="default-radio-label" title="设为默认模型">' +
             '<input type="radio" name="default-provider" data-action="set-default" ' + (isDefault ? 'checked' : '') + '>' +
-            '<span class="default-radio-text">' + (isDefault ? '✓ Default' : 'Set as Default') + '</span>' +
+            '<span class="default-radio-text">' + (isDefault ? '✓ 默认' : '设为默认') + '</span>' +
           '</label>' +
         '</div>' +
-        '<button class="btn-remove-provider" title="Remove provider" data-action="remove">&times;</button>' +
+        '<button class="btn-remove-provider" title="移除提供者" data-action="remove">&times;</button>' +
       '</div>' +
       '<div class="form-grid">' +
         '<div class="form-group full-width">' +
-          '<label for="apiUrl-' + index + '">API URL</label>' +
+          '<label for="apiUrl-' + index + '">API 地址</label>' +
           '<input type="url" id="apiUrl-' + index + '" data-field="apiUrl" placeholder="https://api.openai.com/v1" value="' + escapeAttr(prov.apiUrl || '') + '">' +
           '<span class="error-msg" data-error="apiUrl"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="apiKey-' + index + '">API Key</label>' +
+          '<label for="apiKey-' + index + '">API 密钥</label>' +
           '<input type="password" id="apiKey-' + index + '" data-field="apiKey" placeholder="sk-..." value="' + escapeAttr(prov.apiKey || '') + '">' +
           '<span class="error-msg" data-error="apiKey"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="modelName-' + index + '">Model Name</label>' +
-          '<input type="text" id="modelName-' + index + '" data-field="modelName" placeholder="gpt-4" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<label for="modelName-' + index + '">模型名称</label>' +
+          '<input type="text" id="modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o、deepseek-chat" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<span class="error-msg" data-error="modelName"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="temperature-' + index + '">Temperature</label>' +
+          '<label for="temperature-' + index + '">温度</label>' +
           '<div class="slider-group">' +
             '<input type="range" id="temperature-' + index + '" data-field="temperature" min="0" max="2" step="0.1" value="' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '">' +
             '<span class="slider-value" data-value="temperature">' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="maxTokens-' + index + '">Max Tokens</label>' +
-          '<input type="number" id="maxTokens-' + index + '" data-field="maxTokens" placeholder="4096" min="1" value="' + (prov.parameters && prov.parameters.maxTokens ? prov.parameters.maxTokens : '') + '">' +
+          '<label for="maxContextTokens-' + index + '">上下文上限（Token）</label>' +
+          '<input type="number" id="maxContextTokens-' + index + '" data-field="maxContextTokens" placeholder="例如 131072" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
         '</div>' +
       '</div>';
 
@@ -198,15 +213,24 @@ window.ConfigPage = (function () {
 
     // 连接移除按钮
     card.querySelector('[data-action="remove"]').addEventListener('click', function () {
-      // 如果删除的是默认提供者之前的，调整 defaultIndex
-      if (index < defaultIndex) {
-        defaultIndex--;
-      } else if (index === defaultIndex) {
-        defaultIndex = 0;
-      }
-      providers.splice(index, 1);
-      if (providers.length === 0) defaultIndex = 0;
-      renderProviders();
+      Modal.confirm({
+        title: '移除提供者',
+        message: '确定要移除该 LLM 提供者吗？',
+        type: 'warning',
+        confirmText: '移除',
+        cancelText: '取消',
+      }).then(function (confirmed) {
+        if (!confirmed) return;
+        // 如果删除的是默认提供者之前的，调整 defaultIndex
+        if (index < defaultIndex) {
+          defaultIndex--;
+        } else if (index === defaultIndex) {
+          defaultIndex = 0;
+        }
+        providers.splice(index, 1);
+        if (providers.length === 0) defaultIndex = 0;
+        renderProviders();
+      });
     });
 
     // 连接默认选择按钮
@@ -245,17 +269,15 @@ window.ConfigPage = (function () {
 
       result.push({
         id: original.id || generateId(),
-        providerName: original.providerName || 'openai',
         apiUrl: card.querySelector('[data-field="apiUrl"]').value.trim(),
         apiKey: apiKey,
         modelName: card.querySelector('[data-field="modelName"]').value.trim(),
-        parameters: {
-          temperature: parseFloat(card.querySelector('[data-field="temperature"]').value),
-          maxTokens: parseInt(card.querySelector('[data-field="maxTokens"]').value, 10) || undefined
-        },
+        parameters: Object.assign({}, original.parameters || {}, {
+          temperature: parseFloat(card.querySelector('[data-field="temperature"]').value)
+        }),
         isDefault: i === defaultIndex,
-        supportsVision: original.supportsVision,
-        maxContextTokens: original.maxContextTokens,
+        supportsVision: original.supportsVision !== undefined ? original.supportsVision : true,
+        maxContextTokens: parseInt(card.querySelector('[data-field="maxContextTokens"]').value, 10) || undefined,
         requestTimeoutMs: original.requestTimeoutMs
       });
     }
@@ -281,11 +303,14 @@ window.ConfigPage = (function () {
 
     if (hasErrors) return;
 
-    saveConfig(data, function (err) {
+    saveConfig(data, function (err, result) {
       if (err) {
-        showNotification('Failed to save: ' + err.message, 'error');
+        showNotification('保存失败：' + err.message, 'error');
       } else {
-        showNotification('Configuration saved successfully', 'success');
+        showNotification('配置已保存', 'success');
+        if (result && result.setupComplete && window.AppRouter && window.AppRouter.exitSetupMode) {
+          window.AppRouter.exitSetupMode();
+        }
         // 从服务器刷新提供者以获取遮蔽的密钥
         loadConfig(function (_err, loaded) {
           if (!_err) {
@@ -312,11 +337,11 @@ window.ConfigPage = (function () {
   function handleAddProvider() {
     providers.push({
       id: generateId(),
-      providerName: 'openai',
       apiUrl: '',
       apiKey: '',
       modelName: '',
-      parameters: { temperature: 1 }
+      parameters: { temperature: 1 },
+      supportsVision: true
     });
     renderProviders();
   }
@@ -328,25 +353,37 @@ window.ConfigPage = (function () {
 
     container.innerHTML =
       '<div class="config-page">' +
-        '<h1>Model Configuration</h1>' +
-        '<p class="subtitle">Manage your LLM provider settings. Select a default provider using the radio button.</p>' +
+        '<div class="setup-banner" id="setup-banner" hidden>' +
+          '<strong>首次使用</strong>：请填写 AI 服务商提供的 API 地址、密钥和模型名称，保存后即可开始聊天。' +
+        '</div>' +
+        '<h1>模型配置</h1>' +
+        '<p class="subtitle">管理 LLM 提供者：填写 API 地址与密钥，选择默认模型后即可开始聊天。</p>' +
+        '<p class="subtitle">仅支持openAI协议，不支持A社的！！！</p>' +
         '<div id="provider-list"></div>' +
         '<div class="config-actions">' +
-          '<button class="btn btn-primary" id="btn-save">Save Configuration</button>' +
-          '<button class="btn btn-secondary" id="btn-add">+ Add Provider</button>' +
+          '<button class="btn btn-primary" id="btn-save">保存配置</button>' +
+          '<button class="btn btn-secondary" id="btn-add">+ 添加提供者</button>' +
         '</div>' +
       '</div>';
 
     container.querySelector('#btn-save').addEventListener('click', handleSave);
     container.querySelector('#btn-add').addEventListener('click', handleAddProvider);
 
+    var setupBanner = container.querySelector('#setup-banner');
+    if (setupBanner && window.AppRouter && window.AppRouter.isSetupRequired && window.AppRouter.isSetupRequired()) {
+      setupBanner.hidden = false;
+    }
+
     // 加载已有配置
-    loadConfig(function (err, loaded) {
+    loadConfig(function (err, loaded, meta) {
       if (err) {
-        showNotification('Failed to load configuration', 'error');
+        showNotification('加载配置失败', 'error');
         providers = [];
       } else {
         providers = loaded.map(function (p) { p._masked = true; return p; });
+        if (setupBanner && meta && meta.setupRequired) {
+          setupBanner.hidden = false;
+        }
         // 找到标记为默认的提供者
         defaultIndex = 0;
         for (var i = 0; i < providers.length; i++) {
@@ -360,11 +397,11 @@ window.ConfigPage = (function () {
         // 默认添加一个空的提供者卡片
         providers.push({
           id: generateId(),
-          providerName: 'openai',
           apiUrl: '',
           apiKey: '',
           modelName: '',
-          parameters: { temperature: 1 }
+          parameters: { temperature: 1 },
+          supportsVision: true
         });
       }
       renderProviders();

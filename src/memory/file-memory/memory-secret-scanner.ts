@@ -152,6 +152,10 @@ const SECRET_RULES: SecretRule[] = [
       '\\b((?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99})(?:[\\x60\'"\\s;]|\\\\[nr]|$)',
   },
   {
+    id: 'stripe-test-key-dash',
+    source: '\\b(sk-(?:test|live|prod)-[a-zA-Z0-9-]{16,})(?:[\\x60\'"\\s;]|\\\\[nr]|$)',
+  },
+  {
     id: 'shopify-access-token',
     source: 'shpat_[a-fA-F0-9]{32}',
   },

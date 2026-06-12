@@ -16,7 +16,74 @@ import type {
   ToolDefinition,
   UnifiedMessage,
 } from './types.js';
+import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
+import { prepareToolsForChatCompletions } from './tool-offering.js';
+import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import { isAbortError, makeAbortedError } from './abort-error.js';
+
+/** 顶层请求参数字段顺序 — 保证同配置多轮 JSON 字节一致 */
+const FIXED_CHAT_PARAM_KEYS = [
+  'model',
+  'messages',
+  'stream',
+  'tools',
+  'temperature',
+  'max_tokens',
+  'top_p',
+  'frequency_penalty',
+  'presence_penalty',
+  'stream_options',
+  'chat_template_kwargs',
+  'extra_body',
+] as const;
+
+/** 移除 undefined/null 并按固定 key 顺序整理请求体 */
+export function orderRequestParams(params: Record<string, unknown>): Record<string, unknown> {
+  const ordered: Record<string, unknown> = {};
+  const seen = new Set<string>();
+
+  for (const key of FIXED_CHAT_PARAM_KEYS) {
+    const value = params[key];
+    if (value !== undefined && value !== null) {
+      ordered[key] = value;
+      seen.add(key);
+    }
+  }
+
+  const extraKeys = Object.keys(params)
+    .filter((k) => !seen.has(k))
+    .sort((a, b) => a.localeCompare(b));
+  for (const key of extraKeys) {
+    const value = params[key];
+    if (value !== undefined && value !== null) {
+      ordered[key] = value;
+    }
+  }
+
+  return ordered;
+}
+
+/** 合并全部 system 为一条并置于首位（供 MiniMax 等严格 OpenAI 兼容端点使用）。 */
+export function collapseUnifiedSystemMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
+  const systemParts: string[] = [];
+  const rest: UnifiedMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      const text = typeof msg.content === 'string'
+        ? msg.content
+        : msg.content
+          .filter((b) => b.type === 'text' && b.text)
+          .map((b) => b.text!)
+          .join('\n');
+      if (text) systemParts.push(text);
+    } else {
+      rest.push(msg);
+    }
+  }
+  if (systemParts.length === 0) return messages;
+  return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
+}
 
 /**
  * OpenAI 适配器的配置。
@@ -49,41 +116,63 @@ export class OpenAIAdapter implements ProviderAdapter {
   private client: OpenAI;
   private model: string;
   private supportsVision: boolean;
+  /** 构造时写入 SDK 的默认超时；单次请求可用更大的 requestTimeoutMs 覆盖 */
+  private defaultRequestTimeoutMs: number;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
+    this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
       organization: config.organization,
-      timeout: config.timeout ?? 120_000,       // 2 分钟超时，防止无限挂起
+      timeout: this.defaultRequestTimeoutMs,
       maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
     });
     this.model = config.model;
-    // 视觉支持：显式配置 > 自动检测
-    this.supportsVision = config.supportsVision ?? this.detectVisionSupport(config.model);
+    // 视觉支持：显式配置 > 默认开启
+    this.supportsVision = config.supportsVision ?? true;
     const { apiKey, baseURL, organization, model, timeout, supportsVision, ...rest } = config;
     this.defaultParams = rest;
   }
 
   /**
    * 根据模型名称自动检测是否支持视觉输入。
-   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), claude-3, qwen-vl 等。
+   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), qwen-vl 等。
    * 保守策略：未知模型默认不支持。
    */
   private detectVisionSupport(model: string): boolean {
     const m = model.toLowerCase();
     // OpenAI 视觉模型
     if (m.includes('gpt-4o') || m.includes('gpt-4-vision') || m.includes('gpt-4-turbo')) return true;
-    // Anthropic (通过 OpenAI 兼容层)
-    if (m.includes('claude-3') || m.includes('claude-4')) return true;
     // 通义千问视觉
     if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
     // Google Gemini
     if (m.includes('gemini')) return true;
+    // Xiaomi MiMo Omni 等多模态
+    if (m.includes('omni') || m.includes('-vl') || m.includes('_vl')) return true;
     // 默认不支持（DeepSeek、GLM 等纯文本模型）
     return false;
+  }
+
+  private buildRequestOptions(
+    options: LLMOptions,
+    signal?: AbortSignal,
+  ): { signal?: AbortSignal; timeout: number } {
+    const perCall =
+      typeof options.requestTimeoutMs === 'number'
+      && Number.isFinite(options.requestTimeoutMs)
+      && options.requestTimeoutMs > 0
+        ? Math.floor(options.requestTimeoutMs)
+        : undefined;
+    const timeout = perCall !== undefined
+      ? Math.max(this.defaultRequestTimeoutMs, perCall)
+      : this.defaultRequestTimeoutMs;
+    return {
+      ...(signal ? { signal } : {}),
+      timeout,
+    };
   }
 
   /**
@@ -95,14 +184,25 @@ export class OpenAIAdapter implements ProviderAdapter {
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, false);
 
-      console.log(`[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const reqOpts = this.buildRequestOptions(options, signal);
+      console.log(
+        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms`,
+      );
       const startTime = Date.now();
-
-      const response = await this.client.chat.completions.create(params);
+      const response = await this.client.chat.completions.create(params, reqOpts);
 
       const elapsed = Date.now() - startTime;
       const usage = (response as OpenAI.ChatCompletion).usage;
-      console.log(`[OpenAI] chat 响应 ← ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'}→${usage?.completion_tokens ?? '?'}`);
+      const pc = usage ? extractPromptCacheFromChatUsage(usage) : {};
+      const cacheFrag =
+        pc.cacheReadTokens != null || pc.cacheMissTokens != null
+          ? ` | cache_hit/miss=${pc.cacheReadTokens ?? '?'}/${pc.cacheMissTokens ?? '?'}`
+          : '';
+      console.log(
+        `[OpenAI] chat 响应: ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'} | ${usage?.completion_tokens ?? '?'}${cacheFrag}`,
+      );
 
       return this.convertResponse(response as OpenAI.ChatCompletion);
     } catch (error) {
@@ -126,10 +226,13 @@ export class OpenAIAdapter implements ProviderAdapter {
       console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
 
-      const stream = await this.client.chat.completions.create({
-        ...params,
-        stream: true,
-      });
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+      const reqOpts = this.buildRequestOptions(options, signal);
+      const stream = await this.client.chat.completions.create(
+        { ...params, stream: true },
+        reqOpts,
+      );
 
       let fullContent = '';
       let reasoningContent = '';
@@ -137,6 +240,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
       let promptTokens = 0;
       let completionTokens = 0;
+      let lastUsageExtras: ReturnType<typeof extractPromptCacheFromChatUsage> = {};
 
       for await (const chunk of stream) {
         const delta = chunk.choices?.[0]?.delta;
@@ -149,12 +253,12 @@ export class OpenAIAdapter implements ProviderAdapter {
             callback(delta.content, false);
           }
 
-          // Handle reasoning_content for thinking models (e.g., DeepSeek)
-          // 不推送到 callback — reasoning_content 是内部思考过程，不直接展示给用户
-          // 但必须保留并回传给 API，否则 DeepSeek thinking 模式会报 400
+          // reasoning_content / reasoning_details：经独立 channel 推前端；不回传 API
           const deltaAny = delta as any;
-          if (deltaAny.reasoning_content) {
-            reasoningContent += deltaAny.reasoning_content;
+          const reasoningDelta = this.extractStreamReasoningDelta(deltaAny);
+          if (reasoningDelta) {
+            reasoningContent += reasoningDelta;
+            callback({ channel: 'reasoning', delta: reasoningDelta }, false);
           }
 
           // Handle tool calls in streaming
@@ -184,13 +288,20 @@ export class OpenAIAdapter implements ProviderAdapter {
         if (chunk.usage) {
           promptTokens = chunk.usage.prompt_tokens ?? 0;
           completionTokens = chunk.usage.completion_tokens ?? 0;
+          lastUsageExtras = extractPromptCacheFromChatUsage(chunk.usage);
         }
       }
 
       callback('', true);
 
       const elapsed = Date.now() - startTime;
-      console.log(`[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} / ${completionTokens}`);
+      const streamCacheFrag =
+        lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
+          ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`
+          : '';
+      console.log(
+        `[OpenAI] stream 完成 : ${elapsed}ms | tokens: ${promptTokens} | ${completionTokens}${streamCacheFrag}`,
+      );
 
       const parsedToolCalls = this.parseStreamToolCalls(toolCalls);
 
@@ -203,6 +314,7 @@ export class OpenAIAdapter implements ProviderAdapter {
           outputTokens: completionTokens,
           totalTokens: promptTokens + completionTokens,
           provider: this.name,
+          ...lastUsageExtras,
         },
         finishReason,
       };
@@ -227,19 +339,16 @@ export class OpenAIAdapter implements ProviderAdapter {
   private convertToOpenAIMessages(
     messages: UnifiedMessage[],
   ): OpenAI.ChatCompletionMessageParam[] {
-    // DeepSeek thinking 模式修复：如果会话中任何 assistant 消息有 reasoningContent，
-    // 则所有 assistant 消息都必须有 reasoning_content 字段，缺失的补空字符串。
-    const hasAnyReasoning = messages.some(m => m.role === 'assistant' && m.reasoningContent);
-    const normalized = hasAnyReasoning
-      ? messages.map(m => {
-          if (m.role === 'assistant' && !m.reasoningContent) {
-            return { ...m, reasoningContent: '' };
-          }
-          return m;
-        })
-      : messages;
+    const stripped = messages.map((m) => {
+      if (m.role === 'assistant' && m.reasoningContent !== undefined) {
+        const { reasoningContent: _r, ...rest } = m;
+        return rest;
+      }
+      return m;
+    });
 
-    const converted = normalized.map((msg) => this.convertSingleMessage(msg));
+    const withCollapsedSystem = collapseUnifiedSystemMessages(stripped);
+    const converted = withCollapsedSystem.map((msg) => this.convertSingleMessage(msg));
     return this.validateToolCallPairing(converted);
   }
 
@@ -254,10 +363,28 @@ export class OpenAIAdapter implements ProviderAdapter {
   private validateToolCallPairing(
     messages: OpenAI.ChatCompletionMessageParam[],
   ): OpenAI.ChatCompletionMessageParam[] {
-    // 收集所有 assistant 的 tool_call id
-    const requiredIds = new Map<string, number>(); // id -> assistant 消息索引
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
+    const requiredIdSet = new Set<string>();
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
+        for (const tc of msg.tool_calls) {
+          requiredIdSet.add(tc.id);
+        }
+      }
+    }
+
+    if (requiredIdSet.size === 0) {
+      return messages.filter(m => m.role !== 'tool');
+    }
+
+    // 移除无对应 assistant tool_call 的孤立 tool 消息
+    const withoutOrphans = messages.filter(m => {
+      if (m.role !== 'tool' || !('tool_call_id' in m) || !m.tool_call_id) return true;
+      return requiredIdSet.has(m.tool_call_id);
+    });
+
+    const requiredIds = new Map<string, number>();
+    for (let i = 0; i < withoutOrphans.length; i++) {
+      const msg = withoutOrphans[i]!;
       if (msg.role === 'assistant' && 'tool_calls' in msg && msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           requiredIds.set(tc.id, i);
@@ -265,11 +392,9 @@ export class OpenAIAdapter implements ProviderAdapter {
       }
     }
 
-    if (requiredIds.size === 0) return messages;
-
     // 收集已有的 tool 消息 id
     const existingToolIds = new Set<string>();
-    for (const msg of messages) {
+    for (const msg of withoutOrphans) {
       if (msg.role === 'tool' && 'tool_call_id' in msg && msg.tool_call_id) {
         existingToolIds.add(msg.tool_call_id);
       }
@@ -283,7 +408,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       }
     }
 
-    if (missingIds.length === 0) return messages;
+    if (missingIds.length === 0) return withoutOrphans;
 
     // 按 assistantIdx 分组
     const missingByIdx = new Map<number, string[]>();
@@ -294,30 +419,27 @@ export class OpenAIAdapter implements ProviderAdapter {
       missingByIdx.get(assistantIdx)!.push(id);
     }
 
-    // 插入占位 tool 消息
+    // 插入占位 tool 消息（不重复推送紧随 assistant 的已有 tool）
     const result: OpenAI.ChatCompletionMessageParam[] = [];
-    for (let i = 0; i < messages.length; i++) {
-      result.push(messages[i]);
+    for (let i = 0; i < withoutOrphans.length; i++) {
+      const msg = withoutOrphans[i]!;
+      result.push(msg);
 
-      if (missingByIdx.has(i)) {
-        // 跳过紧随其后的已有 tool 消息（它们已经在 result 中了，下一轮循环会加）
-        // 找到该 assistant 后面连续 tool 消息的末尾
-        let j = i + 1;
-        while (j < messages.length && messages[j].role === 'tool') {
-          result.push(messages[j]);
-          j++;
-        }
-        // 在末尾补齐缺失的
-        for (const missingId of missingByIdx.get(i)!) {
-          result.push({
-            role: 'tool',
-            content: '[工具结果丢失]',
-            tool_call_id: missingId,
-          });
-        }
-        // 跳过已处理的
-        i = j - 1;
+      if (msg.role !== 'assistant' || !missingByIdx.has(i)) continue;
+
+      let j = i + 1;
+      while (j < withoutOrphans.length && withoutOrphans[j]?.role === 'tool') {
+        result.push(withoutOrphans[j]!);
+        j++;
       }
+      for (const missingId of missingByIdx.get(i)!) {
+        result.push({
+          role: 'tool',
+          content: '[工具结果丢失]',
+          tool_call_id: missingId,
+        });
+      }
+      i = j - 1;
     }
 
     return result;
@@ -361,7 +483,11 @@ export class OpenAIAdapter implements ProviderAdapter {
                 }
               }
               if (imageCount > 0) {
-                textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+                const combined = textParts.join('\n');
+                const hasPersistedImageHint = /image_read|imagesCache/i.test(combined);
+                if (!hasPersistedImageHint) {
+                  textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
+                }
               }
               return { role: 'user', content: textParts.join('\n') };
             }
@@ -374,10 +500,6 @@ export class OpenAIAdapter implements ProviderAdapter {
           role: 'assistant',
           content: this.resolveContent(msg.content),
         };
-        // 传回 reasoning_content（DeepSeek thinking 模式要求）
-        if (msg.reasoningContent !== undefined) {
-          assistantMsg.reasoning_content = msg.reasoningContent;
-        }
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           assistantMsg.tool_calls = msg.toolCalls.map((tc) => ({
             id: tc.id,
@@ -483,9 +605,10 @@ export class OpenAIAdapter implements ProviderAdapter {
       params.presence_penalty = options.presencePenalty;
     }
 
-    // 处理工具（Function Calling）
-    if (options.tools && options.tools.length > 0) {
-      params.tools = this.convertToolDefinitions(options.tools);
+    // 处理工具（Function Calling）；排序 + 可选瘦描述 → 前缀更稳、更小
+    const prepared = prepareToolsForChatCompletions(options.tools);
+    if (prepared && prepared.length > 0) {
+      params.tools = this.convertToolDefinitions(prepared);
     }
 
     // 透传提供者特定参数（如 NVIDIA 的 chat_template_kwargs）
@@ -498,7 +621,53 @@ export class OpenAIAdapter implements ProviderAdapter {
       params.stream_options = { include_usage: true };
     }
 
-    return params as OpenAI.ChatCompletionCreateParams;
+    // MiniMax：拆分思考链到 reasoning 字段，供 Web 思考块展示
+    if (this.shouldUseReasoningSplit(model)) {
+      params.extra_body = {
+        ...(params.extra_body ?? {}),
+        reasoning_split: true,
+      };
+    }
+
+    return orderRequestParams(params) as unknown as OpenAI.ChatCompletionCreateParams;
+  }
+
+  /** MiniMax M2/M3 等：启用 reasoning_split 将思考从 content 分离。 */
+  private shouldUseReasoningSplit(model: string): boolean {
+    return model.toLowerCase().includes('minimax');
+  }
+
+  /** 流式 delta 中的思考增量（DeepSeek reasoning_content / MiniMax reasoning_details）。 */
+  private extractStreamReasoningDelta(deltaAny: Record<string, unknown>): string {
+    if (typeof deltaAny.reasoning_content === 'string' && deltaAny.reasoning_content) {
+      return deltaAny.reasoning_content;
+    }
+    const details = deltaAny.reasoning_details;
+    if (!Array.isArray(details)) return '';
+    let parts = '';
+    for (const detail of details) {
+      if (detail && typeof detail === 'object' && typeof (detail as { text?: string }).text === 'string') {
+        parts += (detail as { text: string }).text;
+      }
+    }
+    return parts;
+  }
+
+  /** 非流式 message 中的思考全文。 */
+  private extractMessageReasoningContent(messageAny: Record<string, unknown>): string | undefined {
+    if (typeof messageAny.reasoning_content === 'string' && messageAny.reasoning_content) {
+      return messageAny.reasoning_content;
+    }
+    const details = messageAny.reasoning_details;
+    if (!Array.isArray(details)) return undefined;
+    const parts = details
+      .map((detail) => (
+        detail && typeof detail === 'object' && typeof (detail as { text?: string }).text === 'string'
+          ? (detail as { text: string }).text
+          : ''
+      ))
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join('') : undefined;
   }
 
   /**
@@ -524,11 +693,12 @@ export class OpenAIAdapter implements ProviderAdapter {
 
     const content = message?.content || '';
 
-    // 提取 reasoning_content（DeepSeek 等 thinking 模型）
-    const messageAny = message as any;
-    const reasoningContent = messageAny?.reasoning_content || undefined;
+    const messageAny = message as unknown as Record<string, unknown>;
+    const reasoningContent = this.extractMessageReasoningContent(messageAny);
 
     const toolCalls = this.parseToolCalls(message?.tool_calls);
+
+    const cacheSlice = extractPromptCacheFromChatUsage(response.usage ?? null);
 
     return {
       content,
@@ -537,8 +707,11 @@ export class OpenAIAdapter implements ProviderAdapter {
       usage: {
         inputTokens: response.usage?.prompt_tokens ?? 0,
         outputTokens: response.usage?.completion_tokens ?? 0,
-        totalTokens: response.usage?.total_tokens ?? 0,
+        totalTokens:
+          response.usage?.total_tokens
+          ?? (response.usage?.prompt_tokens ?? 0) + (response.usage?.completion_tokens ?? 0),
         provider: this.name,
+        ...cacheSlice,
       },
       finishReason: this.mapFinishReason(choice?.finish_reason),
     };
@@ -585,9 +758,9 @@ export class OpenAIAdapter implements ProviderAdapter {
    */
   private safeParseJSON(jsonStr: string): Record<string, any> {
     try {
-      return JSON.parse(jsonStr);
+      return normalizeToolArguments(JSON.parse(jsonStr)) as Record<string, any>;
     } catch {
-      return { raw: jsonStr };
+      return normalizeToolArguments({ raw: jsonStr }) as Record<string, any>;
     }
   }
 
@@ -614,6 +787,11 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 将 OpenAI API 错误转换为统一错误格式。
    */
   private convertError(error: unknown): Error {
+    if (isAbortError(error)) {
+      const aborted = makeAbortedError(this.name);
+      (aborted as any).provider = this.name;
+      return aborted;
+    }
     if (error instanceof OpenAI.APIError) {
       const message = `OpenAI API Error [${error.status}]: ${error.message}`;
       const unifiedError = new Error(message);

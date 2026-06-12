@@ -102,10 +102,11 @@ export function resolveFileReferences(message: string): { text: string; filePath
 export function createUploadRouter(): Router {
   const router = Router();
 
+  void ensureUploadDir();
+
   // multer 配置：存到临时目录
   const storage = multer.diskStorage({
-    destination: async (_req, _file, cb) => {
-      await ensureUploadDir();
+    destination: (_req, _file, cb) => {
       cb(null, UPLOAD_DIR);
     },
     filename: (_req, file, cb) => {
@@ -135,34 +136,49 @@ export function createUploadRouter(): Router {
   /**
    * POST /api/chat/upload — 上传文件
    */
-  router.post('/upload', upload.single('file'), async (req: Request, res: Response): Promise<void> => {
-    try {
-      const file = (req as any).file;
-      if (!file) {
-        res.json({ error: '未收到文件' });
+  router.post('/upload', (req: Request, res: Response): void => {
+    upload.single('file')(req, res, (err: unknown) => {
+      if (err) {
+        let message: string;
+        if (err instanceof multer.MulterError) {
+          message = err.code === 'LIMIT_FILE_SIZE'
+            ? `文件超过 ${CHAT_UPLOAD_MAX_FILE_BYTES / (1024 * 1024)}MB 上限`
+            : err.message;
+        } else {
+          message = err instanceof Error ? err.message : String(err);
+        }
+        res.json({ error: `上传失败: ${message}` });
         return;
       }
 
-      // 修复中文文件名
-      const originalName = fixFilename(file.originalname);
+      void (async () => {
+        try {
+          const file = (req as { file?: { originalname: string; path: string; size: number; mimetype: string } }).file;
+          if (!file) {
+            res.json({ error: '未收到文件' });
+            return;
+          }
 
-      const fileId = randomUUID();
-      uploadedFiles.set(fileId, {
-        originalName,
-        filePath: file.path,
-        size: file.size,
-        mimeType: file.mimetype,
-      });
+          const originalName = fixFilename(file.originalname);
+          const fileId = randomUUID();
+          uploadedFiles.set(fileId, {
+            originalName,
+            filePath: file.path,
+            size: file.size,
+            mimeType: file.mimetype,
+          });
 
-      res.json({
-        fileId,
-        filename: originalName,
-        size: file.size,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      res.json({ error: `上传失败: ${message}` });
-    }
+          res.json({
+            fileId,
+            filename: originalName,
+            size: file.size,
+          });
+        } catch (handlerErr) {
+          const message = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+          res.json({ error: `上传失败: ${message}` });
+        }
+      })();
+    });
   });
 
   return router;

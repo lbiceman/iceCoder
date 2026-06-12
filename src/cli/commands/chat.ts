@@ -6,21 +6,23 @@
  */
 
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
+import { resolveDefaultApiPort } from '../serve-port.js';
 import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
+import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
-import { getBackgroundTaskManager } from '../../tools/background-task-manager.js';
+import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
 import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
@@ -29,8 +31,17 @@ import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
-  getHarnessTokenBudgetFromEnv,
+  getHarnessTokenBudget,
 } from '../../harness/token-budget-config.js';
+import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
+import {
+  readSkipPermissionChecksFromMainConfig,
+  readSkipSandboxFromMainConfig,
+} from '../../config/main-config-supervisor-mode.js';
+import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
+import { fetchQuickTunnelPublicUrl } from '../../web/quicktunnel-url.js';
+import { startTunnel } from '../tunnel/cloudflared-tunnel.js';
+import { isTunnelDevEnabled } from '../../runtime/tunnel-feature.js';
 
 /**
  * 在终端显示 ASCII 二维码。
@@ -52,17 +63,11 @@ async function showScanQR(port: number): Promise<void> {
       if (localIP !== '127.0.0.1') break;
     }
 
-    // 尝试获取 cloudflared 隧道 URL
     let url = `http://${localIP}:${port}`;
-    try {
-      const res = await fetch('http://127.0.0.1:20241/quicktunnel', { signal: AbortSignal.timeout(2000) });
-      if (res.ok) {
-        const data = await res.json() as { hostname?: string };
-        if (data.hostname) {
-          url = `https://${data.hostname}`;
-        }
-      }
-    } catch { /* no tunnel */ }
+    if (isTunnelDevEnabled()) {
+      const tunnelUrl = await fetchQuickTunnelPublicUrl();
+      if (tunnelUrl) url = tunnelUrl;
+    }
 
     const QRCode = await import('qrcode');
     const qrText = await QRCode.default.toString(url, { type: 'terminal', small: true });
@@ -77,97 +82,12 @@ async function showScanQR(port: number): Promise<void> {
 }
 
 /**
- * 检测 cloudflared 是否可用。
- */
-async function findCloudflared(customBin?: string): Promise<string | null> {
-  const candidates = [
-    customBin,
-    process.env.CLOUDFLARED_BIN,
-    'E:\\tools\\cloudflared\\cloudflared.exe', // 本地开发环境
-    'cloudflared', // PATH 中查找
-  ].filter(Boolean) as string[];
-
-  for (const bin of candidates) {
-    try {
-      const { execSync } = await import('node:child_process');
-      execSync(`${bin} --version`, { stdio: 'ignore', timeout: 5000 });
-      return bin;
-    } catch {
-      // 不可用，继续尝试下一个
-    }
-  }
-  return null;
-}
-
-/**
- * 启动 Cloudflare Tunnel 子进程。
- * 如果 cloudflared 不存在，提示用户下载并跳过。
- */
-async function startTunnel(port: number, tunnelBin?: string): Promise<ChildProcess | null> {
-  const bin = await findCloudflared(tunnelBin);
-
-  if (!bin) {
-    warn('未检测到 cloudflared，跳过公网隧道。');
-    console.log(`
-  ${c.bold}安装 cloudflared:${c.reset}
-    Windows:  ${c.cyan}winget install cloudflare.cloudflared${c.reset}
-    macOS:    ${c.cyan}brew install cloudflared${c.reset}
-    Linux:    ${c.cyan}curl -fsSL https://pkg.cloudflare.com/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared${c.reset}
-    手动下载: ${c.underline}https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/${c.reset}
-
-  安装后重新运行 ${c.green}iceCoder start${c.reset} 即可自动启用公网隧道。
-  或使用 ${c.green}--tunnel-bin <路径>${c.reset} 指定 cloudflared 位置。
-`);
-    return null;
-  }
-
-  info(`启动 Cloudflare Tunnel: ${bin}`);
-
-  const tunnelArgs = ['tunnel', '--url', `http://localhost:${port}`, '--metrics', '127.0.0.1:20241'];
-  const child = spawn(bin, tunnelArgs, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
-    windowsHide: true,
-  });
-
-  child.stdout?.on('data', (chunk: Buffer) => {
-    const msg = chunk.toString().trim();
-    // 提取隧道 URL
-    const urlMatch = msg.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (urlMatch) {
-      info(`🌐 公网地址: ${c.underline}${urlMatch[0]}${c.reset}`);
-    }
-  });
-
-  child.stderr?.on('data', (chunk: Buffer) => {
-    const msg = chunk.toString().trim();
-    const urlMatch = msg.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (urlMatch) {
-      info(`🌐 公网地址: ${c.underline}${urlMatch[0]}${c.reset}`);
-    }
-  });
-
-  child.on('error', (err) => {
-    error(`Cloudflare Tunnel 启动失败: ${err.message}`);
-    info('可通过 --no-tunnel 跳过，或 --tunnel-bin 指定 cloudflared 路径');
-  });
-
-  child.on('exit', (code) => {
-    if (code !== null && code !== 0) {
-      error(`Cloudflare Tunnel 控制台退出 (code: ${code})`);
-    }
-  });
-
-  return child;
-}
-
-/**
  * iceCoder chat/cli/start 命令入口。
  */
 export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const noServe = hasFlag(args.flags, 'no-serve');
   const withTunnel = hasFlag(args.flags, 'with-tunnel');
-  const port = getFlagNum(args.flags, 'port', 'p') ?? parseInt(process.env.PORT ?? '3000', 10);
+  const port = getFlagNum(args.flags, 'port', 'p') ?? resolveDefaultApiPort();
   const { memoryFilesDir } = ctx.paths;
 
   /** 加载提示词（与 WebSocket 共用逻辑；不绑定固定自然语言）。 */
@@ -185,25 +105,17 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
   if (!noServe) {
     serveResult = await startWebServer(ctx, port);
-    info(`Web 服务器已启动: ${c.underline}http://localhost:${port}${c.reset}`);
+    info(`Web 服务器已启动: ${c.underline}http://127.0.0.1:${port}${c.reset}`);
 
-    // 启动 Cloudflare Tunnel（start 模式）
-    if (withTunnel && !hasFlag(args.flags, 'no-tunnel')) {
+    if (
+      isTunnelDevEnabled() &&
+      withTunnel &&
+      !hasFlag(args.flags, 'no-tunnel') &&
+      !ctx.needsSetup
+    ) {
       tunnelProcess = await startTunnel(port, getFlagStr(args.flags, 'tunnel-bin'));
     }
   }
-
-  // 初始化记忆系统
-  let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
-
-  try {
-    fileMemoryManager = createFileMemoryManager({
-      memory: { memoryDir: memoryFilesDir },
-      enableAutoExtraction: true,
-      enableAsyncPrefetch: true,
-    });
-    await fileMemoryManager.initialize();
-  } catch { fileMemoryManager = null; }
 
   // 注册优雅退出（Ctrl+C / SIGTERM）
   // latestHarness 追踪最近一次对话的 Harness 实例，
@@ -219,12 +131,40 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
           latestHarness = null;
         }
       },
-      () => { getBackgroundTaskManager().dispose(); },
+      () => { disposeAllBackgroundTaskManagers(); },
       () => { tunnelProcess?.kill(); },
       () => { serveResult?.cleanup(); },
       () => ctx.mcpManager.shutdown(),
     ],
   });
+
+  if (ctx.needsSetup) {
+    if (!noServe) {
+      warn('首次使用：请在浏览器中完成模型配置');
+      console.log(`  ${c.cyan}http://127.0.0.1:${port}/#/config${c.reset}`);
+      return;
+    }
+    error('请先完成模型配置后再使用终端对话');
+    process.exit(1);
+  }
+
+  // F2: dual-mode 全局策略一次性加载，每次对话复用，避免每轮多读磁盘。
+  const supervisorRuntime = await loadHarnessSupervisorRuntime({
+    dataDir: ctx.paths.dataDir,
+    mainConfigPath: ctx.paths.configPath,
+  });
+
+  // 初始化记忆系统
+  let fileMemoryManager: ReturnType<typeof createFileMemoryManager> | null = null;
+
+  try {
+    fileMemoryManager = createFileMemoryManager({
+      memory: { memoryDir: memoryFilesDir },
+      enableAutoExtraction: true,
+      enableAsyncPrefetch: true,
+    });
+    await fileMemoryManager.initialize();
+  } catch { fileMemoryManager = null; }
 
   // 会话消息历史（跨轮次累积）
   let sessionMessages: UnifiedMessage[] | undefined;
@@ -301,7 +241,6 @@ ${c.bold}终端内置命令:${c.reset}
   ${c.cyan}/scan${c.reset}    显示手机连接二维码
   ${c.cyan}/tools${c.reset}   列出可用工具
   ${c.cyan}/clear${c.reset}   清空对话历史
-  ${c.cyan}/export${c.reset}  导出记忆文件
   ${c.cyan}/memory${c.reset}  查看/管理记忆文件
   ${c.cyan}/help${c.reset}    显示此帮助
   ${c.cyan}/quit${c.reset}    退出
@@ -426,77 +365,28 @@ ${c.bold}终端内置命令:${c.reset}
       return;
     }
 
-    if (cmd === 'export') {
-      try {
-        const { promises: fsP } = await import('node:fs');
-        const pathMod = await import('node:path');
-        const { gzip: gzipCb } = await import('node:zlib');
-        const { promisify } = await import('node:util');
-        const gzipFn = promisify(gzipCb);
-
-        const projDir = pathMod.default.resolve(memoryFilesDir);
-        const userDir = pathMod.default.resolve(process.env.ICE_USER_MEMORY_DIR || 'data/user-memory');
-
-        // 扫描文件
-        const scanDir = async (dir: string): Promise<string[]> => {
-          try {
-            const entries = await fsP.readdir(dir, { recursive: true });
-            return entries.filter((e: any) => typeof e === 'string' && e.endsWith('.md')) as string[];
-          } catch { return []; }
-        };
-
-        const projFiles = await scanDir(projDir);
-        const userFiles = await scanDir(userDir);
-        const total = projFiles.length + userFiles.length;
-
-        if (total === 0) {
-          info('没有可导出的记忆文件。');
-          rl.prompt();
-          return;
-        }
-
-        // 打包
-        const entries: Array<{ rp: string; buf: Buffer }> = [];
-        for (const f of projFiles) {
-          entries.push({ rp: 'project/' + f.replace(/\\/g, '/'), buf: await fsP.readFile(pathMod.default.join(projDir, f)) });
-        }
-        for (const f of userFiles) {
-          entries.push({ rp: 'user/' + f.replace(/\\/g, '/'), buf: await fsP.readFile(pathMod.default.join(userDir, f)) });
-        }
-
-        let size = 4;
-        for (const e of entries) { size += 2 + Buffer.byteLength(e.rp) + 4 + e.buf.length; }
-        const raw = Buffer.alloc(size);
-        let off = 0;
-        raw.writeUInt32BE(entries.length, off); off += 4;
-        for (const e of entries) {
-          const pb = Buffer.from(e.rp, 'utf-8');
-          raw.writeUInt16BE(pb.length, off); off += 2;
-          pb.copy(raw, off); off += pb.length;
-          raw.writeUInt32BE(e.buf.length, off); off += 4;
-          e.buf.copy(raw, off); off += e.buf.length;
-        }
-
-        const compressed = await gzipFn(raw);
-        const date = new Date().toISOString().split('T')[0];
-        const outPath = `icecoder-memory-${date}.gz`;
-        await fsP.writeFile(outPath, compressed);
-
-        success(`记忆导出完成: ${outPath} (${total} 个文件, ${(compressed.length / 1024).toFixed(1)} KB)`);
-      } catch (e) {
-        error(`导出失败: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      rl.prompt();
-      return;
-    }
-
-    // 发送给 AI
     const spinner = new Spinner('思考中...');
     spinner.start();
 
     try {
       const assembled = await loadAssembledPrompt();
-      const toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
+      let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
+
+      const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
+      const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
+      const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
+
+      const wsCtx = await resolveWorkspaceToolContext({
+        sessionDir: ctx.paths.sessionsDir,
+        sessionId: 'default',
+        userMessage: input,
+        defaultWorkDir: process.cwd(),
+        defaultToolExecutor: ctx.toolExecutor,
+        defaultToolRegistry: ctx.toolRegistry,
+        fileParser: ctx.fileParser,
+        llmAdapter: ctx.llmAdapter,
+      });
+      toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
       const harnessConfig: HarnessConfig = {
         context: {
@@ -508,17 +398,25 @@ ${c.bold}终端内置命令:${c.reset}
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
           timeout: getHarnessTimeoutMsFromEnv(),
-          tokenBudget: getHarnessTokenBudgetFromEnv(),
+          tokenBudget: getHarnessTokenBudget(),
         },
         permissions: [
           { pattern: 'delete_file', permission: 'confirm', reason: '删除文件需要确认' },
         ],
+        skipPermissionChecks,
+        skipSandbox,
         compactionThreshold: 40,
         compactionKeepRecent: 10,
         compactionEnableLLMSummary: true,
         memoryDir: memoryFilesDir,
         fileMemoryManager: fileMemoryManager ?? undefined,
         sessionDir: ctx.paths.sessionsDir,
+        sessionId: 'default',
+        workspaceRoot: wsCtx.effectiveWorkspaceRoot,
+        verificationExemptDirs,
+        supervisorConfig: supervisorRuntime.supervisorConfig,
+        globalPolicy: supervisorRuntime.globalPolicy,
+        supervisorBridge: supervisorRuntime.bridge,
         onConfirm: async (toolName, toolArgs) => {
           // 终端确认
           spinner.stop();
@@ -535,7 +433,7 @@ ${c.bold}终端内置命令:${c.reset}
         },
       };
 
-      const harness = new Harness(harnessConfig, ctx.toolExecutor);
+      const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
       latestHarness = harness;
 
       spinner.stop();

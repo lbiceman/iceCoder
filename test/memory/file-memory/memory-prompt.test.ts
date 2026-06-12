@@ -6,7 +6,8 @@ describe('buildMemoryInstructions', () => {
     const prompt = buildMemoryInstructions('/tmp/memory');
 
     expect(prompt).toContain('not as a replacement for the user');
-    expect(prompt).toContain('only when the user explicitly asks');
+    expect(prompt).toContain('unless the user explicitly asks you to remember');
+    expect(prompt).toContain('session-notes');
     expect(prompt).toContain('focus on the task');
   });
 });

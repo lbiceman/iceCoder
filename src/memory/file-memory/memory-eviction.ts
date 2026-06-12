@@ -10,13 +10,16 @@
  * - 召回频率（经常被召回的记忆受保护）
  * - 记忆类型（user 受保护；feedback/reference 更易淘汰）
  *
- * 被淘汰的文件移动到 evicted/ 目录（可恢复），不是直接删除。
+ * 被淘汰的文件移动到 `memory-evicted/{memory-files|user-memory}/`（可恢复），不是直接删除。
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
+import { repairDeadLinksInMemoryIndex } from './memory-index-health.js';
+import { removeIndexRows } from './memory-index-maintainer.js';
+import { getScannerCache } from './memory-scanner-cache.js';
 import {
   type EvictionConfig,
   DEFAULT_EVICTION_CONFIG,
@@ -266,6 +269,20 @@ export async function evictIfNeeded(
 
   if (evictedFiles.length > 0) {
     console.log(`[memory-eviction] ${summary}`);
+    try {
+      await removeIndexRows(memoryDir, evictedFiles);
+    } catch (err) {
+      console.debug('[memory-eviction] removeIndexRows failed:', err instanceof Error ? err.message : err);
+    }
+    try {
+      const repair = await repairDeadLinksInMemoryIndex(memoryDir);
+      if (repair.wrote) {
+        console.debug(`[memory-eviction] MEMORY.md stripped ${repair.removedLinks} dead link(s)`);
+        getScannerCache().invalidate(memoryDir);
+      }
+    } catch (err) {
+      console.debug('[memory-eviction] repair MEMORY.md links failed:', err instanceof Error ? err.message : err);
+    }
   }
 
   return { executed: evictedFiles.length > 0, fileCountBefore, fileCountAfter, evictedFiles, summary };

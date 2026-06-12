@@ -51,7 +51,7 @@ const RECALL_FLUSH_INTERVAL_MS = 30_000;
 /** LLM 召回超时（毫秒） */
 const LLM_RECALL_TIMEOUT_MS = 30_000;
 /** LLM 召回最少候选数：候选数不足时直接走关键词回退，避免无意义的 LLM 调用 */
-export const LLM_RECALL_MIN_CANDIDATES = 4;
+export const LLM_RECALL_MIN_CANDIDATES = 2;
 /** LLM 召回最大输出 token */
 const LLM_RECALL_MAX_TOKENS = 512;
 /** Fact 选择上限 */
@@ -84,6 +84,12 @@ const TAGS_JACCARD_THRESHOLD = 0.2;
 /**
  * 召回结果。
  */
+/** 召回选项 */
+export interface RecallOptions {
+  /** 粗召回：降低过滤阈值，零命中时按活跃度兜底 */
+  relaxed?: boolean;
+}
+
 export interface RecallResult {
   /** 选中的记忆文件 */
   memories: MemoryHeader[];
@@ -195,7 +201,11 @@ export async function recallRelevantMemories(
   maxResults: number = 5,
   prefetchedPaths: Set<string> = new Set(),
   topicSwitched: boolean = false,
+  options?: RecallOptions,
 ): Promise<RecallResult> {
+  const relaxed = options?.relaxed === true;
+  const confidenceThreshold = relaxed ? 0.2 : CONFIDENCE_FILTER_THRESHOLD;
+  const scoreThreshold = relaxed ? 0.01 : SCORE_FILTER_THRESHOLD;
   const startTime = Date.now();
 
   // ── 空目录快速跳过 ──
@@ -229,7 +239,7 @@ export async function recallRelevantMemories(
   // 过滤极低置信度和不适合当前任务类型的记忆（减少噪声，降低幻觉）
   const filteredMemories = dedupeConflictingMemories(
     filterByMemoryLevelForIntent(
-      memories.filter(m => m.confidence >= CONFIDENCE_FILTER_THRESHOLD),
+      memories.filter(m => m.confidence >= confidenceThreshold),
       inferRecallIntent(query),
     ),
   );
@@ -255,12 +265,26 @@ export async function recallRelevantMemories(
   await factIndex.buildIndex(filteredMemories);
 
   // 如果有 LLM 适配器且候选数足够，使用 LLM 召回（v7：一次调用同时选文件和精排 facts）
-  // 候选数不足时直接走关键词回退，避免无意义的 LLM 调用（10-14s 开销）
-  if (llmAdapter && filteredMemories.length >= LLM_RECALL_MIN_CANDIDATES) {
+  // 先关键词粗筛，缩小 LLM 候选池
+  const llmPoolLimit = Math.max(maxResults * COARSE_LIMIT_MULTIPLIER, COARSE_LIMIT_MIN);
+  const llmCandidatePool = filteredMemories.length > llmPoolLimit
+    ? keywordFallback(
+      query,
+      filteredMemories,
+      llmPoolLimit,
+      negationExpansions,
+      timeRange,
+      prefetchedPaths,
+      topicSwitched,
+      scoreThreshold,
+    )
+    : filteredMemories;
+
+  if (llmAdapter && llmCandidatePool.length >= LLM_RECALL_MIN_CANDIDATES) {
     try {
       // LLM 召回带 30 秒超时，防止无限挂起
       const llmResult = await Promise.race([
-        llmSelectAndRankMemories(query, filteredMemories, llmAdapter, maxResults, factIndex, timeRange, topicSwitched),
+        llmSelectAndRankMemories(query, llmCandidatePool, llmAdapter, maxResults, factIndex, timeRange, topicSwitched),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`LLM recall timeout (${LLM_RECALL_TIMEOUT_MS / 1000}s)`)), LLM_RECALL_TIMEOUT_MS)),
       ]);
       // ── 关联扩展（1 跳）──
@@ -290,7 +314,19 @@ export async function recallRelevantMemories(
   }
 
   // 回退：关键词匹配
-  const fallbackResults = keywordFallback(query, filteredMemories, maxResults, negationExpansions, timeRange, prefetchedPaths, topicSwitched);
+  let fallbackResults = keywordFallback(
+    query,
+    filteredMemories,
+    maxResults,
+    negationExpansions,
+    timeRange,
+    prefetchedPaths,
+    topicSwitched,
+    scoreThreshold,
+  );
+  if (relaxed && fallbackResults.length === 0 && filteredMemories.length > 0) {
+    fallbackResults = recallActivityFallback(filteredMemories, maxResults);
+  }
   // ── 关联扩展（关键词回退路径也支持）──
   const fallbackExpanded = expandRelatedMemories(fallbackResults, filteredMemories, alreadySurfaced);
   const allFallback = [...fallbackResults, ...fallbackExpanded];
@@ -813,6 +849,17 @@ export function invalidateIdfCache(): void {
  * - TF-IDF 加权：稀有 token 命中权重更高（"typescript" > "the"）
  * - description/filename 命中权重 ×2（比 contentPreview 更重要）
  */
+/** 粗召回零命中时按活跃度兜底 */
+function recallActivityFallback(memories: MemoryHeader[], maxResults: number): MemoryHeader[] {
+  return [...memories]
+    .sort((a, b) => {
+      const scoreA = (a.recallCount || 0) * 2 + (a.confidence || 0.5) + (a.type === 'user' ? 1.5 : 0);
+      const scoreB = (b.recallCount || 0) * 2 + (b.confidence || 0.5) + (b.type === 'user' ? 1.5 : 0);
+      return scoreB - scoreA;
+    })
+    .slice(0, maxResults);
+}
+
 function keywordFallback(
   query: string,
   memories: MemoryHeader[],
@@ -821,6 +868,7 @@ function keywordFallback(
   timeRange: TimeRange | null = null,
   prefetchedPaths: Set<string> = new Set(),
   topicSwitched: boolean = false,
+  scoreFilterThreshold: number = SCORE_FILTER_THRESHOLD,
 ): MemoryHeader[] {
   const queryLower = query.toLowerCase();
   const queryTokens = tokenize(query);
@@ -926,7 +974,7 @@ function keywordFallback(
   });
 
   const coarseResults = scored
-    .filter(item => item.score > SCORE_FILTER_THRESHOLD)
+    .filter(item => item.score > scoreFilterThreshold)
     .sort((a, b) => b.score - a.score)
     .slice(0, COARSE_LIMIT);
 

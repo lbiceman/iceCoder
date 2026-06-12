@@ -5,13 +5,14 @@
  * 并启动 Express Web 服务器与 WebSocket 聊天。
  */
 
+import './cli/paths.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 // LLM 层
 import { LLMAdapter } from './llm/llm-adapter.js';
 import { OpenAIAdapter } from './llm/openai-adapter.js';
-import { AnthropicAdapter } from './llm/anthropic-adapter.js';
+import { openAiAdapterConfigFromProvider } from './llm/provider-adapter-config.js';
 
 // 解析器层
 import { FileParser } from './parser/file-parser.js';
@@ -26,27 +27,49 @@ import { Orchestrator } from './core/orchestrator.js';
 import { initializeToolSystem } from './tools/index.js';
 
 // MCP
-import { MCPManager } from './mcp/index.js';
+import { MCPManager, startMcpBackgroundInit } from './mcp/index.js';
 
 // Web 层
 import { createServer, startServer } from './web/server.js';
-import { createConfigRouter, getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from './web/routes/config.js';
+import { createConfigRouter } from './web/routes/config.js';
 import { createToolsRouter } from './web/routes/tools.js';
 import { createRemoteRouter } from './web/routes/remote.js';
-import { attachChatWebSocket, cleanupChatResources } from './web/chat-ws.js';
-import { createSessionsRouter } from './web/routes/sessions.js';
+import {
+  attachChatWebSocket,
+  broadcastMcpReady,
+  broadcastTunnelReady,
+  cleanupChatResources,
+  getActiveSessionId,
+  getProcessingSessionIds,
+  purgeSessionRuntimeCaches,
+} from './web/chat-ws.js';
+import { registerBootstrapSessionHints } from './web/last-active-session.js';
+import { startTunnelReadyWatcher } from './web/tunnel-ready-watcher.js';
+import { isTunnelDevEnabled } from './runtime/tunnel-feature.js';
+import { createSessionsRouter, registerSessionCleanupHook } from './web/routes/sessions.js';
+import { disposeAllBackgroundTaskManagers } from './tools/background-task-manager.js';
+
+registerSessionCleanupHook(purgeSessionRuntimeCaches);
+registerBootstrapSessionHints({
+  getRuntimeActiveId: getActiveSessionId,
+  getProcessingSessionIds,
+});
 import { createUploadRouter } from './web/routes/upload.js';
 import { createMemoryTelemetryRouter } from './web/routes/memory-telemetry.js';
+import { createSupervisorEventsRouter } from './web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from './web/routes/memory-export.js';
 import { createMemoryFilesRouter } from './web/routes/memory-files.js';
+import { createMemoryDreamRouter } from './web/routes/memory-dream.js';
 
 // 类型
 import type { ProviderConfig, IceCoderConfigFile } from './web/types.js';
-import { ensureMcpConfigFile, resolveMcpConfigPath } from './cli/paths.js';
+import { ensureDataDir, resolveDataPaths, resolveMcpConfigPath } from './cli/paths.js';
+import { isAppConfigReady } from './config/config-readiness.js';
+import { normalizeProviders } from './config/normalize-provider.js';
 
-const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH ?? 'data/config.json');
-const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR ?? 'output');
-const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions');
+const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH!);
+const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR!);
+const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 
 /**
  * 从 data/config.json 读取提供者配置。
@@ -54,7 +77,7 @@ const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR ?? 'data/sessions
 async function loadConfig(): Promise<ProviderConfig[]> {
   const data = await fs.readFile(CONFIG_PATH, 'utf-8');
   const config = JSON.parse(data) as IceCoderConfigFile;
-  return config.providers;
+  return normalizeProviders(config.providers);
 }
 
 /**
@@ -65,30 +88,7 @@ function initializeLLMAdapter(providers: ProviderConfig[]): LLMAdapter {
   const llmAdapter = new LLMAdapter();
 
   for (const provider of providers) {
-    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    if (provider.providerName === 'openai') {
-      const rt = resolveOpenAiRequestTimeoutMs(provider);
-      const openaiAdapter = new OpenAIAdapter({
-        name: provider.id,
-        apiKey: provider.apiKey,
-        baseURL: provider.apiUrl,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-        ...(rt !== undefined ? { timeout: rt } : {}),
-      });
-      llmAdapter.registerProvider(openaiAdapter);
-    } else if (provider.providerName === 'anthropic') {
-      const anthropicAdapter = new AnthropicAdapter({
-        apiKey: provider.apiKey,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-      });
-      llmAdapter.registerProvider(anthropicAdapter);
-    }
+    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);
@@ -113,7 +113,7 @@ function initializeFileParser(): FileParser {
 }
 
 /**
- * 初始化工具系统 + MCP，再创建编排器（与 CLI bootstrap 行为一致）。
+ * 初始化工具系统与 MCPManager（MCP 进程在 HTTP 就绪后后台拉起，见 main）。
  */
 async function initializeOrchestrator(
   fileParser: FileParser,
@@ -126,17 +126,6 @@ async function initializeOrchestrator(
   });
 
   const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
-  try {
-    await mcpManager.initialize();
-    for (const tool of mcpManager.getRegisteredTools()) {
-      registry.register(tool);
-    }
-    if (mcpManager.totalTools > 0) {
-      console.log(`已注册 ${mcpManager.totalTools} 个 MCP 工具到工具系统`);
-    }
-  } catch (err) {
-    console.error('MCP 初始化失败（不影响核心功能）:', err);
-  }
 
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {
     outputDir: OUTPUT_DIR,
@@ -154,30 +143,7 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
   const providers = await loadConfig();
 
   for (const provider of providers) {
-    const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
-    if (provider.providerName === 'openai') {
-      const rt = resolveOpenAiRequestTimeoutMs(provider);
-      const openaiAdapter = new OpenAIAdapter({
-        name: provider.id,
-        apiKey: provider.apiKey,
-        baseURL: provider.apiUrl,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-        ...(rt !== undefined ? { timeout: rt } : {}),
-      });
-      llmAdapter.registerProvider(openaiAdapter);
-    } else if (provider.providerName === 'anthropic') {
-      const anthropicAdapter = new AnthropicAdapter({
-        apiKey: provider.apiKey,
-        model: provider.modelName,
-        temperature: provider.parameters.temperature,
-        maxTokens,
-        topP: provider.parameters.topP,
-      });
-      llmAdapter.registerProvider(anthropicAdapter);
-    }
+    llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
   const defaultProvider = providers.find((p) => p.isDefault);
@@ -217,7 +183,8 @@ function watchConfigChanges(llmAdapter: LLMAdapter): void {
 async function main(): Promise<void> {
   console.log('iceCoder starting...');
 
-  await ensureMcpConfigFile(CONFIG_PATH);
+  const paths = await resolveDataPaths();
+  await ensureDataDir(paths);
 
   // 1. 加载提供者配置
   const providers = await loadConfig();
@@ -234,13 +201,17 @@ async function main(): Promise<void> {
 
   // 5. 创建带所有 API 路由的 Express 服务器
   const port = parseInt(process.env.PORT ?? '1024', 10);
+  const setupState = { required: !isAppConfigReady({ providers }) };
 
   const app = await createServer({
+    setupGate: () => setupState.required,
     routes: [
       { path: '/api/config', router: createConfigRouter({
         configPath: CONFIG_PATH,
-        onConfigSaved: () => {
+        setSetupRequired: (required) => { setupState.required = required; },
+        onConfigSaved: (ready) => {
           reloadLLMAdapterFromConfig(llmAdapter).catch(err => console.error('Failed to reload LLM adapter:', err));
+          if (ready) console.log('[iceCoder] 模型配置已完成，聊天功能已启用');
         },
       }) },
       { path: '/api/tools', router: createToolsRouter({ registry: toolRegistry, executor: toolExecutor }) },
@@ -248,7 +219,9 @@ async function main(): Promise<void> {
       { path: '/api/sessions', router: createSessionsRouter() },
       { path: '/api/chat', router: createUploadRouter() },
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
+      { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
+      { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter() },
     ],
   });
@@ -257,21 +230,51 @@ async function main(): Promise<void> {
   const server = await startServer(app, port);
 
   // 7. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
-  attachChatWebSocket(server, { orchestrator, toolRegistry, toolExecutor });
+  attachChatWebSocket(server, {
+    orchestrator,
+    toolRegistry,
+    toolExecutor,
+    isSetupRequired: () => setupState.required,
+  });
+
+  // 7b. MCP 后台初始化（不阻塞监听）；完成后广播 mcp_ready，并由宠物提示
+  startMcpBackgroundInit(mcpManager, toolRegistry, (r) => {
+    broadcastMcpReady({
+      ok: r.ok,
+      toolCount: r.toolCount,
+      readyServers: r.readyServers,
+      ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+    });
+  });
+
+  const stopTunnelReadyWatcher = isTunnelDevEnabled()
+    ? startTunnelReadyWatcher({
+        onReady: (url) => broadcastTunnelReady({ url }),
+      })
+    : () => {};
 
   // 8. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);
 
   // 9. 优雅关闭处理
-  const shutdown = () => {
-    console.log('Shutting down...');
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Shutting down... (${signal})`);
+    stopTunnelReadyWatcher();
     cleanupChatResources();
-    mcpManager.shutdown().catch((err) => console.error('MCP shutdown error:', err));
+    disposeAllBackgroundTaskManagers();
+    try {
+      await mcpManager.shutdown();
+    } catch (err) {
+      console.error('MCP shutdown error:', err);
+    }
     server.close();
-    process.exit(0);
+    setTimeout(() => process.exit(0), 500).unref();
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
   console.log('iceCoder is ready');
 }

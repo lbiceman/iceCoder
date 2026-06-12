@@ -1,6 +1,6 @@
 /**
  * 冰豆（Ice Bean）— iceCoder Web 会话状态指示器
- * 极简风格：固定黑底 + 胶囊眼睛；眼睛色在启动时从色板随机。
+ * 极简风格：固定黑底 + 胶囊眼睛；眼睛色对应当前 supervisorMode（见 session-pet-palette）。
  * 不区分昼夜模式，始终黑底白字。
  * 眨眼：1-3 秒随机间隔，闭眼 150ms。
  *
@@ -9,10 +9,12 @@
  */
 import {
   SESSION_PET_PALETTE_COLORS as COLORS,
-  pickRandomPaletteColor,
+  supervisorModeToEyeColor,
   buildSessionPetCanvasAriaLabel,
   SESSION_PET_DISPLAY_NAME,
 } from './session-pet-palette.js';
+
+window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
 (function () {
   'use strict';
@@ -37,7 +39,6 @@ import {
   // 固定颜色：黑底；眼睛线色见 create() 闭包内 eyeColor（每实例独立）
   var BODY_BG = '#000000';
   var READ_GLASSES_STROKE = 'rgba(255,255,255,0.55)';
-  var GLOW_COLOR = 'rgba(107,156,255,0.10)';
 
   /** token 圆环线宽（逻辑像素） */
   var TOKEN_RING_LINE_WIDTH = 3.25 * PET_SCALE;
@@ -114,11 +115,13 @@ import {
 
   var DRAG_STORE_KEY = 'ice-session-pet-position';
   var DRAG_MARGIN = 8;
+  var DRAG_THRESHOLD = 5;
 
   function initPetDrag(rootEl, dragHandleEl) {
     if (!rootEl || !dragHandleEl) return { afterShow: function () { } };
 
     var dragPointerId = null;
+    var dragActive = false;
     var startClientX = 0;
     var startClientY = 0;
     var startLeft = 0;
@@ -200,9 +203,15 @@ import {
 
     function onPointerMove(e) {
       if (dragPointerId === null || e.pointerId !== dragPointerId) return;
-      e.preventDefault();
       var dx = e.clientX - startClientX;
       var dy = e.clientY - startClientY;
+      if (!dragActive) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        dragActive = true;
+        dragHandleEl.classList.add('pet-dragging');
+        applyPosition(startLeft, startTop);
+      }
+      e.preventDefault();
       applyPosition(startLeft + dx, startTop + dy);
     }
 
@@ -210,6 +219,7 @@ import {
       if (dragPointerId === null) return;
       if (e && e.pointerId !== dragPointerId) return;
       dragPointerId = null;
+      dragActive = false;
       dragHandleEl.classList.remove('pet-dragging');
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', endDrag);
@@ -228,13 +238,12 @@ import {
       function (e) {
         if (e.button !== undefined && e.button !== 0) return;
         dragPointerId = e.pointerId;
+        dragActive = false;
         startClientX = e.clientX;
         startClientY = e.clientY;
         var rect = rootEl.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
-        applyPosition(startLeft, startTop);
-        dragHandleEl.classList.add('pet-dragging');
         window.addEventListener('pointermove', onPointerMove, { passive: false });
         window.addEventListener('pointerup', endDrag);
         window.addEventListener('pointercancel', endDrag);
@@ -312,7 +321,28 @@ import {
     drawCapsuleEye(ctx, rightX, y, EYE_W / 2, EYE_H / 2, ec);
   }
 
-  /** 2. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
+  /** 2. success — 任务完成（字面 ^ ^ 笑眼，尖顶 caret） */
+  function expressionSuccess(ctx, leftX, rightX, y, ec) {
+    var w = EYE_W / 2;
+    var peak = -6;
+
+    function drawCaret(cx) {
+      ctx.beginPath();
+      ctx.moveTo(cx - w * 0.72, y + 2);
+      ctx.lineTo(cx, y + peak);
+      ctx.lineTo(cx + w * 0.72, y + 2);
+      ctx.strokeStyle = ec;
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+
+    drawCaret(leftX);
+    drawCaret(rightX);
+  }
+
+  /** 3. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
   function expressionHappy(ctx, leftX, rightX, y, ec) {
     var w = EYE_W / 2;
     ctx.beginPath();
@@ -332,7 +362,7 @@ import {
     ctx.stroke();
   }
 
-  /** 3. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
+  /** 4. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
   function expressionThinking(ctx, leftX, rightX, y, ec) {
     var hw = EYE_W / 2;
     var hh = EYE_H * 0.38;
@@ -367,7 +397,7 @@ import {
   var WORKING_GAZE_PERIOD_MS = 3800;
 
   /**
-   * 4. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
+   * 5. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
    * @param {number} timestamp requestAnimationFrame 时间戳
    */
   function expressionWorking(ctx, leftX, rightX, y, timestamp, ec) {
@@ -491,6 +521,54 @@ import {
     ctx.stroke();
   }
 
+  /** 10b. crying — 哭泣（>X 形皱眼 + 大泪滴 + 撇嘴，与 idle 胶囊眼明显区分） */
+  function expressionCrying(ctx, leftX, rightX, y, ec) {
+    var w = EYE_W / 2;
+    // 皱眉 X 形眼（与 idle 竖胶囊完全不同）
+    ctx.beginPath();
+    ctx.moveTo(leftX - w * 0.75, y - 5);
+    ctx.lineTo(leftX + w * 0.75, y + 5);
+    ctx.moveTo(leftX + w * 0.75, y - 5);
+    ctx.lineTo(leftX - w * 0.75, y + 5);
+    ctx.moveTo(rightX - w * 0.75, y - 5);
+    ctx.lineTo(rightX + w * 0.75, y + 5);
+    ctx.moveTo(rightX + w * 0.75, y - 5);
+    ctx.lineTo(rightX - w * 0.75, y + 5);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    // 大泪滴（高对比蓝，黑底上易辨认）
+    var tearY = y + 10;
+    ctx.fillStyle = 'rgba(96, 165, 250, 0.95)';
+    ctx.beginPath();
+    ctx.ellipse(leftX - 1, tearY, 4, 6.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(leftX, tearY + 9, 2.8, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1, tearY + 1, 4, 6.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(rightX + 1, tearY + 10, 2.8, 4.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.arc(leftX - 2, tearY - 2, 1.2, 0, Math.PI * 2);
+    ctx.arc(rightX, tearY - 1, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    // 撇嘴
+    var mouthY = y + 24;
+    ctx.beginPath();
+    ctx.moveTo(leftX - 5, mouthY);
+    ctx.quadraticCurveTo((leftX + rightX) / 2, mouthY + 6, rightX + 5, mouthY);
+    ctx.strokeStyle = ec;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+
   /** 11. angry — 生气（眼睛斜向上） */
   function expressionAngry(ctx, leftX, rightX, y, ec) {
     ctx.beginPath();
@@ -605,38 +683,65 @@ import {
     ctx.stroke();
   }
 
-  /** read：白色圆框眼镜（直径 READ_LENS_DIA_PX）；画在眼上，眨眼后仍绘镜框 */
+  /** read：白色长方镜框；上两角小圆角，下两角更大圆角（基准 READ_LENS_DIA_PX） */
   function drawReadGlasses(ctx, leftX, rightX, y) {
-    var lr = READ_LENS_DIA_PX / 2;
-    var templeLen = 7.5;
+    var base = READ_LENS_DIA_PX / 1.8;
+    var lensHalfW = base * 1.05;
+    var lensHalfH = base * 0.72;
+    var lensCornerRTop = Math.min(
+      Math.max(1.25 * PET_SCALE, READ_LENS_DIA_PX * 0.09),
+      lensHalfW * 0.38,
+      lensHalfH * 0.38
+    );
+
+    function strokeLensAt(cx, cy) {
+      var x = cx - lensHalfW;
+      var yy = cy - lensHalfH;
+      var w = lensHalfW * 2;
+      var h = lensHalfH * 2;
+      var rt = Math.min(lensCornerRTop, w / 2 - 0.01, h / 2 - 0.01);
+      var rb = Math.min(
+        Math.max(rt * 2.6, READ_LENS_DIA_PX * 0.16),
+        w / 2 - 0.01,
+        h - rt - 0.02
+      );
+      ctx.beginPath();
+      ctx.moveTo(x + rt, yy);
+      ctx.arcTo(x + w, yy, x + w, yy + h, rt);
+      ctx.lineTo(x + w, yy + h - rb);
+      ctx.arcTo(x + w, yy + h, x, yy + h, rb);
+      ctx.lineTo(x + rb, yy + h);
+      ctx.arcTo(x, yy + h, x, yy, rb);
+      ctx.lineTo(x, yy + rt);
+      ctx.arcTo(x, yy, x + w, yy, rt);
+      ctx.closePath();
+      ctx.stroke();
+    }
+
     ctx.save();
     ctx.strokeStyle = READ_GLASSES_STROKE;
     ctx.lineWidth = 1.2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    strokeLensAt(leftX, y);
+    strokeLensAt(rightX, y);
     ctx.beginPath();
-    ctx.arc(leftX, y, lr, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(rightX, y, lr, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(leftX + lr, y);
-    ctx.lineTo(rightX - lr, y);
+    ctx.moveTo(leftX + lensHalfW, y);
+    ctx.lineTo(rightX - lensHalfW, y);
     ctx.stroke();
     ctx.lineWidth = 1.55;
     ctx.beginPath();
-    ctx.moveTo(leftX - lr, y);
-    ctx.lineTo(leftX - lr - templeLen, y - 10);
-    ctx.moveTo(rightX + lr, y);
-    ctx.lineTo(rightX + lr + templeLen, y - 10);
+    ctx.moveTo(leftX - lensHalfW, y);
+    ctx.lineTo(leftX - lensHalfW - 2, y - 20);
+    ctx.moveTo(rightX + lensHalfW, y);
+    ctx.lineTo(rightX + lensHalfW + 2, y - 20);
     ctx.stroke();
     ctx.restore();
   }
 
-  /** 18. read — 直径 12px 实心圆眼；24px 白色圆镜框见 drawReadGlasses */
+  /** 18. read — 直径 12px 实心圆眼；长方镜片上小圆角、下大圆角见 drawReadGlasses */
   function expressionRead(ctx, leftX, rightX, y, ec) {
-    var er = READ_EYE_DIA_PX / 2;
+    var er = READ_EYE_DIA_PX / 1.6;
     ctx.fillStyle = ec;
     ctx.beginPath();
     ctx.arc(leftX, y, er, 0, Math.PI * 2);
@@ -676,6 +781,7 @@ import {
   // 表情映射表（对外 20 种 + 内部 blink）
   var EXPRESSIONS = {
     idle: expressionIdle,
+    success: expressionSuccess,
     happy: expressionHappy,
     thinking: expressionThinking,
     working: expressionWorking,
@@ -685,6 +791,7 @@ import {
     rest: expressionRest,
     surprised: expressionSurprised,
     sad: expressionSad,
+    crying: expressionCrying,
     angry: expressionAngry,
     curious: expressionCurious,
     dizzy: expressionDizzy,
@@ -700,12 +807,15 @@ import {
 
   /**
    * @param {HTMLElement} rootEl
+   * @param {{ enableDrag?: boolean }} [options] — enableDrag 默认 true；桌面悬浮窗传 false
    */
-  function create(rootEl) {
+  function create(rootEl, options) {
+    options = options || {};
     var canvas = rootEl.querySelector('.pet-canvas');
     var bubbleEl = rootEl.querySelector('.pet-bubble');
     var turnEl = rootEl.querySelector('.status-turn');
-    var dragApi = initPetDrag(rootEl, canvas);
+    var dragApi =
+      options.enableDrag === false ? { afterShow: function () {} } : initPetDrag(rootEl, canvas);
     var ctx = null;
     var state = 'idle';
     var visible = true;
@@ -718,7 +828,11 @@ import {
     var tokenUsed = 0;
     var tokenMax = 0;
     var tokenOutput = 0;
-    var eyeColor = pickRandomPaletteColor(COLORS);
+    var initialMode =
+      window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
+        ? window.AppRouter.getSupervisorMode()
+        : 'adaptive';
+    var eyeColor = supervisorModeToEyeColor(initialMode, COLORS);
     var tokenHintEl = document.createElement('span');
     tokenHintEl.className = 'pet-token-hint';
     tokenHintEl.setAttribute('aria-hidden', 'true');
@@ -757,7 +871,7 @@ import {
 
       var breath = state === 'working' ? 0 : Math.sin(timestamp / 800) * 1.5;
       var scale = 1;
-      if (state === 'happy') scale *= 1.02;
+      if (state === 'happy' || state === 'success') scale *= 1.02;
       if (state === 'playful') scale *= 1 + Math.sin(timestamp / 350) * 0.012;
 
       ctx.save();
@@ -766,12 +880,6 @@ import {
       ctx.translate(-cx, -cy);
 
       var bodyY = cy + breath;
-
-      // 外圈光晕
-      ctx.beginPath();
-      ctx.arc(cx, bodyY, PET_SIZE / 2 - 4, 0, Math.PI * 2);
-      ctx.fillStyle = GLOW_COLOR;
-      ctx.fill();
 
       // 机身：固定黑底
       ctx.beginPath();
@@ -839,10 +947,12 @@ import {
         case 'alert':
           return { lx: 0, ly: -3, rx: 0, ry: -3 };
         case 'happy':
+        case 'success':
           return { lx: -1, ly: -2, rx: 1, ry: -2 };
         case 'surprised':
           return { lx: 0, ly: -4, rx: 0, ry: -4 };
         case 'sad':
+        case 'crying':
           return { lx: 0, ly: 3, rx: 0, ry: 3 };
         case 'anxious':
           return { lx: 1, ly: 1, rx: -1, ry: 1 };
@@ -873,8 +983,17 @@ import {
       isBlinking = false;
 
       function nextBlink() {
+        if (state === 'crying') {
+          isBlinking = false;
+          blinkTimer = setTimeout(nextBlink, BLINK_MAX);
+          return;
+        }
         var delay = BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN);
         blinkTimer = setTimeout(function () {
+          if (state === 'crying') {
+            nextBlink();
+            return;
+          }
           isBlinking = true;
           blinkCloseTimer = setTimeout(function () {
             isBlinking = false;
@@ -894,7 +1013,10 @@ import {
 
     function setState(s) {
       state = s || 'idle';
-      if (canvas) canvas.classList.remove('pet-wobble');
+      if (canvas) {
+        canvas.classList.remove('pet-wobble', 'pet-crying');
+        if (state === 'crying') canvas.classList.add('pet-crying');
+      }
     }
 
     function setBubbleText(text) {

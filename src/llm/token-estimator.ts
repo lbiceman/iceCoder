@@ -15,7 +15,14 @@
  * 如需精确计数，应使用 API 返回的 usage 字段。
  */
 
-import type { UnifiedMessage } from './types.js';
+import type { ToolDefinition, UnifiedMessage } from './types.js';
+
+export interface CompactionUsageSnapshot {
+  effectiveUsed: number;
+  localEstimate: number;
+  toolsOverhead: number;
+  apiPrompt: number;
+}
 
 /**
  * 估算单个字符串的 token 数。
@@ -80,4 +87,32 @@ export function estimateMessagesTokens(messages: UnifiedMessage[]): number {
     tokens += MESSAGE_OVERHEAD_TOKENS;
   }
   return tokens;
+}
+
+/** 估算 tools schema 占用（API 侧与 messages 分开计费的近似）。 */
+export function estimateToolsTokens(tools: ToolDefinition[] | undefined): number {
+  if (!tools?.length) return 0;
+  let raw = '';
+  for (const t of tools) {
+    raw += t.name;
+    if (t.description) raw += t.description;
+    if (t.parameters) raw += JSON.stringify(t.parameters);
+  }
+  return estimateStringTokens(raw);
+}
+
+/**
+ * 压缩 / 圆环共用的有效占用：双轨取大。
+ * effectiveUsed = max(localEstimate + toolsOverhead, lastApiPromptTokens)
+ */
+export function resolveCompactionUsage(input: {
+  messages: UnifiedMessage[];
+  tools?: ToolDefinition[];
+  lastApiPromptTokens?: number;
+}): CompactionUsageSnapshot {
+  const localEstimate = estimateMessagesTokens(input.messages);
+  const toolsOverhead = estimateToolsTokens(input.tools);
+  const apiPrompt = Math.max(0, input.lastApiPromptTokens ?? 0);
+  const effectiveUsed = Math.max(localEstimate + toolsOverhead, apiPrompt);
+  return { effectiveUsed, localEstimate, toolsOverhead, apiPrompt };
 }
