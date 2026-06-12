@@ -155,7 +155,6 @@
   color: var(--text-secondary, #b9c0d4);
   word-break: break-all;
 }
-
 .exec-plan-step-evidence {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }

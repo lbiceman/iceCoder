@@ -84,11 +84,9 @@ window.ChatPage = (function () {
   var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
   var elFileStatus, elFileName, elFileRemove;
   var elStatusBar, elStatusTurn;
-  var elCmdPlusBtn, elCmdPalette, mainInputWrapper;
+  var elCmdPlusBtn, mainInputWrapper;
   var cmdPaletteResizeObserver = null;
   var sessionPet = null;
-  var cmdPaletteOpen = false;
-  var cmdBlurHideTimer = null;
 
   function updateNavStatus(connected) {
     var dot = document.getElementById('status-dot');
@@ -127,9 +125,15 @@ window.ChatPage = (function () {
           modelName = defaultProvider.modelName || '';
           updatePetTokenUsage();
         }
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders(providers);
+        }
         updateChipModelLabel(providers);
       })
       .catch(function () {
+        if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
+          window.ChatModelPicker.setProviders([]);
+        }
         updateChipModelLabel(null);
       });
   }
@@ -239,91 +243,18 @@ window.ChatPage = (function () {
     }
   }
 
-  // ---- 命令面板（+ 按钮） ----
-  function closeCmdPalette() {
-    if (!elCmdPalette || !cmdPaletteOpen) return;
-    cmdPaletteOpen = false;
-    elCmdPalette.classList.add('hidden');
-    if (elCmdPlusBtn) elCmdPlusBtn.classList.remove('active');
-    Cmd.hide();
-    Cmd.setApplyTarget(null);
-    if (mainInputWrapper) Cmd.mountDropdownTo(mainInputWrapper);
-  }
-
-  function positionCmdPalette() {
-    if (!elCmdPalette || !elCmdPlusBtn) return;
-    // 关键：把面板挂到 document.body 顶层 + position: fixed，
-    // 完全脱离 chat-main / chat-composer 的 stacking context，
-    // 任何高度变化都不会被工具栏行绘制顺序盖住。
-    if (elCmdPalette.parentElement !== document.body) {
-      document.body.appendChild(elCmdPalette);
-    }
-    var plusRect = elCmdPlusBtn.getBoundingClientRect();
-    var toolbar = elCmdPlusBtn.closest('.composer-toolbar');
-    var toolbarRect = toolbar ? toolbar.getBoundingClientRect() : plusRect;
-    var margin = 8;
-    var panelWidth = Math.min(320, window.innerWidth - 32);
-    elCmdPalette.style.position = 'fixed';
-    elCmdPalette.style.width = panelWidth + 'px';
-    elCmdPalette.style.visibility = 'hidden';
-    elCmdPalette.style.left = '0px';
-    elCmdPalette.style.top = '0px';
-    // 强制回流
-    void elCmdPalette.offsetHeight;
-    var panelHeight = elCmdPalette.offsetHeight;
-    elCmdPalette.style.visibility = '';
-    // 面板底端 = 工具栏行顶端之上 margin（不依赖 panelHeight 是否已经包含 dropdown）
-    var left = plusRect.right - panelWidth;
-    if (left < 8) left = 8;
-    if (left + panelWidth > window.innerWidth - 8) {
-      left = window.innerWidth - panelWidth - 8;
-    }
-    var top = toolbarRect.top - panelHeight - margin;
-    if (top < 8) top = 8;
-    elCmdPalette.style.left = left + 'px';
-    elCmdPalette.style.top = top + 'px';
-  }
-
-  function onCmdPaletteDocClick(e) {
-    if (!cmdPaletteOpen || !elCmdPalette || !elCmdPlusBtn) return;
-    var t = e.target;
-    if (elCmdPalette.contains(t) || elCmdPlusBtn.contains(t)) return;
-    closeCmdPalette();
-  }
-
+  // ---- 命令面板（+ 按钮）：浮层已统一为 ChatDropdown ----
   function openCmdPalette() {
-    if (!elCmdPalette) return;
-    if (cmdBlurHideTimer) {
-      clearTimeout(cmdBlurHideTimer);
-      cmdBlurHideTimer = null;
-    }
-    cmdPaletteOpen = true;
-    elCmdPalette.classList.remove('hidden');
-    if (elCmdPlusBtn) elCmdPlusBtn.classList.add('active');
-    Cmd.mountDropdownTo(elCmdPalette);
+    if (!elCmdPlusBtn) return;
     Cmd.setApplyTarget(function (value) {
       executeLocalCommand(value);
-      closeCmdPalette();
+      Cmd.hide();
     });
     Cmd.show('~', '');
-    elCmdPalette.focus();
-    // Cmd.show 会在面板里注入命令列表（panelHeight 此时才撑高）。
-    // 必须等 dropdown DOM 落地 + reflow 后再算位置，否则 panelHeight≈0，
-    // 面板会跑到按钮下方被 composer-toolbar 行盖住。
-    // Cmd 内部用 microtask 同步注入 DOM，但 reflow 要等下一帧——
-    // 双 rAF 确保 list DOM 已布局完成。
-    requestAnimationFrame(function () {
-      positionCmdPalette();
-      requestAnimationFrame(positionCmdPalette);
-    });
-    // 延一帧再绑 doc click，避免本次点击立刻被它关闭
-    setTimeout(function () {
-      document.addEventListener('mousedown', onCmdPaletteDocClick, true);
-    }, 0);
   }
 
   function toggleCmdPalette() {
-    if (cmdPaletteOpen) closeCmdPalette();
+    if (Cmd.isOpen && Cmd.isOpen()) Cmd.hide();
     else openCmdPalette();
   }
 
@@ -367,7 +298,7 @@ window.ChatPage = (function () {
 
   // ---- 发送/停止 ----
   function handleSend() {
-    closeCmdPalette();
+    Cmd.hide();
     if (isWorkloadActive()) {
       handleStop();
       return;
@@ -1211,8 +1142,9 @@ window.ChatPage = (function () {
               '<button class="btn-icon btn-icon-ghost" id="btn-file" title="Upload file" aria-label="Upload file">' +
                 '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
               '</button>' +
-              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型">' +
-                '<span class="chip-label" id="chip-model-label"></span>' +
+              '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
+                '<span class="chip-label" id="chip-model-label">加载中…</span>' +
+                '<svg class="chip-caret" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 4 6 8 10 4"/></svg>' +
               '</button>' +
               '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
                 '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
@@ -1231,7 +1163,6 @@ window.ChatPage = (function () {
               '</div>' +
             '</div>' +
           '</div>' +
-          '<div class="cmd-palette hidden" id="cmd-palette" tabindex="-1" role="menu" aria-label="命令列表"></div>' +
           '<input type="file" class="hidden-input" id="file-input">' +
         '</div>' +
         '</div>' + /* /chat-main */
@@ -1250,8 +1181,19 @@ window.ChatPage = (function () {
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusTurn = container.querySelector('#status-turn');
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
-    elCmdPalette = container.querySelector('#cmd-palette');
     mainInputWrapper = container.querySelector('.input-wrapper');
+    if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
+
+    // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
+    // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
+    if (window.ChatModelPicker && typeof window.ChatModelPicker.init === 'function') {
+      window.ChatModelPicker.init({
+        chipEl: container.querySelector('#chip-model'),
+        labelEl: container.querySelector('#chip-model-label'),
+      });
+      // 初次拉取 providers 缓存，供下拉渲染使用
+      window.ChatModelPicker.refreshFromServer();
+    }
 
     // 初始化会话侧栏（PC 模式）
     if (!remoteMode && window.ChatSessionSidebar) {
@@ -1364,37 +1306,14 @@ window.ChatPage = (function () {
       UI.autoResizeInput();
       Cmd.handleInput(elInput.value, elInput);
     });
-    elInput.addEventListener('focus', closeCmdPalette);
-    elInput.addEventListener('blur', function () {
-      if (cmdPaletteOpen) return;
-      if (cmdBlurHideTimer) clearTimeout(cmdBlurHideTimer);
-      cmdBlurHideTimer = setTimeout(function () {
-        cmdBlurHideTimer = null;
-        if (!cmdPaletteOpen) Cmd.hide();
-      }, 150);
-    });
+    // 命令面板的 outside-click / escape / focus-blur 关闭由 ChatDropdown 统一处理
     if (elCmdPlusBtn) {
       elCmdPlusBtn.addEventListener('click', function (e) {
         e.stopPropagation();
         toggleCmdPalette();
       });
     }
-    if (elCmdPalette) {
-      elCmdPalette.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          closeCmdPalette();
-          return;
-        }
-        Cmd.handleKeydown(e, null);
-      });
-    }
-    document.addEventListener('click', function (e) {
-      if (!cmdPaletteOpen || !elCmdPalette) return;
-      var anchor = elCmdPalette.parentElement;
-      if (anchor && anchor.contains(e.target)) return;
-      closeCmdPalette();
-    });
+    // 命令面板的 keydown / outside-click / escape 由 ChatDropdown 统一处理
     elInput.addEventListener('paste', function (e) {
       var items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
