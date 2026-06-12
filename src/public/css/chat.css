@@ -1328,18 +1328,34 @@
 
 .chat-sidebar-brand {
   display: flex;
+  justify-content: center;
   align-items: center;
   gap: 8px;
-  padding: 12px 10px 10px;
-  flex-shrink: 0;
+  padding: 10px;
   border-bottom: 1px solid var(--border-light);
 }
 
 .chat-sidebar-brand-logo {
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--accent);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  background: linear-gradient(
+    90deg,
+    #3CD49E 0%,
+    #4fc3f7 25%,
+    #F1A8B2 50%,
+    #EDE067 75%,
+    #3CD49E 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: chat-sidebar-brand-shine 5s linear infinite;
+}
+
+@keyframes chat-sidebar-brand-shine {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
 }
 
 .chat-sidebar-nav {
