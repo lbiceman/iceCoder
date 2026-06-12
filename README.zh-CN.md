@@ -12,7 +12,7 @@
 
 无需安装 Node.js，下载安装包即可使用（内置服务端 + Electron 壳 + 悬浮冰豆）：
 
-**[下载 iceCoder Setup 1.0.1 — Windows x64](./releases/windows/iceCoder-Setup-1.0.1-win-x64.exe)**
+**[下载 iceCoder Setup 1.0.0 — Windows x64](./releases/windows/iceCoder-Setup-1.0.0-win-x64.exe)**
 
 安装后首次启动请在「配置」页填写 API Key；数据目录默认 `~/.iceCoder/`。从源码自行打包见 [`docs/使用文档.md`](./docs/使用文档.md) 或执行 `npm run build:desktop`。
 

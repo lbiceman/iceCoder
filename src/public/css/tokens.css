@@ -83,7 +83,7 @@
 [data-theme="light"] {
   --bg-primary: #f8f9fb;
   --bg-secondary: #ffffff;
-  --bg-card: #ffffff;
+  --bg-card: #f9f9f9;
   --bg-input: #f1f3f6;
   --bg-nav: rgba(255, 255, 255, 0.96);
   --bg-hover: rgba(0, 0, 0, 0.04);
