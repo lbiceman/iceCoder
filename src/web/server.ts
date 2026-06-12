@@ -104,7 +104,7 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
 }
 
 /** 用于 ::1 / 127.0.0.1 启动后自检，确认是本进程的 iceCoder 首页而非其它占用端口的程序 */
-const LOOPBACK_APP_MARKER = '<span class="logo-text">IceCoder</span>';
+const LOOPBACK_APP_MARKER = '<script type="module" src="/js/main.js">';
 
 async function probeOurApp(url: string): Promise<boolean> {
   try {

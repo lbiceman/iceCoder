@@ -1195,42 +1195,11 @@ window.ChatPage = (function () {
       window.ChatModelPicker.refreshFromServer();
     }
 
-    // 初始化会话侧栏（PC 模式）
+    // 初始化会话侧栏（PC 模式）。侧栏已固定常驻，不再创建折叠按钮。
     if (!remoteMode && window.ChatSessionSidebar) {
       var chatLayout = container.querySelector('.chat-layout');
       if (chatLayout) {
         window.ChatSessionSidebar.create(chatLayout);
-        var navBrand = document.querySelector('.nav-brand');
-        var panelToggle = document.getElementById('nav-sidebar-toggle');
-        if (navBrand && !panelToggle) {
-          panelToggle = document.createElement('button');
-          panelToggle.type = 'button';
-          panelToggle.className = 'nav-sidebar-toggle is-expanded';
-          panelToggle.id = 'nav-sidebar-toggle';
-          panelToggle.title = '隐藏会话列表';
-          panelToggle.setAttribute('aria-label', '显示或隐藏会话列表');
-          panelToggle.setAttribute('aria-pressed', 'true');
-          panelToggle.innerHTML =
-            '<span class="nav-sidebar-toggle-icon" aria-hidden="true">' +
-              '<svg class="icon-panel-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
-                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
-                '<path d="M9 4v16"/>' +
-              '</svg>' +
-              '<svg class="icon-panel-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
-                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
-                '<path d="M9 4v16"/>' +
-                '<path d="M14 12h5"/>' +
-                '<path d="M17 9l3 3-3 3"/>' +
-              '</svg>' +
-            '</span>';
-          panelToggle.addEventListener('click', function () {
-            window.ChatSessionSidebar.togglePanel();
-          });
-          navBrand.insertBefore(panelToggle, navBrand.firstChild);
-        }
-        if (panelToggle) {
-          window.ChatSessionSidebar.bindNavToggle(panelToggle);
-        }
       }
     }
 
