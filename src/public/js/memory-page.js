@@ -1057,7 +1057,7 @@ window.MemoryPage = (function () {
       '<span class="memory-health-dot"></span>' +
       '<span class="memory-health-text">检查中…</span>' +
       '</span>' +
-      '<button type="button" class="nav-link active memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
+      '<button type="button" class="memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
       '</div>';
 
     var consolidateBtn = header.querySelector('#memory-consolidate-btn');

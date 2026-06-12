@@ -24,15 +24,29 @@
 
   // ---- DOM 引用 ----
   var pageContainer = document.getElementById('page-container');
-  var navChat = document.getElementById('nav-chat');
-  var navMemory = document.getElementById('nav-memory');
-  var navConfig = document.getElementById('nav-config');
-  var statusDot = document.getElementById('status-dot');
-  // var statusModel = document.getElementById('status-model');
-  var themeToggle = document.getElementById('theme-toggle');
-  var themeIcon = document.getElementById('theme-icon');
-  var supervisorModeToggle = document.getElementById('supervisor-mode-toggle');
-  var supervisorModeLabel = document.getElementById('supervisor-mode-label');
+
+  /** 侧栏与主内容区并列，切页时仅切换 page-container 内子页，不隐藏会话栏 */
+  function ensureAppShell() {
+    var app = document.getElementById('app');
+    if (!app || !pageContainer) return null;
+    var existing = app.querySelector('.app-shell');
+    if (existing) return existing;
+    var shell = document.createElement('div');
+    shell.className = 'app-shell';
+    var main = document.createElement('div');
+    main.className = 'app-main';
+    app.appendChild(shell);
+    shell.appendChild(main);
+    main.appendChild(pageContainer);
+    return shell;
+  }
+
+  function ensureSessionSidebar() {
+    var shell = ensureAppShell();
+    if (!shell || !window.ChatSessionSidebar) return;
+    window.ChatSessionSidebar.create(shell);
+  }
+  // 顶栏元素已移入侧边栏（IceCoder logo / 监管模式 / 主题 / 连接状态），此处不再持有引用。
 
   var SUPERVISOR_MODES = ['off', 'adaptive', 'strict'];
   var SUPERVISOR_LABELS = { off: '自由', adaptive: '自适应', strict: '严格' };
@@ -42,9 +56,6 @@
   function applySetupMode(required) {
     setupRequired = !!required;
     document.body.classList.toggle('setup-required', setupRequired);
-    if (navChat) navChat.style.display = setupRequired ? 'none' : '';
-    if (navMemory) navMemory.style.display = setupRequired ? 'none' : '';
-    if (supervisorModeToggle) supervisorModeToggle.style.display = setupRequired ? 'none' : '';
     if (setupRequired && getRouteFromHash() !== 'config') {
       window.location.replace('#/config');
     }
@@ -68,27 +79,19 @@
     }
   }
 
-  function updateSupervisorModeButton() {
-    if (!supervisorModeToggle || !supervisorModeLabel) return;
-    supervisorModeLabel.textContent = SUPERVISOR_LABELS[currentSupervisorMode] || currentSupervisorMode;
-    supervisorModeToggle.setAttribute('data-mode', currentSupervisorMode);
-    supervisorModeToggle.title = '监管模式：' + (SUPERVISOR_LABELS[currentSupervisorMode] || '')
-      + '（点击切换；对新消息生效）';
-  }
-
   function applySupervisorModeFromConfig(data) {
     if (data && (data.supervisorMode === 'off' || data.supervisorMode === 'adaptive' || data.supervisorMode === 'strict')) {
       currentSupervisorMode = data.supervisorMode;
     }
-    updateSupervisorModeButton();
     syncSupervisorModeToPet(false);
+    if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
+      window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
+    }
   }
 
   function cycleSupervisorMode() {
-    if (!supervisorModeToggle) return;
     var idx = SUPERVISOR_MODES.indexOf(currentSupervisorMode);
     var next = SUPERVISOR_MODES[(idx + 1) % SUPERVISOR_MODES.length];
-    supervisorModeToggle.disabled = true;
     fetch('/api/config/supervisor-mode', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -98,14 +101,13 @@
       .then(function (result) {
         if (result.ok && result.body.success) {
           currentSupervisorMode = result.body.supervisorMode;
-          updateSupervisorModeButton();
           syncSupervisorModeToPet(true);
+          if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
+            window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
+          }
         }
       })
-      .catch(function () { /* ignore */ })
-      .finally(function () {
-        supervisorModeToggle.disabled = false;
-      });
+      .catch(function () { /* ignore */ });
   }
 
   // ---- 主题管理 ----
@@ -117,13 +119,54 @@
   function setTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('ice-theme', theme);
-    themeIcon.textContent = theme === 'dark' ? 'Light' : 'Dark';
+    if (window.AppShell && typeof window.AppShell.notifyThemeChange === 'function') {
+      window.AppShell.notifyThemeChange(theme);
+    }
   }
 
   function toggleTheme() {
     var current = document.documentElement.getAttribute('data-theme') || 'dark';
     setTheme(current === 'dark' ? 'light' : 'dark');
   }
+
+  function getTheme() {
+    return document.documentElement.getAttribute('data-theme') || 'dark';
+  }
+
+  function getSupervisorMode() { return currentSupervisorMode; }
+  function getSupervisorLabel(mode) {
+    return SUPERVISOR_LABELS[mode || currentSupervisorMode] || (mode || currentSupervisorMode);
+  }
+
+  var currentConnectionState = 'disconnected';
+  function getConnectionState() { return currentConnectionState; }
+  function setConnectionState(state) {
+    currentConnectionState = state || 'disconnected';
+    if (window.AppShell && typeof window.AppShell.notifyConnectionChange === 'function') {
+      window.AppShell.notifyConnectionChange(currentConnectionState);
+    }
+  }
+
+  window.AppShell = {
+    getTheme: getTheme,
+    toggleTheme: toggleTheme,
+    getSupervisorMode: getSupervisorMode,
+    getSupervisorLabel: getSupervisorLabel,
+    cycleSupervisorMode: cycleSupervisorMode,
+    setConnectionState: setConnectionState,
+    getConnectionState: getConnectionState,
+    onThemeChange: null,
+    onConnectionChange: null,
+    onSupervisorModeChange: null,
+  };
+  function notifySupervisorShell() {
+    if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
+      window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
+    }
+  }
+  window.AppShell.notifyThemeChange = function (t) { if (typeof window.AppShell.onThemeChange === 'function') window.AppShell.onThemeChange(t); };
+  window.AppShell.notifyConnectionChange = function (s) { if (typeof window.AppShell.onConnectionChange === 'function') window.AppShell.onConnectionChange(s); };
+  window.AppShell.notifySupervisorModeChange = function (m) { if (typeof window.AppShell.onSupervisorModeChange === 'function') window.AppShell.onSupervisorModeChange(m); };
 
   // ---- 路由 ----
 
@@ -163,9 +206,7 @@
       history.replaceState(null, '', newHash);
     }
 
-    navChat.classList.toggle('active', page === 'chat');
-    if (navMemory) navMemory.classList.toggle('active', page === 'memory');
-    navConfig.classList.toggle('active', page === 'config');
+    // 顶栏三个 tab 已移入侧边栏：路由 active 态由 ChatSessionSidebar 监听 hashchange 维护。
 
     // 离开 memory：必须停掉 fetch/AbortController/resize/popover；DOM 子树保留隐藏以备复用
     if (
@@ -219,9 +260,7 @@
       })
       .then(function (data) {
         applySetupMode(!!data.setupRequired);
-        statusDot.classList.remove('disconnected');
-        statusDot.classList.add('connected');
-        statusDot.title = '已连接';
+        setConnectionState('connected');
         applySupervisorModeFromConfig(data);
 
         var providers = data.providers || [];
@@ -234,9 +273,7 @@
         return data;
       })
       .catch(function () {
-        statusDot.classList.remove('connected');
-        statusDot.classList.add('disconnected');
-        statusDot.title = '未连接';
+        setConnectionState('disconnected');
         // statusModel.textContent = '—';
         return null;
       });
@@ -248,11 +285,8 @@
     // 检测是否为远程控制模式（URL 含 ?token=xxx）
     var params = new URLSearchParams(window.location.search);
     if (params.get('token')) {
-      // 远程控制模式：隐藏配置按钮，直接渲染聊天页面（ChatPage 内部处理远程逻辑）
+      // 远程控制模式：直接渲染聊天页面（ChatPage 内部处理远程逻辑）
       setTheme(getStoredTheme());
-      navConfig.style.display = 'none';
-      themeToggle.addEventListener('click', toggleTheme);
-      if (supervisorModeToggle) supervisorModeToggle.addEventListener('click', cycleSupervisorMode);
       fetchSystemStatus();
       document.body.dataset.page = 'chat';
       var chatRoot = ensurePageRoot('chat');
@@ -264,10 +298,7 @@
 
     // 应用存储的主题（默认暗色）
     setTheme(getStoredTheme());
-
-    // 主题切换按钮
-    themeToggle.addEventListener('click', toggleTheme);
-    if (supervisorModeToggle) supervisorModeToggle.addEventListener('click', cycleSupervisorMode);
+    ensureSessionSidebar();
 
     // 监听 hash 变化
     window.addEventListener('hashchange', function () {
@@ -278,18 +309,7 @@
       navigate(getRouteFromHash());
     });
 
-    navChat.addEventListener('click', function () {
-      window.location.hash = '#/chat';
-    });
-    if (navMemory) {
-      navMemory.addEventListener('click', function () {
-        window.location.hash = '#/memory';
-      });
-    }
-    navConfig.addEventListener('click', function () {
-      window.location.hash = '#/config';
-    });
-
+    // 顶栏三个 tab 的 click 逻辑已移入 ChatSessionSidebar 内部。
     fetchSystemStatus().then(function () {
       navigate(setupRequired ? 'config' : getRouteFromHash());
     });

@@ -630,10 +630,10 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.arc(rx - 1.5, y + 2.5, 1.3, 0, Math.PI * 2);
     ctx.fill();
     // 淡腮红（娇羞）
-    ctx.fillStyle = 'rgba(255, 130, 150, 0.22)';
+    ctx.fillStyle = 'rgba(255, 130, 160, 0.46)';
     ctx.beginPath();
-    ctx.arc(lx - 10, y + 14, 9, 0, Math.PI * 2);
-    ctx.arc(rx + 10, y + 14, 9, 0, Math.PI * 2);
+    ctx.arc(lx - 8, y + 12, 6, 0, Math.PI * 2);
+    ctx.arc(rx + 8, y + 12, 6, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -805,6 +805,9 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     blink: expressionBlink,
   };
 
+  /** 默认/空闲表情（原 idle，现改为 shy） */
+  var DEFAULT_EXPRESSION = 'shy';
+
   /**
    * @param {HTMLElement} rootEl
    * @param {{ enableDrag?: boolean }} [options] — enableDrag 默认 true；桌面悬浮窗传 false
@@ -817,7 +820,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     var dragApi =
       options.enableDrag === false ? { afterShow: function () {} } : initPetDrag(rootEl, canvas);
     var ctx = null;
-    var state = 'idle';
+    var state = DEFAULT_EXPRESSION;
     var visible = true;
     var blinkTimer = null;
     var isBlinking = false;
@@ -1012,7 +1015,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     }
 
     function setState(s) {
-      state = s || 'idle';
+      state = (!s || s === 'idle') ? DEFAULT_EXPRESSION : s;
       if (canvas) {
         canvas.classList.remove('pet-wobble', 'pet-crying');
         if (state === 'crying') canvas.classList.add('pet-crying');

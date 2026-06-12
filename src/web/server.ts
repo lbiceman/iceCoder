@@ -103,8 +103,8 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   return app;
 }
 
-/** 用于 ::1 / 127.0.0.1 启动后自检，确认是本进程的 iceCoder 首页而非其它占用端口的程序 */
-const LOOPBACK_APP_MARKER = '<span class="logo-text">IceCoder</span>';
+/** 用于 ::1 / 127.0.0.1 启动后自检，确认是本进程的 iceCoder 首页而非其它占用端口的程序（须 dev/prod index 共有，勿用 Vite 哈希资源路径） */
+const LOOPBACK_APP_MARKER = 'id="page-container"';
 
 async function probeOurApp(url: string): Promise<boolean> {
   try {

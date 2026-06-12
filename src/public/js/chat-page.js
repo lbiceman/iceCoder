@@ -393,11 +393,13 @@ window.ChatPage = (function () {
       var stoppedContent = Session.stripStatusTag(lastMsg.content || '');
       lastMsg.content = stoppedContent ? stoppedContent + '\n\n[已停止]' : '[已停止]';
       Session.markLastMessageStreaming(false);
+      if (lastMsg.completedAt == null) lastMsg.completedAt = Date.now();
 
       var streamEl = document.getElementById('streaming-msg');
       if (streamEl) {
         var contentEl = streamEl._streamContentEl || streamEl.lastChild;
         if (contentEl) contentEl.textContent = lastMsg.content;
+        if (UI.updateMsgLabelTime) UI.updateMsgLabelTime(streamEl, lastMsg.completedAt);
         streamEl.removeAttribute('id');
         delete streamEl._streamContentEl;
       }
@@ -886,8 +888,10 @@ window.ChatPage = (function () {
     var notices = data.notices || [];
     var messages = Session.getMessages();
     for (var i = 0; i < notices.length; i++) {
-      messages.push({ role: 'agent', content: notices[i] });
-      UI.appendMessageEl(messages[messages.length - 1], Session.stripStatusTag);
+      var noticeMsg = { role: 'agent', content: notices[i] };
+      if (Session.stampMessageTimestamps) Session.stampMessageTimestamps(noticeMsg);
+      messages.push(noticeMsg);
+      UI.appendMessageEl(noticeMsg, Session.stripStatusTag);
     }
     Session.saveMessages();
     Pet.applyMemoryNoticesToPet(notices, {
@@ -1114,7 +1118,7 @@ window.ChatPage = (function () {
     remoteMode = !!remoteToken;
 
     container.innerHTML =
-      '<div class="chat-page chat-layout">' +
+      '<div class="chat-page">' +
         '<div class="chat-main">' +
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
@@ -1195,44 +1199,7 @@ window.ChatPage = (function () {
       window.ChatModelPicker.refreshFromServer();
     }
 
-    // 初始化会话侧栏（PC 模式）
-    if (!remoteMode && window.ChatSessionSidebar) {
-      var chatLayout = container.querySelector('.chat-layout');
-      if (chatLayout) {
-        window.ChatSessionSidebar.create(chatLayout);
-        var navBrand = document.querySelector('.nav-brand');
-        var panelToggle = document.getElementById('nav-sidebar-toggle');
-        if (navBrand && !panelToggle) {
-          panelToggle = document.createElement('button');
-          panelToggle.type = 'button';
-          panelToggle.className = 'nav-sidebar-toggle is-expanded';
-          panelToggle.id = 'nav-sidebar-toggle';
-          panelToggle.title = '隐藏会话列表';
-          panelToggle.setAttribute('aria-label', '显示或隐藏会话列表');
-          panelToggle.setAttribute('aria-pressed', 'true');
-          panelToggle.innerHTML =
-            '<span class="nav-sidebar-toggle-icon" aria-hidden="true">' +
-              '<svg class="icon-panel-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
-                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
-                '<path d="M9 4v16"/>' +
-              '</svg>' +
-              '<svg class="icon-panel-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
-                '<rect x="3" y="4" width="18" height="16" rx="2"/>' +
-                '<path d="M9 4v16"/>' +
-                '<path d="M14 12h5"/>' +
-                '<path d="M17 9l3 3-3 3"/>' +
-              '</svg>' +
-            '</span>';
-          panelToggle.addEventListener('click', function () {
-            window.ChatSessionSidebar.togglePanel();
-          });
-          navBrand.insertBefore(panelToggle, navBrand.firstChild);
-        }
-        if (panelToggle) {
-          window.ChatSessionSidebar.bindNavToggle(panelToggle);
-        }
-      }
-    }
+    // 会话侧栏由 app.js 挂在 app-shell 上，切记忆/配置页时保持可见。
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });

@@ -38,8 +38,12 @@ window.ChatFile = (function () {
       .then(function (data) {
         if (data.error) {
           if (elFileName) elFileName.textContent = file.name + ' (failed)';
-          messages.push({ role: 'agent', content: 'Upload failed: ' + data.error });
-          appendFn(messages[messages.length - 1]);
+          var uploadErrMsg = { role: 'agent', content: 'Upload failed: ' + data.error };
+          if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+            window.ChatSession.stampMessageTimestamps(uploadErrMsg);
+          }
+          messages.push(uploadErrMsg);
+          appendFn(uploadErrMsg);
           saveFn();
           uploadedFile = null;
         } else {

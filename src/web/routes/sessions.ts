@@ -117,6 +117,8 @@ interface ChatMessage {
   content: string;
   id?: string;
   images?: string[];
+  sentAt?: number;
+  completedAt?: number;
 }
 
 /** 确保目录存在 */

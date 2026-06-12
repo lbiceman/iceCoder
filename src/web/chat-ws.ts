@@ -843,6 +843,8 @@ async function appendMessages(
     status?: string;
     toolCallId?: string;
     images?: string[];
+    sentAt?: number;
+    completedAt?: number;
   }[],
   sessionId: string = activeSessionId,
 ): Promise<boolean> {
@@ -855,7 +857,17 @@ async function appendMessages(
       const data = await fsPromises.readFile(file, 'utf-8');
       existing = JSON.parse(data);
     } catch { /* file doesn't exist yet */ }
-    existing.push(...msgs);
+    const now = Date.now();
+    const stamped = msgs.map((msg) => {
+      if (msg.role === 'user' && msg.sentAt == null) {
+        return { ...msg, sentAt: now };
+      }
+      if (msg.role === 'agent' && msg.completedAt == null) {
+        return { ...msg, completedAt: now };
+      }
+      return msg;
+    });
+    existing.push(...stamped);
     await fsPromises.writeFile(file, JSON.stringify(existing), 'utf-8');
     return true;
   } catch (err) {
