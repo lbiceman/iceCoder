@@ -462,7 +462,6 @@
   background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
   color: var(--text-primary);
 }
-.chip:active { transform: scale(0.97); }
 .chip .chip-caret { opacity: 0.7; }
 .chip.chip-locale { padding: 0 8px; min-width: 36px; justify-content: center; }
 .chip.chip-plan { color: color-mix(in srgb, var(--accent) 92%, transparent); }
@@ -644,9 +643,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
   cursor: pointer;
   transition: background var(--transition);
+}
+.cmd-item:not(:first-child) {
+  margin-top: 5px;
 }
 .cmd-item:hover,
 .cmd-item.active {
@@ -739,11 +742,6 @@
   background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
   color: var(--text-primary);
 }
-.chip.chip-select.active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
 .chip.chip-select .chip-caret {
   width: 10px;
   height: 10px;
@@ -767,7 +765,8 @@
   white-space: nowrap;
 }
 
-/* 命令下拉：默认挂到 body 顶层时也是可见的（与命令面板内嵌的样式保持一致） */
+/* 统一下拉浮层（由 ChatDropdown 挂到 body 顶层、position:fixed）；
+   高度由内容决定，条目多时各调用方加 .is-scrollable 上限。 */
 .cmd-dropdown {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -776,31 +775,36 @@
     0 1px 0 0 color-mix(in srgb, #ffffff 5%, transparent) inset,
     0 10px 30px -10px rgba(0, 0, 0, 0.45),
     0 2px 6px -2px rgba(0, 0, 0, 0.25);
-  padding: 4px;
+  padding: 10px;
   min-width: 220px;
-  max-width: 420px;
-  position: absolute;
-  bottom: 100%;
+  max-width: 300px;
+  position: fixed;
+  z-index: 9999;
+  /* left / top 由 JS 在 open() 时根据 anchor 位置计算 */
   left: 0;
-  right: 0;
-  margin-bottom: 4px;
+  top: 0;
   overflow: hidden;
-  z-index: 20;
-  /* 默认不限制高度，按内容展开；条目很多时由各调用方按需加上限 */
 }
-
 .cmd-dropdown.hidden { display: none; }
-
 .cmd-dropdown.is-scrollable {
   max-height: 360px;
   overflow-y: auto;
 }
-.cmd-palette .cmd-dropdown,
-.model-palette .cmd-dropdown {
-  position: static;
-  margin: 0;
+.cmd-dropdown .cmd-empty {
+  padding: 8px 12px;
+  color: var(--text-muted, #98a2b3);
+  font-size: 12px;
+  text-align: center;
+}
+.cmd-dropdown.is-model-menu {
   min-width: 0;
-  max-width: none;
+}
+.cmd-dropdown.is-model-menu .cmd-item {
+  justify-content: flex-start;
+  padding: 8px 12px;
+}
+.cmd-dropdown.is-model-menu .cmd-item.active .cmd-name {
+  color: var(--accent);
 }
 .btn-cmd-plus {
   width: 26px;

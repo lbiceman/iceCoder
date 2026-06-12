@@ -1,6 +1,6 @@
 /**
- * 命令面板模块
- * 负责：~ 命令下拉框、本地命令处理（open/scan/telemetry）
+ * 命令面板模块（~ 命令）。
+ * 浮层本身已统一为 ChatDropdown；本模块只负责数据 + 行为（键盘 / 输入过滤 / 应用选中的命令）。
  */
 
 /* exported ChatCommands */
@@ -12,31 +12,22 @@ window.ChatCommands = (function () {
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' }
+    { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
   var REMOTE_LOCAL_COMMANDS = [
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
-    { name: 'supervisor', description: '查看 Supervisor / Execution Mode 事件报告', prefix: '~' }
+    { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
-  var elCmdDropdown = null;
   var cmdSelectedIndex = 0;
-  var cmdVisible = false;
   var cmdFiltered = [];
   var cmdActivePrefix = '';
   var remoteMode = false;
   var applyTargetFn = null;
   var activeInputEl = null;
-
-  function updateActiveItem() {
-    if (!elCmdDropdown) return;
-    var items = elCmdDropdown.querySelectorAll('.cmd-item');
-    for (var j = 0; j < items.length; j++) {
-      items[j].classList.toggle('active', j === cmdSelectedIndex);
-    }
-  }
+  var anchorEl = null;
 
   function dispatchInput(inputEl) {
     if (!inputEl) return;
@@ -49,94 +40,69 @@ window.ChatCommands = (function () {
     }
   }
 
-  function setRemoteMode(isRemote) {
-    remoteMode = isRemote;
-  }
+  function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
+  function getLocalCommands() { return remoteMode ? REMOTE_LOCAL_COMMANDS : PC_LOCAL_COMMANDS; }
 
-  function getLocalCommands() {
-    return remoteMode ? REMOTE_LOCAL_COMMANDS : PC_LOCAL_COMMANDS;
-  }
-
-  function createDropdown() {
-    var el = document.createElement('div');
-    el.className = 'cmd-dropdown hidden';
-    el.setAttribute('id', 'cmd-dropdown');
-    el.addEventListener('click', function (e) {
-      var item = e.target.closest('.cmd-item');
-      if (!item || !cmdVisible) return;
-      var idx = parseInt(item.getAttribute('data-index'), 10);
-      if (isNaN(idx)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      applySelection(idx);
-    });
-    return el;
-  }
-
-  function show(prefix, filter) {
-    if (!elCmdDropdown) return;
-    if (prefix !== '~') {
-      hide();
-      return;
+  function updateActiveItem() {
+    var dd = window.ChatDropdown && window.ChatDropdown.getContainer();
+    if (!dd) return;
+    var items = dd.querySelectorAll('.cmd-item');
+    for (var j = 0; j < items.length; j++) {
+      items[j].classList.toggle('active', j === cmdSelectedIndex);
     }
+  }
+
+  function isOpen() { return !!(window.ChatDropdown && window.ChatDropdown.isOpen()); }
+
+  function show(prefix, filter, inputEl) {
+    if (prefix !== '~') { hide(); return; }
     cmdActivePrefix = prefix;
+    activeInputEl = inputEl || activeInputEl;
     var query = (filter || '').toLowerCase();
     var source = getLocalCommands();
     cmdFiltered = source.filter(function (cmd) {
       return cmd.name.toLowerCase().indexOf(query) >= 0;
     });
-    if (cmdFiltered.length === 0) {
-      hide();
-      return;
-    }
+    if (cmdFiltered.length === 0) { hide(); return; }
     cmdSelectedIndex = 0;
-    render();
-    elCmdDropdown.classList.remove('hidden');
-    cmdVisible = true;
+    openDropdown();
   }
 
   function hide() {
-    if (!elCmdDropdown) return;
-    elCmdDropdown.classList.add('hidden');
-    cmdVisible = false;
     cmdFiltered = [];
     cmdActivePrefix = '';
-  }
-
-  function render() {
-    if (!elCmdDropdown) return;
-    elCmdDropdown.innerHTML = '';
-    for (var i = 0; i < cmdFiltered.length; i++) {
-      var item = document.createElement('div');
-      item.className = 'cmd-item' + (i === cmdSelectedIndex ? ' active' : '');
-      item.setAttribute('data-index', i);
-      var prefix = cmdFiltered[i].prefix || cmdActivePrefix;
-      item.innerHTML =
-        '<span class="cmd-name">' + prefix + cmdFiltered[i].name + '</span>' +
-        '<span class="cmd-desc">' + cmdFiltered[i].description + '</span>';
-      (function (idx) {
-        item.addEventListener('mouseenter', function () {
-          cmdSelectedIndex = idx;
-          updateActiveItem();
-        });
-      })(i);
-      elCmdDropdown.appendChild(item);
+    if (window.ChatDropdown && window.ChatDropdown.isOpen()) {
+      window.ChatDropdown.close();
     }
   }
 
-  function select(index) {
-    if (index < 0 || index >= cmdFiltered.length) return;
-    return cmdFiltered[index];
+  function openDropdown() {
+    if (!window.ChatDropdown || !anchorEl) return;
+    var anchorRect = anchorEl.getBoundingClientRect();
+    window.ChatDropdown.open({
+      anchor: anchorEl,
+      items: cmdFiltered,
+      placement: 'top',
+      placementRef: 'toolbar',
+      align: 'center',
+      fitContent: true,
+      minWidth: Math.ceil(anchorRect.width),
+      maxWidth: 300,
+      onSelect: function (item, idx) {
+        applySelection(idx);
+      },
+      onClose: function () {
+        cmdFiltered = [];
+        cmdActivePrefix = '';
+      },
+    });
+    // 选中态由 ChatDropdown 渲染时按 isCurrent 处理（命令面板没有 isCurrent 概念，
+    // 但保留高亮当前 hover/keyboard 选中项的能力：渲染后立即把 cmdSelectedIndex 标 active）
+    setTimeout(updateActiveItem, 0);
   }
 
-  function setApplyTarget(fn) {
-    applyTargetFn = typeof fn === 'function' ? fn : null;
-  }
-
-  function mountDropdownTo(container) {
-    if (!elCmdDropdown || !container) return;
-    container.appendChild(elCmdDropdown);
-  }
+  function setApplyTarget(fn) { applyTargetFn = typeof fn === 'function' ? fn : null; }
+  function setAnchor(el) { anchorEl = el; }
 
   function applySelection(index, inputEl) {
     if (index < 0 || index >= cmdFiltered.length) return null;
@@ -154,26 +120,24 @@ window.ChatCommands = (function () {
   }
 
   function handleKeydown(e, inputEl) {
-    if (!cmdVisible) return false;
+    var visible = !!(window.ChatDropdown && window.ChatDropdown.isOpen());
+    if (!visible) return false;
     activeInputEl = inputEl || activeInputEl;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      cmdSelectedIndex = (cmdSelectedIndex + 1) % cmdFiltered.length;
+      cmdSelectedIndex = (cmdSelectedIndex + 1) % Math.max(cmdFiltered.length, 1);
       updateActiveItem();
       return true;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      cmdSelectedIndex = (cmdSelectedIndex - 1 + cmdFiltered.length) % cmdFiltered.length;
+      cmdSelectedIndex = (cmdSelectedIndex - 1 + cmdFiltered.length) % Math.max(cmdFiltered.length, 1);
       updateActiveItem();
       return true;
     }
-    // Tab 或 Enter（非 Shift+换行）— 将当前高亮项写入输入框并关闭面板
-    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+    if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();
-      if (cmdFiltered.length) {
-        applySelection(cmdSelectedIndex, inputEl);
-      }
+      applySelection(cmdSelectedIndex, inputEl);
       return true;
     }
     if (e.key === 'Escape') {
@@ -194,23 +158,17 @@ window.ChatCommands = (function () {
         getLocalCommands().some(function (c) {
           return c.name.toLowerCase() === restTrim.toLowerCase();
         });
-      if (exactFull) {
-        hide();
-        return;
-      }
-      show('~', rest);
+      if (exactFull) { hide(); return; }
+      show('~', rest, inputEl);
     } else {
       hide();
     }
   }
 
-  function getDropdownEl() {
-    return elCmdDropdown;
-  }
-
   function init() {
-    elCmdDropdown = createDropdown();
-    return elCmdDropdown;
+    // 兼容旧调用：直接返回 null（旧版返回 dropdown 元素）。
+    // 命令面板的触发元素由外部通过 setAnchor 注入。
+    return null;
   }
 
   // ---- 命令处理 ----
@@ -221,7 +179,6 @@ window.ChatCommands = (function () {
 
   function handleOpen(ws, ui) {
     ui.showThinking(false);
-    // ~open：发给模型的指令为英文。中文含义——用户若只给文件名，须结合最近一次目录列表里的 `[当前路径]` 拼成绝对路径后再调用 parse_document / parse_pptx_deep / open_file。
     ws.sendMessage(
       '~open\n\n' +
       '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
@@ -232,87 +189,22 @@ window.ChatCommands = (function () {
     messages.push({ role: 'agent', content: '正在获取记忆系统遥测报告…' });
     appendFn(messages[messages.length - 1]);
     saveFn();
-
-    fetch('/api/memory/telemetry')
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        messages.pop();
-        if (data.success && data.report) {
-          messages.push({ role: 'agent', content: data.report });
-        } else {
-          messages.push({ role: 'agent', content: '获取遥测报告失败: ' + (data.error || '未知错误') });
-        }
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      })
-      .catch(function () {
-        messages.pop();
-        messages.push({ role: 'agent', content: '获取遥测报告失败，请检查服务器是否运行' });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      });
-  }
-
-  function parseSupervisorCommandArgs(text) {
-    var args = { days: 7, event: '', limit: 10 };
-    var rest = text.substring('~supervisor'.length).trim();
-    if (!rest) return args;
-    var parts = rest.split(/\s+/);
-    for (var i = 0; i < parts.length; i++) {
-      var p = parts[i];
-      if (p.indexOf('days=') === 0) args.days = parseInt(p.slice(5), 10) || args.days;
-      else if (p.indexOf('event=') === 0) args.event = p.slice(6);
-      else if (p.indexOf('limit=') === 0) args.limit = parseInt(p.slice(6), 10) || args.limit;
-    }
-    return args;
-  }
-
-  function handleSupervisor(text, messages, appendFn, saveFn) {
-    var opts = parseSupervisorCommandArgs(text);
-    messages.push({ role: 'agent', content: '正在获取 Supervisor 事件报告…' });
-    appendFn(messages[messages.length - 1]);
-    saveFn();
-
-    var qs = '?days=' + encodeURIComponent(String(opts.days))
-      + '&limit=' + encodeURIComponent(String(opts.limit));
-    if (opts.event) qs += '&event=' + encodeURIComponent(opts.event);
-
-    fetch('/api/supervisor/events' + qs)
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        messages.pop();
-        if (data.success && data.report) {
-          messages.push({ role: 'agent', content: data.report });
-        } else {
-          messages.push({ role: 'agent', content: '获取 Supervisor 报告失败: ' + (data.error || '未知错误') });
-        }
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      })
-      .catch(function () {
-        messages.pop();
-        messages.push({ role: 'agent', content: '获取 Supervisor 报告失败，请检查服务器是否运行' });
-        appendFn(messages[messages.length - 1]);
-        saveFn();
-      });
   }
 
   return {
     init: init,
+    setAnchor: setAnchor,
+    setRemoteMode: setRemoteMode,
+    setApplyTarget: setApplyTarget,
     show: show,
     hide: hide,
-    render: render,
-    select: select,
-    setApplyTarget: setApplyTarget,
-    mountDropdownTo: mountDropdownTo,
-    applySelection: applySelection,
+    isOpen: isOpen,
     handleKeydown: handleKeydown,
     handleInput: handleInput,
-    getDropdownEl: getDropdownEl,
-    setRemoteMode: setRemoteMode,
+    applySelection: applySelection,
+    getLocalCommands: getLocalCommands,
     handleScan: handleScan,
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
-    handleSupervisor: handleSupervisor,
   };
 })();

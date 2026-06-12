@@ -13,6 +13,7 @@ import './chat-session.js';
 import './chat-session-store.js';
 import './chat-session-sidebar.js';
 import './chat-ui.js';
+import './chat-dropdown.js';
 import './chat-commands.js';
 import './chat-model-picker.js';
 import './chat-file.js';
