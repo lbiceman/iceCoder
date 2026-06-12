@@ -126,11 +126,21 @@ window.ChatSession = (function () {
       .replace(/\s*$/, '');
   }
 
+  function stampMessageTimestamps(msg) {
+    if (!msg || typeof msg !== 'object') return msg;
+    var now = Date.now();
+    if (msg.role === 'user' && msg.sentAt == null) msg.sentAt = now;
+    if (msg.role === 'agent' && !msg._streaming && msg.completedAt == null) msg.completedAt = now;
+    return msg;
+  }
+
   function serializeMessageForStorage(m) {
     var c = m.content;
     if (m.role === 'agent' && typeof c === 'string') c = stripStatusTag(c);
     var o = { role: m.role, content: c };
     if (m.id) o.id = m.id;
+    if (typeof m.sentAt === 'number' && isFinite(m.sentAt)) o.sentAt = m.sentAt;
+    if (typeof m.completedAt === 'number' && isFinite(m.completedAt)) o.completedAt = m.completedAt;
     if (Array.isArray(m.images) && m.images.length > 0) {
       o.images = m.images.slice();
     }
@@ -148,6 +158,8 @@ window.ChatSession = (function () {
     if (Array.isArray(raw.images) && raw.images.length > 0) {
       o.images = raw.images.filter(function (u) { return typeof u === 'string' && u; });
     }
+    if (typeof raw.sentAt === 'number' && isFinite(raw.sentAt)) o.sentAt = raw.sentAt;
+    if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
     return o;
   }
 
@@ -319,6 +331,7 @@ window.ChatSession = (function () {
   }
 
   function appendMessage(msg) {
+    stampMessageTimestamps(msg);
     messages.push(msg);
   }
 
@@ -398,6 +411,7 @@ window.ChatSession = (function () {
     applyServerChatSnapshot: applyServerChatSnapshot,
     flushToolBatchLocal: flushToolBatchLocal,
     appendMessage: appendMessage,
+    stampMessageTimestamps: stampMessageTimestamps,
     getMessages: getMessages,
     getToolTraces: getToolTraces,
     getLastMessage: getLastMessage,

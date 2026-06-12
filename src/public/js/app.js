@@ -24,6 +24,28 @@
 
   // ---- DOM 引用 ----
   var pageContainer = document.getElementById('page-container');
+
+  /** 侧栏与主内容区并列，切页时仅切换 page-container 内子页，不隐藏会话栏 */
+  function ensureAppShell() {
+    var app = document.getElementById('app');
+    if (!app || !pageContainer) return null;
+    var existing = app.querySelector('.app-shell');
+    if (existing) return existing;
+    var shell = document.createElement('div');
+    shell.className = 'app-shell';
+    var main = document.createElement('div');
+    main.className = 'app-main';
+    app.appendChild(shell);
+    shell.appendChild(main);
+    main.appendChild(pageContainer);
+    return shell;
+  }
+
+  function ensureSessionSidebar() {
+    var shell = ensureAppShell();
+    if (!shell || !window.ChatSessionSidebar) return;
+    window.ChatSessionSidebar.create(shell);
+  }
   // 顶栏元素已移入侧边栏（IceCoder logo / 监管模式 / 主题 / 连接状态），此处不再持有引用。
 
   var SUPERVISOR_MODES = ['off', 'adaptive', 'strict'];
@@ -276,6 +298,7 @@
 
     // 应用存储的主题（默认暗色）
     setTheme(getStoredTheme());
+    ensureSessionSidebar();
 
     // 监听 hash 变化
     window.addEventListener('hashchange', function () {

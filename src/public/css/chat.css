@@ -146,13 +146,17 @@
 .chat-page {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   height: 100%;
   position: relative;
+  overflow: hidden;
 }
 
 /* ── Chat Messages ── */
 .chat-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-anchor: none;          /* 禁用容器自身锚定 */
   overscroll-behavior: contain;
@@ -351,11 +355,31 @@
   border-bottom-left-radius: 4px;
 }
 
+.message .msg-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.message .msg-label-row .msg-label {
+  margin-bottom: 0;
+}
+
 .message .msg-label {
   font-size: 11px;
   font-weight: 600;
   margin-bottom: 4px;
   opacity: 0.6;
+}
+
+.message .msg-time {
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.45;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ── Chat Input Area (Codex desktop-style composer) ── */
@@ -1303,6 +1327,9 @@
 .chat-session-sidebar {
   width: 240px;
   flex-shrink: 0;
+  align-self: stretch;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
@@ -1341,11 +1368,11 @@
   letter-spacing: 2px;
   background: linear-gradient(
     90deg,
-    #3CD49E 0%,
-    #4fc3f7 25%,
-    #F1A8B2 50%,
-    #EDE067 75%,
-    #3CD49E 100%
+    #34d399 0%,      /* 项目 success 绿 */
+    #4fc3f7 25%,     /* 清新蓝，保留你给的中间色 */
+    #F1A8B2 50%,     /* 柔和粉，保留 */
+    #86E0FF 75%,     /* 项目自适应蓝 */
+    #39D1E0 100%     /* 项目主 accent 青 */
   );
   background-size: 200% 100%;
   background-clip: text;
@@ -1451,27 +1478,6 @@
 .chat-sidebar-new-btn-label {
   font-size: 13px;
   letter-spacing: 0.2px;
-}
-
-.chat-sidebar-close-btn {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.chat-sidebar-close-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  border-color: var(--accent);
 }
 
 .chat-sidebar-list {
@@ -1745,7 +1751,7 @@
 
 /* 主题图标：根据 data-theme 切换显隐 */
 .chat-sidebar-theme-btn {
-  border: 1px solid var(--text-secondary);
+  border: 1px solid var(--border-color);
 }
 .chat-sidebar-theme-btn .chat-sidebar-theme-icon-light { display: none; }
 .chat-sidebar-theme-btn[data-theme="light"] .chat-sidebar-theme-icon-dark { display: none; }
@@ -1776,23 +1782,14 @@
   outline: none;
 }
 
-.chat-sidebar-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  z-index: 99;
-}
-
-.chat-sidebar-backdrop.hidden {
-  display: none;
-}
-
 .chat-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
 }
 
 /* 用户上滑阅读历史时显示，点击恢复贴底 */
@@ -1826,25 +1823,3 @@
   line-height: 1;
 }
 
-@media (max-width: 768px) {
-  .chat-session-sidebar {
-    position: fixed;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    z-index: 100;
-    width: 280px;
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
-  }
-
-  .chat-session-sidebar.open {
-    transform: translateX(0);
-  }
-
-  .chat-sidebar-close-btn {
-    display: flex;
-  }
-
-}

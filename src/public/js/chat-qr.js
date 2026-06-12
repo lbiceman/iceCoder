@@ -14,17 +14,25 @@ window.ChatQR = (function () {
     return div.innerHTML;
   }
 
+  function pushAgentMessage(messages, appendFn, content) {
+    var msg = { role: 'agent', content: content };
+    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+      window.ChatSession.stampMessageTimestamps(msg);
+    }
+    messages.push(msg);
+    appendFn(msg);
+    return msg;
+  }
+
   function showQrCode(messages, appendFn, saveFn) {
-    messages.push({ role: 'agent', content: '正在生成远程控制二维码…' });
-    appendFn(messages[messages.length - 1]);
+    pushAgentMessage(messages, appendFn, '正在生成远程控制二维码…');
     saveFn();
 
     fetch('/api/remote/session', { method: 'POST' })
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (!data.success) {
-          messages.push({ role: 'agent', content: '生成二维码失败: ' + (data.error || '未知错误') });
-          appendFn(messages[messages.length - 1]);
+          pushAgentMessage(messages, appendFn, '生成二维码失败: ' + (data.error || '未知错误'));
           saveFn();
           return;
         }
@@ -36,8 +44,7 @@ window.ChatQR = (function () {
         showQrModal(data.url, data.qrDataUrl, data.localIP, data.port, data.tunnel);
       })
       .catch(function () {
-        messages.push({ role: 'agent', content: '生成二维码失败，请检查网络连接' });
-        appendFn(messages[messages.length - 1]);
+        pushAgentMessage(messages, appendFn, '生成二维码失败，请检查网络连接');
         saveFn();
       });
   }

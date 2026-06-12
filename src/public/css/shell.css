@@ -5,6 +5,22 @@
   height: 100vh;
 }
 
+.app-shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* ===== Page Container ===== */
 .page-container {
   flex: 1;

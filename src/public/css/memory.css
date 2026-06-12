@@ -79,10 +79,22 @@
   color: var(--text-secondary);
 }
 
-/* 与顶栏 .nav-link.active 一致：accent 字色 + accent-light 胶囊底 */
+/* 胶囊主按钮：accent 字色 + accent-light 底（原顶栏 .nav-link.active） */
 .memory-consolidate-btn {
-  white-space: nowrap;
+  padding: 6px 16px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 13px;
   cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.memory-consolidate-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent-hover);
 }
 
 .memory-consolidate-btn:disabled {

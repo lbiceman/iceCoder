@@ -186,8 +186,12 @@ window.ChatCommands = (function () {
   }
 
   function handleTelemetry(messages, appendFn, saveFn) {
-    messages.push({ role: 'agent', content: '正在获取记忆系统遥测报告…' });
-    appendFn(messages[messages.length - 1]);
+    var telemetryMsg = { role: 'agent', content: '正在获取记忆系统遥测报告…' };
+    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+      window.ChatSession.stampMessageTimestamps(telemetryMsg);
+    }
+    messages.push(telemetryMsg);
+    appendFn(telemetryMsg);
     saveFn();
   }
 

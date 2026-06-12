@@ -393,11 +393,13 @@ window.ChatPage = (function () {
       var stoppedContent = Session.stripStatusTag(lastMsg.content || '');
       lastMsg.content = stoppedContent ? stoppedContent + '\n\n[已停止]' : '[已停止]';
       Session.markLastMessageStreaming(false);
+      if (lastMsg.completedAt == null) lastMsg.completedAt = Date.now();
 
       var streamEl = document.getElementById('streaming-msg');
       if (streamEl) {
         var contentEl = streamEl._streamContentEl || streamEl.lastChild;
         if (contentEl) contentEl.textContent = lastMsg.content;
+        if (UI.updateMsgLabelTime) UI.updateMsgLabelTime(streamEl, lastMsg.completedAt);
         streamEl.removeAttribute('id');
         delete streamEl._streamContentEl;
       }
@@ -886,8 +888,10 @@ window.ChatPage = (function () {
     var notices = data.notices || [];
     var messages = Session.getMessages();
     for (var i = 0; i < notices.length; i++) {
-      messages.push({ role: 'agent', content: notices[i] });
-      UI.appendMessageEl(messages[messages.length - 1], Session.stripStatusTag);
+      var noticeMsg = { role: 'agent', content: notices[i] };
+      if (Session.stampMessageTimestamps) Session.stampMessageTimestamps(noticeMsg);
+      messages.push(noticeMsg);
+      UI.appendMessageEl(noticeMsg, Session.stripStatusTag);
     }
     Session.saveMessages();
     Pet.applyMemoryNoticesToPet(notices, {
@@ -1114,7 +1118,7 @@ window.ChatPage = (function () {
     remoteMode = !!remoteToken;
 
     container.innerHTML =
-      '<div class="chat-page chat-layout">' +
+      '<div class="chat-page">' +
         '<div class="chat-main">' +
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
@@ -1195,13 +1199,7 @@ window.ChatPage = (function () {
       window.ChatModelPicker.refreshFromServer();
     }
 
-    // 初始化会话侧栏（PC 模式）。侧栏已固定常驻，不再创建折叠按钮。
-    if (!remoteMode && window.ChatSessionSidebar) {
-      var chatLayout = container.querySelector('.chat-layout');
-      if (chatLayout) {
-        window.ChatSessionSidebar.create(chatLayout);
-      }
-    }
+    // 会话侧栏由 app.js 挂在 app-shell 上，切记忆/配置页时保持可见。
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });

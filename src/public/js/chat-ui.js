@@ -1470,14 +1470,86 @@ window.ChatUI = (function () {
 
   // ---- 消息渲染 ----
 
+  function formatMessageTime(ts) {
+    if (typeof ts !== 'number' || !isFinite(ts)) return '';
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    var now = new Date();
+    var sameDay = d.getFullYear() === now.getFullYear()
+      && d.getMonth() === now.getMonth()
+      && d.getDate() === now.getDate();
+    if (sameDay) {
+      return d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+    return d.toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
+
+  function getMessageTimestamp(msg) {
+    if (!msg) return null;
+    if (msg.role === 'user') {
+      return typeof msg.sentAt === 'number' && isFinite(msg.sentAt) ? msg.sentAt : null;
+    }
+    if (msg.role === 'agent') {
+      return typeof msg.completedAt === 'number' && isFinite(msg.completedAt) ? msg.completedAt : null;
+    }
+    return null;
+  }
+
+  function createMsgLabelRow(role, timestamp) {
+    var row = document.createElement('div');
+    row.className = 'msg-label-row';
+    var label = document.createElement('div');
+    label.className = 'msg-label';
+    label.textContent = role === 'user' ? 'You' : 'Assistant';
+    row.appendChild(label);
+    var timeText = formatMessageTime(timestamp);
+    if (timeText) {
+      var timeEl = document.createElement('time');
+      timeEl.className = 'msg-time';
+      timeEl.dateTime = new Date(timestamp).toISOString();
+      timeEl.textContent = timeText;
+      row.appendChild(timeEl);
+    }
+    return row;
+  }
+
+  function updateMsgLabelTime(el, timestamp) {
+    if (!el) return;
+    var timeText = formatMessageTime(timestamp);
+    var row = el.querySelector('.msg-label-row');
+    if (!row) {
+      var label = el.querySelector('.msg-label');
+      if (!label || label.classList.contains('msg-thinking-toggle')) return;
+      row = document.createElement('div');
+      row.className = 'msg-label-row';
+      label.parentNode.insertBefore(row, label);
+      row.appendChild(label);
+    }
+    var timeEl = row.querySelector('.msg-time');
+    if (!timeText) {
+      if (timeEl) timeEl.remove();
+      return;
+    }
+    if (!timeEl) {
+      timeEl = document.createElement('time');
+      timeEl.className = 'msg-time';
+      row.appendChild(timeEl);
+    }
+    timeEl.dateTime = new Date(timestamp).toISOString();
+    timeEl.textContent = timeText;
+  }
+
   function createMessageEl(msg, stripStatusTagFn) {
     var el = document.createElement('div');
     el.className = 'message ' + msg.role;
 
-    var label = document.createElement('div');
-    label.className = 'msg-label';
-    label.textContent = msg.role === 'user' ? 'You' : 'Assistant';
-    el.appendChild(label);
+    el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg)));
 
     if (msg.images && msg.images.length > 0) {
       var imgRow = document.createElement('div');
@@ -1687,10 +1759,7 @@ window.ChatUI = (function () {
       el.className = 'message assistant';
       el.setAttribute('id', 'streaming-msg');
 
-      var label = document.createElement('div');
-      label.className = 'msg-label';
-      label.textContent = 'Assistant';
-      el.appendChild(label);
+      el.appendChild(createMsgLabelRow('agent', null));
 
       var contentDiv = document.createElement('div');
       contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
@@ -1707,10 +1776,7 @@ window.ChatUI = (function () {
       var wrap = document.createElement('div');
       wrap.className = 'message assistant';
       wrap.setAttribute('id', 'streaming-msg');
-      var lab = document.createElement('div');
-      lab.className = 'msg-label';
-      lab.textContent = 'Assistant';
-      wrap.appendChild(lab);
+      wrap.appendChild(createMsgLabelRow('agent', null));
       var contentDiv = document.createElement('div');
       contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
       wrap.appendChild(contentDiv);
@@ -1738,11 +1804,17 @@ window.ChatUI = (function () {
       delete lastMsg._streaming;
       lastMsg.content = stripStatusTagFn(lastMsg.content);
     }
+    if (lastMsg && lastMsg.role === 'agent' && lastMsg.completedAt == null) {
+      lastMsg.completedAt = Date.now();
+    }
     streamReplyBuffer = '';
     var streamEl = document.getElementById('streaming-msg');
     if (streamEl) {
       if (streamEl._streamContentEl) {
         streamEl._streamContentEl.textContent = stripStatusTagFn(streamEl._streamContentEl.textContent || '');
+      }
+      if (lastMsg && lastMsg.completedAt != null) {
+        updateMsgLabelTime(streamEl, lastMsg.completedAt);
       }
       streamEl.removeAttribute('id');
       delete streamEl._streamContentEl;
@@ -1881,6 +1953,7 @@ window.ChatUI = (function () {
     clearReasoningStream: clearReasoningStream,
     promoteAssistantBubbleToThinking: promoteAssistantBubbleToThinking,
     finalizeStreamResponse: finalizeStreamResponse,
+    updateMsgLabelTime: updateMsgLabelTime,
     finalizeBeforeUserMessage: finalizeBeforeUserMessage,
     repairOrphanStreamingIfAny: repairOrphanStreamingIfAny,
     appendToolAction: appendToolAction,
