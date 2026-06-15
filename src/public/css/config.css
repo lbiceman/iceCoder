@@ -23,14 +23,14 @@
   margin-bottom: 20px;
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
-  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: color-mix(in srgb, var(--text-primary) 65%, var(--text-muted) 35%);
   font-size: 13px;
   line-height: 1.5;
 }
 .setup-banner strong {
-  color: var(--accent-primary);
+  color: var(--accent);
 }
 body.setup-required .nav-link[data-page="config"] {
   pointer-events: none;

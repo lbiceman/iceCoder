@@ -386,8 +386,8 @@
 
 /* ── Chat Input Area (Codex desktop-style composer) ── */
 .chat-input-area {
+  background: var(--chat-bg, var(--bg-primary));
   position: relative;            /* 模糊遮罩盒的绝对定位祖先 */
-  background: transparent;
   border-top: none;
   padding: 8px 18px 16px;
   flex-shrink: 0;
@@ -1768,12 +1768,11 @@
 }
 
 .chat-sidebar-control-icon {
-  flex-shrink: 0;
   display: inline-flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .chat-sidebar-control-label {
@@ -1793,8 +1792,8 @@
 
 /* 连接状态配色 */
 .chat-sidebar-connection[data-state="connected"] {
-  color: #3CD49E;
-  border: 1px solid #3CD49E;
+  color: #37D1A3;
+  border: 1px solid #37D1A3;
 }
 .chat-sidebar-connection[data-state="connecting"] {
   color: #facc15;

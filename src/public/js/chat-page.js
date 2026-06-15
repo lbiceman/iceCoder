@@ -1267,6 +1267,8 @@ window.ChatPage = (function () {
       if (Cmd.handleKeydown(e, elInput)) return;
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
+        // 流式/暂停态：回车吞掉，**不**触发 stop；暂停必须鼠标点按钮
+        if (isWorkloadActive()) return;
         handleSend();
       }
     });

@@ -1872,7 +1872,8 @@ window.ChatUI = (function () {
       elSendBtn.innerHTML = '<span class="icon-stop"></span>';
       elSendBtn.title = 'Stop';
       elSendBtn.classList.add('btn-stop');
-      elInput.disabled = true;
+      // 流式态：禁止发送，但允许在输入框继续打字（按 Enter 走 stop 行为，由 chat-page.js 拦截）
+      elInput.disabled = false;
     } else {
       elSendBtn.innerHTML = '<span class="icon-send"></span>';
       elSendBtn.title = 'Send';
