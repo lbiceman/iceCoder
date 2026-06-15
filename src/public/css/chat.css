@@ -160,10 +160,12 @@
   overflow-y: auto;
   overflow-anchor: none;          /* 禁用容器自身锚定 */
   overscroll-behavior: contain;
-  padding: 20px 24px;
+  padding: 20px 24px;       /* 底部多 64px 留给模糊遮罩盒 */
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: var(--chat-bg, var(--bg-primary));
+  position: relative;
 }
 
 /* ── Background Task Ephemeral Chips (Phase 4b) ── */
@@ -358,7 +360,7 @@
 .message .msg-label-row {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   margin-bottom: 4px;
 }
@@ -384,10 +386,39 @@
 
 /* ── Chat Input Area (Codex desktop-style composer) ── */
 .chat-input-area {
+  position: relative;            /* 模糊遮罩盒的绝对定位祖先 */
   background: transparent;
   border-top: none;
   padding: 8px 18px 16px;
   flex-shrink: 0;
+}
+
+/* 阴影遮罩盒：作为 .chat-input-area 的第一个子元素，
+   用 position: absolute 钉在输入框正上方，固定不动。
+   不要用 backdrop-filter（会把消息糊成一团）。
+   改用 box-shadow 朝下投射 + 顶部一条窄渐变做"光打下来"的阴影效果。 */
+.chat-fade-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;                  /* 钉在 .chat-input-area 顶边（输入框正上方） */
+  height: 24px;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--chat-bg, #f8f9fb) 100%
+  );
+  box-shadow: 0 12px 12px -8px var(--chat-bg, #f8f9fb);
+}
+[data-theme="dark"] .chat-fade-overlay {
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--chat-bg, #14141a) 100%
+  );
+  box-shadow: 0 12px 12px -8px var(--chat-bg, #14141a);
 }
 .chat-input-area > .file-upload-status,
 .chat-input-area > .pending-images-preview {
@@ -1729,6 +1760,9 @@
 }
 
 .chat-sidebar-connection {
+  flex: 0 0 30px;              /* 固定 30px 宽，覆盖父级 flex: 1，只显示图标 */
+  justify-content: center;
+  align-items: center;
   cursor: default;
   pointer-events: none;
 }

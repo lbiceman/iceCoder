@@ -1131,6 +1131,7 @@ window.ChatPage = (function () {
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         '<div class="chat-input-area">' +
+          '<div class="chat-fade-overlay" aria-hidden="true"></div>' +
           '<div class="pending-images-preview hidden" id="pending-images-preview"></div>' +
           '<div class="file-upload-status hidden" id="file-status">' +
             '<span class="file-name" id="file-name"></span>' +
