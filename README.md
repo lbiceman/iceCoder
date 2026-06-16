@@ -4,6 +4,10 @@
 
 [中文简介](./README.zh-CN.md) · [**Usage & commands**](./docs/使用文档.md) · [Full guide](./docs/PROJECT-GUIDE.md) · [项目介绍](./docs/项目介绍.md)
 
+## Preview
+
+![IceCoder Web UI — sidebar, welcome dashboard, mode / memory / Harness / L2·Gate status, and composer](./docs/assets/web-ui.png)
+
 ---
 
 ## Getting started
@@ -28,7 +32,7 @@ Node.js **18+** (22+ recommended) · Dev data: `./data/` · Prod: `~/.iceCoder/`
 
 ### Dual-mode runtime (L0 / L1 / L2)
 
-Three layers: **L0** is the Web tier you pick (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L2** watches `no_progress`, `file_loop`, `tool_repeat_fail`, `goal_drift`, etc., and can **takeover → correct → handoff** back to the main loop (events in `supervisor-events.jsonl`).
+Three layers: **L0** is the supervision tier you pick in the sidebar footer (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L2** watches `no_progress`, `file_loop`, `tool_repeat_fail`, `goal_drift`, etc., and can **takeover → correct → handoff** back to the main loop (events in `supervisor-events.jsonl`).
 
 - **adaptive** (default) balances freedom and enforcement; **strict** stays near forced, builds the graph on round 1, and is required for some L2 cases (e.g. file_loop).
 - Tied to **TaskGraph** and **Verification Gate** — code changes without verification cannot “finish by chat alone”; `critical_*` domains affect L2 takeover.
@@ -46,7 +50,7 @@ Three layers: **L0** is the Web tier you pick (`off` / `adaptive` / `strict`); *
 
 Web-only Canvas pet — visual feedback from Harness / Supervisor / TaskGraph events; **does not** drive runtime decisions.
 
-- **L0 eye color** reflects `off` / `adaptive` / `strict`.
+- **L0 eye color** reflects `off` / `adaptive` / `strict` (toggle in the sidebar footer); the welcome dashboard shows Harness and L2·Gate status at a glance.
 - **L1 chip** shows `forced · …` aligned with `execution_mode_enter` reasons.
 - **~20 expressions** plus a token ring; step summary and “round N” sync over WebSocket.
 
