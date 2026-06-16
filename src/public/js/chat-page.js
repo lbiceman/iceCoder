@@ -227,9 +227,12 @@ window.ChatPage = (function () {
       supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
         ? window.AppRouter.getSupervisorMode()
         : 'adaptive',
-      modelName: modelName,
-      maxContextTokens: maxContextTokens,
-      usedInputTokens: usedInputTokens,
+      connectionState: window.AppShell && typeof window.AppShell.getConnectionState === 'function'
+        ? window.AppShell.getConnectionState()
+        : 'disconnected',
+      setupRequired: window.AppRouter && typeof window.AppRouter.isSetupRequired === 'function'
+        ? window.AppRouter.isSetupRequired()
+        : false,
       remoteMode: remoteMode,
     });
   }
@@ -1242,9 +1245,16 @@ window.ChatPage = (function () {
       });
     }
     if (window.AppShell) {
-      window.AppShell.onSupervisorModeChange = function () {
-        syncWelcomeState();
-      };
+      if (typeof window.AppShell.addSupervisorModeListener === 'function') {
+        window.AppShell.addSupervisorModeListener(function () {
+          syncWelcomeState();
+        });
+      }
+      if (typeof window.AppShell.addConnectionChangeListener === 'function') {
+        window.AppShell.addConnectionChangeListener(function () {
+          syncWelcomeState();
+        });
+      }
     }
     File.init({ elFileStatus: elFileStatus, elFileName: elFileName, elFileInput: elFileInput });
     Cmd.setRemoteMode(remoteMode);

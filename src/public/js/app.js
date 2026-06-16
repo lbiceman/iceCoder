@@ -148,6 +148,23 @@
     }
   }
 
+  function createListenerHub() {
+    var listeners = [];
+    return {
+      add: function (fn) {
+        if (typeof fn !== 'function') return;
+        if (listeners.indexOf(fn) === -1) listeners.push(fn);
+      },
+      notify: function (arg) {
+        for (var i = 0; i < listeners.length; i++) listeners[i](arg);
+      },
+    };
+  }
+
+  var supervisorModeHub = createListenerHub();
+  var themeChangeHub = createListenerHub();
+  var connectionChangeHub = createListenerHub();
+
   window.AppShell = {
     getTheme: getTheme,
     toggleTheme: toggleTheme,
@@ -156,18 +173,13 @@
     cycleSupervisorMode: cycleSupervisorMode,
     setConnectionState: setConnectionState,
     getConnectionState: getConnectionState,
-    onThemeChange: null,
-    onConnectionChange: null,
-    onSupervisorModeChange: null,
+    addSupervisorModeListener: supervisorModeHub.add,
+    addThemeChangeListener: themeChangeHub.add,
+    addConnectionChangeListener: connectionChangeHub.add,
+    notifySupervisorModeChange: supervisorModeHub.notify,
+    notifyThemeChange: themeChangeHub.notify,
+    notifyConnectionChange: connectionChangeHub.notify,
   };
-  function notifySupervisorShell() {
-    if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
-      window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
-    }
-  }
-  window.AppShell.notifyThemeChange = function (t) { if (typeof window.AppShell.onThemeChange === 'function') window.AppShell.onThemeChange(t); };
-  window.AppShell.notifyConnectionChange = function (s) { if (typeof window.AppShell.onConnectionChange === 'function') window.AppShell.onConnectionChange(s); };
-  window.AppShell.notifySupervisorModeChange = function (m) { if (typeof window.AppShell.onSupervisorModeChange === 'function') window.AppShell.onSupervisorModeChange(m); };
 
   // ---- 路由 ----
 

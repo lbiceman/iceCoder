@@ -250,7 +250,6 @@ window.ChatSessionSidebar = (function () {
       modeBtn.addEventListener('click', function () {
         if (!shell || typeof shell.cycleSupervisorMode !== 'function') return;
         shell.cycleSupervisorMode();
-        syncShellMode();
       });
     }
 
@@ -264,9 +263,15 @@ window.ChatSessionSidebar = (function () {
     }
 
     if (shell) {
-      shell.onSupervisorModeChange = function () { syncShellMode(); };
-      shell.onThemeChange = function () { syncShellTheme(); };
-      shell.onConnectionChange = function (state) { syncShellConnection(state); };
+      if (typeof shell.addSupervisorModeListener === 'function') {
+        shell.addSupervisorModeListener(function () { syncShellMode(); });
+      }
+      if (typeof shell.addThemeChangeListener === 'function') {
+        shell.addThemeChangeListener(function () { syncShellTheme(); });
+      }
+      if (typeof shell.addConnectionChangeListener === 'function') {
+        shell.addConnectionChangeListener(function (state) { syncShellConnection(state); });
+      }
     }
   }
 

@@ -67,13 +67,6 @@ window.ChatWelcome = (function () {
       .replace(/"/g, '&quot;');
   }
 
-  function formatTokenCount(n) {
-    if (!n || n <= 0) return '—';
-    if (n >= 1000000) return (n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1) + 'M';
-    if (n >= 1000) return Math.round(n / 1000) + 'K';
-    return String(n);
-  }
-
   function getSupervisorLabel(mode) {
     if (window.AppShell && typeof window.AppShell.getSupervisorLabel === 'function') {
       return window.AppShell.getSupervisorLabel(mode);
@@ -95,10 +88,13 @@ window.ChatWelcome = (function () {
     if (name === 'memory') {
       return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>';
     }
-    if (name === 'checkpoint') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 4h15v16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M6 8h11"/></svg>';
+    if (name === 'harness') {
+      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>';
     }
-    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+    if (name === 'l2') {
+      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3 4 7v6c0 4.5 3.4 7.8 8 8 4.6-.2 8-3.5 8-8V7l-8-4Z"/><circle cx="12" cy="11" r="2.5"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/></svg>';
   }
 
   function promptIconSvg(name) {
@@ -164,17 +160,17 @@ window.ChatWelcome = (function () {
             '</div>' +
           '</div>' +
           '<div class="chat-welcome-stat">' +
-            '<span class="chat-welcome-stat-icon chat-welcome-stat-icon-ready">' + statIconSvg('checkpoint') + '</span>' +
+            '<span class="chat-welcome-stat-icon chat-welcome-stat-icon-harness" data-welcome-harness-icon>' + statIconSvg('harness') + '</span>' +
             '<div class="chat-welcome-stat-body">' +
-              '<span class="chat-welcome-stat-label">Checkpoint</span>' +
-              '<span class="chat-welcome-stat-value chat-welcome-stat-value-success">就绪</span>' +
+              '<span class="chat-welcome-stat-label">Harness</span>' +
+              '<span class="chat-welcome-stat-value" data-welcome-harness title="L1 主循环：消息预处理 → LLM → 工具执行">—</span>' +
             '</div>' +
           '</div>' +
           '<div class="chat-welcome-stat">' +
-            '<span class="chat-welcome-stat-icon">' + statIconSvg('context') + '</span>' +
+            '<span class="chat-welcome-stat-icon chat-welcome-stat-icon-pipeline" data-welcome-pipeline-icon>' + statIconSvg('l2') + '</span>' +
             '<div class="chat-welcome-stat-body">' +
-              '<span class="chat-welcome-stat-label">上下文</span>' +
-              '<span class="chat-welcome-stat-value" data-welcome-context>—</span>' +
+              '<span class="chat-welcome-stat-label">L2 · Gate</span>' +
+              '<span class="chat-welcome-stat-value" data-welcome-pipeline title="L2 过程监管与 Gate 收尾验收">—</span>' +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -250,22 +246,60 @@ window.ChatWelcome = (function () {
     el.textContent = memoryCount > 0 ? ('已加载 ' + memoryCount + ' 条') : '暂无记忆';
   }
 
-  function updateContextLabel(opts) {
-    if (!elRoot) return;
-    var el = elRoot.querySelector('[data-welcome-context]');
+  function setStatValue(el, iconEl, text, tone) {
     if (!el) return;
-    var maxCtx = opts.maxContextTokens || 0;
-    var used = opts.usedInputTokens || 0;
-    if (maxCtx > 0) {
-      var pct = Math.min(100, Math.round((used / maxCtx) * 100));
-      el.textContent = pct + '% / ' + formatTokenCount(maxCtx);
+    el.textContent = text;
+    el.classList.remove(
+      'chat-welcome-stat-value-accent',
+      'chat-welcome-stat-value-success',
+      'chat-welcome-stat-value-muted'
+    );
+    if (tone === 'accent') el.classList.add('chat-welcome-stat-value-accent');
+    else if (tone === 'success') el.classList.add('chat-welcome-stat-value-success');
+    else if (tone === 'muted') el.classList.add('chat-welcome-stat-value-muted');
+    if (!iconEl) return;
+    iconEl.classList.remove(
+      'chat-welcome-stat-icon-ready',
+      'chat-welcome-stat-icon-warn',
+      'chat-welcome-stat-icon-muted'
+    );
+    if (tone === 'success') iconEl.classList.add('chat-welcome-stat-icon-ready');
+    else if (tone === 'muted') iconEl.classList.add('chat-welcome-stat-icon-muted');
+    else if (tone === 'warn') iconEl.classList.add('chat-welcome-stat-icon-warn');
+  }
+
+  function updateHarnessLabel(opts) {
+    if (!elRoot) return;
+    var el = elRoot.querySelector('[data-welcome-harness]');
+    var iconEl = elRoot.querySelector('[data-welcome-harness-icon]');
+    var connected = opts.connectionState === 'connected';
+    var setupRequired = !!opts.setupRequired;
+    if (!connected) {
+      setStatValue(el, iconEl, '未连接', 'warn');
       return;
     }
-    if (opts.modelName) {
-      el.textContent = opts.modelName;
+    if (setupRequired) {
+      setStatValue(el, iconEl, '待配置', 'warn');
       return;
     }
-    el.textContent = '—';
+    setStatValue(el, iconEl, '就绪', 'success');
+  }
+
+  function updatePipelineLabel(opts) {
+    if (!elRoot) return;
+    var el = elRoot.querySelector('[data-welcome-pipeline]');
+    var iconEl = elRoot.querySelector('[data-welcome-pipeline-icon]');
+    var mode = opts.supervisorMode || 'adaptive';
+    var connected = opts.connectionState === 'connected';
+    var setupRequired = !!opts.setupRequired;
+    var l2Text = '待命';
+    if (mode === 'off') l2Text = '已关闭';
+    else if (mode === 'strict') l2Text = '严格';
+    var gateText = (!connected || setupRequired) ? '未激活' : '待触发';
+    var tone = 'accent';
+    if (mode === 'off' || !connected || setupRequired) tone = 'muted';
+    else if (gateText === '待触发') tone = 'success';
+    setStatValue(el, iconEl, l2Text + ' · ' + gateText, tone);
   }
 
   function updateModeLabel(mode) {
@@ -302,7 +336,8 @@ window.ChatWelcome = (function () {
     if (!show) return;
 
     updateModeLabel(opts.supervisorMode || 'adaptive');
-    updateContextLabel(opts);
+    updateHarnessLabel(opts);
+    updatePipelineLabel(opts);
     updateMemoryLabel();
     if (memoryCount == null) fetchMemoryCount();
   }

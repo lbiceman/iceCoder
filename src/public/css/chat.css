@@ -406,6 +406,16 @@
   color: var(--success);
 }
 
+.chat-welcome-stat-icon-warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+
+.chat-welcome-stat-icon-muted {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+}
+
 .chat-welcome-stat-body {
   min-width: 0;
   display: flex;
@@ -432,6 +442,10 @@
 
 .chat-welcome-stat-value-success {
   color: var(--success);
+}
+
+.chat-welcome-stat-value-muted {
+  color: var(--text-muted);
 }
 
 .chat-welcome-section {
