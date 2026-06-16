@@ -794,7 +794,7 @@ window.ChatUI = (function () {
   function autoResizeInput() {
     if (!elInput) return;
     elInput.style.height = 'auto';
-    elInput.style.height = Math.min(elInput.scrollHeight, 120) + 'px';
+    elInput.style.height = Math.min(elInput.scrollHeight, 220) + 'px';
   }
 
   // ---- 工具调用行 ----
@@ -1644,6 +1644,9 @@ window.ChatUI = (function () {
     }
 
     followBottomAfterContentPatch(shouldScroll);
+    if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
+      window.ChatPage.syncWelcomeState();
+    }
   }
 
   /** 内容增删改后跟随到底（含虚拟历史 remeasure / diff 挂载后的二次对齐） */
@@ -1668,6 +1671,9 @@ window.ChatUI = (function () {
     if (!elTailRoot) return;
     insertTailBefore(createMessageEl(msg, stripStatusTagFn));
     notifyTailLayoutChange();
+    if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
+      window.ChatPage.syncWelcomeState();
+    }
   }
 
   /**

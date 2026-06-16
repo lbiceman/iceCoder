@@ -1,6 +1,5 @@
 /**
- * 命令面板模块（~ 命令）。
- * 浮层本身已统一为 ChatDropdown；本模块只负责数据 + 行为（键盘 / 输入过滤 / 应用选中的命令）。
+ * 命令面板模块：通过工具栏按钮打开，选中后直接执行本地命令。
  */
 
 /* exported ChatCommands */
@@ -52,10 +51,15 @@ window.ChatCommands = (function () {
     }
   }
 
-  function isOpen() { return !!(window.ChatDropdown && window.ChatDropdown.isOpen()); }
+  function isOpen() {
+    return !!(window.ChatDropdown && window.ChatDropdown.isOpen() && cmdActivePrefix === '~');
+  }
 
   function show(prefix, filter, inputEl) {
     if (prefix !== '~') { hide(); return; }
+    if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
+      window.ChatSkills.hide();
+    }
     cmdActivePrefix = prefix;
     activeInputEl = inputEl || activeInputEl;
     var query = (filter || '').toLowerCase();
@@ -69,11 +73,10 @@ window.ChatCommands = (function () {
   }
 
   function hide() {
+    var shouldClose = cmdActivePrefix === '~' && window.ChatDropdown && window.ChatDropdown.isOpen();
     cmdFiltered = [];
     cmdActivePrefix = '';
-    if (window.ChatDropdown && window.ChatDropdown.isOpen()) {
-      window.ChatDropdown.close();
-    }
+    if (shouldClose) window.ChatDropdown.close();
   }
 
   function openDropdown() {
@@ -120,8 +123,7 @@ window.ChatCommands = (function () {
   }
 
   function handleKeydown(e, inputEl) {
-    var visible = !!(window.ChatDropdown && window.ChatDropdown.isOpen());
-    if (!visible) return false;
+    if (!isOpen()) return false;
     activeInputEl = inputEl || activeInputEl;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -150,19 +152,7 @@ window.ChatCommands = (function () {
 
   function handleInput(val, inputEl) {
     activeInputEl = inputEl || activeInputEl;
-    if (val.indexOf('~') === 0) {
-      var rest = val.slice(1);
-      var restTrim = rest.trim();
-      var exactFull =
-        rest === restTrim &&
-        getLocalCommands().some(function (c) {
-          return c.name.toLowerCase() === restTrim.toLowerCase();
-        });
-      if (exactFull) { hide(); return; }
-      show('~', rest, inputEl);
-    } else {
-      hide();
-    }
+    if (cmdActivePrefix === '~') hide();
   }
 
   function init() {

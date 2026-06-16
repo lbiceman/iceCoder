@@ -14,6 +14,7 @@ window.ChatPage = (function () {
   var WS = window.ChatWebSocket;
   var UI = window.ChatUI;
   var Cmd = window.ChatCommands;
+  var Skills = window.ChatSkills;
   var File = window.ChatFile;
   var QR = window.ChatQR;
   var Pet = window.ChatPetBridge;
@@ -129,6 +130,7 @@ window.ChatPage = (function () {
           window.ChatModelPicker.setProviders(providers);
         }
         updateChipModelLabel(providers);
+        syncWelcomeState();
       })
       .catch(function () {
         if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
@@ -215,6 +217,21 @@ window.ChatPage = (function () {
     if (sessionPet && sessionPet.setTokenUsage) {
       sessionPet.setTokenUsage(usedInputTokens, maxContextTokens, usedOutputTokens);
     }
+    syncWelcomeState();
+  }
+
+  function syncWelcomeState() {
+    if (!window.ChatWelcome || typeof window.ChatWelcome.sync !== 'function') return;
+    window.ChatWelcome.sync({
+      messageCount: Session.getMessages().length,
+      supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
+        ? window.AppRouter.getSupervisorMode()
+        : 'adaptive',
+      modelName: modelName,
+      maxContextTokens: maxContextTokens,
+      usedInputTokens: usedInputTokens,
+      remoteMode: remoteMode,
+    });
   }
 
   /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
@@ -299,19 +316,23 @@ window.ChatPage = (function () {
   // ---- 发送/停止 ----
   function handleSend() {
     Cmd.hide();
+    if (Skills) Skills.hide();
     if (isWorkloadActive()) {
       handleStop();
       return;
     }
 
-    var text = elInput.value.trim();
+    var text = (Skills && typeof Skills.getComposerText === 'function')
+      ? Skills.getComposerText(elInput).trim()
+      : elInput.value.trim();
     var uploadedFile = File.getUploadedFile();
     var pendingImages = File.getPendingImages();
 
     if (!text && !uploadedFile && pendingImages.length === 0) return;
 
     if (executeLocalCommand(text)) {
-      elInput.value = '';
+      if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
+      else elInput.value = '';
       UI.autoResizeInput();
       return;
     }
@@ -352,7 +373,8 @@ window.ChatPage = (function () {
       }
     }
 
-    elInput.value = '';
+    if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
+    else elInput.value = '';
     UI.autoResizeInput();
     Cmd.hide();
     userStopped = false;
@@ -1140,7 +1162,8 @@ window.ChatPage = (function () {
           '<div class="chat-composer">' +
             '<div class="composer-input">' +
               '<div class="input-wrapper">' +
-                '<textarea id="chat-input" rows="1" placeholder="输入指令… (输入 ~ 查看命令)"></textarea>' +
+                '<div id="skill-chips-bar" class="skill-chips-bar hidden" role="listbox" aria-label="已选技能"></div>' +
+                '<textarea id="chat-input" rows="2" placeholder="输入消息… (输入 # 选用技能)"></textarea>' +
               '</div>' +
             '</div>' +
             '<div class="composer-toolbar">' +
@@ -1188,6 +1211,7 @@ window.ChatPage = (function () {
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     mainInputWrapper = container.querySelector('.input-wrapper');
     if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
+    if (elCmdPlusBtn && Skills) Skills.setAnchor(elCmdPlusBtn);
 
     // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
     // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
@@ -1204,10 +1228,31 @@ window.ChatPage = (function () {
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
+    if (window.ChatWelcome && typeof window.ChatWelcome.init === 'function') {
+      window.ChatWelcome.init({
+        elMessages: elMessages,
+        remoteMode: remoteMode,
+        onPromptSelect: function (text) {
+          if (!elInput) return;
+          UI.setInputValue(text);
+          UI.autoResizeInput();
+          UI.focusInput();
+        },
+      });
+    }
+    if (window.AppShell) {
+      window.AppShell.onSupervisorModeChange = function () {
+        syncWelcomeState();
+      };
+    }
     File.init({ elFileStatus: elFileStatus, elFileName: elFileName, elFileInput: elFileInput });
     Cmd.setRemoteMode(remoteMode);
     var cmdDropdown = Cmd.init();
     if (mainInputWrapper && cmdDropdown) mainInputWrapper.appendChild(cmdDropdown);
+    if (Skills) {
+      Skills.init();
+      Skills.initSkillComposer(elInput, container.querySelector('#skill-chips-bar'));
+    }
 
     // 初始化冰豆（会话指示器）
     if (window.SessionPet) {
@@ -1264,6 +1309,7 @@ window.ChatPage = (function () {
     // 绑定 UI 事件
     elSendBtn.addEventListener('click', handleSend);
     elInput.addEventListener('keydown', function (e) {
+      if (Skills && Skills.handleKeydown(e, elInput)) return;
       if (Cmd.handleKeydown(e, elInput)) return;
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -1274,6 +1320,7 @@ window.ChatPage = (function () {
     });
     elInput.addEventListener('input', function () {
       UI.autoResizeInput();
+      if (Skills) Skills.handleInput(elInput.value, elInput);
       Cmd.handleInput(elInput.value, elInput);
     });
     // 命令面板的 outside-click / escape / focus-blur 关闭由 ChatDropdown 统一处理
@@ -1404,5 +1451,6 @@ window.ChatPage = (function () {
     onActivate: onActivate,
     onSessionSwitched: onSessionSwitched,
     isWorkloadActive: isWorkloadActive,
+    syncWelcomeState: syncWelcomeState,
   };
 })();

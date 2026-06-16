@@ -92,6 +92,7 @@ import {
 // isExecutionPlanEnabled removed (Phase 11)
 
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
+import { getSkillRegistry } from '../core/skill-registry.js';
 
 applyRuntimeDataEnvDefaults();
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
@@ -1230,6 +1231,13 @@ async function handleChatMessage(
   // 解析消息中的文件引用 [file:xxx]，替换为实际文件路径
   const { text: resolvedMessage, filePaths, imageUrls } = resolveFileReferences(message);
 
+  // 解析 #skill.md 引用，将技能正文注入发给模型的文本
+  let harnessMessageText = resolvedMessage;
+  const skillResolved = await getSkillRegistry().resolveMessage(resolvedMessage);
+  if (skillResolved) {
+    harnessMessageText = skillResolved.augmentedText;
+  }
+
   const supportsVision = await resolveDefaultSupportsVision(MAIN_CONFIG_PATH);
 
   const persistedInline = await persistInlineImages(inlineImages, runSessionId);
@@ -1263,7 +1271,7 @@ async function handleChatMessage(
 
   const { content: userMessageContent, harnessUserMessage: builtHarnessUserMessage } =
     buildUserMessageWithImages({
-      userText: resolvedMessage,
+      userText: harnessMessageText,
       filePaths,
       imageAbsolutePaths,
       imageDataUrls: supportsVision ? visionDataUrls : [],

@@ -59,6 +59,7 @@ import { createMemoryTelemetryRouter } from './web/routes/memory-telemetry.js';
 import { createSupervisorEventsRouter } from './web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from './web/routes/memory-export.js';
 import { createMemoryFilesRouter } from './web/routes/memory-files.js';
+import { createSkillsRouter } from './web/routes/skills.js';
 import { createMemoryDreamRouter } from './web/routes/memory-dream.js';
 
 // 类型
@@ -221,6 +222,7 @@ async function main(): Promise<void> {
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
+      { path: '/api/skills', router: createSkillsRouter() },
       { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter() },
     ],

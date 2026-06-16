@@ -73,6 +73,12 @@ window.ChatSessionSidebar = (function () {
           '</span>' +
           '<span class="chat-sidebar-nav-btn-label">记忆</span>' +
         '</button>' +
+        '<button class="chat-sidebar-nav-btn" data-page="skills" role="tab" aria-selected="false">' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
+            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 1.8 2.5 4.2v3.6c0 3.1 2.3 5.4 5.5 6.4 3.2-1 5.5-3.3 5.5-6.4V4.2L8 1.8Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.2 8.2 7.4 9.5 10 6.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</span>' +
+          '<span class="chat-sidebar-nav-btn-label">技能</span>' +
+        '</button>' +
         '<button class="chat-sidebar-nav-btn" data-page="config" role="tab" aria-selected="false">' +
           '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
             '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
@@ -147,7 +153,7 @@ window.ChatSessionSidebar = (function () {
 
   function getRouteFromHash() {
     var h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'config') return h;
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'config') return h;
     return 'chat';
   }
 
