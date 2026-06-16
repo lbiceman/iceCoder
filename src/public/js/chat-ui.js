@@ -1565,6 +1565,7 @@ window.ChatUI = (function () {
     }
 
     var content = document.createElement('div');
+    content.className = 'msg-content';
     content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
     el.appendChild(content);
 
@@ -1669,11 +1670,27 @@ window.ChatUI = (function () {
   function appendMessageEl(msg, stripStatusTagFn) {
     ensureChatLayout();
     if (!elTailRoot) return;
-    insertTailBefore(createMessageEl(msg, stripStatusTagFn));
+    var el = createMessageEl(msg, stripStatusTagFn);
+    msg._el = el;
+    insertTailBefore(el);
     notifyTailLayoutChange();
     if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
       window.ChatPage.syncWelcomeState();
     }
+    return el;
+  }
+
+  function updateMessageContent(msg, content, stripStatusTagFn) {
+    if (!msg) return;
+    msg.content = content;
+    var root = msg._el;
+    if (!root) return;
+    var contentDiv = root.querySelector('.msg-content');
+    if (!contentDiv) return;
+    var text = msg.role === 'agent' ? stripStatusTagFn(content) : content;
+    contentDiv.textContent = text;
+    notifyTailLayoutChange();
+    followBottomAfterContentPatch();
   }
 
   /**
@@ -1954,6 +1971,7 @@ window.ChatUI = (function () {
     renderMessagesOnly: renderMessagesOnly,
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
+    updateMessageContent: updateMessageContent,
     appendStreamChunk: appendStreamChunk,
     appendReasoningStreamChunk: appendReasoningStreamChunk,
     appendReasoningStreamIfAbsent: appendReasoningStreamIfAbsent,

@@ -175,6 +175,20 @@ window.ChatCommands = (function () {
     );
   }
 
+  function fetchJsonWithTimeout(url, timeoutMs) {
+    var ms = timeoutMs || 30000;
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      return fetch(url, { signal: AbortSignal.timeout(ms) }).then(function (res) { return res.json(); });
+    }
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () { reject(new Error('请求超时')); }, ms);
+      fetch(url)
+        .then(function (res) { return res.json(); })
+        .then(function (body) { clearTimeout(timer); resolve(body); })
+        .catch(function (err) { clearTimeout(timer); reject(err); });
+    });
+  }
+
   function handleTelemetry(messages, appendFn, saveFn) {
     var telemetryMsg = { role: 'agent', content: '正在获取记忆系统遥测报告…' };
     if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
@@ -183,6 +197,78 @@ window.ChatCommands = (function () {
     messages.push(telemetryMsg);
     appendFn(telemetryMsg);
     saveFn();
+
+    fetchJsonWithTimeout('/api/memory/telemetry?days=7&format=text', 30000)
+      .then(function (body) {
+        var report = (body && body.success && body.report)
+          ? body.report
+          : ('遥测报告获取失败：' + ((body && body.error) || '未知错误'));
+        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
+          var stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
+          window.ChatUI.updateMessageContent(telemetryMsg, report, stripFn || function (s) { return s; });
+        } else {
+          telemetryMsg.content = report;
+        }
+        saveFn();
+      })
+      .catch(function (err) {
+        var errText = '遥测报告获取失败：' + (err && err.message ? err.message : '网络错误');
+        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
+          var stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
+          window.ChatUI.updateMessageContent(telemetryMsg, errText, stripFn || function (s) { return s; });
+        } else {
+          telemetryMsg.content = errText;
+        }
+        saveFn();
+      });
+  }
+
+  function parseSupervisorCommand(text) {
+    var days = 7;
+    var event = '';
+    var m = String(text || '').match(/days=(\d+)/i);
+    if (m) days = Math.min(Math.max(parseInt(m[1], 10) || 7, 1), 90);
+    m = String(text || '').match(/event=([^\s]+)/i);
+    if (m) event = m[1];
+    return { days: days, event: event };
+  }
+
+  function handleSupervisor(text, messages, appendFn, saveFn) {
+    var opts = parseSupervisorCommand(text);
+    var pendingMsg = { role: 'agent', content: '正在获取 Supervisor 报告…' };
+    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+      window.ChatSession.stampMessageTimestamps(pendingMsg);
+    }
+    messages.push(pendingMsg);
+    appendFn(pendingMsg);
+    saveFn();
+
+    var qs = '?days=' + encodeURIComponent(String(opts.days)) + '&format=text';
+    if (opts.event) qs += '&event=' + encodeURIComponent(opts.event);
+
+    fetchJsonWithTimeout('/api/supervisor/events' + qs, 30000)
+      .then(function (body) {
+        var report = (body && body.success && body.report)
+          ? body.report
+          : ('Supervisor 报告获取失败：' + ((body && body.error) || '未知错误'));
+        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
+          var stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
+          window.ChatUI.updateMessageContent(pendingMsg, report, stripFn || function (s) { return s; });
+        } else {
+          pendingMsg.content = report;
+        }
+        saveFn();
+      })
+      .catch(function (err) {
+        var errText = 'Supervisor 报告获取失败：' + (err && err.message ? err.message : '网络错误');
+        if (window.ChatUI && typeof window.ChatUI.updateMessageContent === 'function') {
+          var stripFn = window.ChatSession && window.ChatSession.stripStatusTag;
+          window.ChatUI.updateMessageContent(pendingMsg, errText, stripFn || function (s) { return s; });
+        } else {
+          pendingMsg.content = errText;
+        }
+        saveFn();
+      });
   }
 
   return {
@@ -200,5 +286,6 @@ window.ChatCommands = (function () {
     handleScan: handleScan,
     handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
+    handleSupervisor: handleSupervisor,
   };
 })();

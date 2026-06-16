@@ -1211,7 +1211,8 @@ window.ChatPage = (function () {
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     mainInputWrapper = container.querySelector('.input-wrapper');
     if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
-    if (elCmdPlusBtn && Skills) Skills.setAnchor(elCmdPlusBtn);
+    var composerInputEl = container.querySelector('.composer-input');
+    if (composerInputEl && Skills) Skills.setAnchor(composerInputEl);
 
     // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
     // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。

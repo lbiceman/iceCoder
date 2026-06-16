@@ -66,16 +66,16 @@ window.ChatSkills = (function () {
 
   function openDropdown() {
     if (!window.ChatDropdown || !anchorEl) return;
-    var anchorRect = anchorEl.getBoundingClientRect();
     window.ChatDropdown.open({
       anchor: anchorEl,
       items: skillFiltered,
       placement: 'top',
-      placementRef: 'toolbar',
-      align: 'center',
+      placementRef: 'anchor',
+      align: 'start',
       fitContent: true,
-      minWidth: Math.ceil(anchorRect.width),
+      minWidth: 200,
       maxWidth: 320,
+      markAnchorActive: false,
       onSelect: function (_item, idx) { applySelection(idx); },
       onClose: function () {
         skillFiltered = [];
