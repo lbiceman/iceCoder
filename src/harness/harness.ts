@@ -268,8 +268,8 @@ export class Harness {
     const run = () => task();
     const p = this.checkpointPersistTail.then(run, run);
     this.checkpointPersistTail = p.then(
-      (): void => {},
-      (): void => {},
+      (): void => { },
+      (): void => { },
     );
     return p;
   }

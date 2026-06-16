@@ -73,6 +73,9 @@ export function applyRuntimeDataEnvDefaults(): void {
   if (!process.env.ICE_USER_MEMORY_DIR?.trim()) {
     process.env.ICE_USER_MEMORY_DIR = path.join(dataDir, 'user-memory');
   }
+  if (!process.env.ICE_SKILLS_DIR?.trim()) {
+    process.env.ICE_SKILLS_DIR = path.join(dataDir, 'skills');
+  }
   if (!process.env.ICE_MCP_CONFIG_PATH?.trim()) {
     process.env.ICE_MCP_CONFIG_PATH = path.join(dataDir, 'mcp.json');
   }
@@ -129,6 +132,7 @@ export interface DataPaths {
   memoryFilesDir: string;
   outputDir: string;
   userMemoryDir: string;
+  skillsDir: string;
   mcpConfigPath: string;
 }
 
@@ -162,6 +166,7 @@ export async function resolveDataPaths(): Promise<DataPaths> {
     memoryFilesDir: path.resolve(process.env.ICE_MEMORY_DIR!),
     outputDir: path.resolve(process.env.ICE_OUTPUT_DIR!),
     userMemoryDir: path.resolve(process.env.ICE_USER_MEMORY_DIR!),
+    skillsDir: path.resolve(process.env.ICE_SKILLS_DIR!),
     mcpConfigPath: resolveMcpConfigPath(),
   };
 }
@@ -275,6 +280,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(paths.memoryDir, { recursive: true });
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });
   await fs.mkdir(paths.userMemoryDir, { recursive: true });
+  await fs.mkdir(paths.skillsDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
   await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
 

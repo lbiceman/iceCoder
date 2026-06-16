@@ -31,7 +31,7 @@
 
 ### 0.3 验收标准（全部满足即完成）
 
-1. **Windows**：`npm run desktop:dist:win` 产出 `iceCoder Setup x.x.x.exe`，全新机器（无 Node）安装后可启动主窗口。
+1. **Windows**：`npm run desktop:dist:win` 产出 `iceCoder-windows.exe`，全新机器（无 Node）安装后可启动主窗口。
 2. **首次启动**：无 API Key 时自动打开 `/#/config` 配置页；保存后可正常聊天。
 3. **工作区**：启动时或菜单「打开文件夹…」选定目录后，`run_command` / 读写文件的 cwd 为该目录。
 4. **退出**：关闭窗口或托盘「退出」后，子进程 Node 服务被干净终止（无残留 `node.exe`）。
@@ -575,7 +575,7 @@ npm run desktop:dev
 
 # 3. 打 Windows 安装包
 npm run desktop:dist:win
-# 产物：desktop/release/iceCoder Setup 1.0.0.exe
+# 产物：desktop/release/iceCoder-windows.exe（复制到 releases/windows/ 供下载）
 
 # 4. 仅目录打包（调试 installer 前）
 cd desktop && npm run pack

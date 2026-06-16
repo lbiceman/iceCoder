@@ -4,7 +4,7 @@
  * 包含主题切换（默认暗色模式）
  */
 
-/* global ConfigPage, ChatPage, MemoryPage */
+/* global ConfigPage, ChatPage, MemoryPage, SkillsPage */
 
 (function () {
   'use strict';
@@ -20,6 +20,7 @@
     chat: { root: null, mounted: false },
     config: { root: null, mounted: false },
     memory: { root: null, mounted: false },
+    skills: { root: null, mounted: false },
   };
 
   // ---- DOM 引用 ----
@@ -147,6 +148,23 @@
     }
   }
 
+  function createListenerHub() {
+    var listeners = [];
+    return {
+      add: function (fn) {
+        if (typeof fn !== 'function') return;
+        if (listeners.indexOf(fn) === -1) listeners.push(fn);
+      },
+      notify: function (arg) {
+        for (var i = 0; i < listeners.length; i++) listeners[i](arg);
+      },
+    };
+  }
+
+  var supervisorModeHub = createListenerHub();
+  var themeChangeHub = createListenerHub();
+  var connectionChangeHub = createListenerHub();
+
   window.AppShell = {
     getTheme: getTheme,
     toggleTheme: toggleTheme,
@@ -155,18 +173,13 @@
     cycleSupervisorMode: cycleSupervisorMode,
     setConnectionState: setConnectionState,
     getConnectionState: getConnectionState,
-    onThemeChange: null,
-    onConnectionChange: null,
-    onSupervisorModeChange: null,
+    addSupervisorModeListener: supervisorModeHub.add,
+    addThemeChangeListener: themeChangeHub.add,
+    addConnectionChangeListener: connectionChangeHub.add,
+    notifySupervisorModeChange: supervisorModeHub.notify,
+    notifyThemeChange: themeChangeHub.notify,
+    notifyConnectionChange: connectionChangeHub.notify,
   };
-  function notifySupervisorShell() {
-    if (window.AppShell && typeof window.AppShell.notifySupervisorModeChange === 'function') {
-      window.AppShell.notifySupervisorModeChange(currentSupervisorMode);
-    }
-  }
-  window.AppShell.notifyThemeChange = function (t) { if (typeof window.AppShell.onThemeChange === 'function') window.AppShell.onThemeChange(t); };
-  window.AppShell.notifyConnectionChange = function (s) { if (typeof window.AppShell.onConnectionChange === 'function') window.AppShell.onConnectionChange(s); };
-  window.AppShell.notifySupervisorModeChange = function (m) { if (typeof window.AppShell.onSupervisorModeChange === 'function') window.AppShell.onSupervisorModeChange(m); };
 
   // ---- 路由 ----
 
@@ -174,6 +187,7 @@
     var hash = window.location.hash || '';
     if (hash.startsWith('#/config')) return 'config';
     if (hash.startsWith('#/memory')) return 'memory';
+    if (hash.startsWith('#/skills')) return 'skills';
     return 'chat';
   }
 
@@ -201,6 +215,7 @@
     var newHash = '#/chat';
     if (page === 'config') newHash = '#/config';
     else if (page === 'memory') newHash = '#/memory';
+    else if (page === 'skills') newHash = '#/skills';
 
     if (window.location.hash !== newHash) {
       history.replaceState(null, '', newHash);
@@ -208,7 +223,7 @@
 
     // 顶栏三个 tab 已移入侧边栏：路由 active 态由 ChatSessionSidebar 监听 hashchange 维护。
 
-    // 离开 memory：必须停掉 fetch/AbortController/resize/popover；DOM 子树保留隐藏以备复用
+    // 离开 memory/skills：停掉 fetch/AbortController；DOM 子树保留隐藏以备复用
     if (
       prev === 'memory' &&
       page !== 'memory' &&
@@ -217,6 +232,15 @@
     ) {
       window.MemoryPage.destroy();
       pages.memory.mounted = false;
+    }
+    if (
+      prev === 'skills' &&
+      page !== 'skills' &&
+      window.SkillsPage &&
+      typeof window.SkillsPage.destroy === 'function'
+    ) {
+      window.SkillsPage.destroy();
+      pages.skills.mounted = false;
     }
 
     // 聊天页/配置页保持 keep-alive：不调用 destroy，子树仅切 display
@@ -238,6 +262,8 @@
         window.ConfigPage.render(root);
       } else if (page === 'memory' && window.MemoryPage) {
         window.MemoryPage.render(root);
+      } else if (page === 'skills' && window.SkillsPage) {
+        window.SkillsPage.render(root);
       } else {
         window.ChatPage.render(root);
       }
@@ -245,6 +271,8 @@
     } else if (page === 'memory' && window.MemoryPage) {
       // memory 因 destroy 已重置内部状态，每次进入重新 render
       window.MemoryPage.render(root);
+    } else if (page === 'skills' && window.SkillsPage) {
+      window.SkillsPage.render(root);
     } else if (page === 'chat' && window.ChatPage && typeof window.ChatPage.onActivate === 'function') {
       window.ChatPage.onActivate();
     }

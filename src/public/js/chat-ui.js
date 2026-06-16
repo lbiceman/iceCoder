@@ -794,7 +794,7 @@ window.ChatUI = (function () {
   function autoResizeInput() {
     if (!elInput) return;
     elInput.style.height = 'auto';
-    elInput.style.height = Math.min(elInput.scrollHeight, 120) + 'px';
+    elInput.style.height = Math.min(elInput.scrollHeight, 220) + 'px';
   }
 
   // ---- 工具调用行 ----
@@ -1565,6 +1565,7 @@ window.ChatUI = (function () {
     }
 
     var content = document.createElement('div');
+    content.className = 'msg-content';
     content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
     el.appendChild(content);
 
@@ -1644,6 +1645,9 @@ window.ChatUI = (function () {
     }
 
     followBottomAfterContentPatch(shouldScroll);
+    if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
+      window.ChatPage.syncWelcomeState();
+    }
   }
 
   /** 内容增删改后跟随到底（含虚拟历史 remeasure / diff 挂载后的二次对齐） */
@@ -1666,8 +1670,27 @@ window.ChatUI = (function () {
   function appendMessageEl(msg, stripStatusTagFn) {
     ensureChatLayout();
     if (!elTailRoot) return;
-    insertTailBefore(createMessageEl(msg, stripStatusTagFn));
+    var el = createMessageEl(msg, stripStatusTagFn);
+    msg._el = el;
+    insertTailBefore(el);
     notifyTailLayoutChange();
+    if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
+      window.ChatPage.syncWelcomeState();
+    }
+    return el;
+  }
+
+  function updateMessageContent(msg, content, stripStatusTagFn) {
+    if (!msg) return;
+    msg.content = content;
+    var root = msg._el;
+    if (!root) return;
+    var contentDiv = root.querySelector('.msg-content');
+    if (!contentDiv) return;
+    var text = msg.role === 'agent' ? stripStatusTagFn(content) : content;
+    contentDiv.textContent = text;
+    notifyTailLayoutChange();
+    followBottomAfterContentPatch();
   }
 
   /**
@@ -1872,7 +1895,8 @@ window.ChatUI = (function () {
       elSendBtn.innerHTML = '<span class="icon-stop"></span>';
       elSendBtn.title = 'Stop';
       elSendBtn.classList.add('btn-stop');
-      elInput.disabled = true;
+      // 流式态：禁止发送，但允许在输入框继续打字（按 Enter 走 stop 行为，由 chat-page.js 拦截）
+      elInput.disabled = false;
     } else {
       elSendBtn.innerHTML = '<span class="icon-send"></span>';
       elSendBtn.title = 'Send';
@@ -1947,6 +1971,7 @@ window.ChatUI = (function () {
     renderMessagesOnly: renderMessagesOnly,
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
+    updateMessageContent: updateMessageContent,
     appendStreamChunk: appendStreamChunk,
     appendReasoningStreamChunk: appendReasoningStreamChunk,
     appendReasoningStreamIfAbsent: appendReasoningStreamIfAbsent,

@@ -95,11 +95,7 @@ window.ChatModelPicker = (function () {
       .catch(function (err) {
         var def = defaultProvider();
         if (elLabel) elLabel.textContent = def && def.modelName ? def.modelName : '未配置';
-        if (window.UI && typeof window.UI.notify === 'function') {
-          window.UI.notify('切换模型失败: ' + (err && err.message ? err.message : err), 'error');
-        } else if (typeof alert === 'function') {
-          alert('切换模型失败: ' + (err && err.message ? err.message : err));
-        }
+        Notification.error('切换模型失败: ' + (err && err.message ? err.message : err));
       });
   }
 
@@ -111,9 +107,7 @@ window.ChatModelPicker = (function () {
     Promise.resolve(ensure).then(function () {
       var items = buildItems();
       if (!items.length) {
-        if (window.UI && typeof window.UI.notify === 'function') {
-          window.UI.notify('暂无可用模型，请先在「配置」页添加。', 'info');
-        }
+        Notification.info('暂无可用模型，请先在「配置」页添加。');
         return;
       }
       // 如果在 await 期间用户已经切换到别的会话、或 dropdown 被关掉了，直接放弃

@@ -73,6 +73,12 @@ window.ChatSessionSidebar = (function () {
           '</span>' +
           '<span class="chat-sidebar-nav-btn-label">记忆</span>' +
         '</button>' +
+        '<button class="chat-sidebar-nav-btn" data-page="skills" role="tab" aria-selected="false">' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
+            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 1.8 2.5 4.2v3.6c0 3.1 2.3 5.4 5.5 6.4 3.2-1 5.5-3.3 5.5-6.4V4.2L8 1.8Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.2 8.2 7.4 9.5 10 6.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</span>' +
+          '<span class="chat-sidebar-nav-btn-label">技能</span>' +
+        '</button>' +
         '<button class="chat-sidebar-nav-btn" data-page="config" role="tab" aria-selected="false">' +
           '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
             '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
@@ -91,24 +97,23 @@ window.ChatSessionSidebar = (function () {
       '</div>' +
       '<div class="chat-sidebar-list"></div>' +
       '<div class="chat-sidebar-footer">' +
+      '<button class="chat-sidebar-control chat-sidebar-theme-btn" type="button" data-theme="dark" title="切换主题">' +
+        '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
+          '<svg class="chat-sidebar-theme-icon-dark" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>' +
+          '<svg class="chat-sidebar-theme-icon-light" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
+        '</span>' +
+        '<span class="chat-sidebar-control-label">主题</span>' +
+      '</button>' +
         '<button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式">' +
           '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
             '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="5.2" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.5v3.7l2.4 1.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
           '</span>' +
           '<span class="chat-sidebar-control-label">自适应</span>' +
         '</button>' +
-        '<button class="chat-sidebar-control chat-sidebar-theme-btn" type="button" data-theme="dark" title="切换主题">' +
-          '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
-            '<svg class="chat-sidebar-theme-icon-dark" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>' +
-            '<svg class="chat-sidebar-theme-icon-light" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
-          '</span>' +
-          '<span class="chat-sidebar-control-label">主题</span>' +
-        '</button>' +
         '<div class="chat-sidebar-control chat-sidebar-connection" data-state="disconnected" title="连接状态">' +
           '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
             '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 5.8a8.5 8.5 0 0 1 12 0M4.4 8.2a5.5 5.5 0 0 1 7.2 0M6.8 10.6a2.5 2.5 0 0 1 2.4 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="13" r="0.9" fill="currentColor"/></svg>' +
           '</span>' +
-          '<span class="chat-sidebar-control-label">未连接</span>' +
         '</div>' +
       '</div>';
 
@@ -148,7 +153,7 @@ window.ChatSessionSidebar = (function () {
 
   function getRouteFromHash() {
     var h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'config') return h;
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'config') return h;
     return 'chat';
   }
 
@@ -232,8 +237,6 @@ window.ChatSessionSidebar = (function () {
       resolved = (shell && typeof shell.getConnectionState === 'function') ? shell.getConnectionState() : 'disconnected';
     }
     el.setAttribute('data-state', resolved);
-    var labelEl = el.querySelector('.chat-sidebar-control-label');
-    if (labelEl) labelEl.textContent = resolved === 'connected' ? '已连接' : (resolved === 'connecting' ? '连接中' : '未连接');
   }
 
   function bindShellControls() {
@@ -247,7 +250,6 @@ window.ChatSessionSidebar = (function () {
       modeBtn.addEventListener('click', function () {
         if (!shell || typeof shell.cycleSupervisorMode !== 'function') return;
         shell.cycleSupervisorMode();
-        syncShellMode();
       });
     }
 
@@ -261,9 +263,15 @@ window.ChatSessionSidebar = (function () {
     }
 
     if (shell) {
-      shell.onSupervisorModeChange = function () { syncShellMode(); };
-      shell.onThemeChange = function () { syncShellTheme(); };
-      shell.onConnectionChange = function (state) { syncShellConnection(state); };
+      if (typeof shell.addSupervisorModeListener === 'function') {
+        shell.addSupervisorModeListener(function () { syncShellMode(); });
+      }
+      if (typeof shell.addThemeChangeListener === 'function') {
+        shell.addThemeChangeListener(function () { syncShellTheme(); });
+      }
+      if (typeof shell.addConnectionChangeListener === 'function') {
+        shell.addConnectionChangeListener(function (state) { syncShellConnection(state); });
+      }
     }
   }
 

@@ -56,7 +56,8 @@
           "target": "nsis"
         }
       ],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "artifactName": "iceCoder-windows.${ext}"
     },
     "nsis": {
       "oneClick": false,

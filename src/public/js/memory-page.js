@@ -506,7 +506,7 @@ window.MemoryPage = (function () {
             .then(function (res) {
               deleteBtn.disabled = false;
               if (!res.ok || !res.json.success) {
-                Modal.alert({ title: '删除失败', message: res.json.error || res.json.message || '删除失败', type: 'danger' });
+                Notification.error(res.json.error || res.json.message || '删除失败');
                 return;
               }
               closePopover();
@@ -514,7 +514,7 @@ window.MemoryPage = (function () {
             })
             .catch(function () {
               deleteBtn.disabled = false;
-              Modal.alert({ title: '请求失败', message: '删除请求失败', type: 'danger' });
+              Notification.error('删除请求失败');
             });
         });
       });
@@ -1057,10 +1057,72 @@ window.MemoryPage = (function () {
       '<span class="memory-health-dot"></span>' +
       '<span class="memory-health-text">检查中…</span>' +
       '</span>' +
+      '<button type="button" class="memory-export-btn" id="memory-export-btn" title="打包下载全部记忆 Markdown">导出记忆</button>' +
       '<button type="button" class="memory-consolidate-btn" id="memory-consolidate-btn">手动整合</button>' +
       '</div>';
 
+    var exportBtn = header.querySelector('#memory-export-btn');
     var consolidateBtn = header.querySelector('#memory-consolidate-btn');
+
+    if (exportBtn) {
+      exportBtn.addEventListener('click', function () {
+        if (!containerEl || exportBtn.disabled) return;
+        var btn = /** @type {HTMLButtonElement} */ (exportBtn);
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+        btn.textContent = '导出中…';
+
+        fetch('/api/memory/stats')
+          .then(function (res) {
+            return res.json().then(function (body) {
+              return { ok: res.ok, body: body };
+            });
+          })
+          .then(function (out) {
+            if (!out.ok || !out.body.success) {
+              throw new Error((out.body && out.body.error) || '统计失败');
+            }
+            if (!out.body.total) {
+              Notification.warning('没有可导出的记忆文件。');
+              return null;
+            }
+            return fetch('/api/memory/export');
+          })
+          .then(function (res) {
+            if (!res) return;
+            if (!res.ok) {
+              return res.json().then(function (body) {
+                throw new Error((body && body.error) || '导出失败');
+              });
+            }
+            var countHdr = res.headers.get('X-Memory-File-Count');
+            var date = new Date().toISOString().split('T')[0];
+            var filename = 'icecoder-memory-' + date + '.zip';
+            return res.blob().then(function (blob) {
+              var url = URL.createObjectURL(blob);
+              var a = document.createElement('a');
+              a.href = url;
+              a.download = filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              var n = countHdr ? parseInt(countHdr, 10) : NaN;
+              if (!isNaN(n) && n > 0) {
+                Notification.success('记忆已导出，共 ' + n + ' 个文件。ZIP 内包含 memory-files/ 与 user-memory/ 目录。');
+              }
+            });
+          })
+          .catch(function (err) {
+            Notification.error('记忆导出失败：' + ((err && err.message) || '未知错误'));
+          })
+          .finally(function () {
+            btn.disabled = false;
+            btn.removeAttribute('aria-busy');
+            btn.textContent = '导出记忆';
+          });
+      });
+    }
 
     function startDreamPoll() {
       stopDreamPoll();
@@ -1095,7 +1157,7 @@ window.MemoryPage = (function () {
 
             if (!out.ok || !out.body.success) {
               var errMsg = (out.body && out.body.error) || '操作失败';
-              window.alert(errMsg);
+              Notification.error(errMsg);
               return;
             }
             var summary = out.body.summary || '操作完成';
@@ -1104,7 +1166,7 @@ window.MemoryPage = (function () {
               ' · 删除 ' + (out.body.filesDeleted || 0) +
               (out.body.ruleFixed ? ' · 索引修复 ' + (out.body.ruleEntryCount || 0) + ' 条' : '') +
               (out.body.filesEvicted ? ' · 归档 ' + out.body.filesEvicted : '');
-            window.alert(summary + (detail.trim() ? '\n' + detail : ''));
+            Notification.success(summary + (detail.trim() ? '\n' + detail : ''));
 
             if (out.body.background) {
               fetchHealthCapsule();
@@ -1117,7 +1179,7 @@ window.MemoryPage = (function () {
             btn.disabled = false;
             btn.removeAttribute('aria-busy');
             btn.textContent = '手动整合';
-            window.alert('请求失败，请稍后重试。');
+            Notification.error('请求失败，请稍后重试。');
           });
       });
     }

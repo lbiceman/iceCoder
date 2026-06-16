@@ -15,6 +15,7 @@
  *     fitContent: false,                                // true 时宽度随内容，不超过 maxWidth
  *     placementRef: 'anchor' | 'toolbar',               // top 定位基准：anchor 或 composer-toolbar 顶边
  *     variant: 'default' | 'model',                       // model：仅名称、普通字体样式
+ *     markAnchorActive: true,                             // 是否在 anchor 上添加 active（技能 # 下拉应传 false）
  *   });
  *   ChatDropdown.close();
  *   ChatDropdown.isOpen();
@@ -43,6 +44,7 @@ window.ChatDropdown = (function () {
     fitContent: false,
     placementRef: 'anchor',
     variant: 'default',
+    markAnchorActive: true,
   };
   var outsideBound = false;
 
@@ -74,10 +76,10 @@ window.ChatDropdown = (function () {
       var it = current.items[idx];
       if (!it) return;
       var cb = current.onSelect;
-      close();
       if (typeof cb === 'function') {
         try { cb(it, idx, e); } catch (_e) { /* ignore */ }
       }
+      close();
     });
     document.body.appendChild(c);
     elContainer = c;
@@ -195,7 +197,7 @@ window.ChatDropdown = (function () {
       elContainer.classList.remove('is-model-menu');
     }
     isOpen = false;
-    if (current.anchor && current.anchor.classList) {
+    if (current.anchor && current.anchor.classList && current.markAnchorActive) {
       current.anchor.classList.remove('active');
       current.anchor.setAttribute && current.anchor.setAttribute('aria-expanded', 'false');
     }
@@ -223,6 +225,7 @@ window.ChatDropdown = (function () {
     current.fitContent = !!opts.fitContent;
     current.placementRef = opts.placementRef || 'anchor';
     current.variant = opts.variant || 'default';
+    current.markAnchorActive = opts.markAnchorActive !== false;
     ensureContainer();
     bindOutside();
     elContainer.classList.remove('is-model-menu');
@@ -230,7 +233,7 @@ window.ChatDropdown = (function () {
     render();
     elContainer.classList.remove('hidden');
     isOpen = true;
-    if (current.anchor && current.anchor.classList) {
+    if (current.anchor && current.anchor.classList && current.markAnchorActive) {
       current.anchor.classList.add('active');
       current.anchor.setAttribute && current.anchor.setAttribute('aria-expanded', 'true');
     }

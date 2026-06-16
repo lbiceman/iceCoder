@@ -4,6 +4,10 @@
 
 [English README](./README.md) · [**使用说明与命令**](./docs/使用文档.md) · [项目介绍](./docs/项目介绍.md) · [Project guide](./docs/PROJECT-GUIDE.md)
 
+## 界面预览
+
+![IceCoder Web 界面 — 侧栏会话、欢迎页状态面板（模式 / Memory / Harness / L2·Gate）与输入区](./docs/assets/web-ui.png)
+
 ---
 
 ## 快速上手
@@ -12,7 +16,7 @@
 
 无需安装 Node.js，下载安装包即可使用（内置服务端 + Electron 壳 + 悬浮冰豆）：
 
-**[下载 iceCoder Setup 1.0.0 — Windows x64](./releases/windows/iceCoder-Setup-1.0.0-win-x64.exe)**
+**[下载 iceCoder — Windows x64](./releases/windows/iceCoder-windows.exe)**
 
 安装后首次启动请在「配置」页填写 API Key；数据目录默认 `~/.iceCoder/`。从源码自行打包见 [`docs/使用文档.md`](./docs/使用文档.md) 或执行 `npm run build:desktop`。
 
@@ -28,7 +32,7 @@ Node.js **18+**（推荐 **22+**）· 开发数据 `./data/` · 生产 `~/.iceCo
 
 ### 双模运行时（L0 / L1 / L2）
 
-三层分工：**L0** 是你在 Web 顶栏选的监管档位（`off` / `adaptive` / `strict`），决定整体松紧；**L1** 是 Harness 内的 `free` ↔ `forced` 执行模式，在风险升高时收紧工具门禁（`ToolGate`、分支预算、TaskGraph 约束）；**L2** 在后台观察 `no_progress`、`file_loop`、`tool_repeat_fail`、`goal_drift` 等信号，必要时 **takeover → 纠偏 → handoff** 交还主循环，事件写入 `supervisor-events.jsonl`。
+三层分工：**L0** 是你在 Web 侧栏底栏切换的监管档位（`off` / `adaptive` / `strict`），决定整体松紧；**L1** 是 Harness 内的 `free` ↔ `forced` 执行模式，在风险升高时收紧工具门禁（`ToolGate`、分支预算、TaskGraph 约束）；**L2** 在后台观察 `no_progress`、`file_loop`、`tool_repeat_fail`、`goal_drift` 等信号，必要时 **takeover → 纠偏 → handoff** 交还主循环，事件写入 `supervisor-events.jsonl`。
 
 - **adaptive**（默认）：按任务风险在自由与强约束间切换，适合日常编码；**strict** 全程偏 forced，首轮即建图，部分 L2 场景（如 file_loop）须此档。
 - 与 **TaskGraph**、**Verification Gate** 联动：改过代码未跑验证不能「口头完工」；`critical_*` 域映射影响 L2 是否可接管。
@@ -46,7 +50,7 @@ Node.js **18+**（推荐 **22+**）· 开发数据 `./data/` · 生产 `~/.iceCo
 
 仅 **Web 聊天页** 的 Canvas 宠物「冰豆」，把后端 Harness / Supervisor / TaskGraph 事件映射成可见反馈，**不参与**运行时决策。
 
-- **L0 眼色**：顶栏 `off` / `adaptive` / `strict` 三档对应不同瞳孔/高光。
+- **L0 眼色**：侧栏底栏 `off` / `adaptive` / `strict` 三档对应不同瞳孔/高光；欢迎页同步展示 Harness 与 L2·Gate 状态。
 - **L1 角标**：底部 `forced · …` chip，与 `execution_mode_enter` 原因对齐。
 - **表情与 token 环**：约 20 种表情（运行中、等待工具、成功、失败、压缩等）+ 外圈 token 用量；任务图步骤摘要与「第 N 轮」文案同步 WebSocket 事件。
 
