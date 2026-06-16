@@ -79,6 +79,31 @@
   color: var(--text-secondary);
 }
 
+/* 导出：描边次要按钮 */
+.memory-export-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.memory-export-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.memory-export-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* 胶囊主按钮：accent 字色 + accent-light 底（原顶栏 .nav-link.active） */
 .memory-consolidate-btn {
   padding: 6px 16px;

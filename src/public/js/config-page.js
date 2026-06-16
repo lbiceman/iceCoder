@@ -35,7 +35,7 @@ window.ConfigPage = (function () {
       }
       saveConfig(data, function (err) {
         if (err) {
-          showNotification('默认模型未能保存: ' + err.message, 'error');
+          Notification.error('默认模型未能保存: ' + err.message);
           return;
         }
         loadConfig(function (_err, loaded) {
@@ -67,21 +67,6 @@ window.ConfigPage = (function () {
   function maskApiKey(key) {
     if (!key || key.length <= 8) return '****';
     return key.slice(0, 4) + '*'.repeat(key.length - 8) + key.slice(-4);
-  }
-
-  function showNotification(message, type) {
-    // 移除已有通知
-    var existing = document.querySelector('.notification');
-    if (existing) existing.remove();
-
-    var el = document.createElement('div');
-    el.className = 'notification ' + type;
-    el.textContent = message;
-    document.body.appendChild(el);
-
-    setTimeout(function () {
-      if (el.parentNode) el.remove();
-    }, 3000);
   }
 
   // ---- API ----
@@ -305,9 +290,9 @@ window.ConfigPage = (function () {
 
     saveConfig(data, function (err, result) {
       if (err) {
-        showNotification('保存失败：' + err.message, 'error');
+        Notification.error('保存失败：' + err.message);
       } else {
-        showNotification('配置已保存', 'success');
+        Notification.success('配置已保存');
         if (result && result.setupComplete && window.AppRouter && window.AppRouter.exitSetupMode) {
           window.AppRouter.exitSetupMode();
         }
@@ -377,7 +362,7 @@ window.ConfigPage = (function () {
     // 加载已有配置
     loadConfig(function (err, loaded, meta) {
       if (err) {
-        showNotification('加载配置失败', 'error');
+        Notification.error('加载配置失败');
         providers = [];
       } else {
         providers = loaded.map(function (p) { p._masked = true; return p; });

@@ -1,6 +1,7 @@
 /* iceCoder UI — split modules (load order matters) */
 @import url('./tokens.css');
 @import url('./shell.css');
+@import url('./notification.css');
 @import url('./config.css');
 @import url('./chat.css');
 @import url('./memory.css');
