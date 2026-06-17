@@ -83,7 +83,7 @@ window.ChatPage = (function () {
 
   // DOM 引用
   var elMessages, elAnchor, elInput, elSendBtn, elFileBtn, elFileInput;
-  var elFileStatus, elFileName, elFileRemove;
+  var elFileStatus;
   var elStatusBar, elStatusTurn;
   var elCmdPlusBtn, mainInputWrapper;
   var cmdPaletteResizeObserver = null;
@@ -328,10 +328,11 @@ window.ChatPage = (function () {
     var text = (Skills && typeof Skills.getComposerText === 'function')
       ? Skills.getComposerText(elInput).trim()
       : elInput.value.trim();
-    var uploadedFile = File.getUploadedFile();
+    var uploadedFiles = File.getUploadedFiles();
     var pendingImages = File.getPendingImages();
 
-    if (!text && !uploadedFile && pendingImages.length === 0) return;
+    if (File.hasPendingUploads && File.hasPendingUploads()) return;
+    if (!text && uploadedFiles.length === 0 && pendingImages.length === 0) return;
 
     if (executeLocalCommand(text)) {
       if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
@@ -343,7 +344,9 @@ window.ChatPage = (function () {
     // 普通消息
     var displayParts = [];
     if (text) displayParts.push(text);
-    if (uploadedFile) displayParts.push('[file] ' + uploadedFile.filename);
+    for (var fi = 0; fi < uploadedFiles.length; fi++) {
+      displayParts.push('[file] ' + uploadedFiles[fi].filename);
+    }
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
     var didAppendUserMessage = false;
@@ -383,13 +386,14 @@ window.ChatPage = (function () {
     userStopped = false;
     streamFinalized = false;
     streamChunksReceived = false;
-    Pet.showThinking(!!uploadedFile || msgImages.length > 0);
+    Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
 
     var msgText = text || '';
-    if (uploadedFile) {
-      msgText = (msgText ? msgText + '\n' : '') + '[file:' + uploadedFile.fileId + '] ' + uploadedFile.filename;
+    for (var fj = 0; fj < uploadedFiles.length; fj++) {
+      var uf = uploadedFiles[fj];
+      msgText = (msgText ? msgText + '\n' : '') + '[file:' + uf.fileId + '] ' + uf.filename;
     }
-    File.removeUploadedFile();
+    File.clearUploadedFiles();
 
     UI.clearLiveToolRoundDom();
     UI.setLiveToolRoundActive(true);
@@ -1158,10 +1162,7 @@ window.ChatPage = (function () {
         '<div class="chat-input-area">' +
           '<div class="chat-fade-overlay" aria-hidden="true"></div>' +
           '<div class="pending-images-preview hidden" id="pending-images-preview"></div>' +
-          '<div class="file-upload-status hidden" id="file-status">' +
-            '<span class="file-name" id="file-name"></span>' +
-            '<button class="file-remove" id="file-remove" title="Remove file">&times;</button>' +
-          '</div>' +
+          '<div class="file-upload-status hidden" id="file-status"></div>' +
           '<div class="chat-composer">' +
             '<div class="composer-input">' +
               '<div class="input-wrapper">' +
@@ -1194,7 +1195,7 @@ window.ChatPage = (function () {
               '</div>' +
             '</div>' +
           '</div>' +
-          '<input type="file" class="hidden-input" id="file-input">' +
+          '<input type="file" class="hidden-input" id="file-input" multiple>' +
         '</div>' +
         '</div>' + /* /chat-main */
       '</div>';
@@ -1207,8 +1208,6 @@ window.ChatPage = (function () {
     elFileBtn = container.querySelector('#btn-file');
     elFileInput = container.querySelector('#file-input');
     elFileStatus = container.querySelector('#file-status');
-    elFileName = container.querySelector('#file-name');
-    elFileRemove = container.querySelector('#file-remove');
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusTurn = container.querySelector('#status-turn');
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
@@ -1256,7 +1255,7 @@ window.ChatPage = (function () {
         });
       }
     }
-    File.init({ elFileStatus: elFileStatus, elFileName: elFileName, elFileInput: elFileInput });
+    File.init({ elFileStatus: elFileStatus, elFileInput: elFileInput });
     Cmd.setRemoteMode(remoteMode);
     var cmdDropdown = Cmd.init();
     if (mainInputWrapper && cmdDropdown) mainInputWrapper.appendChild(cmdDropdown);
@@ -1391,13 +1390,12 @@ window.ChatPage = (function () {
     }
     if (elFileInput) {
       elFileInput.addEventListener('change', function () {
-        if (elFileInput.files && elFileInput.files[0]) {
-          File.handleFileSelect(elFileInput.files[0], Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+        if (!elFileInput.files) return;
+        for (var fi = 0; fi < elFileInput.files.length; fi++) {
+          File.handleFileSelect(elFileInput.files[fi], Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
         }
+        elFileInput.value = '';
       });
-    }
-    if (elFileRemove) {
-      elFileRemove.addEventListener('click', File.removeUploadedFile);
     }
 
     function paintInitialChatView() {

@@ -903,25 +903,40 @@
 
 .file-upload-status {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 12px;
   color: var(--text-secondary);
-  background: var(--bg-card);
-  padding: 6px 12px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border-color);
 }
 .file-upload-status.hidden { display: none; }
-.file-upload-status .file-name { font-weight: 600; }
-.file-upload-status .file-remove {
-  margin-left: auto;
+.pending-file-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  max-width: 100%;
+}
+.pending-file-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-file-name.pending-file-failed { color: var(--danger); }
+.pending-file-remove {
+  flex-shrink: 0;
   background: none;
   border: none;
   color: var(--text-muted);
   font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
 }
-.file-upload-status .file-remove:hover { color: var(--danger); }
+.pending-file-remove:hover { color: var(--danger); }
 
 /* ── Pending Images Preview ── */
 .pending-images-preview {
