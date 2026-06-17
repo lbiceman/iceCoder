@@ -33,6 +33,17 @@ describe('collectSkillRelativePaths / scanSkillFiles', () => {
     expect(skills.map((s) => s.filename).sort()).toEqual(['openClaude/skll.md', '创建技能.md'].sort());
   });
 
+  it('跳过技能文件夹内的 README.md', async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ice-skill-readme-'));
+    await mkdir(path.join(tmpDir, 'e2eTest'), { recursive: true });
+    await writeFile(path.join(tmpDir, 'e2eTest', 'skill.md'), '---\nname: 端到端测试\n---\n', 'utf-8');
+    await writeFile(path.join(tmpDir, 'e2eTest', 'README.md'), '# docs\n', 'utf-8');
+    await writeFile(path.join(tmpDir, 'e2eTest', 'readme.md'), '# lower\n', 'utf-8');
+
+    const paths = await collectSkillRelativePaths(tmpDir);
+    expect(paths).toEqual(['e2eTest/skill.md']);
+  });
+
   it('可按一级子路径读取技能', async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'ice-skill-read-'));
     await mkdir(path.join(tmpDir, 'openClaude'), { recursive: true });

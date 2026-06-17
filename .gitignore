@@ -11,7 +11,7 @@ data/*
 !data/supervisor-config.json
 !data/supervisor-config.example.json
 !data/skills/
-!data/skills/**
+!data/skills/创建技能.md
 LoCoMo/
 .iceCoder/
 .cursor/

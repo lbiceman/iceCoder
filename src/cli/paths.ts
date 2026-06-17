@@ -341,62 +341,34 @@ export async function ensureSupervisorConfigFile(dataDir: string): Promise<void>
 }
 
 const BUNDLED_SKILLS_DIR = 'skills';
-
-/** 与 skill-loader 一致：根目录 .md + 一级子目录内 .md */
-async function collectBundledSkillRelativePaths(rootDir: string): Promise<string[]> {
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  const paths: string[] = [];
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-      paths.push(entry.name);
-      continue;
-    }
-    if (!entry.isDirectory()) continue;
-    const subEntries = await fs.readdir(path.join(rootDir, entry.name), { withFileTypes: true });
-    for (const sub of subEntries) {
-      if (sub.isFile() && sub.name.toLowerCase().endsWith('.md')) {
-        paths.push(`${entry.name}/${sub.name}`.replace(/\\/g, '/'));
-      }
-    }
-  }
-  return paths;
-}
+const DEFAULT_SKILL_FILE = '创建技能.md';
 
 /**
- * 若用户技能目录缺少包内默认技能，则从 `data/skills/` 复制（已存在则不覆盖）。
- * 全局安装时包内 `data/skills/` → `~/.iceCoder/skills/`；本地开发两者为同一路径则跳过。
+ * 若不存在则从包内写入 `{skillsDir}/创建技能.md`（全局安装 → ~/.iceCoder/skills/）。
  */
 export async function ensureDefaultSkillFiles(skillsDir: string): Promise<void> {
   await fs.mkdir(skillsDir, { recursive: true });
 
-  const bundledDir = resolvePackagedDataDir(BUNDLED_SKILLS_DIR);
-  const localBundledDir = path.join(LOCAL_DATA_DIR, BUNDLED_SKILLS_DIR);
-  let sourceDir: string | null = null;
-  if (await exists(bundledDir)) {
-    sourceDir = bundledDir;
-  } else if (await exists(localBundledDir)) {
-    sourceDir = localBundledDir;
+  const target = path.join(skillsDir, DEFAULT_SKILL_FILE);
+  if (await exists(target)) return;
+
+  const bundled = resolvePackagedDataDir(path.join(BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE));
+  const localBundled = path.join(LOCAL_DATA_DIR, BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE);
+  let content: string | null = null;
+  if (await exists(bundled)) {
+    content = await fs.readFile(bundled, 'utf-8');
+  } else if (await exists(localBundled)) {
+    content = await fs.readFile(localBundled, 'utf-8');
   } else {
     console.warn(
-      `[iceCoder] 未找到 data/${BUNDLED_SKILLS_DIR}，跳过默认技能初始化`,
+      `[iceCoder] 未找到 ${DEFAULT_SKILL_FILE}，跳过默认技能初始化`,
     );
     return;
   }
 
-  if (path.resolve(sourceDir) === path.resolve(skillsDir)) return;
-
-  const mdFiles = await collectBundledSkillRelativePaths(sourceDir);
-  for (const relativePath of mdFiles) {
-    const target = path.join(skillsDir, relativePath);
-    if (await exists(target)) continue;
-
-    const source = path.join(sourceDir, relativePath);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    const content = await fs.readFile(source, 'utf-8');
-    const normalized = content.endsWith('\n') ? content : `${content}\n`;
-    await fs.writeFile(target, normalized, 'utf-8');
-    console.log(`[iceCoder] 已初始化技能 ${target}`);
-  }
+  const normalized = content.endsWith('\n') ? content : `${content}\n`;
+  await fs.writeFile(target, normalized, 'utf-8');
+  console.log(`[iceCoder] 已初始化技能 ${target}`);
 }
 
 applyRuntimeDataEnvDefaults();

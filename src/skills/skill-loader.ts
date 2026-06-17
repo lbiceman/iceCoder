@@ -21,6 +21,11 @@ export interface SkillMeta {
 const CONTENT_PREVIEW_MAX = 200;
 const FRONTMATTER_MAX_LINES = 30;
 
+/** 技能文件夹内的 README 说明文件，不参与注册。 */
+function isExcludedSkillMarkdown(relativePath: string): boolean {
+  return path.basename(relativePath).toLowerCase() === 'readme.md';
+}
+
 function baseNameSansExt(filename: string): string {
   const leaf = path.basename(filename);
   return leaf.replace(/\.md$/i, '') || leaf;
@@ -33,7 +38,7 @@ export async function collectSkillRelativePaths(skillsDir: string): Promise<stri
 
   for (const entry of entries) {
     if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-      paths.push(entry.name);
+      if (!isExcludedSkillMarkdown(entry.name)) paths.push(entry.name);
       continue;
     }
     if (!entry.isDirectory()) continue;
@@ -41,9 +46,10 @@ export async function collectSkillRelativePaths(skillsDir: string): Promise<stri
     const subDir = path.join(skillsDir, entry.name);
     const subEntries = await fs.readdir(subDir, { withFileTypes: true });
     for (const sub of subEntries) {
-      if (sub.isFile() && sub.name.toLowerCase().endsWith('.md')) {
-        paths.push(`${entry.name}/${sub.name}`.replace(/\\/g, '/'));
-      }
+      if (!sub.isFile() || !sub.name.toLowerCase().endsWith('.md')) continue;
+      const relativePath = `${entry.name}/${sub.name}`.replace(/\\/g, '/');
+      if (isExcludedSkillMarkdown(relativePath)) continue;
+      paths.push(relativePath);
     }
   }
 
@@ -214,9 +220,14 @@ The user wants to create, generate, edit, modify, or adjust an Agent Skill file.
 - When editing/updating: modify the existing \`.md\` in this directory (read_file first); do not duplicate elsewhere
 
 **File rules**:
-- One skill = one \`.md\` file
-- Root-level: \`skillname.md\` (e.g. \`创建技能.md\` → \`#创建技能.md\`)
-- Optional one-level folder for bundled scripts/assets: \`folder/skill.md\` (e.g. \`openClaude/skll.md\` → \`#openClaude/skll.md\`); only scan \`.md\` directly inside that folder, not deeper nesting
+- One skill = one registerable \`.md\` file
+- **Text-only**: root \`skillname.md\` (e.g. \`创建技能.md\` → \`#创建技能.md\`)
+- **With scripts** (preferred): one first-level folder per skill, markdown MUST be \`folder/skill.md\`:
+  - Example: \`connectWeChat/skill.md\` → \`#connectWeChat/skill.md\`
+  - Scripts: \`connectWeChat/connect.js\` OR \`connectWeChat/scripts/connect.js\` (same folder; \`scripts/\` is optional)
+  - Folder name: English camelCase (e.g. \`connectWeChat\`); do NOT use random md names like \`skll.md\`
+  - Do NOT create \`README.md\` / \`readme.md\` inside skill folders — every \`.md\` directly in a first-level folder is registered as a separate skill; put all docs in \`skill.md\` body instead
+  - Only \`.md\` files directly inside a first-level folder are registered; deeper paths are assets only
 - Use write_file / edit_file (or equivalent) to create or update; no server restart needed
 
 **Required Markdown shape** (YAML frontmatter + body):
