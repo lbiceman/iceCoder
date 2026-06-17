@@ -30,7 +30,6 @@ export interface SkillResolveResult {
 export class SkillRegistry {
   private readonly skillsDir: string;
   private readonly builtins = new Map<string, RegisteredSkill>();
-  private diskCache: RegisteredSkill[] | null = null;
 
   constructor(skillsDir: string) {
     this.skillsDir = skillsDir;
@@ -40,18 +39,14 @@ export class SkillRegistry {
   register(skill: Omit<RegisteredSkill, 'source'> & { source?: 'builtin' }): void {
     const filename = normalizeSkillFilename(skill.filename);
     this.builtins.set(filename, { ...skill, filename, source: 'builtin' });
-    this.diskCache = null;
   }
 
-  invalidate(): void {
-    this.diskCache = null;
-  }
+  /** 保留 API；磁盘技能列表每次 list 时重新扫描，无需手动失效。 */
+  invalidate(): void {}
 
   private async loadDiskSkills(): Promise<RegisteredSkill[]> {
-    if (this.diskCache) return this.diskCache;
     const scanned = await scanSkillFiles(this.skillsDir);
-    this.diskCache = scanned.map(s => ({ ...s, source: 'disk' as const }));
-    return this.diskCache;
+    return scanned.map(s => ({ ...s, source: 'disk' as const }));
   }
 
   /** 列出所有技能（内置覆盖同名磁盘项）。 */

@@ -11,6 +11,7 @@ window.SkillsPage = (function () {
   var allSkills = [];
   var selectedFilename = null;
   var listFetchAbort = null;
+  var skillsChangedHandler = null;
 
   function escapeHtml(str) {
     var div = document.createElement('div');
@@ -47,6 +48,10 @@ window.SkillsPage = (function () {
     if (listFetchAbort) {
       listFetchAbort.abort();
       listFetchAbort = null;
+    }
+    if (skillsChangedHandler) {
+      window.removeEventListener('ice-skills-changed', skillsChangedHandler);
+      skillsChangedHandler = null;
     }
     containerEl = null;
     allSkills = [];
@@ -218,6 +223,9 @@ window.SkillsPage = (function () {
     root.appendChild(header);
     root.appendChild(main);
     parentEl.appendChild(root);
+
+    skillsChangedHandler = function () { reloadSkills(); };
+    window.addEventListener('ice-skills-changed', skillsChangedHandler);
 
     reloadSkills();
   }

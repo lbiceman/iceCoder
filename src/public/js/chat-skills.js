@@ -112,7 +112,6 @@ window.ChatSkills = (function () {
       openDropdown();
     }
 
-    if (skillsLoaded) { renderFiltered(); return; }
     if (skillsLoading) return;
     skillsLoading = true;
     fetchSkills(function () {
