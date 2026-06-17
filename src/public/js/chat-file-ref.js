@@ -27,6 +27,7 @@ window.ChatFileRef = (function () {
   var pendingAutoNavFilter = '';
   var searchTimer = null;
   var searchSeq = 0;
+  var pickerSuppressed = false;
 
   function safeCall(fn) {
     try { return fn(); } catch (_e) { return undefined; }
@@ -79,6 +80,14 @@ window.ChatFileRef = (function () {
 
   function isOpen() {
     return activePrefix === '@' && panels.length > 0 && pickerRootEl && !pickerRootEl.classList.contains('hidden');
+  }
+
+  function clearPickerSuppressed() {
+    pickerSuppressed = false;
+  }
+
+  function suppressPicker() {
+    pickerSuppressed = true;
   }
 
   function hide() {
@@ -517,6 +526,7 @@ window.ChatFileRef = (function () {
     if (!entry || entry.isDirectory) return;
     stripTriggerFromTextarea(activeInputEl);
     addPath(entry.path);
+    clearPickerSuppressed();
     hide();
     if (activeInputEl) activeInputEl.focus();
   }
@@ -618,6 +628,7 @@ window.ChatFileRef = (function () {
     clearChipSelection();
     lastInputFilter = '';
     pendingAutoNavFilter = '';
+    clearPickerSuppressed();
     hide();
     stripTriggerFromTextarea(inputEl);
     renderChipBar();
@@ -690,6 +701,7 @@ window.ChatFileRef = (function () {
 
   function handleKeydown(e, inputEl) {
     if (handleChipBarKeydown(e, inputEl)) return true;
+    if (e.key === '@') clearPickerSuppressed();
     if (!isOpen()) return false;
     activeInputEl = inputEl || activeInputEl;
     var panel = getCurrentPanel();
@@ -740,6 +752,7 @@ window.ChatFileRef = (function () {
     }
     if (e.key === 'Escape') {
       e.preventDefault();
+      suppressPicker();
       hide();
       return true;
     }
@@ -751,32 +764,37 @@ window.ChatFileRef = (function () {
     if (chipBarFocused) clearChipSelection();
     var plain = val != null ? String(val) : (inputEl && inputEl.value) || '';
     var trigger = parseFileTrigger(plain);
-    if (trigger) {
-      if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
-        window.ChatSkills.hide();
-      }
-      activePrefix = '@';
-      var fullFilter = trigger.filter || '';
-      var pickerMode = getPickerMode(fullFilter);
-      if (pickerMode === 'search') {
-        if (shouldResetPicker(fullFilter)) {
-          openSearch(fullFilter);
-        }
-      } else if (shouldResetPicker(fullFilter)) {
-        openRoot(fullFilter);
-      } else {
-        var currentPanel = getCurrentPanel();
-        if (currentPanel) {
-          currentPanel.filter = getRelativeFilterForDepth(fullFilter, panels.length - 1);
-          currentPanel.selectedIndex = 0;
-          renderAllPanels();
-        }
-      }
-      lastInputFilter = fullFilter;
-    } else {
+    if (!trigger) {
       lastInputFilter = '';
+      clearPickerSuppressed();
       if (activePrefix === '@') hide();
+      return;
     }
+    if (pickerSuppressed) {
+      if (activePrefix === '@') hide();
+      return;
+    }
+    if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
+      window.ChatSkills.hide();
+    }
+    activePrefix = '@';
+    var fullFilter = trigger.filter || '';
+    var pickerMode = getPickerMode(fullFilter);
+    if (pickerMode === 'search') {
+      if (shouldResetPicker(fullFilter)) {
+        openSearch(fullFilter);
+      }
+    } else if (shouldResetPicker(fullFilter)) {
+      openRoot(fullFilter);
+    } else {
+      var currentPanel = getCurrentPanel();
+      if (currentPanel) {
+        currentPanel.filter = getRelativeFilterForDepth(fullFilter, panels.length - 1);
+        currentPanel.selectedIndex = 0;
+        renderAllPanels();
+      }
+    }
+    lastInputFilter = fullFilter;
   }
 
   function initFileComposer(inputEl, barEl) {
