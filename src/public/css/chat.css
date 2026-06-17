@@ -725,11 +725,10 @@
 .skill-chips-bar .skill-chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
   border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
-  font-weight: 600;
   line-height: 1.5;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -737,6 +736,35 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
+.skill-chips-bar .skill-chip-label {
+  line-height: 1.5;
+}
+.skill-chips-bar .skill-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1;
+  opacity: 0.65;
+  cursor: pointer;
+}
+.skill-chips-bar .skill-chip-remove:hover,
+.skill-chips-bar .skill-chip-remove:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: none;
 }
 .skill-chips-bar .skill-chip.is-selected {
   border-color: var(--accent);

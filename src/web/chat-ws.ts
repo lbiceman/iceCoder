@@ -1233,10 +1233,12 @@ async function handleChatMessage(
 
   // 解析 #skill.md 引用，将技能正文注入发给模型的文本
   let harnessMessageText = resolvedMessage;
-  const skillResolved = await getSkillRegistry().resolveMessage(resolvedMessage);
+  const skillRegistry = getSkillRegistry();
+  const skillResolved = await skillRegistry.resolveMessage(resolvedMessage);
   if (skillResolved) {
     harnessMessageText = skillResolved.augmentedText;
   }
+  harnessMessageText = skillRegistry.applyCreationGuideIfNeeded(harnessMessageText, resolvedMessage);
 
   const supportsVision = await resolveDefaultSupportsVision(MAIN_CONFIG_PATH);
 

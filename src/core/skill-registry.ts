@@ -10,6 +10,8 @@ import {
   readSkillBody,
   parseAllSkillRefsFromMessage,
   normalizeSkillFilename,
+  wantsSkillCreation,
+  prependSkillCreationGuide,
 } from '../skills/skill-loader.js';
 
 export type { SkillMeta };
@@ -119,6 +121,12 @@ export class SkillRegistry {
       displayText: text,
       augmentedText,
     };
+  }
+
+  /** 若用户要创建/编辑/修改技能文件，在发往模型的文本前注入目录与格式指引。 */
+  applyCreationGuideIfNeeded(harnessText: string, userText: string): string {
+    if (!wantsSkillCreation(userText)) return harnessText;
+    return prependSkillCreationGuide(harnessText, this.skillsDir);
   }
 }
 

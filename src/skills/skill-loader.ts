@@ -26,6 +26,30 @@ function baseNameSansExt(filename: string): string {
   return leaf.replace(/\.md$/i, '') || leaf;
 }
 
+/** 收集可注册的技能相对路径：根目录 .md + 一级子目录内的 .md（不递归更深）。 */
+export async function collectSkillRelativePaths(skillsDir: string): Promise<string[]> {
+  const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+  const paths: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+      paths.push(entry.name);
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
+
+    const subDir = path.join(skillsDir, entry.name);
+    const subEntries = await fs.readdir(subDir, { withFileTypes: true });
+    for (const sub of subEntries) {
+      if (sub.isFile() && sub.name.toLowerCase().endsWith('.md')) {
+        paths.push(`${entry.name}/${sub.name}`.replace(/\\/g, '/'));
+      }
+    }
+  }
+
+  return paths;
+}
+
 function buildSkillMeta(
   filename: string,
   content: string,
@@ -52,17 +76,14 @@ function buildSkillMeta(
 /** 扫描技能目录，返回按修改时间降序排列的技能列表。 */
 export async function scanSkillFiles(skillsDir: string, maxFiles = 100): Promise<SkillMeta[]> {
   try {
-    const entries = await fs.readdir(skillsDir, { recursive: true });
-    const mdFiles = entries.filter(
-      f => typeof f === 'string' && f.endsWith('.md'),
-    );
+    const mdFiles = await collectSkillRelativePaths(skillsDir);
 
     const results = await Promise.allSettled(
       mdFiles.map(async (relativePath): Promise<SkillMeta & { mtimeMs: number }> => {
-        const filePath = path.join(skillsDir, relativePath as string);
+        const filePath = path.join(skillsDir, relativePath);
         const stat = await fs.stat(filePath);
         const content = await fs.readFile(filePath, 'utf-8');
-        const meta = buildSkillMeta(relativePath as string, content, stat.mtimeMs);
+        const meta = buildSkillMeta(relativePath, content, stat.mtimeMs);
         return { ...meta, mtimeMs: stat.mtimeMs };
       }),
     );
@@ -104,12 +125,21 @@ export async function readSkillBody(skillsDir: string, filename: string): Promis
   return extractBodyFromMarkdown(found.content).trim();
 }
 
-/** 将用户输入规范化为技能文件名（自动补 .md）。 */
+/** 将用户输入规范化为技能相对路径（自动补 .md；支持一级子目录如 openClaude/skll.md）。 */
 export function normalizeSkillFilename(raw: string): string {
   const trimmed = raw.trim().replace(/^#/, '');
   if (!trimmed) return '';
-  const base = path.basename(trimmed);
-  return base.endsWith('.md') ? base : `${base}.md`;
+
+  const normalized = trimmed.replace(/\\/g, '/');
+  if (normalized.includes('..') || normalized.startsWith('/')) return '';
+
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length === 0 || parts.length > 2) return '';
+
+  const ensureMd = (name: string): string => (name.toLowerCase().endsWith('.md') ? name : `${name}.md`);
+
+  if (parts.length === 1) return ensureMd(parts[0]);
+  return `${parts[0]}/${ensureMd(parts[1])}`;
 }
 
 /** 从用户消息中解析所有技能引用（#xxx.md）。 */
@@ -133,4 +163,77 @@ export function parseSkillRefFromMessage(text: string): { filename: string; rest
   const match = text.match(/^#([^\s#]+\.md)\s*([\s\S]*)$/);
   if (!match) return null;
   return { filename: match[1], rest: match[2].trim() };
+}
+
+const SKILL_VERB_CN =
+  '创建|新建|新增|添加|编写|撰写|制作|定义|写|建|做|弄|加|生成|编辑|修改|调整|更新|优化|完善|修订|改写|改';
+const SKILL_VERB_EN =
+  'create|add|write|make|define|new|generate|edit|modify|update|adjust|revise|tweak|change';
+
+const SKILL_CREATE_INTENT_PATTERNS: RegExp[] = [
+  // 创建skill / 编辑 skill / 修改一个技能 / 生成skill
+  new RegExp(
+    `(?:${SKILL_VERB_CN})\\s*(?:一下|一个|个|一种)?\\s*(?:技能|skills?)`,
+    'i',
+  ),
+  // 技能修改 / skill 文件编辑
+  new RegExp(
+    `(?:技能|skills?)\\s*(?:文件|markdown|md|文档)?\\s*(?:的)?\\s*(?:${SKILL_VERB_CN})`,
+    'i',
+  ),
+  // create / edit / generate skill
+  new RegExp(
+    `(?:${SKILL_VERB_EN})\\s+(?:a\\s+)?skills?(?:\\s+file)?`,
+    'i',
+  ),
+  /skills?\s*(?:file|markdown|creation|create|edit|update|modify)/i,
+  // 口语：帮我改个 skill、调整一下技能
+  new RegExp(
+    `(?:帮我|请|麻烦)?\\s*(?:做|弄|搞|整|改|调)\\s*(?:一下|一个|个)?\\s*(?:技能|skills?)`,
+    'i',
+  ),
+];
+
+/** 用户是否要创建/编辑/修改/生成技能文件（区别于仅引用 #xxx.md 使用技能）。 */
+export function wantsSkillCreation(text: string): boolean {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  return SKILL_CREATE_INTENT_PATTERNS.some((re) => re.test(t));
+}
+
+/** 生成技能文件落盘指引，注入给模型以明确目录与格式。 */
+export function buildSkillCreationGuide(skillsDir: string): string {
+  const dir = skillsDir.replace(/\\/g, '/');
+  return `[System: Skill File Guide]
+
+The user wants to create, generate, edit, modify, or adjust an Agent Skill file. All read/write MUST use the directory below, or the Skills page and chat \`#\` picker will NOT see it.
+
+**ONLY valid directory**: \`${dir}\`
+- Same level as user-memory; env \`ICE_SKILLS_DIR\`
+- Do NOT write under src/skills, .cursor/skills, docs/, project root, or any other path
+- When editing/updating: modify the existing \`.md\` in this directory (read_file first); do not duplicate elsewhere
+
+**File rules**:
+- One skill = one \`.md\` file
+- Root-level: \`skillname.md\` (e.g. \`创建技能.md\` → \`#创建技能.md\`)
+- Optional one-level folder for bundled scripts/assets: \`folder/skill.md\` (e.g. \`openClaude/skll.md\` → \`#openClaude/skll.md\`); only scan \`.md\` directly inside that folder, not deeper nesting
+- Use write_file / edit_file (or equivalent) to create or update; no server restart needed
+
+**Required Markdown shape** (YAML frontmatter + body):
+\`\`\`markdown
+---
+name: Display name
+description: One-line when to use this skill
+createdAt: 2026-06-16T00:00:00.000Z
+---
+
+(Steps, constraints, examples for the agent…)
+\`\`\`
+
+After saving, tell the user the filename and that they can pick it via \`#\` in chat or the Skills sidebar.`;
+}
+
+/** 在发往 Harness 的文本前追加技能创建指引。 */
+export function prependSkillCreationGuide(harnessText: string, skillsDir: string): string {
+  return `${buildSkillCreationGuide(skillsDir)}\n\n${harnessText}`;
 }

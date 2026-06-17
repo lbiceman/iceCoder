@@ -10,6 +10,7 @@
     "dist/",
     "data/config.example.json",
     "data/supervisor-config.example.json",
+    "data/skills/",
     "data/system-prompt.md",
     "package.json",
     "README.md"
