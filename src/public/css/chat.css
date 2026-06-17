@@ -770,6 +770,93 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
 }
+.file-ref-chips-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+.file-ref-chips-bar.hidden {
+  display: none;
+}
+.file-ref-chips-bar .file-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  max-width: min(100%, 280px);
+}
+.file-ref-chips-bar .file-ref-chip-label {
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-ref-chips-bar .file-ref-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1;
+  opacity: 0.65;
+  cursor: pointer;
+}
+.file-ref-chips-bar .file-ref-chip-remove:hover,
+.file-ref-chips-bar .file-ref-chip-remove:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: none;
+}
+.file-ref-chips-bar .file-ref-chip.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.file-ref-picker {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+}
+.file-ref-picker.hidden {
+  display: none;
+}
+.file-ref-picker .file-ref-panel {
+  pointer-events: auto;
+  min-width: 200px;
+  max-width: 320px;
+}
+.file-ref-picker .cmd-item.is-folder .cmd-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-ref-arrow {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+}
 .composer-input .input-wrapper textarea {
   width: 100%;
   border: none;

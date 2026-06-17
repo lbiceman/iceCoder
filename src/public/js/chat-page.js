@@ -15,6 +15,7 @@ window.ChatPage = (function () {
   var UI = window.ChatUI;
   var Cmd = window.ChatCommands;
   var Skills = window.ChatSkills;
+  var FileRef = window.ChatFileRef;
   var File = window.ChatFile;
   var QR = window.ChatQR;
   var Pet = window.ChatPetBridge;
@@ -317,17 +318,40 @@ window.ChatPage = (function () {
   }
 
   // ---- 发送/停止 ----
+  function getComposerText() {
+    var lines = [];
+    if (Skills && typeof Skills.getSelectedRefs === 'function') {
+      var skillRefs = Skills.getSelectedRefs();
+      if (skillRefs.length) lines.push(skillRefs.join(' '));
+    }
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
+      var fileRefs = FileRef.getSelectedRefs();
+      for (var fi = 0; fi < fileRefs.length; fi++) {
+        lines.push(fileRefs[fi]);
+      }
+    }
+    var body = (elInput && elInput.value != null ? elInput.value : '').replace(/\u00A0/g, ' ').trim();
+    if (body) lines.push(body);
+    return lines.join('\n');
+  }
+
+  function clearComposerInput() {
+    if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
+    else if (elInput) elInput.value = '';
+    if (FileRef && typeof FileRef.clearInput === 'function') FileRef.clearInput(elInput);
+    UI.autoResizeInput();
+  }
+
   function handleSend() {
     Cmd.hide();
     if (Skills) Skills.hide();
+    if (FileRef) FileRef.hide();
     if (isWorkloadActive()) {
       handleStop();
       return;
     }
 
-    var text = (Skills && typeof Skills.getComposerText === 'function')
-      ? Skills.getComposerText(elInput).trim()
-      : elInput.value.trim();
+    var text = getComposerText().trim();
     var uploadedFiles = File.getUploadedFiles();
     var pendingImages = File.getPendingImages();
 
@@ -335,9 +359,7 @@ window.ChatPage = (function () {
     if (!text && uploadedFiles.length === 0 && pendingImages.length === 0) return;
 
     if (executeLocalCommand(text)) {
-      if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
-      else elInput.value = '';
-      UI.autoResizeInput();
+      clearComposerInput();
       return;
     }
 
@@ -379,9 +401,7 @@ window.ChatPage = (function () {
       }
     }
 
-    if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
-    else elInput.value = '';
-    UI.autoResizeInput();
+    clearComposerInput();
     Cmd.hide();
     userStopped = false;
     streamFinalized = false;
@@ -478,6 +498,9 @@ window.ChatPage = (function () {
   function onSessionSwitched(sessionId, runningTurn) {
     UI.clearReasoningStream();
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
+    if (FileRef && typeof FileRef.clearInput === 'function') {
+      FileRef.clearInput(elInput);
+    }
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
@@ -1167,7 +1190,8 @@ window.ChatPage = (function () {
             '<div class="composer-input">' +
               '<div class="input-wrapper">' +
                 '<div id="skill-chips-bar" class="skill-chips-bar hidden" role="listbox" aria-label="已选技能"></div>' +
-                '<textarea id="chat-input" rows="2" placeholder="输入消息… (输入 # 选用技能)"></textarea>' +
+                '<div id="file-ref-chips-bar" class="file-ref-chips-bar hidden" role="listbox" aria-label="已引用文件"></div>' +
+                '<textarea id="chat-input" rows="2" placeholder="输入消息… (输入 # 选用技能，@ 引用文件)"></textarea>' +
               '</div>' +
             '</div>' +
             '<div class="composer-toolbar">' +
@@ -1215,6 +1239,7 @@ window.ChatPage = (function () {
     if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
     var composerInputEl = container.querySelector('.composer-input');
     if (composerInputEl && Skills) Skills.setAnchor(composerInputEl);
+    if (composerInputEl && FileRef) FileRef.setAnchor(composerInputEl);
 
     // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
     // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
@@ -1262,6 +1287,10 @@ window.ChatPage = (function () {
     if (Skills) {
       Skills.init();
       Skills.initSkillComposer(elInput, container.querySelector('#skill-chips-bar'));
+    }
+    if (FileRef) {
+      FileRef.init();
+      FileRef.initFileComposer(elInput, container.querySelector('#file-ref-chips-bar'));
     }
 
     // 初始化冰豆（会话指示器）
@@ -1319,6 +1348,7 @@ window.ChatPage = (function () {
     // 绑定 UI 事件
     elSendBtn.addEventListener('click', handleSend);
     elInput.addEventListener('keydown', function (e) {
+      if (FileRef && FileRef.handleKeydown(e, elInput)) return;
       if (Skills && Skills.handleKeydown(e, elInput)) return;
       if (Cmd.handleKeydown(e, elInput)) return;
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1331,6 +1361,7 @@ window.ChatPage = (function () {
     elInput.addEventListener('input', function () {
       UI.autoResizeInput();
       if (Skills) Skills.handleInput(elInput.value, elInput);
+      if (FileRef) FileRef.handleInput(elInput.value, elInput);
       Cmd.handleInput(elInput.value, elInput);
     });
     // 命令面板的 outside-click / escape / focus-blur 关闭由 ChatDropdown 统一处理

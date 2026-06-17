@@ -202,6 +202,18 @@ window.ChatSkills = (function () {
     renderChipBar();
   }
 
+  function focusChipBarEnd() {
+    if (!selectedSkills.length) return false;
+    chipBarFocused = true;
+    chipFocusIndex = selectedSkills.length - 1;
+    renderChipBar();
+    return true;
+  }
+
+  function isChipBarFocused() {
+    return chipBarFocused;
+  }
+
   function clearChipSelection() {
     chipBarFocused = false;
     chipFocusIndex = -1;
@@ -280,6 +292,11 @@ window.ChatSkills = (function () {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (window.ChatFileRef && typeof window.ChatFileRef.focusChipBarFromAbove === 'function'
+          && window.ChatFileRef.focusChipBarFromAbove()) {
+        clearChipSelection();
+        return true;
+      }
       clearChipSelection();
       if (inputEl) inputEl.focus();
       return true;
@@ -364,7 +381,7 @@ window.ChatSkills = (function () {
     activeInputEl = inputEl || activeInputEl;
     chipBarEl = barEl || chipBarEl;
     if (inputEl) {
-      inputEl.setAttribute('placeholder', '输入消息… (输入 # 选用技能)');
+      inputEl.setAttribute('placeholder', '输入消息… (输入 # 选用技能，@ 引用文件)');
       inputEl.addEventListener('focus', clearChipSelection);
     }
     if (chipBarEl) {
@@ -415,6 +432,11 @@ window.ChatSkills = (function () {
     clearSkillChipMode: clearSkillChipMode,
     clearInput: clearInput,
     getComposerText: getComposerText,
+    getSelectedRefs: function () {
+      return selectedSkills.map(function (fn) { return '#' + fn; });
+    },
+    focusChipBarEnd: focusChipBarEnd,
+    isChipBarFocused: isChipBarFocused,
     isSkillTriggerVal: isSkillTriggerVal,
     SKILLS_CHANGED: SKILLS_CHANGED,
   };
