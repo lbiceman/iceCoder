@@ -6,7 +6,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import path from 'node:path';
-import { listWorkspaceDirectory } from '../workspace-browse.js';
+import { listWorkspaceDirectory, searchWorkspaceFiles } from '../workspace-browse.js';
 import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
 import { rejectUnsafeSessionId } from '../session-id-guard.js';
 import '../../cli/paths.js';
@@ -40,6 +40,32 @@ export function createWorkspaceBrowseRouter(): Router {
       const message = error instanceof Error ? error.message : 'Unknown error';
       const status = message.includes('outside workspace') ? 403 : 400;
       res.status(status).json({ success: false, error: message });
+    }
+  });
+
+  router.get('/search', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const sessionId = String(req.query.sessionId || DEFAULT_SESSION_ID);
+      if (rejectUnsafeSessionId(res, sessionId)) return;
+
+      const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+      if (!q) {
+        res.json({ success: true, entries: [], total: 0 });
+        return;
+      }
+
+      const defaultWorkDir = process.cwd();
+      const { workspaceRoot } = await resolveEffectiveWorkspaceRoot(
+        getSessionsDir(),
+        sessionId,
+        defaultWorkDir,
+      );
+
+      const entries = await searchWorkspaceFiles(workspaceRoot, q);
+      res.json({ success: true, entries, total: entries.length, workspaceRoot });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      res.status(400).json({ success: false, error: message });
     }
   });
 

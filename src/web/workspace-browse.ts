@@ -47,6 +47,11 @@ export interface WorkspaceBrowseEntry {
   isDirectory: boolean;
 }
 
+export interface WorkspaceSearchEntry extends WorkspaceBrowseEntry {
+  relativePath: string;
+  score: number;
+}
+
 export interface WorkspaceBrowseResult {
   dir: string;
   workspaceRoot: string;
@@ -146,4 +151,88 @@ export async function listWorkspaceDirectory(
     workspaceRoot: root,
     entries,
   };
+}
+
+const SEARCH_MAX_RESULTS = 50;
+const SEARCH_MAX_DEPTH = 24;
+
+/** 文件名模糊匹配得分：精确 > 前缀 > 包含 */
+export function scoreNameMatch(name: string, query: string): number {
+  const n = name.toLowerCase();
+  const q = query.toLowerCase();
+  if (!q) return 0;
+  if (n === q) return 100;
+  if (n.startsWith(q)) return 80;
+  if (n.includes(q)) return 60;
+  return 0;
+}
+
+/**
+ * 在工作区内递归搜索文件/文件夹（按文件名模糊匹配）。
+ * 跳过隐藏目录；结果按相关度排序并限制数量。
+ */
+export async function searchWorkspaceFiles(
+  workspaceRoot: string,
+  query: string,
+  maxResults = SEARCH_MAX_RESULTS,
+): Promise<WorkspaceSearchEntry[]> {
+  const root = path.resolve(workspaceRoot);
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const results: WorkspaceSearchEntry[] = [];
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (results.length >= maxResults || depth > SEARCH_MAX_DEPTH) return;
+
+    let dirents;
+    try {
+      dirents = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const dirent of dirents) {
+      if (results.length >= maxResults) return;
+
+      const name = dirent.name;
+      if (dirent.isDirectory() && isHiddenDirName(name)) continue;
+
+      const fullPath = path.join(dir, name);
+      try {
+        resolvePathUnderWorkspace(root, fullPath);
+      } catch {
+        continue;
+      }
+
+      const info = await statSafe(fullPath);
+      if (!info) continue;
+
+      const score = scoreNameMatch(name, trimmed);
+      if (score > 0) {
+        const rel = path.relative(root, fullPath).replace(/\\/g, '/');
+        results.push({
+          name,
+          path: fullPath,
+          relativePath: rel,
+          isDirectory: info.isDirectory,
+          score,
+        });
+      }
+
+      if (info.isDirectory) {
+        await walk(fullPath, depth + 1);
+      }
+    }
+  }
+
+  await walk(root, 0);
+
+  results.sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? 1 : -1;
+    return a.relativePath.localeCompare(b.relativePath, undefined, { sensitivity: 'base' });
+  });
+
+  return results.slice(0, maxResults);
 }

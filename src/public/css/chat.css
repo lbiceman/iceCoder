@@ -850,6 +850,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.file-ref-picker .cmd-item .cmd-desc {
+  flex: 1;
+  min-width: 0;
+  margin-left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
 .file-ref-arrow {
   flex-shrink: 0;
   margin-left: 8px;

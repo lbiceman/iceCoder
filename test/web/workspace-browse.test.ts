@@ -14,6 +14,8 @@ import {
   isHiddenDirName,
   listWorkspaceDirectory,
   resolvePathUnderWorkspace,
+  scoreNameMatch,
+  searchWorkspaceFiles,
 } from '../../src/web/workspace-browse.js';
 
 function getPort(server: Server): number {
@@ -27,7 +29,10 @@ describe('workspace-browse core', () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ws-browse-'));
     await fs.mkdir(path.join(tempDir, 'src'), { recursive: true });
+    await fs.mkdir(path.join(tempDir, 'src', 'harness'), { recursive: true });
     await fs.writeFile(path.join(tempDir, 'src', 'index.ts'), 'export {};\n', 'utf-8');
+    await fs.writeFile(path.join(tempDir, 'src', 'harness', 'harness.ts'), 'export {};\n', 'utf-8');
+    await fs.writeFile(path.join(tempDir, 'src', 'harness-tool.ts'), 'export {};\n', 'utf-8');
     await fs.mkdir(path.join(tempDir, 'node_modules'), { recursive: true });
     await fs.writeFile(path.join(tempDir, 'node_modules', 'pkg.js'), '', 'utf-8');
     await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
@@ -69,6 +74,30 @@ describe('workspace-browse core', () => {
     expect(HIDDEN_DIR_NAMES.has('.venv')).toBe(true);
     expect(HIDDEN_DIR_NAMES.has('site-packages')).toBe(true);
   });
+
+  it('scoreNameMatch ranks exact match highest', () => {
+    expect(scoreNameMatch('harness.ts', 'harness.ts')).toBeGreaterThan(scoreNameMatch('harness-tool.ts', 'harness.ts'));
+    expect(scoreNameMatch('harness.ts', 'harness')).toBeGreaterThan(scoreNameMatch('other.ts', 'harness'));
+  });
+
+  it('searchWorkspaceFiles finds nested files by fuzzy name', async () => {
+    const exact = await searchWorkspaceFiles(tempDir, 'harness.ts');
+    const names = exact.map((e) => e.name);
+    expect(names).toContain('harness.ts');
+    expect(names).not.toContain('index.ts');
+
+    const fuzzy = await searchWorkspaceFiles(tempDir, 'harness');
+    const fuzzyNames = fuzzy.map((e) => e.name);
+    expect(fuzzyNames).toContain('harness.ts');
+    expect(fuzzyNames).toContain('harness-tool.ts');
+    expect(fuzzyNames.some((n) => n === 'harness')).toBe(true);
+  });
+
+  it('searchWorkspaceFiles skips node_modules', async () => {
+    await fs.writeFile(path.join(tempDir, 'node_modules', 'harness.ts'), '', 'utf-8');
+    const results = await searchWorkspaceFiles(tempDir, 'harness.ts');
+    expect(results.every((e) => !e.path.includes('node_modules'))).toBe(true);
+  });
 });
 
 describe('workspace browse API', () => {
@@ -76,6 +105,7 @@ describe('workspace browse API', () => {
   let sessionsDir: string;
   let server: Server;
   let baseUrl: string;
+  let searchUrl: string;
   const prevSessionsDir = process.env.ICE_SESSIONS_DIR;
 
   beforeEach(async () => {
@@ -84,6 +114,8 @@ describe('workspace browse API', () => {
     await fs.mkdir(sessionsDir, { recursive: true });
     await fs.mkdir(path.join(tempDir, 'visible'), { recursive: true });
     await fs.writeFile(path.join(tempDir, 'visible', 'a.txt'), 'hi', 'utf-8');
+    await fs.mkdir(path.join(tempDir, 'src', 'harness'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'src', 'harness', 'harness.ts'), 'x', 'utf-8');
     await fs.mkdir(path.join(tempDir, 'node_modules'), { recursive: true });
     await fs.writeFile(
       path.join(sessionsDir, 'default.workspace.json'),
@@ -99,6 +131,7 @@ describe('workspace browse API', () => {
     server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     baseUrl = `http://127.0.0.1:${getPort(server)}/api/workspace/browse`;
+    searchUrl = `http://127.0.0.1:${getPort(server)}/api/workspace/search`;
   });
 
   afterEach(async () => {
@@ -122,5 +155,14 @@ describe('workspace browse API', () => {
     const outside = path.resolve(tempDir, '..');
     const res = await fetch(`${baseUrl}?sessionId=default&dir=${encodeURIComponent(outside)}`);
     expect(res.status).toBe(403);
+  });
+
+  it('GET /search returns fuzzy file matches', async () => {
+    const res = await fetch(`${searchUrl}?sessionId=default&q=harness.ts`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { success: boolean; entries: { name: string; relativePath: string }[] };
+    expect(body.success).toBe(true);
+    expect(body.entries.some((e) => e.name === 'harness.ts')).toBe(true);
+    expect(body.entries.some((e) => e.relativePath.includes('harness/harness.ts'))).toBe(true);
   });
 });

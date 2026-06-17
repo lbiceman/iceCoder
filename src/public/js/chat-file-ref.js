@@ -25,6 +25,8 @@ window.ChatFileRef = (function () {
   var chipFocusIndex = -1;
   var lastInputFilter = '';
   var pendingAutoNavFilter = '';
+  var searchTimer = null;
+  var searchSeq = 0;
 
   function safeCall(fn) {
     try { return fn(); } catch (_e) { return undefined; }
@@ -83,6 +85,8 @@ window.ChatFileRef = (function () {
     activePrefix = '';
     lastInputFilter = '';
     pendingAutoNavFilter = '';
+    clearSearchTimer();
+    searchSeq += 1;
     panels = [];
     fetchSeq += 1;
     if (fetchAbort) {
@@ -114,6 +118,88 @@ window.ChatFileRef = (function () {
     return panels.length ? panels[panels.length - 1] : null;
   }
 
+  function isPathNavigation(filter) {
+    return /[/\\]/.test(String(filter || ''));
+  }
+
+  function getPickerMode(filter) {
+    var f = String(filter || '').trim();
+    if (!f) return 'browse';
+    if (isPathNavigation(f)) return 'browse';
+    return 'search';
+  }
+
+  function clearSearchTimer() {
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+  }
+
+  function scheduleSearch(query) {
+    clearSearchTimer();
+    searchTimer = setTimeout(function () {
+      searchTimer = null;
+      fetchSearch(query);
+    }, 150);
+  }
+
+  function fetchSearch(query) {
+    var seq = ++searchSeq;
+    fetchSeq += 1;
+    if (fetchAbort) {
+      try { fetchAbort.abort(); } catch (_e) { /* ignore */ }
+    }
+    fetchAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+
+    panels = [{
+      mode: 'search',
+      query: query,
+      entries: [],
+      selectedIndex: 0,
+      loading: true,
+      error: null,
+    }];
+    renderAllPanels();
+
+    var url = '/api/workspace/search?sessionId=' + encodeURIComponent(getSessionId())
+      + '&q=' + encodeURIComponent(query);
+
+    fetch(url, fetchAbort ? { signal: fetchAbort.signal } : undefined)
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (seq !== searchSeq) return;
+        if (!body || !body.success) {
+          panels[0].loading = false;
+          panels[0].error = (body && body.error) || '搜索失败';
+          renderAllPanels();
+          return;
+        }
+        panels[0].entries = Array.isArray(body.entries) ? body.entries : [];
+        panels[0].loading = false;
+        panels[0].error = null;
+        panels[0].selectedIndex = 0;
+        renderAllPanels();
+      })
+      .catch(function (err) {
+        if (seq !== searchSeq) return;
+        if (err && err.name === 'AbortError') return;
+        panels[0].loading = false;
+        panels[0].error = '搜索失败';
+        renderAllPanels();
+      });
+  }
+
+  function openSearch(query) {
+    if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
+      window.ChatSkills.hide();
+    }
+    activePrefix = '@';
+    ensurePickerRoot();
+    pendingAutoNavFilter = '';
+    scheduleSearch(query);
+  }
+
   function getFilterSegments(filter) {
     return String(filter || '').replace(/\\/g, '/').split('/').filter(function (p) { return p.length > 0; });
   }
@@ -133,7 +219,12 @@ window.ChatFileRef = (function () {
   }
 
   function shouldResetPicker(fullFilter) {
+    var mode = getPickerMode(fullFilter);
     if (!isOpen() || !panels.length) return true;
+    if (mode === 'search') {
+      return panels.length !== 1 || panels[0].mode !== 'search' || panels[0].query !== fullFilter;
+    }
+    if (panels[0] && panels[0].mode === 'search') return true;
     if (getActiveFilterSegment(fullFilter) !== getActiveFilterSegment(lastInputFilter)) return true;
     if (panels.length > 1 && !panelStackMatchesFilter(fullFilter)) return true;
     if (getFilterSegments(fullFilter).length > 0 && panels.length > getFilterSegments(fullFilter).length) return true;
@@ -189,12 +280,33 @@ window.ChatFileRef = (function () {
 
   function getFilteredEntries(panel) {
     if (!panel || !panel.entries) return [];
+    if (panel.mode === 'search') return panel.entries.slice();
     var segment = getActiveFilterSegment(panel.filter);
     if (!segment) return panel.entries.slice();
     var q = segment.toLowerCase();
     return panel.entries.filter(function (entry) {
       return entry.name.toLowerCase().indexOf(q) >= 0;
     });
+  }
+
+  function scrollActiveItemIntoView(panelIndex) {
+    if (!pickerRootEl) return;
+    var panelEl = pickerRootEl.querySelector('.file-ref-panel[data-panel-index="' + panelIndex + '"]');
+    var panel = panels[panelIndex];
+    if (!panelEl || !panel || !panelEl.classList.contains('is-scrollable')) return;
+    var items = panelEl.querySelectorAll('.cmd-item');
+    var activeEl = items[panel.selectedIndex];
+    if (!activeEl) return;
+
+    var padding = 4;
+    var panelRect = panelEl.getBoundingClientRect();
+    var itemRect = activeEl.getBoundingClientRect();
+
+    if (itemRect.top < panelRect.top + padding) {
+      panelEl.scrollTop -= panelRect.top - itemRect.top + padding;
+    } else if (itemRect.bottom > panelRect.bottom - padding) {
+      panelEl.scrollTop += itemRect.bottom - panelRect.bottom + padding;
+    }
   }
 
   function updateActiveItems() {
@@ -210,6 +322,7 @@ window.ChatFileRef = (function () {
       if (panels[p].selectedIndex >= filtered.length) {
         panels[p].selectedIndex = Math.max(0, filtered.length - 1);
       }
+      scrollActiveItemIntoView(p);
     }
   }
 
@@ -265,9 +378,11 @@ window.ChatFileRef = (function () {
       var arrow = entry.isDirectory
         ? '<span class="file-ref-arrow" aria-hidden="true">›</span>'
         : '';
+      var desc = entry.relativePath || '';
       html +=
         '<div class="cmd-item' + (isActive ? ' active' : '') + (entry.isDirectory ? ' is-folder' : ' is-file') + '" data-index="' + i + '" data-panel="' + panelIndex + '" role="menuitem" title="' + escapeHtml(entry.path) + '">' +
           '<span class="cmd-name">' + escapeHtml(entry.name) + '</span>' +
+          (desc ? '<span class="cmd-desc">' + escapeHtml(desc) + '</span>' : '') +
           arrow +
         '</div>';
     }
@@ -413,6 +528,16 @@ window.ChatFileRef = (function () {
     var entry = filtered[itemIndex];
     if (!entry) return;
     panel.selectedIndex = itemIndex;
+    if (panel.mode === 'search') {
+      if (entry.isDirectory) {
+        pendingAutoNavFilter = '';
+        panels = [];
+        fetchDirectory(entry.path, 0, '', null);
+      } else {
+        applyFileSelection(entry);
+      }
+      return;
+    }
     if (entry.isDirectory) {
       enterFolder(panelIndex, entry);
     } else {
@@ -632,7 +757,12 @@ window.ChatFileRef = (function () {
       }
       activePrefix = '@';
       var fullFilter = trigger.filter || '';
-      if (shouldResetPicker(fullFilter)) {
+      var pickerMode = getPickerMode(fullFilter);
+      if (pickerMode === 'search') {
+        if (shouldResetPicker(fullFilter)) {
+          openSearch(fullFilter);
+        }
+      } else if (shouldResetPicker(fullFilter)) {
         openRoot(fullFilter);
       } else {
         var currentPanel = getCurrentPanel();
