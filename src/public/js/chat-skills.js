@@ -41,7 +41,11 @@ window.ChatSkills = (function () {
   }
 
   function skillToDropdownItem(skill) {
-    return { name: skill.filename, prefix: '#' };
+    return {
+      name: skill.name || skill.filename,
+      key: skill.filename,
+      prefix: '',
+    };
   }
 
   function updateActiveItem() {
@@ -108,7 +112,6 @@ window.ChatSkills = (function () {
       openDropdown();
     }
 
-    if (skillsLoaded) { renderFiltered(); return; }
     if (skillsLoading) return;
     skillsLoading = true;
     fetchSkills(function () {
@@ -157,7 +160,19 @@ window.ChatSkills = (function () {
       chip.setAttribute('role', 'option');
       chip.setAttribute('aria-selected', chipBarFocused && i === chipFocusIndex ? 'true' : 'false');
       chip.dataset.index = String(i);
-      chip.textContent = '#' + fn;
+
+      var label = document.createElement('span');
+      label.className = 'skill-chip-label';
+      label.textContent = '#' + fn;
+      chip.appendChild(label);
+
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'skill-chip-remove';
+      removeBtn.setAttribute('aria-label', '移除技能 ' + fn);
+      removeBtn.textContent = '\u00D7';
+      chip.appendChild(removeBtn);
+
       if (chipBarFocused && i === chipFocusIndex) chip.classList.add('is-selected');
       chipBarEl.appendChild(chip);
     }
@@ -185,6 +200,18 @@ window.ChatSkills = (function () {
       chipFocusIndex = 0;
     }
     renderChipBar();
+  }
+
+  function focusChipBarEnd() {
+    if (!selectedSkills.length) return false;
+    chipBarFocused = true;
+    chipFocusIndex = selectedSkills.length - 1;
+    renderChipBar();
+    return true;
+  }
+
+  function isChipBarFocused() {
+    return chipBarFocused;
   }
 
   function clearChipSelection() {
@@ -217,8 +244,8 @@ window.ChatSkills = (function () {
   function applySelection(index, inputEl) {
     if (index < 0 || index >= skillFiltered.length) return null;
     var item = skillFiltered[index];
-    var skill = allSkills.find(function (s) { return s.filename === item.name; });
-    var built = skill ? { ref: '#' + skill.filename, body: '' } : { ref: '#' + (item.name || ''), body: '' };
+    var skill = allSkills.find(function (s) { return s.filename === item.key; });
+    var built = skill ? { ref: '#' + skill.filename, body: '' } : { ref: '#' + (item.key || item.name || ''), body: '' };
     var targetInput = inputEl || activeInputEl;
     if (applyTargetFn) {
       applyTargetFn(built.ref);
@@ -265,6 +292,11 @@ window.ChatSkills = (function () {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (window.ChatFileRef && typeof window.ChatFileRef.focusChipBarFromAbove === 'function'
+          && window.ChatFileRef.focusChipBarFromAbove()) {
+        clearChipSelection();
+        return true;
+      }
       clearChipSelection();
       if (inputEl) inputEl.focus();
       return true;
@@ -349,11 +381,21 @@ window.ChatSkills = (function () {
     activeInputEl = inputEl || activeInputEl;
     chipBarEl = barEl || chipBarEl;
     if (inputEl) {
-      inputEl.setAttribute('placeholder', '输入消息… (输入 # 选用技能)');
+      inputEl.setAttribute('placeholder', '输入消息… (输入 # 选用技能，@ 引用文件)');
       inputEl.addEventListener('focus', clearChipSelection);
     }
     if (chipBarEl) {
       chipBarEl.addEventListener('mousedown', function (e) {
+        var removeBtn = e.target.closest('.skill-chip-remove');
+        if (removeBtn) {
+          e.preventDefault();
+          e.stopPropagation();
+          var chipFromRemove = removeBtn.closest('.skill-chip');
+          if (!chipFromRemove || !chipBarEl.contains(chipFromRemove)) return;
+          removeSkillAt(parseInt(chipFromRemove.dataset.index, 10) || 0);
+          if (inputEl) inputEl.focus();
+          return;
+        }
         var chip = e.target.closest('.skill-chip');
         if (!chip || !chipBarEl.contains(chip)) return;
         e.preventDefault();
@@ -390,6 +432,11 @@ window.ChatSkills = (function () {
     clearSkillChipMode: clearSkillChipMode,
     clearInput: clearInput,
     getComposerText: getComposerText,
+    getSelectedRefs: function () {
+      return selectedSkills.map(function (fn) { return '#' + fn; });
+    },
+    focusChipBarEnd: focusChipBarEnd,
+    isChipBarFocused: isChipBarFocused,
     isSkillTriggerVal: isSkillTriggerVal,
     SKILLS_CHANGED: SKILLS_CHANGED,
   };

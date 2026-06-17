@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import {
   LOCAL_DATA_DIR,
   USER_DATA_DIR,
   applyRuntimeDataEnvDefaults,
+  ensureDefaultSkillFiles,
   ensureSupervisorConfigFile,
   getRuntimeDataDir,
   isPackagedCliEntry,
@@ -51,6 +52,40 @@ describe('usesUserDataRoot / data dir', () => {
     process.argv[1] = 'D:/work/self/iceCoder/dist/cli/index.js';
     applyRuntimeDataEnvDefaults();
     expect(getRuntimeDataDir()).toBe(USER_DATA_DIR);
+  });
+});
+
+describe('ensureDefaultSkillFiles', () => {
+  it('从包内示例写入 dataDir/skills/创建技能.md', async () => {
+    const bundled = resolvePackagedDataExamplePath('skills/创建技能.md');
+    expect(bundled).toContain(`${path.sep}skills${path.sep}`);
+
+    const tmp = await mkdtemp(path.join(os.tmpdir(), 'ice-skills-'));
+    try {
+      const skillsDir = path.join(tmp, 'skills');
+      await ensureDefaultSkillFiles(skillsDir);
+      const target = path.join(skillsDir, '创建技能.md');
+      const raw = await readFile(target, 'utf-8');
+      expect(raw).toContain('name: 创建技能');
+      expect(raw).toContain('ICE_SKILLS_DIR');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('已存在的技能文件不会被覆盖', async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), 'ice-skills-skip-'));
+    try {
+      const skillsDir = path.join(tmp, 'skills');
+      const target = path.join(skillsDir, '创建技能.md');
+      await mkdir(skillsDir, { recursive: true });
+      await writeFile(target, 'custom\n', 'utf-8');
+      await ensureDefaultSkillFiles(skillsDir);
+      const raw = await readFile(target, 'utf-8');
+      expect(raw).toBe('custom\n');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 

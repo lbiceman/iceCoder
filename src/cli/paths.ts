@@ -138,8 +138,13 @@ export interface DataPaths {
 
 /** npm pack / 全局安装包内 `data/` 示例文件（相对 dist/cli/paths.js → ../../data/） */
 export function resolvePackagedDataExamplePath(filename: string): string {
+  return resolvePackagedDataDir(filename);
+}
+
+/** npm pack / 全局安装包内 `data/` 下的文件或子目录 */
+export function resolvePackagedDataDir(relativePath: string): string {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(moduleDir, '../../data', filename);
+  return path.resolve(moduleDir, '../../data', relativePath);
 }
 
 export function resolveSupervisorConfigPath(): string {
@@ -296,6 +301,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   }
 
   await ensureSupervisorConfigFile(paths.dataDir);
+  await ensureDefaultSkillFiles(paths.skillsDir);
 
   return isFirstRun;
 }
@@ -332,6 +338,37 @@ export async function ensureSupervisorConfigFile(dataDir: string): Promise<void>
   const normalized = content.endsWith('\n') ? content : `${content}\n`;
   await fs.writeFile(target, normalized, 'utf-8');
   console.log(`[iceCoder] 已初始化 ${target}`);
+}
+
+const BUNDLED_SKILLS_DIR = 'skills';
+const DEFAULT_SKILL_FILE = '创建技能.md';
+
+/**
+ * 若不存在则从包内写入 `{skillsDir}/创建技能.md`（全局安装 → ~/.iceCoder/skills/）。
+ */
+export async function ensureDefaultSkillFiles(skillsDir: string): Promise<void> {
+  await fs.mkdir(skillsDir, { recursive: true });
+
+  const target = path.join(skillsDir, DEFAULT_SKILL_FILE);
+  if (await exists(target)) return;
+
+  const bundled = resolvePackagedDataDir(path.join(BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE));
+  const localBundled = path.join(LOCAL_DATA_DIR, BUNDLED_SKILLS_DIR, DEFAULT_SKILL_FILE);
+  let content: string | null = null;
+  if (await exists(bundled)) {
+    content = await fs.readFile(bundled, 'utf-8');
+  } else if (await exists(localBundled)) {
+    content = await fs.readFile(localBundled, 'utf-8');
+  } else {
+    console.warn(
+      `[iceCoder] 未找到 ${DEFAULT_SKILL_FILE}，跳过默认技能初始化`,
+    );
+    return;
+  }
+
+  const normalized = content.endsWith('\n') ? content : `${content}\n`;
+  await fs.writeFile(target, normalized, 'utf-8');
+  console.log(`[iceCoder] 已初始化技能 ${target}`);
 }
 
 applyRuntimeDataEnvDefaults();

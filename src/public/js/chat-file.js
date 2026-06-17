@@ -8,27 +8,30 @@
 window.ChatFile = (function () {
   'use strict';
 
-  var uploadedFile = null;
+  var uploadedFiles = [];
   var pendingImages = [];
 
   var elFileStatus = null;
-  var elFileName = null;
   var elFileInput = null;
 
   function init(els) {
     elFileStatus = els.elFileStatus;
-    elFileName = els.elFileName;
     elFileInput = els.elFileInput;
   }
 
   function handleFileSelect(file, messages, appendFn, saveFn) {
     if (!file) return;
 
+    var entry = {
+      localId: String(Date.now()) + '-' + Math.random().toString(36).slice(2),
+      filename: file.name,
+      status: 'uploading',
+    };
+    uploadedFiles.push(entry);
+    renderUploadedFiles();
+
     var formData = new FormData();
     formData.append('file', file);
-
-    if (elFileStatus) elFileStatus.classList.remove('hidden');
-    if (elFileName) elFileName.textContent = file.name + ' (uploading…)';
 
     fetch('/api/chat/upload', {
       method: 'POST',
@@ -37,7 +40,7 @@ window.ChatFile = (function () {
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (data.error) {
-          if (elFileName) elFileName.textContent = file.name + ' (failed)';
+          entry.status = 'failed';
           var uploadErrMsg = { role: 'agent', content: 'Upload failed: ' + data.error };
           if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
             window.ChatSession.stampMessageTimestamps(uploadErrMsg);
@@ -45,27 +48,94 @@ window.ChatFile = (function () {
           messages.push(uploadErrMsg);
           appendFn(uploadErrMsg);
           saveFn();
-          uploadedFile = null;
         } else {
-          uploadedFile = { fileId: data.fileId, filename: data.filename, size: data.size };
-          if (elFileName) elFileName.textContent = data.filename + ' (' + formatSize(data.size) + ') — 发送时将自动解析';
+          entry.fileId = data.fileId;
+          entry.filename = data.filename;
+          entry.size = data.size;
+          entry.status = 'ready';
         }
+        renderUploadedFiles();
       })
       .catch(function () {
-        if (elFileName) elFileName.textContent = file.name + ' (failed)';
-        uploadedFile = null;
+        entry.status = 'failed';
+        renderUploadedFiles();
       });
   }
 
-  function removeUploadedFile() {
-    uploadedFile = null;
-    if (elFileStatus) elFileStatus.classList.add('hidden');
-    if (elFileName) elFileName.textContent = '';
+  function removeUploadedFile(index) {
+    if (index < 0 || index >= uploadedFiles.length) return;
+    uploadedFiles.splice(index, 1);
+    renderUploadedFiles();
+  }
+
+  function clearUploadedFiles() {
+    uploadedFiles = [];
+    renderUploadedFiles();
     if (elFileInput) elFileInput.value = '';
   }
 
-  function getUploadedFile() {
-    return uploadedFile;
+  function getUploadedFiles() {
+    var ready = [];
+    for (var i = 0; i < uploadedFiles.length; i++) {
+      if (uploadedFiles[i].status === 'ready' && uploadedFiles[i].fileId) {
+        ready.push(uploadedFiles[i]);
+      }
+    }
+    return ready;
+  }
+
+  function hasPendingUploads() {
+    for (var i = 0; i < uploadedFiles.length; i++) {
+      if (uploadedFiles[i].status === 'uploading') return true;
+    }
+    return false;
+  }
+
+  function renderUploadedFiles() {
+    if (!elFileStatus) return;
+
+    if (uploadedFiles.length === 0) {
+      elFileStatus.classList.add('hidden');
+      elFileStatus.innerHTML = '';
+      return;
+    }
+
+    elFileStatus.classList.remove('hidden');
+    elFileStatus.innerHTML = '';
+
+    for (var i = 0; i < uploadedFiles.length; i++) {
+      (function (idx) {
+        var file = uploadedFiles[idx];
+        var item = document.createElement('div');
+        item.className = 'pending-file-item';
+
+        var nameEl = document.createElement('span');
+        nameEl.className = 'pending-file-name';
+        if (file.status === 'uploading') {
+          nameEl.textContent = file.filename + ' (uploading…)';
+        } else if (file.status === 'failed') {
+          nameEl.textContent = file.filename + ' (failed)';
+          nameEl.classList.add('pending-file-failed');
+        } else {
+          nameEl.textContent = file.filename + ' (' + formatSize(file.size) + ')';
+        }
+        item.appendChild(nameEl);
+
+        var removeBtn = document.createElement('button');
+        removeBtn.className = 'pending-file-remove';
+        removeBtn.textContent = '×';
+        removeBtn.title = '移除文件';
+        removeBtn.type = 'button';
+        removeBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          removeUploadedFile(idx);
+        });
+        item.appendChild(removeBtn);
+
+        elFileStatus.appendChild(item);
+      })(i);
+    }
   }
 
   function addPendingImage(file) {
@@ -141,7 +211,9 @@ window.ChatFile = (function () {
     init: init,
     handleFileSelect: handleFileSelect,
     removeUploadedFile: removeUploadedFile,
-    getUploadedFile: getUploadedFile,
+    clearUploadedFiles: clearUploadedFiles,
+    getUploadedFiles: getUploadedFiles,
+    hasPendingUploads: hasPendingUploads,
     addPendingImage: addPendingImage,
     removePendingImage: removePendingImage,
     clearPendingImages: clearPendingImages,

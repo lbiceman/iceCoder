@@ -40,16 +40,16 @@ window.ChatWelcome = (function () {
       hint: '命令',
     },
     {
+      key: 'at',
+      title: '@ 引用文件',
+      desc: '输入 @ 从工作区选择文件，引用绝对路径供 Agent 读取',
+      hint: '@',
+    },
+    {
       key: 'hash',
       title: '# 技能',
       desc: '输入 # 选用技能，或在侧栏「技能」页浏览全部技能',
       hint: '#',
-    },
-    {
-      key: 'model',
-      title: '模型切换',
-      desc: '点击输入框下方模型 chip，切换 Provider 与默认模型',
-      hint: '模型',
     },
     {
       key: 'plus',

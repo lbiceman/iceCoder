@@ -28,6 +28,7 @@ import './tool-display-history.js';
 import './chat-virtual-history.js';
 import './chat-bg-task-chip.js';
 import './chat-skills.js';
+import './chat-file-ref.js';
 import './chat-page.js';
 import './memory-page.js';
 import './skills-page.js';
