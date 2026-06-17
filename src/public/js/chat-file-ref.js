@@ -28,6 +28,12 @@ window.ChatFileRef = (function () {
   var searchTimer = null;
   var searchSeq = 0;
   var pickerSuppressed = false;
+  var searchCache = {};
+  var lastFetchedSearchQuery = '';
+  var SEARCH_DEBOUNCE_MS = 250;
+  var MIN_SEARCH_QUERY_LEN = 2;
+  var browseFromSearch = false;
+  var lockedSearchQuery = '';
 
   function safeCall(fn) {
     try { return fn(); } catch (_e) { return undefined; }
@@ -96,6 +102,9 @@ window.ChatFileRef = (function () {
     pendingAutoNavFilter = '';
     clearSearchTimer();
     searchSeq += 1;
+    lastFetchedSearchQuery = '';
+    browseFromSearch = false;
+    lockedSearchQuery = '';
     panels = [];
     fetchSeq += 1;
     if (fetchAbort) {
@@ -127,14 +136,9 @@ window.ChatFileRef = (function () {
     return panels.length ? panels[panels.length - 1] : null;
   }
 
-  function isPathNavigation(filter) {
-    return /[/\\]/.test(String(filter || ''));
-  }
-
   function getPickerMode(filter) {
     var f = String(filter || '').trim();
     if (!f) return 'browse';
-    if (isPathNavigation(f)) return 'browse';
     return 'search';
   }
 
@@ -145,15 +149,63 @@ window.ChatFileRef = (function () {
     }
   }
 
+  function clearSearchCache() {
+    searchCache = {};
+    lastFetchedSearchQuery = '';
+  }
+
+  function getSearchCacheKey(query) {
+    return getSessionId() + '\0' + query;
+  }
+
+  function applySearchResult(query, payload) {
+    if (!panels.length || panels[0].mode !== 'search') return;
+    panels[0].query = query;
+    panels[0].entries = payload.entries || [];
+    panels[0].truncated = !!payload.truncated;
+    panels[0].loading = false;
+    panels[0].error = null;
+    panels[0].hint = payload.hint || null;
+    panels[0].selectedIndex = 0;
+    lastFetchedSearchQuery = query;
+    renderAllPanels();
+  }
+
   function scheduleSearch(query) {
     clearSearchTimer();
     searchTimer = setTimeout(function () {
       searchTimer = null;
       fetchSearch(query);
-    }, 150);
+    }, SEARCH_DEBOUNCE_MS);
   }
 
   function fetchSearch(query) {
+    if (query === lastFetchedSearchQuery && panels[0] && panels[0].mode === 'search'
+        && panels[0].query === query && !panels[0].loading && !panels[0].error) {
+      return;
+    }
+
+    if (query.length < MIN_SEARCH_QUERY_LEN) {
+      panels = [{
+        mode: 'search',
+        query: query,
+        entries: [],
+        selectedIndex: 0,
+        loading: false,
+        error: null,
+        truncated: false,
+        hint: '再输入 ' + (MIN_SEARCH_QUERY_LEN - query.length) + ' 个字符开始搜索',
+      }];
+      renderAllPanels();
+      return;
+    }
+
+    var cacheKey = getSearchCacheKey(query);
+    if (searchCache[cacheKey]) {
+      applySearchResult(query, searchCache[cacheKey]);
+      return;
+    }
+
     var seq = ++searchSeq;
     fetchSeq += 1;
     if (fetchAbort) {
@@ -168,6 +220,8 @@ window.ChatFileRef = (function () {
       selectedIndex: 0,
       loading: true,
       error: null,
+      truncated: false,
+      hint: null,
     }];
     renderAllPanels();
 
@@ -184,11 +238,13 @@ window.ChatFileRef = (function () {
           renderAllPanels();
           return;
         }
-        panels[0].entries = Array.isArray(body.entries) ? body.entries : [];
-        panels[0].loading = false;
-        panels[0].error = null;
-        panels[0].selectedIndex = 0;
-        renderAllPanels();
+        var payload = {
+          entries: Array.isArray(body.entries) ? body.entries : [],
+          truncated: !!body.truncated,
+          hint: null,
+        };
+        searchCache[cacheKey] = payload;
+        applySearchResult(query, payload);
       })
       .catch(function (err) {
         if (seq !== searchSeq) return;
@@ -203,6 +259,8 @@ window.ChatFileRef = (function () {
     if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
       window.ChatSkills.hide();
     }
+    browseFromSearch = false;
+    lockedSearchQuery = '';
     activePrefix = '@';
     ensurePickerRoot();
     pendingAutoNavFilter = '';
@@ -343,27 +401,40 @@ window.ChatFileRef = (function () {
     var tb = anchorEl.closest && anchorEl.closest('.composer-toolbar');
     var topRef = tb ? tb.getBoundingClientRect().top : rect.top;
     var panelEls = pickerRootEl.querySelectorAll('.file-ref-panel');
-    var left = rect.left;
-    var top = topRef - margin;
+    var widths = [];
+    var maxH = 0;
+    var i;
 
-    for (var i = 0; i < panelEls.length; i++) {
+    for (i = 0; i < panelEls.length; i++) {
+      var measure = panelEls[i];
+      measure.style.position = 'fixed';
+      measure.style.visibility = 'hidden';
+      measure.style.left = '0px';
+      measure.style.top = '0px';
+      void measure.offsetHeight;
+      widths.push(measure.offsetWidth);
+      maxH = Math.max(maxH, measure.offsetHeight);
+    }
+
+    var totalW = 0;
+    for (i = 0; i < widths.length; i++) totalW += widths[i];
+    if (panelEls.length > 1) totalW += panelGap * (panelEls.length - 1);
+
+    var left = rect.left;
+    if (left + totalW > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - totalW - 8);
+    }
+
+    var panelTop = topRef - margin - maxH;
+    if (panelTop < 8) panelTop = 8;
+
+    var cursorLeft = left;
+    for (i = 0; i < panelEls.length; i++) {
       var el = panelEls[i];
-      el.style.position = 'fixed';
-      el.style.visibility = 'hidden';
-      el.style.left = '0px';
-      el.style.top = '0px';
-      void el.offsetHeight;
-      var w = el.offsetWidth;
-      var h = el.offsetHeight;
       el.style.visibility = '';
-      if (left + w > window.innerWidth - 8) {
-        left = Math.max(8, window.innerWidth - w - 8);
-      }
-      var panelTop = top - h;
-      if (panelTop < 8) panelTop = 8;
-      el.style.left = left + 'px';
+      el.style.left = cursorLeft + 'px';
       el.style.top = panelTop + 'px';
-      left += w + panelGap;
+      cursorLeft += widths[i] + panelGap;
     }
   }
 
@@ -377,8 +448,12 @@ window.ChatFileRef = (function () {
     if (panel.error) {
       return '<div class="cmd-empty">' + escapeHtml(panel.error) + '</div>';
     }
+    if (panel.hint) {
+      return '<div class="cmd-empty">' + escapeHtml(panel.hint) + '</div>';
+    }
     if (!filtered.length) {
-      return '<div class="cmd-empty">无匹配项</div>';
+      var emptyMsg = panel.truncated ? '无匹配项（搜索范围已截断，请输入更精确关键词）' : '无匹配项';
+      return '<div class="cmd-empty">' + escapeHtml(emptyMsg) + '</div>';
     }
     var html = '';
     for (var i = 0; i < filtered.length; i++) {
@@ -394,6 +469,9 @@ window.ChatFileRef = (function () {
           (desc ? '<span class="cmd-desc">' + escapeHtml(desc) + '</span>' : '') +
           arrow +
         '</div>';
+    }
+    if (panel.truncated) {
+      html += '<div class="file-ref-truncated-hint">结果过多，仅显示部分匹配；请输入更精确关键词</div>';
     }
     return html;
   }
@@ -440,6 +518,7 @@ window.ChatFileRef = (function () {
       filter: filter || '',
       loading: true,
       error: null,
+      mode: 'browse',
     };
     renderAllPanels();
 
@@ -478,6 +557,8 @@ window.ChatFileRef = (function () {
     if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
       window.ChatSkills.hide();
     }
+    browseFromSearch = false;
+    lockedSearchQuery = '';
     activePrefix = '@';
     ensurePickerRoot();
     pendingAutoNavFilter = filter || '';
@@ -498,6 +579,7 @@ window.ChatFileRef = (function () {
       filter: childFilter || '',
       loading: true,
       error: null,
+      mode: 'browse',
     });
     renderAllPanels();
     fetchDirectory(entry.path, nextIndex, childFilter || '', function (seq) {
@@ -507,6 +589,8 @@ window.ChatFileRef = (function () {
 
   function enterFolder(panelIndex, entry) {
     if (!entry || !entry.isDirectory) return;
+    browseFromSearch = false;
+    lockedSearchQuery = '';
     var parentPanel = panels[panelIndex];
     var childFilter = parentPanel ? computeChildFilter(parentPanel.filter, entry.name) : '';
     pendingAutoNavFilter = '';
@@ -520,6 +604,33 @@ window.ChatFileRef = (function () {
     chipBarFocused = false;
     chipFocusIndex = -1;
     renderChipBar();
+  }
+
+  function openFolderFromSearch(entry) {
+    if (!entry || !entry.isDirectory) return;
+    var prevQuery = panels[0] && panels[0].mode === 'search' ? panels[0].query : lockedSearchQuery;
+    pendingAutoNavFilter = '';
+    browseFromSearch = true;
+    lockedSearchQuery = prevQuery || '';
+    clearSearchTimer();
+    searchSeq += 1;
+    activePrefix = '@';
+    ensurePickerRoot();
+    fetchDirectory(entry.path, 0, '', null);
+  }
+
+  function activatePanelEntry(panelIndex, entry) {
+    if (!entry) return;
+    var panel = panels[panelIndex];
+    if (entry.isDirectory) {
+      if (panel && panel.mode === 'search') {
+        openFolderFromSearch(entry);
+      } else {
+        enterFolder(panelIndex, entry);
+      }
+    } else {
+      applyFileSelection(entry);
+    }
   }
 
   function applyFileSelection(entry) {
@@ -538,21 +649,7 @@ window.ChatFileRef = (function () {
     var entry = filtered[itemIndex];
     if (!entry) return;
     panel.selectedIndex = itemIndex;
-    if (panel.mode === 'search') {
-      if (entry.isDirectory) {
-        pendingAutoNavFilter = '';
-        panels = [];
-        fetchDirectory(entry.path, 0, '', null);
-      } else {
-        applyFileSelection(entry);
-      }
-      return;
-    }
-    if (entry.isDirectory) {
-      enterFolder(panelIndex, entry);
-    } else {
-      applyFileSelection(entry);
-    }
+    activatePanelEntry(panelIndex, entry);
   }
 
   function renderChipBar() {
@@ -629,6 +726,7 @@ window.ChatFileRef = (function () {
     lastInputFilter = '';
     pendingAutoNavFilter = '';
     clearPickerSuppressed();
+    clearSearchCache();
     hide();
     stripTriggerFromTextarea(inputEl);
     renderChipBar();
@@ -734,20 +832,16 @@ window.ChatFileRef = (function () {
       var entryR = filtered[panel.selectedIndex];
       if (entryR && entryR.isDirectory) {
         e.preventDefault();
-        enterFolder(panelIndex, entryR);
+        activatePanelEntry(panelIndex, entryR);
         return true;
       }
       return false;
     }
-    if (e.key === 'Enter' || e.key === 'Tab') {
+    if (e.key === 'Enter') {
       e.preventDefault();
       var entry = filtered[panel.selectedIndex];
       if (!entry) return true;
-      if (entry.isDirectory) {
-        enterFolder(panelIndex, entry);
-      } else {
-        applyFileSelection(entry);
-      }
+      activatePanelEntry(panelIndex, entry);
       return true;
     }
     if (e.key === 'Escape') {
@@ -779,6 +873,14 @@ window.ChatFileRef = (function () {
     }
     activePrefix = '@';
     var fullFilter = trigger.filter || '';
+    if (browseFromSearch && fullFilter === lockedSearchQuery) {
+      lastInputFilter = fullFilter;
+      return;
+    }
+    if (fullFilter !== lockedSearchQuery) {
+      browseFromSearch = false;
+      lockedSearchQuery = '';
+    }
     var pickerMode = getPickerMode(fullFilter);
     if (pickerMode === 'search') {
       if (shouldResetPicker(fullFilter)) {
@@ -836,7 +938,8 @@ window.ChatFileRef = (function () {
       if (!isOpen()) return;
       if (pickerRootEl && pickerRootEl.contains(e.target)) return;
       if (anchorEl && anchorEl.contains && anchorEl.contains(e.target)) return;
-      if (activeInputEl && activeInputEl.contains && activeInputEl.contains(e.target)) return;
+      if (activeInputEl && (e.target === activeInputEl || activeInputEl.contains(e.target))) return;
+      suppressPicker();
       hide();
     });
     window.addEventListener('resize', function () { if (isOpen()) positionPanels(); });

@@ -866,6 +866,14 @@
   line-height: 1;
   color: var(--text-muted);
 }
+.file-ref-truncated-hint {
+  margin-top: 6px;
+  padding: 6px 10px 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+}
 .composer-input .input-wrapper textarea {
   width: 100%;
   border: none;

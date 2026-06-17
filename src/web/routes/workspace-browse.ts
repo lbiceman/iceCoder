@@ -62,7 +62,14 @@ export function createWorkspaceBrowseRouter(): Router {
       );
 
       const entries = await searchWorkspaceFiles(workspaceRoot, q);
-      res.json({ success: true, entries, total: entries.length, workspaceRoot });
+      res.json({
+        success: true,
+        entries: entries.entries,
+        total: entries.entries.length,
+        truncated: entries.truncated,
+        scanned: entries.scanned,
+        workspaceRoot,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       res.status(400).json({ success: false, error: message });

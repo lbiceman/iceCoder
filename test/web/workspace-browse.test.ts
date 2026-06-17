@@ -12,9 +12,12 @@ import os from 'node:os';
 import {
   HIDDEN_DIR_NAMES,
   isHiddenDirName,
+  isSkippedEntry,
   listWorkspaceDirectory,
   resolvePathUnderWorkspace,
-  scoreNameMatch,
+  assertUnderWorkspaceRoot,
+  scorePathFuzzy,
+  scoreFuzzySubsequence,
   searchWorkspaceFiles,
 } from '../../src/web/workspace-browse.js';
 
@@ -75,28 +78,44 @@ describe('workspace-browse core', () => {
     expect(HIDDEN_DIR_NAMES.has('site-packages')).toBe(true);
   });
 
-  it('scoreNameMatch ranks exact match highest', () => {
-    expect(scoreNameMatch('harness.ts', 'harness.ts')).toBeGreaterThan(scoreNameMatch('harness-tool.ts', 'harness.ts'));
-    expect(scoreNameMatch('harness.ts', 'harness')).toBeGreaterThan(scoreNameMatch('other.ts', 'harness'));
+  it('scoreFuzzySubsequence ranks tighter matches higher', () => {
+    expect(scoreFuzzySubsequence('harness.ts', 'harness.ts'))
+      .toBeGreaterThan(scoreFuzzySubsequence('harness-tool.ts', 'harness.ts'));
+    expect(scoreFuzzySubsequence('harness.ts', 'harness'))
+      .toBeGreaterThan(scoreFuzzySubsequence('other.ts', 'harness'));
   });
 
-  it('searchWorkspaceFiles finds nested files by fuzzy name', async () => {
+  it('scorePathFuzzy matches abbreviated path queries like sr/hars', () => {
+    const target = 'src/harness/harness.ts';
+    expect(scorePathFuzzy(target, 'sr/hars')).toBeGreaterThan(0);
+    expect(scorePathFuzzy(target, 's/ha')).toBeGreaterThan(0);
+    expect(scorePathFuzzy(target, 'src/harness.ts')).toBeGreaterThan(scorePathFuzzy(target, 'sr/hars'));
+  });
+
+  it('searchWorkspaceFiles finds nested files by path fuzzy query', async () => {
     const exact = await searchWorkspaceFiles(tempDir, 'harness.ts');
-    const names = exact.map((e) => e.name);
+    const names = exact.entries.map((e) => e.name);
     expect(names).toContain('harness.ts');
     expect(names).not.toContain('index.ts');
 
     const fuzzy = await searchWorkspaceFiles(tempDir, 'harness');
-    const fuzzyNames = fuzzy.map((e) => e.name);
+    const fuzzyNames = fuzzy.entries.map((e) => e.name);
     expect(fuzzyNames).toContain('harness.ts');
     expect(fuzzyNames).toContain('harness-tool.ts');
-    expect(fuzzyNames.some((n) => n === 'harness')).toBe(true);
+
+    const pathFuzzy = await searchWorkspaceFiles(tempDir, 'sr/hars');
+    expect(pathFuzzy.entries.some((e) => e.relativePath.replace(/\\/g, '/').includes('harness/harness.ts'))).toBe(true);
   });
 
   it('searchWorkspaceFiles skips node_modules', async () => {
     await fs.writeFile(path.join(tempDir, 'node_modules', 'harness.ts'), '', 'utf-8');
     const results = await searchWorkspaceFiles(tempDir, 'harness.ts');
-    expect(results.every((e) => !e.path.includes('node_modules'))).toBe(true);
+    expect(results.entries.every((e) => !e.path.includes('node_modules'))).toBe(true);
+  });
+
+  it('isSkippedEntry hides dot-prefixed entries', () => {
+    expect(isSkippedEntry('.env', false)).toBe(true);
+    expect(isSkippedEntry('src', true)).toBe(false);
   });
 });
 
@@ -164,5 +183,14 @@ describe('workspace browse API', () => {
     expect(body.success).toBe(true);
     expect(body.entries.some((e) => e.name === 'harness.ts')).toBe(true);
     expect(body.entries.some((e) => e.relativePath.includes('harness/harness.ts'))).toBe(true);
+  });
+
+  it('GET /search supports path-style fuzzy query sr/hars', async () => {
+    const res = await fetch(`${searchUrl}?sessionId=default&q=${encodeURIComponent('sr/hars')}`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { success: boolean; entries: { relativePath: string }[]; truncated: boolean };
+    expect(body.success).toBe(true);
+    expect(body.truncated).toBe(false);
+    expect(body.entries.some((e) => e.relativePath.replace(/\\/g, '/').includes('harness/harness.ts'))).toBe(true);
   });
 });
