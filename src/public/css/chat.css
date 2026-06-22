@@ -2289,3 +2289,140 @@
   line-height: 1;
 }
 
+/* ── 楼梯导航：右侧横线 + 悬停气泡列表 ── */
+.chat-staircase-nav {
+  position: absolute;
+  right: 30px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-height: calc(100% - 220px);
+  pointer-events: auto;
+}
+.chat-staircase-nav.hidden {
+  display: none;
+}
+
+.chat-staircase-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  padding: 6px 2px;
+  max-height: calc(100vh - 320px);
+  overflow: hidden;
+}
+.chat-staircase-lines.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.chat-staircase-line {
+  display: block;
+  height: 2px;
+  padding: 4px 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 1px;
+  transition: opacity var(--transition), transform var(--transition);
+  width: 16px;
+}
+.chat-staircase-line::after {
+  content: '';
+  display: block;
+  height: 2px;
+  width: 100%;
+  border-radius: 1px;
+  background: var(--text-muted);
+  opacity: 0.45;
+  transition: background var(--transition), opacity var(--transition), width var(--transition);
+}
+.chat-staircase-line:hover::after,
+.chat-staircase-line.is-active::after {
+  background: var(--accent);
+  opacity: 0.9;
+}
+.chat-staircase-line:hover {
+  transform: translateX(-2px);
+}
+
+.chat-staircase-nav.is-expanded {
+  z-index: 13;
+}
+
+.chat-staircase-popover {
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 220px;
+  max-width: min(320px, 42vw);
+  max-height: min(420px, 60vh);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md);
+}
+.chat-staircase-popover.hidden {
+  display: none;
+}
+
+.chat-staircase-popover-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-staircase-popover-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.chat-staircase-popover-item:hover,
+.chat-staircase-popover-item.is-active {
+  background: var(--accent-light);
+}
+.chat-staircase-popover-index {
+  flex-shrink: 0;
+  min-width: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--accent);
+  opacity: 0.85;
+}
+.chat-staircase-popover-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.chat-staircase-popover-item:hover .chat-staircase-popover-text,
+.chat-staircase-popover-item.is-active .chat-staircase-popover-text {
+  color: var(--text-primary);
+}

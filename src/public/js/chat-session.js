@@ -310,6 +310,7 @@ window.ChatSession = (function () {
 
     messages = separated.msgs;
     toolTraces = separated.traces;
+    reindexMessages();
     lastSessionSyncSig = sig;
     return true;
   }
@@ -317,6 +318,7 @@ window.ChatSession = (function () {
   function initSession() {
     SESSION_ID = readInitialSessionId();
     messages = loadLocalMessages();
+    reindexMessages();
     toolTraces = {};
     currentToolBatch = loadLiveToolBatch();
     return messages;
@@ -330,8 +332,15 @@ window.ChatSession = (function () {
     clearLiveToolBatch();
   }
 
+  function reindexMessages() {
+    for (var i = 0; i < messages.length; i++) {
+      messages[i]._msgIndex = i;
+    }
+  }
+
   function appendMessage(msg) {
     stampMessageTimestamps(msg);
+    msg._msgIndex = messages.length;
     messages.push(msg);
   }
 

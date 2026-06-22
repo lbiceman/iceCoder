@@ -26,6 +26,7 @@ import './chat-execution-plan-bridge.js';
 import './tool-trace-format.js';
 import './tool-display-history.js';
 import './chat-virtual-history.js';
+import './chat-staircase-nav.js';
 import './chat-bg-task-chip.js';
 import './chat-skills.js';
 import './chat-file-ref.js';

@@ -118,6 +118,11 @@ window.ChatUI = (function () {
         scrollRoot: elMessages,
         renderUnit: renderHistoryUnit,
         stickyThresholdPx: SCROLL_STICKY_THRESHOLD_PX,
+        onAfterVisibleRender: function () {
+          if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.notifyScrollSync === 'function') {
+            window.ChatStaircaseNav.notifyScrollSync();
+          }
+        },
       });
     }
 
@@ -584,7 +589,7 @@ window.ChatUI = (function () {
   function renderHistoryUnit(unit, slot) {
     if (!unit || !slot) return;
     if (unit.type === 'message' && unit.msg) {
-      slot.appendChild(createMessageEl(unit.msg, lastStripStatusTagFn));
+      slot.appendChild(createMessageEl(unit.msg, lastStripStatusTagFn, unit.msgIndex));
       return;
     }
     if (unit.type === 'tools' && unit.traces && unit.traces.length > 0) {
@@ -653,6 +658,9 @@ window.ChatUI = (function () {
     if (suppressScrollSync) return;
     syncAutoScrollFromViewport();
     onVirtualHistoryScroll();
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.notifyScrollSync === 'function') {
+      window.ChatStaircaseNav.notifyScrollSync();
+    }
   }
 
   function scrollToBottom(force) {
@@ -1545,9 +1553,17 @@ window.ChatUI = (function () {
     timeEl.textContent = timeText;
   }
 
-  function createMessageEl(msg, stripStatusTagFn) {
+  function createMessageEl(msg, stripStatusTagFn, msgIndex) {
     var el = document.createElement('div');
     el.className = 'message ' + msg.role;
+
+    var idx = typeof msgIndex === 'number' ? msgIndex : msg._msgIndex;
+    if (typeof idx === 'number') {
+      el.setAttribute('data-msg-index', String(idx));
+    }
+    if (msg.role === 'user') {
+      el.setAttribute('data-user-turn', 'true');
+    }
 
     el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg)));
 
@@ -1641,13 +1657,14 @@ window.ChatUI = (function () {
         var msgDisplays = (displayMap && msg.id && displayMap[msg.id]) ? displayMap[msg.id] : [];
         insertFoldableToolTraceGroup(msgTraces, msgDisplays, msg.id);
       }
-      insertTailBefore(createMessageEl(msg, stripStatusTagFn));
+      insertTailBefore(createMessageEl(msg, stripStatusTagFn, i));
     }
 
     followBottomAfterContentPatch(shouldScroll);
     if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
       window.ChatPage.syncWelcomeState();
     }
+    notifyStaircaseNavRefresh();
   }
 
   /** 内容增删改后跟随到底（含虚拟历史 remeasure / diff 挂载后的二次对齐） */
@@ -1670,14 +1687,180 @@ window.ChatUI = (function () {
   function appendMessageEl(msg, stripStatusTagFn) {
     ensureChatLayout();
     if (!elTailRoot) return;
-    var el = createMessageEl(msg, stripStatusTagFn);
+    var msgIndex = typeof msg._msgIndex === 'number' ? msg._msgIndex : -1;
+    var el = createMessageEl(msg, stripStatusTagFn, msgIndex >= 0 ? msgIndex : undefined);
     msg._el = el;
     insertTailBefore(el);
     notifyTailLayoutChange();
     if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
       window.ChatPage.syncWelcomeState();
     }
+    notifyStaircaseNavRefresh();
     return el;
+  }
+
+  function notifyStaircaseNavRefresh() {
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.refresh === 'function') {
+      window.ChatStaircaseNav.refresh();
+    }
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.notifyScrollSync === 'function') {
+      window.ChatStaircaseNav.notifyScrollSync();
+    }
+  }
+
+  function scrollToMessageIndex(msgIndex, messages) {
+    if (!elMessages || typeof msgIndex !== 'number' || msgIndex < 0) return;
+
+    userPinnedScroll = true;
+    autoScrollEnabled = false;
+    updateFollowBottomClass();
+    updateJumpBottomButton();
+
+    var target = elMessages.querySelector('.message[data-msg-index="' + msgIndex + '"]');
+    if (target) {
+      suppressScrollSync = true;
+      try {
+        target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      } catch (_e) {
+        target.scrollIntoView(true);
+      }
+      setTimeout(function () {
+        suppressScrollSync = false;
+        syncAutoScrollFromViewport();
+        notifyStaircaseNavRefresh();
+      }, 400);
+      return;
+    }
+
+    if (virtualScroller && typeof virtualScroller.scrollToMessageIndex === 'function') {
+      suppressScrollSync = true;
+      var scrolled = virtualScroller.scrollToMessageIndex(msgIndex);
+      if (scrolled) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            var mounted = elMessages.querySelector('.message[data-msg-index="' + msgIndex + '"]');
+            if (mounted) {
+              try {
+                mounted.scrollIntoView({ block: 'start', behavior: 'smooth' });
+              } catch (_e2) {
+                mounted.scrollIntoView(true);
+              }
+            }
+            suppressScrollSync = false;
+            syncAutoScrollFromViewport();
+            notifyStaircaseNavRefresh();
+          });
+        });
+        return;
+      }
+      suppressScrollSync = false;
+    }
+
+    if (Array.isArray(messages) && msgIndex < messages.length) {
+      var tailStart = 0;
+      if (window.ChatVirtualHistory && typeof window.ChatVirtualHistory.computeTailStartIndex === 'function') {
+        tailStart = window.ChatVirtualHistory.computeTailStartIndex(
+          messages,
+          window.ChatVirtualHistory.TAIL_TURN_COUNT,
+        );
+      }
+      if (msgIndex >= tailStart) {
+        scrollToBottom(true);
+      }
+    }
+  }
+
+  /** 视口顶部附近的用户消息索引（供楼梯导航高亮，兼容虚拟历史区） */
+  function findMaxUserMsgIndexInDom(onlyVisible) {
+    if (!elMessages) return -1;
+    var nodes = elMessages.querySelectorAll('.message.user[data-msg-index]');
+    var rootRect = elMessages.getBoundingClientRect();
+    var maxIdx = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var idx = parseInt(nodes[i].getAttribute('data-msg-index') || '-1', 10);
+      if (idx < 0) continue;
+      if (onlyVisible) {
+        var rect = nodes[i].getBoundingClientRect();
+        if (rect.bottom <= rootRect.top + 12) continue;
+        if (rect.top >= rootRect.bottom - 12) continue;
+      }
+      if (idx > maxIdx) maxIdx = idx;
+    }
+    return maxIdx;
+  }
+
+  function findLastUserMsgIndexAboveViewport() {
+    if (!elMessages) return -1;
+    var nodes = elMessages.querySelectorAll('.message.user[data-msg-index]');
+    var rootRect = elMessages.getBoundingClientRect();
+    var maxIdx = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var rect = nodes[i].getBoundingClientRect();
+      if (rect.bottom > rootRect.top + 12) continue;
+      var idx = parseInt(nodes[i].getAttribute('data-msg-index') || '-1', 10);
+      if (idx > maxIdx) maxIdx = idx;
+    }
+    return maxIdx;
+  }
+
+  function getActiveUserMsgIndex() {
+    if (!elMessages) return -1;
+
+    if (isNearBottom()) {
+      var atBottom = findMaxUserMsgIndexInDom(false);
+      if (atBottom >= 0) return atBottom;
+    }
+
+    var rootRect = elMessages.getBoundingClientRect();
+    var anchorY = rootRect.top + 80;
+    var activeFromDom = -1;
+    var bestTop = -Infinity;
+    var fallbackIndex = -1;
+    var fallbackTop = Infinity;
+
+    var nodes = elMessages.querySelectorAll('.message.user[data-msg-index]');
+    for (var n = 0; n < nodes.length; n++) {
+      var el = nodes[n];
+      var rect = el.getBoundingClientRect();
+      if (rect.bottom <= rootRect.top + 12) continue;
+      if (rect.top >= rootRect.bottom - 12) continue;
+
+      var msgIdx = parseInt(el.getAttribute('data-msg-index') || '-1', 10);
+      if (msgIdx < 0) continue;
+
+      if (rect.top <= anchorY && rect.top > bestTop) {
+        bestTop = rect.top;
+        activeFromDom = msgIdx;
+      } else if (rect.top > anchorY && rect.top < fallbackTop) {
+        fallbackTop = rect.top;
+        fallbackIndex = msgIdx;
+      }
+    }
+
+    if (activeFromDom >= 0) return activeFromDom;
+    if (fallbackIndex >= 0) return fallbackIndex;
+
+    var lastAbove = findLastUserMsgIndexAboveViewport();
+    if (lastAbove >= 0) return lastAbove;
+
+    if (virtualScroller && elHistoryOuter
+        && typeof virtualScroller.resolveActiveUserMsgIndex === 'function') {
+      var historyTop = elHistoryOuter.offsetTop;
+      var viewTop = elMessages.scrollTop - historyTop;
+      var totalH = typeof virtualScroller.getTotalHeight === 'function'
+        ? virtualScroller.getTotalHeight()
+        : 0;
+      if (viewTop >= 0 && viewTop <= totalH + 1) {
+        var fromVirtual = virtualScroller.resolveActiveUserMsgIndex(viewTop, 80);
+        if (fromVirtual >= 0) return fromVirtual;
+      }
+      if (viewTop > totalH) {
+        var inTail = findMaxUserMsgIndexInDom(false);
+        if (inTail >= 0) return inTail;
+      }
+    }
+
+    return findMaxUserMsgIndexInDom(false);
   }
 
   function updateMessageContent(msg, content, stripStatusTagFn) {
@@ -1961,6 +2144,8 @@ window.ChatUI = (function () {
   return {
     init: init,
     scrollToBottom: scrollToBottom,
+    scrollToMessageIndex: scrollToMessageIndex,
+    getActiveUserMsgIndex: getActiveUserMsgIndex,
     enableAutoScroll: enableAutoScroll,
     followBottomAfterContentPatch: followBottomAfterContentPatch,
     scheduleScrollIfSticky: scheduleScrollIfSticky,
