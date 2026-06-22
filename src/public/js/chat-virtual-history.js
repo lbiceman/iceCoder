@@ -53,6 +53,7 @@ window.ChatVirtualHistory = (function () {
         type: 'message',
         key: 'msg:' + (msg.id || i) + ':' + msg.role,
         msg: msg,
+        msgIndex: i,
       });
     }
     return units;
@@ -831,6 +832,41 @@ window.ChatVirtualHistory = (function () {
       },
       getTotalHeight: function () {
         return totalHeight;
+      },
+      scrollToMessageIndex: function (msgIndex) {
+        if (!scrollRoot || !outerEl || !units.length) return false;
+        if (typeof msgIndex !== 'number' || msgIndex < 0) return false;
+        var targetIdx = -1;
+        for (var ui = 0; ui < units.length; ui++) {
+          if (units[ui].type === 'message' && units[ui].msgIndex === msgIndex) {
+            targetIdx = ui;
+            break;
+          }
+        }
+        if (targetIdx < 0) return false;
+        restoringScroll = true;
+        var contentViewTop = offsets[targetIdx];
+        scrollRoot.scrollTop = outerEl.offsetTop + contentViewTop;
+        scheduleRenderImmediate();
+        requestAnimationFrame(function () {
+          restoringScroll = false;
+          runLayoutSettle();
+          scheduleRenderImmediate();
+        });
+        return true;
+      },
+      /** 历史区内容坐标下，视口顶部的用户消息索引（无 DOM 时供楼梯导航高亮） */
+      resolveActiveUserMsgIndex: function (contentViewTop, anchorPx) {
+        if (!units.length) return -1;
+        var anchor = (typeof contentViewTop === 'number' ? contentViewTop : 0)
+          + (typeof anchorPx === 'number' ? anchorPx : 80);
+        var active = -1;
+        for (var ri = 0; ri < units.length; ri++) {
+          var unit = units[ri];
+          if (unit.type !== 'message' || !unit.msg || unit.msg.role !== 'user') continue;
+          if (offsets[ri] <= anchor) active = unit.msgIndex;
+        }
+        return active;
       },
     };
   }

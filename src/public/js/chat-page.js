@@ -67,6 +67,9 @@ window.ChatPage = (function () {
     if (UI.followBottomAfterContentPatch) {
       UI.followBottomAfterContentPatch(shouldScroll);
     }
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.refresh === 'function') {
+      window.ChatStaircaseNav.refresh();
+    }
   }
 
   function renderChatHistoryWithFetch(shouldScroll, done) {
@@ -1256,6 +1259,13 @@ window.ChatPage = (function () {
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
+    if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.init === 'function') {
+      window.ChatStaircaseNav.init({
+        elMessages: elMessages,
+        elMain: container.querySelector('.chat-main'),
+        getMessages: Session.getMessages,
+      });
+    }
     if (window.ChatWelcome && typeof window.ChatWelcome.init === 'function') {
       window.ChatWelcome.init({
         elMessages: elMessages,
