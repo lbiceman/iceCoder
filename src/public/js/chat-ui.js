@@ -1637,6 +1637,100 @@ window.ChatUI = (function () {
     timeEl.textContent = timeText;
   }
 
+  function formatTokenCount(n) {
+    var num = typeof n === 'number' && isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+    try {
+      return num.toLocaleString();
+    } catch (_e) {
+      return String(num);
+    }
+  }
+
+  function normalizeTurnTokenUsage(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    var input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+    var output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+    if (input <= 0 && output <= 0) return null;
+    return { inputTokens: input, outputTokens: output };
+  }
+
+  function createTokenUsageBar(usage) {
+    var normalized = normalizeTurnTokenUsage(usage);
+    if (!normalized) return null;
+    var total = normalized.inputTokens + normalized.outputTokens;
+    var bar = document.createElement('div');
+    bar.className = 'msg-token-usage';
+    bar.textContent = "Token消耗: ";
+    bar.setAttribute('aria-label', 'Token 消耗');
+
+    function addItem(label, value) {
+      var item = document.createElement('span');
+      item.className = 'msg-token-usage__item';
+      var lbl = document.createElement('span');
+      lbl.className = 'msg-token-usage__label';
+      lbl.textContent = label;
+      var val = document.createElement('span');
+      val.className = 'msg-token-usage__value';
+      val.textContent = formatTokenCount(value);
+      item.appendChild(lbl);
+      item.appendChild(val);
+      bar.appendChild(item);
+    }
+
+    addItem('输入', normalized.inputTokens);
+    addItem('输出', normalized.outputTokens);
+    addItem('合计', total);
+    return bar;
+  }
+
+  function mountTokenUsageBar(messageEl, usage) {
+    if (!messageEl) return;
+    var normalized = normalizeTurnTokenUsage(usage);
+    var existing = messageEl.querySelector('.msg-token-usage');
+    if (!normalized) {
+      if (existing) existing.remove();
+      return;
+    }
+    var bar = createTokenUsageBar(normalized);
+    if (!bar) return;
+    if (existing) {
+      existing.replaceWith(bar);
+      return;
+    }
+    var content = messageEl.querySelector('.msg-content');
+    if (content) {
+      if (content.nextSibling) {
+        messageEl.insertBefore(bar, content.nextSibling);
+      } else {
+        messageEl.appendChild(bar);
+      }
+      return;
+    }
+    messageEl.appendChild(bar);
+  }
+
+  function updateMessageTokenUsage(msg) {
+    if (!msg || (msg.role !== 'agent' && msg.role !== 'assistant')) return;
+    var el = msg._el;
+    if (!el && msg.id && elMessages) {
+      el = elMessages.querySelector('.message.agent[data-message-id="' + msg.id + '"]')
+        || elMessages.querySelector('.message.assistant[data-message-id="' + msg.id + '"]');
+    }
+    if (!el && typeof msg._msgIndex === 'number' && elMessages) {
+      el = elMessages.querySelector('.message.agent[data-msg-index="' + msg._msgIndex + '"]')
+        || elMessages.querySelector('.message.assistant[data-msg-index="' + msg._msgIndex + '"]');
+    }
+    if (!el) {
+      var streamEl = document.getElementById('streaming-msg');
+      if (streamEl && msg._streaming) el = streamEl;
+    }
+    if (!el && elTailRoot) {
+      var nodes = elTailRoot.querySelectorAll('.message.agent, .message.assistant');
+      if (nodes.length) el = nodes[nodes.length - 1];
+    }
+    if (el) mountTokenUsageBar(el, msg.turnTokenUsage);
+  }
+
   function createMessageEl(msg, stripStatusTagFn, msgIndex) {
     var el = document.createElement('div');
     el.className = 'message ' + msg.role;
@@ -1648,6 +1742,9 @@ window.ChatUI = (function () {
     if (msg.role === 'user') {
       el.setAttribute('data-user-turn', 'true');
       if (msg.id) el.setAttribute('data-message-id', msg.id);
+    }
+    if ((msg.role === 'agent' || msg.role === 'assistant') && msg.id) {
+      el.setAttribute('data-message-id', msg.id);
     }
 
     var restoreOpts = null;
@@ -1678,6 +1775,9 @@ window.ChatUI = (function () {
       content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
     }
     el.appendChild(content);
+
+    var tokenBar = createTokenUsageBar(msg.turnTokenUsage);
+    if (tokenBar) el.appendChild(tokenBar);
 
     return el;
   }
@@ -2064,6 +2164,7 @@ window.ChatUI = (function () {
       el.appendChild(createMsgLabelRow('agent', null));
 
       var contentDiv = document.createElement('div');
+      contentDiv.className = 'msg-content';
       contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
       el.appendChild(contentDiv);
       el._streamContentEl = contentDiv;
@@ -2080,6 +2181,7 @@ window.ChatUI = (function () {
       wrap.setAttribute('id', 'streaming-msg');
       wrap.appendChild(createMsgLabelRow('agent', null));
       var contentDiv = document.createElement('div');
+      contentDiv.className = 'msg-content';
       contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
       wrap.appendChild(contentDiv);
       wrap._streamContentEl = contentDiv;
@@ -2122,6 +2224,9 @@ window.ChatUI = (function () {
       delete streamEl._streamContentEl;
     } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
       appendMessageEl(lastMsg, stripStatusTagFn);
+    }
+    if (lastMsg && lastMsg.role === 'agent' && lastMsg.turnTokenUsage) {
+      updateMessageTokenUsage(lastMsg);
     }
     if (autoScrollEnabled) scheduleScrollIfSticky();
   }
@@ -2253,6 +2358,7 @@ window.ChatUI = (function () {
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
     updateMessageContent: updateMessageContent,
+    updateMessageTokenUsage: updateMessageTokenUsage,
     appendStreamChunk: appendStreamChunk,
     appendReasoningStreamChunk: appendReasoningStreamChunk,
     appendReasoningStreamIfAbsent: appendReasoningStreamIfAbsent,

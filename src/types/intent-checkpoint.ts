@@ -10,6 +10,12 @@ import type { CombinedCheckpointFile } from '../harness/checkpoint-engine.js';
 
 export const INTENT_CHECKPOINT_VERSION = 1 as const;
 
+/** 单轮 AI 回复的 token 消耗（用户消息 → agent 回复） */
+export interface TurnTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 /** UI 层会话消息（data/sessions/{id}.json） */
 export interface UiChatMessage {
   role: string;
@@ -24,6 +30,8 @@ export interface UiChatMessage {
   sentAt?: number;
   completedAt?: number;
   diffSource?: string;
+  /** 本轮 agent 回复累计 token（刷新后仍可见） */
+  turnTokenUsage?: TurnTokenUsage;
 }
 
 /** 单条 Intent Checkpoint 归档 */

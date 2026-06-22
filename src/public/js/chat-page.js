@@ -32,6 +32,8 @@ window.ChatPage = (function () {
   var streamFinalized = false;
   /** 本轮是否收到过流式增量（用于区分 stream_end + response 双包时的重复追加） */
   var streamChunksReceived = false;
+  /** tokenUsage 早于 agent 消息到达时的暂存 */
+  var pendingTurnTokenUsage = null;
   var remoteMode = false;
   var remoteToken = null;
   /** 本页仅提示一次 MCP 就绪（含 WS 晚连时 connected.mcpReady 补发） */
@@ -417,6 +419,7 @@ window.ChatPage = (function () {
     userStopped = false;
     streamFinalized = false;
     streamChunksReceived = false;
+    pendingTurnTokenUsage = null;
     Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
 
     var msgText = text || '';
@@ -785,8 +788,18 @@ window.ChatPage = (function () {
     UI.clearReasoningStream();
     var msg = { role: 'agent', content: Session.stripStatusTag(data.content || '') };
     Session.appendMessage(msg);
+    if (pendingTurnTokenUsage) {
+      if (pendingTurnTokenUsage.messageId && !msg.id) {
+        msg.id = pendingTurnTokenUsage.messageId;
+      }
+      msg.turnTokenUsage = pendingTurnTokenUsage.usage || pendingTurnTokenUsage;
+      pendingTurnTokenUsage = null;
+    }
     Session.flushToolBatchLocal();
     UI.appendMessageEl(msg, Session.stripStatusTag);
+    if (msg.turnTokenUsage && UI.updateMessageTokenUsage) {
+      UI.updateMessageTokenUsage(msg);
+    }
     Session.saveMessages();
     UI.enableAutoScroll();
     scheduleRefreshAfterTurn();
@@ -1020,11 +1033,50 @@ window.ChatPage = (function () {
     }
   }
 
+  function applyTurnTokenUsageToLastAgent(usage, messageId) {
+    if (!usage || typeof usage !== 'object') return false;
+    var payload = {
+      inputTokens: usage.inputTokens || 0,
+      outputTokens: usage.outputTokens || 0,
+    };
+    var msgs = Session.getMessages();
+    if (messageId) {
+      for (var j = msgs.length - 1; j >= 0; j--) {
+        if (msgs[j].role === 'agent' && msgs[j].id === messageId) {
+          msgs[j].turnTokenUsage = payload;
+          if (UI.updateMessageTokenUsage) UI.updateMessageTokenUsage(msgs[j]);
+          Session.saveMessages();
+          return true;
+        }
+      }
+      pendingTurnTokenUsage = { usage: payload, messageId: messageId };
+      return false;
+    }
+    for (var i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'agent') {
+        msgs[i].turnTokenUsage = payload;
+        if (UI.updateMessageTokenUsage) UI.updateMessageTokenUsage(msgs[i]);
+        Session.saveMessages();
+        return true;
+      }
+    }
+    pendingTurnTokenUsage = { usage: payload, messageId: '' };
+    return false;
+  }
+
   function onWsTokenUsage(data) {
     updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
       effectiveUsed: data.effectiveUsed,
       contextWindow: data.contextWindow,
     });
+    var turnIn = typeof data.totalInputTokens === 'number' ? data.totalInputTokens : 0;
+    var turnOut = typeof data.totalOutputTokens === 'number' ? data.totalOutputTokens : 0;
+    if (turnIn > 0 || turnOut > 0) {
+      var usage = { inputTokens: turnIn, outputTokens: turnOut };
+      if (applyTurnTokenUsageToLastAgent(usage, data.messageId || '')) {
+        pendingTurnTokenUsage = null;
+      }
+    }
   }
 
   function onWsPulse(data) {

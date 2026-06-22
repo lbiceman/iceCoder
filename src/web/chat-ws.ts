@@ -937,6 +937,7 @@ async function appendMessages(
     images?: string[];
     sentAt?: number;
     completedAt?: number;
+    turnTokenUsage?: { inputTokens: number; outputTokens: number };
   }[],
   sessionId: string = activeSessionId,
 ): Promise<boolean> {
@@ -1821,15 +1822,24 @@ async function handleChatMessage(
       sessionEntries.push(entry as (typeof sessionEntries)[number]);
     }
 
+    const turnTokenUsage = {
+      inputTokens: result.loopState.totalInputTokens,
+      outputTokens: result.loopState.totalOutputTokens,
+    };
+
     // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
+    let turnAgentMsgId: string | undefined;
     if (result.content) {
-      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
+      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId, turnTokenUsage });
+      turnAgentMsgId = agentMsgId;
     } else if (toolTraceBatch.length > 0) {
       sessionEntries.push({
         role: 'agent',
         content: '（本轮仅有工具调用，无文字回复）',
         id: agentMsgId,
+        turnTokenUsage,
       });
+      turnAgentMsgId = agentMsgId;
     }
 
     if (sessionEntries.length > 0) {
@@ -1862,6 +1872,7 @@ async function handleChatMessage(
       }),
       totalInputTokens: result.loopState.totalInputTokens,
       totalOutputTokens: result.loopState.totalOutputTokens,
+      ...(turnAgentMsgId ? { messageId: turnAgentMsgId } : {}),
     });
   } finally {
     clearInterval(pulseTimer);

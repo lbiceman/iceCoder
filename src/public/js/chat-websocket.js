@@ -172,6 +172,7 @@ window.ChatWebSocket = (function () {
           contextWindow: data.contextWindow,
           totalInputTokens: data.totalInputTokens,
           totalOutputTokens: data.totalOutputTokens,
+          messageId: data.messageId || '',
         });
         break;
       case 'session_switched':

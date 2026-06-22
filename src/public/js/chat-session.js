@@ -145,6 +145,12 @@ window.ChatSession = (function () {
     if (Array.isArray(m.images) && m.images.length > 0) {
       o.images = m.images.slice();
     }
+    if (m.turnTokenUsage && typeof m.turnTokenUsage === 'object') {
+      o.turnTokenUsage = {
+        inputTokens: m.turnTokenUsage.inputTokens || 0,
+        outputTokens: m.turnTokenUsage.outputTokens || 0,
+      };
+    }
     return o;
   }
 
@@ -161,6 +167,12 @@ window.ChatSession = (function () {
     }
     if (typeof raw.sentAt === 'number' && isFinite(raw.sentAt)) o.sentAt = raw.sentAt;
     if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
+    if (raw.turnTokenUsage && typeof raw.turnTokenUsage === 'object') {
+      o.turnTokenUsage = {
+        inputTokens: raw.turnTokenUsage.inputTokens || 0,
+        outputTokens: raw.turnTokenUsage.outputTokens || 0,
+      };
+    }
     return o;
   }
 

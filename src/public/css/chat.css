@@ -638,6 +638,46 @@
   white-space: nowrap;
 }
 
+.message.agent .msg-token-usage,
+.message.assistant .msg-token-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-light);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  max-width: 100%;
+}
+
+.msg-token-usage__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.msg-token-usage__item:not(:last-child)::after {
+  content: '·';
+  margin: 0 7px;
+  opacity: 0.5;
+  font-weight: 400;
+}
+
+.msg-token-usage__label {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.msg-token-usage__value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .message.user .msg-restore-btn {
   display: none;
   margin-left: auto;
