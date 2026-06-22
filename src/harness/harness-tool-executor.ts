@@ -33,6 +33,11 @@ import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import { recordBudgetBlockByPath } from './harness-policy-stats.js';
+import {
+  capturePreTurnWriteSnapshot,
+  isIntentCheckpointWriteTool,
+} from './intent-checkpoint-turn-snapshot.js';
+import { touchSessionTouchedPath } from './intent-checkpoint-store.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -53,6 +58,10 @@ export interface ToolExecutorDeps {
   missingFileAttempts?: Map<string, number>;
   /** Harness 策略拦截 / 恢复统计。 */
   harnessPolicyStats?: HarnessPolicyStats;
+  /** 会话 ID（Intent Checkpoint 写入前快照用） */
+  sessionId?: string;
+  /** 会话目录（Session manifest 跟踪用） */
+  sessionDir?: string;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -502,6 +511,13 @@ export async function executeToolCallsStreaming(
       deps.harnessPolicyStats && (deps.harnessPolicyStats.writeBypassUsedCount += 1);
     }
 
+    if (isIntentCheckpointWriteTool(tc.name) && targetPath) {
+      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, targetPath);
+    }
+    if (tc.name === 'read_file') {
+      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, targetPath);
+    }
+
     // ── 提交到流式执行器 ──
     logger.toolCall(tc.name, tc.arguments);
     onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
@@ -593,6 +609,12 @@ export async function executeToolCallsStreaming(
 
     taskState?.recordToolResult(tc, result);
     repoContext?.recordToolResult(tc, result);
+    if (result.success && deps.sessionDir && deps.sessionId) {
+      const touchedPath = extractToolTargetPath(tc.name, tc.arguments);
+      if (touchedPath && (isIntentCheckpointWriteTool(tc.name) || tc.name === 'read_file')) {
+        void touchSessionTouchedPath(deps.sessionDir, deps.sessionId, touchedPath).catch(() => { /* ignore */ });
+      }
+    }
     if (taskState && repoContext) {
       // currentPlanTracker.onToolResult removed (Phase 11)
     }

@@ -377,7 +377,15 @@ window.ChatPage = (function () {
     var didAppendUserMessage = false;
     if (displayParts.length > 0 || msgImages.length > 0) {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
-      var userMsg = { role: 'user', content: displayParts.join('\n') || '(图片)', images: msgImages.length > 0 ? msgImages : undefined };
+      var userMessageId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : ('msg-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+      var userMsg = {
+        role: 'user',
+        id: userMessageId,
+        content: displayParts.join('\n') || '(图片)',
+        images: msgImages.length > 0 ? msgImages : undefined,
+      };
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       if (UI.maybeRepartitionTailIfNeeded) {
@@ -420,10 +428,13 @@ window.ChatPage = (function () {
 
     UI.clearLiveToolRoundDom();
     UI.setLiveToolRoundActive(true);
+    var outboundMessageId = didAppendUserMessage && Session.getLastMessage()
+      ? Session.getLastMessage().id
+      : undefined;
     if (msgImages.length > 0) {
-      WS.send({ type: 'message', content: msgText || '请分析这些图片', images: msgImages });
+      WS.sendMessage(msgText || '请分析这些图片', { messageId: outboundMessageId, images: msgImages });
     } else {
-      WS.sendMessage(msgText);
+      WS.sendMessage(msgText, { messageId: outboundMessageId });
     }
     File.clearPendingImages();
 
@@ -684,6 +695,9 @@ window.ChatPage = (function () {
     }
     if (data && data.tunnelReady) {
       announceTunnelReadyFromPayload(data.tunnelReady);
+    }
+    if (typeof data.canRestore === 'boolean') {
+      applyHarnessRestoreUi(data.canRestore, data.checkpointMessageIds);
     }
     syncActiveSessionFromServer(data || {});
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
@@ -1019,6 +1033,95 @@ window.ChatPage = (function () {
     Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
   }
 
+  function applyHarnessRestoreUi(canRestore, checkpointIds) {
+    if (UI && typeof UI.setRestoreAvailability === 'function') {
+      UI.setRestoreAvailability(canRestore);
+    }
+    if (UI && typeof UI.setCheckpointMessageIds === 'function') {
+      UI.setCheckpointMessageIds(checkpointIds || []);
+    }
+  }
+
+  function onWsHarnessState(data) {
+    if (!data) return;
+    applyHarnessRestoreUi(!!data.canRestore, data.checkpointMessageIds);
+  }
+
+  function onWsCheckpointMessageIds(data) {
+    if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
+    UI.setCheckpointMessageIds(data.ids || []);
+  }
+
+  function closeRestoreConfirmDialog() {
+    var overlay = document.querySelector('.restore-confirm-overlay');
+    if (overlay) overlay.remove();
+  }
+
+  function showRestoreConfirmDialog(messageId) {
+    closeRestoreConfirmDialog();
+    var overlay = document.createElement('div');
+    overlay.className = 'restore-confirm-overlay';
+    overlay.innerHTML =
+      '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-confirm-title">' +
+        '<h3 id="restore-confirm-title">确认回滚？</h3>' +
+        '<p>将运行时回滚到此对话点？<br><br>' +
+        '当前运行时状态及之后的全部对话记录将被丢弃。</p>' +
+        '<div class="restore-confirm-actions">' +
+          '<button type="button" class="restore-confirm-cancel">取消</button>' +
+          '<button type="button" class="restore-confirm-ok">回滚</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('.restore-confirm-cancel').addEventListener('click', closeRestoreConfirmDialog);
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeRestoreConfirmDialog();
+    });
+    overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
+      closeRestoreConfirmDialog();
+      WS.sendRestoreRuntime(messageId);
+    });
+  }
+
+  function onRestoreButtonClick(e) {
+    var btn = e.target.closest('.msg-restore-btn');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) return;
+    var messageId = btn.dataset.messageId;
+    if (!messageId) return;
+    if (UI && typeof UI.hasCheckpointForMessage === 'function' && !UI.hasCheckpointForMessage(messageId)) {
+      notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
+      return;
+    }
+    showRestoreConfirmDialog(messageId);
+  }
+
+  function onWsRuntimeRestored() {
+    isStreaming = false;
+    UI.setStreamingState(false);
+    UI.clearReasoningStream();
+    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
+    refreshChatHistoryAfterTurn(true);
+    syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
+  }
+
+  function notifyUser(message, type, opts) {
+    if (window.Notification && typeof window.Notification.show === 'function') {
+      return window.Notification.show(message, type || 'info', opts);
+    }
+    if (window.UI && typeof window.UI.notify === 'function') {
+      return window.UI.notify(message, type || 'info', opts);
+    }
+    alert(message);
+  }
+
+  function onWsRestoreFailed(data) {
+    var msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
+    notifyUser(msg, 'error', { duration: 5000 });
+  }
+
   function shouldSkipServerSnapshotSync() {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
   }
@@ -1351,11 +1454,16 @@ window.ChatPage = (function () {
     WS.on('bg_task_update', onWsBgTaskUpdate);
     WS.on('bg_task_stop_result', onWsBgTaskStopResult);
     WS.on('tool_output', onWsToolOutput);
+    WS.on('harness_state', onWsHarnessState);
+    WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
+    WS.on('runtime_restored', onWsRuntimeRestored);
+    WS.on('restore_failed', onWsRestoreFailed);
 
     // 连接 WebSocket
     WS.connect(remoteToken);
 
     // 绑定 UI 事件
+    elMessages.addEventListener('click', onRestoreButtonClick);
     elSendBtn.addEventListener('click', handleSend);
     elInput.addEventListener('keydown', function (e) {
       if (FileRef && FileRef.handleKeydown(e, elInput)) return;

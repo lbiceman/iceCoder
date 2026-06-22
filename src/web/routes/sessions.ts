@@ -188,6 +188,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
     '.json',
     '.structured.json',
     '.checkpoint.json',
+    '.checkpoint-index.json',
     '.workspace.json',
     '.session-notes.md',
     '.tool-trace-diffs.json',
@@ -197,6 +198,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
       fs.unlink(path.join(SESSIONS_DIR, `${sessionId}${suffix}`)).catch(() => {}),
     ),
   );
+  await fs.rm(path.join(SESSIONS_DIR, sessionId, 'checkpoints'), { recursive: true, force: true }).catch(() => {});
   if (sessionCleanupHook) {
     try {
       await sessionCleanupHook(sessionId);

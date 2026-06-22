@@ -130,6 +130,7 @@ window.ChatSession = (function () {
     if (!msg || typeof msg !== 'object') return msg;
     var now = Date.now();
     if (msg.role === 'user' && msg.sentAt == null) msg.sentAt = now;
+    if (msg.role === 'system' && msg.sentAt == null) msg.sentAt = now;
     if (msg.role === 'agent' && !msg._streaming && msg.completedAt == null) msg.completedAt = now;
     return msg;
   }
@@ -150,7 +151,7 @@ window.ChatSession = (function () {
   function normalizeStoredMessage(raw) {
     if (!raw || typeof raw !== 'object') return null;
     var role = raw.role;
-    if (role !== 'user' && role !== 'agent') return null;
+    if (role !== 'user' && role !== 'agent' && role !== 'system') return null;
     var rawContent = typeof raw.content === 'string' ? raw.content : '';
     var content = role === 'agent' ? stripStatusTag(rawContent) : rawContent;
     var o = { role: role, content: content };

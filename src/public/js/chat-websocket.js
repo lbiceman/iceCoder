@@ -10,6 +10,13 @@ window.ChatWebSocket = (function () {
 
   var chatWs = null;
   var wsProcessing = false;
+  var harnessCanRestore = true;
+  var checkpointMessageIds = [];
+
+  function applyCheckpointMessageIds(ids) {
+    checkpointMessageIds = Array.isArray(ids) ? ids.slice() : [];
+    emit('checkpoint_message_ids', { ids: checkpointMessageIds });
+  }
   /** 用户主动 stop 后置为 true；阻止 'stream' chunk 把 wsProcessing 重置为 true，直到下次发新消息 */
   var userStoppedFlag = false;
   var lastToolProgressHint = '';
@@ -90,6 +97,8 @@ window.ChatWebSocket = (function () {
   function handleMessage(data) {
     switch (data.type) {
       case 'connected':
+        if (typeof data.canRestore === 'boolean') harnessCanRestore = data.canRestore;
+        applyCheckpointMessageIds(data.checkpointMessageIds);
         emit('connected', data || {});
         break;
       case 'session_updated':
@@ -201,6 +210,39 @@ window.ChatWebSocket = (function () {
           error: data.error || '',
         });
         break;
+      case 'harness_state':
+        if (typeof data.canRestore === 'boolean') harnessCanRestore = data.canRestore;
+        if (Array.isArray(data.checkpointMessageIds)) {
+          applyCheckpointMessageIds(data.checkpointMessageIds);
+        }
+        emit('harness_state', {
+          state: data.state || 'idle',
+          canRestore: harnessCanRestore,
+          sessionId: data.sessionId || '',
+          checkpointMessageIds: checkpointMessageIds,
+        });
+        break;
+      case 'checkpoint_captured':
+        if (data.messageId && checkpointMessageIds.indexOf(data.messageId) < 0) {
+          checkpointMessageIds.push(data.messageId);
+          emit('checkpoint_message_ids', { ids: checkpointMessageIds.slice() });
+        }
+        break;
+      case 'checkpoint_capture_failed':
+        emit('checkpoint_capture_failed', {
+          messageId: data.messageId || '',
+          error: data.error || '',
+        });
+        break;
+      case 'runtime_restored':
+        if (Array.isArray(data.checkpointMessageIds)) {
+          applyCheckpointMessageIds(data.checkpointMessageIds);
+        }
+        emit('runtime_restored', data || {});
+        break;
+      case 'restore_failed':
+        emit('restore_failed', { error: data.error || '回滚失败。' });
+        break;
     }
   }
 
@@ -215,8 +257,20 @@ window.ChatWebSocket = (function () {
     return false;
   }
 
-  function sendMessage(text) {
-    send({ type: 'message', content: text });
+  function sendRestoreRuntime(messageId) {
+    send({ type: 'restore_runtime', messageId: messageId });
+  }
+
+  function canRestoreRuntime() {
+    return harnessCanRestore && !wsProcessing;
+  }
+
+  function sendMessage(text, opts) {
+    var payload = { type: 'message', content: text };
+    opts = opts || {};
+    if (opts.messageId) payload.messageId = opts.messageId;
+    if (opts.images && opts.images.length > 0) payload.images = opts.images;
+    send(payload);
   }
 
   function sendStop() {
@@ -288,6 +342,8 @@ window.ChatWebSocket = (function () {
     sendMessage: sendMessage,
     sendStop: sendStop,
     sendConfirmReply: sendConfirmReply,
+    sendRestoreRuntime: sendRestoreRuntime,
+    canRestoreRuntime: canRestoreRuntime,
     on: on,
     off: off,
     isConnected: isConnected,

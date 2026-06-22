@@ -246,6 +246,7 @@ export class Harness {
       onConfirm: this.onConfirm,
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
+      sessionDir: this.sessionDir,
       tokenBudgetTracker: this.tokenBudgetTracker,
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,

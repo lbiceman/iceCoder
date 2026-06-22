@@ -1500,7 +1500,7 @@ window.ChatUI = (function () {
 
   function getMessageTimestamp(msg) {
     if (!msg) return null;
-    if (msg.role === 'user') {
+    if (msg.role === 'user' || msg.role === 'system') {
       return typeof msg.sentAt === 'number' && isFinite(msg.sentAt) ? msg.sentAt : null;
     }
     if (msg.role === 'agent') {
@@ -1509,12 +1509,93 @@ window.ChatUI = (function () {
     return null;
   }
 
-  function createMsgLabelRow(role, timestamp) {
+  var restoreUiState = { canRestore: true, checkpointIds: {} };
+
+  function restoreButtonIconSvg() {
+    return '<svg class="msg-restore-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M2.5 8a5.5 5.5 0 1 0 1.35-3.65"/>' +
+      '<polyline points="2 4.25 2.5 8 6 8"/>' +
+    '</svg>';
+  }
+
+  function createRestoreButton(messageId, sentAt) {
+    var restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'msg-restore-btn';
+    restoreBtn.innerHTML = restoreButtonIconSvg();
+    restoreBtn.dataset.messageId = messageId;
+    if (sentAt) restoreBtn.dataset.sentAt = String(sentAt);
+    restoreBtn.setAttribute('aria-label', '回滚到此消息');
+    return restoreBtn;
+  }
+
+  function ensureRestoreButtonsOnUserMessages() {
+    if (!elMessages) return;
+    var userEls = elMessages.querySelectorAll('.message.user[data-message-id]');
+    for (var i = 0; i < userEls.length; i++) {
+      var el = userEls[i];
+      if (el.querySelector('.msg-restore-btn')) continue;
+      var mid = el.getAttribute('data-message-id');
+      if (!mid) continue;
+      var row = el.querySelector('.msg-label-row');
+      if (!row) continue;
+      var sentAt = el.querySelector('.msg-time') && el.querySelector('.msg-time').dateTime
+        ? Date.parse(el.querySelector('.msg-time').dateTime)
+        : null;
+      row.appendChild(createRestoreButton(mid, sentAt));
+    }
+  }
+
+  function setCheckpointMessageIds(ids) {
+    var map = {};
+    if (Array.isArray(ids)) {
+      for (var i = 0; i < ids.length; i++) {
+        if (ids[i]) map[ids[i]] = true;
+      }
+    }
+    restoreUiState.checkpointIds = map;
+    ensureRestoreButtonsOnUserMessages();
+    refreshRestoreButtonsVisibility();
+    if (virtualScroller && typeof virtualScroller.refresh === 'function') {
+      virtualScroller.refresh();
+    }
+  }
+
+  function hasCheckpointForMessage(messageId) {
+    return !!(messageId && restoreUiState.checkpointIds[messageId]);
+  }
+
+  function refreshRestoreButtonsVisibility() {
+    if (!elMessages) return;
+    var buttons = elMessages.querySelectorAll('.msg-restore-btn');
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      var mid = btn.dataset.messageId || '';
+      var visible = hasCheckpointForMessage(mid);
+      if (visible) btn.classList.add('msg-restore-btn--ready');
+      else btn.classList.remove('msg-restore-btn--ready');
+      btn.disabled = !visible || !restoreUiState.canRestore;
+      btn.title = restoreUiState.canRestore
+        ? '回滚到此消息'
+        : '运行中，请等待当前任务完成后再回滚';
+    }
+  }
+
+  function setRestoreAvailability(canRestore) {
+    restoreUiState.canRestore = !!canRestore;
+    refreshRestoreButtonsVisibility();
+  }
+
+  function createMsgLabelRow(role, timestamp, restoreOpts) {
     var row = document.createElement('div');
     row.className = 'msg-label-row';
     var label = document.createElement('div');
     label.className = 'msg-label';
-    label.textContent = role === 'user' ? 'You' : 'Assistant';
+    if (role === 'system') {
+      label.textContent = 'Runtime';
+    } else {
+      label.textContent = role === 'user' ? 'You' : 'Assistant';
+    }
     row.appendChild(label);
     var timeText = formatMessageTime(timestamp);
     if (timeText) {
@@ -1523,6 +1604,9 @@ window.ChatUI = (function () {
       timeEl.dateTime = new Date(timestamp).toISOString();
       timeEl.textContent = timeText;
       row.appendChild(timeEl);
+    }
+    if (role === 'user' && restoreOpts && restoreOpts.messageId) {
+      row.appendChild(createRestoreButton(restoreOpts.messageId, restoreOpts.sentAt));
     }
     return row;
   }
@@ -1563,9 +1647,14 @@ window.ChatUI = (function () {
     }
     if (msg.role === 'user') {
       el.setAttribute('data-user-turn', 'true');
+      if (msg.id) el.setAttribute('data-message-id', msg.id);
     }
 
-    el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg)));
+    var restoreOpts = null;
+    if (msg.role === 'user' && msg.id) {
+      restoreOpts = { messageId: msg.id, sentAt: msg.sentAt };
+    }
+    el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg), restoreOpts));
 
     if (msg.images && msg.images.length > 0) {
       var imgRow = document.createElement('div');
@@ -1582,7 +1671,12 @@ window.ChatUI = (function () {
 
     var content = document.createElement('div');
     content.className = 'msg-content';
-    content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
+    if (msg.role === 'system') {
+      content.className = 'msg-content msg-system-content';
+      content.textContent = msg.content || '';
+    } else {
+      content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
+    }
     el.appendChild(content);
 
     return el;
@@ -1665,9 +1759,8 @@ window.ChatUI = (function () {
       window.ChatPage.syncWelcomeState();
     }
     notifyStaircaseNavRefresh();
+    refreshRestoreButtonsVisibility();
   }
-
-  /** 内容增删改后跟随到底（含虚拟历史 remeasure / diff 挂载后的二次对齐） */
   function followBottomAfterContentPatch(shouldScroll) {
     if (shouldScroll === 'force') {
       enableAutoScroll();
@@ -1696,6 +1789,9 @@ window.ChatUI = (function () {
       window.ChatPage.syncWelcomeState();
     }
     notifyStaircaseNavRefresh();
+    if (msg.role === 'user' && msg.id) {
+      refreshRestoreButtonsVisibility();
+    }
     return el;
   }
 
@@ -2182,5 +2278,8 @@ window.ChatUI = (function () {
     repairMissingDiffMountsFromStructured: repairMissingDiffMountsFromStructured,
     showDiffForToolCallId: showDiffForToolCallId,
     showDiffAfterToolAction: showDiffAfterToolAction,
+    setRestoreAvailability: setRestoreAvailability,
+    setCheckpointMessageIds: setCheckpointMessageIds,
+    hasCheckpointForMessage: hasCheckpointForMessage,
   };
 })();
