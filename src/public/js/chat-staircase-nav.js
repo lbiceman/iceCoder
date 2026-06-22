@@ -246,7 +246,12 @@ window.ChatStaircaseNav = (function () {
     }
 
     if (activeIndex < 0 && userTurnsCache.length > 0) {
-      activeIndex = userTurnsCache[0].msgIndex;
+      var nearBottom = window.ChatUI
+        && typeof window.ChatUI.isNearBottom === 'function'
+        && window.ChatUI.isNearBottom();
+      activeIndex = nearBottom
+        ? userTurnsCache[userTurnsCache.length - 1].msgIndex
+        : userTurnsCache[0].msgIndex;
     }
 
     applyActiveHighlight(activeIndex);

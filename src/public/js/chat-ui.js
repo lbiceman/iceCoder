@@ -1771,8 +1771,45 @@ window.ChatUI = (function () {
   }
 
   /** 视口顶部附近的用户消息索引（供楼梯导航高亮，兼容虚拟历史区） */
+  function findMaxUserMsgIndexInDom(onlyVisible) {
+    if (!elMessages) return -1;
+    var nodes = elMessages.querySelectorAll('.message.user[data-msg-index]');
+    var rootRect = elMessages.getBoundingClientRect();
+    var maxIdx = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var idx = parseInt(nodes[i].getAttribute('data-msg-index') || '-1', 10);
+      if (idx < 0) continue;
+      if (onlyVisible) {
+        var rect = nodes[i].getBoundingClientRect();
+        if (rect.bottom <= rootRect.top + 12) continue;
+        if (rect.top >= rootRect.bottom - 12) continue;
+      }
+      if (idx > maxIdx) maxIdx = idx;
+    }
+    return maxIdx;
+  }
+
+  function findLastUserMsgIndexAboveViewport() {
+    if (!elMessages) return -1;
+    var nodes = elMessages.querySelectorAll('.message.user[data-msg-index]');
+    var rootRect = elMessages.getBoundingClientRect();
+    var maxIdx = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var rect = nodes[i].getBoundingClientRect();
+      if (rect.bottom > rootRect.top + 12) continue;
+      var idx = parseInt(nodes[i].getAttribute('data-msg-index') || '-1', 10);
+      if (idx > maxIdx) maxIdx = idx;
+    }
+    return maxIdx;
+  }
+
   function getActiveUserMsgIndex() {
     if (!elMessages) return -1;
+
+    if (isNearBottom()) {
+      var atBottom = findMaxUserMsgIndexInDom(false);
+      if (atBottom >= 0) return atBottom;
+    }
 
     var rootRect = elMessages.getBoundingClientRect();
     var anchorY = rootRect.top + 80;
@@ -1803,6 +1840,9 @@ window.ChatUI = (function () {
     if (activeFromDom >= 0) return activeFromDom;
     if (fallbackIndex >= 0) return fallbackIndex;
 
+    var lastAbove = findLastUserMsgIndexAboveViewport();
+    if (lastAbove >= 0) return lastAbove;
+
     if (virtualScroller && elHistoryOuter
         && typeof virtualScroller.resolveActiveUserMsgIndex === 'function') {
       var historyTop = elHistoryOuter.offsetTop;
@@ -1814,9 +1854,13 @@ window.ChatUI = (function () {
         var fromVirtual = virtualScroller.resolveActiveUserMsgIndex(viewTop, 80);
         if (fromVirtual >= 0) return fromVirtual;
       }
+      if (viewTop > totalH) {
+        var inTail = findMaxUserMsgIndexInDom(false);
+        if (inTail >= 0) return inTail;
+      }
     }
 
-    return -1;
+    return findMaxUserMsgIndexInDom(false);
   }
 
   function updateMessageContent(msg, content, stripStatusTagFn) {

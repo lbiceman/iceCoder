@@ -2292,7 +2292,7 @@
 /* ── 楼梯导航：右侧横线 + 悬停气泡列表 ── */
 .chat-staircase-nav {
   position: absolute;
-  right: 6px;
+  right: 30px;
   top: 50%;
   transform: translateY(-50%);
   z-index: 11;
