@@ -34,6 +34,15 @@ import { createFileMemoryManager } from '../memory/file-memory/file-memory-manag
 import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
+
+const CLIENT_MESSAGE_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function parseClientMessageId(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const id = raw.trim();
+  return CLIENT_MESSAGE_ID_RE.test(id) ? id : null;
+}
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
 import type { AssembledPrompt } from '../prompts/types.js';
 import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
@@ -93,11 +102,67 @@ import {
 
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
 import { getSkillRegistry } from '../core/skill-registry.js';
+import {
+  beginSessionHarnessRun,
+  clearHarnessRuntimeState,
+  endSessionHarnessRun,
+  getHarnessRuntimeState,
+} from '../harness/harness-runtime-registry.js';
+import {
+  captureIntentCheckpoint,
+  readUiSessionMessages,
+} from '../harness/intent-checkpoint-capture.js';
+import {
+  beginIntentCheckpointTurn,
+  finalizeIntentCheckpointTurn,
+} from '../harness/intent-checkpoint-turn-snapshot.js';
+import {
+  loadCheckpointIndex,
+  loadCheckpointMessageIds,
+  loadIntentCheckpoint,
+} from '../harness/intent-checkpoint-store.js';
+import {
+  getRuntimeRestoreCoordinator,
+  RestoreFailedError,
+  RestoreNotAllowedError,
+} from '../harness/runtime-restore-coordinator.js';
+import {
+  canAcceptRuntimeRestore,
+  registerSessionRuntimeBusyProbe,
+} from './session-runtime-busy.js';
 
 applyRuntimeDataEnvDefaults();
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 let activeSessionId = 'default';
 let activeSessionBootstrapPromise: Promise<void> | null = null;
+
+/** 会话级活跃 batch 计数（含排队消息处理中） */
+const sessionActiveBatchCounts = new Map<string, number>();
+
+function beginSessionBatch(sessionId: string): void {
+  sessionActiveBatchCounts.set(sessionId, (sessionActiveBatchCounts.get(sessionId) ?? 0) + 1);
+  beginSessionHarnessRun(sessionId);
+}
+
+function endSessionBatch(sessionId: string): void {
+  const next = Math.max(0, (sessionActiveBatchCounts.get(sessionId) ?? 0) - 1);
+  if (next === 0) sessionActiveBatchCounts.delete(sessionId);
+  else sessionActiveBatchCounts.set(sessionId, next);
+  endSessionHarnessRun(sessionId);
+}
+
+async function buildConnectedPayloadExtras(sessionId: string): Promise<{
+  harnessState: string;
+  canRestore: boolean;
+  checkpointMessageIds: string[];
+}> {
+  const checkpointMessageIds = await loadCheckpointMessageIds(SESSIONS_DIR, sessionId);
+  return {
+    harnessState: getHarnessRuntimeState(sessionId),
+    canRestore: canAcceptRuntimeRestore(sessionId),
+    checkpointMessageIds,
+  };
+}
 
 /** 后台 shell 任务 → WebSocket chip 推送（Phase 4b） */
 let bgTaskPusher: BgTaskPusher | null = null;
@@ -236,6 +301,8 @@ export function getProcessingSessionIds(): string[] {
 export function purgeSessionRuntimeCaches(sessionId: string): void {
   structuredCache.delete(sessionId);
   fileBrowserStateBySession.delete(sessionId);
+  clearHarnessRuntimeState(sessionId);
+  sessionActiveBatchCounts.delete(sessionId);
   const pending = saveTimerMap.get(sessionId);
   if (pending) {
     clearTimeout(pending);
@@ -453,6 +520,25 @@ function broadcastToSession(sessionId: string, data: unknown): void {
   }
 }
 
+function broadcastHarnessState(sessionId: string): void {
+  void buildConnectedPayloadExtras(sessionId).then((extras) => {
+    broadcastToSession(sessionId, {
+      type: 'harness_state',
+      sessionId,
+      state: extras.harnessState,
+      canRestore: extras.canRestore,
+      checkpointMessageIds: extras.checkpointMessageIds,
+    });
+  });
+}
+
+async function getPriorTrackedPaths(sessionId: string): Promise<string[]> {
+  const index = await loadCheckpointIndex(SESSIONS_DIR, sessionId);
+  if (!index.cursorMessageId) return [];
+  const archive = await loadIntentCheckpoint(SESSIONS_DIR, sessionId, index.cursorMessageId);
+  return archive?.trackedPaths ?? [];
+}
+
 /** 向订阅者发送已序列化的 bg_task_update JSON（BgTaskPusher 回调） */
 function broadcastBgTaskJson(sessionId: string, jsonBody: string): void {
   const set = sessionSubscribers.get(sessionId);
@@ -579,6 +665,11 @@ interface RunningTurnSnapshot {
 }
 
 const runningTurns = new Map<string, RunningTurnSnapshot>();
+
+registerSessionRuntimeBusyProbe({
+  getRunningTurn: (sessionId) => runningTurns.get(sessionId) ?? null,
+  getPendingBatchCount: (sessionId) => sessionActiveBatchCounts.get(sessionId) ?? 0,
+});
 
 function createEmptyRunningTurn(): RunningTurnSnapshot {
   return {
@@ -846,6 +937,7 @@ async function appendMessages(
     images?: string[];
     sentAt?: number;
     completedAt?: number;
+    turnTokenUsage?: { inputTokens: number; outputTokens: number };
   }[],
   sessionId: string = activeSessionId,
 ): Promise<boolean> {
@@ -1009,6 +1101,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
     const features = { executionPlan: true };
     const runningTurn = snapshotRunningTurn(activeSessionId);
+    const runtimeExtras = await buildConnectedPayloadExtras(activeSessionId);
     try {
       const [meta, workspace] = await Promise.all([
         resolveDefaultChatModelMeta(),
@@ -1024,6 +1117,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
           ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
           ...(runningTurn ? { runningTurn } : {}),
+          ...runtimeExtras,
       });
     } catch {
       sendJSON(ws, {
@@ -1036,6 +1130,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
         ...(runningTurn ? { runningTurn } : {}),
+        ...runtimeExtras,
       });
     }
     if (runningTurn?.isProcessing) {
@@ -1044,7 +1139,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
     let isProcessing = false;
     /** 处理期间用户发来的消息队列（处理完后自动发送） */
-    const pendingMessages: Array<{ content: string; images: string[] }> = [];
+    const pendingMessages: Array<{ content: string; images: string[]; messageId?: string }> = [];
 
     ws.on('message', async (data) => {
       try {
@@ -1086,6 +1181,62 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         if (msg.type === 'bg_task_stop') {
           const taskId = typeof msg.taskId === 'string' ? msg.taskId.trim() : '';
           await handleBgTaskStop(ws, taskId, activeSessionId);
+          return;
+        }
+
+        if (msg.type === 'restore_runtime') {
+          const messageId = typeof msg.messageId === 'string' ? msg.messageId.trim() : '';
+          const sid = wsToSubscribedSession.get(ws) || activeSessionId;
+          if (!messageId) {
+            sendJSON(ws, { type: 'restore_failed', error: '缺少 messageId。' });
+            return;
+          }
+          if (!canAcceptRuntimeRestore(sid)) {
+            sendJSON(ws, {
+              type: 'restore_failed',
+              error: '运行中，请等待当前任务完成后再回滚。',
+            });
+            return;
+          }
+          try {
+            const supervisorRuntime = await getSupervisorRuntime();
+            const result = await getRuntimeRestoreCoordinator().restore({
+              sessionDir: SESSIONS_DIR,
+              sessionId: sid,
+              messageId,
+              defaultWorkDir: DEFAULT_WORK_DIR,
+              supervisorBridge: supervisorRuntime.bridge,
+              getStructuredMessages: () => getCachedMessages(sid),
+              setStructuredMessages: (m) => setCachedMessages(sid, m),
+            });
+            const systemMsgId = randomUUID();
+            await appendMessages([{
+              role: 'system',
+              content: result.systemEventContent,
+              id: systemMsgId,
+              sentAt: Date.now(),
+            }], sid);
+            broadcastToSession(sid, {
+              type: 'runtime_restored',
+              sessionId: sid,
+              messageId,
+              checkpointMessageIds: await loadCheckpointMessageIds(SESSIONS_DIR, sid),
+              systemEvent: {
+                id: systemMsgId,
+                content: result.systemEventContent,
+                sentAt: Date.now(),
+              },
+              userMessageTime: result.userMessageTime,
+            });
+            broadcastHarnessState(sid);
+            broadcastSessionUpdated('runtime_restored', { sessionId: sid }, ws);
+          } catch (err) {
+            const message = err instanceof RestoreNotAllowedError || err instanceof RestoreFailedError
+              ? err.message
+              : '回滚失败，运行时状态未改变。';
+            console.error('[chat-ws] restore_runtime failed:', err);
+            sendJSON(ws, { type: 'restore_failed', error: message });
+          }
           return;
         }
 
@@ -1162,7 +1313,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         if (msg.type === 'message' && (msg.content || (msg.images && msg.images.length > 0))) {
           if (isProcessing) {
             // 缓存消息到队列，处理完后自动发送
-            pendingMessages.push({ content: msg.content || '', images: Array.isArray(msg.images) ? msg.images : [] });
+            pendingMessages.push({
+              content: msg.content || '',
+              images: Array.isArray(msg.images) ? msg.images : [],
+              messageId: parseClientMessageId(msg.messageId) ?? undefined,
+            });
             sendJSON(ws, { type: 'info', message: '已排队，当前任务完成后自动处理' });
             return;
           }
@@ -1170,32 +1325,50 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           isProcessing = true;
           const runSid = wsToSubscribedSession.get(ws) || activeSessionId;
           void persistLastActiveSessionId(runSid);
+          beginSessionBatch(runSid);
+          broadcastHarnessState(runSid);
           ensureRunningTurn(runSid);
           broadcastToSession(runSid, { type: 'status', status: 'processing' });
 
           try {
             const inlineImages: string[] = Array.isArray(msg.images) ? msg.images : [];
-            await handleChatMessage(ws, msg.content || '', orchestrator, toolRegistry, toolExecutor, inlineImages);
+            await handleChatMessage(
+              ws,
+              msg.content || '',
+              orchestrator,
+              toolRegistry,
+              toolExecutor,
+              inlineImages,
+              parseClientMessageId(msg.messageId),
+            );
+
+            while (pendingMessages.length > 0) {
+              const pending = pendingMessages.shift()!;
+              const nextSid = wsToSubscribedSession.get(ws) || activeSessionId;
+              ensureRunningTurn(nextSid);
+              broadcastToSession(nextSid, { type: 'status', status: 'processing' });
+              try {
+                await handleChatMessage(
+                  ws,
+                  pending.content,
+                  orchestrator,
+                  toolRegistry,
+                  toolExecutor,
+                  pending.images,
+                  pending.messageId ?? null,
+                );
+              } catch (err) {
+                broadcastToSession(nextSid, { type: 'error', message: formatFriendlyError(err) });
+              }
+            }
           } catch (err) {
             broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+          } finally {
+            isProcessing = false;
+            endSessionBatch(runSid);
+            broadcastHarnessState(runSid);
+            broadcastToSession(runSid, { type: 'status', status: 'idle' });
           }
-
-          // 处理队列中的待发消息
-          while (pendingMessages.length > 0) {
-            const pending = pendingMessages.shift()!;
-            const nextSid = activeSessionId;
-            ensureRunningTurn(nextSid);
-            broadcastToSession(nextSid, { type: 'status', status: 'processing' });
-            try {
-              await handleChatMessage(ws, pending.content, orchestrator, toolRegistry, toolExecutor, pending.images);
-            } catch (err) {
-              broadcastToSession(nextSid, { type: 'error', message: formatFriendlyError(err) });
-            }
-          }
-
-          isProcessing = false;
-          // 整批结束：runningTurn 已在每条任务 finally 中清空；广播 idle 给该批起始的订阅者
-          broadcastToSession(runSid, { type: 'status', status: 'idle' });
         }
       } catch {
         sendJSON(ws, { type: 'error', message: '消息格式错误' });
@@ -1217,6 +1390,7 @@ async function handleChatMessage(
   toolRegistry: ToolRegistry,
   toolExecutor: ToolExecutor,
   inlineImages: string[] = [],
+  clientMessageId: string | null = null,
 ): Promise<void> {
   // 关键：锁定本次运行的 sessionId。
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
@@ -1295,7 +1469,7 @@ async function handleChatMessage(
   const existingMessages = getCachedMessages(runSessionId);
 
   // 写入用户消息到会话文件
-  const userMsgId = randomUUID();
+  const userMsgId = clientMessageId ?? randomUUID();
   const userPersisted = await appendMessages(
     [{
       role: 'user',
@@ -1457,6 +1631,43 @@ async function handleChatMessage(
 
   const harness = new Harness(harnessConfig, runToolExecutor);
 
+  // Intent Checkpoint — 每条 User Message 对应一个 Runtime Checkpoint（Harness 即将 Running）
+  try {
+    const priorTracked = await getPriorTrackedPaths(runSessionId);
+    const uiMessages = await readUiSessionMessages(SESSIONS_DIR, runSessionId);
+    const structuredBase = existingMessages ? [...existingMessages] : [];
+    structuredBase.push({
+      role: 'user',
+      content: Array.isArray(userMessageContent) ? userMessageContent : harnessUserMessage,
+    });
+    const userUi = uiMessages.find((m) => m.id === userMsgId);
+    await captureIntentCheckpoint({
+      sessionDir: SESSIONS_DIR,
+      sessionId: runSessionId,
+      messageId: userMsgId,
+      userMessageTime: userUi?.sentAt ?? Date.now(),
+      workspaceRoot: effectiveWorkspace,
+      workspaceState: wsCtx.workspace.state,
+      structuredMessages: structuredBase,
+      uiMessages,
+      priorTrackedPaths: priorTracked,
+    });
+    broadcastToSession(runSessionId, {
+      type: 'checkpoint_captured',
+      sessionId: runSessionId,
+      messageId: userMsgId,
+    });
+    broadcastHarnessState(runSessionId);
+  } catch (err) {
+    console.error('[chat-ws] intent checkpoint capture failed:', err);
+    broadcastToSession(runSessionId, {
+      type: 'checkpoint_capture_failed',
+      sessionId: runSessionId,
+      messageId: userMsgId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   // 注册默认停止钩子：模型自承未完成时拉回工具调用（意图过滤由 Harness 状态门控承担）
   harness.getStopHookManager().register(async (messages, lastContent) =>
     evaluateIncompleteTaskStopHook(messages, lastContent),
@@ -1467,6 +1678,8 @@ async function handleChatMessage(
 
   // 方案 B2：本次任务的快照锚点（每条 message 一个）
   ensureRunningTurn(runSessionId);
+
+  beginIntentCheckpointTurn(runSessionId, userMsgId, effectiveWorkspace);
 
   const pulseTimer = setInterval(() => {
     broadcastToSession(runSessionId, { type: 'pulse', ts: Date.now() });
@@ -1609,15 +1822,24 @@ async function handleChatMessage(
       sessionEntries.push(entry as (typeof sessionEntries)[number]);
     }
 
+    const turnTokenUsage = {
+      inputTokens: result.loopState.totalInputTokens,
+      outputTokens: result.loopState.totalOutputTokens,
+    };
+
     // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
+    let turnAgentMsgId: string | undefined;
     if (result.content) {
-      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId });
+      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId, turnTokenUsage });
+      turnAgentMsgId = agentMsgId;
     } else if (toolTraceBatch.length > 0) {
       sessionEntries.push({
         role: 'agent',
         content: '（本轮仅有工具调用，无文字回复）',
         id: agentMsgId,
+        turnTokenUsage,
       });
+      turnAgentMsgId = agentMsgId;
     }
 
     if (sessionEntries.length > 0) {
@@ -1650,9 +1872,15 @@ async function handleChatMessage(
       }),
       totalInputTokens: result.loopState.totalInputTokens,
       totalOutputTokens: result.loopState.totalOutputTokens,
+      ...(turnAgentMsgId ? { messageId: turnAgentMsgId } : {}),
     });
   } finally {
     clearInterval(pulseTimer);
+    try {
+      await finalizeIntentCheckpointTurn(SESSIONS_DIR, runSessionId, userMsgId);
+    } catch (turnSnapErr) {
+      console.error('[chat-ws] intent checkpoint turn snapshot finalize failed:', turnSnapErr);
+    }
     activeAbortController = null;
     llmAdapter.setAbortSignal?.(null);
     // 任务（或本次 abort）落幕：清空运行中快照

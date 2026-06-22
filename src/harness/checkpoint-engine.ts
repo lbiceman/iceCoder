@@ -133,6 +133,8 @@ export class CheckpointEngine {
   private v2State: RuntimeCheckpointV2 = emptyRuntimeCheckpointV2();
   /** §2.8 / T12 — forced 段是否启用更积极的 checkpoint policy。 */
   private forcedPolicyActive = false;
+  /** Runtime Restore 期间禁止落盘，避免半恢复污染 checkpoint。 */
+  private restoreLock = false;
 
   constructor(sessionDir: string, sessionId = 'default') {
     this.checkpointPath = path.join(sessionDir, `${sessionId}.checkpoint.json`);
@@ -150,6 +152,28 @@ export class CheckpointEngine {
 
   isForcedPolicyActive(): boolean {
     return this.forcedPolicyActive;
+  }
+
+  /** Runtime Restore 期间锁定：禁止 save / 创建新 checkpoint。 */
+  setRestoreLock(locked: boolean): void {
+    this.restoreLock = locked;
+  }
+
+  isRestoreLocked(): boolean {
+    return this.restoreLock;
+  }
+
+  /**
+   * 从完整 CombinedCheckpointFile 装载 v2 内存状态（Restore 路径）。
+   * 不触发磁盘读写。
+   */
+  loadFromCombined(combined: CombinedCheckpointFile): RuntimeCheckpointV2 | null {
+    if (combined.runtimeV2 && isRuntimeCheckpointV2(combined.runtimeV2)) {
+      this.v2State = cloneV2(combined.runtimeV2);
+      return cloneV2(combined.runtimeV2);
+    }
+    this.v2State = emptyRuntimeCheckpointV2();
+    return null;
   }
 
   /**
@@ -202,6 +226,10 @@ export class CheckpointEngine {
    * 如果文件还不存在（v1 尚未写过），自动建立一个最小占位（只含 runtimeV2）。
    */
   async save(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
+    if (this.restoreLock) {
+      this.applyInput(input);
+      return cloneV2(this.v2State);
+    }
     this.applyInput(input);
 
     await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });

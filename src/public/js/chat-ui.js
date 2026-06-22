@@ -1500,7 +1500,7 @@ window.ChatUI = (function () {
 
   function getMessageTimestamp(msg) {
     if (!msg) return null;
-    if (msg.role === 'user') {
+    if (msg.role === 'user' || msg.role === 'system') {
       return typeof msg.sentAt === 'number' && isFinite(msg.sentAt) ? msg.sentAt : null;
     }
     if (msg.role === 'agent') {
@@ -1509,12 +1509,93 @@ window.ChatUI = (function () {
     return null;
   }
 
-  function createMsgLabelRow(role, timestamp) {
+  var restoreUiState = { canRestore: true, checkpointIds: {} };
+
+  function restoreButtonIconSvg() {
+    return '<svg class="msg-restore-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M2.5 8a5.5 5.5 0 1 0 1.35-3.65"/>' +
+      '<polyline points="2 4.25 2.5 8 6 8"/>' +
+    '</svg>';
+  }
+
+  function createRestoreButton(messageId, sentAt) {
+    var restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'msg-restore-btn';
+    restoreBtn.innerHTML = restoreButtonIconSvg();
+    restoreBtn.dataset.messageId = messageId;
+    if (sentAt) restoreBtn.dataset.sentAt = String(sentAt);
+    restoreBtn.setAttribute('aria-label', '回滚到此消息');
+    return restoreBtn;
+  }
+
+  function ensureRestoreButtonsOnUserMessages() {
+    if (!elMessages) return;
+    var userEls = elMessages.querySelectorAll('.message.user[data-message-id]');
+    for (var i = 0; i < userEls.length; i++) {
+      var el = userEls[i];
+      if (el.querySelector('.msg-restore-btn')) continue;
+      var mid = el.getAttribute('data-message-id');
+      if (!mid) continue;
+      var row = el.querySelector('.msg-label-row');
+      if (!row) continue;
+      var sentAt = el.querySelector('.msg-time') && el.querySelector('.msg-time').dateTime
+        ? Date.parse(el.querySelector('.msg-time').dateTime)
+        : null;
+      row.appendChild(createRestoreButton(mid, sentAt));
+    }
+  }
+
+  function setCheckpointMessageIds(ids) {
+    var map = {};
+    if (Array.isArray(ids)) {
+      for (var i = 0; i < ids.length; i++) {
+        if (ids[i]) map[ids[i]] = true;
+      }
+    }
+    restoreUiState.checkpointIds = map;
+    ensureRestoreButtonsOnUserMessages();
+    refreshRestoreButtonsVisibility();
+    if (virtualScroller && typeof virtualScroller.refresh === 'function') {
+      virtualScroller.refresh();
+    }
+  }
+
+  function hasCheckpointForMessage(messageId) {
+    return !!(messageId && restoreUiState.checkpointIds[messageId]);
+  }
+
+  function refreshRestoreButtonsVisibility() {
+    if (!elMessages) return;
+    var buttons = elMessages.querySelectorAll('.msg-restore-btn');
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      var mid = btn.dataset.messageId || '';
+      var visible = hasCheckpointForMessage(mid);
+      if (visible) btn.classList.add('msg-restore-btn--ready');
+      else btn.classList.remove('msg-restore-btn--ready');
+      btn.disabled = !visible || !restoreUiState.canRestore;
+      btn.title = restoreUiState.canRestore
+        ? '回滚到此消息'
+        : '运行中，请等待当前任务完成后再回滚';
+    }
+  }
+
+  function setRestoreAvailability(canRestore) {
+    restoreUiState.canRestore = !!canRestore;
+    refreshRestoreButtonsVisibility();
+  }
+
+  function createMsgLabelRow(role, timestamp, restoreOpts) {
     var row = document.createElement('div');
     row.className = 'msg-label-row';
     var label = document.createElement('div');
     label.className = 'msg-label';
-    label.textContent = role === 'user' ? 'You' : 'Assistant';
+    if (role === 'system') {
+      label.textContent = 'Runtime';
+    } else {
+      label.textContent = role === 'user' ? 'You' : 'Assistant';
+    }
     row.appendChild(label);
     var timeText = formatMessageTime(timestamp);
     if (timeText) {
@@ -1523,6 +1604,9 @@ window.ChatUI = (function () {
       timeEl.dateTime = new Date(timestamp).toISOString();
       timeEl.textContent = timeText;
       row.appendChild(timeEl);
+    }
+    if (role === 'user' && restoreOpts && restoreOpts.messageId) {
+      row.appendChild(createRestoreButton(restoreOpts.messageId, restoreOpts.sentAt));
     }
     return row;
   }
@@ -1553,6 +1637,100 @@ window.ChatUI = (function () {
     timeEl.textContent = timeText;
   }
 
+  function formatTokenCount(n) {
+    var num = typeof n === 'number' && isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+    try {
+      return num.toLocaleString();
+    } catch (_e) {
+      return String(num);
+    }
+  }
+
+  function normalizeTurnTokenUsage(usage) {
+    if (!usage || typeof usage !== 'object') return null;
+    var input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+    var output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+    if (input <= 0 && output <= 0) return null;
+    return { inputTokens: input, outputTokens: output };
+  }
+
+  function createTokenUsageBar(usage) {
+    var normalized = normalizeTurnTokenUsage(usage);
+    if (!normalized) return null;
+    var total = normalized.inputTokens + normalized.outputTokens;
+    var bar = document.createElement('div');
+    bar.className = 'msg-token-usage';
+    bar.textContent = "Token消耗: ";
+    bar.setAttribute('aria-label', 'Token 消耗');
+
+    function addItem(label, value) {
+      var item = document.createElement('span');
+      item.className = 'msg-token-usage__item';
+      var lbl = document.createElement('span');
+      lbl.className = 'msg-token-usage__label';
+      lbl.textContent = label;
+      var val = document.createElement('span');
+      val.className = 'msg-token-usage__value';
+      val.textContent = formatTokenCount(value);
+      item.appendChild(lbl);
+      item.appendChild(val);
+      bar.appendChild(item);
+    }
+
+    addItem('输入', normalized.inputTokens);
+    addItem('输出', normalized.outputTokens);
+    addItem('合计', total);
+    return bar;
+  }
+
+  function mountTokenUsageBar(messageEl, usage) {
+    if (!messageEl) return;
+    var normalized = normalizeTurnTokenUsage(usage);
+    var existing = messageEl.querySelector('.msg-token-usage');
+    if (!normalized) {
+      if (existing) existing.remove();
+      return;
+    }
+    var bar = createTokenUsageBar(normalized);
+    if (!bar) return;
+    if (existing) {
+      existing.replaceWith(bar);
+      return;
+    }
+    var content = messageEl.querySelector('.msg-content');
+    if (content) {
+      if (content.nextSibling) {
+        messageEl.insertBefore(bar, content.nextSibling);
+      } else {
+        messageEl.appendChild(bar);
+      }
+      return;
+    }
+    messageEl.appendChild(bar);
+  }
+
+  function updateMessageTokenUsage(msg) {
+    if (!msg || (msg.role !== 'agent' && msg.role !== 'assistant')) return;
+    var el = msg._el;
+    if (!el && msg.id && elMessages) {
+      el = elMessages.querySelector('.message.agent[data-message-id="' + msg.id + '"]')
+        || elMessages.querySelector('.message.assistant[data-message-id="' + msg.id + '"]');
+    }
+    if (!el && typeof msg._msgIndex === 'number' && elMessages) {
+      el = elMessages.querySelector('.message.agent[data-msg-index="' + msg._msgIndex + '"]')
+        || elMessages.querySelector('.message.assistant[data-msg-index="' + msg._msgIndex + '"]');
+    }
+    if (!el) {
+      var streamEl = document.getElementById('streaming-msg');
+      if (streamEl && msg._streaming) el = streamEl;
+    }
+    if (!el && elTailRoot) {
+      var nodes = elTailRoot.querySelectorAll('.message.agent, .message.assistant');
+      if (nodes.length) el = nodes[nodes.length - 1];
+    }
+    if (el) mountTokenUsageBar(el, msg.turnTokenUsage);
+  }
+
   function createMessageEl(msg, stripStatusTagFn, msgIndex) {
     var el = document.createElement('div');
     el.className = 'message ' + msg.role;
@@ -1563,9 +1741,17 @@ window.ChatUI = (function () {
     }
     if (msg.role === 'user') {
       el.setAttribute('data-user-turn', 'true');
+      if (msg.id) el.setAttribute('data-message-id', msg.id);
+    }
+    if ((msg.role === 'agent' || msg.role === 'assistant') && msg.id) {
+      el.setAttribute('data-message-id', msg.id);
     }
 
-    el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg)));
+    var restoreOpts = null;
+    if (msg.role === 'user' && msg.id) {
+      restoreOpts = { messageId: msg.id, sentAt: msg.sentAt };
+    }
+    el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg), restoreOpts));
 
     if (msg.images && msg.images.length > 0) {
       var imgRow = document.createElement('div');
@@ -1582,8 +1768,16 @@ window.ChatUI = (function () {
 
     var content = document.createElement('div');
     content.className = 'msg-content';
-    content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
+    if (msg.role === 'system') {
+      content.className = 'msg-content msg-system-content';
+      content.textContent = msg.content || '';
+    } else {
+      content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
+    }
     el.appendChild(content);
+
+    var tokenBar = createTokenUsageBar(msg.turnTokenUsage);
+    if (tokenBar) el.appendChild(tokenBar);
 
     return el;
   }
@@ -1665,9 +1859,8 @@ window.ChatUI = (function () {
       window.ChatPage.syncWelcomeState();
     }
     notifyStaircaseNavRefresh();
+    refreshRestoreButtonsVisibility();
   }
-
-  /** 内容增删改后跟随到底（含虚拟历史 remeasure / diff 挂载后的二次对齐） */
   function followBottomAfterContentPatch(shouldScroll) {
     if (shouldScroll === 'force') {
       enableAutoScroll();
@@ -1696,6 +1889,9 @@ window.ChatUI = (function () {
       window.ChatPage.syncWelcomeState();
     }
     notifyStaircaseNavRefresh();
+    if (msg.role === 'user' && msg.id) {
+      refreshRestoreButtonsVisibility();
+    }
     return el;
   }
 
@@ -1968,6 +2164,7 @@ window.ChatUI = (function () {
       el.appendChild(createMsgLabelRow('agent', null));
 
       var contentDiv = document.createElement('div');
+      contentDiv.className = 'msg-content';
       contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
       el.appendChild(contentDiv);
       el._streamContentEl = contentDiv;
@@ -1984,6 +2181,7 @@ window.ChatUI = (function () {
       wrap.setAttribute('id', 'streaming-msg');
       wrap.appendChild(createMsgLabelRow('agent', null));
       var contentDiv = document.createElement('div');
+      contentDiv.className = 'msg-content';
       contentDiv.textContent = stripStatusTagFn(streamReplyBuffer);
       wrap.appendChild(contentDiv);
       wrap._streamContentEl = contentDiv;
@@ -2026,6 +2224,9 @@ window.ChatUI = (function () {
       delete streamEl._streamContentEl;
     } else if (wasStreaming && lastMsg && lastMsg.role === 'agent' && (lastMsg.content || '').length > 0) {
       appendMessageEl(lastMsg, stripStatusTagFn);
+    }
+    if (lastMsg && lastMsg.role === 'agent' && lastMsg.turnTokenUsage) {
+      updateMessageTokenUsage(lastMsg);
     }
     if (autoScrollEnabled) scheduleScrollIfSticky();
   }
@@ -2157,6 +2358,7 @@ window.ChatUI = (function () {
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
     updateMessageContent: updateMessageContent,
+    updateMessageTokenUsage: updateMessageTokenUsage,
     appendStreamChunk: appendStreamChunk,
     appendReasoningStreamChunk: appendReasoningStreamChunk,
     appendReasoningStreamIfAbsent: appendReasoningStreamIfAbsent,
@@ -2182,5 +2384,8 @@ window.ChatUI = (function () {
     repairMissingDiffMountsFromStructured: repairMissingDiffMountsFromStructured,
     showDiffForToolCallId: showDiffForToolCallId,
     showDiffAfterToolAction: showDiffAfterToolAction,
+    setRestoreAvailability: setRestoreAvailability,
+    setCheckpointMessageIds: setCheckpointMessageIds,
+    hasCheckpointForMessage: hasCheckpointForMessage,
   };
 })();
