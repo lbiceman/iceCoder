@@ -678,9 +678,26 @@
   white-space: nowrap;
 }
 
-.message.user .msg-restore-btn {
-  display: none;
+.message.user .msg-label-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.message.user:hover .msg-label-actions,
+.message.user:focus-within .msg-label-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.message.user .msg-delete-btn,
+.message.user .msg-restore-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -691,36 +708,35 @@
   cursor: pointer;
   line-height: 0;
   flex-shrink: 0;
-  transition: opacity 0.15s ease;
 }
 
-.message.user .msg-restore-btn.msg-restore-btn--ready {
-  display: inline-flex;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.message.user .msg-restore-btn .msg-restore-icon {
+.message.user .msg-restore-btn .msg-restore-icon,
+.message.user .msg-delete-btn .msg-delete-icon {
   display: block;
   width: 12px;
   height: 12px;
   opacity: 0.45;
 }
 
-.message.user:hover .msg-restore-btn.msg-restore-btn--ready,
-.message.user:focus-within .msg-restore-btn.msg-restore-btn--ready {
-  opacity: 1;
-  pointer-events: auto;
+.message.user .msg-restore-btn.msg-restore-btn--ready .msg-restore-icon {
+  opacity: 0.45;
 }
 
+.message.user .msg-restore-btn:not(.msg-restore-btn--ready) .msg-restore-icon {
+  opacity: 0.2;
+}
+
+.message.user .msg-delete-btn:hover:not(:disabled) .msg-delete-icon,
 .message.user .msg-restore-btn.msg-restore-btn--ready:hover:not(:disabled) .msg-restore-icon {
   opacity: 0.75;
 }
 
+.message.user .msg-delete-btn:disabled,
 .message.user .msg-restore-btn:disabled {
   cursor: not-allowed;
 }
 
+.message.user .msg-delete-btn:disabled .msg-delete-icon,
 .message.user .msg-restore-btn:disabled .msg-restore-icon {
   opacity: 0.25;
 }

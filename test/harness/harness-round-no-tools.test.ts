@@ -311,13 +311,42 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     logSpy.mockRestore();
   });
 
-  it('verification gate 半程叠加一次 no_tool 强提示', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  it('工程变更未跑测 → 提醒后再次收尾 → model_done', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
     const state = makeState(messages, 'fix bug');
-    state.verificationGateContinuationCount = 2;
+    state.verificationGateContinuationCount = 1;
+    state.noToolExecutionRecoveryCount = 1;
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
+      { success: true, output: 'ok' },
+    );
+
+    const result = await handleNoToolCalls(
+      makeDeps(new StopHookManager()),
+      {
+        state,
+        response: { content: '改动很小，无需跑测。', finishReason: 'stop' },
+        userMessage: 'fix bug',
+        currentTools: state.tools,
+        tokenUsage: { input: 1, output: 1 },
+        logger: makeLogger(),
+      },
+    );
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+    expect(state.taskState.snapshot().verificationStatus).toBe('not_required');
+  });
+
+  it('工程变更未跑测 → 首次 inject 使用软化提示', async () => {
+    const messages: UnifiedMessage[] = [
+      { role: 'user', content: 'fix bug' },
+    ];
+    const state = makeState(messages, 'fix bug');
     state.noToolExecutionRecoveryCount = 1;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
@@ -337,9 +366,9 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('continue');
-    expect(state.verificationGateContinuationCount).toBe(3);
-    expect(messages.at(-1)?.content).toMatch(/native function-calling \(tool_calls\)/i);
-    logSpy.mockRestore();
+    expect(state.verificationGateContinuationCount).toBe(1);
+    expect(messages.at(-1)?.content).toMatch(/consider running unit tests/i);
+    expect(messages.at(-1)?.content).toMatch(/confident/i);
   });
 
   it('无 run_command 工具时工程变更 pending → verification_exhausted', async () => {
@@ -372,7 +401,7 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     }
   });
 
-  it('verification gate 熔断后仍 pending → verification_exhausted', async () => {
+  it('verification gate 多次提醒后工程变更仍 pending → model_done', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
@@ -398,7 +427,7 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
 
     expect(result.action).toBe('return');
     if (result.action === 'return') {
-      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+      expect(result.result.loopState.stopReason).toBe('model_done');
     }
   });
 

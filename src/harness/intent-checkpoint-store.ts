@@ -179,6 +179,32 @@ export async function collectTrackedPathsAfterMessage(
   return [...paths];
 }
 
+/** 删除指定 messageId 及其之后的 checkpoint 条目与归档（删除用户消息时调用）。 */
+export async function truncateCheckpointsFrom(
+  sessionDir: string,
+  sessionId: string,
+  messageId: string,
+): Promise<void> {
+  const index = await loadCheckpointIndex(sessionDir, sessionId);
+  const targetIdx = index.entries.findIndex((e) => e.messageId === messageId);
+  if (targetIdx < 0) return;
+
+  const toRemove = index.entries.slice(targetIdx);
+  index.entries = index.entries.slice(0, targetIdx);
+  index.cursorMessageId = index.entries.length > 0
+    ? index.entries[index.entries.length - 1].messageId
+    : null;
+  await saveCheckpointIndex(sessionDir, sessionId, index);
+
+  for (const entry of toRemove) {
+    try {
+      await fs.unlink(path.join(checkpointsDir(sessionDir, sessionId), entry.archiveFileName));
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 /** 删除 cursor 之后的 checkpoint 条目与归档（Restore 后截断时间线）。 */
 export async function truncateCheckpointsAfter(
   sessionDir: string,

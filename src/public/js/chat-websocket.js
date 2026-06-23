@@ -244,6 +244,15 @@ window.ChatWebSocket = (function () {
       case 'restore_failed':
         emit('restore_failed', { error: data.error || '回滚失败。' });
         break;
+      case 'message_deleted':
+        if (Array.isArray(data.checkpointMessageIds)) {
+          applyCheckpointMessageIds(data.checkpointMessageIds);
+        }
+        emit('message_deleted', data || {});
+        break;
+      case 'delete_message_failed':
+        emit('delete_message_failed', { error: data.error || '删除失败。' });
+        break;
     }
   }
 
@@ -262,7 +271,15 @@ window.ChatWebSocket = (function () {
     send({ type: 'restore_runtime', messageId: messageId });
   }
 
+  function sendDeleteUserMessage(messageId) {
+    send({ type: 'delete_user_message', messageId: messageId });
+  }
+
   function canRestoreRuntime() {
+    return harnessCanRestore && !wsProcessing;
+  }
+
+  function canDeleteUserMessage() {
     return harnessCanRestore && !wsProcessing;
   }
 
@@ -344,7 +361,9 @@ window.ChatWebSocket = (function () {
     sendStop: sendStop,
     sendConfirmReply: sendConfirmReply,
     sendRestoreRuntime: sendRestoreRuntime,
+    sendDeleteUserMessage: sendDeleteUserMessage,
     canRestoreRuntime: canRestoreRuntime,
+    canDeleteUserMessage: canDeleteUserMessage,
     on: on,
     off: off,
     isConnected: isConnected,

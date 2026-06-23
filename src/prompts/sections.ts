@@ -105,10 +105,10 @@ export function createDoingTasksSection(): PromptSection {
 - Stop calling tools and output a short delivery summary ONLY when one of:
   1. The runtime injects \`[System / Acceptance ✓] All N acceptance commands passed.\` — output ≤10 delivery bullets and STOP.
   2. The user explicitly closes the task (任务完成 / 就这样 / 可以了 / OK).
-  3. **No source-code changes** in this task, OR you changed source code and **unit tests passed** (via run_command), OR you explicitly skipped tests with reason (docs-only, no harness).
-- If the runtime injects \`[System] You changed source code but have not run unit tests yet\`, run tests for the listed changed files before stopping (pick the command for the project).
-- If the runtime injects a failed-test reminder, fix and re-run when you can; you may stop after that reminder but must state failures plainly.
-- Do NOT stop just because you feel finished. Self-perceived completion is not evidence.
+  3. **No source-code changes** in this task, OR you changed source code and **unit tests passed** (via run_command), OR you judged tests unnecessary and stated why.
+- If the runtime injects \`[System] You changed source code but have not run unit tests yet\`, prefer running tests for the listed files; you may also finish with a brief reason if you're confident the change is safe.
+- If the runtime injects a failed-test reminder, try to fix and re-run when practical; you may stop after that reminder but must state failures plainly.
+- Prefer objective signals (tests passed, acceptance ✓) over gut feeling — but a brief reason counts when you skip tests after the runtime reminder.
 - Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands.
 - A single \`[System / Acceptance ✓] cmd — summary\` line means **one** command passed; keep going until you see the final "All N passed" signal.`,
     isStatic: true,

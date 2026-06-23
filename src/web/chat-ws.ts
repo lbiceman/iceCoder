@@ -127,6 +127,10 @@ import {
   RestoreNotAllowedError,
 } from '../harness/runtime-restore-coordinator.js';
 import {
+  deleteUserMessageConversation,
+  DeleteMessageNotFoundError,
+} from '../harness/conversation-delete.js';
+import {
   canAcceptRuntimeRestore,
   registerSessionRuntimeBusyProbe,
 } from './session-runtime-busy.js';
@@ -1236,6 +1240,46 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               : '回滚失败，运行时状态未改变。';
             console.error('[chat-ws] restore_runtime failed:', err);
             sendJSON(ws, { type: 'restore_failed', error: message });
+          }
+          return;
+        }
+
+        if (msg.type === 'delete_user_message') {
+          const messageId = typeof msg.messageId === 'string' ? msg.messageId.trim() : '';
+          const sid = wsToSubscribedSession.get(ws) || activeSessionId;
+          if (!messageId) {
+            sendJSON(ws, { type: 'delete_message_failed', error: '缺少 messageId。' });
+            return;
+          }
+          if (!canAcceptRuntimeRestore(sid)) {
+            sendJSON(ws, {
+              type: 'delete_message_failed',
+              error: '运行中，请等待当前任务完成后再删除。',
+            });
+            return;
+          }
+          try {
+            await deleteUserMessageConversation({
+              sessionDir: SESSIONS_DIR,
+              sessionId: sid,
+              messageId,
+              getStructuredMessages: () => getCachedMessages(sid),
+              setStructuredMessages: (m) => setCachedMessages(sid, m),
+            });
+            broadcastToSession(sid, {
+              type: 'message_deleted',
+              sessionId: sid,
+              messageId,
+              checkpointMessageIds: await loadCheckpointMessageIds(SESSIONS_DIR, sid),
+            });
+            broadcastHarnessState(sid);
+            broadcastSessionUpdated('message_deleted', { sessionId: sid }, ws);
+          } catch (err) {
+            const message = err instanceof DeleteMessageNotFoundError
+              ? err.message
+              : '删除消息失败，请稍后重试。';
+            console.error('[chat-ws] delete_user_message failed:', err);
+            sendJSON(ws, { type: 'delete_message_failed', error: message });
           }
           return;
         }

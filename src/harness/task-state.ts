@@ -172,10 +172,10 @@ export class TaskState {
 
     return `[System] You changed source code but have not run unit tests yet.
 
-Run unit tests covering these changed files (pick the command for this project — mvn test, pytest, go test, cargo test, npm test, etc.):
+Before finishing, consider running unit tests for these changed files (pick the command for this project — mvn test, pytest, go test, cargo test, npm test, etc.):
 ${fileList}${more}
 
-Use run_command, then fix failures before claiming the task is complete.`;
+If you're confident the changes are correct and low-risk, you may finish with a brief note. Otherwise use run_command to verify and fix any failures.`;
   }
 
   buildFailedUnitTestReminderPrompt(): string {
@@ -189,12 +189,17 @@ Use run_command, then fix failures before claiming the task is complete.`;
 
     return `[System] Unit tests failed for your recent changes.
 
-Please complete unit tests: fix the failures, re-run tests via run_command, and only then finish.
+If you can fix them, re-run tests via run_command and address failures. If not, you may finish — but state the failure plainly in your summary.
 
 Changed source files:
-${fileList}${more}
+${fileList}${more}`;
+  }
 
-You may stop after this reminder if you cannot fix tests — but state the failure plainly in your summary.`;
+  /** 模型在 Verification Gate 提醒后选择不跑测收尾 */
+  markVerificationWaived(): void {
+    if (this.verificationStatus === 'required') {
+      this.verificationStatus = 'not_required';
+    }
   }
 
   /** filesChanged 中缺少 writeVersion 的路径补版本（checkpoint 恢复或历史审计遗留） */
