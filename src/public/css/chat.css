@@ -2535,6 +2535,9 @@
 }
 
 .chat-staircase-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   list-style: none;
   margin: 0;
   padding: 6px;
@@ -2559,15 +2562,6 @@
 .chat-staircase-popover-item:hover,
 .chat-staircase-popover-item.is-active {
   background: var(--accent-light);
-}
-.chat-staircase-popover-index {
-  flex-shrink: 0;
-  min-width: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--accent);
-  opacity: 0.85;
 }
 .chat-staircase-popover-text {
   flex: 1;
