@@ -428,7 +428,11 @@ export async function handleNoToolCalls(
         : '工程源码变更需要 run_command 跑单元测试，但当前工具集不可用。',
     );
   } else if (blockVerification) {
-    if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
+    if (!acceptanceIncomplete && state.verificationGateContinuationCount >= 1) {
+      console.log('[harness] verification gate 已提醒，允许 model_done');
+      state.taskState.markVerificationWaived();
+      blockVerification = false;
+    } else if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
       console.log('[harness] verification gate 连续注入已达上限，强制结束');
       return returnVerificationExhausted();
     } else {

@@ -84,7 +84,7 @@ export function normalizeVerificationCommandKey(command: string): string {
 
 export function extractRunCommandsFromDelegateTask(task: string): string[] {
   const commands: string[] = [];
-  const lineRe = /(?:^|\n)\s*(?:\d+[.)]\s*)?(?:run\s+)?(?:command\s*[:：]\s*)?(`([^`]+)`|"([^"]+)"|'([^']+)'|((?:npm|npx|pnpm|yarn|node)\s[^\n]+))/gim;
+  const lineRe = /(?:^|\n)\s*(?:\d+[.)]\s*)?(?:run\s+)?(?:command\s*[:：]\s*)?(`([^`]+)`|"([^"]+)"|'([^']+)'|((?:npm|npx|pnpm|yarn|node|rm|rmdir|del|taskkill|killall|pkill)\s[^\n]+))/gim;
   let match: RegExpExecArray | null;
   while ((match = lineRe.exec(task)) !== null) {
     const cmd = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? '').trim();

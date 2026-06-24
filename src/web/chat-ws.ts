@@ -24,6 +24,7 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
+import type { MCPManager } from '../mcp/mcp-manager.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
@@ -54,7 +55,6 @@ import {
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
 import {
   readSkipPermissionChecksFromMainConfig,
-  readSkipSandboxFromMainConfig,
 } from '../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import {
@@ -126,6 +126,10 @@ import {
   RestoreFailedError,
   RestoreNotAllowedError,
 } from '../harness/runtime-restore-coordinator.js';
+import {
+  deleteUserMessageConversation,
+  DeleteMessageNotFoundError,
+} from '../harness/conversation-delete.js';
 import {
   canAcceptRuntimeRestore,
   registerSessionRuntimeBusyProbe,
@@ -450,6 +454,7 @@ export interface ChatWSOptions {
   orchestrator: Orchestrator;
   toolRegistry: ToolRegistry;
   toolExecutor: ToolExecutor;
+  mcpManager?: MCPManager;
   /** 未完成主配置时拒绝 WebSocket 连接 */
   isSetupRequired?: () => boolean;
 }
@@ -1042,7 +1047,7 @@ async function finalizeDirectBrowserTurn(
  * 路径: /api/chat/ws 或 /api/chat/ws?token=xxx
  */
 export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
-  const { orchestrator, toolRegistry, toolExecutor } = options;
+  const { orchestrator, toolRegistry, toolExecutor, mcpManager } = options;
 
   void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(activeSessionId).catch(() => {}));
 
@@ -1240,6 +1245,46 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           return;
         }
 
+        if (msg.type === 'delete_user_message') {
+          const messageId = typeof msg.messageId === 'string' ? msg.messageId.trim() : '';
+          const sid = wsToSubscribedSession.get(ws) || activeSessionId;
+          if (!messageId) {
+            sendJSON(ws, { type: 'delete_message_failed', error: '缺少 messageId。' });
+            return;
+          }
+          if (!canAcceptRuntimeRestore(sid)) {
+            sendJSON(ws, {
+              type: 'delete_message_failed',
+              error: '运行中，请等待当前任务完成后再删除。',
+            });
+            return;
+          }
+          try {
+            await deleteUserMessageConversation({
+              sessionDir: SESSIONS_DIR,
+              sessionId: sid,
+              messageId,
+              getStructuredMessages: () => getCachedMessages(sid),
+              setStructuredMessages: (m) => setCachedMessages(sid, m),
+            });
+            broadcastToSession(sid, {
+              type: 'message_deleted',
+              sessionId: sid,
+              messageId,
+              checkpointMessageIds: await loadCheckpointMessageIds(SESSIONS_DIR, sid),
+            });
+            broadcastHarnessState(sid);
+            broadcastSessionUpdated('message_deleted', { sessionId: sid }, ws);
+          } catch (err) {
+            const message = err instanceof DeleteMessageNotFoundError
+              ? err.message
+              : '删除消息失败，请稍后重试。';
+            console.error('[chat-ws] delete_user_message failed:', err);
+            sendJSON(ws, { type: 'delete_message_failed', error: message });
+          }
+          return;
+        }
+
         if (msg.type === 'switch_session') {
           const targetId = String(msg.sessionId || '');
           if (!targetId || targetId === activeSessionId) {
@@ -1340,6 +1385,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               toolExecutor,
               inlineImages,
               parseClientMessageId(msg.messageId),
+              mcpManager,
             );
 
             while (pendingMessages.length > 0) {
@@ -1356,6 +1402,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
                   toolExecutor,
                   pending.images,
                   pending.messageId ?? null,
+                  mcpManager,
                 );
               } catch (err) {
                 broadcastToSession(nextSid, { type: 'error', message: formatFriendlyError(err) });
@@ -1391,6 +1438,7 @@ async function handleChatMessage(
   toolExecutor: ToolExecutor,
   inlineImages: string[] = [],
   clientMessageId: string | null = null,
+  mcpManager?: MCPManager,
 ): Promise<void> {
   // 关键：锁定本次运行的 sessionId。
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
@@ -1547,7 +1595,6 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
-  const skipSandbox = await readSkipSandboxFromMainConfig(MAIN_CONFIG_PATH);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
@@ -1563,6 +1610,7 @@ async function handleChatMessage(
     defaultToolRegistry: toolRegistry,
     fileParser: orchestrator.getFileParser(),
     llmAdapter,
+    mcpManager,
   });
   toolDefs = wsCtx.toolDefs;
   const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
@@ -1595,7 +1643,6 @@ async function handleChatMessage(
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
     skipPermissionChecks,
-    skipSandbox,
     compactionThreshold: 40,
     compactionKeepRecent: 10,
     compactionEnableLLMSummary: true,

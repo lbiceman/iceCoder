@@ -44,4 +44,11 @@ describe('IceCoderConfigFile vs data/config.example.json', () => {
     expect(meta?.modelName).toBeTruthy();
     expect(meta?.maxContextTokens).toBeGreaterThan(0);
   });
+
+  it('shellBlacklist in example matches packaged DEFAULT_SHELL_BLACKLIST_PATTERNS', async () => {
+    const { DEFAULT_SHELL_BLACKLIST_PATTERNS } = await import('../../src/tools/shell-sandbox.js');
+    const raw = readFileSync(configExamplePath, 'utf-8');
+    const parsed = JSON.parse(raw) as IceCoderConfigFile;
+    expect(parsed.shellBlacklist).toEqual(DEFAULT_SHELL_BLACKLIST_PATTERNS);
+  });
 });

@@ -11,7 +11,7 @@ import { createShellTool } from '../../src/tools/builtin/shell-tool.js';
  * 这些测试不真正派生长进程，只验证：
  * - long 命令被识别为后台（返回 mode:'background'）
  * - short 命令前台执行
- * - destructive + background 被拒绝
+ * - rm -rf blocked by shell blacklist
  * - background:false 强制前台
  */
 describe('shell-tool — classifier integration', () => {
@@ -104,16 +104,14 @@ describe('shell-tool — classifier integration', () => {
     expect(parsed.timeout).toBe('60s');
   });
 
-  it('destructive command with background:true is REJECTED to background (forced foreground)', async () => {
+  it('rm -rf is blocked by shell blacklist', async () => {
     const tool = createShellTool(workDir);
-    // `rm -rf` matches destructive pattern; should NOT go background.
-    // It will probably fail in foreground (rm not on Windows / nothing to remove), but the key
-    // assertion is: we don't see mode:'background' in the output.
     const result = await tool.handler({
       command: 'rm -rf /tmp/some-nonexistent-path-icecoder-test',
       background: true,
     });
-    expect(result.output).not.toMatch(/"mode":\s*"background"/);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Sandbox|blacklist/i);
   });
 
   it('empty command returns error', async () => {

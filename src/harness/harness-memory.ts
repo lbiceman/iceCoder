@@ -253,7 +253,7 @@ function toolMemoryWriteAttemptSucceeded(
   if (!toolResult) return false;
   const content = typeof toolResult.content === 'string' ? toolResult.content : '';
   if (!content.trim()) return false;
-  if (/工具执行错误|Tool .* failed|policy_block|\[HostGuard\s\/\sBlocked\]/i.test(content)) {
+  if (/工具执行错误|Tool .* failed|policy_block|\[(?:HostGuard|Sandbox)\s\/\sBlocked\]/i.test(content)) {
     return false;
   }
   if (/\b(?:success|成功):\s*false/i.test(content)) return false;

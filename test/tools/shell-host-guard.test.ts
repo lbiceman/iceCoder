@@ -15,8 +15,24 @@ describe('shell-host-guard', () => {
     expect(findHostKillInText("execSync('taskkill /F /IM node.exe 2>nul')")).toBe('taskkill /IM node');
   });
 
-  it('allows taskkill by PID', () => {
+  it('allows taskkill by other PID', () => {
     expect(findHostKillInText('taskkill /F /PID 12345')).toBeNull();
+  });
+
+  it('blocks taskkill on agent root PID', () => {
+    const cmd = `taskkill /F /PID ${process.pid}`;
+    expect(findHostKillInText(cmd)).toBe('taskkill /PID agent root');
+    const result = analyzeShellHostSafety(cmd);
+    expect(result.blocked).toBe(true);
+    expect(result.matchLabel).toBe('taskkill /PID agent root');
+  });
+
+  it('blocks taskkill using ICE_AGENT_ROOT_PID', () => {
+    expect(findHostKillInText('taskkill /F /PID %ICE_AGENT_ROOT_PID%')).toBe('taskkill /PID agent root');
+  });
+
+  it('blocks kill on agent root PID', () => {
+    expect(findHostKillInText(`kill -9 ${process.pid}`)).toBe('kill agent root pid');
   });
 
   it('blocks direct run_command with broad kill', () => {

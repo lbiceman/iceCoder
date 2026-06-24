@@ -238,6 +238,7 @@ async function main(): Promise<void> {
     orchestrator,
     toolRegistry,
     toolExecutor,
+    mcpManager,
     isSetupRequired: () => setupState.required,
   });
 

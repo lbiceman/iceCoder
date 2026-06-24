@@ -25,7 +25,6 @@ import {
 import { loadHarnessSupervisorRuntime } from '../../harness/supervisor/supervisor-config.js';
 import {
   readSkipPermissionChecksFromMainConfig,
-  readSkipSandboxFromMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
@@ -62,7 +61,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
     });
 
     const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(ctx.paths.configPath);
-    const skipSandbox = await readSkipSandboxFromMainConfig(ctx.paths.configPath);
     const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(ctx.paths.configPath);
 
     const wsCtx = await resolveWorkspaceToolContext({
@@ -74,6 +72,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       defaultToolRegistry: ctx.toolRegistry,
       fileParser: ctx.fileParser,
       llmAdapter: ctx.llmAdapter,
+      mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 
@@ -91,7 +90,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       },
       permissions: [],
       skipPermissionChecks,
-      skipSandbox,
       compactionThreshold: 40,
       compactionKeepRecent: 10,
       compactionEnableLLMSummary: true,

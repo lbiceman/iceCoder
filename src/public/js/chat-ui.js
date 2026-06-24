@@ -1518,6 +1518,15 @@ window.ChatUI = (function () {
     '</svg>';
   }
 
+  function deleteButtonIconSvg() {
+    return '<svg class="msg-delete-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M2.5 4h11"/>' +
+      '<path d="M6.25 4V3a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1"/>' +
+      '<path d="M12.25 4v9.5a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1V4"/>' +
+      '<path d="M6.75 7v4M9.25 7v4"/>' +
+    '</svg>';
+  }
+
   function createRestoreButton(messageId, sentAt) {
     var restoreBtn = document.createElement('button');
     restoreBtn.type = 'button';
@@ -1529,21 +1538,48 @@ window.ChatUI = (function () {
     return restoreBtn;
   }
 
-  function ensureRestoreButtonsOnUserMessages() {
+  function createDeleteButton(messageId) {
+    var deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'msg-delete-btn';
+    deleteBtn.innerHTML = deleteButtonIconSvg();
+    deleteBtn.dataset.messageId = messageId;
+    deleteBtn.setAttribute('aria-label', '删除此消息及后续对话');
+    deleteBtn.title = '删除此消息及后续对话';
+    return deleteBtn;
+  }
+
+  function createUserMessageActions(messageId, sentAt) {
+    var actions = document.createElement('div');
+    actions.className = 'msg-label-actions';
+    actions.appendChild(createDeleteButton(messageId));
+    actions.appendChild(createRestoreButton(messageId, sentAt));
+    return actions;
+  }
+
+  function ensureUserMessageActionButtons() {
     if (!elMessages) return;
     var userEls = elMessages.querySelectorAll('.message.user[data-message-id]');
     for (var i = 0; i < userEls.length; i++) {
       var el = userEls[i];
-      if (el.querySelector('.msg-restore-btn')) continue;
       var mid = el.getAttribute('data-message-id');
       if (!mid) continue;
       var row = el.querySelector('.msg-label-row');
       if (!row) continue;
+      if (row.querySelector('.msg-label-actions')) continue;
+      var looseDelete = row.querySelector('.msg-delete-btn');
+      var looseRestore = row.querySelector('.msg-restore-btn');
+      if (looseDelete) looseDelete.remove();
+      if (looseRestore) looseRestore.remove();
       var sentAt = el.querySelector('.msg-time') && el.querySelector('.msg-time').dateTime
         ? Date.parse(el.querySelector('.msg-time').dateTime)
         : null;
-      row.appendChild(createRestoreButton(mid, sentAt));
+      row.appendChild(createUserMessageActions(mid, sentAt));
     }
+  }
+
+  function ensureRestoreButtonsOnUserMessages() {
+    ensureUserMessageActionButtons();
   }
 
   function setCheckpointMessageIds(ids) {
@@ -1567,17 +1603,27 @@ window.ChatUI = (function () {
 
   function refreshRestoreButtonsVisibility() {
     if (!elMessages) return;
-    var buttons = elMessages.querySelectorAll('.msg-restore-btn');
-    for (var i = 0; i < buttons.length; i++) {
-      var btn = buttons[i];
+    var restoreButtons = elMessages.querySelectorAll('.msg-restore-btn');
+    for (var i = 0; i < restoreButtons.length; i++) {
+      var btn = restoreButtons[i];
       var mid = btn.dataset.messageId || '';
       var visible = hasCheckpointForMessage(mid);
       if (visible) btn.classList.add('msg-restore-btn--ready');
       else btn.classList.remove('msg-restore-btn--ready');
       btn.disabled = !visible || !restoreUiState.canRestore;
-      btn.title = restoreUiState.canRestore
-        ? '回滚到此消息'
-        : '运行中，请等待当前任务完成后再回滚';
+      btn.title = !visible
+        ? '未找到检查点，无法回滚'
+        : (restoreUiState.canRestore
+          ? '回滚到此消息'
+          : '运行中，请等待当前任务完成后再回滚');
+    }
+    var deleteButtons = elMessages.querySelectorAll('.msg-delete-btn');
+    for (var j = 0; j < deleteButtons.length; j++) {
+      var delBtn = deleteButtons[j];
+      delBtn.disabled = !restoreUiState.canRestore;
+      delBtn.title = restoreUiState.canRestore
+        ? '删除此消息及后续对话'
+        : '运行中，请等待当前任务完成后再删除';
     }
   }
 
@@ -1606,7 +1652,7 @@ window.ChatUI = (function () {
       row.appendChild(timeEl);
     }
     if (role === 'user' && restoreOpts && restoreOpts.messageId) {
-      row.appendChild(createRestoreButton(restoreOpts.messageId, restoreOpts.sentAt));
+      row.appendChild(createUserMessageActions(restoreOpts.messageId, restoreOpts.sentAt));
     }
     return row;
   }

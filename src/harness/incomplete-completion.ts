@@ -57,9 +57,9 @@ export function buildIncompleteContinuationPrompt(
     lines.push(`- Recent tool failures: ${repo.recentDiagnostics.slice(-3).join('; ')}`);
   }
   if (task.verificationStatus === 'failed') {
-    lines.push('- Unit tests failed; fix and re-run before stopping.');
+    lines.push('- Unit tests failed; consider fixing and re-running before stopping.');
   } else if (shouldPromptEngineeringUnitTest(task.filesChanged, task.verificationStatus)) {
-    lines.push('- Source code changed but unit tests have not passed yet.');
+    lines.push('- Source code changed but unit tests have not been run yet.');
   }
 
   const awaitsFileWrite = hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent);
@@ -71,7 +71,7 @@ export function buildIncompleteContinuationPrompt(
   if (testTargets.length > 0 && task.verificationStatus !== 'passed') {
     const maxList = 12;
     const listed = testTargets.slice(0, maxList);
-    lines.push('', 'Changed source files (run unit tests covering these):');
+    lines.push('', 'Changed source files (consider running unit tests for these):');
     for (const p of listed) {
       lines.push(`- ${p}`);
     }
@@ -89,13 +89,13 @@ export function buildIncompleteContinuationPrompt(
   } else if (task.verificationStatus === 'failed') {
     lines.push(
       '',
-      'Continue NOW: fix failing tests, then re-run unit tests via run_command until green.',
+      'Continue: fix failing tests and re-run via run_command if you can; otherwise finish with a clear failure summary.',
       'Do not output plans or thinking-only replies.',
     );
   } else if (shouldPromptEngineeringUnitTest(task.filesChanged, task.verificationStatus)) {
     lines.push(
       '',
-      'Continue NOW: run unit tests for the changed source files via run_command (choose the command for this project).',
+      'Continue: run unit tests via run_command if useful, or finish with a brief note if you are confident the change is safe.',
       'Do not output plans or thinking-only replies.',
     );
   } else {

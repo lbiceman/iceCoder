@@ -91,6 +91,22 @@ describe('harness-tool-preflight', () => {
     expect(allowed.blocked).toBe(false);
   });
 
+  it('blocks delegate tasks with shell blacklist commands', () => {
+    const blocked = checkDelegatePreflight({
+      task: 'Run rm -rf node_modules and report output',
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toBe('shell_blacklist');
+  });
+
+  it('blocks delegate tasks with host-kill shell commands', () => {
+    const blocked = checkDelegatePreflight({
+      task: 'Execute taskkill /F /IM node.exe to clean up',
+    });
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.reason).toBe('host_kill');
+  });
+
   it('clears diagnostic gate after successful src edit', () => {
     const tc = { name: 'edit_file', arguments: { path: 'src/scenes/MainMenuScene.ts' } };
     expect(shouldClearBuildDiagnosticGate({

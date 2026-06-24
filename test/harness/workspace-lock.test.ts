@@ -8,7 +8,6 @@ import {
   emptySessionWorkspaceState,
 } from '../../src/harness/workspace-lock.js';
 import { buildWorkspaceAnchorContent } from '../../src/harness/workspace-anchor.js';
-import { checkWorkspacePathViolation } from '../../src/harness/workspace-path-guard.js';
 
 describe('workspace-lock', () => {
   it('normalizeDetectedPath converts D:// style paths', () => {
@@ -94,27 +93,6 @@ describe('workspace-lock', () => {
     expect(content).toContain('D:\\ref\\req.md');
   });
 
-  it('path guard blocks write outside locked root', () => {
-    const violation = checkWorkspacePathViolation(
-      'write_file',
-      { path: 'D:\\outside\\a.ts', content: 'x' },
-      'E:\\proj',
-      [],
-    );
-    expect(violation).toMatch(/Workspace Lock/);
-  });
-
-  it('path guard allows reference read outside root', () => {
-    const ref = 'D:\\ref\\xvqiu.md';
-    const violation = checkWorkspacePathViolation(
-      'read_file',
-      { path: ref },
-      'E:\\proj',
-      [ref],
-    );
-    expect(violation).toBeUndefined();
-  });
-
   it('switches from D to E when second message uses 增加 on same line', () => {
     let state = emptySessionWorkspaceState();
     const d1 = detectWorkspaceFromUserMessage(
@@ -139,81 +117,8 @@ describe('workspace-lock', () => {
     expect(result.lockedRoot?.toLowerCase()).toBe('d:\\djsiogfdsj\\213\\42\\43\\4');
   });
 
-  it('path guard blocks fs_operation delete outside workspace', () => {
-    const violation = checkWorkspacePathViolation(
-      'fs_operation',
-      { operation: 'delete', path: 'D:\\outside\\a.ts' },
-      'E:\\proj',
-      [],
-    );
-    expect(violation).toMatch(/Workspace Lock/);
-  });
-
-  it('path guard blocks browse_directory outside workspace', () => {
-    const violation = checkWorkspacePathViolation(
-      'browse_directory',
-      { path: 'D:\\outside' },
-      'E:\\proj',
-      [],
-    );
-    expect(violation).toMatch(/Workspace Lock/);
-  });
-
-  it('path guard blocks list_drives when workspace locked', () => {
-    const violation = checkWorkspacePathViolation(
-      'list_drives',
-      {},
-      'E:\\proj',
-      [],
-    );
-    expect(violation).toMatch(/list_drives is disabled/);
-  });
-
   it('normalizeDetectedPath fixes semicolon after drive letter', () => {
     expect(preprocessWorkspaceMessage('D;//foo')).toBe('D://foo');
     expect(normalizeDetectedPath('D;//foo/bar')).toBe('D:\\foo\\bar');
-  });
-
-  it('path guard allows cd /d into locked workspace then npm test', () => {
-    const locked = 'E:\\test\\agentToolTest\\implement-spellbrigade-survivor-second';
-    const violation = checkWorkspacePathViolation(
-      'run_command',
-      { command: `cd /d "${locked}" && npm test` },
-      locked,
-      [],
-    );
-    expect(violation).toBeUndefined();
-  });
-
-  it('path guard blocks cd /d outside locked workspace', () => {
-    const violation = checkWorkspacePathViolation(
-      'run_command',
-      { command: 'cd /d D:\\other && npm test' },
-      'E:\\proj',
-      [],
-    );
-    expect(violation).toMatch(/Workspace Lock/);
-    expect(violation).toMatch(/D:\\other/i);
-  });
-
-  it('path guard still blocks outside path in command remainder after in-root cd', () => {
-    const locked = 'E:\\proj';
-    const violation = checkWorkspacePathViolation(
-      'run_command',
-      { command: `cd /d ${locked} && copy D:\\outside\\a.txt .` },
-      locked,
-      [],
-    );
-    expect(violation).toMatch(/D:\\outside/i);
-  });
-
-  it('path guard still blocks unix absolute paths like /data/foo', () => {
-    const violation = checkWorkspacePathViolation(
-      'run_command',
-      { command: 'npm run build --output /data/out' },
-      'E:\\proj',
-      [],
-    );
-    expect(violation).toMatch(/\/data\/out/);
   });
 });

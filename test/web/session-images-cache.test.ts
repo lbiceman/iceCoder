@@ -4,7 +4,6 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { addSessionReferenceReads } from '../../src/harness/session-workspace-store.js';
-import { checkWorkspacePathViolation } from '../../src/harness/workspace-path-guard.js';
 import {
   buildSessionImageApiUrl,
   persistInlineImages,
@@ -32,7 +31,7 @@ describe('session imagesCache workspace + UI', () => {
     await fs.rm(sessionDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('addSessionReferenceReads 登记 imagesCache 路径供 image_read 通过 workspace guard', async () => {
+  it('addSessionReferenceReads 登记 imagesCache 路径到 referenceReads', async () => {
     const png1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     const saved = await persistInlineImages([`data:image/png;base64,${png1x1}`], sessionId);
     expect(saved).toHaveLength(1);
@@ -43,14 +42,6 @@ describe('session imagesCache workspace + UI', () => {
       paths: [saved[0].absolutePath],
     });
     expect(state.referenceReads.some((r) => r.toLowerCase() === saved[0].absolutePath.toLowerCase())).toBe(true);
-
-    const violation = checkWorkspacePathViolation(
-      'image_read',
-      { path: saved[0].absolutePath },
-      'E:\\other\\workspace',
-      state.referenceReads,
-    );
-    expect(violation).toBeUndefined();
   });
 
   it('resolveSessionImageFile 拒绝目录穿越', () => {

@@ -6,46 +6,13 @@ import { join } from 'node:path';
 import { executeToolCallsStreaming } from '../../src/harness/harness-tool-executor.js';
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { emptyHarnessPolicyStats } from '../../src/harness/harness-policy-stats.js';
-import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import type { ToolCall, UnifiedMessage } from '../../src/llm/types.js';
 
 describe('harness-tool-executor policy blocks', () => {
-  it('treats workspace lock violation as policy block, not execution failure', async () => {
+  it('allows paths outside locked workspace without policy block', async () => {
     const tc: ToolCall = {
       id: 'tc-outside',
-      name: 'read_file',
-      arguments: { path: 'C:/outside/project/foo.ts' },
-    };
-    const messages: UnifiedMessage[] = [];
-    const loopController = new LoopController({ maxRounds: 1 });
-    const execute = vi.fn();
-
-    const stats = await executeToolCallsStreaming(
-      {
-        toolExecutor: { execute } as never,
-        loopController,
-        permissionRules: [],
-        workspaceRoot: 'E:/locked/project',
-        lockedWorkspaceRoot: 'E:/locked/project',
-        referenceReads: [],
-      },
-      {
-        toolCalls: [tc],
-        messages,
-        logger: { toolCall: () => {}, toolResult: () => {} } as never,
-      },
-    );
-
-    expect(execute).not.toHaveBeenCalled();
-    expect(stats.failedCount).toBe(0);
-    expect(stats.failedSignatures).toHaveLength(0);
-    expect(stats.policyBlockedSignatures).toEqual([toolCallSignature(tc)]);
-  });
-
-  it('allows paths outside locked workspace when skipSandbox is true', async () => {
-    const tc: ToolCall = {
-      id: 'tc-outside-open',
       name: 'read_file',
       arguments: { path: 'C:/outside/project/foo.ts' },
     };
@@ -58,7 +25,6 @@ describe('harness-tool-executor policy blocks', () => {
         toolExecutor: { executeTool } as never,
         loopController,
         permissionRules: [],
-        skipSandbox: true,
         workspaceRoot: 'E:/locked/project',
         lockedWorkspaceRoot: 'E:/locked/project',
         referenceReads: [],

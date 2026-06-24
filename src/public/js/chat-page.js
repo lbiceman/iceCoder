@@ -1134,6 +1134,36 @@ window.ChatPage = (function () {
     });
   }
 
+  function closeDeleteConfirmDialog() {
+    var overlay = document.querySelector('.delete-confirm-overlay');
+    if (overlay) overlay.remove();
+  }
+
+  function showDeleteConfirmDialog(messageId) {
+    closeDeleteConfirmDialog();
+    var overlay = document.createElement('div');
+    overlay.className = 'restore-confirm-overlay delete-confirm-overlay';
+    overlay.innerHTML =
+      '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">' +
+        '<h3 id="delete-confirm-title">确认删除？</h3>' +
+        '<p>将删除此消息及之后的全部对话记录，并同步更新模型上下文。<br><br>' +
+        '此操作不会回滚工作区文件修改。</p>' +
+        '<div class="restore-confirm-actions">' +
+          '<button type="button" class="restore-confirm-cancel">取消</button>' +
+          '<button type="button" class="restore-confirm-ok">删除</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('.restore-confirm-cancel').addEventListener('click', closeDeleteConfirmDialog);
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeDeleteConfirmDialog();
+    });
+    overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
+      closeDeleteConfirmDialog();
+      WS.sendDeleteUserMessage(messageId);
+    });
+  }
+
   function onRestoreButtonClick(e) {
     var btn = e.target.closest('.msg-restore-btn');
     if (!btn || btn.disabled) return;
@@ -1147,6 +1177,17 @@ window.ChatPage = (function () {
       return;
     }
     showRestoreConfirmDialog(messageId);
+  }
+
+  function onDeleteButtonClick(e) {
+    var btn = e.target.closest('.msg-delete-btn');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) return;
+    var messageId = btn.dataset.messageId;
+    if (!messageId) return;
+    showDeleteConfirmDialog(messageId);
   }
 
   function onWsRuntimeRestored() {
@@ -1171,6 +1212,21 @@ window.ChatPage = (function () {
 
   function onWsRestoreFailed(data) {
     var msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
+    notifyUser(msg, 'error', { duration: 5000 });
+  }
+
+  function onWsMessageDeleted() {
+    isStreaming = false;
+    UI.setStreamingState(false);
+    UI.clearReasoningStream();
+    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
+    refreshChatHistoryAfterTurn(true);
+    syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
+  }
+
+  function onWsDeleteMessageFailed(data) {
+    var msg = (data && data.error) ? data.error : '删除消息失败。';
     notifyUser(msg, 'error', { duration: 5000 });
   }
 
@@ -1244,6 +1300,12 @@ window.ChatPage = (function () {
     if (data && data.reason === 'turn_complete') {
       if (!shouldSkipServerSnapshotSync()) {
         refreshChatHistoryAfterTurn('force');
+      }
+      return;
+    }
+    if (data && data.reason === 'message_deleted') {
+      if (!shouldSkipServerSnapshotSync()) {
+        refreshChatHistoryAfterTurn(true);
       }
       return;
     }
@@ -1510,12 +1572,15 @@ window.ChatPage = (function () {
     WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
     WS.on('runtime_restored', onWsRuntimeRestored);
     WS.on('restore_failed', onWsRestoreFailed);
+    WS.on('message_deleted', onWsMessageDeleted);
+    WS.on('delete_message_failed', onWsDeleteMessageFailed);
 
     // 连接 WebSocket
     WS.connect(remoteToken);
 
     // 绑定 UI 事件
     elMessages.addEventListener('click', onRestoreButtonClick);
+    elMessages.addEventListener('click', onDeleteButtonClick);
     elSendBtn.addEventListener('click', handleSend);
     elInput.addEventListener('keydown', function (e) {
       if (FileRef && FileRef.handleKeydown(e, elInput)) return;

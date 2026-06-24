@@ -154,15 +154,10 @@ window.ChatStaircaseNav = (function () {
         btn.className = 'chat-staircase-popover-item';
         btn.setAttribute('data-msg-index', String(turn.msgIndex));
 
-        var indexEl = document.createElement('span');
-        indexEl.className = 'chat-staircase-popover-index';
-        indexEl.textContent = String(turnIndex + 1);
-
         var textEl = document.createElement('span');
         textEl.className = 'chat-staircase-popover-text';
         textEl.textContent = truncateText(turn.content, 80);
 
-        btn.appendChild(indexEl);
         btn.appendChild(textEl);
         btn.addEventListener('click', function (e) {
           e.stopPropagation();

@@ -29,11 +29,16 @@ async function verify(label: string, nodeEnv: string | undefined): Promise<boole
       ? path.join(os.homedir(), '.iceCoder')
       : path.resolve('data');
 
+  const expectedMcp =
+    nodeEnv === 'production'
+      ? path.join(os.homedir(), '.iceCoder', 'mcp.json')
+      : path.resolve('.iceCoder/mcp.json');
+
   const ok =
     path.resolve(dataDir) === path.resolve(expectedRoot)
     && paths.configPath === path.join(path.resolve(expectedRoot), 'config.json')
     && paths.sessionsDir === path.join(path.resolve(expectedRoot), 'sessions')
-    && paths.mcpConfigPath === path.join(path.resolve(expectedRoot), 'mcp.json');
+    && paths.mcpConfigPath === expectedMcp;
 
   console.log(`\n[${label}] NODE_ENV=${nodeEnv ?? '(unset)'}`);
   console.log('  dataDir     ', dataDir);

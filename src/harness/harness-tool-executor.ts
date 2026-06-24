@@ -26,7 +26,6 @@ import {
   extractRunCommand,
   extractToolTargetPath,
 } from './branch-budget-tool-path.js';
-import { checkWorkspacePathViolation } from './workspace-path-guard.js';
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
 import { checkToolPreflight, checkDelegatePreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
@@ -45,8 +44,6 @@ export interface ToolExecutorDeps {
   permissionRules: ToolPermissionRule[];
   /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
   skipPermissionChecks?: boolean;
-  /** 为 true 时跳过 HostGuard 沙箱预检 */
-  skipSandbox?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
   workspaceRoot: string;
   lockedWorkspaceRoot?: string;
@@ -132,7 +129,7 @@ function emitHarnessPolicyBlock(
     policyReason: ctx.policyReason ?? ctx.errorLabel,
     outputLength: blockMessage.length,
   });
-  if (ctx.policyReason === 'host_kill') {
+  if (ctx.policyReason === 'host_kill' || ctx.policyReason === 'shell_blacklist') {
     ctx.deps.runtimeTelemetry?.recordHostGuardBlock({
       round: ctx.iteration,
       toolName: ctx.tc.name,
@@ -250,6 +247,7 @@ export async function executeToolCallsStreaming(
       const delegateTask = String(tc.arguments.task ?? '');
       const delegatePreflight = checkDelegatePreflight({
         task: delegateTask,
+        workspaceRoot: deps.workspaceRoot,
         buildDiagnosticGateActive,
         branchBudget: deps.branchBudget,
       });
@@ -394,35 +392,7 @@ export async function executeToolCallsStreaming(
       }
     }
 
-    if (!deps.skipSandbox) {
-      const workspaceBlock = checkWorkspacePathViolation(
-        tc.name,
-        tc.arguments,
-        deps.lockedWorkspaceRoot ?? '',
-        deps.referenceReads ?? [],
-      );
-      if (workspaceBlock) {
-        emitHarnessPolicyBlock({
-          deps,
-          tc,
-          iteration,
-          baseMessage: workspaceBlock,
-          errorLabel: 'Workspace lock block',
-          policyReason: 'workspace_lock',
-          messages,
-          onStep,
-          logger,
-          taskState,
-          repoContext,
-          policyBlockedSignatures,
-        });
-        directTotalCount++;
-        submittedIds.add(tc.id);
-        continue;
-      }
-    }
-
-    // Harness preflight：dist 读取 / missing file / build diagnostic gate
+    // Harness preflight：dist 读取 / missing file / build diagnostic gate / shell sandbox
     const preflight = checkToolPreflight({
       toolName: tc.name,
       args: tc.arguments,
@@ -432,7 +402,6 @@ export async function executeToolCallsStreaming(
       workspaceRoot: deps.workspaceRoot,
       lockedWorkspaceRoot: deps.lockedWorkspaceRoot,
       missingFileAttempts: deps.missingFileAttempts,
-      skipSandbox: deps.skipSandbox,
     });
     if (preflight.blocked) {
       const enrichGate = preflight.reason === 'build_diagnostic_gate';

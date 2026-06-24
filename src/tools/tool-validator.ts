@@ -102,10 +102,9 @@ export class ToolValidator {
 /**
  * 创建默认的验证规则集。
  *
- * 包含常见的安全检查：
- * - 路径遍历检测
- * - 危险命令检测
- * - 必填参数检查
+ * 包含常见的输入校验：
+ * - 路径遍历到 /etc 检测
+ * - run_command 空命令检测
  */
 export function createDefaultValidationRules(): ValidationRule[] {
   return [

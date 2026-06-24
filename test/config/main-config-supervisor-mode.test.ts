@@ -5,11 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   readSkipPermissionChecksFromMainConfig,
-  readSkipSandboxFromMainConfig,
-  readSkipSandboxFromMainConfigSync,
   readSupervisorModeFromMainConfig,
   resolveSkipPermissionChecks,
-  resolveSkipSandbox,
   writeSupervisorModeToMainConfig,
 } from '../../src/config/main-config-supervisor-mode.js';
 
@@ -48,23 +45,4 @@ describe('main-config-supervisor-mode', () => {
     expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(true);
   });
 
-  it('resolveSkipSandbox only true for literal true', () => {
-    expect(resolveSkipSandbox(true)).toBe(true);
-    expect(resolveSkipSandbox(false)).toBe(false);
-    expect(resolveSkipSandbox(undefined)).toBe(false);
-    expect(resolveSkipSandbox('true')).toBe(false);
-  });
-
-  it('readSkipSandboxFromMainConfig reads skipSandbox', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-config-'));
-    const configPath = path.join(dir, 'config.json');
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ providers: [], skipSandbox: true }, null, 2),
-      'utf-8',
-    );
-
-    expect(await readSkipSandboxFromMainConfig(configPath)).toBe(true);
-    expect(readSkipSandboxFromMainConfigSync(configPath)).toBe(true);
-  });
 });

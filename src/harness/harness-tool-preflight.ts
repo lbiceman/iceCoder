@@ -6,9 +6,9 @@ import { isBuildVerificationCommand, isHarnessVerificationCommand } from './veri
 import { extractRunCommandsFromDelegateTask } from './verification-output-buffer.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 import {
-  analyzeShellHostSafety,
   checkHostGuardWritePreflight,
 } from '../tools/shell-host-guard.js';
+import { analyzeShellSandbox } from '../tools/shell-sandbox.js';
 
 export interface ToolPreflightInput {
   toolName: string;
@@ -20,13 +20,11 @@ export interface ToolPreflightInput {
   lockedWorkspaceRoot?: string;
   /** 同路径 missing-file preflight 拦截次数（由 HarnessRunState 持有）。 */
   missingFileAttempts?: Map<string, number>;
-  /** 为 true 时跳过 HostGuard；工作区路径拦截在 harness-tool-executor 层跳过 */
-  skipSandbox?: boolean;
 }
 
 export interface ToolPreflightDecision {
   blocked: boolean;
-  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill';
+  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_blacklist';
   message?: string;
   hostKillLabel?: string;
 }
@@ -185,31 +183,29 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
     }
   }
 
-  if (!input.skipSandbox) {
-    if (input.toolName === 'run_command') {
-      const command = extractRunCommand(input.args);
-      if (command) {
-        const hostGuard = analyzeShellHostSafety(command, { workDir: input.workspaceRoot });
-        if (hostGuard.blocked) {
-          return {
-            blocked: true,
-            reason: 'host_kill',
-            hostKillLabel: hostGuard.matchLabel,
-            message: hostGuard.message ?? '[HostGuard / Blocked]',
-          };
-        }
+  if (input.toolName === 'run_command') {
+    const command = extractRunCommand(input.args);
+    if (command) {
+      const sandbox = analyzeShellSandbox(command, { workDir: input.workspaceRoot });
+      if (sandbox.blocked) {
+        return {
+          blocked: true,
+          reason: sandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
+          hostKillLabel: sandbox.matchLabel,
+          message: sandbox.message ?? '[Sandbox / Blocked]',
+        };
       }
     }
+  }
 
-    const hostWrite = checkHostGuardWritePreflight(input.toolName, input.args);
-    if (hostWrite.blocked) {
-      return {
-        blocked: true,
-        reason: 'host_kill',
-        hostKillLabel: hostWrite.matchLabel,
-        message: hostWrite.message ?? '[HostGuard / Blocked]',
-      };
-    }
+  const hostWrite = checkHostGuardWritePreflight(input.toolName, input.args);
+  if (hostWrite.blocked) {
+    return {
+      blocked: true,
+      reason: 'host_kill',
+      hostKillLabel: hostWrite.matchLabel,
+      message: hostWrite.message ?? '[HostGuard / Blocked]',
+    };
   }
 
   return { blocked: false };
@@ -217,12 +213,23 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
 
 export function checkDelegatePreflight(input: {
   task: string;
+  workspaceRoot?: string;
   buildDiagnosticGateActive?: boolean;
   branchBudget?: BranchBudgetTracker;
 }): ToolPreflightDecision {
   const commands = extractRunCommandsFromDelegateTask(input.task);
 
   for (const command of commands) {
+    const sandbox = analyzeShellSandbox(command, { workDir: input.workspaceRoot });
+    if (sandbox.blocked) {
+      return {
+        blocked: true,
+        reason: sandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
+        hostKillLabel: sandbox.matchLabel,
+        message: sandbox.message ?? '[Sandbox / Blocked]',
+      };
+    }
+
     if (input.buildDiagnosticGateActive && isBuildLikeCommand(command) && !isDiagnosticAllowedCommand(command)) {
       return {
         blocked: true,

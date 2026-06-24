@@ -8,6 +8,7 @@ import {
   applyRuntimeDataEnvDefaults,
   ensureDefaultSkillFiles,
   ensureSupervisorConfigFile,
+  getMcpCacheDir,
   getRuntimeDataDir,
   isPackagedCliEntry,
   resolvePackagedDataExamplePath,
@@ -52,6 +53,39 @@ describe('usesUserDataRoot / data dir', () => {
     process.argv[1] = 'D:/work/self/iceCoder/dist/cli/index.js';
     applyRuntimeDataEnvDefaults();
     expect(getRuntimeDataDir()).toBe(USER_DATA_DIR);
+  });
+});
+
+describe('getMcpCacheDir', () => {
+  const env = process.env;
+  const argv1 = process.argv[1];
+
+  afterEach(() => {
+    process.env = { ...env };
+    process.argv[1] = argv1;
+    delete process.env.ICE_DATA_DIR;
+    delete process.env.ICE_MCP_CACHE_DIR;
+    delete process.env.NODE_ENV;
+  });
+
+  it('开发环境 → data/mcpCache', () => {
+    delete process.env.ICE_DATA_DIR;
+    delete process.env.NODE_ENV;
+    process.argv[1] = 'D:/work/self/iceCoder/src/cli/index.ts';
+    applyRuntimeDataEnvDefaults();
+    expect(getMcpCacheDir()).toBe(path.join(LOCAL_DATA_DIR, 'mcpCache'));
+  });
+
+  it('生产环境 → ~/.iceCoder/mcpCache', () => {
+    process.env.NODE_ENV = 'production';
+    process.argv[1] = 'D:/work/self/iceCoder/dist/cli/index.js';
+    applyRuntimeDataEnvDefaults();
+    expect(getMcpCacheDir()).toBe(path.join(USER_DATA_DIR, 'mcpCache'));
+  });
+
+  it('ICE_MCP_CACHE_DIR 可覆盖默认路径', () => {
+    process.env.ICE_MCP_CACHE_DIR = 'D:/custom/mcpCache';
+    expect(getMcpCacheDir()).toBe(path.resolve('D:/custom/mcpCache'));
   });
 });
 

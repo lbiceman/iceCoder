@@ -316,10 +316,9 @@
       // 远程控制模式：直接渲染聊天页面（ChatPage 内部处理远程逻辑）
       setTheme(getStoredTheme());
       fetchSystemStatus();
-      document.body.dataset.page = 'chat';
-      var chatRoot = ensurePageRoot('chat');
-      window.ChatPage.render(chatRoot);
-      pages.chat.mounted = true;
+      // ensurePageRoot 新建节点时默认 display:none，须走 renderPage 才会显示
+      currentPage = null;
+      renderPage('chat');
       currentPage = 'chat';
       return;
     }

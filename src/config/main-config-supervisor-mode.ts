@@ -2,7 +2,6 @@
  * 从 data/config.json 读写 supervisorMode（用户可配置的三档监管模式）。
  */
 
-import { readFileSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import type { IceCoderConfigFile } from '../web/types.js';
 import type { SupervisorMode } from '../types/supervisor.js';
@@ -73,32 +72,6 @@ export async function readSkipPermissionChecksFromMainConfig(
 ): Promise<boolean> {
   const config = await readMainConfigFile(configPath);
   return resolveSkipPermissionChecks(config.skipPermissionChecks);
-}
-
-/** 仅当 config.json 显式 `"skipSandbox": true` 时为 true；跳过 HostGuard 与工作区路径拦截（检测/锁定仍生效）。 */
-export function resolveSkipSandbox(value: unknown): boolean {
-  return value === true;
-}
-
-/** 读取 config.json 中的 skipSandbox；缺失或非 true 时返回 false。 */
-export async function readSkipSandboxFromMainConfig(
-  configPath: string,
-): Promise<boolean> {
-  const config = await readMainConfigFile(configPath);
-  return resolveSkipSandbox(config.skipSandbox);
-}
-
-/** 同步读取 skipSandbox（供 Shell 工具执行时按需查询）。 */
-export function readSkipSandboxFromMainConfigSync(
-  configPath: string = resolveMainConfigPath(),
-): boolean {
-  try {
-    const raw = readFileSync(configPath, 'utf-8');
-    const parsed = JSON.parse(raw) as IceCoderConfigFile;
-    return resolveSkipSandbox(parsed.skipSandbox);
-  } catch {
-    return false;
-  }
 }
 
 function isMissingFile(error: unknown): boolean {
