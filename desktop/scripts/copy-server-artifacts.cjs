@@ -11,6 +11,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { BUNDLED_DATA_FILES } = require('../../scripts/bundled-data-files.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const desktopRoot = path.resolve(__dirname, '..');
@@ -19,7 +20,6 @@ const targetRoot = path.join(desktopRoot, 'server-bundle');
 const FILES_TO_COPY = [
   'dist',
   'package.json',
-  'data',
 ];
 
 const PROD_DEPS = [
@@ -112,6 +112,19 @@ function mergePublicStaticExtras(repoRoot, targetDistPublic) {
   }
 }
 
+function copyBundledDataFiles(repoRoot, targetRoot) {
+  for (const rel of BUNDLED_DATA_FILES) {
+    const src = path.join(repoRoot, rel);
+    const dst = path.join(targetRoot, rel);
+    if (!fs.existsSync(src)) {
+      log(`SKIP missing bundled ${rel}`);
+      continue;
+    }
+    log(`copyFile ${rel}`);
+    copyFile(src, dst);
+  }
+}
+
 function main() {
   log(`repoRoot  = ${repoRoot}`);
   log(`target    = ${targetRoot}`);
@@ -134,6 +147,8 @@ function main() {
       copyFile(src, dst);
     }
   }
+
+  copyBundledDataFiles(repoRoot, targetRoot);
 
   mergePublicStaticExtras(repoRoot, path.join(targetRoot, 'dist', 'public'));
 

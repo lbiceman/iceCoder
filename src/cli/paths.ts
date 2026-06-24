@@ -387,6 +387,7 @@ export async function ensureSupervisorConfigFile(dataDir: string): Promise<void>
 }
 
 const BUNDLED_SKILLS_DIR = 'skills';
+/** 安装包内唯一自带的技能模板（见 scripts/bundled-data-files.cjs） */
 const DEFAULT_SKILL_FILE = '创建技能.md';
 
 /**
