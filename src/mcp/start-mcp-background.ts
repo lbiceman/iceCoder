@@ -5,6 +5,15 @@
 import type { MCPManager } from './mcp-manager.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 
+/** 将 MCPManager 中已就绪的工具注册到指定 ToolRegistry（可重复调用）。 */
+export function registerMcpToolsOnRegistry(registry: ToolRegistry, mcpManager: MCPManager): number {
+  const tools = mcpManager.getRegisteredTools();
+  for (const tool of tools) {
+    registry.register(tool);
+  }
+  return tools.length;
+}
+
 export interface McpBackgroundSettled {
   ok: boolean;
   toolCount: number;
@@ -23,12 +32,9 @@ export function startMcpBackgroundInit(
   void (async () => {
     try {
       await mcpManager.initialize();
-      const tools = mcpManager.getRegisteredTools();
-      for (const tool of tools) {
-        registry.register(tool);
-      }
-      if (tools.length > 0) {
-        console.log(`已注册 ${tools.length} 个 MCP 工具到工具系统`);
+      const count = registerMcpToolsOnRegistry(registry, mcpManager);
+      if (count > 0) {
+        console.log(`已注册 ${count} 个 MCP 工具到工具系统`);
       }
       onSettled?.({
         ok: true,

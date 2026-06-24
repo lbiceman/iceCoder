@@ -40,7 +40,15 @@ describe('runtime data paths', () => {
     const paths = await resolveDataPaths();
     expect(paths.configPath).toBe(path.resolve('data/config.json'));
     expect(paths.sessionsDir).toBe(path.resolve('data/sessions'));
-    expect(paths.mcpConfigPath).toBe(path.resolve('data/mcp.json'));
+    expect(paths.mcpConfigPath).toBe(path.resolve('.iceCoder/mcp.json'));
+  });
+
+  it('uses ~/.iceCoder/mcp.json in production', async () => {
+    process.env.NODE_ENV = 'production';
+    const { resolveDataPaths } = await loadPathsModule();
+    const expectedRoot = path.join(os.homedir(), '.iceCoder');
+    const paths = await resolveDataPaths();
+    expect(paths.mcpConfigPath).toBe(path.join(expectedRoot, 'mcp.json'));
   });
 
   it('uses ~/.iceCoder in production', async () => {

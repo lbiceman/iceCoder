@@ -6,6 +6,10 @@
  * - **源码本地开发**（`tsx src/cli/index.ts`、`npm run dev` 等）：当前项目下的 `data/`
  * - **`NODE_ENV=production`**（如 `npm start`）：`~/.iceCoder/`
  *
+ * 子目录示例（随 dataDir 切换）：`memory-files/`、`imagesCache/`、`mcpCache/` 等。
+ *
+ * MCP 配置（`mcp.json`）单独落在 `.iceCoder/`：开发用项目 `.iceCoder/mcp.json`，生产/全局用 `~/.iceCoder/mcp.json`。
+ *
  * 显式设置 `ICE_DATA_DIR` 等环境变量时始终优先。
  * 模块加载时会调用 `applyRuntimeDataEnvDefaults()`，保证 Web/CLI 子模块读到一致路径。
  */
@@ -22,6 +26,9 @@ export const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
 
 /** 当前工作目录下的 data 目录（开发环境） */
 export const LOCAL_DATA_DIR = path.resolve('data');
+
+/** 开发环境：项目根 `.iceCoder/`（MCP、memory.md 等项目级配置） */
+export const LOCAL_ICECODER_DIR = path.resolve('.iceCoder');
 
 /** 生产环境：NODE_ENV=production */
 export function isProductionRuntime(): boolean {
@@ -78,7 +85,7 @@ export function applyRuntimeDataEnvDefaults(): void {
     process.env.ICE_SKILLS_DIR = path.join(dataDir, 'skills');
   }
   if (!process.env.ICE_MCP_CONFIG_PATH?.trim()) {
-    process.env.ICE_MCP_CONFIG_PATH = path.join(dataDir, 'mcp.json');
+    process.env.ICE_MCP_CONFIG_PATH = path.join(resolveMcpConfigDir(), 'mcp.json');
   }
   if (!process.env.ICE_SUPERVISOR_CONFIG_PATH?.trim()) {
     process.env.ICE_SUPERVISOR_CONFIG_PATH = path.join(dataDir, 'supervisor-config.json');
@@ -113,6 +120,20 @@ export function getImagesCacheStorageRoot(): string {
 /** `{storageRoot}/imagesCache/{sessionId}` */
 export function getImagesCacheSessionDir(sessionId: string): string {
   return path.join(getImagesCacheStorageRoot(), 'imagesCache', sessionId);
+}
+
+/**
+ * MCP 工具返回的图片落盘目录（如 Puppeteer 截图）。
+ * 与 memory-files / imagesCache 相同，随 `getRuntimeDataDir()` 分环境：
+ * - 开发：项目 `data/mcpCache/`
+ * - 生产 / 全局安装：用户目录 `~/.iceCoder/mcpCache/`
+ */
+export function getMcpCacheDir(): string {
+  applyRuntimeDataEnvDefaults();
+  if (process.env.ICE_MCP_CACHE_DIR?.trim()) {
+    return path.resolve(process.env.ICE_MCP_CACHE_DIR.trim());
+  }
+  return path.join(getRuntimeDataDir(), 'mcpCache');
 }
 
 /** `{dataDir}/memory` 下的子路径（telemetry、dream-state 等） */
@@ -224,15 +245,24 @@ export const DEFAULT_SYSTEM_PROMPT = `你是 iceCoder，一个智能编程助手
 自然语言由你与用户共同选择，无强制回复语种。`;
 
 /**
- * MCP 独立配置文件路径。
- * 开发/生产均落在数据根目录下的 `mcp.json`（可用 ICE_MCP_CONFIG_PATH 覆盖）。
+ * MCP 配置目录。
+ * - 开发：项目 `.iceCoder/`
+ * - 生产 / 全局安装 / Electron：`~/.iceCoder/`
+ */
+export function resolveMcpConfigDir(): string {
+  return usesUserDataRoot() ? USER_DATA_DIR : LOCAL_ICECODER_DIR;
+}
+
+/**
+ * MCP 独立配置文件路径（`{mcpConfigDir}/mcp.json`）。
+ * 可用 ICE_MCP_CONFIG_PATH 覆盖。
  */
 export function resolveMcpConfigPath(): string {
   applyRuntimeDataEnvDefaults();
   if (process.env.ICE_MCP_CONFIG_PATH?.trim()) {
     return path.resolve(process.env.ICE_MCP_CONFIG_PATH.trim());
   }
-  return path.join(getRuntimeDataDir(), 'mcp.json');
+  return path.join(resolveMcpConfigDir(), 'mcp.json');
 }
 
 /**
@@ -249,13 +279,26 @@ async function exists(p: string): Promise<boolean> {
 
 /**
  * 若不存在则创建 `mcp.json`。
- * 首次创建时：若主配置中仍有 `mcpServers`，则迁移；否则写入占位模板。
+ * 首次创建时：优先从旧版 `data/mcp.json` 或主配置中的 `mcpServers` 迁移；否则写入占位模板。
  */
 export async function ensureMcpConfigFile(mainConfigPath?: string): Promise<void> {
   const mcpPath = resolveMcpConfigPath();
   const dir = path.dirname(mcpPath);
   await fs.mkdir(dir, { recursive: true });
   if (await exists(mcpPath)) return;
+
+  const legacyDevMcp = path.join(LOCAL_DATA_DIR, 'mcp.json');
+  if (await exists(legacyDevMcp)) {
+    try {
+      const raw = await fs.readFile(legacyDevMcp, 'utf-8');
+      JSON.parse(raw);
+      await fs.writeFile(mcpPath, raw.endsWith('\n') ? raw : `${raw}\n`, 'utf-8');
+      console.log(`[iceCoder] 已从 ${legacyDevMcp} 迁移 MCP 配置至 ${mcpPath}`);
+      return;
+    } catch {
+      /* 使用下方占位 */
+    }
+  }
 
   if (mainConfigPath && (await exists(mainConfigPath))) {
     try {
@@ -290,6 +333,7 @@ export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   await fs.mkdir(paths.skillsDir, { recursive: true });
   await fs.mkdir(paths.outputDir, { recursive: true });
   await fs.mkdir(path.join(paths.dataDir, 'imagesCache'), { recursive: true });
+  await fs.mkdir(getMcpCacheDir(), { recursive: true });
 
   if (!(await exists(paths.configPath))) {
     await fs.writeFile(paths.configPath, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');

@@ -383,6 +383,7 @@ ${c.bold}终端内置命令:${c.reset}
         defaultToolRegistry: ctx.toolRegistry,
         fileParser: ctx.fileParser,
         llmAdapter: ctx.llmAdapter,
+        mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 

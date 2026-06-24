@@ -19,6 +19,7 @@ import type {
 } from './types.js';
 import type { RegisteredTool, ToolResult } from '../tools/types.js';
 import { resolveMcpConfigPath } from '../cli/paths.js';
+import { formatMcpToolResult } from './mcp-result-formatter.js';
 
 /**
  * MCP Manager 配置。
@@ -158,11 +159,15 @@ export class MCPManager {
 
       for (const mcpTool of record.tools) {
         const fullName = `mcp_${serverName}_${mcpTool.name}`;
+        const baseDescription = mcpTool.description || mcpTool.name;
+        const screenshotNote = /screenshot/i.test(mcpTool.name)
+          ? ' Screenshots are returned as in-memory image data (not workspace files); after capture, use the saved path from the tool result with image_read — do not guess paths like {name}.png in the project root.'
+          : '';
 
         tools.push({
           definition: {
             name: fullName,
-            description: `[MCP:${serverName}] ${mcpTool.description || mcpTool.name}`,
+            description: `[MCP:${serverName}] ${baseDescription}${screenshotNote}`,
             parameters: mcpTool.inputSchema || { type: 'object', properties: {}, required: [] },
           },
           handler: this.createToolHandler(serverName, mcpTool.name),
@@ -189,18 +194,12 @@ export class MCPManager {
 
       try {
         const result = await record.client.callTool(toolName, args);
-
-        // 将 MCP 结果转换为 ice-coder 的 ToolResult
-        const textParts = (result.content || [])
-          .filter((c) => c.type === 'text' && c.text)
-          .map((c) => c.text!);
-
-        const output = textParts.join('\n') || '(无文本输出)';
+        const formatted = await formatMcpToolResult(result);
 
         return {
           success: !result.isError,
-          output,
-          error: result.isError ? output : undefined,
+          output: formatted.output,
+          error: result.isError ? formatted.output : undefined,
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

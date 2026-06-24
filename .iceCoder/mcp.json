@@ -1,39 +1,19 @@
-// {
-//   "mcpServers": {
-//     "browsermcp": {
-//       "command": "npx",
-//       "args": ["-y", "@browsermcp/mcp@latest"],
-//       "disabled": false
-//     },
-//     "puppeteer": {
-//       "command": "npx",
-//       "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
-//       "env": {
-//         "PUPPETEER_EXECUTABLE_PATH": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-//       },
-//       "disabled": false
-//     },
-//     "memory": {
-//       "command": "npx",
-//       "args": [
-//         "-y",
-//         "@modelcontextprotocol/server-memory"
-//       ],
-//       "env": {
-//         "MEMORY_FILE_PATH": "E:\\my\\memory\\memory.jsonl"
-//       },
-//       "disabled": false,
-//       "autoApprove": [
-//         "create_entities",
-//         "create_relations",
-//         "add_observations",
-//         "open_nodes",
-//         "search_nodes",
-//         "read_graph",
-//         "delete_entities",
-//         "delte_relations",
-//         "delete_observations"
-//       ]
-//     }
-//   }
-// }
+{
+  "mcpServers": {
+    "browsermcp": {
+      "command": "npx",
+      "args": ["-y", "@browsermcp/mcp@latest"],
+      "disabled": false
+    },
+    "puppeteer": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env": {
+        "PUPPETEER_EXECUTABLE_PATH": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "ALLOW_DANGEROUS": "true",
+        "PUPPETEER_LAUNCH_OPTIONS": "{\"headless\":false,\"args\":[\"--ignore-certificate-errors\",\"--ignore-urlfetcher-cert-requests\",\"--allow-running-insecure-content\",\"--disable-web-security\",\"--no-sandbox\"],\"ignoreHTTPSErrors\":true}"
+      },
+      "disabled": false
+    }
+  }
+}

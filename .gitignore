@@ -11,6 +11,8 @@ data/*
 !data/supervisor-config.json
 !data/supervisor-config.example.json
 !data/skills/
+# skills 目录仅提交模板「创建技能.md」，其余为用户/会话自定义技能
+data/skills/*
 !data/skills/创建技能.md
 LoCoMo/
 .iceCoder/

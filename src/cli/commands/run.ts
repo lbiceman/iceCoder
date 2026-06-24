@@ -72,6 +72,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       defaultToolRegistry: ctx.toolRegistry,
       fileParser: ctx.fileParser,
       llmAdapter: ctx.llmAdapter,
+      mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
 

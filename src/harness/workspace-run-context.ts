@@ -1,7 +1,7 @@
-import path from 'node:path';
-
 import type { FileParser } from '../parser/file-parser.js';
 import type { LLMAdapterInterface, ToolDefinition } from '../llm/types.js';
+import type { MCPManager } from '../mcp/mcp-manager.js';
+import { registerMcpToolsOnRegistry } from '../mcp/start-mcp-background.js';
 import { initializeToolSystem } from '../tools/index.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
@@ -19,6 +19,8 @@ export interface ResolveWorkspaceToolContextParams {
   defaultToolRegistry: ToolRegistry;
   fileParser: FileParser;
   llmAdapter?: LLMAdapterInterface;
+  /** 传入后会把已就绪的 MCP 工具合并进本次 run 的 registry */
+  mcpManager?: MCPManager;
 }
 
 export interface ResolvedWorkspaceToolContext {
@@ -46,6 +48,10 @@ export async function resolveWorkspaceToolContext(
     fileParser: params.fileParser,
     llmAdapter: params.llmAdapter,
   });
+
+  if (params.mcpManager) {
+    registerMcpToolsOnRegistry(toolSystem.registry, params.mcpManager);
+  }
 
   return {
     workspace,

@@ -24,6 +24,7 @@ import type { HarnessConfig } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
+import type { MCPManager } from '../mcp/mcp-manager.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
@@ -453,6 +454,7 @@ export interface ChatWSOptions {
   orchestrator: Orchestrator;
   toolRegistry: ToolRegistry;
   toolExecutor: ToolExecutor;
+  mcpManager?: MCPManager;
   /** 未完成主配置时拒绝 WebSocket 连接 */
   isSetupRequired?: () => boolean;
 }
@@ -1045,7 +1047,7 @@ async function finalizeDirectBrowserTurn(
  * 路径: /api/chat/ws 或 /api/chat/ws?token=xxx
  */
 export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
-  const { orchestrator, toolRegistry, toolExecutor } = options;
+  const { orchestrator, toolRegistry, toolExecutor, mcpManager } = options;
 
   void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(activeSessionId).catch(() => {}));
 
@@ -1383,6 +1385,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               toolExecutor,
               inlineImages,
               parseClientMessageId(msg.messageId),
+              mcpManager,
             );
 
             while (pendingMessages.length > 0) {
@@ -1399,6 +1402,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
                   toolExecutor,
                   pending.images,
                   pending.messageId ?? null,
+                  mcpManager,
                 );
               } catch (err) {
                 broadcastToSession(nextSid, { type: 'error', message: formatFriendlyError(err) });
@@ -1434,6 +1438,7 @@ async function handleChatMessage(
   toolExecutor: ToolExecutor,
   inlineImages: string[] = [],
   clientMessageId: string | null = null,
+  mcpManager?: MCPManager,
 ): Promise<void> {
   // 关键：锁定本次运行的 sessionId。
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
@@ -1605,6 +1610,7 @@ async function handleChatMessage(
     defaultToolRegistry: toolRegistry,
     fileParser: orchestrator.getFileParser(),
     llmAdapter,
+    mcpManager,
   });
   toolDefs = wsCtx.toolDefs;
   const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
