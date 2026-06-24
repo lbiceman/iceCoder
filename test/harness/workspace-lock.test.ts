@@ -104,13 +104,22 @@ describe('workspace-lock', () => {
     expect(violation).toMatch(/Workspace Lock/);
   });
 
-  it('path guard allows reference read outside root', () => {
-    const ref = 'D:\\ref\\xvqiu.md';
+  it('path guard allows read outside locked root without referenceReads', () => {
     const violation = checkWorkspacePathViolation(
       'read_file',
-      { path: ref },
+      { path: 'D:\\ref\\xvqiu.md' },
       'E:\\proj',
-      [ref],
+      [],
+    );
+    expect(violation).toBeUndefined();
+  });
+
+  it('path guard allows parse_document outside locked root', () => {
+    const violation = checkWorkspacePathViolation(
+      'parse_document',
+      { path: 'D:\\docs\\spec.pdf' },
+      'E:\\proj',
+      [],
     );
     expect(violation).toBeUndefined();
   });
@@ -149,24 +158,24 @@ describe('workspace-lock', () => {
     expect(violation).toMatch(/Workspace Lock/);
   });
 
-  it('path guard blocks browse_directory outside workspace', () => {
+  it('path guard allows browse_directory outside workspace', () => {
     const violation = checkWorkspacePathViolation(
       'browse_directory',
       { path: 'D:\\outside' },
       'E:\\proj',
       [],
     );
-    expect(violation).toMatch(/Workspace Lock/);
+    expect(violation).toBeUndefined();
   });
 
-  it('path guard blocks list_drives when workspace locked', () => {
+  it('path guard allows list_drives when workspace locked', () => {
     const violation = checkWorkspacePathViolation(
       'list_drives',
       {},
       'E:\\proj',
       [],
     );
-    expect(violation).toMatch(/list_drives is disabled/);
+    expect(violation).toBeUndefined();
   });
 
   it('normalizeDetectedPath fixes semicolon after drive letter', () => {

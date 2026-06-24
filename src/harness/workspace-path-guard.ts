@@ -11,26 +11,7 @@ import { isUnderRoot, resolveAgainstWorkspace } from '../shared/path-scope.js';
 
 export { isUnderRoot, resolveAgainstWorkspace } from '../shared/path-scope.js';
 
-const READ_PATH_TOOLS = new Set([
-  'read_file',
-  'glob',
-  'grep',
-  'parse_document',
-  'open_file',
-  'image_read',
-  'notebook_read',
-  'doc_parse',
-  'file_info',
-  'parse_xmind_deep',
-  'parse_pptx_deep',
-  'parse_doc_legacy',
-  'parse_xlsx_deep',
-  'diff_files',
-]);
-
 const WRITE_FS_OPERATIONS = new Set(['create_dir', 'delete', 'move', 'copy']);
-
-const READ_FS_OPERATIONS = new Set(['list']);
 
 export function pathsEqual(a: string, b: string): boolean {
   return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
@@ -42,40 +23,21 @@ export function workspaceFileExists(workspaceRoot: string, rawPath: string | und
   return existsSync(resolveAgainstWorkspace(rawPath.trim(), workspaceRoot));
 }
 
-function isAllowedReferenceRead(
-  absPath: string,
-  referenceReads: string[],
-): boolean {
-  return referenceReads.some((ref) => pathsEqual(absPath, ref));
-}
-
 function violationMessage(
   action: string,
   rawPath: string,
   lockedRoot: string,
-  referenceReads: string[],
 ): string {
-  const refHint = referenceReads.length > 0
-    ? ` Allowed reference reads: ${referenceReads.join(', ')}.`
-    : '';
-  return `[Workspace Lock] ${action} path "${rawPath}" is outside locked workspace ${lockedRoot}.${refHint}`;
+  return `[Workspace Lock] ${action} path "${rawPath}" is outside locked workspace ${lockedRoot}.`;
 }
 
-function checkResolvedPath(params: {
+function checkResolvedWritePath(params: {
   rawPath: string;
   lockedRoot: string;
-  referenceReads: string[];
-  write: boolean;
 }): string | undefined {
   const abs = resolveAgainstWorkspace(params.rawPath, params.lockedRoot);
   if (isUnderRoot(abs, params.lockedRoot)) return undefined;
-  if (!params.write && isAllowedReferenceRead(abs, params.referenceReads)) return undefined;
-  return violationMessage(
-    params.write ? 'Write' : 'Read',
-    params.rawPath,
-    params.lockedRoot,
-    params.referenceReads,
-  );
+  return violationMessage('Write', params.rawPath, params.lockedRoot);
 }
 
 function extractPathArg(args: Record<string, unknown>): string | undefined {
@@ -115,123 +77,50 @@ function extractOutsidePathsFromCommand(command: string, workspaceRoot: string):
 function checkFsOperation(
   args: Record<string, unknown>,
   lockedRoot: string,
-  referenceReads: string[],
 ): string | undefined {
   const op = typeof args.operation === 'string' ? args.operation : '';
   const primary = extractPathArg(args);
-  if (!primary) return undefined;
+  if (!primary || !WRITE_FS_OPERATIONS.has(op)) return undefined;
 
-  const isWrite = WRITE_FS_OPERATIONS.has(op);
-  const isRead = READ_FS_OPERATIONS.has(op);
-  if (!isWrite && !isRead) return undefined;
-
-  const primaryViolation = checkResolvedPath({
+  const primaryViolation = checkResolvedWritePath({
     rawPath: primary,
     lockedRoot,
-    referenceReads,
-    write: isWrite,
   });
   if (primaryViolation) return primaryViolation;
 
-  if (isWrite && typeof args.target === 'string' && args.target.trim()) {
-    return checkResolvedPath({
+  if (typeof args.target === 'string' && args.target.trim()) {
+    return checkResolvedWritePath({
       rawPath: args.target.trim(),
       lockedRoot,
-      referenceReads,
-      write: true,
     });
   }
 
-  return undefined;
-}
-
-function checkDiffFiles(
-  args: Record<string, unknown>,
-  lockedRoot: string,
-  referenceReads: string[],
-): string | undefined {
-  for (const key of ['pathA', 'pathB', 'fileA', 'fileB']) {
-    const raw = args[key];
-    if (typeof raw !== 'string' || !raw.trim()) continue;
-    const violation = checkResolvedPath({
-      rawPath: raw.trim(),
-      lockedRoot,
-      referenceReads,
-      write: false,
-    });
-    if (violation) return violation;
-  }
   return undefined;
 }
 
 /**
  * 工作区锁定后的路径硬约束。返回违规则说明；undefined 表示允许。
+ * 仅拦截写入与 shell 越界路径；读取（含跨盘 browse/open/parse_document 等）不拦截。
  */
 export function checkWorkspacePathViolation(
   toolName: string,
   args: Record<string, unknown>,
   lockedRoot: string,
-  referenceReads: string[],
+  _referenceReads: string[],
 ): string | undefined {
   if (!lockedRoot) return undefined;
 
   if (isFileWriteTool(toolName)) {
     const target = extractToolTargetPath(toolName, args);
     if (!target) return undefined;
-    return checkResolvedPath({
+    return checkResolvedWritePath({
       rawPath: target,
       lockedRoot,
-      referenceReads,
-      write: true,
     });
   }
 
   if (toolName === 'fs_operation') {
-    return checkFsOperation(args, lockedRoot, referenceReads);
-  }
-
-  if (toolName === 'browse_directory') {
-    const target = extractPathArg(args);
-    if (!target) return undefined;
-    return checkResolvedPath({
-      rawPath: target,
-      lockedRoot,
-      referenceReads,
-      write: false,
-    });
-  }
-
-  if (toolName === 'list_drives') {
-    return `[Workspace Lock] list_drives is disabled while workspace is locked to ${lockedRoot}. Use fs_operation/list or relative paths within the workspace.`;
-  }
-
-  if (toolName === 'glob' || toolName === 'grep') {
-    const searchRoot = typeof args.path === 'string' && args.path.trim()
-      ? args.path.trim()
-      : typeof args.directory === 'string' && args.directory.trim()
-        ? args.directory.trim()
-        : '.';
-    const violation = checkResolvedPath({
-      rawPath: searchRoot,
-      lockedRoot,
-      referenceReads,
-      write: false,
-    });
-    if (violation) return violation;
-  }
-
-  if (READ_PATH_TOOLS.has(toolName)) {
-    if (toolName === 'diff_files') {
-      return checkDiffFiles(args, lockedRoot, referenceReads);
-    }
-    const target = extractPathArg(args);
-    if (!target) return undefined;
-    return checkResolvedPath({
-      rawPath: target,
-      lockedRoot,
-      referenceReads,
-      write: false,
-    });
+    return checkFsOperation(args, lockedRoot);
   }
 
   if (toolName === 'run_command') {

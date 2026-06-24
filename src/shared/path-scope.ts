@@ -25,6 +25,7 @@ export type RipgrepSearchScope =
 
 /**
  * 解析 glob/grep 的搜索根：目录原样；若 path 指向文件则用其所在目录，rg 目标为该文件。
+ * 允许绝对路径或相对路径解析到 workDir 外（读取不限制跨目录/跨盘）。
  */
 export async function resolveRipgrepSearchScope(
   workDir: string,
@@ -34,13 +35,7 @@ export async function resolveRipgrepSearchScope(
   const raw = rawPath?.trim();
   const resolved = !raw || raw === '.'
     ? base
-    : path.isAbsolute(raw)
-      ? path.resolve(raw)
-      : path.resolve(base, raw);
-
-  if (!isUnderRoot(resolved, base)) {
-    return { ok: false, error: 'search path must stay within the work directory' };
-  }
+    : resolveAgainstWorkspace(raw, base);
 
   try {
     const st = await stat(resolved);

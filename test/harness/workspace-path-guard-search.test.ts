@@ -6,14 +6,14 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 describe('workspace-path-guard glob/grep', () => {
-  it('blocks grep with relative path outside locked root', () => {
+  it('allows grep with relative path outside locked root', () => {
     const msg = checkWorkspacePathViolation(
       'grep',
       { pattern: 'foo', path: '..' },
       repoRoot,
       [],
     );
-    expect(msg).toMatch(/Workspace Lock|outside locked workspace/i);
+    expect(msg).toBeUndefined();
   });
 
   it('allows grep within locked root', () => {
@@ -26,13 +26,13 @@ describe('workspace-path-guard glob/grep', () => {
     expect(msg).toBeUndefined();
   });
 
-  it('blocks glob with directory escape', () => {
+  it('allows glob with directory escape at guard layer', () => {
     const msg = checkWorkspacePathViolation(
       'glob',
       { pattern: '**/*', directory: '../' },
       repoRoot,
       [],
     );
-    expect(msg).toMatch(/Workspace Lock|outside locked workspace/i);
+    expect(msg).toBeUndefined();
   });
 });

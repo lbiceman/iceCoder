@@ -13,14 +13,13 @@ describe('search path scope', () => {
     rgAvailable = !!(await resolveRipgrepPath());
   });
 
-  it('rejects grep path outside workDir', async () => {
+  it('allows grep path outside workDir', async () => {
     const grepTool = createSearchTools(repoRoot).find((t) => t.definition.name === 'grep')!;
     const result = await grepTool.handler({
       pattern: 'test',
       path: '..',
     });
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/within the work directory/i);
+    expect(result.error ?? '').not.toMatch(/within the work directory/i);
   });
 
   it('glob finds files under workDir', async () => {
