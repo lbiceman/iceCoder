@@ -11,11 +11,8 @@ import {
   normalizeRunCommand,
 } from './shell-command-normalizer.js';
 import { analyzeInlineScriptCommand } from '../shell-inline-script-advisory.js';
-import {
-  analyzeShellHostSafety,
-  buildShellChildEnv,
-  matchesDangerousShellPattern,
-} from '../shell-host-guard.js';
+import { analyzeShellSandbox } from '../shell-sandbox.js';
+import { buildShellChildEnv } from '../shell-host-guard.js';
 import {
   classifyShellCommand,
   pickBackgroundHardTimeout,
@@ -24,8 +21,6 @@ import {
   SOFT_TIMEOUT_MS,
 } from '../shell-runtime-classifier.js';
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
-import { isDestructiveCommand } from '../tool-metadata.js';
-import { readSkipSandboxFromMainConfigSync } from '../../config/main-config-supervisor-mode.js';
 import { assertAgentMemoryShellCommandAllowed } from '../../memory/file-memory/memory-write-pipeline.js';
 
 /** 命令执行超时（毫秒） */
@@ -45,7 +40,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Runtime auto-picks foreground/background by command shape: long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) go background and return a task_id immediately; short commands (git status, ls, tsc --noEmit) run foreground with a 10s cap. Force with background:true only if the classifier missed it; never set background:true for destructive commands (rm/del/git push -f). Pass command as a top-level argument (alias: cmd). Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks for this session. Use task_id + action:"stop" to kill a running background task. Has dangerous command blocklist. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead.',
+        'Execute shell commands (foreground or background). Runtime auto-picks foreground/background by command shape: long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) go background and return a task_id immediately; short commands (git status, ls, tsc --noEmit) run foreground with a 10s cap. Force with background:true only if the classifier missed it. Pass command as a top-level argument (alias: cmd). Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks for this session. Use task_id + action:"stop" to kill a running background task. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead.',
       parameters: {
         type: 'object',
         properties: {
@@ -143,16 +138,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
       const explicitBackground = args.background === true;
       const explicitForeground = args.background === false;
 
-      // destructive 命令拒绝静默后台（包括 classifier 判 long + 显式 background:true）
-      const destructive = trimmedCommand ? isDestructiveCommand(trimmedCommand) : false;
-
-      // 决定实际是否走后台：
-      // 1) explicit background:true 且非 destructive → background
-      // 2) explicit background:false → foreground（永不 background）
-      // 3) classifier === 'long' 且非 destructive → background (auto)
-      // 4) 否则 → foreground
       const shouldBackground =
-        !destructive &&
         !explicitForeground &&
         (explicitBackground || shellClass === 'long');
 
@@ -166,11 +152,9 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (inlineAdvisory?.block) {
           return { success: false, output: '', error: inlineAdvisory.message };
         }
-        if (!readSkipSandboxFromMainConfigSync()) {
-          const bgHostGuard = analyzeShellHostSafety(command, { workDir });
-          if (bgHostGuard.blocked) {
-            return { success: false, output: '', error: bgHostGuard.message ?? '[HostGuard / Blocked]' };
-          }
+        const sandbox = analyzeShellSandbox(command, { workDir });
+        if (sandbox.blocked) {
+          return { success: false, output: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
         }
         const userTimeoutMs = (args.timeout as number) || 0;
         const hardTimeoutMs = userTimeoutMs > 0
@@ -212,15 +196,9 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         return { success: false, output: '', error: inlineAdvisory.message };
       }
 
-      if (!readSkipSandboxFromMainConfigSync()) {
-        const hostGuard = analyzeShellHostSafety(command, { workDir });
-        if (hostGuard.blocked) {
-          return { success: false, output: '', error: hostGuard.message ?? '[HostGuard / Blocked]' };
-        }
-      }
-
-      if (matchesDangerousShellPattern(command)) {
-        return { success: false, output: '', error: 'Security check failed: command matches dangerous pattern' };
+      const sandbox = analyzeShellSandbox(command, { workDir });
+      if (sandbox.blocked) {
+        return { success: false, output: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
       }
 
       const normalized = normalizeRunCommand(command, { workDir });

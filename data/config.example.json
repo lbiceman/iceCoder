@@ -1,6 +1,28 @@
 {
   "supervisorMode": "adaptive",
-  "skipSandbox": false,
+  "shellBlacklist": [
+    "rm\\s+-rf",
+    "rm\\s+-fr",
+    "rmdir\\s+/s",
+    "rd\\s+/s",
+    "format\\s+[a-z]:",
+    "\\bmkfs\\b",
+    "dd\\s+if=",
+    ":>\\s*/etc/",
+    "\\bshutdown\\b",
+    "\\breboot\\b",
+    "\\bhalt\\b",
+    "\\bpoweroff\\b",
+    "git\\s+push\\s+.*(-f|--force)",
+    "git\\s+reset\\s+--hard",
+    "git\\s+clean\\s+.*-f",
+    "\\bdel\\s+/[fq]",
+    "\\berase\\s+/[fq]",
+    "\\bdiskpart\\b",
+    "\\bfdisk\\b",
+    "\\bdropdb\\b",
+    "DROP\\s+(TABLE|DATABASE)"
+  ],
   "providers": [
     {
       "id": "default",

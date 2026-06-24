@@ -74,6 +74,7 @@ export function createDoingTasksSection(): PromptSection {
 3. Complete a step → verify with tests or observable output when you changed code.
 4. Test fails → fix or report plainly. Do not sugarcoat or stop on a failing suite without saying so.
 5. Unclear or generic instruction → interpret in software-engineering context and the working directory (e.g. rename a method in code, not just answer with a string).
+6. Unless the user asks otherwise, prefer changes inside the current workspace; you may access other paths when the task clearly requires it.
 
 ## User intent
 - The user's latest message is the PRIMARY directive. Execute it.
@@ -151,7 +152,6 @@ export function createToolUsageSection(): PromptSection {
 - If a foreground command returns mode:'escalated' with a taskId, it has been moved to background after ~8s. Do NOT retry; poll later with action:'check'.
 - Polling: { action:'check', task_id, since:<prev cursor> } returns only new output. Always pass back the returned \`cursor\` next time.
 - The runtime may inject a [Background Task Status] block every ~5 minutes for any running task. Treat it as ground truth; don't echo it to the user verbatim.
-- Never set background:true for destructive commands (rm/del/git push -f …).
 
 ## MCP (Model Context Protocol)
 - Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.

@@ -72,7 +72,7 @@ async function removeStaleMemoryFileIfMoved(fromPath: string, toPath: string): P
 
 /**
  * 创建文件工具集。
- * @param workDir - 工作目录根路径，所有文件操作限制在此目录内
+ * @param workDir - 默认工作目录；相对路径基于此解析，绝对路径直接使用
  */
 export function createFileTools(workDir: string, sessionId = 'default'): RegisteredTool[] {
   return [

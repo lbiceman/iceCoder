@@ -10,7 +10,7 @@ import { LoopController } from '../../src/harness/loop-controller.js';
 import type { ToolCall, UnifiedMessage } from '../../src/llm/types.js';
 
 describe('harness-tool-executor policy blocks', () => {
-  it('allows read_file outside locked workspace without policy block', async () => {
+  it('allows paths outside locked workspace without policy block', async () => {
     const tc: ToolCall = {
       id: 'tc-outside',
       name: 'read_file',
@@ -25,37 +25,6 @@ describe('harness-tool-executor policy blocks', () => {
         toolExecutor: { executeTool } as never,
         loopController,
         permissionRules: [],
-        workspaceRoot: 'E:/locked/project',
-        lockedWorkspaceRoot: 'E:/locked/project',
-        referenceReads: [],
-      },
-      {
-        toolCalls: [tc],
-        messages,
-        logger: { toolCall: () => {}, toolResult: () => {} } as never,
-      },
-    );
-
-    expect(executeTool).toHaveBeenCalledOnce();
-    expect(stats.policyBlockedSignatures).toHaveLength(0);
-  });
-
-  it('allows paths outside locked workspace when skipSandbox is true', async () => {
-    const tc: ToolCall = {
-      id: 'tc-outside-open',
-      name: 'read_file',
-      arguments: { path: 'C:/outside/project/foo.ts' },
-    };
-    const messages: UnifiedMessage[] = [];
-    const loopController = new LoopController({ maxRounds: 1 });
-    const executeTool = vi.fn().mockResolvedValue({ success: true, output: 'ok' });
-
-    const stats = await executeToolCallsStreaming(
-      {
-        toolExecutor: { executeTool } as never,
-        loopController,
-        permissionRules: [],
-        skipSandbox: true,
         workspaceRoot: 'E:/locked/project',
         lockedWorkspaceRoot: 'E:/locked/project',
         referenceReads: [],

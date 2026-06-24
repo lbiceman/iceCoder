@@ -9,17 +9,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** 通用危险 shell 模式（与 shell-tool / background-task-manager 共享） */
-export const DANGEROUS_SHELL_PATTERNS: RegExp[] = [
-  /\brm\s+-rf\s+\/(?!\w)/i,
-  /\bformat\b/i,
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /\b:>\s*\/etc\//i,
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-];
-
 /** 按进程镜像名广杀 node/tsx — 会终止 iceCoder 宿主 */
 const HOST_KILL_PATTERN_DEFS: Array<{ re: RegExp; label: string }> = [
   { re: /\btaskkill\b[^;\n\r]*\/IM\s+[\s"']*(?:node(?:js)?|tsx)(?:\.exe)?/i, label: 'taskkill /IM node' },
@@ -46,22 +35,48 @@ export interface ShellHostGuardResult {
   matchLabel?: string;
 }
 
-export function matchesDangerousShellPattern(command: string): boolean {
-  return DANGEROUS_SHELL_PATTERNS.some(p => p.test(command));
-}
-
 export function findHostKillInText(text: string): string | null {
   for (const { re, label } of HOST_KILL_PATTERN_DEFS) {
     if (re.test(text)) return label;
   }
+  return findSelfPidKillInText(text);
+}
+
+/** 拦截针对 iceCoder 宿主 PID 的精确杀进程（允许 taskkill 其他 PID）。 */
+export function findSelfPidKillInText(text: string, rootPid = process.pid): string | null {
+  const pidStr = String(rootPid);
+
+  if (/ICE_AGENT_ROOT_PID/i.test(text)) {
+    if (/\btaskkill\b/i.test(text)) return 'taskkill /PID agent root';
+    if (/\bkill\b/i.test(text)) return 'kill agent root pid';
+    if (/Stop-Process/i.test(text)) return 'Stop-Process agent root pid';
+  }
+
+  let match: RegExpExecArray | null;
+  const taskkillPidRe = /\btaskkill\b[^;\n\r]*?\/PID\s+(\d+)/gi;
+  while ((match = taskkillPidRe.exec(text)) !== null) {
+    if (match[1] === pidStr) return 'taskkill /PID agent root';
+  }
+
+  const killNumRe = /\bkill\s+(?:-\S+\s+)*(\d+)/gi;
+  while ((match = killNumRe.exec(text)) !== null) {
+    if (match[1] === pidStr) return 'kill agent root pid';
+  }
+
+  const stopIdRe = /Stop-Process\s+[^\n\r]*?-Id\s+(\d+)/gi;
+  while ((match = stopIdRe.exec(text)) !== null) {
+    if (match[1] === pidStr) return 'Stop-Process -Id agent root';
+  }
+
   return null;
 }
 
 export const HOST_GUARD_HINT = [
   'Broad process kills (taskkill /IM node, killall node, pkill node) terminate the running iceCoder agent.',
+  'Never kill the agent root PID (ICE_AGENT_ROOT_PID / current node process).',
   'To stop a dev/preview server, kill by port/PID instead:',
   '  netstat -ano | findstr :4173',
-  '  taskkill /F /PID <pid>',
+  '  taskkill /F /PID <other-pid>',
   'Do not retry the same command or embed it in scripts.',
 ].join('\n');
 

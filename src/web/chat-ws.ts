@@ -54,7 +54,6 @@ import {
 import { loadHarnessSupervisorRuntime } from '../harness/supervisor/supervisor-config.js';
 import {
   readSkipPermissionChecksFromMainConfig,
-  readSkipSandboxFromMainConfig,
 } from '../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import {
@@ -1591,7 +1590,6 @@ async function handleChatMessage(
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
-  const skipSandbox = await readSkipSandboxFromMainConfig(MAIN_CONFIG_PATH);
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
@@ -1639,7 +1637,6 @@ async function handleChatMessage(
       { pattern: 'fs_operation', permission: 'confirm', reason: 'File system operations require confirmation' },
     ],
     skipPermissionChecks,
-    skipSandbox,
     compactionThreshold: 40,
     compactionKeepRecent: 10,
     compactionEnableLLMSummary: true,

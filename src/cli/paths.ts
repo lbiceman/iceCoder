@@ -15,6 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { IceCoderConfigFile } from '../web/types.js';
+import { DEFAULT_SHELL_BLACKLIST_PATTERNS } from '../tools/shell-sandbox.js';
 
 /** 用户主目录下的 iceCoder 数据目录（生产环境） */
 export const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
@@ -200,6 +201,7 @@ export const MCP_SERVERS_TEMPLATE: Record<string, Record<string, unknown>> = {
 
 const DEFAULT_CONFIG: IceCoderConfigFile = {
   supervisorMode: 'adaptive',
+  shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
   providers: [
     {
       id: 'default',
