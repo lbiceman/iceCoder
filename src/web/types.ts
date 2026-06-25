@@ -12,6 +12,11 @@ export interface ProviderConfig {
   apiKey: string;
   modelName: string;
   /**
+   * OpenAI 兼容 API 模式：`chat_completions`（默认）或 `responses`（Bedrock GPT-5.4/5.5 等）。
+   * 也可在 `parameters.apiMode` 中设置。
+   */
+  apiMode?: 'chat_completions' | 'responses';
+  /**
    * OpenAI 兼容适配器：单次 HTTP 请求超时（毫秒）。
    * 未设置时可用环境变量 ICE_OPENAI_REQUEST_TIMEOUT_MS；再高才回退 SDK 默认。
    */

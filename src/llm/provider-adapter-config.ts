@@ -6,6 +6,7 @@ import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/r
 export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenAIAdapterConfig {
   const maxTokens = provider.parameters.maxTokens ?? getModelMaxOutputTokens(provider.modelName);
   const rt = resolveOpenAiRequestTimeoutMs(provider);
+  const apiMode = provider.apiMode ?? provider.parameters.apiMode;
   return {
     name: provider.id,
     apiKey: provider.apiKey,
@@ -15,6 +16,7 @@ export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenA
     maxTokens,
     topP: provider.parameters.topP,
     supportsVision: provider.supportsVision ?? true,
+    ...(apiMode === 'responses' || apiMode === 'chat_completions' ? { apiMode } : {}),
     ...(rt !== undefined ? { timeout: rt } : {}),
   };
 }

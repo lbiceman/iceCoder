@@ -149,6 +149,7 @@ function getModelMaxContext(modelName: string): number {
   if (name.includes('gpt-3.5-turbo-16k')) return 16384;
   if (name.includes('gpt-3.5')) return 4096;
   if (name.includes('o1') || name.includes('o3') || name.includes('o4')) return 200000;
+  if (name.includes('openai.gpt-5.5') || name.includes('openai.gpt-5.4')) return 272000;
 
   // GLM 系列
   if (name.includes('glm-4')) return 128000;
