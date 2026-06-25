@@ -15,6 +15,7 @@ data/*
 data/skills/*
 !data/skills/创建技能.md
 LoCoMo/
+# 项目级本地配置（MCP、memory.md 等），不提交
 .iceCoder/
 .cursor/
 # Pipeline 输出
