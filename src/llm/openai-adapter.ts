@@ -19,7 +19,11 @@ import type {
 import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
-import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import {
+  cleanText as sanitizeText,
+  resolveContentText,
+  safeParseToolArguments,
+} from './text-sanitize.js';
 import { isAbortError, makeAbortedError } from './abort-error.js';
 import { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 import {
@@ -146,25 +150,6 @@ export class OpenAIAdapter implements ProviderAdapter {
       supportsVision: this.supportsVision,
       reqOpts: this.buildRequestOptions(options, signal),
     };
-  }
-
-  /**
-   * 根据模型名称自动检测是否支持视觉输入。
-   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), qwen-vl 等。
-   * 保守策略：未知模型默认不支持。
-   */
-  private detectVisionSupport(model: string): boolean {
-    const m = model.toLowerCase();
-    // OpenAI 视觉模型
-    if (m.includes('gpt-4o') || m.includes('gpt-4-vision') || m.includes('gpt-4-turbo')) return true;
-    // 通义千问视觉
-    if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
-    // Google Gemini
-    if (m.includes('gemini')) return true;
-    // Xiaomi MiMo Omni 等多模态
-    if (m.includes('omni') || m.includes('-vl') || m.includes('_vl')) return true;
-    // 默认不支持（DeepSeek、GLM 等纯文本模型）
-    return false;
   }
 
   private buildRequestOptions(
@@ -578,31 +563,14 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 清理可能导致 JSON 解析失败的非法字符。
    */
   private resolveContent(content: string | ContentBlock[]): string {
-    let text: string;
-    if (typeof content === 'string') {
-      text = content;
-    } else {
-      text = content
-        .filter((block) => block.type === 'text' && block.text)
-        .map((block) => block.text!)
-        .join('\n');
-    }
-    return this.cleanText(text);
+    return resolveContentText(content);
   }
 
   /**
    * 清理文本中可能导致 API JSON 解析失败的非法字符。
    */
   private cleanText(text: string): string {
-    // 1. 清理 ASCII 控制字符（保留 \t \n \r）
-    text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-    // 2. 清理 lone surrogates（U+D800-U+DFFF），这些在 JSON 中非法
-    // eslint-disable-next-line no-control-regex
-    text = text.replace(/[\uD800-\uDFFF]/g, '\uFFFD');
-    // 3. 清理其他 Unicode 控制字符（C1 控制字符 U+0080-U+009F）
-    // eslint-disable-next-line no-control-regex
-    text = text.replace(/[\x80-\x9F]/g, '');
-    return text;
+    return sanitizeText(text);
   }
 
   /**
@@ -807,11 +775,7 @@ export class OpenAIAdapter implements ProviderAdapter {
    * Safely parse JSON string to object.
    */
   private safeParseJSON(jsonStr: string): Record<string, any> {
-    try {
-      return normalizeToolArguments(JSON.parse(jsonStr)) as Record<string, any>;
-    } catch {
-      return normalizeToolArguments({ raw: jsonStr }) as Record<string, any>;
-    }
+    return safeParseToolArguments(jsonStr) as Record<string, any>;
   }
 
   /**

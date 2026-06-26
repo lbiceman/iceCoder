@@ -128,6 +128,15 @@ export class MCPManager {
       record.status = 'error';
       record.error = message;
       console.error(`[mcp-manager] 服务器 ${name} 启动失败: ${message}`);
+      // 防止僵尸进程：spawn 可能已成功但 initialize()/listTools() 失败，
+      // 此时子进程仍在运行，必须显式 stop() 回收（stop 对未 spawn 的情况是安全空操作）。
+      try {
+        await client.stop();
+      } catch (stopErr) {
+        console.error(
+          `[mcp-manager] 服务器 ${name} 启动失败后清理子进程出错: ${stopErr instanceof Error ? stopErr.message : stopErr}`,
+        );
+      }
     }
   }
 

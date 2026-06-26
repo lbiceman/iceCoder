@@ -53,4 +53,16 @@ desktop/release/
 desktop/.cache/
 desktop/package-lock.json
 
+# 构建产物 / 包（npm pack 输出不入库）
+*.tgz
+
+# 统一使用 npm（根目录 .npmrc + package-lock.json）；忽略根级 pnpm 锁文件避免双包管理器
+/pnpm-lock.yaml
+
+# curl/调试残留
+cookies.txt
+
+# Electron 临时目录
+desktop/_electron_tmp/
+
 # 公开发布安装包纳入版本库：releases/windows/*.exe

@@ -148,6 +148,9 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
     llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
+  // 清理已从配置中删除/改名的陈旧 provider
+  llmAdapter.pruneProviders(providers.map((p) => p.id));
+
   const defaultProvider = providers.find((p) => p.isDefault);
   if (defaultProvider) {
     llmAdapter.setDefaultProvider(defaultProvider.id);

@@ -24,7 +24,7 @@ Configure your API key on first launch. Data directory: `~/.iceCoder/`. Build fr
 
 Install, configure API keys, start dev/Web/CLI, run one-shot tasks, tests, and coverage — **all commands are in** [`docs/使用文档.md`](./docs/使用文档.md) (not duplicated here).
 
-Node.js **18+** (22+ recommended) · Dev data: `./data/` · Prod: `~/.iceCoder/` — env vars: [`docs/environment-variables.md`](./docs/environment-variables.md).
+Node.js **22+** (required, matches `engines.node >=22`) · Dev data: `./data/` · Prod: `~/.iceCoder/` — env vars: [`docs/environment-variables.md`](./docs/environment-variables.md).
 
 ---
 

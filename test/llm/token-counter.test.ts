@@ -122,4 +122,36 @@ describe('TokenCounter', () => {
       expect(counter.getCumulativeStats()).toEqual([]);
     });
   });
+
+  // P2-19: 明细有上限防止无界增长，但累计统计基于独立聚合不受丢弃影响
+  describe('明细上限与累计聚合（P2-19）', () => {
+    it('明细条数不超过 maxRecords，丢弃最旧的', () => {
+      const capped = new TokenCounter(3);
+      for (let i = 1; i <= 10; i++) {
+        capped.record({ inputTokens: i, outputTokens: 0, totalTokens: i, provider: 'openai' });
+      }
+      const stats = capped.getStats();
+      expect(stats).toHaveLength(3);
+      // 仅保留最近 3 条（i=8,9,10）
+      expect(stats.map((s) => s.inputTokens)).toEqual([8, 9, 10]);
+    });
+
+    it('即使明细被丢弃，getTotalTokens / getCumulativeStats 仍统计全量', () => {
+      const capped = new TokenCounter(3);
+      for (let i = 1; i <= 10; i++) {
+        capped.record({ inputTokens: i, outputTokens: 1, totalTokens: i + 1, provider: 'openai' });
+      }
+      // 全量 total = Σ(i+1), i=1..10 = (55) + 10 = 65
+      expect(capped.getTotalTokens()).toBe(65);
+      const cum = capped.getCumulativeStats();
+      expect(cum).toHaveLength(1);
+      expect(cum[0]).toEqual({
+        provider: 'openai',
+        totalInputTokens: 55,
+        totalOutputTokens: 10,
+        totalTokens: 65,
+        callCount: 10,
+      });
+    });
+  });
 });

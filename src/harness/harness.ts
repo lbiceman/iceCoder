@@ -71,7 +71,7 @@ import { ensureDelegateToSubagentTool } from './sub-agent-runner.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
 import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
 import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
-import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../web/routes/config.js';
+import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../config/model-capabilities.js';
 import {
   buildModeDecisionContext,
   buildRuntimeExecutionState,

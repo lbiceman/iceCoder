@@ -4,7 +4,6 @@
 
 import OpenAI from 'openai';
 import type {
-  ContentBlock,
   LLMOptions,
   LLMResponse,
   StreamCallback,
@@ -14,7 +13,11 @@ import type {
 } from './types.js';
 import { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
-import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import {
+  cleanText,
+  resolveContentText as resolveText,
+  safeParseToolArguments as safeParseJSON,
+} from './text-sanitize.js';
 
 export type OpenAiApiMode = 'chat_completions' | 'responses';
 
@@ -23,28 +26,6 @@ export function resolveOpenAiApiMode(model: string, apiMode?: string): OpenAiApi
   // Bedrock Mantle 上 OpenAI GPT-5.4/5.5 仅支持 Responses API
   if (/^openai\.gpt-5\.(4|5)$/i.test(model)) return 'responses';
   return 'chat_completions';
-}
-
-function cleanText(text: string): string {
-  text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  // eslint-disable-next-line no-control-regex
-  text = text.replace(/[\uD800-\uDFFF]/g, '\uFFFD');
-  // eslint-disable-next-line no-control-regex
-  text = text.replace(/[\x80-\x9F]/g, '');
-  return text;
-}
-
-function resolveText(content: string | ContentBlock[]): string {
-  let text: string;
-  if (typeof content === 'string') {
-    text = content;
-  } else {
-    text = content
-      .filter((block) => block.type === 'text' && block.text)
-      .map((block) => block.text!)
-      .join('\n');
-  }
-  return cleanText(text);
 }
 
 function convertToResponsesInput(
@@ -177,14 +158,6 @@ function buildResponsesParams(
   }
 
   return params as OpenAI.Responses.ResponseCreateParams;
-}
-
-function safeParseJSON(jsonStr: string): Record<string, unknown> {
-  try {
-    return normalizeToolArguments(JSON.parse(jsonStr)) as Record<string, unknown>;
-  } catch {
-    return normalizeToolArguments({ raw: jsonStr }) as Record<string, unknown>;
-  }
 }
 
 function extractReasoningFromOutput(

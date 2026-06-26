@@ -1,6 +1,6 @@
 import type { ProviderConfig } from '../web/types.js';
 import type { OpenAIAdapterConfig } from './openai-adapter.js';
-import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../web/routes/config.js';
+import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../config/model-capabilities.js';
 
 /** 将 data/config.json 中的 provider 条目转为 OpenAIAdapter 构造参数。 */
 export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenAIAdapterConfig {
