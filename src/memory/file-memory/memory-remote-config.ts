@@ -19,7 +19,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
+import { writeFileAtomic } from './atomic-write.js';
 import {
   type MemoryDynamicConfig,
   DEFAULT_DYNAMIC_CONFIG,
@@ -82,9 +82,7 @@ export async function refreshConfig(): Promise<MemoryDynamicConfig> {
  */
 export async function saveConfig(config: Partial<MemoryDynamicConfig>): Promise<void> {
   const merged = mergeConfig(cachedConfig, config);
-  const dir = path.dirname(REMOTE_CONFIG_FILE_PATH);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(REMOTE_CONFIG_FILE_PATH, JSON.stringify(merged, null, 2), 'utf-8');
+  await writeFileAtomic(REMOTE_CONFIG_FILE_PATH, JSON.stringify(merged, null, 2), 'utf-8');
   cachedConfig = merged;
   lastLoadTime = Date.now();
 }

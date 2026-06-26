@@ -8,6 +8,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from './atomic-write.js';
 import type { MemoryHeader } from './types.js';
 
 /** 索引健康报告 */
@@ -208,7 +209,7 @@ export async function repairDeadLinksInMemoryIndex(
   }
 
   const collapsed = outLines.join('\n').replace(/\n{3,}/g, '\n\n');
-  await fs.writeFile(indexPath, collapsed.trimEnd() + '\n', 'utf-8');
+  await writeFileAtomic(indexPath, collapsed.trimEnd() + '\n', 'utf-8');
   return { removedLinks, wrote: true };
 }
 
@@ -270,6 +271,6 @@ export async function rebuildMemoryIndexFromMemories(
   }
 
   const indexPath = path.join(path.resolve(memoryDir), 'MEMORY.md');
-  await fs.writeFile(indexPath, sections.join('\n').trimEnd() + '\n', 'utf-8');
+  await writeFileAtomic(indexPath, sections.join('\n').trimEnd() + '\n', 'utf-8');
   return { wrote: true, entryCount: sorted.length };
 }

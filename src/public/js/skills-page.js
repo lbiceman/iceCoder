@@ -114,9 +114,28 @@ window.SkillsPage = (function () {
             '<p class="skills-detail-desc">' + escapeHtml(meta.description || '') + '</p>' +
             '<div class="skills-detail-actions">' +
               '<button type="button" class="skills-btn skills-btn-danger" id="skills-delete-btn">删除技能</button>' +
+              '<button type="button" class="skills-btn skills-btn-primary" id="skills-use-btn">使用技能</button>' +
             '</div>' +
           '</div>' +
           '<pre class="skills-detail-content">' + escapeHtml(content) + '</pre>';
+
+        var useBtn = detailEl.querySelector('#skills-use-btn');
+        if (useBtn) {
+          useBtn.addEventListener('click', function () {
+            if (window.ChatSkills && typeof window.ChatSkills.useSkill === 'function') {
+              window.ChatSkills.useSkill(filename);
+            }
+            if (window.location.hash !== '#/chat') {
+              window.location.hash = '#/chat';
+            } else {
+              window.dispatchEvent(new HashChangeEvent('hashchange'));
+            }
+            setTimeout(function () {
+              var input = document.getElementById('chat-input');
+              if (input) input.focus();
+            }, 0);
+          });
+        }
 
         var delBtn = detailEl.querySelector('#skills-delete-btn');
         if (delBtn) {

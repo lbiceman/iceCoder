@@ -378,10 +378,12 @@ export class MCPClient {
     this._ready = false;
 
     if (this.process) {
-      // 先尝试优雅关闭
+      // 先尝试优雅关闭（通知失败不影响后续 SIGTERM，但记录便于排查）
       try {
         this.sendNotification('notifications/cancelled', {});
-      } catch { /* ignore */ }
+      } catch (err) {
+        console.debug('[mcp-client] 发送 cancelled 通知失败（将继续 SIGTERM）:', err instanceof Error ? err.message : err);
+      }
 
       this.process.kill('SIGTERM');
 

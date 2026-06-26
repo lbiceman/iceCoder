@@ -104,7 +104,7 @@ export async function resilienceRecordToolCalls(
             },
           });
         } catch (err) {
-          console.debug(
+          console.warn(
             '[harness] resilience v2 save (tool_failed) failed:',
             err instanceof Error ? err.message : err,
           );
@@ -131,7 +131,7 @@ export async function resilienceRecordToolCalls(
           },
         });
       } catch (err) {
-        console.debug(
+        console.warn(
           '[harness] resilience v2 save (tool) failed:',
           err instanceof Error ? err.message : err,
         );
@@ -185,7 +185,7 @@ export function resilienceMaybeBranchRecover(
         appendRecoverySignal: signal,
       });
     } catch (err) {
-      console.debug(
+      console.warn(
         '[harness] resilience v2 save (recovery signal) failed:',
         err instanceof Error ? err.message : err,
       );
@@ -290,7 +290,7 @@ export async function resilienceSaveCheckpoint(
         lastStopReason: stopReason,
       });
     } catch (err) {
-      console.debug(
+      console.warn(
         `[harness] resilience v2 save (${trigger}) failed:`,
         err instanceof Error ? err.message : err,
       );

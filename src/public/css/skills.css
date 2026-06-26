@@ -224,6 +224,16 @@
 }
 .skills-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+.skills-btn-primary {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.skills-btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
 .skills-btn-danger {
   border-color: color-mix(in srgb, #e55 35%, var(--border-color));
   color: #e66;

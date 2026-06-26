@@ -22,6 +22,7 @@ window.ChatSkills = (function () {
   var chipBarEl = null;
 
   var selectedSkills = [];
+  var pendingSkills = [];
   var chipBarFocused = false;
   var chipFocusIndex = -1;
 
@@ -186,6 +187,32 @@ window.ChatSkills = (function () {
     chipBarFocused = false;
     chipFocusIndex = -1;
     renderChipBar();
+  }
+
+  function focusComposerInput() {
+    var input = activeInputEl || document.getElementById('chat-input');
+    if (!input) return;
+    setTimeout(function () { input.focus(); }, 0);
+  }
+
+  function drainPendingSkills() {
+    var hadPending = pendingSkills.length > 0;
+    while (pendingSkills.length) {
+      addSkill(pendingSkills.shift());
+    }
+    if (hadPending) focusComposerInput();
+  }
+
+  /** 从技能库等页面选用技能：写入输入框上方 chip 栏并聚焦输入框 */
+  function useSkill(filename) {
+    var fn = String(filename || '').replace(/^#/, '');
+    if (!fn) return;
+    if (chipBarEl) {
+      addSkill(fn);
+      focusComposerInput();
+    } else {
+      pendingSkills.push(fn);
+    }
   }
 
   function removeSkillAt(index) {
@@ -405,6 +432,7 @@ window.ChatSkills = (function () {
         if (inputEl) inputEl.focus();
       });
     }
+    drainPendingSkills();
     renderChipBar();
   }
 
@@ -431,6 +459,8 @@ window.ChatSkills = (function () {
     initSkillComposer: initSkillComposer,
     clearSkillChipMode: clearSkillChipMode,
     clearInput: clearInput,
+    addSkill: addSkill,
+    useSkill: useSkill,
     getComposerText: getComposerText,
     getSelectedRefs: function () {
       return selectedSkills.map(function (fn) { return '#' + fn; });

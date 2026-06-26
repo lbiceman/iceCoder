@@ -8,6 +8,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { writeFileAtomic } from './atomic-write.js';
 import path from 'node:path';
 import type { LLMAdapterInterface, UnifiedMessage } from '../../llm/types.js';
 import { formatMemoryManifest } from './memory-scanner.js';
@@ -655,7 +656,7 @@ ${memory.content}
           safeContent = redactSecrets(fileContent);
         }
 
-        await fs.writeFile(filePath, safeContent, 'utf-8');
+        await writeFileAtomic(filePath, safeContent, 'utf-8');
         writtenPaths.push(filePath);
 
         // Phase 1: 写后维护 MEMORY.md 索引

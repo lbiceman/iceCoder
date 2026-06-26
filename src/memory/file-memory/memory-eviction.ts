@@ -14,6 +14,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { writeFileAtomic } from './atomic-write.js';
 import path from 'node:path';
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
@@ -245,8 +246,7 @@ export async function evictIfNeeded(
       try {
         const content = await fs.readFile(mem.filePath, 'utf-8');
         const destPath = path.join(cfg.evictedDir, mem.filename);
-        await fs.mkdir(path.dirname(destPath), { recursive: true });
-        await fs.writeFile(destPath, content, 'utf-8');
+        await writeFileAtomic(destPath, content, 'utf-8');
         await fs.unlink(mem.filePath);
         evictedFiles.push(mem.filename);
         evictedDetails.push({ filename: mem.filename, score: breakdown.score, reason: formatEvictionReason(mem, breakdown) });
@@ -320,8 +320,7 @@ export async function restoreEvicted(
       const srcPath = path.join(evictedDir, filename);
       const content = await fs.readFile(srcPath, 'utf-8');
       const destPath = path.join(memoryDir, filename);
-      await fs.mkdir(path.dirname(destPath), { recursive: true });
-      await fs.writeFile(destPath, content, 'utf-8');
+      await writeFileAtomic(destPath, content, 'utf-8');
       await fs.unlink(srcPath);
       console.log(`[memory-eviction] Restored (copy): ${filename}`);
       return true;

@@ -28,7 +28,12 @@ interface ActiveTurn {
 }
 
 const turnBuffers = new Map<string, Record<string, string | null>>();
-let activeTurn: ActiveTurn | null = null;
+/**
+ * 每个会话各自的「当前活跃回合」。
+ * 进程内可能同时跑多个会话（Web 多标签 / 移动端并发），单个全局 activeTurn
+ * 会被后一回合覆盖，导致写前快照挂到错误的会话；故按 sessionId 维护。
+ */
+const activeTurns = new Map<string, ActiveTurn>();
 
 function turnKey(sessionId: string, messageId: string): string {
   return `${sessionId}:${messageId}`;
@@ -43,14 +48,24 @@ export function beginIntentCheckpointTurn(
   messageId: string,
   workspaceRoot: string,
 ): void {
-  activeTurn = { sessionId, messageId, workspaceRoot };
+  activeTurns.set(sessionId, { sessionId, messageId, workspaceRoot });
   turnBuffers.set(turnKey(sessionId, messageId), {});
 }
 
 export function clearIntentCheckpointTurn(sessionId: string, messageId: string): void {
   turnBuffers.delete(turnKey(sessionId, messageId));
-  if (activeTurn?.sessionId === sessionId && activeTurn.messageId === messageId) {
-    activeTurn = null;
+  const active = activeTurns.get(sessionId);
+  if (active?.messageId === messageId) {
+    activeTurns.delete(sessionId);
+  }
+}
+
+/** 清理某会话的全部回合状态（会话删除时调用，避免陈旧 activeTurn / 缓冲残留）。 */
+export function clearIntentCheckpointTurnsForSession(sessionId: string): void {
+  activeTurns.delete(sessionId);
+  const prefix = `${sessionId}:`;
+  for (const key of turnBuffers.keys()) {
+    if (key.startsWith(prefix)) turnBuffers.delete(key);
   }
 }
 
@@ -76,9 +91,9 @@ export async function capturePreTurnWriteSnapshot(
   workspaceRoot: string,
   relPath: string | undefined,
 ): Promise<void> {
-  if (!sessionId || !relPath?.trim() || !activeTurn || activeTurn.sessionId !== sessionId) {
-    return;
-  }
+  if (!sessionId || !relPath?.trim()) return;
+  const activeTurn = activeTurns.get(sessionId);
+  if (!activeTurn) return;
   const normalized = relPath.replace(/\\/g, '/');
   const posix = toPosixRel(workspaceRoot, path.resolve(workspaceRoot, ...normalized.split('/')));
   const rel = posix ?? normalized;
