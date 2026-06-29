@@ -40,6 +40,43 @@ window.ChatPage = (function () {
   var mcpReadyAnnounced = false;
   /** 本页仅提示一次公网隧道就绪 */
   var tunnelReadyAnnounced = false;
+  var lastWsConnectedFetchMs = 0;
+  var lastActivateFetchMs = 0;
+  var lastSyncMessagesMs = 0;
+  var initialHistoryPainted = false;
+  var pendingInitialPaint = false;
+
+  function isMobileShell() {
+    try {
+      return document.documentElement.getAttribute('data-shell') === 'mobile';
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  function getWsConnectedFetchGapMs() {
+    return isMobileShell() ? 8000 : 4000;
+  }
+
+  function getActivateFetchGapMs() {
+    return isMobileShell() ? 20000 : 10000;
+  }
+
+  function shouldSkipWsConnectedHeavyFetch() {
+    if (!initialHistoryPainted) return false;
+    var now = Date.now();
+    if (now - lastWsConnectedFetchMs < getWsConnectedFetchGapMs()) return true;
+    lastWsConnectedFetchMs = now;
+    return false;
+  }
+
+  function needsInitialHistoryPaint() {
+    if (!initialHistoryPainted) return true;
+    if (Session && typeof Session.getMessages === 'function') {
+      return Session.getMessages().length === 0;
+    }
+    return false;
+  }
 
   /** run_command 流式 stdout 累积（tool_result 到达后会清空） */
   var streamingDiffBuffer = { toolCallId: '', text: '' };
@@ -556,6 +593,8 @@ window.ChatPage = (function () {
       renderChatHistoryWithFetch(false, function () {
         Session.saveMessages();
         UI.enableAutoScroll();
+        initialHistoryPainted = true;
+        pendingInitialPaint = false;
         if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
       });
     });
@@ -566,17 +605,51 @@ window.ChatPage = (function () {
     }
   }
 
+  function paintInitialChatView() {
+    function afterHistoryPainted() {
+      initialHistoryPainted = true;
+      pendingInitialPaint = false;
+      var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
+      if (cachedLiveTools.length > 0) {
+        applyLiveToolTimelineToUI(cachedLiveTools);
+      }
+      UI.enableAutoScroll();
+      syncSendButtonWithWorkload();
+    }
+    Session.fetchServerMessages(function (serverMsgs) {
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      if (raw.length > 0) {
+        var separated = Session.separateToolTraces(raw);
+        Session.applyServerChatSnapshot(
+          separated,
+          { fullRender: false, authoritative: true },
+          isStreaming,
+          WS.isProcessing(),
+        );
+      }
+      renderChatHistoryWithFetch(false, afterHistoryPainted);
+    });
+  }
+
   function syncActiveSessionFromServer(data) {
-    if (remoteMode || !data) return;
+    if (!data) return false;
     var serverId = data.activeSessionId || data.sessionId;
-    if (!serverId) return;
+    if (!serverId) return false;
     var clientId = Session.getActiveId ? Session.getActiveId() : 'default';
-    if (window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
+    if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
       window.ChatSessionStore.setActiveSessionId(serverId);
     }
     if (serverId !== clientId) {
-      onSessionSwitched(serverId);
+      pendingInitialPaint = false;
+      onSessionSwitched(serverId, data.runningTurn || null);
+      return true;
     }
+    if (remoteMode && pendingInitialPaint && !initialHistoryPainted) {
+      pendingInitialPaint = false;
+      paintInitialChatView();
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -696,20 +769,19 @@ window.ChatPage = (function () {
   }
 
   function onWsConnected(data) {
+    var skipHeavyFetch = shouldSkipWsConnectedHeavyFetch();
+    var paintedFromSessionSync = syncActiveSessionFromServer(data || {});
     if (!applyModelContextFromWs(data)) {
-      loadModelConfig();
+      if (!skipHeavyFetch) loadModelConfig();
     } else if (data && (data.providers || data.modelName)) {
-      // applyModelContextFromWs 已同步 token 用量；chip label 仍需单独刷一次
       syncChipModelLabelFromWs(data);
-    } else {
-      // WS payload 没带 providers / modelName，兜底走 fetch
+    } else if (!skipHeavyFetch) {
       loadModelConfig();
     }
     syncSidebarWorkspace(data);
-    if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
+    if (!skipHeavyFetch && window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
       window.ChatSessionStore.fetchSessions();
     }
-    // 仅当服务端活跃会话与当前选中一致时才还原 runningTurn，避免 A 的思考串到 B
     var clientSid = Session.getActiveId ? Session.getActiveId() : 'default';
     var serverSid = data && (data.activeSessionId || data.sessionId);
     if (data && serverSid === clientSid) {
@@ -726,14 +798,17 @@ window.ChatPage = (function () {
     if (typeof data.canRestore === 'boolean') {
       applyHarnessRestoreUi(data.canRestore, data.checkpointMessageIds);
     }
-    syncActiveSessionFromServer(data || {});
     if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
-      window.ChatExecutionPlanBridge.notifyConnected(data || {});
+      if (!skipHeavyFetch) {
+        window.ChatExecutionPlanBridge.notifyConnected(data || {});
+      }
     }
-    // 任务进行中（runningTurn）时跳过服务端快照合并，避免覆盖刚还原的 live 工具区
+    if (paintedFromSessionSync) return;
     var rt = data && data.runningTurn;
-    if (!rt || !rt.isProcessing) {
-      syncMessages();
+    if ((!rt || !rt.isProcessing) && !skipHeavyFetch) {
+      syncMessages(needsInitialHistoryPaint());
+    } else if (needsInitialHistoryPaint()) {
+      syncMessages(true);
     }
   }
 
@@ -1133,6 +1208,40 @@ window.ChatPage = (function () {
     UI.setCheckpointMessageIds(data.ids || []);
   }
 
+  function dispatchDeleteMessage(messageId) {
+    if (!messageId) return;
+    if (!WS.isConnected || !WS.isConnected()) {
+      notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
+      WS.connect(remoteToken);
+      return;
+    }
+    if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) {
+      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      return;
+    }
+    var sent = WS.sendDeleteUserMessage(messageId);
+    if (sent === false) {
+      notifyUser('删除请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
+    }
+  }
+
+  function dispatchRestoreRuntime(messageId) {
+    if (!messageId) return;
+    if (!WS.isConnected || !WS.isConnected()) {
+      notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
+      WS.connect(remoteToken);
+      return;
+    }
+    if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
+      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      return;
+    }
+    var sent = WS.sendRestoreRuntime(messageId);
+    if (sent === false) {
+      notifyUser('回滚请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
+    }
+  }
+
   function closeRestoreConfirmDialog() {
     var overlay = document.querySelector('.restore-confirm-overlay');
     if (overlay) overlay.remove();
@@ -1159,7 +1268,7 @@ window.ChatPage = (function () {
     });
     overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
       closeRestoreConfirmDialog();
-      WS.sendRestoreRuntime(messageId);
+      dispatchRestoreRuntime(messageId);
     });
   }
 
@@ -1189,17 +1298,32 @@ window.ChatPage = (function () {
     });
     overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
       closeDeleteConfirmDialog();
-      WS.sendDeleteUserMessage(messageId);
+      dispatchDeleteMessage(messageId);
     });
   }
 
-  function onRestoreButtonClick(e) {
-    var btn = e.target.closest('.msg-restore-btn');
-    if (!btn || btn.disabled) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) return;
-    var messageId = btn.dataset.messageId;
+  function handleMessageDeleteAction(messageId, btn) {
+    if (btn && btn.disabled) {
+      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) {
+      notifyUser('运行中，请等待当前任务完成后再删除。', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!messageId) return;
+    showDeleteConfirmDialog(messageId);
+  }
+
+  function handleMessageRestoreAction(messageId, btn) {
+    if (btn && btn.disabled) {
+      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      return;
+    }
+    if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
+      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      return;
+    }
     if (!messageId) return;
     if (UI && typeof UI.hasCheckpointForMessage === 'function' && !UI.hasCheckpointForMessage(messageId)) {
       notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
@@ -1208,15 +1332,24 @@ window.ChatPage = (function () {
     showRestoreConfirmDialog(messageId);
   }
 
-  function onDeleteButtonClick(e) {
-    var btn = e.target.closest('.msg-delete-btn');
+  function onRestoreButtonClick(e) {
+    var target = e.target && e.target.nodeType === 1 ? e.target : (e.target && e.target.parentElement);
+    if (!target || !target.closest) return;
+    var btn = target.closest('.msg-restore-btn');
     if (!btn || btn.disabled) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!WS.canDeleteUserMessage || !WS.canDeleteUserMessage()) return;
-    var messageId = btn.dataset.messageId;
-    if (!messageId) return;
-    showDeleteConfirmDialog(messageId);
+    handleMessageRestoreAction(btn.dataset.messageId, btn);
+  }
+
+  function onDeleteButtonClick(e) {
+    var target = e.target && e.target.nodeType === 1 ? e.target : (e.target && e.target.parentElement);
+    if (!target || !target.closest) return;
+    var btn = target.closest('.msg-delete-btn');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleMessageDeleteAction(btn.dataset.messageId, btn);
   }
 
   function onWsRuntimeRestored() {
@@ -1289,8 +1422,18 @@ window.ChatPage = (function () {
     });
   }
 
-  function syncMessages() {
+  function getSyncMessagesGapMs() {
+    return isMobileShell() ? 12000 : 5000;
+  }
+
+  function syncMessages(force) {
     if (shouldSkipServerSnapshotSync()) return;
+    var allowThrottleBypass = !!force || needsInitialHistoryPaint();
+    if (!allowThrottleBypass) {
+      var now = Date.now();
+      if (now - lastSyncMessagesMs < getSyncMessagesGapMs()) return;
+    }
+    lastSyncMessagesMs = Date.now();
     Session.fetchServerMessages(function (serverMsgs) {
       // F5 重连：onWsOpen 发起的 fetch 可能在 connected+restore 之后才返回；
       // 此时若仍 renderMessagesOnly 会清掉 runningTurn 刚还原的工具时间线/流式气泡。
@@ -1299,8 +1442,17 @@ window.ChatPage = (function () {
       var separated = Session.separateToolTraces(serverMsgs);
       var updated = Session.applyServerChatSnapshot(separated, { fullRender: false }, isStreaming, WS.isProcessing());
       if (updated) {
-        renderChatHistoryWithFetch(false);
-        Session.saveMessages();
+        renderChatHistoryWithFetch(false, function () {
+          Session.saveMessages();
+          initialHistoryPainted = true;
+          pendingInitialPaint = false;
+        });
+      } else if (needsInitialHistoryPaint() && serverMsgs && serverMsgs.length > 0) {
+        renderChatHistoryWithFetch(false, function () {
+          Session.saveMessages();
+          initialHistoryPainted = true;
+          pendingInitialPaint = false;
+        });
       }
     });
   }
@@ -1397,10 +1549,13 @@ window.ChatPage = (function () {
       WS.connect(remoteToken);
     }
     syncSendButtonWithWorkload();
+    if (needsInitialHistoryPaint()) return;
+    var now = Date.now();
+    if (now - lastActivateFetchMs < getActivateFetchGapMs()) return;
+    lastActivateFetchMs = now;
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
-      syncMessages();
+      syncMessages(false);
     }
-    // 切回 chat 页面时也重新同步默认模型 / chip（不依赖 WS 状态，避免卡在"加载中…"）
     loadModelConfig();
   }
 
@@ -1505,6 +1660,12 @@ window.ChatPage = (function () {
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
+    if (typeof UI.setMessageActionHandlers === 'function') {
+      UI.setMessageActionHandlers({
+        onDelete: handleMessageDeleteAction,
+        onRestore: handleMessageRestoreAction,
+      });
+    }
     if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.init === 'function') {
       window.ChatStaircaseNav.init({
         elMessages: elMessages,
@@ -1607,9 +1768,9 @@ window.ChatPage = (function () {
     // 连接 WebSocket
     WS.connect(remoteToken);
 
-    // 绑定 UI 事件
-    elMessages.addEventListener('click', onRestoreButtonClick);
-    elMessages.addEventListener('click', onDeleteButtonClick);
+    // 绑定 UI 事件（捕获阶段：虚拟历史区与尾部真实 DOM 均可靠命中）
+    elMessages.addEventListener('click', onRestoreButtonClick, true);
+    elMessages.addEventListener('click', onDeleteButtonClick, true);
     elSendBtn.addEventListener('click', handleSend);
     elInput.addEventListener('keydown', function (e) {
       if (FileRef && FileRef.handleKeydown(e, elInput)) return;
@@ -1693,57 +1854,35 @@ window.ChatPage = (function () {
       });
     }
 
-    function paintInitialChatView() {
-      function afterHistoryPainted() {
-        var cachedLiveTools = Session.loadLiveToolBatch ? Session.loadLiveToolBatch() : [];
-        if (cachedLiveTools.length > 0) {
-          applyLiveToolTimelineToUI(cachedLiveTools);
-        }
-        UI.enableAutoScroll();
-        syncSendButtonWithWorkload();
-      }
-      // 先拉服务端会话（含 tool_trace），再 fetch structured 重绘，避免 F5 后工具行无 diff
-      Session.fetchServerMessages(function (serverMsgs) {
-        var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
-        if (raw.length > 0) {
-          var separated = Session.separateToolTraces(raw);
-          Session.applyServerChatSnapshot(
-            separated,
-            { fullRender: false, authoritative: true },
-            isStreaming,
-            WS.isProcessing(),
-          );
-        }
-        renderChatHistoryWithFetch(false, afterHistoryPainted);
-      });
-    }
-
     if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
       window.ChatSessionStore.bootstrapInitialSession(function () {
         paintInitialChatView();
       });
+    } else if (remoteMode) {
+      pendingInitialPaint = true;
+      setTimeout(function () {
+        if (!initialHistoryPainted && pendingInitialPaint) {
+          pendingInitialPaint = false;
+          paintInitialChatView();
+        }
+      }, 4000);
     } else {
       paintInitialChatView();
-    }
-
-    if (remoteMode) {
-      Session.fetchServerMessages(function (serverMsgs) {
-        var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
-        var separated = Session.separateToolTraces(raw);
-        if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
-          renderChatHistoryWithFetch(false);
-          Session.saveMessages();
-        }
-      });
     }
 
     // 切回前台重连
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible') {
-        syncMessages();
         if (!WS.isConnected()) {
           WS.connect(remoteToken);
+        } else if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
+          var now = Date.now();
+          if (now - lastActivateFetchMs >= getActivateFetchGapMs()) {
+            lastActivateFetchMs = now;
+            syncMessages(false);
+          }
         }
+        WS.startSyncPolling();
       } else {
         WS.stopSyncPolling();
       }

@@ -85,6 +85,23 @@
   font-size: 14px;
 }
 
+/* 触控无 hover：删除/回滚按钮需常驻可见可点（桌面端仍 hover 显示） */
+[data-shell="mobile"] .message.user .msg-label-actions {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+[data-shell="mobile"] .message.user .msg-delete-btn,
+[data-shell="mobile"] .message.user .msg-restore-btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 8px;
+  margin: -6px 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: auto !important;
+}
+
 /* 移动端 wrapper 页通用适配 */
 [data-shell="mobile"] .mobile-page-root .config-page,
 [data-shell="mobile"] .mobile-page-root .memory-root,
@@ -92,8 +109,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px;
-  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0));
+  padding-top: 10px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
 }
 
 [data-shell="mobile"] .mobile-page-root .config-page {

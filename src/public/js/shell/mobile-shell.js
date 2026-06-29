@@ -25,11 +25,17 @@ window.MobileShell = (function () {
   };
 
   var NAV_ITEMS = [
-    { page: 'work', label: '工作', hash: '#/m/work' },
-    { page: 'mMemory', label: '记忆', hash: '#/m/memory' },
-    { page: 'mSkills', label: '技能', hash: '#/m/skills' },
-    { page: 'mConfig', label: '配置', hash: '#/m/config' },
+    { page: 'work', label: '工作', path: '/m/chat' },
+    { page: 'mMemory', label: '记忆', path: '/m/memory' },
+    { page: 'mSkills', label: '技能', path: '/m/skills' },
+    { page: 'mConfig', label: '配置', path: '/m/config' },
   ];
+
+  var THEME_BTN_HTML =
+    '<button type="button" class="mobile-top-bar-theme-btn" data-current-theme="light" aria-label="切换主题">' +
+      '<svg class="mobile-top-bar-theme-icon-dark" width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>' +
+      '<svg class="mobile-top-bar-theme-icon-light" width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
+    '</button>';
 
   function create() {
     if (shellEl && shellEl.isConnected) return shellEl;
@@ -70,7 +76,8 @@ window.MobileShell = (function () {
       window.MobileSessionDrawer.mount(shellEl.querySelector('.mobile-session-drawer-panel'));
     }
 
-    syncBottomNavActive(window.location.hash);
+    syncBottomNavActive();
+    bindAppShellListeners();
     setTopBarMode('work');
 
     return shellEl;
@@ -80,7 +87,7 @@ window.MobileShell = (function () {
     if (!bottomNavEl) return;
     bottomNavEl.innerHTML = NAV_ITEMS.map(function (item) {
       return (
-        '<button type="button" class="mobile-bottom-nav-btn" data-page="' + item.page + '" data-hash="' + item.hash + '" role="tab" aria-selected="false">' +
+        '<button type="button" class="mobile-bottom-nav-btn" data-page="' + item.page + '" data-path="' + item.path + '" role="tab" aria-selected="false">' +
           '<span class="mobile-bottom-nav-icon" aria-hidden="true">' + NAV_ICONS[item.page === 'work' ? 'work' : item.page === 'mMemory' ? 'memory' : item.page === 'mSkills' ? 'skills' : 'config'] + '</span>' +
           '<span class="mobile-bottom-nav-label">' + item.label + '</span>' +
         '</button>'
@@ -96,18 +103,13 @@ window.MobileShell = (function () {
       var page = btn.getAttribute('data-page');
       if (page && window.AppRouter && typeof window.AppRouter.navigate === 'function') {
         window.AppRouter.navigate(page);
-        return;
-      }
-      var hash = btn.getAttribute('data-hash');
-      if (!hash) return;
-      if (window.location.hash !== hash) {
-        window.location.hash = hash;
-      } else {
-        window.dispatchEvent(new HashChangeEvent('hashchange'));
       }
     });
+    window.addEventListener('popstate', function () {
+      syncBottomNavActive();
+    });
     window.addEventListener('hashchange', function () {
-      syncBottomNavActive(window.location.hash);
+      syncBottomNavActive();
     });
   }
 
@@ -119,8 +121,20 @@ window.MobileShell = (function () {
     }
   }
 
-  function pageFromHash(hash) {
-    var h = hash || window.location.hash || '';
+  function normalizePathname(pathname) {
+    var p = String(pathname || '/').replace(/\/+$/, '');
+    return p || '/';
+  }
+
+  function pageFromLocation() {
+    var path = normalizePathname(window.location.pathname);
+    if (path === '/m/chat' || path === '/m/work') return 'work';
+    if (path.indexOf('/m/work/') === 0) return 'workChat';
+    if (path === '/m/memory') return 'mMemory';
+    if (path === '/m/skills') return 'mSkills';
+    if (path === '/m/config') return 'mConfig';
+
+    var h = window.location.hash || '';
     if (h.startsWith('#/m/work/')) return 'workChat';
     if (h.startsWith('#/m/work')) return 'work';
     if (h.startsWith('#/m/memory')) return 'mMemory';
@@ -129,9 +143,9 @@ window.MobileShell = (function () {
     return 'work';
   }
 
-  function syncBottomNavActive(hash) {
+  function syncBottomNavActive(activePage) {
     if (!bottomNavEl) return;
-    var current = pageFromHash(hash);
+    var current = activePage || pageFromLocation();
     var hideNav = current === 'workChat';
     bottomNavEl.classList.toggle('is-hidden', hideNav);
 
@@ -156,6 +170,37 @@ window.MobileShell = (function () {
     return '<span class="mobile-top-bar-status" data-state="' + state + '" aria-hidden="true"></span>';
   }
 
+  function syncThemeButton() {
+    if (!topBarEl) return;
+    var btn = topBarEl.querySelector('.mobile-top-bar-theme-btn');
+    if (!btn) return;
+    var theme = 'light';
+    if (window.AppShell && typeof window.AppShell.getTheme === 'function') {
+      theme = window.AppShell.getTheme();
+    }
+    btn.setAttribute('data-current-theme', theme);
+    btn.title = theme === 'dark' ? '当前：深色模式，点击切换为浅色' : '当前：浅色模式，点击切换为深色';
+  }
+
+  function bindThemeButton() {
+    if (!topBarEl) return;
+    var btn = topBarEl.querySelector('.mobile-top-bar-theme-btn');
+    if (!btn || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', function () {
+      if (window.AppShell && typeof window.AppShell.toggleTheme === 'function') {
+        window.AppShell.toggleTheme();
+        syncThemeButton();
+      }
+    });
+    syncThemeButton();
+  }
+
+  function finishTopBarRender() {
+    bindThemeButton();
+    syncThemeButton();
+  }
+
   function setTopBarMode(mode, opts) {
     opts = opts || {};
     currentTopMode = mode;
@@ -176,6 +221,7 @@ window.MobileShell = (function () {
           '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>' +
         '</button>';
       center.innerHTML = '<span class="mobile-top-bar-brand">IceCoder</span>' + getConnectionDot();
+      right.innerHTML = THEME_BTN_HTML;
       var menuBtn = left.querySelector('.mobile-top-bar-menu-btn');
       if (menuBtn) {
         menuBtn.addEventListener('click', openDrawer);
@@ -191,7 +237,8 @@ window.MobileShell = (function () {
       right.innerHTML =
         '<button type="button" class="mobile-top-bar-more-btn" aria-label="更多">' +
           '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>' +
-        '</button>';
+        '</button>' +
+        THEME_BTN_HTML;
       var backBtn = left.querySelector('.mobile-top-bar-back-btn');
       if (backBtn) {
         backBtn.addEventListener('click', function () {
@@ -202,11 +249,16 @@ window.MobileShell = (function () {
       }
     } else if (mode === 'memory') {
       center.innerHTML = '<span class="mobile-top-bar-title">记忆</span>' + getConnectionDot();
+      right.innerHTML = THEME_BTN_HTML;
     } else if (mode === 'skills') {
       center.innerHTML = '<span class="mobile-top-bar-title">技能</span>' + getConnectionDot();
+      right.innerHTML = THEME_BTN_HTML;
     } else if (mode === 'config') {
       center.innerHTML = '<span class="mobile-top-bar-title">配置</span>' + getConnectionDot();
+      right.innerHTML = THEME_BTN_HTML;
     }
+
+    finishTopBarRender();
   }
 
   function escapeHtml(str) {
@@ -303,9 +355,10 @@ window.MobileShell = (function () {
     if (typeof shell.addConnectionChangeListener === 'function') {
       shell.addConnectionChangeListener(syncConnectionState);
     }
+    if (typeof shell.addThemeChangeListener === 'function') {
+      shell.addThemeChangeListener(syncThemeButton);
+    }
   }
-
-  bindAppShellListeners();
 
   return {
     create: create,

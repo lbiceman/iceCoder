@@ -23,7 +23,7 @@ window.MobileWorkPage = (function () {
     if (window.MobileShell) {
       window.MobileShell.setTopBarMode('work');
       if (typeof window.MobileShell.syncBottomNavActive === 'function') {
-        window.MobileShell.syncBottomNavActive(window.location.hash);
+        window.MobileShell.syncBottomNavActive();
       }
     }
 

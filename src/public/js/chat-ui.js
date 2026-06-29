@@ -1510,6 +1510,59 @@ window.ChatUI = (function () {
   }
 
   var restoreUiState = { canRestore: true, checkpointIds: {} };
+  var messageActionHandlers = { onDelete: null, onRestore: null };
+
+  function rebindExistingMessageActionButtons() {
+    if (!elMessages) return;
+    var deleteBtns = elMessages.querySelectorAll('.msg-delete-btn');
+    for (var i = 0; i < deleteBtns.length; i++) {
+      var del = deleteBtns[i];
+      if (!del._actionBound) bindMessageActionButton(del, 'delete', del.dataset.messageId || '');
+    }
+    var restoreBtns = elMessages.querySelectorAll('.msg-restore-btn');
+    for (var j = 0; j < restoreBtns.length; j++) {
+      var res = restoreBtns[j];
+      if (!res._actionBound) bindMessageActionButton(res, 'restore', res.dataset.messageId || '');
+    }
+  }
+
+  function setMessageActionHandlers(handlers) {
+    handlers = handlers || {};
+    messageActionHandlers.onDelete = typeof handlers.onDelete === 'function' ? handlers.onDelete : null;
+    messageActionHandlers.onRestore = typeof handlers.onRestore === 'function' ? handlers.onRestore : null;
+    rebindExistingMessageActionButtons();
+  }
+
+  function bindMessageActionButton(btn, type, messageId) {
+    if (!btn || btn._actionBound) return;
+    btn._actionBound = true;
+    var lastInvokeAt = 0;
+    var touchMoved = false;
+
+    function invoke(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      var now = Date.now();
+      if (now - lastInvokeAt < 350) return;
+      lastInvokeAt = now;
+      var fn = type === 'delete' ? messageActionHandlers.onDelete : messageActionHandlers.onRestore;
+      if (typeof fn === 'function') fn(messageId, btn);
+    }
+
+    btn.addEventListener('click', invoke);
+    btn.addEventListener('touchstart', function () {
+      touchMoved = false;
+    }, { passive: true });
+    btn.addEventListener('touchmove', function () {
+      touchMoved = true;
+    }, { passive: true });
+    btn.addEventListener('touchend', function (e) {
+      if (touchMoved) return;
+      invoke(e);
+    });
+  }
 
   function restoreButtonIconSvg() {
     return '<svg class="msg-restore-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -1535,6 +1588,7 @@ window.ChatUI = (function () {
     restoreBtn.dataset.messageId = messageId;
     if (sentAt) restoreBtn.dataset.sentAt = String(sentAt);
     restoreBtn.setAttribute('aria-label', '回滚到此消息');
+    bindMessageActionButton(restoreBtn, 'restore', messageId);
     return restoreBtn;
   }
 
@@ -1546,6 +1600,7 @@ window.ChatUI = (function () {
     deleteBtn.dataset.messageId = messageId;
     deleteBtn.setAttribute('aria-label', '删除此消息及后续对话');
     deleteBtn.title = '删除此消息及后续对话';
+    bindMessageActionButton(deleteBtn, 'delete', messageId);
     return deleteBtn;
   }
 
@@ -1706,7 +1761,6 @@ window.ChatUI = (function () {
     var total = normalized.inputTokens + normalized.outputTokens;
     var bar = document.createElement('div');
     bar.className = 'msg-token-usage';
-    bar.textContent = "Token消耗: ";
     bar.setAttribute('aria-label', 'Token 消耗');
 
     function addItem(label, value) {
@@ -2433,5 +2487,6 @@ window.ChatUI = (function () {
     setRestoreAvailability: setRestoreAvailability,
     setCheckpointMessageIds: setCheckpointMessageIds,
     hasCheckpointForMessage: hasCheckpointForMessage,
+    setMessageActionHandlers: setMessageActionHandlers,
   };
 })();

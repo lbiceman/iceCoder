@@ -13,6 +13,10 @@ window.SkillsPage = (function () {
   var listFetchAbort = null;
   var skillsChangedHandler = null;
 
+  function isMobile() {
+    return window.innerWidth <= 720;
+  }
+
   function escapeHtml(str) {
     var div = document.createElement('div');
     div.appendChild(document.createTextNode(str || ''));
@@ -80,16 +84,111 @@ window.SkillsPage = (function () {
             '<span class="skills-card-file">#' + escapeHtml(sk.filename) + '</span>' +
           '</div>' +
           '<p class="skills-card-desc">' + escapeHtml(sk.description || '（无描述）') + '</p>' +
-          '<div class="skills-card-meta">更新于 ' + escapeHtml(formatZhIso(sk.modifiedAt)) + '</div>';
+          '<div class="skills-card-meta">更新于 ' + escapeHtml(formatZhIso(sk.modifiedAt)) + '</div>' +
+          '<div class="skills-card-actions">' +
+            '<button type="button" class="skills-btn skills-btn-danger" data-action="delete">删除技能</button>' +
+            '<button type="button" class="skills-btn skills-btn-primary" data-action="use">使用技能</button>' +
+          '</div>';
 
-        card.addEventListener('click', function () {
-          selectedFilename = sk.filename;
-          renderSkillList(listEl, countEl);
-          loadSkillDetail(sk.filename);
-        });
+        if (isMobile()) {
+          card.addEventListener('click', function (e) {
+            if (e.target.closest('.skills-btn')) return;
+            toggleSkillExpand(card, sk);
+          });
+          var delBtn = card.querySelector('[data-action="delete"]');
+          if (delBtn) delBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            confirmDeleteSkill(sk);
+          });
+          var useBtn = card.querySelector('[data-action="use"]');
+          if (useBtn) useBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            useSkillAction(sk);
+          });
+        } else {
+          card.addEventListener('click', function () {
+            selectedFilename = sk.filename;
+            renderSkillList(listEl, countEl);
+            loadSkillDetail(sk.filename);
+          });
+        }
         listEl.appendChild(card);
       })(allSkills[i]);
     }
+  }
+
+  function toggleSkillExpand(card, sk) {
+    var wasExpanded = card.classList.contains('is-expanded');
+    // 收起其他已展开的卡片
+    var expanded = containerEl.querySelectorAll('.skills-card.is-expanded');
+    for (var i = 0; i < expanded.length; i++) {
+      expanded[i].classList.remove('is-expanded');
+      var old = expanded[i].querySelector('.skills-card-detail');
+      if (old) old.remove();
+    }
+    if (wasExpanded) return;
+    // 展开当前卡片
+    card.classList.add('is-expanded');
+    var detailDiv = document.createElement('div');
+    detailDiv.className = 'skills-card-detail';
+    detailDiv.innerHTML = '<div class="skills-detail-loading">载入中…</div>';
+    card.appendChild(detailDiv);
+    fetch('/api/skills/' + encodeURIComponent(sk.filename))
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        if (!body.success) throw new Error(body.error || '加载失败');
+        detailDiv.innerHTML =
+          '<pre class="skills-detail-content">' + escapeHtml(body.content || '') + '</pre>';
+      })
+      .catch(function (err) {
+        detailDiv.innerHTML = '<div class="skills-detail-error">加载失败：' + escapeHtml(err.message || '未知错误') + '</div>';
+      });
+  }
+
+  function confirmDeleteSkill(sk) {
+    var name = sk.name || sk.filename;
+    var doConfirm = function () { doDelete(sk.filename); };
+    if (window.Modal && typeof window.Modal.confirm === 'function') {
+      window.Modal.confirm({
+        title: '删除技能',
+        message: '确定删除「' + name + '」？此操作不可撤销。',
+        confirmText: '删除',
+        dangerConfirm: true,
+      }).then(function (ok) { if (ok) doConfirm(); });
+    } else if (confirm('确定删除技能「' + name + '」？')) {
+      doConfirm();
+    }
+  }
+
+  function navigateToChatComposer() {
+    var router = window.AppRouter;
+    if (router && typeof router.getShell === 'function' && router.getShell() === 'mobile') {
+      if (typeof router.navigate === 'function') {
+        router.navigate('work');
+      }
+      return;
+    }
+    var targetHash = '#/chat';
+    if (window.location.hash !== targetHash) {
+      window.location.hash = targetHash;
+    } else {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }
+  }
+
+  function focusChatInputSoon() {
+    setTimeout(function () {
+      var input = document.getElementById('chat-input');
+      if (input) input.focus();
+    }, 0);
+  }
+
+  function useSkillAction(sk) {
+    if (window.ChatSkills && typeof window.ChatSkills.useSkill === 'function') {
+      window.ChatSkills.useSkill(sk.filename);
+    }
+    navigateToChatComposer();
+    focusChatInputSoon();
   }
 
   function loadSkillDetail(filename) {
@@ -125,15 +224,8 @@ window.SkillsPage = (function () {
             if (window.ChatSkills && typeof window.ChatSkills.useSkill === 'function') {
               window.ChatSkills.useSkill(filename);
             }
-            if (window.location.hash !== '#/chat') {
-              window.location.hash = '#/chat';
-            } else {
-              window.dispatchEvent(new HashChangeEvent('hashchange'));
-            }
-            setTimeout(function () {
-              var input = document.getElementById('chat-input');
-              if (input) input.focus();
-            }, 0);
+            navigateToChatComposer();
+            focusChatInputSoon();
           });
         }
 

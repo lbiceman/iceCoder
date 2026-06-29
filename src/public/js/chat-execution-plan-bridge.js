@@ -123,11 +123,18 @@ window.ChatExecutionPlanBridge = (function () {
     }
   }
 
+  function getSessionUpdatedThrottleMs() {
+    try {
+      if (document.documentElement.getAttribute('data-shell') === 'mobile') return 5000;
+    } catch (_e) { /* ignore */ }
+    return 800;
+  }
+
   function onSessionUpdated() {
     if (!enabled) return;
     // 节流：避免短时间多次 session_updated 撞接口
     var now = Date.now();
-    if (now - lastSyncMs < 800) return;
+    if (now - lastSyncMs < getSessionUpdatedThrottleMs()) return;
     lastSyncMs = now;
     fetchAndApply();
   }

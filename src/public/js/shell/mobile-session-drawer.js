@@ -125,9 +125,9 @@ window.MobileSessionDrawer = (function () {
       }
 
       // 移动端主 Shell：留在工作 Tab 切换会话，不进入 workChat 二级页
-      var hash = window.location.hash || '';
+      var path = String(window.location.pathname || '').replace(/\/+$/, '') || '/';
       var page = document.body.dataset.page;
-      if (hash.indexOf('#/m/work/') === 0 || page === 'workChat') {
+      if (path.indexOf('/m/work/') === 0 || page === 'workChat') {
         if (Router && typeof Router.navigate === 'function') {
           Router.navigate('work');
         }

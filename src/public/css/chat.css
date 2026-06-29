@@ -695,6 +695,24 @@
   pointer-events: auto;
 }
 
+/* 触控设备无 hover：操作按钮常驻可见可点 */
+@media (hover: none), (pointer: coarse) {
+  .message.user .msg-label-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .message.user .msg-delete-btn,
+  .message.user .msg-restore-btn {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 8px;
+    margin: -6px 0;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
 .message.user .msg-delete-btn,
 .message.user .msg-restore-btn {
   display: inline-flex;

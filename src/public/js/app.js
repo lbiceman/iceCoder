@@ -1,7 +1,7 @@
 /**
  * SPA 路由和主应用逻辑
  * 处理配置页面和聊天页面之间的 hash 路由
- * 包含主题切换（默认暗色模式）
+ * 包含主题切换（桌面默认暗色，移动端默认浅色）
  */
 
 /* global ConfigPage, ChatPage, MemoryPage, SkillsPage */
@@ -67,7 +67,11 @@
     if (isRemoteTokenUrl()) return;
     var route = resolveEntryRoute();
     if (route.shell === 'mobile' && route.page !== 'mConfig') {
-      window.location.replace('#/m/config');
+      if (usesMobilePathRouting()) {
+        window.location.replace(mobileUrl('/m/config'));
+      } else {
+        window.location.replace('#/m/config');
+      }
     } else if (route.shell === 'desktop' && route.page !== 'config') {
       window.location.replace('#/config');
     }
@@ -128,25 +132,49 @@
 
   // ---- 主题管理 ----
 
-  function getStoredTheme() {
-    return localStorage.getItem('ice-theme') || 'dark';
+  var THEME_KEY_DESKTOP = 'ice-theme';
+  var THEME_KEY_MOBILE = 'ice-theme-mobile';
+
+  function getThemeStorageKey(shell) {
+    return shell === 'mobile' ? THEME_KEY_MOBILE : THEME_KEY_DESKTOP;
   }
 
-  function setTheme(theme) {
+  function detectShellForTheme() {
+    var path = normalizePathname(window.location.pathname);
+    if (parseMobilePathRoute(path)) return 'mobile';
+    if (path === '/m/chat') return 'mobile';
+    if (path === '/' && isRemoteTokenUrl()) return 'mobile';
+    var hash = window.location.hash || '';
+    if (hash.indexOf('#/m/') === 0) return 'mobile';
+    if (path === '/' && !hash && !isRemoteTokenUrl() && window.matchMedia('(max-width: 768px)').matches) {
+      return 'mobile';
+    }
+    return 'desktop';
+  }
+
+  function getStoredTheme(shell) {
+    if (!shell) shell = currentShell || detectShellForTheme();
+    var stored = localStorage.getItem(getThemeStorageKey(shell));
+    if (stored === 'light' || stored === 'dark') return stored;
+    return shell === 'mobile' ? 'light' : 'dark';
+  }
+
+  function setTheme(theme, shell) {
+    if (!shell) shell = currentShell || detectShellForTheme();
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('ice-theme', theme);
+    localStorage.setItem(getThemeStorageKey(shell), theme);
     if (window.AppShell && typeof window.AppShell.notifyThemeChange === 'function') {
       window.AppShell.notifyThemeChange(theme);
     }
   }
 
   function toggleTheme() {
-    var current = document.documentElement.getAttribute('data-theme') || 'dark';
+    var current = document.documentElement.getAttribute('data-theme') || getStoredTheme();
     setTheme(current === 'dark' ? 'light' : 'dark');
   }
 
   function getTheme() {
-    return document.documentElement.getAttribute('data-theme') || 'dark';
+    return document.documentElement.getAttribute('data-theme') || getStoredTheme();
   }
 
   function getSupervisorMode() { return currentSupervisorMode; }
@@ -207,36 +235,84 @@
     return !!new URLSearchParams(window.location.search).get('token');
   }
 
-  /** 解析入口：/m/chat?token= 走主 Shell 工作 Tab；hash 仍可切记忆/技能/配置 */
+  /** 远程扫码 /m/* 入口：Tab 切换 pathname（/m/memory?token=），不用 hash */
+  function usesMobilePathRouting() {
+    return isRemoteTokenUrl() || parseMobilePathRoute(window.location.pathname) !== null;
+  }
+
+  function mobileUrl(pathname, search) {
+    if (search === undefined) search = window.location.search || '';
+    return pathname + search;
+  }
+
+  /**
+   * @returns {{ shell: 'mobile', page: string, sessionId?: string } | null}
+   */
+  function parseMobilePathRoute(pathname) {
+    var path = normalizePathname(pathname);
+    if (path === '/m/chat' || path === '/m/work') {
+      return { shell: 'mobile', page: 'work' };
+    }
+    if (path.indexOf('/m/work/') === 0) {
+      var id = path.slice('/m/work/'.length).split('/')[0];
+      if (id) return { shell: 'mobile', page: 'workChat', sessionId: decodeURIComponent(id) };
+    }
+    if (path === '/m/memory') return { shell: 'mobile', page: 'mMemory' };
+    if (path === '/m/skills') return { shell: 'mobile', page: 'mSkills' };
+    if (path === '/m/config') return { shell: 'mobile', page: 'mConfig' };
+    return null;
+  }
+
+  function mobilePageToPath(page, opts) {
+    opts = opts || {};
+    if (page === 'workChat' && opts.sessionId) {
+      return '/m/work/' + encodeURIComponent(opts.sessionId);
+    }
+    if (page === 'work') return '/m/chat';
+    if (page === 'mMemory') return '/m/memory';
+    if (page === 'mSkills') return '/m/skills';
+    if (page === 'mConfig') return '/m/config';
+    return '/m/chat';
+  }
+
+  function pushMobilePath(pathname) {
+    var url = mobileUrl(pathname);
+    if (window.location.pathname + window.location.search === url) return;
+    history.pushState(null, '', url);
+  }
+
+  function setMobilePath(pathname) {
+    var url = mobileUrl(pathname);
+    if (window.location.pathname + window.location.search === url) return;
+    history.replaceState(null, '', url);
+  }
+
+  /** 解析入口：/m/*?token= 用 pathname；窄屏 / 桌面仍用 hash */
   function resolveEntryRoute() {
+    var pathRoute = parseMobilePathRoute(window.location.pathname);
+    if (pathRoute) return pathRoute;
     var path = normalizePathname(window.location.pathname);
     if (path === '/m/chat') {
-      if (window.location.hash) {
-        return parseRoute(window.location.hash);
-      }
       return { shell: 'mobile', page: 'work' };
     }
     return parseRoute(window.location.hash || '#/chat');
   }
 
+  function syncMobileNavActive(route) {
+    if (!window.MobileShell || typeof window.MobileShell.syncBottomNavActive !== 'function') return;
+    var page = route && route.page;
+    if (page === 'workChat') page = 'work';
+    window.MobileShell.syncBottomNavActive(page);
+  }
+
   function setMobileHash(newHash) {
     if (window.location.hash === newHash) return;
-    var path = normalizePathname(window.location.pathname);
-    if (path === '/m/chat') {
-      history.replaceState(null, '', path + (window.location.search || '') + newHash);
-    } else {
-      history.replaceState(null, '', newHash);
-    }
+    history.replaceState(null, '', newHash);
   }
 
   function pushMobileHash(newHash) {
     if (window.location.hash === newHash) return;
-    var path = normalizePathname(window.location.pathname);
-    if (path === '/m/chat') {
-      history.pushState(null, '', path + (window.location.search || '') + newHash);
-    } else {
-      history.pushState(null, '', newHash);
-    }
+    history.pushState(null, '', newHash);
   }
 
   /**
@@ -358,24 +434,23 @@
     }
     if (page === currentPage && page !== 'workChat') {
       renderPage(page, route.sessionId);
-      if (window.MobileShell && typeof window.MobileShell.syncBottomNavActive === 'function') {
-        window.MobileShell.syncBottomNavActive(window.location.hash);
-      }
+      syncMobileNavActive(route);
       return;
     }
     if (page === 'workChat' && page === currentPage && route.sessionId) {
       renderPage('workChat', route.sessionId);
-      if (window.MobileShell && typeof window.MobileShell.syncBottomNavActive === 'function') {
-        window.MobileShell.syncBottomNavActive(window.location.hash);
-      }
+      syncMobileNavActive(route);
       return;
     }
 
     var prev = currentPage;
     currentPage = page;
 
-    var newHash = mobilePageToHash(page, { sessionId: route.sessionId });
-    setMobileHash(newHash);
+    if (usesMobilePathRouting()) {
+      setMobilePath(mobilePageToPath(page, { sessionId: route.sessionId }));
+    } else {
+      setMobileHash(mobilePageToHash(page, { sessionId: route.sessionId }));
+    }
 
     if (
       prev === 'mMemory' &&
@@ -402,13 +477,11 @@
       renderPage(page);
     }
 
-    if (window.MobileShell && typeof window.MobileShell.syncBottomNavActive === 'function') {
-      window.MobileShell.syncBottomNavActive(newHash);
-    }
+    syncMobileNavActive(route);
   }
 
   function handleRouteChange(route) {
-    if (!route) route = parseRoute(window.location.hash);
+    if (!route) route = resolveEntryRoute();
     ensureShell(route);
     if (route.shell === 'mobile') {
       navigateMobile(route);
@@ -417,11 +490,15 @@
     }
   }
 
-  function onMobileRouteHashChange() {
-    var route = parseRoute(window.location.hash);
+  function onRouteLocationChange() {
+    var route = resolveEntryRoute();
     if (setupRequired && !isRemoteTokenUrl()) {
       if (route.shell === 'mobile' && route.page !== 'mConfig') {
-        window.location.replace('#/m/config');
+        if (usesMobilePathRouting()) {
+          window.location.replace(mobileUrl('/m/config'));
+        } else {
+          window.location.replace('#/m/config');
+        }
         return;
       }
       if (route.shell === 'desktop' && route.page !== 'config') {
@@ -430,9 +507,7 @@
       }
     }
     handleRouteChange(route);
-    if (window.MobileShell && typeof window.MobileShell.syncBottomNavActive === 'function') {
-      window.MobileShell.syncBottomNavActive(window.location.hash);
-    }
+    syncMobileNavActive(route);
   }
 
   function renderPage(page, sessionId) {
@@ -523,20 +598,20 @@
   // ---- 初始化 ----
 
   function init() {
-    setTheme(getStoredTheme());
-
     var path = normalizePathname(window.location.pathname);
     var search = window.location.search || '';
 
-    // 旧链接 /?token=xxx → /m/chat?token=xxx#/m/work
+    // 旧链接 /?token=xxx → /m/chat?token=xxx
     if (path === '/' && isRemoteTokenUrl()) {
-      window.location.replace('/m/chat' + search + '#/m/work');
+      window.location.replace('/m/chat' + search);
       return;
     }
 
-    // 远程扫码入口：保留 pathname+token，默认落在工作 Tab
-    if (path === '/m/chat' && !window.location.hash) {
-      history.replaceState(null, '', '/m/chat' + search + '#/m/work');
+    // 旧链接 /m/chat?token=xxx#/m/memory → /m/memory?token=xxx
+    if (path === '/m/chat' && window.location.hash && window.location.hash.indexOf('#/m/') === 0) {
+      var legacyRoute = parseRoute(window.location.hash);
+      window.location.replace(mobileUrl(mobilePageToPath(legacyRoute.page, { sessionId: legacyRoute.sessionId }), search));
+      return;
     }
 
     // 无 hash 时，窄屏自动跳转 H5 工作页（非远程、非 /m/chat）
@@ -550,6 +625,7 @@
     var initialRoute = resolveEntryRoute();
     currentShell = initialRoute.shell;
     document.documentElement.setAttribute('data-shell', currentShell);
+    setTheme(getStoredTheme(currentShell));
 
     if (currentShell === 'mobile') {
       if (window.MobileShell) window.MobileShell.create();
@@ -557,14 +633,22 @@
       ensureSessionSidebar();
     }
 
-    // 监听 hash / history 变化（pushState 改 hash 不会触发 hashchange）
-    window.addEventListener('hashchange', onMobileRouteHashChange);
-    window.addEventListener('popstate', onMobileRouteHashChange);
+    // hash 路由 + /m/* pathname 路由均监听 popstate；hash 另监听 hashchange
+    window.addEventListener('hashchange', onRouteLocationChange);
+    window.addEventListener('popstate', onRouteLocationChange);
 
     // 顶栏三个 tab 的 click 逻辑已移入 ChatSessionSidebar 内部。
     fetchSystemStatus().then(function () {
       if (setupRequired) {
-        handleRouteChange(parseRoute(currentShell === 'mobile' ? '#/m/config' : '#/config'));
+        if (currentShell === 'mobile') {
+          handleRouteChange(
+            usesMobilePathRouting()
+              ? parseMobilePathRoute('/m/config')
+              : parseRoute('#/m/config')
+          );
+        } else {
+          handleRouteChange(parseRoute('#/config'));
+        }
       } else {
         handleRouteChange(resolveEntryRoute());
       }
@@ -591,21 +675,35 @@
     navigate: function (page, opts) {
       opts = opts || {};
       if (currentShell === 'mobile') {
-        var hash = mobilePageToHash(page, opts);
-        pushMobileHash(hash);
-        handleRouteChange(parseRoute(hash));
+        if (usesMobilePathRouting()) {
+          var newPath = mobilePageToPath(page, opts);
+          pushMobilePath(newPath);
+          handleRouteChange(parseMobilePathRoute(newPath) || { shell: 'mobile', page: page });
+        } else {
+          var hash = mobilePageToHash(page, opts);
+          pushMobileHash(hash);
+          handleRouteChange(parseRoute(hash));
+        }
       } else {
         navigateDesktop(page);
       }
     },
+    resolveRoute: resolveEntryRoute,
+    usesPathRouting: usesMobilePathRouting,
     navigateWorkChat: function (sessionId) {
       if (!sessionId) return;
       if (currentShell === 'mobile') {
-        var hash = '#/m/work/' + encodeURIComponent(sessionId);
-        if (window.location.hash === hash) {
-          handleRouteChange(parseRoute(hash));
+        if (usesMobilePathRouting()) {
+          var chatPath = '/m/work/' + encodeURIComponent(sessionId);
+          pushMobilePath(chatPath);
+          handleRouteChange(parseMobilePathRoute(chatPath));
         } else {
-          window.location.hash = hash;
+          var hash = '#/m/work/' + encodeURIComponent(sessionId);
+          if (window.location.hash === hash) {
+            handleRouteChange(parseRoute(hash));
+          } else {
+            window.location.hash = hash;
+          }
         }
         return;
       }
@@ -627,8 +725,13 @@
     },
     back: function () {
       if (currentShell === 'mobile' && currentPage === 'workChat') {
-        history.replaceState(null, '', '#/m/work');
-        handleRouteChange(parseRoute('#/m/work'));
+        if (usesMobilePathRouting()) {
+          setMobilePath('/m/chat');
+          handleRouteChange(parseMobilePathRoute('/m/chat'));
+        } else {
+          history.replaceState(null, '', '#/m/work');
+          handleRouteChange(parseRoute('#/m/work'));
+        }
       } else {
         history.back();
       }

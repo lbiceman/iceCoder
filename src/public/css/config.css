@@ -231,3 +231,27 @@ body.setup-required .nav-link[data-page="config"] {
 .btn-secondary:hover {
   background: var(--bg-hover);
 }
+
+/* ---- Mobile ---- */
+@media (max-width: 720px) {
+  .config-page {
+    max-width: 100%;
+    padding: 0 12px 120px;
+    overflow-x: hidden;
+  }
+  .provider-card {
+    min-width: 0;
+    padding: 14px;
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .config-actions {
+    flex-direction: row;
+    gap: 10px;
+  }
+  .config-actions .btn {
+    flex: 1;
+    text-align: center;
+  }
+}

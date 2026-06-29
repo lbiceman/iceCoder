@@ -32,6 +32,7 @@
   padding-top: env(safe-area-inset-top, 0);
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
+  color: var(--text-primary);
   flex-shrink: 0;
   z-index: 20;
 }
@@ -41,6 +42,11 @@
   display: flex;
   align-items: center;
   min-width: 44px;
+  gap: 2px;
+}
+
+.mobile-top-bar-right {
+  justify-content: flex-end;
 }
 
 .mobile-top-bar-center {
@@ -54,7 +60,8 @@
 
 .mobile-top-bar-menu-btn,
 .mobile-top-bar-back-btn,
-.mobile-top-bar-more-btn {
+.mobile-top-bar-more-btn,
+.mobile-top-bar-theme-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -62,13 +69,37 @@
   height: 40px;
   border: none;
   background: transparent;
-  color: var(--text-primary);
+  color: inherit;
   border-radius: 8px;
   cursor: pointer;
 }
 
+/* 勿用 data-theme：会与 tokens.css 的 [data-theme] 主题作用域冲突，导致夜间图标不可见 */
+.mobile-top-bar-theme-btn .mobile-top-bar-theme-icon-light {
+  display: none;
+}
+
+.mobile-top-bar-theme-btn[data-current-theme="light"] .mobile-top-bar-theme-icon-dark {
+  display: none;
+}
+
+.mobile-top-bar-theme-btn[data-current-theme="light"] .mobile-top-bar-theme-icon-light {
+  display: inline-flex;
+}
+
+.mobile-top-bar-theme-icon-dark,
+.mobile-top-bar-theme-icon-light {
+  display: inline-flex;
+  color: inherit;
+}
+
+.mobile-top-bar-theme-btn svg {
+  color: inherit;
+}
+
 .mobile-top-bar-menu-btn:active,
-.mobile-top-bar-back-btn:active {
+.mobile-top-bar-back-btn:active,
+.mobile-top-bar-theme-btn:active {
   background: var(--bg-hover);
 }
 
@@ -185,7 +216,7 @@
   top: 0;
   left: 0;
   bottom: 0;
-  width: min(320px, 85vw);
+  width: min(280px, 50vw);
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   padding-top: env(safe-area-inset-top, 0);
