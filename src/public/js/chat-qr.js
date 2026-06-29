@@ -41,7 +41,7 @@ window.ChatQR = (function () {
         appendFn(messages[messages.length - 1]);
         saveFn();
 
-        showQrModal(data.url, data.qrDataUrl, data.localIP, data.port, data.tunnel);
+        showQrModal(data.url, data.qrDataUrl, data.localIP, data.port, data.tunnel, data.token);
       })
       .catch(function () {
         pushAgentMessage(messages, appendFn, '生成二维码失败，请检查网络连接');
@@ -49,7 +49,29 @@ window.ChatQR = (function () {
       });
   }
 
-  function showQrModal(url, qrDataUrl, localIP, port, tunnel) {
+  function buildMobileRemoteUrl(data) {
+    if (data.url && String(data.url).indexOf('/m/chat') >= 0) {
+      return data.url;
+    }
+    if (!data.token) return data.url || '';
+    var base = '';
+    if (data.url) {
+      try {
+        var u = new URL(data.url);
+        base = u.origin;
+      } catch (_e) {
+        base = String(data.url).split('?')[0].replace(/\/?$/, '');
+      }
+    }
+    if (!base && data.localIP && data.port) {
+      base = 'http://' + data.localIP + ':' + data.port;
+    }
+    if (!base) return data.url || '';
+    return base + '/m/chat?token=' + encodeURIComponent(data.token);
+  }
+
+  function showQrModal(url, qrDataUrl, localIP, port, tunnel, token) {
+    var displayUrl = buildMobileRemoteUrl({ url: url, token: token, localIP: localIP, port: port });
     var overlay = document.createElement('div');
     overlay.className = 'qr-overlay';
     overlay.setAttribute('id', 'qr-overlay');
@@ -63,7 +85,7 @@ window.ChatQR = (function () {
 
     var desc = document.createElement('p');
     desc.className = 'qr-desc';
-    desc.textContent = '请确保手机和电脑在同一局域网内';
+    desc.textContent = '请确保手机和电脑在同一局域网内；扫码后将打开手机端 H5 界面';
     modal.appendChild(desc);
 
     var qrContainer = document.createElement('div');
@@ -77,13 +99,13 @@ window.ChatQR = (function () {
       img.style.borderRadius = '8px';
       qrContainer.appendChild(img);
     } else {
-      qrContainer.innerHTML = '<p style="word-break:break-all;font-size:12px;color:#a0a0a0;">二维码生成失败，请手动访问:<br>' + escapeHtml(url) + '</p>';
+      qrContainer.innerHTML = '<p style="word-break:break-all;font-size:12px;color:#a0a0a0;">二维码生成失败，请手动访问:<br>' + escapeHtml(displayUrl) + '</p>';
     }
     modal.appendChild(qrContainer);
 
     var urlText = document.createElement('p');
     urlText.className = 'qr-url';
-    urlText.textContent = url;
+    urlText.textContent = displayUrl;
     modal.appendChild(urlText);
 
     var info = document.createElement('p');

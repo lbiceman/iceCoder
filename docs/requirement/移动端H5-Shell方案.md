@@ -1,7 +1,7 @@
 # iceCoder 移动端 H5 Shell 方案
 
 > **状态**：待实现  
-> **版本**：v1.0  
+> **版本**：v1.1  
 > **日期**：2026-06-26  
 > **范围**：Web 前端 · 同一套 JS Core · 独立 Mobile Shell UI · Hash 路由 `#/m/*` · 非原生 App（浏览器 H5）
 
@@ -13,7 +13,7 @@
 
 | 项 | 说明 |
 |----|------|
-| **用户价值** | 手机浏览器打开 iceCoder，获得与设计稿一致的移动端体验（底栏导航、工作首页、聊天栈、子 Tab） |
+| **用户价值** | 手机浏览器打开 iceCoder，获得与设计稿一致的移动端体验（底栏四 Tab 默认工作、工作主屏 + 会话抽屉、聊天栈） |
 | **技术路线** | **同一 `index.html` + 同一 `main.js` 模块树**；桌面与 H5 仅 **Shell（导航壳）与 Page View（DOM 布局）** 不同 |
 | **不改写** | WebSocket、会话 API、Harness、记忆、技能、配置 API 等后端与 Core 模块保持原样 |
 | **路由区分** | 桌面：`#/chat`、`#/memory`、`#/skills`、`#/config`；H5：`#/m/work`、`#/m/work/:sessionId` 等 |
@@ -29,7 +29,7 @@
 
 ### 0.3 验收标准（全部满足即 V1 完成）
 
-1. 访问 `/#/m/work` 在移动端视口下展示：顶栏（IceCoder + 状态）、Dashboard 卡片、快捷上手、建议开始、底栏四 Tab、底部输入区。
+1. 访问 `/#/m/work`（H5 默认页）在移动端视口下展示：顶栏（**左上角菜单 icon** + 品牌/状态）、Dashboard 卡片、快捷上手、建议开始、**底栏四 Tab（工作 / 记忆 / 技能 / 配置，默认高亮「工作」）**、底部输入区；**右滑主屏或点击菜单 icon** 自左侧展开会话列表抽屉。
 2. 点击会话或新建会话进入 `/#/m/work/:sessionId`，展示聊天详情（返回、标题、对话/文件/技能子 Tab、消息流、输入框）。
 3. 底栏切换 `#/m/memory`、`#/m/skills`、`#/m/config` 正常，且 **WebSocket / 当前会话 / 流式输出状态不因切 Tab 丢失**（keep-alive 与桌面一致）。
 4. 桌面路由 `/#/chat` 等行为与现网一致，左栏 Shell 不受影响。
@@ -54,8 +54,9 @@
 
 | 维度 | 桌面（现状） | 移动端 H5（目标） |
 |------|-------------|------------------|
-| 主导航 | 左侧竖栏 | **底部 Tab 栏**（工作 / 记忆 / 技能 / 配置） |
-| 工作区 | 侧栏会话列表 + 右侧聊天 | **栈式导航**：Dashboard 首页 → 会话列表/入口 → 聊天详情 |
+| 主导航 | 左侧竖栏 | **底部 Tab 栏**（工作 / 记忆 / 技能 / 配置）；**默认进入「工作」Tab** |
+| 工作区 | 侧栏会话列表 + 右侧聊天 | **工作主屏**（Dashboard + 输入框）+ **左侧抽屉会话列表**（右滑或点菜单展开）；选会话后进入聊天详情栈页 |
+| 会话列表 | 左栏常驻 | **抽屉层**（overlay + 自左滑入），非主屏内嵌列表；与桌面共用 `ChatSessionStore` |
 | 聊天页 | 与侧栏并排 | 独立全屏页：顶栏（返回 + 标题 + ⋯）+ 子 Tab（对话 / 文件 / 技能） |
 | 欢迎态 | `ChatWelcome` 嵌在聊天消息区 | Dashboard 独立首页（状态卡片 + 快捷上手 + 建议开始） |
 | 输入框 | 聊天页底部 | **工作 Tab 首页也保留输入框**（设计稿：首页即可开聊） |
@@ -170,6 +171,8 @@ flowchart TB
 
 ### 3.2 Hash 解析（`app.js` 扩展）
 
+> 现有 `app.js` 中路由函数为 `getRouteFromHash()`（返回页面名字符串，见 `app.js:186`）。下列 `parseRoute` 为**新增函数**，返回 `{ shell, page, sessionId? }` 对象以替代 `getRouteFromHash`；迁移时需同步更新 `init()` 与 `hashchange` 监听里对原函数的调用。
+
 ```javascript
 /**
  * @returns {{
@@ -244,6 +247,11 @@ window.AppRouter = {
 <div id="app">
   <div class="mobile-shell" data-shell="mobile">
     <header class="mobile-top-bar"><!-- 随路由变化 --></header>
+  <!-- 工作 Tab 会话抽屉：右滑 / 菜单 icon 展开，与主屏并列于 Shell 层 -->
+    <aside class="mobile-session-drawer" aria-hidden="true">
+      <div class="mobile-session-drawer-panel"><!-- 会话列表 --></div>
+      <div class="mobile-session-drawer-backdrop"></div>
+    </aside>
     <main class="mobile-main">
       <div id="page-container"><div class="page-root">...</div></div>
     </main>
@@ -271,6 +279,8 @@ window.AppRouter = {
 
 ### 4.2 底栏 Tab（`mobile-shell.js`）
 
+底部固定 **四个 Tab**，顺序与桌面侧栏主导航一致：
+
 | Tab | `data-page` | 路由 | 图标 |
 |-----|-------------|------|------|
 | 工作 | `work` | `#/m/work` | 与侧栏「工作」SVG 一致 |
@@ -278,6 +288,7 @@ window.AppRouter = {
 | 技能 | `skills` | `#/m/skills` | 同上 |
 | 配置 | `config` | `#/m/config` | 同上 |
 
+- **默认 Tab**：进入 H5（`#/m/work` 或无 hash 自动跳转）时，底栏 **「工作」** 为 active。
 - 在 `workChat`（聊天详情）页：**隐藏底栏**或降低 z-index（设计稿聊天页无底栏，仅顶栏返回）。
 - Active 态：`.mobile-bottom-nav-btn.is-active`。
 
@@ -285,11 +296,42 @@ window.AppRouter = {
 
 | 路由 | 顶栏内容 |
 |------|----------|
-| `#/m/work` | 左：IceCoder logo；右：通知（可选 V1 占位）、连接状态/宠物指示 |
+| `#/m/work` | 左：**菜单 icon**（展开会话抽屉）；中/右：IceCoder 品牌或标题、连接状态/宠物指示（通知可选 V1 占位） |
 | `#/m/work/:id` | 左：返回；中：会话标题（可编辑）；右：⋯ 菜单 |
 | `#/m/memory` 等 | 左：标题文字；右：与 work 首页类似 |
 
-### 4.4 安全区与视口
+### 4.4 会话列表抽屉（工作 Tab）
+
+对应桌面左栏中的 **会话列表区域**，在 H5 中不常驻，而以 **左侧抽屉** 呈现。
+
+**展开方式（二选一，行为一致）**：
+
+1. **右滑手势**：在工作主屏（`#/m/work`）自屏幕左缘向右滑动，抽屉自左滑入。
+2. **菜单 icon**：点击顶栏左上角菜单 icon（`mobile-top-bar-menu-btn`），抽屉展开。
+
+**收起方式**：
+
+- 点击半透明遮罩（backdrop）
+- 向左滑关闭抽屉
+- 选中某会话进入 `#/m/work/:id` 后自动关闭
+- 按 Esc（外接键盘调试）可选支持
+
+**抽屉内容**（复用 `ChatSessionStore` 数据，UI 对齐桌面侧栏会话区）：
+
+- 新建会话按钮
+- 会话列表（标题 + 更新时间；长按/滑动操作 V2）
+- 底部可保留模型/连接等与桌面侧栏底部控制对齐的精简区（V1 可仅列表 + 新建）
+
+**实现归属**：`mobile-shell.js` 管理 open/close 状态与手势；列表 DOM 与 `ChatSessionStore` 订阅可放在 `mobile-session-drawer.js` 或 Shell 内子模块。
+
+**与路由关系**：
+
+- 抽屉 **不改变 hash**（纯 UI 层）；选会话 → `AppRouter.navigateWorkChat(sessionId)`。
+- 在 `#/m/work/:id` 聊天详情页：顶栏为「返回」而非菜单；**不展示会话抽屉**（返回 `#/m/work` 后再可展开）。
+
+**无障碍**：`aria-hidden` / `aria-expanded` 与焦点 trap（V1 至少保证 icon 有 `aria-label="打开会话列表"`）。
+
+### 4.5 安全区与视口
 
 `index.html` 增加（若尚未设置）：
 
@@ -316,19 +358,20 @@ CSS 变量（`mobile-shell.css`）：
 
 **职责**：工作 Tab 首页，对应设计稿左屏。
 
-**区块**：
+**区块**（主屏内容，**不含**会话列表——会话列表见 §4.4 抽屉）：
 
 1. **状态行**：「IceCoder 已就绪」+ 宠物/连接指示（复用 `AppShell.getConnectionState`、`ChatPetBridge` 可选）
 2. **状态卡片 2×2**：模式 / 记忆条数 / Harness / L2 Gate（数据来自 `/api/config` + `ChatWelcome` 已有 fetch 逻辑）
 3. **快捷上手 2×2**：命令面板、@ 引用、# 技能、附件（复用 `ChatWelcome` 的 `TIPS` 数据）
 4. **建议开始**：三条 prompt（复用 `ChatWelcome` 的 `PROMPTS`）
-5. **会话列表**：精简列表项（标题 + 更新时间），点击 → `#/m/work/:id`
-6. **底部输入区**：与聊天页相同的 input row（模型选择 + 发送）；在首页发送时：**若无 active 会话则先 POST 新建会话**，再 `navigateWorkChat(id)` 并发送
+5. **底部输入区**：与聊天页相同的 input row（模型选择 + 发送）；在首页发送时：**若无 active 会话则先 POST 新建会话**，再 `navigateWorkChat(id)` 并发送
+
+**会话入口**：通过顶栏 **菜单 icon** 或 **右滑** 打开 §4.4 抽屉；点击列表项 → `#/m/work/:id`。
 
 **实现策略**：
 
-- 优先 **调用 `ChatWelcome` 的渲染函数或导出 build 函数**，避免复制 HTML 字符串。
-- 会话列表调用 `ChatSessionStore` 已有 API。
+- `ChatWelcome` 当前仅导出 `{ init, sync }`，`PROMPTS` / `TIPS` 为模块内私有变量，**无 build / render 导出**（见 `chat-welcome.js:345`）。复用前需先为其增加导出（如 `buildPromptsHtml` / `getTipsData`），或在 MobileWorkPage 引用同一份数据源；V1 过渡可先复制 HTML 字符串并标注 TODO 待抽 Core。
+- 会话列表在 `mobile-session-drawer` 中渲染，调用 `ChatSessionStore` 已有 API（`getSessions` / `switchSession` 等）；主屏 `MobileWorkPage` 不重复渲染列表。
 
 ### 5.2 MobileChatPage（`#/m/work/:sessionId`）
 
@@ -345,19 +388,28 @@ CSS 变量（`mobile-shell.css`）：
 
 ```javascript
 // mobile-chat-page.js
+// 注：以下 API 均对齐当前 Core 真实导出，非臆测
 function render(root, sessionId) {
   root.innerHTML = buildMobileChatTemplate();
-  ChatSessionStore.switchSession(sessionId).then(function () {
-    ChatUI.mount({
+  // switchSession(sessionId, wsSend, callback) 为回调式，非 Promise，且需注入 wsSend
+  ChatSessionStore.switchSession(sessionId, wsSend, function (ok) {
+    if (!ok) return;
+    // ChatUI 导出 init(els)，无 mount 方法
+    ChatUI.init({
       root: root,
       messagesEl: root.querySelector('.chat-messages'),
       inputEl: root.querySelector('.chat-input-area'),
     });
-    ChatWebSocket.ensureConnected();
+    // ChatWebSocket 导出 connect(token)/disconnect()，无 ensureConnected
+    if (WS && typeof WS.isConnected === 'function' && !WS.isConnected()) {
+      WS.connect(remoteToken);
+    }
     ChatPage.onActivate && ChatPage.onActivate(); // V1 过渡：复用激活钩子
   });
 }
 ```
+
+> `wsSend` 由 `ChatWebSocket` 提供、`remoteToken` 取自 `?token=` query，注入方式参考 `ChatPage` 现有实现（`chat-page.js:1367`）。
 
 **V1 过渡方案**（减少大 refactor）：
 
@@ -385,14 +437,16 @@ function render(root) {
 
 | 路径 | 职责 |
 |------|------|
-| `src/public/js/shell/mobile-shell.js` | H5 底栏、顶栏、路由 Tab 同步 |
+| `src/public/js/shell/mobile-shell.js` | H5 底栏、顶栏、路由 Tab 同步、会话抽屉开关 |
+| `src/public/js/shell/mobile-session-drawer.js` | 会话列表抽屉 DOM、手势、Store 订阅（可合并入 shell） |
 | `src/public/js/pages/mobile/mobile-work-page.js` | 工作首页 |
 | `src/public/js/pages/mobile/mobile-chat-page.js` | 聊天详情 |
 | `src/public/js/pages/mobile/mobile-memory-page.js` | 记忆 wrapper（可选 V1） |
 | `src/public/js/pages/mobile/mobile-skills-page.js` | 技能 wrapper |
 | `src/public/js/pages/mobile/mobile-config-page.js` | 配置 wrapper |
 | `src/public/css/mobile-shell.css` | Shell 布局、底栏、安全区 |
-| `src/public/css/mobile-work.css` | Dashboard 卡片、会话列表 |
+| `src/public/css/mobile-work.css` | Dashboard 卡片 |
+| `src/public/css/mobile-session-drawer.css` | 会话抽屉、遮罩、滑入动画（可合并入 `mobile-shell.css`） |
 | `src/public/css/mobile-chat.css` | 聊天详情、子 Tab |
 
 ### 6.2 修改文件
@@ -508,7 +562,7 @@ function renderPage(route) {
 ### Phase 1 — 路由与 Shell 骨架（1–2 天）
 
 - [ ] `parseRoute` + `#/m/*` hash 监听
-- [ ] `mobile-shell.js`：底栏四 Tab + 空 `page-container`
+- [ ] `mobile-shell.js`：底栏四 Tab（工作/记忆/技能/配置，默认工作）+ 顶栏菜单 icon + 会话抽屉骨架 + 空 `page-container`
 - [ ] `mobile-shell.css` + `data-shell` 互斥
 - [ ] 四个 Tab 可切换到占位页（「Mobile Memory 占位」）
 - [ ] 验收：桌面 `#/chat` 无回归；`/#/m/work` 见底栏
@@ -516,7 +570,7 @@ function renderPage(route) {
 ### Phase 2 — 工作首页（2–3 天）
 
 - [ ] `MobileWorkPage`：Dashboard + 复用 `ChatWelcome` 数据
-- [ ] 会话列表 + 新建会话
+- [ ] `mobile-session-drawer`：会话列表 + 新建会话；右滑 / 菜单 icon 展开
 - [ ] 首页输入框：新建会话并跳转
 - [ ] 验收：首页 UI 对齐设计稿主结构
 
@@ -557,6 +611,7 @@ function renderPage(route) {
 ### 11.1 手工测试
 
 - [ ] `#/m/work` Dashboard 数据与 `/api/config` 一致
+- [ ] 工作页右滑 / 菜单 icon 均可展开会话抽屉；选会话进入详情并关闭抽屉
 - [ ] 新建会话 → 发消息 → 流式显示 → 刷新页面会话仍在
 - [ ] 切 `#/m/memory` 再回 `#/m/work/:id`，消息不丢、WS 不断
 - [ ] 模型切换在 H5 生效
@@ -586,7 +641,9 @@ function renderPage(route) {
 
 | 设计稿元素 | 实现来源 |
 |-----------|----------|
-| 底栏 工作/记忆/技能/配置 | `mobile-shell.js` |
+| 底栏 工作/记忆/技能/配置（默认工作） | `mobile-shell.js` |
+| 会话列表抽屉（右滑 / 菜单 icon） | `mobile-session-drawer.js` + `ChatSessionStore` |
+| 工作顶栏菜单 icon | `mobile-shell.js` |
 | 状态卡片四宫格 | `ChatWelcome` + `/api/config` |
 | 快捷上手四宫格 | `ChatWelcome.TIPS` |
 | 建议开始列表 | `ChatWelcome.PROMPTS` |
@@ -602,3 +659,4 @@ function renderPage(route) {
 | 版本 | 日期 | 说明 |
 |------|------|------|
 | v1.0 | 2026-06-26 | 初稿：H5 Shell 方案、路由、分层、分阶段计划 |
+| v1.1 | 2026-06-29 | 明确底栏四 Tab 默认工作；会话列表改为左滑抽屉（右滑/菜单 icon 展开） |

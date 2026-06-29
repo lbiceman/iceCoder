@@ -228,8 +228,12 @@ window.ChatPage = (function () {
 
   function syncWelcomeState() {
     if (!window.ChatWelcome || typeof window.ChatWelcome.sync !== 'function') return;
+    var tail = elMessages && elMessages.querySelector ? elMessages.querySelector('.chat-tail-root') : null;
+    var hasTailContent = !!(tail && tail.childElementCount > 0);
     window.ChatWelcome.sync({
       messageCount: Session.getMessages().length,
+      hasTailContent: hasTailContent,
+      isWorkloadActive: isWorkloadActive(),
       supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
         ? window.AppRouter.getSupervisorMode()
         : 'adaptive',
@@ -241,6 +245,9 @@ window.ChatPage = (function () {
         : false,
       remoteMode: remoteMode,
     });
+    if (window.MobileWorkPage && typeof window.MobileWorkPage.syncChatActivity === 'function') {
+      window.MobileWorkPage.syncChatActivity();
+    }
   }
 
   /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
@@ -257,6 +264,9 @@ window.ChatPage = (function () {
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.syncSwitchLockState === 'function') {
       window.ChatSessionSidebar.syncSwitchLockState();
     }
+    if (window.MobileSessionDrawer && typeof window.MobileSessionDrawer.syncSwitchLockState === 'function') {
+      window.MobileSessionDrawer.syncSwitchLockState();
+    }
     if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
         sessionPet.setState(isStreaming ? 'read' : 'thinking');
@@ -267,6 +277,7 @@ window.ChatPage = (function () {
         sessionPet.setState('idle');
       }
     }
+    syncWelcomeState();
   }
 
   // ---- 命令面板（+ 按钮）：浮层已统一为 ChatDropdown ----
@@ -368,6 +379,18 @@ window.ChatPage = (function () {
       return;
     }
 
+    if (
+      window.AppRouter &&
+      typeof window.AppRouter.getShell === 'function' &&
+      window.AppRouter.getShell() === 'mobile' &&
+      document.body.dataset.page === 'work' &&
+      !remoteMode &&
+      window.MobileComposerHost &&
+      typeof window.MobileComposerHost.handleWorkPageSend === 'function'
+    ) {
+      if (window.MobileComposerHost.handleWorkPageSend()) return;
+    }
+
     // 普通消息
     var displayParts = [];
     if (text) displayParts.push(text);
@@ -401,6 +424,7 @@ window.ChatPage = (function () {
       }
       didAppendUserMessage = true;
       Session.saveMessages();
+      syncWelcomeState();
       var titlePrompt = displayParts.join('\n') || text || '';
       if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
         var userMsgCount = 0;
@@ -733,6 +757,7 @@ window.ChatPage = (function () {
     }
     if (sessionPet) sessionPet.setState('thinking');
     UI.appendReasoningStreamChunk(data.delta || '');
+    syncWelcomeState();
   }
 
   function onWsStream(data) {
@@ -746,10 +771,12 @@ window.ChatPage = (function () {
     if (WS.isProcessing()) {
       if (sessionPet) sessionPet.setState('thinking');
       UI.appendReasoningStreamChunk(data.delta || '');
+      syncWelcomeState();
       return;
     }
     if (sessionPet) sessionPet.setState('read');
     UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
+    syncWelcomeState();
   }
 
   function onWsStreamEnd() {
@@ -764,6 +791,7 @@ window.ChatPage = (function () {
     streamChunksReceived = false;
     isStreaming = false;
     UI.setStreamingState(false);
+    syncWelcomeState();
   }
 
   function scheduleRefreshAfterTurn() {
@@ -802,6 +830,7 @@ window.ChatPage = (function () {
     }
     Session.saveMessages();
     UI.enableAutoScroll();
+    syncWelcomeState();
     scheduleRefreshAfterTurn();
   }
 
@@ -1727,5 +1756,8 @@ window.ChatPage = (function () {
     onSessionSwitched: onSessionSwitched,
     isWorkloadActive: isWorkloadActive,
     syncWelcomeState: syncWelcomeState,
+    triggerSend: handleSend,
+    isMounted: function () { return mounted; },
+    getContainer: function () { return container; },
   };
 })();

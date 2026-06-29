@@ -1,0 +1,191 @@
+/* ===== Mobile Work Page ===== */
+
+.mobile-work-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.mobile-work-scroll {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 16px 8px;
+}
+
+.mobile-work-scroll.is-collapsed {
+  display: none;
+}
+
+.mobile-work-has-chat .mobile-composer-slot .mobile-chat-host--work-mode .chat-messages,
+.mobile-work-has-chat .mobile-composer-slot .mobile-chat-host--work-mode .session-pet-indicator {
+  display: flex !important;
+}
+
+.mobile-work-has-chat .mobile-composer-slot .mobile-chat-host--work-mode {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-work-has-chat .mobile-composer-slot .mobile-chat-host--work-mode .chat-page,
+.mobile-work-has-chat .mobile-composer-slot .mobile-chat-host--work-mode .chat-main {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-work-has-chat .mobile-composer-slot .mobile-chat-host--work-mode .chat-messages {
+  flex: 1;
+  min-height: 0;
+}
+
+.page-root-work.mobile-work-has-chat .mobile-work-page {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.page-root-work.mobile-work-has-chat .mobile-composer-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-work-dashboard .chat-welcome-inner {
+  max-width: 100%;
+}
+
+.mobile-work-dashboard .chat-welcome-header {
+  margin-bottom: 16px;
+}
+
+.mobile-work-dashboard .chat-welcome-brand {
+  gap: 12px;
+}
+
+.mobile-work-dashboard .chat-welcome-title {
+  font-size: 20px;
+}
+
+.mobile-work-dashboard .chat-welcome-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.mobile-work-dashboard .chat-welcome-stat {
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.mobile-work-dashboard .chat-welcome-tips {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.mobile-work-dashboard .chat-welcome-tip {
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.mobile-work-dashboard .chat-welcome-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 共享 ChatPage Composer 容器 */
+.mobile-composer-slot {
+  flex-shrink: 0;
+}
+
+.mobile-chat-host--work-mode .chat-page {
+  height: auto;
+  min-height: 0;
+}
+
+.mobile-chat-host--work-mode .chat-main {
+  height: auto;
+  min-height: 0;
+}
+
+.mobile-chat-host--work-mode .chat-messages,
+.mobile-chat-host--work-mode .session-pet-indicator {
+  display: none !important;
+}
+
+.mobile-chat-host--work-mode .chat-input-area {
+  border-top: 1px solid var(--border-color);
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+}
+
+.mobile-chat-host:not(.mobile-chat-host--work-mode) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-chat-host:not(.mobile-chat-host--work-mode) .chat-page {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-chat-host:not(.mobile-chat-host--work-mode) .chat-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-chat-host:not(.mobile-chat-host--work-mode) .chat-messages {
+  flex: 1;
+  min-height: 0;
+}
+
+.mobile-chat-host:not(.mobile-chat-host--work-mode) .chat-input-area {
+  flex-shrink: 0;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+}
+
+/* 远程扫码：在工作 Tab 内全屏聊天（主 Shell + 底栏） */
+.mobile-work-page--remote {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page-root-work.mobile-work-remote {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-work-page--remote .mobile-work-chat-core {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

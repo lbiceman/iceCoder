@@ -107,6 +107,14 @@ export function removeSession(token: string): void {
   sessions.delete(token);
 }
 
+/** 扫码远程控制默认打开的 H5 路径（路径路由，避免 hash 被扫码器丢弃） */
+const MOBILE_REMOTE_CHAT_PATH = '/m/chat';
+
+function buildMobileRemoteUrl(baseUrl: string, token: string): string {
+  const origin = baseUrl.replace(/\/+$/, '');
+  return `${origin}${MOBILE_REMOTE_CHAT_PATH}?token=${encodeURIComponent(token)}`;
+}
+
 // ---- 路由 ----
 
 export function createRemoteRouter(_options: RemoteRouterOptions): Router {
@@ -138,7 +146,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
     const port = process.env.PORT ?? '3784';
     const tunnelUrl = await getTunnelUrl();
     const baseUrl = tunnelUrl || `http://${localIP}:${port}`;
-    const url = `${baseUrl}/?token=${token}`;
+    const url = buildMobileRemoteUrl(baseUrl, token);
 
     // 生成二维码 data URL
     let qrDataUrl = '';

@@ -187,7 +187,11 @@ window.ChatWelcome = (function () {
   }
 
   function ensureRoot(remoteMode) {
-    if (elRoot || !elMessages) return;
+    if (!elMessages) return;
+    if (elRoot && !elMessages.contains(elRoot)) {
+      elRoot = null;
+    }
+    if (elRoot) return;
     elRoot = document.createElement('div');
     elRoot.className = 'chat-welcome hidden';
     elRoot.id = 'chat-welcome';
@@ -232,12 +236,15 @@ window.ChatWelcome = (function () {
         if (elRoot && !elRoot.classList.contains('hidden')) {
           updateMemoryLabel();
         }
+        var mobileDash = document.getElementById('mobile-work-dashboard');
+        if (mobileDash) updateMemoryLabel(mobileDash);
       });
   }
 
-  function updateMemoryLabel() {
-    if (!elRoot) return;
-    var el = elRoot.querySelector('[data-welcome-memory]');
+  function updateMemoryLabel(root) {
+    var r = resolveRoot(root);
+    if (!r) return;
+    var el = r.querySelector('[data-welcome-memory]');
     if (!el) return;
     if (memoryCount == null) {
       el.textContent = '载入中…';
@@ -268,10 +275,11 @@ window.ChatWelcome = (function () {
     else if (tone === 'warn') iconEl.classList.add('chat-welcome-stat-icon-warn');
   }
 
-  function updateHarnessLabel(opts) {
-    if (!elRoot) return;
-    var el = elRoot.querySelector('[data-welcome-harness]');
-    var iconEl = elRoot.querySelector('[data-welcome-harness-icon]');
+  function updateHarnessLabel(opts, root) {
+    var r = resolveRoot(root);
+    if (!r) return;
+    var el = r.querySelector('[data-welcome-harness]');
+    var iconEl = r.querySelector('[data-welcome-harness-icon]');
     var connected = opts.connectionState === 'connected';
     var setupRequired = !!opts.setupRequired;
     if (!connected) {
@@ -285,10 +293,11 @@ window.ChatWelcome = (function () {
     setStatValue(el, iconEl, '就绪', 'success');
   }
 
-  function updatePipelineLabel(opts) {
-    if (!elRoot) return;
-    var el = elRoot.querySelector('[data-welcome-pipeline]');
-    var iconEl = elRoot.querySelector('[data-welcome-pipeline-icon]');
+  function updatePipelineLabel(opts, root) {
+    var r = resolveRoot(root);
+    if (!r) return;
+    var el = r.querySelector('[data-welcome-pipeline]');
+    var iconEl = r.querySelector('[data-welcome-pipeline-icon]');
     var mode = opts.supervisorMode || 'adaptive';
     var connected = opts.connectionState === 'connected';
     var setupRequired = !!opts.setupRequired;
@@ -302,10 +311,15 @@ window.ChatWelcome = (function () {
     setStatValue(el, iconEl, l2Text + ' · ' + gateText, tone);
   }
 
-  function updateModeLabel(mode) {
-    if (!elRoot) return;
-    var modeEl = elRoot.querySelector('[data-welcome-mode]');
-    var subEl = elRoot.querySelector('[data-welcome-subtitle]');
+  function resolveRoot(root) {
+    return root || elRoot;
+  }
+
+  function updateModeLabel(mode, root) {
+    var r = resolveRoot(root);
+    if (!r) return;
+    var modeEl = r.querySelector('[data-welcome-mode]');
+    var subEl = r.querySelector('[data-welcome-subtitle]');
     var label = getSupervisorLabel(mode);
     if (modeEl) modeEl.textContent = label;
     if (subEl) subEl.textContent = getSubtitle(mode);
@@ -331,7 +345,9 @@ window.ChatWelcome = (function () {
     if (!elRoot) return;
 
     var messageCount = typeof opts.messageCount === 'number' ? opts.messageCount : 0;
-    var show = messageCount <= 0;
+    var hasTailContent = !!opts.hasTailContent;
+    var isWorkloadActive = !!opts.isWorkloadActive;
+    var show = messageCount <= 0 && !hasTailContent && !isWorkloadActive;
     setVisible(show);
     if (!show) return;
 
@@ -342,8 +358,35 @@ window.ChatWelcome = (function () {
     if (memoryCount == null) fetchMemoryCount();
   }
 
+  function bindDashboardEvents(root, onSelect) {
+    if (!root) return;
+    root.addEventListener('click', function (e) {
+      var btn = e.target && e.target.closest ? e.target.closest('[data-prompt-index]') : null;
+      if (!btn) return;
+      var idx = parseInt(btn.getAttribute('data-prompt-index'), 10);
+      var item = PROMPTS[idx];
+      if (!item || typeof onSelect !== 'function') return;
+      onSelect(item.value);
+    });
+  }
+
+  function syncDashboard(root, opts) {
+    opts = opts || {};
+    if (!root) return;
+    updateModeLabel(opts.supervisorMode || 'adaptive', root);
+    updateHarnessLabel(opts, root);
+    updatePipelineLabel(opts, root);
+    updateMemoryLabel(root);
+    if (memoryCount == null) fetchMemoryCount();
+  }
+
   return {
     init: init,
     sync: sync,
+    buildDashboardMarkup: buildMarkup,
+    bindDashboardEvents: bindDashboardEvents,
+    syncDashboard: syncDashboard,
+    getPrompts: function () { return PROMPTS.slice(); },
+    getTips: function () { return TIPS.slice(); },
   };
 })();
