@@ -18,8 +18,11 @@ import { isTunnelDevEnabled } from '../../runtime/tunnel-feature.js';
 // ---- 类型定义 ----
 
 export interface RemoteSession {
+  /** 远程鉴权会话 id（非聊天 session） */
   sessionId: string;
   token: string;
+  /** 扫码时应镜像的 PC 端聊天 session id */
+  chatSessionId?: string;
   createdAt: number;
   connected: boolean;
 }
@@ -110,9 +113,11 @@ export function removeSession(token: string): void {
 /** 扫码远程控制默认打开的 H5 路径（路径路由，避免 hash 被扫码器丢弃） */
 const MOBILE_REMOTE_CHAT_PATH = '/m/chat';
 
-function buildMobileRemoteUrl(baseUrl: string, token: string): string {
+function buildMobileRemoteUrl(baseUrl: string, token: string, chatSessionId?: string): string {
   const origin = baseUrl.replace(/\/+$/, '');
-  return `${origin}${MOBILE_REMOTE_CHAT_PATH}?token=${encodeURIComponent(token)}`;
+  const params = new URLSearchParams({ token });
+  if (chatSessionId) params.set('sid', chatSessionId);
+  return `${origin}${MOBILE_REMOTE_CHAT_PATH}?${params.toString()}`;
 }
 
 // ---- 路由 ----
@@ -124,17 +129,21 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
    * POST /api/remote/session - 创建远程控制会话
    * 会清除所有旧会话，新会话长期有效直到下次生成。
    */
-  router.post('/session', async (_req: Request, res: Response): Promise<void> => {
+  router.post('/session', async (req: Request, res: Response): Promise<void> => {
     // 使所有旧会话失效
     invalidateAllSessions();
 
     const sessionId = randomUUID();
     const token = randomUUID();
     const now = Date.now();
+    const chatSessionId = typeof req.body?.chatSessionId === 'string' && req.body.chatSessionId.trim()
+      ? req.body.chatSessionId.trim()
+      : undefined;
 
     const session: RemoteSession = {
       sessionId,
       token,
+      chatSessionId,
       createdAt: now,
       connected: false,
     };
@@ -146,7 +155,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
     const port = process.env.PORT ?? '3784';
     const tunnelUrl = await getTunnelUrl();
     const baseUrl = tunnelUrl || `http://${localIP}:${port}`;
-    const url = buildMobileRemoteUrl(baseUrl, token);
+    const url = buildMobileRemoteUrl(baseUrl, token, chatSessionId);
 
     // 生成二维码 data URL
     let qrDataUrl = '';
@@ -165,6 +174,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
       success: true,
       sessionId,
       token,
+      chatSessionId,
       url,
       qrDataUrl,
       localIP,
@@ -193,6 +203,7 @@ export function createRemoteRouter(_options: RemoteRouterOptions): Router {
     res.json({
       valid: true,
       sessionId: session.sessionId,
+      chatSessionId: session.chatSessionId,
     });
   });
 

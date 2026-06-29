@@ -88,6 +88,22 @@ window.ChatSessionStore = (function () {
     }
   }
 
+  function isRemoteTokenEntry() {
+    try {
+      return !!new URLSearchParams(window.location.search || '').get('token');
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  function readRemoteUrlSessionId() {
+    try {
+      return new URLSearchParams(window.location.search || '').get('sid') || '';
+    } catch (_e) {
+      return '';
+    }
+  }
+
   function persistLastActiveSessionId(sessionId) {
     if (!sessionId) return;
     try {
@@ -116,8 +132,19 @@ window.ChatSessionStore = (function () {
     return sorted[0].id;
   }
 
-  /** 解析初始选中：本地最近工作 > API 推荐 > 内存 active > updatedAt 最近。 */
+  /** 解析初始选中：远程扫码跟随 PC/URL；本地为 最近工作 > API 推荐 > 内存 active > updatedAt 最近。 */
   function resolveInitialActiveSessionId(apiActiveId) {
+    if (isRemoteTokenEntry()) {
+      var urlSid = readRemoteUrlSessionId();
+      if (urlSid && sessions.some(function (s) { return s.id === urlSid; })) {
+        return urlSid;
+      }
+      var remoteCandidate = apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
+      if (!sessions.some(function (s) { return s.id === remoteCandidate; })) {
+        remoteCandidate = pickMostRecentSessionId();
+      }
+      return remoteCandidate;
+    }
     var stored = readLastActiveSessionIdFromStorage();
     var candidate = stored || apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
     if (!sessions.some(function (s) { return s.id === candidate; })) {
@@ -138,6 +165,9 @@ window.ChatSessionStore = (function () {
         var resolvedId = resolveInitialActiveSessionId(data && data.activeSessionId);
         if (resolvedId !== activeSessionId) {
           activeSessionId = resolvedId;
+        }
+        if (isRemoteTokenEntry()) {
+          persistLastActiveSessionId(activeSessionId);
         }
         if (callback) callback(sessions, resolvedId);
         emit();

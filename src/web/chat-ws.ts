@@ -439,6 +439,39 @@ async function flushStructuredMessagesNow(sessionId: string): Promise<void> {
   );
 }
 
+/** 移动端扫码连入：将全局 activeSessionId 对齐到 QR 绑定的聊天 session */
+async function ensureGlobalActiveSessionId(targetId: string): Promise<void> {
+  if (!targetId || targetId === activeSessionId) return;
+  const oldSessionId = activeSessionId;
+  try {
+    await flushStructuredMessagesNow(oldSessionId);
+    activeSessionId = targetId;
+    void persistLastActiveSessionId(targetId);
+    let loaded: UnifiedMessage[] | undefined;
+    try {
+      loaded = await loadStructuredMessages(activeSessionId);
+    } catch (loadErr) {
+      console.warn('[chat-ws] remote join load structured failed, starting empty:', loadErr);
+      loaded = undefined;
+    }
+    setCachedMessages(activeSessionId, loaded ?? []);
+    try {
+      resetSupervisorRuntimeCache();
+    } catch (err) {
+      console.warn('[chat-ws] supervisor reset on remote join failed:', err);
+    }
+    try {
+      await rebindBgTaskPusher(activeSessionId);
+    } catch (rebindErr) {
+      console.warn('[chat-ws] remote join rebind bg task failed:', rebindErr);
+    }
+    console.log(`[chat-ws] 远程扫码对齐会话 ${activeSessionId}`);
+  } catch (err) {
+    activeSessionId = oldSessionId;
+    console.error('[chat-ws] remote join session align failed:', err);
+  }
+}
+
 function saveStructuredMessages(messages: UnifiedMessage[], sessionId?: string): void {
   const id = sessionId || activeSessionId;
   structuredCache.set(id, messages);
@@ -1217,8 +1250,23 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
   });
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
-  wss.on('connection', async (ws: WebSocket) => {
+  wss.on('connection', async (ws: WebSocket, request) => {
     await ensureActiveSessionBootstrapped();
+
+    try {
+      const reqUrl = new URL(request.url || '', 'http://localhost');
+      const token = reqUrl.searchParams.get('token');
+      if (token) {
+        const remoteSession = getSession(token);
+        const chatSessionId = remoteSession?.chatSessionId;
+        if (chatSessionId) {
+          await ensureGlobalActiveSessionId(chatSessionId);
+        }
+      }
+    } catch (err) {
+      console.warn('[chat-ws] remote session align skipped:', err);
+    }
+
     chatClients.add(ws);
     subscribeWsToSession(ws, activeSessionId);
     startChatRuntimePrewarm();

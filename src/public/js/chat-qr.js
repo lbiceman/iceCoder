@@ -19,7 +19,18 @@ window.ChatQR = (function () {
     setQrModalLoading(overlay);
     document.body.appendChild(overlay);
 
-    fetch('/api/remote/session', { method: 'POST' })
+    var chatSessionId = '';
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
+      chatSessionId = window.ChatSessionStore.getActiveSessionId() || '';
+    } else if (window.ChatSession && typeof window.ChatSession.getActiveId === 'function') {
+      chatSessionId = window.ChatSession.getActiveId() || '';
+    }
+
+    fetch('/api/remote/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chatSessionId: chatSessionId || 'default' }),
+    })
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (!data.success) {
@@ -51,7 +62,11 @@ window.ChatQR = (function () {
       base = 'http://' + data.localIP + ':' + data.port;
     }
     if (!base) return data.url || '';
-    return base + '/m/chat?token=' + encodeURIComponent(data.token);
+    var params = 'token=' + encodeURIComponent(data.token);
+    if (data.chatSessionId) {
+      params += '&sid=' + encodeURIComponent(data.chatSessionId);
+    }
+    return base + '/m/chat?' + params;
   }
 
   function createQrOverlayShell() {

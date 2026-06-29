@@ -266,7 +266,8 @@ window.ChatPage = (function () {
   function syncWelcomeState() {
     if (!window.ChatWelcome || typeof window.ChatWelcome.sync !== 'function') return;
     var tail = elMessages && elMessages.querySelector ? elMessages.querySelector('.chat-tail-root') : null;
-    var hasTailContent = !!(tail && tail.childElementCount > 0);
+    // tail 内始终保留 .chat-tail-anchor 占位，仅统计其前的真实消息/流式块
+    var hasTailContent = !!(tail && tail.firstChild !== tail.lastChild);
     window.ChatWelcome.sync({
       messageCount: Session.getMessages().length,
       hasTailContent: hasTailContent,
@@ -644,7 +645,7 @@ window.ChatPage = (function () {
     var serverId = data.activeSessionId || data.sessionId;
     if (!serverId) return false;
     var clientId = Session.getActiveId ? Session.getActiveId() : 'default';
-    if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
       window.ChatSessionStore.setActiveSessionId(serverId);
     }
     if (serverId !== clientId) {
@@ -1674,6 +1675,12 @@ window.ChatPage = (function () {
     var params = new URLSearchParams(window.location.search);
     remoteToken = params.get('token');
     remoteMode = !!remoteToken;
+    if (remoteMode) {
+      var remoteSid = params.get('sid');
+      if (remoteSid && window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
+        window.ChatSessionStore.setActiveSessionId(remoteSid);
+      }
+    }
 
     container.innerHTML =
       '<div class="chat-page">' +
