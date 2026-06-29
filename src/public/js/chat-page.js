@@ -1129,11 +1129,26 @@ window.ChatPage = (function () {
     });
   }
 
+  function dismissActiveConfirmModal(approved) {
+    if (window.Modal && typeof Modal.dismissActive === 'function') {
+      Modal.dismissActive(approved);
+    }
+  }
+
   function onWsConfirmResolved(data) {
     if (!data) return;
-    // 标记本地弹窗的回复已被服务端 first-win
+    // 其它端 first-win 后关闭本地弹窗，避免 PC/移动端各弹各的
     if (!activeConfirmId || data.confirmId === activeConfirmId) {
       activeConfirmResolved = true;
+      dismissActiveConfirmModal(!!data.approved);
+    }
+  }
+
+  function onWsConfirmTimeout(data) {
+    if (!data) return;
+    if (!activeConfirmId || data.confirmId === activeConfirmId) {
+      activeConfirmResolved = true;
+      dismissActiveConfirmModal(false);
     }
   }
 
@@ -1470,6 +1485,36 @@ window.ChatPage = (function () {
     });
   }
 
+  function applyRemoteUserMessage(msg) {
+    if (!msg || msg.role !== 'user') return false;
+    if (msg.sessionId && Session.getActiveId && msg.sessionId !== Session.getActiveId()) return false;
+    if (!Session.insertRemoteUserMessage || !Session.insertRemoteUserMessage(msg)) return false;
+    if (UI.insertRemoteUserMessageEl) {
+      UI.insertRemoteUserMessageEl(msg, Session.stripStatusTag);
+    } else {
+      UI.appendMessageEl(msg, Session.stripStatusTag);
+    }
+    if (UI.maybeRepartitionTailIfNeeded) {
+      UI.maybeRepartitionTailIfNeeded(
+        Session.getMessages(),
+        Session.getToolTraces(),
+        Session.stripStatusTag,
+        'force',
+        buildDisplayMap(),
+      );
+    }
+    Session.saveMessages();
+    syncWelcomeState();
+    UI.scheduleScrollIfSticky();
+    return true;
+  }
+
+  function onWsUserMessageAppended(data) {
+    if (!data || !data.message) return;
+    if (data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) return;
+    applyRemoteUserMessage(data.message);
+  }
+
   function onWsSessionUpdated(data) {
     if (data && data.sessionId && data.title && window.ChatSessionStore
         && typeof window.ChatSessionStore.patchSession === 'function') {
@@ -1487,6 +1532,27 @@ window.ChatPage = (function () {
     if (data && data.reason === 'message_deleted') {
       if (!shouldSkipServerSnapshotSync()) {
         refreshChatHistoryAfterTurn(true);
+      }
+      return;
+    }
+    if (data && data.reason === 'user_message') {
+      if (Session.fetchAndMergeRemoteUserMessages) {
+        Session.fetchAndMergeRemoteUserMessages(function (added) {
+          if (!added) return;
+          var msgs = Session.getMessages();
+          for (var ui = 0; ui < msgs.length; ui++) {
+            var um = msgs[ui];
+            if (um.role !== 'user' || um._el) continue;
+            if (UI.insertRemoteUserMessageEl) {
+              UI.insertRemoteUserMessageEl(um, Session.stripStatusTag);
+            } else {
+              UI.appendMessageEl(um, Session.stripStatusTag);
+            }
+          }
+          Session.saveMessages();
+          syncWelcomeState();
+          UI.scheduleScrollIfSticky();
+        });
       }
       return;
     }
@@ -1750,9 +1816,11 @@ window.ChatPage = (function () {
     WS.on('memory_notice', onWsMemoryNotice);
     WS.on('confirm', onWsConfirm);
     WS.on('confirm_resolved', onWsConfirmResolved);
+    WS.on('confirm_timeout', onWsConfirmTimeout);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
     WS.on('session_updated', onWsSessionUpdated);
+    WS.on('user_message_appended', onWsUserMessageAppended);
     WS.on('workspace_updated', syncSidebarWorkspace);
     WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);

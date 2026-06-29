@@ -1995,6 +1995,44 @@ window.ChatUI = (function () {
     return el;
   }
 
+  /**
+   * 多端同步：在当前轮流式/工具/思考块之前插入远端用户消息 DOM。
+   */
+  function insertRemoteUserMessageEl(msg, stripStatusTagFn) {
+    ensureChatLayout();
+    if (!elTailRoot || !elTailAnchor) return null;
+    var insertBefore = elTailAnchor;
+    var node = elTailAnchor.previousElementSibling;
+    while (node) {
+      if (node.id === 'streaming-reasoning-msg' || node.id === 'streaming-msg') {
+        insertBefore = node;
+        node = node.previousElementSibling;
+        continue;
+      }
+      if (node.classList && (
+        node.classList.contains('tool-action')
+        || isToolRowBlock(node)
+        || isToolTraceContainer(node)
+      )) {
+        insertBefore = node;
+        node = node.previousElementSibling;
+        continue;
+      }
+      break;
+    }
+    var msgIndex = typeof msg._msgIndex === 'number' ? msg._msgIndex : -1;
+    var el = createMessageEl(msg, stripStatusTagFn, msgIndex >= 0 ? msgIndex : undefined);
+    msg._el = el;
+    elTailRoot.insertBefore(el, insertBefore);
+    notifyTailLayoutChange();
+    if (window.ChatPage && typeof window.ChatPage.syncWelcomeState === 'function') {
+      window.ChatPage.syncWelcomeState();
+    }
+    notifyStaircaseNavRefresh();
+    if (msg.id) refreshRestoreButtonsVisibility();
+    return el;
+  }
+
   function notifyStaircaseNavRefresh() {
     if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.refresh === 'function') {
       window.ChatStaircaseNav.refresh();
@@ -2457,6 +2495,7 @@ window.ChatUI = (function () {
     renderMessagesOnly: renderMessagesOnly,
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
+    insertRemoteUserMessageEl: insertRemoteUserMessageEl,
     updateMessageContent: updateMessageContent,
     updateMessageTokenUsage: updateMessageTokenUsage,
     appendStreamChunk: appendStreamChunk,

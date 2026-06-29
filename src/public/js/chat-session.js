@@ -309,6 +309,53 @@ window.ChatSession = (function () {
     return separated.msgs.length + '|' + ids + '|' + snapshotTraceTotals(separated.traces);
   }
 
+  function hasUserMessageId(id) {
+    if (!id) return false;
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].id === id) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 多端同步：在 processing / 流式期间插入远端用户消息（插在当前轮 assistant 流式气泡之前）。
+   * @returns {boolean} 是否新增了消息
+   */
+  function insertRemoteUserMessage(msg) {
+    if (!msg || msg.role !== 'user') return false;
+    if (hasUserMessageId(msg.id)) return false;
+    stampMessageTimestamps(msg);
+    var insertAt = messages.length;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'agent' && messages[i]._streaming) {
+        insertAt = i;
+        break;
+      }
+    }
+    messages.splice(insertAt, 0, msg);
+    reindexMessages();
+    return true;
+  }
+
+  function mergeUserMessagesFromServer(serverMsgs) {
+    if (!serverMsgs || !serverMsgs.length) return false;
+    var added = false;
+    for (var i = 0; i < serverMsgs.length; i++) {
+      var m = serverMsgs[i];
+      if (m.role === 'user' && insertRemoteUserMessage(m)) added = true;
+    }
+    return added;
+  }
+
+  function fetchAndMergeRemoteUserMessages(done) {
+    fetchServerMessages(function (serverMsgs) {
+      var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      var separated = separateToolTraces(raw);
+      var added = mergeUserMessagesFromServer(separated.msgs);
+      if (done) done(added);
+    });
+  }
+
   function applyServerChatSnapshot(separated, options, isStreaming, wsProcessing) {
     var opts = options || {};
     if (hasStreamingModelBubble() || wsProcessing || isStreaming) return false;
@@ -447,6 +494,9 @@ window.ChatSession = (function () {
     clearLiveToolBatch: clearLiveToolBatch,
     saveLiveToolBatch: saveLiveToolBatch,
     hasStreamingModelBubble: hasStreamingModelBubble,
+    insertRemoteUserMessage: insertRemoteUserMessage,
+    mergeUserMessagesFromServer: mergeUserMessagesFromServer,
+    fetchAndMergeRemoteUserMessages: fetchAndMergeRemoteUserMessages,
     stripStatusTag: stripStatusTag,
     setSessionId: setSessionId,
     getActiveId: getActiveId,

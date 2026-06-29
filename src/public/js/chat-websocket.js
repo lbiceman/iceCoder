@@ -108,6 +108,12 @@ window.ChatWebSocket = (function () {
       case 'session_updated':
         emit('session_updated', data || {});
         break;
+      case 'user_message_appended':
+        emit('user_message_appended', {
+          sessionId: data.sessionId || '',
+          message: data.message || null,
+        });
+        break;
       case 'stream':
         if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
         emit('stream', { delta: data.delta || '' });

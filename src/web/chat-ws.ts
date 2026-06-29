@@ -586,6 +586,27 @@ function broadcastToSession(sessionId: string, data: unknown): void {
   }
 }
 
+/** 向 session 订阅者广播，可排除发送方（多端同步时发送端已有乐观 UI） */
+function broadcastToSessionExcept(
+  sessionId: string,
+  data: unknown,
+  except?: WebSocket,
+): void {
+  const set = sessionSubscribers.get(sessionId);
+  if (!set || set.size === 0) return;
+  const body = JSON.stringify(data);
+  for (const ws of set) {
+    if (except && ws === except) continue;
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(body);
+      } catch (err) {
+        console.debug('[chat-ws] broadcastToSessionExcept 发送失败:', err instanceof Error ? err.message : err);
+      }
+    }
+  }
+}
+
 function broadcastHarnessState(sessionId: string): void {
   void buildConnectedPayloadExtras(sessionId).then((extras) => {
     broadcastToSession(sessionId, {
@@ -1574,11 +1595,13 @@ async function handleChatMessage(
 
   // 写入用户消息到会话文件
   const userMsgId = clientMessageId ?? randomUUID();
+  const userSentAt = Date.now();
   const userPersisted = await appendMessages(
     [{
       role: 'user',
       content: message,
       id: userMsgId,
+      sentAt: userSentAt,
       ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
     }],
     runSessionId,
@@ -1587,9 +1610,21 @@ async function handleChatMessage(
     const autoTitle = await applyFirstPromptSessionTitle(runSessionId, message);
     broadcastSessionUpdated(
       'user_message',
-      autoTitle ? { sessionId: runSessionId, title: autoTitle } : undefined,
+      autoTitle ? { sessionId: runSessionId, title: autoTitle } : { sessionId: runSessionId },
       ws,
     );
+    // 多端实时同步：processing 期间其它端无法靠 session_updated 拉快照（前端会跳过），须直推用户消息
+    broadcastToSessionExcept(runSessionId, {
+      type: 'user_message_appended',
+      sessionId: runSessionId,
+      message: {
+        role: 'user',
+        id: userMsgId,
+        content: message,
+        sentAt: userSentAt,
+        ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
+      },
+    }, ws);
   }
 
   const resolvedForDirect =
