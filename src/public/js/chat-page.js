@@ -587,7 +587,10 @@ window.ChatPage = (function () {
       var separated = Session.separateToolTraces(raw);
       Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
       if (shouldSkipServerSnapshotSync()) {
+        mergeAndPaintRemoteUserMessages(raw);
         if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
+        initialHistoryPainted = true;
+        pendingInitialPaint = false;
         return;
       }
       renderChatHistoryWithFetch(false, function () {
@@ -618,6 +621,11 @@ window.ChatPage = (function () {
     }
     Session.fetchServerMessages(function (serverMsgs) {
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+      if (shouldSkipServerSnapshotSync()) {
+        mergeAndPaintRemoteUserMessages(raw);
+        afterHistoryPainted();
+        return;
+      }
       if (raw.length > 0) {
         var separated = Session.separateToolTraces(raw);
         Session.applyServerChatSnapshot(
@@ -1485,6 +1493,45 @@ window.ChatPage = (function () {
     });
   }
 
+  function paintRemoteUserMessagesWithoutDom(msgs) {
+    var painted = false;
+    for (var i = 0; i < msgs.length; i++) {
+      var um = msgs[i];
+      if (um.role !== 'user' || um._el) continue;
+      if (UI.insertRemoteUserMessageEl) {
+        UI.insertRemoteUserMessageEl(um, Session.stripStatusTag);
+      } else {
+        UI.appendMessageEl(um, Session.stripStatusTag);
+      }
+      painted = true;
+    }
+    if (painted) {
+      if (UI.maybeRepartitionTailIfNeeded) {
+        UI.maybeRepartitionTailIfNeeded(
+          Session.getMessages(),
+          Session.getToolTraces(),
+          Session.stripStatusTag,
+          'force',
+          buildDisplayMap(),
+        );
+      }
+      syncWelcomeState();
+      UI.scheduleScrollIfSticky();
+    }
+    return painted;
+  }
+
+  /** processing 期间无法全量拉快照时，仅补齐服务端已有 user 消息并插入 DOM */
+  function mergeAndPaintRemoteUserMessages(serverMsgs) {
+    var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
+    if (!raw.length || !Session.mergeUserMessagesFromServer) return false;
+    var separated = Session.separateToolTraces(raw);
+    var added = Session.mergeUserMessagesFromServer(separated.msgs);
+    var painted = paintRemoteUserMessagesWithoutDom(Session.getMessages());
+    if (added || painted) Session.saveMessages();
+    return added || painted;
+  }
+
   function applyRemoteUserMessage(msg) {
     if (!msg || msg.role !== 'user') return false;
     if (msg.sessionId && Session.getActiveId && msg.sessionId !== Session.getActiveId()) return false;
@@ -1539,19 +1586,8 @@ window.ChatPage = (function () {
       if (Session.fetchAndMergeRemoteUserMessages) {
         Session.fetchAndMergeRemoteUserMessages(function (added) {
           if (!added) return;
-          var msgs = Session.getMessages();
-          for (var ui = 0; ui < msgs.length; ui++) {
-            var um = msgs[ui];
-            if (um.role !== 'user' || um._el) continue;
-            if (UI.insertRemoteUserMessageEl) {
-              UI.insertRemoteUserMessageEl(um, Session.stripStatusTag);
-            } else {
-              UI.appendMessageEl(um, Session.stripStatusTag);
-            }
-          }
+          paintRemoteUserMessagesWithoutDom(Session.getMessages());
           Session.saveMessages();
-          syncWelcomeState();
-          UI.scheduleScrollIfSticky();
         });
       }
       return;

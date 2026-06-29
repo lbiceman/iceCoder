@@ -1865,6 +1865,17 @@
   min-height: 220px;
 }
 .qr-canvas-container canvas { border-radius: 8px; }
+.qr-loading {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.qr-error {
+  font-size: 13px;
+  color: var(--danger, #e57373);
+  margin: 0;
+  word-break: break-word;
+}
 .qr-url {
   font-size: 11px;
   color: var(--text-muted);
