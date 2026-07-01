@@ -62,12 +62,28 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 - **提取与维护（post-tool）**：工具执行后写入/更新片段；**Dream** 与淘汰策略控制体积与冲突。
 - **会话笔记**：`session-notes` 与 `icecoder-runtime` 块保存压缩前快照；与 Harness 记忆集成协作。
 
-### 多会话与跨端同步
+### Agent Skills（技能库）
 
-侧栏对会话 **增删改查**，每条会话独立聊天历史、`session-notes` 与 checkpoint，互不污染。
+可复用的 **Markdown 技能文件** 落在 `data/skills/`（`ICE_SKILLS_DIR`，与用户记忆同级）。
 
+- **技能页**：侧栏 **技能** Tab — 桌面 **`#/skills`** / 移动 **`#/m/skills`**，支持列表、预览、删除。
+- **聊天 `#` 选择器**：输入框输入 `#` 挂载技能 chip，发送时将技能正文注入提示词。
+- **目录约定**：根目录 `.md` 或 `文件夹/skill.md`（可带脚本）；内置指引见 [`data/skills/创建技能.md`](./data/skills/创建技能.md)。
+- **API**：`GET/DELETE /api/skills` — Agent 创建/修改技能**只能**写入 `ICE_SKILLS_DIR`。
+
+### 多会话、移动端 H5 与跨端同步
+
+侧栏对会话 **增删改查**，每条会话独立聊天历史、`session-notes`、checkpoint 与 **工作区根目录**，互不污染。
+
+- **移动端 H5 Shell**：与桌面同一 bundle；路由 **`#/m/work`**、**`#/m/work/:sessionId`**、**`#/m/memory`**、**`#/m/skills`**、**`#/m/config`** — 底栏四 Tab、左侧会话抽屉、保活策略与桌面一致。
 - **`~scan`**：生成二维码，手机与 PC 绑定 **同一会话 id**，远程页与桌面共享上下文（非仅看板镜像）。
 - Web 保活与 **runningTurn**：流式进行中刷新或断线重连可恢复 UI 状态（见保活需求文档）。
+
+### 文件引用与系统浏览
+
+- **`@` 工作区引用**：级联选择器浏览会话工作区（`/api/workspace/browse`），选中路径以 chip 展示在输入框上方。
+- **系统文件浏览器工具**：`list_drives`、`browse_directory`、`open_file` — 可浏览/读取仓库外路径（配合手机远程查看电脑文件）。
+- **`~open`**：服务端确定性执行目录列举，避免模型编造磁盘列表后再回答。
 
 ### Checkpoint、压缩与断点恢复
 
@@ -77,9 +93,9 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 - **F5 / WebSocket 重连**：依赖 `runningTurn` 与 checkpoint 重放，避免「刷新即丢半轮输出」。
 - 旧版无 `runtimeV2` 的 checkpoint 仍可读取，新字段对老路径透明。
 
-### 工具生态（27 内置 + MCP）
+### 工具生态（30 内置 + MCP）
 
-内置覆盖读写的文件/Git/Shell、搜索、子代理委派、URL 抓取、Office 解析等；**MCP** 子进程把外部 Server 工具注册进同一 `ToolRegistry`。
+内置覆盖读写的文件/Git/Shell、搜索、子代理委派、URL 抓取、Office 解析、**系统文件浏览器**等；**MCP** 子进程把外部 Server 工具注册进同一 `ToolRegistry`。
 
 - **Shell 双轨**：`run_command` 运行时分类——长任务进后台、短命令前台；软超时后可 escalate，避免聊天被 `npm test` 堵死。
 - **Diff Viewer**：编辑类工具在聊天内嵌 Git 风格 diff，可展开核对。
@@ -95,7 +111,7 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 
 ### 测试与质量基线
 
-**约 1,867** 条 Vitest（`src/` 行覆盖约 **78%**；Harness **~84%**、Supervisor **~95%**、记忆 **~71%**，以本地 `npm run test:coverage` 为准）。
+**约 2,000+** 条 Vitest（`src/` 行覆盖约 **78%**；Harness **~84%**、Supervisor **~95%**、记忆 **~71%**，以本地 `npm run test:coverage` 为准）。
 
 - 覆盖 Harness 门禁、TaskGraph、双模、记忆生命周期、Web 路由等；长会话与监管有专项用例。
 - **`npm run eval:agent`**：Agent 行为指标骨架（任务成功率、工具调用率、验证率等），用于回归观测。
@@ -108,7 +124,7 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 - 任务分层 L1–L7 与 **L4+ / L7**（billing 97 文件 19 BUG；**L7 融合** 142 文件 33 探针）；修复类 iceCoder 常见 **+3** Composite，长周期游戏与 L4+ 见下表。
 - 跑法与目录约定：[`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md) · 体系 [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)。
 
-**深入阅读：** 双模 → [`docs/requirement/L2测试过程.md`](./docs/requirement/L2测试过程.md) · 全貌 → [`docs/项目介绍.md`](./docs/项目介绍.md) · 记忆 → [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) · 多会话 → [`docs/requirement/多会话-web侧栏-finish.md`](./docs/requirement/多会话-web侧栏-finish.md)
+**深入阅读：** 双模 → [`docs/requirement/L2测试过程.md`](./docs/requirement/L2测试过程.md) · 全貌 → [`docs/项目介绍.md`](./docs/项目介绍.md) · 记忆 → [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) · 多会话 → [`docs/requirement/多会话-web侧栏-finish.md`](./docs/requirement/多会话-web侧栏-finish.md) · 移动端 H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
 
 ---
 
@@ -136,8 +152,8 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 ## 架构（简图）
 
 ```text
-CLI / Web / WS → 记忆召回 → Harness（工具、验收、压缩）
-  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 27 工具 + MCP
+CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、验收、压缩）
+  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 30 工具 + MCP
 ```
 
 | 模块 | 作用 |
@@ -146,7 +162,8 @@ CLI / Web / WS → 记忆召回 → Harness（工具、验收、压缩）
 | **Supervisor** | L1 执行模式 + L2 接管/交还 |
 | **TaskGraph** | 结构化计划注入 |
 | **文件记忆** | Markdown 长期事实 + 会话笔记 |
-| **Web** | 冰豆、多会话、保活、Diff、`~` 命令 |
+| **Skills** | `ICE_SKILLS_DIR` 技能 Markdown；`#` 注入 + 技能页 |
+| **Web / 移动端** | 冰豆、多会话、H5 Shell、`@`/`#` 输入、Diff、`~` 命令 |
 
 ---
 

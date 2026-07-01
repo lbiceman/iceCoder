@@ -2,7 +2,7 @@
 
 > Full project introduction. For a quick overview, see [README](../README.md).
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole structured execution context source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), optional **dual-mode Supervisor** (`off` / `adaptive` / `strict`), file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole structured execution context source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), optional **dual-mode Supervisor** (`off` / `adaptive` / `strict`), file-based long-term memory, **Agent Skills**, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket / Mobile H5** entrypoints (plus optional MCP tools).
 
 **Stack:** Node.js 22+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
@@ -10,7 +10,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
-[中文项目介绍](./项目介绍.md) | [Environment variables](./environment-variables.md) ([中文](./环境变量.md)) | [Next Work](./nextWork.md)
+[中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md) | [Next Work](./nextWork.md)
 
 ---
 
@@ -23,6 +23,9 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
 | **Dual-mode Supervisor** | **L2 largely validated** — L1/L2 wired; 15 Web manual scenarios in **Testing & validation**; spec [`docs/双模方案2.md`](./双模方案2.md) |
 | **Memory system** | File-based long-term memory + session notes + Dream/eviction; **20** test files **~391** cases — see **Memory System** |
+| **Agent Skills** | Markdown skills in `ICE_SKILLS_DIR`; Web Skills page + chat `#` injection; `/api/skills` — see **Agent Skills** |
+| **Workspace & file browser** | Per-session workspace lock; `@` refs + `/api/workspace/browse`; `list_drives` / `browse_directory` / `open_file`; `~open` direct listing |
+| **Mobile H5 Shell** | `#/m/*` routes; bottom tabs + session drawer; shared JS Core with desktop — see **Web app** |
 | **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
 | **Shell dual-track** | `run_command` runtime classifier: long jobs → background, short → foreground with soft-timeout escalate |
@@ -37,14 +40,14 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth. Baseline (2026-06-01): **173** test files, **1844** cases, **~39s**. Full breakdown in **Testing & validation** below.
+Treat **`npm test`** as the source of truth. Baseline (2026-07-01): **~221** test files, **~2,000+** cases. Full breakdown in **Testing & validation** below.
 
 ---
 
 ## Runtime Architecture
 
 ```text
-User / CLI / Web / Remote
+User / CLI / Web / Mobile H5 / Remote
   -> loadAssembledChatPrompt()
   -> HarnessConfig
       -> ContextAssembler
@@ -178,7 +181,7 @@ L2 Runtime supervision (SupervisorRuntimeBridge)
 - **Params**: `data/supervisor-config.json` (template [`supervisor-config.example.json`](../data/supervisor-config.example.json))
 - **Loading**: `loadHarnessSupervisorRuntime()` from `chat` / `run` / `chat-ws` / `remote-ws`
 - **Shadow**: `ICE_SUPERVISOR_SHADOW=1` — evaluate without mutating `supervisorPhase`
-- **Env vars**: [`docs/environment-variables.md`](./environment-variables.md) §4
+- **Env vars**: [`docs/环境变量.md`](./环境变量.md) §4
 
 **Recent fixes (2026-05-22):** `inferTaskDomain()` · `node --check` verification · `preserveOnCompaction` for recovery injects
 
@@ -509,7 +512,7 @@ This gives the model a stable view of what has happened even if conversation his
 
 ### Automated tests (Vitest)
 
-**Baseline (2026-06-01):** **173** test files · **1844** cases · **~39s** · `npx tsc --noEmit` 0 errors
+**Baseline (2026-07-01):** **~221** test files · **~2,000+** cases · `npx tsc --noEmit` 0 errors
 
 | Directory | Files | Notes |
 |-----------|-------|-------|
@@ -582,7 +585,7 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 ### Release gate
 
 1. `npx tsc --noEmit` — 0 errors  
-2. `npm test` — 1844/1844 green (default config)  
+2. `npm test` — all green (default config)  
 3. `ICE_SUPERVISOR_MODE=off` — harness suites zero regression  
 4. After `supervisor/` changes: rerun `dual-mode-scenarios` + `supervisor-bridge` + `recovery-boundary`
 
@@ -619,9 +622,11 @@ See [`docs/nextWork.md`](./nextWork.md) for the next implementation steps.
 - **HTTP server** (`src/index.ts`, `src/web/server.ts`): default port **`1024`** when started via `tsx src/index.ts` / `npm run dev:api`. Serves the built SPA static assets in production; in development it still hosts API routes while the Vite dev server serves the UI.
 - **CLI `web` / `start` / `chat`**: default port **`3784`** unless `PORT` or `--port` is set (`src/cli/commands/serve.ts`, `chat.ts`).
 - **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
-- **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients can use `/api/remote` and related routes.
-- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export), `/api/supervisor/events` (Supervisor / Execution Mode events report — see **`~supervisor`** under Dual-mode Supervisor).
-- **Frontend** lives under `src/public/` (e.g. chat UI scripts, Ice Bean indicator). Production build output: `dist/public/`.
+- **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients use `/api/remote` and related routes.
+- **Desktop routes**: `#/chat`, `#/memory`, `#/skills`, `#/config` — left sidebar shell.
+- **Mobile H5 routes**: `#/m/work`, `#/m/work/:sessionId`, `#/m/memory`, `#/m/skills`, `#/m/config` — bottom tab shell (`src/public/js/shell/mobile-shell.js`).
+- **Notable API mounts**: `/api/config`, `/api/tools`, `/api/remote`, `/api/sessions`, `/api/skills`, `/api/workspace/browse`, `/api/chat/upload`, `/api/memory/*` (telemetry report, file CRUD, recall test/export), `/api/supervisor/events` (Supervisor / Execution Mode events report — see **`~supervisor`** under Dual-mode Supervisor).
+- **Frontend** lives under `src/public/` (chat UI, Skills/Memory pages, Ice Bean, mobile pages). Production build output: `dist/public/`.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
 
@@ -654,6 +659,45 @@ WebSocket HarnessStepEvent
 
 CLI-only workflows have **no Ice Bean**; it is a browser UX layer only.
 
+### Agent Skills
+
+Skills are **Markdown playbooks** stored only under **`ICE_SKILLS_DIR`** (default `{dataDir}/skills`, set in `src/cli/paths.ts`).
+
+| Layer | Role |
+|-------|------|
+| **`src/skills/skill-loader.ts`** | Scan root `.md` + one-level `folder/skill.md`; parse frontmatter; `#` ref parsing |
+| **`src/core/skill-registry.ts`** | Disk + builtin registry; `resolveMessage()` injects bodies; creation-guide when user asks to author skills |
+| **`src/web/routes/skills.ts`** | `GET/DELETE /api/skills` |
+| **`src/public/js/skills-page.js`** | Desktop Skills tab UI |
+| **`src/public/js/chat-skills.js`** | Composer `#` dropdown + chip bar |
+
+Chat send path (`chat-ws.ts`) resolves `#skill.md` references before Harness runs. Bundled template: `data/skills/创建技能.md` (copied on first install).
+
+### Workspace references & system filesystem browser
+
+| Feature | Implementation |
+|---------|----------------|
+| **Per-session workspace** | `{sessionId}.workspace.json` via `session-workspace-store.ts`; exposed on `/api/sessions` |
+| **`@` file refs** | `chat-file-ref.js` + `GET /api/workspace/browse` (`workspace-browse.ts`) |
+| **System browser tools** | `list_drives`, `browse_directory`, `open_file` in `filesystem-browser-tool.ts` — paths outside repo/workdir |
+| **`~open` direct listing** | `file-browser-direct.ts` executes real `browse_directory` server-side before LLM answers |
+
+Uploads and paste images remain in `chat-file.js` (`/api/chat/upload`).
+
+### Mobile H5 Shell
+
+Same `index.html` / `main.js` bundle as desktop. Route prefix **`#/m/`** selects `MobileShell` instead of the left sidebar.
+
+| Route | Page |
+|-------|------|
+| `#/m/work` | Dashboard + composer + session drawer |
+| `#/m/work/:sessionId` | Full-screen chat (对话 / 文件 / 技能 sub-tabs) |
+| `#/m/memory` | Memory wrapper |
+| `#/m/skills` | Skills wrapper |
+| `#/m/config` | Config + setup gate |
+
+Core modules (`chat-session-store.js`, `chat-websocket.js`, `chat-skills.js`, etc.) are shared; only shell DOM differs. Spec: [`requirement/移动端H5-Shell方案.md`](./requirement/移动端H5-Shell方案.md).
+
 ---
 
 ## MCP (Model Context Protocol)
@@ -668,7 +712,7 @@ CLI-only workflows have **no Ice Bean**; it is a browser UX layer only.
 
 Full documentation for **every** process environment variable and the browser `localStorage` key (purpose, valid values, defaults, code locations, `.env` template):
 
-**[`docs/environment-variables.md`](./environment-variables.md)** (detailed Chinese: [`docs/环境变量.md`](./环境变量.md))
+**[`docs/环境变量.md`](./环境变量.md)** — full reference (Chinese)
 
 Quick reference:
 
@@ -676,6 +720,7 @@ Quick reference:
 |----------|------|---------|--------------|
 | `ICE_DATA_DIR` | CLI data root | `./data` or `~/.iceCoder` | directory path |
 | `ICE_CONFIG_PATH` | LLM provider config | `{dataDir}/config.json` | file path |
+| `ICE_SKILLS_DIR` | Agent skill Markdown files | `{dataDir}/skills` | directory path |
 | `PORT` | HTTP port | CLI **3784** / `index.ts` **1024** | port number |
 | `config.json` → `supervisorMode` | Dual-mode supervisor | `adaptive` | `off` \| `adaptive` \| `strict` |
 | `ICE_CONTEXT_WINDOW` | Context token cap | provider → **128000** | positive integer |
@@ -696,12 +741,13 @@ src/
                     # checkpoint + CheckpointEngine v2, branch budget, supervisor/*
   llm/              # OpenAI-compatible adapters
   memory/file-memory/  # File-based memory (26 modules), session notes, dream, eviction
+  skills/             # skill-loader, SkillRegistry helpers
   parser/           # FileParser strategies (HTML, Office, XMind)
   prompts/          # Prompt assembly
-  tools/            # Builtin tools, registry, executor
+  tools/            # Builtin tools (incl. filesystem browser), registry, executor
   mcp/              # MCP client manager
-  web/              # Express server, routes, WebSocket chat
-  public/           # Vite root: chat UI, Ice Bean (canvas + bridge), static assets
+  web/              # Express server, routes, WebSocket chat, workspace browse
+  public/           # Vite root: chat UI, Skills/Memory pages, mobile shell, Ice Bean
   types/            # Shared types (runtime snapshot, task-graph, runtime-checkpoint schema)
 docs/               # Requirements archives, memory benchmarks, dual-mode specs, nextWork
 test/               # Vitest suites mirroring src areas
@@ -737,14 +783,14 @@ Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js`
 
 Higher-level prose (beyond this README):
 
-- [`docs/environment-variables.md`](./environment-variables.md) — **full environment variable reference** (purpose, valid values, defaults)
+- [`docs/环境变量.md`](./环境变量.md) — **full environment variable reference** (purpose, valid values, defaults)
 - [`docs/环境变量.md`](./环境变量.md) — 环境变量（中文详版）
 - [`docs/nextWork.md`](./nextWork.md) — active roadmap and eval gaps
 - [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
 - [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments
-- [`docs/test.md`](./test.md) — **dual-mode test playbook** (1844 automated + 15 manual Web scenarios)
+- [`docs/test.md`](./test.md) — **dual-mode test playbook** (~2,000+ automated + 15 manual Web scenarios)
 - [`docs/双模方案2.md`](./双模方案2.md) — dual-mode supervisor spec **V1.3.7**
 - [`docs/运行时后续优化.md`](./运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
 - [`docs/locomo/memory-optimization-roadmap.md`](./locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes

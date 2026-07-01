@@ -24,7 +24,7 @@ Configure your API key on first launch. Data directory: `~/.iceCoder/`. Build fr
 
 Install, configure API keys, start dev/Web/CLI, run one-shot tasks, tests, and coverage — **all commands are in** [`docs/使用文档.md`](./docs/使用文档.md) (not duplicated here).
 
-Node.js **22+** (required, matches `engines.node >=22`) · Dev data: `./data/` · Prod: `~/.iceCoder/` — env vars: [`docs/environment-variables.md`](./docs/environment-variables.md).
+Node.js **22+** (required, matches `engines.node >=22`) · Dev data: `./data/` · Prod: `~/.iceCoder/` — env vars: [`docs/环境变量.md`](./docs/环境变量.md).
 
 ---
 
@@ -62,12 +62,28 @@ Long-term facts live as **Markdown** under `data/memory-files/` (no external vec
 - **Extract & maintenance (post-tool)**: writes/updates after tools; **Dream** and eviction control size and conflicts.
 - **Session notes** with `icecoder-runtime` blocks cooperate with Harness memory integration.
 
-### Multi-session & cross-device sync
+### Agent Skills
 
-Sidebar **CRUD** per session — isolated history, `session-notes`, and checkpoints.
+Reusable **Markdown skill files** live under `data/skills/` (`ICE_SKILLS_DIR`, same level as user-memory).
 
+- **Skills page**: sidebar tab **`#/skills`** (desktop) / **`#/m/skills`** (mobile) — list, preview, delete.
+- **Chat `#` picker**: type `#` in the composer to attach skills as chips; bodies are injected into the prompt at send time.
+- **Layouts**: flat `name.md` or `folder/skill.md` with optional scripts; bundled guide [`data/skills/创建技能.md`](./data/skills/创建技能.md).
+- **API**: `GET/DELETE /api/skills` — agent-created skills must stay under `ICE_SKILLS_DIR` only.
+
+### Multi-session, mobile H5 & cross-device sync
+
+Sidebar **CRUD** per session — isolated history, `session-notes`, checkpoints, and per-session **workspace roots**.
+
+- **Mobile H5 Shell**: same bundle as desktop; routes **`#/m/work`**, **`#/m/work/:sessionId`**, **`#/m/memory`**, **`#/m/skills`**, **`#/m/config`** — bottom tabs, session drawer, keep-alive aligned with desktop.
 - **`~scan`**: QR pairs phone and PC on the **same session id** (shared context, not a read-only mirror).
 - Keep-alive + **runningTurn** restores streaming UI after refresh or reconnect.
+
+### File references & system browser
+
+- **`@` workspace refs**: cascade picker over the session workspace (`/api/workspace/browse`); selected paths become composer chips.
+- **System filesystem tools**: `list_drives`, `browse_directory`, `open_file` — browse/read paths outside the repo (remote/mobile use case).
+- **`~open`**: server-side deterministic directory listing before the model answers (avoids fabricated drive lists).
 
 ### Checkpoint, compaction & resume
 
@@ -77,9 +93,9 @@ Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervi
 - **F5 / WS reconnect** uses `runningTurn` + checkpoint replay so half-finished streams are not lost.
 - Legacy checkpoints without `runtimeV2` remain readable.
 
-### Tools (27 built-in + MCP)
+### Tools (30 built-in + MCP)
 
-File/Git/Shell, search, sub-agent delegation, URL fetch, Office parse, etc.; **MCP** registers external server tools into the same `ToolRegistry`.
+File/Git/Shell, search, sub-agent delegation, URL fetch, Office parse, **system filesystem browser**, etc.; **MCP** registers external server tools into the same `ToolRegistry`.
 
 - **Shell dual-track**: long `run_command` jobs go background, short ones foreground; soft timeout can escalate.
 - **Diff viewer** embeds Git-style diffs for edit tools in chat.
@@ -95,7 +111,7 @@ Harness rounds, memory ops, L1 mode changes, L2 timeline → `data/*/telemetry.j
 
 ### Tests & quality baseline
 
-**~1,867** Vitest cases (**~78%** line coverage on `src/`; Harness **~84%**, Supervisor **~95%**, memory **~71%** — run `npm run test:coverage` locally).
+**~2,000+** Vitest cases (**~78%** line coverage on `src/`; Harness **~84%**, Supervisor **~95%**, memory **~71%** — run `npm run test:coverage` locally).
 
 - Covers gates, TaskGraph, dual-mode, memory lifecycle, Web routes, and long-session scenarios.
 - **`npm run eval:agent`**: agent metric skeleton (success rate, tool rate, verification rate) for regression watch.
@@ -108,7 +124,7 @@ Blind **same-model** runs vs **Claude Code** (judge: Cursor Composer 2.5); **SR*
 - Layers L1–L6 plus **L4+** (e.g. billing: 97 files, 19 cross-module logic bugs); repair tasks often **+3** Composite for iceCoder — see table below.
 - How to run: [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md) · rubric [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md).
 
-**Read more:** dual-mode → [`docs/requirement/L2测试过程.md`](./docs/requirement/L2测试过程.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · memory → [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) · multi-session → [`docs/requirement/多会话-web侧栏-finish.md`](./docs/requirement/多会话-web侧栏-finish.md)
+**Read more:** dual-mode → [`docs/requirement/L2测试过程.md`](./docs/requirement/L2测试过程.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · memory → [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) · multi-session → [`docs/requirement/多会话-web侧栏-finish.md`](./docs/requirement/多会话-web侧栏-finish.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
 
 ---
 
@@ -126,6 +142,8 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 | [Spell Brigade](./benchMark/reports/implement-spellbrigade-survivor.md) | iceCoder / CC | m2.5-pro | 1 / 1 | **81** / **80** | +1 | ~120m / 87m |
 | [Billing 19 bugs](./benchMark/reports/debug-billing-settlement.md) **01** | iceCoder | **MiniMax-M3** | ✅ 19/19 | **93** | +1 vs 02 | **≈3.6 min** · 23 turns |
 | [Billing 19 bugs](./benchMark/reports/debug-billing-settlement.md) **02** | CC | **MiniMax-M3** | ✅ 19/19 | **92** | — | **5m 45s** |
+| [Fusion L7 33 probes](./benchMark/reports/debug-fusion-supply-fintech.md) **01** | iceCoder | **MiniMax-M3** | ✅ 33/33 | **91** | — | **≈5.3 min** |
+| [Fusion L7 33 probes](./benchMark/reports/debug-fusion-supply-fintech.md) **02** | CC | **MiniMax-M3** | ✅ 33/33 | **92** | +1 | **6m 17s** |
 
 **Takeaway:** Same model + same repo — iceCoder leads on **governed delivery** (acceptance pass, composite, or wall-clock on L4+ billing); CC can win on isolated code style (e.g. `tax-line-builder`). The **+1** on billing (93 vs 92) is **D6 delivery notes only** — see report §「分差解读」.
 
@@ -134,8 +152,8 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 ## Architecture (compact)
 
 ```text
-CLI / Web / WS → memory recall → Harness (tools, verify, compact)
-  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 27 tools + MCP
+CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify, compact)
+  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 30 tools + MCP
 ```
 
 | Piece | Role |
@@ -144,7 +162,8 @@ CLI / Web / WS → memory recall → Harness (tools, verify, compact)
 | **Supervisor** | L1 execution mode + L2 runtime takeover/handoff |
 | **TaskGraph** | Structured plan injection |
 | **File memory** | Long-term Markdown facts + session notes |
-| **Web** | Pet, multi-session, keep-alive, diff viewer, `~` commands |
+| **Skills** | Markdown playbooks in `ICE_SKILLS_DIR`; `#` injection + Skills page |
+| **Web / Mobile** | Pet, multi-session, H5 shell, `@`/`#` composer, diff viewer, `~` commands |
 
 ---
 
