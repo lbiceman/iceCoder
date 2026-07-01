@@ -601,3 +601,107 @@
 .memory-tag-pill {
   cursor: pointer;
 }
+
+/* ---- Mobile memory list ---- */
+@media (max-width: 720px) {
+  .memory-header { display: none; }
+  .memory-sidebar { display: none; }
+  .memory-graph-area { display: none; }
+  .memory-main { padding: 0; gap: 0; }
+  .memory-root-mobile {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .memory-mobile-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .memory-mobile-card {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    cursor: pointer;
+    transition: border-color var(--transition), background var(--transition);
+  }
+  .memory-mobile-card:hover {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+    background: var(--bg-hover);
+  }
+  .memory-mobile-card.is-expanded {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+  }
+  .memory-mobile-card-head { margin-bottom: 4px; }
+  .memory-mobile-card-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .memory-mobile-card-desc {
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .memory-mobile-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .memory-mobile-card-tags .memory-tag-pill {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--accent-light);
+    color: var(--accent);
+    cursor: default;
+  }
+  .memory-mobile-card-meta {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--text-muted) 80%, transparent);
+  }
+  .memory-mobile-card-actions {
+    display: flex;
+    margin-top: 10px;
+    gap: 8px;
+  }
+  .memory-mobile-card-detail {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+  }
+  .memory-mobile-card-content {
+    margin: 0;
+    padding: 12px;
+    border-radius: var(--radius);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-secondary);
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  .memory-empty {
+    padding: 40px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+}

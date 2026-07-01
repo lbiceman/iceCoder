@@ -4,6 +4,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readMainConfigFile } from '../config/main-config-supervisor-mode.js';
 
 function normalizePath(path: string): string {
@@ -21,8 +22,30 @@ export const DEFAULT_VERIFICATION_EXEMPT_PREFIXES = [
   '.icecoder/session-notes',
 ] as const;
 
-let runtimeExemptPrefixes: string[] = [];
-let runtimeWorkspaceRoot: string | undefined;
+interface ExemptRuntime {
+  prefixes: string[];
+  workspaceRoot: string | undefined;
+}
+
+/**
+ * 进程级回退运行时（无活跃作用域时使用，兼容直接调用方与测试）。
+ */
+const globalRuntime: ExemptRuntime = { prefixes: [], workspaceRoot: undefined };
+
+/**
+ * 每次 Harness.run 建立独立作用域，使并发会话各自隔离，
+ * 避免后一次运行覆盖前一会话的验收豁免配置（P1-10 串话）。
+ */
+const exemptStorage = new AsyncLocalStorage<ExemptRuntime>();
+
+function currentRuntime(): ExemptRuntime {
+  return exemptStorage.getStore() ?? globalRuntime;
+}
+
+/** 在独立的验收豁免作用域内执行 fn（ALS 跨 await 自动传播）。 */
+export function runWithVerificationExemptScope<T>(fn: () => T): T {
+  return exemptStorage.run({ prefixes: [], workspaceRoot: undefined }, fn);
+}
 
 /** 将配置项规范为工作区相对目录前缀（小写、正斜杠、无 ..）。 */
 export function normalizeVerificationExemptPrefix(raw: string): string | null {
@@ -67,11 +90,11 @@ export function toWorkspaceRelativePath(filePath: string, workspaceRoot?: string
 }
 
 export function getVerificationExemptDirPrefixes(): readonly string[] {
-  return runtimeExemptPrefixes;
+  return currentRuntime().prefixes;
 }
 
 export function getVerificationExemptWorkspaceRoot(): string | undefined {
-  return runtimeWorkspaceRoot;
+  return currentRuntime().workspaceRoot;
 }
 
 /** 供 Harness 每轮 run 注入；测试可调用 resetVerificationExemptRuntime 清理。 */
@@ -79,20 +102,23 @@ export function setVerificationExemptRuntime(options: {
   workspaceRoot?: string;
   prefixes: readonly string[];
 }): void {
-  runtimeWorkspaceRoot = options.workspaceRoot?.trim() || undefined;
-  runtimeExemptPrefixes = normalizeVerificationExemptPrefixes(options.prefixes);
+  const rt = currentRuntime();
+  rt.workspaceRoot = options.workspaceRoot?.trim() || undefined;
+  rt.prefixes = normalizeVerificationExemptPrefixes(options.prefixes);
 }
 
 export function resetVerificationExemptRuntime(): void {
-  runtimeExemptPrefixes = [];
-  runtimeWorkspaceRoot = undefined;
+  const rt = currentRuntime();
+  rt.prefixes = [];
+  rt.workspaceRoot = undefined;
 }
 
 export function isProjectCustomExemptPath(filePath: string): boolean {
-  if (runtimeExemptPrefixes.length === 0) return false;
-  const rel = toWorkspaceRelativePath(filePath, runtimeWorkspaceRoot);
+  const rt = currentRuntime();
+  if (rt.prefixes.length === 0) return false;
+  const rel = toWorkspaceRelativePath(filePath, rt.workspaceRoot);
   const abs = normalizePath(filePath);
-  return runtimeExemptPrefixes.some(
+  return rt.prefixes.some(
     prefix => isUnderExemptDirPrefix(rel, prefix) || isUnderExemptDirPrefix(abs, prefix),
   );
 }

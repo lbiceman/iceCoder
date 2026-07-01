@@ -24,7 +24,7 @@
 
 安装、配置 API Key、启动开发/Web/CLI、一次性任务、测试与覆盖率 — **全部命令见** [`docs/使用文档.md`](./docs/使用文档.md)（README 不重复罗列）。
 
-Node.js **18+**（推荐 **22+**）· 开发数据 `./data/` · 生产 `~/.iceCoder/` — 环境变量见 [`docs/环境变量.md`](./docs/环境变量.md)。
+Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./data/` · 生产 `~/.iceCoder/` — 环境变量见 [`docs/环境变量.md`](./docs/环境变量.md)。
 
 ---
 

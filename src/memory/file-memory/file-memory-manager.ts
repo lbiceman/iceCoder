@@ -11,6 +11,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { writeFileAtomic } from './atomic-write.js';
 import path from 'node:path';
 import type { MemoryHeader, FileMemoryConfig } from './types.js';
 import { MultiLevelMemoryLoader, type MultiLevelMemoryConfig, MemoryLevel } from './multi-level-memory.js';
@@ -194,7 +195,7 @@ ${content}
 *手动保存*`;
 
       const safe = sanitizeMemoryContentBeforeWrite(memoryContent);
-      await fs.writeFile(filePath, safe.content, 'utf-8');
+      await writeFileAtomic(filePath, safe.content, 'utf-8');
 
       await upsertIndexRow(memoryDir, {
         filename,

@@ -695,6 +695,24 @@
   pointer-events: auto;
 }
 
+/* 触控设备无 hover：操作按钮常驻可见可点 */
+@media (hover: none), (pointer: coarse) {
+  .message.user .msg-label-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .message.user .msg-delete-btn,
+  .message.user .msg-restore-btn {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 8px;
+    margin: -6px 0;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
 .message.user .msg-delete-btn,
 .message.user .msg-restore-btn {
   display: inline-flex;
@@ -905,9 +923,9 @@
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--chip-skill-fg);
+  background: var(--chip-skill-bg);
+  border: 1px solid var(--chip-skill-border);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -938,12 +956,12 @@
 .skill-chips-bar .skill-chip-remove:hover,
 .skill-chips-bar .skill-chip-remove:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--chip-skill-fg) 22%, transparent);
   outline: none;
 }
 .skill-chips-bar .skill-chip.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  border-color: var(--chip-skill-fg);
+  box-shadow: 0 0 0 2px var(--chip-skill-ring);
 }
 .file-ref-chips-bar {
   display: flex;
@@ -963,9 +981,9 @@
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--chip-file-fg);
+  background: var(--chip-file-bg);
+  border: 1px solid var(--chip-file-border);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -999,12 +1017,12 @@
 .file-ref-chips-bar .file-ref-chip-remove:hover,
 .file-ref-chips-bar .file-ref-chip-remove:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--chip-file-fg) 22%, transparent);
   outline: none;
 }
 .file-ref-chips-bar .file-ref-chip.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+  border-color: var(--chip-file-fg);
+  box-shadow: 0 0 0 2px var(--chip-file-ring);
 }
 .file-ref-picker {
   position: fixed;
@@ -1847,6 +1865,17 @@
   min-height: 220px;
 }
 .qr-canvas-container canvas { border-radius: 8px; }
+.qr-loading {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.qr-error {
+  font-size: 13px;
+  color: var(--danger, #e57373);
+  margin: 0;
+  word-break: break-word;
+}
 .qr-url {
   font-size: 11px;
   color: var(--text-muted);

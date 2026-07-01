@@ -18,11 +18,13 @@ import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, S
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
+import { buildMcpRuntimeContext } from '../../mcp/mcp-runtime-context.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
+import { purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
@@ -121,7 +123,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   // 退出时 drain 确保后台记忆提取/Dream 完成。
   let latestHarness: InstanceType<typeof Harness> | null = null;
 
-  registerGracefulShutdown({
+  const triggerShutdown = registerGracefulShutdown({
     message: 'iceCoder 正在退出...',
     cleanups: [
       async () => {
@@ -131,6 +133,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
         }
       },
       () => { disposeAllBackgroundTaskManagers(); },
+      () => { purgeAllUploadedFiles(); },
       () => { tunnelProcess?.kill(); },
       () => { serveResult?.cleanup(); },
       () => ctx.mcpManager.shutdown(),
@@ -200,9 +203,8 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
 
     if (cmd === 'quit' || cmd === 'exit' || cmd === 'q') {
       console.log('Bye!');
-      tunnelProcess?.kill();
-      serveResult?.cleanup();
-      ctx.mcpManager.shutdown().catch(() => {});
+      // 走优雅退出（含 drainMemory / 后台任务释放 / 关闭超时），
+      // 关闭 readline 由 shutdown 的 process.exit 收尾。
       rl.close();
       return;
     }
@@ -386,6 +388,10 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      const mcpRuntimeContext = buildMcpRuntimeContext(
+        ctx.mcpManager,
+        toolDefs.map((t) => t.name),
+      );
 
       const harnessConfig: HarnessConfig = {
         context: {
@@ -393,6 +399,7 @@ ${c.bold}终端内置命令:${c.reset}
           tools: toolDefs,
           memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
           ...harnessOverlayToContextFields(assembled),
+          ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
         },
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
@@ -487,11 +494,8 @@ ${c.bold}终端内置命令:${c.reset}
   });
 
   rl.on('close', () => {
-    console.log('\nBye!');
-    // 优雅退出由 registerGracefulShutdown 处理
-    tunnelProcess?.kill();
-    serveResult?.cleanup();
-    ctx.mcpManager.shutdown().catch(() => {});
-    process.exit(0);
+    // 经由优雅退出执行有序清理（drainMemory → 后台任务 → tunnel → web → mcp），
+    // 而非直接 process.exit 跳过 drainMemory 丢失未落盘记忆/状态。
+    void triggerShutdown('cli-close');
   });
 }

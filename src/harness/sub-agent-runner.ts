@@ -374,9 +374,14 @@ export class SubAgentRunner {
     }
   }
 
-  /** 缓存分组键：task / context / allowedPaths / tools 的稳定哈希。 */
+  /**
+   * 缓存分组键：workspaceRoot / task / context / allowedPaths / tools 的稳定哈希。
+   * 纳入 workspaceRoot 后，不同会话（不同工作区）即使任务文本相同也不会命中彼此的缓存，
+   * 杜绝跨会话「串话」（A 工作区的摘要被返回给 B 工作区）。同一工作区内仍可正常复用。
+   */
   private cacheTaskKey(request: SubAgentRequest): string {
     return stableHash({
+      workspaceRoot: path.resolve(this.workspaceRoot).replace(/\\/g, '/').toLowerCase(),
       task: request.task,
       context: request.context ?? '',
       allowedPaths: request.allowedPaths ?? [],

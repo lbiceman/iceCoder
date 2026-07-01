@@ -45,7 +45,11 @@ window.ChatWebSocket = (function () {
   function connect(token) {
     remoteToken = token || null;
     if (chatWs) {
+      if (chatWs.readyState === WebSocket.OPEN || chatWs.readyState === WebSocket.CONNECTING) {
+        return;
+      }
       try { chatWs.close(); } catch (_e) { /* ignore */ }
+      chatWs = null;
     }
     if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
     if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
@@ -103,6 +107,12 @@ window.ChatWebSocket = (function () {
         break;
       case 'session_updated':
         emit('session_updated', data || {});
+        break;
+      case 'user_message_appended':
+        emit('user_message_appended', {
+          sessionId: data.sessionId || '',
+          message: data.message || null,
+        });
         break;
       case 'stream':
         if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
@@ -268,11 +278,11 @@ window.ChatWebSocket = (function () {
   }
 
   function sendRestoreRuntime(messageId) {
-    send({ type: 'restore_runtime', messageId: messageId });
+    return send({ type: 'restore_runtime', messageId: messageId });
   }
 
   function sendDeleteUserMessage(messageId) {
-    send({ type: 'delete_user_message', messageId: messageId });
+    return send({ type: 'delete_user_message', messageId: messageId });
   }
 
   function canRestoreRuntime() {
@@ -314,13 +324,20 @@ window.ChatWebSocket = (function () {
     }, delay);
   }
 
+  function getSyncIntervalMs() {
+    try {
+      if (document.documentElement.getAttribute('data-shell') === 'mobile') return 15000;
+    } catch (_e) { /* ignore */ }
+    return 5000;
+  }
+
   function startSyncPolling() {
     stopSyncPolling();
     wsSyncTimer = setInterval(function () {
       if (!wsProcessing) {
         emit('sync', {});
       }
-    }, 5000);
+    }, getSyncIntervalMs());
   }
 
   function stopSyncPolling() {

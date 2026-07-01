@@ -146,8 +146,13 @@ class FileTimelineSink implements TimelineSink {
 
   append(line: string): Promise<void> {
     this.pending = this.pending.then(async () => {
-      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      await fs.appendFile(this.filePath, line, 'utf-8');
+      try {
+        await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+        await fs.appendFile(this.filePath, line, 'utf-8');
+      } catch (err) {
+        // 上报并吞掉异常，避免 rejected promise 毒化整条链导致后续事件全部静默丢失（P1-16）。
+        console.warn('[event-timeline] 写入事件失败，已丢弃该事件:', this.filePath, err instanceof Error ? err.message : err);
+      }
     });
     return this.pending;
   }

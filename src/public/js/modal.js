@@ -12,6 +12,9 @@
 window.Modal = (function () {
   'use strict';
 
+  /** 当前顶层 confirm 的 close 回调，供多端 first-win 时程序化关窗 */
+  var activeDismiss = null;
+
   var ICONS = {
     danger: '⚠',
     warning: '⚡',
@@ -88,10 +91,12 @@ window.Modal = (function () {
       });
 
       var settled = false;
+      var dismissRef = null;
 
       function close(result) {
         if (settled) return;
         settled = true;
+        if (activeDismiss === dismissRef) activeDismiss = null;
         overlay.classList.remove('visible');
         setTimeout(function () {
           if (overlay.parentNode) overlay.remove();
@@ -122,6 +127,8 @@ window.Modal = (function () {
         document.removeEventListener('keydown', onKeydown);
         origClose(result);
       };
+      dismissRef = close;
+      activeDismiss = close;
 
       confirmBtn.focus();
     });
@@ -136,5 +143,16 @@ window.Modal = (function () {
     return confirm(opts).then(function () { return true; });
   }
 
-  return { confirm: confirm, alert: alert };
+  /**
+   * 关闭当前 confirm 弹窗（不触发用户点击）。
+   * @param {boolean} result - 与点击「确认/取消」等价的 resolve 值
+   * @returns {boolean} 是否关闭了弹窗
+   */
+  function dismissActive(result) {
+    if (!activeDismiss) return false;
+    activeDismiss(result);
+    return true;
+  }
+
+  return { confirm: confirm, alert: alert, dismissActive: dismissActive };
 })();

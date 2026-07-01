@@ -100,7 +100,14 @@ export async function scanSkillFiles(skillsDir: string, maxFiles = 100): Promise
       .sort((a, b) => b.mtimeMs - a.mtimeMs)
       .slice(0, maxFiles)
       .map(({ mtimeMs: _mtimeMs, ...meta }) => meta);
-  } catch {
+  } catch (err) {
+    // 技能目录不存在属预期（debug）；其它扫描异常上报 warn，避免技能列表静默为空难以排查（P1-16）。
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT') {
+      console.debug('[skill-loader] 技能目录不存在，跳过扫描:', skillsDir);
+    } else {
+      console.warn('[skill-loader] 扫描技能目录失败，返回空列表:', skillsDir, err instanceof Error ? err.message : err);
+    }
     return [];
   }
 }

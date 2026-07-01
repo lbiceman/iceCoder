@@ -25,6 +25,7 @@ import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { MCPManager } from '../mcp/mcp-manager.js';
+import { buildMcpRuntimeContext } from '../mcp/mcp-runtime-context.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
@@ -86,7 +87,7 @@ import {
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
 import { BgTaskPusher } from './bg-task-pusher.js';
-import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning } from '../tools/background-task-manager.js';
+import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning, disposeBackgroundTaskManagerForSession } from '../tools/background-task-manager.js';
 import {
   formatToolArgsDetailPreview,
   resolveToolCallInitialStatus,
@@ -115,6 +116,7 @@ import {
 import {
   beginIntentCheckpointTurn,
   finalizeIntentCheckpointTurn,
+  clearIntentCheckpointTurnsForSession,
 } from '../harness/intent-checkpoint-turn-snapshot.js';
 import {
   loadCheckpointIndex,
@@ -312,6 +314,27 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
     clearTimeout(pending);
     saveTimerMap.delete(sessionId);
   }
+  // P1-11：清理此前未被回收的运行期资源，避免内存增长 / 后台进程残留。
+  // 运行中快照
+  runningTurns.delete(sessionId);
+  // 进行中标记 + 排队消息 + abort 控制器
+  if (abortSession(sessionId)) {
+    // 已 abort：让其 cleanup 自行收尾，这里仅移除登记
+  }
+  sessionAbortControllers.delete(sessionId);
+  sessionProcessing.delete(sessionId);
+  clearSessionPending(sessionId);
+  // 该会话的待确认对话框 + 60s 定时器
+  for (const [cid, entry] of pendingConfirms) {
+    if (entry.sessionId !== sessionId) continue;
+    clearTimeout(entry.timer);
+    pendingConfirms.delete(cid);
+    try { entry.resolve(false); } catch { /* ignore */ }
+  }
+  // intent checkpoint 回合状态
+  clearIntentCheckpointTurnsForSession(sessionId);
+  // 后台任务管理器（终止后台进程）
+  try { disposeBackgroundTaskManagerForSession(sessionId); } catch { /* ignore */ }
   if (sessionId === activeSessionId) {
     cachedMessages = undefined;
   }
@@ -324,10 +347,49 @@ export function getSessionsDir(): string {
 }
 
 /**
- * 当前活跃的 AbortController（用于用户中断正在执行的任务）。
- * 每次 handleChatMessage 开始时创建，结束时清空。
+ * 会话级 AbortController（用于用户中断正在执行的任务）。
+ * 每次 handleChatMessage 开始时按 runSessionId 登记，结束时移除。
+ * 改为会话级后，一次 stop 只会中止对应会话的运行，不会误中止其它标签/会话（P1-9）。
  */
-let activeAbortController: AbortController | null = null;
+const sessionAbortControllers = new Map<string, AbortController>();
+
+/** 当前正在运行 harness 的会话集合（跨连接共享，防止同一会话被多标签并发跑两个 harness）。 */
+const sessionProcessing = new Set<string>();
+
+interface PendingChatMessage {
+  content: string;
+  images: string[];
+  messageId?: string;
+  ws: WebSocket;
+}
+
+/** 会话级待处理消息队列：同一会话运行中时，新消息（含其它标签页）排队，由持有运行的循环 drain。 */
+const sessionPendingMessages = new Map<string, PendingChatMessage[]>();
+
+function enqueueSessionPending(sessionId: string, msg: PendingChatMessage): void {
+  const arr = sessionPendingMessages.get(sessionId);
+  if (arr) arr.push(msg);
+  else sessionPendingMessages.set(sessionId, [msg]);
+}
+
+function dequeueSessionPending(sessionId: string): PendingChatMessage | undefined {
+  const arr = sessionPendingMessages.get(sessionId);
+  if (!arr || arr.length === 0) return undefined;
+  const next = arr.shift();
+  if (arr.length === 0) sessionPendingMessages.delete(sessionId);
+  return next;
+}
+
+function clearSessionPending(sessionId: string): void {
+  sessionPendingMessages.delete(sessionId);
+}
+
+function abortSession(sessionId: string): boolean {
+  const ctrl = sessionAbortControllers.get(sessionId);
+  if (!ctrl) return false;
+  ctrl.abort();
+  return true;
+}
 
 // ─────────────────────────────────────────────────────────────
 // 方案 B4 — 多端 confirm：first-win 协议
@@ -376,6 +438,39 @@ async function flushStructuredMessagesNow(sessionId: string): Promise<void> {
       }
     },
   );
+}
+
+/** 移动端扫码连入：将全局 activeSessionId 对齐到 QR 绑定的聊天 session */
+async function ensureGlobalActiveSessionId(targetId: string): Promise<void> {
+  if (!targetId || targetId === activeSessionId) return;
+  const oldSessionId = activeSessionId;
+  try {
+    await flushStructuredMessagesNow(oldSessionId);
+    activeSessionId = targetId;
+    void persistLastActiveSessionId(targetId);
+    let loaded: UnifiedMessage[] | undefined;
+    try {
+      loaded = await loadStructuredMessages(activeSessionId);
+    } catch (loadErr) {
+      console.warn('[chat-ws] remote join load structured failed, starting empty:', loadErr);
+      loaded = undefined;
+    }
+    setCachedMessages(activeSessionId, loaded ?? []);
+    try {
+      resetSupervisorRuntimeCache();
+    } catch (err) {
+      console.warn('[chat-ws] supervisor reset on remote join failed:', err);
+    }
+    try {
+      await rebindBgTaskPusher(activeSessionId);
+    } catch (rebindErr) {
+      console.warn('[chat-ws] remote join rebind bg task failed:', rebindErr);
+    }
+    console.log(`[chat-ws] 远程扫码对齐会话 ${activeSessionId}`);
+  } catch (err) {
+    activeSessionId = oldSessionId;
+    console.error('[chat-ws] remote join session align failed:', err);
+  }
 }
 
 function saveStructuredMessages(messages: UnifiedMessage[], sessionId?: string): void {
@@ -518,8 +613,29 @@ function broadcastToSession(sessionId: string, data: unknown): void {
     if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(body);
-      } catch {
-        /* ignore */
+      } catch (err) {
+        console.debug('[chat-ws] broadcastToSession 发送失败:', err instanceof Error ? err.message : err);
+      }
+    }
+  }
+}
+
+/** 向 session 订阅者广播，可排除发送方（多端同步时发送端已有乐观 UI） */
+function broadcastToSessionExcept(
+  sessionId: string,
+  data: unknown,
+  except?: WebSocket,
+): void {
+  const set = sessionSubscribers.get(sessionId);
+  if (!set || set.size === 0) return;
+  const body = JSON.stringify(data);
+  for (const ws of set) {
+    if (except && ws === except) continue;
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(body);
+      } catch (err) {
+        console.debug('[chat-ws] broadcastToSessionExcept 发送失败:', err instanceof Error ? err.message : err);
       }
     }
   }
@@ -552,8 +668,8 @@ function broadcastBgTaskJson(sessionId: string, jsonBody: string): void {
     if (ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(jsonBody);
-      } catch {
-        /* ignore */
+      } catch (err) {
+        console.debug('[chat-ws] broadcastBgTaskJson 发送失败:', err instanceof Error ? err.message : err);
       }
     }
   }
@@ -1049,6 +1165,46 @@ async function finalizeDirectBrowserTurn(
 export function attachChatWebSocket(server: Server, options: ChatWSOptions): void {
   const { orchestrator, toolRegistry, toolExecutor, mcpManager } = options;
 
+  /**
+   * 会话级运行循环：串行处理同一会话的消息（含其它标签页排队的消息）。
+   * 通过 `sessionProcessing` 防止同一会话被多个连接并发跑两个 harness（P1-9）。
+   */
+  async function runSessionMessageLoop(runSid: string, first: PendingChatMessage): Promise<void> {
+    sessionProcessing.add(runSid);
+    try {
+      let current: PendingChatMessage | undefined = first;
+      while (current) {
+        void persistLastActiveSessionId(runSid);
+        beginSessionBatch(runSid);
+        broadcastHarnessState(runSid);
+        ensureRunningTurn(runSid);
+        broadcastToSession(runSid, { type: 'status', status: 'processing' });
+        try {
+          await handleChatMessage(
+            current.ws,
+            current.content,
+            orchestrator,
+            toolRegistry,
+            toolExecutor,
+            current.images,
+            current.messageId ?? null,
+            mcpManager,
+            runSid,
+          );
+        } catch (err) {
+          broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+        } finally {
+          endSessionBatch(runSid);
+          broadcastHarnessState(runSid);
+          broadcastToSession(runSid, { type: 'status', status: 'idle' });
+        }
+        current = dequeueSessionPending(runSid);
+      }
+    } finally {
+      sessionProcessing.delete(runSid);
+    }
+  }
+
   void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(activeSessionId).catch(() => {}));
 
   const wss = new WebSocketServer({ noServer: true });
@@ -1088,14 +1244,30 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
-    } catch {
+    } catch (err) {
+      console.warn('[chat-ws] WebSocket upgrade 失败:', err instanceof Error ? err.message : err);
       socket.destroy();
     }
   });
 
   // 处理 WebSocket 连接（PC 和移动端统一处理）
-  wss.on('connection', async (ws: WebSocket) => {
+  wss.on('connection', async (ws: WebSocket, request) => {
     await ensureActiveSessionBootstrapped();
+
+    try {
+      const reqUrl = new URL(request.url || '', 'http://localhost');
+      const token = reqUrl.searchParams.get('token');
+      if (token) {
+        const remoteSession = getSession(token);
+        const chatSessionId = remoteSession?.chatSessionId;
+        if (chatSessionId) {
+          await ensureGlobalActiveSessionId(chatSessionId);
+        }
+      }
+    } catch (err) {
+      console.warn('[chat-ws] remote session align skipped:', err);
+    }
+
     chatClients.add(ws);
     subscribeWsToSession(ws, activeSessionId);
     startChatRuntimePrewarm();
@@ -1142,10 +1314,6 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       sendJSON(ws, { type: 'status', status: 'processing' });
     }
 
-    let isProcessing = false;
-    /** 处理期间用户发来的消息队列（处理完后自动发送） */
-    const pendingMessages: Array<{ content: string; images: string[]; messageId?: string }> = [];
-
     ws.on('message', async (data) => {
       try {
         const msg = JSON.parse(data.toString());
@@ -1174,11 +1342,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'stop') {
-          // 中断正在执行的任务；同时丢弃排队中的待发消息，避免 abort 后自动再起一轮
-          pendingMessages.length = 0;
-          if (activeAbortController) {
-            activeAbortController.abort();
-            console.log('[chat-ws] 用户请求中断任务');
+          // 仅中断本连接当前订阅会话的运行，并丢弃该会话排队中的待发消息，
+          // 避免误中止其它标签/会话（P1-9），也避免 abort 后自动再起一轮。
+          const sid = wsToSubscribedSession.get(ws) || activeSessionId;
+          clearSessionPending(sid);
+          if (abortSession(sid)) {
+            console.log(`[chat-ws] 用户请求中断任务 session=${sid}`);
           }
           return;
         }
@@ -1291,12 +1460,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             sendJSON(ws, { type: 'session_switched', ok: true, sessionId: activeSessionId });
             return;
           }
-          // 任务进行中切换：主动 abort 旧任务，让其 cleanup 写入旧 session（已被 runSessionId 锁定），
-          // 然后无阻塞切换到新 session。
-          if (isProcessing && activeAbortController) {
-            console.log('[chat-ws] switch_session 时中断当前任务');
-            activeAbortController.abort();
-            activeAbortController = null;
+          // 任务进行中切换：主动 abort 正在离开的会话的运行，让其 cleanup 写入旧 session
+          // （已被 runSessionId 锁定），然后无阻塞切换到新 session。仅作用于该会话，避免误中止其它会话。
+          const leavingSessionId = wsToSubscribedSession.get(ws) || activeSessionId;
+          if (abortSession(leavingSessionId)) {
+            console.log(`[chat-ws] switch_session 时中断会话 ${leavingSessionId} 的任务`);
+            clearSessionPending(leavingSessionId);
           }
           const oldSessionId = activeSessionId;
           try {
@@ -1356,73 +1525,29 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'message' && (msg.content || (msg.images && msg.images.length > 0))) {
-          if (isProcessing) {
-            // 缓存消息到队列，处理完后自动发送
-            pendingMessages.push({
-              content: msg.content || '',
-              images: Array.isArray(msg.images) ? msg.images : [],
-              messageId: parseClientMessageId(msg.messageId) ?? undefined,
-            });
+          const runSid = wsToSubscribedSession.get(ws) || activeSessionId;
+          const incoming: PendingChatMessage = {
+            content: msg.content || '',
+            images: Array.isArray(msg.images) ? msg.images : [],
+            messageId: parseClientMessageId(msg.messageId) ?? undefined,
+            ws,
+          };
+          // 会话级串行：若该会话已在运行（可能来自其它标签页），排队由持有运行的循环 drain。
+          if (sessionProcessing.has(runSid)) {
+            enqueueSessionPending(runSid, incoming);
             sendJSON(ws, { type: 'info', message: '已排队，当前任务完成后自动处理' });
             return;
           }
-
-          isProcessing = true;
-          const runSid = wsToSubscribedSession.get(ws) || activeSessionId;
-          void persistLastActiveSessionId(runSid);
-          beginSessionBatch(runSid);
-          broadcastHarnessState(runSid);
-          ensureRunningTurn(runSid);
-          broadcastToSession(runSid, { type: 'status', status: 'processing' });
-
-          try {
-            const inlineImages: string[] = Array.isArray(msg.images) ? msg.images : [];
-            await handleChatMessage(
-              ws,
-              msg.content || '',
-              orchestrator,
-              toolRegistry,
-              toolExecutor,
-              inlineImages,
-              parseClientMessageId(msg.messageId),
-              mcpManager,
-            );
-
-            while (pendingMessages.length > 0) {
-              const pending = pendingMessages.shift()!;
-              const nextSid = wsToSubscribedSession.get(ws) || activeSessionId;
-              ensureRunningTurn(nextSid);
-              broadcastToSession(nextSid, { type: 'status', status: 'processing' });
-              try {
-                await handleChatMessage(
-                  ws,
-                  pending.content,
-                  orchestrator,
-                  toolRegistry,
-                  toolExecutor,
-                  pending.images,
-                  pending.messageId ?? null,
-                  mcpManager,
-                );
-              } catch (err) {
-                broadcastToSession(nextSid, { type: 'error', message: formatFriendlyError(err) });
-              }
-            }
-          } catch (err) {
-            broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
-          } finally {
-            isProcessing = false;
-            endSessionBatch(runSid);
-            broadcastHarnessState(runSid);
-            broadcastToSession(runSid, { type: 'status', status: 'idle' });
-          }
+          void runSessionMessageLoop(runSid, incoming);
         }
       } catch {
         sendJSON(ws, { type: 'error', message: '消息格式错误' });
       }
     });
 
-    ws.on('error', () => { /* ignore */ });
+    ws.on('error', (err) => {
+      console.debug('[chat-ws] WebSocket 连接错误:', err instanceof Error ? err.message : err);
+    });
   });
 }
 
@@ -1439,11 +1564,12 @@ async function handleChatMessage(
   inlineImages: string[] = [],
   clientMessageId: string | null = null,
   mcpManager?: MCPManager,
+  runSessionId: string = activeSessionId,
 ): Promise<void> {
-  // 关键：锁定本次运行的 sessionId。
+  // 关键：本次运行的 sessionId 由调用方（runSessionMessageLoop）锁定为该连接订阅的会话，
+  // 而非全局 activeSessionId，避免某连接订阅会话 ≠ 全局活跃会话时把运行/持久化写到错误会话（P1-8）。
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
   // 仍写入正确的旧 session 文件，不会污染新 session。
-  const runSessionId = activeSessionId;
   await rebindBgTaskPusher(runSessionId);
   const llmAdapter = orchestrator.getLLMAdapter();
   let toolDefs = toolRegistry.getDefinitions();
@@ -1518,11 +1644,13 @@ async function handleChatMessage(
 
   // 写入用户消息到会话文件
   const userMsgId = clientMessageId ?? randomUUID();
+  const userSentAt = Date.now();
   const userPersisted = await appendMessages(
     [{
       role: 'user',
       content: message,
       id: userMsgId,
+      sentAt: userSentAt,
       ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
     }],
     runSessionId,
@@ -1531,9 +1659,21 @@ async function handleChatMessage(
     const autoTitle = await applyFirstPromptSessionTitle(runSessionId, message);
     broadcastSessionUpdated(
       'user_message',
-      autoTitle ? { sessionId: runSessionId, title: autoTitle } : undefined,
+      autoTitle ? { sessionId: runSessionId, title: autoTitle } : { sessionId: runSessionId },
       ws,
     );
+    // 多端实时同步：processing 期间其它端无法靠 session_updated 拉快照（前端会跳过），须直推用户消息
+    broadcastToSessionExcept(runSessionId, {
+      type: 'user_message_appended',
+      sessionId: runSessionId,
+      message: {
+        role: 'user',
+        id: userMsgId,
+        content: message,
+        sentAt: userSentAt,
+        ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
+      },
+    }, ws);
   }
 
   const resolvedForDirect =
@@ -1587,9 +1727,9 @@ async function handleChatMessage(
     harnessUserMessage += `\n\n（服务端提示：最近一次列出的文件夹为 \`${fbs.lastBrowsedPath}\`。用户若只给出文件名，请与该路径拼接为完整绝对路径后调用 parse_document / parse_pptx_deep / open_file。）`;
   }
 
-  // 创建 AbortController 用于用户中断
+  // 创建会话级 AbortController 用于用户中断
   const abortController = new AbortController();
-  activeAbortController = abortController;
+  sessionAbortControllers.set(runSessionId, abortController);
   // 将中断信号传递给 LLMAdapter，支持重试等待期间中断
   llmAdapter.setAbortSignal?.(abortController.signal);
 
@@ -1615,6 +1755,10 @@ async function handleChatMessage(
   toolDefs = wsCtx.toolDefs;
   const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
   const runToolExecutor = wsCtx.toolExecutor;
+  const mcpRuntimeContext = buildMcpRuntimeContext(
+    mcpManager,
+    toolDefs.map((t) => t.name),
+  );
 
   if (wsCtx.workspace.detection.changed) {
     broadcastToSession(runSessionId, {
@@ -1631,6 +1775,7 @@ async function handleChatMessage(
       tools: shouldDisableRuntimeTools() ? [] : toolDefs,
       memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
       ...harnessDynamic,
+      ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
     },
     loop: {
       maxRounds: getHarnessMaxRoundsFromEnv(),
@@ -1822,8 +1967,10 @@ async function handleChatMessage(
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );
 
-    // 清空 abort controller 和中断信号
-    activeAbortController = null;
+    // 清空会话级 abort controller 和中断信号（仅当仍是本次运行登记的实例）
+    if (sessionAbortControllers.get(runSessionId) === abortController) {
+      sessionAbortControllers.delete(runSessionId);
+    }
     llmAdapter.setAbortSignal?.(null);
 
     // 缓存完整的结构化消息历史并持久化到磁盘（写入本次运行锁定的 sessionId，
@@ -1928,7 +2075,9 @@ async function handleChatMessage(
     } catch (turnSnapErr) {
       console.error('[chat-ws] intent checkpoint turn snapshot finalize failed:', turnSnapErr);
     }
-    activeAbortController = null;
+    if (sessionAbortControllers.get(runSessionId) === abortController) {
+      sessionAbortControllers.delete(runSessionId);
+    }
     llmAdapter.setAbortSignal?.(null);
     // 任务（或本次 abort）落幕：清空运行中快照
     clearRunningTurn(runSessionId);
@@ -1949,10 +2098,12 @@ export function cleanupChatResources(): void {
     bgTaskPusher.detach();
     bgTaskPusher = null;
   }
-  if (activeAbortController) {
-    activeAbortController.abort();
-    activeAbortController = null;
+  for (const ctrl of sessionAbortControllers.values()) {
+    try { ctrl.abort(); } catch { /* ignore */ }
   }
+  sessionAbortControllers.clear();
+  sessionProcessing.clear();
+  sessionPendingMessages.clear();
   setCachedMessages(activeSessionId, undefined);
   fileBrowserStateBySession.delete(activeSessionId);
   chatClients.clear();

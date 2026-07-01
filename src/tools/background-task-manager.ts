@@ -959,6 +959,20 @@ export function getBackgroundTaskManager(workDir?: string): BackgroundTaskManage
 }
 
 /**
+ * 清理指定 session 的后台任务管理器（会话删除时调用），
+ * 终止其全部后台进程并从缓存移除，避免后台进程在会话删除后继续运行（P1-11）。
+ *
+ * @returns 是否存在并被清理
+ */
+export function disposeBackgroundTaskManagerForSession(sessionId: string): boolean {
+  const m = managersBySession.get(sessionId);
+  if (!m) return false;
+  try { m.dispose(); } catch { /* ignore */ }
+  managersBySession.delete(sessionId);
+  return true;
+}
+
+/**
  * 清理全部 session 的后台任务管理器（优雅关闭时调用）。
  */
 export function disposeAllBackgroundTaskManagers(): void {

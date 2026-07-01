@@ -60,6 +60,7 @@ import { createSupervisorEventsRouter } from './web/routes/supervisor-events.js'
 import { createMemoryExportRouter } from './web/routes/memory-export.js';
 import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 import { createSkillsRouter } from './web/routes/skills.js';
+import { createMcpStatusRouter } from './web/routes/mcp-status.js';
 import { createWorkspaceBrowseRouter } from './web/routes/workspace-browse.js';
 import { createMemoryDreamRouter } from './web/routes/memory-dream.js';
 
@@ -148,6 +149,9 @@ async function reloadLLMAdapterFromConfig(llmAdapter: LLMAdapter): Promise<void>
     llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
+  // 清理已从配置中删除/改名的陈旧 provider
+  llmAdapter.pruneProviders(providers.map((p) => p.id));
+
   const defaultProvider = providers.find((p) => p.isDefault);
   if (defaultProvider) {
     llmAdapter.setDefaultProvider(defaultProvider.id);
@@ -224,6 +228,7 @@ async function main(): Promise<void> {
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
+      { path: '/api/mcp', router: createMcpStatusRouter(mcpManager) },
       { path: '/api/workspace', router: createWorkspaceBrowseRouter() },
       { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter() },

@@ -4,7 +4,7 @@
 
 iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole structured execution context source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), optional **dual-mode Supervisor** (`off` / `adaptive` / `strict`), file-based long-term memory, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket** entrypoints (plus optional MCP tools).
 
-**Stack:** Node.js 18+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
+**Stack:** Node.js 22+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
 The goal is not only to chat with a model, but to run a **software-engineering assistant** that can understand a task, inspect a repository, edit files, run verification, recover from failures, preserve useful memory, and continue long sessions without losing state.
 

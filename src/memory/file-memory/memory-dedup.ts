@@ -9,6 +9,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { writeFileAtomic } from './atomic-write.js';
 import type { MemoryHeader } from './types.js';
 import { scanMemoryFiles } from './memory-scanner.js';
 
@@ -233,7 +234,7 @@ export async function performRuleMerge(
       newContentA += `\n\n<!-- merged from ${candidate.fileB.filename} at ${mergedAt} -->\n${bodyB}`;
     }
 
-    await fs.writeFile(filePathA, newContentA, 'utf-8');
+    await writeFileAtomic(filePathA, newContentA, 'utf-8');
     await fs.unlink(filePathB);
 
     return { performed: true, mergedFile: candidate.fileA.filename, deletedFile: candidate.fileB.filename };

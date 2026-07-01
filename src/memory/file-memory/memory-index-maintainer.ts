@@ -13,6 +13,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from './atomic-write.js';
 import type { MemoryHeader } from './types.js';
 import {
   auditMemoryIndexHealth,
@@ -183,7 +184,7 @@ export async function upsertIndexRow(
     }
 
     if (found) {
-      await fs.writeFile(indexPath, out.join('\n'), 'utf-8');
+      await writeFileAtomic(indexPath, out.join('\n'), 'utf-8');
     } else {
       // 新文件 — 追加到对应类型分区
       const type = header.type || 'project';
@@ -192,7 +193,7 @@ export async function upsertIndexRow(
 
       const insertedLines = insertIndexRowIntoSection(lines, sectionTitle, newLine);
       if (insertedLines) {
-        await fs.writeFile(indexPath, insertedLines.join('\n'), 'utf-8');
+        await writeFileAtomic(indexPath, insertedLines.join('\n'), 'utf-8');
       } else {
         const outLines = [
           ...lines,
@@ -202,7 +203,7 @@ export async function upsertIndexRow(
           '|------|------|',
           newLine,
         ];
-        await fs.writeFile(indexPath, outLines.join('\n'), 'utf-8');
+        await writeFileAtomic(indexPath, outLines.join('\n'), 'utf-8');
       }
     }
 
@@ -266,7 +267,7 @@ export async function removeIndexRows(
 
     if (out.length < lines.length) {
       const collapsed = out.join('\n').replace(/\n{3,}/g, '\n\n');
-      await fs.writeFile(indexPath, collapsed.trimEnd() + '\n', 'utf-8');
+      await writeFileAtomic(indexPath, collapsed.trimEnd() + '\n', 'utf-8');
       getScannerCache().invalidate(memoryDir);
     }
   });

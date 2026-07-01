@@ -19,8 +19,21 @@ import type {
 import { extractPromptCacheFromChatUsage } from './chat-completion-usage.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
-import { normalizeToolArguments } from '../tools/tool-arguments-normalizer.js';
+import {
+  cleanText as sanitizeText,
+  resolveContentText,
+  safeParseToolArguments,
+} from './text-sanitize.js';
 import { isAbortError, makeAbortedError } from './abort-error.js';
+import { collapseUnifiedSystemMessages } from './openai-message-utils.js';
+import {
+  resolveOpenAiApiMode,
+  responsesChat,
+  responsesStream,
+  type OpenAiApiMode,
+} from './openai-responses-bridge.js';
+
+export { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 
 /** 顶层请求参数字段顺序 — 保证同配置多轮 JSON 字节一致 */
 const FIXED_CHAT_PARAM_KEYS = [
@@ -64,27 +77,6 @@ export function orderRequestParams(params: Record<string, unknown>): Record<stri
   return ordered;
 }
 
-/** 合并全部 system 为一条并置于首位（供 MiniMax 等严格 OpenAI 兼容端点使用）。 */
-export function collapseUnifiedSystemMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
-  const systemParts: string[] = [];
-  const rest: UnifiedMessage[] = [];
-  for (const msg of messages) {
-    if (msg.role === 'system') {
-      const text = typeof msg.content === 'string'
-        ? msg.content
-        : msg.content
-          .filter((b) => b.type === 'text' && b.text)
-          .map((b) => b.text!)
-          .join('\n');
-      if (text) systemParts.push(text);
-    } else {
-      rest.push(msg);
-    }
-  }
-  if (systemParts.length === 0) return messages;
-  return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
-}
-
 /**
  * OpenAI 适配器的配置。
  */
@@ -104,6 +96,8 @@ export interface OpenAIAdapterConfig {
   timeout?: number;
   /** 是否支持视觉/图片输入（默认自动检测：gpt-4o/gpt-4-vision 等支持，其他不支持） */
   supportsVision?: boolean;
+  /** OpenAI 兼容端点 API 模式；Bedrock GPT-5.4/5.5 等需 `responses` */
+  apiMode?: OpenAiApiMode;
   [key: string]: any;
 }
 
@@ -119,6 +113,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   /** 构造时写入 SDK 的默认超时；单次请求可用更大的 requestTimeoutMs 覆盖 */
   private defaultRequestTimeoutMs: number;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
+  private apiMode: OpenAiApiMode;
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
@@ -133,27 +128,28 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.model = config.model;
     // 视觉支持：显式配置 > 默认开启
     this.supportsVision = config.supportsVision ?? true;
-    const { apiKey, baseURL, organization, model, timeout, supportsVision, ...rest } = config;
+    this.apiMode = resolveOpenAiApiMode(config.model, config.apiMode);
+    const { apiKey, baseURL, organization, model, timeout, supportsVision, apiMode: _apiMode, ...rest } = config;
     this.defaultParams = rest;
   }
 
-  /**
-   * 根据模型名称自动检测是否支持视觉输入。
-   * 已知支持视觉的模型模式：gpt-4o, gpt-4-vision, gpt-4-turbo (2024+), qwen-vl 等。
-   * 保守策略：未知模型默认不支持。
-   */
-  private detectVisionSupport(model: string): boolean {
-    const m = model.toLowerCase();
-    // OpenAI 视觉模型
-    if (m.includes('gpt-4o') || m.includes('gpt-4-vision') || m.includes('gpt-4-turbo')) return true;
-    // 通义千问视觉
-    if (m.includes('qwen-vl') || m.includes('qwen2-vl')) return true;
-    // Google Gemini
-    if (m.includes('gemini')) return true;
-    // Xiaomi MiMo Omni 等多模态
-    if (m.includes('omni') || m.includes('-vl') || m.includes('_vl')) return true;
-    // 默认不支持（DeepSeek、GLM 等纯文本模型）
-    return false;
+  private responsesCtx(
+    options: LLMOptions,
+    signal?: AbortSignal,
+  ): {
+    providerName: string;
+    model: string;
+    defaultParams: Record<string, unknown>;
+    supportsVision: boolean;
+    reqOpts: { signal?: AbortSignal; timeout: number };
+  } {
+    return {
+      providerName: this.name,
+      model: options.model || this.model,
+      defaultParams: this.defaultParams as Record<string, unknown>,
+      supportsVision: this.supportsVision,
+      reqOpts: this.buildRequestOptions(options, signal),
+    };
   }
 
   private buildRequestOptions(
@@ -181,11 +177,30 @@ export class OpenAIAdapter implements ProviderAdapter {
    */
   async chat(messages: UnifiedMessage[], options: LLMOptions): Promise<LLMResponse> {
     try {
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+
+      if (this.apiMode === 'responses') {
+        console.log(
+          `[OpenAI] responses 请求 → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个`,
+        );
+        const startTime = Date.now();
+        const result = await responsesChat(
+          this.client,
+          messages,
+          options,
+          this.responsesCtx(options, signal),
+        );
+        const elapsed = Date.now() - startTime;
+        console.log(
+          `[OpenAI] responses 响应: ${elapsed}ms | tokens: ${result.usage.inputTokens} | ${result.usage.outputTokens}`,
+        );
+        return result;
+      }
+
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, false);
 
-      const signal = options.signal ?? undefined;
-      if (signal?.aborted) throw makeAbortedError(this.name);
       const reqOpts = this.buildRequestOptions(options, signal);
       console.log(
         `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms`,
@@ -220,14 +235,34 @@ export class OpenAIAdapter implements ProviderAdapter {
     options: LLMOptions,
   ): Promise<LLMResponse> {
     try {
+      const signal = options.signal ?? undefined;
+      if (signal?.aborted) throw makeAbortedError(this.name);
+
+      if (this.apiMode === 'responses') {
+        console.log(
+          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个`,
+        );
+        const startTime = Date.now();
+        const result = await responsesStream(
+          this.client,
+          messages,
+          callback,
+          options,
+          this.responsesCtx(options, signal),
+        );
+        const elapsed = Date.now() - startTime;
+        console.log(
+          `[OpenAI] responses stream 完成: ${elapsed}ms | tokens: ${result.usage.inputTokens} | ${result.usage.outputTokens}`,
+        );
+        return result;
+      }
+
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, true);
 
       console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
 
-      const signal = options.signal ?? undefined;
-      if (signal?.aborted) throw makeAbortedError(this.name);
       const reqOpts = this.buildRequestOptions(options, signal);
       const stream = await this.client.chat.completions.create(
         { ...params, stream: true },
@@ -528,31 +563,14 @@ export class OpenAIAdapter implements ProviderAdapter {
    * 清理可能导致 JSON 解析失败的非法字符。
    */
   private resolveContent(content: string | ContentBlock[]): string {
-    let text: string;
-    if (typeof content === 'string') {
-      text = content;
-    } else {
-      text = content
-        .filter((block) => block.type === 'text' && block.text)
-        .map((block) => block.text!)
-        .join('\n');
-    }
-    return this.cleanText(text);
+    return resolveContentText(content);
   }
 
   /**
    * 清理文本中可能导致 API JSON 解析失败的非法字符。
    */
   private cleanText(text: string): string {
-    // 1. 清理 ASCII 控制字符（保留 \t \n \r）
-    text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-    // 2. 清理 lone surrogates（U+D800-U+DFFF），这些在 JSON 中非法
-    // eslint-disable-next-line no-control-regex
-    text = text.replace(/[\uD800-\uDFFF]/g, '\uFFFD');
-    // 3. 清理其他 Unicode 控制字符（C1 控制字符 U+0080-U+009F）
-    // eslint-disable-next-line no-control-regex
-    text = text.replace(/[\x80-\x9F]/g, '');
-    return text;
+    return sanitizeText(text);
   }
 
   /**
@@ -757,11 +775,7 @@ export class OpenAIAdapter implements ProviderAdapter {
    * Safely parse JSON string to object.
    */
   private safeParseJSON(jsonStr: string): Record<string, any> {
-    try {
-      return normalizeToolArguments(JSON.parse(jsonStr)) as Record<string, any>;
-    } catch {
-      return normalizeToolArguments({ raw: jsonStr }) as Record<string, any>;
-    }
+    return safeParseToolArguments(jsonStr) as Record<string, any>;
   }
 
   /**

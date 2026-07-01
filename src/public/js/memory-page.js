@@ -87,6 +87,10 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function isMobile() {
+  return window.innerWidth <= 720;
+}
+
 /** @param {string | undefined} iso */
 function formatZhMemoryIso(iso) {
   if (!iso) return '—';
@@ -1026,7 +1030,127 @@ window.MemoryPage = (function () {
       });
   }
 
+  // ---- Mobile list rendering ----
+
+  function renderMobile(innerContainer) {
+    teardownMemoryPageRuntime();
+    var epochSnap = ++memoryPageEpoch;
+    containerEl = innerContainer;
+    innerContainer.innerHTML = '';
+    var root = document.createElement('div');
+    root.className = 'memory-root memory-root-mobile';
+    var listEl = document.createElement('div');
+    listEl.className = 'memory-mobile-list';
+    listEl.innerHTML = '<div class="memory-loading">载入中…</div>';
+    root.appendChild(listEl);
+    innerContainer.appendChild(root);
+    listFetchAbort = new AbortController();
+    fetch('/api/memory/files', { signal: listFetchAbort.signal })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (epochSnap !== memoryPageEpoch) return;
+        if (!data.success || !data.files || !data.files.length) {
+          listEl.innerHTML = '<div class="memory-empty">暂无记忆文件。</div>';
+          return;
+        }
+        allFiles = data.files;
+        renderMobileList(listEl, data.files);
+      })
+      .catch(function (err) {
+        if (epochSnap !== memoryPageEpoch) return;
+        if (err && err.name === 'AbortError') return;
+        listEl.innerHTML = '<div class="memory-empty" style="color:var(--danger)">载入失败。</div>';
+      });
+  }
+
+  function renderMobileList(listEl, files) {
+    listEl.innerHTML = '';
+    for (var i = 0; i < files.length; i++) {
+      (function (file) {
+        var card = document.createElement('div');
+        card.className = 'memory-mobile-card';
+        card.setAttribute('data-filename', file.filename);
+        var tagsHtml = '';
+        if (file.tags && file.tags.length) {
+          tagsHtml = '<div class="memory-mobile-card-tags">';
+          file.tags.forEach(function (t) {
+            tagsHtml += '<span class="memory-tag-pill">' + escapeHtml(t) + '</span>';
+          });
+          tagsHtml += '</div>';
+        }
+        card.innerHTML =
+          '<div class="memory-mobile-card-head">' +
+            '<span class="memory-mobile-card-name">' + escapeHtml(file.name || file.filename) + '</span>' +
+          '</div>' +
+          '<p class="memory-mobile-card-desc">' + escapeHtml(file.description || '（无描述）') + '</p>' +
+          tagsHtml +
+          '<div class="memory-mobile-card-meta">更新于 ' + escapeHtml(formatZhMemoryIso(file.modifiedAt)) + '</div>' +
+          '<div class="memory-mobile-card-actions">' +
+            '<button type="button" class="skills-btn skills-btn-danger" data-action="delete">删除记忆</button>' +
+          '</div>';
+        card.addEventListener('click', function (e) {
+          if (e.target.closest('.skills-btn')) return;
+          toggleMemoryExpand(card, file);
+        });
+        var delBtn = card.querySelector('[data-action="delete"]');
+        if (delBtn) delBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          deleteMemoryItem(file, card);
+        });
+        listEl.appendChild(card);
+      })(files[i]);
+    }
+  }
+
+  function toggleMemoryExpand(card, file) {
+    var wasExpanded = card.classList.contains('is-expanded');
+    var expanded = containerEl.querySelectorAll('.memory-mobile-card.is-expanded');
+    for (var i = 0; i < expanded.length; i++) {
+      expanded[i].classList.remove('is-expanded');
+      var old = expanded[i].querySelector('.memory-mobile-card-detail');
+      if (old) old.remove();
+    }
+    if (wasExpanded) return;
+    card.classList.add('is-expanded');
+    var detailDiv = document.createElement('div');
+    detailDiv.className = 'memory-mobile-card-detail';
+    detailDiv.innerHTML = '<div class="skills-detail-loading">载入中…</div>';
+    card.appendChild(detailDiv);
+    fetch('/api/memory/files/' + encodeURIComponent(file.filename))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!data.success) throw new Error(data.error || '加载失败');
+        detailDiv.innerHTML = '<pre class="memory-mobile-card-content">' + escapeHtml(data.content || '') + '</pre>';
+      })
+      .catch(function (err) {
+        detailDiv.innerHTML = '<div class="skills-detail-error">加载失败：' + escapeHtml(err.message || '未知错误') + '</div>';
+      });
+  }
+
+  function deleteMemoryItem(file, card) {
+    var name = file.name || file.filename;
+    var doDelete = function () {
+      fetch('/api/memory/files/' + encodeURIComponent(file.filename), { method: 'DELETE' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.success) { Notification.error(data.error || '删除失败'); return; }
+          card.remove();
+        })
+        .catch(function () { Notification.error('删除请求失败'); });
+    };
+    if (window.Modal && typeof window.Modal.confirm === 'function') {
+      Modal.confirm({ title: '删除记忆', message: '确定删除记忆「' + name + '」？删除后不可恢复。', type: 'danger', confirmText: '删除', cancelText: '取消' })
+        .then(function (ok) { if (ok) doDelete(); });
+    } else if (confirm('确定删除记忆「' + name + '」？')) {
+      doDelete();
+    }
+  }
+
   function render(innerContainer) {
+    if (isMobile()) {
+      renderMobile(innerContainer);
+      return;
+    }
     teardownMemoryPageRuntime();
     var epochSnap = ++memoryPageEpoch;
 

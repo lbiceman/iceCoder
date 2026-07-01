@@ -1,0 +1,119 @@
+/* ===== Mobile Chat Page ===== */
+
+.mobile-chat-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.mobile-chat-subtabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.mobile-chat-subtab {
+  flex: 1;
+  padding: 10px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.mobile-chat-subtab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.mobile-chat-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-chat-core {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mobile-chat-core.hidden {
+  display: none;
+}
+
+.mobile-chat-core .chat-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-chat-core .chat-main {
+  flex: 1;
+  min-height: 0;
+}
+
+.mobile-chat-core .chat-input-area {
+  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0));
+}
+
+/* composer 由 mobile-chat-host 承载，此处不再重复定义 */
+
+.mobile-chat-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 16px;
+}
+
+.mobile-chat-panel.hidden {
+  display: none;
+}
+
+.mobile-chat-panel-placeholder {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* 触控无 hover：删除/回滚按钮需常驻可见可点（桌面端仍 hover 显示） */
+[data-shell="mobile"] .message.user .msg-label-actions {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+[data-shell="mobile"] .message.user .msg-delete-btn,
+[data-shell="mobile"] .message.user .msg-restore-btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 8px;
+  margin: -6px 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: auto !important;
+}
+
+/* 移动端 wrapper 页通用适配 */
+[data-shell="mobile"] .mobile-page-root .config-page,
+[data-shell="mobile"] .mobile-page-root .memory-root,
+[data-shell="mobile"] .mobile-page-root .skills-root {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 10px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
+}
+
+[data-shell="mobile"] .mobile-page-root .config-page {
+  margin: 0;
+  max-width: 100%;
+}

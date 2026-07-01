@@ -3,6 +3,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { IceCoderConfigFile } from '../web/types.js';
 import type { SupervisorMode } from '../types/supervisor.js';
 
@@ -54,11 +55,13 @@ export async function writeSupervisorModeToMainConfig(
   return normalized;
 }
 
+/** 与 Web/CLI 共用：优先 `ICE_CONFIG_PATH`，否则 `{cwd}/data/config.json`。 */
 export function resolveMainConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.ICE_CONFIG_PATH?.trim()) {
-    return env.ICE_CONFIG_PATH.trim();
+  const explicit = env.ICE_CONFIG_PATH?.trim();
+  if (explicit) {
+    return path.resolve(explicit);
   }
-  return 'data/config.json';
+  return path.resolve('data/config.json');
 }
 
 /** 仅当 config.json 显式 `"skipPermissionChecks": true` 时为 true。 */

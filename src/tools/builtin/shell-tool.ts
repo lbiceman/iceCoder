@@ -265,8 +265,18 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
             });
 
             if (adoptResult.error) {
-              // adopt 失败（如并发上限）→ 退回前台 hard timeout 行为
-              escalated = false;
+              // adopt 失败（如并发上限）：此时前台 stdout/stderr/close listener 已卸载，
+              // 且 hardTimer 已清除，无法干净回退前台模式。为避免子进程变成无人收割、
+              // 无超时约束的孤儿进程，这里直接终止它，并以已捕获的部分输出 settle。
+              killed = true;
+              try { child.kill('SIGTERM'); } catch { /* ignore */ }
+              setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, 2000).unref();
+              const failedPartial = prefix.slice(-2000);
+              safeResolve({
+                success: false,
+                output: failedPartial,
+                error: `命令运行超过 ${SOFT_TIMEOUT_MS}ms 且无法转入后台（${adoptResult.error}），已终止进程。`,
+              });
               return;
             }
 

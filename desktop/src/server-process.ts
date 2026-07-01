@@ -6,6 +6,7 @@ import { ChildProcess, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import os from 'node:os';
 import { getServerRoot } from './constants';
 import {
   HEALTHCHECK_MAX_WAIT_MS,
@@ -31,14 +32,63 @@ export interface ServerProcessHandle {
   stop(): Promise<void>;
 }
 
+const PATH_SEP = process.platform === 'win32' ? ';' : ':';
+
+/**
+ * 在给定 PATH 中定位真实的 node/npx 所在目录。
+ * Electron 主进程（用户双击启动）继承完整用户 PATH，因此能找到装在
+ * 非标准位置（如 D:\tools\node16）的 Node，再转发给 server 子进程。
+ */
+function locateNodeDir(basePath: string | undefined): string | null {
+  const candidates = process.platform === 'win32'
+    ? ['node.exe', 'npx.cmd', 'npx.exe']
+    : ['node', 'npx'];
+  for (const dir of (basePath ?? '').split(PATH_SEP)) {
+    const trimmed = dir.trim();
+    if (!trimmed) continue;
+    for (const name of candidates) {
+      try {
+        if (fs.existsSync(path.join(trimmed, name))) return trimmed;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return null;
+}
+
 function buildEnv(opts: ServerProcessOptions, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const useElectronNode = opts.electronRunAsNode !== false;
+  const pathExtras: string[] = [];
+  if (process.platform === 'win32') {
+    const localAppData = base.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+    const appData = base.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
+    const programFiles = base.ProgramFiles ?? 'C:\\Program Files';
+    pathExtras.push(
+      path.join(programFiles, 'nodejs'),
+      path.join(localAppData, 'Programs', 'nodejs'),
+      path.join(appData, 'npm'),
+    );
+  }
+  // 定位真实 node 目录（含非标准安装位置），置顶并显式转发给 MCP 子进程使用。
+  const nodeDir = locateNodeDir(base.PATH);
+  const mergedPath = [
+    ...(nodeDir ? [nodeDir] : []),
+    ...pathExtras,
+    ...(base.PATH ?? '').split(PATH_SEP),
+  ]
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const uniquePath = [...new Set(mergedPath)].join(PATH_SEP);
+
   return {
     ...base,
+    PATH: uniquePath,
     NODE_ENV: 'production',
     PORT: String(opts.port),
     ICE_ELECTRON: '1',
     ICE_SERVER_ROOT: getServerRoot(),
+    ...(nodeDir ? { ICE_NODE_DIR: nodeDir } : {}),
     ...(useElectronNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
   };
 }

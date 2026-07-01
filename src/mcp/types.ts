@@ -17,6 +17,8 @@ export interface MCPServerConfig {
   disabled?: boolean;
   /** 自动批准的工具列表（不需要确认） */
   autoApprove?: string[];
+  /** 子进程工作目录（可选） */
+  cwd?: string;
 }
 
 /**

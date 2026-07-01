@@ -23,6 +23,7 @@ const FILES_TO_COPY = [
 ];
 
 const PROD_DEPS = [
+  '@modelcontextprotocol/server-puppeteer',
   '@vscode/ripgrep',
   'cheerio',
   'domhandler',

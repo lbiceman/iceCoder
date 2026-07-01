@@ -96,6 +96,9 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
     llmAdapter.registerProvider(new OpenAIAdapter(openAiAdapterConfigFromProvider(provider)));
   }
 
+  // 清理已从配置中删除/改名的陈旧 provider，避免它们继续残留可被选中
+  llmAdapter.pruneProviders(providers.map((p) => p.id));
+
   if (providers.length > 0) {
     llmAdapter.setDefaultProvider(resolveDefaultProviderId(providers));
   }

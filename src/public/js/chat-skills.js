@@ -8,7 +8,8 @@ window.ChatSkills = (function () {
   'use strict';
 
   var SKILLS_CHANGED = 'ice-skills-changed';
-  var SKILL_TRIGGER_RE = /(?:^| )#([^\s#]*)$/;
+  /** 行首，或任意空白（空格/换行/制表等）之后输入 # */
+  var SKILL_TRIGGER_RE = /(?:^|\s)#([^\s#]*)$/;
 
   var skillSelectedIndex = 0;
   var skillFiltered = [];
@@ -22,6 +23,7 @@ window.ChatSkills = (function () {
   var chipBarEl = null;
 
   var selectedSkills = [];
+  var pendingSkills = [];
   var chipBarFocused = false;
   var chipFocusIndex = -1;
 
@@ -112,6 +114,10 @@ window.ChatSkills = (function () {
       openDropdown();
     }
 
+    if (skillsLoaded) {
+      renderFiltered();
+      return;
+    }
     if (skillsLoading) return;
     skillsLoading = true;
     fetchSkills(function () {
@@ -123,23 +129,34 @@ window.ChatSkills = (function () {
   function setApplyTarget(fn) { applyTargetFn = typeof fn === 'function' ? fn : null; }
   function setAnchor(el) { anchorEl = el; }
 
-  function parseSkillTrigger(val) {
-    if (!val) return null;
-    var m = String(val).match(SKILL_TRIGGER_RE);
-    if (!m) return null;
-    return { filter: m[1] || '', matchLen: m[0].length };
+  function getInputCursor(inputEl, val) {
+    if (inputEl && typeof inputEl.selectionStart === 'number') {
+      return inputEl.selectionStart;
+    }
+    return val != null ? String(val).length : 0;
   }
 
-  function isSkillTriggerVal(val) {
-    return !!parseSkillTrigger(val);
+  function parseSkillTrigger(val, inputEl) {
+    if (val == null && inputEl) val = inputEl.value || '';
+    if (!val) return null;
+    var cursor = getInputCursor(inputEl, val);
+    var before = String(val).slice(0, cursor);
+    var m = before.match(SKILL_TRIGGER_RE);
+    if (!m) return null;
+    return { filter: m[1] || '', matchLen: m[0].length, cursorEnd: cursor };
+  }
+
+  function isSkillTriggerVal(val, inputEl) {
+    return !!parseSkillTrigger(val, inputEl);
   }
 
   function stripTriggerFromTextarea(inputEl) {
     if (!inputEl) return;
     var val = inputEl.value || '';
-    var trigger = parseSkillTrigger(val);
+    var trigger = parseSkillTrigger(val, inputEl);
     if (!trigger) return;
-    inputEl.value = val.slice(0, val.length - trigger.matchLen);
+    var end = trigger.cursorEnd != null ? trigger.cursorEnd : val.length;
+    inputEl.value = val.slice(0, end - trigger.matchLen) + val.slice(end);
     dispatchInput(inputEl);
   }
 
@@ -186,6 +203,32 @@ window.ChatSkills = (function () {
     chipBarFocused = false;
     chipFocusIndex = -1;
     renderChipBar();
+  }
+
+  function focusComposerInput() {
+    var input = activeInputEl || document.getElementById('chat-input');
+    if (!input) return;
+    setTimeout(function () { input.focus(); }, 0);
+  }
+
+  function drainPendingSkills() {
+    var hadPending = pendingSkills.length > 0;
+    while (pendingSkills.length) {
+      addSkill(pendingSkills.shift());
+    }
+    if (hadPending) focusComposerInput();
+  }
+
+  /** 从技能库等页面选用技能：写入输入框上方 chip 栏并聚焦输入框 */
+  function useSkill(filename) {
+    var fn = String(filename || '').replace(/^#/, '');
+    if (!fn) return;
+    if (chipBarEl) {
+      addSkill(fn);
+      focusComposerInput();
+    } else {
+      pendingSkills.push(fn);
+    }
   }
 
   function removeSkillAt(index) {
@@ -349,7 +392,7 @@ window.ChatSkills = (function () {
     activeInputEl = inputEl || activeInputEl;
     if (chipBarFocused) clearChipSelection();
     var plain = val != null ? String(val) : (inputEl && inputEl.value) || '';
-    var trigger = parseSkillTrigger(plain);
+    var trigger = parseSkillTrigger(plain, inputEl);
     if (trigger) {
       show('#', trigger.filter, inputEl);
     } else if (skillActivePrefix === '#') {
@@ -405,6 +448,7 @@ window.ChatSkills = (function () {
         if (inputEl) inputEl.focus();
       });
     }
+    drainPendingSkills();
     renderChipBar();
   }
 
@@ -431,6 +475,8 @@ window.ChatSkills = (function () {
     initSkillComposer: initSkillComposer,
     clearSkillChipMode: clearSkillChipMode,
     clearInput: clearInput,
+    addSkill: addSkill,
+    useSkill: useSkill,
     getComposerText: getComposerText,
     getSelectedRefs: function () {
       return selectedSkills.map(function (fn) { return '#' + fn; });

@@ -123,6 +123,29 @@ export class LLMAdapter implements LLMAdapterInterface {
   }
 
   /**
+   * 热重载后清理陈旧 provider：仅保留 keepNames 中的提供者，移除其余（已删除/改名的）。
+   * 若被移除的恰为当前默认提供者，则清空默认指向（由调用方随后重新设置）。
+   */
+  pruneProviders(keepNames: string[]): void {
+    const keep = new Set(keepNames);
+    for (const name of Array.from(this.providers.keys())) {
+      if (!keep.has(name)) {
+        this.providers.delete(name);
+        if (this.defaultProvider === name) {
+          this.defaultProvider = '';
+        }
+      }
+    }
+  }
+
+  /**
+   * 返回当前已注册的提供者名称列表（用于诊断/测试）。
+   */
+  getProviderNames(): string[] {
+    return Array.from(this.providers.keys());
+  }
+
+  /**
    * 按名称设置默认提供者。如果提供者未注册则抛出错误。
    */
   setDefaultProvider(name: string): void {
@@ -164,9 +187,23 @@ export class LLMAdapter implements LLMAdapterInterface {
     const provider = this.resolveProvider(options);
     const merged = this.mergeAbortSignal(options);
 
-    const response = merged.skipRetry
-      ? await provider.stream(messages, callback, merged)
-      : await this.withRetry(() => provider.stream(messages, callback, merged));
+    let response: LLMResponse;
+    if (merged.skipRetry) {
+      response = await provider.stream(messages, callback, merged);
+    } else {
+      // 防止重试导致重复输出：一旦本次尝试已经向调用方推送过任何内容
+      // （正文或 reasoning），就不能再重试——否则重试会从头重放，调用方会收到重复 delta。
+      // 仅当尚未产出任何 chunk 时才允许重试（覆盖"连接建立即失败"等典型可重试场景）。
+      let emittedAny = false;
+      const trackingCallback: StreamCallback = (chunk, done) => {
+        if (chunk) emittedAny = true;
+        callback(chunk, done);
+      };
+      response = await this.withRetry(
+        () => provider.stream(messages, trackingCallback, merged),
+        () => !emittedAny,
+      );
+    }
 
     this.tokenCounter.record(response.usage);
     return response;
@@ -230,7 +267,10 @@ export class LLMAdapter implements LLMAdapterInterface {
    * 使用带抖动的指数退避：delay = min(baseDelay * 2^attempt + jitter, maxDelay)。
    * 在网络错误、服务器错误 (5xx) 和速率限制 (429) 时重试。
    */
-  private async withRetry<T>(operation: () => Promise<T>): Promise<T> {
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    canRetry?: () => boolean,
+  ): Promise<T> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.retryConfig.maxRetries; attempt++) {
@@ -239,7 +279,11 @@ export class LLMAdapter implements LLMAdapterInterface {
       } catch (error) {
         lastError = error;
 
-        if (attempt >= this.retryConfig.maxRetries || !isRetryableError(error)) {
+        if (
+          attempt >= this.retryConfig.maxRetries ||
+          !isRetryableError(error) ||
+          (canRetry !== undefined && !canRetry())
+        ) {
           throw error;
         }
 

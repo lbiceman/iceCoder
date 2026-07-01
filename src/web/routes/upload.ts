@@ -41,12 +41,78 @@ const CHAT_SUGGESTED_EXTENSIONS = [
 /** 上传临时目录 */
 const UPLOAD_DIR = path.join(os.tmpdir(), 'iceCoder-uploads');
 
-/** 已上传文件的元数据缓存 */
-const uploadedFiles = new Map<string, { originalName: string; filePath: string; size: number; mimeType: string }>();
+interface UploadedFileMeta {
+  originalName: string;
+  filePath: string;
+  size: number;
+  mimeType: string;
+}
+
+/**
+ * 已上传文件元数据缓存上限（FIFO）。超过后淘汰最旧条目并删除其临时文件，
+ * 避免 Map 无界增长 + tmp 目录文件堆积。可用 ICE_UPLOAD_CACHE_MAX 覆盖。
+ */
+const DEFAULT_UPLOAD_CACHE_MAX = 200;
+
+function getUploadCacheMax(): number {
+  const raw = process.env.ICE_UPLOAD_CACHE_MAX;
+  if (raw == null || raw === '') return DEFAULT_UPLOAD_CACHE_MAX;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? n : DEFAULT_UPLOAD_CACHE_MAX;
+}
+
+/** 已上传文件的元数据缓存（插入顺序即 FIFO 淘汰顺序） */
+const uploadedFiles = new Map<string, UploadedFileMeta>();
+
+/** 后台删除临时文件（best-effort，不抛错） */
+function unlinkTempFileBestEffort(filePath: string): void {
+  void fs.unlink(filePath).catch((err: NodeJS.ErrnoException) => {
+    if (err?.code !== 'ENOENT') {
+      console.warn('[upload] 清理临时文件失败:', filePath, err?.message ?? err);
+    }
+  });
+}
+
+/** 登记上传文件，超出上限时 FIFO 淘汰最旧条目并删除其临时文件。 */
+function registerUploadedFile(fileId: string, meta: UploadedFileMeta): void {
+  uploadedFiles.set(fileId, meta);
+  const max = getUploadCacheMax();
+  while (uploadedFiles.size > max) {
+    const oldestKey = uploadedFiles.keys().next().value as string | undefined;
+    if (oldestKey === undefined) break;
+    const evicted = uploadedFiles.get(oldestKey);
+    uploadedFiles.delete(oldestKey);
+    if (evicted) unlinkTempFileBestEffort(evicted.filePath);
+  }
+}
 
 /** 确保上传目录存在 */
 async function ensureUploadDir(): Promise<void> {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
+}
+
+/** 启动时清理 tmp 目录中的陈旧残留文件（上次进程遗留），best-effort。 */
+async function sweepStaleUploads(maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(UPLOAD_DIR);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  await Promise.all(
+    entries.map(async (name) => {
+      const full = path.join(UPLOAD_DIR, name);
+      try {
+        const stat = await fs.stat(full);
+        if (stat.isFile() && now - stat.mtimeMs > maxAgeMs) {
+          await fs.unlink(full);
+        }
+      } catch {
+        /* 忽略单个文件的 stat/unlink 失败 */
+      }
+    }),
+  );
 }
 
 /**
@@ -68,6 +134,14 @@ function fixFilename(name: string): string {
  */
 export function getUploadedFile(fileId: string): { originalName: string; filePath: string; size: number; mimeType: string } | undefined {
   return uploadedFiles.get(fileId);
+}
+
+/** 清空上传缓存并删除其临时文件（优雅关闭时调用）。 */
+export function purgeAllUploadedFiles(): void {
+  for (const meta of uploadedFiles.values()) {
+    unlinkTempFileBestEffort(meta.filePath);
+  }
+  uploadedFiles.clear();
 }
 
 /**
@@ -102,7 +176,7 @@ export function resolveFileReferences(message: string): { text: string; filePath
 export function createUploadRouter(): Router {
   const router = Router();
 
-  void ensureUploadDir();
+  void ensureUploadDir().then(() => sweepStaleUploads()).catch(() => {});
 
   // multer 配置：存到临时目录
   const storage = multer.diskStorage({
@@ -140,14 +214,19 @@ export function createUploadRouter(): Router {
     upload.single('file')(req, res, (err: unknown) => {
       if (err) {
         let message: string;
+        let status = 400;
         if (err instanceof multer.MulterError) {
-          message = err.code === 'LIMIT_FILE_SIZE'
-            ? `文件超过 ${CHAT_UPLOAD_MAX_FILE_BYTES / (1024 * 1024)}MB 上限`
-            : err.message;
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            message = `文件超过 ${CHAT_UPLOAD_MAX_FILE_BYTES / (1024 * 1024)}MB 上限`;
+            status = 413;
+          } else {
+            message = err.message;
+          }
         } else {
           message = err instanceof Error ? err.message : String(err);
+          status = 500;
         }
-        res.json({ error: `上传失败: ${message}` });
+        res.status(status).json({ error: `上传失败: ${message}` });
         return;
       }
 
@@ -155,13 +234,13 @@ export function createUploadRouter(): Router {
         try {
           const file = (req as { file?: { originalname: string; path: string; size: number; mimetype: string } }).file;
           if (!file) {
-            res.json({ error: '未收到文件' });
+            res.status(400).json({ error: '未收到文件' });
             return;
           }
 
           const originalName = fixFilename(file.originalname);
           const fileId = randomUUID();
-          uploadedFiles.set(fileId, {
+          registerUploadedFile(fileId, {
             originalName,
             filePath: file.path,
             size: file.size,
@@ -175,7 +254,7 @@ export function createUploadRouter(): Router {
           });
         } catch (handlerErr) {
           const message = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
-          res.json({ error: `上传失败: ${message}` });
+          res.status(500).json({ error: `上传失败: ${message}` });
         }
       })();
     });

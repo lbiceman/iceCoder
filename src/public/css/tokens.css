@@ -49,6 +49,16 @@
   --danger: #fb7185;
   --danger-light: rgba(251, 113, 133, 0.12);
 
+  /* 输入区 chip：技能 # 浅紫、文件 @ 浅绿，与 accent/success 同系低饱和 */
+  --chip-skill-fg: #c4b0e0;
+  --chip-skill-bg: rgba(167, 148, 200, 0.12);
+  --chip-skill-border: rgba(180, 168, 210, 0.28);
+  --chip-skill-ring: rgba(167, 148, 200, 0.22);
+  --chip-file-fg: #7dd3a8;
+  --chip-file-bg: rgba(52, 211, 153, 0.12);
+  --chip-file-border: rgba(110, 231, 183, 0.28);
+  --chip-file-ring: rgba(52, 211, 153, 0.22);
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -107,6 +117,15 @@
   --warning-light: rgba(217, 119, 6, 0.08);
   --danger: #F0506A;
   --danger-light: rgba(220, 38, 38, 0.08);
+
+  --chip-skill-fg: #7c6b9e;
+  --chip-skill-bg: rgba(124, 107, 158, 0.08);
+  --chip-skill-border: rgba(107, 91, 138, 0.22);
+  --chip-skill-ring: rgba(124, 107, 158, 0.18);
+  --chip-file-fg: #15803d;
+  --chip-file-bg: rgba(22, 163, 74, 0.08);
+  --chip-file-border: rgba(22, 163, 74, 0.22);
+  --chip-file-ring: rgba(22, 163, 74, 0.18);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);

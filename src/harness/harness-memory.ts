@@ -1294,7 +1294,7 @@ ${candidateList}`;
       queryLength: latestUserMsg.length,
       dedupCount,
       recallPhase,
-    }).catch(() => {});
+    }).catch((e) => console.debug('[harness-memory] logRecall 遥测失败:', e instanceof Error ? e.message : e));
   }
 
   /**
@@ -1326,7 +1326,7 @@ ${candidateList}`;
     if (isNegative) {
       const filenames = this.lastConfirmedMemories.filenames;
       console.debug(`[harness-memory] 用户否定反馈: ${filenames.join(', ')}`);
-      this.sequentialAdjustConfidence(filenames, -0.5).catch(() => {});
+      this.sequentialAdjustConfidence(filenames, -0.5).catch((e) => console.debug('[harness-memory] 负反馈置信度调整失败:', e instanceof Error ? e.message : e));
       this.lastConfirmedMemories = null;
       return;
     }
@@ -1336,7 +1336,7 @@ ${candidateList}`;
     if (isPositive) {
       const filenames = this.lastConfirmedMemories.filenames;
       console.debug(`[harness-memory] 用户肯定反馈: ${filenames.join(', ')}`);
-      this.sequentialAdjustConfidence(filenames, 0.2).catch(() => {});
+      this.sequentialAdjustConfidence(filenames, 0.2).catch((e) => console.debug('[harness-memory] 正反馈置信度调整失败:', e instanceof Error ? e.message : e));
       this.lastConfirmedMemories = null;
       return;
     }
@@ -1707,7 +1707,7 @@ ${candidateList}`;
         contextPrefixLength: conversationPrefix.length,
         durationMs: totalDuration,
         writtenFiles: allWrittenPaths,
-      }).catch(() => {});
+      }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
 
       if (totalWritten > 0) {
         this.sessionSuccessfulExtractCount++;
@@ -1780,7 +1780,7 @@ ${candidateList}`;
           durationMs: 0,
           trigger: dreamGate.trigger ?? 'session_interval',
           skipReason: dreamGate.skipReason,
-        }).catch(() => {});
+        }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
         // Phase 1.4: index_drift 已由 evaluateDreamGate 内部规则层重建索引，无需 LLM
         await this.evictMemoryOverCap();
         return;
@@ -1826,7 +1826,7 @@ ${candidateList}`;
           fileCountBefore: projEvict.fileCountBefore,
           filesEvicted: projEvict.evictedFiles.length,
           durationMs: Date.now() - tProj,
-        }).catch(() => {});
+        }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
       }
     }
 
@@ -1839,7 +1839,7 @@ ${candidateList}`;
           fileCountBefore: userEvict.fileCountBefore,
           filesEvicted: userEvict.evictedFiles.length,
           durationMs: Date.now() - tUser,
-        }).catch(() => {});
+        }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
       }
     }
   }
@@ -1969,7 +1969,7 @@ ${candidateList}`;
             evidenceAnchored: !!pkg,
             contradictionWarning: !!warn,
             retried: sessionRetried,
-          }).catch(() => {});
+          }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
           this.sessionMemoryRejectStreak = 0;
           this.sessionMemoryBackoffUntil = 0;
           console.debug('[harness-memory] 会话记忆已更新');
@@ -1986,7 +1986,7 @@ ${candidateList}`;
             evidenceAnchored: false,
             contradictionWarning: false,
             retried: sessionRetried,
-          }).catch(() => {});
+          }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
           console.debug(
             `[harness-memory] 会话记忆更新被拒绝 — ${validation.reason}` +
             (validation.missingSections ? ` (缺失: ${validation.missingSections.join(', ')})` : ''),
@@ -2005,7 +2005,7 @@ ${candidateList}`;
           evidenceAnchored: false,
           contradictionWarning: false,
           retried: sessionRetried,
-        }).catch(() => {});
+        }).catch((e) => console.debug('[harness-memory] 记忆后台副作用失败:', e instanceof Error ? e.message : e));
       }
 
       this.sessionMemoryState.tokensAtLastExtraction = currentTokenCount;

@@ -30,6 +30,7 @@ import { getFactIndex, type FactEntry } from './memory-fact-index.js';
 import { tokenize, extractEntities } from './memory-tokenizer.js';
 import { memoryDecayFactor } from './memory-age.js';
 import { promises as fs } from 'node:fs';
+import { writeFileAtomic } from './atomic-write.js';
 import path from 'node:path';
 import {
   type RelevanceGateConfig,
@@ -1085,10 +1086,17 @@ async function flushRecallMetadata(): Promise<void> {
       }
 
       if (updated !== content) {
-        await fs.writeFile(filePath, updated, 'utf-8');
+        // 原子写：避免与 dream/extractor 并发改同一 frontmatter 时写入中途崩溃损坏文件（P1-14）。
+        await writeFileAtomic(filePath, updated, 'utf-8');
       }
-    } catch {
-      // 更新失败不阻塞
+    } catch (err) {
+      // 文件被删除属预期（debug）；其它异常上报 warn，避免静默吞掉（P1-16）。
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') {
+        console.debug('[memory-recall] flush skip (file gone):', filePath);
+      } else {
+        console.warn('[memory-recall] flush 召回元数据失败:', filePath, err instanceof Error ? err.message : err);
+      }
     }
   }
 }

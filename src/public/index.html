@@ -2,10 +2,23 @@
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
+  <script>
+    (function () {
+      try {
+        var p = (location.pathname || '/').replace(/\/+$/, '') || '/';
+        var mobile = /^\/m(\/|$)/.test(p) || (p === '/' && /(?:^|[?&])token=/.test(location.search || ''));
+        if (!mobile && (location.hash || '').indexOf('#/m/') === 0) mobile = true;
+        var key = mobile ? 'ice-theme-mobile' : 'ice-theme';
+        var stored = localStorage.getItem(key);
+        var theme = (stored === 'light' || stored === 'dark') ? stored : (mobile ? 'light' : 'dark');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) { /* ignore */ }
+    })();
+  </script>
   <title>iceCoder</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="alternate icon" href="/favicon.ico">

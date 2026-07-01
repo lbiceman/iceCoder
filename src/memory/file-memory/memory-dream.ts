@@ -15,6 +15,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { writeFileAtomic } from './atomic-write.js';
 import type { LLMAdapterInterface, LLMOptions, UnifiedMessage } from '../../llm/types.js';
 import { scanMemoryFiles, formatMemoryManifest } from './memory-scanner.js';
 import { validatePath, PathTraversalError } from './memory-security.js';
@@ -954,7 +955,7 @@ export class MemoryDream {
     nextBatch: number,
     totalBatches: number,
   ): Promise<void> {
-    await fs.writeFile(
+    await writeFileAtomic(
       this.dreamBatchProgressPath(memoryDir),
       JSON.stringify({ nextBatch, totalBatches, updatedAt: Date.now() }),
       'utf-8',
@@ -962,7 +963,9 @@ export class MemoryDream {
   }
 
   private async clearDreamBatchProgress(memoryDir: string): Promise<void> {
-    await fs.unlink(this.dreamBatchProgressPath(memoryDir)).catch(() => {});
+    await fs.unlink(this.dreamBatchProgressPath(memoryDir)).catch((e: NodeJS.ErrnoException) => {
+      if (e?.code !== 'ENOENT') console.debug('[memory-dream] 清理 dream 进度文件失败:', e?.message ?? e);
+    });
   }
 
   /** 超大库：多批 compact LLM，每批 ≤20 文件 manifest；支持断点续跑与预算用尽后衔接 */
@@ -1026,7 +1029,7 @@ export class MemoryDream {
           continue;
         }
         if (this.config.enableBackup) {
-          await this.backupBeforeDream(memoryDir, parsed).catch(() => {});
+          await this.backupBeforeDream(memoryDir, parsed).catch((e) => console.warn('[memory-dream] dream 前备份失败:', e instanceof Error ? e.message : e));
         }
 
         const batchResult = await this.executeDreamActions(memoryDir, response.content, {
@@ -1273,7 +1276,7 @@ export class MemoryDream {
                 `$1\nmerged-from: [${JSON.stringify(removeFiles)}]\nmerged-at: ${new Date().toISOString()}`,
               );
             }
-            await fs.writeFile(keepPath, keepContent, 'utf-8');
+            await writeFileAtomic(keepPath, keepContent, 'utf-8');
             filesModified++;
           } catch (e) {
             console.error(`[MemoryDream] action merge failed for ${keepFile}:`, e);
@@ -1304,7 +1307,7 @@ export class MemoryDream {
               );
             }
           } catch { /* 文件不存在，正常 */ }
-          await fs.writeFile(filePath, writeContent, 'utf-8');
+          await writeFileAtomic(filePath, writeContent, 'utf-8');
           filesModified++;
 
           if (fw.promote_to_user) {
@@ -1364,7 +1367,7 @@ export class MemoryDream {
     if (wroteFullIndex) {
       try {
         const indexPath = path.join(memoryDir, 'MEMORY.md');
-        await fs.writeFile(indexPath, parsed.new_index as string, 'utf-8');
+        await writeFileAtomic(indexPath, parsed.new_index as string, 'utf-8');
         filesModified++;
         getScannerCache().invalidate(memoryDir);
       } catch (error) {
@@ -1398,7 +1401,7 @@ export class MemoryDream {
       try {
         const content = await fs.readFile(mem.filePath, 'utf-8');
         const destPath = validatePath(mem.filename, userMemoryDir);
-        await fs.writeFile(destPath, content, 'utf-8');
+        await writeFileAtomic(destPath, content, 'utf-8');
         await fs.unlink(mem.filePath);
         promoted++;
         console.log(`[MemoryDream] Auto-promoted to user-level: ${mem.filename}`);
@@ -1464,7 +1467,7 @@ export class MemoryDream {
         const content = await fs.readFile(srcPath, 'utf-8');
         const destPath = path.join(backupPath, filename);
         await fs.mkdir(path.dirname(destPath), { recursive: true });
-        await fs.writeFile(destPath, content, 'utf-8');
+        await writeFileAtomic(destPath, content, 'utf-8');
 
         const reason = Array.isArray(parsed.file_deletes) && parsed.file_deletes.includes(filename)
           ? 'will_be_deleted'
@@ -1479,7 +1482,7 @@ export class MemoryDream {
 
     if (backedUp.length === 0) {
       // 没有实际备份任何文件，清理空目录
-      await fs.rm(backupPath, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(backupPath, { recursive: true, force: true }).catch((e) => console.debug('[memory-dream] 清理备份目录失败:', e instanceof Error ? e.message : e));
       return null;
     }
 
@@ -1490,7 +1493,7 @@ export class MemoryDream {
       dreamSummary: parsed.summary || '',
       dreamActions: parsed.actions || [],
     };
-    await fs.writeFile(
+    await writeFileAtomic(
       path.join(backupPath, 'manifest.json'),
       JSON.stringify(manifest, null, 2),
       'utf-8',
@@ -1571,7 +1574,7 @@ export class MemoryDream {
         const destPath = path.join(memoryDir, entry.filename);
         const content = await fs.readFile(srcPath, 'utf-8');
         await fs.mkdir(path.dirname(destPath), { recursive: true });
-        await fs.writeFile(destPath, content, 'utf-8');
+        await writeFileAtomic(destPath, content, 'utf-8');
         restored++;
       } catch {
         console.debug(`[MemoryDream] Failed to restore ${entry.filename}`);
@@ -1638,7 +1641,7 @@ export class MemoryDream {
    */
   notifyStaleIndexDreamCompleted(): void {
     this.staleIndexDreamCompletedAt = Date.now();
-    void this.enqueuePersistState().catch(() => {});
+    void this.enqueuePersistState().catch((e) => console.warn('[memory-dream] 持久化 dream 状态失败:', e instanceof Error ? e.message : e));
   }
 
   /** 手动/自动 Dream 启动前：检查 LLM 空跑退避（与 indexDreamBackoff 独立） */
@@ -1650,7 +1653,7 @@ export class MemoryDream {
   notifyDreamEmptyRun(): void {
     this.dreamEmptyRunBackoffCount = Math.min(this.dreamEmptyRunBackoffCount + 1, 8);
     this.lastDreamEmptyRunAt = Date.now();
-    void this.enqueuePersistState().catch(() => {});
+    void this.enqueuePersistState().catch((e) => console.warn('[memory-dream] 持久化 dream 状态失败:', e instanceof Error ? e.message : e));
   }
 
   /** 等待 dream-state.json 写盘完成（连续手动 Dream 前必须 await） */
@@ -1667,7 +1670,7 @@ export class MemoryDream {
   notifyDreamSubstantiveRun(): void {
     if (this.dreamEmptyRunBackoffCount > 0) {
       this.dreamEmptyRunBackoffCount = 0;
-      void this.enqueuePersistState().catch(() => {});
+      void this.enqueuePersistState().catch((e) => console.warn('[memory-dream] 持久化 dream 状态失败:', e instanceof Error ? e.message : e));
     }
   }
 
@@ -1707,7 +1710,7 @@ export class MemoryDream {
         lastDreamEmptyRunAt: this.lastDreamEmptyRunAt,
         updatedAt: new Date().toISOString(),
       };
-      await fs.writeFile(this.stateFilePath, JSON.stringify(state), 'utf-8');
+      await writeFileAtomic(this.stateFilePath, JSON.stringify(state), 'utf-8');
     } catch (err) {
       console.debug('[MemoryDream] persistState failed:', err instanceof Error ? err.message : err);
     }

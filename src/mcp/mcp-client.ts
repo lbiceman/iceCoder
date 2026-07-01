@@ -17,7 +17,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import path from 'node:path';
+import { resolveMcpServerLaunch } from './resolve-mcp-command.js';
 import type {
   MCPServerConfig,
   MCPToolDefinition,
@@ -62,17 +62,17 @@ export class MCPClient {
    * 启动 MCP Server 进程并完成初始化握手。
    */
   async start(): Promise<void> {
-    let { command, args = [], env = {} } = this.config;
+    const plan = resolveMcpServerLaunch(this.config);
 
-    // Windows：裸 `npx` 在非 shell 的 spawn 下常找不到，统一改为 npx.cmd
-    if (process.platform === 'win32' && /^npx$/i.test(path.basename(command, path.extname(command)))) {
-      command = 'npx.cmd';
+    if (plan.launchMode === 'bundled') {
+      console.log(`[mcp:${this.serverName}] 使用安装包内 MCP 模块启动（免 npx）`);
     }
 
-    this.process = spawn(command, args, {
+    this.process = spawn(plan.command, plan.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...env },
-      shell: process.platform === 'win32',
+      env: plan.env,
+      cwd: plan.cwd,
+      shell: process.platform === 'win32' && plan.launchMode === 'npx',
       windowsHide: true,
     });
 
@@ -141,13 +141,27 @@ export class MCPClient {
 
   /**
    * 调用 MCP 工具。
+   *
+   * 部分 MCP Server（如 Puppeteer）会把工具执行失败当作 JSON-RPC error 返回，
+   * 而非 result.isError；此处转为 MCPToolResult，避免 Manager 误判为服务器故障。
    */
   async callTool(toolName: string, args: Record<string, any>): Promise<MCPToolResult> {
-    const result = await this.sendRequest('tools/call', {
-      name: toolName,
-      arguments: args,
-    });
-    return result as MCPToolResult;
+    try {
+      const result = await this.sendRequest('tools/call', {
+        name: toolName,
+        arguments: args,
+      });
+      return result as MCPToolResult;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('MCP error [')) {
+        return {
+          content: [{ type: 'text', text: message }],
+          isError: true,
+        };
+      }
+      throw err;
+    }
   }
 
   /**
@@ -378,10 +392,12 @@ export class MCPClient {
     this._ready = false;
 
     if (this.process) {
-      // 先尝试优雅关闭
+      // 先尝试优雅关闭（通知失败不影响后续 SIGTERM，但记录便于排查）
       try {
         this.sendNotification('notifications/cancelled', {});
-      } catch { /* ignore */ }
+      } catch (err) {
+        console.debug('[mcp-client] 发送 cancelled 通知失败（将继续 SIGTERM）:', err instanceof Error ? err.message : err);
+      }
 
       this.process.kill('SIGTERM');
 

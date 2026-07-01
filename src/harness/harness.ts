@@ -71,7 +71,7 @@ import { ensureDelegateToSubagentTool } from './sub-agent-runner.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
 import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
 import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
-import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../web/routes/config.js';
+import { DEFAULT_AGENT_MAX_OUTPUT_TOKENS } from '../config/model-capabilities.js';
 import {
   buildModeDecisionContext,
   buildRuntimeExecutionState,
@@ -99,6 +99,7 @@ import { finalizeMessagesForApi } from './context-assembler.js';
 import {
   resolveVerificationExemptDirPrefixes,
   setVerificationExemptRuntime,
+  runWithVerificationExemptScope,
 } from './verification-exempt-config.js';
 import { resolveLlmToolsForRound } from './casual-mode.js';
 import { resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
@@ -409,6 +410,21 @@ export class Harness {
    * 负责会话初始化、工作区锁定、检查点/resilience 恢复、记忆 hydrate，并在 finally 中收尾记忆写入。
    */
   async run(
+    userMessage: string,
+    chatFn: ChatFunction,
+    onStep?: (event: HarnessStepEvent) => void,
+    existingMessages?: UnifiedMessage[],
+    streamFn?: StreamFunction,
+    userContentBlocks?: import('../llm/types.js').ContentBlock[],
+  ): Promise<HarnessResult> {
+    // 每次 run 建立独立的「验收豁免」运行时作用域（AsyncLocalStorage），
+    // 使并发会话各自隔离，互不覆盖（P1-10）。
+    return runWithVerificationExemptScope(() =>
+      this.runScoped(userMessage, chatFn, onStep, existingMessages, streamFn, userContentBlocks),
+    );
+  }
+
+  private async runScoped(
     userMessage: string,
     chatFn: ChatFunction,
     onStep?: (event: HarnessStepEvent) => void,

@@ -28,6 +28,7 @@ import {
 } from '../../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
+import { buildMcpRuntimeContext } from '../../mcp/mcp-runtime-context.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
@@ -75,6 +76,10 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+    const mcpRuntimeContext = buildMcpRuntimeContext(
+      ctx.mcpManager,
+      toolDefs.map((t) => t.name),
+    );
 
     const harnessConfig: HarnessConfig = {
       context: {
@@ -82,6 +87,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
         tools: toolDefs,
         memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
         ...harnessOverlayToContextFields(assembled),
+        ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
       },
       loop: {
         maxRounds,

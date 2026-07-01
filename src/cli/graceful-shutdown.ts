@@ -33,12 +33,12 @@ let forceExitRegistered = false;
  * 首次 Ctrl+C：执行所有清理函数，超时后强制退出。
  * 二次 Ctrl+C：立即退出。
  */
-export function registerGracefulShutdown(options: ShutdownOptions): void {
+export function registerGracefulShutdown(options: ShutdownOptions): TriggerShutdown {
   const { cleanups, timeout = SHUTDOWN_TIMEOUT_MS, message = 'Shutting down...' } = options;
 
   const shutdown = async (signal: string) => {
     if (shuttingDown) {
-      // 二次 Ctrl+C → 立即退出
+      // 二次 Ctrl+C / 重复触发 → 立即退出
       console.log('\n强制退出');
       process.exit(1);
     }
@@ -73,7 +73,13 @@ export function registerGracefulShutdown(options: ShutdownOptions): void {
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
   }
+
+  // 供 CLI /quit、rl close 等主动退出路径复用同一套有序清理（含 drainMemory）。
+  return (signal = 'manual') => shutdown(signal);
 }
+
+/** 主动触发优雅退出（与 SIGINT 共用 cleanups + 超时 + 去重保护）。 */
+export type TriggerShutdown = (signal?: string) => Promise<void>;
 
 /**
  * 重置状态（用于测试）。
