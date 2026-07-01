@@ -141,13 +141,27 @@ export class MCPClient {
 
   /**
    * 调用 MCP 工具。
+   *
+   * 部分 MCP Server（如 Puppeteer）会把工具执行失败当作 JSON-RPC error 返回，
+   * 而非 result.isError；此处转为 MCPToolResult，避免 Manager 误判为服务器故障。
    */
   async callTool(toolName: string, args: Record<string, any>): Promise<MCPToolResult> {
-    const result = await this.sendRequest('tools/call', {
-      name: toolName,
-      arguments: args,
-    });
-    return result as MCPToolResult;
+    try {
+      const result = await this.sendRequest('tools/call', {
+        name: toolName,
+        arguments: args,
+      });
+      return result as MCPToolResult;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith('MCP error [')) {
+        return {
+          content: [{ type: 'text', text: message }],
+          isError: true,
+        };
+      }
+      throw err;
+    }
   }
 
   /**

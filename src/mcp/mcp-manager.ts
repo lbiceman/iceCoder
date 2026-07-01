@@ -178,6 +178,11 @@ export class MCPManager {
     const tools: RegisteredTool[] = [];
 
     for (const [serverName, record] of this.servers) {
+      // 进程仍存活但曾被工具级 JSON-RPC 错误误标为 error 时自动恢复
+      if (record.status === 'error' && record.client?.isReady) {
+        record.status = 'ready';
+        record.error = undefined;
+      }
       if (record.status !== 'ready') continue;
 
       for (const mcpTool of record.tools) {
@@ -246,6 +251,7 @@ export class MCPManager {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // 仅传输/进程级故障才降级 server 状态；工具级 JSON-RPC 错误已在 callTool 转为 isError
         record.status = 'error';
         record.error = message;
         return {
