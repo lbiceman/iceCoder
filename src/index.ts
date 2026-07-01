@@ -60,6 +60,7 @@ import { createSupervisorEventsRouter } from './web/routes/supervisor-events.js'
 import { createMemoryExportRouter } from './web/routes/memory-export.js';
 import { createMemoryFilesRouter } from './web/routes/memory-files.js';
 import { createSkillsRouter } from './web/routes/skills.js';
+import { createMcpStatusRouter } from './web/routes/mcp-status.js';
 import { createWorkspaceBrowseRouter } from './web/routes/workspace-browse.js';
 import { createMemoryDreamRouter } from './web/routes/memory-dream.js';
 
@@ -227,6 +228,7 @@ async function main(): Promise<void> {
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
+      { path: '/api/mcp', router: createMcpStatusRouter(mcpManager) },
       { path: '/api/workspace', router: createWorkspaceBrowseRouter() },
       { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter() },

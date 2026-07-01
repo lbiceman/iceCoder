@@ -17,7 +17,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import path from 'node:path';
+import { resolveMcpServerLaunch } from './resolve-mcp-command.js';
 import type {
   MCPServerConfig,
   MCPToolDefinition,
@@ -62,17 +62,17 @@ export class MCPClient {
    * 启动 MCP Server 进程并完成初始化握手。
    */
   async start(): Promise<void> {
-    let { command, args = [], env = {} } = this.config;
+    const plan = resolveMcpServerLaunch(this.config);
 
-    // Windows：裸 `npx` 在非 shell 的 spawn 下常找不到，统一改为 npx.cmd
-    if (process.platform === 'win32' && /^npx$/i.test(path.basename(command, path.extname(command)))) {
-      command = 'npx.cmd';
+    if (plan.launchMode === 'bundled') {
+      console.log(`[mcp:${this.serverName}] 使用安装包内 MCP 模块启动（免 npx）`);
     }
 
-    this.process = spawn(command, args, {
+    this.process = spawn(plan.command, plan.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...env },
-      shell: process.platform === 'win32',
+      env: plan.env,
+      cwd: plan.cwd,
+      shell: process.platform === 'win32' && plan.launchMode === 'npx',
       windowsHide: true,
     });
 

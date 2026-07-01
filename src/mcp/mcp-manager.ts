@@ -50,15 +50,29 @@ interface ServerRecord {
 export class MCPManager {
   private servers = new Map<string, ServerRecord>();
   private readonly mcpConfigPath: string;
+  private initPromise: Promise<void> | null = null;
 
   constructor(options?: MCPManagerOptions) {
     this.mcpConfigPath = options?.mcpConfigPath ?? resolveMcpConfigPath();
   }
 
   /**
+   * 等待 MCP 后台初始化完成（幂等；聊天/run 在注册工具前应 await，避免只拿到部分 MCP 工具）。
+   */
+  whenReady(): Promise<void> {
+    return this.initialize();
+  }
+
+  /**
    * 从配置文件加载 MCP Server 配置并启动所有已启用的服务器。
    */
   async initialize(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this.doInitialize();
+    return this.initPromise;
+  }
+
+  private async doInitialize(): Promise<void> {
     const mcpConfig = await this.loadMCPConfig();
 
     if (!mcpConfig || Object.keys(mcpConfig).length === 0) {
@@ -190,14 +204,34 @@ export class MCPManager {
   /**
    * 创建 MCP 工具的处理器函数。
    */
+  private async ensureServerReady(serverName: string): Promise<ServerRecord | null> {
+    let record = this.servers.get(serverName);
+    if (record?.status === 'ready' && record.client) return record;
+    if (record?.status === 'disabled') return record;
+
+    console.warn(
+      `[mcp-manager] 服务器 ${serverName} 当前不可用 (状态: ${record?.status ?? 'unknown'})，尝试重启…`,
+    );
+    try {
+      await this.restartServer(serverName);
+    } catch (err) {
+      console.error(
+        `[mcp-manager] 重启 ${serverName} 失败:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+    return this.servers.get(serverName) ?? null;
+  }
+
   private createToolHandler(serverName: string, toolName: string): (args: Record<string, any>) => Promise<ToolResult> {
     return async (args: Record<string, any>): Promise<ToolResult> => {
-      const record = this.servers.get(serverName);
+      const record = await this.ensureServerReady(serverName);
       if (!record || record.status !== 'ready' || !record.client) {
+        const detail = record?.error ? `: ${record.error}` : '';
         return {
           success: false,
           output: '',
-          error: `MCP 服务器 ${serverName} 不可用 (状态: ${record?.status ?? 'unknown'})`,
+          error: `MCP 服务器 ${serverName} 不可用 (状态: ${record?.status ?? 'unknown'}${detail})。请检查 ~/.iceCoder/mcp.json 或在终端运行 iceCoder mcp 查看详情。`,
         };
       }
 
@@ -212,6 +246,8 @@ export class MCPManager {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        record.status = 'error';
+        record.error = message;
         return {
           success: false,
           output: '',

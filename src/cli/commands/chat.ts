@@ -18,6 +18,7 @@ import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, S
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
+import { buildMcpRuntimeContext } from '../../mcp/mcp-runtime-context.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { createFileMemoryManager } from '../../memory/file-memory/file-memory-manager.js';
 import type { UnifiedMessage } from '../../llm/types.js';
@@ -387,6 +388,10 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      const mcpRuntimeContext = buildMcpRuntimeContext(
+        ctx.mcpManager,
+        toolDefs.map((t) => t.name),
+      );
 
       const harnessConfig: HarnessConfig = {
         context: {
@@ -394,6 +399,7 @@ ${c.bold}终端内置命令:${c.reset}
           tools: toolDefs,
           memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
           ...harnessOverlayToContextFields(assembled),
+          ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
         },
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),

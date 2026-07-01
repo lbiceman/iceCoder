@@ -50,6 +50,7 @@ export async function resolveWorkspaceToolContext(
   });
 
   if (params.mcpManager) {
+    await params.mcpManager.whenReady();
     registerMcpToolsOnRegistry(toolSystem.registry, params.mcpManager);
   }
 

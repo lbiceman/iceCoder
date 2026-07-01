@@ -25,6 +25,7 @@ import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { MCPManager } from '../mcp/mcp-manager.js';
+import { buildMcpRuntimeContext } from '../mcp/mcp-runtime-context.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
@@ -1754,6 +1755,10 @@ async function handleChatMessage(
   toolDefs = wsCtx.toolDefs;
   const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
   const runToolExecutor = wsCtx.toolExecutor;
+  const mcpRuntimeContext = buildMcpRuntimeContext(
+    mcpManager,
+    toolDefs.map((t) => t.name),
+  );
 
   if (wsCtx.workspace.detection.changed) {
     broadcastToSession(runSessionId, {
@@ -1770,6 +1775,7 @@ async function handleChatMessage(
       tools: shouldDisableRuntimeTools() ? [] : toolDefs,
       memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
       ...harnessDynamic,
+      ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
     },
     loop: {
       maxRounds: getHarnessMaxRoundsFromEnv(),

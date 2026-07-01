@@ -1375,7 +1375,7 @@ window.ChatPage = (function () {
     e.stopPropagation();
     handleMessageDeleteAction(btn.dataset.messageId, btn);
   }
-
+                                                             
   function onWsRuntimeRestored() {
     isStreaming = false;
     UI.setStreamingState(false);
