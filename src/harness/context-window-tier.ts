@@ -1,10 +1,11 @@
 /**
- * 根据当前生效的上下文窗口（token）划分 S/M/L/XL，与 data/config.json 中默认 provider 的
- * maxContextTokens 对齐（可被 ICE_CONTEXT_WINDOW 覆盖）。
+ * 根据当前生效的上下文窗口（token）划分 S/M/L/XL，与主 config（`ICE_CONFIG_PATH` /
+ * `{dataDir}/config.json`）中默认 provider 的 maxContextTokens 对齐（可被 ICE_CONTEXT_WINDOW 覆盖）。
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
+import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
+import { resolveMainConfigPath } from '../config/main-config-supervisor-mode.js';
 import type { IceCoderConfigFile } from '../web/types.js';
 
 /** 默认上下文窗口（配置文件不可用且无 env 时与压缩器一致） */
@@ -30,16 +31,25 @@ export function providerCompactionCapForProvider(provider: ProviderCompactionHin
   return null;
 }
 
-function readDefaultProviderFromConfig(): ProviderCompactionHint | null {
+function resolveEffectiveConfigPath(): string {
+  applyRuntimeDataEnvDefaults();
+  return resolveMainConfigPath();
+}
+
+function readMainConfigSync(): IceCoderConfigFile | null {
   try {
-    const configPath = path.resolve('data/config.json');
-    const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as IceCoderConfigFile;
-    const defaultProvider = config.providers?.find(p => p.isDefault);
-    return defaultProvider ?? null;
+    const raw = fs.readFileSync(resolveEffectiveConfigPath(), 'utf-8');
+    return JSON.parse(raw) as IceCoderConfigFile;
   } catch {
     return null;
   }
+}
+
+function readDefaultProviderFromConfig(): ProviderCompactionHint | null {
+  const config = readMainConfigSync();
+  if (!config) return null;
+  const defaultProvider = config.providers?.find(p => p.isDefault);
+  return defaultProvider ?? null;
 }
 
 /** S：≤128K（含） */
@@ -68,7 +78,7 @@ export function tierFromMaxContextTokens(tokens: number): ContextWindowTier {
 /**
  * 与压缩器相同的「生效上下文窗口」解析：
  * 1. ICE_CONTEXT_WINDOW
- * 2. data/config.json 默认 provider 的 maxContextTokens
+ * 2. 主 config 默认 provider 的 maxContextTokens
  * 3. 所有 provider 中最大的 maxContextTokens
  * 4. DEFAULT_EFFECTIVE_CONTEXT_WINDOW
  */
@@ -76,10 +86,8 @@ export function readEffectiveContextWindowTokens(): number {
   const env = parseInt(process.env.ICE_CONTEXT_WINDOW || '', 10);
   if (Number.isFinite(env) && env > 0) return env;
 
-  try {
-    const configPath = path.resolve('data/config.json');
-    const raw = fs.readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(raw) as IceCoderConfigFile;
+  const config = readMainConfigSync();
+  if (config) {
     const defaultProvider = config.providers?.find(p => p.isDefault && p.maxContextTokens);
     if (defaultProvider?.maxContextTokens && defaultProvider.maxContextTokens > 0) {
       return defaultProvider.maxContextTokens;
@@ -91,8 +99,6 @@ export function readEffectiveContextWindowTokens(): number {
       }
     }
     if (maxCtx > 0) return maxCtx;
-  } catch {
-    /* 配置文件缺失或解析失败 */
   }
 
   return DEFAULT_EFFECTIVE_CONTEXT_WINDOW;

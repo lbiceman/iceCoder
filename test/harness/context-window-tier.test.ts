@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   tierFromMaxContextTokens,
@@ -30,11 +33,19 @@ describe('tierFromMaxContextTokens', () => {
 });
 
 describe('readEffectiveContextWindowTokens + getContextWindowTier', () => {
-  const orig = process.env.ICE_CONTEXT_WINDOW;
+  const origContextWindow = process.env.ICE_CONTEXT_WINDOW;
+  const origConfigPath = process.env.ICE_CONFIG_PATH;
+  let tempDir: string | undefined;
 
-  afterEach(() => {
-    if (orig === undefined) delete process.env.ICE_CONTEXT_WINDOW;
-    else process.env.ICE_CONTEXT_WINDOW = orig;
+  afterEach(async () => {
+    if (origContextWindow === undefined) delete process.env.ICE_CONTEXT_WINDOW;
+    else process.env.ICE_CONTEXT_WINDOW = origContextWindow;
+    if (origConfigPath === undefined) delete process.env.ICE_CONFIG_PATH;
+    else process.env.ICE_CONFIG_PATH = origConfigPath;
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
   });
 
   it('ICE_CONTEXT_WINDOW 优先于配置文件', () => {
@@ -47,6 +58,26 @@ describe('readEffectiveContextWindowTokens + getContextWindowTier', () => {
     process.env.ICE_CONTEXT_WINDOW = '96000';
     expect(readEffectiveContextWindowTokens()).toBe(96_000);
     expect(getContextWindowTier()).toBe('S');
+  });
+
+  it('reads maxContextTokens from ICE_CONFIG_PATH (CLI user config)', async () => {
+    delete process.env.ICE_CONTEXT_WINDOW;
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'icecoder-ctx-window-'));
+    const configPath = path.join(tempDir, 'config.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      providers: [{
+        id: 'gpt-4o-proxy',
+        apiUrl: 'http://localhost:8000/v1',
+        apiKey: 'sk-test',
+        modelName: 'gpt-4o',
+        isDefault: true,
+        maxContextTokens: 1_000_000,
+      }],
+    }), 'utf-8');
+    process.env.ICE_CONFIG_PATH = configPath;
+
+    expect(readEffectiveContextWindowTokens()).toBe(1_000_000);
+    expect(getContextWindowTier()).toBe('XL');
   });
 });
 
