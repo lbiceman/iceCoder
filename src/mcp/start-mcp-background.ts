@@ -18,6 +18,8 @@ export interface McpBackgroundSettled {
   ok: boolean;
   toolCount: number;
   readyServers: number;
+  /** 本次写入 registry 的 MCP 工具数（热重载时由 reload 模块填充） */
+  registeredCount?: number;
   errorMessage?: string;
 }
 

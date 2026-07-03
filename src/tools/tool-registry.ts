@@ -45,4 +45,18 @@ export class ToolRegistry implements IToolRegistry {
   has(name: string): boolean {
     return this.tools.has(name);
   }
+
+  /**
+   * 移除名称以指定前缀开头的工具（用于 MCP 热重载时清理旧 mcp_* 条目）。
+   */
+  unregisterByPrefix(prefix: string): number {
+    let removed = 0;
+    for (const name of [...this.tools.keys()]) {
+      if (name.startsWith(prefix)) {
+        this.tools.delete(name);
+        removed++;
+      }
+    }
+    return removed;
+  }
 }

@@ -20,7 +20,7 @@ import { OfficeParserStrategy } from '../parser/office-strategy.js';
 import { XMindParserStrategy } from '../parser/xmind-strategy.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
-import { MCPManager, startMcpBackgroundInit } from '../mcp/index.js';
+import { MCPManager, startMcpBackgroundInit, watchMcpConfigChanges } from '../mcp/index.js';
 import { broadcastMcpReady } from '../web/chat-ws.js';
 import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
 import { isAppConfigReady } from '../config/config-readiness.js';
@@ -145,13 +145,20 @@ export async function bootstrap(): Promise<BootstrapResult> {
   });
 
   const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
-  startMcpBackgroundInit(mcpManager, registry, (r) => {
+  const notifyMcpReady = (r: import('../mcp/start-mcp-background.js').McpBackgroundSettled) => {
     broadcastMcpReady({
       ok: r.ok,
       toolCount: r.toolCount,
       readyServers: r.readyServers,
       ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
     });
+  };
+  startMcpBackgroundInit(mcpManager, registry, notifyMcpReady);
+  watchMcpConfigChanges({
+    mcpConfigPath: resolveMcpConfigPath(),
+    mcpManager,
+    registry,
+    onReloaded: notifyMcpReady,
   });
 
   const orchestrator = new Orchestrator(fileParser, llmAdapter, {

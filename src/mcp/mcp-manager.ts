@@ -20,6 +20,7 @@ import type {
 import type { RegisteredTool, ToolResult } from '../tools/types.js';
 import { resolveMcpConfigPath } from '../cli/paths.js';
 import { formatMcpToolResult } from './mcp-result-formatter.js';
+import { setMcpServerDisabled } from './persist-mcp-config.js';
 
 /**
  * MCP Manager 配置。
@@ -51,6 +52,7 @@ export class MCPManager {
   private servers = new Map<string, ServerRecord>();
   private readonly mcpConfigPath: string;
   private initPromise: Promise<void> | null = null;
+  private reloadPromise: Promise<void> | null = null;
 
   constructor(options?: MCPManagerOptions) {
     this.mcpConfigPath = options?.mcpConfigPath ?? resolveMcpConfigPath();
@@ -264,6 +266,13 @@ export class MCPManager {
   }
 
   /**
+   * MCP 配置文件路径（只读）。
+   */
+  getConfigPath(): string {
+    return this.mcpConfigPath;
+  }
+
+  /**
    * 获取所有 MCP Server 的运行时状态。
    */
   getServerInfos(): MCPServerInfo[] {
@@ -291,28 +300,113 @@ export class MCPManager {
   }
 
   /**
-   * 重启指定的 MCP Server。
+   * 手动停止指定的 MCP Server，并将 disabled: true 写回 mcp.json。
+   */
+  async stopServer(name: string): Promise<void> {
+    const record = this.servers.get(name);
+    if (!record) {
+      throw new Error(`MCP 服务器 ${name} 不存在`);
+    }
+    if (record.status === 'disabled') {
+      return;
+    }
+
+    if (record.client) {
+      await record.client.stop();
+      record.client = null;
+    }
+
+    await setMcpServerDisabled(this.mcpConfigPath, name, true);
+    record.config.disabled = true;
+    record.status = 'disabled';
+    record.tools = [];
+    record.error = undefined;
+    console.log(`[mcp-manager] 服务器 ${name} 已停止（disabled: true 已写入配置）`);
+  }
+
+  /**
+   * 启动已停止/禁用的 MCP Server，并将 disabled: false 写回 mcp.json。
+   */
+  async startServerByName(name: string): Promise<void> {
+    const record = this.servers.get(name);
+    if (!record) {
+      throw new Error(`MCP 服务器 ${name} 不存在`);
+    }
+
+    await setMcpServerDisabled(this.mcpConfigPath, name, false);
+    record.config.disabled = false;
+
+    if (record.client) {
+      await record.client.stop();
+      record.client = null;
+    }
+
+    await this.startServer(name, record.config);
+  }
+
+  /**
+   * 重启指定的 MCP Server（运行中；不修改 disabled 配置）。
    */
   async restartServer(name: string): Promise<void> {
     const record = this.servers.get(name);
     if (!record) {
       throw new Error(`MCP 服务器 ${name} 不存在`);
     }
-    if (record.status === 'disabled') {
-      throw new Error(`MCP 服务器 ${name} 已在配置中禁用，请先将 disabled 设为 false`);
+    if (record.config.disabled || record.status === 'disabled') {
+      throw new Error(`MCP 服务器 ${name} 已停止，请使用启动`);
     }
 
     // 停止旧进程
-    if (record.client) await record.client.stop();
+    if (record.client) {
+      await record.client.stop();
+      record.client = null;
+    }
 
     // 重新启动
     await this.startServer(name, record.config);
   }
 
   /**
+   * 重新加载 MCP 配置：停止现有进程、重读 mcp.json、再启动。
+   * 并发调用会合并为同一次 reload。
+   */
+  async reload(): Promise<void> {
+    if (this.reloadPromise) return this.reloadPromise;
+    this.reloadPromise = this.doReload();
+    try {
+      await this.reloadPromise;
+    } finally {
+      this.reloadPromise = null;
+    }
+  }
+
+  private async doReload(): Promise<void> {
+    if (this.initPromise) {
+      await this.initPromise.catch(() => {});
+    }
+
+    const work = (async () => {
+      console.log(`[mcp-manager] 重新加载 MCP 配置 (${this.mcpConfigPath})…`);
+      await this.stopAllServers();
+      this.servers.clear();
+      await this.doInitialize();
+    })();
+
+    this.initPromise = work;
+    await work;
+  }
+
+  /**
    * 停止所有 MCP Server。
    */
   async shutdown(): Promise<void> {
+    await this.stopAllServers();
+    this.servers.clear();
+    this.initPromise = null;
+    console.log('[mcp-manager] 所有 MCP 服务器已停止');
+  }
+
+  private async stopAllServers(): Promise<void> {
     const stopPromises: Promise<void>[] = [];
 
     for (const [name, record] of this.servers) {
@@ -326,7 +420,5 @@ export class MCPManager {
     }
 
     await Promise.allSettled(stopPromises);
-    this.servers.clear();
-    console.log('[mcp-manager] 所有 MCP 服务器已停止');
   }
 }

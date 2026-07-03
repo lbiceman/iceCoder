@@ -77,8 +77,12 @@
     }
   }
 
-  function exitSetupMode() {
+  function clearSetupMode() {
     applySetupMode(false);
+  }
+
+  function exitSetupMode() {
+    clearSetupMode();
     if (currentShell === 'mobile') {
       navigateMobile({ shell: 'mobile', page: 'work' });
     } else {
@@ -511,6 +515,14 @@
   }
 
   function renderPage(page, sessionId) {
+    var prevPage = document.body.dataset.page;
+    if (prevPage === 'config' && page !== 'config' && window.ConfigPage && typeof window.ConfigPage.onDeactivate === 'function') {
+      window.ConfigPage.onDeactivate();
+    }
+    if (prevPage === 'mConfig' && page !== 'mConfig' && window.ConfigPage && typeof window.ConfigPage.onDeactivate === 'function') {
+      window.ConfigPage.onDeactivate();
+    }
+
     document.body.dataset.page = page;
     document.body.dataset.shell = currentShell;
     for (var k in pages) {
@@ -662,6 +674,7 @@
 
   window.AppRouter = {
     refreshStatus: fetchSystemStatus,
+    clearSetupMode: clearSetupMode,
     exitSetupMode: exitSetupMode,
     isSetupRequired: function () {
       return setupRequired;

@@ -103,6 +103,7 @@
 }
 
 /* 移动端 wrapper 页通用适配 */
+[data-shell="mobile"] .mobile-page-root .config-center,
 [data-shell="mobile"] .mobile-page-root .config-page,
 [data-shell="mobile"] .mobile-page-root .memory-root,
 [data-shell="mobile"] .mobile-page-root .skills-root {
@@ -113,6 +114,7 @@
   padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
 }
 
+[data-shell="mobile"] .mobile-page-root .config-center,
 [data-shell="mobile"] .mobile-page-root .config-page {
   margin: 0;
   max-width: 100%;
