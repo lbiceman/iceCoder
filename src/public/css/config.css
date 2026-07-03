@@ -533,7 +533,7 @@
   padding: 12px 24px;
   border-top: 1px solid var(--border-color);
   background: color-mix(in srgb, var(--bg-card) 50%, transparent);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -545,6 +545,104 @@
 
 .mcp-st-ready strong { color: var(--success); }
 .mcp-st-error strong { color: var(--danger); }
+
+.mcp-collapsible {
+  margin-bottom: 20px;
+}
+
+.mcp-collapsible-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.mcp-collapsible-toggle:hover .mcp-collapsible-title {
+  color: var(--accent);
+}
+
+.mcp-collapsible-icon {
+  display: inline-flex;
+  width: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.mcp-collapsible-title {
+  margin: 0;
+}
+
+.mcp-collapsible-body[hidden] {
+  display: none;
+}
+
+.mcp-config-section {
+  margin-bottom: 16px;
+}
+
+.mcp-config-editor {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-card) 90%, transparent);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.mcp-config-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.mcp-config-error {
+  margin: 8px 0 0;
+  min-height: 1.2em;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.mcp-config-toolbar {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mcp-config-toolbar .skills-btn-danger {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.mcp-server-name-input {
+  min-width: 180px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mcp-server-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
 /* ===== 旧版兼容 / 表单 ===== */
 .config-page {
@@ -812,10 +910,6 @@ body.setup-required .nav-link[data-page="config"] {
   .config-detail-toolbar .skills-btn-primary {
     width: 100%;
     text-align: center;
-  }
-  .mcp-overview {
-    padding: 10px 12px;
-    gap: 10px 16px;
   }
   .config-page {
     max-width: 100%;

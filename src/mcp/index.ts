@@ -28,4 +28,9 @@ export {
   suppressMcpConfigWatch,
   isMcpConfigWatchSuppressed,
   MCP_CONFIG_PERSIST_SUPPRESS_MS,
+  getMcpServerConfig,
+  updateMcpServerConfig,
+  addMcpServerConfig,
+  removeMcpServerConfig,
+  validateMcpServerConfig,
 } from './persist-mcp-config.js';
