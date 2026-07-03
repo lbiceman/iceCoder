@@ -173,6 +173,7 @@ html, body {
 
 /* 主工作区底色：与左侧栏/顶栏形成可分辨的层级差 */
 .chat-page,
+.config-center,
 .config-page,
 .memory-root {
   background: var(--surface-page);

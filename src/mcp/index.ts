@@ -15,3 +15,22 @@ export type {
 } from './types.js';
 export { startMcpBackgroundInit } from './start-mcp-background.js';
 export type { McpBackgroundSettled } from './start-mcp-background.js';
+export {
+  reloadMcpConfiguration,
+  syncMcpToolsOnRegistry,
+  watchMcpConfigChanges,
+  MCP_CONFIG_WATCH_INTERVAL_MS,
+  MCP_CONFIG_RELOAD_DEBOUNCE_MS,
+} from './reload-mcp-config.js';
+export type { WatchMcpConfigOptions } from './reload-mcp-config.js';
+export {
+  setMcpServerDisabled,
+  suppressMcpConfigWatch,
+  isMcpConfigWatchSuppressed,
+  MCP_CONFIG_PERSIST_SUPPRESS_MS,
+  getMcpServerConfig,
+  updateMcpServerConfig,
+  addMcpServerConfig,
+  removeMcpServerConfig,
+  validateMcpServerConfig,
+} from './persist-mcp-config.js';

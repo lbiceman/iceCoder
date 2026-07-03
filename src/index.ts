@@ -27,7 +27,7 @@ import { Orchestrator } from './core/orchestrator.js';
 import { initializeToolSystem } from './tools/index.js';
 
 // MCP
-import { MCPManager, startMcpBackgroundInit } from './mcp/index.js';
+import { MCPManager, startMcpBackgroundInit, watchMcpConfigChanges } from './mcp/index.js';
 
 // Web 层
 import { createServer, startServer } from './web/server.js';
@@ -228,7 +228,18 @@ async function main(): Promise<void> {
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
       { path: '/api/skills', router: createSkillsRouter() },
-      { path: '/api/mcp', router: createMcpStatusRouter(mcpManager) },
+      { path: '/api/mcp', router: createMcpStatusRouter({
+        mcpManager,
+        registry: toolRegistry,
+        onReloaded: (r) => {
+          broadcastMcpReady({
+            ok: r.ok,
+            toolCount: r.toolCount,
+            readyServers: r.readyServers,
+            ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+          });
+        },
+      }) },
       { path: '/api/workspace', router: createWorkspaceBrowseRouter() },
       { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter() },
@@ -265,6 +276,21 @@ async function main(): Promise<void> {
 
   // 8. 监视配置变化以支持 LLM 提供者热切换
   watchConfigChanges(llmAdapter);
+
+  // 8b. 监视 mcp.json 变化以支持 MCP 热重载（10s 轮询 + 1s debounce）
+  watchMcpConfigChanges({
+    mcpConfigPath: resolveMcpConfigPath(),
+    mcpManager,
+    registry: toolRegistry,
+    onReloaded: (r) => {
+      broadcastMcpReady({
+        ok: r.ok,
+        toolCount: r.toolCount,
+        readyServers: r.readyServers,
+        ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+      });
+    },
+  });
 
   // 9. 优雅关闭处理
   let shuttingDown = false;
