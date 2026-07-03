@@ -51,17 +51,6 @@ window.McpConfigPanel = (function () {
     }
   }
 
-  function statusClass(status) {
-    switch (status) {
-      case 'ready': return 'is-ready';
-      case 'error': return 'is-error';
-      case 'disabled': return 'is-disabled';
-      case 'starting': return 'is-starting';
-      case 'draft': return 'is-offline';
-      default: return 'is-offline';
-    }
-  }
-
   function dotClass(status) {
     switch (status) {
       case 'ready': return 'dot-green';
@@ -146,26 +135,6 @@ window.McpConfigPanel = (function () {
       }
     });
     return items;
-  }
-
-  function renderOverview() {
-    var el = container && container.querySelector('#mcp-overview');
-    if (!el) return;
-    var list = getAllListItems();
-    var counts = { total: list.length, ready: 0, error: 0, offline: 0, disabled: 0 };
-    for (var i = 0; i < list.length; i++) {
-      var s = list[i].status;
-      if (s === 'ready') counts.ready++;
-      else if (s === 'error') counts.error++;
-      else if (s === 'disabled' || s === 'draft') counts.disabled++;
-      else counts.offline++;
-    }
-    el.innerHTML =
-      '<span class="mcp-overview-item">全部 <strong>' + counts.total + '</strong></span>' +
-      '<span class="mcp-overview-item mcp-st-ready">运行中 <strong>' + counts.ready + '</strong></span>' +
-      '<span class="mcp-overview-item mcp-st-error">连接失败 <strong>' + counts.error + '</strong></span>' +
-      '<span class="mcp-overview-item mcp-st-offline">离线 <strong>' + counts.offline + '</strong></span>' +
-      '<span class="mcp-overview-item mcp-st-disabled">已停止 <strong>' + counts.disabled + '</strong></span>';
   }
 
   function selectServer(name) {
@@ -552,7 +521,6 @@ window.McpConfigPanel = (function () {
           (isDraft
             ? '<input type="text" class="mcp-server-name-input" id="mcp-server-name" placeholder="服务器名称" value="' + escapeAttr(srv.name) + '">'
             : '<h2 class="config-detail-title">' + escapeHtml(srv.name) + '</h2>') +
-          '<span class="config-badge ' + statusClass(srv.status) + '">' + escapeHtml(statusLabel(srv.status)) + '</span>' +
         '</div>' +
         renderActionButtons(srv) +
       '</div>' +
@@ -611,7 +579,6 @@ window.McpConfigPanel = (function () {
   function renderAll() {
     renderList();
     renderDetail();
-    renderOverview();
   }
 
   function handleAddServer() {
@@ -643,14 +610,12 @@ window.McpConfigPanel = (function () {
         if (detailEl && !configDirty) {
           detailEl.innerHTML = '<div class="config-detail-placeholder">加载失败：' + escapeHtml(err.message) + '</div>';
         }
-        renderOverview();
         return;
       }
       applyStatusBody(body);
 
       if (configDirty) {
         renderList();
-        renderOverview();
         updateDetailStatusOnly();
       } else {
         loadingConfig = false;
@@ -671,11 +636,6 @@ window.McpConfigPanel = (function () {
     if (!srv) return;
     var detailEl = container.querySelector('#mcp-detail');
     if (!detailEl) return;
-    var badge = detailEl.querySelector('.config-badge');
-    if (badge) {
-      badge.className = 'config-badge ' + statusClass(srv.status);
-      badge.textContent = statusLabel(srv.status);
-    }
     var dot = detailEl.querySelector('.mcp-info-grid .config-status-dot');
     if (dot) dot.className = 'config-status-dot ' + dotClass(srv.status);
     var statusText = detailEl.querySelector('.mcp-info-grid dd:nth-of-type(3)');
@@ -715,7 +675,6 @@ window.McpConfigPanel = (function () {
           '</aside>' +
           '<section class="config-detail-panel" id="mcp-detail"></section>' +
         '</div>' +
-        '<footer class="mcp-overview" id="mcp-overview"></footer>' +
       '</div>';
 
     parentEl.querySelector('#mcp-btn-add').addEventListener('click', handleAddServer);

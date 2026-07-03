@@ -526,26 +526,6 @@
   color: var(--text-muted);
 }
 
-.mcp-overview {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px 24px;
-  padding: 12px 24px;
-  border-top: 1px solid var(--border-color);
-  background: color-mix(in srgb, var(--bg-card) 50%, transparent);
-  font-size: 14px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.mcp-overview-item strong {
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.mcp-st-ready strong { color: var(--success); }
-.mcp-st-error strong { color: var(--danger); }
-
 .mcp-collapsible {
   margin-bottom: 20px;
 }
