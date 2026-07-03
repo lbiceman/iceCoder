@@ -1652,6 +1652,8 @@ window.ChatPage = (function () {
       WS.connect(remoteToken);
     }
     syncSendButtonWithWorkload();
+    // 模型配置与底部 chip 每次回到聊天页都要刷新，不受消息同步节流影响
+    loadModelConfig();
     if (needsInitialHistoryPaint()) return;
     var now = Date.now();
     if (now - lastActivateFetchMs < getActivateFetchGapMs()) return;
@@ -1659,7 +1661,6 @@ window.ChatPage = (function () {
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
       syncMessages(false);
     }
-    loadModelConfig();
   }
 
   // ---- 渲染 ----
@@ -2006,6 +2007,7 @@ window.ChatPage = (function () {
     onSessionSwitched: onSessionSwitched,
     isWorkloadActive: isWorkloadActive,
     syncWelcomeState: syncWelcomeState,
+    reloadModelConfig: loadModelConfig,
     triggerSend: handleSend,
     isMounted: function () { return mounted; },
     getContainer: function () { return container; },

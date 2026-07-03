@@ -43,6 +43,16 @@ window.ModelConfigPanel = (function () {
       && !/your-api-key/i.test(prov.apiKey));
   }
 
+  function notifyModelConfigChanged() {
+    if (window.ChatPage && typeof window.ChatPage.reloadModelConfig === 'function') {
+      window.ChatPage.reloadModelConfig();
+      return;
+    }
+    if (window.ChatModelPicker && typeof window.ChatModelPicker.refreshFromServer === 'function') {
+      window.ChatModelPicker.refreshFromServer();
+    }
+  }
+
   function tryAutoSaveDefault() {
     if (autoSaveDefaultTimer) clearTimeout(autoSaveDefaultTimer);
     autoSaveDefaultTimer = setTimeout(function () {
@@ -72,6 +82,7 @@ window.ModelConfigPanel = (function () {
         if (window.AppRouter && window.AppRouter.refreshStatus) {
           window.AppRouter.refreshStatus();
         }
+        notifyModelConfigChanged();
       });
     }, 320);
   }
@@ -293,28 +304,7 @@ window.ModelConfigPanel = (function () {
       });
     }
 
-    detailEl.querySelector('#model-btn-delete').addEventListener('click', function () {
-      Modal.confirm({
-        title: '移除提供者',
-        message: '确定要移除该 LLM 提供者吗？',
-        type: 'warning',
-        confirmText: '移除',
-        cancelText: '取消',
-      }).then(function (confirmed) {
-        if (!confirmed) return;
-        if (index < defaultIndex) defaultIndex--;
-        else if (index === defaultIndex) defaultIndex = 0;
-        if (index < selectedIndex) selectedIndex--;
-        providers.splice(index, 1);
-        if (providers.length === 0) {
-          defaultIndex = 0;
-          selectedIndex = 0;
-        } else if (selectedIndex >= providers.length) {
-          selectedIndex = providers.length - 1;
-        }
-        renderAll();
-      });
-    });
+    detailEl.querySelector('#model-btn-delete').addEventListener('click', handleDelete);
 
     detailEl.querySelector('#model-btn-save').addEventListener('click', handleSave);
   }
@@ -324,11 +314,10 @@ window.ModelConfigPanel = (function () {
     renderDetail();
   }
 
-  function collectFormData() {
-    syncFormToProvider(selectedIndex);
+  function buildProviderPayload(sourceProviders) {
     var result = [];
-    for (var i = 0; i < providers.length; i++) {
-      var original = providers[i] || {};
+    for (var i = 0; i < sourceProviders.length; i++) {
+      var original = sourceProviders[i] || {};
       result.push({
         id: original.id || generateId(),
         apiUrl: original.apiUrl || '',
@@ -345,6 +334,111 @@ window.ModelConfigPanel = (function () {
       });
     }
     return result;
+  }
+
+  function collectFormData() {
+    syncFormToProvider(selectedIndex);
+    return buildProviderPayload(providers);
+  }
+
+  function reloadProvidersFromServer(callback) {
+    loadConfig(function (_err, loaded) {
+      if (!_err) {
+        providers = loaded.map(function (p) { p._masked = true; return p; });
+        defaultIndex = 0;
+        for (var j = 0; j < providers.length; j++) {
+          if (providers[j].isDefault) {
+            defaultIndex = j;
+            break;
+          }
+        }
+        if (providers.length === 0) {
+          providers.push({
+            id: generateId(),
+            apiUrl: '',
+            apiKey: '',
+            modelName: '',
+            parameters: { temperature: 1 },
+            supportsVision: true
+          });
+        }
+        selectedIndex = defaultIndex;
+        renderAll();
+      }
+      if (callback) callback(_err);
+    });
+  }
+
+  function adjustIndicesAfterRemoval(removedIndex, removedWasDefault) {
+    if (providers.length === 0) {
+      defaultIndex = 0;
+      selectedIndex = 0;
+      return;
+    }
+    if (removedWasDefault) {
+      defaultIndex = 0;
+    } else if (defaultIndex > removedIndex) {
+      defaultIndex--;
+    }
+    selectedIndex = Math.min(removedIndex, providers.length - 1);
+  }
+
+  function handleDelete() {
+    var deleteIndex = selectedIndex;
+    var target = providers[deleteIndex];
+    if (!target) return;
+    var deleteId = target.id;
+    var deleteName = providerDisplayName(target);
+    var confirmFn = (window.Modal && typeof window.Modal.confirm === 'function')
+      ? window.Modal.confirm
+      : function (opts) {
+        return Promise.resolve(window.confirm((opts && opts.message) || '确认？'));
+      };
+
+    confirmFn({
+      title: '移除提供者',
+      message: '确定要移除「' + deleteName + '」吗？',
+      type: 'warning',
+      confirmText: '移除',
+      cancelText: '取消',
+      dangerConfirm: true,
+    }).then(function (confirmed) {
+      if (!confirmed) return;
+
+      syncFormToProvider(deleteIndex);
+
+      var wasDefault = deleteIndex === defaultIndex;
+      providers = providers.filter(function (p) { return p.id !== deleteId; });
+      adjustIndicesAfterRemoval(deleteIndex, wasDefault);
+
+      var data = buildProviderPayload(providers);
+      for (var i = 0; i < data.length; i++) {
+        if (Object.keys(validateProvider(data[i])).length > 0) {
+          Notification.error('无法删除：其余提供者配置不完整，请先完善或删除');
+          reloadProvidersFromServer();
+          return;
+        }
+      }
+
+      renderAll();
+
+      saveConfig(data, function (err, result) {
+        if (err) {
+          Notification.error('删除失败：' + err.message);
+          reloadProvidersFromServer();
+          return;
+        }
+        Notification.success('「' + deleteName + '」已移除');
+        if (result && result.setupComplete && window.AppRouter && window.AppRouter.clearSetupMode) {
+          window.AppRouter.clearSetupMode();
+        }
+        reloadProvidersFromServer();
+        if (window.AppRouter && window.AppRouter.refreshStatus) {
+          window.AppRouter.refreshStatus();
+        }
+        notifyModelConfigChanged();
+      });
+    });
   }
 
   function handleSave() {
@@ -393,6 +487,7 @@ window.ModelConfigPanel = (function () {
         if (window.AppRouter && window.AppRouter.refreshStatus) {
           window.AppRouter.refreshStatus();
         }
+        notifyModelConfigChanged();
       }
     });
   }
