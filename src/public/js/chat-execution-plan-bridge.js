@@ -70,6 +70,13 @@ window.ChatExecutionPlanBridge = (function () {
       return;
     }
 
+    // 独立于 enabled：终态清理必须执行，避免 feature flag 关闭时残留底部摘要
+    if (step.type === 'task_graph_done') {
+      currentPlanId = null;
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+      return;
+    }
+
     // connected 若被其它模块覆盖导致 enabled 仍为 false，仍以首包 init 打开功能
     if (step.type === 'execution_plan_init' && step.plan) {
       enabled = true;
@@ -113,9 +120,6 @@ window.ChatExecutionPlanBridge = (function () {
     }
     if (step.type === 'task_graph_branch') {
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.highlightGraphBranch(step);
-    }
-    if (step.type === 'task_graph_done') {
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.markGraphComplete();
     }
 
     if (step.type === 'execution_mode_enter' || step.type === 'execution_mode_exit') {

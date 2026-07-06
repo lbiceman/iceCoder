@@ -37,9 +37,30 @@ window.ChatPetBridge = (function () {
   function hasLiveExecutionPlan() {
     var P = window.ChatExecutionPlan;
     if (!P || typeof P.getPlan !== 'function') return false;
+    if (typeof P.isPlanLive === 'function') return P.isPlanLive();
     if (typeof P.isPanelSuppressed === 'function' && P.isPanelSuppressed()) return false;
+    if (typeof P.isVisible === 'function' && !P.isVisible()) return false;
     var plan = P.getPlan();
-    return !!(plan && plan.steps && plan.steps.length);
+    if (!plan || !plan.steps || !plan.steps.length) return false;
+    if (typeof P.isPlanComplete === 'function' && P.isPlanComplete(plan)) return false;
+    return true;
+  }
+
+  function clearFinishedPlan() {
+    var P = window.ChatExecutionPlan;
+    if (!P || typeof P.clear !== 'function' || typeof P.getPlan !== 'function') return;
+    var plan = P.getPlan();
+    if (!plan) return;
+    // 仅清除已终态 plan；不用 isPlanLive（面板被 ICE_PLAN_PANEL=0 抑制时会把进行中的 plan 误判为可清）
+    if (typeof P.isPlanComplete === 'function' && P.isPlanComplete(plan)) {
+      P.clear();
+    }
+  }
+
+  function forceClearExecutionPlan() {
+    if (window.ChatExecutionPlan && typeof ChatExecutionPlan.clear === 'function') {
+      ChatExecutionPlan.clear();
+    }
   }
 
   /**
@@ -96,6 +117,7 @@ window.ChatPetBridge = (function () {
       if (!sessionPet || !sessionPet.isVisible()) return;
       sessionPet.setState('idle');
       sessionPet.setBubbleText('');
+      clearFinishedPlan();
       syncExecPlanFoot();
     }, MODEL_DONE_NOTICE_MS);
   }
@@ -103,6 +125,7 @@ window.ChatPetBridge = (function () {
   function showThinking(withFile) {
     userCheckpointNoticeActive = false;
     clearModelDoneNotice();
+    clearFinishedPlan();
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
       ChatExecutionPlan.resetExecutionMode();
     }
@@ -149,6 +172,7 @@ window.ChatPetBridge = (function () {
     sessionPet.setState('idle');
     sessionPet.setBubbleText('');
     sessionPet.setTurnLabel('');
+    clearFinishedPlan();
     syncExecPlanFoot();
   }
 
@@ -261,6 +285,8 @@ window.ChatPetBridge = (function () {
       case 'task_graph_done':
         sessionPet.setState('happy');
         bubble('任务图完成');
+        clearFinishedPlan();
+        syncExecPlanFoot();
         break;
       case 'final':
         {
@@ -286,6 +312,7 @@ window.ChatPetBridge = (function () {
             sessionPet.setState('alert');
             if (step.content) bubble(step.content);
           } else if (sr === 'model_done') {
+            forceClearExecutionPlan();
             applyModelDoneNotice();
           } else {
             sessionPet.setState('happy');
@@ -353,6 +380,8 @@ window.ChatPetBridge = (function () {
           } else if (typeof patch.progress === 'number' && patch.progress === 100) {
             sessionPet.setState('happy');
             bubble('计划全部完成');
+            clearFinishedPlan();
+            syncExecPlanFoot();
           } else if (sp && sp.status === 'done') {
             sessionPet.setState('playful');
           }

@@ -342,6 +342,23 @@ window.ChatExecutionPlan = (function () {
     return n;
   }
 
+  /** 计划是否已全部结束（进度 100 或所有步骤进入终态） */
+  function isPlanComplete(plan) {
+    if (!plan) return true;
+    if (typeof plan.progress === 'number' && plan.progress >= 100) return true;
+    if (!plan.steps || !plan.steps.length) return false;
+    for (var i = 0; i < plan.steps.length; i++) {
+      var s = plan.steps[i].status;
+      if (s !== 'done' && s !== 'failed' && s !== 'skipped') return false;
+    }
+    return true;
+  }
+
+  /** 底部摘要 / 锚点是否应继续展示（进行中且未被抑制） */
+  function isPlanLive() {
+    return !!currentPlan && visible && !isPanelSuppressed() && !isPlanComplete(currentPlan);
+  }
+
   function pickActiveStep(plan) {
     if (!plan || !plan.steps) return null;
     if (plan.activeStepId) {
@@ -420,6 +437,8 @@ window.ChatExecutionPlan = (function () {
     if (!currentPlan) return;
     currentPlan.progress = 100;
     visible = false;
+    updateAnchorChrome();
+    notifyPetFoot();
   }
 
   /** 底部一行摘要（供冰豆 #status-turn）；如 forced · 工具失败 = executionMode + enteredByPrimary 组合，非单一事件类型 */
@@ -462,6 +481,10 @@ window.ChatExecutionPlan = (function () {
     if (!step || !step.executionMode) return;
     if (step.type === 'execution_mode_exit') {
       currentExecutionMode = null;
+      if (isPlanComplete(currentPlan)) {
+        clear();
+        return;
+      }
     } else {
       currentExecutionMode = Object.assign({}, step.executionMode);
     }
@@ -601,7 +624,7 @@ window.ChatExecutionPlan = (function () {
       return;
     }
     currentPlan = plan;
-    visible = !isPanelSuppressed();
+    visible = !isPanelSuppressed() && !isPlanComplete(plan);
     ensureMounted();
     fullRender();
     updateAnchorChrome();
@@ -647,6 +670,10 @@ window.ChatExecutionPlan = (function () {
     if (typeof patch.updatedAt === 'number') {
       currentPlan.updatedAt = patch.updatedAt;
     }
+    if (isPlanComplete(currentPlan)) {
+      visible = false;
+      updateAnchorChrome();
+    }
     notifyPetFoot();
     if (popoverOpen) positionPopover();
   }
@@ -674,7 +701,7 @@ window.ChatExecutionPlan = (function () {
   }
 
   function setVisible(v) {
-    visible = !!v && !isPanelSuppressed();
+    visible = !!v && !isPanelSuppressed() && !isPlanComplete(currentPlan);
     if (rootEl) {
       rootEl.classList.toggle('exec-plan-panel--suppressed', isPanelSuppressed() || !visible);
     }
@@ -706,6 +733,8 @@ window.ChatExecutionPlan = (function () {
     setVisible: setVisible,
     getPlan: getPlan,
     isVisible: isVisible,
+    isPlanLive: isPlanLive,
+    isPlanComplete: isPlanComplete,
     formatFootSummary: formatFootSummary,
     formatExecutionModeChip: formatExecutionModeChip,
     getExecutionModeChip: getExecutionModeChip,
