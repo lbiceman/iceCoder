@@ -354,9 +354,11 @@ window.ChatExecutionPlan = (function () {
     return true;
   }
 
-  /** 底部摘要 / 锚点是否应继续展示（进行中且未被抑制） */
+  /** 底部摘要 / 锚点是否应继续展示（forced 执行段且进行中） */
   function isPlanLive() {
-    return !!currentPlan && visible && !isPanelSuppressed() && !isPlanComplete(currentPlan);
+    if (!currentPlan || !visible || isPanelSuppressed() || isPlanComplete(currentPlan)) return false;
+    if (!currentExecutionMode || currentExecutionMode.executionMode !== 'forced') return false;
+    return true;
   }
 
   function pickActiveStep(plan) {
@@ -480,14 +482,10 @@ window.ChatExecutionPlan = (function () {
   function applyExecutionModeEvent(step) {
     if (!step || !step.executionMode) return;
     if (step.type === 'execution_mode_exit') {
-      currentExecutionMode = null;
-      if (isPlanComplete(currentPlan)) {
-        clear();
-        return;
-      }
-    } else {
-      currentExecutionMode = Object.assign({}, step.executionMode);
+      clear();
+      return;
     }
+    currentExecutionMode = Object.assign({}, step.executionMode);
     ensureMounted();
     if (!currentPlan && titleEl) {
       titleEl.textContent = 'Execution Mode';

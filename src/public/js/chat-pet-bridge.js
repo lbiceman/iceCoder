@@ -282,6 +282,9 @@ window.ChatPetBridge = (function () {
         sessionPet.setState('alert');
         bubble(step.message || '分支切换');
         break;
+      case 'execution_mode_exit':
+        syncExecPlanFoot();
+        break;
       case 'task_graph_done':
         sessionPet.setState('happy');
         bubble('任务图完成');

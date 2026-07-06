@@ -29,6 +29,8 @@ window.ChatExecutionPlanBridge = (function () {
   var attached = false;         // 已经挂载过订阅
   var currentPlanId = null;     // 本地 plan 跟踪 ID（防错位）
   var lastSyncMs = 0;
+  /** exit_forced 后抑制 REST 重同步，直到新一轮 task_graph / plan init */
+  var planFootDismissed = false;
 
   function isLocallyDisabled() {
     try {
@@ -72,8 +74,24 @@ window.ChatExecutionPlanBridge = (function () {
 
     // 独立于 enabled：终态清理必须执行，避免 feature flag 关闭时残留底部摘要
     if (step.type === 'task_graph_done') {
+      planFootDismissed = true;
       currentPlanId = null;
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+      return;
+    }
+
+    // 独立于 enabled：exit_forced = L2 交还模型，必须清底部摘要且勿被 REST 复活
+    if (step.type === 'execution_mode_exit') {
+      planFootDismissed = true;
+      currentPlanId = null;
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyExecutionModeEvent(step);
+      return;
+    }
+
+    if (step.type === 'execution_mode_enter') {
+      planFootDismissed = false;
+      enabled = true;
+      if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyExecutionModeEvent(step);
       return;
     }
 
@@ -84,11 +102,13 @@ window.ChatExecutionPlanBridge = (function () {
     if (!enabled) return;
 
     if (step.type === 'execution_plan_init' && step.plan) {
+      planFootDismissed = false;
       currentPlanId = step.plan.planId;
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.setPlan(step.plan);
       return;
     }
     if (step.type === 'execution_plan_update' && step.patch) {
+      if (planFootDismissed) return;
       if (!currentPlanId || step.planId !== currentPlanId) {
         // planId 不匹配：丢弃 patch + 触发全量同步
         scheduleResync();
@@ -99,14 +119,18 @@ window.ChatExecutionPlanBridge = (function () {
 
     // ── TaskGraph events (Phase 7) ──
     if (step.type === 'task_graph_init') {
+      planFootDismissed = false;
       enabled = true;
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.renderGraph(step);
       return;
     }
     if (step.type === 'task_graph_node' && step.nodeId) {
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.updateGraphNode(step);
+      if (!planFootDismissed && window.ChatExecutionPlan) {
+        window.ChatExecutionPlan.updateGraphNode(step);
+      }
     }
     if (step.type === 'task_graph_update' && step.plan) {
+      if (planFootDismissed) return;
       currentPlanId = step.plan.planId;
       if (window.ChatExecutionPlan) {
         window.ChatExecutionPlan.setPlan({
@@ -120,10 +144,6 @@ window.ChatExecutionPlanBridge = (function () {
     }
     if (step.type === 'task_graph_branch') {
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.highlightGraphBranch(step);
-    }
-
-    if (step.type === 'execution_mode_enter' || step.type === 'execution_mode_exit') {
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyExecutionModeEvent(step);
     }
   }
 
@@ -144,7 +164,7 @@ window.ChatExecutionPlanBridge = (function () {
   }
 
   function fetchAndApply() {
-    if (!enabled) return;
+    if (!enabled || planFootDismissed) return;
     fetch('/api/sessions/' + encodeURIComponent(SESSION_ID) + '/plan', {
       cache: 'no-store',
     })
