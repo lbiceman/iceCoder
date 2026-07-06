@@ -993,17 +993,55 @@ body.setup-required .chat-sidebar-settings-btn {
   .config-tabs {
     padding: 0 12px;
   }
+  .config-tab-panels,
+  .config-tab-panel.is-active {
+    overflow: visible;
+    min-height: auto;
+  }
+  .config-tab-panel[data-panel="model"].is-active,
+  .config-tab-panel[data-panel="mcp"].is-active {
+    overflow: visible;
+  }
+  .config-panel-inner {
+    overflow: visible;
+    min-height: auto;
+    flex: none;
+  }
   .config-split {
     flex-direction: column;
+    overflow: visible;
+    min-height: auto;
+    flex: none;
   }
   .config-list-panel {
     width: 100%;
-    max-height: 220px;
+    max-height: none;
     border-right: none;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: none;
+    overflow: visible;
+    min-height: auto;
+  }
+  .config-list {
+    overflow: visible;
+    flex: none;
+    padding: 0 12px 12px;
   }
   .config-detail-panel {
-    padding: 16px 12px 24px;
+    display: none !important;
+  }
+  .config-list-item.is-active,
+  .config-list-item.is-expanded {
+    border-color: var(--accent);
+    background: var(--bg-card);
+  }
+  .config-list-item-detail {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    cursor: default;
+  }
+  .config-list-item-detail .config-detail-header {
+    margin-bottom: 12px;
   }
   .form-grid {
     grid-template-columns: 1fr;
@@ -1015,6 +1053,17 @@ body.setup-required .chat-sidebar-settings-btn {
   }
   .config-detail-toolbar .skills-btn-primary {
     width: 100%;
+    text-align: center;
+  }
+  .mcp-config-toolbar {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+  .mcp-config-toolbar .skills-btn-danger,
+  .mcp-config-toolbar .skills-btn-primary {
+    width: auto;
+    flex: 1;
     text-align: center;
   }
   .config-page {

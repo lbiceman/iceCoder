@@ -18,6 +18,53 @@ window.McpConfigPanel = (function () {
   var nextDraftId = 1;
   var loadingConfig = false;
   var pendingDeleteNames = {};
+  var mobileExpanded = false;
+
+  function isMobile() {
+    return window.innerWidth <= 720;
+  }
+
+  function isListItemActive(name) {
+    if (isMobile()) return mobileExpanded && name === selectedName;
+    return name === selectedName;
+  }
+
+  function getDetailElForServer(name) {
+    if (isMobile()) {
+      var inlineItems = container.querySelectorAll('.config-list-item-detail');
+      for (var i = 0; i < inlineItems.length; i++) {
+        if (inlineItems[i].getAttribute('data-name') === name) return inlineItems[i];
+      }
+      return null;
+    }
+    if (name === selectedName) return container.querySelector('#mcp-detail');
+    return null;
+  }
+
+  function getActiveDetailEl() {
+    if (!selectedName) return container.querySelector('#mcp-detail');
+    return getDetailElForServer(selectedName) || container.querySelector('#mcp-detail');
+  }
+
+  function collapseMobile() {
+    if (!isMobile() || !mobileExpanded) return;
+    mobileExpanded = false;
+    renderAll();
+  }
+
+  function handleListItemClick(name) {
+    if (!isMobile()) {
+      selectServer(name);
+      return;
+    }
+    if (mobileExpanded && name === selectedName) {
+      mobileExpanded = false;
+      renderAll();
+      return;
+    }
+    mobileExpanded = true;
+    selectServer(name);
+  }
 
   var NEW_SERVER_TEMPLATE = {
     command: 'npx',
@@ -163,7 +210,7 @@ window.McpConfigPanel = (function () {
       (function (srv) {
         var btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'config-list-item' + (srv.name === selectedName ? ' is-active' : '');
+        btn.className = 'config-list-item' + (isListItemActive(srv.name) ? ' is-active' : '');
         var toolText = srv.status === 'draft'
           ? '未保存'
           : (srv.toolCount != null ? srv.toolCount + ' 个工具' : '—');
@@ -173,9 +220,20 @@ window.McpConfigPanel = (function () {
             '<span class="config-status-dot ' + dotClass(srv.status) + '" aria-hidden="true"></span>' +
           '</div>' +
           '<div class="config-list-item-sub">' + escapeHtml(toolText) + '</div>';
-        btn.addEventListener('click', function () {
-          selectServer(srv.name);
+        btn.addEventListener('click', function (e) {
+          if (e.target.closest('.config-list-item-detail')) return;
+          e.stopPropagation();
+          handleListItemClick(srv.name);
         });
+        if (isMobile() && mobileExpanded && srv.name === selectedName) {
+          btn.classList.add('is-expanded');
+          var detailDiv = document.createElement('div');
+          detailDiv.className = 'config-list-item-detail';
+          detailDiv.setAttribute('data-name', srv.name);
+          detailDiv.innerHTML = buildMcpDetailHtml(srv);
+          btn.appendChild(detailDiv);
+          populateMcpDetailContent(detailDiv, srv);
+        }
         listEl.appendChild(btn);
       })(list[i]);
     }
@@ -485,19 +543,7 @@ window.McpConfigPanel = (function () {
     });
   }
 
-  function renderDetail() {
-    var detailEl = container.querySelector('#mcp-detail');
-    if (!detailEl) return;
-
-    var list = getAllListItems();
-    if (!list.length) {
-      detailEl.innerHTML =
-        '<div class="config-detail-placeholder">' +
-          '点击左侧「新增」添加 MCP 服务器，在下方编辑 JSON 配置后保存。' +
-        '</div>';
-      return;
-    }
-
+  function resolveSelectedServer(list) {
     var srv = null;
     for (var i = 0; i < list.length; i++) {
       if (list[i].name === selectedName) {
@@ -507,15 +553,15 @@ window.McpConfigPanel = (function () {
     }
     if (!srv) srv = list[0];
     selectedName = srv.name;
+    return srv;
+  }
 
+  function buildMcpDetailHtml(srv) {
     var cfg = srv.config || {};
     var cmdLine = [cfg.command || ''].concat(cfg.args || []).filter(Boolean).join(' ');
     var isDraft = isDraftName(srv.name);
-    var initialConfigText = isDraft
-      ? formatConfigJson(draftServers[srv.name] || NEW_SERVER_TEMPLATE)
-      : formatConfigJson(cfg);
 
-    detailEl.innerHTML =
+    return (
       '<div class="config-detail-header">' +
         '<div class="config-detail-title-row">' +
           (isDraft
@@ -542,7 +588,16 @@ window.McpConfigPanel = (function () {
       '<div class="config-detail-toolbar mcp-config-toolbar">' +
         '<button type="button" class="skills-btn skills-btn-danger" id="mcp-btn-delete">删除</button>' +
         '<button type="button" class="skills-btn skills-btn-primary" id="mcp-btn-save">保存</button>' +
-      '</div>';
+      '</div>'
+    );
+  }
+
+  function populateMcpDetailContent(detailEl, srv) {
+    var isDraft = isDraftName(srv.name);
+    var cfg = srv.config || {};
+    var initialConfigText = isDraft
+      ? formatConfigJson(draftServers[srv.name] || NEW_SERVER_TEMPLATE)
+      : formatConfigJson(cfg);
 
     bindActionButtons(detailEl, srv);
     bindToolsToggle(detailEl);
@@ -561,7 +616,7 @@ window.McpConfigPanel = (function () {
     fetchServerConfig(srv.name, function (err, fullConfig) {
       loadingConfig = false;
       if (!container || selectedName !== srv.name) return;
-      var currentDetail = container.querySelector('#mcp-detail');
+      var currentDetail = getDetailElForServer(srv.name);
       if (!currentDetail) return;
       if (err) {
         setConfigTextarea(currentDetail, initialConfigText);
@@ -574,6 +629,29 @@ window.McpConfigPanel = (function () {
         configDirty = false;
       }
     });
+  }
+
+  function renderDetail() {
+    var detailEl = container.querySelector('#mcp-detail');
+    if (!detailEl) return;
+
+    if (isMobile()) {
+      detailEl.innerHTML = '';
+      return;
+    }
+
+    var list = getAllListItems();
+    if (!list.length) {
+      detailEl.innerHTML =
+        '<div class="config-detail-placeholder">' +
+          '点击左侧「新增」添加 MCP 服务器，在下方编辑 JSON 配置后保存。' +
+        '</div>';
+      return;
+    }
+
+    var srv = resolveSelectedServer(list);
+    detailEl.innerHTML = buildMcpDetailHtml(srv);
+    populateMcpDetailContent(detailEl, srv);
   }
 
   function renderAll() {
@@ -594,6 +672,7 @@ window.McpConfigPanel = (function () {
     }
     draftServers[name] = JSON.parse(JSON.stringify(NEW_SERVER_TEMPLATE));
     selectedName = name;
+    if (isMobile()) mobileExpanded = true;
     renderAll();
   }
 
@@ -634,7 +713,7 @@ window.McpConfigPanel = (function () {
       }
     }
     if (!srv) return;
-    var detailEl = container.querySelector('#mcp-detail');
+    var detailEl = getActiveDetailEl();
     if (!detailEl) return;
     var dot = detailEl.querySelector('.mcp-info-grid .config-status-dot');
     if (dot) dot.className = 'config-status-dot ' + dotClass(srv.status);
@@ -660,6 +739,7 @@ window.McpConfigPanel = (function () {
     stopPolling();
     container = parentEl;
     configDirty = false;
+    mobileExpanded = false;
     parentEl.innerHTML =
       '<div class="config-panel-inner config-panel-mcp">' +
         '<div class="config-split">' +
@@ -698,11 +778,12 @@ window.McpConfigPanel = (function () {
     container = null;
     servers = [];
     selectedName = null;
+    mobileExpanded = false;
     draftServers = {};
     configDirty = false;
     loadingConfig = false;
     pendingDeleteNames = {};
   }
 
-  return { render: render, destroy: destroy, reload: reloadData, pause: pause, resume: resume };
+  return { render: render, destroy: destroy, reload: reloadData, pause: pause, resume: resume, collapseMobile: collapseMobile };
 })();

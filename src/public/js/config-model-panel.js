@@ -12,7 +12,67 @@ window.ModelConfigPanel = (function () {
   var nextId = 1;
   var defaultIndex = 0;
   var selectedIndex = 0;
+  var mobileExpanded = false;
   var autoSaveDefaultTimer = null;
+
+  function isMobile() {
+    return window.innerWidth <= 720;
+  }
+
+  function isListItemActive(idx) {
+    if (isMobile()) return mobileExpanded && idx === selectedIndex;
+    return idx === selectedIndex;
+  }
+
+  function getDetailElForIndex(index) {
+    if (isMobile()) {
+      var inlineItems = container.querySelectorAll('.config-list-item-detail');
+      for (var i = 0; i < inlineItems.length; i++) {
+        if (parseInt(inlineItems[i].getAttribute('data-index'), 10) === index) {
+          return inlineItems[i];
+        }
+      }
+      return null;
+    }
+    if (index === selectedIndex) {
+      return container.querySelector('#model-detail');
+    }
+    return null;
+  }
+
+  function getActiveDetailEl() {
+    return getDetailElForIndex(selectedIndex);
+  }
+
+  function collapseMobile() {
+    if (!isMobile() || !mobileExpanded) return;
+    syncFormToProvider(selectedIndex);
+    mobileExpanded = false;
+    renderAll();
+  }
+
+  function handleListItemClick(idx) {
+    if (!isMobile()) {
+      if (idx !== selectedIndex) {
+        syncFormToProvider(selectedIndex);
+        selectedIndex = idx;
+        renderAll();
+      }
+      return;
+    }
+    if (mobileExpanded && idx === selectedIndex) {
+      syncFormToProvider(selectedIndex);
+      mobileExpanded = false;
+      renderAll();
+      return;
+    }
+    if (idx !== selectedIndex) {
+      syncFormToProvider(selectedIndex);
+    }
+    selectedIndex = idx;
+    mobileExpanded = true;
+    renderAll();
+  }
 
   var CARD_THEMES = [
     'theme-0', 'theme-1', 'theme-2', 'theme-3', 'theme-4',
@@ -167,7 +227,7 @@ window.ModelConfigPanel = (function () {
   }
 
   function syncFormToProvider(index) {
-    var detailEl = container.querySelector('#model-detail');
+    var detailEl = getDetailElForIndex(index);
     if (!detailEl || !providers[index]) return;
     var prov = providers[index];
     var apiUrl = detailEl.querySelector('[data-field="apiUrl"]');
@@ -198,7 +258,7 @@ window.ModelConfigPanel = (function () {
         var prov = providers[idx];
         var btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'config-list-item' + (idx === selectedIndex ? ' is-active' : '');
+        btn.className = 'config-list-item' + (isListItemActive(idx) ? ' is-active' : '');
         var isDefaultItem = idx === defaultIndex;
         btn.innerHTML =
           '<div class="config-list-item-head">' +
@@ -206,34 +266,32 @@ window.ModelConfigPanel = (function () {
             (isDefaultItem ? '<span class="config-badge is-default">默认</span>' : '') +
           '</div>' +
           '<div class="config-list-item-sub">' + escapeHtml(providerSubtitle(prov)) + '</div>';
-        btn.addEventListener('click', function () {
-          if (idx !== selectedIndex) {
-            syncFormToProvider(selectedIndex);
-            selectedIndex = idx;
-            renderAll();
-          }
+        btn.addEventListener('click', function (e) {
+          if (e.target.closest('.config-list-item-detail')) return;
+          e.stopPropagation();
+          handleListItemClick(idx);
         });
+        if (isMobile() && mobileExpanded && idx === selectedIndex) {
+          btn.classList.add('is-expanded');
+          var detailDiv = document.createElement('div');
+          detailDiv.className = 'config-list-item-detail';
+          detailDiv.setAttribute('data-index', String(idx));
+          detailDiv.innerHTML = buildModelDetailHtml(idx);
+          btn.appendChild(detailDiv);
+          bindModelDetailEvents(detailDiv, idx);
+        }
         listEl.appendChild(btn);
       })(i);
     }
   }
 
-  function renderDetail() {
-    var detailEl = container.querySelector('#model-detail');
-    if (!detailEl) return;
-
-    if (!providers.length) {
-      detailEl.innerHTML = '<div class="config-detail-placeholder">点击左侧「+ 添加」创建模型提供者。</div>';
-      return;
-    }
-
-    if (selectedIndex >= providers.length) selectedIndex = providers.length - 1;
-    var prov = providers[selectedIndex];
-    var index = selectedIndex;
+  function buildModelDetailHtml(index) {
+    if (index >= providers.length) index = providers.length - 1;
+    var prov = providers[index];
     var isDefault = index === defaultIndex;
     var displayName = providerDisplayName(prov);
 
-    detailEl.innerHTML =
+    return (
       '<div class="config-detail-header">' +
         '<div class="config-detail-title-row">' +
           '<h2 class="config-detail-title">' + escapeHtml(displayName) + '</h2>' +
@@ -245,30 +303,30 @@ window.ModelConfigPanel = (function () {
       '</div>' +
       '<div class="form-grid model-detail-form">' +
         '<div class="form-group full-width">' +
-          '<label for="model-apiUrl">API 地址</label>' +
-          '<input type="url" id="model-apiUrl" data-field="apiUrl" placeholder="https://api.openai.com/v1" value="' + escapeAttr(prov.apiUrl || '') + '">' +
+          '<label for="model-apiUrl-' + index + '">API 地址</label>' +
+          '<input type="url" id="model-apiUrl-' + index + '" data-field="apiUrl" placeholder="https://api.openai.com/v1" value="' + escapeAttr(prov.apiUrl || '') + '">' +
           '<span class="error-msg" data-error="apiUrl"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-apiKey">API 密钥</label>' +
-          '<input type="password" id="model-apiKey" data-field="apiKey" placeholder="sk-..." value="' + escapeAttr(prov.apiKey || '') + '">' +
+          '<label for="model-apiKey-' + index + '">API 密钥</label>' +
+          '<input type="password" id="model-apiKey-' + index + '" data-field="apiKey" placeholder="sk-..." value="' + escapeAttr(prov.apiKey || '') + '">' +
           '<span class="error-msg" data-error="apiKey"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-modelName">模型名称</label>' +
-          '<input type="text" id="model-modelName" data-field="modelName" placeholder="例如 gpt-4o、deepseek-chat" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<label for="model-modelName-' + index + '">模型名称</label>' +
+          '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o、deepseek-chat" value="' + escapeAttr(prov.modelName || '') + '">' +
           '<span class="error-msg" data-error="modelName"></span>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-temperature">温度</label>' +
+          '<label for="model-temperature-' + index + '">温度</label>' +
           '<div class="slider-group">' +
-            '<input type="range" id="model-temperature" data-field="temperature" min="0" max="2" step="0.1" value="' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '">' +
+            '<input type="range" id="model-temperature-' + index + '" data-field="temperature" min="0" max="2" step="0.1" value="' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '">' +
             '<span class="slider-value" data-value="temperature">' + (prov.parameters && prov.parameters.temperature != null ? prov.parameters.temperature : 1) + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="form-group">' +
-          '<label for="model-maxContextTokens">上下文上限（Token）</label>' +
-          '<input type="number" id="model-maxContextTokens" data-field="maxContextTokens" placeholder="例如 131072" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
+          '<label for="model-maxContextTokens-' + index + '">上下文上限（Token）</label>' +
+          '<input type="number" id="model-maxContextTokens-' + index + '" data-field="maxContextTokens" placeholder="例如 131072" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
         '</div>' +
       '</div>' +
       '<div class="config-detail-toolbar">' +
@@ -281,8 +339,11 @@ window.ModelConfigPanel = (function () {
           '</span>' +
         '</label>' +
         '<button type="button" class="skills-btn skills-btn-primary" id="model-btn-save">保存配置</button>' +
-      '</div>';
+      '</div>'
+    );
+  }
 
+  function bindModelDetailEvents(detailEl, index) {
     var slider = detailEl.querySelector('[data-field="temperature"]');
     var sliderVal = detailEl.querySelector('[data-value="temperature"]');
     if (slider && sliderVal) {
@@ -304,9 +365,30 @@ window.ModelConfigPanel = (function () {
       });
     }
 
-    detailEl.querySelector('#model-btn-delete').addEventListener('click', handleDelete);
+    var deleteBtn = detailEl.querySelector('#model-btn-delete');
+    if (deleteBtn) deleteBtn.addEventListener('click', handleDelete);
 
-    detailEl.querySelector('#model-btn-save').addEventListener('click', handleSave);
+    var saveBtn = detailEl.querySelector('#model-btn-save');
+    if (saveBtn) saveBtn.addEventListener('click', handleSave);
+  }
+
+  function renderDetail() {
+    var detailEl = container.querySelector('#model-detail');
+    if (!detailEl) return;
+
+    if (isMobile()) {
+      detailEl.innerHTML = '';
+      return;
+    }
+
+    if (!providers.length) {
+      detailEl.innerHTML = '<div class="config-detail-placeholder">点击左侧「+ 添加」创建模型提供者。</div>';
+      return;
+    }
+
+    if (selectedIndex >= providers.length) selectedIndex = providers.length - 1;
+    detailEl.innerHTML = buildModelDetailHtml(selectedIndex);
+    bindModelDetailEvents(detailEl, selectedIndex);
   }
 
   function renderAll() {
@@ -443,7 +525,7 @@ window.ModelConfigPanel = (function () {
 
   function handleSave() {
     var data = collectFormData();
-    var detailEl = container.querySelector('#model-detail');
+    var detailEl = getActiveDetailEl();
     clearFieldErrors(detailEl);
     var errors = validateProvider(data[selectedIndex]);
     var hasErrors = Object.keys(errors).length > 0;
@@ -503,6 +585,7 @@ window.ModelConfigPanel = (function () {
       supportsVision: true
     });
     selectedIndex = providers.length - 1;
+    if (isMobile()) mobileExpanded = true;
     renderAll();
   }
 
@@ -563,9 +646,10 @@ window.ModelConfigPanel = (function () {
         });
       }
       selectedIndex = defaultIndex;
+      mobileExpanded = !isMobile();
       renderAll();
     });
   }
 
-  return { render: render };
+  return { render: render, collapseMobile: collapseMobile };
 })();

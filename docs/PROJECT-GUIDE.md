@@ -630,6 +630,30 @@ See [`docs/nextWork.md`](./nextWork.md) for the next implementation steps.
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
 
+### UI screenshots
+
+Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界面预览](../README.zh-CN.md#界面预览).
+
+**Desktop**
+
+![Work chat](./assets/desktop-work-chat.png)
+
+![Memory graph](./assets/desktop-memory-graph.png)
+
+![Skills library](./assets/desktop-skills.png)
+
+![MCP settings](./assets/desktop-config-mcp.png)
+
+![Remote QR (~scan)](./assets/desktop-remote-scan.png)
+
+**Mobile H5**
+
+![Mobile work chat](./assets/mobile-work-chat.png)
+
+![Mobile skills](./assets/mobile-skills.png)
+
+![Mobile MCP settings](./assets/mobile-config-mcp.png)
+
 ### Ice Bean (session pet / Web indicator)
 
 The **chat page** embeds **Ice Bean** (display name **冰豆**, `SESSION_PET_DISPLAY_NAME`): a Canvas-based indicator mapping Harness runtime state to **expressions, bubbles, and a token ring** — decoupled from backend logic.

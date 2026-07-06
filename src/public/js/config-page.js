@@ -10,6 +10,28 @@ window.SettingsPage = (function () {
   var container = null;
   var activeTab = 'general';
 
+  function isMobileViewport() {
+    return window.innerWidth <= 720;
+  }
+
+  function bindMobileBlankDismiss(rootEl) {
+    if (!rootEl || rootEl._configMobileBlankBound) return;
+    rootEl._configMobileBlankBound = true;
+    rootEl.addEventListener('click', function (e) {
+      if (!isMobileViewport()) return;
+      if (e.target.closest('.config-list-item')) return;
+      if (e.target.closest('.config-detail-panel')) return;
+      if (e.target.closest('.config-list-panel-head')) return;
+      if (e.target.closest('.chat-sidebar-new-btn')) return;
+      if (window.ModelConfigPanel && typeof window.ModelConfigPanel.collapseMobile === 'function') {
+        window.ModelConfigPanel.collapseMobile();
+      }
+      if (window.McpConfigPanel && typeof window.McpConfigPanel.collapseMobile === 'function') {
+        window.McpConfigPanel.collapseMobile();
+      }
+    });
+  }
+
   function renderGeneralPanel(parentEl) {
     var shell = window.AppShell;
     var theme = (shell && typeof shell.getTheme === 'function') ? shell.getTheme() : 'dark';
@@ -108,6 +130,7 @@ window.SettingsPage = (function () {
       '</div>';
 
     container = parentEl.querySelector('.config-center') || parentEl;
+    bindMobileBlankDismiss(container);
 
     var tabs = parentEl.querySelectorAll('.config-tab');
     for (var i = 0; i < tabs.length; i++) {
