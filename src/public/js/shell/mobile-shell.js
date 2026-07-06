@@ -28,7 +28,7 @@ window.MobileShell = (function () {
     { page: 'work', label: '工作', path: '/m/chat' },
     { page: 'mMemory', label: '记忆', path: '/m/memory' },
     { page: 'mSkills', label: '技能', path: '/m/skills' },
-    { page: 'mConfig', label: '配置', path: '/m/config' },
+    { page: 'mConfig', label: '设置', path: '/m/config' },
   ];
 
   var THEME_BTN_HTML =
@@ -254,7 +254,7 @@ window.MobileShell = (function () {
       center.innerHTML = '<span class="mobile-top-bar-title">技能</span>' + getConnectionDot();
       right.innerHTML = THEME_BTN_HTML;
     } else if (mode === 'config') {
-      center.innerHTML = '<span class="mobile-top-bar-title">配置</span>' + getConnectionDot();
+      center.innerHTML = '<span class="mobile-top-bar-title">设置</span>' + getConnectionDot();
       right.innerHTML = THEME_BTN_HTML;
     }
 

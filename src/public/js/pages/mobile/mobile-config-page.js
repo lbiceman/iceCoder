@@ -21,7 +21,7 @@ window.MobileConfigPage = (function () {
       if (window.ConfigPage && typeof window.ConfigPage.render === 'function') {
         window.ConfigPage.render(parentEl);
       } else {
-        parentEl.innerHTML = '<div class="mobile-page-placeholder">配置页加载失败</div>';
+        parentEl.innerHTML = '<div class="mobile-page-placeholder">设置页加载失败</div>';
       }
     }
   }

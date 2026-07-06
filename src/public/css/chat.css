@@ -2348,7 +2348,7 @@
   background: rgba(239, 68, 68, 0.12);
 }
 
-/* === Sidebar Footer: 控制按钮行（监管模式 / 主题 / 连接状态） === */
+/* === Sidebar Footer: 控制按钮行（监管模式 / 设置 / 连接状态） === */
 .chat-sidebar-footer {
   flex-shrink: 0;
   display: flex;
@@ -2419,13 +2419,15 @@
   white-space: nowrap;
 }
 
-/* 主题图标：根据 data-theme 切换显隐 */
-.chat-sidebar-theme-btn {
+/* 设置按钮 */
+.chat-sidebar-settings-btn {
   border: 1px solid var(--border-color);
 }
-.chat-sidebar-theme-btn .chat-sidebar-theme-icon-light { display: none; }
-.chat-sidebar-theme-btn[data-theme="light"] .chat-sidebar-theme-icon-dark { display: none; }
-.chat-sidebar-theme-btn[data-theme="light"] .chat-sidebar-theme-icon-light { display: inline-block; }
+.chat-sidebar-settings-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-light);
+}
 
 /* 连接状态配色 */
 .chat-sidebar-connection[data-state="connected"] {
