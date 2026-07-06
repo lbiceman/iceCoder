@@ -79,12 +79,6 @@ window.ChatSessionSidebar = (function () {
           '</span>' +
           '<span class="chat-sidebar-nav-btn-label">技能</span>' +
         '</button>' +
-        '<button class="chat-sidebar-nav-btn" data-page="config" role="tab" aria-selected="false">' +
-          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
-            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
-          '</span>' +
-          '<span class="chat-sidebar-nav-btn-label">配置</span>' +
-        '</button>' +
       '</nav>' +
       '<div class="chat-sidebar-header">' +
         '<div class="chat-sidebar-header-top">' +
@@ -97,12 +91,11 @@ window.ChatSessionSidebar = (function () {
       '</div>' +
       '<div class="chat-sidebar-list"></div>' +
       '<div class="chat-sidebar-footer">' +
-      '<button class="chat-sidebar-control chat-sidebar-theme-btn" type="button" data-theme="dark" title="切换主题">' +
+      '<button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置">' +
         '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
-          '<svg class="chat-sidebar-theme-icon-dark" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>' +
-          '<svg class="chat-sidebar-theme-icon-light" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
+          '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
         '</span>' +
-        '<span class="chat-sidebar-control-label">主题</span>' +
+        '<span class="chat-sidebar-control-label">设置</span>' +
       '</button>' +
         '<button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式">' +
           '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
@@ -153,8 +146,17 @@ window.ChatSessionSidebar = (function () {
 
   function getRouteFromHash() {
     var h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
-    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'config') return h;
+    if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'settings' || h === 'config') return h === 'config' ? 'settings' : h;
     return 'chat';
+  }
+
+  function syncSidebarSettingsActive() {
+    if (!sidebar) return;
+    var btn = sidebar.querySelector('.chat-sidebar-settings-btn');
+    if (!btn) return;
+    var onSettings = getRouteFromHash() === 'settings';
+    btn.classList.toggle('is-active', onSettings);
+    btn.setAttribute('aria-current', onSettings ? 'page' : 'false');
   }
 
   function syncSidebarNavActive() {
@@ -168,6 +170,7 @@ window.ChatSessionSidebar = (function () {
       btn.classList.toggle('is-active', on);
       btn.setAttribute('aria-selected', on ? 'true' : 'false');
     }
+    syncSidebarSettingsActive();
   }
 
   function bindEvents() {
@@ -217,16 +220,6 @@ window.ChatSessionSidebar = (function () {
     btn.title = '监管模式：' + label + '（点击切换）';
   }
 
-  function syncShellTheme() {
-    if (!sidebar) return;
-    var shell = window.AppShell;
-    var btn = sidebar.querySelector('.chat-sidebar-theme-btn');
-    if (!btn) return;
-    var theme = (shell && typeof shell.getTheme === 'function') ? shell.getTheme() : 'dark';
-    btn.setAttribute('data-theme', theme);
-    btn.title = theme === 'dark' ? '当前：深色模式，点击切换为浅色' : '当前：浅色模式，点击切换为深色';
-  }
-
   function syncShellConnection(state) {
     if (!sidebar) return;
     var el = sidebar.querySelector('.chat-sidebar-connection');
@@ -242,8 +235,8 @@ window.ChatSessionSidebar = (function () {
   function bindShellControls() {
     var shell = window.AppShell;
     syncShellMode();
-    syncShellTheme();
     syncShellConnection();
+    syncSidebarSettingsActive();
 
     var modeBtn = sidebar.querySelector('.chat-sidebar-mode-btn');
     if (modeBtn) {
@@ -253,21 +246,20 @@ window.ChatSessionSidebar = (function () {
       });
     }
 
-    var themeBtn = sidebar.querySelector('.chat-sidebar-theme-btn');
-    if (themeBtn) {
-      themeBtn.addEventListener('click', function () {
-        if (!shell || typeof shell.toggleTheme !== 'function') return;
-        shell.toggleTheme();
-        syncShellTheme();
+    var settingsBtn = sidebar.querySelector('.chat-sidebar-settings-btn');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', function () {
+        if (window.location.hash !== '#/settings') {
+          window.location.hash = '#/settings';
+        } else {
+          window.dispatchEvent(new HashChangeEvent('hashchange'));
+        }
       });
     }
 
     if (shell) {
       if (typeof shell.addSupervisorModeListener === 'function') {
         shell.addSupervisorModeListener(function () { syncShellMode(); });
-      }
-      if (typeof shell.addThemeChangeListener === 'function') {
-        shell.addThemeChangeListener(function () { syncShellTheme(); });
       }
       if (typeof shell.addConnectionChangeListener === 'function') {
         shell.addConnectionChangeListener(function (state) { syncShellConnection(state); });

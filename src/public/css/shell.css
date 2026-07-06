@@ -41,6 +41,7 @@
 
 .page-root > .chat-page,
 .page-root > .config-center,
+.page-root > .settings-center,
 .page-root > .config-page,
 .page-root > .memory-root {
   flex: 1;

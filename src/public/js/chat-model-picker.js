@@ -107,7 +107,7 @@ window.ChatModelPicker = (function () {
     Promise.resolve(ensure).then(function () {
       var items = buildItems();
       if (!items.length) {
-        Notification.info('暂无可用模型，请先在「配置」页添加。');
+        Notification.info('暂无可用模型，请先在「设置」页添加。');
         return;
       }
       // 如果在 await 期间用户已经切换到别的会话、或 dropdown 被关掉了，直接放弃

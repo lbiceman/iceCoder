@@ -143,7 +143,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   if (ctx.needsSetup) {
     if (!noServe) {
       warn('首次使用：请在浏览器中完成模型配置');
-      console.log(`  ${c.cyan}http://127.0.0.1:${port}/#/config${c.reset}`);
+      console.log(`  ${c.cyan}http://127.0.0.1:${port}/#/settings${c.reset}`);
       return;
     }
     error('请先完成模型配置后再使用终端对话');

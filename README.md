@@ -6,7 +6,47 @@
 
 ## Preview
 
-![IceCoder Web UI — sidebar, welcome dashboard, mode / memory / Harness / L2·Gate status, and composer](./docs/assets/web-ui.png)
+### Desktop
+
+**Work / chat** — multi-session sidebar, tool execution trail, Ice Bean indicator, `#` / `@` composer:
+
+![Desktop — work chat: Unity session, tool calls, and Ice Bean](./docs/assets/desktop-work-chat.png)
+
+**Memory map** — tag filters + force-directed graph; click nodes for details:
+
+![Desktop — memory graph: tag filters and node relationships](./docs/assets/desktop-memory-graph.png)
+
+**Skills** — list + Markdown preview; type `#` in chat to attach:
+
+![Desktop — skills library: list, preview, and “Use skill”](./docs/assets/desktop-skills.png)
+
+**Settings · MCP** — manage MCP servers, start/stop, tool list, JSON config:
+
+![Desktop — MCP settings: server list and browsermcp detail](./docs/assets/desktop-config-mcp.png)
+
+**Remote via QR (`~scan`)** — phone and PC share the **same session id** (same LAN):
+
+![Desktop — ~scan remote control: QR code and session URL](./docs/assets/desktop-remote-scan.png)
+
+Welcome dashboard (mode / Memory / Harness / L2·Gate):
+
+![Desktop — welcome dashboard and sidebar status panel](./docs/assets/web-ui.png)
+
+### Mobile H5
+
+Same bundle as desktop; routes `#/m/*`; bottom tabs: Work / Memory / Skills / Settings.
+
+**Work** — chat detail, model picker, token stats:
+
+![Mobile — work chat](./docs/assets/mobile-work-chat.png)
+
+**Skills** — card list with delete and “Use skill”:
+
+![Mobile — skills page](./docs/assets/mobile-skills.png)
+
+**Settings · MCP** — same MCP management as desktop:
+
+![Mobile — MCP settings](./docs/assets/mobile-config-mcp.png)
 
 ---
 

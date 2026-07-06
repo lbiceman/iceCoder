@@ -85,7 +85,7 @@ async function main(): Promise<void> {
     console.log(`
 ${c.bold}下一步：${c.reset}
   1. 运行 ${c.green}iceCoder web${c.reset} 或 ${c.green}iceCoder start${c.reset}
-  2. 在浏览器打开 ${c.cyan}http://127.0.0.1:${resolveDefaultApiPort()}/#/config${c.reset}
+  2. 在浏览器打开 ${c.cyan}http://127.0.0.1:${resolveDefaultApiPort()}/#/settings${c.reset}
   3. 填写 API Key 并保存
 `);
     process.exit(1);

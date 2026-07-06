@@ -6,7 +6,47 @@
 
 ## 界面预览
 
-![IceCoder Web 界面 — 侧栏会话、欢迎页状态面板（模式 / Memory / Harness / L2·Gate）与输入区](./docs/assets/web-ui.png)
+### 桌面端
+
+**工作 / 聊天** — 侧栏多会话、工具执行记录、冰豆状态指示与 `#` / `@` 输入区：
+
+![桌面端 — 工作聊天页：Unity 项目会话、工具调用记录与冰豆](./docs/assets/desktop-work-chat.png)
+
+**记忆图谱** — 标签筛选 + 力导向关系图，点击节点查看详情：
+
+![桌面端 — 记忆图谱：标签筛选与节点关系可视化](./docs/assets/desktop-memory-graph.png)
+
+**技能库** — 列表 + Markdown 预览，输入 `#` 可快速挂载：
+
+![桌面端 — 技能库：列表、正文预览与「使用技能」](./docs/assets/desktop-skills.png)
+
+**设置 · MCP** — 管理 MCP 服务器、启动/停止、查看工具列表与 JSON 配置：
+
+![桌面端 — 设置页 MCP 配置：服务器列表与 browsermcp 详情](./docs/assets/desktop-config-mcp.png)
+
+**手机扫码远程** — `~scan` 生成二维码，手机与 PC **同一会话**同步（需同一局域网）：
+
+![桌面端 — ~scan 远程控制：二维码与同会话 URL](./docs/assets/desktop-remote-scan.png)
+
+欢迎页状态面板（模式 / Memory / Harness / L2·Gate）：
+
+![桌面端 — 欢迎页与侧栏状态面板](./docs/assets/web-ui.png)
+
+### 移动端 H5
+
+与桌面共用同一 bundle，路由 `#/m/*`，底栏四 Tab（工作 / 记忆 / 技能 / 设置）：
+
+**工作** — 聊天详情、模型选择与 token 统计：
+
+![移动端 — 工作聊天页](./docs/assets/mobile-work-chat.png)
+
+**技能** — 卡片列表，支持删除与「使用技能」：
+
+![移动端 — 技能页](./docs/assets/mobile-skills.png)
+
+**设置 · MCP** — 与桌面相同的 MCP 管理能力：
+
+![移动端 — 设置页 MCP 配置](./docs/assets/mobile-config-mcp.png)
 
 ---
 

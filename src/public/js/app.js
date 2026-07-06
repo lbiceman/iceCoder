@@ -1,10 +1,10 @@
 /**
  * SPA 路由和主应用逻辑
- * 处理配置页面和聊天页面之间的 hash 路由
- * 包含主题切换（桌面默认暗色，移动端默认浅色）
+ * 处理设置页面和聊天页面之间的 hash 路由
+ * 包含主题切换（桌面默认暗色，移动端默认浅色；桌面侧栏入口在设置页）
  */
 
-/* global ConfigPage, ChatPage, MemoryPage, SkillsPage */
+/* global ConfigPage, SettingsPage, ChatPage, MemoryPage, SkillsPage */
 
 (function () {
   'use strict';
@@ -19,7 +19,7 @@
    */
   var pages = {
     chat: { shell: 'desktop', root: null, mounted: false },
-    config: { shell: 'desktop', root: null, mounted: false },
+    settings: { shell: 'desktop', root: null, mounted: false },
     memory: { shell: 'desktop', root: null, mounted: false },
     skills: { shell: 'desktop', root: null, mounted: false },
     work: { shell: 'mobile', root: null, mounted: false },
@@ -53,7 +53,7 @@
     if (!shell || !window.ChatSessionSidebar) return;
     window.ChatSessionSidebar.create(shell);
   }
-  // 顶栏元素已移入侧边栏（IceCoder logo / 监管模式 / 主题 / 连接状态），此处不再持有引用。
+  // 顶栏元素已移入侧边栏（IceCoder logo / 监管模式 / 设置 / 连接状态），此处不再持有引用。
 
   var SUPERVISOR_MODES = ['off', 'adaptive', 'strict'];
   var SUPERVISOR_LABELS = { off: '自由', adaptive: '自适应', strict: '严格' };
@@ -72,8 +72,8 @@
       } else {
         window.location.replace('#/m/config');
       }
-    } else if (route.shell === 'desktop' && route.page !== 'config') {
-      window.location.replace('#/config');
+    } else if (route.shell === 'desktop' && route.page !== 'settings') {
+      window.location.replace('#/settings');
     }
   }
 
@@ -214,6 +214,7 @@
 
   window.AppShell = {
     getTheme: getTheme,
+    setTheme: setTheme,
     toggleTheme: toggleTheme,
     getSupervisorMode: getSupervisorMode,
     getSupervisorLabel: getSupervisorLabel,
@@ -337,7 +338,8 @@
       if (rest.startsWith('/config')) return { shell: 'mobile', page: 'mConfig' };
       return { shell: 'mobile', page: 'work' };
     }
-    if (h.startsWith('#/config')) return { shell: 'desktop', page: 'config' };
+    if (h.startsWith('#/config')) return { shell: 'desktop', page: 'settings' };
+    if (h.startsWith('#/settings')) return { shell: 'desktop', page: 'settings' };
     if (h.startsWith('#/memory')) return { shell: 'desktop', page: 'memory' };
     if (h.startsWith('#/skills')) return { shell: 'desktop', page: 'skills' };
     return { shell: 'desktop', page: 'chat' };
@@ -388,15 +390,15 @@
   }
 
   function navigateDesktop(page) {
-    if (setupRequired && page !== 'config') {
-      page = 'config';
+    if (setupRequired && page !== 'settings') {
+      page = 'settings';
     }
     if (page === currentPage) return;
     var prev = currentPage;
     currentPage = page;
 
     var newHash = '#/chat';
-    if (page === 'config') newHash = '#/config';
+    if (page === 'settings') newHash = '#/settings';
     else if (page === 'memory') newHash = '#/memory';
     else if (page === 'skills') newHash = '#/skills';
 
@@ -426,7 +428,7 @@
       pages.skills.mounted = false;
     }
 
-    // 聊天页/配置页保持 keep-alive：不调用 destroy，子树仅切 display
+    // 聊天页/设置页保持 keep-alive：不调用 destroy，子树仅切 display
     renderPage(page);
   }
 
@@ -505,8 +507,8 @@
         }
         return;
       }
-      if (route.shell === 'desktop' && route.page !== 'config') {
-        window.location.replace('#/config');
+      if (route.shell === 'desktop' && route.page !== 'settings') {
+        window.location.replace('#/settings');
         return;
       }
     }
@@ -516,8 +518,11 @@
 
   function renderPage(page, sessionId) {
     var prevPage = document.body.dataset.page;
-    if (prevPage === 'config' && page !== 'config' && window.ConfigPage && typeof window.ConfigPage.onDeactivate === 'function') {
-      window.ConfigPage.onDeactivate();
+    if (prevPage === 'settings' && page !== 'settings') {
+      var leavingSettings = window.SettingsPage || window.ConfigPage;
+      if (leavingSettings && typeof leavingSettings.onDeactivate === 'function') {
+        leavingSettings.onDeactivate();
+      }
     }
     if (prevPage === 'mConfig' && page !== 'mConfig' && window.ConfigPage && typeof window.ConfigPage.onDeactivate === 'function') {
       window.ConfigPage.onDeactivate();
@@ -534,8 +539,9 @@
     root.style.display = '';
     var entry = pages[page];
     if (!entry.mounted) {
-      if (page === 'config') {
-        window.ConfigPage.render(root);
+      if (page === 'settings') {
+        var settingsPage = window.SettingsPage || window.ConfigPage;
+        if (settingsPage) settingsPage.render(root);
       } else if (page === 'memory' && window.MemoryPage) {
         window.MemoryPage.render(root);
       } else if (page === 'skills' && window.SkillsPage) {
@@ -659,7 +665,7 @@
               : parseRoute('#/m/config')
           );
         } else {
-          handleRouteChange(parseRoute('#/config'));
+          handleRouteChange(parseRoute('#/settings'));
         }
       } else {
         handleRouteChange(resolveEntryRoute());
