@@ -45,6 +45,25 @@ function parseClientMessageId(raw: unknown): string | null {
   const id = raw.trim();
   return CLIENT_MESSAGE_ID_RE.test(id) ? id : null;
 }
+
+function normalizeReferencePath(raw: string): string {
+  return path.win32.normalize(raw.trim().replace(/\//g, '\\')).toLowerCase();
+}
+
+/** @ 文件引用会作为独立路径行进入展示文本；工作区锁定时必须忽略这些引用行。 */
+function stripReferencePathLinesForWorkspaceLock(message: string, referencePaths: string[]): string {
+  if (!referencePaths.length) return message;
+  const refs = new Set(referencePaths.map(normalizeReferencePath));
+  return message
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      return !refs.has(normalizeReferencePath(trimmed));
+    })
+    .join('\n')
+    .trim();
+}
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
 import type { AssembledPrompt } from '../prompts/types.js';
 import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
@@ -359,6 +378,7 @@ const sessionProcessing = new Set<string>();
 interface PendingChatMessage {
   content: string;
   images: string[];
+  referencePaths: string[];
   messageId?: string;
   ws: WebSocket;
 }
@@ -1187,6 +1207,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             toolRegistry,
             toolExecutor,
             current.images,
+            current.referencePaths,
             current.messageId ?? null,
             mcpManager,
             runSid,
@@ -1529,6 +1550,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           const incoming: PendingChatMessage = {
             content: msg.content || '',
             images: Array.isArray(msg.images) ? msg.images : [],
+            referencePaths: Array.isArray(msg.referencePaths)
+              ? msg.referencePaths.filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0)
+              : [],
             messageId: parseClientMessageId(msg.messageId) ?? undefined,
             ws,
           };
@@ -1562,6 +1586,7 @@ async function handleChatMessage(
   toolRegistry: ToolRegistry,
   toolExecutor: ToolExecutor,
   inlineImages: string[] = [],
+  referencePaths: string[] = [],
   clientMessageId: string | null = null,
   mcpManager?: MCPManager,
   runSessionId: string = activeSessionId,
@@ -1594,12 +1619,16 @@ async function handleChatMessage(
   const persistedUploads = await persistUploadedImageFiles(imageUrls, runSessionId);
   const allPersistedImages = [...persistedInline, ...persistedUploads];
   const imageAbsolutePaths = allPersistedImages.map((p) => p.absolutePath);
+  const explicitReferencePaths = referencePaths
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const referenceReadPaths = [...explicitReferencePaths, ...imageAbsolutePaths];
 
-  if (imageAbsolutePaths.length > 0) {
+  if (referenceReadPaths.length > 0) {
     await addSessionReferenceReads({
       sessionDir: SESSIONS_DIR,
       sessionId: runSessionId,
-      paths: imageAbsolutePaths,
+      paths: referenceReadPaths,
     });
   }
 
@@ -1738,9 +1767,7 @@ async function handleChatMessage(
   const verificationExemptDirs = await readVerificationExemptDirsFromMainConfig(MAIN_CONFIG_PATH);
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
-  const workspaceMessage = typeof harnessUserMessage === 'string'
-    ? harnessUserMessage
-    : resolvedMessage;
+  const workspaceMessage = stripReferencePathLinesForWorkspaceLock(message, explicitReferencePaths);
   const wsCtx = await resolveWorkspaceToolContext({
     sessionDir: SESSIONS_DIR,
     sessionId: runSessionId,
