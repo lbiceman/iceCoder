@@ -77,6 +77,30 @@ export async function readSkipPermissionChecksFromMainConfig(
   return resolveSkipPermissionChecks(config.skipPermissionChecks);
 }
 
+export async function writeSkipPermissionChecksToMainConfig(
+  configPath: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const skipPermissionChecks = resolveSkipPermissionChecks(enabled);
+  const config = await readMainConfigFile(configPath);
+  config.skipPermissionChecks = skipPermissionChecks;
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+  return skipPermissionChecks;
+}
+
+export async function writeShellBlacklistToMainConfig(
+  configPath: string,
+  patterns: string[],
+): Promise<string[]> {
+  const shellBlacklist = patterns
+    .map(item => item.trim())
+    .filter(item => item.length > 0);
+  const config = await readMainConfigFile(configPath);
+  config.shellBlacklist = shellBlacklist;
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+  return shellBlacklist;
+}
+
 function isMissingFile(error: unknown): boolean {
   return !!error
     && typeof error === 'object'

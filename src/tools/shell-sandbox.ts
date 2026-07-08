@@ -66,6 +66,20 @@ export function resolveShellBlacklistPatterns(value: unknown): string[] {
   return strings.length > 0 ? strings : [...DEFAULT_SHELL_BLACKLIST_PATTERNS];
 }
 
+/** 校验 shell 黑名单正则；首个无效项返回错误文案，全部合法返回 null。 */
+export function validateShellBlacklistPatterns(patterns: string[]): string | null {
+  for (const pattern of patterns) {
+    const trimmed = pattern.trim();
+    if (!trimmed) continue;
+    try {
+      new RegExp(trimmed, 'i');
+    } catch {
+      return `无效的正则表达式：${trimmed}`;
+    }
+  }
+  return null;
+}
+
 export function readShellBlacklistPatternsSync(
   configPath: string = resolveMainConfigPath(),
 ): RegExp[] {

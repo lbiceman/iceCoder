@@ -11,8 +11,15 @@ import {
   normalizeSupervisorMode,
   readMainConfigFile,
   resolveSkipPermissionChecks,
+  writeShellBlacklistToMainConfig,
+  writeSkipPermissionChecksToMainConfig,
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
+import {
+  DEFAULT_SHELL_BLACKLIST_PATTERNS,
+  resetShellBlacklistCache,
+  validateShellBlacklistPatterns,
+} from '../../tools/shell-sandbox.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
 import { isAppConfigReady, isPlaceholderApiKey } from '../../config/config-readiness.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
@@ -246,7 +253,10 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         providers: maskedProviders,
         supervisorMode: normalizeSupervisorMode(config.supervisorMode),
         skipPermissionChecks: resolveSkipPermissionChecks(config.skipPermissionChecks),
-        ...(config.shellBlacklist !== undefined ? { shellBlacklist: config.shellBlacklist } : {}),
+        shellBlacklist: config.shellBlacklist !== undefined
+          ? config.shellBlacklist
+          : [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
+        shellBlacklistIsDefault: config.shellBlacklist === undefined,
         setupRequired: !isAppConfigReady(config),
       });
     } catch (err) {
@@ -255,6 +265,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           providers: [],
           supervisorMode: DEFAULT_MAIN_CONFIG_SUPERVISOR_MODE,
           skipPermissionChecks: false,
+          shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
+          shellBlacklistIsDefault: true,
           setupRequired: true,
         });
         return;
@@ -286,6 +298,60 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `更新监管模式失败：${message}` });
     }
+  });
+
+  /**
+   * PATCH /api/config/skip-permission-checks — 切换是否跳过工具权限确认。
+   */
+  router.patch('/skip-permission-checks', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { skipPermissionChecks?: unknown })?.skipPermissionChecks;
+      if (typeof raw !== 'boolean') {
+        res.status(400).json({ error: 'skipPermissionChecks 须为 boolean' });
+        return;
+      }
+      const saved = await writeSkipPermissionChecksToMainConfig(configFile, raw);
+      res.json({ success: true, skipPermissionChecks: saved });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新权限确认设置失败：${message}` });
+    }
+  });
+
+  /**
+   * PATCH /api/config/shell-blacklist — 更新 Shell 命令黑名单（正则数组）。
+   */
+  router.patch('/shell-blacklist', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { shellBlacklist?: unknown })?.shellBlacklist;
+      if (!Array.isArray(raw)) {
+        res.status(400).json({ error: 'shellBlacklist 须为字符串数组' });
+        return;
+      }
+      if (raw.some(item => typeof item !== 'string')) {
+        res.status(400).json({ error: 'shellBlacklist 数组元素须均为字符串' });
+        return;
+      }
+      const patterns = raw.map(item => item.trim()).filter(item => item.length > 0);
+      const validationError = validateShellBlacklistPatterns(patterns);
+      if (validationError) {
+        res.status(400).json({ error: validationError });
+        return;
+      }
+      const saved = await writeShellBlacklistToMainConfig(configFile, patterns);
+      resetShellBlacklistCache();
+      res.json({ success: true, shellBlacklist: saved });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新 Shell 黑名单失败：${message}` });
+    }
+  });
+
+  /**
+   * GET /api/config/shell-blacklist-defaults — 返回内置默认 Shell 黑名单。
+   */
+  router.get('/shell-blacklist-defaults', (_req: Request, res: Response): void => {
+    res.json({ shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS] });
   });
 
   return router;

@@ -265,6 +265,11 @@ window.ChatStaircaseNav = (function () {
     onScroll();
   }
 
+  function setMessagesNavGutter(active) {
+    if (!elMessages) return;
+    elMessages.classList.toggle('has-staircase-nav', !!active);
+  }
+
   function refresh() {
     if (!elNav) return;
 
@@ -273,11 +278,13 @@ window.ChatStaircaseNav = (function () {
 
     if (messages.length <= MESSAGE_THRESHOLD || userTurnsCache.length === 0) {
       elNav.classList.add('hidden');
+      setMessagesNavGutter(false);
       closePopover();
       return;
     }
 
     elNav.classList.remove('hidden');
+    setMessagesNavGutter(true);
     renderLines();
     renderPopoverList();
     updateActiveHighlight();
