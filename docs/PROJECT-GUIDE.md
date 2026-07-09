@@ -30,7 +30,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
 | **Shell dual-track** | `run_command` runtime classifier: long jobs → background, short → foreground with soft-timeout escalate |
 | **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
-| **Eval** | `npm run eval:agent` is still a metric skeleton (no full scoring runner yet) |
+| **Eval** | `npm run eval:agent` — Agent behavior regression (7 fixed cases, temp sandbox, Harness pass/fail); TaskGraph metrics via `scripts/eval-runner.ts` |
 
 Verification:
 
@@ -593,15 +593,21 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 
 ## Runtime evaluation (eval harness)
 
-A minimal eval skeleton exists (script name `eval:agent` is legacy):
+**Agent Eval Runner** (`npm run eval:agent`, `scripts/agent-eval.ts`):
 
 ```bash
-npm run eval:agent
+npm run eval:agent                              # default real — configured LLM required
+npm run eval:agent -- --mode=mock               # no-API smoke
+npm run eval:agent -- --case=single-file-edit
+npm run eval:agent -- --format=markdown --keep-workspaces
 ```
 
-It currently defines the metric names and baseline case categories. It is not yet a full scoring runner.
+- Case definitions: `scripts/agent-eval-cases.ts` (7 fixed scenarios).
+- Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, rule-based scoring.
+- History: `data/eval/agent-eval-history.jsonl`.
+- Non-zero exit when any case fails or P0 metrics regress.
 
-Target metrics:
+Metrics per case and aggregate:
 
 - task_success_rate
 - tool_call_rate
@@ -613,7 +619,9 @@ Target metrics:
 - tokens_per_successful_task
 - compaction_saved_tokens
 
-See [`docs/nextWork.md`](./nextWork.md) for the next implementation steps.
+**TaskGraph eval** (separate): `npx tsx scripts/eval-runner.ts` — graph completion / node scores from benchmark fixtures.
+
+Remaining eval work (CI gate, trend dashboards): [`docs/nextWork.md`](./nextWork.md) §3–§4.
 
 ---
 
@@ -827,7 +835,7 @@ The remaining work is tracked in [`docs/nextWork.md`](./nextWork.md). Representa
 
 1. Memory v2 structured levels and conflict arbitration
 2. Deeper compaction / session-notes integration (token accounting, tighter recovery budgets) — `icecoder-runtime` snapshots already exist
-3. A real eval runner with pass/fail scoring (`scripts/eval-runner.ts` exists; `npm run eval:agent` is still a skeleton)
+3. Eval CI gate + telemetry trend integration (`npm run eval:agent` Agent runner done; `scripts/eval-runner.ts` for TaskGraph)
 4. Telemetry persistence for runtime metrics
 5. **Dual-mode supervisor** — core path wired; continue spec completion, telemetry, and edge cases per [`docs/双模方案2.md`](./双模方案2.md)
 6. Stronger adaptive planning beyond the intent-based tool planner (see TaskGraph requirement docs)

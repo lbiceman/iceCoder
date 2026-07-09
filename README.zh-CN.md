@@ -154,7 +154,7 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 **约 2,000+** 条 Vitest（`src/` 行覆盖约 **78%**；Harness **~84%**、Supervisor **~95%**、记忆 **~71%**，以本地 `npm run test:coverage` 为准）。
 
 - 覆盖 Harness 门禁、TaskGraph、双模、记忆生命周期、Web 路由等；长会话与监管有专项用例。
-- **`npm run eval:agent`**：Agent 行为指标骨架（任务成功率、工具调用率、验证率等），用于回归观测。
+- **`npm run eval:agent`**：Agent 行为回归评测 — 7 个固定 case 在临时沙箱中真实跑 Harness + 工具，输出 pass/fail 与指标；`--mode=mock` 可无 API Key 烟测。详见 [`docs/使用文档.md`](./docs/使用文档.md)。
 - 跑测命令见 [`docs/使用文档.md`](./docs/使用文档.md)。
 
 ### 本地 Benchmark

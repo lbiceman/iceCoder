@@ -154,7 +154,7 @@ Harness rounds, memory ops, L1 mode changes, L2 timeline → `data/*/telemetry.j
 **~2,000+** Vitest cases (**~78%** line coverage on `src/`; Harness **~84%**, Supervisor **~95%**, memory **~71%** — run `npm run test:coverage` locally).
 
 - Covers gates, TaskGraph, dual-mode, memory lifecycle, Web routes, and long-session scenarios.
-- **`npm run eval:agent`**: agent metric skeleton (success rate, tool rate, verification rate) for regression watch.
+- **`npm run eval:agent`**: Agent behavior regression — 7 fixed cases in isolated temp workspaces, real Harness + tools, pass/fail + metrics; `--mode=mock` for no-API smoke. See [`docs/使用文档.md`](./docs/使用文档.md).
 - How to run: [`docs/使用文档.md`](./docs/使用文档.md).
 
 ### Local benchmarks

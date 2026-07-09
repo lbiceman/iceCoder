@@ -67,33 +67,34 @@ recovery prompt
 
 ---
 
-## 3. 正式 Agent Eval Runner
+## 3. 正式 Agent Eval Runner（核心能力已完成）
 
 ### 目标
 
 用数据证明系统变强，而不是凭感觉调 prompt。
 
-### 已完成（骨架）
+### 已完成（2026-07）
 
-- `npm run eval:agent` 可跑；mock 模式输出 case 与聚合指标；real 模式可读取已有 `telemetry.jsonl`。
+1. `scripts/agent-eval-cases.ts` — 7 个固定 case（prompt、初始文件、断言、验证命令、记忆夹具）。
+2. `scripts/agent-eval-runner.ts` — 临时沙箱、`initializeToolSystem`、`Harness.run`、规则判分、telemetry 读取。
+3. `scripts/agent-eval.ts` — 默认 **real** 驱动 Harness；`--mode=mock` 无 API 烟测；`--case` / `--format` / `--keep-workspaces`。
+4. JSONL 历史：`data/eval/agent-eval-history.jsonl`；失败或 P0 指标退化时非 0 exit code。
 
-### 需要做什么
+### 仍需加强
 
-1. 把 `scripts/agent-eval.ts` 升级为**驱动 Harness 跑 case** 的可执行 runner（非 mock 恒绿）。
-2. 支持 JSONL 历史记录，便于趋势对比。
-3. 与 `scripts/eval-runner.ts`（TaskGraph 指标）纳入统一 CI 入口（可选 `npm run eval:taskgraph`）。
+1. 纳入统一 CI 入口（可选 `npm run eval:taskgraph` 与 `scripts/eval-runner.ts` 联动）。
+2. 与 Runtime Telemetry 做跨次趋势对比看板或汇总脚本。
+3. 扩展 case 覆盖面与模型批次固定策略（避免同次对比混模型）。
 
-### Eval Case
+### Eval Case（已覆盖）
 
-至少覆盖：
-
-- 单文件修改
-- 测试失败修复
-- 多文件重构
-- 工具失败恢复
-- 长会话压缩恢复
-- 记忆冲突场景
-- 禁工具/评测模式一致性
+- 单文件修改 — `single-file-edit`
+- 测试失败修复 — `test-failure-fix`
+- 多文件重构 — `multi-file-refactor`
+- 工具失败恢复 — `tool-failure-recovery`
+- 长会话压缩恢复 — `compression-recovery`
+- 记忆冲突场景 — `memory-conflict`
+- 禁工具/评测模式一致性 — `eval-mode-tools-disabled`
 
 ### 指标
 
@@ -109,9 +110,9 @@ recovery prompt
 
 ### 验收标准
 
-- `npm run eval:agent` 真实模式对每个 case 输出 pass/fail。
-- P0 指标下降时能返回非 0 exit code。
-- 每次 Harness/Prompt/Memory 改动都能跑 eval 对比。
+- `npm run eval:agent` 真实模式对每个 case 输出 pass/fail。（已测）
+- P0 指标下降时能返回非 0 exit code。（已测）
+- 每次 Harness/Prompt/Memory 改动都能跑 eval 对比。（可用；建议接 CI）
 
 ---
 
@@ -132,7 +133,7 @@ recovery prompt
 
 1. 权限裁决、验证状态等字段在事件中的覆盖度与一致性（与 Eval 指标对齐）。
 2. **会话级与跨会话汇总**、CI 可读报告、简单看板或 `npm run` 汇总脚本。
-3. 与 `scripts/agent-eval.ts` **real** 模式打通：用完整 case 跑 Harness 后自动解析 JSONL 判分。
+3. 与 `scripts/agent-eval.ts` **real** 模式打通：用完整 case 跑 Harness 后自动解析沙箱内 telemetry 判分。（Agent runner 已写沙箱 telemetry；跨会话汇总仍待加强）
 
 ### 验收标准
 
