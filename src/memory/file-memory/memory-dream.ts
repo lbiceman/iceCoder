@@ -75,6 +75,21 @@ const USER_PROMOTE_MIN_RECALL = 3;
 const DREAM_STATE_FILE_PATH = getRuntimeMemoryAuxPath('dream-state.json');
 /** 因 stale_index 跑完 Dream 后，在此时间内不再仅因死链再次触发（避免 LLM 未修好索引时连打） */
 const STALE_INDEX_DREAM_COOLDOWN_MS = 12 * 60 * 1000;
+/** 规则层偏好合并只处理带明确主题标签的记忆，避免按自然语言猜测误合并。 */
+const PREFERENCE_TOPIC_TAG_PREFIXES = [
+  'pref:',
+  'preference:',
+  'style:',
+  'tool:',
+  'lang:',
+  'framework:',
+  'communication:',
+  'format:',
+  'test:',
+];
+/** 被同主题新偏好覆盖后，旧偏好仍保留审计痕迹，但降低召回权重。 */
+const SUPERSEDED_PREFERENCE_CONFIDENCE_CAP = 0.45;
+const SUPERSEDED_PREFERENCE_DECAY = 0.7;
 
 /**
  * Dream 触发原因（用于遥测与门控）。
@@ -243,6 +258,61 @@ function truncateDreamIndexPrompt(content: string): string {
 }
 
 type DreamInputMode = 'full' | 'manifest' | 'batch';
+
+function isPreferenceLikeMemory(mem: MemoryHeader): boolean {
+  return mem.level === 'preference'
+    || mem.type === 'feedback'
+    || mem.tags.some(tag => tag === 'preference' || tag.startsWith('preference:') || tag.startsWith('pref:'));
+}
+
+function preferenceTopicKey(mem: MemoryHeader): string | null {
+  const tag = mem.tags.find(t => {
+    const lower = t.toLowerCase();
+    return PREFERENCE_TOPIC_TAG_PREFIXES.some(prefix => lower.startsWith(prefix));
+  });
+  return tag ? tag.toLowerCase() : null;
+}
+
+function preferenceRank(mem: MemoryHeader): number {
+  const recalledAt = mem.lastRecalledMs || 0;
+  const eventAt = mem.eventDateMs || 0;
+  const freshness = Math.max(mem.mtimeMs, mem.createdMs, recalledAt, eventAt);
+  return (mem.confidence * 1_000_000)
+    + (mem.recallCount * 10_000)
+    + Math.floor(freshness / 86_400_000);
+}
+
+function frontmatterValue(content: string, key: string): string | null {
+  const match = content.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+  return match?.[1]?.trim() ?? null;
+}
+
+function upsertFrontmatterField(content: string, key: string, value: string): string {
+  const fieldPattern = new RegExp(`^${key}:\\s*.*$`, 'm');
+  if (fieldPattern.test(content)) {
+    return content.replace(fieldPattern, `${key}: ${value}`);
+  }
+  const confidencePattern = /^(confidence:\s*\S+)\s*$/m;
+  if (confidencePattern.test(content)) {
+    return content.replace(confidencePattern, `$1\n${key}: ${value}`);
+  }
+  return content.replace(/^---\s*$/m, `---\n${key}: ${value}`);
+}
+
+function markdownBody(content: string): string {
+  const separator = content.indexOf('\n---');
+  if (content.startsWith('---') && separator >= 0) {
+    return content.slice(separator + 4).trim();
+  }
+  return content.trim();
+}
+
+function appendMergedPreferenceHistory(keepContent: string, sourceFilename: string, sourceContent: string): string {
+  const sourceBody = markdownBody(sourceContent);
+  if (!sourceBody || keepContent.includes(`Merged preference from ${sourceFilename}`)) return keepContent;
+  const excerpt = sourceBody.length > 1200 ? `${sourceBody.slice(0, 1200)}\n...[truncated]` : sourceBody;
+  return `${keepContent.trim()}\n\n## Merged preference from ${sourceFilename}\n\n${excerpt}\n`;
+}
 
 /**
  * 两阶段 LLM：Index pass prompt（仅输出 new_index）。
@@ -847,6 +917,15 @@ export class MemoryDream {
       };
     }
 
+    const preferenceConsolidated = await this.consolidatePreferenceTopics(memoryDir);
+    if (preferenceConsolidated > 0) {
+      result = {
+        ...result,
+        filesModified: result.filesModified + preferenceConsolidated,
+        summary: `${result.summary} Consolidated ${preferenceConsolidated} preference memory update(s).`,
+      };
+    }
+
     // 3.12: 规则重复合并（Dream 后扫相似对，shadow/merge 模式）
     if (process.env.ICE_RULE_MERGE !== 'off') {
       const mergeMode = (process.env.ICE_RULE_MERGE || 'shadow') as 'shadow' | 'merge';
@@ -1072,6 +1151,15 @@ export class MemoryDream {
         ...result,
         filesModified: result.filesModified + promoted,
         summary: `${result.summary} Promoted ${promoted} user memory(ies).`,
+      };
+    }
+
+    const preferenceConsolidated = await this.consolidatePreferenceTopics(memoryDir);
+    if (preferenceConsolidated > 0) {
+      result = {
+        ...result,
+        filesModified: result.filesModified + preferenceConsolidated,
+        summary: `${result.summary} Consolidated ${preferenceConsolidated} preference memory update(s).`,
       };
     }
 
@@ -1417,6 +1505,93 @@ export class MemoryDream {
       getScannerCache().invalidate(userMemoryDir);
     }
     return promoted;
+  }
+
+  /**
+   * 规则层同主题偏好整合。
+   *
+   * LLM Dream 已能做自由合并；这里专门处理带结构化 topic tag 的偏好记忆：
+   * - 把同主题旧偏好的正文摘要合并到一个 keeper
+   * - 旧文件不删除，只标记 superseded-by 并降低 confidence，避免误删用户偏好
+   */
+  private async consolidatePreferenceTopics(memoryDir: string): Promise<number> {
+    const memories = await scanMemoryFiles(memoryDir, 500);
+    const groups = new Map<string, MemoryHeader[]>();
+
+    for (const mem of memories) {
+      if (!isPreferenceLikeMemory(mem)) continue;
+      const topic = preferenceTopicKey(mem);
+      if (!topic) continue;
+      const group = groups.get(topic) ?? [];
+      group.push(mem);
+      groups.set(topic, group);
+    }
+
+    let filesModified = 0;
+    const now = new Date().toISOString();
+
+    for (const [topic, group] of groups) {
+      if (group.length < 2) continue;
+      const [keeper, ...older] = [...group].sort((a, b) => preferenceRank(b) - preferenceRank(a));
+      if (!keeper) continue;
+
+      let keepContent: string;
+      try {
+        keepContent = await fs.readFile(keeper.filePath, 'utf-8');
+      } catch {
+        continue;
+      }
+
+      const mergedFrom = new Set<string>();
+      const existingMergedFrom = frontmatterValue(keepContent, 'merged-from');
+      if (existingMergedFrom) {
+        for (const item of existingMergedFrom.replace(/^\[|\]$/g, '').split(',')) {
+          const clean = item.trim().replace(/^["']|["']$/g, '');
+          if (clean) mergedFrom.add(clean);
+        }
+      }
+
+      let keeperChanged = false;
+      for (const old of older) {
+        let oldContent: string;
+        try {
+          oldContent = await fs.readFile(old.filePath, 'utf-8');
+        } catch {
+          continue;
+        }
+
+        if (!mergedFrom.has(old.filename)) {
+          keepContent = appendMergedPreferenceHistory(keepContent, old.filename, oldContent);
+          mergedFrom.add(old.filename);
+          keeperChanged = true;
+        }
+
+        const decayed = Math.min(
+          SUPERSEDED_PREFERENCE_CONFIDENCE_CAP,
+          Math.max(0.1, Math.round(old.confidence * SUPERSEDED_PREFERENCE_DECAY * 100) / 100),
+        );
+        let updatedOld = upsertFrontmatterField(oldContent, 'confidence', String(decayed));
+        updatedOld = upsertFrontmatterField(updatedOld, 'superseded-by', keeper.filename);
+        updatedOld = upsertFrontmatterField(updatedOld, 'superseded-topic', topic);
+        updatedOld = upsertFrontmatterField(updatedOld, 'superseded-at', now);
+
+        if (updatedOld !== oldContent) {
+          await writeFileAtomic(old.filePath, updatedOld, 'utf-8');
+          filesModified++;
+        }
+      }
+
+      if (keeperChanged) {
+        keepContent = upsertFrontmatterField(keepContent, 'merged-from', `[${[...mergedFrom].map(f => `"${f}"`).join(', ')}]`);
+        keepContent = upsertFrontmatterField(keepContent, 'merged-at', now);
+        keepContent = upsertFrontmatterField(keepContent, 'preference-topic', topic);
+        await writeFileAtomic(keeper.filePath, keepContent, 'utf-8');
+        filesModified++;
+      }
+    }
+
+    if (filesModified > 0) getScannerCache().invalidate(memoryDir);
+    return filesModified;
   }
 
   // ─── Dream 备份 ───
