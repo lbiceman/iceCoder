@@ -387,9 +387,9 @@ npm run build
 
 ## 10. 报告模板
 
-评测完成后落盘：`benchMark/reports/debug-saas-order-supply-approval-fusion-05-02.md`
+正式评测报告已落盘：[`../reports/debug-saas-order-supply-approval-fusion-05.md`](../reports/debug-saas-order-supply-approval-fusion-05.md)
 
-需额外记录：
+报告需额外记录：
 
 - 参测标记：`01` / `02`
 - 运行耗时 / 轮次
@@ -404,11 +404,11 @@ npm run build
 
 ## 11. 与评测体系文档的关系
 
-建议在 [`三平台同模对比评测与裁判评分体系.md`](./三平台同模对比评测与裁判评分体系.md) §3.1 增加一行：
+已在 [`三平台同模对比评测与裁判评分体系.md`](./三平台同模对比评测与裁判评分体系.md) §3.1 增加 L8 行，并链到本任务规格与正式报告：
 
 | L8 | `debug-saas-order-supply-approval-fusion-*` | 1+ | 企业 SaaS 订单、供应链、审批、计费、审计、迁移与 outbox 融合修复 | 高 |
 
-本任务为 **L8 首发**。
+本任务为 **L8 首发**。赛后结果摘要见本文第 7–9 节；完整 Implementation Record 见正式报告。
 
 ---
 
