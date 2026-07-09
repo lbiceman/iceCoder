@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Harness } from '../../src/harness/harness.js';
-import { ContextCompactor } from '../../src/harness/context-compactor.js';
+import { ContextCompactor, estimateTokens } from '../../src/harness/context-compactor.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
 import type { HarnessConfig, HarnessStepEvent, ChatFunction } from '../../src/harness/types.js';
@@ -1228,7 +1228,45 @@ describe('ContextCompactor - 微压缩', () => {
     expect(message.content).toContain('修复失败用例');
     expect(message.content).toContain('src/a.ts');
     expect(message.content).toContain('npm test');
-    expect(message.content).toContain('<runtime-recovery-context>');
+    expect(message.content).toContain('<runtime-recovery-context');
+    expect(message.content).toContain('## Critical Task State');
+    expect(message.content).toContain('verificationStatus: passed');
+    expect(message.content).not.toContain('# Runtime State');
+  });
+
+  it('压缩恢复 Runtime State 按预算裁剪低优先级列表', () => {
+    const compactor = new ContextCompactor({ maxRuntimeRecoveryTokens: 400 });
+    const taskSnapshot = {
+      goal: `实现压缩恢复强化 ${'保持当前任务目标 '.repeat(80)}`,
+      intent: 'edit' as const,
+      phase: 'editing' as const,
+      filesRead: Array.from({ length: 80 }, (_, i) => `src/read-${String(i).padStart(2, '0')}.ts`),
+      filesChanged: Array.from({ length: 12 }, (_, i) => `src/changed-${String(i).padStart(2, '0')}.ts`),
+      commandsRun: Array.from({ length: 30 }, (_, i) => `npm run command-${i}`),
+      verificationRequired: true,
+      verificationStatus: 'required' as const,
+    };
+    const repoSnapshot = {
+      filesRead: taskSnapshot.filesRead,
+      filesChanged: taskSnapshot.filesChanged,
+      commandsRun: taskSnapshot.commandsRun,
+      testCommands: ['npm test -- test/harness/harness.test.ts'],
+      recentDiagnostics: Array.from({ length: 8 }, (_, i) => `diagnostic ${i}: ${'x'.repeat(120)}`),
+    };
+
+    const message = compactor.buildRuntimeRecoveryContext(taskSnapshot, repoSnapshot);
+    const oldJsonMessage = {
+      role: 'user' as const,
+      content: JSON.stringify({ taskSnapshot, repoSnapshot }, null, 2),
+    };
+
+    expect(message.content).toContain('budgetTokens="400"');
+    expect(message.content).toContain('verificationStatus: required');
+    expect(message.content).toContain('src/changed-11.ts');
+    expect(message.content).toContain('npm test -- test/harness/harness.test.ts');
+    expect(message.content).toContain('omitted');
+    expect(message.content).not.toContain('src/read-00.ts');
+    expect(estimateTokens([message])).toBeLessThan(estimateTokens([oldJsonMessage]));
   });
 });
 

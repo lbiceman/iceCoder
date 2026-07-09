@@ -100,6 +100,8 @@ export interface CompactionConfig {
   maxReinjectFiles: number;
   /** 重新注入最近文件内容的总 token 预算 */
   maxReinjectTokens: number;
+  /** 硬压缩后 Runtime Recovery Context 的最大 token 预算 */
+  maxRuntimeRecoveryTokens: number;
   /** 会话 id，用于压缩截断提示中的 session-notes 路径 */
   sessionId?: string;
 }
@@ -130,11 +132,111 @@ const DEFAULT_CONFIG: CompactionConfig = {
   enableLLMSummary: true,
   maxReinjectFiles: 12,
   maxReinjectTokens: 50000,
+  maxRuntimeRecoveryTokens: 1600,
 };
 
 /** 再注入唯一文件数上限（构造参数钳制） */
 const MIN_REINJECT_FILES_CAP = 1;
 const MAX_REINJECT_FILES_CAP = 64;
+const MIN_RUNTIME_RECOVERY_TOKENS = 400;
+const MAX_RUNTIME_RECOVERY_TOKENS = 8000;
+
+interface RuntimeRecoveryCaps {
+  goalChars: number;
+  changedFiles: number;
+  readFiles: number;
+  commands: number;
+  testCommands: number;
+  diagnostics: number;
+}
+
+const DEFAULT_RUNTIME_RECOVERY_CAPS: RuntimeRecoveryCaps = {
+  goalChars: 1200,
+  changedFiles: 40,
+  readFiles: 24,
+  commands: 8,
+  testCommands: 5,
+  diagnostics: 5,
+};
+
+function clampRuntimeRecoveryTokens(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_CONFIG.maxRuntimeRecoveryTokens;
+  }
+  return Math.min(
+    Math.max(Math.floor(value), MIN_RUNTIME_RECOVERY_TOKENS),
+    MAX_RUNTIME_RECOVERY_TOKENS,
+  );
+}
+
+function truncateForRecovery(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 24)).trimEnd()}...[truncated]`;
+}
+
+function uniqueInOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function uniqueLatest(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (let i = values.length - 1; i >= 0; i--) {
+    const value = values[i]?.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    out.unshift(value);
+  }
+  return out;
+}
+
+function formatRecoveryList(
+  title: string,
+  values: string[],
+  cap: number,
+  itemMaxChars = 180,
+): string[] {
+  const total = values.length;
+  const shown = cap > 0 ? values.slice(Math.max(0, total - cap)) : [];
+  const omitted = total - shown.length;
+  const lines = [`## ${title} (${total})`];
+  if (shown.length === 0) {
+    lines.push(total === 0 ? '- none' : `- omitted ${omitted} item(s) due to recovery budget`);
+    return lines;
+  }
+  for (const item of shown) {
+    lines.push(`- ${truncateForRecovery(item, itemMaxChars)}`);
+  }
+  if (omitted > 0) {
+    lines.push(`- ... ${omitted} earlier item(s) omitted due to recovery budget`);
+  }
+  return lines;
+}
+
+function nextRecoveryAction(taskState: TaskStateSnapshot, repoContext: RepoContextSnapshot): string {
+  if (taskState.verificationStatus === 'failed' || repoContext.recentDiagnostics.length > 0) {
+    return 'Fix the latest failure or diagnostic, then rerun the relevant verification command.';
+  }
+  if (taskState.verificationStatus === 'required') {
+    return 'Run focused verification for the changed files before finalizing.';
+  }
+  if (taskState.verificationStatus === 'passed') {
+    return 'Continue from the latest user instruction; if implementation is complete, summarize the verified result.';
+  }
+  if (taskState.phase === 'editing') {
+    return 'Continue editing from the changed files and recent commands.';
+  }
+  return 'Continue from the latest user instruction using this state as the compacted task anchor.';
+}
 
 /**
  * 估算消息列表的 token 数。
@@ -164,6 +266,9 @@ export class ContextCompactor {
       reinjectCap >= MIN_REINJECT_FILES_CAP
         ? Math.min(Math.floor(reinjectCap), MAX_REINJECT_FILES_CAP)
         : DEFAULT_CONFIG.maxReinjectFiles;
+    this.config.maxRuntimeRecoveryTokens = clampRuntimeRecoveryTokens(
+      this.config.maxRuntimeRecoveryTokens,
+    );
   }
 
   /** 每轮 prep 开始时重置本轮微压缩计数 */
@@ -392,17 +497,117 @@ export class ContextCompactor {
     taskState: TaskStateSnapshot,
     repoContext: RepoContextSnapshot,
   ): UnifiedMessage {
-    return {
-      role: 'user',
-      content: [
+    const buildWithCaps = (caps: RuntimeRecoveryCaps): UnifiedMessage => {
+      const changedFiles = uniqueInOrder([
+        ...taskState.filesChanged,
+        ...repoContext.filesChanged,
+      ]);
+      const readFiles = uniqueInOrder([
+        ...taskState.filesRead,
+        ...repoContext.filesRead,
+      ]).filter(path => !changedFiles.includes(path));
+      const commands = uniqueLatest([
+        ...taskState.commandsRun,
+        ...repoContext.commandsRun,
+      ]);
+      const testCommands = uniqueLatest(repoContext.testCommands);
+
+      const content = [
         '<runtime-recovery-context>',
-        'This structured runtime state survived context compaction. Treat it as authoritative for the current task unless the latest user message says otherwise.',
+        'Structured state survived hard compaction. Treat this as the authoritative current-task anchor unless newer user messages override it.',
         '',
-        '# Runtime State',
-        JSON.stringify(taskState, null, 2),
+        '## Critical Task State',
+        `- goal: ${truncateForRecovery(taskState.goal, caps.goalChars)}`,
+        `- intent: ${taskState.intent}`,
+        `- phase: ${taskState.phase}`,
+        `- verificationRequired: ${taskState.verificationRequired}`,
+        `- verificationStatus: ${taskState.verificationStatus}`,
+        `- nextAction: ${nextRecoveryAction(taskState, repoContext)}`,
         '',
-        '# Repo Context',
-        JSON.stringify(repoContext, null, 2),
+        ...formatRecoveryList('Changed Files', changedFiles, caps.changedFiles),
+        '',
+        ...formatRecoveryList('Recent Test Commands', testCommands, caps.testCommands, 220),
+        '',
+        ...formatRecoveryList('Recent Commands', commands, caps.commands, 220),
+        '',
+        ...formatRecoveryList('Recent Diagnostics', repoContext.recentDiagnostics, caps.diagnostics, 260),
+        '',
+        ...formatRecoveryList('Read Files', readFiles, caps.readFiles),
+        '</runtime-recovery-context>',
+      ].join('\n');
+
+      return { role: 'user', content, preserveOnCompaction: true };
+    };
+
+    const caps: RuntimeRecoveryCaps = { ...DEFAULT_RUNTIME_RECOVERY_CAPS };
+    let message = buildWithCaps(caps);
+    const targetTokens = this.config.maxRuntimeRecoveryTokens;
+    const shrinkSteps: Array<() => boolean> = [
+      () => {
+        if (caps.readFiles <= 0) return false;
+        caps.readFiles = Math.max(0, Math.floor(caps.readFiles / 2));
+        return true;
+      },
+      () => {
+        if (caps.commands <= 3) return false;
+        caps.commands = Math.max(3, Math.floor(caps.commands / 2));
+        return true;
+      },
+      () => {
+        if (caps.diagnostics <= 2) return false;
+        caps.diagnostics = Math.max(2, Math.floor(caps.diagnostics / 2));
+        return true;
+      },
+      () => {
+        if (caps.goalChars <= 300) return false;
+        caps.goalChars = Math.max(300, Math.floor(caps.goalChars / 2));
+        return true;
+      },
+      () => {
+        if (caps.changedFiles <= 8) return false;
+        caps.changedFiles = Math.max(8, Math.floor(caps.changedFiles / 2));
+        return true;
+      },
+      () => {
+        if (caps.testCommands <= 1) return false;
+        caps.testCommands = 1;
+        return true;
+      },
+      () => {
+        if (caps.commands <= 0 && caps.diagnostics <= 0 && caps.readFiles <= 0) {
+          return false;
+        }
+        caps.commands = 0;
+        caps.diagnostics = 0;
+        caps.readFiles = 0;
+        return true;
+      },
+      () => {
+        if (caps.goalChars <= 160) return false;
+        caps.goalChars = 160;
+        return true;
+      },
+      () => {
+        if (caps.changedFiles <= 3) return false;
+        caps.changedFiles = 3;
+        return true;
+      },
+    ];
+
+    let stepIndex = 0;
+    while (estimateTokens([message]) > targetTokens && stepIndex < shrinkSteps.length) {
+      if (shrinkSteps[stepIndex]()) {
+        message = buildWithCaps(caps);
+      } else {
+        stepIndex++;
+      }
+    }
+
+    return {
+      ...message,
+      content: [
+        `<runtime-recovery-context budgetTokens="${targetTokens}" estimatedTokens="${estimateTokens([message])}">`,
+        String(message.content).replace(/^<runtime-recovery-context>\n?/, '').replace(/\n?<\/runtime-recovery-context>$/, ''),
         '</runtime-recovery-context>',
       ].join('\n'),
     };

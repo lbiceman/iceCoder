@@ -620,10 +620,11 @@ Metrics per case and aggregate:
 - memory_interference_rate
 - tokens_per_successful_task
 - compaction_saved_tokens
+- compaction_recovery_success_rate (`compression-recovery` only; requires hard compaction + post-compaction tool progress + verification)
 
 **TaskGraph eval** (separate): `npx tsx scripts/eval-runner.ts` — graph completion / node scores from benchmark fixtures.
 
-Remaining eval work (CI gate, trend dashboards): [`docs/nextWork.md`](./nextWork.md) §3–§4.
+Remaining release cleanup is tracked in [`docs/nextWork.md`](./nextWork.md).
 
 ---
 

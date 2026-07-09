@@ -14,6 +14,7 @@ interface EvalMetrics {
   memory_interference_rate: number;
   tokens_per_successful_task: number;
   compaction_saved_tokens: number;
+  compaction_recovery_success_rate: number;
 }
 
 interface CaseResult {
@@ -35,6 +36,7 @@ const METRIC_KEYS: Array<keyof EvalMetrics> = [
   'memory_interference_rate',
   'tokens_per_successful_task',
   'compaction_saved_tokens',
+  'compaction_recovery_success_rate',
 ];
 
 interface CliArgs {
@@ -68,8 +70,10 @@ async function main(): Promise<void> {
   console.log(formatReport(report, args.format));
   await appendHistory(report);
 
+  const includesCompressionCase = results.some(result => result.category === 'compression');
   if (results.some(result => !result.passed)
     || metrics.task_success_rate < 1
+    || (includesCompressionCase && metrics.compaction_recovery_success_rate < 0.95)
     || metrics.no_tool_final_rate > 0
     || metrics.memory_interference_rate > 0) {
     process.exitCode = 1;
@@ -88,6 +92,7 @@ function runMockEval(cases: AgentEvalCase[]): CaseResult[] {
       memory_interference_rate: testCase.category === 'memory-conflict' ? 0 : 0,
       tokens_per_successful_task: 1000 + index * 100,
       compaction_saved_tokens: testCase.category === 'compression' ? 5000 : 0,
+      compaction_recovery_success_rate: testCase.category === 'compression' ? 1 : 0,
     };
     return { id: testCase.id, category: testCase.category, passed: true, metrics, failures: [] };
   });
@@ -111,8 +116,13 @@ async function runRealEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseR
 function aggregate(results: CaseResult[]): EvalMetrics {
   const aggregateMetrics = zeroMetrics();
   for (const key of METRIC_KEYS) {
+    if (key === 'compaction_recovery_success_rate') continue;
     aggregateMetrics[key] = average(results.map(result => result.metrics[key]));
   }
+  const compressionResults = results.filter(result => result.category === 'compression');
+  aggregateMetrics.compaction_recovery_success_rate = average(
+    compressionResults.map(result => result.metrics.compaction_recovery_success_rate),
+  );
   return aggregateMetrics;
 }
 
@@ -127,6 +137,7 @@ function zeroMetrics(): EvalMetrics {
     memory_interference_rate: 0,
     tokens_per_successful_task: 0,
     compaction_saved_tokens: 0,
+    compaction_recovery_success_rate: 0,
   };
 }
 
@@ -198,6 +209,7 @@ function formatReport(report: {
     `- verification_rate: ${roundMetric(report.metrics.verification_rate)}`,
     `- no_tool_final_rate: ${roundMetric(report.metrics.no_tool_final_rate)}`,
     `- memory_interference_rate: ${roundMetric(report.metrics.memory_interference_rate)}`,
+    `- compaction_recovery_success_rate: ${roundMetric(report.metrics.compaction_recovery_success_rate)}`,
     '',
   ];
 
@@ -207,6 +219,9 @@ function formatReport(report: {
     lines.push(`- category: ${result.category}`);
     lines.push(`- tool_call_rate: ${roundMetric(result.metrics.tool_call_rate)}`);
     lines.push(`- verification_rate: ${roundMetric(result.metrics.verification_rate)}`);
+    if (result.category === 'compression') {
+      lines.push(`- compaction_recovery_success_rate: ${roundMetric(result.metrics.compaction_recovery_success_rate)}`);
+    }
     lines.push(`- tokens_per_successful_task: ${roundMetric(result.metrics.tokens_per_successful_task)}`);
     if (result.workspace) lines.push(`- workspace: ${result.workspace}`);
     if (result.failures.length > 0) {

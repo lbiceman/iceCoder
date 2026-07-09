@@ -23,6 +23,7 @@ export interface EvalMetrics {
   memory_interference_rate: number;
   tokens_per_successful_task: number;
   compaction_saved_tokens: number;
+  compaction_recovery_success_rate: number;
 }
 
 export interface CaseResult {
@@ -266,12 +267,26 @@ async function scoreCase(args: {
   const summary = telemetry
     .filter((event): event is Extract<RuntimeTelemetryEvent, { type: 'summary' }> => event.type === 'summary')
     .at(-1);
-  const compactionSavedTokens = telemetry
-    .filter((event): event is Extract<RuntimeTelemetryEvent, { type: 'compaction' }> => event.type === 'compaction')
-    .reduce((sum, event) => sum + event.savedTokens, 0);
-  const taskSucceeded = failures.length === 0;
+  const compactionEvents = telemetry
+    .filter((event): event is Extract<RuntimeTelemetryEvent, { type: 'compaction' }> => event.type === 'compaction');
+  const compactionSavedTokens = compactionEvents.reduce((sum, event) => sum + event.savedTokens, 0);
   const noToolFinal = testCase.expected.requiresTool && toolCallEvents.length === 0 && finalEvent?.type === 'final';
+  const compactionHappened = compactionEvents.length > 0;
+  const postCompactionToolProgress = didToolRunAfterHardCompaction(events);
+  if (testCase.category === 'compression' && !compactionHappened) {
+    failures.push('expected hard compaction telemetry event');
+  }
+  if (testCase.category === 'compression' && !postCompactionToolProgress) {
+    failures.push('expected tool progress after hard compaction');
+  }
+  const taskSucceeded = failures.length === 0;
   const memoryInterference = testCase.category === 'memory-conflict' && assertionFailures.length > 0 ? 1 : 0;
+  const compactionRecoverySucceeded = testCase.category === 'compression'
+    && compactionHappened
+    && postCompactionToolProgress
+    && taskSucceeded
+    && agentVerificationPassed
+    && !noToolFinal;
 
   const metrics: EvalMetrics = {
     task_success_rate: taskSucceeded ? 1 : 0,
@@ -285,6 +300,7 @@ async function scoreCase(args: {
       ? result.loopState.totalInputTokens + result.loopState.totalOutputTokens
       : summary?.tokensPerSuccessfulTask ?? 0,
     compaction_saved_tokens: compactionSavedTokens || summary?.compactionSavedTokens || 0,
+    compaction_recovery_success_rate: compactionRecoverySucceeded ? 1 : 0,
   };
 
   return {
@@ -361,6 +377,15 @@ function repeatFailureRate(events: HarnessStepEvent[]): number {
   return repeated / failures.length;
 }
 
+function didToolRunAfterHardCompaction(events: HarnessStepEvent[]): boolean {
+  const compactionIndex = events.findIndex(event =>
+    event.type === 'compaction'
+    && !String(event.content ?? '').startsWith('micro:'),
+  );
+  if (compactionIndex < 0) return false;
+  return events.slice(compactionIndex + 1).some(event => event.type === 'tool_call');
+}
+
 function trimForFailure(output: string): string {
   const trimmed = output.trim();
   return trimmed.length > 800 ? `${trimmed.slice(0, 800)}...` : trimmed;
@@ -381,5 +406,6 @@ export function zeroMetrics(): EvalMetrics {
     memory_interference_rate: 0,
     tokens_per_successful_task: 0,
     compaction_saved_tokens: 0,
+    compaction_recovery_success_rate: 0,
   };
 }
