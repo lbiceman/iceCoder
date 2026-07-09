@@ -94,13 +94,16 @@ Web-only Canvas pet — visual feedback from Harness / Supervisor / TaskGraph ev
 - **L1 chip** shows `forced · …` aligned with `execution_mode_enter` reasons.
 - **~20 expressions** plus a token ring; step summary and “round N” sync over WebSocket.
 
-### File memory
+### File memory (Memory v2)
 
 Long-term facts live as **Markdown** under `data/memory-files/` (no external vector DB).
 
+- **Structured levels**: `hard_rule` / `project_fact` / `preference` / `observation` / `session_state`, plus `evidenceStrength` for ranking and eviction.
+- **Intent-aware recall**: execute / inspect / question filters; conflicting same-topic memories inject **one side only** (tag-based + code-edit preference heuristic).
 - **Coarse recall (pre-LLM)**: keyword pull, up to 3 snippets — cheap and auditable.
 - **Extract & maintenance (post-tool)**: writes/updates after tools; **Dream** and eviction control size and conflicts.
 - **Session notes** with `icecoder-runtime` blocks cooperate with Harness memory integration.
+- **Eval**: `npm run eval:agent -- --case memory-conflict` guards against old preferences blocking current edit instructions.
 
 ### Agent Skills
 
@@ -201,7 +204,7 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 | **Harness** | Main agent loop, verification gate, compaction, telemetry |
 | **Supervisor** | L1 execution mode + L2 runtime takeover/handoff |
 | **TaskGraph** | Structured plan injection |
-| **File memory** | Long-term Markdown facts + session notes |
+| **File memory** | Memory v2: levels / evidence / conflict arbitration + session notes |
 | **Skills** | Markdown playbooks in `ICE_SKILLS_DIR`; `#` injection + Skills page |
 | **Web / Mobile** | Pet, multi-session, H5 shell, `@`/`#` composer, diff viewer, `~` commands |
 

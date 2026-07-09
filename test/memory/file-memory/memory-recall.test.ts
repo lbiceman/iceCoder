@@ -24,6 +24,7 @@ import {
   parseTimeRange,
   expandRelatedMemories,
   buildIdfMap,
+  dedupeConflictingMemories,
   LLM_RECALL_MIN_CANDIDATES,
 } from '../../../src/memory/file-memory/memory-recall.js';
 import type { MemoryHeader } from '../../../src/memory/file-memory/types.js';
@@ -307,6 +308,127 @@ describe('recallRelevantMemories — 关键词回退（TF-IDF 加权）', () => 
     const result = await recallRelevantMemories('test', tempDir, null, new Set(), 3);
 
     expect(result.memories.length).toBe(3);
+  });
+});
+
+// ─── Memory v2 冲突去重 ───
+
+describe('dedupeConflictingMemories', () => {
+  it('同主题 tag 冲突只保留优先级最高的记忆', () => {
+    const weakOld = makeHeader({
+      filename: 'weak-old.md',
+      level: 'preference',
+      evidenceStrength: 'weak',
+      confidence: 0.4,
+      tags: ['pref:testing'],
+    });
+    const explicitNew = makeHeader({
+      filename: 'explicit-new.md',
+      level: 'preference',
+      evidenceStrength: 'explicit',
+      confidence: 1,
+      tags: ['pref:testing'],
+    });
+
+    const result = dedupeConflictingMemories([weakOld, explicitNew]);
+
+    expect(result.map(m => m.filename)).toEqual(['explicit-new.md']);
+  });
+
+  it('带结构化 tag 的 project_fact 保持原有冲突去重行为', () => {
+    const oldProjectFact = makeHeader({
+      filename: 'old-project-test.md',
+      level: 'project_fact',
+      evidenceStrength: 'inferred',
+      confidence: 0.6,
+      tags: ['tool:testing'],
+    });
+    const explicitProjectFact = makeHeader({
+      filename: 'explicit-project-test.md',
+      level: 'project_fact',
+      evidenceStrength: 'explicit',
+      confidence: 1,
+      tags: ['tool:testing'],
+    });
+
+    const result = dedupeConflictingMemories([oldProjectFact, explicitProjectFact]);
+
+    expect(result.map(m => m.filename)).toEqual(['explicit-project-test.md']);
+  });
+
+  it('无 tag 的代码修改偏好冲突只保留一侧', () => {
+    const oldPreference = makeHeader({
+      filename: 'old-no-code-edits.md',
+      level: 'preference',
+      evidenceStrength: 'weak',
+      confidence: 0.35,
+      description: 'The user previously preferred that agents should not modify code.',
+      contentPreview: 'The user previously preferred that agents should not modify code.',
+    });
+    const currentPreference = makeHeader({
+      filename: 'current-code-edits.md',
+      level: 'preference',
+      evidenceStrength: 'explicit',
+      confidence: 1,
+      description: 'The user explicitly allows agents to modify code when asked.',
+      contentPreview: 'The user explicitly allows agents to modify code when asked.',
+    });
+
+    const result = dedupeConflictingMemories([oldPreference, currentPreference]);
+
+    expect(result.map(m => m.filename)).toEqual(['current-code-edits.md']);
+  });
+
+  it('无 tag 的普通测试偏好不会被启发式误删', () => {
+    const vitestPreference = makeHeader({
+      filename: 'vitest-preference.md',
+      level: 'preference',
+      evidenceStrength: 'explicit',
+      confidence: 1,
+      description: 'The user prefers Vitest for unit tests.',
+      contentPreview: 'The user prefers Vitest for unit tests.',
+    });
+    const testCommandPreference = makeHeader({
+      filename: 'test-command-preference.md',
+      level: 'preference',
+      evidenceStrength: 'explicit',
+      confidence: 1,
+      description: 'The user wants tests run before finishing coding tasks.',
+      contentPreview: 'The user wants tests run before finishing coding tasks.',
+    });
+
+    const result = dedupeConflictingMemories([vitestPreference, testCommandPreference]);
+
+    expect(result.map(m => m.filename)).toEqual(['vitest-preference.md', 'test-command-preference.md']);
+  });
+});
+
+describe('recallRelevantMemories — Memory v2 冲突去重', () => {
+  it('召回路径支持 memoryLevel 别名并避免同轮注入无 tag 的冲突偏好', async () => {
+    await fs.writeFile(path.join(tempDir, 'old-preference.md'), [
+      '---',
+      'memoryLevel: preference',
+      'evidenceStrength: weak',
+      'confidence: 0.35',
+      'description: The user previously preferred that agents should not modify code.',
+      '---',
+      '',
+      'The user previously preferred that agents should not modify code.',
+    ].join('\n'), 'utf-8');
+    await fs.writeFile(path.join(tempDir, 'new-preference.md'), [
+      '---',
+      'memoryLevel: preference',
+      'evidenceStrength: explicit',
+      'confidence: 1',
+      'description: The user explicitly allows agents to modify code when asked.',
+      '---',
+      '',
+      'The user explicitly allows agents to modify code when asked.',
+    ].join('\n'), 'utf-8');
+
+    const result = await recallRelevantMemories('modify code when asked', tempDir, null);
+
+    expect(result.memories.map(m => m.filename)).toEqual(['new-preference.md']);
   });
 });
 

@@ -113,7 +113,7 @@ export async function scanMemoryFiles(
         const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
         const eventDate = frontmatter.eventDate;
         const eventDateMs = eventDate ? new Date(eventDate).getTime() || 0 : 0;
-        const level = parseMemoryLevel(frontmatter.level, type);
+        const level = parseMemoryLevel(frontmatter.level ?? frontmatter.memoryLevel, type);
         const evidenceStrength = parseEvidenceStrength(frontmatter.evidenceStrength, confidence);
         const rawName = frontmatter.name?.trim();
         const name = rawName || null;

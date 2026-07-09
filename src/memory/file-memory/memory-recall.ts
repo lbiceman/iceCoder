@@ -128,7 +128,7 @@ export function filterByMemoryLevelForIntent(memories: MemoryHeader[], intent: R
   });
 }
 
-function dedupeConflictingMemories(memories: MemoryHeader[]): MemoryHeader[] {
+export function dedupeConflictingMemories(memories: MemoryHeader[]): MemoryHeader[] {
   const groups = new Map<string, MemoryHeader[]>();
   for (const memory of memories) {
     const key = conflictKey(memory);
@@ -153,6 +153,27 @@ function conflictKey(memory: MemoryHeader): string | null {
   if (!memory.level || !memory.evidenceStrength) return null;
   const topicTag = memory.tags.find(tag => /^(pref|preference|rule|topic|tool|lang|framework):/.test(tag));
   if (topicTag) return `${memory.level}:${topicTag.toLowerCase()}`;
+  if (!isConflictProneLevel(memory.level)) return null;
+  const topic = inferPreferenceConflictTopic(memory);
+  if (topic) return `${memory.level}:${topic}`;
+  return null;
+}
+
+function isConflictProneLevel(level: string): boolean {
+  return level === 'hard_rule' || level === 'preference' || level === 'session_state';
+}
+
+function inferPreferenceConflictTopic(memory: MemoryHeader): string | null {
+  const text = [
+    memory.filename,
+    memory.description ?? '',
+    memory.contentPreview ?? '',
+  ].join(' ').toLowerCase();
+
+  if (/(modify|edit|change|write|update|touch)\s+(code|files?)|改(代码|文件)|修改(代码|文件)|不要改代码|不改代码/.test(text)) {
+    return 'code_edits';
+  }
+
   return null;
 }
 

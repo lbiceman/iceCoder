@@ -366,13 +366,15 @@ query
 
 **Key constants:** `LLM_RECALL_MIN_CANDIDATES = 4`, `CONFIDENCE_FILTER_THRESHOLD = 0.3`, standard recall cooldown default **5 min** (`ICE_STANDARD_RECALL_COOLDOWN_SEC`, `0` disables). Remote overrides: `data/memory/memory-config.json` (hot-reloaded).
 
-Recent changes tightened memory behavior:
+Recent changes tightened memory behavior (**Memory v2 done**):
 
 - Recall prompt now uses strict relevance rather than broad inclusion.
 - Coding/debugging tasks prefer project facts and technical constraints.
 - Personal preferences are injected only when strongly relevant.
+- Same-topic conflicting memories inject **one side only** (structured tags; untagged code-edit preference heuristic).
 - Extraction prompt now prefers fewer high-confidence memories over noisy long-term memory.
 - Weak one-off signals should remain session state, not persistent memory.
+- Eval case `memory-conflict` guards against old preferences blocking current edit instructions.
 
 ### Dream Consolidation & Eviction
 
@@ -833,7 +835,7 @@ Higher-level prose (beyond this README):
 
 The remaining work is tracked in [`docs/nextWork.md`](./nextWork.md). Representative next items:
 
-1. Memory v2 structured levels and conflict arbitration
+1. ~~Memory v2 structured levels and conflict arbitration~~ — **done** (levels / evidence / intent filter / same-round conflict dedupe; `memory-conflict` eval). Optional: Dream preference merge, token/noise metrics.
 2. Deeper compaction / session-notes integration (token accounting, tighter recovery budgets) — `icecoder-runtime` snapshots already exist
 3. Eval CI gate + telemetry trend integration (`npm run eval:agent` Agent runner done; `scripts/eval-runner.ts` for TaskGraph)
 4. Telemetry persistence for runtime metrics
