@@ -8,6 +8,7 @@ import {
   DEFAULT_SHELL_BLACKLIST_PATTERNS,
   resetShellBlacklistCache,
   resolveShellBlacklistPatterns,
+  validateShellBlacklistPatterns,
 } from '../../src/tools/shell-sandbox.js';
 
 describe('shell-sandbox', () => {
@@ -71,5 +72,10 @@ describe('shell-sandbox', () => {
   it('resolveShellBlacklistPatterns falls back to defaults', () => {
     expect(resolveShellBlacklistPatterns(undefined)).toEqual(DEFAULT_SHELL_BLACKLIST_PATTERNS);
     expect(resolveShellBlacklistPatterns([])).toEqual([]);
+  });
+
+  it('validateShellBlacklistPatterns rejects invalid regex', () => {
+    expect(validateShellBlacklistPatterns(['rm\\s+-rf'])).toBeNull();
+    expect(validateShellBlacklistPatterns(['('[)).toMatch(/无效的正则表达式/);
   });
 });

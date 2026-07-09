@@ -50,6 +50,47 @@ describe('workspace-lock', () => {
     expect(result.lockedRoot?.toLowerCase()).not.toContain('324ji3o');
   });
 
+  it('@ reference of a file inside locked root does NOT change workspace', () => {
+    const prev = {
+      lockedRoot: 'E:\\work\\U3D\\climbing',
+      referenceReads: [] as string[],
+    };
+    const msg = [
+      'E:\\work\\U3D\\climbing\\Assets\\Scenes\\MainScene.unity',
+      '这个文件是干什么的？',
+    ].join('\n');
+    const result = detectWorkspaceFromUserMessage(msg, prev);
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\work\\u3d\\climbing');
+    expect(result.reason).not.toBe('workspace_change');
+  });
+
+  it('@ reference of a file outside locked root becomes a reference read, not workspace', () => {
+    const prev = {
+      lockedRoot: 'E:\\work\\U3D\\climbing',
+      referenceReads: [] as string[],
+    };
+    const msg = [
+      'D:\\docs\\spec.unity',
+      '按这个参考实现',
+    ].join('\n');
+    const result = detectWorkspaceFromUserMessage(msg, prev);
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\work\\u3d\\climbing');
+  });
+
+  it('standalone path line does not switch an already locked workspace', () => {
+    const prev = {
+      lockedRoot: 'E:\\work\\U3D\\climbing',
+      referenceReads: [] as string[],
+    };
+    const msg = [
+      'E:\\work\\U3D\\unity-mcp-repo\\scripts\\validate-nlt-coverage',
+      '这个文件是什么意思？具体是干什么的？',
+    ].join('\n');
+    const result = detectWorkspaceFromUserMessage(msg, prev);
+    expect(result.lockedRoot?.toLowerCase()).toBe('e:\\work\\u3d\\climbing');
+    expect(result.reason).not.toBe('workspace_change');
+  });
+
   it('changes workspace on explicit switch phrase', () => {
     const prev = {
       lockedRoot: 'E:\\old\\repo',

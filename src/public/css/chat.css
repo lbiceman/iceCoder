@@ -582,6 +582,10 @@
   }
 }
 
+.chat-messages.has-staircase-nav {
+  padding-right: 52px;
+}
+
 /* Message bubbles */
 .message {
   max-width: 78%;
@@ -2495,17 +2499,18 @@
   line-height: 1;
 }
 
-/* ── 楼梯导航：右侧横线 + 悬停气泡列表 ── */
+/* ── 楼梯导航：右侧独立 gutter，不遮挡用户消息 ── */
 .chat-staircase-nav {
   position: absolute;
-  right: 36px;
-  top: 36%;
+  right: 22px;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 11;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   max-height: calc(100% - 220px);
-  pointer-events: auto;
+  pointer-events: none;
 }
 .chat-staircase-nav.hidden {
   display: none;
@@ -2519,6 +2524,7 @@
   padding: 6px 2px;
   max-height: calc(100vh - 320px);
   overflow: hidden;
+  pointer-events: auto;
 }
 .chat-staircase-lines.is-hidden {
   visibility: hidden;
@@ -2558,6 +2564,7 @@
 
 .chat-staircase-nav.is-expanded {
   z-index: 13;
+  pointer-events: auto;
 }
 
 .chat-staircase-popover {
@@ -2575,6 +2582,7 @@
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
+  pointer-events: auto;
 }
 .chat-staircase-popover.hidden {
   display: none;

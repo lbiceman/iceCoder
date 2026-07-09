@@ -14,6 +14,54 @@ function workspaceFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.workspace.json`);
 }
 
+function sessionMessagesFilePath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.json`);
+}
+
+const LOCKED_ROOT_FILE_EXT =
+  /\.(md|markdown|rst|txt|log|yaml|yml|json|jsonc|toml|ini|cfg|conf|env|properties|lock|csv|tsv|xml|sql|ts|tsx|js|jsx|mjs|cjs|vue|svelte|astro|py|go|rs|rb|php|java|kt|kts|swift|scala|dart|lua|c|cc|cpp|cxx|h|hpp|hh|cs|m|mm|sh|bash|zsh|bat|cmd|ps1|gradle|html|htm|css|scss|sass|less|unity|prefab|asset|mat|shader|shadergraph|anim|controller|meta|scene|uasset|umap|png|jpe?g|gif|svg|webp|ico|pdf|docx?|xlsx?|pptx?)$/i;
+
+async function looksLikeCorruptFileLockedRoot(lockedRoot?: string): Promise<boolean> {
+  if (!lockedRoot) return false;
+  try {
+    const stat = await fs.stat(lockedRoot);
+    return stat.isFile();
+  } catch {
+    return LOCKED_ROOT_FILE_EXT.test(path.win32.basename(lockedRoot));
+  }
+}
+
+async function rebuildSessionWorkspaceFromMessages(
+  sessionDir: string,
+  sessionId: string,
+): Promise<SessionWorkspaceState | null> {
+  try {
+    const raw = await fs.readFile(sessionMessagesFilePath(sessionDir, sessionId), 'utf-8');
+    const messages = JSON.parse(raw) as Array<{ role?: string; content?: unknown }>;
+    let state = emptySessionWorkspaceState();
+    for (const msg of messages) {
+      if (msg?.role !== 'user' || typeof msg.content !== 'string') continue;
+      const detection = detectWorkspaceFromUserMessage(msg.content, state);
+      state = mergeWorkspaceDetection(state, detection);
+    }
+    return state.lockedRoot ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+async function repairCorruptFileLockedRoot(
+  sessionDir: string,
+  sessionId: string,
+  state: SessionWorkspaceState,
+): Promise<SessionWorkspaceState> {
+  if (!await looksLikeCorruptFileLockedRoot(state.lockedRoot)) return state;
+  const rebuilt = await rebuildSessionWorkspaceFromMessages(sessionDir, sessionId);
+  if (!rebuilt?.lockedRoot || rebuilt.lockedRoot === state.lockedRoot) return state;
+  await saveSessionWorkspace(sessionDir, sessionId, rebuilt);
+  return rebuilt;
+}
+
 export async function loadSessionWorkspace(
   sessionDir: string,
   sessionId: string,
@@ -21,12 +69,13 @@ export async function loadSessionWorkspace(
   try {
     const raw = await fs.readFile(workspaceFilePath(sessionDir, sessionId), 'utf-8');
     const parsed = JSON.parse(raw) as SessionWorkspaceState;
-    return {
+    const state = {
       referenceReads: parsed.referenceReads ?? [],
       changeCount: parsed.changeCount ?? 0,
       lockedRoot: parsed.lockedRoot,
       lockedAt: parsed.lockedAt,
     };
+    return await repairCorruptFileLockedRoot(sessionDir, sessionId, state);
   } catch {
     return emptySessionWorkspaceState();
   }

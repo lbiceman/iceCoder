@@ -5,12 +5,30 @@ import path from 'node:path';
 
 import {
   buildSupervisorEventsReport,
+  defaultSupervisorLogPaths,
   filterSupervisorTimelineEvents,
   extractExecutionModeEvents,
   readJsonlFile,
 } from '../../../src/web/routes/supervisor-events.js';
 
 describe('supervisor-events API helpers', () => {
+  it('resolves default log paths against ICE_DATA_DIR', () => {
+    const prev = process.env.ICE_DATA_DIR;
+    process.env.ICE_DATA_DIR = path.join(os.tmpdir(), 'ice-data-test');
+    try {
+      const paths = defaultSupervisorLogPaths();
+      expect(paths.supervisorLog).toBe(
+        path.resolve(process.env.ICE_DATA_DIR, 'runtime', 'supervisor-events.jsonl'),
+      );
+      expect(paths.runtimeLog).toBe(
+        path.resolve(process.env.ICE_DATA_DIR, 'runtime', 'telemetry.jsonl'),
+      );
+    } finally {
+      if (prev === undefined) delete process.env.ICE_DATA_DIR;
+      else process.env.ICE_DATA_DIR = prev;
+    }
+  });
+
   it('filters timeline events and formats report', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sup-events-'));
     const supervisorLog = path.join(dir, 'supervisor-events.jsonl');

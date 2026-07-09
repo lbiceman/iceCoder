@@ -298,6 +298,7 @@ window.ChatWebSocket = (function () {
     opts = opts || {};
     if (opts.messageId) payload.messageId = opts.messageId;
     if (opts.images && opts.images.length > 0) payload.images = opts.images;
+    if (opts.referencePaths && opts.referencePaths.length > 0) payload.referencePaths = opts.referencePaths;
     send(payload);
   }
 

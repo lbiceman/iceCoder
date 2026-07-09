@@ -670,11 +670,153 @@ body.setup-required .chat-sidebar-settings-btn {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 20px 24px 32px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 20px 32px 32px;
 }
 
 .settings-section {
-  max-width: 560px;
+  width: 100%;
+  max-width: none;
+}
+
+.settings-security-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-section-spaced {
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.settings-section-head .settings-section-title {
+  margin: 0;
+}
+
+.settings-section-loading {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.settings-section-loading.is-error {
+  color: var(--danger);
+}
+
+.settings-card {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.settings-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-card-header {
+  margin-bottom: 12px;
+}
+
+.settings-card-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-card-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.settings-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-card-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.settings-card-switch {
+  flex-shrink: 0;
+}
+
+.settings-risk-badge {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.settings-blacklist-card {
+  padding-bottom: 14px;
+}
+
+.settings-blacklist-editor {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-color) 80%, var(--accent) 20%);
+  background: color-mix(in srgb, var(--bg-input) 92%, transparent);
+}
+
+.settings-blacklist-textarea {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  max-height: 360px;
+  padding: 14px 16px;
+  border: none;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-primary);
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.settings-blacklist-textarea:focus {
+  outline: none;
+}
+
+.settings-blacklist-editor:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring-glow, var(--accent-glow));
+}
+
+.settings-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 2px;
+}
+
+.settings-card-footer .btn {
+  padding: 8px 16px;
+  font-size: 13px;
 }
 
 .settings-section-title {
@@ -692,9 +834,9 @@ body.setup-required .chat-sidebar-settings-btn {
 }
 
 .settings-theme-options {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(148px, 240px));
   gap: 12px;
-  flex-wrap: wrap;
 }
 
 .settings-theme-option {
@@ -702,7 +844,7 @@ body.setup-required .chat-sidebar-settings-btn {
   flex-direction: column;
   align-items: stretch;
   gap: 10px;
-  width: 148px;
+  width: 100%;
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -1082,5 +1224,23 @@ body.setup-required .chat-sidebar-settings-btn {
   .config-actions .btn {
     flex: 1;
     text-align: center;
+  }
+  .settings-general {
+    padding: 16px 12px 120px;
+  }
+  .settings-section {
+    max-width: none;
+  }
+  .settings-theme-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-card-row {
+    align-items: flex-start;
+  }
+  .settings-card-footer {
+    flex-direction: row;
+  }
+  .settings-card-footer .btn {
+    flex: 1;
   }
 }

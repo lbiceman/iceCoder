@@ -7,6 +7,8 @@ import {
   readSkipPermissionChecksFromMainConfig,
   readSupervisorModeFromMainConfig,
   resolveSkipPermissionChecks,
+  writeShellBlacklistToMainConfig,
+  writeSkipPermissionChecksToMainConfig,
   writeSupervisorModeToMainConfig,
 } from '../../src/config/main-config-supervisor-mode.js';
 
@@ -43,6 +45,36 @@ describe('main-config-supervisor-mode', () => {
     );
 
     expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(true);
+  });
+
+  it('writeSkipPermissionChecksToMainConfig persists boolean', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-config-'));
+    const configPath = path.join(dir, 'config.json');
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ providers: [] }, null, 2),
+      'utf-8',
+    );
+
+    expect(await writeSkipPermissionChecksToMainConfig(configPath, true)).toBe(true);
+    expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(true);
+    expect(await writeSkipPermissionChecksToMainConfig(configPath, false)).toBe(false);
+    expect(await readSkipPermissionChecksFromMainConfig(configPath)).toBe(false);
+  });
+
+  it('writeShellBlacklistToMainConfig persists patterns', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-config-'));
+    const configPath = path.join(dir, 'config.json');
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ providers: [] }, null, 2),
+      'utf-8',
+    );
+
+    const saved = await writeShellBlacklistToMainConfig(configPath, ['  rm\\s+-rf  ', '', 'git\\s+push']);
+    expect(saved).toEqual(['rm\\s+-rf', 'git\\s+push']);
+    const raw = JSON.parse(await fs.readFile(configPath, 'utf-8')) as { shellBlacklist?: string[] };
+    expect(raw.shellBlacklist).toEqual(['rm\\s+-rf', 'git\\s+push']);
   });
 
 });

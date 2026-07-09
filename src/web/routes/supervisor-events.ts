@@ -7,11 +7,21 @@
 import { Router, type Request, type Response } from 'express';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { getRuntimeDataDir } from '../../cli/paths.js';
+import { resolveTimelinePath } from '../../harness/supervisor/event-timeline.js';
 import type { RuntimeEvent, SupervisorTimelineEventType } from '../../types/supervisor.js';
 import type { ExecutionModeTelemetryPayload } from '../../types/supervisor.js';
 
 const DEFAULT_SUPERVISOR_LOG = 'data/runtime/supervisor-events.jsonl';
 const DEFAULT_RUNTIME_TELEMETRY_LOG = 'data/runtime/telemetry.jsonl';
+
+/** 与 EventTimeline / RuntimeTelemetry 落盘根一致（ICE_DATA_DIR/runtime/...）。 */
+export function defaultSupervisorLogPaths(): { supervisorLog: string; runtimeLog: string } {
+  return {
+    supervisorLog: resolveTimelinePath(DEFAULT_SUPERVISOR_LOG, getRuntimeDataDir()),
+    runtimeLog: resolveTimelinePath(DEFAULT_RUNTIME_TELEMETRY_LOG, getRuntimeDataDir()),
+  };
+}
 
 export interface SupervisorEventsQuery {
   days?: number;
@@ -205,8 +215,9 @@ export async function buildSupervisorEventsReport(
   const recentLimit = Math.min(Math.max(query.limit ?? 10, 1), 50);
   const eventFilter = query.event?.trim() || undefined;
 
-  const supervisorPath = paths.supervisorLog ?? DEFAULT_SUPERVISOR_LOG;
-  const runtimePath = paths.runtimeLog ?? DEFAULT_RUNTIME_TELEMETRY_LOG;
+  const defaults = defaultSupervisorLogPaths();
+  const supervisorPath = paths.supervisorLog ?? defaults.supervisorLog;
+  const runtimePath = paths.runtimeLog ?? defaults.runtimeLog;
 
   const supervisorRaw = await readJsonlFile(supervisorPath, days);
   const runtimeRaw = await readJsonlFile(runtimePath, days);

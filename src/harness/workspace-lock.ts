@@ -34,7 +34,8 @@ const WIN_UNC_PATH =
 
 const UNIX_PATH = /(?:^|[^\w])((?:\/[\w.-]+)+)/g;
 
-const FILE_EXT = /\.(md|txt|yaml|yml|json|ts|tsx|js|jsx|vue|py|go|rs)$/i;
+const FILE_EXT =
+  /\.(md|markdown|rst|txt|log|yaml|yml|json|jsonc|toml|ini|cfg|conf|env|properties|lock|csv|tsv|xml|sql|ts|tsx|js|jsx|mjs|cjs|vue|svelte|astro|py|go|rs|rb|php|java|kt|kts|swift|scala|dart|lua|c|cc|cpp|cxx|h|hpp|hh|cs|m|mm|sh|bash|zsh|bat|cmd|ps1|gradle|html|htm|css|scss|sass|less|unity|prefab|asset|mat|shader|shadergraph|anim|controller|meta|scene|uasset|umap|png|jpe?g|gif|svg|webp|ico|pdf|docx?|xlsx?|pptx?)$/i;
 
 const EXPLICIT_MARKER = /(?:工作目录|Workspace|仓库路径)\s*[:：]\s*/i;
 
@@ -202,6 +203,16 @@ function rootsEqual(a: string, b: string): boolean {
   return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 }
 
+/** candidate 是否位于 root 目录内部（严格子路径，不含 root 自身）。 */
+function isPathInsideRoot(root: string, candidate: string): boolean {
+  const rel = path.win32.relative(
+    path.win32.resolve(root),
+    path.win32.resolve(candidate),
+  );
+  if (!rel) return false;
+  return !rel.startsWith('..') && !path.win32.isAbsolute(rel);
+}
+
 function workspaceScoreThreshold(previous?: Pick<SessionWorkspaceState, 'lockedRoot'>, candidatePath?: string): number {
   if (!previous?.lockedRoot || !candidatePath) return WORKSPACE_SCORE_THRESHOLD;
   if (!rootsEqual(previous.lockedRoot, candidatePath)) {
@@ -277,12 +288,28 @@ export function detectWorkspaceFromUserMessage(
     const line = trimmed.split(/\r?\n/).find((l) => l.trim() === c.raw.trim());
     return !!line && !c.isFile;
   });
-  if (standaloneLinePath) {
+  if (standaloneLinePath && !previous?.lockedRoot) {
     bestWorkspace = { path: standaloneLinePath.normalized, score: 10 };
   }
 
-  const nextLockedRoot = workspaceChangeTarget ?? bestWorkspace?.path;
+  let nextLockedRoot = workspaceChangeTarget ?? bestWorkspace?.path;
   const prevRoot = previous?.lockedRoot;
+
+  // 已锁定工作区内部的路径（例如通过 @ 引用 `<lockedRoot>\Assets\x.unity`）
+  // 只是引用了工作区里的文件，绝不应改写已锁定的工作区根。
+  if (
+    prevRoot
+    && nextLockedRoot
+    && !rootsEqual(prevRoot, nextLockedRoot)
+    && isPathInsideRoot(prevRoot, nextLockedRoot)
+  ) {
+    const insideCandidate = candidates.find(
+      (c) => rootsEqual(c.normalized, nextLockedRoot as string),
+    );
+    if (insideCandidate?.isFile) referenceReads.add(insideCandidate.normalized);
+    nextLockedRoot = undefined;
+  }
+
   const refs = [...referenceReads];
 
   if (!nextLockedRoot) {

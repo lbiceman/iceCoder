@@ -406,6 +406,10 @@ window.ChatPage = (function () {
     }
 
     var text = getComposerText().trim();
+    var referencePaths = [];
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
+      referencePaths = FileRef.getSelectedRefs();
+    }
     var uploadedFiles = File.getUploadedFiles();
     var pendingImages = File.getPendingImages();
 
@@ -497,9 +501,13 @@ window.ChatPage = (function () {
       ? Session.getLastMessage().id
       : undefined;
     if (msgImages.length > 0) {
-      WS.sendMessage(msgText || '请分析这些图片', { messageId: outboundMessageId, images: msgImages });
+      WS.sendMessage(msgText || '请分析这些图片', {
+        messageId: outboundMessageId,
+        images: msgImages,
+        referencePaths: referencePaths,
+      });
     } else {
-      WS.sendMessage(msgText, { messageId: outboundMessageId });
+      WS.sendMessage(msgText, { messageId: outboundMessageId, referencePaths: referencePaths });
     }
     File.clearPendingImages();
 
