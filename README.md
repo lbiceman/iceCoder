@@ -136,13 +136,14 @@ Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervi
 - **F5 / WS reconnect** uses `runningTurn` + checkpoint replay so half-finished streams are not lost.
 - Legacy checkpoints without `runtimeV2` remain readable.
 
-### Tools (30 built-in + MCP)
+### Tools (27 built-in + MCP)
 
-File/Git/Shell, search, sub-agent delegation, URL fetch, Office parse, **system filesystem browser**, etc.; **MCP** registers external server tools into the same `ToolRegistry`.
+File/Git/Shell, search, URL fetch, Office/XMind parse, **system filesystem browser**, vision `image_read`, etc.; Harness also exposes **`delegate_to_subagent`**. **MCP** registers external server tools into the same `ToolRegistry`.
 
 - **Shell dual-track**: long `run_command` jobs go background, short ones foreground; soft timeout can escalate.
 - **Diff viewer** embeds Git-style diffs for edit tools in chat.
 - **confirm** without a UI callback defaults to **deny** for unattended safety.
+- **MCP settings UI**: start/stop servers, browse tools, edit JSON config (desktop `#/config` / mobile `#/m/config`).
 
 ### Telemetry & observability
 
@@ -154,27 +155,28 @@ Harness rounds, memory ops, L1 mode changes, L2 timeline → `data/*/telemetry.j
 
 ### Tests & quality baseline
 
-**~2,000+** Vitest cases (**~78%** line coverage on `src/`; Harness **~84%**, Supervisor **~95%**, memory **~71%** — run `npm run test:coverage` locally).
+**~2,000** Vitest cases across **~225** files (**~78%** line coverage on `src/`; Harness **~84%**, Supervisor **~95%**, memory **~71%** — run `npm run test:coverage` locally).
 
 - Covers gates, TaskGraph, dual-mode, memory lifecycle, Web routes, and long-session scenarios.
 - **`npm run eval:agent`**: Agent behavior regression — 7 fixed cases in isolated temp workspaces, real Harness + tools, pass/fail + metrics; `--mode=mock` for no-API smoke. See [`docs/使用文档.md`](./docs/使用文档.md).
+- **`npm run telemetry:runtime`**: summarize runtime telemetry JSONL for long-run debugging.
 - How to run: [`docs/使用文档.md`](./docs/使用文档.md).
 
 ### Local benchmarks
 
-Blind **same-model** runs vs **Claude Code** (judge: Cursor Composer 2.5); **SR** (acceptance pass) + **Composite (Gate 40 + Judge 60)**, not turn count alone.
+Blind **same-model** runs vs **Claude Code**; **SR** (acceptance pass) + **Composite (Gate 40 + Judge 60)**, not turn count alone.
 
-- Layers L1–L6 plus **L4+** (e.g. billing: 97 files, 19 cross-module logic bugs); repair tasks often **+3** Composite for iceCoder — see table below.
-- How to run: [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md) · rubric [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md).
+- Layers **L1–L8** (billing L4+: 97 files / 19 bugs; fusion L7: 33 probes; **L8 SaaS fusion**: multi-tenant order × supply × approval × billing).
+- How to run: [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md#本地-benchmark) · rubric [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md).
 
-**Read more:** dual-mode → [`docs/requirement/L2测试过程.md`](./docs/requirement/L2测试过程.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · memory → [`docs/requirement/记忆系统调整-finish.md`](./docs/requirement/记忆系统调整-finish.md) · multi-session → [`docs/requirement/多会话-web侧栏-finish.md`](./docs/requirement/多会话-web侧栏-finish.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
+**Read more:** dual-mode → [`docs/双模机制详解.md`](./docs/双模机制详解.md) · L2 → [`docs/L2监管层详解.md`](./docs/L2监管层详解.md) · memory → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · compaction → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · overview → [`docs/项目介绍.md`](./docs/项目介绍.md) · mobile H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
 
 ---
 
 ## Local benchmark scores
 
 Judge: **Cursor Composer 2.5** · Rubric: [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)  
-Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/tasks/`](./benchMark/tasks/) · **How to run:** [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md)
+Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/tasks/`](./benchMark/tasks/) · **How to run:** [`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md#本地-benchmark)
 
 > **Do not mix model batches** when comparing platforms (`m2.7` vs `m2.5-pro` vs `MiniMax-M3`).
 
@@ -187,8 +189,10 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 | [Billing 19 bugs](./benchMark/reports/debug-billing-settlement.md) **02** | CC | **MiniMax-M3** | ✅ 19/19 | **92** | — | **5m 45s** |
 | [Fusion L7 33 probes](./benchMark/reports/debug-fusion-supply-fintech.md) **01** | iceCoder | **MiniMax-M3** | ✅ 33/33 | **91** | — | **≈5.3 min** |
 | [Fusion L7 33 probes](./benchMark/reports/debug-fusion-supply-fintech.md) **02** | CC | **MiniMax-M3** | ✅ 33/33 | **92** | +1 | **6m 17s** |
+| [SaaS L8 fusion](./benchMark/reports/debug-saas-order-supply-approval-fusion-05.md) **01** | iceCoder | GPT-5.5 judge | ✅ 7/7 Gate | **71** | +2 vs 02 | **≈16m** · 122 turns |
+| [SaaS L8 fusion](./benchMark/reports/debug-saas-order-supply-approval-fusion-05.md) **02** | CC | GPT-5.5 judge | ✅ 7/7 Gate | **69** | — | **≈5m** |
 
-**Takeaway:** Same model + same repo — iceCoder leads on **governed delivery** (acceptance pass, composite, or wall-clock on L4+ billing); CC can win on isolated code style (e.g. `tax-line-builder`). The **+1** on billing (93 vs 92) is **D6 delivery notes only** — see report §「分差解读」.
+**Takeaway:** Same model + same repo — iceCoder leads on **governed delivery** (acceptance pass, composite, or wall-clock on L4+ billing); CC can win on isolated code style or raw speed. L8 both pass public Gate **38/40** with thin implementations vs the 160–220-file design target; iceCoder **+2** Composite (71 vs 69) mainly from shipping over-ship fix.
 
 ---
 
@@ -196,7 +200,7 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 
 ```text
 CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify, compact)
-  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 30 tools + MCP
+  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 27 tools + MCP
 ```
 
 | Piece | Role |
@@ -217,9 +221,14 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 | [**使用文档**](./docs/使用文档.md) | **Commands** — install, dev, CLI, tests, benchmark, `~` commands |
 | [PROJECT-GUIDE](./docs/PROJECT-GUIDE.md) | Architecture & modules |
 | [项目介绍](./docs/项目介绍.md) | Chinese full reference |
+| [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 design (no vector DB) |
+| [压缩机制详解](./docs/压缩机制详解.md) | Layered compaction + structured recovery |
+| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L2 dual-mode overview |
+| [L2监管层详解](./docs/L2监管层详解.md) | L2 takeover / handoff deep dive |
 | [PACKAGE_USAGE](./PACKAGE_USAGE.md) | `npm pack` install |
 | [Benchmark rubric](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | Scoring methodology |
 | [debug-billing-settlement](./benchMark/reports/debug-billing-settlement.md) | L4+ 19-bug run (M3, iceCoder vs CC) |
+| [debug-saas-order-supply-approval-fusion-05](./benchMark/reports/debug-saas-order-supply-approval-fusion-05.md) | L8 SaaS fusion (iceCoder vs CC) |
 
 ---
 

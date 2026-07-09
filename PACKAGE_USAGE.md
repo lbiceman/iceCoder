@@ -1,6 +1,6 @@
 # iceCoder 打包与分发使用说明
 
-> 最后更新：2026-06-04  
+> 最后更新：2026-07-09  
 > 日常开发命令（`dev`、测试、Benchmark、`~` 命令）见 [`docs/使用文档.md`](./docs/使用文档.md)。本文只说明 **`npm pack` 产物如何安装与运行**。
 
 ## 简介
@@ -9,7 +9,7 @@ iceCoder 可通过 `npm pack` 打成 **`ice-coder-<version>.tgz`**，在**无完
 
 ## 前置要求
 
-- **Node.js** >= 18（推荐 **22+**）
+- **Node.js** **22+**（与 `package.json` → `engines.node` 一致）
 - **npm**（仓库脚本以 npm 为准；亦可用 pnpm / yarn 安装依赖）
 
 ## 构建安装包（维护者）
@@ -35,6 +35,8 @@ npm run build
 |------|------|
 | `dist/` | 编译后的 Node 入口、CLI、Harness、Web 服务 |
 | `data/config.example.json` | API 配置模板 |
+| `data/supervisor-config.example.json` | 双模监管参数模板 |
+| `data/skills/创建技能.md` | 技能创建指引 |
 | `data/system-prompt.md` | 系统提示词模板 |
 | `package.json` | 依赖与 `bin` |
 | `README.md` | 英文简要说明 |
@@ -105,7 +107,7 @@ cp data/config.example.json data/config.json
 }
 ```
 
-环境变量（`ICE_DATA_DIR`、`ICE_SUPERVISOR_MODE` 等）见 [`docs/环境变量.md`](./docs/环境变量.md)。
+环境变量（`ICE_DATA_DIR`、`ICE_SKILLS_DIR`、`ICE_SUPERVISOR_SHADOW` 等）见 [`docs/环境变量.md`](./docs/环境变量.md)。监管档位写在 `data/config.json` 的 **`supervisorMode`**（`off` / `adaptive` / `strict`）。
 
 ## 运行方式
 
@@ -168,7 +170,7 @@ iceCoder run "修复失败测试并跑通 npm test" --max-rounds 100
 
 ```bash
 npm test
-# 约 1,867 条 Vitest 用例，详见 docs/使用文档.md
+# 约 2,000 条 Vitest 用例，详见 docs/使用文档.md
 ```
 
 **使用者**安装 tgz 后快速自检：
