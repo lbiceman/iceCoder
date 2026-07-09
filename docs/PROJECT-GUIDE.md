@@ -10,7 +10,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
-[中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md) | [Next Work](./nextWork.md)
+[中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md)
 
 ---
 
@@ -624,7 +624,6 @@ Metrics per case and aggregate:
 
 **TaskGraph eval** (separate): `npx tsx scripts/eval-runner.ts` — graph completion / node scores from benchmark fixtures.
 
-Remaining release cleanup is tracked in [`docs/nextWork.md`](./nextWork.md).
 
 ---
 
@@ -784,7 +783,7 @@ src/
   web/              # Express server, routes, WebSocket chat, workspace browse
   public/           # Vite root: chat UI, Skills/Memory pages, mobile shell, Ice Bean
   types/            # Shared types (runtime snapshot, task-graph, runtime-checkpoint schema)
-docs/               # Requirements archives, memory benchmarks, dual-mode specs, nextWork
+docs/               # Requirements archives, memory benchmarks, dual-mode specs
 test/               # Vitest suites mirroring src areas
 data/               # Provider config templates, sessions, optional MCP-side memory sample
 ```
@@ -820,7 +819,6 @@ Higher-level prose (beyond this README):
 
 - [`docs/环境变量.md`](./环境变量.md) — **full environment variable reference** (purpose, valid values, defaults)
 - [`docs/环境变量.md`](./环境变量.md) — 环境变量（中文详版）
-- [`docs/nextWork.md`](./nextWork.md) — active roadmap and eval gaps
 - [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
 - [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
@@ -831,14 +829,3 @@ Higher-level prose (beyond this README):
 - [`docs/locomo/memory-optimization-roadmap.md`](./locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes
 
 ---
-
-## Roadmap
-
-The remaining work is tracked in [`docs/nextWork.md`](./nextWork.md). Representative next items:
-
-1. ~~Memory v2 structured levels and conflict arbitration~~ — **done** (levels / evidence / intent filter / same-round conflict dedupe; `memory-conflict` eval). Optional: Dream preference merge, token/noise metrics.
-2. Deeper compaction / session-notes integration (token accounting, tighter recovery budgets) — `icecoder-runtime` snapshots already exist
-3. Eval CI gate + telemetry trend integration (`npm run eval:agent` Agent runner done; `scripts/eval-runner.ts` for TaskGraph)
-4. Telemetry persistence for runtime metrics
-5. **Dual-mode supervisor** — core path wired; continue spec completion, telemetry, and edge cases per [`docs/双模方案2.md`](./双模方案2.md)
-6. Stronger adaptive planning beyond the intent-based tool planner (see TaskGraph requirement docs)
