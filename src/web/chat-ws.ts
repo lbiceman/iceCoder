@@ -121,7 +121,7 @@ import {
 } from './session-tool-trace-diffs.js';
 // isExecutionPlanEnabled removed (Phase 11)
 
-import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
+import { applyRuntimeDataEnvDefaults, getDefaultWorkDir } from '../cli/paths.js';
 import { getSkillRegistry } from '../core/skill-registry.js';
 import {
   beginSessionHarnessRun,
@@ -779,7 +779,7 @@ async function handleBgTaskStop(
   }
 }
 
-const DEFAULT_WORK_DIR = process.cwd();
+const DEFAULT_WORK_DIR = getDefaultWorkDir();
 
 async function resolveSessionWorkspacePayload(sessionId: string) {
   return resolveEffectiveWorkspaceRoot(SESSIONS_DIR, sessionId, DEFAULT_WORK_DIR);
@@ -1785,7 +1785,7 @@ async function handleChatMessage(
     sessionDir: SESSIONS_DIR,
     sessionId: runSessionId,
     userMessage: workspaceMessage,
-    defaultWorkDir: process.cwd(),
+    defaultWorkDir: getDefaultWorkDir(),
     defaultToolExecutor: toolExecutor,
     defaultToolRegistry: toolRegistry,
     fileParser: orchestrator.getFileParser(),
@@ -2031,7 +2031,7 @@ async function handleChatMessage(
       const synthesized = await resolveToolDiffForSession({
         sessionsDir: SESSIONS_DIR,
         sessionId: runSessionId,
-        defaultWorkDir: process.cwd(),
+        defaultWorkDir: getDefaultWorkDir(),
         toolCallId: trace.toolCallId,
         relPath: trace.detail,
         toolName: 'write_file',

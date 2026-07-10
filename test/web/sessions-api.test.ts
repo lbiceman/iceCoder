@@ -21,6 +21,7 @@ describe('Sessions API (multi-session)', () => {
   let server: Server;
   let baseUrl: string;
   const prevSessionsDir = process.env.ICE_SESSIONS_DIR;
+  const prevDefaultWorkDir = process.env.ICE_DEFAULT_WORK_DIR;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sessions-api-'));
@@ -43,6 +44,11 @@ describe('Sessions API (multi-session)', () => {
       delete process.env.ICE_SESSIONS_DIR;
     } else {
       process.env.ICE_SESSIONS_DIR = prevSessionsDir;
+    }
+    if (prevDefaultWorkDir === undefined) {
+      delete process.env.ICE_DEFAULT_WORK_DIR;
+    } else {
+      process.env.ICE_DEFAULT_WORK_DIR = prevDefaultWorkDir;
     }
   });
 
@@ -177,6 +183,18 @@ describe('Sessions API (multi-session)', () => {
     const defaultBody = await defaultRes.json() as { workspaceRoot: string; defaultWorkDir: string };
     expect(defaultBody.workspaceRoot).toBe(process.cwd());
     expect(defaultBody.defaultWorkDir).toBe(process.cwd());
+  });
+
+  it('GET /workspace/:id uses ICE_DEFAULT_WORK_DIR when no workspace is locked', async () => {
+    const defaultWorkDir = path.join(tempDir, 'desktop-default-workdir');
+    await fs.mkdir(defaultWorkDir, { recursive: true });
+    process.env.ICE_DEFAULT_WORK_DIR = defaultWorkDir;
+
+    const res = await fetch(`${baseUrl}/workspace/default`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { workspaceRoot: string; defaultWorkDir: string };
+    expect(body.workspaceRoot).toBe(path.resolve(defaultWorkDir));
+    expect(body.defaultWorkDir).toBe(path.resolve(defaultWorkDir));
   });
 
   it('GET /workspace/:id works through full web createServer stack', async () => {

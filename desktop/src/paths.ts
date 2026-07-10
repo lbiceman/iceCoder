@@ -93,10 +93,19 @@ export function writePetFloatingPosition(pos: PetFloatingPosition): void {
   fs.writeFileSync(file, JSON.stringify(pos, null, 2));
 }
 
-/** 启动 server 的子进程 cwd 解析：优先用户工作区，回退到 home。 */
+/** iceCoder 数据目录（设置页配置，未设置时 ~/\.iceCoder）。 */
+export function resolveDataDirectory(): string {
+  return readDataDirectory() ?? path.join(os.homedir(), '.iceCoder');
+}
+
+/** 启动 server 的子进程 cwd：数据目录存在则使用它，否则用用户目录兜底。 */
 export function resolveServerCwd(): string {
-  const ws = readWorkspace();
-  if (ws) return ws;
+  const dataDir = resolveDataDirectory();
+  try {
+    if (fs.statSync(dataDir).isDirectory()) return dataDir;
+  } catch {
+    // 数据目录不存在或不可访问时，使用稳定存在的用户目录启动 server。
+  }
   return os.homedir();
 }
 

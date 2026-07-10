@@ -7,6 +7,7 @@ import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import type { AssembledPrompt } from './types.js';
 import { PromptAssembler } from './prompt-assembler.js';
+import { getDefaultWorkDir } from '../cli/paths.js';
 
 export interface LoadChatPromptOptions {
   /** 日志前缀，如 '[chat-ws]' */
@@ -84,7 +85,7 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
   return assembler.assemble({
     customSystemPrompt,
     environment: {
-      workingDirectory: process.cwd(),
+      workingDirectory: getDefaultWorkDir(),
       platform: process.platform === 'win32' ? 'win32' : process.platform,
       currentDate: new Date().toISOString().slice(0, 10),
     },
