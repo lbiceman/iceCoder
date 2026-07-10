@@ -54,6 +54,7 @@ function createWindow(show: boolean): BrowserWindow {
     minWidth: 960,
     minHeight: 640,
     show,
+    autoHideMenuBar: true,
     backgroundColor: '#0e0f12',
     title: APP_NAME,
     ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
@@ -268,9 +269,6 @@ async function bootstrap(): Promise<void> {
   mainWindow.on('restore', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
   mainWindow.on('show', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
 
-  // 6) 顶栏原生菜单暂隐藏（原仅「帮助」一项）
-  Menu.setApplicationMenu(null);
-
   tray = buildTray(mainWindow, {
     showMain: () => showAndFocusMain(),
     quit: () => { void gracefulShutdown(); },
@@ -303,6 +301,8 @@ app.on('activate', () => {
 
 app.whenReady().then(() => {
   logStartupTiming('electron-ready');
+  // 启动窗口创建前就移除默认菜单，避免加载阶段出现 File/Edit 顶栏
+  Menu.setApplicationMenu(null);
   const appIcon = resolveAppIcon();
   if (!appIcon.isEmpty() && process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(appIcon);

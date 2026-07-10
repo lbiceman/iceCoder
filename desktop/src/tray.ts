@@ -1,26 +1,38 @@
 /**
  * tray.ts — 系统托盘
  */
-import { Tray, Menu, app, nativeImage, BrowserWindow } from 'electron';
+import { Tray, Menu, nativeImage, BrowserWindow } from 'electron';
 import path from 'node:path';
-import { IPC } from './constants';
 
 export interface TrayCallbacks {
   showMain: () => void;
   quit: () => void;
 }
 
+function resolveTrayIcon(): Electron.NativeImage {
+  const assetsDir = path.join(__dirname, '..', 'assets');
+  const candidates =
+    process.platform === 'win32'
+      ? ['tray-icon.png', 'icon.ico', 'icon.png']
+      : ['tray-icon.png', 'icon.png', 'icon.ico'];
+  for (const name of candidates) {
+    const image = nativeImage.createFromPath(path.join(assetsDir, name));
+    if (!image.isEmpty()) {
+      const traySize = process.platform === 'win32' ? 16 : 22;
+      const { width } = image.getSize();
+      return width === traySize
+        ? image
+        : image.resize({ width: traySize, height: traySize, quality: 'best' });
+    }
+  }
+  return nativeImage.createEmpty();
+}
+
 export function buildTray(
   mainWindow: BrowserWindow,
   cb: TrayCallbacks,
 ): Tray {
-  // 占位图标：1x1 透明 PNG（无品牌资源时不报错）
-  const iconPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
-  let image = nativeImage.createFromPath(iconPath);
-  if (image.isEmpty()) {
-    image = nativeImage.createEmpty();
-  }
-  const tray = new Tray(image);
+  const tray = new Tray(resolveTrayIcon());
   tray.setToolTip('iceCoder');
 
   const menu = Menu.buildFromTemplate([
