@@ -135,6 +135,14 @@ window.ChatSession = (function () {
     return msg;
   }
 
+  /** 可跨刷新持久化的图片 URL（排除 inline data URL，避免 localStorage 配额溢出）。 */
+  function filterPersistableImageUrls(urls) {
+    if (!Array.isArray(urls)) return [];
+    return urls.filter(function (u) {
+      return typeof u === 'string' && u && u.indexOf('data:') !== 0;
+    });
+  }
+
   function serializeMessageForStorage(m) {
     var c = m.content;
     if (m.role === 'agent' && typeof c === 'string') c = stripStatusTag(c);
@@ -142,8 +150,9 @@ window.ChatSession = (function () {
     if (m.id) o.id = m.id;
     if (typeof m.sentAt === 'number' && isFinite(m.sentAt)) o.sentAt = m.sentAt;
     if (typeof m.completedAt === 'number' && isFinite(m.completedAt)) o.completedAt = m.completedAt;
-    if (Array.isArray(m.images) && m.images.length > 0) {
-      o.images = m.images.slice();
+    var persistableImages = filterPersistableImageUrls(m.images);
+    if (persistableImages.length > 0) {
+      o.images = persistableImages;
     }
     if (m.turnTokenUsage && typeof m.turnTokenUsage === 'object') {
       o.turnTokenUsage = {
@@ -321,9 +330,23 @@ window.ChatSession = (function () {
    * 多端同步：在 processing / 流式期间插入远端用户消息（插在当前轮 assistant 流式气泡之前）。
    * @returns {boolean} 是否新增了消息
    */
+  function patchUserMessageImages(id, images) {
+    if (!id) return false;
+    var persistable = filterPersistableImageUrls(images);
+    if (persistable.length === 0) return false;
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].id !== id) continue;
+      messages[i].images = persistable.slice();
+      return true;
+    }
+    return false;
+  }
+
   function insertRemoteUserMessage(msg) {
     if (!msg || msg.role !== 'user') return false;
-    if (hasUserMessageId(msg.id)) return false;
+    if (hasUserMessageId(msg.id)) {
+      return patchUserMessageImages(msg.id, msg.images || []);
+    }
     stampMessageTimestamps(msg);
     var insertAt = messages.length;
     for (var i = messages.length - 1; i >= 0; i--) {
@@ -495,6 +518,8 @@ window.ChatSession = (function () {
     saveLiveToolBatch: saveLiveToolBatch,
     hasStreamingModelBubble: hasStreamingModelBubble,
     insertRemoteUserMessage: insertRemoteUserMessage,
+    patchUserMessageImages: patchUserMessageImages,
+    hasUserMessageId: hasUserMessageId,
     mergeUserMessagesFromServer: mergeUserMessagesFromServer,
     fetchAndMergeRemoteUserMessages: fetchAndMergeRemoteUserMessages,
     stripStatusTag: stripStatusTag,

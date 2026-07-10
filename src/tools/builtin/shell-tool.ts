@@ -6,6 +6,8 @@
 import { spawn } from 'node:child_process';
 import type { RegisteredTool, ToolOutputCallback } from '../types.js';
 import { getBackgroundTaskManagerFor } from '../background-task-manager.js';
+import { registerForegroundShell, unregisterForegroundShell } from '../foreground-shell-registry.js';
+import { killShellProcessTree } from '../shell-process-kill.js';
 import {
   formatNormalizedCommandOutput,
   normalizeRunCommand,
@@ -216,9 +218,12 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
 
         const child = spawn(shell, shellArgs, {
           cwd: normalized.cwd,
-          env: buildShellChildEnv(),
+          env: buildShellChildEnv(sessionId),
           stdio: ['ignore', 'pipe', 'pipe'],
+          detached: !isWindows,
+          windowsHide: true,
         });
+        registerForegroundShell(sessionId, child, command);
 
         let stdout = '';
         let stderr = '';
@@ -236,8 +241,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         const hardTimer = setTimeout(() => {
           if (escalated || settled) return;
           killed = true;
-          child.kill('SIGTERM');
-          setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, 2000);
+          killShellProcessTree(child.pid ?? null, child);
         }, timeout);
 
         // Phase 2: 软超时 escalate（仅 'auto' 分支）
@@ -263,14 +267,14 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
               hardTimeoutMs: HARD_TIMEOUT_LONG_MS,
               reason: 'soft_timeout',
             });
+            unregisterForegroundShell(child);
 
             if (adoptResult.error) {
               // adopt 失败（如并发上限）：此时前台 stdout/stderr/close listener 已卸载，
               // 且 hardTimer 已清除，无法干净回退前台模式。为避免子进程变成无人收割、
               // 无超时约束的孤儿进程，这里直接终止它，并以已捕获的部分输出 settle。
               killed = true;
-              try { child.kill('SIGTERM'); } catch { /* ignore */ }
-              setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, 2000).unref();
+              killShellProcessTree(child.pid ?? null, child);
               const failedPartial = prefix.slice(-2000);
               safeResolve({
                 success: false,

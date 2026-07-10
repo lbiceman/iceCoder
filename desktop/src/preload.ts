@@ -33,6 +33,12 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.WORKSPACE_CHANGED, listener);
   },
 
+  /** iceCoder 数据目录（重启后生效）。 */
+  getDataDirectory: (): Promise<string> => ipcRenderer.invoke(IPC.DATA_DIRECTORY_GET),
+  pickDataDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.DATA_DIRECTORY_PICK),
+  setDataDirectory: (dataDir: string | null): Promise<string> =>
+    ipcRenderer.invoke(IPC.DATA_DIRECTORY_SET, dataDir),
+
   /** 应用级。 */
   openDataDir: () => ipcRenderer.send(IPC.APP_OPEN_DATA_DIR),
   quit: () => ipcRenderer.send(IPC.APP_QUIT),

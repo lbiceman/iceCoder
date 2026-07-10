@@ -35,6 +35,26 @@ window.SettingsPage = (function () {
   function renderGeneralPanel(parentEl) {
     var shell = window.AppShell;
     var theme = (shell && typeof shell.getTheme === 'function') ? shell.getTheme() : 'dark';
+    var dataDirectorySection =
+      '<section class="settings-section settings-section-spaced" id="settings-data-directory-section">' +
+        '<h2 class="settings-section-title">数据目录</h2>' +
+        '<p class="settings-section-desc">iceCoder 的会话、缓存、技能和 MCP 配置默认保存在用户目录的 <code>.iceCoder</code> 文件夹中。可改到其他磁盘以释放系统盘空间。</p>' +
+        '<div class="settings-card" id="settings-data-directory-card">' +
+          '<div class="settings-card-info">' +
+            '<div class="settings-card-title-row"><span class="settings-card-title">iceCoder 数据文件夹</span><span class="config-badge is-off" id="settings-data-directory-env-badge">检测中</span></div>' +
+            '<p class="settings-card-desc" id="settings-data-directory-desc">选择完整的数据文件夹路径；更改将在重启应用后生效。</p>' +
+          '</div>' +
+          '<div class="settings-data-directory-controls">' +
+            '<input class="settings-data-directory-input" id="settings-data-directory-input" type="text" spellcheck="false" aria-label="iceCoder 数据文件夹路径" />' +
+            '<button type="button" class="btn btn-secondary" id="settings-data-directory-browse">选择文件夹</button>' +
+          '</div>' +
+          '<p class="settings-data-directory-note" id="settings-data-directory-note"></p>' +
+          '<div class="settings-card-footer">' +
+            '<button type="button" class="btn btn-secondary" id="settings-data-directory-reset">恢复默认</button>' +
+            '<button type="button" class="btn btn-primary" id="settings-data-directory-save">保存位置</button>' +
+          '</div>' +
+        '</div>' +
+      '</section>';
 
     parentEl.innerHTML =
       '<div class="settings-general">' +
@@ -64,6 +84,7 @@ window.SettingsPage = (function () {
             '</button>' +
           '</div>' +
         '</section>' +
+        dataDirectorySection +
         '<section class="settings-section settings-section-spaced" id="settings-security-section">' +
           '<div class="settings-section-head">' +
             '<h2 class="settings-section-title">安全与执行</h2>' +
@@ -109,7 +130,95 @@ window.SettingsPage = (function () {
       '</div>';
 
     bindThemeOptions(parentEl, shell);
+    bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
+  }
+
+  function bindDataDirectorySettings(parentEl) {
+    var desktop = window.iceDesktop;
+    var migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。';
+
+    var input = parentEl.querySelector('#settings-data-directory-input');
+    var browseBtn = parentEl.querySelector('#settings-data-directory-browse');
+    var saveBtn = parentEl.querySelector('#settings-data-directory-save');
+    var resetBtn = parentEl.querySelector('#settings-data-directory-reset');
+    var badge = parentEl.querySelector('#settings-data-directory-env-badge');
+    var note = parentEl.querySelector('#settings-data-directory-note');
+    if (!input || !browseBtn || !saveBtn || !resetBtn) return;
+
+    if (!desktop || typeof desktop.getDataDirectory !== 'function') {
+      input.value = '';
+      input.placeholder = '选择完整的数据文件夹路径；更改将在重启应用后生效。';
+      input.disabled = true;
+      browseBtn.disabled = true;
+      saveBtn.disabled = true;
+      resetBtn.disabled = true;
+      if (badge) {
+        badge.textContent = '不可修改';
+        badge.classList.remove('is-off');
+        badge.classList.add('is-starting');
+      }
+      if (note) {
+        note.textContent = migrationTip;
+      }
+      return;
+    }
+
+    if (badge) {
+      badge.textContent = '可修改';
+      badge.classList.remove('is-off');
+      badge.classList.add('is-ready');
+    }
+    if (note) {
+      note.textContent = migrationTip;
+    }
+
+    desktop.getDataDirectory()
+      .then(function (dataDir) { input.value = dataDir || ''; })
+      .catch(function () {
+        if (window.Notification) window.Notification.error('无法读取数据目录');
+      });
+
+    browseBtn.addEventListener('click', function () {
+      desktop.pickDataDirectory()
+        .then(function (dataDir) {
+          if (dataDir) input.value = dataDir;
+        })
+        .catch(function () {
+          if (window.Notification) window.Notification.error('无法选择文件夹');
+        });
+    });
+
+    saveBtn.addEventListener('click', function () {
+      var dataDir = input.value.trim();
+      if (!dataDir) {
+        if (window.Notification) window.Notification.error('请选择数据文件夹');
+        return;
+      }
+      saveBtn.disabled = true;
+      desktop.setDataDirectory(dataDir)
+        .then(function (savedDataDir) {
+          input.value = savedDataDir;
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录');
+        })
+        .catch(function (err) {
+          if (window.Notification) window.Notification.error((err && err.message) || '保存失败，请输入绝对路径');
+        })
+        .finally(function () { saveBtn.disabled = false; });
+    });
+
+    resetBtn.addEventListener('click', function () {
+      resetBtn.disabled = true;
+      desktop.setDataDirectory(null)
+        .then(function (defaultDataDir) {
+          input.value = defaultDataDir;
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录');
+        })
+        .catch(function () {
+          if (window.Notification) window.Notification.error('恢复默认位置失败');
+        })
+        .finally(function () { resetBtn.disabled = false; });
+    });
   }
 
   function bindThemeOptions(parentEl, shell) {

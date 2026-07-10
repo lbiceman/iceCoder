@@ -414,6 +414,7 @@ window.ChatPage = (function () {
     var pendingImages = File.getPendingImages();
 
     if (File.hasPendingUploads && File.hasPendingUploads()) return;
+    if (File.hasPendingImageLoads && File.hasPendingImageLoads()) return;
     if (!text && uploadedFiles.length === 0 && pendingImages.length === 0) return;
 
     if (executeLocalCommand(text)) {
@@ -1544,7 +1545,17 @@ window.ChatPage = (function () {
   function applyRemoteUserMessage(msg) {
     if (!msg || msg.role !== 'user') return false;
     if (msg.sessionId && Session.getActiveId && msg.sessionId !== Session.getActiveId()) return false;
+    var existed = Session.hasUserMessageId && Session.hasUserMessageId(msg.id);
     if (!Session.insertRemoteUserMessage || !Session.insertRemoteUserMessage(msg)) return false;
+    if (existed) {
+      if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
+        UI.updateMessageImagesEl(msg.id, msg.images);
+      }
+      Session.saveMessages();
+      syncWelcomeState();
+      UI.scheduleScrollIfSticky();
+      return true;
+    }
     if (UI.insertRemoteUserMessageEl) {
       UI.insertRemoteUserMessageEl(msg, Session.stripStatusTag);
     } else {

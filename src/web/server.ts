@@ -20,6 +20,7 @@ import { createSetupGateMiddleware } from './setup-gate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const HASHED_ASSET_NAME = /-[A-Za-z0-9_-]{8,}\.[^.]+$/;
 
 /**
  * 创建 Express 服务器的配置。
@@ -76,7 +77,17 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   };
 
   if (isProd) {
-    app.use(express.static(staticDir));
+    app.use(express.static(staticDir, {
+      setHeaders: (res, filePath) => {
+        // Vite 指纹资源的 URL 会随内容变化，可跨应用重启复用浏览器磁盘缓存；
+        // HTML 和未指纹化的 pet 原始资源保持不缓存，避免发布后引用旧文件。
+        if (filePath.includes(`${path.sep}assets${path.sep}`) && HASHED_ASSET_NAME.test(path.basename(filePath))) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          return;
+        }
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      },
+    }));
     app.get('/favicon.ico', sendFaviconIco);
     app.get('/{*splat}', (_req: Request, res: Response) => {
       if (_req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });

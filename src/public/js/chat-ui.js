@@ -2210,6 +2210,43 @@ window.ChatUI = (function () {
     followBottomAfterContentPatch();
   }
 
+  /** 服务端持久化后，将用户消息中的 data URL 替换为 /api/sessions/... URL 并刷新 DOM。 */
+  function updateMessageImagesEl(messageId, images) {
+    if (!messageId || !Array.isArray(images) || images.length === 0) return false;
+    var persistable = images.filter(function (u) {
+      return typeof u === 'string' && u && u.indexOf('data:') !== 0;
+    });
+    if (persistable.length === 0) return false;
+
+    var root = null;
+    if (elMessages) {
+      root = elMessages.querySelector('.message[data-message-id="' + messageId + '"]');
+    }
+    if (!root) return false;
+
+    var imgRow = root.querySelector('.msg-images');
+    if (!imgRow) {
+      imgRow = document.createElement('div');
+      imgRow.className = 'msg-images';
+      var label = root.querySelector('.msg-label');
+      var anchor = label ? label.nextElementSibling : root.firstChild;
+      if (anchor) root.insertBefore(imgRow, anchor);
+      else root.appendChild(imgRow);
+    }
+    imgRow.innerHTML = '';
+    for (var j = 0; j < persistable.length; j++) {
+      var img = document.createElement('img');
+      img.src = persistable[j];
+      img.className = 'msg-image-thumb';
+      img.alt = '图片 ' + (j + 1);
+      imgRow.appendChild(img);
+    }
+    if (isNodeInHistoryRegion(root)) notifyHistoryLayoutChange(root);
+    else notifyTailLayoutChange();
+    followBottomAfterContentPatch();
+    return true;
+  }
+
   /**
    * 尾部真实 DOM 中用户轮次超过 N 时，重绘以把更早轮次迁入虚拟历史区。
    * （仅靠 append 不重绘时，第 3+ 轮会一直堆在 tail-root）
@@ -2497,6 +2534,7 @@ window.ChatUI = (function () {
     appendMessageEl: appendMessageEl,
     insertRemoteUserMessageEl: insertRemoteUserMessageEl,
     updateMessageContent: updateMessageContent,
+    updateMessageImagesEl: updateMessageImagesEl,
     updateMessageTokenUsage: updateMessageTokenUsage,
     appendStreamChunk: appendStreamChunk,
     appendReasoningStreamChunk: appendReasoningStreamChunk,

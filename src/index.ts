@@ -73,6 +73,11 @@ import { normalizeProviders } from './config/normalize-provider.js';
 const CONFIG_PATH = path.resolve(process.env.ICE_CONFIG_PATH!);
 const OUTPUT_DIR = path.resolve(process.env.ICE_OUTPUT_DIR!);
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
+const startupStartedAt = performance.now();
+
+function logStartupTiming(phase: string): void {
+  console.log(`[startup] server ${phase} +${Math.round(performance.now() - startupStartedAt)}ms`);
+}
 
 /**
  * 从 data/config.json 读取提供者配置。
@@ -191,10 +196,12 @@ async function main(): Promise<void> {
 
   const paths = await resolveDataPaths();
   await ensureDataDir(paths);
+  logStartupTiming('data-directory-ready');
 
   // 1. 加载提供者配置
   const providers = await loadConfig();
   console.log(`Loaded ${providers.length} provider configuration(s)`);
+  logStartupTiming('config-loaded');
 
   // 2. 使用注册的提供者初始化 LLM 适配器
   const llmAdapter = initializeLLMAdapter(providers);
@@ -204,6 +211,7 @@ async function main(): Promise<void> {
 
   // 4. 使用 FileParser、LLMAdapter、工具系统和输出配置初始化编排器
   const { orchestrator, toolRegistry, toolExecutor, mcpManager } = await initializeOrchestrator(fileParser, llmAdapter);
+  logStartupTiming('runtime-initialized');
 
   // 5. 创建带所有 API 路由的 Express 服务器
   const port = parseInt(process.env.PORT ?? '1024', 10);
@@ -248,6 +256,7 @@ async function main(): Promise<void> {
 
   // 6. 启动服务器
   const server = await startServer(app, port);
+  logStartupTiming('http-listening');
 
   // 7. 附加统一聊天 WebSocket（PC 和移动端共用，兼容 /api/remote/ws 旧路径）
   attachChatWebSocket(server, {
@@ -313,6 +322,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
   console.log('iceCoder is ready');
+  logStartupTiming('ready');
 }
 
 main().catch((err) => {
