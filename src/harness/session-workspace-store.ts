@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 
+import { getDefaultWorkDir } from '../cli/paths.js';
 import {
   detectWorkspaceFromUserMessage,
   emptySessionWorkspaceState,
@@ -111,11 +112,11 @@ export interface ResolvedSessionWorkspace {
   lockedRoot?: string;
 }
 
-/** 会话有效工作目录：已锁定则用 lockedRoot，否则回退 defaultWorkDir（通常为 process.cwd()）。 */
+/** 会话有效工作目录：已锁定则用 lockedRoot，否则回退运行时默认工作区。 */
 export async function resolveEffectiveWorkspaceRoot(
   sessionDir: string,
   sessionId: string,
-  defaultWorkDir: string = process.cwd(),
+  defaultWorkDir: string = getDefaultWorkDir(),
 ): Promise<ResolvedSessionWorkspace> {
   const state = await loadSessionWorkspace(sessionDir, sessionId);
   const workspaceRoot = state.lockedRoot ?? defaultWorkDir;

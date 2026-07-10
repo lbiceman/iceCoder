@@ -97,6 +97,14 @@ export function getRuntimeDataDir(): string {
   return path.resolve(process.env.ICE_DATA_DIR!);
 }
 
+/** 未锁定会话工作区时的默认命令目录；桌面端由主进程显式传入。 */
+export function getDefaultWorkDir(): string {
+  if (process.env.ICE_DEFAULT_WORK_DIR?.trim()) {
+    return path.resolve(process.env.ICE_DEFAULT_WORK_DIR.trim());
+  }
+  return process.cwd();
+}
+
 /** 生产环境：OS 用户缓存根（与 ~/.iceCoder 数据目录分离） */
 export function getUserCacheDir(): string {
   if (process.platform === 'win32') {

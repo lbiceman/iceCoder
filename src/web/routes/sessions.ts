@@ -13,6 +13,7 @@ import { parsePersistedPlan } from '../../memory/file-memory/execution-plan-fenc
 // ExecutionPlan type removed (Phase 11)
 import type { TaskCheckpoint } from '../../harness/checkpoint.js';
 import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
+import { getDefaultWorkDir } from '../../cli/paths.js';
 import { backfillPlaceholderSessionTitles } from '../session-title.js';
 import {
   resolveSessionImageFile,
@@ -130,7 +131,7 @@ async function buildWorkspaceIndex(sessionIds: string[]): Promise<{
   defaultWorkDir: string;
   workspaces: Record<string, string>;
 }> {
-  const defaultWorkDir = process.cwd();
+  const defaultWorkDir = getDefaultWorkDir();
   const workspaces: Record<string, string> = {};
   await Promise.all(
     sessionIds.map(async (id) => {
@@ -254,7 +255,7 @@ export function createSessionsRouter(): Router {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const id = String(req.params.id || SESSION_ID);
     if (rejectUnsafeSessionId(res, id)) return;
-    const defaultWorkDir = process.cwd();
+    const defaultWorkDir = getDefaultWorkDir();
     const workspace = await resolveEffectiveWorkspaceRoot(SESSIONS_DIR, id, defaultWorkDir);
     res.json(workspace);
   });
@@ -355,7 +356,7 @@ export function createSessionsRouter(): Router {
       toolCallId: m.toolCallId,
       content: typeof m.content === 'string' ? m.content : undefined,
     }));
-    const roots = await collectWorkspaceRoots(SESSIONS_DIR, sessionId, process.cwd());
+    const roots = await collectWorkspaceRoots(SESSIONS_DIR, sessionId, getDefaultWorkDir());
     const workspaceOverride = typeof req.query.workspaceRoot === 'string'
       ? req.query.workspaceRoot.trim()
       : '';
@@ -377,7 +378,7 @@ export function createSessionsRouter(): Router {
     const diffSource = await resolveToolDiffForSession({
       sessionsDir: SESSIONS_DIR,
       sessionId,
-      defaultWorkDir: process.cwd(),
+      defaultWorkDir: getDefaultWorkDir(),
       toolCallId: toolCallId || undefined,
       relPath: relPath || undefined,
       toolName,

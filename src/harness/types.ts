@@ -200,7 +200,7 @@ export interface HarnessConfig {
   fileMemoryManager?: FileMemoryManager;
   /** 会话目录，用于保存任务断点 checkpoint */
   sessionDir?: string;
-  /** 工作区根目录（会话笔记 package.json 锚定；默认 process.cwd()） */
+  /** 工作区根目录（会话笔记 package.json 锚定；未传时由 Harness 使用当前进程 cwd）。 */
   workspaceRoot?: string;
   /**
    * 写后读 Gate 豁免目录（相对工作区）；与工作区 `.icecoder.json` 合并。

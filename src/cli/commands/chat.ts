@@ -30,7 +30,7 @@ import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
 import type { AssembledPrompt } from '../../prompts/types.js';
-import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
+import { DEFAULT_SYSTEM_PROMPT, getDefaultWorkDir } from '../paths.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
@@ -382,7 +382,7 @@ ${c.bold}终端内置命令:${c.reset}
         sessionDir: ctx.paths.sessionsDir,
         sessionId: 'default',
         userMessage: input,
-        defaultWorkDir: process.cwd(),
+        defaultWorkDir: getDefaultWorkDir(),
         defaultToolExecutor: ctx.toolExecutor,
         defaultToolRegistry: ctx.toolRegistry,
         fileParser: ctx.fileParser,

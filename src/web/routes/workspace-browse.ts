@@ -10,7 +10,7 @@ import { listWorkspaceDirectory, searchWorkspaceFiles } from '../workspace-brows
 import { resolveEffectiveWorkspaceRoot } from '../../harness/session-workspace-store.js';
 import { rejectUnsafeSessionId } from '../session-id-guard.js';
 import '../../cli/paths.js';
-import { getRuntimeDataDir } from '../../cli/paths.js';
+import { getRuntimeDataDir, getDefaultWorkDir } from '../../cli/paths.js';
 
 const DEFAULT_SESSION_ID = 'default';
 
@@ -27,7 +27,7 @@ export function createWorkspaceBrowseRouter(): Router {
       if (rejectUnsafeSessionId(res, sessionId)) return;
 
       const dirQuery = typeof req.query.dir === 'string' ? req.query.dir : undefined;
-      const defaultWorkDir = process.cwd();
+      const defaultWorkDir = getDefaultWorkDir();
       const { workspaceRoot } = await resolveEffectiveWorkspaceRoot(
         getSessionsDir(),
         sessionId,
@@ -54,7 +54,7 @@ export function createWorkspaceBrowseRouter(): Router {
         return;
       }
 
-      const defaultWorkDir = process.cwd();
+      const defaultWorkDir = getDefaultWorkDir();
       const { workspaceRoot } = await resolveEffectiveWorkspaceRoot(
         getSessionsDir(),
         sessionId,

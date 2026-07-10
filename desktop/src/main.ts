@@ -7,15 +7,14 @@ import { app, BrowserWindow, dialog, ipcMain, shell, Menu, Tray, nativeImage } f
 
 ensureWinConsoleUtf8();
 import path from 'node:path';
-import os from 'node:os';
 import { IPC, APP_NAME, DEFAULT_HTTP_PORT } from './constants';
 import { getAvailablePort } from './port-utils';
 import { startServerProcess, ServerProcessHandle } from './server-process';
 import {
   readWorkspace,
   writeWorkspace,
-  readDataDirectory,
   writeDataDirectory,
+  resolveDataDirectory,
   resolveServerCwd,
   isServerBundleReady,
 } from './paths';
@@ -115,10 +114,6 @@ function broadcastWorkspace(ws: string | null): void {
   mainWindow?.webContents.send(IPC.WORKSPACE_CHANGED, ws);
 }
 
-function getDataDirectory(): string {
-  return readDataDirectory() ?? path.join(os.homedir(), '.iceCoder');
-}
-
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC.PET_GET_MODE, () => petManager.getMode());
   ipcMain.handle(IPC.PET_SET_EMBEDDED, (_e: Electron.IpcMainInvokeEvent, visible: boolean) => {
@@ -157,12 +152,12 @@ function registerIpcHandlers(): void {
   });
   ipcMain.handle(IPC.WORKSPACE_GET, () => readWorkspace());
 
-  ipcMain.handle(IPC.DATA_DIRECTORY_GET, () => getDataDirectory());
+  ipcMain.handle(IPC.DATA_DIRECTORY_GET, () => resolveDataDirectory());
   ipcMain.handle(IPC.DATA_DIRECTORY_PICK, async () => {
     if (!mainWindow) return null;
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择 iceCoder 数据文件夹',
-      defaultPath: getDataDirectory(),
+      defaultPath: resolveDataDirectory(),
       properties: ['openDirectory', 'createDirectory'],
     });
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
@@ -172,11 +167,11 @@ function registerIpcHandlers(): void {
       throw new Error('数据目录必须是绝对路径');
     }
     writeDataDirectory(dataDir);
-    return getDataDirectory();
+    return resolveDataDirectory();
   });
 
   ipcMain.on(IPC.APP_OPEN_DATA_DIR, () => {
-    void shell.openPath(getDataDirectory());
+    void shell.openPath(resolveDataDirectory());
   });
   ipcMain.on(IPC.APP_DEVTOOLS, () => {
     mainWindow?.webContents.openDevTools({ mode: 'detach' });
@@ -233,14 +228,16 @@ async function bootstrap(): Promise<void> {
   const port = await getAvailablePort(DEFAULT_HTTP_PORT, 50);
   logStartupTiming('port-selected');
   // 2) 启动 server 子进程
-  const dataDir = getDataDirectory();
+  const dataDir = resolveDataDirectory();
+  const serverCwd = resolveServerCwd();
   serverHandle = await startServerProcess({
     port,
-    cwd: resolveServerCwd(),
+    cwd: serverCwd,
     env: {
       ...process.env,
       ICE_DATA_DIR: dataDir,
       ICE_MCP_CONFIG_PATH: path.join(dataDir, 'mcp.json'),
+      ICE_DEFAULT_WORK_DIR: serverCwd,
     },
   });
   logStartupTiming('server-ready');

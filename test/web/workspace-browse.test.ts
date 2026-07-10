@@ -126,6 +126,7 @@ describe('workspace browse API', () => {
   let baseUrl: string;
   let searchUrl: string;
   const prevSessionsDir = process.env.ICE_SESSIONS_DIR;
+  const prevDefaultWorkDir = process.env.ICE_DEFAULT_WORK_DIR;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ws-browse-api-'));
@@ -158,6 +159,8 @@ describe('workspace browse API', () => {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     if (prevSessionsDir === undefined) delete process.env.ICE_SESSIONS_DIR;
     else process.env.ICE_SESSIONS_DIR = prevSessionsDir;
+    if (prevDefaultWorkDir === undefined) delete process.env.ICE_DEFAULT_WORK_DIR;
+    else process.env.ICE_DEFAULT_WORK_DIR = prevDefaultWorkDir;
   });
 
   it('GET /browse lists cwd when no dir param', async () => {
@@ -168,6 +171,18 @@ describe('workspace browse API', () => {
     const names = body.entries.map((e) => e.name);
     expect(names).toContain('visible');
     expect(names).not.toContain('node_modules');
+  });
+
+  it('GET /browse uses default workdir when session workspace is not locked', async () => {
+    await fs.rm(path.join(sessionsDir, 'default.workspace.json'), { force: true });
+    process.env.ICE_DEFAULT_WORK_DIR = tempDir;
+
+    const res = await fetch(`${baseUrl}?sessionId=default`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { success: boolean; workspaceRoot: string; entries: { name: string }[] };
+    expect(body.success).toBe(true);
+    expect(path.resolve(body.workspaceRoot)).toBe(path.resolve(tempDir));
+    expect(body.entries.map((e) => e.name)).toContain('visible');
   });
 
   it('GET /browse rejects path outside workspace', async () => {

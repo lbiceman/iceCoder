@@ -16,7 +16,7 @@ import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
-import { DEFAULT_SYSTEM_PROMPT } from '../paths.js';
+import { DEFAULT_SYSTEM_PROMPT, getDefaultWorkDir } from '../paths.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
@@ -68,7 +68,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       sessionDir: ctx.paths.sessionsDir,
       sessionId: 'default',
       userMessage: task,
-      defaultWorkDir: process.cwd(),
+      defaultWorkDir: getDefaultWorkDir(),
       defaultToolExecutor: ctx.toolExecutor,
       defaultToolRegistry: ctx.toolRegistry,
       fileParser: ctx.fileParser,
