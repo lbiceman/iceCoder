@@ -10,7 +10,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
 
-[中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md) | [Next Work](./nextWork.md)
+[中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md)
 
 ---
 
@@ -21,8 +21,8 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, verification gate, no-tool recovery, repeat-failure detection |
 | **TaskGraph** | Sole structured context injection for critical intents; `TaskDomainGate` keeps `question`/`inspect` in free mode |
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
-| **Dual-mode Supervisor** | **L2 largely validated** — L1/L2 wired; 15 Web manual scenarios in **Testing & validation**; spec [`docs/双模方案2.md`](./双模方案2.md) |
-| **Memory system** | File-based long-term memory + session notes + Dream/eviction; **20** test files **~391** cases — see **Memory System** |
+| **Dual-mode Supervisor** | **L2 largely validated** — L1/L2 wired; 15 Web manual scenarios in **Testing & validation**; spec [`docs/requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) · overview [`docs/双模机制详解.md`](./双模机制详解.md) |
+| **Memory system** | File-based long-term memory + session notes + Dream/eviction; **24** test files **~446** cases — see **Memory System** · [`记忆系统详解.md`](./记忆系统详解.md) |
 | **Agent Skills** | Markdown skills in `ICE_SKILLS_DIR`; Web Skills page + chat `#` injection; `/api/skills` — see **Agent Skills** |
 | **Workspace & file browser** | Per-session workspace lock; `@` refs + `/api/workspace/browse`; `list_drives` / `browse_directory` / `open_file`; `~open` direct listing |
 | **Mobile H5 Shell** | `#/m/*` routes; bottom tabs + session drawer; shared JS Core with desktop — see **Web app** |
@@ -30,7 +30,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
 | **Shell dual-track** | `run_command` runtime classifier: long jobs → background, short → foreground with soft-timeout escalate |
 | **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
-| **Eval** | `npm run eval:agent` is still a metric skeleton (no full scoring runner yet) |
+| **Eval** | `npm run eval:agent` — Agent behavior regression (7 fixed cases, temp sandbox, Harness pass/fail); TaskGraph metrics via `scripts/eval-runner.ts` |
 
 Verification:
 
@@ -40,7 +40,7 @@ npm test
 npm run eval:agent
 ```
 
-Treat **`npm test`** as the source of truth. Baseline (2026-07-01): **~221** test files, **~2,000+** cases. Full breakdown in **Testing & validation** below.
+Treat **`npm test`** as the source of truth. Baseline (2026-07-09): **~225** test files, **~2,000** cases. Full breakdown in **Testing & validation** below.
 
 ---
 
@@ -141,7 +141,7 @@ Key files:
 
 ### Dual-mode Supervisor (V1.3.7)
 
-Spec: [`双模方案2.md`](./双模方案2.md) · Manual playbook: [`test.md`](./test.md) · Flow chart: [`双模 L2 流程图.md`](./双模%20L2%20流程图.md)
+Spec: [`requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) · Manual playbook: [`requirement/L2测试过程.md`](./requirement/L2测试过程.md) · Deep dive: [`L2监管层详解.md`](./L2监管层详解.md) · Overview: [`双模机制详解.md`](./双模机制详解.md)
 
 Dual-mode separates **user-selected supervision tier** from **runtime execution constraints**:
 
@@ -291,6 +291,8 @@ Current tool categories:
 
 iceCoder uses **file-based** persistent memory (no external DB). Core code: `src/memory/file-memory/` (**26** source files), integrated via `HarnessMemoryIntegration` (`harness-memory.ts`).
 
+**Full Chinese deep-dive:** [`docs/记忆系统详解.md`](./记忆系统详解.md)
+
 ### Module map
 
 | Module | Files | Role |
@@ -351,7 +353,7 @@ query
   -> intent / level filter (execute vs inspect vs question)
   -> dedupe conflicting memories
   -> FactIndex build/cache
-  -> if llmAdapter AND filtered candidates >= 4 (LLM_RECALL_MIN_CANDIDATES):
+  -> if llmAdapter AND filtered candidates >= 2 (LLM_RECALL_MIN_CANDIDATES):
         LLM select files + rank facts (30s timeout) -> usedLLM: true
      else OR empty LLM result OR timeout/error:
         keyword fallback (TF-IDF, negation expansion, time-range boost) -> usedLLM: false
@@ -362,17 +364,19 @@ query
   -> CoN + JSON prompt injection
 ```
 
-**Why telemetry may show 0% LLM recall:** coarse events always count as keyword; with a **small memory library** (e.g. &lt; 15 files), `alreadySurfaced` often leaves **&lt; 4** candidates so the LLM branch is skipped; harness **rerank** uses LLM but does **not** set `usedLLM` on recall events. See `GET /api/memory/telemetry` and `data/memory/telemetry.jsonl`.
+**Why telemetry may show 0% LLM recall:** coarse events always count as keyword; with a **small memory library**, `alreadySurfaced` often leaves **&lt; 2** candidates so the LLM branch is skipped; harness **rerank** uses LLM but does **not** set `usedLLM` on recall events. See `GET /api/memory/telemetry` and `data/memory/telemetry.jsonl`.
 
-**Key constants:** `LLM_RECALL_MIN_CANDIDATES = 4`, `CONFIDENCE_FILTER_THRESHOLD = 0.3`, standard recall cooldown default **5 min** (`ICE_STANDARD_RECALL_COOLDOWN_SEC`, `0` disables). Remote overrides: `data/memory/memory-config.json` (hot-reloaded).
+**Key constants:** `LLM_RECALL_MIN_CANDIDATES = 2`, `CONFIDENCE_FILTER_THRESHOLD = 0.3`, standard recall cooldown default **5 min** (`ICE_STANDARD_RECALL_COOLDOWN_SEC`, `0` disables). Remote overrides: `data/memory/memory-config.json` (hot-reloaded).
 
-Recent changes tightened memory behavior:
+Recent changes tightened memory behavior (**Memory v2 done**):
 
 - Recall prompt now uses strict relevance rather than broad inclusion.
 - Coding/debugging tasks prefer project facts and technical constraints.
 - Personal preferences are injected only when strongly relevant.
+- Same-topic conflicting memories inject **one side only** (structured tags; untagged code-edit preference heuristic).
 - Extraction prompt now prefers fewer high-confidence memories over noisy long-term memory.
 - Weak one-off signals should remain session state, not persistent memory.
+- Eval case `memory-conflict` guards against old preferences blocking current edit instructions.
 
 ### Dream Consolidation & Eviction
 
@@ -418,10 +422,10 @@ Safety protections:
 
 | Type | Files | Cases (~) | Coverage |
 |------|-------|-----------|----------|
-| Unit / integration | **20** | **~391** | recall, extract, Dream, eviction, security, concurrency |
+| Unit / integration | **24** | **~446** | recall, extract, Dream, eviction, security, concurrency |
 | E2E | included | **9** in `memory-e2e.test.ts` | extract → write → recall |
 
-Command: `npm test -- test/memory/` · Design: [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md)
+Command: `npm test -- test/memory/` · Design: [`docs/记忆系统详解.md`](./记忆系统详解.md) · changelog: [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md)
 
 ---
 
@@ -449,7 +453,7 @@ Recent changes:
 
 ### Context Compaction
 
-`ContextCompactor` uses layered compression:
+`ContextCompactor` uses layered compression (deep dive: [`docs/压缩机制详解.md`](./压缩机制详解.md)):
 
 1. snip duplicate reminders/summaries
 2. microcompact old low-value history
@@ -457,6 +461,8 @@ Recent changes:
 4. extract structural summary
 5. optionally refine summary with LLM
 6. re-inject recent file content and recovery prompt
+
+Watermarks (relative to context window): **~72%** micro · **~85%** hard · remaining **&lt;18K** also hard · **~93%** aggressive fork.
 
 The context window is selected by priority:
 
@@ -508,16 +514,16 @@ This gives the model a stable view of what has happened even if conversation his
 
 ## Testing & validation
 
-> Manual steps + copy-paste prompts: [`docs/test.md`](./test.md) · Dual-mode e2e: `test/e2e/dual-mode-scenarios.test.ts`
+> Manual steps + copy-paste prompts: [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) · Dual-mode e2e: `test/e2e/dual-mode-scenarios.test.ts`
 
 ### Automated tests (Vitest)
 
-**Baseline (2026-07-01):** **~221** test files · **~2,000+** cases · `npx tsc --noEmit` 0 errors
+**Baseline (2026-07-09):** **~225** test files · **~2,000** cases · `npx tsc --noEmit` 0 errors
 
 | Directory | Files | Notes |
 |-----------|-------|-------|
 | `test/harness/` | **90** | Harness loop, compaction, checkpoint, **full supervisor stack**, Shell dual-track |
-| `test/memory/` | **20** | File memory recall / extract / Dream / eviction |
+| `test/memory/` | **24** | File memory recall / extract / Dream / eviction |
 | `test/web/` | **19** | API, sessions, setup gate, supervisor-events, chat-ws |
 | `test/tools/` | **14** | Shell classifier, background tasks, git, patch, parsers |
 | `test/llm/` | **7** | Adapters, token counting |
@@ -532,7 +538,8 @@ npm test -- test/harness/supervisor-bridge.test.ts    # 53 cases
 npm test -- test/harness/recovery-boundary.test.ts    # 13 cases
 npm test -- test/e2e/dual-mode-scenarios.test.ts      # 7 cases
 npm test -- test/memory/
-ICE_SUPERVISOR_MODE=off npm test -- test/harness/harness.test.ts
+# Set data/config.json supervisorMode to off (or adaptive) for harness zero-regression
+npm test -- test/harness/harness.test.ts
 ```
 
 > If `data/config.json` has `supervisorMode: strict` left over from manual L2-6 runs, **2** cases in `mode-controller.test.ts` may fail until restored to `adaptive`.
@@ -553,7 +560,7 @@ File: `test/e2e/dual-mode-scenarios.test.ts` — **7** cases:
 
 ### Manual Web tests (2026-05-22)
 
-Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`docs/test.md`](./test.md) §10–§11
+Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md)
 
 **L1 execution mode — scenarios A–H (8)**
 
@@ -586,22 +593,28 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 
 1. `npx tsc --noEmit` — 0 errors  
 2. `npm test` — all green (default config)  
-3. `ICE_SUPERVISOR_MODE=off` — harness suites zero regression  
+3. `data/config.json` → `supervisorMode: off` — harness suites zero regression  
 4. After `supervisor/` changes: rerun `dual-mode-scenarios` + `supervisor-bridge` + `recovery-boundary`
 
 ---
 
 ## Runtime evaluation (eval harness)
 
-A minimal eval skeleton exists (script name `eval:agent` is legacy):
+**Agent Eval Runner** (`npm run eval:agent`, `scripts/agent-eval.ts`):
 
 ```bash
-npm run eval:agent
+npm run eval:agent                              # default real — configured LLM required
+npm run eval:agent -- --mode=mock               # no-API smoke
+npm run eval:agent -- --case=single-file-edit
+npm run eval:agent -- --format=markdown --keep-workspaces
 ```
 
-It currently defines the metric names and baseline case categories. It is not yet a full scoring runner.
+- Case definitions: `scripts/agent-eval-cases.ts` (7 fixed scenarios).
+- Runner: `scripts/agent-eval-runner.ts` — `mkdtemp` sandbox, `initializeToolSystem`, `Harness.run`, rule-based scoring.
+- History: `data/eval/agent-eval-history.jsonl`.
+- Non-zero exit when any case fails or P0 metrics regress.
 
-Target metrics:
+Metrics per case and aggregate:
 
 - task_success_rate
 - tool_call_rate
@@ -612,14 +625,16 @@ Target metrics:
 - memory_interference_rate
 - tokens_per_successful_task
 - compaction_saved_tokens
+- compaction_recovery_success_rate (`compression-recovery` only; requires hard compaction + post-compaction tool progress + verification)
 
-See [`docs/nextWork.md`](./nextWork.md) for the next implementation steps.
+**TaskGraph eval** (separate): `npx tsx scripts/eval-runner.ts` — graph completion / node scores from benchmark fixtures.
+
 
 ---
 
 ## Web app, API, and ports
 
-- **HTTP server** (`src/index.ts`, `src/web/server.ts`): default port **`1024`** when started via `tsx src/index.ts` / `npm run dev:api`. Serves the built SPA static assets in production; in development it still hosts API routes while the Vite dev server serves the UI.
+- **HTTP server** (`src/index.ts`, `src/web/server.ts`): default port **`1024`** when started via `tsx src/index.ts` / `npm run dev -- --api`. Serves the built SPA static assets in production; in development it still hosts API routes while the Vite dev server serves the UI.
 - **CLI `web` / `start` / `chat`**: default port **`3784`** unless `PORT` or `--port` is set (`src/cli/commands/serve.ts`, `chat.ts`).
 - **Vite dev UI** (`vite.config.ts`): default **`1025`**, proxies `/api` and WebSocket upgrade to `http://localhost:1024`.
 - **WebSocket chat**: attached to the HTTP server (`src/web/chat-ws.ts`); mobile/remote clients use `/api/remote` and related routes.
@@ -773,7 +788,7 @@ src/
   web/              # Express server, routes, WebSocket chat, workspace browse
   public/           # Vite root: chat UI, Skills/Memory pages, mobile shell, Ice Bean
   types/            # Shared types (runtime snapshot, task-graph, runtime-checkpoint schema)
-docs/               # Requirements archives, memory benchmarks, dual-mode specs, nextWork
+docs/               # Requirements archives, memory benchmarks, dual-mode specs
 test/               # Vitest suites mirroring src areas
 data/               # Provider config templates, sessions, optional MCP-side memory sample
 ```
@@ -792,11 +807,12 @@ npm run eval:agent
 Common commands:
 
 ```bash
-npm run dev          # API + Vite (project script may include tunnel; see package.json)
-npm run dev:api      # API only (tsx src/index.ts)
-npm run dev:web      # Vite only (port 1025)
+npm run dev                 # API + Vite (+ tunnel unless --no-tunnel)
+npm run dev -- --api        # API only (tsx src/index.ts)
+npm run dev -- --web        # Vite only (port 1025)
 npx tsx src/cli/index.ts web --port 1024
 npx tsx src/cli/index.ts run "fix failing tests"
+npm run telemetry:runtime
 ```
 
 Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js` (see `package.json` `bin`).
@@ -808,26 +824,17 @@ Global CLI after `npm link` / global install: `iceCoder` → `dist/cli/index.js`
 Higher-level prose (beyond this README):
 
 - [`docs/环境变量.md`](./环境变量.md) — **full environment variable reference** (purpose, valid values, defaults)
-- [`docs/环境变量.md`](./环境变量.md) — 环境变量（中文详版）
-- [`docs/nextWork.md`](./nextWork.md) — active roadmap and eval gaps
+- [`docs/记忆系统详解.md`](./记忆系统详解.md) — Memory v2 design (no vector DB)
+- [`docs/压缩机制详解.md`](./压缩机制详解.md) — layered compaction + structured recovery
+- [`docs/双模机制详解.md`](./双模机制详解.md) — L0 / L1 / L2 dual-mode overview
+- [`docs/L2监管层详解.md`](./L2监管层详解.md) — L2 takeover / handoff deep dive
 - [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
 - [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
-- [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments
-- [`docs/test.md`](./test.md) — **dual-mode test playbook** (~2,000+ automated + 15 manual Web scenarios)
-- [`docs/双模方案2.md`](./双模方案2.md) — dual-mode supervisor spec **V1.3.7**
-- [`docs/运行时后续优化.md`](./运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
+- [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments (changelog)
+- [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) — **dual-mode test playbook** (~2,000 automated + 15 manual Web scenarios)
+- [`docs/requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) — dual-mode supervisor spec **V1.3.7**
+- [`docs/requirement/运行时后续优化.md`](./requirement/运行时后续优化.md) — Phase **5E** follow-up (benchmark / Learning; deferred)
 - [`docs/locomo/memory-optimization-roadmap.md`](./locomo/memory-optimization-roadmap.md) — memory benchmark & recall tuning notes
 
 ---
-
-## Roadmap
-
-The remaining work is tracked in [`docs/nextWork.md`](./nextWork.md). Representative next items:
-
-1. Memory v2 structured levels and conflict arbitration
-2. Deeper compaction / session-notes integration (token accounting, tighter recovery budgets) — `icecoder-runtime` snapshots already exist
-3. A real eval runner with pass/fail scoring (`scripts/eval-runner.ts` exists; `npm run eval:agent` is still a skeleton)
-4. Telemetry persistence for runtime metrics
-5. **Dual-mode supervisor** — core path wired; continue spec completion, telemetry, and edge cases per [`docs/双模方案2.md`](./双模方案2.md)
-6. Stronger adaptive planning beyond the intent-based tool planner (see TaskGraph requirement docs)

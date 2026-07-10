@@ -1,0 +1,198 @@
+# L8 benchmark — SaaS 订单 × 供应链 × 审批 × 计费 × 审计融合修复
+# 目标：160-220 源文件 · 36 处逻辑缺陷 + 8 个空壳模块 + 6 处冲突需求
+
+task_id: debug-saas-order-supply-approval-fusion-05
+version: "0.1"
+created: "2026-07-09"
+
+layers:
+  - L2   # 定点修 bug
+  - L4   # 读失败日志 / 测试输出定位
+  - L5   # 多模块联动
+  - L8   # 企业系统极限融合：长上下文 + 契约 + 迁移 + 审计 + 幂等
+
+tags:
+  - extreme
+  - enterprise-saas
+  - order-management
+  - supply-chain
+  - approval-workflow
+  - billing
+  - audit
+  - migration
+  - idempotency
+  - outbox
+  - long-context
+  - integration
+  - contract-tests
+
+estimated:
+  min_turns: 160
+  typical_turns: 220-320
+  max_turns: 320
+  duration_minutes: 360-420
+  source_files: 160-220
+  source_size_kb: 900-1200
+
+repo: benchMark/repos/debug-saas-order-supply-approval-fusion-05
+
+prompt: |
+  这是一个复杂企业 SaaS starter 仓库。系统覆盖多租户订单、供应链库存、采购审批、合同额度、计费结算、审计合规和事件驱动 outbox。
+
+  当前仓库包含大量故意植入的逻辑 BUG、部分未实现模块、矛盾文档和迁移问题。请你在不修改 `test/`、`package.json`、锁文件、`vitest.config.ts`、`scripts/generate-fixtures.mjs` 的前提下，修复系统直到所有验收命令通过。
+
+  必须先阅读：
+
+  - `README.md`
+  - `docs/DOMAIN-MODEL.md`
+  - `docs/ORDER-LIFECYCLE.md`
+  - `docs/APPROVAL-POLICY.md`
+  - `docs/INVENTORY-CONSISTENCY.md`
+  - `docs/BILLING-SETTLEMENT.md`
+  - `docs/AUDIT-COMPLIANCE.md`
+  - `docs/MIGRATION-v3.md`
+
+  注意：文档中存在 6 处故意冲突描述。以测试、类型契约和 ADR 中标注为 "source of truth" 的规则为准，不要盲目相信单一文档。
+
+  ## 执行纪律
+
+  - 立即运行 `npm test` 获取失败基线。
+  - 不要只修最先失败的测试；必须持续定位并修复直到所有验收命令全绿。
+  - 测试失败时读完整失败输出，定位相关模块，修改后重跑对应测试，再跑总测试。
+  - 禁止修改 `test/`、`package.json`、锁文件、配置文件、fixtures 生成脚本。
+  - 禁止通过硬编码测试 fixture 值过关；隐藏测试会替换 tenant、currency、approval policy 和库存批次。
+  - 禁止删除审计事件、跳过审批、绕过库存锁或把异常吞掉。
+  - 只有 `npm ci`、`npm test`、`npm run test:integration`、`npm run test:contracts`、`npm run migrate:check`、`npm run audit:snapshot`、`npm run build` 全部 exit 0 后，才输出最终总结。
+
+  ## 业务修复范围
+
+  你需要修复或实现以下领域：
+
+  1. 多租户隔离：所有查询、幂等 key、outbox event、审计事件都必须带 `tenantId`。
+  2. 订单状态机：拒绝非法跳转；已开票订单不能直接取消；取消释放未发货库存。
+  3. 审批流：按金额、毛利率、信用额度、新供应商动态路由；审批链去重但保持固定顺序。
+  4. 库存一致性：`available = onHand - reserved - safetyStock`；FEFO 批次预占；发货只能扣减 reservation。
+  5. 采购补货：同 tenant 同 SKU 缺口合并；blacklisted supplier 不可选。
+  6. 定价、税和结算：折扣顺序、税基、阈值 inclusive、多币种转换和最终舍入。
+  7. 付款、贷项和收入确认：付款分配优先级、credit memo 封顶、退款引用原付款、递延收入 N 期。
+  8. 幂等与 outbox：`(tenantId, commandId)` 作用域；重复命令不重复写库存/发票/outbox。
+  9. 审计合规：关键动作写 audit event；PII 脱敏；snapshot 稳定排序。
+  10. v2 -> v3 迁移：tenant-scoped ledger、approval role、batch-aware reservation、幂等和迁移审计。
+
+  ## 验收命令
+
+  必须全部成功：
+
+  ```bash
+  npm ci
+  npm test
+  npm run test:integration
+  npm run test:contracts
+  npm run migrate:check
+  npm run audit:snapshot
+  npm run build
+  ```
+
+  ## 允许修改
+
+  - `src/**`
+  - `migrations/**`
+  - `docs/ADR-IMPLEMENTATION-NOTES.md`
+
+  ## 禁止修改
+
+  - `test/**`
+  - `package.json`
+  - `package-lock.json`
+  - `vitest.config.ts`
+  - `scripts/**`
+  - `fixtures/**`
+
+  完成后用 12 条以内 bullet 说明：主要修复域、空壳实现、迁移/审计/合同测试如何通过、最终跑过哪些命令。
+
+acceptance:
+  commands:
+    - npm ci
+    - npm test
+    - npm run test:integration
+    - npm run test:contracts
+    - npm run migrate:check
+    - npm run audit:snapshot
+    - npm run build
+  files_must_exist:
+    - src/tenant/query-scope.ts
+    - src/authz/role-check.ts
+    - src/contract/credit-limit.ts
+    - src/order/state-machine.ts
+    - src/approval/router.ts
+    - src/approval/workflow-engine.ts
+    - src/inventory/availability.ts
+    - src/inventory/batch-reservation.ts
+    - src/procurement/replenishment-planner.ts
+    - src/pricing/discount-engine.ts
+    - src/tax/tax-engine.ts
+    - src/billing/invoice-builder.ts
+    - src/payment/allocation-engine.ts
+    - src/credit/credit-memo.ts
+    - src/revenue/deferred-schedule.ts
+    - src/outbox/outbox-store.ts
+    - src/idempotency/idempotency-guard.ts
+    - src/audit/audit-log.ts
+    - src/audit/redaction.ts
+    - src/reporting/tenant-ledger-report.ts
+    - migrations/003-v3-tenant-ledger.ts
+    - docs/ADR-IMPLEMENTATION-NOTES.md
+  files_must_not_change:
+    - test/**
+    - package.json
+    - package-lock.json
+    - vitest.config.ts
+    - scripts/**
+    - fixtures/**
+  allowed_change_globs:
+    - src/**
+    - migrations/**
+    - docs/ADR-IMPLEMENTATION-NOTES.md
+  forbidden_change_globs:
+    - test/**
+    - node_modules/**
+    - scripts/**
+    - fixtures/**
+    - package.json
+    - package-lock.json
+    - vitest.config.ts
+
+timeout_minutes: 420
+max_turns: 320
+
+observability:
+  complexity:
+    - 36 logic bugs across tenant/order/approval/inventory/procurement/billing/payment/revenue/outbox/audit/migration.
+    - 8 intentional stubs require real implementations.
+    - 6 conflicting docs require source-of-truth resolution.
+    - Contract tests and migration idempotency catch shallow fixes.
+  long_running:
+    - Expected to require phased exploration and repeated targeted test reruns.
+    - Single-domain fixes should not pass integration.
+  recovery:
+    - Large enough to stress compaction/recovery and task-state tracking.
+    - Forbidden-file constraints catch unsafe shortcuts.
+  exploration:
+    - Must distinguish misleading docs from ADR/test contracts.
+    - Must preserve tenant scoping and idempotency across modules.
+
+scoring_hints:
+  judge_focus:
+    - D1: How many domains are fully fixed, not just first failing tests.
+    - D2: Tenant isolation, idempotency scope, state machine legality, rounding, migration idempotency.
+    - D3: Domain boundaries and maintainable implementation rather than fixture hardcoding.
+    - D4: Minimal allowed-path changes.
+    - D5: Evidence of npm test -> targeted rerun -> integration/contracts/migration/audit/build.
+    - D6: Final summary matches actual diff and verification.
+  common_failure_modes:
+    - Fixes visible unit tests but leaves integration/contracts red.
+    - Trusts misleading docs over ADR/source-of-truth behavior.
+    - Uses commandId-only idempotency and fails cross-tenant hidden cases.
+    - Makes migration one-shot but not idempotent.
+    - Removes audit events or exports PII.
+    - Modifies tests, package scripts, or fixtures to pass.

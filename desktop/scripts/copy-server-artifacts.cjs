@@ -23,7 +23,6 @@ const FILES_TO_COPY = [
 ];
 
 const PROD_DEPS = [
-  '@modelcontextprotocol/server-puppeteer',
   '@vscode/ripgrep',
   'cheerio',
   'domhandler',
@@ -91,8 +90,12 @@ function collectTransitiveDependencies(rootNames, nodeModulesDir) {
   return [...collected].sort();
 }
 
-/** Vite 只产出 SPA 入口；pet-floating 等仍依赖 src/public 原始 js/css。 */
-const PUBLIC_STATIC_DIRS = ['js', 'css'];
+/** Vite 已打包主 SPA；仅 pet 浮窗仍依赖这些未打包的模块。 */
+const PET_STATIC_JS_FILES = [
+  'pet-floating-page.js',
+  'session-pet.js',
+  'session-pet-palette.js',
+];
 const PUBLIC_STATIC_FILES = ['pet-floating.html', 'favicon.svg'];
 
 function mergePublicStaticExtras(repoRoot, targetDistPublic) {
@@ -105,11 +108,30 @@ function mergePublicStaticExtras(repoRoot, targetDistPublic) {
     copyFile(src, path.join(targetDistPublic, rel));
     log(`mergePublic ${rel}`);
   }
-  for (const rel of PUBLIC_STATIC_DIRS) {
-    const src = path.join(srcPublic, rel);
+  for (const rel of PET_STATIC_JS_FILES) {
+    const src = path.join(srcPublic, 'js', rel);
     if (!fs.existsSync(src)) continue;
-    copyDir(src, path.join(targetDistPublic, rel));
-    log(`mergePublic ${rel}/`);
+    copyFile(src, path.join(targetDistPublic, 'js', rel));
+    log(`mergePublic js/${rel}`);
+  }
+  // pet-floating.html 直接引用 style.css，而它继续通过 @import 引用其余样式表；
+  // 复制整个 CSS 目录以保留这条依赖链，同时不再复制主 SPA 的 40 余个原始 JS 模块。
+  const cssDir = path.join(srcPublic, 'css');
+  if (fs.existsSync(cssDir)) {
+    copyDir(cssDir, path.join(targetDistPublic, 'css'));
+    log('mergePublic css/ (pet floating dependencies)');
+  }
+}
+
+function getRipgrepPlatformDependency(nodeModulesDir) {
+  const pkgPath = path.join(nodeModulesDir, '@vscode', 'ripgrep', 'package.json');
+  if (!fs.existsSync(pkgPath)) return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const expected = `@vscode/ripgrep-${process.platform}-${process.arch}`;
+    return Object.prototype.hasOwnProperty.call(pkg.optionalDependencies || {}, expected) ? expected : null;
+  } catch {
+    return null;
   }
 }
 
@@ -157,8 +179,13 @@ function main() {
   const repoNm = path.join(repoRoot, 'node_modules');
   const tgtNm = path.join(targetRoot, 'node_modules');
   fs.mkdirSync(tgtNm, { recursive: true });
-  const depsToCopy = collectTransitiveDependencies(PROD_DEPS, repoNm);
-  log(`copyDeps ${depsToCopy.length} packages (roots=${PROD_DEPS.length})`);
+  const ripgrepPlatformDependency = getRipgrepPlatformDependency(repoNm);
+  const prodDeps = [
+    ...PROD_DEPS,
+    ...(ripgrepPlatformDependency ? [ripgrepPlatformDependency] : []),
+  ];
+  const depsToCopy = collectTransitiveDependencies(prodDeps, repoNm);
+  log(`copyDeps ${depsToCopy.length} packages (roots=${prodDeps.length})`);
   let copied = 0;
   let skipped = 0;
   for (const dep of depsToCopy) {
@@ -183,7 +210,7 @@ function main() {
     main: 'dist/index.js',
     type: 'module',
     dependencies: Object.fromEntries(
-      PROD_DEPS.map((d) => [d, (srcPkg.dependencies || {})[d] || '*']),
+      prodDeps.map((d) => [d, (srcPkg.dependencies || {})[d] || '*']),
     ),
   };
   fs.writeFileSync(

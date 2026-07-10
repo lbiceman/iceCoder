@@ -11,13 +11,14 @@
  * 设计为进程级单例，所有工具共享同一个实例。
  */
 
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { mkdirSync, createWriteStream, type WriteStream } from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { analyzeShellSandbox } from './shell-sandbox.js';
 import { buildShellChildEnv } from './shell-host-guard.js';
+import { killShellProcessTree } from './shell-process-kill.js';
 
 /** 任务状态 */
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'timeout' | 'killed';
@@ -138,71 +139,6 @@ function detectListenPort(text: string): number | null {
   return null;
 }
 
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: unknown) {
-    const code = err && typeof err === 'object' && 'code' in err ? (err as NodeJS.ErrnoException).code : '';
-    return code !== 'ESRCH';
-  }
-}
-
-/** Windows：递归终止进程树（taskkill + PowerShell 子进程扫描） */
-function killWindowsProcessTree(rootPid: number): void {
-  try {
-    execFileSync('taskkill', ['/PID', String(rootPid), '/T', '/F'], {
-      windowsHide: true,
-      stdio: 'pipe',
-    });
-    console.log(`[bg-task] taskkill /T /F 成功 pid=${rootPid}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[bg-task] taskkill 失败 pid=${rootPid}: ${msg}`);
-  }
-  try {
-    execFileSync(
-      'powershell',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `$root=${rootPid};$seen=@{};$q=[Collections.Queue]::new();$q.Enqueue($root);`
-          + 'while($q.Count -gt 0){$p=$q.Dequeue();if($seen[$p]){continue};$seen[$p]=$true;'
-          + 'Get-CimInstance Win32_Process -Filter "ParentProcessId=$p" | ForEach-Object {$q.Enqueue([int]$_.ProcessId)}};'
-          + 'foreach($p in $seen.Keys){try{Stop-Process -Id $p -Force -ErrorAction SilentlyContinue}catch{}}',
-      ],
-      { windowsHide: true, stdio: 'pipe' },
-    );
-    console.log(`[bg-task] PowerShell 进程树 kill 完成 rootPid=${rootPid}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[bg-task] PowerShell 进程树 kill 失败 rootPid=${rootPid}: ${msg}`);
-  }
-}
-
-/** Windows：按监听端口终止 dev server（pnpm/vite 脱离 cmd 进程树时的兜底） */
-function killProcessesOnPortWindows(port: number): void {
-  try {
-    execFileSync(
-      'powershell',
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        `$p=${port};Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue `
-          + '| Select-Object -ExpandProperty OwningProcess -Unique '
-          + '| ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }',
-      ],
-      { windowsHide: true, stdio: 'pipe' },
-    );
-    console.log(`[bg-task] 已按端口 ${port} 终止监听进程`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[bg-task] 按端口 ${port} 终止失败: ${msg}`);
-  }
-}
-
 /**
  * 后台任务管理器。
  *
@@ -262,46 +198,9 @@ export class BackgroundTaskManager extends EventEmitter {
     this.emit('taskStatusChanged', this.buildRunningSummary(task));
   }
 
-  /**
-   * 跨平台进程树 kill（POSIX）。
-   *
-   * Windows 请用 {@link killTaskProcesses}。
-   */
-  private killTreePosix(child: ChildProcess): void {
-    if (!child.pid) return;
-    const pid = child.pid;
-    try { process.kill(-pid, 'SIGTERM'); } catch {
-      try { child.kill('SIGTERM'); } catch { /* ignore */ }
-    }
-    setTimeout(() => {
-      if (!child.pid) return;
-      try { process.kill(-pid, 'SIGKILL'); } catch {
-        try { child.kill('SIGKILL'); } catch { /* ignore */ }
-      }
-    }, 2000);
-    console.log(`[bg-task] 已发送 SIGTERM 至进程组 pid=${pid}`);
-  }
-
   /** 终止任务关联的全部 OS 进程（含 Windows 端口兜底） */
   private killTaskProcesses(task: BackgroundTask): void {
-    const rootPid = task.rootPid ?? task.child?.pid ?? null;
-    if (process.platform === 'win32') {
-      if (rootPid) {
-        killWindowsProcessTree(rootPid);
-        if (isPidAlive(rootPid)) {
-          console.warn(`[bg-task] rootPid=${rootPid} 仍存活，尝试按端口兜底`);
-        }
-      } else {
-        console.warn(`[bg-task] kill ${task.taskId}: 无 rootPid，无法杀 OS 进程`);
-      }
-      if (task.detectedPort) {
-        killProcessesOnPortWindows(task.detectedPort);
-      }
-      return;
-    }
-    if (task.child) {
-      this.killTreePosix(task.child);
-    }
+    killShellProcessTree(task.rootPid ?? task.child?.pid ?? null, task.child, task.detectedPort);
   }
 
   /**
@@ -881,6 +780,37 @@ export class BackgroundTaskManager extends EventEmitter {
   }
 
   /**
+   * 终止本 manager 内全部运行中任务（用户 Stop / 会话 abort，保留任务记录）。
+   * @returns 被终止的任务数
+   */
+  killAllRunning(): number {
+    let count = 0;
+    for (const task of this.tasks.values()) {
+      if (task.status !== 'running') continue;
+      const taskId = task.taskId;
+      const rootPid = task.rootPid ?? task.child?.pid ?? null;
+      const commandPreview = (task.label || task.command).substring(0, 80);
+      task.status = 'killed';
+      task.error = 'terminated by user stop';
+      task.endTime = Date.now();
+      this.appendOutput(task, Buffer.from('[terminated by user stop]\n'), '');
+      this.killTaskProcesses(task);
+      console.log(
+        `[bg-task] 用户停止终止后台任务 ${taskId}${rootPid ? ` rootPid=${rootPid}` : ''} `
+        + `label="${commandPreview}"`,
+      );
+      this.closeLogStream(task);
+      this.markSummaryDirty(taskId);
+      setTimeout(() => {
+        task.child = null;
+      }, 2500).unref?.();
+      this.scheduleCleanup(taskId);
+      count++;
+    }
+    return count;
+  }
+
+  /**
    * 清理所有资源（优雅关闭时调用）。
    */
   dispose(): void {
@@ -970,6 +900,22 @@ export function disposeBackgroundTaskManagerForSession(sessionId: string): boole
   try { m.dispose(); } catch { /* ignore */ }
   managersBySession.delete(sessionId);
   return true;
+}
+
+/** 终止指定 session 的全部运行中后台任务（不销毁 manager 实例）。 */
+export function killAllRunningBackgroundTasksForSession(sessionId: string): number {
+  const m = managersBySession.get(sessionId);
+  if (!m) return 0;
+  return m.killAllRunning();
+}
+
+/** 终止全部 session 的运行中后台任务（不销毁 manager 缓存）。 */
+export function killAllRunningBackgroundTasks(): number {
+  let total = 0;
+  for (const m of managersBySession.values()) {
+    total += m.killAllRunning();
+  }
+  return total;
 }
 
 /**

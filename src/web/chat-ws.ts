@@ -107,6 +107,7 @@ import {
 } from './file-browser-direct.js';
 import { BgTaskPusher } from './bg-task-pusher.js';
 import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning, disposeBackgroundTaskManagerForSession } from '../tools/background-task-manager.js';
+import { stopAllShellWorkForSession, stopAllShellWork } from '../tools/session-shell-control.js';
 import {
   formatToolArgsDetailPreview,
   resolveToolCallInitialStatus,
@@ -334,6 +335,8 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
     saveTimerMap.delete(sessionId);
   }
   // P1-11：清理此前未被回收的运行期资源，避免内存增长 / 后台进程残留。
+  // 先杀 shell 子进程（前台 + 后台），再 abort harness，避免 abort 收尾期间命令仍在跑。
+  try { stopAllShellWorkForSession(sessionId, 'session delete'); } catch { /* ignore */ }
   // 运行中快照
   runningTurns.delete(sessionId);
   // 进行中标记 + 排队消息 + abort 控制器
@@ -352,7 +355,7 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   }
   // intent checkpoint 回合状态
   clearIntentCheckpointTurnsForSession(sessionId);
-  // 后台任务管理器（终止后台进程）
+  // 移除后台任务 manager 缓存（进程已在上方 stopAllShellWorkForSession 中终止）
   try { disposeBackgroundTaskManagerForSession(sessionId); } catch { /* ignore */ }
   if (sessionId === activeSessionId) {
     cachedMessages = undefined;
@@ -409,6 +412,10 @@ function abortSession(sessionId: string): boolean {
   if (!ctrl) return false;
   ctrl.abort();
   return true;
+}
+
+function hasActiveSessionRun(sessionId: string): boolean {
+  return sessionAbortControllers.has(sessionId);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1367,6 +1374,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           // 避免误中止其它标签/会话（P1-9），也避免 abort 后自动再起一轮。
           const sid = wsToSubscribedSession.get(ws) || activeSessionId;
           clearSessionPending(sid);
+          stopAllShellWorkForSession(sid, 'chat stop');
           if (abortSession(sid)) {
             console.log(`[chat-ws] 用户请求中断任务 session=${sid}`);
           }
@@ -1484,6 +1492,10 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           // 任务进行中切换：主动 abort 正在离开的会话的运行，让其 cleanup 写入旧 session
           // （已被 runSessionId 锁定），然后无阻塞切换到新 session。仅作用于该会话，避免误中止其它会话。
           const leavingSessionId = wsToSubscribedSession.get(ws) || activeSessionId;
+          const shouldStopLeavingShells = hasActiveSessionRun(leavingSessionId);
+          if (shouldStopLeavingShells) {
+            stopAllShellWorkForSession(leavingSessionId, 'session switch');
+          }
           if (abortSession(leavingSessionId)) {
             console.log(`[chat-ws] switch_session 时中断会话 ${leavingSessionId} 的任务`);
             clearSessionPending(leavingSessionId);
@@ -1691,8 +1703,9 @@ async function handleChatMessage(
       autoTitle ? { sessionId: runSessionId, title: autoTitle } : { sessionId: runSessionId },
       ws,
     );
-    // 多端实时同步：processing 期间其它端无法靠 session_updated 拉快照（前端会跳过），须直推用户消息
-    broadcastToSessionExcept(runSessionId, {
+    // 多端实时同步：processing 期间其它端无法靠 session_updated 拉快照（前端会跳过），须直推用户消息。
+    // 发送端也需收到持久化后的 API URL，以便替换本地 data URL（localStorage 不宜存 base64）。
+    broadcastToSession(runSessionId, {
       type: 'user_message_appended',
       sessionId: runSessionId,
       message: {
@@ -1702,7 +1715,7 @@ async function handleChatMessage(
         sentAt: userSentAt,
         ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
       },
-    }, ws);
+    });
   }
 
   const resolvedForDirect =
@@ -2106,6 +2119,10 @@ async function handleChatMessage(
       sessionAbortControllers.delete(runSessionId);
     }
     llmAdapter.setAbortSignal?.(null);
+    // 兜底：若本回合被 abort 但 stop 消息未送达（极端竞态），仍终止该会话 shell。
+    if (abortController.signal.aborted) {
+      try { stopAllShellWorkForSession(runSessionId, 'turn abort'); } catch { /* ignore */ }
+    }
     // 任务（或本次 abort）落幕：清空运行中快照
     clearRunningTurn(runSessionId);
   }
@@ -2121,6 +2138,7 @@ function sendJSON(ws: WebSocket, data: unknown): void {
  * 清理聊天系统资源（优雅关闭时调用）。
  */
 export function cleanupChatResources(): void {
+  try { stopAllShellWork('app shutdown'); } catch { /* ignore */ }
   if (bgTaskPusher) {
     bgTaskPusher.detach();
     bgTaskPusher = null;

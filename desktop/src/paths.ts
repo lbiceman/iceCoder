@@ -9,6 +9,7 @@ import { getServerRoot } from './constants';
 
 const WORKSPACE_FILE = 'workspace.json';
 const PET_POS_FILE = 'pet-floating-position.json';
+const DATA_DIR_FILE = 'data-directory.json';
 
 /** 用户选定的工作区目录（绝对路径），未设置时返回 null。 */
 export function readWorkspace(): string | null {
@@ -29,6 +30,34 @@ export function writeWorkspace(workspace: string | null): void {
   const file = path.join(app.getPath('userData'), WORKSPACE_FILE);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ workspace }, null, 2));
+}
+
+/** 用户选择的 iceCoder 数据目录；未设置时返回 null（使用 ~/\.iceCoder）。 */
+export function readDataDirectory(): string | null {
+  const file = path.join(app.getPath('userData'), DATA_DIR_FILE);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const dataDir = typeof raw?.dataDir === 'string' ? raw.dataDir.trim() : '';
+    if (!dataDir || !path.isAbsolute(dataDir)) return null;
+    return path.resolve(dataDir);
+  } catch {
+    return null;
+  }
+}
+
+/** 保存用户选择的 iceCoder 数据目录；传 null 可恢复默认 ~/\.iceCoder。 */
+export function writeDataDirectory(dataDir: string | null): void {
+  const normalized = dataDir?.trim();
+  if (normalized && !path.isAbsolute(normalized)) {
+    throw new Error('数据目录必须是绝对路径');
+  }
+  const file = path.join(app.getPath('userData'), DATA_DIR_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ dataDir: normalized ? path.resolve(normalized) : null }, null, 2),
+  );
 }
 
 export interface PetFloatingPosition {

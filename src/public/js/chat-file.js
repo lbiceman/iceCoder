@@ -10,6 +10,7 @@ window.ChatFile = (function () {
 
   var uploadedFiles = [];
   var pendingImages = [];
+  var pendingImageLoads = 0;
 
   var elFileStatus = null;
   var elFileInput = null;
@@ -139,10 +140,15 @@ window.ChatFile = (function () {
   }
 
   function addPendingImage(file) {
+    pendingImageLoads++;
     var reader = new FileReader();
     reader.onload = function (e) {
+      pendingImageLoads = Math.max(0, pendingImageLoads - 1);
       pendingImages.push({ dataUrl: e.target.result, file: file });
       renderPendingImages();
+    };
+    reader.onerror = function () {
+      pendingImageLoads = Math.max(0, pendingImageLoads - 1);
     };
     reader.readAsDataURL(file);
   }
@@ -201,6 +207,10 @@ window.ChatFile = (function () {
     }
   }
 
+  function hasPendingImageLoads() {
+    return pendingImageLoads > 0;
+  }
+
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -218,6 +228,7 @@ window.ChatFile = (function () {
     removePendingImage: removePendingImage,
     clearPendingImages: clearPendingImages,
     getPendingImages: getPendingImages,
+    hasPendingImageLoads: hasPendingImageLoads,
     renderPendingImages: renderPendingImages,
   };
 })();

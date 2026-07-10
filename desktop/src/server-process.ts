@@ -34,6 +34,10 @@ export interface ServerProcessHandle {
 
 const PATH_SEP = process.platform === 'win32' ? ';' : ':';
 
+function logStartupTiming(phase: string, startedAt: number): void {
+  writeConsole(process.stdout, `[startup] server-process ${phase} +${Date.now() - startedAt}ms\n`);
+}
+
 /**
  * 在给定 PATH 中定位真实的 node/npx 所在目录。
  * Electron 主进程（用户双击启动）继承完整用户 PATH，因此能找到装在
@@ -123,6 +127,7 @@ async function waitForServer(port: number, host = '127.0.0.1'): Promise<boolean>
 export async function startServerProcess(
   opts: ServerProcessOptions,
 ): Promise<ServerProcessHandle> {
+  const startedAt = Date.now();
   const serverRoot = getServerRoot();
   const entry = path.join(serverRoot, 'dist', 'index.js');
   const useElectronNode = opts.electronRunAsNode !== false;
@@ -136,6 +141,7 @@ export async function startServerProcess(
     windowsHide: true,
     shell: false,
   });
+  logStartupTiming('spawned', startedAt);
 
   const stderrLines: string[] = [];
   const forwardServerLog = (chunk: Buffer, stream: NodeJS.WriteStream) => {
@@ -168,6 +174,7 @@ export async function startServerProcess(
       `iceCoder server did not become ready on port ${opts.port} within ${HEALTHCHECK_MAX_WAIT_MS}ms${bundleHint}${hint}`,
     );
   }
+  logStartupTiming('healthcheck-ready', startedAt);
 
   return {
     child,
@@ -179,7 +186,7 @@ export async function startServerProcess(
 
 function stopServer(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => {
-    if (!child || child.killed || child.exitCode !== null) {
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
       resolve();
       return;
     }
@@ -197,7 +204,9 @@ function stopServer(child: ChildProcess): Promise<void> {
     try { child.kill('SIGTERM'); } catch { /* ignore */ }
 
     const forceTimer = setTimeout(() => {
-      if (child.exitCode !== null || child.killed) {
+      // child.killed only means a signal was sent, not that the process exited.
+      // Wait for exit/signalCode; otherwise force-kill the whole server tree.
+      if (child.exitCode !== null || child.signalCode !== null) {
         done();
         return;
       }
@@ -215,7 +224,7 @@ function stopServer(child: ChildProcess): Promise<void> {
       }
       try { child.kill('SIGKILL'); } catch { /* ignore */ }
       done();
-    }, 8000);
+    }, 4000);
     forceTimer.unref?.();
   });
 }

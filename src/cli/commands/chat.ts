@@ -24,6 +24,7 @@ import { createFileMemoryManager } from '../../memory/file-memory/file-memory-ma
 import type { UnifiedMessage } from '../../llm/types.js';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
+import { stopAllShellWork } from '../../tools/session-shell-control.js';
 import { purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
@@ -132,6 +133,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
           latestHarness = null;
         }
       },
+      () => { stopAllShellWork('shutdown'); },
       () => { disposeAllBackgroundTaskManagers(); },
       () => { purgeAllUploadedFiles(); },
       () => { tunnelProcess?.kill(); },

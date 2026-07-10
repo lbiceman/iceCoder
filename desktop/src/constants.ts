@@ -39,6 +39,11 @@ export const IPC = {
   WORKSPACE_GET: 'workspace:get',
   WORKSPACE_CHANGED: 'workspace:changed',
 
+  // 数据目录
+  DATA_DIRECTORY_GET: 'data-directory:get',
+  DATA_DIRECTORY_PICK: 'data-directory:pick',
+  DATA_DIRECTORY_SET: 'data-directory:set',
+
   // 应用
   APP_OPEN_DATA_DIR: 'app:open-data-dir',
   APP_QUIT: 'app:quit',

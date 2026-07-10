@@ -44,6 +44,7 @@ async function writeMemoryFile(
     evidenceStrength?: string;
     source?: string;
     eventDate?: string;
+    tags?: string[];
   } = {},
 ) {
   const type = opts.type ?? 'project';
@@ -54,11 +55,12 @@ async function writeMemoryFile(
   const evidenceStrength = opts.evidenceStrength !== undefined ? `\nevidenceStrength: ${opts.evidenceStrength}` : '';
   const source = opts.source !== undefined ? `\nsource: ${opts.source}` : '';
   const eventDate = opts.eventDate !== undefined ? `\neventDate: ${opts.eventDate}` : '';
+  const tags = opts.tags !== undefined ? `\ntags: ${opts.tags.join(', ')}` : '';
   const body = opts.content ?? `Content of ${filename}`;
   const fileContent = `---
 name: ${filename.replace('.md', '')}
 description: ${description}
-type: ${type}${confidence}${recallCount}${createdAt}${level}${evidenceStrength}${source}${eventDate}
+type: ${type}${confidence}${recallCount}${createdAt}${level}${evidenceStrength}${source}${eventDate}${tags}
 ---
 
 ${body}`;
@@ -729,6 +731,45 @@ describe('Dream 执行', () => {
     const result = await dream.forceDream(tempDir, mockLLM);
     expect(result.executed).toBe(false);
     expect(result.skipReason).toBe('empty_run');
+  });
+
+  it('Dream 后规则层合并同主题偏好并降低旧偏好置信度', async () => {
+    await writeMemoryFile(tempDir, 'pref_new.md', '用户偏好 TypeScript 简洁说明', {
+      type: 'feedback',
+      level: 'preference',
+      confidence: 0.9,
+      recallCount: 2,
+      tags: ['preference:response-style'],
+      content: 'User prefers concise TypeScript-focused answers.',
+    });
+    await writeMemoryFile(tempDir, 'pref_old.md', '用户偏好 TypeScript 说明风格', {
+      type: 'feedback',
+      level: 'preference',
+      confidence: 0.8,
+      recallCount: 0,
+      tags: ['preference:response-style'],
+      content: 'User previously asked for concise answers with less ceremony.',
+    });
+
+    const mockLLM = createMockLLM(JSON.stringify({
+      actions: [],
+      new_index: null,
+      file_writes: [],
+      file_deletes: [],
+      summary: 'noop',
+    }));
+
+    const dream = createMemoryDream({ enableBackup: false });
+    const result = await dream.forceDream(tempDir, mockLLM);
+
+    expect(result.executed).toBe(true);
+    const keeper = await fs.readFile(path.join(tempDir, 'pref_new.md'), 'utf-8');
+    const old = await fs.readFile(path.join(tempDir, 'pref_old.md'), 'utf-8');
+
+    expect(keeper).toContain('Merged preference from pref_old.md');
+    expect(keeper).toContain('preference-topic: preference:response-style');
+    expect(old).toContain('superseded-by: pref_new.md');
+    expect(old).toContain('confidence: 0.45');
   });
 });
 

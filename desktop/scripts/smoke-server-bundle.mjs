@@ -6,12 +6,14 @@
  * 用法: node desktop/scripts/smoke-server-bundle.mjs [--port=4096]
  * 退出码: 0 通过；非 0 失败。
  */
-'use strict';
+import path from 'node:path';
+import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 
-const path = require('node:path');
-const http = require('node:http');
-const { spawn } = require('node:child_process');
-
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const bundleDir = path.resolve(__dirname, '..', 'server-bundle');
 const distEntry = path.join(bundleDir, 'dist', 'index.js');
 
@@ -21,7 +23,6 @@ function parsePort() {
 }
 
 function main() {
-  const fs = require('node:fs');
   if (!fs.existsSync(distEntry)) {
     process.stderr.write(`[smoke] missing entry: ${distEntry}\n`);
     process.stderr.write('[smoke] run: npm run build:desktop:server\n');
@@ -32,7 +33,7 @@ function main() {
     ...process.env,
     NODE_ENV: 'production',
     PORT: String(port),
-    ICE_DATA_DIR: path.join(require('node:os').homedir(), '.iceCoder-smoke'),
+    ICE_DATA_DIR: path.join(os.homedir(), '.iceCoder-smoke'),
   };
 
   const child = spawn(process.execPath, [distEntry], {
@@ -76,4 +77,4 @@ function main() {
   setTimeout(probe, 500);
 }
 
-if (require.main === module) main();
+main();
