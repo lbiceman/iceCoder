@@ -28,9 +28,7 @@ import { isSafeSessionId } from '../session-id-guard.js';
 import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
 import {
-  formatPendingNoteSuccessMessage,
   PENDING_NOTE_USAGE_MESSAGE,
-  setPendingNote,
 } from '../../session/pending-note.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
@@ -408,8 +406,10 @@ export function createSessionsRouter(): Router {
       res.json({ ok: false, message: PENDING_NOTE_USAGE_MESSAGE });
       return;
     }
-    setPendingNote(sessionId, text);
-    res.json({ ok: true, message: formatPendingNoteSuccessMessage(text) });
+    res.json({
+      ok: false,
+      message: '当前没有运行中的任务，/also 只对当前任务的下一轮 LLM 调用生效',
+    });
   }
 
   /**

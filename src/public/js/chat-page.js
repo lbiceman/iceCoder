@@ -36,6 +36,7 @@ window.ChatPage = (function () {
   var visibleStreamChunksReceived = false;
   /** tokenUsage 早于 agent 消息到达时的暂存 */
   var pendingTurnTokenUsage = null;
+  var pendingAlsoBubble = null;
   var remoteMode = false;
   var remoteToken = null;
   /** 本页仅提示一次 MCP 就绪（含 WS 晚连时 connected.mcpReady 补发） */
@@ -363,33 +364,44 @@ window.ChatPage = (function () {
     return body.slice('/next'.length).trim();
   }
 
+  function removePendingAlsoBubble() {
+    if (!pendingAlsoBubble) return;
+    if (pendingAlsoBubble._el && pendingAlsoBubble._el.parentNode) {
+      pendingAlsoBubble._el.parentNode.removeChild(pendingAlsoBubble._el);
+    }
+    pendingAlsoBubble = null;
+    syncWelcomeState();
+  }
+
+  function showPendingAlsoBubble(noteText) {
+    removePendingAlsoBubble();
+    pendingAlsoBubble = {
+      role: 'agent',
+      content: '用户备注：' + noteText,
+      statusTag: 'system',
+      _transient: true,
+    };
+    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+      window.ChatSession.stampMessageTimestamps(pendingAlsoBubble);
+    }
+    UI.appendMessageEl(pendingAlsoBubble, Session.stripStatusTag);
+    UI.enableAutoScroll();
+    syncWelcomeState();
+  }
+
   function handleAlsoCommand(body) {
     body = (body || '').trim();
     if (body.indexOf('/also') !== 0) return false;
     var noteText = body.slice('/also'.length).trim();
-    var sid = Session.getActiveId();
-    fetch('/api/sessions/' + encodeURIComponent(sid) + '/also', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: noteText }),
-    })
-      .then(function (res) { return res.json(); })
-      .then(function (body) {
-        var content = (body && body.message) ? body.message : '用法: /also <补充说明>';
-        var infoMsg = { role: 'agent', content: content, statusTag: 'system' };
-        if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
-          window.ChatSession.stampMessageTimestamps(infoMsg);
-        }
-        Session.appendMessage(infoMsg);
-        UI.appendMessageEl(infoMsg, Session.stripStatusTag);
-        Session.saveMessages();
-      })
-      .catch(function () {
-        var errMsg = { role: 'agent', content: '备注设置失败', statusTag: 'system' };
-        Session.appendMessage(errMsg);
-        UI.appendMessageEl(errMsg, Session.stripStatusTag);
-        Session.saveMessages();
-      });
+    if (!noteText) {
+      var usageMsg = { role: 'agent', content: '用法: /also <补充说明>', statusTag: 'system' };
+      Session.appendMessage(usageMsg);
+      UI.appendMessageEl(usageMsg, Session.stripStatusTag);
+      Session.saveMessages();
+      return true;
+    }
+    showPendingAlsoBubble(noteText);
+    WS.sendMessage('/also ' + noteText);
     return true;
   }
 
@@ -518,6 +530,8 @@ window.ChatPage = (function () {
     if (File.hasPendingUploads && File.hasPendingUploads()) return;
     if (File.hasPendingImageLoads && File.hasPendingImageLoads()) return;
     if (!composerBody && !fullText && uploadedFiles.length === 0 && pendingImages.length === 0) return;
+
+    removePendingAlsoBubble();
 
     if (
       window.AppRouter &&
@@ -686,6 +700,27 @@ window.ChatPage = (function () {
     if (!window.ChatTaskQueue || typeof window.ChatTaskQueue.setItems !== 'function') return;
     if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
     window.ChatTaskQueue.setItems(data && data.items ? data.items : []);
+  }
+
+  function appendSystemAgentMessage(content) {
+    var msg = { role: 'agent', content: content || '', statusTag: 'system' };
+    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+      window.ChatSession.stampMessageTimestamps(msg);
+    }
+    Session.appendMessage(msg);
+    UI.appendMessageEl(msg, Session.stripStatusTag);
+    Session.saveMessages();
+  }
+
+  function onWsAlsoConsumed(data) {
+    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
+    removePendingAlsoBubble();
+  }
+
+  function onWsAlsoRejected(data) {
+    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
+    removePendingAlsoBubble();
+    appendSystemAgentMessage((data && data.message) || '/also 未生效');
   }
 
   function announceTunnelReadyFromPayload(payload) {
@@ -2040,6 +2075,8 @@ window.ChatPage = (function () {
     WS.on('message_deleted', onWsMessageDeleted);
     WS.on('delete_message_failed', onWsDeleteMessageFailed);
     WS.on('task_queue_updated', onWsTaskQueueUpdated);
+    WS.on('also_consumed', onWsAlsoConsumed);
+    WS.on('also_rejected', onWsAlsoRejected);
 
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
       var inputArea = container.querySelector('.chat-input-area');

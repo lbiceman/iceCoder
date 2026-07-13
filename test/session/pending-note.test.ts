@@ -3,11 +3,11 @@ import {
   setPendingNote,
   getPendingNote,
   clearPendingNote,
+  consumePendingNote,
+  clearPendingNoteForRun,
   injectPendingNote,
   injectPendingNoteForTurn,
-  discardPendingNoteIfUnused,
   formatPendingNoteForHarnessContext,
-  formatPendingNoteSuccessMessage,
   parseAlsoCommand,
   parseNextCommand,
   resetPendingNotesForTests,
@@ -27,6 +27,23 @@ describe('pending-note', () => {
     expect(getPendingNote('s1')).toBeUndefined();
   });
 
+  it('consumePendingNote returns the note once and clears it', () => {
+    setPendingNote('s1', 'use Chinese');
+    expect(consumePendingNote('s1')).toBe('use Chinese');
+    expect(consumePendingNote('s1')).toBeUndefined();
+    expect(getPendingNote('s1')).toBeUndefined();
+  });
+
+  it('run-scoped pending note only applies to the matching run', () => {
+    setPendingNote('s1', 'use Chinese', 10);
+    expect(consumePendingNote('s1', 11)).toBeUndefined();
+    expect(getPendingNote('s1')).toBe('use Chinese');
+    clearPendingNoteForRun('s1', 11);
+    expect(getPendingNote('s1')).toBe('use Chinese');
+    clearPendingNoteForRun('s1', 10);
+    expect(getPendingNote('s1')).toBeUndefined();
+  });
+
   it('injectPendingNote appends structured note and clears pending note', () => {
     setPendingNote('s1', '严格模式');
     const base = [{ role: 'user' as const, content: 'hello' }];
@@ -42,17 +59,6 @@ describe('pending-note', () => {
   it('injectPendingNote is a no-op without pending note', () => {
     const base = [{ role: 'user' as const, content: 'hello' }];
     expect(injectPendingNote(base, 's1')).toBe(base);
-  });
-
-  it('discardPendingNoteIfUnused clears note and returns discard message', () => {
-    setPendingNote('s1', 'unused');
-    expect(discardPendingNoteIfUnused('s1')).toBe('任务已结束，备注未生效');
-    expect(getPendingNote('s1')).toBeUndefined();
-    expect(discardPendingNoteIfUnused('s1')).toBeUndefined();
-  });
-
-  it('formatPendingNoteSuccessMessage includes the note text', () => {
-    expect(formatPendingNoteSuccessMessage('修改难度大吗？')).toContain('修改难度大吗？');
   });
 
   it('formatPendingNoteForHarnessContext treats note as current-turn high-priority instruction', () => {

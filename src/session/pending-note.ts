@@ -1,14 +1,9 @@
 import type { UnifiedMessage } from '../llm/types.js';
 
 const pendingNoteBySession = new Map<string, string>();
+const pendingNoteRunIdBySession = new Map<string, number>();
 
-export const PENDING_NOTE_DISCARD_MESSAGE = '任务已结束，备注未生效';
-export const PENDING_NOTE_SUCCESS_MESSAGE = '📝 已记录备注，下次对话时自动带上';
 export const PENDING_NOTE_USAGE_MESSAGE = '用法: /also <补充说明>';
-
-export function formatPendingNoteSuccessMessage(text: string): string {
-  return `${PENDING_NOTE_SUCCESS_MESSAGE}\n\n${text}`;
-}
 
 export function formatPendingNoteForHarnessContext(text: string): string {
   return [
@@ -42,8 +37,10 @@ export function injectPendingNoteForTurn(
   ];
 }
 
-export function setPendingNote(sessionId: string, text: string): void {
+export function setPendingNote(sessionId: string, text: string, runId?: number): void {
   pendingNoteBySession.set(sessionId, text);
+  if (runId != null) pendingNoteRunIdBySession.set(sessionId, runId);
+  else pendingNoteRunIdBySession.delete(sessionId);
 }
 
 export function getPendingNote(sessionId: string): string | undefined {
@@ -52,6 +49,21 @@ export function getPendingNote(sessionId: string): string | undefined {
 
 export function clearPendingNote(sessionId: string): void {
   pendingNoteBySession.delete(sessionId);
+  pendingNoteRunIdBySession.delete(sessionId);
+}
+
+export function consumePendingNote(sessionId: string, runId?: number): string | undefined {
+  const noteRunId = pendingNoteRunIdBySession.get(sessionId);
+  if (runId != null && noteRunId != null && noteRunId !== runId) return undefined;
+  const note = pendingNoteBySession.get(sessionId);
+  if (note) clearPendingNote(sessionId);
+  return note;
+}
+
+export function clearPendingNoteForRun(sessionId: string, runId: number): void {
+  if (pendingNoteRunIdBySession.get(sessionId) === runId) {
+    clearPendingNote(sessionId);
+  }
 }
 
 export function hasPendingNote(sessionId: string): boolean {
@@ -92,23 +104,19 @@ export function injectPendingNote(
 ): UnifiedMessage[] {
   const note = pendingNoteBySession.get(sessionId);
   if (!note) return messages;
-  pendingNoteBySession.delete(sessionId);
+  clearPendingNote(sessionId);
   return [
     ...messages,
     { role: 'user', content: `[备注] ${note}` },
   ];
 }
 
-export function discardPendingNoteIfUnused(sessionId: string): string | undefined {
-  if (!pendingNoteBySession.has(sessionId)) return undefined;
-  pendingNoteBySession.delete(sessionId);
-  return PENDING_NOTE_DISCARD_MESSAGE;
-}
-
 export function clearPendingNotesForSession(sessionId: string): void {
   pendingNoteBySession.delete(sessionId);
+  pendingNoteRunIdBySession.delete(sessionId);
 }
 
 export function resetPendingNotesForTests(): void {
   pendingNoteBySession.clear();
+  pendingNoteRunIdBySession.clear();
 }

@@ -146,6 +146,15 @@ window.ChatWebSocket = (function () {
       case 'info':
         emit('info', { message: data.message });
         break;
+      case 'also_consumed':
+        emit('also_consumed', { sessionId: data.sessionId || '' });
+        break;
+      case 'also_rejected':
+        emit('also_rejected', {
+          sessionId: data.sessionId || '',
+          message: data.message || '',
+        });
+        break;
       case 'task_queue_updated':
         emit('task_queue_updated', {
           sessionId: data.sessionId || '',

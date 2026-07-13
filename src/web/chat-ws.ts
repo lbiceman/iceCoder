@@ -37,14 +37,13 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
 import {
-  formatPendingNoteSuccessMessage,
   injectPendingNoteForTurn,
   parseNextCommand,
   parseAlsoCommand,
   PENDING_NOTE_USAGE_MESSAGE,
   setPendingNote,
-  getPendingNote,
-  clearPendingNote,
+  consumePendingNote,
+  clearPendingNoteForRun,
   clearPendingNotesForSession,
 } from '../session/pending-note.js';
 import {
@@ -895,6 +894,7 @@ async function resolveSessionWorkspacePayload(sessionId: string) {
 // ─────────────────────────────────────────────────────────────
 interface RunningTurnSnapshot {
   isProcessing: boolean;
+  runId: number;
   iteration: number;
   streamingText: string;
   /** 当轮思考流（仅 UI，不入库） */
@@ -917,6 +917,7 @@ interface RunningTurnSnapshot {
 }
 
 const runningTurns = new Map<string, RunningTurnSnapshot>();
+let nextRunningTurnId = 1;
 
 registerSessionRuntimeBusyProbe({
   getRunningTurn: (sessionId) => runningTurns.get(sessionId) ?? null,
@@ -926,6 +927,7 @@ registerSessionRuntimeBusyProbe({
 function createEmptyRunningTurn(): RunningTurnSnapshot {
   return {
     isProcessing: true,
+    runId: nextRunningTurnId++,
     iteration: 0,
     streamingText: '',
     streamingReasoningText: '',
@@ -1743,8 +1745,17 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               sendJSON(ws, { type: 'info', message: PENDING_NOTE_USAGE_MESSAGE });
               return;
             }
-            setPendingNote(runSid, alsoCmd.text);
-            sendJSON(ws, { type: 'info', message: formatPendingNoteSuccessMessage(alsoCmd.text) });
+            const runningTurn = getRunningTurn(runSid);
+            if (!runningTurn) {
+              sendJSON(ws, {
+                type: 'also_rejected',
+                sessionId: runSid,
+                message: '当前没有运行中的任务，/also 只对当前任务的下一轮 LLM 调用生效',
+              });
+              sendJSON(ws, { type: 'info', message: '当前没有运行中的任务，/also 只对当前任务的下一轮 LLM 调用生效' });
+              return;
+            }
+            setPendingNote(runSid, alsoCmd.text, runningTurn.runId);
             return;
           }
 
@@ -2035,11 +2046,14 @@ async function handleChatMessage(
     mcpManager,
     toolDefs.map((t) => t.name),
   );
-  const pendingNote = getPendingNote(runSessionId);
-  if (pendingNote) {
-    clearPendingNote(runSessionId);
-  }
-
+  const runNoteId = getRunningTurn(runSessionId)?.runId;
+  const consumeAlsoForRun = (): string | undefined => {
+    const note = consumePendingNote(runSessionId, runNoteId);
+    if (note) {
+      broadcastToSession(runSessionId, { type: 'also_consumed', sessionId: runSessionId });
+    }
+    return note;
+  };
   if (wsCtx.workspace.detection.changed) {
     broadcastToSession(runSessionId, {
       type: 'workspace_updated',
@@ -2161,7 +2175,7 @@ async function handleChatMessage(
   try {
     const result = await harness.run(
       harnessUserMessage,
-      (msgs, opts) => llmAdapter.chat(injectPendingNoteForTurn(msgs, pendingNote), opts),
+      (msgs, opts) => llmAdapter.chat(injectPendingNoteForTurn(msgs, consumeAlsoForRun()), opts),
       (event) => {
         // 同步 fold 进 runningTurn 快照（供 F5/扫码后新订阅者还原）
         foldStepIntoRunningTurn(runSessionId, event);
@@ -2243,7 +2257,7 @@ async function handleChatMessage(
       },
       existingMessages,
       // 流式调用函数
-      (msgs, callback, opts) => llmAdapter.stream(injectPendingNoteForTurn(msgs, pendingNote), callback, opts),
+      (msgs, callback, opts) => llmAdapter.stream(injectPendingNoteForTurn(msgs, consumeAlsoForRun()), callback, opts),
       // 多模态内容块（图片等）
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );
@@ -2366,6 +2380,7 @@ async function handleChatMessage(
       try { stopAllShellWorkForSession(runSessionId, 'turn abort'); } catch { /* ignore */ }
     }
     // 任务（或本次 abort）落幕：清空运行中快照
+    if (runNoteId != null) clearPendingNoteForRun(runSessionId, runNoteId);
     clearRunningTurn(runSessionId);
   }
   return stopReason;

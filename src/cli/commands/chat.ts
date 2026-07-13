@@ -45,13 +45,10 @@ import { fetchQuickTunnelPublicUrl } from '../../web/quicktunnel-url.js';
 import { startTunnel } from '../tunnel/cloudflared-tunnel.js';
 import { isTunnelDevEnabled } from '../../runtime/tunnel-feature.js';
 import {
-  clearPendingNote,
-  formatPendingNoteSuccessMessage,
-  getPendingNote,
+  consumePendingNote,
   injectPendingNoteForTurn,
   parseAlsoCommand,
   PENDING_NOTE_USAGE_MESSAGE,
-  setPendingNote,
 } from '../../session/pending-note.js';
 
 /**
@@ -267,8 +264,7 @@ ${c.bold}终端内置命令:${c.reset}
       if (!alsoCmd.text) {
         error(PENDING_NOTE_USAGE_MESSAGE);
       } else {
-        setPendingNote('default', alsoCmd.text);
-        success(formatPendingNoteSuccessMessage(alsoCmd.text));
+        error('/also 只对正在运行任务的下一轮 LLM 调用生效；CLI REPL 不支持运行中补充。');
       }
       rl.prompt();
       return;
@@ -417,11 +413,6 @@ ${c.bold}终端内置命令:${c.reset}
         toolDefs.map((t) => t.name),
       );
       const harnessDynamic = harnessOverlayToContextFields(assembled);
-      const pendingNote = getPendingNote('default');
-      if (pendingNote) {
-        clearPendingNote('default');
-      }
-
       const harnessConfig: HarnessConfig = {
         context: {
           systemPrompt: assembled.systemPrompt,
@@ -474,7 +465,7 @@ ${c.bold}终端内置命令:${c.reset}
 
       const result = await harness.run(
         input,
-        (msgs, opts) => ctx.llmAdapter.chat(injectPendingNoteForTurn(msgs, pendingNote), opts),
+        (msgs, opts) => ctx.llmAdapter.chat(injectPendingNoteForTurn(msgs, consumePendingNote('default')), opts),
         (event) => {
           if (event.type === 'thinking' && event.content) {
             // 思考内容（部分模型会返回）
