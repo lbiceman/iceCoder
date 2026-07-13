@@ -2449,19 +2449,23 @@ window.ChatUI = (function () {
   // ---- 发送/停止按钮 ----
 
   function setStreamingState(streaming) {
+    setComposerAction(streaming ? 'stop' : 'send');
+  }
+
+  function setComposerAction(action) {
     if (!elSendBtn) return;
-    if (streaming) {
+    if (action === 'stop') {
       elSendBtn.innerHTML = '<span class="icon-stop"></span>';
       elSendBtn.title = 'Stop';
       elSendBtn.classList.add('btn-stop');
-      // 流式态：禁止发送，但允许在输入框继续打字（按 Enter 走 stop 行为，由 chat-page.js 拦截）
-      elInput.disabled = false;
+      elSendBtn.dataset.action = 'stop';
     } else {
       elSendBtn.innerHTML = '<span class="icon-send"></span>';
       elSendBtn.title = 'Send';
       elSendBtn.classList.remove('btn-stop');
-      elInput.disabled = false;
+      elSendBtn.dataset.action = 'send';
     }
+    if (elInput) elInput.disabled = false;
   }
 
   function getInputValue() {
@@ -2553,6 +2557,7 @@ window.ChatUI = (function () {
     isLiveToolRoundActive: isLiveToolRoundActive,
     repairLiveToolGroupFold: repairLiveToolGroupFold,
     setStreamingState: setStreamingState,
+    setComposerAction: setComposerAction,
     getInputValue: getInputValue,
     setInputValue: setInputValue,
     focusInput: focusInput,

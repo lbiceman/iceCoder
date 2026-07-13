@@ -32,6 +32,8 @@ window.ChatPage = (function () {
   var streamFinalized = false;
   /** 本轮是否收到过流式增量（用于区分 stream_end + response 双包时的重复追加） */
   var streamChunksReceived = false;
+  /** 本轮是否已有可见正文流写入 Assistant 气泡；仅 Thinking 流不算。 */
+  var visibleStreamChunksReceived = false;
   /** tokenUsage 早于 agent 消息到达时的暂存 */
   var pendingTurnTokenUsage = null;
   var remoteMode = false;
@@ -295,10 +297,21 @@ window.ChatPage = (function () {
       || (Session && typeof Session.hasStreamingModelBubble === 'function' && Session.hasStreamingModelBubble());
   }
 
-  /** 切回聊天页或 WS 状态变化后，把发送钮与真实 workload 对齐（DOM 重建不会保留 btn-stop） */
-  function syncSendButtonWithWorkload() {
+  /** 输入框是否有可发送内容（含附件 / file ref / skill ref） */
+  function getComposerHasSendableContent() {
+    if (getComposerText().trim()) return true;
+    if (File.getUploadedFiles().length > 0) return true;
+    if (File.getPendingImages().length > 0) return true;
+    return false;
+  }
+
+  function syncComposerActionState() {
     var busy = isWorkloadActive();
-    UI.setStreamingState(busy);
+    if (!busy || getComposerHasSendableContent()) {
+      UI.setComposerAction('send');
+    } else {
+      UI.setComposerAction('stop');
+    }
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.syncSwitchLockState === 'function') {
       window.ChatSessionSidebar.syncSwitchLockState();
     }
@@ -318,9 +331,72 @@ window.ChatPage = (function () {
     syncWelcomeState();
   }
 
+  /** 切回聊天页或 WS 状态变化后，把发送钮与真实 workload 对齐（DOM 重建不会保留 btn-stop） */
+  function syncSendButtonWithWorkload() {
+    syncComposerActionState();
+  }
+
+  function getComposerBody() {
+    return (elInput && elInput.value != null ? elInput.value : '').replace(/\u00A0/g, ' ').trim();
+  }
+
+  function buildComposerTextWithBody(taskBody) {
+    var lines = [];
+    if (Skills && typeof Skills.getSelectedRefs === 'function') {
+      var skillRefs = Skills.getSelectedRefs();
+      if (skillRefs.length) lines.push(skillRefs.join(' '));
+    }
+    if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
+      var fileRefs = FileRef.getSelectedRefs();
+      for (var fi = 0; fi < fileRefs.length; fi++) {
+        lines.push(fileRefs[fi]);
+      }
+    }
+    var trimmed = (taskBody || '').trim();
+    if (trimmed) lines.push(trimmed);
+    return lines.join('\n');
+  }
+
+  function parseExplicitNextBody(body) {
+    body = (body || '').trim();
+    if (body.indexOf('/next') !== 0) return null;
+    return body.slice('/next'.length).trim();
+  }
+
+  function handleAlsoCommand(body) {
+    body = (body || '').trim();
+    if (body.indexOf('/also') !== 0) return false;
+    var noteText = body.slice('/also'.length).trim();
+    var sid = Session.getActiveId();
+    fetch('/api/sessions/' + encodeURIComponent(sid) + '/also', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: noteText }),
+    })
+      .then(function (res) { return res.json(); })
+      .then(function (body) {
+        var content = (body && body.message) ? body.message : '用法: /also <补充说明>';
+        var infoMsg = { role: 'agent', content: content, statusTag: 'system' };
+        if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+          window.ChatSession.stampMessageTimestamps(infoMsg);
+        }
+        Session.appendMessage(infoMsg);
+        UI.appendMessageEl(infoMsg, Session.stripStatusTag);
+        Session.saveMessages();
+      })
+      .catch(function () {
+        var errMsg = { role: 'agent', content: '备注设置失败', statusTag: 'system' };
+        Session.appendMessage(errMsg);
+        UI.appendMessageEl(errMsg, Session.stripStatusTag);
+        Session.saveMessages();
+      });
+    return true;
+  }
+
   // ---- 命令面板（+ 按钮）：浮层已统一为 ChatDropdown ----
   function openCmdPalette() {
     if (!elCmdPlusBtn) return;
+    Cmd.hide();
     Cmd.setApplyTarget(function (value) {
       executeLocalCommand(value);
       Cmd.hide();
@@ -329,7 +405,7 @@ window.ChatPage = (function () {
   }
 
   function toggleCmdPalette() {
-    if (Cmd.isOpen && Cmd.isOpen()) Cmd.hide();
+    if (Cmd.isTildeOpen && Cmd.isTildeOpen()) Cmd.hide();
     else openCmdPalette();
   }
 
@@ -400,27 +476,48 @@ window.ChatPage = (function () {
     Cmd.hide();
     if (Skills) Skills.hide();
     if (FileRef) FileRef.hide();
-    if (isWorkloadActive()) {
-      handleStop();
-      return;
-    }
 
-    var text = getComposerText().trim();
+    var composerBody = getComposerBody();
+    var fullText = getComposerText().trim();
     var referencePaths = [];
     if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
       referencePaths = FileRef.getSelectedRefs();
     }
     var uploadedFiles = File.getUploadedFiles();
     var pendingImages = File.getPendingImages();
+    var explicitNextBody = parseExplicitNextBody(composerBody);
+    var isExplicitNext = explicitNextBody !== null;
+    var busyAtSend = isWorkloadActive();
+    var appendUserMessageNow = !isExplicitNext && !busyAtSend;
+
+    if (handleAlsoCommand(composerBody)) {
+      clearComposerInput();
+      syncComposerActionState();
+      return;
+    }
+
+    if (executeLocalCommand(composerBody)) {
+      clearComposerInput();
+      syncComposerActionState();
+      return;
+    }
+
+    if (
+      elSendBtn
+      && elSendBtn.dataset.action === 'stop'
+      && !isExplicitNext
+      && !composerBody
+      && !fullText
+      && uploadedFiles.length === 0
+      && pendingImages.length === 0
+    ) {
+      handleStop();
+      return;
+    }
 
     if (File.hasPendingUploads && File.hasPendingUploads()) return;
     if (File.hasPendingImageLoads && File.hasPendingImageLoads()) return;
-    if (!text && uploadedFiles.length === 0 && pendingImages.length === 0) return;
-
-    if (executeLocalCommand(text)) {
-      clearComposerInput();
-      return;
-    }
+    if (!composerBody && !fullText && uploadedFiles.length === 0 && pendingImages.length === 0) return;
 
     if (
       window.AppRouter &&
@@ -434,16 +531,29 @@ window.ChatPage = (function () {
       if (window.MobileComposerHost.handleWorkPageSend()) return;
     }
 
-    // 普通消息
+    var outboundText = isExplicitNext ? buildComposerTextWithBody(explicitNextBody) : fullText;
+    if (isExplicitNext && !explicitNextBody && uploadedFiles.length === 0 && pendingImages.length === 0) {
+      var usageMsg = { role: 'agent', content: '用法: /next <任务描述>', statusTag: 'system' };
+      if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
+        window.ChatSession.stampMessageTimestamps(usageMsg);
+      }
+      Session.appendMessage(usageMsg);
+      UI.appendMessageEl(usageMsg, Session.stripStatusTag);
+      Session.saveMessages();
+      clearComposerInput();
+      syncComposerActionState();
+      return;
+    }
+
     var displayParts = [];
-    if (text) displayParts.push(text);
+    if (appendUserMessageNow && composerBody) displayParts.push(composerBody);
     for (var fi = 0; fi < uploadedFiles.length; fi++) {
-      displayParts.push('[file] ' + uploadedFiles[fi].filename);
+      if (appendUserMessageNow) displayParts.push('[file] ' + uploadedFiles[fi].filename);
     }
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
     var didAppendUserMessage = false;
-    if (displayParts.length > 0 || msgImages.length > 0) {
+    if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0)) {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMessageId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
         ? crypto.randomUUID()
@@ -468,7 +578,7 @@ window.ChatPage = (function () {
       didAppendUserMessage = true;
       Session.saveMessages();
       syncWelcomeState();
-      var titlePrompt = displayParts.join('\n') || text || '';
+      var titlePrompt = displayParts.join('\n') || composerBody || fullText || '';
       if (window.ChatSessionStore && typeof window.ChatSessionStore.maybeAutoTitleFromPrompt === 'function') {
         var userMsgCount = 0;
         var allMsgs = Session.getMessages();
@@ -483,38 +593,52 @@ window.ChatPage = (function () {
 
     clearComposerInput();
     Cmd.hide();
-    userStopped = false;
-    streamFinalized = false;
-    streamChunksReceived = false;
-    pendingTurnTokenUsage = null;
-    Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
 
-    var msgText = text || '';
+    var msgText = outboundText || '';
     for (var fj = 0; fj < uploadedFiles.length; fj++) {
       var uf = uploadedFiles[fj];
       msgText = (msgText ? msgText + '\n' : '') + '[file:' + uf.fileId + '] ' + uf.filename;
     }
     File.clearUploadedFiles();
 
-    UI.clearLiveToolRoundDom();
-    UI.setLiveToolRoundActive(true);
+    if (appendUserMessageNow) {
+      userStopped = false;
+      streamFinalized = false;
+      streamChunksReceived = false;
+      visibleStreamChunksReceived = false;
+      pendingTurnTokenUsage = null;
+      Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
+      UI.clearLiveToolRoundDom();
+      UI.setLiveToolRoundActive(true);
+    }
     var outboundMessageId = didAppendUserMessage && Session.getLastMessage()
       ? Session.getLastMessage().id
       : undefined;
+    var sendOpts = { referencePaths: referencePaths };
+    if (outboundMessageId) sendOpts.messageId = outboundMessageId;
+    if (isExplicitNext) {
+      sendOpts.source = 'explicit';
+      sendOpts.command = 'next';
+    }
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.getEditingInsertIndex === 'function') {
+      var insertIndex = window.ChatTaskQueue.getEditingInsertIndex();
+      if (typeof insertIndex === 'number') {
+        sendOpts.queueInsertIndex = insertIndex;
+        window.ChatTaskQueue.clearEditingInsertIndex();
+      }
+    }
     if (msgImages.length > 0) {
-      WS.sendMessage(msgText || '请分析这些图片', {
-        messageId: outboundMessageId,
-        images: msgImages,
-        referencePaths: referencePaths,
-      });
+      sendOpts.images = msgImages;
+      WS.sendMessage(msgText || '请分析这些图片', sendOpts);
     } else {
-      WS.sendMessage(msgText, { messageId: outboundMessageId, referencePaths: referencePaths });
+      WS.sendMessage(msgText, sendOpts);
     }
     File.clearPendingImages();
 
     if (didAppendUserMessage) {
       UI.enableAutoScroll();
     }
+    syncComposerActionState();
   }
 
   function handleStop() {
@@ -551,9 +675,17 @@ window.ChatPage = (function () {
     isStreaming = false;
     streamFinalized = false;
     streamChunksReceived = false;
+    visibleStreamChunksReceived = false;
     UI.setStreamingState(false);
     WS.setProcessing(false);
     Session.saveMessages();
+    syncComposerActionState();
+  }
+
+  function onWsTaskQueueUpdated(data) {
+    if (!window.ChatTaskQueue || typeof window.ChatTaskQueue.setItems !== 'function') return;
+    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
+    window.ChatTaskQueue.setItems(data && data.items ? data.items : []);
   }
 
   function announceTunnelReadyFromPayload(payload) {
@@ -613,6 +745,9 @@ window.ChatPage = (function () {
     });
     resetTokenUsage();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
+      window.ChatTaskQueue.refresh(sessionId);
+    }
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
@@ -718,6 +853,7 @@ window.ChatPage = (function () {
       userStopped = false;
       streamFinalized = false;
       streamChunksReceived = false;
+      visibleStreamChunksReceived = false;
       WS.setProcessing(false);
       UI.setStreamingState(false);
       if (sessionPet) {
@@ -742,6 +878,7 @@ window.ChatPage = (function () {
     isStreaming = !!runningTurn.streamingText;
     userStopped = false;
     streamFinalized = false;
+    visibleStreamChunksReceived = false;
     WS.setProcessing(true);
     UI.setStreamingState(true);
 
@@ -867,6 +1004,7 @@ window.ChatPage = (function () {
       syncWelcomeState();
       return;
     }
+    visibleStreamChunksReceived = true;
     if (sessionPet) sessionPet.setState('read');
     UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
     syncWelcomeState();
@@ -900,11 +1038,14 @@ window.ChatPage = (function () {
       userStopped = false;
       return;
     }
-    if (streamFinalized) {
+    if (streamFinalized && visibleStreamChunksReceived) {
       streamFinalized = false;
+      visibleStreamChunksReceived = false;
       scheduleRefreshAfterTurn();
       return;
     }
+    streamFinalized = false;
+    visibleStreamChunksReceived = false;
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
     UI.clearReasoningStream();
     var msg = { role: 'agent', content: Session.stripStatusTag(data.content || '') };
@@ -1771,8 +1912,11 @@ window.ChatPage = (function () {
     mainInputWrapper = container.querySelector('.input-wrapper');
     if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
     var composerInputEl = container.querySelector('.composer-input');
-    if (composerInputEl && Skills) Skills.setAnchor(composerInputEl);
-    if (composerInputEl && FileRef) FileRef.setAnchor(composerInputEl);
+    if (composerInputEl) {
+      Cmd.setInputAnchor(composerInputEl);
+      if (Skills) Skills.setAnchor(composerInputEl);
+      if (FileRef) FileRef.setAnchor(composerInputEl);
+    }
 
     // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
     // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
@@ -1895,6 +2039,24 @@ window.ChatPage = (function () {
     WS.on('restore_failed', onWsRestoreFailed);
     WS.on('message_deleted', onWsMessageDeleted);
     WS.on('delete_message_failed', onWsDeleteMessageFailed);
+    WS.on('task_queue_updated', onWsTaskQueueUpdated);
+
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
+      var inputArea = container.querySelector('.chat-input-area');
+      window.ChatTaskQueue.init({
+        container: inputArea,
+        getSessionId: function () { return Session.getActiveId(); },
+        onFillInput: function (text) {
+          if (elInput) {
+            elInput.value = text || '';
+            UI.autoResizeInput();
+            elInput.focus();
+          }
+          syncComposerActionState();
+        },
+      });
+      window.ChatTaskQueue.refresh(Session.getActiveId());
+    }
 
     // 连接 WebSocket
     WS.connect(remoteToken);
@@ -1909,8 +2071,7 @@ window.ChatPage = (function () {
       if (Cmd.handleKeydown(e, elInput)) return;
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        // 流式/暂停态：回车吞掉，**不**触发 stop；暂停必须鼠标点按钮
-        if (isWorkloadActive()) return;
+        if (elSendBtn && elSendBtn.dataset.action === 'stop') return;
         handleSend();
       }
     });
@@ -1919,6 +2080,7 @@ window.ChatPage = (function () {
       if (Skills) Skills.handleInput(elInput.value, elInput);
       if (FileRef) FileRef.handleInput(elInput.value, elInput);
       Cmd.handleInput(elInput.value, elInput);
+      syncComposerActionState();
     });
     // 命令面板的 outside-click / escape / focus-blur 关闭由 ChatDropdown 统一处理
     if (elCmdPlusBtn) {

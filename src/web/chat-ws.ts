@@ -20,7 +20,7 @@ import { Harness } from '../harness/harness.js';
 import { finalizeMessagesForApi } from '../harness/context-assembler.js';
 import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
-import type { HarnessConfig } from '../harness/types.js';
+import type { HarnessConfig, StopReason } from '../harness/types.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
@@ -36,6 +36,22 @@ import { createFileMemoryManager } from '../memory/file-memory/file-memory-manag
 import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
+import {
+  formatPendingNoteSuccessMessage,
+  injectPendingNoteForTurn,
+  parseNextCommand,
+  parseAlsoCommand,
+  PENDING_NOTE_USAGE_MESSAGE,
+  setPendingNote,
+  getPendingNote,
+  clearPendingNote,
+  clearPendingNotesForSession,
+} from '../session/pending-note.js';
+import {
+  getTaskQueueManager,
+  type QueuedTask,
+  type TaskEnqueueInput,
+} from '../session/task-queue.js';
 
 const CLIENT_MESSAGE_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -99,6 +115,7 @@ import {
   persistInlineImages,
   persistUploadedImageFiles,
   buildSessionImageApiUrl,
+  resolveSessionImageFile,
 } from './images-cache.js';
 import {
   detectFileBrowserOpen,
@@ -345,7 +362,6 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   }
   sessionAbortControllers.delete(sessionId);
   sessionProcessing.delete(sessionId);
-  clearSessionPending(sessionId);
   // 该会话的待确认对话框 + 60s 定时器
   for (const [cid, entry] of pendingConfirms) {
     if (entry.sessionId !== sessionId) continue;
@@ -357,6 +373,8 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   clearIntentCheckpointTurnsForSession(sessionId);
   // 移除后台任务 manager 缓存（进程已在上方 stopAllShellWorkForSession 中终止）
   try { disposeBackgroundTaskManagerForSession(sessionId); } catch { /* ignore */ }
+  try { void getTaskQueueManager(SESSIONS_DIR).clearSession(sessionId); } catch { /* ignore */ }
+  clearPendingNotesForSession(sessionId);
   if (sessionId === activeSessionId) {
     cachedMessages = undefined;
   }
@@ -383,28 +401,108 @@ interface PendingChatMessage {
   images: string[];
   referencePaths: string[];
   messageId?: string;
+  source: 'implicit' | 'explicit';
+  skipUserMessageAppend?: boolean;
   ws: WebSocket;
 }
 
-/** 会话级待处理消息队列：同一会话运行中时，新消息（含其它标签页）排队，由持有运行的循环 drain。 */
-const sessionPendingMessages = new Map<string, PendingChatMessage[]>();
-
-function enqueueSessionPending(sessionId: string, msg: PendingChatMessage): void {
-  const arr = sessionPendingMessages.get(sessionId);
-  if (arr) arr.push(msg);
-  else sessionPendingMessages.set(sessionId, [msg]);
+function pickSessionWs(sessionId: string, fallback?: WebSocket): WebSocket | undefined {
+  if (fallback && fallback.readyState === WebSocket.OPEN) return fallback;
+  const set = sessionSubscribers.get(sessionId);
+  if (!set) return fallback;
+  for (const ws of set) {
+    if (ws.readyState === WebSocket.OPEN) return ws;
+  }
+  return fallback;
 }
 
-function dequeueSessionPending(sessionId: string): PendingChatMessage | undefined {
-  const arr = sessionPendingMessages.get(sessionId);
-  if (!arr || arr.length === 0) return undefined;
-  const next = arr.shift();
-  if (arr.length === 0) sessionPendingMessages.delete(sessionId);
-  return next;
+function queuedTaskToPending(task: QueuedTask, ws: WebSocket): PendingChatMessage {
+  return {
+    content: task.text,
+    images: task.images ?? [],
+    referencePaths: task.referencePaths ?? [],
+    messageId: task.messageId,
+    source: task.source,
+    skipUserMessageAppend: task.source === 'implicit' && !!task.messageId,
+    ws,
+  };
 }
 
-function clearSessionPending(sessionId: string): void {
-  sessionPendingMessages.delete(sessionId);
+function isOpenLegacyCommand(content: string): boolean {
+  const trimmed = content.trim();
+  return trimmed === '~open' || trimmed.startsWith('~open\n') || trimmed.startsWith('~open ');
+}
+
+const NEXT_USAGE_MESSAGE = '用法: /next <任务描述>';
+
+async function publishTaskQueueState(sessionId: string): Promise<void> {
+  const items = await getTaskQueueManager(SESSIONS_DIR).list(sessionId);
+  broadcastToSession(sessionId, { type: 'task_queue_updated', sessionId, items });
+}
+
+export async function notifyTaskQueueUpdated(sessionId: string): Promise<void> {
+  await publishTaskQueueState(sessionId);
+}
+
+function isSessionImageApiUrl(url: string): boolean {
+  return typeof url === 'string'
+    && url.startsWith('/api/sessions/')
+    && url.includes('/images/');
+}
+
+async function buildEnqueueInput(
+  sessionId: string,
+  content: string,
+  images: string[],
+  referencePaths: string[],
+  messageId: string | undefined,
+  source: 'implicit' | 'explicit',
+): Promise<TaskEnqueueInput> {
+  const persistedInline = await persistInlineImages(
+    images.filter((img) => !isSessionImageApiUrl(img)),
+    sessionId,
+  );
+  const { imageUrls } = resolveFileReferences(content);
+  const persistedUploads = await persistUploadedImageFiles(imageUrls, sessionId);
+  const uiImageUrls = [...persistedInline, ...persistedUploads].map((p) =>
+    buildSessionImageApiUrl(sessionId, p.absolutePath),
+  );
+  const storedApiUrls = images.filter((img) => isSessionImageApiUrl(img));
+  const allImages = [...storedApiUrls, ...uiImageUrls];
+  return {
+    text: content,
+    source,
+    messageId,
+    images: allImages.length > 0 ? allImages : undefined,
+    referencePaths: referencePaths.length > 0 ? referencePaths : undefined,
+  };
+}
+
+async function persistImplicitQueuedUserMessage(
+  sessionId: string,
+  ws: WebSocket,
+  taskInput: TaskEnqueueInput,
+): Promise<void> {
+  if (taskInput.source !== 'implicit' || !taskInput.messageId) return;
+  const message = {
+    role: 'user',
+    id: taskInput.messageId,
+    content: taskInput.text,
+    ...(taskInput.images && taskInput.images.length > 0 ? { images: taskInput.images } : {}),
+  };
+  const persisted = await appendMessages([message], sessionId);
+  if (!persisted) return;
+  const autoTitle = await applyFirstPromptSessionTitle(sessionId, taskInput.text);
+  broadcastSessionUpdated(
+    'user_message',
+    autoTitle ? { sessionId, title: autoTitle } : { sessionId },
+    ws,
+  );
+  broadcastToSession(sessionId, {
+    type: 'user_message_appended',
+    sessionId,
+    message,
+  });
 }
 
 function abortSession(sessionId: string): boolean {
@@ -416,6 +514,12 @@ function abortSession(sessionId: string): boolean {
 
 function hasActiveSessionRun(sessionId: string): boolean {
   return sessionAbortControllers.has(sessionId);
+}
+
+function hasBusySessionRun(sessionId: string): boolean {
+  return sessionProcessing.has(sessionId)
+    || hasActiveSessionRun(sessionId)
+    || runningTurns.has(sessionId);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1108,7 +1212,19 @@ async function appendMessages(
       }
       return msg;
     });
-    existing.push(...stamped);
+    for (const msg of stamped) {
+      const existingIndex = typeof msg.id === 'string' && msg.id
+        ? existing.findIndex((item) => item && item.id === msg.id)
+        : -1;
+      if (existingIndex >= 0) {
+        existing[existingIndex] = {
+          ...existing[existingIndex],
+          ...msg,
+        };
+      } else {
+        existing.push(msg);
+      }
+    }
     await fsPromises.writeFile(file, JSON.stringify(existing), 'utf-8');
     return true;
   } catch (err) {
@@ -1193,11 +1309,42 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
   const { orchestrator, toolRegistry, toolExecutor, mcpManager } = options;
 
   /**
-   * 会话级运行循环：串行处理同一会话的消息（含其它标签页排队的消息）。
+   * 会话级运行循环：串行处理同一会话的任务队列。
    * 通过 `sessionProcessing` 防止同一会话被多个连接并发跑两个 harness（P1-9）。
    */
-  async function runSessionMessageLoop(runSid: string, first: PendingChatMessage): Promise<void> {
+  async function enqueueAndMaybeKickoff(
+    runSid: string,
+    ws: WebSocket,
+    taskInput: TaskEnqueueInput,
+    queueInsertIndex?: number,
+  ): Promise<void> {
+    const taskQueue = getTaskQueueManager(SESSIONS_DIR);
+    if (queueInsertIndex !== undefined) {
+      await taskQueue.insertAt(runSid, queueInsertIndex, taskInput);
+    } else {
+      await taskQueue.enqueue(runSid, taskInput);
+    }
+    await publishTaskQueueState(runSid);
+
+    if (!hasBusySessionRun(runSid)) {
+      const next = await taskQueue.dequeue(runSid);
+      await publishTaskQueueState(runSid);
+      if (next) {
+        const relayWs = pickSessionWs(runSid, ws);
+        if (relayWs) {
+          void runSessionMessageLoop(runSid, relayWs, queuedTaskToPending(next, relayWs));
+        }
+      }
+    }
+  }
+
+  async function runSessionMessageLoop(
+    runSid: string,
+    ws: WebSocket,
+    first: PendingChatMessage,
+  ): Promise<void> {
     sessionProcessing.add(runSid);
+    const taskQueue = getTaskQueueManager(SESSIONS_DIR);
     try {
       let current: PendingChatMessage | undefined = first;
       while (current) {
@@ -1206,8 +1353,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         broadcastHarnessState(runSid);
         ensureRunningTurn(runSid);
         broadcastToSession(runSid, { type: 'status', status: 'processing' });
+        let stopReason: StopReason | undefined;
         try {
-          await handleChatMessage(
+          stopReason = await handleChatMessage(
             current.ws,
             current.content,
             orchestrator,
@@ -1218,15 +1366,37 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             current.messageId ?? null,
             mcpManager,
             runSid,
+            {
+              skipUserMessageAppend: current.skipUserMessageAppend,
+              source: current.source,
+            },
           );
         } catch (err) {
           broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+          break;
         } finally {
           endSessionBatch(runSid);
           broadcastHarnessState(runSid);
           broadcastToSession(runSid, { type: 'status', status: 'idle' });
         }
-        current = dequeueSessionPending(runSid);
+
+        if (stopReason !== 'model_done') {
+          break;
+        }
+
+        const nextQueued = await taskQueue.dequeue(runSid);
+        if (!nextQueued) break;
+
+        await publishTaskQueueState(runSid);
+        if (nextQueued.source === 'explicit') {
+          broadcastToSession(runSid, {
+            type: 'info',
+            message: `📋 正在执行排队任务：${nextQueued.text}`,
+          });
+        }
+
+        const relayWs = pickSessionWs(runSid, ws) ?? current.ws;
+        current = queuedTaskToPending(nextQueued, relayWs);
       }
     } finally {
       sessionProcessing.delete(runSid);
@@ -1370,10 +1540,8 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'stop') {
-          // 仅中断本连接当前订阅会话的运行，并丢弃该会话排队中的待发消息，
-          // 避免误中止其它标签/会话（P1-9），也避免 abort 后自动再起一轮。
+          // 仅中断本连接当前订阅会话的运行；持久化任务队列保留。
           const sid = wsToSubscribedSession.get(ws) || activeSessionId;
-          clearSessionPending(sid);
           stopAllShellWorkForSession(sid, 'chat stop');
           if (abortSession(sid)) {
             console.log(`[chat-ws] 用户请求中断任务 session=${sid}`);
@@ -1498,7 +1666,6 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           }
           if (abortSession(leavingSessionId)) {
             console.log(`[chat-ws] switch_session 时中断会话 ${leavingSessionId} 的任务`);
-            clearSessionPending(leavingSessionId);
           }
           const oldSessionId = activeSessionId;
           try {
@@ -1559,22 +1726,67 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
         if (msg.type === 'message' && (msg.content || (msg.images && msg.images.length > 0))) {
           const runSid = wsToSubscribedSession.get(ws) || activeSessionId;
-          const incoming: PendingChatMessage = {
-            content: msg.content || '',
-            images: Array.isArray(msg.images) ? msg.images : [],
-            referencePaths: Array.isArray(msg.referencePaths)
-              ? msg.referencePaths.filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0)
-              : [],
-            messageId: parseClientMessageId(msg.messageId) ?? undefined,
-            ws,
-          };
-          // 会话级串行：若该会话已在运行（可能来自其它标签页），排队由持有运行的循环 drain。
-          if (sessionProcessing.has(runSid)) {
-            enqueueSessionPending(runSid, incoming);
-            sendJSON(ws, { type: 'info', message: '已排队，当前任务完成后自动处理' });
+          const content = typeof msg.content === 'string' ? msg.content : '';
+          const images = Array.isArray(msg.images) ? msg.images : [];
+          const referencePaths = Array.isArray(msg.referencePaths)
+            ? msg.referencePaths.filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0)
+            : [];
+          const messageId = parseClientMessageId(msg.messageId) ?? undefined;
+          const queueInsertIndex = typeof msg.queueInsertIndex === 'number'
+            ? msg.queueInsertIndex
+            : undefined;
+          const hasAttachments = images.length > 0;
+
+          const alsoCmd = parseAlsoCommand(content);
+          if (alsoCmd.matched) {
+            if (!alsoCmd.text) {
+              sendJSON(ws, { type: 'info', message: PENDING_NOTE_USAGE_MESSAGE });
+              return;
+            }
+            setPendingNote(runSid, alsoCmd.text);
+            sendJSON(ws, { type: 'info', message: formatPendingNoteSuccessMessage(alsoCmd.text) });
             return;
           }
-          void runSessionMessageLoop(runSid, incoming);
+
+          if (isOpenLegacyCommand(content)) {
+            if (sessionProcessing.has(runSid)) {
+              sendJSON(ws, { type: 'info', message: '当前有任务进行中，请稍后再试 ~open' });
+              return;
+            }
+            const direct: PendingChatMessage = {
+              content,
+              images,
+              referencePaths,
+              messageId,
+              source: 'implicit',
+              ws,
+            };
+            void runSessionMessageLoop(runSid, ws, direct);
+            return;
+          }
+
+          const requestedSource = msg.source === 'explicit' || msg.command === 'next' ? 'explicit' : undefined;
+          const nextCmd = parseNextCommand(content);
+          const isExplicitNext = requestedSource === 'explicit' || nextCmd.matched;
+          const taskText = nextCmd.matched ? nextCmd.text : content;
+          if (isExplicitNext && !taskText.trim() && !hasAttachments) {
+            sendJSON(ws, { type: 'info', message: NEXT_USAGE_MESSAGE });
+            return;
+          }
+          if (!taskText.trim() && !hasAttachments) {
+            return;
+          }
+
+          const taskInput = await buildEnqueueInput(
+            runSid,
+            taskText,
+            images,
+            referencePaths,
+            messageId,
+            isExplicitNext ? 'explicit' : 'implicit',
+          );
+          await persistImplicitQueuedUserMessage(runSid, ws, taskInput);
+          await enqueueAndMaybeKickoff(runSid, ws, taskInput, queueInsertIndex);
         }
       } catch {
         sendJSON(ws, { type: 'error', message: '消息格式错误' });
@@ -1591,6 +1803,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
  * 处理聊天消息，执行 AI 对话并实时推送进度。
  * PC 端和移动端共用此函数。
  */
+interface HandleChatMessageOptions {
+  skipUserMessageAppend?: boolean;
+  source?: 'implicit' | 'explicit';
+}
+
 async function handleChatMessage(
   ws: WebSocket,
   message: string,
@@ -1602,7 +1819,8 @@ async function handleChatMessage(
   clientMessageId: string | null = null,
   mcpManager?: MCPManager,
   runSessionId: string = activeSessionId,
-): Promise<void> {
+  options: HandleChatMessageOptions = {},
+): Promise<StopReason | undefined> {
   // 关键：本次运行的 sessionId 由调用方（runSessionMessageLoop）锁定为该连接订阅的会话，
   // 而非全局 activeSessionId，避免某连接订阅会话 ≠ 全局活跃会话时把运行/持久化写到错误会话（P1-8）。
   // 用户在长任务中途切换 session 时，旧任务的 cleanup（持久化、记录工具调用）
@@ -1627,9 +1845,23 @@ async function handleChatMessage(
 
   const supportsVision = await resolveDefaultSupportsVision(MAIN_CONFIG_PATH);
 
-  const persistedInline = await persistInlineImages(inlineImages, runSessionId);
+  const apiImageUrls = inlineImages.filter(isSessionImageApiUrl);
+  const rawDataUrls = inlineImages.filter((img) => !isSessionImageApiUrl(img));
+  const persistedInline = await persistInlineImages(rawDataUrls, runSessionId);
+  const persistedFromApi = apiImageUrls.flatMap((apiUrl) => {
+    const tail = apiUrl.split('/images/')[1];
+    if (!tail) return [];
+    const fileName = decodeURIComponent(tail);
+    const abs = resolveSessionImageFile(runSessionId, fileName);
+    if (!abs) return [];
+    const ext = path.extname(abs).toLowerCase();
+    return [{
+      absolutePath: abs,
+      mimeType: ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.png' ? 'image/png' : 'image/png',
+    }];
+  });
   const persistedUploads = await persistUploadedImageFiles(imageUrls, runSessionId);
-  const allPersistedImages = [...persistedInline, ...persistedUploads];
+  const allPersistedImages = [...persistedFromApi, ...persistedInline, ...persistedUploads];
   const imageAbsolutePaths = allPersistedImages.map((p) => p.absolutePath);
   const explicitReferencePaths = referencePaths
     .map((p) => p.trim())
@@ -1644,11 +1876,15 @@ async function handleChatMessage(
     });
   }
 
-  const uiImageUrls = allPersistedImages.map((p) => buildSessionImageApiUrl(runSessionId, p.absolutePath));
+  const uiImageUrls = [
+    ...apiImageUrls,
+    ...persistedInline.map((p) => buildSessionImageApiUrl(runSessionId, p.absolutePath)),
+    ...persistedUploads.map((p) => buildSessionImageApiUrl(runSessionId, p.absolutePath)),
+  ];
 
-  const visionDataUrls: string[] = [...inlineImages];
+  const visionDataUrls: string[] = [...rawDataUrls];
   if (supportsVision) {
-    for (const img of persistedUploads) {
+    for (const img of [...persistedFromApi, ...persistedUploads]) {
       try {
         const imgData = await fsPromises.readFile(img.absolutePath);
         const ext = path.extname(img.absolutePath).toLowerCase().replace('.', '');
@@ -1683,39 +1919,39 @@ async function handleChatMessage(
 
   const existingMessages = getCachedMessages(runSessionId);
 
-  // 写入用户消息到会话文件
   const userMsgId = clientMessageId ?? randomUUID();
   const userSentAt = Date.now();
-  const userPersisted = await appendMessages(
-    [{
-      role: 'user',
-      content: message,
-      id: userMsgId,
-      sentAt: userSentAt,
-      ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
-    }],
-    runSessionId,
-  );
-  if (userPersisted) {
-    const autoTitle = await applyFirstPromptSessionTitle(runSessionId, message);
-    broadcastSessionUpdated(
-      'user_message',
-      autoTitle ? { sessionId: runSessionId, title: autoTitle } : { sessionId: runSessionId },
-      ws,
-    );
-    // 多端实时同步：processing 期间其它端无法靠 session_updated 拉快照（前端会跳过），须直推用户消息。
-    // 发送端也需收到持久化后的 API URL，以便替换本地 data URL（localStorage 不宜存 base64）。
-    broadcastToSession(runSessionId, {
-      type: 'user_message_appended',
-      sessionId: runSessionId,
-      message: {
+  const skipUserAppend = options.skipUserMessageAppend ?? false;
+  if (!skipUserAppend) {
+    const userPersisted = await appendMessages(
+      [{
         role: 'user',
-        id: userMsgId,
         content: message,
+        id: userMsgId,
         sentAt: userSentAt,
         ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
-      },
-    });
+      }],
+      runSessionId,
+    );
+    if (userPersisted) {
+      const autoTitle = await applyFirstPromptSessionTitle(runSessionId, message);
+      broadcastSessionUpdated(
+        'user_message',
+        autoTitle ? { sessionId: runSessionId, title: autoTitle } : { sessionId: runSessionId },
+        ws,
+      );
+      broadcastToSession(runSessionId, {
+        type: 'user_message_appended',
+        sessionId: runSessionId,
+        message: {
+          role: 'user',
+          id: userMsgId,
+          content: message,
+          sentAt: userSentAt,
+          ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
+        },
+      });
+    }
   }
 
   const resolvedForDirect =
@@ -1752,7 +1988,7 @@ async function handleChatMessage(
       },
       sessionId: runSessionId,
     });
-    return;
+    return 'model_done';
   }
 
   if (direct.handled && direct.variant === 'harness_augment') {
@@ -1799,6 +2035,10 @@ async function handleChatMessage(
     mcpManager,
     toolDefs.map((t) => t.name),
   );
+  const pendingNote = getPendingNote(runSessionId);
+  if (pendingNote) {
+    clearPendingNote(runSessionId);
+  }
 
   if (wsCtx.workspace.detection.changed) {
     broadcastToSession(runSessionId, {
@@ -1917,10 +2157,11 @@ async function handleChatMessage(
     broadcastToSession(runSessionId, { type: 'pulse', ts: Date.now() });
   }, 10_000);
 
+  let stopReason: StopReason | undefined;
   try {
     const result = await harness.run(
       harnessUserMessage,
-      (msgs, opts) => llmAdapter.chat(msgs, opts),
+      (msgs, opts) => llmAdapter.chat(injectPendingNoteForTurn(msgs, pendingNote), opts),
       (event) => {
         // 同步 fold 进 runningTurn 快照（供 F5/扫码后新订阅者还原）
         foldStepIntoRunningTurn(runSessionId, event);
@@ -2002,7 +2243,7 @@ async function handleChatMessage(
       },
       existingMessages,
       // 流式调用函数
-      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
+      (msgs, callback, opts) => llmAdapter.stream(injectPendingNoteForTurn(msgs, pendingNote), callback, opts),
       // 多模态内容块（图片等）
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );
@@ -2108,6 +2349,7 @@ async function handleChatMessage(
       totalOutputTokens: result.loopState.totalOutputTokens,
       ...(turnAgentMsgId ? { messageId: turnAgentMsgId } : {}),
     });
+    stopReason = result.loopState.stopReason;
   } finally {
     clearInterval(pulseTimer);
     try {
@@ -2126,6 +2368,7 @@ async function handleChatMessage(
     // 任务（或本次 abort）落幕：清空运行中快照
     clearRunningTurn(runSessionId);
   }
+  return stopReason;
 }
 
 function sendJSON(ws: WebSocket, data: unknown): void {
@@ -2148,7 +2391,6 @@ export function cleanupChatResources(): void {
   }
   sessionAbortControllers.clear();
   sessionProcessing.clear();
-  sessionPendingMessages.clear();
   setCachedMessages(activeSessionId, undefined);
   fileBrowserStateBySession.delete(activeSessionId);
   chatClients.clear();

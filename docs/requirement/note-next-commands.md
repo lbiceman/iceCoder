@@ -1,4 +1,4 @@
-# `/note` 与 `/next` 斜杠指令 — 需求文档
+# `/also` 与 `/next` 斜杠指令 — 需求文档
 
 > **状态**：待实现  
 > **日期**：2026-07-13  
@@ -16,9 +16,9 @@
 | `StopReason` 含 `task_complete` | **仅 `model_done`** | 代码库无 `task_complete`；成功结束统一为 `model_done` |
 | 全局 `data/sessions/task-queue.json` | **按会话** `{sessionId}.task-queue.json` | 项目已多会话；队列须与会话绑定 |
 | 全局 `pendingNote` | **按会话** 进程内 `Map<sessionId, string>` | 与 `sessionPendingMessages`、structured cache 等同理 |
-| 指令 `/` 与 `~` 双前缀 | **本功能仅 `/` 前缀** | 仅识别`/note`、`/next` |
+| 指令 `/` 与 `~` 双前缀 | **本功能仅 `/` 前缀** | 仅识别`/also`、`/next` |
 | 备注注入到「对话消息列表」 | **仅注入 structured 消息**（LLM 上下文） | 不写入 UI `{sessionId}.json`；用户聊天区不可见 |
-| 未说明是否走 Harness | **`/note` 本地处理；`/next` 只入队、不直接跑 Harness** | 避免命令本身触发 Intent Checkpoint；执行发生在队列 kickoff / 接力阶段 |
+| 未说明是否走 Harness | **`/also` 本地处理；`/next` 只入队、不直接跑 Harness** | 避免命令本身触发 Intent Checkpoint；执行发生在队列 kickoff / 接力阶段 |
 | 未限定自动出队条件 | **仅 `model_done` 自动出队** | `user_checkpoint` / `user_abort` / `max_rounds` 等不应自动接力 |
 | 普通发送直接进 Harness | **默认发送 ≡ 隐式 `/next`（入队）** | 用户无需打 `/next` 前缀；输入框打字发送即入任务队列 |
 | 未说明与并发发送队列关系 | **`sessionPendingMessages` 由任务队列取代** | 运行中连发也进同一 FIFO，不再用内存 WS 排队 |
@@ -34,13 +34,13 @@
 
 **默认发送就是 `/next`。**
 
-用户在输入框直接打字并点发送（不带 `/note` 等命令前缀）时，行为与 `/next <任务描述>` 相同：任务入 FIFO 队列，而非立刻 `harness.run()`。
+用户在输入框直接打字并点发送（不带 `/also` 等命令前缀）时，行为与 `/next <任务描述>` 相同：任务入 FIFO 队列，而非立刻 `harness.run()`。
 
 | 发送方式 | 语义 | 用户气泡 | 队列卡片 |
 |----------|------|----------|----------|
 | 直接打字发送 `修一下登录页` | 隐式 `/next`（**默认**） | **立即展示**；执行时不得重复 append | 忙碌时卡片出现；空闲 kickoff 后该项出队，卡片同步更新 |
 | 显式 `/next 修一下登录页` | 显式 `/next` | 入队时**不展示**；执行开始时按普通用户消息展示，便于历史与 checkpoint 对齐 | 同上 |
-| `/note …` | 备注 | 不展示 | 不影响卡片 |
+| `/also …` | 补充说明 | 不展示 | 不影响卡片 |
 | 卡片内删除 / 编辑 | UI 队列管理 | — | 见 §4.2 |
 
 **空闲时**：入队后若该会话无进行中的 Harness，**立即**取出队首并开跑（用户无感，等价于「发一条就开始干」）。
@@ -59,10 +59,10 @@
 |------|------|
 | 输入框发一条任务 | 入队；空闲则马上执行，忙碌则等当前任务结束 |
 | 连续发多条 | `任务 A` → `任务 B` → `任务 C`，按 FIFO 逐个执行，无需打 `/next` |
-| 任务进行中补充约束 | `/note 别忘了用严格模式`，下次调 LLM 前自动带上 |
+| 任务进行中补充约束 | `/also 别忘了用严格模式`，下次调 LLM 前自动带上 |
 | 静默追加（不想立刻多一条用户气泡） | 显式 `/next 再写单元测试`；该项真正执行时再写入用户气泡 |
 | 查看 / 删除 / 编辑排队任务 | 输入框上方**浮动队列卡片**（§4.2） |
-| 刷新页面 / 重启进程 | 队列从磁盘恢复并刷新卡片；`/note` 内存暂存，重启丢失（可接受） |
+| 刷新页面 / 重启进程 | 队列从磁盘恢复并刷新卡片；`/also` 内存暂存，重启丢失（可接受） |
 
 ### 1.3 非目标
 
@@ -81,14 +81,14 @@
 收到 WS `message` 后，按以下顺序分类：
 
 ```
-1. 本地命令：/note（仅 / 前缀；Web 可走 REST，WS 也需兜底识别）
+1. 本地命令：/also（仅 / 前缀；Web 可走 REST，WS 也需兜底识别）
 2. 既有本地命令：~telemetry、~supervisor、~scan（与本功能无关，保持现状）
 3. 既有 Harness 捷径：~open（保持现状，不入队）
 4. 显式入队：/next <文本>（仅 / 前缀）
 5. 默认：其余一切文本 / 附件 → 隐式 /next（入队）  ← 输入框普通发送走此分支
 ```
 
-**注意**：`~note`、`~next` **不**作为本功能命令；会落入第 5 类，按普通消息隐式入队。
+**注意**：`~also`、`~next` **不**作为本功能命令；会落入第 5 类，按普通消息隐式入队。
 
 第 4、5 类统一由 `chat-ws.ts` 调用 `TaskQueueManager.enqueue()` 并负责 kickoff / 接力；**仅第 5 类**在入队前由前端写入 UI 用户消息，服务端执行时复用 `messageId`，不得重复 append。
 
@@ -96,46 +96,46 @@
 
 | 模式 | 识别条件 | 行为 |
 |------|----------|------|
-| `/note` | 以 `/note` 开头 | 设置 pendingNote；**不入队、不走 Harness** |
+| `/also` | 以 `/also` 开头 | 设置 pendingNote；**不入队、不走 Harness** |
 | `/next` 显式入队 | `/next <文本>` | 入队；入队时**不写 UI 用户消息**；执行开始时再写入用户消息；刷新队列卡片 |
 | **默认发送** | 不满足以上，且非既有 `~open` 等例外 | **隐式 `/next`**；前端先写 UI 用户消息并带 `messageId` 入队；执行时复用该消息 |
 | `~open` 等既有命令 | 以 `~` 开头的遗留命令 | 保持现状，**与本功能无关** |
 
 **不实现** `/next list`、`/next clear`、`/next remove N`；`/next` 后若紧跟 `list`/`clear`/`remove` 视为任务描述正文的一部分入队（或按普通默认发送处理）。
 
-前缀后参数 trim；允许无空格，如 `/note严格模式` 合法。
+前缀后参数 trim；允许无空格，如 `/also严格模式` 合法。
 
 ### 2.3 解析位置
 
 | 入口 | 处理层 | 说明 |
 |------|--------|------|
-| Web `chat-page.js` | `handleSend()` / `executeLocalCommand()` | `/note` 走本地 REST 并展示系统反馈；显式 `/next` 不 append 用户气泡但仍发 WS，由服务端入队；普通发送走 WS，由服务端默认入队 |
-| CLI `chat.ts` | REPL 内置命令分支 | `/note` 本地处理；普通输入与显式 `/next` 默认入队（无浮动卡片，队列变更由服务端回显） |
+| Web `chat-page.js` | `handleSend()` / `executeLocalCommand()` | `/also` 走本地 REST 并展示系统反馈；显式 `/next` 不 append 用户气泡但仍发 WS，由服务端入队；普通发送走 WS，由服务端默认入队 |
+| CLI `chat.ts` | REPL 内置命令分支 | `/also` 本地处理；普通输入与显式 `/next` 默认入队（无浮动卡片，队列变更由服务端回显） |
 | WebSocket | `chat-ws.ts` | 统一路由 + 空闲 kickoff + `model_done` 接力 |
 
 ### 2.4 命令注册
 
 在 `chat-commands.js` 的 `PC_LOCAL_COMMANDS` / `REMOTE_LOCAL_COMMANDS` 中新增（**`prefix: '/'`**，与既有 `~` 命令区分）：
 
-- `note` — 为下次 LLM 调用附加备注
+- `also` — 为下次 LLM 调用附加补充说明
 - `next` — 显式静默入队（入队时不展示用户气泡；**普通发送已默认入队，可不敲此前缀**）
 
-命令面板需支持 `~` 与 `/` 两类 prefix 的过滤 / 展示；选中后插入 `/note ` 或 `/next `（不是 `~note`）。
+命令面板需支持 `~` 与 `/` 两类 prefix 的过滤 / 展示；选中后插入 `/also ` 或 `/next `（不是 `~also`）。
 
 ---
 
-## 3. `/note` 指令
+## 3. `/also` 指令
 
 ### 3.1 行为
 
 - 将参数文本存入 **会话级** 内存变量 `pendingNoteBySession: Map<string, string>`
-- 同一会话重复 `/note` → **覆盖**上一条（只保留最新备注）
+- 同一会话重复 `/also` → **覆盖**上一条（只保留最新补充说明）
 - 空参数 → 回复用法提示，不修改已有 `pendingNote`
 
 ### 3.2 用户反馈
 
 - 成功：`📝 已记录备注，下次对话时自动带上`
-- 空参数：`用法: /note <备注内容>`
+- 空参数：`用法: /also <补充说明>`
 - 丢弃（见 §3.4）：`任务已结束，备注未生效`
 
 反馈以 **系统/agent 气泡** 展示（同既有本地命令反馈），`role: 'agent'`，带 `statusTag: 'system'` 或项目现有系统消息约定。
@@ -157,11 +157,11 @@
 3. 注入后 **立即清空** 该会话的 `pendingNote`
 4. 不写入 `{sessionId}.json` UI 消息；不触发 Intent Checkpoint（备注附着于已有用户回合）
 
-**注入点（实现参考）**：优先在 `chat-ws.ts` 包装传给 `harness.run()` 的 `chat` 函数：每次调用 LLM 前检查并消费 `pendingNote`，把 `[备注] ...` 追加到本次传入的 structured messages。这样运行中发送 `/note` 才能赶上当前任务的下一次 LLM 调用。仅在 `getCachedMessages()` 后、`harness.run()` 前注入只能覆盖首轮调用，不足以满足运行中补充约束。
+**注入点（实现参考）**：优先在 `chat-ws.ts` 包装传给 `harness.run()` 的 `chat` 函数：每次调用 LLM 前检查并消费 `pendingNote`，把 `[备注] ...` 追加到本次传入的 structured messages。这样运行中发送 `/also` 才能赶上当前任务的下一次 LLM 调用。仅在 `getCachedMessages()` 后、`harness.run()` 前注入只能覆盖首轮调用，不足以满足运行中补充约束。
 
 ### 3.4 边界：任务已结束且备注未注入
 
-若某次 `harness.run()` 在 **注入发生前** 即以 `model_done` 结束（例如：用户在运行中发送 `/note`，但该轮在下一轮 LLM 调用前就结束了），则：
+若某次 `harness.run()` 在 **注入发生前** 即以 `model_done` 结束（例如：用户在运行中发送 `/also`，但该轮在下一轮 LLM 调用前就结束了），则：
 
 - 丢弃该 `pendingNote`
 - 向用户推送丢弃提示（§3.2 第三条）
@@ -406,7 +406,7 @@ runSessionMessageLoop:
 |------|------|
 | `model_done` 且队列非空、即将自动接力 | 不展示「已完成 / success」，或瞬时切到 `thinking`；避免 success → thinking 闪烁 |
 | 自动接力开始 | 与普通用户消息一致：`thinking` |
-| `/note` / `/next` 本地命令 | 不改变冰豆状态 |
+| `/also` / `/next` 本地命令 | 不改变冰豆状态 |
 
 实现建议：`chat-ws.ts` 在 `final` 事件广播时，若 `stopReason === 'model_done'` 且队列非空，设置 `petState: 'thinking'`，`petBubble: '排队任务接力中…'`。
 
@@ -420,14 +420,14 @@ runSessionMessageLoop:
 
 | 操作 | Checkpoint |
 |------|------------|
-| `/note`、显式 `/next` 入队 | **不** capture（显式入队无 UI 消息） |
+| `/also`、显式 `/next` 入队 | **不** capture（显式入队无 UI 消息） |
 | 默认发送入队 | **不在入队时 capture**；前端已有 UI 用户消息，但 Harness 尚未运行 |
 | 队列项开始执行 | **要** capture；默认发送复用已有 `messageId`，显式 `/next` 先写入用户消息再 capture |
-| `/note` 注入 structured 消息 | **不**单独 capture；附属于该轮已有 `userMsgId` 的 structured 快照 |
+| `/also` 注入 structured 消息 | **不**单独 capture；附属于该轮已有 `userMsgId` 的 structured 快照 |
 
 ### 5.4 会话记忆 `session-notes.md`
 
-- 无交叉；`/note` 为 ephemeral LLM 上下文补丁，不写入 `session-notes.md`
+- 无交叉；`/also` 为 ephemeral LLM 上下文补丁，不写入 `session-notes.md`
 - 文档与 UI 文案使用「备注」「排队任务」，避免「笔记」「记忆」字样
 
 ---
@@ -440,11 +440,11 @@ runSessionMessageLoop:
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/sessions/:id/note` | body: `{ text: string }` → 设置 pendingNote |
+| `POST` | `/api/sessions/:id/also` | body: `{ text: string }` → 设置 pendingNote |
 | `GET` | `/api/sessions/:id/task-queue` | 返回 `{ items: QueuedTask[] }` |
 | `DELETE` | `/api/sessions/:id/task-queue/:taskId` | 按 id 删除一项 |
 
-task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ ok: true, message: string }`。
+task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/also` 返回 `{ ok: true, message: string }`。
 
 入队不走 REST：默认发送、显式 `/next`、编辑后插回都通过 WS `message` 进入 `chat-ws.ts`，因为只有 WS 侧持有 `sessionProcessing`、订阅会话、kickoff 与自动接力上下文。REST 只做查询和队列管理，不直接启动 Harness。
 
@@ -458,7 +458,7 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 
 触发时机：`enqueue` / `dequeue` / `remove` / `insert`、会话切换后可选推送。前端 `chat-task-queue.js` 监听并重绘卡片。
 
-`/note` 仍可由 REST 返回 message 后 `appendMessageEl` 展示系统气泡。
+`/also` 仍可由 REST 返回 message 后 `appendMessageEl` 展示系统气泡。
 
 编辑插回时，前端发送：
 
@@ -470,7 +470,7 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 
 ### 6.3 CLI
 
-在 `chat.ts` 增加 `/note`；**普通 REPL 输入默认入队**（无 Web 卡片，可通过日志或 `GET task-queue` 查看队列）。**不实现** `/next list` 等子命令。
+在 `chat.ts` 增加 `/also`；**普通 REPL 输入默认入队**（无 Web 卡片，可通过日志或 `GET task-queue` 查看队列）。**不实现** `/next list` 等子命令。
 
 ---
 
@@ -482,7 +482,7 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 |------|------|
 | `src/session/pending-note.ts` | 会话级 pendingNote 读写 / 注入辅助 |
 | `src/session/task-queue.ts` | 队列 CRUD + 文件持久化 |
-| `test/session/pending-note.test.ts` | `/note` 单元测试 |
+| `test/session/pending-note.test.ts` | `/also` 单元测试 |
 | `test/session/task-queue.test.ts` | 队列 CRUD + 持久化测试 |
 | `src/public/js/chat-task-queue.js` | 浮动卡片渲染、删除 / 编辑、与 API / WS 同步 |
 | `src/public/css/chat-task-queue.css` | 卡片样式 |
@@ -492,18 +492,18 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 
 | 文件 | 改动摘要 |
 |------|----------|
-| `src/public/js/chat-commands.js` | 以 `prefix: '/'` 注册 `note` / `next`，并支持 `~` / `/` 两类命令提示 |
-| `src/public/js/chat-page.js` | 拦 `/note`、显式 `/next`；挂载队列卡片；编辑态发送附带 `queueInsertIndex`；忙碌态按钮按输入内容切换发送 / 暂停 |
+| `src/public/js/chat-commands.js` | 以 `prefix: '/'` 注册 `also` / `next`，并支持 `~` / `/` 两类命令提示 |
+| `src/public/js/chat-page.js` | 拦 `/also`、显式 `/next`；挂载队列卡片；编辑态发送附带 `queueInsertIndex`；忙碌态按钮按输入内容切换发送 / 暂停 |
 | `src/web/chat-ws.ts` | 消息路由、默认入队、空闲 kickoff、`task_queue_updated`、pendingNote 注入、`handleChatMessage` 返回 `StopReason` |
 | `src/web/routes/sessions.ts` | note / task-queue REST；删除会话时清理 queue 文件 |
-| `src/cli/commands/chat.ts` | CLI `/note` + 普通输入默认入队（无卡片） |
+| `src/cli/commands/chat.ts` | CLI `/also` + 普通输入默认入队（无卡片） |
 | `src/public/js/chat-pet-bridge.js` |（按需）success 抑制 |
 | 聊天页 HTML/CSS 入口 | 引入 `chat-task-queue.css` / `.js` |
 
 ### 7.3 实现顺序建议
 
 1. `task-queue.ts` + `pending-note.ts` + 单元测试  
-2. REST API（`GET` / `DELETE` / note）+ CLI `/note`  
+2. REST API（`GET` / `DELETE` / also）+ CLI `/also`  
 3. `chat-ws.ts` 注入、kickoff、接力、`queueInsertIndex` + `task_queue_updated`  
 4. Web 浮动卡片 UI（显隐 / 删除 / 编辑 / 多端同步）+ 发送 / 暂停按钮状态机  
 5. 冰豆打磨 + 集成测试  
@@ -514,7 +514,7 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 
 ### 8.1 单元测试
 
-**`/note`（`pending-note.test.ts`）**
+**`/also`（`pending-note.test.ts`）**
 
 - [ ] 设置 / 覆盖 / 读取 / 清空 pendingNote
 - [ ] `injectPendingNote(messages, sessionId)` 在 structured 列表末尾追加 `[备注] …` 并清空
@@ -538,9 +538,9 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 - [ ] 忙碌时输入框有内容 → 按钮为发送，点击 / 回车均入队；输入为空 → 按钮为暂停，回车不触发 Stop
 - [ ] `model_done` 后自动 dequeue 并触发下一轮；广播 `task_queue_updated`
 - [ ] `user_checkpoint` 结束 **不** 自动 dequeue
-- [ ] `/note` 在下一次 LLM `chat()` 前出现在 structured messages 中；运行中发送且后续仍有 LLM 调用时能被当前 run 消费
-- [ ] `executeLocalCommand('/note x')` 不调用 `WS.sendMessage`
-- [ ] `~note x` **不**触发 note 逻辑，按默认发送入队
+- [ ] `/also` 在下一次 LLM `chat()` 前出现在 structured messages 中；运行中发送且后续仍有 LLM 调用时能被当前 run 消费
+- [ ] `executeLocalCommand('/also x')` 不调用 `WS.sendMessage`
+- [ ] `~also x` **不**触发 also 逻辑，按默认发送入队
 - [ ] 显式 `/next` 入队时不入 UI 消息，执行开始时写入用户消息；默认发送入队时已有 UI 消息且执行时不重复写
 - [ ] 队列非空时卡片可见；清空后卡片隐藏
 - [ ] 删除按钮调用 API 后卡片与磁盘同步
@@ -559,23 +559,23 @@ task queue 响应统一 `{ ok: true, items: QueuedTask[] }`；`/note` 返回 `{ 
 | 1 | 输入框直接发送 `修登录页`（无命令）→ 空闲时立即开跑；聊天区**有**用户气泡 |
 | 2 | 任务运行中再发 `写测试` → 入队，**浮动卡片出现**并列出该项；不打断当前任务；`model_done` 后自动执行 |
 | 3 | 忙碌时输入框有内容则按钮为发送，点击 / 回车都入队；输入为空时按钮为暂停，回车不触发 Stop |
-| 4 | `/note foo` → 系统反馈，无用户气泡；下一次 LLM 调用时 structured 含 `[备注] foo` |
-| 5 | 运行中 `/note` 后任务在下一轮 LLM 前结束 → 「任务已结束，备注未生效」 |
+| 4 | `/also foo` → 系统反馈，无用户气泡；下一次 LLM 调用时 structured 含 `[备注] foo` |
+| 5 | 运行中 `/also` 后任务在下一轮 LLM 前结束 → 「任务已结束，备注未生效」 |
 | 6 | 显式 `/next A` + 默认发送 `B` → 卡片按 FIFO 显示；逐项自动执行 |
 | 7 | `user_checkpoint` 停止后队列保留，卡片仍可见，不自动执行 |
 | 8 | 卡片 **删除**：该项消失，磁盘同步；队列空则卡片隐藏 |
 | 9 | 卡片 **编辑**：项移入输入框并从卡片移除；改完发送后插回原位置并刷新卡片 |
-| 10 | 重启后卡片仍显示未完成任务；`/note` 不保留 |
+| 10 | 重启后卡片仍显示未完成任务；`/also` 不保留 |
 | 11 | 删除会话后 `.task-queue.json` 删除 |
 | 12 | 冰豆自动接力时不长时间停留 success |
 | 13 | CLI 普通输入默认入队；**无** `/next list` 等子命令 |
-| 14 | 输入 `~note` / `~next` 不触发本功能，按普通消息处理 |
+| 14 | 输入 `~also` / `~next` 不触发本功能，按普通消息处理 |
 
 ---
 
 ## 10. 流程图
 
-### 10.1 `/note` 生命周期
+### 10.1 `/also` 生命周期
 
 ```mermaid
 sequenceDiagram
@@ -585,8 +585,8 @@ sequenceDiagram
   participant WS as chat-ws.ts
   participant H as Harness
 
-  U->>UI: /note 严格模式
-  UI->>API: POST .../note
+  U->>UI: /also 严格模式
+  UI->>API: POST .../also
   API-->>UI: 已记录备注
   UI-->>U: 系统气泡
 
@@ -655,14 +655,14 @@ sequenceDiagram
 
 初稿中下列描述**保持不变**：
 
-- `/note` 反馈文案、注入后清空、任务结束未注入则丢弃
+- `/also` 反馈文案、注入后清空、任务结束未注入则丢弃
 - `/next` FIFO 队列与持久化
 - 单元测试覆盖暂存、注入、入队、出队
 
 初稿中下列描述**本文已修订**：
 
 - `task_complete` → `model_done`；全局队列 → 按会话；pendingNote 按会话
-- **`/note`、`/next` 仅 `/` 前缀**；备注仅注入 structured
+- **`/also`、`/next` 仅 `/` 前缀**；备注仅注入 structured
 - **默认发送 ≡ 隐式 `/next`**；空闲立即 kickoff
 - **`sessionPendingMessages` 由任务队列取代**
 - **不做 `/next list/clear/remove` 子命令**；改用输入框上方浮动卡片（删除 / 编辑）
