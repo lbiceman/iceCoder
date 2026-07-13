@@ -15,6 +15,8 @@ import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compa
 import { isResumeContinuationMessage } from './resume-goal.js';
 import { prepareRuntimeContextEphemeral } from './harness-runtime-inject.js';
 import { prepareWorkspaceAnchorEphemeral } from './workspace-anchor.js';
+import { takeAnalysisReadyForInjection } from './analysis-ready-injector.js';
+import { inferKindFromIntent } from './sub-agent-prompts.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { HarnessRunState } from './harness-run-state.js';
@@ -30,6 +32,7 @@ import {
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
 import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
+import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import type {
   ChatFunction,
   HarnessResult,
@@ -43,6 +46,8 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   runtimeTelemetry?: RuntimeTelemetry;
   /** L2-7 — strict 首轮 `task_graph_init` 门禁经此 bridge 判定；缺省回退 `shouldUseTaskGraph`。 */
   supervisorBridge?: SupervisorRuntimeBridge;
+  /** Async Sub-Agent：ready analysis prompt injection. */
+  analysisSupervisor?: AnalysisSupervisor;
   /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
@@ -169,6 +174,33 @@ export async function prepareHarnessRound(
     }
   }
 
+  if (!deps.graphExecutor?.hasGraph() && !state.analysisAutoTriggered && deps.analysisSupervisor && deps.sessionId) {
+    const taskSnapshot = state.taskState.snapshot();
+    const inferredKind = inferKindFromIntent(
+      taskSnapshot.intent,
+      taskSnapshot.phase,
+      taskSnapshot.goal || userMessage,
+    );
+    if (inferredKind && deps.analysisSupervisor.shouldAutoTrigger(inferredKind)) {
+      deps.analysisSupervisor.requestAnalysis({
+        sessionId: deps.sessionId,
+        kind: inferredKind,
+        prompt: taskSnapshot.goal || userMessage,
+        context: 'Automatically triggered from the current task intent. Keep the analysis read-only and concise.',
+        scope: {
+          scopeHash: `auto:${inferredKind}:${taskSnapshot.goal || userMessage}`,
+        },
+        intent: taskSnapshot.intent,
+        phase: taskSnapshot.phase,
+        requestedBy: 'supervisor',
+      }, {
+        round,
+        reason: 'auto_trigger',
+      });
+      state.analysisAutoTriggered = true;
+    }
+  }
+
   // Phase 4a — 后台任务摘要：仅在有 dirty / due running 任务时返回非空，
   // BackgroundTaskManager 内部 5min 节流；本块帮助模型记住「有 npm test 在跑」而不是再起一份。
   if (deps.workspaceRoot) {
@@ -177,6 +209,14 @@ export async function prepareHarnessRound(
     if (bgStatus) {
       ephemeralBlocks.push(bgStatus);
     }
+  }
+
+  const analysisReady = await takeAnalysisReadyForInjection({
+    supervisor: deps.analysisSupervisor,
+    sessionId: deps.sessionId,
+  });
+  if (analysisReady) {
+    ephemeralBlocks.push(analysisReady);
   }
 
   {

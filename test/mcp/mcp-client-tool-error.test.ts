@@ -24,7 +24,10 @@ function createFakeProcess() {
   proc.stdin = new PassThrough();
   proc.stdout = new PassThrough();
   proc.stderr = new PassThrough();
-  proc.kill = vi.fn();
+  proc.kill = vi.fn(() => {
+    queueMicrotask(() => proc.emit('exit', 0, null));
+    return true;
+  });
   return proc;
 }
 
@@ -44,21 +47,22 @@ describe('MCPClient callTool JSON-RPC 错误', () => {
     const client = new MCPClient('puppeteer', { command: 'node', args: ['x.js'] });
     const startPromise = client.start();
 
-    let id = 0;
-    fakeProc.stdout.on('data', () => {
-      id += 1;
-      if (id === 1) {
-        fakeProc.stdout.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'test', version: '1' } },
-        }) + '\n');
-      } else if (id === 2) {
-        fakeProc.stdout.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id: 2,
-          error: { code: -32603, message: 'net::ERR_CONNECTION_CLOSED at https://example.com/' },
-        }) + '\n');
+    fakeProc.stdin.on('data', (chunk) => {
+      for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+        const request = JSON.parse(line) as { id?: number; method?: string };
+        if (request.id === 1 && request.method === 'initialize') {
+          fakeProc.stdout.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'test', version: '1' } },
+          }) + '\n');
+        } else if (request.id != null && request.method === 'tools/call') {
+          fakeProc.stdout.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            error: { code: -32603, message: 'net::ERR_CONNECTION_CLOSED at https://example.com/' },
+          }) + '\n');
+        }
       }
     });
 

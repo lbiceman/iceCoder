@@ -215,6 +215,8 @@ export interface HarnessConfig {
   supervisorConfig?: ResolvedSupervisorConfig;
   /** L2-1+：SupervisorRuntimeBridge；工具轮末段调用 PassiveObserver。 */
   supervisorBridge?: import('./supervisor/supervisor-bridge.js').SupervisorRuntimeBridge;
+  /** Async Sub-Agent Phase 4：AnalysisSupervisor；本阶段仅承载依赖，不接入主循环。 */
+  analysisSupervisor?: import('./supervisor/analysis-supervisor.js').AnalysisSupervisor;
 }
 
 /**

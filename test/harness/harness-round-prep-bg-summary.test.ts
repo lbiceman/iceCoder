@@ -175,4 +175,36 @@ describe('harness-round-prep · bg-summary injection (P0-B)', () => {
     ).length;
     expect(secondInApi).toBe(0);
   });
+
+  it('auto-triggers one async analysis by default', async () => {
+    const state = makeState('inspect oauth module');
+    const calls: unknown[] = [];
+    const deps = {
+      ...buildDeps(sessionId, workDir),
+      analysisSupervisor: {
+        shouldAutoTrigger: () => true,
+        requestAnalysis: (...args: unknown[]) => {
+          calls.push(args);
+          return { taskId: 'auto', submitted: true, status: 'pending' };
+        },
+        getReadyAnalyses: async () => [],
+      },
+    };
+
+    await prepareHarnessRound(deps as never, {
+      state,
+      userMessage: 'inspect oauth module',
+      chatFn,
+      logger: new HarnessLogger(),
+    });
+    await prepareHarnessRound(deps as never, {
+      state,
+      userMessage: 'inspect oauth module',
+      chatFn,
+      logger: new HarnessLogger(),
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(state.analysisAutoTriggered).toBe(true);
+  });
 });

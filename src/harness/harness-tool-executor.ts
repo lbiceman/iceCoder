@@ -16,6 +16,8 @@ import {
   formatSubAgentResult,
   SubAgentRunner,
 } from './sub-agent-runner.js';
+import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
+import type { SubAgentKind } from '../types/async-sub-agent.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
 import type { TaskState } from './task-state.js';
 import type { ChatFunction, HarnessStepEvent, ToolPermissionRule } from './types.js';
@@ -59,6 +61,8 @@ export interface ToolExecutorDeps {
   sessionId?: string;
   /** 会话目录（Session manifest 跟踪用） */
   sessionDir?: string;
+  /** Async Sub-Agent Phase 5：非阻塞分析请求入口。 */
+  analysisSupervisor?: AnalysisSupervisor;
 }
 
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
@@ -71,6 +75,28 @@ function formatToolFailureOutput(error: string | undefined, rawOutput: string): 
 function isEnoentError(error: string | undefined, output: string): boolean {
   const text = `${error ?? ''}\n${output}`.toLowerCase();
   return /enoent|no such file|not found/.test(text);
+}
+
+function normalizeAnalysisKind(value: unknown): SubAgentKind {
+  const kind = String(value ?? '').trim();
+  if (
+    kind === 'explorer'
+    || kind === 'search'
+    || kind === 'review'
+    || kind === 'dependency'
+    || kind === 'test_analysis'
+  ) {
+    return kind;
+  }
+  throw new Error(`Invalid request_analysis kind: ${kind || '(empty)'}`);
+}
+
+function stringArrayArg(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map(item => item.trim());
+  return items.length > 0 ? items : undefined;
 }
 
 interface PolicyBlockContext {
@@ -241,6 +267,104 @@ export async function executeToolCallsStreaming(
     if (deps.loopController.isAborted()) {
       yieldMissingToolResults(toolCalls, submittedIds, messages);
       break;
+    }
+
+    if (tc.name === 'request_analysis') {
+      logger.toolCall(tc.name, tc.arguments);
+      onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
+
+      let output: string;
+      let success = true;
+      let error: string | undefined;
+      try {
+        if (!deps.analysisSupervisor) {
+          throw new Error('request_analysis requires AnalysisSupervisor');
+        }
+        const kind = normalizeAnalysisKind(tc.arguments.kind);
+        const task = String(tc.arguments.task ?? '').trim();
+        if (!task) throw new Error('request_analysis requires a non-empty task');
+        const result = deps.analysisSupervisor.requestAnalysis({
+          sessionId: deps.sessionId ?? 'default',
+          kind,
+          prompt: task,
+          context: typeof tc.arguments.context === 'string' ? tc.arguments.context : undefined,
+          scope: {
+            paths: stringArrayArg(tc.arguments.paths),
+            keywords: stringArrayArg(tc.arguments.keywords),
+          },
+        }, {
+          round: iteration,
+          reason: 'request_analysis_tool',
+        });
+        output = [
+          '[Analysis Requested]',
+          `taskId: ${result.taskId}`,
+          `status: ${result.status}`,
+          `submitted: ${result.submitted}`,
+          'The analysis is running in the background. Continue useful work; an [Analysis Ready] context block will appear later.',
+        ].join('\n');
+      } catch (err) {
+        success = false;
+        error = err instanceof Error ? err.message : String(err);
+        output = `工具执行错误: ${error}`;
+      }
+
+      directTotalCount++;
+      if (!success) {
+        directFailedCount++;
+        directFailedSignatures.push(toolCallSignature(tc));
+      }
+      logger.toolResult(tc.name, success, output.length, error);
+      deps.runtimeTelemetry?.recordTool({
+        round: iteration,
+        toolName: tc.name,
+        success,
+        outputLength: output.length,
+      });
+      onStep?.({
+        type: 'tool_result',
+        iteration,
+        toolCallId: tc.id,
+        toolName: tc.name,
+        toolSuccess: success,
+        toolOutput: stepToolOutputPreview(tc.name, output),
+        toolError: success ? undefined : error,
+        toolArgs: tc.arguments,
+      });
+      messages.push({
+        role: 'tool',
+        content: output,
+        toolCallId: tc.id,
+      });
+      taskState?.recordToolResult(tc, { success, output, error });
+      repoContext?.recordToolResult(tc, { success, output, error });
+      deps.loopController.recordToolCalls(1);
+      submittedIds.add(tc.id);
+      continue;
+    }
+
+    if (
+      isIntentCheckpointWriteTool(tc.name)
+      && deps.analysisSupervisor
+      && await deps.analysisSupervisor.hasPendingAnalyses(deps.sessionId ?? 'default')
+    ) {
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
+        iteration,
+        baseMessage: '[Harness / Async Sub-Agent] A background analysis is still pending for this session. Wait for the next [Analysis Ready] context block before making write changes, or continue with read-only inspection.',
+        errorLabel: 'analysis_pending',
+        policyReason: 'analysis_pending',
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
+      });
+      directTotalCount++;
+      submittedIds.add(tc.id);
+      continue;
     }
 
     if (tc.name === 'delegate_to_subagent') {

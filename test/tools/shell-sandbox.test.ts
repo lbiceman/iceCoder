@@ -76,6 +76,6 @@ describe('shell-sandbox', () => {
 
   it('validateShellBlacklistPatterns rejects invalid regex', () => {
     expect(validateShellBlacklistPatterns(['rm\\s+-rf'])).toBeNull();
-    expect(validateShellBlacklistPatterns(['('[)).toMatch(/无效的正则表达式/);
+    expect(validateShellBlacklistPatterns(['('])).toMatch(/无效的正则表达式/);
   });
 });

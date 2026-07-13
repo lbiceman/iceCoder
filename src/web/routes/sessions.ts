@@ -176,6 +176,7 @@ async function readSessionPlan(sessionId: string): Promise<any> {
  *  - `{id}.checkpoint.json`      TaskCheckpoint（断点恢复）
  *  - `{id}.workspace.json`       工作区锁定
  *  - `{id}.session-notes.md`     会话笔记（含 runtime / plan fence）
+ *  - `{id}/analysis|subtasks|artifacts` 异步子代理分析工作区
  */
 type SessionCleanupHook = (sessionId: string) => void | Promise<void>;
 let sessionCleanupHook: SessionCleanupHook | null = null;
@@ -199,7 +200,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
       fs.unlink(path.join(SESSIONS_DIR, `${sessionId}${suffix}`)).catch(() => {}),
     ),
   );
-  await fs.rm(path.join(SESSIONS_DIR, sessionId, 'checkpoints'), { recursive: true, force: true }).catch(() => {});
+  await fs.rm(path.join(SESSIONS_DIR, sessionId), { recursive: true, force: true }).catch(() => {});
   if (sessionCleanupHook) {
     try {
       await sessionCleanupHook(sessionId);

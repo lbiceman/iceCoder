@@ -217,6 +217,16 @@ export function checkDelegatePreflight(input: {
   buildDiagnosticGateActive?: boolean;
   branchBudget?: BranchBudgetTracker;
 }): ToolPreflightDecision {
+  const taskSandbox = analyzeShellSandbox(input.task, { workDir: input.workspaceRoot });
+  if (taskSandbox.blocked) {
+    return {
+      blocked: true,
+      reason: taskSandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
+      hostKillLabel: taskSandbox.matchLabel,
+      message: taskSandbox.message ?? '[Sandbox / Blocked]',
+    };
+  }
+
   const commands = extractRunCommandsFromDelegateTask(input.task);
 
   for (const command of commands) {

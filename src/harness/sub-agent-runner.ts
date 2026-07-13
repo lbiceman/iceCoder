@@ -154,6 +154,48 @@ export function createDelegateToSubagentToolDefinition(): ToolDefinition {
   };
 }
 
+/** 主会话注册用的异步 `request_analysis` 工具定义。 */
+export function createRequestAnalysisToolDefinition(): ToolDefinition {
+  return {
+    name: 'request_analysis',
+    description: [
+      'Request a background read-only analysis by an async sub-agent.',
+      'This tool returns immediately with a task id; do not wait for the analysis in the same turn.',
+      'Use it when exploring unfamiliar code, searching broadly, reviewing risks, dependency relationships, or test coverage.',
+      'The result will be provided later as an Analysis Ready context block from the shared analysis workspace.',
+    ].join(' '),
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['explorer', 'search', 'review', 'dependency', 'test_analysis'],
+          description: 'Type of read-only analysis to run in the background.',
+        },
+        task: {
+          type: 'string',
+          description: 'Detailed read-only analysis task for the async sub-agent.',
+        },
+        context: {
+          type: 'string',
+          description: 'Optional extra context that helps scope the analysis.',
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional workspace-relative paths that bound the analysis scope.',
+        },
+        keywords: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional symbols, feature names, or keywords that identify the target area.',
+        },
+      },
+      required: ['kind', 'task'],
+    },
+  };
+}
+
 /**
  * 在工具列表末尾追加 `delegate_to_subagent`（若尚未存在）。
  * 若 `tools.length === 0`（运行时禁用工具）则不追加，与 Harness 行为一致。
@@ -162,6 +204,14 @@ export function ensureDelegateToSubagentTool(tools: ToolDefinition[]): ToolDefin
   if (tools.length === 0) return tools;
   if (tools.some(t => t.name === 'delegate_to_subagent')) return tools;
   return [...tools, createDelegateToSubagentToolDefinition()];
+}
+
+/** 追加同步委派与异步分析工具定义。 */
+export function ensureSubAgentTools(tools: ToolDefinition[]): ToolDefinition[] {
+  const withDelegate = ensureDelegateToSubagentTool(tools);
+  if (withDelegate.length === 0) return withDelegate;
+  if (withDelegate.some(t => t.name === 'request_analysis')) return withDelegate;
+  return [...withDelegate, createRequestAnalysisToolDefinition()];
 }
 
 /** 将 {@link SubAgentResult} 拼成主会话 tool 消息中的多行文本。 */
