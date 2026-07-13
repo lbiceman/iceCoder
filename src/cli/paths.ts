@@ -14,7 +14,7 @@
  * 模块加载时会调用 `applyRuntimeDataEnvDefaults()`，保证 Web/CLI 子模块读到一致路径。
  */
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, realpathSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -37,8 +37,18 @@ export function isProductionRuntime(): boolean {
 
 /** 从 `npm install -g` / tgz 安装的 `iceCoder` CLI 入口（含 npm link 到包目录）。 */
 export function isPackagedCliEntry(): boolean {
-  const entry = (process.argv[1] ?? '').replace(/\\/g, '/');
-  return entry.includes('/node_modules/ice-coder/dist/cli/');
+  const raw = process.argv[1] ?? '';
+  if (!raw) return false;
+  // 解析 symlink（npm install -g / npm link 的 bin 是 symlink）
+  let resolved: string;
+  try {
+    resolved = realpathSync(raw);
+  } catch {
+    resolved = raw;
+  }
+  const entry = resolved.replace(/\\/g, '/');
+  return entry.includes('/node_modules/ice-coder/dist/cli/')
+    || entry.endsWith('/dist/cli/index.js');
 }
 
 /** Electron 打包应用内嵌 server（由主进程设置 ICE_ELECTRON=1）。 */
