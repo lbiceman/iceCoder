@@ -84,7 +84,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 
 - **TaskState + RepoContext**：跟踪 intent、阶段、改动文件、验证状态与读过的仓库面。
 - **CheckpointEngine v2**：在同一份 `{sessionId}.checkpoint.json` 上叠加 `runtimeV2`（工具轨迹、失败、分支预算、监管快照），长会话可续跑。
-- **子代理**：`delegate_to_subagent` 用只读白名单工具做探索，主上下文只收短摘要，减轻搜索/读文件带来的 token 膨胀。
+- **子代理**：`request_analysis` 启动只读异步后台分析；主线程继续工作，稍后接收简短的 Analysis Ready 摘要。
 
 ### 冰豆（Web 会话指示器）
 
@@ -138,7 +138,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 
 ### 工具生态（27 内置 + MCP）
 
-内置覆盖文件/Git/Shell、搜索、URL 抓取、Office/XMind 解析、**系统文件浏览器**、视觉 `image_read` 等；Harness 另暴露 **`delegate_to_subagent`**。**MCP** 子进程把外部 Server 工具注册进同一 `ToolRegistry`。
+内置覆盖文件/Git/Shell、搜索、URL 抓取、Office/XMind 解析、**系统文件浏览器**、视觉 `image_read` 等；Harness 另暴露异步 **`request_analysis`**。**MCP** 子进程把外部 Server 工具注册进同一 `ToolRegistry`。
 
 - **Shell 双轨**：`run_command` 运行时分类——长任务进后台、短命令前台；软超时后可 escalate，避免聊天被 `npm test` 堵死。
 - **Diff Viewer**：编辑类工具在聊天内嵌 Git 风格 diff，可展开核对。

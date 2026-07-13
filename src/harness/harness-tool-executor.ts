@@ -12,10 +12,6 @@ import {
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { RepoContext } from './repo-context.js';
-import {
-  formatSubAgentResult,
-  SubAgentRunner,
-} from './sub-agent-runner.js';
 import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import type { SubAgentKind } from '../types/async-sub-agent.js';
 import { StreamingToolExecutor } from './streaming-tool-executor.js';
@@ -29,7 +25,7 @@ import {
   extractToolTargetPath,
 } from './branch-budget-tool-path.js';
 import { appendVerificationEvidenceToBranchBlock } from './rebuild-escalation.js';
-import { checkToolPreflight, checkDelegatePreflight } from './harness-tool-preflight.js';
+import { checkToolPreflight } from './harness-tool-preflight.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { isHarnessVerificationCommand } from './verification-digest.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
@@ -363,109 +359,6 @@ export async function executeToolCallsStreaming(
         policyBlockedSignatures,
       });
       directTotalCount++;
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (tc.name === 'delegate_to_subagent') {
-      const delegateTask = String(tc.arguments.task ?? '');
-      const delegatePreflight = checkDelegatePreflight({
-        task: delegateTask,
-        workspaceRoot: deps.workspaceRoot,
-        buildDiagnosticGateActive,
-        branchBudget: deps.branchBudget,
-      });
-      if (delegatePreflight.blocked) {
-        emitHarnessPolicyBlock({
-          deps,
-          tc,
-          iteration,
-          baseMessage: delegatePreflight.message ?? '[Harness / Preflight] delegate_to_subagent denied.',
-          errorLabel: delegatePreflight.reason ?? 'Preflight block',
-          policyReason: delegatePreflight.reason ?? 'delegate_preflight',
-          messages,
-          onStep,
-          logger,
-          taskState,
-          repoContext,
-          policyBlockedSignatures,
-          enrichWithVerification: delegatePreflight.reason === 'delegate_build_blocked',
-          verificationOutputBuffer,
-        });
-        directTotalCount++;
-        submittedIds.add(tc.id);
-        continue;
-      }
-
-      logger.toolCall(tc.name, tc.arguments);
-      onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
-      onStep?.({
-        type: 'tool_progress',
-        iteration,
-        phase: 'running',
-        toolName: tc.name,
-        content: '正在委派只读子代理探索代码库…',
-      });
-
-      let output: string;
-      let success = true;
-      let error: string | undefined;
-      try {
-        if (!chatFn || !currentTools) {
-          throw new Error('delegate_to_subagent requires Harness chat function and tool definitions');
-        }
-        const runner = new SubAgentRunner({
-          toolExecutor: deps.toolExecutor,
-          toolDefinitions: currentTools,
-          chatFn,
-          workspaceRoot: deps.workspaceRoot,
-        });
-        const result = await runner.run({
-          task: String(tc.arguments.task ?? ''),
-          context: typeof tc.arguments.context === 'string' ? tc.arguments.context : undefined,
-        });
-        output = formatSubAgentResult(result);
-        success = result.status !== 'error';
-        error = result.error;
-      } catch (err) {
-        success = false;
-        error = err instanceof Error ? err.message : String(err);
-        output = `工具执行错误: ${error}`;
-      }
-
-      directTotalCount++;
-      if (!success) {
-        directFailedCount++;
-        directFailedSignatures.push(toolCallSignature(tc));
-      }
-      logger.toolResult(tc.name, success, output.length, error);
-      deps.runtimeTelemetry?.recordTool({
-        round: iteration,
-        toolName: tc.name,
-        success,
-        outputLength: output.length,
-      });
-      onStep?.({
-        type: 'tool_result',
-        iteration,
-        toolCallId: tc.id,
-        toolName: tc.name,
-        toolSuccess: success,
-        toolOutput: stepToolOutputPreview(tc.name, output),
-        toolError: success ? undefined : error,
-        toolArgs: tc.arguments,
-      });
-      messages.push({
-        role: 'tool',
-        content: output,
-        toolCallId: tc.id,
-      });
-      taskState?.recordToolResult(tc, { success, output, error });
-      repoContext?.recordToolResult(tc, { success, output, error });
-      if (taskState && repoContext) {
-        // currentPlanTracker.onToolResult removed (Phase 11)
-      }
-      deps.loopController.recordToolCalls(1);
       submittedIds.add(tc.id);
       continue;
     }

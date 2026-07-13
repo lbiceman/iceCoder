@@ -13,7 +13,7 @@
 
 - **Resilience v2**：CheckpointEngine（`src/harness/checkpoint-engine.ts`）、BranchBudgetTracker（`src/harness/branch-budget.ts`）、StepReview（`src/harness/step-review.ts`）三件套已在运行
 - **ExecutionPlanTracker**（`src/harness/execution-plan-tracker.ts`）：提供执行透明度，生成 plan → 追踪 step → 发射事件
-- **SubAgentRunner**（`src/harness/sub-agent-runner.ts`）：支撑 `delegate_to_subagent` 工具，做只读探索
+- **SubAgentRunner**（`src/harness/sub-agent-runner.ts`）：支撑异步 `request_analysis` 后台只读探索
 - **Session memory**：`icecoder-runtime` + `icecoder-plan` fence 将运行时状态持久化到 session-notes.md
 
 但核心问题依然存在：**Harness 循环仍是模型主导（model-led）**。每一轮由 LLM 自由决定做什么，没有预先规划的确定性执行图。
@@ -417,7 +417,7 @@ User          Builder       TaskGraph      Executor      Harness       Review
 ### 6.8 delegate — 委派
 - **用途**：交给 SubAgentRunner 做只读探索
 - **phase**: `context`
-- **requiresTool**: `true`（delegate_to_subagent）
+- **requiresTool**: `true`（request_analysis）
 - **delegate 配置**：task + tools + maxRounds
 - **完成条件**：子代理返回结果
 
@@ -559,7 +559,7 @@ pending ──► running ──► done
 | edit | write_file, edit_file, batch_edit_file, patch_file | — |
 | verify | run_command | write_file, edit_file |
 | summarize | 无工具调用 | 所有工具 |
-| delegate | delegate_to_subagent | 所有其他工具 |
+| delegate | request_analysis | 所有其他工具 |
 
 **实现方式**：GraphExecutor 在每轮开始前，通过 Harness 的 `permissionRules` 动态注入节点级权限。约束是**软性**的（system prompt 引导），不阻止 LLM 自由选择——与现有 tracker 的"不拒绝模型实际 toolCall"策略一致。
 
@@ -705,8 +705,8 @@ async function executeDelegateNode(graph: TaskGraph, node: TaskNode): Promise<vo
   });
   
   // 结果作为工具输出注入 Harness 上下文
-  // 格式与现有 delegate_to_subagent tool result 一致
-  formatSubAgentResult(result);
+  // 写入 Analysis Workspace，等待 Analysis Ready 注入
+  writeAnalysisArtifact(result);
 }
 ```
 
@@ -721,7 +721,7 @@ async function executeDelegateNode(graph: TaskGraph, node: TaskNode): Promise<vo
 
 ### 11.3 上下文隔离
 
-委派节点的子代理拥有独立的消息循环。子代理结果通过 `formatSubAgentResult()` 合并回主 Harness 上下文。这与现有 `SubAgentRunner` 行为完全一致——GraphExecutor 只是将"何时调用"从 LLM 决策改为图预设。
+委派节点的子代理拥有独立的消息循环。子代理结果写入 Analysis Workspace，并通过 Analysis Ready 合并回主 Harness 上下文。GraphExecutor 只负责决定何时请求后台分析，不直接暴露同步子代理工具。
 
 ---
 

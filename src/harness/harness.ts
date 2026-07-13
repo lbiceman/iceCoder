@@ -67,7 +67,7 @@ import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { GraphExecutor } from './task-graph-executor.js';
-import { ensureSubAgentTools } from './sub-agent-runner.js';
+import { ensureRequestAnalysisTool } from './sub-agent-runner.js';
 import { AsyncSubAgentManager } from './async-sub-agent-manager.js';
 import { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
@@ -168,7 +168,7 @@ export class Harness {
   ) {
     const context = {
       ...config.context,
-      tools: ensureSubAgentTools(config.context.tools),
+      tools: ensureRequestAnalysisTool(config.context.tools),
     };
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);

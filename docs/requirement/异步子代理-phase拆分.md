@@ -10,7 +10,7 @@
 
 | 模块 | 现状 | RFC 差距 |
 |------|------|----------|
-| `src/harness/sub-agent-runner.ts` | 同步 `delegate_to_subagent`，主 Harness **await** 子循环 | 需改为后台运行 + 结果落盘 |
+| `src/harness/sub-agent-runner.ts` | 只读子循环执行器 | 仅由异步 Manager 后台调用 |
 | `src/harness/harness-tool-executor.ts` | 工具轮内阻塞等待 `SubAgentRunner.run()` | 需 fire-and-forget + 后续轮次消费 |
 | `src/tools/background-task-manager.ts` | Shell 后台任务（EventEmitter、状态查询） | **可复用** 生命周期管理模式 |
 | `src/harness/supervisor/` | Recovery / Mode / EventTimeline | 需新增 **Analysis Supervisor** 调度层 |
@@ -218,7 +218,7 @@ Phase 1（类型）。
 - [ ] 事件：`analysis_started`, `analysis_finished`（本地 EventEmitter；Phase 4 接 EventTimeline）
 - [ ] 并发上限：`ICE_ASYNC_SUBAGENT_MAX_CONCURRENT`（默认 5）
 - [ ] 超时 / 取消：沿用 `ICE_SUBAGENT_TIMEOUT_MS`
-- [ ] 保留现有同步 `delegate_to_subagent` 路径不变（本 Phase 不删除）
+- [ ] 不向主模型暴露同步子代理工具；只保留 `SubAgentRunner` 作为后台执行器
 - [ ] 测试：submit 不阻塞、完成写盘、超时标记 failed
 
 ## 6. Validation
@@ -310,7 +310,7 @@ Phase 1, 2, 3。
 
 - 不允许修改 RecoverySupervisor 决策链
 - 不允许接入 Harness 主循环（Phase 5）
-- 不允许删除同步 `delegate_to_subagent`
+- 不允许 Main Agent 直接调用 Manager（须经 Supervisor，Phase 4）
 
 ## 10. Cursor Execution Notes
 
@@ -336,13 +336,13 @@ Phase 1, 2, 3。
 - 新增工具 `request_analysis`：**立即返回** taskId，不 await Sub-Agent
 - Harness 每轮开始前 / 工具轮后：注入 **AnalysisReady** 摘要到 prompt 队列
 - 实现 **关键决策等待** gate（可选 env 开关）
-- 保留 `delegate_to_subagent` 作为同步降级路径
+- 移除同步子代理降级路径，模型只能使用异步 `request_analysis`
 
 ## 3. Files To Modify
 
 | 路径 | 变更 |
 |------|------|
-| `src/harness/harness-tool-executor.ts` | 处理 `request_analysis`；`delegate_to_subagent` 不变 |
+| `src/harness/harness-tool-executor.ts` | 处理 `request_analysis`；移除同步子代理分支 |
 | `src/harness/harness.ts` | 构造并注入 `AnalysisSupervisor` |
 | `src/harness/context-assembler.ts` 或等价注入点 | AnalysisReady prompt 片段 |
 | `src/harness/sub-agent-runner.ts` | `createRequestAnalysisToolDefinition()` |
@@ -396,8 +396,8 @@ Phase 1–4。
 
 ## 9. Forbidden Changes
 
-- 不允许移除 `delegate_to_subagent`
-- 不允许默认开启 block-on-missing（必须 opt-in）
+- 不允许重新暴露同步子代理工具
+- 不允许关闭默认写前等待
 - 不允许重构 Harness 主循环结构（仅 graft）
 
 ## 10. Cursor Execution Notes
@@ -561,7 +561,7 @@ Phase 1–6 全部完成。
 
 - Main Agent 等待 Sub-Agent 的 wall-clock 时间 ≈ 0（除 opt-in block gate）
 - Token：Main 未 full-repo read；Explorer 局部总结可用
-- 同步 `delegate_to_subagent` 仍可用（降级）
+- 主模型只能看到 `request_analysis`，不会出现同步等待型子代理工具
 
 ---
 
@@ -577,7 +577,7 @@ Phase 1–6 全部完成。
 严格要求：
 1. 不实现后续 Phase
 2. 不重构 Harness 主循环（Phase 5 前）
-3. 不删除同步 delegate_to_subagent
+3. 不重新引入同步子代理工具
 4. Sub-Agent 永远 ReadOnly
 5. Main Agent 不直接 spawn Sub-Agent（Phase 4 起经 Supervisor）
 6. commit 粒度保持 phase 级

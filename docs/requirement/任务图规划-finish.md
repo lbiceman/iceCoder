@@ -278,7 +278,7 @@ Explain:
 
 result merge.
 
-Must align existing delegate_to_subagent.
+Must align existing async request_analysis sub-agent flow.
 
 ---
 

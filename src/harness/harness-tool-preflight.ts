@@ -3,7 +3,6 @@ import { extractRunCommand } from './branch-budget-tool-path.js';
 import type { ToolCall } from '../llm/types.js';
 import type { TaskState } from './task-state.js';
 import { isBuildVerificationCommand, isHarnessVerificationCommand } from './verification-digest.js';
-import { extractRunCommandsFromDelegateTask } from './verification-output-buffer.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 import {
   checkHostGuardWritePreflight,
@@ -32,29 +31,6 @@ export interface ToolPreflightDecision {
 const MISSING_FILE_TARGET_TOOLS = new Set(['read_file', 'edit_file', 'patch_file', 'append_file']);
 const DIST_ARTIFACT_RE = /^(?:dist|build|out)\//i;
 const SOURCE_FILE_RE = /^src\/.*\.(ts|tsx|js|jsx)$/i;
-
-/** delegate 任务文案是否暗示会跑 build / e2e 等验收流水线（regex 未抽出命令时的兜底）。 */
-const DELEGATE_READ_ONLY_RE = /\b(read[_\s-]?only|inspect|explore|analyze|analysis|explain|list_dir|read_file|查看|分析|只读|探索|review\s+code)\b/i;
-
-const DELEGATE_VERIFICATION_PIPELINE_RES: RegExp[] = [
-  /\bnpm\s+run\s+(?:build|test:e2e)\b/i,
-  /\btest:e2e\b/i,
-  /\bvite\s+build\b/i,
-  /\bnpx\s+tsc\b(?![^\n]*--no[- ]?emit)/i,
-  /\b(run|execute|retry)\b[^\n]{0,40}\b(build|test:e2e)\b/i,
-  /\b(build|compile|验收|构建)\b[^\n]{0,30}\b(fix|until|pass|成功|通过)\b/i,
-];
-
-export function taskMentionsBlockedVerificationPipeline(task: string): boolean {
-  const text = task.trim();
-  if (!text) return false;
-  const mentionsPipeline = DELEGATE_VERIFICATION_PIPELINE_RES.some(re => re.test(text));
-  if (!mentionsPipeline) return false;
-  if (DELEGATE_READ_ONLY_RE.test(text) && !/\b(build|test:e2e|vite\s+build|npm\s+run)\b/i.test(text)) {
-    return false;
-  }
-  return true;
-}
 
 export function isDistArtifactPath(path: string | undefined): boolean {
   if (!path) return false;
@@ -205,75 +181,6 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
       reason: 'host_kill',
       hostKillLabel: hostWrite.matchLabel,
       message: hostWrite.message ?? '[HostGuard / Blocked]',
-    };
-  }
-
-  return { blocked: false };
-}
-
-export function checkDelegatePreflight(input: {
-  task: string;
-  workspaceRoot?: string;
-  buildDiagnosticGateActive?: boolean;
-  branchBudget?: BranchBudgetTracker;
-}): ToolPreflightDecision {
-  const taskSandbox = analyzeShellSandbox(input.task, { workDir: input.workspaceRoot });
-  if (taskSandbox.blocked) {
-    return {
-      blocked: true,
-      reason: taskSandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
-      hostKillLabel: taskSandbox.matchLabel,
-      message: taskSandbox.message ?? '[Sandbox / Blocked]',
-    };
-  }
-
-  const commands = extractRunCommandsFromDelegateTask(input.task);
-
-  for (const command of commands) {
-    const sandbox = analyzeShellSandbox(command, { workDir: input.workspaceRoot });
-    if (sandbox.blocked) {
-      return {
-        blocked: true,
-        reason: sandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
-        hostKillLabel: sandbox.matchLabel,
-        message: sandbox.message ?? '[Sandbox / Blocked]',
-      };
-    }
-
-    if (input.buildDiagnosticGateActive && isBuildLikeCommand(command) && !isDiagnosticAllowedCommand(command)) {
-      return {
-        blocked: true,
-        reason: 'delegate_build_blocked',
-        message: [
-          '[Harness / Diagnostic Gate] delegate_to_subagent blocked: sub-task would rerun blocked build commands.',
-          `Detected command: ${command}`,
-          'Fix source locally with read_file + npx tsc --noEmit + edit_file; do not delegate build/test pipeline while diagnostic gate is active.',
-        ].join('\n'),
-      };
-    }
-
-    if (input.branchBudget?.wouldBlockCommandRetry(command) && isHarnessVerificationCommand(command)) {
-      return {
-        blocked: true,
-        reason: 'delegate_build_blocked',
-        message: [
-          '[Harness / BranchBudget] delegate_to_subagent blocked: sub-task would rerun a verification command already at retry cap.',
-          `Detected command: ${command}`,
-          'Read the last failure output, fix source, then retry from the main session after new evidence.',
-        ].join('\n'),
-      };
-    }
-  }
-
-  if (input.buildDiagnosticGateActive && taskMentionsBlockedVerificationPipeline(input.task)) {
-    return {
-      blocked: true,
-      reason: 'delegate_build_blocked',
-      message: [
-        '[Harness / Diagnostic Gate] delegate_to_subagent blocked: sub-task text implies build/test verification work.',
-        'Fix source locally with read_file + npx tsc --noEmit + edit_file; do not delegate build/test pipeline while diagnostic gate is active.',
-        `Task preview: ${input.task.trim().slice(0, 200)}`,
-      ].join('\n'),
     };
   }
 

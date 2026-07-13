@@ -111,7 +111,7 @@
 | **CC** | `BashOutput` 的 **diff-only + filter** 是省 token 的关键 |
 | **CC 的反例** | 后台 stale reminder（#11716）说明：**任务状态变更必须 invalidate 旧快照**，不能反复注入「仍在跑」的旧消息 |
 | **Codex** | **写入路径与执行路径共用 hook**（apply_patch 改走 shell 走同一沙箱）——iceCoder 的 `commandPolicyGate` 应当是一处统一闸口 |
-| **Cursor** | 长命令**推到独立 Agent** 跑完通知——与 iceCoder 已有的 `delegate_to_subagent` 哲学一致；本期不做，但记入未来扩展 |
+| **Cursor** | 长命令**推到独立 Agent** 跑完通知——与 iceCoder 的 `request_analysis` 异步子代理哲学一致；本期不做，但记入未来扩展 |
 
 ### 3.2 明确不学的
 
