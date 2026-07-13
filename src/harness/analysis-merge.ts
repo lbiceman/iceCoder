@@ -5,14 +5,15 @@ export function mergeAnalysisArtifacts(analyses: readonly ReadyAnalysisSummary[]
 
   const lines: string[] = [
     '[Analysis Ready]',
-    'Background read-only sub-agent analyses are available. Use these summaries as context; reread files if a code change depends on exact details.',
+    'Background read-only sub-agent analyses are available. Use these summaries as context.',
+    'Do not call read_file on analysis artifact paths; they live in the session analysis store, not the repository workspace.',
+    'If exact source details are needed, reread only the workspace files listed in filesRead.',
   ];
 
   for (const analysis of analyses) {
     lines.push(
       '',
       `- ${analysis.kind} task ${analysis.taskId}`,
-      `  artifact: ${analysis.artifactPath}`,
       `  summary: ${analysis.summaryPreview || '(empty summary)'}`,
     );
     if (analysis.filesRead.length > 0) {
