@@ -8,6 +8,7 @@ export function mergeAnalysisArtifacts(analyses: readonly ReadyAnalysisSummary[]
     'Background read-only sub-agent analyses are available. Use these summaries as context.',
     'Do not call read_file on analysis artifact paths; they live in the session analysis store, not the repository workspace.',
     'If exact source details are needed, reread only the workspace files listed in filesRead.',
+    'When summarizing these results to the user, use factual engineering language and avoid celebratory phrasing.',
   ];
 
   for (const analysis of analyses) {

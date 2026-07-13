@@ -42,6 +42,7 @@ describe('analysis-merge', () => {
     expect(block).toContain('src/a.ts');
     expect(block).toContain('src/b.ts');
     expect(block).toContain('Do not call read_file on analysis artifact paths');
+    expect(block).toContain('use factual engineering language');
     expect(block).not.toContain('analysis/a.md');
     expect(block).not.toContain('analysis/b.md');
   });
