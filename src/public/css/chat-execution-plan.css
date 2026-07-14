@@ -69,8 +69,8 @@
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
-  color: #ffd89a;
-  background: rgba(255, 180, 60, 0.12);
+  color: var(--warning);
+  background: var(--warning-light);
   border-bottom: 1px solid var(--border-light, #363e54);
 }
 
@@ -100,8 +100,8 @@
 }
 
 .exec-plan-step.active {
-  border-color: var(--accent, #a78bfa);
-  box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.18);
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-border) 50%, transparent);
 }
 
 .exec-plan-step-head {
@@ -126,19 +126,19 @@
 }
 
 .exec-plan-step.status-running .exec-plan-step-badge {
-  background: rgba(167, 139, 250, 0.18);
-  color: var(--accent, #a78bfa);
+  background: var(--accent-light);
+  color: var(--accent);
   animation: ice-plan-pulse 1.4s ease-in-out infinite;
 }
 
 .exec-plan-step.status-done .exec-plan-step-badge {
-  background: rgba(30, 207, 180, 0.16);
-  color: #1ecfb4;
+  background: var(--success-light);
+  color: var(--success);
 }
 
 .exec-plan-step.status-failed .exec-plan-step-badge {
-  background: rgba(252, 90, 118, 0.16);
-  color: #fc5a76;
+  background: var(--danger-light);
+  color: var(--danger);
 }
 
 .exec-plan-step.status-skipped {
@@ -161,7 +161,7 @@
 
 .exec-plan-step-error {
   font-size: 11.5px;
-  color: #fc5a76;
+  color: var(--danger);
   word-break: break-all;
 }
 

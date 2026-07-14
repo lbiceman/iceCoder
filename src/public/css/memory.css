@@ -62,17 +62,17 @@
 
 /* 健康：绿 */
 .memory-health-capsule[data-status='ok'] .memory-health-dot {
-  background: #22c55e;
+  background: var(--success);
 }
 
 /* 警告：橙（orphans>5 或 dead>0） */
 .memory-health-capsule[data-status='warn'] .memory-health-dot {
-  background: #f59e0b;
+  background: var(--warning);
 }
 
 /* 异常：红（orphans>10 或 dead>3） */
 .memory-health-capsule[data-status='bad'] .memory-health-dot {
-  background: #ef4444;
+  background: var(--danger);
 }
 
 .memory-health-text {
@@ -203,8 +203,8 @@
 }
 
 .memory-sidebar-tag.active {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
   background: var(--accent-light);
 }
 
@@ -573,8 +573,8 @@
 }
 
 .memory-popover-close:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 
 .memory-popover-delete {
@@ -633,11 +633,11 @@
     transition: border-color var(--transition), background var(--transition);
   }
   .memory-mobile-card:hover {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+    border-color: var(--accent-border);
     background: var(--bg-hover);
   }
   .memory-mobile-card.is-expanded {
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+    border-color: var(--accent-border-strong);
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
   }
   .memory-mobile-card-head { margin-bottom: 4px; }

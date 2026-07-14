@@ -27,8 +27,8 @@
 }
 
 .mobile-chat-subtab.is-active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-border-strong);
 }
 
 .mobile-chat-body {
