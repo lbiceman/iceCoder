@@ -67,7 +67,9 @@ import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
 import { GraphExecutor } from './task-graph-executor.js';
-import { ensureDelegateToSubagentTool } from './sub-agent-runner.js';
+import { ensureRequestAnalysisTool } from './sub-agent-runner.js';
+import { AsyncSubAgentManager } from './async-sub-agent-manager.js';
+import { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import { ModeDecisionEngine } from './supervisor/mode-decision-engine.js';
 import { TaskRiskClassifier } from './supervisor/task-risk-classifier.js';
 import { resolveSupervisorConfig } from './supervisor/supervisor-config.js';
@@ -145,6 +147,7 @@ export class Harness {
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
   private verificationExemptDirs?: string[];
   private supervisorBridge?: SupervisorRuntimeBridge;
+  private analysisSupervisor?: AnalysisSupervisor;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
   /**
@@ -165,7 +168,7 @@ export class Harness {
   ) {
     const context = {
       ...config.context,
-      tools: ensureDelegateToSubagentTool(config.context.tools),
+      tools: ensureRequestAnalysisTool(config.context.tools),
     };
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
@@ -196,6 +199,7 @@ export class Harness {
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
     this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
     this.supervisorBridge = config.supervisorBridge;
+    this.analysisSupervisor = config.analysisSupervisor;
     this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
     this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
     this.checkpointManager = config.sessionDir
@@ -249,6 +253,7 @@ export class Harness {
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
       supervisorBridge: this.supervisorBridge,
+      analysisSupervisor: this.analysisSupervisor,
       supervisorObserverSuppressInject: shouldSuppressObserverInject(this.globalPolicy),
       supervisorRiskScoreProvider: () => this.lastRiskScore,
       agentMaxOutputTokens: this.agentMaxOutputTokens,
@@ -496,6 +501,21 @@ export class Harness {
     deps.referenceReads = referenceReads;
 
     const tools = this.contextAssembler.getTools();
+    if (!this.analysisSupervisor && this.sessionDir) {
+      const manager = new AsyncSubAgentManager({
+        sessionDir: this.sessionDir,
+        toolExecutor: this.toolExecutor,
+        toolDefinitions: tools,
+        chatFn,
+        workspaceRoot: this.workspaceRoot,
+      });
+      this.analysisSupervisor = new AnalysisSupervisor({
+        sessionDir: this.sessionDir,
+        manager,
+        mode: 'free',
+      });
+      deps.analysisSupervisor = this.analysisSupervisor;
+    }
     logger.loopStart(tools.length, messages.length);
 
     const sessionGoalAnchor = resolveSessionGoalAnchor(

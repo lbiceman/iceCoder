@@ -1,0 +1,6 @@
+/* 图标占位：hydrate 前保持尺寸，避免布局跳动 */
+[data-app-icon] {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}

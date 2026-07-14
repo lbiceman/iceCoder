@@ -105,7 +105,6 @@ function minConfig(overrides?: Partial<HarnessConfig>): HarnessConfig {
     compactionTokenThreshold: overrides?.compactionTokenThreshold ?? 999999,
     // 使用不存在的目录，避免记忆系统扫描到真实文件并触发 LLM sideQuery
     memoryDir: overrides?.memoryDir ?? '__test_nonexistent_memory_dir__',
-    sessionDir: overrides?.sessionDir ?? '__test_nonexistent_session_dir__',
     ...overrides,
   };
 }

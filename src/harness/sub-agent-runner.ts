@@ -1,6 +1,6 @@
 /**
  * 只读子代理运行器：独立消息循环、工具白名单、结果摘要与进程内缓存。
- * 供主 Harness 在执行 `delegate_to_subagent` 时调用，不修改主会话历史。
+ * 供异步子代理 Manager 运行后台只读分析，不修改主会话历史。
  */
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -127,58 +127,53 @@ export function clearSubAgentCacheForTests(): void {
   subAgentCache.clear();
 }
 
-/** 主会话注册用的 `delegate_to_subagent` 工具定义（英文 description 供模型阅读）。 */
-export function createDelegateToSubagentToolDefinition(): ToolDefinition {
+/** 主会话注册用的异步 `request_analysis` 工具定义。 */
+export function createRequestAnalysisToolDefinition(): ToolDefinition {
   return {
-    name: 'delegate_to_subagent',
+    name: 'request_analysis',
     description: [
-      'Delegate a read-only codebase exploration task to an isolated sub-agent.',
-      'Use this when you need to search or read multiple files but only need a concise structured summary back.',
-      'The sub-agent can only use read-only tools and cannot write files, run commands, or delegate again.',
-      'Prefer this tool over read_file/glob/grep when exploring unfamiliar code. It isolates context and returns a clean summary.',
+      'Request a background read-only analysis by an async sub-agent.',
+      'This tool returns immediately with a task id; do not wait for the analysis in the same turn.',
+      'Use it when exploring unfamiliar code, searching broadly, reviewing risks, dependency relationships, or test coverage.',
+      'The result will be provided later as an Analysis Ready context block from the shared analysis workspace.',
     ].join(' '),
     parameters: {
       type: 'object',
       properties: {
+        kind: {
+          type: 'string',
+          enum: ['explorer', 'search', 'review', 'dependency', 'test_analysis'],
+          description: 'Type of read-only analysis to run in the background.',
+        },
         task: {
           type: 'string',
-          description: 'Detailed read-only exploration task for the sub-agent.',
+          description: 'Detailed read-only analysis task for the async sub-agent.',
         },
         context: {
           type: 'string',
-          description: 'Optional extra context that helps scope the exploration.',
+          description: 'Optional extra context that helps scope the analysis.',
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional workspace-relative paths that bound the analysis scope.',
+        },
+        keywords: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional symbols, feature names, or keywords that identify the target area.',
         },
       },
-      required: ['task'],
+      required: ['kind', 'task'],
     },
   };
 }
 
-/**
- * 在工具列表末尾追加 `delegate_to_subagent`（若尚未存在）。
- * 若 `tools.length === 0`（运行时禁用工具）则不追加，与 Harness 行为一致。
- */
-export function ensureDelegateToSubagentTool(tools: ToolDefinition[]): ToolDefinition[] {
+/** 追加异步后台分析工具定义。 */
+export function ensureRequestAnalysisTool(tools: ToolDefinition[]): ToolDefinition[] {
   if (tools.length === 0) return tools;
-  if (tools.some(t => t.name === 'delegate_to_subagent')) return tools;
-  return [...tools, createDelegateToSubagentToolDefinition()];
-}
-
-/** 将 {@link SubAgentResult} 拼成主会话 tool 消息中的多行文本。 */
-export function formatSubAgentResult(result: SubAgentResult): string {
-  return [
-    '[SubAgent Result]',
-    `status: ${result.status}`,
-    `roundsUsed: ${result.roundsUsed}`,
-    `toolCallCount: ${result.toolCallCount}`,
-    `tokensUsed: ${result.tokensUsed}`,
-    `filesRead: ${result.filesRead.length > 0 ? result.filesRead.join(', ') : '(none)'}`,
-    `recommendedAction: ${result.recommendedAction ?? 'use_summary'}`,
-    result.error ? `error: ${result.error}` : undefined,
-    '',
-    'summary:',
-    result.summary || '(empty summary)',
-  ].filter((line): line is string => line !== undefined).join('\n');
+  if (tools.some(t => t.name === 'request_analysis')) return tools;
+  return [...tools, createRequestAnalysisToolDefinition()];
 }
 
 /**
@@ -208,7 +203,7 @@ export class SubAgentRunner {
     const maxRounds = request.maxRounds ?? DEFAULT_MAX_ROUNDS;
     const timeoutMs = request.timeoutMs ?? getSubAgentTimeoutMsFromEnv();
     const allowedTools = new Set(request.tools ?? [...DEFAULT_ALLOWED_TOOLS]);
-    allowedTools.delete('delegate_to_subagent');
+    allowedTools.delete('request_analysis');
 
     const tools = this.buildToolDefinitions(allowedTools);
     /** 本次子运行中成功 read_file 的相对路径，用于结果与缓存键 */
@@ -294,7 +289,7 @@ export class SubAgentRunner {
   /** 从主工具定义中筛出白名单，并将 `fs_operation` 限制为仅 `list`。 */
   private buildToolDefinitions(allowedTools: Set<string>): ToolDefinition[] {
     return this.toolDefinitions
-      .filter(tool => allowedTools.has(tool.name) && tool.name !== 'delegate_to_subagent')
+      .filter(tool => allowedTools.has(tool.name) && tool.name !== 'request_analysis')
       .map(tool => tool.name === 'fs_operation' ? restrictFsOperationToList(tool) : tool);
   }
 
@@ -464,7 +459,7 @@ function validateReadOnlyToolCall(
   allowedTools: Set<string>,
   allowedPaths: string[] | undefined,
 ): string | undefined {
-  if (!allowedTools.has(toolCall.name) || toolCall.name === 'delegate_to_subagent') {
+  if (!allowedTools.has(toolCall.name) || toolCall.name === 'request_analysis') {
     return `只读子代理不允许调用 ${toolCall.name}`;
   }
 

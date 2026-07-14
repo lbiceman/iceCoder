@@ -140,7 +140,8 @@ export function createToolUsageSection(): PromptSection {
     content: `# Tools
 
 ## Principles
-- When you need to explore a directory, understand module structure, or search across multiple files, use delegate_to_subagent. Reserve direct glob/grep/read_file for targeted lookups.
+- When you need to explore a directory, understand module structure, or search across multiple files, use request_analysis for background async analysis. Reserve direct glob/grep/read_file for targeted lookups.
+- When reporting async analysis results, use factual engineering language: "observed", "passed", "not triggered", "no sync sub-agent seen". Avoid celebratory phrasing like "all green" or "perfect".
 - Code search flow: **glob** (find paths) → **grep** with output_mode files_with_matches (default) → **read_file** (2–3 files) → edit tools.
 - Do NOT use run_command when a dedicated tool exists.
 - Independent tools in parallel; dependent tools in order.

@@ -72,9 +72,11 @@ window.ChatSkills = (function () {
 
   function openDropdown() {
     if (!window.ChatDropdown || !anchorEl) return;
+    var activePrefix = skillActivePrefix;
+    var filteredItems = skillFiltered.slice();
     window.ChatDropdown.open({
       anchor: anchorEl,
-      items: skillFiltered,
+      items: filteredItems,
       placement: 'top',
       placementRef: 'anchor',
       align: 'start',
@@ -84,10 +86,11 @@ window.ChatSkills = (function () {
       markAnchorActive: false,
       onSelect: function (_item, idx) { applySelection(idx); },
       onClose: function () {
-        skillFiltered = [];
-        skillActivePrefix = '';
+        // 刷新过滤列表时 ChatDropdown.open 会先 close 再 open；状态清理由 hide() 负责。
       },
     });
+    skillActivePrefix = activePrefix;
+    skillFiltered = filteredItems;
     setTimeout(updateActiveItem, 0);
   }
 

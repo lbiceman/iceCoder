@@ -95,7 +95,7 @@ sub('⑧ 多会话与跨端同步');
 dot('侧栏增删改查独立会话；~scan 二维码绑定手机与 PC 共享上下文；断线重连恢复 UI 状态。');
 
 sub('⑨ MCP 与子代理');
-dot('MCP 子进程并入外部 Server 工具；delegate_to_subagent 只读子代理降低 token ~60-80%。');
+dot('MCP 子进程并入外部 Server 工具；request_analysis 异步只读子代理降低 token 与等待成本。');
 
 sec('项目架构');
 body('多入口 (CLI / Web / 桌面端) 统一注入提示词 → Harness 主循环统筹 LLM、工具、上下文与状态 → 文件系统持久化 (checkpoint / memory / events)。构建: TypeScript + Vite + npm pack。');

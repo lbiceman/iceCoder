@@ -27,6 +27,7 @@
     "test": "vitest --run",
     "test:coverage": "vitest run --coverage",
     "eval:agent": "tsx scripts/agent-eval.ts",
+    "eval:session": "tsx scripts/session-flow-eval.ts",
     "telemetry:runtime": "tsx scripts/runtime-telemetry-summary.ts",
     "build:desktop:server": "npm run build:server && npm run build:web && node desktop/scripts/copy-server-artifacts.cjs",
     "build:desktop": "npm run build:desktop:server && cd desktop && npm run dist:win && node scripts/copy-release-win.cjs",

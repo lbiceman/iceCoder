@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import type { LLMResponse, ToolDefinition, UnifiedMessage } from '../../src/llm/types.js';
 import type { ChatFunction } from '../../src/harness/types.js';
-import { Harness } from '../../src/harness/harness.js';
 import { SubAgentRunner, clearSubAgentCacheForTests } from '../../src/harness/sub-agent-runner.js';
 import { ToolRegistry } from '../../src/tools/tool-registry.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -238,107 +237,5 @@ describe('SubAgentRunner', () => {
       vi.useRealTimers();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
-  });
-});
-
-describe('Harness delegate_to_subagent integration', () => {
-  it('exposes delegate_to_subagent and injects the sub-agent result as one tool result', async () => {
-    const definitions = [readFileTool];
-    const executor = executorFor(definitions, async () => ({ success: true, output: 'file contents' }));
-    const harness = new Harness({
-      context: { systemPrompt: 'test', tools: definitions },
-      loop: { maxRounds: 5 },
-      compactionThreshold: 999,
-      compactionTokenThreshold: 999_999,
-      memoryDir: '__test_nonexistent_memory_dir__',
-    }, executor);
-
-    const chatFn = vi.fn<ChatFunction>(async (messages, options) => {
-      const hasSubAgentSystem = messages.some(m =>
-        m.role === 'system' && typeof m.content === 'string' && m.content.includes('read-only exploration sub-agent'),
-      );
-      if (hasSubAgentSystem) {
-        return response('Core findings: delegated summary.');
-      }
-      if (chatFn.mock.calls.length === 1) {
-        expect(options.tools.some(t => t.name === 'delegate_to_subagent')).toBe(true);
-        return response('delegating', [
-          { id: 'delegate-1', name: 'delegate_to_subagent', arguments: { task: 'Explore docs' } },
-        ]);
-      }
-      return response('Done with delegated summary.');
-    });
-
-    const result = await harness.run('Explore docs', chatFn);
-
-    expect(result.content).toBe('Done with delegated summary.');
-    expect(result.loopState.totalToolCalls).toBe(1);
-    expect(result.messages.some(m =>
-      m.role === 'tool'
-      && m.toolCallId === 'delegate-1'
-      && typeof m.content === 'string'
-      && m.content.includes('[SubAgent Result]')
-      && m.content.includes('delegated summary'),
-    )).toBe(true);
-  });
-
-  it('does not expose delegate_to_subagent when runtime tools are disabled', async () => {
-    const executor = executorFor([], async () => ({ success: true, output: 'unused' }));
-    const harness = new Harness({
-      context: { systemPrompt: 'test', tools: [] },
-      loop: { maxRounds: 1 },
-      compactionThreshold: 999,
-      compactionTokenThreshold: 999_999,
-      memoryDir: '__test_nonexistent_memory_dir__',
-    }, executor);
-
-    const chatFn = vi.fn<ChatFunction>(async (_messages, options) => {
-      expect(options.tools).toEqual([]);
-      return response('No tools available.');
-    });
-
-    await harness.run('Just answer', chatFn);
-    expect(chatFn).toHaveBeenCalledTimes(1);
-  });
-
-  it('truncates sub-agent summaries older than the latest six results before LLM calls', async () => {
-    const definitions = [readFileTool];
-    const executor = executorFor(definitions, async () => ({ success: true, output: 'unused' }));
-    const harness = new Harness({
-      context: { systemPrompt: 'test', tools: definitions },
-      loop: { maxRounds: 1 },
-      compactionThreshold: 999,
-      compactionTokenThreshold: 999_999,
-      memoryDir: '__test_nonexistent_memory_dir__',
-    }, executor);
-    const existingMessages: UnifiedMessage[] = [
-      { role: 'system', content: 'test' },
-      { role: 'user', content: 'previous task' },
-    ];
-    for (let i = 0; i < 7; i++) {
-      existingMessages.push({
-        role: 'assistant',
-        content: '',
-        toolCalls: [{ id: `delegate-${i}`, name: 'delegate_to_subagent', arguments: { task: `task ${i}` } }],
-      });
-      existingMessages.push({
-        role: 'tool',
-        toolCallId: `delegate-${i}`,
-        content: `[SubAgent Result]\nstatus: completed\nsummary:\nsummary-${i}-${'x'.repeat(500)}`,
-      });
-    }
-
-    const chatFn = vi.fn<ChatFunction>(async (messages) => {
-      const subAgentResults = messages.filter(m =>
-        m.role === 'tool'
-        && typeof m.content === 'string'
-        && m.content.startsWith('[SubAgent Result]'),
-      );
-      expect(String(subAgentResults[0].content)).toContain('旧子代理摘要已裁剪');
-      expect(String(subAgentResults[6].content)).not.toContain('旧子代理摘要已裁剪');
-      return response('Done.');
-    });
-
-    await harness.run('Continue', chatFn, undefined, existingMessages);
   });
 });

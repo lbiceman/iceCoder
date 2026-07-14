@@ -1,5 +1,5 @@
 /**
- * 命令面板模块：通过工具栏按钮打开，选中后直接执行本地命令。
+ * 命令面板：`+` 按钮打开 ~ 本地命令；输入 `/` 在输入区上方打开独立 slash 命令面板。
  */
 
 /* exported ChatCommands */
@@ -7,14 +7,22 @@
 window.ChatCommands = (function () {
   'use strict';
 
-  var PC_LOCAL_COMMANDS = [
+  /** 行首，或任意空白（空格/换行/制表等）之后输入 / */
+  var SLASH_TRIGGER_RE = /(?:^|\s)\/([^\s/]*)$/;
+
+  var SLASH_LOCAL_COMMANDS = [
+    { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
+    { name: 'next', description: '静默入队下一条任务', prefix: '/' }
+  ];
+
+  var TILDE_PC_COMMANDS = [
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
-  var REMOTE_LOCAL_COMMANDS = [
+  var TILDE_REMOTE_COMMANDS = [
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
@@ -27,6 +35,7 @@ window.ChatCommands = (function () {
   var applyTargetFn = null;
   var activeInputEl = null;
   var anchorEl = null;
+  var inputAnchorEl = null;
 
   function dispatchInput(inputEl) {
     if (!inputEl) return;
@@ -40,7 +49,9 @@ window.ChatCommands = (function () {
   }
 
   function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
-  function getLocalCommands() { return remoteMode ? REMOTE_LOCAL_COMMANDS : PC_LOCAL_COMMANDS; }
+  function getTildeCommands() { return remoteMode ? TILDE_REMOTE_COMMANDS : TILDE_PC_COMMANDS; }
+  function getSlashCommands() { return SLASH_LOCAL_COMMANDS; }
+  function getLocalCommands() { return getTildeCommands().concat(getSlashCommands()); }
 
   function updateActiveItem() {
     var dd = window.ChatDropdown && window.ChatDropdown.getContainer();
@@ -52,18 +63,70 @@ window.ChatCommands = (function () {
   }
 
   function isOpen() {
+    return !!(window.ChatDropdown && window.ChatDropdown.isOpen()
+      && (cmdActivePrefix === '~' || cmdActivePrefix === '/'));
+  }
+
+  function isTildeOpen() {
     return !!(window.ChatDropdown && window.ChatDropdown.isOpen() && cmdActivePrefix === '~');
   }
 
+  function findSlashCommandMatch(text) {
+    if (!text) return null;
+    var normalized = String(text);
+    if (normalized.indexOf('/') === 0) normalized = normalized.slice(1);
+    var commands = getSlashCommands();
+    for (var i = 0; i < commands.length; i++) {
+      if (normalized === commands[i].name) return commands[i];
+    }
+    return null;
+  }
+
+  function getInputCursor(inputEl, val) {
+    if (inputEl && typeof inputEl.selectionStart === 'number') {
+      return inputEl.selectionStart;
+    }
+    return val != null ? String(val).length : 0;
+  }
+
+  function parseSlashTrigger(val, inputEl) {
+    if (val == null && inputEl) val = inputEl.value || '';
+    if (!val) return null;
+    var cursor = getInputCursor(inputEl, val);
+    var before = String(val).slice(0, cursor);
+    var m = before.match(SLASH_TRIGGER_RE);
+    if (!m) return null;
+    return { filter: (m[1] || '').toLowerCase(), matchLen: m[0].length, cursorEnd: cursor };
+  }
+
+  function replaceSlashTriggerInTextarea(inputEl, value) {
+    if (!inputEl) return false;
+    var val = inputEl.value || '';
+    var trigger = parseSlashTrigger(val, inputEl);
+    if (!trigger) return false;
+    var end = trigger.cursorEnd != null ? trigger.cursorEnd : val.length;
+    var start = end - trigger.matchLen;
+    var prefix = val.slice(start, start + 1).match(/\s/) ? val.slice(start, start + 1) : '';
+    var replacement = prefix + value;
+    inputEl.value = val.slice(0, start) + replacement + val.slice(end);
+    var cursor = start + replacement.length;
+    if (typeof inputEl.setSelectionRange === 'function') {
+      try { inputEl.setSelectionRange(cursor, cursor); } catch (_err) { /* ignore */ }
+    }
+    dispatchInput(inputEl);
+    return true;
+  }
+
   function show(prefix, filter, inputEl) {
-    if (prefix !== '~') { hide(); return; }
+    if (prefix !== '~' && prefix !== '/') { hide(); return; }
     if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
       window.ChatSkills.hide();
     }
+    if (prefix === '/' && isTildeOpen()) hide();
     cmdActivePrefix = prefix;
     activeInputEl = inputEl || activeInputEl;
     var query = (filter || '').toLowerCase();
-    var source = getLocalCommands();
+    var source = prefix === '~' ? getTildeCommands() : getSlashCommands();
     cmdFiltered = source.filter(function (cmd) {
       return cmd.name.toLowerCase().indexOf(query) >= 0;
     });
@@ -73,32 +136,39 @@ window.ChatCommands = (function () {
   }
 
   function hide() {
-    var shouldClose = cmdActivePrefix === '~' && window.ChatDropdown && window.ChatDropdown.isOpen();
+    var shouldClose = (cmdActivePrefix === '~' || cmdActivePrefix === '/')
+      && window.ChatDropdown && window.ChatDropdown.isOpen();
     cmdFiltered = [];
     cmdActivePrefix = '';
     if (shouldClose) window.ChatDropdown.close();
   }
 
   function openDropdown() {
-    if (!window.ChatDropdown || !anchorEl) return;
-    var anchorRect = anchorEl.getBoundingClientRect();
+    var isSlash = cmdActivePrefix === '/';
+    var anchor = isSlash ? (inputAnchorEl || anchorEl) : anchorEl;
+    if (!window.ChatDropdown || !anchor) return;
+    var anchorRect = anchor.getBoundingClientRect();
+    var activePrefix = cmdActivePrefix;
+    var filteredItems = cmdFiltered.slice();
     window.ChatDropdown.open({
-      anchor: anchorEl,
-      items: cmdFiltered,
+      anchor: anchor,
+      items: filteredItems,
       placement: 'top',
-      placementRef: 'toolbar',
-      align: 'center',
+      placementRef: isSlash ? 'anchor' : 'toolbar',
+      align: isSlash ? 'start' : 'center',
       fitContent: true,
-      minWidth: Math.ceil(anchorRect.width),
-      maxWidth: 300,
+      minWidth: isSlash ? 200 : Math.ceil(anchorRect.width),
+      maxWidth: isSlash ? 320 : 300,
+      markAnchorActive: !isSlash,
       onSelect: function (item, idx) {
         applySelection(idx);
       },
       onClose: function () {
-        cmdFiltered = [];
-        cmdActivePrefix = '';
+        // 刷新过滤列表时 ChatDropdown.open 会先 close 再 open；状态清理由 hide() 负责。
       },
     });
+    cmdActivePrefix = activePrefix;
+    cmdFiltered = filteredItems;
     // 选中态由 ChatDropdown 渲染时按 isCurrent 处理（命令面板没有 isCurrent 概念，
     // 但保留高亮当前 hover/keyboard 选中项的能力：渲染后立即把 cmdSelectedIndex 标 active）
     setTimeout(updateActiveItem, 0);
@@ -106,17 +176,20 @@ window.ChatCommands = (function () {
 
   function setApplyTarget(fn) { applyTargetFn = typeof fn === 'function' ? fn : null; }
   function setAnchor(el) { anchorEl = el; }
+  function setInputAnchor(el) { inputAnchorEl = el; }
 
   function applySelection(index, inputEl) {
     if (index < 0 || index >= cmdFiltered.length) return null;
     var cmd = cmdFiltered[index];
-    var value = cmdActivePrefix + cmd.name;
+    var value = (cmd.prefix || cmdActivePrefix) + cmd.name;
     var targetInput = inputEl || activeInputEl;
-    if (applyTargetFn) {
+    if (applyTargetFn && (cmd.prefix || cmdActivePrefix) === '~') {
       applyTargetFn(value);
     } else if (targetInput) {
-      targetInput.value = value;
-      dispatchInput(targetInput);
+      if (!replaceSlashTriggerInTextarea(targetInput, value)) {
+        targetInput.value = value;
+        dispatchInput(targetInput);
+      }
     }
     hide();
     return cmd;
@@ -138,6 +211,15 @@ window.ChatCommands = (function () {
       return true;
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
+      var trigger = parseSlashTrigger(null, inputEl);
+      if (trigger && findSlashCommandMatch(trigger.filter)) {
+        hide();
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          return true;
+        }
+        return false;
+      }
       e.preventDefault();
       applySelection(cmdSelectedIndex, inputEl);
       return true;
@@ -152,7 +234,17 @@ window.ChatCommands = (function () {
 
   function handleInput(val, inputEl) {
     activeInputEl = inputEl || activeInputEl;
+    var trigger = parseSlashTrigger(val, inputEl);
     if (cmdActivePrefix === '~') hide();
+    if (!trigger) {
+      if (cmdActivePrefix === '/') hide();
+      return;
+    }
+    if (findSlashCommandMatch(trigger.filter)) {
+      if (cmdActivePrefix === '/') hide();
+      return;
+    }
+    show('/', trigger.filter, inputEl);
   }
 
   function init() {
@@ -274,11 +366,13 @@ window.ChatCommands = (function () {
   return {
     init: init,
     setAnchor: setAnchor,
+    setInputAnchor: setInputAnchor,
     setRemoteMode: setRemoteMode,
     setApplyTarget: setApplyTarget,
     show: show,
     hide: hide,
     isOpen: isOpen,
+    isTildeOpen: isTildeOpen,
     handleKeydown: handleKeydown,
     handleInput: handleInput,
     applySelection: applySelection,

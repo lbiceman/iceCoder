@@ -26,6 +26,7 @@ import {
 } from '../session-tool-trace-diffs.js';
 import { isSafeSessionId } from '../session-id-guard.js';
 import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
+import { getTaskQueueManager } from '../../session/task-queue.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -176,6 +177,7 @@ async function readSessionPlan(sessionId: string): Promise<any> {
  *  - `{id}.checkpoint.json`      TaskCheckpoint（断点恢复）
  *  - `{id}.workspace.json`       工作区锁定
  *  - `{id}.session-notes.md`     会话笔记（含 runtime / plan fence）
+ *  - `{id}/analysis|subtasks|artifacts` 异步子代理分析工作区
  */
 type SessionCleanupHook = (sessionId: string) => void | Promise<void>;
 let sessionCleanupHook: SessionCleanupHook | null = null;
@@ -192,6 +194,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
     '.checkpoint-index.json',
     '.workspace.json',
     '.session-notes.md',
+    '.task-queue.json',
     '.tool-trace-diffs.json',
   ];
   await Promise.all(
@@ -199,7 +202,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
       fs.unlink(path.join(SESSIONS_DIR, `${sessionId}${suffix}`)).catch(() => {}),
     ),
   );
-  await fs.rm(path.join(SESSIONS_DIR, sessionId, 'checkpoints'), { recursive: true, force: true }).catch(() => {});
+  await fs.rm(path.join(SESSIONS_DIR, sessionId), { recursive: true, force: true }).catch(() => {});
   if (sessionCleanupHook) {
     try {
       await sessionCleanupHook(sessionId);
@@ -390,6 +393,44 @@ export function createSessionsRouter(): Router {
       return;
     }
     res.json({ diffSource });
+  });
+
+  /**
+   * GET /api/sessions/:id/task-queue - 返回待执行队列
+   */
+  router.get('/:id/task-queue', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const items = await getTaskQueueManager(SESSIONS_DIR).list(sessionId);
+    res.json({ ok: true, items });
+  });
+
+  /**
+   * DELETE /api/sessions/:id/task-queue/:taskId - 删除排队任务
+   */
+  router.delete('/:id/task-queue/:taskId', async (req: Request, res: Response): Promise<void> => {
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const taskId = String(req.params.taskId || '').trim();
+    if (!taskId) {
+      res.status(400).json({ ok: false, error: 'taskId required' });
+      return;
+    }
+    const manager = getTaskQueueManager(SESSIONS_DIR);
+    const removed = await manager.removeById(sessionId, taskId);
+    if (!removed) {
+      res.status(404).json({ ok: false, error: 'not found' });
+      return;
+    }
+    const items = await manager.list(sessionId);
+    res.json({ ok: true, items });
+    try {
+      const { notifyTaskQueueUpdated } = await import('../chat-ws.js');
+      void notifyTaskQueueUpdated(sessionId);
+    } catch {
+      /* WS 未挂载时忽略广播 */
+    }
   });
 
   /**

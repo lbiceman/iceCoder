@@ -7,49 +7,75 @@
 
 /* ===== Design Tokens ===== */
 :root {
-  --radius: 8px;
-  --radius-lg: 16px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
   --radius-pill: 9999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --transition-fast: 120ms ease;
   --transition: 180ms ease;
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --transition-slow: 260ms ease;
+  --content-max-width: 1080px;
+  --sidebar-width: 256px;
+  --font: Inter, "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
-/* ── Dark Theme (default): 中性暖灰底 + 蓝绿 accent ── */
+/* ── Dark Theme (default): shadcn/zinc 中性灰阶，无彩度主色（白），层级靠明度差 + 边框 ── */
 [data-theme="dark"] {
-  --bg-primary: #18181b;
-  --bg-secondary: #1e1e22;
-  --bg-card: #27272a;
-  --bg-input: #232326;
-  --bg-hover: rgba(255, 255, 255, 0.08);
+  color-scheme: dark;
+  --bg-primary: #111113;
+  --bg-secondary: #0a0a0b;
+  --bg-card: #1a1a1d;
+  --bg-input: #141416;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.09);
 
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
+  --text-primary: #f2f2f3;
+  --text-secondary: #a6a6ae;
+  --text-muted: #6e6e77;
+  --text-on-accent: #18181b;
+  --text-on-accent-muted: rgba(24, 24, 27, 0.72);
 
-  --border-color: #3f3f46;
-  --border-light: #323238;
+  --border-color: #29292e;
+  --border-light: #202024;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: #3f3f46;
 
-  --accent: #39D1E0;
-  --accent-hover: #5edae7;
-  --accent-light: rgba(57, 209, 224, 0.16);
-  --accent-glow: rgba(57, 209, 224, 0.24);
+  /* shadcn 暗色 primary：近白，无彩度（仅用于实心填充） */
+  --accent: #fafafa;
+  --accent-hover: #ffffff;
+  --accent-light: rgba(250, 250, 250, 0.07);
+  --accent-glow: rgba(250, 250, 250, 0.09);
+  /* 描边/选中环专用：暗色下用中性锌灰，避免边框、下划线发白刺眼 */
+  --accent-border: #52525b;
+  --accent-border-strong: #71717a;
+  --interactive-hover: rgba(255, 255, 255, 0.055);
+  --interactive-active: rgba(255, 255, 255, 0.10);
 
-  /* 右下角发送：单独降亮，不与导航/链接强 accent 同色 */
-  --btn-send-bg: #2ab3c0;
-  --btn-send-hover: #39D1E0;
+  --btn-send-bg: #e4e4e7;
+  --btn-send-hover: #fafafa;
 
-  /* 输入聚焦：弱化冷色描边光晕（略偏灰蓝，与对话框一体） */
-  --focus-ring-color: #39D1E0;
-  --focus-ring-glow: rgba(57, 209, 224, 0.25);
+  --focus-ring-color: #52525b;
+  --focus-ring-glow: rgba(255, 255, 255, 0.09);
+  --focus-ring: 0 0 0 3px var(--focus-ring-glow);
 
-  --success: #34d399;
+  --success: #55c58e;
   --success-light: rgba(52, 211, 153, 0.14);
-  --warning: #fbbf24;
+  --warning: #d5ae68;
   --warning-light: rgba(251, 191, 36, 0.14);
-  --danger: #fb7185;
+  --danger: #df8290;
   --danger-light: rgba(251, 113, 133, 0.12);
 
-  /* 输入区 chip：技能 # 浅紫、文件 @ 浅绿，与 accent/success 同系低饱和 */
+  /* 输入区 chip：技能 # 浅紫、文件 @ 浅绿，低饱和不抢主色 */
   --chip-skill-fg: #c4b0e0;
   --chip-skill-bg: rgba(167, 148, 200, 0.12);
   --chip-skill-border: rgba(180, 168, 210, 0.28);
@@ -59,18 +85,21 @@
   --chip-file-border: rgba(110, 231, 183, 0.28);
   --chip-file-ring: rgba(52, 211, 153, 0.22);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.42);
+  --shadow-md: 0 18px 44px -12px rgba(0, 0, 0, 0.52);
 
-  --msg-user-bg: #2ab3c0;
-  --msg-agent-bg: var(--bg-card);
-  --msg-agent-border: var(--border-color);
+  /* 用户气泡：中性灰面 + 正常文字（ChatGPT/shadcn 式），不再用彩色实心 */
+  --msg-user-bg: #2a2a2e;
+  --msg-user-fg: #f2f2f3;
+  --msg-user-note-bg: #3b3b41;
+  --msg-agent-bg: #17171a;
+  --msg-agent-border: rgba(255, 255, 255, 0.07);
 
-  /* 流式思考块：accent 同系弱化，与正文主色区分 */
-  --msg-thinking-text: #98CBCB;
-  --msg-thinking-label: #5a8f96;
-  --msg-thinking-border: rgba(57, 209, 224, 0.38);
+  /* 流式思考块：灰阶弱化，与正文主色区分 */
+  --msg-thinking-text: #9d9da6;
+  --msg-thinking-label: #71717a;
+  --msg-thinking-border: rgba(255, 255, 255, 0.16);
 
   /* Diff Viewer */
   --diff-add-bg: rgba(34, 197, 94, 0.18);
@@ -81,35 +110,54 @@
   --diff-del-text: #fecaca;
   --diff-del-num-bg: rgba(239, 68, 68, 0.25);
   --diff-del-num-text: #fca5a5;
-  --diff-hunk-bg: rgba(57, 209, 224, 0.12);
+  --diff-hunk-bg: rgba(161, 161, 170, 0.12);
   --diff-hunk-text: var(--text-secondary);
+
+  --surface-page: #111113;
+  --surface-sidebar: #0a0a0b;
+  --surface-panel: #151517;
+  --surface-raised: #1e1e21;
+  --surface-overlay: rgba(10, 10, 11, 0.95);
+  --chat-bg: var(--surface-page);
 }
 
-/* ── Light Theme ── */
+/* ── Light Theme: shadcn/zinc 白底 + 边框分层，主色为近黑 ── */
 [data-theme="light"] {
-  --bg-primary: #f8f9fb;
-  --bg-secondary: #ffffff;
-  --bg-card: #f9f9f9;
-  --bg-input: #f1f3f6;
-  --bg-hover: rgba(0, 0, 0, 0.04);
+  color-scheme: light;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f6f7;
+  --bg-card: #ffffff;
+  --bg-input: #f4f4f5;
+  --bg-hover: rgba(24, 24, 27, 0.05);
+  --bg-active: rgba(24, 24, 27, 0.08);
 
-  --text-primary: #1a1a2e;
-  --text-secondary: #5a5a7a;
-  --text-muted: #9a9ab0;
+  --text-primary: #18181b;
+  --text-secondary: #52525b;
+  --text-muted: #8b8b94;
+  --text-on-accent: #fafafa;
+  --text-on-accent-muted: rgba(250, 250, 250, 0.8);
 
-  --border-color: #e4e4ee;
-  --border-light: #ededed;
+  --border-color: #e4e4e7;
+  --border-light: #ededf0;
+  --border-subtle: rgba(24, 24, 27, 0.08);
+  --border-strong: #d0d0d5;
 
-  --accent: #2ab3c0;
-  --accent-hover: #1e9eaa;
-  --accent-light: rgba(42, 179, 192, 0.08);
-  --accent-glow: rgba(42, 179, 192, 0.15);
+  /* shadcn 亮色 primary：近黑，无彩度（仅用于实心填充） */
+  --accent: #18181b;
+  --accent-hover: #3a3a40;
+  --accent-light: rgba(24, 24, 27, 0.06);
+  --accent-glow: rgba(24, 24, 27, 0.10);
+  /* 描边/选中环专用：亮色下用中性灰，避免边框过黑过重 */
+  --accent-border: #a1a1aa;
+  --accent-border-strong: #71717a;
+  --interactive-hover: rgba(24, 24, 27, 0.05);
+  --interactive-active: rgba(24, 24, 27, 0.09);
 
-  /* 发送按钮 & 输入聚焦：与暗色模式对称 */
-  --btn-send-bg: #2ab3c0;
-  --btn-send-hover: #1e9eaa;
-  --focus-ring-color: #2ab3c0;
-  --focus-ring-glow: rgba(42, 179, 192, 0.2);
+  --btn-send-bg: #18181b;
+  --btn-send-hover: #3a3a40;
+  --focus-ring-color: #a1a1aa;
+  --focus-ring-glow: rgba(24, 24, 27, 0.12);
+  --focus-ring: 0 0 0 3px var(--focus-ring-glow);
 
   --success: #16a34a;
   --success-light: rgba(22, 163, 74, 0.08);
@@ -127,17 +175,20 @@
   --chip-file-border: rgba(22, 163, 74, 0.22);
   --chip-file-ring: rgba(22, 163, 74, 0.18);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --shadow: 0 6px 18px -6px rgba(24, 24, 27, 0.08);
+  --shadow-md: 0 18px 44px -14px rgba(24, 24, 27, 0.14);
 
-  --msg-user-bg: #2ab3c0;
-  --msg-agent-bg: #ffffff;
-  --msg-agent-border: #e4e4ee;
+  /* 用户气泡：浅灰面 + 正常文字（ChatGPT/shadcn 式），不再用彩色实心 */
+  --msg-user-bg: #e9e9ec;
+  --msg-user-fg: #1b1b1f;
+  --msg-user-note-bg: #dcdce1;
+  --msg-agent-bg: #fafafa;
+  --msg-agent-border: var(--border-subtle);
 
-  --msg-thinking-text: #5a7579;
-  --msg-thinking-label: #7a9599;
-  --msg-thinking-border: rgba(42, 179, 192, 0.42);
+  --msg-thinking-text: #6b6b74;
+  --msg-thinking-label: #8f8f98;
+  --msg-thinking-border: rgba(24, 24, 27, 0.22);
 
   /* Diff Viewer */
   --diff-add-bg: rgba(34, 197, 94, 0.12);
@@ -148,16 +199,16 @@
   --diff-del-text: #b91c1c;
   --diff-del-num-bg: rgba(239, 68, 68, 0.18);
   --diff-del-num-text: #991b1b;
-  --diff-hunk-bg: rgba(42, 179, 192, 0.08);
+  --diff-hunk-bg: rgba(113, 113, 122, 0.10);
   --diff-hunk-text: var(--text-secondary);
-}
 
-/* ── Surface Layer Tokens（产品级层次感）
-   目的：让 顶栏 / 左侧栏 / 主工作区 / Tool 区域 用肉眼可分辨的底色差分层
-   顺序（由浅至深或由冷至暖）：surface-page < surface-sidebar < surface-panel < surface-raised */
-/* 主工作区底色（被 html/body 与各 page 的 background 引用） */
-[data-theme="dark"]  { --surface-page: var(--bg-primary); }
-[data-theme="light"] { --surface-page: #ffffff; }
+  --surface-page: #ffffff;
+  --surface-sidebar: #f6f6f7;
+  --surface-panel: #fafafa;
+  --surface-raised: #ffffff;
+  --surface-overlay: rgba(255, 255, 255, 0.95);
+  --chat-bg: var(--surface-page);
+}
 
 /* ===== Global ===== */
 html, body {
@@ -166,9 +217,10 @@ html, body {
   font-size: 14px;
   line-height: 1.6;
   color: var(--text-primary);
-  background: var(--bg-primary);
-  transition: background 0.25s ease, color 0.25s ease;
+  background: var(--surface-page);
+  transition: background var(--transition-slow), color var(--transition-slow);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 /* 主工作区底色：与左侧栏/顶栏形成可分辨的层级差 */
@@ -179,6 +231,13 @@ html, body {
   background: var(--surface-page);
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* 主色为无彩度黑/白，链接靠下划线区分（shadcn 惯例）；
+   下划线用中性描边色，避免暗色下白线刺眼 */
+a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+a:hover { text-decoration-color: var(--text-secondary); }
 button { cursor: pointer; font-family: inherit; font-size: inherit; }

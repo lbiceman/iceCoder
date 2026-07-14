@@ -7,12 +7,10 @@ import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import {
   buildDiagnosticGateMessage,
-  checkDelegatePreflight,
   checkToolPreflight,
   isDistArtifactPath,
   shouldActivateBuildDiagnosticGate,
   shouldClearBuildDiagnosticGate,
-  taskMentionsBlockedVerificationPipeline,
 } from '../../src/harness/harness-tool-preflight.js';
 import { appendVerificationEvidenceToBranchBlock } from '../../src/harness/rebuild-escalation.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
@@ -62,49 +60,6 @@ describe('harness-tool-preflight', () => {
       signatureOf: toolCallSignature,
     })).toBe(true);
     expect(buildDiagnosticGateMessage()).toMatch(/Diagnostic Gate/);
-  });
-
-  it('blocks delegate tasks that rerun build under diagnostic gate', () => {
-    const blocked = checkDelegatePreflight({
-      task: 'Execute npm run build 2>&1 and report stderr',
-      buildDiagnosticGateActive: true,
-    });
-    expect(blocked.blocked).toBe(true);
-    expect(blocked.reason).toBe('delegate_build_blocked');
-  });
-
-  it('blocks delegate tasks with implicit build intent when regex misses commands', () => {
-    expect(taskMentionsBlockedVerificationPipeline('Fix build until it passes')).toBe(true);
-    const blocked = checkDelegatePreflight({
-      task: 'Please fix the build pipeline until verification passes',
-      buildDiagnosticGateActive: true,
-    });
-    expect(blocked.blocked).toBe(true);
-    expect(blocked.reason).toBe('delegate_build_blocked');
-  });
-
-  it('allows read-only delegate tasks under diagnostic gate', () => {
-    const allowed = checkDelegatePreflight({
-      task: 'Read-only inspect src/scenes/MainMenuScene.ts and explain the bug',
-      buildDiagnosticGateActive: true,
-    });
-    expect(allowed.blocked).toBe(false);
-  });
-
-  it('blocks delegate tasks with shell blacklist commands', () => {
-    const blocked = checkDelegatePreflight({
-      task: 'Run rm -rf node_modules and report output',
-    });
-    expect(blocked.blocked).toBe(true);
-    expect(blocked.reason).toBe('shell_blacklist');
-  });
-
-  it('blocks delegate tasks with host-kill shell commands', () => {
-    const blocked = checkDelegatePreflight({
-      task: 'Execute taskkill /F /IM node.exe to clean up',
-    });
-    expect(blocked.blocked).toBe(true);
-    expect(blocked.reason).toBe('host_kill');
   });
 
   it('clears diagnostic gate after successful src edit', () => {

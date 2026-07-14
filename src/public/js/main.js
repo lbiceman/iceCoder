@@ -3,6 +3,7 @@
  * 导入所有页面模块。
  * CSS 通过 index.html 的 <link> 标签加载，兼容非 Vite 环境。
  */
+import './icon.js';
 import './notification.js';
 import './modal.js';
 import './diff-viewer.js';
@@ -40,6 +41,7 @@ import './pages/mobile/mobile-chat-page.js';
 import './pages/mobile/mobile-memory-page.js';
 import './pages/mobile/mobile-skills-page.js';
 import './pages/mobile/mobile-config-page.js';
+import './chat-task-queue.js';
 import './chat-page.js';
 import './memory-page.js';
 import './skills-page.js';

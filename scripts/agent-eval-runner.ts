@@ -253,6 +253,7 @@ async function scoreCase(args: {
   const finalEvent = [...events].reverse().find(event => event.type === 'final');
   const agentVerificationPassed = didAgentRunVerification(events, testCase.verifyCommands);
   const anyFileChanged = await didAnyCaseFileChange(workspace, initialFiles);
+  const analysisArtifactCount = await countAnalysisArtifacts(workspace, testCase.id);
 
   if (testCase.expected.requiresTool && toolCallEvents.length === 0) {
     failures.push('expected tool use');
@@ -262,6 +263,9 @@ async function scoreCase(args: {
   }
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
+  }
+  if (testCase.expected.requiresAnalysisArtifact && analysisArtifactCount === 0) {
+    failures.push('expected async sub-agent analysis artifact');
   }
 
   const summary = telemetry
@@ -310,6 +314,16 @@ async function scoreCase(args: {
     metrics,
     failures,
   };
+}
+
+async function countAnalysisArtifacts(workspace: string, sessionId: string): Promise<number> {
+  const analysisDir = path.join(workspace, '.icecoder', 'sessions', sessionId, 'analysis');
+  try {
+    const entries = await fs.readdir(analysisDir);
+    return entries.filter(entry => entry.endsWith('.meta.json')).length;
+  } catch {
+    return 0;
+  }
 }
 
 async function evaluateAssertions(

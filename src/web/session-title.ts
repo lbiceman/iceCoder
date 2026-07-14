@@ -116,3 +116,38 @@ export async function applyFirstPromptSessionTitle(
   await writeSessionIndex(index);
   return title;
 }
+
+export interface DeletedMessageSessionMetadata {
+  deletedPrompt: string;
+  firstRemainingPrompt: string | null;
+  remainingUserCount: number;
+}
+
+/**
+ * 删除用户消息后同步侧栏元数据；仅当标题仍等于被删首条提示词生成的自动标题时才重算标题。
+ */
+export async function updateSessionMetadataAfterMessageDelete(
+  sessionId: string,
+  metadata: DeletedMessageSessionMetadata,
+): Promise<string | null> {
+  const index = await readSessionIndex();
+  const entry = index.find((session) => session.id === sessionId);
+  if (!entry) return null;
+
+  entry.messageCount = metadata.remainingUserCount;
+  entry.updatedAt = Date.now();
+
+  let updatedTitle: string | null = null;
+  if (
+    metadata.deletedPrompt.trim()
+    && entry.title === deriveSessionTitleFromPrompt(metadata.deletedPrompt)
+  ) {
+    updatedTitle = metadata.firstRemainingPrompt?.trim()
+      ? deriveSessionTitleFromPrompt(metadata.firstRemainingPrompt)
+      : (sessionId === 'default' ? '默认会话' : '新会话');
+    entry.title = updatedTitle;
+  }
+
+  await writeSessionIndex(index);
+  return updatedTitle;
+}

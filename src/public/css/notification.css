@@ -57,6 +57,6 @@
 
 .notification.info {
   background: var(--accent-light);
-  color: var(--accent);
-  border: 1px solid var(--accent);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-border);
 }

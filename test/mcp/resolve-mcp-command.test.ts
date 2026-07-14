@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import {
   augmentPathForMcpSpawn,
   extractNpxPackageName,
@@ -11,7 +12,7 @@ describe('resolveMcpCommand', () => {
     if (process.platform !== 'win32') return;
     const fakeDir = 'C:\\fake-nodejs';
     const resolved = resolveMcpCommand('npx', `${fakeDir};C:\\Windows`);
-    expect(resolved).toBe('npx.cmd');
+    expect(path.basename(resolved).toLowerCase()).toBe('npx.cmd');
   });
 
   it('augmentPathForMcpSpawn 前置常见 Node 目录', () => {

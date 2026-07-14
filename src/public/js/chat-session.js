@@ -213,13 +213,18 @@ window.ChatSession = (function () {
     syncSessionIdFromStore();
     var url = '/api/sessions/' + SESSION_ID + '?_t=' + Date.now();
     fetch(url)
-      .then(function (res) { return res.json(); })
+      .then(function (res) {
+        if (res && 'ok' in res && !res.ok) {
+          throw new Error('HTTP ' + res.status);
+        }
+        return res.json();
+      })
       .then(function (data) {
         var msgs = (data.messages && data.messages.length > 0) ? data.messages : [];
-        if (callback) callback(msgs);
+        if (callback) callback(msgs, { ok: true });
       })
       .catch(function () {
-        if (callback) callback([]);
+        if (callback) callback([], { ok: false });
       });
   }
 
@@ -382,8 +387,7 @@ window.ChatSession = (function () {
   function applyServerChatSnapshot(separated, options, isStreaming, wsProcessing) {
     var opts = options || {};
     if (hasStreamingModelBubble() || wsProcessing || isStreaming) return false;
-    // 服务端空响应（读文件失败 / 会话 id 错位）不得覆盖本地已有历史
-    if (separated.msgs.length === 0 && messages.length > 0) return false;
+    // 非权威快照不得用较短历史覆盖本地待同步消息；权威空快照代表会话确实为空。
     if (!opts.authoritative && separated.msgs.length < messages.length) return false;
 
     var sig = sessionPayloadSig(separated);
@@ -425,6 +429,21 @@ window.ChatSession = (function () {
     stampMessageTimestamps(msg);
     msg._msgIndex = messages.length;
     messages.push(msg);
+  }
+
+  function removeMessageById(messageId) {
+    if (!messageId) return false;
+    var idx = -1;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i] && messages[i].id === messageId) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) return false;
+    messages.splice(idx, 1);
+    reindexMessages();
+    return true;
   }
 
   function getMessages() {
@@ -503,6 +522,7 @@ window.ChatSession = (function () {
     applyServerChatSnapshot: applyServerChatSnapshot,
     flushToolBatchLocal: flushToolBatchLocal,
     appendMessage: appendMessage,
+    removeMessageById: removeMessageById,
     stampMessageTimestamps: stampMessageTimestamps,
     getMessages: getMessages,
     getToolTraces: getToolTraces,

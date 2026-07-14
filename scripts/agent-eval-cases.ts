@@ -5,6 +5,7 @@ export type AgentEvalCategory =
   | 'compression'
   | 'memory-conflict'
   | 'tool-failure'
+  | 'async-subagent'
   | 'eval-mode';
 
 export interface AgentEvalFileAssertion {
@@ -25,6 +26,7 @@ export interface AgentEvalCase {
     requiresTool: boolean;
     requiresVerification?: boolean;
     allowFileChanges?: boolean;
+    requiresAnalysisArtifact?: boolean;
   };
   assertions: AgentEvalFileAssertion[];
   maxRounds?: number;
@@ -173,6 +175,53 @@ export const agentEvalCases: AgentEvalCase[] = [
       { path: 'src/mode.js', contains: "return 'modern'" },
       { path: 'src/mode.js', notContains: "return 'legacy'" },
     ],
+  },
+  {
+    id: 'async-subagent-oauth-context',
+    category: 'async-subagent',
+    prompt: [
+      'Inspect the OAuth login flow before editing.',
+      'Then update the callback route to return "oauth-ready" and run npm test.',
+      'Use background analysis when gathering context.',
+    ].join(' '),
+    files: {
+      'package.json': packageJson(),
+      'src/auth/oauth.js': [
+        'function buildCallbackResponse() {',
+        "  return 'oauth-pending';",
+        '}',
+        '',
+        'module.exports = { buildCallbackResponse };',
+        '',
+      ].join('\n'),
+      'src/routes/callback.js': [
+        "const { buildCallbackResponse } = require('../auth/oauth');",
+        '',
+        'function callbackRoute() {',
+        '  return buildCallbackResponse();',
+        '}',
+        '',
+        'module.exports = { callbackRoute };',
+        '',
+      ].join('\n'),
+      'test/oauth.test.js': [
+        "const test = require('node:test');",
+        "const assert = require('node:assert/strict');",
+        "const { callbackRoute } = require('../src/routes/callback');",
+        '',
+        "test('oauth callback is ready', () => {",
+        "  assert.equal(callbackRoute(), 'oauth-ready');",
+        '});',
+        '',
+      ].join('\n'),
+    },
+    verifyCommands: ['npm test'],
+    expected: { requiresTool: true, requiresVerification: true, requiresAnalysisArtifact: true },
+    assertions: [
+      { path: 'src/auth/oauth.js', contains: "return 'oauth-ready'" },
+      { path: 'src/auth/oauth.js', notContains: "return 'oauth-pending'" },
+    ],
+    maxRounds: 10,
   },
   {
     id: 'eval-mode-tools-disabled',

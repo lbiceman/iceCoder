@@ -84,7 +84,7 @@ Three layers: **L0** is the supervision tier you pick in the sidebar footer (`of
 
 - **TaskState + RepoContext** track intent, phase, touched files, and verification status.
 - **CheckpointEngine v2** adds `runtimeV2` on the same `{sessionId}.checkpoint.json` (tool trail, failures, branch budget, supervisor snapshot).
-- **Sub-agents**: `delegate_to_subagent` explores with a read-only tool whitelist; the main thread only gets a short summary (~60–80% less context bloat from search/read).
+- **Sub-agents**: `request_analysis` launches read-only async background analysis; the main thread keeps working and later receives concise Analysis Ready summaries.
 
 ### Ice Bean (Web session indicator)
 
@@ -138,7 +138,7 @@ Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervi
 
 ### Tools (27 built-in + MCP)
 
-File/Git/Shell, search, URL fetch, Office/XMind parse, **system filesystem browser**, vision `image_read`, etc.; Harness also exposes **`delegate_to_subagent`**. **MCP** registers external server tools into the same `ToolRegistry`.
+File/Git/Shell, search, URL fetch, Office/XMind parse, **system filesystem browser**, vision `image_read`, etc.; Harness also exposes async **`request_analysis`**. **MCP** registers external server tools into the same `ToolRegistry`.
 
 - **Shell dual-track**: long `run_command` jobs go background, short ones foreground; soft timeout can escalate.
 - **Diff viewer** embeds Git-style diffs for edit tools in chat.

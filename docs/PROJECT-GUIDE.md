@@ -88,7 +88,7 @@ while running:
 
 ### Sub-Agent Runner
 
-`src/harness/sub-agent-runner.ts` provides an **isolated read-only agent** for codebase exploration. When the main model calls `delegate_to_subagent`, a private message loop starts with a whitelisted tool set (`read_file`, `search_codebase`, `fs_operation list` only). The sub-agent runs independently (60s timeout, max 10 rounds), reads files, searches code, and returns a **concise structured summary** instead of dumping raw file contents into the main context.
+`src/harness/sub-agent-runner.ts` provides the **isolated read-only agent executor** used by async `request_analysis` background tasks. The sub-agent runs with a read-only whitelist, writes artifacts into the Analysis Workspace, and returns concise Analysis Ready summaries instead of blocking the main context.
 
 This solves the "context pollution" problem: previously, each exploration task dumped large search results and file contents directly into the session, accelerating compaction and wasting tokens. With the sub-agent, the main context receives only a short summary (~hundreds of tokens), cutting exploration-induced context bloat by an estimated 60-80%.
 
@@ -96,8 +96,8 @@ The sub-agent also has a **process-level LRU cache** (default 100 entries, keyed
 
 Key components:
 - `SubAgentRunner` — isolated message loop with timeout and round limits
-- `delegate_to_subagent` — the tool exposed to the model for delegation
-- `formatSubAgentResult()` — formats the structured result for the main session
+- `request_analysis` — the async background analysis tool exposed to the model
+- `AnalysisSupervisor` / `analysis-ready-injector` — schedules background analysis and injects ready summaries
 
 Key runtime protections:
 

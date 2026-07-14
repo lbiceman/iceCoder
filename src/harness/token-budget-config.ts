@@ -46,12 +46,12 @@ export function getHarnessTokenBudget(): number {
   return DEFAULT_HARNESS_TOKEN_BUDGET_TOTAL;
 }
 
-/** 与 OpenAIAdapter 默认单次请求超时对齐，避免首轮 LLM 仍可等、子代理外层 60s 先失败 */
-const DEFAULT_SUBAGENT_ENVELOPE_MS = 120_000;
+/** 子代理整段耗时上限：后台分析默认 3 分钟，给搜索/阅读留足空间但避免长期占槽。 */
+const DEFAULT_SUBAGENT_ENVELOPE_MS = 180_000;
 
 /**
  * 子代理 delegate 整段耗时上限（毫秒）。
- * 可被 `ICE_SUBAGENT_TIMEOUT_MS` 覆盖；默认 120s 或与 ICE_SUBAGENT_TIMEOUT_MS 一致。
+ * 可被 `ICE_SUBAGENT_TIMEOUT_MS` 覆盖；默认 180s。
  */
 export function getSubAgentTimeoutMsFromEnv(defaultMs = DEFAULT_SUBAGENT_ENVELOPE_MS): number {
   return readPositiveIntEnv('ICE_SUBAGENT_TIMEOUT_MS') ?? defaultMs;

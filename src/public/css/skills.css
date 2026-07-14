@@ -96,13 +96,13 @@
   transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
 }
 .skills-card:hover {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+  border-color: var(--accent-border);
   background: var(--bg-hover);
 }
 .skills-card.is-active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+  border-color: var(--accent-border-strong);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: none;
 }
 
 .skills-card-head {
@@ -198,9 +198,9 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   padding: 3px 10px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
 }
 
 .skills-detail-desc {
@@ -228,22 +228,22 @@
 .skills-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 .skills-btn-primary {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
-  color: var(--accent);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .skills-btn-primary:hover {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .skills-btn-danger {
-  border-color: color-mix(in srgb, #e55 35%, var(--border-color));
-  color: #e66;
-  background: color-mix(in srgb, #e55 6%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border-color));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 .skills-btn-danger:hover {
-  background: color-mix(in srgb, #e55 14%, transparent);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
 .skills-detail-content {
@@ -275,7 +275,7 @@
     gap: 8px;
   }
   .skills-card.is-expanded {
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+    border-color: var(--accent-border-strong);
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
   }
   .skills-card-detail {

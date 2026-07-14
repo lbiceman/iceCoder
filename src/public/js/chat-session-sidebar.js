@@ -12,6 +12,10 @@ window.ChatSessionSidebar = (function () {
   var Store = window.ChatSessionStore;
   var sidebar = null;
 
+  function ic(name, width) {
+    return window.AppIcon ? window.AppIcon.html(name, { width: width || 14 }) : '';
+  }
+
   function normalizePath(p) {
     return String(p || '').replace(/\\/g, '/').toLowerCase();
   }
@@ -62,21 +66,15 @@ window.ChatSessionSidebar = (function () {
       '</div>' +
       '<nav class="chat-sidebar-nav" role="tablist" aria-label="主导航">' +
         '<button class="chat-sidebar-nav-btn" data-page="chat" role="tab" aria-selected="true">' +
-          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
-            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h9A1.5 1.5 0 0 1 14 4.5v7A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-7Zm2 .5h8M4 8h6M4 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</span>' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('work') + '</span>' +
           '<span class="chat-sidebar-nav-btn-label">工作</span>' +
         '</button>' +
         '<button class="chat-sidebar-nav-btn" data-page="memory" role="tab" aria-selected="false">' +
-          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
-            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 3.5A1.5 1.5 0 0 1 4.5 2h7A1.5 1.5 0 0 1 13 3.5v9A1.5 1.5 0 0 1 11.5 14h-7A1.5 1.5 0 0 1 3 12.5v-9Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
-          '</span>' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('memory') + '</span>' +
           '<span class="chat-sidebar-nav-btn-label">记忆</span>' +
         '</button>' +
         '<button class="chat-sidebar-nav-btn" data-page="skills" role="tab" aria-selected="false">' +
-          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' +
-            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 1.8 2.5 4.2v3.6c0 3.1 2.3 5.4 5.5 6.4 3.2-1 5.5-3.3 5.5-6.4V4.2L8 1.8Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.2 8.2 7.4 9.5 10 6.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</span>' +
+          '<span class="chat-sidebar-nav-btn-icon" aria-hidden="true">' + ic('skills') + '</span>' +
           '<span class="chat-sidebar-nav-btn-label">技能</span>' +
         '</button>' +
       '</nav>' +
@@ -92,21 +90,15 @@ window.ChatSessionSidebar = (function () {
       '<div class="chat-sidebar-list"></div>' +
       '<div class="chat-sidebar-footer">' +
       '<button class="chat-sidebar-control chat-sidebar-settings-btn" type="button" title="设置">' +
-        '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
-          '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8 3.4 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
-        '</span>' +
+        '<span class="chat-sidebar-control-icon" aria-hidden="true">' + ic('settings') + '</span>' +
         '<span class="chat-sidebar-control-label">设置</span>' +
       '</button>' +
         '<button class="chat-sidebar-control chat-sidebar-mode-btn" type="button" data-mode="adaptive" title="点击切换监管模式">' +
-          '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
-            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="5.2" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.5v3.7l2.4 1.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</span>' +
+          '<span class="chat-sidebar-control-icon" aria-hidden="true">' + ic('clock') + '</span>' +
           '<span class="chat-sidebar-control-label">自适应</span>' +
         '</button>' +
         '<div class="chat-sidebar-control chat-sidebar-connection" data-state="disconnected" title="连接状态">' +
-          '<span class="chat-sidebar-control-icon" aria-hidden="true">' +
-            '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M2 5.8a8.5 8.5 0 0 1 12 0M4.4 8.2a5.5 5.5 0 0 1 7.2 0M6.8 10.6a2.5 2.5 0 0 1 2.4 0" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="8" cy="13" r="0.9" fill="currentColor"/></svg>' +
-          '</span>' +
+          '<span class="chat-sidebar-control-icon" aria-hidden="true">' + ic('wifi') + '</span>' +
         '</div>' +
       '</div>';
 
@@ -117,6 +109,7 @@ window.ChatSessionSidebar = (function () {
       host.insertBefore(sidebar, host.firstChild);
     }
     bindEvents();
+    if (window.AppIcon) window.AppIcon.hydrate(sidebar);
     Store.fetchSessions(function () { renderList(); });
     return sidebar;
   }

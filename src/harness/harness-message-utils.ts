@@ -77,6 +77,23 @@ export function countRealUserMessages(messages: UnifiedMessage[]): number {
   return count;
 }
 
+export function isAlsoNoteMessage(msg: UnifiedMessage): boolean {
+  return msg.alsoNote === true;
+}
+
+/** 任务切换检测用：跳过 /also 备注，避免误触发「新任务」提示。 */
+export function getLatestUserTextForTaskSwitch(messages: UnifiedMessage[], fallback = ''): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'user' || isAlsoNoteMessage(msg)) continue;
+    const text = extractUserMessageText(msg.content);
+    if (!text.trim()) continue;
+    if (isSystemInjectedUserContent(text)) continue;
+    return text;
+  }
+  return fallback;
+}
+
 /** 倒序查找第一条未被 {@link isSystemInjectedUserContent} 排除的 user 文本。 */
 export function getLatestRealUserText(messages: UnifiedMessage[], fallback = ''): string {
   for (let i = messages.length - 1; i >= 0; i--) {

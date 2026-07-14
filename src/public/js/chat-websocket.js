@@ -146,6 +146,24 @@ window.ChatWebSocket = (function () {
       case 'info':
         emit('info', { message: data.message });
         break;
+      case 'also_note_appended':
+        emit('also_note_appended', {
+          sessionId: data.sessionId || '',
+          message: data.message || null,
+        });
+        break;
+      case 'also_rejected':
+        emit('also_rejected', {
+          sessionId: data.sessionId || '',
+          message: data.message || '',
+        });
+        break;
+      case 'task_queue_updated':
+        emit('task_queue_updated', {
+          sessionId: data.sessionId || '',
+          items: Array.isArray(data.items) ? data.items : [],
+        });
+        break;
       case 'memory_notice':
         emit('memory_notice', { notices: data.notices });
         break;
@@ -261,7 +279,10 @@ window.ChatWebSocket = (function () {
         emit('message_deleted', data || {});
         break;
       case 'delete_message_failed':
-        emit('delete_message_failed', { error: data.error || '删除失败。' });
+        emit('delete_message_failed', {
+          error: data.error || '删除失败。',
+          code: data.code || '',
+        });
         break;
     }
   }
@@ -299,6 +320,9 @@ window.ChatWebSocket = (function () {
     if (opts.messageId) payload.messageId = opts.messageId;
     if (opts.images && opts.images.length > 0) payload.images = opts.images;
     if (opts.referencePaths && opts.referencePaths.length > 0) payload.referencePaths = opts.referencePaths;
+    if (typeof opts.queueInsertIndex === 'number') payload.queueInsertIndex = opts.queueInsertIndex;
+    if (opts.source) payload.source = opts.source;
+    if (opts.command) payload.command = opts.command;
     send(payload);
   }
 

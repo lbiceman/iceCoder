@@ -1,0 +1,8 @@
+<!-- IceCoder logo: 冰豆脸型 — 大圆脸 + 一对竖胶囊眼，比例对齐 session-pet -->
+<svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="50" cy="50" r="44" fill="currentColor" opacity="0.16"/>
+  <g stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M25 39 A6 6 0 0 1 37 39 L37 55 A6 6 0 0 1 25 55 Z"/>
+    <path d="M63 39 A6 6 0 0 1 75 39 L75 55 A6 6 0 0 1 63 55 Z"/>
+  </g>
+</svg>

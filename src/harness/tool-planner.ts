@@ -45,7 +45,7 @@ function recommendedFlow(intent: TaskIntent): string[] {
     case 'debug':
       return ['read the error/output', 'search and read related files', 'edit the smallest relevant code path', 'run a focused test or typecheck when useful'];
     case 'edit':
-      return ['inspect related files', 'make the edit with file tools', 'run unit tests when useful before finishing if you changed source code'];
+      return ['inspect related files', 'make the edit with file tools', 'run unit tests before finishing when useful if you changed source code'];
     case 'test':
       return ['run the failing test or check', 'inspect the failure and related files', 'edit the implementation or test', 'rerun the focused test'];
     case 'refactor':

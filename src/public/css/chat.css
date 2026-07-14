@@ -160,10 +160,10 @@
   overflow-y: auto;
   overflow-anchor: none;          /* 禁用容器自身锚定 */
   overscroll-behavior: contain;
-  padding: 20px 24px;       /* 底部多 64px 留给模糊遮罩盒 */
+  padding: 24px 28px;       /* 内容区留足呼吸，长文不贴边 */
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   background: var(--chat-bg, var(--bg-primary));
   position: relative;
 }
@@ -386,7 +386,7 @@
   padding: 12px 12px 11px;
   border: 1px solid var(--border-light);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--bg-card) 55%, transparent);
 }
 
 .chat-welcome-stat-icon {
@@ -407,12 +407,12 @@
 }
 
 .chat-welcome-stat-icon-warn {
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
+  background: var(--warning-light);
+  color: var(--warning);
 }
 
 .chat-welcome-stat-icon-muted {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-hover);
   color: var(--text-muted);
 }
 
@@ -476,7 +476,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border-light);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.015);
+  background: color-mix(in srgb, var(--bg-card) 45%, transparent);
 }
 
 .chat-welcome-tip-kbd {
@@ -524,7 +524,7 @@
   padding: 12px 14px;
   border: 1px solid var(--border-light);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--bg-card) 55%, transparent);
   color: var(--text-primary);
   font-size: 13px;
   text-align: left;
@@ -588,11 +588,11 @@
 
 /* Message bubbles */
 .message {
-  max-width: 78%;
-  padding: 12px 16px;
-  border-radius: var(--radius);
+  max-width: 80%;
+  padding: 14px 18px;
+  border-radius: var(--radius-lg);
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.68;
   word-wrap: break-word;
   white-space: pre-wrap;
   flex-shrink: 0;
@@ -602,8 +602,26 @@
   align-self: flex-end;
   margin-left: auto;
   background: var(--msg-user-bg);
-  color: #fff;
+  color: var(--msg-user-fg, var(--text-primary));
   border-bottom-right-radius: 4px;
+  box-shadow: var(--shadow-sm);
+}
+
+.message.user.also-note {
+  background: var(--msg-user-note-bg, var(--msg-user-bg));
+  box-shadow: 0 0 0 1px var(--border-subtle), 0 4px 14px color-mix(in srgb, var(--msg-user-note-bg, var(--msg-user-bg)) 30%, transparent);
+}
+
+.message.user.also-note .msg-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.92;
+}
+
+.message.user.also-note .msg-content::before {
+  content: '💬 ';
+  opacity: 0.85;
 }
 
 .message.assistant,
@@ -613,6 +631,7 @@
   border: 1px solid var(--msg-agent-border);
   color: var(--text-primary);
   border-bottom-left-radius: 4px;
+  box-shadow: var(--shadow-sm);
 }
 
 .message .msg-label-row {
@@ -726,7 +745,7 @@
   border: none;
   border-radius: 2px;
   background: transparent;
-  color: inherit;
+  color: var(--msg-user-fg, var(--text-primary));
   cursor: pointer;
   line-height: 0;
   flex-shrink: 0;
@@ -737,20 +756,20 @@
   display: block;
   width: 12px;
   height: 12px;
-  opacity: 0.45;
+  opacity: 0.92;
 }
 
 .message.user .msg-restore-btn.msg-restore-btn--ready .msg-restore-icon {
-  opacity: 0.45;
+  opacity: 0.92;
 }
 
 .message.user .msg-restore-btn:not(.msg-restore-btn--ready) .msg-restore-icon {
-  opacity: 0.2;
+  opacity: 0.55;
 }
 
 .message.user .msg-delete-btn:hover:not(:disabled) .msg-delete-icon,
 .message.user .msg-restore-btn.msg-restore-btn--ready:hover:not(:disabled) .msg-restore-icon {
-  opacity: 0.75;
+  opacity: 1;
 }
 
 .message.user .msg-delete-btn:disabled,
@@ -760,14 +779,14 @@
 
 .message.user .msg-delete-btn:disabled .msg-delete-icon,
 .message.user .msg-restore-btn:disabled .msg-restore-icon {
-  opacity: 0.25;
+  opacity: 0.45;
 }
 
 .message.system {
   align-self: center;
   max-width: 92%;
-  background: rgba(100, 140, 200, 0.08);
-  border: 1px dashed rgba(100, 140, 200, 0.35);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px dashed var(--accent-border);
   border-radius: 8px;
   padding: 8px 12px;
 }
@@ -831,8 +850,8 @@
 
 .restore-confirm-actions .restore-confirm-ok {
   border: none;
-  background: var(--accent, #4a90d9);
-  color: #fff;
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
 }
 
 /* ── Chat Input Area (Codex desktop-style composer) ── */
@@ -892,7 +911,8 @@
   transition: border-color 180ms ease, background 200ms ease;
 }
 .chat-composer:focus-within {
-  border-color: color-mix(in srgb, var(--border-color) 100%, transparent);
+  border-color: var(--accent-border);
+  box-shadow: var(--focus-ring);
 }
 
 /* Upper area: textarea — 主：空状态就有两行高，内部 padding 充足 */
@@ -1122,7 +1142,7 @@
   color: color-mix(in srgb, var(--text-primary) 82%, transparent);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
@@ -1140,14 +1160,14 @@
   color: var(--accent);
 }
 
-/* Icon buttons (ghost) */
+/* Icon buttons (ghost) — 与工具栏其他控件统一：28×28 / 圆角 8px / 同款 hover */
 .btn-icon.btn-icon-ghost {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
+  border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
   color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
@@ -1158,42 +1178,44 @@
 .btn-icon.btn-icon-ghost:hover {
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--border-color) 60%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 55%, transparent);
 }
 .btn-icon.btn-icon-ghost:active { transform: scale(0.94); }
 
-/* Send button: subtle rounded corners, primary, with subtle highlight */
+/* Send button: 与工具栏控件同尺寸/同圆角，仅以实心 accent 保持主操作强调 */
 .btn-send {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: .3s;
-  border: transparent;
+  transition: background 160ms ease, transform 140ms ease, box-shadow 160ms ease;
+  border: 1px solid transparent;
   background: var(--btn-send-bg, var(--accent));
-  color: #fff;
-  border-radius: var(--radius);
+  color: var(--text-on-accent, #fff);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 .btn-send > svg { width: 16px; height: 16px; }
 
 .btn-send:hover {
   background: var(--btn-send-hover, var(--accent-hover));
 }
-.btn-send:active { transform: translateY(0) scale(0.96); }
+.btn-send:active { transform: scale(0.94); }
 .btn-send:disabled {
   opacity: 0.4;
   cursor: not-allowed;
   filter: saturate(0.7);
   transform: none;
-  box-shadow: inset 0 1px 0 0 color-mix(in srgb, #ffffff 25%, transparent);
+  box-shadow: none;
 }
 
 .btn-send.btn-stop {
   background: var(--danger);
   border-color: transparent;
+  color: #fff;
   font-size: 14px;
   line-height: 1;
 }
@@ -1299,7 +1321,7 @@
 
 /* ── Drag Over Indicator ── */
 .chat-page.drag-over {
-  outline: 2px dashed var(--accent);
+  outline: 2px dashed var(--accent-border-strong);
   outline-offset: -4px;
 }
 .chat-page.drag-over::after {
@@ -1408,9 +1430,9 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 0 10px 0 8px;
+  padding: 0 8px 0 10px;
   height: 28px;
-  border-radius: 999px;
+  border-radius: 8px;       /* 与工具栏图标按钮统一圆角 */
   font-size: 12.5px;
   font-weight: 500;
   color: color-mix(in srgb, var(--text-primary) 82%, transparent);
@@ -1425,8 +1447,13 @@
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 .chip.chip-select:hover {
-  background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 55%, transparent);
   color: var(--text-primary);
+}
+.chip.chip-select.active {
+  background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 65%, transparent);
 }
 .chip.chip-select .chip-caret {
   width: 10px;
@@ -1493,14 +1520,14 @@
   color: var(--accent);
 }
 .btn-cmd-plus {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius);
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
 }
 .btn-cmd-plus.active {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-primary);
+  border-color: var(--accent-border);
 }
 
 .model-dropdown {
@@ -1683,13 +1710,13 @@
   border-radius: 6px;
 }
 .session-pet-indicator .status-turn.exec-plan-anchor--forced {
-  color: #ADD12E;
+  color: var(--warning);
 }
 .session-pet-indicator .status-turn.exec-plan-anchor:hover,
 .session-pet-indicator .status-turn.exec-plan-anchor:focus-visible {
   color: var(--text-primary);
   outline: none;
-  background: rgba(107, 156, 255, 0.12);
+  background: var(--accent-light);
 }
 .pet-token-hint {
   display: block;
@@ -1762,7 +1789,7 @@
   color: var(--danger, #e94560);
 }
 .tool-action .tool-icon.warn { color: var(--warning); }
-.tool-action .tool-icon.background { color: #6b9cff; }
+.tool-action .tool-icon.background { color: var(--accent); }
 .tool-action .tool-name {
   font-weight: 600;
   color: var(--text-secondary);
@@ -1825,7 +1852,7 @@
   color: var(--text-secondary);
 }
 .tool-trace-toggle:hover {
-  border-color: var(--accent-color, #4fc3f7);
+  border-color: var(--accent-border);
   color: var(--text-primary);
 }
 .hidden-input { display: none; }
@@ -1842,7 +1869,7 @@
   padding: 20px;
 }
 .qr-modal {
-  background: var(--bg-secondary);
+  background: var(--surface-raised);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 28px;
@@ -2038,13 +2065,12 @@
   font-size: 22px;
   font-weight: 800;
   letter-spacing: 2px;
+  /* 单色系流光：跟随主题前景色，shadcn 式极简 */
   background: linear-gradient(
     90deg,
-    #34d399 0%,      /* 项目 success 绿 */
-    #4fc3f7 25%,     /* 清新蓝，保留你给的中间色 */
-    #F1A8B2 50%,     /* 柔和粉，保留 */
-    #86E0FF 75%,     /* 项目自适应蓝 */
-    #39D1E0 100%     /* 项目主 accent 青 */
+    var(--text-primary) 0%,
+    var(--text-muted) 50%,
+    var(--text-primary) 100%
   );
   background-size: 200% 100%;
   background-clip: text;
@@ -2138,7 +2164,7 @@
 .chat-sidebar-new-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--accent);
+  border-color: var(--accent-border);
 }
 
 .chat-sidebar-new-btn-icon {
@@ -2187,8 +2213,9 @@
   display: flex;
   align-items: stretch;
   gap: 4px;
-  padding: 10px;
+  padding: 10px 11px;
   border-radius: 10px;
+  border: 1px solid var(--border-subtle);
   cursor: pointer;
   font-size: 13px;
   color: var(--text-secondary);
@@ -2316,9 +2343,10 @@
 }
 
 .chat-sidebar-item.active {
-  color: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 12px var(--accent-glow);
+  color: var(--text-primary);
+  background: var(--accent-light);
+  border-color: var(--accent-border);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-border) 60%, transparent);
 }
 .chat-sidebar-item.active .chat-sidebar-item-title {
   color: var(--text-primary);
@@ -2385,16 +2413,16 @@
 }
 
 .chat-sidebar-mode-btn[data-mode="off"] {
-  border-color: #88EDC7;
-  color: #88EDC7;
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
+  color: var(--success);
 }
 .chat-sidebar-mode-btn[data-mode="adaptive"] {
-  border-color: #86E0FF;
-  color: #86E0FF;
+  border-color: var(--accent-border);
+  color: var(--text-secondary);
 }
 .chat-sidebar-mode-btn[data-mode="strict"] {
-  border-color: #F1A8B2;
-  color: #F1A8B2;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger);
 }
 .chat-sidebar-mode-btn:hover {
   opacity: 0.85;
@@ -2428,29 +2456,29 @@
   border: 1px solid var(--border-color);
 }
 .chat-sidebar-settings-btn.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-border);
+  color: var(--text-primary);
   background: var(--accent-light);
 }
 
 /* 连接状态配色 */
 .chat-sidebar-connection[data-state="connected"] {
-  color: #37D1A3;
-  border: 1px solid #37D1A3;
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 55%, transparent);
 }
 .chat-sidebar-connection[data-state="connecting"] {
-  color: #facc15;
-  border-color: rgba(250, 204, 21, 0.35);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
 }
 .chat-sidebar-connection[data-state="disconnected"] {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.35);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
 .chat-sidebar-rename-input {
   width: 100%;
   padding: 2px 4px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-border);
   border-radius: 4px;
   background: var(--bg-input);
   color: var(--text-primary);

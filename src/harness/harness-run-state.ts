@@ -162,4 +162,6 @@ export interface HarnessRunState {
    * 避免把 bridge 经各子模块依赖链层层传递。
    */
   supervisorBridge?: SupervisorRuntimeBridge;
+  /** Async Sub-Agent：本 run 是否已自动触发过后台分析（防 token 风暴）。 */
+  analysisAutoTriggered?: boolean;
 }

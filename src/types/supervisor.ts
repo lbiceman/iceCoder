@@ -153,6 +153,11 @@ export type SupervisorTimelineEventType =
   | 'failure'
   | 'drift'
   | 'timeout'
+  | 'analysis_requested'
+  | 'analysis_started'
+  | 'analysis_finished'
+  | 'workspace_analysis_updated'
+  | 'analysis_ready'
   | 'shadow_diagnostic';
 
 /** §8.9 JSONL 落盘结构。 */

@@ -68,7 +68,7 @@ window.SettingsPage = (function () {
                 '<span class="settings-theme-preview-body"></span>' +
               '</span>' +
               '<span class="settings-theme-option-label">' +
-                '<svg class="settings-theme-option-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>' +
+                (window.AppIcon ? window.AppIcon.html('moon', { width: 14, className: 'settings-theme-option-icon' }) : '') +
                 '深色' +
               '</span>' +
             '</button>' +
@@ -78,7 +78,7 @@ window.SettingsPage = (function () {
                 '<span class="settings-theme-preview-body"></span>' +
               '</span>' +
               '<span class="settings-theme-option-label">' +
-                '<svg class="settings-theme-option-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><path d="M8 1.5v1.5M8 13v1.5M14.5 8H13M3 8H1.5M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' +
+                (window.AppIcon ? window.AppIcon.html('sun', { width: 14, className: 'settings-theme-option-icon' }) : '') +
                 '浅色' +
               '</span>' +
             '</button>' +
@@ -129,6 +129,7 @@ window.SettingsPage = (function () {
         '</section>' +
       '</div>';
 
+    if (window.AppIcon) window.AppIcon.hydrate(parentEl);
     bindThemeOptions(parentEl, shell);
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
