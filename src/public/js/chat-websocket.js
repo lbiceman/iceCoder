@@ -279,7 +279,10 @@ window.ChatWebSocket = (function () {
         emit('message_deleted', data || {});
         break;
       case 'delete_message_failed':
-        emit('delete_message_failed', { error: data.error || '删除失败。' });
+        emit('delete_message_failed', {
+          error: data.error || '删除失败。',
+          code: data.code || '',
+        });
         break;
     }
   }

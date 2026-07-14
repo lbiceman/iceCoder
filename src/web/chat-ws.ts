@@ -100,7 +100,10 @@ import {
   readStructuredMessagesFile,
   writeStructuredMessagesFile,
 } from './session-structured-io.js';
-import { applyFirstPromptSessionTitle } from './session-title.js';
+import {
+  applyFirstPromptSessionTitle,
+  updateSessionMetadataAfterMessageDelete,
+} from './session-title.js';
 import {
   getOrLoadAssembledChatPrompt,
   prewarmChatRuntime,
@@ -1627,13 +1630,25 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             return;
           }
           try {
-            await deleteUserMessageConversation({
+            // 等待旧的防抖写盘完成，避免删除后的 structured 记录被旧快照覆盖。
+            await flushStructuredMessagesNow(sid);
+            const deletion = await deleteUserMessageConversation({
               sessionDir: SESSIONS_DIR,
               sessionId: sid,
               messageId,
               getStructuredMessages: () => getCachedMessages(sid),
               setStructuredMessages: (m) => setCachedMessages(sid, m),
             });
+            let updatedTitle: string | null = null;
+            try {
+              updatedTitle = await updateSessionMetadataAfterMessageDelete(sid, {
+                deletedPrompt: deletion.deletedUserContent,
+                firstRemainingPrompt: deletion.firstRemainingUserContent,
+                remainingUserCount: deletion.remainingUserCount,
+              });
+            } catch (metadataErr) {
+              console.warn('[chat-ws] 删除后同步会话元数据失败:', metadataErr);
+            }
             broadcastToSession(sid, {
               type: 'message_deleted',
               sessionId: sid,
@@ -1641,13 +1656,21 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               checkpointMessageIds: await loadCheckpointMessageIds(SESSIONS_DIR, sid),
             });
             broadcastHarnessState(sid);
-            broadcastSessionUpdated('message_deleted', { sessionId: sid }, ws);
+            broadcastSessionUpdated(
+              'message_deleted',
+              updatedTitle ? { sessionId: sid, title: updatedTitle } : { sessionId: sid },
+              ws,
+            );
           } catch (err) {
             const message = err instanceof DeleteMessageNotFoundError
               ? err.message
               : '删除消息失败，请稍后重试。';
             console.error('[chat-ws] delete_user_message failed:', err);
-            sendJSON(ws, { type: 'delete_message_failed', error: message });
+            sendJSON(ws, {
+              type: 'delete_message_failed',
+              error: message,
+              ...(err instanceof DeleteMessageNotFoundError ? { code: err.code } : {}),
+            });
           }
           return;
         }

@@ -1592,8 +1592,8 @@ window.ChatUI = (function () {
     deleteBtn.innerHTML = deleteButtonIconSvg();
     if (window.AppIcon) window.AppIcon.hydrate(deleteBtn);
     deleteBtn.dataset.messageId = messageId;
-    deleteBtn.setAttribute('aria-label', '删除此消息及后续对话');
-    deleteBtn.title = '删除此消息及后续对话';
+    deleteBtn.setAttribute('aria-label', '删除此消息');
+    deleteBtn.title = '删除此消息';
     bindMessageActionButton(deleteBtn, 'delete', messageId);
     return deleteBtn;
   }

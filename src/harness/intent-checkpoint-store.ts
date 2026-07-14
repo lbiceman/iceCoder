@@ -72,6 +72,19 @@ export async function loadIntentCheckpoint(
   return null;
 }
 
+/** 仅重写已有归档内容，不改变 checkpoint 索引顺序或 cursor。 */
+export async function rewriteIntentCheckpoint(
+  sessionDir: string,
+  sessionId: string,
+  archive: IntentCheckpointArchive,
+): Promise<void> {
+  const dest = archivePath(sessionDir, sessionId, archive.messageId);
+  await fs.mkdir(checkpointsDir(sessionDir, sessionId), { recursive: true });
+  const tmp = `${dest}.${randomUUID()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(archive, null, 2), 'utf-8');
+  await fs.rename(tmp, dest);
+}
+
 export interface SaveIntentCheckpointInput {
   sessionDir: string;
   sessionId: string;
@@ -179,7 +192,7 @@ export async function collectTrackedPathsAfterMessage(
   return [...paths];
 }
 
-/** 删除指定 messageId 及其之后的 checkpoint 条目与归档（删除用户消息时调用）。 */
+/** 删除指定 messageId 及其之后的 checkpoint 条目与归档（时间线截断时调用）。 */
 export async function truncateCheckpointsFrom(
   sessionDir: string,
   sessionId: string,
@@ -202,6 +215,31 @@ export async function truncateCheckpointsFrom(
     } catch {
       /* already gone */
     }
+  }
+}
+
+/** 删除单个 checkpoint 条目与归档，保留其后的 checkpoint。 */
+export async function removeCheckpoint(
+  sessionDir: string,
+  sessionId: string,
+  messageId: string,
+): Promise<void> {
+  const index = await loadCheckpointIndex(sessionDir, sessionId);
+  const targetIdx = index.entries.findIndex((entry) => entry.messageId === messageId);
+  if (targetIdx < 0) return;
+
+  const [removed] = index.entries.splice(targetIdx, 1);
+  if (index.cursorMessageId === messageId) {
+    index.cursorMessageId = targetIdx > 0
+      ? index.entries[targetIdx - 1].messageId
+      : null;
+  }
+  await saveCheckpointIndex(sessionDir, sessionId, index);
+
+  try {
+    await fs.unlink(path.join(checkpointsDir(sessionDir, sessionId), removed.archiveFileName));
+  } catch {
+    /* already gone */
   }
 }
 

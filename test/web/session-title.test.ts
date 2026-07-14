@@ -130,4 +130,66 @@ describe('session-title', () => {
     ]);
     expect(index[0].title).toBe('审计多会话实现');
   });
+
+  it('updates message count and replaces an auto title derived from a deleted prompt', async () => {
+    const sessionId = 'delete-title';
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify([{
+        id: sessionId,
+        title: '第一条需求',
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 2,
+      }]),
+      'utf-8',
+    );
+
+    const { updateSessionMetadataAfterMessageDelete } = await import(
+      '../../src/web/session-title.js'
+    );
+    const title = await updateSessionMetadataAfterMessageDelete(sessionId, {
+      deletedPrompt: '第一条需求',
+      firstRemainingPrompt: '第二条需求',
+      remainingUserCount: 1,
+    });
+
+    expect(title).toBe('第二条需求');
+    const index = JSON.parse(await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8')) as {
+      title: string;
+      messageCount: number;
+    }[];
+    expect(index[0]).toMatchObject({ title: '第二条需求', messageCount: 1 });
+  });
+
+  it('preserves a custom title while updating the message count', async () => {
+    const sessionId = 'custom-title';
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify([{
+        id: sessionId,
+        title: '我的专项',
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 2,
+      }]),
+      'utf-8',
+    );
+
+    const { updateSessionMetadataAfterMessageDelete } = await import(
+      '../../src/web/session-title.js'
+    );
+    const title = await updateSessionMetadataAfterMessageDelete(sessionId, {
+      deletedPrompt: '第一条需求',
+      firstRemainingPrompt: '第二条需求',
+      remainingUserCount: 1,
+    });
+
+    expect(title).toBeNull();
+    const index = JSON.parse(await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8')) as {
+      title: string;
+      messageCount: number;
+    }[];
+    expect(index[0]).toMatchObject({ title: '我的专项', messageCount: 1 });
+  });
 });

@@ -1,5 +1,5 @@
 /**
- * 从用户消息起截断 UI / 结构化对话（不回滚工作区）。
+ * 从 UI / 结构化对话中删除单条用户消息（不回滚工作区）。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -9,7 +9,12 @@ import path from 'node:path';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { UiChatMessage } from '../types/intent-checkpoint.js';
 import { readUiSessionMessages, writeUiSessionMessages } from './intent-checkpoint-capture.js';
-import { truncateCheckpointsFrom } from './intent-checkpoint-store.js';
+import {
+  loadCheckpointIndex,
+  loadIntentCheckpoint,
+  removeCheckpoint,
+  rewriteIntentCheckpoint,
+} from './intent-checkpoint-store.js';
 
 async function readStructuredMessages(
   sessionDir: string,
@@ -45,16 +50,16 @@ export class DeleteMessageNotFoundError extends Error {
   }
 }
 
-export function truncateUiMessagesBeforeUserMessage(
+export function removeUiUserMessage(
   uiMessages: UiChatMessage[],
   messageId: string,
 ): UiChatMessage[] | null {
   const idx = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
   if (idx < 0) return null;
-  return uiMessages.slice(0, idx);
+  return [...uiMessages.slice(0, idx), ...uiMessages.slice(idx + 1)];
 }
 
-export function truncateStructuredBeforeUserMessage(
+export function removeStructuredUserMessage(
   structuredMessages: UnifiedMessage[],
   uiMessages: UiChatMessage[],
   messageId: string,
@@ -71,7 +76,7 @@ export function truncateStructuredBeforeUserMessage(
   for (let i = 0; i < structuredMessages.length; i++) {
     if (structuredMessages[i].role === 'user') {
       if (seenUsers === userCountBefore) {
-        return structuredMessages.slice(0, i);
+        return [...structuredMessages.slice(0, i), ...structuredMessages.slice(i + 1)];
       }
       seenUsers++;
     }
@@ -88,13 +93,49 @@ export interface DeleteUserMessageParams {
   setStructuredMessages?: (messages: UnifiedMessage[] | undefined) => void;
 }
 
+async function removeMessageFromCheckpointHistory(
+  sessionDir: string,
+  sessionId: string,
+  messageId: string,
+): Promise<void> {
+  const index = await loadCheckpointIndex(sessionDir, sessionId);
+  const targetIdx = index.entries.findIndex((entry) => entry.messageId === messageId);
+  if (targetIdx < 0) return;
+
+  for (const entry of index.entries.slice(targetIdx + 1)) {
+    const archive = await loadIntentCheckpoint(sessionDir, sessionId, entry.messageId);
+    if (!archive) continue;
+    const nextStructured = removeStructuredUserMessage(
+      archive.structuredMessages,
+      archive.uiMessages,
+      messageId,
+    );
+    const nextUi = removeUiUserMessage(archive.uiMessages, messageId);
+    if (!nextUi) continue;
+    await rewriteIntentCheckpoint(sessionDir, sessionId, {
+      ...archive,
+      uiMessages: nextUi,
+      structuredMessages: nextStructured ?? archive.structuredMessages,
+    });
+  }
+
+  await removeCheckpoint(sessionDir, sessionId, messageId);
+}
+
 export async function deleteUserMessageConversation(
   params: DeleteUserMessageParams,
-): Promise<{ deletedFromMessageId: string }> {
+): Promise<{
+  deletedMessageId: string;
+  deletedUserContent: string;
+  firstRemainingUserContent: string | null;
+  remainingUserCount: number;
+}> {
   const { sessionDir, sessionId, messageId } = params;
   const uiMessages = await readUiSessionMessages(sessionDir, sessionId);
-  const truncatedUi = truncateUiMessagesBeforeUserMessage(uiMessages, messageId);
-  if (!truncatedUi) {
+  const deletedMessage = uiMessages.find((message) =>
+    message.id === messageId && message.role === 'user');
+  const nextUi = removeUiUserMessage(uiMessages, messageId);
+  if (!nextUi) {
     throw new DeleteMessageNotFoundError('未找到该用户消息。');
   }
 
@@ -102,12 +143,21 @@ export async function deleteUserMessageConversation(
   const structured = (cached && cached.length > 0)
     ? cached
     : await readStructuredMessages(sessionDir, sessionId);
-  const truncatedStructured = truncateStructuredBeforeUserMessage(structured, uiMessages, messageId) ?? [];
+  const nextStructured = removeStructuredUserMessage(structured, uiMessages, messageId) ?? structured;
 
-  await writeUiSessionMessages(sessionDir, sessionId, truncatedUi);
-  await writeStructuredMessages(sessionDir, sessionId, truncatedStructured);
-  params.setStructuredMessages?.(truncatedStructured.length > 0 ? truncatedStructured : undefined);
-  await truncateCheckpointsFrom(sessionDir, sessionId, messageId);
+  await writeUiSessionMessages(sessionDir, sessionId, nextUi);
+  await writeStructuredMessages(sessionDir, sessionId, nextStructured);
+  params.setStructuredMessages?.(nextStructured.length > 0 ? nextStructured : undefined);
+  await removeMessageFromCheckpointHistory(sessionDir, sessionId, messageId);
 
-  return { deletedFromMessageId: messageId };
+  const remainingUsers = nextUi.filter((message) => message.role === 'user');
+  const firstRemainingContent = remainingUsers.find((message) =>
+    typeof message.content === 'string' && message.content.trim());
+  return {
+    deletedMessageId: messageId,
+    deletedUserContent: typeof deletedMessage?.content === 'string' ? deletedMessage.content : '',
+    firstRemainingUserContent:
+      typeof firstRemainingContent?.content === 'string' ? firstRemainingContent.content : null,
+    remainingUserCount: remainingUsers.length,
+  };
 }

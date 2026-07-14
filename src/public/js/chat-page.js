@@ -778,12 +778,15 @@ window.ChatPage = (function () {
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
-    Session.fetchServerMessages(function (serverMsgs) {
+    Session.fetchServerMessages(function (serverMsgs, result) {
+      var fetchOk = !result || result.ok !== false;
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
-      var separated = Session.separateToolTraces(raw);
-      Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
+      if (fetchOk) {
+        var separated = Session.separateToolTraces(raw);
+        Session.applyServerChatSnapshot(separated, { fullRender: true, authoritative: true }, isStreaming, WS.isProcessing());
+      }
       if (shouldSkipServerSnapshotSync()) {
-        mergeAndPaintRemoteUserMessages(raw);
+        if (fetchOk) mergeAndPaintRemoteUserMessages(raw);
         if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
         initialHistoryPainted = true;
         pendingInitialPaint = false;
@@ -818,22 +821,24 @@ window.ChatPage = (function () {
       UI.enableAutoScroll();
       syncSendButtonWithWorkload();
     }
-    Session.fetchServerMessages(function (serverMsgs) {
+    Session.fetchServerMessages(function (serverMsgs, result) {
+      if (result && result.ok === false) {
+        renderChatHistoryWithFetch(false, afterHistoryPainted);
+        return;
+      }
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       if (shouldSkipServerSnapshotSync()) {
         mergeAndPaintRemoteUserMessages(raw);
         afterHistoryPainted();
         return;
       }
-      if (raw.length > 0) {
-        var separated = Session.separateToolTraces(raw);
-        Session.applyServerChatSnapshot(
-          separated,
-          { fullRender: false, authoritative: true },
-          isStreaming,
-          WS.isProcessing(),
-        );
-      }
+      var separated = Session.separateToolTraces(raw);
+      Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
       renderChatHistoryWithFetch(false, afterHistoryPainted);
     });
   }
@@ -1512,7 +1517,7 @@ window.ChatPage = (function () {
     overlay.innerHTML =
       '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">' +
         '<h3 id="delete-confirm-title">确认删除？</h3>' +
-        '<p>将删除此消息及之后的全部对话记录，并同步更新模型上下文。<br><br>' +
+        '<p>仅删除此条消息，并同步更新模型上下文；其他对话记录不会改变。<br><br>' +
         '此操作不会回滚工作区文件修改。</p>' +
         '<div class="restore-confirm-actions">' +
           '<button type="button" class="restore-confirm-cancel">取消</button>' +
@@ -1617,6 +1622,16 @@ window.ChatPage = (function () {
 
   function onWsDeleteMessageFailed(data) {
     var msg = (data && data.error) ? data.error : '删除消息失败。';
+    if (data && data.code === 'DELETE_MESSAGE_NOT_FOUND') {
+      pullServerChatSnapshotAuthoritative(function (synced) {
+        if (synced) {
+          notifyUser('该消息已不在服务端记录中，界面已同步。', 'info', { duration: 4000 });
+          return;
+        }
+        notifyUser(msg, 'error', { duration: 5000 });
+      });
+      return;
+    }
     notifyUser(msg, 'error', { duration: 5000 });
   }
 
@@ -1630,7 +1645,11 @@ window.ChatPage = (function () {
       return;
     }
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    Session.fetchServerMessages(function (serverMsgs) {
+    Session.fetchServerMessages(function (serverMsgs, result) {
+      if (result && result.ok === false) {
+        if (done) done();
+        return;
+      }
       if (shouldSkipServerSnapshotSync()) {
         if (done) done();
         return;
@@ -1685,16 +1704,29 @@ window.ChatPage = (function () {
     });
   }
 
-  function pullServerChatSnapshotAuthoritative() {
-    if (shouldSkipServerSnapshotSync()) return;
-    Session.fetchServerMessages(function (serverMsgs) {
-      if (shouldSkipServerSnapshotSync()) return;
+  function pullServerChatSnapshotAuthoritative(done) {
+    if (shouldSkipServerSnapshotSync()) {
+      if (done) done(false);
+      return;
+    }
+    Session.fetchServerMessages(function (serverMsgs, result) {
+      if ((result && result.ok === false) || shouldSkipServerSnapshotSync()) {
+        if (done) done(false);
+        return;
+      }
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
       var separated = Session.separateToolTraces(raw);
-      if (Session.applyServerChatSnapshot(separated, { fullRender: false, authoritative: true }, isStreaming, WS.isProcessing())) {
+      var updated = Session.applyServerChatSnapshot(
+        separated,
+        { fullRender: false, authoritative: true },
+        isStreaming,
+        WS.isProcessing(),
+      );
+      if (updated) {
         renderChatHistoryWithFetch(false);
         Session.saveMessages();
       }
+      if (done) done(true);
     });
   }
 
