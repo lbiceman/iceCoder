@@ -1565,19 +1565,11 @@ window.ChatUI = (function () {
   }
 
   function restoreButtonIconSvg() {
-    return '<svg class="msg-restore-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M2.5 8a5.5 5.5 0 1 0 1.35-3.65"/>' +
-      '<polyline points="2 4.25 2.5 8 6 8"/>' +
-    '</svg>';
+    return window.AppIcon ? window.AppIcon.html('restore', { width: 12, className: 'msg-restore-icon' }) : '';
   }
 
   function deleteButtonIconSvg() {
-    return '<svg class="msg-delete-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M2.5 4h11"/>' +
-      '<path d="M6.25 4V3a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v1"/>' +
-      '<path d="M12.25 4v9.5a1 1 0 0 1-1 1H4.75a1 1 0 0 1-1-1V4"/>' +
-      '<path d="M6.75 7v4M9.25 7v4"/>' +
-    '</svg>';
+    return window.AppIcon ? window.AppIcon.html('trash', { width: 12, className: 'msg-delete-icon' }) : '';
   }
 
   function createRestoreButton(messageId, sentAt) {
@@ -1585,6 +1577,7 @@ window.ChatUI = (function () {
     restoreBtn.type = 'button';
     restoreBtn.className = 'msg-restore-btn';
     restoreBtn.innerHTML = restoreButtonIconSvg();
+    if (window.AppIcon) window.AppIcon.hydrate(restoreBtn);
     restoreBtn.dataset.messageId = messageId;
     if (sentAt) restoreBtn.dataset.sentAt = String(sentAt);
     restoreBtn.setAttribute('aria-label', '回滚到此消息');
@@ -1597,6 +1590,7 @@ window.ChatUI = (function () {
     deleteBtn.type = 'button';
     deleteBtn.className = 'msg-delete-btn';
     deleteBtn.innerHTML = deleteButtonIconSvg();
+    if (window.AppIcon) window.AppIcon.hydrate(deleteBtn);
     deleteBtn.dataset.messageId = messageId;
     deleteBtn.setAttribute('aria-label', '删除此消息及后续对话');
     deleteBtn.title = '删除此消息及后续对话';
@@ -1694,6 +1688,8 @@ window.ChatUI = (function () {
     label.className = 'msg-label';
     if (role === 'system') {
       label.textContent = 'Runtime';
+    } else if (role === 'user' && restoreOpts && restoreOpts.alsoNote) {
+      label.textContent = '备注';
     } else {
       label.textContent = role === 'user' ? 'You' : 'Assistant';
     }
@@ -1834,6 +1830,9 @@ window.ChatUI = (function () {
   function createMessageEl(msg, stripStatusTagFn, msgIndex) {
     var el = document.createElement('div');
     el.className = 'message ' + msg.role;
+    if (msg.alsoNote) {
+      el.classList.add('also-note');
+    }
 
     var idx = typeof msgIndex === 'number' ? msgIndex : msg._msgIndex;
     if (typeof idx === 'number') {
@@ -1849,7 +1848,7 @@ window.ChatUI = (function () {
 
     var restoreOpts = null;
     if (msg.role === 'user' && msg.id) {
-      restoreOpts = { messageId: msg.id, sentAt: msg.sentAt };
+      restoreOpts = { messageId: msg.id, sentAt: msg.sentAt, alsoNote: !!msg.alsoNote };
     }
     el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg), restoreOpts));
 
@@ -2521,6 +2520,17 @@ window.ChatUI = (function () {
     row.parentNode.insertBefore(wrap, row.nextSibling);
   }
 
+  function removeMessageElById(messageId) {
+    if (!elMessages || !messageId) return false;
+    var root = elMessages.querySelector('.message[data-message-id="' + messageId + '"]');
+    if (!root || !root.parentNode) return false;
+    var inHistory = isNodeInHistoryRegion(root);
+    root.parentNode.removeChild(root);
+    if (inHistory) notifyHistoryLayoutChange(root);
+    else notifyTailLayoutChange();
+    return true;
+  }
+
   return {
     init: init,
     scrollToBottom: scrollToBottom,
@@ -2536,6 +2546,7 @@ window.ChatUI = (function () {
     renderMessagesOnly: renderMessagesOnly,
     maybeRepartitionTailIfNeeded: maybeRepartitionTailIfNeeded,
     appendMessageEl: appendMessageEl,
+    removeMessageElById: removeMessageElById,
     insertRemoteUserMessageEl: insertRemoteUserMessageEl,
     updateMessageContent: updateMessageContent,
     updateMessageImagesEl: updateMessageImagesEl,

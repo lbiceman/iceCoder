@@ -1,73 +1,78 @@
 import type { UnifiedMessage } from '../llm/types.js';
 
-const pendingNoteBySession = new Map<string, string>();
-const pendingNoteRunIdBySession = new Map<string, number>();
+export interface AlsoNoteEntry {
+  text: string;
+  runId: number;
+  messageId: string;
+}
+
+const pendingAlsoNotesBySession = new Map<string, AlsoNoteEntry[]>();
+const activeAlsoRunIdBySession = new Map<string, number>();
 
 export const PENDING_NOTE_USAGE_MESSAGE = '用法: /also <补充说明>';
 
-export function formatPendingNoteForHarnessContext(text: string): string {
-  return [
-    'The user provided the following note for this turn. Treat it as a high-priority instruction for the current task, above ordinary conversation history.',
-    'Apply it to all reasoning, tool-use narration, and final response for this turn unless it conflicts with system/developer/tool safety constraints.',
-    '',
-    text,
-  ].join('\n');
-}
-
-export function injectPendingNoteForTurn(
-  messages: UnifiedMessage[],
-  text: string | undefined,
-): UnifiedMessage[] {
-  if (!text?.trim()) return messages;
-  const noteMessage: UnifiedMessage = {
+function buildAlsoNoteUserMessage(text: string): UnifiedMessage {
+  return {
     role: 'user',
-    content: `# pending_note_for_this_turn\n${formatPendingNoteForHarnessContext(text.trim())}`,
+    content: text.trim(),
+    preserveOnCompaction: true,
+    alsoNote: true,
   };
-  const lastUserIndex = (() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') return i;
+}
+
+export function setActiveAlsoRun(sessionId: string, runId: number): void {
+  activeAlsoRunIdBySession.set(sessionId, runId);
+}
+
+export function queueAlsoNote(sessionId: string, entry: AlsoNoteEntry): void {
+  const list = pendingAlsoNotesBySession.get(sessionId) ?? [];
+  list.push(entry);
+  pendingAlsoNotesBySession.set(sessionId, list);
+}
+
+export function drainAlsoNotesForRun(sessionId: string, runId?: number): AlsoNoteEntry[] {
+  const list = pendingAlsoNotesBySession.get(sessionId) ?? [];
+  if (list.length === 0) return [];
+  const kept: AlsoNoteEntry[] = [];
+  const drained: AlsoNoteEntry[] = [];
+  for (const entry of list) {
+    if (runId != null && entry.runId !== runId) {
+      kept.push(entry);
+    } else {
+      drained.push(entry);
     }
-    return -1;
-  })();
-  if (lastUserIndex < 0) return [...messages, noteMessage];
-  return [
-    ...messages.slice(0, lastUserIndex),
-    noteMessage,
-    ...messages.slice(lastUserIndex),
-  ];
+  }
+  if (kept.length > 0) pendingAlsoNotesBySession.set(sessionId, kept);
+  else pendingAlsoNotesBySession.delete(sessionId);
+  return drained;
 }
 
-export function setPendingNote(sessionId: string, text: string, runId?: number): void {
-  pendingNoteBySession.set(sessionId, text);
-  if (runId != null) pendingNoteRunIdBySession.set(sessionId, runId);
-  else pendingNoteRunIdBySession.delete(sessionId);
-}
-
-export function getPendingNote(sessionId: string): string | undefined {
-  return pendingNoteBySession.get(sessionId);
-}
-
-export function clearPendingNote(sessionId: string): void {
-  pendingNoteBySession.delete(sessionId);
-  pendingNoteRunIdBySession.delete(sessionId);
-}
-
-export function consumePendingNote(sessionId: string, runId?: number): string | undefined {
-  const noteRunId = pendingNoteRunIdBySession.get(sessionId);
-  if (runId != null && noteRunId != null && noteRunId !== runId) return undefined;
-  const note = pendingNoteBySession.get(sessionId);
-  if (note) clearPendingNote(sessionId);
-  return note;
+/** 将排队备注写入 canonical 消息列表，与主任务 user 消息同等对待。 */
+export function appendQueuedAlsoNotesToMessages(
+  messages: UnifiedMessage[],
+  sessionId: string,
+): AlsoNoteEntry[] {
+  const runId = activeAlsoRunIdBySession.get(sessionId);
+  const drained = drainAlsoNotesForRun(sessionId, runId);
+  for (const entry of drained) {
+    messages.push(buildAlsoNoteUserMessage(entry.text));
+  }
+  return drained;
 }
 
 export function clearPendingNoteForRun(sessionId: string, runId: number): void {
-  if (pendingNoteRunIdBySession.get(sessionId) === runId) {
-    clearPendingNote(sessionId);
+  const list = pendingAlsoNotesBySession.get(sessionId) ?? [];
+  const kept = list.filter((entry) => entry.runId !== runId);
+  if (kept.length > 0) pendingAlsoNotesBySession.set(sessionId, kept);
+  else pendingAlsoNotesBySession.delete(sessionId);
+  if (activeAlsoRunIdBySession.get(sessionId) === runId) {
+    activeAlsoRunIdBySession.delete(sessionId);
   }
 }
 
-export function hasPendingNote(sessionId: string): boolean {
-  return pendingNoteBySession.has(sessionId);
+export function clearPendingNotesForSession(sessionId: string): void {
+  pendingAlsoNotesBySession.delete(sessionId);
+  activeAlsoRunIdBySession.delete(sessionId);
 }
 
 export function parseAlsoCommand(content: string): { matched: boolean; text: string } {
@@ -98,25 +103,7 @@ export function parseNextCommand(content: string): { matched: boolean; text: str
   return { matched: false, text: '' };
 }
 
-export function injectPendingNote(
-  messages: UnifiedMessage[],
-  sessionId: string,
-): UnifiedMessage[] {
-  const note = pendingNoteBySession.get(sessionId);
-  if (!note) return messages;
-  clearPendingNote(sessionId);
-  return [
-    ...messages,
-    { role: 'user', content: `[备注] ${note}` },
-  ];
-}
-
-export function clearPendingNotesForSession(sessionId: string): void {
-  pendingNoteBySession.delete(sessionId);
-  pendingNoteRunIdBySession.delete(sessionId);
-}
-
 export function resetPendingNotesForTests(): void {
-  pendingNoteBySession.clear();
-  pendingNoteRunIdBySession.clear();
+  pendingAlsoNotesBySession.clear();
+  activeAlsoRunIdBySession.clear();
 }

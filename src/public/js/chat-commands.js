@@ -11,7 +11,7 @@ window.ChatCommands = (function () {
   var SLASH_TRIGGER_RE = /(?:^|\s)\/([^\s/]*)$/;
 
   var SLASH_LOCAL_COMMANDS = [
-    { name: 'also', description: '为下次 LLM 调用附加补充说明', prefix: '/' },
+    { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
     { name: 'next', description: '静默入队下一条任务', prefix: '/' }
   ];
 
@@ -148,9 +148,11 @@ window.ChatCommands = (function () {
     var anchor = isSlash ? (inputAnchorEl || anchorEl) : anchorEl;
     if (!window.ChatDropdown || !anchor) return;
     var anchorRect = anchor.getBoundingClientRect();
+    var activePrefix = cmdActivePrefix;
+    var filteredItems = cmdFiltered.slice();
     window.ChatDropdown.open({
       anchor: anchor,
-      items: cmdFiltered,
+      items: filteredItems,
       placement: 'top',
       placementRef: isSlash ? 'anchor' : 'toolbar',
       align: isSlash ? 'start' : 'center',
@@ -162,10 +164,11 @@ window.ChatCommands = (function () {
         applySelection(idx);
       },
       onClose: function () {
-        cmdFiltered = [];
-        cmdActivePrefix = '';
+        // 刷新过滤列表时 ChatDropdown.open 会先 close 再 open；状态清理由 hide() 负责。
       },
     });
+    cmdActivePrefix = activePrefix;
+    cmdFiltered = filteredItems;
     // 选中态由 ChatDropdown 渲染时按 isCurrent 处理（命令面板没有 isCurrent 概念，
     // 但保留高亮当前 hover/keyboard 选中项的能力：渲染后立即把 cmdSelectedIndex 标 active）
     setTimeout(updateActiveItem, 0);

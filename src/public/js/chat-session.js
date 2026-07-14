@@ -427,6 +427,21 @@ window.ChatSession = (function () {
     messages.push(msg);
   }
 
+  function removeMessageById(messageId) {
+    if (!messageId) return false;
+    var idx = -1;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i] && messages[i].id === messageId) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) return false;
+    messages.splice(idx, 1);
+    reindexMessages();
+    return true;
+  }
+
   function getMessages() {
     return messages;
   }
@@ -503,6 +518,7 @@ window.ChatSession = (function () {
     applyServerChatSnapshot: applyServerChatSnapshot,
     flushToolBatchLocal: flushToolBatchLocal,
     appendMessage: appendMessage,
+    removeMessageById: removeMessageById,
     stampMessageTimestamps: stampMessageTimestamps,
     getMessages: getMessages,
     getToolTraces: getToolTraces,

@@ -8,8 +8,10 @@ import {
   bigramJaccard,
   getLastAssistantText,
   getLatestRealUserText,
+  getLatestUserTextForTaskSwitch,
   isActionableToolRequest,
 } from './harness-message-utils.js';
+import { appendQueuedAlsoNotesToMessages } from '../session/pending-note.js';
 import { TASK_SWITCH_JACCARD_THRESHOLD } from './harness-constants.js';
 import { shouldSkipMemoryRecallOnPostForkRound } from './checkpoint-resume-compact.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
@@ -76,6 +78,16 @@ export async function prepareHarnessRound(
 ): Promise<PrepareHarnessRoundResult> {
   const { state, userMessage, chatFn, logger, onStep, streamFn } = args;
   const { messages: msgs, tools: currentTools } = state;
+
+  const alsoNotes = appendQueuedAlsoNotesToMessages(msgs, deps.sessionId ?? 'default');
+  for (const entry of alsoNotes) {
+    const anchor = state.sessionGoalAnchor?.trim();
+    const supplement = entry.text.trim();
+    if (supplement) {
+      state.sessionGoalAnchor = anchor ? `${anchor}\n\n${supplement}` : supplement;
+      state.taskState.rebindGoal(state.sessionGoalAnchor);
+    }
+  }
 
   await maybeCompact(deps, {
     messages: msgs,
@@ -242,7 +254,7 @@ export async function prepareHarnessRound(
   }
 
   if (!state.taskSwitchInjected) {
-    const latestUserContent = getLatestRealUserText(msgs, userMessage);
+    const latestUserContent = getLatestUserTextForTaskSwitch(msgs, userMessage);
     const lastAssistantText = getLastAssistantText(msgs);
     if (
       latestUserContent

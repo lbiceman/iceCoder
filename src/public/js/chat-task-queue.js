@@ -26,6 +26,14 @@ window.ChatTaskQueue = (function () {
     return oneLine.length > 120 ? oneLine.slice(0, 120) + '…' : oneLine;
   }
 
+  function editIconSvg() {
+    return window.AppIcon ? window.AppIcon.html('edit', { width: 14, className: 'chat-task-queue-icon' }) : '';
+  }
+
+  function deleteIconSvg() {
+    return window.AppIcon ? window.AppIcon.html('trash', { width: 14, className: 'chat-task-queue-icon' }) : '';
+  }
+
   function mount(container) {
     if (!container) return;
     root = document.getElementById('chat-task-queue');
@@ -46,21 +54,26 @@ window.ChatTaskQueue = (function () {
     }
     root.classList.remove('hidden');
     var html = '<div class="chat-task-queue-header">' +
-      '<span>Next 队列</span>' +
-      '<span class="chat-task-queue-count">(' + items.length + ')</span>' +
+      '<span class="chat-task-queue-title">消息队列</span>' +
+      '<span class="chat-task-queue-count">' + items.length + '</span>' +
       '</div><div class="chat-task-queue-list">';
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
       html += '<div class="chat-task-queue-item" data-task-id="' + escapeHtml(item.id) + '">' +
-        '<span class="chat-task-queue-index">' + (i + 1) + '.</span>' +
+        '<span class="chat-task-queue-index">' + (i + 1) + '</span>' +
         '<span class="chat-task-queue-text" title="' + escapeHtml(item.text) + '">' + escapeHtml(summarize(item.text)) + '</span>' +
         '<span class="chat-task-queue-actions">' +
-          '<button type="button" class="chat-task-queue-btn" data-action="edit" aria-label="编辑">编辑</button>' +
-          '<button type="button" class="chat-task-queue-btn" data-action="delete" aria-label="删除">删除</button>' +
+          '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--edit" data-action="edit" title="编辑" aria-label="编辑">' +
+            editIconSvg() +
+          '</button>' +
+          '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--delete" data-action="delete" title="删除" aria-label="删除">' +
+            deleteIconSvg() +
+          '</button>' +
         '</span></div>';
     }
     html += '</div>';
     root.innerHTML = html;
+    if (window.AppIcon) window.AppIcon.hydrate(root);
   }
 
   function setItems(newItems) {

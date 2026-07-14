@@ -37,12 +37,11 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { randomUUID } from 'node:crypto';
 import {
-  injectPendingNoteForTurn,
   parseNextCommand,
   parseAlsoCommand,
   PENDING_NOTE_USAGE_MESSAGE,
-  setPendingNote,
-  consumePendingNote,
+  queueAlsoNote,
+  setActiveAlsoRun,
   clearPendingNoteForRun,
   clearPendingNotesForSession,
 } from '../session/pending-note.js';
@@ -1752,10 +1751,29 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
                 sessionId: runSid,
                 message: '当前没有运行中的任务，/also 只对当前任务的下一轮 LLM 调用生效',
               });
-              sendJSON(ws, { type: 'info', message: '当前没有运行中的任务，/also 只对当前任务的下一轮 LLM 调用生效' });
               return;
             }
-            setPendingNote(runSid, alsoCmd.text, runningTurn.runId);
+            const alsoMessageId = messageId ?? randomUUID();
+            const sentAt = Date.now();
+            queueAlsoNote(runSid, {
+              text: alsoCmd.text,
+              runId: runningTurn.runId,
+              messageId: alsoMessageId,
+            });
+            const uiMessage = {
+              role: 'user',
+              content: alsoCmd.text,
+              id: alsoMessageId,
+              alsoNote: true,
+              sentAt,
+            };
+            void appendMessages([uiMessage], runSid);
+            console.log(`[chat-ws] /also 备注已入队 session=${runSid.slice(0, 8)} note="${alsoCmd.text.slice(0, 60)}"`);
+            broadcastToSession(runSid, {
+              type: 'also_note_appended',
+              sessionId: runSid,
+              message: uiMessage,
+            });
             return;
           }
 
@@ -2047,13 +2065,9 @@ async function handleChatMessage(
     toolDefs.map((t) => t.name),
   );
   const runNoteId = getRunningTurn(runSessionId)?.runId;
-  const consumeAlsoForRun = (): string | undefined => {
-    const note = consumePendingNote(runSessionId, runNoteId);
-    if (note) {
-      broadcastToSession(runSessionId, { type: 'also_consumed', sessionId: runSessionId });
-    }
-    return note;
-  };
+  if (runNoteId != null) {
+    setActiveAlsoRun(runSessionId, runNoteId);
+  }
   if (wsCtx.workspace.detection.changed) {
     broadcastToSession(runSessionId, {
       type: 'workspace_updated',
@@ -2175,7 +2189,7 @@ async function handleChatMessage(
   try {
     const result = await harness.run(
       harnessUserMessage,
-      (msgs, opts) => llmAdapter.chat(injectPendingNoteForTurn(msgs, consumeAlsoForRun()), opts),
+      (msgs, opts) => llmAdapter.chat(msgs, opts),
       (event) => {
         // 同步 fold 进 runningTurn 快照（供 F5/扫码后新订阅者还原）
         foldStepIntoRunningTurn(runSessionId, event);
@@ -2257,7 +2271,7 @@ async function handleChatMessage(
       },
       existingMessages,
       // 流式调用函数
-      (msgs, callback, opts) => llmAdapter.stream(injectPendingNoteForTurn(msgs, consumeAlsoForRun()), callback, opts),
+      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
       // 多模态内容块（图片等）
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );

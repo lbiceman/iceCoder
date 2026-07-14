@@ -1,13 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  setPendingNote,
-  getPendingNote,
-  clearPendingNote,
-  consumePendingNote,
+  queueAlsoNote,
+  setActiveAlsoRun,
+  clearPendingNotesForSession,
   clearPendingNoteForRun,
-  injectPendingNote,
-  injectPendingNoteForTurn,
-  formatPendingNoteForHarnessContext,
+  appendQueuedAlsoNotesToMessages,
+  drainAlsoNotesForRun,
   parseAlsoCommand,
   parseNextCommand,
   resetPendingNotesForTests,
@@ -18,72 +16,75 @@ describe('pending-note', () => {
     resetPendingNotesForTests();
   });
 
-  it('sets, overwrites, reads, and clears pending note per session', () => {
-    setPendingNote('s1', 'first');
-    expect(getPendingNote('s1')).toBe('first');
-    setPendingNote('s1', 'second');
-    expect(getPendingNote('s1')).toBe('second');
-    clearPendingNote('s1');
-    expect(getPendingNote('s1')).toBeUndefined();
+  it('queues and drains also notes for the active run', () => {
+    setActiveAlsoRun('s1', 10);
+    queueAlsoNote('s1', { text: 'first', runId: 10, messageId: 'm1' });
+    queueAlsoNote('s1', { text: 'second', runId: 10, messageId: 'm2' });
+
+    const drained = drainAlsoNotesForRun('s1', 10);
+    expect(drained).toHaveLength(2);
+    expect(drainAlsoNotesForRun('s1', 10)).toHaveLength(0);
   });
 
-  it('consumePendingNote returns the note once and clears it', () => {
-    setPendingNote('s1', 'use Chinese');
-    expect(consumePendingNote('s1')).toBe('use Chinese');
-    expect(consumePendingNote('s1')).toBeUndefined();
-    expect(getPendingNote('s1')).toBeUndefined();
+  it('drainAlsoNotesForRun ignores notes bound to a different run', () => {
+    queueAlsoNote('s1', { text: 'use Chinese', runId: 10, messageId: 'm1' });
+    expect(drainAlsoNotesForRun('s1', 11)).toHaveLength(0);
+    expect(drainAlsoNotesForRun('s1', 10)).toHaveLength(1);
   });
 
-  it('run-scoped pending note only applies to the matching run', () => {
-    setPendingNote('s1', 'use Chinese', 10);
-    expect(consumePendingNote('s1', 11)).toBeUndefined();
-    expect(getPendingNote('s1')).toBe('use Chinese');
-    clearPendingNoteForRun('s1', 11);
-    expect(getPendingNote('s1')).toBe('use Chinese');
-    clearPendingNoteForRun('s1', 10);
-    expect(getPendingNote('s1')).toBeUndefined();
-  });
-
-  it('injectPendingNote appends structured note and clears pending note', () => {
-    setPendingNote('s1', '严格模式');
-    const base = [{ role: 'user' as const, content: 'hello' }];
-    const injected = injectPendingNote(base, 's1');
-
-    expect(injected).toEqual([
-      { role: 'user', content: 'hello' },
-      { role: 'user', content: '[备注] 严格模式' },
-    ]);
-    expect(getPendingNote('s1')).toBeUndefined();
-  });
-
-  it('injectPendingNote is a no-op without pending note', () => {
-    const base = [{ role: 'user' as const, content: 'hello' }];
-    expect(injectPendingNote(base, 's1')).toBe(base);
-  });
-
-  it('formatPendingNoteForHarnessContext treats note as current-turn high-priority instruction', () => {
-    const formatted = formatPendingNoteForHarnessContext('用中文思考和回复');
-    expect(formatted).toContain('high-priority instruction');
-    expect(formatted).toContain('current task');
-    expect(formatted).toContain('用中文思考和回复');
-  });
-
-  it('injectPendingNoteForTurn inserts note as a user message before the current task', () => {
+  it('appendQueuedAlsoNotesToMessages appends plain user messages into canonical history', () => {
+    setActiveAlsoRun('s1', 10);
+    queueAlsoNote('s1', { text: '用中文思考', runId: 10, messageId: 'm1' });
     const base = [
       { role: 'system' as const, content: 'system prompt' },
       { role: 'user' as const, content: 'old task' },
       { role: 'assistant' as const, content: 'old answer' },
-      { role: 'user' as const, content: 'new task' },
     ];
-    const injected = injectPendingNoteForTurn(base, '用中文思考');
+    const drained = appendQueuedAlsoNotesToMessages(base, 's1');
 
-    expect(injected).toHaveLength(5);
-    expect(injected[0]).toBe(base[0]);
-    expect(injected[3]).toMatchObject({ role: 'user' });
-    expect(String(injected[3].content)).toContain('pending_note_for_this_turn');
-    expect(String(injected[3].content)).toContain('用中文思考');
-    expect(injected[4]).toBe(base[3]);
+    expect(drained).toHaveLength(1);
     expect(base).toHaveLength(4);
+    expect(base[3]).toMatchObject({
+      role: 'user',
+      content: '用中文思考',
+      preserveOnCompaction: true,
+      alsoNote: true,
+    });
+  });
+
+  it('appendQueuedAlsoNotesToMessages appends after tool results in a mid-run turn', () => {
+    setActiveAlsoRun('s1', 10);
+    queueAlsoNote('s1', { text: '本轮必须用中文回答', runId: 10, messageId: 'm1' });
+    const base = [
+      { role: 'system' as const, content: 'system prompt' },
+      { role: 'user' as const, content: '找出项目里的 BUG' },
+      { role: 'assistant' as const, content: 'reading files' },
+      { role: 'tool' as const, content: 'file contents' },
+    ];
+    appendQueuedAlsoNotesToMessages(base, 's1');
+
+    expect(base).toHaveLength(5);
+    expect(base[4]).toMatchObject({
+      role: 'user',
+      content: '本轮必须用中文回答',
+      alsoNote: true,
+    });
+  });
+
+  it('clearPendingNoteForRun removes only notes for the matching run', () => {
+    queueAlsoNote('s1', { text: 'run-10', runId: 10, messageId: 'm1' });
+    queueAlsoNote('s1', { text: 'run-11', runId: 11, messageId: 'm2' });
+    clearPendingNoteForRun('s1', 10);
+    expect(drainAlsoNotesForRun('s1', 11)).toHaveLength(1);
+    expect(drainAlsoNotesForRun('s1', 11)).toHaveLength(0);
+  });
+
+  it('clearPendingNotesForSession clears queued notes and active run binding', () => {
+    setActiveAlsoRun('s1', 10);
+    queueAlsoNote('s1', { text: 'x', runId: 10, messageId: 'm1' });
+    clearPendingNotesForSession('s1');
+    expect(drainAlsoNotesForRun('s1', 10)).toHaveLength(0);
+    expect(appendQueuedAlsoNotesToMessages([], 's1')).toHaveLength(0);
   });
 
   it('parseAlsoCommand supports optional whitespace after /also', () => {

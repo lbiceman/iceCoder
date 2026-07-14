@@ -45,8 +45,6 @@ import { fetchQuickTunnelPublicUrl } from '../../web/quicktunnel-url.js';
 import { startTunnel } from '../tunnel/cloudflared-tunnel.js';
 import { isTunnelDevEnabled } from '../../runtime/tunnel-feature.js';
 import {
-  consumePendingNote,
-  injectPendingNoteForTurn,
   parseAlsoCommand,
   PENDING_NOTE_USAGE_MESSAGE,
 } from '../../session/pending-note.js';
@@ -186,7 +184,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   if (serveResult) {
     console.log(`${c.dim}输入 /scan 显示手机连接二维码${c.reset}`);
   }
-  console.log(`${c.dim}输入 /also 附加补充说明，/help 查看命令，/quit 退出${c.reset}`);
+  console.log(`${c.dim}任务运行中可用 /also 注入备注，/help 查看命令，/quit 退出${c.reset}`);
   divider();
 
   // 创建 readline 接口
@@ -248,7 +246,7 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
       console.log(`
 ${c.bold}终端内置命令:${c.reset}
   ${c.cyan}/scan${c.reset}    显示手机连接二维码
-  ${c.cyan}/also${c.reset}    为下次 LLM 调用附加补充说明
+  ${c.cyan}/also${c.reset}    运行中注入用户备注（Web 端；CLI 不支持运行中补充）
   ${c.cyan}/tools${c.reset}   列出可用工具
   ${c.cyan}/clear${c.reset}   清空对话历史
   ${c.cyan}/memory${c.reset}  查看/管理记忆文件
@@ -465,7 +463,7 @@ ${c.bold}终端内置命令:${c.reset}
 
       const result = await harness.run(
         input,
-        (msgs, opts) => ctx.llmAdapter.chat(injectPendingNoteForTurn(msgs, consumePendingNote('default')), opts),
+        (msgs, opts) => ctx.llmAdapter.chat(msgs, opts),
         (event) => {
           if (event.type === 'thinking' && event.content) {
             // 思考内容（部分模型会返回）

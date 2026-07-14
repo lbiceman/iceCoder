@@ -1,10 +1,12 @@
 .chat-task-queue {
-  margin-bottom: 8px;
+  margin: 0 4px 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--bg-input, #1e1e2e);
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  box-shadow:
+    0 1px 0 0 color-mix(in srgb, #ffffff 5%, transparent) inset,
+    0 8px 24px -12px rgba(0, 0, 0, 0.35);
   max-height: 180px;
   overflow: hidden;
   display: flex;
@@ -19,46 +21,62 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
-  font-size: 13px;
+  padding: 0 2px;
+}
+
+.chat-task-queue-title {
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary, #a0a0b0);
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
 }
 
 .chat-task-queue-count {
   font-size: 12px;
   font-weight: 500;
-  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .chat-task-queue-list {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .chat-task-queue-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 6px 6px 6px 8px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--bg-hover, rgba(255, 255, 255, 0.04)) 55%, transparent);
 }
 
 .chat-task-queue-index {
   flex: 0 0 auto;
-  width: 20px;
-  font-size: 12px;
-  color: var(--text-muted, #6b6b7b);
-  text-align: right;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
 }
 
 .chat-task-queue-text {
   flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -67,22 +85,66 @@
 .chat-task-queue-actions {
   flex: 0 0 auto;
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
 }
 
 .chat-task-queue-btn {
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
   background: transparent;
-  color: var(--text-secondary, #a0a0b0);
+  color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
   cursor: pointer;
-  padding: 4px 6px;
-  border-radius: 6px;
-  font-size: 12px;
+  line-height: 0;
+  flex-shrink: 0;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease, transform 140ms ease;
 }
 
-.chat-task-queue-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary, #e8e8f0);
+.chat-task-queue-btn .chat-task-queue-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  opacity: 0.72;
+  transition: opacity 140ms ease;
+}
+
+.chat-task-queue-btn:hover .chat-task-queue-icon,
+.chat-task-queue-btn:focus-visible .chat-task-queue-icon {
+  opacity: 1;
+}
+
+.chat-task-queue-btn:hover,
+.chat-task-queue-btn:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--border-color) 60%, transparent);
+  outline: none;
+}
+
+.chat-task-queue-btn:active {
+  transform: scale(0.94);
+}
+
+.chat-task-queue-btn--delete:hover,
+.chat-task-queue-btn--delete:focus-visible {
+  color: var(--danger);
+  background: var(--danger-light);
+  border-color: color-mix(in srgb, var(--danger) 24%, transparent);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-task-queue-btn {
+    min-width: 32px;
+    min-height: 32px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
 }
 
 @media (max-width: 768px) {

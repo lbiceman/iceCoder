@@ -36,7 +36,7 @@ window.ChatPage = (function () {
   var visibleStreamChunksReceived = false;
   /** tokenUsage 早于 agent 消息到达时的暂存 */
   var pendingTurnTokenUsage = null;
-  var pendingAlsoBubble = null;
+  var pendingAlsoMessageIds = {};
   var remoteMode = false;
   var remoteToken = null;
   /** 本页仅提示一次 MCP 就绪（含 WS 晚连时 connected.mcpReady 补发） */
@@ -364,29 +364,30 @@ window.ChatPage = (function () {
     return body.slice('/next'.length).trim();
   }
 
-  function removePendingAlsoBubble() {
-    if (!pendingAlsoBubble) return;
-    if (pendingAlsoBubble._el && pendingAlsoBubble._el.parentNode) {
-      pendingAlsoBubble._el.parentNode.removeChild(pendingAlsoBubble._el);
+  function createAlsoNoteId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
     }
-    pendingAlsoBubble = null;
-    syncWelcomeState();
+    return 'also-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
   }
 
-  function showPendingAlsoBubble(noteText) {
-    removePendingAlsoBubble();
-    pendingAlsoBubble = {
-      role: 'agent',
-      content: '用户备注：' + noteText,
-      statusTag: 'system',
-      _transient: true,
+  function appendAlsoNoteBubble(noteText, messageId) {
+    var noteMsg = {
+      role: 'user',
+      content: noteText,
+      id: messageId,
+      alsoNote: true,
     };
     if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
-      window.ChatSession.stampMessageTimestamps(pendingAlsoBubble);
+      window.ChatSession.stampMessageTimestamps(noteMsg);
     }
-    UI.appendMessageEl(pendingAlsoBubble, Session.stripStatusTag);
+    Session.appendMessage(noteMsg);
+    UI.appendMessageEl(noteMsg, Session.stripStatusTag);
+    Session.saveMessages();
+    pendingAlsoMessageIds[messageId] = true;
     UI.enableAutoScroll();
     syncWelcomeState();
+    return noteMsg;
   }
 
   function handleAlsoCommand(body) {
@@ -400,8 +401,9 @@ window.ChatPage = (function () {
       Session.saveMessages();
       return true;
     }
-    showPendingAlsoBubble(noteText);
-    WS.sendMessage('/also ' + noteText);
+    var noteId = createAlsoNoteId();
+    appendAlsoNoteBubble(noteText, noteId);
+    WS.sendMessage('/also ' + noteText, { messageId: noteId });
     return true;
   }
 
@@ -481,6 +483,7 @@ window.ChatPage = (function () {
     if (Skills && typeof Skills.clearInput === 'function') Skills.clearInput(elInput);
     else if (elInput) elInput.value = '';
     if (FileRef && typeof FileRef.clearInput === 'function') FileRef.clearInput(elInput);
+    if (Cmd && typeof Cmd.handleInput === 'function') Cmd.handleInput('', elInput);
     UI.autoResizeInput();
   }
 
@@ -530,8 +533,6 @@ window.ChatPage = (function () {
     if (File.hasPendingUploads && File.hasPendingUploads()) return;
     if (File.hasPendingImageLoads && File.hasPendingImageLoads()) return;
     if (!composerBody && !fullText && uploadedFiles.length === 0 && pendingImages.length === 0) return;
-
-    removePendingAlsoBubble();
 
     if (
       window.AppRouter &&
@@ -712,14 +713,32 @@ window.ChatPage = (function () {
     Session.saveMessages();
   }
 
-  function onWsAlsoConsumed(data) {
+  function removeAlsoNoteFromUi(messageId) {
+    if (!messageId) return;
+    delete pendingAlsoMessageIds[messageId];
+    Session.removeMessageById(messageId);
+    UI.removeMessageElById(messageId);
+    Session.saveMessages();
+    syncWelcomeState();
+  }
+
+  function onWsAlsoNoteAppended(data) {
     if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    removePendingAlsoBubble();
+    var msg = data && data.message;
+    if (!msg || !msg.id) return;
+    if (pendingAlsoMessageIds[msg.id]) {
+      delete pendingAlsoMessageIds[msg.id];
+      return;
+    }
+    appendAlsoNoteBubble(msg.content, msg.id);
   }
 
   function onWsAlsoRejected(data) {
     if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    removePendingAlsoBubble();
+    var ids = Object.keys(pendingAlsoMessageIds);
+    for (var i = 0; i < ids.length; i++) {
+      removeAlsoNoteFromUi(ids[i]);
+    }
     appendSystemAgentMessage((data && data.message) || '/also 未生效');
   }
 
@@ -1905,25 +1924,18 @@ window.ChatPage = (function () {
             '</div>' +
             '<div class="composer-toolbar">' +
               '<button class="btn-icon btn-icon-ghost" id="btn-file" title="Upload file" aria-label="Upload file">' +
-                '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+                (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '') +
               '</button>' +
               '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
                 '<span class="chip-label" id="chip-model-label">加载中…</span>' +
-                '<svg class="chip-caret" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 4 6 8 10 4"/></svg>' +
+                (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
               '</button>' +
               '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
-                '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 12 12 6 18 12"/><line x1="12" y1="6" x2="12" y2="20"/></svg>' +
+                (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
               '</button>' +
               '<div class="cmd-palette-anchor">' +
                 '<button class="btn-icon btn-cmd-plus" id="btn-cmd-plus" type="button" title="命令" aria-label="命令">' +
-                  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-                    '<line x1="4" y1="6" x2="14" y2="6"/>' +
-                    '<line x1="4" y1="12" x2="20" y2="12"/>' +
-                    '<line x1="4" y1="18" x2="10" y2="18"/>' +
-                    '<circle cx="16" cy="6" r="1.6" fill="currentColor" stroke="none"/>' +
-                    '<circle cx="6" cy="12" r="1.6" fill="currentColor" stroke="none"/>' +
-                    '<circle cx="14" cy="18" r="1.6" fill="currentColor" stroke="none"/>' +
-                  '</svg>' +
+                  (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
                 '</button>' +
               '</div>' +
             '</div>' +
@@ -1932,6 +1944,8 @@ window.ChatPage = (function () {
         '</div>' +
         '</div>' + /* /chat-main */
       '</div>';
+
+    if (window.AppIcon) window.AppIcon.hydrate(container);
 
     // 缓存 DOM
     elMessages = container.querySelector('#chat-messages');
@@ -2075,7 +2089,7 @@ window.ChatPage = (function () {
     WS.on('message_deleted', onWsMessageDeleted);
     WS.on('delete_message_failed', onWsDeleteMessageFailed);
     WS.on('task_queue_updated', onWsTaskQueueUpdated);
-    WS.on('also_consumed', onWsAlsoConsumed);
+    WS.on('also_note_appended', onWsAlsoNoteAppended);
     WS.on('also_rejected', onWsAlsoRejected);
 
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {

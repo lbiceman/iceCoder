@@ -27,9 +27,6 @@ import {
 import { isSafeSessionId } from '../session-id-guard.js';
 import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
-import {
-  PENDING_NOTE_USAGE_MESSAGE,
-} from '../../session/pending-note.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -397,25 +394,6 @@ export function createSessionsRouter(): Router {
     }
     res.json({ diffSource });
   });
-
-  async function handleAlsoRoute(req: Request, res: Response): Promise<void> {
-    const sessionId = String(req.params.id || SESSION_ID);
-    if (rejectUnsafeSessionId(res, sessionId)) return;
-    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
-    if (!text) {
-      res.json({ ok: false, message: PENDING_NOTE_USAGE_MESSAGE });
-      return;
-    }
-    res.json({
-      ok: false,
-      message: '当前没有运行中的任务，/also 只对当前任务的下一轮 LLM 调用生效',
-    });
-  }
-
-  /**
-   * POST /api/sessions/:id/also - 设置 pendingNote（Web 本地命令）
-   */
-  router.post('/:id/also', handleAlsoRoute);
 
   /**
    * GET /api/sessions/:id/task-queue - 返回待执行队列

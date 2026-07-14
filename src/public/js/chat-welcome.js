@@ -82,29 +82,13 @@ window.ChatWelcome = (function () {
   }
 
   function statIconSvg(name) {
-    if (name === 'mode') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
-    }
-    if (name === 'memory') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>';
-    }
-    if (name === 'harness') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>';
-    }
-    if (name === 'l2') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3 4 7v6c0 4.5 3.4 7.8 8 8 4.6-.2 8-3.5 8-8V7l-8-4Z"/><circle cx="12" cy="11" r="2.5"/></svg>';
-    }
-    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/></svg>';
+    var map = { mode: 'eye', memory: 'database', harness: 'harness', l2: 'shield-badge' };
+    return window.AppIcon ? window.AppIcon.html(map[name] || 'circle', { width: 18 }) : '';
   }
 
   function promptIconSvg(name) {
-    if (name === 'megaphone') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m3 11 8-4v10l-8-4v-2Z"/><path d="M11 9.5 16 7v10l-5-2.5"/><path d="M18 8a3 3 0 0 1 0 8"/></svg>';
-    }
-    if (name === 'spark') {
-      return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3 9.5 9.5 3 12l6.5 2.5L12 21l2.5-6.5L21 12l-6.5-2.5L12 3Z"/></svg>';
-    }
-    return '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 8l-2 8 8-2 2-8-8 2Z"/><path d="m14 10 4 4"/></svg>';
+    var map = { megaphone: 'megaphone', spark: 'spark', code: 'code-cursor' };
+    return window.AppIcon ? window.AppIcon.html(map[name] || 'code-cursor', { width: 18 }) : '';
   }
 
   function buildMarkup(remoteMode) {
@@ -136,7 +120,7 @@ window.ChatWelcome = (function () {
         '<header class="chat-welcome-header">' +
           '<div class="chat-welcome-brand">' +
             '<span class="chat-welcome-logo" aria-hidden="true">' +
-              '<svg viewBox="0 0 100 100" width="40" height="40"><circle cx="50" cy="50" r="41" fill="currentColor" opacity="0.12"/><g fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"><path d="M21 37 A9 9 0 0 1 39 37 L39 59 A9 9 0 0 1 21 59 Z"/><path d="M61 37 A9 9 0 0 1 79 37 L79 59 A9 9 0 0 1 61 59 Z"/></g></svg>' +
+              (window.AppIcon ? window.AppIcon.html('logo', { width: 40 }) : '') +
             '</span>' +
             '<div class="chat-welcome-headings">' +
               '<h1 class="chat-welcome-title">IceCoder 已就绪</h1>' +
@@ -198,6 +182,7 @@ window.ChatWelcome = (function () {
     elRoot.setAttribute('role', 'region');
     elRoot.setAttribute('aria-label', '欢迎与快速上手');
     elRoot.innerHTML = buildMarkup(!!remoteMode);
+    if (window.AppIcon) window.AppIcon.hydrate(elRoot);
 
     elRoot.addEventListener('click', function (e) {
       var btn = e.target && e.target.closest ? e.target.closest('[data-prompt-index]') : null;

@@ -33,6 +33,8 @@ export interface UnifiedMessage {
   preserveOnCompaction?: boolean;
   /** 连续失败阶梯 ephemeral 注入；meaningful_progress 后由 Harness 移除 */
   ephemeralFailureRecovery?: 'light' | 'evidence' | 'strong';
+  /** 运行中 /also 注入的用户备注；与主任务 user 消息同等写入 canonical 历史 */
+  alsoNote?: boolean;
 }
 
 /**

@@ -606,6 +606,23 @@
   border-bottom-right-radius: 4px;
 }
 
+.message.user.also-note {
+  background: #2F9CB0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 4px 14px rgba(47, 156, 176, 0.28);
+}
+
+.message.user.also-note .msg-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.92;
+}
+
+.message.user.also-note .msg-content::before {
+  content: '💬 ';
+  opacity: 0.85;
+}
+
 .message.assistant,
 .message.agent {
   align-self: flex-start;
@@ -726,7 +743,7 @@
   border: none;
   border-radius: 2px;
   background: transparent;
-  color: inherit;
+  color: #fff;
   cursor: pointer;
   line-height: 0;
   flex-shrink: 0;
@@ -737,20 +754,20 @@
   display: block;
   width: 12px;
   height: 12px;
-  opacity: 0.45;
+  opacity: 0.92;
 }
 
 .message.user .msg-restore-btn.msg-restore-btn--ready .msg-restore-icon {
-  opacity: 0.45;
+  opacity: 0.92;
 }
 
 .message.user .msg-restore-btn:not(.msg-restore-btn--ready) .msg-restore-icon {
-  opacity: 0.2;
+  opacity: 0.55;
 }
 
 .message.user .msg-delete-btn:hover:not(:disabled) .msg-delete-icon,
 .message.user .msg-restore-btn.msg-restore-btn--ready:hover:not(:disabled) .msg-restore-icon {
-  opacity: 0.75;
+  opacity: 1;
 }
 
 .message.user .msg-delete-btn:disabled,
@@ -760,7 +777,7 @@
 
 .message.user .msg-delete-btn:disabled .msg-delete-icon,
 .message.user .msg-restore-btn:disabled .msg-restore-icon {
-  opacity: 0.25;
+  opacity: 0.45;
 }
 
 .message.system {
