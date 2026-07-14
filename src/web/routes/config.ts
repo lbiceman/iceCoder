@@ -21,7 +21,8 @@ import {
   validateShellBlacklistPatterns,
 } from '../../tools/shell-sandbox.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
-import { isAppConfigReady, isPlaceholderApiKey } from '../../config/config-readiness.js';
+import { isAppConfigReady } from '../../config/config-readiness.js';
+import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config/resolve-api-key.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
 import { applyRuntimeDataEnvDefaults } from '../../cli/paths.js';
 import {
@@ -116,16 +117,16 @@ function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown },
   };
 }
 
-/** 验证单个提供者配置：无效返回错误文案，合法返回 null */
+/** 验证单个提供者配置：无效返回错误文案，合法返回 null（apiKey 允许来自环境变量） */
 function validateProvider(provider: ProviderConfig): string | null {
   if (!provider.apiUrl || provider.apiUrl.trim() === '') {
     return 'API 地址不能为空';
   }
-  if (!provider.apiKey || provider.apiKey.trim() === '') {
-    return 'API 密钥不能为空';
-  }
-  if (isPlaceholderApiKey(provider.apiKey)) {
-    return '请填写有效的 API 密钥，不能使用占位符';
+  const resolved = resolveProviderApiKey(provider);
+  if (!resolved.apiKey) {
+    const candidates = envKeyCandidatesForProvider(provider);
+    const hint = candidates.length > 0 ? `，或设置环境变量 ${candidates.join(' / ')}` : '';
+    return `API 密钥不能为空（可在配置中填写${hint}）`;
   }
   if (!provider.modelName || provider.modelName.trim() === '') {
     return '模型名称不能为空';
@@ -241,13 +242,20 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       const data = await fs.readFile(configFile, 'utf-8');
       const config = JSON.parse(data) as IceCoderConfigFile;
 
-      // 返回前遮蔽 API 密钥
-      const maskedProviders = config.providers.map((provider: ProviderConfig, index: number) => ({
-        ...sanitizeProvider(provider, index),
-        apiKey: maskApiKey(provider.apiKey),
-        // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
-        maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),
-      }));
+      // 返回前遮蔽 API 密钥；标注 Key 是否来自环境变量（env 时不回传密钥内容）
+      const maskedProviders = config.providers.map((provider: ProviderConfig, index: number) => {
+        const sanitized = sanitizeProvider(provider, index);
+        const resolved = resolveProviderApiKey(sanitized);
+        const fromEnv = resolved.source === 'env';
+        return {
+          ...sanitized,
+          apiKey: fromEnv ? '' : maskApiKey(provider.apiKey),
+          apiKeySource: resolved.source,
+          ...(fromEnv && resolved.envVar ? { apiKeyEnvVar: resolved.envVar } : {}),
+          // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
+          maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),
+        };
+      });
 
       res.json({
         providers: maskedProviders,

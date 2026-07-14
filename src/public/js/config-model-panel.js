@@ -98,9 +98,14 @@ window.ModelConfigPanel = (function () {
     }
   }
 
+  function hasEnvApiKey(prov) {
+    return !!(prov && prov.apiKeySource === 'env');
+  }
+
   function isProviderEnabled(prov) {
-    return !!(prov && prov.apiUrl && prov.apiKey && prov.modelName
-      && !/your-api-key/i.test(prov.apiKey));
+    if (!prov || !prov.apiUrl || !prov.modelName) return false;
+    if (hasEnvApiKey(prov)) return true;
+    return !!(prov.apiKey && !/your-api-key/i.test(prov.apiKey));
   }
 
   function notifyModelConfigChanged() {
@@ -186,7 +191,10 @@ window.ModelConfigPanel = (function () {
     if (!prov.apiUrl || prov.apiUrl.trim() === '') {
       errors.apiUrl = '请填写 API 地址';
     }
-    if (!prov.apiKey || prov.apiKey.trim() === '') {
+    // 密钥来自环境变量时允许留空
+    if (hasEnvApiKey(prov)) {
+      // 不校验 apiKey
+    } else if (!prov.apiKey || prov.apiKey.trim() === '') {
       errors.apiKey = '请填写 API 密钥';
     } else if (/your-api-key/i.test(prov.apiKey)) {
       errors.apiKey = '请填写有效的 API 密钥';
@@ -236,7 +244,13 @@ window.ModelConfigPanel = (function () {
     var temperature = detailEl.querySelector('[data-field="temperature"]');
     var maxContext = detailEl.querySelector('[data-field="maxContextTokens"]');
     if (apiUrl) prov.apiUrl = apiUrl.value.trim();
-    if (apiKey) prov.apiKey = apiKey.value;
+    if (apiKey) {
+      prov.apiKey = apiKey.value;
+      // 用户手动输入非空、非脱敏值 → 视为来自配置，覆盖 env 来源标记
+      if (apiKey.value && apiKey.value.trim() !== '' && apiKey.value.indexOf('*') === -1) {
+        prov.apiKeySource = 'config';
+      }
+    }
     if (modelName) prov.modelName = modelName.value.trim();
     if (temperature) {
       prov.parameters = prov.parameters || {};
@@ -309,7 +323,10 @@ window.ModelConfigPanel = (function () {
         '</div>' +
         '<div class="form-group">' +
           '<label for="model-apiKey-' + index + '">API 密钥</label>' +
-          '<input type="password" id="model-apiKey-' + index + '" data-field="apiKey" placeholder="sk-..." value="' + escapeAttr(prov.apiKey || '') + '">' +
+          '<input type="password" id="model-apiKey-' + index + '" data-field="apiKey" placeholder="' + (hasEnvApiKey(prov) ? '已从环境变量读取，可留空' : 'sk-...') + '" value="' + escapeAttr(prov.apiKey || '') + '">' +
+          (hasEnvApiKey(prov)
+            ? '<span class="field-hint">已从环境变量 <code>' + escapeHtml(prov.apiKeyEnvVar || '') + '</code> 读取，留空即使用该变量；填写将改用此处的密钥。</span>'
+            : '') +
           '<span class="error-msg" data-error="apiKey"></span>' +
         '</div>' +
         '<div class="form-group">' +
@@ -412,7 +429,9 @@ window.ModelConfigPanel = (function () {
         isDefault: i === defaultIndex,
         supportsVision: original.supportsVision !== undefined ? original.supportsVision : true,
         maxContextTokens: original.maxContextTokens,
-        requestTimeoutMs: original.requestTimeoutMs
+        requestTimeoutMs: original.requestTimeoutMs,
+        apiKeySource: original.apiKeySource,
+        apiKeyEnvVar: original.apiKeyEnvVar
       });
     }
     return result;
