@@ -1116,6 +1116,22 @@ body.setup-required .chat-sidebar-settings-btn {
 .form-group input.error { border-color: var(--danger); }
 .form-group .error-msg { color: var(--danger); font-size: 12px; margin-top: 2px; }
 
+.form-group .field-hint {
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.form-group .field-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
 .slider-group {
   display: flex;
   align-items: center;

@@ -4,24 +4,19 @@
 
 import fs from 'fs/promises';
 import type { IceCoderConfigFile, ProviderConfig } from '../web/types.js';
+import {
+  PLACEHOLDER_API_KEY_MARKERS,
+  isPlaceholderApiKey,
+  resolveProviderApiKey,
+} from './resolve-api-key.js';
 
-/** 默认占位 API Key（与 paths.ts / config.example.json 一致） */
-export const PLACEHOLDER_API_KEY_MARKERS = [
-  'sk-your-api-key-here',
-  'your-api-key-here',
-] as const;
+// 向后兼容：历史上占位符助手从本文件导出，保留 re-export 以免破坏既有引用与测试。
+export { PLACEHOLDER_API_KEY_MARKERS, isPlaceholderApiKey };
 
-export function isPlaceholderApiKey(apiKey: string): boolean {
-  const trimmed = apiKey.trim();
-  if (!trimmed) return true;
-  const lower = trimmed.toLowerCase();
-  return PLACEHOLDER_API_KEY_MARKERS.some((marker) => lower.includes(marker));
-}
-
-/** 单个 provider 是否具备可用的 LLM 连接信息 */
+/** 单个 provider 是否具备可用的 LLM 连接信息（apiKey 可来自环境变量） */
 export function isProviderReady(provider: ProviderConfig): boolean {
   if (!provider.apiUrl?.trim()) return false;
-  if (!provider.apiKey?.trim() || isPlaceholderApiKey(provider.apiKey)) return false;
+  if (!resolveProviderApiKey(provider).apiKey) return false;
   if (!provider.modelName?.trim()) return false;
   return true;
 }
