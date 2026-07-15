@@ -63,7 +63,7 @@
 
 .chat-messages::-webkit-scrollbar,
 .diff-file-body::-webkit-scrollbar,
-.cmd-palette .cmd-dropdown::-webkit-scrollbar {
+.cmd-dropdown::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
@@ -81,7 +81,6 @@
   .config-page { padding: 0 12px; margin: 16px auto; }
   .form-grid { grid-template-columns: 1fr; }
   .chat-messages { padding: 12px; gap: 10px; }
-  .chat-input-area > .chat-input-row { padding: 16px 12px; }
   .session-pet-indicator { bottom: 72px; }
   .message { max-width: 90%; padding: 10px 14px; }
 }
