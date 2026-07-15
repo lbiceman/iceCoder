@@ -10,7 +10,7 @@
 
 **Work / chat** — multi-session sidebar, tool execution trail, Ice Bean indicator, `#` / `@` composer:
 
-![Desktop — work chat: Unity session, tool calls, and Ice Bean](./docs/assets/desktop-work-chat.png)
+![Desktop — work chat: Android session, tool calls, and Ice Bean](./docs/assets/desktop-work-chat.png)
 
 **Memory map** — tag filters + force-directed graph; click nodes for details:
 
@@ -20,17 +20,21 @@
 
 ![Desktop — skills library: list, preview, and “Use skill”](./docs/assets/desktop-skills.png)
 
+**Settings · General** — dark/light theme, data directory, security options:
+
+![Desktop — general settings: theme and data directory](./docs/assets/desktop-config-general.png)
+
+**Settings · Model** — providers, API keys, temperature, context limit:
+
+![Desktop — model settings: provider list and configuration form](./docs/assets/desktop-config-model.png)
+
 **Settings · MCP** — manage MCP servers, start/stop, tool list, JSON config:
 
-![Desktop — MCP settings: server list and browsermcp detail](./docs/assets/desktop-config-mcp.png)
+![Desktop — MCP settings: server list and unity-mcp detail](./docs/assets/desktop-config-mcp.png)
 
-**Remote via QR (`~scan`)** — phone and PC share the **same session id** (same LAN):
+**Work / chat (light theme)** — same layout with light appearance:
 
-![Desktop — ~scan remote control: QR code and session URL](./docs/assets/desktop-remote-scan.png)
-
-Welcome dashboard (mode / Memory / Harness / L2·Gate):
-
-![Desktop — welcome dashboard and sidebar status panel](./docs/assets/web-ui.png)
+![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 
 ### Mobile H5
 
@@ -38,15 +42,23 @@ Same bundle as desktop; routes `#/m/*`; bottom tabs: Work / Memory / Skills / Se
 
 **Work** — chat detail, model picker, token stats:
 
-![Mobile — work chat](./docs/assets/mobile-work-chat.png)
+![Mobile — work chat (dark theme)](./docs/assets/mobile-work-chat.png)
+
+**Work (light theme)** — same chat layout with light appearance:
+
+![Mobile — work chat (light theme)](./docs/assets/mobile-work-chat-light.png)
 
 **Skills** — card list with delete and “Use skill”:
 
 ![Mobile — skills page](./docs/assets/mobile-skills.png)
 
-**Settings · MCP** — same MCP management as desktop:
+**Settings** — theme, data directory, and execution options:
 
-![Mobile — MCP settings](./docs/assets/mobile-config-mcp.png)
+![Mobile — settings (dark theme)](./docs/assets/mobile-config-general.png)
+
+**Settings (light theme)** — same settings with light appearance:
+
+![Mobile — settings (light theme)](./docs/assets/mobile-config-light.png)
 
 ---
 

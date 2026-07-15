@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "total_questions": 0,
+    "passed": 0,
+    "failed": 0,
+    "overall_accuracy": 0.0
+  },
+  "by_category": {},
+  "by_sample": [],
+  "metadata": {
+    "timestamp": "2026-05-04T14:19:57.110142",
+    "host": "127.0.0.1",
+    "port": 3000,
+    "dataset": "locomo10.json",
+    "elapsed_seconds": 2319.5,
+    "threshold": 0.6,
+    "sample_ids": [
+      "conv-47"
+    ],
+    "categories": null,
+    "max_qa": null
+  },
+  "details": [
+    {
+      "sample_id": "conv-47",
+      "total_qa": 190,
+      "qa_results": [],
+      "error": "[Errno 22] Invalid argument",
+      "timing": {
+        "inject_seconds": 1238.0,
+        "messages_sent": 166
+      }
+    }
+  ]
+}
