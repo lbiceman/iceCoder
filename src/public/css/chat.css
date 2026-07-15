@@ -866,7 +866,7 @@
 /* 阴影遮罩盒：作为 .chat-input-area 的第一个子元素，
    用 position: absolute 钉在输入框正上方，固定不动。
    不要用 backdrop-filter（会把消息糊成一团）。
-   改用 box-shadow 朝下投射 + 顶部一条窄渐变做"光打下来"的阴影效果。 */
+   渐变 + 朝上投射的 box-shadow，只在消息区一侧产生淡出，不向输入框下方漏阴影。 */
 .chat-fade-overlay {
   position: absolute;
   left: 0;
@@ -880,7 +880,7 @@
     transparent,
     var(--chat-bg, #f8f9fb) 100%
   );
-  box-shadow: 0 12px 12px -8px var(--chat-bg, #f8f9fb);
+  box-shadow: 0 -10px 16px -6px var(--chat-bg, #f8f9fb);
 }
 [data-theme="dark"] .chat-fade-overlay {
   background: linear-gradient(
@@ -888,7 +888,7 @@
     transparent,
     var(--chat-bg, #14141a) 100%
   );
-  box-shadow: 0 12px 12px -8px var(--chat-bg, #14141a);
+  box-shadow: 0 -10px 16px -6px var(--chat-bg, #14141a);
 }
 .chat-input-area > .file-upload-status,
 .chat-input-area > .pending-images-preview {
@@ -1287,17 +1287,20 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--danger);
-  color: #fff;
-  border: none;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
   font-size: 12px;
-  line-height: 20px;
+  line-height: 17px;
   text-align: center;
   cursor: pointer;
   padding: 0;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .pending-image-remove:hover {
-  background: #dc2626;
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ── Message Images ── */
