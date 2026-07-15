@@ -18,6 +18,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { analyzeShellSandbox } from './shell-sandbox.js';
 import { buildShellChildEnv } from './shell-host-guard.js';
+import { resolveShellExecutable } from './shell-spawn-env.js';
 import { killShellProcessTree } from './shell-process-kill.js';
 
 /** 任务状态 */
@@ -341,7 +342,7 @@ export class BackgroundTaskManager extends EventEmitter {
 
     const taskId = generateId();
     const isWindows = process.platform === 'win32';
-    const shell = isWindows ? 'cmd.exe' : '/bin/sh';
+    const shell = resolveShellExecutable();
     const shellArgs = isWindows ? ['/c', command] : ['-c', command];
 
     const child = spawn(shell, shellArgs, {

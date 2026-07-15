@@ -65,10 +65,15 @@ function buildEnv(opts: ServerProcessOptions, base: NodeJS.ProcessEnv): NodeJS.P
   const useElectronNode = opts.electronRunAsNode !== false;
   const pathExtras: string[] = [];
   if (process.platform === 'win32') {
+    const systemRoot = (base.SystemRoot || base.windir || 'C:\\Windows').trim();
     const localAppData = base.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
     const appData = base.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming');
     const programFiles = base.ProgramFiles ?? 'C:\\Program Files';
     pathExtras.push(
+      path.join(systemRoot, 'System32'),
+      path.join(systemRoot, 'SysWOW64'),
+      path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0'),
+      systemRoot,
       path.join(programFiles, 'nodejs'),
       path.join(localAppData, 'Programs', 'nodejs'),
       path.join(appData, 'npm'),
@@ -213,7 +218,9 @@ function stopServer(child: ChildProcess): Promise<void> {
       if (process.platform === 'win32' && child.pid) {
         try {
           const { spawn: sp } = require('node:child_process') as typeof import('node:child_process');
-          sp('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+          const systemRoot = (process.env.SystemRoot || process.env.windir || 'C:\\Windows').trim();
+          const taskkill = path.join(systemRoot, 'System32', 'taskkill.exe');
+          sp(taskkill, ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
             .on('exit', done)
             .on('error', done);
         } catch {

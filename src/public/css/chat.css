@@ -1,15 +1,12 @@
-/* 流式思考块（仅当轮展示，不入库）— 特异性须高于 .message.assistant */
-.message.assistant.message-thinking,
-.message.agent.message-thinking {
+/* 流式思考块（仅当轮展示，不入库）— 特异性须高于 .message.assistant / .message.agent */
+.message:is(.assistant, .agent).message-thinking {
   color: var(--msg-thinking-text);
   border: 1px solid var(--msg-agent-border);
   border-left: 2px solid var(--msg-thinking-border);
   padding: 8px 10px;
 }
-.message.assistant.message-thinking .msg-label,
-.message.agent.message-thinking .msg-label,
-.message.assistant.message-thinking .msg-thinking-toggle,
-.message.agent.message-thinking .msg-thinking-toggle {
+.message:is(.assistant, .agent).message-thinking .msg-label,
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle {
   font-size: 0.8em;
   font-weight: 600;
   color: var(--msg-thinking-label);
@@ -17,8 +14,7 @@
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
-.message.assistant.message-thinking .msg-thinking-toggle,
-.message.agent.message-thinking .msg-thinking-toggle {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -33,43 +29,33 @@
   border-radius: 4px;
   transition: color var(--transition), background var(--transition);
 }
-.message.assistant.message-thinking .msg-thinking-toggle-header,
-.message.agent.message-thinking .msg-thinking-toggle-header {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle-header {
   margin: 0 0 4px;
 }
-.message.assistant.message-thinking .msg-thinking-toggle-footer,
-.message.agent.message-thinking .msg-thinking-toggle-footer {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle-footer {
   margin: 4px 0 0;
 }
-.message.assistant.message-thinking .msg-thinking-toggle:hover,
-.message.agent.message-thinking .msg-thinking-toggle:hover {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle:hover {
   color: var(--accent);
   background: var(--bg-hover);
 }
-.message.assistant.message-thinking .msg-thinking-toggle-icon,
-.message.agent.message-thinking .msg-thinking-toggle-icon {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle-icon {
   font-size: 1.85em;
   line-height: 1;
   transition: none;
 }
-.message.assistant.message-thinking .msg-thinking-toggle-footer .msg-thinking-toggle-icon,
-.message.agent.message-thinking .msg-thinking-toggle-footer .msg-thinking-toggle-icon {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-toggle-footer .msg-thinking-toggle-icon {
   transform: rotate(180deg);
 }
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-toggle-icon,
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-toggle-icon,
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-footer .msg-thinking-toggle-icon,
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-footer .msg-thinking-toggle-icon {
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-toggle-icon,
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-footer .msg-thinking-toggle-icon {
   transform: rotate(-90deg);
 }
-.message.assistant.message-thinking.is-collapsed .msg-thinking-body,
-.message.agent.message-thinking.is-collapsed .msg-thinking-body,
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-footer,
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-footer {
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-body,
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-footer {
   display: none;
 }
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header,
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header {
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header {
   margin: 0;
 }
 /* 收起态：Thinking 逐字从左到右跳动（展开时不播放） */
@@ -86,54 +72,26 @@
     transform: translateY(0);
   }
 }
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char,
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
   display: inline-block;
   animation: msg-thinking-char-bounce 1.35s ease-in-out infinite;
 }
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(1),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(1) {
-  animation-delay: 0s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(2),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(2) {
-  animation-delay: 0.08s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(3),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(3) {
-  animation-delay: 0.16s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(4),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(4) {
-  animation-delay: 0.24s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(5),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(5) {
-  animation-delay: 0.32s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(6),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(6) {
-  animation-delay: 0.4s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(7),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(7) {
-  animation-delay: 0.48s;
-}
-.message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(8),
-.message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(8) {
-  animation-delay: 0.56s;
-}
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(1) { animation-delay: 0s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(2) { animation-delay: 0.08s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(3) { animation-delay: 0.16s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(4) { animation-delay: 0.24s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(5) { animation-delay: 0.32s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(6) { animation-delay: 0.4s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(7) { animation-delay: 0.48s; }
+.message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char:nth-child(8) { animation-delay: 0.56s; }
 @media (prefers-reduced-motion: reduce) {
-  .message.assistant.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char,
-  .message.agent.message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
+  .message:is(.assistant, .agent).message-thinking.is-collapsed .msg-thinking-toggle-header .msg-thinking-char {
     animation: none;
   }
 }
 /* 不设 max-height / 内层滚动，高度随内容增长，由 .chat-messages 统一贴底跟滚（80px 阈值） */
-.message.assistant.message-thinking .msg-thinking-body,
-.message.agent.message-thinking .msg-thinking-body,
-.message.assistant.message-thinking > :not(.msg-label):not(.msg-images),
-.message.agent.message-thinking > :not(.msg-label):not(.msg-images) {
+.message:is(.assistant, .agent).message-thinking .msg-thinking-body,
+.message:is(.assistant, .agent).message-thinking > :not(.msg-label):not(.msg-images) {
   color: var(--msg-thinking-text);
   font-size: 0.9em;
   line-height: 1.55;
@@ -294,8 +252,7 @@
   align-self: flex-end;
   margin-left: auto;
 }
-.chat-vhistory-slot .message.assistant,
-.chat-vhistory-slot .message.agent {
+.chat-vhistory-slot .message:is(.assistant, .agent) {
   align-self: flex-start;
 }
 .chat-vhistory-slot .tool-trace-group {
@@ -624,8 +581,7 @@
   opacity: 0.85;
 }
 
-.message.assistant,
-.message.agent {
+.message:is(.assistant, .agent) {
   align-self: flex-start;
   background: var(--msg-agent-bg);
   border: 1px solid var(--msg-agent-border);
@@ -661,8 +617,7 @@
   white-space: nowrap;
 }
 
-.message.agent .msg-token-usage,
-.message.assistant .msg-token-usage {
+.message:is(.assistant, .agent) .msg-token-usage {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -866,7 +821,7 @@
 /* 阴影遮罩盒：作为 .chat-input-area 的第一个子元素，
    用 position: absolute 钉在输入框正上方，固定不动。
    不要用 backdrop-filter（会把消息糊成一团）。
-   改用 box-shadow 朝下投射 + 顶部一条窄渐变做"光打下来"的阴影效果。 */
+   渐变 + 朝上投射的 box-shadow，只在消息区一侧产生淡出，不向输入框下方漏阴影。 */
 .chat-fade-overlay {
   position: absolute;
   left: 0;
@@ -880,7 +835,7 @@
     transparent,
     var(--chat-bg, #f8f9fb) 100%
   );
-  box-shadow: 0 12px 12px -8px var(--chat-bg, #f8f9fb);
+  box-shadow: 0 -10px 16px -6px var(--chat-bg, #f8f9fb);
 }
 [data-theme="dark"] .chat-fade-overlay {
   background: linear-gradient(
@@ -888,7 +843,7 @@
     transparent,
     var(--chat-bg, #14141a) 100%
   );
-  box-shadow: 0 12px 12px -8px var(--chat-bg, #14141a);
+  box-shadow: 0 -10px 16px -6px var(--chat-bg, #14141a);
 }
 .chat-input-area > .file-upload-status,
 .chat-input-area > .pending-images-preview {
@@ -929,17 +884,20 @@
   min-width: 0;
   position: relative;
 }
-.skill-chips-bar {
+.skill-chips-bar,
+.file-ref-chips-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 0 10px 8px;
 }
-.skill-chips-bar.hidden {
+.skill-chips-bar.hidden,
+.file-ref-chips-bar.hidden {
   display: none;
 }
-.skill-chips-bar .skill-chip {
+.skill-chips-bar .skill-chip,
+.file-ref-chips-bar .file-ref-chip {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -947,17 +905,31 @@
   border-radius: 6px;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--chip-skill-fg);
-  background: var(--chip-skill-bg);
-  border: 1px solid var(--chip-skill-border);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
-.skill-chips-bar .skill-chip-label {
+.skill-chips-bar .skill-chip {
+  color: var(--chip-skill-fg);
+  background: var(--chip-skill-bg);
+  border: 1px solid var(--chip-skill-border);
+}
+.file-ref-chips-bar .file-ref-chip {
+  color: var(--chip-file-fg);
+  background: var(--chip-file-bg);
+  border: 1px solid var(--chip-file-border);
+  max-width: min(100%, 280px);
+}
+.skill-chips-bar .skill-chip-label,
+.file-ref-chips-bar .file-ref-chip-label {
   line-height: 1.5;
 }
-.skill-chips-bar .skill-chip-remove {
+.file-ref-chips-bar .file-ref-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skill-chips-bar .skill-chip-remove,
+.file-ref-chips-bar .file-ref-chip-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -983,66 +955,15 @@
   background: color-mix(in srgb, var(--chip-skill-fg) 22%, transparent);
   outline: none;
 }
-.skill-chips-bar .skill-chip.is-selected {
-  border-color: var(--chip-skill-fg);
-  box-shadow: 0 0 0 2px var(--chip-skill-ring);
-}
-.file-ref-chips-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px 8px;
-}
-.file-ref-chips-bar.hidden {
-  display: none;
-}
-.file-ref-chips-bar .file-ref-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px 2px 8px;
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--chip-file-fg);
-  background: var(--chip-file-bg);
-  border: 1px solid var(--chip-file-border);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-  max-width: min(100%, 280px);
-}
-.file-ref-chips-bar .file-ref-chip-label {
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.file-ref-chips-bar .file-ref-chip-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 1;
-  opacity: 0.65;
-  cursor: pointer;
-}
 .file-ref-chips-bar .file-ref-chip-remove:hover,
 .file-ref-chips-bar .file-ref-chip-remove:focus-visible {
   opacity: 1;
   background: color-mix(in srgb, var(--chip-file-fg) 22%, transparent);
   outline: none;
+}
+.skill-chips-bar .skill-chip.is-selected {
+  border-color: var(--chip-skill-fg);
+  box-shadow: 0 0 0 2px var(--chip-skill-ring);
 }
 .file-ref-chips-bar .file-ref-chip.is-selected {
   border-color: var(--chip-file-fg);
@@ -1287,17 +1208,20 @@
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--danger);
-  color: #fff;
-  border: none;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
   font-size: 12px;
-  line-height: 20px;
+  line-height: 17px;
   text-align: center;
   cursor: pointer;
   padding: 0;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 .pending-image-remove:hover {
-  background: #dc2626;
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ── Message Images ── */
@@ -1338,12 +1262,6 @@
   font-weight: 600;
   pointer-events: none;
   z-index: 100;
-}
-
-.chat-input-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
 }
 
 .cmd-item {
@@ -1399,27 +1317,6 @@
   position: relative;
   flex-shrink: 0;
 }
-.cmd-palette {
-  position: fixed;
-  width: min(320px, calc(100vw - 32px));
-  z-index: 9999;
-  outline: none;
-  /* left / top 由 JS 在打开时根据 + 按钮位置计算 */
-  left: 0;
-  top: 0;
-}
-.cmd-palette.hidden { display: none; }
-
-/* Model picker palette (与命令面板同款)，fixed 浮在 chip 上方 */
-.model-palette {
-  position: fixed;
-  width: min(320px, calc(100vw - 32px));
-  z-index: 9999;
-  /* left / top 由 JS 在打开时根据 chip 位置计算 */
-  left: 0;
-  top: 0;
-}
-.model-palette.hidden { display: none; }
 
 /* 底部模型 chip：点击后显示下拉指示。
    flex item 默认 min-width:auto=min(content)，会突破 max-width；
@@ -1528,65 +1425,6 @@
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--text-primary);
   border-color: var(--accent-border);
-}
-
-.model-dropdown {
-  position: fixed;
-  z-index: 9999;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow:
-    0 1px 0 0 color-mix(in srgb, #ffffff 5%, transparent) inset,
-    0 10px 30px -10px rgba(0, 0, 0, 0.45),
-    0 2px 6px -2px rgba(0, 0, 0, 0.25);
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 4px;
-  min-width: 180px;
-}
-.model-dropdown.hidden { display: none; }
-.model-dropdown-empty {
-  padding: 10px 12px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  text-align: center;
-}
-.model-dropdown-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 12.5px;
-  color: var(--text-primary);
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: background 120ms ease, color 120ms ease;
-}
-.model-dropdown-item:hover {
-  background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
-}
-.model-dropdown-item.is-current {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  cursor: default;
-}
-.model-dropdown-item-name {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.model-dropdown-item-check {
-  flex: 0 0 auto;
-  font-weight: 700;
-  color: var(--accent);
 }
 
 /* 冰豆会话指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
@@ -1957,55 +1795,6 @@
   height: 8px;
   background: currentColor;
   border-radius: 2px;
-}
-
-/* Clip / attach */
-.icon-clip {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-radius: 2px 2px 6px 6px;
-  border-top: none;
-  position: relative;
-}
-.icon-clip::before {
-  content: '';
-  position: absolute;
-  top: -6px;
-  left: 2px;
-  width: 6px;
-  height: 8px;
-  border: 2px solid currentColor;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-}
-
-/* Plus */
-.icon-plus {
-  position: relative;
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-}
-.icon-plus::before,
-.icon-plus::after {
-  content: '';
-  position: absolute;
-  background: currentColor;
-  border-radius: 1px;
-}
-.icon-plus::before {
-  top: 6px;
-  left: 0;
-  width: 14px;
-  height: 2px;
-}
-.icon-plus::after {
-  top: 0;
-  left: 6px;
-  width: 2px;
-  height: 14px;
 }
 
 /* ===== Chat Session Sidebar ===== */
