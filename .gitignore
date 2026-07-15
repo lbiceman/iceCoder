@@ -3,21 +3,22 @@ node_modules/
 
 # 编译输出
 dist/
+desktop/dist/
 
-# 数据目录（LanceDB 文件、上传文件等）
+# 数据目录（LanceDB 文件、上传文件、会话、记忆等运行时数据）
 data/*
 !data/.gitkeep
 !data/config.example.json
-!data/supervisor-config.json
 !data/supervisor-config.example.json
 !data/skills/
 # skills 目录仅提交模板「创建技能.md」，其余为用户/会话自定义技能
 data/skills/*
 !data/skills/创建技能.md
-LoCoMo/
+
 # 项目级本地配置（MCP、memory.md 等），不提交
 .iceCoder/
 .cursor/
+
 # Pipeline 输出
 output/
 
@@ -42,16 +43,39 @@ npm-debug.log*
 # 二进制工具
 bin/
 
-# Test artifacts
+# 单元测试 / 覆盖率产物（test/ 源码目录保留提交）
 __test_*
 coverage/
-runtime/telemetry.jsonl
+test/tmp-tool-diffs/
+test/tmp-tool-diffs-fsop/
+test/tmp-tool-diffs-ws/
+
+# 运行时遥测与本地评测缓存
+runtime/
+data/eval/
+
+# LoCoMo / Benchmark 证据：LoCoMo/、benchMark/reports/ 纳入版本库；仅忽略本地跑分中间目录
+docs/locomo/
+benchMark/repos/
+benchMark/score/
+
+# 用户记忆（开发时可能落在仓库根目录或 data/user-memory/）
+user-memory/
+MEMORY.md
+
+# 脚本生成的验证报告
+scripts/verification_report.md
+
+# Python 缓存
+__pycache__/
+*.py[cod]
 
 # Electron 桌面构建产物
 desktop/server-bundle/
 desktop/release/
 desktop/.cache/
 desktop/package-lock.json
+desktop/pnpm-lock.yaml
 
 # 构建产物 / 包（npm pack 输出不入库）
 *.tgz
