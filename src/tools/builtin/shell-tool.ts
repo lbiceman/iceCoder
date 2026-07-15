@@ -15,6 +15,7 @@ import {
 import { analyzeInlineScriptCommand } from '../shell-inline-script-advisory.js';
 import { analyzeShellSandbox } from '../shell-sandbox.js';
 import { buildShellChildEnv } from '../shell-host-guard.js';
+import { resolveShellExecutable } from '../shell-spawn-env.js';
 import {
   classifyShellCommand,
   pickBackgroundHardTimeout,
@@ -213,7 +214,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
 
       return new Promise((resolve) => {
         const isWindows = process.platform === 'win32';
-        const shell = isWindows ? 'cmd.exe' : '/bin/sh';
+        const shell = resolveShellExecutable();
         const shellArgs = isWindows ? ['/c', normalized.command] : ['-c', normalized.command];
 
         const child = spawn(shell, shellArgs, {

@@ -97,6 +97,7 @@ const PET_STATIC_JS_FILES = [
   'session-pet-palette.js',
 ];
 const PUBLIC_STATIC_FILES = ['pet-floating.html', 'favicon.svg'];
+const PUBLIC_STATIC_DIRS = ['icons'];
 
 function mergePublicStaticExtras(repoRoot, targetDistPublic) {
   const srcPublic = path.join(repoRoot, 'src', 'public');
@@ -107,6 +108,12 @@ function mergePublicStaticExtras(repoRoot, targetDistPublic) {
     if (!fs.existsSync(src)) continue;
     copyFile(src, path.join(targetDistPublic, rel));
     log(`mergePublic ${rel}`);
+  }
+  for (const rel of PUBLIC_STATIC_DIRS) {
+    const src = path.join(srcPublic, rel);
+    if (!fs.existsSync(src)) continue;
+    copyDir(src, path.join(targetDistPublic, rel));
+    log(`mergePublic ${rel}/`);
   }
   for (const rel of PET_STATIC_JS_FILES) {
     const src = path.join(srcPublic, 'js', rel);

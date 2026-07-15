@@ -4,6 +4,7 @@
 
 import { execFileSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { resolveWindowsSystemExecutable } from './shell-spawn-env.js';
 
 function isPidAlive(pid: number): boolean {
   try {
@@ -17,8 +18,10 @@ function isPidAlive(pid: number): boolean {
 
 /** Windows：递归终止进程树（taskkill + PowerShell 子进程扫描） */
 export function killWindowsProcessTree(rootPid: number): void {
+  const taskkill = resolveWindowsSystemExecutable('taskkill');
+  const powershell = resolveWindowsSystemExecutable('powershell');
   try {
-    execFileSync('taskkill', ['/PID', String(rootPid), '/T', '/F'], {
+    execFileSync(taskkill, ['/PID', String(rootPid), '/T', '/F'], {
       windowsHide: true,
       stdio: 'pipe',
     });
@@ -29,7 +32,7 @@ export function killWindowsProcessTree(rootPid: number): void {
   }
   try {
     execFileSync(
-      'powershell',
+      powershell,
       [
         '-NoProfile',
         '-NonInteractive',
@@ -50,9 +53,10 @@ export function killWindowsProcessTree(rootPid: number): void {
 
 /** Windows：按监听端口终止 dev server（pnpm/vite 脱离 cmd 进程树时的兜底） */
 export function killProcessesOnPortWindows(port: number): void {
+  const powershell = resolveWindowsSystemExecutable('powershell');
   try {
     execFileSync(
-      'powershell',
+      powershell,
       [
         '-NoProfile',
         '-NonInteractive',

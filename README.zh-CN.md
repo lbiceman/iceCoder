@@ -10,7 +10,7 @@
 
 **工作 / 聊天** — 侧栏多会话、工具执行记录、冰豆状态指示与 `#` / `@` 输入区：
 
-![桌面端 — 工作聊天页：Unity 项目会话、工具调用记录与冰豆](./docs/assets/desktop-work-chat.png)
+![桌面端 — 工作聊天页：Android 项目会话、工具调用记录与冰豆](./docs/assets/desktop-work-chat.png)
 
 **记忆图谱** — 标签筛选 + 力导向关系图，点击节点查看详情：
 
@@ -20,17 +20,21 @@
 
 ![桌面端 — 技能库：列表、正文预览与「使用技能」](./docs/assets/desktop-skills.png)
 
+**设置 · 通用** — 深色/浅色主题、数据目录、安全与执行选项：
+
+![桌面端 — 通用设置：主题与数据目录](./docs/assets/desktop-config-general.png)
+
+**设置 · 模型配置** — 模型提供者、API 密钥、温度与上下文上限：
+
+![桌面端 — 模型配置：提供者列表与配置表单](./docs/assets/desktop-config-model.png)
+
 **设置 · MCP** — 管理 MCP 服务器、启动/停止、查看工具列表与 JSON 配置：
 
-![桌面端 — 设置页 MCP 配置：服务器列表与 browsermcp 详情](./docs/assets/desktop-config-mcp.png)
+![桌面端 — 设置页 MCP 配置：服务器列表与 unity-mcp 详情](./docs/assets/desktop-config-mcp.png)
 
-**手机扫码远程** — `~scan` 生成二维码，手机与 PC **同一会话**同步（需同一局域网）：
+**工作 / 聊天（浅色主题）** — 相同布局下的浅色外观：
 
-![桌面端 — ~scan 远程控制：二维码与同会话 URL](./docs/assets/desktop-remote-scan.png)
-
-欢迎页状态面板（模式 / Memory / Harness / L2·Gate）：
-
-![桌面端 — 欢迎页与侧栏状态面板](./docs/assets/web-ui.png)
+![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 
 ### 移动端 H5
 
@@ -38,15 +42,23 @@
 
 **工作** — 聊天详情、模型选择与 token 统计：
 
-![移动端 — 工作聊天页](./docs/assets/mobile-work-chat.png)
+![移动端 — 工作聊天页（深色主题）](./docs/assets/mobile-work-chat.png)
+
+**工作（浅色主题）** — 相同聊天布局下的浅色外观：
+
+![移动端 — 工作聊天页（浅色主题）](./docs/assets/mobile-work-chat-light.png)
 
 **技能** — 卡片列表，支持删除与「使用技能」：
 
 ![移动端 — 技能页](./docs/assets/mobile-skills.png)
 
-**设置 · MCP** — 与桌面相同的 MCP 管理能力：
+**设置** — 主题、数据目录与执行选项：
 
-![移动端 — 设置页 MCP 配置](./docs/assets/mobile-config-mcp.png)
+![移动端 — 设置页（深色主题）](./docs/assets/mobile-config-general.png)
+
+**设置（浅色主题）** — 相同设置页的浅色外观：
+
+![移动端 — 设置页（浅色主题）](./docs/assets/mobile-config-light.png)
 
 ---
 

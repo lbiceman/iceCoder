@@ -1,11 +1,25 @@
+import fs from 'node:fs';
 import { defineConfig } from 'vite';
 import path from 'path';
 
 const apiPort = Number(process.env.PORT) || 1024;
 const vitePort = Number(process.env.VITE_PORT) || 1025;
+const repoRoot = __dirname;
+const publicRoot = path.resolve(repoRoot, 'src/public');
+const distPublic = path.resolve(repoRoot, 'dist/public');
+
+function copyDirSync(src: string, dst: string) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dst, entry.name);
+    if (entry.isDirectory()) copyDirSync(from, to);
+    else fs.copyFileSync(from, to);
+  }
+}
 
 export default defineConfig({
-  root: path.resolve(__dirname, 'src/public'),
+  root: publicRoot,
   plugins: [
     {
       name: 'icecoder-favicon-ico',
@@ -17,6 +31,19 @@ export default defineConfig({
           }
           next();
         });
+      },
+    },
+    {
+      name: 'icecoder-copy-static-assets',
+      closeBundle() {
+        const iconsSrc = path.join(publicRoot, 'icons');
+        if (fs.existsSync(iconsSrc)) {
+          copyDirSync(iconsSrc, path.join(distPublic, 'icons'));
+        }
+        const faviconSrc = path.join(publicRoot, 'favicon.svg');
+        if (fs.existsSync(faviconSrc)) {
+          fs.copyFileSync(faviconSrc, path.join(distPublic, 'favicon.svg'));
+        }
       },
     },
   ],
