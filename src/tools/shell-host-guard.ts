@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { augmentPathForShellSpawn } from './shell-spawn-env.js';
 
 /** 按进程镜像名广杀 node/tsx — 会终止 iceCoder 宿主 */
 const HOST_KILL_PATTERN_DEFS: Array<{ re: RegExp; label: string }> = [
@@ -193,6 +194,7 @@ export function checkHostGuardWritePreflight(
 export function buildShellChildEnv(sessionId?: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    PATH: augmentPathForShellSpawn(process.env.PATH),
     NODE_ENV: 'production',
     ICE_AGENT_ROOT_PID: String(process.pid),
     ...(sessionId ? { ICE_AGENT_SESSION: sessionId } : {}),

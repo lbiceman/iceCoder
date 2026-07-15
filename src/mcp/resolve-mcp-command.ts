@@ -15,6 +15,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { MCPServerConfig } from './types.js';
 import { isElectronRuntime } from '../cli/paths.js';
+import { augmentPathForShellSpawn } from '../tools/shell-spawn-env.js';
 
 const PATH_SEP = process.platform === 'win32' ? ';' : ':';
 const NODE_EXE_NAMES = process.platform === 'win32'
@@ -167,8 +168,8 @@ export function augmentPathForMcpSpawn(basePath: string | undefined): string {
     ...standardNodeDirs(),
   ];
 
-  const current = basePath ?? process.env.PATH ?? '';
-  const merged = [...extras, ...current.split(PATH_SEP)].map((p) => p.trim()).filter(Boolean);
+  const shellAugmented = augmentPathForShellSpawn(basePath);
+  const merged = [...extras, ...shellAugmented.split(PATH_SEP)].map((p) => p.trim()).filter(Boolean);
   return [...new Set(merged)].join(PATH_SEP);
 }
 
