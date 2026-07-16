@@ -127,12 +127,269 @@ window.SettingsPage = (function () {
           '</div>' +
           '</div>' +
         '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">执行透明层</h2>' +
+            '<span class="config-badge is-off" id="settings-etl-capability-badge" hidden>服务未启用</span>' +
+          '</div>' +
+          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行计划、工具调用与进度</p>' +
+          '<div class="settings-card" id="settings-etl-main-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">显示执行透明层</span>' +
+                '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
+              '</div>' +
+              '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
+                '<input type="checkbox" id="etl-show-panel" />' +
+                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+              '</label>' +
+            '</div>' +
+            '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
+                  '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
+                  '<input type="checkbox" id="etl-panel-default-expanded" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">显示 LLM 当前动作</span>' +
+                  '<span class="settings-etl-row-hint">仅展示动作状态，不含思维链</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="显示 LLM 当前动作">' +
+                  '<input type="checkbox" id="etl-show-llm-activity" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">显示时间轴</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="显示时间轴">' +
+                  '<input type="checkbox" id="etl-show-timeline" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">自动跟随当前步骤滚动</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="自动跟随当前步骤滚动">' +
+                  '<input type="checkbox" id="etl-auto-scroll-active-step" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+              '<div class="settings-etl-row settings-etl-row--select">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">时间轴粒度</span>' +
+                '</div>' +
+                '<select class="settings-etl-select" id="etl-timeline-granularity" aria-label="时间轴粒度">' +
+                  '<option value="step">仅步骤</option>' +
+                  '<option value="step+tool">步骤与工具</option>' +
+                '</select>' +
+              '</div>' +
+              '<div class="settings-etl-row settings-etl-row--select">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">时间显示</span>' +
+                '</div>' +
+                '<select class="settings-etl-select" id="etl-timeline-time-mode" aria-label="时间显示">' +
+                  '<option value="absolute">绝对时间</option>' +
+                  '<option value="relative">相对时间</option>' +
+                '</select>' +
+              '</div>' +
+              '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">面板默认宽度</span>' +
+                '</div>' +
+                '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
+                  '<option value="320">320 px</option>' +
+                  '<option value="360">360 px</option>' +
+                  '<option value="420">420 px</option>' +
+                  '<option value="480">480 px</option>' +
+                '</select>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
       '</div>';
 
     if (window.AppIcon) window.AppIcon.hydrate(parentEl);
     bindThemeOptions(parentEl, shell);
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
+    bindEtlSettings(parentEl);
+  }
+
+  function isEtlCapabilityEnabled() {
+    return !!(window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.isEnabled === 'function'
+      && window.ChatExecutionPlanBridge.isEnabled());
+  }
+
+  function syncEtlSettingsUi(parentEl, prefs) {
+    if (!prefs) {
+      prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : {};
+    }
+
+    var capabilityEnabled = isEtlCapabilityEnabled();
+    var showPanel = !!prefs.showTransparencyPanel;
+    var subgroupDisabled = !capabilityEnabled || !showPanel;
+
+    var capabilityBadge = parentEl.querySelector('#settings-etl-capability-badge');
+    var showPanelInput = parentEl.querySelector('#etl-show-panel');
+    var subgroup = parentEl.querySelector('#settings-etl-subgroup');
+
+    if (capabilityBadge) capabilityBadge.hidden = capabilityEnabled;
+    if (showPanelInput) {
+      showPanelInput.checked = showPanel;
+      showPanelInput.disabled = !capabilityEnabled;
+    }
+    if (subgroup) subgroup.classList.toggle('is-disabled', subgroupDisabled);
+
+    var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
+    var showLlmActivity = parentEl.querySelector('#etl-show-llm-activity');
+    var showTimeline = parentEl.querySelector('#etl-show-timeline');
+    var autoScroll = parentEl.querySelector('#etl-auto-scroll-active-step');
+    var timelineGranularity = parentEl.querySelector('#etl-timeline-granularity');
+    var timelineTimeMode = parentEl.querySelector('#etl-timeline-time-mode');
+    var panelWidth = parentEl.querySelector('#etl-panel-width');
+
+    if (panelDefaultExpanded) {
+      panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
+      panelDefaultExpanded.disabled = subgroupDisabled;
+    }
+    if (showLlmActivity) {
+      showLlmActivity.checked = prefs.showLlmActivity !== false;
+      showLlmActivity.disabled = subgroupDisabled;
+    }
+    if (showTimeline) {
+      showTimeline.checked = prefs.showTimeline !== false;
+      showTimeline.disabled = subgroupDisabled;
+    }
+    if (autoScroll) {
+      autoScroll.checked = prefs.autoScrollActiveStep !== false;
+      autoScroll.disabled = subgroupDisabled;
+    }
+    if (timelineGranularity) {
+      timelineGranularity.value = prefs.timelineGranularity === 'step+tool' ? 'step+tool' : 'step';
+      timelineGranularity.disabled = subgroupDisabled;
+    }
+    if (timelineTimeMode) {
+      timelineTimeMode.value = prefs.timelineTimeMode === 'relative' ? 'relative' : 'absolute';
+      timelineTimeMode.disabled = subgroupDisabled;
+    }
+    if (panelWidth) {
+      panelWidth.value = String(prefs.panelWidth || 360);
+      panelWidth.disabled = subgroupDisabled;
+    }
+  }
+
+  function bindEtlSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    if (parentEl._etlBound) return;
+    parentEl._etlBound = true;
+
+    syncEtlSettingsUi(parentEl);
+
+    var showPanelInput = parentEl.querySelector('#etl-show-panel');
+    if (showPanelInput) {
+      showPanelInput.addEventListener('change', function () {
+        var next = showPanelInput.checked;
+        window.EtlPrefs.set({ showTransparencyPanel: next });
+        syncEtlSettingsUi(parentEl);
+        if (window.Notification) {
+          window.Notification.success(
+            next ? '已开启执行透明层' : '已关闭执行透明层'
+          );
+        }
+      });
+    }
+
+    var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
+    if (panelDefaultExpanded) {
+      panelDefaultExpanded.addEventListener('change', function () {
+        window.EtlPrefs.set({ panelDefaultExpanded: panelDefaultExpanded.checked });
+      });
+    }
+
+    var showLlmActivity = parentEl.querySelector('#etl-show-llm-activity');
+    if (showLlmActivity) {
+      showLlmActivity.addEventListener('change', function () {
+        window.EtlPrefs.set({ showLlmActivity: showLlmActivity.checked });
+      });
+    }
+
+    var showTimeline = parentEl.querySelector('#etl-show-timeline');
+    if (showTimeline) {
+      showTimeline.addEventListener('change', function () {
+        window.EtlPrefs.set({ showTimeline: showTimeline.checked });
+      });
+    }
+
+    var autoScroll = parentEl.querySelector('#etl-auto-scroll-active-step');
+    if (autoScroll) {
+      autoScroll.addEventListener('change', function () {
+        window.EtlPrefs.set({ autoScrollActiveStep: autoScroll.checked });
+      });
+    }
+
+    var timelineGranularity = parentEl.querySelector('#etl-timeline-granularity');
+    if (timelineGranularity) {
+      timelineGranularity.addEventListener('change', function () {
+        window.EtlPrefs.set({ timelineGranularity: timelineGranularity.value });
+      });
+    }
+
+    var timelineTimeMode = parentEl.querySelector('#etl-timeline-time-mode');
+    if (timelineTimeMode) {
+      timelineTimeMode.addEventListener('change', function () {
+        window.EtlPrefs.set({ timelineTimeMode: timelineTimeMode.value });
+      });
+    }
+
+    var panelWidth = parentEl.querySelector('#etl-panel-width');
+    if (panelWidth) {
+      panelWidth.addEventListener('change', function () {
+        var width = parseInt(panelWidth.value, 10);
+        window.EtlPrefs.set({ panelWidth: width });
+        syncEtlSettingsUi(parentEl);
+      });
+    }
+
+    activateEtlSettings(parentEl);
+  }
+
+  function activateEtlSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    syncEtlSettingsUi(parentEl);
+    if (typeof parentEl._etlUnsubscribe !== 'function') {
+      parentEl._etlUnsubscribe = window.EtlPrefs.onChange(function () {
+        syncEtlSettingsUi(parentEl);
+      });
+    }
+    if (parentEl._etlCapabilityListener) return;
+    parentEl._etlCapabilityListener = function () {
+      syncEtlSettingsUi(parentEl);
+    };
+    window.addEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
+  }
+
+  function unbindEtlSettings(parentEl) {
+    if (!parentEl) return;
+    if (typeof parentEl._etlUnsubscribe === 'function') {
+      parentEl._etlUnsubscribe();
+      parentEl._etlUnsubscribe = null;
+    }
+    if (parentEl._etlCapabilityListener) {
+      window.removeEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
+      parentEl._etlCapabilityListener = null;
+    }
   }
 
   function bindDataDirectorySettings(parentEl) {
@@ -513,9 +770,18 @@ window.SettingsPage = (function () {
     if (window.McpConfigPanel && window.McpConfigPanel.pause) {
       window.McpConfigPanel.pause();
     }
+    if (container) {
+      unbindEtlSettings(container.querySelector('#config-tab-general'));
+    }
   }
 
-  return { render: render, onDeactivate: onDeactivate };
+  function onActivate() {
+    if (container) {
+      activateEtlSettings(container.querySelector('#config-tab-general'));
+    }
+  }
+
+  return { render: render, onActivate: onActivate, onDeactivate: onDeactivate };
 })();
 
 window.ConfigPage = window.SettingsPage;

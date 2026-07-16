@@ -7,6 +7,7 @@ import './icon.js';
 import './notification.js';
 import './modal.js';
 import './diff-viewer.js';
+import './etl-prefs.js';
 import './config-model-panel.js';
 import './config-mcp-panel.js';
 import './config-page.js';

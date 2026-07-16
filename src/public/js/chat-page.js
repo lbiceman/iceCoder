@@ -778,6 +778,10 @@ window.ChatPage = (function () {
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
+    if (window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.notifySessionSwitched === 'function') {
+      window.ChatExecutionPlanBridge.notifySessionSwitched();
+    }
     Session.fetchServerMessages(function (serverMsgs, result) {
       var fetchOk = !result || result.ok !== false;
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
@@ -1139,6 +1143,14 @@ window.ChatPage = (function () {
     if (step.totalTokenUsage) {
       applyTotalTokenUsageFromStep(step.totalTokenUsage);
     }
+    if ((step.totalTokenUsage !== undefined || step.totalToolCalls !== undefined)
+      && window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.applyRuntimeStats === 'function') {
+      window.ChatExecutionPlan.applyRuntimeStats({
+        totalTokenUsage: step.totalTokenUsage,
+        totalToolCalls: step.totalToolCalls,
+      });
+    }
     if (step.iteration) {
       Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
     }
@@ -1243,7 +1255,10 @@ window.ChatPage = (function () {
         || step.type === 'task_graph_branch'
         || step.type === 'task_graph_done'
         || step.type === 'execution_mode_enter'
-        || step.type === 'execution_mode_exit')) {
+        || step.type === 'execution_mode_exit'
+        // Phase 5：工具事件用于推导 LLM 当前动作（面板内只读 toolName / 到达状态）
+        || step.type === 'tool_call'
+        || step.type === 'tool_result')) {
       window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
@@ -1937,9 +1952,9 @@ window.ChatPage = (function () {
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
           '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="' +
           (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
-          '，拖动移动；双击恢复默认位置" title="' +
+          '，拖动移动；双击展开执行透明层" title="' +
           (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
-          '：拖动移动；双击恢复默认位置"></canvas>' +
+          '：拖动移动；双击展开执行透明层"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         '<div class="chat-input-area">' +
@@ -2068,6 +2083,16 @@ window.ChatPage = (function () {
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      var petCanvas = container.querySelector('#pet-canvas');
+      if (petCanvas) {
+        petCanvas.addEventListener('dblclick', function (e) {
+          e.preventDefault();
+          if (window.ChatExecutionPlan
+            && typeof window.ChatExecutionPlan.requestExpandFromPet === 'function') {
+            window.ChatExecutionPlan.requestExpandFromPet();
+          }
+        });
+      }
       if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
         window.DesktopPetBridge.attach(sessionPet);
       }

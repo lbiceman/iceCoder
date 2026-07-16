@@ -62,7 +62,7 @@ describe('企业级 UI 主题体系', () => {
       /\.chat-sidebar-mode-btn\[data-mode="adaptive"\][\s\S]*?color:\s*var\(--accent\)/,
     );
     expect(enterprise).toMatch(
-      /\.message\.user \.msg-label[\s\S]*?color:\s*var\(--text-on-accent-muted\)/,
+      /\.message\.user \.msg-label[\s\S]*?color:\s*color-mix\(in srgb,\s*var\(--msg-user-fg,\s*var\(--text-primary\)\)\s*65%,\s*transparent\)/,
     );
     expect(enterprise).toMatch(
       /\.chat-messages::\-webkit-scrollbar[\s\S]*?width:\s*16px/,

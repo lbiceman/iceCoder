@@ -821,7 +821,7 @@
 /* 阴影遮罩盒：作为 .chat-input-area 的第一个子元素，
    用 position: absolute 钉在输入框正上方，固定不动。
    不要用 backdrop-filter（会把消息糊成一团）。
-   渐变 + 朝上投射的 box-shadow，只在消息区一侧产生淡出，不向输入框下方漏阴影。 */
+   渐变淡出，只在消息区一侧产生淡出效果。 */
 .chat-fade-overlay {
   position: absolute;
   left: 0;
@@ -835,7 +835,6 @@
     transparent,
     var(--chat-bg, #f8f9fb) 100%
   );
-  box-shadow: 0 -10px 16px -6px var(--chat-bg, #f8f9fb);
 }
 [data-theme="dark"] .chat-fade-overlay {
   background: linear-gradient(
@@ -843,7 +842,6 @@
     transparent,
     var(--chat-bg, #14141a) 100%
   );
-  box-shadow: 0 -10px 16px -6px var(--chat-bg, #14141a);
 }
 .chat-input-area > .file-upload-status,
 .chat-input-area > .pending-images-preview {
