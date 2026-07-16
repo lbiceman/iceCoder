@@ -50,10 +50,6 @@ describe('etl-prefs', () => {
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
       showLlmActivity: true,
-      showTimeline: true,
-      autoScrollActiveStep: true,
-      timelineGranularity: 'step',
-      timelineTimeMode: 'absolute',
       panelWidth: 360,
     });
   });
@@ -79,24 +75,19 @@ describe('etl-prefs', () => {
     expect(count).toBe(1);
   });
 
-  it('时间轴粒度与时间模式即时持久化并拒绝非法值', () => {
+  it('忽略已废弃的时间轴偏好键，不写入当前偏好', () => {
     const EtlPrefs = loadEtlPrefs(storage);
     EtlPrefs.set({
       timelineGranularity: 'step+tool',
       timelineTimeMode: 'relative',
-    });
-    expect(EtlPrefs.get()).toMatchObject({
-      timelineGranularity: 'step+tool',
-      timelineTimeMode: 'relative',
-    });
-
-    EtlPrefs.set({
-      timelineGranularity: 'tool-only',
-      timelineTimeMode: 'elapsed',
-    });
-    expect(EtlPrefs.get()).toMatchObject({
-      timelineGranularity: 'step',
-      timelineTimeMode: 'absolute',
+      showTimeline: false,
+      autoScrollActiveStep: false,
+    } as Record<string, unknown>);
+    expect(EtlPrefs.get()).toEqual({
+      showTransparencyPanel: false,
+      panelDefaultExpanded: true,
+      showLlmActivity: true,
+      panelWidth: 360,
     });
   });
 });

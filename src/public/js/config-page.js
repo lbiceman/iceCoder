@@ -132,7 +132,7 @@ window.SettingsPage = (function () {
             '<h2 class="settings-section-title">执行透明层</h2>' +
             '<span class="config-badge is-off" id="settings-etl-capability-badge" hidden>服务未启用</span>' +
           '</div>' +
-          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行计划、工具调用与进度</p>' +
+          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
           '<div class="settings-card" id="settings-etl-main-card">' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
@@ -164,33 +164,6 @@ window.SettingsPage = (function () {
                   '<input type="checkbox" id="etl-show-llm-activity" />' +
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
-              '</div>' +
-              '<div class="settings-etl-row">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">显示时间轴</span>' +
-                '</div>' +
-                '<label class="config-default-switch settings-etl-switch" title="显示时间轴">' +
-                  '<input type="checkbox" id="etl-show-timeline" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
-              '<div class="settings-etl-row">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">自动跟随当前步骤滚动</span>' +
-                '</div>' +
-                '<label class="config-default-switch settings-etl-switch" title="自动跟随当前步骤滚动">' +
-                  '<input type="checkbox" id="etl-auto-scroll-active-step" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
-              '<div class="settings-etl-row settings-etl-row--select">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">时间轴粒度</span>' +
-                '</div>' +
-                '<select class="settings-etl-select" id="etl-timeline-granularity" aria-label="时间轴粒度">' +
-                  '<option value="step">仅步骤</option>' +
-                  '<option value="step+tool">步骤与工具</option>' +
-                '</select>' +
               '</div>' +
               '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
                 '<div class="settings-etl-row-info">' +
@@ -245,9 +218,6 @@ window.SettingsPage = (function () {
 
     var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
     var showLlmActivity = parentEl.querySelector('#etl-show-llm-activity');
-    var showTimeline = parentEl.querySelector('#etl-show-timeline');
-    var autoScroll = parentEl.querySelector('#etl-auto-scroll-active-step');
-    var timelineGranularity = parentEl.querySelector('#etl-timeline-granularity');
     var panelWidth = parentEl.querySelector('#etl-panel-width');
 
     if (panelDefaultExpanded) {
@@ -257,18 +227,6 @@ window.SettingsPage = (function () {
     if (showLlmActivity) {
       showLlmActivity.checked = prefs.showLlmActivity !== false;
       showLlmActivity.disabled = subgroupDisabled;
-    }
-    if (showTimeline) {
-      showTimeline.checked = prefs.showTimeline !== false;
-      showTimeline.disabled = subgroupDisabled;
-    }
-    if (autoScroll) {
-      autoScroll.checked = prefs.autoScrollActiveStep !== false;
-      autoScroll.disabled = subgroupDisabled;
-    }
-    if (timelineGranularity) {
-      timelineGranularity.value = prefs.timelineGranularity === 'step+tool' ? 'step+tool' : 'step';
-      timelineGranularity.disabled = subgroupDisabled;
     }
     if (panelWidth) {
       panelWidth.value = String(prefs.panelWidth || 360);
@@ -308,27 +266,6 @@ window.SettingsPage = (function () {
     if (showLlmActivity) {
       showLlmActivity.addEventListener('change', function () {
         window.EtlPrefs.set({ showLlmActivity: showLlmActivity.checked });
-      });
-    }
-
-    var showTimeline = parentEl.querySelector('#etl-show-timeline');
-    if (showTimeline) {
-      showTimeline.addEventListener('change', function () {
-        window.EtlPrefs.set({ showTimeline: showTimeline.checked });
-      });
-    }
-
-    var autoScroll = parentEl.querySelector('#etl-auto-scroll-active-step');
-    if (autoScroll) {
-      autoScroll.addEventListener('change', function () {
-        window.EtlPrefs.set({ autoScrollActiveStep: autoScroll.checked });
-      });
-    }
-
-    var timelineGranularity = parentEl.querySelector('#etl-timeline-granularity');
-    if (timelineGranularity) {
-      timelineGranularity.addEventListener('change', function () {
-        window.EtlPrefs.set({ timelineGranularity: timelineGranularity.value });
       });
     }
 

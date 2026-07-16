@@ -2,7 +2,7 @@
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
  * Phase 4：由锚定冰豆的 popover 重构为聊天页右侧常驻 `<aside id="exec-transparency-panel">`。
- * 结构：头部（标题 + 最小化）→ Tab 条 → 当前步骤卡 → 执行计划列表（含耗时）→ Footer（Token/工具/时间）。
+ * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 状态快照 / 日志）→ 执行流主体 → Footer（上下文/工具/时间）。
  * 显示门控读 EtlPrefs（`showTransparencyPanel`）；最小化收为宠物形态，双击宠物展开。
  *
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
@@ -70,14 +70,6 @@ window.ChatExecutionPlan = (function () {
     write_intent: '写入意图降级',
   };
 
-  // Supervisor（L2 监管层）Timeline 一级事件模板（设计 §3.7.1）。
-  var SUPERVISOR_SUBTYPES = {
-    takeover: { icon: '⚠', label: 'Supervisor 接管', cls: 'is-takeover' },
-    recovery: { icon: '↻', label: '开始恢复', cls: 'is-recovery' },
-    replan: { icon: '↻', label: '重新规划', cls: 'is-replan' },
-    resume: { icon: '▸', label: '继续执行', cls: 'is-resume' },
-  };
-
   var TABS = [
     { id: 'flow', label: '执行流' },
     { id: 'snapshot', label: '状态快照' },
@@ -105,7 +97,6 @@ window.ChatExecutionPlan = (function () {
   var emptyStateEl = null;
   var footerEl = null;
   var llmActivityEl = null;
-  var timelineEl = null;
   var taskOverviewEl = null;
   var roundTimelineEl = null;
 
@@ -130,8 +121,6 @@ window.ChatExecutionPlan = (function () {
 
   // LLM 当前动作：仅记录最近一次工具调用及其是否已返回；不读取任何 reasoning/thinking 文本。
   var lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
-  // Supervisor 一级事件（{ kind:'supervisor', subtype, reasonHuman, signals, round, ts, expanded }）。
-  var supervisorEvents = [];
   // 本轮模型循环，只保存结构化执行信息；绝不保存 thinking/reasoning 正文。
   var roundRecords = [];
   var roundRecordByIteration = Object.create(null);
@@ -343,7 +332,6 @@ window.ChatExecutionPlan = (function () {
       '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
       '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
       '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
-      '<div class="etl-timeline hidden" id="etl-timeline"></div>' +
     '</section>';
   }
 
@@ -355,7 +343,6 @@ window.ChatExecutionPlan = (function () {
     emptyStateEl = host.querySelector('.etl-plan-empty');
     footerEl = host.querySelector('#etl-footer');
     llmActivityEl = host.querySelector('#etl-llm-activity');
-    timelineEl = host.querySelector('#etl-timeline');
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
   }
@@ -429,7 +416,6 @@ window.ChatExecutionPlan = (function () {
     emptyStateEl = null;
     footerEl = null;
     llmActivityEl = null;
-    timelineEl = null;
     taskOverviewEl = null;
     roundTimelineEl = null;
     mountedMode = null;
@@ -769,18 +755,6 @@ window.ChatExecutionPlan = (function () {
         }
       }
     }
-    // 时间轴：运行中步骤耗时 + 总时长条（就地更新，避免整块重渲染导致滚动/展开态丢失）
-    if (timelineEl && !timelineEl.classList.contains('hidden') && currentPlan && currentPlan.steps) {
-      for (var t = 0; t < currentPlan.steps.length; t++) {
-        var ts = currentPlan.steps[t];
-        if (ts.status === 'running' && typeof ts.startedAt === 'number' && typeof ts.endedAt !== 'number') {
-          var durNode = timelineEl.querySelector('.etl-tl-node--step[data-step-id="' + ts.id + '"] .etl-tl-dur');
-          if (durNode) durNode.textContent = formatStepDuration(ts);
-        }
-      }
-      var totalEl = timelineEl.querySelector('.etl-tl-total');
-      if (totalEl) totalEl.textContent = '总时长 ' + formatPlanTotalTime();
-    }
     if (roundTimelineEl) {
       for (var rr = 0; rr < roundRecords.length; rr++) {
         var roundNode = roundTimelineEl.querySelector(
@@ -922,21 +896,11 @@ window.ChatExecutionPlan = (function () {
       var isActive = step.id === currentPlan.activeStepId;
       listEl.appendChild(renderStepNode(step, isActive));
     }
-    maybeScrollActive();
   }
 
   function renderEmptyState() {
     if (!emptyStateEl) return;
     emptyStateEl.classList.toggle('hidden', !!currentPlan || roundRecords.length > 0);
-  }
-
-  function maybeScrollActive() {
-    try {
-      if (!pref('autoScrollActiveStep', true)) return;
-      if (!listEl || !currentPlan || !currentPlan.activeStepId) return;
-      var el = listEl.querySelector('.exec-plan-step[data-step-id="' + currentPlan.activeStepId + '"]');
-      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
-    } catch (_e) { /* ignore */ }
   }
 
   function applyPatchToStep(stepEl, patch) {
@@ -1454,6 +1418,10 @@ window.ChatExecutionPlan = (function () {
   function makeRoundToolRow(tool) {
     var row = document.createElement('li');
     row.className = 'etl-round-tool status-' + toolStatusClass(tool.status);
+    row.dataset.toolCallId = tool.toolCallId;
+    row.dataset.status = tool.status;
+    if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
+    if (typeof tool.resultTs === 'number') row.dataset.resultTs = String(tool.resultTs);
     var icon = document.createElement('span');
     icon.className = 'etl-round-tool-icon';
     icon.textContent = toolStatusClass(tool.status) === 'done'
@@ -1576,402 +1544,6 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  // ── 渲染：时间轴（设计 §3.7 / §3.7.1）──
-
-  function formatAbsClock(ts) {
-    try {
-      var d = new Date(ts);
-      return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
-    } catch (_e) {
-      return '';
-    }
-  }
-
-  function formatRel(ts, origin) {
-    var ms = ts - origin;
-    if (ms < 0) ms = 0;
-    if (ms < 60000) return '+' + (ms / 1000).toFixed(1) + 's';
-    return '+' + formatClock(ms);
-  }
-
-  /** 计算时间轴起点：首个 startedAt，退化到 plan.createdAt。 */
-  function timelineOrigin() {
-    var origin = null;
-    if (currentPlan && currentPlan.steps) {
-      for (var i = 0; i < currentPlan.steps.length; i++) {
-        var st = currentPlan.steps[i];
-        if (typeof st.startedAt === 'number' && (origin === null || st.startedAt < origin)) {
-          origin = st.startedAt;
-        }
-      }
-    }
-    for (var j = 0; j < supervisorEvents.length; j++) {
-      var ev = supervisorEvents[j];
-      if (typeof ev.ts === 'number' && (origin === null || ev.ts < origin)) origin = ev.ts;
-    }
-    for (var k = 0; k < toolRecords.length; k++) {
-      var toolTs = toolRecords[k].callTs;
-      if (typeof toolTs === 'number' && (origin === null || toolTs < origin)) origin = toolTs;
-    }
-    if (origin === null && currentPlan && typeof currentPlan.createdAt === 'number') {
-      origin = currentPlan.createdAt;
-    }
-    return origin;
-  }
-
-  /** 归并步骤节点与 supervisor 事件为统一时间线（按 ts 升序）。 */
-  function buildTimelineNodes() {
-    var nodes = [];
-    if (currentPlan && currentPlan.steps) {
-      for (var i = 0; i < currentPlan.steps.length; i++) {
-        var st = currentPlan.steps[i];
-        var ts = typeof st.startedAt === 'number'
-          ? st.startedAt
-          : (typeof st.endedAt === 'number' ? st.endedAt : null);
-        nodes.push({
-          kind: 'step',
-          ts: ts,
-          order: i,
-          step: st,
-        });
-      }
-    }
-    for (var k = 0; k < supervisorEvents.length; k++) {
-      var ev = supervisorEvents[k];
-      nodes.push({ kind: 'supervisor', ts: typeof ev.ts === 'number' ? ev.ts : null, order: 10000 + k, event: ev });
-    }
-    if (pref('timelineGranularity', 'step') === 'step+tool') {
-      for (var t = 0; t < toolRecords.length; t++) {
-        var tool = toolRecords[t];
-        nodes.push({ kind: 'tool', ts: tool.callTs, order: 20000 + t, tool: tool });
-      }
-    }
-    nodes.sort(function (a, b) {
-      var ta = a.ts === null ? Infinity : a.ts;
-      var tb = b.ts === null ? Infinity : b.ts;
-      if (ta !== tb) return ta - tb;
-      return a.order - b.order;
-    });
-    return nodes;
-  }
-
-  function timeModeLabel() {
-    return pref('timelineTimeMode', 'absolute') === 'relative' ? '相对时间' : '绝对时间';
-  }
-
-  function granularityLabel() {
-    return pref('timelineGranularity', 'step') === 'step+tool' ? '步骤+工具' : '仅步骤';
-  }
-
-  function makeStepTimelineNode(node, origin, timeMode) {
-    var st = node.step;
-    var wrap = document.createElement('div');
-    wrap.className = 'etl-tl-node etl-tl-node--step status-' + st.status;
-    wrap.dataset.stepId = st.id;
-
-    var stamp = document.createElement('span');
-    stamp.className = 'etl-tl-time';
-    if (node.ts !== null) {
-      stamp.textContent = timeMode === 'relative' ? formatRel(node.ts, origin) : formatAbsClock(node.ts);
-    } else {
-      stamp.textContent = '—';
-    }
-
-    var dot = document.createElement('span');
-    dot.className = 'etl-tl-dot status-' + st.status;
-
-    var body = document.createElement('span');
-    body.className = 'etl-tl-body';
-    var title = document.createElement('span');
-    title.className = 'etl-tl-title';
-    title.textContent = clamp24(st.title);
-    var dur = document.createElement('span');
-    dur.className = 'etl-tl-dur';
-    dur.textContent = st.status === 'pending' ? (STATE_LABELS[st.status] || '') : formatStepDuration(st);
-    body.appendChild(title);
-    body.appendChild(dur);
-
-    wrap.appendChild(stamp);
-    wrap.appendChild(dot);
-    wrap.appendChild(body);
-
-    var tip = clamp24(st.title) + ' · ';
-    tip += node.ts !== null ? ('开始 ' + formatAbsClock(node.ts)) : '未开始';
-    if (typeof st.endedAt === 'number') tip += ' · 结束 ' + formatAbsClock(st.endedAt);
-    tip += ' · ' + (STATE_LABELS[st.status] || st.status);
-    if (st.status !== 'pending') tip += ' · 用时 ' + formatStepDuration(st);
-    wrap.title = tip;
-
-    wrap.addEventListener('click', function () {
-      try {
-        var target = listEl && listEl.querySelector('.exec-plan-step[data-step-id="' + st.id + '"]');
-        if (target && target.scrollIntoView) target.scrollIntoView({ block: 'nearest' });
-        if (target) {
-          target.classList.add('exec-plan-step--flash');
-          setTimeout(function () {
-            try { target.classList.remove('exec-plan-step--flash'); } catch (_e) { /* ignore */ }
-          }, 900);
-        }
-      } catch (_e) { /* ignore */ }
-    });
-    return wrap;
-  }
-
-  function makeSupervisorTimelineNode(node, origin, timeMode) {
-    var ev = node.event;
-    var conf = SUPERVISOR_SUBTYPES[ev.subtype] || SUPERVISOR_SUBTYPES.takeover;
-    var wrap = document.createElement('div');
-    wrap.className = 'etl-tl-node etl-tl-node--supervisor ' + conf.cls;
-
-    var stamp = document.createElement('span');
-    stamp.className = 'etl-tl-time';
-    if (node.ts !== null) {
-      stamp.textContent = timeMode === 'relative' ? formatRel(node.ts, origin) : formatAbsClock(node.ts);
-    } else {
-      stamp.textContent = '—';
-    }
-
-    var dot = document.createElement('span');
-    dot.className = 'etl-tl-dot etl-tl-dot--supervisor';
-    dot.textContent = conf.icon;
-
-    var body = document.createElement('span');
-    body.className = 'etl-tl-body';
-    var head = document.createElement('span');
-    head.className = 'etl-tl-sup-head';
-    var title = document.createElement('span');
-    title.className = 'etl-tl-title';
-    title.textContent = conf.icon + ' ' + conf.label;
-    head.appendChild(title);
-
-    var hasDetail = !!(ev.reasonHuman || (ev.signals && ev.signals.length) || typeof ev.round === 'number');
-    if (hasDetail) {
-      var toggle = document.createElement('button');
-      toggle.type = 'button';
-      toggle.className = 'etl-tl-sup-toggle';
-      toggle.textContent = ev.expanded ? '收起 ▴' : '展开 ▾';
-      head.appendChild(toggle);
-      toggle.addEventListener('click', function (e) {
-        e.stopPropagation();
-        ev.expanded = !ev.expanded;
-        renderTimeline();
-      });
-    }
-    body.appendChild(head);
-
-    if (ev.reasonHuman) {
-      var sub = document.createElement('span');
-      sub.className = 'etl-tl-sup-reason';
-      sub.textContent = clamp40(ev.reasonHuman);
-      body.appendChild(sub);
-    }
-
-    if (ev.expanded && hasDetail) {
-      var detail = document.createElement('div');
-      detail.className = 'etl-tl-sup-detail';
-      if (ev.reasonHuman) {
-        var r = document.createElement('div');
-        r.textContent = '原因：' + ev.reasonHuman;
-        detail.appendChild(r);
-      }
-      if (ev.signals && ev.signals.length) {
-        var sig = document.createElement('div');
-        var tags = ev.signals.map(function (s) { return MODE_SIGNAL_LABELS[s] || s; });
-        sig.textContent = '信号：' + tags.join(' + ');
-        detail.appendChild(sig);
-      }
-      if (typeof ev.round === 'number') {
-        var rd = document.createElement('div');
-        rd.textContent = '轮次：' + ev.round;
-        detail.appendChild(rd);
-      }
-      body.appendChild(detail);
-    }
-
-    wrap.appendChild(stamp);
-    wrap.appendChild(dot);
-    wrap.appendChild(body);
-    return wrap;
-  }
-
-  function makeToolTimelineNode(node, origin, timeMode) {
-    var tool = node.tool;
-    var wrap = document.createElement('div');
-    wrap.className = 'etl-tl-node etl-tl-node--tool status-' + tool.status;
-    wrap.dataset.toolCallId = tool.toolCallId;
-    wrap.dataset.status = tool.status;
-    wrap.dataset.callTs = String(tool.callTs);
-    if (typeof tool.resultTs === 'number') wrap.dataset.resultTs = String(tool.resultTs);
-
-    var stamp = document.createElement('span');
-    stamp.className = 'etl-tl-time';
-    stamp.textContent = timeMode === 'relative'
-      ? formatRel(tool.callTs, origin)
-      : formatAbsClock(tool.callTs);
-    var dot = document.createElement('span');
-    dot.className = 'etl-tl-dot status-' + tool.status;
-    var body = document.createElement('span');
-    body.className = 'etl-tl-body';
-    var title = document.createElement('span');
-    title.className = 'etl-tl-title';
-    title.textContent = clamp24(tool.toolName || '工具调用');
-    var detail = document.createElement('span');
-    detail.className = 'etl-tl-dur';
-    detail.textContent = typeof tool.resultTs === 'number'
-      ? ('返回 ' + (timeMode === 'relative'
-        ? formatRel(tool.resultTs, origin)
-        : formatAbsClock(tool.resultTs)))
-      : '运行中';
-    body.appendChild(title);
-    body.appendChild(detail);
-    wrap.appendChild(stamp);
-    wrap.appendChild(dot);
-    wrap.appendChild(body);
-    try {
-      wrap.title = (tool.toolName || '工具调用') + ' · 调用 ' + formatAbsClock(tool.callTs)
-        + (typeof tool.resultTs === 'number' ? ' · 返回 ' + formatAbsClock(tool.resultTs) : '')
-        + ' · ' + tool.status;
-    } catch (e) {
-      safeWarn('toolTooltip', e);
-    }
-    return wrap;
-  }
-
-  function timelineEnd(nodes, origin) {
-    var end = origin;
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
-      if (typeof n.ts === 'number' && n.ts > end) end = n.ts;
-      if (n.kind === 'step' && typeof n.step.endedAt === 'number' && n.step.endedAt > end) end = n.step.endedAt;
-      if (n.kind === 'tool' && typeof n.tool.resultTs === 'number' && n.tool.resultTs > end) end = n.tool.resultTs;
-    }
-    return end;
-  }
-
-  function positionTimelineNode(nodeEl, node, origin, span) {
-    if (!nodeEl || mountedMode === 'mobile') return;
-    var ts = typeof node.ts === 'number' ? node.ts : origin;
-    var ratio = span > 0 ? (ts - origin) / span : 0;
-    ratio = Math.max(0, Math.min(1, ratio));
-    nodeEl.style.left = (ratio * 100) + '%';
-  }
-
-  function renderTimeline() {
-    if (!timelineEl) return;
-    try {
-      if (!pref('showTimeline', true) || !currentPlan || !currentPlan.steps || !currentPlan.steps.length) {
-        timelineEl.classList.add('hidden');
-        timelineEl.innerHTML = '';
-        return;
-      }
-      if (!Array.isArray(currentPlan.steps) || currentPlan.steps.length > MAX_RENDER_STEPS) {
-        timelineEl.classList.add('hidden');
-        timelineEl.innerHTML = '';
-        return;
-      }
-      var origin = timelineOrigin();
-      if (origin === null) {
-        timelineEl.classList.add('hidden');
-        timelineEl.innerHTML = '';
-        return;
-      }
-      var timeMode = pref('timelineTimeMode', 'absolute');
-      var nodes = buildTimelineNodes();
-
-      timelineEl.innerHTML = '';
-
-      var head = document.createElement('div');
-      head.className = 'etl-tl-head';
-      var htitle = document.createElement('span');
-      htitle.className = 'etl-tl-headtitle';
-      htitle.textContent = '时间轴';
-      var toggles = document.createElement('span');
-      toggles.className = 'etl-tl-toggles';
-
-      var timeBtn = document.createElement('button');
-      timeBtn.type = 'button';
-      timeBtn.className = 'etl-tl-toggle';
-      timeBtn.textContent = timeModeLabel() + ' ▾';
-      timeBtn.title = '切换绝对/相对时间';
-      timeBtn.addEventListener('click', function () {
-        setPrefSafe('timelineTimeMode', timeMode === 'relative' ? 'absolute' : 'relative');
-      });
-
-      var granBtn = document.createElement('button');
-      granBtn.type = 'button';
-      granBtn.className = 'etl-tl-toggle';
-      granBtn.textContent = granularityLabel() + ' ▾';
-      granBtn.title = '切换时间轴粒度';
-      granBtn.addEventListener('click', function () {
-        var cur = pref('timelineGranularity', 'step');
-        setPrefSafe('timelineGranularity', cur === 'step+tool' ? 'step' : 'step+tool');
-      });
-
-      toggles.appendChild(timeBtn);
-      toggles.appendChild(granBtn);
-      head.appendChild(htitle);
-      head.appendChild(toggles);
-      timelineEl.appendChild(head);
-
-      var track = document.createElement('div');
-      var horizontal = mountedMode !== 'mobile';
-      track.className = 'etl-tl-track ' + (horizontal
-        ? 'etl-tl-track--horizontal'
-        : 'etl-tl-track--vertical');
-      var totalSpan = Math.max(0, timelineEnd(nodes, origin) - origin);
-      track.dataset.totalSpan = String(totalSpan);
-      if (horizontal) track.style.width = Math.max(640, nodes.length * 128) + 'px';
-      var activeNodeEl = null;
-      for (var i = 0; i < nodes.length; i++) {
-        var n = nodes[i];
-        var nodeEl;
-        if (n.kind === 'supervisor') nodeEl = makeSupervisorTimelineNode(n, origin, timeMode);
-        else if (n.kind === 'tool') nodeEl = makeToolTimelineNode(n, origin, timeMode);
-        else nodeEl = makeStepTimelineNode(n, origin, timeMode);
-        positionTimelineNode(nodeEl, n, origin, totalSpan);
-        track.appendChild(nodeEl);
-        if (n.kind === 'step' && currentPlan.activeStepId && n.step.id === currentPlan.activeStepId) {
-          activeNodeEl = nodeEl;
-        }
-      }
-      var scroll = document.createElement('div');
-      scroll.className = 'etl-tl-scroll';
-      scroll.appendChild(track);
-      timelineEl.appendChild(scroll);
-
-      var totalBar = document.createElement('div');
-      totalBar.className = 'etl-tl-total';
-      totalBar.textContent = '总时长 ' + formatPlanTotalTime();
-      timelineEl.appendChild(totalBar);
-
-      timelineEl.classList.remove('hidden');
-
-      // 吸附到当前步骤
-      if (activeNodeEl && activeNodeEl.scrollIntoView && mountedMode === 'mobile') {
-        try { activeNodeEl.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (_e) { /* ignore */ }
-      }
-    } catch (e) {
-      safeWarn('renderTimeline', e);
-      try {
-        timelineEl.classList.add('hidden');
-        timelineEl.innerHTML = '';
-      } catch (_e) { /* ignore */ }
-    }
-  }
-
-  function setPrefSafe(key, value) {
-    try {
-      if (window.EtlPrefs && typeof window.EtlPrefs.set === 'function') {
-        var patch = {};
-        patch[key] = value;
-        window.EtlPrefs.set(patch);
-      }
-      renderTimeline();
-    } catch (e) {
-      safeWarn('setPrefSafe', e);
-    }
-  }
-
   /**
    * 偏好变化后的公开刷新入口。仅重绘依赖偏好的独立区块；
    * 不修改计划、执行模式或完成态，供 EtlPrefs 全局变更广播统一调用。
@@ -1985,7 +1557,6 @@ window.ChatExecutionPlan = (function () {
       if (!hostEl) return;
       applyPanelWidth();
       renderLlmActivity();
-      renderTimeline();
     } catch (e) {
       safeWarn('refreshPreferences', e);
     }
@@ -1998,33 +1569,6 @@ window.ChatExecutionPlan = (function () {
       }
     } catch (e) {
       safeWarn('bindPreferenceRefresh', e);
-    }
-  }
-
-  /** 供桥投影 Supervisor（L2 监管层）Timeline 事件；异常丢弃该条，不影响主流程（设计 §14）。 */
-  function pushSupervisorTimelineEvent(evt) {
-    try {
-      if (!evt || !evt.subtype || !SUPERVISOR_SUBTYPES[evt.subtype]) return;
-      var record = {
-        kind: 'supervisor',
-        subtype: evt.subtype,
-        reasonHuman: evt.reasonHuman || '',
-        signals: Array.isArray(evt.signals) ? evt.signals.slice() : [],
-        round: typeof evt.round === 'number' ? evt.round : undefined,
-        ts: typeof evt.ts === 'number' ? evt.ts : Date.now(),
-        expanded: false,
-      };
-      // 去抖：同 subtype + round 短时间重复只保留一条
-      var last = supervisorEvents[supervisorEvents.length - 1];
-      if (last && last.subtype === record.subtype && last.round === record.round
-        && Math.abs(record.ts - last.ts) < 500) {
-        return;
-      }
-      supervisorEvents.push(record);
-      if (supervisorEvents.length > 50) supervisorEvents.shift();
-      renderTimeline();
-    } catch (e) {
-      safeWarn('pushSupervisorTimelineEvent', e);
     }
   }
 
@@ -2069,7 +1613,6 @@ window.ChatExecutionPlan = (function () {
         renderRoundTimeline();
         renderEmptyState();
         renderLlmActivity();
-        renderTimeline();
         renderFooter();
       } else if (step.type === 'tool_result') {
         var resultId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
@@ -2098,7 +1641,6 @@ window.ChatExecutionPlan = (function () {
           renderLlmActivity();
         }
         renderRoundTimeline();
-        renderTimeline();
       }
     } catch (e) {
       safeWarn('applyToolActivity', e);
@@ -2122,7 +1664,6 @@ window.ChatExecutionPlan = (function () {
       renderRoundTimeline();
       renderEmptyState();
       renderLlmActivity();
-      renderTimeline();
       renderFooter();
     } catch (e) {
       safeWarn('resetToolActivity', e);
@@ -2162,7 +1703,6 @@ window.ChatExecutionPlan = (function () {
     renderEmptyState();
     renderList();
     renderLlmActivity();
-    renderTimeline();
     renderFooter();
     if (mountedMode === 'mobile') updateMobileBar();
   }
@@ -2188,7 +1728,7 @@ window.ChatExecutionPlan = (function () {
         clear();
         return;
       }
-      // 新一轮任务（planId 变化）才重置 Supervisor 事件与工具状态；同 plan 的增量更新保留时间线。
+      // 新一轮任务（planId 变化）才重置工具状态；同 plan 的增量更新保留执行流。
       var prevId = currentPlan && currentPlan.planId;
       if (frozenPlanId && prevId === plan.planId && frozenPlanId === plan.planId) {
         recoverPanelAfterFatal();
@@ -2196,7 +1736,6 @@ window.ChatExecutionPlan = (function () {
       }
       if (!prevId || prevId !== plan.planId) {
         frozenPlanId = null;
-        supervisorEvents = [];
         lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
         toolRecords = [];
         toolRecordById = Object.create(null);
@@ -2267,7 +1806,6 @@ window.ChatExecutionPlan = (function () {
             );
             if (newActive) newActive.classList.add('active');
           }
-          maybeScrollActive();
         }
       }
 
@@ -2298,7 +1836,6 @@ window.ChatExecutionPlan = (function () {
       renderTaskOverview();
       renderEmptyState();
       renderLlmActivity();
-      renderTimeline();
       renderFooter();
 
       if (isPlanComplete(currentPlan)) {
@@ -2332,7 +1869,6 @@ window.ChatExecutionPlan = (function () {
       frozenPlanId = null;
       currentExecutionMode = null;
       visible = !isPanelSuppressed();
-      supervisorEvents = [];
       roundRecords = [];
       roundRecordByIteration = Object.create(null);
       lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
@@ -2354,10 +1890,6 @@ window.ChatExecutionPlan = (function () {
         if (llmActivityEl) {
           llmActivityEl.innerHTML = '';
           llmActivityEl.classList.add('hidden');
-        }
-        if (timelineEl) {
-          timelineEl.innerHTML = '';
-          timelineEl.classList.add('hidden');
         }
         renderTaskOverview();
         renderRoundTimeline();
@@ -2602,7 +2134,6 @@ window.ChatExecutionPlan = (function () {
       frozenPlanId = currentPlan.planId;
       visible = !isPanelSuppressed();
       renderCurrentStep();
-      renderTimeline();
       renderFooter();
       stopTick();
       applyVisibility();
@@ -2639,8 +2170,7 @@ window.ChatExecutionPlan = (function () {
     expand: expand,
     applyRuntimeStats: applyRuntimeStats,
     refreshPreferences: refreshPreferences,
-    // Phase 5 新增：LLM 动作 + 时间轴 + Supervisor 投影
-    pushSupervisorTimelineEvent: pushSupervisorTimelineEvent,
+    // Phase 5 新增：LLM 动作 + 执行流轮次
     applyToolActivity: applyToolActivity,
     applyRoundActivity: applyRoundActivity,
     resetToolActivity: resetToolActivity,
