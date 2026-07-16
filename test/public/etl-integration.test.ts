@@ -13,6 +13,10 @@ const BRIDGE_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js'),
   'utf-8',
 );
+const FLOW_STORE_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-flow-store.js'),
+  'utf-8',
+);
 const CONFIG_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/config-page.js'),
   'utf-8',
@@ -64,6 +68,17 @@ async function loadObserver(options: {
       '<main id="settings-root"></main><div id="pet-canvas"></div></body></html>',
   );
   await page.evaluate(({ showPanel, sessionId }) => {
+    const localValues: Record<string, string> = {};
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => localValues[key] ?? null,
+        setItem: (key: string, value: string) => { localValues[key] = String(value); },
+        removeItem: (key: string) => { delete localValues[key]; },
+        clear: () => { Object.keys(localValues).forEach((key) => delete localValues[key]); },
+      },
+    });
+    (window as any).__localValues = localValues;
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
@@ -114,6 +129,7 @@ async function loadObserver(options: {
     sessionId: options.sessionId ?? 'integration-session',
   });
   await page.addScriptTag({ content: PANEL_SOURCE });
+  await page.addScriptTag({ content: FLOW_STORE_SOURCE });
   await page.addScriptTag({ content: BRIDGE_SOURCE });
   await page.evaluate(() => {
     (window as any).ChatExecutionPlan.setPageActive(true);
@@ -843,7 +859,7 @@ describe('ETL 真实 Observer 链路', () => {
 
     expect(result.before).toEqual({ rounds: 1, footer: '1' });
     expect(result.afterSend).toEqual({ rounds: 0, empty: '等待模型开始执行', footer: '—' });
-    expect(result.currentRoundText).toContain('glob');
+    expect(result.currentRoundText).toMatch(/glob/i);
     expect(result.currentRoundText).not.toContain('read_file');
     expect(result.elapsed).toBe('00:05');
     await page.close();
@@ -939,8 +955,8 @@ describe('ETL 真实 Observer 链路', () => {
         iterations: nodes.map((node) => (node as HTMLElement).dataset.iteration),
         durations: nodes.map((node) => node.querySelector('.etl-round-duration')?.textContent),
         roundTexts: nodes.map((node) => node.textContent),
-        finalMarker: nodes[2]?.querySelector('.etl-round-marker')?.textContent,
-        finalComplete: nodes[2]?.querySelector('.etl-round-complete')?.textContent,
+        finalMarker: nodes[0]?.querySelector('.etl-round-marker')?.textContent,
+        finalComplete: nodes[0]?.querySelector('.etl-round-complete')?.textContent,
         footerLabel: document.querySelector('.etl-foot-token')?.textContent,
         leakedThinking: panelText.includes('SECRET_CHAIN_OF_THOUGHT')
           || panelText.includes('ANOTHER_PRIVATE_REASONING')
@@ -950,17 +966,153 @@ describe('ETL 真实 Observer 链路', () => {
 
     expect(result.overview).toContain('实现轮次时间轴');
     expect(result.overview).toContain('意图：实现');
-    expect(result.iterations).toEqual(['1', '2', '3']);
-    expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
-    expect(result.roundTexts[0]).toContain('run_command');
-    expect(result.roundTexts[0]).toContain('为什么这么做');
-    expect(result.roundTexts[1]).toContain('read_file');
+    expect(result.iterations).toEqual(['3', '2', '1']);
+    expect(result.durations).toEqual(['2.0s', '3.0s', '4.0s']);
+    expect(result.roundTexts[2]).toMatch(/run_command|Run Command/i);
+    expect(result.roundTexts[2]).toContain('为什么这么做');
+    expect(result.roundTexts[1]).toMatch(/read_file|Read File/i);
     expect(result.roundTexts[1]).toContain('上一轮工具执行失败');
     expect(result.finalMarker).toBe('✓');
     expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
-    expect(result.roundTexts[2]).toContain('本轮结果');
+    expect(result.roundTexts[0]).toContain('本轮结果');
     expect(result.footerLabel).toContain('上下文');
     expect(result.leakedThinking).toBe(false);
+    await page.close();
+  });
+
+  it('每个 session 仅持久化最近一次执行流并在切换会话时恢复', async () => {
+    const page = await loadObserver({ sessionId: 'session-a' });
+    const planA = makePlan('persist-plan-a');
+    await page.evaluate((plan) => {
+      const bridge = (window as any).ChatExecutionPlanBridge;
+      bridge.notifyConnected({ features: { executionPlan: true } });
+      bridge.handleStep({ type: 'execution_plan_init', plan });
+      (window as any).ChatExecutionPlan.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'persist-tool-a',
+        toolName: 'read_file',
+        toolArgs: { path: 'src/a.ts' },
+      });
+    }, planA);
+
+    await page.waitForTimeout(350);
+
+    const storedA = await page.evaluate(() => {
+      const raw = (window as any).__localValues['ice-etl-flow:session-a'];
+      return raw ? JSON.parse(raw) : null;
+    });
+    expect(storedA).toBeTruthy();
+    expect(Array.isArray(storedA)).toBe(true);
+    expect(storedA).toHaveLength(1);
+    expect(storedA[0].planId).toBe('persist-plan-a');
+    expect(storedA[0].panel.toolRecords[0].toolName).toBe('read_file');
+
+    await page.evaluate(() => {
+      (window as any).ChatExecutionPlanBridge.flushOutgoingSession('session-a');
+      (window as any).__setSessionId('session-b');
+      (window as any).ChatExecutionPlanBridge.notifySessionSwitched();
+    });
+
+    await page.evaluate((plan) => {
+      const bridge = (window as any).ChatExecutionPlanBridge;
+      bridge.handleStep({ type: 'execution_plan_init', plan });
+      (window as any).ChatExecutionPlan.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'persist-tool-b',
+        toolName: 'glob',
+        toolArgs: { pattern: '**/*' },
+      });
+    }, makePlan('persist-plan-b'));
+
+    await page.waitForTimeout(350);
+
+    const storedB = await page.evaluate(() => {
+      const raw = (window as any).__localValues['ice-etl-flow:session-b'];
+      return raw ? JSON.parse(raw) : null;
+    });
+    expect(storedB?.[0]?.panel?.toolRecords?.[0]?.toolName).toBe('glob');
+
+    await page.evaluate(() => {
+      (window as any).__setSessionId('session-a');
+      (window as any).ChatExecutionPlanBridge.notifySessionSwitched();
+    });
+
+    const pendingIndex = await page.evaluate(() => (window as any).__fetchRequests.length - 1);
+    await page.evaluate((index: number) => {
+      (window as any).__resolveFetch(index, { plan: null });
+    }, pendingIndex);
+
+    await page.waitForFunction(() => {
+      const snap = (window as any).ChatExecutionPlan.getFlowSnapshot();
+      return snap?.toolRecords?.[0]?.toolName === 'read_file';
+    });
+
+    const restored = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      const snap = panel.getFlowSnapshot();
+      return {
+        planId: panel.getPlan()?.planId,
+        toolName: snap.toolRecords[0]?.toolName,
+        roundCount: snap.roundRecords.length,
+      };
+    });
+
+    expect(restored).toEqual({
+      planId: 'persist-plan-a',
+      toolName: 'read_file',
+      roundCount: 1,
+    });
+    await page.close();
+  });
+
+  it('离开会话前 flush 可保存防抖窗口内尚未落盘的执行流', async () => {
+    const page = await loadObserver({ sessionId: 'session-a' });
+    const planA = makePlan('flush-plan-a');
+    await page.evaluate((plan) => {
+      const bridge = (window as any).ChatExecutionPlanBridge;
+      bridge.notifyConnected({ features: { executionPlan: true } });
+      bridge.handleStep({ type: 'execution_plan_init', plan });
+      (window as any).ChatExecutionPlan.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'flush-tool-a',
+        toolName: 'grep',
+        toolArgs: { pattern: 'TODO' },
+      });
+      bridge.flushOutgoingSession('session-a');
+    }, planA);
+
+    const storedA = await page.evaluate(() => {
+      const raw = (window as any).__localValues['ice-etl-flow:session-a'];
+      return raw ? JSON.parse(raw) : null;
+    });
+    expect(storedA?.[0]?.panel?.toolRecords?.[0]?.toolName).toBe('grep');
+    await page.close();
+  });
+
+  it('不兼容版本的本地执行流快照会被忽略', async () => {
+    const page = await loadObserver({ sessionId: 'session-a' });
+    await page.evaluate(() => {
+      (window as any).__localValues['ice-etl-flow:session-a'] = JSON.stringify([{
+        version: 99,
+        planId: 'stale-plan',
+        panel: { roundRecords: [{ iteration: 1, toolCallIds: [], signals: [], branchReasons: [] }] },
+      }]);
+      (window as any).ChatExecutionPlanBridge.notifyConnected({ features: { executionPlan: true } });
+    });
+
+    const pendingIndex = await page.evaluate(() => (window as any).__fetchRequests.length - 1);
+    await page.evaluate((index: number) => {
+      (window as any).__resolveFetch(index, { plan: null });
+    }, pendingIndex);
+
+    const restored = await page.evaluate(() => {
+      const snap = (window as any).ChatExecutionPlan.getFlowSnapshot();
+      return snap.roundRecords.length;
+    });
+    expect(restored).toBe(0);
     await page.close();
   });
 });

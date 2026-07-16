@@ -792,6 +792,12 @@ window.ChatPage = (function () {
     if (FileRef && typeof FileRef.clearInput === 'function') {
       FileRef.clearInput(elInput);
     }
+    var outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (outgoingSessionId !== sessionId
+      && window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
+      window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
+    }
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
@@ -822,7 +828,6 @@ window.ChatPage = (function () {
       });
     });
     resetTokenUsage();
-    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
       window.ChatTaskQueue.refresh(sessionId);
     }
@@ -1643,10 +1648,22 @@ window.ChatPage = (function () {
     handleMessageDeleteAction(btn.dataset.messageId, btn);
   }
                                                              
+  function clearSessionExecutionFlow() {
+    var sessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.clearSessionFlow === 'function') {
+      window.ChatExecutionPlanBridge.clearSessionFlow(sessionId);
+    } else if (window.ChatExecutionFlowStore
+      && typeof window.ChatExecutionFlowStore.clear === 'function') {
+      window.ChatExecutionFlowStore.clear(sessionId);
+    }
+  }
+
   function onWsRuntimeRestored() {
     isStreaming = false;
     UI.setStreamingState(false);
     UI.clearReasoningStream();
+    clearSessionExecutionFlow();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
     refreshChatHistoryAfterTurn(true);
@@ -1672,6 +1689,7 @@ window.ChatPage = (function () {
     isStreaming = false;
     UI.setStreamingState(false);
     UI.clearReasoningStream();
+    clearSessionExecutionFlow();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
     refreshChatHistoryAfterTurn(true);

@@ -13,6 +13,10 @@ const BRIDGE_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js'),
   'utf-8',
 );
+const FLOW_STORE_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-execution-flow-store.js'),
+  'utf-8',
+);
 const PET_BRIDGE_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-pet-bridge.js'),
   'utf-8',
@@ -65,6 +69,7 @@ async function loadLifecycle(): Promise<Page> {
     (window as any).fetch = () => new Promise(() => {});
   });
   await page.addScriptTag({ content: PANEL_SOURCE });
+  await page.addScriptTag({ content: FLOW_STORE_SOURCE });
   await page.addScriptTag({ content: BRIDGE_SOURCE });
   await page.evaluate(() => {
     (window as any).ChatExecutionPlan.setPageActive(true);

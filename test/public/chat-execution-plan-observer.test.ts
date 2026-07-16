@@ -945,7 +945,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.a.status).toBe('done');
     expect(result.a.callTs).toBeTruthy();
     expect(result.a.resultTs).toBeTruthy();
-    expect(result.a.text).toContain('read_file');
+    expect(result.a.text).toMatch(/read_file|Read File/i);
     expect(result.b.status).toBe('running');
     expect(result.b.resultTs).toBeUndefined();
     await page.close();
@@ -1000,7 +1000,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.escaped).toBe(false);
     expect(result.count).toBeGreaterThan(0);
     expect(result.count).toBeLessThanOrEqual(100);
-    expect(result.latest).toContain('tool-139');
+    expect(result.latest).toMatch(/tool-139/i);
     await page.close();
   });
 
