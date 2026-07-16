@@ -384,7 +384,20 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   margin: 0;
   padding: 0 0 10px 0;
   list-style: none;
-  contain: layout style;
+  overflow-anchor: none;
+}
+
+.etl-round-live-tools {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-round-node.is-expanded .etl-round-pills {
+  display: none;
 }
 
 .etl-round-node {
@@ -404,10 +417,10 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   border-radius: var(--radius);
   background: var(--surface-raised);
   cursor: pointer;
-  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
 .etl-round-row:hover {
+  transition: border-color var(--transition-fast), background var(--transition-fast);
   border-color: var(--border-strong);
   background: color-mix(in srgb, var(--surface-raised) 88%, var(--bg-hover));
 }
@@ -547,6 +560,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
+  margin-top: var(--space-1);
 }
 
 .etl-round-pills--folded {
