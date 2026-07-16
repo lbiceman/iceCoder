@@ -27,6 +27,8 @@ import {
 import { isSafeSessionId } from '../session-id-guard.js';
 import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
+import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
+import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -148,6 +150,50 @@ async function buildWorkspaceIndex(sessionIds: string[]): Promise<{
  * 优先从 checkpoint 中取（最新），退化到 session-notes plan fence。
  * 找不到则返回 null。
  */
+const CHECKPOINT_PREVIEW_MAX = 140;
+
+export interface CheckpointTimelineEntry {
+  messageId: string;
+  userMessageTime: number | null;
+  createdAt: string;
+  preview: string;
+  isCursor: boolean;
+}
+
+/** 读取 Intent Checkpoint 索引，附带用户消息摘要（供状态快照 Tab 时间轴）。 */
+export async function readCheckpointTimeline(sessionId: string): Promise<{
+  cursorMessageId: string | null;
+  entries: CheckpointTimelineEntry[];
+}> {
+  const index = await loadCheckpointIndex(SESSIONS_DIR, sessionId);
+  const uiMessages = await readUiSessionMessages(SESSIONS_DIR, sessionId);
+  const uiById = new Map(uiMessages.filter((m) => m.id).map((m) => [m.id!, m]));
+
+  const entries: CheckpointTimelineEntry[] = index.entries.map((entry) => {
+    const ui = uiById.get(entry.messageId);
+    const raw = typeof ui?.content === 'string' ? ui.content.trim() : '';
+    const preview = raw.length > CHECKPOINT_PREVIEW_MAX
+      ? `${raw.slice(0, CHECKPOINT_PREVIEW_MAX)}…`
+      : raw;
+    return {
+      messageId: entry.messageId,
+      userMessageTime: entry.userMessageTime,
+      createdAt: entry.createdAt,
+      preview: preview || '（无消息摘要）',
+      isCursor: entry.messageId === index.cursorMessageId,
+    };
+  });
+
+  entries.sort((a, b) => {
+    const ta = a.userMessageTime ?? Date.parse(a.createdAt) ?? 0;
+    const tb = b.userMessageTime ?? Date.parse(b.createdAt) ?? 0;
+    if (ta !== tb) return ta - tb;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+
+  return { cursorMessageId: index.cursorMessageId, entries };
+}
+
 async function readSessionPlan(sessionId: string): Promise<any> {
   const checkpointPath = path.join(SESSIONS_DIR, `${sessionId}.checkpoint.json`);
   try {
@@ -330,6 +376,17 @@ export function createSessionsRouter(): Router {
     if (rejectUnsafeSessionId(res, id)) return;
     const plan = await readSessionPlan(id);
     res.json({ plan });
+  });
+
+  /**
+   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴（状态快照 Tab）
+   */
+  router.get('/:id/checkpoints', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const id = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, id)) return;
+    const timeline = await readCheckpointTimeline(id);
+    res.json(timeline);
   });
 
   /**

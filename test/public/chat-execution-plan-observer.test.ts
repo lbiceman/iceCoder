@@ -1217,4 +1217,46 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('状态快照各节点回滚按钮绑定对应 messageId', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const entries = [
+        { messageId: 'msg-a', preview: 'first', isCursor: false },
+        { messageId: 'msg-b', preview: 'second', isCursor: false },
+        { messageId: 'msg-c', preview: 'third', isCursor: true },
+      ];
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      const restored: string[] = [];
+      panel.registerSnapshotHandlers({
+        onRestore: (id: string) => { restored.push(id); },
+        canRestore: () => true,
+      });
+      const originalFetch = window.fetch;
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({ entries }),
+          } as Response;
+        }
+        return originalFetch(url);
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const buttons = Array.from(
+        document.querySelectorAll('.etl-snapshot-restore-btn'),
+      ) as HTMLButtonElement[];
+      const attrs = buttons.map((b) => b.getAttribute('data-message-id'));
+      buttons.forEach((b) => b.click());
+      window.fetch = originalFetch;
+      return { attrs, restored };
+    }, makePlan());
+
+    expect(result.attrs).toEqual(['msg-a', 'msg-b']);
+    expect(result.restored).toEqual(['msg-a', 'msg-b']);
+    await page.close();
+  });
+
 });
