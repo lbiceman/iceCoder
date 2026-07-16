@@ -179,6 +179,16 @@ window.ChatExecutionPlanBridge = (function () {
     var step = data && data.step;
     if (!step) return;
 
+    // 前端净化后的轮次标记：仅含 iteration/ts/stopReason，不携带模型正文。
+    if (step.type === 'model_round_start'
+      || step.type === 'model_round_end'
+      || step.type === 'model_task_final') {
+      if (window.ChatExecutionPlan && window.ChatExecutionPlan.applyRoundActivity) {
+        window.ChatExecutionPlan.applyRoundActivity(step);
+      }
+      return;
+    }
+
     // 工具事件仅用于推导 LLM 当前动作（不改计划状态）；独立于 enabled，异常已在面板内兜底。
     if (step.type === 'tool_call' || step.type === 'tool_result') {
       if (window.ChatExecutionPlan && window.ChatExecutionPlan.applyToolActivity) {
@@ -213,7 +223,12 @@ window.ChatExecutionPlanBridge = (function () {
     // 独立于 enabled：exit_forced = L2 交还模型；保留计划与「继续执行」Supervisor 节点。
     if (step.type === 'execution_mode_exit') {
       projectSupervisor('resume', step.executionMode, step.ts);
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyExecutionModeEvent(step);
+      if (window.ChatExecutionPlan) {
+        if (window.ChatExecutionPlan.applyRoundActivity) {
+          window.ChatExecutionPlan.applyRoundActivity(step);
+        }
+        window.ChatExecutionPlan.applyExecutionModeEvent(step);
+      }
       return;
     }
 
@@ -221,7 +236,12 @@ window.ChatExecutionPlanBridge = (function () {
       capabilityEvidenceFromStep();
       if (!enabled) return;
       planFootDismissed = false;
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.applyExecutionModeEvent(step);
+      if (window.ChatExecutionPlan) {
+        if (window.ChatExecutionPlan.applyRoundActivity) {
+          window.ChatExecutionPlan.applyRoundActivity(step);
+        }
+        window.ChatExecutionPlan.applyExecutionModeEvent(step);
+      }
       // 接管（forced）与恢复（enteredBy 含 recovery_pending/checkpoint_resumed）分别投影一级事件
       var mode = step.executionMode;
       if (mode && mode.executionMode === 'forced') projectSupervisor('takeover', mode, step.ts);
@@ -278,7 +298,12 @@ window.ChatExecutionPlanBridge = (function () {
       }
     }
     if (step.type === 'task_graph_branch') {
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.highlightGraphBranch(step);
+      if (window.ChatExecutionPlan) {
+        if (window.ChatExecutionPlan.applyRoundActivity) {
+          window.ChatExecutionPlan.applyRoundActivity(step);
+        }
+        window.ChatExecutionPlan.highlightGraphBranch(step);
+      }
       // 分支切换 = 重新规划，投影为 supervisor 一级事件
       projectSupervisor('replan', step.executionMode, step.ts);
     }

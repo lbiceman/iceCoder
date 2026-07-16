@@ -166,6 +166,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const panel = (window as any).ChatExecutionPlan;
       const completedAt = plan.createdAt + 5000;
       plan.steps[0].startedAt = plan.createdAt;
+      panel.beginTurnTimer(plan.createdAt);
       panel.setPlan(plan);
       panel.applyPatch({
         stepPatches: [{ id: 'step-0', status: 'done', endedAt: completedAt }],
@@ -173,6 +174,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         progress: 100,
         updatedAt: completedAt,
       });
+      panel.endTurnTimer(completedAt);
       const read = () => ({
         panelOpen: document.body.classList.contains('etl-panel-open'),
         currentStatus: document.querySelector('#etl-current-step .etl-cs-status')?.textContent,
@@ -199,6 +201,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       plan.steps[0].startedAt = plan.createdAt;
+      panel.beginTurnTimer(plan.createdAt);
       panel.setPlan(plan);
       panel.applyPatch({
         stepPatches: [{
@@ -208,6 +211,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         }],
         activeStepId: null,
       });
+      panel.endTurnTimer(plan.createdAt + 4000);
       return {
         progress: panel.getPlan()?.progress,
         open: document.body.classList.contains('etl-panel-open'),
@@ -231,6 +235,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const panel = (window as any).ChatExecutionPlan;
       const completedAt = plan.createdAt + 5000;
       plan.steps[0].startedAt = plan.createdAt;
+      panel.beginTurnTimer(plan.createdAt);
       panel.setPlan(plan);
       panel.applyPatch({
         stepPatches: [{ id: 'step-0', status: 'done', endedAt: completedAt }],
@@ -238,6 +243,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         progress: 100,
         updatedAt: completedAt,
       });
+      panel.endTurnTimer(completedAt);
       const frozenTimeline = document.querySelector('.etl-tl-total')?.textContent;
       panel.applyPatch({
         stepPatches: [{
@@ -341,7 +347,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
 
     expect(result).toEqual({
       open: true,
-      emptyText: '本次为问答，无执行计划',
+      emptyText: '本次任务无结构化执行计划',
     });
     await page.close();
   });
@@ -848,15 +854,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('Footer 时间与 Timeline 总时长一致，并接收运行统计', async () => {
+  it('Footer 展示本轮对话耗时，并接收运行统计', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
+      panel.beginTurnTimer(plan.createdAt);
       panel.setPlan(plan);
       panel.applyRuntimeStats({
         totalTokenUsage: { effectiveUsed: 1200, contextWindow: 8000 },
         totalToolCalls: 3,
       });
+      panel.endTurnTimer(plan.createdAt + 5000);
       return {
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
         timelineTotal: document.querySelector('.etl-tl-total')?.textContent,
@@ -865,7 +873,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     }, makePlan());
 
-    expect(result.timelineTotal).toBe(`总时长 ${result.footerTime}`);
+    expect(result.footerTime).toBe('00:05');
+    expect(result.timelineTotal).toBe('总时长 00:00');
     expect(result.token).toBe('1,200/8K (15.0%)');
     expect(result.tools).toBe('3');
     await page.close();
@@ -1047,7 +1056,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="context"]') as HTMLButtonElement).click();
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
       const stored = localStorage.getItem('ICE_ETL_ACTIVE_TAB');
       document.documentElement.setAttribute('data-shell', 'mobile');
       panel.setPlan({ ...plan, planId: 'mobile-plan' });
@@ -1058,15 +1067,15 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     }, makePlan());
 
-    expect(result).toEqual({ stored: 'context', active: 'flow', flowHidden: false });
+    expect(result).toEqual({ stored: 'snapshot', active: 'flow', flowHidden: false });
     await page.close();
 
-    const restoredPage = await loadPanel(true, false, 'context');
+    const restoredPage = await loadPanel(true, false, 'snapshot');
     const restored = await restoredPage.evaluate((plan) => {
       (window as any).ChatExecutionPlan.setPlan(plan);
       return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
     }, makePlan());
-    expect(restored).toBe('context');
+    expect(restored).toBe('snapshot');
     await restoredPage.close();
   });
 
@@ -1116,7 +1125,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('设置页修改时间轴偏好后已挂载面板即时重渲染', async () => {
+  it('设置页修改时间轴粒度后即时重渲染，且不再提供时间显示设置', async () => {
     const page = await loadPanel();
     await page.evaluate((plan) => {
       (window as any).ChatExecutionPlan.setPlan(plan);
@@ -1141,22 +1150,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       granularity.value = 'step+tool';
       granularity.dispatchEvent(new Event('change'));
       const afterToolNodes = document.querySelectorAll('.etl-tl-node--tool').length;
-      const timeMode = document.querySelector('#etl-timeline-time-mode') as HTMLSelectElement;
-      timeMode.value = 'relative';
-      timeMode.dispatchEvent(new Event('change'));
       return {
         beforeToolNodes,
         afterToolNodes,
-        timeLabel: document.querySelector('.etl-tl-toggle')?.textContent,
-        firstTime: document.querySelector('.etl-tl-time')?.textContent,
+        timeSettingCount: document.querySelectorAll('#etl-timeline-time-mode').length,
       };
     });
 
     expect(result).toEqual({
       beforeToolNodes: 0,
       afterToolNodes: 1,
-      timeLabel: '相对时间 ▾',
-      firstTime: '+0.0s',
+      timeSettingCount: 0,
     });
     await page.close();
   });
@@ -1191,23 +1195,22 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     const mobileWide = await page.evaluate(() => {
       (window as any).SettingsPage.render(document.querySelector('#settings-root'));
       const granularity = document.querySelector('#etl-timeline-granularity') as HTMLSelectElement;
-      const timeMode = document.querySelector('#etl-timeline-time-mode') as HTMLSelectElement;
       granularity.value = 'step+tool';
       granularity.dispatchEvent(new Event('change'));
-      timeMode.value = 'relative';
-      timeMode.dispatchEvent(new Event('change'));
       const widthRow = document.querySelector('#etl-panel-width-row') as HTMLElement;
       return {
         prefs: (window as any).__prefs,
         widthDisplay: getComputedStyle(widthRow).display,
+        timeSettingCount: document.querySelectorAll('#etl-timeline-time-mode').length,
       };
     });
 
     expect(mobileWide.prefs).toMatchObject({
       timelineGranularity: 'step+tool',
-      timelineTimeMode: 'relative',
+      timelineTimeMode: 'absolute',
     });
     expect(mobileWide.widthDisplay).toBe('none');
+    expect(mobileWide.timeSettingCount).toBe(0);
 
     await page.setViewportSize({ width: 390, height: 844 });
     const desktopNarrowDisplay = await page.evaluate(() => {

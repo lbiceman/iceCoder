@@ -19,6 +19,7 @@ window.ChatExecutionPlan = (function () {
   // Observer 必须同步、快速返回；异常大的计划不应把浏览器事件循环拖死。
   var MAX_RENDER_STEPS = 500;
   var MAX_TOOL_HISTORY = 100;
+  var MAX_ROUND_HISTORY = 50;
 
   var STATE_LABELS = {
     pending: '待执行',
@@ -79,16 +80,13 @@ window.ChatExecutionPlan = (function () {
 
   var TABS = [
     { id: 'flow', label: '执行流' },
-    { id: 'tools', label: '工具调用' },
-    { id: 'context', label: '上下文' },
     { id: 'snapshot', label: '状态快照' },
     { id: 'log', label: '日志' },
   ];
 
-  // 移动端底部 sheet 仅保留「执行流」+「工具调用」（设计 §6）。
+  // 移动端底部 sheet 仅保留「执行流」。
   var MOBILE_TABS = [
     { id: 'flow', label: '执行流' },
-    { id: 'tools', label: '工具调用' },
   ];
 
   var currentPlan = null;
@@ -108,6 +106,8 @@ window.ChatExecutionPlan = (function () {
   var footerEl = null;
   var llmActivityEl = null;
   var timelineEl = null;
+  var taskOverviewEl = null;
+  var roundTimelineEl = null;
 
   // 挂载模式与承载容器：桌面 = 右侧停靠 aside；移动 = 顶部条 + 底部 sheet（设计 §6）。
   var mountedMode = null;      // 'desktop' | 'mobile'
@@ -117,6 +117,8 @@ window.ChatExecutionPlan = (function () {
   var mobileBackdropEl = null; // 移动端 sheet 蒙层
 
   var tickTimer = null;
+  var turnStartedAt = null;
+  var turnEndedAt = null;
   var resizeBound = false;
   var footerStats = { totalTokenUsage: null, totalToolCalls: null };
   var toolRecords = [];
@@ -130,6 +132,9 @@ window.ChatExecutionPlan = (function () {
   var lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
   // Supervisor 一级事件（{ kind:'supervisor', subtype, reasonHuman, signals, round, ts, expanded }）。
   var supervisorEvents = [];
+  // 本轮模型循环，只保存结构化执行信息；绝不保存 thinking/reasoning 正文。
+  var roundRecords = [];
+  var roundRecordByIteration = Object.create(null);
 
   function safeWarn(where, err) {
     try {
@@ -329,8 +334,13 @@ window.ChatExecutionPlan = (function () {
   /** 执行流 Tab 主体（当前步骤卡 + 计划列表 + LLM 动作 + 时间轴），桌面/移动共用 IDs。 */
   function flowPanelHtml() {
     return '<section class="etl-tabpanel" id="etl-panel-flow" data-panel="flow" role="tabpanel" aria-labelledby="etl-tab-flow">' +
+      '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
+      '<div class="etl-round-timeline" id="etl-round-timeline">' +
+        '<div class="etl-round-empty etl-empty">等待模型开始执行</div>' +
+        '<ol class="etl-round-list"></ol>' +
+      '</div>' +
       '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
-      '<div class="etl-empty etl-plan-empty hidden">本次为问答，无执行计划</div>' +
+      '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
       '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
       '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
       '<div class="etl-timeline hidden" id="etl-timeline"></div>' +
@@ -346,6 +356,8 @@ window.ChatExecutionPlan = (function () {
     footerEl = host.querySelector('#etl-footer');
     llmActivityEl = host.querySelector('#etl-llm-activity');
     timelineEl = host.querySelector('#etl-timeline');
+    taskOverviewEl = host.querySelector('#etl-task-overview');
+    roundTimelineEl = host.querySelector('#etl-round-timeline');
   }
 
   /** 绑定最小化按钮 + Tab 切换（桌面/移动共用）。 */
@@ -418,6 +430,8 @@ window.ChatExecutionPlan = (function () {
     footerEl = null;
     llmActivityEl = null;
     timelineEl = null;
+    taskOverviewEl = null;
+    roundTimelineEl = null;
     mountedMode = null;
   }
 
@@ -438,12 +452,6 @@ window.ChatExecutionPlan = (function () {
       '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
       '<div class="etl-body">' +
         flowPanelHtml() +
-        '<section class="etl-tabpanel hidden" id="etl-panel-tools" data-panel="tools" role="tabpanel" aria-labelledby="etl-tab-tools">' +
-          '<div class="etl-empty">暂无数据</div>' +
-        '</section>' +
-        '<section class="etl-tabpanel hidden" id="etl-panel-context" data-panel="context" role="tabpanel" aria-labelledby="etl-tab-context">' +
-          '<div class="etl-empty">暂无数据</div>' +
-        '</section>' +
         '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
           '<div class="etl-empty">暂无数据</div>' +
         '</section>' +
@@ -460,10 +468,10 @@ window.ChatExecutionPlan = (function () {
     bindHostControls(rootEl);
   }
 
-  /** 移动端：顶部一行入口 + 底部 sheet（复用执行流/工具调用 Tab；设计 §6）。 */
+  /** 移动端：顶部一行入口 + 底部 sheet（仅执行流 Tab；设计 §6）。 */
   function mountMobile() {
-    // 移动端仅有 flow/tools 两个 Tab；若 activeTab 落在桌面独有 Tab 上则回落到 flow。
-    if (activeTab !== 'flow' && activeTab !== 'tools') {
+    // 移动端仅有 flow Tab；若 activeTab 落在桌面独有 Tab 上则回落到 flow。
+    if (activeTab !== 'flow') {
       activeTab = 'flow';
       persistActiveTab(activeTab);
     }
@@ -500,9 +508,6 @@ window.ChatExecutionPlan = (function () {
       '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(MOBILE_TABS) + '</nav>' +
       '<div class="etl-body">' +
         flowPanelHtml() +
-        '<section class="etl-tabpanel hidden" id="etl-panel-tools" data-panel="tools" role="tabpanel" aria-labelledby="etl-tab-tools">' +
-          '<div class="etl-empty">暂无数据</div>' +
-        '</section>' +
       '</div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
 
@@ -722,7 +727,7 @@ window.ChatExecutionPlan = (function () {
   }
 
   function startTick() {
-    if (tickTimer || isPlanComplete(currentPlan)) return;
+    if (tickTimer || (isPlanComplete(currentPlan) && turnStartedAt === null)) return;
     tickTimer = setInterval(function () {
       try {
         if (!isShowing()) {
@@ -730,7 +735,7 @@ window.ChatExecutionPlan = (function () {
           return;
         }
         updateLiveTimes();
-        if (isPlanComplete(currentPlan) && !hasRunningStep()) {
+        if (isPlanComplete(currentPlan) && !hasRunningStep() && turnEndedAt !== null) {
           stopTick();
         }
       } catch (e) {
@@ -776,9 +781,18 @@ window.ChatExecutionPlan = (function () {
       var totalEl = timelineEl.querySelector('.etl-tl-total');
       if (totalEl) totalEl.textContent = '总时长 ' + formatPlanTotalTime();
     }
+    if (roundTimelineEl) {
+      for (var rr = 0; rr < roundRecords.length; rr++) {
+        var roundNode = roundTimelineEl.querySelector(
+          '.etl-round-node[data-iteration="' + roundRecords[rr].iteration + '"]',
+        );
+        var roundTime = roundNode && roundNode.querySelector('.etl-round-duration');
+        if (roundTime) roundTime.textContent = roundDuration(roundRecords[rr]);
+      }
+    }
     // Footer 总时间
     var timeElFoot = footerEl && footerEl.querySelector('.etl-foot-time b');
-    if (timeElFoot) timeElFoot.textContent = formatPlanTotalTime();
+    if (timeElFoot) timeElFoot.textContent = formatTurnElapsed();
     // 移动端顶部条进度计数
     if (mountedMode === 'mobile') updateMobileBar();
   }
@@ -913,7 +927,7 @@ window.ChatExecutionPlan = (function () {
 
   function renderEmptyState() {
     if (!emptyStateEl) return;
-    emptyStateEl.classList.toggle('hidden', !!currentPlan);
+    emptyStateEl.classList.toggle('hidden', !!currentPlan || roundRecords.length > 0);
   }
 
   function maybeScrollActive() {
@@ -1005,6 +1019,13 @@ window.ChatExecutionPlan = (function () {
     return formatClock(e - start);
   }
 
+  /** 右下角时间：从本轮用户发送开始，到最终回复/停止/异常结束。 */
+  function formatTurnElapsed() {
+    if (typeof turnStartedAt !== 'number') return '00:00';
+    var end = typeof turnEndedAt === 'number' ? turnEndedAt : Date.now();
+    return formatClock(Math.max(0, end - turnStartedAt));
+  }
+
   function formatTokenStat() {
     var t = footerStats.totalTokenUsage;
     if (!t) return '—';
@@ -1022,10 +1043,10 @@ window.ChatExecutionPlan = (function () {
       ? uniqueToolCallCount
       : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
-    var timeTxt = formatPlanTotalTime();
+    var timeTxt = formatTurnElapsed();
     footerEl.innerHTML = '';
 
-    footerEl.appendChild(makeFootItem('etl-foot-token', 'Token', tokenTxt));
+    footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', tokenTxt));
     footerEl.appendChild(makeFootItem('etl-foot-tool', '工具', toolTxt));
     footerEl.appendChild(makeFootItem('etl-foot-time', '时间', timeTxt));
   }
@@ -1154,6 +1175,404 @@ window.ChatExecutionPlan = (function () {
         llmActivityEl.classList.add('hidden');
         llmActivityEl.textContent = '';
       } catch (_e) { /* ignore */ }
+    }
+  }
+
+  // ── 工具执行辅助（供执行流轮次时间轴与 Footer/时间轴消费）──
+
+  function toolStatusClass(status) {
+    if (status === 'done' || status === 'success') return 'done';
+    if (status === 'failed' || status === 'error') return 'failed';
+    if (status === 'warn') return 'warn';
+    return 'running';
+  }
+
+  function formatToolDuration(record) {
+    if (!record || typeof record.callTs !== 'number') return '';
+    var end = typeof record.resultTs === 'number' ? record.resultTs : Date.now();
+    var ms = Math.max(0, end - record.callTs);
+    if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+    return formatClock(ms);
+  }
+
+  function formatToolArgsPreview(toolName, args) {
+    try {
+      if (window.ToolTraceFormat
+        && typeof window.ToolTraceFormat.formatToolArgsDetailPreview === 'function') {
+        var formatted = window.ToolTraceFormat.formatToolArgsDetailPreview(toolName, args);
+        if (formatted) return clamp40(formatted);
+      }
+      if (!args || typeof args !== 'object') return '';
+      var common = args.path || args.file || args.command || args.query
+        || args.pattern || args.url || args.description;
+      if (common) return clamp40(common);
+      return clamp40(JSON.stringify(args));
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  // 工具名 → 归类；供执行流轮次推导「本轮做了什么/为什么」。
+  var CONTEXT_READ_TOOLS = {
+    read_file: true, file_info: true, notebook_read: true,
+    parse_document: true, parse_pptx_deep: true, open_file: true,
+    read_image: true, xmind_parse: true, xlsx_parse: true,
+  };
+  var CONTEXT_WRITE_TOOLS = {
+    write_file: true, append_file: true, edit_file: true,
+    patch_file: true, batch_edit_file: true, fs_operation: true,
+    apply_patch: true, undo_edit: true, create_file: true, multi_edit: true,
+  };
+  var CONTEXT_SEARCH_TOOLS = { glob: true, grep: true };
+
+  function extractToolTarget(toolName, args) {
+    try {
+      if (!args || typeof args !== 'object') return '';
+      if (toolName === 'run_command') return String(args.command || '');
+      if (CONTEXT_SEARCH_TOOLS[toolName]) return String(args.pattern || args.query || '');
+      var pathVal = args.path || args.file || args.filePath || args.filename;
+      if (pathVal) return String(pathVal);
+      return '';
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  // ── 渲染：按模型轮次的执行流 ──
+
+  var PHASE_LABELS = {
+    intent: '理解目标',
+    context: '收集上下文',
+    editing: '实施修改',
+    verification: '验证结果',
+    final: '整理结论',
+  };
+
+  function normalizeRoundIteration(iteration) {
+    if (typeof iteration === 'number' && isFinite(iteration) && iteration > 0) {
+      return Math.floor(iteration);
+    }
+    if (roundRecords.length) return roundRecords[roundRecords.length - 1].iteration;
+    return 1;
+  }
+
+  function snapshotRoundPlan(record) {
+    if (!record || record.activeTitle) return;
+    var active = pickActiveStep(currentPlan);
+    if (active) {
+      record.activeTitle = active.title || '';
+      record.phase = active.phase || '';
+    } else if (currentPlan) {
+      record.phase = currentPlan.phase || '';
+    }
+  }
+
+  function ensureRoundRecord(iteration, ts) {
+    var normalized = normalizeRoundIteration(iteration);
+    var key = String(normalized);
+    var record = roundRecordByIteration[key];
+    if (!record) {
+      var inferredStart = typeof ts === 'number' ? ts : Date.now();
+      if (normalized === 1 && typeof turnStartedAt === 'number') {
+        inferredStart = turnStartedAt;
+      } else {
+        for (var previousIndex = 0; previousIndex < roundRecords.length; previousIndex++) {
+          var previousRecord = roundRecords[previousIndex];
+          if (previousRecord.iteration < normalized && typeof previousRecord.endTs === 'number') {
+            inferredStart = previousRecord.endTs;
+          }
+        }
+      }
+      record = {
+        iteration: normalized,
+        startTs: inferredStart,
+        endTs: null,
+        status: 'running',
+        toolCallIds: [],
+        signals: [],
+        branchReasons: [],
+        stopReason: '',
+        activeTitle: '',
+        phase: '',
+      };
+      snapshotRoundPlan(record);
+      roundRecords.push(record);
+      roundRecords.sort(function (a, b) { return a.iteration - b.iteration; });
+      roundRecordByIteration[key] = record;
+      if (roundRecords.length > MAX_ROUND_HISTORY) {
+        var removed = roundRecords.shift();
+        if (removed) delete roundRecordByIteration[String(removed.iteration)];
+      }
+    } else if (typeof ts === 'number' && ts < record.startTs) {
+      record.startTs = ts;
+    }
+    snapshotRoundPlan(record);
+    return record;
+  }
+
+  function addUniqueStrings(target, values) {
+    if (!Array.isArray(values)) return;
+    for (var i = 0; i < values.length; i++) {
+      if (target.indexOf(values[i]) < 0) target.push(values[i]);
+    }
+  }
+
+  function applyRoundActivity(evt) {
+    try {
+      if (!evt || !evt.type) return;
+      var ts = typeof evt.ts === 'number' ? evt.ts : Date.now();
+      var record = ensureRoundRecord(evt.iteration, ts);
+      if (evt.type === 'model_round_end' || evt.type === 'model_task_final') {
+        record.endTs = ts;
+        record.status = 'done';
+        if (evt.stopReason) record.stopReason = String(evt.stopReason);
+      }
+      if (evt.type === 'model_task_final') {
+        // 最终轮：标记任务完成，供轮次卡展示「已完成」结果。
+        record.isFinal = true;
+        markRoundsComplete(record.iteration);
+      }
+      if (evt.executionMode) {
+        addUniqueStrings(record.signals, evt.executionMode.enteredBy || []);
+        if (evt.executionMode.primaryReasonHuman && !record.reasonHuman) {
+          record.reasonHuman = evt.executionMode.primaryReasonHuman;
+        }
+      }
+      if (evt.reason || evt.message) {
+        var branchReason = String(evt.message || evt.reason);
+        if (record.branchReasons.indexOf(branchReason) < 0) {
+          record.branchReasons.push(branchReason);
+        }
+      }
+      renderTaskOverview();
+      renderRoundTimeline();
+      renderEmptyState();
+      if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
+    } catch (e) {
+      safeWarn('applyRoundActivity', e);
+    }
+  }
+
+  function getRoundTools(record) {
+    var out = [];
+    for (var i = 0; i < record.toolCallIds.length; i++) {
+      var tool = toolRecordById[record.toolCallIds[i]];
+      if (tool) out.push(tool);
+    }
+    return out;
+  }
+
+  function roundDuration(record) {
+    var end = typeof record.endTs === 'number' ? record.endTs : Date.now();
+    var tools = getRoundTools(record);
+    for (var i = 0; i < tools.length; i++) {
+      if (typeof tools[i].resultTs === 'number' && tools[i].resultTs > end) end = tools[i].resultTs;
+    }
+    var ms = Math.max(0, end - record.startTs);
+    if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+    return formatClock(ms);
+  }
+
+  function previousRoundFailed(record) {
+    var previous = null;
+    for (var i = 0; i < roundRecords.length; i++) {
+      if (roundRecords[i].iteration < record.iteration) previous = roundRecords[i];
+    }
+    if (!previous) return false;
+    var tools = getRoundTools(previous);
+    for (var j = 0; j < tools.length; j++) {
+      if (toolStatusClass(tools[j].status) === 'failed') return true;
+    }
+    return false;
+  }
+
+  /** 任务完成时把仍在运行的历史轮统一收尾，避免遗留“进行中”状态。 */
+  function markRoundsComplete(finalIteration) {
+    for (var i = 0; i < roundRecords.length; i++) {
+      var record = roundRecords[i];
+      if (record.iteration <= finalIteration && record.status !== 'done') {
+        record.status = 'done';
+        if (typeof record.endTs !== 'number') record.endTs = Date.now();
+      }
+    }
+  }
+
+  var STOP_REASON_LABELS = {
+    model_done: '模型已完成本次任务',
+    stop_hook: '任务在收尾校验后完成',
+    max_output_tokens: '输出达到上限后结束',
+    verification_exhausted: '验证轮次用尽后结束',
+    circuit_breaker: '触发熔断保护后结束',
+    error: '执行出现错误后结束',
+  };
+
+  function roundCompletionText(record) {
+    if (record.stopReason && STOP_REASON_LABELS[record.stopReason]) {
+      return '✅ ' + STOP_REASON_LABELS[record.stopReason];
+    }
+    return '✅ 已完成本次任务';
+  }
+
+  function deriveRoundReason(record) {
+    if (record.isFinal) {
+      return '模型判断目标已达成，结束本次执行';
+    }
+    var parts = [];
+    if (record.signals.length) {
+      var labels = record.signals.map(function (signal) {
+        return MODE_SIGNAL_LABELS[signal] || signal;
+      });
+      parts.push('监管信号：' + labels.join('、'));
+    }
+    if (record.branchReasons.length) {
+      parts.push('执行路径调整：' + clamp40(record.branchReasons[record.branchReasons.length - 1]));
+    }
+    if (previousRoundFailed(record)) {
+      parts.push('上一轮工具执行失败，需要调整策略并继续验证');
+    }
+    if (record.activeTitle) {
+      parts.push('为完成计划步骤「' + clamp40(record.activeTitle) + '」');
+    } else {
+      var tools = getRoundTools(record);
+      var hasRead = false;
+      var hasWrite = false;
+      var hasCommand = false;
+      for (var i = 0; i < tools.length; i++) {
+        var name = tools[i].toolName;
+        if (CONTEXT_READ_TOOLS[name] || CONTEXT_SEARCH_TOOLS[name]) hasRead = true;
+        if (CONTEXT_WRITE_TOOLS[name]) hasWrite = true;
+        if (name === 'run_command') hasCommand = true;
+      }
+      if (hasRead) parts.push('收集项目上下文，为判断和后续操作提供依据');
+      if (hasWrite) parts.push('落实用户目标并更新相关文件');
+      if (hasCommand) parts.push('获取运行证据或验证当前结果');
+      if (!tools.length) parts.push('理解用户目标并规划下一步执行');
+    }
+    return parts.join('；');
+  }
+
+  function makeRoundToolRow(tool) {
+    var row = document.createElement('li');
+    row.className = 'etl-round-tool status-' + toolStatusClass(tool.status);
+    var icon = document.createElement('span');
+    icon.className = 'etl-round-tool-icon';
+    icon.textContent = toolStatusClass(tool.status) === 'done'
+      ? '✓'
+      : (toolStatusClass(tool.status) === 'failed' ? '×' : '•');
+    var text = document.createElement('span');
+    text.className = 'etl-round-tool-text';
+    text.textContent = tool.toolName + (tool.detail ? ' · ' + tool.detail : '');
+    var dur = document.createElement('span');
+    dur.className = 'etl-round-tool-duration';
+    dur.textContent = formatToolDuration(tool);
+    row.appendChild(icon);
+    row.appendChild(text);
+    row.appendChild(dur);
+    return row;
+  }
+
+  function makeRoundNode(record) {
+    var tools = getRoundTools(record);
+    var item = document.createElement('li');
+    item.className = 'etl-round-node status-' + (record.status === 'done' ? 'done' : 'running')
+      + (record.isFinal ? ' is-final' : '');
+    item.dataset.iteration = String(record.iteration);
+
+    var marker = document.createElement('span');
+    marker.className = 'etl-round-marker';
+    marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    item.appendChild(marker);
+
+    var card = document.createElement('div');
+    card.className = 'etl-round-card';
+    var head = document.createElement('div');
+    head.className = 'etl-round-head';
+    var title = document.createElement('span');
+    title.className = 'etl-round-title';
+    title.textContent = '第 ' + record.iteration + ' 轮'
+      + (record.phase ? ' · ' + (PHASE_LABELS[record.phase] || record.phase) : '');
+    var time = document.createElement('span');
+    time.className = 'etl-round-duration';
+    time.textContent = roundDuration(record);
+    head.appendChild(title);
+    head.appendChild(time);
+    card.appendChild(head);
+
+    var actionLabel = document.createElement('div');
+    actionLabel.className = 'etl-round-section-label';
+    actionLabel.textContent = record.isFinal ? '本轮结果' : '本轮做了什么';
+    card.appendChild(actionLabel);
+    if (tools.length) {
+      var toolList = document.createElement('ul');
+      toolList.className = 'etl-round-tools';
+      for (var i = 0; i < tools.length; i++) toolList.appendChild(makeRoundToolRow(tools[i]));
+      card.appendChild(toolList);
+    }
+    if (record.isFinal) {
+      var completion = document.createElement('div');
+      completion.className = 'etl-round-complete';
+      completion.textContent = roundCompletionText(record);
+      card.appendChild(completion);
+    } else if (!tools.length) {
+      var planning = document.createElement('div');
+      planning.className = 'etl-round-action';
+      planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
+      card.appendChild(planning);
+    }
+
+    var reasonLabel = document.createElement('div');
+    reasonLabel.className = 'etl-round-section-label';
+    reasonLabel.textContent = '为什么这么做';
+    var reason = document.createElement('div');
+    reason.className = 'etl-round-reason';
+    reason.textContent = deriveRoundReason(record);
+    card.appendChild(reasonLabel);
+    card.appendChild(reason);
+    item.appendChild(card);
+    return item;
+  }
+
+  function renderTaskOverview() {
+    if (!taskOverviewEl) return;
+    try {
+      if (!currentPlan) {
+        taskOverviewEl.innerHTML = '';
+        taskOverviewEl.classList.add('hidden');
+        return;
+      }
+      var active = pickActiveStep(currentPlan);
+      var intent = INTENT_LABELS[currentPlan.intent] || currentPlan.intent || '未分类';
+      var phase = active && active.phase ? (PHASE_LABELS[active.phase] || active.phase) : '已结束';
+      taskOverviewEl.innerHTML = '';
+      var goal = document.createElement('div');
+      goal.className = 'etl-overview-goal';
+      goal.textContent = currentPlan.goal || (active && active.title) || '当前任务';
+      var meta = document.createElement('div');
+      meta.className = 'etl-overview-meta';
+      meta.textContent = '意图：' + intent + ' · 阶段：' + phase
+        + ' · 进度：' + Math.max(0, Math.min(100, currentPlan.progress || 0)) + '%';
+      taskOverviewEl.appendChild(goal);
+      taskOverviewEl.appendChild(meta);
+      taskOverviewEl.classList.remove('hidden');
+    } catch (e) {
+      safeWarn('renderTaskOverview', e);
+    }
+  }
+
+  function renderRoundTimeline() {
+    if (!roundTimelineEl) return;
+    try {
+      var empty = roundTimelineEl.querySelector('.etl-round-empty');
+      var list = roundTimelineEl.querySelector('.etl-round-list');
+      if (empty) empty.classList.toggle('hidden', roundRecords.length > 0);
+      if (!list) return;
+      list.innerHTML = '';
+      for (var i = 0; i < roundRecords.length; i++) {
+        snapshotRoundPlan(roundRecords[i]);
+        list.appendChild(makeRoundNode(roundRecords[i]));
+      }
+    } catch (e) {
+      safeWarn('renderRoundTimeline', e);
     }
   }
 
@@ -1621,6 +2040,7 @@ window.ChatExecutionPlan = (function () {
         if (!callId) return;
         var toolName = typeof step.toolName === 'string' ? step.toolName : '';
         var callTs = typeof step.ts === 'number' ? step.ts : Date.now();
+        var round = ensureRoundRecord(step.iteration, callTs);
         if (!toolRecordById[callId]) {
           var record = {
             toolCallId: callId,
@@ -1628,9 +2048,13 @@ window.ChatExecutionPlan = (function () {
             callTs: callTs,
             resultTs: null,
             status: 'running',
+            detail: formatToolArgsPreview(toolName, step.toolArgs),
+            target: extractToolTarget(toolName, step.toolArgs),
+            iteration: round.iteration,
           };
           toolRecords.push(record);
           toolRecordById[callId] = record;
+          if (round.toolCallIds.indexOf(callId) < 0) round.toolCallIds.push(callId);
           if (!toolCallIds[callId]) {
             toolCallIds[callId] = true;
             uniqueToolCallCount++;
@@ -1641,6 +2065,9 @@ window.ChatExecutionPlan = (function () {
           }
         }
         lastTool = { toolCallId: callId, toolName: toolName, pending: true, ts: callTs };
+        renderTaskOverview();
+        renderRoundTimeline();
+        renderEmptyState();
         renderLlmActivity();
         renderTimeline();
         renderFooter();
@@ -1654,15 +2081,73 @@ window.ChatExecutionPlan = (function () {
             : (step.toolOutcome === 'policy_block'
               ? 'warn'
               : (step.toolSuccess === false ? 'failed' : 'done'));
+          if (!matched.toolName && typeof step.toolName === 'string') {
+            matched.toolName = step.toolName;
+          }
+          var matchedRound = ensureRoundRecord(matched.iteration, matched.callTs);
+          if (matched.resultTs > (matchedRound.endTs || 0)) matchedRound.endTs = matched.resultTs;
+          var roundTools = getRoundTools(matchedRound);
+          var allDone = roundTools.length > 0;
+          for (var ri = 0; ri < roundTools.length; ri++) {
+            if (toolStatusClass(roundTools[ri].status) === 'running') allDone = false;
+          }
+          if (allDone) matchedRound.status = 'done';
         }
         if (lastTool.pending && resultId && lastTool.toolCallId === resultId) {
           lastTool.pending = false;
           renderLlmActivity();
         }
+        renderRoundTimeline();
         renderTimeline();
       }
     } catch (e) {
       safeWarn('applyToolActivity', e);
+    }
+  }
+
+  /** 新一轮用户输入开始时，仅清空上一轮工具记录与计数，不改执行计划。 */
+  function resetToolActivity() {
+    try {
+      lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
+      toolRecords = [];
+      toolRecordById = Object.create(null);
+      toolCallIds = Object.create(null);
+      uniqueToolCallCount = 0;
+      authoritativeToolCalls = null;
+      calibratedUniqueToolCount = 0;
+      footerStats.totalToolCalls = null;
+      roundRecords = [];
+      roundRecordByIteration = Object.create(null);
+      renderTaskOverview();
+      renderRoundTimeline();
+      renderEmptyState();
+      renderLlmActivity();
+      renderTimeline();
+      renderFooter();
+    } catch (e) {
+      safeWarn('resetToolActivity', e);
+    }
+  }
+
+  function beginTurnTimer(ts) {
+    try {
+      turnStartedAt = typeof ts === 'number' ? ts : Date.now();
+      turnEndedAt = null;
+      renderFooter();
+      startTick();
+    } catch (e) {
+      safeWarn('beginTurnTimer', e);
+    }
+  }
+
+  function endTurnTimer(ts) {
+    try {
+      if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') return;
+      turnEndedAt = typeof ts === 'number' ? Math.max(turnStartedAt, ts) : Date.now();
+      renderFooter();
+      if (isPlanComplete(currentPlan) && !hasRunningStep()) stopTick();
+    } catch (e) {
+      safeWarn('endTurnTimer', e);
     }
   }
 
@@ -1671,6 +2156,8 @@ window.ChatExecutionPlan = (function () {
   function fullRender() {
     if (!ensureMounted()) throw new Error('执行透明层挂载失败');
     renderExecutionModeBanner();
+    renderTaskOverview();
+    renderRoundTimeline();
     renderCurrentStep();
     renderEmptyState();
     renderList();
@@ -1808,6 +2295,7 @@ window.ChatExecutionPlan = (function () {
       }
 
       renderCurrentStep();
+      renderTaskOverview();
       renderEmptyState();
       renderLlmActivity();
       renderTimeline();
@@ -1845,6 +2333,8 @@ window.ChatExecutionPlan = (function () {
       currentExecutionMode = null;
       visible = !isPanelSuppressed();
       supervisorEvents = [];
+      roundRecords = [];
+      roundRecordByIteration = Object.create(null);
       lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
       toolRecords = [];
       toolRecordById = Object.create(null);
@@ -1853,7 +2343,7 @@ window.ChatExecutionPlan = (function () {
       authoritativeToolCalls = null;
       calibratedUniqueToolCount = 0;
       footerStats = { totalTokenUsage: null, totalToolCalls: null };
-      stopTick();
+      if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
       if (hostEl) {
         if (listEl) listEl.innerHTML = '';
         if (currentStepEl) {
@@ -1869,6 +2359,8 @@ window.ChatExecutionPlan = (function () {
           timelineEl.innerHTML = '';
           timelineEl.classList.add('hidden');
         }
+        renderTaskOverview();
+        renderRoundTimeline();
         renderExecutionModeBanner();
         renderFooter();
       }
@@ -2014,6 +2506,7 @@ window.ChatExecutionPlan = (function () {
     if (!plan || !plan.steps) return null;
     return {
       planId: plan.planId,
+      goal: plan.goal,
       intent: plan.intent,
       progress: plan.progress || 0,
       steps: plan.steps,
@@ -2073,6 +2566,8 @@ window.ChatExecutionPlan = (function () {
         }
       }
       renderCurrentStep();
+      renderTaskOverview();
+      renderRoundTimeline();
       renderFooter();
       notifyPetFoot();
     } catch (e) {
@@ -2147,6 +2642,10 @@ window.ChatExecutionPlan = (function () {
     // Phase 5 新增：LLM 动作 + 时间轴 + Supervisor 投影
     pushSupervisorTimelineEvent: pushSupervisorTimelineEvent,
     applyToolActivity: applyToolActivity,
+    applyRoundActivity: applyRoundActivity,
+    resetToolActivity: resetToolActivity,
+    beginTurnTimer: beginTurnTimer,
+    endTurnTimer: endTurnTimer,
     // TaskGraph（兼容）
     renderGraph: renderGraph,
     updateGraphNode: updateGraphNode,
