@@ -2,7 +2,7 @@
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
  * Phase 4：由锚定冰豆的 popover 重构为聊天页右侧常驻 `<aside id="exec-transparency-panel">`。
- * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 状态快照 / 日志）→ 执行流主体 → Footer（上下文/工具/时间）。
+ * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 状态快照）→ 执行流主体 → Footer（上下文/工具/时间）。
  * 显示门控读 EtlPrefs（`showTransparencyPanel`）；最小化收为宠物形态，双击宠物展开。
  *
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
@@ -15,7 +15,6 @@ window.ChatExecutionPlan = (function () {
   'use strict';
 
   var PANEL_ID = 'exec-transparency-panel';
-  var ACTIVE_TAB_STORAGE_KEY = 'ICE_ETL_ACTIVE_TAB';
   // Observer 必须同步、快速返回；异常大的计划不应把浏览器事件循环拖死。
   var MAX_RENDER_STEPS = 500;
   var MAX_TOOL_HISTORY = 100;
@@ -73,7 +72,6 @@ window.ChatExecutionPlan = (function () {
   var TABS = [
     { id: 'flow', label: '执行流' },
     { id: 'snapshot', label: '状态快照' },
-    { id: 'log', label: '日志' },
   ];
 
   // 移动端底部 sheet 仅保留「执行流」。
@@ -88,7 +86,7 @@ window.ChatExecutionPlan = (function () {
   var capabilityEnabled = true;
   var pageActive = true;
   var minimized = false;
-  var activeTab = restoreActiveTab();
+  var activeTab = 'flow';
 
   var rootEl = null;
   var listEl = null;
@@ -130,22 +128,6 @@ window.ChatExecutionPlan = (function () {
       if (typeof console !== 'undefined' && console.warn) {
         console.warn('[ChatExecutionPlan] ' + where + ' 降级：', err);
       }
-    } catch (_e) { /* ignore */ }
-  }
-
-  function restoreActiveTab() {
-    try {
-      var stored = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-      for (var i = 0; i < TABS.length; i++) {
-        if (TABS[i].id === stored) return stored;
-      }
-    } catch (_e) { /* ignore */ }
-    return 'flow';
-  }
-
-  function persistActiveTab(tabId) {
-    try {
-      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tabId);
     } catch (_e) { /* ignore */ }
   }
 
@@ -439,10 +421,7 @@ window.ChatExecutionPlan = (function () {
       '<div class="etl-body">' +
         flowPanelHtml() +
         '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
-          '<div class="etl-empty">暂无数据</div>' +
-        '</section>' +
-        '<section class="etl-tabpanel hidden" id="etl-panel-log" data-panel="log" role="tabpanel" aria-labelledby="etl-tab-log">' +
-          '<div class="etl-empty">暂无数据</div>' +
+          '<div class="etl-empty">开发中。。。</div>' +
         '</section>' +
       '</div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
@@ -459,7 +438,6 @@ window.ChatExecutionPlan = (function () {
     // 移动端仅有 flow Tab；若 activeTab 落在桌面独有 Tab 上则回落到 flow。
     if (activeTab !== 'flow') {
       activeTab = 'flow';
-      persistActiveTab(activeTab);
     }
 
     mobileBarEl = document.createElement('button');
@@ -574,7 +552,6 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!tabId || !hostEl) return;
       activeTab = tabId;
-      persistActiveTab(activeTab);
       var tabBtns = hostEl.querySelectorAll('.etl-tab');
       Array.prototype.forEach.call(tabBtns, function (btn) {
         var on = btn.getAttribute('data-tab') === tabId;
@@ -1112,7 +1089,7 @@ window.ChatExecutionPlan = (function () {
   function renderLlmActivity() {
     if (!llmActivityEl) return;
     try {
-      if (!pref('showLlmActivity', true) || !currentPlan || isPlanComplete(currentPlan)) {
+      if (!currentPlan || isPlanComplete(currentPlan)) {
         llmActivityEl.classList.add('hidden');
         llmActivityEl.textContent = '';
         return;

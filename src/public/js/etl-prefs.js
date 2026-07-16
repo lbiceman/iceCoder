@@ -1,5 +1,5 @@
 /**
- * 执行透明层（ETL）前端偏好：读写、校验、旧键迁移与变更广播。
+ * 执行透明层（ETL）前端偏好：从 config.json 读写、校验与变更广播。
  * 纯数据层，无 DOM 依赖。
  */
 
@@ -8,18 +8,17 @@
 window.EtlPrefs = (function () {
   'use strict';
 
-  var STORAGE_KEY = 'ICE_ETL_PREFS';
-  var LEGACY_KEY = 'ICE_PLAN_PANEL';
-
   var DEFAULTS = {
-    showTransparencyPanel: false,
+    showTransparencyPanel: true,
     panelDefaultExpanded: true,
-    showLlmActivity: true,
     panelWidth: 360,
   };
 
   var cached = null;
   var listeners = [];
+  var readyPromise = null;
+  var readyResolved = false;
+  var loading = false;
 
   function clampPanelWidth(value) {
     var w = typeof value === 'number' ? value : parseInt(value, 10);
@@ -37,48 +36,8 @@ window.EtlPrefs = (function () {
     if (typeof raw.panelDefaultExpanded === 'boolean') {
       out.panelDefaultExpanded = raw.panelDefaultExpanded;
     }
-    if (typeof raw.showLlmActivity === 'boolean') {
-      out.showLlmActivity = raw.showLlmActivity;
-    }
     out.panelWidth = clampPanelWidth(raw.panelWidth);
     return out;
-  }
-
-  function applyLegacyMigration(prefs) {
-    try {
-      if (localStorage.getItem(LEGACY_KEY) === '0') {
-        prefs.showTransparencyPanel = false;
-      }
-    } catch (_e) { /* ignore */ }
-    return prefs;
-  }
-
-  function persist(prefs) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
-    } catch (_e) { /* ignore */ }
-  }
-
-  function load() {
-    var raw = null;
-    try {
-      raw = localStorage.getItem(STORAGE_KEY);
-    } catch (_e) { /* ignore */ }
-
-    var prefs;
-    if (!raw) {
-      prefs = applyLegacyMigration(sanitize(DEFAULTS));
-      persist(prefs);
-    } else {
-      try {
-        prefs = sanitize(JSON.parse(raw));
-      } catch (_e) {
-        prefs = sanitize(DEFAULTS);
-      }
-    }
-
-    cached = prefs;
-    return prefs;
   }
 
   function prefsChanged(before, after) {
@@ -96,27 +55,102 @@ window.EtlPrefs = (function () {
     }
   }
 
+  function resolveReady() {
+    if (readyResolved) return;
+    readyResolved = true;
+    if (readyPromise && typeof readyPromise.resolve === 'function') {
+      readyPromise.resolve();
+    }
+  }
+
+  function whenReady() {
+    if (readyResolved) return Promise.resolve();
+    if (!readyPromise) {
+      readyPromise = {};
+      readyPromise.promise = new Promise(function (resolve) {
+        readyPromise.resolve = resolve;
+      });
+    }
+    return readyPromise.promise;
+  }
+
+  function applyLoaded(raw) {
+    var next = sanitize(raw);
+    var before = cached || sanitize(DEFAULTS);
+    cached = next;
+    if (prefsChanged(before, next)) emit();
+  }
+
+  function loadFromServer() {
+    if (loading) return whenReady();
+    loading = true;
+    if (!cached) cached = sanitize(DEFAULTS);
+
+    if (typeof fetch !== 'function') {
+      resolveReady();
+      return whenReady();
+    }
+
+    return fetch('/api/config')
+      .then(function (res) {
+        if (!res.ok) throw new Error('fetch failed');
+        return res.json();
+      })
+      .then(function (data) {
+        applyLoaded(data && data.iceEtlPrefs);
+      })
+      .catch(function () {
+        /* 读取失败时保留内存默认，不阻塞 UI */
+      })
+      .finally(function () {
+        loading = false;
+        resolveReady();
+      });
+  }
+
   function get() {
-    if (!cached) load();
+    if (!cached) cached = sanitize(DEFAULTS);
     return Object.assign({}, cached);
   }
 
   function getKey(key) {
-    if (!cached) load();
+    if (!cached) cached = sanitize(DEFAULTS);
     return cached[key];
   }
 
   function set(patch) {
-    if (!patch || typeof patch !== 'object') return;
-    if (!cached) load();
+    if (!patch || typeof patch !== 'object') return Promise.resolve(false);
+    if (!cached) cached = sanitize(DEFAULTS);
 
     var before = cached;
     var next = sanitize(Object.assign({}, cached, patch));
-    if (!prefsChanged(before, next)) return;
+    if (!prefsChanged(before, next)) return Promise.resolve(true);
 
-    cached = next;
-    persist(cached);
-    emit();
+    if (typeof fetch !== 'function') {
+      cached = next;
+      emit();
+      return Promise.resolve(true);
+    }
+
+    return fetch('/api/config/ice-etl-prefs', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ iceEtlPrefs: patch }),
+    })
+      .then(function (res) {
+        return res.json().then(function (body) {
+          return { ok: res.ok, body: body };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok || !result.body || result.body.success !== true) {
+          var message = (result.body && result.body.error) || '更新失败';
+          return Promise.reject(new Error(message));
+        }
+        cached = sanitize(result.body.iceEtlPrefs || next);
+        emit();
+        return true;
+      });
   }
 
   function onChange(fn) {
@@ -127,12 +161,13 @@ window.EtlPrefs = (function () {
     };
   }
 
-  load();
+  loadFromServer();
 
   return {
     get: get,
     getKey: getKey,
     set: set,
     onChange: onChange,
+    whenReady: whenReady,
   };
 })();

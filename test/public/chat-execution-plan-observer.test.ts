@@ -46,7 +46,6 @@ afterEach(async () => {
 async function loadPanel(
   showTransparencyPanel = true,
   mobile = false,
-  storedActiveTab?: string,
 ): Promise<Page> {
   const page = await browser.newPage();
   openPages.add(page);
@@ -55,9 +54,8 @@ async function loadPanel(
       '<nav id="top-nav"></nav><main class="page-container"></main>' +
       '<div id="pet-canvas"></div></body></html>',
   );
-  await page.evaluate(({ showPanel, initialActiveTab }) => {
+  await page.evaluate(({ showPanel }) => {
     const localValues: Record<string, string> = {};
-    if (initialActiveTab) localValues.ICE_ETL_ACTIVE_TAB = initialActiveTab;
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
       value: {
@@ -70,7 +68,6 @@ async function loadPanel(
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
-      showLlmActivity: true,
       panelWidth: 360,
     };
     const prefListeners: Array<() => void> = [];
@@ -80,6 +77,7 @@ async function loadPanel(
       set: (patch: Record<string, unknown>) => {
         Object.assign(prefs, patch);
         prefListeners.slice().forEach((listener) => listener());
+        return Promise.resolve(true);
       },
       onChange: (listener: () => void) => {
         prefListeners.push(listener);
@@ -88,10 +86,11 @@ async function loadPanel(
           if (index >= 0) prefListeners.splice(index, 1);
         };
       },
+      whenReady: () => Promise.resolve(),
     };
     (window as any).ChatExecutionPlanBridge = { isEnabled: () => true };
     (window as any).ChatPetBridge = { syncExecPlanFoot: () => {} };
-  }, { showPanel: showTransparencyPanel, initialActiveTab: storedActiveTab });
+  }, { showPanel: showTransparencyPanel });
   await page.addScriptTag({ content: PANEL_SOURCE });
   return page;
 }
@@ -634,7 +633,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const prefs = {
         showTransparencyPanel: false,
         panelDefaultExpanded: true,
-        showLlmActivity: true,
         panelWidth: 360,
       };
       (window as any).__setCapability = (value: boolean) => { enabled = value; };
@@ -643,7 +641,10 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       (window as any).ChatExecutionPlanBridge = { isEnabled: () => enabled };
       (window as any).EtlPrefs = {
         get: () => ({ ...prefs }),
-        set: (patch: Record<string, unknown>) => Object.assign(prefs, patch),
+        set: (patch: Record<string, unknown>) => {
+          Object.assign(prefs, patch);
+          return Promise.resolve(true);
+        },
         onChange: (fn: () => void) => {
           prefListeners.push(fn);
           return () => {
@@ -651,6 +652,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
             if (index >= 0) prefListeners.splice(index, 1);
           };
         },
+        whenReady: () => Promise.resolve(),
       };
       (window as any).AppShell = { getTheme: () => 'dark' };
       (window as any).AppRouter = { isSetupRequired: () => false };
@@ -1044,32 +1046,42 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await mobile.close();
   });
 
-  it('执行层 Tab 写入 localStorage，移动端恢复桌面专属 Tab 时回退 flow', async () => {
+  it('刷新后默认展示执行流 Tab', async () => {
+    const page = await loadPanel();
+    const switched = await page.evaluate((plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+    }, makePlan());
+    expect(switched).toBe('snapshot');
+    await page.close();
+
+    const freshPage = await loadPanel();
+    const defaultTab = await freshPage.evaluate((plan) => {
+      (window as any).ChatExecutionPlan.setPlan(plan);
+      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+    }, makePlan());
+    expect(defaultTab).toBe('flow');
+    await freshPage.close();
+  });
+
+  it('移动端切到桌面专属 Tab 时回退 flow', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
       (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
-      const stored = localStorage.getItem('ICE_ETL_ACTIVE_TAB');
       document.documentElement.setAttribute('data-shell', 'mobile');
       panel.setPlan({ ...plan, planId: 'mobile-plan' });
       return {
-        stored,
         active: document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab'),
         flowHidden: document.querySelector('[data-panel="flow"]')?.classList.contains('hidden'),
       };
     }, makePlan());
 
-    expect(result).toEqual({ stored: 'snapshot', active: 'flow', flowHidden: false });
+    expect(result).toEqual({ active: 'flow', flowHidden: false });
     await page.close();
-
-    const restoredPage = await loadPanel(true, false, 'snapshot');
-    const restored = await restoredPage.evaluate((plan) => {
-      (window as any).ChatExecutionPlan.setPlan(plan);
-      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
-    }, makePlan());
-    expect(restored).toBe('snapshot');
-    await restoredPage.close();
   });
 
   it('移动 sheet 支持 Escape 收起', async () => {
@@ -1149,7 +1161,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       timeMode: false,
       hasEnabled: true,
       hasExpand: true,
-      hasLlm: true,
+      hasLlm: false,
       hasWidth: true,
     });
     await page.close();
@@ -1161,17 +1173,20 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.setContent('<html data-shell="mobile"><body><main id="settings-root"></main></body></html>');
     await page.evaluate(() => {
       const prefs: Record<string, unknown> = {
-        showTransparencyPanel: true,
-        panelDefaultExpanded: true,
-        showLlmActivity: true,
-        panelWidth: 360,
+      showTransparencyPanel: true,
+      panelDefaultExpanded: true,
+      panelWidth: 360,
       };
       (window as any).__prefs = prefs;
       (window as any).ChatExecutionPlanBridge = { isEnabled: () => true };
       (window as any).EtlPrefs = {
         get: () => ({ ...prefs }),
-        set: (patch: Record<string, unknown>) => Object.assign(prefs, patch),
+        set: (patch: Record<string, unknown>) => {
+          Object.assign(prefs, patch);
+          return Promise.resolve(true);
+        },
         onChange: () => () => {},
+        whenReady: () => Promise.resolve(),
       };
       (window as any).AppShell = { getTheme: () => 'dark' };
       (window as any).AppRouter = { isSetupRequired: () => false };

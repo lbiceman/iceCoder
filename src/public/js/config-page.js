@@ -155,16 +155,6 @@ window.SettingsPage = (function () {
                   '<span class="config-default-switch-track" aria-hidden="true"></span>' +
                 '</label>' +
               '</div>' +
-              '<div class="settings-etl-row">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">显示 LLM 当前动作</span>' +
-                  '<span class="settings-etl-row-hint">仅展示动作状态，不含思维链</span>' +
-                '</div>' +
-                '<label class="config-default-switch settings-etl-switch" title="显示 LLM 当前动作">' +
-                  '<input type="checkbox" id="etl-show-llm-activity" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
-              '</div>' +
               '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
                 '<div class="settings-etl-row-info">' +
                   '<span class="settings-etl-row-label">面板默认宽度</span>' +
@@ -217,16 +207,11 @@ window.SettingsPage = (function () {
     if (subgroup) subgroup.classList.toggle('is-disabled', subgroupDisabled);
 
     var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
-    var showLlmActivity = parentEl.querySelector('#etl-show-llm-activity');
     var panelWidth = parentEl.querySelector('#etl-panel-width');
 
     if (panelDefaultExpanded) {
       panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
       panelDefaultExpanded.disabled = subgroupDisabled;
-    }
-    if (showLlmActivity) {
-      showLlmActivity.checked = prefs.showLlmActivity !== false;
-      showLlmActivity.disabled = subgroupDisabled;
     }
     if (panelWidth) {
       panelWidth.value = String(prefs.panelWidth || 360);
@@ -245,27 +230,39 @@ window.SettingsPage = (function () {
     if (showPanelInput) {
       showPanelInput.addEventListener('change', function () {
         var next = showPanelInput.checked;
-        window.EtlPrefs.set({ showTransparencyPanel: next });
-        syncEtlSettingsUi(parentEl);
-        if (window.Notification) {
-          window.Notification.success(
-            next ? '已开启执行透明层' : '已关闭执行透明层'
-          );
-        }
+        showPanelInput.disabled = true;
+        window.EtlPrefs.set({ showTransparencyPanel: next })
+          .then(function (ok) {
+            if (!ok) throw new Error('更新失败');
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) {
+              window.Notification.success(
+                next ? '已开启执行透明层' : '已关闭执行透明层'
+              );
+            }
+          })
+          .catch(function (err) {
+            showPanelInput.checked = !next;
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) {
+              window.Notification.error((err && err.message) || '更新失败');
+            }
+          })
+          .finally(function () { showPanelInput.disabled = false; });
       });
     }
 
     var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
     if (panelDefaultExpanded) {
       panelDefaultExpanded.addEventListener('change', function () {
-        window.EtlPrefs.set({ panelDefaultExpanded: panelDefaultExpanded.checked });
-      });
-    }
-
-    var showLlmActivity = parentEl.querySelector('#etl-show-llm-activity');
-    if (showLlmActivity) {
-      showLlmActivity.addEventListener('change', function () {
-        window.EtlPrefs.set({ showLlmActivity: showLlmActivity.checked });
+        var next = panelDefaultExpanded.checked;
+        panelDefaultExpanded.disabled = true;
+        window.EtlPrefs.set({ panelDefaultExpanded: next })
+          .catch(function () {
+            panelDefaultExpanded.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(function () { panelDefaultExpanded.disabled = false; });
       });
     }
 
@@ -273,10 +270,25 @@ window.SettingsPage = (function () {
     if (panelWidth) {
       panelWidth.addEventListener('change', function () {
         var width = parseInt(panelWidth.value, 10);
-        window.EtlPrefs.set({ panelWidth: width });
-        syncEtlSettingsUi(parentEl);
+        var previous = panelWidth.dataset.savedValue || panelWidth.value;
+        panelWidth.disabled = true;
+        window.EtlPrefs.set({ panelWidth: width })
+          .then(function () {
+            panelWidth.dataset.savedValue = String(width);
+            syncEtlSettingsUi(parentEl);
+          })
+          .catch(function () {
+            panelWidth.value = previous;
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(function () { panelWidth.disabled = false; });
       });
     }
+
+    window.EtlPrefs.whenReady().then(function () {
+      syncEtlSettingsUi(parentEl);
+    });
 
     activateEtlSettings(parentEl);
   }
