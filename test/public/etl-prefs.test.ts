@@ -7,86 +7,103 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ETL_PREFS_PATH = path.join(__dirname, '../../src/public/js/etl-prefs.js');
 
-function createMemoryStorage(): Storage {
-  const map = new Map<string, string>();
-  return {
-    get length() { return map.size; },
-    clear() { map.clear(); },
-    getItem(key: string) { return map.has(key) ? map.get(key)! : null; },
-    key(index: number) { return [...map.keys()][index] ?? null; },
-    removeItem(key: string) { map.delete(key); },
-    setItem(key: string, value: string) { map.set(key, value); },
+type FetchHandler = (input: string, init?: { method?: string; body?: string }) => Promise<{
+  ok: boolean;
+  json: () => Promise<Record<string, unknown>>;
+}>;
+
+function createFetchMock(initialPrefs: Record<string, unknown>, onPatch?: (body: unknown) => void): FetchHandler {
+  let prefs = { ...initialPrefs };
+  return async (_input, init) => {
+    if (init?.method === 'PATCH') {
+      const body = JSON.parse(init.body || '{}') as { iceEtlPrefs?: Record<string, unknown> };
+      onPatch?.(body);
+      prefs = {
+        panelDefaultExpanded: true,
+        panelWidth: 360,
+        showTransparencyPanel: true,
+        ...prefs,
+        ...(body.iceEtlPrefs || {}),
+      };
+      return {
+        ok: true,
+        json: async () => ({ success: true, iceEtlPrefs: prefs }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ iceEtlPrefs: prefs }),
+    };
   };
 }
 
-function loadEtlPrefs(storage: Storage) {
+function loadEtlPrefs(fetchImpl: FetchHandler) {
   const src = readFileSync(ETL_PREFS_PATH, 'utf-8');
   const context: Record<string, unknown> = {
     window: {},
-    localStorage: storage,
+    fetch: fetchImpl,
     console,
   };
   context.window = context;
   vm.createContext(context);
   vm.runInContext(src, context);
-  return (context.window as { EtlPrefs: {
-    get: () => Record<string, unknown>;
-    getKey: (key: string) => unknown;
-    set: (patch: Record<string, unknown>) => void;
-    onChange: (fn: () => void) => () => void;
-  } }).EtlPrefs;
+  return (context.window as {
+    EtlPrefs: {
+      get: () => Record<string, unknown>;
+      getKey: (key: string) => unknown;
+      set: (patch: Record<string, unknown>) => Promise<boolean>;
+      onChange: (fn: () => void) => () => void;
+      whenReady: () => Promise<void>;
+    };
+  }).EtlPrefs;
 }
 
 describe('etl-prefs', () => {
-  let storage: Storage;
-
-  beforeEach(() => {
-    storage = createMemoryStorage();
-  });
-
-  it('get() 返回默认对象', () => {
-    const EtlPrefs = loadEtlPrefs(storage);
+  it('whenReady 后从 /api/config 读回 iceEtlPrefs', async () => {
+    const EtlPrefs = loadEtlPrefs(createFetchMock({
+      showTransparencyPanel: false,
+      panelDefaultExpanded: true,
+      panelWidth: 360,
+    }));
+    await EtlPrefs.whenReady();
     expect(EtlPrefs.get()).toEqual({
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
-      showLlmActivity: true,
       panelWidth: 360,
     });
   });
 
-  it('set({ panelWidth: 9999 }) 后读回被夹到 480', () => {
-    const EtlPrefs = loadEtlPrefs(storage);
-    EtlPrefs.set({ panelWidth: 9999 });
+  it('set({ panelWidth: 9999 }) PATCH 后读回被夹到 480', async () => {
+    let patched: unknown = null;
+    const EtlPrefs = loadEtlPrefs(createFetchMock({}, (body) => { patched = body; }));
+    await EtlPrefs.whenReady();
+    await EtlPrefs.set({ panelWidth: 9999 });
+    expect(patched).toEqual({ iceEtlPrefs: { panelWidth: 9999 } });
     expect(EtlPrefs.getKey('panelWidth')).toBe(480);
   });
 
-  it('ICE_PLAN_PANEL=0 且缺失 ICE_ETL_PREFS 时迁移 showTransparencyPanel=false', () => {
-    storage.setItem('ICE_PLAN_PANEL', '0');
-    const EtlPrefs = loadEtlPrefs(storage);
-    expect(EtlPrefs.getKey('showTransparencyPanel')).toBe(false);
-  });
-
-  it('onChange 仅在实际变化时触发', () => {
-    const EtlPrefs = loadEtlPrefs(storage);
+  it('onChange 仅在实际变化时触发', async () => {
+    const EtlPrefs = loadEtlPrefs(createFetchMock({}));
+    await EtlPrefs.whenReady();
     let count = 0;
     EtlPrefs.onChange(() => { count += 1; });
-    EtlPrefs.set({ panelWidth: 420 });
-    EtlPrefs.set({ panelWidth: 420 });
+    await EtlPrefs.set({ panelWidth: 420 });
+    await EtlPrefs.set({ panelWidth: 420 });
     expect(count).toBe(1);
   });
 
-  it('忽略已废弃的时间轴偏好键，不写入当前偏好', () => {
-    const EtlPrefs = loadEtlPrefs(storage);
-    EtlPrefs.set({
+  it('忽略已废弃的时间轴偏好键，不写入当前偏好', async () => {
+    const EtlPrefs = loadEtlPrefs(createFetchMock({}));
+    await EtlPrefs.whenReady();
+    await EtlPrefs.set({
       timelineGranularity: 'step+tool',
       timelineTimeMode: 'relative',
       showTimeline: false,
       autoScrollActiveStep: false,
     } as Record<string, unknown>);
     expect(EtlPrefs.get()).toEqual({
-      showTransparencyPanel: false,
+      showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      showLlmActivity: true,
       panelWidth: 360,
     });
   });

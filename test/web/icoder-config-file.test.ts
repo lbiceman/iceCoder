@@ -51,4 +51,11 @@ describe('IceCoderConfigFile vs data/config.example.json', () => {
     const parsed = JSON.parse(raw) as IceCoderConfigFile;
     expect(parsed.shellBlacklist).toEqual(DEFAULT_SHELL_BLACKLIST_PATTERNS);
   });
+
+  it('iceEtlPrefs in example matches packaged DEFAULT_ICE_ETL_PREFS', async () => {
+    const { DEFAULT_ICE_ETL_PREFS } = await import('../../src/config/main-config-ice-etl-prefs.js');
+    const raw = readFileSync(configExamplePath, 'utf-8');
+    const parsed = JSON.parse(raw) as IceCoderConfigFile;
+    expect(parsed.iceEtlPrefs).toEqual(DEFAULT_ICE_ETL_PREFS);
+  });
 });

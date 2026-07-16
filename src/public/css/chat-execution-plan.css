@@ -119,22 +119,17 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 /* ── Tab 条 ── */
 .etl-tabs {
   display: flex;
-  gap: 2px;
-  padding: 6px 8px 0;
+  gap: 0;
+  padding: 6px 0 0;
   border-bottom: 1px solid var(--border-light, #363e54);
   background: var(--bg-secondary, #242a3a);
-  overflow-x: auto;
   flex-shrink: 0;
-  scrollbar-width: none;
-}
-
-.etl-tabs::-webkit-scrollbar {
-  display: none;
 }
 
 .etl-tab {
-  flex-shrink: 0;
-  padding: 6px 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -142,6 +137,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   font-size: 12.5px;
   cursor: pointer;
   white-space: nowrap;
+  text-align: center;
   transition: color 140ms ease, border-color 140ms ease;
 }
 

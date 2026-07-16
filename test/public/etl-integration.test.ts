@@ -67,7 +67,6 @@ async function loadObserver(options: {
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
-      showLlmActivity: true,
       panelWidth: 360,
     };
     const listeners: Array<() => void> = [];
@@ -89,6 +88,7 @@ async function loadObserver(options: {
       set: (patch: Record<string, unknown>) => {
         Object.assign(prefs, patch);
         listeners.slice().forEach((listener) => listener());
+        return Promise.resolve(true);
       },
       onChange: (listener: () => void) => {
         listeners.push(listener);
@@ -97,6 +97,7 @@ async function loadObserver(options: {
           if (index >= 0) listeners.splice(index, 1);
         };
       },
+      whenReady: () => Promise.resolve(),
     };
     (window as any).ChatSessionStore = {
       getActiveSessionId: () => activeSessionId,
@@ -652,15 +653,15 @@ describe('ETL 真实 Observer 链路', () => {
       };
     }, makePlan('desktop-tabs'));
 
-    expect(desktopResult.associations).toHaveLength(3);
+    expect(desktopResult.associations).toHaveLength(2);
     for (const association of desktopResult.associations) {
       expect(association.id).toMatch(/^etl-tab-/);
       expect(association.controls).toMatch(/^etl-panel-/);
       expect(association.panelLabelledBy).toBe(association.id);
     }
     expect(desktopResult.right).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
-    expect(desktopResult.end).toEqual({ tab: 'log', activeTab: 'log' });
-    expect(desktopResult.left).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
+    expect(desktopResult.end).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
+    expect(desktopResult.left).toEqual({ tab: 'flow', activeTab: 'flow' });
     expect(desktopResult.home).toEqual({ tab: 'flow', activeTab: 'flow' });
 
     const mobile = await loadObserver({ mobile: true });

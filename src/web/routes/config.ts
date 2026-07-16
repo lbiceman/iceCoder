@@ -16,6 +16,11 @@ import {
   writeSupervisorModeToMainConfig,
 } from '../../config/main-config-supervisor-mode.js';
 import {
+  DEFAULT_ICE_ETL_PREFS,
+  resolveIceEtlPrefs,
+  writeIceEtlPrefsToMainConfig,
+} from '../../config/main-config-ice-etl-prefs.js';
+import {
   DEFAULT_SHELL_BLACKLIST_PATTERNS,
   resetShellBlacklistCache,
   validateShellBlacklistPatterns,
@@ -31,7 +36,7 @@ import {
   getModelMaxOutputTokens,
   resolveOpenAiRequestTimeoutMs,
 } from '../../config/model-capabilities.js';
-import type { IceCoderConfigFile, ProviderConfig } from '../types.js';
+import type { IceCoderConfigFile, IceEtlPrefs, ProviderConfig } from '../types.js';
 
 // 向后兼容：历史上这些助手从本文件导出，保留 re-export 以免破坏既有引用与测试。
 export {
@@ -168,6 +173,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       let existingSupervisorMode: IceCoderConfigFile['supervisorMode'];
       let existingSkipPermissionChecks: IceCoderConfigFile['skipPermissionChecks'];
       let existingShellBlacklist: IceCoderConfigFile['shellBlacklist'];
+      let existingIceEtlPrefs: IceCoderConfigFile['iceEtlPrefs'];
       try {
         const data = await fs.readFile(configFile, 'utf-8');
         const existing = JSON.parse(data) as IceCoderConfigFile;
@@ -175,6 +181,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         existingSupervisorMode = existing.supervisorMode;
         existingSkipPermissionChecks = existing.skipPermissionChecks;
         existingShellBlacklist = existing.shellBlacklist;
+        existingIceEtlPrefs = existing.iceEtlPrefs;
       } catch { /* 文件不存在，首次保存 */ }
 
       // 构建 id → 原始 apiKey 的映射
@@ -212,6 +219,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           supervisorMode: normalizeSupervisorMode(existingSupervisorMode),
           skipPermissionChecks: resolveSkipPermissionChecks(existingSkipPermissionChecks),
           ...(existingShellBlacklist !== undefined ? { shellBlacklist: existingShellBlacklist } : {}),
+          ...(existingIceEtlPrefs !== undefined ? { iceEtlPrefs: existingIceEtlPrefs } : {}),
         },
         null,
         2,
@@ -265,6 +273,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           ? config.shellBlacklist
           : [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
         shellBlacklistIsDefault: config.shellBlacklist === undefined,
+        iceEtlPrefs: resolveIceEtlPrefs(config),
+        iceEtlPrefsIsDefault: config.iceEtlPrefs === undefined,
         setupRequired: !isAppConfigReady(config),
       });
     } catch (err) {
@@ -275,6 +285,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           skipPermissionChecks: false,
           shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS],
           shellBlacklistIsDefault: true,
+          iceEtlPrefs: { ...DEFAULT_ICE_ETL_PREFS },
+          iceEtlPrefsIsDefault: true,
           setupRequired: true,
         });
         return;
@@ -352,6 +364,48 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `更新 Shell 黑名单失败：${message}` });
+    }
+  });
+
+  /**
+   * PATCH /api/config/ice-etl-prefs — 更新执行透明层 UI 偏好。
+   */
+  router.patch('/ice-etl-prefs', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { iceEtlPrefs?: unknown })?.iceEtlPrefs;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        res.status(400).json({ error: 'iceEtlPrefs 须为对象' });
+        return;
+      }
+      const patch = raw as Record<string, unknown>;
+      const allowedKeys = new Set([
+        'showTransparencyPanel',
+        'panelDefaultExpanded',
+        'panelWidth',
+      ]);
+      for (const key of Object.keys(patch)) {
+        if (!allowedKeys.has(key)) {
+          res.status(400).json({ error: `iceEtlPrefs 含未知字段：${key}` });
+          return;
+        }
+      }
+      if (patch.showTransparencyPanel !== undefined && typeof patch.showTransparencyPanel !== 'boolean') {
+        res.status(400).json({ error: 'showTransparencyPanel 须为 boolean' });
+        return;
+      }
+      if (patch.panelDefaultExpanded !== undefined && typeof patch.panelDefaultExpanded !== 'boolean') {
+        res.status(400).json({ error: 'panelDefaultExpanded 须为 boolean' });
+        return;
+      }
+      if (patch.panelWidth !== undefined && typeof patch.panelWidth !== 'number') {
+        res.status(400).json({ error: 'panelWidth 须为 number' });
+        return;
+      }
+      const saved = await writeIceEtlPrefsToMainConfig(configFile, patch as Partial<IceEtlPrefs>);
+      res.json({ success: true, iceEtlPrefs: saved });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `更新执行透明层偏好失败：${message}` });
     }
   });
 
