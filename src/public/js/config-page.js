@@ -130,7 +130,6 @@ window.SettingsPage = (function () {
         '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
           '<div class="settings-section-head">' +
             '<h2 class="settings-section-title">执行透明层</h2>' +
-            '<span class="config-badge is-off" id="settings-etl-capability-badge" hidden>服务未启用</span>' +
           '</div>' +
           '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
           '<div class="settings-card" id="settings-etl-main-card">' +
@@ -620,6 +619,7 @@ window.SettingsPage = (function () {
           '<div class="config-center-header-text">' +
             '<h1 class="config-center-title">设置</h1>' +
             '<p class="config-center-subtitle">管理外观主题、安全选项、模型与 MCP 服务器</p>' +
+            '<p class="config-center-format-hint">仅支持 OpenAI 兼容 API（如 <code>/v1/chat/completions</code>），不支持 Anthropic Messages API（A/）。</p>' +
           '</div>' +
         '</header>' +
         '<nav class="config-tabs" role="tablist" aria-label="设置类型">' +
