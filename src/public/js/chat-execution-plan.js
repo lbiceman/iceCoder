@@ -128,8 +128,9 @@ window.ChatExecutionPlan = (function () {
   var roundRecordByIteration = Object.create(null);
   var expandedRounds = Object.create(null);
   var bannerDetailOpen = false;
-  var roundVisibleLimit = 8;
+  var roundVisibleLimit = 20;
   var roundTimelineBound = false;
+  var cachedLoadMoreHidden = -1;
   var flowPersistTimer = null;
   var flowPersistHandler = null;
 
@@ -1007,19 +1008,29 @@ window.ChatExecutionPlan = (function () {
     return formatThousands(used) + '/' + formatWindow(win) + ' (' + pct + '%)';
   }
 
+  function ensureFooterSkeleton() {
+    if (!footerEl || footerEl.querySelector('.etl-foot-token')) return;
+    footerEl.innerHTML = '';
+    footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', '—'));
+    footerEl.appendChild(makeFootItem('etl-foot-tool', '工具', '—'));
+    footerEl.appendChild(makeFootItem('etl-foot-time', '时间', '00:00'));
+  }
+
   function renderFooter() {
     if (!footerEl) return;
+    ensureFooterSkeleton();
     var tokenTxt = formatTokenStat();
     var liveToolCount = authoritativeToolCalls === null
       ? uniqueToolCallCount
       : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
     var timeTxt = formatTurnElapsed();
-    footerEl.innerHTML = '';
-
-    footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', tokenTxt));
-    footerEl.appendChild(makeFootItem('etl-foot-tool', '工具', toolTxt));
-    footerEl.appendChild(makeFootItem('etl-foot-time', '时间', timeTxt));
+    var tokenEl = footerEl.querySelector('.etl-foot-token b');
+    var toolEl = footerEl.querySelector('.etl-foot-tool b');
+    var timeEl = footerEl.querySelector('.etl-foot-time b');
+    if (tokenEl) tokenEl.textContent = tokenTxt;
+    if (toolEl) toolEl.textContent = toolTxt;
+    if (timeEl) timeEl.textContent = timeTxt;
   }
 
   function makeFootItem(cls, label, value) {
@@ -1173,15 +1184,19 @@ window.ChatExecutionPlan = (function () {
         llmActivityEl.textContent = '';
         return;
       }
-      llmActivityEl.innerHTML = '';
-      var label = document.createElement('div');
-      label.className = 'etl-llm-label';
-      label.textContent = 'LLM 当前动作';
-      var text = document.createElement('div');
-      text.className = 'etl-llm-text';
-      text.textContent = phrase;
-      llmActivityEl.appendChild(label);
-      llmActivityEl.appendChild(text);
+      var label = llmActivityEl.querySelector('.etl-llm-label');
+      var text = llmActivityEl.querySelector('.etl-llm-text');
+      if (!label || !text) {
+        llmActivityEl.textContent = '';
+        label = document.createElement('div');
+        label.className = 'etl-llm-label';
+        label.textContent = 'LLM 当前动作';
+        text = document.createElement('div');
+        text.className = 'etl-llm-text';
+        llmActivityEl.appendChild(label);
+        llmActivityEl.appendChild(text);
+      }
+      if (text.textContent !== phrase) text.textContent = phrase;
       llmActivityEl.classList.remove('hidden');
     } catch (e) {
       safeWarn('renderLlmActivity', e);
@@ -1497,12 +1512,7 @@ window.ChatExecutionPlan = (function () {
           record.branchReasons.push(branchReason);
         }
       }
-      renderTaskOverview();
-      if (roundResult.created && roundRecords.length > 1) {
-        var prevRound = roundRecords[roundRecords.length - 2];
-        syncRoundTimeline({ iteration: prevRound.iteration });
-      }
-      syncRoundTimeline({ iteration: record.iteration });
+      syncRoundTimeline({ iteration: record.iteration, insert: roundResult.created });
       renderEmptyState();
       if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
       scheduleFlowPersist();
@@ -1720,15 +1730,37 @@ window.ChatExecutionPlan = (function () {
     return buildCollapsedRoundPill(tools);
   }
 
+  function roundPillSignature(tools, collapsed) {
+    if (!tools.length) return '0';
+    if (collapsed) {
+      var first = tools[0];
+      return 'c:' + first.toolCallId + ':' + tools.length;
+    }
+    return 'e:' + tools.map(function (tool) { return tool.toolCallId; }).join(',');
+  }
+
+  function shouldRebuildRoundPills(roundNode, record) {
+    var tools = getRoundTools(record);
+    var collapsed = !isRoundExpanded(record);
+    var wrap = roundNode.querySelector('.etl-round-pills');
+    if (!tools.length) return !!wrap;
+    if (!wrap) return true;
+    var nextSig = roundPillSignature(tools, collapsed);
+    return wrap.dataset.pillSig !== nextSig;
+  }
+
   function renderRoundPills(summary, tools, record) {
     if (!summary) return;
     var collapsed = !isRoundExpanded(record);
-    var old = summary.querySelector('.etl-round-pills');
-    if (old) old.parentNode.removeChild(old);
     var pills = buildRoundPills(tools, collapsed);
     if (!pills.length) return;
+    var nextSig = roundPillSignature(tools, collapsed);
+    var wrap = summary.querySelector('.etl-round-pills');
+    if (wrap && wrap.dataset.pillSig === nextSig) return;
+    if (wrap) wrap.parentNode.removeChild(wrap);
     var pillWrap = document.createElement('div');
     pillWrap.className = 'etl-round-pills' + (collapsed ? ' etl-round-pills--folded' : '');
+    pillWrap.dataset.pillSig = nextSig;
     for (var p = 0; p < pills.length; p++) {
       var pill = document.createElement('span');
       pill.className = 'etl-round-pill';
@@ -1802,7 +1834,7 @@ window.ChatExecutionPlan = (function () {
   }
 
   function getVisibleRoundRecords() {
-    return roundRecords.slice(-roundVisibleLimit).reverse();
+    return roundRecords.slice(-roundVisibleLimit);
   }
 
   function isRoundInVisibleWindow(record) {
@@ -1828,28 +1860,252 @@ window.ChatExecutionPlan = (function () {
     return { empty: empty, list: list };
   }
 
-  function syncLoadMoreButton() {
+  function syncLoadMoreButton(force) {
     if (!roundTimelineEl) return;
     var loadMore = roundTimelineEl.querySelector('#etl-round-load-more');
     if (!loadMore) return;
     var hiddenCount = Math.max(0, roundRecords.length - roundVisibleLimit);
+    if (!force && hiddenCount === cachedLoadMoreHidden) return;
+    cachedLoadMoreHidden = hiddenCount;
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
     loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ' (' + hiddenCount + ')' : '');
   }
 
-  function pruneInvisibleRoundNodes(list, visibleSet) {
-    if (!list) return;
-    var nodes = list.querySelectorAll('.etl-round-node');
-    Array.prototype.forEach.call(nodes, function (node) {
-      if (!visibleSet || !visibleSet[node.dataset.iteration]) {
-        node.parentNode.removeChild(node);
-      }
-    });
+  function isRoundExpanded(record) {
+    if (!record) return false;
+    var key = String(record.iteration);
+    return expandedRounds[key] === true;
   }
 
-  function insertRoundNodeAt(list, node, index) {
-    var ref = list.children[index] || null;
-    list.insertBefore(node, ref);
+  function applyRoundExpandPresentation(roundNode, record) {
+    if (!roundNode || !record) return;
+    var expanded = isRoundExpanded(record);
+    roundNode.classList.toggle('is-expanded', expanded);
+    var row = roundNode.querySelector('.etl-round-row');
+    if (row) row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    var toggle = roundNode.querySelector('.etl-round-toggle');
+    if (toggle) {
+      toggle.textContent = expanded ? '▴' : '▾';
+      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
+    }
+    if (expanded) {
+      var pills = roundNode.querySelector('.etl-round-pills');
+      if (pills) pills.parentNode.removeChild(pills);
+      appendRoundDetailElement(roundNode, record);
+      var detail = roundNode.querySelector('.etl-round-detail');
+      var actions = detail && detail.querySelector('.etl-round-actions');
+      if (actions) {
+        var tools = getRoundTools(record);
+        for (var i = 0; i < tools.length; i++) {
+          if (!actions.querySelector('[data-tool-call-id="' + tools[i].toolCallId + '"]')) {
+            actions.appendChild(makeRoundActionRow(tools[i]));
+          }
+        }
+      }
+      patchRoundReason(roundNode, record);
+    } else {
+      syncRoundToolsPreview(roundNode, record);
+    }
+  }
+
+  /** 紧凑轮次壳（对齐 chat appendToolAction）：仅 summary + live 工具槽，不建 detail。 */
+  function createRoundShell(record) {
+    var visualStatus = roundVisualStatus(record);
+    var item = document.createElement('li');
+    item.className = 'etl-round-node etl-round-card status-' + visualStatus
+      + (record.isFinal ? ' is-final' : '');
+    item.dataset.iteration = String(record.iteration);
+
+    var row = document.createElement('div');
+    row.className = 'etl-round-row';
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-expanded', 'false');
+
+    var marker = document.createElement('span');
+    marker.className = 'etl-round-marker';
+    marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+
+    var summary = document.createElement('div');
+    summary.className = 'etl-round-summary';
+
+    var head = document.createElement('div');
+    head.className = 'etl-round-head';
+    var title = document.createElement('span');
+    title.className = 'etl-round-title';
+    title.textContent = deriveRoundTitle(record);
+    var badge = document.createElement('span');
+    badge.className = 'etl-round-badge status-' + visualStatus;
+    badge.textContent = roundStatusLabel(visualStatus);
+    var time = document.createElement('span');
+    time.className = 'etl-round-duration';
+    time.textContent = roundDuration(record);
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'etl-round-toggle';
+    toggle.setAttribute('aria-label', '展开轮次详情');
+    toggle.textContent = '▾';
+    head.appendChild(title);
+    head.appendChild(badge);
+    head.appendChild(time);
+    head.appendChild(toggle);
+    summary.appendChild(head);
+
+    var liveTools = document.createElement('ul');
+    liveTools.className = 'etl-round-live-tools';
+    summary.appendChild(liveTools);
+
+    row.appendChild(marker);
+    row.appendChild(summary);
+    item.appendChild(row);
+    return item;
+  }
+
+  function ensureLiveToolsList(roundNode) {
+    if (!roundNode) return null;
+    var summary = roundNode.querySelector('.etl-round-summary');
+    if (!summary) return null;
+    var list = summary.querySelector('.etl-round-live-tools');
+    if (list) return list;
+    list = document.createElement('ul');
+    list.className = 'etl-round-live-tools';
+    summary.appendChild(list);
+    return list;
+  }
+
+  function syncRoundToolsPreview(roundNode, record) {
+    if (!roundNode || !record || isRoundExpanded(record)) return;
+    var summary = roundNode.querySelector('.etl-round-summary');
+    if (!summary) return;
+    renderRoundPills(summary, getRoundTools(record), record);
+  }
+
+  function appendToolRowToDetail(roundNode, tool) {
+    if (!roundNode || !tool) return;
+    appendRoundDetailElement(roundNode, roundRecordByIteration[roundNode.dataset.iteration]);
+    var detail = roundNode.querySelector('.etl-round-detail');
+    if (!detail) return;
+    var actions = detail.querySelector('.etl-round-actions');
+    if (!actions) return;
+    if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
+      actions.appendChild(makeRoundActionRow(tool));
+      while (actions.children.length > MAX_TOOL_HISTORY) {
+        actions.removeChild(actions.firstElementChild);
+      }
+    }
+  }
+
+  function syncRoundFinalDetail(roundNode, record) {
+    if (!roundNode || !record || !record.isFinal) return;
+    var detail = roundNode.querySelector('.etl-round-detail');
+    if (!detail || getRoundTools(record).length) return;
+    var actionLabel = detail.querySelector('.etl-round-section-label');
+    if (actionLabel) actionLabel.textContent = '本轮结果';
+    if (!detail.querySelector('.etl-round-complete')) {
+      rebuildRoundDetailBody(detail, record);
+    } else {
+      var completion = detail.querySelector('.etl-round-complete');
+      if (completion) completion.textContent = roundCompletionText(record);
+    }
+  }
+
+  /** 对齐 chat appendToolAction：折叠态写入隐藏槽供 patch；展开态只写入 detail。 */
+  function appendLiveToolToRound(roundNode, tool) {
+    if (!roundNode || !tool || !tool.toolCallId) return;
+    var record = roundRecordByIteration[roundNode.dataset.iteration];
+    if (!record) return;
+    if (isRoundExpanded(record)) {
+      appendToolRowToDetail(roundNode, tool);
+      return;
+    }
+    var list = ensureLiveToolsList(roundNode);
+    if (!list || list.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) return;
+    list.appendChild(makeRoundActionRow(tool));
+    while (list.children.length > MAX_TOOL_HISTORY) {
+      list.removeChild(list.firstElementChild);
+    }
+    syncRoundToolsPreview(roundNode, record);
+  }
+
+  function patchRoundShellSummary(roundNode, record) {
+    if (!roundNode || !record) return;
+    var visualStatus = roundVisualStatus(record);
+    roundNode.classList.remove('status-done', 'status-failed', 'status-running');
+    roundNode.classList.add('status-' + visualStatus);
+    roundNode.classList.toggle('is-final', !!record.isFinal);
+    var marker = roundNode.querySelector('.etl-round-marker');
+    if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    var title = roundNode.querySelector('.etl-round-title');
+    if (title) title.textContent = deriveRoundTitle(record);
+    var badge = roundNode.querySelector('.etl-round-badge');
+    if (badge) {
+      badge.className = 'etl-round-badge status-' + visualStatus;
+      badge.textContent = roundStatusLabel(visualStatus);
+    }
+    var time = roundNode.querySelector('.etl-round-duration');
+    if (time) time.textContent = roundDuration(record);
+    applyRoundExpandPresentation(roundNode, record);
+    syncRoundFinalDetail(roundNode, record);
+  }
+
+  function patchFooterToolCount() {
+    if (!footerEl) return;
+    ensureFooterSkeleton();
+    var liveToolCount = authoritativeToolCalls === null
+      ? uniqueToolCallCount
+      : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+    var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
+    var toolEl = footerEl.querySelector('.etl-foot-tool b');
+    if (toolEl && toolEl.textContent !== toolTxt) toolEl.textContent = toolTxt;
+  }
+
+  /** 新增可见轮次：≤limit append 壳；>limit remove 首条再 append。 */
+  function pushRoundShellToList(list, record) {
+    if (!list || !record) return null;
+    if (findRoundNode(record.iteration)) return findRoundNode(record.iteration);
+    var fresh = createRoundShell(record);
+    if (list.children.length >= roundVisibleLimit) {
+      var first = list.firstElementChild;
+      if (first) list.removeChild(first);
+    }
+    list.appendChild(fresh);
+    return fresh;
+  }
+
+  /** 加载更早轮次：在列表头部按时间顺序 prepend 尚未渲染的轮次。 */
+  function prependMissingRoundNodes(list, records) {
+    if (!list || !records || !records.length) return;
+    var missing = [];
+    for (var i = 0; i < records.length; i++) {
+      if (!findRoundNode(records[i].iteration)) missing.push(records[i]);
+    }
+    for (var j = missing.length - 1; j >= 0; j--) {
+      list.insertBefore(materializeRoundNode(missing[j]), list.firstElementChild);
+    }
+  }
+
+  function materializeRoundNode(record) {
+    var node = createRoundShell(record);
+    if (!isRoundExpanded(record)) {
+      var tools = getRoundTools(record);
+      for (var i = 0; i < tools.length; i++) {
+        var list = ensureLiveToolsList(node);
+        if (list && !list.querySelector('[data-tool-call-id="' + tools[i].toolCallId + '"]')) {
+          list.appendChild(makeRoundActionRow(tools[i]));
+        }
+      }
+    }
+    patchRoundShellSummary(node, record);
+    return node;
+  }
+
+  function rebuildVisibleRoundList(list) {
+    if (!list) return;
+    list.innerHTML = '';
+    var visible = getVisibleRoundRecords();
+    for (var i = 0; i < visible.length; i++) {
+      list.appendChild(materializeRoundNode(visible[i]));
+    }
   }
 
   function rebuildRoundPillsInNode(roundNode, record) {
@@ -1871,6 +2127,7 @@ window.ChatExecutionPlan = (function () {
     if (!roundNode || !record) return;
     snapshotRoundPlan(record);
     patchRoundSummary(roundNode, record);
+    appendRoundDetailElement(roundNode, record);
     var detail = roundNode.querySelector('.etl-round-detail');
     if (!detail) return;
     var tools = getRoundTools(record);
@@ -1924,11 +2181,13 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  function patchRoundSummary(roundNode, record) {
+  function patchRoundSummary(roundNode, record, options) {
+    options = options || {};
     var visualStatus = roundVisualStatus(record);
-    roundNode.className = 'etl-round-node status-' + visualStatus
-      + (record.isFinal ? ' is-final' : '')
-      + (isRoundExpanded(record) ? ' is-expanded' : '');
+    roundNode.classList.remove('status-done', 'status-failed', 'status-running', 'is-expanded');
+    roundNode.classList.add('status-' + visualStatus);
+    roundNode.classList.toggle('is-final', !!record.isFinal);
+    roundNode.classList.toggle('is-expanded', isRoundExpanded(record));
     var marker = roundNode.querySelector('.etl-round-marker');
     if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
     var title = roundNode.querySelector('.etl-round-title');
@@ -1940,7 +2199,9 @@ window.ChatExecutionPlan = (function () {
     }
     var time = roundNode.querySelector('.etl-round-duration');
     if (time) time.textContent = roundDuration(record);
-    rebuildRoundPillsInNode(roundNode, record);
+    if (!options.skipPills && shouldRebuildRoundPills(roundNode, record)) {
+      rebuildRoundPillsInNode(roundNode, record);
+    }
   }
 
   function rebuildRoundDetailBody(detail, record) {
@@ -1977,7 +2238,49 @@ window.ChatExecutionPlan = (function () {
     detail.appendChild(reason);
   }
 
+  function appendRoundDetailElement(item, record) {
+    if (!item || item.querySelector('.etl-round-detail')) return;
+    var tools = getRoundTools(record);
+    var detail = document.createElement('div');
+    detail.className = 'etl-round-detail';
+
+    var actionLabel = document.createElement('div');
+    actionLabel.className = 'etl-round-section-label';
+    actionLabel.textContent = record.isFinal ? '本轮结果' : '做了什么';
+    detail.appendChild(actionLabel);
+
+    if (tools.length) {
+      var actionList = document.createElement('ul');
+      actionList.className = 'etl-round-actions';
+      for (var i = 0; i < tools.length; i++) {
+        actionList.appendChild(makeRoundActionRow(tools[i]));
+      }
+      detail.appendChild(actionList);
+    } else if (record.isFinal) {
+      var completion = document.createElement('div');
+      completion.className = 'etl-round-complete';
+      completion.textContent = roundCompletionText(record);
+      detail.appendChild(completion);
+    } else {
+      var planning = document.createElement('div');
+      planning.className = 'etl-round-reason';
+      planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
+      detail.appendChild(planning);
+    }
+
+    var reasonLabel = document.createElement('div');
+    reasonLabel.className = 'etl-round-section-label';
+    reasonLabel.textContent = '为什么这么做';
+    var reason = document.createElement('div');
+    reason.className = 'etl-round-reason';
+    reason.textContent = deriveRoundReason(record);
+    detail.appendChild(reasonLabel);
+    detail.appendChild(reason);
+    item.appendChild(detail);
+  }
+
   function appendToolToRoundNode(roundNode, record, tool) {
+    appendRoundDetailElement(roundNode, record);
     patchRoundSummary(roundNode, record);
     var detail = roundNode.querySelector('.etl-round-detail');
     if (!detail) return;
@@ -1993,10 +2296,8 @@ window.ChatExecutionPlan = (function () {
     patchRoundReason(roundNode, record);
   }
 
-  function tryPatchRoundToolRow(tool) {
-    if (!roundTimelineEl || !tool || !tool.toolCallId) return false;
-    var row = roundTimelineEl.querySelector('.etl-round-tool[data-tool-call-id="' + tool.toolCallId + '"]');
-    if (!row) return false;
+  function patchRoundToolRow(row, tool) {
+    if (!row || !tool) return;
     var status = toolStatusClass(tool.status);
     row.className = 'etl-round-action etl-round-tool status-' + status;
     row.dataset.status = tool.status;
@@ -2006,11 +2307,23 @@ window.ChatExecutionPlan = (function () {
     if (icon) icon.textContent = status === 'failed' ? '×' : '✓';
     var dur = row.querySelector('.etl-round-action-dur');
     if (dur) dur.textContent = formatToolDuration(tool);
+  }
+
+  function tryPatchRoundToolRow(tool) {
+    if (!tool || !tool.toolCallId) return false;
+    var rows = [];
+    if (roundTimelineEl) {
+      var matches = roundTimelineEl.querySelectorAll('[data-tool-call-id="' + tool.toolCallId + '"]');
+      Array.prototype.forEach.call(matches, function (row) { rows.push(row); });
+    }
+    if (!rows.length) return false;
+    for (var i = 0; i < rows.length; i++) patchRoundToolRow(rows[i], tool);
     return true;
   }
 
-  /** 已有节点 patch，缺失节点 append；不做整节点替换。 */
-  function ensureRoundNode(record) {
+  /** 已有节点就地 patch；新节点走 pushRoundNodeToList。 */
+  function ensureRoundNode(record, options) {
+    options = options || {};
     var ctx = getRoundListContext();
     if (!ctx || !ctx.list || !record) return null;
     var existing = findRoundNode(record.iteration);
@@ -2018,18 +2331,8 @@ window.ChatExecutionPlan = (function () {
       patchRoundNode(existing, record);
       return existing;
     }
-    var fresh = makeRoundNode(record);
-    var visible = getVisibleRoundRecords();
-    var index = -1;
-    for (var i = 0; i < visible.length; i++) {
-      if (visible[i].iteration === record.iteration) {
-        index = i;
-        break;
-      }
-    }
-    if (index < 0) return null;
-    insertRoundNodeAt(ctx.list, fresh, index);
-    return fresh;
+    if (options.insert) return pushRoundShellToList(ctx.list, record);
+    return null;
   }
 
   function syncRoundTimeline(options) {
@@ -2037,10 +2340,10 @@ window.ChatExecutionPlan = (function () {
     try {
       var ctx = getRoundListContext();
       if (!ctx || !ctx.list) return;
-      syncLoadMoreButton();
 
       if (options.reset) {
         ctx.list.innerHTML = '';
+        cachedLoadMoreHidden = -1;
       }
 
       if (options.iteration != null) {
@@ -2054,35 +2357,36 @@ window.ChatExecutionPlan = (function () {
         if (options.tool && options.mode === 'append') {
           var liveNode = findRoundNode(rec.iteration);
           if (liveNode) {
-            appendToolToRoundNode(liveNode, rec, options.tool);
+            appendLiveToolToRound(liveNode, options.tool);
+            patchRoundShellSummary(liveNode, rec);
             return;
           }
         }
-        ensureRoundNode(rec);
+        if (options.insert) {
+          var shell = pushRoundShellToList(ctx.list, rec);
+          if (shell && options.tool) appendLiveToolToRound(shell, options.tool);
+          if (shell) patchRoundShellSummary(shell, rec);
+          syncLoadMoreButton();
+          return;
+        }
+        var existing = findRoundNode(rec.iteration);
+        if (existing) {
+          if (options.tool) appendLiveToolToRound(existing, options.tool);
+          patchRoundShellSummary(existing, rec);
+        }
         return;
       }
 
       if (options.loadMore) {
-        var moreVisible = getVisibleRoundRecords();
-        for (var mi = 0; mi < moreVisible.length; mi++) {
-          ensureRoundNode(moreVisible[mi]);
-        }
-        var moreSet = Object.create(null);
-        for (var mj = 0; mj < moreVisible.length; mj++) {
-          moreSet[String(moreVisible[mj].iteration)] = true;
-        }
-        pruneInvisibleRoundNodes(ctx.list, moreSet);
+        cachedLoadMoreHidden = -1;
+        syncLoadMoreButton(true);
+        prependMissingRoundNodes(ctx.list, getVisibleRoundRecords());
         refreshVisibleRoundPillSummaries();
         return;
       }
 
-      var visible = getVisibleRoundRecords();
-      var visibleSet = Object.create(null);
-      for (var vi = 0; vi < visible.length; vi++) {
-        visibleSet[String(visible[vi].iteration)] = true;
-        ensureRoundNode(visible[vi]);
-      }
-      pruneInvisibleRoundNodes(ctx.list, visibleSet);
+      syncLoadMoreButton(true);
+      rebuildVisibleRoundList(ctx.list);
       refreshVisibleRoundPillSummaries();
     } catch (e) {
       safeWarn('syncRoundTimeline', e);
@@ -2093,31 +2397,13 @@ window.ChatExecutionPlan = (function () {
     syncRoundTimeline({ reset: !!reset });
   }
 
-  function isRoundExpanded(record) {
-    if (!record) return false;
-    var key = String(record.iteration);
-    if (expandedRounds[key] === true) return true;
-    if (expandedRounds[key] === false) return false;
-    var latest = roundRecords.length ? roundRecords[roundRecords.length - 1].iteration : null;
-    return record.iteration === latest;
-  }
-
   function toggleRoundExpanded(iteration) {
     var key = String(iteration);
     var record = roundRecordByIteration[key];
     expandedRounds[key] = !isRoundExpanded(record);
     var node = findRoundNode(iteration);
-    if (!node) return;
-    var expanded = isRoundExpanded(record);
-    node.classList.toggle('is-expanded', expanded);
-    var row = node.querySelector('.etl-round-row');
-    if (row) row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    var toggle = node.querySelector('.etl-round-toggle');
-    if (toggle) {
-      toggle.textContent = expanded ? '▴' : '▾';
-      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
-    }
-    rebuildRoundPillsInNode(node, record);
+    if (!node || !record) return;
+    applyRoundExpandPresentation(node, record);
   }
 
   function bindRoundTimelineEvents() {
@@ -2130,6 +2416,7 @@ window.ChatExecutionPlan = (function () {
         var loadMore = target.closest('#etl-round-load-more');
         if (loadMore) {
           roundVisibleLimit += 8;
+          cachedLoadMoreHidden = -1;
           syncRoundTimeline({ loadMore: true });
           return;
         }
@@ -2145,14 +2432,15 @@ window.ChatExecutionPlan = (function () {
     });
   }
 
-  function makeRoundNode(record) {
+  function makeRoundNode(record, options) {
+    options = options || {};
     var tools = getRoundTools(record);
     var visualStatus = roundVisualStatus(record);
     var itemKey = String(record.iteration);
     var isExpanded = isRoundExpanded(record);
 
     var item = document.createElement('li');
-    item.className = 'etl-round-node status-' + visualStatus
+    item.className = 'etl-round-node etl-round-card status-' + visualStatus
       + (record.isFinal ? ' is-final' : '')
       + (isExpanded ? ' is-expanded' : '');
     item.dataset.iteration = itemKey;
@@ -2198,42 +2486,7 @@ window.ChatExecutionPlan = (function () {
     row.appendChild(summary);
     item.appendChild(row);
 
-    var detail = document.createElement('div');
-    detail.className = 'etl-round-detail etl-round-card';
-
-    var actionLabel = document.createElement('div');
-    actionLabel.className = 'etl-round-section-label';
-    actionLabel.textContent = record.isFinal ? '本轮结果' : '做了什么';
-    detail.appendChild(actionLabel);
-
-    if (tools.length) {
-      var actionList = document.createElement('ul');
-      actionList.className = 'etl-round-actions';
-      for (var i = 0; i < tools.length; i++) {
-        actionList.appendChild(makeRoundActionRow(tools[i]));
-      }
-      detail.appendChild(actionList);
-    } else if (record.isFinal) {
-      var completion = document.createElement('div');
-      completion.className = 'etl-round-complete';
-      completion.textContent = roundCompletionText(record);
-      detail.appendChild(completion);
-    } else {
-      var planning = document.createElement('div');
-      planning.className = 'etl-round-reason';
-      planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
-      detail.appendChild(planning);
-    }
-
-    var reasonLabel = document.createElement('div');
-    reasonLabel.className = 'etl-round-section-label';
-    reasonLabel.textContent = '为什么这么做';
-    var reason = document.createElement('div');
-    reason.className = 'etl-round-reason';
-    reason.textContent = deriveRoundReason(record);
-    detail.appendChild(reasonLabel);
-    detail.appendChild(reason);
-    item.appendChild(detail);
+    if (!options.summaryOnly) appendRoundDetailElement(item, record);
 
     return item;
   }
@@ -2438,11 +2691,6 @@ window.ChatExecutionPlan = (function () {
           }
         }
         lastTool = { toolCallId: callId, toolName: toolName, pending: true, ts: callTs };
-        renderTaskOverview();
-        if (roundResult.created && roundRecords.length > 1) {
-          var prevIter = roundRecords[roundRecords.length - 2].iteration;
-          syncRoundTimeline({ iteration: prevIter });
-        }
         if (!historyTrimmed && createdTool && findRoundNode(round.iteration) && !roundResult.created
           && getRoundTools(round).length < MAX_TOOL_HISTORY) {
           syncRoundTimeline({
@@ -2451,11 +2699,17 @@ window.ChatExecutionPlan = (function () {
             tool: toolRecordById[callId],
           });
         } else {
-          syncRoundTimeline({ iteration: round.iteration });
+          syncRoundTimeline({
+            iteration: round.iteration,
+            insert: roundResult.created,
+            tool: createdTool ? toolRecordById[callId] : null,
+          });
         }
         renderEmptyState();
-        renderLlmActivity();
-        renderFooter();
+        if (createdTool) {
+          patchFooterToolCount();
+          renderLlmActivity();
+        }
       } else if (step.type === 'tool_result') {
         var resultId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
         var matched = resultId ? toolRecordById[resultId] : null;
@@ -2480,10 +2734,7 @@ window.ChatExecutionPlan = (function () {
           if (allDone) matchedRound.status = 'done';
           if (tryPatchRoundToolRow(matched)) {
             var roundNode = findRoundNode(matchedRound.iteration);
-            if (roundNode) {
-              patchRoundSummary(roundNode, matchedRound);
-              patchRoundReason(roundNode, matchedRound);
-            }
+            if (roundNode) patchRoundShellSummary(roundNode, matchedRound);
           } else {
             syncRoundTimeline({ iteration: matchedRound.iteration });
           }
@@ -2513,7 +2764,8 @@ window.ChatExecutionPlan = (function () {
       roundRecords = [];
       roundRecordByIteration = Object.create(null);
       expandedRounds = Object.create(null);
-      roundVisibleLimit = 8;
+      roundVisibleLimit = 20;
+      cachedLoadMoreHidden = -1;
       renderTaskOverview();
       renderRoundTimeline(true);
       renderEmptyState();
@@ -2732,7 +2984,7 @@ window.ChatExecutionPlan = (function () {
       roundRecords = [];
       roundRecordByIteration = Object.create(null);
       expandedRounds = Object.create(null);
-      roundVisibleLimit = 8;
+      roundVisibleLimit = 20;
       bannerDetailOpen = false;
       lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
       toolRecords = [];
@@ -3056,7 +3308,7 @@ window.ChatExecutionPlan = (function () {
         ? snapshot.authoritativeToolCalls
         : null;
       expandedRounds = Object.create(null);
-      roundVisibleLimit = 8;
+      roundVisibleLimit = 20;
 
       if (!opts.overlayOnly) {
         currentPlan = snapshot.currentPlan && hasSafePlanShape(snapshot.currentPlan)

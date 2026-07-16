@@ -949,14 +949,17 @@ describe('ETL 真实 Observer 链路', () => {
       emit('step', { step: { type: 'final', iteration: 3, stopReason: 'model_done' } });
 
       const nodes = [...document.querySelectorAll('#etl-round-timeline .etl-round-node')];
+      const lastNode = nodes[nodes.length - 1] as HTMLElement | undefined;
+      lastNode?.querySelector('.etl-round-row')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       const panelText = document.querySelector('#exec-transparency-panel')?.textContent || '';
       return {
         overview: document.querySelector('#etl-task-overview')?.textContent,
         iterations: nodes.map((node) => (node as HTMLElement).dataset.iteration),
         durations: nodes.map((node) => node.querySelector('.etl-round-duration')?.textContent),
         roundTexts: nodes.map((node) => node.textContent),
-        finalMarker: nodes[0]?.querySelector('.etl-round-marker')?.textContent,
-        finalComplete: nodes[0]?.querySelector('.etl-round-complete')?.textContent,
+        finalMarker: lastNode?.querySelector('.etl-round-marker')?.textContent,
+        finalComplete: lastNode?.querySelector('.etl-round-complete')?.textContent,
+        finalRoundText: lastNode?.textContent || '',
         footerLabel: document.querySelector('.etl-foot-token')?.textContent,
         leakedThinking: panelText.includes('SECRET_CHAIN_OF_THOUGHT')
           || panelText.includes('ANOTHER_PRIVATE_REASONING')
@@ -966,17 +969,96 @@ describe('ETL 真实 Observer 链路', () => {
 
     expect(result.overview).toContain('实现轮次时间轴');
     expect(result.overview).toContain('意图：实现');
-    expect(result.iterations).toEqual(['3', '2', '1']);
-    expect(result.durations).toEqual(['2.0s', '3.0s', '4.0s']);
-    expect(result.roundTexts[2]).toMatch(/run_command|Run Command/i);
-    expect(result.roundTexts[2]).toContain('为什么这么做');
+    expect(result.iterations).toEqual(['1', '2', '3']);
+    expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
+    expect(result.roundTexts[0]).toMatch(/run_command|Run Command/i);
     expect(result.roundTexts[1]).toMatch(/read_file|Read File/i);
-    expect(result.roundTexts[1]).toContain('上一轮工具执行失败');
     expect(result.finalMarker).toBe('✓');
     expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
-    expect(result.roundTexts[0]).toContain('本轮结果');
+    expect(result.finalRoundText).toContain('本轮结果');
     expect(result.footerLabel).toContain('上下文');
     expect(result.leakedThinking).toBe(false);
+    await page.close();
+  });
+
+  it('增量追加执行流轮次时会裁剪超出可见窗口的旧节点', async () => {
+    const page = await loadChatPageObserver();
+    const result = await page.evaluate((basePlan) => {
+      const emit = (window as any).__emitWs;
+      let now = 100_000;
+      Date.now = () => now;
+      emit('connected', { features: { executionPlan: true } });
+      const input = document.querySelector('#chat-input') as HTMLTextAreaElement;
+      input.value = '多轮执行流裁剪';
+      (document.querySelector('#btn-send') as HTMLButtonElement).click();
+
+      now = 100_500;
+      emit('step', {
+        step: {
+          type: 'task_graph_init',
+          plan: { ...basePlan, goal: '多轮执行流裁剪', intent: 'edit' },
+        },
+      });
+
+      for (let iteration = 1; iteration <= 25; iteration += 1) {
+        now += 1_000;
+        emit('step', {
+          step: {
+            type: 'tool_call',
+            iteration,
+            toolCallId: `round-${iteration}-read`,
+            toolName: 'read_file',
+            toolArgs: { path: `src/file-${iteration}.ts` },
+          },
+        });
+        now += 500;
+        emit('step', {
+          step: {
+            type: 'tool_result',
+            iteration,
+            toolCallId: `round-${iteration}-read`,
+            toolName: 'read_file',
+            toolSuccess: true,
+          },
+        });
+      }
+
+      const nodes = [...document.querySelectorAll('#etl-round-timeline .etl-round-node')];
+      const loadMore = document.querySelector('#etl-round-load-more') as HTMLButtonElement | null;
+      return {
+        iterations: nodes.map((node) => (node as HTMLElement).dataset.iteration),
+        nodeCount: nodes.length,
+        loadMoreHidden: loadMore?.classList.contains('hidden') ?? true,
+        loadMoreText: loadMore?.textContent || '',
+      };
+    }, makePlan('round-prune-plan'));
+
+    expect(result.nodeCount).toBe(20);
+    expect(result.iterations).toEqual([
+      '6', '7', '8', '9', '10', '11', '12', '13', '14', '15',
+      '16', '17', '18', '19', '20', '21', '22', '23', '24', '25',
+    ]);
+    expect(result.loadMoreHidden).toBe(false);
+    expect(result.loadMoreText).toContain('(5)');
+
+    const afterLoadMore = await page.evaluate(() => {
+      const loadMore = document.querySelector('#etl-round-load-more') as HTMLButtonElement;
+      loadMore.click();
+      const nodes = [...document.querySelectorAll('#etl-round-timeline .etl-round-node')];
+      return {
+        iterations: nodes.map((node) => (node as HTMLElement).dataset.iteration),
+        nodeCount: nodes.length,
+        loadMoreHidden: loadMore.classList.contains('hidden'),
+      };
+    });
+
+    expect(afterLoadMore.nodeCount).toBe(25);
+    expect(afterLoadMore.iterations).toEqual([
+      '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+      '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
+      '21', '22', '23', '24', '25',
+    ]);
+    expect(afterLoadMore.loadMoreHidden).toBe(true);
     await page.close();
   });
 
