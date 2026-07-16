@@ -8,9 +8,17 @@
 
 ### Desktop
 
-**Work / chat** — multi-session sidebar, tool execution trail, Ice Bean indicator, `#` / `@` composer:
+**Work / chat** — multi-session sidebar, tool execution trail, **iceCoder Workbench** (execution overlay) on the right, and `#` / `@` composer; repeated tool failures trigger **supervision mode** with round indicators:
 
-![Desktop — work chat: Android session, tool calls, and Ice Bean](./docs/assets/desktop-work-chat.png)
+![Desktop — work chat: multi-session, tool calls, and execution overlay](./docs/assets/desktop-work-chat.png)
+
+**Execution overlay · Flow** — per-round step timeline with pass/fail status; expand a step for **what was done** / **why**, plus live context usage, tool count, and elapsed time in the footer:
+
+![Desktop — execution flow: round timeline and step details](./docs/assets/desktop-workbench-flow-detail.png)
+
+**Execution overlay · Snapshot** — session checkpoint timeline marking current position and working directory; browse history and roll back:
+
+![Desktop — status snapshot: session checkpoints and current position](./docs/assets/desktop-work-snapshot.png)
 
 **Memory map** — tag filters + force-directed graph; click nodes for details:
 
@@ -20,9 +28,9 @@
 
 ![Desktop — skills library: list, preview, and “Use skill”](./docs/assets/desktop-skills.png)
 
-**Settings · General** — dark/light theme, data directory, security options:
+**Settings · General** — skip permission prompts, shell command blacklist, execution overlay toggle/default expand/panel width, and other security options:
 
-![Desktop — general settings: theme and data directory](./docs/assets/desktop-config-general.png)
+![Desktop — general settings: security and execution overlay](./docs/assets/desktop-config-general.png)
 
 **Settings · Model** — providers, API keys, temperature, context limit:
 
