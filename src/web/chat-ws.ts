@@ -1573,6 +1573,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             });
             return;
           }
+          console.log(`[chat-ws] restore_runtime session=${sid} messageId=${messageId}`);
           try {
             const supervisorRuntime = await getSupervisorRuntime();
             const result = await getRuntimeRestoreCoordinator().restore({

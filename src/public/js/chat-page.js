@@ -29,6 +29,7 @@ window.ChatPage = (function () {
   var mounted = false;
   var isStreaming = false;
   var userStopped = false;
+  var runtimeRestoreInFlight = false;
   var streamFinalized = false;
   /** 本轮是否收到过流式增量（用于区分 stream_end + response 双包时的重复追加） */
   var streamChunksReceived = false;
@@ -831,6 +832,7 @@ window.ChatPage = (function () {
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
       window.ChatTaskQueue.refresh(sessionId);
     }
+    refreshSnapshotTimelinePanel();
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
@@ -1313,6 +1315,7 @@ window.ChatPage = (function () {
   function onWsStatus(data) {
     var processing = data.status === 'processing';
     WS.setProcessing(processing);
+    notifySnapshotRestoreAvailability();
     if (!processing) {
       endTransparencyTurnTimer();
       // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
@@ -1492,16 +1495,47 @@ window.ChatPage = (function () {
     if (UI && typeof UI.setCheckpointMessageIds === 'function') {
       UI.setCheckpointMessageIds(checkpointIds || []);
     }
+    notifySnapshotRestoreAvailability();
+  }
+
+  function refreshSnapshotTimelinePanel() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.refreshSnapshotTimeline === 'function') {
+      window.ChatExecutionPlan.refreshSnapshotTimeline();
+    }
+  }
+
+  function notifySnapshotRestoreAvailability() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.notifySnapshotRestoreAvailability === 'function') {
+      window.ChatExecutionPlan.notifySnapshotRestoreAvailability();
+    }
+  }
+
+  function wireSnapshotTimelineHandlers() {
+    if (!window.ChatExecutionPlan
+      || typeof window.ChatExecutionPlan.registerSnapshotHandlers !== 'function') {
+      return;
+    }
+    window.ChatExecutionPlan.registerSnapshotHandlers({
+      onRestore: handleMessageRestoreAction,
+      canRestore: function () {
+        if (runtimeRestoreInFlight) return false;
+        return !!(WS.canRestoreRuntime && WS.canRestoreRuntime());
+      },
+    });
   }
 
   function onWsHarnessState(data) {
     if (!data) return;
     applyHarnessRestoreUi(!!data.canRestore, data.checkpointMessageIds);
+    refreshSnapshotTimelinePanel();
   }
 
   function onWsCheckpointMessageIds(data) {
     if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
     UI.setCheckpointMessageIds(data.ids || []);
+    refreshSnapshotTimelinePanel();
   }
 
   function dispatchDeleteMessage(messageId) {
@@ -1523,6 +1557,10 @@ window.ChatPage = (function () {
 
   function dispatchRestoreRuntime(messageId) {
     if (!messageId) return;
+    if (runtimeRestoreInFlight) {
+      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      return;
+    }
     if (!WS.isConnected || !WS.isConnected()) {
       notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
       WS.connect(remoteToken);
@@ -1532,8 +1570,12 @@ window.ChatPage = (function () {
       notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
       return;
     }
+    runtimeRestoreInFlight = true;
+    notifySnapshotRestoreAvailability();
     var sent = WS.sendRestoreRuntime(messageId);
     if (sent === false) {
+      runtimeRestoreInFlight = false;
+      notifySnapshotRestoreAvailability();
       notifyUser('回滚请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
     }
   }
@@ -1612,6 +1654,10 @@ window.ChatPage = (function () {
   }
 
   function handleMessageRestoreAction(messageId, btn) {
+    if (runtimeRestoreInFlight) {
+      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      return;
+    }
     if (btn && btn.disabled) {
       notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
       return;
@@ -1660,14 +1706,19 @@ window.ChatPage = (function () {
   }
 
   function onWsRuntimeRestored() {
+    runtimeRestoreInFlight = false;
     isStreaming = false;
+    userStopped = false;
+    WS.setProcessing(false);
     UI.setStreamingState(false);
     UI.clearReasoningStream();
     clearSessionExecutionFlow();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    refreshChatHistoryAfterTurn(true);
+    refreshChatHistoryAfterTurn(true, null, { force: true });
     syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
+    refreshSnapshotTimelinePanel();
+    notifySnapshotRestoreAvailability();
   }
 
   function notifyUser(message, type, opts) {
@@ -1681,8 +1732,11 @@ window.ChatPage = (function () {
   }
 
   function onWsRestoreFailed(data) {
+    runtimeRestoreInFlight = false;
+    notifySnapshotRestoreAvailability();
     var msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
     notifyUser(msg, 'error', { duration: 5000 });
+    refreshSnapshotTimelinePanel();
   }
 
   function onWsMessageDeleted() {
@@ -1715,8 +1769,9 @@ window.ChatPage = (function () {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
   }
 
-  function refreshChatHistoryAfterTurn(shouldScroll, done) {
-    if (shouldSkipServerSnapshotSync()) {
+  function refreshChatHistoryAfterTurn(shouldScroll, done, opts) {
+    opts = opts || {};
+    if (!opts.force && shouldSkipServerSnapshotSync()) {
       if (done) done();
       return;
     }
@@ -1726,7 +1781,7 @@ window.ChatPage = (function () {
         if (done) done();
         return;
       }
-      if (shouldSkipServerSnapshotSync()) {
+      if (!opts.force && shouldSkipServerSnapshotSync()) {
         if (done) done();
         return;
       }
@@ -1903,6 +1958,11 @@ window.ChatPage = (function () {
       if (!shouldSkipServerSnapshotSync()) {
         refreshChatHistoryAfterTurn(true);
       }
+      return;
+    }
+    if (data && data.reason === 'runtime_restored') {
+      refreshChatHistoryAfterTurn(true, null, { force: true });
+      refreshSnapshotTimelinePanel();
       return;
     }
     if (data && data.reason === 'user_message') {
@@ -2096,6 +2156,7 @@ window.ChatPage = (function () {
         onRestore: handleMessageRestoreAction,
       });
     }
+    wireSnapshotTimelineHandlers();
     if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.init === 'function') {
       window.ChatStaircaseNav.init({
         elMessages: elMessages,
@@ -2202,6 +2263,7 @@ window.ChatPage = (function () {
     WS.on('tool_output', onWsToolOutput);
     WS.on('harness_state', onWsHarnessState);
     WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
+    WS.on('checkpoint_captured', refreshSnapshotTimelinePanel);
     WS.on('runtime_restored', onWsRuntimeRestored);
     WS.on('restore_failed', onWsRestoreFailed);
     WS.on('message_deleted', onWsMessageDeleted);

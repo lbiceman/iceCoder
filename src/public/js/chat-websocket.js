@@ -264,6 +264,8 @@ window.ChatWebSocket = (function () {
         });
         break;
       case 'runtime_restored':
+        wsProcessing = false;
+        userStoppedFlag = false;
         if (Array.isArray(data.checkpointMessageIds)) {
           applyCheckpointMessageIds(data.checkpointMessageIds);
         }

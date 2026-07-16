@@ -900,3 +900,217 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 .etl-msheet .etl-body {
   -webkit-overflow-scrolling: touch;
 }
+
+/* ── 状态快照 Tab：会话检查点时间轴 ── */
+.etl-snapshot-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  flex: 1;
+}
+
+.etl-snapshot-hint {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-subtle));
+  border-radius: var(--radius);
+  background: var(--warning-light);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.etl-snapshot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.etl-snapshot-header-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.etl-snapshot-header-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-snapshot-desc {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.etl-snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-3);
+  list-style: none;
+}
+
+.etl-snapshot-node {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: stretch;
+  min-width: 0;
+}
+
+.etl-snapshot-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 14px;
+}
+
+.etl-snapshot-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-panel);
+  z-index: 1;
+}
+
+.etl-snapshot-node.is-cursor .etl-snapshot-dot {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.etl-snapshot-line {
+  flex: 1;
+  width: 2px;
+  min-height: 12px;
+  margin-top: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--border-subtle);
+}
+
+.etl-snapshot-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) calc(var(--space-2) + 34px) var(--space-2) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.etl-snapshot-node.is-cursor .etl-snapshot-card {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-raised));
+}
+
+.etl-snapshot-card:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--surface-raised) 90%, var(--bg-hover));
+}
+
+.etl-snapshot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.etl-snapshot-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-snapshot-time {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-snapshot-badge {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.etl-snapshot-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.etl-snapshot-restore-btn {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.etl-snapshot-restore-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  color: var(--accent);
+}
+
+.etl-snapshot-restore-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.etl-snapshot-restore-icon {
+  display: block;
+}
+
+.etl-snapshot-empty,
+.etl-snapshot-loading {
+  padding: var(--space-5) var(--space-3);
+}
+
+#etl-panel-snapshot {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
