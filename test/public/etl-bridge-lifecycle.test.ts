@@ -170,7 +170,7 @@ describe('ETL bridge 生命周期', () => {
       disabled: { open: false, petHidden: false },
       enabled: {
         open: true,
-        emptyText: '本次为问答，无执行计划',
+        emptyText: '本次任务无结构化执行计划',
       },
     });
     await page.close();

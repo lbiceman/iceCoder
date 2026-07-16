@@ -182,6 +182,195 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   font-size: 12.5px;
 }
 
+.etl-empty.hidden {
+  display: none;
+}
+
+/* ── 执行流：任务概览 + 模型轮次纵向时间轴 ── */
+.etl-task-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light, #363e54);
+  border-radius: 9px;
+  background: var(--bg-secondary, #242a3a);
+}
+
+.etl-task-overview.hidden {
+  display: none;
+}
+
+.etl-overview-goal {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.etl-overview-meta {
+  color: var(--text-muted, #7c8499);
+  font-size: 11px;
+}
+
+.etl-round-timeline {
+  min-width: 0;
+}
+
+.etl-round-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-round-list::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 14px;
+  width: 1px;
+  background: var(--border-light, #363e54);
+}
+
+.etl-round-node {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.etl-round-marker {
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: var(--bg-card, #1c2130);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.etl-round-node.status-done .etl-round-marker {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.etl-round-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-light, #363e54);
+  border-radius: 9px;
+  background: var(--bg-input, #282f42);
+}
+
+.etl-round-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.etl-round-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-round-duration,
+.etl-round-tool-duration {
+  flex-shrink: 0;
+  color: var(--text-muted, #7c8499);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-round-section-label {
+  margin-top: 2px;
+  color: var(--text-muted, #7c8499);
+  font-size: 10.5px;
+}
+
+.etl-round-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-round-tool {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 5px;
+  font-size: 11.5px;
+}
+
+.etl-round-tool-icon {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.etl-round-tool.status-done .etl-round-tool-icon {
+  color: var(--success);
+}
+
+.etl-round-tool.status-failed .etl-round-tool-icon {
+  color: var(--danger);
+}
+
+.etl-round-tool-text {
+  overflow: hidden;
+  color: var(--text-secondary, #b9c0d4);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-round-action,
+.etl-round-reason {
+  color: var(--text-secondary, #b9c0d4);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.etl-round-reason {
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent-border, rgba(90, 130, 255, 0.4));
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-secondary, #242a3a);
+}
+
+.etl-round-complete {
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.etl-round-node.is-final .etl-round-marker {
+  border-color: var(--success);
+  background: var(--success-light);
+  color: var(--success);
+}
+
 /* ── 当前步骤卡 ── */
 .etl-current-step {
   display: flex;

@@ -192,15 +192,6 @@ window.SettingsPage = (function () {
                   '<option value="step+tool">步骤与工具</option>' +
                 '</select>' +
               '</div>' +
-              '<div class="settings-etl-row settings-etl-row--select">' +
-                '<div class="settings-etl-row-info">' +
-                  '<span class="settings-etl-row-label">时间显示</span>' +
-                '</div>' +
-                '<select class="settings-etl-select" id="etl-timeline-time-mode" aria-label="时间显示">' +
-                  '<option value="absolute">绝对时间</option>' +
-                  '<option value="relative">相对时间</option>' +
-                '</select>' +
-              '</div>' +
               '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
                 '<div class="settings-etl-row-info">' +
                   '<span class="settings-etl-row-label">面板默认宽度</span>' +
@@ -257,7 +248,6 @@ window.SettingsPage = (function () {
     var showTimeline = parentEl.querySelector('#etl-show-timeline');
     var autoScroll = parentEl.querySelector('#etl-auto-scroll-active-step');
     var timelineGranularity = parentEl.querySelector('#etl-timeline-granularity');
-    var timelineTimeMode = parentEl.querySelector('#etl-timeline-time-mode');
     var panelWidth = parentEl.querySelector('#etl-panel-width');
 
     if (panelDefaultExpanded) {
@@ -279,10 +269,6 @@ window.SettingsPage = (function () {
     if (timelineGranularity) {
       timelineGranularity.value = prefs.timelineGranularity === 'step+tool' ? 'step+tool' : 'step';
       timelineGranularity.disabled = subgroupDisabled;
-    }
-    if (timelineTimeMode) {
-      timelineTimeMode.value = prefs.timelineTimeMode === 'relative' ? 'relative' : 'absolute';
-      timelineTimeMode.disabled = subgroupDisabled;
     }
     if (panelWidth) {
       panelWidth.value = String(prefs.panelWidth || 360);
@@ -343,13 +329,6 @@ window.SettingsPage = (function () {
     if (timelineGranularity) {
       timelineGranularity.addEventListener('change', function () {
         window.EtlPrefs.set({ timelineGranularity: timelineGranularity.value });
-      });
-    }
-
-    var timelineTimeMode = parentEl.querySelector('#etl-timeline-time-mode');
-    if (timelineTimeMode) {
-      timelineTimeMode.addEventListener('change', function () {
-        window.EtlPrefs.set({ timelineTimeMode: timelineTimeMode.value });
       });
     }
 

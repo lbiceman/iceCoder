@@ -487,6 +487,13 @@ window.ChatPage = (function () {
     UI.autoResizeInput();
   }
 
+  function endTransparencyTurnTimer() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.endTurnTimer === 'function') {
+      window.ChatExecutionPlan.endTurnTimer();
+    }
+  }
+
   function handleSend() {
     Cmd.hide();
     if (Skills) Skills.hide();
@@ -622,6 +629,15 @@ window.ChatPage = (function () {
       streamChunksReceived = false;
       visibleStreamChunksReceived = false;
       pendingTurnTokenUsage = null;
+      // 工具 Tab 只展示本轮用户输入触发的调用；新提示词发送时清空上一轮记录。
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
+        window.ChatExecutionPlan.resetToolActivity();
+      }
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
+        window.ChatExecutionPlan.beginTurnTimer();
+      }
       Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
       UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
@@ -693,6 +709,7 @@ window.ChatPage = (function () {
     visibleStreamChunksReceived = false;
     UI.setStreamingState(false);
     WS.setProcessing(false);
+    endTransparencyTurnTimer();
     Session.saveMessages();
     syncComposerActionState();
   }
@@ -1040,6 +1057,7 @@ window.ChatPage = (function () {
     updateNavStatus(false);
     isStreaming = false;
     UI.setStreamingState(false);
+    endTransparencyTurnTimer();
   }
 
   function onWsReasoningStream(data) {
@@ -1097,6 +1115,7 @@ window.ChatPage = (function () {
   }
 
   function onWsResponse(data) {
+    endTransparencyTurnTimer();
     if (userStopped) {
       userStopped = false;
       return;
@@ -1131,6 +1150,20 @@ window.ChatPage = (function () {
     scheduleRefreshAfterTurn();
   }
 
+  function forwardExecutionRoundMarker(type, step) {
+    try {
+      if (!window.ChatExecutionPlanBridge
+        || typeof window.ChatExecutionPlanBridge.handleStep !== 'function') return;
+      // 只转发轮次与终止原因；严禁把 thinking/content/delta 带入透明层。
+      window.ChatExecutionPlanBridge.handleStep({
+        type: type,
+        iteration: step && step.iteration,
+        stopReason: step && step.stopReason,
+        ts: Date.now(),
+      });
+    } catch (_e) { /* observer must not affect chat */ }
+  }
+
   function onWsStep(data) {
     var step = data.step;
     if (!step) return;
@@ -1139,6 +1172,14 @@ window.ChatPage = (function () {
     // step / stream_delta，UI 不再据此切冰豆状态，否则会出现「按钮变 Send 了但冰豆还在动」。
     // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
     if (userStopped) return;
+
+    if (step.type === 'thinking' && typeof step.iteration === 'number') {
+      forwardExecutionRoundMarker('model_round_start', step);
+    } else if (step.type === 'context_usage' && typeof step.iteration === 'number') {
+      forwardExecutionRoundMarker('model_round_end', step);
+    } else if (step.type === 'final') {
+      forwardExecutionRoundMarker('model_task_final', step);
+    }
 
     if (step.totalTokenUsage) {
       applyTotalTokenUsageFromStep(step.totalTokenUsage);
@@ -1268,6 +1309,7 @@ window.ChatPage = (function () {
     var processing = data.status === 'processing';
     WS.setProcessing(processing);
     if (!processing) {
+      endTransparencyTurnTimer();
       // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
       // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
       var skipRefreshAfterUserStop = userStopped;
@@ -1287,6 +1329,7 @@ window.ChatPage = (function () {
   }
 
   function onWsError(data) {
+    endTransparencyTurnTimer();
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
     var msg = { role: 'agent', content: '[err] ' + data.message };
     Session.appendMessage(msg);

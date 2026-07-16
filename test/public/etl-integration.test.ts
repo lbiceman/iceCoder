@@ -332,8 +332,10 @@ describe('ETL 真实 Observer 链路', () => {
     const page = await loadObserver();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
+      (window as any).ChatExecutionPlan.beginTurnTimer(10_000);
       bridge.notifyConnected({ features: { executionPlan: true } });
       bridge.handleStep({ type: 'task_graph_update', plan });
+      (window as any).ChatExecutionPlan.endTurnTimer(15_000);
       const projected = (window as any).ChatExecutionPlan.getPlan();
       return {
         createdAt: projected?.createdAt,
@@ -653,13 +655,13 @@ describe('ETL 真实 Observer 链路', () => {
       };
     }, makePlan('desktop-tabs'));
 
-    expect(desktopResult.associations).toHaveLength(5);
+    expect(desktopResult.associations).toHaveLength(3);
     for (const association of desktopResult.associations) {
       expect(association.id).toMatch(/^etl-tab-/);
       expect(association.controls).toMatch(/^etl-panel-/);
       expect(association.panelLabelledBy).toBe(association.id);
     }
-    expect(desktopResult.right).toEqual({ tab: 'tools', activeTab: 'tools' });
+    expect(desktopResult.right).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
     expect(desktopResult.end).toEqual({ tab: 'log', activeTab: 'log' });
     expect(desktopResult.left).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
     expect(desktopResult.home).toEqual({ tab: 'flow', activeTab: 'flow' });
@@ -678,7 +680,7 @@ describe('ETL 真实 Observer 链路', () => {
         active: document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab'),
       };
     }, makePlan('mobile-tabs'));
-    expect(mobileResult).toEqual({ count: 2, focused: 'tools', active: 'tools' });
+    expect(mobileResult).toEqual({ count: 1, focused: 'flow', active: 'flow' });
   });
 
   it('真实 panel render 异常被隔离，bridge 后续事件仍更新并恢复 UI', async () => {
@@ -790,6 +792,177 @@ describe('ETL 真实 Observer 链路', () => {
       uiToolCalls: 1,
       petStepCalls: 4,
     });
+    await page.close();
+  });
+
+  it('发送下一条用户提示词时清空执行流，随后只展示新一轮调用', async () => {
+    const page = await loadChatPageObserver();
+    const result = await page.evaluate(() => {
+      const emit = (window as any).__emitWs;
+      emit('connected', { features: { executionPlan: true } });
+      emit('step', {
+        step: {
+          type: 'tool_call',
+          iteration: 1,
+          toolCallId: 'previous-turn-tool',
+          toolName: 'read_file',
+          toolArgs: { path: 'src/previous.ts' },
+        },
+      });
+      const before = {
+        rounds: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        footer: document.querySelector('.etl-foot-tool b')?.textContent,
+      };
+
+      const input = document.querySelector('#chat-input') as HTMLTextAreaElement;
+      input.value = '开始下一轮任务';
+      Date.now = () => 100_000;
+      (document.querySelector('#btn-send') as HTMLButtonElement).click();
+      const afterSend = {
+        rounds: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        empty: document.querySelector('#etl-round-timeline .etl-round-empty')?.textContent,
+        footer: document.querySelector('.etl-foot-tool b')?.textContent,
+      };
+
+      emit('step', {
+        step: {
+          type: 'tool_call',
+          iteration: 1,
+          toolCallId: 'current-turn-tool',
+          toolName: 'glob',
+          toolArgs: { pattern: 'src/**/*.ts' },
+        },
+      });
+      Date.now = () => 105_000;
+      emit('status', { status: 'idle' });
+      return {
+        before,
+        afterSend,
+        currentRoundText: document.querySelector('#etl-round-timeline .etl-round-node')?.textContent,
+        elapsed: document.querySelector('.etl-foot-time b')?.textContent,
+      };
+    });
+
+    expect(result.before).toEqual({ rounds: 1, footer: '1' });
+    expect(result.afterSend).toEqual({ rounds: 0, empty: '等待模型开始执行', footer: '—' });
+    expect(result.currentRoundText).toContain('glob');
+    expect(result.currentRoundText).not.toContain('read_file');
+    expect(result.elapsed).toBe('00:05');
+    await page.close();
+  });
+
+  it('执行流按模型轮次纵向展示动作、耗时与结构化原因且不泄露 thinking 正文', async () => {
+    const page = await loadChatPageObserver();
+    const result = await page.evaluate((basePlan) => {
+      const emit = (window as any).__emitWs;
+      Date.now = () => 100_000;
+      emit('connected', { features: { executionPlan: true } });
+      const input = document.querySelector('#chat-input') as HTMLTextAreaElement;
+      input.value = '实现轮次时间轴';
+      (document.querySelector('#btn-send') as HTMLButtonElement).click();
+
+      Date.now = () => 100_500;
+      emit('step', {
+        step: {
+          type: 'task_graph_init',
+          plan: { ...basePlan, goal: '实现轮次时间轴', intent: 'edit' },
+        },
+      });
+      Date.now = () => 101_000;
+      emit('step', {
+        step: {
+          type: 'thinking',
+          iteration: 1,
+          content: 'SECRET_CHAIN_OF_THOUGHT',
+        },
+      });
+      Date.now = () => 102_000;
+      emit('step', {
+        step: {
+          type: 'tool_call',
+          iteration: 1,
+          toolCallId: 'round-1-command',
+          toolName: 'run_command',
+          toolArgs: { command: 'npm test' },
+        },
+      });
+      Date.now = () => 103_000;
+      emit('step', {
+        step: {
+          type: 'tool_result',
+          iteration: 1,
+          toolCallId: 'round-1-command',
+          toolName: 'run_command',
+          toolSuccess: false,
+        },
+      });
+      Date.now = () => 104_000;
+      emit('step', { step: { type: 'context_usage', iteration: 1 } });
+
+      Date.now = () => 105_000;
+      emit('step', {
+        step: {
+          type: 'thinking',
+          iteration: 2,
+          content: 'ANOTHER_PRIVATE_REASONING',
+        },
+      });
+      Date.now = () => 106_000;
+      emit('step', {
+        step: {
+          type: 'tool_call',
+          iteration: 2,
+          toolCallId: 'round-2-read',
+          toolName: 'read_file',
+          toolArgs: { path: 'src/retry.ts' },
+        },
+      });
+      Date.now = () => 107_000;
+      emit('step', {
+        step: {
+          type: 'tool_result',
+          iteration: 2,
+          toolCallId: 'round-2-read',
+          toolName: 'read_file',
+          toolSuccess: true,
+        },
+      });
+      Date.now = () => 108_000;
+      emit('step', {
+        step: { type: 'thinking', iteration: 3, content: 'THIRD_ROUND_REASONING' },
+      });
+      Date.now = () => 109_000;
+      emit('step', { step: { type: 'final', iteration: 3, stopReason: 'model_done' } });
+
+      const nodes = [...document.querySelectorAll('#etl-round-timeline .etl-round-node')];
+      const panelText = document.querySelector('#exec-transparency-panel')?.textContent || '';
+      return {
+        overview: document.querySelector('#etl-task-overview')?.textContent,
+        iterations: nodes.map((node) => (node as HTMLElement).dataset.iteration),
+        durations: nodes.map((node) => node.querySelector('.etl-round-duration')?.textContent),
+        roundTexts: nodes.map((node) => node.textContent),
+        finalMarker: nodes[2]?.querySelector('.etl-round-marker')?.textContent,
+        finalComplete: nodes[2]?.querySelector('.etl-round-complete')?.textContent,
+        footerLabel: document.querySelector('.etl-foot-token')?.textContent,
+        leakedThinking: panelText.includes('SECRET_CHAIN_OF_THOUGHT')
+          || panelText.includes('ANOTHER_PRIVATE_REASONING')
+          || panelText.includes('THIRD_ROUND_REASONING'),
+      };
+    }, makePlan('round-timeline-plan'));
+
+    expect(result.overview).toContain('实现轮次时间轴');
+    expect(result.overview).toContain('意图：实现');
+    expect(result.iterations).toEqual(['1', '2', '3']);
+    expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
+    expect(result.roundTexts[0]).toContain('run_command');
+    expect(result.roundTexts[0]).toContain('为什么这么做');
+    expect(result.roundTexts[1]).toContain('read_file');
+    expect(result.roundTexts[1]).toContain('上一轮工具执行失败');
+    expect(result.finalMarker).toBe('✓');
+    expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
+    expect(result.roundTexts[2]).toContain('本轮结果');
+    expect(result.footerLabel).toContain('上下文');
+    expect(result.leakedThinking).toBe(false);
     await page.close();
   });
 });
