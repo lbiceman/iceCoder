@@ -227,12 +227,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       clampToBounds();
     }
 
-    dragHandleEl.addEventListener('dblclick', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      clearCustomPosition();
-    });
-
     dragHandleEl.addEventListener(
       'pointerdown',
       function (e) {

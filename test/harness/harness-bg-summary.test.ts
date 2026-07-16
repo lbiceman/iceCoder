@@ -144,7 +144,10 @@ describe('harness-bg-summary — stale reminder defense (CC #11716 防御)', () 
     expect(first!).toMatch(/will-die/);
 
     mgr.kill(r.taskId);
-    await new Promise((res) => setTimeout(res, 200));
+    await expect.poll(
+      () => mgr.getStatus(r.taskId)?.status,
+      { timeout: 10_000, interval: 50 },
+    ).toBe('killed');
 
     // dirty 标志已被设置但 status != running → 不应再注入
     const second = takeBgStatusForInjection('stale-test', workDir, {
@@ -161,10 +164,12 @@ describe('harness-bg-summary — stale reminder defense (CC #11716 防御)', () 
       'console.log("instant");\n',
       'utf-8',
     );
-    mgr.spawn('node quick.cjs', 10_000, 'instant-task');
+    const spawned = mgr.spawn('node quick.cjs', 10_000, 'instant-task');
 
-    // 等到 task 完成
-    await new Promise((res) => setTimeout(res, 2_500));
+    await expect.poll(
+      () => mgr.getStatus(spawned.taskId)?.status,
+      { timeout: 10_000, interval: 50 },
+    ).toBe('completed');
 
     const result = takeBgStatusForInjection('stale-test', workDir, {
       manager: mgr,

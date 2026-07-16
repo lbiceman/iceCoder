@@ -764,6 +764,75 @@ body.setup-required .chat-sidebar-settings-btn {
   flex-shrink: 0;
 }
 
+.settings-etl-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.settings-etl-subgroup.is-disabled {
+  opacity: 0.55;
+}
+
+.settings-etl-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-etl-row--select {
+  align-items: center;
+}
+
+.settings-etl-row-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-etl-row-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.settings-etl-row-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.settings-etl-switch {
+  flex-shrink: 0;
+}
+
+.settings-etl-select {
+  flex-shrink: 0;
+  min-width: 108px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-etl-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+html[data-shell="mobile"] .settings-etl-panel-width-row {
+  display: none;
+}
+
 .settings-data-directory-controls {
   display: flex;
   gap: 10px;

@@ -1,68 +1,105 @@
 /**
- * 执行透明层 — 宠物锚定悬停弹层（原右上角卡片改为 popover）。
+ * 执行透明层（ETL）— 右侧停靠侧边栏（Phase 4）。
+ *
+ * 由 popover 改为 `position:fixed;right:0` 的 `<aside id="exec-transparency-panel">`；
+ * 展开时给 body 加 `.etl-panel-open`，对 `.page-container` 施 padding-right 让聊天区避让。
+ * 布局：头部（标题 + 最小化）→ 监管横幅 → Tab 条 → 当前步骤卡 → 计划列表 → Footer。
  */
 
-.exec-plan-panel {
+:root {
+  --etl-w: 360px;
+}
+
+/* ── 面板容器 ── */
+.etl-panel {
   position: fixed;
-  width: min(300px, calc(100vw - 24px));
-  max-height: min(52vh, 420px);
-  background-color: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--etl-w, 360px);
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-card, #1c2130);
+  border-left: 1px solid var(--border-color);
   color: var(--text-primary, #f2f4fa);
   font-size: 13px;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
-  z-index: 125;
-  flex-direction: column;
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.28);
+  z-index: 90;
   overflow: hidden;
-  display: none;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 160ms ease, transform 160ms ease;
+  transform: translateX(100%);
+  visibility: hidden;
   pointer-events: none;
+  transition: transform 180ms ease;
 }
 
-.exec-plan-panel::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: var(--bg-card);
-  opacity: 0.66;
-  z-index: -1;
-}
-
-.exec-plan-panel.exec-plan-panel--popover.exec-plan-panel--open {
-  display: flex;
-  opacity: 1;
-  transform: translateY(0);
+.etl-panel.etl-panel--open {
+  transform: translateX(0);
+  visibility: visible;
   pointer-events: auto;
 }
 
-.exec-plan-panel.exec-plan-panel--suppressed {
-  display: none !important;
-  pointer-events: none !important;
+/* 聊天区避让：展开时 page-container 右缩（不改 chat-page/chat-main flex 结构） */
+body.etl-panel-open .page-container {
+  padding-right: var(--etl-w, 360px);
+  transition: padding-right 180ms ease;
 }
 
-.exec-plan-header {
+/* 聊天页冰豆与透明层视觉互斥；仅隐藏当前聊天页宠物，不影响独立桌面宠物窗口。 */
+body.etl-pet-hidden-by-panel #agent-status-bar {
+  display: none;
+}
+
+/* 移动端不停靠（Phase 7 走底部 sheet） */
+html[data-shell="mobile"] body.etl-panel-open .page-container {
+  padding-right: 0;
+}
+
+/* ── 头部 ── */
+.etl-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-light, #363e54);
   background: var(--bg-secondary, #242a3a);
+  flex-shrink: 0;
 }
 
-.exec-plan-title {
+.etl-title {
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 600;
   flex: 1;
 }
 
+.etl-minimize {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #b9c0d4);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.etl-minimize:hover,
+.etl-minimize:focus-visible {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text-primary);
+  outline: none;
+}
+
+/* ── 监管横幅（复用 §3.7.1）── */
 .exec-plan-mode-banner {
   margin: 0;
   padding: 8px 12px;
@@ -72,17 +109,158 @@
   color: var(--warning);
   background: var(--warning-light);
   border-bottom: 1px solid var(--border-light, #363e54);
+  flex-shrink: 0;
 }
 
 .exec-plan-mode-banner.hidden {
   display: none;
 }
 
+/* ── Tab 条 ── */
+.etl-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border-light, #363e54);
+  background: var(--bg-secondary, #242a3a);
+  overflow-x: auto;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+
+.etl-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.etl-tab {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #b9c0d4);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.etl-tab:hover {
+  color: var(--text-primary);
+}
+
+.etl-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── 主体 ── */
+.etl-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.etl-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.etl-tabpanel.hidden {
+  display: none;
+}
+
+.etl-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted, #7c8499);
+  font-size: 12.5px;
+}
+
+/* ── 当前步骤卡 ── */
+.etl-current-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-input, #282f42);
+  border: 1px solid var(--accent-border, rgba(90, 130, 255, 0.4));
+}
+
+.etl-current-step.hidden {
+  display: none;
+}
+
+.etl-cs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.etl-cs-title {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.etl-cs-elapsed {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.etl-cs-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  overflow: hidden;
+}
+
+.etl-cs-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 240ms ease;
+}
+
+.etl-cs-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.etl-cs-status.status-running {
+  color: var(--accent);
+}
+
+.etl-cs-status.status-done {
+  color: var(--success);
+}
+
+.etl-cs-status.status-failed {
+  color: var(--danger);
+}
+
+.etl-cs-evidence {
+  font-size: 11.5px;
+  color: var(--text-secondary, #b9c0d4);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+/* ── 执行计划列表 ── */
 .exec-plan-list {
   list-style: none;
   margin: 0;
-  padding: 8px 10px 12px;
-  overflow-y: auto;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -104,10 +282,13 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-border) 50%, transparent);
 }
 
+.exec-plan-step--fallback {
+  border-color: var(--warning);
+}
+
 .exec-plan-step-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
 }
 
@@ -123,6 +304,15 @@
   border-radius: 999px;
   background: var(--bg-hover, rgba(255, 255, 255, 0.09));
   color: var(--text-secondary);
+}
+
+.exec-plan-step-dur {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, #7c8499);
+  min-width: 34px;
+  text-align: right;
 }
 
 .exec-plan-step.status-running .exec-plan-step-badge {
@@ -155,6 +345,7 @@
   color: var(--text-secondary, #b9c0d4);
   word-break: break-all;
 }
+
 .exec-plan-step-evidence {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -163,6 +354,376 @@
   font-size: 11.5px;
   color: var(--danger);
   word-break: break-all;
+}
+
+/* ── Footer ── */
+.etl-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-light, #363e54);
+  background: var(--bg-secondary, #242a3a);
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.etl-foot-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-foot-item b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.etl-foot-time {
+  margin-left: auto;
+}
+
+/* ── LLM 当前动作（Phase 5 §3.6，仅动作状态，无思维链）── */
+.etl-llm-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-input, #282f42);
+  border: 1px dashed var(--accent-border, rgba(90, 130, 255, 0.4));
+}
+
+.etl-llm-activity.hidden {
+  display: none;
+}
+
+.etl-llm-label {
+  font-size: 11px;
+  color: var(--text-muted, #7c8499);
+  letter-spacing: 0.02em;
+}
+
+.etl-llm-text {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+/* ── 时间轴（Phase 5 §3.7）── */
+.etl-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #242a3a);
+  border: 1px solid var(--border-light, #363e54);
+}
+
+.etl-timeline.hidden {
+  display: none;
+}
+
+.etl-tl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.etl-tl-headtitle {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.etl-tl-toggles {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.etl-tl-toggle {
+  padding: 2px 8px;
+  border: 1px solid var(--border-light, #363e54);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary, #b9c0d4);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.etl-tl-toggle:hover,
+.etl-tl-toggle:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.etl-tl-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+/* 桌面按真实时间跨度横向定位。 */
+.etl-tl-track {
+  box-sizing: border-box;
+}
+
+.etl-tl-track--horizontal {
+  position: relative;
+  min-width: 640px;
+  height: 112px;
+  margin: 0 82px 0 4px;
+}
+
+.etl-tl-track--horizontal .etl-tl-node {
+  position: absolute;
+  top: 8px;
+  width: 118px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 5px;
+  transform: translateX(-50%);
+}
+
+.etl-tl-track--horizontal .etl-tl-node:first-child {
+  transform: none;
+}
+
+.etl-tl-track--horizontal .etl-tl-node::before {
+  left: 11px;
+  top: 34px;
+  width: max(0px, calc(100% - 8px));
+  height: 1px;
+  bottom: auto;
+}
+
+.etl-tl-track--horizontal .etl-tl-dot {
+  order: 2;
+  align-self: flex-start;
+}
+
+.etl-tl-track--horizontal .etl-tl-time {
+  order: 1;
+}
+
+.etl-tl-track--horizontal .etl-tl-body {
+  order: 3;
+  width: 100%;
+}
+
+.etl-tl-track--vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.etl-tl-node {
+  display: grid;
+  grid-template-columns: 62px 18px 1fr;
+  align-items: start;
+  gap: 6px;
+  padding: 4px 2px;
+  position: relative;
+  cursor: default;
+}
+
+.etl-tl-node--step {
+  cursor: pointer;
+}
+
+.etl-tl-node--tool .etl-tl-title {
+  color: var(--accent);
+}
+
+.etl-tl-node--step:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  border-radius: 6px;
+}
+
+/* 竖向连接线 */
+.etl-tl-node::before {
+  content: "";
+  position: absolute;
+  left: calc(62px + 6px + 8px);
+  top: 18px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--border-light, #363e54);
+}
+
+.etl-tl-node:last-child::before {
+  display: none;
+}
+
+.etl-tl-time {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, #7c8499);
+  padding-top: 2px;
+  white-space: nowrap;
+}
+
+.etl-tl-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-top: 3px;
+  justify-self: center;
+  box-sizing: border-box;
+  border: 2px solid var(--text-secondary, #b9c0d4);
+  background: transparent;
+}
+
+.etl-tl-dot.status-done {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.etl-tl-dot.status-running {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: ice-plan-pulse 1.4s ease-in-out infinite;
+}
+
+.etl-tl-dot.status-failed {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.etl-tl-dot.status-skipped {
+  background: var(--text-muted, #7c8499);
+  border-color: var(--text-muted, #7c8499);
+  opacity: 0.6;
+}
+
+.etl-tl-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.etl-tl-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-tl-dur {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted, #7c8499);
+}
+
+/* Supervisor 一级事件（Warning 色，§3.7.1） */
+.etl-tl-node--supervisor .etl-tl-dot--supervisor {
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
+  border-radius: 50%;
+  border: 2px solid var(--warning);
+  background: var(--warning-light);
+  color: var(--warning);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.etl-tl-node--supervisor .etl-tl-title {
+  color: var(--warning);
+  font-weight: 600;
+  white-space: normal;
+}
+
+.etl-tl-node--supervisor.is-resume .etl-tl-dot--supervisor {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.etl-tl-node--supervisor.is-resume .etl-tl-title {
+  color: var(--accent);
+}
+
+.etl-tl-node--supervisor.is-replan::before,
+.etl-tl-node--supervisor.is-recovery::before {
+  border-left: 1px dashed var(--warning);
+  background: transparent;
+}
+
+.etl-tl-sup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.etl-tl-sup-toggle {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--warning);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.etl-tl-sup-reason {
+  font-size: 11px;
+  color: var(--text-secondary, #b9c0d4);
+  line-height: 1.4;
+}
+
+.etl-tl-sup-detail {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--warning-light);
+  color: var(--text-secondary, #b9c0d4);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.etl-tl-total {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-light, #363e54);
+  text-align: center;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #b9c0d4);
+}
+
+/* 点击时间轴节点定位到列表步骤时的高亮闪烁 */
+.exec-plan-step--flash {
+  animation: etl-step-flash 0.9s ease;
+}
+
+@keyframes etl-step-flash {
+
+  0%,
+  100% {
+    box-shadow: none;
+  }
+
+  30% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
 }
 
 @keyframes ice-plan-pulse {
@@ -175,4 +736,116 @@
   50% {
     opacity: 0.55;
   }
+}
+
+/* ── 移动端：顶部一行入口 + 底部 sheet（Phase 7 §6）── */
+
+/* 顶部一行「执行 X/N ▸」：常驻入口，点击弹出底部 sheet。默认隐藏，show 时加 --open。 */
+.etl-mbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 95;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 1px solid var(--border-light, #363e54);
+  background: var(--bg-secondary, #242a3a);
+  color: var(--text-primary, #f2f4fa);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.etl-mbar.etl-mbar--open {
+  display: flex;
+}
+
+.etl-mbar-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-mbar.is-expanded {
+  border-bottom-color: var(--accent);
+}
+
+/* 蒙层 */
+.etl-mbackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 96;
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 180ms ease, visibility 180ms ease;
+}
+
+.etl-mbackdrop.etl-mbackdrop--open {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* 底部 sheet：占满宽度、从底部滑入；不并排、不挤压聊天区（覆盖式浮层） */
+.etl-msheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 97;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100vw;
+  max-height: 78vh;
+  background-color: var(--bg-card, #1c2130);
+  border-top: 1px solid var(--border-color);
+  border-radius: 14px 14px 0 0;
+  color: var(--text-primary, #f2f4fa);
+  font-size: 13px;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.34);
+  overflow: hidden;
+  transform: translateY(100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 200ms ease, visibility 200ms ease;
+}
+
+.etl-msheet.etl-msheet--open {
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* 抓手 */
+.etl-msheet-handle {
+  flex-shrink: 0;
+  width: 40px;
+  height: 4px;
+  margin: 8px auto 2px;
+  border-radius: 999px;
+  background: var(--border-light, #363e54);
+}
+
+/* sheet 内头部无左侧阴影、Tab 与 body 复用桌面样式 */
+.etl-msheet .etl-header {
+  border-bottom: 1px solid var(--border-light, #363e54);
+  background: transparent;
+}
+
+.etl-msheet .etl-body {
+  -webkit-overflow-scrolling: touch;
+}
+
+.etl-msheet .etl-tl-scroll {
+  overflow-x: hidden;
+  overflow-y: visible;
 }

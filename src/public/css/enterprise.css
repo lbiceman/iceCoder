@@ -376,12 +376,10 @@ select:focus-visible,
 
 .chat-fade-overlay {
   background: linear-gradient(to bottom, transparent, var(--surface-page));
-  box-shadow: 0 -10px 16px -6px var(--surface-page);
 }
 
 [data-theme="dark"] .chat-fade-overlay {
   background: linear-gradient(to bottom, transparent, var(--surface-page));
-  box-shadow: 0 -10px 16px -6px var(--surface-page);
 }
 
 .chat-composer {
