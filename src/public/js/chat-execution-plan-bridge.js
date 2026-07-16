@@ -139,29 +139,6 @@ window.ChatExecutionPlanBridge = (function () {
     fetchAndApply();
   }
 
-  /** 把 execution_mode_* / task_graph_branch 投影为 Timeline supervisor 事件（设计 §3.7.1）。 */
-  function projectSupervisor(subtype, mode, ts) {
-    if (!window.ChatExecutionPlan
-      || typeof window.ChatExecutionPlan.pushSupervisorTimelineEvent !== 'function') return;
-    window.ChatExecutionPlan.pushSupervisorTimelineEvent({
-      subtype: subtype,
-      reasonHuman: mode && mode.primaryReasonHuman ? mode.primaryReasonHuman : '',
-      signals: mode && Array.isArray(mode.enteredBy) ? mode.enteredBy : [],
-      round: mode && typeof mode.round === 'number' ? mode.round : undefined,
-      ts: ts || Date.now(),
-    });
-  }
-
-  function hasRecoverySignal(mode) {
-    if (!mode || !Array.isArray(mode.enteredBy)) return false;
-    for (var i = 0; i < mode.enteredBy.length; i++) {
-      if (mode.enteredBy[i] === 'recovery_pending' || mode.enteredBy[i] === 'checkpoint_resumed') {
-        return true;
-      }
-    }
-    return false;
-  }
-
   function onStep(data) {
     // Observer 红线（设计 §14）：单事件处理异常绝不冒泡、绝不中断后续分发。
     try {
@@ -220,9 +197,8 @@ window.ChatExecutionPlanBridge = (function () {
       return;
     }
 
-    // 独立于 enabled：exit_forced = L2 交还模型；保留计划与「继续执行」Supervisor 节点。
+    // 独立于 enabled：exit_forced = L2 交还模型；保留计划与监管横幅状态。
     if (step.type === 'execution_mode_exit') {
-      projectSupervisor('resume', step.executionMode, step.ts);
       if (window.ChatExecutionPlan) {
         if (window.ChatExecutionPlan.applyRoundActivity) {
           window.ChatExecutionPlan.applyRoundActivity(step);
@@ -242,10 +218,6 @@ window.ChatExecutionPlanBridge = (function () {
         }
         window.ChatExecutionPlan.applyExecutionModeEvent(step);
       }
-      // 接管（forced）与恢复（enteredBy 含 recovery_pending/checkpoint_resumed）分别投影一级事件
-      var mode = step.executionMode;
-      if (mode && mode.executionMode === 'forced') projectSupervisor('takeover', mode, step.ts);
-      if (hasRecoverySignal(mode)) projectSupervisor('recovery', mode, step.ts);
       return;
     }
 
@@ -304,8 +276,6 @@ window.ChatExecutionPlanBridge = (function () {
         }
         window.ChatExecutionPlan.highlightGraphBranch(step);
       }
-      // 分支切换 = 重新规划，投影为 supervisor 一级事件
-      projectSupervisor('replan', step.executionMode, step.ts);
     }
   }
 

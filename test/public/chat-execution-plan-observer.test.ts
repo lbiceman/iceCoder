@@ -70,11 +70,7 @@ async function loadPanel(
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
-      showTimeline: true,
       showLlmActivity: true,
-      autoScrollActiveStep: false,
-      timelineTimeMode: 'absolute',
-      timelineGranularity: 'step',
       panelWidth: 360,
     };
     const prefListeners: Array<() => void> = [];
@@ -179,7 +175,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         panelOpen: document.body.classList.contains('etl-panel-open'),
         currentStatus: document.querySelector('#etl-current-step .etl-cs-status')?.textContent,
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
-        timelineTotal: document.querySelector('.etl-tl-total')?.textContent,
       });
       const before = read();
       await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -190,7 +185,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       panelOpen: true,
       currentStatus: '✅ 已完成 · 用时 00:05',
       footerTime: '00:05',
-      timelineTotal: '总时长 00:05',
     });
     expect(result.after).toEqual(result.before);
     await page.close();
@@ -244,7 +238,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         updatedAt: completedAt,
       });
       panel.endTurnTimer(completedAt);
-      const frozenTimeline = document.querySelector('.etl-tl-total')?.textContent;
+      const frozenFooter = document.querySelector('.etl-foot-time b')?.textContent;
       panel.applyPatch({
         stepPatches: [{
           id: 'step-0',
@@ -272,8 +266,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         status: panel.getPlan()?.steps[0]?.status,
         updatedAtDelta: panel.getPlan()?.updatedAt - completedAt,
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
-        timelineTotal: document.querySelector('.etl-tl-total')?.textContent,
-        frozenTimeline,
+        frozenFooter,
       };
       panel.setPlan({
         ...plan,
@@ -304,8 +297,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         status: 'done',
         updatedAtDelta: 0,
         footerTime: '00:05',
-        timelineTotal: '总时长 00:05',
-        frozenTimeline: '总时长 00:05',
+        frozenFooter: '00:05',
       },
       next: {
         planId: 'next-plan',
@@ -643,8 +635,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         showTransparencyPanel: false,
         panelDefaultExpanded: true,
         showLlmActivity: true,
-        showTimeline: true,
-        autoScrollActiveStep: true,
         panelWidth: 360,
       };
       (window as any).__setCapability = (value: boolean) => { enabled = value; };
@@ -823,7 +813,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const afterBroken = {
         listCount: document.querySelectorAll('.exec-plan-step').length,
         currentStepHidden: document.querySelector('#etl-current-step')?.classList.contains('hidden'),
-        timelineHidden: document.querySelector('#etl-timeline')?.classList.contains('hidden'),
       };
       panel.setPlan({ ...plan, planId: 'recovered' });
       return {
@@ -833,24 +822,22 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     }, makePlan());
 
     expect(result).toEqual({
-      afterBroken: { listCount: 0, currentStepHidden: true, timelineHidden: true },
+      afterBroken: { listCount: 0, currentStepHidden: true },
       recoveredCount: 1,
     });
     await page.close();
   });
 
-  it('超大 Timeline 降级为空，不创建海量时间轴节点', async () => {
+  it('超大执行计划列表有界，不创建海量步骤节点', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       (window as any).ChatExecutionPlan.setPlan(plan);
-      const timeline = document.querySelector('#etl-timeline');
       return {
-        hidden: timeline?.classList.contains('hidden'),
-        nodeCount: timeline?.querySelectorAll('.etl-tl-node').length,
+        listCount: document.querySelectorAll('.exec-plan-step').length,
       };
     }, makePlan(1200));
 
-    expect(result).toEqual({ hidden: true, nodeCount: 0 });
+    expect(result.listCount).toBe(0);
     await page.close();
   });
 
@@ -867,14 +854,14 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       panel.endTurnTimer(plan.createdAt + 5000);
       return {
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
-        timelineTotal: document.querySelector('.etl-tl-total')?.textContent,
+        contextLabel: document.querySelector('.etl-foot-token')?.textContent,
         token: document.querySelector('.etl-foot-token b')?.textContent,
         tools: document.querySelector('.etl-foot-tool b')?.textContent,
       };
     }, makePlan());
 
     expect(result.footerTime).toBe('00:05');
-    expect(result.timelineTotal).toBe('总时长 00:00');
+    expect(result.contextLabel).toContain('上下文');
     expect(result.token).toBe('1,200/8K (15.0%)');
     expect(result.tools).toBe('3');
     await page.close();
@@ -901,7 +888,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('Tooltip 渲染抛错后时间轴降级，后续事件仍可处理', async () => {
+  it('状态更新在缺少 Tooltip 能力时仍可完成', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const title = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'title');
@@ -917,20 +904,19 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         stepPatches: [{ id: 'step-0', status: 'done', endedAt: Date.now() }],
       });
       return {
-        timelineHidden: document.querySelector('#etl-timeline')?.classList.contains('hidden'),
+        hasTimeline: !!document.querySelector('#etl-timeline'),
         status: document.querySelector('[data-step-id="step-0"] .exec-plan-step-badge')?.textContent,
       };
     }, makePlan());
 
-    expect(result).toEqual({ timelineHidden: true, status: '已完成' });
+    expect(result).toEqual({ hasTimeline: false, status: '已完成' });
     await page.close();
   });
 
-  it('step+tool 时间轴按 toolCallId 配对并只结束匹配的并发调用', async () => {
+  it('执行流按 toolCallId 配对并只结束匹配的并发调用', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
-      (window as any).EtlPrefs.set({ timelineGranularity: 'step+tool' });
       panel.setPlan(plan);
       panel.applyToolActivity({
         type: 'tool_call', toolCallId: 'call-a', toolName: 'read_file', ts: plan.createdAt + 1000,
@@ -987,7 +973,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
-      (window as any).EtlPrefs.set({ timelineGranularity: 'step+tool' });
       panel.setPlan(plan);
       let escaped = false;
       try {
@@ -1005,7 +990,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       }
       return {
         escaped,
-        count: document.querySelectorAll('.etl-tl-node--tool').length,
+        count: document.querySelectorAll('.etl-round-tool').length,
         latest: document.querySelector('[data-tool-call-id="bounded-139"]')?.textContent,
       };
     }, makePlan());
@@ -1017,37 +1002,45 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('桌面 Timeline 横向滚动并按总时间跨度定位，移动端退化竖向', async () => {
+  it('桌面/移动均渲染纵向执行流，无旧横向时间轴', async () => {
     const desktop = await loadPanel();
     const desktopResult = await desktop.evaluate((plan) => {
-      plan.steps = [
-        { id: 's0', title: '开始', status: 'done', startedAt: plan.createdAt, endedAt: plan.createdAt + 100 },
-        { id: 's1', title: '中间', status: 'done', startedAt: plan.createdAt + 1000, endedAt: plan.createdAt + 1100 },
-        { id: 's2', title: '结束', status: 'running', startedAt: plan.createdAt + 10000 },
-      ];
-      plan.activeStepId = 's2';
-      (window as any).ChatExecutionPlan.setPlan(plan);
-      const track = document.querySelector('.etl-tl-track') as HTMLElement;
-      const nodes = [...document.querySelectorAll('.etl-tl-node--step')] as HTMLElement[];
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 't1', toolName: 'read_file', ts: plan.createdAt + 100,
+      });
       return {
-        span: track.dataset.totalSpan,
-        positions: nodes.map((node) => node.style.left),
-        horizontal: track.classList.contains('etl-tl-track--horizontal'),
+        hasLegacyTimeline: !!document.querySelector('#etl-timeline, .etl-tl-track'),
+        hasRoundTimeline: !!document.querySelector('#etl-round-timeline'),
+        roundCount: document.querySelectorAll('.etl-round-card').length,
       };
     }, makePlan());
     expect(desktopResult).toEqual({
-      span: '10000',
-      positions: ['0%', '10%', '100%'],
-      horizontal: true,
+      hasLegacyTimeline: false,
+      hasRoundTimeline: true,
+      roundCount: 1,
     });
     await desktop.close();
 
     const mobile = await loadPanel(true, true);
     const mobileVertical = await mobile.evaluate((plan) => {
-      (window as any).ChatExecutionPlan.setPlan(plan);
-      return document.querySelector('.etl-tl-track')?.classList.contains('etl-tl-track--vertical');
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 't2', toolName: 'read_file', ts: plan.createdAt + 100,
+      });
+      return {
+        hasLegacyTimeline: !!document.querySelector('#etl-timeline, .etl-tl-track'),
+        hasRoundTimeline: !!document.querySelector('#etl-round-timeline'),
+        vertical: !!document.querySelector('.etl-round-list'),
+      };
     }, makePlan());
-    expect(mobileVertical).toBe(true);
+    expect(mobileVertical).toEqual({
+      hasLegacyTimeline: false,
+      hasRoundTimeline: true,
+      vertical: true,
+    });
     await mobile.close();
   });
 
@@ -1125,42 +1118,39 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('设置页修改时间轴粒度后即时重渲染，且不再提供时间显示设置', async () => {
+  it('设置页不再暴露已下线的时间轴选项', async () => {
     const page = await loadPanel();
-    await page.evaluate((plan) => {
-      (window as any).ChatExecutionPlan.setPlan(plan);
-      (window as any).ChatExecutionPlan.applyToolActivity({
-        type: 'tool_call',
-        toolCallId: 'settings-live-tool',
-        toolName: 'read_file',
-        ts: plan.createdAt + 1000,
-      });
+    await page.evaluate(() => {
       const root = document.createElement('main');
       root.id = 'settings-root';
       document.body.appendChild(root);
       (window as any).AppShell = { getTheme: () => 'dark' };
       (window as any).AppRouter = { isSetupRequired: () => false };
-    }, makePlan());
+    });
     await page.addScriptTag({ content: CONFIG_SOURCE });
 
-    const result = await page.evaluate(() => {
+    const missing = await page.evaluate(() => {
       (window as any).SettingsPage.render(document.querySelector('#settings-root'));
-      const beforeToolNodes = document.querySelectorAll('.etl-tl-node--tool').length;
-      const granularity = document.querySelector('#etl-timeline-granularity') as HTMLSelectElement;
-      granularity.value = 'step+tool';
-      granularity.dispatchEvent(new Event('change'));
-      const afterToolNodes = document.querySelectorAll('.etl-tl-node--tool').length;
       return {
-        beforeToolNodes,
-        afterToolNodes,
-        timeSettingCount: document.querySelectorAll('#etl-timeline-time-mode').length,
+        showTimeline: !!document.querySelector('#etl-show-timeline'),
+        autoScroll: !!document.querySelector('#etl-auto-scroll'),
+        granularity: !!document.querySelector('#etl-timeline-granularity'),
+        timeMode: !!document.querySelector('#etl-timeline-time-mode'),
+        hasEnabled: !!document.querySelector('#etl-show-panel'),
+        hasExpand: !!document.querySelector('#etl-panel-default-expanded'),
+        hasLlm: !!document.querySelector('#etl-show-llm-activity'),
+        hasWidth: !!document.querySelector('#etl-panel-width'),
       };
     });
-
-    expect(result).toEqual({
-      beforeToolNodes: 0,
-      afterToolNodes: 1,
-      timeSettingCount: 0,
+    expect(missing).toEqual({
+      showTimeline: false,
+      autoScroll: false,
+      granularity: false,
+      timeMode: false,
+      hasEnabled: true,
+      hasExpand: true,
+      hasLlm: true,
+      hasWidth: true,
     });
     await page.close();
   });
@@ -1174,10 +1164,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         showTransparencyPanel: true,
         panelDefaultExpanded: true,
         showLlmActivity: true,
-        showTimeline: true,
-        autoScrollActiveStep: true,
-        timelineGranularity: 'step',
-        timelineTimeMode: 'absolute',
         panelWidth: 360,
       };
       (window as any).__prefs = prefs;
@@ -1194,21 +1180,15 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.addStyleTag({ content: CONFIG_CSS_SOURCE });
     const mobileWide = await page.evaluate(() => {
       (window as any).SettingsPage.render(document.querySelector('#settings-root'));
-      const granularity = document.querySelector('#etl-timeline-granularity') as HTMLSelectElement;
-      granularity.value = 'step+tool';
-      granularity.dispatchEvent(new Event('change'));
       const widthRow = document.querySelector('#etl-panel-width-row') as HTMLElement;
       return {
-        prefs: (window as any).__prefs,
         widthDisplay: getComputedStyle(widthRow).display,
-        timeSettingCount: document.querySelectorAll('#etl-timeline-time-mode').length,
+        timeSettingCount: document.querySelectorAll(
+          '#etl-timeline-time-mode, #etl-show-timeline, #etl-timeline-granularity, #etl-auto-scroll',
+        ).length,
       };
     });
 
-    expect(mobileWide.prefs).toMatchObject({
-      timelineGranularity: 'step+tool',
-      timelineTimeMode: 'absolute',
-    });
     expect(mobileWide.widthDisplay).toBe('none');
     expect(mobileWide.timeSettingCount).toBe(0);
 
@@ -1221,4 +1201,5 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(desktopNarrowDisplay).toBe('flex');
     await page.close();
   });
+
 });

@@ -54,11 +54,7 @@ async function loadLifecycle(): Promise<Page> {
     const prefs = {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      showTimeline: true,
       showLlmActivity: true,
-      autoScrollActiveStep: false,
-      timelineTimeMode: 'absolute',
-      timelineGranularity: 'step',
       panelWidth: 360,
     };
     (window as any).EtlPrefs = {
@@ -98,7 +94,7 @@ function makePlan() {
 }
 
 describe('ETL bridge 生命周期', () => {
-  it('execution_mode_exit 保留继续执行 Supervisor 节点和计划', async () => {
+  it('execution_mode_exit 保留计划与面板，不再渲染旧 Supervisor 时间轴节点', async () => {
     const page = await loadLifecycle();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
@@ -129,13 +125,13 @@ describe('ETL bridge 生命周期', () => {
       return {
         planId: (window as any).ChatExecutionPlan.getPlan()?.planId,
         open: document.body.classList.contains('etl-panel-open'),
-        supervisorText: document.querySelector('.etl-tl-node--supervisor.is-resume')?.textContent,
+        hasLegacySupervisor: !!document.querySelector('.etl-tl-node--supervisor'),
       };
     }, makePlan());
 
     expect(result.planId).toBe('lifecycle-plan');
     expect(result.open).toBe(true);
-    expect(result.supervisorText).toContain('继续执行');
+    expect(result.hasLegacySupervisor).toBe(false);
     await page.close();
   });
 
@@ -252,11 +248,7 @@ describe('ETL bridge 生命周期', () => {
       const prefs = {
         showTransparencyPanel: true,
         panelDefaultExpanded: true,
-        showTimeline: true,
         showLlmActivity: true,
-        autoScrollActiveStep: false,
-        timelineTimeMode: 'absolute',
-        timelineGranularity: 'step',
         panelWidth: 360,
       };
       (window as any).EtlPrefs = {

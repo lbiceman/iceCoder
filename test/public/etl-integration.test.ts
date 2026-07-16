@@ -68,10 +68,6 @@ async function loadObserver(options: {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
       showLlmActivity: true,
-      showTimeline: true,
-      autoScrollActiveStep: false,
-      timelineTimeMode: 'absolute',
-      timelineGranularity: 'step',
       panelWidth: 360,
     };
     const listeners: Array<() => void> = [];
@@ -328,7 +324,7 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('task_graph_update 全量投影保留 Timeline 与 Footer 消费的时间字段', async () => {
+  it('task_graph_update 全量投影保留 Footer 消费的时间字段', async () => {
     const page = await loadObserver();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
@@ -343,7 +339,7 @@ describe('ETL 真实 Observer 链路', () => {
         planStartedAt: projected?.startedAt,
         planEndedAt: projected?.endedAt,
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
-        timelineTotal: document.querySelector('.etl-tl-total')?.textContent,
+        hasLegacyTimeline: !!document.querySelector('.etl-tl-total, #etl-timeline'),
       };
     }, {
       ...makePlan('timed-graph-plan'),
@@ -368,7 +364,7 @@ describe('ETL 真实 Observer 链路', () => {
       planStartedAt: 10_000,
       planEndedAt: 15_000,
       footerTime: '00:05',
-      timelineTotal: '总时长 00:05',
+      hasLegacyTimeline: false,
     });
   });
 
@@ -419,7 +415,6 @@ describe('ETL 真实 Observer 链路', () => {
     const page = await loadObserver();
     const result = await page.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
-      (window as any).EtlPrefs.set({ timelineGranularity: 'step+tool' });
       bridge.notifyConnected({ features: { executionPlan: true } });
       bridge.handleStep({ type: 'execution_plan_init', plan });
       bridge.handleStep({
@@ -469,7 +464,8 @@ describe('ETL 真实 Observer 链路', () => {
       return {
         progress: (window as any).ChatExecutionPlan.getPlan()?.progress,
         status: document.querySelector('#etl-current-step .etl-cs-status')?.textContent,
-        resume: document.querySelector('.etl-tl-node--supervisor.is-resume')?.textContent,
+        hasLegacySupervisor: !!document.querySelector('.etl-tl-node--supervisor'),
+        roundTools: document.querySelectorAll('.etl-round-tool').length,
         toolCount: document.querySelector('.etl-foot-tool b')?.textContent,
         a: tool('call-a'),
         b: tool('call-b'),
@@ -478,7 +474,8 @@ describe('ETL 真实 Observer 链路', () => {
 
     expect(result.progress).toBe(100);
     expect(result.status).toBe('✅ 已完成 · 用时 00:05');
-    expect(result.resume).toContain('继续执行');
+    expect(result.hasLegacySupervisor).toBe(false);
+    expect(result.roundTools).toBe(2);
     expect(result.toolCount).toBe('2');
     expect(result.a.status).toBe('done');
     expect(result.a.resultTs).toBeTruthy();

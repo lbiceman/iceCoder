@@ -15,15 +15,8 @@ window.EtlPrefs = (function () {
     showTransparencyPanel: false,
     panelDefaultExpanded: true,
     showLlmActivity: true,
-    showTimeline: true,
-    autoScrollActiveStep: true,
-    timelineGranularity: 'step',
-    timelineTimeMode: 'absolute',
     panelWidth: 360,
   };
-
-  var VALID_GRANULARITY = { step: true, 'step+tool': true };
-  var VALID_TIME_MODE = { absolute: true, relative: true };
 
   var cached = null;
   var listeners = [];
@@ -46,18 +39,6 @@ window.EtlPrefs = (function () {
     }
     if (typeof raw.showLlmActivity === 'boolean') {
       out.showLlmActivity = raw.showLlmActivity;
-    }
-    if (typeof raw.showTimeline === 'boolean') {
-      out.showTimeline = raw.showTimeline;
-    }
-    if (typeof raw.autoScrollActiveStep === 'boolean') {
-      out.autoScrollActiveStep = raw.autoScrollActiveStep;
-    }
-    if (VALID_GRANULARITY[raw.timelineGranularity]) {
-      out.timelineGranularity = raw.timelineGranularity;
-    }
-    if (VALID_TIME_MODE[raw.timelineTimeMode]) {
-      out.timelineTimeMode = raw.timelineTimeMode;
     }
     out.panelWidth = clampPanelWidth(raw.panelWidth);
     return out;
