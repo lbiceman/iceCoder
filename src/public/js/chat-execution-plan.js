@@ -122,6 +122,12 @@ window.ChatExecutionPlan = (function () {
   // 本轮模型循环，只保存结构化执行信息；绝不保存 thinking/reasoning 正文。
   var roundRecords = [];
   var roundRecordByIteration = Object.create(null);
+  var expandedRounds = Object.create(null);
+  var bannerDetailOpen = false;
+  var roundVisibleLimit = 8;
+  var roundTimelineBound = false;
+  var flowPersistTimer = null;
+  var flowPersistHandler = null;
 
   function safeWarn(where, err) {
     try {
@@ -302,19 +308,34 @@ window.ChatExecutionPlan = (function () {
     return html;
   }
 
-  /** 执行流 Tab 主体（当前步骤卡 + 计划列表 + LLM 动作 + 时间轴），桌面/移动共用 IDs。 */
+  function headerActionsHtml() {
+    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">—</button>';
+  }
+
+  /** 执行流 Tab 主体（轮次时间轴 + 隐藏的计划列表供 patch 增量更新）。 */
   function flowPanelHtml() {
     return '<section class="etl-tabpanel" id="etl-panel-flow" data-panel="flow" role="tabpanel" aria-labelledby="etl-tab-flow">' +
-      '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
       '<div class="etl-round-timeline" id="etl-round-timeline">' +
         '<div class="etl-round-empty etl-empty">等待模型开始执行</div>' +
         '<ol class="etl-round-list"></ol>' +
+        '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
       '</div>' +
       '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
       '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
       '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
       '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
     '</section>';
+  }
+
+  function sharedBodyHtml() {
+    return '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
+      '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
+      '<div class="etl-body">' +
+        flowPanelHtml() +
+        '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
+          '<div class="etl-empty">开发中。。。</div>' +
+        '</section>' +
+      '</div>';
   }
 
   /** 从 host 抓取渲染所需元素引用（模块级变量，后续渲染均以此为准）。 */
@@ -408,22 +429,16 @@ window.ChatExecutionPlan = (function () {
     rootEl.id = PANEL_ID;
     rootEl.className = 'etl-panel';
     rootEl.setAttribute('role', 'complementary');
-    rootEl.setAttribute('aria-label', '执行透明层');
+    rootEl.setAttribute('aria-label', 'iceCoder工作台');
     rootEl.setAttribute('aria-hidden', 'true');
 
     rootEl.innerHTML =
       '<header class="etl-header">' +
-        '<span class="etl-title">执行透明层</span>' +
-        '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">—</button>' +
+        '<span class="etl-title">iceCoder工作台</span>' +
+        headerActionsHtml() +
       '</header>' +
       '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
-      '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
-      '<div class="etl-body">' +
-        flowPanelHtml() +
-        '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
-          '<div class="etl-empty">开发中。。。</div>' +
-        '</section>' +
-      '</div>' +
+      sharedBodyHtml() +
       '<footer class="etl-footer" id="etl-footer"></footer>';
 
     document.body.appendChild(rootEl);
@@ -460,15 +475,16 @@ window.ChatExecutionPlan = (function () {
     mobileSheetEl.id = PANEL_ID;
     mobileSheetEl.className = 'etl-msheet';
     mobileSheetEl.setAttribute('role', 'complementary');
-    mobileSheetEl.setAttribute('aria-label', '执行透明层');
+    mobileSheetEl.setAttribute('aria-label', 'iceCoder工作台');
     mobileSheetEl.setAttribute('aria-hidden', 'true');
     mobileSheetEl.innerHTML =
       '<div class="etl-msheet-handle" aria-hidden="true"></div>' +
       '<header class="etl-header">' +
-        '<span class="etl-title">执行透明层</span>' +
-        '<button type="button" class="etl-minimize" title="收起" aria-label="收起面板">—</button>' +
+        '<span class="etl-title">iceCoder工作台</span>' +
+        headerActionsHtml() +
       '</header>' +
       '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
+      '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
       '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(MOBILE_TABS) + '</nav>' +
       '<div class="etl-body">' +
         flowPanelHtml() +
@@ -1002,30 +1018,73 @@ window.ChatExecutionPlan = (function () {
     return span;
   }
 
-  // ── 监管横幅（复用现有 .exec-plan-mode-banner）──
+  // ── 监管横幅 ──
+
+  function formatSupervisionReason(modeState) {
+    if (!modeState) return '—';
+    var primary = modeState.enteredByPrimary || (modeState.enteredBy && modeState.enteredBy[0]);
+    if (primary) return MODE_SIGNAL_LABELS[primary] || primary;
+    return modeState.primaryReasonHuman || '监管接管';
+  }
 
   function renderExecutionModeBanner() {
     if (!modeBannerEl) return;
     if (!currentExecutionMode || currentExecutionMode.executionMode !== 'forced') {
       modeBannerEl.classList.add('hidden');
-      modeBannerEl.textContent = '';
+      modeBannerEl.innerHTML = '';
+      bannerDetailOpen = false;
       return;
     }
-    var lines = [];
-    lines.push('⚠ 监管接管中 · ' + (currentExecutionMode.primaryReasonHuman || 'forced'));
+    var reasonLabel = formatSupervisionReason(currentExecutionMode);
+    var roundNo = typeof currentExecutionMode.round === 'number'
+      ? currentExecutionMode.round
+      : (roundRecords.length ? roundRecords[roundRecords.length - 1].iteration : null);
+    var headline = '已进入监管模式（' + reasonLabel + (roundNo ? '，第 ' + roundNo + ' 轮' : '') + '）';
+
+    var detailLines = [];
     if (currentExecutionMode.enteredBy && currentExecutionMode.enteredBy.length) {
       var tags = currentExecutionMode.enteredBy.map(function (sig) {
         return MODE_SIGNAL_LABELS[sig] || sig;
       });
-      lines.push('信号：' + tags.join(' + '));
+      detailLines.push('信号：' + tags.join(' + '));
     }
     if (currentExecutionMode.degradedTier) {
-      lines.push('降级：' + (DEGRADED_LABELS[currentExecutionMode.degradedTier] || currentExecutionMode.degradedTier));
+      detailLines.push('降级：' + (DEGRADED_LABELS[currentExecutionMode.degradedTier]
+        || currentExecutionMode.degradedTier));
     }
-    if (typeof currentExecutionMode.round === 'number') {
-      lines.push('轮次：' + currentExecutionMode.round);
+    if (currentExecutionMode.primaryReasonHuman) {
+      detailLines.push('原因：' + currentExecutionMode.primaryReasonHuman);
     }
-    modeBannerEl.textContent = lines.join('\n');
+
+    modeBannerEl.innerHTML = '';
+    var main = document.createElement('div');
+    main.className = 'etl-banner-main';
+    var icon = document.createElement('span');
+    icon.className = 'etl-banner-icon';
+    icon.textContent = '⚠';
+    var text = document.createElement('span');
+    text.className = 'etl-banner-text';
+    text.textContent = headline;
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'etl-banner-toggle';
+    toggle.textContent = (bannerDetailOpen ? '收起详情 ▴' : '查看详情 ▾');
+    toggle.addEventListener('click', function (event) {
+      event.stopPropagation();
+      bannerDetailOpen = !bannerDetailOpen;
+      renderExecutionModeBanner();
+    });
+    main.appendChild(icon);
+    main.appendChild(text);
+    if (detailLines.length) main.appendChild(toggle);
+    modeBannerEl.appendChild(main);
+
+    if (detailLines.length) {
+      var detail = document.createElement('div');
+      detail.className = 'etl-banner-detail' + (bannerDetailOpen ? '' : ' hidden');
+      detail.textContent = detailLines.join('\n');
+      modeBannerEl.appendChild(detail);
+    }
     modeBannerEl.classList.remove('hidden');
   }
 
@@ -1348,7 +1407,9 @@ window.ChatExecutionPlan = (function () {
     var normalized = normalizeRoundIteration(iteration);
     var key = String(normalized);
     var record = roundRecordByIteration[key];
+    var created = false;
     if (!record) {
+      created = true;
       var inferredStart = typeof ts === 'number' ? ts : Date.now();
       if (normalized === 1 && typeof turnStartedAt === 'number') {
         inferredStart = turnStartedAt;
@@ -1384,7 +1445,7 @@ window.ChatExecutionPlan = (function () {
       record.startTs = ts;
     }
     snapshotRoundPlan(record);
-    return record;
+    return { record: record, created: created };
   }
 
   function addUniqueStrings(target, values) {
@@ -1398,7 +1459,8 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!evt || !evt.type) return;
       var ts = typeof evt.ts === 'number' ? evt.ts : Date.now();
-      var record = ensureRoundRecord(evt.iteration, ts);
+      var roundResult = ensureRoundRecord(evt.iteration, ts);
+      var record = roundResult.record;
       if (evt.type === 'model_round_end' || evt.type === 'model_task_final') {
         record.endTs = ts;
         record.status = 'done';
@@ -1422,9 +1484,14 @@ window.ChatExecutionPlan = (function () {
         }
       }
       renderTaskOverview();
-      renderRoundTimeline();
+      if (roundResult.created && roundRecords.length > 1) {
+        var prevRound = roundRecords[roundRecords.length - 2];
+        syncRoundTimeline({ iteration: prevRound.iteration });
+      }
+      syncRoundTimeline({ iteration: record.iteration });
       renderEmptyState();
       if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyRoundActivity', e);
     }
@@ -1516,77 +1583,632 @@ window.ChatExecutionPlan = (function () {
     return parts.join('；');
   }
 
-  function makeRoundToolRow(tool) {
+  function estimateRemainingSeconds(plan) {
+    if (!plan || !plan.steps || !plan.steps.length || isPlanComplete(plan)) return null;
+    var remaining = 0;
+    var samples = 0;
+    var totalSampleMs = 0;
+    for (var i = 0; i < plan.steps.length; i++) {
+      var step = plan.steps[i];
+      if (step.status === 'done' || step.status === 'failed' || step.status === 'skipped') {
+        if (typeof step.startedAt === 'number' && typeof step.endedAt === 'number') {
+          totalSampleMs += Math.max(0, step.endedAt - step.startedAt);
+          samples++;
+        }
+      } else {
+        remaining++;
+      }
+    }
+    if (!remaining) return 0;
+    var avg = samples ? totalSampleMs / samples : 8000;
+    return Math.max(1, Math.round((avg * remaining) / 1000));
+  }
+
+  function roundVisualStatus(record) {
+    if (record.isFinal && record.status === 'done') return 'done';
+    var tools = getRoundTools(record);
+    for (var i = 0; i < tools.length; i++) {
+      if (toolStatusClass(tools[i].status) === 'failed') return 'failed';
+    }
+    if (record.status === 'done') return 'done';
+    return 'running';
+  }
+
+  function roundStatusLabel(status) {
+    if (status === 'failed') return '失败';
+    if (status === 'done') return '完成';
+    return '进行中';
+  }
+
+  function humanizeToolName(toolName) {
+    if (!toolName) return 'Tool';
+    if (toolName === 'run_command') return 'Run Command';
+    if (toolName === 'read_file') return 'Read File';
+    if (toolName === 'write_file' || toolName === 'edit_file') return 'Edit File';
+    if (toolName === 'grep') return 'Grep';
+    if (toolName === 'glob') return 'Glob';
+    return toolName.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  function deriveRoundTitle(record) {
+    if (record.isFinal) return '整理结论';
+    var tools = getRoundTools(record);
+    if (!tools.length) {
+      return record.activeTitle || '分析目标并规划下一步';
+    }
+    var command = findFirstToolBy(tools, function (t) { return t.toolName === 'run_command'; });
+    if (command) {
+      var cmd = command.detail || command.target || '';
+      if (/test|vitest|jest|playwright|cypress/i.test(cmd)) return 'Run Integration Test';
+      return inferCommandIntent(command);
+    }
+    var reads = tools.filter(function (t) { return CONTEXT_READ_TOOLS[t.toolName]; });
+    if (reads.length >= 2) return '读取核心文件理解实现';
+    if (reads.length === 1) return '读取文件了解上下文';
+    var writes = tools.filter(function (t) { return CONTEXT_WRITE_TOOLS[t.toolName]; });
+    if (writes.length) return writes.length > 1 ? '批量修改文件' : '修改文件落实改动';
+    if (record.activeTitle) return clamp40(record.activeTitle);
+    if (record.phase && PHASE_LABELS[record.phase]) return PHASE_LABELS[record.phase];
+    return '第 ' + record.iteration + ' 轮执行';
+  }
+
+  function buildAllRoundPills(tools) {
+    var pills = [];
+    var grouped = Object.create(null);
+    for (var i = 0; i < tools.length; i++) {
+      var tool = tools[i];
+      var key = tool.toolName + '|' + (tool.detail || tool.target || '');
+      if (!grouped[key]) {
+        grouped[key] = { tool: tool, count: 0 };
+      }
+      grouped[key].count++;
+    }
+    var keys = Object.keys(grouped);
+    for (var k = 0; k < keys.length; k++) {
+      var entry = grouped[keys[k]];
+      var label = humanizeToolName(entry.tool.toolName);
+      if (entry.tool.detail || entry.tool.target) {
+        label += ' · ' + clamp24(entry.tool.detail || entry.tool.target);
+      } else if (entry.count > 1) {
+        label += ' x ' + entry.count;
+      }
+      pills.push({
+        label: label,
+        raw: entry.tool.toolName + (entry.tool.detail ? ' · ' + entry.tool.detail : ''),
+      });
+    }
+    return pills;
+  }
+
+  /** 折叠态：任意工具类型均只展示首个 +「...」。 */
+  function buildCollapsedRoundPill(tools) {
+    if (!tools.length) return [];
+    var firstTool = tools[0];
+    var label = humanizeToolName(firstTool.toolName);
+    var path = firstTool.detail || firstTool.target || '';
+    if (path) label += ' · ' + clamp24(path);
+    if (tools.length === 1) {
+      return [{
+        label: label,
+        raw: firstTool.toolName + (path ? ' · ' + path : ''),
+      }];
+    }
+    return [{
+      label: label + '...',
+      raw: firstTool.toolName + (path ? ' · ' + path : ''),
+      title: '共 ' + tools.length + ' 项',
+    }];
+  }
+
+  /** 折叠态合并为一条；展开态展示全部 pill。 */
+  function buildRoundPills(tools, collapsed) {
+    if (!collapsed) return buildAllRoundPills(tools);
+    return buildCollapsedRoundPill(tools);
+  }
+
+  function renderRoundPills(summary, tools, record) {
+    if (!summary) return;
+    var collapsed = !isRoundExpanded(record);
+    var old = summary.querySelector('.etl-round-pills');
+    if (old) old.parentNode.removeChild(old);
+    var pills = buildRoundPills(tools, collapsed);
+    if (!pills.length) return;
+    var pillWrap = document.createElement('div');
+    pillWrap.className = 'etl-round-pills' + (collapsed ? ' etl-round-pills--folded' : '');
+    for (var p = 0; p < pills.length; p++) {
+      var pill = document.createElement('span');
+      pill.className = 'etl-round-pill';
+      pill.textContent = pills[p].label;
+      pill.title = pills[p].title || pills[p].raw || '';
+      pillWrap.appendChild(pill);
+    }
+    summary.appendChild(pillWrap);
+  }
+
+  /** 按当前展开态刷新所有可见轮次的摘要 pill（避免旧轮次残留多条工具标签）。 */
+  function refreshVisibleRoundPillSummaries() {
+    if (!roundTimelineEl) return;
+    try {
+      var nodes = roundTimelineEl.querySelectorAll('.etl-round-node');
+      Array.prototype.forEach.call(nodes, function (node) {
+        var iter = node.dataset.iteration;
+        if (!iter) return;
+        var record = roundRecordByIteration[iter];
+        if (!record) return;
+        var expanded = isRoundExpanded(record);
+        node.classList.toggle('is-expanded', expanded);
+        if (record.isFinal) node.classList.add('is-final');
+        var row = node.querySelector('.etl-round-row');
+        if (row) row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        var toggle = node.querySelector('.etl-round-toggle');
+        if (toggle) {
+          toggle.textContent = expanded ? '▴' : '▾';
+          toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
+        }
+        rebuildRoundPillsInNode(node, record);
+      });
+    } catch (e) {
+      safeWarn('refreshVisibleRoundPillSummaries', e);
+    }
+  }
+
+  function makeRoundActionRow(tool) {
+    var status = toolStatusClass(tool.status);
     var row = document.createElement('li');
-    row.className = 'etl-round-tool status-' + toolStatusClass(tool.status);
+    row.className = 'etl-round-action etl-round-tool status-' + status;
     row.dataset.toolCallId = tool.toolCallId;
     row.dataset.status = tool.status;
     if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
     if (typeof tool.resultTs === 'number') row.dataset.resultTs = String(tool.resultTs);
     var icon = document.createElement('span');
-    icon.className = 'etl-round-tool-icon';
-    icon.textContent = toolStatusClass(tool.status) === 'done'
-      ? '✓'
-      : (toolStatusClass(tool.status) === 'failed' ? '×' : '•');
-    var text = document.createElement('span');
-    text.className = 'etl-round-tool-text';
-    text.textContent = tool.toolName + (tool.detail ? ' · ' + tool.detail : '');
+    icon.className = 'etl-round-action-icon etl-round-tool-icon';
+    icon.textContent = status === 'failed' ? '×' : '✓';
+    var body = document.createElement('div');
+    body.style.minWidth = '0';
+    var name = document.createElement('div');
+    name.className = 'etl-round-action-name';
+    name.textContent = humanizeToolName(tool.toolName);
+    var target = document.createElement('div');
+    target.className = 'etl-round-action-target etl-round-tool-text';
+    target.textContent = tool.toolName + (tool.detail ? ' · ' + tool.detail : '');
+    body.appendChild(name);
+    if (tool.detail || tool.target) {
+      var path = document.createElement('div');
+      path.className = 'etl-round-action-target';
+      path.textContent = tool.detail || tool.target || '';
+      body.appendChild(path);
+    }
     var dur = document.createElement('span');
-    dur.className = 'etl-round-tool-duration';
+    dur.className = 'etl-round-action-dur etl-round-tool-duration';
     dur.textContent = formatToolDuration(tool);
     row.appendChild(icon);
-    row.appendChild(text);
+    row.appendChild(body);
     row.appendChild(dur);
     return row;
   }
 
+  function getVisibleRoundRecords() {
+    return roundRecords.slice(-roundVisibleLimit).reverse();
+  }
+
+  function isRoundInVisibleWindow(record) {
+    if (!record) return false;
+    var visible = getVisibleRoundRecords();
+    for (var i = 0; i < visible.length; i++) {
+      if (visible[i].iteration === record.iteration) return true;
+    }
+    return false;
+  }
+
+  function findRoundNode(iteration) {
+    if (!roundTimelineEl) return null;
+    return roundTimelineEl.querySelector('.etl-round-node[data-iteration="' + iteration + '"]');
+  }
+
+  function getRoundListContext() {
+    bindRoundTimelineEvents();
+    if (!roundTimelineEl) return null;
+    var empty = roundTimelineEl.querySelector('.etl-round-empty');
+    var list = roundTimelineEl.querySelector('.etl-round-list');
+    if (empty) empty.classList.toggle('hidden', roundRecords.length > 0);
+    return { empty: empty, list: list };
+  }
+
+  function syncLoadMoreButton() {
+    if (!roundTimelineEl) return;
+    var loadMore = roundTimelineEl.querySelector('#etl-round-load-more');
+    if (!loadMore) return;
+    var hiddenCount = Math.max(0, roundRecords.length - roundVisibleLimit);
+    loadMore.classList.toggle('hidden', hiddenCount <= 0);
+    loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ' (' + hiddenCount + ')' : '');
+  }
+
+  function pruneInvisibleRoundNodes(list, visibleSet) {
+    if (!list) return;
+    var nodes = list.querySelectorAll('.etl-round-node');
+    Array.prototype.forEach.call(nodes, function (node) {
+      if (!visibleSet || !visibleSet[node.dataset.iteration]) {
+        node.parentNode.removeChild(node);
+      }
+    });
+  }
+
+  function insertRoundNodeAt(list, node, index) {
+    var ref = list.children[index] || null;
+    list.insertBefore(node, ref);
+  }
+
+  function rebuildRoundPillsInNode(roundNode, record) {
+    var summary = roundNode.querySelector('.etl-round-summary');
+    if (!summary) return;
+    renderRoundPills(summary, getRoundTools(record), record);
+  }
+
+  function patchRoundReason(roundNode, record) {
+    var detail = roundNode.querySelector('.etl-round-detail');
+    if (!detail) return;
+    var reasons = detail.querySelectorAll('.etl-round-reason');
+    var reason = reasons.length ? reasons[reasons.length - 1] : null;
+    if (reason) reason.textContent = deriveRoundReason(record);
+  }
+
+  /** 就地更新已有轮次节点，避免 replaceChild 引发整表重绘闪烁。 */
+  function patchRoundNode(roundNode, record) {
+    if (!roundNode || !record) return;
+    snapshotRoundPlan(record);
+    patchRoundSummary(roundNode, record);
+    var detail = roundNode.querySelector('.etl-round-detail');
+    if (!detail) return;
+    var tools = getRoundTools(record);
+    var actions = detail.querySelector('.etl-round-actions');
+    if (tools.length) {
+      if (actions) {
+        var validIds = Object.create(null);
+        for (var tv = 0; tv < tools.length; tv++) {
+          validIds[tools[tv].toolCallId] = true;
+        }
+        var existingRows = actions.querySelectorAll('[data-tool-call-id]');
+        Array.prototype.forEach.call(existingRows, function (row) {
+          if (!validIds[row.dataset.toolCallId]) {
+            row.parentNode.removeChild(row);
+          }
+        });
+        for (var ti = 0; ti < tools.length; ti++) {
+          var tool = tools[ti];
+          if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
+            actions.appendChild(makeRoundActionRow(tool));
+          }
+        }
+      } else {
+        rebuildRoundDetailBody(detail, record);
+      }
+    } else if (record.isFinal) {
+      var actionLabel = detail.querySelector('.etl-round-section-label');
+      if (actionLabel) actionLabel.textContent = '本轮结果';
+      if (!detail.querySelector('.etl-round-complete')) {
+        rebuildRoundDetailBody(detail, record);
+      } else {
+        var completion = detail.querySelector('.etl-round-complete');
+        if (completion) completion.textContent = roundCompletionText(record);
+      }
+    } else {
+      var planning = detail.querySelector('.etl-round-reason');
+      if (planning && !actions) {
+        planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
+      } else if (!planning) {
+        rebuildRoundDetailBody(detail, record);
+      }
+    }
+    patchRoundReason(roundNode, record);
+    var row = roundNode.querySelector('.etl-round-row');
+    if (row) row.setAttribute('aria-expanded', isRoundExpanded(record) ? 'true' : 'false');
+    var toggle = roundNode.querySelector('.etl-round-toggle');
+    if (toggle) {
+      var expanded = isRoundExpanded(record);
+      toggle.textContent = expanded ? '▴' : '▾';
+      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
+    }
+  }
+
+  function patchRoundSummary(roundNode, record) {
+    var visualStatus = roundVisualStatus(record);
+    roundNode.className = 'etl-round-node status-' + visualStatus
+      + (record.isFinal ? ' is-final' : '')
+      + (isRoundExpanded(record) ? ' is-expanded' : '');
+    var marker = roundNode.querySelector('.etl-round-marker');
+    if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    var title = roundNode.querySelector('.etl-round-title');
+    if (title) title.textContent = deriveRoundTitle(record);
+    var badge = roundNode.querySelector('.etl-round-badge');
+    if (badge) {
+      badge.className = 'etl-round-badge status-' + visualStatus;
+      badge.textContent = roundStatusLabel(visualStatus);
+    }
+    var time = roundNode.querySelector('.etl-round-duration');
+    if (time) time.textContent = roundDuration(record);
+    rebuildRoundPillsInNode(roundNode, record);
+  }
+
+  function rebuildRoundDetailBody(detail, record) {
+    var label = detail.querySelector('.etl-round-section-label');
+    if (!label) return;
+    label.textContent = record.isFinal ? '本轮结果' : '做了什么';
+    while (label.nextSibling) detail.removeChild(label.nextSibling);
+    var tools = getRoundTools(record);
+    if (tools.length) {
+      var actionList = document.createElement('ul');
+      actionList.className = 'etl-round-actions';
+      for (var i = 0; i < tools.length; i++) {
+        actionList.appendChild(makeRoundActionRow(tools[i]));
+      }
+      detail.appendChild(actionList);
+    } else if (record.isFinal) {
+      var completion = document.createElement('div');
+      completion.className = 'etl-round-complete';
+      completion.textContent = roundCompletionText(record);
+      detail.appendChild(completion);
+    } else {
+      var planning = document.createElement('div');
+      planning.className = 'etl-round-reason';
+      planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
+      detail.appendChild(planning);
+    }
+    var reasonLabel = document.createElement('div');
+    reasonLabel.className = 'etl-round-section-label';
+    reasonLabel.textContent = '为什么这么做';
+    var reason = document.createElement('div');
+    reason.className = 'etl-round-reason';
+    reason.textContent = deriveRoundReason(record);
+    detail.appendChild(reasonLabel);
+    detail.appendChild(reason);
+  }
+
+  function appendToolToRoundNode(roundNode, record, tool) {
+    patchRoundSummary(roundNode, record);
+    var detail = roundNode.querySelector('.etl-round-detail');
+    if (!detail) return;
+    var actions = detail.querySelector('.etl-round-actions');
+    if (actions) {
+      if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
+        actions.appendChild(makeRoundActionRow(tool));
+      }
+    } else {
+      rebuildRoundDetailBody(detail, record);
+      return;
+    }
+    patchRoundReason(roundNode, record);
+  }
+
+  function tryPatchRoundToolRow(tool) {
+    if (!roundTimelineEl || !tool || !tool.toolCallId) return false;
+    var row = roundTimelineEl.querySelector('.etl-round-tool[data-tool-call-id="' + tool.toolCallId + '"]');
+    if (!row) return false;
+    var status = toolStatusClass(tool.status);
+    row.className = 'etl-round-action etl-round-tool status-' + status;
+    row.dataset.status = tool.status;
+    if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
+    if (typeof tool.resultTs === 'number') row.dataset.resultTs = String(tool.resultTs);
+    var icon = row.querySelector('.etl-round-action-icon');
+    if (icon) icon.textContent = status === 'failed' ? '×' : '✓';
+    var dur = row.querySelector('.etl-round-action-dur');
+    if (dur) dur.textContent = formatToolDuration(tool);
+    return true;
+  }
+
+  /** 已有节点 patch，缺失节点 append；不做整节点替换。 */
+  function ensureRoundNode(record) {
+    var ctx = getRoundListContext();
+    if (!ctx || !ctx.list || !record) return null;
+    var existing = findRoundNode(record.iteration);
+    if (existing) {
+      patchRoundNode(existing, record);
+      return existing;
+    }
+    var fresh = makeRoundNode(record);
+    var visible = getVisibleRoundRecords();
+    var index = -1;
+    for (var i = 0; i < visible.length; i++) {
+      if (visible[i].iteration === record.iteration) {
+        index = i;
+        break;
+      }
+    }
+    if (index < 0) return null;
+    insertRoundNodeAt(ctx.list, fresh, index);
+    return fresh;
+  }
+
+  function syncRoundTimeline(options) {
+    options = options || {};
+    try {
+      var ctx = getRoundListContext();
+      if (!ctx || !ctx.list) return;
+      syncLoadMoreButton();
+
+      if (options.reset) {
+        ctx.list.innerHTML = '';
+      }
+
+      if (options.iteration != null) {
+        var rec = roundRecordByIteration[String(options.iteration)];
+        if (!rec || !isRoundInVisibleWindow(rec)) {
+          var stale = findRoundNode(options.iteration);
+          if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+          syncLoadMoreButton();
+          return;
+        }
+        if (options.tool && options.mode === 'append') {
+          var liveNode = findRoundNode(rec.iteration);
+          if (liveNode) {
+            appendToolToRoundNode(liveNode, rec, options.tool);
+            return;
+          }
+        }
+        ensureRoundNode(rec);
+        return;
+      }
+
+      if (options.loadMore) {
+        var moreVisible = getVisibleRoundRecords();
+        for (var mi = 0; mi < moreVisible.length; mi++) {
+          ensureRoundNode(moreVisible[mi]);
+        }
+        var moreSet = Object.create(null);
+        for (var mj = 0; mj < moreVisible.length; mj++) {
+          moreSet[String(moreVisible[mj].iteration)] = true;
+        }
+        pruneInvisibleRoundNodes(ctx.list, moreSet);
+        refreshVisibleRoundPillSummaries();
+        return;
+      }
+
+      var visible = getVisibleRoundRecords();
+      var visibleSet = Object.create(null);
+      for (var vi = 0; vi < visible.length; vi++) {
+        visibleSet[String(visible[vi].iteration)] = true;
+        ensureRoundNode(visible[vi]);
+      }
+      pruneInvisibleRoundNodes(ctx.list, visibleSet);
+      refreshVisibleRoundPillSummaries();
+    } catch (e) {
+      safeWarn('syncRoundTimeline', e);
+    }
+  }
+
+  function renderRoundTimeline(reset) {
+    syncRoundTimeline({ reset: !!reset });
+  }
+
+  function isRoundExpanded(record) {
+    if (!record) return false;
+    var key = String(record.iteration);
+    if (expandedRounds[key] === true) return true;
+    if (expandedRounds[key] === false) return false;
+    var latest = roundRecords.length ? roundRecords[roundRecords.length - 1].iteration : null;
+    return record.iteration === latest;
+  }
+
+  function toggleRoundExpanded(iteration) {
+    var key = String(iteration);
+    var record = roundRecordByIteration[key];
+    expandedRounds[key] = !isRoundExpanded(record);
+    var node = findRoundNode(iteration);
+    if (!node) return;
+    var expanded = isRoundExpanded(record);
+    node.classList.toggle('is-expanded', expanded);
+    var row = node.querySelector('.etl-round-row');
+    if (row) row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    var toggle = node.querySelector('.etl-round-toggle');
+    if (toggle) {
+      toggle.textContent = expanded ? '▴' : '▾';
+      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
+    }
+    rebuildRoundPillsInNode(node, record);
+  }
+
+  function bindRoundTimelineEvents() {
+    if (!roundTimelineEl || roundTimelineBound) return;
+    roundTimelineBound = true;
+    roundTimelineEl.addEventListener('click', function (event) {
+      try {
+        var target = event.target;
+        if (!target || !target.closest) return;
+        var loadMore = target.closest('#etl-round-load-more');
+        if (loadMore) {
+          roundVisibleLimit += 8;
+          syncRoundTimeline({ loadMore: true });
+          return;
+        }
+        var row = target.closest('.etl-round-row');
+        if (!row) return;
+        var node = row.closest('.etl-round-node');
+        if (!node || !node.dataset.iteration) return;
+        if (target.closest('.etl-round-toggle')) event.preventDefault();
+        toggleRoundExpanded(node.dataset.iteration);
+      } catch (e) {
+        safeWarn('roundTimelineClick', e);
+      }
+    });
+  }
+
   function makeRoundNode(record) {
     var tools = getRoundTools(record);
+    var visualStatus = roundVisualStatus(record);
+    var itemKey = String(record.iteration);
+    var isExpanded = isRoundExpanded(record);
+
     var item = document.createElement('li');
-    item.className = 'etl-round-node status-' + (record.status === 'done' ? 'done' : 'running')
-      + (record.isFinal ? ' is-final' : '');
-    item.dataset.iteration = String(record.iteration);
+    item.className = 'etl-round-node status-' + visualStatus
+      + (record.isFinal ? ' is-final' : '')
+      + (isExpanded ? ' is-expanded' : '');
+    item.dataset.iteration = itemKey;
+
+    var row = document.createElement('div');
+    row.className = 'etl-round-row';
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
 
     var marker = document.createElement('span');
     marker.className = 'etl-round-marker';
     marker.textContent = record.isFinal ? '✓' : String(record.iteration);
-    item.appendChild(marker);
 
-    var card = document.createElement('div');
-    card.className = 'etl-round-card';
+    var summary = document.createElement('div');
+    summary.className = 'etl-round-summary';
+
     var head = document.createElement('div');
     head.className = 'etl-round-head';
     var title = document.createElement('span');
     title.className = 'etl-round-title';
-    title.textContent = '第 ' + record.iteration + ' 轮'
-      + (record.phase ? ' · ' + (PHASE_LABELS[record.phase] || record.phase) : '');
+    title.textContent = deriveRoundTitle(record);
+    var badge = document.createElement('span');
+    badge.className = 'etl-round-badge status-' + visualStatus;
+    badge.textContent = roundStatusLabel(visualStatus);
     var time = document.createElement('span');
     time.className = 'etl-round-duration';
     time.textContent = roundDuration(record);
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'etl-round-toggle';
+    toggle.setAttribute('aria-label', isExpanded ? '收起轮次详情' : '展开轮次详情');
+    toggle.textContent = isExpanded ? '▴' : '▾';
     head.appendChild(title);
+    head.appendChild(badge);
     head.appendChild(time);
-    card.appendChild(head);
+    head.appendChild(toggle);
+    summary.appendChild(head);
+
+    renderRoundPills(summary, tools, record);
+
+    row.appendChild(marker);
+    row.appendChild(summary);
+    item.appendChild(row);
+
+    var detail = document.createElement('div');
+    detail.className = 'etl-round-detail etl-round-card';
 
     var actionLabel = document.createElement('div');
     actionLabel.className = 'etl-round-section-label';
-    actionLabel.textContent = record.isFinal ? '本轮结果' : '本轮做了什么';
-    card.appendChild(actionLabel);
+    actionLabel.textContent = record.isFinal ? '本轮结果' : '做了什么';
+    detail.appendChild(actionLabel);
+
     if (tools.length) {
-      var toolList = document.createElement('ul');
-      toolList.className = 'etl-round-tools';
-      for (var i = 0; i < tools.length; i++) toolList.appendChild(makeRoundToolRow(tools[i]));
-      card.appendChild(toolList);
-    }
-    if (record.isFinal) {
+      var actionList = document.createElement('ul');
+      actionList.className = 'etl-round-actions';
+      for (var i = 0; i < tools.length; i++) {
+        actionList.appendChild(makeRoundActionRow(tools[i]));
+      }
+      detail.appendChild(actionList);
+    } else if (record.isFinal) {
       var completion = document.createElement('div');
       completion.className = 'etl-round-complete';
       completion.textContent = roundCompletionText(record);
-      card.appendChild(completion);
-    } else if (!tools.length) {
+      detail.appendChild(completion);
+    } else {
       var planning = document.createElement('div');
-      planning.className = 'etl-round-action';
+      planning.className = 'etl-round-reason';
       planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
-      card.appendChild(planning);
+      detail.appendChild(planning);
     }
 
     var reasonLabel = document.createElement('div');
@@ -1595,10 +2217,66 @@ window.ChatExecutionPlan = (function () {
     var reason = document.createElement('div');
     reason.className = 'etl-round-reason';
     reason.textContent = deriveRoundReason(record);
-    card.appendChild(reasonLabel);
-    card.appendChild(reason);
-    item.appendChild(card);
+    detail.appendChild(reasonLabel);
+    detail.appendChild(reason);
+    item.appendChild(detail);
+
     return item;
+  }
+
+  function buildTaskOverviewSkeleton() {
+    taskOverviewEl.innerHTML = '';
+    var label = document.createElement('div');
+    label.className = 'etl-overview-label';
+    label.textContent = '当前目标';
+    taskOverviewEl.appendChild(label);
+
+    var head = document.createElement('div');
+    head.className = 'etl-overview-head';
+    var goal = document.createElement('div');
+    goal.className = 'etl-overview-goal';
+    goal.id = 'etl-overview-goal';
+    var badge = document.createElement('span');
+    badge.className = 'etl-overview-badge hidden';
+    badge.id = 'etl-overview-badge';
+    badge.textContent = '监管接管中';
+    head.appendChild(goal);
+    head.appendChild(badge);
+    taskOverviewEl.appendChild(head);
+
+    var progressWrap = document.createElement('div');
+    progressWrap.className = 'etl-overview-progress';
+    var bar = document.createElement('div');
+    bar.className = 'etl-overview-bar';
+    var fill = document.createElement('div');
+    fill.className = 'etl-overview-bar-fill';
+    fill.id = 'etl-overview-bar-fill';
+    bar.appendChild(fill);
+    var progressMeta = document.createElement('div');
+    progressMeta.className = 'etl-overview-progress-meta';
+    progressMeta.id = 'etl-overview-progress-meta';
+    progressWrap.appendChild(bar);
+    progressWrap.appendChild(progressMeta);
+    taskOverviewEl.appendChild(progressWrap);
+
+    var grid = document.createElement('div');
+    grid.className = 'etl-overview-grid hidden';
+    grid.id = 'etl-overview-grid';
+    grid.innerHTML =
+      '<div class="etl-overview-grid-item">' +
+        '<span class="etl-overview-grid-label">接管原因</span>' +
+        '<span class="etl-overview-grid-value" id="etl-overview-reason">—</span>' +
+      '</div>' +
+      '<div class="etl-overview-grid-item">' +
+        '<span class="etl-overview-grid-label">接管轮次</span>' +
+        '<span class="etl-overview-grid-value" id="etl-overview-round">—</span>' +
+      '</div>';
+    taskOverviewEl.appendChild(grid);
+
+    var intentEl = document.createElement('div');
+    intentEl.className = 'etl-overview-intent hidden';
+    intentEl.id = 'etl-overview-intent';
+    taskOverviewEl.appendChild(intentEl);
   }
 
   function renderTaskOverview() {
@@ -1609,39 +2287,70 @@ window.ChatExecutionPlan = (function () {
         taskOverviewEl.classList.add('hidden');
         return;
       }
+      if (!taskOverviewEl.querySelector('#etl-overview-goal')) {
+        buildTaskOverviewSkeleton();
+      }
+
+      var steps = currentPlan.steps || [];
+      var total = steps.length;
+      var done = countFinished(steps);
+      var pct = total ? Math.round((done / total) * 100) : (currentPlan.progress || 0);
       var active = pickActiveStep(currentPlan);
-      var intent = INTENT_LABELS[currentPlan.intent] || currentPlan.intent || '未分类';
-      var phase = active && active.phase ? (PHASE_LABELS[active.phase] || active.phase) : '已结束';
-      taskOverviewEl.innerHTML = '';
-      var goal = document.createElement('div');
-      goal.className = 'etl-overview-goal';
-      goal.textContent = currentPlan.goal || (active && active.title) || '当前任务';
-      var meta = document.createElement('div');
-      meta.className = 'etl-overview-meta';
-      meta.textContent = '意图：' + intent + ' · 阶段：' + phase
-        + ' · 进度：' + Math.max(0, Math.min(100, currentPlan.progress || 0)) + '%';
-      taskOverviewEl.appendChild(goal);
-      taskOverviewEl.appendChild(meta);
+      var intent = INTENT_LABELS[currentPlan.intent] || currentPlan.intent || '';
+      var forced = currentExecutionMode && currentExecutionMode.executionMode === 'forced';
+      var remainSec = estimateRemainingSeconds(currentPlan);
+
+      var goalEl = taskOverviewEl.querySelector('#etl-overview-goal');
+      if (goalEl) {
+        goalEl.textContent = currentPlan.goal || (active && active.title) || '当前任务';
+      }
+      var badgeEl = taskOverviewEl.querySelector('#etl-overview-badge');
+      if (badgeEl) badgeEl.classList.toggle('hidden', !forced);
+
+      var fillEl = taskOverviewEl.querySelector('#etl-overview-bar-fill');
+      if (fillEl) fillEl.style.width = Math.max(0, Math.min(100, pct)) + '%';
+      var progressMetaEl = taskOverviewEl.querySelector('#etl-overview-progress-meta');
+      if (progressMetaEl) {
+        var progressText = total ? (done + ' / ' + total + ' 步骤') : (pct + '% 进度');
+        if (remainSec !== null && !isPlanComplete(currentPlan)) {
+          progressText += ' · 预计 ' + remainSec + 's 完成';
+        } else if (isPlanComplete(currentPlan)) {
+          progressText += ' · 已完成';
+        }
+        progressMetaEl.textContent = progressText;
+      }
+
+      var gridEl = taskOverviewEl.querySelector('#etl-overview-grid');
+      if (gridEl) {
+        gridEl.classList.toggle('hidden', !forced);
+        if (forced) {
+          var reasonEl = taskOverviewEl.querySelector('#etl-overview-reason');
+          if (reasonEl) reasonEl.textContent = formatSupervisionReason(currentExecutionMode);
+          var roundEl = taskOverviewEl.querySelector('#etl-overview-round');
+          if (roundEl) {
+            var roundNo = typeof currentExecutionMode.round === 'number'
+              ? currentExecutionMode.round
+              : (roundRecords.length ? roundRecords[roundRecords.length - 1].iteration : '—');
+            roundEl.textContent = '第 ' + roundNo + ' 轮';
+          }
+        }
+      }
+
+      var intentEl = taskOverviewEl.querySelector('#etl-overview-intent');
+      if (intentEl) {
+        if (intent) {
+          var phase = active && active.phase ? (PHASE_LABELS[active.phase] || active.phase) : '已结束';
+          intentEl.textContent = '意图：' + intent + ' · 阶段：' + phase;
+          intentEl.classList.remove('hidden');
+        } else {
+          intentEl.textContent = '';
+          intentEl.classList.add('hidden');
+        }
+      }
+
       taskOverviewEl.classList.remove('hidden');
     } catch (e) {
       safeWarn('renderTaskOverview', e);
-    }
-  }
-
-  function renderRoundTimeline() {
-    if (!roundTimelineEl) return;
-    try {
-      var empty = roundTimelineEl.querySelector('.etl-round-empty');
-      var list = roundTimelineEl.querySelector('.etl-round-list');
-      if (empty) empty.classList.toggle('hidden', roundRecords.length > 0);
-      if (!list) return;
-      list.innerHTML = '';
-      for (var i = 0; i < roundRecords.length; i++) {
-        snapshotRoundPlan(roundRecords[i]);
-        list.appendChild(makeRoundNode(roundRecords[i]));
-      }
-    } catch (e) {
-      safeWarn('renderRoundTimeline', e);
     }
   }
 
@@ -1685,8 +2394,12 @@ window.ChatExecutionPlan = (function () {
         if (!callId) return;
         var toolName = typeof step.toolName === 'string' ? step.toolName : '';
         var callTs = typeof step.ts === 'number' ? step.ts : Date.now();
-        var round = ensureRoundRecord(step.iteration, callTs);
+        var roundResult = ensureRoundRecord(step.iteration, callTs);
+        var round = roundResult.record;
+        var createdTool = false;
+        var historyTrimmed = false;
         if (!toolRecordById[callId]) {
+          createdTool = true;
           var record = {
             toolCallId: callId,
             toolName: toolName,
@@ -1707,11 +2420,25 @@ window.ChatExecutionPlan = (function () {
           if (toolRecords.length > MAX_TOOL_HISTORY) {
             var removed = toolRecords.shift();
             if (removed) delete toolRecordById[removed.toolCallId];
+            historyTrimmed = true;
           }
         }
         lastTool = { toolCallId: callId, toolName: toolName, pending: true, ts: callTs };
         renderTaskOverview();
-        renderRoundTimeline();
+        if (roundResult.created && roundRecords.length > 1) {
+          var prevIter = roundRecords[roundRecords.length - 2].iteration;
+          syncRoundTimeline({ iteration: prevIter });
+        }
+        if (!historyTrimmed && createdTool && findRoundNode(round.iteration) && !roundResult.created
+          && getRoundTools(round).length < MAX_TOOL_HISTORY) {
+          syncRoundTimeline({
+            iteration: round.iteration,
+            mode: 'append',
+            tool: toolRecordById[callId],
+          });
+        } else {
+          syncRoundTimeline({ iteration: round.iteration });
+        }
         renderEmptyState();
         renderLlmActivity();
         renderFooter();
@@ -1728,7 +2455,8 @@ window.ChatExecutionPlan = (function () {
           if (!matched.toolName && typeof step.toolName === 'string') {
             matched.toolName = step.toolName;
           }
-          var matchedRound = ensureRoundRecord(matched.iteration, matched.callTs);
+          var matchedRoundResult = ensureRoundRecord(matched.iteration, matched.callTs);
+          var matchedRound = matchedRoundResult.record;
           if (matched.resultTs > (matchedRound.endTs || 0)) matchedRound.endTs = matched.resultTs;
           var roundTools = getRoundTools(matchedRound);
           var allDone = roundTools.length > 0;
@@ -1736,13 +2464,22 @@ window.ChatExecutionPlan = (function () {
             if (toolStatusClass(roundTools[ri].status) === 'running') allDone = false;
           }
           if (allDone) matchedRound.status = 'done';
+          if (tryPatchRoundToolRow(matched)) {
+            var roundNode = findRoundNode(matchedRound.iteration);
+            if (roundNode) {
+              patchRoundSummary(roundNode, matchedRound);
+              patchRoundReason(roundNode, matchedRound);
+            }
+          } else {
+            syncRoundTimeline({ iteration: matchedRound.iteration });
+          }
         }
         if (lastTool.pending && resultId && lastTool.toolCallId === resultId) {
           lastTool.pending = false;
           renderLlmActivity();
         }
-        renderRoundTimeline();
       }
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyToolActivity', e);
     }
@@ -1761,11 +2498,14 @@ window.ChatExecutionPlan = (function () {
       footerStats.totalToolCalls = null;
       roundRecords = [];
       roundRecordByIteration = Object.create(null);
+      expandedRounds = Object.create(null);
+      roundVisibleLimit = 8;
       renderTaskOverview();
-      renderRoundTimeline();
+      renderRoundTimeline(true);
       renderEmptyState();
       renderLlmActivity();
       renderFooter();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('resetToolActivity', e);
     }
@@ -1788,6 +2528,7 @@ window.ChatExecutionPlan = (function () {
       turnEndedAt = typeof ts === 'number' ? Math.max(turnStartedAt, ts) : Date.now();
       renderFooter();
       if (isPlanComplete(currentPlan) && !hasRunningStep()) stopTick();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('endTurnTimer', e);
     }
@@ -1799,7 +2540,7 @@ window.ChatExecutionPlan = (function () {
     if (!ensureMounted()) throw new Error('执行透明层挂载失败');
     renderExecutionModeBanner();
     renderTaskOverview();
-    renderRoundTimeline();
+    renderRoundTimeline(true);
     renderCurrentStep();
     renderEmptyState();
     renderList();
@@ -1858,6 +2599,7 @@ window.ChatExecutionPlan = (function () {
       fullRender();
       applyVisibility();
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('setPlan', e);
       teardownMounts();
@@ -1947,6 +2689,7 @@ window.ChatExecutionPlan = (function () {
         startTick();
       }
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyPatch', e);
       teardownMounts();
@@ -1956,7 +2699,9 @@ window.ChatExecutionPlan = (function () {
   function resetExecutionMode() {
     try {
       currentExecutionMode = null;
+      bannerDetailOpen = false;
       renderExecutionModeBanner();
+      renderTaskOverview();
       applyVisibility();
       notifyPetFoot();
     } catch (e) {
@@ -1972,6 +2717,9 @@ window.ChatExecutionPlan = (function () {
       visible = !isPanelSuppressed();
       roundRecords = [];
       roundRecordByIteration = Object.create(null);
+      expandedRounds = Object.create(null);
+      roundVisibleLimit = 8;
+      bannerDetailOpen = false;
       lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
       toolRecords = [];
       toolRecordById = Object.create(null);
@@ -1993,12 +2741,13 @@ window.ChatExecutionPlan = (function () {
           llmActivityEl.classList.add('hidden');
         }
         renderTaskOverview();
-        renderRoundTimeline();
+        renderRoundTimeline(true);
         renderExecutionModeBanner();
         renderFooter();
       }
       applyVisibility();
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('clear', e);
       teardownMounts();
@@ -2083,7 +2832,9 @@ window.ChatExecutionPlan = (function () {
       if (!step || !step.executionMode) return;
       if (step.type === 'execution_mode_exit') {
         currentExecutionMode = null;
+        bannerDetailOpen = false;
         renderExecutionModeBanner();
+        renderTaskOverview();
         applyVisibility();
         notifyPetFoot();
         return;
@@ -2092,9 +2843,11 @@ window.ChatExecutionPlan = (function () {
       if (!isPanelSuppressed() && pageActive) {
         ensureMounted();
         renderExecutionModeBanner();
+        renderTaskOverview();
       }
       applyVisibility();
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyExecutionModeEvent', e);
       teardownMounts();
@@ -2112,8 +2865,210 @@ window.ChatExecutionPlan = (function () {
         calibratedUniqueToolCount = uniqueToolCallCount;
       }
       renderFooter();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyRuntimeStats', e);
+    }
+  }
+
+  function cloneRoundRecord(record) {
+    if (!record || typeof record !== 'object') return null;
+    return {
+      iteration: record.iteration,
+      startTs: record.startTs,
+      endTs: record.endTs,
+      status: record.status,
+      toolCallIds: Array.isArray(record.toolCallIds) ? record.toolCallIds.slice() : [],
+      signals: Array.isArray(record.signals) ? record.signals.slice() : [],
+      branchReasons: Array.isArray(record.branchReasons) ? record.branchReasons.slice() : [],
+      stopReason: record.stopReason || '',
+      activeTitle: record.activeTitle || '',
+      phase: record.phase || '',
+    };
+  }
+
+  function cloneToolRecord(record) {
+    if (!record || typeof record !== 'object') return null;
+    return {
+      toolCallId: record.toolCallId || '',
+      toolName: record.toolName || '',
+      callTs: record.callTs,
+      resultTs: record.resultTs,
+      status: record.status || 'running',
+      detail: record.detail || '',
+      target: record.target || '',
+      iteration: record.iteration,
+    };
+  }
+
+  function rebuildRoundIndexes(records) {
+    roundRecordByIteration = Object.create(null);
+    for (var i = 0; i < records.length; i++) {
+      var rr = records[i];
+      if (rr && typeof rr.iteration === 'number') {
+        roundRecordByIteration[String(rr.iteration)] = rr;
+      }
+    }
+  }
+
+  function rebuildToolIndexes(records) {
+    toolRecordById = Object.create(null);
+    toolCallIds = Object.create(null);
+    uniqueToolCallCount = 0;
+    for (var i = 0; i < records.length; i++) {
+      var tr = records[i];
+      if (!tr || !tr.toolCallId) continue;
+      toolRecordById[tr.toolCallId] = tr;
+      if (!toolCallIds[tr.toolCallId]) {
+        toolCallIds[tr.toolCallId] = true;
+        uniqueToolCallCount++;
+      }
+    }
+  }
+
+  function scheduleFlowPersist() {
+    if (!flowPersistHandler) return;
+    if (flowPersistTimer) clearTimeout(flowPersistTimer);
+    flowPersistTimer = setTimeout(function () {
+      flowPersistTimer = null;
+      try {
+        flowPersistHandler();
+      } catch (e) {
+        safeWarn('scheduleFlowPersist', e);
+      }
+    }, 250);
+  }
+
+  function cancelFlowPersist() {
+    if (flowPersistTimer) {
+      clearTimeout(flowPersistTimer);
+      flowPersistTimer = null;
+    }
+  }
+
+  /** 取消待写防抖并立即落盘（会话切换 / 页面隐藏时调用）。 */
+  function flushFlowPersist() {
+    cancelFlowPersist();
+    if (!flowPersistHandler) return;
+    try {
+      flowPersistHandler();
+    } catch (e) {
+      safeWarn('flushFlowPersist', e);
+    }
+  }
+
+  function registerFlowPersist(handler) {
+    flowPersistHandler = typeof handler === 'function' ? handler : null;
+  }
+
+  /** 导出可 JSON 序列化的执行流快照（不含 DOM / 偏好）。 */
+  function getFlowSnapshot() {
+    try {
+      var rounds = [];
+      for (var i = 0; i < roundRecords.length; i++) {
+        var clonedRound = cloneRoundRecord(roundRecords[i]);
+        if (clonedRound) rounds.push(clonedRound);
+      }
+      var tools = [];
+      for (var j = 0; j < toolRecords.length; j++) {
+        var clonedTool = cloneToolRecord(toolRecords[j]);
+        if (clonedTool) tools.push(clonedTool);
+      }
+      return {
+        currentPlan: currentPlan ? JSON.parse(JSON.stringify(currentPlan)) : null,
+        frozenPlanId: frozenPlanId,
+        currentExecutionMode: currentExecutionMode
+          ? Object.assign({}, currentExecutionMode)
+          : null,
+        roundRecords: rounds,
+        toolRecords: tools,
+        lastTool: Object.assign({}, lastTool),
+        footerStats: Object.assign({}, footerStats),
+        turnStartedAt: turnStartedAt,
+        turnEndedAt: turnEndedAt,
+        uniqueToolCallCount: uniqueToolCallCount,
+        calibratedUniqueToolCount: calibratedUniqueToolCount,
+        authoritativeToolCalls: typeof authoritativeToolCalls === 'number'
+          ? authoritativeToolCalls
+          : null,
+      };
+    } catch (e) {
+      safeWarn('getFlowSnapshot', e);
+      return null;
+    }
+  }
+
+  /**
+   * 从本地快照恢复执行流。
+   * @param {object} snapshot
+   * @param {{ overlayOnly?: boolean }} opts overlayOnly=true 时仅恢复轮次/工具，保留当前 plan。
+   */
+  function restoreFlowSnapshot(snapshot, opts) {
+    if (!snapshot || typeof snapshot !== 'object') return false;
+    opts = opts || {};
+    try {
+      var rounds = [];
+      if (Array.isArray(snapshot.roundRecords)) {
+        for (var i = 0; i < snapshot.roundRecords.length; i++) {
+          var rr = cloneRoundRecord(snapshot.roundRecords[i]);
+          if (rr) rounds.push(rr);
+        }
+      }
+      roundRecords = rounds;
+      rebuildRoundIndexes(rounds);
+
+      var tools = [];
+      if (Array.isArray(snapshot.toolRecords)) {
+        for (var j = 0; j < snapshot.toolRecords.length; j++) {
+          var tr = cloneToolRecord(snapshot.toolRecords[j]);
+          if (tr) tools.push(tr);
+        }
+      }
+      toolRecords = tools;
+      rebuildToolIndexes(tools);
+
+      lastTool = snapshot.lastTool && typeof snapshot.lastTool === 'object'
+        ? Object.assign({ toolCallId: '', toolName: '', pending: false, ts: 0 }, snapshot.lastTool)
+        : { toolCallId: '', toolName: '', pending: false, ts: 0 };
+      footerStats = snapshot.footerStats && typeof snapshot.footerStats === 'object'
+        ? Object.assign({ totalTokenUsage: null, totalToolCalls: null }, snapshot.footerStats)
+        : { totalTokenUsage: null, totalToolCalls: null };
+      turnStartedAt = typeof snapshot.turnStartedAt === 'number' ? snapshot.turnStartedAt : null;
+      turnEndedAt = typeof snapshot.turnEndedAt === 'number' ? snapshot.turnEndedAt : null;
+      calibratedUniqueToolCount = typeof snapshot.calibratedUniqueToolCount === 'number'
+        ? snapshot.calibratedUniqueToolCount
+        : uniqueToolCallCount;
+      authoritativeToolCalls = typeof snapshot.authoritativeToolCalls === 'number'
+        ? snapshot.authoritativeToolCalls
+        : null;
+      expandedRounds = Object.create(null);
+      roundVisibleLimit = 8;
+
+      if (!opts.overlayOnly) {
+        currentPlan = snapshot.currentPlan && hasSafePlanShape(snapshot.currentPlan)
+          ? snapshot.currentPlan
+          : null;
+        frozenPlanId = snapshot.frozenPlanId || null;
+        currentExecutionMode = snapshot.currentExecutionMode
+          ? Object.assign({}, snapshot.currentExecutionMode)
+          : null;
+      }
+
+      visible = !isPanelSuppressed()
+        && !!(currentPlan || currentExecutionMode || roundRecords.length);
+      if (visible || hostEl) {
+        ensureMounted();
+        fullRender();
+      } else {
+        applyVisibility();
+      }
+      if (hasRunningStep()) startTick();
+      else if (isPlanComplete(currentPlan)) stopTick();
+      notifyPetFoot();
+      return true;
+    } catch (e) {
+      safeWarn('restoreFlowSnapshot', e);
+      return false;
     }
   }
 
@@ -2174,6 +3129,7 @@ window.ChatExecutionPlan = (function () {
       fullRender();
       applyVisibility();
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('renderGraph', e);
       teardownMounts();
@@ -2200,9 +3156,9 @@ window.ChatExecutionPlan = (function () {
       }
       renderCurrentStep();
       renderTaskOverview();
-      renderRoundTimeline();
       renderFooter();
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('updateGraphNode', e);
       teardownMounts();
@@ -2239,6 +3195,7 @@ window.ChatExecutionPlan = (function () {
       stopTick();
       applyVisibility();
       notifyPetFoot();
+      scheduleFlowPersist();
     } catch (e) {
       safeWarn('markGraphComplete', e);
       teardownMounts();
@@ -2277,6 +3234,11 @@ window.ChatExecutionPlan = (function () {
     resetToolActivity: resetToolActivity,
     beginTurnTimer: beginTurnTimer,
     endTurnTimer: endTurnTimer,
+    getFlowSnapshot: getFlowSnapshot,
+    restoreFlowSnapshot: restoreFlowSnapshot,
+    registerFlowPersist: registerFlowPersist,
+    flushFlowPersist: flushFlowPersist,
+    cancelFlowPersist: cancelFlowPersist,
     // TaskGraph（兼容）
     renderGraph: renderGraph,
     updateGraphNode: updateGraphNode,

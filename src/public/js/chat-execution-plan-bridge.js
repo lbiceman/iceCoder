@@ -6,7 +6,8 @@
  *      原因：ChatWebSocket.on() 每个 type 只保留最后一个回调，若在桥里 WS.on('connected') 会被 ChatPage 覆盖。
  *   2. 把 `task_graph_*` / `execution_plan_*`（兼容）事件转给 ChatExecutionPlan 面板；
  *   3. WS 重连或先错过 init 时通过 GET /api/sessions/:id/plan 重同步；
- *   4. 详情卡片锚定冰豆底部 #status-turn；localStorage ICE_PLAN_PANEL=0 仍可关闭计划展示。
+ *   4. 每个 session 在 localStorage 仅保留最近一次执行流快照（见 ChatExecutionFlowStore）；
+ *   5. 详情卡片锚定冰豆底部 #status-turn；localStorage ICE_PLAN_PANEL=0 仍可关闭计划展示。
  *
  * 设计文档：docs/execution-transparency-layer.md §Frontend Design
  */
@@ -42,6 +43,138 @@ window.ChatExecutionPlanBridge = (function () {
       }
     } catch (_e) { /* ignore */ }
     return 'default';
+  }
+
+  function getFlowStore() {
+    return window.ChatExecutionFlowStore || null;
+  }
+
+  function clearSessionFlow(sessionId) {
+    var store = getFlowStore();
+    if (store && typeof store.clear === 'function') {
+      store.clear(sessionId || getActiveSessionId());
+    }
+  }
+
+  function loadStoredFlow(sessionId) {
+    var store = getFlowStore();
+    if (!store || typeof store.load !== 'function') return null;
+    return store.load(sessionId || getActiveSessionId());
+  }
+
+  function applyStoredFlowSnapshot(stored) {
+    if (!stored || !stored.panel || !window.ChatExecutionPlan) return false;
+    if (stored.bridge && typeof stored.bridge === 'object') {
+      currentPlanId = stored.bridge.currentPlanId || stored.planId || null;
+      planFootDismissed = !!stored.bridge.planFootDismissed;
+    } else {
+      currentPlanId = stored.planId || null;
+    }
+    if (typeof window.ChatExecutionPlan.restoreFlowSnapshot === 'function') {
+      window.ChatExecutionPlan.restoreFlowSnapshot(stored.panel);
+    }
+    return true;
+  }
+
+  function restoreFlowFromStorage(sessionId) {
+    var stored = loadStoredFlow(sessionId);
+    if (!stored) return null;
+    applyStoredFlowSnapshot(stored);
+    return stored;
+  }
+
+  function persistFlowForSession(sessionId, bridgeState) {
+    var store = getFlowStore();
+    if (!store || typeof store.save !== 'function' || !window.ChatExecutionPlan) return;
+    if (!sessionId) return;
+    var panel = typeof window.ChatExecutionPlan.getFlowSnapshot === 'function'
+      ? window.ChatExecutionPlan.getFlowSnapshot()
+      : null;
+    if (!panel) return;
+    var plan = typeof window.ChatExecutionPlan.getPlan === 'function'
+      ? window.ChatExecutionPlan.getPlan()
+      : null;
+    var bridgePlanId = bridgeState && bridgeState.currentPlanId;
+    var bridgeFootDismissed = bridgeState && bridgeState.planFootDismissed;
+    var planId = bridgePlanId || currentPlanId || (plan && plan.planId) || null;
+    var hasFlow = !!(planId || panel.roundRecords.length || panel.currentExecutionMode);
+    if (!hasFlow) {
+      clearSessionFlow(sessionId);
+      return;
+    }
+    store.save(sessionId, {
+      planId: planId,
+      bridge: {
+        currentPlanId: bridgePlanId !== undefined ? bridgePlanId : currentPlanId,
+        planFootDismissed: bridgeFootDismissed !== undefined
+          ? !!bridgeFootDismissed
+          : planFootDismissed,
+      },
+      panel: panel,
+    });
+  }
+
+  function persistCurrentFlow() {
+    persistFlowForSession(getActiveSessionId());
+  }
+
+  /**
+   * 离开会话前同步落盘：取消防抖并把当前面板状态写入 outgoing session。
+   * 须在 activeSessionId 切换之前调用；面板内存仍为 outgoing 会话数据。
+   */
+  function flushOutgoingSession(outgoingSessionId) {
+    if (!outgoingSessionId) return;
+    var bridgeState = {
+      currentPlanId: currentPlanId,
+      planFootDismissed: planFootDismissed,
+    };
+    try {
+      if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.cancelFlowPersist === 'function') {
+        window.ChatExecutionPlan.cancelFlowPersist();
+      }
+    } catch (_e) { /* ignore */ }
+    persistFlowForSession(outgoingSessionId, bridgeState);
+  }
+
+  function flushActiveSessionFlow() {
+    try {
+      if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.flushFlowPersist === 'function') {
+        window.ChatExecutionPlan.flushFlowPersist();
+        return;
+      }
+    } catch (_e) { /* ignore */ }
+    persistCurrentFlow();
+  }
+
+  function applyRestPlan(plan, stored) {
+    if (!window.ChatExecutionPlan) return;
+    if (!plan) {
+      var live = window.ChatExecutionPlan.getPlan
+        ? window.ChatExecutionPlan.getPlan()
+        : null;
+      if (!live && stored) {
+        applyStoredFlowSnapshot(stored);
+        ensurePanelVisible();
+        return;
+      }
+      if (!live) {
+        window.ChatExecutionPlan.clear();
+        currentPlanId = null;
+      }
+      return;
+    }
+    currentPlanId = plan.planId;
+    if (stored && stored.planId === plan.planId && stored.panel
+      && typeof window.ChatExecutionPlan.restoreFlowSnapshot === 'function') {
+      window.ChatExecutionPlan.setPlan(plan);
+      window.ChatExecutionPlan.restoreFlowSnapshot(stored.panel, { overlayOnly: true });
+      if (stored.bridge && typeof stored.bridge === 'object') {
+        planFootDismissed = !!stored.bridge.planFootDismissed;
+      }
+    } else {
+      window.ChatExecutionPlan.setPlan(plan);
+    }
+    ensurePanelVisible();
   }
 
   function setEnabled(next) {
@@ -135,8 +268,9 @@ window.ChatExecutionPlanBridge = (function () {
       return;
     }
     ensurePanelVisible();
+    var stored = restoreFlowFromStorage(getActiveSessionId());
     // 连接时主动同步一次，覆盖刷新页面 / 跨端的场景
-    fetchAndApply();
+    fetchAndApply(stored);
   }
 
   function onStep(data) {
@@ -177,6 +311,7 @@ window.ChatExecutionPlanBridge = (function () {
     // 独立于 enabled：上一轮残留 UI 在非计划型对话时也必须清掉
     if (step.type === 'execution_plan_clear') {
       currentPlanId = null;
+      clearSessionFlow(getActiveSessionId());
       if (window.ChatExecutionPlan) {
         window.ChatExecutionPlan.clear();
         if (!enabled) window.ChatExecutionPlan.setVisible(false);
@@ -289,6 +424,11 @@ window.ChatExecutionPlanBridge = (function () {
   function onSessionUpdated() {
     if (!enabled) return;
     ensurePanelVisible();
+    var stored = loadStoredFlow(getActiveSessionId());
+    if (planFootDismissed && stored) {
+      applyStoredFlowSnapshot(stored);
+      return;
+    }
     // 节流：避免短时间多次 session_updated 撞接口
     var now = Date.now();
     if (now - lastSyncMs < getSessionUpdatedThrottleMs()) return;
@@ -303,15 +443,22 @@ window.ChatExecutionPlanBridge = (function () {
   function onSessionSwitched() {
     syncGeneration++;
     lastSyncMs = 0;
+    if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.cancelFlowPersist === 'function') {
+      window.ChatExecutionPlan.cancelFlowPersist();
+    }
     currentPlanId = null;
     planFootDismissed = false;
     if (resyncTimer) {
       clearTimeout(resyncTimer);
       resyncTimer = null;
     }
-    try {
-      if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-    } catch (_e) { /* ignore */ }
+    var sessionId = getActiveSessionId();
+    var stored = restoreFlowFromStorage(sessionId);
+    if (!stored) {
+      try {
+        if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
+      } catch (_e) { /* ignore */ }
+    }
     if (!enabled) {
       try {
         if (window.ChatExecutionPlan) window.ChatExecutionPlan.setVisible(false);
@@ -319,12 +466,18 @@ window.ChatExecutionPlanBridge = (function () {
       return;
     }
     ensurePanelVisible();
-    fetchAndApply();
+    fetchAndApply(stored);
   }
 
-  function fetchAndApply() {
-    if (!enabled || planFootDismissed) return;
+  function fetchAndApply(pendingStored) {
+    if (!enabled) return;
     var sessionId = getActiveSessionId();
+    var stored = pendingStored || loadStoredFlow(sessionId);
+    if (planFootDismissed && stored) {
+      applyStoredFlowSnapshot(stored);
+      ensurePanelVisible();
+      return;
+    }
     var requestGeneration = ++syncGeneration;
     fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/plan', {
       cache: 'no-store',
@@ -332,21 +485,14 @@ window.ChatExecutionPlanBridge = (function () {
       .then(function (res) { return res.ok ? res.json() : { plan: null }; })
       .then(function (body) {
         if (requestGeneration !== syncGeneration || getActiveSessionId() !== sessionId) return;
-        var plan = body && body.plan;
-        if (!plan) {
-          // REST 可能晚于 WebSocket；若 WS 已推送计划事件，不 clear 正在显示的面板。
-          var live = window.ChatExecutionPlan && window.ChatExecutionPlan.getPlan
-            ? window.ChatExecutionPlan.getPlan()
-            : null;
-          if (!live) {
-            if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-            currentPlanId = null;
-          }
+        stored = pendingStored || loadStoredFlow(sessionId);
+        if (planFootDismissed) {
+          if (stored) applyStoredFlowSnapshot(stored);
+          ensurePanelVisible();
           return;
         }
-        currentPlanId = plan.planId;
-        if (window.ChatExecutionPlan) window.ChatExecutionPlan.setPlan(plan);
-        ensurePanelVisible();
+        var plan = body && body.plan;
+        applyRestPlan(plan, stored);
       })
       .catch(function () { /* ignore */ });
   }
@@ -371,6 +517,21 @@ window.ChatExecutionPlanBridge = (function () {
         window.EtlPrefs.onChange(onPrefsChange);
       }
     } catch (_e) { /* ignore */ }
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.registerFlowPersist === 'function') {
+        window.ChatExecutionPlan.registerFlowPersist(persistCurrentFlow);
+      }
+    } catch (_e) { /* ignore */ }
+    try {
+      var onPageHide = function () {
+        flushActiveSessionFlow();
+      };
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') onPageHide();
+      });
+      window.addEventListener('pagehide', onPageHide);
+    } catch (_e) { /* ignore */ }
   }
 
   function handleStep(step) {
@@ -385,6 +546,9 @@ window.ChatExecutionPlanBridge = (function () {
   bridgeApi.handleStep = handleStep;
   bridgeApi.isEnabled = isEnabled;
   bridgeApi.fetchAndApply = fetchAndApply;
+  bridgeApi.clearSessionFlow = clearSessionFlow;
+  bridgeApi.flushOutgoingSession = flushOutgoingSession;
+  bridgeApi.flushActiveSessionFlow = flushActiveSessionFlow;
   /** ChatPage.onWsConnected 末尾调用 — 不可替代 WS.on */
   bridgeApi.notifyConnected = onConnected;
   /** ChatPage.session_updated 时与拉取快照一并调用 */

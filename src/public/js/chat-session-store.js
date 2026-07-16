@@ -406,6 +406,12 @@ window.ChatSessionStore = (function () {
           sessions = sessions.filter(function (s) { return s.id !== sessionId; });
           removeSessionWorkspace(sessionId);
           try { localStorage.removeItem(STORAGE_KEY_PREFIX + sessionId); } catch (_e) { /* */ }
+          try {
+            if (window.ChatExecutionFlowStore
+              && typeof window.ChatExecutionFlowStore.clear === 'function') {
+              window.ChatExecutionFlowStore.clear(sessionId);
+            }
+          } catch (_e) { /* */ }
           emit();
           if (callback) callback(true, switchedTo ? { switchedTo: switchedTo } : null);
         })
