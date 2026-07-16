@@ -1179,6 +1179,142 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
+  function targetHint(tool) {
+    var t = tool.target || tool.detail || '';
+    return t ? '「' + clamp24(t) + '」' : '';
+  }
+
+  function inferCommandIntent(tool) {
+    var detail = tool.detail || tool.target || '';
+    if (!detail) return '执行命令验证或推进任务';
+    var cmd = String(detail).trim();
+    if (cmd.indexOf('check ') === 0) {
+      return '检查后台任务' + (cmd.length > 6 ? ' ' + clamp24(cmd.slice(6)) : '');
+    }
+    if (cmd.indexOf('stop ') === 0) return '停止后台任务';
+    if (cmd === 'list background tasks') return '查看后台任务列表';
+    if (/^(npm|pnpm|yarn|bun)\s+(test|t\b|run\s+test)/.test(cmd)) return '运行测试验证改动';
+    if (/^(vitest|jest|playwright|cypress)\b/.test(cmd)) return '运行测试验证改动';
+    if (/^(npm|pnpm|yarn|bun)\s+run\s+(build|dev|start|serve|preview|watch)/.test(cmd)) {
+      return '启动或构建项目';
+    }
+    if (/^(npm|pnpm|yarn|bun)\s+install/.test(cmd)) return '安装项目依赖';
+    if (/^git\s+(status|diff|log|show)\b/.test(cmd)) return '查看 Git 变更与历史';
+    if (/^git\s+(add|commit|checkout|branch|merge|pull|push)\b/.test(cmd)) return '执行 Git 操作';
+    if (/^(ls|dir|pwd|cat|head|tail|find|tree)\b/.test(cmd)) return '查看目录或文件内容';
+    if (/^(python|node|tsx?|deno|bun)\s/.test(cmd)) return '运行脚本验证逻辑';
+    return '执行命令 ' + clamp24(cmd);
+  }
+
+  function inferFsOperationIntent(tool) {
+    var detail = String(tool.detail || tool.target || '').toLowerCase();
+    if (/\bdelete\b/.test(detail)) return '删除文件或目录' + targetHint(tool);
+    if (/\b(mkdir|create_dir)\b/.test(detail)) return '创建目录' + targetHint(tool);
+    if (/\b(move|rename)\b/.test(detail)) return '移动或重命名' + targetHint(tool);
+    if (/\bcopy\b/.test(detail)) return '复制文件' + targetHint(tool);
+    return '执行文件系统操作' + targetHint(tool);
+  }
+
+  function inferMcpToolIntent(toolName) {
+    if (toolName.indexOf('mcp_') !== 0) return '';
+    var parts = toolName.slice(4).split('_');
+    if (parts.length >= 2) {
+      return '调用 MCP 工具 ' + parts[0] + '/' + parts.slice(1).join('_');
+    }
+    return '调用 MCP 扩展工具';
+  }
+
+  function inferToolIntent(tool) {
+    var name = tool.toolName || '';
+    var hint = targetHint(tool);
+    if (name === 'read_file') return '读取' + hint + '了解代码与上下文';
+    if (name === 'file_info') return '查看文件元信息' + hint;
+    if (name === 'notebook_read') return '读取 Notebook' + hint;
+    if (name === 'open_file') return '打开' + hint + '查看内容';
+    if (name === 'read_image' || name === 'image_read') return '读取图片' + hint;
+    if (name === 'parse_document' || name === 'parse_doc_legacy') return '解析文档' + hint + '提取内容';
+    if (name === 'parse_pptx_deep') return '深度解析 PPT' + hint;
+    if (name === 'parse_xmind_deep' || name === 'xmind_parse') return '解析思维导图' + hint;
+    if (name === 'xlsx_parse') return '解析表格' + hint;
+    if (name === 'diff_files') return '对比文件差异' + hint;
+    if (name === 'browse_directory' || name === 'list_drives') return '浏览目录结构' + hint;
+    if (name === 'grep') return '搜索代码' + (hint || '中的关键词');
+    if (name === 'glob') return '查找匹配' + (hint || '模式的文件');
+    if (name === 'write_file' || name === 'create_file') return '写入或创建文件' + hint;
+    if (name === 'edit_file' || name === 'patch_file' || name === 'apply_patch') return '修改文件' + hint;
+    if (name === 'append_file') return '追加内容到' + hint;
+    if (name === 'batch_edit_file' || name === 'multi_edit') return '批量修改多个文件';
+    if (name === 'fs_operation') return inferFsOperationIntent(tool);
+    if (name === 'undo_edit') return '撤销上一次编辑';
+    if (name === 'run_command') return inferCommandIntent(tool);
+    if (name === 'fetch_url' || name === 'web_search') return '联网查询外部信息' + hint;
+    if (name === 'git') return '执行 Git 操作' + hint;
+    if (name === 'env_info') return '获取运行环境信息';
+    var mcpIntent = inferMcpToolIntent(name);
+    if (mcpIntent) return mcpIntent + hint;
+    if (CONTEXT_READ_TOOLS[name]) return '读取资源' + hint;
+    if (CONTEXT_SEARCH_TOOLS[name]) return '搜索项目' + hint;
+    if (CONTEXT_WRITE_TOOLS[name]) return '更新文件' + hint;
+    return (name ? '调用 ' + name : '调用工具') + hint;
+  }
+
+  function findFirstToolBy(tools, predicate) {
+    for (var i = 0; i < tools.length; i++) {
+      if (predicate(tools[i])) return tools[i];
+    }
+    return null;
+  }
+
+  function summarizeToolIntents(tools) {
+    var counts = { read: 0, search: 0, write: 0, command: 0, other: 0 };
+    for (var i = 0; i < tools.length; i++) {
+      var name = tools[i].toolName;
+      if (CONTEXT_READ_TOOLS[name]) counts.read++;
+      else if (CONTEXT_SEARCH_TOOLS[name]) counts.search++;
+      else if (CONTEXT_WRITE_TOOLS[name]) counts.write++;
+      else if (name === 'run_command') counts.command++;
+      else counts.other++;
+    }
+    var parts = [];
+    if (counts.write) {
+      parts.push(counts.write === 1
+        ? inferToolIntent(findFirstToolBy(tools, function (t) { return CONTEXT_WRITE_TOOLS[t.toolName]; }))
+        : '修改 ' + counts.write + ' 处文件落实改动');
+    }
+    if (counts.command) {
+      parts.push(counts.command === 1
+        ? inferToolIntent(findFirstToolBy(tools, function (t) { return t.toolName === 'run_command'; }))
+        : '执行 ' + counts.command + ' 条命令验证或推进任务');
+    }
+    if (counts.read) {
+      parts.push(counts.read === 1
+        ? inferToolIntent(findFirstToolBy(tools, function (t) { return CONTEXT_READ_TOOLS[t.toolName]; }))
+        : '读取 ' + counts.read + ' 个文件收集上下文');
+    }
+    if (counts.search) {
+      parts.push(counts.search === 1
+        ? inferToolIntent(findFirstToolBy(tools, function (t) { return CONTEXT_SEARCH_TOOLS[t.toolName]; }))
+        : '搜索 ' + counts.search + ' 次定位相关代码');
+    }
+    if (counts.other) parts.push('调用其他工具推进任务');
+    return parts;
+  }
+
+  function deriveRoundToolIntents(tools) {
+    if (!tools.length) return ['理解用户目标并规划下一步执行'];
+    if (tools.length > 3) return summarizeToolIntents(tools);
+    var intents = [];
+    var seen = Object.create(null);
+    for (var i = 0; i < tools.length; i++) {
+      var intent = inferToolIntent(tools[i]);
+      if (intent && !seen[intent]) {
+        seen[intent] = true;
+        intents.push(intent);
+      }
+    }
+    return intents.length ? intents : ['理解用户目标并规划下一步执行'];
+  }
+
   // ── 渲染：按模型轮次的执行流 ──
 
   var PHASE_LABELS = {
@@ -1374,20 +1510,8 @@ window.ChatExecutionPlan = (function () {
     if (record.activeTitle) {
       parts.push('为完成计划步骤「' + clamp40(record.activeTitle) + '」');
     } else {
-      var tools = getRoundTools(record);
-      var hasRead = false;
-      var hasWrite = false;
-      var hasCommand = false;
-      for (var i = 0; i < tools.length; i++) {
-        var name = tools[i].toolName;
-        if (CONTEXT_READ_TOOLS[name] || CONTEXT_SEARCH_TOOLS[name]) hasRead = true;
-        if (CONTEXT_WRITE_TOOLS[name]) hasWrite = true;
-        if (name === 'run_command') hasCommand = true;
-      }
-      if (hasRead) parts.push('收集项目上下文，为判断和后续操作提供依据');
-      if (hasWrite) parts.push('落实用户目标并更新相关文件');
-      if (hasCommand) parts.push('获取运行证据或验证当前结果');
-      if (!tools.length) parts.push('理解用户目标并规划下一步执行');
+      var toolIntents = deriveRoundToolIntents(getRoundTools(record));
+      for (var ti = 0; ti < toolIntents.length; ti++) parts.push(toolIntents[ti]);
     }
     return parts.join('；');
   }
