@@ -652,6 +652,7 @@ window.ChatPage = (function () {
       ? Session.getLastMessage().id
       : undefined;
     var sendOpts = { referencePaths: referencePaths };
+    if (selectedSkillFilenames.length > 0) sendOpts.skills = selectedSkillFilenames.slice();
     if (outboundMessageId) sendOpts.messageId = outboundMessageId;
     if (isExplicitNext) {
       sendOpts.source = 'explicit';
