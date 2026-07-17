@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 从 assets/icon.svg 生成 Electron 用 PNG / ICO / 托盘图标。
+ * 从 src/public/icons/favicon.svg 生成 Electron 用 PNG / ICO / 托盘图标。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import pngToIco from 'png-to-ico';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const assetsDir = path.join(__dirname, '..', 'assets');
 /** 与 Web favicon 共用同一矢量源 */
-const svgPath = path.join(__dirname, '..', '..', 'src', 'public', 'favicon.svg');
+const svgPath = path.join(__dirname, '..', '..', 'src', 'public', 'icons', 'favicon.svg');
 
 async function renderPng(size) {
   const svg = fs.readFileSync(svgPath);

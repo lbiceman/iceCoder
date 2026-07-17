@@ -2520,16 +2520,17 @@ window.ChatUI = (function () {
   function setComposerAction(action) {
     if (!elSendBtn) return;
     if (action === 'stop') {
-      elSendBtn.innerHTML = '<span class="icon-stop"></span>';
+      elSendBtn.innerHTML = window.AppIcon ? window.AppIcon.html('stop', { width: 16 }) : '';
       elSendBtn.title = 'Stop';
       elSendBtn.classList.add('btn-stop');
       elSendBtn.dataset.action = 'stop';
     } else {
-      elSendBtn.innerHTML = '<span class="icon-send"></span>';
+      elSendBtn.innerHTML = window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '';
       elSendBtn.title = 'Send';
       elSendBtn.classList.remove('btn-stop');
       elSendBtn.dataset.action = 'send';
     }
+    if (window.AppIcon) window.AppIcon.hydrate(elSendBtn);
     if (elInput) elInput.disabled = false;
   }
 

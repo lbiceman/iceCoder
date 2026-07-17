@@ -83,7 +83,7 @@ window.ChatSessionSidebar = (function () {
           '<span class="chat-sidebar-title">会话</span>' +
         '</div>' +
         '<button class="chat-sidebar-new-btn" title="新建会话">' +
-          '<span class="chat-sidebar-new-btn-icon" aria-hidden="true">+</span>' +
+          '<span class="chat-sidebar-new-btn-icon" aria-hidden="true">' + ic('plus', 14) + '</span>' +
           '<span class="chat-sidebar-new-btn-label">新建会话</span>' +
         '</button>' +
       '</div>' +
