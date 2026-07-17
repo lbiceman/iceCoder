@@ -77,13 +77,13 @@ for (const m of cssMarkers) {
 }
 
 console.log('\n=== 其它 ===');
-const faviconRoot = fs.existsSync(path.join(root, 'dist/public/favicon.svg'));
+const faviconInIcons = fs.existsSync(path.join(root, 'dist/public/icons/favicon.svg'));
 const faviconAssets = fs.readdirSync(distAssets).some((f) => f.includes('favicon'));
 const iconsDir = path.join(root, 'dist/public/icons');
 const iconCount = fs.existsSync(iconsDir)
   ? fs.readdirSync(iconsDir).filter((f) => f.endsWith('.svg')).length
   : 0;
-console.log(`  favicon.svg 在 dist/public 根目录: ${faviconRoot ? '有' : '无（/favicon.ico 回退可能失效，index.html 内链正常）'}`);
+console.log(`  favicon.svg 在 dist/public/icons: ${faviconInIcons ? '有' : '无（/favicon.ico 回退可能失效，index.html 内链正常）'}`);
 console.log(`  favicon 在 assets/: ${faviconAssets ? '有' : '无'}`);
 console.log(`  icons/*.svg: ${iconCount > 0 ? `${iconCount} 个` : '无（UI 图标会丢失）'}`);
 console.log(`  pet-expressions-demo: 开发演示页， intentionally 不打包`);

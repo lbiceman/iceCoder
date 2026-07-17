@@ -96,7 +96,7 @@ const PET_STATIC_JS_FILES = [
   'session-pet.js',
   'session-pet-palette.js',
 ];
-const PUBLIC_STATIC_FILES = ['pet-floating.html', 'favicon.svg'];
+const PUBLIC_STATIC_FILES = ['pet-floating.html'];
 const PUBLIC_STATIC_DIRS = ['icons'];
 
 function mergePublicStaticExtras(repoRoot, targetDistPublic) {

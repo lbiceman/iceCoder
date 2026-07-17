@@ -46,9 +46,6 @@ window.MobileWorkPage = (function () {
         var dashboard = parentEl.querySelector('#mobile-work-dashboard');
         if (dashboard && window.ChatWelcome && typeof window.ChatWelcome.buildDashboardMarkup === 'function') {
           dashboard.innerHTML = window.ChatWelcome.buildDashboardMarkup(false);
-          if (typeof window.ChatWelcome.bindDashboardEvents === 'function') {
-            window.ChatWelcome.bindDashboardEvents(dashboard, handlePromptSelect);
-          }
         }
       }
     }
@@ -88,22 +85,6 @@ window.MobileWorkPage = (function () {
       connectionState: shell && typeof shell.getConnectionState === 'function' ? shell.getConnectionState() : 'disconnected',
       setupRequired: window.AppRouter && typeof window.AppRouter.isSetupRequired === 'function' ? window.AppRouter.isSetupRequired() : false,
     });
-  }
-
-  function handlePromptSelect(value) {
-    if (!value) return;
-    attachComposer();
-    if (window.ChatUI && typeof window.ChatUI.setInputValue === 'function') {
-      window.ChatUI.setInputValue(value);
-      if (typeof window.ChatUI.autoResizeInput === 'function') window.ChatUI.autoResizeInput();
-      if (typeof window.ChatUI.focusInput === 'function') window.ChatUI.focusInput();
-    } else {
-      var input = document.getElementById('chat-input');
-      if (input) {
-        input.value = value;
-        input.focus();
-      }
-    }
   }
 
   function syncChatActivity() {

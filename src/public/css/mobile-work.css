@@ -11,7 +11,7 @@
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 16px 16px 8px;
+  padding: 20px 20px 12px;
 }
 
 .mobile-work-scroll.is-collapsed {
@@ -63,11 +63,11 @@
 }
 
 .mobile-work-dashboard .chat-welcome-header {
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .mobile-work-dashboard .chat-welcome-brand {
-  gap: 12px;
+  gap: 14px;
 }
 
 .mobile-work-dashboard .chat-welcome-title {
@@ -77,12 +77,12 @@
 .mobile-work-dashboard .chat-welcome-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 24px;
 }
 
 .mobile-work-dashboard .chat-welcome-stat {
-  padding: 12px;
+  padding: 14px;
   border-radius: 10px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
@@ -91,20 +91,24 @@
 .mobile-work-dashboard .chat-welcome-tips {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
 }
 
 .mobile-work-dashboard .chat-welcome-tip {
-  padding: 10px;
+  padding: 12px;
   border-radius: 10px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
 }
 
-.mobile-work-dashboard .chat-welcome-prompts {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.mobile-work-dashboard .chat-welcome-context-rows {
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.mobile-work-dashboard .chat-welcome-context-row {
+  padding: 12px 14px;
 }
 
 /* 共享 ChatPage Composer 容器 */

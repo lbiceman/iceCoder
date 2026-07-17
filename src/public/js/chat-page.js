@@ -276,6 +276,8 @@ window.ChatPage = (function () {
       messageCount: Session.getMessages().length,
       hasTailContent: hasTailContent,
       isWorkloadActive: isWorkloadActive(),
+      contextMaxTokens: maxContextTokens,
+      contextUsedTokens: usedInputTokens,
       supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
         ? window.AppRouter.getSupervisorMode()
         : 'adaptive',
@@ -2174,12 +2176,6 @@ window.ChatPage = (function () {
       window.ChatWelcome.init({
         elMessages: elMessages,
         remoteMode: remoteMode,
-        onPromptSelect: function (text) {
-          if (!elInput) return;
-          UI.setInputValue(text);
-          UI.autoResizeInput();
-          UI.focusInput();
-        },
       });
     }
     if (window.AppShell) {
