@@ -29,6 +29,7 @@ window.ChatPage = (function () {
   var mounted = false;
   var isStreaming = false;
   var userStopped = false;
+  var runtimeRestoreInFlight = false;
   var streamFinalized = false;
   /** 本轮是否收到过流式增量（用于区分 stream_end + response 双包时的重复追加） */
   var streamChunksReceived = false;
@@ -487,6 +488,13 @@ window.ChatPage = (function () {
     UI.autoResizeInput();
   }
 
+  function endTransparencyTurnTimer() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.endTurnTimer === 'function') {
+      window.ChatExecutionPlan.endTurnTimer();
+    }
+  }
+
   function handleSend() {
     Cmd.hide();
     if (Skills) Skills.hide();
@@ -622,6 +630,15 @@ window.ChatPage = (function () {
       streamChunksReceived = false;
       visibleStreamChunksReceived = false;
       pendingTurnTokenUsage = null;
+      // 工具 Tab 只展示本轮用户输入触发的调用；新提示词发送时清空上一轮记录。
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
+        window.ChatExecutionPlan.resetToolActivity();
+      }
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
+        window.ChatExecutionPlan.beginTurnTimer();
+      }
       Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
       UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
@@ -693,6 +710,7 @@ window.ChatPage = (function () {
     visibleStreamChunksReceived = false;
     UI.setStreamingState(false);
     WS.setProcessing(false);
+    endTransparencyTurnTimer();
     Session.saveMessages();
     syncComposerActionState();
   }
@@ -775,8 +793,18 @@ window.ChatPage = (function () {
     if (FileRef && typeof FileRef.clearInput === 'function') {
       FileRef.clearInput(elInput);
     }
+    var outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (outgoingSessionId !== sessionId
+      && window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
+      window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
+    }
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
+    }
+    if (window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.notifySessionSwitched === 'function') {
+      window.ChatExecutionPlanBridge.notifySessionSwitched();
     }
     Session.fetchServerMessages(function (serverMsgs, result) {
       var fetchOk = !result || result.ok !== false;
@@ -801,10 +829,10 @@ window.ChatPage = (function () {
       });
     });
     resetTokenUsage();
-    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
       window.ChatTaskQueue.refresh(sessionId);
     }
+    refreshSnapshotTimelinePanel();
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
@@ -1036,6 +1064,7 @@ window.ChatPage = (function () {
     updateNavStatus(false);
     isStreaming = false;
     UI.setStreamingState(false);
+    endTransparencyTurnTimer();
   }
 
   function onWsReasoningStream(data) {
@@ -1093,6 +1122,7 @@ window.ChatPage = (function () {
   }
 
   function onWsResponse(data) {
+    endTransparencyTurnTimer();
     if (userStopped) {
       userStopped = false;
       return;
@@ -1127,6 +1157,20 @@ window.ChatPage = (function () {
     scheduleRefreshAfterTurn();
   }
 
+  function forwardExecutionRoundMarker(type, step) {
+    try {
+      if (!window.ChatExecutionPlanBridge
+        || typeof window.ChatExecutionPlanBridge.handleStep !== 'function') return;
+      // 只转发轮次与终止原因；严禁把 thinking/content/delta 带入透明层。
+      window.ChatExecutionPlanBridge.handleStep({
+        type: type,
+        iteration: step && step.iteration,
+        stopReason: step && step.stopReason,
+        ts: Date.now(),
+      });
+    } catch (_e) { /* observer must not affect chat */ }
+  }
+
   function onWsStep(data) {
     var step = data.step;
     if (!step) return;
@@ -1136,8 +1180,24 @@ window.ChatPage = (function () {
     // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
     if (userStopped) return;
 
+    if (step.type === 'thinking' && typeof step.iteration === 'number') {
+      forwardExecutionRoundMarker('model_round_start', step);
+    } else if (step.type === 'context_usage' && typeof step.iteration === 'number') {
+      forwardExecutionRoundMarker('model_round_end', step);
+    } else if (step.type === 'final') {
+      forwardExecutionRoundMarker('model_task_final', step);
+    }
+
     if (step.totalTokenUsage) {
       applyTotalTokenUsageFromStep(step.totalTokenUsage);
+    }
+    if ((step.totalTokenUsage !== undefined || step.totalToolCalls !== undefined)
+      && window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.applyRuntimeStats === 'function') {
+      window.ChatExecutionPlan.applyRuntimeStats({
+        totalTokenUsage: step.totalTokenUsage,
+        totalToolCalls: step.totalToolCalls,
+      });
     }
     if (step.iteration) {
       Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
@@ -1243,7 +1303,10 @@ window.ChatPage = (function () {
         || step.type === 'task_graph_branch'
         || step.type === 'task_graph_done'
         || step.type === 'execution_mode_enter'
-        || step.type === 'execution_mode_exit')) {
+        || step.type === 'execution_mode_exit'
+        // Phase 5：工具事件用于推导 LLM 当前动作（面板内只读 toolName / 到达状态）
+        || step.type === 'tool_call'
+        || step.type === 'tool_result')) {
       window.ChatExecutionPlanBridge.handleStep(step);
     }
     Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
@@ -1252,7 +1315,9 @@ window.ChatPage = (function () {
   function onWsStatus(data) {
     var processing = data.status === 'processing';
     WS.setProcessing(processing);
+    notifySnapshotRestoreAvailability();
     if (!processing) {
+      endTransparencyTurnTimer();
       // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
       // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
       var skipRefreshAfterUserStop = userStopped;
@@ -1272,6 +1337,7 @@ window.ChatPage = (function () {
   }
 
   function onWsError(data) {
+    endTransparencyTurnTimer();
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
     var msg = { role: 'agent', content: '[err] ' + data.message };
     Session.appendMessage(msg);
@@ -1429,16 +1495,47 @@ window.ChatPage = (function () {
     if (UI && typeof UI.setCheckpointMessageIds === 'function') {
       UI.setCheckpointMessageIds(checkpointIds || []);
     }
+    notifySnapshotRestoreAvailability();
+  }
+
+  function refreshSnapshotTimelinePanel() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.refreshSnapshotTimeline === 'function') {
+      window.ChatExecutionPlan.refreshSnapshotTimeline();
+    }
+  }
+
+  function notifySnapshotRestoreAvailability() {
+    if (window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.notifySnapshotRestoreAvailability === 'function') {
+      window.ChatExecutionPlan.notifySnapshotRestoreAvailability();
+    }
+  }
+
+  function wireSnapshotTimelineHandlers() {
+    if (!window.ChatExecutionPlan
+      || typeof window.ChatExecutionPlan.registerSnapshotHandlers !== 'function') {
+      return;
+    }
+    window.ChatExecutionPlan.registerSnapshotHandlers({
+      onRestore: handleMessageRestoreAction,
+      canRestore: function () {
+        if (runtimeRestoreInFlight) return false;
+        return !!(WS.canRestoreRuntime && WS.canRestoreRuntime());
+      },
+    });
   }
 
   function onWsHarnessState(data) {
     if (!data) return;
     applyHarnessRestoreUi(!!data.canRestore, data.checkpointMessageIds);
+    refreshSnapshotTimelinePanel();
   }
 
   function onWsCheckpointMessageIds(data) {
     if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
     UI.setCheckpointMessageIds(data.ids || []);
+    refreshSnapshotTimelinePanel();
   }
 
   function dispatchDeleteMessage(messageId) {
@@ -1460,6 +1557,10 @@ window.ChatPage = (function () {
 
   function dispatchRestoreRuntime(messageId) {
     if (!messageId) return;
+    if (runtimeRestoreInFlight) {
+      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      return;
+    }
     if (!WS.isConnected || !WS.isConnected()) {
       notifyUser('连接已断开，正在重连…', 'warning', { duration: 4000 });
       WS.connect(remoteToken);
@@ -1469,8 +1570,12 @@ window.ChatPage = (function () {
       notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
       return;
     }
+    runtimeRestoreInFlight = true;
+    notifySnapshotRestoreAvailability();
     var sent = WS.sendRestoreRuntime(messageId);
     if (sent === false) {
+      runtimeRestoreInFlight = false;
+      notifySnapshotRestoreAvailability();
       notifyUser('回滚请求发送失败，请检查网络后重试。', 'error', { duration: 4000 });
     }
   }
@@ -1549,6 +1654,10 @@ window.ChatPage = (function () {
   }
 
   function handleMessageRestoreAction(messageId, btn) {
+    if (runtimeRestoreInFlight) {
+      notifyUser('回滚进行中，请稍候…', 'warning', { duration: 4000 });
+      return;
+    }
     if (btn && btn.disabled) {
       notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
       return;
@@ -1585,14 +1694,31 @@ window.ChatPage = (function () {
     handleMessageDeleteAction(btn.dataset.messageId, btn);
   }
                                                              
+  function clearSessionExecutionFlow() {
+    var sessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.clearSessionFlow === 'function') {
+      window.ChatExecutionPlanBridge.clearSessionFlow(sessionId);
+    } else if (window.ChatExecutionFlowStore
+      && typeof window.ChatExecutionFlowStore.clear === 'function') {
+      window.ChatExecutionFlowStore.clear(sessionId);
+    }
+  }
+
   function onWsRuntimeRestored() {
+    runtimeRestoreInFlight = false;
     isStreaming = false;
+    userStopped = false;
+    WS.setProcessing(false);
     UI.setStreamingState(false);
     UI.clearReasoningStream();
+    clearSessionExecutionFlow();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    refreshChatHistoryAfterTurn(true);
+    refreshChatHistoryAfterTurn(true, null, { force: true });
     syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
+    refreshSnapshotTimelinePanel();
+    notifySnapshotRestoreAvailability();
   }
 
   function notifyUser(message, type, opts) {
@@ -1606,14 +1732,18 @@ window.ChatPage = (function () {
   }
 
   function onWsRestoreFailed(data) {
+    runtimeRestoreInFlight = false;
+    notifySnapshotRestoreAvailability();
     var msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
     notifyUser(msg, 'error', { duration: 5000 });
+    refreshSnapshotTimelinePanel();
   }
 
   function onWsMessageDeleted() {
     isStreaming = false;
     UI.setStreamingState(false);
     UI.clearReasoningStream();
+    clearSessionExecutionFlow();
     if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
     if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
     refreshChatHistoryAfterTurn(true);
@@ -1639,8 +1769,9 @@ window.ChatPage = (function () {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
   }
 
-  function refreshChatHistoryAfterTurn(shouldScroll, done) {
-    if (shouldSkipServerSnapshotSync()) {
+  function refreshChatHistoryAfterTurn(shouldScroll, done, opts) {
+    opts = opts || {};
+    if (!opts.force && shouldSkipServerSnapshotSync()) {
       if (done) done();
       return;
     }
@@ -1650,7 +1781,7 @@ window.ChatPage = (function () {
         if (done) done();
         return;
       }
-      if (shouldSkipServerSnapshotSync()) {
+      if (!opts.force && shouldSkipServerSnapshotSync()) {
         if (done) done();
         return;
       }
@@ -1829,6 +1960,11 @@ window.ChatPage = (function () {
       }
       return;
     }
+    if (data && data.reason === 'runtime_restored') {
+      refreshChatHistoryAfterTurn(true, null, { force: true });
+      refreshSnapshotTimelinePanel();
+      return;
+    }
     if (data && data.reason === 'user_message') {
       if (Session.fetchAndMergeRemoteUserMessages) {
         Session.fetchAndMergeRemoteUserMessages(function (added) {
@@ -1937,9 +2073,9 @@ window.ChatPage = (function () {
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
           '<canvas class="pet-canvas" id="pet-canvas" width="96" height="96" role="img" aria-label="' +
           (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
-          '，拖动移动；双击恢复默认位置" title="' +
+          '，拖动移动；双击展开执行透明层" title="' +
           (window.SESSION_PET_DISPLAY_NAME || '冰豆') +
-          '：拖动移动；双击恢复默认位置"></canvas>' +
+          '：拖动移动；双击展开执行透明层"></canvas>' +
           '<span class="status-turn" id="status-turn"></span>' +
         '</div>' +
         '<div class="chat-input-area">' +
@@ -2020,6 +2156,7 @@ window.ChatPage = (function () {
         onRestore: handleMessageRestoreAction,
       });
     }
+    wireSnapshotTimelineHandlers();
     if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.init === 'function') {
       window.ChatStaircaseNav.init({
         elMessages: elMessages,
@@ -2068,6 +2205,16 @@ window.ChatPage = (function () {
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
       Pet.init(sessionPet);
+      var petCanvas = container.querySelector('#pet-canvas');
+      if (petCanvas) {
+        petCanvas.addEventListener('dblclick', function (e) {
+          e.preventDefault();
+          if (window.ChatExecutionPlan
+            && typeof window.ChatExecutionPlan.requestExpandFromPet === 'function') {
+            window.ChatExecutionPlan.requestExpandFromPet();
+          }
+        });
+      }
       if (window.DesktopPetBridge && typeof window.DesktopPetBridge.attach === 'function') {
         window.DesktopPetBridge.attach(sessionPet);
       }
@@ -2116,6 +2263,7 @@ window.ChatPage = (function () {
     WS.on('tool_output', onWsToolOutput);
     WS.on('harness_state', onWsHarnessState);
     WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
+    WS.on('checkpoint_captured', refreshSnapshotTimelinePanel);
     WS.on('runtime_restored', onWsRuntimeRestored);
     WS.on('restore_failed', onWsRestoreFailed);
     WS.on('message_deleted', onWsMessageDeleted);

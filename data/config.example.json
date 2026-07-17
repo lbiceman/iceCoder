@@ -1,5 +1,10 @@
 {
   "supervisorMode": "adaptive",
+  "iceEtlPrefs": {
+    "panelDefaultExpanded": true,
+    "panelWidth": 360,
+    "showTransparencyPanel": true
+  },
   "shellBlacklist": [
     "rm\\s+-rf",
     "rm\\s+-fr",

@@ -214,4 +214,42 @@ describe('Sessions API (multi-session)', () => {
       await new Promise<void>((resolve) => fullServer.close(() => resolve()));
     }
   });
+
+  it('GET /:id/checkpoints returns ordered timeline with message previews', async () => {
+    const sessionId = 'cp001234';
+    const messageId = 'msg-checkpoint-a';
+    await fs.mkdir(path.join(tempDir, sessionId, 'checkpoints'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, `${sessionId}.json`),
+      JSON.stringify([
+        { role: 'user', id: messageId, content: '修复登录接口超时', sentAt: 1000 },
+      ]),
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(tempDir, `${sessionId}.checkpoint-index.json`),
+      JSON.stringify({
+        version: 1,
+        cursorMessageId: messageId,
+        entries: [{
+          messageId,
+          archiveFileName: `${messageId}.intent.json`,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          userMessageTime: 1000,
+        }],
+      }),
+      'utf-8',
+    );
+
+    const res = await fetch(`${baseUrl}/${sessionId}/checkpoints`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as {
+      cursorMessageId: string;
+      entries: { messageId: string; preview: string; isCursor: boolean }[];
+    };
+    expect(body.cursorMessageId).toBe(messageId);
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0].preview).toBe('修复登录接口超时');
+    expect(body.entries[0].isCursor).toBe(true);
+  });
 });
