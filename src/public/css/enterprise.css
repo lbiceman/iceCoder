@@ -442,8 +442,12 @@ select:focus-visible,
 }
 
 /* ===== Welcome / dashboard ===== */
+.chat-messages.has-welcome {
+  padding: 0 clamp(28px, 4vw, 48px);
+}
+
 .chat-welcome-inner {
-  width: min(780px, 100%);
+  width: min(880px, 100%);
 }
 
 .chat-welcome-title {
