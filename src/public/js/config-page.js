@@ -127,12 +127,196 @@ window.SettingsPage = (function () {
           '</div>' +
           '</div>' +
         '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-etl-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">执行透明层</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">在聊天页右侧常驻显示 AI 的执行过程、进度与上下文占用</p>' +
+          '<div class="settings-card" id="settings-etl-main-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">显示执行透明层</span>' +
+                '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
+              '</div>' +
+              '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
+                '<input type="checkbox" id="etl-show-panel" />' +
+                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+              '</label>' +
+            '</div>' +
+            '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
+              '<div class="settings-etl-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
+                  '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
+                  '<input type="checkbox" id="etl-panel-default-expanded" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+              '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">面板默认宽度</span>' +
+                '</div>' +
+                '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
+                  '<option value="320">320 px</option>' +
+                  '<option value="360">360 px</option>' +
+                  '<option value="420">420 px</option>' +
+                  '<option value="480">480 px</option>' +
+                '</select>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
       '</div>';
 
     if (window.AppIcon) window.AppIcon.hydrate(parentEl);
     bindThemeOptions(parentEl, shell);
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
+    bindEtlSettings(parentEl);
+  }
+
+  function isEtlCapabilityEnabled() {
+    return !!(window.ChatExecutionPlanBridge
+      && typeof window.ChatExecutionPlanBridge.isEnabled === 'function'
+      && window.ChatExecutionPlanBridge.isEnabled());
+  }
+
+  function syncEtlSettingsUi(parentEl, prefs) {
+    if (!prefs) {
+      prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : {};
+    }
+
+    var capabilityEnabled = isEtlCapabilityEnabled();
+    var showPanel = !!prefs.showTransparencyPanel;
+    var subgroupDisabled = !capabilityEnabled || !showPanel;
+
+    var capabilityBadge = parentEl.querySelector('#settings-etl-capability-badge');
+    var showPanelInput = parentEl.querySelector('#etl-show-panel');
+    var subgroup = parentEl.querySelector('#settings-etl-subgroup');
+
+    if (capabilityBadge) capabilityBadge.hidden = capabilityEnabled;
+    if (showPanelInput) {
+      showPanelInput.checked = showPanel;
+      showPanelInput.disabled = !capabilityEnabled;
+    }
+    if (subgroup) subgroup.classList.toggle('is-disabled', subgroupDisabled);
+
+    var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
+    var panelWidth = parentEl.querySelector('#etl-panel-width');
+
+    if (panelDefaultExpanded) {
+      panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
+      panelDefaultExpanded.disabled = subgroupDisabled;
+    }
+    if (panelWidth) {
+      panelWidth.value = String(prefs.panelWidth || 360);
+      panelWidth.disabled = subgroupDisabled;
+    }
+  }
+
+  function bindEtlSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    if (parentEl._etlBound) return;
+    parentEl._etlBound = true;
+
+    syncEtlSettingsUi(parentEl);
+
+    var showPanelInput = parentEl.querySelector('#etl-show-panel');
+    if (showPanelInput) {
+      showPanelInput.addEventListener('change', function () {
+        var next = showPanelInput.checked;
+        showPanelInput.disabled = true;
+        window.EtlPrefs.set({ showTransparencyPanel: next })
+          .then(function (ok) {
+            if (!ok) throw new Error('更新失败');
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) {
+              window.Notification.success(
+                next ? '已开启执行透明层' : '已关闭执行透明层'
+              );
+            }
+          })
+          .catch(function (err) {
+            showPanelInput.checked = !next;
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) {
+              window.Notification.error((err && err.message) || '更新失败');
+            }
+          })
+          .finally(function () { showPanelInput.disabled = false; });
+      });
+    }
+
+    var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
+    if (panelDefaultExpanded) {
+      panelDefaultExpanded.addEventListener('change', function () {
+        var next = panelDefaultExpanded.checked;
+        panelDefaultExpanded.disabled = true;
+        window.EtlPrefs.set({ panelDefaultExpanded: next })
+          .catch(function () {
+            panelDefaultExpanded.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(function () { panelDefaultExpanded.disabled = false; });
+      });
+    }
+
+    var panelWidth = parentEl.querySelector('#etl-panel-width');
+    if (panelWidth) {
+      panelWidth.addEventListener('change', function () {
+        var width = parseInt(panelWidth.value, 10);
+        var previous = panelWidth.dataset.savedValue || panelWidth.value;
+        panelWidth.disabled = true;
+        window.EtlPrefs.set({ panelWidth: width })
+          .then(function () {
+            panelWidth.dataset.savedValue = String(width);
+            syncEtlSettingsUi(parentEl);
+          })
+          .catch(function () {
+            panelWidth.value = previous;
+            syncEtlSettingsUi(parentEl);
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(function () { panelWidth.disabled = false; });
+      });
+    }
+
+    window.EtlPrefs.whenReady().then(function () {
+      syncEtlSettingsUi(parentEl);
+    });
+
+    activateEtlSettings(parentEl);
+  }
+
+  function activateEtlSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    syncEtlSettingsUi(parentEl);
+    if (typeof parentEl._etlUnsubscribe !== 'function') {
+      parentEl._etlUnsubscribe = window.EtlPrefs.onChange(function () {
+        syncEtlSettingsUi(parentEl);
+      });
+    }
+    if (parentEl._etlCapabilityListener) return;
+    parentEl._etlCapabilityListener = function () {
+      syncEtlSettingsUi(parentEl);
+    };
+    window.addEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
+  }
+
+  function unbindEtlSettings(parentEl) {
+    if (!parentEl) return;
+    if (typeof parentEl._etlUnsubscribe === 'function') {
+      parentEl._etlUnsubscribe();
+      parentEl._etlUnsubscribe = null;
+    }
+    if (parentEl._etlCapabilityListener) {
+      window.removeEventListener('etl:capabilitychange', parentEl._etlCapabilityListener);
+      parentEl._etlCapabilityListener = null;
+    }
   }
 
   function bindDataDirectorySettings(parentEl) {
@@ -435,6 +619,7 @@ window.SettingsPage = (function () {
           '<div class="config-center-header-text">' +
             '<h1 class="config-center-title">设置</h1>' +
             '<p class="config-center-subtitle">管理外观主题、安全选项、模型与 MCP 服务器</p>' +
+            '<p class="config-center-format-hint">仅支持 OpenAI 兼容 API（如 <code>/v1/chat/completions</code>），不支持 Anthropic Messages API（A/）。</p>' +
           '</div>' +
         '</header>' +
         '<nav class="config-tabs" role="tablist" aria-label="设置类型">' +
@@ -513,9 +698,18 @@ window.SettingsPage = (function () {
     if (window.McpConfigPanel && window.McpConfigPanel.pause) {
       window.McpConfigPanel.pause();
     }
+    if (container) {
+      unbindEtlSettings(container.querySelector('#config-tab-general'));
+    }
   }
 
-  return { render: render, onDeactivate: onDeactivate };
+  function onActivate() {
+    if (container) {
+      activateEtlSettings(container.querySelector('#config-tab-general'));
+    }
+  }
+
+  return { render: render, onActivate: onActivate, onDeactivate: onDeactivate };
 })();
 
 window.ConfigPage = window.SettingsPage;

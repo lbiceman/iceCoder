@@ -11,6 +11,28 @@ function sleepCmd(seconds: number): string {
   return isWindows ? `ping -n ${seconds + 1} 127.0.0.1 > nul` : `sleep ${seconds}`;
 }
 
+async function waitForTaskStatus(
+  mgr: BackgroundTaskManager,
+  taskId: string,
+  status: 'completed' | 'failed' | 'running',
+): Promise<void> {
+  await expect.poll(
+    () => mgr.getStatus(taskId)?.status,
+    { timeout: 12_000, interval: 50 },
+  ).toBe(status);
+}
+
+async function waitForOutput(
+  mgr: BackgroundTaskManager,
+  taskId: string,
+  pattern: RegExp,
+): Promise<void> {
+  await expect.poll(
+    () => mgr.getOutputSince(taskId, 0)?.output || '',
+    { timeout: 12_000, interval: 50 },
+  ).toMatch(pattern);
+}
+
 describe('BackgroundTaskManager — getOutputSince (diff-only check)', () => {
   let workDir: string;
   let mgr: BackgroundTaskManager;
@@ -36,8 +58,8 @@ describe('BackgroundTaskManager — getOutputSince (diff-only check)', () => {
     const r = mgr.spawn('node printer.cjs', 10_000, 'printer');
     expect(r.taskId).toBeTruthy();
 
-    // 等到完成
-    await new Promise((res) => setTimeout(res, 2_500));
+    await waitForOutput(mgr, r.taskId, /line 5/);
+    await waitForTaskStatus(mgr, r.taskId, 'completed');
 
     const result = mgr.getOutputSince(r.taskId, 0);
     expect(result).not.toBeNull();
@@ -54,7 +76,8 @@ describe('BackgroundTaskManager — getOutputSince (diff-only check)', () => {
       'utf-8',
     );
     const r = mgr.spawn('node printer2.cjs', 10_000, 'printer2');
-    await new Promise((res) => setTimeout(res, 2_500));
+    await waitForOutput(mgr, r.taskId, /line 3/);
+    await waitForTaskStatus(mgr, r.taskId, 'completed');
 
     const first = mgr.getOutputSince(r.taskId, 0);
     const second = mgr.getOutputSince(r.taskId, first!.cursor);
@@ -70,12 +93,14 @@ describe('BackgroundTaskManager — getOutputSince (diff-only check)', () => {
     writeFileSync(
       join(workDir, 'slow.cjs'),
       `
+const { existsSync } = require('node:fs');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 (async () => {
-  for (let i = 1; i <= 5; i++) {
+  for (let i = 1; i <= 2; i++) {
     console.log("slow line " + i);
-    await sleep(500);
   }
+  while (!existsSync('slow-release.signal')) await sleep(25);
+  for (let i = 3; i <= 5; i++) console.log("slow line " + i);
 })();
 `,
       'utf-8',
@@ -83,14 +108,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const r = mgr.spawn('node slow.cjs', 30_000, 'slow');
     expect(r.taskId).toBeTruthy();
 
-    // 第一次 check 在 ~1.2s 时（应当有 2-3 行）
-    await new Promise((res) => setTimeout(res, 1_200));
+    await waitForOutput(mgr, r.taskId, /slow line 2/);
     const first = mgr.getOutputSince(r.taskId, 0);
     const firstCursor = first!.cursor;
     expect(first!.output).toMatch(/slow line 1/);
 
-    // 等到全部结束
-    await new Promise((res) => setTimeout(res, 3_500));
+    writeFileSync(join(workDir, 'slow-release.signal'), 'release', 'utf-8');
+    await waitForOutput(mgr, r.taskId, /slow line 5/);
+    await waitForTaskStatus(mgr, r.taskId, 'completed');
 
     const second = mgr.getOutputSince(r.taskId, firstCursor);
     expect(second).not.toBeNull();
@@ -108,7 +133,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       'utf-8',
     );
     const r = mgr.spawn('node flood.cjs', 10_000, 'flood');
-    await new Promise((res) => setTimeout(res, 2_500));
+    await expect.poll(
+      () => mgr.getOutputSince(r.taskId, 50)?.truncated,
+      { timeout: 12_000, interval: 50 },
+    ).toBe(true);
 
     const result = mgr.getOutputSince(r.taskId, 50);  // since=50 应被环形缓冲外
     expect(result).not.toBeNull();
@@ -134,9 +162,12 @@ describe('BackgroundTaskManager — log file persistence', () => {
       'utf-8',
     );
     const r = mgr.spawn('node logged.cjs', 10_000);
-    await new Promise((res) => setTimeout(res, 2_500));
 
     const expectedPath = join(workDir, 'data', 'sessions', 'log-test', 'bg', `${r.taskId}.log`);
+    await expect.poll(
+      () => existsSync(expectedPath) ? readFileSync(expectedPath, 'utf-8') : '',
+      { timeout: 12_000, interval: 50 },
+    ).toMatch(/hello-to-log[\s\S]*err-to-log|err-to-log[\s\S]*hello-to-log/);
     expect(existsSync(expectedPath)).toBe(true);
 
     const content = readFileSync(expectedPath, 'utf-8');
@@ -152,10 +183,12 @@ describe('BackgroundTaskManager — log file persistence', () => {
       const r1 = m1.spawn('node a.cjs', 10_000);
       const r2 = m2.spawn('node a.cjs', 10_000);
 
-      await new Promise((res) => setTimeout(res, 2_500));
-
       const p1 = join(workDir, 'data', 'sessions', 'sess-1', 'bg', `${r1.taskId}.log`);
       const p2 = join(workDir, 'data', 'sessions', 'sess-2', 'bg', `${r2.taskId}.log`);
+      await expect.poll(
+        () => [p1, p2].every((file) => existsSync(file) && readFileSync(file, 'utf-8').includes('aaa')),
+        { timeout: 12_000, interval: 50 },
+      ).toBe(true);
       expect(existsSync(p1)).toBe(true);
       expect(existsSync(p2)).toBe(true);
     } finally {
@@ -222,19 +255,19 @@ describe('BackgroundTaskManager — getRunningSummary + markSummaryEmitted', () 
     writeFileSync(
       join(workDir, 'output3.cjs'),
       `
+const { existsSync } = require('node:fs');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 (async () => {
-  for (let i = 1; i <= 10; i++) {
-    console.log("burst " + i);
-    await sleep(150);
-  }
-  await sleep(5000);  // keep running so getRunningSummary still sees it
+  for (let i = 1; i <= 4; i++) console.log("burst " + i);
+  while (!existsSync('summary-release.signal')) await sleep(25);
+  for (let i = 5; i <= 10; i++) console.log("burst " + i);
+  while (!existsSync('summary-finish.signal')) await sleep(25);
 })();
 `,
       'utf-8',
     );
     const r = mgr.spawn('node output3.cjs', 30_000);
-    await new Promise((res) => setTimeout(res, 800));  // some output
+    await waitForOutput(mgr, r.taskId, /burst 4/);
 
     const first = mgr.getRunningSummary({ onlyDirtyOrDue: true, intervalMs: 1 });
     const firstSummary = first.find((s) => s.taskId === r.taskId);
@@ -244,8 +277,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     mgr.markSummaryEmitted([r.taskId]);
 
-    // 让更多输出累积
-    await new Promise((res) => setTimeout(res, 1_500));
+    writeFileSync(join(workDir, 'summary-release.signal'), 'release', 'utf-8');
+    await waitForOutput(mgr, r.taskId, /burst 10/);
 
     const second = mgr.getRunningSummary({ onlyDirtyOrDue: true, intervalMs: 1 });
     const secondSummary = second.find((s) => s.taskId === r.taskId);
@@ -254,6 +287,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     // emit 后 lastEmittedTotalCache 重置；第二次只算 emit 之后的新增
     expect(secondSummary!.newLinesSinceLastSummary).toBeLessThanOrEqual(secondSummary!.totalOutputLines);
 
+    writeFileSync(join(workDir, 'summary-finish.signal'), 'finish', 'utf-8');
     mgr.kill(r.taskId);  // 清理
   }, 15_000);
 });
@@ -363,7 +397,7 @@ describe('BackgroundTaskManager — taskStatusChanged event', () => {
     mgr.on('taskStatusChanged', (s) => events.push(s));
 
     const r = mgr.spawn(sleepCmd(30), 60_000);
-    await new Promise((res) => setTimeout(res, 500));
+    await waitForTaskStatus(mgr, r.taskId, 'running');
     mgr.kill(r.taskId);
 
     expect(events.find((e) => e.taskId === r.taskId && e.status === 'killed')).toBeDefined();

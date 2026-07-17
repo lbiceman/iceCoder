@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 
 import { createShellTool } from '../../src/tools/builtin/shell-tool.js';
 import { BackgroundTaskManager } from '../../src/tools/background-task-manager.js';
+import { killShellProcessTree } from '../../src/tools/shell-process-kill.js';
 
 const isWindows = process.platform === 'win32';
 
@@ -64,12 +65,10 @@ describe('BackgroundTaskManager.adopt() — unit', () => {
 
   it('refuses adopt when MAX_CONCURRENT reached', () => {
     // Fill up with 8 running adopts of `sleep 30`
-    const children = [];
     for (let i = 0; i < 8; i++) {
       const shell = isWindows ? 'cmd.exe' : '/bin/sh';
       const args = isWindows ? ['/c', sleepCmd(30)] : ['-c', sleepCmd(30)];
       const c = spawn(shell, args, { cwd: workDir, stdio: ['ignore', 'pipe', 'pipe'] });
-      children.push(c);
       const r = mgr.adopt(c, { command: 'sleep 30', hardTimeoutMs: 60_000 });
       expect(r.error).toBeUndefined();
     }
@@ -82,9 +81,14 @@ describe('BackgroundTaskManager.adopt() — unit', () => {
     expect(r.taskId).toBe('');
     expect(r.error).toMatch(/上限/);
 
-    // Cleanup
-    for (const c of children) try { c.kill(); } catch { /* ignore */ }
-    try { extra.kill(); } catch { /* ignore */ }
+    // The rejected child is not manager-owned; clean it separately.
+    killShellProcessTree(extra.pid ?? null, extra);
+
+    // dispose owns adopted children and must stay fast/idempotent even at capacity.
+    const disposeStartedAt = Date.now();
+    mgr.dispose();
+    mgr.dispose();
+    expect(Date.now() - disposeStartedAt).toBeLessThan(isWindows ? 4_000 : 1_000);
   }, 20_000);
 
   it('hard timeout in adopt kills the child eventually', async () => {

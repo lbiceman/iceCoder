@@ -150,6 +150,97 @@ describe('RuntimeRestoreCoordinator', () => {
     expect(archive?.messageId).toBe(messageId);
   });
 
+  it('restores to an earlier checkpoint after a later restore', async () => {
+    const msg1 = 'user-msg-1';
+    const msg2 = 'user-msg-2';
+    const msg3 = 'user-msg-3';
+    const combined = {
+      version: 1 as const,
+      taskId: 't1',
+      status: 'running' as const,
+      userGoal: 'goal',
+      phase: 'editing',
+      taskState: {
+        goal: 'goal',
+        intent: 'edit' as const,
+        phase: 'editing' as const,
+        filesRead: [],
+        filesChanged: [],
+        commandsRun: [],
+        verificationRequired: false,
+        verificationStatus: 'not_required' as const,
+      },
+      repoContext: {
+        filesRead: [],
+        filesChanged: [],
+        commandsRun: [],
+        testCommands: [],
+        recentDiagnostics: [],
+      },
+      failedToolCalls: [],
+      messageCount: 1,
+      loop: { currentRound: 1, totalToolCalls: 0, totalInputTokens: 0, totalOutputTokens: 0 },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      runtimeV2: emptyRuntimeCheckpointV2('manual'),
+    };
+    await fs.writeFile(
+      path.join(tmp, `${sessionId}.checkpoint.json`),
+      JSON.stringify(combined, null, 2),
+      'utf-8',
+    );
+
+    async function captureAt(messageId: string, content: string, sentAt: number, prior: { id: string; content: string; sentAt: number }[]) {
+      const uiMessages = [
+        ...prior.map((p) => ({ role: 'user', content: p.content, id: p.id, sentAt: p.sentAt })),
+        { role: 'user', content, id: messageId, sentAt },
+      ];
+      await captureIntentCheckpoint({
+        sessionDir: tmp,
+        sessionId,
+        messageId,
+        userMessageTime: sentAt,
+        workspaceRoot: tmp,
+        workspaceState: { referenceReads: [], changeCount: 0 },
+        structuredMessages: uiMessages.map((m) => ({ role: 'user', content: m.content })),
+        uiMessages,
+      });
+    }
+
+    await captureAt(msg1, 'first', 1000, []);
+    await captureAt(msg2, 'second', 2000, [{ id: msg1, content: 'first', sentAt: 1000 }]);
+    await captureAt(msg3, 'third', 3000, [
+      { id: msg1, content: 'first', sentAt: 1000 },
+      { id: msg2, content: 'second', sentAt: 2000 },
+    ]);
+
+    const coordinator = new RuntimeRestoreCoordinator();
+
+    await coordinator.restore({
+      sessionDir: tmp,
+      sessionId,
+      messageId: msg3,
+      defaultWorkDir: tmp,
+    });
+    let index = await loadCheckpointIndex(tmp, sessionId);
+    expect(index.cursorMessageId).toBe(msg3);
+    expect(index.entries).toHaveLength(3);
+
+    await coordinator.restore({
+      sessionDir: tmp,
+      sessionId,
+      messageId: msg2,
+      defaultWorkDir: tmp,
+    });
+    index = await loadCheckpointIndex(tmp, sessionId);
+    expect(index.cursorMessageId).toBe(msg2);
+    expect(index.entries).toHaveLength(2);
+
+    const uiRaw = JSON.parse(await fs.readFile(path.join(tmp, `${sessionId}.json`), 'utf-8'));
+    expect(uiRaw.filter((m: { role: string }) => m.role === 'user')).toHaveLength(2);
+    expect(uiRaw.some((m: { id?: string }) => m.id === msg3)).toBe(false);
+  });
+
   it('rolls back workspace files when conversation write fails', async () => {
     const messageId = 'user-msg-ws';
     const filePath = 'src/rollback.ts';

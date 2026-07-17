@@ -24,6 +24,7 @@
     "build:web": "vite build",
     "start": "cross-env NODE_ENV=production node dist/index.js",
     "dev": "node scripts/dev-entry.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run",
     "test:coverage": "vitest run --coverage",
     "eval:agent": "tsx scripts/agent-eval.ts",

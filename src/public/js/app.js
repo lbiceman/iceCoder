@@ -530,6 +530,9 @@
 
     document.body.dataset.page = page;
     document.body.dataset.shell = currentShell;
+    if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.setPageActive === 'function') {
+      window.ChatExecutionPlan.setPageActive(page === 'chat' || page === 'workChat');
+    }
     for (var k in pages) {
       var entry = pages[k];
       if (entry.root) entry.root.style.display = (k === page) ? '' : 'none';
@@ -560,6 +563,11 @@
         window.ChatPage.render(root);
       }
       entry.mounted = true;
+    } else if (page === 'settings') {
+      var activeSettingsPage = window.SettingsPage || window.ConfigPage;
+      if (activeSettingsPage && typeof activeSettingsPage.onActivate === 'function') {
+        activeSettingsPage.onActivate();
+      }
     } else if (page === 'memory' && window.MemoryPage) {
       // memory 因 destroy 已重置内部状态，每次进入重新 render
       window.MemoryPage.render(root);
@@ -581,6 +589,9 @@
       window.MobileSkillsPage.render(root);
     } else if (page === 'mConfig' && window.MobileConfigPage) {
       window.MobileConfigPage.render(root);
+      if (window.ConfigPage && typeof window.ConfigPage.onActivate === 'function') {
+        window.ConfigPage.onActivate();
+      }
     }
   }
 

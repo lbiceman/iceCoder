@@ -152,6 +152,8 @@ function detectListenPort(text: string): number | null {
 export class BackgroundTaskManager extends EventEmitter {
   private tasks = new Map<string, BackgroundTask>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 每任务 hard-timeout；任务终态或 dispose 时必须立即释放，避免短任务残留句柄。 */
+  private timeoutTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private workDir: string;
   readonly sessionId: string;
   /** 后台日志根目录；默认 `<workDir>/data/sessions/<sid>/bg` */
@@ -202,6 +204,23 @@ export class BackgroundTaskManager extends EventEmitter {
   /** 终止任务关联的全部 OS 进程（含 Windows 端口兜底） */
   private killTaskProcesses(task: BackgroundTask): void {
     killShellProcessTree(task.rootPid ?? task.child?.pid ?? null, task.child, task.detectedPort);
+  }
+
+  private clearTaskTimeout(taskId: string): void {
+    const timer = this.timeoutTimers.get(taskId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.timeoutTimers.delete(taskId);
+  }
+
+  private scheduleTaskTimeout(taskId: string, timeoutMs: number, onTimeout: () => void): void {
+    this.clearTaskTimeout(taskId);
+    const timer = setTimeout(() => {
+      this.timeoutTimers.delete(taskId);
+      onTimeout();
+    }, timeoutMs);
+    timer.unref?.();
+    this.timeoutTimers.set(taskId, timer);
   }
 
   /**
@@ -275,6 +294,7 @@ export class BackgroundTaskManager extends EventEmitter {
 
     // 接管进程退出
     child.on('close', (code) => {
+      this.clearTaskTimeout(taskId);
       if (task.status === 'running') {
         task.status = code === 0 ? 'completed' : 'failed';
         task.exitCode = code;
@@ -287,6 +307,7 @@ export class BackgroundTaskManager extends EventEmitter {
     });
 
     child.on('error', (err) => {
+      this.clearTaskTimeout(taskId);
       if (task.status === 'running') {
         task.status = 'failed';
         task.error = `进程启动失败: ${err.message}`;
@@ -299,7 +320,7 @@ export class BackgroundTaskManager extends EventEmitter {
     });
 
     // 接管 hard timeout（进程树 kill）
-    setTimeout(() => {
+    this.scheduleTaskTimeout(taskId, hardTimeoutMs, () => {
       if (task.status === 'running') {
         task.status = 'timeout';
         task.error = `执行超时 (${formatElapsed(hardTimeoutMs)})`;
@@ -310,9 +331,9 @@ export class BackgroundTaskManager extends EventEmitter {
         setTimeout(() => {
           task.child = null;
           this.scheduleCleanup(taskId);
-        }, 2500);
+        }, 2500).unref?.();
       }
-    }, hardTimeoutMs);
+    });
 
     return { taskId };
   }
@@ -384,6 +405,7 @@ export class BackgroundTaskManager extends EventEmitter {
 
     // 进程结束
     child.on('close', (code) => {
+      this.clearTaskTimeout(taskId);
       if (task.status === 'running') {
         task.status = code === 0 ? 'completed' : 'failed';
         task.exitCode = code;
@@ -396,6 +418,7 @@ export class BackgroundTaskManager extends EventEmitter {
     });
 
     child.on('error', (err) => {
+      this.clearTaskTimeout(taskId);
       if (task.status === 'running') {
         task.status = 'failed';
         task.error = `进程启动失败: ${err.message}`;
@@ -408,7 +431,7 @@ export class BackgroundTaskManager extends EventEmitter {
     });
 
     // 超时处理（进程树 kill）
-    setTimeout(() => {
+    this.scheduleTaskTimeout(taskId, timeoutMs, () => {
       if (task.status === 'running') {
         task.status = 'timeout';
         task.error = `执行超时 (${formatElapsed(timeoutMs)})`;
@@ -419,9 +442,9 @@ export class BackgroundTaskManager extends EventEmitter {
         setTimeout(() => {
           task.child = null;
           this.scheduleCleanup(taskId);
-        }, 2500);
+        }, 2500).unref?.();
       }
-    }, timeoutMs);
+    });
 
     return { taskId };
   }
@@ -743,6 +766,7 @@ export class BackgroundTaskManager extends EventEmitter {
       : task.command;
 
     task.status = 'killed';
+    this.clearTaskTimeout(taskId);
     task.endTime = Date.now();
     task.error = '被用户终止';
     if (!task.detectedPort && task.outputLines.length > 0) {
@@ -759,7 +783,7 @@ export class BackgroundTaskManager extends EventEmitter {
     this.markSummaryDirty(taskId);
     setTimeout(() => {
       task.child = null;
-    }, 2500);
+    }, 2500).unref?.();
     this.scheduleCleanup(taskId);
     return true;
   }
@@ -792,6 +816,7 @@ export class BackgroundTaskManager extends EventEmitter {
       const rootPid = task.rootPid ?? task.child?.pid ?? null;
       const commandPreview = (task.label || task.command).substring(0, 80);
       task.status = 'killed';
+      this.clearTaskTimeout(taskId);
       task.error = 'terminated by user stop';
       task.endTime = Date.now();
       this.appendOutput(task, Buffer.from('[terminated by user stop]\n'), '');
@@ -823,8 +848,12 @@ export class BackgroundTaskManager extends EventEmitter {
     for (const timer of this.cleanupTimers.values()) {
       clearTimeout(timer);
     }
+    for (const timer of this.timeoutTimers.values()) {
+      clearTimeout(timer);
+    }
     this.tasks.clear();
     this.cleanupTimers.clear();
+    this.timeoutTimers.clear();
   }
 
   /**

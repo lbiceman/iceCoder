@@ -1,133 +1,765 @@
 /**
- * 执行透明层 — 宠物锚定悬停弹层（原右上角卡片改为 popover）。
+ * 执行透明层（ETL）— 右侧停靠侧边栏。
+ *
+ * 布局：头部 → 监管横幅 → 任务摘要 → Tab 条 → 执行流（可折叠轮次）→ Footer。
+ * 视觉：对齐 tokens.css 的 shadcn/zinc 中性灰阶；状态色仅用 success / warning / danger。
  */
 
-.exec-plan-panel {
+:root {
+  --etl-w: 360px;
+  --etl-supervision-fg: var(--chip-skill-fg, #c4b0e0);
+  --etl-supervision-bg: var(--chip-skill-bg, rgba(167, 148, 200, 0.12));
+  --etl-supervision-border: var(--chip-skill-border, rgba(180, 168, 210, 0.28));
+}
+
+/* ── 面板容器 ── */
+.etl-panel {
   position: fixed;
-  width: min(300px, calc(100vw - 24px));
-  max-height: min(52vh, 420px);
-  background-color: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  color: var(--text-primary, #f2f4fa);
-  font-size: 13px;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
-  z-index: 125;
-  flex-direction: column;
-  overflow: hidden;
-  display: none;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 160ms ease, transform 160ms ease;
-  pointer-events: none;
-}
-
-.exec-plan-panel::before {
-  content: '';
-  position: absolute;
+  right: 0;
   top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: var(--bg-card);
-  opacity: 0.66;
-  z-index: -1;
+  bottom: 0;
+  width: var(--etl-w, 360px);
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--surface-panel);
+  border-left: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 14px;
+  box-shadow: var(--shadow-md);
+  z-index: 90;
+  overflow: hidden;
+  transform: translateX(100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform var(--transition);
 }
 
-.exec-plan-panel.exec-plan-panel--popover.exec-plan-panel--open {
-  display: flex;
-  opacity: 1;
-  transform: translateY(0);
+.etl-panel.etl-panel--open {
+  transform: translateX(0);
+  visibility: visible;
   pointer-events: auto;
 }
 
-.exec-plan-panel.exec-plan-panel--suppressed {
-  display: none !important;
-  pointer-events: none !important;
+body.etl-panel-open .page-container {
+  padding-right: var(--etl-w, 360px);
+  transition: padding-right var(--transition);
 }
 
-.exec-plan-header {
+body.etl-pet-hidden-by-panel #agent-status-bar {
+  display: none;
+}
+
+html[data-shell="mobile"] body.etl-panel-open .page-container {
+  padding-right: 0;
+}
+
+/* ── 头部 ── */
+.etl-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-light, #363e54);
-  background: var(--bg-secondary, #242a3a);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-sidebar);
+  flex-shrink: 0;
 }
 
-.exec-plan-title {
+.etl-title {
+  font-weight: 600;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 600;
   flex: 1;
 }
 
+.etl-minimize {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.etl-minimize:hover,
+.etl-minimize:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  outline: none;
+}
+
+/* ── 监管横幅 ── */
 .exec-plan-mode-banner {
-  margin: 0;
-  padding: 8px 12px;
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
   font-size: 12px;
   line-height: 1.45;
-  white-space: pre-wrap;
   color: var(--warning);
-  background: var(--warning-light);
-  border-bottom: 1px solid var(--border-light, #363e54);
+  background: color-mix(in srgb, var(--warning-light) 85%, var(--surface-panel));
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-color));
+  border-radius: var(--radius);
+  flex-shrink: 0;
 }
 
 .exec-plan-mode-banner.hidden {
   display: none;
 }
 
+.etl-banner-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.etl-banner-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.etl-banner-text {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.etl-banner-toggle {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+
+.etl-banner-toggle:hover,
+.etl-banner-toggle:focus-visible {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.etl-banner-detail {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid color-mix(in srgb, var(--warning) 20%, var(--border-color));
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.etl-banner-detail.hidden {
+  display: none;
+}
+
+/* ── 任务摘要卡 ── */
+.etl-task-overview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin: var(--space-2) var(--space-3) 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  flex-shrink: 0;
+}
+
+.etl-task-overview.hidden {
+  display: none;
+}
+
+.etl-overview-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.etl-overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.etl-overview-goal {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.etl-overview-badge {
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--etl-supervision-border);
+  background: var(--etl-supervision-bg);
+  color: var(--etl-supervision-fg);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.etl-overview-badge.hidden {
+  display: none;
+}
+
+.etl-overview-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.etl-overview-bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--border-subtle);
+  overflow: hidden;
+}
+
+.etl-overview-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--success);
+  transition: width 240ms ease;
+}
+
+.etl-overview-progress-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.etl-overview-grid.hidden {
+  display: none;
+}
+
+.etl-overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2) var(--space-3);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.etl-overview-grid-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.etl-overview-grid-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.etl-overview-grid-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-overview-intent {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.etl-overview-intent.hidden {
+  display: none;
+}
+
+/* ── Tab 条 ── */
+.etl-tabs {
+  display: flex;
+  gap: 0;
+  padding: var(--space-2) var(--space-3) 0;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-panel);
+  flex-shrink: 0;
+}
+
+.etl-tab {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-2);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  text-align: center;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.etl-tab:hover {
+  color: var(--text-secondary);
+}
+
+.etl-tab.is-active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-border-strong);
+  font-weight: 600;
+}
+
+/* ── 主体 ── */
+.etl-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+}
+
+.etl-tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  min-height: 0;
+}
+
+.etl-tabpanel.hidden {
+  display: none;
+}
+
+.etl-empty {
+  padding: var(--space-6) var(--space-3);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.etl-empty.hidden {
+  display: none;
+}
+
+.etl-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* ── 执行流：模型轮次列表 ── */
+.etl-round-timeline {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.etl-round-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 0 10px 0;
+  list-style: none;
+  overflow-anchor: none;
+}
+
+.etl-round-live-tools {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-round-node.is-expanded .etl-round-pills {
+  display: none;
+}
+
+.etl-round-node {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.etl-round-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+
+.etl-round-row:hover {
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--surface-raised) 88%, var(--bg-hover));
+}
+
+.etl-round-node.is-expanded .etl-round-row {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+}
+
+.etl-round-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-panel);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-round-node.is-final .etl-round-marker {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border-strong));
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.etl-round-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  margin-top: 3px;
+}
+
+.etl-round-status-icon.status-done {
+  color: var(--success);
+  background: var(--success-light);
+}
+
+.etl-round-status-icon.status-failed {
+  color: var(--danger);
+  background: var(--danger-light);
+}
+
+.etl-round-status-icon.status-running {
+  color: var(--warning);
+  background: var(--warning-light);
+}
+
+.etl-round-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.etl-round-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.etl-round-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding-left: 5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-round-badge {
+  flex-shrink: 0;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.etl-round-badge.status-done {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.etl-round-badge.status-failed {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.etl-round-badge.status-running {
+  background: var(--warning-light);
+  color: var(--warning);
+}
+
+.etl-round-duration {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-round-toggle {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.etl-round-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.etl-round-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.etl-round-pills--folded {
+  flex-wrap: nowrap;
+}
+
+.etl-round-node:not(.is-expanded) .etl-round-pills .etl-round-pill:not(:first-child) {
+  display: none;
+}
+
+.etl-round-pill {
+  max-width: 100%;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-round-detail {
+  display: none;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--msg-agent-bg);
+}
+
+.etl-round-node.is-expanded .etl-round-detail {
+  display: flex;
+}
+
+.etl-round-section-label {
+  margin-bottom: var(--space-1);
+  color: var(--msg-thinking-label);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.etl-round-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-round-action {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.etl-round-action-icon {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.etl-round-action.status-failed .etl-round-action-icon {
+  color: var(--danger);
+}
+
+.etl-round-action-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.etl-round-action-target {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-round-action-dur {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-round-reason {
+  color: var(--msg-thinking-text);
+  font-size: 12px;
+  line-height: 1.55;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--msg-thinking-border);
+}
+
+.etl-round-complete {
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.etl-round-load-more {
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.etl-round-load-more:hover,
+.etl-round-load-more:focus-visible {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.etl-round-load-more.hidden {
+  display: none;
+}
+
+/* 兼容测试与增量 patch：计划列表与当前步骤卡仅保留在 DOM 中 */
+.etl-current-step,
+.exec-plan-list,
+.etl-llm-activity {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+/* ── 执行计划列表（隐藏，供 patch 增量更新）── */
 .exec-plan-list {
   list-style: none;
   margin: 0;
-  padding: 8px 10px 12px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 0;
 }
 
 .exec-plan-step {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--bg-input, #282f42);
-  border: 1px solid transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--msg-agent-bg);
+  border: 1px solid var(--msg-agent-border);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   line-height: 1.45;
 }
 
 .exec-plan-step.active {
   border-color: var(--accent-border);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-border) 50%, transparent);
 }
 
 .exec-plan-step-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .exec-plan-step-title {
   flex: 1;
   font-weight: 500;
+  font-size: 13px;
   color: var(--text-primary);
 }
 
 .exec-plan-step-badge {
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.09));
-  color: var(--text-secondary);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+}
+
+.exec-plan-step-dur {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  min-width: 34px;
+  text-align: right;
 }
 
 .exec-plan-step.status-running .exec-plan-step-badge {
   background: var(--accent-light);
-  color: var(--accent);
+  color: var(--text-primary);
   animation: ice-plan-pulse 1.4s ease-in-out infinite;
 }
 
@@ -141,32 +773,37 @@
   color: var(--danger);
 }
 
-.exec-plan-step.status-skipped {
-  opacity: 0.55;
+/* ── Footer ── */
+.etl-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-sidebar);
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
-.exec-plan-step.status-skipped .exec-plan-step-title {
-  text-decoration: line-through;
+.etl-foot-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
 }
 
-.exec-plan-step-tools,
-.exec-plan-step-evidence {
-  font-size: 11.5px;
-  color: var(--text-secondary, #b9c0d4);
-  word-break: break-all;
-}
-.exec-plan-step-evidence {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.etl-foot-item b {
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
-.exec-plan-step-error {
-  font-size: 11.5px;
-  color: var(--danger);
-  word-break: break-all;
+.etl-foot-time {
+  margin-left: auto;
 }
 
 @keyframes ice-plan-pulse {
-
   0%,
   100% {
     opacity: 1;
@@ -175,4 +812,319 @@
   50% {
     opacity: 0.55;
   }
+}
+
+/* ── 移动端：顶部一行入口 + 底部 sheet ── */
+.etl-mbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 95;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-sidebar);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.etl-mbar.etl-mbar--open {
+  display: flex;
+}
+
+.etl-mbar-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-mbar.is-expanded {
+  border-bottom-color: var(--accent-border-strong);
+}
+
+.etl-mbackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 96;
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--transition), visibility var(--transition);
+}
+
+.etl-mbackdrop.etl-mbackdrop--open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.etl-msheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 97;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100vw;
+  max-height: 78vh;
+  background-color: var(--surface-panel);
+  border-top: 1px solid var(--border-color);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  transform: translateY(100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 200ms ease, visibility 200ms ease;
+}
+
+.etl-msheet.etl-msheet--open {
+  transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.etl-msheet-handle {
+  flex-shrink: 0;
+  width: 40px;
+  height: 4px;
+  margin: var(--space-2) auto 2px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+.etl-msheet .etl-header {
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+}
+
+.etl-msheet .etl-body {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── 状态快照 Tab：会话检查点时间轴 ── */
+.etl-snapshot-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  flex: 1;
+}
+
+.etl-snapshot-hint {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border-subtle));
+  border-radius: var(--radius);
+  background: var(--warning-light);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.etl-snapshot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+}
+
+.etl-snapshot-header-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.etl-snapshot-header-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-snapshot-desc {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.etl-snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-3);
+  list-style: none;
+}
+
+.etl-snapshot-node {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: stretch;
+  min-width: 0;
+}
+
+.etl-snapshot-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 14px;
+}
+
+.etl-snapshot-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-panel);
+  z-index: 1;
+}
+
+.etl-snapshot-node.is-cursor .etl-snapshot-dot {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.etl-snapshot-line {
+  flex: 1;
+  width: 2px;
+  min-height: 12px;
+  margin-top: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--border-subtle);
+}
+
+.etl-snapshot-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) calc(var(--space-2) + 34px) var(--space-2) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.etl-snapshot-node.is-cursor .etl-snapshot-card {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-raised));
+}
+
+.etl-snapshot-card:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--surface-raised) 90%, var(--bg-hover));
+}
+
+.etl-snapshot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.etl-snapshot-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-snapshot-time {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.etl-snapshot-badge {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.etl-snapshot-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.etl-snapshot-restore-btn {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.etl-snapshot-restore-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  color: var(--accent);
+}
+
+.etl-snapshot-restore-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.etl-snapshot-restore-icon {
+  display: block;
+}
+
+.etl-snapshot-empty,
+.etl-snapshot-loading {
+  padding: var(--space-5) var(--space-3);
+}
+
+#etl-panel-snapshot {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }

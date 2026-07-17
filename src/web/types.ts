@@ -38,6 +38,13 @@ export interface ProviderConfig {
   maxContextTokens?: number;
 }
 
+/** 执行透明层（ETL）前端偏好，持久化在 data/config.json。 */
+export interface IceEtlPrefs {
+  showTransparencyPanel: boolean;
+  panelDefaultExpanded: boolean;
+  panelWidth: number;
+}
+
 /** `data/config.json` 顶层结构 */
 export interface IceCoderConfigFile {
   providers: ProviderConfig[];
@@ -56,6 +63,11 @@ export interface IceCoderConfigFile {
    * 缺失时使用内置默认（rm -rf、format、shutdown 等）；空数组 `[]` 表示不启用黑名单。
    */
   shellBlacklist?: string[];
+  /**
+   * 执行透明层 UI 偏好（Web 配置页可改）。
+   * 缺失时使用内置默认。
+   */
+  iceEtlPrefs?: Partial<IceEtlPrefs>;
   /**
    * 写后读验收豁免目录前缀（相对工作区根），如 `.scratch`、`tmp/agent`。
    * 与工作区根目录 `.icecoder.json` 中同名字段合并。

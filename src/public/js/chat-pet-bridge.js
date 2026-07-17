@@ -57,12 +57,6 @@ window.ChatPetBridge = (function () {
     }
   }
 
-  function forceClearExecutionPlan() {
-    if (window.ChatExecutionPlan && typeof ChatExecutionPlan.clear === 'function') {
-      ChatExecutionPlan.clear();
-    }
-  }
-
   /**
    * 有执行计划时底部显示步骤进度摘要；否则回退为「第 N 轮」。
    */
@@ -117,7 +111,6 @@ window.ChatPetBridge = (function () {
       if (!sessionPet || !sessionPet.isVisible()) return;
       sessionPet.setState('idle');
       sessionPet.setBubbleText('');
-      clearFinishedPlan();
       syncExecPlanFoot();
     }, MODEL_DONE_NOTICE_MS);
   }
@@ -172,7 +165,6 @@ window.ChatPetBridge = (function () {
     sessionPet.setState('idle');
     sessionPet.setBubbleText('');
     sessionPet.setTurnLabel('');
-    clearFinishedPlan();
     syncExecPlanFoot();
   }
 
@@ -288,7 +280,6 @@ window.ChatPetBridge = (function () {
       case 'task_graph_done':
         sessionPet.setState('happy');
         bubble('任务图完成');
-        clearFinishedPlan();
         syncExecPlanFoot();
         break;
       case 'final':
@@ -315,7 +306,6 @@ window.ChatPetBridge = (function () {
             sessionPet.setState('alert');
             if (step.content) bubble(step.content);
           } else if (sr === 'model_done') {
-            forceClearExecutionPlan();
             applyModelDoneNotice();
           } else {
             sessionPet.setState('happy');
@@ -383,7 +373,6 @@ window.ChatPetBridge = (function () {
           } else if (typeof patch.progress === 'number' && patch.progress === 100) {
             sessionPet.setState('happy');
             bubble('计划全部完成');
-            clearFinishedPlan();
             syncExecPlanFoot();
           } else if (sp && sp.status === 'done') {
             sessionPet.setState('playful');
