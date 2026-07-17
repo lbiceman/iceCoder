@@ -59,12 +59,35 @@ describe('conversation-delete', () => {
     expect(removeStructuredUserMessage(structuredMessages, uiMessages, 'u2')).toEqual([
       structuredMessages[0],
       structuredMessages[1],
-      structuredMessages[3],
       structuredMessages[4],
     ]);
     expect(removeStructuredUserMessage(structuredMessages, uiMessages, 'u3')).toEqual(
       structuredMessages.slice(0, 4),
     );
+  });
+
+  it('removeStructuredUserMessage skips system-injected user blocks when aligning turns', () => {
+    const uiWithSkill: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'hello' },
+      { role: 'agent', id: 'a1', content: 'hi' },
+      { role: 'user', id: 'u2', content: 'create skill please' },
+    ];
+    const structuredWithSkill: UnifiedMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: '[System: Skill File Guide]\n[User Request]\ncreate skill please' },
+      { role: 'assistant', content: 'drafting skill' },
+    ];
+
+    expect(removeStructuredUserMessage(
+      structuredWithSkill,
+      uiWithSkill,
+      'u2',
+      'create skill please',
+    )).toEqual([
+      structuredWithSkill[0],
+      structuredWithSkill[1],
+    ]);
   });
 
   it('deletes only one message and scrubs it from later checkpoint snapshots', async () => {
@@ -115,8 +138,15 @@ describe('conversation-delete', () => {
         sessionId,
         archive: makeArchive('u3', uiMessages, structuredMessages),
       });
+      await fs.writeFile(
+        path.join(sessionDir, `${sessionId}.checkpoint.json`),
+        JSON.stringify({ version: 1, status: 'paused', userGoal: 'create skill please' }),
+        'utf-8',
+      );
 
       await deleteUserMessageConversation({ sessionDir, sessionId, messageId: 'u2' });
+
+      await expect(fs.access(path.join(sessionDir, `${sessionId}.checkpoint.json`))).rejects.toThrow();
 
       const savedUi = JSON.parse(
         await fs.readFile(path.join(sessionDir, `${sessionId}.json`), 'utf-8'),
@@ -131,7 +161,6 @@ describe('conversation-delete', () => {
       expect(savedStructured.map((message) => message.role)).toEqual([
         'user',
         'assistant',
-        'assistant',
         'user',
       ]);
       expect(index.entries.map((entry) => entry.messageId)).toEqual(['u1', 'u3']);
@@ -145,7 +174,6 @@ describe('conversation-delete', () => {
       ]);
       expect(laterArchive?.structuredMessages.map((message) => message.role)).toEqual([
         'user',
-        'assistant',
         'assistant',
         'user',
       ]);

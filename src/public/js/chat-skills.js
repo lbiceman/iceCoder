@@ -85,6 +85,7 @@ window.ChatSkills = (function () {
       maxWidth: 320,
       markAnchorActive: false,
       onSelect: function (_item, idx) { applySelection(idx); },
+      onHighlight: function (_item, idx) { skillSelectedIndex = idx; },
       onClose: function () {
         // 刷新过滤列表时 ChatDropdown.open 会先 close 再 open；状态清理由 hide() 负责。
       },
@@ -483,6 +484,9 @@ window.ChatSkills = (function () {
     getComposerText: getComposerText,
     getSelectedRefs: function () {
       return selectedSkills.map(function (fn) { return '#' + fn; });
+    },
+    getSelectedSkills: function () {
+      return selectedSkills.slice();
     },
     focusChipBarEnd: focusChipBarEnd,
     isChipBarFocused: isChipBarFocused,

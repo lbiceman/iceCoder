@@ -281,6 +281,91 @@ window.ChatSession = (function () {
     return !!(last && last.role === 'agent' && last._streaming);
   }
 
+  function normalizeReferencePath(raw) {
+    return String(raw || '').trim().replace(/\//g, '\\').toLowerCase();
+  }
+
+  function looksLikeReferencePathLine(line) {
+    var trimmed = String(line || '').trim();
+    if (!trimmed) return false;
+    if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
+    if (trimmed.charAt(0) === '/' && trimmed.indexOf('//') !== 0) return true;
+    return false;
+  }
+
+  function parseSkillRefsFromContent(text) {
+    var re = /(?:^|\s)#([^\s#]+\.md)\b/g;
+    var seen = {};
+    var result = [];
+    var m;
+    while ((m = re.exec(text)) !== null) {
+      var fn = m[1];
+      if (!seen[fn]) {
+        seen[fn] = true;
+        result.push(fn);
+      }
+    }
+    return result;
+  }
+
+  function extractReferencePathsFromContent(text) {
+    var paths = [];
+    var seen = {};
+    var lines = String(text || '').split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var trimmed = lines[i].trim();
+      if (!looksLikeReferencePathLine(trimmed)) continue;
+      var key = normalizeReferencePath(trimmed);
+      if (seen[key]) continue;
+      seen[key] = true;
+      paths.push(trimmed);
+    }
+    return paths;
+  }
+
+  function stripRefsFromDisplayContent(text, skills, referencePaths) {
+    var skillSet = {};
+    var refSet = {};
+    var i;
+    for (i = 0; i < (skills || []).length; i++) {
+      skillSet[String(skills[i]).toLowerCase()] = true;
+    }
+    for (i = 0; i < (referencePaths || []).length; i++) {
+      refSet[normalizeReferencePath(referencePaths[i])] = true;
+    }
+    return String(text || '').split(/\r?\n/)
+      .map(function (line) {
+        var trimmed = line.trim();
+        if (trimmed && refSet[normalizeReferencePath(trimmed)]) return '';
+        return line
+          .replace(/(?:^|\s)#([^\s#]+\.md)\b/g, function (match, fn) {
+            return skillSet[String(fn).toLowerCase()] ? '' : match;
+          })
+          .trim();
+      })
+      .filter(function (line) { return line.length > 0; })
+      .join('\n')
+      .trim();
+  }
+
+  function enrichUserMessageForDisplay(msg) {
+    if (!msg || msg.role !== 'user') return msg;
+    var cloned = Object.assign({}, msg);
+    var text = typeof cloned.content === 'string' ? cloned.content : '';
+    var skills = Array.isArray(cloned.skills) && cloned.skills.length
+      ? cloned.skills.slice()
+      : parseSkillRefsFromContent(text);
+    var referencePaths = Array.isArray(cloned.referencePaths) && cloned.referencePaths.length
+      ? cloned.referencePaths.slice()
+      : extractReferencePathsFromContent(text);
+    cloned.content = stripRefsFromDisplayContent(text, skills, referencePaths);
+    if (skills.length > 0) cloned.skills = skills;
+    else delete cloned.skills;
+    if (referencePaths.length > 0) cloned.referencePaths = referencePaths;
+    else delete cloned.referencePaths;
+    return cloned;
+  }
+
   function separateToolTraces(serverMsgs) {
     var msgs = [];
     var traces = {};
@@ -305,6 +390,9 @@ window.ChatSession = (function () {
         }
         if (Array.isArray(m.images) && m.images.length > 0) {
           cloned.images = m.images.slice();
+        }
+        if (cloned.role === 'user') {
+          cloned = enrichUserMessageForDisplay(cloned);
         }
         msgs.push(cloned);
       }
@@ -353,6 +441,7 @@ window.ChatSession = (function () {
       return patchUserMessageImages(msg.id, msg.images || []);
     }
     stampMessageTimestamps(msg);
+    msg = enrichUserMessageForDisplay(msg);
     var insertAt = messages.length;
     for (var i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'agent' && messages[i]._streaming) {
@@ -405,6 +494,11 @@ window.ChatSession = (function () {
   function initSession() {
     SESSION_ID = readInitialSessionId();
     messages = loadLocalMessages();
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].role === 'user') {
+        messages[i] = enrichUserMessageForDisplay(messages[i]);
+      }
+    }
     reindexMessages();
     toolTraces = {};
     currentToolBatch = loadLiveToolBatch();

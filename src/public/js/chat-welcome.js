@@ -1,5 +1,5 @@
 /**
- * 聊天空状态欢迎页：无消息时展示快速上手与建议开始。
+ * 聊天空状态欢迎页：状态卡片、快速上手与当前上下文。
  */
 
 /* exported ChatWelcome */
@@ -9,53 +9,40 @@ window.ChatWelcome = (function () {
 
   var elRoot = null;
   var elMessages = null;
-  var onPromptSelect = null;
   var memoryCount = null;
   var memoryFetchPending = false;
-
-  var PROMPTS = [
-    {
-      icon: 'megaphone',
-      text: '检查项目中的问题并给出修复建议',
-      value: '请检查当前项目中的问题，并给出修复建议。',
-    },
-    {
-      icon: 'spark',
-      text: '优化项目的性能并提供改进方案',
-      value: '请分析当前项目的性能瓶颈，并提供可落地的改进方案。',
-    },
-    {
-      icon: 'code',
-      text: '解释项目中的某段代码逻辑',
-      value: '请帮我解释项目中某段关键代码的逻辑与调用关系。',
-    },
-  ];
+  var contextMaxTokens = null;
+  var contextUsedTokens = 0;
+  var contextFetchPending = false;
+  var toolsCount = null;
+  var toolsFetchPending = false;
+  var storeListenerBound = false;
 
   var TIPS = [
     {
       key: 'cmd',
       title: '命令面板',
-      desc: '点击输入框右侧命令按钮，快速执行 open、scan、telemetry 等操作',
-      descRemote: '点击输入框右侧命令按钮，快速执行 open、telemetry 等操作',
-      hint: '命令',
+      desc: '点击输入框右侧命令按钮，执行 open、scan等操作',
+      descRemote: '点击输入框右侧命令按钮，执行 open等操作',
+      icon: 'command-list',
     },
     {
       key: 'at',
       title: '@ 引用文件',
-      desc: '输入 @ 从工作区选择文件，引用绝对路径供 Agent 读取',
-      hint: '@',
+      desc: '输入 @ 从工作区选择文件，引用绝对路径供Agent读取',
+      icon: 'at',
     },
     {
       key: 'hash',
       title: '# 技能',
       desc: '输入 # 选用技能，或在侧栏「技能」页浏览全部技能',
-      hint: '#',
+      icon: 'hash',
     },
     {
-      key: 'plus',
-      title: '附件与命令',
-      desc: '左侧 + 上传文件；右侧命令按钮打开命令面板',
-      hint: '+',
+      key: 'slash',
+      title: '/ 指令',
+      desc: '在输入框输入 /，选用 /also、/next 等本地指令',
+      icon: 'slash',
     },
   ];
 
@@ -86,9 +73,15 @@ window.ChatWelcome = (function () {
     return window.AppIcon ? window.AppIcon.html(map[name] || 'circle', { width: 18 }) : '';
   }
 
-  function promptIconSvg(name) {
-    var map = { megaphone: 'megaphone', spark: 'spark', code: 'code-cursor' };
-    return window.AppIcon ? window.AppIcon.html(map[name] || 'code-cursor', { width: 18 }) : '';
+  function tipKbdHtml(tip) {
+    if (!tip.icon || !window.AppIcon) {
+      return '<span class="chat-welcome-tip-kbd" aria-hidden="true"></span>';
+    }
+    return (
+      '<span class="chat-welcome-tip-kbd" aria-hidden="true">' +
+        window.AppIcon.html(tip.icon, { width: 16, className: 'chat-welcome-tip-kbd-svg' }) +
+      '</span>'
+    );
   }
 
   function buildMarkup(remoteMode) {
@@ -96,7 +89,7 @@ window.ChatWelcome = (function () {
       var desc = (remoteMode && tip.descRemote) ? tip.descRemote : tip.desc;
       return (
         '<div class="chat-welcome-tip">' +
-          '<span class="chat-welcome-tip-kbd">' + escapeHtml(tip.hint) + '</span>' +
+          tipKbdHtml(tip) +
           '<div class="chat-welcome-tip-body">' +
             '<div class="chat-welcome-tip-title">' + escapeHtml(tip.title) + '</div>' +
             '<div class="chat-welcome-tip-desc">' + escapeHtml(desc) + '</div>' +
@@ -105,22 +98,12 @@ window.ChatWelcome = (function () {
       );
     }).join('');
 
-    var promptsHtml = PROMPTS.map(function (item, idx) {
-      return (
-        '<button type="button" class="chat-welcome-prompt" data-prompt-index="' + idx + '">' +
-          '<span class="chat-welcome-prompt-icon">' + promptIconSvg(item.icon) + '</span>' +
-          '<span class="chat-welcome-prompt-text">' + escapeHtml(item.text) + '</span>' +
-          '<span class="chat-welcome-prompt-arrow" aria-hidden="true">&rsaquo;</span>' +
-        '</button>'
-      );
-    }).join('');
-
     return (
       '<div class="chat-welcome-inner">' +
         '<header class="chat-welcome-header">' +
           '<div class="chat-welcome-brand">' +
             '<span class="chat-welcome-logo" aria-hidden="true">' +
-              (window.AppIcon ? window.AppIcon.html('logo', { width: 56 }) : '') +
+              (window.AppIcon ? window.AppIcon.html('logo', { width: 52 }) : '') +
             '</span>' +
             '<div class="chat-welcome-headings">' +
               '<h1 class="chat-welcome-title">IceCoder 已就绪</h1>' +
@@ -162,9 +145,22 @@ window.ChatWelcome = (function () {
           '<h2 class="chat-welcome-section-title">快速上手</h2>' +
           '<div class="chat-welcome-tips">' + tipsHtml + '</div>' +
         '</section>' +
-        '<section class="chat-welcome-section">' +
-          '<h2 class="chat-welcome-section-title">建议开始</h2>' +
-          '<div class="chat-welcome-prompts">' + promptsHtml + '</div>' +
+        '<section class="chat-welcome-section chat-welcome-context">' +
+          '<h2 class="chat-welcome-section-title">当前上下文</h2>' +
+          '<div class="chat-welcome-context-rows">' +
+            '<div class="chat-welcome-context-row">' +
+              '<span class="chat-welcome-context-label">工作区</span>' +
+              '<span class="chat-welcome-context-value" data-welcome-workspace title="">—</span>' +
+            '</div>' +
+            '<div class="chat-welcome-context-row">' +
+              '<span class="chat-welcome-context-label">系统工具</span>' +
+              '<span class="chat-welcome-context-value" data-welcome-tools title="">载入中…</span>' +
+            '</div>' +
+            '<div class="chat-welcome-context-row">' +
+              '<span class="chat-welcome-context-label">上下文大小</span>' +
+              '<span class="chat-welcome-context-value" data-welcome-context-size title="">载入中…</span>' +
+            '</div>' +
+          '</div>' +
         '</section>' +
       '</div>'
     );
@@ -184,21 +180,174 @@ window.ChatWelcome = (function () {
     elRoot.innerHTML = buildMarkup(!!remoteMode);
     if (window.AppIcon) window.AppIcon.hydrate(elRoot);
 
-    elRoot.addEventListener('click', function (e) {
-      var btn = e.target && e.target.closest ? e.target.closest('[data-prompt-index]') : null;
-      if (!btn) return;
-      var idx = parseInt(btn.getAttribute('data-prompt-index'), 10);
-      var item = PROMPTS[idx];
-      if (!item || !onPromptSelect) return;
-      onPromptSelect(item.value);
-    });
-
     var historyOuter = elMessages.querySelector('.chat-history-outer');
     if (historyOuter) {
       elMessages.insertBefore(elRoot, historyOuter);
     } else {
       elMessages.insertBefore(elRoot, elMessages.firstChild);
     }
+  }
+
+  function compactPath(p) {
+    var norm = String(p || '').replace(/\\/g, '/');
+    var parts = norm.split('/').filter(function (x) { return x && x !== '.'; });
+    if (parts.length <= 2) return p || '';
+    return '\u2026/' + parts.slice(-2).join('/');
+  }
+
+  function formatWorkspaceLabel(sessionId) {
+    var Store = window.ChatSessionStore;
+    if (!Store) return { text: '—', title: '' };
+    var root = typeof Store.getSessionWorkspace === 'function'
+      ? Store.getSessionWorkspace(sessionId)
+      : '';
+    var def = typeof Store.getDefaultWorkDir === 'function' ? Store.getDefaultWorkDir() : '';
+    var full = root || def || '';
+    if (!full) return { text: '—', title: '' };
+    var display = full.length > 52 ? (compactPath(full) || full) : full;
+    return { text: display, title: full };
+  }
+
+  function formatToolsCountLabel(count) {
+    if (count == null) return { text: '载入中…', title: '' };
+    if (count <= 0) return { text: '—', title: '' };
+    return { text: count + ' 个', title: 'IceCoder 内置工具' };
+  }
+
+  function formatContextWindow(n) {
+    if (!isFinite(n) || n <= 0) return '';
+    if (n >= 1000) return Math.round(n / 1000) + 'K';
+    return String(n);
+  }
+
+  function formatContextSizeLabel(max, used) {
+    if (max == null) return { text: '载入中…', title: '' };
+    if (!max || max <= 0) return { text: '—', title: '' };
+    var maxLabel = formatContextWindow(max);
+    var title = Number(max).toLocaleString('en-US') + ' tokens';
+    if (typeof used === 'number' && used > 0) {
+      var usedLabel = Number(used).toLocaleString('en-US');
+      var pct = ((used / max) * 100).toFixed(1);
+      return { text: usedLabel + ' / ' + maxLabel, title: title + ' · 已用 ' + pct + '%' };
+    }
+    return { text: maxLabel, title: title };
+  }
+
+  function applyContextFromOpts(opts) {
+    opts = opts || {};
+    if (typeof opts.contextMaxTokens === 'number' && opts.contextMaxTokens > 0) {
+      contextMaxTokens = opts.contextMaxTokens;
+    }
+    if (typeof opts.contextUsedTokens === 'number' && opts.contextUsedTokens >= 0) {
+      contextUsedTokens = opts.contextUsedTokens;
+    }
+  }
+
+  function countBuiltinTools(tools) {
+    if (!Array.isArray(tools)) return 0;
+    var n = 0;
+    for (var i = 0; i < tools.length; i++) {
+      var name = tools[i] && tools[i].name ? String(tools[i].name) : '';
+      if (name && name.indexOf('mcp_') !== 0) n++;
+    }
+    return n;
+  }
+
+  function fetchToolsCount() {
+    if (toolsFetchPending || toolsCount != null) return;
+    toolsFetchPending = true;
+    fetch('/api/tools')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data && data.success && Array.isArray(data.tools)) {
+          toolsCount = countBuiltinTools(data.tools);
+        } else if (data && typeof data.count === 'number') {
+          toolsCount = data.count;
+        } else {
+          toolsCount = 0;
+        }
+      })
+      .catch(function () {
+        toolsCount = 0;
+      })
+      .finally(function () {
+        toolsFetchPending = false;
+        refreshContextLabels();
+      });
+  }
+
+  function fetchModelContext() {
+    if (contextFetchPending || contextMaxTokens != null) return;
+    contextFetchPending = true;
+    fetch('/api/config')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        var providers = data && data.providers ? data.providers : [];
+        var def = providers.find(function (p) { return p.isDefault; }) || providers[0];
+        if (def && typeof def.maxContextTokens === 'number' && def.maxContextTokens > 0) {
+          contextMaxTokens = def.maxContextTokens;
+        } else {
+          contextMaxTokens = 0;
+        }
+      })
+      .catch(function () {
+        contextMaxTokens = 0;
+      })
+      .finally(function () {
+        contextFetchPending = false;
+        refreshContextLabels();
+      });
+  }
+
+  function refreshContextLabels() {
+    if (elRoot && !elRoot.classList.contains('hidden')) {
+      updateContextLabels();
+    }
+    var mobileDash = document.getElementById('mobile-work-dashboard');
+    if (mobileDash) updateContextLabels(mobileDash);
+  }
+
+  function updateContextLabels(root) {
+    var r = resolveRoot(root);
+    if (!r) return;
+
+    var workspaceEl = r.querySelector('[data-welcome-workspace]');
+    if (workspaceEl) {
+      var Store = window.ChatSessionStore;
+      var sessionId = Store && typeof Store.getActiveSessionId === 'function'
+        ? Store.getActiveSessionId()
+        : 'default';
+      var workspace = formatWorkspaceLabel(sessionId);
+      workspaceEl.textContent = workspace.text;
+      if (workspace.title) workspaceEl.setAttribute('title', workspace.title);
+      else workspaceEl.removeAttribute('title');
+    }
+
+    var toolsEl = r.querySelector('[data-welcome-tools]');
+    if (toolsEl) {
+      var tools = formatToolsCountLabel(toolsCount);
+      toolsEl.textContent = tools.text;
+      if (tools.title) toolsEl.setAttribute('title', tools.title);
+      else toolsEl.removeAttribute('title');
+    }
+
+    var contextEl = r.querySelector('[data-welcome-context-size]');
+    if (contextEl) {
+      var size = formatContextSizeLabel(contextMaxTokens, contextUsedTokens);
+      contextEl.textContent = size.text;
+      if (size.title) contextEl.setAttribute('title', size.title);
+      else contextEl.removeAttribute('title');
+    }
+  }
+
+  function bindStoreListener() {
+    if (storeListenerBound) return;
+    var Store = window.ChatSessionStore;
+    if (!Store || typeof Store.onChange !== 'function') return;
+    Store.onChange(function () {
+      refreshContextLabels();
+    });
+    storeListenerBound = true;
   }
 
   function fetchMemoryCount() {
@@ -319,9 +468,11 @@ window.ChatWelcome = (function () {
   function init(opts) {
     opts = opts || {};
     elMessages = opts.elMessages || null;
-    onPromptSelect = typeof opts.onPromptSelect === 'function' ? opts.onPromptSelect : null;
     ensureRoot(!!opts.remoteMode);
+    bindStoreListener();
     fetchMemoryCount();
+    fetchModelContext();
+    fetchToolsCount();
   }
 
   function sync(opts) {
@@ -336,42 +487,38 @@ window.ChatWelcome = (function () {
     setVisible(show);
     if (!show) return;
 
+    applyContextFromOpts(opts);
     updateModeLabel(opts.supervisorMode || 'adaptive');
     updateHarnessLabel(opts);
     updatePipelineLabel(opts);
     updateMemoryLabel();
+    updateContextLabels();
+    bindStoreListener();
     if (memoryCount == null) fetchMemoryCount();
-  }
-
-  function bindDashboardEvents(root, onSelect) {
-    if (!root) return;
-    root.addEventListener('click', function (e) {
-      var btn = e.target && e.target.closest ? e.target.closest('[data-prompt-index]') : null;
-      if (!btn) return;
-      var idx = parseInt(btn.getAttribute('data-prompt-index'), 10);
-      var item = PROMPTS[idx];
-      if (!item || typeof onSelect !== 'function') return;
-      onSelect(item.value);
-    });
+    if (contextMaxTokens == null) fetchModelContext();
+    if (toolsCount == null) fetchToolsCount();
   }
 
   function syncDashboard(root, opts) {
     opts = opts || {};
     if (!root) return;
+    applyContextFromOpts(opts);
     updateModeLabel(opts.supervisorMode || 'adaptive', root);
     updateHarnessLabel(opts, root);
     updatePipelineLabel(opts, root);
     updateMemoryLabel(root);
+    updateContextLabels(root);
+    bindStoreListener();
     if (memoryCount == null) fetchMemoryCount();
+    if (contextMaxTokens == null) fetchModelContext();
+    if (toolsCount == null) fetchToolsCount();
   }
 
   return {
     init: init,
     sync: sync,
     buildDashboardMarkup: buildMarkup,
-    bindDashboardEvents: bindDashboardEvents,
     syncDashboard: syncDashboard,
-    getPrompts: function () { return PROMPTS.slice(); },
     getTips: function () { return TIPS.slice(); },
   };
 })();

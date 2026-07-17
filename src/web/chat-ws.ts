@@ -132,6 +132,7 @@ import {
   resolveToolTraceResultStatus,
 } from './tool-trace-format.js';
 import { extractDiffSource } from './tool-display-extract.js';
+import { buildUserMessageDisplayFields } from './user-message-display.js';
 import {
   capToolTraceDiffSource,
   persistToolTraceDiff,
@@ -458,6 +459,7 @@ async function buildEnqueueInput(
   referencePaths: string[],
   messageId: string | undefined,
   source: 'implicit' | 'explicit',
+  skills: string[] = [],
 ): Promise<TaskEnqueueInput> {
   const persistedInline = await persistInlineImages(
     images.filter((img) => !isSessionImageApiUrl(img)),
@@ -476,6 +478,7 @@ async function buildEnqueueInput(
     messageId,
     images: allImages.length > 0 ? allImages : undefined,
     referencePaths: referencePaths.length > 0 ? referencePaths : undefined,
+    skills: skills.length > 0 ? skills : undefined,
   };
 }
 
@@ -485,15 +488,22 @@ async function persistImplicitQueuedUserMessage(
   taskInput: TaskEnqueueInput,
 ): Promise<void> {
   if (taskInput.source !== 'implicit' || !taskInput.messageId) return;
+  const display = buildUserMessageDisplayFields(
+    taskInput.text,
+    taskInput.referencePaths ?? [],
+    taskInput.skills ?? [],
+  );
   const message = {
     role: 'user',
     id: taskInput.messageId,
-    content: taskInput.text,
+    content: display.content,
+    ...(display.skills ? { skills: display.skills } : {}),
+    ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
     ...(taskInput.images && taskInput.images.length > 0 ? { images: taskInput.images } : {}),
   };
   const persisted = await appendMessages([message], sessionId);
   if (!persisted) return;
-  const autoTitle = await applyFirstPromptSessionTitle(sessionId, taskInput.text);
+  const autoTitle = await applyFirstPromptSessionTitle(sessionId, display.content || taskInput.text);
   broadcastSessionUpdated(
     'user_message',
     autoTitle ? { sessionId, title: autoTitle } : { sessionId },
@@ -1191,6 +1201,8 @@ async function appendMessages(
     status?: string;
     toolCallId?: string;
     images?: string[];
+    skills?: string[];
+    referencePaths?: string[];
     sentAt?: number;
     completedAt?: number;
     turnTokenUsage?: { inputTokens: number; outputTokens: number };
@@ -1640,6 +1652,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               getStructuredMessages: () => getCachedMessages(sid),
               setStructuredMessages: (m) => setCachedMessages(sid, m),
             });
+            clearHarnessRuntimeState(sid);
             let updatedTitle: string | null = null;
             try {
               updatedTitle = await updateSessionMetadataAfterMessageDelete(sid, {
@@ -1756,6 +1769,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           const referencePaths = Array.isArray(msg.referencePaths)
             ? msg.referencePaths.filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0)
             : [];
+          const skills = Array.isArray(msg.skills)
+            ? msg.skills.filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0)
+            : [];
           const messageId = parseClientMessageId(msg.messageId) ?? undefined;
           const queueInsertIndex = typeof msg.queueInsertIndex === 'number'
             ? msg.queueInsertIndex
@@ -1837,6 +1853,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             referencePaths,
             messageId,
             isExplicitNext ? 'explicit' : 'implicit',
+            skills,
           );
           await persistImplicitQueuedUserMessage(runSid, ws, taskInput);
           await enqueueAndMaybeKickoff(runSid, ws, taskInput, queueInsertIndex);
@@ -1976,18 +1993,24 @@ async function handleChatMessage(
   const userSentAt = Date.now();
   const skipUserAppend = options.skipUserMessageAppend ?? false;
   if (!skipUserAppend) {
+    const display = buildUserMessageDisplayFields(
+      message,
+      explicitReferencePaths,
+    );
     const userPersisted = await appendMessages(
       [{
         role: 'user',
-        content: message,
+        content: display.content,
         id: userMsgId,
         sentAt: userSentAt,
+        ...(display.skills ? { skills: display.skills } : {}),
+        ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
         ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
       }],
       runSessionId,
     );
     if (userPersisted) {
-      const autoTitle = await applyFirstPromptSessionTitle(runSessionId, message);
+      const autoTitle = await applyFirstPromptSessionTitle(runSessionId, display.content || message);
       broadcastSessionUpdated(
         'user_message',
         autoTitle ? { sessionId: runSessionId, title: autoTitle } : { sessionId: runSessionId },
@@ -1999,8 +2022,10 @@ async function handleChatMessage(
         message: {
           role: 'user',
           id: userMsgId,
-          content: message,
+          content: display.content,
           sentAt: userSentAt,
+          ...(display.skills ? { skills: display.skills } : {}),
+          ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
           ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
         },
       });

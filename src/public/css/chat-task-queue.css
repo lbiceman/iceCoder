@@ -1,5 +1,6 @@
 .chat-task-queue {
-  margin: 0 4px 10px;
+  width: 100%;
+  margin: 0 0 10px;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--bg-card);
@@ -144,12 +145,5 @@
     min-height: 32px;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-  }
-}
-
-@media (max-width: 768px) {
-  .chat-task-queue {
-    margin-left: 0;
-    margin-right: 0;
   }
 }
