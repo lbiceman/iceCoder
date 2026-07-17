@@ -7,6 +7,7 @@ export interface QueuedTask {
   text: string;
   messageId?: string;
   images?: string[];
+  skills?: string[];
   referencePaths?: string[];
   enqueuedAt: number;
   source: 'implicit' | 'explicit';
@@ -68,6 +69,7 @@ export class TaskQueueManager {
       messageId: task.messageId,
       images: task.images,
       referencePaths: task.referencePaths,
+      skills: task.skills,
       enqueuedAt: Date.now(),
       source: task.source,
     };
@@ -105,6 +107,7 @@ export class TaskQueueManager {
       messageId: task.messageId,
       images: task.images,
       referencePaths: task.referencePaths,
+      skills: task.skills,
       enqueuedAt: Date.now(),
       source: task.source,
     };

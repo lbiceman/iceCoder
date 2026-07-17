@@ -163,6 +163,9 @@ window.ChatCommands = (function () {
       onSelect: function (item, idx) {
         applySelection(idx);
       },
+      onHighlight: function (_item, idx) {
+        cmdSelectedIndex = idx;
+      },
       onClose: function () {
         // 刷新过滤列表时 ChatDropdown.open 会先 close 再 open；状态清理由 hide() 负责。
       },

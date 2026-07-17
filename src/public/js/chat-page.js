@@ -276,6 +276,8 @@ window.ChatPage = (function () {
       messageCount: Session.getMessages().length,
       hasTailContent: hasTailContent,
       isWorkloadActive: isWorkloadActive(),
+      contextMaxTokens: maxContextTokens,
+      contextUsedTokens: usedInputTokens,
       supervisorMode: window.AppRouter && typeof window.AppRouter.getSupervisorMode === 'function'
         ? window.AppRouter.getSupervisorMode()
         : 'adaptive',
@@ -569,6 +571,9 @@ window.ChatPage = (function () {
     }
 
     var displayParts = [];
+    var selectedSkillFilenames = (Skills && typeof Skills.getSelectedSkills === 'function')
+      ? Skills.getSelectedSkills()
+      : [];
     if (appendUserMessageNow && composerBody) displayParts.push(composerBody);
     for (var fi = 0; fi < uploadedFiles.length; fi++) {
       if (appendUserMessageNow) displayParts.push('[file] ' + uploadedFiles[fi].filename);
@@ -576,7 +581,7 @@ window.ChatPage = (function () {
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
     var didAppendUserMessage = false;
-    if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0)) {
+    if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0 || selectedSkillFilenames.length > 0 || referencePaths.length > 0)) {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMessageId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
         ? crypto.randomUUID()
@@ -584,9 +589,11 @@ window.ChatPage = (function () {
       var userMsg = {
         role: 'user',
         id: userMessageId,
-        content: displayParts.join('\n') || '(图片)',
+        content: displayParts.join('\n') || (msgImages.length > 0 ? '(图片)' : ''),
         images: msgImages.length > 0 ? msgImages : undefined,
       };
+      if (selectedSkillFilenames.length > 0) userMsg.skills = selectedSkillFilenames.slice();
+      if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       if (UI.maybeRepartitionTailIfNeeded) {
@@ -647,6 +654,7 @@ window.ChatPage = (function () {
       ? Session.getLastMessage().id
       : undefined;
     var sendOpts = { referencePaths: referencePaths };
+    if (selectedSkillFilenames.length > 0) sendOpts.skills = selectedSkillFilenames.slice();
     if (outboundMessageId) sendOpts.messageId = outboundMessageId;
     if (isExplicitNext) {
       sendOpts.source = 'explicit';
@@ -2082,6 +2090,7 @@ window.ChatPage = (function () {
           '<div class="chat-fade-overlay" aria-hidden="true"></div>' +
           '<div class="pending-images-preview hidden" id="pending-images-preview"></div>' +
           '<div class="file-upload-status hidden" id="file-status"></div>' +
+          '<div class="chat-composer-stack">' +
           '<div class="chat-composer">' +
             '<div class="composer-input">' +
               '<div class="input-wrapper">' +
@@ -2107,6 +2116,7 @@ window.ChatPage = (function () {
                 '</button>' +
               '</div>' +
             '</div>' +
+          '</div>' +
           '</div>' +
           '<input type="file" class="hidden-input" id="file-input" multiple>' +
         '</div>' +
@@ -2168,12 +2178,6 @@ window.ChatPage = (function () {
       window.ChatWelcome.init({
         elMessages: elMessages,
         remoteMode: remoteMode,
-        onPromptSelect: function (text) {
-          if (!elInput) return;
-          UI.setInputValue(text);
-          UI.autoResizeInput();
-          UI.focusInput();
-        },
       });
     }
     if (window.AppShell) {

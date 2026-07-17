@@ -406,7 +406,8 @@
       history.replaceState(null, '', newHash);
     }
 
-    // 顶栏三个 tab 已移入侧边栏：路由 active 态由 ChatSessionSidebar 监听 hashchange 维护。
+    // 侧栏 tab 高亮依赖 hashchange；replaceState 不会触发，需手动同步。
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
 
     // 离开 memory/skills：停掉 fetch/AbortController；DOM 子树保留隐藏以备复用
     if (

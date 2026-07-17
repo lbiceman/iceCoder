@@ -41,8 +41,10 @@ window.ChatTaskQueue = (function () {
     root = document.createElement('div');
     root.className = 'chat-task-queue hidden';
     root.id = 'chat-task-queue';
+    var stack = container.querySelector('.chat-composer-stack');
     var composer = container.querySelector('.chat-composer');
-    if (composer) container.insertBefore(root, composer);
+    if (stack && composer) stack.insertBefore(root, composer);
+    else if (composer) container.insertBefore(root, composer);
   }
 
   function render() {
