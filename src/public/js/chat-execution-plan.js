@@ -130,6 +130,9 @@ window.ChatExecutionPlan = (function () {
   var bannerDetailOpen = false;
   var roundVisibleLimit = 20;
   var roundTimelineBound = false;
+  var roundTimelineBoundEl = null;
+  var roundTimelineClickHandler = null;
+  var roundTimelineKeydownHandler = null;
   var cachedLoadMoreHidden = -1;
   var flowPersistTimer = null;
   var flowPersistHandler = null;
@@ -361,6 +364,7 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
     snapshotTimelineEl = host.querySelector('#etl-snapshot-timeline');
+    bindRoundTimelineEvents();
   }
 
   /** 绑定最小化按钮 + Tab 切换（桌面/移动共用）。 */
@@ -435,6 +439,7 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl = null;
     roundTimelineEl = null;
     snapshotTimelineEl = null;
+    unbindRoundTimelineEvents();
     mountedMode = null;
   }
 
@@ -2406,30 +2411,58 @@ window.ChatExecutionPlan = (function () {
     applyRoundExpandPresentation(node, record);
   }
 
-  function bindRoundTimelineEvents() {
-    if (!roundTimelineEl || roundTimelineBound) return;
-    roundTimelineBound = true;
-    roundTimelineEl.addEventListener('click', function (event) {
-      try {
-        var target = event.target;
-        if (!target || !target.closest) return;
-        var loadMore = target.closest('#etl-round-load-more');
-        if (loadMore) {
-          roundVisibleLimit += 8;
-          cachedLoadMoreHidden = -1;
-          syncRoundTimeline({ loadMore: true });
-          return;
-        }
-        var row = target.closest('.etl-round-row');
-        if (!row) return;
-        var node = row.closest('.etl-round-node');
-        if (!node || !node.dataset.iteration) return;
-        if (target.closest('.etl-round-toggle')) event.preventDefault();
-        toggleRoundExpanded(node.dataset.iteration);
-      } catch (e) {
-        safeWarn('roundTimelineClick', e);
+  function handleRoundTimelineInteraction(event) {
+    try {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      var loadMore = target.closest('#etl-round-load-more');
+      if (loadMore) {
+        roundVisibleLimit += 8;
+        cachedLoadMoreHidden = -1;
+        syncRoundTimeline({ loadMore: true });
+        return;
       }
-    });
+      var row = target.closest('.etl-round-row');
+      if (!row) return;
+      var node = row.closest('.etl-round-node');
+      if (!node || !node.dataset.iteration) return;
+      if (event.type === 'keydown') {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+      } else if (target.closest('.etl-round-toggle')) {
+        event.preventDefault();
+      }
+      toggleRoundExpanded(node.dataset.iteration);
+    } catch (e) {
+      safeWarn('roundTimelineClick', e);
+    }
+  }
+
+  function unbindRoundTimelineEvents() {
+    if (roundTimelineBoundEl) {
+      if (roundTimelineClickHandler) {
+        roundTimelineBoundEl.removeEventListener('click', roundTimelineClickHandler);
+      }
+      if (roundTimelineKeydownHandler) {
+        roundTimelineBoundEl.removeEventListener('keydown', roundTimelineKeydownHandler);
+      }
+    }
+    roundTimelineBoundEl = null;
+    roundTimelineClickHandler = null;
+    roundTimelineKeydownHandler = null;
+    roundTimelineBound = false;
+  }
+
+  function bindRoundTimelineEvents() {
+    if (!roundTimelineEl) return;
+    if (roundTimelineBound && roundTimelineBoundEl === roundTimelineEl) return;
+    unbindRoundTimelineEvents();
+    roundTimelineClickHandler = handleRoundTimelineInteraction;
+    roundTimelineKeydownHandler = handleRoundTimelineInteraction;
+    roundTimelineEl.addEventListener('click', roundTimelineClickHandler);
+    roundTimelineEl.addEventListener('keydown', roundTimelineKeydownHandler);
+    roundTimelineBoundEl = roundTimelineEl;
+    roundTimelineBound = true;
   }
 
   function makeRoundNode(record, options) {
