@@ -382,9 +382,14 @@ select:focus-visible,
   background: linear-gradient(to bottom, transparent, var(--surface-page));
 }
 
-.chat-composer {
+.chat-composer-stack {
   width: min(100%, var(--content-max-width));
   margin: 0 auto;
+}
+
+.chat-composer {
+  width: 100%;
+  margin: 0;
   border-color: var(--border-color);
   border-radius: var(--radius-xl);
   background: var(--surface-raised);
