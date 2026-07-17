@@ -569,6 +569,9 @@ window.ChatPage = (function () {
     }
 
     var displayParts = [];
+    var selectedSkillFilenames = (Skills && typeof Skills.getSelectedSkills === 'function')
+      ? Skills.getSelectedSkills()
+      : [];
     if (appendUserMessageNow && composerBody) displayParts.push(composerBody);
     for (var fi = 0; fi < uploadedFiles.length; fi++) {
       if (appendUserMessageNow) displayParts.push('[file] ' + uploadedFiles[fi].filename);
@@ -576,7 +579,7 @@ window.ChatPage = (function () {
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
     var didAppendUserMessage = false;
-    if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0)) {
+    if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0 || selectedSkillFilenames.length > 0 || referencePaths.length > 0)) {
       UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       var userMessageId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
         ? crypto.randomUUID()
@@ -584,9 +587,11 @@ window.ChatPage = (function () {
       var userMsg = {
         role: 'user',
         id: userMessageId,
-        content: displayParts.join('\n') || '(图片)',
+        content: displayParts.join('\n') || (msgImages.length > 0 ? '(图片)' : ''),
         images: msgImages.length > 0 ? msgImages : undefined,
       };
+      if (selectedSkillFilenames.length > 0) userMsg.skills = selectedSkillFilenames.slice();
+      if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       if (UI.maybeRepartitionTailIfNeeded) {

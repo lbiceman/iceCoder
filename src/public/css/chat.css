@@ -581,6 +581,56 @@
   opacity: 0.85;
 }
 
+.message.user .msg-skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.message.user .msg-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 500;
+  font-family: monospace;
+  color: var(--chip-skill-fg);
+  background: color-mix(in srgb, var(--chip-skill-bg) 72%, var(--msg-user-bg));
+  border: 1px solid color-mix(in srgb, var(--chip-skill-border) 80%, transparent);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message.user .msg-file-ref-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.message.user .msg-file-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 500;
+  font-family: monospace;
+  color: var(--chip-file-fg);
+  background: color-mix(in srgb, var(--chip-file-bg) 72%, var(--msg-user-bg));
+  border: 1px solid color-mix(in srgb, var(--chip-file-border) 80%, transparent);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .message:is(.assistant, .agent) {
   align-self: flex-start;
   background: var(--msg-agent-bg);
@@ -1274,8 +1324,10 @@
 .cmd-item:not(:first-child) {
   margin-top: 5px;
 }
-.cmd-item:hover,
-.cmd-item.active {
+.cmd-item:hover {
+  background: var(--accent-light);
+}
+.cmd-dropdown:not(:has(.cmd-item:hover)) .cmd-item.active {
   background: var(--accent-light);
 }
 .cmd-name {
