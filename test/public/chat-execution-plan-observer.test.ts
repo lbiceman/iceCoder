@@ -1046,6 +1046,62 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await mobile.close();
   });
 
+  it('面板卸载后重新挂载时执行流轮次仍可点击展开', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate((plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const prefs = (window as any).EtlPrefs;
+      const ts = plan.createdAt + 100;
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'round-1-read',
+        toolName: 'read_file',
+        ts,
+      });
+      panel.applyToolActivity({
+        type: 'tool_result',
+        iteration: 1,
+        toolCallId: 'round-1-read',
+        toolName: 'read_file',
+        toolSuccess: true,
+        ts: ts + 500,
+      });
+
+      const clickFirstRound = () => {
+        const row = document.querySelector('#etl-round-timeline .etl-round-row') as HTMLElement | null;
+        row?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      };
+      const isExpanded = () => !!document.querySelector('#etl-round-timeline .etl-round-node.is-expanded');
+
+      clickFirstRound();
+      const expandedBefore = isExpanded();
+      if (!expandedBefore) return { expandedBefore, remounted: false, toggledAfterRemount: false };
+
+      return prefs.set({ showTransparencyPanel: false }).then(() => {
+        const removed = !document.querySelector('#exec-transparency-panel');
+        return prefs.set({ showTransparencyPanel: true }).then(() => {
+          panel.setVisible(true);
+          panel.setPlan(plan);
+          const before = isExpanded();
+          clickFirstRound();
+          const after = isExpanded();
+          return {
+            expandedBefore,
+            remounted: removed,
+            toggledAfterRemount: before !== after,
+          };
+        });
+      });
+    }, makePlan());
+
+    expect(result.expandedBefore).toBe(true);
+    expect(result.remounted).toBe(true);
+    expect(result.toggledAfterRemount).toBe(true);
+    await page.close();
+  });
+
   it('刷新后默认展示执行流 Tab', async () => {
     const page = await loadPanel();
     const switched = await page.evaluate((plan) => {
