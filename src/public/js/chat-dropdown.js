@@ -16,6 +16,7 @@
  *     placementRef: 'anchor' | 'toolbar',               // top 定位基准：anchor 或 composer-toolbar 顶边
  *     variant: 'default' | 'model',                       // model：仅名称、普通字体样式
  *     markAnchorActive: true,                             // 是否在 anchor 上添加 active（技能 # 下拉应传 false）
+ *     onHighlight: function (item, idx) { ... },          // 鼠标悬停条目时（供键盘选中索引同步）
  *   });
  *   ChatDropdown.close();
  *   ChatDropdown.isOpen();
@@ -45,6 +46,7 @@ window.ChatDropdown = (function () {
     placementRef: 'anchor',
     variant: 'default',
     markAnchorActive: true,
+    onHighlight: null,
   };
   var outsideBound = false;
 
@@ -112,6 +114,30 @@ window.ChatDropdown = (function () {
       elContainer.classList.add('is-scrollable');
     } else {
       elContainer.classList.remove('is-scrollable');
+    }
+    bindItemHover();
+  }
+
+  function setHighlightedIndex(idx) {
+    if (!elContainer) return;
+    var items = elContainer.querySelectorAll('.cmd-item');
+    for (var j = 0; j < items.length; j++) {
+      items[j].classList.toggle('active', j === idx);
+    }
+  }
+
+  function bindItemHover() {
+    if (!elContainer) return;
+    var items = elContainer.querySelectorAll('.cmd-item');
+    for (var i = 0; i < items.length; i++) {
+      items[i].addEventListener('mouseenter', function () {
+        var idx = parseInt(this.getAttribute('data-index'), 10);
+        if (isNaN(idx)) return;
+        setHighlightedIndex(idx);
+        if (typeof current.onHighlight === 'function') {
+          try { current.onHighlight(current.items[idx], idx); } catch (_e) { /* ignore */ }
+        }
+      });
     }
   }
 
@@ -206,6 +232,7 @@ window.ChatDropdown = (function () {
     current.items = [];
     current.onSelect = null;
     current.onClose = null;
+    current.onHighlight = null;
     if (typeof cb === 'function') {
       try { cb(); } catch (_e) { /* ignore */ }
     }
@@ -226,6 +253,7 @@ window.ChatDropdown = (function () {
     current.placementRef = opts.placementRef || 'anchor';
     current.variant = opts.variant || 'default';
     current.markAnchorActive = opts.markAnchorActive !== false;
+    current.onHighlight = typeof opts.onHighlight === 'function' ? opts.onHighlight : null;
     ensureContainer();
     bindOutside();
     elContainer.classList.remove('is-model-menu');

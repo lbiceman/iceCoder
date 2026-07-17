@@ -1827,6 +1827,58 @@ window.ChatUI = (function () {
     if (el) mountTokenUsageBar(el, msg.turnTokenUsage);
   }
 
+  function resolveSkillChipLabel(filename) {
+    var fn = String(filename || '').replace(/^#/, '');
+    if (!fn) return '';
+    if (window.ChatSkills && typeof window.ChatSkills.getSkills === 'function') {
+      var skills = window.ChatSkills.getSkills();
+      for (var i = 0; i < skills.length; i++) {
+        if (skills[i].filename === fn) {
+          return skills[i].name || fn;
+        }
+      }
+    }
+    return fn;
+  }
+
+  function createMsgSkillChipsRow(skillFilenames) {
+    if (!skillFilenames || !skillFilenames.length) return null;
+    var row = document.createElement('div');
+    row.className = 'msg-skill-chips';
+    for (var i = 0; i < skillFilenames.length; i++) {
+      var fn = String(skillFilenames[i] || '').replace(/^#/, '');
+      if (!fn) continue;
+      var chip = document.createElement('span');
+      chip.className = 'msg-skill-chip';
+      chip.title = fn;
+      chip.textContent = '#' + resolveSkillChipLabel(fn);
+      row.appendChild(chip);
+    }
+    return row.childNodes.length ? row : null;
+  }
+
+  function basenameFromPath(fullPath) {
+    if (!fullPath) return '';
+    var parts = String(fullPath).replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1] || fullPath;
+  }
+
+  function createMsgFileRefChipsRow(filePaths) {
+    if (!filePaths || !filePaths.length) return null;
+    var row = document.createElement('div');
+    row.className = 'msg-file-ref-chips';
+    for (var i = 0; i < filePaths.length; i++) {
+      var absPath = String(filePaths[i] || '').trim();
+      if (!absPath) continue;
+      var chip = document.createElement('span');
+      chip.className = 'msg-file-ref-chip';
+      chip.title = absPath;
+      chip.textContent = '@' + basenameFromPath(absPath);
+      row.appendChild(chip);
+    }
+    return row.childNodes.length ? row : null;
+  }
+
   function createMessageEl(msg, stripStatusTagFn, msgIndex) {
     var el = document.createElement('div');
     el.className = 'message ' + msg.role;
@@ -1852,6 +1904,16 @@ window.ChatUI = (function () {
     }
     el.appendChild(createMsgLabelRow(msg.role, getMessageTimestamp(msg), restoreOpts));
 
+    if (msg.role === 'user' && msg.skills && msg.skills.length) {
+      var skillRow = createMsgSkillChipsRow(msg.skills);
+      if (skillRow) el.appendChild(skillRow);
+    }
+
+    if (msg.role === 'user' && msg.referencePaths && msg.referencePaths.length) {
+      var fileRefRow = createMsgFileRefChipsRow(msg.referencePaths);
+      if (fileRefRow) el.appendChild(fileRefRow);
+    }
+
     if (msg.images && msg.images.length > 0) {
       var imgRow = document.createElement('div');
       imgRow.className = 'msg-images';
@@ -1870,10 +1932,14 @@ window.ChatUI = (function () {
     if (msg.role === 'system') {
       content.className = 'msg-content msg-system-content';
       content.textContent = msg.content || '';
-    } else {
-      content.textContent = msg.role === 'agent' ? stripStatusTagFn(msg.content) : msg.content;
+      el.appendChild(content);
+    } else if (msg.role === 'agent') {
+      content.textContent = stripStatusTagFn(msg.content);
+      el.appendChild(content);
+    } else if (msg.content) {
+      content.textContent = msg.content;
+      el.appendChild(content);
     }
-    el.appendChild(content);
 
     var tokenBar = createTokenUsageBar(msg.turnTokenUsage);
     if (tokenBar) el.appendChild(tokenBar);
