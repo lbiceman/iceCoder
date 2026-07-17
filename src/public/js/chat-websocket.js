@@ -322,6 +322,7 @@ window.ChatWebSocket = (function () {
     if (opts.messageId) payload.messageId = opts.messageId;
     if (opts.images && opts.images.length > 0) payload.images = opts.images;
     if (opts.referencePaths && opts.referencePaths.length > 0) payload.referencePaths = opts.referencePaths;
+    if (opts.skills && opts.skills.length > 0) payload.skills = opts.skills;
     if (typeof opts.queueInsertIndex === 'number') payload.queueInsertIndex = opts.queueInsertIndex;
     if (opts.source) payload.source = opts.source;
     if (opts.command) payload.command = opts.command;

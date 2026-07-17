@@ -8,6 +8,10 @@ import path from 'node:path';
 
 import type { UnifiedMessage } from '../llm/types.js';
 import type { UiChatMessage } from '../types/intent-checkpoint.js';
+import {
+  extractUserMessageText,
+  isSystemInjectedUserContent,
+} from './harness-message-utils.js';
 import { readUiSessionMessages, writeUiSessionMessages } from './intent-checkpoint-capture.js';
 import {
   loadCheckpointIndex,
@@ -15,6 +19,75 @@ import {
   removeCheckpoint,
   rewriteIntentCheckpoint,
 } from './intent-checkpoint-store.js';
+
+function isRealStructuredUserMessage(message: UnifiedMessage): boolean {
+  if (message.role !== 'user') return false;
+  const text = extractUserMessageText(message.content ?? '');
+  if (!text.trim()) return false;
+  return !isSystemInjectedUserContent(text);
+}
+
+function findSkillGuideIndexForDeletedRequest(
+  structuredMessages: UnifiedMessage[],
+  deletedUserContent: string,
+): number {
+  const needle = deletedUserContent.trim();
+  if (!needle) return -1;
+  return structuredMessages.findIndex((message) => {
+    if (message.role !== 'user' || typeof message.content !== 'string') return false;
+    return message.content.includes('[System: Skill File Guide]')
+      && message.content.includes(needle);
+  });
+}
+
+function findDeletedTurnRange(
+  structuredMessages: UnifiedMessage[],
+  uiMessages: UiChatMessage[],
+  messageId: string,
+  deletedUserContent: string,
+): { start: number; end: number } | null {
+  const uiIdx = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
+  if (uiIdx < 0) return null;
+
+  let realUiBefore = 0;
+  for (let i = 0; i < uiIdx; i++) {
+    if (uiMessages[i].role === 'user') realUiBefore++;
+  }
+
+  let start = findNthRealStructuredUserIndex(structuredMessages, realUiBefore);
+  if (start < 0) {
+    start = findSkillGuideIndexForDeletedRequest(structuredMessages, deletedUserContent);
+  }
+  if (start < 0) return null;
+
+  const end = findNthRealStructuredUserIndex(structuredMessages, realUiBefore + 1);
+  return { start, end: end < 0 ? structuredMessages.length : end };
+}
+
+function findNthRealStructuredUserIndex(
+  structuredMessages: UnifiedMessage[],
+  targetIndex: number,
+): number {
+  if (targetIndex < 0) return -1;
+  let seen = 0;
+  for (let i = 0; i < structuredMessages.length; i++) {
+    if (!isRealStructuredUserMessage(structuredMessages[i])) continue;
+    if (seen === targetIndex) return i;
+    seen++;
+  }
+  return -1;
+}
+
+function stripResumeCheckpointMessages(messages: UnifiedMessage[]): UnifiedMessage[] {
+  return messages.filter((message) => {
+    if (message.role !== 'user' || typeof message.content !== 'string') return true;
+    return !message.content.trim().startsWith('<resume-checkpoint>');
+  });
+}
+
+async function clearActiveTaskCheckpoint(sessionDir: string, sessionId: string): Promise<void> {
+  await fs.unlink(path.join(sessionDir, `${sessionId}.checkpoint.json`)).catch(() => {});
+}
 
 async function readStructuredMessages(
   sessionDir: string,
@@ -63,26 +136,25 @@ export function removeStructuredUserMessage(
   structuredMessages: UnifiedMessage[],
   uiMessages: UiChatMessage[],
   messageId: string,
+  deletedUserContent = '',
 ): UnifiedMessage[] | null {
-  const idx = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
-  if (idx < 0) return null;
+  const uiIdx = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
+  if (uiIdx < 0) return null;
 
-  let userCountBefore = 0;
-  for (let i = 0; i < idx; i++) {
-    if (uiMessages[i].role === 'user') userCountBefore++;
+  const range = findDeletedTurnRange(
+    structuredMessages,
+    uiMessages,
+    messageId,
+    deletedUserContent,
+  );
+  if (!range) {
+    return stripResumeCheckpointMessages(structuredMessages);
   }
 
-  let seenUsers = 0;
-  for (let i = 0; i < structuredMessages.length; i++) {
-    if (structuredMessages[i].role === 'user') {
-      if (seenUsers === userCountBefore) {
-        return [...structuredMessages.slice(0, i), ...structuredMessages.slice(i + 1)];
-      }
-      seenUsers++;
-    }
-  }
-
-  return structuredMessages;
+  return stripResumeCheckpointMessages([
+    ...structuredMessages.slice(0, range.start),
+    ...structuredMessages.slice(range.end),
+  ]);
 }
 
 export interface DeleteUserMessageParams {
@@ -97,6 +169,7 @@ async function removeMessageFromCheckpointHistory(
   sessionDir: string,
   sessionId: string,
   messageId: string,
+  deletedUserContent = '',
 ): Promise<void> {
   const index = await loadCheckpointIndex(sessionDir, sessionId);
   const targetIdx = index.entries.findIndex((entry) => entry.messageId === messageId);
@@ -109,6 +182,7 @@ async function removeMessageFromCheckpointHistory(
       archive.structuredMessages,
       archive.uiMessages,
       messageId,
+      deletedUserContent,
     );
     const nextUi = removeUiUserMessage(archive.uiMessages, messageId);
     if (!nextUi) continue;
@@ -143,19 +217,26 @@ export async function deleteUserMessageConversation(
   const structured = (cached && cached.length > 0)
     ? cached
     : await readStructuredMessages(sessionDir, sessionId);
-  const nextStructured = removeStructuredUserMessage(structured, uiMessages, messageId) ?? structured;
+  const deletedUserContent = typeof deletedMessage?.content === 'string' ? deletedMessage.content : '';
+  const nextStructured = removeStructuredUserMessage(
+    structured,
+    uiMessages,
+    messageId,
+    deletedUserContent,
+  ) ?? structured;
 
   await writeUiSessionMessages(sessionDir, sessionId, nextUi);
   await writeStructuredMessages(sessionDir, sessionId, nextStructured);
   params.setStructuredMessages?.(nextStructured.length > 0 ? nextStructured : undefined);
-  await removeMessageFromCheckpointHistory(sessionDir, sessionId, messageId);
+  await removeMessageFromCheckpointHistory(sessionDir, sessionId, messageId, deletedUserContent);
+  await clearActiveTaskCheckpoint(sessionDir, sessionId);
 
   const remainingUsers = nextUi.filter((message) => message.role === 'user');
   const firstRemainingContent = remainingUsers.find((message) =>
     typeof message.content === 'string' && message.content.trim());
   return {
     deletedMessageId: messageId,
-    deletedUserContent: typeof deletedMessage?.content === 'string' ? deletedMessage.content : '',
+    deletedUserContent,
     firstRemainingUserContent:
       typeof firstRemainingContent?.content === 'string' ? firstRemainingContent.content : null,
     remainingUserCount: remainingUsers.length,
