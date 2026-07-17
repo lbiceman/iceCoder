@@ -2090,6 +2090,7 @@ window.ChatPage = (function () {
           '<div class="chat-fade-overlay" aria-hidden="true"></div>' +
           '<div class="pending-images-preview hidden" id="pending-images-preview"></div>' +
           '<div class="file-upload-status hidden" id="file-status"></div>' +
+          '<div class="chat-composer-stack">' +
           '<div class="chat-composer">' +
             '<div class="composer-input">' +
               '<div class="input-wrapper">' +
@@ -2115,6 +2116,7 @@ window.ChatPage = (function () {
                 '</button>' +
               '</div>' +
             '</div>' +
+          '</div>' +
           '</div>' +
           '<input type="file" class="hidden-input" id="file-input" multiple>' +
         '</div>' +
