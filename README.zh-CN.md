@@ -1,6 +1,6 @@
-﻿# iceCoder
+# iceCoder
 
-**自托管的工具化 LLM 运行时治理层** — 用 **L1/L2 双模监管**、Checkpoint、文件记忆与受控工具循环，让长编码任务不跑偏（Harness 实测 **217+ 轮**稳定）。
+**自托管 AI 编程助手，桌面端 + 移动端全覆盖** — L1/L2 双模监管、MCP 工具集成、会话检查点与文件记忆，Harness 实测 217+ 轮稳定运行。Windows 一键安装，零依赖开箱即用。
 
 [English README](./README.md) · [**使用说明与命令**](./docs/使用文档.md) · [项目介绍](./docs/项目介绍.md) · [Project guide](./docs/PROJECT-GUIDE.md)
 
