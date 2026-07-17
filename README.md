@@ -1,6 +1,6 @@
-﻿# iceCoder
+# iceCoder
 
-**Self-hosted runtime governance for tool-using LLM agents** — keeps long coding sessions on goal through **L1/L2 dual-mode supervision**, checkpoints, file memory, and a governed tool loop (**217+ rounds verified**).
+**Self-hosted AI coding agent with desktop & mobile UI** — L1/L2 dual-mode supervision, MCP tool integration, session checkpoints, and 217+ round verified stability. One-click Windows install, zero dependencies.
 
 [中文简介](./README.zh-CN.md) · [**Usage & commands**](./docs/使用文档.md) · [Full guide](./docs/PROJECT-GUIDE.md) · [项目介绍](./docs/项目介绍.md)
 
