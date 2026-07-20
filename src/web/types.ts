@@ -10,7 +10,10 @@ export interface ProviderConfig {
   id: string;
   apiUrl: string;
   apiKey: string;
+  /** 模型名称；多个模型用英文逗号分隔，如 `mimo2.5-pro,mimo-2.5` */
   modelName: string;
+  /** 当前选中的模型名（须在 modelName 解析结果内）；未设置时使用第一个 */
+  activeModelName?: string;
   /**
    * OpenAI 兼容 API 模式：`chat_completions`（默认）或 `responses`（Bedrock GPT-5.4/5.5 等）。
    * 也可在 `parameters.apiMode` 中设置。

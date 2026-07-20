@@ -54,4 +54,13 @@ describe('openAiAdapterConfigFromProvider', () => {
     });
     expect(cfg.apiKey).toBe('sk-env-vendor');
   });
+
+  it('uses activeModelName when modelName lists multiple models', () => {
+    const cfg = openAiAdapterConfigFromProvider({
+      ...base,
+      modelName: 'mimo2.5-pro,mimo-2.5',
+      activeModelName: 'mimo-2.5',
+    });
+    expect(cfg.model).toBe('mimo-2.5');
+  });
 });
