@@ -445,6 +445,7 @@ export class Harness {
     //       否则前一任务残留信号会让本任务首轮直接进入 takeover 候选。
     this.supervisorBridge?.resetForNewTask();
     this.graphExecutor.resetGraph();
+    onStep?.({ type: 'execution_plan_clear' });
 
     let messages: UnifiedMessage[];
     const messageContent = userContentBlocks ?? userMessage;

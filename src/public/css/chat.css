@@ -1519,6 +1519,53 @@
 .cmd-dropdown.is-model-menu .cmd-item.active .cmd-name {
   color: var(--accent);
 }
+.cmd-dropdown.is-model-menu .cmd-item.is-separator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: auto;
+  min-height: 22px;
+  padding: 4px 12px;
+  margin: 2px 0;
+  pointer-events: none;
+  cursor: default;
+  background: transparent;
+  border: none;
+}
+.cmd-dropdown.is-model-menu .cmd-item.is-separator:first-child {
+  margin-top: 0;
+}
+.cmd-dropdown.is-model-menu .cmd-item.is-separator .cmd-separator-line {
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--border, #2a3140) 80%, transparent);
+}
+.cmd-dropdown.is-model-menu .cmd-item.is-separator .cmd-separator-label {
+  flex: 0 0 auto;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted, #98a2b3);
+  letter-spacing: 0.02em;
+}
+.cmd-dropdown.is-model-menu .cmd-item.is-separator.is-separator-plain {
+  display: block;
+  height: 1px;
+  min-height: 1px;
+  padding: 0;
+  margin: 4px 10px;
+  background: color-mix(in srgb, var(--border, #2a3140) 80%, transparent);
+}
+.cmd-dropdown.is-model-menu .cmd-item.is-separator:hover,
+.cmd-dropdown.is-model-menu .cmd-item.is-separator.is-separator-plain:hover {
+  background: transparent;
+}
+.cmd-dropdown.is-model-menu .cmd-item.is-separator.is-separator-plain:hover {
+  background: color-mix(in srgb, var(--border, #2a3140) 80%, transparent);
+}
 .btn-cmd-plus {
   width: 28px;
   height: 28px;

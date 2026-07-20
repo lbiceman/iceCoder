@@ -32,7 +32,7 @@
 
 ![桌面端 — 通用设置：安全选项与执行透明层](./docs/assets/desktop-config-general.png)
 
-**设置 · 模型配置** — 模型提供者、API 密钥、温度与上下文上限：
+**设置 · 模型配置** — 模型提供者、API 密钥、多模型列表（逗号分隔）、温度与上下文上限：
 
 ![桌面端 — 模型配置：提供者列表与配置表单](./docs/assets/desktop-config-model.png)
 
@@ -48,7 +48,7 @@
 
 与桌面共用同一 bundle，路由 `#/m/*`，底栏四 Tab（工作 / 记忆 / 技能 / 设置）：
 
-**工作** — 聊天详情、模型选择与 token 统计：
+**工作** — 聊天详情、底部多模型切换与 token 统计：
 
 ![移动端 — 工作聊天页（深色主题）](./docs/assets/mobile-work-chat.png)
 
@@ -133,6 +133,16 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 - **聊天 `#` 选择器**：输入框输入 `#` 挂载技能 chip，发送时将技能正文注入提示词。
 - **目录约定**：根目录 `.md` 或 `文件夹/skill.md`（可带脚本）；内置指引见 [`data/skills/创建技能.md`](./data/skills/创建技能.md)。
 - **API**：`GET/DELETE /api/skills` — Agent 创建/修改技能**只能**写入 `ICE_SKILLS_DIR`。
+
+### 多模型与图片识别
+
+同一 Provider 可在 **`modelName` 中配置多个模型**（英文逗号分隔，如 `gpt-4o,deepseek-chat`），聊天页底部（桌面 / 移动端 H5）**一键切换**，选中结果写入 `activeModelName` 并持久化到 `data/config.json`。
+
+- **Provider 级 `supportsVision`**：默认 `true`，先发多模态请求；API 拒绝图片 payload 时，**自动去图重试**并注入「当前模型不支持图片识别」说明（不修改会话文件）。
+- **`supportsVision: false`**：不发图片块，粘贴/上传的图片落盘到 `imagesCache`，提示模型用 **`image_read`** 读取绝对路径。
+- **`image_read`** 工具始终跳过 vision fallback，保证必须看到原图。
+
+配置示例与字段说明见 [`docs/使用文档.md` §配置](./docs/使用文档.md#配置)。
 
 ### 多会话、移动端 H5 与跨端同步
 

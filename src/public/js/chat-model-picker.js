@@ -24,21 +24,63 @@ window.ChatModelPicker = (function () {
   var refreshPromise = null;
   var chipClickBound = false;
 
-  function isCurrent(p, def) {
-    if (!def) return false;
-    if (def.id && p.id) return p.id === def.id;
-    return p.modelName === def.modelName;
+  function parseModelNames(modelName) {
+    if (window.ModelNames && typeof window.ModelNames.parseModelNames === 'function') {
+      return window.ModelNames.parseModelNames(modelName);
+    }
+    return (modelName || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  function resolveActiveModelName(provider) {
+    if (window.ModelNames && typeof window.ModelNames.resolveActiveModelName === 'function') {
+      return window.ModelNames.resolveActiveModelName(provider);
+    }
+    var names = parseModelNames(provider && provider.modelName);
+    return names.length ? names[0] : ((provider && provider.modelName) || '').trim();
+  }
+
+  function isCurrentSelection(provider, modelName, def) {
+    if (!def || !provider) return false;
+    if (def.id && provider.id) {
+      return provider.id === def.id && modelName === resolveActiveModelName(def);
+    }
+    return provider.modelName === def.modelName && modelName === resolveActiveModelName(def);
+  }
+
+  function apiUrlGroupLabel(apiUrl) {
+    if (window.ModelNames && typeof window.ModelNames.apiUrlGroupLabel === 'function') {
+      return window.ModelNames.apiUrlGroupLabel(apiUrl);
+    }
+    return '';
   }
 
   function buildItems() {
     var def = cachedProviders.find(function (p) { return p.isDefault; }) || cachedProviders[0];
-    return cachedProviders.map(function (p) {
-      return {
-        key: p.id,
-        name: p.modelName || p.id || 'model',
-        isCurrent: isCurrent(p, def),
-      };
-    });
+    var items = [];
+    for (var i = 0; i < cachedProviders.length; i++) {
+      var p = cachedProviders[i];
+      items.push({
+        type: 'separator',
+        key: 'sep-' + i,
+        label: apiUrlGroupLabel(p.apiUrl),
+      });
+      var names = parseModelNames(p.modelName);
+      if (!names.length) {
+        names = [p.modelName || p.id || 'model'];
+      }
+      for (var j = 0; j < names.length; j++) {
+        var name = names[j];
+        items.push({
+          type: 'item',
+          key: p.id + '::' + name,
+          providerId: p.id,
+          modelName: name,
+          name: name,
+          isCurrent: isCurrentSelection(p, name, def),
+        });
+      }
+    }
+    return items;
   }
 
   function defaultProvider() {
@@ -48,24 +90,27 @@ window.ChatModelPicker = (function () {
   function writeLabel() {
     if (!elLabel) return;
     var def = defaultProvider();
-    elLabel.textContent = def ? (def.modelName || '未配置') : '未配置';
+    elLabel.textContent = def ? (resolveActiveModelName(def) || '未配置') : '未配置';
   }
 
-  function selectDefault(target) {
+  function selectDefault(target, activeModel) {
     if (!target) return;
     var list = cachedProviders.slice();
     var current = list.find(function (p) { return p.isDefault; }) || list[0];
-    if (current && current.id === target.id) return;
+    var currentActive = current ? resolveActiveModelName(current) : '';
+    if (current && current.id === target.id && currentActive === activeModel) return;
     if (elLabel) elLabel.textContent = '切换中…';
 
     var payload = list.map(function (p) {
+      var isTarget = p.id === target.id;
       return {
         id: p.id,
         apiUrl: p.apiUrl,
         apiKey: p.apiKey,
         modelName: p.modelName,
+        activeModelName: isTarget ? activeModel : p.activeModelName,
         parameters: p.parameters || {},
-        isDefault: p.id === target.id,
+        isDefault: isTarget,
         supportsVision: p.supportsVision !== undefined ? p.supportsVision : true,
         maxContextTokens: p.maxContextTokens,
         requestTimeoutMs: p.requestTimeoutMs,
@@ -94,7 +139,9 @@ window.ChatModelPicker = (function () {
       })
       .catch(function (err) {
         var def = defaultProvider();
-        if (elLabel) elLabel.textContent = def && def.modelName ? def.modelName : '未配置';
+        if (elLabel) {
+          elLabel.textContent = def ? (resolveActiveModelName(def) || '未配置') : '未配置';
+        }
         Notification.error('切换模型失败: ' + (err && err.message ? err.message : err));
       });
   }
@@ -124,8 +171,9 @@ window.ChatModelPicker = (function () {
         minWidth: Math.ceil(chipRect.width),
         maxWidth: 300,
         onSelect: function (item) {
-          var target = cachedProviders.find(function (p) { return p.id === item.key; });
-          if (target) selectDefault(target);
+          if (!item || item.type === 'separator') return;
+          var target = cachedProviders.find(function (p) { return p.id === item.providerId; });
+          if (target) selectDefault(target, item.modelName);
         },
       });
     }).catch(function () {

@@ -24,6 +24,10 @@ const api = {
   petDragEnd: (x: number, y: number) =>
     ipcRenderer.send(IPC.PET_DRAG_END, { x, y }),
 
+  /** true=透明区点击穿透；false=悬浮窗接收鼠标（仅 canvas 命中时应为 false）。 */
+  petSetMousePassthrough: (passthrough: boolean) =>
+    ipcRenderer.send(IPC.PET_SET_MOUSE_PASSTHROUGH, { passthrough }),
+
   /** 工作区。 */
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_PICK),
   getWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.WORKSPACE_GET),

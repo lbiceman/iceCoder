@@ -316,4 +316,50 @@ describe('ETL bridge 生命周期', () => {
     });
     await page.close();
   });
+
+  it('notifyNewTurnStarted 清空上一轮 goal/steps 并抑制 REST /plan 写回', async () => {
+    const page = await loadLifecycle();
+    const result = await page.evaluate((plan) => {
+      const bridge = (window as any).ChatExecutionPlanBridge;
+      const panel = (window as any).ChatExecutionPlan;
+      bridge.handleStep({ type: 'task_graph_init', plan: {
+        ...plan,
+        goal: '上一轮反构图目标',
+        intent: 'troubleshoot',
+        phase: '实施修改',
+        progress: 40,
+        steps: [
+          { id: 's0', title: '步骤一', status: 'done' },
+          { id: 's1', title: '步骤二', status: 'done' },
+          { id: 's2', title: '步骤三', status: 'running' },
+          { id: 's3', title: '步骤四', status: 'pending' },
+          { id: 's4', title: '步骤五', status: 'pending' },
+        ],
+      }});
+      const before = {
+        goal: document.querySelector('#etl-overview-goal')?.textContent,
+        progress: document.querySelector('#etl-overview-progress-meta')?.textContent,
+        planId: panel.getPlan()?.planId,
+      };
+      bridge.notifyNewTurnStarted();
+      const afterClear = {
+        goal: document.querySelector('#etl-overview-goal')?.textContent || null,
+        progress: document.querySelector('#etl-overview-progress-meta')?.textContent || null,
+        planId: panel.getPlan()?.planId || null,
+      };
+      (window as any).fetch = () => Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ plan }),
+      });
+      bridge.notifySessionUpdated();
+      return { before, afterClear, planIdAfterRest: panel.getPlan()?.planId || null };
+    }, makePlan());
+
+    expect(result.before.goal).toContain('上一轮反构图目标');
+    expect(result.before.progress).toMatch(/2\s*\/\s*5/);
+    expect(result.afterClear.planId).toBeNull();
+    expect(result.afterClear.goal).toBeNull();
+    expect(result.planIdAfterRest).toBeNull();
+    await page.close();
+  });
 });

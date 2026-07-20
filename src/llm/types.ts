@@ -111,6 +111,8 @@ export interface LLMOptions {
   requestTimeoutMs?: number;
   /** 为 true 时跳过上层 LLMAdapter 的指数退避重试（Dream 等长请求用） */
   skipRetry?: boolean;
+  /** 为 true 时 API 报错后不自动 strip 图片重试（如 image_read 必须看到原图） */
+  skipVisionFallback?: boolean;
   [key: string]: any;
 }
 

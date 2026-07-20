@@ -92,20 +92,23 @@ cp data/config.example.json data/config.json
   "providers": [
     {
       "id": "default",
-      "providerName": "openai",
       "apiUrl": "https://api.example.com/v1",
       "apiKey": "sk-your-api-key-here",
-      "modelName": "your-model",
+      "modelName": "gpt-4o,deepseek-chat",
+      "activeModelName": "gpt-4o",
       "parameters": {
         "temperature": 0.5,
         "maxTokens": 8192
       },
+      "supportsVision": true,
       "maxContextTokens": 131072,
       "isDefault": true
     }
   ]
 }
 ```
+
+`modelName` 支持英文逗号分隔多个模型；聊天页切换会更新 `activeModelName`。`supportsVision` 控制是否先发多模态图片（默认 `true`，API 拒绝时自动去图重试）。详见 [`docs/使用文档.md`](./docs/使用文档.md#配置)。
 
 环境变量（`ICE_DATA_DIR`、`ICE_SKILLS_DIR`、`ICE_SUPERVISOR_SHADOW` 等）见 [`docs/环境变量.md`](./docs/环境变量.md)。监管档位写在 `data/config.json` 的 **`supervisorMode`**（`off` / `adaptive` / `strict`）。
 

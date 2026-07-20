@@ -27,7 +27,65 @@ var root = document.getElementById('pet-root');
 var canvas = document.getElementById('pet-canvas');
 var pet = window.SessionPet.create(root, { enableDrag: false });
 
-function initFloatingWindowDrag(el) {
+/**
+ * 透明区 OS 级点击穿透：默认穿透，鼠标在 canvas 上时取消穿透以便拖/双击。
+ * 依赖主进程 setIgnoreMouseEvents(true, { forward: true })。
+ */
+function initFloatingClickThrough(el, dragHooks) {
+  var api = window.iceDesktop;
+  if (!api || typeof api.petSetMousePassthrough !== 'function' || !el) return null;
+
+  var passthrough = true;
+  var pointerLocked = false;
+
+  function setPassthrough(next) {
+    if (passthrough === next) return;
+    passthrough = next;
+    api.petSetMousePassthrough(next);
+  }
+
+  function isOverInteractive(clientX, clientY) {
+    var rect = el.getBoundingClientRect();
+    return (
+      clientX >= rect.left &&
+      clientX <= rect.right &&
+      clientY >= rect.top &&
+      clientY <= rect.bottom
+    );
+  }
+
+  function syncFromPoint(clientX, clientY) {
+    if (pointerLocked) {
+      setPassthrough(false);
+      return;
+    }
+    setPassthrough(!isOverInteractive(clientX, clientY));
+  }
+
+  document.addEventListener('mousemove', function (e) {
+    syncFromPoint(e.clientX, e.clientY);
+  });
+
+  document.addEventListener('mouseleave', function () {
+    if (!pointerLocked) setPassthrough(true);
+  });
+
+  if (dragHooks) {
+    dragHooks.onPointerDown = function () {
+      pointerLocked = true;
+      setPassthrough(false);
+    };
+    dragHooks.onPointerUp = function (clientX, clientY) {
+      pointerLocked = false;
+      syncFromPoint(clientX, clientY);
+    };
+  }
+
+  setPassthrough(true);
+  return { syncFromPoint: syncFromPoint };
+}
+
+function initFloatingWindowDrag(el, dragHooks) {
   var api = window.iceDesktop;
   if (!api || typeof api.petDragMove !== 'function' || !el) return { moved: false };
 
@@ -48,6 +106,9 @@ function initFloatingWindowDrag(el) {
     startY = e.screenY;
     lastX = e.screenX;
     lastY = e.screenY;
+    if (dragHooks && typeof dragHooks.onPointerDown === 'function') {
+      dragHooks.onPointerDown();
+    }
     try { el.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
     e.preventDefault();
   });
@@ -75,6 +136,9 @@ function initFloatingWindowDrag(el) {
     dragActive = false;
     el.classList.remove('pet-dragging');
     try { el.releasePointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
+    if (dragHooks && typeof dragHooks.onPointerUp === 'function') {
+      dragHooks.onPointerUp(e.clientX, e.clientY);
+    }
   }
 
   el.addEventListener('pointerup', endDrag);
@@ -89,7 +153,9 @@ function initFloatingWindowDrag(el) {
   };
 }
 
-var dragState = canvas ? initFloatingWindowDrag(canvas) : null;
+var dragHooks = {};
+var dragState = canvas ? initFloatingWindowDrag(canvas, dragHooks) : null;
+initFloatingClickThrough(canvas, dragHooks);
 
 function applySnapshot(snap) {
   if (!snap || !pet) return;

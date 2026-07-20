@@ -115,6 +115,21 @@ export function createPetFloatingWindow(opts: PetWindowOptions): BrowserWindow {
 
   win.setAlwaysOnTop(true, 'floating');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  enableFloatingClickThrough(win);
 
   return win;
+}
+
+/** 默认整窗穿透；配合 renderer hit-test，仅 canvas 区域取消穿透。 */
+export function enableFloatingClickThrough(win: BrowserWindow): void {
+  win.setIgnoreMouseEvents(true, { forward: true });
+}
+
+/** @param passthrough true=点击穿透到下层窗口；false=本窗接收鼠标（拖/双击冰豆） */
+export function setFloatingMousePassthrough(win: BrowserWindow, passthrough: boolean): void {
+  if (passthrough) {
+    win.setIgnoreMouseEvents(true, { forward: true });
+  } else {
+    win.setIgnoreMouseEvents(false);
+  }
 }

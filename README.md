@@ -32,7 +32,7 @@
 
 ![Desktop — general settings: security and execution overlay](./docs/assets/desktop-config-general.png)
 
-**Settings · Model** — providers, API keys, temperature, context limit:
+**Settings · Model** — providers, API keys, comma-separated multi-model list, temperature, context limit:
 
 ![Desktop — model settings: provider list and configuration form](./docs/assets/desktop-config-model.png)
 
@@ -48,7 +48,7 @@
 
 Same bundle as desktop; routes `#/m/*`; bottom tabs: Work / Memory / Skills / Settings.
 
-**Work** — chat detail, model picker, token stats:
+**Work** — chat detail, bottom multi-model picker, token stats:
 
 ![Mobile — work chat (dark theme)](./docs/assets/mobile-work-chat.png)
 
@@ -133,6 +133,16 @@ Reusable **Markdown skill files** live under `data/skills/` (`ICE_SKILLS_DIR`, s
 - **Chat `#` picker**: type `#` in the composer to attach skills as chips; bodies are injected into the prompt at send time.
 - **Layouts**: flat `name.md` or `folder/skill.md` with optional scripts; bundled guide [`data/skills/创建技能.md`](./data/skills/创建技能.md).
 - **API**: `GET/DELETE /api/skills` — agent-created skills must stay under `ICE_SKILLS_DIR` only.
+
+### Multi-model & vision
+
+Each provider can list **multiple models** in **`modelName`** (comma-separated, e.g. `gpt-4o,deepseek-chat`). Switch at the bottom of the chat page (desktop / mobile H5); the choice is stored as **`activeModelName`** in `data/config.json`.
+
+- **Provider-level `supportsVision`** (default `true`): send multimodal requests first; if the API rejects image payloads, **strip images and retry once** with an explicit “model does not support vision” notice (session files unchanged).
+- **`supportsVision: false`**: no image blocks — pasted/uploaded images are persisted under `imagesCache` and the model is guided to use **`image_read`** with absolute paths.
+- **`image_read`** always sets `skipVisionFallback` so the tool must receive the original image.
+
+See [`docs/使用文档.md` §配置](./docs/使用文档.md#配置) for examples.
 
 ### Multi-session, mobile H5 & cross-device sync
 
