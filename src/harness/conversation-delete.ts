@@ -40,7 +40,21 @@ function findSkillGuideIndexForDeletedRequest(
   });
 }
 
-function findDeletedTurnRange(
+/** 技能引导块、含图 user 等与 UI 不完全对齐；删除时需连带移除紧随其后的 assistant。 */
+function shouldRemoveFollowingAssistant(message: UnifiedMessage): boolean {
+  if (message.role !== 'user') return false;
+  if (typeof message.content === 'string') {
+    return message.content.includes('[System: Skill File Guide]');
+  }
+  if (Array.isArray(message.content)) {
+    return message.content.some(
+      (part) => typeof part === 'object' && part !== null && 'type' in part && part.type === 'image',
+    );
+  }
+  return false;
+}
+
+function findDeletedStructuredRange(
   structuredMessages: UnifiedMessage[],
   uiMessages: UiChatMessage[],
   messageId: string,
@@ -60,8 +74,14 @@ function findDeletedTurnRange(
   }
   if (start < 0) return null;
 
-  const end = findNthRealStructuredUserIndex(structuredMessages, realUiBefore + 1);
-  return { start, end: end < 0 ? structuredMessages.length : end };
+  let end = start + 1;
+  if (shouldRemoveFollowingAssistant(structuredMessages[start])) {
+    while (end < structuredMessages.length && structuredMessages[end].role !== 'user') {
+      end++;
+    }
+  }
+
+  return { start, end };
 }
 
 function findNthRealStructuredUserIndex(
@@ -141,7 +161,7 @@ export function removeStructuredUserMessage(
   const uiIdx = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
   if (uiIdx < 0) return null;
 
-  const range = findDeletedTurnRange(
+  const range = findDeletedStructuredRange(
     structuredMessages,
     uiMessages,
     messageId,

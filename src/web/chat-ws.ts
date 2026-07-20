@@ -320,7 +320,7 @@ function recordPersistedToolTraceDiff(
   toolCallId: string | undefined,
   diffSource: string | null | undefined,
 ): void {
-  if (!toolCallId || !diffSource) return;
+  if (!toolCallId || !diffSource || isSessionTombstoned(sessionId)) return;
   void persistToolTraceDiff(SESSIONS_DIR, sessionId, toolCallId, diffSource);
 }
 
@@ -344,6 +344,7 @@ export function getProcessingSessionIds(): string[] {
  * 若删的是 active session，调用方应先 `switch_session` 到其它会话。
  */
 export function purgeSessionRuntimeCaches(sessionId: string): void {
+  tombstoneSession(sessionId);
   structuredCache.delete(sessionId);
   fileBrowserStateBySession.delete(sessionId);
   clearHarnessRuntimeState(sessionId);
@@ -563,11 +564,23 @@ function resolveConfirm(confirmId: string, approved: boolean, reason: 'reply' | 
   entry.resolve(approved);
 }
 
+/** 已删除会话 tombstone：阻止异步刷盘在 purge 之后 resurrect 文件 */
+const tombstonedSessionIds = new Set<string>();
+
+export function isSessionTombstoned(sessionId: string): boolean {
+  return tombstonedSessionIds.has(sessionId);
+}
+
+function tombstoneSession(sessionId: string): void {
+  tombstonedSessionIds.add(sessionId);
+}
+
 /** 保存结构化消息到磁盘（防抖，避免频繁写入） */
 const saveTimerMap = new Map<string, ReturnType<typeof setTimeout>>();
 
 /** 立即将指定 session 的结构化缓存写入磁盘（switch_session 前须 await） */
 async function flushStructuredMessagesNow(sessionId: string): Promise<void> {
+  if (isSessionTombstoned(sessionId)) return;
   await flushStructuredSessionToDisk(
     SESSIONS_DIR,
     sessionId,
@@ -617,10 +630,12 @@ async function ensureGlobalActiveSessionId(targetId: string): Promise<void> {
 
 function saveStructuredMessages(messages: UnifiedMessage[], sessionId?: string): void {
   const id = sessionId || activeSessionId;
+  if (isSessionTombstoned(id)) return;
   structuredCache.set(id, messages);
   const existing = saveTimerMap.get(id);
   if (existing) clearTimeout(existing);
   const timer = setTimeout(async () => {
+    if (isSessionTombstoned(id)) return;
     try {
       await writeStructuredMessagesFile(SESSIONS_DIR, id, messages);
     } catch (err) {
@@ -1209,6 +1224,7 @@ async function appendMessages(
   }[],
   sessionId: string = activeSessionId,
 ): Promise<boolean> {
+  if (isSessionTombstoned(sessionId)) return true;
   if (msgs.length === 0) return true;
   try {
     await fsPromises.mkdir(SESSIONS_DIR, { recursive: true });
@@ -2333,70 +2349,72 @@ async function handleChatMessage(
 
     // 缓存完整的结构化消息历史并持久化到磁盘（写入本次运行锁定的 sessionId，
     // 即使用户在执行过程中切换了 activeSessionId，也确保历史归属正确的旧 session）
-    setCachedMessages(runSessionId, result.messages);
-    await flushStructuredSessionToDisk(SESSIONS_DIR, runSessionId, result.messages);
-    saveStructuredMessages(result.messages, runSessionId);
-
-    // 写入 AI 回复 + 工具调用记录到会话文件
-    const agentMsgId = randomUUID();
-    const sessionEntries: any[] = [];
-
-    // write_file 输出常无 unified diff：从工作区合成并持久化索引，供历史区 F5 还原
-    for (const trace of toolTraceBatch) {
-      if (trace.toolName !== 'write_file' || trace.diffSource || !trace.toolCallId || !trace.detail) {
-        continue;
-      }
-      const synthesized = await resolveToolDiffForSession({
-        sessionsDir: SESSIONS_DIR,
-        sessionId: runSessionId,
-        defaultWorkDir: getDefaultWorkDir(),
-        toolCallId: trace.toolCallId,
-        relPath: trace.detail,
-        toolName: 'write_file',
-      });
-      if (!synthesized) continue;
-      const capped = capToolTraceDiffSource(synthesized);
-      trace.diffSource = capped;
-      recordPersistedToolTraceDiff(runSessionId, trace.toolCallId, capped);
-    }
-
-    // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
-    for (const trace of toolTraceBatch) {
-      const entry: Record<string, unknown> = {
-        role: 'tool_trace',
-        parentId: agentMsgId,
-        toolName: trace.toolName,
-        detail: trace.detail,
-        status: trace.status,
-        toolCallId: trace.toolCallId,
-      };
-      if (trace.diffSource) entry.diffSource = trace.diffSource;
-      sessionEntries.push(entry as (typeof sessionEntries)[number]);
-    }
-
-    const turnTokenUsage = {
-      inputTokens: result.loopState.totalInputTokens,
-      outputTokens: result.loopState.totalOutputTokens,
-    };
-
-    // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
     let turnAgentMsgId: string | undefined;
-    if (result.content) {
-      sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId, turnTokenUsage });
-      turnAgentMsgId = agentMsgId;
-    } else if (toolTraceBatch.length > 0) {
-      sessionEntries.push({
-        role: 'agent',
-        content: '（本轮仅有工具调用，无文字回复）',
-        id: agentMsgId,
-        turnTokenUsage,
-      });
-      turnAgentMsgId = agentMsgId;
-    }
+    if (!isSessionTombstoned(runSessionId)) {
+      setCachedMessages(runSessionId, result.messages);
+      await flushStructuredSessionToDisk(SESSIONS_DIR, runSessionId, result.messages);
+      saveStructuredMessages(result.messages, runSessionId);
 
-    if (sessionEntries.length > 0) {
-      const persisted = await appendMessages(sessionEntries, runSessionId);
-      if (persisted) broadcastSessionUpdated('turn_complete', undefined, ws);
+      // 写入 AI 回复 + 工具调用记录到会话文件
+      const agentMsgId = randomUUID();
+      const sessionEntries: any[] = [];
+
+      // write_file 输出常无 unified diff：从工作区合成并持久化索引，供历史区 F5 还原
+      for (const trace of toolTraceBatch) {
+        if (trace.toolName !== 'write_file' || trace.diffSource || !trace.toolCallId || !trace.detail) {
+          continue;
+        }
+        const synthesized = await resolveToolDiffForSession({
+          sessionsDir: SESSIONS_DIR,
+          sessionId: runSessionId,
+          defaultWorkDir: getDefaultWorkDir(),
+          toolCallId: trace.toolCallId,
+          relPath: trace.detail,
+          toolName: 'write_file',
+        });
+        if (!synthesized) continue;
+        const capped = capToolTraceDiffSource(synthesized);
+        trace.diffSource = capped;
+        recordPersistedToolTraceDiff(runSessionId, trace.toolCallId, capped);
+      }
+
+      // 工具调用记录（role: 'tool_trace'，通过 parentId 关联到 agent 消息）
+      for (const trace of toolTraceBatch) {
+        const entry: Record<string, unknown> = {
+          role: 'tool_trace',
+          parentId: agentMsgId,
+          toolName: trace.toolName,
+          detail: trace.detail,
+          status: trace.status,
+          toolCallId: trace.toolCallId,
+        };
+        if (trace.diffSource) entry.diffSource = trace.diffSource;
+        sessionEntries.push(entry as (typeof sessionEntries)[number]);
+      }
+
+      const turnTokenUsage = {
+        inputTokens: result.loopState.totalInputTokens,
+        outputTokens: result.loopState.totalOutputTokens,
+      };
+
+      // agent 消息（无文字但有工具时仍写入占位，避免孤儿 tool_trace）
+      if (result.content) {
+        sessionEntries.push({ role: 'agent', content: result.content, id: agentMsgId, turnTokenUsage });
+        turnAgentMsgId = agentMsgId;
+      } else if (toolTraceBatch.length > 0) {
+        sessionEntries.push({
+          role: 'agent',
+          content: '（本轮仅有工具调用，无文字回复）',
+          id: agentMsgId,
+          turnTokenUsage,
+        });
+        turnAgentMsgId = agentMsgId;
+      }
+
+      if (sessionEntries.length > 0) {
+        const persisted = await appendMessages(sessionEntries, runSessionId);
+        if (persisted) broadcastSessionUpdated('turn_complete', undefined, ws);
+      }
     }
 
     // 推送最终结果到 WebSocket（stream_end 通知前端流式结束）
@@ -2429,10 +2447,12 @@ async function handleChatMessage(
     stopReason = result.loopState.stopReason;
   } finally {
     clearInterval(pulseTimer);
-    try {
-      await finalizeIntentCheckpointTurn(SESSIONS_DIR, runSessionId, userMsgId);
-    } catch (turnSnapErr) {
-      console.error('[chat-ws] intent checkpoint turn snapshot finalize failed:', turnSnapErr);
+    if (!isSessionTombstoned(runSessionId)) {
+      try {
+        await finalizeIntentCheckpointTurn(SESSIONS_DIR, runSessionId, userMsgId);
+      } catch (turnSnapErr) {
+        console.error('[chat-ws] intent checkpoint turn snapshot finalize failed:', turnSnapErr);
+      }
     }
     if (sessionAbortControllers.get(runSessionId) === abortController) {
       sessionAbortControllers.delete(runSessionId);

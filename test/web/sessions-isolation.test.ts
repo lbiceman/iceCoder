@@ -92,7 +92,7 @@ describe('Sessions REST: delete + migrate (multi-session isolation)', () => {
     expect(moved).toBe('# legacy notes');
   });
 
-  it('DELETE /:id removes full file family including .session-notes.md', async () => {
+  it('DELETE /:id removes full file family including checkpoints subtree', async () => {
     const sessionId = 'sess-del';
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(
@@ -106,12 +106,21 @@ describe('Sessions REST: delete + migrate (multi-session isolation)', () => {
       `${sessionId}.json`,
       `${sessionId}.structured.json`,
       `${sessionId}.checkpoint.json`,
+      `${sessionId}.checkpoint-index.json`,
       `${sessionId}.workspace.json`,
       `${sessionId}.session-notes.md`,
+      `${sessionId}.task-queue.json`,
+      `${sessionId}.tool-trace-diffs.json`,
+      `${sessionId}.json.deadbeef.tmp`,
     ];
     for (const name of family) {
       await fs.writeFile(path.join(tempDir, name), name, 'utf-8');
     }
+    const checkpointDir = path.join(tempDir, sessionId, 'checkpoints');
+    await fs.mkdir(checkpointDir, { recursive: true });
+    await fs.writeFile(path.join(checkpointDir, 'msg-1.intent.json'), '{}', 'utf-8');
+    await fs.mkdir(path.join(tempDir, sessionId, 'analysis'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, sessionId, 'analysis', 'note.md'), '# x', 'utf-8');
 
     const res = await fetch(`${baseUrl}/${sessionId}`, { method: 'DELETE' });
     expect(res.ok).toBe(true);
@@ -119,6 +128,7 @@ describe('Sessions REST: delete + migrate (multi-session isolation)', () => {
     for (const name of family) {
       expect(await exists(path.join(tempDir, name))).toBe(false);
     }
+    expect(await exists(path.join(tempDir, sessionId))).toBe(false);
   });
 
   it('DELETE invokes registered runtime-cache cleanup hook', async () => {
