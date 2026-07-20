@@ -52,6 +52,7 @@ window.ChatUI = (function () {
 
     if (elMessages) {
       elMessages.addEventListener('scroll', onMessagesScroll, { passive: true });
+      setupScrollIntentListeners();
     }
     ensureChatLayout();
     ensureJumpBottomButton();
@@ -555,7 +556,39 @@ window.ChatUI = (function () {
   }
 
   function notifyTailLayoutChange() {
+    if (!autoScrollEnabled) return;
     scheduleScrollIfSticky();
+  }
+
+  function cancelStickyScroll() {
+    if (!scrollRafId) return;
+    cancelAnimationFrame(scrollRafId);
+    scrollRafId = 0;
+  }
+
+  /** 用户上滚/拖拽时立即脱离贴底，避免流式增高在 suppressScrollSync 期间抢回滚动条 */
+  function pinScrollAwayFromBottom() {
+    cancelStickyScroll();
+    userPinnedScroll = true;
+    autoScrollEnabled = false;
+    updateFollowBottomClass();
+    updateJumpBottomButton();
+  }
+
+  function setupScrollIntentListeners() {
+    if (!elMessages || elMessages._scrollIntentBound) return;
+    elMessages._scrollIntentBound = true;
+    elMessages.addEventListener('wheel', function (e) {
+      if (e.deltaY < 0) pinScrollAwayFromBottom();
+    }, { passive: true });
+    var touchStartY = 0;
+    elMessages.addEventListener('touchstart', function (e) {
+      if (e.touches && e.touches.length === 1) touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    elMessages.addEventListener('touchmove', function (e) {
+      if (!e.touches || e.touches.length !== 1) return;
+      if (e.touches[0].clientY - touchStartY > 8) pinScrollAwayFromBottom();
+    }, { passive: true });
   }
 
   function notifyHistoryLayoutChange(originNode) {
@@ -725,12 +758,14 @@ window.ChatUI = (function () {
       applyScrollToBottom();
       requestAnimationFrame(function () {
         if (!elMessages) return;
+        if (userPinnedScroll) {
+          suppressScrollSync = false;
+          updateJumpBottomButton();
+          return;
+        }
         applyScrollToBottom();
         suppressScrollSync = false;
-        userPinnedScroll = false;
-        autoScrollEnabled = true;
-        updateFollowBottomClass();
-        updateJumpBottomButton();
+        syncAutoScrollFromViewport();
       });
     });
   }
@@ -764,8 +799,7 @@ window.ChatUI = (function () {
   function setupTailResizeObserver() {
     if (typeof ResizeObserver === 'undefined' || tailResizeObserver) return;
     tailResizeObserver = new ResizeObserver(function () {
-      if (userPinnedScroll) return;
-      if (!autoScrollEnabled && !isNearBottom()) return;
+      if (userPinnedScroll || !autoScrollEnabled) return;
       scheduleScrollIfSticky();
     });
     if (elTailRoot) tailResizeObserver.observe(elTailRoot);

@@ -637,8 +637,11 @@ window.ChatPage = (function () {
       streamChunksReceived = false;
       visibleStreamChunksReceived = false;
       pendingTurnTokenUsage = null;
-      // 工具 Tab 只展示本轮用户输入触发的调用；新提示词发送时清空上一轮记录。
-      if (window.ChatExecutionPlan
+      // 新一轮用户输入：清空工作台 goal/steps/执行流，避免上一轮反构图状态残留。
+      if (window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.notifyNewTurnStarted === 'function') {
+        window.ChatExecutionPlanBridge.notifyNewTurnStarted();
+      } else if (window.ChatExecutionPlan
         && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
         window.ChatExecutionPlan.resetToolActivity();
       }
@@ -686,6 +689,8 @@ window.ChatPage = (function () {
     WS.sendStop();
 
     Pet.removeThinking(isStreaming, WS.isProcessing());
+    UI.clearReasoningStream();
+    if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
 
     var messages = Session.getMessages();
     var lastMsg = Session.getLastMessage();
