@@ -29,6 +29,11 @@ import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor
 import { isAppConfigReady } from '../../config/config-readiness.js';
 import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config/resolve-api-key.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
+import {
+  normalizeProviderActiveModel,
+  parseModelNames,
+  resolveActiveModelName,
+} from '../../config/parse-model-names.js';
 import { applyRuntimeDataEnvDefaults } from '../../cli/paths.js';
 import {
   DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
@@ -85,10 +90,11 @@ export async function resolveDefaultChatModelMeta(
     const providers = normalizeDefaultFlags(parsed.providers ?? []);
     const p = providers.find(pp => pp.isDefault) ?? providers[0];
     if (!p) return null;
+    const activeModel = resolveActiveModelName(p);
     return {
-      modelName: p.modelName || '',
-      maxContextTokens: p.maxContextTokens ?? getModelMaxContext(p.modelName),
-      maxOutputTokens: p.parameters?.maxTokens ?? getModelMaxOutputTokens(p.modelName),
+      modelName: activeModel,
+      maxContextTokens: p.maxContextTokens ?? getModelMaxContext(activeModel),
+      maxOutputTokens: p.parameters?.maxTokens ?? getModelMaxOutputTokens(activeModel),
     };
   } catch {
     return null;
@@ -116,10 +122,10 @@ export async function resolveDefaultSupportsVision(
 /** 去掉旧版 providerName 并保证 id 存在 */
 function sanitizeProvider(provider: ProviderConfig & { providerName?: unknown }, index: number): ProviderConfig {
   const normalized = normalizeProvider(provider, index);
-  return {
+  return normalizeProviderActiveModel({
     ...normalized,
     supportsVision: normalized.supportsVision ?? true,
-  };
+  });
 }
 
 /** 验证单个提供者配置：无效返回错误文案，合法返回 null（apiKey 允许来自环境变量） */
@@ -133,7 +139,7 @@ function validateProvider(provider: ProviderConfig): string | null {
     const hint = candidates.length > 0 ? `，或设置环境变量 ${candidates.join(' / ')}` : '';
     return `API 密钥不能为空（可在配置中填写${hint}）`;
   }
-  if (!provider.modelName || provider.modelName.trim() === '') {
+  if (parseModelNames(provider.modelName).length === 0) {
     return '模型名称不能为空';
   }
   return null;
@@ -261,7 +267,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
           apiKeySource: resolved.source,
           ...(fromEnv && resolved.envVar ? { apiKeyEnvVar: resolved.envVar } : {}),
           // 优先用配置文件中的 maxContextTokens，没有才根据模型名推断
-          maxContextTokens: provider.maxContextTokens || getModelMaxContext(provider.modelName),
+          maxContextTokens: provider.maxContextTokens || getModelMaxContext(resolveActiveModelName(sanitized)),
         };
       });
 

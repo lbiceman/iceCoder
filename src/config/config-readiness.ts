@@ -4,6 +4,7 @@
 
 import fs from 'fs/promises';
 import type { IceCoderConfigFile, ProviderConfig } from '../web/types.js';
+import { parseModelNames } from './parse-model-names.js';
 import {
   PLACEHOLDER_API_KEY_MARKERS,
   isPlaceholderApiKey,
@@ -17,7 +18,7 @@ export { PLACEHOLDER_API_KEY_MARKERS, isPlaceholderApiKey };
 export function isProviderReady(provider: ProviderConfig): boolean {
   if (!provider.apiUrl?.trim()) return false;
   if (!resolveProviderApiKey(provider).apiKey) return false;
-  if (!provider.modelName?.trim()) return false;
+  if (parseModelNames(provider.modelName).length === 0) return false;
   return true;
 }
 

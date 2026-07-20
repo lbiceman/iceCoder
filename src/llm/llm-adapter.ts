@@ -18,6 +18,11 @@ import type {
 import { TokenCounter } from './token-counter.js';
 import { estimateStringTokens } from './token-estimator.js';
 import { isAbortError } from './abort-error.js';
+import {
+  isImagePayloadRejectedError,
+  messagesContainImages,
+  stripImagesFromMessages,
+} from './vision-fallback.js';
 
 /**
  * 默认重试配置。
@@ -165,12 +170,29 @@ export class LLMAdapter implements LLMAdapterInterface {
     const provider = this.resolveProvider(options);
     const merged = this.mergeAbortSignal(options);
 
-    const response = merged.skipRetry
-      ? await provider.chat(messages, merged)
-      : await this.withRetry(() => provider.chat(messages, merged));
-
-    this.tokenCounter.record(response.usage);
-    return response;
+    try {
+      const response = merged.skipRetry
+        ? await provider.chat(messages, merged)
+        : await this.withRetry(() => provider.chat(messages, merged));
+      this.tokenCounter.record(response.usage);
+      return response;
+    } catch (error) {
+      if (
+        merged.skipVisionFallback
+        || !messagesContainImages(messages)
+        || isAbortError(error)
+        || !isImagePayloadRejectedError(error)
+      ) {
+        throw error;
+      }
+      const stripped = stripImagesFromMessages(messages);
+      console.warn(
+        '[LLM] API 拒绝图片 payload，已从本次请求移除图片并重试（会话文件未修改）',
+      );
+      const response = await provider.chat(stripped, { ...merged, skipRetry: true, skipVisionFallback: true });
+      this.tokenCounter.record(response.usage);
+      return response;
+    }
   }
 
   /**
@@ -187,26 +209,39 @@ export class LLMAdapter implements LLMAdapterInterface {
     const provider = this.resolveProvider(options);
     const merged = this.mergeAbortSignal(options);
 
-    let response: LLMResponse;
-    if (merged.skipRetry) {
-      response = await provider.stream(messages, callback, merged);
-    } else {
-      // 防止重试导致重复输出：一旦本次尝试已经向调用方推送过任何内容
-      // （正文或 reasoning），就不能再重试——否则重试会从头重放，调用方会收到重复 delta。
-      // 仅当尚未产出任何 chunk 时才允许重试（覆盖"连接建立即失败"等典型可重试场景）。
-      let emittedAny = false;
-      const trackingCallback: StreamCallback = (chunk, done) => {
-        if (chunk) emittedAny = true;
-        callback(chunk, done);
-      };
-      response = await this.withRetry(
-        () => provider.stream(messages, trackingCallback, merged),
-        () => !emittedAny,
-      );
-    }
+    let emittedAny = false;
+    const trackingCallback: StreamCallback = (chunk, done) => {
+      if (chunk) emittedAny = true;
+      callback(chunk, done);
+    };
 
-    this.tokenCounter.record(response.usage);
-    return response;
+    try {
+      const response = merged.skipRetry
+        ? await provider.stream(messages, trackingCallback, merged)
+        : await this.withRetry(
+          () => provider.stream(messages, trackingCallback, merged),
+          () => !emittedAny,
+        );
+      this.tokenCounter.record(response.usage);
+      return response;
+    } catch (error) {
+      if (
+        merged.skipVisionFallback
+        || !messagesContainImages(messages)
+        || isAbortError(error)
+        || emittedAny
+        || !isImagePayloadRejectedError(error)
+      ) {
+        throw error;
+      }
+      const stripped = stripImagesFromMessages(messages);
+      console.warn(
+        '[LLM] API 拒绝图片 payload，已从本次请求移除图片并重试（会话文件未修改）',
+      );
+      const response = await provider.stream(stripped, callback, { ...merged, skipRetry: true, skipVisionFallback: true });
+      this.tokenCounter.record(response.usage);
+      return response;
+    }
   }
 
   /**
