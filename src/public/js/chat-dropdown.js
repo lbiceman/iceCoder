@@ -101,11 +101,11 @@ window.ChatDropdown = (function () {
       var desc = it.description != null ? it.description : (it.desc || '');
       if (desc === '' && it.apiUrl && current.variant !== 'model') desc = it.apiUrl;
       var isCurrent = !!it.isCurrent;
-      var prefix = it.prefix || '';
       var title = (desc ? desc + ' · ' : '') + (it.key || name);
+      // 面板内只展示命令名；prefix（~ / /）由触发方式隐含，选中时再拼完整指令
       html +=
         '<div class="cmd-item' + (isCurrent ? ' active' : '') + '" data-index="' + i + '" role="menuitem" title="' + escapeHtml(title) + '">' +
-          '<span class="cmd-name">' + escapeHtml(prefix + name) + '</span>' +
+          '<span class="cmd-name">' + escapeHtml(name) + '</span>' +
           (desc ? '<span class="cmd-desc">' + escapeHtml(desc) + '</span>' : '') +
         '</div>';
     }

@@ -31,6 +31,8 @@ window.ChatExecutionPlanBridge = (function () {
   var syncGeneration = 0;       // REST 请求代次，旧响应不得覆盖较新会话
   /** exit_forced 后抑制 REST 重同步，直到新一轮 task_graph / plan init */
   var planFootDismissed = false;
+  /** 新一轮用户输入已清空面板时，忽略 REST /plan 返回的上一轮计划。 */
+  var restPlanSuppressed = false;
   /** 已应用默认展开策略的 session + plan，避免同一计划重连时重复收起。 */
   var defaultCollapseApplied = Object.create(null);
   var lastShowPanelPref = prefShowPanel();
@@ -53,6 +55,16 @@ window.ChatExecutionPlanBridge = (function () {
     var store = getFlowStore();
     if (store && typeof store.clear === 'function') {
       store.clear(sessionId || getActiveSessionId());
+    }
+  }
+
+  function clearPlanStateForSession(sessionId) {
+    currentPlanId = null;
+    planFootDismissed = false;
+    clearSessionFlow(sessionId || getActiveSessionId());
+    if (window.ChatExecutionPlan) {
+      window.ChatExecutionPlan.clear();
+      if (!enabled) window.ChatExecutionPlan.setVisible(false);
     }
   }
 
@@ -148,6 +160,7 @@ window.ChatExecutionPlanBridge = (function () {
 
   function applyRestPlan(plan, stored) {
     if (!window.ChatExecutionPlan) return;
+    if (restPlanSuppressed && plan) return;
     if (!plan) {
       var live = window.ChatExecutionPlan.getPlan
         ? window.ChatExecutionPlan.getPlan()
@@ -310,12 +323,7 @@ window.ChatExecutionPlanBridge = (function () {
 
     // 独立于 enabled：上一轮残留 UI 在非计划型对话时也必须清掉
     if (step.type === 'execution_plan_clear') {
-      currentPlanId = null;
-      clearSessionFlow(getActiveSessionId());
-      if (window.ChatExecutionPlan) {
-        window.ChatExecutionPlan.clear();
-        if (!enabled) window.ChatExecutionPlan.setVisible(false);
-      }
+      clearPlanStateForSession(getActiveSessionId());
       return;
     }
 
@@ -366,6 +374,7 @@ window.ChatExecutionPlanBridge = (function () {
     if (!enabled) return;
 
     if (step.type === 'execution_plan_init' && step.plan) {
+      restPlanSuppressed = false;
       planFootDismissed = false;
       currentPlanId = step.plan.planId;
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.setPlan(step.plan);
@@ -384,6 +393,7 @@ window.ChatExecutionPlanBridge = (function () {
 
     // ── TaskGraph events (Phase 7) ──
     if (step.type === 'task_graph_init') {
+      restPlanSuppressed = false;
       planFootDismissed = false;
       currentPlanId = step.plan && step.plan.planId ? step.plan.planId : currentPlanId;
       if (window.ChatExecutionPlan) window.ChatExecutionPlan.renderGraph(step);
@@ -397,6 +407,7 @@ window.ChatExecutionPlanBridge = (function () {
     }
     if (step.type === 'task_graph_update' && step.plan) {
       if (planFootDismissed) return;
+      restPlanSuppressed = false;
       currentPlanId = step.plan.planId;
       if (window.ChatExecutionPlan) {
         // TaskGraphView 也是面板的权威只读快照；完整投影可保留 createdAt /
@@ -443,6 +454,7 @@ window.ChatExecutionPlanBridge = (function () {
   function onSessionSwitched() {
     syncGeneration++;
     lastSyncMs = 0;
+    restPlanSuppressed = false;
     if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.cancelFlowPersist === 'function') {
       window.ChatExecutionPlan.cancelFlowPersist();
     }
@@ -467,6 +479,25 @@ window.ChatExecutionPlanBridge = (function () {
     }
     ensurePanelVisible();
     fetchAndApply(stored);
+  }
+
+  /**
+   * 同会话新一轮用户输入开始时调用：清空上一轮 goal/steps/执行流，
+   * 并抑制 session_updated 触发的 REST /plan 把旧计划写回面板。
+   */
+  function onNewTurnStarted() {
+    syncGeneration++;
+    lastSyncMs = 0;
+    restPlanSuppressed = true;
+    if (resyncTimer) {
+      clearTimeout(resyncTimer);
+      resyncTimer = null;
+    }
+    if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.cancelFlowPersist === 'function') {
+      window.ChatExecutionPlan.cancelFlowPersist();
+    }
+    clearPlanStateForSession(getActiveSessionId());
+    if (enabled) ensurePanelVisible();
   }
 
   function fetchAndApply(pendingStored) {
@@ -555,6 +586,8 @@ window.ChatExecutionPlanBridge = (function () {
   bridgeApi.notifySessionUpdated = onSessionUpdated;
   /** ChatPage.onSessionSwitched 在 Store activeSessionId 更新后调用。 */
   bridgeApi.notifySessionSwitched = onSessionSwitched;
+  /** ChatPage 发送新一轮用户消息时调用。 */
+  bridgeApi.notifyNewTurnStarted = onNewTurnStarted;
 
   // 模块加载即挂载（main.js 加载顺序保证 ChatWebSocket 已存在）
   if (document.readyState === 'loading') {
