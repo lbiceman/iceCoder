@@ -329,6 +329,7 @@ describe('harness.run() per-user-message reset', () => {
 
     expect(ge.hasGraph()).toBe(false);
     expect(events.some(e => e.type === 'task_graph_node')).toBe(false);
+    expect(events.some(e => e.type === 'execution_plan_clear')).toBe(true);
   });
 
   it('discardPendingRecoverySignals clears pending on harness checkpoint engine', async () => {

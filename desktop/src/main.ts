@@ -144,6 +144,12 @@ function registerIpcHandlers(): void {
       // 此处保留通道位便于将来支持 programmatic move。
     }
   });
+  ipcMain.on(IPC.PET_SET_MOUSE_PASSTHROUGH, (_e: Electron.IpcMainEvent, payload: unknown) => {
+    if (!payload || typeof payload !== 'object') return;
+    const passthrough = (payload as { passthrough?: unknown }).passthrough;
+    if (typeof passthrough !== 'boolean') return;
+    petManager.setFloatingMousePassthrough(passthrough);
+  });
 
   ipcMain.handle(IPC.WORKSPACE_PICK, async () => {
     const ws = await pickWorkspaceInteractive();

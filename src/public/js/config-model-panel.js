@@ -85,8 +85,19 @@ window.ModelConfigPanel = (function () {
 
   function providerDisplayName(prov) {
     if (!prov) return '新提供者';
+    if (window.ModelNames && typeof window.ModelNames.providerDisplayLabel === 'function') {
+      var label = window.ModelNames.providerDisplayLabel(prov);
+      return label === '未设置模型' ? '未设置模型' : label;
+    }
     var name = (prov.modelName || '').trim();
     return name || '未设置模型';
+  }
+
+  function parseModelNames(modelName) {
+    if (window.ModelNames && typeof window.ModelNames.parseModelNames === 'function') {
+      return window.ModelNames.parseModelNames(modelName);
+    }
+    return (modelName || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
   }
 
   function providerSubtitle(prov) {
@@ -103,7 +114,7 @@ window.ModelConfigPanel = (function () {
   }
 
   function isProviderEnabled(prov) {
-    if (!prov || !prov.apiUrl || !prov.modelName) return false;
+    if (!prov || !prov.apiUrl || parseModelNames(prov.modelName).length === 0) return false;
     if (hasEnvApiKey(prov)) return true;
     return !!(prov.apiKey && !/your-api-key/i.test(prov.apiKey));
   }
@@ -199,7 +210,7 @@ window.ModelConfigPanel = (function () {
     } else if (/your-api-key/i.test(prov.apiKey)) {
       errors.apiKey = '请填写有效的 API 密钥';
     }
-    if (!prov.modelName || prov.modelName.trim() === '') {
+    if (parseModelNames(prov.modelName).length === 0) {
       errors.modelName = '请填写模型名称';
     }
     return errors;
@@ -331,7 +342,8 @@ window.ModelConfigPanel = (function () {
         '</div>' +
         '<div class="form-group">' +
           '<label for="model-modelName-' + index + '">模型名称</label>' +
-          '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o、deepseek-chat" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o 或 mimo2.5-pro,mimo-2.5" value="' + escapeAttr(prov.modelName || '') + '">' +
+          '<span class="field-hint">多个模型用英文逗号分隔，聊天时可分别选择</span>' +
           '<span class="error-msg" data-error="modelName"></span>' +
         '</div>' +
         '<div class="form-group">' +
@@ -422,6 +434,7 @@ window.ModelConfigPanel = (function () {
         apiUrl: original.apiUrl || '',
         apiKey: original.apiKey || '',
         modelName: original.modelName || '',
+        activeModelName: original.activeModelName,
         parameters: Object.assign({}, original.parameters || {}, {
           temperature: original.parameters && original.parameters.temperature != null
             ? original.parameters.temperature : 1

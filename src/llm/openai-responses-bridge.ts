@@ -30,8 +30,8 @@ export function resolveOpenAiApiMode(model: string, apiMode?: string): OpenAiApi
 
 function convertToResponsesInput(
   messages: UnifiedMessage[],
-  supportsVision: boolean,
-  model: string,
+  _supportsVision: boolean,
+  _model: string,
 ): OpenAI.Responses.ResponseInput {
   const stripped = messages.map((m) => {
     if (m.role === 'assistant' && m.reasoningContent !== undefined) {
@@ -51,7 +51,7 @@ function convertToResponsesInput(
       case 'user': {
         if (Array.isArray(msg.content)) {
           const hasImage = msg.content.some((b) => b.type === 'image' && b.imageUrl);
-          if (hasImage && supportsVision) {
+          if (hasImage) {
             const parts: OpenAI.Responses.ResponseInputContent[] = [];
             for (const block of msg.content) {
               if (block.type === 'text' && block.text) {
@@ -66,18 +66,7 @@ function convertToResponsesInput(
             }
             items.push({ role: 'user', content: parts });
           } else {
-            let textParts: string[] = [];
-            let imageCount = 0;
-            for (const block of msg.content) {
-              if (block.type === 'text' && block.text) textParts.push(cleanText(block.text));
-              else if (block.type === 'image') imageCount++;
-            }
-            if (imageCount > 0 && !supportsVision) {
-              textParts.push(
-                `[用户发送了 ${imageCount} 张图片，但当前模型 ${model} 不支持图片理解。]`,
-              );
-            }
-            items.push({ role: 'user', content: textParts.join('\n') });
+            items.push({ role: 'user', content: resolveText(msg.content) });
           }
         } else {
           items.push({ role: 'user', content: resolveText(msg.content) });

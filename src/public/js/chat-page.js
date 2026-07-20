@@ -158,6 +158,13 @@ window.ChatPage = (function () {
     return true;
   }
 
+  function resolveActiveModelName(provider) {
+    if (window.ModelNames && typeof window.ModelNames.resolveActiveModelName === 'function') {
+      return window.ModelNames.resolveActiveModelName(provider);
+    }
+    return provider && provider.modelName ? provider.modelName : '';
+  }
+
   // 拉取一次即可覆盖两件事：
   //   1) Token 用量（maxContextTokens / modelName → 冰豆）
   //   2) 底部 #chip-model-label 显示当前默认 provider 的 modelName
@@ -170,7 +177,7 @@ window.ChatPage = (function () {
         var defaultProvider = providers.find(function (p) { return p.isDefault; }) || providers[0];
         if (defaultProvider) {
           maxContextTokens = defaultProvider.maxContextTokens || 0;
-          modelName = defaultProvider.modelName || '';
+          modelName = resolveActiveModelName(defaultProvider);
           updatePetTokenUsage();
         }
         if (window.ChatModelPicker && window.ChatModelPicker.setProviders) {
@@ -198,7 +205,8 @@ window.ChatPage = (function () {
         return true;
       }
       var def = providers.find(function (p) { return p.isDefault; }) || providers[0];
-      el.textContent = def && def.modelName ? def.modelName : '未配置';
+      var label = def ? resolveActiveModelName(def) : '';
+      el.textContent = label || '未配置';
       return true;
     }
     if (apply()) return;
@@ -637,8 +645,11 @@ window.ChatPage = (function () {
       streamChunksReceived = false;
       visibleStreamChunksReceived = false;
       pendingTurnTokenUsage = null;
-      // 工具 Tab 只展示本轮用户输入触发的调用；新提示词发送时清空上一轮记录。
-      if (window.ChatExecutionPlan
+      // 新一轮用户输入：清空工作台 goal/steps/执行流，避免上一轮反构图状态残留。
+      if (window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.notifyNewTurnStarted === 'function') {
+        window.ChatExecutionPlanBridge.notifyNewTurnStarted();
+      } else if (window.ChatExecutionPlan
         && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
         window.ChatExecutionPlan.resetToolActivity();
       }
@@ -686,6 +697,8 @@ window.ChatPage = (function () {
     WS.sendStop();
 
     Pet.removeThinking(isStreaming, WS.isProcessing());
+    UI.clearReasoningStream();
+    if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
 
     var messages = Session.getMessages();
     var lastMsg = Session.getLastMessage();

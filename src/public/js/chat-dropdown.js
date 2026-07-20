@@ -70,7 +70,7 @@ window.ChatDropdown = (function () {
     c.addEventListener('mousedown', function (e) { e.stopPropagation(); });
     c.addEventListener('click', function (e) {
       var item = e.target.closest('.cmd-item');
-      if (!item) return;
+      if (!item || item.classList.contains('is-separator')) return;
       e.preventDefault();
       e.stopPropagation();
       var idx = parseInt(item.getAttribute('data-index'), 10);
@@ -97,15 +97,28 @@ window.ChatDropdown = (function () {
     var html = '';
     for (var i = 0; i < current.items.length; i++) {
       var it = current.items[i];
+      if (it.type === 'separator' || it.isSeparator) {
+        var sepLabel = it.label != null ? String(it.label) : '';
+        if (sepLabel) {
+          html +=
+            '<div class="cmd-item is-separator" role="separator" aria-hidden="true">' +
+              '<span class="cmd-separator-line" aria-hidden="true"></span>' +
+              '<span class="cmd-separator-label">' + escapeHtml(sepLabel) + '</span>' +
+              '<span class="cmd-separator-line" aria-hidden="true"></span>' +
+            '</div>';
+        } else {
+          html += '<div class="cmd-item is-separator is-separator-plain" role="separator" aria-hidden="true"></div>';
+        }
+        continue;
+      }
       var name = it.name || it.key || '';
       var desc = it.description != null ? it.description : (it.desc || '');
       if (desc === '' && it.apiUrl && current.variant !== 'model') desc = it.apiUrl;
       var isCurrent = !!it.isCurrent;
-      var prefix = it.prefix || '';
-      var title = (desc ? desc + ' · ' : '') + (it.key || name);
+      // 面板内只展示命令名；prefix（~ / /）由触发方式隐含，选中时再拼完整指令
       html +=
-        '<div class="cmd-item' + (isCurrent ? ' active' : '') + '" data-index="' + i + '" role="menuitem" title="' + escapeHtml(title) + '">' +
-          '<span class="cmd-name">' + escapeHtml(prefix + name) + '</span>' +
+        '<div class="cmd-item' + (isCurrent ? ' active' : '') + '" data-index="' + i + '" role="menuitem">' +
+          '<span class="cmd-name">' + escapeHtml(name) + '</span>' +
           (desc ? '<span class="cmd-desc">' + escapeHtml(desc) + '</span>' : '') +
         '</div>';
     }
@@ -120,15 +133,16 @@ window.ChatDropdown = (function () {
 
   function setHighlightedIndex(idx) {
     if (!elContainer) return;
-    var items = elContainer.querySelectorAll('.cmd-item');
+    var items = elContainer.querySelectorAll('.cmd-item:not(.is-separator)');
     for (var j = 0; j < items.length; j++) {
-      items[j].classList.toggle('active', j === idx);
+      var itemIdx = parseInt(items[j].getAttribute('data-index'), 10);
+      items[j].classList.toggle('active', !isNaN(itemIdx) && itemIdx === idx);
     }
   }
 
   function bindItemHover() {
     if (!elContainer) return;
-    var items = elContainer.querySelectorAll('.cmd-item');
+    var items = elContainer.querySelectorAll('.cmd-item:not(.is-separator)');
     for (var i = 0; i < items.length; i++) {
       items[i].addEventListener('mouseenter', function () {
         var idx = parseInt(this.getAttribute('data-index'), 10);

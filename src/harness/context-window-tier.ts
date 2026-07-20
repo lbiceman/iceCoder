@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import { applyRuntimeDataEnvDefaults } from '../cli/paths.js';
 import { resolveMainConfigPath } from '../config/main-config-supervisor-mode.js';
 import type { IceCoderConfigFile } from '../web/types.js';
+import { parseModelNames } from '../config/parse-model-names.js';
 
 /** 默认上下文窗口（配置文件不可用且无 env 时与压缩器一致） */
 export const DEFAULT_EFFECTIVE_CONTEXT_WINDOW = 128_000;
@@ -17,13 +18,15 @@ export const MINIMAX_COMPACTION_SAFE_CAP = 128_000;
 export interface ProviderCompactionHint {
   id?: string;
   modelName?: string;
+  activeModelName?: string;
   apiUrl?: string;
 }
 
 /** 按 provider 元数据返回续跑压缩用的保守 token 上限；无特殊 cap 则 null */
 export function providerCompactionCapForProvider(provider: ProviderCompactionHint): number | null {
   const id = (provider.id ?? '').toLowerCase();
-  const model = (provider.modelName ?? '').toLowerCase();
+  const names = parseModelNames(provider.modelName ?? '');
+  const model = names.join(' ').toLowerCase();
   const url = (provider.apiUrl ?? '').toLowerCase();
   if (id.includes('minimax') || model.includes('minimax') || url.includes('minimax')) {
     return MINIMAX_COMPACTION_SAFE_CAP;

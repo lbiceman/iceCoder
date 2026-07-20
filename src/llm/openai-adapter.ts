@@ -488,44 +488,21 @@ export class OpenAIAdapter implements ProviderAdapter {
       case 'system':
         return { role: 'system', content: this.resolveContent(msg.content) };
       case 'user': {
-        // 检查是否包含图片内容块
         if (Array.isArray(msg.content)) {
           const hasImage = msg.content.some(b => b.type === 'image' && b.imageUrl);
           if (hasImage) {
-            if (this.supportsVision) {
-              // 视觉模型：发送图片内容
-              const parts: OpenAI.ChatCompletionContentPart[] = [];
-              for (const block of msg.content) {
-                if (block.type === 'text' && block.text) {
-                  parts.push({ type: 'text', text: this.cleanText(block.text) });
-                } else if (block.type === 'image' && block.imageUrl) {
-                  parts.push({
-                    type: 'image_url',
-                    image_url: { url: block.imageUrl },
-                  });
-                }
+            const parts: OpenAI.ChatCompletionContentPart[] = [];
+            for (const block of msg.content) {
+              if (block.type === 'text' && block.text) {
+                parts.push({ type: 'text', text: this.cleanText(block.text) });
+              } else if (block.type === 'image' && block.imageUrl) {
+                parts.push({
+                  type: 'image_url',
+                  image_url: { url: block.imageUrl },
+                });
               }
-              return { role: 'user', content: parts };
-            } else {
-              // 非视觉模型：降级为纯文本，提示用户
-              const textParts: string[] = [];
-              let imageCount = 0;
-              for (const block of msg.content) {
-                if (block.type === 'text' && block.text) {
-                  textParts.push(this.cleanText(block.text));
-                } else if (block.type === 'image') {
-                  imageCount++;
-                }
-              }
-              if (imageCount > 0) {
-                const combined = textParts.join('\n');
-                const hasPersistedImageHint = /image_read|imagesCache/i.test(combined);
-                if (!hasPersistedImageHint) {
-                  textParts.push(`[用户发送了 ${imageCount} 张图片，但当前模型 ${this.model} 不支持图片理解。请提示用户切换到支持视觉的模型（如 gpt-4o）或用文字描述图片内容。]`);
-                }
-              }
-              return { role: 'user', content: textParts.join('\n') };
             }
+            return { role: 'user', content: parts };
           }
         }
         return { role: 'user', content: this.resolveContent(msg.content) };

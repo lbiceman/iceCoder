@@ -29,6 +29,7 @@ import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
 import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
 import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
+import { purgeSessionDiskFiles } from '../session-file-purge.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = 'default';
@@ -233,22 +234,7 @@ export function registerSessionCleanupHook(hook: SessionCleanupHook | null): voi
 }
 
 async function purgeSessionFiles(sessionId: string): Promise<void> {
-  const suffixes = [
-    '.json',
-    '.structured.json',
-    '.checkpoint.json',
-    '.checkpoint-index.json',
-    '.workspace.json',
-    '.session-notes.md',
-    '.task-queue.json',
-    '.tool-trace-diffs.json',
-  ];
-  await Promise.all(
-    suffixes.map((suffix) =>
-      fs.unlink(path.join(SESSIONS_DIR, `${sessionId}${suffix}`)).catch(() => {}),
-    ),
-  );
-  await fs.rm(path.join(SESSIONS_DIR, sessionId), { recursive: true, force: true }).catch(() => {});
+  // 先停 harness / 取消刷盘定时器，避免删文件后又被异步写入 resurrect
   if (sessionCleanupHook) {
     try {
       await sessionCleanupHook(sessionId);
@@ -256,6 +242,7 @@ async function purgeSessionFiles(sessionId: string): Promise<void> {
       console.warn('[sessions] cleanup hook failed:', err);
     }
   }
+  await purgeSessionDiskFiles(SESSIONS_DIR, sessionId);
 }
 
 function rejectUnsafeSessionId(res: Response, sessionId: string): boolean {
