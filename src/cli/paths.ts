@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import type { IceCoderConfigFile } from '../web/types.js';
 import { DEFAULT_SHELL_BLACKLIST_PATTERNS } from '../tools/shell-sandbox.js';
 import { applyWindowsPathDefaults } from '../tools/shell-spawn-env.js';
+import { ensureDirWritable } from './ensure-dir-writable.js';
 
 /** 用户主目录下的 iceCoder 数据目录（生产环境） */
 export const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
@@ -344,7 +345,7 @@ export async function ensureMcpConfigFile(mainConfigPath?: string): Promise<void
 export async function ensureDataDir(paths: DataPaths): Promise<boolean> {
   let isFirstRun = false;
 
-  await fs.mkdir(paths.dataDir, { recursive: true });
+  await ensureDirWritable(paths.dataDir);
   await fs.mkdir(paths.sessionsDir, { recursive: true });
   await fs.mkdir(paths.memoryDir, { recursive: true });
   await fs.mkdir(paths.memoryFilesDir, { recursive: true });

@@ -5,8 +5,10 @@ import { BrowserWindow } from 'electron';
 import {
   applyFloatingWindowPosition,
   createPetFloatingWindow,
+  enableFloatingClickThrough,
   PET_FLOATING_HEIGHT,
   PET_FLOATING_WIDTH,
+  setFloatingMousePassthrough,
 } from './pet-window';
 import { PetDisplayMode } from './constants';
 import { writePetFloatingPosition } from './paths';
@@ -71,6 +73,7 @@ export class PetWindowManager {
       }
       this.floating.webContents.send('pet:mode', 'floating');
       this.floating.show();
+      enableFloatingClickThrough(this.floating);
       this.mode = 'floating';
     } finally {
       this.transitionLock = false;
@@ -106,6 +109,11 @@ export class PetWindowManager {
     if (!this.floating || this.floating.isDestroyed()) return;
     const [x, y] = this.floating.getPosition();
     this.floating.setPosition(Math.round(x + dx), Math.round(y + dy));
+  }
+
+  setFloatingMousePassthrough(passthrough: boolean): void {
+    if (!this.floating || this.floating.isDestroyed()) return;
+    setFloatingMousePassthrough(this.floating, passthrough);
   }
 
   private attachFloatingHandlers(win: BrowserWindow): void {

@@ -33,6 +33,8 @@ export const IPC = {
   PET_REQUEST_FOCUS_MAIN: 'pet:request-focus-main',
   PET_DRAG_MOVE: 'pet:drag-move',
   PET_DRAG_END: 'pet:drag-end',
+  /** 悬浮窗透明区点击穿透（true=穿透，false=可点冰豆） */
+  PET_SET_MOUSE_PASSTHROUGH: 'pet:set-mouse-passthrough',
 
   // 工作区
   WORKSPACE_PICK: 'workspace:pick',
