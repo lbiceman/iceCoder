@@ -222,6 +222,7 @@ export class BackgroundTaskManager extends EventEmitter {
 
   private scheduleTaskTimeout(taskId: string, timeoutMs: number, onTimeout: () => void): void {
     this.clearTaskTimeout(taskId);
+    if (timeoutMs <= 0) return;
     const timer = setTimeout(() => {
       this.timeoutTimers.delete(taskId);
       onTimeout();
@@ -240,7 +241,7 @@ export class BackgroundTaskManager extends EventEmitter {
    * @param options.command       原始命令字符串
    * @param options.label         任务标签（命令前 40 字）
    * @param options.prefixOutput  前台已收集的 stdout/stderr（作为环形缓冲 prefix）
-   * @param options.hardTimeoutMs 后台 hard timeout（默认 24h）
+   * @param options.hardTimeoutMs 后台 hard timeout（0 = 不限时，默认 0）
    * @param options.reason        转后台原因（'soft_timeout' / 'explicit_background'）
    */
   adopt(
@@ -265,7 +266,7 @@ export class BackgroundTaskManager extends EventEmitter {
 
     const taskId = generateId();
     const command = options.command;
-    const hardTimeoutMs = options.hardTimeoutMs ?? 24 * 60 * 60 * 1000;
+    const hardTimeoutMs = options.hardTimeoutMs ?? 0;
     const now = Date.now();
 
     const { stream: logStream, logPath } = this.openLogStream(taskId);
@@ -353,7 +354,7 @@ export class BackgroundTaskManager extends EventEmitter {
    */
   spawn(
     command: string,
-    timeoutMs: number = 300_000,
+    timeoutMs: number = 0,
     label: string = '',
     lifespan: TaskLifespan = 'detached',
   ): {

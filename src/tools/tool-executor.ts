@@ -22,7 +22,7 @@ const DEFAULT_CONFIG: ToolExecutorConfig = {
   maxRetries: 3,
   retryBaseDelay: 1000,
   retryMaxDelay: 15000,
-  toolTimeout: 60000,
+  toolTimeout: 10 * 60 * 1000,
 };
 
 export class ToolExecutor {
