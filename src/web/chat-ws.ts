@@ -123,9 +123,10 @@ import {
   looksLikeFileAnalysisIntent,
   tryDirectFileBrowserTurn,
 } from './file-browser-direct.js';
-import { BgTaskPusher } from './bg-task-pusher.js';
+import { BgTaskPusher, buildBgTaskRunningSnapshot, type BgTaskUpdateEntry } from './bg-task-pusher.js';
+import { syncSessionBgTasksFromManager, clearSessionBgTasks } from '../session/bg-tasks-store.js';
 import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning, disposeBackgroundTaskManagerForSession } from '../tools/background-task-manager.js';
-import { stopAllShellWorkForSession, stopAllShellWork } from '../tools/session-shell-control.js';
+import { stopAllShellWorkForSession, stopAllShellWork, stopForegroundShellWorkForSession } from '../tools/session-shell-control.js';
 import {
   formatToolArgsDetailPreview,
   resolveToolCallInitialStatus,
@@ -376,6 +377,8 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   clearIntentCheckpointTurnsForSession(sessionId);
   // 移除后台任务 manager 缓存（进程已在上方 stopAllShellWorkForSession 中终止）
   try { disposeBackgroundTaskManagerForSession(sessionId); } catch { /* ignore */ }
+  unwireBgTasksDiskSync(sessionId);
+  void clearSessionBgTasks(SESSIONS_DIR, sessionId).catch(() => {});
   try { void getTaskQueueManager(SESSIONS_DIR).clearSession(sessionId); } catch { /* ignore */ }
   clearPendingNotesForSession(sessionId);
   if (sessionId === activeSessionId) {
@@ -841,13 +844,62 @@ function ensureBgTaskPusher(): BgTaskPusher {
   return bgTaskPusher;
 }
 
+const bgTasksDiskSyncTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const bgTasksDiskSyncHandlers = new Map<string, () => void>();
+
+function scheduleSessionBgTasksDiskSync(sessionId: string, workDir: string): void {
+  const existing = bgTasksDiskSyncTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  bgTasksDiskSyncTimers.set(
+    sessionId,
+    setTimeout(() => {
+      bgTasksDiskSyncTimers.delete(sessionId);
+      void syncSessionBgTasksFromManager(SESSIONS_DIR, sessionId, workDir).catch(() => {});
+    }, 250),
+  );
+}
+
+function wireBgTasksDiskSync(
+  mgr: ReturnType<typeof getBackgroundTaskManagerFor>,
+  sessionId: string,
+  workDir: string,
+): void {
+  const prev = bgTasksDiskSyncHandlers.get(sessionId);
+  if (prev) mgr.off('taskStatusChanged', prev);
+  const handler = () => scheduleSessionBgTasksDiskSync(sessionId, workDir);
+  bgTasksDiskSyncHandlers.set(sessionId, handler);
+  mgr.on('taskStatusChanged', handler);
+}
+
+function unwireBgTasksDiskSync(sessionId: string): void {
+  const timer = bgTasksDiskSyncTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    bgTasksDiskSyncTimers.delete(sessionId);
+  }
+  bgTasksDiskSyncHandlers.delete(sessionId);
+}
+
 /** 将推送器绑定到指定 session 的后台任务管理器（切换会话 / 开跑前调用） */
 async function rebindBgTaskPusher(sessionId: string): Promise<void> {
   const workspace = await resolveSessionWorkspacePayload(sessionId);
   const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
   const mgr = getBackgroundTaskManagerFor(sessionId, workDir);
+  wireBgTasksDiskSync(mgr, sessionId, workDir);
   ensureBgTaskPusher().attach(mgr);
   ensureBgTaskPusher().tick();
+  await syncSessionBgTasksFromManager(SESSIONS_DIR, sessionId, workDir);
+}
+
+/** connected / session_switched 附带的后台任务快照 */
+async function buildBgTasksForSession(sessionId: string): Promise<BgTaskUpdateEntry[]> {
+  try {
+    const workspace = await resolveSessionWorkspacePayload(sessionId);
+    const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+    return await syncSessionBgTasksFromManager(SESSIONS_DIR, sessionId, workDir);
+  } catch {
+    return [];
+  }
 }
 
 /** 用户从 UI 终止后台任务（bg task chip 关闭按钮） */
@@ -897,6 +949,9 @@ async function handleBgTaskStop(
       `[chat-ws] 用户终止后台任务 ${taskId}${stopped?.label ? ` (${stopped.label})` : ''} session=${mgr.sessionId}`,
     );
     ensureBgTaskPusher().tick();
+    const syncWorkspace = await resolveSessionWorkspacePayload(mgr.sessionId);
+    const syncWorkDir = syncWorkspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+    await syncSessionBgTasksFromManager(SESSIONS_DIR, mgr.sessionId, syncWorkDir);
     sendJSON(ws, { type: 'bg_task_stop_result', ok: true, taskId, sessionId: mgr.sessionId });
   } catch (err) {
     console.error('[chat-ws] bg_task_stop 异常:', err);
@@ -1500,6 +1555,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
     chatClients.add(ws);
     subscribeWsToSession(ws, activeSessionId);
+    void rebindBgTaskPusher(activeSessionId).catch(() => {});
     startChatRuntimePrewarm();
     ws.once('close', () => {
       chatClients.delete(ws);
@@ -1509,6 +1565,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     const features = { executionPlan: true };
     const runningTurn = snapshotRunningTurn(activeSessionId);
     const runtimeExtras = await buildConnectedPayloadExtras(activeSessionId);
+    const bgTasks = await buildBgTasksForSession(activeSessionId);
     try {
       const [meta, workspace] = await Promise.all([
         resolveDefaultChatModelMeta(),
@@ -1524,6 +1581,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
           ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
           ...(runningTurn ? { runningTurn } : {}),
+          bgTasks,
           ...runtimeExtras,
       });
     } catch {
@@ -1537,6 +1595,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
         ...(runningTurn ? { runningTurn } : {}),
+        bgTasks,
         ...runtimeExtras,
       });
     }
@@ -1569,7 +1628,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             );
             await getTaskQueueManager(SESSIONS_DIR).clearSession(sid);
             clearPendingNotesForSession(sid);
-            sendJSON(ws, { type: 'session_cleared', ok: true, sessionId: sid });
+            await clearSessionBgTasks(SESSIONS_DIR, sid);
+            unwireBgTasksDiskSync(sid);
+            sendJSON(ws, { type: 'session_cleared', ok: true, sessionId: sid, bgTasks: [] });
           } catch (err) {
             console.error('[chat-ws] clear_session failed:', err);
             sendJSON(ws, {
@@ -1601,9 +1662,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         }
 
         if (msg.type === 'stop') {
-          // 仅中断本连接当前订阅会话的运行；持久化任务队列保留。
+          // 仅中断本连接当前订阅会话的运行；detached 后台任务保留。
           const sid = wsToSubscribedSession.get(ws) || activeSessionId;
-          stopAllShellWorkForSession(sid, 'chat stop');
+          stopForegroundShellWorkForSession(sid, 'chat stop');
           if (abortSession(sid)) {
             console.log(`[chat-ws] 用户请求中断任务 session=${sid}`);
           }
@@ -1745,7 +1806,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           const leavingSessionId = wsToSubscribedSession.get(ws) || activeSessionId;
           const shouldStopLeavingShells = hasActiveSessionRun(leavingSessionId);
           if (shouldStopLeavingShells) {
-            stopAllShellWorkForSession(leavingSessionId, 'session switch');
+            stopForegroundShellWorkForSession(leavingSessionId, 'session switch');
           }
           if (abortSession(leavingSessionId)) {
             console.log(`[chat-ws] switch_session 时中断会话 ${leavingSessionId} 的任务`);
@@ -1785,6 +1846,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             }
             const newRunningTurn = snapshotRunningTurn(activeSessionId);
             const workspace = await resolveSessionWorkspacePayload(activeSessionId);
+            const bgTasks = await buildBgTasksForSession(activeSessionId);
             sendJSON(ws, {
               type: 'session_switched',
               ok: true,
@@ -1792,6 +1854,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
               ...workspace,
               ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
               ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
+              bgTasks,
             });
             console.log(`[chat-ws] 切换到会话 ${activeSessionId}`);
           } catch (err) {
@@ -2489,7 +2552,7 @@ async function handleChatMessage(
     llmAdapter.setAbortSignal?.(null);
     // 兜底：若本回合被 abort 但 stop 消息未送达（极端竞态），仍终止该会话 shell。
     if (abortController.signal.aborted) {
-      try { stopAllShellWorkForSession(runSessionId, 'turn abort'); } catch { /* ignore */ }
+      try { stopForegroundShellWorkForSession(runSessionId, 'turn abort'); } catch { /* ignore */ }
     }
     // 任务（或本次 abort）落幕：清空运行中快照
     if (runNoteId != null) clearPendingNoteForRun(runSessionId, runNoteId);

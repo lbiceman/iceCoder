@@ -433,12 +433,12 @@ window.ChatSessionSidebar = (function () {
   function selectSession(sessionId) {
     if (isSwitchLocked()) return;
     if (sessionId === Store.getActiveSessionId()) return;
-    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload) {
+    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload, _degraded, bgTasks) {
       if (!ok) return;
       applyWorkspaceForSession(sessionId, workspacePayload);
       renderList();
       if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-        window.ChatPage.onSessionSwitched(sessionId, runningTurn);
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
       }
     });
   }

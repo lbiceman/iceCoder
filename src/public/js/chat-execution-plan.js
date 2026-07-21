@@ -334,8 +334,9 @@ window.ChatExecutionPlan = (function () {
     return '<section class="etl-tabpanel" id="etl-panel-flow" data-panel="flow" role="tabpanel" aria-labelledby="etl-tab-flow">' +
       '<div class="etl-round-timeline" id="etl-round-timeline">' +
         '<div class="etl-round-empty etl-empty">等待模型开始执行</div>' +
-        '<ol class="etl-round-list"></ol>' +
+        '<div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div>' +
         '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
+        '<ol class="etl-round-list"></ol>' +
       '</div>' +
       '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
       '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
@@ -365,6 +366,13 @@ window.ChatExecutionPlan = (function () {
     roundTimelineEl = host.querySelector('#etl-round-timeline');
     snapshotTimelineEl = host.querySelector('#etl-snapshot-timeline');
     bindRoundTimelineEvents();
+    if (window.EtlShellDock && typeof window.EtlShellDock.mount === 'function') {
+      var dockHost = host.querySelector('#etl-shell-dock-host');
+      if (dockHost) window.EtlShellDock.mount(dockHost);
+      if (window.ChatPage && typeof window.ChatPage.syncShellDockOnMount === 'function') {
+        window.ChatPage.syncShellDockOnMount();
+      }
+    }
   }
 
   /** 绑定最小化按钮 + Tab 切换（桌面/移动共用）。 */
@@ -441,6 +449,9 @@ window.ChatExecutionPlan = (function () {
     snapshotTimelineEl = null;
     unbindRoundTimelineEvents();
     mountedMode = null;
+    if (window.EtlShellDock && typeof window.EtlShellDock.resetMount === 'function') {
+      window.EtlShellDock.resetMount();
+    }
   }
 
   function mountDesktop() {
@@ -458,6 +469,7 @@ window.ChatExecutionPlan = (function () {
       '</header>' +
       '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
       sharedBodyHtml() +
+      '<div class="etl-shell-dock-host" id="etl-shell-dock-host"></div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
 
     document.body.appendChild(rootEl);
@@ -508,6 +520,7 @@ window.ChatExecutionPlan = (function () {
       '<div class="etl-body">' +
         flowPanelHtml() +
       '</div>' +
+      '<div class="etl-shell-dock-host" id="etl-shell-dock-host"></div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
 
     document.body.appendChild(mobileBackdropEl);
@@ -645,10 +658,12 @@ window.ChatExecutionPlan = (function () {
         applyVisibilityMobile();
         return;
       }
-      if (shouldShow() && !minimized) {
+      if (shouldShow()) {
         ensureMounted();
         applyPanelWidth();
         layoutTop();
+      }
+      if (shouldShow() && !minimized) {
         rootEl.classList.add('etl-panel--open');
         rootEl.setAttribute('aria-hidden', 'false');
         document.body.classList.add('etl-panel-open');
@@ -996,7 +1011,7 @@ window.ChatExecutionPlan = (function () {
     return formatClock(e - start);
   }
 
-  /** 右下角时间：从本轮用户发送开始，到最终回复/停止/异常结束。 */
+  /** 右下角时间：本轮用户发送 → model_done 的本地模型工作耗时。 */
   function formatTurnElapsed() {
     if (typeof turnStartedAt !== 'number') return '00:00';
     var end = typeof turnEndedAt === 'number' ? turnEndedAt : Date.now();
@@ -1504,6 +1519,7 @@ window.ChatExecutionPlan = (function () {
         // 最终轮：标记任务完成，供轮次卡展示「已完成」结果。
         record.isFinal = true;
         markRoundsComplete(record.iteration);
+        if (evt.stopReason === 'model_done') endTurnTimer(ts);
       }
       if (evt.executionMode) {
         addUniqueStrings(record.signals, evt.executionMode.enteredBy || []);
@@ -1874,6 +1890,109 @@ window.ChatExecutionPlan = (function () {
     cachedLoadMoreHidden = hiddenCount;
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
     loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ' (' + hiddenCount + ')' : '');
+    syncPrefixGapHint();
+  }
+
+  /** 轮次从中间开始（如 19）时提示：更早轮次未实时捕获，可回填或去聊天区展开。 */
+  function syncPrefixGapHint() {
+    if (!roundTimelineEl) return;
+    var hint = roundTimelineEl.querySelector('#etl-round-prefix-hint');
+    if (!hint) return;
+    if (!roundRecords.length) {
+      hint.classList.add('hidden');
+      hint.textContent = '';
+      return;
+    }
+    var firstIteration = roundRecords[0].iteration;
+    if (typeof firstIteration !== 'number' || firstIteration <= 1) {
+      hint.classList.add('hidden');
+      hint.textContent = '';
+      return;
+    }
+    var missing = firstIteration - 1;
+    hint.textContent = '轮次 1–' + missing + ' 未载入本面板 · 完整工具记录见聊天区「还有 N 条历史 · 展开」';
+    hint.classList.remove('hidden');
+  }
+
+  function sliceCurrentTurnStructured(structured) {
+    if (!Array.isArray(structured) || !structured.length) return [];
+    var startIdx = -1;
+    for (var i = structured.length - 1; i >= 0; i--) {
+      if (structured[i] && structured[i].role === 'user') {
+        startIdx = i;
+        break;
+      }
+    }
+    return startIdx < 0 ? structured.slice() : structured.slice(startIdx);
+  }
+
+  /**
+   * 从 structured 助手轮次回填 ETL 缺失的前缀轮次（面板晚开 / F5 后只拿到后半段时）。
+   * 只补 roundRecordByIteration 中不存在的 iteration，不覆盖实时数据。
+   */
+  function hydrateFromStructured(structured) {
+    try {
+      var slice = sliceCurrentTurnStructured(structured);
+      if (!slice.length) return false;
+      var baseTs = Date.now() - slice.length * 2000;
+      var iteration = 0;
+      var filled = 0;
+      for (var i = 0; i < slice.length; i++) {
+        var msg = slice[i];
+        if (!msg || msg.role !== 'assistant') continue;
+        iteration++;
+        if (roundRecordByIteration[String(iteration)]) continue;
+        var roundTs = baseTs + iteration * 2000;
+        var roundResult = ensureRoundRecord(iteration, roundTs);
+        var record = roundResult.record;
+        record.status = 'done';
+        record.endTs = roundTs + 1500;
+        var toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
+        for (var ti = 0; ti < toolCalls.length; ti++) {
+          var tc = toolCalls[ti];
+          if (!tc || !tc.name) continue;
+          var callId = typeof tc.id === 'string' && tc.id
+            ? tc.id
+            : ('hydrate-' + iteration + '-' + ti);
+          if (toolRecordById[callId]) continue;
+          var toolTs = roundTs + ti * 200;
+          var toolRec = {
+            toolCallId: callId,
+            toolName: tc.name,
+            callTs: toolTs,
+            resultTs: toolTs + 100,
+            status: 'done',
+            detail: formatToolArgsPreview(tc.name, tc.arguments),
+            target: extractToolTarget(tc.name, tc.arguments),
+            iteration: iteration,
+          };
+          toolRecords.push(toolRec);
+          toolRecordById[callId] = toolRec;
+          if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
+          if (!toolCallIds[callId]) {
+            toolCallIds[callId] = true;
+            uniqueToolCallCount++;
+          }
+          if (toolRecords.length > MAX_TOOL_HISTORY) {
+            var removed = toolRecords.shift();
+            if (removed) delete toolRecordById[removed.toolCallId];
+          }
+        }
+        filled++;
+      }
+      if (!filled) {
+        syncPrefixGapHint();
+        return false;
+      }
+      renderRoundTimeline(true);
+      renderEmptyState();
+      patchFooterToolCount();
+      scheduleFlowPersist();
+      return true;
+    } catch (e) {
+      safeWarn('hydrateFromStructured', e);
+      return false;
+    }
   }
 
   function isRoundExpanded(record) {
@@ -2826,7 +2945,7 @@ window.ChatExecutionPlan = (function () {
       if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') return;
       turnEndedAt = typeof ts === 'number' ? Math.max(turnStartedAt, ts) : Date.now();
       renderFooter();
-      if (isPlanComplete(currentPlan) && !hasRunningStep()) stopTick();
+      stopTick();
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('endTurnTimer', e);
@@ -3773,6 +3892,7 @@ window.ChatExecutionPlan = (function () {
     endTurnTimer: endTurnTimer,
     getFlowSnapshot: getFlowSnapshot,
     restoreFlowSnapshot: restoreFlowSnapshot,
+    hydrateFromStructured: hydrateFromStructured,
     registerFlowPersist: registerFlowPersist,
     flushFlowPersist: flushFlowPersist,
     cancelFlowPersist: cancelFlowPersist,

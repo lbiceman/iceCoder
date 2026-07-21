@@ -668,15 +668,31 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   line-height: 1.5;
 }
 
+.etl-round-prefix-hint {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: color-mix(in srgb, var(--surface-raised) 90%, var(--warning) 10%);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.etl-round-prefix-hint.hidden {
+  display: none;
+}
+
 .etl-round-load-more {
-  align-self: center;
-  border: none;
-  background: transparent;
+  align-self: stretch;
+  width: 100%;
+  border: 1px dashed var(--border-subtle);
+  background: var(--surface-raised);
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
+  text-align: center;
 }
 
 .etl-round-load-more:hover,
@@ -771,6 +787,124 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 .exec-plan-step.status-failed .exec-plan-step-badge {
   background: var(--danger-light);
   color: var(--danger);
+}
+
+/* ── Shell Dock（后台命令列表） ── */
+.etl-shell-dock-host {
+  flex-shrink: 0;
+}
+
+.etl-shell-dock {
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-sidebar);
+  max-height: 160px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.etl-shell-dock.hidden {
+  display: none;
+}
+
+.etl-shell-dock-head {
+  padding: var(--space-2) var(--space-3) 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.etl-shell-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.etl-shell-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+  font-size: 12px;
+  min-width: 0;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+/* 运行中：项目绿色（与执行流「完成」态一致，不用 warning 黄） */
+.etl-shell-item.is-running {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--success-light) 55%, var(--surface-raised));
+}
+
+.etl-shell-item.is-running .etl-shell-status {
+  color: var(--success);
+}
+
+/* 无输出 hang / 停止中 / 终态错误 */
+.etl-shell-item.is-hang,
+.etl-shell-item.is-stopping,
+.etl-shell-item.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
+  background: color-mix(in srgb, var(--danger-light) 55%, var(--surface-raised));
+}
+
+.etl-shell-item.is-hang .etl-shell-status,
+.etl-shell-item.is-stopping .etl-shell-status,
+.etl-shell-item.is-error .etl-shell-status {
+  color: var(--danger);
+}
+
+.etl-shell-item.is-success {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--success-light) 55%, var(--surface-raised));
+}
+
+.etl-shell-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.etl-shell-status {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.etl-shell-stop {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  font-size: 16px;
+}
+
+.etl-shell-stop:hover:not(:disabled) {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.etl-shell-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ── Footer ── */

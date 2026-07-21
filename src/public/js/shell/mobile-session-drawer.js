@@ -112,7 +112,7 @@ window.MobileSessionDrawer = (function () {
     var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
     var Router = window.AppRouter;
 
-    Store.switchSession(sessionId, wsSend, function (ok, runningTurn) {
+    Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
       if (!ok) return;
       renderList();
 
@@ -141,7 +141,7 @@ window.MobileSessionDrawer = (function () {
         window.MobileWorkPage.onActivate();
       }
       if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-        window.ChatPage.onSessionSwitched(sessionId, runningTurn);
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
       }
       if (window.MobileWorkPage && typeof window.MobileWorkPage.syncChatActivity === 'function') {
         window.MobileWorkPage.syncChatActivity();
