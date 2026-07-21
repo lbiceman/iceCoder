@@ -24,6 +24,9 @@ import { killShellProcessTree } from './shell-process-kill.js';
 /** 任务状态 */
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'timeout' | 'killed';
 
+/** 后台任务生命周期：detached 与 harness 解耦；bound 随 Stop/abort 终止 */
+export type TaskLifespan = 'detached' | 'bound';
+
 /** 后台任务信息 */
 export interface BackgroundTask {
   taskId: string;
@@ -53,6 +56,8 @@ export interface BackgroundTask {
   rootPid: number | null;
   /** 从输出中解析到的 dev server 监听端口（Windows 兜底 kill） */
   detectedPort: number | null;
+  /** 与 harness 是否解耦（默认 detached） */
+  lifespan: TaskLifespan;
 }
 
 /** 任务状态摘要（返回给调用方，不含 child 引用） */
@@ -62,9 +67,11 @@ export interface TaskStatusSummary {
   label: string;
   status: TaskStatus;
   elapsed: string;
+  elapsedMs: number;
   exitCode: number | null;
   error: string | null;
   lineCount: number;
+  lifespan: TaskLifespan;
 }
 
 /** 运行中任务摘要（给 Harness / chat-ws 推送用） */
@@ -244,6 +251,7 @@ export class BackgroundTaskManager extends EventEmitter {
       prefixOutput?: string;
       hardTimeoutMs?: number;
       reason?: 'soft_timeout' | 'explicit_background';
+      lifespan?: TaskLifespan;
     },
   ): { taskId: string; error?: string } {
     const runningCount = Array.from(this.tasks.values())
@@ -280,6 +288,7 @@ export class BackgroundTaskManager extends EventEmitter {
       logPath,
       rootPid: child.pid ?? null,
       detectedPort: null,
+      lifespan: options.lifespan ?? 'detached',
     };
 
     // 把前台已收集的输出灌入环形缓冲 + 落盘（不丢历史）
@@ -342,7 +351,12 @@ export class BackgroundTaskManager extends EventEmitter {
    * 启动后台命令。
    * 立即返回 task ID，不等待命令完成。
    */
-  spawn(command: string, timeoutMs: number = 300_000, label: string = ''): {
+  spawn(
+    command: string,
+    timeoutMs: number = 300_000,
+    label: string = '',
+    lifespan: TaskLifespan = 'detached',
+  ): {
     taskId: string;
     error?: string;
   } {
@@ -395,6 +409,7 @@ export class BackgroundTaskManager extends EventEmitter {
       logPath,
       rootPid: child.pid ?? null,
       detectedPort: null,
+      lifespan,
     };
 
     this.tasks.set(taskId, task);
@@ -533,9 +548,11 @@ export class BackgroundTaskManager extends EventEmitter {
       label: task.label,
       status: task.status,
       elapsed: formatElapsed(elapsed),
+      elapsedMs: elapsed,
       exitCode: task.exitCode,
       error: task.error,
       lineCount: task.outputLines.length,
+      lifespan: task.lifespan,
     };
   }
 
@@ -679,6 +696,7 @@ export class BackgroundTaskManager extends EventEmitter {
     command: string;
     label: string;
     status: TaskStatus;
+    lifespan: TaskLifespan;
     startedAt: number;
     endedAt: number | null;
     exitCode: number | null;
@@ -693,6 +711,7 @@ export class BackgroundTaskManager extends EventEmitter {
         command: task.command,
         label: task.label,
         status: task.status,
+        lifespan: task.lifespan,
         startedAt: task.startTime,
         endedAt: task.endTime,
         exitCode: task.exitCode,
@@ -747,6 +766,7 @@ export class BackgroundTaskManager extends EventEmitter {
         logPath: s.logPath,
         rootPid: null,
         detectedPort: null,
+        lifespan: 'detached',
       };
       this.tasks.set(s.taskId, task);
     }
@@ -805,13 +825,15 @@ export class BackgroundTaskManager extends EventEmitter {
   }
 
   /**
-   * 终止本 manager 内全部运行中任务（用户 Stop / 会话 abort，保留任务记录）。
-   * @returns 被终止的任务数
+   * 终止本 manager 内运行中任务（保留任务记录）。
+   * @param options.lifespan — 默认 `all`（delete/shutdown）；Stop/abort 仅杀 bound 时用 filter
    */
-  killAllRunning(): number {
+  killAllRunning(options?: { lifespan?: TaskLifespan | 'all' }): number {
+    const filter = options?.lifespan ?? 'all';
     let count = 0;
     for (const task of this.tasks.values()) {
       if (task.status !== 'running') continue;
+      if (filter !== 'all' && task.lifespan !== filter) continue;
       const taskId = task.taskId;
       const rootPid = task.rootPid ?? task.child?.pid ?? null;
       const commandPreview = (task.label || task.command).substring(0, 80);
@@ -932,18 +954,23 @@ export function disposeBackgroundTaskManagerForSession(sessionId: string): boole
   return true;
 }
 
-/** 终止指定 session 的全部运行中后台任务（不销毁 manager 实例）。 */
-export function killAllRunningBackgroundTasksForSession(sessionId: string): number {
+/** 终止指定 session 的运行中后台任务（不销毁 manager 实例）。 */
+export function killAllRunningBackgroundTasksForSession(
+  sessionId: string,
+  options?: { lifespan?: TaskLifespan | 'all' },
+): number {
   const m = managersBySession.get(sessionId);
   if (!m) return 0;
-  return m.killAllRunning();
+  return m.killAllRunning(options);
 }
 
 /** 终止全部 session 的运行中后台任务（不销毁 manager 缓存）。 */
-export function killAllRunningBackgroundTasks(): number {
+export function killAllRunningBackgroundTasks(
+  options?: { lifespan?: TaskLifespan | 'all' },
+): number {
   let total = 0;
   for (const m of managersBySession.values()) {
-    total += m.killAllRunning();
+    total += m.killAllRunning(options);
   }
   return total;
 }
