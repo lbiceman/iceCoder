@@ -26,6 +26,7 @@ import './chat-model-picker.js';
 import './chat-file.js';
 import './chat-qr.js';
 import './chat-pet-bridge.js';
+import './chat-etl-shell-dock.js';
 import './chat-execution-plan.js';
 import './chat-execution-flow-store.js';
 import './chat-execution-plan-bridge.js';

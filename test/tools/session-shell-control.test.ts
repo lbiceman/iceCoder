@@ -17,7 +17,10 @@ import {
   registerForegroundShell,
   killForegroundShellsForSession,
 } from '../../src/tools/foreground-shell-registry.js';
-import { stopAllShellWorkForSession } from '../../src/tools/session-shell-control.js';
+import {
+  stopAllShellWorkForSession,
+  stopForegroundShellWorkForSession,
+} from '../../src/tools/session-shell-control.js';
 
 const isWindows = process.platform === 'win32';
 
@@ -27,7 +30,7 @@ afterEach(() => {
 });
 
 describe('stopAllShellWorkForSession', () => {
-  it('killAllRunning 终止运行中后台任务', async () => {
+  it('stopAllShellWorkForSession 终止运行中 detached 后台任务', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'ice-shell-stop-'));
     const mgr = getBackgroundTaskManagerFor('sess-stop', workDir);
 
@@ -45,6 +48,24 @@ describe('stopAllShellWorkForSession', () => {
 
     await new Promise((r) => setTimeout(r, 3_500));
     expect(mgr.getStatus(taskId)?.status).toBe('killed');
+  }, 15_000);
+
+  it('stopForegroundShellWorkForSession 不杀 detached 后台任务', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'ice-shell-fg-bg-'));
+    const mgr = getBackgroundTaskManagerFor('sess-fg-bg', workDir);
+
+    const cmd = isWindows
+      ? 'ping -n 60 127.0.0.1 > nul'
+      : 'sleep 60';
+    const { taskId } = mgr.spawn(cmd, 120_000, 'long job');
+    expect(taskId).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 500));
+    expect(mgr.getStatus(taskId)?.status).toBe('running');
+
+    const result = stopForegroundShellWorkForSession('sess-fg-bg', 'test');
+    expect(result.foreground).toBe(0);
+    expect(mgr.getStatus(taskId)?.status).toBe('running');
   }, 15_000);
 
   it('未知 session 返回 0', () => {
@@ -72,4 +93,37 @@ describe('stopAllShellWorkForSession', () => {
     await new Promise((r) => setTimeout(r, 3_500));
     expect(child.killed || child.exitCode !== null).toBe(true);
   }, 15_000);
+
+  it('spawn 默认 lifespan=detached', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'ice-shell-lifespan-'));
+    const mgr = getBackgroundTaskManagerFor('sess-lifespan', workDir);
+    const cmd = isWindows ? 'ping -n 30 127.0.0.1 > nul' : 'sleep 30';
+    const { taskId } = mgr.spawn(cmd, 60_000, 'detached job');
+    expect(mgr.getStatus(taskId)?.lifespan).toBe('detached');
+    mgr.kill(taskId);
+  }, 10_000);
+
+  it('killAllRunning({ lifespan: bound }) 仅杀 bound，保留 detached', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'ice-shell-bound-filter-'));
+    const mgr = getBackgroundTaskManagerFor('sess-bound-filter', workDir);
+    const cmd = isWindows ? 'ping -n 60 127.0.0.1 > nul' : 'sleep 60';
+
+    const detached = mgr.spawn(cmd, 120_000, 'detached job', 'detached');
+    const bound = mgr.spawn(cmd, 120_000, 'bound job', 'bound');
+    expect(detached.taskId).toBeTruthy();
+    expect(bound.taskId).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 500));
+    expect(mgr.getStatus(detached.taskId)?.status).toBe('running');
+    expect(mgr.getStatus(bound.taskId)?.status).toBe('running');
+
+    const killed = mgr.killAllRunning({ lifespan: 'bound' });
+    expect(killed).toBe(1);
+
+    await new Promise((r) => setTimeout(r, 3_500));
+    expect(mgr.getStatus(detached.taskId)?.status).toBe('running');
+    expect(mgr.getStatus(bound.taskId)?.status).toBe('killed');
+
+    mgr.kill(detached.taskId);
+  }, 20_000);
 });

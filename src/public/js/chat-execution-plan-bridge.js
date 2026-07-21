@@ -269,6 +269,21 @@ window.ChatExecutionPlanBridge = (function () {
     } catch (_e) { /* ignore */ }
   }
 
+  function tryHydrateFromStructuredCache() {
+    try {
+      if (!window.ChatSession
+        || typeof window.ChatSession.getStructuredMessages !== 'function'
+        || !window.ChatExecutionPlan
+        || typeof window.ChatExecutionPlan.hydrateFromStructured !== 'function') {
+        return;
+      }
+      var structured = window.ChatSession.getStructuredMessages();
+      if (structured && structured.length) {
+        window.ChatExecutionPlan.hydrateFromStructured(structured);
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
   function onConnected(data) {
     var features = data && data.features;
     connectedKnown = true;
@@ -281,9 +296,11 @@ window.ChatExecutionPlanBridge = (function () {
       return;
     }
     ensurePanelVisible();
+    resyncShellDockUi();
     var stored = restoreFlowFromStorage(getActiveSessionId());
     // 连接时主动同步一次，覆盖刷新页面 / 跨端的场景
     fetchAndApply(stored);
+    tryHydrateFromStructuredCache();
   }
 
   function onStep(data) {
@@ -500,6 +517,14 @@ window.ChatExecutionPlanBridge = (function () {
     if (enabled) ensurePanelVisible();
   }
 
+  function resyncShellDockUi() {
+    try {
+      if (window.ChatPage && typeof window.ChatPage.syncShellDockOnMount === 'function') {
+        window.ChatPage.syncShellDockOnMount();
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
   function fetchAndApply(pendingStored) {
     if (!enabled) return;
     var sessionId = getActiveSessionId();
@@ -507,6 +532,7 @@ window.ChatExecutionPlanBridge = (function () {
     if (planFootDismissed && stored) {
       applyStoredFlowSnapshot(stored);
       ensurePanelVisible();
+      resyncShellDockUi();
       return;
     }
     var requestGeneration = ++syncGeneration;
@@ -520,10 +546,12 @@ window.ChatExecutionPlanBridge = (function () {
         if (planFootDismissed) {
           if (stored) applyStoredFlowSnapshot(stored);
           ensurePanelVisible();
+          resyncShellDockUi();
           return;
         }
         var plan = body && body.plan;
         applyRestPlan(plan, stored);
+        resyncShellDockUi();
       })
       .catch(function () { /* ignore */ });
   }

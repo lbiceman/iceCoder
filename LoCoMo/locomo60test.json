@@ -1,0 +1,1935 @@
+[
+  {
+    "sample_id": "60test-cap55",
+    "conversation": {
+      "speaker_a": "Participant A",
+      "speaker_b": "Participant B",
+      "session_1": [
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:1",
+          "text": "Hey Mel! Good to see you! How have you been?"
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:2",
+          "text": "Hey Caroline! Good to see you! I'm swamped with the kids & work. What's up with you? Anything new?"
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:3",
+          "text": "I went to a LGBTQ support group yesterday and it was so powerful."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:4",
+          "text": "Wow, that's cool, Caroline! What happened that was so awesome? Did you hear any inspiring stories?"
+        },
+        {
+          "speaker": "Caroline",
+          "img_url": [
+            "https://i.redd.it/l7hozpetnhlb1.jpg"
+          ],
+          "blip_caption": "a photo of a dog walking past a wall with a painting of a woman",
+          "query": "transgender pride flag mural",
+          "dia_id": "D1:5",
+          "text": "The transgender stories were so inspiring! I was so happy and thankful for all the support."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:6",
+          "text": "Wow, love that painting! So cool you found such a helpful group. What's it done for you?"
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:7",
+          "text": "The support group has made me feel accepted and given me courage to embrace myself."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:8",
+          "text": "That's really cool. You've got guts. What now?"
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:9",
+          "text": "Gonna continue my edu and check out career options, which is pretty exciting!"
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:10",
+          "text": "Wow, Caroline! What kinda jobs are you thinkin' of? Anything that stands out?"
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:11",
+          "text": "I'm keen on counseling or working in mental health - I'd love to support those with similar issues."
+        },
+        {
+          "speaker": "Melanie",
+          "img_url": [
+            "http://candicealexander.com/cdn/shop/products/IMG_7269_a49d5af8-c76c-4ecd-ae20-48c08cb11dec.jpg"
+          ],
+          "blip_caption": "a photo of a painting of a sunset over a lake",
+          "query": "painting sunrise",
+          "dia_id": "D1:12",
+          "text": "You'd be a great counselor! Your empathy and understanding will really help the people you work with. By the way, take a look at this."
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:13",
+          "text": "Thanks, Melanie! That's really sweet. Is this your own painting?"
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:14",
+          "text": "Yeah, I painted that lake sunrise last year! It's special to me."
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:15",
+          "text": "Wow, Melanie! The colors really blend nicely. Painting looks like a great outlet for expressing yourself."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:16",
+          "text": "Thanks, Caroline! Painting's a fun way to express my feelings and get creative. It's a great way to relax after a long day."
+        },
+        {
+          "speaker": "Caroline",
+          "dia_id": "D1:17",
+          "text": "Totally agree, Mel. Relaxing and expressing ourselves is key. Well, I'm off to go do some research."
+        },
+        {
+          "speaker": "Melanie",
+          "dia_id": "D1:18",
+          "text": "Yep, Caroline. Taking care of ourselves is vital. I'm off to go swimming with the kids. Talk to you soon!"
+        }
+      ],
+      "session_1_date_time": "1:56 pm on 8 May, 2023",
+      "session_2": [
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:1",
+          "text": "Hey Jon! Good to see you. What's up? Anything new?"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:2",
+          "text": "Hey Gina! Good to see you too. Lost my job as a banker yesterday, so I'm gonna take a shot at starting my own business."
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:3",
+          "text": "Sorry about your job Jon, but starting your own business sounds awesome! Unfortunately, I also lost my job at Door Dash this month. What business are you thinking of?"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:4",
+          "text": "Sorry to hear that! I'm starting a dance studio 'cause I'm passionate about dancing and it'd be great to share it with others."
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:5",
+          "text": "That's cool, Jon! What got you into this biz?"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:6",
+          "text": "I've been into dancing since I was a kid and it's been my passion and escape. I wanna start a dance studio so I can teach others the joy that dancing brings me."
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:7",
+          "text": "Wow Jon, same here! Dance is pretty much my go-to for stress relief. Got any fave styles?"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:8",
+          "text": "Cool, Gina! I love all dances, but contemporary is my top pick. It's so expressive and powerful! What's your fave?"
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:9",
+          "text": "Yeah, me too! Contemporary dance is so expressive and graceful - it really speaks to me."
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:10",
+          "text": "Wow, great idea! Let's go to a dance class, it'll be so much fun!"
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:11",
+          "text": "Yeah! Let's explore some new dance moves. We should plan a dance session soon!"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:12",
+          "text": "Yeah definitely! Wanna see my moves next Fri? Can't wait!"
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:13",
+          "text": "Sounds great, Jon! Next Friday works. Let's boogie!"
+        },
+        {
+          "speaker": "Jon",
+          "img_url": [
+            "https://upload.wikimedia.org/wikipedia/commons/a/a9/Dekkadancers_Mu%C5%BE_z_Malty.jpg"
+          ],
+          "blip_caption": "a photography of a man in a suit is performing a dance",
+          "query": "dancing on stage performance dance competition last year",
+          "dia_id": "D1:14",
+          "re-download": true,
+          "text": "Wow, I'm excited too! This is gonna be great!"
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:15",
+          "text": "Wow! What did you get?"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:16",
+          "text": "Woah, that pic's from when my dance crew took home first in a local comp last year. It was amazing up on that stage! I'm super keen to spread that intensity with other peeps. Gina, you ever been in any dance comps or shows?"
+        },
+        {
+          "speaker": "Gina",
+          "img_url": [
+            "https://upload.wikimedia.org/wikipedia/commons/4/41/2009_NHK_Trophy_Dance_-_Meryl_DAVIS_-_Charlie_WHITE_-_Gold_Medal_-_0948a.jpg"
+          ],
+          "blip_caption": "a photography of a couple of people standing next to each other",
+          "query": "dance competition trophy team",
+          "dia_id": "D1:17",
+          "re-download": true,
+          "text": "I used to compete in a few dance competitions and shows - my fav memory was when my team won first place at a regionals at age fifteen. It was an awesome feeling of accomplishment!"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:18",
+          "text": "Wow! Winning first place is amazing! What dance were you doing?"
+        },
+        {
+          "speaker": "Gina",
+          "blip_caption": "a photo of a large open porch with a fireplace and a view of the water",
+          "dia_id": "D1:19",
+          "text": "Thanks! We just did a contemporary piece called \"Finding Freedom.\" It was really emotional and powerful."
+        },
+        {
+          "speaker": "Jon",
+          "img_url": [
+            "https://live.staticflickr.com/2730/4360526470_6bee96b5d7_b.jpg"
+          ],
+          "blip_caption": "a photography of a room with a view of the ocean and a few yoga mats",
+          "query": "dance studio overlooking ocean",
+          "dia_id": "D1:20",
+          "re-download": true,
+          "text": "Wow, that must've been great! Check my ideal dance studio by the water."
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:21",
+          "text": "Cool setup! Man, you can't deny that view! Got time to rehearse with a biz and a new store?"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:22",
+          "text": "Hopefully, we will find a place like this that will inspire us!"
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:23",
+          "text": "Wow, it looks great! What dances do you practice? Got any projects planned?"
+        },
+        {
+          "speaker": "Jon",
+          "img_url": [
+            "https://markmorrisdancegroup.org/wp-content/uploads/2021/04/MM0108_JesuMeineFreude_Boston_BrazilTom_02.jpg"
+          ],
+          "blip_caption": "a photo of a group of dancers in white dresses on a stage",
+          "query": "group dancers performing on stage",
+          "dia_id": "D1:24",
+          "text": "Thanks! I rehearsed with a small group of dancers after work. We do all kinds of dances, from contemporary to hip-hop. We've got some cool projects in the works. Finishing up choreography to perform at a nearby festival next month. Can't wait!"
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:25",
+          "text": "Wow, it looks awesome! Are they yours at the festival? They're so graceful!"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:26",
+          "text": "Yeah, they're the ones performing at the festival! They've been practicing hard and will definitely impress with their grace and skill."
+        },
+        {
+          "speaker": "Gina",
+          "dia_id": "D1:27",
+          "text": "Wow, they look great! Can't wait to see them rock the festival. Gonna be awesome!"
+        },
+        {
+          "speaker": "Jon",
+          "dia_id": "D1:28",
+          "text": "Yeah, awesome! Glad to be part of it."
+        }
+      ],
+      "session_2_date_time": "4:04 pm on 20 January, 2023",
+      "session_3": [
+        {
+          "speaker": "John",
+          "blip_caption": "a photo of a man sitting on a bed using a laptop",
+          "dia_id": "D3:1",
+          "text": "Hey Maria, great to chat again! I joined a service-focused online group last week and it's been an emotional ride. Everyone there is incredible with their own inspiring stories. They've opened my eyes to new perspectives, and I'm feeling a sense of connection and purpose with them."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D3:2",
+          "text": "Wow, John! That's amazing news. It's great to see you finding such a supportive community that is making a difference."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:3",
+          "text": "Thanks, Maria! It's great to have a group of people with the same passion for serving. It's been really inspiring sharing stories, advice, and encouragement."
+        },
+        {
+          "speaker": "Maria",
+          "blip_caption": "a photo of a poster on a table with a santa clause",
+          "dia_id": "D3:4",
+          "text": "That's great to hear! It's always inspiring to share thos things with like-minded individuals. By the way, have you had the chance to meet any of them in person?\n"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:5",
+          "text": "We held some events and got to meet some people. We went to a homeless shelter to give out food and supplies. Seeing the smiles on their faces, we knew we made a real difference. We also organized a toy drive for kids in need. It was amazing seeing the community come together to spread some joy."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D3:6",
+          "text": "That sounds great, John. It's nice to see the difference you're making. Do you have any ideas for future projects?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:7",
+          "text": "We're brainstorming some to help underserved communities get access to education, mentorship, job training, and resume building. The goal is to empower individuals in achieving their aspirations."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D3:8",
+          "text": "That's great, John! Empowering individuals through education and mentorship is crucial for helping them reach their goals. Can't wait to see the initiatives you come up with!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:9",
+          "text": "Thanks, Maria! I'm really excited about them too. I believe that providing the right assistance and resources can make a lasting impact."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D3:10",
+          "text": "Yep John, a bit of support can make an amazing change. You're spot on about it, it really is powerful. Keep doing what you're doing, it's really inspiring!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:11",
+          "text": "Thanks, Maria! I really appreciate your support, It means a lot to me. Especially after I failed the military aptitude test recently, I've been feeling a bit stressed out."
+        },
+        {
+          "speaker": "Maria",
+          "img_url": [
+            "https://images.pexels.com/photos/10815424/pexels-photo-10815424.jpeg?cs\\u003dsrgb\\u0026dl\\u003dpexels-beyza-erdem-10815424.jpg"
+          ],
+          "blip_caption": "a photo of a sunset over the ocean with a wave coming in",
+          "query": "sunset ocean beauty nature",
+          "dia_id": "D3:12",
+          "text": "No worries, John. I'm here for you and I got your back. Nature's beauty reminds me to slow down and enjoy the small stuff."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:13",
+          "text": "That's a chill pic! Where did you find it?"
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D3:14",
+          "text": "I took it at the beach last month. Watching the sunset was so peaceful, it made me feel connected to nature and appreciate life's small moments."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D3:15",
+          "text": "Wow, nature can be so beautiful! It reminds me of the film camera I had as a kid, I took plenty of beach pics. Thanks for sharing."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D3:16",
+          "text": "Glad you enjoyed it, John! It's amazing how beautiful it can be."
+        },
+        {
+          "speaker": "John",
+          "blip_caption": "a photo of a group of people standing around a field",
+          "dia_id": "D3:17",
+          "text": "Yeah, it does. It helps us remember the small joys, especially when life gets busy."
+        }
+      ],
+      "session_3_date_time": "8:30 pm on 1 January, 2023",
+      "session_4": [
+        {
+          "speaker": "Maria",
+          "blip_caption": "a photo of a bride and groom walking down the street",
+          "dia_id": "D8:1",
+          "text": "Hey John, I haven't talked to you in a while. Last week, my grandma passed away and it's been really hard. I'm trying to stay positive, but it's tough. How're you doing?"
+        },
+        {
+          "speaker": "John",
+          "img_url": [
+            "https://content1.getnarrativeapp.com/static/1396e135-13d4-4c37-8183-5d1eaf957c41/Surprise-proposal-picnic-at-cathedral-park-in-Portland-or-.jpg"
+          ],
+          "blip_caption": "a photo of a family sitting on the grass with a baby",
+          "query": "family picnic",
+          "dia_id": "D8:2",
+          "text": "So sorry to hear about your loss, Maria. I'm here for you if you need anything. I'm doing well, I just had a picnic with the wife and kids."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:3",
+          "text": "Thanks for your support, John. How's your family doing? That baby in the pic is adorable! What's their name?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:4",
+          "text": "Thanks, Maria! They're doing great. Our one-year-old is so cute, his name is Kyle!"
+        },
+        {
+          "speaker": "Maria",
+          "blip_caption": "a photo of a person walking on the beach with a surfboard",
+          "dia_id": "D8:5",
+          "text": "Sounds like parenting has been a wonderful experience for you - what has it been like?"
+        },
+        {
+          "speaker": "John",
+          "img_url": [
+            "https://live.staticflickr.com/1883/42932050850_97f4b8999f_b.jpg"
+          ],
+          "blip_caption": "a photography of two children playing on a playground equipment",
+          "query": "parenting kids park playing",
+          "dia_id": "D8:6",
+          "re-download": true,
+          "text": "It's definitely been a wild ride! It's full of ups and downs, but the love and happiness outweigh it all."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:7",
+          "text": "Parenting can be tough but rewarding. Do you take your kid to the park often?"
+        },
+        {
+          "speaker": "John",
+          "img_url": [
+            "https://live.staticflickr.com/1851/44767563171_457da8d8b3_b.jpg"
+          ],
+          "blip_caption": "a photography of a young girl and a young boy on a swing",
+          "query": "park kids playing swings joyful moment",
+          "dia_id": "D8:8",
+          "re-download": true,
+          "text": "Yeah, we go a few times a week. It's great for family bonding and letting the kids run around. We had a great time last weekend - they really enjoyed the carefree joy.\n"
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:9",
+          "text": "Looks like a blast! Did everyone get a chance to try it? Glad you're all having a great time!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:10",
+          "text": "Yeah, everyone got a chance to swing. It's always fun coming up with activities for my family to enjoy."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:11",
+          "text": "Wow, John, that's amazing! How do you come up with these ideas?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:12",
+          "text": "I just try to find things that we'll have fun with, like a walk or picnic in the park, or finding events in our town and beyond. Just last week, I found a violin concert that we all enjoyed. It's all about making memories together."
+        },
+        {
+          "speaker": "Maria",
+          "img_url": [
+            "https://i.redd.it/eq0vvcinma621.jpg"
+          ],
+          "blip_caption": "a photo of a picture of a castle in a shadow box",
+          "query": "DIY cardboard fort fairy lights",
+          "dia_id": "D8:13",
+          "text": "Wow, John, that's great! Making memories together is so valuable. I loved doing something similar with my siblings when I was young - it's amazing how something so simple can make such lasting memories."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:14",
+          "text": "That pic is so cool! It looks like something from a storybook. What gave you the idea for this?"
+        },
+        {
+          "speaker": "Maria",
+          "img_url": [
+            "https://images.rawpixel.com/image_social_square/cHJpdmF0ZS9sci9pbWFnZXMvd2Vic2l0ZS8yMDIzLTAzL21ldDMzOTg0NC1pbWFnZS5qcGc.jpg"
+          ],
+          "blip_caption": "a photography of a painting of a castle on a hill",
+          "query": "castle painting Europe beauty wonder",
+          "dia_id": "D8:15",
+          "re-download": true,
+          "text": "Thanks, John! I got the idea from that trip to England a few years ago - I was mesmerized by the castles. I wanted to bring that same magic to my home, like a reminder of the world's beauty. I made a painting too!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:16",
+          "text": "Wow, that looks great! Where in England was it?"
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:17",
+          "text": "It was in London. The architecture there was so captivating that I wanted to recreate some of that charm in my own space. It's a reminder of London's history and grace."
+        },
+        {
+          "speaker": "John",
+          "blip_caption": "a photo of a wooden sign with a flag and eagle",
+          "dia_id": "D8:18",
+          "text": "Wow, having symbols of travel memories in our homes is so cool! Last week I retook the aptitude test with some great results, and I feel drawn to serving my country in this way."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:19",
+          "text": "Wow, that's really cool! Have you discussed it with anyone yet?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:20",
+          "text": "Yeah, I chatted with my family and friends about it. They've been supportive and understand why I want to volunteer. I'm really proud to have this opportunity!"
+        },
+        {
+          "speaker": "Maria",
+          "blip_caption": "a photo of a group of people standing around a table with food",
+          "dia_id": "D8:21",
+          "text": "Glad you have a good support system, John. It's been great having people behind me while volunteering at the homeless shelter. Positive influences make a big impact.\n"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:22",
+          "text": "Cool, Maria! You've built some awesome connections and you're making a big impact at the homeless shelter - nice work! How did you manage to do that?"
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:23",
+          "text": "Thanks, John! It took time and effort, but I slowly formed connections by listening and showing compassion. It's all about building trust and forming real relationships."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D8:24",
+          "text": "Wow, Maria! I see, so that's the key to making a difference."
+        },
+        {
+          "speaker": "Maria",
+          "dia_id": "D8:25",
+          "text": "Yeah, building those real connections and getting people to trust us is key. It's usually the little things, like taking the time to hear what they're saying, that make the biggest impact."
+        },
+        {
+          "speaker": "John",
+          "blip_caption": "a photo of a group of people sitting at a table with plates of food",
+          "dia_id": "D8:26",
+          "text": "Yeah, Maria, I agree. That can really make a difference. It's important to make people feel noticed and listened to."
+        }
+      ],
+      "session_4_date_time": "6:03 pm on 6 March, 2023",
+      "session_5": [
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:1",
+          "text": "Hey Nate! Haven't talked in a few days. Crazy things happened to me!"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:2",
+          "text": "Hi Joanna! Long time no see! What's been going on? You sound excited!"
+        },
+        {
+          "speaker": "Joanna",
+          "img_url": [
+            "https://live.staticflickr.com/3159/2406045813_cab5f8211d_b.jpg"
+          ],
+          "blip_caption": "a photography of a book with a page of text on it",
+          "query": "screenplay laptop",
+          "dia_id": "D2:3",
+          "re-download": true,
+          "text": "Woo! I finally finished my first full screenplay and printed it last Friday. I've been working on for a while, such a relief to have it all done!"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:4",
+          "text": "Wow, that sounds awesome! What's it about? Glad it's all down!"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:5",
+          "text": "Thanks, Nate! It's a mix of drama and romance!"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:6",
+          "text": "Wow, that's amazing! How do you feel now that it's finished? Do you have any new plans for it?"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:7",
+          "text": "Woohoo, Nate! I'm feeling a rollercoaster of emotions - relief, excitement, some anxiety - over finishing this project. Now I'm gonna submit it to some film festivals and (hopefully) get producers and directors to check it out. Here's hoping!"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:8",
+          "text": "Congrats, Joanna! That sounds like a wild experience. Rock on and I hope they love it!"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:9",
+          "text": "Thanks Nate! A mix of emotions for sure. Hopefully, it leads to positive feedback and new opportunities."
+        },
+        {
+          "speaker": "Nate",
+          "img_url": [
+            "https://live.staticflickr.com/5126/5279947833_4ae1f16e96_b.jpg"
+          ],
+          "blip_caption": "a photography of a turtle and a turtleling sitting on a rock",
+          "query": "pet turtles",
+          "dia_id": "D2:10",
+          "re-download": true,
+          "text": "Yeah, for sure. Hoping for the best! I like having some of these little ones around to keep me calm when things are super important and I'm nervous."
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:11",
+          "text": "Awww! How long have you had them?"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:12",
+          "text": "I've had them for 3 years now and they bring me tons of joy!"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:13",
+          "text": "They sure lookl like they do! Adorable!"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:14",
+          "text": "Thanks! The turtles might be small, but both sure have big personalities. I really reccomend having something like these little guys for times of stress."
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:15",
+          "text": "Good idea, Nate! I'll think about it and maybe get pets of my own soon if I can find any I'm not allergic to. Have you been up to anything recently?"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:16",
+          "text": "Yeah actually! I start to hang out with some people outside of my circle at the tournament. They're pretty cool!"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:17",
+          "text": "Oh? That sounds sweet! Is it a weird relationship with them being competitors and all?"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:18",
+          "text": "Oh, kind of. Some people are more competitive then others, so I tend to just stick around the more chill people here."
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:19",
+          "text": "That makes sense! Are you gonna cheer them on even if you lose?"
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:20",
+          "text": "Absolutely! I don't expect to win big here, I just like playing for fun!  You mentioned you were allergic to pets earlier, how bad is it?"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:21",
+          "text": "Oh, its really bad. My face gets all puffy and itchy when I'm around certain animals, so I've always just stayed away."
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:22",
+          "text": "Sorry to hear that. Allergies can be tough. What specifically are you allergic to?"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:23",
+          "text": "I'm allergic to most reptiles and animals with fur. It can be a bit of a drag, but I find other ways to be happy."
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:24",
+          "text": "Awesome! There are lots of things that can bring you joy without pets. What else brings you joy?"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:25",
+          "text": "Writing and hanging with friends! That way I can express myself through stories, or just have a good time with people."
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:26",
+          "text": "That's great to hear! Those are both great things. I'm glad to hear you've got other things to help you get through times of axiousness despite not being able to have animals!"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:27",
+          "text": "Thanks, Nate! Writing helps me create wild worlds with awesome characters. Plus, it's a great way to express my feelings. I can't imagine life without it."
+        },
+        {
+          "speaker": "Nate",
+          "dia_id": "D2:28",
+          "text": "Wow, Joanna, that sounds amazing! Keep doing what you love!"
+        },
+        {
+          "speaker": "Joanna",
+          "dia_id": "D2:29",
+          "text": "Thanks, Nate! I'll definitely keep pursuing my passion for writing. It means a lot."
+        }
+      ],
+      "session_5_date_time": "2:01 pm on 23 January, 2022",
+      "session_6": [
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:1",
+          "text": "Hey John! How've you been? Something awesome happened - I'm writing articles about fantasy novels for an online mag. It's so rewarding!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D4:2",
+          "text": "Hey Tim! Congrats on the opportunity to write about what you're into! How did it happen?"
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:3",
+          "text": "Thanks! I found this opportunity on a fantasy lit forum and thought it'd be perfect since I love fantasy. I shared my ideas with the magazine and they liked them! It's been awesome to spread my love of fantasy."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D4:4",
+          "text": "Congratulations! That's awesome. What kind of articles have you been writing?"
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:5",
+          "text": "Thanks! I've been writing about different fantasy novels, studying characters, themes, and making book recommendations."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D4:6",
+          "text": "Awesome! Must be so rewarding to delve into your books and chat about them. Do you have any favorite books you love writing about?"
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:7",
+          "text": "For sure! Harry Potter and Game of Thrones are amazing - I'm totally hooked! I could chat about them forever!"
+        },
+        {
+          "speaker": "John",
+          "img_url": [
+            "https://pictures.abebooks.com/inventory/31262885157_3.jpg"
+          ],
+          "blip_caption": "a photo of a book with a picture of a person holding a bookmark",
+          "query": "harry potter signed book",
+          "dia_id": "D4:8",
+          "text": "Oh yeah, I remember you telling me about Harry Potter! I've got a funny story. Anthony and I went to this charity thing and ended up in this intense Harry Potter trivia contest. We did alright, but there was this one super-nerd there that took home this as a prize.\n"
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:9",
+          "text": "That looks great! The signature is sweet! Have you been reading anything?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D4:10",
+          "text": "I've been reading this inspiring book, it reminds me to keep dreaming."
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:11",
+          "text": "Books can really inspire and help us keep our dreams alive. Keep it up!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D4:12",
+          "text": "Thanks! They really do. I want to keep reaching for new goals."
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:13",
+          "text": "Same here!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D4:14",
+          "text": "Have fun with your writing! Catch you later!"
+        },
+        {
+          "speaker": "Tim",
+          "dia_id": "D4:15",
+          "text": "Thanks! I'll enjoy writing them. Take care and talk soon!"
+        }
+      ],
+      "session_6_date_time": "4:17 pm on 2 August, 2023",
+      "session_7": [
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:1",
+          "text": "Hey Andrew! Good to see ya! What's been up since we last talked?"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:2",
+          "text": "Hey Audrey! So, I started a new job as a Financial Analyst last week - it's been quite a change from my previous job. How about you? Anything interesting happening?"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:3",
+          "text": "Congrats on the new job! So I got these new collars and tags for my dogs - so cute!"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:4",
+          "text": "Thanks! That sounds cute. Can I see a picture?"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:5",
+          "img_url": [
+            "https://worldanimalfoundation.org/wp-content/uploads/2022/07/adjustable-collar-Review.jpg"
+          ],
+          "re-download": true,
+          "blip_caption": "a photography of two dogs are standing in the grass with their mouths open",
+          "text": "Sure! See them with their new collars, cute right?"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:6",
+          "text": "Cute little guys! What are their names and how long have you had them?"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:7",
+          "text": "I've had them for 3 years! Their names are Pepper, Precious and Panda. I can't live without my little ones!"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:8",
+          "text": "That's awesome! Have you always wanted a dog, even with living in the city? Can they still go on adventures?"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:9",
+          "text": "Absolutely! They're city dogs and we explore all the time. They love trying out new parks and trails. We go on adventures together very often."
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:10",
+          "text": "Wow, sounds like they make life so awesome! Kinda jealous of all those fun outings with them."
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:11",
+          "text": "They really do! It's great how much happiness they bring. Do you have any pets?"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:12",
+          "text": "No, no pets right now. But I do love animals."
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:13",
+          "text": "That's great to hear! Animals are truly amazing. Do you have a favorite animal?"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:14",
+          "text": "I've always been awed by birds. Their power to soar and explore new spots is amazing."
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:15",
+          "text": "Yeah, birds are amazing! I can imagine it feels incredible to soar and see the world from up high. Do you have a favorite type of bird?"
+        },
+        {
+          "speaker": "Andrew",
+          "img_url": [
+            "https://i.redd.it/g9ia8ap7ckmb1.jpg"
+          ],
+          "blip_caption": "a photo of two birds flying in the sky with a sun shining behind them",
+          "query": "majestic eagle soaring sky",
+          "dia_id": "D1:16",
+          "text": "Eagles have always mesmerized me; they're so strong and graceful!"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:17",
+          "text": "Yeah they're beautiful. Do you go bird-watching? It must be awesome to see them up close."
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:18",
+          "text": "Haven't specifically gone out for bird-watching, but I do spot them when I hike."
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:19",
+          "text": "Nice, spotting pretty birds while hiking must be great. Do you have any favorite hiking spots?"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:20",
+          "text": "Fox Hollow is a great trail to hike on weekends; the views are awesome!"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:21",
+          "text": "Cool, gonna give it a try. Thanks for the suggestion!"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:22",
+          "text": "No problem! Let me know how you like it. Have fun hiking!"
+        },
+        {
+          "speaker": "Audrey",
+          "dia_id": "D1:23",
+          "text": "Thanks! I'll let you know. Have a good one!"
+        },
+        {
+          "speaker": "Andrew",
+          "dia_id": "D1:24",
+          "text": "Take care and have a good one! See ya!"
+        }
+      ],
+      "session_7_date_time": "1:10 pm on 27 March, 2023",
+      "session_8": [
+        {
+          "speaker": "James",
+          "dia_id": "D10:1",
+          "text": "Hey John! Been a while since we chatted. Sorry 'bout not getting back sooner. How's it going? Any new games you're into?"
+        },
+        {
+          "speaker": "John",
+          "img_url": [
+            "https://i.redd.it/eh02fep1qnw01.jpg"
+          ],
+          "blip_caption": "a photo of a wooden table with a game controller on it",
+          "query": "charity gaming tournament friends game controllers",
+          "dia_id": "D10:2",
+          "text": "Hey James! No worries, I know you are really busy at work. I'm good, thanks for asking. Oh, I've been organizing something with my friends yesterday - it was cool! Guess what it was, I'll give you a little hint."
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:3",
+          "text": "Wow, John, that looks awesome! Is it an icon of a new game?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D10:4",
+          "text": "Nope, not a new game. We put together a tournament for our favorite game, CS:GO. Lots showed up and we made a bunch of money for charity!"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:5",
+          "text": "Wow John, organizing that tournament for charity must have been a ton of effort, but it sounds like it was so worth it!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D10:6",
+          "text": "Definitely worth it! It took some planning and coordination, but seeing everyone come together for a good cause was so rewarding."
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:7",
+          "text": "It must have been great to see the results of that effort. Have you considered organizing more events like that in the future?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D10:8",
+          "text": "Yeah, for sure! It was awesome and I want to do more events like that. It combines my interests and helps the community. Plus, it's great to get people together for some friendly competition."
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:9",
+          "text": "Combining gaming and volunteering is a great idea! So fun and fulfilling. Where did you send the collected money?"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D10:10",
+          "text": "Our main goal was to raise money for a dog shelter, which is not far from the street where I live. And we did it!"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:11",
+          "text": "Helping animals is really important!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D10:12",
+          "text": "I agree. We still had some money left after helping the shelter, and we decided to use this money to buy groceries and cook some food for the homeless. They were very happy about it."
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:13",
+          "text": "Glad you are helping those in need! You are doing a great job John, keep up the good work!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D10:14",
+          "text": "Thanks for your support, James! I won't stop there, I will do more and more good things!"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D10:15",
+          "text": "I'm really proud of you!"
+        }
+      ],
+      "session_8_date_time": "12:45 am on 8 May, 2022",
+      "session_9": [
+        {
+          "speaker": "John",
+          "dia_id": "D29:1",
+          "text": "Hey James! Hope you're doing great. I've some amazing news - I held a gaming tourney with my buddies last night. We played Fortnite and a few other games. We raised a decent amount for a children's hospital. Combining gaming and a good cause felt awesome!"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:2",
+          "text": "Hey John! Awesome job organizing a gaming tournament for a children's hospital! Combining gaming and a good cause - that's really cool! Tell me more about who helped out and what other games were played."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D29:3",
+          "text": "Thanks! We all pulled together for a great cause. My gaming pals and I also played Overwatch and Apex Legends. Everyone had a blast raising money for the kids' hospital. The atmosphere was awesome and everyone was so competitive. In the end, we raised a good amount. Feels good to use our love of gaming for good!"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:4",
+          "text": "Wow, that sounds like a blast! It's great how gaming can bring people together like that. You made a huge difference in the kids' lives! Do you have any photos from the tournament?"
+        },
+        {
+          "speaker": "John",
+          "img_url": [
+            "https://i.redd.it/157m14rlacw51.jpg"
+          ],
+          "blip_caption": "a photo of a computer screen with a game menu on it",
+          "query": "gaming tournament intense match engaged thrilling experience good cause",
+          "dia_id": "D29:5",
+          "text": "I got a great shot at the tournament. Check it out! Everyone was so hyped, and it felt great knowing we were playing for a good cause."
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:6",
+          "text": "Wow, this photo rocks!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D29:7",
+          "text": "Thanks! I'm glad you enjoyed it. It was a really awesome moment - unforgettable for all of us! What's new with you?"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:8",
+          "text": "I actually have something new, Samantha and I have decided to move in together!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D29:9",
+          "text": "Wow, that's a really big decision! I hope you both have weighed the pros and cons. Where are you going to live?"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:10",
+          "text": "Of course, this was a mutual and informed decision. We rented an apartment not far from McGee's bar."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D29:11",
+          "text": "You love spending time together in this bar, don't you?"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:12",
+          "text": "We just love it! I’ll be honest, one of the criteria for our choice of apartment was this particular bar nearby."
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D29:13",
+          "text": "Awesome, James! Excited to hear how it goes. Keep me posted and good luck!"
+        },
+        {
+          "speaker": "James",
+          "dia_id": "D29:14",
+          "text": "Thanks, John! I'll be sure to keep you updated. I really appreciate your support. Take care!"
+        },
+        {
+          "speaker": "John",
+          "dia_id": "D29:15",
+          "text": "No worries! I'm here for you whenever you need. Stay safe and chat soon!"
+        },
+        {
+          "speaker": "James",
+          "blip_caption": "a photo of a man and two dogs running in a field",
+          "dia_id": "D29:16",
+          "text": "Thanks! Appreciate your support. Stay safe and talk to you soon!"
+        }
+      ],
+      "session_9_date_time": "12:37 am on 31 October, 2022",
+      "session_10": [
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:1",
+          "text": "Hey Jolene, nice to meet you! How's your week going? Anything fun happened?"
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:2",
+          "text": "Hi Deb! Good to meet you! Yeah, my week's been busy. I finished an electrical engineering project last week - took a lot of work, but it's done now. Anything fun happening for you?"
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:3",
+          "text": "Congrats! Last week I visited a place that holds a lot of memories for me. It was my mother`s old house."
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:4",
+          "text": "Why does it hold such special memories for you?"
+        },
+        {
+          "speaker": "Deborah",
+          "img_url": [
+            "https://jubileewriter.files.wordpress.com/2021/05/20171019_174608.jpg"
+          ],
+          "blip_caption": "a photo of a woman in a wheelchair hugging a woman in a wheelchair",
+          "query": "mother old home emotions memories",
+          "dia_id": "D1:5",
+          "text": "It was full of memories, she passed away a few years ago. This is our last photo together."
+        },
+        {
+          "speaker": "Jolene",
+          "img_url": [
+            "https://www.therootboard.com/cdn/shop/articles/IMG_5420.jpg"
+          ],
+          "blip_caption": "a photo of a room with a bench and a window",
+          "query": "serene yoga studio windows natural light",
+          "dia_id": "D1:6",
+          "text": "Sorry about your loss, Deb. My mother also passed away last year. This is my room in her house, I also have many memories there. Is there anything special about it you remember?"
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:7",
+          "text": "My mom's house had a special bench near the window. She loved to sit there every morning and take in the view. I come to sit here sometimes, it helps me stay connected to her."
+        },
+        {
+          "speaker": "Jolene",
+          "img_url": [
+            "http://eternalkeepsake.com/cdn/shop/products/IMG_0841.jpg"
+          ],
+          "blip_caption": "a photo of a heart shaped pendant with a bird on it",
+          "query": "meaningful necklace heart pendant",
+          "dia_id": "D1:8",
+          "text": "Staying connected is super important. Do you have something to remember her by? This pendant reminds me of my mother, she gave it to me in 2010  in Paris."
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:9",
+          "text": "Yes, I also have a pendant that reminds me of my mother. And what is special for you about your jewelry?"
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:10",
+          "text": "It has a special symbol on it that represents freedom for me. It's a nice reminder to go for my goals and not get held back."
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:11",
+          "text": "It should really give you strength and energy!"
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:12",
+          "text": "Do you have goals?"
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:13",
+          "text": "One of my goals is to keep teaching yoga and supporting my community. I'm passionate about helping people find peace and joy through it."
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:14",
+          "text": "What inspired you to go down this route?"
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:15",
+          "text": "Yoga helped me find peace during a rough time, and now I'm passionate about sharing that with others."
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:16",
+          "text": "It is truly inspiring!"
+        },
+        {
+          "speaker": "Deborah",
+          "dia_id": "D1:17",
+          "text": "Gotta run, bye!"
+        },
+        {
+          "speaker": "Jolene",
+          "dia_id": "D1:18",
+          "text": "Looking forward to the next chat!"
+        }
+      ],
+      "session_10_date_time": "4:06 pm on 23 January, 2023",
+      "session_11": [
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:1",
+          "text": "Hey Evan, good to see you! What's new since we last met? Anything cool happening?"
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:2",
+          "text": "Hey Sam! Good to see you! Yeah, I just got back from a trip with my family in my new Prius."
+        },
+        {
+          "speaker": "Sam",
+          "blip_caption": "a photo of a person's feet on a car dashboard as the sun sets",
+          "dia_id": "D1:3",
+          "text": "Wow, not bad, what happened to the old one? Where'd you go, by the way?"
+        },
+        {
+          "speaker": "Evan",
+          "img_url": [
+            "https://res.cloudinary.com/atlasguruprod/image/upload/v1605280914/site-prod/itineraries/402c83d0-237f-11eb-85fd-4d00e2439877/omasxscl2k2xlnc2ggvj.jpg"
+          ],
+          "blip_caption": "a photo of a lake with rocks and mountains in the background",
+          "query": "canadian rockies sunset scenery",
+          "dia_id": "D1:4",
+          "text": "My old prius broke down, decided to get it repaired and sell it. Glad you asked, we went to Rockies, check it out."
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:5",
+          "text": "Wow! Looks amazing. When did you get to go there?"
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:6",
+          "text": "We all hiked the trails last week - the views were amazing!"
+        },
+        {
+          "speaker": "Sam",
+          "img_url": [
+            "https://storage.needpix.com/rsynced_images/family-1784512_1280.jpg"
+          ],
+          "blip_caption": "a photography of a man and a child walking through a forest",
+          "query": "hiking trail lush greenery bonding experience",
+          "dia_id": "D1:7",
+          "re-download": true,
+          "text": "Wow, that's cool. I love hiking, but it's been ages since I've done it. I did this hike with my dad way back when I was ten. Going hiking together was great fun, and really special for us."
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:8",
+          "text": "Aww, that's cute. How far did you two hike?"
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:9",
+          "text": "We hiked a good distance - quite a feat for me back then. It's definitely a great memory."
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:10",
+          "text": "What other hobbies have you found for yourself?"
+        },
+        {
+          "speaker": "Sam",
+          "img_url": [
+            "https://i.redd.it/hbkrxuiitopb1.jpg"
+          ],
+          "blip_caption": "a photo of a person holding a paint set in a store",
+          "query": "paint set canvas hobbies",
+          "dia_id": "D1:11",
+          "text": "Nothing so far, but I was thinking about trying painting. Do you have any hobbies you love?"
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:12",
+          "text": "Cool idea, Sam! I love it. Have you tried it before?"
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:13",
+          "text": "Not yet, but I'm keen to give it a go. It looks like a nice way to chill and get creative."
+        },
+        {
+          "speaker": "Evan",
+          "img_url": [
+            "https://i.pinimg.com/originals/73/e4/fd/73e4fd6baf59abc2beca9fd5509a853c.jpg"
+          ],
+          "blip_caption": "a photo of a painting of a cactus in the desert",
+          "query": "watercolor painting sunset",
+          "dia_id": "D1:14",
+          "text": "Yep, it's a great stress-buster. I started doing this a few years back."
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:15",
+          "text": "Wow, that's impressive! How did you get into watercolor painting?"
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:16",
+          "text": "My friend got me into it and gave me some advice, and I was hooked right away!"
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:17",
+          "text": "Wow! I hope I can find something I'm as passionate about as you are with watercolor painting."
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:18",
+          "text": "You'll find it, just keep trying new things until something sparks your excitement."
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:19",
+          "text": "Thanks, Evan! I'm excited to try new things, should be fun!"
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:20",
+          "text": "No worries, Sam! Super pumped for you! Let's catch up soon and see how you're enjoying your new hobbies!"
+        },
+        {
+          "speaker": "Sam",
+          "dia_id": "D1:21",
+          "text": "Yeah, I'll keep you posted. See you soon!"
+        },
+        {
+          "speaker": "Evan",
+          "dia_id": "D1:22",
+          "text": "Take it easy, Evan! Can't wait to see you. Have a good one!"
+        }
+      ],
+      "session_11_date_time": "1:47 pm on 18 May, 2023",
+      "session_12": [
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:1",
+          "text": "Hey Dave! Long time no see. I just went to an awesome music thingy in Tokyo - so cool!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:2",
+          "text": "Hey Calvin! Great to hear from you. How was the music thingy in Tokyo? See any cool bands?"
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:3",
+          "text": "Hey Dave! The festival in Tokyo was awesome! Didn't see any bands, but met lots of talented artists and industry people. Totally enriching!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:4",
+          "text": "Wow, Calvin, sounds great! What did you learn from it?"
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:5",
+          "text": "I learned a lot and got some great advice from professionals in the music industry. It was inspiring!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:6",
+          "text": "Wow, Calvin! Bet that was inspiring being surrounded by professionals. Did you get any advice from them?"
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:7",
+          "text": "The producer gave me some advice to stay true to myself and sound unique. It got me thinking about where I want my music to go. It's really motivating!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:8",
+          "text": "Wow, Calvin! It's really motivating to see you staying true to yourself. It got me thinking, where do you see your music taking you?"
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:9",
+          "text": "Thanks, Dave! I'm dreaming of touring the world, performing for different people and connecting with them. I hope my music can reach a global audience and make an impact. I'm also looking forward to my upcoming trip to Boston after I finish the Frank Ocean tour. I've heard that the music scene there is awesome, so I can't wait to check it out!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:10",
+          "img_url": [
+            "https://upload.wikimedia.org/wikipedia/commons/6/67/Boston_Skyline_%28193150499%29.jpeg"
+          ],
+          "re-download": true,
+          "blip_caption": "a photography of a city skyline with a boat in the water",
+          "text": "Sounds like an amazing plan, Cal! I can't wait for your trip to Boston. I'll show you around town and all the cool spots. The music scene there is awesome, with places like Paradise Rock, House of Blues, and Fenway Park. You'll definitely have some great performances there. Count me in for the front row when you're up onstage! Oh, and by the way, check out this pic."
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:11",
+          "text": "Wow, Boston looks great! Thanks for the tips. And, awesome pic!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:12",
+          "img_url": [
+            "https://upload.wikimedia.org/wikipedia/commons/d/de/Ford_Mustang_-_Shuttleworth_Classic_Car_Show_2017_%2833661471822%29.jpg"
+          ],
+          "re-download": true,
+          "blip_caption": "a photography of a green mustang parked in a field of grass",
+          "text": "Last weekend I went to a car show. Classic cars are so charming and the dedication people put into restoring them is amazing. That's why I'm so into auto engineering. Can't wait to show you some when you come to Boston! Oh, almost forgot to send a photo, look at this beautiful car!"
+        },
+        {
+          "speaker": "Calvin",
+          "img_url": [
+            "https://hips.hearstapps.com/hmg-prod/images/2020-ferrari-f8-tributo-120-1551808626.jpg"
+          ],
+          "blip_caption": "a photo of a red sports car on display at a show",
+          "query": "car ferrari",
+          "dia_id": "D3:13",
+          "text": "Wow, Dave, that car looks great! Take a look at my car, I put a lot of work into it. Can't wait to see more when I'm in Boston!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:14",
+          "text": "Thanks! It definitely took a lot of work. Have you had a chance to check out Boston apart from the gigs?"
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:15",
+          "text": "Not yet, been pretty busy with rehearsals and traveling. But I'm looking forward to exploring the city, trying out some delicious food, and visiting the popular attractions. Maybe we can grab a bite together when I'm there?"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:16",
+          "text": "Definitely, Cal! Let's grab some food and I'll show you my favorite spots in the city. Can't wait to show them to you!"
+        },
+        {
+          "speaker": "Calvin",
+          "dia_id": "D3:17",
+          "text": "Sounds great, Dave! Can't wait to try out the food there with you. It'll be fun!"
+        },
+        {
+          "speaker": "Dave",
+          "dia_id": "D3:18",
+          "text": "It'll be great, Cal! Can't wait to show you the amazing music and food here. See you soon!"
+        }
+      ],
+      "session_12_date_time": "4:15 pm on 20 April, 2023"
+    },
+    "qa": [
+      {
+        "question": "When did Caroline go to the LGBTQ support group?",
+        "answer": "7 May 2023",
+        "evidence": [
+          "D1:3"
+        ],
+        "category": 2,
+        "test_tags": [
+          "iconic",
+          "lgbtq",
+          "multi_hop"
+        ],
+        "test_note": "Caroline 参加 LGBTQ 支持小组的时间（LoCoMo 标志性题）",
+        "source_qa_index": 0,
+        "source_sample_id": "conv-26"
+      },
+      {
+        "question": "What is Caroline's identity?",
+        "answer": "Transgender woman",
+        "evidence": [
+          "D1:5"
+        ],
+        "category": 1,
+        "test_tags": [
+          "single_hop",
+          "identity"
+        ],
+        "test_note": "Caroline 的身份认同（官方 Single-hop）",
+        "source_qa_index": 4,
+        "source_sample_id": "conv-26"
+      },
+      {
+        "question": "When Jon has lost his job as a banker?",
+        "answer": "19 January, 2023",
+        "evidence": [
+          "D2:2"
+        ],
+        "category": 2,
+        "test_tags": [
+          "career",
+          "multi_hop"
+        ],
+        "test_note": "Jon 银行失业时间",
+        "source_qa_index": 0,
+        "source_sample_id": "conv-30"
+      },
+      {
+        "question": "How do Jon and Gina both like to destress?",
+        "answer": "by dancing",
+        "evidence": [
+          "D2:7",
+          "D2:6"
+        ],
+        "category": 4,
+        "test_tags": [
+          "temporal",
+          "preference"
+        ],
+        "test_note": "两人共同的减压方式（Temporal 推理）",
+        "source_qa_index": 2,
+        "source_sample_id": "conv-30"
+      },
+      {
+        "question": "What test has John taken multiple times?",
+        "answer": "The military aptitude test",
+        "evidence": [
+          "D4:18",
+          "D3:11"
+        ],
+        "category": 1,
+        "test_tags": [
+          "cross_session",
+          "single_hop",
+          "military_aptitude"
+        ],
+        "test_note": "John 多次参加的 aptitude 测试（session 3+8 聚合）",
+        "source_qa_index": 12,
+        "source_sample_id": "conv-41"
+      },
+      {
+        "question": "Would John be considered a patriotic person?",
+        "answer": "Yes",
+        "evidence": [
+          "D4:18",
+          "D4:20"
+        ],
+        "category": 3,
+        "test_tags": [
+          "cross_session",
+          "open_ended",
+          "inference"
+        ],
+        "test_note": "John 是否爱国（跨 session 开放式推理）",
+        "source_qa_index": 14,
+        "source_sample_id": "conv-41"
+      },
+      {
+        "question": "What pets wouldn't cause any discomfort to Joanna?",
+        "answer": "Hairless cats or pigs,since they don't have fur, which is one of the main causes of Joanna's allergy.",
+        "evidence": [
+          "D5:23"
+        ],
+        "category": 3,
+        "test_tags": [
+          "open_ended",
+          "allergy"
+        ],
+        "test_note": "不会致敏的宠物类型（过敏线）",
+        "source_qa_index": 4,
+        "source_sample_id": "conv-42"
+      },
+      {
+        "question": "When did Joanna finish her first screenplay?",
+        "answer": "The Friday before 23January, 2022",
+        "evidence": [
+          "D5:3"
+        ],
+        "category": 2,
+        "test_tags": [
+          "multi_hop",
+          "screenplay"
+        ],
+        "test_note": "Joanna 完成首个剧本的时间",
+        "source_qa_index": 7,
+        "source_sample_id": "conv-42"
+      },
+      {
+        "question": "Who is Anthony?",
+        "answer": "likely John's friend, colleague or family",
+        "evidence": [
+          "D6:8"
+        ],
+        "category": 3,
+        "test_tags": [
+          "open_ended",
+          "entity"
+        ],
+        "test_note": "Anthony 是谁（人物关系）",
+        "source_qa_index": 15,
+        "source_sample_id": "conv-43"
+      },
+      {
+        "question": "What did Anthony and John end up playing during the charity event?",
+        "answer": "an intense Harry Potter trivia contest",
+        "evidence": [
+          "D6:8"
+        ],
+        "category": 4,
+        "test_tags": [
+          "temporal",
+          "harry_potter",
+          "charity"
+        ],
+        "test_note": "慈善赛上 Anthony/John 玩了什么（Temporal + HP 线）",
+        "source_qa_index": 85,
+        "source_sample_id": "conv-43"
+      },
+      {
+        "question": "Which year did Audrey adopt the first three of her dogs?",
+        "answer": "2020",
+        "evidence": [
+          "D7:7"
+        ],
+        "category": 2,
+        "test_tags": [
+          "multi_hop",
+          "pets"
+        ],
+        "test_note": "Audrey 收养前三只狗的年份",
+        "source_qa_index": 0,
+        "source_sample_id": "conv-44"
+      },
+      {
+        "question": "Which specific type of bird mesmerizes Audrey?",
+        "evidence": [
+          "D7:16"
+        ],
+        "category": 5,
+        "adversarial_answer": "Eagles",
+        "test_tags": [
+          "adversarial",
+          "wrong_subject"
+        ],
+        "test_note": "Audrey 迷住的鸟种（主语错位陷阱）",
+        "source_qa_index": 123,
+        "source_sample_id": "conv-44"
+      },
+      {
+        "question": "How many charity tournaments has John organized till date?",
+        "answer": "two",
+        "evidence": [
+          "D8:2",
+          "D9:1"
+        ],
+        "category": 1,
+        "test_tags": [
+          "cross_session",
+          "long_gap",
+          "single_hop",
+          "charity"
+        ],
+        "test_note": "John 迄今组织几场慈善赛（session 10→29 长期记忆）",
+        "source_qa_index": 20,
+        "source_sample_id": "conv-47"
+      },
+      {
+        "question": "What games has John played with his friends at charity tournaments?",
+        "answer": "CS:GO, Fortnite, Overwatch and Apex Legends",
+        "evidence": [
+          "D8:4",
+          "D9:1",
+          "D9:3"
+        ],
+        "category": 1,
+        "test_tags": [
+          "cross_session",
+          "long_gap",
+          "single_hop",
+          "charity"
+        ],
+        "test_note": "慈善赛上 John 和朋友玩了哪些游戏（跨 distant session）",
+        "source_qa_index": 60,
+        "source_sample_id": "conv-47"
+      },
+      {
+        "question": "What kind of project was Jolene working on in the beginning of January 2023?",
+        "answer": "electricity engineering project",
+        "evidence": [
+          "D10:2"
+        ],
+        "category": 2,
+        "test_tags": [
+          "project",
+          "multi_hop"
+        ],
+        "test_note": "Jolene 2023 年初的工程项目",
+        "source_qa_index": 0,
+        "source_sample_id": "conv-48"
+      },
+      {
+        "question": "When did Jolene`s mother pass away?",
+        "answer": "in 2022",
+        "evidence": [
+          "D10:6"
+        ],
+        "category": 2,
+        "test_tags": [
+          "multi_hop",
+          "grief"
+        ],
+        "test_note": "Jolene 母亲去世时间",
+        "source_qa_index": 3,
+        "source_sample_id": "conv-48"
+      },
+      {
+        "question": "Which hobby did Sam take up in May 2023?",
+        "answer": "painting",
+        "evidence": [
+          "D11:11"
+        ],
+        "category": 2,
+        "test_tags": [
+          "hobby",
+          "multi_hop"
+        ],
+        "test_note": "Sam 2023 年 5 月新爱好",
+        "source_qa_index": 4,
+        "source_sample_id": "conv-49"
+      },
+      {
+        "question": "What type of car did Sam get after his old Prius broke down?",
+        "evidence": [
+          "D11:2"
+        ],
+        "category": 5,
+        "adversarial_answer": "new Prius",
+        "test_tags": [
+          "adversarial",
+          "wrong_subject"
+        ],
+        "test_note": "Sam 换什么车（实为 Evan，wrong_subject 陷阱）",
+        "source_qa_index": 156,
+        "source_sample_id": "conv-49"
+      },
+      {
+        "question": "When did Calvin first travel to Tokyo?",
+        "answer": "between 26 March and 20 April 2023",
+        "evidence": [
+          "D12:1"
+        ],
+        "category": 2,
+        "test_tags": [
+          "temporal",
+          "travel"
+        ],
+        "test_note": "Calvin 首次东京行时间",
+        "source_qa_index": 0,
+        "source_sample_id": "conv-50"
+      },
+      {
+        "question": "Which country do Calvin and Dave want to meet in?",
+        "answer": "United States",
+        "evidence": [
+          "D12:9",
+          "D12:10"
+        ],
+        "category": 3,
+        "test_tags": [
+          "open_ended",
+          "inference"
+        ],
+        "test_note": "Calvin 和 Dave 想在哪国见面（开放式推理）",
+        "source_qa_index": 4,
+        "source_sample_id": "conv-50"
+      }
+    ],
+    "session_summary": {
+      "session_1_summary": "[conv-26 session_1] Caroline and Melanie had a conversation on 8 May 2023 at 1:56 pm. Caroline mentioned that she attended an LGBTQ support group and was inspired by the transgender stories she heard. The support group made her feel accepted and gave her the courage to embrace herself. Caroline plans to continue her education and explore career options, particularly in counseling or working in mental health. Melanie praised Caroline's empathy and mentioned that she painted a lake sunrise last year as a way of expressing herself. Caroline complimented Melanie's painting and agreed that painting is a great outlet for relaxation and self-expression. They both emphasized the importance of taking care of oneself. Caroline was going to do some research, while Melanie planned to go swimming with her kids.",
+      "session_2_summary": "[conv-30 session_1] Gina and Jon met at 4:04 pm on 20 January, 2023. Jon lost his job as a banker and planned to start a dance studio because of his passion for dancing. Gina also lost her job at Door Dash. They both shared a love for dance, with Jon's favorite style being contemporary. They planned to attend a dance class together. Jon showed Gina a photo of his dance crew winning a competition. Gina revealed her experience of winning first place with a contemporary piece in a dance competition. Jon mentioned rehearsing with a group for various dance styles and upcoming projects, including a performance at a festival. Gina complimented the group's grace and expressed excitement for their festival performance. They both shared enthusiasm for the upcoming events.",
+      "session_3_summary": "[conv-41 session_3] At 8:30 pm on 1 January, 2023, John shared with Maria his positive experience with a service-focused online group, feeling a connection and purpose with inspiring individuals. They discussed events like serving at a homeless shelter and arranging a toy drive. John mentioned plans for future projects assisting underserved communities in education and mentorship. Maria praised his initiatives, emphasizing the impact of support and encouraging him to continue. John, feeling stressed after failing a test, appreciated Maria's support. They also bonded over nature's beauty, with Maria sharing a calming beach sunset photo. John reminisced about his childhood beach photography. The conversation highlighted finding joy in simple moments amid life's busyness.",
+      "session_4_summary": "[conv-41 session_8] At 6:03 pm on 6 March 2023, Maria shared with John about her grandmother's recent passing and the challenges she's facing. John expressed his condolences and updated Maria on his happy family life with wife and kids, particularly mentioning his one-year-old son, Kyle. They discussed parenting experiences and family activities, including a recent picnic that everyone enjoyed. John shared his interest in volunteering after a positive aptitude test experience, while Maria talked about her volunteer work at a homeless shelter. They agreed on the importance of building genuine connections to make a difference.",
+      "session_5_summary": "[conv-42 session_2] Joanna and Nate caught up on January 23, 2022, at 2:01 pm. Joanna excitedly shared that she had completed her first screenplay, a mix of drama and romance, and planned to submit it to film festivals. Nate congratulated her and mentioned his turtles, recommending pets for stress relief. Joanna, allergic to animals with fur and reptiles, shared her joy for writing and hanging out with friends. Nate praised her passion for writing, and Joanna expressed her commitment to continue pursuing it. Nate also mentioned making new friends at a tournament.",
+      "session_6_summary": "[conv-43 session_4] At 4:17 pm on 2 August, 2023, Tim excitedly told John about writing articles on fantasy novels for an online magazine, a passion project he found through a fantasy lit forum. John congratulated Tim and enquired about the kind of articles he was working on. Tim mentioned analyzing characters, themes, and book recommendations. They discussed favorite books like Harry Potter and Game of Thrones. John shared a Harry Potter trivia experience, while Tim encouraged John to keep dreaming inspired by a book he's reading. Both expressed a desire to reach new goals before bidding farewell.",
+      "session_7_summary": "[conv-44 session_1] At 1:10 pm on 27 March 2023, Audrey and Andrew caught up. Andrew shared about his new job as a Financial Analyst, whereas Audrey talked about getting new collars for her dogs named Pepper, Precious, and Panda that she has had for 3 years. The dogs, city dwellers, go on adventures exploring parks and trails together. Andrew loves animals, particularly birds, with a fascination for eagles. He recommended the Fox Hollow trail for hiking to Audrey, who planned to give it a try. They bid goodbye, wishing each other well.",
+      "session_8_summary": "[conv-47 session_10] At 12:45 am on 8 May, 2022, James and John caught up after a while. John mentioned organizing a CS:GO tournament with friends for charity, and James praised his efforts. John expressed interest in organizing more events for charity in the future. They discussed donating to a dog shelter and feeding the homeless with the collected money. James commended John's efforts, and John vowed to continue doing good things. James concluded the conversation by expressing pride in John's actions.",
+      "session_9_summary": "[conv-47 session_29] John called James at 12:37 am on 31 October, 2022, sharing news about organizing a gaming tournament with friends, raising funds for a children's hospital by playing Fortnite, Overwatch, and Apex Legends. James praised John's efforts, mentioning how gaming unites people for a good cause. John shared a tournament photo, and James revealed plans to move in with Samantha near McGee's bar. They discussed their love for the bar and James sought John's support. They ended the conversation wishing each other well and promising to stay in touch.",
+      "session_10_summary": "[conv-48 session_1] Deborah and Jolene met at 4:06 pm on 23 January, 2023. They discussed their busy weeks and memories of their deceased mothers. Deborah shared about her mother's old house, while Jolene mentioned her room in her mother's house. They talked about special items that reminded them of their mothers. Jolene discussed a pendant symbolizing freedom, inspiring her to pursue goals. Deborah expressed her goal to teach yoga and bring peace to her community. Yoga helped Deborah find peace during a difficult time. Jolene found Deborah's journey inspiring, and the conversation ended with them looking forward to the next chat.",
+      "session_11_summary": "[conv-49 session_1] Sam and Evan met at 1:47 pm on 18 May, 2023. Evan mentioned his recent trip to the Rockies in his new Prius and shared about his passion for watercolor painting. Sam reminisced about hiking with his dad and expressed an interest in trying painting. Evan encouraged Sam to explore different hobbies until he found one he was passionate about. They both agreed to catch up soon to discuss Sam's new hobbies. The conversation ended with Evan wishing Sam well, and Sam looking forward to trying out new activities.",
+      "session_12_summary": "[conv-50 session_3] Calvin and Dave spoke at 4:15 pm on 20 April, 2023. Calvin shared about attending a music festival in Tokyo where he met industry professionals and received advice. He dreams of touring the world and reaching a global audience with his music. Dave plans to show Calvin around Boston, known for its vibrant music scene. Dave also mentioned his passion for classic cars. Calvin looks forward to exploring Boston's food scene with Dave. They both expressed excitement about the upcoming visit."
+    },
+    "test_suite_meta": {
+      "name": "60test",
+      "description": "Single injection from all 10 LoCoMo convs with distinctive QA: cross-session aggregation, long-gap charity stats, Single-hop, Adversarial traps; target 50–60 memory files",
+      "target_files_min": 50,
+      "target_files_max": 60,
+      "estimated_memory_files": 60,
+      "files_per_session_estimate": 5.0,
+      "session_count": 12,
+      "qa_count": 20,
+      "source_convs": [
+        "conv-26",
+        "conv-30",
+        "conv-41",
+        "conv-42",
+        "conv-43",
+        "conv-44",
+        "conv-47",
+        "conv-48",
+        "conv-49",
+        "conv-50"
+      ],
+      "conv_themes": [
+        "Caroline & Melanie · LGBTQ 标志性 + Single-hop 身份",
+        "Jon & Gina · 失业日期 + Temporal 偏好",
+        "John & Maria · 跨 session 军事 aptitude",
+        "Joanna & Nate · 过敏宠物 + 剧本里程碑",
+        "Tim & John · 慈善赛 + HP 线索",
+        "Audrey & Andrew · 宠物年表 + Adversarial 主语错位",
+        "James & John · long-gap 慈善赛统计",
+        "Deborah & Jolene · 工程项目 + 丧亲时间线",
+        "Evan & Sam · 短期爱好 + Adversarial 张冠李戴",
+        "Calvin & Dave · 东京首访 + 跨国见面推理"
+      ],
+      "session_lineage": [
+        {
+          "merged_session": 1,
+          "source_conv": "conv-26",
+          "source_session": 1,
+          "theme": "Caroline & Melanie · LGBTQ 标志性 + Single-hop 身份"
+        },
+        {
+          "merged_session": 2,
+          "source_conv": "conv-30",
+          "source_session": 1,
+          "theme": "Jon & Gina · 失业日期 + Temporal 偏好"
+        },
+        {
+          "merged_session": 3,
+          "source_conv": "conv-41",
+          "source_session": 3,
+          "theme": "John & Maria · 跨 session 军事 aptitude"
+        },
+        {
+          "merged_session": 4,
+          "source_conv": "conv-41",
+          "source_session": 8,
+          "theme": "John & Maria · 跨 session 军事 aptitude"
+        },
+        {
+          "merged_session": 5,
+          "source_conv": "conv-42",
+          "source_session": 2,
+          "theme": "Joanna & Nate · 过敏宠物 + 剧本里程碑"
+        },
+        {
+          "merged_session": 6,
+          "source_conv": "conv-43",
+          "source_session": 4,
+          "theme": "Tim & John · 慈善赛 + HP 线索"
+        },
+        {
+          "merged_session": 7,
+          "source_conv": "conv-44",
+          "source_session": 1,
+          "theme": "Audrey & Andrew · 宠物年表 + Adversarial 主语错位"
+        },
+        {
+          "merged_session": 8,
+          "source_conv": "conv-47",
+          "source_session": 10,
+          "theme": "James & John · long-gap 慈善赛统计"
+        },
+        {
+          "merged_session": 9,
+          "source_conv": "conv-47",
+          "source_session": 29,
+          "theme": "James & John · long-gap 慈善赛统计"
+        },
+        {
+          "merged_session": 10,
+          "source_conv": "conv-48",
+          "source_session": 1,
+          "theme": "Deborah & Jolene · 工程项目 + 丧亲时间线"
+        },
+        {
+          "merged_session": 11,
+          "source_conv": "conv-49",
+          "source_session": 1,
+          "theme": "Evan & Sam · 短期爱好 + Adversarial 张冠李戴"
+        },
+        {
+          "merged_session": 12,
+          "source_conv": "conv-50",
+          "source_session": 3,
+          "theme": "Calvin & Dave · 东京首访 + 跨国见面推理"
+        }
+      ],
+      "highlights": {
+        "cross_session_qa": 4,
+        "long_gap_conv": "conv-47 (session 10 -> 29)",
+        "military_aptitude_conv": "conv-41 (session 3+8)",
+        "single_hop_qa": 4,
+        "adversarial_qa": 2
+      },
+      "dimension_tags": {
+        "iconic": 1,
+        "lgbtq": 1,
+        "multi_hop": 7,
+        "single_hop": 4,
+        "identity": 1,
+        "career": 1,
+        "temporal": 3,
+        "preference": 1,
+        "cross_session": 4,
+        "military_aptitude": 1,
+        "open_ended": 4,
+        "inference": 2,
+        "allergy": 1,
+        "screenplay": 1,
+        "entity": 1,
+        "harry_potter": 1,
+        "charity": 3,
+        "pets": 1,
+        "adversarial": 2,
+        "wrong_subject": 2,
+        "long_gap": 2,
+        "project": 1,
+        "grief": 1,
+        "hobby": 1,
+        "travel": 1
+      },
+      "categories": {
+        "1": {
+          "name": "Single-hop QA",
+          "count": 4
+        },
+        "2": {
+          "name": "Multi-hop QA",
+          "count": 8
+        },
+        "3": {
+          "name": "Open-ended QA",
+          "count": 4
+        },
+        "4": {
+          "name": "Temporal QA",
+          "count": 2
+        },
+        "5": {
+          "name": "Adversarial QA",
+          "count": 2
+        }
+      }
+    }
+  }
+]

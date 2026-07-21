@@ -2,6 +2,32 @@
 
 基于 [LoCoMo (EMNLP 2024)](https://arxiv.org/abs/2402.17753) 基准的 iceCoder 记忆系统自动化评测工具。
 
+## 60test（60 文件上限快速评测）
+
+在 iceCoder **60 文件记忆上限**下，将官方 10 条 conv 精选合并为单次注入（12 session、20 QA），用于快速回归与上限压力测试。
+
+| 文档 | 说明 |
+|------|------|
+| **[60test.md](./60test.md)** | 完整文档：设计约束、环境、流程、结果、错题分析 |
+| `report_60test.md` | 由 `generate_report.py` 从 JSON 自动生成的结果摘要 |
+| `result_60test.json` | 结构化评测结果 |
+
+```powershell
+# 构建数据集
+py LoCoMo/build_locomo60test.py --verify
+
+# 启动 iceCoder（评测模式）
+$env:ICE_EVAL_MODE="1"; $env:ICE_DISABLE_TOOLS="1"
+npx tsx src/index.ts
+
+# 运行 60test
+py LoCoMo/_run_60test.py
+```
+
+**最新结果（2026-07-20）**：17/20 = **85%**，60 记忆文件，Single-hop / Temporal / Adversarial 均为 100%。
+
+---
+
 ## 评测维度
 
 | 维度 | 说明 | 样本数 |
@@ -70,8 +96,15 @@ python generate_report.py
 ```
 LoCoMo/
 ├── README.md              # 本文件
-├── dataset.jsonl           # 评测数据集（10 条样本）
-├── run_eval.py             # 核心评测脚本
+├── 60test.md              # 60test 完整评测文档（设计/流程/结果）
+├── report_60test.md       # 60test 结果摘要（自动生成）
+├── result_60test.json     # 60test 结构化结果
+├── _run_60test.py         # 60test 一键运行脚本
+├── build_locomo60test.py  # 60test 数据集构建
+├── locomo60test.json      # 60test 评测数据
+├── run_locomo_official.py # 官方 LoCoMo 评测脚本
+├── dataset.jsonl           # 早期自定义评测数据集
+├── run_eval.py             # 早期评测脚本
 ├── generate_report.py      # 报告生成器
 ├── result.json             # 评测结果（运行后生成）
 ├── report.md               # Markdown 报告（运行后生成）

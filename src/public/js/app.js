@@ -741,10 +741,10 @@
       var Store = window.ChatSessionStore;
       var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
       if (Store && typeof Store.switchSession === 'function') {
-        Store.switchSession(sessionId, wsSend, function (ok, runningTurn) {
+        Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
           if (!ok) return;
           if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-            window.ChatPage.onSessionSwitched(sessionId, runningTurn);
+            window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
           }
         });
       }

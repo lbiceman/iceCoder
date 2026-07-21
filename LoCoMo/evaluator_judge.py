@@ -31,38 +31,69 @@ logger = logging.getLogger("locomo-official.judge")
 _CONFIG_PATH = Path(__file__).parent.parent / "data" / "config.json"
 
 
-def _load_deepseek_config() -> dict:
-    """Load DeepSeek config from data/config.json."""
+def _provider_to_cfg(p: dict) -> dict:
+    """Normalize a provider entry to judge/extraction config."""
+    model = p.get("activeModelName") or ""
+    if not model:
+        model = (p.get("modelName") or "").split(",")[0]
+    return {
+        "api_key": p.get("apiKey", ""),
+        "base_url": p.get("apiUrl", ""),
+        "model": model,
+    }
+
+
+def _load_mimo_config() -> dict:
+    """Load MiMo provider from data/config.json."""
     try:
         with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         for p in cfg.get("providers", []):
+            pid = p.get("id", "").lower()
+            if "mimo" in pid:
+                return _provider_to_cfg(p)
+    except Exception as e:
+        logger.warning(f"Failed to load MiMo config from {_CONFIG_PATH}: {e}")
+    return {}
+
+
+def _load_deepseek_config() -> dict:
+    """Load judge/extraction LLM config from data/config.json."""
+    mimo_cfg = _load_mimo_config()
+    if mimo_cfg.get("api_key"):
+        return mimo_cfg
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        providers = cfg.get("providers", [])
+        for p in providers:
             if "deepseek" in p.get("id", "").lower() and "flash" in p.get("modelName", "").lower():
-                return {
-                    "api_key": p["apiKey"],
-                    "base_url": p["apiUrl"],
-                    "model": p["modelName"],
-                }
-        # Fallback: any deepseek provider
-        for p in cfg.get("providers", []):
+                return _provider_to_cfg(p)
+        for p in providers:
             if "deepseek" in p.get("id", "").lower():
-                return {
-                    "api_key": p["apiKey"],
-                    "base_url": p["apiUrl"],
-                    "model": p["modelName"],
-                }
+                return _provider_to_cfg(p)
+        default = next((p for p in providers if p.get("isDefault")), None)
+        if default is None and providers:
+            default = providers[0]
+        if default:
+            return _provider_to_cfg(default)
     except Exception as e:
         logger.warning(f"Failed to load config from {_CONFIG_PATH}: {e}")
     return {}
 
 
+def _load_provider_config() -> dict:
+    """Alias for scripts that prefer a provider-neutral name."""
+    return _load_mimo_config() or _load_deepseek_config()
+
+
 def _get_config():
-    """Get judge config with env override."""
-    file_cfg = _load_deepseek_config()
+    """Get judge/extraction config with env override."""
+    file_cfg = _load_provider_config()
     return {
-        "model": os.getenv("EVAL_MODEL", file_cfg.get("model", "deepseek-v4-flash")),
+        "model": os.getenv("EVAL_MODEL", file_cfg.get("model", "mimo-v2.5-pro")),
         "api_key": os.getenv("EVAL_API_KEY", os.getenv("DEEPSEEK_API_KEY", file_cfg.get("api_key", ""))),
-        "base_url": os.getenv("EVAL_BASE_URL", file_cfg.get("base_url", "https://api.deepseek.com")),
+        "base_url": os.getenv("EVAL_BASE_URL", file_cfg.get("base_url", "https://token-plan-cn.xiaomimimo.com/v1")),
     }
 
 
@@ -109,6 +140,28 @@ Return a JSON object with exactly these fields:
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2
+JUDGE_TIMEOUT = int(os.getenv("LOCOMO_JUDGE_TIMEOUT", "120"))
+EXTRACT_TIMEOUT = int(os.getenv("LOCOMO_EXTRACT_TIMEOUT", "600"))
+
+
+def _extract_message_content(message: dict) -> str:
+    """Return model text from OpenAI-compatible message (handles MiMo reasoning_content)."""
+    content = (message.get("content") or "").strip()
+    if content:
+        return content
+    reasoning = (message.get("reasoning_content") or "").strip()
+    if reasoning:
+        return reasoning
+    return ""
+
+
+def _mimo_payload_extra(cfg: dict) -> dict:
+    """Disable MiMo deep thinking for faster structured JSON output."""
+    base_url = (cfg.get("base_url") or "").lower()
+    model = (cfg.get("model") or "").lower()
+    if "mimo" in base_url or "mimo" in model:
+        return {"thinking": {"type": "disabled"}}
+    return {}
 
 
 def _call_judge_api(system_prompt: str, user_prompt: str, cfg: dict) -> dict:
@@ -128,12 +181,13 @@ def _call_judge_api(system_prompt: str, user_prompt: str, cfg: dict) -> dict:
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": 256,
+        "max_tokens": 1024,
+        **_mimo_payload_extra(cfg),
     }
 
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            resp = requests.post(url, headers=headers, json=payload, timeout=JUDGE_TIMEOUT)
             if resp.status_code == 429:
                 # Rate limited — wait and retry
                 wait = min(RETRY_DELAY * (attempt + 1), 10)
@@ -142,8 +196,19 @@ def _call_judge_api(system_prompt: str, user_prompt: str, cfg: dict) -> dict:
                 continue
             resp.raise_for_status()
             data = resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            return _parse_judge_response(content)
+            message = data["choices"][0]["message"]
+            candidates = [
+                (message.get("content") or "").strip(),
+                (message.get("reasoning_content") or "").strip(),
+            ]
+            last_result = {"verdict": "incorrect", "confidence": 0.0, "reason": "Empty judge response"}
+            for text in candidates:
+                if not text:
+                    continue
+                last_result = _parse_judge_response(text)
+                if not str(last_result.get("reason", "")).startswith("JSON parse failed"):
+                    return last_result
+            return last_result
         except requests.RequestException as e:
             logger.warning(f"Judge API attempt {attempt+1} failed: {e}")
             if attempt < MAX_RETRIES - 1:
@@ -159,9 +224,13 @@ def _call_judge_api(system_prompt: str, user_prompt: str, cfg: dict) -> dict:
 
 def _parse_judge_response(content: str) -> dict:
     """Parse the judge's JSON response, handling markdown code blocks and parse failures."""
-    # Strip markdown code block if present
     content = content.strip()
-    if content.startswith("```"):
+
+    # Extract JSON from fenced code block anywhere in the response
+    code_m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL | re.IGNORECASE)
+    if code_m:
+        content = code_m.group(1).strip()
+    elif content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*", "", content)
         content = re.sub(r"\s*```$", "", content)
 
@@ -511,12 +580,15 @@ def _extract_single_chunk(
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "max_tokens": 12288,
+        "max_tokens": 8192,
+        **_mimo_payload_extra(cfg),
     }
+
+    logger.info(f"    Extraction API call ({len(transcript)} chars, model={cfg['model']})")
 
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            resp = requests.post(url, headers=headers, json=payload, timeout=EXTRACT_TIMEOUT)
             if resp.status_code == 429:
                 wait = min(RETRY_DELAY * (attempt + 1), 10)
                 logger.warning(f"Rate limited during extraction, waiting {wait}s...")
@@ -524,18 +596,36 @@ def _extract_single_chunk(
                 continue
             resp.raise_for_status()
             data = resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
+            message = data["choices"][0]["message"]
+            candidates = [
+                (message.get("content") or "").strip(),
+                (message.get("reasoning_content") or "").strip(),
+            ]
 
-            # Parse JSON array
-            if content.startswith("```"):
-                content = re.sub(r"^```(?:json)?\s*", "", content)
-                content = re.sub(r"\s*```$", "", content)
+            for content in candidates:
+                if not content:
+                    continue
 
-            items = json.loads(content)
-            if isinstance(items, list):
-                return items
-            logger.warning(f"Extraction returned non-list: {type(items)}")
-            return []
+                # Parse JSON array
+                if content.startswith("```"):
+                    content = re.sub(r"^```(?:json)?\s*", "", content)
+                    content = re.sub(r"\s*```$", "", content)
+                code_m = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", content, re.DOTALL | re.IGNORECASE)
+                if code_m:
+                    content = code_m.group(1).strip()
+
+                try:
+                    items = json.loads(content)
+                    if isinstance(items, list):
+                        return items
+                    logger.warning(f"Extraction returned non-list: {type(items)}")
+                except json.JSONDecodeError:
+                    continue
+
+            logger.warning("Extraction parse error: no JSON array in response")
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+            continue
 
         except requests.RequestException as e:
             logger.warning(f"Extraction API attempt {attempt+1} failed: {e}")
