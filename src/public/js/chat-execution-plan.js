@@ -1244,8 +1244,20 @@ window.ChatExecutionPlan = (function () {
     return formatClock(ms);
   }
 
+  function formatSearchToolPreview(toolName, args) {
+    if (!args || typeof args !== 'object') return '';
+    var pattern = args.pattern || args.glob || args.query || '';
+    var scope = args.path || args.directory || '';
+    if (pattern && scope) return clamp40(String(pattern) + ' · ' + String(scope));
+    return clamp40(String(pattern || scope || ''));
+  }
+
   function formatToolArgsPreview(toolName, args) {
     try {
+      if (toolName === 'glob' || toolName === 'grep') {
+        var searchPreview = formatSearchToolPreview(toolName, args);
+        if (searchPreview) return searchPreview;
+      }
       if (window.ToolTraceFormat
         && typeof window.ToolTraceFormat.formatToolArgsDetailPreview === 'function') {
         var formatted = window.ToolTraceFormat.formatToolArgsDetailPreview(toolName, args);
@@ -1264,8 +1276,10 @@ window.ChatExecutionPlan = (function () {
   // 工具名 → 归类；供执行流轮次推导「本轮做了什么/为什么」。
   var CONTEXT_READ_TOOLS = {
     read_file: true, file_info: true, notebook_read: true,
-    parse_document: true, parse_pptx_deep: true, open_file: true,
-    read_image: true, xmind_parse: true, xlsx_parse: true,
+    parse_document: true, parse_pptx_deep: true, parse_doc_legacy: true,
+    parse_xmind_deep: true, parse_xlsx_deep: true, open_file: true,
+    read_image: true, image_read: true, xmind_parse: true, xlsx_parse: true,
+    browse_directory: true, list_drives: true, diff_files: true,
   };
   var CONTEXT_WRITE_TOOLS = {
     write_file: true, append_file: true, edit_file: true,
@@ -1278,7 +1292,12 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!args || typeof args !== 'object') return '';
       if (toolName === 'run_command') return String(args.command || '');
-      if (CONTEXT_SEARCH_TOOLS[toolName]) return String(args.pattern || args.query || '');
+      if (CONTEXT_SEARCH_TOOLS[toolName]) {
+        var pattern = args.pattern || args.glob || args.query || '';
+        var scope = args.path || args.directory || '';
+        if (pattern && scope) return String(pattern) + ' · ' + String(scope);
+        return String(pattern || scope || '');
+      }
       var pathVal = args.path || args.file || args.filePath || args.filename;
       if (pathVal) return String(pathVal);
       return '';
@@ -1343,7 +1362,7 @@ window.ChatExecutionPlan = (function () {
     if (name === 'parse_document' || name === 'parse_doc_legacy') return '解析文档' + hint + '提取内容';
     if (name === 'parse_pptx_deep') return '深度解析 PPT' + hint;
     if (name === 'parse_xmind_deep' || name === 'xmind_parse') return '解析思维导图' + hint;
-    if (name === 'xlsx_parse') return '解析表格' + hint;
+    if (name === 'parse_xlsx_deep' || name === 'xlsx_parse') return '解析表格' + hint;
     if (name === 'diff_files') return '对比文件差异' + hint;
     if (name === 'browse_directory' || name === 'list_drives') return '浏览目录结构' + hint;
     if (name === 'grep') return '搜索代码' + (hint || '中的关键词');
@@ -1363,7 +1382,17 @@ window.ChatExecutionPlan = (function () {
     if (CONTEXT_READ_TOOLS[name]) return '读取资源' + hint;
     if (CONTEXT_SEARCH_TOOLS[name]) return '搜索项目' + hint;
     if (CONTEXT_WRITE_TOOLS[name]) return '更新文件' + hint;
-    return (name ? '调用 ' + name : '调用工具') + hint;
+    return (name ? '调用 ' + humanizeToolName(name) : '调用工具') + hint;
+  }
+
+  /** 工具行副标题：仅在 intent 未覆盖时展示路径/命令等细节。 */
+  function toolActionDetailLine(tool) {
+    var detail = tool.detail || tool.target || '';
+    if (!detail) return '';
+    var intent = inferToolIntent(tool);
+    var short = clamp24(detail);
+    if (short && intent.indexOf(short) >= 0) return '';
+    return detail;
   }
 
   function findFirstToolBy(tools, predicate) {
@@ -1692,6 +1721,10 @@ window.ChatExecutionPlan = (function () {
     if (reads.length === 1) return '读取文件了解上下文';
     var writes = tools.filter(function (t) { return CONTEXT_WRITE_TOOLS[t.toolName]; });
     if (writes.length) return writes.length > 1 ? '批量修改文件' : '修改文件落实改动';
+    var searches = tools.filter(function (t) { return CONTEXT_SEARCH_TOOLS[t.toolName]; });
+    if (searches.length >= 2) return '搜索定位相关代码';
+    if (searches.length === 1) return inferToolIntent(searches[0]);
+    if (tools.length === 1) return inferToolIntent(tools[0]);
     if (record.activeTitle) return clamp40(record.activeTitle);
     if (record.phase && PHASE_LABELS[record.phase]) return PHASE_LABELS[record.phase];
     return '第 ' + record.iteration + ' 轮执行';
@@ -1711,12 +1744,8 @@ window.ChatExecutionPlan = (function () {
     var keys = Object.keys(grouped);
     for (var k = 0; k < keys.length; k++) {
       var entry = grouped[keys[k]];
-      var label = humanizeToolName(entry.tool.toolName);
-      if (entry.tool.detail || entry.tool.target) {
-        label += ' · ' + clamp24(entry.tool.detail || entry.tool.target);
-      } else if (entry.count > 1) {
-        label += ' x ' + entry.count;
-      }
+      var label = inferToolIntent(entry.tool);
+      if (entry.count > 1) label += ' x ' + entry.count;
       pills.push({
         label: label,
         raw: entry.tool.toolName + (entry.tool.detail ? ' · ' + entry.tool.detail : ''),
@@ -1729,9 +1758,8 @@ window.ChatExecutionPlan = (function () {
   function buildCollapsedRoundPill(tools) {
     if (!tools.length) return [];
     var firstTool = tools[0];
-    var label = humanizeToolName(firstTool.toolName);
+    var label = inferToolIntent(firstTool);
     var path = firstTool.detail || firstTool.target || '';
-    if (path) label += ' · ' + clamp24(path);
     if (tools.length === 1) {
       return [{
         label: label,
@@ -1834,15 +1862,14 @@ window.ChatExecutionPlan = (function () {
     body.style.minWidth = '0';
     var name = document.createElement('div');
     name.className = 'etl-round-action-name';
-    name.textContent = humanizeToolName(tool.toolName);
-    var target = document.createElement('div');
-    target.className = 'etl-round-action-target etl-round-tool-text';
-    target.textContent = tool.toolName + (tool.detail ? ' · ' + tool.detail : '');
+    name.textContent = inferToolIntent(tool);
+    name.title = humanizeToolName(tool.toolName);
     body.appendChild(name);
-    if (tool.detail || tool.target) {
+    var detailLine = toolActionDetailLine(tool);
+    if (detailLine) {
       var path = document.createElement('div');
       path.className = 'etl-round-action-target';
-      path.textContent = tool.detail || tool.target || '';
+      path.textContent = detailLine;
       body.appendChild(path);
     }
     var dur = document.createElement('span');

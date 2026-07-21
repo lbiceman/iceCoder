@@ -1010,7 +1010,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.a.status).toBe('done');
     expect(result.a.callTs).toBeTruthy();
     expect(result.a.resultTs).toBeTruthy();
-    expect(result.a.text).toMatch(/read_file|Read File/i);
+    expect(result.a.text).toMatch(/了解代码与上下文|read_file/i);
     expect(result.b.status).toBe('running');
     expect(result.b.resultTs).toBeUndefined();
     await page.close();
