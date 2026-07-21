@@ -187,9 +187,9 @@ window.ChatSessionStore = (function () {
       activeSessionId = id;
       persistLastActiveSessionId(id);
 
-      function complete(runningTurn) {
+      function complete(runningTurn, bgTasks) {
         if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-          window.ChatPage.onSessionSwitched(id, runningTurn);
+          window.ChatPage.onSessionSwitched(id, runningTurn, { bgTasks: bgTasks });
         } else if (window.ChatSession && typeof window.ChatSession.setSessionId === 'function') {
           window.ChatSession.setSessionId(id);
           if (typeof window.ChatSession.fetchServerMessages === 'function') {
@@ -207,8 +207,8 @@ window.ChatSessionStore = (function () {
       var ws = window.ChatWebSocket;
       var wsSend = ws && typeof ws.send === 'function' ? ws.send.bind(ws) : null;
       if (ws && typeof ws.isConnected === 'function' && ws.isConnected() && wsSend) {
-        switchSession(id, wsSend, function (ok, runningTurn) {
-          complete(ok ? runningTurn : undefined);
+        switchSession(id, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
+          complete(ok ? runningTurn : undefined, bgTasks);
         });
         return;
       }
@@ -309,6 +309,7 @@ window.ChatSessionStore = (function () {
     var settled = false;
     var lastRunningTurn = null;
     var lastWorkspace = null;
+    var lastBgTasks = null;
     var sendAttempts = 0;
     var maxSendAttempts = 5;
 
@@ -317,13 +318,14 @@ window.ChatSessionStore = (function () {
       settled = true;
       clearTimeout(timer);
       if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched', handler);
-      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace, !!degraded);
+      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace, !!degraded, lastBgTasks);
     }
 
     function applySwitchPayload(data) {
       activeSessionId = data.sessionId || sessionId;
       persistLastActiveSessionId(activeSessionId);
       if (data.runningTurn) lastRunningTurn = data.runningTurn;
+      if (Array.isArray(data.bgTasks)) lastBgTasks = data.bgTasks;
       if (data.workspaceRoot || data.defaultWorkDir) {
         lastWorkspace = {
           sessionId: activeSessionId,
@@ -410,6 +412,11 @@ window.ChatSessionStore = (function () {
             if (window.ChatExecutionFlowStore
               && typeof window.ChatExecutionFlowStore.clear === 'function') {
               window.ChatExecutionFlowStore.clear(sessionId);
+            }
+          } catch (_e) { /* */ }
+          try {
+            if (window.ChatPage && typeof window.ChatPage.clearShellDockCache === 'function') {
+              window.ChatPage.clearShellDockCache(sessionId);
             }
           } catch (_e) { /* */ }
           emit();

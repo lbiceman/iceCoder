@@ -27,6 +27,10 @@ import {
 import { isSafeSessionId } from '../session-id-guard.js';
 import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
+import {
+  readSessionBgTasks,
+  syncSessionBgTasksFromManager,
+} from '../../session/bg-tasks-store.js';
 import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
 import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
 import { purgeSessionDiskFiles } from '../session-file-purge.js';
@@ -437,6 +441,23 @@ export function createSessionsRouter(): Router {
       return;
     }
     res.json({ diffSource });
+  });
+
+  /**
+   * GET /api/sessions/:id/bg-tasks - 当前会话 running 后台 shell 任务（跨端同步）
+   */
+  router.get('/:id/bg-tasks', async (req: Request, res: Response): Promise<void> => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    try {
+      const workspace = await resolveEffectiveWorkspaceRoot(SESSIONS_DIR, sessionId, getDefaultWorkDir());
+      const tasks = await syncSessionBgTasksFromManager(SESSIONS_DIR, sessionId, workspace.workspaceRoot);
+      res.json({ ok: true, tasks });
+    } catch {
+      const tasks = await readSessionBgTasks(SESSIONS_DIR, sessionId);
+      res.json({ ok: true, tasks });
+    }
   });
 
   /**

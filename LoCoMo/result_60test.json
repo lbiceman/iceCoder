@@ -1,0 +1,343 @@
+{
+  "summary": {
+    "total_questions": 20,
+    "passed": 17,
+    "failed": 3,
+    "overall_accuracy": 85.0
+  },
+  "by_category": {
+    "1": {
+      "name": "Single-hop QA",
+      "total": 4,
+      "passed": 4,
+      "accuracy": 100.0,
+      "avg_score": 0.975
+    },
+    "2": {
+      "name": "Multi-hop QA",
+      "total": 8,
+      "passed": 6,
+      "accuracy": 75.0,
+      "avg_score": 0.7562
+    },
+    "3": {
+      "name": "Open-ended QA",
+      "total": 4,
+      "passed": 3,
+      "accuracy": 75.0,
+      "avg_score": 0.7625
+    },
+    "4": {
+      "name": "Temporal QA",
+      "total": 2,
+      "passed": 2,
+      "accuracy": 100.0,
+      "avg_score": 0.975
+    },
+    "5": {
+      "name": "Adversarial QA",
+      "total": 2,
+      "passed": 2,
+      "accuracy": 100.0,
+      "avg_score": 1.0
+    }
+  },
+  "by_sample": [
+    {
+      "sample_id": "60test-cap55",
+      "total": 20,
+      "passed": 17,
+      "accuracy": 85.0,
+      "error": null
+    }
+  ],
+  "metadata": {
+    "timestamp": "2026-07-20T18:08:54.485037",
+    "host": "127.0.0.1",
+    "port": 1024,
+    "dataset": "D:\\work\\self\\iceCoder\\LoCoMo\\locomo60test.json",
+    "elapsed_seconds": 512.5,
+    "threshold": 0.6,
+    "sample_ids": [
+      "60test-cap55"
+    ],
+    "categories": null,
+    "max_qa": null
+  },
+  "details": [
+    {
+      "sample_id": "60test-cap55",
+      "total_qa": 20,
+      "qa_results": [
+        {
+          "question": "When did Caroline go to the LGBTQ support group?",
+          "category": 2,
+          "answer": "7 May 2023",
+          "response": "Caroline attended the LGBTQ support group on **May 7, 2023**.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response provides the same date in a different format, which is semantically equivalent.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 0,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What is Caroline's identity?",
+          "category": 1,
+          "answer": "Transgender woman",
+          "response": "Caroline attended an LGBTQ support group where she found inspiration in transgender stories, helping her embrace her own identity. She is planning to continue her education and is interested in pursuing counseling or mental health work to support others with similar experiences.",
+          "score": 0.9,
+          "passed": true,
+          "reason": "The response implies Caroline identifies as transgender through her engagement with transgender stories and embracing her own identity, which aligns semantically with the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 0.9,
+          "index": 1,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "When Jon has lost his job as a banker?",
+          "category": 2,
+          "answer": "19 January, 2023",
+          "response": "Jon lost his job as a banker on **January 19, 2023**.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response provides the same date (January 19, 2023) as the expected answer, with only a minor formatting difference.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 2,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "How do Jon and Gina both like to destress?",
+          "category": 4,
+          "answer": "by dancing",
+          "response": "Jon and Gina both like to destress by dancing together. Jon has been into dancing since childhood as his passion and escape, with contemporary as his favorite style, and Gina also enjoys dance (she won a regional competition at age fifteen). They plan to attend a dance class together and have dance sessions, indicating this is their shared way to relax.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response explicitly states that Jon and Gina both destress by dancing, which matches the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 3,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What test has John taken multiple times?",
+          "category": 1,
+          "answer": "The military aptitude test",
+          "response": "John has taken the **military aptitude test** multiple times. He initially failed it, which caused him stress, and later retook it with great results. After retaking it successfully, he felt drawn to serving his country.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response explicitly states that John has taken the military aptitude test multiple times, which matches the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 4,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "Would John be considered a patriotic person?",
+          "category": 3,
+          "answer": "Yes",
+          "response": "Yes, based on the memories, John could be considered patriotic. \n\nThe most direct evidence is from session 4 memory (5/5), which states John \"feels drawn to serving his country after retaking the aptitude test with great results.\" This indicates a sense of duty and desire to contribute to his nation, which aligns with patriotic sentiment.\n\nSupporting this, his pattern of organizing charity events for local causes (like dog shelters and children's hospitals) and his involvement in community-focus",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response affirms 'Yes' and provides supporting reasoning that aligns with the expected answer's semantic meaning.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 5,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What pets wouldn't cause any discomfort to Joanna?",
+          "category": 3,
+          "answer": "Hairless cats or pigs,since they don't have fur, which is one of the main causes of Joanna's allergy.",
+          "response": "根据记忆中关于Joanna的信息，她对大多数爬行动物和有毛皮的动物过敏，接触这些动物时会出现脸部肿胀和发痒的症状。\n\n**不会引起Joanna不适的宠物：**\n\n- **鱼类** — 无毛皮，非爬行动物，可以安全饲养\n- **鸟类** — 无毛皮，非爬行动物（记忆中未提及对羽毛过敏）\n\n来源：`locomo_60test-cap55_s5_03_60test-cap55_session_5_memory_45.md`",
+          "score": 0.1,
+          "passed": false,
+          "reason": "The model's response lists fish and birds as safe pets, while the expected answer specifies hairless cats or pigs, which are not mentioned in the model's response.",
+          "judge_verdict": "incorrect",
+          "judge_confidence": 0.9,
+          "index": 6,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "When did Joanna finish her first screenplay?",
+          "category": 2,
+          "answer": "The Friday before 23January, 2022",
+          "response": "Joanna finished her first full screenplay on **Friday, January 14, 2022**.",
+          "score": 0.95,
+          "passed": true,
+          "reason": "The model's date of Friday, January 14, 2022, is semantically equivalent to 'the Friday before 23 January, 2022' as January 14 is indeed the Friday immediately preceding January 23.",
+          "judge_verdict": "correct",
+          "judge_confidence": 0.95,
+          "index": 7,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "Who is Anthony?",
+          "category": 3,
+          "answer": "likely John's friend, colleague or family",
+          "response": "根据记忆记录，Anthony是John的朋友。他和John一起参加了一个慈善活动，其中有一个哈利·波特知识问答比赛。他们在比赛中表现得还不错，但最终是一个\"超级粉丝\"赢得了包含签名在内的奖品。\n\n（来源：session 6 记忆）",
+          "score": 0.95,
+          "passed": true,
+          "reason": "The model's response explicitly identifies Anthony as John's friend, which matches the core semantic relationship in the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 0.95,
+          "index": 8,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What did Anthony and John end up playing during the charity event?",
+          "category": 4,
+          "answer": "an intense Harry Potter trivia contest",
+          "response": "They played **Harry Potter trivia** at the charity event, and they did alright — though a super-nerd ended up winning a prize that included a signature.",
+          "score": 0.95,
+          "passed": true,
+          "reason": "The model's response confirms they played Harry Potter trivia at the charity event, which matches the core of the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 0.95,
+          "index": 9,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "Which year did Audrey adopt the first three of her dogs?",
+          "category": 2,
+          "answer": "2020",
+          "response": "**2020年。** 根据记忆，Audrey 到 2023 年 3 月已经养了她的狗（Pepper、Precious、Panda）3 年，因此她是在 **2020 年** 收养的。",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model explicitly states the year 2020, which matches the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 10,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "Which specific type of bird mesmerizes Audrey?",
+          "category": 5,
+          "answer": null,
+          "adversarial_answer": "Eagles",
+          "response": "Based on the available memories, there is no information about Audrey being mesmerized by any specific type of bird. The bird-related memories in the retrieved context all pertain to **Andrew**, not Audrey — specifically, Andrew's favorite bird is the **eagle**, which he finds strong and graceful (session 7 memory 45).\n\nAudrey's memories are about her dogs (Pepper, Precious, and Panda) and their adventures, with no mention of birds.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model correctly identified the question as unanswerable and did not provide the adversarial answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 11,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "How many charity tournaments has John organized till date?",
+          "category": 1,
+          "answer": "two",
+          "response": "Based on the recalled memories, John has organized **2** charity tournaments:\n\n1. **CS:GO tournament** (May 7, 2022) — raised money for a dog shelter near his home; leftover funds were used to buy groceries and cook food for the homeless.\n2. **Gaming tournament** (October 30, 2022) — played Fortnite, Overwatch, and Apex Legends; raised a decent amount of money for a children's hospital.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response explicitly states John organized 2 charity tournaments, which matches the expected answer 'two' semantically.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 12,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What games has John played with his friends at charity tournaments?",
+          "category": 1,
+          "answer": "CS:GO, Fortnite, Overwatch and Apex Legends",
+          "response": "John played the following games at charity tournaments with his friends:\n\n1. **CS:GO** — a tournament on May 7, 2022, raising money for a dog shelter near his home.\n2. **Fortnite, Overwatch, and Apex Legends** — a gaming tournament on October 30, 2022, raising money for a children's hospital.",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response lists all four games (CS:GO, Fortnite, Overwatch, and Apex Legends) mentioned in the expected answer, confirming semantic consistency.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 13,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What kind of project was Jolene working on in the beginning of January 2023?",
+          "category": 2,
+          "answer": "electricity engineering project",
+          "response": "Jolene was working on an **electrical engineering project** in early January 2023. She completed it the week before January 23, 2023, and noted that it \"took a lot of work, but it's done now.\"\n\n*(Source: `locomo_60test-cap55_s10_00_60test-cap55_session_10_memory_15.md`)*",
+          "score": 0.95,
+          "passed": true,
+          "reason": "The model's response correctly identifies the project as an electrical engineering project, which is semantically equivalent to the expected 'electricity engineering project'.",
+          "judge_verdict": "correct",
+          "judge_confidence": 0.95,
+          "index": 14,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "When did Jolene`s mother pass away?",
+          "category": 2,
+          "answer": "in 2022",
+          "response": "Jolene's mother passed away in 2022, as indicated in the memory from the conversation on January 23, 2023, where it was mentioned she passed away \"last year\" relative to that date.\n\nSource: `locomo_60test-cap55_s10_01_60test-cap55_session_10_memory_25.md`",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response explicitly states the year 2022, matching the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 15,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "Which hobby did Sam take up in May 2023?",
+          "category": 2,
+          "answer": "painting",
+          "response": "Based on the memories, Sam had **not yet taken up** a hobby in May 2023. During a conversation on 2023-05-18, Sam said they \"have not yet found other hobbies for themselves\" and were merely **keen to try** a new activity (painting/watercolor inspired by Evan). Sam was considering it but hadn't committed — Evan advised Sam to \"keep trying new things until something sparks their excitement,\" and Sam promised to keep Evan posted.",
+          "score": 0.05,
+          "passed": false,
+          "reason": "The model explicitly states Sam had not taken up a hobby in May 2023, contradicting the expected answer that Sam took up painting.",
+          "judge_verdict": "incorrect",
+          "judge_confidence": 0.95,
+          "index": 16,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "What type of car did Sam get after his old Prius broke down?",
+          "category": 5,
+          "answer": null,
+          "adversarial_answer": "new Prius",
+          "response": "根据记忆中的信息，**Sam并没有获得汽车**。记忆中提到的 Prius 故障和更换是关于 **Evan** 的，而不是 Sam。\n\n具体来说：\n- Evan 的旧 Prius 抛锚了，他修理后卖掉了它（来源：`locomo_60test-cap55_s11_00_60test-cap55_session_11_memory_15.md`）。\n- Evan 后来获得了一辆新的 Prius，并用它进行了家庭旅行（来源：同一记忆文件）。\n\n关于 Sam 的记忆主要涉及他和父亲的徒步旅行、考虑尝试绘画作为爱好，以及与 Evan 关于爱好的对话，但没有提到他获得或拥有的汽车。",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model correctly identified the question as unanswerable and refused to provide the adversarial answer, instead explaining the confusion with another person's memory.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 17,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "When did Calvin first travel to Tokyo?",
+          "category": 2,
+          "answer": "between 26 March and 20 April 2023",
+          "response": "Based on the memories, Calvin traveled to Tokyo in **April 2023** to attend a music festival, where he met talented artists and industry people. However, the memories do not explicitly confirm this was his *first* trip to Tokyo — it's the only Tokyo trip recorded.",
+          "score": 0.1,
+          "passed": false,
+          "reason": "The model's response only mentions April 2023, while the expected answer specifies a date range from 26 March to 20 April 2023, which is not semantically equivalent.",
+          "judge_verdict": "incorrect",
+          "judge_confidence": 0.9,
+          "index": 18,
+          "sample_id": "60test-cap55"
+        },
+        {
+          "question": "Which country do Calvin and Dave want to meet in?",
+          "category": 3,
+          "answer": "United States",
+          "response": "They plan to meet in **Boston**, in the **United States** (USA).",
+          "score": 1.0,
+          "passed": true,
+          "reason": "The model's response explicitly states the United States, which matches the expected answer.",
+          "judge_verdict": "correct",
+          "judge_confidence": 1.0,
+          "index": 19,
+          "sample_id": "60test-cap55"
+        }
+      ],
+      "error": null,
+      "timing": {
+        "inject_seconds": 336.0,
+        "messages_sent": 60,
+        "qa_seconds": 175.2
+      }
+    }
+  ]
+}

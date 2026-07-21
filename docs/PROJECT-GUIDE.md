@@ -28,7 +28,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Mobile H5 Shell** | `#/m/*` routes; bottom tabs + session drawer; shared JS Core with desktop — see **Web app** |
 | **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
-| **Shell dual-track** | `run_command` runtime classifier: long jobs → background, short → foreground with soft-timeout escalate |
+| **Shell dual-track** | `run_command` classifier (long → background, short → foreground + soft-timeout escalate); **detached** background tasks survive Agent Stop / session switch; ETL Shell Dock + `bgTasks` WS snapshot — see **Tool Runtime** |
 | **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
 | **Eval** | `npm run eval:agent` — Agent behavior regression (7 fixed cases, temp sandbox, Harness pass/fail); TaskGraph metrics via `scripts/eval-runner.ts` |
 
@@ -284,6 +284,39 @@ Current tool categories:
 - document parsing
 - web search/fetch
 - environment and diff helpers
+
+### Shell dual-track & background task lifecycle
+
+`run_command` (`src/tools/builtin/shell-tool.ts`) uses a runtime classifier (`shell-runtime-classifier.ts`):
+
+| Track | When | Behavior |
+|-------|------|----------|
+| **Background** | Long / explicit background | `BackgroundTaskManager.spawn()` or `adopt()` after foreground soft-timeout escalate |
+| **Foreground** | Short commands | Runs in-process; may escalate to background after ~8s |
+
+Each background task has an internal **`lifespan`** (not exposed in the tool schema):
+
+| lifespan | Default | Stopped when |
+|----------|---------|--------------|
+| **`detached`** | yes (spawn + adopt) | App shutdown · delete/clear session · user `bg_task_stop` / `action:"stop"` · hard timeout |
+| **`bound`** | reserved | Above + chat Stop · switch abort · turn abort |
+
+Kill policy is centralized in `session-shell-control.ts`:
+
+- **`stopForegroundShellWorkForSession`** — chat Stop, switch abort, turn abort: kills foreground shells + **bound** background only; **detached** keeps running (R1/R2).
+- **`stopAllShellWorkForSession`** — delete/clear session: kills all foreground + background for that session.
+- **`stopAllShellWork`** — CLI exit / server shutdown: kills everything.
+
+Web UI (ephemeral — not written to `{sessionId}.json`):
+
+| Surface | Role |
+|---------|------|
+| **`BgTaskChip`** | Chat-area chip; always updated via `bg_task_update` |
+| **ETL Shell Dock** | `#etl-shell-dock-host` above ETL footer; shows **running** background tasks only (`chat-etl-shell-dock.js`) |
+
+On WebSocket **`connected`** / **`session_switched`**, the server sends **`bgTasks`** (`buildBgTaskRunningSnapshot`) and mirrors running tasks to **`data/sessions/{sessionId}.bg-tasks.json`**. Clients hydrate the Dock via WS or **`GET /api/sessions/:id/bg-tasks`** (Desktop + Mobile share the same session file family). `BgTaskPusher` still pushes only the **active** session in real time.
+
+Spec: [`requirement/shell-双轨执行-finish.md`](./requirement/shell-双轨执行-finish.md) · lifecycle + dock: [`requirement/shell-后台持久生命周期-ETL展示-finish.md`](./requirement/shell-后台持久生命周期-ETL展示-finish.md)
 
 ---
 

@@ -109,7 +109,7 @@ window.MobileChatPage = (function () {
 
     var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
 
-    Store.switchSession(sessionId, wsSend, function (ok, runningTurn) {
+    Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
       if (!ok) return;
 
       if (window.ChatPage.isMounted && !window.ChatPage.isMounted()) {
@@ -118,7 +118,7 @@ window.MobileChatPage = (function () {
       }
 
       if (window.ChatPage.onSessionSwitched) {
-        window.ChatPage.onSessionSwitched(sessionId, runningTurn);
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
       } else if (window.ChatPage.onActivate) {
         window.ChatPage.onActivate();
       }

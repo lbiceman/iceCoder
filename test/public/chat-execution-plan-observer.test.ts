@@ -189,6 +189,71 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('轮次从中间开始时显示前缀提示，并将「加载更早」置于列表顶部', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.beginTurnTimer(Date.now());
+      for (let iteration = 19; iteration <= 29; iteration += 1) {
+        panel.applyToolActivity({
+          type: 'tool_call',
+          iteration,
+          toolCallId: 'tool-' + iteration,
+          toolName: 'run_command',
+          toolArgs: { command: 'check bg_' + iteration },
+        });
+        panel.applyToolActivity({
+          type: 'tool_result',
+          iteration,
+          toolCallId: 'tool-' + iteration,
+          toolName: 'run_command',
+          toolSuccess: true,
+        });
+      }
+      const timeline = document.querySelector('#etl-round-timeline');
+      const loadMore = document.querySelector('#etl-round-load-more');
+      const list = document.querySelector('.etl-round-list');
+      const hint = document.querySelector('#etl-round-prefix-hint');
+      return {
+        hintText: hint?.textContent || '',
+        hintHidden: hint?.classList.contains('hidden') ?? true,
+        loadMoreHidden: loadMore?.classList.contains('hidden') ?? true,
+        loadMoreBeforeList: !!(timeline && loadMore && list
+          && loadMore.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING),
+      };
+    });
+
+    expect(result.hintHidden).toBe(false);
+    expect(result.hintText).toContain('轮次 1–18');
+    expect(result.loadMoreHidden).toBe(true);
+    expect(result.loadMoreBeforeList).toBe(true);
+    await page.close();
+  });
+
+  it('model_done 时定格 Footer 模型工作时间，后台仍 processing 也不再累加', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      const startedAt = 100_000;
+      const modelDoneAt = startedAt + 65_000;
+      panel.beginTurnTimer(startedAt);
+      panel.applyRoundActivity({
+        type: 'model_task_final',
+        iteration: 1,
+        stopReason: 'model_done',
+        ts: modelDoneAt,
+      });
+      const read = () => document.querySelector('.etl-foot-time b')?.textContent;
+      const frozen = read();
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      return { frozen, afterWait: read() };
+    });
+
+    expect(result.frozen).toBe('01:05');
+    expect(result.afterWait).toBe('01:05');
+    await page.close();
+  });
+
   it('全部步骤进入终态但 patch 无 updatedAt 时按步骤结束时间定格', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
@@ -945,7 +1010,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.a.status).toBe('done');
     expect(result.a.callTs).toBeTruthy();
     expect(result.a.resultTs).toBeTruthy();
-    expect(result.a.text).toMatch(/read_file|Read File/i);
+    expect(result.a.text).toMatch(/了解代码与上下文|read_file/i);
     expect(result.b.status).toBe('running');
     expect(result.b.resultTs).toBeUndefined();
     await page.close();
