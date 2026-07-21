@@ -29,6 +29,7 @@ Usage:
 """
 
 import json
+import os
 import time
 import logging
 import argparse
@@ -86,7 +87,10 @@ logger = logging.getLogger("locomo-official")
 MAX_RETRIES = 3
 RETRY_DELAY = 2          # seconds between retries
 MSG_INTERVAL = 0.3       # seconds between QA queries
-QA_TIMEOUT = 180         # seconds timeout for QA query
+QA_TIMEOUT = int(os.getenv("LOCOMO_QA_TIMEOUT", "600"))  # seconds timeout for QA query
+# Bundled injection: target total files or fixed files-per-session (0 = one file per fact)
+LOCOMO_TARGET_FILES = int(os.getenv("LOCOMO_TARGET_FILES", "0"))
+LOCOMO_FILES_PER_SESSION = int(os.getenv("LOCOMO_FILES_PER_SESSION", "0"))
 
 # Category names from LoCoMo paper
 CATEGORY_NAMES = {
@@ -102,6 +106,21 @@ CATEGORY_NAMES = {
 # WebSocket Communication
 # ---------------------------------------------------------------------------
 
+def _resolve_active_session_id(host: str, port: int) -> str:
+    """Resolve iceCoder active session id via REST API."""
+    if requests is None:
+        return "default"
+    try:
+        resp = requests.get(f"http://{host}:{port}/api/sessions", timeout=10)
+        if resp.status_code == 200:
+            sid = resp.json().get("activeSessionId")
+            if sid:
+                return sid
+    except requests.RequestException as e:
+        logger.warning(f"Failed to resolve active session id: {e}")
+    return "default"
+
+
 def send_message_ws(host: str, port: int, message: str, timeout: int = 120) -> str:
     """Send a message to iceCoder via WebSocket, return the full response."""
     try:
@@ -110,16 +129,27 @@ def send_message_ws(host: str, port: int, message: str, timeout: int = 120) -> s
         logger.warning("websocket-client not installed, falling back to HTTP")
         return send_message_http(host, port, message, timeout)
 
+    import threading
+
     ws_url = f"ws://{host}:{port}/api/chat/ws"
-    response_parts = []
+    response_parts: list[str] = []
     done = False
     error_msg = None
+    message_sent = False
+    connected = threading.Event()
 
     def on_message(ws, msg):
-        nonlocal done, error_msg
+        nonlocal done, error_msg, message_sent
         try:
             data = json.loads(msg)
             msg_type = data.get("type", "")
+            if msg_type == "connected":
+                connected.set()
+                if not message_sent:
+                    payload = json.dumps({"type": "message", "content": message})
+                    ws.send(payload)
+                    message_sent = True
+                return
             if msg_type == "stream":
                 delta = data.get("delta", "")
                 if delta:
@@ -145,23 +175,26 @@ def send_message_ws(host: str, port: int, message: str, timeout: int = 120) -> s
         error_msg = str(error)
         done = True
 
-    def on_open(ws):
-        payload = json.dumps({"type": "message", "content": message})
-        ws.send(payload)
-
     ws = websocket.WebSocketApp(
         ws_url,
-        on_open=on_open,
         on_message=on_message,
         on_error=on_error,
         on_close=lambda ws, code, msg: None,
     )
 
-    import threading
     wst = threading.Thread(target=ws.run_forever, kwargs={"ping_interval": 30})
     wst.daemon = True
     wst.start()
-    wst.join(timeout=timeout)
+
+    connect_timeout = min(15, timeout)
+    if not connected.wait(timeout=connect_timeout):
+        ws.close()
+        logger.warning(f"WebSocket did not receive connected within {connect_timeout}s")
+        return ""
+
+    deadline = time.time() + timeout
+    while not done and time.time() < deadline:
+        time.sleep(0.2)
 
     if not done:
         ws.close()
@@ -211,30 +244,87 @@ def send_message_with_retry(host: str, port: int, message: str,
 # ---------------------------------------------------------------------------
 
 def clear_session(host: str, port: int) -> bool:
-    """Clear iceCoder chat session via WebSocket + HTTP fallback."""
-    # Try WebSocket first
+    """Clear iceCoder chat session: abort run, wipe in-memory + disk history."""
+    if requests is None:
+        return False
+
+    session_id = _resolve_active_session_id(host, port)
+    cleared = False
+
     try:
         import websocket
-        ws_url = f"ws://{host}:{port}/api/chat/ws"
-        ws = websocket.create_connection(ws_url, timeout=10)
-        ws.send(json.dumps({"type": "clear_session"}))
-        time.sleep(0.5)
-        ws.close()
-        return True
-    except Exception:
-        pass
+    except ImportError:
+        websocket = None
 
-    # HTTP fallback
-    url = f"http://{host}:{port}/api/sessions/default"
+    if websocket is not None:
+        import threading
+
+        ws_url = f"ws://{host}:{port}/api/chat/ws"
+        connected = threading.Event()
+        ack = threading.Event()
+        ws_error = [None]
+
+        def on_message(ws, msg):
+            try:
+                data = json.loads(msg)
+                msg_type = data.get("type", "")
+                if msg_type == "connected":
+                    connected.set()
+                    ws.send(json.dumps({"type": "stop"}))
+                    time.sleep(0.2)
+                    ws.send(json.dumps({"type": "clear_session"}))
+                elif msg_type == "session_cleared":
+                    ack.set()
+                    ws.close()
+                elif msg_type == "error":
+                    ws_error[0] = data.get("message", "unknown error")
+                    ack.set()
+                    ws.close()
+            except json.JSONDecodeError:
+                pass
+
+        def on_error(ws, error):
+            ws_error[0] = str(error)
+            ack.set()
+
+        ws_app = websocket.WebSocketApp(
+            ws_url,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=lambda ws, code, msg: None,
+        )
+        wst = threading.Thread(target=ws_app.run_forever, kwargs={"ping_interval": 30})
+        wst.daemon = True
+        wst.start()
+
+        if connected.wait(timeout=10) and ack.wait(timeout=10):
+            cleared = ws_error[0] is None
+        else:
+            logger.warning("clear_session WebSocket handshake timed out")
+        ws_app.close()
+
+    # HTTP fallback / backup: wipe UI message file for active session
+    url = f"http://{host}:{port}/api/sessions/{session_id}"
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.put(url, json={"messages": []}, timeout=10)
             if resp.status_code == 200:
-                return True
+                cleared = True
+                break
         except requests.RequestException as e:
-            logger.warning(f"Clear session attempt {attempt+1} failed: {e}")
+            logger.warning(f"Clear session HTTP attempt {attempt + 1} failed: {e}")
             time.sleep(RETRY_DELAY)
-    return False
+
+    sessions_dir = SCRIPT_DIR.parent / "data" / "sessions"
+    structured_path = sessions_dir / f"{session_id}.structured.json"
+    try:
+        structured_path.write_text("[]", encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"Failed to clear structured session file: {e}")
+
+    if cleared:
+        logger.debug(f"    Session cleared: {session_id}")
+    return cleared
 
 
 def clear_memory_files(host: str, port: int) -> bool:
@@ -430,16 +520,201 @@ def _extract_date_from_text(text: str) -> str:
     return ""
 
 
+def _resolve_files_per_session(session_count: int) -> int:
+    """Return bundled files per session; 0 means atomic (one file per extracted fact)."""
+    files_per_session = int(os.getenv("LOCOMO_FILES_PER_SESSION", "0"))
+    target_files = int(os.getenv("LOCOMO_TARGET_FILES", "0"))
+    if files_per_session > 0:
+        return files_per_session
+    if target_files > 0 and session_count > 0:
+        return max(1, round(target_files / session_count))
+    return 0
+
+
+def _batch_facts_evenly(facts: list, batch_count: int) -> list[list]:
+    """Split facts into batch_count groups with roughly equal sizes."""
+    if not facts:
+        return []
+    batch_count = max(1, min(batch_count, len(facts)))
+    base, remainder = divmod(len(facts), batch_count)
+    batches: list[list] = []
+    idx = 0
+    for i in range(batch_count):
+        take = base + (1 if i < remainder else 0)
+        batches.append(facts[idx: idx + take])
+        idx += take
+    return batches
+
+
+def _resolve_event_date(fact: dict, dt_str: str, tags_str: str, name: str, content_body: str) -> str:
+    event_date = fact.get("eventDate", "") or ""
+    if not event_date:
+        event_date = _extract_date_from_text(tags_str + " " + name + " " + content_body)
+    if not event_date and dt_str:
+        event_date = _extract_date_from_text(dt_str)
+    if not event_date:
+        m = re.search(r"(\d{4})-(\d{2})", dt_str or "")
+        if m:
+            event_date = f"{m.group(1)}-{m.group(2)}-01"
+    return event_date
+
+
+def _safe_memory_filename(sample_id: str, sess_num: str, batch_idx: int, label: str) -> str:
+    safe_label = re.sub(r"[^\w\s-]", "", label.lower())
+    safe_label = re.sub(r"\s+", "_", safe_label.strip())[:40]
+    return f"locomo_{sample_id}_s{sess_num}_{batch_idx:02d}_{safe_label}.md"
+
+
+def _write_memory_file(
+    *,
+    sample_id: str,
+    sess_num: str,
+    batch_idx: int,
+    name: str,
+    description: str,
+    content_body: str,
+    tags_str: str,
+    event_date: str,
+    now_iso: str,
+    index_lines: list[str],
+) -> Path:
+    filename = _safe_memory_filename(sample_id, sess_num, batch_idx, name)
+    file_content = f"""---
+name: {name}
+description: {description}
+type: reference
+source: locomo_eval_llm
+confidence: 0.9
+tags: {tags_str}
+eventDate: {event_date}
+createdAt: {now_iso}
+recallCount: 0
+---
+
+{content_body}
+"""
+    filepath = MEMORY_DIR / filename
+    filepath.write_text(file_content, encoding="utf-8")
+    index_lines.append(f"- [{name}]({filename}) — {description}\n")
+    return filepath
+
+
+def _write_atomic_fact_files(
+    facts: list,
+    *,
+    sample_id: str,
+    sess_num: str,
+    dt_str: str,
+    now_iso: str,
+    index_lines: list[str],
+    start_batch_idx: int = 0,
+) -> int:
+    written = 0
+    for fi, fact in enumerate(facts):
+        name = fact.get("name", f"{sample_id} s{sess_num} fact {fi + 1}")
+        description = fact.get("description", name)
+        content_body = fact.get("content", description)
+        tags_list = fact.get("tags", [])
+        tags_str = ", ".join(str(t) for t in tags_list) if isinstance(tags_list, list) else str(tags_list)
+        event_date = _resolve_event_date(fact, dt_str, tags_str, name, content_body)
+        _write_memory_file(
+            sample_id=sample_id,
+            sess_num=sess_num,
+            batch_idx=start_batch_idx + fi,
+            name=name,
+            description=description,
+            content_body=content_body,
+            tags_str=tags_str,
+            event_date=event_date,
+            now_iso=now_iso,
+            index_lines=index_lines,
+        )
+        written += 1
+    return written
+
+
+def _write_bundled_fact_files(
+    facts: list,
+    *,
+    files_per_session: int,
+    sample_id: str,
+    sess_num: str,
+    dt_str: str,
+    now_iso: str,
+    index_lines: list[str],
+    start_batch_idx: int = 0,
+) -> int:
+    batches = _batch_facts_evenly(facts, files_per_session)
+    written = 0
+    for bi, batch in enumerate(batches):
+        if len(batch) == 1:
+            written += _write_atomic_fact_files(
+                batch,
+                sample_id=sample_id,
+                sess_num=sess_num,
+                dt_str=dt_str,
+                now_iso=now_iso,
+                index_lines=index_lines,
+                start_batch_idx=start_batch_idx + bi,
+            )
+            continue
+
+        names = [f.get("name", f"fact {i + 1}") for i, f in enumerate(batch)]
+        name = f"{sample_id} session {sess_num} memory ({bi + 1}/{len(batches)})"
+        descriptions = [f.get("description", f.get("name", "")) for f in batch]
+        description = "; ".join(descriptions[:3])
+        if len(descriptions) > 3:
+            description += f"; ... (+{len(descriptions) - 3} more)"
+
+        content_parts = []
+        all_tags: list[str] = []
+        for fact in batch:
+            title = fact.get("name", "Fact")
+            body = fact.get("content", fact.get("description", ""))
+            content_parts.append(f"## {title}\n\n{body}")
+            tags_list = fact.get("tags", [])
+            if isinstance(tags_list, list):
+                all_tags.extend(str(t) for t in tags_list)
+            elif tags_list:
+                all_tags.append(str(tags_list))
+
+        content_body = "\n\n".join(content_parts)
+        tags_str = ", ".join(dict.fromkeys(all_tags))  # preserve order, dedupe
+        event_date = _resolve_event_date(batch[0], dt_str, tags_str, name, content_body)
+        for fact in batch[1:]:
+            alt = _resolve_event_date(
+                fact, dt_str,
+                ", ".join(str(t) for t in (fact.get("tags") or [])),
+                fact.get("name", ""),
+                fact.get("content", ""),
+            )
+            if alt and (not event_date or alt < event_date):
+                event_date = alt
+
+        _write_memory_file(
+            sample_id=sample_id,
+            sess_num=sess_num,
+            batch_idx=start_batch_idx + bi,
+            name=name,
+            description=description,
+            content_body=content_body,
+            tags_str=tags_str,
+            event_date=event_date,
+            now_iso=now_iso,
+            index_lines=index_lines,
+        )
+        written += 1
+    return written
+
+
 def inject_conversations(host: str, port: int, sample: dict,
                          batch_size: int = 0) -> int:
     """
-    Inject conversations by extracting individual facts via LLM,
-    writing ONE memory file per fact (small file strategy).
+    Inject conversations by extracting facts via LLM and writing memory files.
 
-    Each fact gets its own file with a specific name and description,
-    making LLM recall highly precise — the description IS the fact.
-
-    Returns total number of memory files written.
+    Default: one file per fact (small file strategy).
+    When LOCOMO_TARGET_FILES or LOCOMO_FILES_PER_SESSION is set, bundle multiple
+    facts into fewer richer files per session.
     """
     conversation = sample.get("conversation", {})
     sample_id = sample.get("sample_id", "unknown")
@@ -450,9 +725,18 @@ def inject_conversations(host: str, port: int, sample: dict,
     total_turns = sum(len(turns) for _, _, turns in sessions)
     file_count = 0
     extract_cfg = get_judge_config()
+    files_per_session = _resolve_files_per_session(len(sessions))
+
+    if files_per_session > 0:
+        mode_desc = (
+            f"bundled mode, ~{files_per_session} files/session, "
+            f"target ~{files_per_session * len(sessions)} files"
+        )
+    else:
+        mode_desc = "1 file/fact"
 
     logger.info(f"  Injecting {len(sessions)} sessions, {total_turns} turns "
-                f"(LLM extraction mode, 1 file/fact, model={extract_cfg['model']})")
+                f"(LLM extraction, {mode_desc}, model={extract_cfg['model']})")
 
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     index_lines = ["# 记忆索引\n"]
@@ -493,56 +777,27 @@ def inject_conversations(host: str, port: int, sample: dict,
         now_iso = datetime.now(tz=__import__('datetime').timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         sess_num = sess_key.split("_")[1]
 
-        # Write each fact as a separate small file
-        for fi, fact in enumerate(facts):
-            name = fact.get("name", f"{sample_id} s{sess_num} fact {fi+1}")
-            description = fact.get("description", name)
-            content_body = fact.get("content", description)
-            tags_list = fact.get("tags", [])
-            if isinstance(tags_list, list):
-                tags_str = ", ".join(str(t) for t in tags_list)
-            else:
-                tags_str = str(tags_list)
-
-            event_date = fact.get("eventDate", "") or ""
-
-            # Post-process: if eventDate is empty, try to extract from tags/content/name
-            if not event_date:
-                event_date = _extract_date_from_text(tags_str + " " + name + " " + content_body)
-
-            # T2: If still empty, use session date as default
-            if not event_date and dt_str:
-                event_date = _extract_date_from_text(dt_str)
-            if not event_date:
-                # Last resort: extract year-month from session date string
-                m = re.search(r'(\d{4})-(\d{2})', dt_str or "")
-                if m:
-                    event_date = f"{m.group(1)}-{m.group(2)}-01"
-
-            # Safe filename
-            safe_name = re.sub(r"[^\w\s-]", "", name.lower())
-            safe_name = re.sub(r"\s+", "_", safe_name.strip())[:40]
-            filename = f"locomo_{sample_id}_s{sess_num}_{fi:02d}_{safe_name}.md"
-
-            file_content = f"""---
-name: {name}
-description: {description}
-type: reference
-source: locomo_eval_llm
-confidence: 0.9
-tags: {tags_str}
-eventDate: {event_date}
-createdAt: {now_iso}
-recallCount: 0
----
-
-{content_body}
-"""
-            filepath = MEMORY_DIR / filename
-            filepath.write_text(file_content, encoding="utf-8")
-            file_count += 1
-
-            index_lines.append(f"- [{name}]({filename}) — {description}\n")
+        if files_per_session > 0:
+            written = _write_bundled_fact_files(
+                facts,
+                files_per_session=files_per_session,
+                sample_id=sample_id,
+                sess_num=sess_num,
+                dt_str=dt_str,
+                now_iso=now_iso,
+                index_lines=index_lines,
+            )
+            logger.info(f"    {sess_key}: wrote {written} bundled files from {len(facts)} facts")
+            file_count += written
+        else:
+            file_count += _write_atomic_fact_files(
+                facts,
+                sample_id=sample_id,
+                sess_num=sess_num,
+                dt_str=dt_str,
+                now_iso=now_iso,
+                index_lines=index_lines,
+            )
 
     try:
         pbar.close()
@@ -612,8 +867,16 @@ def run_qa_evaluation(host: str, port: int, qa_list: list,
         # Clear session before each QA to isolate memory recall
         clear_session(host, port)
 
+        logger.info(f"    QA[{i + 1}/{len(qa_list)}] cat={category}: {question[:70]}")
+        t0 = time.time()
+
         # Send question to iceCoder (blocking — this is the slow part)
         response = send_message_with_retry(host, port, question, timeout=QA_TIMEOUT)
+        elapsed = time.time() - t0
+        logger.info(
+            f"    QA[{i + 1}] answered in {elapsed:.1f}s "
+            f"({len(response)} chars)"
+        )
 
         # Submit judge scoring to background thread (non-blocking)
         def _judge_task(idx, resp, qa, thr, cfg):
@@ -791,20 +1054,20 @@ def print_summary(metrics: dict) -> None:
     print(f"  Failed:             {s['failed']}")
     print(f"  Overall accuracy:   {s['overall_accuracy']}%")
 
-    print(f"\n{'─'*60}")
+    print(f"\n{'-'*60}")
     print("BY CATEGORY:")
-    print(f"{'─'*60}")
+    print(f"{'-'*60}")
     for cat_id in sorted(metrics["by_category"]):
         c = metrics["by_category"][cat_id]
         bar_len = int(c["accuracy"] / 100 * 20)
-        bar = "█" * bar_len + "░" * (20 - bar_len)
+        bar = "#" * bar_len + "." * (20 - bar_len)
         print(f"  Cat {cat_id} ({c['name']:20s}): "
               f"{c['passed']:3d}/{c['total']:3d} = {c['accuracy']:6.2f}%  "
               f"|{bar}|  avg={c['avg_score']:.3f}")
 
-    print(f"\n{'─'*60}")
+    print(f"\n{'-'*60}")
     print("BY SAMPLE:")
-    print(f"{'─'*60}")
+    print(f"{'-'*60}")
     for ss in metrics["by_sample"]:
         err = " [ERROR]" if ss["error"] else ""
         print(f"  {ss['sample_id']:12s}: "
