@@ -1553,6 +1553,35 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           return;
         }
 
+        if (msg.type === 'clear_session') {
+          const sid = wsToSubscribedSession.get(ws) || activeSessionId;
+          try {
+            stopAllShellWorkForSession(sid, 'clear_session');
+            abortSession(sid);
+            sessionProcessing.delete(sid);
+            runningTurns.delete(sid);
+            setCachedMessages(sid, []);
+            await writeStructuredMessagesFile(SESSIONS_DIR, sid, []);
+            await fsPromises.writeFile(
+              path.join(SESSIONS_DIR, `${sid}.json`),
+              '[]',
+              'utf-8',
+            );
+            await getTaskQueueManager(SESSIONS_DIR).clearSession(sid);
+            clearPendingNotesForSession(sid);
+            sendJSON(ws, { type: 'session_cleared', ok: true, sessionId: sid });
+          } catch (err) {
+            console.error('[chat-ws] clear_session failed:', err);
+            sendJSON(ws, {
+              type: 'session_cleared',
+              ok: false,
+              sessionId: sid,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return;
+        }
+
         // 方案 B4：confirm 多端 first-win
         if (msg.type === 'confirm_reply') {
           const cid = typeof msg.confirmId === 'string' ? msg.confirmId : '';

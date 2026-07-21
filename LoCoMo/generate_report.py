@@ -29,8 +29,142 @@ def load_results(input_path: Path) -> dict:
         return json.load(f)
 
 
+CATEGORY_NAMES = {
+    1: "Single-hop QA",
+    2: "Multi-hop QA",
+    3: "Open-ended QA",
+    4: "Temporal QA",
+    5: "Adversarial QA",
+}
+
+
+def generate_official_report(data: dict) -> str:
+    """Generate Markdown report from run_locomo_official.py results."""
+    summary = data.get("summary", {})
+    metadata = data.get("metadata", {})
+    by_category = data.get("by_category", {})
+    by_sample = data.get("by_sample", [])
+    details = data.get("details", [])
+
+    timestamp = metadata.get("timestamp", datetime.now().isoformat())
+    elapsed = metadata.get("elapsed_seconds", 0)
+    host = metadata.get("host", "unknown")
+    port = metadata.get("port", "unknown")
+    dataset = metadata.get("dataset", "N/A")
+    threshold = metadata.get("threshold", 0.6)
+
+    lines = []
+    lines.append("# iceCoder LoCoMo 60test 评测结果摘要")
+    lines.append("")
+    lines.append("> 完整文档（测试过程、环境、数据集设计）：[`60test.md`](./60test.md)")
+    lines.append("")
+    lines.append(f"> 生成时间: {timestamp}")
+    lines.append(f"> 评测服务器: {host}:{port}")
+    lines.append(f"> 总耗时: {elapsed}s | Judge 阈值: {threshold}")
+    lines.append(f"> 数据集: `{dataset}`")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    lines.append("## 一、总体指标")
+    lines.append("")
+    lines.append("| 指标 | 值 |")
+    lines.append("|------|-----|")
+    lines.append(f"| 总题数 | {summary.get('total_questions', 0)} |")
+    lines.append(f"| 通过 | {summary.get('passed', 0)} |")
+    lines.append(f"| 失败 | {summary.get('failed', 0)} |")
+    lines.append(f"| **总体准确率** | **{summary.get('overall_accuracy', 0)}%** |")
+    lines.append("")
+
+    if by_sample:
+        ss = by_sample[0]
+        lines.append("| 样本 ID | 题数 | 通过 | 准确率 |")
+        lines.append("|---------|:----:|:----:|:------:|")
+        err = " ⚠" if ss.get("error") else ""
+        lines.append(
+            f"| `{ss.get('sample_id', 'N/A')}` | {ss.get('total', 0)} | "
+            f"{ss.get('passed', 0)} | **{ss.get('accuracy', 0)}%**{err} |"
+        )
+        lines.append("")
+
+    timing = (details[0].get("timing") if details else None) or {}
+    if timing:
+        lines.append("### 耗时分解")
+        lines.append("")
+        lines.append("| 阶段 | 耗时 | 备注 |")
+        lines.append("|------|------|------|")
+        lines.append(f"| 记忆注入 | {timing.get('inject_seconds', 'N/A')}s | "
+                       f"{timing.get('messages_sent', '?')} 个记忆文件 |")
+        lines.append(f"| QA 问答 | {timing.get('qa_seconds', 'N/A')}s | "
+                       f"{summary.get('total_questions', 0)} 道题 |")
+        lines.append("")
+
+    lines.append("## 二、分类得分")
+    lines.append("")
+    lines.append("| Cat | 题型 | 题数 | 通过 | 准确率 | 均分 |")
+    lines.append("|:---:|------|:----:|:----:|:------:|:----:|")
+    for cat_id in sorted(by_category, key=lambda x: int(x)):
+        c = by_category[cat_id]
+        lines.append(
+            f"| {cat_id} | {c.get('name', CATEGORY_NAMES.get(int(cat_id), '?'))} | "
+            f"{c.get('total', 0)} | {c.get('passed', 0)} | "
+            f"**{c.get('accuracy', 0)}%** | {c.get('avg_score', 0):.3f} |"
+        )
+    lines.append("")
+
+    failed_qa: list[dict] = []
+    for block in details:
+        for qa in block.get("qa_results", []):
+            if not qa.get("passed", False):
+                failed_qa.append(qa)
+
+    lines.append("## 三、错题详情")
+    lines.append("")
+    if not failed_qa:
+        lines.append("*全部通过，无错题。*")
+    else:
+        for qa in failed_qa:
+            cat = qa.get("category", "?")
+            cat_name = CATEGORY_NAMES.get(cat, f"Cat {cat}")
+            idx = qa.get("index", "?")
+            lines.append(f"### Q{idx + 1 if isinstance(idx, int) else idx} · {cat_name}")
+            lines.append("")
+            lines.append(f"- **问题**: {qa.get('question', 'N/A')}")
+            lines.append(f"- **标准答案**: {qa.get('answer', 'N/A')}")
+            lines.append(f"- **模型回答**: {qa.get('response', 'N/A')[:500]}")
+            lines.append(f"- **Judge 评分**: {qa.get('score', 0)} ({qa.get('judge_verdict', '?')})")
+            if qa.get("reason"):
+                lines.append(f"- **判定理由**: {qa.get('reason')}")
+            lines.append("")
+
+    lines.append("## 四、全量 QA 明细")
+    lines.append("")
+    lines.append("| # | Cat | 结果 | 分数 | 问题 |")
+    lines.append("|:-:|-----|:----:|:----:|------|")
+    for block in details:
+        for qa in block.get("qa_results", []):
+            idx = qa.get("index", 0)
+            cat = qa.get("category", "?")
+            ok = "✓" if qa.get("passed") else "✗"
+            q = qa.get("question", "").replace("|", "\\|")
+            if len(q) > 60:
+                q = q[:57] + "..."
+            lines.append(f"| {idx + 1 if isinstance(idx, int) else idx} | {cat} | {ok} | "
+                         f"{qa.get('score', 0):.2f} | {q} |")
+    lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append("*本摘要由 `generate_report.py` 从 `result_60test.json` 自动生成；设计说明见 [`60test.md`](./60test.md)*")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def generate_report(data: dict) -> str:
     """Generate Markdown report from evaluation results."""
+    if "by_category" in data:
+        return generate_official_report(data)
+
     summary = data.get("summary", {})
     metadata = data.get("metadata", {})
     breakdown = data.get("breakdown", {})
@@ -197,9 +331,16 @@ def main():
     # Print summary to console
     summary = data.get("summary", {})
     print(f"\nOverall accuracy: {summary.get('overall_accuracy', 0)}%")
-    print(f"Recall@5: {data.get('recall_at_5', 0)}%")
-    print(f"Multi-hop: {data.get('multi_hop_accuracy', 0)}%")
-    print(f"Expired filter: {data.get('expired_filter_accuracy', 0)}%")
+    if "by_category" in data:
+        print(f"Passed: {summary.get('passed', 0)}/{summary.get('total_questions', 0)}")
+        for cat_id in sorted(data.get("by_category", {}), key=lambda x: int(x)):
+            c = data["by_category"][cat_id]
+            print(f"  Cat {cat_id} ({c.get('name', '?')}): "
+                  f"{c.get('passed', 0)}/{c.get('total', 0)} = {c.get('accuracy', 0)}%")
+    else:
+        print(f"Recall@5: {data.get('recall_at_5', 0)}%")
+        print(f"Multi-hop: {data.get('multi_hop_accuracy', 0)}%")
+        print(f"Expired filter: {data.get('expired_filter_accuracy', 0)}%")
 
 
 if __name__ == "__main__":
