@@ -94,6 +94,8 @@ export interface RunningTaskSummary {
   error: string | null;
   /** 终态标记 */
   isTerminal: boolean;
+  /** OS 进程仍存活（无输出不等于已退出，dev server 编译后常静默） */
+  processAlive: boolean;
 }
 
 /** 增量输出查询结果 */
@@ -512,6 +514,29 @@ export class BackgroundTaskManager extends EventEmitter {
   /**
    * 构造单个任务的 RunningTaskSummary（不包含 newLinesSinceLastSummary 修正）。
    */
+  /** 探测任务对应 OS 进程是否仍在运行（用于区分「静默 dev server」与「真 hang」） */
+  isProcessAlive(task: BackgroundTask): boolean {
+    const child = task.child;
+    if (child) {
+      if (child.killed) return false;
+      if (child.exitCode !== null) return false;
+      return true;
+    }
+    const pid = task.rootPid;
+    if (pid == null || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err: unknown) {
+      const code = err && typeof err === 'object' && 'code' in err
+        ? (err as NodeJS.ErrnoException).code
+        : '';
+      // EPERM：进程存在但无权限发 signal（Windows 常见）→ 视为仍存活
+      if (code === 'EPERM') return true;
+      return false;
+    }
+  }
+
   private buildRunningSummary(task: BackgroundTask): RunningTaskSummary {
     const endTime = task.endTime ?? Date.now();
     const elapsedMs = endTime - task.startTime;
@@ -529,6 +554,7 @@ export class BackgroundTaskManager extends EventEmitter {
       exitCode: task.exitCode,
       error: task.error,
       isTerminal,
+      processAlive: task.status === 'running' ? this.isProcessAlive(task) : false,
     };
   }
 

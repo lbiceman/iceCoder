@@ -49,7 +49,7 @@
     if (isStopping) {
       statusText = 'stopping…';
     } else if (task.isHang) {
-      statusText = 'no output for >30min, may be hung';
+      statusText = 'process not responding';
     } else if (task.isTerminal) {
       var verb = task.status === 'completed' ? 'completed'
                : task.status === 'failed' ? 'failed'

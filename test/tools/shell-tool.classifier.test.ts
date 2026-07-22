@@ -92,15 +92,28 @@ describe('shell-tool — classifier integration', () => {
     expect(parsed.timeout).toBe('unlimited');
   });
 
-  it('user-supplied timeout overrides classifier hard timeout', async () => {
+  it('explicit background:true with timeout applies hard timeout cap', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
       command: 'npm test',
+      background: true,
       timeout: 60_000,  // 1 min
     });
     expect(result.success).toBe(true);
     const parsed = JSON.parse(result.output);
     expect(parsed.timeout).toBe('60s');
+  });
+
+  it('classifier-routed background ignores timeout (avoid schema default killing dev servers)', async () => {
+    const tool = createShellTool(workDir);
+    const result = await tool.handler({
+      command: 'npm test',
+      timeout: 600_000,
+    });
+    expect(result.success).toBe(true);
+    const parsed = JSON.parse(result.output);
+    expect(parsed.mode).toBe('background');
+    expect(parsed.timeout).toBe('unlimited');
   });
 
   it('rm -rf is blocked by shell blacklist', async () => {

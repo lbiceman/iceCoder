@@ -215,17 +215,32 @@ describe('BgTaskPusher — hang detection', () => {
     mgr.dispose();
   });
 
-  it('marks running task as hang when lastOutputAt > threshold', async () => {
-    // sleep 命令不会产生输出，lastOutputAt = startTime
+  it('does not mark alive silent task as hang when lastOutputAt > threshold', async () => {
+    // sleep 命令不会产生输出，但 OS 进程仍存活 → 不应判 hang（dev server 静默同理）
     mgr.spawn(sleepCmd(30), 60_000, 'silent-sleeper');
 
-    // 等一下，确保 now - startTime > hangThresholdMs (1ms)
     await new Promise((r) => setTimeout(r, 100));
 
     pusher.tick();
     expect(broadcasts.length).toBeGreaterThanOrEqual(1);
     const lastBcast = broadcasts[broadcasts.length - 1];
+    expect(lastBcast.body.tasks[0].isHang).toBe(false);
+    expect(lastBcast.body.tasks[0].processAlive).toBe(true);
+  });
+
+  it('marks task as hang when process is gone but status still running', async () => {
+    const spawned = mgr.spawn(sleepCmd(30), 60_000, 'dead-sleeper');
+    const task = (mgr as any).tasks.get(spawned.taskId);
+    expect(task).toBeDefined();
+    // 模拟进程已退出但 close 事件尚未到达
+    task.child = null;
+    task.rootPid = 999_999_999;
+
+    await new Promise((r) => setTimeout(r, 50));
+    pusher.tick();
+    const lastBcast = broadcasts[broadcasts.length - 1];
     expect(lastBcast.body.tasks[0].isHang).toBe(true);
+    expect(lastBcast.body.tasks[0].processAlive).toBe(false);
   });
 });
 
