@@ -49,7 +49,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command to execute. Top-level field; alias: cmd. Not needed for list action' },
-          timeout: { type: 'number', description: 'Timeout in ms for foreground (default 600000 = 10min); background uses 0 (unlimited) unless overridden', default: 600000 },
+          timeout: { type: 'number', description: 'Timeout in ms for foreground (default 600000 = 10min). Background: unlimited by default; only honored when background:true AND timeout is explicitly set' },
           background: { type: 'boolean', description: 'Run command in background, returns task_id immediately', default: false },
           task_id: { type: 'string', description: 'Task ID for checking or stopping a background task' },
           action: { type: 'string', description: 'For background management: "check" (query task status), "stop" (kill task), "list" (list all tasks)' },
@@ -160,9 +160,11 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (sandbox.blocked) {
           return { success: false, output: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
         }
-        const userTimeoutMs = (args.timeout as number) || 0;
-        const hardTimeoutMs = userTimeoutMs > 0
-          ? userTimeoutMs
+        const explicitTimeoutMs = typeof args.timeout === 'number' && args.timeout > 0
+          ? args.timeout
+          : 0;
+        const hardTimeoutMs = explicitBackground && explicitTimeoutMs > 0
+          ? explicitTimeoutMs
           : pickBackgroundHardTimeout(shellClass, { explicitBackground });
         const timeoutSec = hardTimeoutMs / 1000;
         const label = (args.label as string) || '';
