@@ -52,6 +52,20 @@ export interface JsonRpcResponse {
   };
 }
 
+/** MCP 2026-07-28 服务发现结果。 */
+export interface MCPDiscoverResult {
+  resultType: string;
+  supportedVersions: string[];
+  capabilities: Record<string, any>;
+  instructions?: string;
+  ttlMs: number;
+  cacheScope: 'public' | 'private';
+  _meta?: Record<string, any>;
+}
+
+/** 当前 stdio 连接采用的 MCP 协议代际。 */
+export type MCPProtocolMode = 'legacy' | 'modern';
+
 /**
  * JSON-RPC 2.0 通知（无 id）。
  */
@@ -78,14 +92,33 @@ export interface MCPToolDefinition {
 /**
  * MCP 工具调用结果。
  */
-export interface MCPToolResult {
-  content: Array<{
-    type: 'text' | 'image' | 'resource';
-    text?: string;
-    data?: string;
+export interface MCPContentBlock {
+  type: 'text' | 'image' | 'audio' | 'resource' | 'resource_link' | string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  name?: string;
+  uri?: string;
+  description?: string;
+  size?: number;
+  resource?: {
+    uri: string;
     mimeType?: string;
-  }>;
+    text?: string;
+    blob?: string;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+export interface MCPToolResult {
+  /** 旧协议结果没有该字段，按 complete 处理。 */
+  resultType?: 'complete' | 'input_required' | string;
+  content: MCPContentBlock[];
+  structuredContent?: unknown;
   isError?: boolean;
+  _meta?: Record<string, any>;
+  [key: string]: any;
 }
 
 /**

@@ -390,9 +390,11 @@ export class MemoryDream {
   /** 串行化 dream-state 写盘，避免 recordSession 与 Dream 竞态覆盖 */
   private persistChain: Promise<void> = Promise.resolve();
 
-  constructor(config?: Partial<DreamConfig>) {
+  constructor(config?: Partial<DreamConfig>, runtimeOptions?: { stateFilePath?: string }) {
     this.config = { ...DEFAULT_DREAM_CONFIG, ...config };
-    this.stateFilePath = DREAM_STATE_FILE_PATH;
+    this.stateFilePath = runtimeOptions?.stateFilePath
+      ? path.resolve(runtimeOptions.stateFilePath)
+      : DREAM_STATE_FILE_PATH;
   }
 
   /**
@@ -1969,8 +1971,11 @@ export class MemoryDream {
 /**
  * 创建 MemoryDream 实例。
  */
-export function createMemoryDream(config?: Partial<DreamConfig>): MemoryDream {
-  return new MemoryDream(config);
+export function createMemoryDream(
+  config?: Partial<DreamConfig>,
+  runtimeOptions?: { stateFilePath?: string },
+): MemoryDream {
+  return new MemoryDream(config, runtimeOptions);
 }
 
 /** 全局用户级文件名：必须以 user- 或 user_ 开头（排除 javastudy-user-* 等项目前缀命名） */
