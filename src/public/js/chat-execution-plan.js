@@ -1913,11 +1913,12 @@ window.ChatExecutionPlan = (function () {
     var loadMore = roundTimelineEl.querySelector('#etl-round-load-more');
     if (!loadMore) return;
     var hiddenCount = Math.max(0, roundRecords.length - roundVisibleLimit);
+    // 前缀缺口与“本地隐藏数量”是两套独立状态；即使按钮数量未变化也必须刷新提示。
+    syncPrefixGapHint();
     if (!force && hiddenCount === cachedLoadMoreHidden) return;
     cachedLoadMoreHidden = hiddenCount;
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
     loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ' (' + hiddenCount + ')' : '');
-    syncPrefixGapHint();
   }
 
   /** 轮次从中间开始（如 19）时提示：更早轮次未实时捕获，可回填或去聊天区展开。 */
@@ -2835,6 +2836,7 @@ window.ChatExecutionPlan = (function () {
   function applyToolActivity(step) {
     try {
       if (!step || !step.type) return;
+      recoverPanelAfterFatal();
       if (step.type === 'tool_call') {
         var callId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
         if (!callId) return;
@@ -2958,6 +2960,7 @@ window.ChatExecutionPlan = (function () {
 
   function beginTurnTimer(ts) {
     try {
+      recoverPanelAfterFatal();
       turnStartedAt = typeof ts === 'number' ? ts : Date.now();
       turnEndedAt = null;
       renderFooter();
