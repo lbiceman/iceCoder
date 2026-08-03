@@ -197,6 +197,19 @@ window.ModelConfigPanel = (function () {
       });
   }
 
+  function resolveApiMode(prov) {
+    if (!prov) return '';
+    if (prov.apiMode) return String(prov.apiMode).trim();
+    if (prov.parameters && prov.parameters.apiMode) {
+      return String(prov.parameters.apiMode).trim();
+    }
+    return '';
+  }
+
+  function normalizeApiModeInput(value) {
+    return String(value || '').trim();
+  }
+
   function validateProvider(prov) {
     var errors = {};
     if (!prov.apiUrl || prov.apiUrl.trim() === '') {
@@ -212,6 +225,10 @@ window.ModelConfigPanel = (function () {
     }
     if (parseModelNames(prov.modelName).length === 0) {
       errors.modelName = '请填写模型名称';
+    }
+    var apiMode = normalizeApiModeInput(prov.apiMode);
+    if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses') {
+      errors.apiMode = 'apiMode 仅支持 chat_completions 或 responses';
     }
     return errors;
   }
@@ -254,6 +271,7 @@ window.ModelConfigPanel = (function () {
     var modelName = detailEl.querySelector('[data-field="modelName"]');
     var temperature = detailEl.querySelector('[data-field="temperature"]');
     var maxContext = detailEl.querySelector('[data-field="maxContextTokens"]');
+    var apiMode = detailEl.querySelector('[data-field="apiMode"]');
     if (apiUrl) prov.apiUrl = apiUrl.value.trim();
     if (apiKey) {
       prov.apiKey = apiKey.value;
@@ -270,6 +288,16 @@ window.ModelConfigPanel = (function () {
     if (maxContext) {
       var n = parseInt(maxContext.value, 10);
       prov.maxContextTokens = isNaN(n) ? undefined : n;
+    }
+    if (apiMode) {
+      var mode = normalizeApiModeInput(apiMode.value);
+      if (!mode || mode === 'chat_completions') {
+        delete prov.apiMode;
+        if (prov.parameters) delete prov.parameters.apiMode;
+      } else {
+        prov.apiMode = mode;
+        if (prov.parameters) delete prov.parameters.apiMode;
+      }
     }
   }
 
@@ -345,6 +373,12 @@ window.ModelConfigPanel = (function () {
           '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o 或 mimo2.5-pro,mimo-2.5" value="' + escapeAttr(prov.modelName || '') + '">' +
           '<span class="field-hint">多个模型用英文逗号分隔，聊天时可分别选择</span>' +
           '<span class="error-msg" data-error="modelName"></span>' +
+        '</div>' +
+        '<div class="form-group full-width">' +
+          '<label for="model-apiMode-' + index + '">API 模式（apiMode）</label>' +
+          '<input type="text" id="model-apiMode-' + index + '" data-field="apiMode" placeholder="chat_completions" value="' + escapeAttr(resolveApiMode(prov) === 'chat_completions' ? '' : resolveApiMode(prov)) + '">' +
+          '<span class="field-hint">默认 <code>chat_completions</code>；仅 Responses 端点填写 <code>responses</code>（如 DeepSeek-V4-Flash-0731）</span>' +
+          '<span class="error-msg" data-error="apiMode"></span>' +
         '</div>' +
         '<div class="form-group">' +
           '<label for="model-temperature-' + index + '">温度</label>' +
@@ -429,20 +463,25 @@ window.ModelConfigPanel = (function () {
     var result = [];
     for (var i = 0; i < sourceProviders.length; i++) {
       var original = sourceProviders[i] || {};
+      var params = Object.assign({}, original.parameters || {}, {
+          temperature: original.parameters && original.parameters.temperature != null
+            ? original.parameters.temperature : 1
+        });
+      delete params.apiMode;
       result.push({
         id: original.id || generateId(),
         apiUrl: original.apiUrl || '',
         apiKey: original.apiKey || '',
         modelName: original.modelName || '',
         activeModelName: original.activeModelName,
-        parameters: Object.assign({}, original.parameters || {}, {
-          temperature: original.parameters && original.parameters.temperature != null
-            ? original.parameters.temperature : 1
-        }),
+        parameters: params,
         isDefault: i === defaultIndex,
         supportsVision: original.supportsVision !== undefined ? original.supportsVision : true,
         maxContextTokens: original.maxContextTokens,
         requestTimeoutMs: original.requestTimeoutMs,
+        ...(normalizeApiModeInput(resolveApiMode(original)) === 'responses'
+          ? { apiMode: 'responses' }
+          : {}),
         apiKeySource: original.apiKeySource,
         apiKeyEnvVar: original.apiKeyEnvVar
       });
