@@ -102,14 +102,32 @@ describe('pending-note', () => {
     expect(parseNextCommand('普通任务')).toEqual({ matched: false, text: '' });
   });
 
-  it('parseShellCommand recognizes /shell and the rejected legacy exit command', () => {
-    expect(parseShellCommand('/shell')).toEqual({ matched: true, action: 'enter' });
-    expect(parseShellCommand('/shell exit')).toEqual({ matched: true, action: 'exit' });
-    expect(parseShellCommand('/shell\n\n[Shell Copilot Mode]')).toEqual({ matched: true, action: 'enter' });
-    expect(parseShellCommand('/shell foo')).toEqual({ matched: false, action: null });
-    expect(parseShellCommand('ssh user@host')).toEqual({ matched: false, action: null });
-    expect(parseShellCommand('/also note')).toEqual({ matched: false, action: null });
-    expect(parseShellCommand('/shell exit\n\nextra body')).toEqual({ matched: true, action: 'exit' });
-    expect(parseShellCommand('/shell exit foo')).toEqual({ matched: false, action: null });
+  it('parseShellCommand recognizes /shell, trailing prompt, and the rejected legacy exit command', () => {
+    expect(parseShellCommand('/shell')).toEqual({ matched: true, action: 'enter', prompt: '' });
+    expect(parseShellCommand('/shell exit')).toEqual({ matched: true, action: 'exit', prompt: '' });
+    expect(parseShellCommand('/shell\n\n[Shell Copilot Mode]')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '',
+    });
+    expect(parseShellCommand('/shell 你能干什么')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '你能干什么',
+    });
+    expect(parseShellCommand('/shell foo')).toEqual({ matched: true, action: 'enter', prompt: 'foo' });
+    expect(parseShellCommand('#skill.md\n/shell 帮我连 ssh')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '帮我连 ssh',
+    });
+    expect(parseShellCommand('ssh user@host')).toEqual({ matched: false, action: null, prompt: '' });
+    expect(parseShellCommand('/also note')).toEqual({ matched: false, action: null, prompt: '' });
+    expect(parseShellCommand('/shell exit\n\nextra body')).toEqual({
+      matched: true,
+      action: 'exit',
+      prompt: '',
+    });
+    expect(parseShellCommand('/shell exit foo')).toEqual({ matched: false, action: null, prompt: '' });
   });
 });

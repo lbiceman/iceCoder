@@ -12,7 +12,7 @@ window.ChatCommands = (function () {
 
   var SLASH_LOCAL_COMMANDS = [
     { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
-    { name: 'shell', description: '将当前会话固定为 Shell 协作模式（只需发送一次）', prefix: '/' },
+    { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' },
     { name: 'next', description: '静默入队下一条任务', prefix: '/' }
   ];
 
@@ -190,8 +190,10 @@ window.ChatCommands = (function () {
     if (applyTargetFn && (cmd.prefix || cmdActivePrefix) === '~') {
       applyTargetFn(value);
     } else if (targetInput) {
-      if (!replaceSlashTriggerInTextarea(targetInput, value)) {
-        targetInput.value = value;
+      var slashValue = value;
+      if (cmd.name === 'shell') slashValue = slashValue + ' ';
+      if (!replaceSlashTriggerInTextarea(targetInput, slashValue)) {
+        targetInput.value = slashValue;
         dispatchInput(targetInput);
       }
     }

@@ -2137,7 +2137,10 @@ window.ChatPage = (function () {
     var existed = Session.hasUserMessageId && Session.hasUserMessageId(msg.id);
     if (!Session.insertRemoteUserMessage || !Session.insertRemoteUserMessage(msg)) return false;
     if (existed) {
-      if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
+      var localMsg = Session.getMessageById ? Session.getMessageById(msg.id) : null;
+      if (localMsg && UI.replaceUserMessageEl) {
+        UI.replaceUserMessageEl(localMsg, Session.stripStatusTag);
+      } else if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
         UI.updateMessageImagesEl(msg.id, msg.images);
       }
       Session.saveMessages();
