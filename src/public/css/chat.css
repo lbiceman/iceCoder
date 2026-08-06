@@ -634,7 +634,8 @@
   opacity: 0.85;
 }
 
-.message.user .msg-skill-chips {
+.message.user .msg-skill-chips,
+.message.user .msg-shell-command-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -657,6 +658,34 @@
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.message.user .msg-shell-command-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 500;
+  font-family: monospace;
+  color: color-mix(in srgb, var(--accent) 82%, var(--msg-user-fg, var(--text-primary)));
+  background: color-mix(in srgb, var(--accent) 14%, var(--msg-user-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  white-space: nowrap;
+}
+
+.message.user .msg-shell-command-chip .app-icon,
+.message.user .msg-shell-command-chip svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
+.message.user .msg-shell-command-chip-label {
+  white-space: nowrap;
 }
 
 .message.user .msg-file-ref-chips {

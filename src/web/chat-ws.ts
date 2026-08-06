@@ -519,24 +519,35 @@ async function findRunningInteractiveShellForSession(
   return mgr.listForSession().find((task) => task.status === 'running') ?? null;
 }
 
+/** @returns 是否完成模式切换（busy 拒绝进入时为 false） */
 async function handleShellCollabRoute(
   ws: WebSocket,
   sessionId: string,
   action: 'enter' | 'exit',
   rawContent: string,
   clientMessageId?: string,
-): Promise<void> {
+  prompt: string = '',
+): Promise<boolean> {
   // 进程重启后内存 Map 为空，须先从 sidecar 恢复再判断 active（T15/T16 幂等）。
   await loadForSession(sessionId, SESSIONS_DIR);
 
   const now = Date.now();
   const userMsgId = clientMessageId ?? randomUUID();
-  const userMessage = {
-    role: 'user' as const,
-    content: rawContent.trim(),
-    id: userMsgId,
-    sentAt: now,
-  };
+  const trimmedPrompt = String(prompt || '').trim();
+  const userMessage = action === 'enter'
+    ? {
+        role: 'user' as const,
+        content: trimmedPrompt,
+        id: userMsgId,
+        sentAt: now,
+        shellCommand: '/shell' as const,
+      }
+    : {
+        role: 'user' as const,
+        content: rawContent.trim(),
+        id: userMsgId,
+        sentAt: now,
+      };
 
   if (action === 'exit') {
     await appendMessages([userMessage], sessionId);
@@ -546,36 +557,51 @@ async function handleShellCollabRoute(
       message: userMessage,
     });
     sendJSON(ws, { type: 'info', message: SHELL_COLLAB_EXIT_DISABLED_MESSAGE });
-    return;
+    return true;
   }
 
   const wasActive = getShellCollabState(sessionId)?.active === true;
   if (!wasActive && hasBusySessionRun(sessionId)) {
     sendJSON(ws, { type: 'info', message: SHELL_COLLAB_BUSY_ENTER_MESSAGE });
-    return;
+    return false;
   }
   await setShellCollabActive(sessionId, true, SESSIONS_DIR);
   const runningTask = await findRunningInteractiveShellForSession(sessionId);
 
-  const agentContent = wasActive
-    ? SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE
-    : SHELL_COLLAB_ENTERED_MESSAGE;
-  const agentMessage = {
-    role: 'agent' as const,
-    content: agentContent,
-    id: randomUUID(),
-    completedAt: now,
-  };
+  // 已在模式且带提示词：只写用户气泡，跳过「已在模式中」，提示词交给后续入队执行。
+  const skipAlreadyActiveBubble = wasActive && !!trimmedPrompt;
+  const agentMessage = skipAlreadyActiveBubble
+    ? null
+    : {
+        role: 'agent' as const,
+        content: wasActive ? SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE : SHELL_COLLAB_ENTERED_MESSAGE,
+        id: randomUUID(),
+        completedAt: now,
+      };
 
-  await appendMessages([userMessage, agentMessage], sessionId);
+  await appendMessages(
+    agentMessage ? [userMessage, agentMessage] : [userMessage],
+    sessionId,
+  );
   broadcastToSession(sessionId, {
     type: 'user_message_appended',
     sessionId,
     message: userMessage,
   });
 
+  if (trimmedPrompt) {
+    const autoTitle = await applyFirstPromptSessionTitle(sessionId, trimmedPrompt);
+    broadcastSessionUpdated(
+      'user_message',
+      autoTitle ? { sessionId, title: autoTitle } : { sessionId },
+      ws,
+    );
+  }
+
   if (wasActive) {
-    sendJSON(ws, { type: 'info', message: SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE });
+    if (!skipAlreadyActiveBubble) {
+      sendJSON(ws, { type: 'info', message: SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE });
+    }
     broadcastToSession(sessionId, {
       type: 'shell_collab_entered',
       sessionId,
@@ -583,7 +609,7 @@ async function handleShellCollabRoute(
       shellCollabActive: true,
       idempotent: true,
     });
-  } else {
+  } else if (agentMessage) {
     broadcastToSession(sessionId, {
       type: 'shell_collab_entered',
       sessionId,
@@ -604,8 +630,10 @@ async function handleShellCollabRoute(
 
   console.log(
     `[chat-ws] /shell enter session=${sessionId.slice(0, 8)} `
-    + `wasActive=${wasActive} resumed=${runningTask?.taskId ?? 'none'}`,
+    + `wasActive=${wasActive} resumed=${runningTask?.taskId ?? 'none'} `
+    + `prompt=${trimmedPrompt ? 'yes' : 'no'}`,
   );
+  return true;
 }
 
 async function publishTaskQueueState(sessionId: string): Promise<void> {
@@ -668,6 +696,7 @@ async function persistImplicitQueuedUserMessage(
     role: 'user',
     id: taskInput.messageId,
     content: display.content,
+    ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
     ...(display.skills ? { skills: display.skills } : {}),
     ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
     ...(taskInput.images && taskInput.images.length > 0 ? { images: taskInput.images } : {}),
@@ -1495,6 +1524,8 @@ async function appendMessages(
     images?: string[];
     skills?: string[];
     referencePaths?: string[];
+    shellCommand?: string;
+    alsoNote?: boolean;
     sentAt?: number;
     completedAt?: number;
     turnTokenUsage?: { inputTokens: number; outputTokens: number };
@@ -2155,10 +2186,31 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
 
           const shellCmd = parseShellCommand(content);
           if (shellCmd.matched && shellCmd.action) {
-            await queueShellCollabTransition(
-              runSid,
-              () => handleShellCollabRoute(ws, runSid, shellCmd.action!, content, messageId),
-            );
+            const shellMessageId = messageId ?? randomUUID();
+            let shellRouteOk = false;
+            await queueShellCollabTransition(runSid, async () => {
+              shellRouteOk = await handleShellCollabRoute(
+                ws,
+                runSid,
+                shellCmd.action!,
+                content,
+                shellMessageId,
+                shellCmd.prompt,
+              );
+            });
+            // `/shell <prompt>`：模式切换成功后，提示词作为普通任务入队（用户气泡已在 route 中写入）
+            if (shellRouteOk && shellCmd.action === 'enter' && shellCmd.prompt.trim()) {
+              const taskInput = await buildEnqueueInput(
+                runSid,
+                shellCmd.prompt,
+                images,
+                referencePaths,
+                shellMessageId,
+                'implicit',
+                skills,
+              );
+              await enqueueAndMaybeKickoff(runSid, ws, taskInput, queueInsertIndex);
+            }
             return;
           }
           // WebSocket message 回调可并发触发；普通消息必须等待同 session 的 /shell
@@ -2351,6 +2403,7 @@ async function handleChatMessage(
         content: display.content,
         id: userMsgId,
         sentAt: userSentAt,
+        ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
         ...(display.skills ? { skills: display.skills } : {}),
         ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
         ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
@@ -2372,6 +2425,7 @@ async function handleChatMessage(
           id: userMsgId,
           content: display.content,
           sentAt: userSentAt,
+          ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
           ...(display.skills ? { skills: display.skills } : {}),
           ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
           ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),

@@ -105,20 +105,68 @@ export function parseNextCommand(content: string): { matched: boolean; text: str
 
 export type ShellCommandAction = 'enter' | 'exit';
 
+export interface ParsedShellCommand {
+  matched: boolean;
+  action: ShellCommandAction | null;
+  /** enter 时 `/shell` 后的提示词；模式切换本身不包含此文本 */
+  prompt: string;
+}
+
+/** 剥离历史/文档中可能附带的 Shell Copilot 模式横幅，避免误当作用户提示词。 */
+function stripShellCopilotModeBanner(text: string): string {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('[Shell Copilot Mode]')) return '';
+  const idx = trimmed.indexOf('\n[Shell Copilot Mode]');
+  if (idx >= 0) return trimmed.slice(0, idx).trim();
+  const idxInline = trimmed.indexOf('[Shell Copilot Mode]');
+  if (idxInline === 0) return '';
+  if (idxInline > 0) return trimmed.slice(0, idxInline).trim();
+  return trimmed;
+}
+
 /**
- * 仅识别精确 `/shell` 与旧 `/shell exit`（首行）。
- * exit 只用于服务端给出“请新建会话”的拒绝提示，不再改变模式。
+ * 识别 `/shell`（可带尾随提示词）与旧 `/shell exit`。
+ * - `/shell` / `/shell <prompt>` → enter；prompt 与模式指令分离
+ * - `/shell exit` → exit（仅拒绝提示，不改变模式）
+ * - `/shell exit foo` → 不匹配
  */
-export function parseShellCommand(content: string): { matched: boolean; action: ShellCommandAction | null } {
+export function parseShellCommand(content: string): ParsedShellCommand {
   const trimmed = content.trim();
-  const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? '';
-  if (firstLine === '/shell exit') {
-    return { matched: true, action: 'exit' };
+  if (!trimmed) return { matched: false, action: null, prompt: '' };
+
+  const lines = trimmed.split(/\r?\n/);
+  let shellLineIndex = -1;
+  let shellLine = '';
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i]?.trim() ?? '';
+    if (t === '/shell' || t === '/shell exit' || t.startsWith('/shell ')) {
+      shellLineIndex = i;
+      shellLine = t;
+      break;
+    }
   }
-  if (firstLine === '/shell') {
-    return { matched: true, action: 'enter' };
+  if (shellLineIndex < 0) return { matched: false, action: null, prompt: '' };
+
+  if (shellLine === '/shell exit') {
+    return { matched: true, action: 'exit', prompt: '' };
   }
-  return { matched: false, action: null };
+
+  const after = shellLine.slice('/shell'.length).trim();
+  if (after === 'exit' || after.startsWith('exit ')) {
+    return { matched: false, action: null, prompt: '' };
+  }
+
+  const promptParts: string[] = [];
+  if (after) promptParts.push(after);
+  const rest = stripShellCopilotModeBanner(lines.slice(shellLineIndex + 1).join('\n'));
+  if (rest) promptParts.push(rest);
+
+  return {
+    matched: true,
+    action: 'enter',
+    prompt: promptParts.join('\n').trim(),
+  };
 }
 
 export function resetPendingNotesForTests(): void {
