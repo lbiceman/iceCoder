@@ -859,7 +859,7 @@ describe('ETL 真实 Observer 链路', () => {
 
     expect(result.before).toEqual({ rounds: 1, footer: '1' });
     expect(result.afterSend).toEqual({ rounds: 0, empty: '等待模型开始执行', footer: '—' });
-    expect(result.currentRoundText).toMatch(/glob/i);
+    expect(result.currentRoundText).toMatch(/glob|查找匹配/i);
     expect(result.currentRoundText).not.toContain('read_file');
     expect(result.elapsed).toBe('00:05');
     await page.close();
@@ -971,8 +971,8 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.overview).toContain('意图：实现');
     expect(result.iterations).toEqual(['1', '2', '3']);
     expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
-    expect(result.roundTexts[0]).toMatch(/run_command|Run Command/i);
-    expect(result.roundTexts[1]).toMatch(/read_file|Read File/i);
+    expect(result.roundTexts[0]).toMatch(/run_command|Run Command|Run Integration Test/i);
+    expect(result.roundTexts[1]).toMatch(/read_file|Read File|读取/i);
     expect(result.finalMarker).toBe('✓');
     expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
     expect(result.finalRoundText).toContain('本轮结果');

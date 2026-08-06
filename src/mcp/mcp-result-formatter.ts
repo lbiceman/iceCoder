@@ -55,6 +55,16 @@ function isDataUrlText(text: string): boolean {
   return /^data:image\/[^;]+;base64,/i.test(text.trim());
 }
 
+function stringifyForDisplay(value: unknown, maxChars = 8000): string {
+  try {
+    const text = JSON.stringify(value, null, 2);
+    if (text === undefined) return String(value);
+    return text.length > maxChars ? `${text.slice(0, maxChars)}\n…(已截断)` : text;
+  } catch {
+    return String(value);
+  }
+}
+
 /**
  * 格式化 MCP 工具结果：保留文本，将 image / data URL 落盘并附带 image_read 路径指引。
  */
@@ -82,7 +92,44 @@ export async function formatMcpToolResult(result: MCPToolResult): Promise<Format
       const buffer = Buffer.from(item.data, 'base64');
       const absolutePath = await persistMcpImage(buffer, mimeType);
       savedImagePaths.push(absolutePath);
+      continue;
     }
+
+    if (item.type === 'audio') {
+      textParts.push(`[音频内容] ${item.mimeType ?? '未知类型'}（当前仅保留内容说明）`);
+      continue;
+    }
+
+    if (item.type === 'resource_link') {
+      const label = item.name || item.description || '资源链接';
+      textParts.push(`[${label}] ${item.uri ?? '(缺少 URI)'}`);
+      continue;
+    }
+
+    if (item.type === 'resource') {
+      const resource = item.resource;
+      if (resource?.text) {
+        textParts.push(resource.text);
+      } else if (item.text) {
+        // 兼容早期/非标准实现把资源文本直接放在 content block 顶层。
+        textParts.push(item.text);
+      } else if (resource?.blob || item.data) {
+        textParts.push(
+          `[嵌入资源] ${resource?.uri ?? item.uri ?? '(缺少 URI)'}`
+          + `，${resource?.mimeType ?? item.mimeType ?? '未知类型'}（二进制内容未展开）`,
+        );
+      } else {
+        textParts.push(`[嵌入资源] ${resource?.uri ?? item.uri ?? '(缺少 URI)'}`);
+      }
+      continue;
+    }
+
+    // 对未来扩展内容块保底可见，避免合法结果被静默显示为“无文本输出”。
+    textParts.push(`[MCP 内容块: ${item.type}] ${stringifyForDisplay(item, 4000)}`);
+  }
+
+  if (result.structuredContent !== undefined) {
+    textParts.push(`[结构化结果]\n${stringifyForDisplay(result.structuredContent)}`);
   }
 
   const imageHint = buildImageReadHint(savedImagePaths);

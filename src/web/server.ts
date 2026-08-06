@@ -61,7 +61,9 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   const distPublic = path.join(__dirname, '../public');       // dist/web/../public = dist/public
   const srcPublic = path.join(__dirname, '../../src/public'); // 开发模式回退
   const staticDir = config?.staticDir ?? (
-    fs.existsSync(distPublic) ? distPublic : srcPublic
+    isProd
+      ? (fs.existsSync(distPublic) ? distPublic : srcPublic)
+      : srcPublic
   );
 
   const faviconSvgPath = path.join(staticDir, 'icons', 'favicon.svg');

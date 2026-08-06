@@ -51,4 +51,33 @@ describe('formatMcpToolResult', () => {
 
     await fs.unlink(formatted.savedImagePaths[0]);
   });
+
+  it('保留现代协议的结构化结果、资源和音频说明', async () => {
+    const formatted = await formatMcpToolResult({
+      resultType: 'complete',
+      content: [
+        { type: 'resource_link', name: '页面', uri: 'https://example.com/page' },
+        {
+          type: 'resource',
+          resource: { uri: 'file:///result.txt', mimeType: 'text/plain', text: 'resource body' },
+        },
+        { type: 'audio', data: 'AAAA', mimeType: 'audio/wav' },
+      ],
+      structuredContent: { browserId: 'browser-123', pageId: 'page-456' },
+    });
+
+    expect(formatted.output).toContain('[页面] https://example.com/page');
+    expect(formatted.output).toContain('resource body');
+    expect(formatted.output).toContain('[音频内容] audio/wav');
+    expect(formatted.output).toContain('"browserId": "browser-123"');
+  });
+
+  it('未知扩展内容块不会被静默丢弃', async () => {
+    const formatted = await formatMcpToolResult({
+      content: [{ type: 'custom_block', value: 'future payload' }],
+    });
+
+    expect(formatted.output).toContain('[MCP 内容块: custom_block]');
+    expect(formatted.output).toContain('future payload');
+  });
 });

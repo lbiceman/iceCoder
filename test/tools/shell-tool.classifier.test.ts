@@ -68,7 +68,7 @@ describe('shell-tool — classifier integration', () => {
     expect(result.output).not.toMatch(/"mode":\s*"background"/);
   });
 
-  it('explicit background:true keeps backward-compatible 5min timeout', async () => {
+  it('explicit background:true uses unlimited timeout', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
       command: 'echo hello',  // short command, but explicit background:true forces bg
@@ -77,10 +77,10 @@ describe('shell-tool — classifier integration', () => {
     expect(result.success).toBe(true);
     const parsed = JSON.parse(result.output);
     expect(parsed.mode).toBe('background');
-    expect(parsed.timeout).toBe('300s');
+    expect(parsed.timeout).toBe('unlimited');
   });
 
-  it('long classifier with background:true picks 24h timeout', async () => {
+  it('long classifier with background:true uses unlimited timeout', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
       command: 'npm test',
@@ -89,19 +89,31 @@ describe('shell-tool — classifier integration', () => {
     expect(result.success).toBe(true);
     const parsed = JSON.parse(result.output);
     expect(parsed.mode).toBe('background');
-    // 24h = 86400s
-    expect(parsed.timeout).toBe('86400s');
+    expect(parsed.timeout).toBe('unlimited');
   });
 
-  it('user-supplied timeout overrides classifier hard timeout', async () => {
+  it('explicit background:true with timeout applies hard timeout cap', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
       command: 'npm test',
+      background: true,
       timeout: 60_000,  // 1 min
     });
     expect(result.success).toBe(true);
     const parsed = JSON.parse(result.output);
     expect(parsed.timeout).toBe('60s');
+  });
+
+  it('classifier-routed background ignores timeout (avoid schema default killing dev servers)', async () => {
+    const tool = createShellTool(workDir);
+    const result = await tool.handler({
+      command: 'npm test',
+      timeout: 600_000,
+    });
+    expect(result.success).toBe(true);
+    const parsed = JSON.parse(result.output);
+    expect(parsed.mode).toBe('background');
+    expect(parsed.timeout).toBe('unlimited');
   });
 
   it('rm -rf is blocked by shell blacklist', async () => {

@@ -153,6 +153,7 @@ export function createToolUsageSection(): PromptSection {
 - If a foreground command returns mode:'escalated' with a taskId, it has been moved to background after ~8s. Do NOT retry; poll later with action:'check'.
 - Polling: { action:'check', task_id, since:<prev cursor> } returns only new output. Always pass back the returned \`cursor\` next time.
 - The runtime may inject a [Background Task Status] block every ~5 minutes for any running task. Treat it as ground truth; don't echo it to the user verbatim.
+- Long-running background tasks (dev servers, watch mode) often produce no new log output after startup — that is normal. Do NOT stop them just for silence; use action:"check" first. Only stop if check shows failure/timeout or the user asks.
 
 ## MCP (Model Context Protocol)
 - Tools whose names start with \`mcp_\` are live MCP tools: the runtime already connected the servers and registered them. **Call them directly** when the task needs them — you do **not** need to read \`.iceCoder/mcp.json\` (or any MCP config file) first to “enable” them.

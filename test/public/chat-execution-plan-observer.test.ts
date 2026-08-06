@@ -193,6 +193,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     const page = await loadPanel();
     const result = await page.evaluate(() => {
       const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
       panel.beginTurnTimer(Date.now());
       for (let iteration = 19; iteration <= 29; iteration += 1) {
         panel.applyToolActivity({
@@ -236,6 +237,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const panel = (window as any).ChatExecutionPlan;
       const startedAt = 100_000;
       const modelDoneAt = startedAt + 65_000;
+      panel.setVisible(true);
       panel.beginTurnTimer(startedAt);
       panel.applyRoundActivity({
         type: 'model_task_final',
