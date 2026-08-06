@@ -78,7 +78,9 @@
 
 **[下载 iceCoder — Windows x64](./releases/windows/iceCoder-windows.exe)**
 
-安装后首次启动请在「配置」页填写 API Key；数据目录默认 `~/.iceCoder/`。从源码自行打包见 [`docs/使用文档.md`](./docs/使用文档.md) 或执行 `npm run build:desktop`。
+安装后首次启动请在「配置」页填写 API Key；数据目录默认 `~/.iceCoder/`。
+
+**从源码打包桌面版（开发者）**：执行 `npm run build:desktop`。Windows 上 `/shell` 依赖 `node-pty` 原生重编译，需 **VS 2022「使用 C++ 的桌面开发」+ Windows SDK**；Spectre 库由打包脚本**默认绕过**。无 C++ 工具链时会跳过 rebuild、打包仍可成功，但桌面包内 `/shell` 不可用。详见 [`docs/使用文档.md` §桌面打包（Electron）](./docs/使用文档.md#桌面打包electron)。
 
 ### 源码 / Web / CLI
 
@@ -171,6 +173,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 内置覆盖文件/Git/Shell、搜索、URL 抓取、Office/XMind 解析、**系统文件浏览器**、视觉 `image_read` 等；Harness 另暴露异步 **`request_analysis`**。**MCP** 子进程把外部 Server 工具注册进同一 `ToolRegistry`。
 
 - **Shell 双轨**：`run_command` 运行时分类——长任务进后台、短命令前台；软超时后可 escalate，避免聊天被 `npm test` 堵死。
+- **`/shell` Shell 协作**：在专用会话中托管 **持久 PTY**，AI 读终端、你在聊天里决策（SSH/考试/多段密码等）；**一次 `/shell` 固定整会话**，无内嵌黑窗口。详见 [**Shell 协作模式**](./docs/shell协作模式.md)。
 - **Diff Viewer**：编辑类工具在聊天内嵌 Git 风格 diff，可展开核对。
 - **权限与 confirm**：需用户确认的操作无 UI 回调时默认 **拒绝**，避免无人值守误删改。
 - **MCP 设置页**：启停 Server、浏览工具列表、编辑 JSON 配置（桌面 `#/config` / 移动 `#/m/config`）。
@@ -249,6 +252,8 @@ CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、�
 | 文档 | 内容 |
 |------|------|
 | [**使用文档**](./docs/使用文档.md) | **命令大全** — 安装、dev、CLI、测试、Benchmark、`~` 命令 |
+| [**Shell 协作（/shell）**](./docs/shell协作模式.md) | SSH / 交互终端协作：进入方式、安全、与 run_command 区别 |
+| [**使用文档 · 桌面打包**](./docs/使用文档.md#桌面打包electron) | Electron 打包、`node-pty`、VS 2022 / Windows SDK、Spectre 绕过 |
 | [PROJECT-GUIDE](./docs/PROJECT-GUIDE.md) | 架构与模块 |
 | [项目介绍](./docs/项目介绍.md) | 中文完整说明 |
 | [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 设计（无向量库） |
