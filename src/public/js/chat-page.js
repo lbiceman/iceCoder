@@ -2356,10 +2356,10 @@ window.ChatPage = (function () {
                 '</button>' +
               '</div>' +
               '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
-              + 'title="此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
+              + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
               + 'aria-label="Shell 协作模式">'
               + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
-              + '<span class="shell-collab-label">Shell</span>'
+              + '<span class="shell-collab-label">Shell协作</span>'
               + '</span>' +
             '</div>' +
           '</div>' +
