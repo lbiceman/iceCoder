@@ -142,6 +142,10 @@ function validateProvider(provider: ProviderConfig): string | null {
   if (parseModelNames(provider.modelName).length === 0) {
     return '模型名称不能为空';
   }
+  const apiMode = (provider.apiMode ?? provider.parameters?.apiMode)?.trim();
+  if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses') {
+    return 'apiMode 仅支持 chat_completions 或 responses';
+  }
   return null;
 }
 

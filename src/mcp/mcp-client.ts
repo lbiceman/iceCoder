@@ -4,7 +4,7 @@
  * 实现 MCP 协议的客户端侧：
  * 1. 启动子进程（stdio 传输）
  * 2. JSON-RPC 2.0 消息收发
- * 3. initialize 握手
+ * 3. 自动探测 MCP 2026-07-28 无状态协议，并兼容旧 initialize 握手
  * 4. tools/list 获取工具列表
  * 5. tools/call 调用工具
  *
@@ -20,6 +20,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { resolveMcpServerLaunch } from './resolve-mcp-command.js';
 import type {
   MCPServerConfig,
+  MCPDiscoverResult,
+  MCPProtocolMode,
   MCPToolDefinition,
   MCPToolResult,
   JsonRpcRequest,
@@ -28,6 +30,17 @@ import type {
 
 /** 请求超时（毫秒） */
 const REQUEST_TIMEOUT = 60_000;
+const MODERN_PROTOCOL_VERSIONS = ['2026-07-28'] as const;
+const LEGACY_PROTOCOL_VERSION = '2024-11-05';
+const CLIENT_INFO = { name: 'ice-coder', version: '1.0.0' } as const;
+
+/** 现代协议探测需快速失败，避免旧 Server 忽略未知请求时长时间阻塞启动。 */
+const DISCOVER_TIMEOUT = (() => {
+  const raw = process.env.ICE_MCP_DISCOVER_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return 3_000;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 250 ? n : 3_000;
+})();
 
 /** 初始化超时（毫秒）；Puppeteer 等首次 npx 拉包可能较慢，可由 ICE_MCP_INIT_TIMEOUT_MS 覆盖 */
 const INIT_TIMEOUT = (() => {
@@ -36,6 +49,23 @@ const INIT_TIMEOUT = (() => {
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n >= 15_000 ? n : 120_000;
 })();
+
+class MCPRequestError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: unknown,
+  ) {
+    super(`MCP error [${code}]: ${message}`);
+    this.name = 'MCPRequestError';
+  }
+}
+
+/** 2026-07-28 规范定义的现代协议专用错误；收到任一项都不能回退 legacy。 */
+function isRecognizedModernError(err: unknown): err is MCPRequestError {
+  return err instanceof MCPRequestError
+    && (err.code === -32020 || err.code === -32021 || err.code === -32022);
+}
 
 /**
  * 单个 MCP Server 的客户端连接。
@@ -52,15 +82,15 @@ export class MCPClient {
   private buffer = '';
   private _ready = false;
   private tools: MCPToolDefinition[] = [];
+  private protocolMode: MCPProtocolMode = 'legacy';
+  private negotiatedVersion = LEGACY_PROTOCOL_VERSION;
 
   constructor(serverName: string, config: MCPServerConfig) {
     this.serverName = serverName;
     this.config = config;
   }
 
-  /**
-   * 启动 MCP Server 进程并完成初始化握手。
-   */
+  /** 启动 MCP Server 进程并完成现代协议探测或旧协议握手。 */
   async start(): Promise<void> {
     const plan = resolveMcpServerLaunch(this.config);
 
@@ -105,28 +135,113 @@ export class MCPClient {
       console.error(`[mcp:${this.serverName}] 进程错误:`, err.message);
     });
 
-    // 执行 initialize 握手
-    await this.initialize();
+    await this.negotiateProtocol();
   }
 
   /**
-   * MCP initialize 握手。
+   * 优先用 server/discover 探测现代协议；非现代错误或短超时按规范回退旧握手。
+   * UnsupportedProtocolVersionError 是明确的现代响应，绝不能回退 initialize。
    */
-  private async initialize(): Promise<void> {
+  private async negotiateProtocol(): Promise<void> {
+    const preferredVersion = MODERN_PROTOCOL_VERSIONS[0];
+    let discoveryResult: MCPDiscoverResult;
+
+    try {
+      discoveryResult = await this.sendRequest(
+        'server/discover',
+        {},
+        DISCOVER_TIMEOUT,
+        preferredVersion,
+      ) as MCPDiscoverResult;
+    } catch (err) {
+      if (err instanceof MCPRequestError && err.code === -32022) {
+        const supported = this.readSupportedVersions(err.data);
+        const selected = this.selectModernVersion(supported);
+        if (!selected) {
+          throw new Error(
+            `MCP server ${this.serverName} 是现代协议服务器，但不支持客户端版本 ${MODERN_PROTOCOL_VERSIONS.join(', ')}`
+            + (supported.length > 0 ? `；服务器支持: ${supported.join(', ')}` : ''),
+          );
+        }
+
+        const result = await this.sendRequest(
+          'server/discover',
+          {},
+          DISCOVER_TIMEOUT,
+          selected,
+        ) as MCPDiscoverResult;
+        this.activateModernProtocol(result, selected);
+        return;
+      }
+
+      if (isRecognizedModernError(err)) {
+        throw new Error(
+          `MCP server ${this.serverName} 返回现代协议错误，不能回退 legacy: ${err.message}`,
+          { cause: err },
+        );
+      }
+
+      console.log(
+        `[mcp:${this.serverName}] 未检测到现代协议，回退 legacy initialize`
+        + ` (${err instanceof Error ? err.message : String(err)})`,
+      );
+      await this.initializeLegacy();
+      return;
+    }
+
+    // 能返回 server/discover 成功结果的服务器已经明确属于现代代际；
+    // 结果结构或版本不兼容时应直接报错，不能误回退 initialize。
+    this.activateModernProtocol(discoveryResult);
+  }
+
+  private activateModernProtocol(result: MCPDiscoverResult, requestedVersion?: string): void {
+    this.assertModernResultType('server/discover', result, ['complete']);
+    const supported = Array.isArray(result?.supportedVersions)
+      ? result.supportedVersions.filter((version): version is string => typeof version === 'string')
+      : [];
+    const selected = this.selectModernVersion(supported)
+      ?? (requestedVersion && supported.includes(requestedVersion) ? requestedVersion : undefined);
+
+    if (!selected) {
+      throw new Error(
+        `MCP server ${this.serverName} 的 server/discover 未返回共同支持的现代协议版本`
+        + (supported.length > 0 ? `（服务器支持: ${supported.join(', ')}）` : ''),
+      );
+    }
+
+    this.protocolMode = 'modern';
+    this.negotiatedVersion = selected;
+    this._ready = true;
+    console.log(`[mcp:${this.serverName}] 协议: modern (${selected})`);
+  }
+
+  private selectModernVersion(supported: string[]): string | undefined {
+    return MODERN_PROTOCOL_VERSIONS.find((version) => supported.includes(version));
+  }
+
+  private readSupportedVersions(data: unknown): string[] {
+    if (!data || typeof data !== 'object') return [];
+    const supported = (data as { supported?: unknown }).supported;
+    return Array.isArray(supported)
+      ? supported.filter((version): version is string => typeof version === 'string')
+      : [];
+  }
+
+  /** 旧版 MCP initialize 握手。 */
+  private async initializeLegacy(): Promise<void> {
     const result = await this.sendRequest('initialize', {
-      protocolVersion: '2024-11-05',
+      protocolVersion: LEGACY_PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: {
-        name: 'ice-coder',
-        version: '1.0.0',
-      },
+      clientInfo: CLIENT_INFO,
     }, INIT_TIMEOUT);
 
     // 发送 initialized 通知
     this.sendNotification('notifications/initialized', {});
 
+    this.protocolMode = 'legacy';
+    this.negotiatedVersion = result?.protocolVersion || LEGACY_PROTOCOL_VERSION;
     this._ready = true;
-    console.log(`[mcp:${this.serverName}] 初始化成功, 协议版本: ${result?.protocolVersion || 'unknown'}`);
+    console.log(`[mcp:${this.serverName}] 协议: legacy (${this.negotiatedVersion})`);
   }
 
   /**
@@ -134,6 +249,9 @@ export class MCPClient {
    */
   async listTools(): Promise<MCPToolDefinition[]> {
     const result = await this.sendRequest('tools/list', {});
+    if (this.protocolMode === 'modern') {
+      this.assertModernResultType('tools/list', result, ['complete']);
+    }
     this.tools = result?.tools || [];
     console.log(`[mcp:${this.serverName}] 发现 ${this.tools.length} 个工具`);
     return this.tools;
@@ -151,8 +269,25 @@ export class MCPClient {
         name: toolName,
         arguments: args,
       });
+
+      if (this.protocolMode === 'modern') {
+        this.assertModernResultType('tools/call', result, ['complete', 'input_required']);
+      }
+      if (this.protocolMode === 'modern' && result?.resultType === 'input_required') {
+        return {
+          content: [{
+            type: 'text',
+            text: '该 MCP 工具要求 Multi Round-Trip Request (input_required)，当前 iceCoder 尚未支持 MRTR。',
+          }],
+          isError: true,
+        };
+      }
       return result as MCPToolResult;
     } catch (err) {
+      // 协议版本失配属于连接级兼容故障，不能伪装成普通工具执行错误。
+      if (err instanceof MCPRequestError && err.code === -32022) {
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       if (message.startsWith('MCP error [')) {
         return {
@@ -164,12 +299,32 @@ export class MCPClient {
     }
   }
 
+  private assertModernResultType(
+    method: string,
+    result: unknown,
+    allowed: readonly string[],
+  ): asserts result is Record<string, any> {
+    const resultType = result && typeof result === 'object'
+      ? (result as { resultType?: unknown }).resultType
+      : undefined;
+    if (typeof resultType !== 'string' || !allowed.includes(resultType)) {
+      throw new Error(
+        `MCP server ${this.serverName} 的 ${method} 返回无效 resultType: ${String(resultType)}`,
+      );
+    }
+  }
+
   /**
    * 发送 JSON-RPC 请求并等待响应。
    *
    * 发送格式：裸 JSON + 换行符（大多数 MCP Server 使用此格式）。
    */
-  private sendRequest(method: string, params: Record<string, any>, timeout = REQUEST_TIMEOUT): Promise<any> {
+  private sendRequest(
+    method: string,
+    params: Record<string, any>,
+    timeout = REQUEST_TIMEOUT,
+    forceModernVersion?: string,
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.process || !this.process.stdin) {
         reject(new Error(`MCP server ${this.serverName} 未启动`));
@@ -181,7 +336,7 @@ export class MCPClient {
         jsonrpc: '2.0',
         id,
         method,
-        params,
+        params: this.withRequestMetadata(params, forceModernVersion),
       };
 
       const timer = setTimeout(() => {
@@ -202,6 +357,27 @@ export class MCPClient {
         }
       });
     });
+  }
+
+  /** 为现代协议请求合并必需元数据；调用方已有的非保留 _meta 字段会被保留。 */
+  private withRequestMetadata(params: Record<string, any>, forceModernVersion?: string): Record<string, any> {
+    const version = forceModernVersion
+      ?? (this.protocolMode === 'modern' ? this.negotiatedVersion : undefined);
+    if (!version) return params;
+
+    const existingMeta = params._meta && typeof params._meta === 'object'
+      ? params._meta as Record<string, any>
+      : {};
+
+    return {
+      ...params,
+      _meta: {
+        ...existingMeta,
+        'io.modelcontextprotocol/protocolVersion': version,
+        'io.modelcontextprotocol/clientInfo': CLIENT_INFO,
+        'io.modelcontextprotocol/clientCapabilities': {},
+      },
+    };
   }
 
   /**
@@ -373,7 +549,7 @@ export class MCPClient {
           this.pendingRequests.delete(idNum);
 
           if (msg.error) {
-            pending.reject(new Error(`MCP error [${msg.error.code}]: ${msg.error.message}`));
+            pending.reject(new MCPRequestError(msg.error.code, msg.error.message, msg.error.data));
           } else {
             pending.resolve(msg.result);
           }
@@ -392,28 +568,47 @@ export class MCPClient {
     this._ready = false;
 
     if (this.process) {
-      // 先尝试优雅关闭（通知失败不影响后续 SIGTERM，但记录便于排查）
-      try {
-        this.sendNotification('notifications/cancelled', {});
-      } catch (err) {
-        console.debug('[mcp-client] 发送 cancelled 通知失败（将继续 SIGTERM）:', err instanceof Error ? err.message : err);
-      }
+      const child = this.process;
 
-      this.process.kill('SIGTERM');
-
-      // 等待进程退出，超时后强制杀死
+      // stdio 规范以关闭 stdin/EOF 作为首选的可移植优雅退出信号。
+      // notifications/cancelled 只能引用仍在执行的 requestId，不能用空参数代替 shutdown。
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          if (this.process) {
-            this.process.kill('SIGKILL');
-          }
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(termTimer);
+          clearTimeout(killTimer);
           resolve();
+        };
+        const termTimer = setTimeout(() => {
+          if (!settled) {
+            child.kill('SIGTERM');
+          }
+        }, 500);
+        const killTimer = setTimeout(() => {
+          if (!settled) {
+            child.kill('SIGKILL');
+            finish();
+          }
         }, 5000);
 
-        this.process!.on('exit', () => {
-          clearTimeout(timer);
-          resolve();
-        });
+        child.once('exit', finish);
+
+        if (typeof child.exitCode === 'number' || child.signalCode != null) {
+          finish();
+          return;
+        }
+
+        try {
+          if (child.stdin && !child.stdin.destroyed) {
+            child.stdin.end();
+          } else {
+            child.kill('SIGTERM');
+          }
+        } catch {
+          child.kill('SIGTERM');
+        }
       });
 
       this.process = null;

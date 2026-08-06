@@ -20,14 +20,15 @@ import {
   classifyShellCommand,
   pickBackgroundHardTimeout,
   pickForegroundTimeout,
-  HARD_TIMEOUT_LONG_MS,
+  FOREGROUND_DEFAULT_TIMEOUT_MS,
+  HARD_TIMEOUT_NONE,
   SOFT_TIMEOUT_MS,
 } from '../shell-runtime-classifier.js';
 import { buildVerificationSuccessSummary } from '../../harness/verification-digest.js';
 import { assertAgentMemoryShellCommandAllowed } from '../../memory/file-memory/memory-write-pipeline.js';
 
-/** 命令执行超时（毫秒） */
-const DEFAULT_TIMEOUT = 30000;
+/** 命令执行超时（毫秒）— 前台一次性命令默认 10 分钟 */
+const DEFAULT_TIMEOUT = FOREGROUND_DEFAULT_TIMEOUT_MS;
 
 /** 最大输出大小（字节） */
 const MAX_OUTPUT_SIZE = 1024 * 1024; // 1MB
@@ -43,12 +44,12 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
     definition: {
       name: 'run_command',
       description:
-        'Execute shell commands (foreground or background). Runtime auto-picks foreground/background by command shape: long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) go background and return a task_id immediately; short commands (git status, ls, tsc --noEmit) run foreground with a 10s cap. Force with background:true only if the classifier missed it. Pass command as a top-level argument (alias: cmd). Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks for this session. Use task_id + action:"stop" to kill a running background task. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead.',
+        'Execute shell commands (foreground or background). Runtime auto-picks foreground/background by command shape: long jobs (npm test/build/dev, vitest, tsc -w, docker build, git clone) go background and return a task_id immediately with no time limit; short commands (git status, ls, tsc --noEmit) run foreground with a 10s cap; other foreground commands have a 10min cap. Force with background:true only if the classifier missed it. Pass command as a top-level argument (alias: cmd). Use task_id + action:"check" to poll status/output. Use action:"list" to list all background tasks for this session. Use task_id + action:"stop" to kill a running background task. Avoid inline `node -e` with long/complex scripts on Windows — write to scripts/*.mjs or scripts/*.cjs and run the file instead.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Shell command to execute. Top-level field; alias: cmd. Not needed for list action' },
-          timeout: { type: 'number', description: 'Timeout in ms for foreground (default 30000)', default: 30000 },
+          timeout: { type: 'number', description: 'Timeout in ms for foreground (default 600000 = 10min). Background: unlimited by default; only honored when background:true AND timeout is explicitly set' },
           background: { type: 'boolean', description: 'Run command in background, returns task_id immediately', default: false },
           task_id: { type: 'string', description: 'Task ID for checking or stopping a background task' },
           action: { type: 'string', description: 'For background management: "check" (query task status), "stop" (kill task), "list" (list all tasks)' },
@@ -159,9 +160,11 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (sandbox.blocked) {
           return { success: false, output: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
         }
-        const userTimeoutMs = (args.timeout as number) || 0;
-        const hardTimeoutMs = userTimeoutMs > 0
-          ? userTimeoutMs
+        const explicitTimeoutMs = typeof args.timeout === 'number' && args.timeout > 0
+          ? args.timeout
+          : 0;
+        const hardTimeoutMs = explicitBackground && explicitTimeoutMs > 0
+          ? explicitTimeoutMs
           : pickBackgroundHardTimeout(shellClass, { explicitBackground });
         const timeoutSec = hardTimeoutMs / 1000;
         const label = (args.label as string) || '';
@@ -175,7 +178,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
             taskId: bgResult.taskId,
             status: 'started',
             label: bgStatus?.label || label,
-            timeout: `${timeoutSec}s`,
+            timeout: hardTimeoutMs > 0 ? `${timeoutSec}s` : 'unlimited',
             classifiedAs: shellClass,
             message: 'Task started in background. Use action:"check" with task_id to poll progress.',
           }, null, 2),
@@ -265,7 +268,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
               command,
               label: labelArg,
               prefixOutput: prefix,
-              hardTimeoutMs: HARD_TIMEOUT_LONG_MS,
+              hardTimeoutMs: HARD_TIMEOUT_NONE,
               reason: 'soft_timeout',
             });
             unregisterForegroundShell(child);

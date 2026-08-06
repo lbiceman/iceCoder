@@ -18,7 +18,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import {
-  createMemoryDream,
+  createMemoryDream as createMemoryDreamBase,
   isDreamBatchRetryableError,
   shouldAutoPromoteToUserLevel,
   type MemoryDream,
@@ -29,6 +29,12 @@ import type { LLMAdapterInterface, UnifiedMessage } from '../../../src/llm/types
 
 let tempDir: string;
 let backupDir: string;
+
+function createMemoryDream(config?: Parameters<typeof createMemoryDreamBase>[0]) {
+  return createMemoryDreamBase(config, {
+    stateFilePath: path.join(tempDir, 'dream-state.json'),
+  });
+}
 
 async function writeMemoryFile(
   dir: string,
@@ -83,18 +89,10 @@ function createMockLLM(response: string): LLMAdapterInterface {
   };
 }
 
-const defaultDreamStatePath = path.join(process.cwd(), 'data', 'memory', 'dream-state.json');
-
 beforeEach(async () => {
   tempDir = path.join(os.tmpdir(), `dream-test-${randomUUID()}`);
   backupDir = path.join(os.tmpdir(), `dream-backup-${randomUUID()}`);
   await fs.mkdir(tempDir, { recursive: true });
-  await fs.mkdir(path.dirname(defaultDreamStatePath), { recursive: true });
-  await fs.writeFile(
-    defaultDreamStatePath,
-    JSON.stringify({ sessionCount: 0, lastDreamTime: 0, staleIndexDreamCompletedAt: 0 }),
-    'utf-8',
-  );
 });
 
 afterEach(async () => {

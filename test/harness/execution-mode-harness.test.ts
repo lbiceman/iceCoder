@@ -449,7 +449,10 @@ describe('Harness execution mode integration - Batch 3', () => {
     const result = await harness.run('hello', chatFn, event => events.push(event));
 
     expect(eventCountAtFirstLlm).toBeGreaterThan(0);
-    expect(events[0]).toMatchObject({
+    const enterEventIndex = events.findIndex(event => event.type === 'execution_mode_enter');
+    expect(enterEventIndex).toBeGreaterThanOrEqual(0);
+    expect(enterEventIndex).toBeLessThan(eventCountAtFirstLlm);
+    expect(events[enterEventIndex]).toMatchObject({
       type: 'execution_mode_enter',
       executionMode: {
         executionMode: 'forced',

@@ -24,6 +24,9 @@ function createFakeProcess() {
   proc.stdin = new PassThrough();
   proc.stdout = new PassThrough();
   proc.stderr = new PassThrough();
+  proc.stdin.once('finish', () => {
+    queueMicrotask(() => proc.emit('exit', 0, null));
+  });
   proc.kill = vi.fn(() => {
     queueMicrotask(() => proc.emit('exit', 0, null));
     return true;
@@ -50,10 +53,16 @@ describe('MCPClient callTool JSON-RPC 错误', () => {
     fakeProc.stdin.on('data', (chunk) => {
       for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
         const request = JSON.parse(line) as { id?: number; method?: string };
-        if (request.id === 1 && request.method === 'initialize') {
+        if (request.id != null && request.method === 'server/discover') {
           fakeProc.stdout.write(JSON.stringify({
             jsonrpc: '2.0',
-            id: 1,
+            id: request.id,
+            error: { code: -32601, message: 'Method not found' },
+          }) + '\n');
+        } else if (request.id != null && request.method === 'initialize') {
+          fakeProc.stdout.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
             result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'test', version: '1' } },
           }) + '\n');
         } else if (request.id != null && request.method === 'tools/call') {

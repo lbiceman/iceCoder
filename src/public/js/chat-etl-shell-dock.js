@@ -20,7 +20,7 @@
 
   function statusText(task, isStopping) {
     if (isStopping) return 'stopping…';
-    if (task.isHang) return 'no output >30min';
+    if (task.isHang) return 'process not responding';
     var newPart = task.newLines > 0 ? ' · +' + task.newLines + ' lines' : '';
     return 'running · ' + task.elapsed + newPart;
   }

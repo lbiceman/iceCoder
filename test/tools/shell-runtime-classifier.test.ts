@@ -4,8 +4,8 @@ import {
   pickBackgroundHardTimeout,
   pickForegroundTimeout,
   SOFT_TIMEOUT_MS,
-  HARD_TIMEOUT_DEFAULT_MS,
-  HARD_TIMEOUT_LONG_MS,
+  HARD_TIMEOUT_NONE,
+  FOREGROUND_DEFAULT_TIMEOUT_MS,
   SHORT_TIMEOUT_MAX_MS,
   BG_SUMMARY_INTERVAL_MS,
 } from '../../src/tools/shell-runtime-classifier.js';
@@ -15,12 +15,12 @@ describe('shell-runtime-classifier — constants', () => {
     expect(SOFT_TIMEOUT_MS).toBe(8_000);
   });
 
-  it('HARD_TIMEOUT_DEFAULT_MS is 5 minutes', () => {
-    expect(HARD_TIMEOUT_DEFAULT_MS).toBe(5 * 60 * 1000);
+  it('HARD_TIMEOUT_NONE is 0 (unlimited background)', () => {
+    expect(HARD_TIMEOUT_NONE).toBe(0);
   });
 
-  it('HARD_TIMEOUT_LONG_MS is 24 hours', () => {
-    expect(HARD_TIMEOUT_LONG_MS).toBe(24 * 60 * 60 * 1000);
+  it('FOREGROUND_DEFAULT_TIMEOUT_MS is 10 minutes', () => {
+    expect(FOREGROUND_DEFAULT_TIMEOUT_MS).toBe(10 * 60 * 1000);
   });
 
   it('SHORT_TIMEOUT_MAX_MS is 10 seconds', () => {
@@ -147,27 +147,27 @@ describe('classifyShellCommand — edge cases', () => {
 });
 
 describe('pickBackgroundHardTimeout', () => {
-  it('returns 24h for long', () => {
-    expect(pickBackgroundHardTimeout('long')).toBe(HARD_TIMEOUT_LONG_MS);
+  it('returns unlimited (0) for long', () => {
+    expect(pickBackgroundHardTimeout('long')).toBe(HARD_TIMEOUT_NONE);
   });
 
-  it('returns 5min for explicit background:true on auto', () => {
+  it('returns unlimited for explicit background:true on auto', () => {
     expect(pickBackgroundHardTimeout('auto', { explicitBackground: true }))
-      .toBe(HARD_TIMEOUT_DEFAULT_MS);
+      .toBe(HARD_TIMEOUT_NONE);
   });
 
-  it('returns 5min for explicit background:true on short', () => {
+  it('returns unlimited for explicit background:true on short', () => {
     expect(pickBackgroundHardTimeout('short', { explicitBackground: true }))
-      .toBe(HARD_TIMEOUT_DEFAULT_MS);
+      .toBe(HARD_TIMEOUT_NONE);
   });
 
-  it('returns 5min for auto without explicit (Phase 1 default)', () => {
-    expect(pickBackgroundHardTimeout('auto')).toBe(HARD_TIMEOUT_DEFAULT_MS);
+  it('returns unlimited for auto without explicit', () => {
+    expect(pickBackgroundHardTimeout('auto')).toBe(HARD_TIMEOUT_NONE);
   });
 
-  it('long beats explicit background flag', () => {
+  it('long with explicit background flag is also unlimited', () => {
     expect(pickBackgroundHardTimeout('long', { explicitBackground: true }))
-      .toBe(HARD_TIMEOUT_LONG_MS);
+      .toBe(HARD_TIMEOUT_NONE);
   });
 });
 
@@ -188,8 +188,8 @@ describe('pickForegroundTimeout', () => {
     expect(pickForegroundTimeout('auto', 20_000)).toBe(20_000);
   });
 
-  it('auto uses 30s default when undefined', () => {
-    expect(pickForegroundTimeout('auto', undefined)).toBe(30_000);
+  it('auto uses 10min default when undefined', () => {
+    expect(pickForegroundTimeout('auto', undefined)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
   });
 
   it('auto honors custom default', () => {
@@ -197,12 +197,12 @@ describe('pickForegroundTimeout', () => {
   });
 
   it('long: foreground timeout falls through to user/default (rare path, shouldBackground would normally trigger)', () => {
-    expect(pickForegroundTimeout('long', undefined)).toBe(30_000);
+    expect(pickForegroundTimeout('long', undefined)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
     expect(pickForegroundTimeout('long', 45_000)).toBe(45_000);
   });
 
   it('ignores zero / negative args.timeout', () => {
-    expect(pickForegroundTimeout('auto', 0)).toBe(30_000);
-    expect(pickForegroundTimeout('auto', -1)).toBe(30_000);
+    expect(pickForegroundTimeout('auto', 0)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
+    expect(pickForegroundTimeout('auto', -1)).toBe(FOREGROUND_DEFAULT_TIMEOUT_MS);
   });
 });

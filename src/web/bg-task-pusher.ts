@@ -44,8 +44,10 @@ export interface BgTaskUpdateEntry {
   error?: string | null;
   /** 终态推送（状态变更触发） */
   isTerminal: boolean;
-  /** Hang 提示（运行中但 lastOutputAt > 30min） */
+  /** Hang 提示（运行中、进程不可达且 lastOutputAt > 30min） */
   isHang: boolean;
+  /** OS 进程仍存活 */
+  processAlive?: boolean;
 }
 
 /** 注入的广播函数：把 JSON 字符串发给所有当前 session 的 WS 客户端 */
@@ -65,8 +67,11 @@ function toEntry(
   command?: string,
 ): BgTaskUpdateEntry {
   const now = Date.now();
+  // 仅当进程已退出/不可达且长时间无输出时才判 hang；dev server 编译完成后常静默但仍存活
   const isHang =
-    s.status === 'running' && (now - s.lastOutputAt) > hangThresholdMs;
+    s.status === 'running'
+    && !s.processAlive
+    && (now - s.lastOutputAt) > hangThresholdMs;
   return {
     taskId: s.taskId,
     label: s.label,
@@ -79,6 +84,7 @@ function toEntry(
     error: s.error,
     isTerminal: s.isTerminal,
     isHang,
+    processAlive: s.processAlive,
   };
 }
 
