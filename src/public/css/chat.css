@@ -1174,7 +1174,7 @@
   min-height: 40px;
 }
 
-/* Shell 协作模式：位置仍在工具栏右侧；视觉为终端图标 + Shell 徽章 */
+/* Shell 协作模式：位置仍在工具栏右侧；视觉为终端图标 + Shell协作 徽章（悬停 title 说明） */
 .shell-collab-indicator {
   flex-shrink: 0;
   display: inline-flex;
@@ -1192,6 +1192,7 @@
   letter-spacing: 0.01em;
   line-height: 1;
   user-select: none;
+  cursor: help;
 }
 
 .shell-collab-indicator.hidden {
