@@ -20,6 +20,8 @@ window.ChatSessionStore = (function () {
   var defaultWorkDir = '';
   /** sessionId → workspaceRoot */
   var workspacesBySession = {};
+  /** sessionId → Shell 协作是否 active（来自 GET /api/sessions 或 WS 增量更新） */
+  var shellCollabActiveBySession = {};
 
   function deriveTitleFromPrompt(prompt) {
     var t = (prompt || '').replace(/\s+/g, ' ').trim();
@@ -43,6 +45,11 @@ window.ChatSessionStore = (function () {
     }
     if (data.workspaces && typeof data.workspaces === 'object') {
       workspacesBySession = data.workspaces;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'shellCollabActive')) {
+      shellCollabActiveBySession = (data.shellCollabActive && typeof data.shellCollabActive === 'object')
+        ? data.shellCollabActive
+        : {};
     }
   }
 
@@ -77,6 +84,24 @@ window.ChatSessionStore = (function () {
   function removeSessionWorkspace(sessionId) {
     if (!sessionId || !workspacesBySession[sessionId]) return;
     delete workspacesBySession[sessionId];
+  }
+
+  function getShellCollabActive(sessionId) {
+    return shellCollabActiveBySession[sessionId] === true;
+  }
+
+  /** WS connected / session_switched / shell_collab_* 增量更新 */
+  function setShellCollabActive(sessionId, active) {
+    if (!sessionId) return;
+    if (active) shellCollabActiveBySession[sessionId] = true;
+    else delete shellCollabActiveBySession[sessionId];
+    emit();
+  }
+
+  function applyShellCollabActiveMap(map) {
+    if (!map || typeof map !== 'object') return;
+    shellCollabActiveBySession = map;
+    emit();
   }
 
   function readLastActiveSessionIdFromStorage() {
@@ -336,6 +361,9 @@ window.ChatSessionStore = (function () {
       } else {
         emit();
       }
+      if (typeof data.shellCollabActive === 'boolean') {
+        setShellCollabActive(activeSessionId, data.shellCollabActive);
+      }
     }
 
     function fallbackLocalSwitch(degraded) {
@@ -407,6 +435,9 @@ window.ChatSessionStore = (function () {
           }
           sessions = sessions.filter(function (s) { return s.id !== sessionId; });
           removeSessionWorkspace(sessionId);
+          if (shellCollabActiveBySession[sessionId]) {
+            delete shellCollabActiveBySession[sessionId];
+          }
           try { localStorage.removeItem(STORAGE_KEY_PREFIX + sessionId); } catch (_e) { /* */ }
           try {
             if (window.ChatExecutionFlowStore
@@ -483,6 +514,9 @@ window.ChatSessionStore = (function () {
     getSessionWorkspace: getSessionWorkspace,
     isDefaultWorkspace: isDefaultWorkspace,
     setSessionWorkspace: setSessionWorkspace,
+    getShellCollabActive: getShellCollabActive,
+    setShellCollabActive: setShellCollabActive,
+    applyShellCollabActiveMap: applyShellCollabActiveMap,
     onChange: onChange,
     offChange: offChange,
   };

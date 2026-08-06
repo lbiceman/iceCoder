@@ -12,6 +12,7 @@ window.ChatCommands = (function () {
 
   var SLASH_LOCAL_COMMANDS = [
     { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
+    { name: 'shell', description: '将当前会话固定为 Shell 协作模式（只需发送一次）', prefix: '/' },
     { name: 'next', description: '静默入队下一条任务', prefix: '/' }
   ];
 

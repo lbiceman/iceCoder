@@ -196,8 +196,30 @@ window.ChatSessionSidebar = (function () {
     window.addEventListener('hashchange', syncSidebarNavActive);
 
     bindShellControls();
+    bindShellCollabWs();
 
     Store.onChange(function () { renderList(); });
+  }
+
+  function notifyShellCollabUpdated(data) {
+    if (!data) return;
+    if (data.shellCollabActiveBySession && Store.applyShellCollabActiveMap) {
+      Store.applyShellCollabActiveMap(data.shellCollabActiveBySession);
+    } else {
+      var sid = data.sessionId;
+      if (sid && typeof data.shellCollabActive === 'boolean' && Store.setShellCollabActive) {
+        Store.setShellCollabActive(sid, data.shellCollabActive);
+      }
+    }
+    renderList();
+  }
+
+  function bindShellCollabWs() {
+    var WS = window.ChatWebSocket;
+    if (!WS || WS.__shellCollabSidebarBound) return;
+    WS.__shellCollabSidebarBound = true;
+    WS.on('connected', notifyShellCollabUpdated);
+    WS.on('shell_collab_entered', notifyShellCollabUpdated);
   }
 
   function syncShellMode() {
@@ -372,6 +394,20 @@ window.ChatSessionSidebar = (function () {
 
       body.appendChild(titleRow);
 
+      var meta = document.createElement('div');
+      meta.className = 'chat-sidebar-item-meta';
+
+      if (Store.getShellCollabActive && Store.getShellCollabActive(s.id)) {
+        var shellBadge = document.createElement('span');
+        shellBadge.className = 'chat-sidebar-item-shell-badge';
+        shellBadge.title = 'Shell 协作模式已固定；需要普通 Agent 请新建会话';
+        shellBadge.setAttribute('aria-label', 'Shell 协作模式');
+        shellBadge.innerHTML =
+          ic('terminal', 11) +
+          '<span class="chat-sidebar-item-shell-label">Shell</span>';
+        meta.appendChild(shellBadge);
+      }
+
       if (isActive) {
         var subtitle = document.createElement('span');
         subtitle.className = 'chat-sidebar-item-subtitle';
@@ -380,13 +416,15 @@ window.ChatSessionSidebar = (function () {
         subtitle.textContent = subtitleText || '默认工作区';
         if (subtitleText === '默认工作区' || !subtitleText) subtitle.classList.add('is-default');
         if (fullPath) subtitle.title = fullPath;
-        body.appendChild(subtitle);
+        meta.appendChild(subtitle);
       } else {
         var time = document.createElement('span');
         time.className = 'chat-sidebar-item-time';
         time.textContent = formatRelativeTime(s.updatedAt);
-        body.appendChild(time);
+        meta.appendChild(time);
       }
+
+      body.appendChild(meta);
 
       item.appendChild(body);
 
@@ -396,6 +434,7 @@ window.ChatSessionSidebar = (function () {
 
       list.appendChild(item);
     }
+    if (window.AppIcon) window.AppIcon.hydrate(list);
     syncSwitchLockState();
     renderWorkspaceFooter();
   }
@@ -403,6 +442,9 @@ window.ChatSessionSidebar = (function () {
   function applyWorkspaceForSession(sessionId, workspacePayload) {
     if (workspacePayload && Store.setSessionWorkspace) {
       Store.setSessionWorkspace(sessionId, workspacePayload);
+      if (typeof workspacePayload.shellCollabActive === 'boolean' && Store.setShellCollabActive) {
+        Store.setShellCollabActive(sessionId, workspacePayload.shellCollabActive);
+      }
       return;
     }
     Store.fetchSessions(function () { renderList(); });
@@ -471,6 +513,9 @@ window.ChatSessionSidebar = (function () {
     var sid = data.sessionId || data.activeSessionId;
     if (!sid || !Store.setSessionWorkspace) return;
     Store.setSessionWorkspace(sid, data);
+    if (typeof data.shellCollabActive === 'boolean' && Store.setShellCollabActive) {
+      Store.setShellCollabActive(sid, data.shellCollabActive);
+    }
   }
 
   return {
@@ -479,5 +524,6 @@ window.ChatSessionSidebar = (function () {
     renderList: renderList,
     syncSwitchLockState: syncSwitchLockState,
     notifyWorkspaceUpdated: notifyWorkspaceUpdated,
+    notifyShellCollabUpdated: notifyShellCollabUpdated,
   };
 })();

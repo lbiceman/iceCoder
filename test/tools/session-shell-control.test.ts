@@ -20,13 +20,19 @@ import {
 import {
   stopAllShellWorkForSession,
   stopForegroundShellWorkForSession,
+  killCopilotInteractiveShellsForSession,
 } from '../../src/tools/session-shell-control.js';
+import {
+  getInteractiveShellManagerFor,
+  __resetInteractiveShellManagers,
+} from '../../src/tools/interactive-shell-manager.js';
 
 const isWindows = process.platform === 'win32';
 
 afterEach(() => {
   __resetBackgroundTaskManagers();
   __resetForegroundShellRegistry();
+  __resetInteractiveShellManagers();
 });
 
 describe('stopAllShellWorkForSession', () => {
@@ -72,6 +78,7 @@ describe('stopAllShellWorkForSession', () => {
     const result = stopAllShellWorkForSession('no-such-session', 'test');
     expect(result.background).toBe(0);
     expect(result.foreground).toBe(0);
+    expect(result.interactiveShell).toBe(0);
   });
 
   it('killForegroundShellsForSession 终止前台 shell', async () => {
@@ -126,4 +133,57 @@ describe('stopAllShellWorkForSession', () => {
 
     mgr.kill(detached.taskId);
   }, 20_000);
+});
+
+describe('copilot interactive shell lifespan (任务 1.4)', () => {
+  const longCmd = isWindows
+    ? 'ping -n 60 127.0.0.1 > nul'
+    : 'sleep 60';
+
+  it('T6: stopForegroundShellWorkForSession 不杀 copilot PTY', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'ice-ish-stop-fg-'));
+    const ishMgr = getInteractiveShellManagerFor('sess-ish-fg', workDir);
+    const { taskId } = ishMgr.start({ command: longCmd });
+    expect(taskId).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 500));
+    expect(ishMgr.getActiveTask()?.status).toBe('running');
+
+    const result = stopForegroundShellWorkForSession('sess-ish-fg', 'Stop Agent');
+    expect(result.background).toBe(0);
+    expect(ishMgr.getActiveTask()?.status).toBe('running');
+
+    ishMgr.stop(taskId);
+  }, 15_000);
+
+  it('T7: stopAllShellWorkForSession 终止 copilot PTY', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'ice-ish-stop-all-'));
+    const ishMgr = getInteractiveShellManagerFor('sess-ish-all', workDir);
+    const { taskId } = ishMgr.start({ command: longCmd });
+    expect(taskId).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 500));
+    expect(ishMgr.getActiveTask()?.status).toBe('running');
+
+    const result = stopAllShellWorkForSession('sess-ish-all', 'session delete');
+    expect(result.interactiveShell).toBe(1);
+
+    expect(ishMgr.getActiveTask()).toBeNull();
+    // dispose 已清空 task 表；PTY 已在 kill 阶段终止
+    expect(ishMgr.getTask(taskId)).toBeNull();
+  }, 15_000);
+
+  it('killCopilotInteractiveShellsForSession 可供 session 删除清理 PTY', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'ice-ish-exit-'));
+    const ishMgr = getInteractiveShellManagerFor('sess-ish-exit', workDir);
+    const { taskId } = ishMgr.start({ command: longCmd });
+    expect(taskId).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 500));
+    expect(ishMgr.getActiveTask()?.status).toBe('running');
+
+    const killed = killCopilotInteractiveShellsForSession('sess-ish-exit', 'session cleanup');
+    expect(killed).toBe(1);
+    expect(ishMgr.getTask(taskId)?.status).toBe('killed');
+  }, 15_000);
 });

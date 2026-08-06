@@ -13,6 +13,8 @@
  * - AI 的思考过程
  */
 
+import { redactToolArguments } from '../tools/tool-argument-redaction.js';
+
 /**
  * 单条日志条目。
  */
@@ -105,9 +107,10 @@ export class HarnessLogger {
    * AI 决定调用工具。
    */
   toolCall(toolName: string, args: Record<string, any>): void {
-    const argsStr = JSON.stringify(args);
+    const safeArgs = redactToolArguments(toolName, args);
+    const argsStr = JSON.stringify(safeArgs);
     const truncated = argsStr.length > 300 ? argsStr.substring(0, 300) + '...' : argsStr;
-    this.log('tool_call', `📌 ${toolName}(${truncated})`, { tool: toolName, args });
+    this.log('tool_call', `📌 ${toolName}(${truncated})`, { tool: toolName, args: safeArgs });
   }
 
   /**

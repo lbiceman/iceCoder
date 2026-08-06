@@ -1144,6 +1144,42 @@
   background: transparent;
   min-height: 40px;
 }
+
+/* Shell 协作模式：位置仍在工具栏右侧；视觉为终端图标 + Shell 徽章 */
+.shell-collab-indicator {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border-color));
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-primary));
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  user-select: none;
+}
+
+.shell-collab-indicator.hidden {
+  display: none;
+}
+
+.shell-collab-indicator .app-icon,
+.shell-collab-indicator svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
+.shell-collab-label {
+  white-space: nowrap;
+}
 .toolbar-divider {
   width: 1px;
   height: 16px;
@@ -2168,6 +2204,64 @@
   font-size: 13.5px;
   letter-spacing: 0.1px;
   color: var(--text-primary);
+}
+
+/* Shell 标记沉到 meta 行，避免与标题 / 活跃点抢视觉 */
+.chat-sidebar-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-sidebar-item-shell-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: color-mix(in srgb, var(--text-muted) 55%, var(--accent));
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  opacity: 0.92;
+  user-select: none;
+}
+
+.chat-sidebar-item.active .chat-sidebar-item-shell-badge {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-secondary));
+  opacity: 1;
+}
+
+.chat-sidebar-item-shell-badge .app-icon,
+.chat-sidebar-item-shell-badge svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.chat-sidebar-item-shell-label {
+  white-space: nowrap;
+}
+
+.chat-sidebar-item-meta .chat-sidebar-item-subtitle,
+.chat-sidebar-item-meta .chat-sidebar-item-time {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-sidebar-item-meta .chat-sidebar-item-time {
+  text-align: right;
+}
+
+.chat-sidebar-item-shell-badge + .chat-sidebar-item-subtitle::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.45;
 }
 
 .chat-sidebar-item-dot {

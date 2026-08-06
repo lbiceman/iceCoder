@@ -1,1 +1,1 @@
-export * from './tunnel-stubs/tunnel-ready-watcher.js';
+export * from '../dev/tunnel/tunnel-ready-watcher.js';
