@@ -6,7 +6,11 @@ import type { HarnessMemoryIntegration } from './harness-memory.js';
 import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
   formatConfirmToolName,
+  isShellCollabCommandTool,
+  isShellCollabTool,
+  resolveShellMandatoryConfirm,
   resolveToolPermission,
+  shellMandatoryConfirmKey,
   toolCallSignature,
 } from './harness-permission-runtime.js';
 import type { HarnessLogger } from './logger.js';
@@ -35,6 +39,7 @@ import {
   isIntentCheckpointWriteTool,
 } from './intent-checkpoint-turn-snapshot.js';
 import { touchSessionTouchedPath } from './intent-checkpoint-store.js';
+import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -43,6 +48,11 @@ export interface ToolExecutorDeps {
   /** 为 true 时跳过 resolveToolPermission / onConfirm 全流程 */
   skipPermissionChecks?: boolean;
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  /** Shell 协作 mandatory confirm；不可被 skipPermissionChecks 跳过 */
+  onShellMandatoryConfirm?: (
+    request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
+  ) => Promise<boolean>;
+  shellCollabActive?: boolean;
   workspaceRoot: string;
   lockedWorkspaceRoot?: string;
   referenceReads?: string[];
@@ -66,6 +76,10 @@ function formatToolFailureOutput(error: string | undefined, rawOutput: string): 
   const body = rawOutput.trim();
   if (body) return `工具执行错误: ${message}\n\n${body}`;
   return `工具执行错误: ${message}`;
+}
+
+function observableToolArgs(tc: ToolCall): Record<string, any> {
+  return redactToolArguments(tc.name, tc.arguments);
 }
 
 function isEnoentError(error: string | undefined, output: string): boolean {
@@ -168,7 +182,7 @@ function emitHarnessPolicyBlock(
     toolOutcome: 'policy_block',
     toolOutput: stepToolOutputPreview(ctx.tc.name, blockMessage),
     toolError: ctx.policyReason ?? ctx.errorLabel,
-    toolArgs: ctx.tc.arguments,
+    toolArgs: observableToolArgs(ctx.tc),
   });
   ctx.taskState?.recordToolResult(ctx.tc, {
     success: false,
@@ -195,6 +209,8 @@ export interface ExecuteToolCallsStreamingArgs {
   currentTools?: ToolDefinition[];
   buildDiagnosticGateActive?: boolean;
   verificationOutputBuffer?: VerificationOutputBuffer;
+  /** 本 Harness run 内已拒绝的 Shell mandatory-confirm 键。 */
+  shellMandatoryConfirmDenials?: Set<string>;
 }
 
 export interface ToolExecutionStats {
@@ -234,6 +250,7 @@ export async function executeToolCallsStreaming(
     currentTools,
     buildDiagnosticGateActive,
     verificationOutputBuffer,
+    shellMandatoryConfirmDenials,
   } = args;
 
   const streamingExecutor = new StreamingToolExecutor(
@@ -255,6 +272,9 @@ export async function executeToolCallsStreaming(
   const policyBlockedSignatures: string[] = [];
   const budgetBlockedFilePaths: string[] = [];
   const budgetBlockedPathSet = new Set<string>();
+  const currentToolNames = currentTools
+    ? new Set(currentTools.map(tool => tool.name))
+    : undefined;
 
   // 第一遍：权限检查 + 提交到流式执行器
   const submittedIds = new Set<string>();
@@ -265,9 +285,31 @@ export async function executeToolCallsStreaming(
       break;
     }
 
+    // LLM 输出、checkpoint salvage 或外部恢复数据都不得调用本轮未暴露的工具。
+    // 此校验必须位于 request_analysis 特殊分支和底层 ToolExecutor 之前。
+    if (currentToolNames && !currentToolNames.has(tc.name)) {
+      emitHarnessPolicyBlock({
+        deps,
+        tc,
+        iteration,
+        baseMessage: `[Harness / Tool Policy] Tool "${tc.name}" is not available in this turn.`,
+        errorLabel: 'Tool not available in current turn',
+        policyReason: 'tool_not_available_this_turn',
+        messages,
+        onStep,
+        logger,
+        taskState,
+        repoContext,
+        policyBlockedSignatures,
+      });
+      directTotalCount++;
+      submittedIds.add(tc.id);
+      continue;
+    }
+
     if (tc.name === 'request_analysis') {
       logger.toolCall(tc.name, tc.arguments);
-      onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
+      onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: observableToolArgs(tc) });
 
       let output: string;
       let success = true;
@@ -325,7 +367,7 @@ export async function executeToolCallsStreaming(
         toolSuccess: success,
         toolOutput: stepToolOutputPreview(tc.name, output),
         toolError: success ? undefined : error,
-        toolArgs: tc.arguments,
+        toolArgs: observableToolArgs(tc),
       });
       messages.push({
         role: 'tool',
@@ -363,8 +405,95 @@ export async function executeToolCallsStreaming(
       continue;
     }
 
-    // ── 权限检查：显式规则优先，破坏性工具兜底确认 ──
-    if (!deps.skipPermissionChecks) {
+    // ── 权限检查：Shell 协作 mandatory confirm / 显式规则 / 破坏性工具兜底 ──
+    const shellCollabTool = deps.shellCollabActive && isShellCollabTool(tc.name);
+    if (shellCollabTool) {
+      if (isShellCollabCommandTool(tc.name)) {
+        const mandatory = resolveShellMandatoryConfirm(tc, {
+          sessionId: deps.sessionId ?? 'default',
+          workspaceRoot: deps.workspaceRoot,
+        });
+
+        if (mandatory.hardBlocked) {
+          emitHarnessPolicyBlock({
+            deps,
+            tc,
+            iteration,
+            baseMessage: mandatory.hardBlockMessage ?? '[Sandbox / Blocked]',
+            errorLabel: 'Shell hard block',
+            policyReason: 'shell_hard_block',
+            messages,
+            onStep,
+            logger,
+            taskState,
+            repoContext,
+            policyBlockedSignatures,
+          });
+          directTotalCount++;
+          submittedIds.add(tc.id);
+          continue;
+        }
+
+        if (mandatory.required && mandatory.request) {
+          const req = mandatory.request;
+          const denialKey = shellMandatoryConfirmKey(req);
+          if (shellMandatoryConfirmDenials?.has(denialKey)) {
+            emitHarnessPolicyBlock({
+              deps,
+              tc,
+              iteration,
+              baseMessage: `[Harness / Shell Confirm Policy] This exact command was already denied in the current run. Command was not written to PTY: ${req.commandDisplay}`,
+              errorLabel: 'Shell mandatory confirmation previously denied',
+              policyReason: 'shell_mandatory_confirm_previously_denied',
+              messages,
+              onStep,
+              logger,
+              taskState,
+              repoContext,
+              policyBlockedSignatures,
+            });
+            directTotalCount++;
+            submittedIds.add(tc.id);
+            continue;
+          }
+
+          if (!deps.onShellMandatoryConfirm) {
+            const reason = 'Shell mandatory confirmation required but no handler is configured';
+            logger.toolResult(tc.name, false, 0, reason);
+            onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+            messages.push({
+              role: 'tool',
+              content: `Tool ${tc.name} requires shell mandatory confirmation but no handler is configured.`,
+              toolCallId: tc.id,
+            });
+            submittedIds.add(tc.id);
+            continue;
+          }
+
+          const confirmToolName = formatConfirmToolName(tc);
+          onStep?.({
+            type: 'tool_confirm',
+            iteration,
+            toolName: confirmToolName,
+            toolArgs: observableToolArgs(tc),
+          });
+          const allowed = await deps.onShellMandatoryConfirm(req);
+          if (!allowed) {
+            shellMandatoryConfirmDenials?.add(denialKey);
+            logger.toolResult(tc.name, false, 0, 'Shell mandatory confirmation denied or timed out');
+            onStep?.({ type: 'tool_denied', iteration, toolName: tc.name });
+            messages.push({
+              role: 'tool',
+              content: `User denied shell command or confirmation timed out (confirmation_timeout). `
+                + `Command was not written to PTY: ${req.commandDisplay}`,
+              toolCallId: tc.id,
+            });
+            submittedIds.add(tc.id);
+            continue;
+          }
+        }
+      }
+    } else if (!deps.skipPermissionChecks) {
       const permission = resolveToolPermission(tc, deps.permissionRules);
       if (permission.permission === 'deny') {
         logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
@@ -393,7 +522,7 @@ export async function executeToolCallsStreaming(
 
       if (permission.permission === 'confirm' && deps.onConfirm) {
         const confirmToolName = formatConfirmToolName(tc);
-        onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: tc.arguments });
+        onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: observableToolArgs(tc) });
         const allowed = await deps.onConfirm(confirmToolName, tc.arguments);
         if (!allowed) {
           logger.toolResult(tc.name, false, 0, 'User denied execution');
@@ -506,7 +635,7 @@ export async function executeToolCallsStreaming(
 
     // ── 提交到流式执行器 ──
     logger.toolCall(tc.name, tc.arguments);
-    onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: tc.arguments });
+    onStep?.({ type: 'tool_call', iteration, toolCallId: tc.id, toolName: tc.name, toolArgs: observableToolArgs(tc) });
     onStep?.({
       type: 'tool_progress',
       iteration,
@@ -577,7 +706,7 @@ export async function executeToolCallsStreaming(
       toolOutcome: result.success ? 'executed' : 'execution_fail',
       toolOutput: stepToolOutputPreview(tc.name, output),
       toolError: result.success ? undefined : result.error,
-      toolArgs: tc.arguments,
+      toolArgs: observableToolArgs(tc),
     });
 
     const toolMeta = getToolMetadata(tc.name);

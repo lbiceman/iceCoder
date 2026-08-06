@@ -1,6 +1,123 @@
 import type { ToolCall } from '../llm/types.js';
+import { analyzeShellSandbox } from '../tools/shell-sandbox.js';
+import {
+  classifyShellCollabCommandRisk,
+  hashNormalizedShellCommand,
+  redactShellCommandForDisplay,
+  type ShellCollabCommandRisk,
+} from '../tools/shell-collab-command-risk.js';
+import { SHELL_COLLAB_TOOL_NAMES } from '../tools/shell-collab-tools.js';
+import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { getToolMetadata, isDestructiveCommand, isDestructiveOperation } from '../tools/tool-metadata.js';
 import type { ToolPermissionRule } from './types.js';
+
+export const SHELL_COLLAB_COMMAND_TOOLS = new Set(['shell_exec', 'interactive_shell']);
+const SHELL_COLLAB_TOOLS = new Set<string>(SHELL_COLLAB_TOOL_NAMES);
+
+export interface ShellMandatoryConfirmRequest {
+  toolName: string;
+  args: Record<string, unknown>;
+  command: string;
+  commandDisplay: string;
+  taskId: string;
+  sessionId: string;
+  normalizedCommandHash: string;
+  risk: ShellCollabCommandRisk;
+}
+
+export interface ShellMandatoryConfirmDecision {
+  required: boolean;
+  hardBlocked?: boolean;
+  hardBlockMessage?: string;
+  request?: ShellMandatoryConfirmRequest;
+}
+
+/** 同一 Harness run 内 mandatory-confirm 拒绝去重键。 */
+export function shellMandatoryConfirmKey(
+  request: Pick<ShellMandatoryConfirmRequest, 'sessionId' | 'taskId' | 'normalizedCommandHash'>,
+): string {
+  return `${request.sessionId}\u0000${request.taskId}\u0000${request.normalizedCommandHash}`;
+}
+
+/** 从 shell_exec / interactive_shell(start) 提取待检命令文本。 */
+export function extractShellCollabCommandFromToolCall(tc: ToolCall): string | null {
+  if (tc.name === 'shell_exec') {
+    const command = (tc.arguments as Record<string, unknown>)?.command;
+    return typeof command === 'string' && command.trim() ? command.trim() : null;
+  }
+  if (tc.name === 'interactive_shell') {
+    const action = (tc.arguments as Record<string, unknown>)?.action;
+    if (action !== 'start') return null;
+    const command = (tc.arguments as Record<string, unknown>)?.command;
+    return typeof command === 'string' && command.trim() ? command.trim() : null;
+  }
+  return null;
+}
+
+export function isShellCollabCommandTool(toolName: string): boolean {
+  return SHELL_COLLAB_COMMAND_TOOLS.has(toolName);
+}
+
+export function isShellCollabTool(toolName: string): boolean {
+  return SHELL_COLLAB_TOOLS.has(toolName);
+}
+
+/**
+ * Shell 协作命令权限：hard block > shellMandatoryConfirm > 未命中直行。
+ * 未命中可配置正则时不进入普通 permission。
+ */
+export function resolveShellMandatoryConfirm(
+  tc: ToolCall,
+  options: {
+    sessionId: string;
+    workspaceRoot?: string;
+    configPath?: string;
+  },
+): ShellMandatoryConfirmDecision {
+  const command = extractShellCollabCommandFromToolCall(tc);
+  if (!command) {
+    return { required: false };
+  }
+
+  const sandbox = analyzeShellSandbox(command, {
+    workDir: options.workspaceRoot,
+    configPath: options.configPath,
+    includeBlacklist: false,
+  });
+  if (sandbox.blocked) {
+    return {
+      required: false,
+      hardBlocked: true,
+      hardBlockMessage: sandbox.message ?? '[Sandbox / Blocked]',
+    };
+  }
+
+  const risk = classifyShellCollabCommandRisk(command, { configPath: options.configPath });
+  if (!risk) {
+    return { required: false };
+  }
+
+  const taskIdRaw = (tc.arguments as Record<string, unknown>)?.task_id;
+  const taskId = typeof taskIdRaw === 'string' && taskIdRaw.trim()
+    ? taskIdRaw.trim()
+    : tc.name === 'interactive_shell'
+      ? '__shell_start__'
+      : '';
+
+  return {
+    required: true,
+    request: {
+      toolName: tc.name,
+      args: tc.arguments ?? {},
+      command,
+      commandDisplay: redactShellCommandForDisplay(command),
+      taskId,
+      sessionId: options.sessionId,
+      normalizedCommandHash: hashNormalizedShellCommand(risk.normalized),
+      risk,
+    },
+  };
+}
 
 /**
  * 判断工具调用是否具有破坏性。
@@ -47,9 +164,10 @@ export function matchesPermissionPattern(pattern: string, toolName: string): boo
   return new RegExp(`^${escaped}$`).test(toolName);
 }
 
-/** 连续失败统计用的稳定键（工具名 + 序列化参数）。 */
+/** 连续失败统计用的稳定键（工具名 + 脱敏后参数）。凭证不得进入 checkpoint / resilience。 */
 export function toolCallSignature(tc: ToolCall): string {
-  return `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
+  const safeArgs = redactToolArguments(tc.name, tc.arguments ?? {});
+  return `${tc.name}:${JSON.stringify(safeArgs)}`;
 }
 
 /**
@@ -83,6 +201,20 @@ export function formatConfirmToolName(tc: ToolCall): string {
     if (cmd) {
       const short = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;
       return `run_command (${short})`;
+    }
+  }
+  if (tc.name === 'shell_exec') {
+    const cmd = (tc.arguments as Record<string, any>)?.command as string | undefined;
+    if (cmd) {
+      const short = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;
+      return `shell_exec (${short})`;
+    }
+  }
+  if (tc.name === 'interactive_shell') {
+    const cmd = (tc.arguments as Record<string, any>)?.command as string | undefined;
+    if (cmd) {
+      const short = cmd.length > 60 ? cmd.substring(0, 57) + '...' : cmd;
+      return `interactive_shell start (${short})`;
     }
   }
   return tc.name;

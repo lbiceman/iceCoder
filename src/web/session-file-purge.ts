@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { getDefaultWorkDir } from '../cli/paths.js';
 import { loadSessionWorkspace } from '../harness/session-workspace-store.js';
+import { clearShellCollab } from '../session/shell-collab-store.js';
 import { deleteSessionImagesCache } from './images-cache.js';
 
 async function purgeWorkspaceSessionShadow(sessionsDir: string, sessionId: string): Promise<void> {
@@ -32,6 +33,8 @@ async function purgeWorkspaceSessionShadow(sessionsDir: string, sessionId: strin
 
 /** 删除 sessions 目录内与会话 id 关联的全部文件/子目录，并清理 imagesCache 与工作区 shadow。 */
 export async function purgeSessionDiskFiles(sessionsDir: string, sessionId: string): Promise<void> {
+  // 通用文件族清理只能删除 sidecar；显式调用同时清除进程内 Shell 协作状态。
+  await clearShellCollab(sessionId, sessionsDir);
   await purgeWorkspaceSessionShadow(sessionsDir, sessionId);
 
   const entries = await fs.readdir(sessionsDir).catch((): string[] => []);

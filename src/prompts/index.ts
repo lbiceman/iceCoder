@@ -42,4 +42,12 @@ export {
   createMemorySection,
   createPreferencesSection,
   createToolResultClearingSection,
+  createShellCopilotSection,
+  SHELL_COLLAB_REMOVED_SECTION_IDS,
 } from './sections.js';
+
+export {
+  applyShellCollabPromptOverlay,
+  assembleShellCollabPrompt,
+  loadShellCopilotSkillBody,
+} from './shell-collab-prompt.js';

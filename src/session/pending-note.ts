@@ -103,6 +103,24 @@ export function parseNextCommand(content: string): { matched: boolean; text: str
   return { matched: false, text: '' };
 }
 
+export type ShellCommandAction = 'enter' | 'exit';
+
+/**
+ * 仅识别精确 `/shell` 与旧 `/shell exit`（首行）。
+ * exit 只用于服务端给出“请新建会话”的拒绝提示，不再改变模式。
+ */
+export function parseShellCommand(content: string): { matched: boolean; action: ShellCommandAction | null } {
+  const trimmed = content.trim();
+  const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? '';
+  if (firstLine === '/shell exit') {
+    return { matched: true, action: 'exit' };
+  }
+  if (firstLine === '/shell') {
+    return { matched: true, action: 'enter' };
+  }
+  return { matched: false, action: null };
+}
+
 export function resetPendingNotesForTests(): void {
   pendingAlsoNotesBySession.clear();
   activeAlsoRunIdBySession.clear();

@@ -179,7 +179,13 @@ window.ChatWebSocket = (function () {
         emit('tunnel_ready', { url: data.url || '' });
         break;
       case 'confirm':
-        emit('confirm', { confirmId: data.confirmId, toolName: data.toolName, args: data.args });
+        emit('confirm', {
+          confirmId: data.confirmId,
+          toolName: data.toolName,
+          args: data.args,
+          confirmKind: data.confirmKind,
+          shellMandatory: data.shellMandatory,
+        });
         break;
       case 'confirm_resolved':
         emit('confirm_resolved', {
@@ -205,6 +211,12 @@ window.ChatWebSocket = (function () {
         break;
       case 'session_switched':
         emit('session_switched', data);
+        break;
+      case 'shell_collab_entered':
+        emit('shell_collab_entered', data || {});
+        break;
+      case 'shell_collab_resumed':
+        emit('shell_collab_resumed', data || {});
         break;
       case 'session_cleared':
         emit('session_cleared', data || {});

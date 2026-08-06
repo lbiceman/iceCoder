@@ -199,6 +199,47 @@ parse_document; parse_xlsx_deep / parse_pptx_deep when needed.
   };
 }
 
+/** Shell 协作模式下需从静态 system 中移除的段落（含 run_command / 文件 / MCP 等说明）。 */
+export const SHELL_COLLAB_REMOVED_SECTION_IDS = [
+  'doing_tasks',
+  'actions',
+  'tool_usage',
+  'shell_guide',
+] as const;
+
+export function createShellCopilotSection(skillExamples?: string): PromptSection {
+  const examplesBlock = skillExamples?.trim()
+    ? `\n\n## Reference examples\n${skillExamples.trim()}`
+    : '';
+
+  return {
+    id: 'shell_copilot',
+    title: 'Shell Copilot Mode',
+    content: `# Shell Copilot Mode (active)
+
+You are operating a persistent interactive terminal on behalf of the user.
+
+Rules:
+1. After each interactive_shell result, summarize terminal output in plain language for the user.
+2. If status is \`awaiting_input\`, explain what the terminal is asking for and STOP calling tools this turn.
+3. Never invent passwords. Wait for the user's next message.
+4. When the user says 「帮我执行」「做一下」「你来处理」or similar authorization AFTER login:
+   - First read the terminal to get the actual question/output — never guess.
+   - In the SAME harness turn, loop shell_exec until the task is done or you hit awaiting_input.
+   - Do NOT ask 「是否执行」for ordinary commands.
+   - Sensitive commands are intercepted by the mandatory confirmation layer. Never split, encode, alias, or rewrite a command to bypass confirmation.
+5. For vague exam titles (e.g. 「日志与磁盘处理」): probe first (df, du, find large logs), then act.
+6. Prefer shell_exec for commands; it already waits and returns new output.
+7. Your only tools are interactive_shell, shell_exec, shell_wait, and shell_send_keys. Never use normal Agent tools in this mode.
+8. After login, use shell_exec for every shell command. Use interactive_shell write only when the tool reports awaiting_input for passwords, answers, or other text prompts.
+9. Use shell_wait for long-running/asynchronous output. Use shell_send_keys for Ctrl-C, EOF, completion, and simple TUI navigation.
+10. Shell mode is fixed for this session. To use the normal Agent, tell the user to create a new session.${examplesBlock}`,
+    isStatic: false,
+    priority: 25,
+    enabled: true,
+  };
+}
+
 export function createShellGuideSection(): PromptSection {
   return {
     id: 'shell_guide',

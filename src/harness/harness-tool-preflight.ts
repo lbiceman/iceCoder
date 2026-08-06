@@ -56,6 +56,21 @@ function extractTargetPath(args: Record<string, unknown>): string | undefined {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
 }
 
+function extractShellCollabPreflightCommand(
+  toolName: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  if (toolName === 'shell_exec') {
+    const command = args.command;
+    return typeof command === 'string' && command.trim() ? command.trim() : undefined;
+  }
+  if (toolName === 'interactive_shell' && args.action === 'start') {
+    const command = args.command;
+    return typeof command === 'string' && command.trim() ? command.trim() : undefined;
+  }
+  return undefined;
+}
+
 export function buildMissingFileBlockMessage(
   toolName: string,
   filePath: string,
@@ -167,6 +182,24 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
         return {
           blocked: true,
           reason: sandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
+          hostKillLabel: sandbox.matchLabel,
+          message: sandbox.message ?? '[Sandbox / Blocked]',
+        };
+      }
+    }
+  }
+
+  if (input.toolName === 'shell_exec' || input.toolName === 'interactive_shell') {
+    const command = extractShellCollabPreflightCommand(input.toolName, input.args);
+    if (command) {
+      const sandbox = analyzeShellSandbox(command, {
+        workDir: input.workspaceRoot,
+        includeBlacklist: false,
+      });
+      if (sandbox.blocked) {
+        return {
+          blocked: true,
+          reason: sandbox.reason === 'hard_block' ? 'host_kill' : 'host_kill',
           hostKillLabel: sandbox.matchLabel,
           message: sandbox.message ?? '[Sandbox / Blocked]',
         };

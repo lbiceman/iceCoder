@@ -132,6 +132,8 @@ export class Harness {
   private permissionRules: HarnessConfig['permissions'];
   private skipPermissionChecks: boolean;
   private onConfirm?: HarnessConfig['onConfirm'];
+  private onShellMandatoryConfirm?: HarnessConfig['onShellMandatoryConfirm'];
+  private shellCollabActive: boolean;
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
@@ -168,7 +170,9 @@ export class Harness {
   ) {
     const context = {
       ...config.context,
-      tools: ensureRequestAnalysisTool(config.context.tools),
+      tools: config.enableRequestAnalysis === false
+        ? config.context.tools
+        : ensureRequestAnalysisTool(config.context.tools),
     };
     this.contextAssembler = new ContextAssembler(context);
     this.loopController = new LoopController(config.loop);
@@ -190,6 +194,8 @@ export class Harness {
     this.permissionRules = config.permissions ?? [];
     this.skipPermissionChecks = config.skipPermissionChecks === true;
     this.onConfirm = config.onConfirm;
+    this.onShellMandatoryConfirm = config.onShellMandatoryConfirm;
+    this.shellCollabActive = config.shellCollabActive === true;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.verificationExemptDirs = config.verificationExemptDirs;
@@ -246,6 +252,8 @@ export class Harness {
       permissionRules: this.permissionRules ?? [],
       skipPermissionChecks: this.skipPermissionChecks,
       onConfirm: this.onConfirm,
+      onShellMandatoryConfirm: this.onShellMandatoryConfirm,
+      shellCollabActive: this.shellCollabActive,
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
       sessionDir: this.sessionDir,
@@ -525,15 +533,17 @@ export class Harness {
       activeCheckpoint?.userGoal,
     );
 
-    this.memoryIntegration.onLoopStart(
-      sessionGoalAnchor,
-      {
-        chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
-        stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
-        countTokens: async (text) => estimateStringTokens(text),
-      },
-      { triggerUserMessage: userMessage, messages: [...messages] },
-    );
+    if (!this.shellCollabActive) {
+      this.memoryIntegration.onLoopStart(
+        sessionGoalAnchor,
+        {
+          chat: async (msgs, opts) => chatFn(msgs, { tools: [], ...opts }),
+          stream: async () => { throw new Error('Stream not supported for memory sideQuery'); },
+          countTokens: async (text) => estimateStringTokens(text),
+        },
+        { triggerUserMessage: userMessage, messages: [...messages] },
+      );
+    }
 
     const state: HarnessRunState = {
       messages,
@@ -574,6 +584,7 @@ export class Harness {
       taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
       consecutiveNoToolRounds: 0,
       missingFileAttempts: new Map(),
+      shellMandatoryConfirmDenials: new Set(),
       harnessPolicyStats: emptyHarnessPolicyStats(),
       checkpointResumeForkApplied: false,
       contextEmergencyCompactUsed: false,
@@ -635,7 +646,7 @@ export class Harness {
     state.verificationOutputBuffer.clear();
     this.supervisorBridge?.resetPerRunInjectionBudget();
 
-    if (existingMessages && existingMessages.length > 0) {
+    if (!this.shellCollabActive && existingMessages && existingMessages.length > 0) {
       try {
         const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
           state.taskState,
@@ -832,14 +843,16 @@ export class Harness {
         // 工具轮后不 graph-stop：工程变更须走 Verification Gate（单测提示），避免图 done 绕过验收
       }
     } finally {
-      this.memoryIntegration.onLoopEnd(
-        state.messages,
-        state.turnCount,
-        this.loopController.getState().totalInputTokens,
-        { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() },
-      ).catch(err => {
-        console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
-      });
+      if (!this.shellCollabActive) {
+        this.memoryIntegration.onLoopEnd(
+          state.messages,
+          state.turnCount,
+          this.loopController.getState().totalInputTokens,
+          { task: state.taskState.snapshot(), repo: state.repoContext.snapshot() },
+        ).catch(err => {
+          console.debug('[harness] memory onLoopEnd failed:', err instanceof Error ? err.message : err);
+        });
+      }
     }
   }
 

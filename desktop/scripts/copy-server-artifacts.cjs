@@ -24,6 +24,7 @@ const FILES_TO_COPY = [
 
 const PROD_DEPS = [
   '@vscode/ripgrep',
+  'node-pty',
   'cheerio',
   'domhandler',
   'express',
@@ -147,8 +148,7 @@ function copyBundledDataFiles(repoRoot, targetRoot) {
     const src = path.join(repoRoot, rel);
     const dst = path.join(targetRoot, rel);
     if (!fs.existsSync(src)) {
-      log(`SKIP missing bundled ${rel}`);
-      continue;
+      throw new Error(`missing required bundled data file: ${rel}`);
     }
     log(`copyFile ${rel}`);
     copyFile(src, dst);

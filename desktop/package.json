@@ -12,9 +12,11 @@
     "dist:win": "npm run build && electron-builder --win nsis",
     "dist:mac": "npm run build && electron-builder --mac dmg",
     "dist:linux": "npm run build && electron-builder --linux AppImage deb",
-    "smoke:server-bundle": "node scripts/smoke-server-bundle.mjs"
+    "smoke:server-bundle": "node scripts/smoke-server-bundle.mjs",
+    "rebuild:server-native": "node scripts/rebuild-server-native.cjs"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "@types/node": "^25.6.0",
     "electron": "^32.2.5",
     "electron-builder": "^25.1.8",
@@ -49,7 +51,8 @@
     ],
     "asarUnpack": [
       "**/*.node",
-      "**/node_modules/@vscode/ripgrep/**"
+      "**/node_modules/@vscode/ripgrep/**",
+      "**/node_modules/node-pty/**"
     ],
     "win": {
       "target": [
