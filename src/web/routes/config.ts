@@ -349,7 +349,8 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
   });
 
   /**
-   * PATCH /api/config/shell-blacklist — 更新 Shell 命令黑名单（正则数组）。
+   * PATCH /api/config/shell-blacklist — 更新 Shell 协作强制确认规则（正则数组）。
+   * 路径与字段名为兼容既有配置保留。
    */
   router.patch('/shell-blacklist', async (req: Request, res: Response): Promise<void> => {
     try {
@@ -373,7 +374,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       res.json({ success: true, shellBlacklist: saved });
     } catch (err) {
       const message = err instanceof Error ? err.message : '未知错误';
-      res.status(500).json({ error: `更新 Shell 黑名单失败：${message}` });
+      res.status(500).json({ error: `更新 Shell 强制确认规则失败：${message}` });
     }
   });
 
@@ -420,7 +421,7 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
   });
 
   /**
-   * GET /api/config/shell-blacklist-defaults — 返回内置默认 Shell 黑名单。
+   * GET /api/config/shell-blacklist-defaults — 返回内置默认 Shell 强制确认规则。
    */
   router.get('/shell-blacklist-defaults', (_req: Request, res: Response): void => {
     res.json({ shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS] });

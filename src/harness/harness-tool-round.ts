@@ -68,6 +68,7 @@ import {
 } from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import { maybeResetVerificationGateCounter } from './harness-verification-gate.js';
+import { redactToolCalls } from '../tools/tool-argument-redaction.js';
 import {
   buildDiagnosticGateMessage,
   shouldActivateBuildDiagnosticGate,
@@ -175,7 +176,8 @@ export async function runHarnessToolRound(
   msgs.push({
     role: 'assistant',
     content: prepareAssistantContentForHistory(response.content || ''),
-    toolCalls: response.toolCalls,
+    // 工具仍以 response 中的原始参数执行；历史/checkpoint 只保存脱敏副本。
+    toolCalls: redactToolCalls(response.toolCalls),
   });
 
   let toolCallsForGate = response.toolCalls ?? [];
@@ -270,6 +272,7 @@ export async function runHarnessToolRound(
     currentTools,
     buildDiagnosticGateActive: state.buildDiagnosticGateActive,
     verificationOutputBuffer: state.verificationOutputBuffer,
+    shellMandatoryConfirmDenials: state.shellMandatoryConfirmDenials,
   });
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;

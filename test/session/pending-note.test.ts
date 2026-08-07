@@ -8,6 +8,7 @@ import {
   drainAlsoNotesForRun,
   parseAlsoCommand,
   parseNextCommand,
+  parseShellCommand,
   resetPendingNotesForTests,
 } from '../../src/session/pending-note.js';
 
@@ -99,5 +100,34 @@ describe('pending-note', () => {
     expect(parseNextCommand('/next 修登录页')).toEqual({ matched: true, text: '修登录页' });
     expect(parseNextCommand('#skill\n/next 修登录页')).toEqual({ matched: true, text: '修登录页' });
     expect(parseNextCommand('普通任务')).toEqual({ matched: false, text: '' });
+  });
+
+  it('parseShellCommand recognizes /shell, trailing prompt, and the rejected legacy exit command', () => {
+    expect(parseShellCommand('/shell')).toEqual({ matched: true, action: 'enter', prompt: '' });
+    expect(parseShellCommand('/shell exit')).toEqual({ matched: true, action: 'exit', prompt: '' });
+    expect(parseShellCommand('/shell\n\n[Shell Copilot Mode]')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '',
+    });
+    expect(parseShellCommand('/shell 你能干什么')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '你能干什么',
+    });
+    expect(parseShellCommand('/shell foo')).toEqual({ matched: true, action: 'enter', prompt: 'foo' });
+    expect(parseShellCommand('#skill.md\n/shell 帮我连 ssh')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '帮我连 ssh',
+    });
+    expect(parseShellCommand('ssh user@host')).toEqual({ matched: false, action: null, prompt: '' });
+    expect(parseShellCommand('/also note')).toEqual({ matched: false, action: null, prompt: '' });
+    expect(parseShellCommand('/shell exit\n\nextra body')).toEqual({
+      matched: true,
+      action: 'exit',
+      prompt: '',
+    });
+    expect(parseShellCommand('/shell exit foo')).toEqual({ matched: false, action: null, prompt: '' });
   });
 });

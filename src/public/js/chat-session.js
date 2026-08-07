@@ -154,6 +154,12 @@ window.ChatSession = (function () {
     if (persistableImages.length > 0) {
       o.images = persistableImages;
     }
+    if (m.shellCommand) o.shellCommand = m.shellCommand;
+    if (m.alsoNote) o.alsoNote = true;
+    if (Array.isArray(m.skills) && m.skills.length) o.skills = m.skills.slice();
+    if (Array.isArray(m.referencePaths) && m.referencePaths.length) {
+      o.referencePaths = m.referencePaths.slice();
+    }
     if (m.turnTokenUsage && typeof m.turnTokenUsage === 'object') {
       o.turnTokenUsage = {
         inputTokens: m.turnTokenUsage.inputTokens || 0,
@@ -176,6 +182,12 @@ window.ChatSession = (function () {
     }
     if (typeof raw.sentAt === 'number' && isFinite(raw.sentAt)) o.sentAt = raw.sentAt;
     if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
+    if (raw.shellCommand) o.shellCommand = raw.shellCommand;
+    if (raw.alsoNote) o.alsoNote = true;
+    if (Array.isArray(raw.skills) && raw.skills.length) o.skills = raw.skills.slice();
+    if (Array.isArray(raw.referencePaths) && raw.referencePaths.length) {
+      o.referencePaths = raw.referencePaths.slice();
+    }
     if (raw.turnTokenUsage && typeof raw.turnTokenUsage === 'object') {
       o.turnTokenUsage = {
         inputTokens: raw.turnTokenUsage.inputTokens || 0,
@@ -348,10 +360,57 @@ window.ChatSession = (function () {
       .trim();
   }
 
+  /**
+   * 将 `/shell` / `/shell <prompt>` 拆成模式标记 + 提示词正文。
+   * 即使已有 shellCommand，也要剥离正文里残留的 `/shell` 前缀（防止回合刷新后合并回一条）。
+   */
+  function splitShellCommandFromContent(text, existingShellCommand) {
+    var raw = String(text || '');
+    var lines = raw.split(/\r?\n/);
+    var shellLineIndex = -1;
+    var shellLine = '';
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (t === '/shell' || t.startsWith('/shell ')) {
+        if (t === '/shell exit' || t.indexOf('/shell exit ') === 0) {
+          return { shellCommand: '', content: raw };
+        }
+        shellLineIndex = i;
+        shellLine = t;
+        break;
+      }
+    }
+    if (shellLineIndex < 0) {
+      return {
+        shellCommand: existingShellCommand || '',
+        content: raw.trim(),
+      };
+    }
+    var after = shellLine.slice('/shell'.length).trim();
+    var promptParts = [];
+    if (after) promptParts.push(after);
+    var rest = lines.slice(shellLineIndex + 1).join('\n').trim();
+    if (rest.indexOf('[Shell Copilot Mode]') === 0) rest = '';
+    else if (rest.indexOf('[Shell Copilot Mode]') > 0) {
+      rest = rest.slice(0, rest.indexOf('[Shell Copilot Mode]')).trim();
+    }
+    if (rest) promptParts.push(rest);
+    return {
+      shellCommand: existingShellCommand || '/shell',
+      content: promptParts.join('\n').trim(),
+    };
+  }
+
   function enrichUserMessageForDisplay(msg) {
     if (!msg || msg.role !== 'user') return msg;
     var cloned = Object.assign({}, msg);
     var text = typeof cloned.content === 'string' ? cloned.content : '';
+    var shellSplit = splitShellCommandFromContent(text, cloned.shellCommand);
+    if (shellSplit.shellCommand) {
+      cloned.shellCommand = shellSplit.shellCommand;
+      text = shellSplit.content;
+      cloned.content = text;
+    }
     var skills = Array.isArray(cloned.skills) && cloned.skills.length
       ? cloned.skills.slice()
       : parseSkillRefsFromContent(text);
@@ -435,10 +494,50 @@ window.ChatSession = (function () {
     return false;
   }
 
+  /** 用服务端用户消息补丁本地条目（含 shellCommand / 正文拆分），返回是否有字段变化。 */
+  function patchUserMessageDisplay(id, incoming) {
+    if (!id || !incoming) return false;
+    var enriched = enrichUserMessageForDisplay(incoming);
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].id !== id) continue;
+      var cur = messages[i];
+      var changed = false;
+      if (String(cur.content || '') !== String(enriched.content || '')) {
+        cur.content = enriched.content || '';
+        changed = true;
+      }
+      if ((cur.shellCommand || '') !== (enriched.shellCommand || '')) {
+        if (enriched.shellCommand) cur.shellCommand = enriched.shellCommand;
+        else delete cur.shellCommand;
+        changed = true;
+      }
+      if (enriched.alsoNote) {
+        if (!cur.alsoNote) { cur.alsoNote = true; changed = true; }
+      }
+      if (Array.isArray(enriched.skills)) {
+        cur.skills = enriched.skills.slice();
+        changed = true;
+      }
+      if (Array.isArray(enriched.referencePaths)) {
+        cur.referencePaths = enriched.referencePaths.slice();
+        changed = true;
+      }
+      var persistable = filterPersistableImageUrls(enriched.images || incoming.images);
+      if (persistable.length > 0) {
+        cur.images = persistable.slice();
+        changed = true;
+      }
+      return changed;
+    }
+    return false;
+  }
+
   function insertRemoteUserMessage(msg) {
     if (!msg || msg.role !== 'user') return false;
     if (hasUserMessageId(msg.id)) {
-      return patchUserMessageImages(msg.id, msg.images || []);
+      patchUserMessageDisplay(msg.id, msg);
+      patchUserMessageImages(msg.id, msg.images || []);
+      return true;
     }
     stampMessageTimestamps(msg);
     msg = enrichUserMessageForDisplay(msg);
@@ -521,6 +620,16 @@ window.ChatSession = (function () {
 
   function appendMessage(msg) {
     stampMessageTimestamps(msg);
+    if (msg && msg.role === 'user') {
+      var enriched = enrichUserMessageForDisplay(msg);
+      msg.content = enriched.content;
+      if (enriched.shellCommand) msg.shellCommand = enriched.shellCommand;
+      else delete msg.shellCommand;
+      if (enriched.skills) msg.skills = enriched.skills;
+      else delete msg.skills;
+      if (enriched.referencePaths) msg.referencePaths = enriched.referencePaths;
+      else delete msg.referencePaths;
+    }
     msg._msgIndex = messages.length;
     messages.push(msg);
   }
@@ -633,6 +742,15 @@ window.ChatSession = (function () {
     hasStreamingModelBubble: hasStreamingModelBubble,
     insertRemoteUserMessage: insertRemoteUserMessage,
     patchUserMessageImages: patchUserMessageImages,
+    patchUserMessageDisplay: patchUserMessageDisplay,
+    prepareUserMessageForDisplay: enrichUserMessageForDisplay,
+    getMessageById: function (id) {
+      if (!id) return null;
+      for (var i = 0; i < messages.length; i++) {
+        if (messages[i].id === id) return messages[i];
+      }
+      return null;
+    },
     hasUserMessageId: hasUserMessageId,
     mergeUserMessagesFromServer: mergeUserMessagesFromServer,
     fetchAndMergeRemoteUserMessages: fetchAndMergeRemoteUserMessages,

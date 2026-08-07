@@ -6,6 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { analyzeShellHostSafety } from './shell-host-guard.js';
+import { collectExpandedShellCommands } from './shell-command-parser.js';
 import { resolveMainConfigPath } from '../config/main-config-supervisor-mode.js';
 import type { IceCoderConfigFile } from '../web/types.js';
 
@@ -34,11 +35,31 @@ export const DEFAULT_SHELL_BLACKLIST_PATTERNS: string[] = [
   'DROP\\s+(TABLE|DATABASE)',
 ];
 
+/**
+ * 不受 shellBlacklist 配置影响的灾难性命令。
+ *
+ * 这里只放“任何场景都不应由协管 PTY 执行”的最小集合；其余高风险命令由
+ * shellMandatoryConfirm 处理。模式允许 sudo、组合短参数及 `--` 参数终止符。
+ */
+export const SHELL_HARD_BLOCK_PATTERNS: ReadonlyArray<{
+  label: string;
+  re: RegExp;
+}> = [
+  {
+    label: 'rm_recursive_force_root',
+    re: /(?:^|[;&|]\s*)(?:sudo\s+)?rm\s+(?=[^;&|\r\n]*?(?:-(?!-)[^\s;&|]*r[^\s;&|]*|--recursive)(?:\s|$))(?=[^;&|\r\n]*?(?:-(?!-)[^\s;&|]*f[^\s;&|]*|--force)(?:\s|$))(?:--?[^\s;&|]+\s+)*(?:--\s+)?["']?\/(?:\*+)?["']?(?=\s*(?:$|[;&|\r\n]))/i,
+  },
+  {
+    label: 'format_drive',
+    re: /(?:^|[;&|]\s*)format(?:\.com)?\s+[a-z]:(?:\s|$)/i,
+  },
+];
+
 export interface ShellSandboxResult {
   blocked: boolean;
   message?: string;
   matchLabel?: string;
-  reason?: 'host_kill' | 'blacklist';
+  reason?: 'hard_block' | 'host_kill' | 'blacklist';
 }
 
 let cachedPatterns: RegExp[] | null = null;
@@ -110,9 +131,44 @@ export function findShellBlacklistMatch(
   configPath?: string,
 ): { matched: boolean; pattern?: string } {
   const patterns = readShellBlacklistPatternsSync(configPath ?? resolveMainConfigPath());
-  for (const re of patterns) {
-    if (re.test(command)) {
-      return { matched: true, pattern: re.source };
+  for (const segment of collectExpandedShellCommands(command)) {
+    for (const re of patterns) {
+      if (re.test(segment)) {
+        return { matched: true, pattern: re.source };
+      }
+    }
+  }
+  return { matched: false };
+}
+
+/** 去掉成对分组括号，避免 `(rm -rf /)` 一类包装绕过锚定 hard block。 */
+function unwrapShellGrouping(segment: string): string {
+  let current = segment.trim();
+  for (let i = 0; i < 4; i++) {
+    if (
+      (current.startsWith('(') && current.endsWith(')'))
+      || (current.startsWith('{') && current.endsWith('}'))
+      || (current.startsWith('[') && current.endsWith(']'))
+    ) {
+      current = current.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return current.replace(/^[(\[{]+\s*/, '');
+}
+
+export function findShellHardBlockMatch(
+  command: string,
+): { matched: boolean; label?: string } {
+  for (const segment of collectExpandedShellCommands(command)) {
+    const candidates = [segment, unwrapShellGrouping(segment)];
+    for (const candidate of candidates) {
+      for (const pattern of SHELL_HARD_BLOCK_PATTERNS) {
+        if (pattern.re.test(candidate)) {
+          return { matched: true, label: pattern.label };
+        }
+      }
     }
   }
   return { matched: false };
@@ -123,29 +179,44 @@ export function findShellBlacklistMatch(
  */
 export function analyzeShellSandbox(
   command: string,
-  options?: { workDir?: string; configPath?: string },
+  options?: { workDir?: string; configPath?: string; includeBlacklist?: boolean },
 ): ShellSandboxResult {
   const trimmed = command.trim();
   if (!trimmed) return { blocked: false };
 
-  const hostResult = analyzeShellHostSafety(trimmed, { workDir: options?.workDir });
-  if (hostResult.blocked) {
+  // hard block 必须先于可配置黑名单，且不能被 shellBlacklist: [] 关闭。
+  const hardBlock = findShellHardBlockMatch(trimmed);
+  if (hardBlock.matched) {
     return {
       blocked: true,
-      reason: 'host_kill',
-      matchLabel: hostResult.matchLabel,
-      message: hostResult.message,
+      reason: 'hard_block',
+      matchLabel: hardBlock.label,
+      message: `[Sandbox / Hard Block] Catastrophic command rejected (${hardBlock.label}).`,
     };
   }
 
-  const blacklist = findShellBlacklistMatch(trimmed, options?.configPath);
-  if (blacklist.matched) {
-    return {
-      blocked: true,
-      reason: 'blacklist',
-      matchLabel: blacklist.pattern,
-      message: `[Sandbox / Blocked] Command matches shell blacklist (${blacklist.pattern}).`,
-    };
+  for (const segment of collectExpandedShellCommands(trimmed)) {
+    const hostResult = analyzeShellHostSafety(segment, { workDir: options?.workDir });
+    if (hostResult.blocked) {
+      return {
+        blocked: true,
+        reason: 'host_kill',
+        matchLabel: hostResult.matchLabel,
+        message: hostResult.message,
+      };
+    }
+  }
+
+  if (options?.includeBlacklist !== false) {
+    const blacklist = findShellBlacklistMatch(trimmed, options?.configPath);
+    if (blacklist.matched) {
+      return {
+        blocked: true,
+        reason: 'blacklist',
+        matchLabel: blacklist.pattern,
+        message: `[Sandbox / Blocked] Command matches shell blacklist (${blacklist.pattern}).`,
+      };
+    }
   }
 
   return { blocked: false };

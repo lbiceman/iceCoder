@@ -29,6 +29,7 @@ window.Modal = (function () {
    * @param {string}  [opts.confirmText='确认']
    * @param {string}  [opts.cancelText='取消']
    * @param {boolean} [opts.dangerConfirm=false] - 确认按钮使用 danger 样式
+   * @param {'confirm'|'cancel'} [opts.defaultFocus='confirm'] - 默认焦点按钮
    * @returns {Promise<boolean>} resolve(true) 确认 / resolve(false) 取消
    */
   function confirm(opts) {
@@ -116,7 +117,9 @@ window.Modal = (function () {
           close(false);
         } else if (e.key === 'Enter') {
           e.preventDefault();
-          close(true);
+          // Enter 只执行当前真实焦点按钮。danger 弹框默认焦点为取消时，
+          // 不得被 document 级快捷键反向批准。
+          close(document.activeElement === confirmBtn);
         }
       }
       document.addEventListener('keydown', onKeydown);
@@ -130,7 +133,11 @@ window.Modal = (function () {
       dismissRef = close;
       activeDismiss = close;
 
-      confirmBtn.focus();
+      if (opts.defaultFocus === 'cancel') {
+        cancelBtn.focus();
+      } else {
+        confirmBtn.focus();
+      }
     });
   }
 

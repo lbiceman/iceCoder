@@ -5,6 +5,8 @@ export interface UserMessageDisplayFields {
   content: string;
   skills?: string[];
   referencePaths?: string[];
+  /** `/shell` 模式指令；与 content（提示词）分离展示 */
+  shellCommand?: string;
 }
 
 function normalizeReferencePath(raw: string): string {
@@ -64,6 +66,41 @@ function stripReferencePathLines(text: string, referencePaths: string[]): string
     .trim();
 }
 
+/** 将 `/shell` / `/shell <prompt>` 拆成模式标记与提示词正文。 */
+function splitShellCommandFromContent(text: string): { shellCommand?: string; content: string } {
+  const raw = String(text || '');
+  const lines = raw.split(/\r?\n/);
+  let shellLineIndex = -1;
+  let shellLine = '';
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i]?.trim() ?? '';
+    if (t === '/shell' || t.startsWith('/shell ')) {
+      if (t === '/shell exit' || t.startsWith('/shell exit ')) {
+        return { content: raw };
+      }
+      shellLineIndex = i;
+      shellLine = t;
+      break;
+    }
+  }
+  if (shellLineIndex < 0) return { content: raw.trim() };
+
+  const after = shellLine.slice('/shell'.length).trim();
+  const promptParts: string[] = [];
+  if (after) promptParts.push(after);
+  let rest = lines.slice(shellLineIndex + 1).join('\n').trim();
+  if (rest.startsWith('[Shell Copilot Mode]')) rest = '';
+  else {
+    const bannerIdx = rest.indexOf('[Shell Copilot Mode]');
+    if (bannerIdx >= 0) rest = rest.slice(0, bannerIdx).trim();
+  }
+  if (rest) promptParts.push(rest);
+  return {
+    shellCommand: '/shell',
+    content: promptParts.join('\n').trim(),
+  };
+}
+
 /** 从完整发送文本拆出 UI 展示字段（正文 + 技能/文件引用元数据）。 */
 export function buildUserMessageDisplayFields(
   fullText: string,
@@ -71,17 +108,20 @@ export function buildUserMessageDisplayFields(
   explicitSkills: string[] = [],
 ): UserMessageDisplayFields {
   const text = String(fullText || '');
+  const shellSplit = splitShellCommandFromContent(text);
+  const workingText = shellSplit.content;
   const skills = explicitSkills.length > 0
     ? explicitSkills.slice()
-    : parseAllSkillRefsFromMessage(text);
+    : parseAllSkillRefsFromMessage(workingText);
   const referencePaths = explicitReferencePaths.length > 0
     ? explicitReferencePaths.slice()
-    : extractReferencePathsFromContent(text);
+    : extractReferencePathsFromContent(workingText);
 
-  let content = stripReferencePathLines(text, referencePaths);
+  let content = stripReferencePathLines(workingText, referencePaths);
   content = stripSkillRefsFromDisplayText(content, skills);
 
   const result: UserMessageDisplayFields = { content };
+  if (shellSplit.shellCommand) result.shellCommand = shellSplit.shellCommand;
   if (skills.length > 0) result.skills = skills;
   if (referencePaths.length > 0) result.referencePaths = referencePaths;
   return result;
