@@ -71,4 +71,39 @@ describe('Modal keyboard safety', () => {
       await page.close();
     }
   });
+
+  it('overlay click and Escape do not dismiss the confirm dialog', async () => {
+    const page = await browser.newPage();
+    try {
+      await page.setContent('<html><body></body></html>');
+      await page.addScriptTag({ content: MODAL_SOURCE });
+      await page.evaluate(() => {
+        (window as any).__modalResult = undefined;
+        (window as any).Modal.confirm({
+          title: '危险操作确认',
+          message: 'fs_operation (delete)',
+          dangerConfirm: true,
+          defaultFocus: 'cancel',
+        }).then((value: boolean) => {
+          (window as any).__modalResult = value;
+        });
+      });
+
+      await expect.poll(() => page.locator('.modal-overlay.visible').count()).toBe(1);
+      await page.locator('.modal-overlay').click({ position: { x: 8, y: 8 } });
+      await page.waitForTimeout(100);
+      expect(await page.evaluate(() => (window as any).__modalResult)).toBeUndefined();
+      await expect.poll(() => page.locator('.modal-overlay.visible').count()).toBe(1);
+
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(100);
+      expect(await page.evaluate(() => (window as any).__modalResult)).toBeUndefined();
+      await expect.poll(() => page.locator('.modal-overlay.visible').count()).toBe(1);
+
+      await page.locator('.modal-btn:not(.primary):not(.danger)').click();
+      await expect.poll(() => page.evaluate(() => (window as any).__modalResult)).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
 });

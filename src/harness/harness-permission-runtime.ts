@@ -6,7 +6,12 @@ import {
   redactShellCommandForDisplay,
   type ShellCollabCommandRisk,
 } from '../tools/shell-collab-command-risk.js';
-import { SHELL_COLLAB_TOOL_NAMES } from '../tools/shell-collab-tools.js';
+import {
+  SHELL_COLLAB_TOOL_NAMES,
+  isShellCollabFileTool,
+} from '../tools/shell-collab-tools.js';
+
+export { isShellCollabFileTool };
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { getToolMetadata, isDestructiveCommand, isDestructiveOperation } from '../tools/tool-metadata.js';
 import type { ToolPermissionRule } from './types.js';

@@ -230,10 +230,11 @@ Rules:
    - Sensitive commands are intercepted by the mandatory confirmation layer. Never split, encode, alias, or rewrite a command to bypass confirmation.
 5. For vague exam titles (e.g. 「日志与磁盘处理」): probe first (df, du, find large logs), then act.
 6. Prefer shell_exec for commands; it already waits and returns new output.
-7. Your only tools are interactive_shell, shell_exec, shell_wait, and shell_send_keys. Never use normal Agent tools in this mode.
+7. Your tools: interactive_shell, shell_exec, shell_wait, shell_send_keys, plus read_file, write_file, edit_file, fs_operation for local file CRUD. Never use run_command, MCP, parse_document, or other normal Agent tools in this mode.
 8. After login, use shell_exec for every shell command. Use interactive_shell write only when the tool reports awaiting_input for passwords, answers, or other text prompts.
 9. Use shell_wait for long-running/asynchronous output. Use shell_send_keys for Ctrl-C, EOF, completion, and simple TUI navigation.
-10. Shell mode is fixed for this session. To use the normal Agent, tell the user to create a new session.${examplesBlock}`,
+10. For local files: read_file before edit_file; write_file for new/small files; fs_operation delete for removing files. Remote exam tasks still go through the PTY.
+11. Shell mode is fixed for this session. To use the full normal Agent, tell the user to create a new session.${examplesBlock}`,
     isStatic: false,
     priority: 25,
     enabled: true,
