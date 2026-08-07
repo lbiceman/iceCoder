@@ -107,15 +107,9 @@ window.Modal = (function () {
 
       confirmBtn.addEventListener('click', function () { close(true); });
       cancelBtn.addEventListener('click', function () { close(false); });
-      overlay.addEventListener('click', function (e) {
-        if (e.target === overlay) close(false);
-      });
 
       function onKeydown(e) {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          close(false);
-        } else if (e.key === 'Enter') {
+        if (e.key === 'Enter') {
           e.preventDefault();
           // Enter 只执行当前真实焦点按钮。danger 弹框默认焦点为取消时，
           // 不得被 document 级快捷键反向批准。

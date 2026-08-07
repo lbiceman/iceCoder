@@ -4,7 +4,7 @@
 > **版本**：v1.0  
 > **日期**：2026-08-06  
 > **依据**：[`shell-交互协管-slash-shell.md`](./shell-交互协管-slash-shell.md)（需求 v1.8）  
-> **范围**：Phase 1 MVP 全量（PTY · 4 工具 · R9 隔离 · mandatory confirm · UI 标识 · Skill）  
+> **范围**：Phase 1 MVP 全量（PTY · 8 工具 · R9 隔离 · mandatory confirm · UI 标识 · Skill）  
 > **本文件性质**：执行任务清单，不新增产品需求、不修改架构决策。
 
 ---
@@ -333,9 +333,9 @@ Wave 8（E2E 验收）
 
 **Checklist**
 
-- [x] `SHELL_COLLAB_TOOL_NAMES` 常量（需求 §5.6.1）
-- [x] `createShellCollabTools({ sessionId, cwd })` 返回 4 个绑定 session 的 tool 实例
-- [x] **不**注册进全局 `initializeToolSystem()`
+- [x] `SHELL_COLLAB_TOOL_NAMES` 常量（需求 §5.6.1）：4 PTY + 4 文件 CRUD
+- [x] `createShellCollabTools({ sessionId, cwd })` 返回 8 个绑定 session 的 tool 实例
+- [x] PTY 专用工具**不**注册进全局 `initializeToolSystem()`（文件 CRUD 复用全局实现，经 Shell 专用 Registry 注入）
 
 **验收**
 
@@ -487,7 +487,7 @@ Wave 8（E2E 验收）
 
 **验收**
 
-- [x] T19 definitions 无 `run_command` / 文件 / MCP
+- [x] T19 definitions 无 `run_command` / glob·grep / MCP（含文件 CRUD 四工具）
 
 ---
 
@@ -580,7 +580,7 @@ Wave 8（E2E 验收）
 **Checklist**
 
 - [x] 普通 session：无 Shell 工具
-- [x] Shell session：仅 4 工具；伪造 call 返回 policy error
+- [x] Shell session：严格 8 工具（PTY + 文件 CRUD）；伪造 call 返回 policy error
 - [x] 旧 `/shell exit` 后仍严格保持 Shell 专用 tools
 
 **验收**
@@ -746,7 +746,7 @@ Wave 8（E2E 验收）
 **Checklist**
 
 - [x] `ShellCollabState.active` 时追加 Shell Copilot section（或引用 skill）
-- [x] 不出现 PDF/DOC/文件/MCP/`run_command` 说明
+- [x] 不出现 PDF/DOC/MCP/`run_command`/glob·grep 说明（文件 CRUD 四工具除外）
 
 ---
 
@@ -818,7 +818,7 @@ Wave 8（E2E 验收）
 - 不新增 xterm / 终端面板 / WS 终端推流（需求 §1.4）
 - 不把 Shell 工具注册进全局 `ToolRegistry`
 - 不用「完整 tools + prompt 软提醒」代替 R9 硬隔离
-- 不让 `skipPermissionChecks` 绕过已命中的 `shellMandatoryConfirm`；也不对未命中命令追加普通 permission
+- 不让 `skipPermissionChecks` 绕过已命中的 `shellMandatoryConfirm`；Shell 文件工具（尤其 `fs_operation` delete/move）的 `onConfirm` 亦不受其影响；未命中 shell 命令不追加普通 permission
 - 不在 v1 实现 `/shell ssh …` 带参语法
 - 不修改无关模块风格（最小 diff）
 
