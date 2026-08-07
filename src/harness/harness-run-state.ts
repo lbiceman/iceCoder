@@ -108,6 +108,8 @@ export interface HarnessRunState {
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */
   missingFileAttempts: Map<string, number>;
+  /** 本 run 内已被用户拒绝的 Shell mandatory-confirm 键。 */
+  shellMandatoryConfirmDenials: Set<string>;
   /** Harness 策略拦截 / 恢复统计（telemetry summary） */
   harnessPolicyStats: HarnessPolicyStats;
   /** 续跑 Pre-flight 已做 checkpoint fork（首轮跳过常规压缩/记忆扩展） */

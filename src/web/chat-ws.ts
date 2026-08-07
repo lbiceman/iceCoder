@@ -21,14 +21,14 @@ import { finalizeMessagesForApi } from '../harness/context-assembler.js';
 import { buildTotalTokenUsageWithContext } from '../harness/context-usage-display.js';
 import { evaluateIncompleteTaskStopHook } from '../harness/incomplete-task-stop-hook.js';
 import type { HarnessConfig, StopReason } from '../harness/types.js';
+import type { ShellMandatoryConfirmRequest } from '../harness/harness-permission-runtime.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import type { MCPManager } from '../mcp/mcp-manager.js';
-import { buildMcpRuntimeContext } from '../mcp/mcp-runtime-context.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
-import { resolveWorkspaceToolContext } from '../harness/workspace-run-context.js';
+import { resolveSessionHarnessToolContext } from '../session/session-tool-policy.js';
 import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
@@ -39,12 +39,24 @@ import { randomUUID } from 'node:crypto';
 import {
   parseNextCommand,
   parseAlsoCommand,
+  parseShellCommand,
   PENDING_NOTE_USAGE_MESSAGE,
   queueAlsoNote,
   setActiveAlsoRun,
   clearPendingNoteForRun,
   clearPendingNotesForSession,
 } from '../session/pending-note.js';
+import {
+  getShellCollabState,
+  setShellCollabActive,
+  buildShellCollabActiveIndex,
+  resolveShellCollabActive,
+  loadForSession,
+} from '../session/shell-collab-store.js';
+import {
+  getInteractiveShellManagerFor,
+  type InteractiveShellTaskSummary,
+} from '../tools/interactive-shell-manager.js';
 import {
   getTaskQueueManager,
   type QueuedTask,
@@ -79,6 +91,7 @@ function stripReferencePathLinesForWorkspaceLock(message: string, referencePaths
     .trim();
 }
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
+import { assembleShellCollabPrompt } from '../prompts/shell-collab-prompt.js';
 import type { AssembledPrompt } from '../prompts/types.js';
 import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
 import {
@@ -127,6 +140,7 @@ import { BgTaskPusher, buildBgTaskRunningSnapshot, type BgTaskUpdateEntry } from
 import { syncSessionBgTasksFromManager, clearSessionBgTasks } from '../session/bg-tasks-store.js';
 import { getBackgroundTaskManagerFor, findBackgroundTaskManagerOwning, disposeBackgroundTaskManagerForSession } from '../tools/background-task-manager.js';
 import { stopAllShellWorkForSession, stopAllShellWork, stopForegroundShellWorkForSession } from '../tools/session-shell-control.js';
+import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import {
   formatToolArgsDetailPreview,
   resolveToolCallInitialStatus,
@@ -441,6 +455,187 @@ function isOpenLegacyCommand(content: string): boolean {
 
 const NEXT_USAGE_MESSAGE = '用法: /next <任务描述>';
 
+const SHELL_COLLAB_ENTERED_MESSAGE =
+  '当前会话已进入 Shell 协作模式（只需 /shell 一次）。后续直接说话即可，无需再带 /shell。';
+const SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE = '已在 Shell 协作模式。';
+const SHELL_COLLAB_EXIT_DISABLED_MESSAGE =
+  'Shell 协作模式已固定到当前会话，不能退出；如需普通 Agent，请新建会话。';
+const SHELL_COLLAB_BUSY_ENTER_MESSAGE =
+  '当前会话仍有任务运行，不能切换为 Shell 协作模式；请等待任务结束后重试 /shell。';
+const shellCollabTransitions = new Map<string, Promise<void>>();
+
+function queueShellCollabTransition(sessionId: string, operation: () => Promise<void>): Promise<void> {
+  const previous = shellCollabTransitions.get(sessionId) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  shellCollabTransitions.set(sessionId, current);
+  const cleanup = () => {
+    if (shellCollabTransitions.get(sessionId) === current) {
+      shellCollabTransitions.delete(sessionId);
+    }
+  };
+  void current.then(cleanup, cleanup);
+  return current;
+}
+
+async function waitForShellCollabTransition(sessionId: string): Promise<void> {
+  await shellCollabTransitions.get(sessionId)?.catch(() => {});
+}
+
+const SESSION_INDEX_FILE = path.join(SESSIONS_DIR, 'index.json');
+
+async function readSessionIdsFromIndex(): Promise<string[]> {
+  try {
+    const raw = await fsPromises.readFile(SESSION_INDEX_FILE, 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [activeSessionId];
+    const ids = parsed
+      .map((entry) => (entry && typeof entry === 'object' ? (entry as { id?: string }).id : undefined))
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    return ids.length > 0 ? ids : [activeSessionId];
+  } catch {
+    return [activeSessionId];
+  }
+}
+
+async function buildShellCollabWsExtras(sessionId: string): Promise<{
+  shellCollabActive: boolean;
+  shellCollabActiveBySession: Record<string, boolean>;
+}> {
+  const sessionIds = await readSessionIdsFromIndex();
+  const ids = sessionIds.includes(sessionId) ? sessionIds : [...sessionIds, sessionId];
+  const shellCollabActiveBySession = await buildShellCollabActiveIndex(ids, SESSIONS_DIR);
+  return {
+    shellCollabActive: shellCollabActiveBySession[sessionId] === true,
+    shellCollabActiveBySession,
+  };
+}
+
+async function findRunningInteractiveShellForSession(
+  sessionId: string,
+): Promise<InteractiveShellTaskSummary | null> {
+  const workspace = await resolveSessionWorkspacePayload(sessionId);
+  const workDir = workspace.workspaceRoot ?? DEFAULT_WORK_DIR;
+  const mgr = getInteractiveShellManagerFor(sessionId, workDir);
+  return mgr.listForSession().find((task) => task.status === 'running') ?? null;
+}
+
+/** @returns 是否完成模式切换（busy 拒绝进入时为 false） */
+async function handleShellCollabRoute(
+  ws: WebSocket,
+  sessionId: string,
+  action: 'enter' | 'exit',
+  rawContent: string,
+  clientMessageId?: string,
+  prompt: string = '',
+): Promise<boolean> {
+  // 进程重启后内存 Map 为空，须先从 sidecar 恢复再判断 active（T15/T16 幂等）。
+  await loadForSession(sessionId, SESSIONS_DIR);
+
+  const now = Date.now();
+  const userMsgId = clientMessageId ?? randomUUID();
+  const trimmedPrompt = String(prompt || '').trim();
+  const userMessage = action === 'enter'
+    ? {
+        role: 'user' as const,
+        content: trimmedPrompt,
+        id: userMsgId,
+        sentAt: now,
+        shellCommand: '/shell' as const,
+      }
+    : {
+        role: 'user' as const,
+        content: rawContent.trim(),
+        id: userMsgId,
+        sentAt: now,
+      };
+
+  if (action === 'exit') {
+    await appendMessages([userMessage], sessionId);
+    broadcastToSession(sessionId, {
+      type: 'user_message_appended',
+      sessionId,
+      message: userMessage,
+    });
+    sendJSON(ws, { type: 'info', message: SHELL_COLLAB_EXIT_DISABLED_MESSAGE });
+    return true;
+  }
+
+  const wasActive = getShellCollabState(sessionId)?.active === true;
+  if (!wasActive && hasBusySessionRun(sessionId)) {
+    sendJSON(ws, { type: 'info', message: SHELL_COLLAB_BUSY_ENTER_MESSAGE });
+    return false;
+  }
+  await setShellCollabActive(sessionId, true, SESSIONS_DIR);
+  const runningTask = await findRunningInteractiveShellForSession(sessionId);
+
+  // 已在模式且带提示词：只写用户气泡，跳过「已在模式中」，提示词交给后续入队执行。
+  const skipAlreadyActiveBubble = wasActive && !!trimmedPrompt;
+  const agentMessage = skipAlreadyActiveBubble
+    ? null
+    : {
+        role: 'agent' as const,
+        content: wasActive ? SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE : SHELL_COLLAB_ENTERED_MESSAGE,
+        id: randomUUID(),
+        completedAt: now,
+      };
+
+  await appendMessages(
+    agentMessage ? [userMessage, agentMessage] : [userMessage],
+    sessionId,
+  );
+  broadcastToSession(sessionId, {
+    type: 'user_message_appended',
+    sessionId,
+    message: userMessage,
+  });
+
+  if (trimmedPrompt) {
+    const autoTitle = await applyFirstPromptSessionTitle(sessionId, trimmedPrompt);
+    broadcastSessionUpdated(
+      'user_message',
+      autoTitle ? { sessionId, title: autoTitle } : { sessionId },
+      ws,
+    );
+  }
+
+  if (wasActive) {
+    if (!skipAlreadyActiveBubble) {
+      sendJSON(ws, { type: 'info', message: SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE });
+    }
+    broadcastToSession(sessionId, {
+      type: 'shell_collab_entered',
+      sessionId,
+      sticky: true,
+      shellCollabActive: true,
+      idempotent: true,
+    });
+  } else if (agentMessage) {
+    broadcastToSession(sessionId, {
+      type: 'shell_collab_entered',
+      sessionId,
+      sticky: true,
+      shellCollabActive: true,
+      message: agentMessage,
+    });
+  }
+
+  if (runningTask) {
+    broadcastToSession(sessionId, {
+      type: 'shell_collab_resumed',
+      sessionId,
+      taskId: runningTask.taskId,
+      status: runningTask.status,
+    });
+  }
+
+  console.log(
+    `[chat-ws] /shell enter session=${sessionId.slice(0, 8)} `
+    + `wasActive=${wasActive} resumed=${runningTask?.taskId ?? 'none'} `
+    + `prompt=${trimmedPrompt ? 'yes' : 'no'}`,
+  );
+  return true;
+}
+
 async function publishTaskQueueState(sessionId: string): Promise<void> {
   const items = await getTaskQueueManager(SESSIONS_DIR).list(sessionId);
   broadcastToSession(sessionId, { type: 'task_queue_updated', sessionId, items });
@@ -501,6 +696,7 @@ async function persistImplicitQueuedUserMessage(
     role: 'user',
     id: taskInput.messageId,
     content: display.content,
+    ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
     ...(display.skills ? { skills: display.skills } : {}),
     ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
     ...(taskInput.images && taskInput.images.length > 0 ? { images: taskInput.images } : {}),
@@ -546,6 +742,7 @@ interface PendingConfirm {
   toolName: string;
   resolve: (approved: boolean) => void;
   timer: ReturnType<typeof setTimeout>;
+  confirmKind?: 'shell_mandatory';
 }
 const pendingConfirms = new Map<string, PendingConfirm>();
 let nextConfirmIdCounter = 1;
@@ -563,8 +760,62 @@ function resolveConfirm(confirmId: string, approved: boolean, reason: 'reply' | 
     toolName: entry.toolName,
     approved,
     reason,
+    ...(entry.confirmKind ? { confirmKind: entry.confirmKind } : {}),
   });
   entry.resolve(approved);
+}
+
+function createShellMandatoryConfirmHandler(
+  runSessionId: string,
+): (request: ShellMandatoryConfirmRequest) => Promise<boolean> {
+  return (request) => new Promise<boolean>((resolve) => {
+    const confirmId = nextConfirmId();
+    const toolName = formatShellMandatoryConfirmToolName(request);
+    const timer = setTimeout(() => {
+      if (pendingConfirms.has(confirmId)) {
+        broadcastToSession(runSessionId, {
+          type: 'confirm_timeout',
+          confirmId,
+          toolName,
+          confirmKind: 'shell_mandatory',
+        });
+        resolveConfirm(confirmId, false, 'timeout');
+      }
+    }, 60_000);
+    pendingConfirms.set(confirmId, {
+      sessionId: runSessionId,
+      toolName,
+      resolve,
+      timer,
+      confirmKind: 'shell_mandatory',
+    });
+    broadcastToSession(runSessionId, {
+      type: 'confirm',
+      confirmId,
+      toolName,
+      args: {
+        ...redactToolArguments(request.toolName, request.args),
+        command: request.commandDisplay,
+      },
+      confirmKind: 'shell_mandatory',
+      shellMandatory: {
+        sessionId: request.sessionId,
+        taskId: request.taskId,
+        command: request.commandDisplay,
+        matchedPattern: request.risk.matchedPattern,
+        category: request.risk.category,
+        impact: request.risk.impact,
+        normalizedCommandHash: request.normalizedCommandHash,
+      },
+    });
+  });
+}
+
+function formatShellMandatoryConfirmToolName(request: ShellMandatoryConfirmRequest): string {
+  const short = request.commandDisplay.length > 60
+    ? `${request.commandDisplay.substring(0, 57)}...`
+    : request.commandDisplay;
+  return `${request.toolName} (${short})`;
 }
 
 /** 已删除会话 tombstone：阻止异步刷盘在 purge 之后 resurrect 文件 */
@@ -1273,6 +1524,8 @@ async function appendMessages(
     images?: string[];
     skills?: string[];
     referencePaths?: string[];
+    shellCommand?: string;
+    alsoNote?: boolean;
     sentAt?: number;
     completedAt?: number;
     turnTokenUsage?: { inputTokens: number; outputTokens: number };
@@ -1566,6 +1819,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     const runningTurn = snapshotRunningTurn(activeSessionId);
     const runtimeExtras = await buildConnectedPayloadExtras(activeSessionId);
     const bgTasks = await buildBgTasksForSession(activeSessionId);
+    const shellCollabExtras = await buildShellCollabWsExtras(activeSessionId);
     try {
       const [meta, workspace] = await Promise.all([
         resolveDefaultChatModelMeta(),
@@ -1578,6 +1832,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
           activeSessionId,
           ...(meta ? { modelContext: meta } : {}),
           ...workspace,
+          ...shellCollabExtras,
           ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
           ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
           ...(runningTurn ? { runningTurn } : {}),
@@ -1592,6 +1847,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         activeSessionId,
         workspaceRoot: DEFAULT_WORK_DIR,
         defaultWorkDir: DEFAULT_WORK_DIR,
+        ...shellCollabExtras,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
         ...(runningTurn ? { runningTurn } : {}),
@@ -1646,11 +1902,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         // 方案 B4：confirm 多端 first-win
         if (msg.type === 'confirm_reply') {
           const cid = typeof msg.confirmId === 'string' ? msg.confirmId : '';
-          if (cid && pendingConfirms.has(cid)) {
+          const subscribedSid = wsToSubscribedSession.get(ws) || activeSessionId;
+          const pending = cid ? pendingConfirms.get(cid) : undefined;
+          if (pending && pending.sessionId === subscribedSid) {
             resolveConfirm(cid, !!msg.approved, 'reply');
           } else if (!cid && pendingConfirms.size > 0) {
             // 兼容旧客户端（不带 confirmId）：取该 session 下最早的一个 pending
-            const subscribedSid = wsToSubscribedSession.get(ws) || activeSessionId;
             for (const [k, entry] of pendingConfirms) {
               if (entry.sessionId === subscribedSid) {
                 resolveConfirm(k, !!msg.approved, 'reply');
@@ -1847,10 +2104,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             const newRunningTurn = snapshotRunningTurn(activeSessionId);
             const workspace = await resolveSessionWorkspacePayload(activeSessionId);
             const bgTasks = await buildBgTasksForSession(activeSessionId);
+            const shellCollabActive = await resolveShellCollabActive(activeSessionId, SESSIONS_DIR);
             sendJSON(ws, {
               type: 'session_switched',
               ok: true,
               sessionId: activeSessionId,
+              shellCollabActive,
               ...workspace,
               ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
               ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
@@ -1924,6 +2183,39 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
             });
             return;
           }
+
+          const shellCmd = parseShellCommand(content);
+          if (shellCmd.matched && shellCmd.action) {
+            const shellMessageId = messageId ?? randomUUID();
+            let shellRouteOk = false;
+            await queueShellCollabTransition(runSid, async () => {
+              shellRouteOk = await handleShellCollabRoute(
+                ws,
+                runSid,
+                shellCmd.action!,
+                content,
+                shellMessageId,
+                shellCmd.prompt,
+              );
+            });
+            // `/shell <prompt>`：模式切换成功后，提示词作为普通任务入队（用户气泡已在 route 中写入）
+            if (shellRouteOk && shellCmd.action === 'enter' && shellCmd.prompt.trim()) {
+              const taskInput = await buildEnqueueInput(
+                runSid,
+                shellCmd.prompt,
+                images,
+                referencePaths,
+                shellMessageId,
+                'implicit',
+                skills,
+              );
+              await enqueueAndMaybeKickoff(runSid, ws, taskInput, queueInsertIndex);
+            }
+            return;
+          }
+          // WebSocket message 回调可并发触发；普通消息必须等待同 session 的 /shell
+          // 状态落盘完成后再解析工具域，避免短暂获得普通 Agent 完整工具集。
+          await waitForShellCollabTransition(runSid);
 
           if (isOpenLegacyCommand(content)) {
             if (sessionProcessing.has(runSid)) {
@@ -2111,6 +2403,7 @@ async function handleChatMessage(
         content: display.content,
         id: userMsgId,
         sentAt: userSentAt,
+        ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
         ...(display.skills ? { skills: display.skills } : {}),
         ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
         ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
@@ -2132,6 +2425,7 @@ async function handleChatMessage(
           id: userMsgId,
           content: display.content,
           sentAt: userSentAt,
+          ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
           ...(display.skills ? { skills: display.skills } : {}),
           ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
           ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
@@ -2143,44 +2437,48 @@ async function handleChatMessage(
   const resolvedForDirect =
     typeof userMessageContent === 'string' ? userMessageContent : resolvedMessage;
 
-  // ── 目录列举：服务端直接执行 list_drives / browse_directory，避免模型假列表 ──
-  const direct = await tryDirectFileBrowserTurn({
-    toolExecutor,
-    resolvedText: resolvedForDirect,
-    opensBrowser,
-    lastBrowsedPath: fbs.lastBrowsedPath,
-    platform: process.platform,
-    hasImages: inlineImages.length > 0 || imageUrls.length > 0 || imageAbsolutePaths.length > 0,
-    active: fbs.active,
-  });
-
-  if (direct.handled && direct.variant === 'deterministic') {
-    fbs.lastBrowsedPath = direct.newLastBrowsedPath;
-    console.log(`[chat-ws] file-browser-direct ${direct.toolName} ok=${direct.success}`);
-    await finalizeDirectBrowserTurn(ws, {
-      userStructuredContent: harnessUserMessage,
-      assistantContent: direct.assistantMarkdown,
-      toolTraceBatch: [
-        {
-          toolName: direct.toolName,
-          detail: direct.toolDetail,
-          status: direct.success ? 'success' : 'error',
-        },
-      ],
-      syntheticTool: {
-        toolName: direct.toolName,
-        toolDetail: direct.toolDetail,
-        success: direct.success,
-      },
-      sessionId: runSessionId,
+  // Shell 协作 session 不得进入使用全局 ToolExecutor 的文件浏览旁路。
+  const shellCollabActiveForTurn = await resolveShellCollabActive(runSessionId, SESSIONS_DIR);
+  if (!shellCollabActiveForTurn) {
+    // ── 目录列举：服务端直接执行 list_drives / browse_directory，避免模型假列表 ──
+    const direct = await tryDirectFileBrowserTurn({
+      toolExecutor,
+      resolvedText: resolvedForDirect,
+      opensBrowser,
+      lastBrowsedPath: fbs.lastBrowsedPath,
+      platform: process.platform,
+      hasImages: inlineImages.length > 0 || imageUrls.length > 0 || imageAbsolutePaths.length > 0,
+      active: fbs.active,
     });
-    return 'model_done';
-  }
 
-  if (direct.handled && direct.variant === 'harness_augment') {
-    fbs.lastBrowsedPath = direct.newLastBrowsedPath;
-    harnessUserMessage = direct.augmentedUserText;
-    console.log('[chat-ws] file-browser-direct harness_augment (browse_directory output injected)');
+    if (direct.handled && direct.variant === 'deterministic') {
+      fbs.lastBrowsedPath = direct.newLastBrowsedPath;
+      console.log(`[chat-ws] file-browser-direct ${direct.toolName} ok=${direct.success}`);
+      await finalizeDirectBrowserTurn(ws, {
+        userStructuredContent: harnessUserMessage,
+        assistantContent: direct.assistantMarkdown,
+        toolTraceBatch: [
+          {
+            toolName: direct.toolName,
+            detail: direct.toolDetail,
+            status: direct.success ? 'success' : 'error',
+          },
+        ],
+        syntheticTool: {
+          toolName: direct.toolName,
+          toolDetail: direct.toolDetail,
+          success: direct.success,
+        },
+        sessionId: runSessionId,
+      });
+      return 'model_done';
+    }
+
+    if (direct.handled && direct.variant === 'harness_augment') {
+      fbs.lastBrowsedPath = direct.newLastBrowsedPath;
+      harnessUserMessage = direct.augmentedUserText;
+      console.log('[chat-ws] file-browser-direct harness_augment (browse_directory output injected)');
+    }
   }
 
   if (
@@ -2203,7 +2501,7 @@ async function handleChatMessage(
   const modelMeta = await resolveDefaultChatModelMeta(MAIN_CONFIG_PATH);
 
   const workspaceMessage = stripReferencePathLinesForWorkspaceLock(message, explicitReferencePaths);
-  const wsCtx = await resolveWorkspaceToolContext({
+  const sessionToolCtx = await resolveSessionHarnessToolContext({
     sessionDir: SESSIONS_DIR,
     sessionId: runSessionId,
     userMessage: workspaceMessage,
@@ -2214,18 +2512,24 @@ async function handleChatMessage(
     llmAdapter,
     mcpManager,
   });
-  toolDefs = wsCtx.toolDefs;
-  const effectiveWorkspace = wsCtx.effectiveWorkspaceRoot;
-  const runToolExecutor = wsCtx.toolExecutor;
-  const mcpRuntimeContext = buildMcpRuntimeContext(
-    mcpManager,
-    toolDefs.map((t) => t.name),
+  toolDefs = sessionToolCtx.toolDefs;
+  const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
+  const runToolExecutor = sessionToolCtx.toolExecutor;
+  const toolNames = toolDefs.map((tool) => tool.name);
+  console.log(
+    `[chat-ws] harness tool policy session=${runSessionId.slice(0, 8)} `
+    + `shellCollabActive=${sessionToolCtx.shellCollabActive} `
+    + `toolNames=${toolNames.join(',')}`,
   );
+  const effectiveAssembled = sessionToolCtx.shellCollabActive
+    ? await assembleShellCollabPrompt(assembled)
+    : assembled;
+  const mcpRuntimeContext = sessionToolCtx.mcpRuntimeContext;
   const runNoteId = getRunningTurn(runSessionId)?.runId;
   if (runNoteId != null) {
     setActiveAlsoRun(runSessionId, runNoteId);
   }
-  if (wsCtx.workspace.detection.changed) {
+  if (sessionToolCtx.workspace.detection.changed) {
     broadcastToSession(runSessionId, {
       type: 'workspace_updated',
       sessionId: runSessionId,
@@ -2236,9 +2540,11 @@ async function handleChatMessage(
 
   const harnessConfig: HarnessConfig = {
     context: {
-      systemPrompt: assembled.systemPrompt,
+      systemPrompt: effectiveAssembled.systemPrompt,
       tools: shouldDisableRuntimeTools() ? [] : toolDefs,
-      memoryPrompt: await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+      memoryPrompt: sessionToolCtx.shellCollabActive
+        ? undefined
+        : await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
       ...harnessDynamic,
       ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
     },
@@ -2257,7 +2563,9 @@ async function handleChatMessage(
     compactionKeepRecent: 10,
     compactionEnableLLMSummary: true,
     memoryDir: MEMORY_DIR,
-    fileMemoryManager: globalFileMemoryManager ?? undefined,
+    fileMemoryManager: sessionToolCtx.shellCollabActive
+      ? undefined
+      : globalFileMemoryManager ?? undefined,
     sessionDir: SESSIONS_DIR,
     sessionId: runSessionId,
     workspaceRoot: effectiveWorkspace,
@@ -2265,6 +2573,11 @@ async function handleChatMessage(
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
     supervisorBridge: supervisorRuntime.bridge,
+    enableRequestAnalysis: sessionToolCtx.enableRequestAnalysis,
+    shellCollabActive: sessionToolCtx.shellCollabActive,
+    onShellMandatoryConfirm: sessionToolCtx.shellCollabActive
+      ? createShellMandatoryConfirmHandler(runSessionId)
+      : undefined,
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         const confirmId = nextConfirmId();
@@ -2304,7 +2617,7 @@ async function handleChatMessage(
       messageId: userMsgId,
       userMessageTime: userUi?.sentAt ?? Date.now(),
       workspaceRoot: effectiveWorkspace,
-      workspaceState: wsCtx.workspace.state,
+      workspaceState: sessionToolCtx.workspace.state,
       structuredMessages: structuredBase,
       uiMessages,
       priorTrackedPaths: priorTracked,

@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import pkg from '../../package.json' with { type: 'json' };
 
 const require = createRequire(import.meta.url);
-const { BUNDLED_DATA_FILES, BUNDLED_SKILL_FILE } = require('../../scripts/bundled-data-files.cjs') as {
+const { BUNDLED_DATA_FILES, BUNDLED_SKILL_FILES } = require('../../scripts/bundled-data-files.cjs') as {
   BUNDLED_DATA_FILES: string[];
-  BUNDLED_SKILL_FILE: string;
+  BUNDLED_SKILL_FILES: string[];
 };
 
 describe('bundled-data-files', () => {
@@ -15,8 +15,11 @@ describe('bundled-data-files', () => {
     expect(fromPkg).toEqual([...BUNDLED_DATA_FILES].sort());
   });
 
-  it('skills 打包清单仅含创建技能模板', () => {
+  it('skills 打包清单包含创建技能模板与 Shell Copilot', () => {
     const skillFiles = BUNDLED_DATA_FILES.filter((f) => f.startsWith('data/skills/'));
-    expect(skillFiles).toEqual([`data/skills/${BUNDLED_SKILL_FILE}`]);
+    expect(skillFiles.sort()).toEqual(
+      BUNDLED_SKILL_FILES.map((file) => `data/skills/${file}`).sort(),
+    );
+    expect(skillFiles).toContain('data/skills/shellCopilot/skill.md');
   });
 });

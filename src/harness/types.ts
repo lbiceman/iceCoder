@@ -194,6 +194,12 @@ export interface HarnessConfig {
   compactionMaxReinjectFiles?: number;
   /** confirm 权限的回调：返回 true 允许，false 拒绝 */
   onConfirm?: (toolName: string, args: Record<string, any>) => Promise<boolean>;
+  /** Shell 协作模式：命中强制确认规则时的独立回调（不可被 skipPermissionChecks 跳过） */
+  onShellMandatoryConfirm?: (
+    request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
+  ) => Promise<boolean>;
+  /** 当前 session 处于 Shell 协作模式时为 true */
+  shellCollabActive?: boolean;
   /** 记忆文件目录路径（用于文件记忆预取，向后兼容） */
   memoryDir?: string;
   /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */
@@ -217,6 +223,11 @@ export interface HarnessConfig {
   supervisorBridge?: import('./supervisor/supervisor-bridge.js').SupervisorRuntimeBridge;
   /** Async Sub-Agent Phase 4：AnalysisSupervisor；本阶段仅承载依赖，不接入主循环。 */
   analysisSupervisor?: import('./supervisor/analysis-supervisor.js').AnalysisSupervisor;
+  /**
+   * 是否向模型暴露 request_analysis 虚拟工具；默认 true。
+   * 严格工具域（如 Shell 协作模式）必须显式设为 false。
+   */
+  enableRequestAnalysis?: boolean;
 }
 
 /**

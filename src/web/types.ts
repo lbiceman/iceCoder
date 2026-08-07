@@ -62,8 +62,9 @@ export interface IceCoderConfigFile {
    */
   skipPermissionChecks?: boolean;
   /**
-   * Shell 命令黑名单（字符串正则，不含首尾 `/`）。
-   * 缺失时使用内置默认（rm -rf、format、shutdown 等）；空数组 `[]` 表示不启用黑名单。
+   * Shell 协作强制确认规则（字符串正则，不含首尾 `/`）。
+   * 缺失时使用内置默认；空数组 `[]` 表示仅保留不可配置的 hard block / 宿主保护。
+   * 字段名为兼容既有配置暂保留 shellBlacklist。
    */
   shellBlacklist?: string[];
   /**

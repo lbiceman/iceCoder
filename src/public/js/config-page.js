@@ -90,7 +90,7 @@ window.SettingsPage = (function () {
             '<h2 class="settings-section-title">安全与执行</h2>' +
             '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">加载中…</span>' +
           '</div>' +
-          '<p class="settings-section-desc">控制 Agent 工具执行时的权限确认与 Shell 命令拦截规则</p>' +
+          '<p class="settings-section-desc">控制 Agent 工具权限，以及 Shell 协作模式下哪些命令需要强制确认</p>' +
           '<div class="settings-security-grid">' +
           '<div class="settings-card" id="settings-skip-permission-card" hidden>' +
             '<div class="settings-card-row">' +
@@ -111,10 +111,10 @@ window.SettingsPage = (function () {
             '<div class="settings-card-header">' +
               '<div class="settings-card-info">' +
                 '<div class="settings-card-title-row">' +
-                  '<span class="settings-card-title">Shell 命令黑名单</span>' +
+                  '<span class="settings-card-title">Shell 强制确认规则</span>' +
                   '<span class="config-badge is-starting" id="settings-blacklist-count">0 条规则</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">每行一条正则表达式，匹配的 Shell 命令将被拦截；全部清空并保存可禁用黑名单（宿主进程保护仍生效）</p>' +
+                '<p class="settings-card-desc">每行一条正则表达式。Shell 协作模式中，命中的命令执行前必须确认；未命中的命令跳过普通权限确认并直接执行。清空后不再触发规则确认，但灾难性命令 hard block 与宿主进程保护仍始终生效。</p>' +
               '</div>' +
             '</div>' +
             '<div class="settings-blacklist-editor">' +
@@ -122,7 +122,7 @@ window.SettingsPage = (function () {
             '</div>' +
             '<div class="settings-card-footer">' +
               '<button type="button" class="btn btn-secondary" id="settings-blacklist-reset">恢复默认</button>' +
-              '<button type="button" class="btn btn-primary" id="settings-blacklist-save">保存黑名单</button>' +
+              '<button type="button" class="btn btn-primary" id="settings-blacklist-save">保存规则</button>' +
             '</div>' +
           '</div>' +
           '</div>' +
@@ -558,7 +558,7 @@ window.SettingsPage = (function () {
               textarea.value = saved.join('\n');
               textarea.dataset.savedValue = textarea.value;
               updateBlacklistCount(parentEl, saved);
-              if (window.Notification) window.Notification.success('Shell 黑名单已保存');
+              if (window.Notification) window.Notification.success('Shell 强制确认规则已保存');
             } else if (window.Notification) {
               window.Notification.error((result.body && result.body.error) || '保存失败');
             }
@@ -582,7 +582,7 @@ window.SettingsPage = (function () {
               textarea.value = defaults.join('\n');
               updateBlacklistCount(parentEl, defaults);
             }
-            if (window.Notification) window.Notification.info('已填入默认规则，点击「保存黑名单」生效');
+            if (window.Notification) window.Notification.info('已填入默认规则，点击「保存规则」生效');
           })
           .catch(function () {
             if (window.Notification) window.Notification.error('无法加载默认规则');

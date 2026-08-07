@@ -78,7 +78,9 @@ No Node.js required — download the installer (bundled server + Electron shell 
 
 **[Download iceCoder — Windows x64](./releases/windows/iceCoder-windows.exe)**
 
-Configure your API key on first launch. Data directory: `~/.iceCoder/`. Build from source: `npm run build:desktop` or see [`docs/使用文档.md`](./docs/使用文档.md).
+Configure your API key on first launch. Data directory: `~/.iceCoder/`.
+
+**Building the desktop app from source:** run `npm run build:desktop`. On Windows, `/shell` requires rebuilding native `node-pty` for Electron — install **VS 2022 “Desktop development with C++”** plus a **Windows 10/11 SDK**. Spectre-mitigated libs are **bypassed by default** in `desktop/scripts/rebuild-server-native.cjs`. Without a C++ toolchain the rebuild is skipped (packaging still succeeds) but `/shell` will not work in the packaged app. See [`docs/使用文档.md` § Desktop build](./docs/使用文档.md#桌面打包electron) (Chinese).
 
 ### Source / Web / CLI
 
@@ -171,6 +173,7 @@ Disk checkpoints bundle **task state, TaskGraph/runtimeV2, BranchBudget, supervi
 File/Git/Shell, search, URL fetch, Office/XMind parse, **system filesystem browser**, vision `image_read`, etc.; Harness also exposes async **`request_analysis`**. **MCP** registers external server tools into the same `ToolRegistry`.
 
 - **Shell dual-track**: long `run_command` jobs go background, short ones foreground; soft timeout can escalate.
+- **`/shell` collaboration**: dedicated session with a **persistent PTY** — agent reads the terminal, you decide in chat (SSH, exams, passwords). Send **`/shell` once** per session; no embedded terminal UI. See [**Shell collaboration**](./docs/shell协作模式.md) (Chinese).
 - **Diff viewer** embeds Git-style diffs for edit tools in chat.
 - **confirm** without a UI callback defaults to **deny** for unattended safety.
 - **MCP settings UI**: start/stop servers, browse tools, edit JSON config (desktop `#/config` / mobile `#/m/config`).
@@ -249,6 +252,8 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 | Doc | Content |
 |-----|---------|
 | [**使用文档**](./docs/使用文档.md) | **Commands** — install, dev, CLI, tests, benchmark, `~` commands |
+| [**Desktop build / node-pty**](./docs/使用文档.md#桌面打包electron) | Electron packaging, VS 2022, Windows SDK, Spectre bypass (Chinese) |
+| [**Shell collaboration / `/shell`**](./docs/shell协作模式.md) | Persistent PTY sessions, SSH/exam workflows (Chinese) |
 | [PROJECT-GUIDE](./docs/PROJECT-GUIDE.md) | Architecture & modules |
 | [项目介绍](./docs/项目介绍.md) | Chinese full reference |
 | [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 design (no vector DB) |

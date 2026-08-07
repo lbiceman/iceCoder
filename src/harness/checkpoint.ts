@@ -7,6 +7,7 @@ import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-sn
 import { engineeringTestTargetPaths, writeConfirmationPaths } from './document-deliverable.js';
 import { checkpointHasPendingWork } from './incomplete-completion.js';
 import { buildCheckpointResumeSummary, sanitizeCheckpointGoal } from './checkpoint-resume-compact.js';
+import { redactToolCalls } from '../tools/tool-argument-redaction.js';
 // ExecutionPlan type removed (Phase 11)
 
 export type TaskCheckpointStatus = 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
@@ -130,7 +131,8 @@ export class TaskCheckpointManager {
 
 export function summarizeToolCalls(toolCalls: ToolCall[] | undefined): string[] {
   if (!toolCalls?.length) return [];
-  return toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`);
+  return (redactToolCalls(toolCalls) ?? [])
+    .map(tc => `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`);
 }
 
 function createTaskId(userGoal: string, isoTimestamp: string): string {

@@ -760,6 +760,63 @@ window.ChatPage = (function () {
     Session.saveMessages();
   }
 
+  var elShellCollabIndicator = null;
+
+  function getShellCollabStore() {
+    return window.ChatSessionStore || null;
+  }
+
+  function isActiveSessionShellCollab() {
+    var Store = getShellCollabStore();
+    var sid = Session.getActiveId ? Session.getActiveId() : 'default';
+    return !!(Store && Store.getShellCollabActive && Store.getShellCollabActive(sid));
+  }
+
+  function syncShellCollabIndicator() {
+    if (!elShellCollabIndicator) return;
+    var active = isActiveSessionShellCollab();
+    elShellCollabIndicator.classList.toggle('hidden', !active);
+    elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+  }
+
+  function notifyShellCollabState(data) {
+    var Store = getShellCollabStore();
+    if (!Store) return;
+    if (data && data.shellCollabActiveBySession && Store.applyShellCollabActiveMap) {
+      Store.applyShellCollabActiveMap(data.shellCollabActiveBySession);
+    } else if (data && data.sessionId && typeof data.shellCollabActive === 'boolean' && Store.setShellCollabActive) {
+      Store.setShellCollabActive(data.sessionId, data.shellCollabActive);
+    }
+    syncShellCollabIndicator();
+    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+      window.ChatSessionSidebar.renderList();
+    }
+  }
+
+  function appendShellCollabAgentMessage(data) {
+    if (!data || !data.message) return;
+    if (data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) return;
+    var msg = data.message;
+    if (!msg || msg.role !== 'agent') return;
+    if (msg.id && Session.getMessages) {
+      var msgs = Session.getMessages();
+      for (var i = 0; i < msgs.length; i++) {
+        if (msgs[i].id === msg.id) return;
+      }
+    }
+    Session.appendMessage(msg);
+    UI.appendMessageEl(msg, Session.stripStatusTag);
+    Session.saveMessages();
+    syncWelcomeState();
+    UI.scheduleScrollIfSticky();
+  }
+
+  function onWsShellCollabEntered(data) {
+    notifyShellCollabState(data);
+    if (!data || data.idempotent) return;
+    appendShellCollabAgentMessage(data);
+  }
+
   function removeAlsoNoteFromUi(messageId) {
     if (!messageId) return;
     delete pendingAlsoMessageIds[messageId];
@@ -965,6 +1022,7 @@ window.ChatPage = (function () {
       window.ChatSessionSidebar.renderList();
     }
     hydrateShellDockForSession(sessionId, options.bgTasks);
+    syncShellCollabIndicator();
   }
 
   function paintInitialChatView() {
@@ -1182,6 +1240,7 @@ window.ChatPage = (function () {
       hydrateShellDockForSession(dockSid, null);
     }
     scheduleShellDockResync();
+    notifyShellCollabState(data || {});
     if (paintedFromSessionSync) return;
     var rt = data && data.runningTurn;
     if ((!rt || !rt.isProcessing) && !skipHeavyFetch) {
@@ -1526,16 +1585,43 @@ window.ChatPage = (function () {
     }
     activeConfirmId = data.confirmId || null;
     activeConfirmResolved = false;
-    var argsText = data.args ? JSON.stringify(data.args) : '';
 
-    Modal.confirm({
-      title: '危险操作确认',
-      message: '工具: ' + data.toolName + '\n参数: ' + argsText,
-      type: 'danger',
-      dangerConfirm: true,
-      confirmText: '允许',
-      cancelText: '拒绝',
-    }).then(function (ok) {
+    var isShellMandatory = data.confirmKind === 'shell_mandatory';
+    var shellInfo = data.shellMandatory || null;
+    var modalOpts;
+
+    if (isShellMandatory && shellInfo) {
+      var lines = [
+        'Session: ' + (shellInfo.sessionId || ''),
+        '命令: ' + (shellInfo.command || ''),
+        '命中规则: ' + (shellInfo.matchedPattern || ''),
+        '风险类别: ' + (shellInfo.category || ''),
+        '影响: ' + (shellInfo.impact || ''),
+        '',
+        '此确认不会被「自动执行」设置跳过。',
+      ];
+      modalOpts = {
+        title: 'Shell 敏感命令确认',
+        message: lines.join('\n'),
+        type: 'danger',
+        dangerConfirm: true,
+        confirmText: '确认执行',
+        cancelText: '取消',
+        defaultFocus: 'cancel',
+      };
+    } else {
+      var argsText = data.args ? JSON.stringify(data.args) : '';
+      modalOpts = {
+        title: '危险操作确认',
+        message: '工具: ' + data.toolName + '\n参数: ' + argsText,
+        type: 'danger',
+        dangerConfirm: true,
+        confirmText: '允许',
+        cancelText: '拒绝',
+      };
+    }
+
+    Modal.confirm(modalOpts).then(function (ok) {
       if (activeConfirmResolved) {
         activeConfirmId = null;
         activeConfirmResolved = false;
@@ -2051,7 +2137,10 @@ window.ChatPage = (function () {
     var existed = Session.hasUserMessageId && Session.hasUserMessageId(msg.id);
     if (!Session.insertRemoteUserMessage || !Session.insertRemoteUserMessage(msg)) return false;
     if (existed) {
-      if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
+      var localMsg = Session.getMessageById ? Session.getMessageById(msg.id) : null;
+      if (localMsg && UI.replaceUserMessageEl) {
+        UI.replaceUserMessageEl(localMsg, Session.stripStatusTag);
+      } else if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
         UI.updateMessageImagesEl(msg.id, msg.images);
       }
       Session.saveMessages();
@@ -2266,6 +2355,12 @@ window.ChatPage = (function () {
                   (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
                 '</button>' +
               '</div>' +
+              '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
+              + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
+              + 'aria-label="Shell 协作模式">'
+              + (window.AppIcon ? window.AppIcon.html('terminal', { width: 13 }) : '')
+              + '<span class="shell-collab-label">Shell协作</span>'
+              + '</span>' +
             '</div>' +
           '</div>' +
           '</div>' +
@@ -2287,6 +2382,7 @@ window.ChatPage = (function () {
     elStatusBar = container.querySelector('#agent-status-bar');
     elStatusTurn = container.querySelector('#status-turn');
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
+    elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
     mainInputWrapper = container.querySelector('.input-wrapper');
     if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
     var composerInputEl = container.querySelector('.composer-input');
@@ -2442,6 +2538,9 @@ window.ChatPage = (function () {
     WS.on('task_queue_updated', onWsTaskQueueUpdated);
     WS.on('also_note_appended', onWsAlsoNoteAppended);
     WS.on('also_rejected', onWsAlsoRejected);
+    WS.on('shell_collab_entered', onWsShellCollabEntered);
+
+    syncShellCollabIndicator();
 
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
       var inputArea = container.querySelector('.chat-input-area');
