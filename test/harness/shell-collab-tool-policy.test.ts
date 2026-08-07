@@ -6,7 +6,7 @@ import { LoopController } from '../../src/harness/loop-controller.js';
 import type { HarnessConfig } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition, UnifiedMessage } from '../../src/llm/types.js';
 import { initializeToolSystem } from '../../src/tools/index.js';
-import { SHELL_COLLAB_TOOL_NAMES } from '../../src/tools/shell-collab-tools.js';
+import { SHELL_COLLAB_TOOL_NAMES, SHELL_ONLY_TOOL_NAMES } from '../../src/tools/shell-collab-tools.js';
 
 function definition(name: string): ToolDefinition {
   return {
@@ -79,7 +79,7 @@ describe('Shell collaboration Harness tool policy', () => {
     const messages: UnifiedMessage[] = [];
     const toolCalls = [
       'run_command',
-      'read_file',
+      'glob',
       'parse_document',
       'mcp_fake_exec',
       'request_analysis',
@@ -114,13 +114,13 @@ describe('Shell collaboration Harness tool policy', () => {
     )).toBe(true);
   });
 
-  it('keeps Shell-only tools out of the global ToolSystem used by /api/tools', async () => {
+  it('keeps shell-only PTY tools out of the global ToolSystem used by /api/tools', async () => {
     const globalTools = initializeToolSystem({
       workDir: '/tmp/workspace',
       fileParser: {} as never,
     });
 
-    for (const name of SHELL_COLLAB_TOOL_NAMES) {
+    for (const name of SHELL_ONLY_TOOL_NAMES) {
       expect(globalTools.registry.has(name)).toBe(false);
       await expect(globalTools.executor.executeTool({
         id: `global-${name}`,

@@ -1832,9 +1832,6 @@ window.ChatPage = (function () {
       '</div>';
     document.body.appendChild(overlay);
     overlay.querySelector('.restore-confirm-cancel').addEventListener('click', closeRestoreConfirmDialog);
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) closeRestoreConfirmDialog();
-    });
     overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
       closeRestoreConfirmDialog();
       dispatchRestoreRuntime(messageId);
@@ -1862,9 +1859,6 @@ window.ChatPage = (function () {
       '</div>';
     document.body.appendChild(overlay);
     overlay.querySelector('.restore-confirm-cancel').addEventListener('click', closeDeleteConfirmDialog);
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay) closeDeleteConfirmDialog();
-    });
     overlay.querySelector('.restore-confirm-ok').addEventListener('click', function () {
       closeDeleteConfirmDialog();
       dispatchDeleteMessage(messageId);
