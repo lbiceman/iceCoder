@@ -744,6 +744,13 @@ window.ChatFileRef = (function () {
     renderChipBar();
   }
 
+  function isInputCursorOnFirstLine(inputEl) {
+    if (!inputEl || typeof inputEl.selectionStart !== 'number') return true;
+    if (inputEl.selectionStart !== inputEl.selectionEnd) return false;
+    var before = inputEl.value.substring(0, inputEl.selectionStart);
+    return before.indexOf('\n') === -1 && before.indexOf('\r') === -1;
+  }
+
   function handleChipBarKeydown(e, inputEl) {
     if (isOpen()) return false;
     if (!selectedPaths.length) return false;
@@ -755,6 +762,7 @@ window.ChatFileRef = (function () {
       if (window.ChatSkills && window.ChatSkills.isOpen && window.ChatSkills.isOpen()) {
         return false;
       }
+      if (!isInputCursorOnFirstLine(inputEl)) return false;
       e.preventDefault();
       chipBarFocused = true;
       chipFocusIndex = selectedPaths.length - 1;
