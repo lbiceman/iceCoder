@@ -305,11 +305,19 @@ window.ChatSkills = (function () {
     return skill || item;
   }
 
+  function isInputCursorOnFirstLine(inputEl) {
+    if (!inputEl || typeof inputEl.selectionStart !== 'number') return true;
+    if (inputEl.selectionStart !== inputEl.selectionEnd) return false;
+    var before = inputEl.value.substring(0, inputEl.selectionStart);
+    return before.indexOf('\n') === -1 && before.indexOf('\r') === -1;
+  }
+
   function handleChipBarKeydown(e, inputEl) {
     if (isOpen()) return false;
     if (!selectedSkills.length) return false;
 
     if (!chipBarFocused && e.key === 'ArrowUp' && !isOpen()) {
+      if (!isInputCursorOnFirstLine(inputEl)) return false;
       e.preventDefault();
       chipBarFocused = true;
       chipFocusIndex = selectedSkills.length - 1;
