@@ -17,7 +17,8 @@ describe('shell-collab prompt (Wave 7.2)', () => {
     expect(section.content).toContain('Shell Copilot Mode (active)');
     expect(section.content).toContain('awaiting_input');
     expect(section.content).toContain('shell_exec');
-    expect(section.content).toContain('Never use normal Agent tools');
+    expect(section.content).toContain('read_file');
+    expect(section.content).toContain('Never use run_command');
   });
 
   it('applyShellCollabPromptOverlay 移除普通 Agent 工具说明', () => {
@@ -26,11 +27,11 @@ describe('shell-collab prompt (Wave 7.2)', () => {
     const overlay = applyShellCollabPromptOverlay(base);
 
     expect(overlay.systemPrompt).toContain('Shell Copilot Mode (active)');
-    expect(overlay.systemPrompt).not.toContain('run_command');
-    expect(overlay.systemPrompt).not.toContain('parse_document');
     expect(overlay.systemPrompt).not.toContain('mcp_');
-    expect(overlay.systemPrompt).not.toContain('read_file');
+    expect(overlay.systemPrompt).toContain('read_file');
     expect(overlay.systemPrompt).not.toContain('request_analysis');
+    expect(overlay.systemPrompt).toContain('Never use run_command');
+    expect(overlay.systemPrompt).toContain('Never use run_command, MCP, parse_document');
 
     const ids = overlay.systemPromptSections.map((s) => s.id);
     for (const removed of SHELL_COLLAB_REMOVED_SECTION_IDS) {

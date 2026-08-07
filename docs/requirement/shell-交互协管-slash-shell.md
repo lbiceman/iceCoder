@@ -503,7 +503,7 @@ const PROMPT_PATTERNS: Array<{ re: RegExp; hint: string }> = [
 | session 状态 | 传给 LLM 的 tools | 执行器 Registry |
 |--------------|-------------------|-----------------|
 | 未进入 `/shell` | 现有 builtin + MCP + `request_analysis` | 现有完整 Registry；**不含任何 Shell 专用工具** |
-| `ShellCollabState.active === true` | **仅 Shell 专用白名单** | Shell 专用 Registry；**仅注册 4 个 Shell 工具** |
+| `ShellCollabState.active === true` | **仅 Shell 专用白名单** | Shell 专用 Registry；注册 8 个白名单工具（4 PTY + 4 文件 CRUD） |
 | 其他 session | 按各自状态独立计算 | 不共享 Shell ToolSystem |
 
 #### 5.6.1 Shell 模式允许工具
@@ -514,23 +514,39 @@ const PROMPT_PATTERNS: Array<{ re: RegExp; hint: string }> = [
 | `shell_exec` | 在当前 PTY 执行一条命令并等待结果；登录后的高频主路径 |
 | `shell_wait` | 等待异步输出、prompt、idle 或 exit，避免空轮询 |
 | `shell_send_keys` | 发送 Ctrl-C、Ctrl-D、Tab、方向键等固定控制键 |
+| `read_file` | 读取工作区本地文件（查） |
+| `write_file` | 创建或覆盖小文件（增） |
+| `edit_file` | 查找替换式修改（改） |
+| `fs_operation` | 文件系统操作；删除用 `operation: delete`（删）；另含 list/create_dir/move/copy |
 
-`run_command` **不在 Shell 模式提供**。本机命令与 SSH/考试 PTY 命令容易混淆；进入 Shell 模式后，所有命令必须通过 `shell_exec` 写入当前 PTY，password / yes-no / text prompt 等交互回答使用 `interactive_shell write`。若用户需要普通编码、文件或本机一次性命令能力，应新建会话。
+`run_command` **不在 Shell 模式提供**。本机命令与 SSH/考试 PTY 命令容易混淆；进入 Shell 模式后，远程/考试命令必须通过 `shell_exec` 写入当前 PTY，password / yes-no / text prompt 等交互回答使用 `interactive_shell write`。本地工作区文件增删改查使用上表四个文件工具。若用户需要 glob/grep/MCP/解析文档等完整 Agent 能力，应新建会话。
 
 唯一白名单常量：
 
 ```typescript
-const SHELL_COLLAB_TOOL_NAMES = [
+const SHELL_ONLY_TOOL_NAMES = [
   'interactive_shell',
   'shell_exec',
   'shell_wait',
   'shell_send_keys',
 ] as const;
+
+const SHELL_FILE_TOOL_NAMES = [
+  'read_file',
+  'write_file',
+  'edit_file',
+  'fs_operation',
+] as const;
+
+const SHELL_COLLAB_TOOL_NAMES = [
+  ...SHELL_ONLY_TOOL_NAMES,
+  ...SHELL_FILE_TOOL_NAMES,
+] as const;
 ```
 
 #### 5.6.2 Shell 模式明确排除
 
-- **文件与搜索**：`read_file`、`write_file`、`append_file`、`edit_file`、`fs_operation`、`file_info`、`glob`、`grep`、`diff_files`、`batch_edit_file`、`patch_file`、`undo_edit`
+- **文件与搜索（超出 CRUD 白名单）**：`append_file`、`file_info`、`glob`、`grep`、`diff_files`、`batch_edit_file`、`patch_file`、`undo_edit`
 - **一次性执行与环境**：`run_command`、`env_info`、`git`
 - **文档与媒体**：`parse_document`、`parse_pptx_deep`、`parse_xmind_deep`、`parse_doc_legacy`、`parse_xlsx_deep`、`image_read`、`notebook_read`
 - **网络与文件浏览**：`fetch_url`、`web_search`、`list_drives`、`browse_directory`、`open_file`
@@ -545,8 +561,8 @@ const SHELL_COLLAB_TOOL_NAMES = [
    - 不允许“完整 tools + prompt 提醒不要调用”的软隔离
 
 2. **专用 Registry / Executor（执行隔离）**
-   - 所有 Shell 专用工具均不注册进 `initializeToolSystem()` 或全局 `ToolRegistry`
-   - Shell 模式创建专用 `ToolRegistry + ToolExecutor`，Registry 中只注册绑定当前 session 的 4 个 Shell 工具
+   - Shell 专用 PTY 工具不注册进 `initializeToolSystem()` 或全局 `ToolRegistry`
+   - Shell 模式创建专用 `ToolRegistry + ToolExecutor`，Registry 中注册绑定当前 session 的 8 个白名单工具（PTY handler + 文件 CRUD 实例）
    - 不先创建完整 ToolSystem 再只过滤 definitions；否则隐藏工具的 handler 仍可被旧 checkpoint、伪造 tool call 或 salvage 路径触达
    - PTY manager 可为进程级单例，但 handler 必须绑定并校验当前 `sessionId`
 
@@ -560,7 +576,7 @@ const SHELL_COLLAB_TOOL_NAMES = [
 - **MCP**：Shell 模式不等待 MCP 初始化、不注册 MCP handler、不构建 `mcpRuntimeContext`
 - **`request_analysis`**：Harness 构造器在 Shell 模式禁止 `ensureRequestAnalysisTool()` 自动注入
 - **文件浏览直通**：`chat-ws.ts` 的 direct file-browser shortcut 在 Shell active 时必须跳过，所有普通消息进入 Shell Harness
-- **Prompt / Skill**：仅注入 Shell Copilot prompt；不得出现 PDF、DOC、文件编辑、MCP、`run_command` 等工具说明
+- **Prompt / Skill**：注入 Shell Copilot prompt；不得出现 PDF、DOC、MCP、`run_command`、glob/grep 等被排除工具的说明（文件 CRUD 四工具除外）
 - **Memory**：不得从长期 memory 拉取密码或凭证；建议 Shell 模式不注入长期 memory，也不写入 memory
 - **HTTP 工具 API**：Shell 专用工具不在全局 Registry，因此 `/api/tools` 与 `/api/tools/execute` 不得列出或执行它们
 - **CLI / eval**：未显式加载 active Shell session 时默认普通模式，且无任何 Shell 专用工具
@@ -576,7 +592,8 @@ const SHELL_COLLAB_TOOL_NAMES = [
 
 - 普通 session：tools 为现有完整集合，且 **无任何 Shell 专用工具**
 - Shell active session：tools **严格等于** `SHELL_COLLAB_TOOL_NAMES`
-- Shell 模式伪造调用 `run_command`、`read_file`、`parse_document`、任意 `mcp_*`、`request_analysis`：执行层拒绝，handler 未运行
+- Shell 模式伪造调用 `run_command`、`glob`、`parse_document`、任意 `mcp_*`、`request_analysis`：执行层拒绝，handler 未运行
+- Shell 模式合法调用 `read_file` / `write_file` / `edit_file` / `fs_operation`：经 Shell 专用 Registry 执行；`fs_operation (delete|move)` 走 `onConfirm`，且**不受** `skipPermissionChecks` 影响
 - 两个 session 分别为普通 / Shell 模式：工具集互不污染
 - 旧 `/shell exit` 不改变工具集；Shell session 始终保持专用白名单
 - F5 / 切走再切回：`active` 仍为 true，下一轮仍只有 Shell 专用白名单
@@ -606,10 +623,11 @@ Rules:
    - Sensitive commands are intercepted by the mandatory confirmation layer. Never split, encode, alias, or rewrite a command to bypass confirmation.
 5. For vague exam titles (e.g. 「日志与磁盘处理」): probe first (df, du, find large logs), then act.
 6. Prefer shell_exec for commands; it already waits and returns new output.
-7. Your only tools are interactive_shell, shell_exec, shell_wait, and shell_send_keys. Never use normal Agent tools in this mode.
+7. Your tools: interactive_shell, shell_exec, shell_wait, shell_send_keys, plus read_file, write_file, edit_file, fs_operation for local file CRUD. Never use run_command, MCP, parse_document, or other normal Agent tools in this mode.
 8. After login, use shell_exec for every shell command. Use interactive_shell write only when the tool reports awaiting_input for passwords, answers, or other text prompts.
 9. Use shell_wait for long-running/asynchronous output. Use shell_send_keys for Ctrl-C, EOF, completion, and simple TUI navigation.
-10. Shell mode is fixed for this session. To use the normal Agent, tell the user to create a new session.
+10. For local files: read_file before edit_file; write_file for new/small files; fs_operation delete for removing files. Remote exam tasks still go through the PTY.
+11. Shell mode is fixed for this session. To use the full normal Agent, tell the user to create a new session.
 ```
 
 ### 6.2 Skill（推荐一并交付）
@@ -624,9 +642,9 @@ Rules:
 | session 模式 | 可见工具 | 行为 |
 |--------------|----------|------|
 | 普通 Agent | 现有 builtin + MCP + `request_analysis` | 编码、文件、解析、网络、本机一次性命令；无任何 Shell 专用工具 |
-| Shell 协作 | **仅 `SHELL_COLLAB_TOOL_NAMES`** | 当前持久 PTY 内执行、等待、低级读写与控制键；无普通 Agent 工具 |
+| Shell 协作 | **仅 `SHELL_COLLAB_TOOL_NAMES`** | 持久 PTY 执行/等待/控制键 + 本地文件 CRUD；无 run_command/MCP/搜索/解析等 |
 | 未 `/shell` 却要远程交互 | 无持久 PTY 工具 | 提示在本 session 发一次 `/shell` |
-| Shell 模式需要普通编码工具 | 不在本模式混用 | 提示新建会话并按普通 Agent 处理 |
+| Shell 模式需要完整 Agent | 不在本模式混用 | 提示新建会话（glob/grep/MCP/解析等） |
 
 ### 6.4 Harness 侧 tools 组装（实现锚点）
 
@@ -718,7 +736,7 @@ hard block > shellMandatoryConfirm > 普通 permission / 自动执行设置
 
 - hard block / 宿主保护始终生效，不属于可配置规则，清空规则也不能关闭
 - 命中 `shellBlacklist` 正则 → `shellMandatoryConfirm`；一旦命中，全局“自动执行”、工具自动批准、`skipPermissionChecks` 与“始终允许”均不得跳过
-- 未命中任何配置正则 → **不进入普通 permission 确认，直接执行**
+- 未命中任何配置正则 → **不进入普通 permission 确认，直接执行**（仅 shell 命令工具；Shell 模式文件 CRUD 仍走 `onConfirm`，且不受 `skipPermissionChecks` 影响）
 - `shellBlacklist: []` → 不触发任何可配置强制确认，仅保留 hard block / 宿主保护
 - 强制确认没有“本次会话始终允许”选项；每条敏感命令按精确内容单次授权
 - 批准只对 `sessionId + taskId + normalizedCommandHash` 生效一次；命令被修改、重新生成或换 PTY 后必须重新确认
@@ -893,8 +911,8 @@ Electron 打包须将 `node-pty` 原生模块纳入 rebuild（参考 desktop 现
 | T16 幂等 | 已 active 时再发 `/shell` | 不重置 PTY；提示已在模式中 |
 | T17 stop 与 exit 分离 | AI 调 `action:stop` 后再发普通消息 | PTY 已结束，但 tools 仍严格等于 `SHELL_COLLAB_TOOL_NAMES`，可 start 新 PTY |
 | T18 无终端 UI | 进入/退出及完整协作流程 | 页面无 xterm、终端面板或终端输出区；仅有最小模式标识 |
-| T19 禁用普通工具 | Shell 模式检查 definitions | 无 `run_command`、文件、PDF/DOC、网络、Git、MCP 工具 |
-| T20 执行层防伪造 | Shell 模式伪造调用 `run_command` / `read_file` / `parse_document` / `mcp_*` / `request_analysis` | policy error；对应 handler 未运行 |
+| T19 禁用普通工具 | Shell 模式检查 definitions | 无 `run_command`、glob/grep、PDF/DOC、网络、Git、MCP；含文件 CRUD 四工具 |
+| T20 执行层防伪造 | Shell 模式伪造调用 `run_command` / `glob` / `parse_document` / `mcp_*` / `request_analysis` | policy error；对应 handler 未运行 |
 | T21 session 隔离 | session A 为 Shell、session B 为普通 | A 仅 Shell 专用白名单；B 完整普通 tools；互不污染 |
 | T22 旁路隔离 | Shell 模式输入文件浏览语句并启用 MCP | 不走 direct file-browser，不等待/注入 MCP，不注入 `request_analysis` |
 | T23 全局 Registry 隔离 | 查询 `/api/tools` 或未 active 时尝试调用 | 不列出且不能执行任何 Shell 专用工具 |
@@ -995,4 +1013,4 @@ sequenceDiagram
 | v1.5 | 2026-08-06 | **Shell 工具严格隔离（R9）**：Shell active 时 definitions 与专用 Registry 均仅含 `interactive_shell`；移除 `run_command`、文件/解析/MCP/SubAgent；增加 Executor allowlist 与旁路隔离；新增 T19–T23 |
 | v1.6 | 2026-08-06 | **增加高频 Shell 专用工具**：在底层 `interactive_shell` 外增加 `shell_exec`、`shell_wait`、`shell_send_keys`；白名单扩为 `SHELL_COLLAB_TOOL_NAMES`；新增 T24–T27 |
 | v1.7 | 2026-08-06 | **强制敏感命令确认 + 最小模式标识**：新增不可被自动执行设置绕过的 `shellMandatoryConfirm`；命令统一走 `shell_exec`，禁止 write 拆分绕过；覆盖删除、权限、服务、电源、进程、磁盘等高风险命令；输入区与 session item 显示 Shell 标识；新增 T28–T36 |
-| v1.8 | 2026-08-06 | **设置正则成为强制确认唯一配置来源**：命中规则才 mandatory confirm，未命中跳过普通 permission 并直接执行；清空规则不影响灾难性 hard block / 宿主保护；新增 T37 |
+| v1.9 | 2026-08-07 | **Shell 模式增加文件 CRUD 四工具**：白名单扩为 8（4 PTY + read/write/edit/fs_operation）；Shell 文件工具走 onConfirm 且不受 skipPermissionChecks 影响 |

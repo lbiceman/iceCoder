@@ -497,10 +497,20 @@ window.ChatSession = (function () {
   /** 用服务端用户消息补丁本地条目（含 shellCommand / 正文拆分），返回是否有字段变化。 */
   function patchUserMessageDisplay(id, incoming) {
     if (!id || !incoming) return false;
-    var enriched = enrichUserMessageForDisplay(incoming);
     for (var i = 0; i < messages.length; i++) {
       if (messages[i].id !== id) continue;
       var cur = messages[i];
+      var enriched = enrichUserMessageForDisplay(incoming);
+      if ((!enriched.referencePaths || !enriched.referencePaths.length)
+          && cur.referencePaths && cur.referencePaths.length) {
+        enriched.referencePaths = cur.referencePaths.slice();
+      }
+      if ((!enriched.skills || !enriched.skills.length) && cur.skills && cur.skills.length) {
+        enriched.skills = cur.skills.slice();
+      }
+      if (!enriched.shellCommand && cur.shellCommand) {
+        enriched.shellCommand = cur.shellCommand;
+      }
       var changed = false;
       if (String(cur.content || '') !== String(enriched.content || '')) {
         cur.content = enriched.content || '';
@@ -572,6 +582,39 @@ window.ChatSession = (function () {
     });
   }
 
+  /** 服务端快照缺 referencePaths/skills 时，保留本地已展示的用户消息元数据（如 @ 文件 chip）。 */
+  function mergeLocalUserDisplayFields(serverMsgs, localMsgs) {
+    if (!localMsgs || !localMsgs.length || !serverMsgs || !serverMsgs.length) return;
+    var localById = {};
+    var i;
+    for (i = 0; i < localMsgs.length; i++) {
+      var lm = localMsgs[i];
+      if (lm && lm.role === 'user' && lm.id) localById[lm.id] = lm;
+    }
+    for (i = 0; i < serverMsgs.length; i++) {
+      var sm = serverMsgs[i];
+      if (!sm || sm.role !== 'user' || !sm.id) continue;
+      var local = localById[sm.id];
+      if (!local) continue;
+      var merged = Object.assign({}, sm);
+      var patched = false;
+      if ((!merged.referencePaths || !merged.referencePaths.length)
+          && local.referencePaths && local.referencePaths.length) {
+        merged.referencePaths = local.referencePaths.slice();
+        patched = true;
+      }
+      if ((!merged.skills || !merged.skills.length) && local.skills && local.skills.length) {
+        merged.skills = local.skills.slice();
+        patched = true;
+      }
+      if (!merged.shellCommand && local.shellCommand) {
+        merged.shellCommand = local.shellCommand;
+        patched = true;
+      }
+      if (patched) serverMsgs[i] = enrichUserMessageForDisplay(merged);
+    }
+  }
+
   function applyServerChatSnapshot(separated, options, isStreaming, wsProcessing) {
     var opts = options || {};
     if (hasStreamingModelBubble() || wsProcessing || isStreaming) return false;
@@ -583,6 +626,7 @@ window.ChatSession = (function () {
       return false;
     }
 
+    mergeLocalUserDisplayFields(separated.msgs, messages);
     messages = separated.msgs;
     toolTraces = separated.traces;
     reindexMessages();
@@ -702,6 +746,7 @@ window.ChatSession = (function () {
 
   /** 切换会话 ID（前端侧栏切换时调用） */
   function setSessionId(id) {
+    saveSessionMessages();
     SESSION_ID = id || 'default';
     messages = loadLocalMessages();
     toolTraces = {};

@@ -7,7 +7,7 @@ import { toolExecutionUserHint } from './harness-llm-log.js';
 import {
   formatConfirmToolName,
   isShellCollabCommandTool,
-  isShellCollabTool,
+  isShellCollabFileTool,
   resolveShellMandatoryConfirm,
   resolveToolPermission,
   shellMandatoryConfirmKey,
@@ -405,10 +405,12 @@ export async function executeToolCallsStreaming(
       continue;
     }
 
-    // ── 权限检查：Shell 协作 mandatory confirm / 显式规则 / 破坏性工具兜底 ──
-    const shellCollabTool = deps.shellCollabActive && isShellCollabTool(tc.name);
-    if (shellCollabTool) {
-      if (isShellCollabCommandTool(tc.name)) {
+    // ── 权限检查：Shell mandatory confirm / Shell 文件 confirm / 显式规则 / 破坏性兜底 ──
+    const shellCollabActive = deps.shellCollabActive === true;
+    const isShellCommandTool = shellCollabActive && isShellCollabCommandTool(tc.name);
+    const isShellFileTool = shellCollabActive && isShellCollabFileTool(tc.name);
+
+    if (isShellCommandTool) {
         const mandatory = resolveShellMandatoryConfirm(tc, {
           sessionId: deps.sessionId ?? 'default',
           workspaceRoot: deps.workspaceRoot,
@@ -492,8 +494,13 @@ export async function executeToolCallsStreaming(
             continue;
           }
         }
-      }
-    } else if (!deps.skipPermissionChecks) {
+    }
+
+    // Shell 文件工具走 permission confirm；Shell 模式不受 skipPermissionChecks 影响。
+    // Shell 命令工具（shell_exec 等）未命中 mandatory 时也不进入普通 permission。
+    const runPermissionChecks = !isShellCommandTool
+      && (isShellFileTool || !deps.skipPermissionChecks);
+    if (runPermissionChecks) {
       const permission = resolveToolPermission(tc, deps.permissionRules);
       if (permission.permission === 'deny') {
         logger.toolResult(tc.name, false, 0, permission.reason ?? 'Tool denied by policy');
