@@ -527,6 +527,9 @@ async function handleShellCollabRoute(
   rawContent: string,
   clientMessageId?: string,
   prompt: string = '',
+  referencePaths: string[] = [],
+  skills: string[] = [],
+  images: string[] = [],
 ): Promise<boolean> {
   // 进程重启后内存 Map 为空，须先从 sidecar 恢复再判断 active（T15/T16 幂等）。
   await loadForSession(sessionId, SESSIONS_DIR);
@@ -534,13 +537,34 @@ async function handleShellCollabRoute(
   const now = Date.now();
   const userMsgId = clientMessageId ?? randomUUID();
   const trimmedPrompt = String(prompt || '').trim();
+  let resolvedReferencePaths = referencePaths.slice();
+  let resolvedSkills = skills.slice();
+  let uiImageUrls: string[] = [];
+  if (action === 'enter' && images.length > 0) {
+    const taskInput = await buildEnqueueInput(
+      sessionId,
+      rawContent,
+      images,
+      resolvedReferencePaths,
+      userMsgId,
+      'implicit',
+      resolvedSkills,
+    );
+    uiImageUrls = taskInput.images ?? [];
+    resolvedReferencePaths = taskInput.referencePaths ?? resolvedReferencePaths;
+    resolvedSkills = taskInput.skills ?? resolvedSkills;
+  }
+  const display = buildUserMessageDisplayFields(rawContent, resolvedReferencePaths, resolvedSkills);
   const userMessage = action === 'enter'
     ? {
         role: 'user' as const,
-        content: trimmedPrompt,
+        content: display.content,
         id: userMsgId,
         sentAt: now,
-        shellCommand: '/shell' as const,
+        ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
+        ...(display.skills ? { skills: display.skills } : {}),
+        ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
+        ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),
       }
     : {
         role: 'user' as const,
@@ -1557,10 +1581,23 @@ async function appendMessages(
         ? existing.findIndex((item) => item && item.id === msg.id)
         : -1;
       if (existingIndex >= 0) {
-        existing[existingIndex] = {
-          ...existing[existingIndex],
-          ...msg,
-        };
+        const prev = existing[existingIndex] as Record<string, unknown>;
+        const incoming = msg as Record<string, unknown>;
+        const merged: Record<string, unknown> = { ...prev, ...incoming };
+        if (!Array.isArray(incoming.referencePaths) || incoming.referencePaths.length === 0) {
+          if (Array.isArray(prev.referencePaths) && prev.referencePaths.length > 0) {
+            merged.referencePaths = prev.referencePaths;
+          }
+        }
+        if (!Array.isArray(incoming.skills) || incoming.skills.length === 0) {
+          if (Array.isArray(prev.skills) && prev.skills.length > 0) {
+            merged.skills = prev.skills;
+          }
+        }
+        if (!incoming.shellCommand && prev.shellCommand) {
+          merged.shellCommand = prev.shellCommand;
+        }
+        existing[existingIndex] = merged;
       } else {
         existing.push(msg);
       }
@@ -2196,9 +2233,12 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
                 content,
                 shellMessageId,
                 shellCmd.prompt,
+                referencePaths,
+                skills,
+                images,
               );
             });
-            // `/shell <prompt>`：模式切换成功后，提示词作为普通任务入队（用户气泡已在 route 中写入）
+            // `/shell <prompt>`：用户气泡已在 handleShellCollabRoute 写入（含 shellCommand / @文件 / 图片）
             if (shellRouteOk && shellCmd.action === 'enter' && shellCmd.prompt.trim()) {
               const taskInput = await buildEnqueueInput(
                 runSid,
