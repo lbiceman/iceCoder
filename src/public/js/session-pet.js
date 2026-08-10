@@ -254,6 +254,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       window.visualViewport.addEventListener('resize', onResizeClamp);
       window.visualViewport.addEventListener('scroll', onResizeClamp);
     }
+    document.addEventListener('ice:composer-layout', onResizeClamp);
 
     return {
       afterShow: function () {

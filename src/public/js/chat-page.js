@@ -2401,6 +2401,7 @@ window.ChatPage = (function () {
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
+    UI.autoResizeInput();
     if (typeof UI.setMessageActionHandlers === 'function') {
       UI.setMessageActionHandlers({
         onDelete: handleMessageDeleteAction,
