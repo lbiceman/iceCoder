@@ -29,6 +29,12 @@ import type { MCPManager } from '../mcp/mcp-manager.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { resolveSessionHarnessToolContext } from '../session/session-tool-policy.js';
+import {
+  selectToolsForOffering,
+  lazyToolOfferingLogEnabled,
+  DEFERRED_TOOLS,
+  buildAvailableDocToolsContext,
+} from '../tools/tool-offering-selector.js';
 import { addSessionReferenceReads } from '../harness/session-workspace-store.js';
 import { resolveEffectiveWorkspaceRoot } from '../harness/session-workspace-store.js';
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
@@ -321,6 +327,21 @@ function getFileBrowserState(sessionId: string = activeSessionId): FileBrowserSt
   return state;
 }
 
+/** 会话级最近成功调用的 deferred 工具名（供 Lazy Tool Offering 粘性） */
+const sessionDeferredToolCalls = new Map<string, string[]>();
+
+function recordSessionDeferredToolCall(sessionId: string, toolName: string): void {
+  const list = sessionDeferredToolCalls.get(sessionId) ?? [];
+  if (!list.includes(toolName)) {
+    list.push(toolName);
+    sessionDeferredToolCalls.set(sessionId, list);
+  }
+}
+
+function getSessionDeferredToolCalls(sessionId: string): string[] {
+  return sessionDeferredToolCalls.get(sessionId) ?? [];
+}
+
 interface ToolTraceBatchEntry {
   toolName: string;
   detail: string;
@@ -362,6 +383,7 @@ export function purgeSessionRuntimeCaches(sessionId: string): void {
   tombstoneSession(sessionId);
   structuredCache.delete(sessionId);
   fileBrowserStateBySession.delete(sessionId);
+  sessionDeferredToolCalls.delete(sessionId);
   clearHarnessRuntimeState(sessionId);
   sessionActiveBatchCounts.delete(sessionId);
   const pending = saveTimerMap.get(sessionId);
@@ -2555,16 +2577,35 @@ async function handleChatMessage(
   toolDefs = sessionToolCtx.toolDefs;
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
+
+  // Lazy Tool Offering：按信号裁剪传给 LLM 的工具定义（文档工具按需携带）
+  const offeringResult = selectToolsForOffering(toolDefs, {
+    userMessage: harnessMessageText,
+    uploadedFilePaths: filePaths,
+    explicitReferencePaths,
+    sessionRecentToolCalls: getSessionDeferredToolCalls(runSessionId),
+    lastBrowsedPath: getFileBrowserState(runSessionId).lastBrowsedPath ?? undefined,
+    shellCollabActive: sessionToolCtx.shellCollabActive,
+    hasInlineVisionImages: imageUrls.length > 0 || inlineImages.length > 0,
+  });
+  toolDefs = offeringResult.tools;
+  if (lazyToolOfferingLogEnabled() && offeringResult.reasons.length > 0) {
+    console.log(`[lazy-tools] session=${runSessionId.slice(0, 8)} reasons=${offeringResult.reasons.join(',')}`);
+  }
+
   const toolNames = toolDefs.map((tool) => tool.name);
-  console.log(
-    `[chat-ws] harness tool policy session=${runSessionId.slice(0, 8)} `
-    + `shellCollabActive=${sessionToolCtx.shellCollabActive} `
-    + `toolNames=${toolNames.join(',')}`,
-  );
   const effectiveAssembled = sessionToolCtx.shellCollabActive
     ? await assembleShellCollabPrompt(assembled)
     : assembled;
   const mcpRuntimeContext = sessionToolCtx.mcpRuntimeContext;
+  // Prompt 与 tools 对齐：已激活的文档工具注入 systemContext（未激活时不注入）。
+  // Shell 协作模式 / 运行时工具禁用时跳过——此时 tools 数组不含文档工具，注入会造成不一致。
+  const docToolsContext = sessionToolCtx.shellCollabActive || shouldDisableRuntimeTools()
+    ? {}
+    : buildAvailableDocToolsContext(
+        [...offeringResult.activated].filter((n) => DEFERRED_TOOLS.has(n)),
+      );
+  const mergedSystemContext = { ...docToolsContext, ...mcpRuntimeContext };
   const runNoteId = getRunningTurn(runSessionId)?.runId;
   if (runNoteId != null) {
     setActiveAlsoRun(runSessionId, runNoteId);
@@ -2586,7 +2627,7 @@ async function handleChatMessage(
         ? undefined
         : await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
       ...harnessDynamic,
-      ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
+      ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
     },
     loop: {
       maxRounds: getHarnessMaxRoundsFromEnv(),
@@ -2777,6 +2818,11 @@ async function handleChatMessage(
           const icon = resultStatus === 'error' ? '[err]' : resultStatus === 'background' ? '[bg]' : '[ok]';
           const preview = event.toolOutput ? event.toolOutput.substring(0, 150) : (event.toolError || '');
           console.log(`[step] ${icon} ${event.toolName} → ${preview.substring(0, 150)}`);
+
+          // Lazy Tool Offering 粘性：deferred 工具成功调用后，后续轮次继续携带
+          if (event.toolSuccess && DEFERRED_TOOLS.has(String(event.toolName))) {
+            recordSessionDeferredToolCall(runSessionId, String(event.toolName));
+          }
         }
       },
       existingMessages,

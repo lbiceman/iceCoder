@@ -29,6 +29,14 @@ import { purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
+import {
+  selectToolsForOffering,
+  recordCliDeferredToolCall,
+  getCliDeferredToolCalls,
+  buildAvailableDocToolsContext,
+  DEFERRED_TOOLS,
+  lazyToolOfferingLogEnabled,
+} from '../../tools/tool-offering-selector.js';
 import type { AssembledPrompt } from '../../prompts/types.js';
 import { DEFAULT_SYSTEM_PROMPT, getDefaultWorkDir } from '../paths.js';
 import {
@@ -406,10 +414,30 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      // Lazy Tool Offering（CLI）：按信号裁剪文档工具
+      const offeringResult = selectToolsForOffering(toolDefs, {
+        userMessage: input,
+        uploadedFilePaths: [],
+        explicitReferencePaths: [],
+        sessionRecentToolCalls: getCliDeferredToolCalls('default'),
+        shellCollabActive: false,
+        hasInlineVisionImages: false,
+      });
+      toolDefs = offeringResult.tools;
+      if (lazyToolOfferingLogEnabled() && offeringResult.reasons.length > 0) {
+        console.log(`[lazy-tools] chat reasons=${offeringResult.reasons.join(',')}`);
+      }
+      // Prompt 与 tools 对齐：已激活文档工具注入 systemContext（工具禁用时不注入）
+      const docToolsContext = shouldDisableRuntimeTools()
+        ? {}
+        : buildAvailableDocToolsContext(
+            [...offeringResult.activated].filter((n) => DEFERRED_TOOLS.has(n)),
+          );
       const mcpRuntimeContext = buildMcpRuntimeContext(
         ctx.mcpManager,
         toolDefs.map((t) => t.name),
       );
+      const mergedSystemContext = { ...docToolsContext, ...mcpRuntimeContext };
       const harnessDynamic = harnessOverlayToContextFields(assembled);
       const harnessConfig: HarnessConfig = {
         context: {
@@ -417,7 +445,7 @@ ${c.bold}终端内置命令:${c.reset}
           tools: toolDefs,
           memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
           ...harnessDynamic,
-          ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
+          ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
         },
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
@@ -477,6 +505,9 @@ ${c.bold}终端内置命令:${c.reset}
           }
           if (event.type === 'tool_result') {
             toolResult(event.toolSuccess ?? false);
+            if (event.toolSuccess && event.toolName) {
+              recordCliDeferredToolCall('default', String(event.toolName));
+            }
           }
         },
         sessionMessages,
