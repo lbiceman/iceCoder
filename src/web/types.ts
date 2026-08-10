@@ -46,6 +46,8 @@ export interface IceEtlPrefs {
   showTransparencyPanel: boolean;
   panelDefaultExpanded: boolean;
   panelWidth: number;
+  /** 任务完成后是否通过桌面系统通知提醒（仅桌面端生效） */
+  taskDoneNotification: boolean;
 }
 
 /** `data/config.json` 顶层结构 */

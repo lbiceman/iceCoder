@@ -6,6 +6,12 @@ import path from 'node:path';
 
 export const APP_NAME = 'iceCoder';
 
+/** Windows 系统通知左上角来源名（toast 应用标识）。 */
+export const NOTIFICATION_APP_NAME = 'iceCoder消息';
+
+/** electron-builder appId，与 desktop/package.json build.appId 一致。 */
+export const APP_USER_MODEL_ID = 'com.icecoder.app';
+
 /** 主进程传给子进程的环境变量标记。 */
 export const ENV_ELECTRON = 'ICE_ELECTRON';
 export const ENV_PORT = 'PORT';
@@ -50,6 +56,9 @@ export const IPC = {
   APP_OPEN_DATA_DIR: 'app:open-data-dir',
   APP_QUIT: 'app:quit',
   APP_DEVTOOLS: 'app:devtools',
+
+  /** 渲染层请求系统通知（任务完成提醒）。 */
+  TASK_DONE_NOTIFY: 'task:done-notify',
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];

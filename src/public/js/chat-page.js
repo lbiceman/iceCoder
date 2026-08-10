@@ -669,6 +669,10 @@ window.ChatPage = (function () {
       UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
     }
+    // 记录用户提示词摘要（任务完成通知使用）
+    if (typeof Pet.setLastUserPrompt === 'function') {
+      Pet.setLastUserPrompt(outboundText || composerBody || '');
+    }
     var outboundMessageId = didAppendUserMessage && Session.getLastMessage()
       ? Session.getLastMessage().id
       : undefined;

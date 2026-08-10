@@ -3,11 +3,11 @@
  */
 import { writeConsole } from './console-output';
 import { ensureWinConsoleUtf8 } from './win-console-utf8';
-import { app, BrowserWindow, dialog, ipcMain, shell, Menu, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, Menu, Tray, nativeImage, Notification } from 'electron';
 
 ensureWinConsoleUtf8();
 import path from 'node:path';
-import { IPC, APP_NAME, DEFAULT_HTTP_PORT } from './constants';
+import { IPC, APP_NAME, APP_USER_MODEL_ID, DEFAULT_HTTP_PORT, NOTIFICATION_APP_NAME } from './constants';
 import { getAvailablePort } from './port-utils';
 import { startServerProcess, ServerProcessHandle } from './server-process';
 import {
@@ -20,6 +20,11 @@ import {
 } from './paths';
 import { buildTray } from './tray';
 import { PetWindowManager } from './pet-window-manager';
+import { resolveTaskDoneNotification } from './task-done-notify';
+import {
+  buildWindowsTaskDoneToastXml,
+  resolveWindowsToastAppLogoPath,
+} from './win-task-done-toast';
 
 let mainWindow: BrowserWindow | null = null;
 let serverHandle: ServerProcessHandle | null = null;
@@ -30,6 +35,13 @@ const startupStartedAt = performance.now();
 
 function logStartupTiming(phase: string): void {
   writeConsole(process.stdout, `[startup] main ${phase} +${Math.round(performance.now() - startupStartedAt)}ms\n`);
+}
+
+/** Windows toast 左上角来源名默认是 electron.app.*，需显式设置应用名与 AUMID。 */
+function configureWindowsNotificationIdentity(): void {
+  if (process.platform !== 'win32') return;
+  app.setAppUserModelId(app.isPackaged ? APP_USER_MODEL_ID : process.execPath);
+  app.setName(NOTIFICATION_APP_NAME);
 }
 
 function resolveAppIcon(): Electron.NativeImage {
@@ -43,6 +55,39 @@ function resolveAppIcon(): Electron.NativeImage {
     if (!image.isEmpty()) return image;
   }
   return nativeImage.createEmpty();
+}
+
+function resolveDesktopAssetsDir(): string {
+  return path.join(__dirname, '..', 'assets');
+}
+
+function showTaskDoneSystemNotification(decision: {
+  title: string;
+  body: string;
+}): Electron.Notification {
+  const assetsDir = resolveDesktopAssetsDir();
+  const appIcon = resolveAppIcon();
+
+  if (process.platform === 'win32') {
+    const appLogoPath = resolveWindowsToastAppLogoPath(assetsDir);
+    const heroIconPath = appIcon.isEmpty() ? null : path.join(assetsDir, 'icon.png');
+    return new Notification({
+      toastXml: buildWindowsTaskDoneToastXml({
+        title: decision.title,
+        body: decision.body,
+        appLogoPath,
+        heroIconPath,
+      }),
+      silent: false,
+    });
+  }
+
+  return new Notification({
+    title: decision.title,
+    body: decision.body,
+    silent: false,
+    ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
+  });
 }
 
 function createWindow(show: boolean): BrowserWindow {
@@ -185,6 +230,24 @@ function registerIpcHandlers(): void {
   ipcMain.on(IPC.APP_QUIT, () => {
     void gracefulShutdown();
   });
+
+  // 任务完成系统通知（渲染层仅在配置开启时发送）
+  ipcMain.on(IPC.TASK_DONE_NOTIFY, (_e: Electron.IpcMainEvent, payload: unknown) => {
+    const decision = resolveTaskDoneNotification(payload, mainWindow, APP_NAME);
+    if (decision.skip) return; // 非法载荷 / R10 主窗在前台
+
+    try {
+      const notification = showTaskDoneSystemNotification({
+        title: decision.title,
+        body: decision.body,
+      });
+      // R9：点击通知 → 恢复并聚焦主窗
+      notification.on('click', () => { showAndFocusMain(); });
+      notification.show();
+    } catch (err) {
+      writeConsole(process.stderr, `[main] 系统通知失败: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  });
 }
 
 function showAndFocusMain(): void {
@@ -304,6 +367,7 @@ app.on('activate', () => {
 
 app.whenReady().then(() => {
   logStartupTiming('electron-ready');
+  configureWindowsNotificationIdentity();
   // 启动窗口创建前就移除默认菜单，避免加载阶段出现 File/Edit 顶栏
   Menu.setApplicationMenu(null);
   const appIcon = resolveAppIcon();

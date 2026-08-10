@@ -90,7 +90,7 @@ window.SettingsPage = (function () {
             '<h2 class="settings-section-title">安全与执行</h2>' +
             '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">加载中…</span>' +
           '</div>' +
-          '<p class="settings-section-desc">控制 Agent 工具权限，以及 Shell 协作模式下哪些命令需要强制确认</p>' +
+          '<p class="settings-section-desc">控制 Agent 工具权限，以及敏感 Shell 命令在普通模式与 Shell 协作模式下的不同处理方式</p>' +
           '<div class="settings-security-grid">' +
           '<div class="settings-card" id="settings-skip-permission-card" hidden>' +
             '<div class="settings-card-row">' +
@@ -114,7 +114,32 @@ window.SettingsPage = (function () {
                   '<span class="settings-card-title">Shell 强制确认规则</span>' +
                   '<span class="config-badge is-starting" id="settings-blacklist-count">0 条规则</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">每行一条正则表达式。Shell 协作模式中，命中的命令执行前必须确认；未命中的命令跳过普通权限确认并直接执行。清空后不再触发规则确认，但灾难性命令 hard block 与宿主进程保护仍始终生效。</p>' +
+                '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。</p>' +
+                '<div class="settings-shell-mode-grid" role="list" aria-label="普通模式与 Shell 模式下的规则生效方式">' +
+                  '<div class="settings-shell-mode-item" role="listitem">' +
+                    '<div class="settings-shell-mode-head">' +
+                      '<span class="settings-shell-mode-badge">普通模式</span>' +
+                      '<span class="settings-shell-mode-sub">默认聊天 · run_command</span>' +
+                    '</div>' +
+                    '<ul class="settings-shell-mode-list">' +
+                      '<li>命中规则 → <strong>直接拦截</strong>，命令无法执行</li>' +
+                      '<li>不会弹出确认框，Agent 会收到拒绝结果</li>' +
+                      '<li>未命中规则 → 按普通权限策略（破坏性命令可能弹确认）</li>' +
+                    '</ul>' +
+                  '</div>' +
+                  '<div class="settings-shell-mode-item settings-shell-mode-item--shell" role="listitem">' +
+                    '<div class="settings-shell-mode-head">' +
+                      '<span class="settings-shell-mode-badge settings-shell-mode-badge--shell">Shell 模式</span>' +
+                      '<span class="settings-shell-mode-sub">/shell 会话 · PTY 工具</span>' +
+                    '</div>' +
+                    '<ul class="settings-shell-mode-list">' +
+                      '<li>命中规则 → <strong>弹框强制确认</strong>，批准后才写入终端</li>' +
+                      '<li>未命中规则 → <strong>直接执行</strong>，跳过普通权限确认</li>' +
+                      '<li>「跳过权限确认」等设置不能绕过强制确认</li>' +
+                    '</ul>' +
+                  '</div>' +
+                '</div>' +
+                '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后，上述两种模式的行为均不再生效。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +
               '</div>' +
             '</div>' +
             '<div class="settings-blacklist-editor">' +
@@ -168,6 +193,24 @@ window.SettingsPage = (function () {
             '</div>' +
           '</div>' +
         '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">任务通知</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">任务结束后通过系统通知提醒，与执行透明层显示无关</p>' +
+          '<div class="settings-card" id="settings-task-notification-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">任务完成消息通知</span>' +
+                '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
+              '</div>' +
+              '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
+                '<input type="checkbox" id="settings-task-done-notification" />' +
+                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
       '</div>';
 
     if (window.AppIcon) window.AppIcon.hydrate(parentEl);
@@ -175,6 +218,7 @@ window.SettingsPage = (function () {
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
     bindEtlSettings(parentEl);
+    bindTaskNotificationSettings(parentEl);
   }
 
   function isEtlCapabilityEnabled() {
@@ -215,6 +259,66 @@ window.SettingsPage = (function () {
     if (panelWidth) {
       panelWidth.value = String(prefs.panelWidth || 360);
       panelWidth.disabled = subgroupDisabled;
+    }
+  }
+
+  function syncTaskNotificationUi(parentEl, prefs) {
+    if (!prefs) {
+      prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : {};
+    }
+    var taskDoneNotification = parentEl.querySelector('#settings-task-done-notification');
+    if (taskDoneNotification) {
+      taskDoneNotification.checked = prefs.taskDoneNotification === true;
+      taskDoneNotification.disabled = !(
+        window.iceDesktop
+        && typeof window.iceDesktop.notifyTaskDone === 'function'
+      );
+    }
+  }
+
+  function bindTaskNotificationSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    if (parentEl._taskNotificationBound) return;
+    parentEl._taskNotificationBound = true;
+
+    syncTaskNotificationUi(parentEl);
+
+    var taskDoneNotification = parentEl.querySelector('#settings-task-done-notification');
+    if (taskDoneNotification) {
+      taskDoneNotification.addEventListener('change', function () {
+        var next = taskDoneNotification.checked;
+        taskDoneNotification.disabled = true;
+        window.EtlPrefs.set({ taskDoneNotification: next })
+          .then(function (ok) {
+            if (!ok) throw new Error('更新失败');
+            syncTaskNotificationUi(parentEl);
+            if (window.Notification) {
+              window.Notification.success(
+                next ? '已开启任务完成通知' : '已关闭任务完成通知'
+              );
+            }
+          })
+          .catch(function (err) {
+            taskDoneNotification.checked = !next;
+            syncTaskNotificationUi(parentEl);
+            if (window.Notification) {
+              window.Notification.error((err && err.message) || '更新失败');
+            }
+          })
+          .finally(function () { taskDoneNotification.disabled = false; });
+      });
+    }
+
+    window.EtlPrefs.whenReady().then(function () {
+      syncTaskNotificationUi(parentEl);
+    });
+
+    if (typeof parentEl._taskNotificationUnsubscribe !== 'function') {
+      parentEl._taskNotificationUnsubscribe = window.EtlPrefs.onChange(function () {
+        syncTaskNotificationUi(parentEl);
+      });
     }
   }
 

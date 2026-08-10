@@ -15,6 +15,7 @@
 
 import type { ToolDefinition } from '../llm/types.js';
 import { looksLikeFileAnalysisIntent } from '../web/file-browser-direct.js';
+import { SHELL_COLLAB_TOOL_NAMES } from './shell-collab-tools.js';
 
 /** Tier-1 按需携带的文档/媒体工具 */
 export const DEFERRED_TOOLS = new Set([
@@ -57,6 +58,27 @@ export interface ToolActivationInput {
   shellCollabActive: boolean;
   /** 是否已有 vision 多模态 inline 图片（此时不激活 image_read） */
   hasInlineVisionImages: boolean;
+}
+
+export interface ToolCategorySummary {
+  /** 普通聊天模式默认可用（非 deferred、非 mcp） */
+  chat: { count: number };
+  /** 文档/媒体解析（Lazy Tool Offering，按需激活） */
+  doc: { count: number; lazy: true };
+  /** /shell 协作模式专用白名单（不进全局 Registry） */
+  shell: { count: number };
+}
+
+/** 按聊天 / 文档解析 / Shell 模式汇总工具数量（供欢迎页与 /api/tools） */
+export function summarizeToolCategories(toolNames: string[]): ToolCategorySummary {
+  const builtin = toolNames.filter((n) => n && !n.startsWith('mcp_'));
+  const docCount = builtin.filter((n) => DEFERRED_TOOLS.has(n)).length;
+  const chatCount = builtin.length - docCount;
+  return {
+    chat: { count: chatCount },
+    doc: { count: docCount, lazy: true },
+    shell: { count: SHELL_COLLAB_TOOL_NAMES.length },
+  };
 }
 
 export interface ToolOfferingResult {

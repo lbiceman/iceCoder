@@ -70,6 +70,7 @@ describe('etl-prefs', () => {
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
       panelWidth: 360,
+      taskDoneNotification: false,
     });
   });
 
@@ -105,6 +106,7 @@ describe('etl-prefs', () => {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
       panelWidth: 360,
+      taskDoneNotification: false,
     });
   });
 });
