@@ -99,6 +99,18 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   outline: none;
 }
 
+/* ── 可滚动主区（横幅 / 摘要 / Tab / 执行流） ── */
+.etl-main-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* ── 监管横幅 ── */
 .exec-plan-mode-banner {
   margin: var(--space-2) var(--space-3) 0;
@@ -204,6 +216,12 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
 }
 
 .etl-overview-badge {
@@ -326,10 +344,8 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 
 /* ── 主体 ── */
 .etl-body {
-  flex: 1;
+  flex: 1 0 auto;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
 }
@@ -1045,7 +1061,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   background: transparent;
 }
 
-.etl-msheet .etl-body {
+.etl-msheet .etl-main-scroll {
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1257,8 +1273,6 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 }
 
 #etl-panel-snapshot {
-  flex: 1;
+  flex: 1 0 auto;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
 }
