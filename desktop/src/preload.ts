@@ -48,6 +48,10 @@ const api = {
   quit: () => ipcRenderer.send(IPC.APP_QUIT),
   openDevTools: () => ipcRenderer.send(IPC.APP_DEVTOOLS),
 
+  /** 任务完成系统通知（payload: { success: boolean; summary: string }）。 */
+  notifyTaskDone: (payload: { success: boolean; summary: string }) =>
+    ipcRenderer.send(IPC.TASK_DONE_NOTIFY, payload),
+
   /** 监听 main → renderer 的事件。 */
   onPetMode: (cb: (mode: string) => void) => {
     const listener = (_e: IpcRendererEvent, mode: string) => cb(mode);

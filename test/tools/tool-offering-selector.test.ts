@@ -3,6 +3,7 @@ import {
   selectToolsForOffering,
   DEFERRED_TOOLS,
   buildAvailableDocToolsContext,
+  summarizeToolCategories,
 } from '../../src/tools/tool-offering-selector.js';
 import type { ToolDefinition } from '../../src/llm/types.js';
 
@@ -135,6 +136,23 @@ describe('selectToolsForOffering', () => {
   it('「分析 report.docx」→ 激活 parse_document', () => {
     const result = selectToolsForOffering(makeDefs(), baseInput({ userMessage: '分析 report.docx' }));
     expect(offeredNames(result)).toContain('parse_document');
+  });
+});
+
+describe('summarizeToolCategories', () => {
+  it('splits builtin tools into chat, doc lazy, and shell counts', () => {
+    const names = makeDefs().map((d) => d.name);
+    const summary = summarizeToolCategories(names);
+    expect(summary.chat.count).toBe(CORE_NAMES.length + 1); // + request_analysis
+    expect(summary.doc.count).toBe(DEFERRED_TOOLS.size);
+    expect(summary.doc.lazy).toBe(true);
+    expect(summary.shell.count).toBe(8);
+  });
+
+  it('excludes mcp tools from chat and doc buckets', () => {
+    const summary = summarizeToolCategories(['read_file', 'mcp_foo', 'parse_document']);
+    expect(summary.chat.count).toBe(1);
+    expect(summary.doc.count).toBe(1);
   });
 });
 

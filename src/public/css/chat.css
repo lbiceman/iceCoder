@@ -519,6 +519,40 @@
   white-space: nowrap;
 }
 
+.chat-welcome-context-value--badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 6px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.chat-welcome-context-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-light) 85%, transparent);
+}
+
+.chat-welcome-context-badge--shell {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-muted));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border-light));
+}
+
+.chat-welcome-context-row--tools .chat-welcome-context-label {
+  color: var(--text-secondary);
+}
+
 @media (min-width: 1180px) and (min-height: 760px) and (max-height: 860px) {
   /* 1260×820 设计视口：居中下移、适度留白、无滚动条 */
   .chat-messages.has-welcome {

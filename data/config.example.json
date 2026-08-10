@@ -3,7 +3,8 @@
   "iceEtlPrefs": {
     "panelDefaultExpanded": true,
     "panelWidth": 360,
-    "showTransparencyPanel": true
+    "showTransparencyPanel": true,
+    "taskDoneNotification": false
   },
   "shellBlacklist": [
     "rm\\s+-rf",

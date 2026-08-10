@@ -14,7 +14,7 @@ window.ChatWelcome = (function () {
   var contextMaxTokens = null;
   var contextUsedTokens = 0;
   var contextFetchPending = false;
-  var toolsCount = null;
+  var toolsCategories = null;
   var toolsFetchPending = false;
   var storeListenerBound = false;
 
@@ -152,9 +152,17 @@ window.ChatWelcome = (function () {
               '<span class="chat-welcome-context-label">工作区</span>' +
               '<span class="chat-welcome-context-value" data-welcome-workspace title="">—</span>' +
             '</div>' +
-            '<div class="chat-welcome-context-row">' +
-              '<span class="chat-welcome-context-label">系统工具</span>' +
-              '<span class="chat-welcome-context-value" data-welcome-tools title="">载入中…</span>' +
+            '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
+              '<span class="chat-welcome-context-label">常用工具</span>' +
+              '<span class="chat-welcome-context-value" data-welcome-tools-chat title="普通对话默认可用">载入中…</span>' +
+            '</div>' +
+            '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
+              '<span class="chat-welcome-context-label">解析工具</span>' +
+              '<span class="chat-welcome-context-value chat-welcome-context-value--badges" data-welcome-tools-doc title="">载入中…</span>' +
+            '</div>' +
+            '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
+              '<span class="chat-welcome-context-label">Shell 模式</span>' +
+              '<span class="chat-welcome-context-value chat-welcome-context-value--badges" data-welcome-tools-shell title="">载入中…</span>' +
             '</div>' +
             '<div class="chat-welcome-context-row">' +
               '<span class="chat-welcome-context-label">上下文大小</span>' +
@@ -208,10 +216,35 @@ window.ChatWelcome = (function () {
     return { text: display, title: full };
   }
 
-  function formatToolsCountLabel(count) {
-    if (count == null) return { text: '载入中…', title: '' };
-    if (count <= 0) return { text: '—', title: '' };
-    return { text: count + ' 个', title: 'IceCoder 内置工具' };
+  function formatToolCount(n) {
+    if (n == null || n <= 0) return '—';
+    return n + ' 个';
+  }
+
+  function toolCountBadgeHtml(text, extraClass) {
+    return (
+      '<span class="chat-welcome-context-badge' + (extraClass ? ' ' + extraClass : '') + '">' +
+        escapeHtml(text) +
+      '</span>'
+    );
+  }
+
+  function formatToolCategoriesView(categories) {
+    if (!categories) return null;
+    var chat = categories.chat && typeof categories.chat.count === 'number' ? categories.chat.count : 0;
+    var doc = categories.doc && typeof categories.doc.count === 'number' ? categories.doc.count : 0;
+    var shell = categories.shell && typeof categories.shell.count === 'number' ? categories.shell.count : 0;
+    return {
+      chat: { text: formatToolCount(chat), title: '文件读写、搜索、命令执行等默认可用工具' },
+      doc: {
+        text: (doc > 0 ? toolCountBadgeHtml('懒加载') + ' ' : '') + formatToolCount(doc),
+        title: 'PDF、Office、图片等解析工具；检测到相关文件或意图后按需携带',
+      },
+      shell: {
+        text: (shell > 0 ? toolCountBadgeHtml('/shell', 'chat-welcome-context-badge--shell') + ' ' : '') + formatToolCount(shell),
+        title: 'PTY 交互与文件 CRUD；输入 /shell 进入协作模式后可用',
+      },
+    };
   }
 
   function formatContextWindow(n) {
@@ -243,32 +276,44 @@ window.ChatWelcome = (function () {
     }
   }
 
-  function countBuiltinTools(tools) {
-    if (!Array.isArray(tools)) return 0;
-    var n = 0;
-    for (var i = 0; i < tools.length; i++) {
-      var name = tools[i] && tools[i].name ? String(tools[i].name) : '';
-      if (name && name.indexOf('mcp_') !== 0) n++;
+  /** @deprecated 仅作 API 无 categories 时的兜底 */
+  var DEFERRED_TOOL_NAMES = [
+    'parse_document', 'parse_doc_legacy', 'parse_xlsx_deep', 'parse_pptx_deep',
+    'parse_xmind_deep', 'notebook_read', 'image_read',
+  ];
+  var SHELL_TOOL_COUNT = 8;
+
+  function fallbackCategoriesFromTools(tools) {
+    if (!Array.isArray(tools)) return { chat: { count: 0 }, doc: { count: 0, lazy: true }, shell: { count: SHELL_TOOL_COUNT } };
+    var deferredSet = {};
+    for (var i = 0; i < DEFERRED_TOOL_NAMES.length; i++) deferredSet[DEFERRED_TOOL_NAMES[i]] = true;
+    var doc = 0;
+    var chat = 0;
+    for (var j = 0; j < tools.length; j++) {
+      var name = tools[j] && tools[j].name ? String(tools[j].name) : '';
+      if (!name || name.indexOf('mcp_') === 0) continue;
+      if (deferredSet[name]) doc++;
+      else chat++;
     }
-    return n;
+    return { chat: { count: chat }, doc: { count: doc, lazy: true }, shell: { count: SHELL_TOOL_COUNT } };
   }
 
-  function fetchToolsCount() {
-    if (toolsFetchPending || toolsCount != null) return;
+  function fetchToolCategories() {
+    if (toolsFetchPending || toolsCategories != null) return;
     toolsFetchPending = true;
     fetch('/api/tools')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        if (data && data.success && Array.isArray(data.tools)) {
-          toolsCount = countBuiltinTools(data.tools);
-        } else if (data && typeof data.count === 'number') {
-          toolsCount = data.count;
+        if (data && data.success && data.categories) {
+          toolsCategories = data.categories;
+        } else if (data && data.success && Array.isArray(data.tools)) {
+          toolsCategories = fallbackCategoriesFromTools(data.tools);
         } else {
-          toolsCount = 0;
+          toolsCategories = fallbackCategoriesFromTools([]);
         }
       })
       .catch(function () {
-        toolsCount = 0;
+        toolsCategories = fallbackCategoriesFromTools([]);
       })
       .finally(function () {
         toolsFetchPending = false;
@@ -323,12 +368,33 @@ window.ChatWelcome = (function () {
       else workspaceEl.removeAttribute('title');
     }
 
-    var toolsEl = r.querySelector('[data-welcome-tools]');
-    if (toolsEl) {
-      var tools = formatToolsCountLabel(toolsCount);
-      toolsEl.textContent = tools.text;
-      if (tools.title) toolsEl.setAttribute('title', tools.title);
-      else toolsEl.removeAttribute('title');
+    var chatToolsEl = r.querySelector('[data-welcome-tools-chat]');
+    var docToolsEl = r.querySelector('[data-welcome-tools-doc]');
+    var shellToolsEl = r.querySelector('[data-welcome-tools-shell]');
+    if (chatToolsEl || docToolsEl || shellToolsEl) {
+      if (!toolsCategories) {
+        if (chatToolsEl) chatToolsEl.textContent = '载入中…';
+        if (docToolsEl) docToolsEl.textContent = '载入中…';
+        if (shellToolsEl) shellToolsEl.textContent = '载入中…';
+      } else {
+        var cats = formatToolCategoriesView(toolsCategories);
+        if (cats && chatToolsEl) {
+          chatToolsEl.textContent = cats.chat.text;
+          if (cats.chat.title) chatToolsEl.setAttribute('title', cats.chat.title);
+        }
+        if (cats && docToolsEl) {
+          if (cats.doc.text.indexOf('<span') >= 0) docToolsEl.innerHTML = cats.doc.text;
+          else docToolsEl.textContent = cats.doc.text;
+          if (cats.doc.title) docToolsEl.setAttribute('title', cats.doc.title);
+          else docToolsEl.removeAttribute('title');
+        }
+        if (cats && shellToolsEl) {
+          if (cats.shell.text.indexOf('<span') >= 0) shellToolsEl.innerHTML = cats.shell.text;
+          else shellToolsEl.textContent = cats.shell.text;
+          if (cats.shell.title) shellToolsEl.setAttribute('title', cats.shell.title);
+          else shellToolsEl.removeAttribute('title');
+        }
+      }
     }
 
     var contextEl = r.querySelector('[data-welcome-context-size]');
@@ -472,7 +538,7 @@ window.ChatWelcome = (function () {
     bindStoreListener();
     fetchMemoryCount();
     fetchModelContext();
-    fetchToolsCount();
+    fetchToolCategories();
   }
 
   function sync(opts) {
@@ -496,7 +562,7 @@ window.ChatWelcome = (function () {
     bindStoreListener();
     if (memoryCount == null) fetchMemoryCount();
     if (contextMaxTokens == null) fetchModelContext();
-    if (toolsCount == null) fetchToolsCount();
+    if (toolsCategories == null) fetchToolCategories();
   }
 
   function syncDashboard(root, opts) {
@@ -511,7 +577,7 @@ window.ChatWelcome = (function () {
     bindStoreListener();
     if (memoryCount == null) fetchMemoryCount();
     if (contextMaxTokens == null) fetchModelContext();
-    if (toolsCount == null) fetchToolsCount();
+    if (toolsCategories == null) fetchToolCategories();
   }
 
   return {

@@ -10,6 +10,7 @@ export const DEFAULT_ICE_ETL_PREFS: IceEtlPrefs = {
   showTransparencyPanel: true,
   panelDefaultExpanded: true,
   panelWidth: 360,
+  taskDoneNotification: false,
 };
 
 function clampPanelWidth(value: unknown): number {
@@ -28,6 +29,9 @@ export function sanitizeIceEtlPrefs(raw: unknown): IceEtlPrefs {
   }
   if (typeof input.panelDefaultExpanded === 'boolean') {
     out.panelDefaultExpanded = input.panelDefaultExpanded;
+  }
+  if (typeof input.taskDoneNotification === 'boolean') {
+    out.taskDoneNotification = input.taskDoneNotification;
   }
   out.panelWidth = clampPanelWidth(input.panelWidth);
   return out;

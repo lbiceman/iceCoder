@@ -6,6 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import type { ToolRegistry } from '../../tools/tool-registry.js';
 import type { ToolExecutor } from '../../tools/tool-executor.js';
+import { summarizeToolCategories } from '../../tools/tool-offering-selector.js';
 
 export interface ToolsRouterOptions {
   registry: ToolRegistry;
@@ -29,7 +30,8 @@ export function createToolsRouter(options: ToolsRouterOptions): Router {
       parameters: t.definition.parameters,
     }));
 
-    res.json({ success: true, tools, count: tools.length });
+    const categories = summarizeToolCategories(tools.map((t) => t.name));
+    res.json({ success: true, tools, count: tools.length, categories });
   });
 
   /**

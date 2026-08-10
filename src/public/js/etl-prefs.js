@@ -12,6 +12,7 @@ window.EtlPrefs = (function () {
     showTransparencyPanel: true,
     panelDefaultExpanded: true,
     panelWidth: 360,
+    taskDoneNotification: false,
   };
 
   var cached = null;
@@ -35,6 +36,9 @@ window.EtlPrefs = (function () {
     }
     if (typeof raw.panelDefaultExpanded === 'boolean') {
       out.panelDefaultExpanded = raw.panelDefaultExpanded;
+    }
+    if (typeof raw.taskDoneNotification === 'boolean') {
+      out.taskDoneNotification = raw.taskDoneNotification;
     }
     out.panelWidth = clampPanelWidth(raw.panelWidth);
     return out;

@@ -29,6 +29,21 @@ window.ChatPetBridge = (function () {
   var modelDoneResetTimer = null;
   var MODEL_DONE_NOTICE_MS = 5200;
   var MODEL_DONE_BUBBLE = '已完成';
+  var lastUserPrompt = '';
+  var USER_PROMPT_MAX_CHARS = 30;
+  var turnHadToolCall = false;
+
+  /** 记录最近一次用户提示词（用于任务完成通知摘要）。 */
+  function setLastUserPrompt(text) {
+    lastUserPrompt = String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  /** 用户提示词摘要：取开头 N 字，超出加省略号。 */
+  function summarizeUserPrompt() {
+    if (!lastUserPrompt) return '';
+    if (lastUserPrompt.length <= USER_PROMPT_MAX_CHARS) return lastUserPrompt;
+    return lastUserPrompt.slice(0, USER_PROMPT_MAX_CHARS) + '…';
+  }
 
   function init(pet) {
     sessionPet = pet;
@@ -97,9 +112,29 @@ window.ChatPetBridge = (function () {
     }
   }
 
+  /**
+   * 任务完成时按配置发送桌面系统通知。
+   * 不注册任何常驻监听器（一次性读取配置后即发），无内存泄漏风险。
+   */
+  function maybeNotifyTaskDone() {
+    try {
+      var prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : null;
+      if (!prefs || prefs.taskDoneNotification !== true) return;
+      // 纯闲聊（本轮无工具调用）不通知
+      if (!turnHadToolCall) return;
+      if (!window.iceDesktop || typeof window.iceDesktop.notifyTaskDone !== 'function') return;
+      // 仅后台弹通知：主窗口处于前台/可见时用户正在看，不打扰
+      if (document.hasFocus()) return;
+      window.iceDesktop.notifyTaskDone({ success: true, summary: summarizeUserPrompt() });
+    } catch (_e) { /* 通知失败不影响主流程 */ }
+  }
+
   function applyModelDoneNotice() {
     clearModelDoneNotice();
     modelDoneNoticeActive = true;
+    maybeNotifyTaskDone();
     if (!sessionPet) return;
     sessionPet.setVisible(true);
     sessionPet.setState('success');
@@ -118,6 +153,7 @@ window.ChatPetBridge = (function () {
   function showThinking(withFile) {
     userCheckpointNoticeActive = false;
     clearModelDoneNotice();
+    turnHadToolCall = false;
     clearFinishedPlan();
     if (window.ChatExecutionPlan && typeof ChatExecutionPlan.resetExecutionMode === 'function') {
       ChatExecutionPlan.resetExecutionMode();
@@ -211,6 +247,7 @@ window.ChatPetBridge = (function () {
         if (step.content) bubble(step.content);
         break;
       case 'tool_call':
+        turnHadToolCall = true;
         sessionPet.setState('working');
         {
           var toolHint = step.toolName || '';
@@ -535,5 +572,6 @@ window.ChatPetBridge = (function () {
     syncExecPlanFoot: syncExecPlanFoot,
     isUserCheckpointActive: isUserCheckpointActive,
     isModelDoneNoticeActive: isModelDoneNoticeActive,
+    setLastUserPrompt: setLastUserPrompt,
   };
 })();

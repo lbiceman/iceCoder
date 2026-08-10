@@ -4,6 +4,7 @@
 - icon.png        512×512，Linux / electron-builder 通用源（由脚本生成）
 - icon.ico        Windows 安装包与任务栏（由脚本生成）
 - tray-icon.png   32×32 系统托盘（由脚本生成）
+- notification-app-logo.png  44×44 Windows 通知左上角圆形 logo（由脚本生成）
 
 生成 PNG / ICO：
 
