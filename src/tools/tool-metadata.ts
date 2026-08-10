@@ -134,6 +134,14 @@ export const DEFAULT_TOOL_METADATA: Record<string, ToolMetadata> = {
     maxResultSizeChars: 100000,
     tags: ['parse'],
   },
+  parse_xlsx_deep: {
+    name: 'parse_xlsx_deep',
+    isConcurrencySafe: true,
+    isReadOnly: true,
+    isDestructive: false,
+    maxResultSizeChars: 100000,
+    tags: ['parse'],
+  },
   parse_xmind_deep: {
     name: 'parse_xmind_deep',
     isConcurrencySafe: true,
