@@ -37,6 +37,10 @@ const CHAT_WS_STREAM_HANDLERS_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.js'),
   'utf-8',
 );
+const CHAT_WS_SESSION_HANDLERS_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-ws-session-handlers.js'),
+  'utf-8',
+);
 const APP_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/app.js'),
   'utf-8',
@@ -230,6 +234,7 @@ async function loadChatPageObserver(): Promise<Page> {
   });
   await page.addScriptTag({ content: CHAT_SHELL_DOCK_SOURCE });
   await page.addScriptTag({ content: CHAT_WS_STREAM_HANDLERS_SOURCE });
+  await page.addScriptTag({ content: CHAT_WS_SESSION_HANDLERS_SOURCE });
   await page.addScriptTag({ content: CHAT_PAGE_SOURCE });
   await page.evaluate(() => {
     (window as any).ChatPage.render(document.querySelector('#page-container'));

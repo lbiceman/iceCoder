@@ -960,27 +960,6 @@ window.ChatPage = (function () {
     });
   }
 
-  function syncActiveSessionFromServer(data) {
-    if (!data) return false;
-    var serverId = data.activeSessionId || data.sessionId;
-    if (!serverId) return false;
-    var clientId = Session.getActiveId ? Session.getActiveId() : 'default';
-    if (window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
-      window.ChatSessionStore.setActiveSessionId(serverId);
-    }
-    if (serverId !== clientId) {
-      pendingInitialPaint = false;
-      onSessionSwitched(serverId, data.runningTurn || null, { bgTasks: data.bgTasks });
-      return true;
-    }
-    if (remoteMode && pendingInitialPaint && !initialHistoryPainted) {
-      pendingInitialPaint = false;
-      paintInitialChatView();
-      return true;
-    }
-    return false;
-  }
-
   /**
    * 把工具时间线渲染到 live 工具区（F5 / runningTurn / localStorage 共用）
    */
@@ -1097,67 +1076,6 @@ window.ChatPage = (function () {
     }
 
     UI.scheduleScrollIfSticky();
-  }
-
-  function onWsConnected(data) {
-    var skipHeavyFetch = shouldSkipWsConnectedHeavyFetch();
-    var paintedFromSessionSync = syncActiveSessionFromServer(data || {});
-    if (!applyModelContextFromWs(data)) {
-      if (!skipHeavyFetch) loadModelConfig();
-    } else if (data && (data.providers || data.modelName)) {
-      syncChipModelLabelFromWs(data);
-    } else if (!skipHeavyFetch) {
-      loadModelConfig();
-    }
-    syncSidebarWorkspace(data);
-    if (!skipHeavyFetch && window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
-      window.ChatSessionStore.fetchSessions();
-    }
-    var clientSid = Session.getActiveId ? Session.getActiveId() : 'default';
-    var serverSid = data && (data.activeSessionId || data.sessionId);
-    if (data && serverSid === clientSid) {
-      restoreFromRunningTurn(data.runningTurn || null);
-    } else if (data && data.runningTurn && data.runningTurn.isProcessing) {
-      restoreFromRunningTurn(null);
-    }
-    if (data && data.mcpReady) {
-      announceMcpReadyFromPayload(data.mcpReady);
-    }
-    if (data && data.tunnelReady) {
-      announceTunnelReadyFromPayload(data.tunnelReady);
-    }
-    if (typeof data.canRestore === 'boolean') {
-      applyHarnessRestoreUi(data.canRestore, data.checkpointMessageIds);
-    }
-    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
-      if (!skipHeavyFetch) {
-        window.ChatExecutionPlanBridge.notifyConnected(data || {});
-      }
-    }
-    var dockSid = Session.getActiveId ? Session.getActiveId() : 'default';
-    var connectedSid = data && (data.activeSessionId || data.sessionId);
-    if (!connectedSid || connectedSid === dockSid) {
-      if (window.ChatShellDock) window.ChatShellDock.hydrate(dockSid, data && data.bgTasks);
-    } else if (window.ChatShellDock) {
-      window.ChatShellDock.hydrate(dockSid, null);
-    }
-    if (window.ChatShellDock) window.ChatShellDock.scheduleResync();
-    notifyShellCollabState(data || {});
-    if (paintedFromSessionSync) return;
-    var rt = data && data.runningTurn;
-    if ((!rt || !rt.isProcessing) && !skipHeavyFetch) {
-      syncMessages(needsInitialHistoryPaint());
-    } else if (needsInitialHistoryPaint()) {
-      syncMessages(true);
-    }
-  }
-
-  function onWsSessionCleared(data) {
-    if (!data || !data.ok) return;
-    var activeId = Session.getActiveId ? Session.getActiveId() : 'default';
-    var sid = data.sessionId || activeId;
-    if (sid !== activeId) return;
-    if (window.ChatShellDock) window.ChatShellDock.replaceTasks(Array.isArray(data.bgTasks) ? data.bgTasks : [], sid);
   }
 
   // ---- WebSocket 事件处理 ----
@@ -1791,52 +1709,6 @@ window.ChatPage = (function () {
     return true;
   }
 
-  function onWsUserMessageAppended(data) {
-    if (!data || !data.message) return;
-    if (data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) return;
-    applyRemoteUserMessage(data.message);
-  }
-
-  function onWsSessionUpdated(data) {
-    if (data && data.sessionId && data.title && window.ChatSessionStore
-        && typeof window.ChatSessionStore.patchSession === 'function') {
-      window.ChatSessionStore.patchSession(data.sessionId, { title: data.title });
-    }
-    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
-      window.ChatExecutionPlanBridge.notifySessionUpdated();
-    }
-    if (data && data.reason === 'turn_complete') {
-      if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn('force');
-      }
-      return;
-    }
-    if (data && data.reason === 'message_deleted') {
-      if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn(true);
-      }
-      return;
-    }
-    if (data && data.reason === 'runtime_restored') {
-      refreshChatHistoryAfterTurn(true, null, { force: true });
-      refreshSnapshotTimelinePanel();
-      return;
-    }
-    if (data && data.reason === 'user_message') {
-      if (Session.fetchAndMergeRemoteUserMessages) {
-        Session.fetchAndMergeRemoteUserMessages(function (added) {
-          if (!added) return;
-          paintRemoteUserMessagesWithoutDom(Session.getMessages());
-          Session.saveMessages();
-        });
-      }
-      return;
-    }
-    if (!data || !data.title) {
-      pullServerChatSnapshotAuthoritative();
-    }
-  }
-
   function onWsBgTaskStopResult(payload) {
     if (!payload || payload.ok) return;
     if (window.BgTaskChip && window.BgTaskChip.resetStopPending && payload.taskId) {
@@ -1923,6 +1795,44 @@ window.ChatPage = (function () {
       applyTotalTokenUsageFromStep: applyTotalTokenUsageFromStep,
       notifySnapshotRestoreAvailability: notifySnapshotRestoreAvailability,
       syncSendButtonWithWorkload: syncSendButtonWithWorkload,
+    };
+  }
+
+  // ---- 会话 handler ctx ----
+  // 会话事件 handler 已拆分至 chat-ws-session-handlers.js；共享函数留在本闭包，
+  // 经 ctx 注入避免双实现分叉（模块内不再复制 syncMessages / syncSidebarWorkspace 等）。
+  function buildSessionHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'remoteMode') return remoteMode;
+        if (name === 'initialHistoryPainted') return initialHistoryPainted;
+        if (name === 'pendingInitialPaint') return pendingInitialPaint;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'initialHistoryPainted') initialHistoryPainted = value;
+        else if (name === 'pendingInitialPaint') pendingInitialPaint = value;
+      },
+      onSessionSwitched: onSessionSwitched,
+      paintInitialChatView: paintInitialChatView,
+      shouldSkipWsConnectedHeavyFetch: shouldSkipWsConnectedHeavyFetch,
+      applyModelContextFromWs: applyModelContextFromWs,
+      loadModelConfig: loadModelConfig,
+      syncChipModelLabelFromWs: syncChipModelLabelFromWs,
+      syncSidebarWorkspace: syncSidebarWorkspace,
+      restoreFromRunningTurn: restoreFromRunningTurn,
+      announceMcpReadyFromPayload: announceMcpReadyFromPayload,
+      announceTunnelReadyFromPayload: announceTunnelReadyFromPayload,
+      applyHarnessRestoreUi: applyHarnessRestoreUi,
+      notifyShellCollabState: notifyShellCollabState,
+      needsInitialHistoryPaint: needsInitialHistoryPaint,
+      syncMessages: syncMessages,
+      applyRemoteUserMessage: applyRemoteUserMessage,
+      shouldSkipServerSnapshotSync: shouldSkipServerSnapshotSync,
+      refreshChatHistoryAfterTurn: refreshChatHistoryAfterTurn,
+      refreshSnapshotTimelinePanel: refreshSnapshotTimelinePanel,
+      paintRemoteUserMessagesWithoutDom: paintRemoteUserMessagesWithoutDom,
+      pullServerChatSnapshotAuthoritative: pullServerChatSnapshotAuthoritative,
     };
   }
 
@@ -2129,13 +2039,16 @@ window.ChatPage = (function () {
 
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
-    WS.on('connected', onWsConnected);
-    WS.on('session_cleared', onWsSessionCleared);
     WS.on('close', onWsClose);
     // 流式事件（stream / reasoning_stream / stream_end / response / step / status / error / tool_output）
     // 已拆分至 chat-ws-stream-handlers.js，经 ctx 读写共享状态
     if (window.ChatWsStreamHandlers && typeof window.ChatWsStreamHandlers.bind === 'function') {
       window.ChatWsStreamHandlers.bind(WS, buildStreamHandlerCtx());
+    }
+    // 会话事件（connected / session_cleared / session_updated / sync / user_message_appended / workspace_updated）
+    // 已拆分至 chat-ws-session-handlers.js，共享函数经 ctx 注入
+    if (window.ChatWsSessionHandlers && typeof window.ChatWsSessionHandlers.bind === 'function') {
+      window.ChatWsSessionHandlers.bind(WS, buildSessionHandlerCtx());
     }
     WS.on('mcp_ready', onWsMcpReady);
     WS.on('tunnel_ready', onWsTunnelReady);
@@ -2145,10 +2058,6 @@ window.ChatPage = (function () {
     WS.on('confirm_timeout', onWsConfirmTimeout);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    WS.on('session_updated', onWsSessionUpdated);
-    WS.on('user_message_appended', onWsUserMessageAppended);
-    WS.on('workspace_updated', syncSidebarWorkspace);
-    WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);
     WS.on('bg_task_stop_result', onWsBgTaskStopResult);
     WS.on('harness_state', onWsHarnessState);
