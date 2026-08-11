@@ -18,7 +18,7 @@ export function extractToolTargetPath(
 
 /** 从 run_command 参数中提取命令字符串。 */
 export function extractRunCommand(args: Record<string, unknown>): string | undefined {
-  const raw = args.command;
+  const raw = args.command ?? args.cmd;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
 }
 

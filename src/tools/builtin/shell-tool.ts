@@ -156,7 +156,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         if (inlineAdvisory?.block) {
           return { success: false, output: '', error: inlineAdvisory.message };
         }
-        const sandbox = analyzeShellSandbox(command, { workDir });
+        const sandbox = analyzeShellSandbox(command, { workDir, includeBlacklist: false });
         if (sandbox.blocked) {
           return { success: false, output: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
         }
@@ -202,7 +202,7 @@ export function createShellTool(workDir: string, sessionId = 'default'): Registe
         return { success: false, output: '', error: inlineAdvisory.message };
       }
 
-      const sandbox = analyzeShellSandbox(command, { workDir });
+      const sandbox = analyzeShellSandbox(command, { workDir, includeBlacklist: false });
       if (sandbox.blocked) {
         return { success: false, output: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
       }

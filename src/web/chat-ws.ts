@@ -2656,9 +2656,7 @@ async function handleChatMessage(
     supervisorBridge: supervisorRuntime.bridge,
     enableRequestAnalysis: sessionToolCtx.enableRequestAnalysis,
     shellCollabActive: sessionToolCtx.shellCollabActive,
-    onShellMandatoryConfirm: sessionToolCtx.shellCollabActive
-      ? createShellMandatoryConfirmHandler(runSessionId)
-      : undefined,
+    onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
     onConfirm: (toolName, args) => {
       return new Promise<boolean>((resolve) => {
         const confirmId = nextConfirmId();

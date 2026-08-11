@@ -910,58 +910,15 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
   padding-bottom: 14px;
 }
 
-.settings-shell-mode-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+.settings-shell-rules-panel {
   margin: 12px 0 10px;
-}
-
-.settings-shell-mode-item {
   padding: 12px 14px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 10px);
   background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-secondary));
 }
 
-.settings-shell-mode-item--shell {
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-color));
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg-card));
-}
-
-.settings-shell-mode-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.settings-shell-mode-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: var(--radius-pill, 999px);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border-color) 90%, transparent);
-}
-
-.settings-shell-mode-badge--shell {
-  color: color-mix(in srgb, var(--accent) 78%, var(--text-secondary));
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border-color));
-}
-
-.settings-shell-mode-sub {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.settings-shell-mode-list {
+.settings-shell-rules-list {
   margin: 0;
   padding-left: 1.15em;
   font-size: 12px;
@@ -969,11 +926,11 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
   color: var(--text-muted);
 }
 
-.settings-shell-mode-list li + li {
+.settings-shell-rules-list li + li {
   margin-top: 4px;
 }
 
-.settings-shell-mode-list strong {
+.settings-shell-rules-list strong {
   color: var(--text-secondary);
   font-weight: 600;
 }
@@ -981,12 +938,6 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
 .settings-card-desc--footnote {
   margin-top: 2px;
   font-size: 11.5px;
-}
-
-@media (max-width: 720px) {
-  .settings-shell-mode-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .settings-blacklist-editor {
