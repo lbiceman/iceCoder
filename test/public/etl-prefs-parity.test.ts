@@ -55,6 +55,7 @@ describe('前后端 iceEtlPrefs 一致性（防漂移）', () => {
       showTransparencyPanel: 'yes' as unknown,
       panelDefaultExpanded: 1 as unknown,
       taskDoneNotification: 'true' as unknown,
+      panelAutoCollapse: 'yes' as unknown,
       panelWidth: 'abc' as unknown,
     };
     const front = loadFrontEtlPrefs();
@@ -63,7 +64,7 @@ describe('前后端 iceEtlPrefs 一致性（防漂移）', () => {
   });
 
   it('合法布尔 patch 两端同样生效', async () => {
-    const patch = { showTransparencyPanel: false, taskDoneNotification: true };
+    const patch = { showTransparencyPanel: false, taskDoneNotification: true, panelAutoCollapse: true };
     const front = loadFrontEtlPrefs();
     await front.set(patch);
     expect(front.get()).toEqual(sanitizeIceEtlPrefs({ ...DEFAULT_ICE_ETL_PREFS, ...patch }));

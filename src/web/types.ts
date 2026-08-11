@@ -57,6 +57,8 @@ export interface IceEtlPrefs {
   panelWidth: number;
   /** 任务完成后是否通过桌面系统通知提醒（仅桌面端生效） */
   taskDoneNotification: boolean;
+  /** 面板空闲（无执行活动）时自动收起为宠物形态 */
+  panelAutoCollapse: boolean;
 }
 
 /** `data/config.json` 顶层结构 */

@@ -71,6 +71,7 @@ describe('etl-prefs', () => {
       panelDefaultExpanded: true,
       panelWidth: 360,
       taskDoneNotification: false,
+      panelAutoCollapse: false,
     });
   });
 
@@ -107,6 +108,7 @@ describe('etl-prefs', () => {
       panelDefaultExpanded: true,
       panelWidth: 360,
       taskDoneNotification: false,
+      panelAutoCollapse: false,
     });
   });
 });

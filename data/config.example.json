@@ -4,7 +4,8 @@
     "panelDefaultExpanded": true,
     "panelWidth": 360,
     "showTransparencyPanel": true,
-    "taskDoneNotification": false
+    "taskDoneNotification": false,
+    "panelAutoCollapse": false
   },
   "shellBlacklist": [
     "rm\\s+-rf",
