@@ -49,6 +49,7 @@ import './chat-task-queue.js';
 import './chat-shell-dock.js';
 import './chat-ws-stream-handlers.js';
 import './chat-ws-session-handlers.js';
+import './chat-ws-restore-handlers.js';
 import './chat-page.js';
 import './memory-page.js';
 import './skills-page.js';

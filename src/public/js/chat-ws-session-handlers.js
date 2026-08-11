@@ -101,7 +101,7 @@ window.ChatWsSessionHandlers = (function () {
       var activeId = Session.getActiveId ? Session.getActiveId() : 'default';
       var sid = data.sessionId || activeId;
       if (sid !== activeId) return;
-      if (window.ChatShellDock) window.ChatShellDock.replaceTasks(Array.isArray(data.bgTasks) ? data.bgTasks : [], sid);
+      if (window.ChatShellDock) window.ChatShellDock.replaceTasks(Array.isArray(data.bgTasks) ? data.bgTasks : []);
     }
 
     function onUserMessageAppended(data) {
