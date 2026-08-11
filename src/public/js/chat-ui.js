@@ -1741,7 +1741,7 @@ window.ChatUI = (function () {
       var delBtn = deleteButtons[j];
       delBtn.disabled = !restoreUiState.canRestore;
       delBtn.title = restoreUiState.canRestore
-        ? '删除此消息及后续对话'
+        ? '删除此消息及对应回复'
         : '运行中，请等待当前任务完成后再删除';
     }
   }

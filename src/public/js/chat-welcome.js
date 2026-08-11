@@ -153,16 +153,8 @@ window.ChatWelcome = (function () {
               '<span class="chat-welcome-context-value" data-welcome-workspace title="">—</span>' +
             '</div>' +
             '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
-              '<span class="chat-welcome-context-label">常用工具</span>' +
-              '<span class="chat-welcome-context-value" data-welcome-tools-chat title="普通对话默认可用">载入中…</span>' +
-            '</div>' +
-            '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
-              '<span class="chat-welcome-context-label">解析工具</span>' +
-              '<span class="chat-welcome-context-value chat-welcome-context-value--badges" data-welcome-tools-doc title="">载入中…</span>' +
-            '</div>' +
-            '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
-              '<span class="chat-welcome-context-label">Shell 模式</span>' +
-              '<span class="chat-welcome-context-value chat-welcome-context-value--badges" data-welcome-tools-shell title="">载入中…</span>' +
+              '<span class="chat-welcome-context-label">系统工具</span>' +
+              '<div class="chat-welcome-tools-inline" data-welcome-tools-inline title="">载入中…</div>' +
             '</div>' +
             '<div class="chat-welcome-context-row">' +
               '<span class="chat-welcome-context-label">上下文大小</span>' +
@@ -221,30 +213,38 @@ window.ChatWelcome = (function () {
     return n + ' 个';
   }
 
-  function toolCountBadgeHtml(text, extraClass) {
+  function buildToolSegHtml(name, count, opts) {
+    opts = opts || {};
+    var countText = opts.countCompact
+      ? (count == null || count <= 0 ? '—' : count + '个')
+      : formatToolCount(count);
     return (
-      '<span class="chat-welcome-context-badge' + (extraClass ? ' ' + extraClass : '') + '">' +
-        escapeHtml(text) +
+      '<span class="chat-welcome-tool-seg"' +
+        (opts.title ? ' title="' + escapeHtml(opts.title) + '"' : '') +
+      '>' +
+        '<span class="chat-welcome-tool-seg-name">' + escapeHtml(name) + '</span>' +
+        '<span class="chat-welcome-tool-seg-value">' + escapeHtml(countText) + '</span>' +
       '</span>'
     );
   }
 
-  function formatToolCategoriesView(categories) {
-    if (!categories) return null;
+  function buildToolsInlineHtml(categories) {
+    if (!categories) return '';
     var chat = categories.chat && typeof categories.chat.count === 'number' ? categories.chat.count : 0;
     var doc = categories.doc && typeof categories.doc.count === 'number' ? categories.doc.count : 0;
     var shell = categories.shell && typeof categories.shell.count === 'number' ? categories.shell.count : 0;
-    return {
-      chat: { text: formatToolCount(chat), title: '文件读写、搜索、命令执行等默认可用工具' },
-      doc: {
-        text: (doc > 0 ? toolCountBadgeHtml('懒加载') + ' ' : '') + formatToolCount(doc),
-        title: 'PDF、Office、图片等解析工具；检测到相关文件或意图后按需携带',
-      },
-      shell: {
-        text: (shell > 0 ? toolCountBadgeHtml('/shell', 'chat-welcome-context-badge--shell') + ' ' : '') + formatToolCount(shell),
-        title: 'PTY 交互与文件 CRUD；输入 /shell 进入协作模式后可用',
-      },
-    };
+    return (
+      buildToolSegHtml('常用', chat, {
+        title: '普通模式默认可用：文件读写、搜索、命令执行等',
+      }) +
+      buildToolSegHtml('解析', doc, {
+        title: '文档/媒体解析工具；检测到相关文件或意图后按需携带',
+      }) +
+      buildToolSegHtml('shell模式', shell, {
+        title: 'Shell 模式专用；输入 /shell 进入协作会话后可用',
+        countCompact: true,
+      })
+    );
   }
 
   function formatContextWindow(n) {
@@ -368,32 +368,17 @@ window.ChatWelcome = (function () {
       else workspaceEl.removeAttribute('title');
     }
 
-    var chatToolsEl = r.querySelector('[data-welcome-tools-chat]');
-    var docToolsEl = r.querySelector('[data-welcome-tools-doc]');
-    var shellToolsEl = r.querySelector('[data-welcome-tools-shell]');
-    if (chatToolsEl || docToolsEl || shellToolsEl) {
+    var toolsInlineEl = r.querySelector('[data-welcome-tools-inline]');
+    if (toolsInlineEl) {
       if (!toolsCategories) {
-        if (chatToolsEl) chatToolsEl.textContent = '载入中…';
-        if (docToolsEl) docToolsEl.textContent = '载入中…';
-        if (shellToolsEl) shellToolsEl.textContent = '载入中…';
+        toolsInlineEl.textContent = '载入中…';
+        toolsInlineEl.removeAttribute('title');
       } else {
-        var cats = formatToolCategoriesView(toolsCategories);
-        if (cats && chatToolsEl) {
-          chatToolsEl.textContent = cats.chat.text;
-          if (cats.chat.title) chatToolsEl.setAttribute('title', cats.chat.title);
-        }
-        if (cats && docToolsEl) {
-          if (cats.doc.text.indexOf('<span') >= 0) docToolsEl.innerHTML = cats.doc.text;
-          else docToolsEl.textContent = cats.doc.text;
-          if (cats.doc.title) docToolsEl.setAttribute('title', cats.doc.title);
-          else docToolsEl.removeAttribute('title');
-        }
-        if (cats && shellToolsEl) {
-          if (cats.shell.text.indexOf('<span') >= 0) shellToolsEl.innerHTML = cats.shell.text;
-          else shellToolsEl.textContent = cats.shell.text;
-          if (cats.shell.title) shellToolsEl.setAttribute('title', cats.shell.title);
-          else shellToolsEl.removeAttribute('title');
-        }
+        toolsInlineEl.innerHTML = buildToolsInlineHtml(toolsCategories);
+        toolsInlineEl.setAttribute(
+          'title',
+          '常用：普通模式默认携带 · 解析：按需携带 · shell模式：/shell 会话专用'
+        );
       }
     }
 

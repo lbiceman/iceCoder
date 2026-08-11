@@ -146,11 +146,11 @@ const cases: EvalCase[] = [
       const index = await loadCheckpointIndex(caseDir, sessionId);
       const later = await loadIntentCheckpoint(caseDir, sessionId, 'u3');
 
-      assertJsonEqual(ui.map(message => message.id), ['u1', 'a1', 'a2', 'u3'], 'UI should remove only u2');
+      assertJsonEqual(ui.map(message => message.id), ['u1', 'a1', 'u3'], 'UI should remove u2 and its agent reply');
       assertJsonEqual(
         structured.map(message => message.content),
-        ['first', 'answer one', 'answer two', 'last'],
-        'structured history should remove only the aligned user message',
+        ['first', 'answer one', 'last'],
+        'structured history should remove the user turn and assistant reply',
       );
       assertJsonEqual(
         index.entries.map(entry => entry.messageId),

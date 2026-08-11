@@ -7,7 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, Menu, Tray, nativeImage, No
 
 ensureWinConsoleUtf8();
 import path from 'node:path';
-import { IPC, APP_NAME, APP_USER_MODEL_ID, DEFAULT_HTTP_PORT, NOTIFICATION_APP_NAME } from './constants';
+import { IPC, APP_NAME, DEFAULT_HTTP_PORT } from './constants';
 import { getAvailablePort } from './port-utils';
 import { startServerProcess, ServerProcessHandle } from './server-process';
 import {
@@ -21,10 +21,7 @@ import {
 import { buildTray } from './tray';
 import { PetWindowManager } from './pet-window-manager';
 import { resolveTaskDoneNotification } from './task-done-notify';
-import {
-  buildWindowsTaskDoneToastXml,
-  resolveWindowsToastAppLogoPath,
-} from './win-task-done-toast';
+import { configureWindowsNotificationIdentity } from './win-notification-shortcut';
 
 let mainWindow: BrowserWindow | null = null;
 let serverHandle: ServerProcessHandle | null = null;
@@ -37,11 +34,8 @@ function logStartupTiming(phase: string): void {
   writeConsole(process.stdout, `[startup] main ${phase} +${Math.round(performance.now() - startupStartedAt)}ms\n`);
 }
 
-/** Windows toast 左上角来源名默认是 electron.app.*，需显式设置应用名与 AUMID。 */
-function configureWindowsNotificationIdentity(): void {
-  if (process.platform !== 'win32') return;
-  app.setAppUserModelId(app.isPackaged ? APP_USER_MODEL_ID : process.execPath);
-  app.setName(NOTIFICATION_APP_NAME);
+function resolveDesktopAssetsDir(): string {
+  return path.join(__dirname, '..', 'assets');
 }
 
 function resolveAppIcon(): Electron.NativeImage {
@@ -57,36 +51,15 @@ function resolveAppIcon(): Electron.NativeImage {
   return nativeImage.createEmpty();
 }
 
-function resolveDesktopAssetsDir(): string {
-  return path.join(__dirname, '..', 'assets');
-}
-
+/** 纯文字系统通知；Windows 标题栏应用图标由系统强制展示，应用侧无法移除。 */
 function showTaskDoneSystemNotification(decision: {
   title: string;
   body: string;
 }): Electron.Notification {
-  const assetsDir = resolveDesktopAssetsDir();
-  const appIcon = resolveAppIcon();
-
-  if (process.platform === 'win32') {
-    const appLogoPath = resolveWindowsToastAppLogoPath(assetsDir);
-    const heroIconPath = appIcon.isEmpty() ? null : path.join(assetsDir, 'icon.png');
-    return new Notification({
-      toastXml: buildWindowsTaskDoneToastXml({
-        title: decision.title,
-        body: decision.body,
-        appLogoPath,
-        heroIconPath,
-      }),
-      silent: false,
-    });
-  }
-
   return new Notification({
     title: decision.title,
     body: decision.body,
     silent: false,
-    ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
   });
 }
 
@@ -367,7 +340,10 @@ app.on('activate', () => {
 
 app.whenReady().then(() => {
   logStartupTiming('electron-ready');
-  configureWindowsNotificationIdentity();
+  configureWindowsNotificationIdentity(
+    resolveDesktopAssetsDir(),
+    path.join(__dirname, '..', 'scripts', 'ensure-notification-shortcut.ps1'),
+  );
   // 启动窗口创建前就移除默认菜单，避免加载阶段出现 File/Edit 顶栏
   Menu.setApplicationMenu(null);
   const appIcon = resolveAppIcon();

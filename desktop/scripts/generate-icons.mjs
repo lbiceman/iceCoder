@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * 从 src/public/icons/favicon.svg 生成 Electron 用 PNG / ICO / 托盘图标。
+ * icon.ico / icon.png 与 Web 浏览器 favicon 同源，也用于 Windows 通知左上角图标注册。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -32,16 +33,12 @@ async function main() {
   const tray32 = await renderPng(32);
   fs.writeFileSync(path.join(assetsDir, 'tray-icon.png'), tray32);
 
-  // Windows toast 左上角 appLogoOverride（44×44，SVG 圆外透明 + hint-crop=circle）
-  const toastLogo44 = await renderPng(44);
-  fs.writeFileSync(path.join(assetsDir, 'notification-app-logo.png'), toastLogo44);
-
   const icoSizes = [16, 24, 32, 48, 64, 128, 256];
   const icoBuffers = await Promise.all(icoSizes.map((s) => renderPng(s)));
   const ico = await pngToIco(icoBuffers);
   fs.writeFileSync(path.join(assetsDir, 'icon.ico'), ico);
 
-  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), notification-app-logo.png (44), icon.ico');
+  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), icon.ico');
   console.log('[generate-icons] macOS .icns 将在 electron-builder --mac 时由 icon.png 自动转换');
 }
 

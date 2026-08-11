@@ -38,6 +38,32 @@ export async function readToolTraceDiffIndex(
   }
 }
 
+export async function removeToolTraceDiffEntries(
+  sessionsDir: string,
+  sessionId: string,
+  toolCallIds: string[],
+): Promise<void> {
+  const toRemove = new Set(toolCallIds.filter((id) => typeof id === 'string' && id.trim()));
+  if (toRemove.size === 0) return;
+
+  const index = await readToolTraceDiffIndex(sessionsDir, sessionId);
+  let changed = false;
+  for (const id of toRemove) {
+    if (Object.prototype.hasOwnProperty.call(index, id)) {
+      delete index[id];
+      changed = true;
+    }
+  }
+  if (!changed) return;
+
+  const file = toolTraceDiffsPath(sessionsDir, sessionId);
+  if (Object.keys(index).length === 0) {
+    await fs.unlink(file).catch(() => {});
+    return;
+  }
+  await fs.writeFile(file, JSON.stringify(index), 'utf-8');
+}
+
 export async function persistToolTraceDiff(
   sessionsDir: string,
   sessionId: string,
