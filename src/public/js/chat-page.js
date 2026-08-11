@@ -48,10 +48,6 @@ window.ChatPage = (function () {
   var lastActivateFetchMs = 0;
   var lastSyncMessagesMs = 0;
   var initialHistoryPainted = false;
-  /** 当前 session 后台 shell 任务内存缓存（权威源：服务端 session 文件 + WS bgTasks） */
-  var shellDockTaskCache = [];
-  var shellDockResyncTimer = null;
-  var shellDockFetchGeneration = 0;
   var pendingInitialPaint = false;
 
   function isMobileShell() {
@@ -868,104 +864,6 @@ window.ChatPage = (function () {
     });
   }
 
-  function tryMountShellDock() {
-    if (!window.EtlShellDock || typeof window.EtlShellDock.mount !== 'function') return;
-    var host = document.getElementById('etl-shell-dock-host');
-    if (host) window.EtlShellDock.mount(host);
-  }
-
-  function scheduleShellDockResync() {
-    if (shellDockResyncTimer) clearTimeout(shellDockResyncTimer);
-    shellDockResyncTimer = setTimeout(function () {
-      shellDockResyncTimer = null;
-      syncShellDockFromCache();
-    }, 80);
-    setTimeout(syncShellDockFromCache, 450);
-  }
-
-  function isShellDockRunningTask(t) {
-    if (window.EtlShellDock && typeof window.EtlShellDock.isRunningTask === 'function') {
-      return window.EtlShellDock.isRunningTask(t);
-    }
-    return !!(t && t.taskId && t.status === 'running' && !t.isTerminal);
-  }
-
-  function mergeShellDockTasks(tasks) {
-    if (!Array.isArray(tasks)) return;
-    for (var i = 0; i < tasks.length; i++) {
-      var t = tasks[i];
-      if (!t || !t.taskId) continue;
-      if (!isShellDockRunningTask(t)) {
-        shellDockTaskCache = shellDockTaskCache.filter(function (row) {
-          return row && row.taskId !== t.taskId;
-        });
-        continue;
-      }
-      var found = -1;
-      for (var j = 0; j < shellDockTaskCache.length; j++) {
-        if (shellDockTaskCache[j].taskId === t.taskId) {
-          found = j;
-          break;
-        }
-      }
-      if (found >= 0) shellDockTaskCache[found] = t;
-      else shellDockTaskCache.push(t);
-    }
-  }
-
-  function syncShellDockFromCache() {
-    tryMountShellDock();
-    if (window.EtlShellDock && typeof window.EtlShellDock.hydrate === 'function') {
-      window.EtlShellDock.hydrate(shellDockTaskCache);
-    }
-  }
-
-  function replaceShellDockTasks(tasks, sessionId) {
-    if (!Array.isArray(tasks)) {
-      scheduleShellDockResync();
-      return;
-    }
-    shellDockTaskCache = tasks.filter(isShellDockRunningTask);
-    syncShellDockFromCache();
-    scheduleShellDockResync();
-  }
-
-  function fetchSessionBgTasks(sessionId, callback) {
-    var sid = sessionId || (Session.getActiveId ? Session.getActiveId() : 'default');
-    var generation = ++shellDockFetchGeneration;
-    fetch('/api/sessions/' + encodeURIComponent(sid) + '/bg-tasks', { cache: 'no-store' })
-      .then(function (res) { return res.ok ? res.json() : { tasks: [] }; })
-      .then(function (body) {
-        if (generation !== shellDockFetchGeneration) return;
-        var tasks = body && Array.isArray(body.tasks) ? body.tasks : [];
-        if (callback) callback(tasks);
-      })
-      .catch(function () {
-        if (generation !== shellDockFetchGeneration) return;
-        if (callback) callback([]);
-      });
-  }
-
-  /** WS bgTasks 优先；缺失时 REST 读 session 文件（跨端同步）。 */
-  function hydrateShellDockForSession(sessionId, wsTasks) {
-    if (Array.isArray(wsTasks)) {
-      replaceShellDockTasks(wsTasks, sessionId);
-      return;
-    }
-    fetchSessionBgTasks(sessionId, function (tasks) {
-      replaceShellDockTasks(tasks, sessionId);
-    });
-  }
-
-  function clearShellDockCache(sessionId) {
-    var activeId = Session.getActiveId ? Session.getActiveId() : 'default';
-    var sid = sessionId || activeId;
-    if (sid === activeId) {
-      shellDockTaskCache = [];
-      syncShellDockFromCache();
-    }
-  }
-
   function syncSidebarWorkspace(data) {
     if (!data || !window.ChatSessionSidebar) return;
     var sid = data.sessionId || data.activeSessionId;
@@ -1025,7 +923,7 @@ window.ChatPage = (function () {
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
-    hydrateShellDockForSession(sessionId, options.bgTasks);
+    if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
     syncShellCollabIndicator();
   }
 
@@ -1239,11 +1137,11 @@ window.ChatPage = (function () {
     var dockSid = Session.getActiveId ? Session.getActiveId() : 'default';
     var connectedSid = data && (data.activeSessionId || data.sessionId);
     if (!connectedSid || connectedSid === dockSid) {
-      hydrateShellDockForSession(dockSid, data && data.bgTasks);
-    } else {
-      hydrateShellDockForSession(dockSid, null);
+      if (window.ChatShellDock) window.ChatShellDock.hydrate(dockSid, data && data.bgTasks);
+    } else if (window.ChatShellDock) {
+      window.ChatShellDock.hydrate(dockSid, null);
     }
-    scheduleShellDockResync();
+    if (window.ChatShellDock) window.ChatShellDock.scheduleResync();
     notifyShellCollabState(data || {});
     if (paintedFromSessionSync) return;
     var rt = data && data.runningTurn;
@@ -1259,7 +1157,7 @@ window.ChatPage = (function () {
     var activeId = Session.getActiveId ? Session.getActiveId() : 'default';
     var sid = data.sessionId || activeId;
     if (sid !== activeId) return;
-    replaceShellDockTasks(Array.isArray(data.bgTasks) ? data.bgTasks : [], sid);
+    if (window.ChatShellDock) window.ChatShellDock.replaceTasks(Array.isArray(data.bgTasks) ? data.bgTasks : [], sid);
   }
 
   // ---- WebSocket 事件处理 ----
@@ -2228,13 +2126,13 @@ window.ChatPage = (function () {
       : '';
     if (payload && Array.isArray(payload.tasks)
       && (!payload.sessionId || payload.sessionId === activeId)) {
-      mergeShellDockTasks(payload.tasks);
+      if (window.ChatShellDock) window.ChatShellDock.mergeTasks(payload.tasks);
     }
     if (window.BgTaskChip && elMessages) {
       window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
     }
     if (window.EtlShellDock && typeof window.EtlShellDock.handleUpdate === 'function') {
-      tryMountShellDock();
+      if (window.ChatShellDock) window.ChatShellDock.tryMount();
       window.EtlShellDock.handleUpdate(payload, activeId);
     }
     if (window.BgTaskChip && elMessages) {
@@ -2490,15 +2388,7 @@ window.ChatPage = (function () {
         WS.send({ type: 'bg_task_stop', taskId: taskId });
       });
     }
-    if (window.EtlShellDock && window.EtlShellDock.setTaskRemovedHandler) {
-      window.EtlShellDock.setTaskRemovedHandler(function (taskId) {
-        if (!taskId) return;
-        shellDockTaskCache = shellDockTaskCache.filter(function (t) {
-          return t && t.taskId !== taskId;
-        });
-        persistShellDockCache();
-      });
-    }
+    if (window.ChatShellDock) window.ChatShellDock.initTaskRemovedHandler();
 
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
@@ -2686,9 +2576,9 @@ window.ChatPage = (function () {
     render: render,
     onActivate: onActivate,
     onSessionSwitched: onSessionSwitched,
-    syncShellDockOnMount: syncShellDockFromCache,
-    clearShellDockCache: clearShellDockCache,
-    hydrateShellDockForSession: hydrateShellDockForSession,
+    syncShellDockOnMount: function () { if (window.ChatShellDock) window.ChatShellDock.sync(); },
+    clearShellDockCache: function (sessionId) { if (window.ChatShellDock) window.ChatShellDock.clearCache(sessionId); },
+    hydrateShellDockForSession: function (sessionId, wsTasks) { if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, wsTasks); },
     isWorkloadActive: isWorkloadActive,
     syncWelcomeState: syncWelcomeState,
     reloadModelConfig: loadModelConfig,
