@@ -47,6 +47,7 @@ import './pages/mobile/mobile-skills-page.js';
 import './pages/mobile/mobile-config-page.js';
 import './chat-task-queue.js';
 import './chat-shell-dock.js';
+import './chat-ws-stream-handlers.js';
 import './chat-page.js';
 import './memory-page.js';
 import './skills-page.js';

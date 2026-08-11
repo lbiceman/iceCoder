@@ -145,7 +145,7 @@ describe('phase 1-3 wiring', () => {
 
   it('chat-page 将后端累计 Token 和工具次数同步到面板 Footer', () => {
     const src = readFileSync(
-      path.join(__dirname, '../../src/public/js/chat-page.js'),
+      path.join(__dirname, '../../src/public/js/chat-ws-stream-handlers.js'),
       'utf-8',
     );
     expect(src).toMatch(/ChatExecutionPlan\.applyRuntimeStats\(\{[\s\S]*totalTokenUsage:\s*step\.totalTokenUsage[\s\S]*totalToolCalls:\s*step\.totalToolCalls/);

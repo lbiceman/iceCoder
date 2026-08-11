@@ -1173,284 +1173,11 @@ window.ChatPage = (function () {
     endTransparencyTurnTimer();
   }
 
-  function onWsReasoningStream(data) {
-    if (userStopped) return;
-    if (!isStreaming) {
-      isStreaming = true;
-      UI.setStreamingState(true);
-    }
-    if (sessionPet) sessionPet.setState('thinking');
-    UI.appendReasoningStreamChunk(data.delta || '');
-    syncWelcomeState();
-  }
+  // 流式事件 handler（stream / reasoning_stream / stream_end / response）已拆分至
+  // chat-ws-stream-handlers.js，经 ctx 读写共享状态。
 
-  function onWsStream(data) {
-    if (userStopped) return;
-    streamChunksReceived = true;
-    if (!isStreaming) {
-      isStreaming = true;
-      UI.setStreamingState(true);
-    }
-    // Harness 多轮工具任务期间 stream_delta 多为规划/推理，进 Thinking 块而非 Assistant 正文
-    if (WS.isProcessing()) {
-      if (sessionPet) sessionPet.setState('thinking');
-      UI.appendReasoningStreamChunk(data.delta || '');
-      syncWelcomeState();
-      return;
-    }
-    visibleStreamChunksReceived = true;
-    if (sessionPet) sessionPet.setState('read');
-    UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
-    syncWelcomeState();
-  }
-
-  function onWsStreamEnd() {
-    if (!userStopped) {
-      UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-      if (streamChunksReceived) {
-        streamFinalized = true;
-        // 任务结束：过程思考仅作流式展示，最终答复由 refresh / response 写入 Assistant
-        UI.clearReasoningStream();
-      }
-    }
-    streamChunksReceived = false;
-    isStreaming = false;
-    UI.setStreamingState(false);
-    syncWelcomeState();
-  }
-
-  function scheduleRefreshAfterTurn() {
-    setTimeout(function () {
-      if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn('force');
-      }
-    }, 50);
-  }
-
-  function onWsResponse(data) {
-    endTransparencyTurnTimer();
-    if (userStopped) {
-      userStopped = false;
-      return;
-    }
-    if (streamFinalized && visibleStreamChunksReceived) {
-      streamFinalized = false;
-      visibleStreamChunksReceived = false;
-      scheduleRefreshAfterTurn();
-      return;
-    }
-    streamFinalized = false;
-    visibleStreamChunksReceived = false;
-    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    UI.clearReasoningStream();
-    var msg = { role: 'agent', content: Session.stripStatusTag(data.content || '') };
-    Session.appendMessage(msg);
-    if (pendingTurnTokenUsage) {
-      if (pendingTurnTokenUsage.messageId && !msg.id) {
-        msg.id = pendingTurnTokenUsage.messageId;
-      }
-      msg.turnTokenUsage = pendingTurnTokenUsage.usage || pendingTurnTokenUsage;
-      pendingTurnTokenUsage = null;
-    }
-    Session.flushToolBatchLocal();
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    if (msg.turnTokenUsage && UI.updateMessageTokenUsage) {
-      UI.updateMessageTokenUsage(msg);
-    }
-    Session.saveMessages();
-    UI.enableAutoScroll();
-    syncWelcomeState();
-    scheduleRefreshAfterTurn();
-  }
-
-  function forwardExecutionRoundMarker(type, step) {
-    try {
-      if (!window.ChatExecutionPlanBridge
-        || typeof window.ChatExecutionPlanBridge.handleStep !== 'function') return;
-      // 只转发轮次与终止原因；严禁把 thinking/content/delta 带入透明层。
-      window.ChatExecutionPlanBridge.handleStep({
-        type: type,
-        iteration: step && step.iteration,
-        stopReason: step && step.stopReason,
-        ts: Date.now(),
-      });
-    } catch (_e) { /* observer must not affect chat */ }
-  }
-
-  function onWsStep(data) {
-    var step = data.step;
-    if (!step) return;
-
-    // P3 — 用户已点 Stop：后端 harness 还在收尾（写 checkpoint / drain memory）期间会继续推
-    // step / stream_delta，UI 不再据此切冰豆状态，否则会出现「按钮变 Send 了但冰豆还在动」。
-    // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
-    if (userStopped) return;
-
-    if (step.type === 'thinking' && typeof step.iteration === 'number') {
-      forwardExecutionRoundMarker('model_round_start', step);
-    } else if (step.type === 'context_usage' && typeof step.iteration === 'number') {
-      forwardExecutionRoundMarker('model_round_end', step);
-    } else if (step.type === 'final') {
-      forwardExecutionRoundMarker('model_task_final', step);
-    }
-
-    if (step.totalTokenUsage) {
-      applyTotalTokenUsageFromStep(step.totalTokenUsage);
-    }
-    if ((step.totalTokenUsage !== undefined || step.totalToolCalls !== undefined)
-      && window.ChatExecutionPlan
-      && typeof window.ChatExecutionPlan.applyRuntimeStats === 'function') {
-      window.ChatExecutionPlan.applyRuntimeStats({
-        totalTokenUsage: step.totalTokenUsage,
-        totalToolCalls: step.totalToolCalls,
-      });
-    }
-    if (step.iteration) {
-      Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
-    }
-    if (step.type === 'tool_progress' && step.content) {
-      Pet.setLastToolProgressHint(step.content);
-      WS.setLastToolProgressHint(step.content);
-      Pet.updateStatusText(step.content, isStreaming, WS.isProcessing());
-    }
-    if (step.type === 'thinking') {
-      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
-      if (step.content) {
-        UI.appendReasoningStreamIfAbsent(Session.stripStatusTag(step.content));
-      }
-      var msgsThink = Session.getMessages();
-      for (var mti = msgsThink.length - 1; mti >= 0; mti--) {
-        if (msgsThink[mti].role === 'agent' && msgsThink[mti]._streaming) {
-          msgsThink.splice(mti, 1);
-          break;
-        }
-      }
-    }
-    if (step.type === 'tool_call') {
-      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
-      var msgs = Session.getMessages();
-      for (var mi = msgs.length - 1; mi >= 0; mi--) {
-        if (msgs[mi].role === 'agent' && msgs[mi]._streaming) {
-          msgs.splice(mi, 1);
-          break;
-        }
-      }
-    }
-    if (step.type === 'tool_call' && step.toolName) {
-      if (WS.isProcessing() && UI.isLiveToolRoundActive && !UI.isLiveToolRoundActive()) {
-        UI.setLiveToolRoundActive(true);
-      }
-      var fmt = window.ToolTraceFormat;
-      var detail = fmt
-        ? fmt.formatToolArgsDetailPreview(step.toolName, step.toolArgs)
-        : (step.toolArgs && (step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query)) || '';
-      if (!detail && step.toolArgs) {
-        var argsStr = JSON.stringify(step.toolArgs);
-        detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
-      }
-      var callStatus = fmt && fmt.resolveToolCallInitialStatus
-        ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
-        : 'pending';
-      var toolCallId = step.toolCallId || '';
-      var diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
-        ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
-        : null;
-      UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs);
-      Session.pushToolBatch({
-        toolName: step.toolName,
-        detail: detail,
-        status: callStatus,
-        toolCallId: toolCallId,
-      });
-      if (toolCallId) {
-        streamingDiffBuffer = { toolCallId: toolCallId, text: '' };
-      }
-    }
-    if (step.type === 'tool_result' && step.toolName) {
-      var fmtResult = window.ToolTraceFormat;
-      var resultStatus = fmtResult
-        ? fmtResult.resolveToolTraceResultStatus(
-          step.toolName,
-          step.toolSuccess,
-          step.toolOutcome,
-          step.toolOutput,
-        )
-        : (step.toolOutcome === 'policy_block'
-          ? 'warn'
-          : (step.toolSuccess ? 'success' : 'error'));
-      UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus);
-      Session.updateToolBatchStatus(step.toolName, resultStatus, step.toolCallId || '');
-      if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
-        var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
-        if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
-          window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
-        }
-      }
-      if (window.ToolDisplayHistory) {
-        var diffSource = window.ToolDisplayHistory.extractDiffSource(
-          step.toolName,
-          step.toolOutput,
-          step.toolArgs,
-        );
-        if (!diffSource && window.DiffViewer && step.toolOutput) {
-          diffSource = DiffViewer.extractUnifiedDiff(step.toolOutput);
-        }
-        tryMountToolDiff(step.toolCallId || '', diffSource);
-      }
-      streamingDiffBuffer = { toolCallId: '', text: '' };
-    }
-    if (window.ChatExecutionPlanBridge
-      && (step.type === 'execution_plan_init'
-        || step.type === 'execution_plan_update'
-        || step.type === 'execution_plan_clear'
-        || step.type === 'task_graph_init'
-        || step.type === 'task_graph_node'
-        || step.type === 'task_graph_update'
-        || step.type === 'task_graph_branch'
-        || step.type === 'task_graph_done'
-        || step.type === 'execution_mode_enter'
-        || step.type === 'execution_mode_exit'
-        // Phase 5：工具事件用于推导 LLM 当前动作（面板内只读 toolName / 到达状态）
-        || step.type === 'tool_call'
-        || step.type === 'tool_result')) {
-      window.ChatExecutionPlanBridge.handleStep(step);
-    }
-    Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
-  }
-
-  function onWsStatus(data) {
-    var processing = data.status === 'processing';
-    WS.setProcessing(processing);
-    notifySnapshotRestoreAvailability();
-    if (!processing) {
-      endTransparencyTurnTimer();
-      // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
-      // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
-      var skipRefreshAfterUserStop = userStopped;
-      if (userStopped) userStopped = false;
-      isStreaming = false;
-      Pet.removeThinking(isStreaming, WS.isProcessing());
-      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
-      if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
-      // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
-      if (!skipRefreshAfterUserStop) {
-        refreshChatHistoryAfterTurn('force');
-      }
-    } else if (!userStopped) {
-      if (sessionPet) sessionPet.setState('thinking');
-    }
-    syncSendButtonWithWorkload();
-  }
-
-  function onWsError(data) {
-    endTransparencyTurnTimer();
-    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    var msg = { role: 'agent', content: '[err] ' + data.message };
-    Session.appendMessage(msg);
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    Session.saveMessages();
-    Pet.removeThinking(isStreaming, WS.isProcessing());
-  }
+  // step / status / error / tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js，
+  // 经 ctx 读写共享状态；onWsMcpReady 等会话/恢复域 handler 保留在本文件。
 
   function onWsMcpReady(data) {
     announceMcpReadyFromPayload(data || {});
@@ -2140,33 +1867,7 @@ window.ChatPage = (function () {
     }
   }
 
-  function tryMountToolDiff(toolCallId, diffSource) {
-    if (!toolCallId || !diffSource || !UI.mountDiffForToolCallId) return;
-    UI.mountDiffForToolCallId(toolCallId, diffSource);
-  }
-
-  /** run_command 流式输出：按 toolCallId 累积并实时预览 */
-  function onWsToolOutput(data) {
-    if (!data || !data.content || !data.toolCallId) return;
-    if (streamingDiffBuffer.toolCallId && streamingDiffBuffer.toolCallId !== data.toolCallId) {
-      streamingDiffBuffer = { toolCallId: data.toolCallId, text: '' };
-    }
-    if (!streamingDiffBuffer.toolCallId) streamingDiffBuffer.toolCallId = data.toolCallId;
-    streamingDiffBuffer.text += data.content;
-    var diffSource = null;
-    if (window.DiffViewer && typeof DiffViewer.extractUnifiedDiff === 'function') {
-      diffSource = DiffViewer.extractUnifiedDiff(streamingDiffBuffer.text);
-    } else if (window.DiffViewer && typeof DiffViewer.looksLikeUnifiedDiffText === 'function') {
-      if (!DiffViewer.looksLikeUnifiedDiffText(streamingDiffBuffer.text)) return;
-      diffSource = streamingDiffBuffer.text;
-    } else if (!/^@@\s/m.test(streamingDiffBuffer.text) && !/^diff --git /m.test(streamingDiffBuffer.text)) {
-      return;
-    } else {
-      diffSource = streamingDiffBuffer.text;
-    }
-    if (!diffSource) return;
-    tryMountToolDiff(streamingDiffBuffer.toolCallId, diffSource);
-  }
+  // tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js。
 
   /**
    * 方案 A keep-alive：app.js navigate 回聊天页时调用。
@@ -2187,6 +1888,42 @@ window.ChatPage = (function () {
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
       syncMessages(false);
     }
+  }
+
+  // ---- 流式 handler ctx ----
+  // 流式事件 handler 已拆分至 chat-ws-stream-handlers.js；ctx 向各 handler 暴露
+  // 共享状态读写（状态仍保留在本闭包）与跨域辅助函数引用。
+  function buildStreamHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'isStreaming') return isStreaming;
+        if (name === 'userStopped') return userStopped;
+        if (name === 'streamFinalized') return streamFinalized;
+        if (name === 'streamChunksReceived') return streamChunksReceived;
+        if (name === 'visibleStreamChunksReceived') return visibleStreamChunksReceived;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'isStreaming') isStreaming = value;
+        else if (name === 'userStopped') userStopped = value;
+        else if (name === 'streamFinalized') streamFinalized = value;
+        else if (name === 'streamChunksReceived') streamChunksReceived = value;
+        else if (name === 'visibleStreamChunksReceived') visibleStreamChunksReceived = value;
+      },
+      getPendingTurnTokenUsage: function () { return pendingTurnTokenUsage; },
+      setPendingTurnTokenUsage: function (v) { pendingTurnTokenUsage = v; },
+      getStreamingDiffBuffer: function () { return streamingDiffBuffer; },
+      setStreamingDiffBuffer: function (buf) { streamingDiffBuffer = buf; },
+      getSessionPet: function () { return sessionPet; },
+      getElMessages: function () { return elMessages; },
+      syncWelcomeState: syncWelcomeState,
+      endTransparencyTurnTimer: endTransparencyTurnTimer,
+      refreshChatHistoryAfterTurn: refreshChatHistoryAfterTurn,
+      shouldSkipServerSnapshotSync: shouldSkipServerSnapshotSync,
+      applyTotalTokenUsageFromStep: applyTotalTokenUsageFromStep,
+      notifySnapshotRestoreAvailability: notifySnapshotRestoreAvailability,
+      syncSendButtonWithWorkload: syncSendButtonWithWorkload,
+    };
   }
 
   // ---- 渲染 ----
@@ -2395,13 +2132,11 @@ window.ChatPage = (function () {
     WS.on('connected', onWsConnected);
     WS.on('session_cleared', onWsSessionCleared);
     WS.on('close', onWsClose);
-    WS.on('stream', onWsStream);
-    WS.on('reasoning_stream', onWsReasoningStream);
-    WS.on('stream_end', onWsStreamEnd);
-    WS.on('response', onWsResponse);
-    WS.on('step', onWsStep);
-    WS.on('status', onWsStatus);
-    WS.on('error', onWsError);
+    // 流式事件（stream / reasoning_stream / stream_end / response / step / status / error / tool_output）
+    // 已拆分至 chat-ws-stream-handlers.js，经 ctx 读写共享状态
+    if (window.ChatWsStreamHandlers && typeof window.ChatWsStreamHandlers.bind === 'function') {
+      window.ChatWsStreamHandlers.bind(WS, buildStreamHandlerCtx());
+    }
     WS.on('mcp_ready', onWsMcpReady);
     WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
@@ -2416,7 +2151,6 @@ window.ChatPage = (function () {
     WS.on('sync', syncMessages);
     WS.on('bg_task_update', onWsBgTaskUpdate);
     WS.on('bg_task_stop_result', onWsBgTaskStopResult);
-    WS.on('tool_output', onWsToolOutput);
     WS.on('harness_state', onWsHarnessState);
     WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
     WS.on('checkpoint_captured', refreshSnapshotTimelinePanel);
