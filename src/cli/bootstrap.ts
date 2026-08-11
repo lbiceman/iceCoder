@@ -161,10 +161,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
     onReloaded: notifyMcpReady,
   });
 
-  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-    outputDir: paths.outputDir,
-    sessionDir: paths.sessionsDir,
-  });
+  const orchestrator = new Orchestrator(fileParser, llmAdapter);
 
 
   return {

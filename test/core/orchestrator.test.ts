@@ -17,20 +17,12 @@ describe('Orchestrator', () => {
   });
 
   it('getLLMAdapter returns the adapter passed to constructor', () => {
-    const orchestrator = new Orchestrator(fileParser, llmAdapter, { outputDir: '/out' });
+    const orchestrator = new Orchestrator(fileParser, llmAdapter);
     expect(orchestrator.getLLMAdapter()).toBe(llmAdapter);
   });
 
   it('getFileParser returns the parser passed to constructor', () => {
     const orchestrator = new Orchestrator(fileParser, llmAdapter);
     expect(orchestrator.getFileParser()).toBe(fileParser);
-  });
-
-  it('getConfig returns a readonly snapshot of config', () => {
-    const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-      outputDir: '/tmp/out',
-      sessionDir: '/tmp/sess',
-    });
-    expect(orchestrator.getConfig()).toEqual({ outputDir: '/tmp/out', sessionDir: '/tmp/sess' });
   });
 });

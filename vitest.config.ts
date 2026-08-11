@@ -18,6 +18,9 @@ export default defineConfig({
       '@memory': './src/memory',
       '@llm': './src/llm',
       '@web': './src/web',
+      // desktop 模块依赖 electron；真实 electron 包在纯 Node 下无法 import，
+      // 统一指向测试替身（test/desktop/electron-stub.ts）。
+      electron: './test/desktop/electron-stub.ts',
     },
   },
 });
