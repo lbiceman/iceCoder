@@ -15,6 +15,10 @@ import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
 import { resolveDefaultApiPort } from '../serve-port.js';
 import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
+import {
+  createCliOnConfirm,
+  createCliOnShellMandatoryConfirm,
+} from '../utils/harness-confirm-handlers.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
@@ -468,20 +472,8 @@ ${c.bold}终端内置命令:${c.reset}
         supervisorConfig: supervisorRuntime.supervisorConfig,
         globalPolicy: supervisorRuntime.globalPolicy,
         supervisorBridge: supervisorRuntime.bridge,
-        onConfirm: async (toolName, toolArgs) => {
-          // 终端确认
-          spinner.stop();
-          const detail = toolName.includes('(') ? '' : ` (${JSON.stringify(toolArgs).substring(0, 80)})`;
-          console.log(`\n${c.yellow}⚠ 需要确认: ${toolName}${detail}${c.reset}`);
-
-          return new Promise<boolean>((resolve) => {
-            const confirmRl = createInterface({ input: process.stdin, output: process.stdout });
-            confirmRl.question(`${c.yellow}允许执行? (y/n) ${c.reset}`, (answer) => {
-              confirmRl.close();
-              resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
-            });
-          });
-        },
+        onConfirm: createCliOnConfirm(spinner),
+        onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(spinner),
       };
 
       const harness = new Harness(harnessConfig, wsCtx.toolExecutor);

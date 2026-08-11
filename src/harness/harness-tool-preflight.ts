@@ -23,9 +23,15 @@ export interface ToolPreflightInput {
 
 export interface ToolPreflightDecision {
   blocked: boolean;
-  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_blacklist';
+  reason?: 'dist_read' | 'build_diagnostic_gate' | 'delegate_build_blocked' | 'missing_file' | 'missing_file_repeat' | 'host_kill' | 'shell_hard_block';
   message?: string;
   hostKillLabel?: string;
+}
+
+function sandboxBlockPreflightReason(
+  sandboxReason: 'hard_block' | 'host_kill' | 'blacklist' | undefined,
+): NonNullable<ToolPreflightDecision['reason']> {
+  return sandboxReason === 'hard_block' ? 'shell_hard_block' : 'host_kill';
 }
 
 const MISSING_FILE_TARGET_TOOLS = new Set(['read_file', 'edit_file', 'patch_file', 'append_file']);
@@ -177,11 +183,14 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
   if (input.toolName === 'run_command') {
     const command = extractRunCommand(input.args);
     if (command) {
-      const sandbox = analyzeShellSandbox(command, { workDir: input.workspaceRoot });
+      const sandbox = analyzeShellSandbox(command, {
+        workDir: input.workspaceRoot,
+        includeBlacklist: false,
+      });
       if (sandbox.blocked) {
         return {
           blocked: true,
-          reason: sandbox.reason === 'blacklist' ? 'shell_blacklist' : 'host_kill',
+          reason: sandboxBlockPreflightReason(sandbox.reason),
           hostKillLabel: sandbox.matchLabel,
           message: sandbox.message ?? '[Sandbox / Blocked]',
         };
@@ -199,7 +208,7 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
       if (sandbox.blocked) {
         return {
           blocked: true,
-          reason: sandbox.reason === 'hard_block' ? 'host_kill' : 'host_kill',
+          reason: sandboxBlockPreflightReason(sandbox.reason),
           hostKillLabel: sandbox.matchLabel,
           message: sandbox.message ?? '[Sandbox / Blocked]',
         };

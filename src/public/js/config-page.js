@@ -90,7 +90,7 @@ window.SettingsPage = (function () {
             '<h2 class="settings-section-title">安全与执行</h2>' +
             '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">加载中…</span>' +
           '</div>' +
-          '<p class="settings-section-desc">控制 Agent 工具权限，以及敏感 Shell 命令在普通模式与 Shell 协作模式下的不同处理方式</p>' +
+          '<p class="settings-section-desc">控制 Agent 工具权限，以及敏感 Shell 命令的强制确认策略</p>' +
           '<div class="settings-security-grid">' +
           '<div class="settings-card" id="settings-skip-permission-card" hidden>' +
             '<div class="settings-card-row">' +
@@ -114,32 +114,15 @@ window.SettingsPage = (function () {
                   '<span class="settings-card-title">Shell 强制确认规则</span>' +
                   '<span class="config-badge is-starting" id="settings-blacklist-count">0 条规则</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。</p>' +
-                '<div class="settings-shell-mode-grid" role="list" aria-label="普通模式与 Shell 模式下的规则生效方式">' +
-                  '<div class="settings-shell-mode-item" role="listitem">' +
-                    '<div class="settings-shell-mode-head">' +
-                      '<span class="settings-shell-mode-badge">普通模式</span>' +
-                      '<span class="settings-shell-mode-sub">默认聊天 · run_command</span>' +
-                    '</div>' +
-                    '<ul class="settings-shell-mode-list">' +
-                      '<li>命中规则 → <strong>直接拦截</strong>，命令无法执行</li>' +
-                      '<li>不会弹出确认框，Agent 会收到拒绝结果</li>' +
-                      '<li>未命中规则 → 按普通权限策略（破坏性命令可能弹确认）</li>' +
-                    '</ul>' +
-                  '</div>' +
-                  '<div class="settings-shell-mode-item settings-shell-mode-item--shell" role="listitem">' +
-                    '<div class="settings-shell-mode-head">' +
-                      '<span class="settings-shell-mode-badge settings-shell-mode-badge--shell">Shell 模式</span>' +
-                      '<span class="settings-shell-mode-sub">/shell 会话 · PTY 工具</span>' +
-                    '</div>' +
-                    '<ul class="settings-shell-mode-list">' +
-                      '<li>命中规则 → <strong>弹框强制确认</strong>，批准后才写入终端</li>' +
-                      '<li>未命中规则 → <strong>直接执行</strong>，跳过普通权限确认</li>' +
-                      '<li>「跳过权限确认」等设置不能绕过强制确认</li>' +
-                    '</ul>' +
-                  '</div>' +
+                '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。适用于普通聊天与 /shell 协作。</p>' +
+                '<div class="settings-shell-rules-panel">' +
+                  '<ul class="settings-shell-rules-list">' +
+                    '<li>命中规则 → <strong>弹框强制确认</strong>，批准后才执行</li>' +
+                    '<li>「跳过权限确认」等设置<strong>不能</strong>绕过强制确认</li>' +
+                    '<li>未命中规则的命令不受此列表约束</li>' +
+                  '</ul>' +
                 '</div>' +
-                '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后，上述两种模式的行为均不再生效。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +
+                '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后不再触发强制确认。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +
               '</div>' +
             '</div>' +
             '<div class="settings-blacklist-editor">' +

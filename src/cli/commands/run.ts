@@ -11,6 +11,10 @@ import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, hasFlag } from '../utils/args-parser.js';
 import { c, info, error, toolCall, toolResult, Spinner } from '../utils/terminal-ui.js';
+import {
+  createCliOnConfirm,
+  createCliOnShellMandatoryConfirm,
+} from '../utils/harness-confirm-handlers.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
@@ -135,6 +139,8 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       supervisorConfig,
       globalPolicy,
       supervisorBridge,
+      onConfirm: createCliOnConfirm(!jsonOutput ? spinner : undefined),
+      onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(!jsonOutput ? spinner : undefined),
     };
 
     const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
