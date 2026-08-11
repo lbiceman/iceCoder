@@ -135,10 +135,7 @@ async function initializeOrchestrator(
 
   const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
 
-  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-    outputDir: OUTPUT_DIR,
-    sessionDir: SESSIONS_DIR,
-  });
+  const orchestrator = new Orchestrator(fileParser, llmAdapter);
 
   return { orchestrator, toolRegistry: registry, toolExecutor: executor, mcpManager };
 }
