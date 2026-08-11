@@ -18,8 +18,12 @@ const RESTORE_HANDLERS_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-ws-restore-handlers.js'),
   'utf-8',
 );
+const BG_TASK_HANDLERS_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/chat-ws-bg-task-handlers.js'),
+  'utf-8',
+);
 
-describe('chat-page WS handler 拆分（块 1-3）', () => {
+describe('chat-page WS handler 拆分（块 1-4）', () => {
   it('chat-page.js 不再注册已迁出的流式事件', () => {
     for (const evt of ['stream', 'reasoning_stream', 'stream_end', 'response', 'step', 'status', 'error', 'tool_output']) {
       expect(CHAT_PAGE_SOURCE).not.toMatch(new RegExp(`WS\\.on\\('${evt}'`));
@@ -42,6 +46,12 @@ describe('chat-page WS handler 拆分（块 1-3）', () => {
     }
   });
 
+  it('chat-page.js 不再注册已迁出的后台任务/协作事件', () => {
+    for (const evt of ['bg_task_update', 'bg_task_stop_result', 'task_queue_updated', 'also_note_appended', 'also_rejected', 'shell_collab_entered']) {
+      expect(CHAT_PAGE_SOURCE).not.toMatch(new RegExp(`WS\\.on\\('${evt}'`));
+    }
+  });
+
   it('新模块各自注册对应事件', () => {
     for (const evt of ['stream', 'reasoning_stream', 'stream_end', 'response', 'step', 'status', 'error', 'tool_output']) {
       expect(STREAM_HANDLERS_SOURCE).toMatch(new RegExp(`WS\\.on\\('${evt}'`));
@@ -55,6 +65,9 @@ describe('chat-page WS handler 拆分（块 1-3）', () => {
       'runtime_restored', 'restore_failed', 'message_deleted', 'delete_message_failed',
     ]) {
       expect(RESTORE_HANDLERS_SOURCE).toMatch(new RegExp(`WS\\.on\\('${evt}'`));
+    }
+    for (const evt of ['bg_task_update', 'bg_task_stop_result', 'task_queue_updated', 'also_note_appended', 'also_rejected', 'shell_collab_entered']) {
+      expect(BG_TASK_HANDLERS_SOURCE).toMatch(new RegExp(`WS\\.on\\('${evt}'`));
     }
   });
 
@@ -92,7 +105,7 @@ describe('chat-page WS handler 拆分（块 1-3）', () => {
     );
     const chatPageIdx = mainSource.indexOf("import './chat-page.js';");
     expect(chatPageIdx).toBeGreaterThan(-1);
-    for (const mod of ['chat-ws-stream-handlers', 'chat-ws-session-handlers', 'chat-ws-restore-handlers']) {
+    for (const mod of ['chat-ws-stream-handlers', 'chat-ws-session-handlers', 'chat-ws-restore-handlers', 'chat-ws-bg-task-handlers']) {
       const idx = mainSource.indexOf(`import './${mod}.js';`);
       expect(idx).toBeGreaterThan(-1);
       expect(idx).toBeLessThan(chatPageIdx);

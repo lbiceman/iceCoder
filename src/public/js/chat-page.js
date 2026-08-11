@@ -744,21 +744,8 @@ window.ChatPage = (function () {
     syncComposerActionState();
   }
 
-  function onWsTaskQueueUpdated(data) {
-    if (!window.ChatTaskQueue || typeof window.ChatTaskQueue.setItems !== 'function') return;
-    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    window.ChatTaskQueue.setItems(data && data.items ? data.items : []);
-  }
-
-  function appendSystemAgentMessage(content) {
-    var msg = { role: 'agent', content: content || '', statusTag: 'system' };
-    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
-      window.ChatSession.stampMessageTimestamps(msg);
-    }
-    Session.appendMessage(msg);
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    Session.saveMessages();
-  }
+  // task_queue_updated / bg_task_update / bg_task_stop_result / also_note_appended /
+  // also_rejected / shell_collab_entered 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
   var elShellCollabIndicator = null;
 
@@ -793,58 +780,8 @@ window.ChatPage = (function () {
     }
   }
 
-  function appendShellCollabAgentMessage(data) {
-    if (!data || !data.message) return;
-    if (data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) return;
-    var msg = data.message;
-    if (!msg || msg.role !== 'agent') return;
-    if (msg.id && Session.getMessages) {
-      var msgs = Session.getMessages();
-      for (var i = 0; i < msgs.length; i++) {
-        if (msgs[i].id === msg.id) return;
-      }
-    }
-    Session.appendMessage(msg);
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    Session.saveMessages();
-    syncWelcomeState();
-    UI.scheduleScrollIfSticky();
-  }
-
-  function onWsShellCollabEntered(data) {
-    notifyShellCollabState(data);
-    if (!data || data.idempotent) return;
-    appendShellCollabAgentMessage(data);
-  }
-
-  function removeAlsoNoteFromUi(messageId) {
-    if (!messageId) return;
-    delete pendingAlsoMessageIds[messageId];
-    Session.removeMessageById(messageId);
-    UI.removeMessageElById(messageId);
-    Session.saveMessages();
-    syncWelcomeState();
-  }
-
-  function onWsAlsoNoteAppended(data) {
-    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    var msg = data && data.message;
-    if (!msg || !msg.id) return;
-    if (pendingAlsoMessageIds[msg.id]) {
-      delete pendingAlsoMessageIds[msg.id];
-      return;
-    }
-    appendAlsoNoteBubble(msg.content, msg.id);
-  }
-
-  function onWsAlsoRejected(data) {
-    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    var ids = Object.keys(pendingAlsoMessageIds);
-    for (var i = 0; i < ids.length; i++) {
-      removeAlsoNoteFromUi(ids[i]);
-    }
-    appendSystemAgentMessage((data && data.message) || '/also 未生效');
-  }
+  // appendShellCollabAgentMessage / onWsShellCollabEntered / removeAlsoNoteFromUi /
+  // onWsAlsoNoteAppended / onWsAlsoRejected 已拆分至 chat-ws-bg-task-handlers.js。
 
   function announceTunnelReadyFromPayload(payload) {
     if (!payload || !payload.url || tunnelReadyAnnounced) return;
@@ -1564,35 +1501,7 @@ window.ChatPage = (function () {
     return true;
   }
 
-  function onWsBgTaskStopResult(payload) {
-    if (!payload || payload.ok) return;
-    if (window.BgTaskChip && window.BgTaskChip.resetStopPending && payload.taskId) {
-      window.BgTaskChip.resetStopPending(payload.taskId);
-    }
-    if (window.EtlShellDock && window.EtlShellDock.resetStopPending && payload.taskId) {
-      window.EtlShellDock.resetStopPending(payload.taskId);
-    }
-  }
-
-  function onWsBgTaskUpdate(payload) {
-    var activeId = (Session && typeof Session.getActiveId === 'function')
-      ? Session.getActiveId()
-      : '';
-    if (payload && Array.isArray(payload.tasks)
-      && (!payload.sessionId || payload.sessionId === activeId)) {
-      if (window.ChatShellDock) window.ChatShellDock.mergeTasks(payload.tasks);
-    }
-    if (window.BgTaskChip && elMessages) {
-      window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
-    }
-    if (window.EtlShellDock && typeof window.EtlShellDock.handleUpdate === 'function') {
-      if (window.ChatShellDock) window.ChatShellDock.tryMount();
-      window.EtlShellDock.handleUpdate(payload, activeId);
-    }
-    if (window.BgTaskChip && elMessages) {
-      UI.scheduleScrollIfSticky();
-    }
-  }
+  // bg_task_update / bg_task_stop_result 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
   // tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js。
 
@@ -1717,6 +1626,26 @@ window.ChatPage = (function () {
       syncSidebarWorkspace: syncSidebarWorkspace,
       notifyUser: notifyUser,
       pullServerChatSnapshotAuthoritative: pullServerChatSnapshotAuthoritative,
+    };
+  }
+
+  // ---- 后台任务/协作 handler ctx ----
+  // bg_task / task_queue / also / shell_collab 事件 handler 已拆分至
+  // chat-ws-bg-task-handlers.js；共享状态（pendingAlsoMessageIds）留在本闭包，
+  // 经 ctx.get/set 共享对象引用；共享函数经 ctx 注入，模块内不复制实现。
+  function buildBgTaskHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'pendingAlsoMessageIds') return pendingAlsoMessageIds;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'pendingAlsoMessageIds') pendingAlsoMessageIds = value;
+      },
+      getElMessages: function () { return elMessages; },
+      appendAlsoNoteBubble: appendAlsoNoteBubble,
+      notifyShellCollabState: notifyShellCollabState,
+      syncWelcomeState: syncWelcomeState,
     };
   }
 
@@ -1947,12 +1876,13 @@ window.ChatPage = (function () {
     WS.on('memory_notice', onWsMemoryNotice);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    WS.on('bg_task_update', onWsBgTaskUpdate);
-    WS.on('bg_task_stop_result', onWsBgTaskStopResult);
-    WS.on('task_queue_updated', onWsTaskQueueUpdated);
-    WS.on('also_note_appended', onWsAlsoNoteAppended);
-    WS.on('also_rejected', onWsAlsoRejected);
-    WS.on('shell_collab_entered', onWsShellCollabEntered);
+    // 后台任务/协作事件（bg_task_update / bg_task_stop_result / task_queue_updated /
+    // also_note_appended / also_rejected / shell_collab_entered）已拆分至 chat-ws-bg-task-handlers.js
+    if (window.ChatWsBgTaskHandlers && typeof window.ChatWsBgTaskHandlers.bind === 'function') {
+      window.ChatWsBgTaskHandlers.bind(WS, buildBgTaskHandlerCtx());
+    } else if (typeof console !== 'undefined') {
+      console.warn('[ChatPage] ChatWsBgTaskHandlers not loaded');
+    }
 
     syncShellCollabIndicator();
 
