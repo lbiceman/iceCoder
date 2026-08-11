@@ -1854,7 +1854,7 @@ window.ChatPage = (function () {
     overlay.innerHTML =
       '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">' +
         '<h3 id="delete-confirm-title">确认删除？</h3>' +
-        '<p>仅删除此条消息，并同步更新模型上下文；其他对话记录不会改变。<br><br>' +
+        '<p>删除此条消息及其 AI 回复，并同步更新模型上下文；其他对话记录不会改变。<br><br>' +
         '此操作不会回滚工作区文件修改。</p>' +
         '<div class="restore-confirm-actions">' +
           '<button type="button" class="restore-confirm-cancel">取消</button>' +

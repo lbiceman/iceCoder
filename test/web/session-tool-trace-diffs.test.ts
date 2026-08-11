@@ -29,6 +29,23 @@ describe('session-tool-trace-diffs', () => {
     expect(index.call_1).toContain('+x');
   });
 
+  it('removeToolTraceDiffEntries deletes selected ids and removes empty file', async () => {
+    const dir = path.join(__dirname, '../tmp-tool-diffs-remove');
+    await fs.mkdir(dir, { recursive: true });
+    const sessionId = 'test-diff-remove';
+    const { removeToolTraceDiffEntries } = await import('../../src/web/session-tool-trace-diffs.js');
+    await persistToolTraceDiff(dir, sessionId, 'call_1', '--- a\n+++ b\n@@\n+x');
+    await persistToolTraceDiff(dir, sessionId, 'call_2', '--- c\n+++ d\n@@\n+y');
+
+    await removeToolTraceDiffEntries(dir, sessionId, ['call_1']);
+    const partial = await readToolTraceDiffIndex(dir, sessionId);
+    expect(partial.call_1).toBeUndefined();
+    expect(partial.call_2).toContain('+y');
+
+    await removeToolTraceDiffEntries(dir, sessionId, ['call_2']);
+    await expect(fs.access(path.join(dir, `${sessionId}.tool-trace-diffs.json`))).rejects.toThrow();
+  });
+
   it('collectWorkspaceRoots infers root from fs_operation when workspace.json missing', async () => {
     const dir = path.join(__dirname, '../tmp-tool-diffs-fsop');
     const sessionId = 'fsop1';

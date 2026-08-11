@@ -1,8 +1,7 @@
 /**
  * 网页搜索工具。
- * 通过搜索引擎 API 搜索互联网内容，返回搜索结果摘要。
- * 支持多个搜索后端：SearXNG（自建）、Bing Web Search API、Google Custom Search。
- * 默认使用免费的 DuckDuckGo HTML 搜索作为 fallback。
+ * 通过搜索引擎 HTML/API 搜索互联网内容，返回搜索结果摘要。
+ * 默认使用国内 Bing（cn.bing.com）；亦支持 DuckDuckGo、SearXNG（自建）。
  */
 
 import * as cheerio from 'cheerio';
@@ -15,6 +14,70 @@ interface SearchResult {
   snippet: string;
 }
 
+/** 默认搜索引擎 */
+const DEFAULT_ENGINE = 'bing_cn';
+
+/** 搜索请求超时（毫秒） */
+const SEARCH_TIMEOUT_MS = 15000;
+
+const SEARCH_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/**
+ * 国内 Bing HTML 搜索（无需 API Key）。
+ * 通过解析 cn.bing.com 搜索结果页获取摘要。
+ */
+async function searchBingCn(query: string, maxResults: number): Promise<SearchResult[]> {
+  const url = `https://cn.bing.com/search?q=${encodeURIComponent(query)}&ensearch=0`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': SEARCH_USER_AGENT,
+        Accept: 'text/html',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    return parseBingCnHtml(html, maxResults);
+  } catch (error) {
+    clearTimeout(timer);
+    throw error;
+  }
+}
+
+/** 从 Bing 国内版 HTML 中提取搜索结果（便于单测） */
+export function parseBingCnHtml(html: string, maxResults: number): SearchResult[] {
+  const $ = cheerio.load(html);
+  const results: SearchResult[] = [];
+
+  $('#b_results li.b_algo').each((_i, el) => {
+    if (results.length >= maxResults) return;
+
+    const titleEl = $(el).find('h2 a');
+    const title = titleEl.text().trim();
+    const href = titleEl.attr('href') || '';
+    const snippet = $(el).find('.b_caption p, .b_lineclamp2, .b_algoSlug').first().text().trim();
+
+    if (title && href) {
+      results.push({ title, url: href, snippet });
+    }
+  });
+
+  return results;
+}
+
 /**
  * DuckDuckGo HTML 搜索（无需 API Key）。
  * 通过解析 DuckDuckGo HTML 页面获取搜索结果。
@@ -23,14 +86,13 @@ async function searchDuckDuckGo(query: string, maxResults: number): Promise<Sear
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
       method: 'GET',
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': SEARCH_USER_AGENT,
         Accept: 'text/html',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       },
@@ -89,7 +151,7 @@ async function searchSearXNG(
   const url = `${apiUrl}/search?q=${encodeURIComponent(query)}&format=json&language=zh-CN`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
@@ -141,9 +203,9 @@ export function createWebSearchTool(): RegisteredTool {
           },
           engine: {
             type: 'string',
-            description: '搜索引擎：duckduckgo（默认，免费）、searxng（需配置 apiUrl）',
-            enum: ['duckduckgo', 'searxng'],
-            default: 'duckduckgo',
+            description: '搜索引擎：bing_cn（默认，国内 Bing）、duckduckgo、searxng（需配置 apiUrl）',
+            enum: ['bing_cn', 'duckduckgo', 'searxng'],
+            default: DEFAULT_ENGINE,
           },
           apiUrl: {
             type: 'string',
@@ -156,15 +218,17 @@ export function createWebSearchTool(): RegisteredTool {
     handler: async (args) => {
       const query = args.query as string;
       const maxResults = (args.maxResults as number) || 8;
-      const engine = (args.engine as string) || 'duckduckgo';
+      const engine = (args.engine as string) || DEFAULT_ENGINE;
 
       try {
         let results: SearchResult[];
 
         if (engine === 'searxng' && args.apiUrl) {
           results = await searchSearXNG(query, maxResults, args.apiUrl as string);
-        } else {
+        } else if (engine === 'duckduckgo') {
           results = await searchDuckDuckGo(query, maxResults);
+        } else {
+          results = await searchBingCn(query, maxResults);
         }
 
         if (results.length === 0) {

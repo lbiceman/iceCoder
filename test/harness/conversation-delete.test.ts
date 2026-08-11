@@ -14,6 +14,7 @@ import {
   loadIntentCheckpoint,
   saveIntentCheckpoint,
 } from '../../src/harness/intent-checkpoint-store.js';
+import { persistToolTraceDiff, readToolTraceDiffIndex } from '../../src/web/session-tool-trace-diffs.js';
 import type { IntentCheckpointArchive } from '../../src/types/intent-checkpoint.js';
 import type { UiChatMessage } from '../../src/types/intent-checkpoint.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
@@ -41,11 +42,10 @@ describe('conversation-delete', () => {
     { role: 'user', content: 'retry' },
   ];
 
-  it('removeUiUserMessage removes only the target user message', () => {
+  it('removeUiUserMessage removes the target user message and its agent reply', () => {
     expect(removeUiUserMessage(uiMessages, 'u2')).toEqual([
       uiMessages[0],
       uiMessages[1],
-      uiMessages[3],
       uiMessages[4],
     ]);
     expect(removeUiUserMessage(uiMessages, 'u3')).toEqual(uiMessages.slice(0, 4));
@@ -55,7 +55,7 @@ describe('conversation-delete', () => {
     expect(removeUiUserMessage(uiMessages, 'missing')).toBeNull();
   });
 
-  it('removeStructuredUserMessage removes only the aligned structured user turn', () => {
+  it('removeStructuredUserMessage removes the aligned user turn and assistant reply', () => {
     expect(removeStructuredUserMessage(structuredMessages, uiMessages, 'u2')).toEqual([
       structuredMessages[0],
       structuredMessages[1],
@@ -64,6 +64,31 @@ describe('conversation-delete', () => {
     expect(removeStructuredUserMessage(structuredMessages, uiMessages, 'u3')).toEqual(
       structuredMessages.slice(0, 4),
     );
+  });
+
+  it('removeStructuredUserMessage keeps later turns when deleting before a skill guide turn', () => {
+    const uiWithSkill: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'hello' },
+      { role: 'agent', id: 'a1', content: 'hi' },
+      { role: 'user', id: 'u2', content: 'create skill please' },
+      { role: 'agent', id: 'a2', content: 'drafting skill' },
+    ];
+    const structuredWithSkill: UnifiedMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: '[System: Skill File Guide]\n[User Request]\ncreate skill please' },
+      { role: 'assistant', content: 'drafting skill' },
+    ];
+
+    expect(removeStructuredUserMessage(
+      structuredWithSkill,
+      uiWithSkill,
+      'u1',
+      'hello',
+    )).toEqual([
+      structuredWithSkill[2],
+      structuredWithSkill[3],
+    ]);
   });
 
   it('removeStructuredUserMessage skips system-injected user blocks when aligning turns', () => {
@@ -87,6 +112,61 @@ describe('conversation-delete', () => {
     )).toEqual([
       structuredWithSkill[0],
       structuredWithSkill[1],
+    ]);
+  });
+
+  it('removeUiUserMessage deletes only an /also note without cascading', () => {
+    const uiWithAlso: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'hello' },
+      { role: 'agent', id: 'a1', content: 'hi' },
+      { role: 'user', id: 'also1', content: 'fix tests only', alsoNote: true },
+      { role: 'user', id: 'u2', content: 'next task' },
+      { role: 'agent', id: 'a2', content: 'done' },
+    ];
+
+    expect(removeUiUserMessage(uiWithAlso, 'also1')).toEqual([
+      uiWithAlso[0],
+      uiWithAlso[1],
+      uiWithAlso[3],
+      uiWithAlso[4],
+    ]);
+  });
+
+  it('removeStructuredUserMessage aligns turns when UI has /also notes absent from structured', () => {
+    const uiWithAlso: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'first' },
+      { role: 'agent', id: 'a1', content: 'answer one' },
+      { role: 'user', id: 'also1', content: 'fix tests only', alsoNote: true },
+      { role: 'user', id: 'u2', content: 'delete me' },
+      { role: 'agent', id: 'a2', content: 'answer two' },
+    ];
+    const structured: UnifiedMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'answer one' },
+      { role: 'user', content: 'delete me' },
+      { role: 'assistant', content: 'answer two' },
+    ];
+
+    expect(removeStructuredUserMessage(structured, uiWithAlso, 'u2', 'delete me')).toEqual([
+      structured[0],
+      structured[1],
+    ]);
+  });
+
+  it('removeStructuredUserMessage removes aligned /also note from structured history', () => {
+    const uiWithAlso: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'first' },
+      { role: 'user', id: 'also1', content: 'fix tests only', alsoNote: true },
+    ];
+    const structured: UnifiedMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'answer one' },
+      { role: 'user', content: 'fix tests only', alsoNote: true },
+    ];
+
+    expect(removeStructuredUserMessage(structured, uiWithAlso, 'also1')).toEqual([
+      structured[0],
+      structured[1],
     ]);
   });
 
@@ -157,7 +237,7 @@ describe('conversation-delete', () => {
       const index = await loadCheckpointIndex(sessionDir, sessionId);
       const laterArchive = await loadIntentCheckpoint(sessionDir, sessionId, 'u3');
 
-      expect(savedUi.map((message) => message.id)).toEqual(['u1', 'a1', 'a2', 'u3']);
+      expect(savedUi.map((message) => message.id)).toEqual(['u1', 'a1', 'u3']);
       expect(savedStructured.map((message) => message.role)).toEqual([
         'user',
         'assistant',
@@ -169,7 +249,6 @@ describe('conversation-delete', () => {
       expect(laterArchive?.uiMessages.map((message) => message.id)).toEqual([
         'u1',
         'a1',
-        'a2',
         'u3',
       ]);
       expect(laterArchive?.structuredMessages.map((message) => message.role)).toEqual([
@@ -177,6 +256,46 @@ describe('conversation-delete', () => {
         'assistant',
         'user',
       ]);
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('deleteUserMessageConversation removes tool trace diff entries for deleted turn', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-delete-diff-'));
+    const sessionId = 'delete-diff';
+    const uiWithTrace: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: 'write file' },
+      { role: 'tool_trace', parentId: 'a1', toolName: 'write_file', detail: 'a.ts', toolCallId: 'call_1' },
+      { role: 'agent', id: 'a1', content: 'done' },
+      { role: 'user', id: 'u2', content: 'keep me' },
+    ];
+    const structured: UnifiedMessage[] = [
+      { role: 'user', content: 'write file' },
+      { role: 'assistant', content: 'done' },
+      { role: 'user', content: 'keep me' },
+    ];
+
+    try {
+      await fs.writeFile(path.join(sessionDir, `${sessionId}.json`), JSON.stringify(uiWithTrace), 'utf-8');
+      await fs.writeFile(
+        path.join(sessionDir, `${sessionId}.structured.json`),
+        JSON.stringify(structured),
+        'utf-8',
+      );
+      await persistToolTraceDiff(sessionDir, sessionId, 'call_1', '--- a\n+++ b\n@@\n+x');
+      await persistToolTraceDiff(sessionDir, sessionId, 'call_keep', '--- c\n+++ d\n@@\n+y');
+
+      await deleteUserMessageConversation({ sessionDir, sessionId, messageId: 'u1' });
+
+      const savedUi = JSON.parse(
+        await fs.readFile(path.join(sessionDir, `${sessionId}.json`), 'utf-8'),
+      ) as UiChatMessage[];
+      const index = await readToolTraceDiffIndex(sessionDir, sessionId);
+
+      expect(savedUi.map((message) => message.id)).toEqual(['u2']);
+      expect(index.call_1).toBeUndefined();
+      expect(index.call_keep).toContain('+y');
     } finally {
       await fs.rm(sessionDir, { recursive: true, force: true });
     }

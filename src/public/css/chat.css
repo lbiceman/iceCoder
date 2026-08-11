@@ -519,34 +519,45 @@
   white-space: nowrap;
 }
 
-.chat-welcome-context-value--badges {
-  display: inline-flex;
+.chat-welcome-tools-inline {
+  display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: nowrap;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
   max-width: 100%;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.chat-welcome-tool-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   white-space: nowrap;
 }
 
-.chat-welcome-context-badge {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill, 999px);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.35;
-  color: var(--text-muted);
-  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border-light) 85%, transparent);
+.chat-welcome-tool-seg + .chat-welcome-tool-seg {
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 85%, transparent);
 }
 
-.chat-welcome-context-badge--shell {
-  color: color-mix(in srgb, var(--accent) 70%, var(--text-muted));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--border-light));
+.chat-welcome-tool-seg-name {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.chat-welcome-tool-seg-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chat-welcome-context-row--tools {
+  align-items: center;
 }
 
 .chat-welcome-context-row--tools .chat-welcome-context-label {
