@@ -1121,98 +1121,8 @@ window.ChatPage = (function () {
     });
   }
 
-  /** 当前正在显示的 confirm 对话框（用于其它端 first-win 后关闭本地弹窗） */
-  var activeConfirmId = null;
-  var activeConfirmResolved = false;
-
-  function onWsConfirm(data) {
-    if (sessionPet) {
-      sessionPet.setState('alert');
-      sessionPet.setBubbleText('请在弹窗中确认危险操作');
-    }
-    activeConfirmId = data.confirmId || null;
-    activeConfirmResolved = false;
-
-    var isShellMandatory = data.confirmKind === 'shell_mandatory';
-    var shellInfo = data.shellMandatory || null;
-    var modalOpts;
-
-    if (isShellMandatory && shellInfo) {
-      var lines = [
-        'Session: ' + (shellInfo.sessionId || ''),
-        '命令: ' + (shellInfo.command || ''),
-        '命中规则: ' + (shellInfo.matchedPattern || ''),
-        '风险类别: ' + (shellInfo.category || ''),
-        '影响: ' + (shellInfo.impact || ''),
-        '',
-        '此确认不会被「自动执行」设置跳过。',
-      ];
-      modalOpts = {
-        title: 'Shell 敏感命令确认',
-        message: lines.join('\n'),
-        type: 'danger',
-        dangerConfirm: true,
-        confirmText: '确认执行',
-        cancelText: '取消',
-        defaultFocus: 'cancel',
-      };
-    } else {
-      var argsText = data.args ? JSON.stringify(data.args) : '';
-      modalOpts = {
-        title: '危险操作确认',
-        message: '工具: ' + data.toolName + '\n参数: ' + argsText,
-        type: 'danger',
-        dangerConfirm: true,
-        confirmText: '允许',
-        cancelText: '拒绝',
-      };
-    }
-
-    Modal.confirm(modalOpts).then(function (ok) {
-      if (activeConfirmResolved) {
-        activeConfirmId = null;
-        activeConfirmResolved = false;
-        if (sessionPet) {
-          sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-          sessionPet.setBubbleText('');
-        }
-        return;
-      }
-      WS.sendConfirmReply(ok, activeConfirmId);
-      activeConfirmId = null;
-      var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
-      Session.appendMessage(confirmMsg);
-      UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
-      Session.saveMessages();
-      if (sessionPet) {
-        sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-        sessionPet.setBubbleText('');
-      }
-    });
-  }
-
-  function dismissActiveConfirmModal(approved) {
-    if (window.Modal && typeof Modal.dismissActive === 'function') {
-      Modal.dismissActive(approved);
-    }
-  }
-
-  function onWsConfirmResolved(data) {
-    if (!data) return;
-    // 其它端 first-win 后关闭本地弹窗，避免 PC/移动端各弹各的
-    if (!activeConfirmId || data.confirmId === activeConfirmId) {
-      activeConfirmResolved = true;
-      dismissActiveConfirmModal(!!data.approved);
-    }
-  }
-
-  function onWsConfirmTimeout(data) {
-    if (!data) return;
-    if (!activeConfirmId || data.confirmId === activeConfirmId) {
-      activeConfirmResolved = true;
-      dismissActiveConfirmModal(false);
-    }
-  }
+  // confirm / confirm_resolved / confirm_timeout 事件 handler 已拆分至
+  // chat-ws-restore-handlers.js（含 activeConfirmId / activeConfirmResolved 私有状态）。
 
   function applyTurnTokenUsageToLastAgent(usage, messageId) {
     if (!usage || typeof usage !== 'object') return false;
@@ -1304,17 +1214,9 @@ window.ChatPage = (function () {
     });
   }
 
-  function onWsHarnessState(data) {
-    if (!data) return;
-    applyHarnessRestoreUi(!!data.canRestore, data.checkpointMessageIds);
-    refreshSnapshotTimelinePanel();
-  }
-
-  function onWsCheckpointMessageIds(data) {
-    if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
-    UI.setCheckpointMessageIds(data.ids || []);
-    refreshSnapshotTimelinePanel();
-  }
+  // harness_state / checkpoint_message_ids / checkpoint_captured / runtime_restored /
+  // restore_failed / message_deleted / delete_message_failed 事件 handler 已拆分至
+  // chat-ws-restore-handlers.js。
 
   function dispatchDeleteMessage(messageId) {
     if (!messageId) return;
@@ -1477,22 +1379,6 @@ window.ChatPage = (function () {
     }
   }
 
-  function onWsRuntimeRestored() {
-    runtimeRestoreInFlight = false;
-    isStreaming = false;
-    userStopped = false;
-    WS.setProcessing(false);
-    UI.setStreamingState(false);
-    UI.clearReasoningStream();
-    clearSessionExecutionFlow();
-    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    refreshChatHistoryAfterTurn(true, null, { force: true });
-    syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
-    refreshSnapshotTimelinePanel();
-    notifySnapshotRestoreAvailability();
-  }
-
   function notifyUser(message, type, opts) {
     if (window.Notification && typeof window.Notification.show === 'function') {
       return window.Notification.show(message, type || 'info', opts);
@@ -1503,39 +1389,8 @@ window.ChatPage = (function () {
     alert(message);
   }
 
-  function onWsRestoreFailed(data) {
-    runtimeRestoreInFlight = false;
-    notifySnapshotRestoreAvailability();
-    var msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
-    notifyUser(msg, 'error', { duration: 5000 });
-    refreshSnapshotTimelinePanel();
-  }
-
-  function onWsMessageDeleted() {
-    isStreaming = false;
-    UI.setStreamingState(false);
-    UI.clearReasoningStream();
-    clearSessionExecutionFlow();
-    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    refreshChatHistoryAfterTurn(true);
-    syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
-  }
-
-  function onWsDeleteMessageFailed(data) {
-    var msg = (data && data.error) ? data.error : '删除消息失败。';
-    if (data && data.code === 'DELETE_MESSAGE_NOT_FOUND') {
-      pullServerChatSnapshotAuthoritative(function (synced) {
-        if (synced) {
-          notifyUser('该消息已不在服务端记录中，界面已同步。', 'info', { duration: 4000 });
-          return;
-        }
-        notifyUser(msg, 'error', { duration: 5000 });
-      });
-      return;
-    }
-    notifyUser(msg, 'error', { duration: 5000 });
-  }
+  // runtime_restored / restore_failed / message_deleted / delete_message_failed
+  // 事件 handler 已拆分至 chat-ws-restore-handlers.js。
 
   function shouldSkipServerSnapshotSync() {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
@@ -1836,6 +1691,35 @@ window.ChatPage = (function () {
     };
   }
 
+  // ---- 恢复/确认 handler ctx ----
+  // confirm / harness / checkpoint / runtime_restored / message_deleted 等事件 handler
+  // 已拆分至 chat-ws-restore-handlers.js；跨域状态（runtimeRestoreInFlight / isStreaming /
+  // userStopped）留在本闭包，经 ctx.get/set 读写；共享函数经 ctx 注入，模块内不复制实现。
+  function buildRestoreHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'runtimeRestoreInFlight') return runtimeRestoreInFlight;
+        if (name === 'isStreaming') return isStreaming;
+        if (name === 'userStopped') return userStopped;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'runtimeRestoreInFlight') runtimeRestoreInFlight = value;
+        else if (name === 'isStreaming') isStreaming = value;
+        else if (name === 'userStopped') userStopped = value;
+      },
+      getSessionPet: function () { return sessionPet; },
+      applyHarnessRestoreUi: applyHarnessRestoreUi,
+      refreshSnapshotTimelinePanel: refreshSnapshotTimelinePanel,
+      notifySnapshotRestoreAvailability: notifySnapshotRestoreAvailability,
+      clearSessionExecutionFlow: clearSessionExecutionFlow,
+      refreshChatHistoryAfterTurn: refreshChatHistoryAfterTurn,
+      syncSidebarWorkspace: syncSidebarWorkspace,
+      notifyUser: notifyUser,
+      pullServerChatSnapshotAuthoritative: pullServerChatSnapshotAuthoritative,
+    };
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
     if (mounted) {
@@ -2050,23 +1934,21 @@ window.ChatPage = (function () {
     if (window.ChatWsSessionHandlers && typeof window.ChatWsSessionHandlers.bind === 'function') {
       window.ChatWsSessionHandlers.bind(WS, buildSessionHandlerCtx());
     }
+    // 恢复/确认事件（confirm / confirm_resolved / confirm_timeout / harness_state /
+    // checkpoint_message_ids / checkpoint_captured / runtime_restored / restore_failed /
+    // message_deleted / delete_message_failed）已拆分至 chat-ws-restore-handlers.js
+    if (window.ChatWsRestoreHandlers && typeof window.ChatWsRestoreHandlers.bind === 'function') {
+      window.ChatWsRestoreHandlers.bind(WS, buildRestoreHandlerCtx());
+    } else if (typeof console !== 'undefined') {
+      console.warn('[ChatPage] ChatWsRestoreHandlers not loaded');
+    }
     WS.on('mcp_ready', onWsMcpReady);
     WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
-    WS.on('confirm', onWsConfirm);
-    WS.on('confirm_resolved', onWsConfirmResolved);
-    WS.on('confirm_timeout', onWsConfirmTimeout);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
     WS.on('bg_task_update', onWsBgTaskUpdate);
     WS.on('bg_task_stop_result', onWsBgTaskStopResult);
-    WS.on('harness_state', onWsHarnessState);
-    WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
-    WS.on('checkpoint_captured', refreshSnapshotTimelinePanel);
-    WS.on('runtime_restored', onWsRuntimeRestored);
-    WS.on('restore_failed', onWsRestoreFailed);
-    WS.on('message_deleted', onWsMessageDeleted);
-    WS.on('delete_message_failed', onWsDeleteMessageFailed);
     WS.on('task_queue_updated', onWsTaskQueueUpdated);
     WS.on('also_note_appended', onWsAlsoNoteAppended);
     WS.on('also_rejected', onWsAlsoRejected);

@@ -69,7 +69,7 @@ window.ChatShellDock = (function () {
     }
   }
 
-  function replaceTasks(tasks, sessionId) {
+  function replaceTasks(tasks) {
     if (!Array.isArray(tasks)) {
       scheduleResync();
       return;
@@ -98,11 +98,11 @@ window.ChatShellDock = (function () {
   /** WS bgTasks 优先；缺失时 REST 读 session 文件（跨端同步）。 */
   function hydrate(sessionId, wsTasks) {
     if (Array.isArray(wsTasks)) {
-      replaceTasks(wsTasks, sessionId);
+      replaceTasks(wsTasks);
       return;
     }
     fetchSessionBgTasks(sessionId, function (tasks) {
-      replaceTasks(tasks, sessionId);
+      replaceTasks(tasks);
     });
   }
 
