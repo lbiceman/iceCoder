@@ -18,6 +18,7 @@ import {
 import {
   DEFAULT_ICE_ETL_PREFS,
   resolveIceEtlPrefs,
+  validateIceEtlPrefsPatch,
   writeIceEtlPrefsToMainConfig,
 } from '../../config/main-config-ice-etl-prefs.js';
 import {
@@ -389,32 +390,11 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         return;
       }
       const patch = raw as Record<string, unknown>;
-      const allowedKeys = new Set([
-        'showTransparencyPanel',
-        'panelDefaultExpanded',
-        'panelWidth',
-        'taskDoneNotification',
-      ]);
-      for (const key of Object.keys(patch)) {
-        if (!allowedKeys.has(key)) {
-          res.status(400).json({ error: `iceEtlPrefs 含未知字段：${key}` });
-          return;
-        }
-      }
-      if (patch.showTransparencyPanel !== undefined && typeof patch.showTransparencyPanel !== 'boolean') {
-        res.status(400).json({ error: 'showTransparencyPanel 须为 boolean' });
-        return;
-      }
-      if (patch.panelDefaultExpanded !== undefined && typeof patch.panelDefaultExpanded !== 'boolean') {
-        res.status(400).json({ error: 'panelDefaultExpanded 须为 boolean' });
-        return;
-      }
-      if (patch.panelWidth !== undefined && typeof patch.panelWidth !== 'number') {
-        res.status(400).json({ error: 'panelWidth 须为 number' });
-        return;
-      }
-      if (patch.taskDoneNotification !== undefined && typeof patch.taskDoneNotification !== 'boolean') {
-        res.status(400).json({ error: 'taskDoneNotification 须为 boolean' });
+      // 允许字段 + 类型校验均由 DEFAULT_ICE_ETL_PREFS 派生（validateIceEtlPrefsPatch），
+      // 新增字段只需同步 DEFAULT + sanitize + types.ts + 前端，路由自动覆盖
+      const validationError = validateIceEtlPrefsPatch(patch);
+      if (validationError) {
+        res.status(400).json({ error: validationError });
         return;
       }
       const saved = await writeIceEtlPrefsToMainConfig(configFile, patch as Partial<IceEtlPrefs>);
