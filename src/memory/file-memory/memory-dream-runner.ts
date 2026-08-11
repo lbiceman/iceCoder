@@ -200,6 +200,22 @@ async function runManualDreamLlmJob(params: ManualDreamBackgroundParams): Promis
   beginJob('manual');
   const startMs = Date.now();
 
+  // 无 LLM 快路径：不扫描记忆、不拿锁、不写 telemetry（配置缺失不是一次 Dream 尝试）
+  if (!llmAdapter) {
+    const durationMs = Date.now() - startMs;
+    const summary = 'No LLM adapter configured; dream skipped.';
+    finishJob('manual', {
+      lastExecuted: false,
+      lastSummary: summary,
+      filesModified: 0,
+      filesDeleted: 0,
+      filesEvicted: preEvicted,
+      durationMs,
+    });
+    console.log(`[MemoryDreamRunner] manual dream skipped: ${summary} (${durationMs}ms)`);
+    return;
+  }
+
   const dream = createMemoryDream();
   await dream.loadPersistedState();
   const gate = await dream.evaluateDreamGate(memoryDir);
@@ -247,7 +263,7 @@ async function runManualDreamLlmJob(params: ManualDreamBackgroundParams): Promis
       dream.notifyStaleIndexDreamCompleted();
     } else if (result.executed) {
       dream.notifyDreamSubstantiveRun();
-    } else if (!result.executed) {
+    } else if (!result.executed && result.skipReason !== 'no_llm') {
       dream.notifyDreamEmptyRun();
       await dream.flushPersistedState();
     }
@@ -329,8 +345,25 @@ export function scheduleAutoDream(params: AutoDreamBackgroundParams): boolean {
   } = params;
 
   return enqueueDreamJob('auto', async () => {
-    const dream = createMemoryDream();
     const startMs = Date.now();
+
+    // 无 LLM 快路径：不扫描记忆、不拿锁、不写 telemetry（配置缺失不是一次 Dream 尝试）
+    if (!llmAdapter) {
+      const durationMs = Date.now() - startMs;
+      const summary = 'No LLM adapter configured; autoDream skipped.';
+      finishJob('auto', {
+        lastExecuted: false,
+        lastSummary: summary,
+        filesModified: 0,
+        filesDeleted: 0,
+        filesEvicted: 0,
+        durationMs,
+      });
+      console.log(`[MemoryDreamRunner] autoDream skipped: ${summary} (${durationMs}ms)`);
+      return;
+    }
+
+    const dream = createMemoryDream();
 
     try {
       const prefix =
@@ -345,7 +378,7 @@ export function scheduleAutoDream(params: AutoDreamBackgroundParams): boolean {
         dream.notifyStaleIndexDreamCompleted();
       } else if (result.executed) {
         dream.notifyDreamSubstantiveRun();
-      } else if (!result.executed) {
+      } else if (!result.executed && result.skipReason !== 'no_llm') {
         dream.notifyDreamEmptyRun();
         await dream.flushPersistedState();
       }
