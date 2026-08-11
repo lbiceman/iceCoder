@@ -11,6 +11,7 @@ export const DEFAULT_ICE_ETL_PREFS: IceEtlPrefs = {
   panelDefaultExpanded: true,
   panelWidth: 360,
   taskDoneNotification: false,
+  panelAutoCollapse: false,
 };
 
 function clampPanelWidth(value: unknown): number {
@@ -32,6 +33,9 @@ export function sanitizeIceEtlPrefs(raw: unknown): IceEtlPrefs {
   }
   if (typeof input.taskDoneNotification === 'boolean') {
     out.taskDoneNotification = input.taskDoneNotification;
+  }
+  if (typeof input.panelAutoCollapse === 'boolean') {
+    out.panelAutoCollapse = input.panelAutoCollapse;
   }
   out.panelWidth = clampPanelWidth(input.panelWidth);
   return out;
@@ -60,6 +64,9 @@ export function validateIceEtlPrefsPatch(patch: Record<string, unknown>): string
   }
   if (patch.taskDoneNotification !== undefined && typeof patch.taskDoneNotification !== 'boolean') {
     return 'taskDoneNotification 须为 boolean';
+  }
+  if (patch.panelAutoCollapse !== undefined && typeof patch.panelAutoCollapse !== 'boolean') {
+    return 'panelAutoCollapse 须为 boolean';
   }
   return null;
 }

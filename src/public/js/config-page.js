@@ -190,6 +190,16 @@ window.SettingsPage = (function () {
                   '<option value="480">480 px</option>' +
                 '</select>' +
               '</div>' +
+              '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">空闲自动收起</span>' +
+                  '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
+                  '<input type="checkbox" id="etl-panel-auto-collapse" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</section>' +
@@ -251,6 +261,7 @@ window.SettingsPage = (function () {
 
     var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
     var panelWidth = parentEl.querySelector('#etl-panel-width');
+    var panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
 
     if (panelDefaultExpanded) {
       panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
@@ -259,6 +270,10 @@ window.SettingsPage = (function () {
     if (panelWidth) {
       panelWidth.value = String(prefs.panelWidth || 360);
       panelWidth.disabled = subgroupDisabled;
+    }
+    if (panelAutoCollapse) {
+      panelAutoCollapse.checked = prefs.panelAutoCollapse === true;
+      panelAutoCollapse.disabled = subgroupDisabled;
     }
   }
 
@@ -366,6 +381,20 @@ window.SettingsPage = (function () {
             if (window.Notification) window.Notification.error('更新失败');
           })
           .finally(function () { panelDefaultExpanded.disabled = false; });
+      });
+    }
+
+    var panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
+    if (panelAutoCollapse) {
+      panelAutoCollapse.addEventListener('change', function () {
+        var next = panelAutoCollapse.checked;
+        panelAutoCollapse.disabled = true;
+        window.EtlPrefs.set({ panelAutoCollapse: next })
+          .catch(function () {
+            panelAutoCollapse.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(function () { panelAutoCollapse.disabled = false; });
       });
     }
 
