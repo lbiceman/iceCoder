@@ -1,7 +1,7 @@
 /**
  * iceCoder chat/cli/start — 交互式终端对话。
  *
- * start 模式：CLI + Web + Cloudflare Tunnel 三合一
+ * start 模式：Web（自动打开浏览器）+ CLI + 可选 Cloudflare Tunnel
  * cli 模式：仅终端对话（--no-serve）
  */
 
@@ -14,6 +14,7 @@ import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
 import { resolveDefaultApiPort } from '../serve-port.js';
+import { maybeOpenAppInBrowser } from '../open-browser.js';
 import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
 import {
   createCliOnConfirm,
@@ -124,6 +125,11 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   if (!noServe) {
     serveResult = await startWebServer(ctx, port);
     info(`Web 服务器已启动: ${c.underline}http://127.0.0.1:${port}${c.reset}`);
+    await maybeOpenAppInBrowser({
+      port,
+      needsSetup: ctx.needsSetup,
+      flags: args.flags,
+    });
 
     if (
       isTunnelDevEnabled() &&

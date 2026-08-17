@@ -437,7 +437,7 @@ window.SettingsPage = (function () {
 
   function bindDataDirectorySettings(parentEl) {
     var desktop = window.iceDesktop;
-    var migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。';
+    var migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。Electron 与 iceCoder start 共用此位置。';
 
     var input = parentEl.querySelector('#settings-data-directory-input');
     var browseBtn = parentEl.querySelector('#settings-data-directory-browse');
@@ -447,77 +447,93 @@ window.SettingsPage = (function () {
     var note = parentEl.querySelector('#settings-data-directory-note');
     if (!input || !browseBtn || !saveBtn || !resetBtn) return;
 
-    if (!desktop || typeof desktop.getDataDirectory !== 'function') {
-      input.value = '';
-      input.placeholder = '选择完整的数据文件夹路径；更改将在重启应用后生效。';
-      input.disabled = true;
+    var canPickFolder = desktop && typeof desktop.pickDataDirectory === 'function';
+    if (!canPickFolder) {
       browseBtn.disabled = true;
-      saveBtn.disabled = true;
-      resetBtn.disabled = true;
+      browseBtn.title = '在系统浏览器中请手动填写绝对路径';
+    }
+
+    function applyPayload(data) {
+      if (!data) return;
+      input.value = data.dataDir || '';
+      var persistable = !!data.canPersist;
+      input.disabled = !persistable;
+      saveBtn.disabled = !persistable;
+      resetBtn.disabled = !persistable;
+      browseBtn.disabled = !persistable || !canPickFolder;
       if (badge) {
-        badge.textContent = '不可修改';
+        badge.textContent = persistable ? '可修改' : '开发模式';
         badge.classList.remove('is-off');
-        badge.classList.add('is-starting');
+        badge.classList.toggle('is-ready', persistable);
+        badge.classList.toggle('is-starting', !persistable);
       }
-      if (note) {
-        note.textContent = migrationTip;
-      }
-      return;
     }
 
-    if (badge) {
-      badge.textContent = '可修改';
-      badge.classList.remove('is-off');
-      badge.classList.add('is-ready');
-    }
-    if (note) {
-      note.textContent = migrationTip;
+    function showError(err) {
+      var message = (err && err.message) || '操作失败';
+      if (window.Notification) window.Notification.error(message);
     }
 
-    desktop.getDataDirectory()
-      .then(function (dataDir) { input.value = dataDir || ''; })
-      .catch(function () {
-        if (window.Notification) window.Notification.error('无法读取数据目录');
-      });
+    if (note) note.textContent = migrationTip;
+
+    fetch('/api/config/data-directory', { cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(applyPayload)
+      .catch(function () { showError({ message: '无法读取数据目录' }); });
 
     browseBtn.addEventListener('click', function () {
+      if (!canPickFolder) return;
       desktop.pickDataDirectory()
         .then(function (dataDir) {
           if (dataDir) input.value = dataDir;
         })
-        .catch(function () {
-          if (window.Notification) window.Notification.error('无法选择文件夹');
-        });
+        .catch(function () { showError({ message: '无法选择文件夹' }); });
     });
 
     saveBtn.addEventListener('click', function () {
       var dataDir = input.value.trim();
       if (!dataDir) {
-        if (window.Notification) window.Notification.error('请选择数据文件夹');
+        showError({ message: '请选择数据文件夹' });
         return;
       }
       saveBtn.disabled = true;
-      desktop.setDataDirectory(dataDir)
-        .then(function (savedDataDir) {
-          input.value = savedDataDir;
-          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录');
+      fetch('/api/config/data-directory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataDir: dataDir }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data && data.error || '保存失败');
+            return data;
+          });
         })
-        .catch(function (err) {
-          if (window.Notification) window.Notification.error((err && err.message) || '保存失败，请输入绝对路径');
+        .then(function (data) {
+          applyPayload(data);
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
         })
+        .catch(showError)
         .finally(function () { saveBtn.disabled = false; });
     });
 
     resetBtn.addEventListener('click', function () {
       resetBtn.disabled = true;
-      desktop.setDataDirectory(null)
-        .then(function (defaultDataDir) {
-          input.value = defaultDataDir;
-          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录');
+      fetch('/api/config/data-directory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataDir: null }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data && data.error || '恢复失败');
+            return data;
+          });
         })
-        .catch(function () {
-          if (window.Notification) window.Notification.error('恢复默认位置失败');
+        .then(function (data) {
+          applyPayload(data);
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
         })
+        .catch(showError)
         .finally(function () { resetBtn.disabled = false; });
     });
   }

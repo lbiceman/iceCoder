@@ -272,6 +272,7 @@ async function bootstrap(): Promise<void> {
   // 2) 启动 server 子进程
   const dataDir = resolveDataDirectory();
   const serverCwd = resolveServerCwd();
+  const defaultWorkDir = readWorkspace() ?? serverCwd;
   serverHandle = await startServerProcess({
     port,
     cwd: serverCwd,
@@ -279,7 +280,7 @@ async function bootstrap(): Promise<void> {
       ...process.env,
       ICE_DATA_DIR: dataDir,
       ICE_MCP_CONFIG_PATH: path.join(dataDir, 'mcp.json'),
-      ICE_DEFAULT_WORK_DIR: serverCwd,
+      ICE_DEFAULT_WORK_DIR: defaultWorkDir,
     },
   });
   logStartupTiming('server-ready');

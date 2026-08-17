@@ -19,14 +19,18 @@ import {
 describe('desktop paths（userData 持久化读写）', () => {
   let tmp: string;
   let realDir: string;
+  const prevIdentity = process.env.ICE_SHELL_IDENTITY_DIR;
 
   beforeEach(() => {
     tmp = mkdtempSync(path.join(os.tmpdir(), 'desktop-paths-'));
     realDir = mkdtempSync(path.join(os.tmpdir(), 'desktop-real-'));
+    process.env.ICE_SHELL_IDENTITY_DIR = tmp;
     setStubUserData(tmp);
   });
 
   afterEach(() => {
+    if (prevIdentity === undefined) delete process.env.ICE_SHELL_IDENTITY_DIR;
+    else process.env.ICE_SHELL_IDENTITY_DIR = prevIdentity;
     rmSync(tmp, { recursive: true, force: true });
     rmSync(realDir, { recursive: true, force: true });
   });
