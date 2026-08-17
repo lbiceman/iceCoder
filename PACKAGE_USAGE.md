@@ -23,9 +23,12 @@ npm run build
 
 `build` 依次执行：
 
-1. `tsc` — 输出到 `dist/`
-2. `vite build` — 前端静态资源写入 `dist/public/`（生产 Web 用）
-3. `npm pack` — 在项目根生成 **`ice-coder-1.0.0.tgz`**（版本号随 `package.json` 的 `version` 变化）
+1. **patch 版本 +1**（写入 `package.json` / `package-lock.json`，与 Claude Code 发版升版本同一原理）
+2. `tsc` — 输出到 `dist/`
+3. `vite build` — 前端静态资源写入 `dist/public/`（生产 Web 用）
+4. `npm pack` — 生成 **`ice-coder-<version>.tgz`**
+
+CI 环境默认不自增（避免流水线改脏版本）；本地可用 `ICE_BUMP_VERSION=0` 关闭。
 
 > 打包包体**不包含**用户 `data/config.json`、会话、记忆文件等运行数据。
 
@@ -47,9 +50,20 @@ npm run build
 
 ### 方式一：从 tgz 全局安装（推荐 CLI）
 
+Claude Code / OpenCode 装新包会替换旧包，是因为每次发版 **version 会变**。`npm run build` 会把 patch 版本 +1，随后 `npm install -g` 就会覆盖全局旧的 `iceCoder`。
+
+源码仓推荐：
+
 ```bash
-npm install -g ./ice-coder-1.0.0.tgz
+npm run build:install
+```
+
+只装已经打好的包：
+
+```bash
+npm run install:global
 iceCoder --help
+iceCoder -v
 ```
 
 全局命令 **`iceCoder`** 对应 `dist/cli/index.js`（见 `package.json` → `bin`）。
@@ -57,7 +71,7 @@ iceCoder --help
 ### 方式二：安装到当前项目
 
 ```bash
-npm install ./ice-coder-1.0.0.tgz
+npm install ./ice-coder-<version>.tgz
 npx iceCoder web
 # 或 package.json scripts 中引用 node_modules/.bin/iceCoder
 ```
@@ -66,7 +80,7 @@ npx iceCoder web
 
 ```bash
 mkdir iceCoder-dist && cd iceCoder-dist
-tar -xzf ../ice-coder-1.0.0.tgz
+tar -xzf ../ice-coder-<version>.tgz
 cd package
 npm install --omit=dev
 cp data/config.example.json data/config.json
@@ -186,8 +200,8 @@ iceCoder config
 若 `iceCoder web` 报 `Provider adapter "undefined" is not registered`，多半是 **全局 `ice-coder` 版本过旧**（仍按 `providerName` 注册），而 `data/config.json` 已改为 `id` 字段。在源码仓执行 `npm run build:server` 后重新安装：
 
 ```bash
-npm install -g ./ice-coder-1.0.0.tgz
-# 或开发期：npm link
+npm install -g ./ice-coder-<version>.tgz --force
+# 或开发期：npm run install:global
 ```
 
 能列出工具且无配置报错即说明 `dist/` 与依赖正常；完整能力需配置有效 API Key 后执行 `iceCoder web` 或 `iceCoder run`。
@@ -203,7 +217,7 @@ npm install -g ./ice-coder-1.0.0.tgz
 ## 注意事项
 
 1. **API Key**：仅保存在使用者本机 `data/config.json` 或 `~/.iceCoder/` 对应配置路径，勿泄露。
-2. **包版本**：`package.json` 中 `name` 为 `ice-coder`，`bin` 为 `iceCoder`；tgz 文件名形如 `ice-coder-1.0.0.tgz`。
+2. **包版本**：`package.json` 中 `name` 为 `ice-coder`，`bin` 为 `iceCoder`；每次 `npm run build` 会自增 patch，tgz 形如 `ice-coder-1.0.1.tgz`。
 3. **依赖**：安装 tgz 时会解析 `package.json` 的 `dependencies`；开发依赖（Vitest、Vite 等）不会装入生产安装。
 4. **监管档位**：`data/config.json` 可配置 `supervisorMode`（`off` / `adaptive` / `strict`），详见 [`docs/双模机制详解.md`](./docs/双模机制详解.md)。
 
