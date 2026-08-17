@@ -136,9 +136,9 @@ npm start
 
 | 命令 | 说明 |
 |------|------|
-| `iceCoder` / `iceCoder start` | 交互式编码会话（CLI） |
-| `iceCoder cli` | CLI 子命令模式 |
-| `iceCoder web` | 启动 Web 界面 |
+| `iceCoder` / `iceCoder start` | 启动 Web，**自动用系统浏览器打开**聊天页（首次配置则打开设置页）；终端同时进入交互式对话。可用 `--no-open` 关闭自动打开 |
+| `iceCoder cli` | 仅终端对话（不启动 Web） |
+| `iceCoder web` | 仅启动 Web 服务器（不自动打开浏览器） |
 | `iceCoder run "<任务>"` | 一次性任务（Harness） |
 | `iceCoder tools` | 列出可用工具 |
 | `iceCoder mcp` | MCP 服务状态 |
@@ -157,11 +157,11 @@ iceCoder run "修复失败测试并跑通 npm test" --max-rounds 100
 
 | 环境 | 数据根 | 说明 |
 |------|--------|------|
-| **`npm install -g` / tgz 安装的 `iceCoder`** | `~/.iceCoder/`（Windows：`%USERPROFILE%\.iceCoder`） | 与在哪个目录执行命令无关；会话在 `sessions/` |
+| **`npm install -g` / tgz 的 `iceCoder` 与 Electron 桌面端** | 同一套：默认 `~/.iceCoder/` | 设置页改过的位置写在 `%APPDATA%/iceCoder/data-directory.json`；配置、会话、记忆、MCP 两边共用 |
 | **`npm start` / `NODE_ENV=production`** | 同上 | |
-| **源码开发**（`npm run dev`、`tsx src/cli/index.ts`） | 项目内 `./data/` | 仅仓库内开发 |
+| **源码开发**（`npm run dev`、`tsx src/cli/index.ts`） | 项目内 `./data/` | 仅仓库内开发，不与桌面端混用 |
 
-可用 **`ICE_DATA_DIR`** 覆盖数据根路径。
+可用 **`ICE_DATA_DIR`** 覆盖数据根路径（优先级高于设置页指针）。
 
 > 若曾在用户主目录下生成过 `~/data/sessions`（旧行为），请手动迁移到 `~/.iceCoder/sessions`。
 

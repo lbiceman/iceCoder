@@ -8,8 +8,9 @@
  *
  * 子目录示例（随 dataDir 切换）：`memory-files/`、`imagesCache/`、`mcpCache/` 等。
  *
- * MCP 配置（`mcp.json`）单独落在 `.iceCoder/`：开发用项目 `.iceCoder/mcp.json`，生产/全局用 `~/.iceCoder/mcp.json`。
+ * MCP 配置：开发用项目 `.iceCoder/mcp.json`；生产 / 全局 / Electron 用 `{ICE_DATA_DIR}/mcp.json`（与桌面端一致）。
  *
+ * 生产数据目录：先读与 Electron 共用的 `%APPDATA%/iceCoder/data-directory.json`，否则 `~/.iceCoder`。
  * 显式设置 `ICE_DATA_DIR` 等环境变量时始终优先。
  * 模块加载时会调用 `applyRuntimeDataEnvDefaults()`，保证 Web/CLI 子模块读到一致路径。
  */
@@ -22,6 +23,10 @@ import type { IceCoderConfigFile } from '../web/types.js';
 import { DEFAULT_SHELL_BLACKLIST_PATTERNS } from '../tools/shell-sandbox.js';
 import { applyWindowsPathDefaults } from '../tools/shell-spawn-env.js';
 import { ensureDirWritable } from './ensure-dir-writable.js';
+import {
+  readPersistedDataDirectory,
+  resolveSharedDefaultWorkDir,
+} from '../runtime/shell-identity.js';
 
 /** 用户主目录下的 iceCoder 数据目录（生产环境） */
 export const USER_DATA_DIR = path.join(os.homedir(), '.iceCoder');
@@ -64,7 +69,8 @@ export function usesUserDataRoot(): boolean {
 }
 
 function defaultDataDirForRuntime(): string {
-  return usesUserDataRoot() ? USER_DATA_DIR : LOCAL_DATA_DIR;
+  if (!usesUserDataRoot()) return LOCAL_DATA_DIR;
+  return readPersistedDataDirectory() ?? USER_DATA_DIR;
 }
 
 /**
@@ -97,10 +103,16 @@ export function applyRuntimeDataEnvDefaults(): void {
     process.env.ICE_SKILLS_DIR = path.join(dataDir, 'skills');
   }
   if (!process.env.ICE_MCP_CONFIG_PATH?.trim()) {
-    process.env.ICE_MCP_CONFIG_PATH = path.join(resolveMcpConfigDir(), 'mcp.json');
+    process.env.ICE_MCP_CONFIG_PATH = path.join(
+      usesUserDataRoot() ? dataDir : LOCAL_ICECODER_DIR,
+      'mcp.json',
+    );
   }
   if (!process.env.ICE_SUPERVISOR_CONFIG_PATH?.trim()) {
     process.env.ICE_SUPERVISOR_CONFIG_PATH = path.join(dataDir, 'supervisor-config.json');
+  }
+  if (!process.env.ICE_DEFAULT_WORK_DIR?.trim() && usesUserDataRoot()) {
+    process.env.ICE_DEFAULT_WORK_DIR = resolveSharedDefaultWorkDir(dataDir);
   }
 }
 
@@ -109,7 +121,7 @@ export function getRuntimeDataDir(): string {
   return path.resolve(process.env.ICE_DATA_DIR!);
 }
 
-/** 未锁定会话工作区时的默认命令目录；桌面端由主进程显式传入。 */
+/** 未锁定会话工作区时的默认命令目录；生产 / Electron / 全局 CLI 与桌面端同一套指针。 */
 export function getDefaultWorkDir(): string {
   if (process.env.ICE_DEFAULT_WORK_DIR?.trim()) {
     return path.resolve(process.env.ICE_DEFAULT_WORK_DIR.trim());
@@ -267,10 +279,12 @@ export const DEFAULT_SYSTEM_PROMPT = `你是 iceCoder，一个智能编程助手
 /**
  * MCP 配置目录。
  * - 开发：项目 `.iceCoder/`
- * - 生产 / 全局安装 / Electron：`~/.iceCoder/`
+ * - 生产 / 全局安装 / Electron：`{ICE_DATA_DIR}`（默认 ~/.iceCoder，可被设置页改掉）
  */
 export function resolveMcpConfigDir(): string {
-  return usesUserDataRoot() ? USER_DATA_DIR : LOCAL_ICECODER_DIR;
+  if (!usesUserDataRoot()) return LOCAL_ICECODER_DIR;
+  applyRuntimeDataEnvDefaults();
+  return path.resolve(process.env.ICE_DATA_DIR!);
 }
 
 /**

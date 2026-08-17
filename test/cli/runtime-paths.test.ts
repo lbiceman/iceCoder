@@ -13,6 +13,8 @@ describe('runtime data paths', () => {
     'ICE_OUTPUT_DIR',
     'ICE_USER_MEMORY_DIR',
     'ICE_MCP_CONFIG_PATH',
+    'ICE_DEFAULT_WORK_DIR',
+    'ICE_SHELL_IDENTITY_DIR',
   ];
 
   beforeEach(() => {
@@ -61,6 +63,26 @@ describe('runtime data paths', () => {
     expect(paths.memoryFilesDir).toBe(path.join(expectedRoot, 'memory-files'));
   });
 
+  it('production 读取共享壳目录里的 data-directory.json', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { writePersistedDataDirectory } = await import('../../src/runtime/shell-identity.js');
+    const identity = await mkdtemp(path.join(os.tmpdir(), 'ice-id-'));
+    const custom = await mkdtemp(path.join(os.tmpdir(), 'ice-custom-root-'));
+    process.env.NODE_ENV = 'production';
+    process.env.ICE_SHELL_IDENTITY_DIR = identity;
+    writePersistedDataDirectory(custom);
+    try {
+      const { applyRuntimeDataEnvDefaults, getRuntimeDataDir, resolveDataPaths } = await loadPathsModule();
+      applyRuntimeDataEnvDefaults();
+      expect(getRuntimeDataDir()).toBe(path.resolve(custom));
+      const paths = await resolveDataPaths();
+      expect(paths.mcpConfigPath).toBe(path.join(path.resolve(custom), 'mcp.json'));
+    } finally {
+      await rm(identity, { recursive: true, force: true });
+      await rm(custom, { recursive: true, force: true });
+    }
+  });
+
   it('respects explicit ICE_DATA_DIR override', async () => {
     process.env.NODE_ENV = 'production';
     const custom = path.join(os.tmpdir(), 'ice-custom-data');
@@ -69,6 +91,7 @@ describe('runtime data paths', () => {
     expect(getRuntimeDataDir()).toBe(path.resolve(custom));
     const paths = await resolveDataPaths();
     expect(paths.sessionsDir).toBe(path.join(path.resolve(custom), 'sessions'));
+    expect(paths.mcpConfigPath).toBe(path.join(path.resolve(custom), 'mcp.json'));
   });
 
   it('inline images: dev and prod under runtime data dir (imagesCache)', async () => {

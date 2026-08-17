@@ -50,8 +50,8 @@ test/tmp-tool-diffs/
 test/tmp-tool-diffs-fsop/
 test/tmp-tool-diffs-ws/
 
-# 运行时遥测与本地评测缓存
-runtime/
+# 运行时遥测与本地评测缓存（仅仓库根目录；src/runtime 源码需入库）
+/runtime/
 data/eval/
 
 # LoCoMo / Benchmark 证据：LoCoMo/、benchMark/reports/ 纳入版本库；仅忽略本地跑分中间目录
