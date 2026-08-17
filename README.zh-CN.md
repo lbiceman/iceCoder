@@ -72,13 +72,16 @@
 
 ## 快速上手
 
-### Windows 桌面版（推荐）
+二选一：Windows 安装包（无需 Node.js），或 CLI tgz（需 Node.js 22+）。
 
-无需安装 Node.js，下载安装包即可使用（内置服务端 + Electron 壳 + 悬浮冰豆）：
+| 下载 | 环境 | 用法 |
+|------|------|------|
+| **[Windows x64 安装包](./releases/windows/iceCoder-windows.exe)** | — | 安装后启动 iceCoder |
+| **[CLI tgz](./releases/npm/ice-coder.tgz)** | Node.js 22+ | `npm install -g ./ice-coder.tgz`，然后 `iceCoder start` |
 
-**[下载 iceCoder — Windows x64](./releases/windows/iceCoder-windows.exe)**
+### Windows 桌面版
 
-安装后首次启动请在「配置」页填写 API Key；数据目录默认 `~/.iceCoder/`。
+安装包内置服务端 + Electron 壳 + 悬浮冰豆。首次启动请在「配置」页填写 API Key；数据目录默认 `~/.iceCoder/`。
 
 **从源码打包桌面版（开发者）**：执行 `npm run build:desktop`。Windows 上 `/shell` 依赖 `node-pty` 原生重编译，需 **VS 2022「使用 C++ 的桌面开发」+ Windows SDK**；Spectre 库由打包脚本**默认绕过**。无 C++ 工具链时会跳过 rebuild、打包仍可成功，但桌面包内 `/shell` 不可用。详见 [`docs/使用文档.md` §桌面打包（Electron）](./docs/使用文档.md#桌面打包electron)。
 

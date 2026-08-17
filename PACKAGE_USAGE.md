@@ -27,6 +27,7 @@ npm run build
 2. `tsc` — 输出到 `dist/`
 3. `vite build` — 前端静态资源写入 `dist/public/`（生产 Web 用）
 4. `npm pack` — 生成 **`ice-coder-<version>.tgz`**
+5. 复制为 **`releases/npm/ice-coder.tgz`**（固定文件名，供 README 下载）
 
 CI 环境默认不自增（避免流水线改脏版本）；本地可用 `ICE_BUMP_VERSION=0` 关闭。
 
@@ -51,6 +52,13 @@ CI 环境默认不自增（避免流水线改脏版本）；本地可用 `ICE_BU
 ### 方式一：从 tgz 全局安装（推荐 CLI）
 
 Claude Code / OpenCode 装新包会替换旧包，是因为每次发版 **version 会变**。`npm run build` 会把 patch 版本 +1，随后 `npm install -g` 就会覆盖全局旧的 `iceCoder`。
+
+仓库已发布的包在 [`releases/npm/ice-coder.tgz`](./releases/npm/ice-coder.tgz)（与 Windows exe 并列，固定文件名）。下载后：
+
+```bash
+npm install -g ./ice-coder.tgz
+iceCoder start
+```
 
 源码仓推荐：
 

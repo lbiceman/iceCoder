@@ -72,13 +72,16 @@ Same bundle as desktop; routes `#/m/*`; bottom tabs: Work / Memory / Skills / Se
 
 ## Getting started
 
-### Windows desktop (recommended)
+Pick one: Windows installer (no Node.js) or CLI tarball (Node.js 22+).
 
-No Node.js required — download the installer (bundled server + Electron shell + floating Ice Bean):
+| Download | Needs | How to run |
+|----------|--------|------------|
+| **[Windows x64 installer](./releases/windows/iceCoder-windows.exe)** | — | Install, then launch iceCoder |
+| **[CLI tgz](./releases/npm/ice-coder.tgz)** | Node.js 22+ | `npm install -g ./ice-coder.tgz` then `iceCoder start` |
 
-**[Download iceCoder — Windows x64](./releases/windows/iceCoder-windows.exe)**
+### Windows desktop
 
-Configure your API key on first launch. Data directory: `~/.iceCoder/`.
+The installer bundles the server, Electron shell, and floating Ice Bean. Configure your API key on first launch. Data directory: `~/.iceCoder/`.
 
 **Building the desktop app from source:** run `npm run build:desktop`. On Windows, `/shell` requires rebuilding native `node-pty` for Electron — install **VS 2022 “Desktop development with C++”** plus a **Windows 10/11 SDK**. Spectre-mitigated libs are **bypassed by default** in `desktop/scripts/rebuild-server-native.cjs`. Without a C++ toolchain the rebuild is skipped (packaging still succeeds) but `/shell` will not work in the packaged app. See [`docs/使用文档.md` § Desktop build](./docs/使用文档.md#桌面打包electron) (Chinese).
 
