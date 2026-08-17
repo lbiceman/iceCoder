@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { createServer, startServer } from '../../src/web/server.js';
+import { createServer, startServer, resolveDefaultStaticDir } from '../../src/web/server.js';
 import type { Server } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -141,6 +141,44 @@ describe('Web Server', () => {
         process.exit = originalExit;
         await new Promise<void>((resolve) => blocker.close(() => resolve()));
       }
+    });
+  });
+
+  describe('resolveDefaultStaticDir', () => {
+    it('tsx 源码入口使用 src/public 且不做生产缓存', () => {
+      const resolved = resolveDefaultStaticDir({
+        moduleDir: path.join('/repo', 'src', 'web'),
+        nodeEnv: undefined,
+        existsSync: () => false,
+      });
+      expect(path.normalize(resolved.dir)).toBe(path.normalize('/repo/src/public'));
+      expect(resolved.prodCaching).toBe(false);
+    });
+
+    it('dist/web 且存在 dist/public/index.html 时用打包前端（不依赖 NODE_ENV）', () => {
+      const moduleDir = path.join('/app', 'node_modules', 'ice-coder', 'dist', 'web');
+      const distIndex = path.join('/app', 'node_modules', 'ice-coder', 'dist', 'public', 'index.html');
+      const resolved = resolveDefaultStaticDir({
+        moduleDir,
+        nodeEnv: undefined,
+        existsSync: (p) => path.normalize(p) === path.normalize(distIndex),
+      });
+      expect(path.normalize(resolved.dir)).toBe(
+        path.normalize('/app/node_modules/ice-coder/dist/public'),
+      );
+      expect(resolved.prodCaching).toBe(true);
+    });
+
+    it('NODE_ENV=production 时优先 dist/public', () => {
+      const moduleDir = path.join('/app', 'dist', 'web');
+      const distPublic = path.join('/app', 'dist', 'public');
+      const resolved = resolveDefaultStaticDir({
+        moduleDir,
+        nodeEnv: 'production',
+        existsSync: (p) => path.normalize(p) === path.normalize(distPublic),
+      });
+      expect(path.normalize(resolved.dir)).toBe(path.normalize(distPublic));
+      expect(resolved.prodCaching).toBe(true);
     });
   });
 });

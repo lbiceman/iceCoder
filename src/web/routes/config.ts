@@ -18,6 +18,7 @@ import {
 import {
   DEFAULT_ICE_ETL_PREFS,
   resolveIceEtlPrefs,
+  validateIceEtlPrefsPatch,
   writeIceEtlPrefsToMainConfig,
 } from '../../config/main-config-ice-etl-prefs.js';
 import {
@@ -34,7 +35,11 @@ import {
   parseModelNames,
   resolveActiveModelName,
 } from '../../config/parse-model-names.js';
-import { applyRuntimeDataEnvDefaults } from '../../cli/paths.js';
+import { applyRuntimeDataEnvDefaults, getRuntimeDataDir, USER_DATA_DIR, usesUserDataRoot } from '../../cli/paths.js';
+import {
+  readPersistedDataDirectory,
+  writePersistedDataDirectory,
+} from '../../runtime/shell-identity.js';
 import {
   DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
   getModelMaxContext,
@@ -389,27 +394,11 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
         return;
       }
       const patch = raw as Record<string, unknown>;
-      const allowedKeys = new Set([
-        'showTransparencyPanel',
-        'panelDefaultExpanded',
-        'panelWidth',
-      ]);
-      for (const key of Object.keys(patch)) {
-        if (!allowedKeys.has(key)) {
-          res.status(400).json({ error: `iceEtlPrefs 含未知字段：${key}` });
-          return;
-        }
-      }
-      if (patch.showTransparencyPanel !== undefined && typeof patch.showTransparencyPanel !== 'boolean') {
-        res.status(400).json({ error: 'showTransparencyPanel 须为 boolean' });
-        return;
-      }
-      if (patch.panelDefaultExpanded !== undefined && typeof patch.panelDefaultExpanded !== 'boolean') {
-        res.status(400).json({ error: 'panelDefaultExpanded 须为 boolean' });
-        return;
-      }
-      if (patch.panelWidth !== undefined && typeof patch.panelWidth !== 'number') {
-        res.status(400).json({ error: 'panelWidth 须为 number' });
+      // 允许字段 + 类型校验均由 DEFAULT_ICE_ETL_PREFS 派生（validateIceEtlPrefsPatch），
+      // 新增字段只需同步 DEFAULT + sanitize + types.ts + 前端，路由自动覆盖
+      const validationError = validateIceEtlPrefsPatch(patch);
+      if (validationError) {
+        res.status(400).json({ error: validationError });
         return;
       }
       const saved = await writeIceEtlPrefsToMainConfig(configFile, patch as Partial<IceEtlPrefs>);
@@ -425,6 +414,49 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
    */
   router.get('/shell-blacklist-defaults', (_req: Request, res: Response): void => {
     res.json({ shellBlacklist: [...DEFAULT_SHELL_BLACKLIST_PATTERNS] });
+  });
+
+  /**
+   * GET /api/config/data-directory — 当前数据目录与是否可持久化（npm 包 / Electron 共用指针）。
+   */
+  router.get('/data-directory', (_req: Request, res: Response): void => {
+    applyRuntimeDataEnvDefaults();
+    res.json({
+      dataDir: getRuntimeDataDir(),
+      defaultDataDir: USER_DATA_DIR,
+      persistedDataDir: readPersistedDataDirectory(),
+      canPersist: usesUserDataRoot(),
+    });
+  });
+
+  /**
+   * PUT /api/config/data-directory — 写入共享指针，重启后 Electron 与 iceCoder start 同时生效。
+   * body: { dataDir: string | null }
+   */
+  router.put('/data-directory', (req: Request, res: Response): void => {
+    if (!usesUserDataRoot()) {
+      res.status(400).json({ error: '开发模式使用项目 data/，不能改生产数据目录指针' });
+      return;
+    }
+    const body = req.body as { dataDir?: unknown };
+    if (body.dataDir !== null && typeof body.dataDir !== 'string') {
+      res.status(400).json({ error: 'dataDir 必须是绝对路径或 null' });
+      return;
+    }
+    try {
+      writePersistedDataDirectory(body.dataDir);
+      res.json({
+        success: true,
+        dataDir: body.dataDir ? path.resolve(body.dataDir) : USER_DATA_DIR,
+        defaultDataDir: USER_DATA_DIR,
+        persistedDataDir: readPersistedDataDirectory(),
+        canPersist: true,
+        restartRequired: true,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(400).json({ error: message });
+    }
   });
 
   return router;

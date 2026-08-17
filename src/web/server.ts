@@ -22,6 +22,40 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const HASHED_ASSET_NAME = /-[A-Za-z0-9_-]{8,}\.[^.]+$/;
 
+export interface ResolvedStaticDir {
+  dir: string;
+  /** 使用 Vite 指纹资源的长期缓存头（打包产物 / NODE_ENV=production） */
+  prodCaching: boolean;
+}
+
+/**
+ * 解析默认静态目录。
+ * - `tsx src/web/server.ts`：`src/public`（源码，禁用长期缓存）
+ * - `dist/web` 且存在 `dist/public/index.html`：打包前端（含全局 `iceCoder`，不依赖 NODE_ENV）
+ * - `NODE_ENV=production`：优先 `dist/public`
+ */
+export function resolveDefaultStaticDir(options?: {
+  moduleDir?: string;
+  nodeEnv?: string;
+  existsSync?: (p: string) => boolean;
+}): ResolvedStaticDir {
+  const moduleDir = options?.moduleDir ?? __dirname;
+  const nodeEnv = options?.nodeEnv ?? process.env.NODE_ENV;
+  const exists = options?.existsSync ?? fs.existsSync;
+  const distPublic = path.join(moduleDir, '../public');
+  const srcPublic = path.join(moduleDir, '../../src/public');
+  const fromDist = path.basename(path.dirname(moduleDir)) === 'dist';
+  const distIndex = path.join(distPublic, 'index.html');
+
+  if (fromDist && exists(distIndex)) {
+    return { dir: distPublic, prodCaching: true };
+  }
+  if (nodeEnv === 'production') {
+    return { dir: exists(distPublic) ? distPublic : srcPublic, prodCaching: true };
+  }
+  return { dir: srcPublic, prodCaching: false };
+}
+
 /**
  * 创建 Express 服务器的配置。
  */
@@ -56,15 +90,12 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   }
 
   // 静态文件托管
-  // 路径解析：__dirname 在编译后是 dist/web/，优先找 dist/public，回退 src/public
-  const isProd = process.env.NODE_ENV === 'production';
-  const distPublic = path.join(__dirname, '../public');       // dist/web/../public = dist/public
-  const srcPublic = path.join(__dirname, '../../src/public'); // 开发模式回退
-  const staticDir = config?.staticDir ?? (
-    isProd
-      ? (fs.existsSync(distPublic) ? distPublic : srcPublic)
-      : srcPublic
-  );
+  // 路径解析：编译产物在 dist/web/ 时优先 dist/public（打包 CLI 不依赖 NODE_ENV）；tsx 回退 src/public
+  const resolvedStatic = config?.staticDir
+    ? { dir: config.staticDir, prodCaching: process.env.NODE_ENV === 'production' }
+    : resolveDefaultStaticDir();
+  const staticDir = resolvedStatic.dir;
+  const isProd = resolvedStatic.prodCaching;
 
   const faviconSvgPath = path.join(staticDir, 'icons', 'favicon.svg');
   /** 浏览器默认请求 /favicon.ico；须先于 SPA 回退，否则会被改成返回 index.html */

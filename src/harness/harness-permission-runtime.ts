@@ -44,8 +44,17 @@ export function shellMandatoryConfirmKey(
   return `${request.sessionId}\u0000${request.taskId}\u0000${request.normalizedCommandHash}`;
 }
 
-/** 从 shell_exec / interactive_shell(start) 提取待检命令文本。 */
+/** 从 run_command / shell_exec / interactive_shell(start) 提取待检命令文本。 */
+const RUN_COMMAND_MGMT_ACTIONS = new Set(['check', 'list', 'stop']);
+
 export function extractShellCollabCommandFromToolCall(tc: ToolCall): string | null {
+  if (tc.name === 'run_command') {
+    const args = tc.arguments as Record<string, unknown>;
+    const action = typeof args?.action === 'string' ? args.action.trim() : '';
+    if (RUN_COMMAND_MGMT_ACTIONS.has(action)) return null;
+    const command = args?.command ?? args?.cmd;
+    return typeof command === 'string' && command.trim() ? command.trim() : null;
+  }
   if (tc.name === 'shell_exec') {
     const command = (tc.arguments as Record<string, unknown>)?.command;
     return typeof command === 'string' && command.trim() ? command.trim() : null;
@@ -63,13 +72,18 @@ export function isShellCollabCommandTool(toolName: string): boolean {
   return SHELL_COLLAB_COMMAND_TOOLS.has(toolName);
 }
 
+/** 走 shellMandatoryConfirm 层的命令类工具（Shell 协作 PTY + 普通 run_command）。 */
+export function isShellMandatoryConfirmCommandTool(toolName: string): boolean {
+  return toolName === 'run_command' || isShellCollabCommandTool(toolName);
+}
+
 export function isShellCollabTool(toolName: string): boolean {
   return SHELL_COLLAB_TOOLS.has(toolName);
 }
 
 /**
- * Shell 协作命令权限：hard block > shellMandatoryConfirm > 未命中直行。
- * 未命中可配置正则时不进入普通 permission。
+ * Shell 命令权限：hard block > shellMandatoryConfirm > 未命中直行（Shell 模式）或普通 permission（run_command）。
+ * 未命中可配置正则时，Shell 协作命令不进入普通 permission；run_command 仍走普通 permission。
  */
 export function resolveShellMandatoryConfirm(
   tc: ToolCall,
@@ -107,7 +121,9 @@ export function resolveShellMandatoryConfirm(
     ? taskIdRaw.trim()
     : tc.name === 'interactive_shell'
       ? '__shell_start__'
-      : '';
+      : tc.name === 'run_command'
+        ? '__run_command__'
+        : '';
 
   return {
     required: true,

@@ -11,6 +11,10 @@ import type { BootstrapResult } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, hasFlag } from '../utils/args-parser.js';
 import { c, info, error, toolCall, toolResult, Spinner } from '../utils/terminal-ui.js';
+import {
+  createCliOnConfirm,
+  createCliOnShellMandatoryConfirm,
+} from '../utils/harness-confirm-handlers.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
@@ -29,6 +33,14 @@ import {
 import { readVerificationExemptDirsFromMainConfig } from '../../harness/verification-exempt-config.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
 import { buildMcpRuntimeContext } from '../../mcp/mcp-runtime-context.js';
+import {
+  selectToolsForOffering,
+  recordCliDeferredToolCall,
+  getCliDeferredToolCalls,
+  buildAvailableDocToolsContext,
+  DEFERRED_TOOLS,
+  lazyToolOfferingLogEnabled,
+} from '../../tools/tool-offering-selector.js';
 
 export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<void> {
   const task = args.positional.join(' ');
@@ -76,10 +88,30 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+    // Lazy Tool Offering（CLI）：按信号裁剪文档工具；CLI 暂无上传/引用/多模态
+    const offeringResult = selectToolsForOffering(toolDefs, {
+      userMessage: task,
+      uploadedFilePaths: [],
+      explicitReferencePaths: [],
+      sessionRecentToolCalls: getCliDeferredToolCalls('default'),
+      shellCollabActive: false,
+      hasInlineVisionImages: false,
+    });
+    toolDefs = offeringResult.tools;
+    if (lazyToolOfferingLogEnabled() && offeringResult.reasons.length > 0) {
+      console.log(`[lazy-tools] run reasons=${offeringResult.reasons.join(',')}`);
+    }
+    // Prompt 与 tools 对齐：已激活文档工具注入 systemContext（工具禁用时不注入）
+    const docToolsContext = shouldDisableRuntimeTools()
+      ? {}
+      : buildAvailableDocToolsContext(
+          [...offeringResult.activated].filter((n) => DEFERRED_TOOLS.has(n)),
+        );
     const mcpRuntimeContext = buildMcpRuntimeContext(
       ctx.mcpManager,
       toolDefs.map((t) => t.name),
     );
+    const mergedSystemContext = { ...docToolsContext, ...mcpRuntimeContext };
 
     const harnessConfig: HarnessConfig = {
       context: {
@@ -87,7 +119,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
         tools: toolDefs,
         memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
         ...harnessOverlayToContextFields(assembled),
-        ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
+        ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
       },
       loop: {
         maxRounds,
@@ -107,6 +139,8 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       supervisorConfig,
       globalPolicy,
       supervisorBridge,
+      onConfirm: createCliOnConfirm(!jsonOutput ? spinner : undefined),
+      onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(!jsonOutput ? spinner : undefined),
     };
 
     const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
@@ -123,6 +157,9 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
         }
         if (event.type === 'tool_result') {
           toolResult(event.toolSuccess ?? false);
+          if (event.toolSuccess && event.toolName) {
+            recordCliDeferredToolCall('default', String(event.toolName));
+          }
         }
       },
     );

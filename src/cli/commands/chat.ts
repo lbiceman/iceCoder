@@ -1,7 +1,7 @@
 /**
  * iceCoder chat/cli/start — 交互式终端对话。
  *
- * start 模式：CLI + Web + Cloudflare Tunnel 三合一
+ * start 模式：Web（自动打开浏览器）+ CLI + 可选 Cloudflare Tunnel
  * cli 模式：仅终端对话（--no-serve）
  */
 
@@ -14,7 +14,12 @@ import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum, getFlagStr, hasFlag } from '../utils/args-parser.js';
 import { startWebServer, type ServeResult } from './serve.js';
 import { resolveDefaultApiPort } from '../serve-port.js';
+import { maybeOpenAppInBrowser } from '../open-browser.js';
 import { c, info, success, warn, error, toolCall, toolResult, aiText, divider, Spinner } from '../utils/terminal-ui.js';
+import {
+  createCliOnConfirm,
+  createCliOnShellMandatoryConfirm,
+} from '../utils/harness-confirm-handlers.js';
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { resolveWorkspaceToolContext } from '../../harness/workspace-run-context.js';
@@ -29,6 +34,14 @@ import { purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { formatFriendlyError } from '../friendly-errors.js';
 import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
+import {
+  selectToolsForOffering,
+  recordCliDeferredToolCall,
+  getCliDeferredToolCalls,
+  buildAvailableDocToolsContext,
+  DEFERRED_TOOLS,
+  lazyToolOfferingLogEnabled,
+} from '../../tools/tool-offering-selector.js';
 import type { AssembledPrompt } from '../../prompts/types.js';
 import { DEFAULT_SYSTEM_PROMPT, getDefaultWorkDir } from '../paths.js';
 import {
@@ -112,6 +125,11 @@ export async function runChat(ctx: BootstrapResult, args: ParsedArgs): Promise<v
   if (!noServe) {
     serveResult = await startWebServer(ctx, port);
     info(`Web 服务器已启动: ${c.underline}http://127.0.0.1:${port}${c.reset}`);
+    await maybeOpenAppInBrowser({
+      port,
+      needsSetup: ctx.needsSetup,
+      flags: args.flags,
+    });
 
     if (
       isTunnelDevEnabled() &&
@@ -406,10 +424,30 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      // Lazy Tool Offering（CLI）：按信号裁剪文档工具
+      const offeringResult = selectToolsForOffering(toolDefs, {
+        userMessage: input,
+        uploadedFilePaths: [],
+        explicitReferencePaths: [],
+        sessionRecentToolCalls: getCliDeferredToolCalls('default'),
+        shellCollabActive: false,
+        hasInlineVisionImages: false,
+      });
+      toolDefs = offeringResult.tools;
+      if (lazyToolOfferingLogEnabled() && offeringResult.reasons.length > 0) {
+        console.log(`[lazy-tools] chat reasons=${offeringResult.reasons.join(',')}`);
+      }
+      // Prompt 与 tools 对齐：已激活文档工具注入 systemContext（工具禁用时不注入）
+      const docToolsContext = shouldDisableRuntimeTools()
+        ? {}
+        : buildAvailableDocToolsContext(
+            [...offeringResult.activated].filter((n) => DEFERRED_TOOLS.has(n)),
+          );
       const mcpRuntimeContext = buildMcpRuntimeContext(
         ctx.mcpManager,
         toolDefs.map((t) => t.name),
       );
+      const mergedSystemContext = { ...docToolsContext, ...mcpRuntimeContext };
       const harnessDynamic = harnessOverlayToContextFields(assembled);
       const harnessConfig: HarnessConfig = {
         context: {
@@ -417,7 +455,7 @@ ${c.bold}终端内置命令:${c.reset}
           tools: toolDefs,
           memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
           ...harnessDynamic,
-          ...(Object.keys(mcpRuntimeContext).length > 0 ? { systemContext: mcpRuntimeContext } : {}),
+          ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
         },
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
@@ -440,20 +478,8 @@ ${c.bold}终端内置命令:${c.reset}
         supervisorConfig: supervisorRuntime.supervisorConfig,
         globalPolicy: supervisorRuntime.globalPolicy,
         supervisorBridge: supervisorRuntime.bridge,
-        onConfirm: async (toolName, toolArgs) => {
-          // 终端确认
-          spinner.stop();
-          const detail = toolName.includes('(') ? '' : ` (${JSON.stringify(toolArgs).substring(0, 80)})`;
-          console.log(`\n${c.yellow}⚠ 需要确认: ${toolName}${detail}${c.reset}`);
-
-          return new Promise<boolean>((resolve) => {
-            const confirmRl = createInterface({ input: process.stdin, output: process.stdout });
-            confirmRl.question(`${c.yellow}允许执行? (y/n) ${c.reset}`, (answer) => {
-              confirmRl.close();
-              resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
-            });
-          });
-        },
+        onConfirm: createCliOnConfirm(spinner),
+        onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(spinner),
       };
 
       const harness = new Harness(harnessConfig, wsCtx.toolExecutor);
@@ -477,6 +503,9 @@ ${c.bold}终端内置命令:${c.reset}
           }
           if (event.type === 'tool_result') {
             toolResult(event.toolSuccess ?? false);
+            if (event.toolSuccess && event.toolName) {
+              recordCliDeferredToolCall('default', String(event.toolName));
+            }
           }
         },
         sessionMessages,

@@ -363,7 +363,7 @@ export class BackgroundTaskManager extends EventEmitter {
     taskId: string;
     error?: string;
   } {
-    const sandbox = analyzeShellSandbox(command, { workDir: this.workDir });
+    const sandbox = analyzeShellSandbox(command, { workDir: this.workDir, includeBlacklist: false });
     if (sandbox.blocked) {
       return { taskId: '', error: sandbox.message ?? '[Sandbox / Blocked]' };
     }

@@ -4,7 +4,7 @@
  */
 
 import type { BootstrapResult } from '../bootstrap.js';
-import { reloadLLMAdapter } from '../bootstrap.js';
+import { reloadLLMAdapter, watchConfigChanges } from '../bootstrap.js';
 import type { ParsedArgs } from '../utils/args-parser.js';
 import { getFlagNum } from '../utils/args-parser.js';
 import { createServer, startServer } from '../../web/server.js';
@@ -13,6 +13,7 @@ import { createToolsRouter } from '../../web/routes/tools.js';
 import { createRemoteRouter } from '../../web/routes/remote.js';
 import {
   attachChatWebSocket,
+  broadcastMcpReady,
   broadcastTunnelReady,
   cleanupChatResources,
   getActiveSessionId,
@@ -28,15 +29,19 @@ registerBootstrapSessionHints({
   getRuntimeActiveId: getActiveSessionId,
   getProcessingSessionIds,
 });
-import { createUploadRouter } from '../../web/routes/upload.js';
+import { createUploadRouter, purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { createMemoryTelemetryRouter } from '../../web/routes/memory-telemetry.js';
 import { createSupervisorEventsRouter } from '../../web/routes/supervisor-events.js';
 import { createMemoryExportRouter } from '../../web/routes/memory-export.js';
 import { createMemoryFilesRouter } from '../../web/routes/memory-files.js';
 import { createMemoryDreamRouter } from '../../web/routes/memory-dream.js';
+import { createSkillsRouter } from '../../web/routes/skills.js';
+import { createMcpStatusRouter } from '../../web/routes/mcp-status.js';
+import { createWorkspaceBrowseRouter } from '../../web/routes/workspace-browse.js';
 import type { Server } from 'http';
 import { registerGracefulShutdown } from '../graceful-shutdown.js';
 import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-manager.js';
+import { stopAllShellWork } from '../../tools/session-shell-control.js';
 import { c, warn } from '../utils/terminal-ui.js';
 import { resolveDefaultApiPort } from '../serve-port.js';
 
@@ -50,7 +55,7 @@ export interface ServeResult {
  * 启动 Web 服务器，返回 server 实例。
  */
 export async function startWebServer(ctx: BootstrapResult, port: number): Promise<ServeResult> {
-  const { orchestrator, toolRegistry, toolExecutor, llmAdapter, paths } = ctx;
+  const { orchestrator, toolRegistry, toolExecutor, llmAdapter, paths, mcpManager } = ctx;
   const setupState = { required: ctx.needsSetup };
 
   const app = await createServer({
@@ -74,6 +79,20 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
       { path: '/api/memory/telemetry', router: createMemoryTelemetryRouter() },
       { path: '/api/supervisor/events', router: createSupervisorEventsRouter() },
       { path: '/api/memory/files', router: createMemoryFilesRouter() },
+      { path: '/api/skills', router: createSkillsRouter() },
+      { path: '/api/mcp', router: createMcpStatusRouter({
+        mcpManager,
+        registry: toolRegistry,
+        onReloaded: (r) => {
+          broadcastMcpReady({
+            ok: r.ok,
+            toolCount: r.toolCount,
+            readyServers: r.readyServers,
+            ...(r.errorMessage ? { errorMessage: r.errorMessage } : {}),
+          });
+        },
+      }) },
+      { path: '/api/workspace', router: createWorkspaceBrowseRouter() },
       { path: '/api/memory/dream', router: createMemoryDreamRouter(llmAdapter) },
       { path: '/api/memory', router: createMemoryExportRouter(llmAdapter) },
     ],
@@ -84,20 +103,39 @@ export async function startWebServer(ctx: BootstrapResult, port: number): Promis
     orchestrator,
     toolRegistry,
     toolExecutor,
+    mcpManager,
     isSetupRequired: () => setupState.required,
   });
 
   const stopTunnelWatcher = startTunnelReadyWatcher({
     onReady: (url) => broadcastTunnelReady({ url }),
   });
+  const stopConfigWatch = watchConfigChanges(llmAdapter, paths.configPath);
 
   const cleanup = () => {
+    stopConfigWatch();
     stopTunnelWatcher();
     cleanupChatResources();
     server.close();
   };
 
   return { server, port, cleanup };
+}
+
+/**
+ * Electron / `npm start` / `iceCoder web` 共用的退出清理（停 HTTP、Shell、上传缓存、MCP）。
+ */
+export function registerWebRuntimeShutdown(ctx: BootstrapResult, cleanup: () => void): void {
+  registerGracefulShutdown({
+    message: 'iceCoder 正在退出...',
+    cleanups: [
+      () => { cleanup(); },
+      () => { stopAllShellWork('shutdown'); },
+      () => { disposeAllBackgroundTaskManagers(); },
+      () => { purgeAllUploadedFiles(); },
+      () => ctx.mcpManager.shutdown(),
+    ],
+  });
 }
 
 /**
@@ -113,12 +151,5 @@ export async function runServe(ctx: BootstrapResult, args: ParsedArgs): Promise<
     console.log(`  ${c.cyan}http://127.0.0.1:${port}/#/settings${c.reset}`);
   }
 
-  registerGracefulShutdown({
-    message: 'iceCoder 正在退出...',
-    cleanups: [
-      () => { cleanup(); },
-      () => { disposeAllBackgroundTaskManagers(); },
-      () => ctx.mcpManager.shutdown(),
-    ],
-  });
+  registerWebRuntimeShutdown(ctx, cleanup);
 }

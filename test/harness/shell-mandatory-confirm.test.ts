@@ -27,6 +27,18 @@ describe('shell mandatory confirm runtime', () => {
       name: 'interactive_shell',
       arguments: { action: 'write', input: 'secret' },
     })).toBeNull();
+
+    expect(extractShellCollabCommandFromToolCall({
+      id: '4',
+      name: 'run_command',
+      arguments: { command: 'git reset --hard' },
+    })).toBe('git reset --hard');
+
+    expect(extractShellCollabCommandFromToolCall({
+      id: '5',
+      name: 'run_command',
+      arguments: { action: 'check', task_id: 'bg_1', command: 'git reset --hard' },
+    })).toBeNull();
   });
 
   it('T29: mandatory confirm runs even when skipPermissionChecks is true', async () => {
@@ -91,6 +103,37 @@ describe('shell mandatory confirm runtime', () => {
 
     expect(onConfirm).not.toHaveBeenCalled();
     expect(onShellMandatoryConfirm).not.toHaveBeenCalled();
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('run_command in normal mode triggers mandatory confirm and bypasses skipPermissionChecks', async () => {
+    const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
+    const onShellMandatoryConfirm = vi.fn(async () => true);
+    const messages: UnifiedMessage[] = [];
+
+    await executeToolCallsStreaming(
+      {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 1 }),
+        permissionRules: [],
+        skipPermissionChecks: true,
+        shellCollabActive: false,
+        onShellMandatoryConfirm,
+        workspaceRoot: '/tmp/workspace',
+        sessionId: 'sess-1',
+      },
+      {
+        toolCalls: [{
+          id: 'tc-1',
+          name: 'run_command',
+          arguments: { command: 'git reset --hard' },
+        }],
+        messages,
+        logger: { toolCall: () => {}, toolResult: () => {} } as never,
+      },
+    );
+
+    expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(1);
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
@@ -159,5 +202,113 @@ describe('shell mandatory confirm runtime', () => {
       shellMandatoryConfirmDenials,
     });
     expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(2);
+  });
+
+  it('run_command skips second destructive confirm after mandatory approval', async () => {
+    const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
+    const onConfirm = vi.fn(async () => false);
+    const onShellMandatoryConfirm = vi.fn(async () => true);
+    const messages: UnifiedMessage[] = [];
+
+    await executeToolCallsStreaming(
+      {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 1 }),
+        permissionRules: [{ pattern: '*', permission: 'confirm' }],
+        skipPermissionChecks: false,
+        shellCollabActive: false,
+        onConfirm,
+        onShellMandatoryConfirm,
+        workspaceRoot: '/tmp/workspace',
+        sessionId: 'sess-1',
+      },
+      {
+        toolCalls: [{
+          id: 'tc-1',
+          name: 'run_command',
+          arguments: { command: 'git reset --hard' },
+        }],
+        messages,
+        logger: { toolCall: () => {}, toolResult: () => {} } as never,
+      },
+    );
+
+    expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('run_command action:check does not trigger mandatory confirm', async () => {
+    const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
+    const onShellMandatoryConfirm = vi.fn(async () => false);
+    const messages: UnifiedMessage[] = [];
+
+    await executeToolCallsStreaming(
+      {
+        toolExecutor: { executeTool } as never,
+        loopController: new LoopController({ maxRounds: 1 }),
+        permissionRules: [],
+        skipPermissionChecks: true,
+        shellCollabActive: false,
+        onShellMandatoryConfirm,
+        workspaceRoot: '/tmp/workspace',
+        sessionId: 'sess-1',
+      },
+      {
+        toolCalls: [{
+          id: 'tc-1',
+          name: 'run_command',
+          arguments: { action: 'check', task_id: 'bg_1', command: 'git reset --hard' },
+        }],
+        messages,
+        logger: { toolCall: () => {}, toolResult: () => {} } as never,
+      },
+    );
+
+    expect(onShellMandatoryConfirm).not.toHaveBeenCalled();
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('run_command denial dedup uses __run_command__ taskId within one run', async () => {
+    const executeTool = vi.fn(async () => ({ success: true, output: 'ok' }));
+    const onShellMandatoryConfirm = vi.fn(async () => false);
+    const shellMandatoryConfirmDenials = new Set<string>();
+    const deps = {
+      toolExecutor: { executeTool } as never,
+      loopController: new LoopController({ maxRounds: 3 }),
+      permissionRules: [],
+      shellCollabActive: false,
+      onShellMandatoryConfirm,
+      workspaceRoot: '/tmp/workspace',
+      sessionId: 'sess-1',
+    };
+    const logger = { toolCall: () => {}, toolResult: () => {} } as never;
+
+    await executeToolCallsStreaming(deps, {
+      toolCalls: [{
+        id: 'tc-1',
+        name: 'run_command',
+        arguments: { command: 'git reset --hard' },
+      }],
+      messages: [],
+      logger,
+      shellMandatoryConfirmDenials,
+    });
+    const secondMessages: UnifiedMessage[] = [];
+    const secondStats = await executeToolCallsStreaming(deps, {
+      toolCalls: [{
+        id: 'tc-2',
+        name: 'run_command',
+        arguments: { command: '  GIT   RESET --hard  ' },
+      }],
+      messages: secondMessages,
+      logger,
+      shellMandatoryConfirmDenials,
+    });
+
+    expect(onShellMandatoryConfirm).toHaveBeenCalledTimes(1);
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(secondStats.policyBlockedSignatures).toHaveLength(1);
+    expect(secondMessages[0]?.content).toMatch(/already denied/i);
   });
 });

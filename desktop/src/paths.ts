@@ -1,5 +1,7 @@
 /**
  * 桌面端路径解析（与 src/cli/paths.ts 解耦，独立编译）。
+ * 数据目录指针、默认工作区写入与 npm 包相同的共享壳目录（%APPDATA%/iceCoder），
+ * 不得只用 Electron userData，否则 iceCoder start 读不到。
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -11,12 +13,50 @@ const WORKSPACE_FILE = 'workspace.json';
 const PET_POS_FILE = 'pet-floating-position.json';
 const DATA_DIR_FILE = 'data-directory.json';
 
+/** 必须与 src/runtime/shell-identity.ts 的 resolveSharedShellDir 保持一致。 */
+export function resolveSharedShellDir(): string {
+  const override = process.env.ICE_SHELL_IDENTITY_DIR?.trim();
+  if (override) return path.resolve(override);
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA?.trim()
+      || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'iceCoder');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'iceCoder');
+  }
+  const xdg = process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), '.config');
+  return path.join(xdg, 'iceCoder');
+}
+
+function identityReadCandidates(fileName: string): string[] {
+  const shared = path.join(resolveSharedShellDir(), fileName);
+  const legacy = path.join(app.getPath('userData'), fileName);
+  return shared === legacy ? [shared] : [shared, legacy];
+}
+
+function readIdentityJson(fileName: string): unknown | null {
+  for (const file of identityReadCandidates(fileName)) {
+    if (!fs.existsSync(file)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      // 尝试下一候选
+    }
+  }
+  return null;
+}
+
+function writeIdentityJson(fileName: string, value: unknown): void {
+  const file = path.join(resolveSharedShellDir(), fileName);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(value, null, 2));
+}
+
 /** 用户选定的工作区目录（绝对路径），未设置时返回 null。 */
 export function readWorkspace(): string | null {
-  const file = path.join(app.getPath('userData'), WORKSPACE_FILE);
-  if (!fs.existsSync(file)) return null;
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const raw = readIdentityJson(WORKSPACE_FILE) as { workspace?: unknown } | null;
     const ws = typeof raw?.workspace === 'string' ? raw.workspace : null;
     if (!ws) return null;
     if (!fs.existsSync(ws)) return null;
@@ -27,17 +67,13 @@ export function readWorkspace(): string | null {
 }
 
 export function writeWorkspace(workspace: string | null): void {
-  const file = path.join(app.getPath('userData'), WORKSPACE_FILE);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ workspace }, null, 2));
+  writeIdentityJson(WORKSPACE_FILE, { workspace });
 }
 
 /** 用户选择的 iceCoder 数据目录；未设置时返回 null（使用 ~/\.iceCoder）。 */
 export function readDataDirectory(): string | null {
-  const file = path.join(app.getPath('userData'), DATA_DIR_FILE);
-  if (!fs.existsSync(file)) return null;
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const raw = readIdentityJson(DATA_DIR_FILE) as { dataDir?: unknown } | null;
     const dataDir = typeof raw?.dataDir === 'string' ? raw.dataDir.trim() : '';
     if (!dataDir || !path.isAbsolute(dataDir)) return null;
     return path.resolve(dataDir);
@@ -52,11 +88,9 @@ export function writeDataDirectory(dataDir: string | null): void {
   if (normalized && !path.isAbsolute(normalized)) {
     throw new Error('数据目录必须是绝对路径');
   }
-  const file = path.join(app.getPath('userData'), DATA_DIR_FILE);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(
-    file,
-    JSON.stringify({ dataDir: normalized ? path.resolve(normalized) : null }, null, 2),
+  writeIdentityJson(
+    DATA_DIR_FILE,
+    { dataDir: normalized ? path.resolve(normalized) : null },
   );
 }
 

@@ -48,10 +48,6 @@ window.ChatPage = (function () {
   var lastActivateFetchMs = 0;
   var lastSyncMessagesMs = 0;
   var initialHistoryPainted = false;
-  /** 当前 session 后台 shell 任务内存缓存（权威源：服务端 session 文件 + WS bgTasks） */
-  var shellDockTaskCache = [];
-  var shellDockResyncTimer = null;
-  var shellDockFetchGeneration = 0;
   var pendingInitialPaint = false;
 
   function isMobileShell() {
@@ -669,6 +665,10 @@ window.ChatPage = (function () {
       UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
     }
+    // 记录用户提示词摘要（任务完成通知使用）
+    if (typeof Pet.setLastUserPrompt === 'function') {
+      Pet.setLastUserPrompt(outboundText || composerBody || '');
+    }
     var outboundMessageId = didAppendUserMessage && Session.getLastMessage()
       ? Session.getLastMessage().id
       : undefined;
@@ -744,21 +744,8 @@ window.ChatPage = (function () {
     syncComposerActionState();
   }
 
-  function onWsTaskQueueUpdated(data) {
-    if (!window.ChatTaskQueue || typeof window.ChatTaskQueue.setItems !== 'function') return;
-    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    window.ChatTaskQueue.setItems(data && data.items ? data.items : []);
-  }
-
-  function appendSystemAgentMessage(content) {
-    var msg = { role: 'agent', content: content || '', statusTag: 'system' };
-    if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
-      window.ChatSession.stampMessageTimestamps(msg);
-    }
-    Session.appendMessage(msg);
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    Session.saveMessages();
-  }
+  // task_queue_updated / bg_task_update / bg_task_stop_result / also_note_appended /
+  // also_rejected / shell_collab_entered 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
   var elShellCollabIndicator = null;
 
@@ -793,58 +780,8 @@ window.ChatPage = (function () {
     }
   }
 
-  function appendShellCollabAgentMessage(data) {
-    if (!data || !data.message) return;
-    if (data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) return;
-    var msg = data.message;
-    if (!msg || msg.role !== 'agent') return;
-    if (msg.id && Session.getMessages) {
-      var msgs = Session.getMessages();
-      for (var i = 0; i < msgs.length; i++) {
-        if (msgs[i].id === msg.id) return;
-      }
-    }
-    Session.appendMessage(msg);
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    Session.saveMessages();
-    syncWelcomeState();
-    UI.scheduleScrollIfSticky();
-  }
-
-  function onWsShellCollabEntered(data) {
-    notifyShellCollabState(data);
-    if (!data || data.idempotent) return;
-    appendShellCollabAgentMessage(data);
-  }
-
-  function removeAlsoNoteFromUi(messageId) {
-    if (!messageId) return;
-    delete pendingAlsoMessageIds[messageId];
-    Session.removeMessageById(messageId);
-    UI.removeMessageElById(messageId);
-    Session.saveMessages();
-    syncWelcomeState();
-  }
-
-  function onWsAlsoNoteAppended(data) {
-    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    var msg = data && data.message;
-    if (!msg || !msg.id) return;
-    if (pendingAlsoMessageIds[msg.id]) {
-      delete pendingAlsoMessageIds[msg.id];
-      return;
-    }
-    appendAlsoNoteBubble(msg.content, msg.id);
-  }
-
-  function onWsAlsoRejected(data) {
-    if (data && data.sessionId && data.sessionId !== Session.getActiveId()) return;
-    var ids = Object.keys(pendingAlsoMessageIds);
-    for (var i = 0; i < ids.length; i++) {
-      removeAlsoNoteFromUi(ids[i]);
-    }
-    appendSystemAgentMessage((data && data.message) || '/also 未生效');
-  }
+  // appendShellCollabAgentMessage / onWsShellCollabEntered / removeAlsoNoteFromUi /
+  // onWsAlsoNoteAppended / onWsAlsoRejected 已拆分至 chat-ws-bg-task-handlers.js。
 
   function announceTunnelReadyFromPayload(payload) {
     if (!payload || !payload.url || tunnelReadyAnnounced) return;
@@ -862,104 +799,6 @@ window.ChatPage = (function () {
       isStreaming: isStreaming,
       wsProcessing: WS.isProcessing(),
     });
-  }
-
-  function tryMountShellDock() {
-    if (!window.EtlShellDock || typeof window.EtlShellDock.mount !== 'function') return;
-    var host = document.getElementById('etl-shell-dock-host');
-    if (host) window.EtlShellDock.mount(host);
-  }
-
-  function scheduleShellDockResync() {
-    if (shellDockResyncTimer) clearTimeout(shellDockResyncTimer);
-    shellDockResyncTimer = setTimeout(function () {
-      shellDockResyncTimer = null;
-      syncShellDockFromCache();
-    }, 80);
-    setTimeout(syncShellDockFromCache, 450);
-  }
-
-  function isShellDockRunningTask(t) {
-    if (window.EtlShellDock && typeof window.EtlShellDock.isRunningTask === 'function') {
-      return window.EtlShellDock.isRunningTask(t);
-    }
-    return !!(t && t.taskId && t.status === 'running' && !t.isTerminal);
-  }
-
-  function mergeShellDockTasks(tasks) {
-    if (!Array.isArray(tasks)) return;
-    for (var i = 0; i < tasks.length; i++) {
-      var t = tasks[i];
-      if (!t || !t.taskId) continue;
-      if (!isShellDockRunningTask(t)) {
-        shellDockTaskCache = shellDockTaskCache.filter(function (row) {
-          return row && row.taskId !== t.taskId;
-        });
-        continue;
-      }
-      var found = -1;
-      for (var j = 0; j < shellDockTaskCache.length; j++) {
-        if (shellDockTaskCache[j].taskId === t.taskId) {
-          found = j;
-          break;
-        }
-      }
-      if (found >= 0) shellDockTaskCache[found] = t;
-      else shellDockTaskCache.push(t);
-    }
-  }
-
-  function syncShellDockFromCache() {
-    tryMountShellDock();
-    if (window.EtlShellDock && typeof window.EtlShellDock.hydrate === 'function') {
-      window.EtlShellDock.hydrate(shellDockTaskCache);
-    }
-  }
-
-  function replaceShellDockTasks(tasks, sessionId) {
-    if (!Array.isArray(tasks)) {
-      scheduleShellDockResync();
-      return;
-    }
-    shellDockTaskCache = tasks.filter(isShellDockRunningTask);
-    syncShellDockFromCache();
-    scheduleShellDockResync();
-  }
-
-  function fetchSessionBgTasks(sessionId, callback) {
-    var sid = sessionId || (Session.getActiveId ? Session.getActiveId() : 'default');
-    var generation = ++shellDockFetchGeneration;
-    fetch('/api/sessions/' + encodeURIComponent(sid) + '/bg-tasks', { cache: 'no-store' })
-      .then(function (res) { return res.ok ? res.json() : { tasks: [] }; })
-      .then(function (body) {
-        if (generation !== shellDockFetchGeneration) return;
-        var tasks = body && Array.isArray(body.tasks) ? body.tasks : [];
-        if (callback) callback(tasks);
-      })
-      .catch(function () {
-        if (generation !== shellDockFetchGeneration) return;
-        if (callback) callback([]);
-      });
-  }
-
-  /** WS bgTasks 优先；缺失时 REST 读 session 文件（跨端同步）。 */
-  function hydrateShellDockForSession(sessionId, wsTasks) {
-    if (Array.isArray(wsTasks)) {
-      replaceShellDockTasks(wsTasks, sessionId);
-      return;
-    }
-    fetchSessionBgTasks(sessionId, function (tasks) {
-      replaceShellDockTasks(tasks, sessionId);
-    });
-  }
-
-  function clearShellDockCache(sessionId) {
-    var activeId = Session.getActiveId ? Session.getActiveId() : 'default';
-    var sid = sessionId || activeId;
-    if (sid === activeId) {
-      shellDockTaskCache = [];
-      syncShellDockFromCache();
-    }
   }
 
   function syncSidebarWorkspace(data) {
@@ -1021,7 +860,7 @@ window.ChatPage = (function () {
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
-    hydrateShellDockForSession(sessionId, options.bgTasks);
+    if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
     syncShellCollabIndicator();
   }
 
@@ -1056,27 +895,6 @@ window.ChatPage = (function () {
       );
       renderChatHistoryWithFetch(false, afterHistoryPainted);
     });
-  }
-
-  function syncActiveSessionFromServer(data) {
-    if (!data) return false;
-    var serverId = data.activeSessionId || data.sessionId;
-    if (!serverId) return false;
-    var clientId = Session.getActiveId ? Session.getActiveId() : 'default';
-    if (window.ChatSessionStore && typeof window.ChatSessionStore.setActiveSessionId === 'function') {
-      window.ChatSessionStore.setActiveSessionId(serverId);
-    }
-    if (serverId !== clientId) {
-      pendingInitialPaint = false;
-      onSessionSwitched(serverId, data.runningTurn || null, { bgTasks: data.bgTasks });
-      return true;
-    }
-    if (remoteMode && pendingInitialPaint && !initialHistoryPainted) {
-      pendingInitialPaint = false;
-      paintInitialChatView();
-      return true;
-    }
-    return false;
   }
 
   /**
@@ -1197,67 +1015,6 @@ window.ChatPage = (function () {
     UI.scheduleScrollIfSticky();
   }
 
-  function onWsConnected(data) {
-    var skipHeavyFetch = shouldSkipWsConnectedHeavyFetch();
-    var paintedFromSessionSync = syncActiveSessionFromServer(data || {});
-    if (!applyModelContextFromWs(data)) {
-      if (!skipHeavyFetch) loadModelConfig();
-    } else if (data && (data.providers || data.modelName)) {
-      syncChipModelLabelFromWs(data);
-    } else if (!skipHeavyFetch) {
-      loadModelConfig();
-    }
-    syncSidebarWorkspace(data);
-    if (!skipHeavyFetch && window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
-      window.ChatSessionStore.fetchSessions();
-    }
-    var clientSid = Session.getActiveId ? Session.getActiveId() : 'default';
-    var serverSid = data && (data.activeSessionId || data.sessionId);
-    if (data && serverSid === clientSid) {
-      restoreFromRunningTurn(data.runningTurn || null);
-    } else if (data && data.runningTurn && data.runningTurn.isProcessing) {
-      restoreFromRunningTurn(null);
-    }
-    if (data && data.mcpReady) {
-      announceMcpReadyFromPayload(data.mcpReady);
-    }
-    if (data && data.tunnelReady) {
-      announceTunnelReadyFromPayload(data.tunnelReady);
-    }
-    if (typeof data.canRestore === 'boolean') {
-      applyHarnessRestoreUi(data.canRestore, data.checkpointMessageIds);
-    }
-    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifyConnected === 'function') {
-      if (!skipHeavyFetch) {
-        window.ChatExecutionPlanBridge.notifyConnected(data || {});
-      }
-    }
-    var dockSid = Session.getActiveId ? Session.getActiveId() : 'default';
-    var connectedSid = data && (data.activeSessionId || data.sessionId);
-    if (!connectedSid || connectedSid === dockSid) {
-      hydrateShellDockForSession(dockSid, data && data.bgTasks);
-    } else {
-      hydrateShellDockForSession(dockSid, null);
-    }
-    scheduleShellDockResync();
-    notifyShellCollabState(data || {});
-    if (paintedFromSessionSync) return;
-    var rt = data && data.runningTurn;
-    if ((!rt || !rt.isProcessing) && !skipHeavyFetch) {
-      syncMessages(needsInitialHistoryPaint());
-    } else if (needsInitialHistoryPaint()) {
-      syncMessages(true);
-    }
-  }
-
-  function onWsSessionCleared(data) {
-    if (!data || !data.ok) return;
-    var activeId = Session.getActiveId ? Session.getActiveId() : 'default';
-    var sid = data.sessionId || activeId;
-    if (sid !== activeId) return;
-    replaceShellDockTasks(Array.isArray(data.bgTasks) ? data.bgTasks : [], sid);
-  }
-
   // ---- WebSocket 事件处理 ----
   function onWsOpen() {
     updateNavStatus(true);
@@ -1271,284 +1028,11 @@ window.ChatPage = (function () {
     endTransparencyTurnTimer();
   }
 
-  function onWsReasoningStream(data) {
-    if (userStopped) return;
-    if (!isStreaming) {
-      isStreaming = true;
-      UI.setStreamingState(true);
-    }
-    if (sessionPet) sessionPet.setState('thinking');
-    UI.appendReasoningStreamChunk(data.delta || '');
-    syncWelcomeState();
-  }
+  // 流式事件 handler（stream / reasoning_stream / stream_end / response）已拆分至
+  // chat-ws-stream-handlers.js，经 ctx 读写共享状态。
 
-  function onWsStream(data) {
-    if (userStopped) return;
-    streamChunksReceived = true;
-    if (!isStreaming) {
-      isStreaming = true;
-      UI.setStreamingState(true);
-    }
-    // Harness 多轮工具任务期间 stream_delta 多为规划/推理，进 Thinking 块而非 Assistant 正文
-    if (WS.isProcessing()) {
-      if (sessionPet) sessionPet.setState('thinking');
-      UI.appendReasoningStreamChunk(data.delta || '');
-      syncWelcomeState();
-      return;
-    }
-    visibleStreamChunksReceived = true;
-    if (sessionPet) sessionPet.setState('read');
-    UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
-    syncWelcomeState();
-  }
-
-  function onWsStreamEnd() {
-    if (!userStopped) {
-      UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-      if (streamChunksReceived) {
-        streamFinalized = true;
-        // 任务结束：过程思考仅作流式展示，最终答复由 refresh / response 写入 Assistant
-        UI.clearReasoningStream();
-      }
-    }
-    streamChunksReceived = false;
-    isStreaming = false;
-    UI.setStreamingState(false);
-    syncWelcomeState();
-  }
-
-  function scheduleRefreshAfterTurn() {
-    setTimeout(function () {
-      if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn('force');
-      }
-    }, 50);
-  }
-
-  function onWsResponse(data) {
-    endTransparencyTurnTimer();
-    if (userStopped) {
-      userStopped = false;
-      return;
-    }
-    if (streamFinalized && visibleStreamChunksReceived) {
-      streamFinalized = false;
-      visibleStreamChunksReceived = false;
-      scheduleRefreshAfterTurn();
-      return;
-    }
-    streamFinalized = false;
-    visibleStreamChunksReceived = false;
-    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    UI.clearReasoningStream();
-    var msg = { role: 'agent', content: Session.stripStatusTag(data.content || '') };
-    Session.appendMessage(msg);
-    if (pendingTurnTokenUsage) {
-      if (pendingTurnTokenUsage.messageId && !msg.id) {
-        msg.id = pendingTurnTokenUsage.messageId;
-      }
-      msg.turnTokenUsage = pendingTurnTokenUsage.usage || pendingTurnTokenUsage;
-      pendingTurnTokenUsage = null;
-    }
-    Session.flushToolBatchLocal();
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    if (msg.turnTokenUsage && UI.updateMessageTokenUsage) {
-      UI.updateMessageTokenUsage(msg);
-    }
-    Session.saveMessages();
-    UI.enableAutoScroll();
-    syncWelcomeState();
-    scheduleRefreshAfterTurn();
-  }
-
-  function forwardExecutionRoundMarker(type, step) {
-    try {
-      if (!window.ChatExecutionPlanBridge
-        || typeof window.ChatExecutionPlanBridge.handleStep !== 'function') return;
-      // 只转发轮次与终止原因；严禁把 thinking/content/delta 带入透明层。
-      window.ChatExecutionPlanBridge.handleStep({
-        type: type,
-        iteration: step && step.iteration,
-        stopReason: step && step.stopReason,
-        ts: Date.now(),
-      });
-    } catch (_e) { /* observer must not affect chat */ }
-  }
-
-  function onWsStep(data) {
-    var step = data.step;
-    if (!step) return;
-
-    // P3 — 用户已点 Stop：后端 harness 还在收尾（写 checkpoint / drain memory）期间会继续推
-    // step / stream_delta，UI 不再据此切冰豆状态，否则会出现「按钮变 Send 了但冰豆还在动」。
-    // userStopped 会在 status:idle 或下一次 sendMessage 时被清掉。
-    if (userStopped) return;
-
-    if (step.type === 'thinking' && typeof step.iteration === 'number') {
-      forwardExecutionRoundMarker('model_round_start', step);
-    } else if (step.type === 'context_usage' && typeof step.iteration === 'number') {
-      forwardExecutionRoundMarker('model_round_end', step);
-    } else if (step.type === 'final') {
-      forwardExecutionRoundMarker('model_task_final', step);
-    }
-
-    if (step.totalTokenUsage) {
-      applyTotalTokenUsageFromStep(step.totalTokenUsage);
-    }
-    if ((step.totalTokenUsage !== undefined || step.totalToolCalls !== undefined)
-      && window.ChatExecutionPlan
-      && typeof window.ChatExecutionPlan.applyRuntimeStats === 'function') {
-      window.ChatExecutionPlan.applyRuntimeStats({
-        totalTokenUsage: step.totalTokenUsage,
-        totalToolCalls: step.totalToolCalls,
-      });
-    }
-    if (step.iteration) {
-      Pet.updateTurnCounter(step.iteration, isStreaming, WS.isProcessing());
-    }
-    if (step.type === 'tool_progress' && step.content) {
-      Pet.setLastToolProgressHint(step.content);
-      WS.setLastToolProgressHint(step.content);
-      Pet.updateStatusText(step.content, isStreaming, WS.isProcessing());
-    }
-    if (step.type === 'thinking') {
-      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
-      if (step.content) {
-        UI.appendReasoningStreamIfAbsent(Session.stripStatusTag(step.content));
-      }
-      var msgsThink = Session.getMessages();
-      for (var mti = msgsThink.length - 1; mti >= 0; mti--) {
-        if (msgsThink[mti].role === 'agent' && msgsThink[mti]._streaming) {
-          msgsThink.splice(mti, 1);
-          break;
-        }
-      }
-    }
-    if (step.type === 'tool_call') {
-      UI.promoteAssistantBubbleToThinking(Session.stripStatusTag);
-      var msgs = Session.getMessages();
-      for (var mi = msgs.length - 1; mi >= 0; mi--) {
-        if (msgs[mi].role === 'agent' && msgs[mi]._streaming) {
-          msgs.splice(mi, 1);
-          break;
-        }
-      }
-    }
-    if (step.type === 'tool_call' && step.toolName) {
-      if (WS.isProcessing() && UI.isLiveToolRoundActive && !UI.isLiveToolRoundActive()) {
-        UI.setLiveToolRoundActive(true);
-      }
-      var fmt = window.ToolTraceFormat;
-      var detail = fmt
-        ? fmt.formatToolArgsDetailPreview(step.toolName, step.toolArgs)
-        : (step.toolArgs && (step.toolArgs.path || step.toolArgs.file || step.toolArgs.command || step.toolArgs.query)) || '';
-      if (!detail && step.toolArgs) {
-        var argsStr = JSON.stringify(step.toolArgs);
-        detail = argsStr.length > 80 ? argsStr.substring(0, 80) + '…' : argsStr;
-      }
-      var callStatus = fmt && fmt.resolveToolCallInitialStatus
-        ? fmt.resolveToolCallInitialStatus(step.toolName, step.toolArgs)
-        : 'pending';
-      var toolCallId = step.toolCallId || '';
-      var diffFromArgs = (window.ToolDisplayHistory && step.toolArgs)
-        ? window.ToolDisplayHistory.extractDiffSource(step.toolName, null, step.toolArgs)
-        : null;
-      UI.appendToolAction(step.toolName, detail, callStatus, toolCallId, diffFromArgs);
-      Session.pushToolBatch({
-        toolName: step.toolName,
-        detail: detail,
-        status: callStatus,
-        toolCallId: toolCallId,
-      });
-      if (toolCallId) {
-        streamingDiffBuffer = { toolCallId: toolCallId, text: '' };
-      }
-    }
-    if (step.type === 'tool_result' && step.toolName) {
-      var fmtResult = window.ToolTraceFormat;
-      var resultStatus = fmtResult
-        ? fmtResult.resolveToolTraceResultStatus(
-          step.toolName,
-          step.toolSuccess,
-          step.toolOutcome,
-          step.toolOutput,
-        )
-        : (step.toolOutcome === 'policy_block'
-          ? 'warn'
-          : (step.toolSuccess ? 'success' : 'error'));
-      UI.updateToolActionByCallId(step.toolCallId || '', step.toolName, resultStatus);
-      Session.updateToolBatchStatus(step.toolName, resultStatus, step.toolCallId || '');
-      if (fmtResult && step.toolName === 'run_command' && window.BgTaskChip && elMessages) {
-        var checkInfo = fmtResult.parseCheckTaskResult(step.toolOutput);
-        if (checkInfo && fmtResult.isTerminalBackgroundStatus(checkInfo.status)) {
-          window.BgTaskChip.markConfirmedViaCheck(elMessages, checkInfo.taskId);
-        }
-      }
-      if (window.ToolDisplayHistory) {
-        var diffSource = window.ToolDisplayHistory.extractDiffSource(
-          step.toolName,
-          step.toolOutput,
-          step.toolArgs,
-        );
-        if (!diffSource && window.DiffViewer && step.toolOutput) {
-          diffSource = DiffViewer.extractUnifiedDiff(step.toolOutput);
-        }
-        tryMountToolDiff(step.toolCallId || '', diffSource);
-      }
-      streamingDiffBuffer = { toolCallId: '', text: '' };
-    }
-    if (window.ChatExecutionPlanBridge
-      && (step.type === 'execution_plan_init'
-        || step.type === 'execution_plan_update'
-        || step.type === 'execution_plan_clear'
-        || step.type === 'task_graph_init'
-        || step.type === 'task_graph_node'
-        || step.type === 'task_graph_update'
-        || step.type === 'task_graph_branch'
-        || step.type === 'task_graph_done'
-        || step.type === 'execution_mode_enter'
-        || step.type === 'execution_mode_exit'
-        // Phase 5：工具事件用于推导 LLM 当前动作（面板内只读 toolName / 到达状态）
-        || step.type === 'tool_call'
-        || step.type === 'tool_result')) {
-      window.ChatExecutionPlanBridge.handleStep(step);
-    }
-    Pet.applyHarnessStepToPet(step, isStreaming, WS.isProcessing());
-  }
-
-  function onWsStatus(data) {
-    var processing = data.status === 'processing';
-    WS.setProcessing(processing);
-    notifySnapshotRestoreAvailability();
-    if (!processing) {
-      endTransparencyTurnTimer();
-      // 用户主动 Stop 后 handleStop 已更新本地消息/DOM；idle 时再 authoritative 拉服务端
-      // 快照可能拿到空数组（会话文件读写竞态 / sessionId 未对齐），会把整页聊天记录清掉。
-      var skipRefreshAfterUserStop = userStopped;
-      if (userStopped) userStopped = false;
-      isStreaming = false;
-      Pet.removeThinking(isStreaming, WS.isProcessing());
-      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
-      if (UI.repairLiveToolGroupFold) UI.repairLiveToolGroupFold();
-      // turn_complete 时 session_updated 可能仍在 processing 中被跳过；idle 时强制从 structured 重绘 diff
-      if (!skipRefreshAfterUserStop) {
-        refreshChatHistoryAfterTurn('force');
-      }
-    } else if (!userStopped) {
-      if (sessionPet) sessionPet.setState('thinking');
-    }
-    syncSendButtonWithWorkload();
-  }
-
-  function onWsError(data) {
-    endTransparencyTurnTimer();
-    UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    var msg = { role: 'agent', content: '[err] ' + data.message };
-    Session.appendMessage(msg);
-    UI.appendMessageEl(msg, Session.stripStatusTag);
-    Session.saveMessages();
-    Pet.removeThinking(isStreaming, WS.isProcessing());
-  }
+  // step / status / error / tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js，
+  // 经 ctx 读写共享状态；onWsMcpReady 等会话/恢复域 handler 保留在本文件。
 
   function onWsMcpReady(data) {
     announceMcpReadyFromPayload(data || {});
@@ -1574,98 +1058,8 @@ window.ChatPage = (function () {
     });
   }
 
-  /** 当前正在显示的 confirm 对话框（用于其它端 first-win 后关闭本地弹窗） */
-  var activeConfirmId = null;
-  var activeConfirmResolved = false;
-
-  function onWsConfirm(data) {
-    if (sessionPet) {
-      sessionPet.setState('alert');
-      sessionPet.setBubbleText('请在弹窗中确认危险操作');
-    }
-    activeConfirmId = data.confirmId || null;
-    activeConfirmResolved = false;
-
-    var isShellMandatory = data.confirmKind === 'shell_mandatory';
-    var shellInfo = data.shellMandatory || null;
-    var modalOpts;
-
-    if (isShellMandatory && shellInfo) {
-      var lines = [
-        'Session: ' + (shellInfo.sessionId || ''),
-        '命令: ' + (shellInfo.command || ''),
-        '命中规则: ' + (shellInfo.matchedPattern || ''),
-        '风险类别: ' + (shellInfo.category || ''),
-        '影响: ' + (shellInfo.impact || ''),
-        '',
-        '此确认不会被「自动执行」设置跳过。',
-      ];
-      modalOpts = {
-        title: 'Shell 敏感命令确认',
-        message: lines.join('\n'),
-        type: 'danger',
-        dangerConfirm: true,
-        confirmText: '确认执行',
-        cancelText: '取消',
-        defaultFocus: 'cancel',
-      };
-    } else {
-      var argsText = data.args ? JSON.stringify(data.args) : '';
-      modalOpts = {
-        title: '危险操作确认',
-        message: '工具: ' + data.toolName + '\n参数: ' + argsText,
-        type: 'danger',
-        dangerConfirm: true,
-        confirmText: '允许',
-        cancelText: '拒绝',
-      };
-    }
-
-    Modal.confirm(modalOpts).then(function (ok) {
-      if (activeConfirmResolved) {
-        activeConfirmId = null;
-        activeConfirmResolved = false;
-        if (sessionPet) {
-          sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-          sessionPet.setBubbleText('');
-        }
-        return;
-      }
-      WS.sendConfirmReply(ok, activeConfirmId);
-      activeConfirmId = null;
-      var confirmMsg = { role: 'agent', content: ok ? '[ok] 用户已确认: ' + data.toolName : '[denied] 用户已拒绝: ' + data.toolName };
-      Session.appendMessage(confirmMsg);
-      UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
-      Session.saveMessages();
-      if (sessionPet) {
-        sessionPet.setState(isStreaming || WS.isProcessing() ? 'read' : 'idle');
-        sessionPet.setBubbleText('');
-      }
-    });
-  }
-
-  function dismissActiveConfirmModal(approved) {
-    if (window.Modal && typeof Modal.dismissActive === 'function') {
-      Modal.dismissActive(approved);
-    }
-  }
-
-  function onWsConfirmResolved(data) {
-    if (!data) return;
-    // 其它端 first-win 后关闭本地弹窗，避免 PC/移动端各弹各的
-    if (!activeConfirmId || data.confirmId === activeConfirmId) {
-      activeConfirmResolved = true;
-      dismissActiveConfirmModal(!!data.approved);
-    }
-  }
-
-  function onWsConfirmTimeout(data) {
-    if (!data) return;
-    if (!activeConfirmId || data.confirmId === activeConfirmId) {
-      activeConfirmResolved = true;
-      dismissActiveConfirmModal(false);
-    }
-  }
+  // confirm / confirm_resolved / confirm_timeout 事件 handler 已拆分至
+  // chat-ws-restore-handlers.js（含 activeConfirmId / activeConfirmResolved 私有状态）。
 
   function applyTurnTokenUsageToLastAgent(usage, messageId) {
     if (!usage || typeof usage !== 'object') return false;
@@ -1757,17 +1151,9 @@ window.ChatPage = (function () {
     });
   }
 
-  function onWsHarnessState(data) {
-    if (!data) return;
-    applyHarnessRestoreUi(!!data.canRestore, data.checkpointMessageIds);
-    refreshSnapshotTimelinePanel();
-  }
-
-  function onWsCheckpointMessageIds(data) {
-    if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
-    UI.setCheckpointMessageIds(data.ids || []);
-    refreshSnapshotTimelinePanel();
-  }
+  // harness_state / checkpoint_message_ids / checkpoint_captured / runtime_restored /
+  // restore_failed / message_deleted / delete_message_failed 事件 handler 已拆分至
+  // chat-ws-restore-handlers.js。
 
   function dispatchDeleteMessage(messageId) {
     if (!messageId) return;
@@ -1850,7 +1236,7 @@ window.ChatPage = (function () {
     overlay.innerHTML =
       '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">' +
         '<h3 id="delete-confirm-title">确认删除？</h3>' +
-        '<p>仅删除此条消息，并同步更新模型上下文；其他对话记录不会改变。<br><br>' +
+        '<p>删除此条消息及其 AI 回复，并同步更新模型上下文；其他对话记录不会改变。<br><br>' +
         '此操作不会回滚工作区文件修改。</p>' +
         '<div class="restore-confirm-actions">' +
           '<button type="button" class="restore-confirm-cancel">取消</button>' +
@@ -1930,22 +1316,6 @@ window.ChatPage = (function () {
     }
   }
 
-  function onWsRuntimeRestored() {
-    runtimeRestoreInFlight = false;
-    isStreaming = false;
-    userStopped = false;
-    WS.setProcessing(false);
-    UI.setStreamingState(false);
-    UI.clearReasoningStream();
-    clearSessionExecutionFlow();
-    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    refreshChatHistoryAfterTurn(true, null, { force: true });
-    syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
-    refreshSnapshotTimelinePanel();
-    notifySnapshotRestoreAvailability();
-  }
-
   function notifyUser(message, type, opts) {
     if (window.Notification && typeof window.Notification.show === 'function') {
       return window.Notification.show(message, type || 'info', opts);
@@ -1956,39 +1326,8 @@ window.ChatPage = (function () {
     alert(message);
   }
 
-  function onWsRestoreFailed(data) {
-    runtimeRestoreInFlight = false;
-    notifySnapshotRestoreAvailability();
-    var msg = (data && data.error) ? data.error : '回滚失败，运行时状态未改变。';
-    notifyUser(msg, 'error', { duration: 5000 });
-    refreshSnapshotTimelinePanel();
-  }
-
-  function onWsMessageDeleted() {
-    isStreaming = false;
-    UI.setStreamingState(false);
-    UI.clearReasoningStream();
-    clearSessionExecutionFlow();
-    if (window.ChatExecutionPlan) window.ChatExecutionPlan.clear();
-    if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
-    refreshChatHistoryAfterTurn(true);
-    syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
-  }
-
-  function onWsDeleteMessageFailed(data) {
-    var msg = (data && data.error) ? data.error : '删除消息失败。';
-    if (data && data.code === 'DELETE_MESSAGE_NOT_FOUND') {
-      pullServerChatSnapshotAuthoritative(function (synced) {
-        if (synced) {
-          notifyUser('该消息已不在服务端记录中，界面已同步。', 'info', { duration: 4000 });
-          return;
-        }
-        notifyUser(msg, 'error', { duration: 5000 });
-      });
-      return;
-    }
-    notifyUser(msg, 'error', { duration: 5000 });
-  }
+  // runtime_restored / restore_failed / message_deleted / delete_message_failed
+  // 事件 handler 已拆分至 chat-ws-restore-handlers.js。
 
   function shouldSkipServerSnapshotSync() {
     return WS.isProcessing() || isStreaming || Session.hasStreamingModelBubble();
@@ -2162,109 +1501,9 @@ window.ChatPage = (function () {
     return true;
   }
 
-  function onWsUserMessageAppended(data) {
-    if (!data || !data.message) return;
-    if (data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) return;
-    applyRemoteUserMessage(data.message);
-  }
+  // bg_task_update / bg_task_stop_result 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
-  function onWsSessionUpdated(data) {
-    if (data && data.sessionId && data.title && window.ChatSessionStore
-        && typeof window.ChatSessionStore.patchSession === 'function') {
-      window.ChatSessionStore.patchSession(data.sessionId, { title: data.title });
-    }
-    if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
-      window.ChatExecutionPlanBridge.notifySessionUpdated();
-    }
-    if (data && data.reason === 'turn_complete') {
-      if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn('force');
-      }
-      return;
-    }
-    if (data && data.reason === 'message_deleted') {
-      if (!shouldSkipServerSnapshotSync()) {
-        refreshChatHistoryAfterTurn(true);
-      }
-      return;
-    }
-    if (data && data.reason === 'runtime_restored') {
-      refreshChatHistoryAfterTurn(true, null, { force: true });
-      refreshSnapshotTimelinePanel();
-      return;
-    }
-    if (data && data.reason === 'user_message') {
-      if (Session.fetchAndMergeRemoteUserMessages) {
-        Session.fetchAndMergeRemoteUserMessages(function (added) {
-          if (!added) return;
-          paintRemoteUserMessagesWithoutDom(Session.getMessages());
-          Session.saveMessages();
-        });
-      }
-      return;
-    }
-    if (!data || !data.title) {
-      pullServerChatSnapshotAuthoritative();
-    }
-  }
-
-  function onWsBgTaskStopResult(payload) {
-    if (!payload || payload.ok) return;
-    if (window.BgTaskChip && window.BgTaskChip.resetStopPending && payload.taskId) {
-      window.BgTaskChip.resetStopPending(payload.taskId);
-    }
-    if (window.EtlShellDock && window.EtlShellDock.resetStopPending && payload.taskId) {
-      window.EtlShellDock.resetStopPending(payload.taskId);
-    }
-  }
-
-  function onWsBgTaskUpdate(payload) {
-    var activeId = (Session && typeof Session.getActiveId === 'function')
-      ? Session.getActiveId()
-      : '';
-    if (payload && Array.isArray(payload.tasks)
-      && (!payload.sessionId || payload.sessionId === activeId)) {
-      mergeShellDockTasks(payload.tasks);
-    }
-    if (window.BgTaskChip && elMessages) {
-      window.BgTaskChip.handleUpdate(elMessages, payload, activeId);
-    }
-    if (window.EtlShellDock && typeof window.EtlShellDock.handleUpdate === 'function') {
-      tryMountShellDock();
-      window.EtlShellDock.handleUpdate(payload, activeId);
-    }
-    if (window.BgTaskChip && elMessages) {
-      UI.scheduleScrollIfSticky();
-    }
-  }
-
-  function tryMountToolDiff(toolCallId, diffSource) {
-    if (!toolCallId || !diffSource || !UI.mountDiffForToolCallId) return;
-    UI.mountDiffForToolCallId(toolCallId, diffSource);
-  }
-
-  /** run_command 流式输出：按 toolCallId 累积并实时预览 */
-  function onWsToolOutput(data) {
-    if (!data || !data.content || !data.toolCallId) return;
-    if (streamingDiffBuffer.toolCallId && streamingDiffBuffer.toolCallId !== data.toolCallId) {
-      streamingDiffBuffer = { toolCallId: data.toolCallId, text: '' };
-    }
-    if (!streamingDiffBuffer.toolCallId) streamingDiffBuffer.toolCallId = data.toolCallId;
-    streamingDiffBuffer.text += data.content;
-    var diffSource = null;
-    if (window.DiffViewer && typeof DiffViewer.extractUnifiedDiff === 'function') {
-      diffSource = DiffViewer.extractUnifiedDiff(streamingDiffBuffer.text);
-    } else if (window.DiffViewer && typeof DiffViewer.looksLikeUnifiedDiffText === 'function') {
-      if (!DiffViewer.looksLikeUnifiedDiffText(streamingDiffBuffer.text)) return;
-      diffSource = streamingDiffBuffer.text;
-    } else if (!/^@@\s/m.test(streamingDiffBuffer.text) && !/^diff --git /m.test(streamingDiffBuffer.text)) {
-      return;
-    } else {
-      diffSource = streamingDiffBuffer.text;
-    }
-    if (!diffSource) return;
-    tryMountToolDiff(streamingDiffBuffer.toolCallId, diffSource);
-  }
+  // tool_output 事件 handler 已拆分至 chat-ws-stream-handlers.js。
 
   /**
    * 方案 A keep-alive：app.js navigate 回聊天页时调用。
@@ -2285,6 +1524,129 @@ window.ChatPage = (function () {
     if (!WS.isProcessing() && !isStreaming && !Session.hasStreamingModelBubble()) {
       syncMessages(false);
     }
+  }
+
+  // ---- 流式 handler ctx ----
+  // 流式事件 handler 已拆分至 chat-ws-stream-handlers.js；ctx 向各 handler 暴露
+  // 共享状态读写（状态仍保留在本闭包）与跨域辅助函数引用。
+  function buildStreamHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'isStreaming') return isStreaming;
+        if (name === 'userStopped') return userStopped;
+        if (name === 'streamFinalized') return streamFinalized;
+        if (name === 'streamChunksReceived') return streamChunksReceived;
+        if (name === 'visibleStreamChunksReceived') return visibleStreamChunksReceived;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'isStreaming') isStreaming = value;
+        else if (name === 'userStopped') userStopped = value;
+        else if (name === 'streamFinalized') streamFinalized = value;
+        else if (name === 'streamChunksReceived') streamChunksReceived = value;
+        else if (name === 'visibleStreamChunksReceived') visibleStreamChunksReceived = value;
+      },
+      getPendingTurnTokenUsage: function () { return pendingTurnTokenUsage; },
+      setPendingTurnTokenUsage: function (v) { pendingTurnTokenUsage = v; },
+      getStreamingDiffBuffer: function () { return streamingDiffBuffer; },
+      setStreamingDiffBuffer: function (buf) { streamingDiffBuffer = buf; },
+      getSessionPet: function () { return sessionPet; },
+      getElMessages: function () { return elMessages; },
+      syncWelcomeState: syncWelcomeState,
+      endTransparencyTurnTimer: endTransparencyTurnTimer,
+      refreshChatHistoryAfterTurn: refreshChatHistoryAfterTurn,
+      shouldSkipServerSnapshotSync: shouldSkipServerSnapshotSync,
+      applyTotalTokenUsageFromStep: applyTotalTokenUsageFromStep,
+      notifySnapshotRestoreAvailability: notifySnapshotRestoreAvailability,
+      syncSendButtonWithWorkload: syncSendButtonWithWorkload,
+    };
+  }
+
+  // ---- 会话 handler ctx ----
+  // 会话事件 handler 已拆分至 chat-ws-session-handlers.js；共享函数留在本闭包，
+  // 经 ctx 注入避免双实现分叉（模块内不再复制 syncMessages / syncSidebarWorkspace 等）。
+  function buildSessionHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'remoteMode') return remoteMode;
+        if (name === 'initialHistoryPainted') return initialHistoryPainted;
+        if (name === 'pendingInitialPaint') return pendingInitialPaint;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'initialHistoryPainted') initialHistoryPainted = value;
+        else if (name === 'pendingInitialPaint') pendingInitialPaint = value;
+      },
+      onSessionSwitched: onSessionSwitched,
+      paintInitialChatView: paintInitialChatView,
+      shouldSkipWsConnectedHeavyFetch: shouldSkipWsConnectedHeavyFetch,
+      applyModelContextFromWs: applyModelContextFromWs,
+      loadModelConfig: loadModelConfig,
+      syncChipModelLabelFromWs: syncChipModelLabelFromWs,
+      syncSidebarWorkspace: syncSidebarWorkspace,
+      restoreFromRunningTurn: restoreFromRunningTurn,
+      announceMcpReadyFromPayload: announceMcpReadyFromPayload,
+      announceTunnelReadyFromPayload: announceTunnelReadyFromPayload,
+      applyHarnessRestoreUi: applyHarnessRestoreUi,
+      notifyShellCollabState: notifyShellCollabState,
+      needsInitialHistoryPaint: needsInitialHistoryPaint,
+      syncMessages: syncMessages,
+      applyRemoteUserMessage: applyRemoteUserMessage,
+      shouldSkipServerSnapshotSync: shouldSkipServerSnapshotSync,
+      refreshChatHistoryAfterTurn: refreshChatHistoryAfterTurn,
+      refreshSnapshotTimelinePanel: refreshSnapshotTimelinePanel,
+      paintRemoteUserMessagesWithoutDom: paintRemoteUserMessagesWithoutDom,
+      pullServerChatSnapshotAuthoritative: pullServerChatSnapshotAuthoritative,
+    };
+  }
+
+  // ---- 恢复/确认 handler ctx ----
+  // confirm / harness / checkpoint / runtime_restored / message_deleted 等事件 handler
+  // 已拆分至 chat-ws-restore-handlers.js；跨域状态（runtimeRestoreInFlight / isStreaming /
+  // userStopped）留在本闭包，经 ctx.get/set 读写；共享函数经 ctx 注入，模块内不复制实现。
+  function buildRestoreHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'runtimeRestoreInFlight') return runtimeRestoreInFlight;
+        if (name === 'isStreaming') return isStreaming;
+        if (name === 'userStopped') return userStopped;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'runtimeRestoreInFlight') runtimeRestoreInFlight = value;
+        else if (name === 'isStreaming') isStreaming = value;
+        else if (name === 'userStopped') userStopped = value;
+      },
+      getSessionPet: function () { return sessionPet; },
+      applyHarnessRestoreUi: applyHarnessRestoreUi,
+      refreshSnapshotTimelinePanel: refreshSnapshotTimelinePanel,
+      notifySnapshotRestoreAvailability: notifySnapshotRestoreAvailability,
+      clearSessionExecutionFlow: clearSessionExecutionFlow,
+      refreshChatHistoryAfterTurn: refreshChatHistoryAfterTurn,
+      syncSidebarWorkspace: syncSidebarWorkspace,
+      notifyUser: notifyUser,
+      pullServerChatSnapshotAuthoritative: pullServerChatSnapshotAuthoritative,
+    };
+  }
+
+  // ---- 后台任务/协作 handler ctx ----
+  // bg_task / task_queue / also / shell_collab 事件 handler 已拆分至
+  // chat-ws-bg-task-handlers.js；共享状态（pendingAlsoMessageIds）留在本闭包，
+  // 经 ctx.get/set 共享对象引用；共享函数经 ctx 注入，模块内不复制实现。
+  function buildBgTaskHandlerCtx() {
+    return {
+      get: function (name) {
+        if (name === 'pendingAlsoMessageIds') return pendingAlsoMessageIds;
+        return undefined;
+      },
+      set: function (name, value) {
+        if (name === 'pendingAlsoMessageIds') pendingAlsoMessageIds = value;
+      },
+      getElMessages: function () { return elMessages; },
+      appendAlsoNoteBubble: appendAlsoNoteBubble,
+      notifyShellCollabState: notifyShellCollabState,
+      syncWelcomeState: syncWelcomeState,
+    };
   }
 
   // ---- 渲染 ----
@@ -2401,6 +1763,7 @@ window.ChatPage = (function () {
 
     // 初始化子模块
     UI.init({ elMessages: elMessages, elAnchor: elAnchor, elInput: elInput, elSendBtn: elSendBtn });
+    UI.autoResizeInput();
     if (typeof UI.setMessageActionHandlers === 'function') {
       UI.setMessageActionHandlers({
         onDelete: handleMessageDeleteAction,
@@ -2485,54 +1848,41 @@ window.ChatPage = (function () {
         WS.send({ type: 'bg_task_stop', taskId: taskId });
       });
     }
-    if (window.EtlShellDock && window.EtlShellDock.setTaskRemovedHandler) {
-      window.EtlShellDock.setTaskRemovedHandler(function (taskId) {
-        if (!taskId) return;
-        shellDockTaskCache = shellDockTaskCache.filter(function (t) {
-          return t && t.taskId !== taskId;
-        });
-        persistShellDockCache();
-      });
-    }
+    if (window.ChatShellDock) window.ChatShellDock.initTaskRemovedHandler();
 
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
-    WS.on('connected', onWsConnected);
-    WS.on('session_cleared', onWsSessionCleared);
     WS.on('close', onWsClose);
-    WS.on('stream', onWsStream);
-    WS.on('reasoning_stream', onWsReasoningStream);
-    WS.on('stream_end', onWsStreamEnd);
-    WS.on('response', onWsResponse);
-    WS.on('step', onWsStep);
-    WS.on('status', onWsStatus);
-    WS.on('error', onWsError);
+    // 流式事件（stream / reasoning_stream / stream_end / response / step / status / error / tool_output）
+    // 已拆分至 chat-ws-stream-handlers.js，经 ctx 读写共享状态
+    if (window.ChatWsStreamHandlers && typeof window.ChatWsStreamHandlers.bind === 'function') {
+      window.ChatWsStreamHandlers.bind(WS, buildStreamHandlerCtx());
+    }
+    // 会话事件（connected / session_cleared / session_updated / sync / user_message_appended / workspace_updated）
+    // 已拆分至 chat-ws-session-handlers.js，共享函数经 ctx 注入
+    if (window.ChatWsSessionHandlers && typeof window.ChatWsSessionHandlers.bind === 'function') {
+      window.ChatWsSessionHandlers.bind(WS, buildSessionHandlerCtx());
+    }
+    // 恢复/确认事件（confirm / confirm_resolved / confirm_timeout / harness_state /
+    // checkpoint_message_ids / checkpoint_captured / runtime_restored / restore_failed /
+    // message_deleted / delete_message_failed）已拆分至 chat-ws-restore-handlers.js
+    if (window.ChatWsRestoreHandlers && typeof window.ChatWsRestoreHandlers.bind === 'function') {
+      window.ChatWsRestoreHandlers.bind(WS, buildRestoreHandlerCtx());
+    } else if (typeof console !== 'undefined') {
+      console.warn('[ChatPage] ChatWsRestoreHandlers not loaded');
+    }
     WS.on('mcp_ready', onWsMcpReady);
     WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
-    WS.on('confirm', onWsConfirm);
-    WS.on('confirm_resolved', onWsConfirmResolved);
-    WS.on('confirm_timeout', onWsConfirmTimeout);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    WS.on('session_updated', onWsSessionUpdated);
-    WS.on('user_message_appended', onWsUserMessageAppended);
-    WS.on('workspace_updated', syncSidebarWorkspace);
-    WS.on('sync', syncMessages);
-    WS.on('bg_task_update', onWsBgTaskUpdate);
-    WS.on('bg_task_stop_result', onWsBgTaskStopResult);
-    WS.on('tool_output', onWsToolOutput);
-    WS.on('harness_state', onWsHarnessState);
-    WS.on('checkpoint_message_ids', onWsCheckpointMessageIds);
-    WS.on('checkpoint_captured', refreshSnapshotTimelinePanel);
-    WS.on('runtime_restored', onWsRuntimeRestored);
-    WS.on('restore_failed', onWsRestoreFailed);
-    WS.on('message_deleted', onWsMessageDeleted);
-    WS.on('delete_message_failed', onWsDeleteMessageFailed);
-    WS.on('task_queue_updated', onWsTaskQueueUpdated);
-    WS.on('also_note_appended', onWsAlsoNoteAppended);
-    WS.on('also_rejected', onWsAlsoRejected);
-    WS.on('shell_collab_entered', onWsShellCollabEntered);
+    // 后台任务/协作事件（bg_task_update / bg_task_stop_result / task_queue_updated /
+    // also_note_appended / also_rejected / shell_collab_entered）已拆分至 chat-ws-bg-task-handlers.js
+    if (window.ChatWsBgTaskHandlers && typeof window.ChatWsBgTaskHandlers.bind === 'function') {
+      window.ChatWsBgTaskHandlers.bind(WS, buildBgTaskHandlerCtx());
+    } else if (typeof console !== 'undefined') {
+      console.warn('[ChatPage] ChatWsBgTaskHandlers not loaded');
+    }
 
     syncShellCollabIndicator();
 
@@ -2681,9 +2031,9 @@ window.ChatPage = (function () {
     render: render,
     onActivate: onActivate,
     onSessionSwitched: onSessionSwitched,
-    syncShellDockOnMount: syncShellDockFromCache,
-    clearShellDockCache: clearShellDockCache,
-    hydrateShellDockForSession: hydrateShellDockForSession,
+    syncShellDockOnMount: function () { if (window.ChatShellDock) window.ChatShellDock.sync(); },
+    clearShellDockCache: function (sessionId) { if (window.ChatShellDock) window.ChatShellDock.clearCache(sessionId); },
+    hydrateShellDockForSession: function (sessionId, wsTasks) { if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, wsTasks); },
     isWorkloadActive: isWorkloadActive,
     syncWelcomeState: syncWelcomeState,
     reloadModelConfig: loadModelConfig,

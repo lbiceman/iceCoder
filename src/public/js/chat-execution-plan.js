@@ -467,8 +467,10 @@ window.ChatExecutionPlan = (function () {
         '<span class="etl-title">iceCoder工作台</span>' +
         headerActionsHtml() +
       '</header>' +
-      '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
-      sharedBodyHtml() +
+      '<div class="etl-main-scroll">' +
+        '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
+        sharedBodyHtml() +
+      '</div>' +
       '<div class="etl-shell-dock-host" id="etl-shell-dock-host"></div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
 
@@ -514,11 +516,13 @@ window.ChatExecutionPlan = (function () {
         '<span class="etl-title">iceCoder工作台</span>' +
         headerActionsHtml() +
       '</header>' +
-      '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
-      '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
-      '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(MOBILE_TABS) + '</nav>' +
-      '<div class="etl-body">' +
-        flowPanelHtml() +
+      '<div class="etl-main-scroll">' +
+        '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
+        '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
+        '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(MOBILE_TABS) + '</nav>' +
+        '<div class="etl-body">' +
+          flowPanelHtml() +
+        '</div>' +
       '</div>' +
       '<div class="etl-shell-dock-host" id="etl-shell-dock-host"></div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
@@ -2726,6 +2730,21 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl.appendChild(intentEl);
   }
 
+  function formatGoalDisplay(goal, active) {
+    var raw = goal || (active && active.title) || '当前任务';
+    if (!raw || raw === '当前任务') return raw;
+    var skillMatch = raw.match(/\[Active Skill:\s*([^\]]+)\]/);
+    if (skillMatch) {
+      return '[Active Skill: ' + skillMatch[1].trim() + ']';
+    }
+    if (raw.length > 240) {
+      var trimmed = raw.slice(0, 240);
+      trimmed = trimmed.replace(/\s+\S*$/, '');
+      return trimmed + '…';
+    }
+    return raw;
+  }
+
   function renderTaskOverview() {
     if (!taskOverviewEl) return;
     try {
@@ -2749,7 +2768,7 @@ window.ChatExecutionPlan = (function () {
 
       var goalEl = taskOverviewEl.querySelector('#etl-overview-goal');
       if (goalEl) {
-        goalEl.textContent = currentPlan.goal || (active && active.title) || '当前任务';
+        goalEl.textContent = formatGoalDisplay(currentPlan.goal, active);
       }
       var badgeEl = taskOverviewEl.querySelector('#etl-overview-badge');
       if (badgeEl) badgeEl.classList.toggle('hidden', !forced);

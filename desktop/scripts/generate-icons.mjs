@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * 从 src/public/icons/favicon.svg 生成 Electron 用 PNG / ICO / 托盘图标。
+ * icon.ico / icon.png 与 Web 浏览器 favicon 同源，也用于 Windows 通知左上角图标注册。
  */
 import fs from 'node:fs';
 import path from 'node:path';
