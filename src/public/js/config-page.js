@@ -90,7 +90,7 @@ window.SettingsPage = (function () {
             '<h2 class="settings-section-title">安全与执行</h2>' +
             '<span class="settings-section-loading" id="settings-security-loading" aria-hidden="true">加载中…</span>' +
           '</div>' +
-          '<p class="settings-section-desc">控制 Agent 工具权限，以及 Shell 协作模式下哪些命令需要强制确认</p>' +
+          '<p class="settings-section-desc">控制 Agent 工具权限，以及敏感 Shell 命令的强制确认策略</p>' +
           '<div class="settings-security-grid">' +
           '<div class="settings-card" id="settings-skip-permission-card" hidden>' +
             '<div class="settings-card-row">' +
@@ -114,7 +114,15 @@ window.SettingsPage = (function () {
                   '<span class="settings-card-title">Shell 强制确认规则</span>' +
                   '<span class="config-badge is-starting" id="settings-blacklist-count">0 条规则</span>' +
                 '</div>' +
-                '<p class="settings-card-desc">每行一条正则表达式。Shell 协作模式中，命中的命令执行前必须确认；未命中的命令跳过普通权限确认并直接执行。清空后不再触发规则确认，但灾难性命令 hard block 与宿主进程保护仍始终生效。</p>' +
+                '<p class="settings-card-desc">每行一条正则表达式，匹配敏感 Shell 命令（如 rm -rf、git reset --hard）。适用于普通聊天与 /shell 协作。</p>' +
+                '<div class="settings-shell-rules-panel">' +
+                  '<ul class="settings-shell-rules-list">' +
+                    '<li>命中规则 → <strong>弹框强制确认</strong>，批准后才执行</li>' +
+                    '<li>「跳过权限确认」等设置<strong>不能</strong>绕过强制确认</li>' +
+                    '<li>未命中规则的命令不受此列表约束</li>' +
+                  '</ul>' +
+                '</div>' +
+                '<p class="settings-card-desc settings-card-desc--footnote">清空全部规则后不再触发强制确认。灾难性 hard block 与宿主进程保护始终生效，不受此列表影响。</p>' +
               '</div>' +
             '</div>' +
             '<div class="settings-blacklist-editor">' +
@@ -165,6 +173,34 @@ window.SettingsPage = (function () {
                   '<option value="480">480 px</option>' +
                 '</select>' +
               '</div>' +
+              '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
+                '<div class="settings-etl-row-info">' +
+                  '<span class="settings-etl-row-label">空闲自动收起</span>' +
+                  '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
+                '</div>' +
+                '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
+                  '<input type="checkbox" id="etl-panel-auto-collapse" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</section>' +
+        '<section class="settings-section settings-section-spaced" id="settings-task-notification-section">' +
+          '<div class="settings-section-head">' +
+            '<h2 class="settings-section-title">任务通知</h2>' +
+          '</div>' +
+          '<p class="settings-section-desc">任务结束后通过系统通知提醒，与执行透明层显示无关</p>' +
+          '<div class="settings-card" id="settings-task-notification-card">' +
+            '<div class="settings-card-row">' +
+              '<div class="settings-card-info">' +
+                '<span class="settings-card-title">任务完成消息通知</span>' +
+                '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
+              '</div>' +
+              '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
+                '<input type="checkbox" id="settings-task-done-notification" />' +
+                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+              '</label>' +
             '</div>' +
           '</div>' +
         '</section>' +
@@ -175,6 +211,7 @@ window.SettingsPage = (function () {
     bindDataDirectorySettings(parentEl);
     loadGeneralSecuritySettings(parentEl);
     bindEtlSettings(parentEl);
+    bindTaskNotificationSettings(parentEl);
   }
 
   function isEtlCapabilityEnabled() {
@@ -207,6 +244,7 @@ window.SettingsPage = (function () {
 
     var panelDefaultExpanded = parentEl.querySelector('#etl-panel-default-expanded');
     var panelWidth = parentEl.querySelector('#etl-panel-width');
+    var panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
 
     if (panelDefaultExpanded) {
       panelDefaultExpanded.checked = prefs.panelDefaultExpanded !== false;
@@ -215,6 +253,70 @@ window.SettingsPage = (function () {
     if (panelWidth) {
       panelWidth.value = String(prefs.panelWidth || 360);
       panelWidth.disabled = subgroupDisabled;
+    }
+    if (panelAutoCollapse) {
+      panelAutoCollapse.checked = prefs.panelAutoCollapse === true;
+      panelAutoCollapse.disabled = subgroupDisabled;
+    }
+  }
+
+  function syncTaskNotificationUi(parentEl, prefs) {
+    if (!prefs) {
+      prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : {};
+    }
+    var taskDoneNotification = parentEl.querySelector('#settings-task-done-notification');
+    if (taskDoneNotification) {
+      taskDoneNotification.checked = prefs.taskDoneNotification === true;
+      taskDoneNotification.disabled = !(
+        window.iceDesktop
+        && typeof window.iceDesktop.notifyTaskDone === 'function'
+      );
+    }
+  }
+
+  function bindTaskNotificationSettings(parentEl) {
+    if (!parentEl || !window.EtlPrefs) return;
+    if (parentEl._taskNotificationBound) return;
+    parentEl._taskNotificationBound = true;
+
+    syncTaskNotificationUi(parentEl);
+
+    var taskDoneNotification = parentEl.querySelector('#settings-task-done-notification');
+    if (taskDoneNotification) {
+      taskDoneNotification.addEventListener('change', function () {
+        var next = taskDoneNotification.checked;
+        taskDoneNotification.disabled = true;
+        window.EtlPrefs.set({ taskDoneNotification: next })
+          .then(function (ok) {
+            if (!ok) throw new Error('更新失败');
+            syncTaskNotificationUi(parentEl);
+            if (window.Notification) {
+              window.Notification.success(
+                next ? '已开启任务完成通知' : '已关闭任务完成通知'
+              );
+            }
+          })
+          .catch(function (err) {
+            taskDoneNotification.checked = !next;
+            syncTaskNotificationUi(parentEl);
+            if (window.Notification) {
+              window.Notification.error((err && err.message) || '更新失败');
+            }
+          })
+          .finally(function () { taskDoneNotification.disabled = false; });
+      });
+    }
+
+    window.EtlPrefs.whenReady().then(function () {
+      syncTaskNotificationUi(parentEl);
+    });
+
+    if (typeof parentEl._taskNotificationUnsubscribe !== 'function') {
+      parentEl._taskNotificationUnsubscribe = window.EtlPrefs.onChange(function () {
+        syncTaskNotificationUi(parentEl);
+      });
     }
   }
 
@@ -262,6 +364,20 @@ window.SettingsPage = (function () {
             if (window.Notification) window.Notification.error('更新失败');
           })
           .finally(function () { panelDefaultExpanded.disabled = false; });
+      });
+    }
+
+    var panelAutoCollapse = parentEl.querySelector('#etl-panel-auto-collapse');
+    if (panelAutoCollapse) {
+      panelAutoCollapse.addEventListener('change', function () {
+        var next = panelAutoCollapse.checked;
+        panelAutoCollapse.disabled = true;
+        window.EtlPrefs.set({ panelAutoCollapse: next })
+          .catch(function () {
+            panelAutoCollapse.checked = !next;
+            if (window.Notification) window.Notification.error('更新失败');
+          })
+          .finally(function () { panelAutoCollapse.disabled = false; });
       });
     }
 
@@ -321,7 +437,7 @@ window.SettingsPage = (function () {
 
   function bindDataDirectorySettings(parentEl) {
     var desktop = window.iceDesktop;
-    var migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。';
+    var migrationTip = '提示：保存后请手动将原来的 .iceCoder 文件夹内容移动到新目录；移动完成后重启 iceCoder，避免丢失会话、配置和缓存。Electron 与 iceCoder start 共用此位置。';
 
     var input = parentEl.querySelector('#settings-data-directory-input');
     var browseBtn = parentEl.querySelector('#settings-data-directory-browse');
@@ -331,77 +447,93 @@ window.SettingsPage = (function () {
     var note = parentEl.querySelector('#settings-data-directory-note');
     if (!input || !browseBtn || !saveBtn || !resetBtn) return;
 
-    if (!desktop || typeof desktop.getDataDirectory !== 'function') {
-      input.value = '';
-      input.placeholder = '选择完整的数据文件夹路径；更改将在重启应用后生效。';
-      input.disabled = true;
+    var canPickFolder = desktop && typeof desktop.pickDataDirectory === 'function';
+    if (!canPickFolder) {
       browseBtn.disabled = true;
-      saveBtn.disabled = true;
-      resetBtn.disabled = true;
+      browseBtn.title = '在系统浏览器中请手动填写绝对路径';
+    }
+
+    function applyPayload(data) {
+      if (!data) return;
+      input.value = data.dataDir || '';
+      var persistable = !!data.canPersist;
+      input.disabled = !persistable;
+      saveBtn.disabled = !persistable;
+      resetBtn.disabled = !persistable;
+      browseBtn.disabled = !persistable || !canPickFolder;
       if (badge) {
-        badge.textContent = '不可修改';
+        badge.textContent = persistable ? '可修改' : '开发模式';
         badge.classList.remove('is-off');
-        badge.classList.add('is-starting');
+        badge.classList.toggle('is-ready', persistable);
+        badge.classList.toggle('is-starting', !persistable);
       }
-      if (note) {
-        note.textContent = migrationTip;
-      }
-      return;
     }
 
-    if (badge) {
-      badge.textContent = '可修改';
-      badge.classList.remove('is-off');
-      badge.classList.add('is-ready');
-    }
-    if (note) {
-      note.textContent = migrationTip;
+    function showError(err) {
+      var message = (err && err.message) || '操作失败';
+      if (window.Notification) window.Notification.error(message);
     }
 
-    desktop.getDataDirectory()
-      .then(function (dataDir) { input.value = dataDir || ''; })
-      .catch(function () {
-        if (window.Notification) window.Notification.error('无法读取数据目录');
-      });
+    if (note) note.textContent = migrationTip;
+
+    fetch('/api/config/data-directory', { cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(applyPayload)
+      .catch(function () { showError({ message: '无法读取数据目录' }); });
 
     browseBtn.addEventListener('click', function () {
+      if (!canPickFolder) return;
       desktop.pickDataDirectory()
         .then(function (dataDir) {
           if (dataDir) input.value = dataDir;
         })
-        .catch(function () {
-          if (window.Notification) window.Notification.error('无法选择文件夹');
-        });
+        .catch(function () { showError({ message: '无法选择文件夹' }); });
     });
 
     saveBtn.addEventListener('click', function () {
       var dataDir = input.value.trim();
       if (!dataDir) {
-        if (window.Notification) window.Notification.error('请选择数据文件夹');
+        showError({ message: '请选择数据文件夹' });
         return;
       }
       saveBtn.disabled = true;
-      desktop.setDataDirectory(dataDir)
-        .then(function (savedDataDir) {
-          input.value = savedDataDir;
-          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录');
+      fetch('/api/config/data-directory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataDir: dataDir }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data && data.error || '保存失败');
+            return data;
+          });
         })
-        .catch(function (err) {
-          if (window.Notification) window.Notification.error((err && err.message) || '保存失败，请输入绝对路径');
+        .then(function (data) {
+          applyPayload(data);
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
         })
+        .catch(showError)
         .finally(function () { saveBtn.disabled = false; });
     });
 
     resetBtn.addEventListener('click', function () {
       resetBtn.disabled = true;
-      desktop.setDataDirectory(null)
-        .then(function (defaultDataDir) {
-          input.value = defaultDataDir;
-          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录');
+      fetch('/api/config/data-directory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataDir: null }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            if (!res.ok) throw new Error(data && data.error || '恢复失败');
+            return data;
+          });
         })
-        .catch(function () {
-          if (window.Notification) window.Notification.error('恢复默认位置失败');
+        .then(function (data) {
+          applyPayload(data);
+          if (window.Notification) window.Notification.success('修改成功，请手动操作相关目录后重启');
         })
+        .catch(showError)
         .finally(function () { resetBtn.disabled = false; });
     });
   }

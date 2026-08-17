@@ -31,6 +31,8 @@ describe('main-config-ice-etl-prefs', () => {
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
       panelWidth: 420,
+      taskDoneNotification: false,
+      panelAutoCollapse: false,
     });
 
     const raw = JSON.parse(await readFile(configPath, 'utf-8')) as { iceEtlPrefs: unknown };

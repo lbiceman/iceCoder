@@ -697,10 +697,22 @@ export class MemoryDream {
    */
   async dream(
     memoryDir: string,
-    llmAdapter: LLMAdapterInterface,
+    llmAdapter: LLMAdapterInterface | null,
     conversationPrefix?: UnifiedMessage[],
   ): Promise<DreamResult> {
     const startTime = Date.now();
+
+    // 无 LLM 时优雅跳过：不拿锁、不扫描，避免 null.chat 抛 TypeError 污染日志
+    if (!llmAdapter) {
+      return {
+        executed: false,
+        summary: 'No LLM adapter configured; dream skipped.',
+        filesModified: 0,
+        filesDeleted: 0,
+        duration: Date.now() - startTime,
+        skipReason: 'no_llm',
+      };
+    }
 
     if (!tryEnterConsolidation(memoryDir)) {
       return {
@@ -1797,7 +1809,7 @@ export class MemoryDream {
    */
   async forceDream(
     memoryDir: string,
-    llmAdapter: LLMAdapterInterface,
+    llmAdapter: LLMAdapterInterface | null,
     conversationPrefix?: UnifiedMessage[],
   ): Promise<DreamResult> {
     return this.dream(memoryDir, llmAdapter, conversationPrefix);

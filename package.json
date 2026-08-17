@@ -1,6 +1,6 @@
 {
   "name": "ice-coder",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI coding assistant with tool-use capabilities for PC and mobile",
   "main": "dist/index.js",
   "bin": {
@@ -20,7 +20,9 @@
   "scripts": {
     "prebuild": "node scripts/tunnel-pack-entry.cjs",
     "prebuild:server": "node scripts/tunnel-pack-entry.cjs",
-    "build": "tsc -p tsconfig.pack.json --listEmittedFiles && vite build && npm pack",
+    "build": "node scripts/bump-pack-version.mjs && tsc -p tsconfig.pack.json --listEmittedFiles && vite build && npm pack && node scripts/copy-release-tgz.mjs",
+    "install:global": "node scripts/install-tgz.mjs",
+    "build:install": "npm run build && npm run install:global",
     "build:server": "tsc -p tsconfig.pack.json",
     "build:web": "vite build",
     "start": "cross-env NODE_ENV=production node dist/index.js",

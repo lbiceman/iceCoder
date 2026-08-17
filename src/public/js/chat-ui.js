@@ -34,6 +34,7 @@ window.ChatUI = (function () {
   var elJumpBottom = null;
   var contentResizeObserver = null;
   var tailResizeObserver = null;
+  var composerResizeObserver = null;
 
   // 实时工具区 DOM
   var liveToolRoundActive = false;
@@ -58,6 +59,7 @@ window.ChatUI = (function () {
     ensureJumpBottomButton();
     setupContentResizeObserver();
     setupTailResizeObserver();
+    setupComposerResizeObserver();
     ensureDiffOutsideClose();
     updateFollowBottomClass();
   }
@@ -833,10 +835,44 @@ window.ChatUI = (function () {
     });
   }
 
+  function getMaxInputHeight() {
+    if (!elInput) return 220;
+    var maxH = parseFloat(window.getComputedStyle(elInput).maxHeight);
+    return isFinite(maxH) && maxH > 0 ? maxH : 220;
+  }
+
+  function syncComposerStackHeight() {
+    var main = elMessages && elMessages.parentElement;
+    var inputArea = main ? main.querySelector('.chat-input-area') : null;
+    if (!main || !inputArea) return;
+    var h = Math.ceil(inputArea.getBoundingClientRect().height);
+    if (h > 0) main.style.setProperty('--chat-composer-stack-height', h + 'px');
+    try {
+      document.dispatchEvent(new CustomEvent('ice:composer-layout'));
+    } catch (_e) { /* ignore */ }
+  }
+
+  function setupComposerResizeObserver() {
+    if (typeof ResizeObserver === 'undefined' || composerResizeObserver) return;
+    var main = elMessages && elMessages.parentElement;
+    var inputArea = main ? main.querySelector('.chat-input-area') : null;
+    if (!inputArea || !main) return;
+    composerResizeObserver = new ResizeObserver(function () {
+      syncComposerStackHeight();
+    });
+    composerResizeObserver.observe(inputArea);
+    syncComposerStackHeight();
+  }
+
   function autoResizeInput() {
     if (!elInput) return;
     elInput.style.height = 'auto';
-    elInput.style.height = Math.min(elInput.scrollHeight, 220) + 'px';
+    var maxH = getMaxInputHeight();
+    var scrollH = elInput.scrollHeight;
+    var next = Math.min(scrollH, maxH);
+    elInput.style.height = next + 'px';
+    elInput.style.overflowY = scrollH > maxH + 1 ? 'auto' : 'hidden';
+    syncComposerStackHeight();
   }
 
   // ---- 工具调用行 ----
@@ -1705,7 +1741,7 @@ window.ChatUI = (function () {
       var delBtn = deleteButtons[j];
       delBtn.disabled = !restoreUiState.canRestore;
       delBtn.title = restoreUiState.canRestore
-        ? '删除此消息及后续对话'
+        ? '删除此消息及对应回复'
         : '运行中，请等待当前任务完成后再删除';
     }
   }

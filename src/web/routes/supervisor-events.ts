@@ -202,7 +202,6 @@ export function formatSupervisorEventsReport(args: {
   }
 
   lines.push('');
-  lines.push('过滤示例：`~supervisor event=recover` · 天数：`~supervisor days=3`');
 
   return lines.join('\n');
 }

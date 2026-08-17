@@ -4,7 +4,7 @@ import './paths.js';
  * iceCoder CLI 入口。
  *
  * 用法:
- *   iceCoder start             启动全部（CLI + Web + Cloudflare Tunnel）
+ *   iceCoder start             启动 Web（自动打开浏览器）+ 终端对话
  *   iceCoder cli               仅终端交互式对话
  *   iceCoder web               仅启动 Web 服务器
  *   iceCoder run "任务描述"     单次任务执行
@@ -18,14 +18,28 @@ import { parseArgs } from './utils/args-parser.js';
 import { hasFlag } from './utils/args-parser.js';
 import { c, error } from './utils/terminal-ui.js';
 import { bootstrap } from './bootstrap.js';
+import { isPackagedCliEntry } from './paths.js';
 import { defaultApiPortHelpText, resolveDefaultApiPort } from './serve-port.js';
 import { isTunnelDevEnabled } from '../runtime/tunnel-feature.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function readCliVersion(): string {
+  const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json');
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version?.trim() || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
 
 ${c.bold}用法:${c.reset}
-  iceCoder start [options]          启动全部（CLI + Web + Cloudflare Tunnel）
+  iceCoder start [options]          启动 Web（自动打开浏览器）+ 终端对话
   iceCoder cli [options]            仅终端交互式对话
   iceCoder web [options]            仅启动 Web 服务器
   iceCoder run "任务" [options]     单次任务执行
@@ -37,6 +51,7 @@ ${c.bold}用法:${c.reset}
 
 ${c.bold}start/cli/web 选项:${c.reset}
   --port, -p <n>       Web 服务器端口 (默认 ${defaultApiPortHelpText()}，可用环境变量 PORT 覆盖)
+  --no-open            启动后不自动打开浏览器（仅 start）
   --no-tunnel          不启动 Cloudflare Tunnel (仅 start，需 ICE_TUNNEL_DEV=1)
   --tunnel-bin <path>  cloudflared 可执行文件路径（本地开发）
 
@@ -53,6 +68,11 @@ ${c.bold}终端内置命令 (cli/start 模式):${c.reset}
 `;
 
 async function main(): Promise<void> {
+  // 全局 / tgz 安装的 iceCoder 未设 NODE_ENV 时按生产静态资源与缓存处理
+  if (isPackagedCliEntry() && !process.env.NODE_ENV) {
+    process.env.NODE_ENV = 'production';
+  }
+
   const args = parseArgs();
 
   // 帮助
@@ -63,7 +83,7 @@ async function main(): Promise<void> {
 
   // 版本
   if (hasFlag(args.flags, 'version', 'v')) {
-    console.log('iceCoder v1.0.0');
+    console.log(`iceCoder v${readCliVersion()}`);
     return;
   }
 

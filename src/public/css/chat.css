@@ -285,11 +285,12 @@
 }
 
 .chat-welcome {
-  flex: 1 1 auto;
+  /* 至少占满消息区；内容更高时可撑开 scrollHeight，避免输入框变高后顶部被居中裁剪 */
+  flex: 0 0 auto;
+  min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 0;
   width: 100%;
   padding: 24px 0 16px;
   box-sizing: border-box;
@@ -516,6 +517,51 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-welcome-tools-inline {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.chat-welcome-tool-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-welcome-tool-seg + .chat-welcome-tool-seg {
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--border-light) 85%, transparent);
+}
+
+.chat-welcome-tool-seg-name {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.chat-welcome-tool-seg-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chat-welcome-context-row--tools {
+  align-items: center;
+}
+
+.chat-welcome-context-row--tools .chat-welcome-context-label {
+  color: var(--text-secondary);
 }
 
 @media (min-width: 1180px) and (min-height: 760px) and (max-height: 860px) {
@@ -1148,6 +1194,7 @@
   outline: none;
   background: transparent;
   resize: none;
+  overflow-y: hidden;
   font-family: inherit;
   font-size: 15px;
   line-height: 1.55;
@@ -1155,7 +1202,7 @@
   color: var(--text-primary);
   padding: 5px 10px;
   min-height: 56px;
-  max-height: 220px;
+  max-height: min(220px, 38vh);
   caret-color: var(--accent);
 }
 .composer-input .input-wrapper textarea::placeholder {
@@ -1645,11 +1692,14 @@
 
 /* 冰豆会话指示器 — fixed；外圈圆环表示上下文占用，眼睛色为启动随机 */
 /* 气泡绝对定位，不参与 flex 宽计算，避免长文案撑宽整块导致居中偏移、挤偏冰豆 */
+.session-pet-indicator:not(.session-pet-indicator--placed) {
+  /* 随输入框高度上移，避免多行输入时压住欢迎页/消息区 */
+  bottom: calc(var(--chat-composer-stack-height, 160px) + 20px);
+}
+
 .session-pet-indicator {
   display: flex;
   position: fixed;
-  /* 抬到聊天输入框（composer + toolbar ≈ 140px）上方，避免双击复位后盖住聊天框 */
-  bottom: 180px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;
@@ -2529,6 +2579,7 @@
 }
 
 .chat-main {
+  --chat-composer-stack-height: 160px;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -2542,7 +2593,7 @@
 .chat-jump-bottom {
   position: absolute;
   right: 20px;
-  bottom: 160px;
+  bottom: calc(var(--chat-composer-stack-height, 160px) + 16px);
   z-index: 12;
   display: inline-flex;
   align-items: center;
@@ -2579,7 +2630,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  max-height: calc(100% - 220px);
+  max-height: calc(100% - var(--chat-composer-stack-height, 160px) - 40px);
   pointer-events: none;
 }
 .chat-staircase-nav.hidden {

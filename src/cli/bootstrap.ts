@@ -9,7 +9,6 @@
  */
 
 import fs from 'fs/promises';
-import path from 'path';
 
 import { LLMAdapter } from '../llm/llm-adapter.js';
 import { OpenAIAdapter } from '../llm/openai-adapter.js';
@@ -22,7 +21,7 @@ import { Orchestrator } from '../core/orchestrator.js';
 import { initializeToolSystem } from '../tools/index.js';
 import { MCPManager, startMcpBackgroundInit, watchMcpConfigChanges } from '../mcp/index.js';
 import { broadcastMcpReady } from '../web/chat-ws.js';
-import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, type DataPaths } from './paths.js';
+import { resolveDataPaths, ensureDataDir, resolveMcpConfigPath, getDefaultWorkDir, type DataPaths } from './paths.js';
 import { isAppConfigReady } from '../config/config-readiness.js';
 import { normalizeProviders } from '../config/normalize-provider.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
@@ -107,6 +106,35 @@ export async function reloadLLMAdapter(llmAdapter: LLMAdapter, configPath: strin
 }
 
 /**
+ * 监视 config.json 变化并热重载 LLM 适配器（与 Electron / npm start 一致）。
+ */
+export function watchConfigChanges(llmAdapter: LLMAdapter, configPath: string): () => void {
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let watching = true;
+
+  import('node:fs').then((nodeFs) => {
+    if (!watching) return;
+    nodeFs.watchFile(configPath, { interval: 2000 }, () => {
+      if (!watching) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        reloadLLMAdapter(llmAdapter, configPath).catch((err) => {
+          console.error('Failed to reload LLM adapter config:', err);
+        });
+      }, 500);
+    });
+  });
+
+  return () => {
+    watching = false;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    import('node:fs').then((nodeFs) => {
+      nodeFs.unwatchFile(configPath);
+    }).catch(() => {});
+  };
+}
+
+/**
  * 初始化文件解析器。
  */
 export function initializeFileParser(): FileParser {
@@ -140,8 +168,9 @@ export async function bootstrap(): Promise<BootstrapResult> {
 
   // 初始化工具系统
   const { registry, executor } = initializeToolSystem({
-    workDir: path.resolve('.'),
+    workDir: getDefaultWorkDir(),
     fileParser,
+    llmAdapter,
   });
 
   const mcpManager = new MCPManager({ mcpConfigPath: resolveMcpConfigPath() });
@@ -161,10 +190,7 @@ export async function bootstrap(): Promise<BootstrapResult> {
     onReloaded: notifyMcpReady,
   });
 
-  const orchestrator = new Orchestrator(fileParser, llmAdapter, {
-    outputDir: paths.outputDir,
-    sessionDir: paths.sessionsDir,
-  });
+  const orchestrator = new Orchestrator(fileParser, llmAdapter);
 
 
   return {

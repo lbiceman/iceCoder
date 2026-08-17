@@ -12,6 +12,8 @@ window.EtlPrefs = (function () {
     showTransparencyPanel: true,
     panelDefaultExpanded: true,
     panelWidth: 360,
+    taskDoneNotification: false,
+    panelAutoCollapse: false,
   };
 
   var cached = null;
@@ -35,6 +37,12 @@ window.EtlPrefs = (function () {
     }
     if (typeof raw.panelDefaultExpanded === 'boolean') {
       out.panelDefaultExpanded = raw.panelDefaultExpanded;
+    }
+    if (typeof raw.taskDoneNotification === 'boolean') {
+      out.taskDoneNotification = raw.taskDoneNotification;
+    }
+    if (typeof raw.panelAutoCollapse === 'boolean') {
+      out.panelAutoCollapse = raw.panelAutoCollapse;
     }
     out.panelWidth = clampPanelWidth(raw.panelWidth);
     return out;

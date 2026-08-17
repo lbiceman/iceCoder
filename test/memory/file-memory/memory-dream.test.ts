@@ -866,17 +866,17 @@ describe('forceDream', () => {
     expect(result.summary).toContain('No memories');
   });
 
-  it('forceDream 在无 LLM 时不报错', async () => {
+  it('forceDream 在无 LLM 时不报错（优雅降级为 no_llm）', async () => {
     const dream = createMemoryDream({ enableBackup: false });
     await writeMemoryFile(tempDir, 'note.md', '笔记');
 
-    const result = await dream.forceDream(tempDir, null as any).catch(() => ({
-      executed: false,
-      summary: 'error',
-      filesModified: 0,
-      filesDeleted: 0,
-      duration: 0,
-    }));
-    expect(result).toBeDefined();
+    const result = await dream.forceDream(tempDir, null as any);
+    expect(result.executed).toBe(false);
+    expect(result.skipReason).toBe('no_llm');
+    expect(result.summary).toContain('No LLM adapter');
+    // 不进入 LLM 调用路径：无记忆文件也不抛 null.chat
+    const result2 = await dream.forceDream(path.join(tempDir, 'no-such-dir'), null as any);
+    expect(result2.executed).toBe(false);
+    expect(result2.skipReason).toBe('no_llm');
   });
 });

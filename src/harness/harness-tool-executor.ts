@@ -8,6 +8,7 @@ import {
   formatConfirmToolName,
   isShellCollabCommandTool,
   isShellCollabFileTool,
+  isShellMandatoryConfirmCommandTool,
   resolveShellMandatoryConfirm,
   resolveToolPermission,
   shellMandatoryConfirmKey,
@@ -165,7 +166,7 @@ function emitHarnessPolicyBlock(
     policyReason: ctx.policyReason ?? ctx.errorLabel,
     outputLength: blockMessage.length,
   });
-  if (ctx.policyReason === 'host_kill' || ctx.policyReason === 'shell_blacklist') {
+  if (ctx.policyReason === 'host_kill' || ctx.policyReason === 'shell_hard_block') {
     ctx.deps.runtimeTelemetry?.recordHostGuardBlock({
       round: ctx.iteration,
       toolName: ctx.tc.name,
@@ -409,8 +410,11 @@ export async function executeToolCallsStreaming(
     const shellCollabActive = deps.shellCollabActive === true;
     const isShellCommandTool = shellCollabActive && isShellCollabCommandTool(tc.name);
     const isShellFileTool = shellCollabActive && isShellCollabFileTool(tc.name);
+    const needsShellMandatoryConfirm = isShellMandatoryConfirmCommandTool(tc.name)
+      && (tc.name === 'run_command' || shellCollabActive);
+    let shellMandatoryConfirmApproved = false;
 
-    if (isShellCommandTool) {
+    if (needsShellMandatoryConfirm) {
         const mandatory = resolveShellMandatoryConfirm(tc, {
           sessionId: deps.sessionId ?? 'default',
           workspaceRoot: deps.workspaceRoot,
@@ -439,12 +443,15 @@ export async function executeToolCallsStreaming(
         if (mandatory.required && mandatory.request) {
           const req = mandatory.request;
           const denialKey = shellMandatoryConfirmKey(req);
+          const commandNotExecutedHint = isShellCollabCommandTool(tc.name)
+            ? `Command was not written to PTY: ${req.commandDisplay}`
+            : `Command was not executed: ${req.commandDisplay}`;
           if (shellMandatoryConfirmDenials?.has(denialKey)) {
             emitHarnessPolicyBlock({
               deps,
               tc,
               iteration,
-              baseMessage: `[Harness / Shell Confirm Policy] This exact command was already denied in the current run. Command was not written to PTY: ${req.commandDisplay}`,
+              baseMessage: `[Harness / Shell Confirm Policy] This exact command was already denied in the current run. ${commandNotExecutedHint}`,
               errorLabel: 'Shell mandatory confirmation previously denied',
               policyReason: 'shell_mandatory_confirm_previously_denied',
               messages,
@@ -487,12 +494,13 @@ export async function executeToolCallsStreaming(
             messages.push({
               role: 'tool',
               content: `User denied shell command or confirmation timed out (confirmation_timeout). `
-                + `Command was not written to PTY: ${req.commandDisplay}`,
+                + commandNotExecutedHint,
               toolCallId: tc.id,
             });
             submittedIds.add(tc.id);
             continue;
           }
+          shellMandatoryConfirmApproved = true;
         }
     }
 
@@ -527,7 +535,11 @@ export async function executeToolCallsStreaming(
         continue;
       }
 
-      if (permission.permission === 'confirm' && deps.onConfirm) {
+      if (
+        permission.permission === 'confirm'
+        && deps.onConfirm
+        && !(shellMandatoryConfirmApproved && tc.name === 'run_command')
+      ) {
         const confirmToolName = formatConfirmToolName(tc);
         onStep?.({ type: 'tool_confirm', iteration, toolName: confirmToolName, toolArgs: observableToolArgs(tc) });
         const allowed = await deps.onConfirm(confirmToolName, tc.arguments);

@@ -41,11 +41,24 @@ export interface ProviderConfig {
   maxContextTokens?: number;
 }
 
-/** 执行透明层（ETL）前端偏好，持久化在 data/config.json。 */
+/**
+ * 执行透明层（ETL）前端偏好，持久化在 data/config.json。
+ *
+ * ⚠️ 新增字段 checklist（防前后端漂移，4 处必须同步）：
+ * 1. 此处接口类型 + 注释
+ * 2. `src/config/main-config-ice-etl-prefs.ts` 的 `DEFAULT_ICE_ETL_PREFS` + `sanitizeIceEtlPrefs`
+ * 3. `src/public/js/etl-prefs.js` 的 `DEFAULTS` + `sanitize`（前端独立实现）
+ * 4. `src/web/routes/config.ts` 的 PATCH 校验（allowedKeys + 类型规则均由 `validateIceEtlPrefsPatch` 派生，见 `main-config-ice-etl-prefs.ts`）
+ * 防漂移测试：`test/public/etl-prefs-parity.test.ts`（两端一致）、`test/web/config-ice-etl-prefs-route.test.ts`（路由清单）
+ */
 export interface IceEtlPrefs {
   showTransparencyPanel: boolean;
   panelDefaultExpanded: boolean;
   panelWidth: number;
+  /** 任务完成后是否通过桌面系统通知提醒（仅桌面端生效） */
+  taskDoneNotification: boolean;
+  /** 面板空闲（无执行活动）时自动收起为宠物形态 */
+  panelAutoCollapse: boolean;
 }
 
 /** `data/config.json` 顶层结构 */

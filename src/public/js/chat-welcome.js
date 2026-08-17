@@ -14,7 +14,7 @@ window.ChatWelcome = (function () {
   var contextMaxTokens = null;
   var contextUsedTokens = 0;
   var contextFetchPending = false;
-  var toolsCount = null;
+  var toolsCategories = null;
   var toolsFetchPending = false;
   var storeListenerBound = false;
 
@@ -152,9 +152,9 @@ window.ChatWelcome = (function () {
               '<span class="chat-welcome-context-label">工作区</span>' +
               '<span class="chat-welcome-context-value" data-welcome-workspace title="">—</span>' +
             '</div>' +
-            '<div class="chat-welcome-context-row">' +
+            '<div class="chat-welcome-context-row chat-welcome-context-row--tools">' +
               '<span class="chat-welcome-context-label">系统工具</span>' +
-              '<span class="chat-welcome-context-value" data-welcome-tools title="">载入中…</span>' +
+              '<div class="chat-welcome-tools-inline" data-welcome-tools-inline title="">载入中…</div>' +
             '</div>' +
             '<div class="chat-welcome-context-row">' +
               '<span class="chat-welcome-context-label">上下文大小</span>' +
@@ -208,10 +208,43 @@ window.ChatWelcome = (function () {
     return { text: display, title: full };
   }
 
-  function formatToolsCountLabel(count) {
-    if (count == null) return { text: '载入中…', title: '' };
-    if (count <= 0) return { text: '—', title: '' };
-    return { text: count + ' 个', title: 'IceCoder 内置工具' };
+  function formatToolCount(n) {
+    if (n == null || n <= 0) return '—';
+    return n + ' 个';
+  }
+
+  function buildToolSegHtml(name, count, opts) {
+    opts = opts || {};
+    var countText = opts.countCompact
+      ? (count == null || count <= 0 ? '—' : count + '个')
+      : formatToolCount(count);
+    return (
+      '<span class="chat-welcome-tool-seg"' +
+        (opts.title ? ' title="' + escapeHtml(opts.title) + '"' : '') +
+      '>' +
+        '<span class="chat-welcome-tool-seg-name">' + escapeHtml(name) + '</span>' +
+        '<span class="chat-welcome-tool-seg-value">' + escapeHtml(countText) + '</span>' +
+      '</span>'
+    );
+  }
+
+  function buildToolsInlineHtml(categories) {
+    if (!categories) return '';
+    var chat = categories.chat && typeof categories.chat.count === 'number' ? categories.chat.count : 0;
+    var doc = categories.doc && typeof categories.doc.count === 'number' ? categories.doc.count : 0;
+    var shell = categories.shell && typeof categories.shell.count === 'number' ? categories.shell.count : 0;
+    return (
+      buildToolSegHtml('常用', chat, {
+        title: '普通模式默认可用：文件读写、搜索、命令执行等',
+      }) +
+      buildToolSegHtml('解析', doc, {
+        title: '文档/媒体解析工具；检测到相关文件或意图后按需携带',
+      }) +
+      buildToolSegHtml('shell模式', shell, {
+        title: 'Shell 模式专用；输入 /shell 进入协作会话后可用',
+        countCompact: true,
+      })
+    );
   }
 
   function formatContextWindow(n) {
@@ -243,32 +276,44 @@ window.ChatWelcome = (function () {
     }
   }
 
-  function countBuiltinTools(tools) {
-    if (!Array.isArray(tools)) return 0;
-    var n = 0;
-    for (var i = 0; i < tools.length; i++) {
-      var name = tools[i] && tools[i].name ? String(tools[i].name) : '';
-      if (name && name.indexOf('mcp_') !== 0) n++;
+  /** @deprecated 仅作 API 无 categories 时的兜底 */
+  var DEFERRED_TOOL_NAMES = [
+    'parse_document', 'parse_doc_legacy', 'parse_xlsx_deep', 'parse_pptx_deep',
+    'parse_xmind_deep', 'notebook_read', 'image_read',
+  ];
+  var SHELL_TOOL_COUNT = 8;
+
+  function fallbackCategoriesFromTools(tools) {
+    if (!Array.isArray(tools)) return { chat: { count: 0 }, doc: { count: 0, lazy: true }, shell: { count: SHELL_TOOL_COUNT } };
+    var deferredSet = {};
+    for (var i = 0; i < DEFERRED_TOOL_NAMES.length; i++) deferredSet[DEFERRED_TOOL_NAMES[i]] = true;
+    var doc = 0;
+    var chat = 0;
+    for (var j = 0; j < tools.length; j++) {
+      var name = tools[j] && tools[j].name ? String(tools[j].name) : '';
+      if (!name || name.indexOf('mcp_') === 0) continue;
+      if (deferredSet[name]) doc++;
+      else chat++;
     }
-    return n;
+    return { chat: { count: chat }, doc: { count: doc, lazy: true }, shell: { count: SHELL_TOOL_COUNT } };
   }
 
-  function fetchToolsCount() {
-    if (toolsFetchPending || toolsCount != null) return;
+  function fetchToolCategories() {
+    if (toolsFetchPending || toolsCategories != null) return;
     toolsFetchPending = true;
     fetch('/api/tools')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        if (data && data.success && Array.isArray(data.tools)) {
-          toolsCount = countBuiltinTools(data.tools);
-        } else if (data && typeof data.count === 'number') {
-          toolsCount = data.count;
+        if (data && data.success && data.categories) {
+          toolsCategories = data.categories;
+        } else if (data && data.success && Array.isArray(data.tools)) {
+          toolsCategories = fallbackCategoriesFromTools(data.tools);
         } else {
-          toolsCount = 0;
+          toolsCategories = fallbackCategoriesFromTools([]);
         }
       })
       .catch(function () {
-        toolsCount = 0;
+        toolsCategories = fallbackCategoriesFromTools([]);
       })
       .finally(function () {
         toolsFetchPending = false;
@@ -323,12 +368,18 @@ window.ChatWelcome = (function () {
       else workspaceEl.removeAttribute('title');
     }
 
-    var toolsEl = r.querySelector('[data-welcome-tools]');
-    if (toolsEl) {
-      var tools = formatToolsCountLabel(toolsCount);
-      toolsEl.textContent = tools.text;
-      if (tools.title) toolsEl.setAttribute('title', tools.title);
-      else toolsEl.removeAttribute('title');
+    var toolsInlineEl = r.querySelector('[data-welcome-tools-inline]');
+    if (toolsInlineEl) {
+      if (!toolsCategories) {
+        toolsInlineEl.textContent = '载入中…';
+        toolsInlineEl.removeAttribute('title');
+      } else {
+        toolsInlineEl.innerHTML = buildToolsInlineHtml(toolsCategories);
+        toolsInlineEl.setAttribute(
+          'title',
+          '常用：普通模式默认携带 · 解析：按需携带 · shell模式：/shell 会话专用'
+        );
+      }
     }
 
     var contextEl = r.querySelector('[data-welcome-context-size]');
@@ -472,7 +523,7 @@ window.ChatWelcome = (function () {
     bindStoreListener();
     fetchMemoryCount();
     fetchModelContext();
-    fetchToolsCount();
+    fetchToolCategories();
   }
 
   function sync(opts) {
@@ -496,7 +547,7 @@ window.ChatWelcome = (function () {
     bindStoreListener();
     if (memoryCount == null) fetchMemoryCount();
     if (contextMaxTokens == null) fetchModelContext();
-    if (toolsCount == null) fetchToolsCount();
+    if (toolsCategories == null) fetchToolCategories();
   }
 
   function syncDashboard(root, opts) {
@@ -511,7 +562,7 @@ window.ChatWelcome = (function () {
     bindStoreListener();
     if (memoryCount == null) fetchMemoryCount();
     if (contextMaxTokens == null) fetchModelContext();
-    if (toolsCount == null) fetchToolsCount();
+    if (toolsCategories == null) fetchToolCategories();
   }
 
   return {
