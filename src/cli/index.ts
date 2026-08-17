@@ -21,6 +21,19 @@ import { bootstrap } from './bootstrap.js';
 import { isPackagedCliEntry } from './paths.js';
 import { defaultApiPortHelpText, resolveDefaultApiPort } from './serve-port.js';
 import { isTunnelDevEnabled } from '../runtime/tunnel-feature.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function readCliVersion(): string {
+  const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json');
+  try {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version?.trim() || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 const HELP = `
 ${c.bold}${c.cyan}iceCoder${c.reset} — AI 编程助手 CLI
@@ -70,7 +83,7 @@ async function main(): Promise<void> {
 
   // 版本
   if (hasFlag(args.flags, 'version', 'v')) {
-    console.log('iceCoder v1.0.0');
+    console.log(`iceCoder v${readCliVersion()}`);
     return;
   }
 
