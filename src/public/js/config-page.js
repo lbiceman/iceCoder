@@ -145,7 +145,10 @@ window.SettingsPage = (function () {
           '<div class="settings-card" id="settings-etl-main-card">' +
             '<div class="settings-card-row">' +
               '<div class="settings-card-info">' +
-                '<span class="settings-card-title">显示执行透明层</span>' +
+                '<div class="settings-card-title-row">' +
+                  '<span class="settings-card-title">显示执行透明层</span>' +
+                  '<span class="config-badge is-off" id="settings-etl-capability-badge" hidden>功能未开启</span>' +
+                '</div>' +
                 '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
               '</div>' +
               '<div class="settings-card-control">' +
@@ -227,9 +230,13 @@ window.SettingsPage = (function () {
   }
 
   function isEtlCapabilityEnabled() {
-    return !!(window.ChatExecutionPlanBridge
-      && typeof window.ChatExecutionPlanBridge.isEnabled === 'function'
-      && window.ChatExecutionPlanBridge.isEnabled());
+    var bridge = window.ChatExecutionPlanBridge;
+    if (!bridge || typeof bridge.isEnabled !== 'function') return true;
+    // WS 尚未宣告 features.executionPlan 时视为可用，避免设置页首屏把全部开关锁死。
+    if (typeof bridge.isCapabilityKnown === 'function' && !bridge.isCapabilityKnown()) {
+      return true;
+    }
+    return !!bridge.isEnabled();
   }
 
   function syncEtlSettingsUi(parentEl, prefs) {
@@ -361,7 +368,7 @@ window.SettingsPage = (function () {
               window.Notification.error((err && err.message) || '更新失败');
             }
           })
-          .finally(function () { showPanelInput.disabled = false; });
+          .finally(function () { syncEtlSettingsUi(parentEl); });
       });
     }
 
@@ -375,7 +382,7 @@ window.SettingsPage = (function () {
             panelDefaultExpanded.checked = !next;
             if (window.Notification) window.Notification.error('更新失败');
           })
-          .finally(function () { panelDefaultExpanded.disabled = false; });
+          .finally(function () { syncEtlSettingsUi(parentEl); });
       });
     }
 
@@ -389,7 +396,7 @@ window.SettingsPage = (function () {
             panelAutoCollapse.checked = !next;
             if (window.Notification) window.Notification.error('更新失败');
           })
-          .finally(function () { panelAutoCollapse.disabled = false; });
+          .finally(function () { syncEtlSettingsUi(parentEl); });
       });
     }
 
@@ -409,7 +416,7 @@ window.SettingsPage = (function () {
             syncEtlSettingsUi(parentEl);
             if (window.Notification) window.Notification.error('更新失败');
           })
-          .finally(function () { panelWidth.disabled = false; });
+          .finally(function () { syncEtlSettingsUi(parentEl); });
       });
     }
 

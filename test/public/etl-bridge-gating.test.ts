@@ -30,6 +30,7 @@ interface BridgeApi {
   handleStep: (step: unknown) => void;
   fetchAndApply: () => void;
   isEnabled: () => boolean;
+  isCapabilityKnown: () => boolean;
 }
 
 function makeEtlPrefs(overrides: Record<string, unknown> = {}): EtlPrefsStub {
@@ -122,6 +123,19 @@ describe('phase 6 — 桥接门控与偏好联动', () => {
 
   beforeEach(() => {
     panel = makePanel();
+  });
+
+  it('connected 到达前 isCapabilityKnown 为 false，到达后为权威值', () => {
+    const etlPrefs = makeEtlPrefs({ showTransparencyPanel: true });
+    const { bridge } = loadBridge(etlPrefs, panel);
+    expect(bridge.isCapabilityKnown()).toBe(false);
+    expect(bridge.isEnabled()).toBe(false);
+    bridge.notifyConnected({ features: { executionPlan: true } });
+    expect(bridge.isCapabilityKnown()).toBe(true);
+    expect(bridge.isEnabled()).toBe(true);
+    bridge.notifyConnected({ features: { executionPlan: false } });
+    expect(bridge.isCapabilityKnown()).toBe(true);
+    expect(bridge.isEnabled()).toBe(false);
   });
 
   it('主开关关时不显示（即使服务端能力开启）', () => {

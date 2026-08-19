@@ -603,7 +603,7 @@ describe('ETL 真实 Observer 链路', () => {
     });
 
     expect(result).toEqual({
-      initiallyDisabled: true,
+      initiallyDisabled: false,
       enabledAfterConnected: true,
       widthDisplay: 'none',
     });
@@ -647,7 +647,7 @@ describe('ETL 真实 Observer 链路', () => {
     });
 
     expect(result).toEqual({
-      initial: { mainDisabled: true, childrenDisabled: true },
+      initial: { mainDisabled: false, childrenDisabled: false },
       enabled: { mainEnabled: true, childrenEnabled: true },
       capabilityOff: { mainDisabled: true, childrenDisabled: true },
       mainOff: { mainEnabled: true, childrenDisabled: true },
