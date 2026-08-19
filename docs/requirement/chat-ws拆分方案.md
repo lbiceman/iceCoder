@@ -1,7 +1,7 @@
 # chat-ws.ts 拆分方案
 
-> 状态：方案 · 未改代码
-> 范围：只拆 `src/web/chat-ws.ts`（约 2996 行）。不改协议、不改行为、不顺带做 Harness / 前端工程化。
+> 状态：**已完成**（2026-08-19）
+> 范围：只拆 `src/web/chat-ws.ts`（原约 2996 行 → 现 237 行）。不改协议、不改行为、不顺带做 Harness / 前端工程化。
 > 对照：前端 `chat-page.js` 已按业务域拆出 4 个 handler 模块（见 `docs/chat-page-ws-handlers-split-handoff.md`）。服务端复用「一刀一 commit、行为不变、静态测试锁死」，**不复用 ctx 注入**。
 
 ---
@@ -233,12 +233,37 @@ vitest run test/web/chat-ws-split.test.ts test/web/chat-ws-bg-push.test.ts test/
 
 ## 8. 验收对照
 
-- [ ] 五刀全部合入后 `chat-ws.ts` ≤ 600 行，且不含入站 type 分支、不含 `new Harness`
-- [ ] 对外 API 与 import 路径不变（`serve.ts` / `bootstrap.ts` / `sessions.ts` 零 diff，或仅类型导入仍指向 `chat-ws.js`）
-- [ ] runtime 无环（静态测试）
-- [ ] confirm / switch_session / restore / 文件浏览旁路 / `/shell` / 任务队列接力行为与拆前一致
-- [ ] 无双实现：`appendMessages`、`broadcastToSession`、`resolveConfirm` 全仓库各一处
-- [ ] 本方案文档与代码目录一致（合完后把本文件状态改为「已完成」并补各文件行数）
+- [x] 五刀全部合入后 `chat-ws.ts` ≤ 600 行（**237**），且不含入站 type 分支、不含 `new Harness`
+- [x] 对外 API 与 import 路径不变（`serve.ts` / `bootstrap.ts` / `sessions.ts` 零 diff）
+- [x] runtime 无环（`test/web/chat-ws-split.test.ts`）
+- [x] 静态锁：9 个入站 type 只在 inbound；`new Harness(` 只在 turn
+- [x] 无双实现：`appendMessages`、`broadcastToSession`、`resolveConfirm` 全仓库各一处
+- [x] 本方案文档与代码目录一致
+
+落地偏差（有意为之，避免成环）：`hasBusySessionRun` 放在 `chat-ws-running-turn.ts` 而非 runtime（它依赖 `runningTurns`）。`buildEnqueueInput` 放在 persist，避免 shell ↔ loop 互引。
+
+审计补丁（2026-08-19）：`purgeSessionMaps` 不得 abort；`purgeSessionRuntimeCaches` 必须先 `stopAllShellWorkForSession` 再 `dropSessionRunLocks`，与拆前 P1-11 一致。`saveStructuredMessages` 写 `structuredCache.set`（不走 `setCachedMessages`），与拆前一致。
+
+### 完成后文件行数（2026-08-19）
+
+| 文件 | 行数 |
+|------|------|
+| `chat-ws.ts` | 237 |
+| `chat-ws-helpers.ts` | 40 |
+| `chat-ws-runtime.ts` | 174 |
+| `chat-ws-broadcast.ts` | 196 |
+| `chat-ws-confirm.ts` | 145 |
+| `chat-ws-running-turn.ts` | 251 |
+| `chat-ws-persist.ts` | 330 |
+| `chat-ws-bg-tasks.ts` | 150 |
+| `chat-ws-shell.ts` | 216 |
+| `chat-ws-loop.ts` | 188 |
+| `chat-ws-inbound.ts` | 458 |
+| `chat-ws-turn.ts` | 712 |
+
+`chat-ws-turn.ts` 略超软指标 650：含 `finalizeDirectBrowserTurn`，仍是单一职责。inbound 458 因 9 个 type 全集中，可接受。
+
+回归：`vitest run test/web/chat-ws-split.test.ts test/web/chat-ws-bg-push.test.ts test/web/chat-ws-prewarm.test.ts` + `tsc --noEmit` 全绿。
 
 ---
 

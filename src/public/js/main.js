@@ -11,6 +11,7 @@ import './etl-prefs.js';
 import './model-names.js';
 import './config-model-panel.js';
 import './config-mcp-panel.js';
+import './config-supervisor-panel.js';
 import './config-page.js';
 import './session-pet.js';
 import './desktop-pet-bridge.js';

@@ -1,5 +1,5 @@
 /**
- * 设置页面：Tab 切换「通用」「模型配置」与「MCP 配置」。
+ * 设置页面：Tab 切换「通用」「模型配置」「MCP 配置」与「监管模式配置」。
  */
 
 /* exported ConfigPage, SettingsPage */
@@ -101,10 +101,12 @@ window.SettingsPage = (function () {
                 '</div>' +
                 '<p class="settings-card-desc">开启后 Agent 可直接执行工具，不再弹出确认（新会话生效）</p>' +
               '</div>' +
-              '<label class="config-default-switch settings-card-switch" title="跳过权限确认">' +
-                '<input type="checkbox" id="settings-skip-permission-input" />' +
-                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-              '</label>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="跳过权限确认">' +
+                  '<input type="checkbox" id="settings-skip-permission-input" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
             '</div>' +
           '</div>' +
           '<div class="settings-card settings-blacklist-card" id="settings-blacklist-card" hidden>' +
@@ -146,10 +148,12 @@ window.SettingsPage = (function () {
                 '<span class="settings-card-title">显示执行透明层</span>' +
                 '<p class="settings-card-desc">关闭后聊天页不显示面板，仅保留冰豆底部摘要</p>' +
               '</div>' +
-              '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
-                '<input type="checkbox" id="etl-show-panel" />' +
-                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-              '</label>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="显示执行透明层">' +
+                  '<input type="checkbox" id="etl-show-panel" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
             '</div>' +
             '<div class="settings-etl-subgroup" id="settings-etl-subgroup">' +
               '<div class="settings-etl-row">' +
@@ -157,31 +161,37 @@ window.SettingsPage = (function () {
                   '<span class="settings-etl-row-label">新会话默认展开面板</span>' +
                   '<span class="settings-etl-row-hint">关闭时默认最小化为宠物形态，需双击宠物展开</span>' +
                 '</div>' +
-                '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
-                  '<input type="checkbox" id="etl-panel-default-expanded" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
+                '<div class="settings-card-control">' +
+                  '<label class="config-default-switch settings-etl-switch" title="新会话默认展开面板">' +
+                    '<input type="checkbox" id="etl-panel-default-expanded" />' +
+                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                  '</label>' +
+                '</div>' +
               '</div>' +
               '<div class="settings-etl-row settings-etl-row--select settings-etl-panel-width-row" id="etl-panel-width-row">' +
                 '<div class="settings-etl-row-info">' +
                   '<span class="settings-etl-row-label">面板默认宽度</span>' +
                 '</div>' +
-                '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
-                  '<option value="320">320 px</option>' +
-                  '<option value="360">360 px</option>' +
-                  '<option value="420">420 px</option>' +
-                  '<option value="480">480 px</option>' +
-                '</select>' +
+                '<div class="settings-card-control">' +
+                  '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
+                    '<option value="320">320 px</option>' +
+                    '<option value="360">360 px</option>' +
+                    '<option value="420">420 px</option>' +
+                    '<option value="480">480 px</option>' +
+                  '</select>' +
+                '</div>' +
               '</div>' +
               '<div class="settings-etl-row" id="etl-panel-auto-collapse-row">' +
                 '<div class="settings-etl-row-info">' +
                   '<span class="settings-etl-row-label">空闲自动收起</span>' +
                   '<span class="settings-etl-row-hint">无执行活动时自动收起为宠物形态，双击宠物展开</span>' +
                 '</div>' +
-                '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
-                  '<input type="checkbox" id="etl-panel-auto-collapse" />' +
-                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-                '</label>' +
+                '<div class="settings-card-control">' +
+                  '<label class="config-default-switch settings-etl-switch" title="空闲自动收起">' +
+                    '<input type="checkbox" id="etl-panel-auto-collapse" />' +
+                    '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                  '</label>' +
+                '</div>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -197,10 +207,12 @@ window.SettingsPage = (function () {
                 '<span class="settings-card-title">任务完成消息通知</span>' +
                 '<p class="settings-card-desc">任务完成后通过系统通知提醒（仅桌面端生效）</p>' +
               '</div>' +
-              '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
-                '<input type="checkbox" id="settings-task-done-notification" />' +
-                '<span class="config-default-switch-track" aria-hidden="true"></span>' +
-              '</label>' +
+              '<div class="settings-card-control">' +
+                '<label class="config-default-switch settings-card-switch" title="任务完成消息通知">' +
+                  '<input type="checkbox" id="settings-task-done-notification" />' +
+                  '<span class="config-default-switch-track" aria-hidden="true"></span>' +
+                '</label>' +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</section>' +
@@ -750,7 +762,7 @@ window.SettingsPage = (function () {
         '<header class="config-center-header">' +
           '<div class="config-center-header-text">' +
             '<h1 class="config-center-title">设置</h1>' +
-            '<p class="config-center-subtitle">管理外观主题、安全选项、模型与 MCP 服务器</p>' +
+            '<p class="config-center-subtitle">管理外观主题、安全选项、模型、MCP 服务器与监管模式</p>' +
             '<p class="config-center-format-hint">支持 OpenAI 兼容 API（默认 <code>/v1/chat/completions</code>，可选 <code>/v1/responses</code>）；不支持 Anthropic Messages API（A/）。</p>' +
           '</div>' +
         '</header>' +
@@ -758,11 +770,13 @@ window.SettingsPage = (function () {
           '<button type="button" class="config-tab' + (activeTab === 'general' ? ' is-active' : '') + '" data-tab="general" role="tab" aria-selected="' + (activeTab === 'general' ? 'true' : 'false') + '">通用</button>' +
           '<button type="button" class="config-tab' + (activeTab === 'model' ? ' is-active' : '') + '" data-tab="model" role="tab" aria-selected="' + (activeTab === 'model' ? 'true' : 'false') + '">模型配置</button>' +
           '<button type="button" class="config-tab' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-tab="mcp" role="tab" aria-selected="' + (activeTab === 'mcp' ? 'true' : 'false') + '">MCP 配置</button>' +
+          '<button type="button" class="config-tab' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-tab="supervisor" role="tab" aria-selected="' + (activeTab === 'supervisor' ? 'true' : 'false') + '">监管模式配置</button>' +
         '</nav>' +
         '<div class="config-tab-panels">' +
           '<div class="config-tab-panel' + (activeTab === 'general' ? ' is-active' : '') + '" data-panel="general" role="tabpanel" id="config-tab-general"' + (activeTab === 'general' ? '' : ' hidden') + '></div>' +
           '<div class="config-tab-panel' + (activeTab === 'model' ? ' is-active' : '') + '" data-panel="model" role="tabpanel" id="config-tab-model"' + (activeTab === 'model' ? '' : ' hidden') + '></div>' +
           '<div class="config-tab-panel' + (activeTab === 'mcp' ? ' is-active' : '') + '" data-panel="mcp" role="tabpanel" id="config-tab-mcp"' + (activeTab === 'mcp' ? '' : ' hidden') + '></div>' +
+          '<div class="config-tab-panel' + (activeTab === 'supervisor' ? ' is-active' : '') + '" data-panel="supervisor" role="tabpanel" id="config-tab-supervisor"' + (activeTab === 'supervisor' ? '' : ' hidden') + '></div>' +
         '</div>' +
       '</div>';
 
@@ -823,6 +837,14 @@ window.SettingsPage = (function () {
       }
     } else if (switching && window.McpConfigPanel && window.McpConfigPanel.pause) {
       window.McpConfigPanel.pause();
+    }
+
+    if (tab === 'supervisor' && window.SupervisorConfigPanel) {
+      var supEl = container.querySelector('#config-tab-supervisor');
+      if (supEl && !supEl.dataset.mounted) {
+        supEl.dataset.mounted = '1';
+        window.SupervisorConfigPanel.render(supEl);
+      }
     }
   }
 

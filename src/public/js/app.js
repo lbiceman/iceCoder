@@ -700,6 +700,9 @@
     getSupervisorMode: function () {
       return currentSupervisorMode;
     },
+    applySupervisorMode: function (mode) {
+      applySupervisorModeFromConfig({ supervisorMode: mode });
+    },
     getShell: function () {
       return currentShell;
     },

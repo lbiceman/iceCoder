@@ -174,6 +174,21 @@ export async function loadHarnessSupervisorRuntime(
   }
 }
 
+/** 设置页 / 测试：解析 supervisor-config.json 的磁盘路径。 */
+export function resolveSupervisorConfigFilePath(
+  options: LoadSupervisorConfigOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveConfigPath(options, env);
+}
+
+/** 设置页：默认值与磁盘文件浅合并后的可编辑文档（不含 globalPolicy）。 */
+export function buildSupervisorConfigFile(
+  override: DeepPartial<SupervisorConfigFile> = {},
+): SupervisorConfigFile {
+  return mergeConfig(defaultSupervisorConfig(), override);
+}
+
 function resolveConfigPath(
   options: LoadSupervisorConfigOptions,
   env: NodeJS.ProcessEnv,
