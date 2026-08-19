@@ -13,21 +13,24 @@ window.ChatCommands = (function () {
   var SLASH_LOCAL_COMMANDS = [
     { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
     { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' },
-    { name: 'next', description: '静默入队下一条任务', prefix: '/' }
+    { name: 'next', description: '静默入队下一条任务', prefix: '/' },
+    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
   ];
 
   var TILDE_PC_COMMANDS = [
-    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
   var TILDE_REMOTE_COMMANDS = [
-    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
+
+  var OPEN_BROWSE_PAYLOAD =
+    '/open\n\n' +
+    '【目录浏览】若用户只给出文件名（没有文件夹路径），请与最近一次列表中标记为 `[当前路径]` 的目录拼成完整绝对路径，再按需调用 parse_document、parse_pptx_deep 或 open_file。';
 
   var cmdSelectedIndex = 0;
   var cmdFiltered = [];
@@ -267,10 +270,7 @@ window.ChatCommands = (function () {
 
   function handleOpen(ws, ui) {
     ui.showThinking(false);
-    ws.sendMessage(
-      '~open\n\n' +
-      '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
-    );
+    ws.sendMessage(OPEN_BROWSE_PAYLOAD);
   }
 
   function fetchJsonWithTimeout(url, timeoutMs) {

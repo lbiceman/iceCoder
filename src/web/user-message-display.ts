@@ -7,17 +7,24 @@ export interface UserMessageDisplayFields {
   referencePaths?: string[];
   /** `/shell` 模式指令；与 content（提示词）分离展示 */
   shellCommand?: string;
+  /** `/open` 目录浏览指令；与 content（说明正文）分离展示 */
+  openCommand?: string;
 }
 
 function normalizeReferencePath(raw: string): string {
   return path.win32.normalize(raw.trim().replace(/\//g, '\\')).toLowerCase();
 }
 
+/** `/open`、`/shell` 等 slash 命令不是 Unix 绝对路径。 */
+function isSlashCommandLine(trimmed: string): boolean {
+  return /^\/[a-z]+(?:\s|$)/i.test(trimmed) && !trimmed.slice(1).includes('/');
+}
+
 function looksLikeReferencePathLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
   if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
-  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return true;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//') && !isSlashCommandLine(trimmed)) return true;
   return false;
 }
 
@@ -101,6 +108,31 @@ function splitShellCommandFromContent(text: string): { shellCommand?: string; co
   };
 }
 
+function isOpenCommandLine(line: string): boolean {
+  const t = line.trim();
+  return t === '/open' || t.startsWith('/open ')
+    || t === '~open' || t.startsWith('~open ');
+}
+
+/** 将 `/open` 拆成命令芯片与说明正文，避免被当成 @ 文件引用。 */
+function splitOpenCommandFromContent(text: string): { openCommand?: string; content: string } {
+  const raw = String(text || '');
+  const lines = raw.split(/\r?\n/);
+  let openLineIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (isOpenCommandLine(lines[i] ?? '')) {
+      openLineIndex = i;
+      break;
+    }
+  }
+  if (openLineIndex < 0) return { content: raw.trim() };
+  const rest = lines.slice(openLineIndex + 1).join('\n').trim();
+  return {
+    openCommand: '/open',
+    content: rest,
+  };
+}
+
 /** 从完整发送文本拆出 UI 展示字段（正文 + 技能/文件引用元数据）。 */
 export function buildUserMessageDisplayFields(
   fullText: string,
@@ -109,19 +141,22 @@ export function buildUserMessageDisplayFields(
 ): UserMessageDisplayFields {
   const text = String(fullText || '');
   const shellSplit = splitShellCommandFromContent(text);
-  const workingText = shellSplit.content;
+  const openSplit = splitOpenCommandFromContent(shellSplit.content);
+  const workingText = openSplit.content;
   const skills = explicitSkills.length > 0
     ? explicitSkills.slice()
     : parseAllSkillRefsFromMessage(workingText);
-  const referencePaths = explicitReferencePaths.length > 0
+  const referencePaths = (explicitReferencePaths.length > 0
     ? explicitReferencePaths.slice()
-    : extractReferencePathsFromContent(workingText);
+    : extractReferencePathsFromContent(workingText)
+  ).filter((p) => !isSlashCommandLine(p.trim()));
 
   let content = stripReferencePathLines(workingText, referencePaths);
   content = stripSkillRefsFromDisplayText(content, skills);
 
   const result: UserMessageDisplayFields = { content };
   if (shellSplit.shellCommand) result.shellCommand = shellSplit.shellCommand;
+  if (openSplit.openCommand) result.openCommand = openSplit.openCommand;
   if (skills.length > 0) result.skills = skills;
   if (referencePaths.length > 0) result.referencePaths = referencePaths;
   return result;

@@ -1,5 +1,5 @@
 /**
- * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /next ~open）。
+ * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /next /open）。
  */
 
 import { promises as fsPromises } from 'node:fs';
@@ -429,7 +429,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
 
         if (isOpenLegacyCommand(content)) {
           if (isSessionProcessing(runSid)) {
-            sendJSON(ws, { type: 'info', message: '当前有任务进行中，请稍后再试 ~open' });
+            sendJSON(ws, { type: 'info', message: '当前有任务进行中，请稍后再试 /open' });
             return;
           }
           const direct: PendingChatMessage = {

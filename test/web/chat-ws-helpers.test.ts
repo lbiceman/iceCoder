@@ -19,11 +19,16 @@ describe('chat-ws-helpers', () => {
     expect(isSessionImageApiUrl('https://example.com/x.png')).toBe(false);
   });
 
-  it('isOpenLegacyCommand 识别 ~open', () => {
+  it('isOpenLegacyCommand 识别 /open 与遗留 ~open', () => {
     expect(isOpenLegacyCommand('~open')).toBe(true);
     expect(isOpenLegacyCommand('~open D:\\work')).toBe(true);
     expect(isOpenLegacyCommand('~open\nD:\\')).toBe(true);
-    expect(isOpenLegacyCommand('open')).toBe(false);
+    expect(isOpenLegacyCommand('/open')).toBe(true);
+    expect(isOpenLegacyCommand('/open\n\n【目录浏览】若用户只给出文件名')).toBe(true);
+    expect(isOpenLegacyCommand('open')).toBe(true);
+    expect(isOpenLegacyCommand('open\n\n【目录浏览】若用户只给出文件名')).toBe(true);
+    expect(isOpenLegacyCommand('open\n\n[Directory browsing] If the user only gives a file name')).toBe(true);
+    expect(isOpenLegacyCommand('open the file')).toBe(false);
   });
 
   it('stripReferencePathLinesForWorkspaceLock 去掉独立路径行', () => {
