@@ -27,6 +27,11 @@ import {
   validateShellBlacklistPatterns,
 } from '../../tools/shell-sandbox.js';
 import { resetSupervisorRuntimeCache } from '../../harness/supervisor/supervisor-runtime-cache.js';
+import {
+  readSupervisorSettingsDocument,
+  validateSupervisorSettingsDocument,
+  writeSupervisorSettingsDocument,
+} from '../../config/supervisor-settings-io.js';
 import { isAppConfigReady } from '../../config/config-readiness.js';
 import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config/resolve-api-key.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
@@ -162,12 +167,16 @@ export interface ConfigRouterOptions {
   onConfigSaved?: (ready: boolean) => void;
   /** 配置文件路径（须与 LLM bootstrap 的 configPath 一致，例如 CLI 下的 ~/.iceCoder/config.json） */
   configPath?: string;
-  /** 配置保存后更新「待配置」状态 */
-  setSetupRequired?: (required: boolean) => void;
+  /** 监管运行时配置路径（须与 ICE_SUPERVISOR_CONFIG_PATH 一致；测试可注入） */
+  supervisorConfigPath?: string;
 }
 
 export function createConfigRouter(options?: ConfigRouterOptions): Router {
   const configFile = resolveConfigPath(options?.configPath);
+  const supervisorOptions = {
+    configPath: options?.supervisorConfigPath,
+    mainConfigPath: configFile,
+  };
   const router = Router();
 
   /**
@@ -308,6 +317,42 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       }
       const message = err instanceof Error ? err.message : '未知错误';
       res.status(500).json({ error: `加载配置失败：${message}` });
+    }
+  });
+
+  /**
+   * GET /api/config/supervisor-runtime — 读取 supervisor-config.json（缺省字段用内置默认值补齐）。
+   */
+  router.get('/supervisor-runtime', async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const { config, configPath } = await readSupervisorSettingsDocument(supervisorOptions);
+      res.json({ success: true, config, configPath });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      res.status(500).json({ error: `加载监管配置失败：${message}` });
+    }
+  });
+
+  /**
+   * PUT /api/config/supervisor-runtime — 整份写入 supervisor-config.json，并把 mode 同步到 config.json。
+   */
+  router.put('/supervisor-runtime', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const raw = (req.body as { config?: unknown })?.config;
+      const validationError = validateSupervisorSettingsDocument(raw);
+      if (validationError) {
+        res.status(400).json({ error: validationError });
+        return;
+      }
+      const saved = await writeSupervisorSettingsDocument(raw, supervisorOptions);
+      resetSupervisorRuntimeCache();
+      res.json({ success: true, config: saved });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知错误';
+      const status = err && typeof err === 'object' && 'code' in err && (err as { code?: string }).code === 'VALIDATE'
+        ? 400
+        : 500;
+      res.status(status).json({ error: `保存监管配置失败：${message}` });
     }
   });
 
