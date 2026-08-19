@@ -438,7 +438,12 @@ window.ChatPage = (function () {
     else openCmdPalette();
   }
 
-  /** 本地 ~ 命令：选中即执行，返回 true 表示已处理 */
+  function isOpenComposerCommand(text) {
+    return text === '~open' || text.indexOf('~open\n') === 0 || text.indexOf('~open ') === 0
+      || text === '/open' || text.indexOf('/open\n') === 0 || text.indexOf('/open ') === 0;
+  }
+
+  /** 本地 ~ 命令：选中即执行；/open 在发送时拦截。返回 true 表示已处理 */
   function executeLocalCommand(text) {
     text = (text || '').trim();
     if (!text) return false;
@@ -449,14 +454,14 @@ window.ChatPage = (function () {
       return true;
     }
 
-    if (text === '~open') {
+    if (isOpenComposerCommand(text)) {
       Cmd.hide();
       Pet.showThinking(false);
       UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
       WS.sendMessage(
-        '~open\n\n' +
-        '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
+        '/open\n\n' +
+        '【目录浏览】若用户只给出文件名（没有文件夹路径），请与最近一次列表中标记为 `[当前路径]` 的目录拼成完整绝对路径，再按需调用 parse_document、parse_pptx_deep 或 open_file。',
       );
       return true;
     }

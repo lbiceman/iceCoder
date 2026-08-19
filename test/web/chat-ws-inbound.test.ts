@@ -164,7 +164,7 @@ describe('chat-ws-inbound', () => {
     sessionProcessing.add(sid);
     const handler = createInboundMessageHandler(dummyDeps);
     await handler(ws, Buffer.from(JSON.stringify({ type: 'message', content: '~open' })));
-    expect(ws.sent[0]).toMatchObject({ type: 'info', message: '当前有任务进行中，请稍后再试 ~open' });
+    expect(ws.sent[0]).toMatchObject({ type: 'info', message: '当前有任务进行中，请稍后再试 /open' });
     expect(runSessionMessageLoop).not.toHaveBeenCalled();
   });
 
@@ -174,6 +174,16 @@ describe('chat-ws-inbound', () => {
     subscribeWsToSession(ws, sid);
     const handler = createInboundMessageHandler(dummyDeps);
     await handler(ws, Buffer.from(JSON.stringify({ type: 'message', content: '~open' })));
+    expect(runSessionMessageLoop).toHaveBeenCalledTimes(1);
+    expect(enqueueAndMaybeKickoff).not.toHaveBeenCalled();
+  });
+
+  it('/open 空闲时走 runSessionMessageLoop 不入队', async () => {
+    const sid = uniqueSid('inbound-slash-open-idle');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({ type: 'message', content: '/open' })));
     expect(runSessionMessageLoop).toHaveBeenCalledTimes(1);
     expect(enqueueAndMaybeKickoff).not.toHaveBeenCalled();
   });

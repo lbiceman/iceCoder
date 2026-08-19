@@ -136,6 +136,7 @@ export async function handleShellCollabRoute(
         id: userMsgId,
         sentAt: now,
         ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
+        ...(display.openCommand ? { openCommand: display.openCommand } : {}),
         ...(display.skills ? { skills: display.skills } : {}),
         ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
         ...(uiImageUrls.length > 0 ? { images: uiImageUrls } : {}),

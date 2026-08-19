@@ -1927,23 +1927,28 @@ window.ChatUI = (function () {
     return row.childNodes.length ? row : null;
   }
 
-  function createMsgShellCommandChip(shellCommand) {
-    if (!shellCommand) return null;
+  function createMsgSlashCommandChip(command, title) {
+    if (!command) return null;
     var row = document.createElement('div');
     row.className = 'msg-shell-command-chips';
     var chip = document.createElement('span');
     chip.className = 'msg-shell-command-chip';
-    chip.title = 'Shell 协作模式';
-    chip.setAttribute('aria-label', 'Shell 协作模式');
-    if (window.AppIcon) {
+    chip.title = title || command;
+    chip.setAttribute('aria-label', title || command);
+    var label = command === '/shell' ? '/shell' : command;
+    if (window.AppIcon && command === '/shell') {
       chip.innerHTML =
         window.AppIcon.html('terminal', { width: 12 }) +
-        '<span class="msg-shell-command-chip-label">/shell</span>';
+        '<span class="msg-shell-command-chip-label">' + label + '</span>';
     } else {
-      chip.textContent = '/shell';
+      chip.innerHTML = '<span class="msg-shell-command-chip-label">' + label + '</span>';
     }
     row.appendChild(chip);
     return row;
+  }
+
+  function createMsgShellCommandChip(shellCommand) {
+    return createMsgSlashCommandChip(shellCommand, 'Shell 协作模式');
   }
 
   function basenameFromPath(fullPath) {
@@ -2008,6 +2013,11 @@ window.ChatUI = (function () {
         el.appendChild(shellRow);
         if (window.AppIcon) window.AppIcon.hydrate(shellRow);
       }
+    }
+
+    if (displayMsg.role === 'user' && displayMsg.openCommand) {
+      var openRow = createMsgSlashCommandChip(displayMsg.openCommand, '目录浏览');
+      if (openRow) el.appendChild(openRow);
     }
 
     if (displayMsg.role === 'user' && displayMsg.skills && displayMsg.skills.length) {

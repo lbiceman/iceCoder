@@ -240,6 +240,7 @@ export type AppendableSessionMessage = {
   skills?: string[];
   referencePaths?: string[];
   shellCommand?: string;
+  openCommand?: string;
   alsoNote?: boolean;
   sentAt?: number;
   completedAt?: number;
@@ -297,6 +298,9 @@ export async function appendMessages(
         }
         if (!incoming.shellCommand && prev.shellCommand) {
           merged.shellCommand = prev.shellCommand;
+        }
+        if (!incoming.openCommand && prev.openCommand) {
+          merged.openCommand = prev.openCommand;
         }
         existing[existingIndex] = merged;
       } else {

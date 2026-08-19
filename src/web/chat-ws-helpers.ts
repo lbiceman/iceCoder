@@ -41,7 +41,18 @@ export function isSessionImageApiUrl(url: string): boolean {
     && url.includes('/images/');
 }
 
+/** 前端 open 气泡注入的目录浏览提示（有无 `~` 都算） */
+const OPEN_UI_HINT_RE = /\[Directory browsing\]|【(?:文件浏览器模式|目录列举|目录浏览)/;
+
+function isOpenCommandLine(line: string): boolean {
+  return line === '~open' || line === '/open' || line === 'open';
+}
+
 export function isOpenLegacyCommand(content: string): boolean {
   const trimmed = content.trim();
-  return trimmed === '~open' || trimmed.startsWith('~open\n') || trimmed.startsWith('~open ');
+  if (trimmed === '~open' || trimmed.startsWith('~open\n') || trimmed.startsWith('~open ')) return true;
+  if (trimmed === '/open' || trimmed.startsWith('/open\n') || trimmed.startsWith('/open ')) return true;
+  const firstLine = trimmed.split(/\r?\n/, 1)[0].trim();
+  if (!isOpenCommandLine(firstLine)) return false;
+  return trimmed === firstLine || OPEN_UI_HINT_RE.test(trimmed);
 }

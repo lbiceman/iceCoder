@@ -41,4 +41,13 @@ describe('buildUserMessageDisplayFields', () => {
     expect(result.referencePaths).toEqual([ref]);
     expect(result.content).toBe('分析一下');
   });
+
+  it('does not treat /open as an @ file ref, and splits it into openCommand', () => {
+    const result = buildUserMessageDisplayFields(
+      '/open\n\n【目录浏览】若用户只给出文件名',
+    );
+    expect(result.openCommand).toBe('/open');
+    expect(result.referencePaths).toBeUndefined();
+    expect(result.content).toBe('【目录浏览】若用户只给出文件名');
+  });
 });

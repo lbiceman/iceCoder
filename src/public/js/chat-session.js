@@ -155,6 +155,7 @@ window.ChatSession = (function () {
       o.images = persistableImages;
     }
     if (m.shellCommand) o.shellCommand = m.shellCommand;
+    if (m.openCommand) o.openCommand = m.openCommand;
     if (m.alsoNote) o.alsoNote = true;
     if (Array.isArray(m.skills) && m.skills.length) o.skills = m.skills.slice();
     if (Array.isArray(m.referencePaths) && m.referencePaths.length) {
@@ -183,6 +184,7 @@ window.ChatSession = (function () {
     if (typeof raw.sentAt === 'number' && isFinite(raw.sentAt)) o.sentAt = raw.sentAt;
     if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
     if (raw.shellCommand) o.shellCommand = raw.shellCommand;
+    if (raw.openCommand) o.openCommand = raw.openCommand;
     if (raw.alsoNote) o.alsoNote = true;
     if (Array.isArray(raw.skills) && raw.skills.length) o.skills = raw.skills.slice();
     if (Array.isArray(raw.referencePaths) && raw.referencePaths.length) {
@@ -301,8 +303,37 @@ window.ChatSession = (function () {
     var trimmed = String(line || '').trim();
     if (!trimmed) return false;
     if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
-    if (trimmed.charAt(0) === '/' && trimmed.indexOf('//') !== 0) return true;
+    if (trimmed.charAt(0) === '/' && trimmed.indexOf('//') !== 0 && !isSlashCommandLine(trimmed)) return true;
     return false;
+  }
+
+  function isSlashCommandLine(trimmed) {
+    return /^\/[a-z]+(?:\s|$)/i.test(trimmed) && trimmed.slice(1).indexOf('/') < 0;
+  }
+
+  function isOpenCommandLine(line) {
+    var t = String(line || '').trim();
+    return t === '/open' || t.indexOf('/open ') === 0
+      || t === '~open' || t.indexOf('~open ') === 0;
+  }
+
+  function splitOpenCommandFromContent(text, existingOpenCommand) {
+    var raw = String(text || '');
+    var lines = raw.split(/\r?\n/);
+    var openLineIndex = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (isOpenCommandLine(lines[i])) {
+        openLineIndex = i;
+        break;
+      }
+    }
+    if (openLineIndex < 0) {
+      return { openCommand: existingOpenCommand || '', content: raw.trim() };
+    }
+    return {
+      openCommand: existingOpenCommand || '/open',
+      content: lines.slice(openLineIndex + 1).join('\n').trim(),
+    };
   }
 
   function parseSkillRefsFromContent(text) {
@@ -411,12 +442,19 @@ window.ChatSession = (function () {
       text = shellSplit.content;
       cloned.content = text;
     }
+    var openSplit = splitOpenCommandFromContent(text, cloned.openCommand);
+    if (openSplit.openCommand) {
+      cloned.openCommand = openSplit.openCommand;
+      text = openSplit.content;
+      cloned.content = text;
+    }
     var skills = Array.isArray(cloned.skills) && cloned.skills.length
       ? cloned.skills.slice()
       : parseSkillRefsFromContent(text);
-    var referencePaths = Array.isArray(cloned.referencePaths) && cloned.referencePaths.length
+    var referencePaths = (Array.isArray(cloned.referencePaths) && cloned.referencePaths.length
       ? cloned.referencePaths.slice()
-      : extractReferencePathsFromContent(text);
+      : extractReferencePathsFromContent(text)
+    ).filter(function (p) { return !isSlashCommandLine(String(p || '').trim()); });
     cloned.content = stripRefsFromDisplayContent(text, skills, referencePaths);
     if (skills.length > 0) cloned.skills = skills;
     else delete cloned.skills;
@@ -511,6 +549,9 @@ window.ChatSession = (function () {
       if (!enriched.shellCommand && cur.shellCommand) {
         enriched.shellCommand = cur.shellCommand;
       }
+      if (!enriched.openCommand && cur.openCommand) {
+        enriched.openCommand = cur.openCommand;
+      }
       var changed = false;
       if (String(cur.content || '') !== String(enriched.content || '')) {
         cur.content = enriched.content || '';
@@ -519,6 +560,11 @@ window.ChatSession = (function () {
       if ((cur.shellCommand || '') !== (enriched.shellCommand || '')) {
         if (enriched.shellCommand) cur.shellCommand = enriched.shellCommand;
         else delete cur.shellCommand;
+        changed = true;
+      }
+      if ((cur.openCommand || '') !== (enriched.openCommand || '')) {
+        if (enriched.openCommand) cur.openCommand = enriched.openCommand;
+        else delete cur.openCommand;
         changed = true;
       }
       if (enriched.alsoNote) {
@@ -611,6 +657,10 @@ window.ChatSession = (function () {
         merged.shellCommand = local.shellCommand;
         patched = true;
       }
+      if (!merged.openCommand && local.openCommand) {
+        merged.openCommand = local.openCommand;
+        patched = true;
+      }
       if (patched) serverMsgs[i] = enrichUserMessageForDisplay(merged);
     }
   }
@@ -669,6 +719,8 @@ window.ChatSession = (function () {
       msg.content = enriched.content;
       if (enriched.shellCommand) msg.shellCommand = enriched.shellCommand;
       else delete msg.shellCommand;
+      if (enriched.openCommand) msg.openCommand = enriched.openCommand;
+      else delete msg.openCommand;
       if (enriched.skills) msg.skills = enriched.skills;
       else delete msg.skills;
       if (enriched.referencePaths) msg.referencePaths = enriched.referencePaths;
