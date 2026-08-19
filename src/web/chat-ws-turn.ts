@@ -451,7 +451,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   }
 
   const effectiveAssembled = sessionToolCtx.shellCollabActive
-    ? await assembleShellCollabPrompt(assembled)
+    ? assembleShellCollabPrompt(assembled)
     : assembled;
   const mcpRuntimeContext = sessionToolCtx.mcpRuntimeContext;
   const docToolsContext = sessionToolCtx.shellCollabActive || shouldDisableRuntimeTools()

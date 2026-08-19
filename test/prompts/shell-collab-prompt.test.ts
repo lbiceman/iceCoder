@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PromptAssembler } from '../../src/prompts/prompt-assembler.js';
-import {
-  applyShellCollabPromptOverlay,
-  loadShellCopilotSkillBody,
-} from '../../src/prompts/shell-collab-prompt.js';
+import { applyShellCollabPromptOverlay } from '../../src/prompts/shell-collab-prompt.js';
 import {
   createShellCopilotSection,
   getDefaultSections,
@@ -83,14 +80,6 @@ describe('shell-collab prompt (Wave 7.2)', () => {
     expect(overlay.systemPrompt).not.toContain('old examples');
     expect(overlay.systemPrompt).toContain('new examples');
     expect(overlay.systemPromptSections.filter((section) => section.id === 'shell_copilot')).toHaveLength(1);
-  });
-
-  it('loadShellCopilotSkillBody 可读 repo 内 shellCopilot/skill.md', async () => {
-    const body = await loadShellCopilotSkillBody();
-    expect(body).toBeTruthy();
-    expect(body).toContain('SSH');
-    expect(body).toContain('帮我执行');
-    expect(body).toContain('awaiting_input');
   });
 
   it('getDefaultSections 仍含被 Shell 模式剔除的段落（普通会话不受影响）', () => {

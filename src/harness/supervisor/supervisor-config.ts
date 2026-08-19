@@ -38,12 +38,12 @@ export interface LoadSupervisorConfigOptions {
   dataDir?: string;
 }
 
-const DEFAULT_EVENT_TIMELINE: EventTimelineConfig = {
+export const DEFAULT_EVENT_TIMELINE: EventTimelineConfig = {
   enabled: true,
   persistPath: 'data/runtime/supervisor-events.jsonl',
 };
 
-const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
+export const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
   pendingStepsEnterThreshold: 2,
   writeTargetsEnterThreshold: 1,
   diffLinesEnterThreshold: 200,

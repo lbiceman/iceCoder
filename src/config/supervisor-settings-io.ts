@@ -4,9 +4,15 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { SupervisorConfigFile } from '../types/supervisor.js';
+import type {
+  EventTimelineConfig,
+  ExecutionModeConfig,
+  SupervisorConfigFile,
+} from '../types/supervisor.js';
 import {
   buildSupervisorConfigFile,
+  DEFAULT_EVENT_TIMELINE,
+  DEFAULT_EXECUTION_MODE,
   resolveSupervisorConfigFilePath,
   type LoadSupervisorConfigOptions,
 } from '../harness/supervisor/supervisor-config.js';
@@ -190,8 +196,16 @@ export async function writeSupervisorSettingsDocument(
     goalDrift: { ...merged.goalDrift, ...input.goalDrift },
     snapshotConfidence: { ...merged.snapshotConfidence, ...input.snapshotConfidence },
     correctionBudget: { ...merged.correctionBudget, ...input.correctionBudget },
-    eventTimeline: { ...merged.eventTimeline, ...input.eventTimeline },
-    executionMode: { ...merged.executionMode, ...input.executionMode },
+    eventTimeline: {
+      ...DEFAULT_EVENT_TIMELINE,
+      ...merged.eventTimeline,
+      ...input.eventTimeline,
+    } satisfies EventTimelineConfig,
+    executionMode: {
+      ...DEFAULT_EXECUTION_MODE,
+      ...merged.executionMode,
+      ...input.executionMode,
+    } satisfies ExecutionModeConfig,
   };
   const configPath = resolveSupervisorConfigFilePath(options);
   await fs.mkdir(path.dirname(configPath), { recursive: true });

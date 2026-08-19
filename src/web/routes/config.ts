@@ -169,6 +169,8 @@ export interface ConfigRouterOptions {
   configPath?: string;
   /** 监管运行时配置路径（须与 ICE_SUPERVISOR_CONFIG_PATH 一致；测试可注入） */
   supervisorConfigPath?: string;
+  /** 配置保存后同步进程内 setup 门闩（HTTP 503 / WebSocket 拒绝） */
+  setSetupRequired?: (required: boolean) => void;
 }
 
 export function createConfigRouter(options?: ConfigRouterOptions): Router {
