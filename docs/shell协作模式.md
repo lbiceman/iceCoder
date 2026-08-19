@@ -175,6 +175,6 @@ PTY 在服务端按会话保持；刷新后 **同一 session** 重连可恢复 S
 
 | 文档 | 内容 |
 |------|------|
-| [`data/skills/shellCopilot/skill.md`](../data/skills/shellCopilot/skill.md) | AI 侧 Shell Copilot 工作规则 |
+| [`src/prompts/sections.ts`](../src/prompts/sections.ts) `createShellCopilotSection` | AI 侧 Shell Copilot 工作规则 |
 | [`requirement/shell-交互协管-slash-shell.md`](./requirement/shell-交互协管-slash-shell.md) | 完整需求与设计 |
 | [`使用文档.md` §桌面打包](./使用文档.md#桌面打包electron) | 打包时 `node-pty` 编译说明 |

@@ -1,6 +1,6 @@
 {
   "name": "ice-coder",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "AI coding assistant with tool-use capabilities for PC and mobile",
   "main": "dist/index.js",
   "bin": {
@@ -10,7 +10,6 @@
     "dist/",
     "data/config.example.json",
     "data/supervisor-config.example.json",
-    "data/skills/shellCopilot/skill.md",
     "data/skills/创建技能.md",
     "data/system-prompt.md",
     "package.json",

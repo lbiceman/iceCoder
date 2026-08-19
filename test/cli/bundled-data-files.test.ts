@@ -15,11 +15,11 @@ describe('bundled-data-files', () => {
     expect(fromPkg).toEqual([...BUNDLED_DATA_FILES].sort());
   });
 
-  it('skills 打包清单包含创建技能模板与 Shell Copilot', () => {
+  it('skills 打包清单仅包含创建技能模板', () => {
     const skillFiles = BUNDLED_DATA_FILES.filter((f) => f.startsWith('data/skills/'));
     expect(skillFiles.sort()).toEqual(
       BUNDLED_SKILL_FILES.map((file) => `data/skills/${file}`).sort(),
     );
-    expect(skillFiles).toContain('data/skills/shellCopilot/skill.md');
+    expect(skillFiles).toEqual(['data/skills/创建技能.md']);
   });
 });
