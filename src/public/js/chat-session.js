@@ -225,7 +225,8 @@ window.ChatSession = (function () {
 
   function fetchServerMessages(callback) {
     syncSessionIdFromStore();
-    var url = '/api/sessions/' + SESSION_ID + '?_t=' + Date.now();
+    var requestedId = SESSION_ID;
+    var url = '/api/sessions/' + requestedId + '?_t=' + Date.now();
     fetch(url)
       .then(function (res) {
         if (res && 'ok' in res && !res.ok) {
@@ -234,19 +235,22 @@ window.ChatSession = (function () {
         return res.json();
       })
       .then(function (data) {
+        if (SESSION_ID !== requestedId) return;
         var msgs = (data.messages && data.messages.length > 0) ? data.messages : [];
         if (callback) callback(msgs, { ok: true });
       })
       .catch(function () {
+        if (SESSION_ID !== requestedId) return;
         if (callback) callback([], { ok: false });
       });
   }
 
-  var structuredEmptyWarned = false;
+  var structuredEmptyWarnedBySession = {};
 
   function warnStructuredEmptyOnce(sessionId) {
-    if (structuredEmptyWarned) return;
-    structuredEmptyWarned = true;
+    if (!sessionId || structuredEmptyWarnedBySession[sessionId]) return;
+    if (!messages || messages.length === 0) return;
+    structuredEmptyWarnedBySession[sessionId] = true;
     console.warn(
       '[ChatSession] structured messages 为空（session=' + sessionId + '）。'
       + '历史 diff 无法还原；新任务完成后会自动生成 .structured.json。',
@@ -266,17 +270,20 @@ window.ChatSession = (function () {
 
   function fetchStructuredMessages(callback) {
     syncSessionIdFromStore();
-    var url = '/api/sessions/' + SESSION_ID + '/structured?_t=' + Date.now();
+    var requestedId = SESSION_ID;
+    var url = '/api/sessions/' + requestedId + '/structured?_t=' + Date.now();
     fetch(url)
       .then(function (res) { return res.json(); })
       .then(function (data) {
+        if (SESSION_ID !== requestedId) return;
         structuredMessagesCache = Array.isArray(data.messages) ? data.messages : [];
         if (structuredMessagesCache.length === 0) {
-          warnStructuredEmptyOnce(SESSION_ID);
+          warnStructuredEmptyOnce(requestedId);
         }
         if (callback) callback(structuredMessagesCache);
       })
       .catch(function () {
+        if (SESSION_ID !== requestedId) return;
         structuredMessagesCache = [];
         if (callback) callback([]);
       });
@@ -805,7 +812,6 @@ window.ChatSession = (function () {
     currentToolBatch = loadLiveToolBatch();
     lastSessionSyncSig = '';
     structuredMessagesCache = null;
-    structuredEmptyWarned = false;
   }
 
   function getActiveId() { return SESSION_ID; }
