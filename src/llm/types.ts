@@ -104,7 +104,8 @@ export interface LLMOptions {
   tools?: ToolDefinition[];
   /**
    * 用户中断信号 — 触发时 provider 应尽快断开正在进行的 HTTP/流。
-   * 由 LLMAdapter.stream/chat 从 setAbortSignal() 注入；provider 不需要、也不应自行清理监听。
+   * 由调用方通过 options.signal 传入（每轮 LLM 调用各带自己的 AbortSignal）；
+   * provider 不需要、也不应自行清理监听。
    */
   signal?: AbortSignal | null;
   /** 单次 HTTP 请求超时（ms）；未设置时使用适配器构造时的默认值 */

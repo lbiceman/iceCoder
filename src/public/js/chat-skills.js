@@ -496,6 +496,11 @@ window.ChatSkills = (function () {
     getSelectedSkills: function () {
       return selectedSkills.slice();
     },
+    setSelectedSkills: function (names) {
+      selectedSkills = Array.isArray(names) ? names.slice() : [];
+      clearChipSelection();
+      renderChipBar();
+    },
     focusChipBarEnd: focusChipBarEnd,
     isChipBarFocused: isChipBarFocused,
     isSkillTriggerVal: isSkillTriggerVal,

@@ -230,5 +230,17 @@ window.ChatFile = (function () {
     getPendingImages: getPendingImages,
     hasPendingImageLoads: hasPendingImageLoads,
     renderPendingImages: renderPendingImages,
+    getComposerSnapshot: function () {
+      return {
+        uploadedFiles: uploadedFiles.slice(),
+        pendingImages: pendingImages.slice(),
+      };
+    },
+    setComposerSnapshot: function (snap) {
+      uploadedFiles = snap && Array.isArray(snap.uploadedFiles) ? snap.uploadedFiles.slice() : [];
+      pendingImages = snap && Array.isArray(snap.pendingImages) ? snap.pendingImages.slice() : [];
+      renderUploadedFiles();
+      renderPendingImages();
+    },
   };
 })();

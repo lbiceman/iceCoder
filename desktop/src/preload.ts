@@ -48,9 +48,15 @@ const api = {
   quit: () => ipcRenderer.send(IPC.APP_QUIT),
   openDevTools: () => ipcRenderer.send(IPC.APP_DEVTOOLS),
 
-  /** 任务完成系统通知（payload: { success: boolean; summary: string }）。 */
-  notifyTaskDone: (payload: { success: boolean; summary: string }) =>
+  /** 任务完成系统通知（payload: { success: boolean; summary: string; sessionId?: string }）。 */
+  notifyTaskDone: (payload: { success: boolean; summary: string; sessionId?: string }) =>
     ipcRenderer.send(IPC.TASK_DONE_NOTIFY, payload),
+
+  onTaskDoneNotifyClick: (cb: (sessionId: string) => void) => {
+    const listener = (_e: IpcRendererEvent, sessionId: string) => cb(sessionId);
+    ipcRenderer.on(IPC.TASK_DONE_NOTIFY_CLICK, listener);
+    return () => ipcRenderer.removeListener(IPC.TASK_DONE_NOTIFY_CLICK, listener);
+  },
 
   /** 监听 main → renderer 的事件。 */
   onPetMode: (cb: (mode: string) => void) => {

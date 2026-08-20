@@ -28,10 +28,6 @@ window.ChatCommands = (function () {
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
-  var OPEN_BROWSE_PAYLOAD =
-    '/open\n\n' +
-    '【目录浏览】若用户只给出文件名（没有文件夹路径），请与最近一次列表中标记为 `[当前路径]` 的目录拼成完整绝对路径，再按需调用 parse_document、parse_pptx_deep 或 open_file。';
-
   var cmdSelectedIndex = 0;
   var cmdFiltered = [];
   var cmdActivePrefix = '';
@@ -55,7 +51,6 @@ window.ChatCommands = (function () {
   function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
   function getTildeCommands() { return remoteMode ? TILDE_REMOTE_COMMANDS : TILDE_PC_COMMANDS; }
   function getSlashCommands() { return SLASH_LOCAL_COMMANDS; }
-  function getLocalCommands() { return getTildeCommands().concat(getSlashCommands()); }
 
   function updateActiveItem() {
     var dd = window.ChatDropdown && window.ChatDropdown.getContainer();
@@ -264,15 +259,6 @@ window.ChatCommands = (function () {
 
   // ---- 命令处理 ----
 
-  function handleScan(qrModule, messages, appendFn, saveFn) {
-    qrModule.showQrCode(messages, appendFn, saveFn);
-  }
-
-  function handleOpen(ws, ui) {
-    ui.showThinking(false);
-    ws.sendMessage(OPEN_BROWSE_PAYLOAD);
-  }
-
   function fetchJsonWithTimeout(url, timeoutMs) {
     var ms = timeoutMs || 30000;
     if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
@@ -382,9 +368,6 @@ window.ChatCommands = (function () {
     handleKeydown: handleKeydown,
     handleInput: handleInput,
     applySelection: applySelection,
-    getLocalCommands: getLocalCommands,
-    handleScan: handleScan,
-    handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
     handleSupervisor: handleSupervisor,
   };

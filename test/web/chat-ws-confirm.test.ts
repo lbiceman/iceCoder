@@ -6,6 +6,10 @@ vi.mock('../../src/web/chat-ws-broadcast.js', () => ({
   broadcastToSession: (_sid: string, data: unknown) => {
     broadcasts.push(data);
   },
+  hasSessionSubscribers: () => true,
+  onAfterSubscribe: () => {},
+  onAfterUnsubscribe: () => {},
+  sendJSON: () => {},
 }));
 
 afterEach(() => {

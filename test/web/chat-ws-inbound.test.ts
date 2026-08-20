@@ -2,12 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { WebSocket } from 'ws';
 import { createInboundMessageHandler } from '../../src/web/chat-ws-inbound.js';
-import { subscribeWsToSession, clearBroadcastState } from '../../src/web/chat-ws-broadcast.js';
+import { subscribeWsToSession, clearBroadcastState, getSubscribedSessionId, addChatClient } from '../../src/web/chat-ws-broadcast.js';
 import {
   getSessionFile,
   getSessionsDir,
   sessionAbortControllers,
   sessionProcessing,
+  setActiveSessionId,
+  getActiveSessionId,
+  setSessionRunPhase,
+  getSessionRunPhase,
 } from '../../src/web/chat-ws-runtime.js';
 import {
   ensureRunningTurn,
@@ -67,6 +71,7 @@ afterEach(async () => {
     clearRunningTurn(sid);
     sessionProcessing.delete(sid);
     sessionAbortControllers.delete(sid);
+    setSessionRunPhase(sid, 'idle');
     await fs.unlink(getSessionFile(sid)).catch(() => {});
     await fs.unlink(getSessionFile(sid).replace(/\.json$/, '.structured.json')).catch(() => {});
     await getTaskQueueManager(getSessionsDir()).clearSession(sid).catch(() => {});
@@ -221,22 +226,72 @@ describe('chat-ws-inbound', () => {
     expect(sessionAbortControllers.has(sid)).toBe(true);
   });
 
-  it('switch_session 目标等于当前会话时直接 ok', async () => {
+  it('switch_session 目标等于当前订阅时直接 ok', async () => {
     const ws = fakeWs();
-    const { getActiveSessionId } = await import('../../src/web/chat-ws-runtime.js');
+    const sid = uniqueSid('inbound-switch-same');
+    subscribeWsToSession(ws, sid);
     const handler = createInboundMessageHandler(dummyDeps);
     await handler(ws, Buffer.from(JSON.stringify({
       type: 'switch_session',
-      sessionId: getActiveSessionId(),
+      sessionId: sid,
     })));
-    expect(ws.sent[0]).toMatchObject({ type: 'session_switched', ok: true });
+    expect(ws.sent[0]).toMatchObject({ type: 'session_switched', ok: true, sessionId: sid });
+    expect(sessionAbortControllers.has(sid)).toBe(false);
   });
 
   it('switch_session 空 sessionId 视为当前会话', async () => {
     const ws = fakeWs();
+    const sid = uniqueSid('inbound-switch-empty');
+    subscribeWsToSession(ws, sid);
     const handler = createInboundMessageHandler(dummyDeps);
     await handler(ws, Buffer.from(JSON.stringify({ type: 'switch_session', sessionId: '' })));
-    expect(ws.sent[0]).toMatchObject({ type: 'session_switched', ok: true });
+    expect(ws.sent[0]).toMatchObject({ type: 'session_switched', ok: true, sessionId: sid });
+  });
+
+  it('switch_session 切走不 abort leaving 会话', async () => {
+    const leaving = uniqueSid('inbound-leave');
+    const target = uniqueSid('inbound-target');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, leaving);
+    sessionProcessing.add(leaving);
+    const ctrl = new AbortController();
+    sessionAbortControllers.set(leaving, ctrl);
+    const prevFocused = getActiveSessionId();
+    const handler = createInboundMessageHandler(dummyDeps);
+    try {
+      await handler(ws, Buffer.from(JSON.stringify({ type: 'switch_session', sessionId: target })));
+      expect(ctrl.signal.aborted).toBe(false);
+      expect(sessionAbortControllers.get(leaving)).toBe(ctrl);
+      const switched = ws.sent.find((m) =>
+        (m as { type?: string; ok?: boolean }).type === 'session_switched'
+        && (m as { ok?: boolean }).ok === true,
+      ) as { sessionId: string; canRestore?: boolean };
+      expect(switched.sessionId).toBe(target);
+      expect(typeof switched.canRestore).toBe('boolean');
+    } finally {
+      setActiveSessionId(prevFocused);
+    }
+  });
+
+  it('switch_session 幂等看订阅 id，不看进程级 activeSessionId', async () => {
+    const leaving = uniqueSid('inbound-sub');
+    const focused = uniqueSid('inbound-focused');
+    const target = uniqueSid('inbound-goto');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, leaving);
+    const prevFocused = getActiveSessionId();
+    setActiveSessionId(focused);
+    try {
+      const handler = createInboundMessageHandler(dummyDeps);
+      await handler(ws, Buffer.from(JSON.stringify({ type: 'switch_session', sessionId: target })));
+      expect(getSubscribedSessionId(ws)).toBe(target);
+      expect(ws.sent.some((m) =>
+        (m as { type?: string; ok?: boolean }).type === 'session_switched'
+        && (m as { ok?: boolean }).ok === true,
+      )).toBe(true);
+    } finally {
+      setActiveSessionId(prevFocused);
+    }
   });
 
   it('restore_runtime / delete_user_message 缺少 messageId', async () => {
@@ -312,5 +367,35 @@ describe('chat-ws-inbound', () => {
     const handler = createInboundMessageHandler(dummyDeps);
     await handler(ws, Buffer.from(JSON.stringify({ type: 'clear_session' })));
     expect(ws.sent[0]).toMatchObject({ type: 'session_cleared', ok: true, sessionId: sid, bgTasks: [] });
+  });
+
+  it('ack_session_run 将 done 广播为 idle，全员可见', async () => {
+    const sid = uniqueSid('inbound-ack-done');
+    const ws = fakeWs();
+    const watcher = fakeWs();
+    subscribeWsToSession(ws, sid);
+    addChatClient(watcher);
+    setSessionRunPhase(sid, 'done');
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({ type: 'ack_session_run', sessionId: sid })));
+    expect(getSessionRunPhase(sid)).toBe('idle');
+    expect(watcher.sent.some((m) => {
+      const row = m as { type?: string; sessionId?: string; phase?: string };
+      return row.type === 'session_run_state' && row.sessionId === sid && row.phase === 'idle';
+    })).toBe(true);
+  });
+
+  it('ack_session_run 不能清 running，也不能清未订阅会话', async () => {
+    const a = uniqueSid('inbound-ack-run');
+    const b = uniqueSid('inbound-ack-other');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, a);
+    setSessionRunPhase(a, 'running');
+    setSessionRunPhase(b, 'error');
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({ type: 'ack_session_run', sessionId: a })));
+    expect(getSessionRunPhase(a)).toBe('running');
+    await handler(ws, Buffer.from(JSON.stringify({ type: 'ack_session_run', sessionId: b })));
+    expect(getSessionRunPhase(b)).toBe('error');
   });
 });

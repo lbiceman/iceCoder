@@ -37,6 +37,7 @@ const INBOUND_TYPES = [
   'confirm_reply',
   'stop',
   'bg_task_stop',
+  'ack_session_run',
   'restore_runtime',
   'delete_user_message',
   'switch_session',
@@ -172,6 +173,7 @@ describe('chat-ws 拆分', () => {
     const required = [
       'connected', 'pong', 'status', 'error', 'info',
       'session_cleared', 'session_switched', 'session_updated',
+      'sessions_index_updated',
       'restore_failed', 'runtime_restored',
       'delete_message_failed', 'message_deleted',
       'also_rejected', 'also_note_appended',

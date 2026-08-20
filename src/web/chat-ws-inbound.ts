@@ -19,7 +19,6 @@ import { clearSessionBgTasks } from '../session/bg-tasks-store.js';
 import { persistLastActiveSessionId } from './last-active-session.js';
 import { updateSessionMetadataAfterMessageDelete } from './session-title.js';
 import { writeStructuredMessagesFile } from './session-structured-io.js';
-import { resetSupervisorRuntimeCache } from '../harness/supervisor/supervisor-runtime-cache.js';
 import { clearHarnessRuntimeState } from '../harness/harness-runtime-registry.js';
 import { loadCheckpointMessageIds } from '../harness/intent-checkpoint-store.js';
 import {
@@ -41,16 +40,18 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { parseClientMessageId, isOpenLegacyCommand } from './chat-ws-helpers.js';
 import { handleBgTaskStop, rebindBgTaskPusher, unwireBgTasksDiskSync, buildBgTasksForSession } from './chat-ws-bg-tasks.js';
 import {
+  broadcastSessionRunState,
   broadcastSessionUpdated,
   broadcastToSession,
   getSubscribedSessionId,
   sendJSON,
   subscribeWsToSession,
 } from './chat-ws-broadcast.js';
-import { handleConfirmReply } from './chat-ws-confirm.js';
+import { handleConfirmReply, replayPendingConfirmsToWs } from './chat-ws-confirm.js';
 import {
   appendMessages,
   broadcastHarnessState,
+  buildConnectedPayloadExtras,
   buildEnqueueInput,
   flushStructuredMessagesNow,
   loadStructuredMessages,
@@ -68,12 +69,13 @@ import {
   getActiveSessionId,
   getCachedMessages,
   getSupervisorRuntime,
-  hasActiveSessionRun,
   isSessionProcessing,
   resolveSessionWorkspacePayload,
   sessionProcessing,
   setActiveSessionId,
   setCachedMessages,
+  setSessionRunPhase,
+  getSessionRunPhase,
 } from './chat-ws-runtime.js';
 import {
   enqueueAndMaybeKickoff,
@@ -95,12 +97,32 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         return;
       }
 
+      if (msg.type === 'ack_session_run') {
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) return;
+        const target = typeof msg.sessionId === 'string' && msg.sessionId.trim()
+          ? msg.sessionId.trim()
+          : sid;
+        if (target !== sid) return;
+        const phase = getSessionRunPhase(target);
+        if (phase !== 'done' && phase !== 'error') return;
+        setSessionRunPhase(target, 'idle');
+        broadcastSessionRunState({ type: 'session_run_state', sessionId: target, phase: 'idle' });
+        return;
+      }
+
       if (msg.type === 'clear_session') {
-        const sid = getSubscribedSessionId(ws) || getActiveSessionId();
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) {
+          sendJSON(ws, { type: 'session_cleared', ok: false, error: '未订阅会话' });
+          return;
+        }
         try {
           stopAllShellWorkForSession(sid, 'clear_session');
           abortSession(sid);
           sessionProcessing.delete(sid);
+          setSessionRunPhase(sid, 'idle');
+          broadcastSessionRunState({ type: 'session_run_state', sessionId: sid, phase: 'idle' });
           clearRunningTurn(sid);
           setCachedMessages(sid, []);
           await writeStructuredMessagesFile(SESSIONS_DIR, sid, []);
@@ -128,13 +150,15 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
 
       if (msg.type === 'confirm_reply') {
         const cid = typeof msg.confirmId === 'string' ? msg.confirmId : '';
-        const subscribedSid = getSubscribedSessionId(ws) || getActiveSessionId();
+        const subscribedSid = getSubscribedSessionId(ws);
+        if (!subscribedSid) return;
         handleConfirmReply(cid, !!msg.approved, subscribedSid);
         return;
       }
 
       if (msg.type === 'stop') {
-        const sid = getSubscribedSessionId(ws) || getActiveSessionId();
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) return;
         stopForegroundShellWorkForSession(sid, 'chat stop');
         if (abortSession(sid)) {
           console.log(`[chat-ws] 用户请求中断任务 session=${sid}`);
@@ -144,15 +168,19 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
 
       if (msg.type === 'bg_task_stop') {
         const taskId = typeof msg.taskId === 'string' ? msg.taskId.trim() : '';
-        await handleBgTaskStop(ws, taskId, getActiveSessionId());
+        await handleBgTaskStop(ws, taskId);
         return;
       }
 
       if (msg.type === 'restore_runtime') {
         const messageId = typeof msg.messageId === 'string' ? msg.messageId.trim() : '';
-        const sid = getSubscribedSessionId(ws) || getActiveSessionId();
         if (!messageId) {
           sendJSON(ws, { type: 'restore_failed', error: '缺少 messageId。' });
+          return;
+        }
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) {
+          sendJSON(ws, { type: 'restore_failed', error: '未订阅会话' });
           return;
         }
         if (!canAcceptRuntimeRestore(sid)) {
@@ -207,9 +235,13 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
 
       if (msg.type === 'delete_user_message') {
         const messageId = typeof msg.messageId === 'string' ? msg.messageId.trim() : '';
-        const sid = getSubscribedSessionId(ws) || getActiveSessionId();
         if (!messageId) {
           sendJSON(ws, { type: 'delete_message_failed', error: '缺少 messageId。' });
+          return;
+        }
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) {
+          sendJSON(ws, { type: 'delete_message_failed', error: '未订阅会话' });
           return;
         }
         if (!canAcceptRuntimeRestore(sid)) {
@@ -267,80 +299,80 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
 
       if (msg.type === 'switch_session') {
         const targetId = String(msg.sessionId || '');
-        if (!targetId || targetId === getActiveSessionId()) {
-          sendJSON(ws, { type: 'session_switched', ok: true, sessionId: getActiveSessionId() });
+        const subscribedId = getSubscribedSessionId(ws);
+        if (!targetId || targetId === subscribedId) {
+          sendJSON(ws, { type: 'session_switched', ok: true, sessionId: subscribedId || getActiveSessionId() });
           return;
         }
-        const leavingSessionId = getSubscribedSessionId(ws) || getActiveSessionId();
-        const shouldStopLeavingShells = hasActiveSessionRun(leavingSessionId);
-        if (shouldStopLeavingShells) {
-          stopForegroundShellWorkForSession(leavingSessionId, 'session switch');
-        }
-        if (abortSession(leavingSessionId)) {
-          console.log(`[chat-ws] switch_session 时中断会话 ${leavingSessionId} 的任务`);
-        }
-        const oldSessionId = getActiveSessionId();
+        const leavingSessionId = subscribedId;
+        const prevFocused = getActiveSessionId();
         try {
-          await flushStructuredMessagesNow(oldSessionId);
+          if (leavingSessionId) {
+            await flushStructuredMessagesNow(leavingSessionId);
+          }
         } catch (err) {
           console.error('[chat-ws] switch_session flush failed:', err);
-          sendJSON(ws, { type: 'session_switched', ok: false, reason: 'flush_failed', sessionId: oldSessionId });
+          sendJSON(ws, {
+            type: 'session_switched',
+            ok: false,
+            reason: 'flush_failed',
+            sessionId: leavingSessionId || prevFocused,
+          });
           return;
-        }
-        let supervisorResetFailed = false;
-        try {
-          resetSupervisorRuntimeCache();
-        } catch (err) {
-          supervisorResetFailed = true;
-          console.warn('[chat-ws] supervisor reset on switch_session failed:', err);
         }
         try {
           setActiveSessionId(targetId);
           void persistLastActiveSessionId(targetId);
           let loaded: UnifiedMessage[] | undefined;
           try {
-            loaded = await loadStructuredMessages(getActiveSessionId());
+            loaded = await loadStructuredMessages(targetId);
           } catch (loadErr) {
             console.warn('[chat-ws] switch_session load structured failed, starting empty:', loadErr);
             loaded = undefined;
           }
-          setCachedMessages(getActiveSessionId(), loaded ?? []);
-          subscribeWsToSession(ws, getActiveSessionId());
+          setCachedMessages(targetId, loaded ?? []);
+          subscribeWsToSession(ws, targetId);
           try {
-            await rebindBgTaskPusher(getActiveSessionId());
+            await rebindBgTaskPusher(targetId);
           } catch (rebindErr) {
             console.warn('[chat-ws] switch_session rebind bg task failed:', rebindErr);
           }
-          const newRunningTurn = snapshotRunningTurn(getActiveSessionId());
-          const workspace = await resolveSessionWorkspacePayload(getActiveSessionId());
-          const bgTasks = await buildBgTasksForSession(getActiveSessionId());
-          const shellCollabActive = await resolveShellCollabActive(getActiveSessionId(), SESSIONS_DIR);
+          const newRunningTurn = snapshotRunningTurn(targetId);
+          const workspace = await resolveSessionWorkspacePayload(targetId);
+          const bgTasks = await buildBgTasksForSession(targetId);
+          const shellCollabActive = await resolveShellCollabActive(targetId, SESSIONS_DIR);
+          const runtimeExtras = await buildConnectedPayloadExtras(targetId);
           sendJSON(ws, {
             type: 'session_switched',
             ok: true,
-            sessionId: getActiveSessionId(),
+            sessionId: targetId,
             shellCollabActive,
             ...workspace,
-            ...(supervisorResetFailed ? { reason: 'supervisor_reset_failed' } : {}),
+            ...runtimeExtras,
             ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
             bgTasks,
           });
-          console.log(`[chat-ws] 切换到会话 ${getActiveSessionId()}`);
+          replayPendingConfirmsToWs(ws, targetId);
+          console.log(`[chat-ws] 切换到会话 ${targetId}`);
         } catch (err) {
-          setActiveSessionId(oldSessionId);
+          setActiveSessionId(prevFocused);
           console.error('[chat-ws] switch_session failed:', err);
           sendJSON(ws, {
             type: 'session_switched',
             ok: false,
             reason: 'switch_failed',
-            sessionId: oldSessionId,
+            sessionId: prevFocused,
           });
         }
         return;
       }
 
       if (msg.type === 'message' && (msg.content || (msg.images && msg.images.length > 0))) {
-        const runSid = getSubscribedSessionId(ws) || getActiveSessionId();
+        const runSid = getSubscribedSessionId(ws);
+        if (!runSid) {
+          sendJSON(ws, { type: 'error', message: '未订阅会话' });
+          return;
+        }
         const content = typeof msg.content === 'string' ? msg.content : '';
         const images = Array.isArray(msg.images) ? msg.images : [];
         const referencePaths = Array.isArray(msg.referencePaths)
@@ -358,7 +390,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         const alsoCmd = parseAlsoCommand(content);
         if (alsoCmd.matched) {
           if (!alsoCmd.text) {
-            sendJSON(ws, { type: 'info', message: PENDING_NOTE_USAGE_MESSAGE });
+            sendJSON(ws, { type: 'info', sessionId: runSid, message: PENDING_NOTE_USAGE_MESSAGE });
             return;
           }
           const runningTurn = getRunningTurn(runSid);
@@ -429,7 +461,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
 
         if (isOpenLegacyCommand(content)) {
           if (isSessionProcessing(runSid)) {
-            sendJSON(ws, { type: 'info', message: '当前有任务进行中，请稍后再试 /open' });
+            sendJSON(ws, { type: 'info', sessionId: runSid, message: '当前有任务进行中，请稍后再试 /open' });
             return;
           }
           const direct: PendingChatMessage = {
@@ -449,7 +481,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         const isExplicitNext = requestedSource === 'explicit' || nextCmd.matched;
         const taskText = nextCmd.matched ? nextCmd.text : content;
         if (isExplicitNext && !taskText.trim() && !hasAttachments) {
-          sendJSON(ws, { type: 'info', message: NEXT_USAGE_MESSAGE });
+          sendJSON(ws, { type: 'info', sessionId: runSid, message: NEXT_USAGE_MESSAGE });
           return;
         }
         if (!taskText.trim() && !hasAttachments) {

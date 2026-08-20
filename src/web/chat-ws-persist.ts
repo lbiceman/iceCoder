@@ -33,7 +33,6 @@ import {
   prewarmChatRuntime,
 } from './chat-ws-prewarm.js';
 import { bootstrapActiveSessionIdFromIndex } from './routes/sessions.js';
-import { resetSupervisorRuntimeCache } from '../harness/supervisor/supervisor-runtime-cache.js';
 import {
   MEMORY_DIR,
   SESSIONS_DIR,
@@ -48,7 +47,6 @@ import {
   structuredCache,
 } from './chat-ws-runtime.js';
 import { broadcastToSession } from './chat-ws-broadcast.js';
-import { rebindBgTaskPusher } from './chat-ws-bg-tasks.js';
 
 export async function buildConnectedPayloadExtras(sessionId: string): Promise<{
   harnessState: string;
@@ -119,39 +117,6 @@ export async function loadStructuredMessages(sessionId?: string): Promise<Unifie
     return repaired;
   }
   return undefined;
-}
-
-/** 移动端扫码连入：将全局 activeSessionId 对齐到 QR 绑定的聊天 session */
-export async function ensureGlobalActiveSessionId(targetId: string): Promise<void> {
-  if (!targetId || targetId === getActiveSessionId()) return;
-  const oldSessionId = getActiveSessionId();
-  try {
-    await flushStructuredMessagesNow(oldSessionId);
-    setActiveSessionId(targetId);
-    void persistLastActiveSessionId(targetId);
-    let loaded: UnifiedMessage[] | undefined;
-    try {
-      loaded = await loadStructuredMessages(getActiveSessionId());
-    } catch (loadErr) {
-      console.warn('[chat-ws] remote join load structured failed, starting empty:', loadErr);
-      loaded = undefined;
-    }
-    setCachedMessages(getActiveSessionId(), loaded ?? []);
-    try {
-      resetSupervisorRuntimeCache();
-    } catch (err) {
-      console.warn('[chat-ws] supervisor reset on remote join failed:', err);
-    }
-    try {
-      await rebindBgTaskPusher(getActiveSessionId());
-    } catch (rebindErr) {
-      console.warn('[chat-ws] remote join rebind bg task failed:', rebindErr);
-    }
-    console.log(`[chat-ws] 远程扫码对齐会话 ${getActiveSessionId()}`);
-  } catch (err) {
-    setActiveSessionId(oldSessionId);
-    console.error('[chat-ws] remote join session align failed:', err);
-  }
 }
 
 let activeSessionBootstrapPromise: Promise<void> | null = null;
@@ -256,7 +221,7 @@ export type AppendableSessionMessage = {
  */
 export async function appendMessages(
   msgs: AppendableSessionMessage[],
-  sessionId: string = getActiveSessionId(),
+  sessionId: string,
 ): Promise<boolean> {
   if (isSessionTombstoned(sessionId)) return true;
   if (msgs.length === 0) return true;
@@ -320,10 +285,6 @@ export async function getPriorTrackedPaths(sessionId: string): Promise<string[]>
   if (!index.cursorMessageId) return [];
   const archive = await loadIntentCheckpoint(SESSIONS_DIR, sessionId, index.cursorMessageId);
   return archive?.trackedPaths ?? [];
-}
-
-export function dropPersistCache(sessionId: string): void {
-  setCachedMessages(sessionId, undefined);
 }
 
 export async function buildEnqueueInput(

@@ -71,6 +71,7 @@ import { isSessionImageApiUrl, stripReferencePathLinesForWorkspaceLock } from '.
 import {
   broadcastSessionUpdated,
   broadcastToSession,
+  isWsSubscribedTo,
 } from './chat-ws-broadcast.js';
 import { createShellMandatoryConfirmHandler, createToolConfirmHandler } from './chat-ws-confirm.js';
 import { rebindBgTaskPusher } from './chat-ws-bg-tasks.js';
@@ -164,7 +165,11 @@ async function finalizeDirectBrowserTurn(
   }
   entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
   await appendMessages(entries, sid);
-  broadcastSessionUpdated('turn_complete', undefined, ws);
+  broadcastSessionUpdated(
+    'turn_complete',
+    { sessionId: sid },
+    isWsSubscribedTo(ws, sid) ? ws : undefined,
+  );
 
   if (opts.syntheticTool) {
     broadcastToSession(sid, {
@@ -413,7 +418,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
   const abortController = new AbortController();
   sessionAbortControllers.set(runSessionId, abortController);
-  llmAdapter.setAbortSignal?.(abortController.signal);
 
   const supervisorRuntime = await getSupervisorRuntime();
   const skipPermissionChecks = await readSkipPermissionChecksFromMainConfig(MAIN_CONFIG_PATH);
@@ -570,7 +574,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   try {
     const result = await harness.run(
       harnessUserMessage,
-      (msgs, opts) => llmAdapter.chat(msgs, opts),
+      (msgs, opts) => llmAdapter.chat(msgs, { ...opts, signal: abortController.signal }),
       (event) => {
         foldStepIntoRunningTurn(runSessionId, event);
 
@@ -649,14 +653,13 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         }
       },
       existingMessages,
-      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, opts),
+      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, { ...opts, signal: abortController.signal }),
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );
 
     if (sessionAbortControllers.get(runSessionId) === abortController) {
       sessionAbortControllers.delete(runSessionId);
     }
-    llmAdapter.setAbortSignal?.(null);
 
     let turnAgentMsgId: string | undefined;
     if (!isSessionTombstoned(runSessionId)) {
@@ -718,7 +721,13 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
       if (sessionEntries.length > 0) {
         const persisted = await appendMessages(sessionEntries, runSessionId);
-        if (persisted) broadcastSessionUpdated('turn_complete', undefined, ws);
+        if (persisted) {
+          broadcastSessionUpdated(
+            'turn_complete',
+            { sessionId: runSessionId },
+            isWsSubscribedTo(ws, runSessionId) ? ws : undefined,
+          );
+        }
       }
     }
 
@@ -760,7 +769,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     if (sessionAbortControllers.get(runSessionId) === abortController) {
       sessionAbortControllers.delete(runSessionId);
     }
-    llmAdapter.setAbortSignal?.(null);
     if (abortController.signal.aborted) {
       try { stopForegroundShellWorkForSession(runSessionId, 'turn abort'); } catch { /* ignore */ }
     }

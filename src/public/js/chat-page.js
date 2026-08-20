@@ -328,12 +328,6 @@ window.ChatPage = (function () {
     } else {
       UI.setComposerAction('stop');
     }
-    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.syncSwitchLockState === 'function') {
-      window.ChatSessionSidebar.syncSwitchLockState();
-    }
-    if (window.MobileSessionDrawer && typeof window.MobileSessionDrawer.syncSwitchLockState === 'function') {
-      window.MobileSessionDrawer.syncSwitchLockState();
-    }
     if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
         sessionPet.setState(isStreaming ? 'read' : 'thinking');
@@ -450,7 +444,7 @@ window.ChatPage = (function () {
 
     if (text === '~scan' && !remoteMode) {
       Cmd.hide();
-      QR.showQrCode(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      QR.showQrCode();
       return true;
     }
 
@@ -814,27 +808,144 @@ window.ChatPage = (function () {
     }
   }
 
+  function closeComposerOverlays() {
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
+    if (Skills && typeof Skills.hide === 'function') Skills.hide();
+    if (FileRef && typeof FileRef.hide === 'function') FileRef.hide();
+    if (QR && typeof QR.closeQrCode === 'function') QR.closeQrCode();
+    if (window.ChatDropdown && typeof window.ChatDropdown.close === 'function') {
+      window.ChatDropdown.close();
+    }
+  }
+
+  function captureComposerDraft(sessionId) {
+    if (!sessionId || !window.ChatSessionStore || typeof window.ChatSessionStore.setComposerDraft !== 'function') {
+      return;
+    }
+    var fileSnap = (File && typeof File.getComposerSnapshot === 'function')
+      ? File.getComposerSnapshot()
+      : { uploadedFiles: [], pendingImages: [] };
+    window.ChatSessionStore.setComposerDraft(sessionId, {
+      text: elInput && elInput.value != null ? elInput.value : '',
+      skills: Skills && typeof Skills.getSelectedSkills === 'function' ? Skills.getSelectedSkills() : [],
+      fileRefs: FileRef && typeof FileRef.getSelectedRefs === 'function' ? FileRef.getSelectedRefs() : [],
+      uploadedFiles: fileSnap.uploadedFiles || [],
+      pendingImages: fileSnap.pendingImages || [],
+      queueInsertIndex: window.ChatTaskQueue && typeof window.ChatTaskQueue.getEditingInsertIndex === 'function'
+        ? window.ChatTaskQueue.getEditingInsertIndex()
+        : null,
+    });
+  }
+
+  function restoreComposerDraft(sessionId) {
+    var draft = window.ChatSessionStore && typeof window.ChatSessionStore.getComposerDraft === 'function'
+      ? window.ChatSessionStore.getComposerDraft(sessionId)
+      : null;
+    if (elInput) elInput.value = draft && draft.text ? draft.text : '';
+    if (Skills && typeof Skills.setSelectedSkills === 'function') {
+      Skills.setSelectedSkills(draft && draft.skills ? draft.skills : []);
+    }
+    if (FileRef && typeof FileRef.setSelectedRefs === 'function') {
+      FileRef.setSelectedRefs(draft && draft.fileRefs ? draft.fileRefs : []);
+    }
+    if (File && typeof File.setComposerSnapshot === 'function') {
+      File.setComposerSnapshot({
+        uploadedFiles: draft && draft.uploadedFiles ? draft.uploadedFiles : [],
+        pendingImages: draft && draft.pendingImages ? draft.pendingImages : [],
+      });
+    }
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.setEditingInsertIndex === 'function') {
+      window.ChatTaskQueue.setEditingInsertIndex(
+        draft && typeof draft.queueInsertIndex === 'number' ? draft.queueInsertIndex : null,
+      );
+    }
+    closeComposerOverlays();
+    if (UI && typeof UI.autoResizeInput === 'function') UI.autoResizeInput();
+  }
+
+  function dismissConfirmWithoutReply() {
+    if (window.ChatWsRestoreHandlers
+      && typeof window.ChatWsRestoreHandlers.dismissConfirmWithoutReply === 'function') {
+      window.ChatWsRestoreHandlers.dismissConfirmWithoutReply();
+    }
+  }
+
+  function bindTaskDoneNotifyClick() {
+    if (!window.iceDesktop || typeof window.iceDesktop.onTaskDoneNotifyClick !== 'function') return;
+    if (window.iceDesktop._iceTaskDoneNotifyClickBound) return;
+    window.iceDesktop._iceTaskDoneNotifyClickBound = true;
+    window.iceDesktop.onTaskDoneNotifyClick(function (sessionId) {
+      if (!sessionId || !window.ChatSessionStore) return;
+      if (window.ChatSessionStore.getActiveSessionId() === sessionId) return;
+      var wsSend = window.ChatWebSocket && typeof window.ChatWebSocket.send === 'function'
+        ? window.ChatWebSocket.send
+        : null;
+      window.ChatSessionStore.switchSession(sessionId, wsSend, function (ok, runningTurn, workspacePayload, _degraded, bgTasks, runtime) {
+        if (!ok) return;
+        if (workspacePayload && typeof window.ChatSessionStore.setSessionWorkspace === 'function') {
+          window.ChatSessionStore.setSessionWorkspace(sessionId, workspacePayload);
+        }
+        if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+          window.ChatSessionSidebar.renderList();
+        }
+        if (window.MobileSessionDrawer && typeof window.MobileSessionDrawer.renderList === 'function') {
+          window.MobileSessionDrawer.renderList();
+        }
+        onSessionSwitched(sessionId, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
+      });
+    });
+  }
+
+  function resetViewportTransientState() {
+    pendingTurnTokenUsage = null;
+    pendingAlsoMessageIds = {};
+    streamingDiffBuffer = { toolCallId: '', text: '' };
+    if (window.BgTaskChip && typeof window.BgTaskChip.clearAll === 'function') {
+      window.BgTaskChip.clearAll();
+    }
+  }
+
   /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。 */
   function onSessionSwitched(sessionId, runningTurn, options) {
     options = options || {};
+    closeComposerOverlays();
+    dismissConfirmWithoutReply();
+    var outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (outgoingSessionId && outgoingSessionId !== sessionId) {
+      captureComposerDraft(outgoingSessionId);
+      if (Pet && typeof Pet.captureSnapshot === 'function') Pet.captureSnapshot(outgoingSessionId);
+      if (window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
+        window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
+      }
+    }
     UI.clearReasoningStream();
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    if (FileRef && typeof FileRef.clearInput === 'function') {
-      FileRef.clearInput(elInput);
-    }
-    var outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
-    if (outgoingSessionId !== sessionId
-      && window.ChatExecutionPlanBridge
-      && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
-      window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
-    }
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
+    resetViewportTransientState();
+    if (typeof options.canRestore === 'boolean') {
+      applyHarnessRestoreUi(options.canRestore, options.checkpointMessageIds);
+    } else {
+      applyHarnessRestoreUi(false, []);
+    }
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.acknowledgeRunPhase === 'function') {
+      window.ChatSessionStore.acknowledgeRunPhase(sessionId);
+    }
+    restoreComposerDraft(sessionId);
     if (window.ChatExecutionPlanBridge
       && typeof window.ChatExecutionPlanBridge.notifySessionSwitched === 'function') {
       window.ChatExecutionPlanBridge.notifySessionSwitched();
     }
+    resetTokenUsage();
+    if (runningTurn && runningTurn.isProcessing) {
+      restoreFromRunningTurn(runningTurn);
+    } else {
+      restoreFromRunningTurn(null);
+      if (Pet && typeof Pet.resetToIdle === 'function') Pet.resetToIdle();
+    }
+    syncComposerActionState();
     Session.fetchServerMessages(function (serverMsgs, result) {
       var fetchOk = !result || result.ok !== false;
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
@@ -857,7 +968,6 @@ window.ChatPage = (function () {
         if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
       });
     });
-    resetTokenUsage();
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
       window.ChatTaskQueue.refresh(sessionId);
     }
@@ -953,6 +1063,8 @@ window.ChatPage = (function () {
       visibleStreamChunksReceived = false;
       WS.setProcessing(false);
       UI.setStreamingState(false);
+      if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
       if (sessionPet) {
         sessionPet.setState('idle');
         sessionPet.setBubbleText('');
@@ -1047,7 +1159,14 @@ window.ChatPage = (function () {
     announceTunnelReadyFromPayload(data || {});
   }
 
+  function isForeignSessionEvent(data) {
+    if (!data || !data.sessionId) return false;
+    var active = Session.getActiveId ? Session.getActiveId() : '';
+    return data.sessionId !== active;
+  }
+
   function onWsMemoryNotice(data) {
+    if (isForeignSessionEvent(data)) return;
     var notices = data.notices || [];
     var messages = Session.getMessages();
     for (var i = 0; i < notices.length; i++) {
@@ -1098,6 +1217,7 @@ window.ChatPage = (function () {
   }
 
   function onWsTokenUsage(data) {
+    if (isForeignSessionEvent(data)) return;
     updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
       effectiveUsed: data.effectiveUsed,
       contextWindow: data.contextWindow,
@@ -1113,6 +1233,7 @@ window.ChatPage = (function () {
   }
 
   function onWsPulse(data) {
+    if (isForeignSessionEvent(data)) return;
     if (!sessionPet) return;
     var hint = data && data.hint ? data.hint : '处理中';
     Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
@@ -1890,6 +2011,7 @@ window.ChatPage = (function () {
     }
 
     syncShellCollabIndicator();
+    bindTaskDoneNotifyClick();
 
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
       var inputArea = container.querySelector('.chat-input-area');

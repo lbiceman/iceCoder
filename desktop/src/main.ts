@@ -215,7 +215,13 @@ function registerIpcHandlers(): void {
         body: decision.body,
       });
       // R9：点击通知 → 恢复并聚焦主窗
-      notification.on('click', () => { showAndFocusMain(); });
+      notification.on('click', () => {
+        showAndFocusMain();
+        const sid = typeof decision.sessionId === 'string' ? decision.sessionId : '';
+        if (sid && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC.TASK_DONE_NOTIFY_CLICK, sid);
+        }
+      });
       notification.show();
     } catch (err) {
       writeConsole(process.stderr, `[main] 系统通知失败: ${err instanceof Error ? err.message : String(err)}\n`);
