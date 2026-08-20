@@ -32,6 +32,7 @@ window.ChatPetBridge = (function () {
   var lastUserPrompt = '';
   var USER_PROMPT_MAX_CHARS = 30;
   var turnHadToolCall = false;
+  var petViewBySession = {};
 
   /** 记录最近一次用户提示词（用于任务完成通知摘要）。 */
   function setLastUserPrompt(text) {
@@ -112,6 +113,84 @@ window.ChatPetBridge = (function () {
     }
   }
 
+  function captureSnapshot(sessionId) {
+    if (!sessionId) return;
+    petViewBySession[sessionId] = {
+      lastUserPrompt: lastUserPrompt,
+      currentTurnCount: currentTurnCount,
+      lastToolProgressHint: lastToolProgressHint,
+      lastIsStreaming: lastIsStreaming,
+      lastWsProcessing: lastWsProcessing,
+      turnHadToolCall: turnHadToolCall,
+    };
+  }
+
+  function restoreSnapshot(sessionId) {
+    var snap = sessionId ? petViewBySession[sessionId] : null;
+    if (!snap) {
+      resetToIdle();
+      return;
+    }
+    lastUserPrompt = snap.lastUserPrompt || '';
+    currentTurnCount = snap.currentTurnCount || 0;
+    lastToolProgressHint = snap.lastToolProgressHint || '';
+    lastIsStreaming = !!snap.lastIsStreaming;
+    lastWsProcessing = !!snap.lastWsProcessing;
+    turnHadToolCall = !!snap.turnHadToolCall;
+  }
+
+  function resetToIdle() {
+    lastIsStreaming = false;
+    lastWsProcessing = false;
+    lastToolProgressHint = '';
+    currentTurnCount = 0;
+    turnHadToolCall = false;
+    userCheckpointNoticeActive = false;
+    petUiSessionActive = false;
+    clearModelDoneNotice();
+    if (memoryNoticeResetTimer) {
+      clearTimeout(memoryNoticeResetTimer);
+      memoryNoticeResetTimer = null;
+    }
+    if (mcpReadyResetTimer) {
+      clearTimeout(mcpReadyResetTimer);
+      mcpReadyResetTimer = null;
+    }
+    if (tunnelReadyResetTimer) {
+      clearTimeout(tunnelReadyResetTimer);
+      tunnelReadyResetTimer = null;
+    }
+    if (supervisorModeResetTimer) {
+      clearTimeout(supervisorModeResetTimer);
+      supervisorModeResetTimer = null;
+    }
+    if (!sessionPet) return;
+    sessionPet.setState('idle');
+    sessionPet.setBubbleText('');
+    sessionPet.setTurnLabel('');
+  }
+
+  /**
+   * 后台会话结束：不画当前视口冰豆，窗口失焦时仍可发系统通知。
+   */
+  function notifyBackgroundTaskDone(opts) {
+    opts = opts || {};
+    try {
+      var prefs = window.EtlPrefs && typeof window.EtlPrefs.get === 'function'
+        ? window.EtlPrefs.get()
+        : null;
+      if (!prefs || prefs.taskDoneNotification !== true) return;
+      if (!window.iceDesktop || typeof window.iceDesktop.notifyTaskDone !== 'function') return;
+      if (document.hasFocus()) return;
+      var payload = {
+        success: opts.success !== false,
+        summary: '',
+      };
+      if (opts.sessionId) payload.sessionId = opts.sessionId;
+      window.iceDesktop.notifyTaskDone(payload);
+    } catch (_e) { /* 通知失败不影响主流程 */ }
+  }
+
   /**
    * 任务完成时按配置发送桌面系统通知。
    * 不注册任何常驻监听器（一次性读取配置后即发），无内存泄漏风险。
@@ -127,7 +206,12 @@ window.ChatPetBridge = (function () {
       if (!window.iceDesktop || typeof window.iceDesktop.notifyTaskDone !== 'function') return;
       // 仅后台弹通知：主窗口处于前台/可见时用户正在看，不打扰
       if (document.hasFocus()) return;
-      window.iceDesktop.notifyTaskDone({ success: true, summary: summarizeUserPrompt() });
+      var payload = { success: true, summary: summarizeUserPrompt() };
+      if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
+        var sid = window.ChatSessionStore.getActiveSessionId();
+        if (sid) payload.sessionId = sid;
+      }
+      window.iceDesktop.notifyTaskDone(payload);
     } catch (_e) { /* 通知失败不影响主流程 */ }
   }
 
@@ -573,5 +657,9 @@ window.ChatPetBridge = (function () {
     isUserCheckpointActive: isUserCheckpointActive,
     isModelDoneNoticeActive: isModelDoneNoticeActive,
     setLastUserPrompt: setLastUserPrompt,
+    captureSnapshot: captureSnapshot,
+    restoreSnapshot: restoreSnapshot,
+    resetToIdle: resetToIdle,
+    notifyBackgroundTaskDone: notifyBackgroundTaskDone,
   };
 })();

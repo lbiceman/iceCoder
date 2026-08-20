@@ -122,6 +122,12 @@ export async function bootstrapActiveSessionIdFromIndex(): Promise<string> {
   return resolveBootstrapActiveSessionId(index);
 }
 
+/** 会话列表第一项（与侧栏/抽屉渲染顺序一致）。扫码连入默认订阅此项。 */
+export async function readFirstSessionIdFromIndex(): Promise<string> {
+  const index = await ensureDefaultInIndex();
+  return index[0]?.id || SESSION_ID;
+}
+
 interface ChatMessage {
   role: string;
   content: string;
@@ -238,6 +244,18 @@ export function registerSessionCleanupHook(hook: SessionCleanupHook | null): voi
   sessionCleanupHook = hook;
 }
 
+type SessionListLiveSync = {
+  getRunStates: () => unknown[];
+  notifyIndexUpdated: () => void;
+};
+
+let sessionListLiveSync: SessionListLiveSync | null = null;
+
+/** 由 chat-ws 入口注入：REST 列表带上运行态圆点，CRUD 后通知 PC/手机刷新。 */
+export function registerSessionListLiveSync(sync: SessionListLiveSync | null): void {
+  sessionListLiveSync = sync;
+}
+
 async function purgeSessionFiles(sessionId: string): Promise<void> {
   // 先停 harness / 取消刷盘定时器，避免删文件后又被异步写入 resurrect
   if (sessionCleanupHook) {
@@ -272,7 +290,14 @@ export function createSessionsRouter(): Router {
       buildShellCollabActiveIndex(sessionIds, SESSIONS_DIR),
       bootstrapActiveSessionIdFromIndex(),
     ]);
-    res.json({ sessions: index, defaultWorkDir, workspaces, shellCollabActive, activeSessionId });
+    res.json({
+      sessions: index,
+      defaultWorkDir,
+      workspaces,
+      shellCollabActive,
+      activeSessionId,
+      sessionRunStates: sessionListLiveSync ? sessionListLiveSync.getRunStates() : [],
+    });
   });
 
   /**
@@ -289,6 +314,7 @@ export function createSessionsRouter(): Router {
     // 创建空消息文件
     await ensureDir();
     await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
+    sessionListLiveSync?.notifyIndexUpdated();
     res.json({ success: true, session: meta });
   });
 
@@ -319,6 +345,7 @@ export function createSessionsRouter(): Router {
     entry.title = title;
     entry.updatedAt = Date.now();
     await writeSessionIndex(index);
+    sessionListLiveSync?.notifyIndexUpdated();
     res.json({ success: true, session: entry });
   });
 
@@ -337,6 +364,7 @@ export function createSessionsRouter(): Router {
     index = index.filter(s => s.id !== sessionId);
     await writeSessionIndex(index);
     await purgeSessionFiles(sessionId);
+    sessionListLiveSync?.notifyIndexUpdated();
     res.json({ success: true });
   });
 

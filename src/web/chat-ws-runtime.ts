@@ -162,6 +162,50 @@ export function isSessionProcessing(sessionId: string): boolean {
   return sessionProcessing.has(sessionId);
 }
 
+export type SessionRunPhase = 'running' | 'done' | 'error' | 'idle';
+
+export interface SessionRunStateEntry {
+  sessionId: string;
+  phase: Exclude<SessionRunPhase, 'idle'>;
+  stopReason?: string;
+}
+
+/** 进程内会话运行态（侧栏圆点）。done/error 不落盘，重启后只恢复 running。 */
+const runPhaseBySession = new Map<string, { phase: Exclude<SessionRunPhase, 'idle'>; stopReason?: string }>();
+
+export function setSessionRunPhase(
+  sessionId: string,
+  phase: SessionRunPhase,
+  stopReason?: string,
+): void {
+  if (!sessionId) return;
+  if (phase === 'idle') {
+    runPhaseBySession.delete(sessionId);
+    return;
+  }
+  runPhaseBySession.set(sessionId, stopReason ? { phase, stopReason } : { phase });
+}
+
+export function getSessionRunPhase(sessionId: string): SessionRunPhase {
+  if (!sessionId) return 'idle';
+  return runPhaseBySession.get(sessionId)?.phase ?? 'idle';
+}
+
+/** 侧栏圆点快照：Map 中的非 idle + 仍在 processing 但尚未写入 phase 的会话。 */
+export function buildSessionRunStatesSnapshot(): SessionRunStateEntry[] {
+  const runStates: SessionRunStateEntry[] = [];
+  for (const [sessionId, v] of runPhaseBySession) {
+    runStates.push(v.stopReason
+      ? { sessionId, phase: v.phase, stopReason: v.stopReason }
+      : { sessionId, phase: v.phase });
+  }
+  const seen = new Set(runStates.map((s) => s.sessionId));
+  for (const id of sessionProcessing) {
+    if (!seen.has(id)) runStates.push({ sessionId: id, phase: 'running' });
+  }
+  return runStates;
+}
+
 /** 已删除会话 tombstone：阻止异步刷盘在 purge 之后 resurrect 文件 */
 export const tombstonedSessionIds = new Set<string>();
 
@@ -186,6 +230,7 @@ export function purgeSessionMaps(sessionId: string): void {
   fileBrowserStateBySession.delete(sessionId);
   sessionDeferredToolCalls.delete(sessionId);
   sessionActiveBatchCounts.delete(sessionId);
+  runPhaseBySession.delete(sessionId);
   const pending = saveTimerMap.get(sessionId);
   if (pending) {
     clearTimeout(pending);
@@ -209,6 +254,7 @@ export function clearRuntimeOnShutdown(): void {
   }
   sessionAbortControllers.clear();
   sessionProcessing.clear();
+  runPhaseBySession.clear();
   setCachedMessages(getActiveSessionId(), undefined);
   fileBrowserStateBySession.delete(getActiveSessionId());
 }

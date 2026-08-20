@@ -97,13 +97,16 @@ export async function buildBgTasksForSession(sessionId: string): Promise<BgTaskU
 export async function handleBgTaskStop(
   ws: WebSocket,
   taskId: string,
-  fallbackSessionId: string,
 ): Promise<void> {
-  const sid = getSubscribedSessionId(ws) || fallbackSessionId;
-  console.log(`[chat-ws] 收到 bg_task_stop taskId=${taskId || '(empty)'} wsSession=${sid}`);
+  const sid = getSubscribedSessionId(ws);
+  console.log(`[chat-ws] 收到 bg_task_stop taskId=${taskId || '(empty)'} wsSession=${sid || '(none)'}`);
 
   if (!taskId) {
     sendJSON(ws, { type: 'bg_task_stop_result', ok: false, error: 'missing taskId' });
+    return;
+  }
+  if (!sid) {
+    sendJSON(ws, { type: 'bg_task_stop_result', ok: false, error: 'missing session' });
     return;
   }
   try {
@@ -113,9 +116,10 @@ export async function handleBgTaskStop(
     let ok = mgr.kill(taskId);
     if (!ok) {
       const owner = findBackgroundTaskManagerOwning(taskId);
-      if (owner) {
+      // 只允许找回「同一会话、不同 workDir 实例」的 manager，禁止跨会话误杀
+      if (owner && owner.sessionId === sid) {
         console.log(
-          `[chat-ws] bg_task_stop 在 session=${owner.sessionId} 找到任务（WS session=${sid}）`,
+          `[chat-ws] bg_task_stop 在 session=${owner.sessionId} 找回任务（WS session=${sid}）`,
         );
         mgr = owner;
         ensureBgTaskPusher().attach(mgr);

@@ -12,12 +12,12 @@ import {
   type QueuedTask,
   type TaskEnqueueInput,
 } from '../session/task-queue.js';
-import { persistLastActiveSessionId } from './last-active-session.js';
 import { applyFirstPromptSessionTitle } from './session-title.js';
 import { buildUserMessageDisplayFields } from './user-message-display.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
 import {
+  broadcastSessionRunState,
   broadcastSessionUpdated,
   broadcastToSession,
   pickSessionWs,
@@ -29,6 +29,8 @@ import {
   beginSessionBatch,
   endSessionBatch,
   sessionProcessing,
+  setSessionRunPhase,
+  type SessionRunPhase,
 } from './chat-ws-runtime.js';
 import { handleChatMessage } from './chat-ws-turn.js';
 
@@ -106,6 +108,39 @@ export async function persistImplicitQueuedUserMessage(
   });
 }
 
+const ERROR_LIKE_STOP = new Set<StopReason>([
+  'error',
+  'timeout',
+  'circuit_breaker',
+  'verification_exhausted',
+  'max_output_tokens',
+  'max_rounds',
+  'token_budget',
+  'stop_hook',
+]);
+
+function publishRunState(
+  sessionId: string,
+  phase: SessionRunPhase,
+  stopReason?: StopReason,
+): void {
+  setSessionRunPhase(sessionId, phase, stopReason);
+  broadcastSessionRunState({
+    type: 'session_run_state',
+    sessionId,
+    phase,
+    ...(stopReason ? { stopReason } : {}),
+  });
+}
+
+function resolveTerminalPhase(stopReason?: StopReason): SessionRunPhase {
+  if (stopReason === 'model_done') return 'done';
+  if (stopReason === 'user_abort') return 'idle';
+  if (stopReason === 'user_checkpoint') return 'running';
+  if (!stopReason || ERROR_LIKE_STOP.has(stopReason)) return 'error';
+  return 'error';
+}
+
 /**
  * 会话级运行循环：串行处理同一会话的任务队列。
  * 通过 `sessionProcessing` 防止同一会话被多个连接并发跑两个 harness（P1-9）。
@@ -130,9 +165,8 @@ export async function enqueueAndMaybeKickoff(
     await publishTaskQueueState(runSid);
     if (next) {
       const relayWs = pickSessionWs(runSid, ws);
-      if (relayWs) {
-        void runSessionMessageLoop(deps, runSid, relayWs, queuedTaskToPending(next, relayWs));
-      }
+      const loopWs = relayWs ?? ws;
+      void runSessionMessageLoop(deps, runSid, loopWs, queuedTaskToPending(next, loopWs));
     }
   }
 }
@@ -145,10 +179,12 @@ export async function runSessionMessageLoop(
 ): Promise<void> {
   sessionProcessing.add(runSid);
   const taskQueue = getTaskQueueManager(SESSIONS_DIR);
+  let terminalPhase: SessionRunPhase | null = null;
+  let terminalReason: StopReason | undefined;
   try {
+    publishRunState(runSid, 'running');
     let current: PendingChatMessage | undefined = first;
     while (current) {
-      void persistLastActiveSessionId(runSid);
       beginSessionBatch(runSid);
       broadcastHarnessState(runSid);
       ensureRunningTurn(runSid);
@@ -171,6 +207,7 @@ export async function runSessionMessageLoop(
         });
       } catch (err) {
         broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+        terminalPhase = 'error';
         break;
       } finally {
         endSessionBatch(runSid);
@@ -179,11 +216,17 @@ export async function runSessionMessageLoop(
       }
 
       if (stopReason !== 'model_done') {
+        terminalPhase = resolveTerminalPhase(stopReason);
+        terminalReason = stopReason;
         break;
       }
 
       const nextQueued = await taskQueue.dequeue(runSid);
-      if (!nextQueued) break;
+      if (!nextQueued) {
+        terminalPhase = 'done';
+        terminalReason = 'model_done';
+        break;
+      }
 
       await publishTaskQueueState(runSid);
       if (nextQueued.source === 'explicit') {
@@ -198,5 +241,8 @@ export async function runSessionMessageLoop(
     }
   } finally {
     sessionProcessing.delete(runSid);
+    if (terminalPhase && terminalPhase !== 'running') {
+      publishRunState(runSid, terminalPhase, terminalReason);
+    }
   }
 }

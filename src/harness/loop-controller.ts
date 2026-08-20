@@ -172,4 +172,8 @@ export class LoopController {
   isAborted(): boolean {
     return this.config.signal?.aborted ?? false;
   }
+
+  getAbortSignal(): AbortSignal | undefined {
+    return this.config.signal;
+  }
 }

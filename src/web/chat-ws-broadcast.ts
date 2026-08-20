@@ -20,6 +20,31 @@ const sessionSubscribers = new Map<string, Set<WebSocket>>();
 /** WS → 当前订阅的 sessionId，便于 close / switch 时反查清理 */
 const wsToSubscribedSession = new WeakMap<WebSocket, string>();
 
+type AfterSubscribeFn = (ws: WebSocket, sessionId: string) => void;
+type AfterUnsubscribeFn = (ws: WebSocket, sessionId: string) => void;
+const afterSubscribeListeners: AfterSubscribeFn[] = [];
+const afterUnsubscribeListeners: AfterUnsubscribeFn[] = [];
+
+export function onAfterSubscribe(fn: AfterSubscribeFn): void {
+  afterSubscribeListeners.push(fn);
+}
+
+export function onAfterUnsubscribe(fn: AfterUnsubscribeFn): void {
+  afterUnsubscribeListeners.push(fn);
+}
+
+function notifyAfterSubscribe(ws: WebSocket, sessionId: string): void {
+  for (const fn of afterSubscribeListeners) {
+    try { fn(ws, sessionId); } catch { /* ignore */ }
+  }
+}
+
+function notifyAfterUnsubscribe(ws: WebSocket, sessionId: string): void {
+  for (const fn of afterUnsubscribeListeners) {
+    try { fn(ws, sessionId); } catch { /* ignore */ }
+  }
+}
+
 export function subscribeWsToSession(ws: WebSocket, sessionId: string): void {
   const prev = wsToSubscribedSession.get(ws);
   if (prev === sessionId) return;
@@ -29,6 +54,8 @@ export function subscribeWsToSession(ws: WebSocket, sessionId: string): void {
       prevSet.delete(ws);
       if (prevSet.size === 0) sessionSubscribers.delete(prev);
     }
+    wsToSubscribedSession.delete(ws);
+    notifyAfterUnsubscribe(ws, prev);
   }
   let set = sessionSubscribers.get(sessionId);
   if (!set) {
@@ -37,6 +64,7 @@ export function subscribeWsToSession(ws: WebSocket, sessionId: string): void {
   }
   set.add(ws);
   wsToSubscribedSession.set(ws, sessionId);
+  notifyAfterSubscribe(ws, sessionId);
 }
 
 export function unsubscribeWsFromAll(ws: WebSocket): void {
@@ -48,6 +76,7 @@ export function unsubscribeWsFromAll(ws: WebSocket): void {
     if (set.size === 0) sessionSubscribers.delete(sid);
   }
   wsToSubscribedSession.delete(ws);
+  notifyAfterUnsubscribe(ws, sid);
 }
 
 export function getSubscribedSessionId(ws: WebSocket): string | undefined {
@@ -62,14 +91,40 @@ export function removeChatClient(ws: WebSocket): void {
   chatClients.delete(ws);
 }
 
-export function pickSessionWs(sessionId: string, fallback?: WebSocket): WebSocket | undefined {
-  if (fallback && fallback.readyState === WebSocket.OPEN) return fallback;
+export function isWsSubscribedTo(ws: WebSocket, sessionId: string): boolean {
+  return wsToSubscribedSession.get(ws) === sessionId;
+}
+
+export function hasSessionSubscribers(sessionId: string): boolean {
   const set = sessionSubscribers.get(sessionId);
-  if (!set) return fallback;
+  if (!set || set.size === 0) return false;
+  for (const client of set) {
+    if (client.readyState === WebSocket.OPEN) return true;
+  }
+  return false;
+}
+
+/**
+ * 只从该 sid 的订阅者里挑 OPEN 连接。
+ * fallback 仅当它仍订阅该 sid 时可用；没有订阅者则返回 undefined（不要把已改订的连接当 relay）。
+ */
+export function pickSessionWs(sessionId: string, fallback?: WebSocket): WebSocket | undefined {
+  const set = sessionSubscribers.get(sessionId);
+  if (!set || set.size === 0) return undefined;
+  if (fallback && fallback.readyState === WebSocket.OPEN && set.has(fallback)) {
+    return fallback;
+  }
   for (const ws of set) {
     if (ws.readyState === WebSocket.OPEN) return ws;
   }
-  return fallback;
+  return undefined;
+}
+
+function attachSessionId(sessionId: string, data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const rec = data as Record<string, unknown>;
+  if (typeof rec.sessionId === 'string' && rec.sessionId) return data;
+  return { ...rec, sessionId };
 }
 
 /**
@@ -80,7 +135,7 @@ export function pickSessionWs(sessionId: string, fallback?: WebSocket): WebSocke
 export function broadcastToSession(sessionId: string, data: unknown): void {
   const set = sessionSubscribers.get(sessionId);
   if (!set || set.size === 0) return;
-  const body = JSON.stringify(data);
+  const body = JSON.stringify(attachSessionId(sessionId, data));
   for (const ws of set) {
     if (ws.readyState === WebSocket.OPEN) {
       try {
@@ -100,7 +155,7 @@ export function broadcastToSessionExcept(
 ): void {
   const set = sessionSubscribers.get(sessionId);
   if (!set || set.size === 0) return;
-  const body = JSON.stringify(data);
+  const body = JSON.stringify(attachSessionId(sessionId, data));
   for (const ws of set) {
     if (except && ws === except) continue;
     if (ws.readyState === WebSocket.OPEN) {
@@ -134,6 +189,15 @@ export function sendJSON(ws: WebSocket, data: unknown): void {
   }
 }
 
+export function broadcastSessionRunState(payload: {
+  type: 'session_run_state';
+  sessionId: string;
+  phase: 'running' | 'done' | 'error' | 'idle';
+  stopReason?: string;
+}): void {
+  sendToAllChatClients(JSON.stringify(payload));
+}
+
 export function sendToAllChatClients(jsonBody: string): void {
   for (const client of chatClients) {
     if (client.readyState === WebSocket.OPEN) {
@@ -144,6 +208,10 @@ export function sendToAllChatClients(jsonBody: string): void {
       }
     }
   }
+}
+
+export function broadcastSessionsIndexUpdated(): void {
+  sendToAllChatClients(JSON.stringify({ type: 'sessions_index_updated' }));
 }
 
 export function broadcastSessionUpdated(

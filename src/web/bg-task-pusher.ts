@@ -167,8 +167,10 @@ export class BgTaskPusher {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly intervalMs: number;
   private readonly hangThresholdMs: number;
-  private manager: BackgroundTaskManager | null = null;
-  private statusChangedHandler: ((s: RunningTaskSummary) => void) | null = null;
+  private readonly attachments = new Map<string, {
+    manager: BackgroundTaskManager;
+    handler: (s: RunningTaskSummary) => void;
+  }>();
 
   constructor(
     private readonly broadcaster: BgPushBroadcaster,
@@ -179,67 +181,70 @@ export class BgTaskPusher {
   }
 
   /**
-   * 附加到指定 BackgroundTaskManager。
-   *
-   * - 启动心跳 timer
-   * - 订阅 `taskStatusChanged` 立刻推送终态
+   * 附加到指定 BackgroundTaskManager，不卸载其它 session 的监听。
    */
   attach(manager: BackgroundTaskManager): void {
-    if (this.manager) this.detach();
-    this.manager = manager;
-    this.statusChangedHandler = (s) => this.emitStatusChange(s);
-    manager.on('taskStatusChanged', this.statusChangedHandler);
-    this.timer = setInterval(() => this.tick(), this.intervalMs);
+    this.detachSession(manager.sessionId);
+    const handler = (s: RunningTaskSummary) => this.emitStatusChange(manager, s);
+    manager.on('taskStatusChanged', handler);
+    this.attachments.set(manager.sessionId, { manager, handler });
+    if (!this.timer) {
+      this.timer = setInterval(() => this.tick(), this.intervalMs);
+    }
   }
 
-  /**
-   * 解除附加（清理 timer + 事件）。
-   */
-  detach(): void {
-    if (this.timer) {
+  detachSession(sessionId: string): void {
+    const att = this.attachments.get(sessionId);
+    if (!att) return;
+    att.manager.off('taskStatusChanged', att.handler);
+    this.attachments.delete(sessionId);
+    if (this.attachments.size === 0 && this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
-    if (this.manager && this.statusChangedHandler) {
-      this.manager.off('taskStatusChanged', this.statusChangedHandler);
-    }
-    this.manager = null;
-    this.statusChangedHandler = null;
+  }
+
+  /**
+   * 解除全部附加（清理 timer + 事件）。
+   */
+  detach(): void {
+    for (const sid of [...this.attachments.keys()]) this.detachSession(sid);
   }
 
   /**
    * 手动触发一次心跳（测试 / 调试用）。
    */
   tick(): void {
-    if (!this.manager) return;
-    const summaries = this.manager.getRunningSummary({ onlyDirtyOrDue: false });
+    for (const { manager } of this.attachments.values()) {
+      this.tickManager(manager);
+    }
+  }
+
+  private tickManager(manager: BackgroundTaskManager): void {
+    const summaries = manager.getRunningSummary({ onlyDirtyOrDue: false });
     const running = summaries.filter((s) => s.status === 'running');
     if (running.length === 0) return;
-
     const entries = running.map((s) => toEntry(s, this.hangThresholdMs, s.command));
-    this.broadcast(entries);
-
-    // 标记本轮已 emit（不影响 LLM 通路的独立 emit 节流）
-    this.manager.markSummaryEmitted(running.map((s) => s.taskId));
+    this.broadcast(manager, entries);
+    manager.markSummaryEmitted(running.map((s) => s.taskId));
   }
 
   /** 任务状态变更立刻推送（spawn / 终态；不等心跳 tick） */
-  private emitStatusChange(s: RunningTaskSummary): void {
-    if (!this.manager) return;
-    this.broadcast([toEntry(s, this.hangThresholdMs, s.command)]);
+  private emitStatusChange(manager: BackgroundTaskManager, s: RunningTaskSummary): void {
+    this.broadcast(manager, [toEntry(s, this.hangThresholdMs, s.command)]);
   }
 
   /** 组装 payload 并交给 broadcaster */
-  private broadcast(entries: BgTaskUpdateEntry[]): void {
-    if (!this.manager || entries.length === 0) return;
+  private broadcast(manager: BackgroundTaskManager, entries: BgTaskUpdateEntry[]): void {
+    if (entries.length === 0) return;
     const payload: BgTaskUpdatePayload = {
       type: 'bg_task_update',
-      sessionId: this.manager.sessionId,
+      sessionId: manager.sessionId,
       timestamp: new Date().toISOString(),
       tasks: entries,
     };
     try {
-      this.broadcaster(this.manager.sessionId, JSON.stringify(payload));
+      this.broadcaster(manager.sessionId, JSON.stringify(payload));
     } catch {
       /* ignore broadcaster errors — 不影响任务本身 */
     }

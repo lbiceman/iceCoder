@@ -41,7 +41,7 @@ describe('chat-ws-broadcast', () => {
     subscribeWsToSession(a, 's1');
     subscribeWsToSession(b, 's2');
     broadcastToSession('s1', { type: 'pong' });
-    expect(a.sent).toEqual([{ type: 'pong' }]);
+    expect(a.sent).toEqual([{ type: 'pong', sessionId: 's1' }]);
     expect(b.sent).toEqual([]);
   });
 
@@ -61,7 +61,7 @@ describe('chat-ws-broadcast', () => {
     expect(getSubscribedSessionId(ws)).toBe('neu');
     broadcastToSession('old', { type: 'info', message: 'x' });
     broadcastToSession('neu', { type: 'pong' });
-    expect(ws.sent).toEqual([{ type: 'pong' }]);
+    expect(ws.sent).toEqual([{ type: 'pong', sessionId: 'neu' }]);
   });
 
   it('unsubscribeWsFromAll 后不再收到事件', () => {
@@ -81,6 +81,28 @@ describe('chat-ws-broadcast', () => {
     expect(pickSessionWs('s1', open)).toBe(open);
   });
 
+  it('pickSessionWs 不把已改订的 fallback 当 relay', () => {
+    const ws = fakeWs();
+    subscribeWsToSession(ws, 's1');
+    subscribeWsToSession(ws, 's2');
+    expect(pickSessionWs('s1', ws)).toBeUndefined();
+    expect(pickSessionWs('s2', ws)).toBe(ws);
+  });
+
+  it('pickSessionWs 无订阅者返回 undefined', () => {
+    const ws = fakeWs();
+    expect(pickSessionWs('ghost', ws)).toBeUndefined();
+  });
+
+  it('broadcastToSession 自动注入 sessionId，已有 sid 不覆盖', () => {
+    const ws = fakeWs();
+    subscribeWsToSession(ws, 's1');
+    broadcastToSession('s1', { type: 'stream', delta: 'x' });
+    broadcastToSession('s1', { type: 'info', message: 'keep', sessionId: 'custom' });
+    expect(ws.sent[0]).toEqual({ type: 'stream', delta: 'x', sessionId: 's1' });
+    expect(ws.sent[1]).toEqual({ type: 'info', message: 'keep', sessionId: 'custom' });
+  });
+
   it('broadcastToSessionExcept 跳过发送方', () => {
     const a = fakeWs();
     const b = fakeWs();
@@ -88,7 +110,7 @@ describe('chat-ws-broadcast', () => {
     subscribeWsToSession(b, 's1');
     broadcastToSessionExcept('s1', { type: 'info', message: 'x' }, a);
     expect(a.sent).toEqual([]);
-    expect(b.sent).toEqual([{ type: 'info', message: 'x' }]);
+    expect(b.sent).toEqual([{ type: 'info', message: 'x', sessionId: 's1' }]);
   });
 
   it('session_updated 无 title 时排除 except；有 title 时全员通知', () => {

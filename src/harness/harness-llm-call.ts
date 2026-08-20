@@ -1,5 +1,4 @@
-import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
-import type { LLMResponse } from '../llm/types.js';
+import type { UnifiedMessage, ToolDefinition, LLMOptions, LLMResponse } from '../llm/types.js';
 import {
   LLM_MAX_RETRIES,
   LLM_RETRY_BASE_DELAY,
@@ -110,6 +109,10 @@ export async function callHarnessLlm(
   }
 
   let response: LLMResponse;
+  const llmOpts: LLMOptions = {
+    tools: currentTools,
+    signal: deps.loopController.getAbortSignal(),
+  };
   try {
     if (streamFn) {
       const streamFilter = new AssistantVisibleStreamFilter();
@@ -118,7 +121,7 @@ export async function callHarnessLlm(
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
           dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep, reasoningSanitizer);
-        }, { tools: currentTools });
+        }, llmOpts);
         const tail = streamFilter.flush();
         if (tail.thinking) {
           onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
@@ -134,7 +137,7 @@ export async function callHarnessLlm(
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
         if (errMsg.includes('reasoning_content') || errMsg.includes('Failed to deserialize')) {
           console.log('[harness] 流式调用失败，回退到非流式: ' + errMsg.substring(0, 100));
-          response = await chatFn(normalizedMsgs, { tools: currentTools });
+          response = await chatFn(normalizedMsgs, llmOpts);
         } else {
           throw streamError;
         }
@@ -143,7 +146,7 @@ export async function callHarnessLlm(
         return { action: 'abort' };
       }
     } else {
-      response = await chatFn(normalizedMsgs, { tools: currentTools });
+      response = await chatFn(normalizedMsgs, llmOpts);
     }
     state.llmRetryCount = 0;
   } catch (error) {

@@ -146,6 +146,10 @@ window.ChatTaskQueue = (function () {
     return editingInsertIndex;
   }
 
+  function setEditingInsertIndex(index) {
+    editingInsertIndex = typeof index === 'number' ? index : null;
+  }
+
   function clearEditingInsertIndex() {
     editingInsertIndex = null;
   }
@@ -164,6 +168,7 @@ window.ChatTaskQueue = (function () {
     setItems: setItems,
     refresh: refresh,
     getEditingInsertIndex: getEditingInsertIndex,
+    setEditingInsertIndex: setEditingInsertIndex,
     clearEditingInsertIndex: clearEditingInsertIndex,
   };
 })();

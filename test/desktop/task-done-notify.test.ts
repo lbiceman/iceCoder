@@ -59,4 +59,14 @@ describe('resolveTaskDoneNotification（主进程通知决策）', () => {
     expect(resolveTaskDoneNotification({ success: true, summary: 'x' }, win(false, true), APP).skip).toBe(false);
     expect(resolveTaskDoneNotification({ success: true, summary: 'x' }, null, APP).skip).toBe(false);
   });
+
+  it('透传 sessionId 供点击通知后切会话', () => {
+    const d = resolveTaskDoneNotification(
+      { success: true, summary: '写脚本', sessionId: 'sess-a' },
+      win(false),
+      APP,
+    );
+    expect(d.skip).toBe(false);
+    expect(d.sessionId).toBe('sess-a');
+  });
 });

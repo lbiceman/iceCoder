@@ -17,6 +17,22 @@ afterEach(() => {
   __resetBackgroundTaskManagers();
 });
 
+async function waitForTaskStatus(
+  mgr: ReturnType<typeof getBackgroundTaskManagerFor>,
+  taskId: string,
+  expected: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (mgr.getStatus(taskId)?.status === expected) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(
+    `timeout waiting for ${taskId} to be ${expected}, got ${mgr.getStatus(taskId)?.status}`,
+  );
+}
+
 describe('buildBgTaskSnapshot', () => {
   it('returns running tasks with command, elapsedMs', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'ice-bg-snap-'));
@@ -49,8 +65,7 @@ describe('buildBgTaskSnapshot', () => {
     const { taskId } = mgr.spawn(cmd, 60_000, 'quick job');
     expect(taskId).toBeTruthy();
 
-    await new Promise((r) => setTimeout(r, 800));
-    expect(mgr.getStatus(taskId)?.status).toBe('completed');
+    await waitForTaskStatus(mgr, taskId, 'completed');
 
     const snapshot = buildBgTaskSnapshot(mgr);
     const row = snapshot.find((s) => s.taskId === taskId);
@@ -67,9 +82,9 @@ describe('buildBgTaskSnapshot', () => {
     const isWindows = process.platform === 'win32';
     const quick = isWindows ? 'cmd /c exit 0' : 'true';
     const longCmd = isWindows ? 'ping -n 30 127.0.0.1 > nul' : 'sleep 30';
-    mgr.spawn(quick, 60_000, 'quick');
+    const { taskId: quickId } = mgr.spawn(quick, 60_000, 'quick');
     const { taskId: runningId } = mgr.spawn(longCmd, 60_000, 'long');
-    await new Promise((r) => setTimeout(r, 800));
+    await waitForTaskStatus(mgr, quickId, 'completed');
 
     const all = buildBgTaskSnapshot(mgr);
     const runningOnly = buildBgTaskRunningSnapshot(mgr);

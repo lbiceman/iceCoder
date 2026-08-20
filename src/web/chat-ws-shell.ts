@@ -155,13 +155,13 @@ export async function handleShellCollabRoute(
       sessionId,
       message: userMessage,
     });
-    sendJSON(ws, { type: 'info', message: SHELL_COLLAB_EXIT_DISABLED_MESSAGE });
+    sendJSON(ws, { type: 'info', sessionId, message: SHELL_COLLAB_EXIT_DISABLED_MESSAGE });
     return true;
   }
 
   const wasActive = getShellCollabState(sessionId)?.active === true;
   if (!wasActive && hasBusySessionRun(sessionId)) {
-    sendJSON(ws, { type: 'info', message: SHELL_COLLAB_BUSY_ENTER_MESSAGE });
+    sendJSON(ws, { type: 'info', sessionId, message: SHELL_COLLAB_BUSY_ENTER_MESSAGE });
     return false;
   }
   await setShellCollabActive(sessionId, true, SESSIONS_DIR);
@@ -199,7 +199,7 @@ export async function handleShellCollabRoute(
 
   if (wasActive) {
     if (!skipAlreadyActiveBubble) {
-      sendJSON(ws, { type: 'info', message: SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE });
+      sendJSON(ws, { type: 'info', sessionId, message: SHELL_COLLAB_ALREADY_ACTIVE_MESSAGE });
     }
     broadcastToSession(sessionId, {
       type: 'shell_collab_entered',

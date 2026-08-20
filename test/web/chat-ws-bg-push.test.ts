@@ -47,13 +47,16 @@ describe('BgTaskPusher — attach / detach', () => {
     expect(broadcasts.length).toBe(before);  // 没有新推送
   });
 
-  it('attach a second time replaces the first manager', () => {
+  it('attach 第二个 session 不会卸掉第一个', () => {
     const mgr2 = new BackgroundTaskManager(workDir, 'second');
     try {
       pusher.attach(mgr);
-      pusher.attach(mgr2);  // 替换
-      // 不应抛 + 没有内部冲突
-      expect(true).toBe(true);
+      pusher.attach(mgr2);
+      mgr.spawn(sleepCmd(30), 60_000, 'a-task');
+      mgr2.spawn(sleepCmd(30), 60_000, 'b-task');
+      broadcasts.length = 0;
+      pusher.tick();
+      expect(broadcasts.map((b) => b.sessionId).sort()).toEqual(['push-test', 'second']);
     } finally {
       mgr2.dispose();
     }

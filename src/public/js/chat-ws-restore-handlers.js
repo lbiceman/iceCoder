@@ -17,6 +17,8 @@
 window.ChatWsRestoreHandlers = (function () {
   'use strict';
 
+  var dismissConfirmWithoutReplyFn = null;
+
   function bind(WS, ctx) {
     var Session = window.ChatSession;
     var UI = window.ChatUI;
@@ -33,7 +35,23 @@ window.ChatWsRestoreHandlers = (function () {
       }
     }
 
+    function isForeignSessionEvent(data) {
+      if (!data || !data.sessionId) return false;
+      var active = Session.getActiveId ? Session.getActiveId() : '';
+      return data.sessionId !== active;
+    }
+
+    function dismissConfirmWithoutReply() {
+      if (!activeConfirmId) return;
+      activeConfirmResolved = true;
+      dismissActiveConfirmModal(false);
+      activeConfirmId = null;
+    }
+
+    dismissConfirmWithoutReplyFn = dismissConfirmWithoutReply;
+
     function onConfirm(data) {
+      if (isForeignSessionEvent(data)) return;
       var sessionPet = ctx.getSessionPet();
       if (sessionPet) {
         sessionPet.setState('alert');
@@ -102,6 +120,7 @@ window.ChatWsRestoreHandlers = (function () {
 
     function onConfirmResolved(data) {
       if (!data) return;
+      if (isForeignSessionEvent(data)) return;
       // 其它端 first-win 后关闭本地弹窗，避免 PC/移动端各弹各的
       if (!activeConfirmId || data.confirmId === activeConfirmId) {
         activeConfirmResolved = true;
@@ -111,6 +130,7 @@ window.ChatWsRestoreHandlers = (function () {
 
     function onConfirmTimeout(data) {
       if (!data) return;
+      if (isForeignSessionEvent(data)) return;
       if (!activeConfirmId || data.confirmId === activeConfirmId) {
         activeConfirmResolved = true;
         dismissActiveConfirmModal(false);
@@ -120,18 +140,21 @@ window.ChatWsRestoreHandlers = (function () {
     // ---- checkpoint / harness 域 ----
     function onHarnessState(data) {
       if (!data) return;
+      if (isForeignSessionEvent(data)) return;
       ctx.applyHarnessRestoreUi(!!data.canRestore, data.checkpointMessageIds);
       ctx.refreshSnapshotTimelinePanel();
     }
 
     function onCheckpointMessageIds(data) {
+      if (isForeignSessionEvent(data)) return;
       if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
       UI.setCheckpointMessageIds(data.ids || []);
       ctx.refreshSnapshotTimelinePanel();
     }
 
     // ---- 恢复 / 删除域 ----
-    function onRuntimeRestored() {
+    function onRuntimeRestored(data) {
+      if (isForeignSessionEvent(data)) return;
       set('runtimeRestoreInFlight', false);
       set('isStreaming', false);
       set('userStopped', false);
@@ -155,7 +178,8 @@ window.ChatWsRestoreHandlers = (function () {
       ctx.refreshSnapshotTimelinePanel();
     }
 
-    function onMessageDeleted() {
+    function onMessageDeleted(data) {
+      if (isForeignSessionEvent(data)) return;
       set('isStreaming', false);
       UI.setStreamingState(false);
       UI.clearReasoningStream();
@@ -193,5 +217,10 @@ window.ChatWsRestoreHandlers = (function () {
     WS.on('delete_message_failed', onDeleteMessageFailed);
   }
 
-  return { bind: bind };
+  return {
+    bind: bind,
+    dismissConfirmWithoutReply: function () {
+      if (dismissConfirmWithoutReplyFn) dismissConfirmWithoutReplyFn();
+    },
+  };
 })();

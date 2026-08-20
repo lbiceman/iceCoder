@@ -982,6 +982,11 @@ window.ChatFileRef = (function () {
     initFileComposer: initFileComposer,
     clearInput: clearInput,
     getSelectedRefs: getSelectedRefs,
+    setSelectedRefs: function (paths) {
+      selectedPaths = Array.isArray(paths) ? paths.slice() : [];
+      clearChipSelection();
+      renderChipBar();
+    },
     focusChipBarFromAbove: focusChipBarFromAbove,
   };
 })();

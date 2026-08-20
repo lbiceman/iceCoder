@@ -12,7 +12,7 @@ import { handleChatMessage } from '../../src/web/chat-ws-turn.js';
 import { ensureRunningTurn, clearRunningTurn } from '../../src/web/chat-ws-running-turn.js';
 import { getSessionsDir, sessionProcessing } from '../../src/web/chat-ws-runtime.js';
 import { getTaskQueueManager } from '../../src/session/task-queue.js';
-import { subscribeWsToSession, clearBroadcastState } from '../../src/web/chat-ws-broadcast.js';
+import { subscribeWsToSession, clearBroadcastState, addChatClient } from '../../src/web/chat-ws-broadcast.js';
 
 vi.mock('../../src/web/chat-ws-turn.js', () => ({
   handleChatMessage: vi.fn(async () => 'model_done'),
@@ -126,6 +126,7 @@ describe('chat-ws-loop', () => {
     const sid = uniqueSid();
     const ws = fakeWs();
     subscribeWsToSession(ws, sid);
+    addChatClient(ws);
     await enqueueAndMaybeKickoff(dummyDeps, sid, ws, {
       text: 'go now',
       source: 'implicit',
@@ -140,12 +141,19 @@ describe('chat-ws-loop', () => {
     await vi.waitFor(() => {
       expect(sessionProcessing.has(sid)).toBe(false);
     });
+    const runStates = ws.sent.filter((m) => (m as { type?: string }).type === 'session_run_state') as Array<{
+      phase: string;
+      sessionId: string;
+    }>;
+    expect(runStates[0]).toMatchObject({ sessionId: sid, phase: 'running' });
+    expect(runStates[runStates.length - 1]).toMatchObject({ phase: 'done' });
   });
 
   it('model_done 会继续执行队列中下一项', async () => {
     const sid = uniqueSid();
     const ws = fakeWs();
     subscribeWsToSession(ws, sid);
+    addChatClient(ws);
     await getTaskQueueManager(getSessionsDir()).enqueue(sid, {
       text: 'second',
       source: 'explicit',
@@ -163,6 +171,12 @@ describe('chat-ws-loop', () => {
       (m as { type?: string }).type === 'info'
       && String((m as { message?: string }).message).includes('正在执行排队任务'),
     )).toBe(true);
+    const phases = ws.sent
+      .filter((m) => (m as { type?: string }).type === 'session_run_state')
+      .map((m) => (m as { phase: string }).phase);
+    expect(phases.filter((p) => p === 'done')).toHaveLength(1);
+    expect(phases[phases.length - 1]).toBe('done');
+    expect(phases.includes('running')).toBe(true);
   });
 
   it('非 model_done 停止循环并保留剩余队列', async () => {

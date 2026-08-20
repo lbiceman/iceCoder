@@ -181,7 +181,7 @@ select:focus-visible,
   font-weight: 600;
 }
 
-.chat-sidebar-item-dot {
+.chat-sidebar-item-run-dot {
   width: 6px;
   height: 6px;
   box-shadow: 0 0 0 3px var(--accent-light);

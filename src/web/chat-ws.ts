@@ -15,6 +15,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import { URL } from 'url';
 import { getSession, markSessionConnected } from './routes/remote.js';
+import { readFirstSessionIdFromIndex, registerSessionListLiveSync } from './routes/sessions.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolRegistry } from '../tools/tool-registry.js';
@@ -34,20 +35,21 @@ import {
   broadcastTunnelReady,
   clearBroadcastState,
   getMcpReadySnapshot,
+  getSubscribedSessionId,
   getTunnelReadySnapshot,
   removeChatClient,
   sendJSON,
   subscribeWsToSession,
   unsubscribeWsFromAll,
+  broadcastSessionsIndexUpdated,
 } from './chat-ws-broadcast.js';
 import { detachBgTaskPusher, rebindBgTaskPusher, unwireBgTasksDiskSync, buildBgTasksForSession } from './chat-ws-bg-tasks.js';
-import { clearAllConfirms, purgeSessionConfirms } from './chat-ws-confirm.js';
+import { clearAllConfirms, purgeSessionConfirms, replayPendingConfirmsToWs } from './chat-ws-confirm.js';
 import { createInboundMessageHandler } from './chat-ws-inbound.js';
 import { notifyTaskQueueUpdated } from './chat-ws-loop.js';
 import {
   buildConnectedPayloadExtras,
   ensureActiveSessionBootstrapped,
-  ensureGlobalActiveSessionId,
   startChatRuntimePrewarm,
 } from './chat-ws-persist.js';
 import { buildShellCollabWsExtras } from './chat-ws-shell.js';
@@ -63,6 +65,7 @@ import {
   clearRuntimeOnShutdown,
   dropSessionRunLocks,
   getActiveSessionId,
+  buildSessionRunStatesSnapshot,
   getSessionsDir,
   isSessionTombstoned,
   purgeSessionMaps,
@@ -122,6 +125,11 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     mcpManager,
   });
 
+  registerSessionListLiveSync({
+    getRunStates: buildSessionRunStatesSnapshot,
+    notifyIndexUpdated: broadcastSessionsIndexUpdated,
+  });
+
   void ensureActiveSessionBootstrapped().then(() => rebindBgTaskPusher(getActiveSessionId()).catch(() => {}));
 
   const wss = new WebSocketServer({ noServer: true });
@@ -166,23 +174,22 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
   wss.on('connection', async (ws: WebSocket, request) => {
     await ensureActiveSessionBootstrapped();
 
+    let isRemote = false;
     try {
       const reqUrl = new URL(request.url || '', 'http://localhost');
-      const token = reqUrl.searchParams.get('token');
-      if (token) {
-        const remoteSession = getSession(token);
-        const chatSessionId = remoteSession?.chatSessionId;
-        if (chatSessionId) {
-          await ensureGlobalActiveSessionId(chatSessionId);
-        }
-      }
+      isRemote = Boolean(reqUrl.searchParams.get('token'));
     } catch (err) {
-      console.warn('[chat-ws] remote session align skipped:', err);
+      console.warn('[chat-ws] remote session detect skipped:', err);
     }
 
+    // 扫码连接只订阅列表第一项，不改进程级聚焦，避免打断 PC 正在看的会话流式。
+    const subscribeSid = isRemote
+      ? await readFirstSessionIdFromIndex()
+      : getActiveSessionId();
+
     addChatClient(ws);
-    subscribeWsToSession(ws, getActiveSessionId());
-    void rebindBgTaskPusher(getActiveSessionId()).catch(() => {});
+    subscribeWsToSession(ws, subscribeSid);
+    void rebindBgTaskPusher(subscribeSid).catch(() => {});
     startChatRuntimePrewarm();
     ws.once('close', () => {
       removeChatClient(ws);
@@ -190,13 +197,14 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     });
 
     const features = { executionPlan: true };
-    const sid = getActiveSessionId();
+    const sid = getSubscribedSessionId(ws) || subscribeSid;
     const runningTurn = snapshotRunningTurn(sid);
     const runtimeExtras = await buildConnectedPayloadExtras(sid);
     const bgTasks = await buildBgTasksForSession(sid);
     const shellCollabExtras = await buildShellCollabWsExtras(sid);
     const mcpReadySnapshot = getMcpReadySnapshot();
     const tunnelReadySnapshot = getTunnelReadySnapshot();
+    const sessionRunStates = buildSessionRunStatesSnapshot();
     try {
       const [meta, workspace] = await Promise.all([
         resolveDefaultChatModelMeta(),
@@ -207,6 +215,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         message: '连接成功',
         features,
         activeSessionId: sid,
+        sessionRunStates,
         ...(meta ? { modelContext: meta } : {}),
         ...workspace,
         ...shellCollabExtras,
@@ -222,6 +231,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         message: '连接成功',
         features,
         activeSessionId: sid,
+        sessionRunStates,
         workspaceRoot: DEFAULT_WORK_DIR,
         defaultWorkDir: DEFAULT_WORK_DIR,
         ...shellCollabExtras,
@@ -233,8 +243,9 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
       });
     }
     if (runningTurn?.isProcessing) {
-      sendJSON(ws, { type: 'status', status: 'processing' });
+      sendJSON(ws, { type: 'status', status: 'processing', sessionId: sid });
     }
+    replayPendingConfirmsToWs(ws, sid);
 
     ws.on('message', (data) => {
       void inbound(ws, data);

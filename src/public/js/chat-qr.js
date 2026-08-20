@@ -14,22 +14,15 @@ window.ChatQR = (function () {
     return div.innerHTML;
   }
 
-  function showQrCode(_messages, _appendFn, _saveFn) {
+  function showQrCode() {
     var overlay = createQrOverlayShell();
     setQrModalLoading(overlay);
     document.body.appendChild(overlay);
 
-    var chatSessionId = '';
-    if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
-      chatSessionId = window.ChatSessionStore.getActiveSessionId() || '';
-    } else if (window.ChatSession && typeof window.ChatSession.getActiveId === 'function') {
-      chatSessionId = window.ChatSession.getActiveId() || '';
-    }
-
     fetch('/api/remote/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chatSessionId: chatSessionId || 'default' }),
+      body: JSON.stringify({}),
     })
       .then(function (res) { return res.json(); })
       .then(function (data) {
@@ -63,9 +56,6 @@ window.ChatQR = (function () {
     }
     if (!base) return data.url || '';
     var params = 'token=' + encodeURIComponent(data.token);
-    if (data.chatSessionId) {
-      params += '&sid=' + encodeURIComponent(data.chatSessionId);
-    }
     return base + '/m/chat?' + params;
   }
 
@@ -181,8 +171,14 @@ window.ChatQR = (function () {
     document.body.appendChild(overlay);
   }
 
+  function closeQrCode() {
+    var overlay = document.getElementById('qr-overlay');
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  }
+
   return {
     showQrCode: showQrCode,
     showQrModal: showQrModal,
+    closeQrCode: closeQrCode,
   };
 })();

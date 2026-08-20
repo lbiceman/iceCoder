@@ -114,29 +114,6 @@ window.ChatSessionSidebar = (function () {
     return sidebar;
   }
 
-  function isSwitchLocked() {
-    if (window.ChatPage && typeof window.ChatPage.isWorkloadActive === 'function') {
-      return window.ChatPage.isWorkloadActive();
-    }
-    var WS = window.ChatWebSocket;
-    return !!(WS && typeof WS.isProcessing === 'function' && WS.isProcessing());
-  }
-
-  function syncSwitchLockState() {
-    if (!sidebar) return;
-    var locked = isSwitchLocked();
-    var list = sidebar.querySelector('.chat-sidebar-list');
-    if (list) {
-      list.classList.toggle('is-switch-locked', locked);
-      list.title = locked ? '任务进行中，请先停止后再切换会话' : '';
-    }
-    var newBtn = sidebar.querySelector('.chat-sidebar-new-btn');
-    if (newBtn) {
-      newBtn.classList.toggle('is-disabled', locked);
-      newBtn.title = locked ? '任务进行中，请先停止后再新建会话' : '新建会话';
-    }
-  }
-
   function getRouteFromHash() {
     var h = String(window.location.hash || '').replace(/^#\/?/, '').split('/')[0];
     if (h === 'chat' || h === 'memory' || h === 'skills' || h === 'settings' || h === 'config') return h === 'config' ? 'settings' : h;
@@ -168,7 +145,6 @@ window.ChatSessionSidebar = (function () {
 
   function bindEvents() {
     sidebar.querySelector('.chat-sidebar-new-btn').addEventListener('click', function () {
-      if (isSwitchLocked()) return;
       Store.createSession('新会话', function (session) {
         if (session) {
           renderList();
@@ -352,6 +328,19 @@ window.ChatSessionSidebar = (function () {
       item.className = 'chat-sidebar-item' + (isActive ? ' active' : '');
       item.setAttribute('data-id', s.id);
 
+      var runPhase = Store.getRunPhase ? Store.getRunPhase(s.id) : '';
+      if (runPhase === 'running' || runPhase === 'done' || runPhase === 'error') {
+        item.setAttribute('data-run-phase', runPhase);
+        item.classList.add('has-run-dot');
+        var runDot = document.createElement('span');
+        runDot.className = 'chat-sidebar-item-run-dot is-' + runPhase;
+        runDot.setAttribute(
+          'aria-label',
+          runPhase === 'running' ? '任务进行中' : runPhase === 'done' ? '任务已完成' : '任务失败',
+        );
+        item.appendChild(runDot);
+      }
+
       var body = document.createElement('div');
       body.className = 'chat-sidebar-item-body';
 
@@ -371,12 +360,7 @@ window.ChatSessionSidebar = (function () {
       })(s.id, titleSpan);
       titleRow.appendChild(titleSpan);
 
-      if (isActive) {
-        var dot = document.createElement('span');
-        dot.className = 'chat-sidebar-item-dot';
-        dot.setAttribute('aria-hidden', 'true');
-        titleRow.appendChild(dot);
-      } else {
+      if (!isActive) {
         var delBtn = document.createElement('button');
         delBtn.type = 'button';
         delBtn.className = 'chat-sidebar-item-delete';
@@ -435,7 +419,6 @@ window.ChatSessionSidebar = (function () {
       list.appendChild(item);
     }
     if (window.AppIcon) window.AppIcon.hydrate(list);
-    syncSwitchLockState();
     renderWorkspaceFooter();
   }
 
@@ -473,14 +456,13 @@ window.ChatSessionSidebar = (function () {
   }
 
   function selectSession(sessionId) {
-    if (isSwitchLocked()) return;
     if (sessionId === Store.getActiveSessionId()) return;
-    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload, _degraded, bgTasks) {
+    Store.switchSession(sessionId, window.ChatWebSocket ? window.ChatWebSocket.send : null, function (ok, runningTurn, workspacePayload, _degraded, bgTasks, runtime) {
       if (!ok) return;
       applyWorkspaceForSession(sessionId, workspacePayload);
       renderList();
       if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-        window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
       }
     });
   }
@@ -522,7 +504,6 @@ window.ChatSessionSidebar = (function () {
     create: create,
     destroy: destroy,
     renderList: renderList,
-    syncSwitchLockState: syncSwitchLockState,
     notifyWorkspaceUpdated: notifyWorkspaceUpdated,
     notifyShellCollabUpdated: notifyShellCollabUpdated,
   };
