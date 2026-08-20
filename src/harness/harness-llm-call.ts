@@ -1,4 +1,4 @@
-import type { UnifiedMessage, ToolDefinition, LLMOptions, LLMResponse } from '../llm/types.js';
+import type { UnifiedMessage, ToolDefinition, LLMResponse } from '../llm/types.js';
 import {
   LLM_MAX_RETRIES,
   LLM_RETRY_BASE_DELAY,
@@ -109,7 +109,7 @@ export async function callHarnessLlm(
   }
 
   let response: LLMResponse;
-  const llmOpts: LLMOptions = {
+  const llmOpts: { tools: ToolDefinition[]; signal?: AbortSignal } = {
     tools: currentTools,
     signal: deps.loopController.getAbortSignal(),
   };
