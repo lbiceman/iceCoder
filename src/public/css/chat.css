@@ -1194,7 +1194,9 @@
   outline: none;
   background: transparent;
   resize: none;
-  overflow-y: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  field-sizing: content;
   font-family: inherit;
   font-size: 15px;
   line-height: 1.55;
@@ -1202,6 +1204,7 @@
   color: var(--text-primary);
   padding: 5px 10px;
   min-height: 56px;
+  max-height: 220px;
   max-height: min(220px, 38vh);
   caret-color: var(--accent);
 }
@@ -1212,6 +1215,8 @@
 
 /* Lower area: toolbar — 紧凑，模型 chip 紧贴 send */
 .composer-toolbar {
+  position: relative;
+  z-index: 3;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1219,6 +1224,33 @@
   border-top: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   background: transparent;
   min-height: 40px;
+  pointer-events: auto;
+}
+.composer-file-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.composer-file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 16px;
+}
+.composer-file-btn-face {
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+  width: 28px;
+  height: 28px;
 }
 
 /* Shell 协作模式：位置仍在工具栏右侧；视觉为终端图标 + Shell协作 徽章（悬停 title 说明） */
@@ -1450,11 +1482,49 @@
   max-height: 150px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  cursor: pointer;
+  cursor: zoom-in;
   transition: transform var(--transition);
 }
 .msg-image-thumb:hover {
   transform: scale(1.05);
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+.image-preview-full {
+  max-width: min(96vw, 1600px);
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+.image-preview-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  padding-bottom: 5px;
+}
+.image-preview-close:hover,
+.image-preview-close:focus-visible {
+  background: rgba(255, 255, 255, 0.28);
 }
 
 /* ── Drag Over Indicator ── */
@@ -1959,7 +2029,19 @@
   border-color: var(--accent-border);
   color: var(--text-primary);
 }
-.hidden-input { display: none; }
+/* Electron 打包后对 display:none 的 file input 调用 click() 会被忽略 */
+.hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+}
 
 /* ===== QR Code Modal ===== */
 .qr-overlay {
@@ -2344,14 +2426,42 @@
   opacity: 0.45;
 }
 
-.chat-sidebar-item-dot {
-  flex-shrink: 0;
+.chat-sidebar-item-run-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.chat-sidebar-item.has-run-dot .chat-sidebar-item-title {
+  padding-right: 16px;
+}
+
+.chat-sidebar-item-run-dot.is-running {
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
-  animation: chat-sidebar-dot-breathe 5s ease-in-out infinite;
+  animation: chat-sidebar-dot-breathe 2s ease-in-out infinite;
+}
+
+.chat-sidebar-item-run-dot.is-done {
+  background: var(--success, #55c58e);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success, #55c58e) 28%, transparent);
+}
+
+.chat-sidebar-item-run-dot.is-error {
+  background: var(--danger, #df8290);
+}
+
+.chat-sidebar-item:hover .chat-sidebar-item-run-dot {
+  opacity: 0.7;
+}
+
+.chat-sidebar-item:hover .chat-sidebar-item-run-dot.is-running {
+  opacity: 1;
 }
 
 @keyframes chat-sidebar-dot-breathe {
@@ -2367,7 +2477,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-sidebar-item-dot {
+  .chat-sidebar-item-run-dot.is-running {
     animation: none;
   }
 }
@@ -2402,30 +2512,6 @@
 .chat-sidebar-item-subtitle.is-default {
   font-style: normal;
   opacity: 0.65;
-}
-
-.chat-sidebar-list.is-switch-locked .chat-sidebar-item:not(.active) {
-  opacity: 0.45;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.chat-sidebar-list.is-switch-locked .chat-sidebar-item:not(.active):hover {
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  border-color: var(--border-light);
-}
-
-.chat-sidebar-new-btn.is-disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.chat-sidebar-new-btn.is-disabled:hover {
-  background: transparent;
-  color: var(--text-secondary);
-  border-color: var(--border-color);
 }
 
 .chat-sidebar-item:hover {

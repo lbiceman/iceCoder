@@ -10,6 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 interface ChatSessionApi {
   initSession(): unknown[];
   getMessages(): unknown[];
+  appendMessage(msg: unknown): void;
+  insertRemoteUserMessage(msg: unknown): string;
   separateToolTraces(messages: unknown[]): { msgs: unknown[]; traces: Record<string, unknown[]> };
   applyServerChatSnapshot(
     separated: { msgs: unknown[]; traces: Record<string, unknown[]> },
@@ -20,11 +22,13 @@ interface ChatSessionApi {
   fetchServerMessages(
     callback: (messages: unknown[], result: { ok: boolean }) => void,
   ): void;
+  fetchStructuredMessages(callback: (messages: unknown[]) => void): void;
+  setSessionId(id: string): void;
 }
 
 function loadChatSession(options?: {
   storedMessages?: unknown[];
-  fetchImpl?: () => Promise<unknown>;
+  fetchImpl?: (url?: string) => Promise<unknown>;
 }): ChatSessionApi {
   const src = readFileSync(path.join(__dirname, '../../src/public/js/chat-session.js'), 'utf-8');
   const storage = new Map<string, string>();
@@ -99,5 +103,93 @@ describe('ChatSession 服务端快照同步', () => {
 
     expect(successResult).toEqual({ messages: [], ok: true });
     expect(failureResult).toEqual({ messages: [], ok: false });
+  });
+
+  it('切换会话后忽略过期的服务端消息请求', async () => {
+    let resolveFetch: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => { resolveFetch = resolve; });
+    const session = loadChatSession({
+      fetchImpl: () => pending.then(() => ({
+        ok: true,
+        json: () => Promise.resolve({ messages: [{ role: 'user', id: 'from-a', content: 'A' }] }),
+      })),
+    });
+    session.initSession();
+
+    let called = false;
+    session.fetchServerMessages(() => { called = true; });
+    session.setSessionId('other');
+    resolveFetch(undefined);
+    await pending;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(called).toBe(false);
+  });
+
+  it('空会话不因 structured 为空告警；有历史时只告警一次', async () => {
+    const warns: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warns.push(String(args[0] ?? '')); };
+    try {
+      const emptySession = loadChatSession({
+        fetchImpl: (url?: string) => {
+          if (String(url).includes('/structured')) {
+            return Promise.resolve({ json: () => Promise.resolve({ messages: [] }) });
+          }
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ messages: [] }) });
+        },
+      });
+      emptySession.initSession();
+      await new Promise<void>((resolve) => emptySession.fetchStructuredMessages(() => resolve()));
+      expect(warns.some((w) => w.includes('structured messages 为空'))).toBe(false);
+
+      const withHistory = loadChatSession({
+        storedMessages: [{ role: 'user', id: 'u1', content: 'hi' }],
+        fetchImpl: (url?: string) => {
+          if (String(url).includes('/structured')) {
+            return Promise.resolve({ json: () => Promise.resolve({ messages: [] }) });
+          }
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ messages: [] }) });
+        },
+      });
+      withHistory.initSession();
+      await new Promise<void>((resolve) => withHistory.fetchStructuredMessages(() => resolve()));
+      await new Promise<void>((resolve) => withHistory.fetchStructuredMessages(() => resolve()));
+      expect(warns.filter((w) => w.includes('structured messages 为空'))).toHaveLength(1);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it('服务端回声用不同 id 时认领本地待确认用户消息，不重复插入', () => {
+    const session = loadChatSession();
+    session.initSession();
+    session.appendMessage({
+      role: 'user',
+      id: 'local-optimistic',
+      content: '你能干什么？',
+      _pendingServerAck: true,
+    });
+    expect(session.insertRemoteUserMessage({
+      role: 'user',
+      id: 'server-uuid',
+      content: '你能干什么？',
+    })).toBe('adopted');
+    const msgs = session.getMessages() as { id: string }[];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('server-uuid');
+  });
+
+  it('同 id 的远端用户消息只补丁不新增', () => {
+    const session = loadChatSession();
+    session.initSession();
+    session.appendMessage({ role: 'user', id: 'same-id', content: '你好' });
+    expect(session.insertRemoteUserMessage({
+      role: 'user',
+      id: 'same-id',
+      content: '你好',
+    })).toBe('existing');
+    expect(session.getMessages()).toHaveLength(1);
   });
 });

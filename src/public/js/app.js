@@ -700,6 +700,9 @@
     getSupervisorMode: function () {
       return currentSupervisorMode;
     },
+    applySupervisorMode: function (mode) {
+      applySupervisorModeFromConfig({ supervisorMode: mode });
+    },
     getShell: function () {
       return currentShell;
     },
@@ -741,10 +744,10 @@
       var Store = window.ChatSessionStore;
       var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
       if (Store && typeof Store.switchSession === 'function') {
-        Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
+        Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks, runtime) {
           if (!ok) return;
           if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-            window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
+            window.ChatPage.onSessionSwitched(sessionId, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
           }
         });
       }

@@ -32,7 +32,12 @@ window.ChatWsSessionHandlers = (function () {
       }
       if (serverId !== clientId) {
         set('pendingInitialPaint', false);
-        ctx.onSessionSwitched(serverId, data.runningTurn || null, { bgTasks: data.bgTasks });
+        ctx.onSessionSwitched(serverId, data.runningTurn || null, {
+          bgTasks: data.bgTasks,
+          canRestore: data.canRestore,
+          checkpointMessageIds: data.checkpointMessageIds,
+          harnessState: data.harnessState,
+        });
         return true;
       }
       if (get('remoteMode') && get('pendingInitialPaint') && !get('initialHistoryPainted')) {
@@ -115,6 +120,9 @@ window.ChatWsSessionHandlers = (function () {
           && typeof window.ChatSessionStore.patchSession === 'function') {
         window.ChatSessionStore.patchSession(data.sessionId, { title: data.title });
       }
+      if (data && data.sessionId && Session.getActiveId && data.sessionId !== Session.getActiveId()) {
+        return;
+      }
       if (window.ChatExecutionPlanBridge && typeof window.ChatExecutionPlanBridge.notifySessionUpdated === 'function') {
         window.ChatExecutionPlanBridge.notifySessionUpdated();
       }
@@ -154,6 +162,11 @@ window.ChatWsSessionHandlers = (function () {
     WS.on('session_cleared', onSessionCleared);
     WS.on('user_message_appended', onUserMessageAppended);
     WS.on('session_updated', onSessionUpdated);
+    WS.on('sessions_index_updated', function () {
+      if (window.ChatSessionStore && typeof window.ChatSessionStore.fetchSessions === 'function') {
+        window.ChatSessionStore.fetchSessions();
+      }
+    });
     WS.on('workspace_updated', ctx.syncSidebarWorkspace);
     WS.on('sync', ctx.syncMessages);
   }

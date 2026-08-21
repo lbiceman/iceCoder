@@ -7,6 +7,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import type { ToolCall } from '../llm/types.js';
+import { isOpenLegacyCommand } from './chat-ws-helpers.js';
 
 const MARKER_OPEN = /(?:^|\n)\s*~open\b/;
 /** 与前端注入标题一致时视为 ~open 会话（兼容旧文案） */
@@ -27,7 +28,9 @@ function normalizeTyping(text: string): string {
 
 export function detectFileBrowserOpen(rawMessage: string): boolean {
   const t = rawMessage.trimStart();
-  return MARKER_OPEN.test(rawMessage) || (t.startsWith('~open') && MARKER_UI_ZH.test(rawMessage));
+  return isOpenLegacyCommand(rawMessage)
+    || MARKER_OPEN.test(rawMessage)
+    || (t.startsWith('~open') && MARKER_UI_ZH.test(rawMessage));
 }
 
 /**

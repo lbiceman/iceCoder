@@ -3,47 +3,33 @@
  * 与 src/public/js/session-pet.js 中 EXPRESSIONS 键一致（不含 blink，blink 由内部眨眼定时器驱动）。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-/** 与 SessionPet EXPRESSIONS 对外键一致（不含 blink） */
+/** 与 SessionPet 对外表情键一致（不含 blink） */
 export const PET_EXPRESSION_CYCLE = [
   'idle',
-  'success',
-  'happy',
-  'thinking',
-  'working',
-  'confused',
-  'alert',
-  'anxious',
-  'rest',
-  'surprised',
-  'sad',
-  'crying',
-  'angry',
-  'curious',
-  'dizzy',
-  'shy',
-  'love',
-  'weary',
-  'focused',
-  'read',
-  'determined',
-  'playful',
+  'planning',
+  'running',
+  'executing',
+  'streaming',
+  'tool_calling',
+  'recovering',
+  'restoring',
+  'cancelling',
+  'memory',
+  'clap',
+  'error',
+  'tool_confirm',
+  'user_checkpoint',
 ] as const;
 
 export type PetExpressionId = (typeof PET_EXPRESSION_CYCLE)[number];
 
-describe('PET_EXPRESSION_CYCLE 与 session-pet.js 同步', () => {
-  it('对外表情键在 session-pet.js 的 EXPRESSIONS 映射表中存在', () => {
-    var sessionPetPath = path.join(__dirname, '../../src/public/js/session-pet.js');
-    var src = readFileSync(sessionPetPath, 'utf-8');
+describe('PET_EXPRESSION_CYCLE 与绘制函数同步', () => {
+  it('对外表情键在 harness 绘制表中存在', async () => {
+    const { HARNESS_PET_EXPRESSIONS } = await import('../../src/public/js/session-pet-harness-expr.js');
     for (var i = 0; i < PET_EXPRESSION_CYCLE.length; i++) {
       var id = PET_EXPRESSION_CYCLE[i];
-      expect(src).toMatch(new RegExp('\\b' + id + '\\s*:\\s*expression'));
+      expect(typeof HARNESS_PET_EXPRESSIONS[id]).toBe('function');
     }
   });
 });

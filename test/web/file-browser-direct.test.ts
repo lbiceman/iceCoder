@@ -18,6 +18,9 @@ describe('file-browser-direct helpers', () => {
     expect(detectFileBrowserOpen('~open\n【目录列举】')).toBe(true);
     expect(detectFileBrowserOpen('~open\n[Directory browsing] shortcut')).toBe(true);
     expect(detectFileBrowserOpen('~open\n【目录浏览】')).toBe(true);
+    expect(detectFileBrowserOpen('open\n\n【目录浏览】若用户只给出文件名')).toBe(true);
+    expect(detectFileBrowserOpen('/open\n\n【目录浏览】若用户只给出文件名')).toBe(true);
+    expect(detectFileBrowserOpen('open\n\n[Directory browsing] If the user only gives a file name')).toBe(true);
     expect(detectFileBrowserOpen('聊聊别的')).toBe(false);
   });
 

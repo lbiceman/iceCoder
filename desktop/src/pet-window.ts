@@ -98,26 +98,50 @@ export function createPetFloatingWindow(opts: PetWindowOptions): BrowserWindow {
     hasShadow: false,
     resizable: false,
     movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
     backgroundColor: '#00000000',
+    // Windows：toolbar 不进 Alt-Tab / 任务栏分组，主窗最小化时不会被一起收走
+    ...(process.platform === 'win32' ? { type: 'toolbar' as const } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
+
+  if (typeof win.webContents.setBackgroundThrottling === 'function') {
+    win.webContents.setBackgroundThrottling(false);
+  }
 
   const base = opts.serverBaseUrl.replace(/\/$/, '');
   void win.loadURL(`${base}/pet-floating.html`);
 
-  win.setAlwaysOnTop(true, 'floating');
+  win.setAlwaysOnTop(true, 'screen-saver');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   enableFloatingClickThrough(win);
 
   return win;
+}
+
+/** 主窗已最小化时用 showInactive，避免激活整组窗口或 show 被系统吞掉。 */
+export function revealFloatingWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  if (typeof win.showInactive === 'function') win.showInactive();
+  else win.show();
+  try {
+    win.setAlwaysOnTop(false);
+    win.setAlwaysOnTop(true, 'screen-saver');
+  } catch {
+    win.setAlwaysOnTop(true);
+  }
+  if (typeof win.moveTop === 'function') win.moveTop();
 }
 
 /** 默认整窗穿透；配合 renderer hit-test，仅 canvas 区域取消穿透。 */

@@ -59,6 +59,8 @@ export const IPC = {
 
   /** 渲染层请求系统通知（任务完成提醒）。 */
   TASK_DONE_NOTIFY: 'task:done-notify',
+  /** 用户点击系统通知后，主进程通知渲染层切到对应会话。 */
+  TASK_DONE_NOTIFY_CLICK: 'task:done-notify-click',
 } as const;
 
 export type IpcChannel = typeof IPC[keyof typeof IPC];

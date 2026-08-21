@@ -8,8 +8,8 @@
 window.ChatFileRef = (function () {
   'use strict';
 
-  /** 行首，或任意空白（空格/换行/制表等）之后输入 @ */
-  var FILE_TRIGGER_RE = /(?:^|\s)@([^\s@]*)$/;
+  /** 光标前出现 @ 即触发（中文后无需空格） */
+  var FILE_TRIGGER_RE = /@([^\s@]*)$/;
 
   var anchorEl = null;
   var chipBarEl = null;
@@ -982,6 +982,11 @@ window.ChatFileRef = (function () {
     initFileComposer: initFileComposer,
     clearInput: clearInput,
     getSelectedRefs: getSelectedRefs,
+    setSelectedRefs: function (paths) {
+      selectedPaths = Array.isArray(paths) ? paths.slice() : [];
+      clearChipSelection();
+      renderChipBar();
+    },
     focusChipBarFromAbove: focusChipBarFromAbove,
   };
 })();

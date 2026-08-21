@@ -59,6 +59,14 @@ window.ChatVirtualHistory = (function () {
     return units;
   }
 
+  function clampIndexRange(range, length) {
+    if (!range || typeof length !== 'number' || length <= 0) return null;
+    var start = Math.max(0, range.start | 0);
+    var end = Math.min(length - 1, range.end | 0);
+    if (end < start) return null;
+    return { start: start, end: end };
+  }
+
   function estimateUnitHeight(unit) {
     if (!unit) return DEFAULT_MESSAGE_HEIGHT;
     if (unit.type === 'tools') {
@@ -114,6 +122,7 @@ window.ChatVirtualHistory = (function () {
     var lastRangeEnd = -2;
     var restoringScroll = false;
     var stickyThresholdPx = 80;
+    var layoutGen = 0;
 
     function getHeight(unit) {
       if (!unit || !unit.key) return DEFAULT_MESSAGE_HEIGHT;
@@ -442,7 +451,9 @@ window.ChatVirtualHistory = (function () {
         }
       }
       var idx = findAnchorIndex(viewTop);
-      var key = units[idx].key;
+      var unit = units[idx];
+      if (!unit) return null;
+      var key = unit.key;
       var slot = findSlotByKey(key);
       var offsetFromViewport = viewTop - offsets[idx];
       if (slot) {
@@ -525,10 +536,13 @@ window.ChatVirtualHistory = (function () {
     }
 
     function scanMeasureRange(range) {
-      if (!range || range.end < range.start) return false;
+      range = clampIndexRange(range, units.length);
+      if (!range) return false;
       var dirtyFrom = -1;
       for (var idx = range.start; idx <= range.end; idx++) {
-        var key = units[idx].key;
+        var unit = units[idx];
+        if (!unit) continue;
+        var key = unit.key;
         var slot = findSlotByKey(key);
         if (!slot) continue;
         var d = measureSlotIntoCache(slot, key, idx);
@@ -560,10 +574,13 @@ window.ChatVirtualHistory = (function () {
     }
 
     function patchVisibleRange(range, recycle) {
+      range = clampIndexRange(range, units.length);
+      if (!range) return;
       ensureDomShell();
       var needed = {};
       for (var ni = range.start; ni <= range.end; ni++) {
-        needed[units[ni].key] = true;
+        var neededUnit = units[ni];
+        if (neededUnit) needed[neededUnit.key] = true;
       }
 
       var existing = layerEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
@@ -577,6 +594,7 @@ window.ChatVirtualHistory = (function () {
 
       for (var idx = range.start; idx <= range.end; idx++) {
         var unit = units[idx];
+        if (!unit) continue;
         var slot = recycle[unit.key];
         if (!slot) {
           createSlotForUnit(unit, idx);
@@ -650,8 +668,8 @@ window.ChatVirtualHistory = (function () {
         return;
       }
 
-      var range = findIndexRange(viewTop, viewBottom);
-      if (range.end < range.start) return;
+      var range = clampIndexRange(findIndexRange(viewTop, viewBottom), units.length);
+      if (!range) return;
 
       var rangeChanged = range.start !== lastRangeStart || range.end !== lastRangeEnd;
 
@@ -663,7 +681,8 @@ window.ChatVirtualHistory = (function () {
 
       var neededKeys = {};
       for (var nk = range.start; nk <= range.end; nk++) {
-        neededKeys[units[nk].key] = true;
+        var rangeUnit = units[nk];
+        if (rangeUnit) neededKeys[rangeUnit.key] = true;
       }
 
       var prevSlots = layerEl.querySelectorAll('.chat-vhistory-slot[data-vkey]');
@@ -673,9 +692,11 @@ window.ChatVirtualHistory = (function () {
         if (neededKeys[pk]) recycle[pk] = prevSlots[ps];
       }
 
+      var gen = layoutGen;
       patchVisibleRange(range, recycle);
       if (!scanMeasureRange(range)) {
         requestAnimationFrame(function () {
+          if (gen !== layoutGen) return;
           scanMeasureRange(range);
         });
       }
@@ -747,6 +768,7 @@ window.ChatVirtualHistory = (function () {
     }
 
     function resetScrollerState() {
+      layoutGen += 1;
       teardownAllSlots();
       isScrolling = false;
       setLayerScrollingClass(false);
@@ -877,6 +899,7 @@ window.ChatVirtualHistory = (function () {
     computeTailStartIndex: computeTailStartIndex,
     buildHistoryUnits: buildHistoryUnits,
     estimateUnitHeight: estimateUnitHeight,
+    clampIndexRange: clampIndexRange,
     createScroller: createScroller,
   };
 })();

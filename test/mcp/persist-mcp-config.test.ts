@@ -124,8 +124,19 @@ describe('MCP 配置读写', () => {
     expect(Object.keys(onDisk.mcpServers)).toEqual(['a', 'b']);
   });
 
-  it('validateMcpServerConfig 拒绝缺少 command', () => {
+  it('validateMcpServerConfig 拒绝缺少 command 且缺少 url', () => {
     expect(() => validateMcpServerConfig({ args: [] })).toThrow(/command/);
+  });
+
+  it('validateMcpServerConfig 接受 streamablehttp + url', () => {
+    const cfg = validateMcpServerConfig({
+      type: 'streamablehttp',
+      url: 'https://mcp.example.com',
+      headers: { Authorization: 'Bearer x' },
+      disabled: false,
+    });
+    expect(cfg.url).toBe('https://mcp.example.com');
+    expect(cfg.type).toBe('streamablehttp');
   });
 
   it('removeMcpServerConfig 删除服务器', async () => {

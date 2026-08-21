@@ -8,10 +8,13 @@ import {
   enableFloatingClickThrough,
   PET_FLOATING_HEIGHT,
   PET_FLOATING_WIDTH,
+  revealFloatingWindow,
   setFloatingMousePassthrough,
 } from './pet-window';
 import { PetDisplayMode } from './constants';
 import { writePetFloatingPosition } from './paths';
+
+const FLOATING_LOAD_TIMEOUT_MS = 4000;
 
 export class PetWindowManager {
   private mode: PetDisplayMode = 'hidden';
@@ -24,15 +27,17 @@ export class PetWindowManager {
   setContext(mainWindow: BrowserWindow, serverBaseUrl: string): void {
     this.mainWindow = mainWindow;
     this.serverBaseUrl = serverBaseUrl.replace(/\/$/, '');
+    this.ensureFloatingWindow();
   }
 
   getMode(): PetDisplayMode {
     return this.mode;
   }
 
-  /** 主窗可见时：embedded 模式。 */
+  /** 主窗可见且未最小化时：embedded 模式。 */
   async enterEmbeddedMode(mainWindow?: BrowserWindow): Promise<void> {
     if (mainWindow) this.mainWindow = mainWindow;
+    if (this.isMainMinimized()) return;
     if (this.transitionLock) return;
     this.transitionLock = true;
     try {
@@ -58,21 +63,24 @@ export class PetWindowManager {
         this.mainWindow.webContents.send('pet:force-visible', false);
       }
 
-      if (!this.floating || this.floating.isDestroyed()) {
-        this.floating = createPetFloatingWindow({ serverBaseUrl: this.serverBaseUrl });
-        this.attachFloatingHandlers(this.floating);
-        await new Promise<void>((resolve) => {
-          this.floating!.webContents.once('did-finish-load', () => resolve());
-        });
+      this.ensureFloatingWindow();
+      await this.waitUntilFloatingLoaded();
+
+      if (!this.floating || this.floating.isDestroyed()) return;
+
+      if (this.isMainRestoredVisible()) {
+        this.floating.hide();
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.webContents.send('pet:force-visible', true);
+        }
+        this.mode = 'embedded';
+        return;
       }
 
       applyFloatingWindowPosition(this.floating);
-
-      if (this.lastSnapshot) {
-        this.floating.webContents.send('pet:state-snapshot', this.lastSnapshot);
-      }
+      this.pushSnapshotToFloating();
       this.floating.webContents.send('pet:mode', 'floating');
-      this.floating.show();
+      revealFloatingWindow(this.floating);
       enableFloatingClickThrough(this.floating);
       this.mode = 'floating';
     } finally {
@@ -100,9 +108,7 @@ export class PetWindowManager {
 
   pushSnapshot(snapshot: unknown): void {
     this.lastSnapshot = snapshot;
-    if (this.mode === 'floating' && this.floating && !this.floating.isDestroyed()) {
-      this.floating.webContents.send('pet:state-snapshot', snapshot);
-    }
+    if (this.mode === 'floating') this.pushSnapshotToFloating();
   }
 
   moveFloatingBy(dx: number, dy: number): void {
@@ -114,6 +120,46 @@ export class PetWindowManager {
   setFloatingMousePassthrough(passthrough: boolean): void {
     if (!this.floating || this.floating.isDestroyed()) return;
     setFloatingMousePassthrough(this.floating, passthrough);
+  }
+
+  private isMainMinimized(): boolean {
+    return !!(this.mainWindow && !this.mainWindow.isDestroyed() && this.mainWindow.isMinimized());
+  }
+
+  private isMainRestoredVisible(): boolean {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
+    if (this.mainWindow.isMinimized()) return false;
+    return this.mainWindow.isVisible();
+  }
+
+  private ensureFloatingWindow(): void {
+    if (this.floating && !this.floating.isDestroyed()) return;
+    this.floating = createPetFloatingWindow({ serverBaseUrl: this.serverBaseUrl });
+    this.attachFloatingHandlers(this.floating);
+  }
+
+  private async waitUntilFloatingLoaded(): Promise<void> {
+    const win = this.floating;
+    if (!win || win.isDestroyed()) return;
+    const wc = win.webContents;
+    if (typeof wc.isLoading === 'function' && !wc.isLoading()) return;
+
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        wc.once('did-finish-load', () => resolve());
+      }),
+      new Promise<void>((resolve) => {
+        wc.once('did-fail-load', () => resolve());
+      }),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, FLOATING_LOAD_TIMEOUT_MS);
+      }),
+    ]);
+  }
+
+  private pushSnapshotToFloating(): void {
+    if (!this.lastSnapshot || !this.floating || this.floating.isDestroyed()) return;
+    this.floating.webContents.send('pet:state-snapshot', this.lastSnapshot);
   }
 
   private attachFloatingHandlers(win: BrowserWindow): void {
@@ -129,6 +175,11 @@ export class PetWindowManager {
     win.on('closed', () => {
       this.floating = null;
       this.mode = 'hidden';
+    });
+    win.webContents.on('did-finish-load', () => {
+      if (this.mode !== 'floating' || !this.floating || this.floating.isDestroyed()) return;
+      this.pushSnapshotToFloating();
+      this.floating.webContents.send('pet:mode', 'floating');
     });
   }
 }

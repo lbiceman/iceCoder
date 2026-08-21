@@ -85,4 +85,13 @@ describe('TaskQueueManager', () => {
     expect(await manager.list('s1')).toEqual([]);
     await expect(fs.access(path.join(tempDir, 's1.task-queue.json'))).rejects.toThrow();
   });
+
+  it('s1 与 s2 队列互不污染', async () => {
+    await manager.enqueue('s1', { text: 'one', source: 'explicit' });
+    await manager.enqueue('s2', { text: 'two', source: 'implicit' });
+    await manager.enqueue('s1', { text: 'one-b', source: 'implicit' });
+
+    expect((await manager.list('s1')).map((item) => item.text)).toEqual(['one', 'one-b']);
+    expect((await manager.list('s2')).map((item) => item.text)).toEqual(['two']);
+  });
 });

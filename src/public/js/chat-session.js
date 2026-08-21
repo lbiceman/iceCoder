@@ -155,6 +155,7 @@ window.ChatSession = (function () {
       o.images = persistableImages;
     }
     if (m.shellCommand) o.shellCommand = m.shellCommand;
+    if (m.openCommand) o.openCommand = m.openCommand;
     if (m.alsoNote) o.alsoNote = true;
     if (Array.isArray(m.skills) && m.skills.length) o.skills = m.skills.slice();
     if (Array.isArray(m.referencePaths) && m.referencePaths.length) {
@@ -183,6 +184,7 @@ window.ChatSession = (function () {
     if (typeof raw.sentAt === 'number' && isFinite(raw.sentAt)) o.sentAt = raw.sentAt;
     if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
     if (raw.shellCommand) o.shellCommand = raw.shellCommand;
+    if (raw.openCommand) o.openCommand = raw.openCommand;
     if (raw.alsoNote) o.alsoNote = true;
     if (Array.isArray(raw.skills) && raw.skills.length) o.skills = raw.skills.slice();
     if (Array.isArray(raw.referencePaths) && raw.referencePaths.length) {
@@ -223,7 +225,8 @@ window.ChatSession = (function () {
 
   function fetchServerMessages(callback) {
     syncSessionIdFromStore();
-    var url = '/api/sessions/' + SESSION_ID + '?_t=' + Date.now();
+    var requestedId = SESSION_ID;
+    var url = '/api/sessions/' + requestedId + '?_t=' + Date.now();
     fetch(url)
       .then(function (res) {
         if (res && 'ok' in res && !res.ok) {
@@ -232,19 +235,22 @@ window.ChatSession = (function () {
         return res.json();
       })
       .then(function (data) {
+        if (SESSION_ID !== requestedId) return;
         var msgs = (data.messages && data.messages.length > 0) ? data.messages : [];
         if (callback) callback(msgs, { ok: true });
       })
       .catch(function () {
+        if (SESSION_ID !== requestedId) return;
         if (callback) callback([], { ok: false });
       });
   }
 
-  var structuredEmptyWarned = false;
+  var structuredEmptyWarnedBySession = {};
 
   function warnStructuredEmptyOnce(sessionId) {
-    if (structuredEmptyWarned) return;
-    structuredEmptyWarned = true;
+    if (!sessionId || structuredEmptyWarnedBySession[sessionId]) return;
+    if (!messages || messages.length === 0) return;
+    structuredEmptyWarnedBySession[sessionId] = true;
     console.warn(
       '[ChatSession] structured messages 为空（session=' + sessionId + '）。'
       + '历史 diff 无法还原；新任务完成后会自动生成 .structured.json。',
@@ -264,17 +270,20 @@ window.ChatSession = (function () {
 
   function fetchStructuredMessages(callback) {
     syncSessionIdFromStore();
-    var url = '/api/sessions/' + SESSION_ID + '/structured?_t=' + Date.now();
+    var requestedId = SESSION_ID;
+    var url = '/api/sessions/' + requestedId + '/structured?_t=' + Date.now();
     fetch(url)
       .then(function (res) { return res.json(); })
       .then(function (data) {
+        if (SESSION_ID !== requestedId) return;
         structuredMessagesCache = Array.isArray(data.messages) ? data.messages : [];
         if (structuredMessagesCache.length === 0) {
-          warnStructuredEmptyOnce(SESSION_ID);
+          warnStructuredEmptyOnce(requestedId);
         }
         if (callback) callback(structuredMessagesCache);
       })
       .catch(function () {
+        if (SESSION_ID !== requestedId) return;
         structuredMessagesCache = [];
         if (callback) callback([]);
       });
@@ -301,8 +310,37 @@ window.ChatSession = (function () {
     var trimmed = String(line || '').trim();
     if (!trimmed) return false;
     if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
-    if (trimmed.charAt(0) === '/' && trimmed.indexOf('//') !== 0) return true;
+    if (trimmed.charAt(0) === '/' && trimmed.indexOf('//') !== 0 && !isSlashCommandLine(trimmed)) return true;
     return false;
+  }
+
+  function isSlashCommandLine(trimmed) {
+    return /^\/[a-z]+(?:\s|$)/i.test(trimmed) && trimmed.slice(1).indexOf('/') < 0;
+  }
+
+  function isOpenCommandLine(line) {
+    var t = String(line || '').trim();
+    return t === '/open' || t.indexOf('/open ') === 0
+      || t === '~open' || t.indexOf('~open ') === 0;
+  }
+
+  function splitOpenCommandFromContent(text, existingOpenCommand) {
+    var raw = String(text || '');
+    var lines = raw.split(/\r?\n/);
+    var openLineIndex = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (isOpenCommandLine(lines[i])) {
+        openLineIndex = i;
+        break;
+      }
+    }
+    if (openLineIndex < 0) {
+      return { openCommand: existingOpenCommand || '', content: raw.trim() };
+    }
+    return {
+      openCommand: existingOpenCommand || '/open',
+      content: lines.slice(openLineIndex + 1).join('\n').trim(),
+    };
   }
 
   function parseSkillRefsFromContent(text) {
@@ -411,12 +449,19 @@ window.ChatSession = (function () {
       text = shellSplit.content;
       cloned.content = text;
     }
+    var openSplit = splitOpenCommandFromContent(text, cloned.openCommand);
+    if (openSplit.openCommand) {
+      cloned.openCommand = openSplit.openCommand;
+      text = openSplit.content;
+      cloned.content = text;
+    }
     var skills = Array.isArray(cloned.skills) && cloned.skills.length
       ? cloned.skills.slice()
       : parseSkillRefsFromContent(text);
-    var referencePaths = Array.isArray(cloned.referencePaths) && cloned.referencePaths.length
+    var referencePaths = (Array.isArray(cloned.referencePaths) && cloned.referencePaths.length
       ? cloned.referencePaths.slice()
-      : extractReferencePathsFromContent(text);
+      : extractReferencePathsFromContent(text)
+    ).filter(function (p) { return !isSlashCommandLine(String(p || '').trim()); });
     cloned.content = stripRefsFromDisplayContent(text, skills, referencePaths);
     if (skills.length > 0) cloned.skills = skills;
     else delete cloned.skills;
@@ -478,10 +523,63 @@ window.ChatSession = (function () {
     return false;
   }
 
+  function userContentKey(msg) {
+    return String(msg && msg.content ? msg.content : '').replace(/\s+/g, ' ').trim();
+  }
+
+  function findOptimisticUserDuplicate(incoming) {
+    var key = userContentKey(incoming);
+    if (!key) return null;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      var m = messages[i];
+      if (m.role === 'agent' && m._streaming) continue;
+      if (m.role !== 'user') return null;
+      if (m.id && incoming.id && m.id === incoming.id) return m;
+      if (m._pendingServerAck && userContentKey(m) === key) return m;
+      return null;
+    }
+    return null;
+  }
+
   /**
    * 多端同步：在 processing / 流式期间插入远端用户消息（插在当前轮 assistant 流式气泡之前）。
-   * @returns {boolean} 是否新增了消息
+   * @returns {'existing'|'adopted'|'inserted'|''}
    */
+  function insertRemoteUserMessage(msg) {
+    if (!msg || msg.role !== 'user') return '';
+    if (hasUserMessageId(msg.id)) {
+      patchUserMessageDisplay(msg.id, msg);
+      patchUserMessageImages(msg.id, msg.images || []);
+      var same = null;
+      for (var si = 0; si < messages.length; si++) {
+        if (messages[si].id === msg.id) { same = messages[si]; break; }
+      }
+      if (same) delete same._pendingServerAck;
+      return 'existing';
+    }
+    var optimistic = findOptimisticUserDuplicate(msg);
+    if (optimistic) {
+      optimistic._prevId = optimistic.id;
+      if (msg.id) optimistic.id = msg.id;
+      delete optimistic._pendingServerAck;
+      patchUserMessageDisplay(optimistic.id, msg);
+      patchUserMessageImages(optimistic.id, msg.images || []);
+      return 'adopted';
+    }
+    stampMessageTimestamps(msg);
+    msg = enrichUserMessageForDisplay(msg);
+    var insertAt = messages.length;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'agent' && messages[i]._streaming) {
+        insertAt = i;
+        break;
+      }
+    }
+    messages.splice(insertAt, 0, msg);
+    reindexMessages();
+    return 'inserted';
+  }
+
   function patchUserMessageImages(id, images) {
     if (!id) return false;
     var persistable = filterPersistableImageUrls(images);
@@ -511,6 +609,9 @@ window.ChatSession = (function () {
       if (!enriched.shellCommand && cur.shellCommand) {
         enriched.shellCommand = cur.shellCommand;
       }
+      if (!enriched.openCommand && cur.openCommand) {
+        enriched.openCommand = cur.openCommand;
+      }
       var changed = false;
       if (String(cur.content || '') !== String(enriched.content || '')) {
         cur.content = enriched.content || '';
@@ -519,6 +620,11 @@ window.ChatSession = (function () {
       if ((cur.shellCommand || '') !== (enriched.shellCommand || '')) {
         if (enriched.shellCommand) cur.shellCommand = enriched.shellCommand;
         else delete cur.shellCommand;
+        changed = true;
+      }
+      if ((cur.openCommand || '') !== (enriched.openCommand || '')) {
+        if (enriched.openCommand) cur.openCommand = enriched.openCommand;
+        else delete cur.openCommand;
         changed = true;
       }
       if (enriched.alsoNote) {
@@ -542,33 +648,12 @@ window.ChatSession = (function () {
     return false;
   }
 
-  function insertRemoteUserMessage(msg) {
-    if (!msg || msg.role !== 'user') return false;
-    if (hasUserMessageId(msg.id)) {
-      patchUserMessageDisplay(msg.id, msg);
-      patchUserMessageImages(msg.id, msg.images || []);
-      return true;
-    }
-    stampMessageTimestamps(msg);
-    msg = enrichUserMessageForDisplay(msg);
-    var insertAt = messages.length;
-    for (var i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'agent' && messages[i]._streaming) {
-        insertAt = i;
-        break;
-      }
-    }
-    messages.splice(insertAt, 0, msg);
-    reindexMessages();
-    return true;
-  }
-
   function mergeUserMessagesFromServer(serverMsgs) {
     if (!serverMsgs || !serverMsgs.length) return false;
     var added = false;
     for (var i = 0; i < serverMsgs.length; i++) {
       var m = serverMsgs[i];
-      if (m.role === 'user' && insertRemoteUserMessage(m)) added = true;
+      if (m.role === 'user' && insertRemoteUserMessage(m) === 'inserted') added = true;
     }
     return added;
   }
@@ -609,6 +694,10 @@ window.ChatSession = (function () {
       }
       if (!merged.shellCommand && local.shellCommand) {
         merged.shellCommand = local.shellCommand;
+        patched = true;
+      }
+      if (!merged.openCommand && local.openCommand) {
+        merged.openCommand = local.openCommand;
         patched = true;
       }
       if (patched) serverMsgs[i] = enrichUserMessageForDisplay(merged);
@@ -669,6 +758,8 @@ window.ChatSession = (function () {
       msg.content = enriched.content;
       if (enriched.shellCommand) msg.shellCommand = enriched.shellCommand;
       else delete msg.shellCommand;
+      if (enriched.openCommand) msg.openCommand = enriched.openCommand;
+      else delete msg.openCommand;
       if (enriched.skills) msg.skills = enriched.skills;
       else delete msg.skills;
       if (enriched.referencePaths) msg.referencePaths = enriched.referencePaths;
@@ -753,7 +844,6 @@ window.ChatSession = (function () {
     currentToolBatch = loadLiveToolBatch();
     lastSessionSyncSig = '';
     structuredMessagesCache = null;
-    structuredEmptyWarned = false;
   }
 
   function getActiveId() { return SESSION_ID; }

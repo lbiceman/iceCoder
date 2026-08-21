@@ -13,18 +13,17 @@ window.ChatCommands = (function () {
   var SLASH_LOCAL_COMMANDS = [
     { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
     { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' },
-    { name: 'next', description: '静默入队下一条任务', prefix: '/' }
+    { name: 'next', description: '静默入队下一条任务', prefix: '/' },
+    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
   ];
 
   var TILDE_PC_COMMANDS = [
-    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'scan', description: '手机扫码连接，远程控制', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
 
   var TILDE_REMOTE_COMMANDS = [
-    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '~' },
     { name: 'telemetry', description: '查看记忆系统遥测报告', prefix: '~' },
     { name: 'supervisor', description: '查看 Supervisor 报告', prefix: '~' }
   ];
@@ -52,7 +51,6 @@ window.ChatCommands = (function () {
   function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
   function getTildeCommands() { return remoteMode ? TILDE_REMOTE_COMMANDS : TILDE_PC_COMMANDS; }
   function getSlashCommands() { return SLASH_LOCAL_COMMANDS; }
-  function getLocalCommands() { return getTildeCommands().concat(getSlashCommands()); }
 
   function updateActiveItem() {
     var dd = window.ChatDropdown && window.ChatDropdown.getContainer();
@@ -261,18 +259,6 @@ window.ChatCommands = (function () {
 
   // ---- 命令处理 ----
 
-  function handleScan(qrModule, messages, appendFn, saveFn) {
-    qrModule.showQrCode(messages, appendFn, saveFn);
-  }
-
-  function handleOpen(ws, ui) {
-    ui.showThinking(false);
-    ws.sendMessage(
-      '~open\n\n' +
-      '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
-    );
-  }
-
   function fetchJsonWithTimeout(url, timeoutMs) {
     var ms = timeoutMs || 30000;
     if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
@@ -382,9 +368,6 @@ window.ChatCommands = (function () {
     handleKeydown: handleKeydown,
     handleInput: handleInput,
     applySelection: applySelection,
-    getLocalCommands: getLocalCommands,
-    handleScan: handleScan,
-    handleOpen: handleOpen,
     handleTelemetry: handleTelemetry,
     handleSupervisor: handleSupervisor,
   };

@@ -109,6 +109,18 @@ describe('LLMAdapter.setAbortSignal · 注入到 provider options', () => {
     await adapter.chat(sampleMessages, { signal: acExplicit.signal });
     expect((p.chat as any).mock.calls[0][1].signal).toBe(acExplicit.signal);
   });
+
+  it('仅传 options.signal 时不依赖 setAbortSignal', async () => {
+    const adapter = new LLMAdapter({ maxRetries: 0, baseDelay: 1, maxDelay: 1 });
+    const p = mockProvider('openai');
+    adapter.registerProvider(p);
+    adapter.setDefaultProvider('openai');
+
+    const ac = new AbortController();
+    const resp = await adapter.chat(sampleMessages, { signal: ac.signal });
+    expect(resp.content).toBe('chat-with-signal');
+    expect((p.chat as any).mock.calls[0][1].signal).toBe(ac.signal);
+  });
 });
 
 describe('LLMAdapter withRetry · abort 不触发重试', () => {

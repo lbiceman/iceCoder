@@ -8,6 +8,7 @@
 export interface TaskDoneNotifyPayload {
   success?: unknown;
   summary?: unknown;
+  sessionId?: unknown;
 }
 
 /** 主窗口状态的最小接口（main.ts 的 BrowserWindow 满足）。 */
@@ -28,6 +29,7 @@ export interface TaskDoneNotifyDecision {
   title: string;
   body: string;
   summary: string;
+  sessionId?: string;
 }
 
 export function resolveTaskDoneNotification(
@@ -41,6 +43,7 @@ export function resolveTaskDoneNotification(
   const p = payload as TaskDoneNotifyPayload;
   const success = p.success === true;
   const rawSummary = typeof p.summary === 'string' ? p.summary : '';
+  const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
   const summary =
     rawSummary.length > SUMMARY_MAX_CHARS
       ? `${rawSummary.slice(0, SUMMARY_MAX_CHARS)}…`
@@ -48,7 +51,7 @@ export function resolveTaskDoneNotification(
 
   // R10：仅后台弹通知——主窗在前台时不打扰；最小化/隐藏属于后台，仍会通知
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()) {
-    return { skip: true, title: '', body: '', summary };
+    return { skip: true, title: '', body: '', summary, ...(sessionId ? { sessionId } : {}) };
   }
 
   const title = success ? `${appName} 任务完成` : `${appName} 任务失败`;
@@ -57,5 +60,5 @@ export function resolveTaskDoneNotification(
       ? `用户任务【${summary}】已完成。请确认。`
       : '用户任务已完成。请确认。'
     : summary || '任务执行出错';
-  return { skip: false, title, body, summary };
+  return { skip: false, title, body, summary, ...(sessionId ? { sessionId } : {}) };
 }

@@ -601,9 +601,15 @@ window.ChatExecutionPlanBridge = (function () {
     return enabled;
   }
 
+  /** WS connected 到达后，isEnabled() 才是服务端权威值；此前视为未知。 */
+  function isCapabilityKnown() {
+    return connectedKnown;
+  }
+
   bridgeApi.attach = attach;
   bridgeApi.handleStep = handleStep;
   bridgeApi.isEnabled = isEnabled;
+  bridgeApi.isCapabilityKnown = isCapabilityKnown;
   bridgeApi.fetchAndApply = fetchAndApply;
   bridgeApi.clearSessionFlow = clearSessionFlow;
   bridgeApi.flushOutgoingSession = flushOutgoingSession;

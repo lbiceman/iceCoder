@@ -22,8 +22,8 @@ window.ChatWelcome = (function () {
     {
       key: 'cmd',
       title: '命令面板',
-      desc: '点击输入框右侧命令按钮，执行 open、scan等操作',
-      descRemote: '点击输入框右侧命令按钮，执行 open等操作',
+      desc: '输入 /open 浏览磁盘目录；命令按钮用于扫码、遥测等',
+      descRemote: '输入 /open 浏览磁盘目录；命令按钮用于遥测等',
       icon: 'command-list',
     },
     {

@@ -22,6 +22,9 @@ window.ChatSessionStore = (function () {
   var workspacesBySession = {};
   /** sessionId → Shell 协作是否 active（来自 GET /api/sessions 或 WS 增量更新） */
   var shellCollabActiveBySession = {};
+  var runPhaseBySession = {};
+  var composerDrafts = {};
+  var lastApiActiveSessionId = '';
 
   function deriveTitleFromPrompt(prompt) {
     var t = (prompt || '').replace(/\s+/g, ' ').trim();
@@ -50,6 +53,12 @@ window.ChatSessionStore = (function () {
       shellCollabActiveBySession = (data.shellCollabActive && typeof data.shellCollabActive === 'object')
         ? data.shellCollabActive
         : {};
+    }
+    if (typeof data.activeSessionId === 'string' && data.activeSessionId) {
+      lastApiActiveSessionId = data.activeSessionId;
+    }
+    if (Array.isArray(data.sessionRunStates) && typeof applySessionRunStates === 'function') {
+      applySessionRunStates(data.sessionRunStates);
     }
   }
 
@@ -104,6 +113,50 @@ window.ChatSessionStore = (function () {
     emit();
   }
 
+  function applySessionRunState(sessionId, phase, _stopReason) {
+    if (!sessionId) return;
+    if (!phase || phase === 'idle') delete runPhaseBySession[sessionId];
+    else runPhaseBySession[sessionId] = phase;
+    emit();
+  }
+
+  function applySessionRunStates(list) {
+    runPhaseBySession = {};
+    if (Array.isArray(list)) {
+      for (var i = 0; i < list.length; i++) {
+        var row = list[i];
+        if (row && row.sessionId && row.phase && row.phase !== 'idle') {
+          runPhaseBySession[row.sessionId] = row.phase;
+        }
+      }
+    }
+    emit();
+  }
+
+  function getRunPhase(sessionId) {
+    return runPhaseBySession[sessionId] || '';
+  }
+
+  function acknowledgeRunPhase(sessionId) {
+    var p = runPhaseBySession[sessionId];
+    if (p !== 'done' && p !== 'error') return;
+    delete runPhaseBySession[sessionId];
+    emit();
+    if (window.ChatWebSocket && typeof window.ChatWebSocket.send === 'function') {
+      window.ChatWebSocket.send({ type: 'ack_session_run', sessionId: sessionId });
+    }
+  }
+
+  function getComposerDraft(sessionId) {
+    return composerDrafts[sessionId] || null;
+  }
+
+  function setComposerDraft(sessionId, draft) {
+    if (!sessionId) return;
+    if (!draft) delete composerDrafts[sessionId];
+    else composerDrafts[sessionId] = draft;
+  }
+
   function readLastActiveSessionIdFromStorage() {
     try {
       var stored = localStorage.getItem(STORAGE_KEY_LAST_ACTIVE);
@@ -118,14 +171,6 @@ window.ChatSessionStore = (function () {
       return !!new URLSearchParams(window.location.search || '').get('token');
     } catch (_e) {
       return false;
-    }
-  }
-
-  function readRemoteUrlSessionId() {
-    try {
-      return new URLSearchParams(window.location.search || '').get('sid') || '';
-    } catch (_e) {
-      return '';
     }
   }
 
@@ -157,18 +202,11 @@ window.ChatSessionStore = (function () {
     return sorted[0].id;
   }
 
-  /** 解析初始选中：远程扫码跟随 PC/URL；本地为 最近工作 > API 推荐 > 内存 active > updatedAt 最近。 */
+  /** 解析初始选中：扫码进列表第一项；本地为最近工作 > API 推荐 > 内存 active > updatedAt 最近。 */
   function resolveInitialActiveSessionId(apiActiveId) {
     if (isRemoteTokenEntry()) {
-      var urlSid = readRemoteUrlSessionId();
-      if (urlSid && sessions.some(function (s) { return s.id === urlSid; })) {
-        return urlSid;
-      }
-      var remoteCandidate = apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
-      if (!sessions.some(function (s) { return s.id === remoteCandidate; })) {
-        remoteCandidate = pickMostRecentSessionId();
-      }
-      return remoteCandidate;
+      if (sessions.length) return sessions[0].id;
+      return DEFAULT_SESSION_ID;
     }
     var stored = readLastActiveSessionIdFromStorage();
     var candidate = stored || apiActiveId || activeSessionId || DEFAULT_SESSION_ID;
@@ -187,14 +225,7 @@ window.ChatSessionStore = (function () {
       .then(function (res) { return res.json(); })
       .then(function (data) {
         applySessionsListPayload(data || {});
-        var resolvedId = resolveInitialActiveSessionId(data && data.activeSessionId);
-        if (resolvedId !== activeSessionId) {
-          activeSessionId = resolvedId;
-        }
-        if (isRemoteTokenEntry()) {
-          persistLastActiveSessionId(activeSessionId);
-        }
-        if (callback) callback(sessions, resolvedId);
+        if (callback) callback(sessions, activeSessionId);
         emit();
       })
       .catch(function () {
@@ -207,14 +238,14 @@ window.ChatSessionStore = (function () {
    * @param {function(string)} onReady
    */
   function bootstrapInitialSession(onReady) {
-    fetchSessions(function (_sessions, resolvedId) {
-      var id = resolvedId || activeSessionId || DEFAULT_SESSION_ID;
+    fetchSessions(function () {
+      var id = resolveInitialActiveSessionId(lastApiActiveSessionId);
       activeSessionId = id;
       persistLastActiveSessionId(id);
 
-      function complete(runningTurn, bgTasks) {
+      function complete(runningTurn, bgTasks, runtime) {
         if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-          window.ChatPage.onSessionSwitched(id, runningTurn, { bgTasks: bgTasks });
+          window.ChatPage.onSessionSwitched(id, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
         } else if (window.ChatSession && typeof window.ChatSession.setSessionId === 'function') {
           window.ChatSession.setSessionId(id);
           if (typeof window.ChatSession.fetchServerMessages === 'function') {
@@ -232,8 +263,8 @@ window.ChatSessionStore = (function () {
       var ws = window.ChatWebSocket;
       var wsSend = ws && typeof ws.send === 'function' ? ws.send.bind(ws) : null;
       if (ws && typeof ws.isConnected === 'function' && ws.isConnected() && wsSend) {
-        switchSession(id, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
-          complete(ok ? runningTurn : undefined, bgTasks);
+        switchSession(id, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks, runtime) {
+          complete(ok ? runningTurn : undefined, bgTasks, runtime);
         });
         return;
       }
@@ -335,6 +366,7 @@ window.ChatSessionStore = (function () {
     var lastRunningTurn = null;
     var lastWorkspace = null;
     var lastBgTasks = null;
+    var lastRuntime = null;
     var sendAttempts = 0;
     var maxSendAttempts = 5;
 
@@ -343,7 +375,7 @@ window.ChatSessionStore = (function () {
       settled = true;
       clearTimeout(timer);
       if (window.ChatWebSocket) window.ChatWebSocket.off('session_switched', handler);
-      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace, !!degraded, lastBgTasks);
+      if (callback) callback(!!ok, lastRunningTurn, lastWorkspace, !!degraded, lastBgTasks, lastRuntime);
     }
 
     function applySwitchPayload(data) {
@@ -351,6 +383,11 @@ window.ChatSessionStore = (function () {
       persistLastActiveSessionId(activeSessionId);
       if (data.runningTurn) lastRunningTurn = data.runningTurn;
       if (Array.isArray(data.bgTasks)) lastBgTasks = data.bgTasks;
+      lastRuntime = {
+        canRestore: data.canRestore === true,
+        checkpointMessageIds: Array.isArray(data.checkpointMessageIds) ? data.checkpointMessageIds : [],
+        harnessState: data.harnessState || '',
+      };
       if (data.workspaceRoot || data.defaultWorkDir) {
         lastWorkspace = {
           sessionId: activeSessionId,
@@ -438,6 +475,8 @@ window.ChatSessionStore = (function () {
           if (shellCollabActiveBySession[sessionId]) {
             delete shellCollabActiveBySession[sessionId];
           }
+          if (runPhaseBySession[sessionId]) delete runPhaseBySession[sessionId];
+          if (composerDrafts[sessionId]) delete composerDrafts[sessionId];
           try { localStorage.removeItem(STORAGE_KEY_PREFIX + sessionId); } catch (_e) { /* */ }
           try {
             if (window.ChatExecutionFlowStore
@@ -517,6 +556,12 @@ window.ChatSessionStore = (function () {
     getShellCollabActive: getShellCollabActive,
     setShellCollabActive: setShellCollabActive,
     applyShellCollabActiveMap: applyShellCollabActiveMap,
+    applySessionRunState: applySessionRunState,
+    applySessionRunStates: applySessionRunStates,
+    getRunPhase: getRunPhase,
+    acknowledgeRunPhase: acknowledgeRunPhase,
+    getComposerDraft: getComposerDraft,
+    setComposerDraft: setComposerDraft,
     onChange: onChange,
     offChange: offChange,
   };
