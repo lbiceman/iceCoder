@@ -214,6 +214,26 @@ describe('chat-ws-inbound', () => {
     });
   });
 
+  it('显式 /next 按当前订阅 sid 入队', async () => {
+    const sid = uniqueSid('inbound-explicit-next');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({
+      type: 'message',
+      content: '/next 修登录页',
+      source: 'explicit',
+      command: 'next',
+    })));
+    expect(enqueueAndMaybeKickoff).toHaveBeenCalledTimes(1);
+    const enqueueArgs = vi.mocked(enqueueAndMaybeKickoff).mock.calls[0];
+    expect(enqueueArgs[1]).toBe(sid);
+    expect(enqueueArgs[3]).toMatchObject({
+      text: '修登录页',
+      source: 'implicit',
+    });
+  });
+
   it('stop 会 abort 当前会话 harness', async () => {
     const sid = uniqueSid('inbound-stop');
     const ws = fakeWs();

@@ -26,6 +26,31 @@ window.ChatTaskQueue = (function () {
     return oneLine.length > 120 ? oneLine.slice(0, 120) + '…' : oneLine;
   }
 
+  function isSafeImageSrc(src) {
+    if (!src || typeof src !== 'string') return false;
+    return src.indexOf('data:image/') === 0
+      || src.indexOf('/api/sessions/') === 0
+      || src.indexOf('https://') === 0
+      || src.indexOf('http://') === 0
+      || src.indexOf('blob:') === 0;
+  }
+
+  function renderThumbs(images) {
+    if (!images || !images.length) return '';
+    var html = '<span class="chat-task-queue-thumbs">';
+    var shown = 0;
+    for (var i = 0; i < images.length && shown < 3; i++) {
+      if (!isSafeImageSrc(images[i])) continue;
+      html += '<img class="chat-task-queue-thumb" src="' + escapeHtml(images[i]) + '" alt="配图">';
+      shown += 1;
+    }
+    if (images.length > shown && shown > 0) {
+      html += '<span class="chat-task-queue-thumb-more">+' + (images.length - shown) + '</span>';
+    }
+    html += '</span>';
+    return shown > 0 ? html : '';
+  }
+
   function editIconSvg() {
     return window.AppIcon ? window.AppIcon.html('edit', { width: 14, className: 'chat-task-queue-icon' }) : '';
   }
@@ -61,11 +86,14 @@ window.ChatTaskQueue = (function () {
       '</div><div class="chat-task-queue-list">';
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
+      var label = summarize(item.text);
+      if (!label && item.images && item.images.length) label = '(图片)';
       html += '<div class="chat-task-queue-item" data-task-id="' + escapeHtml(item.id) + '">' +
         '<span class="chat-task-queue-index">' + (i + 1) + '</span>' +
-        '<span class="chat-task-queue-text" title="' + escapeHtml(item.text) + '">' + escapeHtml(summarize(item.text)) + '</span>' +
+        renderThumbs(item.images) +
+        '<span class="chat-task-queue-text" title="' + escapeHtml(item.text || label) + '">' + escapeHtml(label) + '</span>' +
         '<span class="chat-task-queue-actions">' +
-          '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--edit" data-action="edit" title="编辑" aria-label="编辑">' +
+        '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--edit" data-action="edit" title="编辑" aria-label="编辑">' +
             editIconSvg() +
           '</button>' +
           '<button type="button" class="chat-task-queue-btn chat-task-queue-btn--delete" data-action="delete" title="删除" aria-label="删除">' +
@@ -83,11 +111,34 @@ window.ChatTaskQueue = (function () {
     render();
   }
 
+  function addOptimistic(item) {
+    var entry = {
+      id: (item && item.id) || ('optimistic-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)),
+      text: (item && item.text) || '',
+      images: item && Array.isArray(item.images) ? item.images.slice() : [],
+      optimistic: true,
+    };
+    items = items.concat([entry]);
+    render();
+    return entry.id;
+  }
+
+  function removeById(id) {
+    if (!id) return;
+    var next = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].id !== id) next.push(items[i]);
+    }
+    items = next;
+    render();
+  }
+
   function refresh(sessionId) {
     var sid = sessionId || sessionIdProvider();
     return fetch('/api/sessions/' + encodeURIComponent(sid) + '/task-queue', { cache: 'no-store' })
       .then(function (res) { return res.json(); })
       .then(function (body) {
+        if (sessionIdProvider() !== sid) return body;
         if (body && Array.isArray(body.items)) setItems(body.items);
         return body;
       })
@@ -129,7 +180,9 @@ window.ChatTaskQueue = (function () {
       var item = items[index];
       editingInsertIndex = index;
       removeTask(taskId).then(function () {
-        if (typeof onFillInput === 'function') onFillInput(item.text || '');
+        if (typeof onFillInput === 'function') {
+          onFillInput(item.text || '', item.images || []);
+        }
       });
     }
   }
@@ -166,6 +219,8 @@ window.ChatTaskQueue = (function () {
     bind: bind,
     mount: mount,
     setItems: setItems,
+    addOptimistic: addOptimistic,
+    removeById: removeById,
     refresh: refresh,
     getEditingInsertIndex: getEditingInsertIndex,
     setEditingInsertIndex: setEditingInsertIndex,

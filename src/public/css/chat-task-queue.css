@@ -72,6 +72,29 @@
   background: color-mix(in srgb, var(--text-muted) 10%, transparent);
 }
 
+.chat-task-queue-thumbs {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-task-queue-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--bg-hover, rgba(255, 255, 255, 0.04)) 80%, transparent);
+  cursor: zoom-in;
+}
+
+.chat-task-queue-thumb-more {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-task-queue-text {
   flex: 1 1 auto;
   min-width: 0;

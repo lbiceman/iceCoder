@@ -5,6 +5,11 @@
 import { promises as fs } from 'node:fs';
 import { writeFileAtomic } from '../memory/file-memory/atomic-write.js';
 import type { MCPConfig, MCPServerConfig } from './types.js';
+import {
+  normalizeMcpHeaders,
+  resolveMcpHttpUrl,
+  resolveMcpTransportKind,
+} from './mcp-transport.js';
 
 /** UI 写回 mcp.json 后忽略 watch 的时长（应大于 reload debounce） */
 export const MCP_CONFIG_PERSIST_SUPPRESS_MS = 3_000;
@@ -38,14 +43,24 @@ export function validateMcpServerConfig(config: unknown): MCPServerConfig {
     throw new Error('配置必须是 JSON 对象');
   }
   const entry = config as MCPServerConfig;
-  if (!entry.command || typeof entry.command !== 'string' || !entry.command.trim()) {
-    throw new Error('配置缺少 command 字段');
-  }
   if (entry.args != null && !Array.isArray(entry.args)) {
     throw new Error('args 必须是字符串数组');
   }
   if (entry.env != null && (typeof entry.env !== 'object' || Array.isArray(entry.env))) {
     throw new Error('env 必须是对象');
+  }
+  if (entry.headers != null) {
+    normalizeMcpHeaders(entry.headers);
+  }
+
+  const transport = resolveMcpTransportKind(entry);
+  if (transport === 'streamable-http' || transport === 'sse') {
+    resolveMcpHttpUrl(entry);
+    return entry;
+  }
+
+  if (!entry.command || typeof entry.command !== 'string' || !entry.command.trim()) {
+    throw new Error('配置缺少 command 字段（stdio）或 url 字段（远程 HTTP）');
   }
   return entry;
 }

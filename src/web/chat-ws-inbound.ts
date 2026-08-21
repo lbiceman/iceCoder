@@ -476,11 +476,9 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           return;
         }
 
-        const requestedSource = msg.source === 'explicit' || msg.command === 'next' ? 'explicit' : undefined;
         const nextCmd = parseNextCommand(content);
-        const isExplicitNext = requestedSource === 'explicit' || nextCmd.matched;
         const taskText = nextCmd.matched ? nextCmd.text : content;
-        if (isExplicitNext && !taskText.trim() && !hasAttachments) {
+        if (nextCmd.matched && !taskText.trim() && !hasAttachments) {
           sendJSON(ws, { type: 'info', sessionId: runSid, message: NEXT_USAGE_MESSAGE });
           return;
         }
@@ -494,7 +492,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           images,
           referencePaths,
           messageId,
-          isExplicitNext ? 'explicit' : 'implicit',
+          'implicit',
           skills,
         );
         await persistImplicitQueuedUserMessage(runSid, ws, taskInput);

@@ -20,6 +20,7 @@ import './chat-session.js';
 import './chat-session-store.js';
 import './chat-session-sidebar.js';
 import './chat-ui.js';
+import './chat-image-preview.js';
 import './chat-welcome.js';
 import './chat-dropdown.js';
 import './chat-commands.js';
