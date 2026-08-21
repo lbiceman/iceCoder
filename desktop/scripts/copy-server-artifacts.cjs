@@ -91,12 +91,16 @@ function collectTransitiveDependencies(rootNames, nodeModulesDir) {
   return [...collected].sort();
 }
 
-/** Vite 已打包主 SPA；仅 pet 浮窗仍依赖这些未打包的模块。 */
-const PET_STATIC_JS_FILES = [
-  'pet-floating-page.js',
-  'session-pet.js',
-  'session-pet-palette.js',
-];
+/** Vite 已打包主 SPA；仅 pet 浮窗仍走未打包 ESM（session-pet*.js + 入口）。 */
+function collectPetStaticJsFiles(srcPublicJs) {
+  const files = new Set(['pet-floating-page.js']);
+  if (!fs.existsSync(srcPublicJs)) return [...files];
+  for (const name of fs.readdirSync(srcPublicJs)) {
+    if (/^session-pet.*\.js$/.test(name)) files.add(name);
+  }
+  return [...files].sort();
+}
+
 const PUBLIC_STATIC_FILES = ['pet-floating.html'];
 const PUBLIC_STATIC_DIRS = ['icons'];
 
@@ -116,7 +120,8 @@ function mergePublicStaticExtras(repoRoot, targetDistPublic) {
     copyDir(src, path.join(targetDistPublic, rel));
     log(`mergePublic ${rel}/`);
   }
-  for (const rel of PET_STATIC_JS_FILES) {
+  const petJsFiles = collectPetStaticJsFiles(path.join(srcPublic, 'js'));
+  for (const rel of petJsFiles) {
     const src = path.join(srcPublic, 'js', rel);
     if (!fs.existsSync(src)) continue;
     copyFile(src, path.join(targetDistPublic, 'js', rel));

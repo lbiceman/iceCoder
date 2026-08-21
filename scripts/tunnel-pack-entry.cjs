@@ -1,8 +1,8 @@
 /**
  * 恢复隧道入口为发布 stub（tunnel-dev-entry 的逆操作）。
  */
-const fs = require('node:fs');
 const path = require('node:path');
+const { writeTextFileIfChanged } = require('./write-text-file-if-changed.cjs');
 
 const root = path.join(__dirname, '..');
 
@@ -22,5 +22,5 @@ const patches = [
 ];
 
 for (const { target, body } of patches) {
-  fs.writeFileSync(target, body, 'utf8');
+  writeTextFileIfChanged(target, body);
 }
