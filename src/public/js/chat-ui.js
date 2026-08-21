@@ -864,14 +864,25 @@ window.ChatUI = (function () {
     syncComposerStackHeight();
   }
 
+  function supportsFieldSizing() {
+    try {
+      return !!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content'));
+    } catch (_e) {
+      return false;
+    }
+  }
+
   function autoResizeInput() {
     if (!elInput) return;
-    elInput.style.height = 'auto';
-    var maxH = getMaxInputHeight();
-    var scrollH = elInput.scrollHeight;
-    var next = Math.min(scrollH, maxH);
-    elInput.style.height = next + 'px';
-    elInput.style.overflowY = scrollH > maxH + 1 ? 'auto' : 'hidden';
+    if (!supportsFieldSizing()) {
+      var maxH = getMaxInputHeight();
+      var minH = 56;
+      elInput.style.height = 'auto';
+      var scrollH = elInput.scrollHeight;
+      var next = Math.min(Math.max(scrollH, minH), maxH);
+      elInput.style.height = next + 'px';
+    }
+    elInput.style.overflowY = 'auto';
     syncComposerStackHeight();
   }
 
@@ -1927,23 +1938,28 @@ window.ChatUI = (function () {
     return row.childNodes.length ? row : null;
   }
 
-  function createMsgShellCommandChip(shellCommand) {
-    if (!shellCommand) return null;
+  function createMsgSlashCommandChip(command, title) {
+    if (!command) return null;
     var row = document.createElement('div');
     row.className = 'msg-shell-command-chips';
     var chip = document.createElement('span');
     chip.className = 'msg-shell-command-chip';
-    chip.title = 'Shell 协作模式';
-    chip.setAttribute('aria-label', 'Shell 协作模式');
-    if (window.AppIcon) {
+    chip.title = title || command;
+    chip.setAttribute('aria-label', title || command);
+    var label = command === '/shell' ? '/shell' : command;
+    if (window.AppIcon && command === '/shell') {
       chip.innerHTML =
         window.AppIcon.html('terminal', { width: 12 }) +
-        '<span class="msg-shell-command-chip-label">/shell</span>';
+        '<span class="msg-shell-command-chip-label">' + label + '</span>';
     } else {
-      chip.textContent = '/shell';
+      chip.innerHTML = '<span class="msg-shell-command-chip-label">' + label + '</span>';
     }
     row.appendChild(chip);
     return row;
+  }
+
+  function createMsgShellCommandChip(shellCommand) {
+    return createMsgSlashCommandChip(shellCommand, 'Shell 协作模式');
   }
 
   function basenameFromPath(fullPath) {
@@ -2010,6 +2026,11 @@ window.ChatUI = (function () {
       }
     }
 
+    if (displayMsg.role === 'user' && displayMsg.openCommand) {
+      var openRow = createMsgSlashCommandChip(displayMsg.openCommand, '目录浏览');
+      if (openRow) el.appendChild(openRow);
+    }
+
     if (displayMsg.role === 'user' && displayMsg.skills && displayMsg.skills.length) {
       var skillRow = createMsgSkillChipsRow(displayMsg.skills);
       if (skillRow) el.appendChild(skillRow);
@@ -2028,6 +2049,7 @@ window.ChatUI = (function () {
         img.src = displayMsg.images[j];
         img.className = 'msg-image-thumb';
         img.alt = '图片 ' + (j + 1);
+        img.title = '点击查看大图';
         imgRow.appendChild(img);
       }
       el.appendChild(imgRow);
@@ -2173,6 +2195,9 @@ window.ChatUI = (function () {
     ensureChatLayout();
     if (!elTailRoot || !elTailAnchor) return null;
     var insertBefore = elTailAnchor;
+    if (msg.id && elMessages && elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]')) {
+      return elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]');
+    }
     var node = elTailAnchor.previousElementSibling;
     while (node) {
       if (node.id === 'streaming-reasoning-msg' || node.id === 'streaming-msg') {
@@ -2410,6 +2435,7 @@ window.ChatUI = (function () {
       img.src = persistable[j];
       img.className = 'msg-image-thumb';
       img.alt = '图片 ' + (j + 1);
+      img.title = '点击查看大图';
       imgRow.appendChild(img);
     }
     if (isNodeInHistoryRegion(root)) notifyHistoryLayoutChange(root);
@@ -2707,9 +2733,13 @@ window.ChatUI = (function () {
   /** 用最新 msg 替换已有用户气泡（保持 DOM 位置），用于 shellCommand/正文拆分同步。 */
   function replaceUserMessageEl(msg, stripStatusTagFn) {
     if (!msg || !msg.id || msg.role !== 'user') return false;
-    var oldEl = elMessages
-      ? elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]')
-      : null;
+    var oldEl = msg._el && msg._el.isConnected ? msg._el : null;
+    if (!oldEl && elMessages) {
+      oldEl = elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]');
+    }
+    if (!oldEl && elMessages && msg._prevId) {
+      oldEl = elMessages.querySelector('.message.user[data-message-id="' + msg._prevId + '"]');
+    }
     if (!oldEl || !oldEl.parentNode) return false;
     var msgIndex = typeof msg._msgIndex === 'number' ? msg._msgIndex : undefined;
     var newEl = createMessageEl(msg, stripStatusTagFn, msgIndex);

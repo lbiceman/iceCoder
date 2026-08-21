@@ -790,6 +790,7 @@ tags: tool:vitest, testing
 
 describe('时间范围集成', () => {
   it('关键词回退路径 — 时间范围内的记忆排序更高', async () => {
+    const oldPath = path.join(tempDir, 'old_pref.md');
     const oldContent = `---
 name: old_preference
 description: 用户的编程偏好
@@ -798,12 +799,15 @@ createdAt: 2026-01-01T00:00:00.000Z
 ---
 
 用户偏好 Python`;
-    await fs.writeFile(path.join(tempDir, 'old_pref.md'), oldContent, 'utf-8');
+    await fs.writeFile(oldPath, oldContent, 'utf-8');
+    const oldDate = new Date('2026-01-01T00:00:00.000Z');
+    await fs.utimes(oldPath, oldDate, oldDate);
 
     const newContent = `---
 name: new_preference
 description: 用户的编程偏好
 type: user
+createdAt: ${new Date().toISOString()}
 ---
 
 用户偏好 TypeScript`;

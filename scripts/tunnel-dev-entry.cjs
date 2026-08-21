@@ -2,8 +2,8 @@
  * 本地开发：将 web/cli 隧道入口重定向到 src/dev/tunnel 实现（tsx 加载前执行一次）。
  * 发布构建不运行此脚本；dist 仅含 tunnel-stubs。
  */
-const fs = require('node:fs');
 const path = require('node:path');
+const { writeTextFileIfChanged } = require('./write-text-file-if-changed.cjs');
 
 const root = path.join(__dirname, '..');
 
@@ -23,5 +23,5 @@ const patches = [
 ];
 
 for (const { target, body } of patches) {
-  fs.writeFileSync(target, body, 'utf8');
+  writeTextFileIfChanged(target, body);
 }

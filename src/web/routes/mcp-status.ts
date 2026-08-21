@@ -57,6 +57,8 @@ export function createMcpStatusRouter(
         args: s.config.args ?? [],
         disabled: s.config.disabled ?? false,
         cwd: s.config.cwd ?? null,
+        type: s.config.type ?? null,
+        url: s.config.url ?? null,
       },
     }));
   }

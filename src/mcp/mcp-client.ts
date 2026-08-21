@@ -1,23 +1,23 @@
 /**
- * MCP Client — 通过 stdio 与单个 MCP Server 通信。
+ * MCP Client — 与单个 MCP Server 通信。
  *
- * 实现 MCP 协议的客户端侧：
- * 1. 启动子进程（stdio 传输）
- * 2. JSON-RPC 2.0 消息收发
- * 3. 自动探测 MCP 2026-07-28 无状态协议，并兼容旧 initialize 握手
- * 4. tools/list 获取工具列表
- * 5. tools/call 调用工具
+ * 传输：
+ * - stdio：启动子进程，裸 JSON 行 / Content-Length 分帧
+ * - Streamable HTTP：POST JSON-RPC 到远程 url（Cursor 的 type:streamablehttp）
  *
- * 传输格式：
- * - 发送：JSON + 换行符（\n）
- * - 接收：自动检测 Content-Length 分帧 或 裸 JSON 行
- *   大多数 MCP Server 使用裸 JSON 行格式（每行一个 JSON-RPC 消息）
+ * 协议：stdio 优先探测 MCP 2026-07-28 server/discover，失败则 initialize；
+ * HTTP 使用 initialize（默认 2025-06-18）。
  *
  * 参考 MCP 规范：https://modelcontextprotocol.io/specification
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolveMcpServerLaunch } from './resolve-mcp-command.js';
+import { StreamableHttpSession } from './mcp-streamable-http.js';
+import {
+  resolveMcpHttpUrl,
+  resolveMcpTransportKind,
+} from './mcp-transport.js';
 import type {
   MCPServerConfig,
   MCPDiscoverResult,
@@ -32,6 +32,8 @@ import type {
 const REQUEST_TIMEOUT = 60_000;
 const MODERN_PROTOCOL_VERSIONS = ['2026-07-28'] as const;
 const LEGACY_PROTOCOL_VERSION = '2024-11-05';
+/** Streamable HTTP 初始化优先声明的协议版本 */
+const HTTP_PROTOCOL_VERSION = '2025-06-18';
 const CLIENT_INFO = { name: 'ice-coder', version: '1.0.0' } as const;
 
 /** 现代协议探测需快速失败，避免旧 Server 忽略未知请求时长时间阻塞启动。 */
@@ -74,6 +76,7 @@ export class MCPClient {
   private serverName: string;
   private config: MCPServerConfig;
   private process: ChildProcess | null = null;
+  private http: StreamableHttpSession | null = null;
   private nextId = 1;
   private pendingRequests = new Map<
     number | string,
@@ -90,8 +93,19 @@ export class MCPClient {
     this.config = config;
   }
 
-  /** 启动 MCP Server 进程并完成现代协议探测或旧协议握手。 */
+  /** 启动 MCP Server 进程（stdio）或远程会话（Streamable HTTP），并完成协议握手。 */
   async start(): Promise<void> {
+    const transport = resolveMcpTransportKind(this.config);
+    if (transport === 'sse') {
+      throw new Error(
+        `MCP 服务器 ${this.serverName} 使用 type:"sse"（旧版 HTTP+SSE），当前仅支持 stdio 与 Streamable HTTP（type:"streamablehttp" + url）`,
+      );
+    }
+    if (transport === 'streamable-http') {
+      await this.startHttp();
+      return;
+    }
+
     const plan = resolveMcpServerLaunch(this.config);
 
     if (plan.launchMode === 'bundled') {
@@ -136,6 +150,38 @@ export class MCPClient {
     });
 
     await this.negotiateProtocol();
+  }
+
+  /** 远程 Streamable HTTP：不 spawn 子进程，直接 initialize。 */
+  private async startHttp(): Promise<void> {
+    const url = resolveMcpHttpUrl(this.config);
+    this.http = new StreamableHttpSession({
+      url,
+      headers: this.config.headers,
+      serverName: this.serverName,
+    });
+    console.log(`[mcp:${this.serverName}] 使用 Streamable HTTP: ${url.origin}${url.pathname}`);
+    await this.initializeHttp();
+  }
+
+  private async initializeHttp(): Promise<void> {
+    const result = await this.sendRequest('initialize', {
+      protocolVersion: HTTP_PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: CLIENT_INFO,
+    }, INIT_TIMEOUT);
+
+    const negotiated = typeof result?.protocolVersion === 'string' && result.protocolVersion.trim()
+      ? result.protocolVersion.trim()
+      : HTTP_PROTOCOL_VERSION;
+    this.http?.setProtocolVersion(negotiated);
+
+    await this.sendNotification('notifications/initialized', {});
+
+    this.protocolMode = 'legacy';
+    this.negotiatedVersion = negotiated;
+    this._ready = true;
+    console.log(`[mcp:${this.serverName}] 协议: streamable-http (${negotiated})`);
   }
 
   /**
@@ -236,7 +282,7 @@ export class MCPClient {
     }, INIT_TIMEOUT);
 
     // 发送 initialized 通知
-    this.sendNotification('notifications/initialized', {});
+    await this.sendNotification('notifications/initialized', {});
 
     this.protocolMode = 'legacy';
     this.negotiatedVersion = result?.protocolVersion || LEGACY_PROTOCOL_VERSION;
@@ -325,6 +371,10 @@ export class MCPClient {
     timeout = REQUEST_TIMEOUT,
     forceModernVersion?: string,
   ): Promise<any> {
+    if (this.http) {
+      return this.sendHttpRequest(method, params, timeout, forceModernVersion);
+    }
+
     return new Promise((resolve, reject) => {
       if (!this.process || !this.process.stdin) {
         reject(new Error(`MCP server ${this.serverName} 未启动`));
@@ -359,6 +409,29 @@ export class MCPClient {
     });
   }
 
+  private async sendHttpRequest(
+    method: string,
+    params: Record<string, any>,
+    timeout: number,
+    forceModernVersion?: string,
+  ): Promise<any> {
+    if (!this.http) {
+      throw new Error(`MCP server ${this.serverName} 未启动`);
+    }
+    const id = this.nextId++;
+    const request: JsonRpcRequest = {
+      jsonrpc: '2.0',
+      id,
+      method,
+      params: this.withRequestMetadata(params, forceModernVersion),
+    };
+    const msg = await this.http.request(request, timeout);
+    if (msg.error) {
+      throw new MCPRequestError(msg.error.code, msg.error.message, msg.error.data);
+    }
+    return msg.result;
+  }
+
   /** 为现代协议请求合并必需元数据；调用方已有的非保留 _meta 字段会被保留。 */
   private withRequestMetadata(params: Record<string, any>, forceModernVersion?: string): Record<string, any> {
     const version = forceModernVersion
@@ -383,7 +456,11 @@ export class MCPClient {
   /**
    * 发送 JSON-RPC 通知（无需响应）。
    */
-  private sendNotification(method: string, params: Record<string, any>): void {
+  private async sendNotification(method: string, params: Record<string, any>): Promise<void> {
+    if (this.http) {
+      await this.http.notify({ jsonrpc: '2.0', method, params });
+      return;
+    }
     if (!this.process || !this.process.stdin) return;
 
     const notification = {
@@ -393,7 +470,7 @@ export class MCPClient {
     };
 
     const message = JSON.stringify(notification) + '\n';
-    this.process.stdin!.write(message);
+    this.process.stdin.write(message);
   }
 
   /**
@@ -562,10 +639,19 @@ export class MCPClient {
   }
 
   /**
-   * 停止 MCP Server 进程。
+   * 停止 MCP Server 进程或关闭远程 HTTP 会话。
    */
   async stop(): Promise<void> {
     this._ready = false;
+
+    if (this.http) {
+      try {
+        await this.http.close();
+      } catch {
+        /* ignore */
+      }
+      this.http = null;
+    }
 
     if (this.process) {
       const child = this.process;

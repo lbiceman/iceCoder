@@ -49,5 +49,4 @@ export {
 export {
   applyShellCollabPromptOverlay,
   assembleShellCollabPrompt,
-  loadShellCopilotSkillBody,
 } from './shell-collab-prompt.js';

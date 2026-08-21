@@ -29,6 +29,7 @@ window.ChatWsBgTaskHandlers = (function () {
 
     function onBgTaskStopResult(payload) {
       if (!payload || payload.ok) return;
+      if (payload.sessionId && payload.sessionId !== Session.getActiveId()) return;
       if (window.BgTaskChip && window.BgTaskChip.resetStopPending && payload.taskId) {
         window.BgTaskChip.resetStopPending(payload.taskId);
       }

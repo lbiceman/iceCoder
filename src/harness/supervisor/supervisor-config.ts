@@ -38,12 +38,12 @@ export interface LoadSupervisorConfigOptions {
   dataDir?: string;
 }
 
-const DEFAULT_EVENT_TIMELINE: EventTimelineConfig = {
+export const DEFAULT_EVENT_TIMELINE: EventTimelineConfig = {
   enabled: true,
   persistPath: 'data/runtime/supervisor-events.jsonl',
 };
 
-const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
+export const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
   pendingStepsEnterThreshold: 2,
   writeTargetsEnterThreshold: 1,
   diffLinesEnterThreshold: 200,
@@ -172,6 +172,21 @@ export async function loadHarnessSupervisorRuntime(
     const bridge = createSupervisorRuntimeBridge(supervisorConfig, options);
     return { supervisorConfig, globalPolicy: supervisorConfig.globalPolicy, bridge };
   }
+}
+
+/** 设置页 / 测试：解析 supervisor-config.json 的磁盘路径。 */
+export function resolveSupervisorConfigFilePath(
+  options: LoadSupervisorConfigOptions = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveConfigPath(options, env);
+}
+
+/** 设置页：默认值与磁盘文件浅合并后的可编辑文档（不含 globalPolicy）。 */
+export function buildSupervisorConfigFile(
+  override: DeepPartial<SupervisorConfigFile> = {},
+): SupervisorConfigFile {
+  return mergeConfig(defaultSupervisorConfig(), override);
 }
 
 function resolveConfigPath(

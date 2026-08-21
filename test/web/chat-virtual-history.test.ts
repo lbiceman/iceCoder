@@ -16,6 +16,10 @@ function loadChatVirtualHistory() {
   return ctx.window.ChatVirtualHistory as {
     TAIL_TURN_COUNT: number;
     estimateUnitHeight: (unit: { type: string; traces?: unknown[]; msg?: { content?: string } }) => number;
+    clampIndexRange: (
+      range: { start: number; end: number } | null,
+      length: number,
+    ) => { start: number; end: number } | null;
     computeTailStartIndex: (messages: { role: string }[], n?: number) => number;
     buildHistoryUnits: (
       messages: { role: string; id?: string }[],
@@ -60,5 +64,13 @@ describe('ChatVirtualHistory', () => {
     ];
     expect(CVH.computeTailStartIndex(messages, 2)).toBe(0);
     expect(CVH.buildHistoryUnits(messages, {}, {}, 0)).toHaveLength(0);
+  });
+
+  it('clampIndexRange 丢弃越界或空列表范围', () => {
+    const CVH = loadChatVirtualHistory();
+    expect(CVH.clampIndexRange({ start: 10, end: 20 }, 0)).toBeNull();
+    expect(CVH.clampIndexRange({ start: 10, end: 20 }, 3)).toBeNull();
+    expect(CVH.clampIndexRange({ start: 0, end: 20 }, 3)).toEqual({ start: 0, end: 2 });
+    expect(CVH.clampIndexRange({ start: 1, end: 1 }, 3)).toEqual({ start: 1, end: 1 });
   });
 });

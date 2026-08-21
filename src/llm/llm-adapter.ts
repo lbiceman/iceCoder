@@ -173,7 +173,7 @@ export class LLMAdapter implements LLMAdapterInterface {
     try {
       const response = merged.skipRetry
         ? await provider.chat(messages, merged)
-        : await this.withRetry(() => provider.chat(messages, merged));
+        : await this.withRetry(() => provider.chat(messages, merged), undefined, merged.signal);
       this.tokenCounter.record(response.usage);
       return response;
     } catch (error) {
@@ -221,6 +221,7 @@ export class LLMAdapter implements LLMAdapterInterface {
         : await this.withRetry(
           () => provider.stream(messages, trackingCallback, merged),
           () => !emittedAny,
+          merged.signal,
         );
       this.tokenCounter.record(response.usage);
       return response;
@@ -245,8 +246,8 @@ export class LLMAdapter implements LLMAdapterInterface {
   }
 
   /**
-   * 把当前 setAbortSignal() 设的 signal 合并进 options，供 provider 直接消费。
-   * 调用方显式传了 options.signal 时优先使用调用方的（保持可单元测试）。
+   * 把本次调用的 options.signal 与（兼容）setAbortSignal() 槽合并。
+   * 调用方显式传了 options.signal 时优先使用调用方的。
    */
   private mergeAbortSignal(options?: LLMOptions): LLMOptions {
     const next: LLMOptions = { ...(options ?? {}) };
@@ -305,6 +306,7 @@ export class LLMAdapter implements LLMAdapterInterface {
   private async withRetry<T>(
     operation: () => Promise<T>,
     canRetry?: () => boolean,
+    signal?: AbortSignal | null,
   ): Promise<T> {
     let lastError: unknown;
 
@@ -322,7 +324,6 @@ export class LLMAdapter implements LLMAdapterInterface {
           throw error;
         }
 
-        // 带抖动的指数退避，避免惊群效应
         const baseDelay = this.retryConfig.baseDelay * Math.pow(2, attempt);
         const jitter = Math.random() * this.retryConfig.baseDelay;
         const delay = Math.min(baseDelay + jitter, this.retryConfig.maxDelay);
@@ -333,36 +334,34 @@ export class LLMAdapter implements LLMAdapterInterface {
           `${delay.toFixed(0)}ms 后重试...`,
         );
 
-        await this.sleep(delay);
+        await this.sleep(delay, signal);
       }
     }
 
-    // 不应到达此处，但满足 TypeScript 类型检查
     throw lastError;
   }
 
   /**
    * 休眠指定的毫秒数（支持中断信号）。
    */
-  private sleep(ms: number): Promise<void> {
+  private sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
     return new Promise((resolve, reject) => {
+      const abortSignal = signal ?? this._abortSignal;
       const timer = setTimeout(resolve, ms);
-      // 如果有中断信号，监听中断
       const onAbort = () => {
         clearTimeout(timer);
         reject(new Error('Interrupted by user'));
       };
-      if (this._abortSignal) {
-        if (this._abortSignal.aborted) {
+      if (abortSignal) {
+        if (abortSignal.aborted) {
           clearTimeout(timer);
           reject(new Error('Interrupted by user'));
           return;
         }
-        this._abortSignal.addEventListener('abort', onAbort, { once: true });
-        // 清理：正常完成时移除监听器
+        abortSignal.addEventListener('abort', onAbort, { once: true });
         const origResolve = resolve;
         resolve = () => {
-          this._abortSignal?.removeEventListener('abort', onAbort);
+          abortSignal.removeEventListener('abort', onAbort);
           origResolve();
         };
       }

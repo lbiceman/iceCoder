@@ -8,8 +8,8 @@ window.ChatSkills = (function () {
   'use strict';
 
   var SKILLS_CHANGED = 'ice-skills-changed';
-  /** 行首，或任意空白（空格/换行/制表等）之后输入 # */
-  var SKILL_TRIGGER_RE = /(?:^|\s)#([^\s#]*)$/;
+  /** 光标前出现 # 即触发（中文后无需空格） */
+  var SKILL_TRIGGER_RE = /#([^\s#]*)$/;
 
   var skillSelectedIndex = 0;
   var skillFiltered = [];
@@ -113,7 +113,6 @@ window.ChatSkills = (function () {
           return fn.indexOf(query) >= 0 || nm.indexOf(query) >= 0 || desc.indexOf(query) >= 0;
         })
         .map(skillToDropdownItem);
-      if (skillFiltered.length === 0) { hide(); return; }
       skillSelectedIndex = 0;
       openDropdown();
     }
@@ -122,11 +121,13 @@ window.ChatSkills = (function () {
       renderFiltered();
       return;
     }
+    skillSelectedIndex = 0;
+    openDropdown();
     if (skillsLoading) return;
     skillsLoading = true;
     fetchSkills(function () {
       skillsLoading = false;
-      renderFiltered();
+      if (skillActivePrefix === '#') renderFiltered();
     });
   }
 
@@ -495,6 +496,11 @@ window.ChatSkills = (function () {
     },
     getSelectedSkills: function () {
       return selectedSkills.slice();
+    },
+    setSelectedSkills: function (names) {
+      selectedSkills = Array.isArray(names) ? names.slice() : [];
+      clearChipSelection();
+      renderChipBar();
     },
     focusChipBarEnd: focusChipBarEnd,
     isChipBarFocused: isChipBarFocused,

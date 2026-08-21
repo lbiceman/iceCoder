@@ -336,10 +336,13 @@ function isNpxLike(command: string): boolean {
  */
 export function resolveMcpServerLaunch(config: MCPServerConfig): McpSpawnPlan {
   let { command, args = [], env = {} } = config;
+  if (!command || typeof command !== 'string') {
+    throw new Error('MCP stdio 配置缺少 command 字段');
+  }
   const spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
   spawnEnv.PATH = augmentPathForMcpSpawn(spawnEnv.PATH);
 
-  const cwd = (config as MCPServerConfig & { cwd?: string }).cwd;
+  const cwd = config.cwd;
 
   if (isNpxLike(command)) {
     const packageName = extractNpxPackageName(args);
@@ -369,7 +372,7 @@ export function resolveMcpServerLaunch(config: MCPServerConfig): McpSpawnPlan {
     args,
     env: spawnEnv,
     cwd,
-    launchMode: isNpxLike(config.command) ? 'npx' : 'direct',
+    launchMode: isNpxLike(command) ? 'npx' : 'direct',
   };
 }
 

@@ -11,7 +11,7 @@ import { createShellTool } from '../../src/tools/builtin/shell-tool.js';
  * 这些测试不真正派生长进程，只验证：
  * - long 命令被识别为后台（返回 mode:'background'）
  * - short 命令前台执行
- * - rm -rf blocked by shell blacklist
+ * - rm -rf / hard-blocked
  * - background:false 强制前台
  */
 describe('shell-tool — classifier integration', () => {
@@ -116,14 +116,14 @@ describe('shell-tool — classifier integration', () => {
     expect(parsed.timeout).toBe('unlimited');
   });
 
-  it('rm -rf is blocked by shell blacklist', async () => {
+  it('rm -rf / is hard-blocked even when configurable blacklist is deferred', async () => {
     const tool = createShellTool(workDir);
     const result = await tool.handler({
-      command: 'rm -rf /tmp/some-nonexistent-path-icecoder-test',
+      command: 'rm -rf /',
       background: true,
     });
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/Sandbox|blacklist/i);
+    expect(result.error).toMatch(/Sandbox|Hard Block/i);
   });
 
   it('empty command returns error', async () => {

@@ -46,7 +46,13 @@ describe('聊天输入区与欢迎页布局审计', () => {
     expect(CHAT_CSS).toMatch(/\.chat-jump-bottom[\s\S]*var\(--chat-composer-stack-height/);
     expect(CHAT_CSS).toMatch(/\.session-pet-indicator:not\(\.session-pet-indicator--placed\)[\s\S]*var\(--chat-composer-stack-height/);
     expect(CHAT_CSS).toMatch(/max-height:\s*min\(220px,\s*38vh\)/);
+    expect(CHAT_CSS).toMatch(/overflow-y:\s*auto/);
+    expect(CHAT_CSS).toContain('overscroll-behavior: contain');
+    expect(CHAT_CSS).toContain('field-sizing: content');
+    expect(CHAT_CSS).toContain('.composer-file-input');
     expect(CHAT_UI_SOURCE).toContain('ice:composer-layout');
+    expect(CHAT_UI_SOURCE).toContain("elInput.style.overflowY = 'auto'");
+    expect(CHAT_UI_SOURCE).not.toContain("elInput.style.height = '0px'");
     expect(readPublic('js/session-pet.js')).toContain('ice:composer-layout');
   });
 

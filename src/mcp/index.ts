@@ -16,6 +16,10 @@ export type {
 export { startMcpBackgroundInit } from './start-mcp-background.js';
 export type { McpBackgroundSettled } from './start-mcp-background.js';
 export {
+  resolveMcpTransportKind,
+  isRemoteMcpConfig,
+} from './mcp-transport.js';
+export {
   reloadMcpConfiguration,
   syncMcpToolsOnRegistry,
   watchMcpConfigChanges,

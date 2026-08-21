@@ -28,14 +28,6 @@ window.MobileSessionDrawer = (function () {
     Store.fetchSessions(function () { renderList(); });
   }
 
-  function isSwitchLocked() {
-    if (window.ChatPage && typeof window.ChatPage.isWorkloadActive === 'function') {
-      return window.ChatPage.isWorkloadActive();
-    }
-    var WS = window.ChatWebSocket;
-    return !!(WS && typeof WS.isProcessing === 'function' && WS.isProcessing());
-  }
-
   function formatRelativeTime(ts) {
     if (!ts) return '';
     var now = Date.now();
@@ -60,7 +52,6 @@ window.MobileSessionDrawer = (function () {
 
     var sessions = Store.getSessions();
     var activeId = Store.getActiveSessionId();
-    var locked = isSwitchLocked();
 
     for (var i = 0; i < sessions.length; i++) {
       var s = sessions[i];
@@ -69,9 +60,18 @@ window.MobileSessionDrawer = (function () {
       item.type = 'button';
       item.className = 'mobile-drawer-item' + (isActive ? ' is-active' : '');
       item.setAttribute('data-id', s.id);
-      item.disabled = locked;
+
+      var runPhase = Store.getRunPhase ? Store.getRunPhase(s.id) : '';
+      var runDotHtml = '';
+      if (runPhase === 'running' || runPhase === 'done' || runPhase === 'error') {
+        item.setAttribute('data-run-phase', runPhase);
+        item.classList.add('has-run-dot');
+        var label = runPhase === 'running' ? '任务进行中' : runPhase === 'done' ? '任务已完成' : '任务失败';
+        runDotHtml = '<span class="mobile-drawer-item-run-dot is-' + runPhase + '" aria-label="' + label + '"></span>';
+      }
 
       item.innerHTML =
+        runDotHtml +
         '<span class="mobile-drawer-item-title">' + escapeHtml(s.title || '未命名') + '</span>' +
         '<span class="mobile-drawer-item-time">' + formatRelativeTime(s.updatedAt) + '</span>';
 
@@ -94,7 +94,6 @@ window.MobileSessionDrawer = (function () {
   }
 
   function handleNewSession() {
-    if (isSwitchLocked()) return;
     Store.createSession('新会话', function (session) {
       if (!session) return;
       renderList();
@@ -103,16 +102,19 @@ window.MobileSessionDrawer = (function () {
   }
 
   function selectSession(sessionId) {
-    if (!sessionId || isSwitchLocked()) return;
+    if (!sessionId) return;
 
     if (window.MobileShell && typeof window.MobileShell.closeDrawer === 'function') {
       window.MobileShell.closeDrawer();
     }
 
+    // 已在当前会话：只关抽屉（桌面侧栏同理直接 return）
+    if (sessionId === Store.getActiveSessionId()) return;
+
     var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
     var Router = window.AppRouter;
 
-    Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks) {
+    Store.switchSession(sessionId, wsSend, function (ok, runningTurn, _workspace, _degraded, bgTasks, runtime) {
       if (!ok) return;
       renderList();
 
@@ -141,17 +143,12 @@ window.MobileSessionDrawer = (function () {
         window.MobileWorkPage.onActivate();
       }
       if (window.ChatPage && typeof window.ChatPage.onSessionSwitched === 'function') {
-        window.ChatPage.onSessionSwitched(sessionId, runningTurn, { bgTasks: bgTasks });
+        window.ChatPage.onSessionSwitched(sessionId, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
       }
       if (window.MobileWorkPage && typeof window.MobileWorkPage.syncChatActivity === 'function') {
         window.MobileWorkPage.syncChatActivity();
       }
     });
-  }
-
-  function syncSwitchLockState() {
-    if (!panelEl) return;
-    renderList();
   }
 
   function onOpen() {
@@ -162,6 +159,5 @@ window.MobileSessionDrawer = (function () {
     mount: mount,
     onOpen: onOpen,
     renderList: renderList,
-    syncSwitchLockState: syncSwitchLockState,
   };
 })();

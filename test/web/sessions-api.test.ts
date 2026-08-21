@@ -66,12 +66,14 @@ describe('Sessions API (multi-session)', () => {
       sessions: { id: string; title: string }[];
       defaultWorkDir: string;
       workspaces: Record<string, string>;
+      sessionRunStates: unknown[];
     };
     const def = body.sessions.find((s) => s.id === 'default');
     expect(def).toBeTruthy();
     expect(def?.title).toBe('legacy');
     expect(body.defaultWorkDir).toBe(process.cwd());
     expect(body.workspaces.default).toBe(process.cwd());
+    expect(Array.isArray(body.sessionRunStates)).toBe(true);
 
     const indexRaw = await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8');
     const index = JSON.parse(indexRaw) as { id: string; title: string }[];
@@ -251,5 +253,19 @@ describe('Sessions API (multi-session)', () => {
     expect(body.entries).toHaveLength(1);
     expect(body.entries[0].preview).toBe('修复登录接口超时');
     expect(body.entries[0].isCursor).toBe(true);
+  });
+
+  it('readFirstSessionIdFromIndex 返回 index 第一项', async () => {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify([
+        { id: 'first-sid', title: '甲', createdAt: 1, updatedAt: 1, messageCount: 0 },
+        { id: 'second-sid', title: '乙', createdAt: 2, updatedAt: 9, messageCount: 0 },
+      ]),
+      'utf-8',
+    );
+    const { readFirstSessionIdFromIndex } = await import('../../src/web/routes/sessions.js');
+    expect(await readFirstSessionIdFromIndex()).toBe('first-sid');
   });
 });

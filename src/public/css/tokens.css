@@ -41,7 +41,7 @@
 
   --text-primary: #f2f2f3;
   --text-secondary: #a6a6ae;
-  --text-muted: #6e6e77;
+  --text-muted: #A0A0A0;
   --text-on-accent: #18181b;
   --text-on-accent-muted: rgba(24, 24, 27, 0.72);
 
@@ -133,7 +133,7 @@
 
   --text-primary: #18181b;
   --text-secondary: #52525b;
-  --text-muted: #8b8b94;
+  --text-muted: #747479;
   --text-on-accent: #fafafa;
   --text-on-accent-muted: rgba(250, 250, 250, 0.8);
 

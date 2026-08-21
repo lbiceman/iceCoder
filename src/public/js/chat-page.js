@@ -139,6 +139,7 @@ window.ChatPage = (function () {
   var elCmdPlusBtn, mainInputWrapper;
   var cmdPaletteResizeObserver = null;
   var sessionPet = null;
+  var composerEventsBound = false;
 
   function updateNavStatus(connected) {
     var dot = document.getElementById('status-dot');
@@ -308,7 +309,7 @@ window.ChatPage = (function () {
 
   /** 后端仍在跑 / 本地流式未结束 → 发送钮应显示为 Stop */
   function isWorkloadActive() {
-    return WS.isProcessing()
+    return !!(WS && typeof WS.isProcessing === 'function' && WS.isProcessing())
       || isStreaming
       || (Session && typeof Session.hasStreamingModelBubble === 'function' && Session.hasStreamingModelBubble());
   }
@@ -316,8 +317,9 @@ window.ChatPage = (function () {
   /** 输入框是否有可发送内容（含附件 / file ref / skill ref） */
   function getComposerHasSendableContent() {
     if (getComposerText().trim()) return true;
-    if (File.getUploadedFiles().length > 0) return true;
-    if (File.getPendingImages().length > 0) return true;
+    if (File && typeof File.getUploadedFiles === 'function' && File.getUploadedFiles().length > 0) return true;
+    if (File && typeof File.getPendingImages === 'function' && File.getPendingImages().length > 0) return true;
+    if (File && typeof File.hasPendingImageLoads === 'function' && File.hasPendingImageLoads()) return true;
     return false;
   }
 
@@ -328,15 +330,15 @@ window.ChatPage = (function () {
     } else {
       UI.setComposerAction('stop');
     }
-    if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.syncSwitchLockState === 'function') {
-      window.ChatSessionSidebar.syncSwitchLockState();
-    }
-    if (window.MobileSessionDrawer && typeof window.MobileSessionDrawer.syncSwitchLockState === 'function') {
-      window.MobileSessionDrawer.syncSwitchLockState();
-    }
     if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
-        sessionPet.setState(isStreaming ? 'read' : 'thinking');
+        if (Pet.isToolUseActive && Pet.isToolUseActive()) {
+          sessionPet.setState('tool_calling');
+        } else if (isStreaming && !(WS && WS.isProcessing && WS.isProcessing())) {
+          sessionPet.setState('streaming');
+        } else {
+          sessionPet.setState('running');
+        }
       } else if (
         !userStopped
         && !(Pet.isModelDoneNoticeActive && Pet.isModelDoneNoticeActive())
@@ -373,10 +375,12 @@ window.ChatPage = (function () {
     return lines.join('\n');
   }
 
-  function parseExplicitNextBody(body) {
+  function stripNextPrefix(body) {
     body = (body || '').trim();
-    if (body.indexOf('/next') !== 0) return null;
-    return body.slice('/next'.length).trim();
+    if (body.indexOf('/next') === 0) {
+      return { usedPrefix: true, text: body.slice('/next'.length).trim() };
+    }
+    return { usedPrefix: false, text: body };
   }
 
   function createAlsoNoteId() {
@@ -438,25 +442,30 @@ window.ChatPage = (function () {
     else openCmdPalette();
   }
 
-  /** 本地 ~ 命令：选中即执行，返回 true 表示已处理 */
+  function isOpenComposerCommand(text) {
+    return text === '~open' || text.indexOf('~open\n') === 0 || text.indexOf('~open ') === 0
+      || text === '/open' || text.indexOf('/open\n') === 0 || text.indexOf('/open ') === 0;
+  }
+
+  /** 本地 ~ 命令：选中即执行；/open 在发送时拦截。返回 true 表示已处理 */
   function executeLocalCommand(text) {
     text = (text || '').trim();
     if (!text) return false;
 
     if (text === '~scan' && !remoteMode) {
       Cmd.hide();
-      QR.showQrCode(Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+      QR.showQrCode();
       return true;
     }
 
-    if (text === '~open') {
+    if (isOpenComposerCommand(text)) {
       Cmd.hide();
       Pet.showThinking(false);
       UI.clearLiveToolRoundDom();
       UI.setLiveToolRoundActive(true);
       WS.sendMessage(
-        '~open\n\n' +
-        '[Directory browsing] If the user only gives a file name (no folder path), combine it with the directory from the most recent listing line labeled `[当前路径]` to build the full absolute path, then call parse_document, parse_pptx_deep, or open_file as needed.',
+        '/open\n\n' +
+        '【目录浏览】若用户只给出文件名（没有文件夹路径），请与最近一次列表中标记为 `[当前路径]` 的目录拼成完整绝对路径，再按需调用 parse_document、parse_pptx_deep 或 open_file。',
       );
       return true;
     }
@@ -509,8 +518,24 @@ window.ChatPage = (function () {
     }
   }
 
+  function newClientMessageId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    var bytes = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (var bi = 0; bi < 16; bi++) bytes[bi] = Math.floor(Math.random() * 256);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    var hex = [];
+    for (var hi = 0; hi < 16; hi++) hex.push(('0' + bytes[hi].toString(16)).slice(-2));
+    return hex.slice(0, 4).join('') + '-' + hex.slice(4, 6).join('') + '-' + hex.slice(6, 8).join('')
+      + '-' + hex.slice(8, 10).join('') + '-' + hex.slice(10).join('');
+  }
+
   function handleSend() {
-    Cmd.hide();
+    refreshComposerModules();
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
     if (Skills) Skills.hide();
     if (FileRef) FileRef.hide();
 
@@ -520,12 +545,14 @@ window.ChatPage = (function () {
     if (FileRef && typeof FileRef.getSelectedRefs === 'function') {
       referencePaths = FileRef.getSelectedRefs();
     }
-    var uploadedFiles = File.getUploadedFiles();
-    var pendingImages = File.getPendingImages();
-    var explicitNextBody = parseExplicitNextBody(composerBody);
-    var isExplicitNext = explicitNextBody !== null;
+    var uploadedFiles = File && typeof File.getUploadedFiles === 'function' ? File.getUploadedFiles() : [];
+    var pendingImages = File && typeof File.getPendingImages === 'function' ? File.getPendingImages() : [];
+    var nextStrip = stripNextPrefix(composerBody);
+    var taskBody = nextStrip.text;
     var busyAtSend = isWorkloadActive();
-    var appendUserMessageNow = !isExplicitNext && !busyAtSend;
+    // 直接发送与 /next 同一套：空闲出气泡并 kickoff；忙碌只入队，气泡等执行时再出。
+    var appendUserMessageNow = !busyAtSend;
+    var startNewTurnUi = appendUserMessageNow;
 
     if (handleAlsoCommand(composerBody)) {
       clearComposerInput();
@@ -542,7 +569,6 @@ window.ChatPage = (function () {
     if (
       elSendBtn
       && elSendBtn.dataset.action === 'stop'
-      && !isExplicitNext
       && !composerBody
       && !fullText
       && uploadedFiles.length === 0
@@ -552,8 +578,17 @@ window.ChatPage = (function () {
       return;
     }
 
-    if (File.hasPendingUploads && File.hasPendingUploads()) return;
-    if (File.hasPendingImageLoads && File.hasPendingImageLoads()) return;
+    if (File && File.hasPendingUploads && File.hasPendingUploads()) return;
+    if (File && File.hasPendingImageLoads && File.hasPendingImageLoads()) {
+      if (handleSend._waitingImages) return;
+      handleSend._waitingImages = true;
+      var waitImages = File.waitForPendingImageLoads || function (cb) { cb(); };
+      waitImages(function () {
+        handleSend._waitingImages = false;
+        handleSend();
+      });
+      return;
+    }
     if (!composerBody && !fullText && uploadedFiles.length === 0 && pendingImages.length === 0) return;
 
     if (
@@ -562,14 +597,15 @@ window.ChatPage = (function () {
       window.AppRouter.getShell() === 'mobile' &&
       document.body.dataset.page === 'work' &&
       !remoteMode &&
+      !document.querySelector('.page-root-work.mobile-work-has-chat') &&
       window.MobileComposerHost &&
       typeof window.MobileComposerHost.handleWorkPageSend === 'function'
     ) {
       if (window.MobileComposerHost.handleWorkPageSend()) return;
     }
 
-    var outboundText = isExplicitNext ? buildComposerTextWithBody(explicitNextBody) : fullText;
-    if (isExplicitNext && !explicitNextBody && uploadedFiles.length === 0 && pendingImages.length === 0) {
+    var outboundText = buildComposerTextWithBody(taskBody);
+    if (nextStrip.usedPrefix && !taskBody && uploadedFiles.length === 0 && pendingImages.length === 0) {
       var usageMsg = { role: 'agent', content: '用法: /next <任务描述>', statusTag: 'system' };
       if (window.ChatSession && typeof window.ChatSession.stampMessageTimestamps === 'function') {
         window.ChatSession.stampMessageTimestamps(usageMsg);
@@ -586,7 +622,7 @@ window.ChatPage = (function () {
     var selectedSkillFilenames = (Skills && typeof Skills.getSelectedSkills === 'function')
       ? Skills.getSelectedSkills()
       : [];
-    if (appendUserMessageNow && composerBody) displayParts.push(composerBody);
+    if (appendUserMessageNow && taskBody) displayParts.push(taskBody);
     for (var fi = 0; fi < uploadedFiles.length; fi++) {
       if (appendUserMessageNow) displayParts.push('[file] ' + uploadedFiles[fi].filename);
     }
@@ -594,10 +630,10 @@ window.ChatPage = (function () {
 
     var didAppendUserMessage = false;
     if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0 || selectedSkillFilenames.length > 0 || referencePaths.length > 0)) {
-      UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
-      var userMessageId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-        ? crypto.randomUUID()
-        : ('msg-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+      if (startNewTurnUi) {
+        UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
+      }
+      var userMessageId = newClientMessageId();
       var userMsg = {
         role: 'user',
         id: userMessageId,
@@ -606,9 +642,10 @@ window.ChatPage = (function () {
       };
       if (selectedSkillFilenames.length > 0) userMsg.skills = selectedSkillFilenames.slice();
       if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
+      userMsg._pendingServerAck = true;
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
-      if (UI.maybeRepartitionTailIfNeeded) {
+      if (startNewTurnUi && UI.maybeRepartitionTailIfNeeded) {
         UI.maybeRepartitionTailIfNeeded(
           Session.getMessages(),
           Session.getToolTraces(),
@@ -634,51 +671,55 @@ window.ChatPage = (function () {
     }
 
     clearComposerInput();
-    Cmd.hide();
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
 
     var msgText = outboundText || '';
     for (var fj = 0; fj < uploadedFiles.length; fj++) {
       var uf = uploadedFiles[fj];
       msgText = (msgText ? msgText + '\n' : '') + '[file:' + uf.fileId + '] ' + uf.filename;
     }
-    File.clearUploadedFiles();
+    if (File && typeof File.clearUploadedFiles === 'function') File.clearUploadedFiles();
 
-    if (appendUserMessageNow) {
-      userStopped = false;
-      streamFinalized = false;
-      streamChunksReceived = false;
-      visibleStreamChunksReceived = false;
-      pendingTurnTokenUsage = null;
-      // 新一轮用户输入：清空工作台 goal/steps/执行流，避免上一轮反构图状态残留。
-      if (window.ChatExecutionPlanBridge
-        && typeof window.ChatExecutionPlanBridge.notifyNewTurnStarted === 'function') {
-        window.ChatExecutionPlanBridge.notifyNewTurnStarted();
-      } else if (window.ChatExecutionPlan
-        && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
-        window.ChatExecutionPlan.resetToolActivity();
+    try {
+      if (startNewTurnUi) {
+        userStopped = false;
+        streamFinalized = false;
+        streamChunksReceived = false;
+        visibleStreamChunksReceived = false;
+        pendingTurnTokenUsage = null;
+        if (window.ChatExecutionPlanBridge
+          && typeof window.ChatExecutionPlanBridge.notifyNewTurnStarted === 'function') {
+          window.ChatExecutionPlanBridge.notifyNewTurnStarted();
+        } else if (window.ChatExecutionPlan
+          && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
+          window.ChatExecutionPlan.resetToolActivity();
+        }
+        if (window.ChatExecutionPlan
+          && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
+          window.ChatExecutionPlan.beginTurnTimer();
+        }
+        if (Pet && typeof Pet.showThinking === 'function') {
+          Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
+        }
+        if (UI && typeof UI.clearLiveToolRoundDom === 'function') UI.clearLiveToolRoundDom();
+        if (UI && typeof UI.setLiveToolRoundActive === 'function') UI.setLiveToolRoundActive(true);
       }
-      if (window.ChatExecutionPlan
-        && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
-        window.ChatExecutionPlan.beginTurnTimer();
+      if (Pet && typeof Pet.setLastUserPrompt === 'function') {
+        Pet.setLastUserPrompt(outboundText || composerBody || '');
       }
-      Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);
-      UI.clearLiveToolRoundDom();
-      UI.setLiveToolRoundActive(true);
+    } catch (uiErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] send UI update failed', uiErr);
+      }
     }
-    // 记录用户提示词摘要（任务完成通知使用）
-    if (typeof Pet.setLastUserPrompt === 'function') {
-      Pet.setLastUserPrompt(outboundText || composerBody || '');
-    }
+
     var outboundMessageId = didAppendUserMessage && Session.getLastMessage()
       ? Session.getLastMessage().id
       : undefined;
     var sendOpts = { referencePaths: referencePaths };
     if (selectedSkillFilenames.length > 0) sendOpts.skills = selectedSkillFilenames.slice();
     if (outboundMessageId) sendOpts.messageId = outboundMessageId;
-    if (isExplicitNext) {
-      sendOpts.source = 'explicit';
-      sendOpts.command = 'next';
-    }
+    if (msgImages.length > 0) sendOpts.images = msgImages;
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.getEditingInsertIndex === 'function') {
       var insertIndex = window.ChatTaskQueue.getEditingInsertIndex();
       if (typeof insertIndex === 'number') {
@@ -686,15 +727,40 @@ window.ChatPage = (function () {
         window.ChatTaskQueue.clearEditingInsertIndex();
       }
     }
-    if (msgImages.length > 0) {
-      sendOpts.images = msgImages;
-      WS.sendMessage(msgText || '请分析这些图片', sendOpts);
-    } else {
-      WS.sendMessage(msgText, sendOpts);
+    var sent = false;
+    var optimisticId = null;
+    var queueLabel = msgText || (msgImages.length > 0 ? '(图片)' : taskBody) || '排队任务';
+    if (busyAtSend && window.ChatTaskQueue && typeof window.ChatTaskQueue.addOptimistic === 'function') {
+      optimisticId = window.ChatTaskQueue.addOptimistic({ text: queueLabel, images: msgImages });
     }
-    File.clearPendingImages();
+    try {
+      if (!WS || typeof WS.sendMessage !== 'function') {
+        sent = false;
+      } else if (msgImages.length > 0) {
+        sent = WS.sendMessage(msgText || '请分析这些图片', sendOpts);
+      } else {
+        sent = WS.sendMessage(msgText, sendOpts);
+      }
+    } catch (sendErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] sendMessage failed', sendErr);
+      }
+    }
+    if (File && typeof File.clearPendingImages === 'function') File.clearPendingImages();
 
-    if (didAppendUserMessage) {
+    if (!sent) {
+      if (optimisticId && window.ChatTaskQueue && typeof window.ChatTaskQueue.removeById === 'function') {
+        window.ChatTaskQueue.removeById(optimisticId);
+      }
+      if (WS && typeof WS.connect === 'function') WS.connect(remoteToken);
+      notifyUser('未连接到服务，正在重连…请再发送一次', 'warning', { duration: 4000 });
+    } else if (busyAtSend && window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
+      setTimeout(function () {
+        window.ChatTaskQueue.refresh();
+      }, 400);
+    }
+
+    if (didAppendUserMessage && UI && typeof UI.enableAutoScroll === 'function') {
       UI.enableAutoScroll();
     }
     syncComposerActionState();
@@ -809,27 +875,144 @@ window.ChatPage = (function () {
     }
   }
 
+  function closeComposerOverlays() {
+    if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
+    if (Skills && typeof Skills.hide === 'function') Skills.hide();
+    if (FileRef && typeof FileRef.hide === 'function') FileRef.hide();
+    if (QR && typeof QR.closeQrCode === 'function') QR.closeQrCode();
+    if (window.ChatDropdown && typeof window.ChatDropdown.close === 'function') {
+      window.ChatDropdown.close();
+    }
+  }
+
+  function captureComposerDraft(sessionId) {
+    if (!sessionId || !window.ChatSessionStore || typeof window.ChatSessionStore.setComposerDraft !== 'function') {
+      return;
+    }
+    var fileSnap = (File && typeof File.getComposerSnapshot === 'function')
+      ? File.getComposerSnapshot()
+      : { uploadedFiles: [], pendingImages: [] };
+    window.ChatSessionStore.setComposerDraft(sessionId, {
+      text: elInput && elInput.value != null ? elInput.value : '',
+      skills: Skills && typeof Skills.getSelectedSkills === 'function' ? Skills.getSelectedSkills() : [],
+      fileRefs: FileRef && typeof FileRef.getSelectedRefs === 'function' ? FileRef.getSelectedRefs() : [],
+      uploadedFiles: fileSnap.uploadedFiles || [],
+      pendingImages: fileSnap.pendingImages || [],
+      queueInsertIndex: window.ChatTaskQueue && typeof window.ChatTaskQueue.getEditingInsertIndex === 'function'
+        ? window.ChatTaskQueue.getEditingInsertIndex()
+        : null,
+    });
+  }
+
+  function restoreComposerDraft(sessionId) {
+    var draft = window.ChatSessionStore && typeof window.ChatSessionStore.getComposerDraft === 'function'
+      ? window.ChatSessionStore.getComposerDraft(sessionId)
+      : null;
+    if (elInput) elInput.value = draft && draft.text ? draft.text : '';
+    if (Skills && typeof Skills.setSelectedSkills === 'function') {
+      Skills.setSelectedSkills(draft && draft.skills ? draft.skills : []);
+    }
+    if (FileRef && typeof FileRef.setSelectedRefs === 'function') {
+      FileRef.setSelectedRefs(draft && draft.fileRefs ? draft.fileRefs : []);
+    }
+    if (File && typeof File.setComposerSnapshot === 'function') {
+      File.setComposerSnapshot({
+        uploadedFiles: draft && draft.uploadedFiles ? draft.uploadedFiles : [],
+        pendingImages: draft && draft.pendingImages ? draft.pendingImages : [],
+      });
+    }
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.setEditingInsertIndex === 'function') {
+      window.ChatTaskQueue.setEditingInsertIndex(
+        draft && typeof draft.queueInsertIndex === 'number' ? draft.queueInsertIndex : null,
+      );
+    }
+    closeComposerOverlays();
+    if (UI && typeof UI.autoResizeInput === 'function') UI.autoResizeInput();
+  }
+
+  function dismissConfirmWithoutReply() {
+    if (window.ChatWsRestoreHandlers
+      && typeof window.ChatWsRestoreHandlers.dismissConfirmWithoutReply === 'function') {
+      window.ChatWsRestoreHandlers.dismissConfirmWithoutReply();
+    }
+  }
+
+  function bindTaskDoneNotifyClick() {
+    if (!window.iceDesktop || typeof window.iceDesktop.onTaskDoneNotifyClick !== 'function') return;
+    if (window.iceDesktop._iceTaskDoneNotifyClickBound) return;
+    window.iceDesktop._iceTaskDoneNotifyClickBound = true;
+    window.iceDesktop.onTaskDoneNotifyClick(function (sessionId) {
+      if (!sessionId || !window.ChatSessionStore) return;
+      if (window.ChatSessionStore.getActiveSessionId() === sessionId) return;
+      var wsSend = window.ChatWebSocket && typeof window.ChatWebSocket.send === 'function'
+        ? window.ChatWebSocket.send
+        : null;
+      window.ChatSessionStore.switchSession(sessionId, wsSend, function (ok, runningTurn, workspacePayload, _degraded, bgTasks, runtime) {
+        if (!ok) return;
+        if (workspacePayload && typeof window.ChatSessionStore.setSessionWorkspace === 'function') {
+          window.ChatSessionStore.setSessionWorkspace(sessionId, workspacePayload);
+        }
+        if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
+          window.ChatSessionSidebar.renderList();
+        }
+        if (window.MobileSessionDrawer && typeof window.MobileSessionDrawer.renderList === 'function') {
+          window.MobileSessionDrawer.renderList();
+        }
+        onSessionSwitched(sessionId, runningTurn, Object.assign({ bgTasks: bgTasks }, runtime || {}));
+      });
+    });
+  }
+
+  function resetViewportTransientState() {
+    pendingTurnTokenUsage = null;
+    pendingAlsoMessageIds = {};
+    streamingDiffBuffer = { toolCallId: '', text: '' };
+    if (window.BgTaskChip && typeof window.BgTaskChip.clearAll === 'function') {
+      window.BgTaskChip.clearAll();
+    }
+  }
+
   /** 会话切换：侧栏或 WS 重连后同步服务端 activeSessionId。 */
   function onSessionSwitched(sessionId, runningTurn, options) {
     options = options || {};
+    closeComposerOverlays();
+    dismissConfirmWithoutReply();
+    var outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
+    if (outgoingSessionId && outgoingSessionId !== sessionId) {
+      captureComposerDraft(outgoingSessionId);
+      if (Pet && typeof Pet.captureSnapshot === 'function') Pet.captureSnapshot(outgoingSessionId);
+      if (window.ChatExecutionPlanBridge
+        && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
+        window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
+      }
+    }
     UI.clearReasoningStream();
     UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
-    if (FileRef && typeof FileRef.clearInput === 'function') {
-      FileRef.clearInput(elInput);
-    }
-    var outgoingSessionId = Session.getActiveId ? Session.getActiveId() : 'default';
-    if (outgoingSessionId !== sessionId
-      && window.ChatExecutionPlanBridge
-      && typeof window.ChatExecutionPlanBridge.flushOutgoingSession === 'function') {
-      window.ChatExecutionPlanBridge.flushOutgoingSession(outgoingSessionId);
-    }
     if (Session && typeof Session.setSessionId === 'function') {
       Session.setSessionId(sessionId);
     }
+    resetViewportTransientState();
+    if (typeof options.canRestore === 'boolean') {
+      applyHarnessRestoreUi(options.canRestore, options.checkpointMessageIds);
+    } else {
+      applyHarnessRestoreUi(false, []);
+    }
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.acknowledgeRunPhase === 'function') {
+      window.ChatSessionStore.acknowledgeRunPhase(sessionId);
+    }
+    restoreComposerDraft(sessionId);
     if (window.ChatExecutionPlanBridge
       && typeof window.ChatExecutionPlanBridge.notifySessionSwitched === 'function') {
       window.ChatExecutionPlanBridge.notifySessionSwitched();
     }
+    resetTokenUsage();
+    if (runningTurn && runningTurn.isProcessing) {
+      restoreFromRunningTurn(runningTurn);
+    } else {
+      restoreFromRunningTurn(null);
+      if (Pet && typeof Pet.resetToIdle === 'function') Pet.resetToIdle();
+    }
+    syncComposerActionState();
     Session.fetchServerMessages(function (serverMsgs, result) {
       var fetchOk = !result || result.ok !== false;
       var raw = Array.isArray(serverMsgs) ? serverMsgs : [];
@@ -852,7 +1035,6 @@ window.ChatPage = (function () {
         if (runningTurn && runningTurn.isProcessing) restoreFromRunningTurn(runningTurn);
       });
     });
-    resetTokenUsage();
     if (window.ChatTaskQueue && typeof window.ChatTaskQueue.refresh === 'function') {
       window.ChatTaskQueue.refresh(sessionId);
     }
@@ -948,6 +1130,8 @@ window.ChatPage = (function () {
       visibleStreamChunksReceived = false;
       WS.setProcessing(false);
       UI.setStreamingState(false);
+      if (UI.clearLiveToolRoundDom) UI.clearLiveToolRoundDom();
+      if (Session.clearLiveToolBatch) Session.clearLiveToolBatch();
       if (sessionPet) {
         sessionPet.setState('idle');
         sessionPet.setBubbleText('');
@@ -1042,7 +1226,14 @@ window.ChatPage = (function () {
     announceTunnelReadyFromPayload(data || {});
   }
 
+  function isForeignSessionEvent(data) {
+    if (!data || !data.sessionId) return false;
+    var active = Session.getActiveId ? Session.getActiveId() : '';
+    return data.sessionId !== active;
+  }
+
   function onWsMemoryNotice(data) {
+    if (isForeignSessionEvent(data)) return;
     var notices = data.notices || [];
     var messages = Session.getMessages();
     for (var i = 0; i < notices.length; i++) {
@@ -1093,6 +1284,7 @@ window.ChatPage = (function () {
   }
 
   function onWsTokenUsage(data) {
+    if (isForeignSessionEvent(data)) return;
     updateTokenUsage(data.inputTokens || 0, data.outputTokens || 0, {
       effectiveUsed: data.effectiveUsed,
       contextWindow: data.contextWindow,
@@ -1108,6 +1300,7 @@ window.ChatPage = (function () {
   }
 
   function onWsPulse(data) {
+    if (isForeignSessionEvent(data)) return;
     if (!sessionPet) return;
     var hint = data && data.hint ? data.hint : '处理中';
     Pet.updateStatusText(hint, isStreaming, WS.isProcessing());
@@ -1427,9 +1620,13 @@ window.ChatPage = (function () {
 
   function paintRemoteUserMessagesWithoutDom(msgs) {
     var painted = false;
+    var root = document.getElementById('chat-messages');
     for (var i = 0; i < msgs.length; i++) {
       var um = msgs[i];
-      if (um.role !== 'user' || um._el) continue;
+      if (um.role !== 'user') continue;
+      if (um._el && um._el.isConnected) continue;
+      if (um.id && root && root.querySelector('.message.user[data-message-id="' + um.id + '"]')) continue;
+      if (um._prevId && root && root.querySelector('.message.user[data-message-id="' + um._prevId + '"]')) continue;
       if (UI.insertRemoteUserMessageEl) {
         UI.insertRemoteUserMessageEl(um, Session.stripStatusTag);
       } else {
@@ -1467,10 +1664,13 @@ window.ChatPage = (function () {
   function applyRemoteUserMessage(msg) {
     if (!msg || msg.role !== 'user') return false;
     if (msg.sessionId && Session.getActiveId && msg.sessionId !== Session.getActiveId()) return false;
-    var existed = Session.hasUserMessageId && Session.hasUserMessageId(msg.id);
-    if (!Session.insertRemoteUserMessage || !Session.insertRemoteUserMessage(msg)) return false;
-    if (existed) {
-      var localMsg = Session.getMessageById ? Session.getMessageById(msg.id) : null;
+    if (!Session.insertRemoteUserMessage) return false;
+    var result = Session.insertRemoteUserMessage(msg);
+    if (!result) return false;
+    var localMsg = Session.getMessageById
+      ? (Session.getMessageById(msg.id) || (result === 'adopted' ? Session.getLastMessage() : null))
+      : null;
+    if (result === 'existing' || result === 'adopted') {
       if (localMsg && UI.replaceUserMessageEl) {
         UI.replaceUserMessageEl(localMsg, Session.stripStatusTag);
       } else if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
@@ -1649,6 +1849,129 @@ window.ChatPage = (function () {
     };
   }
 
+  function refreshComposerModules() {
+    if (window.ChatSession) Session = window.ChatSession;
+    if (window.ChatWebSocket) WS = window.ChatWebSocket;
+    if (window.ChatUI) UI = window.ChatUI;
+    if (window.ChatCommands) Cmd = window.ChatCommands;
+    if (window.ChatSkills) Skills = window.ChatSkills;
+    if (window.ChatFileRef) FileRef = window.ChatFileRef;
+    if (window.ChatFile) File = window.ChatFile;
+    if (window.ChatQR) QR = window.ChatQR;
+    if (window.ChatPetBridge) Pet = window.ChatPetBridge;
+  }
+
+  function onComposerPaste(e) {
+    if (e && e.__iceComposerPaste) return;
+    if (e) e.__iceComposerPaste = true;
+    refreshComposerModules();
+    if (File && typeof File.handlePasteEvent === 'function' && File.handlePasteEvent(e)) return;
+    if (File && typeof File.tryPasteFromDesktopClipboard === 'function'
+      && File.tryPasteFromDesktopClipboard(e && e.clipboardData)) {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    }
+  }
+
+  /**
+   * 输入区交互必须在后续 init（冰豆 / WS / 欢迎页）之前绑定。
+   * 那些步骤一旦抛错，旧逻辑会跳过 @ # + 指令 粘贴 与自动增高。
+   */
+  function bindComposerInteractions() {
+    if (composerEventsBound) return;
+    composerEventsBound = true;
+    refreshComposerModules();
+
+    if (elMessages) {
+      elMessages.addEventListener('click', onRestoreButtonClick, true);
+      elMessages.addEventListener('click', onDeleteButtonClick, true);
+    }
+    if (elSendBtn) elSendBtn.addEventListener('click', handleSend);
+    if (elInput) {
+      elInput.addEventListener('keydown', function (e) {
+        refreshComposerModules();
+        if (FileRef && FileRef.handleKeydown(e, elInput)) return;
+        if (Skills && Skills.handleKeydown(e, elInput)) return;
+        if (Cmd && Cmd.handleKeydown(e, elInput)) return;
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          if (elSendBtn && elSendBtn.dataset.action === 'stop') return;
+          handleSend();
+        }
+      });
+      elInput.addEventListener('input', function () {
+        refreshComposerModules();
+        if (UI && typeof UI.autoResizeInput === 'function') UI.autoResizeInput();
+        if (Skills) Skills.handleInput(elInput.value, elInput);
+        if (FileRef) FileRef.handleInput(elInput.value, elInput);
+        if (Cmd) Cmd.handleInput(elInput.value, elInput);
+        syncComposerActionState();
+      });
+      elInput.addEventListener('wheel', function (e) {
+        if (elInput.scrollHeight > elInput.clientHeight + 1) e.stopPropagation();
+      }, { passive: true });
+    }
+    document.addEventListener('paste', function (e) {
+      if (!elInput || !container) return;
+      var composer = container.querySelector('.chat-composer');
+      var ae = document.activeElement;
+      var focusedInComposer = !!(ae && composer && composer.contains(ae));
+      var targetInComposer = !!(e.target && composer && composer.contains(e.target));
+      if (ae !== elInput && !focusedInComposer && !targetInComposer) return;
+      onComposerPaste(e);
+    }, true);
+    if (elCmdPlusBtn) {
+      elCmdPlusBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        refreshComposerModules();
+        toggleCmdPalette();
+      });
+    }
+    var chatPage = container && container.querySelector('.chat-page');
+    if (chatPage) {
+      chatPage.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.add('drag-over');
+      });
+      chatPage.addEventListener('dragleave', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.remove('drag-over');
+      });
+      chatPage.addEventListener('drop', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        chatPage.classList.remove('drag-over');
+        refreshComposerModules();
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (!files || !File) return;
+        for (var i = 0; i < files.length; i++) {
+          if (files[i].type.indexOf('image/') === 0) {
+            File.addPendingImage(files[i]);
+          } else {
+            File.handleFileSelect(files[i], Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+          }
+        }
+      });
+    }
+    if (elFileInput) {
+      elFileInput.addEventListener('change', function () {
+        refreshComposerModules();
+        if (!elFileInput.files || !File) return;
+        for (var fi = 0; fi < elFileInput.files.length; fi++) {
+          var picked = elFileInput.files[fi];
+          if (picked && File.isImageFile && File.isImageFile(picked)) {
+            File.addPendingImage(picked);
+          } else {
+            File.handleFileSelect(picked, Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
+          }
+        }
+        elFileInput.value = '';
+      });
+    }
+  }
+
   // ---- 渲染 ----
   function render(parentEl) {
     if (mounted) {
@@ -1656,8 +1979,8 @@ window.ChatPage = (function () {
       onActivate();
       return;
     }
-    mounted = true;
     container = parentEl;
+    refreshComposerModules();
 
     var params = new URLSearchParams(window.location.search);
     remoteToken = params.get('token');
@@ -1696,14 +2019,17 @@ window.ChatPage = (function () {
               '</div>' +
             '</div>' +
             '<div class="composer-toolbar">' +
-              '<button class="btn-icon btn-icon-ghost" id="btn-file" title="Upload file" aria-label="Upload file">' +
-                (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '') +
-              '</button>' +
+              '<div class="composer-file-btn" id="btn-file">' +
+                '<input type="file" class="composer-file-input" id="file-input" multiple tabindex="0" title="上传文件" aria-label="上传文件">' +
+                '<span class="btn-icon btn-icon-ghost composer-file-btn-face" aria-hidden="true">' +
+                  (window.AppIcon ? window.AppIcon.html('plus', { width: 18 }) : '+') +
+                '</span>' +
+              '</div>' +
               '<button class="chip chip-select" id="chip-model" type="button" aria-label="选择模型" aria-haspopup="menu" aria-expanded="false">' +
                 '<span class="chip-label" id="chip-model-label">加载中…</span>' +
                 (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
               '</button>' +
-              '<button class="btn-send" id="btn-send" title="Send" aria-label="Send">' +
+              '<button class="btn-send" id="btn-send" type="button" title="Send" aria-label="Send">' +
                 (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
               '</button>' +
               '<div class="cmd-palette-anchor">' +
@@ -1720,7 +2046,6 @@ window.ChatPage = (function () {
             '</div>' +
           '</div>' +
           '</div>' +
-          '<input type="file" class="hidden-input" id="file-input" multiple>' +
         '</div>' +
         '</div>' + /* /chat-main */
       '</div>';
@@ -1740,10 +2065,14 @@ window.ChatPage = (function () {
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
     mainInputWrapper = container.querySelector('.input-wrapper');
-    if (elCmdPlusBtn) Cmd.setAnchor(elCmdPlusBtn);
+    bindComposerInteractions();
+    mounted = true;
+
+    try {
+    if (elCmdPlusBtn && Cmd && typeof Cmd.setAnchor === 'function') Cmd.setAnchor(elCmdPlusBtn);
     var composerInputEl = container.querySelector('.composer-input');
     if (composerInputEl) {
-      Cmd.setInputAnchor(composerInputEl);
+      if (Cmd && typeof Cmd.setInputAnchor === 'function') Cmd.setInputAnchor(composerInputEl);
       if (Skills) Skills.setAnchor(composerInputEl);
       if (FileRef) FileRef.setAnchor(composerInputEl);
     }
@@ -1796,9 +2125,45 @@ window.ChatPage = (function () {
         });
       }
     }
-    File.init({ elFileStatus: elFileStatus, elFileInput: elFileInput });
-    Cmd.setRemoteMode(remoteMode);
-    var cmdDropdown = Cmd.init();
+    if (File && typeof File.init === 'function') {
+      File.init({
+        elFileStatus: elFileStatus,
+        elFileInput: elFileInput,
+        onComposerChange: syncComposerActionState,
+      });
+    }
+    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
+      window.ChatTaskQueue.init({
+        container: container.querySelector('.chat-input-area'),
+        getSessionId: function () { return Session.getActiveId(); },
+        onFillInput: function (text, images) {
+          if (elInput) {
+            elInput.value = text || '';
+            UI.autoResizeInput();
+            elInput.focus();
+          }
+          if (File && typeof File.setComposerSnapshot === 'function') {
+            var snap = typeof File.getComposerSnapshot === 'function'
+              ? File.getComposerSnapshot()
+              : { uploadedFiles: [] };
+            var pending = [];
+            if (Array.isArray(images)) {
+              for (var pi = 0; pi < images.length; pi++) {
+                pending.push({ dataUrl: images[pi], file: null });
+              }
+            }
+            File.setComposerSnapshot({
+              uploadedFiles: snap.uploadedFiles || [],
+              pendingImages: pending,
+            });
+          }
+          syncComposerActionState();
+        },
+      });
+      window.ChatTaskQueue.refresh(Session.getActiveId());
+    }
+    if (Cmd && typeof Cmd.setRemoteMode === 'function') Cmd.setRemoteMode(remoteMode);
+    var cmdDropdown = Cmd && typeof Cmd.init === 'function' ? Cmd.init() : null;
     if (mainInputWrapper && cmdDropdown) mainInputWrapper.appendChild(cmdDropdown);
     if (Skills) {
       Skills.init();
@@ -1812,7 +2177,7 @@ window.ChatPage = (function () {
     // 初始化冰豆（会话指示器）
     if (window.SessionPet) {
       sessionPet = window.SessionPet.create(elStatusBar);
-      Pet.init(sessionPet);
+      if (Pet && typeof Pet.init === 'function') Pet.init(sessionPet);
       var petCanvas = container.querySelector('#pet-canvas');
       if (petCanvas) {
         petCanvas.addEventListener('dblclick', function (e) {
@@ -1849,149 +2214,82 @@ window.ChatPage = (function () {
       });
     }
     if (window.ChatShellDock) window.ChatShellDock.initTaskRemovedHandler();
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] ui init failed after composer bind', err);
+      }
+    }
 
+    try {
+    if (!WS || typeof WS.on !== 'function') {
+      throw new Error('ChatWebSocket 未加载');
+    }
     // 绑定 WebSocket 事件
     WS.on('open', onWsOpen);
     WS.on('close', onWsClose);
     // 流式事件（stream / reasoning_stream / stream_end / response / step / status / error / tool_output）
     // 已拆分至 chat-ws-stream-handlers.js，经 ctx 读写共享状态
-    if (window.ChatWsStreamHandlers && typeof window.ChatWsStreamHandlers.bind === 'function') {
-      window.ChatWsStreamHandlers.bind(WS, buildStreamHandlerCtx());
+    try {
+      if (window.ChatWsStreamHandlers && typeof window.ChatWsStreamHandlers.bind === 'function') {
+        window.ChatWsStreamHandlers.bind(WS, buildStreamHandlerCtx());
+      }
+    } catch (streamErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] stream handlers bind failed', streamErr);
+      }
     }
-    // 会话事件（connected / session_cleared / session_updated / sync / user_message_appended / workspace_updated）
-    // 已拆分至 chat-ws-session-handlers.js，共享函数经 ctx 注入
-    if (window.ChatWsSessionHandlers && typeof window.ChatWsSessionHandlers.bind === 'function') {
-      window.ChatWsSessionHandlers.bind(WS, buildSessionHandlerCtx());
+    try {
+      if (window.ChatWsSessionHandlers && typeof window.ChatWsSessionHandlers.bind === 'function') {
+        window.ChatWsSessionHandlers.bind(WS, buildSessionHandlerCtx());
+      }
+    } catch (sessionErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] session handlers bind failed', sessionErr);
+      }
     }
-    // 恢复/确认事件（confirm / confirm_resolved / confirm_timeout / harness_state /
-    // checkpoint_message_ids / checkpoint_captured / runtime_restored / restore_failed /
-    // message_deleted / delete_message_failed）已拆分至 chat-ws-restore-handlers.js
-    if (window.ChatWsRestoreHandlers && typeof window.ChatWsRestoreHandlers.bind === 'function') {
-      window.ChatWsRestoreHandlers.bind(WS, buildRestoreHandlerCtx());
-    } else if (typeof console !== 'undefined') {
-      console.warn('[ChatPage] ChatWsRestoreHandlers not loaded');
+    try {
+      if (window.ChatWsRestoreHandlers && typeof window.ChatWsRestoreHandlers.bind === 'function') {
+        window.ChatWsRestoreHandlers.bind(WS, buildRestoreHandlerCtx());
+      } else if (typeof console !== 'undefined') {
+        console.warn('[ChatPage] ChatWsRestoreHandlers not loaded');
+      }
+    } catch (restoreErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] restore handlers bind failed', restoreErr);
+      }
     }
     WS.on('mcp_ready', onWsMcpReady);
     WS.on('tunnel_ready', onWsTunnelReady);
     WS.on('memory_notice', onWsMemoryNotice);
     WS.on('tokenUsage', onWsTokenUsage);
     WS.on('pulse', onWsPulse);
-    // 后台任务/协作事件（bg_task_update / bg_task_stop_result / task_queue_updated /
-    // also_note_appended / also_rejected / shell_collab_entered）已拆分至 chat-ws-bg-task-handlers.js
-    if (window.ChatWsBgTaskHandlers && typeof window.ChatWsBgTaskHandlers.bind === 'function') {
-      window.ChatWsBgTaskHandlers.bind(WS, buildBgTaskHandlerCtx());
-    } else if (typeof console !== 'undefined') {
-      console.warn('[ChatPage] ChatWsBgTaskHandlers not loaded');
+    try {
+      if (window.ChatWsBgTaskHandlers && typeof window.ChatWsBgTaskHandlers.bind === 'function') {
+        window.ChatWsBgTaskHandlers.bind(WS, buildBgTaskHandlerCtx());
+      } else if (typeof console !== 'undefined') {
+        console.warn('[ChatPage] ChatWsBgTaskHandlers not loaded');
+      }
+    } catch (bgErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] bg-task handlers bind failed', bgErr);
+      }
     }
 
     syncShellCollabIndicator();
-
-    if (window.ChatTaskQueue && typeof window.ChatTaskQueue.init === 'function') {
-      var inputArea = container.querySelector('.chat-input-area');
-      window.ChatTaskQueue.init({
-        container: inputArea,
-        getSessionId: function () { return Session.getActiveId(); },
-        onFillInput: function (text) {
-          if (elInput) {
-            elInput.value = text || '';
-            UI.autoResizeInput();
-            elInput.focus();
-          }
-          syncComposerActionState();
-        },
-      });
-      window.ChatTaskQueue.refresh(Session.getActiveId());
-    }
+    bindTaskDoneNotifyClick();
 
     // 连接 WebSocket
     WS.connect(remoteToken);
-
-    // 绑定 UI 事件（捕获阶段：虚拟历史区与尾部真实 DOM 均可靠命中）
-    elMessages.addEventListener('click', onRestoreButtonClick, true);
-    elMessages.addEventListener('click', onDeleteButtonClick, true);
-    elSendBtn.addEventListener('click', handleSend);
-    elInput.addEventListener('keydown', function (e) {
-      if (FileRef && FileRef.handleKeydown(e, elInput)) return;
-      if (Skills && Skills.handleKeydown(e, elInput)) return;
-      if (Cmd.handleKeydown(e, elInput)) return;
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        if (elSendBtn && elSendBtn.dataset.action === 'stop') return;
-        handleSend();
+    } catch (wsErr) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] websocket init failed', wsErr);
       }
-    });
-    elInput.addEventListener('input', function () {
-      UI.autoResizeInput();
-      if (Skills) Skills.handleInput(elInput.value, elInput);
-      if (FileRef) FileRef.handleInput(elInput.value, elInput);
-      Cmd.handleInput(elInput.value, elInput);
-      syncComposerActionState();
-    });
-    // 命令面板的 outside-click / escape / focus-blur 关闭由 ChatDropdown 统一处理
-    if (elCmdPlusBtn) {
-      elCmdPlusBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        toggleCmdPalette();
-      });
-    }
-    // 命令面板的 keydown / outside-click / escape 由 ChatDropdown 统一处理
-    elInput.addEventListener('paste', function (e) {
-      var items = e.clipboardData && e.clipboardData.items;
-      if (!items) return;
-      for (var i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image/') === 0) {
-          e.preventDefault();
-          var file = items[i].getAsFile();
-          if (file) File.addPendingImage(file);
-          return;
-        }
+      if (WS && typeof WS.connect === 'function') {
+        try { WS.connect(remoteToken); } catch (_e) { /* ignore */ }
       }
-    });
-
-    // 拖拽支持
-    var chatPage = container.querySelector('.chat-page');
-    if (chatPage) {
-      chatPage.addEventListener('dragover', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        chatPage.classList.add('drag-over');
-      });
-      chatPage.addEventListener('dragleave', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        chatPage.classList.remove('drag-over');
-      });
-      chatPage.addEventListener('drop', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        chatPage.classList.remove('drag-over');
-        var files = e.dataTransfer && e.dataTransfer.files;
-        if (!files) return;
-        for (var i = 0; i < files.length; i++) {
-          if (files[i].type.indexOf('image/') === 0) {
-            File.addPendingImage(files[i]);
-          } else {
-            File.handleFileSelect(files[i], Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-          }
-        }
-      });
     }
 
-    if (elFileBtn) {
-      elFileBtn.addEventListener('click', function () {
-        elFileInput.click();
-      });
-    }
-    if (elFileInput) {
-      elFileInput.addEventListener('change', function () {
-        if (!elFileInput.files) return;
-        for (var fi = 0; fi < elFileInput.files.length; fi++) {
-          File.handleFileSelect(elFileInput.files[fi], Session.getMessages(), function (msg) { UI.appendMessageEl(msg, Session.stripStatusTag); }, Session.saveMessages);
-        }
-        elFileInput.value = '';
-      });
-    }
-
+    try {
     if (!remoteMode && window.ChatSessionStore && typeof window.ChatSessionStore.bootstrapInitialSession === 'function') {
       window.ChatSessionStore.bootstrapInitialSession(function () {
         paintInitialChatView();
@@ -2025,6 +2323,11 @@ window.ChatPage = (function () {
         WS.stopSyncPolling();
       }
     });
+    } catch (err) {
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[ChatPage] session paint init failed', err);
+      }
+    }
   }
 
   return {

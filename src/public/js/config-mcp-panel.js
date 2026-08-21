@@ -559,6 +559,9 @@ window.McpConfigPanel = (function () {
   function buildMcpDetailHtml(srv) {
     var cfg = srv.config || {};
     var cmdLine = [cfg.command || ''].concat(cfg.args || []).filter(Boolean).join(' ');
+    var urlLine = cfg.url || '';
+    var launchLabel = urlLine ? '连接地址' : '启动命令';
+    var launchValue = urlLine || cmdLine;
     var isDraft = isDraftName(srv.name);
 
     return (
@@ -573,7 +576,7 @@ window.McpConfigPanel = (function () {
       '<div class="mcp-info-section">' +
         '<h3 class="config-section-title">连接信息</h3>' +
         '<dl class="mcp-info-grid">' +
-          '<dt>启动命令</dt><dd><code>' + escapeHtml(cmdLine || '—') + '</code></dd>' +
+          '<dt>' + launchLabel + '</dt><dd><code>' + escapeHtml(launchValue || '—') + '</code></dd>' +
           '<dt>配置文件</dt><dd><code>' + escapeHtml(configPath || '.iceCoder/mcp.json') + '</code></dd>' +
           '<dt>连接状态</dt><dd><span class="config-status-dot ' + dotClass(srv.status) + '"></span> ' + escapeHtml(statusLabel(srv.status)) + '</dd>' +
           (srv.error ? '<dt>错误信息</dt><dd class="mcp-error-text">' + escapeHtml(srv.error) + '</dd>' : '') +

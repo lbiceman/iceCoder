@@ -21,41 +21,54 @@ window.ChatWsStreamHandlers = (function () {
     var get = ctx.get;
     var set = ctx.set;
 
+    function isForeignSessionEvent(data) {
+      if (!data || !data.sessionId) return false;
+      var active = Session.getActiveId ? Session.getActiveId() : '';
+      return data.sessionId !== active;
+    }
+
     function onReasoningStream(data) {
+      if (isForeignSessionEvent(data)) return;
       if (get('userStopped')) return;
       if (!get('isStreaming')) {
         set('isStreaming', true);
         UI.setStreamingState(true);
       }
       var pet = ctx.getSessionPet();
-      if (pet) pet.setState('thinking');
+      if (pet) {
+        pet.setState(Pet.isToolUseActive && Pet.isToolUseActive() ? 'tool_calling' : 'running');
+      }
       UI.appendReasoningStreamChunk(data.delta || '');
       ctx.syncWelcomeState();
     }
 
     function onStream(data) {
+      if (isForeignSessionEvent(data)) return;
       if (get('userStopped')) return;
       set('streamChunksReceived', true);
       if (!get('isStreaming')) {
         set('isStreaming', true);
         UI.setStreamingState(true);
       }
-      // Harness 多轮工具任务期间 stream_delta 多为规划/推理，进 Thinking 块而非 Assistant 正文
+      // 多轮工具任务期间 stream_delta 多为中间推理，进 Thinking 块；已调工具则保持扳手
       if (WS.isProcessing()) {
         var pet = ctx.getSessionPet();
-        if (pet) pet.setState('thinking');
+        if (pet) {
+          pet.setState(Pet.isToolUseActive && Pet.isToolUseActive() ? 'tool_calling' : 'running');
+        }
         UI.appendReasoningStreamChunk(data.delta || '');
         ctx.syncWelcomeState();
         return;
       }
       set('visibleStreamChunksReceived', true);
       var petRead = ctx.getSessionPet();
-      if (petRead) petRead.setState('read');
+      if (petRead) petRead.setState('streaming');
       UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
       ctx.syncWelcomeState();
     }
 
-    function onStreamEnd() {
+    function onStreamEnd(data) {
+      if (isForeignSessionEvent(data)) return;
       if (!get('userStopped')) {
         UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
         if (get('streamChunksReceived')) {
@@ -71,6 +84,7 @@ window.ChatWsStreamHandlers = (function () {
     }
 
     function onResponse(data) {
+      if (isForeignSessionEvent(data)) return;
       ctx.endTransparencyTurnTimer();
       if (get('userStopped')) {
         set('userStopped', false);
@@ -130,6 +144,7 @@ window.ChatWsStreamHandlers = (function () {
     }
 
     function onStep(data) {
+      if (isForeignSessionEvent(data)) return;
       var step = data.step;
       if (!step) return;
 
@@ -271,6 +286,7 @@ window.ChatWsStreamHandlers = (function () {
     }
 
     function onStatus(data) {
+      if (isForeignSessionEvent(data)) return;
       var processing = data.status === 'processing';
       WS.setProcessing(processing);
       ctx.notifySnapshotRestoreAvailability();
@@ -290,12 +306,15 @@ window.ChatWsStreamHandlers = (function () {
         }
       } else if (!get('userStopped')) {
         var pet = ctx.getSessionPet();
-        if (pet) pet.setState('thinking');
+        if (pet) {
+          pet.setState(Pet.isToolUseActive && Pet.isToolUseActive() ? 'tool_calling' : 'running');
+        }
       }
       ctx.syncSendButtonWithWorkload();
     }
 
     function onError(data) {
+      if (isForeignSessionEvent(data)) return;
       ctx.endTransparencyTurnTimer();
       UI.finalizeStreamResponse(Session.getMessages(), Session.stripStatusTag);
       var msg = { role: 'agent', content: '[err] ' + data.message };
@@ -312,6 +331,7 @@ window.ChatWsStreamHandlers = (function () {
 
     /** run_command 流式输出：按 toolCallId 累积并实时预览 */
     function onToolOutput(data) {
+      if (isForeignSessionEvent(data)) return;
       if (!data || !data.content || !data.toolCallId) return;
       var buf = ctx.getStreamingDiffBuffer();
       if (buf.toolCallId && buf.toolCallId !== data.toolCallId) {

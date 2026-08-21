@@ -9,16 +9,81 @@ window.ChatWebSocket = (function () {
   'use strict';
 
   var chatWs = null;
-  var wsProcessing = false;
+  var processingBySession = {};
+  var userStoppedBySession = {};
   var harnessCanRestore = true;
   var checkpointMessageIds = [];
+
+  function getViewportSessionId() {
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.getActiveSessionId === 'function') {
+      return window.ChatSessionStore.getActiveSessionId() || '';
+    }
+    if (window.ChatSession && typeof window.ChatSession.getActiveId === 'function') {
+      return window.ChatSession.getActiveId() || '';
+    }
+    return '';
+  }
+
+  function isForeignSessionEvent(data) {
+    if (!data || !data.sessionId) return false;
+    return data.sessionId !== getViewportSessionId();
+  }
+
+  var TASK_PAINT_TYPES = {
+    stream: 1,
+    reasoning_stream: 1,
+    stream_end: 1,
+    response: 1,
+    step: 1,
+    status: 1,
+    pulse: 1,
+    tokenUsage: 1,
+    confirm: 1,
+    confirm_resolved: 1,
+    confirm_timeout: 1,
+    tool_output: 1,
+    memory_notice: 1,
+    harness_state: 1,
+    error: 1,
+    info: 1,
+    runtime_restored: 1,
+    message_deleted: 1,
+    checkpoint_captured: 1,
+  };
+
+  function applySessionRunStates(list) {
+    if (!window.ChatSessionStore || typeof window.ChatSessionStore.applySessionRunStates !== 'function') return;
+    window.ChatSessionStore.applySessionRunStates(list);
+    if (!Array.isArray(list)) return;
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      if (!row || !row.sessionId) continue;
+      processingBySession[row.sessionId] = row.phase === 'running';
+    }
+  }
+
+  function applySessionRunState(data) {
+    if (!data || !data.sessionId) return;
+    var phase = data.phase || 'idle';
+    processingBySession[data.sessionId] = phase === 'running';
+    if (phase !== 'running') userStoppedBySession[data.sessionId] = false;
+    if (window.ChatSessionStore && typeof window.ChatSessionStore.applySessionRunState === 'function') {
+      window.ChatSessionStore.applySessionRunState(data.sessionId, phase, data.stopReason);
+    }
+    if ((phase === 'done' || phase === 'error') && data.sessionId !== getViewportSessionId()) {
+      if (window.ChatPetBridge && typeof window.ChatPetBridge.notifyBackgroundTaskDone === 'function') {
+        window.ChatPetBridge.notifyBackgroundTaskDone({
+          sessionId: data.sessionId,
+          success: phase === 'done',
+        });
+      }
+    }
+  }
 
   function applyCheckpointMessageIds(ids) {
     checkpointMessageIds = Array.isArray(ids) ? ids.slice() : [];
     emit('checkpoint_message_ids', { ids: checkpointMessageIds });
   }
-  /** 用户主动 stop 后置为 true；阻止 'stream' chunk 把 wsProcessing 重置为 true，直到下次发新消息 */
-  var userStoppedFlag = false;
   var lastToolProgressHint = '';
   var wsReconnectTimer = null;
   var wsReconnectAttempts = 0;
@@ -84,7 +149,8 @@ window.ChatWebSocket = (function () {
 
     chatWs.onclose = function () {
       if (wsConnectTimeout) { clearTimeout(wsConnectTimeout); wsConnectTimeout = null; }
-      wsProcessing = false;
+      processingBySession = {};
+      userStoppedBySession = {};
       emit('close', {});
       scheduleReconnect();
     };
@@ -98,15 +164,42 @@ window.ChatWebSocket = (function () {
     }, 15000);
   }
 
+  function shouldEmitTaskEvent(data) {
+    if (!data || !TASK_PAINT_TYPES[data.type]) return true;
+    if (!data.sessionId) {
+      // 连接本地 info/error（用法提示、未订阅）仍展示；其它任务向包必须带 sid
+      return data.type === 'info' || data.type === 'error';
+    }
+    return data.sessionId === getViewportSessionId();
+  }
+
   function handleMessage(data) {
+    if (data.type === 'session_run_state') {
+      applySessionRunState(data);
+      return;
+    }
+    if (TASK_PAINT_TYPES[data.type] && !shouldEmitTaskEvent(data)) {
+      if (data.type === 'status' && data.sessionId) {
+        if (data.status === 'processing') processingBySession[data.sessionId] = true;
+        else processingBySession[data.sessionId] = false;
+      }
+      return;
+    }
+    var sid = data.sessionId || '';
+    var viewportSid = getViewportSessionId();
+    var stopped = !!userStoppedBySession[sid || viewportSid];
     switch (data.type) {
       case 'connected':
         if (typeof data.canRestore === 'boolean') harnessCanRestore = data.canRestore;
         applyCheckpointMessageIds(data.checkpointMessageIds);
+        if (Array.isArray(data.sessionRunStates)) applySessionRunStates(data.sessionRunStates);
         emit('connected', data || {});
         break;
       case 'session_updated':
         emit('session_updated', data || {});
+        break;
+      case 'sessions_index_updated':
+        emit('sessions_index_updated', data || {});
         break;
       case 'user_message_appended':
         emit('user_message_appended', {
@@ -115,36 +208,42 @@ window.ChatWebSocket = (function () {
         });
         break;
       case 'stream':
-        if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
-        emit('stream', { delta: data.delta || '' });
+        if (!processingBySession[sid || viewportSid] && !stopped) {
+          processingBySession[sid || viewportSid] = true;
+        }
+        emit('stream', { delta: data.delta || '', sessionId: sid });
         break;
       case 'reasoning_stream':
-        if (!wsProcessing && !userStoppedFlag) wsProcessing = true;
-        emit('reasoning_stream', { delta: data.delta || '' });
+        if (!processingBySession[sid || viewportSid] && !stopped) {
+          processingBySession[sid || viewportSid] = true;
+        }
+        emit('reasoning_stream', { delta: data.delta || '', sessionId: sid });
         break;
       case 'stream_end':
-        emit('stream_end', {});
+        emit('stream_end', { sessionId: sid });
         break;
       case 'response':
-        emit('response', { content: data.content || '' });
+        emit('response', { content: data.content || '', sessionId: sid });
         break;
       case 'step':
-        emit('step', { step: data.step });
+        emit('step', { step: data.step, sessionId: sid });
         break;
       case 'status':
         if (data.status === 'processing') {
-          if (!userStoppedFlag) wsProcessing = true;
+          if (!stopped) processingBySession[sid || viewportSid] = true;
         } else {
-          wsProcessing = false;
-          userStoppedFlag = false;
+          processingBySession[sid || viewportSid] = false;
+          userStoppedBySession[sid || viewportSid] = false;
         }
-        emit('status', { status: data.status });
+        emit('status', { status: data.status, sessionId: sid });
         break;
       case 'error':
-        emit('error', { message: data.message });
+        if (data.sessionId && data.sessionId !== viewportSid) break;
+        emit('error', { message: data.message, sessionId: sid });
         break;
       case 'info':
-        emit('info', { message: data.message });
+        if (data.sessionId && data.sessionId !== viewportSid) break;
+        emit('info', { message: data.message, sessionId: sid });
         break;
       case 'also_note_appended':
         emit('also_note_appended', {
@@ -165,7 +264,7 @@ window.ChatWebSocket = (function () {
         });
         break;
       case 'memory_notice':
-        emit('memory_notice', { notices: data.notices });
+        emit('memory_notice', { notices: data.notices, sessionId: sid });
         break;
       case 'mcp_ready':
         emit('mcp_ready', {
@@ -185,6 +284,7 @@ window.ChatWebSocket = (function () {
           args: data.args,
           confirmKind: data.confirmKind,
           shellMandatory: data.shellMandatory,
+          sessionId: sid,
         });
         break;
       case 'confirm_resolved':
@@ -193,10 +293,15 @@ window.ChatWebSocket = (function () {
           toolName: data.toolName || '',
           approved: !!data.approved,
           reason: data.reason || 'reply',
+          sessionId: sid,
         });
         break;
       case 'confirm_timeout':
-        emit('confirm_timeout', { confirmId: data.confirmId || '', toolName: data.toolName || '' });
+        emit('confirm_timeout', {
+          confirmId: data.confirmId || '',
+          toolName: data.toolName || '',
+          sessionId: sid,
+        });
         break;
       case 'tokenUsage':
         emit('tokenUsage', {
@@ -207,6 +312,7 @@ window.ChatWebSocket = (function () {
           totalInputTokens: data.totalInputTokens,
           totalOutputTokens: data.totalOutputTokens,
           messageId: data.messageId || '',
+          sessionId: sid,
         });
         break;
       case 'session_switched':
@@ -232,12 +338,13 @@ window.ChatWebSocket = (function () {
           toolCallId: data.toolCallId || '',
           toolName: data.toolName || '',
           content: data.content || '',
+          sessionId: sid,
         });
         break;
       case 'pong':
         break;
       case 'pulse':
-        emit('pulse', { hint: lastToolProgressHint || '处理中' });
+        emit('pulse', { hint: lastToolProgressHint || '处理中', sessionId: sid });
         break;
       case 'bg_task_update':
         emit('bg_task_update', {
@@ -279,8 +386,8 @@ window.ChatWebSocket = (function () {
         });
         break;
       case 'runtime_restored':
-        wsProcessing = false;
-        userStoppedFlag = false;
+        processingBySession[sid || viewportSid] = false;
+        userStoppedBySession[sid || viewportSid] = false;
         if (Array.isArray(data.checkpointMessageIds)) {
           applyCheckpointMessageIds(data.checkpointMessageIds);
         }
@@ -306,7 +413,7 @@ window.ChatWebSocket = (function () {
 
   function send(msg) {
     if (msg && typeof msg === 'object' && msg.type === 'message') {
-      userStoppedFlag = false;
+      userStoppedBySession[getViewportSessionId()] = false;
     }
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
       chatWs.send(JSON.stringify(msg));
@@ -324,11 +431,11 @@ window.ChatWebSocket = (function () {
   }
 
   function canRestoreRuntime() {
-    return harnessCanRestore && !wsProcessing;
+    return harnessCanRestore && !isProcessing();
   }
 
   function canDeleteUserMessage() {
-    return harnessCanRestore && !wsProcessing;
+    return harnessCanRestore && !isProcessing();
   }
 
   function sendMessage(text, opts) {
@@ -341,12 +448,15 @@ window.ChatWebSocket = (function () {
     if (typeof opts.queueInsertIndex === 'number') payload.queueInsertIndex = opts.queueInsertIndex;
     if (opts.source) payload.source = opts.source;
     if (opts.command) payload.command = opts.command;
-    send(payload);
+    var sent = send(payload);
+    if (sent) processingBySession[getViewportSessionId()] = true;
+    return sent;
   }
 
   function sendStop() {
-    userStoppedFlag = true;
-    wsProcessing = false;
+    var id = getViewportSessionId();
+    userStoppedBySession[id] = true;
+    processingBySession[id] = false;
     send({ type: 'stop' });
   }
 
@@ -377,7 +487,7 @@ window.ChatWebSocket = (function () {
   function startSyncPolling() {
     stopSyncPolling();
     wsSyncTimer = setInterval(function () {
-      if (!wsProcessing) {
+      if (!isProcessing()) {
         emit('sync', {});
       }
     }, getSyncIntervalMs());
@@ -401,12 +511,12 @@ window.ChatWebSocket = (function () {
     return !!(chatWs && chatWs.readyState === WebSocket.OPEN);
   }
 
-  function setProcessing(v) {
-    wsProcessing = v;
+  function setProcessing(v, sessionId) {
+    processingBySession[sessionId || getViewportSessionId()] = !!v;
   }
 
-  function isProcessing() {
-    return wsProcessing;
+  function isProcessing(sessionId) {
+    return !!processingBySession[sessionId || getViewportSessionId()];
   }
 
   function setLastToolProgressHint(hint) {
