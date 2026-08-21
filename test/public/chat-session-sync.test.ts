@@ -10,6 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 interface ChatSessionApi {
   initSession(): unknown[];
   getMessages(): unknown[];
+  appendMessage(msg: unknown): void;
+  insertRemoteUserMessage(msg: unknown): string;
   separateToolTraces(messages: unknown[]): { msgs: unknown[]; traces: Record<string, unknown[]> };
   applyServerChatSnapshot(
     separated: { msgs: unknown[]; traces: Record<string, unknown[]> },
@@ -158,5 +160,36 @@ describe('ChatSession 服务端快照同步', () => {
     } finally {
       console.warn = origWarn;
     }
+  });
+
+  it('服务端回声用不同 id 时认领本地待确认用户消息，不重复插入', () => {
+    const session = loadChatSession();
+    session.initSession();
+    session.appendMessage({
+      role: 'user',
+      id: 'local-optimistic',
+      content: '你能干什么？',
+      _pendingServerAck: true,
+    });
+    expect(session.insertRemoteUserMessage({
+      role: 'user',
+      id: 'server-uuid',
+      content: '你能干什么？',
+    })).toBe('adopted');
+    const msgs = session.getMessages() as { id: string }[];
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('server-uuid');
+  });
+
+  it('同 id 的远端用户消息只补丁不新增', () => {
+    const session = loadChatSession();
+    session.initSession();
+    session.appendMessage({ role: 'user', id: 'same-id', content: '你好' });
+    expect(session.insertRemoteUserMessage({
+      role: 'user',
+      id: 'same-id',
+      content: '你好',
+    })).toBe('existing');
+    expect(session.getMessages()).toHaveLength(1);
   });
 });

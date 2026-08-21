@@ -108,6 +108,9 @@ window.MobileSessionDrawer = (function () {
       window.MobileShell.closeDrawer();
     }
 
+    // 已在当前会话：只关抽屉（桌面侧栏同理直接 return）
+    if (sessionId === Store.getActiveSessionId()) return;
+
     var wsSend = window.ChatWebSocket ? window.ChatWebSocket.send : null;
     var Router = window.AppRouter;
 

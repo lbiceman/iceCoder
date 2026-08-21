@@ -59,7 +59,7 @@ function createEmptyRunningTurn(): RunningTurnSnapshot {
     streamingText: '',
     streamingReasoningText: '',
     toolTimeline: [],
-    petState: 'thinking',
+    petState: 'running',
     petBubble: '',
     petStatusText: '',
     lastInputTokens: 0,
@@ -171,17 +171,17 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
     case 'stream_delta':
       if (typeof event.delta === 'string') {
         t.streamingText += event.delta;
-        t.petState = 'read';
+        if (t.petState !== 'tool_calling') t.petState = 'streaming';
       }
       break;
     case 'reasoning_stream_delta':
       if (typeof event.delta === 'string') {
         t.streamingReasoningText += event.delta;
-        t.petState = 'thinking';
+        if (t.petState !== 'tool_calling') t.petState = 'running';
       }
       break;
     case 'thinking':
-      t.petState = 'thinking';
+      if (t.petState !== 'tool_calling') t.petState = 'running';
       if (typeof event.content === 'string') t.petBubble = event.content;
       break;
     case 'tool_call':
@@ -194,7 +194,7 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
           toolCallId,
           diffSource: extractDiffSource(String(event.toolName), undefined, event.toolArgs as Record<string, unknown> | undefined),
         });
-        t.petState = 'working';
+        t.petState = 'tool_calling';
       }
       break;
     case 'tool_result':
@@ -229,7 +229,26 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
         t.petBubble = event.content;
         t.petStatusText = event.content;
       }
-      t.petState = 'working';
+      t.petState = 'tool_calling';
+      break;
+    case 'memory_event':
+      {
+        const mk = event.memoryKind;
+        if (mk === 'recall_hit' || mk === 'recall_coarse_hit'
+          || (typeof event.memoryDetail === 'string' && event.memoryDetail.includes('记忆并入'))) {
+          t.petState = 'memory';
+        } else if (mk === 'recall_empty') {
+          t.petState = 'cancelling';
+        } else if (mk === 'session_hydrate') {
+          t.petState = 'restoring';
+        } else if (mk === 'recall_skipped') {
+          t.petState = 'idle';
+        }
+        if (typeof event.memoryDetail === 'string' && event.memoryDetail) {
+          t.petBubble = event.memoryDetail;
+          t.petStatusText = event.memoryDetail;
+        }
+      }
       break;
     case 'execution_plan_init':
     case 'execution_plan_update':
@@ -248,11 +267,11 @@ export function foldStepIntoRunningTurn(sessionId: string, event: any): void {
       break;
     case 'final':
       if (event.stopReason === 'user_checkpoint') {
-        t.petState = 'crying';
+        t.petState = 'user_checkpoint';
         t.petBubble = '监管已暂停，需要你介入啦';
         t.petStatusText = '监管已暂停，需要你介入啦';
       } else if (event.stopReason === 'model_done') {
-        t.petState = 'success';
+        t.petState = 'clap';
         t.petBubble = '已完成';
         t.petStatusText = '已完成';
       }

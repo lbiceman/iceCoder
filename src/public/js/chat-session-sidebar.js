@@ -314,6 +314,7 @@ window.ChatSessionSidebar = (function () {
   }
 
   function renderList() {
+    if (!sidebar) return;
     var list = sidebar.querySelector('.chat-sidebar-list');
     if (!list) return;
     list.innerHTML = '';

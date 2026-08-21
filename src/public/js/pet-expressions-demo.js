@@ -3,31 +3,7 @@
  */
 import './session-pet.js';
 import { SESSION_PET_PALETTE_COLORS } from './session-pet-palette.js';
-
-var EXPRESSIONS = [
-  'idle',
-  'success',
-  'happy',
-  'thinking',
-  'working',
-  'confused',
-  'alert',
-  'anxious',
-  'rest',
-  'surprised',
-  'sad',
-  'crying',
-  'angry',
-  'curious',
-  'dizzy',
-  'shy',
-  'love',
-  'weary',
-  'focused',
-  'read',
-  'determined',
-  'playful',
-];
+import { HARNESS_PET_DEMO, HARNESS_PET_DEMO_EXTRAS } from './session-pet-harness-expr.js';
 
 var root = document.getElementById('pet-root');
 var label = document.getElementById('state-label');
@@ -74,29 +50,46 @@ if (colorsWrap) {
   }
 }
 
-function selectState(name, btn) {
+function selectState(name, btn, title) {
   if (currentBtn) currentBtn.classList.remove('active');
   currentBtn = btn || null;
   if (btn) btn.classList.add('active');
   pet.setState(name);
-  label.textContent = name;
-  pet.setBubbleText(name);
+  label.textContent = title || name;
+  pet.setBubbleText(title || name);
+  pet.setTurnLabel(name);
 }
 
-for (var i = 0; i < EXPRESSIONS.length; i++) {
-  (function (name) {
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pet-demo-btn';
-    btn.textContent = name;
-    btn.setAttribute('data-state', name);
-    btn.addEventListener('click', function () {
-      selectState(name, btn);
-    });
-    panel.appendChild(btn);
-  })(EXPRESSIONS[i]);
+function addSection(text) {
+  var h = document.createElement('div');
+  h.className = 'pet-demo-section';
+  h.textContent = text;
+  panel.appendChild(h);
 }
 
-if (panel.firstChild) {
-  selectState('idle', panel.firstChild);
+function addHarnessButtons(items) {
+  for (var i = 0; i < items.length; i++) {
+    (function (item) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pet-demo-btn';
+      btn.setAttribute('data-state', item.state);
+      btn.appendChild(document.createTextNode(item.title));
+      var sub = document.createElement('small');
+      sub.textContent = item.why;
+      btn.appendChild(sub);
+      btn.addEventListener('click', function () {
+        selectState(item.state, btn, item.title);
+      });
+      panel.appendChild(btn);
+    })(items[i]);
+  }
 }
+
+addSection('Harness 候选（JS 绘制 + 动画，未接入）');
+addHarnessButtons(HARNESS_PET_DEMO);
+addSection('运行中常见（同样未接入）');
+addHarnessButtons(HARNESS_PET_DEMO_EXTRAS);
+
+var first = panel.querySelector('[data-state="idle"]');
+if (first) selectState('idle', first, '空闲');

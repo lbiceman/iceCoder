@@ -523,10 +523,63 @@ window.ChatSession = (function () {
     return false;
   }
 
+  function userContentKey(msg) {
+    return String(msg && msg.content ? msg.content : '').replace(/\s+/g, ' ').trim();
+  }
+
+  function findOptimisticUserDuplicate(incoming) {
+    var key = userContentKey(incoming);
+    if (!key) return null;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      var m = messages[i];
+      if (m.role === 'agent' && m._streaming) continue;
+      if (m.role !== 'user') return null;
+      if (m.id && incoming.id && m.id === incoming.id) return m;
+      if (m._pendingServerAck && userContentKey(m) === key) return m;
+      return null;
+    }
+    return null;
+  }
+
   /**
    * 多端同步：在 processing / 流式期间插入远端用户消息（插在当前轮 assistant 流式气泡之前）。
-   * @returns {boolean} 是否新增了消息
+   * @returns {'existing'|'adopted'|'inserted'|''}
    */
+  function insertRemoteUserMessage(msg) {
+    if (!msg || msg.role !== 'user') return '';
+    if (hasUserMessageId(msg.id)) {
+      patchUserMessageDisplay(msg.id, msg);
+      patchUserMessageImages(msg.id, msg.images || []);
+      var same = null;
+      for (var si = 0; si < messages.length; si++) {
+        if (messages[si].id === msg.id) { same = messages[si]; break; }
+      }
+      if (same) delete same._pendingServerAck;
+      return 'existing';
+    }
+    var optimistic = findOptimisticUserDuplicate(msg);
+    if (optimistic) {
+      optimistic._prevId = optimistic.id;
+      if (msg.id) optimistic.id = msg.id;
+      delete optimistic._pendingServerAck;
+      patchUserMessageDisplay(optimistic.id, msg);
+      patchUserMessageImages(optimistic.id, msg.images || []);
+      return 'adopted';
+    }
+    stampMessageTimestamps(msg);
+    msg = enrichUserMessageForDisplay(msg);
+    var insertAt = messages.length;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'agent' && messages[i]._streaming) {
+        insertAt = i;
+        break;
+      }
+    }
+    messages.splice(insertAt, 0, msg);
+    reindexMessages();
+    return 'inserted';
+  }
+
   function patchUserMessageImages(id, images) {
     if (!id) return false;
     var persistable = filterPersistableImageUrls(images);
@@ -595,33 +648,12 @@ window.ChatSession = (function () {
     return false;
   }
 
-  function insertRemoteUserMessage(msg) {
-    if (!msg || msg.role !== 'user') return false;
-    if (hasUserMessageId(msg.id)) {
-      patchUserMessageDisplay(msg.id, msg);
-      patchUserMessageImages(msg.id, msg.images || []);
-      return true;
-    }
-    stampMessageTimestamps(msg);
-    msg = enrichUserMessageForDisplay(msg);
-    var insertAt = messages.length;
-    for (var i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'agent' && messages[i]._streaming) {
-        insertAt = i;
-        break;
-      }
-    }
-    messages.splice(insertAt, 0, msg);
-    reindexMessages();
-    return true;
-  }
-
   function mergeUserMessagesFromServer(serverMsgs) {
     if (!serverMsgs || !serverMsgs.length) return false;
     var added = false;
     for (var i = 0; i < serverMsgs.length; i++) {
       var m = serverMsgs[i];
-      if (m.role === 'user' && insertRemoteUserMessage(m)) added = true;
+      if (m.role === 'user' && insertRemoteUserMessage(m) === 'inserted') added = true;
     }
     return added;
   }

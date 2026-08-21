@@ -332,7 +332,13 @@ window.ChatPage = (function () {
     }
     if (sessionPet && !(Pet.isUserCheckpointActive && Pet.isUserCheckpointActive())) {
       if (busy) {
-        sessionPet.setState(isStreaming ? 'read' : 'thinking');
+        if (Pet.isToolUseActive && Pet.isToolUseActive()) {
+          sessionPet.setState('tool_calling');
+        } else if (isStreaming && !(WS && WS.isProcessing && WS.isProcessing())) {
+          sessionPet.setState('streaming');
+        } else {
+          sessionPet.setState('running');
+        }
       } else if (
         !userStopped
         && !(Pet.isModelDoneNoticeActive && Pet.isModelDoneNoticeActive())
@@ -512,6 +518,21 @@ window.ChatPage = (function () {
     }
   }
 
+  function newClientMessageId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    var bytes = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+    else for (var bi = 0; bi < 16; bi++) bytes[bi] = Math.floor(Math.random() * 256);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    var hex = [];
+    for (var hi = 0; hi < 16; hi++) hex.push(('0' + bytes[hi].toString(16)).slice(-2));
+    return hex.slice(0, 4).join('') + '-' + hex.slice(4, 6).join('') + '-' + hex.slice(6, 8).join('')
+      + '-' + hex.slice(8, 10).join('') + '-' + hex.slice(10).join('');
+  }
+
   function handleSend() {
     refreshComposerModules();
     if (Cmd && typeof Cmd.hide === 'function') Cmd.hide();
@@ -576,6 +597,7 @@ window.ChatPage = (function () {
       window.AppRouter.getShell() === 'mobile' &&
       document.body.dataset.page === 'work' &&
       !remoteMode &&
+      !document.querySelector('.page-root-work.mobile-work-has-chat') &&
       window.MobileComposerHost &&
       typeof window.MobileComposerHost.handleWorkPageSend === 'function'
     ) {
@@ -611,9 +633,7 @@ window.ChatPage = (function () {
       if (startNewTurnUi) {
         UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
       }
-      var userMessageId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-        ? crypto.randomUUID()
-        : ('msg-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+      var userMessageId = newClientMessageId();
       var userMsg = {
         role: 'user',
         id: userMessageId,
@@ -622,6 +642,7 @@ window.ChatPage = (function () {
       };
       if (selectedSkillFilenames.length > 0) userMsg.skills = selectedSkillFilenames.slice();
       if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
+      userMsg._pendingServerAck = true;
       Session.appendMessage(userMsg);
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       if (startNewTurnUi && UI.maybeRepartitionTailIfNeeded) {
@@ -1599,9 +1620,13 @@ window.ChatPage = (function () {
 
   function paintRemoteUserMessagesWithoutDom(msgs) {
     var painted = false;
+    var root = document.getElementById('chat-messages');
     for (var i = 0; i < msgs.length; i++) {
       var um = msgs[i];
-      if (um.role !== 'user' || um._el) continue;
+      if (um.role !== 'user') continue;
+      if (um._el && um._el.isConnected) continue;
+      if (um.id && root && root.querySelector('.message.user[data-message-id="' + um.id + '"]')) continue;
+      if (um._prevId && root && root.querySelector('.message.user[data-message-id="' + um._prevId + '"]')) continue;
       if (UI.insertRemoteUserMessageEl) {
         UI.insertRemoteUserMessageEl(um, Session.stripStatusTag);
       } else {
@@ -1639,10 +1664,13 @@ window.ChatPage = (function () {
   function applyRemoteUserMessage(msg) {
     if (!msg || msg.role !== 'user') return false;
     if (msg.sessionId && Session.getActiveId && msg.sessionId !== Session.getActiveId()) return false;
-    var existed = Session.hasUserMessageId && Session.hasUserMessageId(msg.id);
-    if (!Session.insertRemoteUserMessage || !Session.insertRemoteUserMessage(msg)) return false;
-    if (existed) {
-      var localMsg = Session.getMessageById ? Session.getMessageById(msg.id) : null;
+    if (!Session.insertRemoteUserMessage) return false;
+    var result = Session.insertRemoteUserMessage(msg);
+    if (!result) return false;
+    var localMsg = Session.getMessageById
+      ? (Session.getMessageById(msg.id) || (result === 'adopted' ? Session.getLastMessage() : null))
+      : null;
+    if (result === 'existing' || result === 'adopted') {
       if (localMsg && UI.replaceUserMessageEl) {
         UI.replaceUserMessageEl(localMsg, Session.stripStatusTag);
       } else if (UI.updateMessageImagesEl && msg.images && msg.images.length) {
