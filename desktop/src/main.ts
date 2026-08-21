@@ -311,9 +311,15 @@ async function bootstrap(): Promise<void> {
 
   // 5) 主窗生命周期 ↔ pet 状态机
   mainWindow.on('minimize', () => { if (mainWindow) void petManager.enterFloatingMode(mainWindow); });
-  mainWindow.on('hide', () => { if (mainWindow) void petManager.enterFloatingMode(mainWindow); });
+  mainWindow.on('hide', () => {
+    if (isQuitting || !mainWindow) return;
+    void petManager.enterFloatingMode(mainWindow);
+  });
   mainWindow.on('restore', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
-  mainWindow.on('show', () => { if (mainWindow) void petManager.enterEmbeddedMode(mainWindow); });
+  mainWindow.on('show', () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
+    void petManager.enterEmbeddedMode(mainWindow);
+  });
 
   tray = buildTray(mainWindow, {
     showMain: () => showAndFocusMain(),

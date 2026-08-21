@@ -37,6 +37,20 @@ describe('Harness 候选表情（Canvas，未接入）', () => {
     expect(HARNESS_PET_EXPRESSIONS.executing).toBe(HARNESS_PET_EXPRESSIONS.tool_calling);
   });
 
+  it('拧扳手时左下手握住柄，不对捏', () => {
+    const exprSrc = readFileSync(path.join(root, 'src/public/js/session-pet-harness-expr.js'), 'utf-8');
+    const fn = exprSrc.slice(
+      exprSrc.indexOf('function expressionToolCalling'),
+      exprSrc.indexOf('function expressionStreaming'),
+    );
+    expect(exprSrc).not.toContain('function drawPinchGrip');
+    expect(fn).toContain('drawHand');
+    const m = fn.match(/drawHand\(ctx,\s*([^,]+),\s*([^,]+),\s*([^,]+)/);
+    expect(m).toBeTruthy();
+    expect(Number(m[1])).toBeLessThan(0);
+    expect(Math.abs(Number(m[3]))).toBeGreaterThan(0.8);
+  });
+
   it('session-pet 眨眼时仍走完整表情（只闭眼，不丢掉手）', () => {
     expect(sessionPet).toContain('HARNESS_PET_EXPRESSIONS');
     expect(sessionPet).toContain('isBlinking && !HARNESS_PET_SKIP_BLINK[state]');

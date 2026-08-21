@@ -30,6 +30,8 @@ function webContentsStub() {
     send: noopWindowMethod,
     once: (_event: string, cb: () => void) => cb(),
     on: noopWindowMethod,
+    isLoading: (): boolean => false,
+    setBackgroundThrottling: noopWindowMethod,
   };
 }
 
@@ -41,6 +43,8 @@ export class BrowserWindow {
   isMinimized = (): boolean => false;
   isVisible = (): boolean => true;
   show = noopWindowMethod;
+  showInactive = noopWindowMethod;
+  moveTop = noopWindowMethod;
   hide = noopWindowMethod;
   focus = noopWindowMethod;
   restore = noopWindowMethod;

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setStubUserData } from './electron-stub.js';
@@ -49,5 +49,26 @@ describe('pet-window 几何逻辑（纯函数）', () => {
     const pos = resolveFloatingPosition(WORK_AREA);
     expect(pos.x).toBe(1920 - PET_FLOATING_WIDTH - 200);
     expect(pos.y).toBe(Math.round((1080 - PET_FLOATING_HEIGHT) / 2));
+  });
+});
+
+describe('悬浮窗 Windows 展示约定', () => {
+  const petWindowSrc = readFileSync(
+    path.join(__dirname, '../../desktop/src/pet-window.ts'),
+    'utf-8',
+  );
+  const mainSrc = readFileSync(
+    path.join(__dirname, '../../desktop/src/main.ts'),
+    'utf-8',
+  );
+
+  it('Windows 用 toolbar + showInactive，避免随主窗一起最小化', () => {
+    expect(petWindowSrc).toContain("type: 'toolbar'");
+    expect(petWindowSrc).toContain('showInactive');
+    expect(petWindowSrc).toContain('function revealFloatingWindow');
+  });
+
+  it('主窗 show 在仍最小化时不切回 embedded', () => {
+    expect(mainSrc).toMatch(/on\('show'[\s\S]*isMinimized\(\)/);
   });
 });

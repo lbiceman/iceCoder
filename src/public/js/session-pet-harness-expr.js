@@ -274,10 +274,10 @@ function expressionRunning(ctx, leftX, rightX, y, ec, timestamp) {
   drawHCapsuleEyes(ctx, leftX, rightX, y, ec);
 }
 
-/** executing / tool_calling：一只手握住扳手柄拧 */
+/** executing / tool_calling：左下手握住扳手柄拧 */
 function expressionToolCalling(ctx, leftX, rightX, y, ec, timestamp) {
   var t = ts(timestamp);
-  var swing = Math.sin(t / 130) * 0.55;
+  var swing = Math.sin(t / 130) * 0.28;
 
   drawOvalEyes(ctx, leftX, rightX, y, ec, 4.6 * PET_SCALE, 6.4 * PET_SCALE);
   if (!blinkNow) {
@@ -289,28 +289,29 @@ function expressionToolCalling(ctx, leftX, rightX, y, ec, timestamp) {
   }
 
   ctx.save();
-  ctx.translate((leftX + rightX) / 2 + 1, y + 15);
-  ctx.rotate(-0.95 + swing);
+  ctx.translate((leftX + rightX) / 2 + 3, y + 17);
+  ctx.rotate(-0.72 + swing);
 
   strokeSetup(ctx, ec, 2.35);
   ctx.beginPath();
-  ctx.moveTo(0, -3);
-  ctx.lineTo(0, 18);
+  ctx.moveTo(0, -4);
+  ctx.lineTo(0, 17);
   ctx.stroke();
   ctx.beginPath();
-  ctx.arc(0, -8.2, 5.6, 0.42, Math.PI - 0.42, false);
+  ctx.arc(0, -8.5, 5.4, 0.35, Math.PI - 0.35, false);
   ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(-4.6, -5.4);
-  ctx.lineTo(-1.7, -2.8);
-  ctx.moveTo(4.6, -5.4);
-  ctx.lineTo(1.7, -2.8);
+  ctx.moveTo(-4.4, -5.2);
+  ctx.lineTo(-1.6, -2.6);
+  ctx.moveTo(4.4, -5.2);
+  ctx.lineTo(1.6, -2.6);
   ctx.stroke();
 
-  drawHand(ctx, 0.2, 8, 0.06, 0.94, ec);
+  // 掌在柄左下，手指横握（相对柄约 80°）
+  drawHand(ctx, -4.6, 12.8, 1.38, 1, ec);
 
-  if (Math.abs(swing) > 0.38) {
-    ctx.globalAlpha = (Math.abs(swing) - 0.38) / 0.17;
+  if (Math.abs(swing) > 0.2) {
+    ctx.globalAlpha = (Math.abs(swing) - 0.2) / 0.08;
     strokeSetup(ctx, ec, 1.6);
     ctx.beginPath();
     ctx.moveTo(0, -15);
@@ -595,7 +596,7 @@ export var HARNESS_PET_DEMO = [
   { state: 'running', title: '处理中', why: '两侧速度线，忙碌运转' },
   { state: 'executing', title: '执行', why: '与调工具同一表情' },
   { state: 'streaming', title: '流式输出', why: '开口写回复' },
-  { state: 'tool_calling', title: '调工具', why: '一只手拧扳手' },
+  { state: 'tool_calling', title: '调工具', why: '左下手握住扳手拧' },
   { state: 'recovering', title: '恢复中', why: '陀螺转圈等待' },
   { state: 'restoring', title: '回滚恢复', why: '地图展开上下文' },
   { state: 'cancelling', title: '取消中', why: '耷拉眼收束' },
