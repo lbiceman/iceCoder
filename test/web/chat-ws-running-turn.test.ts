@@ -22,26 +22,32 @@ afterEach(() => {
 });
 
 describe('chat-ws-running-turn', () => {
-  it('fold stream_delta 累积文本并切 petState=read', () => {
+  it('fold stream_delta 累积文本并切 petState=streaming', () => {
     foldStepIntoRunningTurn('rt-stream', { type: 'stream_delta', delta: '你' });
     foldStepIntoRunningTurn('rt-stream', { type: 'stream_delta', delta: '好' });
     const snap = snapshotRunningTurn('rt-stream');
     expect(snap?.streamingText).toBe('你好');
-    expect(snap?.petState).toBe('read');
+    expect(snap?.petState).toBe('streaming');
   });
 
-  it('fold reasoning_stream_delta 累积思考流并切 petState=thinking', () => {
+  it('fold reasoning_stream_delta 累积思考流并切 petState=running', () => {
     foldStepIntoRunningTurn('rt-stream', { type: 'reasoning_stream_delta', delta: '想' });
     foldStepIntoRunningTurn('rt-stream', { type: 'reasoning_stream_delta', delta: '一下' });
     expect(getRunningTurn('rt-stream')?.streamingReasoningText).toBe('想一下');
-    expect(getRunningTurn('rt-stream')?.petState).toBe('thinking');
+    expect(getRunningTurn('rt-stream')?.petState).toBe('running');
+  });
+
+  it('thinking 默认忙碌态是 running', () => {
+    foldStepIntoRunningTurn('rt-stream', { type: 'thinking', content: '处理中' });
+    expect(getRunningTurn('rt-stream')?.petState).toBe('running');
+    expect(getRunningTurn('rt-stream')?.petBubble).toBe('处理中');
   });
 
   it('thinking / tool_progress 更新冰豆文案', () => {
     foldStepIntoRunningTurn('rt-stream', { type: 'thinking', content: '分析中' });
     expect(getRunningTurn('rt-stream')?.petBubble).toBe('分析中');
     foldStepIntoRunningTurn('rt-stream', { type: 'tool_progress', content: '写入文件' });
-    expect(getRunningTurn('rt-stream')?.petState).toBe('working');
+    expect(getRunningTurn('rt-stream')?.petState).toBe('tool_calling');
     expect(getRunningTurn('rt-stream')?.petStatusText).toBe('写入文件');
   });
 
@@ -73,9 +79,25 @@ describe('chat-ws-running-turn', () => {
 
   it('final user_checkpoint / model_done 更新冰豆文案', () => {
     foldStepIntoRunningTurn('rt-final', { type: 'final', stopReason: 'user_checkpoint' });
-    expect(getRunningTurn('rt-final')?.petState).toBe('crying');
+    expect(getRunningTurn('rt-final')?.petState).toBe('user_checkpoint');
     foldStepIntoRunningTurn('rt-final', { type: 'final', stopReason: 'model_done' });
-    expect(getRunningTurn('rt-final')?.petState).toBe('success');
+    expect(getRunningTurn('rt-final')?.petState).toBe('clap');
+  });
+
+  it('memory_event 召回并入切 petState=memory', () => {
+    foldStepIntoRunningTurn('rt-stream', {
+      type: 'memory_event',
+      memoryKind: 'recall_coarse_hit',
+      memoryDetail: '首轮已把记忆并入本回合提示：user_communi.md',
+    });
+    expect(getRunningTurn('rt-stream')?.petState).toBe('memory');
+    expect(getRunningTurn('rt-stream')?.petBubble).toContain('记忆并入');
+  });
+
+  it('tool_call 之后 thinking 仍保持 petState=tool_calling', () => {
+    foldStepIntoRunningTurn('rt-stream', { type: 'tool_call', toolName: 'read_file', toolArgs: { path: 'a.ts' } });
+    foldStepIntoRunningTurn('rt-stream', { type: 'thinking', content: '继续' });
+    expect(getRunningTurn('rt-stream')?.petState).toBe('tool_calling');
   });
 
   it('planEvents 超过 200 条会裁剪', () => {

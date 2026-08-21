@@ -4,7 +4,7 @@
  * 不区分昼夜模式，始终黑底白字。
  * 眨眼：1-3 秒随机间隔，闭眼 150ms。
  *
- * 表情系统：20 种对外状态（+ 内部 blink 眨眼帧），按业务切换。
+ * 表情系统：harness 候选表情（+ 内部 blink 眨眼帧），按业务切换。
  * 外圈圆环：自顶端顺时针表示上下文 token 占用率。
  */
 import {
@@ -13,6 +13,13 @@ import {
   buildSessionPetCanvasAriaLabel,
   SESSION_PET_DISPLAY_NAME,
 } from './session-pet-palette.js';
+import {
+  HARNESS_PET_EXPRESSIONS,
+  HARNESS_PET_SKIP_BLINK,
+  HARNESS_PET_SKIP_BREATH,
+  IDLE_POSES,
+  idlePoseHoldMs,
+} from './session-pet-harness-expr.js';
 
 window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
@@ -24,11 +31,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
   /** 版面比例：相对最初 120×120 设计稿 */
   var PET_SCALE = PET_SIZE / 120;
   var EYE_W = Math.round(14 * PET_SCALE);
-  /** 胶囊眼竖向逻辑高度（非画布位置）；减小此值可缩矮眼睛形状 */
-  var EYE_H = Math.round(18 * PET_SCALE);
-  /** read：实心圆眼、镜框（随 PET_SCALE） */
-  var READ_EYE_DIA_PX = Math.max(5, Math.round(8 * PET_SCALE));
-  var READ_LENS_DIA_PX = Math.round(24 * PET_SCALE);
 
   var BLINK_MIN = 1000;
   var BLINK_MAX = 3000;
@@ -38,8 +40,6 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
   // 固定颜色：黑底；眼睛线色见 create() 闭包内 eyeColor（每实例独立）
   var BODY_BG = '#000000';
-  var READ_GLASSES_STROKE = 'rgba(255,255,255,0.55)';
-
   /** token 圆环线宽（逻辑像素） */
   var TOKEN_RING_LINE_WIDTH = 3.25 * PET_SCALE;
   /** 圆环内侧与机身外缘的间距（逻辑像素） */
@@ -269,35 +269,8 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     };
   }
 
-  // ============ 表情绘制函数（预留 10+ 种状态） ============
+  // ============ 表情绘制（仅 harness 候选 + 内部 blink） ============
 
-  /**
-   * 基础胶囊眼睛（竖直）
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} cx 中心 x
-   * @param {number} cy 中心 y
-   * @param {number} halfW 半宽
-   * @param {number} halfH 半高
-   * @param {string} color 线条颜色
-   */
-  function drawCapsuleEye(ctx, cx, cy, halfW, halfH, color) {
-    var topY = cy - halfH;
-    var bottomY = cy + halfH;
-    var rightX = cx + halfW;
-
-    ctx.beginPath();
-    ctx.arc(cx, topY, halfW, Math.PI, 0, false);
-    ctx.lineTo(rightX, bottomY);
-    ctx.arc(cx, bottomY, halfW, 0, Math.PI, false);
-    ctx.closePath();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-  }
-
-  /** 眨眼横线 */
   function drawBlinkLine(ctx, cx, cy, w, color) {
     ctx.beginPath();
     ctx.moveTo(cx - w / 2, cy);
@@ -308,500 +281,52 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     ctx.stroke();
   }
 
-  // ---- 以下是各种表情的眼睛绘制函数 ----
-
-  /** 1. idle — 平静（标准胶囊眼） */
-  function expressionIdle(ctx, leftX, rightX, y, ec) {
-    drawCapsuleEye(ctx, leftX, y, EYE_W / 2, EYE_H / 2, ec);
-    drawCapsuleEye(ctx, rightX, y, EYE_W / 2, EYE_H / 2, ec);
-  }
-
-  /** 2. success — 任务完成（字面 ^ ^ 笑眼，尖顶 caret） */
-  function expressionSuccess(ctx, leftX, rightX, y, ec) {
-    var w = EYE_W / 2;
-    var peak = -6;
-
-    function drawCaret(cx) {
-      ctx.beginPath();
-      ctx.moveTo(cx - w * 0.72, y + 2);
-      ctx.lineTo(cx, y + peak);
-      ctx.lineTo(cx + w * 0.72, y + 2);
-      ctx.strokeStyle = ec;
-      ctx.lineWidth = 2.6;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-    }
-
-    drawCaret(leftX);
-    drawCaret(rightX);
-  }
-
-  /** 3. happy — 开心（笑眼：弧线中间上拱 ^，与 sad 的下垂弧相反） */
-  function expressionHappy(ctx, leftX, rightX, y, ec) {
-    var w = EYE_W / 2;
-    ctx.beginPath();
-    ctx.moveTo(leftX - w * 0.85, y + 1);
-    ctx.quadraticCurveTo(leftX, y - 5, leftX + w * 0.85, y + 1);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(rightX - w * 0.85, y + 1);
-    ctx.quadraticCurveTo(rightX, y - 5, rightX + w * 0.85, y + 1);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** 4. thinking — 若有所思（略眯、视线朝左上；高光在眶左上，无跨眉线） */
-  function expressionThinking(ctx, leftX, rightX, y, ec) {
-    var hw = EYE_W / 2;
-    var hh = EYE_H * 0.38;
-
-    // 整体略向左，和「往左上看」一致
-    var lx = leftX - 1.5;
-    var rx = rightX - 1;
-
-    drawCapsuleEye(ctx, lx, y - 2, hw - 0.5, hh, ec);
-    drawCapsuleEye(ctx, rx, y - 2, hw - 0.5, hh, ec);
-
-    // 主高光：每只眼轮廓的左上方 → 读成瞳孔/视线朝左上
-    ctx.fillStyle = 'rgba(255,255,255,0.92)';
-    ctx.beginPath();
-    ctx.arc(lx - 2, y - 5.5, 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(rx - 2.8, y - 5.2, 1.9, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 次高光：更靠左上、弱一点，增加凝视层次
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.beginPath();
-    ctx.arc(lx - 3.2, y - 7, 1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(rx - 4, y - 6.6, 0.85, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  /** working 态视线扫动周期（ms）：整段左上方↔右上方约一周期，偏慢显严谨 */
-  var WORKING_GAZE_PERIOD_MS = 3800;
-
-  /**
-   * 5. working — 工作中：略眯、视线在左上与右上之间慢速往复（严谨、像在审读）
-   * @param {number} timestamp requestAnimationFrame 时间戳
-   */
-  function expressionWorking(ctx, leftX, rightX, y, timestamp, ec) {
-    var t = typeof timestamp === 'number' ? timestamp : 0;
-    var u = Math.sin((t / WORKING_GAZE_PERIOD_MS) * Math.PI * 2);
-    var gx = u * 1.35;
-    var gy = -1.15 - Math.abs(u) * 0.22;
-    var lx = leftX + gx;
-    var rx = rightX + gx;
-    var yy = y + gy;
-    var hw = EYE_W / 2 - 0.5;
-    var hh = EYE_H * 0.41;
-    drawCapsuleEye(ctx, lx, yy, hw, hh, ec);
-    drawCapsuleEye(ctx, rx, yy, hw, hh, ec);
-    ctx.fillStyle = ec;
-    ctx.beginPath();
-    ctx.arc(lx + 1 + u * 0.45, yy - 3.2, 1.12, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(rx - 1 + u * 0.45, yy - 3.2, 1.12, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  /** 5. confused — 键名保留；画布与 angry 同为愤怒斜眼 */
-  function expressionConfused(ctx, leftX, rightX, y, ec) {
-    expressionAngry(ctx, leftX, rightX, y, ec);
-  }
-
-  /** 6. alert — 警觉（横宽椭圆眼眶 + 内上凝视点；与 surprised 中空大圆区分） */
-  function expressionAlert(ctx, leftX, rightX, y, ec) {
-    var lidY = y - 1;
-    var rx = EYE_W / 2 + 1.2;
-    var ry = EYE_H * 0.41;
-    var lw = 2.35;
-
-    ctx.beginPath();
-    ctx.ellipse(leftX, lidY, rx, ry, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = lw;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.ellipse(rightX, lidY, rx, ry, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = lw;
-    ctx.stroke();
-
-    ctx.fillStyle = ec;
-    ctx.beginPath();
-    ctx.arc(leftX + 1.85, lidY - 1.35, 1.9, 0, Math.PI * 2);
-    ctx.arc(rightX - 1.85, lidY - 1.35, 1.9, 0, Math.PI * 2);
-    ctx.fill();
-
-    var browLift = ry + 3;
-    ctx.beginPath();
-    ctx.moveTo(leftX - rx * 0.52, lidY - browLift + 2.85);
-    ctx.lineTo(leftX + rx * 0.42, lidY - browLift + 1.15);
-    ctx.moveTo(rightX - rx * 0.42, lidY - browLift + 1.15);
-    ctx.lineTo(rightX + rx * 0.52, lidY - browLift + 2.85);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** 7. anxious — 焦虑（眼睛快速眨动效果用横线表示） */
-  function expressionAnxious(ctx, leftX, rightX, y, ec) {
-    // 半闭眼状态
-    drawBlinkLine(ctx, leftX, y - 2, EYE_W + 2, ec);
-    drawBlinkLine(ctx, rightX, y - 2, EYE_W + 2, ec);
-    // 下面加一条表示紧张
-    drawBlinkLine(ctx, leftX, y + 4, EYE_W, ec);
-    drawBlinkLine(ctx, rightX, y + 4, EYE_W, ec);
-  }
-
-  /** 8. rest — 休息（闭眼横线） */
-  function expressionRest(ctx, leftX, rightX, y, ec) {
-    drawBlinkLine(ctx, leftX, y, EYE_W, ec);
-    drawBlinkLine(ctx, rightX, y, EYE_W, ec);
-    // 加一条 Z 字形表示睡觉
-    ctx.beginPath();
-    ctx.moveTo(rightX + 12, y - 8);
-    ctx.lineTo(rightX + 16, y - 8);
-    ctx.lineTo(rightX + 14, y - 4);
-    ctx.lineTo(rightX + 18, y - 4);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 1.5;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-  }
-
-  /** 9. surprised — 惊讶（眼睛睁圆） */
-  function expressionSurprised(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.arc(leftX, y, EYE_W / 2 + 2, 0, Math.PI * 2);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(rightX, y, EYE_W / 2 + 2, 0, Math.PI * 2);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-  }
-
-  /** 10. sad — 难过（眼睛下垂） */
-  function expressionSad(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.arc(leftX, y - 4, EYE_W / 2, Math.PI * 0.2, Math.PI * 0.8, false);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(rightX, y - 4, EYE_W / 2, Math.PI * 0.2, Math.PI * 0.8, false);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** 10b. crying — 哭泣（>X 形皱眼 + 大泪滴 + 撇嘴，与 idle 胶囊眼明显区分） */
-  function expressionCrying(ctx, leftX, rightX, y, ec) {
-    var w = EYE_W / 2;
-    // 皱眉 X 形眼（与 idle 竖胶囊完全不同）
-    ctx.beginPath();
-    ctx.moveTo(leftX - w * 0.75, y - 5);
-    ctx.lineTo(leftX + w * 0.75, y + 5);
-    ctx.moveTo(leftX + w * 0.75, y - 5);
-    ctx.lineTo(leftX - w * 0.75, y + 5);
-    ctx.moveTo(rightX - w * 0.75, y - 5);
-    ctx.lineTo(rightX + w * 0.75, y + 5);
-    ctx.moveTo(rightX + w * 0.75, y - 5);
-    ctx.lineTo(rightX - w * 0.75, y + 5);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-    // 大泪滴（高对比蓝，黑底上易辨认）
-    var tearY = y + 10;
-    ctx.fillStyle = 'rgba(96, 165, 250, 0.95)';
-    ctx.beginPath();
-    ctx.ellipse(leftX - 1, tearY, 4, 6.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(leftX, tearY + 9, 2.8, 4.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(rightX + 1, tearY + 1, 4, 6.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(rightX + 1, tearY + 10, 2.8, 4.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.beginPath();
-    ctx.arc(leftX - 2, tearY - 2, 1.2, 0, Math.PI * 2);
-    ctx.arc(rightX, tearY - 1, 1.2, 0, Math.PI * 2);
-    ctx.fill();
-    // 撇嘴
-    var mouthY = y + 24;
-    ctx.beginPath();
-    ctx.moveTo(leftX - 5, mouthY);
-    ctx.quadraticCurveTo((leftX + rightX) / 2, mouthY + 6, rightX + 5, mouthY);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** 11. angry — 生气（眼睛斜向上） */
-  function expressionAngry(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.moveTo(leftX - EYE_W / 2, y + 4);
-    ctx.lineTo(leftX + EYE_W / 2, y - 4);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(rightX - EYE_W / 2, y - 4);
-    ctx.lineTo(rightX + EYE_W / 2, y + 4);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** 12. curious — 好奇（一大一小两眼，同一水平线、小眼相对大眼垂直居中） */
-  function expressionCurious(ctx, leftX, rightX, y, ec) {
-    var hwL = EYE_W / 2;
-    var hhL = EYE_H / 2;
-    var hwR = EYE_W / 2 - 2;
-    var hhR = EYE_H / 2 - 3;
-    // 共用同一 y 作为胶囊竖直中心，halfH 不同则自然上下对称扩展 → 垂直居中对齐
-    drawCapsuleEye(ctx, leftX - 2, y, hwL, hhL, ec);
-    drawCapsuleEye(ctx, rightX + 3, y, hwR, hhR, ec);
-  }
-
-  /** 13. dizzy — 晕（眼内小叉） */
-  function drawMiniX(ctx, cx, cy, r, color) {
-    ctx.beginPath();
-    ctx.moveTo(cx - r, cy - r);
-    ctx.lineTo(cx + r, cy + r);
-    ctx.moveTo(cx + r, cy - r);
-    ctx.lineTo(cx - r, cy + r);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-  function expressionDizzy(ctx, leftX, rightX, y, ec) {
-    drawMiniX(ctx, leftX, y, 5, ec);
-    drawMiniX(ctx, rightX, y, 5, ec);
-  }
-
-  /** 14. shy — 害羞（眯眼避视、腮红、略内向） */
-  function expressionShy(ctx, leftX, rightX, y, ec) {
-    var lx = leftX - 3;
-    var rx = rightX - 3;
-    var hh = EYE_H * 0.34;
-    var hw = EYE_W / 2 - 1;
-    drawCapsuleEye(ctx, lx, y + 1, hw, hh, ec);
-    drawCapsuleEye(ctx, rx, y + 1, hw, hh, ec);
-    // 腼腆视线：高光偏外下，像不好意思抬眼
-    ctx.fillStyle = 'rgba(255,255,255,0.65)';
-    ctx.beginPath();
-    ctx.arc(lx - 1.5, y + 2.5, 1.3, 0, Math.PI * 2);
-    ctx.arc(rx - 1.5, y + 2.5, 1.3, 0, Math.PI * 2);
-    ctx.fill();
-    // 淡腮红（娇羞）
-    ctx.fillStyle = 'rgba(255, 130, 160, 0.46)';
-    ctx.beginPath();
-    ctx.arc(lx - 8, y + 12, 6, 0, Math.PI * 2);
-    ctx.arc(rx + 8, y + 12, 6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  /** 15. love — 喜欢（闪亮圆点眼） */
-  function expressionLove(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.arc(leftX, y - 2, 4, 0, Math.PI * 2);
-    ctx.fillStyle = ec;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(rightX, y - 2, 4, 0, Math.PI * 2);
-    ctx.fillStyle = ec;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(leftX, y + 2, 2, 0, Math.PI * 2);
-    ctx.arc(rightX, y + 2, 2, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fill();
-  }
-
-  /** 16. weary — 疲惫（半耷拉眼） */
-  function expressionWeary(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.arc(leftX, y + 2, EYE_W / 2, Math.PI * 0.15, Math.PI * 0.85, false);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(rightX, y + 2, EYE_W / 2, Math.PI * 0.15, Math.PI * 0.85, false);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** 17. focused — 专注（竖条焦聚眼） */
-  function expressionFocused(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.moveTo(leftX, y - 10);
-    ctx.lineTo(leftX, y + 10);
-    ctx.moveTo(rightX, y - 10);
-    ctx.lineTo(rightX, y + 10);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  /** read：白色长方镜框；上两角小圆角，下两角更大圆角（基准 READ_LENS_DIA_PX） */
-  function drawReadGlasses(ctx, leftX, rightX, y) {
-    var base = READ_LENS_DIA_PX / 1.8;
-    var lensHalfW = base * 1.05;
-    var lensHalfH = base * 0.72;
-    var lensCornerRTop = Math.min(
-      Math.max(1.25 * PET_SCALE, READ_LENS_DIA_PX * 0.09),
-      lensHalfW * 0.38,
-      lensHalfH * 0.38
-    );
-
-    function strokeLensAt(cx, cy) {
-      var x = cx - lensHalfW;
-      var yy = cy - lensHalfH;
-      var w = lensHalfW * 2;
-      var h = lensHalfH * 2;
-      var rt = Math.min(lensCornerRTop, w / 2 - 0.01, h / 2 - 0.01);
-      var rb = Math.min(
-        Math.max(rt * 2.6, READ_LENS_DIA_PX * 0.16),
-        w / 2 - 0.01,
-        h - rt - 0.02
-      );
-      ctx.beginPath();
-      ctx.moveTo(x + rt, yy);
-      ctx.arcTo(x + w, yy, x + w, yy + h, rt);
-      ctx.lineTo(x + w, yy + h - rb);
-      ctx.arcTo(x + w, yy + h, x, yy + h, rb);
-      ctx.lineTo(x + rb, yy + h);
-      ctx.arcTo(x, yy + h, x, yy, rb);
-      ctx.lineTo(x, yy + rt);
-      ctx.arcTo(x, yy, x + w, yy, rt);
-      ctx.closePath();
-      ctx.stroke();
-    }
-
-    ctx.save();
-    ctx.strokeStyle = READ_GLASSES_STROKE;
-    ctx.lineWidth = 1.2;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    strokeLensAt(leftX, y);
-    strokeLensAt(rightX, y);
-    ctx.beginPath();
-    ctx.moveTo(leftX + lensHalfW, y);
-    ctx.lineTo(rightX - lensHalfW, y);
-    ctx.stroke();
-    ctx.lineWidth = 1.55;
-    ctx.beginPath();
-    ctx.moveTo(leftX - lensHalfW, y);
-    ctx.lineTo(leftX - lensHalfW - 2, y - 20);
-    ctx.moveTo(rightX + lensHalfW, y);
-    ctx.lineTo(rightX + lensHalfW + 2, y - 20);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  /** 18. read — 直径 12px 实心圆眼；长方镜片上小圆角、下大圆角见 drawReadGlasses */
-  function expressionRead(ctx, leftX, rightX, y, ec) {
-    var er = READ_EYE_DIA_PX / 1.6;
-    ctx.fillStyle = ec;
-    ctx.beginPath();
-    ctx.arc(leftX, y, er, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(rightX, y, er, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  /** 19. determined — 决绝（眉压眼） */
-  function expressionDetermined(ctx, leftX, rightX, y, ec) {
-    ctx.beginPath();
-    ctx.moveTo(leftX - EYE_W / 2 - 2, y - 6);
-    ctx.lineTo(leftX + EYE_W / 2 + 1, y - 1);
-    ctx.moveTo(rightX - EYE_W / 2 - 1, y - 1);
-    ctx.lineTo(rightX + EYE_W / 2 + 2, y - 6);
-    ctx.strokeStyle = ec;
-    ctx.lineWidth = 2.5;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-    drawCapsuleEye(ctx, leftX, y + 2, EYE_W / 2, EYE_H / 2 - 4, ec);
-    drawCapsuleEye(ctx, rightX, y + 2, EYE_W / 2, EYE_H / 2 - 4, ec);
-  }
-
-  /** 20. playful — 俏皮（单眼眨） */
-  function expressionPlayful(ctx, leftX, rightX, y, ec) {
-    drawCapsuleEye(ctx, leftX, y, EYE_W / 2, EYE_H / 2, ec);
-    drawBlinkLine(ctx, rightX, y, EYE_W + 2, ec);
-  }
-
-  /** blink — 眨眼（横线，内部状态） */
   function expressionBlink(ctx, leftX, rightX, y, ec) {
     drawBlinkLine(ctx, leftX, y, EYE_W, ec);
     drawBlinkLine(ctx, rightX, y, EYE_W, ec);
   }
 
-  // 表情映射表（对外 20 种 + 内部 blink）
-  var EXPRESSIONS = {
-    idle: expressionIdle,
-    success: expressionSuccess,
-    happy: expressionHappy,
-    thinking: expressionThinking,
-    working: expressionWorking,
-    confused: expressionConfused,
-    alert: expressionAlert,
-    anxious: expressionAnxious,
-    rest: expressionRest,
-    surprised: expressionSurprised,
-    sad: expressionSad,
-    crying: expressionCrying,
-    angry: expressionAngry,
-    curious: expressionCurious,
-    dizzy: expressionDizzy,
-    shy: expressionShy,
-    love: expressionLove,
-    weary: expressionWeary,
-    focused: expressionFocused,
-    read: expressionRead,
-    determined: expressionDetermined,
-    playful: expressionPlayful,
-    blink: expressionBlink,
+  var LEGACY_PET_STATE = {
+    success: 'clap',
+    happy: 'clap',
+    thinking: 'running',
+    working: 'tool_calling',
+    confused: 'error',
+    alert: 'error',
+    anxious: 'recovering',
+    rest: 'idle',
+    surprised: 'planning',
+    sad: 'cancelling',
+    crying: 'user_checkpoint',
+    angry: 'error',
+    curious: 'planning',
+    dizzy: 'recovering',
+    shy: 'tool_confirm',
+    love: 'memory',
+    weary: 'error',
+    focused: 'running',
+    read: 'streaming',
+    determined: 'tool_calling',
+    playful: 'idle',
+    wave: 'idle',
   };
 
-  /** 默认/空闲表情（原 idle，现改为 shy） */
-  var DEFAULT_EXPRESSION = 'shy';
+  var EXPRESSIONS = { blink: expressionBlink };
+  for (var _hk in HARNESS_PET_EXPRESSIONS) {
+    if (Object.prototype.hasOwnProperty.call(HARNESS_PET_EXPRESSIONS, _hk)) {
+      EXPRESSIONS[_hk] = HARNESS_PET_EXPRESSIONS[_hk];
+    }
+  }
+
+  var DEFAULT_EXPRESSION = 'idle';
+
+  function resolvePetState(s) {
+    var next = s || DEFAULT_EXPRESSION;
+    if (LEGACY_PET_STATE[next]) next = LEGACY_PET_STATE[next];
+    if (!EXPRESSIONS[next] || next === 'blink') next = DEFAULT_EXPRESSION;
+    return next;
+  }
+
 
   /**
    * @param {HTMLElement} rootEl
@@ -821,6 +346,9 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     var isBlinking = false;
     var blinkCloseTimer = null;
     var animFrame = null;
+    var idlePose = 'rest';
+    var idleDir = 1;
+    var idleTimer = null;
 
     var tokenPct = 0;
     var tokenUsed = 0;
@@ -867,10 +395,11 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
       ctx.clearRect(0, 0, PET_SIZE, PET_SIZE);
 
-      var breath = state === 'working' ? 0 : Math.sin(timestamp / 800) * 1.5;
+      var breath = HARNESS_PET_SKIP_BREATH[state] ? 0 : Math.sin(timestamp / 800) * 1.5;
       var scale = 1;
-      if (state === 'happy' || state === 'success') scale *= 1.02;
-      if (state === 'playful') scale *= 1 + Math.sin(timestamp / 350) * 0.012;
+      if (state === 'clap') scale *= 1.02;
+      if (state === 'idle') scale *= 1 + Math.sin(timestamp / 350) * 0.012;
+      if (state === 'running') scale *= 1 + Math.sin(timestamp / 80) * 0.016;
 
       ctx.save();
       ctx.translate(cx, cy);
@@ -914,22 +443,10 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       var eyeXL = cx - eyeSpreadX + eyeOff.lx;
       var eyeXR = cx + eyeSpreadX + eyeOff.rx;
 
-      if (isBlinking) {
-        if (state === 'read') {
-          drawBlinkLine(ctx, eyeXL, eyeYL, READ_EYE_DIA_PX, eyeColor);
-          drawBlinkLine(ctx, eyeXR, eyeYR, READ_EYE_DIA_PX, eyeColor);
-        } else {
-          expressionBlink(ctx, eyeXL, eyeXR, eyeYL, eyeColor);
-        }
-      } else if (state === 'working') {
-        expressionWorking(ctx, eyeXL, eyeXR, eyeYL, timestamp, eyeColor);
-      } else {
-        var exprFn = EXPRESSIONS[state] || expressionIdle;
-        exprFn(ctx, eyeXL, eyeXR, eyeYL, eyeColor);
-      }
-      if (state === 'read') {
-        drawReadGlasses(ctx, eyeXL, eyeXR, eyeYL);
-      }
+      var exprFn = (HARNESS_PET_EXPRESSIONS[state] || EXPRESSIONS[state] || EXPRESSIONS[DEFAULT_EXPRESSION]);
+      var idleExtra = state === 'idle' ? { pose: idlePose, dir: idleDir } : undefined;
+      var blinking = isBlinking && !HARNESS_PET_SKIP_BLINK[state] && !(state === 'idle' && idlePose === 'doze');
+      exprFn(ctx, eyeXL, eyeXR, eyeYL, eyeColor, timestamp, blinking, idleExtra);
 
       ctx.restore();
 
@@ -938,36 +455,21 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
 
     function getEyeOffsetForState(s) {
       switch (s) {
-        case 'thinking':
-          return { lx: -1, ly: -1, rx: -1, ry: -1 };
-        case 'confused':
-          return { lx: 0, ly: 0, rx: 0, ry: 0 };
-        case 'alert':
-          return { lx: 0, ly: -3, rx: 0, ry: -3 };
-        case 'happy':
-        case 'success':
-          return { lx: -1, ly: -2, rx: 1, ry: -2 };
-        case 'surprised':
-          return { lx: 0, ly: -4, rx: 0, ry: -4 };
-        case 'sad':
-        case 'crying':
-          return { lx: 0, ly: 3, rx: 0, ry: 3 };
-        case 'anxious':
-          return { lx: 1, ly: 1, rx: -1, ry: 1 };
-        case 'curious':
-          return { lx: -2, ly: 0, rx: 2, ry: 0 };
-        case 'dizzy':
+        case 'planning':
           return { lx: 0, ly: 1, rx: 0, ry: 1 };
-        case 'focused':
+        case 'running':
+          return { lx: -1, ly: 0, rx: -1, ry: 0 };
+        case 'memory':
           return { lx: 0, ly: -2, rx: 0, ry: -2 };
-        case 'read':
-          return { lx: 0, ly: 0, rx: 0, ry: 0 };
-        case 'determined':
+        case 'cancelling':
           return { lx: 0, ly: 2, rx: 0, ry: 2 };
-        case 'playful':
-          return { lx: 1, ly: -1, rx: -1, ry: -1 };
-        case 'working':
+        case 'tool_calling':
+        case 'executing':
+          return { lx: 3, ly: 3, rx: 3, ry: 3 };
+        case 'error':
           return { lx: 0, ly: -1, rx: 0, ry: -1 };
+        case 'clap':
+          return { lx: -1, ly: -2, rx: 1, ry: -2 };
         default:
           return { lx: 0, ly: 0, rx: 0, ry: 0 };
       }
@@ -981,14 +483,14 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       isBlinking = false;
 
       function nextBlink() {
-        if (state === 'crying') {
+        if (HARNESS_PET_SKIP_BLINK[state]) {
           isBlinking = false;
           blinkTimer = setTimeout(nextBlink, BLINK_MAX);
           return;
         }
         var delay = BLINK_MIN + Math.random() * (BLINK_MAX - BLINK_MIN);
         blinkTimer = setTimeout(function () {
-          if (state === 'crying') {
+          if (HARNESS_PET_SKIP_BLINK[state]) {
             nextBlink();
             return;
           }
@@ -1009,11 +511,46 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
       scheduleBlink();
     }
 
+    function pickIdlePose() {
+      var bag = IDLE_POSES.concat(['rest']);
+      var next = idlePose;
+      var guard = 0;
+      while (next === idlePose && guard < 10) {
+        next = bag[Math.floor(Math.random() * bag.length)];
+        guard += 1;
+      }
+      if (next === 'glance') idleDir = Math.random() < 0.5 ? -1 : 1;
+      return next;
+    }
+
+    function stopIdlePoseCycle() {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    }
+
+    function scheduleIdlePose() {
+      stopIdlePoseCycle();
+      if (state !== 'idle') return;
+      idleTimer = setTimeout(function () {
+        if (state !== 'idle') return;
+        idlePose = pickIdlePose();
+        scheduleIdlePose();
+      }, idlePoseHoldMs(idlePose));
+    }
+
     function setState(s) {
-      state = (!s || s === 'idle') ? DEFAULT_EXPRESSION : s;
+      state = resolvePetState(s);
       if (canvas) {
         canvas.classList.remove('pet-wobble', 'pet-crying');
-        if (state === 'crying') canvas.classList.add('pet-crying');
+        if (state === 'user_checkpoint') canvas.classList.add('pet-crying');
+      }
+      if (state === 'idle') {
+        idlePose = 'rest';
+        scheduleIdlePose();
+      } else {
+        stopIdlePoseCycle();
       }
     }
 
@@ -1098,6 +635,7 @@ window.IceSupervisorModeEyeColor = supervisorModeToEyeColor;
     rootEl.classList.add('active');
     if (dragApi && dragApi.afterShow) dragApi.afterShow();
     scheduleBlink();
+    if (state === 'idle') scheduleIdlePose();
     animFrame = requestAnimationFrame(drawFace);
     setTokenUsage(0, 0, 0);
 

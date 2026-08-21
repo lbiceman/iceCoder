@@ -34,6 +34,20 @@ window.ChatPetBridge = (function () {
   var turnHadToolCall = false;
   var petViewBySession = {};
 
+  /** 忙碌回落：本轮已用工具且仍在跑 → 扳手；处理中 → 速度线；真正写回复 → 流式 */
+  function busyPetState(isStreaming, wsProcessing) {
+    if (turnHadToolCall && wsProcessing) return 'tool_calling';
+    if (isStreaming && !wsProcessing) return 'streaming';
+    if (wsProcessing) return 'running';
+    if (isStreaming) return 'streaming';
+    return 'idle';
+  }
+
+  function isToolUseActive() {
+    return !!(turnHadToolCall && lastWsProcessing
+      && !userCheckpointNoticeActive && !modelDoneNoticeActive);
+  }
+
   /** 记录最近一次用户提示词（用于任务完成通知摘要）。 */
   function setLastUserPrompt(text) {
     lastUserPrompt = String(text || '').replace(/\s+/g, ' ').trim();
@@ -87,7 +101,7 @@ window.ChatPetBridge = (function () {
   function syncExecPlanFoot() {
     if (!sessionPet) return;
     if (userCheckpointNoticeActive) {
-      sessionPet.setState('crying');
+      sessionPet.setState('user_checkpoint');
       sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
       sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
       return;
@@ -221,7 +235,7 @@ window.ChatPetBridge = (function () {
     maybeNotifyTaskDone();
     if (!sessionPet) return;
     sessionPet.setVisible(true);
-    sessionPet.setState('success');
+    sessionPet.setState('clap');
     sessionPet.setBubbleText(MODEL_DONE_BUBBLE);
     sessionPet.setTurnLabel('');
     modelDoneResetTimer = setTimeout(function () {
@@ -248,7 +262,7 @@ window.ChatPetBridge = (function () {
     lastWsProcessing = true;
     if (!sessionPet) return;
     sessionPet.setVisible(true);
-    sessionPet.setState('thinking');
+    sessionPet.setState('running');
     sessionPet.setBubbleText(withFile ? '解析文件中…' : '');
     syncExecPlanFoot();
   }
@@ -292,7 +306,7 @@ window.ChatPetBridge = (function () {
     userCheckpointNoticeActive = true;
     if (!sessionPet) return;
     sessionPet.setVisible(true);
-    sessionPet.setState('crying');
+    sessionPet.setState('user_checkpoint');
     sessionPet.setBubbleText(USER_CHECKPOINT_BUBBLE);
     sessionPet.setTurnLabel(USER_CHECKPOINT_TURN);
   }
@@ -309,10 +323,12 @@ window.ChatPetBridge = (function () {
 
   function applyHarnessStepToPet(step, isStreaming, wsProcessing) {
     if (!sessionPet || !step) return;
+    lastIsStreaming = !!isStreaming;
+    lastWsProcessing = !!wsProcessing;
     if (userCheckpointNoticeActive && step.type !== 'final') return;
 
     function recoverThinkingOrIdle() {
-      sessionPet.setState(isStreaming || wsProcessing ? 'thinking' : 'idle');
+      sessionPet.setState(busyPetState(isStreaming, wsProcessing));
     }
 
     function bubble(txt) {
@@ -327,12 +343,12 @@ window.ChatPetBridge = (function () {
 
     switch (step.type) {
       case 'thinking':
-        sessionPet.setState('thinking');
+        sessionPet.setState(busyPetState(isStreaming, wsProcessing));
         if (step.content) bubble(step.content);
         break;
       case 'tool_call':
         turnHadToolCall = true;
-        sessionPet.setState('working');
+        sessionPet.setState('tool_calling');
         {
           var toolHint = step.toolName || '';
           if (step.toolArgs) {
@@ -349,10 +365,10 @@ window.ChatPetBridge = (function () {
         break;
       case 'tool_result':
         if (step.toolOutcome === 'policy_block') {
-          sessionPet.setState('focused');
+          sessionPet.setState('cancelling');
           bubble(step.toolError || step.content || '策略拦截（未执行）');
         } else if (step.toolSuccess === false) {
-          sessionPet.setState('angry');
+          sessionPet.setState('error');
           bubble(step.toolError || step.content || '工具失败');
         } else {
           recoverThinkingOrIdle();
@@ -361,45 +377,45 @@ window.ChatPetBridge = (function () {
         }
         break;
       case 'tool_denied':
-        sessionPet.setState('angry');
+        sessionPet.setState('error');
         bubble(step.content || '已拒绝工具');
         break;
       case 'tool_confirm':
-        sessionPet.setState('shy');
+        sessionPet.setState('tool_confirm');
         bubble(step.content || '待确认');
         break;
       case 'tool_progress':
-        sessionPet.setState('working');
+        sessionPet.setState('tool_calling');
         bubble(step.content || '');
         break;
       case 'compaction':
-        sessionPet.setState('focused');
+        sessionPet.setState('restoring');
         bubble(step.content || '整理上下文中…');
         break;
       case 'task_graph_init':
-        sessionPet.setState('thinking');
+        sessionPet.setState('planning');
         bubble('任务图已启动');
         break;
       case 'task_graph_node':
         if (step.graphStatus === 'failed') {
-          sessionPet.setState('alert');
+          sessionPet.setState('error');
           bubble('节点失败');
         } else {
-          sessionPet.setState('thinking');
+          sessionPet.setState('planning');
         }
         break;
       case 'task_graph_update':
-        sessionPet.setState('thinking');
+        sessionPet.setState('planning');
         break;
       case 'task_graph_branch':
-        sessionPet.setState('alert');
+        sessionPet.setState('error');
         bubble(step.message || '分支切换');
         break;
       case 'execution_mode_exit':
         syncExecPlanFoot();
         break;
       case 'task_graph_done':
-        sessionPet.setState('happy');
+        sessionPet.setState('clap');
         bubble('任务图完成');
         syncExecPlanFoot();
         break;
@@ -407,38 +423,36 @@ window.ChatPetBridge = (function () {
         {
           var sr = step.stopReason;
           if (sr === 'error') {
-            sessionPet.setState('weary');
+            sessionPet.setState('error');
             bubble(step.content || '出错了');
           } else if (sr === 'circuit_breaker') {
-            sessionPet.setState('determined');
+            sessionPet.setState('error');
             bubble(step.content || '已熔断');
           } else if (sr === 'user_abort') {
             recoverThinkingOrIdle();
             sessionPet.setBubbleText('');
           } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds' || sr === 'verification_exhausted') {
-            sessionPet.setState('weary');
+            sessionPet.setState('error');
             if (step.content) bubble(step.content);
           } else if (sr === 'task_recovery') {
-            sessionPet.setState('dizzy');
+            sessionPet.setState('recovering');
             if (step.content) bubble(step.content);
           } else if (sr === 'user_checkpoint') {
             applyUserCheckpointNotice();
           } else if (sr === 'stop_hook') {
-            sessionPet.setState('alert');
+            sessionPet.setState('error');
             if (step.content) bubble(step.content);
           } else if (sr === 'model_done') {
             applyModelDoneNotice();
           } else {
-            sessionPet.setState('happy');
+            sessionPet.setState('clap');
             if (step.content) bubble(step.content);
           }
         }
         break;
       case 'stream_delta':
-        sessionPet.setState('read');
-        break;
       case 'reasoning_stream_delta':
-        sessionPet.setState('thinking');
+        sessionPet.setState(busyPetState(isStreaming, wsProcessing));
         break;
       case 'tool_output':
         break;
@@ -452,14 +466,15 @@ window.ChatPetBridge = (function () {
             recall_skipped: '本轮未注入记忆',
             session_hydrate: '已恢复会话状态',
           };
-          if (mk === 'recall_hit' || mk === 'recall_coarse_hit') {
-            sessionPet.setState('love');
+          if (mk === 'recall_hit' || mk === 'recall_coarse_hit'
+            || (typeof step.memoryDetail === 'string' && step.memoryDetail.indexOf('记忆并入') !== -1)) {
+            sessionPet.setState('memory');
           } else if (mk === 'recall_empty') {
-            sessionPet.setState('sad');
+            sessionPet.setState('cancelling');
           } else if (mk === 'recall_skipped') {
-            sessionPet.setState('anxious');
+            sessionPet.setState('idle');
           } else if (mk === 'session_hydrate') {
-            sessionPet.setState('surprised');
+            sessionPet.setState('restoring');
           } else {
             recoverThinkingOrIdle();
           }
@@ -469,7 +484,7 @@ window.ChatPetBridge = (function () {
         break;
       case 'execution_plan_init':
         {
-          sessionPet.setState('surprised');
+          sessionPet.setState('planning');
           var planIntent = step.plan && step.plan.intent;
           var planIntros = {
             edit: '拆成几步搞定',
@@ -487,16 +502,16 @@ window.ChatPetBridge = (function () {
           var patch = step.patch;
           var sp = patch && patch.stepPatches && patch.stepPatches[0];
           if (sp && sp.status === 'failed') {
-            sessionPet.setState('weary');
+            sessionPet.setState('error');
             if (sp.error) bubble(sp.error);
           } else if (sp && sp.status === 'running') {
-            sessionPet.setState('working');
+            sessionPet.setState('tool_calling');
           } else if (typeof patch.progress === 'number' && patch.progress === 100) {
-            sessionPet.setState('happy');
+            sessionPet.setState('clap');
             bubble('计划全部完成');
             syncExecPlanFoot();
           } else if (sp && sp.status === 'done') {
-            sessionPet.setState('playful');
+            sessionPet.setState('idle');
           }
         }
         break;
@@ -529,14 +544,14 @@ window.ChatPetBridge = (function () {
     var n = payload && typeof payload.toolCount === 'number' ? payload.toolCount : 0;
     var bubble;
     if (!ok) {
-      sessionPet.setState('weary');
+      sessionPet.setState('error');
       var err = payload && payload.errorMessage ? String(payload.errorMessage) : '';
       bubble = err ? 'MCP 失败：' + err.slice(0, 22) : 'MCP 加载失败';
     } else if (n > 0) {
-      sessionPet.setState('happy');
+      sessionPet.setState('clap');
       bubble = 'MCP 就绪 · ' + n + ' 工具';
     } else {
-      sessionPet.setState('playful');
+      sessionPet.setState('idle');
       bubble = 'MCP 就绪（无扩展工具）';
     }
     sessionPet.setBubbleText(bubble);
@@ -545,7 +560,7 @@ window.ChatPetBridge = (function () {
     mcpReadyResetTimer = setTimeout(function () {
       mcpReadyResetTimer = null;
       if (!sessionPet || !sessionPet.isVisible()) return;
-      sessionPet.setState(wsProcessing || isStreaming ? 'read' : 'idle');
+      sessionPet.setState(busyPetState(isStreaming, wsProcessing));
       sessionPet.setBubbleText('');
     }, MCP_READY_NOTICE_MS);
   }
@@ -562,7 +577,7 @@ window.ChatPetBridge = (function () {
       tunnelReadyResetTimer = null;
     }
     sessionPet.setVisible(true);
-    sessionPet.setState('curious');
+    sessionPet.setState('clap');
     var hostHint = '';
     try {
       var u = new URL(String(payload.url));
@@ -577,7 +592,7 @@ window.ChatPetBridge = (function () {
     tunnelReadyResetTimer = setTimeout(function () {
       tunnelReadyResetTimer = null;
       if (!sessionPet || !sessionPet.isVisible()) return;
-      sessionPet.setState(wsProcessing || isStreaming ? 'read' : 'idle');
+      sessionPet.setState(busyPetState(isStreaming, wsProcessing));
       sessionPet.setBubbleText('');
     }, TUNNEL_READY_NOTICE_MS);
   }
@@ -598,9 +613,9 @@ window.ChatPetBridge = (function () {
     sessionPet.setVisible(true);
     var first = String(notices[0] || '');
     if (/💾|记住|已记录|已更新记忆/.test(first)) {
-      sessionPet.setState('love');
+      sessionPet.setState('memory');
     } else {
-      sessionPet.setState('playful');
+      sessionPet.setState('idle');
     }
     // 回合结束才推送，此时会话活跃标志往往已清空，仍应展示摘要气泡
     if (ctx.showBubble !== false) {
@@ -609,7 +624,7 @@ window.ChatPetBridge = (function () {
     memoryNoticeResetTimer = setTimeout(function () {
       memoryNoticeResetTimer = null;
       if (!sessionPet || !sessionPet.isVisible()) return;
-      sessionPet.setState(wsProcessing || isStreaming ? 'read' : 'idle');
+      sessionPet.setState(busyPetState(isStreaming, wsProcessing));
       sessionPet.setBubbleText('');
     }, MEMORY_NOTICE_MS);
   }
@@ -627,13 +642,13 @@ window.ChatPetBridge = (function () {
     if (!sessionPet) return;
     syncSupervisorModeEye(mode);
     sessionPet.setVisible(true);
-    sessionPet.setState('playful');
+    sessionPet.setState('idle');
     sessionPet.setBubbleText('当前模式：' + (label || mode));
     if (supervisorModeResetTimer) clearTimeout(supervisorModeResetTimer);
     supervisorModeResetTimer = setTimeout(function () {
       supervisorModeResetTimer = null;
       if (!sessionPet || !sessionPet.isVisible()) return;
-      sessionPet.setState(lastWsProcessing || lastIsStreaming ? 'read' : 'idle');
+      sessionPet.setState(busyPetState(lastIsStreaming, lastWsProcessing));
       sessionPet.setBubbleText('');
     }, SUPERVISOR_MODE_NOTICE_MS);
   }
@@ -656,6 +671,8 @@ window.ChatPetBridge = (function () {
     syncExecPlanFoot: syncExecPlanFoot,
     isUserCheckpointActive: isUserCheckpointActive,
     isModelDoneNoticeActive: isModelDoneNoticeActive,
+    isToolUseActive: isToolUseActive,
+    resolveBusyPetState: busyPetState,
     setLastUserPrompt: setLastUserPrompt,
     captureSnapshot: captureSnapshot,
     restoreSnapshot: restoreSnapshot,

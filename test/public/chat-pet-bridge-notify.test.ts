@@ -23,6 +23,8 @@ interface Harness {
     init(pet: unknown): void;
     applyHarnessStepToPet(step: unknown, isStreaming: boolean, wsProcessing: boolean): void;
     setLastUserPrompt(text: string): void;
+    showThinking(withFile: boolean): void;
+    isToolUseActive(): boolean;
   };
   petStates: string[];
   bubbles: string[];
@@ -74,11 +76,11 @@ function runTaskWithToolCall(bridge: Harness['bridge'], hasToolCall: boolean): v
 }
 
 describe('chat-pet-bridge maybeNotifyTaskDone 行为', () => {
-  it('开关关闭 → 不通知，但冰豆 UI 正常进入 success', () => {
+  it('开关关闭 → 不通知，但冰豆 UI 正常进入 clap', () => {
     const h = loadBridge({ taskDoneNotification: false, hasIceDesktop: true, hasFocus: false });
     runTaskWithToolCall(h.bridge, true);
     expect(h.notifyCalls).toHaveLength(0);
-    expect(h.petStates).toContain('success');
+    expect(h.petStates).toContain('clap');
   });
 
   it('纯闲聊（本轮无 tool_call）→ 不通知', () => {
@@ -113,7 +115,48 @@ describe('chat-pet-bridge maybeNotifyTaskDone 行为', () => {
     runTaskWithToolCall(h.bridge, true);
     expect(h.notifyCalls).toHaveLength(1);
     const summary = h.notifyCalls[0].summary;
-    expect(summary.endsWith('…')).toBe(true);
-    expect(summary.length).toBe(31);
+    expect(h.notifyCalls[0].summary.endsWith('…')).toBe(true);
+    expect(h.notifyCalls[0].summary.length).toBe(31);
+  });
+});
+
+describe('chat-pet-bridge 表情贴合 harness 节点', () => {
+  it('记忆并入 → memory，不是 clap / planning', () => {
+    const h = loadBridge();
+    h.bridge.applyHarnessStepToPet({
+      type: 'memory_event',
+      memoryKind: 'recall_coarse_hit',
+      memoryDetail: '首轮已把记忆并入本回合提示：user_communi.md',
+    }, false, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('memory');
+    expect(h.bubbles[h.bubbles.length - 1]).toContain('记忆并入');
+  });
+
+  it('thinking / 处理中 → running', () => {
+    const h = loadBridge();
+    h.bridge.applyHarnessStepToPet({ type: 'thinking', content: '处理中' }, false, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('running');
+  });
+
+  it('showThinking 发送后忙碌 → running', () => {
+    const h = loadBridge();
+    h.bridge.showThinking(false);
+    expect(h.petStates[h.petStates.length - 1]).toBe('running');
+  });
+
+  it('本轮所有用工具的操作共用 tool_calling', () => {
+    const h = loadBridge();
+    h.bridge.showThinking(false);
+    h.bridge.applyHarnessStepToPet({ type: 'tool_call', toolName: 'read_file' }, false, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('tool_calling');
+    h.bridge.applyHarnessStepToPet({ type: 'tool_progress', content: '读取中' }, false, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('tool_calling');
+    h.bridge.applyHarnessStepToPet({ type: 'tool_result', toolName: 'read_file', toolSuccess: true }, false, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('tool_calling');
+    h.bridge.applyHarnessStepToPet({ type: 'thinking', content: '继续分析' }, false, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('tool_calling');
+    h.bridge.applyHarnessStepToPet({ type: 'stream_delta', delta: '…' }, true, true);
+    expect(h.petStates[h.petStates.length - 1]).toBe('tool_calling');
+    expect(h.bridge.isToolUseActive()).toBe(true);
   });
 });

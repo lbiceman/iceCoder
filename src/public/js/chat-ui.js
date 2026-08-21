@@ -2195,6 +2195,9 @@ window.ChatUI = (function () {
     ensureChatLayout();
     if (!elTailRoot || !elTailAnchor) return null;
     var insertBefore = elTailAnchor;
+    if (msg.id && elMessages && elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]')) {
+      return elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]');
+    }
     var node = elTailAnchor.previousElementSibling;
     while (node) {
       if (node.id === 'streaming-reasoning-msg' || node.id === 'streaming-msg') {
@@ -2730,9 +2733,13 @@ window.ChatUI = (function () {
   /** 用最新 msg 替换已有用户气泡（保持 DOM 位置），用于 shellCommand/正文拆分同步。 */
   function replaceUserMessageEl(msg, stripStatusTagFn) {
     if (!msg || !msg.id || msg.role !== 'user') return false;
-    var oldEl = elMessages
-      ? elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]')
-      : null;
+    var oldEl = msg._el && msg._el.isConnected ? msg._el : null;
+    if (!oldEl && elMessages) {
+      oldEl = elMessages.querySelector('.message.user[data-message-id="' + msg.id + '"]');
+    }
+    if (!oldEl && elMessages && msg._prevId) {
+      oldEl = elMessages.querySelector('.message.user[data-message-id="' + msg._prevId + '"]');
+    }
     if (!oldEl || !oldEl.parentNode) return false;
     var msgIndex = typeof msg._msgIndex === 'number' ? msg._msgIndex : undefined;
     var newEl = createMessageEl(msg, stripStatusTagFn, msgIndex);

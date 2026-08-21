@@ -28,6 +28,31 @@ describe('多会话并发切换 · 前端源码约定', () => {
     expect(drawer).not.toMatch(/item\.disabled\s*=/);
   });
 
+  it('侧栏未挂载时 renderList 不访问 DOM', () => {
+    const sidebar = read(publicJs('chat-session-sidebar.js'));
+    const renderList = sidebar.slice(
+      sidebar.indexOf('function renderList()'),
+      sidebar.indexOf('function applyWorkspaceForSession'),
+    );
+    expect(renderList).toMatch(/if\s*\(\s*!sidebar\s*\)\s*return/);
+  });
+
+  it('移动端再点当前会话只关抽屉，不 switchSession', () => {
+    const drawer = read(publicJs('shell', 'mobile-session-drawer.js'));
+    const selectFn = drawer.slice(
+      drawer.indexOf('function selectSession'),
+      drawer.indexOf('function onOpen'),
+    );
+    expect(selectFn).toMatch(/sessionId === Store\.getActiveSessionId\(\)/);
+    expect(selectFn).toMatch(/closeDrawer/);
+    const earlyReturn = selectFn.indexOf('getActiveSessionId()') >= 0
+      ? selectFn.indexOf('getActiveSessionId()')
+      : -1;
+    const switchCall = selectFn.indexOf('Store.switchSession');
+    expect(earlyReturn).toBeGreaterThan(-1);
+    expect(switchCall).toBeGreaterThan(earlyReturn);
+  });
+
   it('ChatWebSocket processing 按 session，并处理 session_run_state', () => {
     const ws = read(publicJs('chat-websocket.js'));
     expect(ws).toContain('processingBySession');

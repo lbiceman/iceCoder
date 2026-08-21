@@ -41,6 +41,14 @@ window.ChatWsRestoreHandlers = (function () {
       return data.sessionId !== active;
     }
 
+    function petBusyFace() {
+      var Pet = window.ChatPetBridge;
+      if (Pet && typeof Pet.resolveBusyPetState === 'function') {
+        return Pet.resolveBusyPetState(get('isStreaming'), WS.isProcessing());
+      }
+      return get('isStreaming') ? 'streaming' : (WS.isProcessing() ? 'running' : 'idle');
+    }
+
     function dismissConfirmWithoutReply() {
       if (!activeConfirmId) return;
       activeConfirmResolved = true;
@@ -54,7 +62,7 @@ window.ChatWsRestoreHandlers = (function () {
       if (isForeignSessionEvent(data)) return;
       var sessionPet = ctx.getSessionPet();
       if (sessionPet) {
-        sessionPet.setState('alert');
+        sessionPet.setState('error');
         sessionPet.setBubbleText('请在弹窗中确认危险操作');
       }
       activeConfirmId = data.confirmId || null;
@@ -100,7 +108,7 @@ window.ChatWsRestoreHandlers = (function () {
           activeConfirmId = null;
           activeConfirmResolved = false;
           if (sessionPet) {
-            sessionPet.setState(get('isStreaming') || WS.isProcessing() ? 'read' : 'idle');
+            sessionPet.setState(petBusyFace());
             sessionPet.setBubbleText('');
           }
           return;
@@ -112,7 +120,7 @@ window.ChatWsRestoreHandlers = (function () {
         UI.appendMessageEl(confirmMsg, Session.stripStatusTag);
         Session.saveMessages();
         if (sessionPet) {
-          sessionPet.setState(get('isStreaming') || WS.isProcessing() ? 'read' : 'idle');
+          sessionPet.setState(petBusyFace());
           sessionPet.setBubbleText('');
         }
       });

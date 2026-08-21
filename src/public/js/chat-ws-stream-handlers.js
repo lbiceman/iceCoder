@@ -35,7 +35,9 @@ window.ChatWsStreamHandlers = (function () {
         UI.setStreamingState(true);
       }
       var pet = ctx.getSessionPet();
-      if (pet) pet.setState('thinking');
+      if (pet) {
+        pet.setState(Pet.isToolUseActive && Pet.isToolUseActive() ? 'tool_calling' : 'running');
+      }
       UI.appendReasoningStreamChunk(data.delta || '');
       ctx.syncWelcomeState();
     }
@@ -48,17 +50,19 @@ window.ChatWsStreamHandlers = (function () {
         set('isStreaming', true);
         UI.setStreamingState(true);
       }
-      // Harness 多轮工具任务期间 stream_delta 多为规划/推理，进 Thinking 块而非 Assistant 正文
+      // 多轮工具任务期间 stream_delta 多为中间推理，进 Thinking 块；已调工具则保持扳手
       if (WS.isProcessing()) {
         var pet = ctx.getSessionPet();
-        if (pet) pet.setState('thinking');
+        if (pet) {
+          pet.setState(Pet.isToolUseActive && Pet.isToolUseActive() ? 'tool_calling' : 'running');
+        }
         UI.appendReasoningStreamChunk(data.delta || '');
         ctx.syncWelcomeState();
         return;
       }
       set('visibleStreamChunksReceived', true);
       var petRead = ctx.getSessionPet();
-      if (petRead) petRead.setState('read');
+      if (petRead) petRead.setState('streaming');
       UI.appendStreamChunk(data.delta, Session.getMessages(), Session.stripStatusTag);
       ctx.syncWelcomeState();
     }
@@ -302,7 +306,9 @@ window.ChatWsStreamHandlers = (function () {
         }
       } else if (!get('userStopped')) {
         var pet = ctx.getSessionPet();
-        if (pet) pet.setState('thinking');
+        if (pet) {
+          pet.setState(Pet.isToolUseActive && Pet.isToolUseActive() ? 'tool_calling' : 'running');
+        }
       }
       ctx.syncSendButtonWithWorkload();
     }
