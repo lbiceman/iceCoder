@@ -864,14 +864,25 @@ window.ChatUI = (function () {
     syncComposerStackHeight();
   }
 
+  function supportsFieldSizing() {
+    try {
+      return !!(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content'));
+    } catch (_e) {
+      return false;
+    }
+  }
+
   function autoResizeInput() {
     if (!elInput) return;
-    elInput.style.height = 'auto';
-    var maxH = getMaxInputHeight();
-    var scrollH = elInput.scrollHeight;
-    var next = Math.min(scrollH, maxH);
-    elInput.style.height = next + 'px';
-    elInput.style.overflowY = scrollH > maxH + 1 ? 'auto' : 'hidden';
+    if (!supportsFieldSizing()) {
+      var maxH = getMaxInputHeight();
+      var minH = 56;
+      elInput.style.height = 'auto';
+      var scrollH = elInput.scrollHeight;
+      var next = Math.min(Math.max(scrollH, minH), maxH);
+      elInput.style.height = next + 'px';
+    }
+    elInput.style.overflowY = 'auto';
     syncComposerStackHeight();
   }
 
@@ -2038,6 +2049,7 @@ window.ChatUI = (function () {
         img.src = displayMsg.images[j];
         img.className = 'msg-image-thumb';
         img.alt = '图片 ' + (j + 1);
+        img.title = '点击查看大图';
         imgRow.appendChild(img);
       }
       el.appendChild(imgRow);
@@ -2420,6 +2432,7 @@ window.ChatUI = (function () {
       img.src = persistable[j];
       img.className = 'msg-image-thumb';
       img.alt = '图片 ' + (j + 1);
+      img.title = '点击查看大图';
       imgRow.appendChild(img);
     }
     if (isNodeInHistoryRegion(root)) notifyHistoryLayoutChange(root);

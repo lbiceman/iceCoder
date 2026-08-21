@@ -3,12 +3,23 @@
  * 定义 MCP 服务器配置、JSON-RPC 消息格式、工具定义等。
  */
 
+/** MCP 传输类型（兼容 Cursor / VS Code / Claude Desktop 的 mcp.json）。 */
+export type MCPConfigTransportType =
+  | 'stdio'
+  | 'sse'
+  | 'http'
+  | 'streamable-http'
+  | 'streamablehttp';
+
 /**
- * MCP 服务器配置（与 Kiro/Claude 的 mcp.json 格式兼容）。
+ * MCP 服务器配置（与 Kiro/Claude/Cursor 的 mcp.json 格式兼容）。
+ *
+ * stdio：`command` + 可选 `args`。
+ * 远程 Streamable HTTP：`type: "streamablehttp"|"http"` + `url` + 可选 `headers`。
  */
 export interface MCPServerConfig {
-  /** 启动命令（如 npx, uvx, node） */
-  command: string;
+  /** 启动命令（stdio，如 npx, uvx, node） */
+  command?: string;
   /** 命令参数 */
   args?: string[];
   /** 环境变量 */
@@ -19,6 +30,12 @@ export interface MCPServerConfig {
   autoApprove?: string[];
   /** 子进程工作目录（可选） */
   cwd?: string;
+  /** 传输类型；缺省时有 url 则按 Streamable HTTP，否则 stdio */
+  type?: MCPConfigTransportType | string;
+  /** 远程 MCP 端点（Streamable HTTP / SSE） */
+  url?: string;
+  /** 远程请求头（如 Authorization） */
+  headers?: Record<string, string>;
 }
 
 /**

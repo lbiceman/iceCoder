@@ -37,8 +37,8 @@
     if (typeof orig !== 'function') return;
     pet[method] = function () {
       orig.apply(pet, arguments);
-      apply.apply(null, arguments);
-      pushSnapshot();
+      try { apply.apply(null, arguments); } catch (_e) { /* ignore */ }
+      try { pushSnapshot(); } catch (_e2) { /* ignore */ }
     };
   }
 

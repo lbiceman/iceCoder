@@ -229,12 +229,10 @@ export async function runSessionMessageLoop(
       }
 
       await publishTaskQueueState(runSid);
-      if (nextQueued.source === 'explicit') {
-        broadcastToSession(runSid, {
-          type: 'info',
-          message: `📋 正在执行排队任务：${nextQueued.text}`,
-        });
-      }
+      broadcastToSession(runSid, {
+        type: 'info',
+        message: `📋 正在执行排队任务：${nextQueued.text}`,
+      });
 
       const relayWs = pickSessionWs(runSid, ws) ?? current.ws;
       current = queuedTaskToPending(nextQueued, relayWs);

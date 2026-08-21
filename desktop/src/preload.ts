@@ -1,7 +1,7 @@
 /**
  * preload.ts — 暴露有限 IPC 给 renderer。
  */
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { clipboard, contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { IPC } from './constants';
 
 const api = {
@@ -47,6 +47,22 @@ const api = {
   openDataDir: () => ipcRenderer.send(IPC.APP_OPEN_DATA_DIR),
   quit: () => ipcRenderer.send(IPC.APP_QUIT),
   openDevTools: () => ipcRenderer.send(IPC.APP_DEVTOOLS),
+
+  /**
+   * 读取系统剪贴板中的位图。Electron 里 Win+Shift+S / 微信截图等常常
+   * 不进入 renderer 的 clipboardData.items，只能从 native clipboard 取。
+   */
+  readClipboardImage: (): { mime: string; base64: string } | null => {
+    try {
+      const img = clipboard.readImage();
+      if (!img || img.isEmpty()) return null;
+      const png = img.toPNG();
+      if (!png || png.length === 0) return null;
+      return { mime: 'image/png', base64: Buffer.from(png).toString('base64') };
+    } catch {
+      return null;
+    }
+  },
 
   /** 任务完成系统通知（payload: { success: boolean; summary: string; sessionId?: string }）。 */
   notifyTaskDone: (payload: { success: boolean; summary: string; sessionId?: string }) =>

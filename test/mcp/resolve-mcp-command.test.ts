@@ -46,4 +46,8 @@ describe('resolveMcpCommand', () => {
       expect(plan.launchMode).toBe('npx');
     }
   });
+
+  it('缺少 command 时抛出明确错误', () => {
+    expect(() => resolveMcpServerLaunch({ url: undefined } as any)).toThrow(/command/);
+  });
 });

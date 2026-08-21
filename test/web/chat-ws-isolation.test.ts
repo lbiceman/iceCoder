@@ -211,4 +211,54 @@ describe('多会话隔离', () => {
       setActiveSessionId(prevFocused);
     }
   });
+
+  it('A 忙碌时 B 的隐式 /next 立即 kickoff，不写入 A 队列', async () => {
+    const a = uniqueSid('next-busy-a');
+    const b = uniqueSid('next-idle-b');
+    const wsA = fakeWs();
+    const wsB = fakeWs();
+    subscribeWsToSession(wsA, a);
+    subscribeWsToSession(wsB, b);
+    addChatClient(wsA);
+    addChatClient(wsB);
+
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    vi.mocked(handleChatMessage).mockImplementation(async (opts: { runSessionId?: string }) => {
+      if (opts.runSessionId === a) await gateA;
+      return 'model_done';
+    });
+
+    void enqueueAndMaybeKickoff(dummyDeps, a, wsA, {
+      text: 'task-a',
+      source: 'implicit',
+      messageId: 'm-a-busy',
+    });
+    await vi.waitFor(() => {
+      expect(sessionProcessing.has(a)).toBe(true);
+    });
+
+    const handler = createInboundMessageHandler(dummyDeps);
+    try {
+      await handler(wsB, Buffer.from(JSON.stringify({
+        type: 'message',
+        content: 'task-b-next',
+        messageId: '550e8400-e29b-41d4-a716-446655440001',
+      })));
+
+      await vi.waitFor(() => {
+        expect(sessionProcessing.has(b)).toBe(true);
+      });
+      expect(sessionProcessing.has(a)).toBe(true);
+      const aQueue = await getTaskQueueManager(getSessionsDir()).list(a);
+      expect(aQueue.map((item) => item.text)).not.toContain('task-b-next');
+      expect(vi.mocked(handleChatMessage).mock.calls.some((call) => call[0]?.runSessionId === b)).toBe(true);
+    } finally {
+      releaseA();
+      await vi.waitFor(() => {
+        expect(sessionProcessing.has(a)).toBe(false);
+        expect(sessionProcessing.has(b)).toBe(false);
+      });
+    }
+  });
 });

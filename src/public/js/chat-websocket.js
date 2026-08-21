@@ -448,7 +448,9 @@ window.ChatWebSocket = (function () {
     if (typeof opts.queueInsertIndex === 'number') payload.queueInsertIndex = opts.queueInsertIndex;
     if (opts.source) payload.source = opts.source;
     if (opts.command) payload.command = opts.command;
-    send(payload);
+    var sent = send(payload);
+    if (sent) processingBySession[getViewportSessionId()] = true;
+    return sent;
   }
 
   function sendStop() {
