@@ -26,6 +26,12 @@ import {
 } from '../session-tool-trace-diffs.js';
 import { isSafeSessionId } from '../session-id-guard.js';
 import { resolveBootstrapActiveSessionId } from '../last-active-session.js';
+import {
+  DEFAULT_SESSION_ID,
+  loadSessionIndex,
+  mutateSessionIndex,
+  type SessionMeta,
+} from '../session-index-store.js';
 import { getTaskQueueManager } from '../../session/task-queue.js';
 import {
   readSessionBgTasks,
@@ -37,34 +43,7 @@ import { purgeSessionDiskFiles } from '../session-file-purge.js';
 import { buildShellCollabActiveIndex } from '../../session/shell-collab-store.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
-const SESSION_ID = 'default';
-const INDEX_FILE = path.join(SESSIONS_DIR, 'index.json');
-
-// ---- 会话索引类型 ----
-
-interface SessionMeta {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  messageCount: number;
-}
-
-// ---- 索引读写 ----
-
-async function readSessionIndex(): Promise<SessionMeta[]> {
-  try {
-    const data = await fs.readFile(INDEX_FILE, 'utf-8');
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed)) return parsed as SessionMeta[];
-  } catch { /* file missing or invalid */ }
-  return [];
-}
-
-async function writeSessionIndex(index: SessionMeta[]): Promise<void> {
-  await fs.mkdir(SESSIONS_DIR, { recursive: true });
-  await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2), 'utf-8');
-}
+const SESSION_ID = DEFAULT_SESSION_ID;
 
 /**
  * 一次性迁移：把全局 `session-notes.md`（多会话改造前的旧布局）改名为
@@ -90,30 +69,10 @@ async function migrateLegacySessionNotes(): Promise<void> {
   }
 }
 
-/** 旧安装仅有 default.json、index 为空时，引导写入 default 条目（用户主动删除 default 后不再自动恢复） */
+/** 对账磁盘 `{id}.json` 后返回 index；空 index 且无会话文件时才引导 default。 */
 async function ensureDefaultInIndex(): Promise<SessionMeta[]> {
   await migrateLegacySessionNotes();
-  let index = await readSessionIndex();
-  if (index.some(s => s.id === SESSION_ID)) return index;
-  if (index.length > 0) return index;
-  const defaultFile = path.join(SESSIONS_DIR, `${SESSION_ID}.json`);
-  let messageCount = 0;
-  try {
-    const data = await fs.readFile(defaultFile, 'utf-8');
-    const msgs = JSON.parse(data);
-    if (Array.isArray(msgs)) messageCount = msgs.length;
-  } catch { /* no default file yet */ }
-  const now = Date.now();
-  const meta: SessionMeta = {
-    id: SESSION_ID,
-    title: '默认会话',
-    createdAt: now,
-    updatedAt: now,
-    messageCount,
-  };
-  index.unshift(meta);
-  await writeSessionIndex(index);
-  return index;
+  return loadSessionIndex();
 }
 
 /** 进程/页面冷启动时选用最近工作的会话（见 last-active-session.ts）。 */
@@ -308,12 +267,12 @@ export function createSessionsRouter(): Router {
     const id = randomUUID().slice(0, 8);
     const now = Date.now();
     const meta: SessionMeta = { id, title, createdAt: now, updatedAt: now, messageCount: 0 };
-    const index = await ensureDefaultInIndex();
-    index.unshift(meta);
-    await writeSessionIndex(index);
-    // 创建空消息文件
-    await ensureDir();
-    await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
+    await mutateSessionIndex(async (index) => {
+      index.unshift(meta);
+      await ensureDir();
+      await fs.writeFile(path.join(SESSIONS_DIR, `${id}.json`), '[]', 'utf-8');
+      return index;
+    });
     sessionListLiveSync?.notifyIndexUpdated();
     res.json({ success: true, session: meta });
   });
@@ -339,12 +298,15 @@ export function createSessionsRouter(): Router {
     if (rejectUnsafeSessionId(res, sessionId)) return;
     const { title } = req.body as { title?: string };
     if (!title) { res.status(400).json({ error: 'title required' }); return; }
-    const index = await readSessionIndex();
-    const entry = index.find(s => s.id === sessionId);
+    let entry: SessionMeta | undefined;
+    await mutateSessionIndex((index) => {
+      entry = index.find(s => s.id === sessionId);
+      if (!entry) return index;
+      entry.title = title;
+      entry.updatedAt = Date.now();
+      return index;
+    });
     if (!entry) { res.status(404).json({ error: 'not found' }); return; }
-    entry.title = title;
-    entry.updatedAt = Date.now();
-    await writeSessionIndex(index);
     sessionListLiveSync?.notifyIndexUpdated();
     res.json({ success: true, session: entry });
   });
@@ -358,11 +320,15 @@ export function createSessionsRouter(): Router {
   router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id);
     if (rejectUnsafeSessionId(res, sessionId)) return;
-    let index = await readSessionIndex();
-    const entry = index.find(s => s.id === sessionId);
-    if (!entry) { res.status(404).json({ error: 'not found' }); return; }
-    index = index.filter(s => s.id !== sessionId);
-    await writeSessionIndex(index);
+    let found = false;
+    await mutateSessionIndex(async (index) => {
+      found = index.some(s => s.id === sessionId);
+      if (!found) return index;
+      // 先摘掉消息文件，避免并发 GET 对账时把已删会话补回 index
+      await fs.unlink(path.join(SESSIONS_DIR, `${sessionId}.json`)).catch(() => {});
+      return index.filter(s => s.id !== sessionId);
+    });
+    if (!found) { res.status(404).json({ error: 'not found' }); return; }
     await purgeSessionFiles(sessionId);
     sessionListLiveSync?.notifyIndexUpdated();
     res.json({ success: true });
