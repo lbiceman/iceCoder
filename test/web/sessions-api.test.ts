@@ -268,4 +268,67 @@ describe('Sessions API (multi-session)', () => {
     const { readFirstSessionIdFromIndex } = await import('../../src/web/routes/sessions.js');
     expect(await readFirstSessionIdFromIndex()).toBe('first-sid');
   });
+
+  it('GET / 把 index 漏掉的磁盘会话补回列表', async () => {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'aabbccdd.json'),
+      JSON.stringify([{ role: 'user', content: '历史会话还在磁盘上', sentAt: 100 }]),
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'also-a-not-a-session.json'),
+      JSON.stringify([{ role: 'user', content: 'should not list' }]),
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(tempDir, 'index.json'),
+      JSON.stringify([{
+        id: '30f8336c',
+        title: '新会话',
+        createdAt: 200,
+        updatedAt: 200,
+        messageCount: 0,
+      }]),
+      'utf-8',
+    );
+    await fs.writeFile(path.join(tempDir, '30f8336c.json'), '[]', 'utf-8');
+
+    const res = await fetch(`${baseUrl}/`);
+    expect(res.ok).toBe(true);
+    const body = await res.json() as { sessions: { id: string; title: string }[] };
+    const ids = body.sessions.map((s) => s.id);
+    expect(ids).toContain('30f8336c');
+    expect(ids).toContain('aabbccdd');
+    expect(ids).not.toContain('also-a-not-a-session');
+    const recovered = body.sessions.find((s) => s.id === 'aabbccdd');
+    expect(recovered?.title).toContain('历史会话');
+
+    const persisted = JSON.parse(await fs.readFile(path.join(tempDir, 'index.json'), 'utf-8')) as { id: string }[];
+    expect(persisted.map((s) => s.id)).toContain('aabbccdd');
+  });
+
+  it('POST / 不会在 index 被读空时丢掉磁盘上的其它会话', async () => {
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, 'c18e59a8.json'),
+      JSON.stringify([{ role: 'user', content: '上一轮还在' }]),
+      'utf-8',
+    );
+    await fs.writeFile(path.join(tempDir, 'index.json'), '[]', 'utf-8');
+
+    const res = await fetch(baseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: '新会话' }),
+    });
+    expect(res.ok).toBe(true);
+    const created = await res.json() as { session: { id: string } };
+
+    const listRes = await fetch(`${baseUrl}/`);
+    const list = await listRes.json() as { sessions: { id: string }[] };
+    const ids = list.sessions.map((s) => s.id);
+    expect(ids).toContain(created.session.id);
+    expect(ids).toContain('c18e59a8');
+  });
 });

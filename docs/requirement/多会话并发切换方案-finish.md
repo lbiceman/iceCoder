@@ -452,7 +452,7 @@ A 的危险操作确认**不得**盖在 B 的视口上。切走后：该 session
 
 - 并发上限 3
 - 同仓库警告
-- （可选）侧栏 `need_confirm` 角标；点击通知跳到对应 session
+- （可选）侧栏 `need_confirm` 角标；点击通知跳到对应 session 
 
 ---
 
