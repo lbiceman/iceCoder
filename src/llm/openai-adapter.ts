@@ -32,6 +32,7 @@ import {
   responsesStream,
   type OpenAiApiMode,
 } from './openai-responses-bridge.js';
+import { endTiming, harnessTimingEnabled, markTimingStart, recordHarnessTiming } from '../harness/harness-timing.js';
 
 export { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 
@@ -192,14 +193,17 @@ export class OpenAIAdapter implements ProviderAdapter {
           this.responsesCtx(options, signal),
         );
         const elapsed = Date.now() - startTime;
+        recordHarnessTiming('llm_http', elapsed);
         console.log(
           `[OpenAI] responses 响应: ${elapsed}ms | tokens: ${result.usage.inputTokens} | ${result.usage.outputTokens}`,
         );
         return result;
       }
 
+      const serializeStartedAt = markTimingStart();
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, false);
+      endTiming('llm_serialize', serializeStartedAt);
 
       const reqOpts = this.buildRequestOptions(options, signal);
       console.log(
@@ -209,6 +213,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       const response = await this.client.chat.completions.create(params, reqOpts);
 
       const elapsed = Date.now() - startTime;
+      recordHarnessTiming('llm_http', elapsed);
       const usage = (response as OpenAI.ChatCompletion).usage;
       const pc = usage ? extractPromptCacheFromChatUsage(usage) : {};
       const cacheFrag =
@@ -219,7 +224,10 @@ export class OpenAIAdapter implements ProviderAdapter {
         `[OpenAI] chat 响应: ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'} | ${usage?.completion_tokens ?? '?'}${cacheFrag}`,
       );
 
-      return this.convertResponse(response as OpenAI.ChatCompletion);
+      const deserializeStartedAt = markTimingStart();
+      const converted = this.convertResponse(response as OpenAI.ChatCompletion);
+      endTiming('llm_deserialize', deserializeStartedAt);
+      return converted;
     } catch (error) {
       throw this.convertError(error);
     }
@@ -251,17 +259,22 @@ export class OpenAIAdapter implements ProviderAdapter {
           this.responsesCtx(options, signal),
         );
         const elapsed = Date.now() - startTime;
+        recordHarnessTiming('llm_http', elapsed);
         console.log(
           `[OpenAI] responses stream 完成: ${elapsed}ms | tokens: ${result.usage.inputTokens} | ${result.usage.outputTokens}`,
         );
         return result;
       }
 
+      const serializeStartedAt = markTimingStart();
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, true);
+      endTiming('llm_serialize', serializeStartedAt);
 
       console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
       const startTime = Date.now();
+      const timingOn = harnessTimingEnabled();
+      let firstTokenMs: number | undefined;
 
       const reqOpts = this.buildRequestOptions(options, signal);
       const stream = await this.client.chat.completions.create(
@@ -284,6 +297,10 @@ export class OpenAIAdapter implements ProviderAdapter {
         if (delta) {
           // Handle regular content
           if (delta.content) {
+            if (timingOn && firstTokenMs === undefined) {
+              firstTokenMs = Date.now() - startTime;
+              recordHarnessTiming('llm_first_token', firstTokenMs);
+            }
             fullContent += delta.content;
             callback(delta.content, false);
           }
@@ -330,6 +347,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       callback('', true);
 
       const elapsed = Date.now() - startTime;
+      recordHarnessTiming('llm_http', elapsed);
       const streamCacheFrag =
         lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
           ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`

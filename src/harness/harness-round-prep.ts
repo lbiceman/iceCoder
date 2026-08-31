@@ -41,6 +41,7 @@ import type {
   HarnessStepEvent,
   StreamFunction,
 } from './types.js';
+import { timeAsync, timeSync } from './harness-timing.js';
 export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
@@ -89,7 +90,7 @@ export async function prepareHarnessRound(
     }
   }
 
-  await maybeCompact(deps, {
+  await timeAsync('prep_compact', () => maybeCompact(deps, {
     messages: msgs,
     chatFn,
     logger,
@@ -97,7 +98,7 @@ export async function prepareHarnessRound(
     state,
     lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
     tools: currentTools,
-  });
+  }));
 
   deps.loopController.advanceRound();
   state.turnCount++;
@@ -236,7 +237,9 @@ export async function prepareHarnessRound(
     const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
     if (!skipMemoryRecall) {
       const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
-      await deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+      await timeAsync('prep_memory', () =>
+        deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep }),
+      );
     }
   }
 
@@ -272,7 +275,9 @@ export async function prepareHarnessRound(
     }
   }
 
-  const normalizedMsgs = buildMessagesForLlm(msgs, { blocks: ephemeralBlocks });
+  const normalizedMsgs = timeSync('prep_build_msgs', () =>
+    buildMessagesForLlm(msgs, { blocks: ephemeralBlocks }),
+  );
 
   if (deps.loopController.isAborted()) {
     return {

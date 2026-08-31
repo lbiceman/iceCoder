@@ -106,6 +106,14 @@ import {
 import { resolveLlmToolsForRound } from './casual-mode.js';
 import { resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
+import {
+  dumpHarnessTiming,
+  endTiming,
+  markTimingStart,
+  resetHarnessTiming,
+  timeAsync,
+  timeSync,
+} from './harness-timing.js';
 
 /**
  * run() 内各子模块共享的运行时依赖（由 Harness.buildRunDeps 从实例字段组装）。
@@ -446,6 +454,8 @@ export class Harness {
     userContentBlocks?: import('../llm/types.js').ContentBlock[],
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
+    resetHarnessTiming();
+    const runStartedAt = markTimingStart();
     // W1: Harness 实例可被复用（cli/web）；清空上一次 run 残留的未消费信号，
     // 避免熔断/abort/max_rounds 终止后引擎 submittedSignals 跨 run 泄漏。
     this.modeDecisionEngine.resetSubmittedSignals();
@@ -718,37 +728,49 @@ export class Harness {
     try {
       this.loopController.resetForNewRun();
       syncExecutionModeLoopState(this.loopController, state);
+      endTiming('run_init', runStartedAt);
       while (true) {
-        const prep = await prepareHarnessRound(deps, {
+        const roundStartedAt = markTimingStart();
+        const prep = await timeAsync('round_prep', () => prepareHarnessRound(deps, {
           state,
           userMessage,
           chatFn,
           logger,
           onStep,
           streamFn,
-        });
-        if (prep.action === 'stop') return prep.result;
+        }));
+        if (prep.action === 'stop') {
+          endTiming('round_wall', roundStartedAt);
+          return prep.result;
+        }
 
-        const graphStopBeforeRound = await tryGraphTerminalStop(deps, {
+        const graphStopBeforeRound = await timeAsync('graph_stop_check', () => tryGraphTerminalStop(deps, {
           state,
           graphExecutor: deps.graphExecutor,
           userMessage,
           currentTools: state.tools,
           logger,
           onStep,
-        });
-        if (graphStopBeforeRound) return graphStopBeforeRound;
+        }), prep.round);
+        if (graphStopBeforeRound) {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return graphStopBeforeRound;
+        }
 
-        this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
+        timeSync('mode_eval', () => {
+          this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
+        }, prep.round);
 
-        onStep?.({
-          type: 'context_usage',
-          iteration: prep.round,
-          totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
-            lastInputTokens: deps.loopController.getState().lastInputTokens,
-            lastOutputTokens: deps.loopController.getState().lastOutputTokens,
-          }),
-        });
+        timeSync('context_usage', () => {
+          onStep?.({
+            type: 'context_usage',
+            iteration: prep.round,
+            totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
+              lastInputTokens: deps.loopController.getState().lastInputTokens,
+              lastOutputTokens: deps.loopController.getState().lastOutputTokens,
+            }),
+          });
+        }, prep.round);
 
         const toolsForLlm = resolveLlmToolsForRound(state.tools, prep.round, plainUserText);
 
@@ -762,8 +784,12 @@ export class Harness {
           logger,
           onStep,
         });
-        if (llm.action === 'retry') continue;
+        if (llm.action === 'retry') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          continue;
+        }
         if (llm.action === 'abort') {
+          endTiming('round_wall', roundStartedAt, prep.round);
           return handleHarnessStop(deps, {
             reason: 'user_abort',
             messages: state.messages,
@@ -775,10 +801,13 @@ export class Harness {
             runtimeState: state,
           });
         }
-        if (llm.action === 'error') return llm.result;
+        if (llm.action === 'error') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return llm.result;
+        }
 
         const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
-        const response = resolveSalvagedLlmResponse(rawResponse);
+        const response = timeSync('post_salvage', () => resolveSalvagedLlmResponse(rawResponse), prep.round);
         if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
           console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
         }
@@ -786,7 +815,7 @@ export class Harness {
 
         if (!hasToolCalls) {
           logger.llmResponseFinal(llmRoundLog.usage, llmRoundLog.meta);
-          const noTools = await handleNoToolCalls(deps, {
+          const noTools = await timeAsync('post_no_tools', () => handleNoToolCalls(deps, {
             state,
             response,
             rawAssistantContent: rawResponse.content,
@@ -795,9 +824,9 @@ export class Harness {
             tokenUsage,
             logger,
             onStep,
-          });
+          }), prep.round);
           if (noTools.action === 'continue') {
-            const supervisorResult = await evaluateSupervisorAfterNoToolRound(deps, {
+            const supervisorResult = await timeAsync('post_supervisor', () => evaluateSupervisorAfterNoToolRound(deps, {
               state,
               round: prep.round,
               response,
@@ -807,8 +836,11 @@ export class Harness {
               logger,
               onStep,
               streamFn,
-            });
-            if (supervisorResult.action === 'return') return supervisorResult.result;
+            }), prep.round);
+            if (supervisorResult.action === 'return') {
+              endTiming('round_wall', roundStartedAt, prep.round);
+              return supervisorResult.result;
+            }
 
             const graphStopAfterNoTool = await tryGraphTerminalStop(deps, {
               state,
@@ -818,15 +850,20 @@ export class Harness {
               logger,
               onStep,
             });
-            if (graphStopAfterNoTool) return graphStopAfterNoTool;
+            if (graphStopAfterNoTool) {
+              endTiming('round_wall', roundStartedAt, prep.round);
+              return graphStopAfterNoTool;
+            }
 
+            endTiming('round_wall', roundStartedAt, prep.round);
             continue;
           }
+          endTiming('round_wall', roundStartedAt, prep.round);
           return noTools.result;
         }
 
         logger.llmResponseToolCalls(response.toolCalls!.length, llmRoundLog.usage, llmRoundLog.meta);
-        const toolRound = await runHarnessToolRound(deps, {
+        const toolRound = await timeAsync('tool_round', () => runHarnessToolRound(deps, {
           state,
           response,
           userMessage,
@@ -837,12 +874,15 @@ export class Harness {
           logger,
           onStep,
           streamFn,
-        });
+        }), prep.round);
+        endTiming('round_wall', roundStartedAt, prep.round);
         if (toolRound.action === 'return') return toolRound.result;
 
         // 工具轮后不 graph-stop：工程变更须走 Verification Gate（单测提示），避免图 done 绕过验收
       }
     } finally {
+      endTiming('run_total', runStartedAt);
+      dumpHarnessTiming();
       if (!this.shellCollabActive) {
         this.memoryIntegration.onLoopEnd(
           state.messages,
