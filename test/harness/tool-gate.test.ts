@@ -18,8 +18,6 @@ describe('ToolGate - Batch 5', () => {
       toolCalls,
       messages,
       ctx: {
-        phase: 'free',
-        mode: 'adaptive',
         executionMode: 'free',
         graphHints: [{ toolName: 'edit_file', action: 'block', message: 'blocked by graph' }],
       },
@@ -39,8 +37,6 @@ describe('ToolGate - Batch 5', () => {
       toolCalls,
       messages,
       ctx: {
-        phase: 'free',
-        mode: 'adaptive',
         executionMode: 'forced',
         graphHints: [
           { toolName: 'edit_file', action: 'block', message: 'edit_file is outside the current step' },

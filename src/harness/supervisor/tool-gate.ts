@@ -6,7 +6,6 @@ export interface ExecuteToolCallsThroughGateArgs {
   toolCalls: ToolCall[];
   messages: UnifiedMessage[];
   ctx: GateContext;
-  toolGate?: ToolGate;
 }
 
 export interface ToolGateExecutionResult {
@@ -14,7 +13,7 @@ export interface ToolGateExecutionResult {
   skippedSignatures: Set<string>;
 }
 
-export class DefaultToolGate implements ToolGate {
+class DefaultToolGate implements ToolGate {
   decide(calls: ToolCall[], ctx: GateContext): ToolGatePlan {
     if (ctx.executionMode !== 'forced') {
       return { entries: calls.map(tc => ({ toolCallId: tc.id, action: 'execute' })) };
@@ -37,7 +36,7 @@ export class DefaultToolGate implements ToolGate {
 }
 
 export function executeToolCallsThroughGate(args: ExecuteToolCallsThroughGateArgs): ToolGateExecutionResult {
-  const gate = args.toolGate ?? new DefaultToolGate();
+  const gate = new DefaultToolGate();
   const plan = gate.decide(args.toolCalls, args.ctx);
   const entriesById = new Map(plan.entries.map(entry => [entry.toolCallId, entry]));
   const executableToolCalls: ToolCall[] = [];

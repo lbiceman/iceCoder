@@ -29,7 +29,6 @@ import {
   seedCheckpointResume,
   toolCallResponse,
 } from './_fixtures/dual-mode-mocks.js';
-import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 
 const originalSupervisorEnv = process.env.ICE_SUPERVISOR_MODE;
 
@@ -46,7 +45,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
+describe('L0/L1/L3 single-axis scenarios', () => {
   it('A · 纯读取：execution mode 全程 free', async () => {
     const tools = [makeTool('read_file'), makeTool('list_directory')];
     const { harness } = await buildDualModeHarnessAsync({
@@ -159,7 +158,6 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
       executionModeEnteredAtRound: 3,
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
-      supervisorPhase: 'takeover',
     });
     const { events, push } = collectSteps();
 
@@ -179,7 +177,6 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
     });
 
     const supervisorConfig = buildSupervisorConfig({ supervisorMode: 'strict' });
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
     const graphExecutor = new GraphExecutor();
     const loopController = new LoopController({ maxRounds: 5 });
     const logger = new HarnessLogger();
@@ -209,7 +206,6 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
       branchBudgetWarnedThisRound: false,
       verificationDigestInjectedThisRound: false,
       stepReviewedThisRound: false,
-      supervisorPhase: 'free' as const,
       executionMode: 'forced' as const,
       executionModeLockRemaining: 0,
       executionModeEnteredBy: ['explicit_impl'] as const,
@@ -226,7 +222,7 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
         memoryIntegration,
         graphExecutor,
         contextCompactor: compactor,
-        supervisorBridge: bridge,
+        globalPolicy: supervisorConfig.globalPolicy,
         stopHookManager: { run: async () => ({ action: 'continue' as const }) } as never,
         checkpointManager: undefined,
         enqueueCheckpointPersist: async task => task(),
@@ -270,5 +266,38 @@ describe('Dual-mode 6 scenarios (任务执行文档.md · P2-2)', () => {
     ).rejects.toThrow('simulated graph build failure');
 
     expect(events.filter(e => e.type === 'task_graph_init')).toHaveLength(0);
+  });
+
+  it('G · off：不进入 execution mode，也不首轮建图', async () => {
+    const { harness } = await buildDualModeHarnessAsync({
+      tools: [makeTool('edit_file')],
+      supervisorMode: 'off',
+    });
+    const { events, push } = collectSteps();
+    const result = await harness.run(
+      '修改一个文件',
+      createChatFn([finalResponse('保持模型自主。')]),
+      push,
+    );
+    expect(result.loopState.executionMode).toBe('free');
+    expect(events.some(event => event.type === 'execution_mode_enter')).toBe(false);
+    expect(events.some(event => event.type === 'task_graph_init')).toBe(false);
+  });
+
+  it('H · 图合约：禁止工具被硬 block', () => {
+    const executor = new GraphExecutor();
+    executor.initGraph({ goal: '修复登录', intent: 'edit' });
+    expect(executor.checkToolCall('delete_file').action).toBe('block');
+  });
+
+  it('I · 图预算：严重合约违规只产生 force_switch 硬动作', () => {
+    const executor = new GraphExecutor();
+    executor.initGraph({ goal: '修复登录', intent: 'edit' });
+    let action = 'none';
+    for (let i = 0; i < 11; i++) {
+      executor.checkToolCall('read_file');
+      action = executor.evaluateRound(1).action;
+    }
+    expect(action).toBe('force_switch');
   });
 });

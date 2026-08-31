@@ -5,7 +5,7 @@
  *   1. ContractValidator — 节点合约检查器
  *   2. DeviationDetector — 偏离检测器
  *   3. FailureClassifier — 失败分类器（11 种）
- *   4. EscalationPolicy — 四级升级策略
+ *   4. EscalationPolicy — 硬升级（block / force_switch）
  *   5. NodeCostTracker — 节点成本预算追踪
  *
  * v1：纯规则驱动，不调用 LLM。
@@ -200,7 +200,7 @@ export class DeviationDetector {
         type: 'tool_mismatch',
         severity: 'hard',
         correction: {
-          type: 'inject_hint',
+          type: 'observe',
           message: `[Contract] 当前节点需要以下工具之一: ${allowedTools.join(', ')}。请聚焦当前步骤。`,
         },
         description: `调用了 ${[...calledSet].join(', ')}，但节点要求 ${allowedTools.join(', ')}`,
@@ -216,7 +216,7 @@ export class DeviationDetector {
           type: 'scope_creep',
           severity: 'soft',
           correction: {
-            type: 'inject_hint',
+            type: 'observe',
             message: '[Contract] 已读取足够上下文。当前节点需要开始编辑操作。',
           },
           description: `edit 节点只读轮次过多 (${toolNames.length})`,
@@ -232,14 +232,14 @@ export class DeviationDetector {
         type: 'phase_mismatch',
         severity: 'soft',
         correction: {
-          type: 'inject_hint',
+          type: 'observe',
           message: `[Contract] 当前阶段为「${nodePhase}」，但你的操作看起来属于「${calledPhase}」。请先完成当前步骤。`,
         },
         description: `Phase 不匹配: node=${nodePhase}, actual=${calledPhase}`,
       };
     }
 
-    return { deviated: false, type: 'none', severity: 'soft', correction: { type: 'inject_hint', message: '' }, description: '' };
+    return { deviated: false, type: 'none', severity: 'soft', correction: { type: 'observe' }, description: '' };
   }
 }
 
@@ -361,7 +361,7 @@ export class FailureClassifier {
 export const DEFAULT_ESCALATION: EscalationPolicy = {
   thresholds: [
     { level: 0 as EscalationLevel, consecutiveDeviations: 1, maxCorrectionAttempts: 99, action: { type: 'none' } },
-    { level: 1 as EscalationLevel, consecutiveDeviations: 2, maxCorrectionAttempts: 2, action: { type: 'inject_hint', message: '' } },
+    { level: 1 as EscalationLevel, consecutiveDeviations: 1, maxCorrectionAttempts: 1, action: { type: 'block_and_reset', blockedTools: [], message: '' } },
     { level: 2 as EscalationLevel, consecutiveDeviations: 1, maxCorrectionAttempts: 1, action: { type: 'block_and_reset', blockedTools: [], message: '' } },
     { level: 3 as EscalationLevel, consecutiveDeviations: 1, maxCorrectionAttempts: 1, action: { type: 'force_branch_switch', reason: 'repeated_failure' } },
   ],
@@ -372,7 +372,6 @@ export const DEFAULT_ESCALATION: EscalationPolicy = {
 export class EscalationManager {
   policy: EscalationPolicy;
   private deviationCounter = 0;
-  private correctionAttempts = 0;
 
   constructor(policy?: EscalationPolicy) {
     this.policy = policy ?? structuredClone(DEFAULT_ESCALATION);
@@ -380,9 +379,7 @@ export class EscalationManager {
 
   /** 根据偏离严重程度评估升级 */
   evaluate(severity: 'soft' | 'hard' | 'critical', nodeId: string):
-    { action: 'none' | 'inject_hint' | 'block' | 'force_switch'; message?: string; blockedTools?: string[] } {
-    const prev = this.policy.currentLevel;
-
+    { action: 'none' | 'block' | 'force_switch'; message?: string; blockedTools?: string[] } {
     this.deviationCounter++;
 
     if (severity === 'critical') {
@@ -391,26 +388,19 @@ export class EscalationManager {
     }
 
     if (severity === 'hard') {
-      if (this.policy.currentLevel < 1) this.advanceTo(1, nodeId, 'hard severity');
-      else this.advanceTo(2, nodeId, 'persistent hard severity');
+      if (this.policy.currentLevel < 2) this.advanceTo(2, nodeId, 'hard severity');
+      else this.advanceTo(3, nodeId, 'persistent hard severity');
     }
 
-    // soft: 连续偏离达到阈值才升级
-    if (severity === 'soft' && this.deviationCounter >= 2 && this.policy.currentLevel === 0) {
-      this.advanceTo(1, nodeId, 'consecutive soft deviations');
+    if (severity === 'soft') {
+      return { action: 'none' };
     }
 
     // 执行当前级别的动作
     switch (this.policy.currentLevel) {
-      case 1: {
-        const used = this.correctionAttempts++ >= 2 && this.policy.currentLevel < 2;
-        if (used) this.advanceTo(2, nodeId, 'correction attempts exhausted');
-        return { action: 'inject_hint', message: `[Escalation L1] 检测到偏离，请聚焦当前节点。` };
-      }
+      case 1:
       case 2: {
-        const used = this.correctionAttempts++ >= 1 && this.policy.currentLevel < 3;
-        if (used) this.advanceTo(3, nodeId, 'block correction exhausted');
-        return { action: 'block', message: '[Escalation L2] 硬纠正：请使用允许的工具。', blockedTools: [] };
+        return { action: 'block', message: '[GraphGuard] 检测到硬偏离，已阻止继续沿当前路径执行。', blockedTools: [] };
       }
       case 3:
         return { action: 'force_switch', message: '[Escalation L3] 强制切换分支。' };
@@ -424,7 +414,6 @@ export class EscalationManager {
     if (this.policy.currentLevel > 0) {
       this.policy.currentLevel = Math.max(0, this.policy.currentLevel - 1) as EscalationLevel;
       this.deviationCounter = 0;
-      this.correctionAttempts = 0;
     }
   }
 
@@ -432,14 +421,12 @@ export class EscalationManager {
     this.policy.currentLevel = 0;
     this.policy.history = [];
     this.deviationCounter = 0;
-    this.correctionAttempts = 0;
   }
 
   private advanceTo(level: EscalationLevel, nodeId: string, reason: string): void {
     const from = this.policy.currentLevel;
     this.policy.currentLevel = level;
     this.policy.history.push({ fromLevel: from, toLevel: level, reason, at: Date.now(), nodeId });
-    this.correctionAttempts = 0;
   }
 }
 

@@ -11,8 +11,6 @@ import path from 'node:path';
 
 import type { UnifiedMessage } from '../llm/types.js';
 import type { IntentCheckpointArchive } from '../types/intent-checkpoint.js';
-import type { RuntimeSupervisorCheckpointState } from '../types/runtime-checkpoint.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import { CheckpointEngine } from './checkpoint-engine.js';
 import {
   canSessionRestore,
@@ -94,7 +92,6 @@ interface PreRestoreBackup {
   checkpointIndexRaw: string | null;
   sessionNotesRaw: string | null;
   toolTraceDiffsRaw: string | null;
-  supervisorSnapshot: RuntimeSupervisorCheckpointState | null;
 }
 
 export interface RuntimeRestoreParams {
@@ -102,7 +99,6 @@ export interface RuntimeRestoreParams {
   sessionId: string;
   messageId: string;
   defaultWorkDir: string;
-  supervisorBridge?: SupervisorRuntimeBridge;
   getStructuredMessages?: () => UnifiedMessage[] | undefined;
   setStructuredMessages?: (messages: UnifiedMessage[] | undefined) => void;
 }
@@ -216,10 +212,6 @@ export class RuntimeRestoreCoordinator {
     const workspaceFilesBefore = await captureWorkspaceFilesForPaths(workspaceRoot, pathsToSnapshot);
 
     const existingCheckpoint = await readSessionCheckpointJson(sessionDir, sessionId);
-    const supervisorSnapshot = existingCheckpoint?.runtimeV2?.supervisorState
-      ? structuredClone(existingCheckpoint.runtimeV2.supervisorState)
-      : null;
-
     return {
       combinedCheckpoint: existingCheckpoint,
       checkpointFileExisted: await checkpointFileExists(sessionDir, sessionId),
@@ -231,7 +223,6 @@ export class RuntimeRestoreCoordinator {
       checkpointIndexRaw: await readOptional(path.join(sessionDir, `${sessionId}.checkpoint-index.json`)),
       sessionNotesRaw: await readOptional(path.join(sessionDir, `${sessionId}.session-notes.md`)),
       toolTraceDiffsRaw: await readOptional(path.join(sessionDir, `${sessionId}.tool-trace-diffs.json`)),
-      supervisorSnapshot,
     };
   }
 
@@ -300,9 +291,6 @@ export class RuntimeRestoreCoordinator {
     await writeSessionNotesContent(sessionDir, sessionId, backup.sessionNotesRaw);
     await writeToolTraceDiffsRaw(sessionDir, sessionId, backup.toolTraceDiffsRaw);
 
-    if (params.supervisorBridge?.isActive() && backup.supervisorSnapshot) {
-      params.supervisorBridge.restoreFromCheckpoint(backup.supervisorSnapshot);
-    }
   }
 
   private async applyRestore(
@@ -310,7 +298,7 @@ export class RuntimeRestoreCoordinator {
     archive: IntentCheckpointArchive,
     engine: CheckpointEngine,
   ): Promise<void> {
-    const { sessionDir, sessionId, supervisorBridge } = params;
+    const { sessionDir, sessionId } = params;
     const workspaceRoot = archive.workspaceRoot || params.defaultWorkDir;
 
     if (archive.combinedCheckpoint) {
@@ -338,10 +326,6 @@ export class RuntimeRestoreCoordinator {
     const toDelete = collectPathsToDeleteOnRestore(workspaceSnapshot, laterPaths);
     await applyWorkspaceFileSnapshot(workspaceRoot, workspaceSnapshot, toDelete);
 
-    const v2 = archive.combinedCheckpoint?.runtimeV2;
-    if (v2?.supervisorState && supervisorBridge?.isActive()) {
-      supervisorBridge.restoreFromCheckpoint(v2.supervisorState);
-    }
   }
 }
 

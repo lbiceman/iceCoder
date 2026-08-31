@@ -49,7 +49,6 @@ function makeState(
     executionModeEnteredBy: [],
     pendingModeSignals: [],
     forcedTaskBearingRoundsSinceEntry: 0,
-    supervisorPhase: 'free',
     recoveryPendingSticky: false,
     stableRoundsSinceLastFailure: 0,
     filesChangedAtRoundStart: 0,
@@ -82,7 +81,7 @@ function makeLogger() {
 }
 
 describe('handleNoToolCalls resume fixes', () => {
-  it('recovers when latest user asks to run tests without tools', async () => {
+  it('allows a direct answer when no explicit pending work requires tools', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '之前的问题' },
       { role: 'assistant', content: '之前完成' },
@@ -105,12 +104,15 @@ describe('handleNoToolCalls resume fixes', () => {
         userMessage: '运行测试',
         currentTools: state.tools,
         tokenUsage: { input: 1, output: 1 },
-        logger: { loopStop: vi.fn() } as any,
+        logger: makeLogger(),
       },
     );
 
-    expect(result.action).toBe('continue');
-    expect(state.noToolExecutionRecoveryCount).toBe(1);
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+    expect(state.noToolExecutionRecoveryCount).toBe(0);
   });
 });
 

@@ -37,7 +37,7 @@ function sortExternalEnterSignals(signals: ModeSignal[]): ModeSignal[] {
   return sortSignalsByPrecedence(signals);
 }
 
-export function shouldEnterForcedMode(
+function shouldEnterForcedMode(
   state: RuntimeExecutionState,
   config: ExecutionModeConfig,
   signals: ModeSignal[] = [],

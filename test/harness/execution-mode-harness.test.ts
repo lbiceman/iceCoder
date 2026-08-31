@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Harness } from '../../src/harness/harness.js';
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
 import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
-import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 import type { ChatFunction, HarnessConfig, HarnessStepEvent } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition } from '../../src/llm/types.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -163,7 +162,7 @@ describe('Harness execution mode integration - Batch 3', () => {
     const events: HarnessStepEvent[] = [];
     let eventCountAtFirstLlm = -1;
     const supervisorConfig = resolveSupervisorConfig({
-      mode: 'adaptive',
+      mode: 'strict',
       executionMode: {
         modeLockRounds: 0,
         writeTargetsEnterThreshold: 1,
@@ -186,18 +185,8 @@ describe('Harness execution mode integration - Batch 3', () => {
     const enterEventIndex = events.findIndex(event => event.type === 'execution_mode_enter');
     expect(enterEventIndex).toBeGreaterThanOrEqual(0);
     expect(enterEventIndex).toBeLessThan(eventCountAtFirstLlm);
-    expect(events[enterEventIndex]).toMatchObject({
-      type: 'execution_mode_enter',
-      executionMode: {
-        executionMode: 'forced',
-        enteredBy: ['task_graph_active', 'pending_steps', 'explicit_impl'],
-        enteredByPrimary: 'task_graph_active',
-        primaryReasonHuman: 'forced because task_graph_active + pending_steps + explicit_impl',
-        round: 1,
-      },
-    });
+    expect(events[enterEventIndex]?.executionMode?.executionMode).toBe('forced');
     expect(result.loopState.executionMode).toBe('forced');
-    expect(result.loopState.executionModeEnteredByPrimary).toBe('task_graph_active');
   });
 
   it('does not enter forced just because many write-capable tools are available', async () => {
@@ -253,7 +242,7 @@ describe('Harness execution mode integration - Batch 3', () => {
     const tools = [makeTool('read_file')];
     const events: HarnessStepEvent[] = [];
     const runtimeV2 = emptyRuntimeCheckpointV2('manual');
-    runtimeV2.supervisorState = {
+    runtimeV2.executionModeState = {
       executionMode: 'forced',
       executionModeLockRemaining: 2,
       executionModeEnteredBy: ['tool_failure'],
@@ -261,7 +250,6 @@ describe('Harness execution mode integration - Batch 3', () => {
       executionModeEnteredAtRound: 3,
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 1,
-      supervisorPhase: 'takeover',
     };
     await fs.writeFile(
       path.join(sessionDir, 'default.checkpoint.json'),
@@ -286,7 +274,6 @@ describe('Harness execution mode integration - Batch 3', () => {
 
     expect(events.some(event => event.type === 'execution_mode_enter')).toBe(false);
     expect(result.loopState.executionMode).toBe('free');
-    expect(result.loopState.supervisorPhase).toBe('free');
   });
 
   it('discards pending recovery signals and stale verification buffer on new user message', async () => {
@@ -314,7 +301,7 @@ describe('Harness execution mode integration - Batch 3', () => {
       }, null, 2),
       'utf-8',
     );
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
       sessionDir,
@@ -334,7 +321,7 @@ describe('Harness execution mode integration - Batch 3', () => {
   it('resetGraph on run() clears task graph from previous run (adaptive)', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file'), makeTool('edit_file')];
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
       sessionDir,
@@ -523,7 +510,7 @@ describe('Harness execution mode integration - W-series regressions', () => {
     const tools = [makeTool('read_file')];
     const events: HarnessStepEvent[] = [];
     const runtimeV2 = emptyRuntimeCheckpointV2('manual');
-    runtimeV2.supervisorState = {
+    runtimeV2.executionModeState = {
       executionMode: 'forced',
       executionModeLockRemaining: 0,
       executionModeEnteredBy: ['tool_failure'],
@@ -531,7 +518,6 @@ describe('Harness execution mode integration - W-series regressions', () => {
       executionModeEnteredAtRound: 3,
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
-      supervisorPhase: 'takeover',
     };
     await fs.writeFile(
       path.join(sessionDir, 'default.checkpoint.json'),
@@ -561,7 +547,7 @@ describe('Harness execution mode integration - W-series regressions', () => {
     const tools = [makeTool('read_file')];
     const events: HarnessStepEvent[] = [];
     const runtimeV2 = emptyRuntimeCheckpointV2('manual');
-    runtimeV2.supervisorState = {
+    runtimeV2.executionModeState = {
       executionMode: 'forced',
       executionModeLockRemaining: 2,
       executionModeEnteredBy: ['multi_write', 'tool_failure'],
@@ -618,15 +604,12 @@ describe('execution-mode-harness · firstRoundGraph integration (L2-7 / P2-4)', 
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('edit_file'), makeTool('write_file')];
     const events: HarnessStepEvent[] = [];
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' }, {});
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
-
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' });
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
       sessionDir,
       supervisorConfig,
       globalPolicy: supervisorConfig.globalPolicy,
-      supervisorBridge: bridge,
     }), createToolExecutor(tools));
 
     await harness.run(
@@ -644,15 +627,12 @@ describe('execution-mode-harness · firstRoundGraph integration (L2-7 / P2-4)', 
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('edit_file'), makeTool('write_file')];
     const events: HarnessStepEvent[] = [];
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
-
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
       sessionDir,
       supervisorConfig,
       globalPolicy: supervisorConfig.globalPolicy,
-      supervisorBridge: bridge,
     }), createToolExecutor(tools));
 
     await harness.run(

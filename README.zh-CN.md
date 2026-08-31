@@ -205,7 +205,7 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 - 任务分层 **L1–L8**（billing L4+：97 文件 19 BUG；L7 融合 33 探针；**L8 SaaS 融合**：多租户订单 × 供应链 × 审批 × 计费）。
 - 跑法与目录约定：[`docs/使用文档.md` §本地 Benchmark](./docs/使用文档.md#本地-benchmark) · 体系 [`benchMark/md/三平台同模对比评测与裁判评分体系.md`](./benchMark/md/三平台同模对比评测与裁判评分体系.md)。
 
-**深入阅读：** 双模 → [`docs/双模机制详解.md`](./docs/双模机制详解.md) · L2 → [`docs/L2监管层详解.md`](./docs/L2监管层详解.md) · 记忆 → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · 压缩 → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · 全貌 → [`docs/项目介绍.md`](./docs/项目介绍.md) · 移动端 H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
+**深入阅读：** 监管机制 → [`docs/双模机制详解.md`](./docs/双模机制详解.md) · L2 退役说明 → [`docs/L2监管层详解.md`](./docs/L2监管层详解.md) · 记忆 → [`docs/记忆系统详解.md`](./docs/记忆系统详解.md) · 压缩 → [`docs/压缩机制详解.md`](./docs/压缩机制详解.md) · 全貌 → [`docs/项目介绍.md`](./docs/项目介绍.md) · 移动端 H5 → [`docs/requirement/移动端H5-Shell方案.md`](./docs/requirement/移动端H5-Shell方案.md)
 
 ---
 
@@ -261,8 +261,8 @@ CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、�
 | [项目介绍](./docs/项目介绍.md) | 中文完整说明 |
 | [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 设计（无向量库） |
 | [压缩机制详解](./docs/压缩机制详解.md) | 分层压缩 + 结构化恢复 |
-| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L2 双模总览 |
-| [L2监管层详解](./docs/L2监管层详解.md) | L2 接管 / 交还深读 |
+| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L3 单轴监管总览 |
+| [L2监管层详解](./docs/L2监管层详解.md) | L2 Runtime Supervisor 退役说明 |
 | [PACKAGE_USAGE](./PACKAGE_USAGE.md) | 打包安装 |
 | [Benchmark 体系](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | 评分方法 |
 | [debug-billing-settlement](./benchMark/reports/debug-billing-settlement.md) | L4+ 19 处跨模块 BUG（M3 · iceCoder vs CC） |

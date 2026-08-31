@@ -44,7 +44,6 @@ function context(overrides: Partial<ModeDecisionContext> = {}): ModeDecisionCont
     round: runtimeState.round,
     executionMode: 'free',
     executionModeLockRemaining: 0,
-    supervisorPhase: 'free',
     supervisorMode: 'adaptive',
     riskLevel: 'L0_observation',
     state: runtimeState,

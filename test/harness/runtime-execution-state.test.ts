@@ -56,7 +56,6 @@ describe('RuntimeExecutionState - Batch 2', () => {
       executionMode: 'free',
       executionModeLockRemaining: 0,
       supervisorMode: 'adaptive',
-      supervisorPhase: 'free',
       riskLevel: 'L2_structural',
       state: runtimeState,
       signals: ['checkpoint_resumed'],

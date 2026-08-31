@@ -133,9 +133,9 @@ describe('ensureSupervisorConfigFile', () => {
       await ensureSupervisorConfigFile(tmp);
       const target = path.join(tmp, 'supervisor-config.json');
       const raw = await readFile(target, 'utf-8');
-      const parsed = JSON.parse(raw) as { mode?: string; eventTimeline?: { persistPath?: string } };
+      const parsed = JSON.parse(raw) as { mode?: string; executionMode?: { modeLockRounds?: number } };
       expect(parsed.mode).toBe('adaptive');
-      expect(parsed.eventTimeline?.persistPath).toBe('runtime/supervisor-events.jsonl');
+      expect(parsed.executionMode?.modeLockRounds).toBe(2);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

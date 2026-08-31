@@ -12,7 +12,6 @@ import { DEFAULT_BRANCH_BUDGET } from '../../src/harness/branch-budget.js';
 import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
 import { MAX_REBUILD_ESCALATIONS_PER_RUN } from '../../src/harness/harness-constants.js';
 import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
-import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 import type { ChatFunction, HarnessConfig, HarnessStepEvent } from '../../src/harness/types.js';
 import type { LLMResponse, ToolDefinition } from '../../src/llm/types.js';
 import { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -145,7 +144,7 @@ async function seedStaleCheckpoint(sessionDir: string): Promise<void> {
     at: 1,
     consumed: false,
   }];
-  runtimeV2.supervisorState = {
+  runtimeV2.executionModeState = {
     executionMode: 'forced',
     executionModeLockRemaining: 0,
     executionModeEnteredBy: ['tool_failure'],
@@ -153,15 +152,6 @@ async function seedStaleCheckpoint(sessionDir: string): Promise<void> {
     executionModeEnteredAtRound: 8,
     pendingModeSignals: [],
     forcedTaskBearingRoundsSinceEntry: 3,
-    supervisorPhase: 'takeover',
-    correctionBudgetUsed: 5,
-    segmentRenewalCount: 2,
-    recoverySupervisorSnapshot: {
-      phase: 'takeover',
-      takeoverStartRound: 4,
-      stableRoundsInTakeover: 0,
-      cooldownRemaining: 0,
-    },
   };
 
   await fs.writeFile(
@@ -179,16 +169,14 @@ function createChatFn(responses: LLMResponse[]): ChatFunction {
 }
 
 function adaptiveHarness(sessionDir: string, tools: ToolDefinition[], handler?: Parameters<typeof createToolExecutor>[1]) {
-  const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
-  const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+  const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
   const harness = new Harness(minConfig({
     context: { systemPrompt: 'test', tools },
     sessionDir,
     supervisorConfig,
     globalPolicy: supervisorConfig.globalPolicy,
-    supervisorBridge: bridge,
   }), createToolExecutor(tools, handler));
-  return { harness, bridge };
+  return { harness };
 }
 
 function harnessCheckpointEngine(harness: Harness) {
@@ -216,11 +204,11 @@ afterEach(async () => {
 });
 
 describe('harness.run() per-user-message reset', () => {
-  it('clears stale verification buffer, recovery signals, and keeps supervisor phase free', async () => {
+  it('clears stale verification buffer and recovery signals', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
     await seedStaleCheckpoint(sessionDir);
-    const { harness, bridge } = adaptiveHarness(sessionDir, tools);
+    const { harness } = adaptiveHarness(sessionDir, tools);
 
     const result = await harness.run('brand new task', createChatFn([finalResponse('ok')]));
 
@@ -231,16 +219,13 @@ describe('harness.run() per-user-message reset', () => {
     expect(userText).not.toContain('stale cross-run warning');
     expect(userText).not.toContain('stale.test.ts');
     expect(result.loopState.executionMode).toBe('free');
-    expect(result.loopState.supervisorPhase).toBe('free');
-    expect(bridge.getCorrectionBudgetUsage().used).toBe(0);
-    expect(bridge.getSegmentRenewalCount()).toBe(0);
   });
 
   it('does not inherit acceptanceGate progress from checkpoint', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('read_file')];
     await seedStaleCheckpoint(sessionDir);
-    const { harness, bridge } = adaptiveHarness(sessionDir, tools);
+    const { harness } = adaptiveHarness(sessionDir, tools);
 
     const longGoal = [
       'Implement full benchmark pipeline:',
@@ -252,7 +237,7 @@ describe('harness.run() per-user-message reset', () => {
 
     await harness.run(longGoal, createChatFn([finalResponse('starting')]));
 
-    expect(bridge.getSupervisorPhase()).toBe('free');
+    expect(harness.getLoopState().executionMode).toBe('free');
   });
 
   it('resets loop round counter on each run (same harness instance)', async () => {

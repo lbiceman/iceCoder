@@ -5,7 +5,6 @@ import path from 'node:path';
 
 import { AsyncSubAgentManager } from '../../src/harness/async-sub-agent-manager.js';
 import { AnalysisSupervisor } from '../../src/harness/supervisor/analysis-supervisor.js';
-import { EventTimeline } from '../../src/harness/supervisor/event-timeline.js';
 import type { ChatFunction } from '../../src/harness/types.js';
 import type { LLMResponse } from '../../src/llm/types.js';
 import type { ToolExecutor } from '../../src/tools/tool-executor.js';
@@ -54,7 +53,7 @@ describe('AnalysisSupervisor', () => {
     vi.restoreAllMocks();
   });
 
-  it('records request/start/finish/ready events and exposes ready analyses', async () => {
+  it('exposes completed analyses without L2 timeline coupling', async () => {
     const finished = deferred();
     const chatFn: ChatFunction = vi.fn(async () => makeResponse('Explorer found src/auth.'));
     const manager = new AsyncSubAgentManager({
@@ -64,15 +63,9 @@ describe('AnalysisSupervisor', () => {
       chatFn,
       maxConcurrent: 1,
     });
-    const timeline = new EventTimeline({
-      enabled: true,
-      persistPath: 'unused.jsonl',
-    }, { memoryOnly: true });
     const supervisor = new AnalysisSupervisor({
       sessionDir,
       manager,
-      eventTimeline: timeline,
-      mode: 'free',
     });
     manager.on('analysis_finished', () => finished.resolve());
 
@@ -81,20 +74,11 @@ describe('AnalysisSupervisor', () => {
       kind: 'explorer',
       prompt: 'Explore auth',
       requestedAt: 100,
-    }, { round: 3, reason: 'test_request' });
+    });
 
     expect(result.status).toBe('pending');
 
     await finished.promise;
-
-    const events = timeline.getRecentEvents().map(event => event.event);
-    expect(events).toEqual([
-      'analysis_requested',
-      'analysis_started',
-      'analysis_finished',
-      'workspace_analysis_updated',
-      'analysis_ready',
-    ]);
 
     const ready = await supervisor.getReadyAnalyses(sessionId);
     expect(ready).toHaveLength(1);

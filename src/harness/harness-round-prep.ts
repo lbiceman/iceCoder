@@ -33,7 +33,7 @@ import {
   markForcedDegraded,
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
+import type { GlobalModePolicy } from '../types/supervisor.js';
 import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import type {
   ChatFunction,
@@ -47,8 +47,8 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   memoryIntegration: HarnessMemoryIntegration;
   graphExecutor: GraphExecutor;
   runtimeTelemetry?: RuntimeTelemetry;
-  /** L2-7 — strict 首轮 `task_graph_init` 门禁经此 bridge 判定；缺省回退 `shouldUseTaskGraph`。 */
-  supervisorBridge?: SupervisorRuntimeBridge;
+  /** L0 策略：仅 strict 在首轮为关键工程任务初始化任务图。 */
+  globalPolicy?: GlobalModePolicy;
   /** Async Sub-Agent：ready analysis prompt injection. */
   analysisSupervisor?: AnalysisSupervisor;
   /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
@@ -142,15 +142,8 @@ export async function prepareHarnessRound(
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
-    // L2-7 / §I3 — 首轮 init 门禁：
-    //   - bridge 活跃 (adaptive/strict)：由 `shouldInitTaskGraphAtFirstRound` 按 firstRoundGraph 判定；
-    //     · adaptive: false（首轮**不**init，由 RecoverySupervisor 接管后 replaceGraph 重建）；
-    //     · strict:   true（关键域第 1 轮 initGraph）；
-    //   - bridge 不存在 / off：保留历史行为 — 等同 `shouldUseTaskGraph(intent)`，避免回归
-    //     掉 cli/web 入口"关键 intent 首轮看见任务图"的体验。
-    const shouldInit = deps.supervisorBridge
-      ? deps.supervisorBridge.shouldInitTaskGraphAtFirstRound(taskSnapshot.intent)
-      : shouldUseTaskGraph(taskSnapshot.intent);
+    const shouldInit = deps.globalPolicy?.supervisorMode === 'strict'
+      && shouldUseTaskGraph(taskSnapshot.intent);
     if (shouldInit) {
       try {
         deps.graphExecutor.initGraph({
@@ -206,9 +199,6 @@ export async function prepareHarnessRound(
         intent: taskSnapshot.intent,
         phase: taskSnapshot.phase,
         requestedBy: 'supervisor',
-      }, {
-        round,
-        reason: 'auto_trigger',
       });
       state.analysisAutoTriggered = true;
     }

@@ -231,15 +231,16 @@ describe('EscalationManager', () => {
 
   beforeEach(() => { em = new EscalationManager(); });
 
-  it('连续 soft 偏离升级到 L1', () => {
-    em.evaluate('soft', 'n1');
+  it('soft 偏离保持静默', () => {
     const r = em.evaluate('soft', 'n1');
-    expect(em.policy.currentLevel).toBe(1);
+    expect(r.action).toBe('none');
+    expect(em.policy.currentLevel).toBe(0);
   });
 
-  it('hard 偏离直接 L1', () => {
+  it('hard 偏离直接硬阻止', () => {
     const r = em.evaluate('hard', 'n1');
-    expect(em.policy.currentLevel).toBe(1);
+    expect(r.action).toBe('block');
+    expect(em.policy.currentLevel).toBe(2);
   });
 
   it('critical 偏离直接 L3', () => {
@@ -248,19 +249,18 @@ describe('EscalationManager', () => {
     expect(em.policy.currentLevel).toBe(3);
   });
 
-  it('升级链路：L1→L2→L3', () => {
-    em.evaluate('hard', 'n1');           // L1
-    em.evaluate('hard', 'n1');           // L1 → correction attempt
-    const r = em.evaluate('hard', 'n1'); // L2
-    expect(em.policy.currentLevel).toBeGreaterThanOrEqual(2);
-    expect(r.action).toBe('block');
+  it('重复 hard 偏离升级到 force_switch', () => {
+    em.evaluate('hard', 'n1');
+    const r = em.evaluate('hard', 'n1');
+    expect(em.policy.currentLevel).toBe(3);
+    expect(r.action).toBe('force_switch');
   });
 
   it('deescalate 降级', () => {
     em.evaluate('hard', 'n1');
-    expect(em.policy.currentLevel).toBe(1);
+    expect(em.policy.currentLevel).toBe(2);
     em.deescalate();
-    expect(em.policy.currentLevel).toBe(0);
+    expect(em.policy.currentLevel).toBe(1);
   });
 
   it('reset 完全重置', () => {

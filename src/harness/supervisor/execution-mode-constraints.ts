@@ -90,7 +90,7 @@ export function applyExecutionModeConstraints(
   syncExecutionModeLoopState(deps.loopController, state);
 }
 
-export function isTaskBearingRound(outcome: TaskBearingRoundOutcome): boolean {
+function isTaskBearingRound(outcome: TaskBearingRoundOutcome): boolean {
   return outcome.hadSuccessfulToolExecute
     || outcome.graphStepAdvanced
     || outcome.writeToolSucceededWithFileChange;
@@ -130,7 +130,6 @@ export function syncExecutionModeLoopState(loopController: LoopController, state
     lastModeDecision: state.lastModeDecision,
     pendingModeSignals: [...(state.pendingModeSignals ?? [])],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
-    supervisorPhase: state.supervisorPhase,
   });
 }
 
@@ -140,7 +139,6 @@ function normalizeExecutionModeState(state: HarnessRunState): void {
   state.executionModeEnteredBy ??= [];
   state.pendingModeSignals ??= [];
   state.forcedTaskBearingRoundsSinceEntry ??= 0;
-  state.supervisorPhase ??= 'free';
 }
 
 function buildTelemetryPayload(

@@ -107,12 +107,12 @@ describe('CheckpointEngine - save', () => {
     expect(raw.runtimeV2.branchBudget.recoverTriggers).toBe(1);
   });
 
-  it('保存调用方提供的 supervisor execution-mode 状态', async () => {
+  it('保存调用方提供的 execution-mode 状态', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
 
     await engine.save({
       trigger: 'step_completed',
-      supervisorState: {
+      executionModeState: {
         executionMode: 'forced',
         executionModeLockRemaining: 1,
         executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
@@ -124,7 +124,7 @@ describe('CheckpointEngine - save', () => {
     });
 
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.runtimeV2.supervisorState).toMatchObject({
+    expect(raw.runtimeV2.executionModeState).toMatchObject({
       executionMode: 'forced',
       executionModeLockRemaining: 1,
       executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
@@ -254,11 +254,11 @@ describe('CheckpointEngine - restore', () => {
     expect(r.recoverySignals[0].message).toBe('switch strategy');
   });
 
-  it('save → loadV2 保留 supervisor execution-mode 扩展字段', async () => {
+  it('save → loadV2 保留 execution-mode 扩展字段', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
 
     const saved = await engine.save({ trigger: 'manual' });
-    saved.supervisorState = {
+    saved.executionModeState = {
       executionMode: 'forced',
       executionModeLockRemaining: 2,
       executionModeEnteredBy: ['checkpoint_resumed'],
@@ -274,7 +274,7 @@ describe('CheckpointEngine - restore', () => {
 
     const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
 
-    expect(restored?.supervisorState).toMatchObject({
+    expect(restored?.executionModeState).toMatchObject({
       executionMode: 'forced',
       executionModeLockRemaining: 2,
       executionModeEnteredBy: ['checkpoint_resumed'],
@@ -283,10 +283,10 @@ describe('CheckpointEngine - restore', () => {
     });
   });
 
-  it('部分 supervisorState 字段缺失时仍可 loadV2 并补安全默认值', async () => {
+  it('部分 executionModeState 字段缺失时仍可 loadV2 并补安全默认值', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
     const saved = await engine.save({ trigger: 'manual' });
-    saved.supervisorState = {
+    saved.executionModeState = {
       executionMode: 'forced',
     } as any;
     await fs.writeFile(engine.checkpointPath, JSON.stringify({
@@ -296,7 +296,7 @@ describe('CheckpointEngine - restore', () => {
 
     const restored = await new CheckpointEngine(tmp, 'sess-1').loadV2();
 
-    expect(restored?.supervisorState).toMatchObject({
+    expect(restored?.executionModeState).toMatchObject({
       executionMode: 'forced',
       executionModeLockRemaining: 0,
       executionModeEnteredBy: [],

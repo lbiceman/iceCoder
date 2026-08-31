@@ -331,9 +331,6 @@ export async function executeToolCallsStreaming(
             paths: stringArrayArg(tc.arguments.paths),
             keywords: stringArrayArg(tc.arguments.keywords),
           },
-        }, {
-          round: iteration,
-          reason: 'request_analysis_tool',
         });
         output = [
           '[Analysis Requested]',

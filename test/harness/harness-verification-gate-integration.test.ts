@@ -44,7 +44,6 @@ function makeState(messages: UnifiedMessage[], goal = 'fix bug'): HarnessRunStat
     executionModeEnteredBy: [],
     pendingModeSignals: [],
     forcedTaskBearingRoundsSinceEntry: 0,
-    supervisorPhase: 'free',
     recoveryPendingSticky: false,
     stableRoundsSinceLastFailure: 0,
     filesChangedAtRoundStart: 0,
