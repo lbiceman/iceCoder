@@ -32,6 +32,7 @@ import type {
   HarnessStepEvent,
   StreamFunction,
 } from './types.js';
+import { endTiming, markTimingStart, timeSync } from './harness-timing.js';
 
 export interface LlmCallDeps {
   loopController: LoopController;
@@ -72,6 +73,7 @@ export async function callHarnessLlm(
   const { state, normalizedMsgs, currentTools, round, chatFn, streamFn, logger, onStep } = args;
 
   // 注入后 token 可能再次逼近窗口 — 调用 API 前主动收缩（与 emergency fork 共用一次性配额）
+  const precheckStartedAt = markTimingStart();
   if (
     deps.contextCompactor
     && !state.contextEmergencyCompactUsed
@@ -107,6 +109,7 @@ export async function callHarnessLlm(
       return { action: 'retry' };
     }
   }
+  endTiming('llm_precheck', precheckStartedAt, round);
 
   let response: LLMResponse;
   const llmOpts: { tools: ToolDefinition[]; signal?: AbortSignal } = {
@@ -118,26 +121,32 @@ export async function callHarnessLlm(
       const streamFilter = new AssistantVisibleStreamFilter();
       const reasoningSanitizer = new ReasoningSystemTagStreamFilter();
       try {
+        const llmWaitStartedAt = markTimingStart();
         response = await streamFn(normalizedMsgs, (chunk, done) => {
           if (deps.loopController.isAborted()) return;
           dispatchStreamChunkToStep(chunk, done, streamFilter, round, onStep, reasoningSanitizer);
         }, llmOpts);
-        const tail = streamFilter.flush();
-        if (tail.thinking) {
-          onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
-        }
-        const reasoningTail = reasoningSanitizer.flush();
-        if (reasoningTail) {
-          onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: reasoningTail });
-        }
-        if (tail.visible) {
-          onStep?.({ type: 'stream_delta', iteration: round, delta: tail.visible });
-        }
+        endTiming('llm_wait', llmWaitStartedAt, round);
+        timeSync('llm_stream_filter', () => {
+          const tail = streamFilter.flush();
+          if (tail.thinking) {
+            onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: tail.thinking });
+          }
+          const reasoningTail = reasoningSanitizer.flush();
+          if (reasoningTail) {
+            onStep?.({ type: 'reasoning_stream_delta', iteration: round, delta: reasoningTail });
+          }
+          if (tail.visible) {
+            onStep?.({ type: 'stream_delta', iteration: round, delta: tail.visible });
+          }
+        }, round);
       } catch (streamError) {
         const errMsg = streamError instanceof Error ? streamError.message : String(streamError);
         if (errMsg.includes('reasoning_content') || errMsg.includes('Failed to deserialize')) {
           console.log('[harness] 流式调用失败，回退到非流式: ' + errMsg.substring(0, 100));
+          const llmWaitStartedAt = markTimingStart();
           response = await chatFn(normalizedMsgs, llmOpts);
+          endTiming('llm_wait', llmWaitStartedAt, round);
         } else {
           throw streamError;
         }
@@ -146,7 +155,9 @@ export async function callHarnessLlm(
         return { action: 'abort' };
       }
     } else {
+      const llmWaitStartedAt = markTimingStart();
       response = await chatFn(normalizedMsgs, llmOpts);
+      endTiming('llm_wait', llmWaitStartedAt, round);
     }
     state.llmRetryCount = 0;
   } catch (error) {
