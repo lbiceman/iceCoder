@@ -16,7 +16,6 @@ import type {
   ModeDecision,
   ModeSignal,
   ResolvedSupervisorConfig,
-  SupervisorPhase,
 } from '../types/supervisor.js';
 
 // ─── 上下文组装 ───
@@ -164,8 +163,6 @@ export interface LoopState {
   pendingModeSignals?: ModeSignal[];
   /** I10：进入 forced 后已完成的 task-bearing round 数。 */
   forcedTaskBearingRoundsSinceEntry?: number;
-  /** Supervisor 运行时相位承载位；由后续 RecoverySupervisor 任务使用。 */
-  supervisorPhase?: SupervisorPhase;
 }
 
 // ─── Harness 核心 ───
@@ -219,8 +216,6 @@ export interface HarnessConfig {
   globalPolicy?: GlobalModePolicy;
   /** Batch 1：可选 supervisor 配置依赖，只读承载位；本批不改变现有运行逻辑。 */
   supervisorConfig?: ResolvedSupervisorConfig;
-  /** L2-1+：SupervisorRuntimeBridge；工具轮末段调用 PassiveObserver。 */
-  supervisorBridge?: import('./supervisor/supervisor-bridge.js').SupervisorRuntimeBridge;
   /** Async Sub-Agent Phase 4：AnalysisSupervisor；本阶段仅承载依赖，不接入主循环。 */
   analysisSupervisor?: import('./supervisor/analysis-supervisor.js').AnalysisSupervisor;
   /**

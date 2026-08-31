@@ -68,7 +68,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       defaultSystemPrompt: DEFAULT_SYSTEM_PROMPT,
     });
     let toolDefs = shouldDisableRuntimeTools() ? [] : ctx.toolRegistry.getDefinitions();
-    const { supervisorConfig, globalPolicy, bridge: supervisorBridge } = await loadHarnessSupervisorRuntime({
+    const { supervisorConfig, globalPolicy } = await loadHarnessSupervisorRuntime({
       dataDir: ctx.paths.dataDir,
       mainConfigPath: ctx.paths.configPath,
     });
@@ -138,7 +138,6 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       verificationExemptDirs,
       supervisorConfig,
       globalPolicy,
-      supervisorBridge,
       onConfirm: createCliOnConfirm(!jsonOutput ? spinner : undefined),
       onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(!jsonOutput ? spinner : undefined),
     };

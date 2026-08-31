@@ -2,10 +2,19 @@ import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { MAX_REBUILD_ESCALATIONS_PER_RUN } from './harness-constants.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
-import { topFileEditFromInspect } from './supervisor/passive-observer.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { buildVerificationDigest, isBuildVerificationCommand, isHarnessVerificationCommand, parseBuildErrorSourcePaths } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
+
+function topFileEditFromInspect(
+  fileEdits: Record<string, number>,
+): { path: string; count: number } | undefined {
+  let best: { path: string; count: number } | undefined;
+  for (const [path, count] of Object.entries(fileEdits)) {
+    if (!best || count > best.count) best = { path, count };
+  }
+  return best;
+}
 
 export type RebuildEscalationTrigger =
   | 'consecutive_failures'
@@ -161,9 +170,7 @@ export function canInjectRebuildEscalation(args: {
   rebuildEscalationInjections: number;
   rebuildEscalationInjectedThisRound: boolean;
   maxRebuildEscalationsPerRun?: number;
-  suppressInject?: boolean;
 }): boolean {
-  if (args.suppressInject) return false;
   if (args.rebuildEscalationInjectedThisRound) return false;
   return !rebuildEscalationBudgetExhausted(
     args.rebuildEscalationInjections,
@@ -176,9 +183,7 @@ export function shouldInjectParallelBudgetBlockHint(args: {
   parallelBudgetBlockHintInjected: boolean;
   budgetBlockedFilePathCount: number;
   blockedWriteToolCount: number;
-  suppressInject?: boolean;
 }): boolean {
-  if (args.suppressInject) return false;
   if (args.parallelBudgetBlockHintInjected) return false;
   return args.budgetBlockedFilePathCount >= 2 && args.blockedWriteToolCount >= 2;
 }

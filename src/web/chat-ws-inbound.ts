@@ -68,7 +68,6 @@ import {
   abortSession,
   getActiveSessionId,
   getCachedMessages,
-  getSupervisorRuntime,
   isSessionProcessing,
   resolveSessionWorkspacePayload,
   sessionProcessing,
@@ -192,13 +191,11 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         }
         console.log(`[chat-ws] restore_runtime session=${sid} messageId=${messageId}`);
         try {
-          const supervisorRuntime = await getSupervisorRuntime();
           const result = await getRuntimeRestoreCoordinator().restore({
             sessionDir: SESSIONS_DIR,
             sessionId: sid,
             messageId,
             defaultWorkDir: DEFAULT_WORK_DIR,
-            supervisorBridge: supervisorRuntime.bridge,
             getStructuredMessages: () => getCachedMessages(sid),
             setStructuredMessages: (m) => setCachedMessages(sid, m),
           });

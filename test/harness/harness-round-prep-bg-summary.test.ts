@@ -49,7 +49,6 @@ function makeState(goal: string): HarnessRunState {
     branchBudgetWarnedThisRound: false,
     verificationDigestInjectedThisRound: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
   };
 }
 

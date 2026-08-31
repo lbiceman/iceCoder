@@ -52,7 +52,6 @@ function buildState(messages: UnifiedMessage[], overrides: Partial<HarnessRunSta
     checkpointResumeForkApplied: false,
     contextEmergencyCompactUsed: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
     filesChangedAtRoundStart: 0,
     branchSwitchedThisRound: false,
     ...overrides,

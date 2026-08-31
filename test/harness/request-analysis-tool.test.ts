@@ -47,7 +47,6 @@ describe('request_analysis tool', () => {
         prompt: 'Explore auth module',
         scope: { paths: ['src/auth'], keywords: ['oauth'] },
       }),
-      expect.objectContaining({ reason: 'request_analysis_tool' }),
     );
     expect(stats.totalCount).toBe(1);
     expect(messages[0]?.content).toContain('[Analysis Requested]');

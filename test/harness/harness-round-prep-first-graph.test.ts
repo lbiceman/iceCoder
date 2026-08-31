@@ -9,7 +9,6 @@ import { HarnessMemoryIntegration } from '../../src/harness/harness-memory.js';
 import { prepareHarnessRound } from '../../src/harness/harness-round-prep.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
-import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
 import { TaskState } from '../../src/harness/task-state.js';
 import { GraphExecutor } from '../../src/harness/task-graph-executor.js';
@@ -41,7 +40,6 @@ function makeState(goal: string): HarnessRunState {
     branchBudgetWarnedThisRound: false,
     verificationDigestInjectedThisRound: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
   };
 }
 
@@ -61,8 +59,7 @@ describe('harness-round-prep · firstRoundGraph integration (P2-4)', () => {
   });
 
   it('strict + edit intent: initGraph + task_graph_init step event', async () => {
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' }, {});
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'strict' });
     const graphExecutor = new GraphExecutor();
     const events: { type: string; graphIntent?: string }[] = [];
     const state = makeState('新增一个 logger 工具');
@@ -73,7 +70,7 @@ describe('harness-round-prep · firstRoundGraph integration (P2-4)', () => {
         memoryIntegration: new HarnessMemoryIntegration({ memoryDir: '__test_nonexistent__' }),
         graphExecutor,
         contextCompactor: new ContextCompactor({ threshold: 9999 }),
-        supervisorBridge: bridge,
+        globalPolicy: supervisorConfig.globalPolicy,
         stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
         checkpointManager: undefined,
         enqueueCheckpointPersist: async task => task(),
@@ -106,8 +103,7 @@ describe('harness-round-prep · firstRoundGraph integration (P2-4)', () => {
   });
 
   it('adaptive + edit intent: §I3 skip first-round init', async () => {
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
     const graphExecutor = new GraphExecutor();
     const events: { type: string }[] = [];
     const state = makeState('新增一个 logger 工具');
@@ -118,7 +114,7 @@ describe('harness-round-prep · firstRoundGraph integration (P2-4)', () => {
         memoryIntegration: new HarnessMemoryIntegration({ memoryDir: '__test_nonexistent__' }),
         graphExecutor,
         contextCompactor: new ContextCompactor({ threshold: 9999 }),
-        supervisorBridge: bridge,
+        globalPolicy: supervisorConfig.globalPolicy,
         stopHookManager: { run: async () => ({ action: 'continue' }) } as never,
         checkpointManager: undefined,
         enqueueCheckpointPersist: async task => task(),

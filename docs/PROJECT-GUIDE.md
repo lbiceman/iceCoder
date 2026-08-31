@@ -2,13 +2,15 @@
 
 > Full project introduction. For a quick overview, see [README](../README.md).
 
-iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole structured execution context source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), optional **dual-mode Supervisor** (`off` / `adaptive` / `strict`), file-based long-term memory, **Agent Skills**, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket / Mobile H5** entrypoints (plus optional MCP tools).
+iceCoder is a **tool-using LLM runtime** for local repositories: a Harness loop with tools, **TaskGraph** (sole structured execution context source — replaces the legacy Execution Transparency Layer), resilient **checkpoint** persistence (`CheckpointEngine` v2 on the same JSON file), a single-axis Supervisor (`off` / `adaptive` / `strict` → `free` / `forced`), file-based long-term memory, **Agent Skills**, session memory for compaction recovery, prompt assembly, and **CLI / Web / WebSocket / Mobile H5** entrypoints (plus optional MCP tools).
 
 **Stack:** Node.js 22+, TypeScript, Express (API + static SPA in production), Vite (dev UI on a separate port), WebSocket chat, Vitest.
 
 The goal is not only to chat with a model, but to run a **software-engineering assistant** that can understand a task, inspect a repository, edit files, run verification, recover from failures, preserve useful memory, and continue long sessions without losing state.
 
 **Removed (no longer in tree):** the legacy **multi-stage pipeline** and per-stage **Agent** classes (`BaseAgent`, `executePipeline`, stage reports, etc.). The `Orchestrator` is now a thin holder for `FileParser` + `LLMAdapter` shared by the WebSocket chat path.
+
+> 2026-08-31 breaking change: L2 takeover/observer/recovery/timeline was removed. Any later historical validation tables mentioning takeover, handoff, graph_hint, shadow, or Supervisor Timeline describe the retired implementation only.
 
 [中文项目介绍](./项目介绍.md) | [环境变量](./环境变量.md)
 
@@ -21,7 +23,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Harness core** | Tool execution, permissions (`allow`/`confirm`/`deny`), Task State v1, RepoContext v1, verification gate, no-tool recovery, repeat-failure detection |
 | **TaskGraph** | Sole structured context injection for critical intents; `TaskDomainGate` keeps `question`/`inspect` in free mode |
 | **CheckpointEngine v2** | `runtimeV2` layered on the same `{sessionId}.checkpoint.json` |
-| **Dual-mode Supervisor** | **L2 largely validated** — L1/L2 wired; 15 Web manual scenarios in **Testing & validation**; spec [`docs/requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) · overview [`docs/双模机制详解.md`](./双模机制详解.md) |
+| **Single-axis Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard; L2 takeover stack retired on 2026-08-31; overview [`docs/双模机制详解.md`](./双模机制详解.md) |
 | **Memory system** | File-based long-term memory + session notes + Dream/eviction; **24** test files **~446** cases — see **Memory System** · [`记忆系统详解.md`](./记忆系统详解.md) |
 | **Agent Skills** | Markdown skills in `ICE_SKILLS_DIR`; Web Skills page + chat `#` injection; `/api/skills` — see **Agent Skills** |
 | **Workspace & file browser** | Per-session workspace lock; `@` refs + `/api/workspace/browse`; `list_drives` / `browse_directory` / `open_file`; `~open` direct listing |
@@ -139,88 +141,46 @@ Key files:
 - Older files without `runtimeV2` still load cleanly; saves merge v1 + v2 without conflicting renames (`checkpointPersistTail` serializes writes in Harness).
 - Triggers mirror the long-session design (step/tool/verification/compaction milestones — see `docs/requirement/长时间连续工作-finish.md`).
 
-### Dual-mode Supervisor (V1.3.7)
+### Single-axis Supervisor
 
-Spec: [`requirement/双模方案2-finish.md`](./requirement/双模方案2-finish.md) · Manual playbook: [`requirement/L2测试过程.md`](./requirement/L2测试过程.md) · Deep dive: [`L2监管层详解.md`](./L2监管层详解.md) · Overview: [`双模机制详解.md`](./双模机制详解.md)
-
-Dual-mode separates **user-selected supervision tier** from **runtime execution constraints**:
+Current overview: [`双模机制详解.md`](./双模机制详解.md) · L2 retirement: [`L2监管层详解.md`](./L2监管层详解.md)
 
 ```text
 L0 Policy tier (config.json · supervisorMode)
-  off / adaptive / strict          ← Web nav · Ice Bean eye color
+  off / adaptive / strict
         ↓
 L1 Execution mode (Harness · executionMode)
-  free ↔ forced                    ← Ice Bean bottom forced · … chip
+  free ↔ forced
   ModeController · ToolGate · TaskGraph · branchBudget
         ↓
-L2 Runtime supervision (SupervisorRuntimeBridge)
-  PassiveObserver · GoalDriftDetector · RecoverySupervisor
-  CorrectionPort · RecoveryBoundary · EventTimeline → supervisor-events.jsonl
+L3 Graph hard guard
+  block / force_switch / user_checkpoint
 ```
 
 | Layer | Key modules | Role |
 |-------|-------------|------|
 | **L0** | `mode-controller.ts` · `supervisor-config.ts` | Load tier + global policy; degrade to `off` on failure |
 | **L1** | `execution-mode-constraints.ts` · `tool-gate.ts` · `mode-decision-engine.ts` | Enter/exit forced by signals; strict floor = forced |
-| **L1** | `task-graph-executor.ts` · `task-domain.ts` | Structured context; `inferTaskDomain()` → `critical_*` for takeover |
-| **L2** | `passive-observer.ts` · `goal-drift-detector.ts` | `no_progress` / `file_loop` / `tool_repeat_fail` / `goal_drift` |
-| **L2** | `recovery-supervisor.ts` · `correction-port.ts` · `recovery-boundary.ts` | takeover / handoff / graph_hint; I4 correction budget |
-| **L2** | `event-timeline.ts` · `supervisor-bridge.ts` | Timeline persistence; round-level evaluate + checkpoint |
+| **L3** | `task-graph-executor.ts` · `task-graph-review.ts` | Hard block; switch fallback branch; checkpoint when none exists |
 
 **L0 tiers**
 
 | Mode | `supervisorMode` | Summary |
 |------|------------------|---------|
-| **off** | `off` | No supervision chain; TaskGraph panel may still appear |
-| **adaptive** | `adaptive` (default) | Risk-based free ↔ forced; first-round graph off by default (§I3) |
-| **strict** | `strict` | Strong constraints; first-round graph + forced; **L2-6 file_loop requires this** |
+| **off** | `off` | Execution Mode and first-round graph disabled |
+| **adaptive** | `adaptive` (default) | Risk-based free ↔ forced; no first-round graph |
+| **strict** | `strict` | Forced floor and first-round graph for engineering tasks |
 
 **Config & entrypoints**
 
 - **Tier**: `data/config.json` → `supervisorMode` (Web nav · `PATCH /api/config/supervisor-mode`)
 - **Params**: `data/supervisor-config.json` (template [`supervisor-config.example.json`](../data/supervisor-config.example.json))
 - **Loading**: `loadHarnessSupervisorRuntime()` from `chat` / `run` / `chat-ws` / `remote-ws`
-- **Shadow**: `ICE_SUPERVISOR_SHADOW=1` — evaluate without mutating `supervisorPhase`
 - **Env vars**: [`docs/环境变量.md`](./环境变量.md) §4
 
-**Recent fixes (2026-05-22):** `inferTaskDomain()` · `node --check` verification · `preserveOnCompaction` for recovery injects
-
-#### `~supervisor` chat command (Supervisor events report)
-
-The Web chat input supports **`~supervisor`** (type `~` for the command palette). It aggregates **L2 Timeline** events and **Execution Mode** enter/exit records — same behavior as `GET /api/supervisor/events`.
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| (none) | Markdown text report for the last 7 days | — |
-| `days=N` | Include JSONL events from the last **N** days (**1–90**) | `7` |
-| `event=<type>` | Filter Timeline events by type | none (all types) |
-| `limit=N` | Show the **N** most recent Timeline rows at the end of the report (**1–50**) | `10` |
-
-Arguments are space-separated `key=value` pairs after the command name and can be combined.
-
-**Examples:**
-
-```text
-~supervisor
-~supervisor days=3
-~supervisor event=recover
-~supervisor days=7 limit=20
-~supervisor days=14 event=failure limit=15
-```
-
-**Valid `event=` values** (`SupervisorTimelineEventType`): `switch`, `recover`, `rollback`, `handoff`, `failure`, `drift`, `timeout`, `shadow_diagnostic`.
-
-**HTTP equivalents:**
-
-- Text report (JSON wrapper with `report` field): `GET /api/supervisor/events?days=7&limit=10`
-- Structured JSON: `GET /api/supervisor/events?days=7&event=recover&format=json` (`format=json` is HTTP-only; the chat command always returns the text report)
-
-**Data sources:**
-
-- L2 Timeline: `data/runtime/supervisor-events.jsonl` (matches `persistPath` in `supervisor-config.json`)
-- Execution Mode enter/exit: `execution_mode_enter` / `execution_mode_exit` in `data/runtime/telemetry.jsonl`
-
-The report includes recent forced-mode entries (`primaryReasonHuman`, `enteredBy` signals), Timeline aggregates, and recent detail rows capped by `limit`.
+The former L2 takeover/observer/recovery/timeline stack was removed on 2026-08-31.
+`GET /api/supervisor/events` now returns only Execution Mode enter/exit telemetry from
+`data/runtime/telemetry.jsonl`.
 
 ---
 
@@ -861,8 +821,8 @@ Higher-level prose (beyond this README):
 - [`docs/环境变量.md`](./环境变量.md) — **full environment variable reference** (purpose, valid values, defaults)
 - [`docs/记忆系统详解.md`](./记忆系统详解.md) — Memory v2 design (no vector DB)
 - [`docs/压缩机制详解.md`](./压缩机制详解.md) — layered compaction + structured recovery
-- [`docs/双模机制详解.md`](./双模机制详解.md) — L0 / L1 / L2 dual-mode overview
-- [`docs/L2监管层详解.md`](./L2监管层详解.md) — L2 takeover / handoff deep dive
+- [`docs/双模机制详解.md`](./双模机制详解.md) — current L0 / L1 / L3 single-axis supervisor
+- [`docs/L2监管层详解.md`](./L2监管层详解.md) — retired L2 migration note
 - [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
 - [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers

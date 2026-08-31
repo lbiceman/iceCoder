@@ -477,7 +477,6 @@ ${c.bold}终端内置命令:${c.reset}
         verificationExemptDirs,
         supervisorConfig: supervisorRuntime.supervisorConfig,
         globalPolicy: supervisorRuntime.globalPolicy,
-        supervisorBridge: supervisorRuntime.bridge,
         onConfirm: createCliOnConfirm(spinner),
         onShellMandatoryConfirm: createCliOnShellMandatoryConfirm(spinner),
       };

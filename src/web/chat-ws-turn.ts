@@ -511,7 +511,6 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     verificationExemptDirs,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
-    supervisorBridge: supervisorRuntime.bridge,
     enableRequestAnalysis: sessionToolCtx.enableRequestAnalysis,
     shellCollabActive: sessionToolCtx.shellCollabActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
