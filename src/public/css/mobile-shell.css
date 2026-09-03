@@ -103,6 +103,14 @@
   background: var(--bg-hover);
 }
 
+.mobile-top-bar-brand-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: block;
+  object-fit: contain;
+}
+
 .mobile-top-bar-brand {
   font-weight: 600;
   font-size: 16px;

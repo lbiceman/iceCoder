@@ -66,28 +66,23 @@ select:focus-visible,
   border-bottom-color: var(--border-subtle);
 }
 
+.chat-sidebar-brand-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: block;
+  object-fit: contain;
+}
+
 .chat-sidebar-brand-logo {
   position: relative;
-  padding-left: 18px;
+  padding-left: 0;
   color: var(--text-primary);
   background: none;
   font-size: 17px;
   font-weight: 720;
   letter-spacing: -0.02em;
   animation: none;
-}
-
-.chat-sidebar-brand-logo::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-light);
-  transform: translateY(-50%) rotate(45deg);
 }
 
 .chat-sidebar-nav {
