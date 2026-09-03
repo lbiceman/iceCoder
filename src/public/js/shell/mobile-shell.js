@@ -229,7 +229,10 @@ window.MobileShell = (function () {
         '<button type="button" class="mobile-top-bar-menu-btn" aria-label="打开会话列表" aria-expanded="false">' +
           ic('menu', 22) +
         '</button>';
-      center.innerHTML = '<span class="mobile-top-bar-brand">IceCoder</span>' + getConnectionDot();
+      center.innerHTML =
+        '<img class="mobile-top-bar-brand-icon" src="/icons/logo.png" width="22" height="22" alt="">' +
+        '<span class="mobile-top-bar-brand">IceCoder</span>' +
+        getConnectionDot();
       right.innerHTML = themeBtnHtml();
       var menuBtn = left.querySelector('.mobile-top-bar-menu-btn');
       if (menuBtn) {

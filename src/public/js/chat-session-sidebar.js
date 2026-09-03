@@ -62,6 +62,7 @@ window.ChatSessionSidebar = (function () {
     sidebar.className = 'chat-session-sidebar';
     sidebar.innerHTML =
       '<div class="chat-sidebar-brand">' +
+        '<img class="chat-sidebar-brand-icon" src="/icons/logo.png" width="28" height="28" alt="">' +
         '<span class="chat-sidebar-brand-logo">IceCoder</span>' +
       '</div>' +
       '<nav class="chat-sidebar-nav" role="tablist" aria-label="主导航">' +

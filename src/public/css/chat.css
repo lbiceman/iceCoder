@@ -320,7 +320,13 @@
 
 .chat-welcome-logo {
   flex-shrink: 0;
-  color: var(--accent);
+}
+
+.chat-welcome-logo-img {
+  display: block;
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
 }
 
 .chat-welcome-title {
@@ -2172,9 +2178,17 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 10px;
   border-bottom: 1px solid var(--border-light);
+}
+
+.chat-sidebar-brand-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: block;
+  object-fit: contain;
 }
 
 .chat-sidebar-brand-logo {
