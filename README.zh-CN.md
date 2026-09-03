@@ -1,6 +1,6 @@
 # iceCoder
 
-**自托管 AI 编程助手，桌面端 + 移动端全覆盖** — L1/L2 双模监管、MCP 工具集成、会话检查点与文件记忆，Harness 实测 217+ 轮稳定运行。Windows 一键安装，零依赖开箱即用。
+**自托管 AI 编程助手，桌面端 + 移动端全覆盖** — L0/L1/L3 单轴监管、MCP 工具集成、会话检查点与文件记忆，Harness 实测 217+ 轮稳定运行。Windows 一键安装，零依赖开箱即用。
 
 [English README](./README.md) · [**使用说明与命令**](./docs/使用文档.md) · [项目介绍](./docs/项目介绍.md) · [Project guide](./docs/PROJECT-GUIDE.md)
 
@@ -95,13 +95,15 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 
 ## 核心能力
 
-### 双模运行时（L0 / L1 / L2）
+### 单轴运行时监管（L0 / L1 / L3）
 
-三层分工：**L0** 是你在 Web 侧栏底栏切换的监管档位（`off` / `adaptive` / `strict`），决定整体松紧；**L1** 是 Harness 内的 `free` ↔ `forced` 执行模式，在风险升高时收紧工具门禁（`ToolGate`、分支预算、TaskGraph 约束）；**L2** 在后台观察 `no_progress`、`file_loop`、`tool_repeat_fail`、`goal_drift` 等信号，必要时 **takeover → 纠偏 → handoff** 交还主循环，事件写入 `supervisor-events.jsonl`。
+三层分工：**L0** 是你在 Web 侧栏底栏切换的监管档位（`off` / `adaptive` / `strict`），决定整体松紧；**L1** 是 Harness 内的 `free` ↔ `forced` 执行模式，在风险升高时收紧工具门禁（`ToolGate`、分支预算、TaskGraph 约束）；**L3** 是 TaskGraph 合约的确定性硬拦截（`block` / `force_switch`，无 fallback 时 `user_checkpoint`）。
 
-- **adaptive**（默认）：按任务风险在自由与强约束间切换，适合日常编码；**strict** 全程偏 forced，首轮即建图，部分 L2 场景（如 file_loop）须此档。
-- 与 **TaskGraph**、**Verification Gate** 联动：改过代码未跑验证不能「口头完工」；`critical_*` 域映射影响 L2 是否可接管。
-- 配置：`data/config.json` 的 `supervisorMode` + `data/supervisor-config.json`；支持 `ICE_SUPERVISOR_SHADOW=1` 影子对照。
+> 原 **L2**（takeover / PassiveObserver / CorrectionPort / EventTimeline）已于 2026-08-31 删除，见 [`docs/L2监管层详解.md`](./docs/L2监管层详解.md)。
+
+- **adaptive**（默认）：按任务风险在自由与强约束间切换，适合日常编码；**strict** 全程偏 forced，关键工程任务首轮即建图。
+- 与 **TaskGraph**、**Verification Gate** 联动：工程源码变更会提示跑单测；Gate 与监管职责分离。
+- 配置：`data/config.json` 的 `supervisorMode` + `data/supervisor-config.json`（仅 `mode` + `executionMode`）。
 
 ### Harness 主循环与 TaskGraph
 
@@ -115,7 +117,7 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 
 仅 **Web 聊天页** 的 Canvas 宠物「冰豆」，把后端 Harness / Supervisor / TaskGraph 事件映射成可见反馈，**不参与**运行时决策。
 
-- **L0 眼色**：侧栏底栏 `off` / `adaptive` / `strict` 三档对应不同瞳孔/高光；欢迎页同步展示 Harness 与 L2·Gate 状态。
+- **L0 眼色**：侧栏底栏 `off` / `adaptive` / `strict` 三档对应不同瞳孔/高光；欢迎页同步展示 Harness 与 Gate 状态。
 - **L1 角标**：底部 `forced · …` chip，与 `execution_mode_enter` 原因对齐。
 - **表情与 token 环**：约 20 种表情（运行中、等待工具、成功、失败、压缩等）+ 外圈 token 用量；任务图步骤摘要与「第 N 轮」文案同步 WebSocket 事件。
 
@@ -183,10 +185,10 @@ Node.js **22+**（必需，与 `engines.node >=22` 一致）· 开发数据 `./d
 
 ### 遥测与可观测性
 
-Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/telemetry.jsonl` 与 `supervisor-events.jsonl`。
+Harness 轮次、记忆操作、L1 模式切换写入 `data/*/telemetry.jsonl`（`execution_mode_enter` / `exit`）。旧 L2 `supervisor-events.jsonl` 不再读取。
 
-- Web：**`~telemetry`**、**`~supervisor`**（可 `days=` / `event=` / `limit=`）、**`~memory`** 等；输入 `~` 可打开命令面板。
-- HTTP：`GET /api/supervisor/events` 等与聊天命令等价；便于排障长任务与对照 shadow 模式。
+- Web：**`~telemetry`**、**`~supervisor`**（可 `days=`）、**`~memory`** 等；输入 `~` 可打开命令面板。
+- HTTP：`GET /api/supervisor/events` 返回 Execution Mode 进入/退出遥测。
 - 命令与路径详见 [`docs/使用文档.md`](./docs/使用文档.md)。
 
 ### 测试与质量基线
@@ -236,13 +238,13 @@ Harness 轮次、记忆操作、L1 模式切换、L2 Timeline 等写入 `data/*/
 
 ```text
 CLI / Web / WS / 移动端 H5 → 记忆 + 技能召回 → Harness（工具、验收、压缩）
-  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 27 工具 + MCP
+  → TaskGraph → Supervisor L0/L1/L3 → Checkpoint + BranchBudget → 27 工具 + MCP
 ```
 
 | 模块 | 作用 |
 |------|------|
 | **Harness** | 主循环、验收门禁、压缩、遥测 |
-| **Supervisor** | L1 执行模式 + L2 接管/交还 |
+| **Supervisor** | L0 档位 + L1 free/forced + L3 图硬约束 |
 | **TaskGraph** | 结构化计划注入 |
 | **文件记忆** | Memory v2：分级 / 证据强度 / 冲突裁决 + 会话笔记 |
 | **Skills** | `ICE_SKILLS_DIR` 技能 Markdown；`#` 注入 + 技能页 |
