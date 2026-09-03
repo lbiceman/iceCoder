@@ -1,5 +1,5 @@
 # Create Start Menu shortcut and set AppUserModelID for Windows toast header icon.
-# Uses icon.ico generated from src/public/icons/favicon.svg (same as browser favicon).
+# Uses icon.ico generated from src/public/icons/logo.png (same as the homepage brand mark).
 param(
     [Parameter(Mandatory = $true)][string]$ShortcutPath,
     [Parameter(Mandatory = $true)][string]$TargetPath,

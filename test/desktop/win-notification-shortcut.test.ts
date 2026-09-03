@@ -8,7 +8,7 @@ import {
 } from '../../desktop/src/win-notification-shortcut.js';
 
 describe('resolveNotificationShortcutIconPath', () => {
-  it('优先 icon.ico（favicon 同源）', () => {
+  it('优先 icon.ico（首页品牌标同源）', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ice-notify-icon-'));
     const ico = path.join(dir, 'icon.ico');
     fs.writeFileSync(ico, 'x');

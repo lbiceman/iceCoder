@@ -1,9 +1,10 @@
-冰豆应用图标资源
+应用图标资源
 
-- （源）src/public/icons/favicon.svg  Web 与桌面共用矢量源
-- icon.png        512×512，Linux / electron-builder 通用源（由脚本生成）
-- icon.ico        Windows 安装包、任务栏、**系统通知左上角**（由 favicon.svg 生成，圆外透明）
-- tray-icon.png   32×32 系统托盘（由脚本生成）
+- （源）src/public/icons/logo.png  首页 / 侧栏品牌标，桌面图标从这张图缩放生成
+- icon.png        512×512，Linux / electron-builder 通用源
+- icon.ico        Windows 安装包、任务栏、系统通知左上角
+- tray-icon.png   32×32 系统托盘
+- notification-app-logo.png  44×44 通知备用标
 
 生成 PNG / ICO：
 
