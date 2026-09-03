@@ -564,30 +564,18 @@ Environment: Web chat · Windows · models z-ai/glm-5.1 / minimax-m2.5 · see [`
 | C multi-file create | adaptive | ✅ |
 | D strict graph | strict | ✅ |
 | E checkpoint | adaptive | ✅ |
-| F tool failures | adaptive | ⚠️ L1 ✅; L2 logs `tool_repeat_fail` not `no_progress` |
+| F tool failures | adaptive | ✅ L1 forced / circuit breaker（旧 L2 `no_progress` 口径已不适用） |
 | G off control | off | ✅ |
 | H long session | adaptive | ✅ |
 
-**L2 supervision signals — L2-1–L2-7 (7)**
-
-| Scenario | Mode | Result |
-|----------|------|--------|
-| L2-1 no_progress | adaptive | ✅ |
-| L2-2 goal_drift | adaptive | ✅ |
-| L2-3 tool_repeat_fail | adaptive | ✅ |
-| L2-4 lifecycle | adaptive | ⚠️ conditional (Timeline OK; chat bubble may be hidden) |
-| L2-5 graph_hint | **strict** | ✅ best (30+ `recover · graph_hint`) |
-| L2-6 file_loop | **strict** | ✅ strict ×2; adaptive R5 exit → not triggered |
-| L2-7 takeover | adaptive + stacked signals | ✅ automation; **Web full chain pending** |
-
-**Manual total:** **15** Web scenarios (8 + 7) · **13 passed** · **2 partial/pending** (F signal semantics, L2-4 / L2-7 Web)
+> **L2-1–L2-7 手工场景（2026-05）已作废。** takeover / Timeline / graph_hint 随 2026-08-31 L2 删除；勿再按 [`requirement/L2测试过程.md`](./requirement/L2测试过程.md) 验收现行版本。现行监管验收以 L0/L1/L3 + `npm test` 为准。
 
 ### Release gate
 
 1. `npx tsc --noEmit` — 0 errors  
 2. `npm test` — all green (default config)  
 3. `data/config.json` → `supervisorMode: off` — harness suites zero regression  
-4. After `supervisor/` changes: rerun `dual-mode-scenarios` + `supervisor-bridge` + `recovery-boundary`
+4. After `supervisor/` changes: rerun dual-mode / execution-mode related tests（`supervisor-bridge` / `recovery-boundary` 等旧套件若已删除则跳过）
 
 ---
 
