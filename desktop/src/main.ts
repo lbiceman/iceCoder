@@ -51,7 +51,11 @@ function resolveAppIcon(): Electron.NativeImage {
   return nativeImage.createEmpty();
 }
 
-/** 纯文字系统通知；Windows 标题栏应用图标由系统强制展示，应用侧无法移除。 */
+/**
+ * 纯文字系统通知。
+ * Windows 标题栏小标由 AUMID / 开始菜单快捷方式的 icon.ico 提供；
+ * 不要传 Notification.icon，否则会在正文左侧再画一张大图。
+ */
 function showTaskDoneSystemNotification(decision: {
   title: string;
   body: string;
