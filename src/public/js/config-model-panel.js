@@ -135,7 +135,7 @@ window.ModelConfigPanel = (function () {
       autoSaveDefaultTimer = null;
       var data = collectFormData();
       for (var i = 0; i < data.length; i++) {
-        if (Object.keys(validateProvider(data[i])).length > 0) return;
+        if (Object.keys(validateProvider(data[i], providers[i])).length > 0) return;
       }
       saveConfig(data, function (err) {
         if (err) {
@@ -210,13 +210,14 @@ window.ModelConfigPanel = (function () {
     return String(value || '').trim();
   }
 
-  function validateProvider(prov) {
+  function validateProvider(prov, original) {
     var errors = {};
+    var keySource = original || prov;
     if (!prov.apiUrl || prov.apiUrl.trim() === '') {
       errors.apiUrl = '请填写 API 地址';
     }
     // 密钥来自环境变量时允许留空
-    if (hasEnvApiKey(prov)) {
+    if (hasEnvApiKey(keySource)) {
       // 不校验 apiKey
     } else if (!prov.apiKey || prov.apiKey.trim() === '') {
       errors.apiKey = '请填写 API 密钥';
@@ -230,7 +231,35 @@ window.ModelConfigPanel = (function () {
     if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses') {
       errors.apiMode = 'apiMode 仅支持 chat_completions 或 responses';
     }
+    if (original && original._headersParseError) {
+      errors.headers = original._headersParseError;
+    }
     return errors;
+  }
+
+  function formatProviderHeaders(headers) {
+    if (!headers || typeof headers !== 'object') return '';
+    return Object.keys(headers).map(function (key) {
+      return key + ': ' + String(headers[key]);
+    }).join('\n');
+  }
+
+  function parseProviderHeadersText(text) {
+    var lines = String(text || '').split(/\r?\n/);
+    var out = {};
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line || line.charAt(0) === '#') continue;
+      var colon = line.indexOf(':');
+      if (colon <= 0) {
+        return { error: '每行格式为 Header-Name: value' };
+      }
+      var name = line.slice(0, colon).trim();
+      var value = line.slice(colon + 1).trim();
+      if (!name) return { error: '请求头名称不能为空' };
+      out[name] = value;
+    }
+    return { headers: Object.keys(out).length ? out : undefined };
   }
 
   function escapeAttr(str) {
@@ -252,7 +281,7 @@ window.ModelConfigPanel = (function () {
   }
 
   function clearFieldErrors(detailEl) {
-    var inputs = detailEl.querySelectorAll('input.error');
+    var inputs = detailEl.querySelectorAll('input.error, textarea.error');
     for (var i = 0; i < inputs.length; i++) {
       inputs[i].classList.remove('error');
     }
@@ -272,6 +301,7 @@ window.ModelConfigPanel = (function () {
     var temperature = detailEl.querySelector('[data-field="temperature"]');
     var maxContext = detailEl.querySelector('[data-field="maxContextTokens"]');
     var apiMode = detailEl.querySelector('[data-field="apiMode"]');
+    var headersEl = detailEl.querySelector('[data-field="headers"]');
     if (apiUrl) prov.apiUrl = apiUrl.value.trim();
     if (apiKey) {
       prov.apiKey = apiKey.value;
@@ -297,6 +327,16 @@ window.ModelConfigPanel = (function () {
       } else {
         prov.apiMode = mode;
         if (prov.parameters) delete prov.parameters.apiMode;
+      }
+    }
+    if (headersEl) {
+      var parsedHeaders = parseProviderHeadersText(headersEl.value);
+      if (parsedHeaders.error) {
+        prov._headersParseError = parsedHeaders.error;
+      } else {
+        delete prov._headersParseError;
+        if (parsedHeaders.headers) prov.headers = parsedHeaders.headers;
+        else delete prov.headers;
       }
     }
   }
@@ -391,6 +431,14 @@ window.ModelConfigPanel = (function () {
           '<label for="model-maxContextTokens-' + index + '">上下文上限（Token）</label>' +
           '<input type="number" id="model-maxContextTokens-' + index + '" data-field="maxContextTokens" placeholder="例如 131072" min="1" value="' + (prov.maxContextTokens != null ? prov.maxContextTokens : '') + '">' +
         '</div>' +
+        '<div class="form-group full-width">' +
+          '<label for="model-headers-' + index + '">额外请求头（headers）</label>' +
+          '<textarea id="model-headers-' + index + '" data-field="headers" rows="3" placeholder="x-opencode-session: {{sessionId}}">' +
+            escapeHtml(formatProviderHeaders(prov.headers)) +
+          '</textarea>' +
+          '<span class="field-hint">每行一条 <code>Header: value</code>。字面量原样发送；动态值仅支持 <code>{{sessionId}}</code>、<code>{{providerId}}</code>、<code>{{model}}</code>。</span>' +
+          '<span class="error-msg" data-error="headers"></span>' +
+        '</div>' +
       '</div>' +
       '<div class="config-detail-toolbar">' +
         '<label class="config-default-switch" title="设为默认模型">' +
@@ -479,6 +527,9 @@ window.ModelConfigPanel = (function () {
         supportsVision: original.supportsVision !== undefined ? original.supportsVision : true,
         maxContextTokens: original.maxContextTokens,
         requestTimeoutMs: original.requestTimeoutMs,
+        ...(original.headers && Object.keys(original.headers).length > 0
+          ? { headers: original.headers }
+          : {}),
         ...(normalizeApiModeInput(resolveApiMode(original)) === 'responses'
           ? { apiMode: 'responses' }
           : {}),
@@ -566,7 +617,7 @@ window.ModelConfigPanel = (function () {
 
       var data = buildProviderPayload(providers);
       for (var i = 0; i < data.length; i++) {
-        if (Object.keys(validateProvider(data[i])).length > 0) {
+        if (Object.keys(validateProvider(data[i], providers[i])).length > 0) {
           Notification.error('无法删除：其余提供者配置不完整，请先完善或删除');
           reloadProvidersFromServer();
           return;
@@ -598,7 +649,7 @@ window.ModelConfigPanel = (function () {
     var data = collectFormData();
     var detailEl = getActiveDetailEl();
     clearFieldErrors(detailEl);
-    var errors = validateProvider(data[selectedIndex]);
+    var errors = validateProvider(data[selectedIndex], providers[selectedIndex]);
     var hasErrors = Object.keys(errors).length > 0;
     if (hasErrors) {
       for (var field in errors) {
@@ -608,7 +659,7 @@ window.ModelConfigPanel = (function () {
     }
 
     for (var i = 0; i < data.length; i++) {
-      if (i !== selectedIndex && Object.keys(validateProvider(data[i])).length > 0) {
+      if (i !== selectedIndex && Object.keys(validateProvider(data[i], providers[i])).length > 0) {
         Notification.error('提供者 #' + (i + 1) + ' 配置不完整，请先完善或删除');
         return;
       }

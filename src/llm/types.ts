@@ -111,8 +111,8 @@ export interface LLMOptions {
   /** 单次 HTTP 请求超时（ms）；未设置时使用适配器构造时的默认值 */
   requestTimeoutMs?: number;
   /**
-   * 会话亲和 ID。OpenCode Go/Zen 会作为 `x-opencode-session` 发送；
-   * 同一会话多轮应保持不变。未设置时由适配器生成稳定兜底值。
+   * 当前会话 ID。配置了 `headers` 且值为 `{{sessionId}}` 时写入对应请求头；
+   * 未设置时由适配器生成稳定兜底值。
    */
   sessionId?: string;
   /** 为 true 时跳过上层 LLMAdapter 的指数退避重试（Dream 等长请求用） */

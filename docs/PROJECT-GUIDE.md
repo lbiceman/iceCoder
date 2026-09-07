@@ -626,7 +626,7 @@ Metrics per case and aggregate:
 
 LLM provider settings are read from **`data/config.json`** by default (see `data/config.example.json`). The server can **watch** that file and reload providers without a full restart (`src/index.ts`).
 
-**Multi-model:** `modelName` accepts comma-separated model ids; `activeModelName` is the one used for API calls and shown in the chat picker. **Vision:** per-provider `supportsVision` (default `true`) — multimodal first, then `LLMAdapter` strips images and retries on API rejection (`src/llm/vision-fallback.ts`); set `supportsVision: false` to route pasted images through `image_read` paths instead.
+**Multi-model:** `modelName` accepts comma-separated model ids; `activeModelName` is the one used for API calls and shown in the chat picker. **Vision:** per-provider `supportsVision` (default `true`) — multimodal first, then `LLMAdapter` strips images and retries on API rejection (`src/llm/vision-fallback.ts`); set `supportsVision: false` to route pasted images through `image_read` paths instead. **Extra HTTP headers:** optional per-provider `headers` (literals or `{{sessionId}}` / `{{providerId}}` / `{{model}}`).
 
 ### UI screenshots
 

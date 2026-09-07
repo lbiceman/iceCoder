@@ -1,4 +1,5 @@
 import type { ProviderConfig } from '../web/types.js';
+import { parseProviderHeaders } from '../llm/provider-request-headers.js';
 
 type RawProvider = ProviderConfig & { providerName?: unknown };
 
@@ -13,7 +14,16 @@ export function normalizeProvider(raw: RawProvider, index: number): ProviderConf
       : '';
   const id = raw.id?.trim() || legacy || `provider-${index + 1}`;
   const { providerName: _legacy, ...rest } = raw;
-  return { ...rest, id };
+  const parsed = parseProviderHeaders(rest.headers);
+  const next: ProviderConfig = { ...rest, id };
+  if (parsed.ok && parsed.headers) next.headers = parsed.headers;
+  else {
+    if (!parsed.ok) {
+      console.warn(`[config] provider ${id}: ${parsed.error}，已忽略 headers`);
+    }
+    delete next.headers;
+  }
+  return next;
 }
 
 export function normalizeProviders(providers: unknown): ProviderConfig[] {

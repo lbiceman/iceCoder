@@ -63,4 +63,23 @@ describe('openAiAdapterConfigFromProvider', () => {
     });
     expect(cfg.model).toBe('mimo-2.5');
   });
+
+  it('passes provider headers through as requestHeaders', () => {
+    const cfg = openAiAdapterConfigFromProvider({
+      ...base,
+      headers: {
+        'x-opencode-session': '{{sessionId}}',
+        'x-opencode-client': 'iceCoder',
+      },
+    });
+    expect(cfg.requestHeaders).toEqual({
+      'x-opencode-session': '{{sessionId}}',
+      'x-opencode-client': 'iceCoder',
+    });
+  });
+
+  it('omits requestHeaders when provider has none', () => {
+    const cfg = openAiAdapterConfigFromProvider(base);
+    expect(cfg.requestHeaders).toBeUndefined();
+  });
 });

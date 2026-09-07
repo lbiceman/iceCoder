@@ -123,7 +123,12 @@ window.ChatDropdown = (function () {
         '</div>';
     }
     elContainer.innerHTML = html;
-    if (current.items.length > 6) {
+    var selectableCount = 0;
+    for (var n = 0; n < current.items.length; n++) {
+      var row = current.items[n];
+      if (row && row.type !== 'separator' && !row.isSeparator) selectableCount++;
+    }
+    if (selectableCount > 6) {
       elContainer.classList.add('is-scrollable');
     } else {
       elContainer.classList.remove('is-scrollable');

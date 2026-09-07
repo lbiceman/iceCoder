@@ -1381,7 +1381,8 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
   padding: 8px 12px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
@@ -1390,13 +1391,22 @@ html[data-shell="mobile"] .settings-etl-panel-width-row {
   background: var(--bg-input);
   transition: border-color var(--transition), box-shadow var(--transition);
 }
+.form-group textarea {
+  width: 100%;
+  min-height: 4.5em;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  line-height: 1.45;
+}
 .form-group input:focus,
-.form-group select:focus {
+.form-group select:focus,
+.form-group textarea:focus {
   outline: none;
   border-color: var(--focus-ring-color, var(--accent));
   box-shadow: 0 0 0 3px var(--focus-ring-glow, var(--accent-glow));
 }
-.form-group input.error { border-color: var(--danger); }
+.form-group input.error,
+.form-group textarea.error { border-color: var(--danger); }
 .form-group .error-msg { color: var(--danger); font-size: 12px; margin-top: 2px; }
 
 .form-group .field-hint {
