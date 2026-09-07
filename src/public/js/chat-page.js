@@ -2073,10 +2073,11 @@ window.ChatPage = (function () {
                 '</button>' +
               '</div>' +
               '<span class="plan-mode-indicator hidden" id="plan-mode-indicator" '
-              + 'title="规划模式：描述任务，完善文档（不能改代码）。输入 /plan exit 退出" '
+              + 'title="规划模式：描述任务，完善文档（不能改代码）" '
               + 'aria-label="plan模式">'
               + (window.AppIcon ? window.AppIcon.html('edit', { width: 13 }) : '')
               + '<span class="plan-mode-label">plan模式</span>'
+              + '<button type="button" class="plan-mode-indicator-remove" id="btn-plan-mode-exit" title="关闭规划模式" aria-label="关闭规划模式">×</button>'
               + '</span>' +
               '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
               + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
@@ -2106,6 +2107,14 @@ window.ChatPage = (function () {
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
     elPlanModeIndicator = container.querySelector('#plan-mode-indicator');
+    var elPlanModeExitBtn = container.querySelector('#btn-plan-mode-exit');
+    if (elPlanModeExitBtn) {
+      elPlanModeExitBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (WS && typeof WS.send === 'function') WS.send({ type: 'plan_mode_exit' });
+      });
+    }
     mainInputWrapper = container.querySelector('.input-wrapper');
     bindComposerInteractions();
     mounted = true;

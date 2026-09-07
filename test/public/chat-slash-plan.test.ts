@@ -29,6 +29,8 @@ describe('规划模式走 / 面板', () => {
     expect(page).not.toContain('shell-mode-chip-bar');
     expect(page).toContain('plan-mode-indicator');
     expect(page).toContain('plan模式');
+    expect(page).toContain('btn-plan-mode-exit');
+    expect(page).toContain("type: 'plan_mode_exit'");
     expect(page).toContain('shell-collab-indicator');
     expect(page).toContain('Shell协作');
   });
