@@ -37,6 +37,7 @@ import {
 import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
+import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
 import {
   buildUserMessageWithImages,
   persistInlineImages,
@@ -131,6 +132,7 @@ export interface HandleChatMessageInput {
   clientMessageId?: string | null;
   skipUserMessageAppend?: boolean;
   source?: 'implicit' | 'explicit';
+  reasoningEffort?: ReasoningEffort;
 }
 
 /** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
@@ -221,6 +223,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const inlineImages = input.images ?? [];
   const referencePaths = input.referencePaths ?? [];
   const clientMessageId = input.clientMessageId ?? null;
+  const reasoningEffort = parseReasoningEffort(input.reasoningEffort);
   const options = {
     skipUserMessageAppend: input.skipUserMessageAppend,
     source: input.source,
@@ -583,6 +586,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         ...opts,
         signal: abortController.signal,
         sessionId: runSessionId,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
       }),
       (event) => {
         foldStepIntoRunningTurn(runSessionId, event);
@@ -666,6 +670,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         ...opts,
         signal: abortController.signal,
         sessionId: runSessionId,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
       }),
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );

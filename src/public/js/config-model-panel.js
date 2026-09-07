@@ -234,6 +234,9 @@ window.ModelConfigPanel = (function () {
     if (original && original._headersParseError) {
       errors.headers = original._headersParseError;
     }
+    if (original && original._reasoningEffortParseError) {
+      errors.reasoningEffort = original._reasoningEffortParseError;
+    }
     return errors;
   }
 
@@ -260,6 +263,27 @@ window.ModelConfigPanel = (function () {
       out[name] = value;
     }
     return { headers: Object.keys(out).length ? out : undefined };
+  }
+
+  var REASONING_EFFORT_TOKEN_RE = /^[a-z][\w.-]{0,31}$/i;
+
+  function parseReasoningEffortInput(text) {
+    var trimmed = String(text || '').trim();
+    if (!trimmed) return { stored: undefined };
+    var seen = {};
+    var out = [];
+    var parts = trimmed.split(',');
+    for (var i = 0; i < parts.length; i++) {
+      var token = parts[i].trim().toLowerCase();
+      if (!token) continue;
+      if (!REASONING_EFFORT_TOKEN_RE.test(token)) {
+        return { error: '推理强度含非法档位：' + parts[i].trim() };
+      }
+      if (seen[token]) continue;
+      seen[token] = true;
+      out.push(token);
+    }
+    return { stored: out.length ? out.join(',') : undefined };
   }
 
   function escapeAttr(str) {
@@ -302,6 +326,7 @@ window.ModelConfigPanel = (function () {
     var maxContext = detailEl.querySelector('[data-field="maxContextTokens"]');
     var apiMode = detailEl.querySelector('[data-field="apiMode"]');
     var headersEl = detailEl.querySelector('[data-field="headers"]');
+    var reasoningEffortEl = detailEl.querySelector('[data-field="reasoningEffort"]');
     if (apiUrl) prov.apiUrl = apiUrl.value.trim();
     if (apiKey) {
       prov.apiKey = apiKey.value;
@@ -337,6 +362,16 @@ window.ModelConfigPanel = (function () {
         delete prov._headersParseError;
         if (parsedHeaders.headers) prov.headers = parsedHeaders.headers;
         else delete prov.headers;
+      }
+    }
+    if (reasoningEffortEl) {
+      var parsedEffort = parseReasoningEffortInput(reasoningEffortEl.value);
+      if (parsedEffort.error) {
+        prov._reasoningEffortParseError = parsedEffort.error;
+      } else {
+        delete prov._reasoningEffortParseError;
+        if (parsedEffort.stored) prov.reasoningEffort = parsedEffort.stored;
+        else delete prov.reasoningEffort;
       }
     }
   }
@@ -413,6 +448,12 @@ window.ModelConfigPanel = (function () {
           '<input type="text" id="model-modelName-' + index + '" data-field="modelName" placeholder="例如 gpt-4o 或 mimo2.5-pro,mimo-2.5" value="' + escapeAttr(prov.modelName || '') + '">' +
           '<span class="field-hint">多个模型用英文逗号分隔，聊天时可分别选择</span>' +
           '<span class="error-msg" data-error="modelName"></span>' +
+        '</div>' +
+        '<div class="form-group full-width">' +
+          '<label for="model-reasoningEffort-' + index + '">推理强度</label>' +
+          '<input type="text" id="model-reasoningEffort-' + index + '" data-field="reasoningEffort" placeholder="low,high,max" value="' + escapeAttr(prov.reasoningEffort || '') + '">' +
+          '<span class="field-hint">英文逗号分隔，例如 <code>low,high,max</code>。选中值原样作为 <code>reasoning_effort</code> 发送；留空则不发送。</span>' +
+          '<span class="error-msg" data-error="reasoningEffort"></span>' +
         '</div>' +
         '<div class="form-group full-width">' +
           '<label for="model-apiMode-' + index + '">API 模式（apiMode）</label>' +
@@ -530,6 +571,7 @@ window.ModelConfigPanel = (function () {
         ...(original.headers && Object.keys(original.headers).length > 0
           ? { headers: original.headers }
           : {}),
+        ...(original.reasoningEffort ? { reasoningEffort: original.reasoningEffort } : {}),
         ...(normalizeApiModeInput(resolveApiMode(original)) === 'responses'
           ? { apiMode: 'responses' }
           : {}),

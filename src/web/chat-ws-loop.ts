@@ -7,6 +7,7 @@ import { formatFriendlyError } from '../cli/friendly-errors.js';
 import type { Orchestrator } from '../core/orchestrator.js';
 import type { MCPManager } from '../mcp/mcp-manager.js';
 import type { StopReason } from '../harness/types.js';
+import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
 import {
   getTaskQueueManager,
   type QueuedTask,
@@ -48,10 +49,12 @@ export interface PendingChatMessage {
   messageId?: string;
   source: 'implicit' | 'explicit';
   skipUserMessageAppend?: boolean;
+  reasoningEffort?: ReasoningEffort;
   ws: WebSocket;
 }
 
 export function queuedTaskToPending(task: QueuedTask, ws: WebSocket): PendingChatMessage {
+  const reasoningEffort = parseReasoningEffort(task.reasoningEffort);
   return {
     content: task.text,
     images: task.images ?? [],
@@ -60,6 +63,7 @@ export function queuedTaskToPending(task: QueuedTask, ws: WebSocket): PendingCha
     source: task.source,
     skipUserMessageAppend: task.source === 'implicit' && !!task.messageId,
     ws,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 }
 
@@ -205,6 +209,7 @@ export async function runSessionMessageLoop(
           runSessionId: runSid,
           skipUserMessageAppend: current.skipUserMessageAppend,
           source: current.source,
+          reasoningEffort: current.reasoningEffort,
         });
       } catch (err) {
         broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });

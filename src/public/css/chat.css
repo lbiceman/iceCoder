@@ -1606,9 +1606,7 @@
 }
 
 /* 底部模型 chip：点击后显示下拉指示。
-   flex item 默认 min-width:auto=min(content)，会突破 max-width；
-   必须显式设 min-width:0 且给 chip 自身一个 flex-basis，
-   text-overflow:ellipsis 才能真正生效。 */
+   按内容收缩，长名称上限 160px 并 ellipsis；min-width:0 避免撑破工具栏。 */
 .chip.chip-select {
   position: relative;
   display: inline-flex;
@@ -1625,9 +1623,10 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  flex: 0 1 160px;       /* 默认 160px，可被父 flex 容器压缩 */
+  flex: 0 1 auto;
   max-width: 160px;
   min-width: 0;
+  width: auto;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 .chip.chip-select:hover {
@@ -1653,13 +1652,105 @@
 }
 .chip.chip-select .chip-label {
   display: block;
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-width: 0;
-  width: 100%;
+  width: auto;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 推理强度：档位来自模型配置，条数与标签动态生成 */
+.reasoning-stepper {
+  --step: 0;
+  --count: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  margin-right: 2px;
+  padding: 0 8px 0 10px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.reasoning-stepper.is-empty,
+.reasoning-stepper[hidden] {
+  display: none;
+}
+.reasoning-stepper:hover,
+.reasoning-stepper:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 55%, transparent);
+  color: var(--text-primary);
+  outline: none;
+}
+.reasoning-stepper.is-dragging {
+  cursor: grabbing;
+  background: color-mix(in srgb, var(--bg-hover) 80%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 65%, transparent);
+}
+
+.reasoning-stepper-label {
+  display: grid;
+  justify-items: start;
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  color: inherit;
+}
+.reasoning-stepper-label > span {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+}
+.reasoning-stepper-label > span.is-current {
+  visibility: visible;
+}
+
+.reasoning-stepper-track {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  width: 20px;
+  height: 28px;
+  padding: 7px 0;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.reasoning-stepper-bar {
+  width: 2.5px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--text-muted) 34%, transparent);
+  transition: background 140ms ease;
+  pointer-events: none;
+}
+.reasoning-stepper-bar:nth-child(1) { height: 5px; }
+.reasoning-stepper-bar:nth-child(2) { height: 8px; }
+.reasoning-stepper-bar:nth-child(3) { height: 11px; }
+.reasoning-stepper-bar:nth-child(4) { height: 14px; }
+.reasoning-stepper-bar:nth-child(n+5) { height: 14px; }
+
+.reasoning-stepper-bar.is-on {
+  background: color-mix(in srgb, var(--text-primary) 82%, transparent);
+}
+
+@media (max-width: 640px) {
+  .reasoning-stepper-label { display: none; }
+  .reasoning-stepper { padding: 0 8px; margin-right: 0; }
+}
+
+[data-shell="mobile"] .reasoning-stepper-label {
+  display: none;
 }
 
 /* 统一下拉浮层（由 ChatDropdown 挂到 body 顶层、position:fixed）；

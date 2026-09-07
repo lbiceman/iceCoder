@@ -37,6 +37,11 @@ import { endTiming, harnessTimingEnabled, markTimingStart, recordHarnessTiming }
 import {
   resolveProviderRequestHeaders,
 } from './provider-request-headers.js';
+import {
+  applyReasoningEffortToChatParams,
+  parseReasoningEffort,
+  resolveWireReasoningEffort,
+} from './reasoning-effort.js';
 
 export { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 
@@ -46,6 +51,7 @@ const FIXED_CHAT_PARAM_KEYS = [
   'messages',
   'stream',
   'tools',
+  'reasoning_effort',
   'temperature',
   'max_tokens',
   'top_p',
@@ -105,6 +111,8 @@ export interface OpenAIAdapterConfig {
   apiMode?: OpenAiApiMode;
   /** 发给该厂商的额外 HTTP 请求头模板（{{sessionId}} 等在请求时展开） */
   requestHeaders?: Record<string, string>;
+  /** 该厂商配置的推理强度档位；为空则不发送 reasoning_effort */
+  reasoningEffortLevels?: string[];
   [key: string]: any;
 }
 
@@ -122,6 +130,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
   private apiMode: OpenAiApiMode;
   private readonly requestHeaderTemplates: Record<string, string>;
+  private readonly reasoningEffortLevels: string[];
   /** 配置了 {{sessionId}} 但调用方未传会话时的稳定兜底值 */
   private readonly fallbackSessionId: string;
 
@@ -129,6 +138,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     this.name = config.name ?? 'openai';
     this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
     this.requestHeaderTemplates = { ...(config.requestHeaders ?? {}) };
+    this.reasoningEffortLevels = [...(config.reasoningEffortLevels ?? [])];
     this.fallbackSessionId = randomUUID();
     this.model = config.model;
     // 视觉支持：显式配置 > 默认开启
@@ -152,6 +162,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       supportsVision,
       apiMode: _apiMode,
       requestHeaders: _requestHeaders,
+      reasoningEffortLevels: _reasoningEffortLevels,
       ...rest
     } = config;
     this.defaultParams = rest;
@@ -213,18 +224,34 @@ export class OpenAIAdapter implements ProviderAdapter {
     return `, extraHeaders=${Object.keys(headers).join(',')}`;
   }
 
+  private effortLogFrag(options: LLMOptions): string {
+    const effort = parseReasoningEffort(options.reasoningEffort);
+    return effort ? `, reasoning=${effort}` : '';
+  }
+
+  private withResolvedEffort(options: LLMOptions): LLMOptions {
+    const effort = resolveWireReasoningEffort(options.reasoningEffort, this.reasoningEffortLevels);
+    if (!effort) {
+      if (!options.reasoningEffort) return options;
+      const { reasoningEffort: _drop, ...rest } = options;
+      return rest;
+    }
+    return { ...options, reasoningEffort: effort };
+  }
+
   /**
    * 向 OpenAI Chat Completions API 发送聊天请求。
    * 将 UnifiedMessage[] 转换为 OpenAI 格式，发送请求，再将响应转换回来。
    */
   async chat(messages: UnifiedMessage[], options: LLMOptions): Promise<LLMResponse> {
     try {
+      options = this.withResolvedEffort(options);
       const signal = options.signal ?? undefined;
       if (signal?.aborted) throw makeAbortedError(this.name);
 
       if (this.apiMode === 'responses') {
         console.log(
-          `[OpenAI] responses 请求 → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个`,
+          `[OpenAI] responses 请求 → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个${this.effortLogFrag(options)}`,
         );
         const startTime = Date.now();
         const result = await responsesChat(
@@ -248,7 +275,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
       const reqOpts = this.buildRequestOptions(options, signal);
       console.log(
-        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms${this.extraHeadersLogFrag(reqOpts.headers)}`,
+        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms${this.effortLogFrag(options)}${this.extraHeadersLogFrag(reqOpts.headers)}`,
       );
       const startTime = Date.now();
       const response = await this.client.chat.completions.create(params, reqOpts);
@@ -284,12 +311,13 @@ export class OpenAIAdapter implements ProviderAdapter {
     options: LLMOptions,
   ): Promise<LLMResponse> {
     try {
+      options = this.withResolvedEffort(options);
       const signal = options.signal ?? undefined;
       if (signal?.aborted) throw makeAbortedError(this.name);
 
       if (this.apiMode === 'responses') {
         console.log(
-          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个`,
+          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个${this.effortLogFrag(options)}`,
         );
         const startTime = Date.now();
         const result = await responsesStream(
@@ -313,7 +341,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       endTiming('llm_serialize', serializeStartedAt);
 
       const reqOpts = this.buildRequestOptions(options, signal);
-      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个${this.extraHeadersLogFrag(reqOpts.headers)}`);
+      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个${this.effortLogFrag(options)}${this.extraHeadersLogFrag(reqOpts.headers)}`);
       const startTime = Date.now();
       const timingOn = harnessTimingEnabled();
       let firstTokenMs: number | undefined;
@@ -666,6 +694,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     // 透传提供者特定参数（如 NVIDIA 的 chat_template_kwargs）
+    applyReasoningEffortToChatParams(
+      params,
+      resolveWireReasoningEffort(options.reasoningEffort, this.reasoningEffortLevels),
+    );
+
     if (options.chatTemplateKwargs) {
       params.chat_template_kwargs = options.chatTemplateKwargs;
     }

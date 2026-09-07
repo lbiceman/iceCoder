@@ -3,6 +3,8 @@
  * 定义统一消息格式、响应类型、提供者适配器接口以及配置类型。
  */
 
+import type { ReasoningEffort } from './reasoning-effort.js';
+
 /**
  * 统一消息中的内容块（文本或图片）。
  */
@@ -119,6 +121,11 @@ export interface LLMOptions {
   skipRetry?: boolean;
   /** 为 true 时 API 报错后不自动 strip 图片重试（如 image_read 必须看到原图） */
   skipVisionFallback?: boolean;
+  /**
+   * 当前请求的推理强度档位（须落在该 provider 配置的逗号列表中）。
+   * Chat Completions 写入 reasoning_effort；Responses API 写入 reasoning.effort。
+   */
+  reasoningEffort?: ReasoningEffort;
   [key: string]: any;
 }
 

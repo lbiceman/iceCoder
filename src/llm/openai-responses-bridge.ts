@@ -12,6 +12,10 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import { collapseUnifiedSystemMessages } from './openai-message-utils.js';
+import {
+  applyReasoningEffortToResponsesParams,
+  parseReasoningEffort,
+} from './reasoning-effort.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
 import {
   cleanText,
@@ -145,6 +149,8 @@ function buildResponsesParams(
   if (prepared?.length) {
     params.tools = convertResponsesTools(prepared);
   }
+
+  applyReasoningEffortToResponsesParams(params, parseReasoningEffort(options.reasoningEffort));
 
   return params as OpenAI.Responses.ResponseCreateParams;
 }

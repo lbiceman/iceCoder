@@ -72,6 +72,13 @@ describe('chat-ws-loop', () => {
       source: 'explicit',
       enqueuedAt: Date.now(),
     }, ws).skipUserMessageAppend).toBe(false);
+    expect(queuedTaskToPending({
+      id: 't3',
+      text: 'hello',
+      source: 'implicit',
+      enqueuedAt: Date.now(),
+      reasoningEffort: 'high',
+    }, ws).reasoningEffort).toBe('high');
   });
 
   it('会话 busy 时 enqueue 只入队不 kickoff', async () => {
@@ -147,6 +154,28 @@ describe('chat-ws-loop', () => {
     }>;
     expect(runStates[0]).toMatchObject({ sessionId: sid, phase: 'running' });
     expect(runStates[runStates.length - 1]).toMatchObject({ phase: 'done' });
+  });
+
+  it('kickoff 把 reasoningEffort 传给 handleChatMessage', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    addChatClient(ws);
+    await enqueueAndMaybeKickoff(dummyDeps, sid, ws, {
+      text: 'go now',
+      source: 'implicit',
+      messageId: 'm-effort',
+      reasoningEffort: 'low',
+    });
+    await vi.waitFor(() => {
+      expect(handleChatMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(vi.mocked(handleChatMessage).mock.calls[0]?.[0]).toMatchObject({
+      reasoningEffort: 'low',
+    });
+    await vi.waitFor(() => {
+      expect(sessionProcessing.has(sid)).toBe(false);
+    });
   });
 
   it('model_done 会继续执行队列中下一项', async () => {

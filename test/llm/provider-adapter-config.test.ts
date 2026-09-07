@@ -82,4 +82,17 @@ describe('openAiAdapterConfigFromProvider', () => {
     const cfg = openAiAdapterConfigFromProvider(base);
     expect(cfg.requestHeaders).toBeUndefined();
   });
+
+  it('parses reasoningEffort comma list into adapter levels', () => {
+    const cfg = openAiAdapterConfigFromProvider({
+      ...base,
+      reasoningEffort: 'low, high, max',
+    });
+    expect(cfg.reasoningEffortLevels).toEqual(['low', 'high', 'max']);
+  });
+
+  it('omits reasoningEffortLevels when provider leaves the field empty', () => {
+    const cfg = openAiAdapterConfigFromProvider(base);
+    expect(cfg.reasoningEffortLevels).toBeUndefined();
+  });
 });

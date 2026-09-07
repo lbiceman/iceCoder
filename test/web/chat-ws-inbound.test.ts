@@ -214,6 +214,36 @@ describe('chat-ws-inbound', () => {
     });
   });
 
+  it('普通 message 会把合法 reasoningEffort 带入队列', async () => {
+    const sid = uniqueSid('inbound-effort');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({
+      type: 'message',
+      content: 'think hard',
+      reasoningEffort: 'xhigh',
+    })));
+    expect(vi.mocked(enqueueAndMaybeKickoff).mock.calls[0]?.[3]).toMatchObject({
+      text: 'think hard',
+      reasoningEffort: 'xhigh',
+    });
+  });
+
+  it('非法 reasoningEffort 不会写入队列', async () => {
+    const sid = uniqueSid('inbound-effort-bad');
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    const handler = createInboundMessageHandler(dummyDeps);
+    await handler(ws, Buffer.from(JSON.stringify({
+      type: 'message',
+      content: 'hello',
+      reasoningEffort: '!!!',
+    })));
+    const task = vi.mocked(enqueueAndMaybeKickoff).mock.calls[0]?.[3] as { reasoningEffort?: string };
+    expect(task.reasoningEffort).toBeUndefined();
+  });
+
   it('显式 /next 按当前订阅 sid 入队', async () => {
     const sid = uniqueSid('inbound-explicit-next');
     const ws = fakeWs();

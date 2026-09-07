@@ -36,6 +36,7 @@ import { isAppConfigReady } from '../../config/config-readiness.js';
 import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config/resolve-api-key.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
 import { parseProviderHeaders } from '../../llm/provider-request-headers.js';
+import { parseReasoningEffortLevelsStrict } from '../../llm/reasoning-effort.js';
 import {
   normalizeProviderActiveModel,
   parseModelNames,
@@ -159,6 +160,8 @@ function validateProvider(provider: ProviderConfig): string | null {
   }
   const headers = parseProviderHeaders(provider.headers);
   if (!headers.ok) return headers.error;
+  const effort = parseReasoningEffortLevelsStrict(provider.reasoningEffort);
+  if (!effort.ok) return effort.error;
   return null;
 }
 
