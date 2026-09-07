@@ -814,6 +814,9 @@ window.ChatPage = (function () {
   // also_rejected / shell_collab_entered 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
   var elShellCollabIndicator = null;
+  var elPlanModeIndicator = null;
+  var DEFAULT_COMPOSER_PLACEHOLDER = '输入消息… (输入 # 选用技能，@ 引用文件)';
+  var PLAN_MODE_COMPOSER_PLACEHOLDER = '规划模式：描述任务，完善文档（不能改代码）…';
 
   function getShellCollabStore() {
     return window.ChatSessionStore || null;
@@ -825,11 +828,28 @@ window.ChatPage = (function () {
     return !!(Store && Store.getShellCollabActive && Store.getShellCollabActive(sid));
   }
 
+  function isActiveSessionPlanMode() {
+    var Store = getShellCollabStore();
+    var sid = Session.getActiveId ? Session.getActiveId() : 'default';
+    return !!(Store && Store.getPlanModeActive && Store.getPlanModeActive(sid));
+  }
+
   function syncShellCollabIndicator() {
     if (!elShellCollabIndicator) return;
     var active = isActiveSessionShellCollab();
     elShellCollabIndicator.classList.toggle('hidden', !active);
     elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+  }
+
+  function syncPlanModeChip() {
+    var active = isActiveSessionPlanMode();
+    if (elPlanModeIndicator) {
+      elPlanModeIndicator.classList.toggle('hidden', !active);
+      elPlanModeIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (elInput) {
+      elInput.placeholder = active ? PLAN_MODE_COMPOSER_PLACEHOLDER : DEFAULT_COMPOSER_PLACEHOLDER;
+    }
   }
 
   function notifyShellCollabState(data) {
@@ -844,6 +864,18 @@ window.ChatPage = (function () {
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
+  }
+
+  function notifyPlanModeState(data) {
+    var Store = getShellCollabStore();
+    if (!Store) return;
+    if (data && data.planModeActiveBySession && Store.applyPlanModeActiveMap) {
+      Store.applyPlanModeActiveMap(data.planModeActiveBySession);
+    } else if (data && typeof data.planModeActive === 'boolean' && Store.setPlanModeActive) {
+      var planSid = data.sessionId || data.activeSessionId;
+      if (planSid) Store.setPlanModeActive(planSid, data.planModeActive);
+    }
+    syncPlanModeChip();
   }
 
   // appendShellCollabAgentMessage / onWsShellCollabEntered / removeAlsoNoteFromUi /
@@ -1044,6 +1076,7 @@ window.ChatPage = (function () {
     }
     if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
     syncShellCollabIndicator();
+    syncPlanModeChip();
   }
 
   function paintInitialChatView() {
@@ -1789,6 +1822,7 @@ window.ChatPage = (function () {
       announceTunnelReadyFromPayload: announceTunnelReadyFromPayload,
       applyHarnessRestoreUi: applyHarnessRestoreUi,
       notifyShellCollabState: notifyShellCollabState,
+      notifyPlanModeState: notifyPlanModeState,
       needsInitialHistoryPaint: needsInitialHistoryPaint,
       syncMessages: syncMessages,
       applyRemoteUserMessage: applyRemoteUserMessage,
@@ -1845,6 +1879,7 @@ window.ChatPage = (function () {
       getElMessages: function () { return elMessages; },
       appendAlsoNoteBubble: appendAlsoNoteBubble,
       notifyShellCollabState: notifyShellCollabState,
+      notifyPlanModeState: notifyPlanModeState,
       syncWelcomeState: syncWelcomeState,
     };
   }
@@ -2037,6 +2072,12 @@ window.ChatPage = (function () {
                   (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
                 '</button>' +
               '</div>' +
+              '<span class="plan-mode-indicator hidden" id="plan-mode-indicator" '
+              + 'title="规划模式：描述任务，完善文档（不能改代码）。输入 /plan exit 退出" '
+              + 'aria-label="plan模式">'
+              + (window.AppIcon ? window.AppIcon.html('edit', { width: 13 }) : '')
+              + '<span class="plan-mode-label">plan模式</span>'
+              + '</span>' +
               '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
               + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
               + 'aria-label="Shell 协作模式">'
@@ -2064,6 +2105,7 @@ window.ChatPage = (function () {
     elStatusTurn = container.querySelector('#status-turn');
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
+    elPlanModeIndicator = container.querySelector('#plan-mode-indicator');
     mainInputWrapper = container.querySelector('.input-wrapper');
     bindComposerInteractions();
     mounted = true;
@@ -2276,6 +2318,7 @@ window.ChatPage = (function () {
     }
 
     syncShellCollabIndicator();
+    syncPlanModeChip();
     bindTaskDoneNotifyClick();
 
     // 连接 WebSocket

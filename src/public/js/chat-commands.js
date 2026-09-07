@@ -12,6 +12,7 @@ window.ChatCommands = (function () {
 
   var SLASH_LOCAL_COMMANDS = [
     { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
+    { name: 'plan', description: '进入规划模式；可在同一条消息中继续写任务', prefix: '/' },
     { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' },
     { name: 'next', description: '静默入队下一条任务', prefix: '/' },
     { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
@@ -189,7 +190,7 @@ window.ChatCommands = (function () {
       applyTargetFn(value);
     } else if (targetInput) {
       var slashValue = value;
-      if (cmd.name === 'shell') slashValue = slashValue + ' ';
+      if (cmd.name === 'shell' || cmd.name === 'plan') slashValue = slashValue + ' ';
       if (!replaceSlashTriggerInTextarea(targetInput, slashValue)) {
         targetInput.value = slashValue;
         dispatchInput(targetInput);

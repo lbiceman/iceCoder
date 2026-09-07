@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { parseAllSkillRefsFromMessage } from '../skills/skill-loader.js';
+import { parsePlanCommand } from '../session/pending-note.js';
 
 export interface UserMessageDisplayFields {
   content: string;
@@ -9,6 +10,8 @@ export interface UserMessageDisplayFields {
   shellCommand?: string;
   /** `/open` 目录浏览指令；与 content（说明正文）分离展示 */
   openCommand?: string;
+  /** `/plan` 规划模式指令；与 content（提示词）分离展示 */
+  planCommand?: string;
 }
 
 function normalizeReferencePath(raw: string): string {
@@ -108,6 +111,17 @@ function splitShellCommandFromContent(text: string): { shellCommand?: string; co
   };
 }
 
+/** 将开头的 `/plan` / `/plan <prompt>` 拆成模式标记与提示词正文。 */
+function splitPlanCommandFromContent(text: string): { planCommand?: string; content: string } {
+  const raw = String(text || '');
+  const parsed = parsePlanCommand(raw);
+  if (!parsed.matched) return { content: raw.trim() };
+  return {
+    planCommand: '/plan',
+    content: parsed.action === 'enter' ? parsed.prompt : '',
+  };
+}
+
 function isOpenCommandLine(line: string): boolean {
   const t = line.trim();
   return t === '/open' || t.startsWith('/open ')
@@ -141,7 +155,8 @@ export function buildUserMessageDisplayFields(
 ): UserMessageDisplayFields {
   const text = String(fullText || '');
   const shellSplit = splitShellCommandFromContent(text);
-  const openSplit = splitOpenCommandFromContent(shellSplit.content);
+  const planSplit = splitPlanCommandFromContent(shellSplit.content);
+  const openSplit = splitOpenCommandFromContent(planSplit.content);
   const workingText = openSplit.content;
   const skills = explicitSkills.length > 0
     ? explicitSkills.slice()
@@ -156,6 +171,7 @@ export function buildUserMessageDisplayFields(
 
   const result: UserMessageDisplayFields = { content };
   if (shellSplit.shellCommand) result.shellCommand = shellSplit.shellCommand;
+  if (planSplit.planCommand) result.planCommand = planSplit.planCommand;
   if (openSplit.openCommand) result.openCommand = openSplit.openCommand;
   if (skills.length > 0) result.skills = skills;
   if (referencePaths.length > 0) result.referencePaths = referencePaths;

@@ -88,6 +88,7 @@ export async function persistImplicitQueuedUserMessage(
     id: taskInput.messageId,
     content: display.content,
     ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
+    ...(display.planCommand ? { planCommand: display.planCommand } : {}),
     ...(display.openCommand ? { openCommand: display.openCommand } : {}),
     ...(display.skills ? { skills: display.skills } : {}),
     ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),

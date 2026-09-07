@@ -137,6 +137,7 @@ export class Harness {
   private onConfirm?: HarnessConfig['onConfirm'];
   private onShellMandatoryConfirm?: HarnessConfig['onShellMandatoryConfirm'];
   private shellCollabActive: boolean;
+  private planModeActive: boolean;
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
@@ -192,6 +193,7 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.onShellMandatoryConfirm = config.onShellMandatoryConfirm;
     this.shellCollabActive = config.shellCollabActive === true;
+    this.planModeActive = config.planModeActive === true;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.verificationExemptDirs = config.verificationExemptDirs;
@@ -249,6 +251,7 @@ export class Harness {
       onConfirm: this.onConfirm,
       onShellMandatoryConfirm: this.onShellMandatoryConfirm,
       shellCollabActive: this.shellCollabActive,
+      planModeActive: this.planModeActive,
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
       sessionDir: this.sessionDir,

@@ -110,6 +110,11 @@ export interface LLMOptions {
   signal?: AbortSignal | null;
   /** 单次 HTTP 请求超时（ms）；未设置时使用适配器构造时的默认值 */
   requestTimeoutMs?: number;
+  /**
+   * 会话亲和 ID。OpenCode Go/Zen 会作为 `x-opencode-session` 发送；
+   * 同一会话多轮应保持不变。未设置时由适配器生成稳定兜底值。
+   */
+  sessionId?: string;
   /** 为 true 时跳过上层 LLMAdapter 的指数退避重试（Dream 等长请求用） */
   skipRetry?: boolean;
   /** 为 true 时 API 报错后不自动 strip 图片重试（如 image_read 必须看到原图） */

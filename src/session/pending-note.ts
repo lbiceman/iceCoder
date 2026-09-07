@@ -169,6 +169,88 @@ export function parseShellCommand(content: string): ParsedShellCommand {
   };
 }
 
+export type PlanCommandAction = 'enter' | 'exit';
+
+export interface ParsedPlanCommand {
+  matched: boolean;
+  action: PlanCommandAction | null;
+  /** enter 时 `/plan` 后的提示词；模式切换本身不包含此文本 */
+  prompt: string;
+}
+
+function isSlashCommandLine(trimmed: string): boolean {
+  return /^\/[a-z]+(?:\s|$)/i.test(trimmed) && !trimmed.slice(1).includes('/');
+}
+
+function isPlanCommandMetaLine(trimmed: string): boolean {
+  if (!trimmed) return true;
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every((token) => /^#[^\s#]+\.md$/i.test(token))) {
+    return true;
+  }
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) return true;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//') && !isSlashCommandLine(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+function isPlanCommandLine(trimmed: string): boolean {
+  return trimmed === '/plan' || trimmed === '/plan exit' || trimmed.startsWith('/plan ');
+}
+
+/**
+ * 只把「开头元数据之后的第一条内容」当成 /plan。
+ * 正文中间提到 `/plan` 不进入规划模式，避免打断普通实现任务。
+ */
+function findLeadingPlanCommand(content: string): { lineIndex: number; line: string } | null {
+  const lines = content.trim().split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i]?.trim() ?? '';
+    if (isPlanCommandMetaLine(t)) continue;
+    if (isPlanCommandLine(t)) return { lineIndex: i, line: t };
+    return null;
+  }
+  return null;
+}
+
+/**
+ * 识别 `/plan`（可带尾随提示词）与 `/plan exit`。
+ * - `/plan` / `/plan <prompt>` → enter；prompt 与模式指令分离
+ * - `/plan exit` → exit
+ * - `/plan exit foo` → 不匹配
+ * - 正文中间的 `/plan` 不匹配
+ */
+export function parsePlanCommand(content: string): ParsedPlanCommand {
+  const trimmed = content.trim();
+  if (!trimmed) return { matched: false, action: null, prompt: '' };
+
+  const found = findLeadingPlanCommand(trimmed);
+  if (!found) return { matched: false, action: null, prompt: '' };
+  const { lineIndex: planLineIndex, line: planLine } = found;
+  const lines = trimmed.split(/\r?\n/);
+
+  if (planLine === '/plan exit') {
+    return { matched: true, action: 'exit', prompt: '' };
+  }
+
+  const after = planLine.slice('/plan'.length).trim();
+  if (after === 'exit' || after.startsWith('exit ')) {
+    return { matched: false, action: null, prompt: '' };
+  }
+
+  const promptParts: string[] = [];
+  if (after) promptParts.push(after);
+  const rest = lines.slice(planLineIndex + 1).join('\n').trim();
+  if (rest) promptParts.push(rest);
+
+  return {
+    matched: true,
+    action: 'enter',
+    prompt: promptParts.join('\n').trim(),
+  };
+}
+
 export function resetPendingNotesForTests(): void {
   pendingAlsoNotesBySession.clear();
   activeAlsoRunIdBySession.clear();

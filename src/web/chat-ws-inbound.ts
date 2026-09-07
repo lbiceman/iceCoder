@@ -1,5 +1,5 @@
 /**
- * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /next /open）。
+ * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /plan /next /open）。
  */
 
 import { promises as fsPromises } from 'node:fs';
@@ -10,6 +10,7 @@ import {
   parseNextCommand,
   parseAlsoCommand,
   parseShellCommand,
+  parsePlanCommand,
   PENDING_NOTE_USAGE_MESSAGE,
   queueAlsoNote,
   clearPendingNotesForSession,
@@ -32,6 +33,7 @@ import {
 } from '../harness/conversation-delete.js';
 import { canAcceptRuntimeRestore } from './session-runtime-busy.js';
 import { resolveShellCollabActive } from '../session/shell-collab-store.js';
+import { resolvePlanModeActive } from '../session/plan-mode-store.js';
 import {
   stopAllShellWorkForSession,
   stopForegroundShellWorkForSession,
@@ -57,6 +59,12 @@ import {
   loadStructuredMessages,
 } from './chat-ws-persist.js';
 import { handleShellCollabRoute, queueShellCollabTransition, waitForShellCollabTransition } from './chat-ws-shell.js';
+import {
+  handlePlanModeRoute,
+  handlePlanModeExit,
+  queuePlanModeTransition,
+  waitForPlanModeTransition,
+} from './chat-ws-plan.js';
 import {
   clearRunningTurn,
   getRunningTurn,
@@ -152,6 +160,18 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         const subscribedSid = getSubscribedSessionId(ws);
         if (!subscribedSid) return;
         handleConfirmReply(cid, !!msg.approved, subscribedSid);
+        return;
+      }
+
+      if (msg.type === 'plan_mode_exit') {
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) {
+          sendJSON(ws, { type: 'error', message: '未订阅会话' });
+          return;
+        }
+        await queuePlanModeTransition(sid, async () => {
+          await handlePlanModeExit(ws, sid, { persistUserMessage: false });
+        });
         return;
       }
 
@@ -337,13 +357,17 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           const newRunningTurn = snapshotRunningTurn(targetId);
           const workspace = await resolveSessionWorkspacePayload(targetId);
           const bgTasks = await buildBgTasksForSession(targetId);
-          const shellCollabActive = await resolveShellCollabActive(targetId, SESSIONS_DIR);
+          const [shellCollabActive, planModeActive] = await Promise.all([
+            resolveShellCollabActive(targetId, SESSIONS_DIR),
+            resolvePlanModeActive(targetId, SESSIONS_DIR),
+          ]);
           const runtimeExtras = await buildConnectedPayloadExtras(targetId);
           sendJSON(ws, {
             type: 'session_switched',
             ok: true,
             sessionId: targetId,
             shellCollabActive,
+            planModeActive,
             ...workspace,
             ...runtimeExtras,
             ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
@@ -454,7 +478,40 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           }
           return;
         }
+
+        const planCmd = parsePlanCommand(content);
+        if (planCmd.matched && planCmd.action) {
+          const planMessageId = messageId ?? randomUUID();
+          let planRouteOk = false;
+          await queuePlanModeTransition(runSid, async () => {
+            planRouteOk = await handlePlanModeRoute(
+              ws,
+              runSid,
+              planCmd.action!,
+              content,
+              planMessageId,
+              planCmd.prompt,
+              referencePaths,
+              skills,
+              images,
+            );
+          });
+          if (planRouteOk && planCmd.action === 'enter' && planCmd.prompt.trim()) {
+            const taskInput = await buildEnqueueInput(
+              runSid,
+              planCmd.prompt,
+              images,
+              referencePaths,
+              planMessageId,
+              'implicit',
+              skills,
+            );
+            await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);
+          }
+          return;
+        }
         await waitForShellCollabTransition(runSid);
+        await waitForPlanModeTransition(runSid);
 
         if (isOpenLegacyCommand(content)) {
           if (isSessionProcessing(runSid)) {
