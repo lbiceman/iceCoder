@@ -2081,6 +2081,12 @@ window.ChatPage = (function () {
                 '<span class="chip-label" id="chip-model-label">加载中…</span>' +
                 (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
               '</button>' +
+              '<div class="reasoning-stepper is-empty" id="reasoning-stepper" hidden role="slider"' +
+                ' aria-label="推理强度" aria-valuemin="0" aria-valuemax="0"' +
+                ' aria-valuenow="0" tabindex="0">' +
+                '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
+                '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
+              '</div>' +
               '<button class="btn-send" id="btn-send" type="button" title="Send" aria-label="Send">' +
                 (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
               '</button>' +
@@ -2139,12 +2145,15 @@ window.ChatPage = (function () {
 
     // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
     // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
+    if (window.ChatReasoningStepper && typeof window.ChatReasoningStepper.init === 'function') {
+      window.ChatReasoningStepper.init(container.querySelector('#reasoning-stepper'));
+    }
+
     if (window.ChatModelPicker && typeof window.ChatModelPicker.init === 'function') {
       window.ChatModelPicker.init({
         chipEl: container.querySelector('#chip-model'),
         labelEl: container.querySelector('#chip-model-label'),
       });
-      // 初次拉取 providers 缓存，供下拉渲染使用
       window.ChatModelPicker.refreshFromServer();
     }
 

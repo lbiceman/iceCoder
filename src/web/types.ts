@@ -45,6 +45,12 @@ export interface ProviderConfig {
    * 不可覆盖 Authorization、Content-Type 等保留头。
    */
   headers?: Record<string, string>;
+  /**
+   * 推理强度档位，英文逗号分隔（如 `low,high,max` 或 `low,medium,high,xhigh`）。
+   * 聊天栏步骤器按此列表显示；请求把选中值原样作为 reasoning_effort 发送。
+   * 留空则不发送该参数。
+   */
+  reasoningEffort?: string;
 }
 
 /**

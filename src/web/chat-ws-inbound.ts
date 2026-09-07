@@ -39,6 +39,7 @@ import {
   stopForegroundShellWorkForSession,
 } from '../tools/session-shell-control.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import { parseReasoningEffort } from '../llm/reasoning-effort.js';
 import { parseClientMessageId, isOpenLegacyCommand } from './chat-ws-helpers.js';
 import { handleBgTaskStop, rebindBgTaskPusher, unwireBgTasksDiskSync, buildBgTasksForSession } from './chat-ws-bg-tasks.js';
 import {
@@ -407,6 +408,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           ? msg.queueInsertIndex
           : undefined;
         const hasAttachments = images.length > 0;
+        const reasoningEffort = parseReasoningEffort(msg.reasoningEffort);
 
         const alsoCmd = parseAlsoCommand(content);
         if (alsoCmd.matched) {
@@ -473,6 +475,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
               shellMessageId,
               'implicit',
               skills,
+              reasoningEffort,
             );
             await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);
           }
@@ -505,6 +508,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
               planMessageId,
               'implicit',
               skills,
+              reasoningEffort,
             );
             await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);
           }
@@ -525,6 +529,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
             messageId,
             source: 'implicit',
             ws,
+            ...(reasoningEffort ? { reasoningEffort } : {}),
           };
           void runSessionMessageLoop(deps, runSid, ws, direct);
           return;
@@ -548,6 +553,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           messageId,
           'implicit',
           skills,
+          reasoningEffort,
         );
         await persistImplicitQueuedUserMessage(runSid, ws, taskInput);
         await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);

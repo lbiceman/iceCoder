@@ -1,5 +1,6 @@
 import type { ProviderConfig } from '../web/types.js';
 import { parseProviderHeaders } from '../llm/provider-request-headers.js';
+import { parseReasoningEffortLevelsStrict } from '../llm/reasoning-effort.js';
 
 type RawProvider = ProviderConfig & { providerName?: unknown };
 
@@ -15,6 +16,7 @@ export function normalizeProvider(raw: RawProvider, index: number): ProviderConf
   const id = raw.id?.trim() || legacy || `provider-${index + 1}`;
   const { providerName: _legacy, ...rest } = raw;
   const parsed = parseProviderHeaders(rest.headers);
+  const effort = parseReasoningEffortLevelsStrict(rest.reasoningEffort);
   const next: ProviderConfig = { ...rest, id };
   if (parsed.ok && parsed.headers) next.headers = parsed.headers;
   else {
@@ -22,6 +24,13 @@ export function normalizeProvider(raw: RawProvider, index: number): ProviderConf
       console.warn(`[config] provider ${id}: ${parsed.error}，已忽略 headers`);
     }
     delete next.headers;
+  }
+  if (effort.ok && effort.stored) next.reasoningEffort = effort.stored;
+  else {
+    if (!effort.ok) {
+      console.warn(`[config] provider ${id}: ${effort.error}，已忽略 reasoningEffort`);
+    }
+    delete next.reasoningEffort;
   }
   return next;
 }
