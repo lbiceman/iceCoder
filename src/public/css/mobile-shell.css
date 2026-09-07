@@ -107,8 +107,6 @@
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  display: block;
-  object-fit: contain;
 }
 
 .mobile-top-bar-brand {

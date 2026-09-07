@@ -230,7 +230,7 @@ window.MobileShell = (function () {
           ic('menu', 22) +
         '</button>';
       center.innerHTML =
-        '<img class="mobile-top-bar-brand-icon" src="/icons/logo.png" width="22" height="22" alt="">' +
+        '<span class="mobile-top-bar-brand-icon ice-brand-logo" aria-hidden="true"></span>' +
         '<span class="mobile-top-bar-brand">IceCoder</span>' +
         getConnectionDot();
       right.innerHTML = themeBtnHtml();
