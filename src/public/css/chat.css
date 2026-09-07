@@ -1290,6 +1290,42 @@
 .shell-collab-label {
   white-space: nowrap;
 }
+
+.plan-mode-indicator {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  border-radius: 8px;
+  border: 1px solid var(--chip-plan-border);
+  background: var(--chip-plan-bg);
+  color: var(--chip-plan-fg);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  user-select: none;
+  cursor: help;
+}
+
+.plan-mode-indicator.hidden {
+  display: none;
+}
+
+.plan-mode-indicator .app-icon,
+.plan-mode-indicator svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
+.plan-mode-label {
+  white-space: nowrap;
+}
 .toolbar-divider {
   width: 1px;
   height: 16px;

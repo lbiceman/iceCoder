@@ -197,6 +197,8 @@ export interface HarnessConfig {
   ) => Promise<boolean>;
   /** 当前 session 处于 Shell 协作模式时为 true */
   shellCollabActive?: boolean;
+  /** 当前 session 处于规划模式时为 true（禁止改代码，只能写文档） */
+  planModeActive?: boolean;
   /** 记忆文件目录路径（用于文件记忆预取，向后兼容） */
   memoryDir?: string;
   /** 文件记忆管理器（优先于 memoryDir，提供多级加载+异步预取+自动提取） */

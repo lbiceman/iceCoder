@@ -324,6 +324,12 @@ window.ChatWebSocket = (function () {
       case 'shell_collab_resumed':
         emit('shell_collab_resumed', data || {});
         break;
+      case 'plan_mode_entered':
+        emit('plan_mode_entered', data || {});
+        break;
+      case 'plan_mode_exited':
+        emit('plan_mode_exited', data || {});
+        break;
       case 'session_cleared':
         emit('session_cleared', data || {});
         break;

@@ -39,6 +39,7 @@ export interface LlmCallDeps {
   tokenBudgetTracker?: TokenBudgetTracker;
   runtimeTelemetry?: RuntimeTelemetry;
   contextCompactor?: ContextCompactor;
+  sessionId?: string;
 }
 
 export interface CallHarnessLlmArgs {
@@ -112,9 +113,10 @@ export async function callHarnessLlm(
   endTiming('llm_precheck', precheckStartedAt, round);
 
   let response: LLMResponse;
-  const llmOpts: { tools: ToolDefinition[]; signal?: AbortSignal } = {
+  const llmOpts: { tools: ToolDefinition[]; signal?: AbortSignal; sessionId?: string } = {
     tools: currentTools,
     signal: deps.loopController.getAbortSignal(),
+    ...(deps.sessionId ? { sessionId: deps.sessionId } : {}),
   };
   try {
     if (streamFn) {

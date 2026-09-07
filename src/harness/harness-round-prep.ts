@@ -55,6 +55,8 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
   workspaceRoot?: string;
+  /** 规划模式：不自动拉起可能改仓库的后台分析。 */
+  planModeActive?: boolean;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -180,7 +182,13 @@ export async function prepareHarnessRound(
     }
   }
 
-  if (!deps.graphExecutor?.hasGraph() && !state.analysisAutoTriggered && deps.analysisSupervisor && deps.sessionId) {
+  if (
+    !deps.planModeActive
+    && !deps.graphExecutor?.hasGraph()
+    && !state.analysisAutoTriggered
+    && deps.analysisSupervisor
+    && deps.sessionId
+  ) {
     const taskSnapshot = state.taskState.snapshot();
     const inferredKind = inferKindFromIntent(
       taskSnapshot.intent,

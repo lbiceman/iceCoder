@@ -2026,6 +2026,11 @@ window.ChatUI = (function () {
       }
     }
 
+    if (displayMsg.role === 'user' && displayMsg.planCommand) {
+      var planRow = createMsgSlashCommandChip(displayMsg.planCommand, '规划模式');
+      if (planRow) el.appendChild(planRow);
+    }
+
     if (displayMsg.role === 'user' && displayMsg.openCommand) {
       var openRow = createMsgSlashCommandChip(displayMsg.openCommand, '目录浏览');
       if (openRow) el.appendChild(openRow);

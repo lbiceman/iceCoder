@@ -223,7 +223,7 @@ export async function responsesChat(
     model: string;
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
-    reqOpts: { signal?: AbortSignal; timeout: number };
+    reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
   },
 ): Promise<LLMResponse> {
   const params = buildResponsesParams(
@@ -251,7 +251,7 @@ export async function responsesStream(
     model: string;
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
-    reqOpts: { signal?: AbortSignal; timeout: number };
+    reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
   },
 ): Promise<LLMResponse> {
   const params = buildResponsesParams(

@@ -41,7 +41,7 @@ window.ChatWelcome = (function () {
     {
       key: 'slash',
       title: '/ 指令',
-      desc: '在输入框输入 /，选用 /also、/next 等本地指令',
+      desc: '在输入框输入 /，选用 /plan、/shell、/next 等本地指令',
       icon: 'slash',
     },
   ];

@@ -5,6 +5,7 @@
  * Requirements: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6, 20.7, 20.8
  */
 
+import { randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import type {
   ContentBlock,
@@ -33,6 +34,7 @@ import {
   type OpenAiApiMode,
 } from './openai-responses-bridge.js';
 import { endTiming, harnessTimingEnabled, markTimingStart, recordHarnessTiming } from '../harness/harness-timing.js';
+import { buildOpenCodeRequestHeaders, wrapFetchWithOpenCodeHeaders } from './opencode-headers.js';
 
 export { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 
@@ -115,16 +117,34 @@ export class OpenAIAdapter implements ProviderAdapter {
   private defaultRequestTimeoutMs: number;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
   private apiMode: OpenAiApiMode;
+  private readonly baseURL?: string;
+  /** OpenCode Go 无会话 id 时的稳定亲和值（适配器生命周期内不变） */
+  private readonly fallbackOpenCodeSession: string;
+  /** 当前请求的会话亲和值；custom fetch 在发出 HTTP 时读取 */
+  private currentOpenCodeSession: string;
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
     this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
+    this.baseURL = config.baseURL;
+    this.fallbackOpenCodeSession = randomUUID();
+    this.currentOpenCodeSession = this.fallbackOpenCodeSession;
+    const openCodeHeaders = buildOpenCodeRequestHeaders(
+      config.baseURL,
+      undefined,
+      this.fallbackOpenCodeSession,
+    );
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
       organization: config.organization,
       timeout: this.defaultRequestTimeoutMs,
       maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
+      ...(openCodeHeaders ? { defaultHeaders: openCodeHeaders } : {}),
+      fetch: wrapFetchWithOpenCodeHeaders(
+        config.baseURL,
+        () => this.currentOpenCodeSession || this.fallbackOpenCodeSession,
+      ),
     });
     this.model = config.model;
     // 视觉支持：显式配置 > 默认开启
@@ -142,7 +162,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     model: string;
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
-    reqOpts: { signal?: AbortSignal; timeout: number };
+    reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
   } {
     return {
       providerName: this.name,
@@ -156,7 +176,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   private buildRequestOptions(
     options: LLMOptions,
     signal?: AbortSignal,
-  ): { signal?: AbortSignal; timeout: number } {
+  ): { signal?: AbortSignal; timeout: number; headers?: Record<string, string> } {
     const perCall =
       typeof options.requestTimeoutMs === 'number'
       && Number.isFinite(options.requestTimeoutMs)
@@ -166,9 +186,18 @@ export class OpenAIAdapter implements ProviderAdapter {
     const timeout = perCall !== undefined
       ? Math.max(this.defaultRequestTimeoutMs, perCall)
       : this.defaultRequestTimeoutMs;
+    const headers = buildOpenCodeRequestHeaders(
+      this.baseURL,
+      options.sessionId,
+      this.fallbackOpenCodeSession,
+    );
+    if (headers?.['x-opencode-session']) {
+      this.currentOpenCodeSession = headers['x-opencode-session'];
+    }
     return {
       ...(signal ? { signal } : {}),
       timeout,
+      ...(headers ? { headers } : {}),
     };
   }
 
@@ -207,7 +236,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
       const reqOpts = this.buildRequestOptions(options, signal);
       console.log(
-        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms`,
+        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms${reqOpts.headers?.['x-opencode-session'] ? `, opencodeSession=${reqOpts.headers['x-opencode-session']}` : ''}`,
       );
       const startTime = Date.now();
       const response = await this.client.chat.completions.create(params, reqOpts);

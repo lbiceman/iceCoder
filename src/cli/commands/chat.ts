@@ -488,7 +488,7 @@ ${c.bold}终端内置命令:${c.reset}
 
       const result = await harness.run(
         input,
-        (msgs, opts) => ctx.llmAdapter.chat(msgs, opts),
+        (msgs, opts) => ctx.llmAdapter.chat(msgs, { ...opts, sessionId: 'default' }),
         (event) => {
           if (event.type === 'thinking' && event.content) {
             // 思考内容（部分模型会返回）

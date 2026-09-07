@@ -41,6 +41,7 @@ import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
 import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
 import { purgeSessionDiskFiles } from '../session-file-purge.js';
 import { buildShellCollabActiveIndex } from '../../session/shell-collab-store.js';
+import { buildPlanModeActiveIndex } from '../../session/plan-mode-store.js';
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
 const SESSION_ID = DEFAULT_SESSION_ID;
@@ -244,9 +245,10 @@ export function createSessionsRouter(): Router {
     let index = await ensureDefaultInIndex();
     index = await backfillPlaceholderSessionTitles(index);
     const sessionIds = index.map((s) => s.id);
-    const [{ defaultWorkDir, workspaces }, shellCollabActive, activeSessionId] = await Promise.all([
+    const [{ defaultWorkDir, workspaces }, shellCollabActive, planModeActive, activeSessionId] = await Promise.all([
       buildWorkspaceIndex(sessionIds),
       buildShellCollabActiveIndex(sessionIds, SESSIONS_DIR),
+      buildPlanModeActiveIndex(sessionIds, SESSIONS_DIR),
       bootstrapActiveSessionIdFromIndex(),
     ]);
     res.json({
@@ -254,6 +256,7 @@ export function createSessionsRouter(): Router {
       defaultWorkDir,
       workspaces,
       shellCollabActive,
+      planModeActive,
       activeSessionId,
       sessionRunStates: sessionListLiveSync ? sessionListLiveSync.getRunStates() : [],
     });

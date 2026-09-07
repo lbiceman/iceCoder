@@ -155,6 +155,7 @@ window.ChatSession = (function () {
       o.images = persistableImages;
     }
     if (m.shellCommand) o.shellCommand = m.shellCommand;
+    if (m.planCommand) o.planCommand = m.planCommand;
     if (m.openCommand) o.openCommand = m.openCommand;
     if (m.alsoNote) o.alsoNote = true;
     if (Array.isArray(m.skills) && m.skills.length) o.skills = m.skills.slice();
@@ -184,6 +185,7 @@ window.ChatSession = (function () {
     if (typeof raw.sentAt === 'number' && isFinite(raw.sentAt)) o.sentAt = raw.sentAt;
     if (typeof raw.completedAt === 'number' && isFinite(raw.completedAt)) o.completedAt = raw.completedAt;
     if (raw.shellCommand) o.shellCommand = raw.shellCommand;
+    if (raw.planCommand) o.planCommand = raw.planCommand;
     if (raw.openCommand) o.openCommand = raw.openCommand;
     if (raw.alsoNote) o.alsoNote = true;
     if (Array.isArray(raw.skills) && raw.skills.length) o.skills = raw.skills.slice();
@@ -439,6 +441,59 @@ window.ChatSession = (function () {
     };
   }
 
+  function isPlanCommandMetaLine(trimmed) {
+    if (!trimmed) return true;
+    var tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (tokens.length > 0) {
+      var allSkills = true;
+      for (var i = 0; i < tokens.length; i++) {
+        if (!/^#[^\s#]+\.md$/i.test(tokens[i])) { allSkills = false; break; }
+      }
+      if (allSkills) return true;
+    }
+    if (looksLikeReferencePathLine(trimmed)) return true;
+    return false;
+  }
+
+  function splitPlanCommandFromContent(text, existingPlanCommand) {
+    var raw = String(text || '');
+    var lines = raw.trim().split(/\r?\n/);
+    var planLineIndex = -1;
+    var planLine = '';
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (isPlanCommandMetaLine(t)) continue;
+      if (t === '/plan' || t === '/plan exit' || t.indexOf('/plan ') === 0) {
+        var afterCmd = t.slice('/plan'.length).trim();
+        if (afterCmd === 'exit' || afterCmd.indexOf('exit ') === 0) {
+          if (t === '/plan exit') {
+            planLineIndex = i;
+            planLine = t;
+          }
+          break;
+        }
+        planLineIndex = i;
+        planLine = t;
+      }
+      break;
+    }
+    if (planLineIndex < 0) {
+      return {
+        planCommand: existingPlanCommand || '',
+        content: raw.trim(),
+      };
+    }
+    var after = planLine.slice('/plan'.length).trim();
+    var promptParts = [];
+    if (after && after !== 'exit') promptParts.push(after);
+    var rest = lines.slice(planLineIndex + 1).join('\n').trim();
+    if (rest) promptParts.push(rest);
+    return {
+      planCommand: existingPlanCommand || '/plan',
+      content: promptParts.join('\n').trim(),
+    };
+  }
+
   function enrichUserMessageForDisplay(msg) {
     if (!msg || msg.role !== 'user') return msg;
     var cloned = Object.assign({}, msg);
@@ -447,6 +502,12 @@ window.ChatSession = (function () {
     if (shellSplit.shellCommand) {
       cloned.shellCommand = shellSplit.shellCommand;
       text = shellSplit.content;
+      cloned.content = text;
+    }
+    var planSplit = splitPlanCommandFromContent(text, cloned.planCommand);
+    if (planSplit.planCommand) {
+      cloned.planCommand = planSplit.planCommand;
+      text = planSplit.content;
       cloned.content = text;
     }
     var openSplit = splitOpenCommandFromContent(text, cloned.openCommand);
@@ -609,6 +670,9 @@ window.ChatSession = (function () {
       if (!enriched.shellCommand && cur.shellCommand) {
         enriched.shellCommand = cur.shellCommand;
       }
+      if (!enriched.planCommand && cur.planCommand) {
+        enriched.planCommand = cur.planCommand;
+      }
       if (!enriched.openCommand && cur.openCommand) {
         enriched.openCommand = cur.openCommand;
       }
@@ -620,6 +684,11 @@ window.ChatSession = (function () {
       if ((cur.shellCommand || '') !== (enriched.shellCommand || '')) {
         if (enriched.shellCommand) cur.shellCommand = enriched.shellCommand;
         else delete cur.shellCommand;
+        changed = true;
+      }
+      if ((cur.planCommand || '') !== (enriched.planCommand || '')) {
+        if (enriched.planCommand) cur.planCommand = enriched.planCommand;
+        else delete cur.planCommand;
         changed = true;
       }
       if ((cur.openCommand || '') !== (enriched.openCommand || '')) {
@@ -696,6 +765,10 @@ window.ChatSession = (function () {
         merged.shellCommand = local.shellCommand;
         patched = true;
       }
+      if (!merged.planCommand && local.planCommand) {
+        merged.planCommand = local.planCommand;
+        patched = true;
+      }
       if (!merged.openCommand && local.openCommand) {
         merged.openCommand = local.openCommand;
         patched = true;
@@ -758,6 +831,8 @@ window.ChatSession = (function () {
       msg.content = enriched.content;
       if (enriched.shellCommand) msg.shellCommand = enriched.shellCommand;
       else delete msg.shellCommand;
+      if (enriched.planCommand) msg.planCommand = enriched.planCommand;
+      else delete msg.planCommand;
       if (enriched.openCommand) msg.openCommand = enriched.openCommand;
       else delete msg.openCommand;
       if (enriched.skills) msg.skills = enriched.skills;

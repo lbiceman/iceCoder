@@ -22,6 +22,8 @@ window.ChatSessionStore = (function () {
   var workspacesBySession = {};
   /** sessionId → Shell 协作是否 active（来自 GET /api/sessions 或 WS 增量更新） */
   var shellCollabActiveBySession = {};
+  /** sessionId → 规划模式是否 active */
+  var planModeActiveBySession = {};
   var runPhaseBySession = {};
   var composerDrafts = {};
   var lastApiActiveSessionId = '';
@@ -53,6 +55,11 @@ window.ChatSessionStore = (function () {
       shellCollabActiveBySession = (data.shellCollabActive && typeof data.shellCollabActive === 'object')
         ? data.shellCollabActive
         : {};
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'planModeActive')
+        && data.planModeActive && typeof data.planModeActive === 'object'
+        && !Array.isArray(data.planModeActive)) {
+      planModeActiveBySession = data.planModeActive;
     }
     if (typeof data.activeSessionId === 'string' && data.activeSessionId) {
       lastApiActiveSessionId = data.activeSessionId;
@@ -110,6 +117,23 @@ window.ChatSessionStore = (function () {
   function applyShellCollabActiveMap(map) {
     if (!map || typeof map !== 'object') return;
     shellCollabActiveBySession = map;
+    emit();
+  }
+
+  function getPlanModeActive(sessionId) {
+    return planModeActiveBySession[sessionId] === true;
+  }
+
+  function setPlanModeActive(sessionId, active) {
+    if (!sessionId) return;
+    if (active) planModeActiveBySession[sessionId] = true;
+    else delete planModeActiveBySession[sessionId];
+    emit();
+  }
+
+  function applyPlanModeActiveMap(map) {
+    if (!map || typeof map !== 'object') return;
+    planModeActiveBySession = map;
     emit();
   }
 
@@ -401,6 +425,9 @@ window.ChatSessionStore = (function () {
       if (typeof data.shellCollabActive === 'boolean') {
         setShellCollabActive(activeSessionId, data.shellCollabActive);
       }
+      if (typeof data.planModeActive === 'boolean') {
+        setPlanModeActive(activeSessionId, data.planModeActive);
+      }
     }
 
     function fallbackLocalSwitch(degraded) {
@@ -474,6 +501,9 @@ window.ChatSessionStore = (function () {
           removeSessionWorkspace(sessionId);
           if (shellCollabActiveBySession[sessionId]) {
             delete shellCollabActiveBySession[sessionId];
+          }
+          if (planModeActiveBySession[sessionId]) {
+            delete planModeActiveBySession[sessionId];
           }
           if (runPhaseBySession[sessionId]) delete runPhaseBySession[sessionId];
           if (composerDrafts[sessionId]) delete composerDrafts[sessionId];
@@ -556,6 +586,9 @@ window.ChatSessionStore = (function () {
     getShellCollabActive: getShellCollabActive,
     setShellCollabActive: setShellCollabActive,
     applyShellCollabActiveMap: applyShellCollabActiveMap,
+    getPlanModeActive: getPlanModeActive,
+    setPlanModeActive: setPlanModeActive,
+    applyPlanModeActiveMap: applyPlanModeActiveMap,
     applySessionRunState: applySessionRunState,
     applySessionRunStates: applySessionRunStates,
     getRunPhase: getRunPhase,
