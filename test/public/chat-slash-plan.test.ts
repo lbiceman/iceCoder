@@ -11,7 +11,7 @@ function readPublic(relativePath: string): string {
 }
 
 describe('规划模式走 / 面板', () => {
-  it('slash 列表含 /plan，模式标识在底部工具栏', () => {
+  it('slash 列表含 /plan，工具栏不再放模式 chip', () => {
     const commands = readPublic('js/chat-commands.js');
     const page = readPublic('js/chat-page.js');
     const main = readPublic('js/main.js');
@@ -25,13 +25,10 @@ describe('规划模式走 / 面板', () => {
     expect(page).not.toContain('ChatAgentModePicker');
     expect(main).not.toContain('chat-agent-mode-picker');
 
-    expect(page).not.toContain('plan-mode-chip-bar');
-    expect(page).not.toContain('shell-mode-chip-bar');
-    expect(page).toContain('plan-mode-indicator');
-    expect(page).toContain('plan模式');
+    expect(page).toContain('plan-mode-chip-bar');
     expect(page).toContain('btn-plan-mode-exit');
     expect(page).toContain("type: 'plan_mode_exit'");
-    expect(page).toContain('shell-collab-indicator');
-    expect(page).toContain('Shell协作');
+    expect(page).toContain('shell-mode-chip-bar');
+    expect(page).toContain('shell-mode-chip-label');
   });
 });

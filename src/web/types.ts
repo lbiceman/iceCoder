@@ -39,6 +39,12 @@ export interface ProviderConfig {
    * 并映射档位：≤128K→S，≤256K→M，≤512K→L，>512K→XL（`tierFromMaxContextTokens`）。
    */
   maxContextTokens?: number;
+  /**
+   * 发给该厂商的额外 HTTP 请求头。值为字面量，或占位符
+   * `{{sessionId}}` / `{{providerId}}` / `{{model}}`。
+   * 不可覆盖 Authorization、Content-Type 等保留头。
+   */
+  headers?: Record<string, string>;
 }
 
 /**

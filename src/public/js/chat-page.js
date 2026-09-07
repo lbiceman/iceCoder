@@ -814,7 +814,8 @@ window.ChatPage = (function () {
   // also_rejected / shell_collab_entered 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
   var elShellCollabIndicator = null;
-  var elPlanModeIndicator = null;
+  var elShellModeChipBar = null;
+  var elPlanModeChipBar = null;
   var DEFAULT_COMPOSER_PLACEHOLDER = '输入消息… (输入 # 选用技能，@ 引用文件)';
   var PLAN_MODE_COMPOSER_PLACEHOLDER = '规划模式：描述任务，完善文档（不能改代码）…';
 
@@ -835,17 +836,22 @@ window.ChatPage = (function () {
   }
 
   function syncShellCollabIndicator() {
-    if (!elShellCollabIndicator) return;
     var active = isActiveSessionShellCollab();
-    elShellCollabIndicator.classList.toggle('hidden', !active);
-    elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (elShellModeChipBar) {
+      elShellModeChipBar.classList.toggle('hidden', !active);
+      elShellModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (elShellCollabIndicator) {
+      elShellCollabIndicator.classList.toggle('hidden', !active);
+      elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
   }
 
   function syncPlanModeChip() {
     var active = isActiveSessionPlanMode();
-    if (elPlanModeIndicator) {
-      elPlanModeIndicator.classList.toggle('hidden', !active);
-      elPlanModeIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (elPlanModeChipBar) {
+      elPlanModeChipBar.classList.toggle('hidden', !active);
+      elPlanModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
     }
     if (elInput) {
       elInput.placeholder = active ? PLAN_MODE_COMPOSER_PLACEHOLDER : DEFAULT_COMPOSER_PLACEHOLDER;
@@ -2030,6 +2036,17 @@ window.ChatPage = (function () {
     container.innerHTML =
       '<div class="chat-page">' +
         '<div class="chat-main">' +
+        '<div id="plan-mode-chip-bar" class="plan-mode-chip-bar hidden" role="status" aria-label="规划模式">' +
+          '<span class="plan-mode-chip">' +
+            '<span class="plan-mode-chip-label">Plan</span>' +
+            '<button type="button" class="plan-mode-chip-remove" id="btn-plan-mode-exit" title="关闭规划模式" aria-label="关闭规划模式">×</button>' +
+          '</span>' +
+        '</div>' +
+        '<div id="shell-mode-chip-bar" class="shell-mode-chip-bar hidden" role="status" aria-label="Shell 协作模式">' +
+          '<span class="shell-mode-chip" title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话">' +
+            '<span class="shell-mode-chip-label">Shell</span>' +
+          '</span>' +
+        '</div>' +
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
@@ -2072,13 +2089,6 @@ window.ChatPage = (function () {
                   (window.AppIcon ? window.AppIcon.html('command-list', { width: 16 }) : '') +
                 '</button>' +
               '</div>' +
-              '<span class="plan-mode-indicator hidden" id="plan-mode-indicator" '
-              + 'title="规划模式：描述任务，完善文档（不能改代码）" '
-              + 'aria-label="plan模式">'
-              + (window.AppIcon ? window.AppIcon.html('edit', { width: 13 }) : '')
-              + '<span class="plan-mode-label">plan模式</span>'
-              + '<button type="button" class="plan-mode-indicator-remove" id="btn-plan-mode-exit" title="关闭规划模式" aria-label="关闭规划模式">×</button>'
-              + '</span>' +
               '<span class="shell-collab-indicator hidden" id="shell-collab-indicator" '
               + 'title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话" '
               + 'aria-label="Shell 协作模式">'
@@ -2106,12 +2116,11 @@ window.ChatPage = (function () {
     elStatusTurn = container.querySelector('#status-turn');
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
-    elPlanModeIndicator = container.querySelector('#plan-mode-indicator');
+    elShellModeChipBar = container.querySelector('#shell-mode-chip-bar');
+    elPlanModeChipBar = container.querySelector('#plan-mode-chip-bar');
     var elPlanModeExitBtn = container.querySelector('#btn-plan-mode-exit');
     if (elPlanModeExitBtn) {
-      elPlanModeExitBtn.addEventListener('click', function (event) {
-        event.preventDefault();
-        event.stopPropagation();
+      elPlanModeExitBtn.addEventListener('click', function () {
         if (WS && typeof WS.send === 'function') WS.send({ type: 'plan_mode_exit' });
       });
     }

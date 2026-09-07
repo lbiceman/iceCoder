@@ -23,5 +23,8 @@ export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenA
     supportsVision: provider.supportsVision ?? true,
     ...(apiMode === 'responses' || apiMode === 'chat_completions' ? { apiMode } : {}),
     ...(rt !== undefined ? { timeout: rt } : {}),
+    ...(provider.headers && Object.keys(provider.headers).length > 0
+      ? { requestHeaders: { ...provider.headers } }
+      : {}),
   };
 }

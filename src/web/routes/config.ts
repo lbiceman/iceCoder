@@ -35,6 +35,7 @@ import {
 import { isAppConfigReady } from '../../config/config-readiness.js';
 import { resolveProviderApiKey, envKeyCandidatesForProvider } from '../../config/resolve-api-key.js';
 import { normalizeProvider } from '../../config/normalize-provider.js';
+import { parseProviderHeaders } from '../../llm/provider-request-headers.js';
 import {
   normalizeProviderActiveModel,
   parseModelNames,
@@ -156,6 +157,8 @@ function validateProvider(provider: ProviderConfig): string | null {
   if (apiMode && apiMode !== 'chat_completions' && apiMode !== 'responses') {
     return 'apiMode 仅支持 chat_completions 或 responses';
   }
+  const headers = parseProviderHeaders(provider.headers);
+  if (!headers.ok) return headers.error;
   return null;
 }
 
@@ -219,25 +222,27 @@ export function createConfigRouter(options?: ConfigRouterOptions): Router {
       }
 
       // 处理每个 provider：如果 apiKey 是脱敏值，恢复原始 key
-      const resolvedProviders = providers.map((provider, index) => {
+      const resolvedProviders = providers.map((provider) => {
         let apiKey = provider.apiKey;
         if (apiKey && apiKey.includes('*') && provider.id && originalKeys.has(provider.id)) {
           // 脱敏值，恢复原始 key
           apiKey = originalKeys.get(provider.id)!;
         }
-        return sanitizeProvider({ ...provider, apiKey }, index);
+        return { ...provider, apiKey };
       });
 
-      const normalizedProviders = normalizeDefaultFlags(resolvedProviders);
-
-      // 验证每个提供者
-      for (let i = 0; i < normalizedProviders.length; i++) {
-        const error = validateProvider(normalizedProviders[i]);
+      // 先校验原始 headers（sanitize 会丢掉非法项，不能放在校验之后）
+      for (let i = 0; i < resolvedProviders.length; i++) {
+        const error = validateProvider(resolvedProviders[i]);
         if (error) {
           res.status(400).json({ error: `提供者 ${i + 1}：${error}` });
           return;
         }
       }
+
+      const normalizedProviders = normalizeDefaultFlags(
+        resolvedProviders.map((provider, index) => sanitizeProvider(provider, index)),
+      );
 
       const configData = JSON.stringify(
         {
