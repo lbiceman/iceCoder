@@ -70,8 +70,6 @@ select:focus-visible,
   width: 28px;
   height: 28px;
   flex-shrink: 0;
-  display: block;
-  object-fit: contain;
 }
 
 .chat-sidebar-brand-logo {

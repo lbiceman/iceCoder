@@ -4,3 +4,14 @@
   flex-shrink: 0;
   vertical-align: middle;
 }
+
+/* 品牌标：浅色用原色冰块蓝，夜间用更亮一档，均透明底 */
+.ice-brand-logo {
+  display: block;
+  flex-shrink: 0;
+  background: url("/icons/logo.png") center / contain no-repeat;
+}
+
+[data-theme="dark"] .ice-brand-logo {
+  background-image: url("/icons/logo-dark.png");
+}
