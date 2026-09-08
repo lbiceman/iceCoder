@@ -43,7 +43,8 @@
       },
       "isDefault": true,
       "supportsVision": true,
-      "maxContextTokens": 128000
+      "maxContextTokens": 128000,
+      "reasoningEffort": "low,medium,high,xhigh"
     }
   ]
 }

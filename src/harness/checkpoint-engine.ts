@@ -29,9 +29,9 @@ import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
   emptyRuntimeCheckpointV2,
-  emptyRuntimeSupervisorCheckpointState,
+  emptyRuntimeExecutionModeCheckpointState,
   type RuntimeCheckpointV2,
-  type RuntimeSupervisorCheckpointState,
+  type RuntimeExecutionModeCheckpointState,
   type CheckpointSaveTrigger,
   type ToolHistoryEntry,
   type FailureHistoryEntry,
@@ -80,8 +80,8 @@ export interface CheckpointSaveInput {
   graphMetrics?: GraphMetrics;
   /** TaskGraph 会话边界（Phase 6） */
   graphSession?: GraphSession;
-  /** Supervisor execution-mode snapshot; restore path may only convert it into signals. */
-  supervisorState?: RuntimeSupervisorCheckpointState;
+  /** L1 execution-mode snapshot. */
+  executionModeState?: RuntimeExecutionModeCheckpointState;
   /** 最近验收失败 stderr tail（VerificationOutputBuffer.snapshot） */
   verificationOutputTail?: VerificationOutputTailEntry[];
   /** TaskAcceptanceTracker.snapshot */
@@ -314,8 +314,8 @@ export class CheckpointEngine {
     if (input.verificationPending !== undefined) state.verificationPending = input.verificationPending;
     if (input.lastStopReason !== undefined) state.lastStopReason = input.lastStopReason;
     if (input.plan?.version !== undefined) state.planVersion = input.plan.version;
-    if (input.supervisorState) {
-      state.supervisorState = cloneSupervisorState(input.supervisorState);
+    if (input.executionModeState) {
+      state.executionModeState = cloneExecutionModeState(input.executionModeState);
     }
     if (input.verificationOutputTail !== undefined) {
       state.verificationOutputTail = input.verificationOutputTail.map(entry => ({ ...entry }));
@@ -513,7 +513,7 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     recoverySignals: v.recoverySignals.map(s => ({ ...s })),
     lastTrigger: v.lastTrigger,
     lastStopReason: v.lastStopReason,
-    supervisorState: v.supervisorState ? cloneSupervisorState(v.supervisorState) : undefined,
+    executionModeState: v.executionModeState ? cloneExecutionModeState(v.executionModeState) : undefined,
     verificationOutputTail: v.verificationOutputTail?.map(entry => ({ ...entry })),
     acceptanceGate: v.acceptanceGate
       ? {
@@ -527,10 +527,10 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
   };
 }
 
-function cloneSupervisorState(
-  state: Partial<RuntimeSupervisorCheckpointState>,
-): RuntimeSupervisorCheckpointState {
-  const defaults = emptyRuntimeSupervisorCheckpointState();
+function cloneExecutionModeState(
+  state: Partial<RuntimeExecutionModeCheckpointState>,
+): RuntimeExecutionModeCheckpointState {
+  const defaults = emptyRuntimeExecutionModeCheckpointState();
   return {
     executionMode: state.executionMode ?? defaults.executionMode,
     executionModeLockRemaining: state.executionModeLockRemaining ?? defaults.executionModeLockRemaining,
@@ -542,17 +542,5 @@ function cloneSupervisorState(
     pendingModeSignals: [...(state.pendingModeSignals ?? defaults.pendingModeSignals)],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry
       ?? defaults.forcedTaskBearingRoundsSinceEntry,
-    // L2-6 / T08：Supervisor phase + snapshot + timeline tail + I4 budget。
-    supervisorPhase: state.supervisorPhase ?? defaults.supervisorPhase,
-    recoverySupervisorSnapshot: state.recoverySupervisorSnapshot
-      ? { ...state.recoverySupervisorSnapshot }
-      : undefined,
-    timelineTail: state.timelineTail
-      ? state.timelineTail.map(ev => ({
-        ...ev,
-        ...(ev.payload ? { payload: { ...ev.payload } } : {}),
-      }))
-      : undefined,
-    correctionBudgetUsed: state.correctionBudgetUsed ?? defaults.correctionBudgetUsed,
   };
 }

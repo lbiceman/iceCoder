@@ -1,9 +1,10 @@
 /**
  * ChatPage 的 WS 后台任务 + 协作事件处理（从 chat-page.js 拆分，2026-08-11）。
  * 职责：bg_task_update / bg_task_stop_result / task_queue_updated /
- *       also_note_appended / also_rejected / shell_collab_entered。
+ *       also_note_appended / also_rejected / shell_collab_entered /
+ *       plan_mode_entered / plan_mode_exited。
  * 共享状态（pendingAlsoMessageIds）留在 chat-page.js 闭包，经 ctx.get/set 共享对象引用；
- * 共享函数（appendAlsoNoteBubble / notifyShellCollabState / syncWelcomeState）由 chat-page.js
+ * 共享函数（appendAlsoNoteBubble / notifyShellCollabState / notifyPlanModeState / syncWelcomeState）由 chat-page.js
  * 经 buildBgTaskHandlerCtx() 注入，避免双实现分叉。
  * 依赖：window.ChatSession、window.ChatUI、window.ChatShellDock、window.BgTaskChip、
  *       window.EtlShellDock、window.ChatTaskQueue。
@@ -85,6 +86,18 @@ window.ChatWsBgTaskHandlers = (function () {
       appendShellCollabAgentMessage(data);
     }
 
+    function onPlanModeEntered(data) {
+      if (typeof ctx.notifyPlanModeState === 'function') ctx.notifyPlanModeState(data);
+      if (!data || data.idempotent) return;
+      appendShellCollabAgentMessage(data);
+    }
+
+    function onPlanModeExited(data) {
+      if (typeof ctx.notifyPlanModeState === 'function') ctx.notifyPlanModeState(data);
+      if (!data || data.idempotent) return;
+      appendShellCollabAgentMessage(data);
+    }
+
     function removeAlsoNoteFromUi(messageId) {
       if (!messageId) return;
       var pending = get('pendingAlsoMessageIds');
@@ -133,6 +146,8 @@ window.ChatWsBgTaskHandlers = (function () {
     WS.on('also_note_appended', onAlsoNoteAppended);
     WS.on('also_rejected', onAlsoRejected);
     WS.on('shell_collab_entered', onShellCollabEntered);
+    WS.on('plan_mode_entered', onPlanModeEntered);
+    WS.on('plan_mode_exited', onPlanModeExited);
   }
 
   return { bind: bind };

@@ -1,6 +1,6 @@
 # iceCoder
 
-**Self-hosted AI coding agent with desktop & mobile UI** — L1/L2 dual-mode supervision, MCP tool integration, session checkpoints, and 217+ round verified stability. One-click Windows install, zero dependencies.
+**Self-hosted AI coding agent with desktop & mobile UI** — L0/L1/L3 single-axis supervision, MCP tool integration, session checkpoints, and 217+ round verified stability. One-click Windows install, zero dependencies.
 
 [中文简介](./README.zh-CN.md) · [**Usage & commands**](./docs/使用文档.md) · [Full guide](./docs/PROJECT-GUIDE.md) · [项目介绍](./docs/项目介绍.md)
 
@@ -95,13 +95,15 @@ Node.js **22+** (required, matches `engines.node >=22`) · Dev data: `./data/` �
 
 ## Core features
 
-### Dual-mode runtime (L0 / L1 / L2)
+### Single-axis supervisor (L0 / L1 / L3)
 
-Three layers: **L0** is the supervision tier you pick in the sidebar footer (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L2** watches `no_progress`, `file_loop`, `tool_repeat_fail`, `goal_drift`, etc., and can **takeover → correct → handoff** back to the main loop (events in `supervisor-events.jsonl`).
+Three layers: **L0** is the supervision tier you pick in the sidebar footer (`off` / `adaptive` / `strict`); **L1** is Harness `free` ↔ `forced` with `ToolGate`, branch budget, and TaskGraph constraints when risk rises; **L3** is TaskGraph hard guard (`block` / `force_switch`, or `user_checkpoint` when no fallback).
 
-- **adaptive** (default) balances freedom and enforcement; **strict** stays near forced, builds the graph on round 1, and is required for some L2 cases (e.g. file_loop).
-- Tied to **TaskGraph** and **Verification Gate** — code changes without verification cannot “finish by chat alone”; `critical_*` domains affect L2 takeover.
-- Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json`; optional `ICE_SUPERVISOR_SHADOW=1` shadow run.
+> Legacy **L2** (takeover / PassiveObserver / CorrectionPort / EventTimeline) was removed on 2026-08-31 — see [`docs/L2监管层详解.md`](./docs/L2监管层详解.md).
+
+- **adaptive** (default) balances freedom and enforcement; **strict** stays near forced and builds the graph on round 1 for critical engineering tasks.
+- Tied to **TaskGraph** and **Verification Gate** — engineering source changes prompt unit tests; Gate and supervision stay separate.
+- Config: `supervisorMode` in `data/config.json` + `data/supervisor-config.json` (`mode` + `executionMode` only).
 
 ### Harness loop & TaskGraph
 
@@ -115,7 +117,7 @@ Three layers: **L0** is the supervision tier you pick in the sidebar footer (`of
 
 Web-only Canvas pet — visual feedback from Harness / Supervisor / TaskGraph events; **does not** drive runtime decisions.
 
-- **L0 eye color** reflects `off` / `adaptive` / `strict` (toggle in the sidebar footer); the welcome dashboard shows Harness and L2·Gate status at a glance.
+- **L0 eye color** reflects `off` / `adaptive` / `strict` (toggle in the sidebar footer); the welcome dashboard shows Harness and Gate status at a glance.
 - **L1 chip** shows `forced · …` aligned with `execution_mode_enter` reasons.
 - **~20 expressions** plus a token ring; step summary and “round N” sync over WebSocket.
 
@@ -183,10 +185,10 @@ File/Git/Shell, search, URL fetch, Office/XMind parse, **system filesystem brows
 
 ### Telemetry & observability
 
-Harness rounds, memory ops, L1 mode changes, L2 timeline → `data/*/telemetry.jsonl` and `supervisor-events.jsonl`.
+Harness rounds, memory ops, and L1 mode changes → `data/*/telemetry.jsonl` (`execution_mode_enter` / `exit`). Legacy L2 `supervisor-events.jsonl` is no longer read.
 
-- Web: **`~telemetry`**, **`~supervisor`** (`days=` / `event=` / `limit=`), **`~memory`**, etc.; type `~` for the command palette.
-- HTTP: `GET /api/supervisor/events` mirrors chat reports — useful for long-run debugging and shadow comparisons.
+- Web: **`~telemetry`**, **`~supervisor`** (`days=`), **`~memory`**, etc.; type `~` for the command palette.
+- HTTP: `GET /api/supervisor/events` returns Execution Mode enter/exit telemetry.
 - Commands and paths: [`docs/使用文档.md`](./docs/使用文档.md).
 
 ### Tests & quality baseline
@@ -236,13 +238,13 @@ Reports: [`benchMark/reports/`](./benchMark/reports/) · Tasks: [`benchMark/task
 
 ```text
 CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify, compact)
-  → TaskGraph → Supervisor L1/L2 → Checkpoint + BranchBudget → 27 tools + MCP
+  → TaskGraph → Supervisor L0/L1/L3 → Checkpoint + BranchBudget → 27 tools + MCP
 ```
 
 | Piece | Role |
 |-------|------|
 | **Harness** | Main agent loop, verification gate, compaction, telemetry |
-| **Supervisor** | L1 execution mode + L2 runtime takeover/handoff |
+| **Supervisor** | L0 tier + L1 free/forced + L3 graph hard guard |
 | **TaskGraph** | Structured plan injection |
 | **File memory** | Memory v2: levels / evidence / conflict arbitration + session notes |
 | **Skills** | Markdown playbooks in `ICE_SKILLS_DIR`; `#` injection + Skills page |
@@ -261,8 +263,8 @@ CLI / Web / WS / Mobile H5 → memory + skills recall → Harness (tools, verify
 | [项目介绍](./docs/项目介绍.md) | Chinese full reference |
 | [记忆系统详解](./docs/记忆系统详解.md) | Memory v2 design (no vector DB) |
 | [压缩机制详解](./docs/压缩机制详解.md) | Layered compaction + structured recovery |
-| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L2 dual-mode overview |
-| [L2监管层详解](./docs/L2监管层详解.md) | L2 takeover / handoff deep dive |
+| [双模机制详解](./docs/双模机制详解.md) | L0 / L1 / L3 single-axis supervisor overview |
+| [L2监管层详解](./docs/L2监管层详解.md) | L2 Runtime Supervisor retirement note |
 | [PACKAGE_USAGE](./PACKAGE_USAGE.md) | `npm pack` install |
 | [Benchmark rubric](./benchMark/md/三平台同模对比评测与裁判评分体系.md) | Scoring methodology |
 | [debug-billing-settlement](./benchMark/reports/debug-billing-settlement.md) | L4+ 19-bug run (M3, iceCoder vs CC) |

@@ -48,7 +48,6 @@ function minimalRunState(overrides: Partial<HarnessRunState> = {}): HarnessRunSt
     checkpointResumeForkApplied: false,
     contextEmergencyCompactUsed: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
     filesChangedAtRoundStart: 0,
     branchSwitchedThisRound: false,
     ...overrides,

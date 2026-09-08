@@ -92,6 +92,7 @@ window.ChatWsSessionHandlers = (function () {
       }
       if (window.ChatShellDock) window.ChatShellDock.scheduleResync();
       ctx.notifyShellCollabState(data || {});
+      if (typeof ctx.notifyPlanModeState === 'function') ctx.notifyPlanModeState(data || {});
       if (paintedFromSessionSync) return;
       var rt = data && data.runningTurn;
       if ((!rt || !rt.isProcessing) && !skipHeavyFetch) {

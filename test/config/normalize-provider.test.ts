@@ -44,6 +44,72 @@ describe('normalizeProvider', () => {
     );
     expect(p.id).toBe('provider-3');
   });
+
+  it('keeps valid extra request headers', () => {
+    const p = normalizeProvider(
+      {
+        id: 'opencode-go',
+        apiUrl: 'https://opencode.ai/zen/go/v1',
+        apiKey: 'sk-x',
+        modelName: 'omen-alpha',
+        parameters: {},
+        headers: {
+          'x-opencode-session': '{{sessionId}}',
+          'x-opencode-client': 'iceCoder',
+        },
+      },
+      0,
+    );
+    expect(p.headers).toEqual({
+      'x-opencode-session': '{{sessionId}}',
+      'x-opencode-client': 'iceCoder',
+    });
+  });
+
+  it('drops invalid headers instead of crashing boot', () => {
+    const p = normalizeProvider(
+      {
+        id: 'bad',
+        apiUrl: 'https://example.com/v1',
+        apiKey: 'sk-x',
+        modelName: 'm',
+        parameters: {},
+        headers: { Authorization: 'Bearer x' },
+      },
+      0,
+    );
+    expect(p.headers).toBeUndefined();
+  });
+
+  it('canonicalizes reasoningEffort comma list', () => {
+    const p = normalizeProvider(
+      {
+        id: 'opencode-go',
+        apiUrl: 'https://opencode.ai/zen/go/v1',
+        apiKey: 'sk-x',
+        modelName: 'omen-alpha',
+        parameters: {},
+        reasoningEffort: ' Low, High, Max ',
+      },
+      0,
+    );
+    expect(p.reasoningEffort).toBe('low,high,max');
+  });
+
+  it('drops invalid reasoningEffort instead of crashing boot', () => {
+    const p = normalizeProvider(
+      {
+        id: 'bad',
+        apiUrl: 'https://example.com/v1',
+        apiKey: 'sk-x',
+        modelName: 'm',
+        parameters: {},
+        reasoningEffort: 'low,!!!',
+      },
+      0,
+    );
+    expect(p.reasoningEffort).toBeUndefined();
+  });
 });
 
 describe('normalizeProviders', () => {

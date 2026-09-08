@@ -12,6 +12,10 @@ import type {
   UnifiedMessage,
 } from './types.js';
 import { collapseUnifiedSystemMessages } from './openai-message-utils.js';
+import {
+  applyReasoningEffortToResponsesParams,
+  parseReasoningEffort,
+} from './reasoning-effort.js';
 import { prepareToolsForChatCompletions } from './tool-offering.js';
 import {
   cleanText,
@@ -146,6 +150,8 @@ function buildResponsesParams(
     params.tools = convertResponsesTools(prepared);
   }
 
+  applyReasoningEffortToResponsesParams(params, parseReasoningEffort(options.reasoningEffort));
+
   return params as OpenAI.Responses.ResponseCreateParams;
 }
 
@@ -223,7 +229,7 @@ export async function responsesChat(
     model: string;
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
-    reqOpts: { signal?: AbortSignal; timeout: number };
+    reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
   },
 ): Promise<LLMResponse> {
   const params = buildResponsesParams(
@@ -251,7 +257,7 @@ export async function responsesStream(
     model: string;
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
-    reqOpts: { signal?: AbortSignal; timeout: number };
+    reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
   },
 ): Promise<LLMResponse> {
   const params = buildResponsesParams(

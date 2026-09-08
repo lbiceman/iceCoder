@@ -2,7 +2,7 @@
  * win-notification-shortcut.ts — Windows 通知身份：开始菜单快捷方式 + favicon 同源 icon。
  *
  * 开发态若未注册快捷方式，通知左上角会显示 Electron 默认蓝底图标；
- * 注册后改用 desktop/assets/icon.ico（由 src/public/icons/favicon.svg 生成）。
+ * 注册后改用 desktop/assets/icon.ico（由首页品牌标 src/public/icons/logo.png 生成）。
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -10,7 +10,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import { APP_NAME, APP_USER_MODEL_ID, NOTIFICATION_APP_NAME } from './constants';
 
-/** 与 generate-icons.mjs 一致：Web favicon.svg → icon.ico / icon.png */
+/** 与 generate-icons.mjs 一致：首页 logo.png → icon.ico / icon.png */
 export const NOTIFICATION_ICON_CANDIDATES = ['icon.ico', 'icon.png'] as const;
 
 export function resolveNotificationShortcutIconPath(assetsDir: string): string | null {

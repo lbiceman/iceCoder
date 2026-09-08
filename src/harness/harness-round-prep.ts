@@ -33,7 +33,7 @@ import {
   markForcedDegraded,
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
+import type { GlobalModePolicy } from '../types/supervisor.js';
 import type { AnalysisSupervisor } from './supervisor/analysis-supervisor.js';
 import type {
   ChatFunction,
@@ -41,19 +41,22 @@ import type {
   HarnessStepEvent,
   StreamFunction,
 } from './types.js';
+import { timeAsync, timeSync } from './harness-timing.js';
 export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   loopController: LoopController;
   memoryIntegration: HarnessMemoryIntegration;
   graphExecutor: GraphExecutor;
   runtimeTelemetry?: RuntimeTelemetry;
-  /** L2-7 — strict 首轮 `task_graph_init` 门禁经此 bridge 判定；缺省回退 `shouldUseTaskGraph`。 */
-  supervisorBridge?: SupervisorRuntimeBridge;
+  /** L0 策略：仅 strict 在首轮为关键工程任务初始化任务图。 */
+  globalPolicy?: GlobalModePolicy;
   /** Async Sub-Agent：ready analysis prompt injection. */
   analysisSupervisor?: AnalysisSupervisor;
   /** Phase 4a 后台摘要注入用；缺省 'default'。和 workspaceRoot 一起决定 BackgroundTaskManager 实例。 */
   sessionId?: string;
   /** 后台摘要 / 工具 cwd 锚点；ToolExecutorDeps 已要求必填，这里冗余声明便于 prep 单独使用。 */
   workspaceRoot?: string;
+  /** 规划模式：不自动拉起可能改仓库的后台分析。 */
+  planModeActive?: boolean;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -89,7 +92,7 @@ export async function prepareHarnessRound(
     }
   }
 
-  await maybeCompact(deps, {
+  await timeAsync('prep_compact', () => maybeCompact(deps, {
     messages: msgs,
     chatFn,
     logger,
@@ -97,7 +100,7 @@ export async function prepareHarnessRound(
     state,
     lastApiPromptTokens: deps.loopController.getState().lastInputTokens,
     tools: currentTools,
-  });
+  }));
 
   deps.loopController.advanceRound();
   state.turnCount++;
@@ -141,15 +144,8 @@ export async function prepareHarnessRound(
 
   if (state.turnCount === 1 && deps.graphExecutor) {
     const taskSnapshot = state.taskState.snapshot();
-    // L2-7 / §I3 — 首轮 init 门禁：
-    //   - bridge 活跃 (adaptive/strict)：由 `shouldInitTaskGraphAtFirstRound` 按 firstRoundGraph 判定；
-    //     · adaptive: false（首轮**不**init，由 RecoverySupervisor 接管后 replaceGraph 重建）；
-    //     · strict:   true（关键域第 1 轮 initGraph）；
-    //   - bridge 不存在 / off：保留历史行为 — 等同 `shouldUseTaskGraph(intent)`，避免回归
-    //     掉 cli/web 入口"关键 intent 首轮看见任务图"的体验。
-    const shouldInit = deps.supervisorBridge
-      ? deps.supervisorBridge.shouldInitTaskGraphAtFirstRound(taskSnapshot.intent)
-      : shouldUseTaskGraph(taskSnapshot.intent);
+    const shouldInit = deps.globalPolicy?.supervisorMode === 'strict'
+      && shouldUseTaskGraph(taskSnapshot.intent);
     if (shouldInit) {
       try {
         deps.graphExecutor.initGraph({
@@ -186,7 +182,13 @@ export async function prepareHarnessRound(
     }
   }
 
-  if (!deps.graphExecutor?.hasGraph() && !state.analysisAutoTriggered && deps.analysisSupervisor && deps.sessionId) {
+  if (
+    !deps.planModeActive
+    && !deps.graphExecutor?.hasGraph()
+    && !state.analysisAutoTriggered
+    && deps.analysisSupervisor
+    && deps.sessionId
+  ) {
     const taskSnapshot = state.taskState.snapshot();
     const inferredKind = inferKindFromIntent(
       taskSnapshot.intent,
@@ -205,9 +207,6 @@ export async function prepareHarnessRound(
         intent: taskSnapshot.intent,
         phase: taskSnapshot.phase,
         requestedBy: 'supervisor',
-      }, {
-        round,
-        reason: 'auto_trigger',
       });
       state.analysisAutoTriggered = true;
     }
@@ -236,7 +235,9 @@ export async function prepareHarnessRound(
     const skipMemoryRecall = shouldSkipMemoryRecallOnPostForkRound(state);
     if (!skipMemoryRecall) {
       const memoryMode = shouldApplyCasualHarness(intent) ? 'casual_light' as const : 'coarse_pre_llm' as const;
-      await deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep });
+      await timeAsync('prep_memory', () =>
+        deps.memoryIntegration.injectMemoryContext(msgs, { mode: memoryMode, onStep }),
+      );
     }
   }
 
@@ -272,7 +273,9 @@ export async function prepareHarnessRound(
     }
   }
 
-  const normalizedMsgs = buildMessagesForLlm(msgs, { blocks: ephemeralBlocks });
+  const normalizedMsgs = timeSync('prep_build_msgs', () =>
+    buildMessagesForLlm(msgs, { blocks: ephemeralBlocks }),
+  );
 
   if (deps.loopController.isAborted()) {
     return {

@@ -19,7 +19,6 @@ import type { HarnessMemoryIntegration } from './harness-memory.js';
 import {
   getLatestRealUserText,
   hasAssistantToolCallAfterLatestRealUser,
-  isActionableToolRequest,
 } from './harness-message-utils.js';
 import {
   buildIncompleteContinuationPrompt,
@@ -99,25 +98,12 @@ export type HandleNoToolCallsResult =
   | { action: 'return'; result: HarnessResult };
 
 function injectContinuationUserMessage(
-  deps: NoToolRoundDeps,
-  state: HarnessRunState,
+  _deps: NoToolRoundDeps,
+  _state: HarnessRunState,
   msgs: UnifiedMessage[],
   content: string,
 ): void {
-  const round = deps.loopController.getState().currentRound;
-  const bridge = state.supervisorBridge;
-  if (bridge?.isActive() && !deps.supervisorObserverSuppressInject) {
-    bridge.createCorrectionPort(msgs, round).inject(
-      {
-        kind: 'recovery',
-        content,
-        preserveOnCompaction: true,
-      },
-      { phase: state.supervisorPhase, source: 'lifecycle' },
-    );
-  } else {
-    msgs.push({ role: 'user', content });
-  }
+  msgs.push({ role: 'user', content, preserveOnCompaction: true });
 }
 
 /**
@@ -489,9 +475,7 @@ export async function handleNoToolCalls(
       || (
         !hasAssistantToolCallAfterLatestRealUser(msgs)
         && (
-          containsEmbeddedToolCalls(response.content)
-          || (isActionableToolRequest(latestUserText) && !shouldApplyCasualHarness(taskSnap.intent))
-          || resumeWithPending
+          resumeWithPending
           || (pendingWork && taskSnap.intent !== 'question' && taskSnap.intent !== 'inspect')
         )
       )

@@ -10,11 +10,30 @@ window.ChatCommands = (function () {
   /** 行首，或任意空白（空格/换行/制表等）之后输入 / */
   var SLASH_TRIGGER_RE = /(?:^|\s)\/([^\s/]*)$/;
 
-  var SLASH_LOCAL_COMMANDS = [
-    { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
-    { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' },
-    { name: 'next', description: '静默入队下一条任务', prefix: '/' },
-    { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
+  var SLASH_COMMAND_GROUPS = [
+    {
+      key: 'followup',
+      label: '跟进',
+      commands: [
+        { name: 'also', description: '运行中注入用户备注（与主任务同等约束）', prefix: '/' },
+        { name: 'next', description: '静默入队下一条任务', prefix: '/' }
+      ]
+    },
+    {
+      key: 'mode',
+      label: '模式',
+      commands: [
+        { name: 'plan', description: '进入规划模式；可在同一条消息中继续写任务', prefix: '/' },
+        { name: 'shell', description: '进入 Shell 协作模式；可在同一条消息中继续写连接说明或任务', prefix: '/' }
+      ]
+    },
+    {
+      key: 'browse',
+      label: '浏览',
+      commands: [
+        { name: 'open', description: '列出磁盘与文件夹，便于查找路径', prefix: '/' }
+      ]
+    }
   ];
 
   var TILDE_PC_COMMANDS = [
@@ -50,12 +69,46 @@ window.ChatCommands = (function () {
 
   function setRemoteMode(isRemote) { remoteMode = !!isRemote; }
   function getTildeCommands() { return remoteMode ? TILDE_REMOTE_COMMANDS : TILDE_PC_COMMANDS; }
-  function getSlashCommands() { return SLASH_LOCAL_COMMANDS; }
+
+  function getSlashCommands() {
+    var list = [];
+    for (var i = 0; i < SLASH_COMMAND_GROUPS.length; i++) {
+      var cmds = SLASH_COMMAND_GROUPS[i].commands;
+      for (var j = 0; j < cmds.length; j++) list.push(cmds[j]);
+    }
+    return list;
+  }
+
+  function buildSlashDropdownItems(filtered) {
+    var byName = {};
+    for (var i = 0; i < filtered.length; i++) byName[filtered[i].name] = filtered[i];
+    var items = [];
+    for (var g = 0; g < SLASH_COMMAND_GROUPS.length; g++) {
+      var group = SLASH_COMMAND_GROUPS[g];
+      var cmds = [];
+      for (var j = 0; j < group.commands.length; j++) {
+        var cmd = byName[group.commands[j].name];
+        if (cmd) cmds.push(cmd);
+      }
+      if (!cmds.length) continue;
+      items.push({ type: 'separator', label: group.label });
+      for (var k = 0; k < cmds.length; k++) items.push(cmds[k]);
+    }
+    return items;
+  }
+
+  function indexOfFilteredCommand(item) {
+    if (!item || item.type === 'separator' || item.isSeparator) return -1;
+    for (var i = 0; i < cmdFiltered.length; i++) {
+      if (cmdFiltered[i] === item || cmdFiltered[i].name === item.name) return i;
+    }
+    return -1;
+  }
 
   function updateActiveItem() {
     var dd = window.ChatDropdown && window.ChatDropdown.getContainer();
     if (!dd) return;
-    var items = dd.querySelectorAll('.cmd-item');
+    var items = dd.querySelectorAll('.cmd-item:not(.is-separator)');
     for (var j = 0; j < items.length; j++) {
       items[j].classList.toggle('active', j === cmdSelectedIndex);
     }
@@ -149,9 +202,10 @@ window.ChatCommands = (function () {
     var anchorRect = anchor.getBoundingClientRect();
     var activePrefix = cmdActivePrefix;
     var filteredItems = cmdFiltered.slice();
+    var displayItems = isSlash ? buildSlashDropdownItems(filteredItems) : filteredItems;
     window.ChatDropdown.open({
       anchor: anchor,
-      items: filteredItems,
+      items: displayItems,
       placement: 'top',
       placementRef: isSlash ? 'anchor' : 'toolbar',
       align: isSlash ? 'start' : 'center',
@@ -159,11 +213,13 @@ window.ChatCommands = (function () {
       minWidth: isSlash ? 200 : Math.ceil(anchorRect.width),
       maxWidth: isSlash ? 320 : 300,
       markAnchorActive: !isSlash,
-      onSelect: function (item, idx) {
-        applySelection(idx);
+      onSelect: function (item) {
+        var idx = indexOfFilteredCommand(item);
+        if (idx >= 0) applySelection(idx);
       },
-      onHighlight: function (_item, idx) {
-        cmdSelectedIndex = idx;
+      onHighlight: function (item) {
+        var idx = indexOfFilteredCommand(item);
+        if (idx >= 0) cmdSelectedIndex = idx;
       },
       onClose: function () {
         // 刷新过滤列表时 ChatDropdown.open 会先 close 再 open；状态清理由 hide() 负责。
@@ -189,7 +245,7 @@ window.ChatCommands = (function () {
       applyTargetFn(value);
     } else if (targetInput) {
       var slashValue = value;
-      if (cmd.name === 'shell') slashValue = slashValue + ' ';
+      if (cmd.name === 'shell' || cmd.name === 'plan') slashValue = slashValue + ' ';
       if (!replaceSlashTriggerInTextarea(targetInput, slashValue)) {
         targetInput.value = slashValue;
         dispatchInput(targetInput);

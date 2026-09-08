@@ -357,13 +357,12 @@ export interface NodeCostTracker {
 // §27 — Escalation Policy
 // ═══════════════════════════════════════════════
 
-/** 升级级别（0=观察, 1=软纠正, 2=硬纠正, 3=分支切换） */
+/** 升级级别（0/1=观察, 2=硬纠正, 3=分支切换） */
 export type EscalationLevel = 0 | 1 | 2 | 3;
 
 /** 升级动作 */
 export type EscalationAction =
   | { type: 'none' }
-  | { type: 'inject_hint'; message: string }
   | { type: 'block_and_reset'; blockedTools: string[]; message: string }
   | { type: 'force_branch_switch'; reason: FallbackReason };
 
@@ -403,7 +402,7 @@ export interface EscalationPolicy {
 
 /** 纠正动作 */
 export type CorrectionAction =
-  | { type: 'inject_hint'; message: string }
+  | { type: 'observe'; message?: string }
   | { type: 'block_tool'; toolName: string }
   | { type: 'reset_node'; nodeId: string }
   | { type: 'force_branch_switch'; reason: string };

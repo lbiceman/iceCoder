@@ -52,7 +52,6 @@ function buildState(messages: UnifiedMessage[], overrides: Partial<HarnessRunSta
     checkpointResumeForkApplied: false,
     contextEmergencyCompactUsed: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
     filesChangedAtRoundStart: 0,
     branchSwitchedThisRound: false,
     ...overrides,
@@ -203,5 +202,33 @@ describe('callHarnessLlm · context window emergency fork', () => {
 
     expect(result.action).toBe('error');
     expect(state.contextEmergencyCompactUsed).toBe(false);
+  });
+
+  it('forwards sessionId to chatFn for provider affinity headers', async () => {
+    const state = buildState([{ role: 'user', content: 'hi' }]);
+    const loopController = new LoopController({ maxRounds: 3 });
+    const chatFn = vi.fn().mockResolvedValue({
+      content: 'ok',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, provider: 'test' },
+      finishReason: 'stop',
+    });
+
+    const result = await callHarnessLlm(
+      { loopController, sessionId: 'web-session-42' },
+      {
+        state,
+        normalizedMsgs: state.messages,
+        currentTools: [],
+        round: 1,
+        chatFn,
+        logger: new HarnessLogger(),
+      },
+    );
+
+    expect(result.action).toBe('response');
+    expect(chatFn).toHaveBeenCalledWith(
+      state.messages,
+      expect.objectContaining({ sessionId: 'web-session-42' }),
+    );
   });
 });

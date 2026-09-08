@@ -199,6 +199,42 @@ Document parsing tools are offered on demand: they appear in your tool list only
   };
 }
 
+/** 规划模式下需从静态 system 中移除的实现向段落，避免鼓励改代码。 */
+export const PLAN_MODE_REMOVED_SECTION_IDS = [
+  'doing_tasks',
+  'actions',
+  'shell_guide',
+] as const;
+
+export function createPlanModeSection(): PromptSection {
+  return {
+    id: 'plan_mode',
+    title: 'Plan Mode',
+    content: `# Plan Mode (active)
+
+You are in planning mode. You must not modify application or source code.
+
+Allowed:
+- Read and search the repository; browse files; fetch docs; web search; parse documents.
+- Write or update documentation only: \`.md\`, \`.markdown\`, \`.mdx\`, \`.txt\`, \`.rst\`, \`.adoc\`, \`.asciidoc\`.
+
+Forbidden:
+- Any code or config edit (\`.ts\`, \`.js\`, \`.py\`, \`.json\` except docs, etc.).
+- \`run_command\`, \`git\`, \`fs_operation\`, \`undo_edit\`, shell tools, and MCP tools.
+
+How to work:
+1. If the goal, constraints, current gaps, or acceptance criteria are missing, ask the user before inventing them.
+2. Propose or reuse a document path (e.g. \`docs/plan-<topic>.md\`) and keep the plan there.
+3. Structure the document: Goal, Current state / gaps, Proposed steps, Acceptance criteria, Open questions.
+4. After the document is good enough, tell the user to close Plan mode (the Plan chip ×) and then ask the Agent to implement from that document.
+
+If the user asks you to implement, refactor, run commands, or commit: refuse, explain the restriction, and point them to the document plus exiting Plan mode.`,
+    isStatic: false,
+    priority: 22,
+    enabled: true,
+  };
+}
+
 /** Shell 协作模式下需从静态 system 中移除的段落（含 run_command / 文件 / MCP 等说明）。 */
 export const SHELL_COLLAB_REMOVED_SECTION_IDS = [
   'doing_tasks',

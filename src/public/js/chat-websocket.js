@@ -324,6 +324,12 @@ window.ChatWebSocket = (function () {
       case 'shell_collab_resumed':
         emit('shell_collab_resumed', data || {});
         break;
+      case 'plan_mode_entered':
+        emit('plan_mode_entered', data || {});
+        break;
+      case 'plan_mode_exited':
+        emit('plan_mode_exited', data || {});
+        break;
       case 'session_cleared':
         emit('session_cleared', data || {});
         break;
@@ -438,6 +444,21 @@ window.ChatWebSocket = (function () {
     return harnessCanRestore && !isProcessing();
   }
 
+  function parseReasoningEffort(raw) {
+    if (typeof raw !== 'string') return null;
+    var token = raw.trim().toLowerCase();
+    return /^[a-z][\w.-]{0,31}$/.test(token) ? token : null;
+  }
+
+  function resolveReasoningEffort(opts) {
+    var fromOpts = opts && parseReasoningEffort(opts.reasoningEffort);
+    if (fromOpts) return fromOpts;
+    if (window.ChatReasoningStepper && typeof window.ChatReasoningStepper.getLevel === 'function') {
+      return parseReasoningEffort(window.ChatReasoningStepper.getLevel());
+    }
+    return null;
+  }
+
   function sendMessage(text, opts) {
     var payload = { type: 'message', content: text };
     opts = opts || {};
@@ -448,6 +469,8 @@ window.ChatWebSocket = (function () {
     if (typeof opts.queueInsertIndex === 'number') payload.queueInsertIndex = opts.queueInsertIndex;
     if (opts.source) payload.source = opts.source;
     if (opts.command) payload.command = opts.command;
+    var reasoningEffort = resolveReasoningEffort(opts);
+    if (reasoningEffort) payload.reasoningEffort = reasoningEffort;
     var sent = send(payload);
     if (sent) processingBySession[getViewportSessionId()] = true;
     return sent;

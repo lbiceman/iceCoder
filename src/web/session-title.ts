@@ -5,36 +5,21 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import '../cli/paths.js';
+import {
+  readSessionIndex,
+  writeSessionIndex,
+  withSessionIndexLock,
+  type SessionMeta,
+} from './session-index-store.js';
+
+export type { SessionMeta };
 
 const SESSIONS_DIR = path.resolve(process.env.ICE_SESSIONS_DIR!);
-const INDEX_FILE = path.join(SESSIONS_DIR, 'index.json');
 
 export const SESSION_TITLE_MAX_LEN = 20;
 
 /** 仍为占位标题、可被首条提示词覆盖 */
 export const PLACEHOLDER_SESSION_TITLES = new Set(['新会话', '默认会话', '未命名']);
-
-export interface SessionMeta {
-  id: string;
-  title: string;
-  createdAt: number;
-  updatedAt: number;
-  messageCount: number;
-}
-
-async function readSessionIndex(): Promise<SessionMeta[]> {
-  try {
-    const data = await fs.readFile(INDEX_FILE, 'utf-8');
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed)) return parsed as SessionMeta[];
-  } catch { /* missing or invalid */ }
-  return [];
-}
-
-async function writeSessionIndex(index: SessionMeta[]): Promise<void> {
-  await fs.mkdir(SESSIONS_DIR, { recursive: true });
-  await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2), 'utf-8');
-}
 
 /** 将首条用户提示词截取为侧栏显示标题 */
 export function deriveSessionTitleFromPrompt(prompt: string): string {
@@ -81,17 +66,21 @@ async function countPersistedUserMessages(sessionId: string): Promise<number> {
 export async function backfillPlaceholderSessionTitles(
   index: SessionMeta[],
 ): Promise<SessionMeta[]> {
-  let changed = false;
-  for (const entry of index) {
-    if (!isPlaceholderSessionTitle(entry.title)) continue;
-    const first = await readFirstUserMessageContent(entry.id);
-    if (!first) continue;
-    entry.title = deriveSessionTitleFromPrompt(first);
-    entry.updatedAt = Date.now();
-    changed = true;
-  }
-  if (changed) await writeSessionIndex(index);
-  return index;
+  return withSessionIndexLock(async () => {
+    const current = await readSessionIndex();
+    const working = current.length > 0 ? current : index;
+    let changed = false;
+    for (const entry of working) {
+      if (!isPlaceholderSessionTitle(entry.title)) continue;
+      const first = await readFirstUserMessageContent(entry.id);
+      if (!first) continue;
+      entry.title = deriveSessionTitleFromPrompt(first);
+      entry.updatedAt = Date.now();
+      changed = true;
+    }
+    if (changed) await writeSessionIndex(working);
+    return working;
+  });
 }
 
 /**
@@ -102,19 +91,21 @@ export async function applyFirstPromptSessionTitle(
   sessionId: string,
   prompt: string,
 ): Promise<string | null> {
-  const index = await readSessionIndex();
-  const entry = index.find((s) => s.id === sessionId);
-  if (!entry || !isPlaceholderSessionTitle(entry.title)) return null;
+  return withSessionIndexLock(async () => {
+    const index = await readSessionIndex();
+    const entry = index.find((s) => s.id === sessionId);
+    if (!entry || !isPlaceholderSessionTitle(entry.title)) return null;
 
-  const userCount = await countPersistedUserMessages(sessionId);
-  if (userCount !== 1) return null;
+    const userCount = await countPersistedUserMessages(sessionId);
+    if (userCount !== 1) return null;
 
-  const title = deriveSessionTitleFromPrompt(prompt);
-  entry.title = title;
-  entry.updatedAt = Date.now();
-  entry.messageCount = Math.max(entry.messageCount, userCount);
-  await writeSessionIndex(index);
-  return title;
+    const title = deriveSessionTitleFromPrompt(prompt);
+    entry.title = title;
+    entry.updatedAt = Date.now();
+    entry.messageCount = Math.max(entry.messageCount, userCount);
+    await writeSessionIndex(index);
+    return title;
+  });
 }
 
 export interface DeletedMessageSessionMetadata {
@@ -130,24 +121,26 @@ export async function updateSessionMetadataAfterMessageDelete(
   sessionId: string,
   metadata: DeletedMessageSessionMetadata,
 ): Promise<string | null> {
-  const index = await readSessionIndex();
-  const entry = index.find((session) => session.id === sessionId);
-  if (!entry) return null;
+  return withSessionIndexLock(async () => {
+    const index = await readSessionIndex();
+    const entry = index.find((session) => session.id === sessionId);
+    if (!entry) return null;
 
-  entry.messageCount = metadata.remainingUserCount;
-  entry.updatedAt = Date.now();
+    entry.messageCount = metadata.remainingUserCount;
+    entry.updatedAt = Date.now();
 
-  let updatedTitle: string | null = null;
-  if (
-    metadata.deletedPrompt.trim()
-    && entry.title === deriveSessionTitleFromPrompt(metadata.deletedPrompt)
-  ) {
-    updatedTitle = metadata.firstRemainingPrompt?.trim()
-      ? deriveSessionTitleFromPrompt(metadata.firstRemainingPrompt)
-      : (sessionId === 'default' ? '默认会话' : '新会话');
-    entry.title = updatedTitle;
-  }
+    let updatedTitle: string | null = null;
+    if (
+      metadata.deletedPrompt.trim()
+      && entry.title === deriveSessionTitleFromPrompt(metadata.deletedPrompt)
+    ) {
+      updatedTitle = metadata.firstRemainingPrompt?.trim()
+        ? deriveSessionTitleFromPrompt(metadata.firstRemainingPrompt)
+        : (sessionId === 'default' ? '默认会话' : '新会话');
+      entry.title = updatedTitle;
+    }
 
-  await writeSessionIndex(index);
-  return updatedTitle;
+    await writeSessionIndex(index);
+    return updatedTitle;
+  });
 }

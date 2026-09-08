@@ -5,6 +5,7 @@
  * Requirements: 20.1, 20.2, 20.3, 20.4, 20.5, 20.6, 20.7, 20.8
  */
 
+import { randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 import type {
   ContentBlock,
@@ -32,6 +33,15 @@ import {
   responsesStream,
   type OpenAiApiMode,
 } from './openai-responses-bridge.js';
+import { endTiming, harnessTimingEnabled, markTimingStart, recordHarnessTiming } from '../harness/harness-timing.js';
+import {
+  resolveProviderRequestHeaders,
+} from './provider-request-headers.js';
+import {
+  applyReasoningEffortToChatParams,
+  parseReasoningEffort,
+  resolveWireReasoningEffort,
+} from './reasoning-effort.js';
 
 export { collapseUnifiedSystemMessages } from './openai-message-utils.js';
 
@@ -41,6 +51,7 @@ const FIXED_CHAT_PARAM_KEYS = [
   'messages',
   'stream',
   'tools',
+  'reasoning_effort',
   'temperature',
   'max_tokens',
   'top_p',
@@ -98,6 +109,10 @@ export interface OpenAIAdapterConfig {
   supportsVision?: boolean;
   /** OpenAI 兼容端点 API 模式；Bedrock GPT-5.4/5.5 等需 `responses` */
   apiMode?: OpenAiApiMode;
+  /** 发给该厂商的额外 HTTP 请求头模板（{{sessionId}} 等在请求时展开） */
+  requestHeaders?: Record<string, string>;
+  /** 该厂商配置的推理强度档位；为空则不发送 reasoning_effort */
+  reasoningEffortLevels?: string[];
   [key: string]: any;
 }
 
@@ -114,22 +129,42 @@ export class OpenAIAdapter implements ProviderAdapter {
   private defaultRequestTimeoutMs: number;
   private defaultParams: Omit<OpenAIAdapterConfig, 'apiKey' | 'baseURL' | 'organization' | 'model'>;
   private apiMode: OpenAiApiMode;
+  private readonly requestHeaderTemplates: Record<string, string>;
+  private readonly reasoningEffortLevels: string[];
+  /** 配置了 {{sessionId}} 但调用方未传会话时的稳定兜底值 */
+  private readonly fallbackSessionId: string;
 
   constructor(config: OpenAIAdapterConfig) {
     this.name = config.name ?? 'openai';
     this.defaultRequestTimeoutMs = config.timeout ?? 120_000;
+    this.requestHeaderTemplates = { ...(config.requestHeaders ?? {}) };
+    this.reasoningEffortLevels = [...(config.reasoningEffortLevels ?? [])];
+    this.fallbackSessionId = randomUUID();
+    this.model = config.model;
+    // 视觉支持：显式配置 > 默认开启
+    this.supportsVision = config.supportsVision ?? true;
+    this.apiMode = resolveOpenAiApiMode(config.model, config.apiMode);
+    const defaultExtraHeaders = this.resolveConfiguredHeaders();
     this.client = new OpenAI({
       apiKey: config.apiKey,
       baseURL: config.baseURL,
       organization: config.organization,
       timeout: this.defaultRequestTimeoutMs,
       maxRetries: 0,                            // 重试由上层 LLMAdapter.withRetry 统一处理
+      ...(defaultExtraHeaders ? { defaultHeaders: defaultExtraHeaders } : {}),
     });
-    this.model = config.model;
-    // 视觉支持：显式配置 > 默认开启
-    this.supportsVision = config.supportsVision ?? true;
-    this.apiMode = resolveOpenAiApiMode(config.model, config.apiMode);
-    const { apiKey, baseURL, organization, model, timeout, supportsVision, apiMode: _apiMode, ...rest } = config;
+    const {
+      apiKey,
+      baseURL,
+      organization,
+      model,
+      timeout,
+      supportsVision,
+      apiMode: _apiMode,
+      requestHeaders: _requestHeaders,
+      reasoningEffortLevels: _reasoningEffortLevels,
+      ...rest
+    } = config;
     this.defaultParams = rest;
   }
 
@@ -141,7 +176,7 @@ export class OpenAIAdapter implements ProviderAdapter {
     model: string;
     defaultParams: Record<string, unknown>;
     supportsVision: boolean;
-    reqOpts: { signal?: AbortSignal; timeout: number };
+    reqOpts: { signal?: AbortSignal; timeout: number; headers?: Record<string, string> };
   } {
     return {
       providerName: this.name,
@@ -155,7 +190,7 @@ export class OpenAIAdapter implements ProviderAdapter {
   private buildRequestOptions(
     options: LLMOptions,
     signal?: AbortSignal,
-  ): { signal?: AbortSignal; timeout: number } {
+  ): { signal?: AbortSignal; timeout: number; headers?: Record<string, string> } {
     const perCall =
       typeof options.requestTimeoutMs === 'number'
       && Number.isFinite(options.requestTimeoutMs)
@@ -165,10 +200,43 @@ export class OpenAIAdapter implements ProviderAdapter {
     const timeout = perCall !== undefined
       ? Math.max(this.defaultRequestTimeoutMs, perCall)
       : this.defaultRequestTimeoutMs;
+    const headers = this.resolveConfiguredHeaders(options);
     return {
       ...(signal ? { signal } : {}),
       timeout,
+      ...(headers ? { headers } : {}),
     };
+  }
+
+  private resolveConfiguredHeaders(options?: LLMOptions): Record<string, string> | undefined {
+    const sessionId = typeof options?.sessionId === 'string' && options.sessionId.trim()
+      ? options.sessionId.trim()
+      : this.fallbackSessionId;
+    return resolveProviderRequestHeaders(this.requestHeaderTemplates, {
+      sessionId,
+      providerId: this.name,
+      model: options?.model || this.model,
+    });
+  }
+
+  private extraHeadersLogFrag(headers?: Record<string, string>): string {
+    if (!headers || Object.keys(headers).length === 0) return '';
+    return `, extraHeaders=${Object.keys(headers).join(',')}`;
+  }
+
+  private effortLogFrag(options: LLMOptions): string {
+    const effort = parseReasoningEffort(options.reasoningEffort);
+    return effort ? `, reasoning=${effort}` : '';
+  }
+
+  private withResolvedEffort(options: LLMOptions): LLMOptions {
+    const effort = resolveWireReasoningEffort(options.reasoningEffort, this.reasoningEffortLevels);
+    if (!effort) {
+      if (!options.reasoningEffort) return options;
+      const { reasoningEffort: _drop, ...rest } = options;
+      return rest;
+    }
+    return { ...options, reasoningEffort: effort };
   }
 
   /**
@@ -177,12 +245,13 @@ export class OpenAIAdapter implements ProviderAdapter {
    */
   async chat(messages: UnifiedMessage[], options: LLMOptions): Promise<LLMResponse> {
     try {
+      options = this.withResolvedEffort(options);
       const signal = options.signal ?? undefined;
       if (signal?.aborted) throw makeAbortedError(this.name);
 
       if (this.apiMode === 'responses') {
         console.log(
-          `[OpenAI] responses 请求 → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个`,
+          `[OpenAI] responses 请求 → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个${this.effortLogFrag(options)}`,
         );
         const startTime = Date.now();
         const result = await responsesChat(
@@ -192,23 +261,27 @@ export class OpenAIAdapter implements ProviderAdapter {
           this.responsesCtx(options, signal),
         );
         const elapsed = Date.now() - startTime;
+        recordHarnessTiming('llm_http', elapsed);
         console.log(
           `[OpenAI] responses 响应: ${elapsed}ms | tokens: ${result.usage.inputTokens} | ${result.usage.outputTokens}`,
         );
         return result;
       }
 
+      const serializeStartedAt = markTimingStart();
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, false);
+      endTiming('llm_serialize', serializeStartedAt);
 
       const reqOpts = this.buildRequestOptions(options, signal);
       console.log(
-        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms`,
+        `[OpenAI] chat 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个, timeout=${reqOpts.timeout}ms${this.effortLogFrag(options)}${this.extraHeadersLogFrag(reqOpts.headers)}`,
       );
       const startTime = Date.now();
       const response = await this.client.chat.completions.create(params, reqOpts);
 
       const elapsed = Date.now() - startTime;
+      recordHarnessTiming('llm_http', elapsed);
       const usage = (response as OpenAI.ChatCompletion).usage;
       const pc = usage ? extractPromptCacheFromChatUsage(usage) : {};
       const cacheFrag =
@@ -219,7 +292,10 @@ export class OpenAIAdapter implements ProviderAdapter {
         `[OpenAI] chat 响应: ${elapsed}ms | tokens: ${usage?.prompt_tokens ?? '?'} | ${usage?.completion_tokens ?? '?'}${cacheFrag}`,
       );
 
-      return this.convertResponse(response as OpenAI.ChatCompletion);
+      const deserializeStartedAt = markTimingStart();
+      const converted = this.convertResponse(response as OpenAI.ChatCompletion);
+      endTiming('llm_deserialize', deserializeStartedAt);
+      return converted;
     } catch (error) {
       throw this.convertError(error);
     }
@@ -235,12 +311,13 @@ export class OpenAIAdapter implements ProviderAdapter {
     options: LLMOptions,
   ): Promise<LLMResponse> {
     try {
+      options = this.withResolvedEffort(options);
       const signal = options.signal ?? undefined;
       if (signal?.aborted) throw makeAbortedError(this.name);
 
       if (this.apiMode === 'responses') {
         console.log(
-          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个`,
+          `[OpenAI] responses stream → model=${options.model || this.model}, messages=${messages.length}条, tools=${options.tools?.length ?? 0}个${this.effortLogFrag(options)}`,
         );
         const startTime = Date.now();
         const result = await responsesStream(
@@ -251,19 +328,24 @@ export class OpenAIAdapter implements ProviderAdapter {
           this.responsesCtx(options, signal),
         );
         const elapsed = Date.now() - startTime;
+        recordHarnessTiming('llm_http', elapsed);
         console.log(
           `[OpenAI] responses stream 完成: ${elapsed}ms | tokens: ${result.usage.inputTokens} | ${result.usage.outputTokens}`,
         );
         return result;
       }
 
+      const serializeStartedAt = markTimingStart();
       const openaiMessages = this.convertToOpenAIMessages(messages);
       const params = this.buildRequestParams(openaiMessages, options, true);
-
-      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个`);
-      const startTime = Date.now();
+      endTiming('llm_serialize', serializeStartedAt);
 
       const reqOpts = this.buildRequestOptions(options, signal);
+      console.log(`[OpenAI] stream 请求 → model=${params.model}, messages=${openaiMessages.length}条, tools=${params.tools?.length ?? 0}个${this.effortLogFrag(options)}${this.extraHeadersLogFrag(reqOpts.headers)}`);
+      const startTime = Date.now();
+      const timingOn = harnessTimingEnabled();
+      let firstTokenMs: number | undefined;
+
       const stream = await this.client.chat.completions.create(
         { ...params, stream: true },
         reqOpts,
@@ -284,6 +366,10 @@ export class OpenAIAdapter implements ProviderAdapter {
         if (delta) {
           // Handle regular content
           if (delta.content) {
+            if (timingOn && firstTokenMs === undefined) {
+              firstTokenMs = Date.now() - startTime;
+              recordHarnessTiming('llm_first_token', firstTokenMs);
+            }
             fullContent += delta.content;
             callback(delta.content, false);
           }
@@ -330,6 +416,7 @@ export class OpenAIAdapter implements ProviderAdapter {
       callback('', true);
 
       const elapsed = Date.now() - startTime;
+      recordHarnessTiming('llm_http', elapsed);
       const streamCacheFrag =
         lastUsageExtras.cacheReadTokens != null || lastUsageExtras.cacheMissTokens != null
           ? ` | cache_hit|miss=${lastUsageExtras.cacheReadTokens ?? '?'}|${lastUsageExtras.cacheMissTokens ?? '?'}`
@@ -607,6 +694,11 @@ export class OpenAIAdapter implements ProviderAdapter {
     }
 
     // 透传提供者特定参数（如 NVIDIA 的 chat_template_kwargs）
+    applyReasoningEffortToChatParams(
+      params,
+      resolveWireReasoningEffort(options.reasoningEffort, this.reasoningEffortLevels),
+    );
+
     if (options.chatTemplateKwargs) {
       params.chat_template_kwargs = options.chatTemplateKwargs;
     }

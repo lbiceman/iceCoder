@@ -39,6 +39,18 @@ export interface ProviderConfig {
    * 并映射档位：≤128K→S，≤256K→M，≤512K→L，>512K→XL（`tierFromMaxContextTokens`）。
    */
   maxContextTokens?: number;
+  /**
+   * 发给该厂商的额外 HTTP 请求头。值为字面量，或占位符
+   * `{{sessionId}}` / `{{providerId}}` / `{{model}}`。
+   * 不可覆盖 Authorization、Content-Type 等保留头。
+   */
+  headers?: Record<string, string>;
+  /**
+   * 推理强度档位，英文逗号分隔（如 `low,high,max` 或 `low,medium,high,xhigh`）。
+   * 聊天栏步骤器按此列表显示；请求把选中值原样作为 reasoning_effort 发送。
+   * 留空则不发送该参数。
+   */
+  reasoningEffort?: string;
 }
 
 /**

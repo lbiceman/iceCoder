@@ -25,6 +25,7 @@ import './chat-welcome.js';
 import './chat-dropdown.js';
 import './chat-commands.js';
 import './chat-model-picker.js';
+import './chat-reasoning-stepper.js';
 import './chat-file.js';
 import './chat-qr.js';
 import './chat-pet-bridge.js';

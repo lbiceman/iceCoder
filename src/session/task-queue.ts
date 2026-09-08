@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
 
 export interface QueuedTask {
   id: string;
@@ -9,6 +10,8 @@ export interface QueuedTask {
   images?: string[];
   skills?: string[];
   referencePaths?: string[];
+  /** 该任务整轮 LLM 调用使用的推理强度（发送时捕获） */
+  reasoningEffort?: ReasoningEffort;
   enqueuedAt: number;
   source: 'implicit' | 'explicit';
 }
@@ -17,6 +20,29 @@ export type TaskEnqueueInput = Omit<QueuedTask, 'id' | 'enqueuedAt'> & { text: s
 
 function taskQueueFilePath(sessionsDir: string, sessionId: string): string {
   return path.join(sessionsDir, `${sessionId}.task-queue.json`);
+}
+
+function toQueuedTask(task: TaskEnqueueInput, id: string, enqueuedAt: number): QueuedTask {
+  const reasoningEffort = parseReasoningEffort(task.reasoningEffort);
+  return {
+    id,
+    text: task.text,
+    messageId: task.messageId,
+    images: task.images,
+    referencePaths: task.referencePaths,
+    skills: task.skills,
+    enqueuedAt,
+    source: task.source,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function withParsedReasoningEffort(item: QueuedTask): QueuedTask {
+  const reasoningEffort = parseReasoningEffort(item.reasoningEffort);
+  if (reasoningEffort) return { ...item, reasoningEffort };
+  if (!item.reasoningEffort) return item;
+  const { reasoningEffort: _drop, ...rest } = item;
+  return rest;
 }
 
 export class TaskQueueManager {
@@ -36,7 +62,8 @@ export class TaskQueueManager {
     try {
       const raw = await fs.readFile(taskQueueFilePath(this.sessionsDir, sessionId), 'utf-8');
       const parsed = JSON.parse(raw) as QueuedTask[];
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.map(withParsedReasoningEffort);
     } catch {
       return [];
     }
@@ -63,16 +90,7 @@ export class TaskQueueManager {
 
   async enqueue(sessionId: string, task: TaskEnqueueInput): Promise<QueuedTask> {
     const queue = await this.ensureLoaded(sessionId);
-    const entry: QueuedTask = {
-      id: randomUUID(),
-      text: task.text,
-      messageId: task.messageId,
-      images: task.images,
-      referencePaths: task.referencePaths,
-      skills: task.skills,
-      enqueuedAt: Date.now(),
-      source: task.source,
-    };
+    const entry = toQueuedTask(task, randomUUID(), Date.now());
     queue.push(entry);
     await this.persist(sessionId, queue);
     return { ...entry };
@@ -101,16 +119,7 @@ export class TaskQueueManager {
   ): Promise<QueuedTask> {
     const queue = await this.ensureLoaded(sessionId);
     const clamped = Math.max(0, Math.min(index, queue.length));
-    const entry: QueuedTask = {
-      id: randomUUID(),
-      text: task.text,
-      messageId: task.messageId,
-      images: task.images,
-      referencePaths: task.referencePaths,
-      skills: task.skills,
-      enqueuedAt: Date.now(),
-      source: task.source,
-    };
+    const entry = toQueuedTask(task, randomUUID(), Date.now());
     queue.splice(clamped, 0, entry);
     await this.persist(sessionId, queue);
     return { ...entry };

@@ -46,7 +46,6 @@ describe('GET/PUT /api/config/supervisor-runtime', () => {
     await fs.writeFile(configPath, JSON.stringify({ providers: [], supervisorMode: 'adaptive' }, null, 2));
     await fs.writeFile(supervisorPath, JSON.stringify({
       mode: 'adaptive',
-      shadow: false,
       executionMode: { writeTargetsEnterThreshold: 3 },
     }, null, 2));
   });

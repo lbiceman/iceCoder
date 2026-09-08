@@ -27,6 +27,7 @@ import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
 import { assembleShellCollabPrompt } from '../prompts/shell-collab-prompt.js';
+import { assemblePlanModePrompt } from '../prompts/plan-mode-prompt.js';
 import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
 import {
   getHarnessMaxRoundsFromEnv,
@@ -36,6 +37,7 @@ import {
 import { readSkipPermissionChecksFromMainConfig } from '../config/main-config-supervisor-mode.js';
 import { readVerificationExemptDirsFromMainConfig } from '../harness/verification-exempt-config.js';
 import { resolveDefaultChatModelMeta, resolveDefaultSupportsVision } from './routes/config.js';
+import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
 import {
   buildUserMessageWithImages,
   persistInlineImages,
@@ -130,6 +132,7 @@ export interface HandleChatMessageInput {
   clientMessageId?: string | null;
   skipUserMessageAppend?: boolean;
   source?: 'implicit' | 'explicit';
+  reasoningEffort?: ReasoningEffort;
 }
 
 /** 目录列举确定性回合结束：更新结构化缓存、持久化、推送 WS（无 LLM） */
@@ -220,6 +223,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const inlineImages = input.images ?? [];
   const referencePaths = input.referencePaths ?? [];
   const clientMessageId = input.clientMessageId ?? null;
+  const reasoningEffort = parseReasoningEffort(input.reasoningEffort);
   const options = {
     skipUserMessageAppend: input.skipUserMessageAppend,
     source: input.source,
@@ -331,6 +335,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         id: userMsgId,
         sentAt: userSentAt,
         ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
+        ...(display.planCommand ? { planCommand: display.planCommand } : {}),
         ...(display.openCommand ? { openCommand: display.openCommand } : {}),
         ...(display.skills ? { skills: display.skills } : {}),
         ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
@@ -354,6 +359,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
           content: display.content,
           sentAt: userSentAt,
           ...(display.shellCommand ? { shellCommand: display.shellCommand } : {}),
+          ...(display.planCommand ? { planCommand: display.planCommand } : {}),
           ...(display.openCommand ? { openCommand: display.openCommand } : {}),
           ...(display.skills ? { skills: display.skills } : {}),
           ...(display.referencePaths ? { referencePaths: display.referencePaths } : {}),
@@ -456,7 +462,9 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
 
   const effectiveAssembled = sessionToolCtx.shellCollabActive
     ? assembleShellCollabPrompt(assembled)
-    : assembled;
+    : sessionToolCtx.planModeActive
+      ? assemblePlanModePrompt(assembled)
+      : assembled;
   const mcpRuntimeContext = sessionToolCtx.mcpRuntimeContext;
   const docToolsContext = sessionToolCtx.shellCollabActive || shouldDisableRuntimeTools()
     ? {}
@@ -511,9 +519,9 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     verificationExemptDirs,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
-    supervisorBridge: supervisorRuntime.bridge,
     enableRequestAnalysis: sessionToolCtx.enableRequestAnalysis,
     shellCollabActive: sessionToolCtx.shellCollabActive,
+    planModeActive: sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
     onConfirm: createToolConfirmHandler(runSessionId),
   };
@@ -574,7 +582,12 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   try {
     const result = await harness.run(
       harnessUserMessage,
-      (msgs, opts) => llmAdapter.chat(msgs, { ...opts, signal: abortController.signal }),
+      (msgs, opts) => llmAdapter.chat(msgs, {
+        ...opts,
+        signal: abortController.signal,
+        sessionId: runSessionId,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      }),
       (event) => {
         foldStepIntoRunningTurn(runSessionId, event);
 
@@ -653,7 +666,12 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
         }
       },
       existingMessages,
-      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, { ...opts, signal: abortController.signal }),
+      (msgs, callback, opts) => llmAdapter.stream(msgs, callback, {
+        ...opts,
+        signal: abortController.signal,
+        sessionId: runSessionId,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      }),
       Array.isArray(userMessageContent) ? userMessageContent : undefined,
     );
 

@@ -4,7 +4,6 @@ import type {
   ModeSignal,
   RuntimeExecutionState,
   SupervisorMode,
-  SupervisorPhase,
   TaskRiskLevel,
 } from '../../types/supervisor.js';
 
@@ -65,7 +64,6 @@ export interface BuildModeDecisionContextInput {
   round: number;
   executionMode: ExecutionMode;
   executionModeLockRemaining: number;
-  supervisorPhase: SupervisorPhase;
   supervisorMode: SupervisorMode;
   riskLevel: TaskRiskLevel;
   state: RuntimeExecutionState;
@@ -79,7 +77,6 @@ export function buildModeDecisionContext(
     round: input.round,
     executionMode: input.executionMode,
     executionModeLockRemaining: input.executionModeLockRemaining,
-    supervisorPhase: input.supervisorPhase,
     supervisorMode: input.supervisorMode,
     riskLevel: input.riskLevel,
     state: input.state,

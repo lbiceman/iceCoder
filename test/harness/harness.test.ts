@@ -26,7 +26,6 @@ import {
   getHarnessTokenBudget,
 } from '../../src/harness/token-budget-config.js';
 import { resolveSupervisorConfig } from '../../src/harness/supervisor/supervisor-config.js';
-import { createSupervisorRuntimeBridge } from '../../src/harness/supervisor/supervisor-bridge.js';
 
 // ═══ 测试工具 ═══
 
@@ -205,7 +204,7 @@ describe('Harness - 工具调用循环', () => {
     expect(result.loopState.totalToolCalls).toBe(1);
   });
 
-  it('执行型任务首轮未调用工具时会自动继续执行', async () => {
+  it('执行型请求没有明确 pending work 时允许模型直接回答', async () => {
     const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -220,14 +219,14 @@ describe('Harness - 工具调用循环', () => {
 
     const result = await harness.run('修复这个失败用例', chatFn);
 
-    expect(result.content).toBe('已修复');
-    expect(result.loopState.totalToolCalls).toBe(3);
-    expect(chatFn).toHaveBeenCalledTimes(5);
+    expect(result.content).toBe('我会先修改这个问题。');
+    expect(result.loopState.totalToolCalls).toBe(0);
+    expect(chatFn).toHaveBeenCalledTimes(1);
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
       && m.content.includes('did not invoke tools')
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it('修改代码未跑测时 verification gate inject', async () => {
@@ -1467,7 +1466,7 @@ describe('Harness - 边界情况', () => {
     expect(result.loopState.totalToolCalls).toBe(0);
   });
 
-  it('多轮会话中的最新执行指令未调用工具时也会触发一次恢复', async () => {
+  it('多轮会话中的最新执行指令没有 pending work 时不强制工具恢复', async () => {
     const tools = [makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -1487,13 +1486,13 @@ describe('Harness - 边界情况', () => {
 
     const result = await harness.run('运行测试', chatFn, undefined, existingMessages);
 
-    expect(result.content).toBe('测试完成');
-    expect(result.loopState.totalToolCalls).toBe(1);
+    expect(result.content).toBe('我会运行测试。');
+    expect(result.loopState.totalToolCalls).toBe(0);
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
       && m.content.includes('did not invoke tools')
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it('token 使用量跨多轮正确累计', async () => {
@@ -1675,18 +1674,15 @@ describe('Harness - 连续工具失败熔断', () => {
     )).toBe(false);
   });
 
-  it('adaptive L2 开启时 non_critical 连续失败仍注入证据包（不受 suppressInject）', async () => {
+  it('adaptive 下 non_critical 连续失败仍注入证据包', async () => {
     const tools = [makeTool('read_file')];
     const failHandler = async () => ({ success: false, output: '', error: 'path is required' }) as ToolResult;
     const executor = createToolExecutor(tools, failHandler);
-    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' }, {});
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
-
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
     const harness = new Harness(minConfig({
       context: { systemPrompt: 'test', tools },
       supervisorConfig,
       globalPolicy: supervisorConfig.globalPolicy,
-      supervisorBridge: bridge,
     }), executor);
 
     const chatFn = createChatFn([
@@ -1704,47 +1700,10 @@ describe('Harness - 连续工具失败熔断', () => {
       chatFn,
     );
 
-    expect(bridge.getSupervisorPhase()).toBe('free');
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
       && m.content.includes('[Failure Evidence — 5 consecutive')
-    )).toBe(true);
-  });
-
-  it('adaptive takeover 后 runRecoveryMainPath 重建 TaskGraph', async () => {
-    const tools = [makeTool('edit_file')];
-    const failHandler = async () => ({ success: false, output: '', error: 'compile error' }) as ToolResult;
-    const executor = createToolExecutor(tools, failHandler);
-    const supervisorConfig = resolveSupervisorConfig({
-      mode: 'adaptive',
-      snapshotConfidence: { templateGraphMin: 0.5 },
-    }, {});
-    const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
-
-    const harness = new Harness(minConfig({
-      context: { systemPrompt: 'test', tools },
-      supervisorConfig,
-      globalPolicy: supervisorConfig.globalPolicy,
-      supervisorBridge: bridge,
-    }), executor);
-
-    const sameArgs = { path: 'src/login.ts', content: 'fix' };
-    const chatFn = createChatFn([
-      toolCallResponse([{ id: 'tc1', name: 'edit_file', args: sameArgs }]),
-      stepReviewLlmStub(),
-      toolCallResponse([{ id: 'tc2', name: 'edit_file', args: sameArgs }]),
-      stepReviewLlmStub(),
-      toolCallResponse([{ id: 'tc3', name: 'edit_file', args: sameArgs }]),
-      stepReviewLlmStub(),
-      finalResponse('recovery'),
-    ]);
-
-    await harness.run('fix failing unit tests in src/login.ts', chatFn);
-
-    expect(bridge.getSupervisorPhase()).toBe('takeover');
-    expect(bridge.eventTimeline.getRecentEvents().some(
-      e => e.event === 'recover' && e.reason?.includes('template_graph'),
     )).toBe(true);
   });
 

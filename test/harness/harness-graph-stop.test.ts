@@ -53,7 +53,6 @@ function makeState(): HarnessRunState {
     executionModeEnteredBy: [],
     pendingModeSignals: [],
     forcedTaskBearingRoundsSinceEntry: 0,
-    supervisorPhase: 'free',
     recoveryPendingSticky: false,
     stableRoundsSinceLastFailure: 0,
     filesChangedAtRoundStart: 0,

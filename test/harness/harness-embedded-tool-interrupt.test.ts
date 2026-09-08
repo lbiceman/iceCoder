@@ -78,7 +78,6 @@ describe('handleNoToolCalls · embedded text after API tools', () => {
       checkpointEngine: undefined,
       resilienceV2Enabled: false,
       runtimeTelemetry: undefined,
-      supervisorObserverSuppressInject: true,
     };
 
     const result = await handleNoToolCalls(deps as any, {

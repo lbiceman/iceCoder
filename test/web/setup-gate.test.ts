@@ -136,4 +136,30 @@ describe('setup gate + config readiness API', () => {
     const getBody = await getRes.json();
     expect(getBody.setupRequired).toBe(false);
   });
+
+  it('rejects unknown header placeholders instead of silently dropping headers', async () => {
+    const port = await startTestServer();
+    const saveRes = await fetch(`http://127.0.0.1:${port}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        providers: [{
+          id: 'default',
+          apiUrl: 'https://api.deepseek.com',
+          apiKey: 'sk-test1234567890abcdef',
+          modelName: 'deepseek-chat',
+          parameters: { temperature: 0.7 },
+          isDefault: true,
+          headers: { 'x-user': '{{userId}}' },
+        }],
+      }),
+    });
+    const saveBody = await saveRes.json() as { error?: string };
+    expect(saveRes.status).toBe(400);
+    expect(saveBody.error).toContain('{{userId}}');
+
+    const raw = await fs.readFile(configPath, 'utf-8');
+    const persisted = JSON.parse(raw) as { providers: Array<{ headers?: unknown }> };
+    expect(persisted.providers[0].headers).toBeUndefined();
+  });
 });

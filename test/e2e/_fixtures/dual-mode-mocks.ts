@@ -6,7 +6,6 @@ import { vi } from 'vitest';
 import { Harness } from '../../../src/harness/harness.js';
 import type { TaskCheckpoint } from '../../../src/harness/checkpoint.js';
 import { resolveSupervisorConfig } from '../../../src/harness/supervisor/supervisor-config.js';
-import { createSupervisorRuntimeBridge } from '../../../src/harness/supervisor/supervisor-bridge.js';
 import type {
   ChatFunction,
   HarnessConfig,
@@ -121,13 +120,11 @@ export async function buildDualModeHarnessAsync(
   const supervisorConfig = buildSupervisorConfig(options);
   const tools = options.tools ?? [makeTool('read_file')];
   const sessionDir = await tempSessionDir();
-  const bridge = createSupervisorRuntimeBridge(supervisorConfig, { memoryOnly: true });
   const harness = new Harness(minConfig({
     context: { systemPrompt: 'test', tools },
     sessionDir,
     supervisorConfig,
     globalPolicy: supervisorConfig.globalPolicy,
-    supervisorBridge: bridge,
     ...options.harnessOverrides,
   }), createToolExecutor(tools));
   return { harness, supervisorConfig, sessionDir };
@@ -172,10 +169,10 @@ export function buildRunningCheckpoint(): TaskCheckpoint {
 
 export async function seedCheckpointResume(
   sessionDir: string,
-  supervisorState: NonNullable<ReturnType<typeof emptyRuntimeCheckpointV2>['supervisorState']>,
+  executionModeState: NonNullable<ReturnType<typeof emptyRuntimeCheckpointV2>['executionModeState']>,
 ): Promise<void> {
   const runtimeV2 = emptyRuntimeCheckpointV2('manual');
-  runtimeV2.supervisorState = supervisorState;
+  runtimeV2.executionModeState = executionModeState;
   await fs.writeFile(
     path.join(sessionDir, 'default.checkpoint.json'),
     JSON.stringify({ ...buildRunningCheckpoint(), runtimeV2 }, null, 2),

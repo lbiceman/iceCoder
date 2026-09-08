@@ -39,28 +39,19 @@ import { executeToolCallsStreaming } from './harness-tool-executor.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
-import {
-  normalizeGraphHintInput,
-  type ComposeGraphHintArgs,
-} from './supervisor/mode-gating.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import type { TokenBudgetTracker } from './token-budget.js';
-import type { CorrectionPort, CorrectionSource, ExecutionModeConfig, GateContext, TaskRiskLevel } from '../types/supervisor.js';
+import type { ExecutionModeConfig, GateContext } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
   markForcedDegraded,
   recordTaskBearingRoundIfForced,
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
-import { MessageCorrectionPort } from './supervisor/correction-port.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
-import { decideGraphHintRouting, type GraphHintRoutingDecision } from './supervisor/graph-hint-routing.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
-import { topFileEditFromInspect } from './supervisor/passive-observer.js';
-import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
-import { computeRecoveryRoundEffective, classifyToolRoundProgress } from './recovery-round-progress.js';
+import { classifyToolRoundProgress } from './tool-round-progress.js';
 import {
   buildVerificationDigest,
   isHarnessVerificationCommand,
@@ -78,7 +69,6 @@ import {
   planTruncatedWriteToolRecovery,
   shouldPlanTruncatedWriteToolRecovery,
 } from './harness-tool-truncation-recovery.js';
-import { evaluateSupervisorAfterRound } from './harness-supervisor-round.js';
 import { tryInjectRebuildEscalation } from './harness-rebuild-inject.js';
 import {
   shouldInjectParallelBudgetBlockHint,
@@ -103,16 +93,6 @@ export interface ToolRoundDeps
   graphExecutor: GraphExecutor;
   executionModeConfig?: ExecutionModeConfig;
   executionModeDecisionEnabled?: boolean;
-  supervisorBridge?: SupervisorRuntimeBridge;
-  /**
-   * L2-6 — Harness 主循环侧 RiskClassifier 结果回放器。
-   *
-   * 实现挂在 Harness 上：将 before-LLM 已经算过的 TaskRiskLevel 映射到 0..1 的 riskScore（与
-   * §8.10 / `adaptiveFree.riskThreshold` 同标尺），供 bridge.evaluateAfterRound 复用，避免在
-   * after-round 再算一次。缺省时退回 0.5 中性值（adaptive 默认阈值 0.6，不直接进入候选）。
-   */
-  supervisorRiskScoreProvider?: () => number;
-  /** L2-6 — 任务级 token 总预算，用于 `RecoveryBudgetManager.recordTokenUsage`。 */
   tokenBudgetTracker?: TokenBudgetTracker;
   /** 单次 LLM max_tokens 上限（与 adapter 对齐，供 write 截断检测）。 */
   agentMaxOutputTokens?: number;
@@ -206,11 +186,6 @@ export async function runHarnessToolRound(
   deps.harnessPolicyStats = state.harnessPolicyStats;
   state.branchBudget?.bindWorkspaceRoot(deps.workspaceRoot);
 
-  // L2-6 / I4：bridge 活跃时由 bridge 工厂创建挂 budget 的端口；off 时退回普通 port。
-  //          所有 free 段 recovery / graph_hint 类 inject 都经此端口，统一受 freeSegmentMaxPerTask 约束。
-  const correctionPort: CorrectionPort = deps.supervisorBridge?.isActive()
-    ? deps.supervisorBridge.createCorrectionPort(msgs, round)
-    : new MessageCorrectionPort(msgs);
   const graphSnapshotBefore = deps.graphExecutor?.toSnapshot();
   const gateContext = buildGateContext(deps.graphExecutor, toolCallsForGate, state);
   const gateResult = executeToolCallsThroughGate({
@@ -223,32 +198,15 @@ export async function runHarnessToolRound(
   // W5: gate 决策已用 buildGateContext (track:false) 完成；这里只对真正会执行的
   //     工具补一次 track:true 的 checkToolCall（推 currentRoundToolNames），
   //     blocked 的工具不入 DeviationDetector，避免同名计数翻倍 / 误升级。
-  //     warn 文案直接复用 gateContext.graphHints，不再二次判定。
   if (gateContext.executionMode === 'forced' && deps.graphExecutor?.hasGraph()) {
     for (const tc of executableToolCalls) {
       deps.graphExecutor.checkToolCall(tc.name, { track: true });
-      const hint = gateContext.graphHints.find(h => h.toolName === tc.name);
-      if (hint?.action === 'warn' && hint.message) {
-        composeGraphHint(deps, {
-          round,
-          executionMode: gateContext.executionMode,
-          port: correctionPort,
-          phase: gateContext.phase,
-          input: { origin: 'forced_step', kind: 'warn', message: hint.message },
-        });
-      }
     }
     if (executableToolCalls.length === 0 && response.toolCalls?.length) {
-      composeGraphHint(deps, {
-        round,
-        executionMode: gateContext.executionMode,
-        port: correctionPort,
-        phase: gateContext.phase,
-        input: {
-          origin: 'forced_step',
-          kind: 'block',
-          message: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.',
-        },
+      msgs.push({
+        role: 'user',
+        content: '[ToolGate] All tool calls were blocked by the current forced step gate. Choose a valid tool for the active step.',
+        preserveOnCompaction: true,
       });
     }
   }
@@ -384,7 +342,6 @@ export async function runHarnessToolRound(
   maybeInjectParallelBudgetBlockHint({
     state,
     msgs,
-    correctionPort,
     deps,
     executableToolCalls,
     policyBlockedSignatures: toolStats.policyBlockedSignatures,
@@ -396,25 +353,22 @@ export async function runHarnessToolRound(
     msgs,
     executableToolCalls,
     failedSignatures: toolStats.failedSignatures,
-    correctionPort,
     deps,
   });
 
   maybeInjectAcceptanceSuccessFeedback({
     state,
     msgs,
-    correctionPort,
     deps,
     newlyPassed: newlyPassedAcceptance,
     completedAll: acceptanceJustCompletedAll,
   });
 
-  maybeUpdateBuildDiagnosticGate(state, msgs, executableToolCalls, toolStats, correctionPort, deps);
+  maybeUpdateBuildDiagnosticGate(state, msgs, executableToolCalls, toolStats, deps);
 
   maybeInjectFileCapRebuildEscalation({
     state,
     msgs,
-    correctionPort,
     deps,
   });
 
@@ -428,20 +382,15 @@ export async function runHarnessToolRound(
       deps,
       state,
       msgs,
-      correctionPort,
       `[System] Repeated failed tool call detected: ${repeatedFailures.join(', ')}. Do not retry the same tool with the same arguments. Change the path, parameters, command, or use a different tool; if blocked, explain the exact blocker and evidence.`,
       { preserveOnCompaction: true },
     );
   }
 
-  const branchRecoverDecision = state.branchBudget?.shouldBranchRecover();
   resilienceMaybeBranchRecover(
     deps,
     state,
     msgs,
-    deps.executionModeDecisionEnabled && !deps.supervisorObserverSuppressInject
-      ? correctionPort
-      : undefined,
   );
 
   // P2 — 用户中断早退：在可能调用 LLM 的 reviewStep / checkpoint 之前先检查 isAborted。
@@ -468,7 +417,6 @@ export async function runHarnessToolRound(
       state,
       'tool_failure',
       chatFn,
-      deps.executionModeDecisionEnabled ? correctionPort : undefined,
     );
   }
 
@@ -480,7 +428,6 @@ export async function runHarnessToolRound(
         state,
         'verification_failure',
         chatFn,
-        deps.executionModeDecisionEnabled ? correctionPort : undefined,
       );
     }
   }
@@ -547,7 +494,6 @@ export async function runHarnessToolRound(
         deps,
         state,
         msgs,
-        correctionPort,
         buildStrongFailureWarningMessage(failureCount),
         'strong',
       );
@@ -563,7 +509,6 @@ export async function runHarnessToolRound(
         deps,
         state,
         msgs,
-        correctionPort,
         buildFailureEvidencePackMessage(failureCount, entries),
         'evidence',
       );
@@ -576,7 +521,6 @@ export async function runHarnessToolRound(
         deps,
         state,
         msgs,
-        correctionPort,
         buildLightFailureHintMessage(failureCount),
         'light',
       );
@@ -603,21 +547,30 @@ export async function runHarnessToolRound(
       deps.graphExecutor.recordToolResult(tc.name, success);
     }
     const evalResult = deps.graphExecutor.evaluateRound(executableToolCalls.length);
-    const routing = composeGraphHint(deps, {
-      round,
-      executionMode: gateContext.executionMode,
-      port: correctionPort,
-      phase: state.supervisorPhase,
-      input: {
-        origin: 'evaluate_round',
-        action: evalResult.action,
-        message: evalResult.message,
-      },
-    });
+    if (evalResult.action === 'block') {
+      state.submitModeSignal?.('graph_executor', 'recovery_pending', {
+        reason: 'graph_hard_deviation',
+      });
+    }
     if (evalResult.action === 'force_switch') {
       evalForceSwitchTriggered = true;
-      if (routing.emitTelemetry) {
+      if (evalResult.fallbackActivated) {
         onStep?.({ type: 'task_graph_branch', reason: 'fallback_activated', message: evalResult.message });
+      } else {
+        deps.loopController.stop('user_checkpoint');
+        return {
+          action: 'return',
+          result: await handleHarnessStop(deps, {
+            reason: 'user_checkpoint',
+            messages: msgs,
+            chatFn,
+            tools: currentTools,
+            logger,
+            onStep,
+            streamFn,
+            runtimeState: state,
+          }),
+        };
       }
     }
 
@@ -688,48 +641,13 @@ export async function runHarnessToolRound(
     state.consecutiveReadOnlyRounds = 0;
   } else if (executableToolCalls.length) {
     state.consecutiveReadOnlyRounds++;
-    if (state.consecutiveReadOnlyRounds === 5 && !deps.supervisorObserverSuppressInject) {
-      correctionPort.inject(
-        {
-          kind: 'recovery',
-          content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
-          preserveOnCompaction: true,
-        },
-        { phase: state.supervisorPhase, source: 'lifecycle' },
-      );
+    if (state.consecutiveReadOnlyRounds === 5) {
+      msgs.push({
+        role: 'user',
+        content: '[System] You have been reading/analyzing for 5 rounds without making any edits. If you have enough context, start implementing changes now using write/edit tools. Do not read more files unless absolutely necessary.',
+        preserveOnCompaction: true,
+      });
     }
-  }
-
-  const allToolsFailedThisRound = roundProgress === 'all_failed_or_blocked';
-  const supervisorResult = await evaluateSupervisorAfterRound(deps, {
-    state,
-    round,
-    currentTools,
-    tokenUsage,
-    chatFn,
-    logger,
-    onStep,
-    streamFn,
-    toolNames: executableToolCalls.map(tc => tc.name),
-    toolSuccess: executableToolCalls.map(tc => {
-      const sig = toolCallSignature(tc);
-      return !toolStats.failedSignatures.includes(sig)
-        && !toolStats.policyBlockedSignatures.includes(sig);
-    }),
-    hadWriteTool: executableToolCalls.some(tc => TASK_BEARING_WRITE_TOOLS.has(tc.name)),
-    allToolsFailedThisRound,
-    repeatedToolSignatures: repeatedFailures,
-    branchRecoverTriggered: branchRecoverDecision?.triggered === true,
-    recoveryRoundEffective: computeRecoveryRoundEffective({
-      executableToolCalls,
-      failedSignatures: toolStats.failedSignatures,
-      policyBlockedSignatures: toolStats.policyBlockedSignatures,
-      branchBudget: state.branchBudget,
-    }),
-    lastAssistantText: typeof response.content === 'string' ? response.content : undefined,
-  });
-  if (supervisorResult.action === 'return') {
-    return supervisorResult;
   }
 
   await deps.memoryIntegration.injectMemoryContext(msgs, { onStep });
@@ -785,51 +703,17 @@ function buildGateContext(
   }
 
   return {
-    phase: state.supervisorPhase,
-    mode: 'adaptive',
     executionMode,
     graphHints,
   };
 }
 
-/**
- * L2-7 / §14.0 — graph hint 收口：bridge 活跃时全部经 `bridge.composeGraphHint`（含 timeline）；
- * bridge 缺省（off 或未注入）时回退到 `decideGraphHintRouting` + 原 inject 行为，保 off 兼容。
- * 任意来源（forced step warn / forced step block / evaluateRound）调用同一入口，避免 free 段
- * 旁路直写 graph_hint。
- */
-function composeGraphHint(
-  deps: ToolRoundDeps,
-  args: ComposeGraphHintArgs,
-): GraphHintRoutingDecision {
-  if (deps.supervisorBridge) {
-    return deps.supervisorBridge.composeGraphHint(args);
-  }
-
-  const { message, action } = normalizeGraphHintInput(args.input);
-  const routing = decideGraphHintRouting({
-    executionMode: args.executionMode,
-    action,
-    message,
-  });
-  if (routing.injectToCorrectionPort && message) {
-    args.port.inject(
-      { kind: 'graph_hint', content: message },
-      { phase: args.phase, source: 'supervisor', round: args.round },
-    );
-  }
-  return routing;
-}
-
 function maybeInjectFileCapRebuildEscalation(args: {
   state: HarnessRunState;
   msgs: HarnessRunState['messages'];
-  correctionPort: CorrectionPort;
   deps: ToolRoundDeps;
 }): void {
-  const { state, msgs, correctionPort, deps } = args;
-  if (deps.supervisorObserverSuppressInject) return;
-
+  const { state, msgs, deps } = args;
   const shouldTrigger = shouldTriggerAnyFileCapRebuild({
     branchBudget: state.branchBudget,
     verificationStatus: state.taskState.snapshot().verificationStatus,
@@ -842,7 +726,6 @@ function maybeInjectFileCapRebuildEscalation(args: {
     deps,
     state,
     msgs,
-    correctionPort,
     state.consecutiveToolFailures,
     shouldTrigger.trigger,
   );
@@ -857,19 +740,16 @@ function injectRebuildEscalation(
   deps: ToolRoundDeps,
   state: HarnessRunState,
   msgs: HarnessRunState['messages'],
-  correctionPort: CorrectionPort,
   failureCount: number,
   trigger: RebuildEscalationTrigger,
 ): void {
   tryInjectRebuildEscalation(
     {
       workspaceRoot: deps.workspaceRoot,
-      supervisorObserverSuppressInject: deps.supervisorObserverSuppressInject,
       executionModeDecisionEnabled: deps.executionModeDecisionEnabled,
     },
     state,
     msgs,
-    correctionPort,
     failureCount,
     trigger,
   );
@@ -881,7 +761,6 @@ function injectRebuildEscalation(
 function maybeInjectParallelBudgetBlockHint(args: {
   state: HarnessRunState;
   msgs: HarnessRunState['messages'];
-  correctionPort: CorrectionPort;
   deps: ToolRoundDeps;
   executableToolCalls: import('../llm/types.js').ToolCall[];
   policyBlockedSignatures: string[];
@@ -890,7 +769,6 @@ function maybeInjectParallelBudgetBlockHint(args: {
   const {
     state,
     msgs,
-    correctionPort,
     deps,
     executableToolCalls,
     policyBlockedSignatures,
@@ -907,15 +785,11 @@ function maybeInjectParallelBudgetBlockHint(args: {
     parallelBudgetBlockHintInjected: state.parallelBudgetBlockHintInjected,
     budgetBlockedFilePathCount: budgetBlockedFilePaths.length,
     blockedWriteToolCount: blockedWriteTools.length,
-    suppressInject: deps.supervisorObserverSuppressInject,
   })) return;
 
   const paths = budgetBlockedFilePaths.slice(0, 6);
   injectRecoveryMessage(
-    deps,
-    state,
     msgs,
-    correctionPort,
     [
       '[System / BranchBudget] Multiple write/edit tools were blocked in one round (file edit cap).',
       `Blocked paths: ${paths.map(p => `\`${p}\``).join(', ')}.`,
@@ -933,7 +807,6 @@ function maybeInjectVerificationDigest(args: {
   msgs: HarnessRunState['messages'];
   executableToolCalls: import('../llm/types.js').ToolCall[];
   failedSignatures: string[];
-  correctionPort: CorrectionPort;
   deps: ToolRoundDeps;
 }): void {
   const {
@@ -941,11 +814,10 @@ function maybeInjectVerificationDigest(args: {
     msgs,
     executableToolCalls,
     failedSignatures,
-    correctionPort,
     deps,
   } = args;
 
-  if (state.verificationDigestInjectedThisRound || deps.supervisorObserverSuppressInject) return;
+  if (state.verificationDigestInjectedThisRound) return;
   if (!state.branchBudget) return;
 
   const failed = new Set(failedSignatures);
@@ -970,7 +842,7 @@ function maybeInjectVerificationDigest(args: {
     const digest = buildVerificationDigest(command, outputForDigest);
     if (!digest) continue;
 
-    injectRecoveryMessage(deps, state, msgs, correctionPort, digest);
+    injectRecoveryMessage(msgs, digest);
     state.verificationDigestInjectedThisRound = true;
     return;
   }
@@ -988,13 +860,11 @@ function maybeInjectVerificationDigest(args: {
 function maybeInjectAcceptanceSuccessFeedback(args: {
   state: HarnessRunState;
   msgs: HarnessRunState['messages'];
-  correctionPort: CorrectionPort;
   deps: ToolRoundDeps;
   newlyPassed: Array<{ command: string; summary: string | null }>;
   completedAll: boolean;
 }): void {
-  const { state, msgs, correctionPort, deps, newlyPassed, completedAll } = args;
-  if (deps.supervisorObserverSuppressInject) return;
+  const { state, msgs, deps, newlyPassed, completedAll } = args;
   if (!state.taskAcceptance?.isActive()) return;
 
   const passedCount = state.taskAcceptance.getPassedCount();
@@ -1008,7 +878,7 @@ function maybeInjectAcceptanceSuccessFeedback(args: {
   });
   if (!message) return;
 
-  injectRecoveryMessage(deps, state, msgs, correctionPort, message);
+  injectRecoveryMessage(msgs, message);
 }
 
 /**
@@ -1054,7 +924,6 @@ function maybeUpdateBuildDiagnosticGate(
     failedSignatures: string[];
     policyBlockedSignatures: string[];
   },
-  correctionPort: CorrectionPort,
   deps: ToolRoundDeps,
 ): void {
   const hadSuccessfulSrcEdit = shouldClearBuildDiagnosticGate({
@@ -1072,8 +941,8 @@ function maybeUpdateBuildDiagnosticGate(
   });
 
   if (shouldActivate && !hadSuccessfulSrcEdit) {
-    if (!state.buildDiagnosticGateActive && !deps.supervisorObserverSuppressInject) {
-      injectRecoveryMessage(deps, state, msgs, correctionPort, buildDiagnosticGateMessage());
+    if (!state.buildDiagnosticGateActive) {
+      injectRecoveryMessage(msgs, buildDiagnosticGateMessage());
     }
     state.buildDiagnosticGateActive = true;
     return;
@@ -1085,83 +954,41 @@ function maybeUpdateBuildDiagnosticGate(
 }
 
 function injectRecoveryMessage(
-  deps: ToolRoundDeps,
-  state: HarnessRunState,
   msgs: HarnessRunState['messages'],
-  correctionPort: CorrectionPort,
   content: string,
 ): void {
-  if (deps.supervisorObserverSuppressInject) {
-    return;
-  }
-  if (!deps.executionModeDecisionEnabled) {
-    msgs.push({ role: 'user', content });
-    return;
-  }
-
-  correctionPort.inject(
-    { kind: 'recovery', content, preserveOnCompaction: true },
-    { phase: state.supervisorPhase, source: 'supervisor' },
-  );
-}
-
-function failureEscalationCorrectionSource(
-  phase: HarnessRunState['supervisorPhase'],
-): CorrectionSource {
-  return phase === 'free' ? 'lifecycle' : 'supervisor';
+  msgs.push({ role: 'user', content, preserveOnCompaction: true });
 }
 
 /**
  * 连续工具失败阶梯 / 同参重复失败提示。
- * L2 adaptive 开启时仍注入（与 branch recover / rebuild 等 C 类 inject 的 suppress 解耦）；
- * free 段经 lifecycle source（不占 I4 budget）；takeover/handoff/cooldown 经 supervisor source。
+ * 直接写入 Harness 消息，不经过已移除的 L2 纠偏端口。
  */
 function injectToolFailureEscalation(
   deps: ToolRoundDeps,
-  state: HarnessRunState,
+  _state: HarnessRunState,
   msgs: HarnessRunState['messages'],
-  correctionPort: CorrectionPort,
   content: string,
   options?: { ephemeralFailureRecovery?: EphemeralFailureRecoveryKind; preserveOnCompaction?: boolean },
 ): void {
-  if (!deps.executionModeDecisionEnabled) {
-    msgs.push({
-      role: 'user',
-      content,
-      ...(options?.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
-      ...(options?.ephemeralFailureRecovery ? { ephemeralFailureRecovery: options.ephemeralFailureRecovery } : {}),
-    });
-    return;
-  }
-
-  correctionPort.inject(
-    {
-      kind: 'recovery',
-      content,
-      ...(options?.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
-      ...(options?.ephemeralFailureRecovery ? { ephemeralFailureRecovery: options.ephemeralFailureRecovery } : {}),
-    },
-    { phase: state.supervisorPhase, source: failureEscalationCorrectionSource(state.supervisorPhase) },
-  );
+  msgs.push({
+    role: 'user',
+    content,
+    ...(options?.preserveOnCompaction ? { preserveOnCompaction: true } : {}),
+    ...(options?.ephemeralFailureRecovery ? { ephemeralFailureRecovery: options.ephemeralFailureRecovery } : {}),
+  });
 }
 
 function injectEphemeralFailureRecovery(
   deps: ToolRoundDeps,
   state: HarnessRunState,
   msgs: HarnessRunState['messages'],
-  correctionPort: CorrectionPort,
   content: string,
   kind: EphemeralFailureRecoveryKind,
 ): void {
-  injectToolFailureEscalation(deps, state, msgs, correctionPort, content, { ephemeralFailureRecovery: kind });
+  injectToolFailureEscalation(deps, state, msgs, content, { ephemeralFailureRecovery: kind });
 }
 
-function topFileEditFromBranchBudget(
-  branchBudget: BranchBudgetTracker | undefined,
-): { path: string; count: number } | undefined {
-  if (!branchBudget) return undefined;
-  return topFileEditFromInspect(branchBudget.inspect().fileEdits);
-}
 
 function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures: Set<string>): number {
   const targets = new Set<string>();

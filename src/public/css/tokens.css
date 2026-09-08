@@ -84,6 +84,14 @@
   --chip-file-bg: rgba(52, 211, 153, 0.12);
   --chip-file-border: rgba(110, 231, 183, 0.28);
   --chip-file-ring: rgba(52, 211, 153, 0.22);
+  --chip-plan-fg: #e8c27a;
+  --chip-plan-bg: rgba(232, 194, 122, 0.12);
+  --chip-plan-border: rgba(232, 194, 122, 0.32);
+  --chip-plan-ring: rgba(232, 194, 122, 0.22);
+  --chip-shell-fg: #7ec8b8;
+  --chip-shell-bg: rgba(126, 200, 184, 0.12);
+  --chip-shell-border: rgba(126, 200, 184, 0.32);
+  --chip-shell-ring: rgba(126, 200, 184, 0.22);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
   --shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.42);
@@ -174,6 +182,14 @@
   --chip-file-bg: rgba(22, 163, 74, 0.08);
   --chip-file-border: rgba(22, 163, 74, 0.22);
   --chip-file-ring: rgba(22, 163, 74, 0.18);
+  --chip-plan-fg: #a16207;
+  --chip-plan-bg: rgba(202, 138, 4, 0.10);
+  --chip-plan-border: rgba(161, 98, 7, 0.22);
+  --chip-plan-ring: rgba(161, 98, 7, 0.18);
+  --chip-shell-fg: #0f766e;
+  --chip-shell-bg: rgba(15, 118, 110, 0.10);
+  --chip-shell-border: rgba(15, 118, 110, 0.22);
+  --chip-shell-ring: rgba(15, 118, 110, 0.18);
 
   --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
   --shadow: 0 6px 18px -6px rgba(24, 24, 27, 0.08);

@@ -56,7 +56,6 @@ function baseState(messages: UnifiedMessage[], overrides: Partial<HarnessRunStat
     checkpointResumeForkApplied: false,
     contextEmergencyCompactUsed: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
     filesChangedAtRoundStart: 0,
     branchSwitchedThisRound: false,
     ...overrides,

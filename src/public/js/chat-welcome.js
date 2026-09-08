@@ -41,7 +41,7 @@ window.ChatWelcome = (function () {
     {
       key: 'slash',
       title: '/ 指令',
-      desc: '在输入框输入 /，选用 /also、/next 等本地指令',
+      desc: '在输入框输入 /，选用 /plan、/shell、/next 等本地指令',
       icon: 'slash',
     },
   ];
@@ -102,9 +102,7 @@ window.ChatWelcome = (function () {
       '<div class="chat-welcome-inner">' +
         '<header class="chat-welcome-header">' +
           '<div class="chat-welcome-brand">' +
-            '<span class="chat-welcome-logo" aria-hidden="true">' +
-              (window.AppIcon ? window.AppIcon.html('logo', { width: 52 }) : '') +
-            '</span>' +
+            '<span class="chat-welcome-logo ice-brand-logo" aria-hidden="true"></span>' +
             '<div class="chat-welcome-headings">' +
               '<h1 class="chat-welcome-title">IceCoder 已就绪</h1>' +
               '<p class="chat-welcome-subtitle" data-welcome-subtitle></p>' +
