@@ -119,6 +119,12 @@ export function markForcedDegraded(state: HarnessRunState, tier: ForcedDegradedT
   return true;
 }
 
+export function clearResolvedRecoveryPending(state: HarnessRunState): boolean {
+  if (!state.recoveryPendingSticky) return false;
+  state.recoveryPendingSticky = false;
+  return true;
+}
+
 export function syncExecutionModeLoopState(loopController: LoopController, state: HarnessRunState): void {
   loopController.updateExecutionModeState({
     executionMode: state.executionMode ?? 'free',

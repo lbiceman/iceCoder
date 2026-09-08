@@ -142,8 +142,10 @@ export interface HarnessRunState {
     signal: ModeSignal,
     payload?: Record<string, unknown>,
   ) => void;
-  /** W4：recovery 信号的「跨轮 sticky」标志；由 supervisor 接管完成时清除。仅阻塞 exit，不参与 enter。 */
+  /** W4：尚未被有效进展解除的 recovery 标志。仅阻塞 exit，不参与 enter。 */
   recoveryPendingSticky?: boolean;
+  /** 最近工具轮是否出现应升级模式的真实失败；验收命令失败不计入。 */
+  lastRoundModeEscalatingFailure?: boolean;
   /** W1：连续无失败轮次计数（与 consecutiveToolFailures 互斥推进），用于 stableRounds 派生。 */
   stableRoundsSinceLastFailure?: number;
   /** W1：本轮开始时 RepoContext.filesChanged 长度的快照，用于派生 accumulatedDiffLines。 */

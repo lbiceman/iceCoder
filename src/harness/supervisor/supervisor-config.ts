@@ -30,7 +30,8 @@ export interface LoadSupervisorConfigOptions {
 
 export const DEFAULT_EXECUTION_MODE: ExecutionModeConfig = {
   pendingStepsEnterThreshold: 2,
-  writeTargetsEnterThreshold: 1,
+  // 两文件修改是常见的小型工程操作；从 3 个不同写目标起再升级 forced。
+  writeTargetsEnterThreshold: 2,
   diffLinesEnterThreshold: 200,
   stableRoundsExitThreshold: 2,
   modeLockRounds: 2,

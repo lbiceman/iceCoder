@@ -213,6 +213,67 @@ describe('Harness execution mode integration - Batch 3', () => {
     expect(result.loopState.executionMode).toBe('free');
   });
 
+  it('keeps adaptive free after a failed verification command alone', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('run_command')];
+    const events: HarnessStepEvent[] = [];
+    const supervisorConfig = resolveSupervisorConfig({
+      mode: 'adaptive',
+      executionMode: { modeLockRounds: 0 },
+    });
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools, async () => ({
+      success: false,
+      output: 'FAIL',
+      error: 'exit 1',
+    })));
+
+    const result = await harness.run(
+      'run the unit tests',
+      createChatFn([
+        toolCallResponse([{ id: 'verify', name: 'run_command', args: { command: 'npm test' } }]),
+        finalResponse('tests failed'),
+        finalResponse('done'),
+      ]),
+      event => events.push(event),
+    );
+
+    expect(events.some(event => event.type === 'execution_mode_enter')).toBe(false);
+    expect(result.loopState.executionMode).toBe('free');
+  });
+
+  it('keeps a normal two-file edit below the adaptive multi-write threshold', async () => {
+    const sessionDir = await tempSessionDir();
+    const tools = [makeTool('edit_file')];
+    const events: HarnessStepEvent[] = [];
+    const supervisorConfig = resolveSupervisorConfig({ mode: 'adaptive' });
+    const harness = new Harness(minConfig({
+      context: { systemPrompt: 'test', tools },
+      sessionDir,
+      supervisorConfig,
+      globalPolicy: supervisorConfig.globalPolicy,
+    }), createToolExecutor(tools));
+
+    const result = await harness.run(
+      'modify two files',
+      createChatFn([
+        toolCallResponse([
+          { id: 'edit-a', name: 'edit_file', args: { path: 'src/a.ts' } },
+          { id: 'edit-b', name: 'edit_file', args: { path: 'src/b.ts' } },
+        ]),
+        finalResponse('done'),
+      ]),
+      event => events.push(event),
+    );
+
+    expect(events.some(event => event.type === 'execution_mode_enter')).toBe(false);
+    expect(result.loopState.executionMode).toBe('free');
+  });
+
   it('keeps off mode compatible by skipping forced entry and telemetry', async () => {
     const sessionDir = await tempSessionDir();
     const tools = [makeTool('edit_file'), makeTool('write_file')];
