@@ -2,7 +2,7 @@
   "mode": "adaptive",
   "executionMode": {
     "pendingStepsEnterThreshold": 2,
-    "writeTargetsEnterThreshold": 1,
+    "writeTargetsEnterThreshold": 2,
     "diffLinesEnterThreshold": 200,
     "stableRoundsExitThreshold": 2,
     "modeLockRounds": 2,

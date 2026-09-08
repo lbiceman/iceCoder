@@ -330,9 +330,12 @@ export class Harness {
       forcedEntryRound: state.executionModeEnteredAtRound ?? null,
       forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
       stableRounds,
-      lastToolSuccess: state.consecutiveToolFailures === 0,
+      // 验收失败仍参与 digest / circuit breaker，但不单独升级 execution mode。
+      lastToolSuccess: !state.lastRoundModeEscalatingFailure,
       recoveryPending,
-      branchDebt: state.branchBudget?.recoverTriggerCount ?? 0,
+      // recoverTriggerCount 是累计遥测值，不能作为当前债务，否则首次恢复触发后
+      // branchDebt 将永久大于 0，forced 再也无法退出。
+      branchDebt: recoveryPending ? 1 : 0,
       accumulatedDiffLines,
       branchSwitchedThisRound: !!state.branchSwitchedThisRound,
     });
@@ -584,6 +587,7 @@ export class Harness {
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
       recoveryPendingSticky: false,
+      lastRoundModeEscalatingFailure: false,
       stableRoundsSinceLastFailure: 0,
       filesChangedAtRoundStart: 0,
       branchSwitchedThisRound: false,

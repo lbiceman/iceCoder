@@ -44,6 +44,7 @@ import type { TokenBudgetTracker } from './token-budget.js';
 import type { ExecutionModeConfig, GateContext } from '../types/supervisor.js';
 import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import {
+  clearResolvedRecoveryPending,
   markForcedDegraded,
   recordTaskBearingRoundIfForced,
   syncExecutionModeLoopState,
@@ -269,6 +270,7 @@ export async function runHarnessToolRound(
   // P1 — 验收项首次从 pending → passed 时对称注入 `[System / Acceptance ✓]` 反馈，
   //       全部 passed 时再追加一条 stopping signal，让模型有客观信号决定收尾。
   const newlyPassedAcceptance: Array<{ command: string; summary: string | null }> = [];
+  const failedAcceptanceSignatures = new Set<string>();
   let acceptanceJustCompletedAll = false;
   if (executableToolCalls.length > 0) {
     const acceptanceActive = state.taskAcceptance?.isActive();
@@ -285,6 +287,9 @@ export async function runHarnessToolRound(
 
       if (acceptanceActive && state.taskAcceptance) {
         const transition = state.taskAcceptance.recordRunCommandToolResult(classified);
+        if (transition?.newStatus === 'failed') {
+          failedAcceptanceSignatures.add(sig);
+        }
         if (transition
           && transition.newStatus === 'passed'
           && transition.previousStatus !== 'passed') {
@@ -311,11 +316,20 @@ export async function runHarnessToolRound(
     }
   }
   const failedSignaturesForSignals = new Set(toolStats.failedSignatures);
-  // tool_failure 信号：本轮任意可执行工具 success:false 即提交（常见为 run_command/npm test 验收失败，
-  // 其次 BranchBudget 拦 write/edit，较少为 patch 对不上等真工具错误）。UI「forced · 工具失败」
-  // 是 enter_forced 主因标签，不表示 edit 工具坏了；详见 branch-budget.ts 文件头运维说明。
-  if (deps.executionModeConfig && toolStats.failedCount > 0) {
-    state.submitModeSignal?.('step_gate', 'tool_failure', { failedCount: toolStats.failedCount });
+  // 验收命令失败属于正常的“修改 → 验证 → 修复”反馈，不应单独把 adaptive 抬进 forced。
+  // 只有非验收工具的真实执行失败才提交 tool_failure；连续失败与 verification digest
+  // 仍分别由原有恢复链路处理。
+  const escalatingFailureCount = countModeEscalatingFailures(
+    executableToolCalls,
+    failedSignaturesForSignals,
+    failedAcceptanceSignatures,
+  );
+  state.lastRoundModeEscalatingFailure = escalatingFailureCount > 0;
+  if (deps.executionModeConfig && escalatingFailureCount > 0) {
+    state.submitModeSignal?.('step_gate', 'tool_failure', {
+      failedCount: escalatingFailureCount,
+      totalFailedCount: toolStats.failedCount,
+    });
   }
   if (deps.executionModeConfig) {
     const writeTargetsThisRound = countWriteTargets(executableToolCalls, failedSignaturesForSignals);
@@ -530,6 +544,10 @@ export async function runHarnessToolRound(
     state.consecutiveToolFailures = 0;
     state.stopHookContinuationCount = 0;
     state.stableRoundsSinceLastFailure = (state.stableRoundsSinceLastFailure ?? 0) + 1;
+    // recovery_pending 表示“当前路径尚未恢复”，不是永久历史标记。
+    // 一旦出现有效工具进展即视为恢复完成；若本轮随后再次发生图硬偏离，
+    // evaluateRound 会重新提交 recovery_pending。
+    clearResolvedRecoveryPending(state);
     purgeEphemeralFailureRecoveryMessagesInPlace(msgs);
     if (roundHadSuccessfulVerification(executableToolCalls, toolStats.failedSignatures)) {
       state.verificationOutputBuffer.clear();
@@ -1002,5 +1020,24 @@ function countWriteTargets(toolCalls: LLMResponse['toolCalls'], failedSignatures
     targets.add(target);
   }
   return targets.size;
+}
+
+export function countModeEscalatingFailures(
+  toolCalls: LLMResponse['toolCalls'],
+  failedSignatures: Set<string>,
+  failedAcceptanceSignatures: Set<string> = new Set(),
+): number {
+  let count = 0;
+  for (const tc of toolCalls ?? []) {
+    const signature = toolCallSignature(tc);
+    if (!failedSignatures.has(signature)) continue;
+    if (failedAcceptanceSignatures.has(signature)) continue;
+    const command = tc.name === 'run_command'
+      ? extractRunCommand(tc.arguments as Record<string, unknown>)
+      : undefined;
+    if (command && isHarnessVerificationCommand(command)) continue;
+    count++;
+  }
+  return count;
 }
 

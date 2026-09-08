@@ -4,6 +4,7 @@
 - 从原图重新抠图：node desktop/scripts/process-brand-logo.mjs <source-image>
 - icon.png        512×512，Linux / electron-builder 通用源
 - icon.ico        Windows 安装包、任务栏、系统通知左上角
+- src/public/favicon.ico  浏览器 tab /favicon.ico（与品牌标同源）
 - tray-icon.png   32×32 系统托盘
 - notification-app-logo.png  44×44 通知备用标
 
