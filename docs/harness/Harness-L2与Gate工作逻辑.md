@@ -1,32 +1,36 @@
-# Harness、L2 监管与 Gate 收尾工作逻辑
+# Harness、单轴监管与 Gate 收尾工作逻辑
 
-> 版本：2026-06-04  
-> 适用范围：iceCoder Harness 主循环、Verification Gate / Acceptance Gate  
-> **L2 监管层专题**（相位机、纠偏、takeover、公理 I1–I6）已迁至 [`../L2监管层详解.md`](../L2监管层详解.md)；本文 §4 保留精简索引。  
+> 版本：2026-09-01  
+> 适用范围：iceCoder Harness 主循环、Verification Gate / Acceptance Gate、L0/L1/L3 单轴监管  
+> **原 L2 Runtime Supervisor**（takeover / PassiveObserver / CorrectionPort / EventTimeline）已于 **2026-08-31 退役**，详见 [`../L2监管层详解.md`](../L2监管层详解.md)。  
+> 当前监管架构：[`../双模机制详解.md`](../双模机制详解.md)  
 > 相关源码：`src/harness/harness.ts`、`harness-round-no-tools.ts`、`harness-tool-round.ts`、`supervisor/*`、`incomplete-completion.ts`、`document-deliverable.ts`
 
 ---
 
 ## 1. 架构总览
 
-Harness 运行时分为 **三条并行线**，职责互不替代：
+Harness 运行时分为 **主循环 + 收尾 Gate + 单轴监管**，职责互不替代：
 
 | 层级 | 名称 | 职责 | 典型停止原因 |
 |------|------|------|--------------|
-| **L1 主循环** | Harness Core | 消息预处理 → LLM → 工具执行 → 无工具收尾 | `model_done`、`max_output_tokens`、`user_abort` |
+| **L1 Core** | Harness 主循环 | 消息预处理 → 模式评估 → LLM → 工具执行 → 无工具收尾 | `model_done`、`max_output_tokens`、`user_abort` |
 | **L1 验收** | Verification Gate + Acceptance Gate | **收尾门槛**：工程源码变更提示跑单测；benchmark 多步命令 | `verification_exhausted`（熔断） |
-| **L2** | SupervisorRuntimeBridge | **过程监管**：偏离检测、takeover/handoff、纠偏 inject | `user_checkpoint`（预算/监管） |
+| **L0/L1 监管** | ModeDecisionEngine + ToolGate | 档位策略、free/forced、工具门禁、分支预算 | —（不单独作为 stopReason） |
+| **L3** | GraphExecutor 硬约束 | 图合约 block / `force_switch`；无 fallback 时停 | `user_checkpoint` |
 
 **定调（当前实现）：**
 
-- **Gate** 只管收尾是否放行：**工程源码变更**须跑过单元测试（`verificationStatus=passed`）；纯文档/样式变更不 inject。
-- **L2** 只管执行过程是否跑偏；**不扩展**为验收层。
+- **Gate** 只管收尾是否放行：**工程源码变更**在 `verificationStatus=required` 时 inject 单测提示；纯文档/样式变更不 inject。
+- **工程单测 Gate 只硬提醒 1 次**，之后 `markVerificationWaived()` 允许 `model_done`（Acceptance Gate 仍走多轮熔断）。
+- **监管** 只管执行过程约束（forced / ToolGate / 图硬拦）；**不扩展**为验收层。
 - `verificationStatus` 由单测类 `run_command` 结果更新；lint/build/tsc **不算**单测通过。
 
 ```mermaid
 flowchart TB
   subgraph L1["L1 Harness 主循环"]
-    PREP[prepareHarnessRound] --> LLM[callHarnessLlm]
+    PREP[prepareHarnessRound] --> MODE[evaluateExecutionModeBeforeLlm]
+    MODE --> LLM[callHarnessLlm]
     LLM -->|有 tool_calls| TOOL[runHarnessToolRound]
     LLM -->|无 tool_calls| NOTOOL[handleNoToolCalls]
     TOOL --> PREP
@@ -39,10 +43,11 @@ flowchart TB
     G1 --> G2[prematureCompletion]
   end
 
-  subgraph L2["L2 Supervisor（每工具轮末）"]
-    TOOL --> OBS[observeAfterTools]
-    OBS --> EVA[evaluateAfterRound]
-    EVA --> INJ[CorrectionPort inject]
+  subgraph SUP["单轴监管（L0/L1/L3）"]
+    MODE --> TG[ToolGate / BranchBudget]
+    TOOL --> SIG[submitModeSignal]
+    SIG --> MODE
+    TOOL --> L3[Graph block / force_switch]
   end
 ```
 
@@ -50,7 +55,7 @@ flowchart TB
 
 ## 2. Harness 主循环（L1 Core）
 
-入口：`Harness.run()` → `while (true)` 迭代。
+入口：`Harness.run()` → `runScoped()` → `while (true)` 迭代。
 
 ### 2.1 单轮流程
 
@@ -58,8 +63,15 @@ flowchart TB
 prepareHarnessRound
   ├─ 消息预算 / 压缩 / 记忆注入
   ├─ Runtime State / Workspace Anchor 注入
-  ├─ 首轮 TaskGraph init（L2 门禁，见 §4.4）
-  └─ ExecutionMode 评估
+  ├─ 首轮 TaskGraph init（strict 关键任务；adaptive 不首轮建图）
+  └─ 其它 prep 副作用
+
+tryGraphTerminalStop（轮前；工具轮后不再 graph-stop）
+
+evaluateExecutionModeBeforeLlm
+  ├─ 消费 pendingModeSignals（通常滞后 1 轮）
+  ├─ ModeDecisionEngine → free/forced
+  └─ applyExecutionModeConstraints / BranchBudget / CheckpointEngine
 
 callHarnessLlm
   ├─ 调用 LLM（可流式）
@@ -68,7 +80,7 @@ callHarnessLlm
 分支：
   ├─ 有 tool_calls → runHarnessToolRound → continue
   └─ 无 tool_calls → handleNoToolCalls
-        ├─ continue → 下一轮
+        ├─ continue → 下一轮（可再 tryGraphTerminalStop）
         └─ return   → HarnessResult（结束）
 ```
 
@@ -76,11 +88,10 @@ callHarnessLlm
 
 | 阶段 | 行为 |
 |------|------|
-| 工具执行前 | Preflight（路径/dist/build diagnostic 等）、ExecutionMode 约束 |
+| 工具执行前 | Preflight（路径/dist/build diagnostic 等）、ToolGate、ExecutionMode 约束 |
 | 工具执行 | 更新 `TaskState`、`RepoContext`；Acceptance Gate 进度；file 写后版本 Map |
-| 工具执行后 | BranchBudget、rebuild escalation、verification digest inject（软提示） |
-| **L2 接入** | `observeAfterTools` → `evaluateAfterRound`（见 §4） |
-| 收尾 | 记忆注入；**仅当 file/Acceptance pending 净减少或 blocking 解除**时 `verificationGateContinuationCount = 0` |
+| 工具执行后 | BranchBudget、rebuild escalation、verification digest inject（软提示）；向 ModeDecisionEngine 提交信号 |
+| 收尾 | 记忆注入；**仅当**工程 pending / Acceptance pending 净减少或 blocking 解除时 `verificationGateContinuationCount = 0` |
 
 工具轮 **不** 调用 Verification Gate；Gate 仅在「无 tool_calls」时触发。
 
@@ -92,9 +103,10 @@ callHarnessLlm
 |------|------|------|
 | Preflight dist 读拦截 | `harness-tool-preflight.ts` | `verificationStatus=required/failed` 时禁读 `dist/` |
 | Build Diagnostic Gate | 同上 | build 失败后暂停 build 类 `run_command` |
-| BranchBudget | `branch-budget.ts` | 限制重复失败命令/文件编辑 |
+| BranchBudget | `branch-budget.ts` | forced 下限制重复失败命令/文件编辑 |
+| ToolGate | `supervisor/tool-gate.ts` | forced 下物理跳过违规工具调用 |
 | verification digest | `harness-tool-round.ts` | 验收命令多次失败后 inject 摘要 |
-| **连续工具失败阶梯** | `failure-evidence-recovery.ts` | 2~3 轻提示 / 4~6 证据包 / 7~9 强警告；**L2 开启时仍注入**（`source=lifecycle`，不占 I4 budget） |
+| **连续工具失败阶梯** | `failure-evidence-recovery.ts` | 2~3 轻提示 / 4~6 证据包 / 7~9 强警告 |
 | **write 截断恢复** | `harness-tool-truncation-recovery.ts` | `finishReason=length` 或 output 顶满且 write 缺 `path` 时 skip + 换策略提示 |
 | step-review | `step-review.ts` | `verificationStatus=failed` 时不计为「有进展」 |
 
@@ -111,7 +123,7 @@ Gate 在 `handleNoToolCalls` 中运行，**每一轮** LLM 返回无 `tool_calls
 2. max-output-tokens 恢复 / 停止
 3. 空响应 / 仅 reasoning 重试
 4. Stop Hook（模型自述未完成）
-5. ★ Verification Gate（Acceptance + 写后读确认）
+5. ★ Verification Gate（Acceptance + 工程单测提示；含 failed 加强提醒）
 6. no_tool execution recovery（该调工具没调）
 7. ★ prematureCompletionRecovery（pendingWork 第二道栏）
 8. model_done 正常收尾
@@ -123,30 +135,35 @@ flowchart TD
   B --> C{Stop Hook}
   C -->|continue| D[下一轮]
   C -->|通过| E{Verification Gate}
-  E -->|block + 可验收| F[inject 验收 prompt → continue]
-  E -->|block + 无工具| G[verification_exhausted]
-  E -->|block + 熔断仍 pending| G
-  E -->|通过| H{no_tool recovery}
-  H -->|continue| D
-  H -->|通过| I{prematureCompletion}
-  I -->|pendingWork| J[inject incomplete prompt → continue]
-  I -->|通过| K[model_done]
+  E -->|工程 required 首次| F[inject 验收 prompt → continue]
+  E -->|工程 required 已提醒过| W[markVerificationWaived → 放行]
+  E -->|Acceptance pending + 可验收| F
+  E -->|Acceptance 熔断 / 无工具| G[verification_exhausted]
+  E -->|通过| H{failed 加强提醒?}
+  H -->|未注入过| R[inject failed reminder → continue]
+  H -->|通过| I{no_tool recovery}
+  I -->|continue| D
+  I -->|通过| J{prematureCompletion}
+  J -->|pendingWork| K[inject incomplete prompt → continue]
+  J -->|pending 达上限| G
+  J -->|通过| L[model_done]
 ```
 
 ### 3.2 Verification Gate（工程单测）
 
-**判定函数：** `TaskState.isVerificationBlockingFinal(acceptanceIncomplete)`
+**判定函数：** `TaskState.isVerificationBlockingFinal(acceptanceIncomplete)`  
+→ Acceptance pending **或** `shouldPromptEngineeringUnitTest(filesChanged, verificationStatus)`（工程目标路径且 status=`required`）。
 
 | 条件 | 是否 block |
 |------|-----------|
-| `acceptanceIncomplete === true` | ✅ |
-| 工程源码变更 && `verificationStatus === 'required'` | ✅ |
+| `acceptanceIncomplete === true` | ✅（多轮，直至完成或熔断） |
+| 工程源码变更 && `verificationStatus === 'required'` | ✅（**仅首轮 inject**；下一无工具轮 waive） |
 | 工程源码变更 && `verificationStatus === 'passed'` | ❌ |
-| `verificationStatus === 'failed'`（单测失败） | ❌（仅 inject 一次加强提示） |
+| `verificationStatus === 'failed'`（单测失败） | ❌ hard block；**另** inject 一次加强提示 |
 | 仅 `.md` / 样式等非单测目标 | ❌ |
 | 无写文件 | ❌ |
 
-**单测目标路径：** `engineeringTestTargetPaths(filesChanged)` — 工程白名单扩展名（`.ts/.py/.java` 等），**不含** `.css/.scss/.less`。
+**单测目标路径：** `engineeringTestTargetPaths(filesChanged)` — 工程白名单扩展名（`.ts/.py/.java` 等），**不含** `.css/.scss/.less`；豁免目录见 verification-exempt 配置。
 
 **验收命令识别：** `isUnitTestVerificationCommand`（`npm test` / `vitest` / `pytest` / `mvn test` 等）；**不含** `lint` / `build` / `tsc` / `test:e2e`。
 
@@ -160,6 +177,7 @@ run_command 单测类命令：
   check completed exit 0  → passed
   check completed 非 0    → failed
 再次 edit 工程源码        → required（并重置 failedUnitTestReminderInjected）
+Gate 已提醒且模型仍想停  → markVerificationWaived() → not_required
 ```
 
 **工具可用性：** `canVerifyDeliverableKind(filesChanged, toolNames, acceptanceIncomplete, verificationStatus)`
@@ -169,15 +187,16 @@ run_command 单测类命令：
 | Acceptance Gate | `run_command` |
 | 工程变更待跑单测 | `run_command` |
 
-**Gate 注入：** `buildVerificationPrompt()` — 列出变更工程文件，命令由模型自选。
+**Gate 注入：** `buildVerificationPrompt()` — 列出变更工程文件；文案允许「低风险可简述后收尾」（与 waive 行为一致）。
 
-**工具轮 Gate 计数：** `maybeResetVerificationGateCounter` — 工程 pending 或 Acceptance pending 净减少、或 blocking 解除时归零。
+**工程 Gate 计数：** 非 Acceptance 时，`verificationGateContinuationCount >= 1` 即 waive 放行。  
+**Acceptance 熔断：** `verificationGateContinuationCount >= MAX`（默认 **5**）→ `verification_exhausted`。
+
+**工具轮 Gate 计数重置：** `maybeResetVerificationGateCounter` — 工程 pending 或 Acceptance pending 净减少、或 blocking 解除时归零。
 
 **图 terminal 停止：** `shouldBlockGraphTerminalStop` 与 Verification Gate 同标尺；`verificationStatus=failed` **不**拦截。**工具轮后不再 graph-stop**。
 
 **prematureCompletion：** 达上限后若仍有 `pendingWork`，走 `verification_exhausted`，不允许 `model_done`。
-
-**熔断：** `verificationGateContinuationCount >= MAX`（默认 **5**）→ 直接 `verification_exhausted`。
 
 **遗留 write/confirm 版本 Map：** 仍写入 checkpoint 供兼容；**不再**驱动 Gate 放行。
 
@@ -192,6 +211,7 @@ run_command 单测类命令：
 | 同步 | `syncTaskVerificationFromAcceptance` → 写回 `TaskState.verificationStatus` |
 | 拦截点 | Gate 的 `acceptanceIncomplete` + prematureCompletion 的 `hasPendingWork` |
 | inject | `acceptance.buildAcceptancePrompt()` |
+| 熔断 | 走 Verification Gate 的 `MAX_VERIFICATION_GATE_CONTINUATIONS`（默认 5） |
 
 ### 3.4 prematureCompletionRecovery（第二道收尾栏）
 
@@ -205,15 +225,15 @@ hasUnfulfilledFileDeliverableGoal(goal, filesChanged, intent)  // goal 要求写
 
 Gate 通过后若仍 `pendingWork`，inject `buildIncompleteContinuationPrompt` → `continue`（有上限 `MAX_PREMATURE_COMPLETION_RECOVERY`）。
 
-**注意：** 单测未跑 / 测失败 **不**触发 `pendingWork`（由 Verification Gate 或失败提醒 inject 处理）。
+**注意：** 单测未跑 / 测失败 **不**构成 `pendingWork`（由 Verification Gate 或 failed 提醒 inject 处理）。
 
 ### 3.5 Stop Hook 跳过条件
 
-避免与 Verification Gate 叠层拦截：
+避免与 Verification Gate 叠层拦截（`harness-round-no-tools.ts`）：
 
-1. casual 意图（question / inspect）
-2. 工程源码变更且 `verificationStatus === 'required'`（单测 Gate 阶段，跳过 Stop Hook）
-3. `!pendingWork && 本轮已调过工具`
+1. casual 意图（question / inspect 等，`shouldApplyCasualHarness`）
+2. **本任务已有写文件变更**（`filesChanged.length > 0`）——由 Gate / prematureCompletion 接管收尾
+3. `!pendingWork &&` 本轮用户消息之后已有过工具调用
 
 Stop Hook 本身只识别模型回复中的**前向未完成承诺**（如「我还需要继续」「next step」）。
 
@@ -225,87 +245,71 @@ Stop Hook 本身只识别模型回复中的**前向未完成承诺**（如「我
 
 ---
 
-## 4. L2 Supervisor 监管逻辑（精简）
+## 4. 单轴监管（L0 / L1 / L3）
 
-> 完整说明见 [`../L2监管层详解.md`](../L2监管层详解.md)。
+> 完整说明见 [`../双模机制详解.md`](../双模机制详解.md)。原 L2 退役说明见 [`../L2监管层详解.md`](../L2监管层详解.md)。
 
-L2 由 `SupervisorRuntimeBridge` 承载；档位见 `data/config.json` 的 `supervisorMode`（`ICE_SUPERVISOR_MODE` 已废弃）。
+档位来源：`data/config.json` 的 `supervisorMode`（优先）+ `data/supervisor-config.json` 的 `executionMode` 阈值。  
+加载入口：`loadHarnessSupervisorRuntime()`。未注入时 Harness 默认 `mode: 'off'`。
 
-### 4.1 核心组件
+### 4.1 核心组件（现存）
 
 | 组件 | 职责 |
 |------|------|
-| **PassiveObserver** | 每轮采集偏离信号（重复失败、无进展、file_loop 等） |
-| **GoalDriftDetector** | 目标漂移信号（`goal_drift`） |
-| **RecoverySupervisor** | 相位机：free → takeover → handoff → cooldown |
-| **CorrectionPort** | 唯一纠偏写消息入口（RecoveryBoundary + Budget） |
-| **EventTimeline** | 决策与信号持久化 |
+| **ModeController / resolveGlobalPolicy** | L0 档位 → `modeDecisionEngineEnabled`、`executionModeFloor` 等 |
+| **ModeDecisionEngine** | 消费 ModeSignal，裁决 free ↔ forced |
+| **TaskRiskClassifier** | 运行态风险分级，供决策上下文 |
+| **applyExecutionModeConstraints** | **唯一**写入 `executionMode` 的入口 |
+| **ToolGate** | forced 下 block 违规工具（物理跳过） |
+| **GraphExecutor** | 图上下文注入 + L3 block / force_switch |
+| **BranchBudgetTracker** | forced 下重复失败预算 |
 
 ### 4.2 接入时机
 
 | 时机 | 入口 | 行为 |
 |------|------|------|
-| **每工具轮末** | `observeAfterTools` | 累积 signal + timeline，**不直接拦 model_done** |
-| **每工具轮末** | `evaluateAfterRound` | 相位机决策；takeover/handoff inject |
-| **takeover 进入 / handoff 回退** | `applyTakeoverRecoveryMainPath` | §10 M5→M8；`replaceGraph` 或 §19.2 降级（新图下轮 prep 注入） |
-| **工具轮内** | `composeGraphHint` | forced 模式下 graph hint |
-| **无工具 continuation** | `createCorrectionPort` | Gate / recovery 消息走 CorrectionPort |
-| **首轮 prep** | `shouldInitTaskGraphAtFirstRound` | adaptive 首轮不 init 图；strict 首轮 init |
-| **新任务** | `resetForNewTask` | 复位 observer / phase / budget |
+| **每轮 LLM 前** | `evaluateExecutionModeBeforeLlm` | 消费上一轮信号 → 切换 free/forced → 同步 BranchBudget / CheckpointEngine |
+| **工具执行前** | ToolGate / Preflight | block 则跳过执行 |
+| **工具轮末** | `submitModeSignal` | 累积 `tool_failure` / `recovery_pending` / 图信号等，**下轮**再 evaluate |
+| **图硬偏离** | GraphExecutor | `block`；重复/critical → `force_switch`；无 fallback → `user_checkpoint` |
+| **首轮 prep** | TaskDomainGate + L0 | `off`/`adaptive` 不首轮建图；`strict` 关键工程任务首轮 init |
+| **新 run** | `modeDecisionEngine.resetSubmittedSignals` + `graphExecutor.resetGraph` | 避免跨 run 泄漏 |
 
-### 4.3 RecoverySupervisor 相位机
+### 4.3 三档体验
 
-```
-free ──(§9 三条件满足)──► takeover ──(稳定窗口)──► handoff_pending ──► cooldown ──► free
-                              │
-                              └── fail{checkpoint} → user_checkpoint 停止
-```
-
-| 相位 | 行为 |
+| 档位 | 行为 |
 |------|------|
-| **free** | 观察 signal，满足条件则进入 takeover |
-| **takeover** | inject `[System Recovery]`；**已**调用 `runRecoveryMainPath` → `replaceGraph` 或 strong_hint 降级 |
+| **off** | 不启用 ModeDecisionEngine；不首轮建图 |
+| **adaptive**（默认） | 默认 free，结构性信号后进入 forced；不首轮建图 |
+| **strict** | forced floor；关键工程任务首轮建图 |
 
-**时序说明：** 进入 takeover 当轮先跑完旧图 `evaluateRound`，`replaceGraph` 在 after-round 末尾执行；**新图节点上下文从下一轮 prep 注入**。
-| **handoff_pending** | 准备交还 L1 执行权 |
-| **cooldown** | 冷却若干轮后回 free |
+进入 forced 后保留 `modeLockRounds` 与 `forcedMinDwellRounds`，避免模式闪跳。
 
-**shadow 模式：** 只写 timeline，不 commit phase 变更、不 inject。
+### 4.4 已删除（勿再按旧文档验收）
 
-**停止：** `decision.action === 'fail' && kind === 'checkpoint'` → Harness `user_checkpoint`（监管停，非 Gate）。
+以下均已不在 `src/harness/supervisor/` 中：
 
-### 4.4 PassiveObserver 信号类型（示例）
+- `supervisorPhase` / takeover / handoff / cooldown
+- PassiveObserver / GoalDriftDetector
+- RecoverySupervisor / CorrectionPort / RecoveryBoundary / CorrectionBudget
+- Supervisor EventTimeline / `supervisor-events.jsonl`
+- shadow evaluate、`ICE_SUPERVISOR_SHADOW`
 
-- 重复工具失败 / 连续无进展
-- 只读循环（file_loop）
-- branch recover 触发
-- 手动 trigger：`scope_creep`、`user_force_takeover`
-- `goal_drift`（GoalDriftDetector）
-
-### 4.5 L2 与验收的关系
-
-| 项目 | L2 行为 |
-|------|---------|
-| file Gate | **不参与** |
-| npm test 是否通过 | **不拦** model_done |
-| `verificationStatus` | **只读** → workspace snapshot / 置信度 / 图节点标 done |
-| inject 路径 | CorrectionPort（`kind: takeover / recovery / graph_hint`） |
+偏离后的替代路径：提交 `recovery_pending` → L1 forced；图硬拦 / `force_switch`；连续失败阶梯与 circuit breaker；无 fallback → `user_checkpoint`。
 
 ---
 
 ## 5. 行为速查表
 
-| 场景 | Verification Gate | prematureCompletion | L2 | 能否 model_done |
-|------|-------------------|---------------------|-----|-----------------|
-| 写 `.md` 未 `file_info` | ✅ 拦 | ✅ 拦 | 旁观 | ❌ |
-| 只改 `.ts` 未读确认 | ✅ 拦 | ✅ 拦 | 旁观 | ❌ |
-| 只改 `.ts` 已读确认、未跑测 | ❌ | ❌ | 可能纠偏 | ✅ |
-| npm test 失败想停（已读确认） | ❌ | ❌ | 可能 digest | ✅ |
-| code + README，任一未确认 | ✅ 拦 | ✅ 拦 | 旁观 | ❌ |
-| 全部已读确认，code 未测 | ❌ | ❌ | 旁观 | ✅ |
-| Acceptance 只完成部分命令 | ✅ 拦 | ✅ 拦 | 旁观 | ❌ |
+| 场景 | Verification Gate | prematureCompletion | 监管 | 能否 model_done |
+|------|-------------------|---------------------|------|-----------------|
+| 写 `.md`，goal 要求写文件但未写 | ❌ | ✅ 拦 | 旁观 | ❌ |
+| 只改 `.ts` 未跑测（首次无工具轮） | ✅ inject 一次 | ❌ | 可能进 forced | 本轮 ❌ |
+| 只改 `.ts` 已提醒过仍未跑测 | waive → 放行 | ❌ | 旁观 | ✅ |
+| npm test 失败想停 | ❌ hard；可有一次 failed 提醒 | ❌ | 可能 digest / forced | 提醒后 ✅ |
+| Acceptance 只完成部分命令 | ✅ 拦（多轮至熔断） | ✅ 拦 | 旁观 | ❌ |
 | 该调工具却只聊天 | no_tool recovery | 视 pending | 旁观 | 视情况 |
-| L2 预算耗尽 | — | — | user_checkpoint | ❌ |
+| 图无 fallback 硬失败 | — | — | L3 `user_checkpoint` | ❌ |
 
 ---
 
@@ -314,8 +318,8 @@ free ──(§9 三条件满足)──► takeover ──(稳定窗口)──►
 | stopReason | 来源 | 说明 |
 |------------|------|------|
 | `model_done` | Gate 通过后正常收尾 | 主成功路径 |
-| `verification_exhausted` | Verification Gate 熔断 / 无验收工具 | file 或 Acceptance 无法继续 |
-| `user_checkpoint` | L2 RecoverySupervisor | 监管/预算停止 |
+| `verification_exhausted` | Acceptance 熔断 / 无验收工具 / pendingWork 耗尽 | 工程单测默认不靠此熔断（1 次后 waive） |
+| `user_checkpoint` | L3 图无 fallback / 其它监管停 | 请求用户介入 |
 | `stop_hook` | Stop Hook 连续干预超限 | |
 | `max_output_tokens` | 输出 token 截断 recovery 耗尽 | |
 | `user_abort` | 用户取消 | |
@@ -331,12 +335,14 @@ free ──(§9 三条件满足)──► takeover ──(稳定窗口)──►
 | 工具轮 | `src/harness/harness-tool-round.ts` |
 | 无工具轮 / Gate | `src/harness/harness-round-no-tools.ts` |
 | pendingWork | `src/harness/incomplete-completion.ts` |
-| file 路径 / 版本判定 | `src/harness/document-deliverable.ts` |
+| 工程路径 / 单测提示判定 | `src/harness/document-deliverable.ts` |
 | Gate 判定 | `src/harness/task-state.ts` |
 | Acceptance Gate | `src/harness/task-acceptance-tracker.ts` |
-| L2 Bridge | `src/harness/supervisor/supervisor-bridge.ts` |
-| L2 相位机 | `src/harness/supervisor/recovery-supervisor.ts` |
-| L2 观察器 | `src/harness/supervisor/passive-observer.ts` |
+| 模式决策 | `src/harness/supervisor/mode-decision-engine.ts` |
+| 模式写入 | `src/harness/supervisor/execution-mode-constraints.ts` |
+| ToolGate | `src/harness/supervisor/tool-gate.ts` |
+| 配置加载 | `src/harness/supervisor/supervisor-config.ts` |
+| 图硬约束 | `src/harness/task-graph-executor.ts` |
 | Stopping rules prompt | `src/prompts/sections.ts` |
 | checkpoint 续跑建议 | `src/harness/checkpoint.ts` |
 | tool-planner 软 hint | `src/harness/tool-planner.ts` |
@@ -347,6 +353,7 @@ free ──(§9 三条件满足)──► takeover ──(稳定窗口)──►
 
 | 日期 | 变更 |
 |------|------|
+| 2026-09-01 | 对齐 2026-08-31 单轴监管：删除旧 L2 章节；补充工程 Gate 1 次后 waive；修正 Stop Hook / 行为表；监管改为 L0/L1/L3 |
 | 2026-06-10 | Verification Gate 改为工程单测提示：去掉写后读硬拦；`isUnitTestVerificationCommand`；样式扩展名不 inject；失败后改代码回到 `required` |
 | 2026-05-28 | 统一写后读：Gate / pendingWork / stop hook 均基于全部 `filesChanged`；engineering 测试仍非硬条件 |
 | 2026-05-28 | 初版：弱化 Verification Gate（仅 file 验收 + Acceptance）；统一 `snapshotHasUnconfirmedFileDeliverables`；P3 stop hook / tool-planner 对齐 |

@@ -75,6 +75,21 @@ describe('TaskQueueManager', () => {
     expect((await restored.list('s1')).map((item) => item.text)).toEqual(['persist me']);
   });
 
+  it('persists reasoningEffort and drops invalid values on restore', async () => {
+    await manager.enqueue('s1', { text: 'hard', source: 'implicit', reasoningEffort: 'high' });
+    const file = path.join(tempDir, 's1.task-queue.json');
+    const onDisk = JSON.parse(await fs.readFile(file, 'utf-8')) as Array<{ reasoningEffort?: string }>;
+    expect(onDisk[0]?.reasoningEffort).toBe('high');
+
+    await fs.writeFile(file, JSON.stringify([
+      { id: 'x', text: 'bad', source: 'implicit', enqueuedAt: 1, reasoningEffort: '!!!' },
+    ]));
+    const restored = new TaskQueueManager(tempDir);
+    const item = (await restored.list('s1'))[0];
+    expect(item?.text).toBe('bad');
+    expect(item?.reasoningEffort).toBeUndefined();
+  });
+
   it('starts from empty queue when file does not exist', async () => {
     expect(await manager.list('new-session')).toEqual([]);
   });

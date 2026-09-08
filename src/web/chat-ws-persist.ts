@@ -21,6 +21,7 @@ import { createFileMemoryManager } from '../memory/file-memory/file-memory-manag
 import type { UnifiedMessage } from '../llm/types.js';
 import type { AssembledPrompt } from '../prompts/types.js';
 import type { TaskEnqueueInput } from '../session/task-queue.js';
+import { parseReasoningEffort, type ReasoningEffort } from '../llm/reasoning-effort.js';
 import { resolveFileReferences } from './routes/upload.js';
 import {
   persistInlineImages,
@@ -295,6 +296,7 @@ export async function buildEnqueueInput(
   messageId: string | undefined,
   source: 'implicit' | 'explicit',
   skills: string[] = [],
+  reasoningEffort?: ReasoningEffort,
 ): Promise<TaskEnqueueInput> {
   const persistedInline = await persistInlineImages(
     images.filter((img) => !isSessionImageApiUrl(img)),
@@ -307,6 +309,7 @@ export async function buildEnqueueInput(
   );
   const storedApiUrls = images.filter((img) => isSessionImageApiUrl(img));
   const allImages = [...storedApiUrls, ...uiImageUrls];
+  const effort = parseReasoningEffort(reasoningEffort);
   return {
     text: content,
     source,
@@ -314,5 +317,6 @@ export async function buildEnqueueInput(
     images: allImages.length > 0 ? allImages : undefined,
     referencePaths: referencePaths.length > 0 ? referencePaths : undefined,
     skills: skills.length > 0 ? skills : undefined,
+    ...(effort ? { reasoningEffort: effort } : {}),
   };
 }

@@ -53,6 +53,7 @@ import {
   startChatRuntimePrewarm,
 } from './chat-ws-persist.js';
 import { buildShellCollabWsExtras } from './chat-ws-shell.js';
+import { buildPlanModeWsExtras } from './chat-ws-plan.js';
 import {
   clearAllRunningTurns,
   getProcessingSessionIds,
@@ -201,7 +202,10 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
     const runningTurn = snapshotRunningTurn(sid);
     const runtimeExtras = await buildConnectedPayloadExtras(sid);
     const bgTasks = await buildBgTasksForSession(sid);
-    const shellCollabExtras = await buildShellCollabWsExtras(sid);
+    const [shellCollabExtras, planModeExtras] = await Promise.all([
+      buildShellCollabWsExtras(sid),
+      buildPlanModeWsExtras(sid),
+    ]);
     const mcpReadySnapshot = getMcpReadySnapshot();
     const tunnelReadySnapshot = getTunnelReadySnapshot();
     const sessionRunStates = buildSessionRunStatesSnapshot();
@@ -219,6 +223,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         ...(meta ? { modelContext: meta } : {}),
         ...workspace,
         ...shellCollabExtras,
+        ...planModeExtras,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
         ...(runningTurn ? { runningTurn } : {}),
@@ -235,6 +240,7 @@ export function attachChatWebSocket(server: Server, options: ChatWSOptions): voi
         workspaceRoot: DEFAULT_WORK_DIR,
         defaultWorkDir: DEFAULT_WORK_DIR,
         ...shellCollabExtras,
+        ...planModeExtras,
         ...(mcpReadySnapshot ? { mcpReady: mcpReadySnapshot } : {}),
         ...(tunnelReadySnapshot ? { tunnelReady: tunnelReadySnapshot } : {}),
         ...(runningTurn ? { runningTurn } : {}),

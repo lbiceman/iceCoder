@@ -63,4 +63,36 @@ describe('openAiAdapterConfigFromProvider', () => {
     });
     expect(cfg.model).toBe('mimo-2.5');
   });
+
+  it('passes provider headers through as requestHeaders', () => {
+    const cfg = openAiAdapterConfigFromProvider({
+      ...base,
+      headers: {
+        'x-opencode-session': '{{sessionId}}',
+        'x-opencode-client': 'iceCoder',
+      },
+    });
+    expect(cfg.requestHeaders).toEqual({
+      'x-opencode-session': '{{sessionId}}',
+      'x-opencode-client': 'iceCoder',
+    });
+  });
+
+  it('omits requestHeaders when provider has none', () => {
+    const cfg = openAiAdapterConfigFromProvider(base);
+    expect(cfg.requestHeaders).toBeUndefined();
+  });
+
+  it('parses reasoningEffort comma list into adapter levels', () => {
+    const cfg = openAiAdapterConfigFromProvider({
+      ...base,
+      reasoningEffort: 'low, high, max',
+    });
+    expect(cfg.reasoningEffortLevels).toEqual(['low', 'high', 'max']);
+  });
+
+  it('omits reasoningEffortLevels when provider leaves the field empty', () => {
+    const cfg = openAiAdapterConfigFromProvider(base);
+    expect(cfg.reasoningEffortLevels).toBeUndefined();
+  });
 });

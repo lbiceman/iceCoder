@@ -3,6 +3,8 @@
  * 定义统一消息格式、响应类型、提供者适配器接口以及配置类型。
  */
 
+import type { ReasoningEffort } from './reasoning-effort.js';
+
 /**
  * 统一消息中的内容块（文本或图片）。
  */
@@ -110,10 +112,20 @@ export interface LLMOptions {
   signal?: AbortSignal | null;
   /** 单次 HTTP 请求超时（ms）；未设置时使用适配器构造时的默认值 */
   requestTimeoutMs?: number;
+  /**
+   * 当前会话 ID。配置了 `headers` 且值为 `{{sessionId}}` 时写入对应请求头；
+   * 未设置时由适配器生成稳定兜底值。
+   */
+  sessionId?: string;
   /** 为 true 时跳过上层 LLMAdapter 的指数退避重试（Dream 等长请求用） */
   skipRetry?: boolean;
   /** 为 true 时 API 报错后不自动 strip 图片重试（如 image_read 必须看到原图） */
   skipVisionFallback?: boolean;
+  /**
+   * 当前请求的推理强度档位（须落在该 provider 配置的逗号列表中）。
+   * Chat Completions 写入 reasoning_effort；Responses API 写入 reasoning.effort。
+   */
+  reasoningEffort?: ReasoningEffort;
   [key: string]: any;
 }
 

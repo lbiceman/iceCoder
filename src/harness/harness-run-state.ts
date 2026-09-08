@@ -2,7 +2,6 @@ import type { UnifiedMessage, ToolDefinition } from '../llm/types.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import type { RepoContext } from './repo-context.js';
 import type { StepReviewResult } from './step-review.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
 import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
@@ -13,7 +12,6 @@ import type {
   ModeDecision,
   ModeSignal,
   ModeSignalSource,
-  SupervisorPhase,
 } from '../types/supervisor.js';
 
 /**
@@ -94,8 +92,6 @@ export interface HarnessRunState {
   rebuildEscalationInjectedThisRound: boolean;
   /** 本 run 是否已注入并行 BranchBudget 拦截指引（每 run 一次） */
   parallelBudgetBlockHintInjected: boolean;
-  /** Segment Renewal：本 run 内已续段次数（与 supervisor bridge 同步） */
-  segmentRenewalCount: number;
   /** 会话级 immutable 任务目标（checkpoint userGoal 优先来源） */
   sessionGoalAnchor?: string;
   /** build 反复失败后进入诊断模式，暂停 build 类 run_command */
@@ -140,8 +136,6 @@ export interface HarnessRunState {
   pendingModeSignals?: ModeSignal[];
   /** Batch 1 承载位：I10 task-bearing round 计数。 */
   forcedTaskBearingRoundsSinceEntry?: number;
-  /** Batch 1 承载位：Supervisor 运行时相位；run() 入口必填，子模块直接读取无需兜底。 */
-  supervisorPhase: SupervisorPhase;
   /** Batch 4：统一信号提交入口；子模块不得直接写 executionMode。 */
   submitModeSignal?: (
     source: ModeSignalSource,
@@ -156,14 +150,6 @@ export interface HarnessRunState {
   filesChangedAtRoundStart?: number;
   /** W1：本轮是否发生分支切换（task graph fallback）。由 submitModeSignal('branch_switched') 同步置位。 */
   branchSwitchedThisRound?: boolean;
-  /** L2 §10 — 最近一次 runRecoveryMainPath 所在轮次；用于 roundsSinceExtract 与 handoff 回退重跑。 */
-  lastRecoveryExtractRound?: number;
-  /**
-   * L2-6 — Harness 主循环持有的 SupervisorRuntimeBridge 引用（off 时缺省）。
-   * `harness-resilience.buildSupervisorCheckpointState` 与 after-round 钩子读取本字段，
-   * 避免把 bridge 经各子模块依赖链层层传递。
-   */
-  supervisorBridge?: SupervisorRuntimeBridge;
   /** Async Sub-Agent：本 run 是否已自动触发过后台分析（防 token 风暴）。 */
   analysisAutoTriggered?: boolean;
 }

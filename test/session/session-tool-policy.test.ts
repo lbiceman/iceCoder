@@ -10,6 +10,10 @@ import {
   resetShellCollabStoreForTests,
   setShellCollabActive,
 } from '../../src/session/shell-collab-store.js';
+import {
+  resetPlanModeStoreForTests,
+  setPlanModeActive,
+} from '../../src/session/plan-mode-store.js';
 import { SHELL_COLLAB_TOOL_NAMES } from '../../src/tools/shell-collab-tools.js';
 
 const workspaceCtx = {
@@ -32,6 +36,7 @@ describe('session-tool-policy', () => {
 
   afterEach(async () => {
     resetShellCollabStoreForTests();
+    resetPlanModeStoreForTests();
     vi.clearAllMocks();
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -146,5 +151,27 @@ describe('session-tool-policy', () => {
     const clearedCtx = await resolveSessionHarnessToolContext(params);
     expect(clearedCtx.shellCollabActive).toBe(false);
     expect(clearedCtx.toolDefs.map(tool => tool.name)).toEqual(['run_command']);
+  });
+
+  it('filters code-changing tools when plan mode is active', async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-plan-policy-'));
+    const sessionId = 'plan-session';
+    await setPlanModeActive(sessionId, true, tempDir);
+
+    const ctx = await resolveSessionHarnessToolContext({
+      sessionDir: tempDir,
+      sessionId,
+      userMessage: '写一份方案',
+      defaultWorkDir: '/tmp/default',
+      defaultToolExecutor: workspaceCtx.toolExecutor as never,
+      defaultToolRegistry: workspaceCtx.toolRegistry as never,
+      fileParser: {} as never,
+    });
+
+    expect(ctx.planModeActive).toBe(true);
+    expect(ctx.shellCollabActive).toBe(false);
+    expect(ctx.enableRequestAnalysis).toBe(false);
+    expect(ctx.toolDefs.map((t) => t.name)).not.toContain('run_command');
+    expect(ctx.mcpRuntimeContext).toEqual({});
   });
 });

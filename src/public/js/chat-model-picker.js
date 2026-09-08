@@ -91,6 +91,38 @@ window.ChatModelPicker = (function () {
     if (!elLabel) return;
     var def = defaultProvider();
     elLabel.textContent = def ? (resolveActiveModelName(def) || '未配置') : '未配置';
+    syncReasoningStepper();
+  }
+
+  function syncReasoningStepper() {
+    if (!window.ChatReasoningStepper || typeof window.ChatReasoningStepper.setLevels !== 'function') return;
+    var def = defaultProvider();
+    window.ChatReasoningStepper.setLevels(def && def.reasoningEffort);
+  }
+
+  function providerSaveFields(p, overrides) {
+    var row = {
+      id: p.id,
+      apiUrl: p.apiUrl,
+      apiKey: p.apiKey,
+      modelName: p.modelName,
+      activeModelName: p.activeModelName,
+      parameters: p.parameters || {},
+      isDefault: !!p.isDefault,
+      supportsVision: p.supportsVision !== undefined ? p.supportsVision : true,
+      maxContextTokens: p.maxContextTokens,
+      requestTimeoutMs: p.requestTimeoutMs,
+    };
+    if (p.headers && typeof p.headers === 'object') row.headers = p.headers;
+    if (p.apiMode) row.apiMode = p.apiMode;
+    if (p.reasoningEffort) row.reasoningEffort = p.reasoningEffort;
+    if (overrides) {
+      var key;
+      for (key in overrides) {
+        if (Object.prototype.hasOwnProperty.call(overrides, key)) row[key] = overrides[key];
+      }
+    }
+    return row;
   }
 
   function selectDefault(target, activeModel) {
@@ -102,19 +134,10 @@ window.ChatModelPicker = (function () {
     if (elLabel) elLabel.textContent = '切换中…';
 
     var payload = list.map(function (p) {
-      var isTarget = p.id === target.id;
-      return {
-        id: p.id,
-        apiUrl: p.apiUrl,
-        apiKey: p.apiKey,
-        modelName: p.modelName,
-        activeModelName: isTarget ? activeModel : p.activeModelName,
-        parameters: p.parameters || {},
-        isDefault: isTarget,
-        supportsVision: p.supportsVision !== undefined ? p.supportsVision : true,
-        maxContextTokens: p.maxContextTokens,
-        requestTimeoutMs: p.requestTimeoutMs,
-      };
+      return providerSaveFields(p, {
+        isDefault: p.id === target.id,
+        activeModelName: p.id === target.id ? activeModel : p.activeModelName,
+      });
     });
 
     fetch('/api/config', {

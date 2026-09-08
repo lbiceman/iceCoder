@@ -41,6 +41,7 @@ import {
 } from './intent-checkpoint-turn-snapshot.js';
 import { touchSessionTouchedPath } from './intent-checkpoint-store.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
+import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -54,6 +55,7 @@ export interface ToolExecutorDeps {
     request: import('./harness-permission-runtime.js').ShellMandatoryConfirmRequest,
   ) => Promise<boolean>;
   shellCollabActive?: boolean;
+  planModeActive?: boolean;
   workspaceRoot: string;
   lockedWorkspaceRoot?: string;
   referenceReads?: string[];
@@ -286,6 +288,29 @@ export async function executeToolCallsStreaming(
       break;
     }
 
+    if (deps.planModeActive === true) {
+      const planDecision = evaluatePlanModeToolCall(tc.name, tc.arguments ?? {});
+      if (!planDecision.allowed) {
+        emitHarnessPolicyBlock({
+          deps,
+          tc,
+          iteration,
+          baseMessage: planDecision.message,
+          errorLabel: 'Plan mode blocked',
+          policyReason: 'plan_mode_blocked',
+          messages,
+          onStep,
+          logger,
+          taskState,
+          repoContext,
+          policyBlockedSignatures,
+        });
+        directTotalCount++;
+        submittedIds.add(tc.id);
+        continue;
+      }
+    }
+
     // LLM 输出、checkpoint salvage 或外部恢复数据都不得调用本轮未暴露的工具。
     // 此校验必须位于 request_analysis 特殊分支和底层 ToolExecutor 之前。
     if (currentToolNames && !currentToolNames.has(tc.name)) {
@@ -331,9 +356,6 @@ export async function executeToolCallsStreaming(
             paths: stringArrayArg(tc.arguments.paths),
             keywords: stringArrayArg(tc.arguments.keywords),
           },
-        }, {
-          round: iteration,
-          reason: 'request_analysis_tool',
         });
         output = [
           '[Analysis Requested]',

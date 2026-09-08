@@ -814,6 +814,10 @@ window.ChatPage = (function () {
   // also_rejected / shell_collab_entered 事件 handler 已拆分至 chat-ws-bg-task-handlers.js。
 
   var elShellCollabIndicator = null;
+  var elShellModeChipBar = null;
+  var elPlanModeChipBar = null;
+  var DEFAULT_COMPOSER_PLACEHOLDER = '输入消息… (输入 # 选用技能，@ 引用文件)';
+  var PLAN_MODE_COMPOSER_PLACEHOLDER = '规划模式：描述任务，完善文档（不能改代码）…';
 
   function getShellCollabStore() {
     return window.ChatSessionStore || null;
@@ -825,11 +829,33 @@ window.ChatPage = (function () {
     return !!(Store && Store.getShellCollabActive && Store.getShellCollabActive(sid));
   }
 
+  function isActiveSessionPlanMode() {
+    var Store = getShellCollabStore();
+    var sid = Session.getActiveId ? Session.getActiveId() : 'default';
+    return !!(Store && Store.getPlanModeActive && Store.getPlanModeActive(sid));
+  }
+
   function syncShellCollabIndicator() {
-    if (!elShellCollabIndicator) return;
     var active = isActiveSessionShellCollab();
-    elShellCollabIndicator.classList.toggle('hidden', !active);
-    elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (elShellModeChipBar) {
+      elShellModeChipBar.classList.toggle('hidden', !active);
+      elShellModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (elShellCollabIndicator) {
+      elShellCollabIndicator.classList.toggle('hidden', !active);
+      elShellCollabIndicator.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+  }
+
+  function syncPlanModeChip() {
+    var active = isActiveSessionPlanMode();
+    if (elPlanModeChipBar) {
+      elPlanModeChipBar.classList.toggle('hidden', !active);
+      elPlanModeChipBar.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (elInput) {
+      elInput.placeholder = active ? PLAN_MODE_COMPOSER_PLACEHOLDER : DEFAULT_COMPOSER_PLACEHOLDER;
+    }
   }
 
   function notifyShellCollabState(data) {
@@ -844,6 +870,18 @@ window.ChatPage = (function () {
     if (window.ChatSessionSidebar && typeof window.ChatSessionSidebar.renderList === 'function') {
       window.ChatSessionSidebar.renderList();
     }
+  }
+
+  function notifyPlanModeState(data) {
+    var Store = getShellCollabStore();
+    if (!Store) return;
+    if (data && data.planModeActiveBySession && Store.applyPlanModeActiveMap) {
+      Store.applyPlanModeActiveMap(data.planModeActiveBySession);
+    } else if (data && typeof data.planModeActive === 'boolean' && Store.setPlanModeActive) {
+      var planSid = data.sessionId || data.activeSessionId;
+      if (planSid) Store.setPlanModeActive(planSid, data.planModeActive);
+    }
+    syncPlanModeChip();
   }
 
   // appendShellCollabAgentMessage / onWsShellCollabEntered / removeAlsoNoteFromUi /
@@ -1044,6 +1082,7 @@ window.ChatPage = (function () {
     }
     if (window.ChatShellDock) window.ChatShellDock.hydrate(sessionId, options.bgTasks);
     syncShellCollabIndicator();
+    syncPlanModeChip();
   }
 
   function paintInitialChatView() {
@@ -1789,6 +1828,7 @@ window.ChatPage = (function () {
       announceTunnelReadyFromPayload: announceTunnelReadyFromPayload,
       applyHarnessRestoreUi: applyHarnessRestoreUi,
       notifyShellCollabState: notifyShellCollabState,
+      notifyPlanModeState: notifyPlanModeState,
       needsInitialHistoryPaint: needsInitialHistoryPaint,
       syncMessages: syncMessages,
       applyRemoteUserMessage: applyRemoteUserMessage,
@@ -1845,6 +1885,7 @@ window.ChatPage = (function () {
       getElMessages: function () { return elMessages; },
       appendAlsoNoteBubble: appendAlsoNoteBubble,
       notifyShellCollabState: notifyShellCollabState,
+      notifyPlanModeState: notifyPlanModeState,
       syncWelcomeState: syncWelcomeState,
     };
   }
@@ -1995,6 +2036,17 @@ window.ChatPage = (function () {
     container.innerHTML =
       '<div class="chat-page">' +
         '<div class="chat-main">' +
+        '<div id="plan-mode-chip-bar" class="plan-mode-chip-bar hidden" role="status" aria-label="规划模式">' +
+          '<span class="plan-mode-chip">' +
+            '<span class="plan-mode-chip-label">Plan</span>' +
+            '<button type="button" class="plan-mode-chip-remove" id="btn-plan-mode-exit" title="关闭规划模式" aria-label="关闭规划模式">×</button>' +
+          '</span>' +
+        '</div>' +
+        '<div id="shell-mode-chip-bar" class="shell-mode-chip-bar hidden" role="status" aria-label="Shell 协作模式">' +
+          '<span class="shell-mode-chip" title="Shell 协作模式：此会话已固定使用 Shell 专用工具；需要普通 Agent 请新建会话">' +
+            '<span class="shell-mode-chip-label">Shell</span>' +
+          '</span>' +
+        '</div>' +
         '<div class="chat-messages" id="chat-messages"><div class="chat-messages-anchor" id="chat-anchor"></div></div>' +
         '<div class="session-pet-indicator" id="agent-status-bar">' +
           '<div class="pet-bubble" id="pet-bubble" role="status" aria-live="polite"></div>' +
@@ -2029,6 +2081,12 @@ window.ChatPage = (function () {
                 '<span class="chip-label" id="chip-model-label">加载中…</span>' +
                 (window.AppIcon ? window.AppIcon.html('chevron-down', { width: 10, className: 'chip-caret' }) : '') +
               '</button>' +
+              '<div class="reasoning-stepper is-empty" id="reasoning-stepper" hidden role="slider"' +
+                ' aria-label="推理强度" aria-valuemin="0" aria-valuemax="0"' +
+                ' aria-valuenow="0" tabindex="0">' +
+                '<span class="reasoning-stepper-track" aria-hidden="true"></span>' +
+                '<span class="reasoning-stepper-label" aria-hidden="true"></span>' +
+              '</div>' +
               '<button class="btn-send" id="btn-send" type="button" title="Send" aria-label="Send">' +
                 (window.AppIcon ? window.AppIcon.html('send', { width: 16 }) : '') +
               '</button>' +
@@ -2064,6 +2122,14 @@ window.ChatPage = (function () {
     elStatusTurn = container.querySelector('#status-turn');
     elCmdPlusBtn = container.querySelector('#btn-cmd-plus');
     elShellCollabIndicator = container.querySelector('#shell-collab-indicator');
+    elShellModeChipBar = container.querySelector('#shell-mode-chip-bar');
+    elPlanModeChipBar = container.querySelector('#plan-mode-chip-bar');
+    var elPlanModeExitBtn = container.querySelector('#btn-plan-mode-exit');
+    if (elPlanModeExitBtn) {
+      elPlanModeExitBtn.addEventListener('click', function () {
+        if (WS && typeof WS.send === 'function') WS.send({ type: 'plan_mode_exit' });
+      });
+    }
     mainInputWrapper = container.querySelector('.input-wrapper');
     bindComposerInteractions();
     mounted = true;
@@ -2079,12 +2145,15 @@ window.ChatPage = (function () {
 
     // 初始化底部"模型名"下拉：点击 chip 弹出与命令面板同款下拉，
     // 选中后走 config-page 相同的 POST /api/config 设为默认逻辑。
+    if (window.ChatReasoningStepper && typeof window.ChatReasoningStepper.init === 'function') {
+      window.ChatReasoningStepper.init(container.querySelector('#reasoning-stepper'));
+    }
+
     if (window.ChatModelPicker && typeof window.ChatModelPicker.init === 'function') {
       window.ChatModelPicker.init({
         chipEl: container.querySelector('#chip-model'),
         labelEl: container.querySelector('#chip-model-label'),
       });
-      // 初次拉取 providers 缓存，供下拉渲染使用
       window.ChatModelPicker.refreshFromServer();
     }
 
@@ -2276,6 +2345,7 @@ window.ChatPage = (function () {
     }
 
     syncShellCollabIndicator();
+    syncPlanModeChip();
     bindTaskDoneNotifyClick();
 
     // 连接 WebSocket

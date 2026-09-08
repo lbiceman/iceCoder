@@ -28,6 +28,7 @@ import {
   getActiveSessionId,
   resolveSessionWorkspacePayload,
 } from './chat-ws-runtime.js';
+import { clearPlanModeForShellCollab } from './chat-ws-plan.js';
 
 export const SHELL_COLLAB_ENTERED_MESSAGE =
   '当前会话已进入 Shell 协作模式（只需 /shell 一次）。后续直接说话即可，无需再带 /shell。';
@@ -165,6 +166,7 @@ export async function handleShellCollabRoute(
     return false;
   }
   await setShellCollabActive(sessionId, true, SESSIONS_DIR);
+  await clearPlanModeForShellCollab(sessionId);
   const runningTask = await findRunningInteractiveShellForSession(sessionId);
 
   // 已在模式且带提示词：只写用户气泡，跳过「已在模式中」，提示词交给后续入队执行。

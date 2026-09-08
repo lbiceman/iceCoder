@@ -1,7 +1,7 @@
 import type { UnifiedMessage, ToolCall } from '../llm/types.js';
 import type {
   CheckpointSaveTrigger,
-  RuntimeSupervisorCheckpointState,
+  RuntimeExecutionModeCheckpointState,
 } from '../types/runtime-checkpoint.js';
 import type { BranchBudgetTracker } from './branch-budget.js';
 import type { CheckpointEngine } from './checkpoint-engine.js';
@@ -11,7 +11,6 @@ import { toolCallSignature } from './harness-permission-runtime.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
 import type { ChatFunction, StopReason } from './types.js';
-import type { CorrectionPort } from '../types/supervisor.js';
 import type { VerificationOutputTailEntry, AcceptanceGateSnapshot } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
@@ -19,11 +18,6 @@ export interface ResilienceBridgeDeps {
   checkpointEngine?: CheckpointEngine;
   enqueueCheckpointPersist: <T>(task: () => Promise<T>) => Promise<T>;
   workspaceRoot?: string;
-  /**
-   * L2-2：Supervisor PassiveObserver 活跃时关闭 free 段 recovery inject（§19.6）。
-   * 仍保留 branch 计数、checkpoint 与 submitModeSignal。
-   */
-  supervisorObserverSuppressInject?: boolean;
 }
 
 function checkpointVerificationOutputTail(state: HarnessRunState): VerificationOutputTailEntry[] | undefined {
@@ -93,7 +87,7 @@ export async function resilienceRecordToolCalls(
           await engine.save({
             trigger: 'tool_failed',
             branchBudget: state.branchBudget,
-            supervisorState: buildSupervisorCheckpointState(state),
+            executionModeState: buildExecutionModeCheckpointState(state),
             verificationOutputTail: checkpointVerificationOutputTail(state),
             acceptanceGate: checkpointAcceptanceGate(state),
             ...checkpointHarnessEscalationFields(state),
@@ -119,7 +113,7 @@ export async function resilienceRecordToolCalls(
         await engine.save({
           trigger: perToolTrigger,
           branchBudget: state.branchBudget,
-          supervisorState: buildSupervisorCheckpointState(state),
+          executionModeState: buildExecutionModeCheckpointState(state),
           verificationOutputTail: checkpointVerificationOutputTail(state),
           acceptanceGate: checkpointAcceptanceGate(state),
           ...checkpointHarnessEscalationFields(state),
@@ -148,7 +142,6 @@ export function resilienceMaybeBranchRecover(
   deps: ResilienceBridgeDeps,
   state: HarnessRunState,
   msgs: UnifiedMessage[],
-  correctionPort?: CorrectionPort,
 ): void {
   if (!deps.resilienceV2Enabled || !state.branchBudget || !deps.checkpointEngine) return;
   if (state.branchBudgetWarnedThisRound) return;
@@ -159,17 +152,7 @@ export function resilienceMaybeBranchRecover(
   const signal = state.branchBudget.buildRecoverySignal(decision);
   if (!signal) return;
 
-  const suppressInject = deps.supervisorObserverSuppressInject === true;
-  if (!suppressInject) {
-    if (correctionPort) {
-      correctionPort.inject(
-        { kind: 'recovery', content: signal.message, preserveOnCompaction: true },
-        { phase: state.supervisorPhase, source: 'supervisor' },
-      );
-    } else {
-      msgs.push({ role: 'user', content: signal.message });
-    }
-  }
+  msgs.push({ role: 'user', content: signal.message, preserveOnCompaction: true });
   state.branchBudget.markRecoveryTriggered();
   state.submitModeSignal?.('branch_budget', 'recovery_pending', { dimension: decision.dimension, key: decision.key });
   state.branchBudgetWarnedThisRound = true;
@@ -180,7 +163,7 @@ export function resilienceMaybeBranchRecover(
       await engine.save({
         trigger: 'tool_failed',
         branchBudget: state.branchBudget,
-        supervisorState: buildSupervisorCheckpointState(state),
+        executionModeState: buildExecutionModeCheckpointState(state),
         ...checkpointHarnessEscalationFields(state),
         appendRecoverySignal: signal,
       });
@@ -202,7 +185,6 @@ export async function resilienceMaybeReviewStep(
   state: HarnessRunState,
   trigger: 'tool_failure' | 'verification_failure' | 'step_transition',
   chatFn: ChatFunction,
-  correctionPort?: CorrectionPort,
 ): Promise<void> {
   if (!deps.resilienceV2Enabled) return;
   if (state.stepReviewedThisRound) return;
@@ -232,18 +214,8 @@ export async function resilienceMaybeReviewStep(
       && result.fallbackSuggested
       && !state.branchBudgetWarnedThisRound
     ) {
-      const suppressInject = deps.supervisorObserverSuppressInject === true;
-      if (!suppressInject) {
-        const content = `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`;
-        if (correctionPort) {
-          correctionPort.inject(
-            { kind: 'recovery', content },
-            { phase: state.supervisorPhase, source: 'supervisor' },
-          );
-        } else {
-          state.messages.push({ role: 'user', content });
-        }
-      }
+      const content = `[Runtime Self-Review] ${result.reason} 请切换策略或拆解为更小子任务，不要原样重试。`;
+      state.messages.push({ role: 'user', content });
       state.branchBudgetWarnedThisRound = true;
     }
   } catch (err) {
@@ -279,7 +251,7 @@ export async function resilienceSaveCheckpoint(
       await engine.save({
         trigger,
         branchBudget: state.branchBudget,
-        supervisorState: buildSupervisorCheckpointState(state),
+        executionModeState: buildExecutionModeCheckpointState(state),
         verificationOutputTail: checkpointVerificationOutputTail(state),
         acceptanceGate: checkpointAcceptanceGate(state),
         ...checkpointHarnessEscalationFields(state),
@@ -298,11 +270,9 @@ export async function resilienceSaveCheckpoint(
   });
 }
 
-export function buildSupervisorCheckpointState(
+export function buildExecutionModeCheckpointState(
   state: HarnessRunState,
-): RuntimeSupervisorCheckpointState {
-  const bridge = state.supervisorBridge;
-  const bridgeSnapshot = bridge?.isActive() ? bridge.snapshotForCheckpoint() : undefined;
+): RuntimeExecutionModeCheckpointState {
   return {
     executionMode: state.executionMode ?? 'free',
     executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
@@ -313,11 +283,5 @@ export function buildSupervisorCheckpointState(
     lastModeDecision: state.lastModeDecision,
     pendingModeSignals: [...(state.pendingModeSignals ?? [])],
     forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
-    // L2-6 / T08：bridge 持有的 phase / RecoverySupervisor snapshot / timeline tail / I4 budget。
-    supervisorPhase: bridgeSnapshot?.supervisorPhase ?? state.supervisorPhase,
-    recoverySupervisorSnapshot: bridgeSnapshot?.recoverySupervisorSnapshot,
-    timelineTail: bridgeSnapshot?.timelineTail,
-    correctionBudgetUsed: bridgeSnapshot?.correctionBudgetUsed ?? 0,
-    segmentRenewalCount: bridgeSnapshot?.segmentRenewalCount ?? state.segmentRenewalCount ?? 0,
   };
 }

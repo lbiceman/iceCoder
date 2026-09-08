@@ -17,32 +17,16 @@ import type { UnifiedMessage } from '../llm/types.js';
 import { estimateStringTokens } from '../llm/token-estimator.js';
 import type { ToolExecutor } from '../tools/tool-executor.js';
 import { clearReadBeforeEditScope } from '../tools/read-before-edit.js';
+import type { TaskGraphSnapshot } from '../types/task-graph.js';
 import type {
-  ExecutionModeConfig,
-  GlobalModePolicy,
   ModeSignal,
   ModeSignalSource,
 } from '../types/supervisor.js';
-import type { SupervisorRuntimeBridge } from './supervisor/supervisor-bridge.js';
-import type { TaskGraphSnapshot } from '../types/task-graph.js';
-
-/** W1: 用于把 RepoContext 新增文件数粗略折算成 diff 行数，仅用于 large_diff 信号阈值参考。 */
-const APPROX_LINES_PER_FILE_CHANGE = 60;
-
-/** 统计任务图中仍为 pending 或 running 的节点数，供 ExecutionMode 决策与图状态上报使用。 */
-function countPendingGraphSteps(snapshot: TaskGraphSnapshot | null): number {
-  if (!snapshot) return 0;
-  let count = 0;
-  for (const node of Object.values(snapshot.nodes)) {
-    if (node.status === 'pending' || node.status === 'running') count++;
-  }
-  return count;
-}
 import type {
+  ChatFunction,
   HarnessConfig,
   HarnessResult,
   HarnessStepEvent,
-  ChatFunction,
   StreamFunction,
 } from './types.js';
 import { ContextAssembler } from './context-assembler.js';
@@ -91,7 +75,6 @@ import { callHarnessLlm } from './harness-llm-call.js';
 import { prepareHarnessRound } from './harness-round-prep.js';
 import { handleNoToolCalls } from './harness-round-no-tools.js';
 import { tryGraphTerminalStop } from './harness-graph-stop.js';
-import { evaluateSupervisorAfterNoToolRound } from './harness-supervisor-round.js';
 import { runHarnessToolRound } from './harness-tool-round.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
 import type { RoundPrepDeps } from './harness-round-prep.js';
@@ -106,10 +89,30 @@ import {
 import { resolveLlmToolsForRound } from './casual-mode.js';
 import { resolveSalvagedLlmResponse } from './text-tool-call-salvage.js';
 import { applyUserMessageWorkspaceLock } from './session-workspace-store.js';
+import {
+  dumpHarnessTiming,
+  endTiming,
+  markTimingStart,
+  resetHarnessTiming,
+  timeAsync,
+  timeSync,
+} from './harness-timing.js';
+
+/** W1: 用于把 RepoContext 新增文件数粗略折算成 diff 行数，仅用于 large_diff 信号阈值参考。 */
+const APPROX_LINES_PER_FILE_CHANGE = 60;
+
+/** 统计任务图中仍为 pending 或 running 的节点数，供 ExecutionMode 决策与图状态上报使用。 */
+function countPendingGraphSteps(snapshot: TaskGraphSnapshot | null): number {
+  if (!snapshot) return 0;
+  let count = 0;
+  for (const node of Object.values(snapshot.nodes)) {
+    if (node.status === 'pending' || node.status === 'running') count++;
+  }
+  return count;
+}
 
 /**
  * run() 内各子模块共享的运行时依赖（由 Harness.buildRunDeps 从实例字段组装）。
- * 包含：循环控制、压缩、图执行、检查点、工具执行、双模 bridge、token 预算等。
  */
 export type HarnessRunDeps = RoundPrepDeps & ToolExecutorDeps & import('./harness-tool-round.js').ToolRoundDeps & {
   stopHookManager: StopHookManager;
@@ -134,6 +137,7 @@ export class Harness {
   private onConfirm?: HarnessConfig['onConfirm'];
   private onShellMandatoryConfirm?: HarnessConfig['onShellMandatoryConfirm'];
   private shellCollabActive: boolean;
+  private planModeActive: boolean;
   private memoryIntegration: HarnessMemoryIntegration;
   private abortSignal?: AbortSignal;
   private checkpointManager?: TaskCheckpointManager;
@@ -148,16 +152,9 @@ export class Harness {
   private globalPolicy?: HarnessConfig['globalPolicy'];
   private supervisorConfig?: HarnessConfig['supervisorConfig'];
   private verificationExemptDirs?: string[];
-  private supervisorBridge?: SupervisorRuntimeBridge;
   private analysisSupervisor?: AnalysisSupervisor;
   private modeDecisionEngine: ModeDecisionEngine;
   private taskRiskClassifier: TaskRiskClassifier;
-  /**
-   * L2-6 — 最近一次 before-LLM evaluate 阶段算出的 risk score（0..1）。
-   * after-round 钩子 `bridge.evaluateAfterRound` 复用，避免在 tool-round 重复计算。
-   * 默认 0.5（中性），adaptive.riskThreshold 默认 0.6 不直接候选。
-   */
-  private lastRiskScore = 0.5;
   private agentMaxOutputTokens: number;
 
   /**
@@ -196,6 +193,7 @@ export class Harness {
     this.onConfirm = config.onConfirm;
     this.onShellMandatoryConfirm = config.onShellMandatoryConfirm;
     this.shellCollabActive = config.shellCollabActive === true;
+    this.planModeActive = config.planModeActive === true;
     this.abortSignal = config.loop.signal;
     this.workspaceRoot = config.workspaceRoot ?? process.cwd();
     this.verificationExemptDirs = config.verificationExemptDirs;
@@ -204,7 +202,6 @@ export class Harness {
     // 调用方需要启用双模决策时，应显式传入 supervisorConfig，或在 config.json 中设置 supervisorMode。
     this.supervisorConfig = config.supervisorConfig ?? resolveSupervisorConfig({ mode: 'off' });
     this.globalPolicy = config.globalPolicy ?? this.supervisorConfig.globalPolicy;
-    this.supervisorBridge = config.supervisorBridge;
     this.analysisSupervisor = config.analysisSupervisor;
     this.modeDecisionEngine = new ModeDecisionEngine(this.supervisorConfig.executionMode);
     this.taskRiskClassifier = new TaskRiskClassifier(this.supervisorConfig.executionMode);
@@ -254,16 +251,15 @@ export class Harness {
       onConfirm: this.onConfirm,
       onShellMandatoryConfirm: this.onShellMandatoryConfirm,
       shellCollabActive: this.shellCollabActive,
+      planModeActive: this.planModeActive,
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
       sessionDir: this.sessionDir,
       tokenBudgetTracker: this.tokenBudgetTracker,
       executionModeConfig: this.supervisorConfig?.executionMode,
       executionModeDecisionEnabled: this.globalPolicy?.modeDecisionEngineEnabled ?? false,
-      supervisorBridge: this.supervisorBridge,
+      globalPolicy: this.globalPolicy,
       analysisSupervisor: this.analysisSupervisor,
-      supervisorObserverSuppressInject: shouldSuppressObserverInject(this.globalPolicy),
-      supervisorRiskScoreProvider: () => this.lastRiskScore,
       agentMaxOutputTokens: this.agentMaxOutputTokens,
       abortSignal: this.abortSignal,
     };
@@ -341,14 +337,10 @@ export class Harness {
       branchSwitchedThisRound: !!state.branchSwitchedThisRound,
     });
     const riskLevel = this.taskRiskClassifier.classify(runtimeState);
-    // L2-6：把 TaskRiskLevel 映射为 [0,1] riskScore（adaptive.riskThreshold 默认 0.6，
-    //        L2 → 0.7 跨阈，L1 → 0.5 不跨阈，L0 → 0.2）。after-round 钩子复用。
-    this.lastRiskScore = riskScoreFromLevel(riskLevel);
     const ctx = buildModeDecisionContext({
       round,
       executionMode: state.executionMode ?? policy.executionModeFloor,
       executionModeLockRemaining: state.executionModeLockRemaining ?? 0,
-      supervisorPhase: state.supervisorPhase,
       supervisorMode: policy.supervisorMode,
       riskLevel,
       state: runtimeState,
@@ -446,12 +438,11 @@ export class Harness {
     userContentBlocks?: import('../llm/types.js').ContentBlock[],
   ): Promise<HarnessResult> {
     const logger = new HarnessLogger();
+    resetHarnessTiming();
+    const runStartedAt = markTimingStart();
     // W1: Harness 实例可被复用（cli/web）；清空上一次 run 残留的未消费信号，
     // 避免熔断/abort/max_rounds 终止后引擎 submittedSignals 跨 run 泄漏。
     this.modeDecisionEngine.resetSubmittedSignals();
-    // L2-6：新任务边界 — 复位 observer/drift/budget/RecoverySupervisor phase，
-    //       否则前一任务残留信号会让本任务首轮直接进入 takeover 候选。
-    this.supervisorBridge?.resetForNewTask();
     this.graphExecutor.resetGraph();
     onStep?.({ type: 'execution_plan_clear' });
 
@@ -521,7 +512,6 @@ export class Harness {
       this.analysisSupervisor = new AnalysisSupervisor({
         sessionDir: this.sessionDir,
         manager,
-        mode: 'free',
       });
       deps.analysisSupervisor = this.analysisSupervisor;
     }
@@ -577,7 +567,6 @@ export class Harness {
       rebuildEscalationInjections: 0,
       rebuildEscalationInjectedThisRound: false,
       parallelBudgetBlockHintInjected: false,
-      segmentRenewalCount: 0,
       sessionGoalAnchor,
       buildDiagnosticGateActive: false,
       verificationOutputBuffer: new VerificationOutputBuffer(),
@@ -594,13 +583,10 @@ export class Harness {
       executionModeEnteredBy: [],
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
-      supervisorPhase: 'free',
       recoveryPendingSticky: false,
       stableRoundsSinceLastFailure: 0,
       filesChangedAtRoundStart: 0,
       branchSwitchedThisRound: false,
-      // L2-6：让 resilience save 与 after-round 钩子能通过 state 访问 bridge，无需再串依赖链。
-      supervisorBridge: this.supervisorBridge,
     };
     state.submitModeSignal = (source, signal, payload) => this.submitModeSignal(state, source, signal, payload);
     syncExecutionModeLoopState(this.loopController, state);
@@ -616,15 +602,15 @@ export class Harness {
         const v2 = await this.checkpointEngine.loadV2();
         if (v2) {
           state.branchBudget?.applySnapshot(v2.branchBudget);
-          // execution-mode 历史承载位（observability only）；phase / takeover / checkpoint_resumed 不跨用户发送恢复
-          if (v2.supervisorState) {
-            const supervisor = v2.supervisorState;
-            state.executionModeEnteredBy = [...(supervisor.executionModeEnteredBy ?? [])];
-            state.executionModeEnteredByPrimary = supervisor.executionModeEnteredByPrimary;
-            state.executionModeEnteredAtRound = supervisor.executionModeEnteredAtRound ?? undefined;
-            state.forcedDegradedTier = supervisor.forcedDegradedTier;
-            state.forcedTaskBearingRoundsSinceEntry = supervisor.forcedTaskBearingRoundsSinceEntry ?? 0;
-            state.lastModeDecision = supervisor.lastModeDecision;
+          // execution-mode 历史承载位（observability only）；checkpoint_resumed 不跨用户发送恢复
+          if (v2.executionModeState) {
+            const execution = v2.executionModeState;
+            state.executionModeEnteredBy = [...(execution.executionModeEnteredBy ?? [])];
+            state.executionModeEnteredByPrimary = execution.executionModeEnteredByPrimary;
+            state.executionModeEnteredAtRound = execution.executionModeEnteredAtRound ?? undefined;
+            state.forcedDegradedTier = execution.forcedDegradedTier;
+            state.forcedTaskBearingRoundsSinceEntry = execution.forcedTaskBearingRoundsSinceEntry ?? 0;
+            state.lastModeDecision = execution.lastModeDecision;
           }
           // verificationOutputBuffer / acceptanceGate / pending recoverySignals 不跨用户发送恢复
           this.checkpointEngine.discardPendingRecoverySignals();
@@ -642,9 +628,7 @@ export class Harness {
     state.rebuildEscalationInjections = 0;
     state.rebuildEscalationInjectedThisRound = false;
     state.parallelBudgetBlockHintInjected = false;
-    state.segmentRenewalCount = 0;
     state.verificationOutputBuffer.clear();
-    this.supervisorBridge?.resetPerRunInjectionBudget();
 
     if (!this.shellCollabActive && existingMessages && existingMessages.length > 0) {
       try {
@@ -718,37 +702,49 @@ export class Harness {
     try {
       this.loopController.resetForNewRun();
       syncExecutionModeLoopState(this.loopController, state);
+      endTiming('run_init', runStartedAt);
       while (true) {
-        const prep = await prepareHarnessRound(deps, {
+        const roundStartedAt = markTimingStart();
+        const prep = await timeAsync('round_prep', () => prepareHarnessRound(deps, {
           state,
           userMessage,
           chatFn,
           logger,
           onStep,
           streamFn,
-        });
-        if (prep.action === 'stop') return prep.result;
+        }));
+        if (prep.action === 'stop') {
+          endTiming('round_wall', roundStartedAt);
+          return prep.result;
+        }
 
-        const graphStopBeforeRound = await tryGraphTerminalStop(deps, {
+        const graphStopBeforeRound = await timeAsync('graph_stop_check', () => tryGraphTerminalStop(deps, {
           state,
           graphExecutor: deps.graphExecutor,
           userMessage,
           currentTools: state.tools,
           logger,
           onStep,
-        });
-        if (graphStopBeforeRound) return graphStopBeforeRound;
+        }), prep.round);
+        if (graphStopBeforeRound) {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return graphStopBeforeRound;
+        }
 
-        this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
+        timeSync('mode_eval', () => {
+          this.evaluateExecutionModeBeforeLlm(deps, state, prep.round, onStep);
+        }, prep.round);
 
-        onStep?.({
-          type: 'context_usage',
-          iteration: prep.round,
-          totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
-            lastInputTokens: deps.loopController.getState().lastInputTokens,
-            lastOutputTokens: deps.loopController.getState().lastOutputTokens,
-          }),
-        });
+        timeSync('context_usage', () => {
+          onStep?.({
+            type: 'context_usage',
+            iteration: prep.round,
+            totalTokenUsage: buildTotalTokenUsageWithContext(state.messages, state.tools, {
+              lastInputTokens: deps.loopController.getState().lastInputTokens,
+              lastOutputTokens: deps.loopController.getState().lastOutputTokens,
+            }),
+          });
+        }, prep.round);
 
         const toolsForLlm = resolveLlmToolsForRound(state.tools, prep.round, plainUserText);
 
@@ -762,8 +758,12 @@ export class Harness {
           logger,
           onStep,
         });
-        if (llm.action === 'retry') continue;
+        if (llm.action === 'retry') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          continue;
+        }
         if (llm.action === 'abort') {
+          endTiming('round_wall', roundStartedAt, prep.round);
           return handleHarnessStop(deps, {
             reason: 'user_abort',
             messages: state.messages,
@@ -775,10 +775,13 @@ export class Harness {
             runtimeState: state,
           });
         }
-        if (llm.action === 'error') return llm.result;
+        if (llm.action === 'error') {
+          endTiming('round_wall', roundStartedAt, prep.round);
+          return llm.result;
+        }
 
         const { response: rawResponse, llmRoundLog, tokenUsage } = llm;
-        const response = resolveSalvagedLlmResponse(rawResponse);
+        const response = timeSync('post_salvage', () => resolveSalvagedLlmResponse(rawResponse), prep.round);
         if (response.toolCalls?.length && !rawResponse.toolCalls?.length) {
           console.log(`[harness] 从 assistant 文本抢救 ${response.toolCalls.length} 个 tool_call`);
         }
@@ -786,7 +789,7 @@ export class Harness {
 
         if (!hasToolCalls) {
           logger.llmResponseFinal(llmRoundLog.usage, llmRoundLog.meta);
-          const noTools = await handleNoToolCalls(deps, {
+          const noTools = await timeAsync('post_no_tools', () => handleNoToolCalls(deps, {
             state,
             response,
             rawAssistantContent: rawResponse.content,
@@ -795,21 +798,8 @@ export class Harness {
             tokenUsage,
             logger,
             onStep,
-          });
+          }), prep.round);
           if (noTools.action === 'continue') {
-            const supervisorResult = await evaluateSupervisorAfterNoToolRound(deps, {
-              state,
-              round: prep.round,
-              response,
-              currentTools: state.tools,
-              tokenUsage,
-              chatFn,
-              logger,
-              onStep,
-              streamFn,
-            });
-            if (supervisorResult.action === 'return') return supervisorResult.result;
-
             const graphStopAfterNoTool = await tryGraphTerminalStop(deps, {
               state,
               graphExecutor: deps.graphExecutor,
@@ -818,15 +808,20 @@ export class Harness {
               logger,
               onStep,
             });
-            if (graphStopAfterNoTool) return graphStopAfterNoTool;
+            if (graphStopAfterNoTool) {
+              endTiming('round_wall', roundStartedAt, prep.round);
+              return graphStopAfterNoTool;
+            }
 
+            endTiming('round_wall', roundStartedAt, prep.round);
             continue;
           }
+          endTiming('round_wall', roundStartedAt, prep.round);
           return noTools.result;
         }
 
         logger.llmResponseToolCalls(response.toolCalls!.length, llmRoundLog.usage, llmRoundLog.meta);
-        const toolRound = await runHarnessToolRound(deps, {
+        const toolRound = await timeAsync('tool_round', () => runHarnessToolRound(deps, {
           state,
           response,
           userMessage,
@@ -837,12 +832,15 @@ export class Harness {
           logger,
           onStep,
           streamFn,
-        });
+        }), prep.round);
+        endTiming('round_wall', roundStartedAt, prep.round);
         if (toolRound.action === 'return') return toolRound.result;
 
         // 工具轮后不 graph-stop：工程变更须走 Verification Gate（单测提示），避免图 done 绕过验收
       }
     } finally {
+      endTiming('run_total', runStartedAt);
+      dumpHarnessTiming();
       if (!this.shellCollabActive) {
         this.memoryIntegration.onLoopEnd(
           state.messages,
@@ -878,34 +876,3 @@ export class Harness {
   }
 }
 
-/**
- * §19.6 — L2 观察活跃时 free 段不重复 inject supervisor 侧 C 类 recovery（branch recover、
- * rebuild escalation、verification digest 等）。
- * 连续工具失败阶梯（轻提示/证据包/强警告）不受此开关影响，始终经 lifecycle source 注入。
- */
-export function shouldSuppressObserverInject(policy: GlobalModePolicy | undefined): boolean {
-  if (!policy) return false;
-  return policy.observerEnabled && policy.recoverySupervisorEnabled;
-}
-
-/**
- * L2-6 — TaskRiskLevel → [0,1] 启发式映射。
- *
- * 与 `SupervisorParams.adaptiveFree.riskThreshold`（默认 0.6）相对：
- *   - L0_observation → 0.2（远低于阈值）
- *   - L1_minor_edit  → 0.5（贴近但低于阈值）
- *   - L2_structural  → 0.7（跨阈值，成为候选）
- *
- * V2 可由 RiskEvaluator 用更细致权重替换；本映射只是 V1 启发式占位。
- */
-function riskScoreFromLevel(level: ReturnType<TaskRiskClassifier['classify']>): number {
-  switch (level) {
-    case 'L2_structural':
-      return 0.7;
-    case 'L1_minor_edit':
-      return 0.5;
-    case 'L0_observation':
-    default:
-      return 0.2;
-  }
-}

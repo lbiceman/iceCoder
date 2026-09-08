@@ -9,6 +9,7 @@ import {
   parseAlsoCommand,
   parseNextCommand,
   parseShellCommand,
+  parsePlanCommand,
   resetPendingNotesForTests,
 } from '../../src/session/pending-note.js';
 
@@ -129,5 +130,32 @@ describe('pending-note', () => {
       prompt: '',
     });
     expect(parseShellCommand('/shell exit foo')).toEqual({ matched: false, action: null, prompt: '' });
+  });
+
+  it('parsePlanCommand recognizes /plan, trailing prompt, and exit', () => {
+    expect(parsePlanCommand('/plan')).toEqual({ matched: true, action: 'enter', prompt: '' });
+    expect(parsePlanCommand('/plan exit')).toEqual({ matched: true, action: 'exit', prompt: '' });
+    expect(parsePlanCommand('/plan 写登录方案')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '写登录方案',
+    });
+    expect(parsePlanCommand('#skill.md\n/plan 补齐验收标准')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '补齐验收标准',
+    });
+    expect(parsePlanCommand('/plan exit foo')).toEqual({ matched: false, action: null, prompt: '' });
+    expect(parsePlanCommand('/shell')).toEqual({ matched: false, action: null, prompt: '' });
+    expect(parsePlanCommand('请实现登录\n/plan 先写方案')).toEqual({
+      matched: false,
+      action: null,
+      prompt: '',
+    });
+    expect(parsePlanCommand('D:\\work\\a.ts\n/plan 分析这个文件')).toEqual({
+      matched: true,
+      action: 'enter',
+      prompt: '分析这个文件',
+    });
   });
 });

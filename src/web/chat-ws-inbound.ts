@@ -1,5 +1,5 @@
 /**
- * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /next /open）。
+ * chat-ws 入站路由器：消化全部 msg.type（含 message 内 /also /shell /plan /next /open）。
  */
 
 import { promises as fsPromises } from 'node:fs';
@@ -10,6 +10,7 @@ import {
   parseNextCommand,
   parseAlsoCommand,
   parseShellCommand,
+  parsePlanCommand,
   PENDING_NOTE_USAGE_MESSAGE,
   queueAlsoNote,
   clearPendingNotesForSession,
@@ -32,11 +33,13 @@ import {
 } from '../harness/conversation-delete.js';
 import { canAcceptRuntimeRestore } from './session-runtime-busy.js';
 import { resolveShellCollabActive } from '../session/shell-collab-store.js';
+import { resolvePlanModeActive } from '../session/plan-mode-store.js';
 import {
   stopAllShellWorkForSession,
   stopForegroundShellWorkForSession,
 } from '../tools/session-shell-control.js';
 import type { UnifiedMessage } from '../llm/types.js';
+import { parseReasoningEffort } from '../llm/reasoning-effort.js';
 import { parseClientMessageId, isOpenLegacyCommand } from './chat-ws-helpers.js';
 import { handleBgTaskStop, rebindBgTaskPusher, unwireBgTasksDiskSync, buildBgTasksForSession } from './chat-ws-bg-tasks.js';
 import {
@@ -58,6 +61,12 @@ import {
 } from './chat-ws-persist.js';
 import { handleShellCollabRoute, queueShellCollabTransition, waitForShellCollabTransition } from './chat-ws-shell.js';
 import {
+  handlePlanModeRoute,
+  handlePlanModeExit,
+  queuePlanModeTransition,
+  waitForPlanModeTransition,
+} from './chat-ws-plan.js';
+import {
   clearRunningTurn,
   getRunningTurn,
   snapshotRunningTurn,
@@ -68,7 +77,6 @@ import {
   abortSession,
   getActiveSessionId,
   getCachedMessages,
-  getSupervisorRuntime,
   isSessionProcessing,
   resolveSessionWorkspacePayload,
   sessionProcessing,
@@ -156,6 +164,18 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         return;
       }
 
+      if (msg.type === 'plan_mode_exit') {
+        const sid = getSubscribedSessionId(ws);
+        if (!sid) {
+          sendJSON(ws, { type: 'error', message: '未订阅会话' });
+          return;
+        }
+        await queuePlanModeTransition(sid, async () => {
+          await handlePlanModeExit(ws, sid, { persistUserMessage: false });
+        });
+        return;
+      }
+
       if (msg.type === 'stop') {
         const sid = getSubscribedSessionId(ws);
         if (!sid) return;
@@ -192,13 +212,11 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         }
         console.log(`[chat-ws] restore_runtime session=${sid} messageId=${messageId}`);
         try {
-          const supervisorRuntime = await getSupervisorRuntime();
           const result = await getRuntimeRestoreCoordinator().restore({
             sessionDir: SESSIONS_DIR,
             sessionId: sid,
             messageId,
             defaultWorkDir: DEFAULT_WORK_DIR,
-            supervisorBridge: supervisorRuntime.bridge,
             getStructuredMessages: () => getCachedMessages(sid),
             setStructuredMessages: (m) => setCachedMessages(sid, m),
           });
@@ -340,13 +358,17 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           const newRunningTurn = snapshotRunningTurn(targetId);
           const workspace = await resolveSessionWorkspacePayload(targetId);
           const bgTasks = await buildBgTasksForSession(targetId);
-          const shellCollabActive = await resolveShellCollabActive(targetId, SESSIONS_DIR);
+          const [shellCollabActive, planModeActive] = await Promise.all([
+            resolveShellCollabActive(targetId, SESSIONS_DIR),
+            resolvePlanModeActive(targetId, SESSIONS_DIR),
+          ]);
           const runtimeExtras = await buildConnectedPayloadExtras(targetId);
           sendJSON(ws, {
             type: 'session_switched',
             ok: true,
             sessionId: targetId,
             shellCollabActive,
+            planModeActive,
             ...workspace,
             ...runtimeExtras,
             ...(newRunningTurn ? { runningTurn: newRunningTurn } : {}),
@@ -386,6 +408,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           ? msg.queueInsertIndex
           : undefined;
         const hasAttachments = images.length > 0;
+        const reasoningEffort = parseReasoningEffort(msg.reasoningEffort);
 
         const alsoCmd = parseAlsoCommand(content);
         if (alsoCmd.matched) {
@@ -452,12 +475,47 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
               shellMessageId,
               'implicit',
               skills,
+              reasoningEffort,
+            );
+            await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);
+          }
+          return;
+        }
+
+        const planCmd = parsePlanCommand(content);
+        if (planCmd.matched && planCmd.action) {
+          const planMessageId = messageId ?? randomUUID();
+          let planRouteOk = false;
+          await queuePlanModeTransition(runSid, async () => {
+            planRouteOk = await handlePlanModeRoute(
+              ws,
+              runSid,
+              planCmd.action!,
+              content,
+              planMessageId,
+              planCmd.prompt,
+              referencePaths,
+              skills,
+              images,
+            );
+          });
+          if (planRouteOk && planCmd.action === 'enter' && planCmd.prompt.trim()) {
+            const taskInput = await buildEnqueueInput(
+              runSid,
+              planCmd.prompt,
+              images,
+              referencePaths,
+              planMessageId,
+              'implicit',
+              skills,
+              reasoningEffort,
             );
             await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);
           }
           return;
         }
         await waitForShellCollabTransition(runSid);
+        await waitForPlanModeTransition(runSid);
 
         if (isOpenLegacyCommand(content)) {
           if (isSessionProcessing(runSid)) {
@@ -471,6 +529,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
             messageId,
             source: 'implicit',
             ws,
+            ...(reasoningEffort ? { reasoningEffort } : {}),
           };
           void runSessionMessageLoop(deps, runSid, ws, direct);
           return;
@@ -494,6 +553,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           messageId,
           'implicit',
           skills,
+          reasoningEffort,
         );
         await persistImplicitQueuedUserMessage(runSid, ws, taskInput);
         await enqueueAndMaybeKickoff(deps, runSid, ws, taskInput, queueInsertIndex);

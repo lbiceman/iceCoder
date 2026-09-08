@@ -26,7 +26,7 @@ describe('supervisor types - Batch 1', () => {
     ]);
   });
 
-  it('keeps runtime checkpoint v2 backward compatible when supervisor state is absent', () => {
+  it('accepts runtime checkpoint v2 when execution-mode state is absent', () => {
     const oldRuntimeV2: RuntimeCheckpointV2 = {
       runtimeVersion: 2,
       branchBudget: { fileEdits: {}, commandRetries: {}, errorRepeats: {}, recoverTriggers: 0 },
@@ -41,10 +41,10 @@ describe('supervisor types - Batch 1', () => {
     expect(isRuntimeCheckpointV2(oldRuntimeV2)).toBe(true);
   });
 
-  it('initializes new runtime checkpoint supervisor fields as inert free-mode defaults', () => {
+  it('initializes execution-mode checkpoint fields as inert free-mode defaults', () => {
     const checkpoint = emptyRuntimeCheckpointV2();
 
-    expect(checkpoint.supervisorState).toMatchObject({
+    expect(checkpoint.executionModeState).toMatchObject({
       executionMode: 'free',
       executionModeLockRemaining: 0,
       executionModeEnteredBy: [],
@@ -80,9 +80,8 @@ describe('supervisor types - Batch 1', () => {
       primaryReasonHuman: 'free',
       round: runtimeState.round,
     };
-    const config: Pick<SupervisorConfigFile, 'mode' | 'shadow'> = {
+    const config: Pick<SupervisorConfigFile, 'mode'> = {
       mode: 'adaptive',
-      shadow: false,
     };
 
     expect(telemetry.executionMode).toBe('free');

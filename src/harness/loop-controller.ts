@@ -130,7 +130,6 @@ export class LoopController {
     | 'lastModeDecision'
     | 'pendingModeSignals'
     | 'forcedTaskBearingRoundsSinceEntry'
-    | 'supervisorPhase'
   >>): void {
     this.state = { ...this.state, ...fields };
   }

@@ -26,7 +26,6 @@ function state(overrides: Partial<HarnessRunState> = {}): HarnessRunState {
     branchBudgetWarnedThisRound: false,
     verificationDigestInjectedThisRound: false,
     stepReviewedThisRound: false,
-    supervisorPhase: 'free',
     ...overrides,
   };
 }

@@ -3,6 +3,7 @@ import type { OpenAIAdapterConfig } from './openai-adapter.js';
 import { getModelMaxOutputTokens, resolveOpenAiRequestTimeoutMs } from '../config/model-capabilities.js';
 import { resolveActiveModelName } from '../config/parse-model-names.js';
 import { resolveProviderApiKey } from '../config/resolve-api-key.js';
+import { parseReasoningEffortLevels } from './reasoning-effort.js';
 
 /** 将 data/config.json 中的 provider 条目转为 OpenAIAdapter 构造参数。 */
 export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenAIAdapterConfig {
@@ -12,6 +13,7 @@ export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenA
   const apiMode = provider.apiMode ?? provider.parameters.apiMode;
   // config 未填有效 Key 时回退环境变量（不落盘）
   const apiKey = resolveProviderApiKey(provider).apiKey || provider.apiKey;
+  const reasoningEffortLevels = parseReasoningEffortLevels(provider.reasoningEffort);
   return {
     name: provider.id,
     apiKey,
@@ -23,5 +25,9 @@ export function openAiAdapterConfigFromProvider(provider: ProviderConfig): OpenA
     supportsVision: provider.supportsVision ?? true,
     ...(apiMode === 'responses' || apiMode === 'chat_completions' ? { apiMode } : {}),
     ...(rt !== undefined ? { timeout: rt } : {}),
+    ...(provider.headers && Object.keys(provider.headers).length > 0
+      ? { requestHeaders: { ...provider.headers } }
+      : {}),
+    ...(reasoningEffortLevels.length > 0 ? { reasoningEffortLevels } : {}),
   };
 }
