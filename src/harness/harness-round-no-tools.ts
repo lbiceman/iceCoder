@@ -43,6 +43,11 @@ import type { ToolDefinition } from '../llm/types.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import {
+  buildCompletionGatePrompt,
+  CompletionGate,
+  type CompletionStatus,
+} from './completion-gate.js';
+import {
   containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
   sanitizeAssistantContentForUser,
@@ -374,7 +379,10 @@ export async function handleNoToolCalls(
     acceptanceIncomplete,
     taskSnap.verificationStatus,
   );
-  let blockVerification = state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
+  const universalCompletionEnabled = !!state.operationOutcomes;
+  let blockVerification = acceptanceIncomplete
+    || (!universalCompletionEnabled
+      && state.taskState.isVerificationBlockingFinal(false, workspaceRoot));
 
   const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
     const defaultSuffix = canVerifyDeliverable
@@ -450,6 +458,8 @@ export async function handleNoToolCalls(
   }
 
   if (
+    !universalCompletionEnabled
+    &&
     !blockVerification
     && !state.failedUnitTestReminderInjected
     && state.taskState.shouldInjectFailedUnitTestReminder()
@@ -464,6 +474,77 @@ export async function handleNoToolCalls(
     ].join('\n'));
     state.transition = 'stop_hook_continue';
     return { action: 'continue' };
+  }
+
+  let completionStatus: CompletionStatus = 'completed';
+  if (universalCompletionEnabled) {
+    const completionDecision = new CompletionGate().evaluate({
+      ledger: state.operationOutcomes,
+      explicitConditionsPending: acceptanceIncomplete,
+      // 当前无工具回复已经是模型读取工具结果后的自主收尾机会；
+      // 软提示位于 system prompt，不再强制追加 LLM 轮。
+      recoveryCount: Math.max(1, state.completionRecoveryCount ?? 0),
+      evidenceRequestCount: Math.max(1, state.completionEvidenceRequestCount ?? 0),
+    });
+    completionStatus = completionDecision.status;
+
+    if (completionDecision.action === 'continue') {
+      const prompt = buildCompletionGatePrompt(completionDecision);
+      if (prompt) {
+        if (completionDecision.reason === 'operation_failed') {
+          state.completionRecoveryCount = (state.completionRecoveryCount ?? 0) + 1;
+        } else if (completionDecision.reason === 'high_risk_receipt_missing') {
+          state.completionEvidenceRequestCount = (state.completionEvidenceRequestCount ?? 0) + 1;
+        }
+        pushAssistantForHistory(msgs, response);
+        injectContinuationUserMessage(deps, state, msgs, prompt);
+        state.transition = 'no_tool_execution_recovery';
+        return { action: 'continue' };
+      }
+    }
+
+    if (completionDecision.action === 'pause' || completionDecision.action === 'fail') {
+      const reason = completionDecision.action === 'fail'
+        ? 'completion_failed'
+        : 'completion_paused';
+      const detail = completionDecision.reason === 'operation_pending'
+        ? '任务仍有未结束的操作或待审批事项，已暂停且未报告完成。'
+        : completionDecision.reason === 'high_risk_receipt_missing'
+          ? '高风险操作缺少结果回执，已暂停且未报告完成。'
+          : '操作未成功完成，已保留失败状态。';
+      const content = `${sanitizeAssistantContentForUser(response.content)}\n${detail}`.trim();
+      pushAssistantForHistory(msgs, response);
+      deps.loopController.stop(reason);
+      const finalState = deps.loopController.getState();
+      logger.loopStop(reason, finalState.currentRound, finalState.totalToolCalls);
+      await saveTaskCheckpoint(
+        deps,
+        completionDecision.action === 'fail' ? 'failed' : 'paused',
+        resolveCheckpointUserGoal(state, userMessage),
+        msgs,
+        state,
+        reason,
+      );
+      await resilienceSaveCheckpoint(deps, 'final_draft', state, reason);
+      recordTelemetrySummary(deps, reason, state);
+      onStep?.({
+        type: 'final',
+        iteration: finalState.currentRound,
+        totalToolCalls: finalState.totalToolCalls,
+        content,
+        stopReason: reason,
+      });
+      return {
+        action: 'return',
+        result: {
+          content,
+          loopState: finalState,
+          messages: [...msgs],
+          log: logger.getEntries(),
+          completionStatus,
+        },
+      };
+    }
   }
 
   if (
@@ -553,6 +634,7 @@ export async function handleNoToolCalls(
       loopState: finalState,
       messages: [...msgs],
       log: logger.getEntries(),
+      ...(universalCompletionEnabled ? { completionStatus } : {}),
     },
   };
 }

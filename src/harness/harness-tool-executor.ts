@@ -361,8 +361,9 @@ export async function executeToolCallsStreaming(
           '[Analysis Requested]',
           `taskId: ${result.taskId}`,
           `status: ${result.status}`,
+          'lifespan: detached',
           `submitted: ${result.submitted}`,
-          'The analysis is running in the background. Continue useful work; an [Analysis Ready] context block will appear later.',
+          'The analysis is detached and will appear later as an [Analysis Ready] context block. Continue independent work now; do not wait or repeatedly retry.',
         ].join('\n');
       } catch (err) {
         success = false;
@@ -400,30 +401,6 @@ export async function executeToolCallsStreaming(
       taskState?.recordToolResult(tc, { success, output, error });
       repoContext?.recordToolResult(tc, { success, output, error });
       deps.loopController.recordToolCalls(1);
-      submittedIds.add(tc.id);
-      continue;
-    }
-
-    if (
-      isIntentCheckpointWriteTool(tc.name)
-      && deps.analysisSupervisor
-      && await deps.analysisSupervisor.hasPendingAnalyses(deps.sessionId ?? 'default')
-    ) {
-      emitHarnessPolicyBlock({
-        deps,
-        tc,
-        iteration,
-        baseMessage: '[Harness / Async Sub-Agent] A background analysis is still pending for this session. Wait for the next [Analysis Ready] context block before making write changes, or continue with read-only inspection.',
-        errorLabel: 'analysis_pending',
-        policyReason: 'analysis_pending',
-        messages,
-        onStep,
-        logger,
-        taskState,
-        repoContext,
-        policyBlockedSignatures,
-      });
-      directTotalCount++;
       submittedIds.add(tc.id);
       continue;
     }

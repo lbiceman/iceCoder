@@ -229,7 +229,7 @@ describe('Harness - 工具调用循环', () => {
     )).toBe(false);
   });
 
-  it('修改代码未跑测时 verification gate inject', async () => {
+  it('简单修改有成功回执时不强制追加测试', async () => {
     const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -244,13 +244,13 @@ describe('Harness - 工具调用循环', () => {
     const result = await harness.run('修复失败用例', chatFn);
 
     expect(result.content).toBe('已修复');
-    expect(result.loopState.totalToolCalls).toBe(2);
+    expect(result.loopState.totalToolCalls).toBe(1);
     expect(result.loopState.stopReason).toBe('model_done');
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
       && /unit tests/i.test(m.content)
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it('修改代码且 npm test 通过后允许完成', async () => {
@@ -387,7 +387,8 @@ describe('Harness - 工具调用循环', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toBe('File does not exist');
+    expect(result.content).toContain('File does not exist');
+    expect(result.completionStatus).toBe('failed');
     // 消息中应该包含工具错误
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('Tool execution error'));
     expect(toolMsg).toBeDefined();
@@ -783,7 +784,8 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toBe('User declined');
+    expect(result.content).toContain('User declined');
+    expect(result.completionStatus).toBe('paused');
     expect(onConfirm).toHaveBeenCalledWith('read_file', {});
     expect(handler).not.toHaveBeenCalled();
   });
@@ -804,7 +806,8 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toBe('Need confirmation');
+    expect(result.content).toContain('Need confirmation');
+    expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     expect(result.messages.some(m =>
       m.role === 'tool'
@@ -872,7 +875,8 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Delete important.txt', chatFn);
 
-    expect(result.content).toBe('OK, I will not delete it');
+    expect(result.content).toContain('OK, I will not delete it');
+    expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('User denied'));
     expect(toolMsg).toBeDefined();
@@ -1592,9 +1596,10 @@ describe('Harness - 连续工具失败熔断', () => {
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 熔断改为渐进式干预：3 轮失败后注入提示并继续，模型可正常回复
-    expect(result.loopState.stopReason).toBe('model_done');
-    expect(result.content).toBe('summary');
+    // 模型仍可输出总结，但结构化终态必须保留最后一次失败。
+    expect(result.loopState.stopReason).toBe('completion_failed');
+    expect(result.completionStatus).toBe('failed');
+    expect(result.content).toContain('summary');
   });
 
   it('重复同参工具失败时注入换策略提示', async () => {

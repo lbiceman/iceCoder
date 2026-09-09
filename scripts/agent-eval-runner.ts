@@ -261,11 +261,28 @@ async function scoreCase(args: {
   if (testCase.expected.requiresVerification && !agentVerificationPassed) {
     failures.push('expected agent-run verification');
   }
+  if (testCase.expected.forbidVerification && didAgentRunShell(events)) {
+    failures.push('unexpected shell verification for soft/no-verification case');
+  }
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
   }
   if (testCase.expected.requiresAnalysisArtifact && analysisArtifactCount === 0) {
     failures.push('expected async sub-agent analysis artifact');
+  }
+  if (
+    testCase.expected.completionStatus
+    && result.completionStatus !== testCase.expected.completionStatus
+  ) {
+    failures.push(
+      `expected completionStatus=${testCase.expected.completionStatus}, got ${result.completionStatus ?? '(missing)'}`,
+    );
+  }
+  if (
+    testCase.expected.finalContains
+    && !result.content.includes(testCase.expected.finalContains)
+  ) {
+    failures.push(`final response does not contain ${JSON.stringify(testCase.expected.finalContains)}`);
   }
 
   const summary = telemetry
@@ -369,6 +386,17 @@ function didAgentRunVerification(events: HarnessStepEvent[], verifyCommands: str
     const command = String(event.toolArgs?.command ?? event.toolArgs?.cmd ?? '');
     return verifyCommands.some(expected => command.includes(expected));
   });
+}
+
+function didAgentRunShell(events: HarnessStepEvent[]): boolean {
+  return events.some(event =>
+    event.type === 'tool_call'
+    && (
+      event.toolName === 'run_command'
+      || event.toolName === 'shell_exec'
+      || event.toolName === 'interactive_shell'
+    ),
+  );
 }
 
 function firstToolLatency(events: HarnessStepEvent[]): number {

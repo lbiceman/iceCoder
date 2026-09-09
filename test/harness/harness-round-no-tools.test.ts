@@ -8,6 +8,10 @@ import { TaskState } from '../../src/harness/task-state.js';
 import { StopHookManager } from '../../src/harness/stop-hooks.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
+import {
+  normalizeOperationOutcome,
+  OperationOutcomeLedger,
+} from '../../src/harness/operation-outcome.js';
 
 function makeState(
   messages: UnifiedMessage[],
@@ -556,6 +560,67 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     expect(result.action).toBe('return');
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+    }
+  });
+});
+
+describe('handleNoToolCalls — 通用收尾协议', () => {
+  it('简单源码修改有成功回执时不强制追加测试轮', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: '修改一处文本' }];
+    const state = makeState(messages, '修改一处文本');
+    state.operationOutcomes = new OperationOutcomeLedger();
+    state.taskState.recordToolResult(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.py' } },
+      { success: true, output: 'updated' },
+    );
+    state.operationOutcomes.record(normalizeOperationOutcome(
+      { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.py' } },
+      { success: true, output: 'updated' },
+    ));
+
+    const result = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '修改完成。', finishReason: 'stop' },
+      userMessage: '修改一处文本',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.completionStatus).toBe('completed');
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+    expect(state.verificationGateContinuationCount).toBe(0);
+  });
+
+  it('后台操作未结束时暂停且不报告完成', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: '运行后台任务' }];
+    const state = makeState(messages, '运行后台任务');
+    state.operationOutcomes = new OperationOutcomeLedger();
+    state.operationOutcomes.record(normalizeOperationOutcome(
+      { id: 's1', name: 'run_command', arguments: { command: 'python worker.py' } },
+      {
+        success: true,
+        output: JSON.stringify({ mode: 'background', status: 'running', taskId: 'bg_1' }),
+      },
+    ));
+
+    const result = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '任务完成。', finishReason: 'stop' },
+      userMessage: '运行后台任务',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.completionStatus).toBe('paused');
+      expect(result.result.loopState.stopReason).toBe('completion_paused');
+      expect(result.result.content).toMatch(/未结束/);
     }
   });
 });

@@ -22,6 +22,7 @@ import {
 } from './text-tool-call-salvage.js';
 import { dispatchStreamChunkToStep } from './stream-step-dispatch.js';
 import { ReasoningSystemTagStreamFilter } from './thinking-content-strip.js';
+import type { CompletionStatus } from './completion-gate.js';
 
 export interface StopHandlerDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -70,6 +71,7 @@ export async function handleHarnessStop(
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
+      completionStatus: 'interrupted',
     };
   }
 
@@ -92,6 +94,7 @@ export async function handleHarnessStop(
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
+      completionStatus: 'interrupted',
     };
   }
 
@@ -114,6 +117,7 @@ export async function handleHarnessStop(
       loopState: state,
       messages: [...messages],
       log: logger.getEntries(),
+      completionStatus: 'paused',
     };
   }
 
@@ -183,5 +187,22 @@ export async function handleHarnessStop(
     loopState: state,
     messages: [...messages],
     log: logger.getEntries(),
+    completionStatus: completionStatusForStop(reason),
   };
+}
+
+function completionStatusForStop(reason: StopReason): CompletionStatus {
+  if (reason === 'completion_failed' || reason === 'error' || reason === 'circuit_breaker') {
+    return 'failed';
+  }
+  if (
+    reason === 'user_abort'
+    || reason === 'token_budget'
+    || reason === 'max_rounds'
+    || reason === 'timeout'
+    || reason === 'max_output_tokens'
+  ) {
+    return 'interrupted';
+  }
+  return 'paused';
 }

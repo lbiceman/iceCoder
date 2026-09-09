@@ -40,6 +40,18 @@ describe('task-acceptance-tracker', () => {
     expect(tracker.isComplete()).toBe(true);
   });
 
+  it('activates for one explicitly required command in any toolchain', () => {
+    const tracker = new TaskAcceptanceTracker(
+      '完成条件：必须通过 `cargo test --workspace` 后才能结束。',
+    );
+    expect(tracker.isActive()).toBe(true);
+    expect(tracker.getPendingCommands().map(item => item.label)).toEqual([
+      'cargo test --workspace',
+    ]);
+    tracker.recordRunCommand('cargo test --workspace', true);
+    expect(tracker.isComplete()).toBe(true);
+  });
+
   it('requires all commands to pass before isComplete', () => {
     const tracker = new TaskAcceptanceTracker(BENCHMARK_GOAL);
     tracker.recordRunCommand('npm test 2>&1', true);

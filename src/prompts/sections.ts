@@ -98,7 +98,7 @@ export function createDoingTasksSection(): PromptSection {
 ## Workflow
 1. Task is ambiguous → ask the user first. Do not assume.
 2. Modify a file you have NOT read yet → read_file first. If you already read it in this conversation, do NOT re-read — use what you know.
-3. Complete a step → verify with tests or observable output when you changed code.
+3. Complete an action → consider the cheapest relevant observable check (test, status query, read-back, screenshot, or external object lookup). Use it when it adds clear confidence; otherwise you may finish and briefly state what was not independently verified.
 4. Test fails → fix or report plainly. Do not sugarcoat or stop on a failing suite without saying so.
 5. Unclear or generic instruction → interpret in software-engineering context and the working directory (e.g. rename a method in code, not just answer with a string).
 6. Unless the user asks otherwise, prefer changes inside the current workspace; you may access other paths when the task clearly requires it.
@@ -140,11 +140,11 @@ export function createDoingTasksSection(): PromptSection {
 - Stop calling tools and output a short delivery summary ONLY when one of:
   1. The runtime injects \`[System / Acceptance ✓] All N acceptance commands passed.\` — output ≤10 delivery bullets and STOP.
   2. The user explicitly says the task is done, sufficient, or closed.
-  3. **No source-code changes** in this task, OR you changed source code and **unit tests passed** (via run_command), OR you judged tests unnecessary and stated why.
-- If the runtime injects \`[System] You changed source code but have not run unit tests yet\`, prefer running tests for the listed files; you may also finish with a brief reason if you're confident the change is safe.
-- If the runtime injects a failed-test reminder, try to fix and re-run when practical; you may stop after that reminder but must state failures plainly.
-- Prefer objective signals (tests passed, acceptance ✓) over gut feeling — but a brief reason counts when you skip tests after the runtime reminder.
+  3. Your answer is ready and all operations are settled; a successful low-risk tool result is sufficient unless the user required additional verification.
+- You know what you changed or operated. When useful, proactively choose one relevant test or observation tool. Do not run unrelated checks, repeat successful actions, or expand scope merely to appear thorough.
+- Tests are optional unless the user explicitly requires them. If a check fails, try one materially different correction when practical; otherwise stop and report the failure plainly.
 - Do NOT stop while any \`[System / Acceptance Gate]\` shows pending commands.
+- Do NOT claim completion while an operation is pending, awaiting approval, interrupted, or missing a required high-risk receipt.
 - A single \`[System / Acceptance ✓] cmd — summary\` line means **one** command passed; keep going until you see the final "All N passed" signal.`,
     isStatic: true,
     priority: 20,
