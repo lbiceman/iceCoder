@@ -10,8 +10,6 @@ describe('buildToolPlan', () => {
       filesRead: [],
       filesChanged: [],
       commandsRun: [],
-      verificationRequired: false,
-      verificationStatus: 'not_required',
     });
     expect(plan.suggestedTools).toContain('read_file');
     expect(plan.suggestedTools).toContain('run_command');
@@ -32,8 +30,6 @@ describe('buildToolPlan', () => {
       filesRead: [],
       filesChanged: ['src/a.ts'],
       commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'required',
     });
     expect('verificationHint' in pending).toBe(false);
   });
@@ -46,8 +42,6 @@ describe('buildToolPlan', () => {
       filesRead: [],
       filesChanged: ['src/a.ts'],
       commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'required',
     });
     expect(plan.recommendedFlow.join(' ')).toContain('relevant observation');
     expect(plan.recommendedFlow.join(' ')).not.toMatch(/unit tests|source code|documentation/i);

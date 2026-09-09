@@ -123,7 +123,18 @@ interface CompletionCondition {
 
 ### 6.4 Checkpoint
 
-兼容字段 `verificationPending` 写入统一门控是否阻塞。旧 checkpoint 读取时转换为通用事实，不恢复已删除的旧门控。
+Project Checkpoint V3 是运行时唯一事实源：
+
+- `execution.taskState` 只保存任务、阶段和文件/命令事实，不含旧 verification 镜像。
+- 完成状态只来自 `completion.conditions` 与 `completion.operationOutcomes`。
+- `checkpointHasPendingWork` 只检查 required blocker 与尚未产出的明确文件交付物。
+- capture/restore 传递完整 V3 聚合；`ProjectCheckpointStore.restore(snapshot)` 覆盖活动文件，不与进程内旧状态合并。
+- 工具批次执行期间 `setPersistBlocked(true)`，禁止产生可恢复快照；批次结束后才允许落盘。
+- active checkpoint 每次原子覆盖整个聚合，不做字段级 merge；generation 拒绝过期写入。
+
+兼容窗口只保留一个旧版本：v1/v2 仅在 legacy adapter 或 session-memory parser 边界读取，读取后立即迁移为 V3/V2 新写模型；生产路径不再写旧字段，未知 JSON-safe extension 原样保留。
+
+当前 `ProjectCheckpointStore` 只维护单个 active snapshot。未来若增加 snapshot store、历史保留或按轻量边界自动采样，应接在 `CheckpointSnapshotProvider` / `CheckpointSnapshotRestorer` 与 lightweight boundary 扩展点之后，不能重新引入并行事实源或改回增量合并写。
 
 ## 7. 状态与可观测性
 

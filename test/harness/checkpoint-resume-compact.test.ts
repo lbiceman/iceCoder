@@ -71,8 +71,6 @@ function buildCheckpoint(overrides: Partial<TaskCheckpoint> = {}): TaskCheckpoin
       filesRead: [],
       filesChanged: ['src/MainMenuScene.ts'],
       commandsRun: ['npm test'],
-      verificationRequired: true,
-      verificationStatus: 'pending',
     },
     repoContext: {
       filesRead: ['src/MainMenuScene.ts'],

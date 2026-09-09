@@ -15,15 +15,25 @@ import {
 import { appendVerificationEvidenceToBranchBlock } from '../../src/harness/rebuild-escalation.js';
 import { toolCallSignature } from '../../src/harness/harness-permission-runtime.js';
 import type { UnifiedMessage } from '../../src/llm/types.js';
+import { CompletionFactsView } from '../../src/harness/completion-facts-view.js';
 
 describe('harness-tool-preflight', () => {
   it('blocks read_file on dist when verification failed', () => {
-    const taskState = new TaskState('goal');
-    taskState.forceVerificationFailed();
     const decision = checkToolPreflight({
       toolName: 'read_file',
       args: { path: 'dist/src/scenes/MapSelectScene.js' },
-      taskState,
+      completionFacts: CompletionFactsView.fromCompletionSnapshot({
+        conditions: [{
+          id: 'verification:test',
+          label: 'tests',
+          required: true,
+          status: 'failed',
+          source: 'user',
+          sourceRef: 'verification:test',
+          evidenceRefs: [],
+        }],
+        operationOutcomes: [],
+      }),
     });
     expect(decision.blocked).toBe(true);
     expect(decision.reason).toBe('dist_read');

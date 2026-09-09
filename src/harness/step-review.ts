@@ -26,6 +26,7 @@
 import type { ChatFunction } from './types.js';
 import type { UnifiedMessage } from '../llm/types.js';
 import type { TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 
 /** StepReview 输出结果 */
 export interface StepReviewResult {
@@ -71,6 +72,8 @@ export interface StepReviewContext {
   trigger: StepReviewTrigger;
   /** 任务快照（用于推断 progress） */
   taskSnapshot?: TaskStateSnapshot;
+  /** 完成事实（验证信号的唯一来源）。 */
+  completionFacts?: CompletionFactsView;
   /** 前一轮 review 结果（如有），用于"连续两次仍无进展" 的判断 */
   previousReview?: StepReviewResult;
 }
@@ -122,7 +125,7 @@ export async function reviewStep(
  *   - 最近 N 次工具同签名失败 ≥ 2 → repeatedPattern=true, fallbackSuggested=true
  *   - trigger === verification_failure → 专用理由（优先于「全部失败」泛化分支）
  *   - 最近 N 次工具全部失败 → fallbackSuggested=true
- *   - 验证已通过 / 有文件变更且有成功工具 —— 若 verificationStatus === 'failed' 则不判为进展
+ *   - 验证已通过 / 有文件变更且有成功工具 —— 若完成事实为 failed 则不判为进展
  */
 function heuristicReview(ctx: StepReviewContext): {
   result: StepReviewResult;
@@ -192,8 +195,11 @@ function heuristicReview(ctx: StepReviewContext): {
 
   // 4. 任务快照表明文件已变化或验证已通过 → progress
   const snap = ctx.taskSnapshot;
+  const verification = ctx.completionFacts
+    ?? (snap ? CompletionFactsView.fromTaskSnapshot(snap) : undefined);
+  const verificationState = verification?.verificationSignal().status;
   if (snap) {
-    if (snap.verificationStatus === 'passed') {
+    if (verificationState === 'passed') {
       return {
         confident: true,
         result: {
@@ -208,7 +214,7 @@ function heuristicReview(ctx: StepReviewContext): {
     if (
       snap.filesChanged.length > 0
       && hadAnySuccess
-      && snap.verificationStatus !== 'failed'
+      && verificationState !== 'failed'
     ) {
       return {
         confident: true,
@@ -225,7 +231,7 @@ function heuristicReview(ctx: StepReviewContext): {
 
   // 5. 模糊情况：有成功也有失败，让上层决定是否再调 LLM 复判
   if (hadAnySuccess) {
-    if (snap?.verificationStatus === 'failed') {
+    if (verificationState === 'failed') {
       return {
         confident: false,
         result: {

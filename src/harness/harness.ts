@@ -42,15 +42,17 @@ import { HarnessMemoryIntegration } from './harness-memory.js';
 import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
 import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
-import { syncHydratedTaskState } from './resume-task-state.js';
+import { isFreshQueryMessage, syncHydratedTaskState } from './resume-task-state.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { OperationOutcomeLedger } from './operation-outcome.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
+import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { GraphExecutor } from './task-graph-executor.js';
 import { ensureRequestAnalysisTool } from './sub-agent-runner.js';
 import { AsyncSubAgentManager } from './async-sub-agent-manager.js';
@@ -465,7 +467,12 @@ export class Harness {
         }
       }
     }
-    const activeCheckpoint = await this.checkpointManager?.loadActive();
+    const projectCheckpoint = this.checkpointManager
+      ? await this.checkpointManager.loadProject()
+      : null;
+    const activeCheckpoint = projectCheckpoint
+      ? this.checkpointManager?.toActiveCheckpoint(projectCheckpoint) ?? null
+      : null;
 
     const plainUserText = typeof userMessage === 'string'
       ? userMessage
@@ -617,7 +624,7 @@ export class Harness {
             state.forcedTaskBearingRoundsSinceEntry = execution.forcedTaskBearingRoundsSinceEntry ?? 0;
             state.lastModeDecision = execution.lastModeDecision;
           }
-          // verificationOutputBuffer / acceptanceGate / pending recoverySignals 不跨用户发送恢复
+          // Verification output buffers and pending recovery signals do not cross user turns.
           this.checkpointEngine.discardPendingRecoverySignals();
         }
       } catch (err) {
@@ -640,6 +647,7 @@ export class Harness {
         const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
           state.taskState,
           state.repoContext,
+          { completionAuthority: projectCheckpoint ? 'checkpoint' : 'legacy-notes' },
         );
         if (hydrated) {
           state.sessionGoalAnchor = syncHydratedTaskState(
@@ -661,6 +669,39 @@ export class Harness {
           err instanceof Error ? err.message : err,
         );
       }
+    }
+
+    // V3 is the authoritative runtime snapshot. Session notes above remain a legacy,
+    // read-only source for narrative/repo continuity and cannot replace V3 completion.
+    if (
+      projectCheckpoint
+      && !isFreshQueryMessage(userMessage, projectCheckpoint.execution.taskState.goal)
+    ) {
+      const completion = CompletionFactsView.fromCompletionSnapshot(projectCheckpoint.completion);
+      state.taskState.applySnapshot(projectCheckpoint.execution.taskState);
+      state.repoContext.applySnapshot(projectCheckpoint.workspace.repoContext);
+      state.operationOutcomes?.replace(projectCheckpoint.completion.operationOutcomes);
+      state.restoredCompletionConditions = completion.conditionSnapshot();
+      state.completionGateContinuationCount = projectCheckpoint.completion.continuationCount ?? 0;
+      state.completionGateBlockingSignature = projectCheckpoint.completion.blockingSignature;
+      state.completionStatus = projectCheckpoint.completion.status;
+      state.completionReason = projectCheckpoint.completion.reason;
+      state.branchBudget?.applySnapshot(projectCheckpoint.execution.resumable?.branchBudget);
+      state.failedToolCallSignatures = new Map(
+        Object.entries(projectCheckpoint.execution.resumable?.failedToolCallSignatures ?? {}),
+      );
+      state.sessionGoalAnchor = syncHydratedTaskState(
+        userMessage,
+        messages,
+        state.taskState,
+        state.repoContext,
+        state.sessionGoalAnchor,
+      );
+      onStep?.({
+        type: 'memory_event',
+        memoryKind: 'session_hydrate',
+        memoryDetail: '已从 V3 checkpoint 恢复执行与完成状态',
+      });
     }
 
     if (activeCheckpoint) {
@@ -722,6 +763,11 @@ export class Harness {
           endTiming('round_wall', roundStartedAt);
           return prep.result;
         }
+        emitLightweightSnapshotBoundary({
+          boundary: 'round_started',
+          sessionId: this.sessionId,
+          round: prep.round,
+        });
 
         const graphStopBeforeRound = await timeAsync('graph_stop_check', () => tryGraphTerminalStop(deps, {
           state,

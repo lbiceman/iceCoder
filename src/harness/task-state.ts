@@ -13,7 +13,6 @@ import {
   missingChangedFilePaths,
   normalizeDeliverablePath,
   pathsReferToSameFile,
-  hasEngineeringTestTargets,
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
@@ -23,14 +22,12 @@ import type {
   TaskIntent,
   TaskPhase,
   TaskStateSnapshot,
-  VerificationStatus,
 } from '../types/runtime-snapshot.js';
 
 export type {
   TaskIntent,
   TaskPhase,
   TaskStateSnapshot,
-  VerificationStatus,
 } from '../types/runtime-snapshot.js';
 
 const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'glob', 'grep', 'git', 'file_info']);
@@ -43,8 +40,6 @@ export class TaskState {
   private filesRead = new Set<string>();
   private filesChanged = new Set<string>();
   private commandsRun: string[] = [];
-  private verificationRequired = false;
-  private verificationStatus: VerificationStatus = 'not_required';
   /** 文件交付物写操作版本（归一化路径 → 版本号，写后递增） */
   private fileDeliverableWriteVersion = new Map<string, number>();
   /** 文件交付物确认时对应的写版本（须与 writeVersion 一致才算验收） */
@@ -66,8 +61,6 @@ export class TaskState {
         this.commandsRun.push(effectiveCommand);
         if (looksLikeVerificationCommand(effectiveCommand)) {
           this.phase = 'verification';
-          this.verificationRequired = true;
-          this.applyUnitTestVerificationFromRunResult(args, effectiveCommand, result);
         }
         if (result.success) {
           for (const deletedPath of extractDeletedPathsFromCommand(effectiveCommand)) {
@@ -113,42 +106,8 @@ export class TaskState {
       if (path) {
         this.filesChanged.add(path);
         this.bumpFileDeliverableWriteVersion(path);
-        this.verificationRequired = true;
-        this.verificationStatus = 'required';
       }
     }
-  }
-
-  /** 按 run_command 真实完成态更新单测验收（跳过后台启动 / 运行中） */
-  private applyUnitTestVerificationFromRunResult(
-    args: Record<string, unknown>,
-    _command: string,
-    result: ToolResult,
-  ): void {
-    const rawOutput = `${result.output ?? ''}`;
-    const classified = classifyRunCommandResult(args, rawOutput, result.success);
-    if (classified) {
-      switch (classified.kind) {
-        case 'background_start':
-        case 'background_running':
-          if (this.verificationStatus !== 'passed') {
-            this.verificationStatus = 'required';
-          }
-          return;
-        case 'background_completed':
-          this.verificationStatus = (classified.exitCode ?? 0) === 0 ? 'passed' : 'failed';
-          return;
-        case 'background_failed':
-          this.verificationStatus = 'failed';
-          return;
-        case 'foreground':
-          this.verificationStatus = classified.foregroundSuccess ? 'passed' : 'failed';
-          return;
-        default:
-          break;
-      }
-    }
-    this.verificationStatus = result.success ? 'passed' : 'failed';
   }
 
   deliverableKind(): DeliverableKind {
@@ -179,30 +138,6 @@ export class TaskState {
   rebindGoal(goal: string): void {
     this.goal = goal;
     this.intent = inferIntent(goal);
-  }
-
-  /** 与 RepoContext.recentDiagnostics 对齐 */
-  forceVerificationFailed(): void {
-    this.verificationRequired = true;
-    this.verificationStatus = 'failed';
-    if (this.filesChanged.size > 0) {
-      this.phase = 'verification';
-    }
-  }
-
-  /** 兼容适配器：全部显式条件满足后同步为 passed。 */
-  markVerificationPassed(): void {
-    this.verificationRequired = true;
-    this.verificationStatus = 'passed';
-    this.phase = 'verification';
-  }
-
-  /** 兼容适配器：仍有显式条件未满足。 */
-  markVerificationRequired(): void {
-    this.verificationRequired = true;
-    if (this.verificationStatus !== 'failed') {
-      this.verificationStatus = 'required';
-    }
   }
 
   areAllFileDeliverablesConfirmed(workspaceRoot?: string): boolean {
@@ -241,15 +176,6 @@ export class TaskState {
     this.fileDeliverableWriteVersion.delete(norm);
     this.fileDeliverableConfirmVersion.delete(norm);
 
-    if (this.filesChanged.size === 0) {
-      if (this.verificationStatus === 'required') {
-        this.verificationStatus = 'not_required';
-      }
-    } else if (!hasEngineeringTestTargets([...this.filesChanged])) {
-      if (this.verificationStatus === 'required') {
-        this.verificationStatus = 'not_required';
-      }
-    }
     return true;
   }
 
@@ -258,9 +184,6 @@ export class TaskState {
     const next = (this.fileDeliverableWriteVersion.get(norm) ?? 0) + 1;
     this.fileDeliverableWriteVersion.set(norm, next);
     this.fileDeliverableConfirmVersion.delete(norm);
-    if (this.verificationStatus === 'passed') {
-      this.verificationStatus = 'required';
-    }
   }
 
   private tryConfirmFileDeliverable(
@@ -294,8 +217,6 @@ export class TaskState {
       filesRead: [...this.filesRead],
       filesChanged: [...this.filesChanged],
       commandsRun: [...this.commandsRun],
-      verificationRequired: this.verificationRequired,
-      verificationStatus: this.verificationStatus,
     };
     const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
     const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
@@ -314,8 +235,6 @@ export class TaskState {
     this.filesRead = new Set(snapshot.filesRead);
     this.filesChanged = new Set(snapshot.filesChanged);
     this.commandsRun = [...snapshot.commandsRun];
-    this.verificationRequired = snapshot.verificationRequired;
-    this.verificationStatus = snapshot.verificationStatus;
     this.fileDeliverableWriteVersion = recordToVersionMap(snapshot.fileDeliverableWriteVersions);
     this.fileDeliverableConfirmVersion = recordToVersionMap(snapshot.fileDeliverableConfirmVersions);
     if (this.fileDeliverableWriteVersion.size === 0) {
@@ -325,9 +244,6 @@ export class TaskState {
           norm,
           resolveOrphanWriteVersion(this.fileDeliverableConfirmVersion, path),
         );
-        if (snapshot.verificationStatus === 'passed') {
-          this.fileDeliverableConfirmVersion.set(norm, 1);
-        }
       }
     }
     this.reconcileOrphanFileDeliverableWriteVersions();

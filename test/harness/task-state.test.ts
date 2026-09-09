@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { looksLikeVerificationCommand, TaskState } from '../../src/harness/task-state.js';
+import { LEGACY_TASK_VERIFICATION_KEYS } from '../../src/types/legacy-runtime-schema.js';
 
 describe('looksLikeVerificationCommand', () => {
   it('recognizes unit test commands only', () => {
@@ -21,15 +22,13 @@ describe('looksLikeVerificationCommand', () => {
   });
 });
 
-describe('TaskState unit test verification', () => {
-  it('marks verification passed after successful npm test', () => {
+describe('TaskState runtime facts', () => {
+  it('records a unit-test command and advances phase without completion state', () => {
     const state = new TaskState('edit logger.ts');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/harness/logger.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.snapshot().verificationStatus).toBe('required');
-
     state.recordToolResult(
       { id: 'c1', name: 'run_command', arguments: { command: 'npm test' } },
       { success: true, output: 'ok' },
@@ -37,10 +36,11 @@ describe('TaskState unit test verification', () => {
 
     const snap = state.snapshot();
     expect(snap.phase).toBe('verification');
-    expect(snap.verificationStatus).toBe('passed');
+    expect(snap.commandsRun).toContain('npm test');
+    for (const key of LEGACY_TASK_VERIFICATION_KEYS) expect(snap).not.toHaveProperty(key);
   });
 
-  it('node --check success leaves verification required', () => {
+  it('node --check remains a regular command fact', () => {
     const state = new TaskState('edit');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
@@ -50,10 +50,11 @@ describe('TaskState unit test verification', () => {
       { id: 'c1', name: 'run_command', arguments: { command: 'node --check src/a.ts' } },
       { success: true, output: '' },
     );
-    expect(state.snapshot().verificationStatus).toBe('required');
+    expect(state.snapshot().phase).toBe('editing');
+    expect(state.snapshot().commandsRun).toContain('node --check src/a.ts');
   });
 
-  it('records failed npm test but does not block gate', () => {
+  it('records failed npm test without embedding the result in TaskState', () => {
     const state = new TaskState('implement game');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: { path: 'src/game/x.ts' } },
@@ -66,26 +67,27 @@ describe('TaskState unit test verification', () => {
 
     const snap = state.snapshot();
     expect(snap.commandsRun).toContain('npm test');
-    expect(snap.verificationStatus).toBe('failed');
+    for (const key of LEGACY_TASK_VERIFICATION_KEYS) expect(snap).not.toHaveProperty(key);
   });
 
-  it('sets verification required on successful file write with path', () => {
+  it('records successful file writes with a path', () => {
     const state = new TaskState('继续');
     state.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(state.snapshot().verificationRequired).toBe(true);
-    expect(state.snapshot().verificationStatus).toBe('required');
+    expect(state.snapshot().filesChanged).toEqual(['src/a.ts']);
+    for (const key of LEGACY_TASK_VERIFICATION_KEYS) {
+      expect(state.snapshot()).not.toHaveProperty(key);
+    }
   });
 
-  it('does not set verification required when write tool lacks path', () => {
+  it('does not record a changed file when write tool lacks path', () => {
     const state = new TaskState('继续');
     state.recordToolResult(
       { id: 'w1', name: 'write_file', arguments: {} },
       { success: true, output: 'ok' },
     );
     expect(state.snapshot().filesChanged).toEqual([]);
-    expect(state.snapshot().verificationStatus).toBe('not_required');
   });
 });

@@ -46,4 +46,20 @@ describe('CompletionConditionLedger', () => {
 
     expect(ledger.list()).toHaveLength(1);
   });
+
+  it('restores an isolated snapshot idempotently', () => {
+    const ledger = new CompletionConditionLedger();
+    const snapshot = [condition({ evidenceRefs: ['receipt:1'] })];
+
+    ledger.restore(snapshot);
+    ledger.restore(snapshot);
+    snapshot[0].evidenceRefs.push('mutated');
+
+    const exported = ledger.snapshot();
+    exported[0].evidenceRefs.push('also-mutated');
+    expect(ledger.list()).toEqual([condition({ evidenceRefs: ['receipt:1'] })]);
+
+    ledger.replace([]);
+    expect(ledger.list()).toEqual([]);
+  });
 });

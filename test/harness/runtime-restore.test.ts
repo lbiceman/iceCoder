@@ -76,8 +76,6 @@ describe('RuntimeRestoreCoordinator', () => {
         filesRead: [],
         filesChanged: ['src/a.ts'],
         commandsRun: [],
-        verificationRequired: false,
-        verificationStatus: 'not_required' as const,
       },
       repoContext: {
         filesRead: [],
@@ -148,6 +146,10 @@ describe('RuntimeRestoreCoordinator', () => {
 
     const archive = await loadIntentCheckpoint(tmp, sessionId, messageId);
     expect(archive?.messageId).toBe(messageId);
+    const restoredCheckpoint = JSON.parse(
+      await fs.readFile(path.join(tmp, `${sessionId}.checkpoint.json`), 'utf-8'),
+    );
+    expect(restoredCheckpoint.extensions.restoredFromIntentMessageId).toBe(messageId);
   });
 
   it('restores to an earlier checkpoint after a later restore', async () => {
@@ -167,8 +169,6 @@ describe('RuntimeRestoreCoordinator', () => {
         filesRead: [],
         filesChanged: [],
         commandsRun: [],
-        verificationRequired: false,
-        verificationStatus: 'not_required' as const,
       },
       repoContext: {
         filesRead: [],
@@ -261,8 +261,6 @@ describe('RuntimeRestoreCoordinator', () => {
         filesRead: [],
         filesChanged: [filePath],
         commandsRun: [],
-        verificationRequired: false,
-        verificationStatus: 'not_required' as const,
       },
       repoContext: {
         filesRead: [],
@@ -309,6 +307,10 @@ describe('RuntimeRestoreCoordinator', () => {
     })).rejects.toBeInstanceOf(RestoreFailedError);
 
     expect(await fs.readFile(absFile, 'utf-8')).toBe('mutated-before-restore-op');
+    const rolledBackCheckpoint = JSON.parse(
+      await fs.readFile(path.join(tmp, `${sessionId}.checkpoint.json`), 'utf-8'),
+    );
+    expect(rolledBackCheckpoint.extensions.restoredFromIntentMessageId).toBeUndefined();
     spy.mockRestore();
   });
 

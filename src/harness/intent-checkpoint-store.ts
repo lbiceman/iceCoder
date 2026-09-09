@@ -15,6 +15,11 @@ import type {
   IntentCheckpointArchive,
 } from '../types/intent-checkpoint.js';
 import { emptyCheckpointIndex, INTENT_CHECKPOINT_VERSION } from '../types/intent-checkpoint.js';
+import {
+  isProjectCheckpointV3,
+  type ProjectCheckpointV3,
+} from '../types/runtime-checkpoint.js';
+import { adaptLegacyCheckpoint } from './legacy-checkpoint-adapter.js';
 
 function indexPath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.checkpoint-index.json`);
@@ -64,7 +69,10 @@ export async function loadIntentCheckpoint(
     const raw = await fs.readFile(archivePath(sessionDir, sessionId, messageId), 'utf-8');
     const parsed = JSON.parse(raw) as IntentCheckpointArchive;
     if (parsed?.version === INTENT_CHECKPOINT_VERSION && parsed.messageId === messageId) {
-      return parsed;
+      return {
+        ...parsed,
+        projectCheckpoint: resolveProjectCheckpoint(parsed, sessionId),
+      };
     }
   } catch {
     /* missing */
@@ -78,10 +86,11 @@ export async function rewriteIntentCheckpoint(
   sessionId: string,
   archive: IntentCheckpointArchive,
 ): Promise<void> {
+  const archiveToWrite = withoutLegacyRuntime(archive);
   const dest = archivePath(sessionDir, sessionId, archive.messageId);
   await fs.mkdir(checkpointsDir(sessionDir, sessionId), { recursive: true });
   const tmp = `${dest}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(archive, null, 2), 'utf-8');
+  await fs.writeFile(tmp, JSON.stringify(archiveToWrite, null, 2), 'utf-8');
   await fs.rename(tmp, dest);
 }
 
@@ -94,11 +103,12 @@ export interface SaveIntentCheckpointInput {
 /** 保存 Intent Checkpoint 并更新索引 cursor（不覆盖已有同 messageId 条目）。 */
 export async function saveIntentCheckpoint(input: SaveIntentCheckpointInput): Promise<void> {
   const { sessionDir, sessionId, archive } = input;
+  const archiveToWrite = withoutLegacyRuntime(archive);
   await fs.mkdir(checkpointsDir(sessionDir, sessionId), { recursive: true });
   const fileName = `${archive.messageId}.intent.json`;
   const dest = archivePath(sessionDir, sessionId, archive.messageId);
   const tmp = `${dest}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(archive, null, 2), 'utf-8');
+  await fs.writeFile(tmp, JSON.stringify(archiveToWrite, null, 2), 'utf-8');
   await fs.rename(tmp, dest);
 
   const index = await loadCheckpointIndex(sessionDir, sessionId);
@@ -278,24 +288,49 @@ export function intentCheckpointArchivePath(
 export async function readSessionCheckpointJson(
   sessionDir: string,
   sessionId: string,
-): Promise<import('./checkpoint-engine.js').CombinedCheckpointFile | null> {
-  const p = path.join(sessionDir, `${sessionId}.checkpoint.json`);
-  try {
-    const raw = await fs.readFile(p, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+): Promise<import('../types/runtime-checkpoint.js').ProjectCheckpointV3 | null> {
+  const { ProjectCheckpointStore } = await import('./project-checkpoint-store.js');
+  return new ProjectCheckpointStore({ sessionDir, sessionId }).load();
 }
 
+/** @deprecated Use ProjectCheckpointStore.save. Kept for restore rollback compatibility. */
 export async function writeSessionCheckpointJson(
   sessionDir: string,
   sessionId: string,
-  combined: import('./checkpoint-engine.js').CombinedCheckpointFile,
+  checkpoint:
+    | import('./checkpoint-engine.js').CombinedCheckpointFile
+    | import('../types/runtime-checkpoint.js').ProjectCheckpointV3,
 ): Promise<void> {
-  const p = path.join(sessionDir, `${sessionId}.checkpoint.json`);
-  await fs.mkdir(sessionDir, { recursive: true });
-  const tmp = `${p}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(combined, null, 2), 'utf-8');
-  await fs.rename(tmp, p);
+  const { ProjectCheckpointStore } = await import('./project-checkpoint-store.js');
+  const store = new ProjectCheckpointStore({ sessionDir, sessionId });
+  const project = isProjectCheckpointV3(checkpoint)
+    ? checkpoint
+    : adaptLegacyCheckpoint(checkpoint, { sessionId });
+  await store.restore(project);
+}
+
+function resolveProjectCheckpoint(
+  archive: IntentCheckpointArchive,
+  sessionId?: string,
+): ProjectCheckpointV3 | null {
+  if (isProjectCheckpointV3(archive.projectCheckpoint)) return archive.projectCheckpoint;
+  const hasLegacyRuntime = Boolean(archive.combinedCheckpoint)
+    || (
+      typeof archive.sessionNotesContent === 'string'
+      && archive.sessionNotesContent.includes('```icecoder-runtime')
+    );
+  if (!hasLegacyRuntime) return archive.projectCheckpoint ?? null;
+  const adapted = adaptLegacyCheckpoint(archive, {
+    sessionId: sessionId ?? archive.sessionId,
+  });
+  return isProjectCheckpointV3(adapted) ? adapted : null;
+}
+
+function withoutLegacyRuntime(archive: IntentCheckpointArchive): IntentCheckpointArchive {
+  const projectCheckpoint = resolveProjectCheckpoint(archive);
+  const next: IntentCheckpointArchive = { ...archive, projectCheckpoint };
+  if (archive.combinedCheckpoint === undefined) {
+    delete next.combinedCheckpoint;
+  }
+  return next;
 }

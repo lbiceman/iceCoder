@@ -6,8 +6,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CheckpointEngine, isResilienceV2Enabled } from '../../src/harness/checkpoint-engine.js';
 import { BranchBudgetTracker } from '../../src/harness/branch-budget.js';
 import {
-  RUNTIME_CHECKPOINT_VERSION,
-  isRuntimeCheckpointV2,
   type RuntimeCheckpointV2,
 } from '../../src/types/runtime-checkpoint.js';
 import type { TaskCheckpoint } from '../../src/harness/checkpoint.js';
@@ -30,8 +28,6 @@ function buildV1Checkpoint(): TaskCheckpoint {
       filesRead: ['a.ts'],
       filesChanged: ['a.ts'],
       commandsRun: [],
-      verificationRequired: false,
-      verificationStatus: 'not_required',
     },
     repoContext: {
       filesRead: ['a.ts'],
@@ -64,32 +60,35 @@ describe('CheckpointEngine - save', () => {
   beforeEach(async () => { tmp = await makeTempDir(); });
   afterEach(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
 
-  it('首次 save 时若文件不存在则生成最小 v1 壳 + v2 字段', async () => {
+  it('首次 save 时生成完整 V3 与 resilience 扩展', async () => {
     const engine = new CheckpointEngine(tmp, 'sess-1');
     await engine.save({ trigger: 'tool_failed' });
 
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.version).toBe(1);
-    expect(isRuntimeCheckpointV2(raw.runtimeV2)).toBe(true);
-    expect(raw.runtimeV2.lastTrigger).toBe('tool_failed');
-    expect(raw.runtimeV2.runtimeVersion).toBe(RUNTIME_CHECKPOINT_VERSION);
+    expect(raw.version).toBe(3);
+    expect(raw.extensions.runtimeResilience.lastTrigger).toBe('tool_failed');
+    expect(raw.extensions.runtimeResilience.runtimeVersion).toBe(2);
   });
 
-  it('已有 v1 checkpoint 时只追加 runtimeV2，不破坏 v1 字段', async () => {
+  it('已有 v1 checkpoint 时迁移为完整 V3 并保留任务字段', async () => {
     const v1 = buildV1Checkpoint();
     const engine = new CheckpointEngine(tmp, 'sess-1');
     await fs.writeFile(engine.checkpointPath, JSON.stringify(v1, null, 2), 'utf-8');
 
     await engine.save({
       trigger: 'step_completed',
-      verificationPending: true,
     });
 
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.version).toBe(1);
-    expect(raw.taskId).toBe('task-1');
-    expect(raw.taskState.filesChanged).toEqual(['a.ts']);
-    expect(raw.runtimeV2.verificationPending).toBe(true);
+    expect(raw.version).toBe(3);
+    expect(raw.identity.checkpointId).toBe('task-1');
+    expect(raw.execution.taskState.filesChanged).toEqual(['a.ts']);
+    expect(raw.extensions.runtimeResilience).not.toHaveProperty('verificationPending');
+    const backup = JSON.parse(
+      await fs.readFile(`${engine.checkpointPath}.legacy.backup.json`, 'utf-8'),
+    );
+    expect(backup.taskId).toBe('task-1');
+    expect(backup.version).toBe(1);
   });
 
   it('合并 branchBudget 快照', async () => {
@@ -102,9 +101,9 @@ describe('CheckpointEngine - save', () => {
 
     await engine.save({ trigger: 'tool_failed', branchBudget: budget });
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.runtimeV2.branchBudget.fileEdits['a.ts']).toBe(2);
-    expect(raw.runtimeV2.branchBudget.commandRetries['npm test']).toBe(1);
-    expect(raw.runtimeV2.branchBudget.recoverTriggers).toBe(1);
+    expect(raw.extensions.runtimeResilience.branchBudget.fileEdits['a.ts']).toBe(2);
+    expect(raw.extensions.runtimeResilience.branchBudget.commandRetries['npm test']).toBe(1);
+    expect(raw.extensions.runtimeResilience.branchBudget.recoverTriggers).toBe(1);
   });
 
   it('保存调用方提供的 execution-mode 状态', async () => {
@@ -124,7 +123,7 @@ describe('CheckpointEngine - save', () => {
     });
 
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.runtimeV2.executionModeState).toMatchObject({
+    expect(raw.extensions.runtimeResilience.executionModeState).toMatchObject({
       executionMode: 'forced',
       executionModeLockRemaining: 1,
       executionModeEnteredBy: ['checkpoint_resumed', 'pending_steps'],
@@ -144,9 +143,11 @@ describe('CheckpointEngine - save', () => {
       });
     }
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.runtimeV2.recentTools.length).toBeLessThanOrEqual(20);
+    expect(raw.extensions.runtimeResilience.recentTools.length).toBeLessThanOrEqual(20);
     // 保留最新的
-    const last = raw.runtimeV2.recentTools[raw.runtimeV2.recentTools.length - 1];
+    const last = raw.extensions.runtimeResilience.recentTools[
+      raw.extensions.runtimeResilience.recentTools.length - 1
+    ];
     expect(last.signature).toBe('sig-29');
   });
 
@@ -161,9 +162,9 @@ describe('CheckpointEngine - save', () => {
       appendFailure: { signature: 'edit_file:x', count: 2, lastError: 'boom2', at: 2 },
     });
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.runtimeV2.recentFailures.length).toBe(1);
-    expect(raw.runtimeV2.recentFailures[0].count).toBe(2);
-    expect(raw.runtimeV2.recentFailures[0].lastError).toBe('boom2');
+    expect(raw.extensions.runtimeResilience.recentFailures.length).toBe(1);
+    expect(raw.extensions.runtimeResilience.recentFailures[0].count).toBe(2);
+    expect(raw.extensions.runtimeResilience.recentFailures[0].lastError).toBe('boom2');
   });
 
   it('persists verificationOutputTail across save and loadV2', async () => {
@@ -231,7 +232,6 @@ describe('CheckpointEngine - restore', () => {
       branchBudget: budget,
       currentStepId: 'step-02',
       currentStepTitle: '编辑文件',
-      verificationPending: true,
       appendTool: { toolName: 'edit_file', success: true, signature: 'sig-1', at: 10 },
       appendRecoverySignal: {
         source: 'branch_budget',
@@ -246,7 +246,7 @@ describe('CheckpointEngine - restore', () => {
     expect(v2).not.toBeNull();
     const r = v2 as RuntimeCheckpointV2;
     expect(r.currentStepId).toBe('step-02');
-    expect(r.verificationPending).toBe(true);
+    expect(r.verificationPending).toBe(false);
     expect(r.branchBudget.fileEdits['x.ts']).toBe(1);
     expect(r.branchBudget.commandRetries['ls']).toBe(1);
     expect(r.branchBudget.recoverTriggers).toBe(1);
@@ -377,7 +377,7 @@ describe('CheckpointEngine - recovery signals', () => {
     expect(engine.getV2State().recoverySignals).toEqual([]);
     // 磁盘文件保留
     const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
-    expect(raw.runtimeV2.recoverySignals.length).toBe(1);
+    expect(raw.extensions.runtimeResilience.recoverySignals.length).toBe(1);
   });
 });
 
@@ -392,5 +392,23 @@ describe('CheckpointEngine - 写入原子性', () => {
     const files = await fs.readdir(tmp);
     expect(files.some(f => f.endsWith('.tmp'))).toBe(false);
     expect(files.length).toBe(1);
+  });
+
+  it('stage accumulates tools until the next durable save', async () => {
+    const engine = new CheckpointEngine(tmp, 'sess-1');
+    engine.stage({
+      trigger: 'step_completed',
+      appendTool: { toolName: 'read_file', success: true, signature: 'a', at: 1 },
+    });
+    engine.stage({
+      trigger: 'step_completed',
+      appendTool: { toolName: 'read_file', success: true, signature: 'b', at: 2 },
+    });
+    await expect(fs.access(engine.checkpointPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    await engine.save({ trigger: 'final_draft' });
+    const raw = JSON.parse(await fs.readFile(engine.checkpointPath, 'utf-8'));
+    expect(raw.extensions.runtimeResilience.recentTools.map((tool: { signature: string }) => tool.signature))
+      .toEqual(['a', 'b']);
   });
 });

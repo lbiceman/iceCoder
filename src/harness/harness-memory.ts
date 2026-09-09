@@ -1149,6 +1149,7 @@ ${candidateList}`;
   async hydrateRuntimeFromSessionNotes(
     taskState: TaskState,
     repoContext: RepoContext,
+    _options: { completionAuthority?: 'checkpoint' | 'legacy-notes' } = {},
   ): Promise<boolean> {
     const raw = await getSessionMemoryContent(this.sessionMemoryState);
     if (!raw) return false;
@@ -1945,8 +1946,6 @@ ${candidateList}`;
                   filesRead: [],
                   filesChanged: [],
                   commandsRun: [],
-                  verificationRequired: false,
-                  verificationStatus: 'not_required',
                 },
                 repo: {
                   filesRead: [],

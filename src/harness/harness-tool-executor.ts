@@ -42,6 +42,7 @@ import {
 import { touchSessionTouchedPath } from './intent-checkpoint-store.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
+import type { CompletionFactsView } from './completion-facts-view.js';
 
 export interface ToolExecutorDeps {
   toolExecutor: ToolExecutor;
@@ -211,6 +212,7 @@ export interface ExecuteToolCallsStreamingArgs {
   chatFn?: ChatFunction;
   currentTools?: ToolDefinition[];
   buildDiagnosticGateActive?: boolean;
+  completionFacts?: CompletionFactsView;
   verificationOutputBuffer?: VerificationOutputBuffer;
   /** 本 Harness run 内已拒绝的 Shell mandatory-confirm 键。 */
   shellMandatoryConfirmDenials?: Set<string>;
@@ -252,6 +254,7 @@ export async function executeToolCallsStreaming(
     chatFn,
     currentTools,
     buildDiagnosticGateActive,
+    completionFacts,
     verificationOutputBuffer,
     shellMandatoryConfirmDenials,
   } = args;
@@ -561,7 +564,7 @@ export async function executeToolCallsStreaming(
       toolName: tc.name,
       args: tc.arguments,
       branchBudget: deps.branchBudget,
-      taskState,
+      completionFacts,
       buildDiagnosticGateActive,
       workspaceRoot: deps.workspaceRoot,
       lockedWorkspaceRoot: deps.lockedWorkspaceRoot,

@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import type { CombinedCheckpointFile } from './checkpoint-engine.js';
+import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
 
 function toPosixRel(workspaceRoot: string, absPath: string): string | null {
   const root = path.resolve(workspaceRoot);
@@ -16,7 +17,7 @@ function toPosixRel(workspaceRoot: string, absPath: string): string | null {
 }
 
 export function collectTrackedPathsFromCheckpoint(
-  combined: CombinedCheckpointFile | null,
+  combined: CombinedCheckpointFile | ProjectCheckpointV3 | null,
   extra: string[] = [],
 ): string[] {
   const paths = new Set<string>();
@@ -24,6 +25,13 @@ export function collectTrackedPathsFromCheckpoint(
     if (p?.trim()) paths.add(p.replace(/\\/g, '/'));
   }
   if (!combined) return [...paths];
+  if (combined.version === 3) {
+    for (const p of combined.execution.taskState.filesChanged) paths.add(p.replace(/\\/g, '/'));
+    for (const p of combined.execution.taskState.filesRead) paths.add(p.replace(/\\/g, '/'));
+    for (const p of combined.workspace.repoContext.filesChanged) paths.add(p.replace(/\\/g, '/'));
+    for (const p of combined.workspace.repoContext.filesRead) paths.add(p.replace(/\\/g, '/'));
+    return [...paths];
+  }
   for (const p of combined.taskState?.filesChanged ?? []) paths.add(p.replace(/\\/g, '/'));
   for (const p of combined.taskState?.filesRead ?? []) paths.add(p.replace(/\\/g, '/'));
   for (const p of combined.repoContext?.filesChanged ?? []) paths.add(p.replace(/\\/g, '/'));

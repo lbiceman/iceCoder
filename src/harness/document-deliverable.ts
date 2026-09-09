@@ -7,7 +7,8 @@
  */
 
 import type { ToolResult } from '../tools/types.js';
-import type { TaskIntent, TaskStateSnapshot, VerificationStatus } from '../types/runtime-snapshot.js';
+import type { TaskIntent, TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import type { VerificationSignalStatus } from './completion-facts-view.js';
 import { stripLeadingCdPrefix } from './task-acceptance-tracker.js';
 import { isProjectCustomExemptPath } from './verification-exempt-config.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
@@ -276,19 +277,19 @@ export function hasEngineeringTestTargets(filesChanged: readonly string[]): bool
 /** 收尾时应 inject「请跑单元测试」（工程变更且尚未跑过验收命令） */
 export function shouldPromptEngineeringUnitTest(
   filesChanged: readonly string[],
-  verificationStatus: VerificationStatus,
+  verificationSignal: VerificationSignalStatus,
 ): boolean {
   if (!hasEngineeringTestTargets(filesChanged)) return false;
-  return verificationStatus === 'required';
+  return verificationSignal === 'pending';
 }
 
 /** 单测已跑但失败：仅加强提示，不 hard block */
 export function shouldInjectFailedUnitTestReminder(
   filesChanged: readonly string[],
-  verificationStatus: VerificationStatus,
+  verificationSignal: VerificationSignalStatus,
 ): boolean {
   if (!hasEngineeringTestTargets(filesChanged)) return false;
-  return verificationStatus === 'failed';
+  return verificationSignal === 'failed';
 }
 
 /**
@@ -300,12 +301,12 @@ export function canVerifyDeliverableKind(
   filesChanged: readonly string[],
   toolNames: readonly string[],
   acceptanceIncomplete?: boolean,
-  verificationStatus: VerificationStatus = 'not_required',
+  verificationSignal: VerificationSignalStatus = 'not_required',
 ): boolean {
   if (acceptanceIncomplete) {
     return toolNames.some(name => name === 'run_command');
   }
-  if (shouldPromptEngineeringUnitTest(filesChanged, verificationStatus)) {
+  if (shouldPromptEngineeringUnitTest(filesChanged, verificationSignal)) {
     return toolNames.some(name => name === 'run_command');
   }
   return true;

@@ -52,4 +52,31 @@ export class CompletionConditionLedger {
       evidenceRefs: [...condition.evidenceRefs],
     }));
   }
+
+  /** 返回可安全持久化的独立快照。 */
+  snapshot(): CompletionCondition[] {
+    return this.list();
+  }
+
+  /** 用快照完整替换账本；重复恢复同一快照不会累加状态。 */
+  replace(snapshot: readonly CompletionCondition[]): void {
+    const next = new Map<string, CompletionCondition>();
+    for (const condition of snapshot) {
+      const previous = next.get(condition.id);
+      next.set(condition.id, {
+        ...condition,
+        required: previous?.required === true ? true : condition.required,
+        label: previous?.required === true ? previous.label : condition.label,
+        source: previous?.required === true ? previous.source : condition.source,
+        sourceRef: previous?.required === true ? previous.sourceRef : condition.sourceRef,
+        evidenceRefs: [...new Set(condition.evidenceRefs)],
+      });
+    }
+    this.conditions.clear();
+    for (const [id, condition] of next) this.conditions.set(id, condition);
+  }
+
+  restore(snapshot: readonly CompletionCondition[]): void {
+    this.replace(snapshot);
+  }
 }

@@ -70,6 +70,9 @@ export async function runAgentEvalCase(
       await writeCaseFiles(memoryDir, testCase.memoryFiles);
     }
     await fs.mkdir(sessionDir, { recursive: true });
+    if (testCase.seedLegacyCheckpoint) {
+      await seedLegacyCheckpoint(sessionDir, testCase.id);
+    }
 
     const fileParser = new FileParser();
     fileParser.registerStrategy(new HtmlParserStrategy());
@@ -286,6 +289,7 @@ async function scoreCase(args: {
   ) {
     failures.push(`final response does not contain ${JSON.stringify(testCase.expected.finalContains)}`);
   }
+  failures.push(...await evaluateCheckpoint(workspace, testCase));
 
   const summary = telemetry
     .filter((event): event is Extract<RuntimeTelemetryEvent, { type: 'summary' }> => event.type === 'summary')
@@ -349,6 +353,97 @@ async function countAnalysisArtifacts(workspace: string, sessionId: string): Pro
     await new Promise(resolve => setTimeout(resolve, 100));
   } while (Date.now() < deadline);
   return 0;
+}
+
+async function seedLegacyCheckpoint(sessionDir: string, sessionId: string): Promise<void> {
+  const payload = {
+    version: 1,
+    taskId: 'legacy-eval',
+    status: 'running',
+    userGoal: 'legacy upgrade',
+    phase: 'intent',
+    taskState: {
+      goal: 'legacy upgrade',
+      intent: 'question',
+      phase: 'intent',
+      filesRead: [],
+      filesChanged: [],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+    },
+    repoContext: {
+      filesRead: [],
+      filesChanged: [],
+      commandsRun: [],
+      testCommands: [],
+      recentDiagnostics: [],
+    },
+    failedToolCalls: [],
+    messageCount: 1,
+    loop: {
+      currentRound: 0,
+      totalToolCalls: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    runtimeV2: {
+      runtimeVersion: 2,
+      branchBudget: { fileEdits: {}, commandRetries: {}, errorRepeats: {}, recoverTriggers: 0 },
+      recentTools: [],
+      recentFailures: [],
+      recoverySignals: [],
+      verificationPending: true,
+      lastTrigger: 'manual',
+      v2UpdatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  };
+  await fs.writeFile(
+    path.join(sessionDir, `${sessionId}.checkpoint.json`),
+    JSON.stringify(payload, null, 2),
+    'utf-8',
+  );
+}
+
+async function evaluateCheckpoint(workspace: string, testCase: AgentEvalCase): Promise<string[]> {
+  const expected = testCase.expected.checkpoint;
+  if (!expected) return [];
+  const failures: string[] = [];
+  const checkpointPath = path.join(workspace, '.icecoder', 'sessions', `${testCase.id}.checkpoint.json`);
+  const raw = await fs.readFile(checkpointPath, 'utf-8').catch(() => '');
+  if (!raw) {
+    failures.push(`missing V3 checkpoint: ${checkpointPath}`);
+    return failures;
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    failures.push('checkpoint is not valid JSON');
+    return failures;
+  }
+  if (parsed.version !== expected.version) {
+    failures.push(`expected checkpoint version ${expected.version}, got ${String(parsed.version)}`);
+  }
+  if (expected.forbidLegacyFields) {
+    for (const field of ['verificationStatus', 'verificationRequired', 'verificationPending', 'acceptanceGate']) {
+      if (raw.includes(`"${field}"`)) {
+        failures.push(`checkpoint still contains legacy field ${field}`);
+      }
+    }
+  }
+  const completion = parsed.completion as { conditions?: unknown; operationOutcomes?: unknown } | undefined;
+  if (expected.hasCompletion && (!completion || !Array.isArray(completion.conditions) || !Array.isArray(completion.operationOutcomes))) {
+    failures.push('checkpoint is missing V3 completion section');
+  }
+  if (expected.migratedFromLegacy) {
+    const backupPath = `${checkpointPath}.legacy.backup.json`;
+    const backupExists = await fs.access(backupPath).then(() => true).catch(() => false);
+    if (!backupExists) failures.push('legacy checkpoint backup was not created');
+  }
+  return failures;
 }
 
 async function evaluateAssertions(

@@ -1,12 +1,11 @@
 import type { LLMResponse } from '../llm/types.js';
 import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
   hasUnfulfilledFileDeliverableGoal,
 } from './document-deliverable.js';
-import type { TaskState } from './task-state.js';
-import type { TaskCheckpoint } from './checkpoint.js';
 
 /** 兼容事实查询：是否仍有显式条件或交付目标未完成。 */
 export function hasPendingWork(
@@ -23,8 +22,25 @@ export function hasPendingWork(
   return false;
 }
 
-export function checkpointHasPendingWork(checkpoint: TaskCheckpoint): boolean {
-  return hasPendingWork(checkpoint.taskState);
+export function checkpointHasPendingWork(checkpoint: ProjectCheckpointV3): boolean {
+  const completedOutcomeIds = new Set(
+    checkpoint.completion.operationOutcomes
+      .filter(outcome => outcome.status === 'completed')
+      .map(outcome => outcome.toolCallId),
+  );
+  const hasRequiredBlocker = checkpoint.completion.conditions.some(condition =>
+    condition.required
+    && (
+      condition.status !== 'satisfied'
+      || condition.evidenceRefs.length === 0
+      || !condition.evidenceRefs.some(ref => completedOutcomeIds.has(ref))
+    ),
+  );
+  return hasRequiredBlocker || hasUnfulfilledFileDeliverableGoal(
+    checkpoint.execution.taskState.goal,
+    checkpoint.execution.taskState.filesChanged,
+    checkpoint.execution.taskState.intent,
+  );
 }
 
 /** 仅 reasoning、无可见 content、无 toolCalls */
@@ -75,19 +91,4 @@ export function buildIncompleteContinuationPrompt(
   }
 
   return lines.join('\n');
-}
-
-/** 工具轮结束后，将兼容验收适配器进度同步到旧验证状态。 */
-export function syncTaskVerificationFromAcceptance(
-  taskState: TaskState,
-  acceptance: TaskAcceptanceTracker | undefined,
-): void {
-  if (!acceptance?.isActive()) return;
-  if (acceptance.isComplete()) {
-    taskState.markVerificationPassed();
-  } else if (acceptance.hasFailure()) {
-    taskState.forceVerificationFailed();
-  } else {
-    taskState.markVerificationRequired();
-  }
 }

@@ -7,6 +7,7 @@
 import type { UnifiedMessage } from '../llm/types.js';
 import type { SessionWorkspaceState } from '../harness/workspace-lock.js';
 import type { CombinedCheckpointFile } from '../harness/checkpoint-engine.js';
+import type { ProjectCheckpointV3 } from './runtime-checkpoint.js';
 
 export const INTENT_CHECKPOINT_VERSION = 1 as const;
 
@@ -44,7 +45,10 @@ export interface IntentCheckpointArchive {
   createdAt: string;
   /** 用户消息时间戳（UI sentAt） */
   userMessageTime: number | null;
-  combinedCheckpoint: CombinedCheckpointFile | null;
+  /** Runtime archive payload for all newly captured intents. */
+  projectCheckpoint?: ProjectCheckpointV3 | null;
+  /** @deprecated Read compatibility for archives captured before V3. */
+  combinedCheckpoint?: CombinedCheckpointFile | null;
   workspace: SessionWorkspaceState;
   workspaceRoot: string;
   /** 工作区相对路径（POSIX）→ 文件内容；null 表示该路径当时不存在 */

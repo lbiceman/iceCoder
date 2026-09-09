@@ -34,6 +34,13 @@ export interface AgentEvalCase {
     completionStatus?: 'completed' | 'completed_unverified' | 'paused' | 'failed' | 'interrupted';
     /** 最终用户可见文本应包含。 */
     finalContains?: string;
+    /** 结束后断言活动 checkpoint 为 ProjectCheckpointV3。 */
+    checkpoint?: {
+      version: 3;
+      forbidLegacyFields?: boolean;
+      hasCompletion?: boolean;
+      migratedFromLegacy?: boolean;
+    };
   };
   assertions: AgentEvalFileAssertion[];
   maxRounds?: number;
@@ -41,6 +48,8 @@ export interface AgentEvalCase {
   compactionThreshold?: number;
   compactionTokenThreshold?: number;
   toolsDisabled?: boolean;
+  /** 运行前写入旧 v1 checkpoint，验证首次保存升级为 V3。 */
+  seedLegacyCheckpoint?: boolean;
 }
 
 const basePackageJson = {
@@ -267,6 +276,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       requiresTool: true,
       forbidVerification: true,
       completionStatus: 'completed',
+      checkpoint: { version: 3, forbidLegacyFields: true, hasCompletion: true },
     },
     assertions: [
       { path: 'src/banner.py', contains: 'def banner()' },
@@ -289,6 +299,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       requiresTool: true,
       requiresVerification: true,
       completionStatus: 'completed',
+      checkpoint: { version: 3, forbidLegacyFields: true, hasCompletion: true },
     },
     assertions: [
       { path: 'src/config.js', contains: "mode: 'production'" },
@@ -313,6 +324,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       forbidVerification: true,
       completionStatus: 'completed',
       finalContains: 'ap-southeast-1',
+      checkpoint: { version: 3, forbidLegacyFields: true, hasCompletion: true },
     },
     assertions: [
       { path: 'settings.json', unchanged: true },
@@ -335,11 +347,18 @@ export const agentEvalCases: AgentEvalCase[] = [
       requiresTool: false,
       allowFileChanges: false,
       completionStatus: 'paused',
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        migratedFromLegacy: true,
+      },
     },
     assertions: [
       { path: 'state.txt', unchanged: true },
     ],
     toolsDisabled: true,
+    seedLegacyCheckpoint: true,
     maxRounds: 4,
   },
 ];

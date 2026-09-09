@@ -109,8 +109,6 @@ describe('tryGraphTerminalStop', () => {
     state.taskState.applySnapshot({
       ...snap,
       filesChanged: ['src/a.ts'],
-      verificationRequired: true,
-      verificationStatus: 'required',
     });
 
     const result = await tryGraphTerminalStop(
@@ -173,7 +171,7 @@ describe('tryGraphTerminalStop', () => {
     expect(shouldBlockGraphTerminalStop(state)).toBe(true);
   });
 
-  it('verificationStatus=failed 时不拦截 graph-stop', async () => {
+  it('普通诊断失败不作为 graph-stop 隐形门控', async () => {
     const loopController = new LoopController({ maxRounds: 10 });
     const executor = new GraphExecutor();
     finishGraph(executor);
@@ -183,8 +181,6 @@ describe('tryGraphTerminalStop', () => {
     state.taskState.applySnapshot({
       ...snap,
       filesChanged: ['src/a.ts'],
-      verificationRequired: true,
-      verificationStatus: 'failed',
     });
     expect(shouldBlockGraphTerminalStop(state)).toBe(false);
 

@@ -176,14 +176,13 @@ describe('handleNoToolCalls — stop hook 状态门控', () => {
     expect(state.stopHookContinuationCount).toBe(1);
   });
 
-  it('工程任务已动过工具且 verification 通过 → 跳过 hook 直接 model_done', async () => {
+  it('工程任务有完成证据时跳过 hook 直接 model_done', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '修复登录 bug' },
       { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'run_command', arguments: { command: 'npm test' } }] },
       { role: 'tool', content: 'pass', toolCallId: 't1' },
     ];
     const state = makeState(messages, '修复登录 bug');
-    state.taskState.markVerificationPassed();
 
     const summary = '修复完成。npm test 全过，manifest 与 colorVariance 审计通过。';
     const result = await handleNoToolCalls(
@@ -317,7 +316,7 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     logSpy.mockRestore();
   });
 
-  it('旧验证状态不会重新形成隐形硬门控', async () => {
+  it('普通源码变更不会形成隐形硬门控', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
@@ -344,7 +343,7 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.taskState.snapshot().verificationStatus).toBe('required');
+    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('软验证只来自提示词而不强制 continue', async () => {

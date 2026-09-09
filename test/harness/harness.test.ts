@@ -1235,7 +1235,7 @@ describe('ContextCompactor - 微压缩', () => {
     expect(message.content).toContain('npm test');
     expect(message.content).toContain('<runtime-recovery-context');
     expect(message.content).toContain('## Critical Task State');
-    expect(message.content).toContain('verificationStatus: passed');
+    expect(message.content).toContain('verificationSignal: not_required');
     expect(message.content).not.toContain('# Runtime State');
   });
 
@@ -1248,8 +1248,6 @@ describe('ContextCompactor - 微压缩', () => {
       filesRead: Array.from({ length: 80 }, (_, i) => `src/read-${String(i).padStart(2, '0')}.ts`),
       filesChanged: Array.from({ length: 12 }, (_, i) => `src/changed-${String(i).padStart(2, '0')}.ts`),
       commandsRun: Array.from({ length: 30 }, (_, i) => `npm run command-${i}`),
-      verificationRequired: true,
-      verificationStatus: 'required' as const,
     };
     const repoSnapshot = {
       filesRead: taskSnapshot.filesRead,
@@ -1266,7 +1264,7 @@ describe('ContextCompactor - 微压缩', () => {
     };
 
     expect(message.content).toContain('budgetTokens="400"');
-    expect(message.content).toContain('verificationStatus: required');
+    expect(message.content).toContain('verificationSignal: not_required');
     expect(message.content).toContain('src/changed-11.ts');
     expect(message.content).toContain('npm test -- test/harness/harness.test.ts');
     expect(message.content).toContain('omitted');
@@ -1870,12 +1868,18 @@ describe('Harness - task checkpoint', () => {
 
     const result = await harness.run('Read src/a.ts', chatFn);
     const raw = await fs.readFile(path.join(sessionDir, 'default.checkpoint.json'), 'utf-8');
-    const checkpoint = JSON.parse(raw) as TaskCheckpoint;
+    const checkpoint = JSON.parse(raw);
 
     expect(result.loopState.stopReason).toBe('model_done');
-    expect(checkpoint.status).toBe('completed');
-    expect(checkpoint.userGoal).toBe('Read src/a.ts');
-    expect(checkpoint.taskState.filesRead).toContain('src/a.ts');
+    expect(checkpoint.version).toBe(3);
+    expect(checkpoint.extensions.legacyApi.status).toBe('completed');
+    expect(checkpoint.extensions.legacyApi.userGoal).toBe('Read src/a.ts');
+    expect(checkpoint.execution.taskState.filesRead).toContain('src/a.ts');
+    expect(checkpoint.completion.operationOutcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolCallId: 'tc1', status: 'completed' }),
+    ]));
+    expect(checkpoint.completion.continuationCount).toBe(0);
+    expect(checkpoint.execution.resumable.branchBudget).toBeDefined();
   });
 
   it('恢复时注入 active checkpoint', async () => {
@@ -1895,8 +1899,6 @@ describe('Harness - task checkpoint', () => {
           filesRead: [],
           filesChanged: ['src/a.ts'],
           commandsRun: ['npx tsc --noEmit'],
-          verificationRequired: true,
-          verificationStatus: 'failed',
         },
         repoContext: {
           filesRead: [],
