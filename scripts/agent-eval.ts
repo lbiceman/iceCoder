@@ -103,12 +103,23 @@ async function runRealEval(cases: AgentEvalCase[], args: CliArgs): Promise<CaseR
   const { runAgentEvalCase } = await import('./agent-eval-runner.js');
   const chatFn = await createRealChatFunction();
   const results: CaseResult[] = [];
-  for (const testCase of cases) {
-    console.error(`[agent-eval] running ${testCase.id}`);
-    results.push(await runAgentEvalCase(testCase, {
-      chatFn,
-      keepWorkspace: args.keepWorkspaces,
-    }));
+  const previousEvalMode = process.env.ICE_EVAL_MODE;
+  // Agent 回归不评测后台记忆提取；关闭它可避免额外模型调用和临时沙箱删除后的悬挂写入。
+  process.env.ICE_EVAL_MODE = '1';
+  try {
+    for (const testCase of cases) {
+      console.error(`[agent-eval] running ${testCase.id}`);
+      results.push(await runAgentEvalCase(testCase, {
+        chatFn,
+        keepWorkspace: args.keepWorkspaces,
+      }));
+    }
+  } finally {
+    if (previousEvalMode === undefined) {
+      delete process.env.ICE_EVAL_MODE;
+    } else {
+      process.env.ICE_EVAL_MODE = previousEvalMode;
+    }
   }
   return results;
 }
@@ -288,7 +299,10 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(name);
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main().then(
+  () => process.exit(process.exitCode ?? 0),
+  error => {
+    console.error(error);
+    process.exit(1);
+  },
+);

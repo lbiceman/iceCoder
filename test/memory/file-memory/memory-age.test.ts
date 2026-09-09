@@ -60,17 +60,17 @@ describe('memoryAgeDays', () => {
 });
 
 describe('memoryAge', () => {
-  it('今天返回"今天"', () => {
-    expect(memoryAge(Date.now())).toBe('今天');
+  it('今天返回英文 today', () => {
+    expect(memoryAge(Date.now())).toBe('today');
   });
 
-  it('昨天返回"昨天"', () => {
-    expect(memoryAge(Date.now() - DAY_MS)).toBe('昨天');
+  it('昨天返回英文 yesterday', () => {
+    expect(memoryAge(Date.now() - DAY_MS)).toBe('yesterday');
   });
 
-  it('多天前返回"N 天前"', () => {
-    expect(memoryAge(Date.now() - 5 * DAY_MS)).toBe('5 天前');
-    expect(memoryAge(Date.now() - 100 * DAY_MS)).toBe('100 天前');
+  it('多天前返回英文年龄', () => {
+    expect(memoryAge(Date.now() - 5 * DAY_MS)).toBe('5 days ago');
+    expect(memoryAge(Date.now() - 100 * DAY_MS)).toBe('100 days ago');
   });
 });
 
@@ -82,8 +82,8 @@ describe('memoryFreshnessText', () => {
 
   it('2 天以上返回警告文本', () => {
     const text = memoryFreshnessText(Date.now() - 5 * DAY_MS);
-    expect(text).toContain('5 天');
-    expect(text).toContain('验证');
+    expect(text).toContain('5 days old');
+    expect(text).toContain('Verify');
   });
 });
 
@@ -96,7 +96,7 @@ describe('memoryFreshnessNote', () => {
     const note = memoryFreshnessNote(Date.now() - 10 * DAY_MS);
     expect(note).toContain('<system-reminder>');
     expect(note).toContain('</system-reminder>');
-    expect(note).toContain('10 天');
+    expect(note).toContain('10 days old');
   });
 });
 

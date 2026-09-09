@@ -483,10 +483,10 @@ export function createXlsxParseTool(workDir: string): RegisteredTool {
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'XLSX 文件路径（相对于工作目录）' },
+          path: { type: 'string', description: 'XLSX file path relative to the working directory' },
           includeMetadata: {
             type: 'boolean',
-            description: '是否提取文档元数据，默认 true',
+            description: 'Include document metadata; default true',
             default: true,
           },
         },

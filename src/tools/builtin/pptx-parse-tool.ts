@@ -296,15 +296,15 @@ export function createPptxParseTool(workDir: string): RegisteredTool {
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'PPTX 文件路径（相对于工作目录）' },
+          path: { type: 'string', description: 'PPTX file path relative to the working directory' },
           includeNotes: {
             type: 'boolean',
-            description: '是否提取备注内容，默认 true',
+            description: 'Include slide notes; default true',
             default: true,
           },
           includeMetadata: {
             type: 'boolean',
-            description: '是否提取文档元数据，默认 true',
+            description: 'Include document metadata; default true',
             default: true,
           },
         },

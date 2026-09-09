@@ -28,24 +28,24 @@ export function createBatchEditTool(workDir: string, sessionId = 'default'): Reg
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '文件路径（相对于工作目录）' },
+          path: { type: 'string', description: 'File path relative to the working directory' },
           edits: {
             type: 'array',
-            description: '替换操作列表，按顺序执行',
+            description: 'Ordered list of replacement operations',
             items: {
               type: 'object',
               properties: {
-                search: { type: 'string', description: '要查找的内容' },
-                replace: { type: 'string', description: '替换后的内容' },
-                isRegex: { type: 'boolean', description: '是否使用正则表达式', default: false },
-                replaceAll: { type: 'boolean', description: '是否替换所有匹配项', default: true },
+                search: { type: 'string', description: 'Content to find' },
+                replace: { type: 'string', description: 'Replacement content' },
+                isRegex: { type: 'boolean', description: 'Treat search as a regular expression', default: false },
+                replaceAll: { type: 'boolean', description: 'Replace all matches', default: true },
               },
               required: ['search', 'replace'],
             },
           },
           dryRun: {
             type: 'boolean',
-            description: '仅预览变更，不实际写入文件',
+            description: 'Preview changes without writing the file',
             default: false,
           },
         },

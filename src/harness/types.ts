@@ -40,7 +40,7 @@ export interface ContextAssemblyConfig {
   userPreferences?: Record<string, any>;
   /** 用户上下文（以 key-value 形式注入到 <system-reminder>） */
   userContext?: Record<string, string>;
-  /** 系统上下文（Git 状态等实时信息，追加到系统提示词末尾） */
+  /** 易变系统上下文（工具/MCP 状态等，仅在发送管道末尾注入，不写入主历史） */
   systemContext?: Record<string, string>;
 }
 

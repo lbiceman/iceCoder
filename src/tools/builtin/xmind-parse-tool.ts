@@ -296,16 +296,16 @@ export function createXmindParseTool(workDir: string): RegisteredTool {
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'XMind 文件路径（相对于工作目录）' },
+          path: { type: 'string', description: 'XMind file path relative to the working directory' },
           format: {
             type: 'string',
-            description: '输出格式: tree（树形文本，默认）或 markdown',
+            description: 'Output format: tree (default) or markdown',
             enum: ['tree', 'markdown'],
             default: 'tree',
           },
           maxDepth: {
             type: 'number',
-            description: '最大解析层级深度，默认不限制',
+            description: 'Maximum parse depth; unlimited by default',
           },
         },
         required: ['path'],

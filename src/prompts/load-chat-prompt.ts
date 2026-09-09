@@ -7,6 +7,7 @@ import { promises as fsPromises } from 'node:fs';
 import path from 'path';
 import type { AssembledPrompt } from './types.js';
 import { PromptAssembler } from './prompt-assembler.js';
+import { applyEvaluationModePromptOverlay } from './evaluation-mode-prompt.js';
 import { getDefaultWorkDir } from '../cli/paths.js';
 
 export interface LoadChatPromptOptions {
@@ -35,6 +36,8 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
   if (isEvalMode || isToolsDisabled) {
     assembler.removeSection('tool_usage');
     assembler.removeSection('shell_guide');
+    assembler.removeSection('doing_tasks');
+    assembler.removeSection('actions');
   }
 
   const iceCoderDir = path.resolve('.iceCoder');
@@ -48,25 +51,12 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
   } catch {
     try {
       await fsPromises.mkdir(iceCoderDir, { recursive: true });
-      await fsPromises.writeFile(memoryMdPath, '# 项目记忆\n', 'utf-8');
+      await fsPromises.writeFile(memoryMdPath, '# Project Memory\n', 'utf-8');
       console.log(`${prefix} 已创建 .iceCoder/memory.md 模板文件`);
     } catch { /* ignore */ }
   }
 
-  const evalAppend = isEvalMode
-    ? `## 评测模式（EVALUATION MODE）
-
-你正在接受记忆系统的标准化评测。请严格遵守以下规则：
-
-1. **直接回答问题**。不要调用任何工具、不要输出特殊字符、不要尝试读取文件。你没有工具可用。
-2. **只使用系统注入的记忆**。你的回答必须完全基于 <system-reminder> 中提供的记忆内容。
-3. **基于记忆推理**。如果记忆中没有直接答案但可以推理，给出推理结果并说明依据。只在完全没有相关信息时才说"不知道"。
-4. **回答要简洁精准**。直接给出答案，不需要长篇解释。
-5. **语言**：可选用与题目一致或与内容相匹配的语言作答；评测不强制「必须与题干语种完全相同」——以答案正确、依据清晰为准。
-6. **部分正确优于完全放弃**。如果你知道部分答案，给出你确定的部分，对不确定的部分明确标注。`
-    : undefined;
-
-  const appendParts = [projectMemory, evalAppend].filter(Boolean);
+  const appendParts = [projectMemory].filter(Boolean);
   const appendPrompt = appendParts.length > 0 ? appendParts.join('\n\n') : undefined;
   const systemPromptPath = options.systemPromptPath ?? process.env.ICE_SYSTEM_PROMPT_PATH;
   let customSystemPrompt: string | undefined;
@@ -82,7 +72,7 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
     } catch { /* optional legacy prompt */ }
   }
 
-  return assembler.assemble({
+  const assembled = assembler.assemble({
     customSystemPrompt,
     environment: {
       workingDirectory: getDefaultWorkDir(),
@@ -91,4 +81,7 @@ export async function loadAssembledChatPrompt(options: LoadChatPromptOptions = {
     },
     appendSystemPrompt: appendPrompt,
   });
+  return isEvalMode
+    ? applyEvaluationModePromptOverlay(assembled)
+    : assembled;
 }

@@ -49,9 +49,10 @@ export interface ResolveLlmToolsOptions {
 
 /** 无 tools 时追加到 LLM 请求（不写回会话 history）的提醒。 */
 export function buildNoToolsLlmReminder(): string {
+  // 中文说明：当前请求未携带函数工具时，只允许自然语言回答，不得伪造工具调用。
   return `<system-reminder>
-当前 LLM 请求未携带工具 API（function calling）。请仅用自然语言回复。
-禁止在正文输出 &lt;tool_call&gt;、&lt;function=...&gt; 等 XML/文本形态的工具调用；不要假装读取或修改文件。
+This LLM request has no function-calling tools. Respond with natural language only.
+Do not emit textual tool calls such as &lt;tool_call&gt; or &lt;function=...&gt;, and do not pretend to read or modify files.
 </system-reminder>`;
 }
 
