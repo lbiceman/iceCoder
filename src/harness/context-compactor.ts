@@ -30,6 +30,7 @@ import { prepareAssistantContentForHistory } from './text-format-tool-call-parse
 import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
 import {
   applyLightMicrocompactToolClear,
@@ -222,14 +223,19 @@ function formatRecoveryList(
   return lines;
 }
 
-function nextRecoveryAction(taskState: TaskStateSnapshot, repoContext: RepoContextSnapshot): string {
-  if (taskState.verificationStatus === 'failed' || repoContext.recentDiagnostics.length > 0) {
+function nextRecoveryAction(
+  taskState: TaskStateSnapshot,
+  repoContext: RepoContextSnapshot,
+  facts: CompletionFactsView,
+): string {
+  const verification = facts.verificationSignal();
+  if (verification.status === 'failed' || repoContext.recentDiagnostics.length > 0) {
     return 'Fix the latest failure or diagnostic, then rerun the relevant verification command.';
   }
-  if (taskState.verificationStatus === 'required') {
+  if (verification.status === 'pending') {
     return 'Run focused verification for the changed files before finalizing.';
   }
-  if (taskState.verificationStatus === 'passed') {
+  if (verification.status === 'passed') {
     return 'Continue from the latest user instruction; if implementation is complete, summarize the verified result.';
   }
   if (taskState.phase === 'editing') {
@@ -496,6 +502,7 @@ export class ContextCompactor {
   buildRuntimeRecoveryContext(
     taskState: TaskStateSnapshot,
     repoContext: RepoContextSnapshot,
+    completionFacts = CompletionFactsView.fromTaskSnapshot(taskState),
   ): UnifiedMessage {
     const buildWithCaps = (caps: RuntimeRecoveryCaps): UnifiedMessage => {
       const changedFiles = uniqueInOrder([
@@ -511,6 +518,8 @@ export class ContextCompactor {
         ...repoContext.commandsRun,
       ]);
       const testCommands = uniqueLatest(repoContext.testCommands);
+      const verification = completionFacts.verificationSignal();
+      const requiredBlockers = completionFacts.requiredBlockers();
 
       const content = [
         '<runtime-recovery-context>',
@@ -520,9 +529,10 @@ export class ContextCompactor {
         `- goal: ${truncateForRecovery(taskState.goal, caps.goalChars)}`,
         `- intent: ${taskState.intent}`,
         `- phase: ${taskState.phase}`,
-        `- verificationRequired: ${taskState.verificationRequired}`,
-        `- verificationStatus: ${taskState.verificationStatus}`,
-        `- nextAction: ${nextRecoveryAction(taskState, repoContext)}`,
+        `- verificationSignal: ${verification.status}`,
+        `- requiredCompletionBlockers: ${requiredBlockers.length}`,
+        `- pendingOperation: ${completionFacts.hasPendingOperation()}`,
+        `- nextAction: ${nextRecoveryAction(taskState, repoContext, completionFacts)}`,
         '',
         ...formatRecoveryList('Changed Files', changedFiles, caps.changedFiles),
         '',

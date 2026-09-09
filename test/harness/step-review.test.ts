@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { reviewStep, type ReviewToolTrace } from '../../src/harness/step-review.js';
 import type { ChatFunction } from '../../src/harness/types.js';
 import type { TaskStateSnapshot } from '../../src/types/runtime-snapshot.js';
+import { CompletionFactsView } from '../../src/harness/completion-facts-view.js';
 
 function trace(toolName: string, signature: string, success: boolean, error?: string): ReviewToolTrace {
   return { toolName, signature, success, error };
@@ -15,10 +16,23 @@ function snapshot(overrides: Partial<TaskStateSnapshot> = {}): TaskStateSnapshot
     filesRead: [],
     filesChanged: [],
     commandsRun: [],
-    verificationRequired: false,
-    verificationStatus: 'not_required',
     ...overrides,
   };
+}
+
+function failedVerificationFacts(): CompletionFactsView {
+  return CompletionFactsView.fromCompletionSnapshot({
+    conditions: [{
+      id: 'verification:test',
+      label: 'tests',
+      required: true,
+      status: 'failed',
+      source: 'user',
+      sourceRef: 'verification:test',
+      evidenceRefs: [],
+    }],
+    operationOutcomes: [],
+  });
 }
 
 describe('reviewStep — heuristic 重复检测', () => {
@@ -65,8 +79,6 @@ describe('reviewStep — heuristic 进展检测', () => {
       lastErrors: [],
       trigger: 'step_transition',
       taskSnapshot: snapshot({
-        verificationRequired: true,
-        verificationStatus: 'passed',
       }),
     });
     expect(r.progressMade).toBe(true);
@@ -130,7 +142,7 @@ describe('reviewStep — verification_failure 触发', () => {
 });
 
 describe('reviewStep — 验证失败后不高估进展', () => {
-  it('verificationStatus=failed 时不走「改过文件即有进展」确信分支', async () => {
+  it('required 验证条件失败时不走「改过文件即有进展」确信分支', async () => {
     const r = await reviewStep({
       goal: 'edit',
       recentTools: [trace('edit_file', 'edit_file:{}', true)],
@@ -138,13 +150,12 @@ describe('reviewStep — 验证失败后不高估进展', () => {
       trigger: 'tool_failure',
       taskSnapshot: snapshot({
         filesChanged: ['a.ts'],
-        verificationRequired: true,
-        verificationStatus: 'failed',
       }),
+      completionFacts: failedVerificationFacts(),
     });
     expect(r.progressMade).toBe(false);  });
 
-  it('verificationStatus=failed 且成败混合时不标 progressMade', async () => {
+  it('required 验证条件失败且成败混合时不标 progressMade', async () => {
     const r = await reviewStep({
       goal: 'edit',
       recentTools: [
@@ -155,9 +166,8 @@ describe('reviewStep — 验证失败后不高估进展', () => {
       trigger: 'tool_failure',
       taskSnapshot: snapshot({
         filesChanged: ['a.ts'],
-        verificationRequired: true,
-        verificationStatus: 'failed',
       }),
+      completionFacts: failedVerificationFacts(),
     });
     expect(r.progressMade).toBe(false);
     expect(r.reason).toContain('验证未通过');

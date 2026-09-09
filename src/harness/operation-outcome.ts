@@ -15,6 +15,11 @@ export type OperationDisposition =
   | 'policy_block'
   | 'user_denied';
 
+export type OperationReversibility =
+  | 'reversible'
+  | 'compensatable'
+  | 'irreversible';
+
 export interface OperationOutcome {
   toolCallId: string;
   toolName: string;
@@ -26,6 +31,10 @@ export interface OperationOutcome {
   receipt?: ToolReceipt;
   error?: string;
   at: number;
+  /** 操作发生后的回退能力；旧调用方可不提供。 */
+  reversibility?: OperationReversibility;
+  /** 标记从旧 checkpoint 补建、并非真实工具回执的结果。 */
+  legacySynthetic?: boolean;
 }
 
 export interface NormalizeOperationOutcomeOptions {
@@ -38,16 +47,44 @@ export class OperationOutcomeLedger {
   private readonly outcomesById = new Map<string, OperationOutcome>();
 
   record(outcome: OperationOutcome): void {
-    this.outcomesByScope.set(outcome.scope, outcome);
-    this.outcomesById.set(outcome.toolCallId, outcome);
+    const copy = cloneOperationOutcome(outcome);
+    const previous = this.outcomesById.get(copy.toolCallId);
+    if (previous && previous.scope !== copy.scope) {
+      this.outcomesByScope.delete(previous.scope);
+    }
+    const superseded = this.outcomesByScope.get(copy.scope);
+    if (superseded && superseded.toolCallId !== copy.toolCallId) {
+      this.outcomesById.delete(superseded.toolCallId);
+    }
+    this.outcomesByScope.set(copy.scope, copy);
+    this.outcomesById.set(copy.toolCallId, copy);
   }
 
   list(): OperationOutcome[] {
-    return [...this.outcomesByScope.values()].sort((a, b) => a.at - b.at);
+    return [...this.outcomesByScope.values()]
+      .sort((a, b) => a.at - b.at)
+      .map(cloneOperationOutcome);
   }
 
   getByToolCallId(toolCallId: string): OperationOutcome | undefined {
-    return this.outcomesById.get(toolCallId);
+    const outcome = this.outcomesById.get(toolCallId);
+    return outcome ? cloneOperationOutcome(outcome) : undefined;
+  }
+
+  /** 返回可安全持久化的独立快照。 */
+  snapshot(): OperationOutcome[] {
+    return this.list();
+  }
+
+  /** 用快照完整替换账本；重复恢复同一快照不会累加状态。 */
+  replace(snapshot: readonly OperationOutcome[]): void {
+    this.outcomesByScope.clear();
+    this.outcomesById.clear();
+    for (const outcome of snapshot) this.record(outcome);
+  }
+
+  restore(snapshot: readonly OperationOutcome[]): void {
+    this.replace(snapshot);
   }
 
   hasPending(): boolean {
@@ -87,6 +124,13 @@ export class OperationOutcomeLedger {
   }
 }
 
+function cloneOperationOutcome(outcome: OperationOutcome): OperationOutcome {
+  return {
+    ...outcome,
+    ...(outcome.receipt ? { receipt: { ...outcome.receipt } } : {}),
+  };
+}
+
 export function normalizeOperationOutcome(
   toolCall: ToolCall,
   result: ToolResult,
@@ -99,6 +143,7 @@ export function normalizeOperationOutcome(
   const receipt = result.receipt ?? inferReceipt(toolCall, result, parsed, status);
   const disposition = options.disposition
     ?? (result.success ? 'executed' : inferFailureDisposition(result));
+  const reversibility = inferReversibility(toolCall.name, effect, risk);
 
   return {
     toolCallId: toolCall.id,
@@ -107,6 +152,7 @@ export function normalizeOperationOutcome(
     effect,
     risk,
     disposition,
+    reversibility,
     scope: inferScope(toolCall, parsed, receipt),
     ...(receipt ? { receipt } : {}),
     ...(result.error ? { error: result.error } : {}),
@@ -143,6 +189,22 @@ function inferStatus(
   if (['failed', 'timeout', 'killed', 'cancelled'].includes(rawStatus)) return 'failed';
   if (typeof parsed?.exitCode === 'number' && parsed.exitCode !== 0) return 'failed';
   return 'completed';
+}
+
+function inferReversibility(
+  toolName: string,
+  effect: ToolEffect,
+  risk: ToolRisk,
+): OperationReversibility {
+  const metadata = getToolMetadata(toolName);
+  if (metadata.isReadOnly || effect === 'observe') return 'reversible';
+  if (effect === 'external_change' || metadata.tags.includes('network')) return 'irreversible';
+  if (metadata.isDestructive || metadata.tags.includes('file_delete') || risk === 'high') {
+    return 'compensatable';
+  }
+  if (effect === 'local_change') return 'reversible';
+  if (metadata.tags.includes('shell')) return 'compensatable';
+  return 'reversible';
 }
 
 function inferEffect(toolName: string): ToolEffect {

@@ -7,6 +7,11 @@ import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
 import type { OperationOutcomeLedger } from './operation-outcome.js';
+import type { CompletionCondition } from './completion-condition.js';
+import type {
+  CompletionGateReason,
+  CompletionStatus,
+} from './completion-gate.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -97,10 +102,15 @@ export interface HarnessRunState {
   taskAcceptance?: TaskAcceptanceTracker;
   /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
   operationOutcomes?: OperationOutcomeLedger;
+  /** 从 V3 恢复且尚未被本轮 tracker 替代的 completion 条件。 */
+  restoredCompletionConditions?: CompletionCondition[];
   /** 统一收尾门控已注入的有界续轮数。 */
   completionGateContinuationCount: number;
   /** 上一次阻塞快照；相同快照不得重复注入。 */
   completionGateBlockingSignature?: string;
+  /** 最近一次统一收尾裁决，供 checkpoint 原样恢复。 */
+  completionStatus?: CompletionStatus;
+  completionReason?: CompletionGateReason;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */

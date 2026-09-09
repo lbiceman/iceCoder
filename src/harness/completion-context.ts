@@ -1,9 +1,7 @@
 import type { ToolDefinition } from '../llm/types.js';
 import { hasUnfulfilledFileDeliverableGoal } from './document-deliverable.js';
-import {
-  CompletionConditionLedger,
-  type CompletionCondition,
-} from './completion-condition.js';
+import type { CompletionCondition } from './completion-condition.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompletionGateInput } from './completion-gate.js';
 import type { HarnessRunState } from './harness-run-state.js';
 
@@ -18,24 +16,19 @@ export function buildCompletionGateInput(
   state: HarnessRunState,
   options: BuildCompletionContextOptions,
 ): CompletionGateInput {
-  const ledger = new CompletionConditionLedger();
   const canRunTrackedConditions = options.currentTools.some(tool => tool.name === 'run_command');
-  for (const condition of state.taskAcceptance?.toCompletionConditions(canRunTrackedConditions) ?? []) {
-    ledger.record(condition);
-  }
-
   const task = state.taskState.snapshot();
+  const additionalConditions: CompletionCondition[] = [];
   if (hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent)) {
-    ledger.record(pendingDeliverableCondition(task.goal));
+    additionalConditions.push(pendingDeliverableCondition(task.goal));
   }
 
-  return {
-    conditions: ledger.list(),
-    ledger: state.operationOutcomes,
+  return CompletionFactsView.fromHarnessRunState(state, {
+    additionalConditions,
+    canExecuteRequiredConditions: canRunTrackedConditions,
+  }).completionDecisionInput({
     answerReady: options.answerReady,
-    continuationCount: state.completionGateContinuationCount,
-    previousBlockingSignature: state.completionGateBlockingSignature,
-  };
+  });
 }
 
 function pendingDeliverableCondition(goal: string): CompletionCondition {

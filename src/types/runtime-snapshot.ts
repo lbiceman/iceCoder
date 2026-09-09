@@ -8,8 +8,6 @@ export type TaskIntent = 'question' | 'inspect' | 'edit' | 'debug' | 'test' | 'r
 
 export type TaskPhase = 'intent' | 'context' | 'editing' | 'verification' | 'final';
 
-export type VerificationStatus = 'not_required' | 'required' | 'passed' | 'failed';
-
 /** 与 TaskState.snapshot() 形状一致 */
 export interface TaskStateSnapshot {
   goal: string;
@@ -18,8 +16,6 @@ export interface TaskStateSnapshot {
   filesRead: string[];
   filesChanged: string[];
   commandsRun: string[];
-  verificationRequired: boolean;
-  verificationStatus: VerificationStatus;
   /** file_deliverable 写后版本（归一化路径 → 版本号） */
   fileDeliverableWriteVersions?: Record<string, number>;
   /** file_deliverable 确认时对应的写版本 */
@@ -35,11 +31,11 @@ export interface RepoContextSnapshot {
   recentDiagnostics: string[];
 }
 
-/** session-notes 中 icecoder-runtime 代码块内的 JSON schema 版本 */
-export const PERSIST_RUNTIME_SCHEMA_VERSION = 1 as const;
+/** session-notes 中 icecoder-runtime 代码块内的新写 schema 版本 */
+export const PERSIST_RUNTIME_SCHEMA_VERSION = 2 as const;
 
 /** 持久化到会话笔记的运行时载荷（版本化以便未来迁移） */
-export interface PersistedRuntimeV1 {
+export interface PersistedRuntimeV2 {
   version: typeof PERSIST_RUNTIME_SCHEMA_VERSION;
   task: TaskStateSnapshot;
   repo: RepoContextSnapshot;

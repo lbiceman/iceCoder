@@ -30,7 +30,6 @@ import {
 import { collectRepeatedFailures, toolCallSignature } from './harness-permission-runtime.js';
 import { stripEmbeddedToolCalls, prepareAssistantContentForHistory } from './text-tool-call-salvage.js';
 import type { HarnessRunState } from './harness-run-state.js';
-import { syncTaskVerificationFromAcceptance } from './incomplete-completion.js';
 import { classifyRunCommandResult } from './task-acceptance-tracker.js';
 import type { StopHandlerDeps } from './harness-stop-handler.js';
 import { handleHarnessStop } from './harness-stop-handler.js';
@@ -50,6 +49,7 @@ import {
   syncExecutionModeLoopState,
 } from './supervisor/execution-mode-constraints.js';
 import { executeToolCallsThroughGate } from './supervisor/tool-gate.js';
+import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { computeForcedDegradedTier } from './supervisor/forced-degraded.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import { classifyToolRoundProgress } from './tool-round-progress.js';
@@ -82,6 +82,7 @@ import type {
   HarnessStepEvent,
   StreamFunction,
 } from './types.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 
 export interface ToolRoundDeps
   extends Omit<ToolExecutorDeps, 'workspaceRoot'>,
@@ -215,7 +216,11 @@ export async function runHarnessToolRound(
   state.taskState.reconcileOrphanFileDeliverableWriteVersions(deps.workspaceRoot);
 
   const repoFilesChangedBefore = state.repoContext.snapshot().filesChanged.length;
-  const toolStats = await executeToolCallsStreaming(deps, {
+  deps.checkpointEngine?.setToolExecutionLock(true);
+  deps.checkpointManager?.setPersistBlocked(true);
+  let toolStats;
+  try {
+    toolStats = await executeToolCallsStreaming(deps, {
     toolCalls: executableToolCalls,
     messages: msgs,
     logger,
@@ -226,8 +231,17 @@ export async function runHarnessToolRound(
     chatFn,
     currentTools,
     buildDiagnosticGateActive: state.buildDiagnosticGateActive,
+    completionFacts: CompletionFactsView.fromHarnessRunState(state),
     verificationOutputBuffer: state.verificationOutputBuffer,
     shellMandatoryConfirmDenials: state.shellMandatoryConfirmDenials,
+  });
+  } finally {
+    deps.checkpointEngine?.setToolExecutionLock(false);
+    deps.checkpointManager?.setPersistBlocked(false);
+  }
+  emitLightweightSnapshotBoundary({
+    boundary: 'tool_batch_completed',
+    detail: `${executableToolCalls.length} tool call(s)`,
   });
   recordOperationOutcomes(
     state,
@@ -285,7 +299,6 @@ export async function runHarnessToolRound(
       }
     }
     if (acceptanceActive && state.taskAcceptance) {
-      syncTaskVerificationFromAcceptance(state.taskState, state.taskAcceptance);
       if (!wasCompleteBefore && state.taskAcceptance.isComplete()) {
         acceptanceJustCompletedAll = true;
       }
@@ -410,7 +423,7 @@ export async function runHarnessToolRound(
     );
   }
 
-  if (state.taskState.snapshot().verificationStatus === 'failed') {
+  if (CompletionFactsView.fromHarnessRunState(state).verificationSignal().status === 'failed') {
     await resilienceSaveCheckpoint(deps, 'verification_failed', state);
     if (!state.stepReviewedThisRound) {
       await resilienceMaybeReviewStep(
@@ -710,7 +723,7 @@ function maybeInjectFileCapRebuildEscalation(args: {
   const { state, msgs, deps } = args;
   const shouldTrigger = shouldTriggerAnyFileCapRebuild({
     branchBudget: state.branchBudget,
-    verificationStatus: state.taskState.snapshot().verificationStatus,
+    verificationSignal: CompletionFactsView.fromHarnessRunState(state).verificationSignal(),
     workspaceRoot: deps.workspaceRoot,
     rebuildEscalationInjections: state.rebuildEscalationInjections,
   });

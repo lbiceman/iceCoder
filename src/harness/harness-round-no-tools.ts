@@ -40,6 +40,7 @@ import {
   type CompletionStatus,
 } from './completion-gate.js';
 import { buildCompletionGateInput } from './completion-context.js';
+import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import {
   containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
@@ -355,6 +356,12 @@ export async function handleNoToolCalls(
     currentTools,
     workspaceRoot,
   }));
+  state.completionStatus = completionDecision.status;
+  state.completionReason = completionDecision.reason;
+  emitLightweightSnapshotBoundary({
+    boundary: 'gate_decision',
+    detail: `${completionDecision.action}:${completionDecision.reason}`,
+  });
   const completionStatus: CompletionStatus = completionDecision.status;
 
   if (completionDecision.action === 'continue') {

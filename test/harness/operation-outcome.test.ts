@@ -15,6 +15,7 @@ describe('operation outcome normalization', () => {
     expect(outcome.status).toBe('completed');
     expect(outcome.effect).toBe('observe');
     expect(outcome.risk).toBe('low');
+    expect(outcome.reversibility).toBe('reversible');
   });
 
   it('uses a successful local write result as a receipt', () => {
@@ -24,6 +25,7 @@ describe('operation outcome normalization', () => {
     );
 
     expect(outcome.effect).toBe('local_change');
+    expect(outcome.reversibility).toBe('reversible');
     expect(outcome.receipt?.target).toBe('notes.txt');
     expect(outcome.receipt?.summary).toBe('File written');
   });
@@ -79,8 +81,42 @@ describe('operation outcome normalization', () => {
 
     expect(approval.status).toBe('awaiting_approval');
     expect(approval.effect).toBe('external_change');
+    expect(approval.reversibility).toBe('irreversible');
     expect(destructive.risk).toBe('high');
+    expect(destructive.reversibility).toBe('compensatable');
     expect(destructive.receipt?.target).toBe('old.tmp');
     expect(destructive.receipt?.summary).toBeUndefined();
+  });
+
+  it('replaces and restores deep-copied outcomes idempotently', () => {
+    const ledger = new OperationOutcomeLedger();
+    const snapshot = [{
+      toolCallId: 'legacy-1',
+      toolName: 'write_file',
+      status: 'completed' as const,
+      effect: 'local_change' as const,
+      risk: 'low' as const,
+      disposition: 'executed' as const,
+      scope: 'target:notes.txt',
+      receipt: { target: 'notes.txt', summary: 'written' },
+      at: 1,
+      reversibility: 'reversible' as const,
+      legacySynthetic: true,
+    }];
+
+    ledger.restore(snapshot);
+    ledger.restore(snapshot);
+    snapshot[0].receipt.summary = 'mutated';
+
+    const exported = ledger.snapshot();
+    exported[0].receipt!.summary = 'also-mutated';
+    expect(ledger.getByToolCallId('legacy-1')).toMatchObject({
+      receipt: { summary: 'written' },
+      reversibility: 'reversible',
+      legacySynthetic: true,
+    });
+
+    ledger.replace([]);
+    expect(ledger.list()).toEqual([]);
   });
 });

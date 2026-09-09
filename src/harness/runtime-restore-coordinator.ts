@@ -38,6 +38,15 @@ import {
   readUiSessionMessages,
 } from './intent-checkpoint-capture.js';
 import { buildSessionWorkspaceRestoreSnapshot } from './session-workspace-restore.js';
+import { ProjectCheckpointStore } from './project-checkpoint-store.js';
+import type { CheckpointSnapshot } from './checkpoint-snapshot.js';
+
+interface IntentRestoreMaterial {
+  checkpoint: CheckpointSnapshot | null;
+  workspaceRoot: string;
+  workspaceFiles: Record<string, string | null>;
+  pathsToDelete: string[];
+}
 
 async function writeStructuredMessages(
   sessionDir: string,
@@ -143,8 +152,8 @@ export class RuntimeRestoreCoordinator {
       }
 
       backup = await this.capturePreRestoreBackup(params, archive);
-
-      await this.applyRestore(params, archive, engine);
+      const material = await this.buildRestoreMaterial(params, archive);
+      await this.applyRestore(params, archive, material, engine);
 
       await writeUiSessionMessages(sessionDir, sessionId, archive.uiMessages);
       await writeStructuredMessages(sessionDir, sessionId, archive.structuredMessages);
@@ -254,6 +263,7 @@ export class RuntimeRestoreCoordinator {
       } catch {
         /* absent */
       }
+      new ProjectCheckpointStore({ sessionDir, sessionId }).discardCachedLatest();
     }
 
     if (backup.workspaceJson != null) {
@@ -261,6 +271,8 @@ export class RuntimeRestoreCoordinator {
       const tmp = `${p}.${randomUUID()}.tmp`;
       await fs.writeFile(tmp, backup.workspaceJson, 'utf-8');
       await fs.rename(tmp, p);
+    } else {
+      await fs.unlink(path.join(sessionDir, `${sessionId}.workspace.json`)).catch(() => undefined);
     }
 
     await applyWorkspaceFileSnapshot(
@@ -296,14 +308,16 @@ export class RuntimeRestoreCoordinator {
   private async applyRestore(
     params: RuntimeRestoreParams,
     archive: IntentCheckpointArchive,
+    material: IntentRestoreMaterial,
     engine: CheckpointEngine,
   ): Promise<void> {
     const { sessionDir, sessionId } = params;
-    const workspaceRoot = archive.workspaceRoot || params.defaultWorkDir;
 
-    if (archive.combinedCheckpoint) {
-      await writeSessionCheckpointJson(sessionDir, sessionId, archive.combinedCheckpoint);
-      engine.loadFromCombined(archive.combinedCheckpoint);
+    if (material.checkpoint) {
+      await new ProjectCheckpointStore({ sessionDir, sessionId }).restore(
+        material.checkpoint,
+        { intentMessageId: archive.messageId },
+      );
     } else {
       try {
         await fs.unlink(sessionCheckpointPath(sessionDir, sessionId));
@@ -314,6 +328,19 @@ export class RuntimeRestoreCoordinator {
     }
 
     await saveSessionWorkspace(sessionDir, sessionId, archive.workspace);
+    await applyWorkspaceFileSnapshot(
+      material.workspaceRoot,
+      material.workspaceFiles,
+      material.pathsToDelete,
+    );
+  }
+
+  private async buildRestoreMaterial(
+    params: RuntimeRestoreParams,
+    archive: IntentCheckpointArchive,
+  ): Promise<IntentRestoreMaterial> {
+    const { sessionDir, sessionId } = params;
+    const workspaceRoot = archive.workspaceRoot || params.defaultWorkDir;
     const currentUi = await readUiSessionMessages(sessionDir, sessionId);
     const workspaceSnapshot = await buildSessionWorkspaceRestoreSnapshot({
       archive,
@@ -323,9 +350,12 @@ export class RuntimeRestoreCoordinator {
       currentUiMessages: currentUi,
     });
     const laterPaths = await collectTrackedPathsAfterMessage(sessionDir, sessionId, archive.messageId);
-    const toDelete = collectPathsToDeleteOnRestore(workspaceSnapshot, laterPaths);
-    await applyWorkspaceFileSnapshot(workspaceRoot, workspaceSnapshot, toDelete);
-
+    return {
+      checkpoint: archive.projectCheckpoint ?? null,
+      workspaceRoot,
+      workspaceFiles: workspaceSnapshot,
+      pathsToDelete: collectPathsToDeleteOnRestore(workspaceSnapshot, laterPaths),
+    };
   }
 }
 

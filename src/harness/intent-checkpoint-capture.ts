@@ -11,9 +11,9 @@ import type { IntentCheckpointArchive, UiChatMessage } from '../types/intent-che
 import { INTENT_CHECKPOINT_VERSION } from '../types/intent-checkpoint.js';
 import {
   loadSessionTouchedPaths,
-  readSessionCheckpointJson,
   saveIntentCheckpoint,
 } from './intent-checkpoint-store.js';
+import { ProjectCheckpointStore } from './project-checkpoint-store.js';
 import {
   captureWorkspaceFileSnapshot,
   collectTrackedPathsFromCheckpoint,
@@ -57,7 +57,10 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
 export async function captureIntentCheckpoint(
   params: CaptureIntentCheckpointParams,
 ): Promise<CaptureIntentCheckpointResult> {
-  const combined = await readSessionCheckpointJson(params.sessionDir, params.sessionId);
+  const projectCheckpoint = await new ProjectCheckpointStore({
+    sessionDir: params.sessionDir,
+    sessionId: params.sessionId,
+  }).load();
   const manifestPaths = await loadSessionTouchedPaths(params.sessionDir, params.sessionId);
   const userMsg = params.uiMessages.find((m) => m.id === params.messageId && m.role === 'user');
   const userText = typeof userMsg?.content === 'string' ? userMsg.content : '';
@@ -66,7 +69,7 @@ export async function captureIntentCheckpoint(
     extractLikelyFilePathsFromText(userText),
   );
   const trackedPaths = mergeTrackedPathSets(
-    collectTrackedPathsFromCheckpoint(combined, params.priorTrackedPaths ?? []),
+    collectTrackedPathsFromCheckpoint(projectCheckpoint, params.priorTrackedPaths ?? []),
     manifestPaths,
     hintedPaths,
   );
@@ -84,7 +87,7 @@ export async function captureIntentCheckpoint(
     sessionId: params.sessionId,
     createdAt: new Date().toISOString(),
     userMessageTime: params.userMessageTime,
-    combinedCheckpoint: combined,
+    projectCheckpoint,
     workspace: params.workspaceState,
     workspaceRoot: params.workspaceRoot,
     workspaceFiles,

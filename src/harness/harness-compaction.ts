@@ -26,6 +26,7 @@ import { resilienceSaveCheckpoint } from './harness-resilience.js';
 import type { HarnessLogger } from './logger.js';
 import type { RuntimeTelemetry } from './runtime-telemetry.js';
 import type { ChatFunction, HarnessStepEvent } from './types.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 
 export interface CompactionDeps extends ResilienceBridgeDeps {
   contextCompactor: ContextCompactor;
@@ -246,6 +247,7 @@ export async function maybeCompact(
     ? deps.contextCompactor.buildRuntimeRecoveryContext(
       state.taskState.snapshot(),
       state.repoContext.snapshot(),
+      CompletionFactsView.fromHarnessRunState(state),
     )
     : null;
 

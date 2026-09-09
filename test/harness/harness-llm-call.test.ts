@@ -77,8 +77,6 @@ describe('callHarnessLlm · context window emergency fork', () => {
             filesRead: [],
             filesChanged: ['src/a.ts'],
             commandsRun: ['npm run build'],
-            verificationRequired: true,
-            verificationStatus: 'failed',
           },
           repoContext: {
             filesRead: [],

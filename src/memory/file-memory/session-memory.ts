@@ -31,9 +31,8 @@ import type {
   TaskIntent,
   TaskPhase,
   TaskStateSnapshot,
-  VerificationStatus,
   RepoContextSnapshot,
-  PersistedRuntimeV1,
+  PersistedRuntimeV2,
 } from '../../types/runtime-snapshot.js';
 import { PERSIST_RUNTIME_SCHEMA_VERSION } from '../../types/runtime-snapshot.js';
 import { getSessionMemoryConfig } from './memory-remote-config.js';
@@ -133,8 +132,6 @@ export interface SessionRuntimeEvidenceInput {
     filesRead: string[];
     filesChanged: string[];
     commandsRun: string[];
-    verificationRequired: boolean;
-    verificationStatus: string;
     fileDeliverableWriteVersions?: Record<string, number>;
     fileDeliverableConfirmVersions?: Record<string, number>;
   };
@@ -160,10 +157,6 @@ const TASK_INTENTS = new Set<string>([
   'question', 'inspect', 'edit', 'debug', 'test', 'refactor', 'docs',
 ]);
 const TASK_PHASES = new Set<string>(['intent', 'context', 'editing', 'verification', 'final']);
-const VERIFICATION_STATUSES = new Set<string>([
-  'not_required', 'required', 'passed', 'failed',
-]);
-
 function parseOptionalVersionRecord(value: unknown): Record<string, number> | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const out: Record<string, number> = {};
@@ -204,8 +197,6 @@ function inputToTaskSnapshot(input: SessionRuntimeEvidenceInput['task']): TaskSt
     filesRead: [...input.filesRead],
     filesChanged: [...input.filesChanged],
     commandsRun: [...input.commandsRun],
-    verificationRequired: input.verificationRequired,
-    verificationStatus: input.verificationStatus as VerificationStatus,
   };
   if (input.fileDeliverableWriteVersions) {
     snap.fileDeliverableWriteVersions = { ...input.fileDeliverableWriteVersions };
@@ -233,7 +224,7 @@ export function serializePersistedRuntime(
   task: TaskStateSnapshot,
   repo: RepoContextSnapshot,
 ): string {
-  const payload: PersistedRuntimeV1 = {
+  const payload: PersistedRuntimeV2 = {
     version: PERSIST_RUNTIME_SCHEMA_VERSION,
     task: capTaskSnapshot(task),
     repo: capRepoSnapshot(repo),
@@ -264,6 +255,7 @@ export function parsePersistedRuntime(notes: string): {
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const o = parsed as Record<string, unknown>;
+  if (o.version === 1) return parsePersistedRuntimeV1(o);
   if (o.version !== PERSIST_RUNTIME_SCHEMA_VERSION) return null;
   const task = o.task;
   const repo = o.repo;
@@ -273,10 +265,6 @@ export function parsePersistedRuntime(notes: string): {
   if (typeof tt.goal !== 'string' || !tt.goal.trim()) return null;
   if (typeof tt.intent !== 'string' || !TASK_INTENTS.has(tt.intent)) return null;
   if (typeof tt.phase !== 'string' || !TASK_PHASES.has(tt.phase)) return null;
-  if (typeof tt.verificationRequired !== 'boolean') return null;
-  if (typeof tt.verificationStatus !== 'string' || !VERIFICATION_STATUSES.has(tt.verificationStatus)) {
-    return null;
-  }
   if (!Array.isArray(tt.filesRead) || !Array.isArray(tt.filesChanged) || !Array.isArray(tt.commandsRun)) {
     return null;
   }
@@ -295,8 +283,6 @@ export function parsePersistedRuntime(notes: string): {
     filesRead: tt.filesRead.filter((x): x is string => typeof x === 'string'),
     filesChanged: tt.filesChanged.filter((x): x is string => typeof x === 'string'),
     commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
-    verificationRequired: tt.verificationRequired,
-    verificationStatus: tt.verificationStatus as VerificationStatus,
     ...(writeVersions ? { fileDeliverableWriteVersions: writeVersions } : {}),
     ...(confirmVersions ? { fileDeliverableConfirmVersions: confirmVersions } : {}),
   };
@@ -308,6 +294,48 @@ export function parsePersistedRuntime(notes: string): {
     recentDiagnostics: rr.recentDiagnostics.filter((x): x is string => typeof x === 'string'),
   };
   return { task: capTaskSnapshot(outTask), repo: capRepoSnapshot(outRepo) };
+}
+
+/** v1 is accepted only at this compatibility boundary and is immediately normalized to v2. */
+function parsePersistedRuntimeV1(
+  payload: Record<string, unknown>,
+): { task: TaskStateSnapshot; repo: RepoContextSnapshot } | null {
+  const task = payload.task;
+  const repo = payload.repo;
+  if (!task || typeof task !== 'object' || !repo || typeof repo !== 'object') return null;
+  const tt = task as Record<string, unknown>;
+  const rr = repo as Record<string, unknown>;
+  if (typeof tt.goal !== 'string' || !tt.goal.trim()) return null;
+  if (typeof tt.intent !== 'string' || !TASK_INTENTS.has(tt.intent)) return null;
+  if (typeof tt.phase !== 'string' || !TASK_PHASES.has(tt.phase)) return null;
+  if (!Array.isArray(tt.filesRead) || !Array.isArray(tt.filesChanged) || !Array.isArray(tt.commandsRun)) {
+    return null;
+  }
+  if (!Array.isArray(rr.filesRead) || !Array.isArray(rr.filesChanged) || !Array.isArray(rr.commandsRun)) {
+    return null;
+  }
+  if (!Array.isArray(rr.testCommands) || !Array.isArray(rr.recentDiagnostics)) return null;
+  const writeVersions = parseOptionalVersionRecord(tt.fileDeliverableWriteVersions);
+  const confirmVersions = parseOptionalVersionRecord(tt.fileDeliverableConfirmVersions);
+  return {
+    task: capTaskSnapshot({
+      goal: tt.goal,
+      intent: tt.intent as TaskIntent,
+      phase: tt.phase as TaskPhase,
+      filesRead: tt.filesRead.filter((x): x is string => typeof x === 'string'),
+      filesChanged: tt.filesChanged.filter((x): x is string => typeof x === 'string'),
+      commandsRun: tt.commandsRun.filter((x): x is string => typeof x === 'string'),
+      ...(writeVersions ? { fileDeliverableWriteVersions: writeVersions } : {}),
+      ...(confirmVersions ? { fileDeliverableConfirmVersions: confirmVersions } : {}),
+    }),
+    repo: capRepoSnapshot({
+      filesRead: rr.filesRead.filter((x): x is string => typeof x === 'string'),
+      filesChanged: rr.filesChanged.filter((x): x is string => typeof x === 'string'),
+      commandsRun: rr.commandsRun.filter((x): x is string => typeof x === 'string'),
+      testCommands: rr.testCommands.filter((x): x is string => typeof x === 'string'),
+      recentDiagnostics: rr.recentDiagnostics.filter((x): x is string => typeof x === 'string'),
+    }),
+  };
 }
 
 // ─── 状态管理（闭包隔离） ───
@@ -703,7 +731,6 @@ export function buildRuntimeEvidenceSection(
   lines.push('', '## Harness TaskState');
   lines.push(`- goal: ${truncateLine(input.task.goal, 200)}`);
   lines.push(`- intent/phase: ${input.task.intent} / ${input.task.phase}`);
-  lines.push(`- verification: required=${input.task.verificationRequired}, status=${input.task.verificationStatus}`);
   lines.push('', '### filesRead (task)');
   lines.push(input.task.filesRead.length ? formatBulletList(input.task.filesRead, 200) : '- _(none)_');
   lines.push('', '### filesChanged (task)');
@@ -741,14 +768,13 @@ export function buildRuntimeEvidenceSection(
 
   const taskSnap = capTaskSnapshot(inputToTaskSnapshot(input.task));
   const repoSnap = capRepoSnapshot(inputToRepoSnapshot(input.repo));
-  const json = serializePersistedRuntime(taskSnap, repoSnap);
   lines.push(
     '',
     '## Persisted runtime (machine)',
-    '_以下 JSON 由系统自动写入，用于进程/页面重启后恢复 TaskState 与 RepoContext；请勿删除 fenced 块。_',
+    '_以下 JSON 由系统自动覆盖写入；v2 不包含任何旧 verification 镜像字段。_',
     '',
     `\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`,
-    json,
+    serializePersistedRuntime(taskSnap, repoSnap),
     '```',
   );
 

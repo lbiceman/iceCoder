@@ -334,8 +334,6 @@ describe('task-acceptance-tracker', () => {
         filesRead: [],
         filesChanged: ['a.ts'],
         commandsRun: ['npm test 2>&1'],
-        verificationRequired: true,
-        verificationStatus: 'passed',
       },
       tracker,
     )).toBe(true);

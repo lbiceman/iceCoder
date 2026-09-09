@@ -144,8 +144,6 @@ export function buildRunningCheckpoint(): TaskCheckpoint {
       filesRead: [],
       filesChanged: [],
       commandsRun: [],
-      verificationRequired: false,
-      verificationStatus: 'not_required',
     },
     repoContext: {
       filesRead: [],

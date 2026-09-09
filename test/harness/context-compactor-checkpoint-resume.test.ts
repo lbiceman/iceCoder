@@ -22,8 +22,6 @@ describe('ContextCompactor.compactForCheckpointResume', () => {
           filesRead: [],
           filesChanged: ['src/a.ts'],
           commandsRun: ['npm test'],
-          verificationRequired: true,
-          verificationStatus: 'failed',
         },
         repoContext: {
           filesRead: [],

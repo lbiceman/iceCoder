@@ -193,19 +193,19 @@ describe('rebuild-escalation', () => {
 
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
-      verificationStatus: 'failed',
+      verificationSignal: { status: 'failed', required: false, evidenceRefs: [] },
       rebuildEscalationInjections: 0,
     })).toBe(true);
 
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
-      verificationStatus: 'passed',
+      verificationSignal: { status: 'passed', required: false, evidenceRefs: [] },
       rebuildEscalationInjections: 0,
     })).toBe(false);
 
     expect(shouldTriggerFileCapRebuild({
       branchBudget: t,
-      verificationStatus: 'failed',
+      verificationSignal: { status: 'failed', required: false, evidenceRefs: [] },
       rebuildEscalationInjections: 3,
     })).toBe(false);
 
@@ -217,7 +217,7 @@ describe('rebuild-escalation', () => {
 
     const any = shouldTriggerAnyFileCapRebuild({
       branchBudget: t,
-      verificationStatus: 'required',
+      verificationSignal: { status: 'pending', required: false, evidenceRefs: [] },
       workspaceRoot: root,
       rebuildEscalationInjections: 0,
     });
