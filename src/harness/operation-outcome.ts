@@ -35,13 +35,19 @@ export interface NormalizeOperationOutcomeOptions {
 
 export class OperationOutcomeLedger {
   private readonly outcomesByScope = new Map<string, OperationOutcome>();
+  private readonly outcomesById = new Map<string, OperationOutcome>();
 
   record(outcome: OperationOutcome): void {
     this.outcomesByScope.set(outcome.scope, outcome);
+    this.outcomesById.set(outcome.toolCallId, outcome);
   }
 
   list(): OperationOutcome[] {
     return [...this.outcomesByScope.values()].sort((a, b) => a.at - b.at);
+  }
+
+  getByToolCallId(toolCallId: string): OperationOutcome | undefined {
+    return this.outcomesById.get(toolCallId);
   }
 
   hasPending(): boolean {
@@ -57,10 +63,7 @@ export class OperationOutcomeLedger {
   }
 
   latestUnresolvedFailure(): OperationOutcome | undefined {
-    const latest = this.list().at(-1);
-    return latest?.status === 'failed' && latest.disposition !== 'policy_block'
-      ? latest
-      : undefined;
+    return this.list().reverse().find(item => item.status === 'failed');
   }
 
   latestHighRiskWithoutReceipt(): OperationOutcome | undefined {
@@ -197,7 +200,7 @@ function inferScope(
   if (operationId) return `operation:${operationId}`;
 
   const target = receipt?.target ?? extractTarget(toolCall.arguments);
-  if (target) return `${toolCall.name}:${target.toLowerCase()}`;
+  if (target) return `target:${target.toLowerCase()}`;
 
   return `${toolCall.name}:${stableArgs(toolCall.arguments ?? {})}`;
 }

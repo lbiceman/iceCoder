@@ -30,7 +30,7 @@ function buildState(messages: UnifiedMessage[], overrides: Partial<HarnessRunSta
     llmRetryCount: 0,
     emptyResponseRetryCount: 0,
     reasoningOnlyRecoveryCount: 0,
-    prematureCompletionRecoveryCount: 0,
+    completionGateContinuationCount: 0,
     consecutiveToolFailures: 0,
     consecutiveReadOnlyRounds: 0,
     noToolExecutionRecoveryCount: 0,

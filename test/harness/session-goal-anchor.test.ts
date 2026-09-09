@@ -125,7 +125,6 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     expect(snap.intent === 'question' || snap.intent === 'inspect').toBe(true);
     expect(snap.filesChanged).toEqual([]);
     expect(snap.verificationStatus).toBe('not_required');
-    expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
   });
 
   it('syncHydratedTaskState 不因 read-before-edit 软错误强制 verification failed', () => {
@@ -152,7 +151,6 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
 
     expect(taskState.snapshot().goal).toBe(turn3);
     expect(taskState.snapshot().verificationStatus).toBe('not_required');
-    expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
   });
 
   it('syncHydratedTaskState keeps sticky state when resume continuation', () => {

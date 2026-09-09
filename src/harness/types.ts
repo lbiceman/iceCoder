@@ -17,7 +17,7 @@ import type {
   ModeSignal,
   ResolvedSupervisorConfig,
 } from '../types/supervisor.js';
-import type { CompletionStatus } from './completion-gate.js';
+import type { CompletionGateReason, CompletionStatus } from './completion-gate.js';
 
 // ─── 上下文组装 ───
 
@@ -106,7 +106,6 @@ export type StopReason =
   | 'user_checkpoint'    // Supervisor 请求人工 checkpoint（Web 冰豆 crying + 固定 final 文案）
   | 'max_output_tokens'  // 输出 token 达到上限（finishReason === 'length'）
   | 'stop_hook'          // 停止钩子阻止继续（连续干预超限）
-  | 'verification_exhausted' // verification gate 连续注入超限
   | 'completion_paused'  // 通用收尾仍有未决操作/审批/必要回执
   | 'completion_failed'  // 通用收尾确认操作失败
   | 'circuit_breaker'    // 连续工具失败熔断
@@ -290,6 +289,8 @@ export interface HarnessStepEvent {
   toolOutcome?: ToolOutcome;
   totalToolCalls?: number;
   stopReason?: StopReason;
+  completionStatus?: CompletionStatus;
+  completionReason?: CompletionGateReason;
   /** TaskGraph (Phase 7) */
   graphGoal?: string;
   graphIntent?: string;

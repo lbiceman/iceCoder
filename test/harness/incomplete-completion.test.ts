@@ -83,7 +83,7 @@ describe('buildIncompleteContinuationPrompt', () => {
     testCommands: [], recentDiagnostics: [],
   };
 
-  it('prompts write_file when deliverable not written yet', () => {
+  it('prompts the unresolved result without prescribing a tool', () => {
     const prompt = buildIncompleteContinuationPrompt(
       {
         goal: '整理 ant design 成 md 文档放到桌面', intent: 'docs', phase: 'intent',
@@ -92,8 +92,8 @@ describe('buildIncompleteContinuationPrompt', () => {
       },
       emptyRepo,
     );
-    expect(prompt).toMatch(/write_file|edit_file/i);
-    expect(prompt).not.toMatch(/Run tests/i);
+    expect(prompt).toMatch(/produce the requested result/i);
+    expect(prompt).not.toMatch(/write_file|edit_file|run tests/i);
   });
 
   it('does not prompt tests for md-only changes', () => {
@@ -108,7 +108,7 @@ describe('buildIncompleteContinuationPrompt', () => {
     expect(prompt).not.toMatch(/unit tests/i);
   });
 
-  it('prompts unit tests for engineering changes', () => {
+  it('does not infer a hard check from changed-item metadata', () => {
     const prompt = buildIncompleteContinuationPrompt(
       {
         goal: 'fix bug', intent: 'edit', phase: 'editing',
@@ -117,11 +117,11 @@ describe('buildIncompleteContinuationPrompt', () => {
       },
       emptyRepo,
     );
-    expect(prompt).toMatch(/unit tests/i);
-    expect(prompt).toMatch(/src\/a\.ts/);
+    expect(prompt).not.toMatch(/unit tests|src\/a\.ts/i);
+    expect(prompt).toMatch(/available tools/i);
   });
 
-  it('prompts fix tests when verification failed', () => {
+  it('does not restore the legacy failed-check gate', () => {
     const prompt = buildIncompleteContinuationPrompt(
       {
         goal: 'fix bug', intent: 'edit', phase: 'verification',
@@ -130,7 +130,7 @@ describe('buildIncompleteContinuationPrompt', () => {
       },
       emptyRepo,
     );
-    expect(prompt).toMatch(/fix failing tests/i);
+    expect(prompt).not.toMatch(/fix failing tests/i);
   });
 });
 

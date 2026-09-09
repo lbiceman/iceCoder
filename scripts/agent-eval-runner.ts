@@ -97,7 +97,7 @@ export async function runAgentEvalCase(
       },
       loop: {
         maxRounds: testCase.maxRounds ?? 8,
-        timeout: 120_000,
+        timeout: testCase.timeoutMs ?? 120_000,
         tokenBudget: 250_000,
       },
       permissions: [],
@@ -253,7 +253,9 @@ async function scoreCase(args: {
   const finalEvent = [...events].reverse().find(event => event.type === 'final');
   const agentVerificationPassed = didAgentRunVerification(events, testCase.verifyCommands);
   const anyFileChanged = await didAnyCaseFileChange(workspace, initialFiles);
-  const analysisArtifactCount = await countAnalysisArtifacts(workspace, testCase.id);
+  const analysisArtifactCount = testCase.expected.requiresAnalysisArtifact
+    ? await countAnalysisArtifacts(workspace, testCase.id)
+    : 0;
 
   if (testCase.expected.requiresTool && toolCallEvents.length === 0) {
     failures.push('expected tool use');
@@ -335,12 +337,18 @@ async function scoreCase(args: {
 
 async function countAnalysisArtifacts(workspace: string, sessionId: string): Promise<number> {
   const analysisDir = path.join(workspace, '.icecoder', 'sessions', sessionId, 'analysis');
-  try {
-    const entries = await fs.readdir(analysisDir);
-    return entries.filter(entry => entry.endsWith('.meta.json')).length;
-  } catch {
-    return 0;
-  }
+  const deadline = Date.now() + 10_000;
+  do {
+    try {
+      const entries = await fs.readdir(analysisDir);
+      const count = entries.filter(entry => entry.endsWith('.meta.json')).length;
+      if (count > 0) return count;
+    } catch {
+      // Detached analysis may not have created its directory yet.
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  return 0;
 }
 
 async function evaluateAssertions(

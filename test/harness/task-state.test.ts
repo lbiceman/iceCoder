@@ -38,7 +38,6 @@ describe('TaskState unit test verification', () => {
     const snap = state.snapshot();
     expect(snap.phase).toBe('verification');
     expect(snap.verificationStatus).toBe('passed');
-    expect(state.isVerificationBlockingFinalAfterSync()).toBe(false);
   });
 
   it('node --check success leaves verification required', () => {
@@ -52,7 +51,6 @@ describe('TaskState unit test verification', () => {
       { success: true, output: '' },
     );
     expect(state.snapshot().verificationStatus).toBe('required');
-    expect(state.isVerificationBlockingFinal()).toBe(true);
   });
 
   it('records failed npm test but does not block gate', () => {
@@ -69,7 +67,6 @@ describe('TaskState unit test verification', () => {
     const snap = state.snapshot();
     expect(snap.commandsRun).toContain('npm test');
     expect(snap.verificationStatus).toBe('failed');
-    expect(state.isVerificationBlockingFinal()).toBe(false);
   });
 
   it('sets verification required on successful file write with path', () => {

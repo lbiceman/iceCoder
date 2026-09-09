@@ -552,13 +552,10 @@ export class Harness {
       noToolExecutionRecoveryCount: 0,
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
-      verificationGateContinuationCount: 0,
-      failedUnitTestReminderInjected: false,
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,
       reasoningOnlyRecoveryCount: 0,
-      prematureCompletionRecoveryCount: 0,
       taskState: new TaskState(sessionGoalAnchor),
       repoContext: new RepoContext(),
       runtimeStateHash: '',
@@ -577,8 +574,7 @@ export class Harness {
       verificationOutputBuffer: new VerificationOutputBuffer(),
       taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
       operationOutcomes: new OperationOutcomeLedger(),
-      completionRecoveryCount: 0,
-      completionEvidenceRequestCount: 0,
+      completionGateContinuationCount: 0,
       consecutiveNoToolRounds: 0,
       missingFileAttempts: new Map(),
       shellMandatoryConfirmDenials: new Set(),
@@ -845,7 +841,7 @@ export class Harness {
         endTiming('round_wall', roundStartedAt, prep.round);
         if (toolRound.action === 'return') return toolRound.result;
 
-        // 工具轮后不 graph-stop：工程变更须走 Verification Gate（单测提示），避免图 done 绕过验收
+        // 工具轮后不 graph-stop：让下一轮统一 CompletionGate 读取最新条件与操作回执。
       }
     } finally {
       endTiming('run_total', runStartedAt);

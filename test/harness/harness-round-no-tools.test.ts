@@ -12,6 +12,7 @@ import {
   normalizeOperationOutcome,
   OperationOutcomeLedger,
 } from '../../src/harness/operation-outcome.js';
+import { TaskAcceptanceTracker } from '../../src/harness/task-acceptance-tracker.js';
 
 function makeState(
   messages: UnifiedMessage[],
@@ -30,14 +31,12 @@ function makeState(
     llmRetryCount: 0,
     emptyResponseRetryCount: 0,
     reasoningOnlyRecoveryCount: 0,
-    prematureCompletionRecoveryCount: 0,
     consecutiveToolFailures: 0,
     consecutiveReadOnlyRounds: 0,
     noToolExecutionRecoveryCount: 0,
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
-    verificationGateContinuationCount: 0,
-    failedUnitTestReminderInjected: false,
+    completionGateContinuationCount: 0,
     transition: 'initial',
     justCompacted: false,
     amnesiaRecoveryCount: 0,
@@ -257,7 +256,7 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.verificationGateContinuationCount).toBe(0);
+    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('仅 md 变更未跑测 → 不 inject verification gate', async () => {
@@ -283,10 +282,10 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     );
 
     expect(result.action).toBe('return');
-    expect(state.verificationGateContinuationCount).toBe(0);
+    expect(state.completionGateContinuationCount).toBe(0);
   });
 
-  it('工程变更未跑测 → verification gate inject 单测提示', async () => {
+  it('没有显式硬验证时不因变更类型追加验证轮', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
@@ -310,19 +309,19 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
       },
     );
 
-    expect(result.action).toBe('continue');
-    expect(state.verificationGateContinuationCount).toBe(1);
-    expect(messages.at(-1)?.content).toMatch(/unit tests/i);
-    expect(messages.at(-1)?.content).toMatch(/src\/a\.ts/);
+    expect(result.action).toBe('return');
+    if (result.action === 'return') {
+      expect(result.result.loopState.stopReason).toBe('model_done');
+    }
+    expect(state.completionGateContinuationCount).toBe(0);
     logSpy.mockRestore();
   });
 
-  it('工程变更未跑测 → 提醒后再次收尾 → model_done', async () => {
+  it('旧验证状态不会重新形成隐形硬门控', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
     const state = makeState(messages, 'fix bug');
-    state.verificationGateContinuationCount = 1;
     state.noToolExecutionRecoveryCount = 1;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
@@ -345,10 +344,10 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     if (result.action === 'return') {
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.taskState.snapshot().verificationStatus).toBe('not_required');
+    expect(state.taskState.snapshot().verificationStatus).toBe('required');
   });
 
-  it('工程变更未跑测 → 首次 inject 使用软化提示', async () => {
+  it('软验证只来自提示词而不强制 continue', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
@@ -371,13 +370,11 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
       },
     );
 
-    expect(result.action).toBe('continue');
-    expect(state.verificationGateContinuationCount).toBe(1);
-    expect(messages.at(-1)?.content).toMatch(/consider running unit tests/i);
-    expect(messages.at(-1)?.content).toMatch(/confident/i);
+    expect(result.action).toBe('return');
+    expect(state.completionGateContinuationCount).toBe(0);
   });
 
-  it('无 run_command 工具时工程变更 pending → verification_exhausted', async () => {
+  it('没有显式条件时不因缺少某种工具而阻塞', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
@@ -403,16 +400,15 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
 
     expect(result.action).toBe('return');
     if (result.action === 'return') {
-      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
+      expect(result.result.loopState.stopReason).toBe('model_done');
     }
   });
 
-  it('verification gate 多次提醒后工程变更仍 pending → model_done', async () => {
+  it('统一门控不读取旧验证计数', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
     const state = makeState(messages, 'fix bug');
-    state.verificationGateContinuationCount = 5;
     state.noToolExecutionRecoveryCount = 1;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
@@ -470,7 +466,7 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     }
   });
 
-  it('npm test 失败 → inject 加强提示后继续（不 hard block）', async () => {
+  it('旧验证失败状态本身不触发第二套门控', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: 'fix bug' },
     ];
@@ -497,10 +493,8 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
       },
     );
 
-    expect(result.action).toBe('continue');
-    expect(state.verificationGateContinuationCount).toBe(0);
-    expect(state.failedUnitTestReminderInjected).toBe(true);
-    expect(messages.at(-1)?.content).toMatch(/Unit tests failed/i);
+    expect(result.action).toBe('return');
+    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('npm test 失败加强提示后再次收尾 → model_done', async () => {
@@ -509,7 +503,6 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     ];
     const state = makeState(messages, 'fix bug');
     state.noToolExecutionRecoveryCount = 1;
-    state.failedUnitTestReminderInjected = true;
     state.taskState.recordToolResult(
       { id: 'w1', name: 'edit_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
@@ -537,12 +530,11 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
     }
   });
 
-  it('premature completion 上限后 pendingWork 仍 true → verification_exhausted', async () => {
+  it('显式交付目标只注入一次统一收尾提示', async () => {
     const messages: UnifiedMessage[] = [
       { role: 'user', content: '整理成 md 文档放到桌面' },
     ];
     const state = makeState(messages, '整理成 md 文档放到桌面');
-    state.prematureCompletionRecoveryCount = 3;
     state.noToolExecutionRecoveryCount = 1;
 
     const result = await handleNoToolCalls(
@@ -557,10 +549,9 @@ describe('handleNoToolCalls — 收尾单元测试提示', () => {
       },
     );
 
-    expect(result.action).toBe('return');
-    if (result.action === 'return') {
-      expect(result.result.loopState.stopReason).toBe('verification_exhausted');
-    }
+    expect(result.action).toBe('continue');
+    expect(state.completionGateContinuationCount).toBe(1);
+    expect(messages.at(-1)?.content).toMatch(/Completion Gate/);
   });
 });
 
@@ -592,7 +583,7 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
       expect(result.result.completionStatus).toBe('completed');
       expect(result.result.loopState.stopReason).toBe('model_done');
     }
-    expect(state.verificationGateContinuationCount).toBe(0);
+    expect(state.completionGateContinuationCount).toBe(0);
   });
 
   it('后台操作未结束时暂停且不报告完成', async () => {
@@ -621,6 +612,38 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
       expect(result.result.completionStatus).toBe('paused');
       expect(result.result.loopState.stopReason).toBe('completion_paused');
       expect(result.result.content).toMatch(/未结束/);
+    }
+  });
+
+  it('相同 required 阻塞快照只续轮一次，随后暂停', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: '必须运行 `make verify` 后才能结束' }];
+    const state = makeState(messages, '必须运行 `make verify` 后才能结束');
+    state.taskAcceptance = new TaskAcceptanceTracker('必须运行 `make verify` 后才能结束');
+    state.operationOutcomes = new OperationOutcomeLedger();
+
+    const first = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '已完成。', finishReason: 'stop' },
+      userMessage: '必须运行 `make verify` 后才能结束',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    expect(first.action).toBe('continue');
+    expect(state.completionGateContinuationCount).toBe(1);
+
+    const second = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '还是完成了。', finishReason: 'stop' },
+      userMessage: '必须运行 `make verify` 后才能结束',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    expect(second.action).toBe('return');
+    if (second.action === 'return') {
+      expect(second.result.loopState.stopReason).toBe('completion_paused');
+      expect(second.result.completionStatus).toBe('paused');
     }
   });
 });

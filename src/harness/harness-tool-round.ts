@@ -59,7 +59,6 @@ import {
   resolveVerificationSuccessSummary,
 } from './verification-digest.js';
 import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
-import { maybeResetVerificationGateCounter } from './harness-verification-gate.js';
 import { redactToolCalls } from '../tools/tool-argument-redaction.js';
 import { normalizeOperationOutcome } from './operation-outcome.js';
 import {
@@ -213,10 +212,6 @@ export async function runHarnessToolRound(
     }
   }
 
-  const acceptancePendingBefore = state.taskAcceptance?.isActive()
-    ? state.taskAcceptance.getPendingCount()
-    : 0;
-  const pendingDeliverablesBefore = state.taskState.pendingFileDeliverableCount(deps.workspaceRoot);
   state.taskState.reconcileOrphanFileDeliverableWriteVersions(deps.workspaceRoot);
 
   const repoFilesChangedBefore = state.repoContext.snapshot().filesChanged.length;
@@ -243,39 +238,12 @@ export async function runHarnessToolRound(
   );
   if (executableToolCalls.length > 0) {
     state.consecutiveNoToolRounds = 0;
-    for (const tc of executableToolCalls) {
-      const sig = toolCallSignature(tc);
-      const writeSucceeded = !toolStats.failedSignatures.includes(sig)
-        && !toolStats.policyBlockedSignatures.includes(sig);
-      if (writeSucceeded && state.taskState.isEngineeringWriteToolCall(tc, { success: true, output: '' })) {
-        state.failedUnitTestReminderInjected = false;
-      }
-    }
-    const acceptanceIncompleteAfter = Boolean(
-      state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
-    );
-    const acceptancePendingAfter = state.taskAcceptance?.isActive()
-      ? state.taskAcceptance.getPendingCount()
-      : 0;
-    const pendingDeliverablesAfter = state.taskState.pendingFileDeliverableCount(deps.workspaceRoot);
-    const blockingAfter = state.taskState.isVerificationBlockingFinal(
-      acceptanceIncompleteAfter,
-      deps.workspaceRoot,
-    );
-    maybeResetVerificationGateCounter(
-      state,
-      pendingDeliverablesBefore,
-      pendingDeliverablesAfter,
-      blockingAfter,
-      acceptancePendingBefore,
-      acceptancePendingAfter,
-    );
   }
   // P0-A — acceptance gate / verification buffer：按工具结果**真实状态**而非「启动成功」判定。
   //   - 后台启动 (`mode:'background'|'escalated'`) → acceptance 状态保持 pending
   //   - check 返回 `status:'completed' && exitCode:0` → mark passed
   //   - check 返回 `status:'failed'|'timeout'|'killed'` 或 exitCode≠0 → mark failed + 回写 verificationOutputBuffer
-  // P1 — 验收项首次从 pending → passed 时对称注入 `[System / Acceptance ✓]` 反馈，
+  // P1 — 条件首次从 pending → passed 时对称注入 `[System / Completion ✓]` 反馈，
   //       全部 passed 时再追加一条 stopping signal，让模型有客观信号决定收尾。
   const newlyPassedAcceptance: Array<{ command: string; summary: string | null }> = [];
   const failedAcceptanceSignatures = new Set<string>();
@@ -294,7 +262,7 @@ export async function runHarnessToolRound(
       if (!classified) continue;
 
       if (acceptanceActive && state.taskAcceptance) {
-        const transition = state.taskAcceptance.recordRunCommandToolResult(classified);
+        const transition = state.taskAcceptance.recordRunCommandToolResult(classified, tc.id);
         if (transition?.newStatus === 'failed') {
           failedAcceptanceSignatures.add(sig);
         }
@@ -875,10 +843,10 @@ function maybeInjectVerificationDigest(args: {
 }
 
 /**
- * P1 — Acceptance ✓ 反馈注入。
+ * P1 — Completion ✓ 条件反馈注入。
  *
  * 两种触发：
- *   - 某条验收命令从 pending → passed → 发一行 `[System / Acceptance ✓] cmd — summary (X/Y passed)`
+ *   - 某条条件从 pending → passed → 发一行 `[System / Completion ✓] label — summary`
  *   - 全部验收命令通过 → 追加 stopping signal，告知模型可以输出 ≤10 条交付 bullet 并停止调工具
  *
  * 与失败侧 `maybeInjectVerificationDigest` 对称。
@@ -908,7 +876,7 @@ function maybeInjectAcceptanceSuccessFeedback(args: {
 }
 
 /**
- * 纯函数：构造 Acceptance ✓ 反馈消息。
+ * 纯函数：构造 Completion ✓ 反馈消息。
  *
  * 与 {@link maybeInjectAcceptanceSuccessFeedback} 拆解开，便于单测「文案 + stopping signal」生成逻辑。
  * 返回 null 表示无需注入（既无新增 passed 也未完成全部）。
@@ -928,14 +896,14 @@ export function buildAcceptanceSuccessFeedbackMessage(args: {
     runningPassed += 1;
     const cmd = item.command.length > 80 ? `${item.command.slice(0, 77)}...` : item.command;
     const summary = item.summary ? ` — ${item.summary}` : '';
-    lines.push(`[System / Acceptance ✓] ${cmd}${summary} (${runningPassed}/${totalCount} passed)`);
+    lines.push(`[System / Completion ✓] ${cmd}${summary} (${runningPassed}/${totalCount} satisfied)`);
   }
   if (completedAll) {
     lines.push(
       '',
-      `[System / Acceptance ✓] All ${totalCount} acceptance commands passed.`,
+      `[System / Completion ✓] All ${totalCount} required conditions are satisfied.`,
       'Output ≤10 delivery bullets now and STOP calling tools.',
-      'Do not re-run verification or open new tool calls; the task is complete.',
+      'Do not repeat successful checks or open unrelated tool calls; the task is complete.',
     );
   }
 

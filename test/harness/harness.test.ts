@@ -383,6 +383,7 @@ describe('Harness - 工具调用循环', () => {
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
       stepReviewLlmStub(),
       finalResponse('File does not exist'),
+      finalResponse('File does not exist'),
     ]);
 
     const result = await harness.run('Read file', chatFn);
@@ -757,7 +758,9 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harnessWithExecutor.run('Read file', chatFn);
 
-    expect(result.content).toBe('Cannot read');
+    expect(result.content).toContain('Cannot read');
+    expect(result.completionStatus).toBe('paused');
+    expect(result.loopState.stopReason).toBe('completion_paused');
     expect(handler).not.toHaveBeenCalled();
     expect(result.messages.some(m =>
       m.role === 'tool'
@@ -1592,6 +1595,7 @@ describe('Harness - 连续工具失败熔断', () => {
       stepReviewLlmStub(),
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
+      finalResponse('summary'),
       finalResponse('summary'),
     ]);
     const result = await harness.run('test', chatFn);

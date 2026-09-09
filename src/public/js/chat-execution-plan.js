@@ -1623,7 +1623,8 @@ window.ChatExecutionPlan = (function () {
     model_done: '模型已完成本次任务',
     stop_hook: '任务在收尾校验后完成',
     max_output_tokens: '输出达到上限后结束',
-    verification_exhausted: '验证轮次用尽后结束',
+    completion_paused: '任务仍有未完成条件，已暂停',
+    completion_failed: '任务未能完成必要条件',
     circuit_breaker: '触发熔断保护后结束',
     error: '执行出现错误后结束',
   };

@@ -117,7 +117,6 @@ const ERROR_LIKE_STOP = new Set<StopReason>([
   'error',
   'timeout',
   'circuit_breaker',
-  'verification_exhausted',
   'max_output_tokens',
   'max_rounds',
   'token_budget',
