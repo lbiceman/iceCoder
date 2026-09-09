@@ -30,8 +30,7 @@ function makeState(): HarnessRunState {
     consecutiveNoToolRounds: 0,
     noToolExecutionRecoveryCount: 0,
     stopHookContinuationCount: 0,
-    verificationGateContinuationCount: 0,
-    prematureCompletionRecoveryCount: 0,
+    completionGateContinuationCount: 0,
     emptyResponseRetryCount: 0,
     reasoningOnlyRecoveryCount: 0,
     maxOutputTokensRecoveryCount: 0,
@@ -95,6 +94,10 @@ describe('handleNoToolCalls · embedded text after API tools', () => {
     });
 
     expect(result.action).toBe('continue');
-    expect(state.noToolExecutionRecoveryCount).toBe(1);
+    expect(
+      state.noToolExecutionRecoveryCount
+      + state.emptyResponseRetryCount
+      + state.completionGateContinuationCount,
+    ).toBe(1);
   });
 });

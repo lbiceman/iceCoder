@@ -24,7 +24,7 @@ describe('buildToolPlan', () => {
     expect(text).toContain('[Runtime Tool Planner]');
   });
 
-  it('adds unit test hint when engineering changes pending tests', () => {
+  it('does not derive a hard verification hint from task metadata', () => {
     const pending = buildToolPlan('fix bug', {
       goal: 'fix bug',
       intent: 'edit',
@@ -35,34 +35,10 @@ describe('buildToolPlan', () => {
       verificationRequired: true,
       verificationStatus: 'required',
     });
-    expect(pending.verificationHint).toMatch(/unit tests/i);
-
-    const passed = buildToolPlan('fix bug', {
-      goal: 'fix bug',
-      intent: 'edit',
-      phase: 'verification',
-      filesRead: [],
-      filesChanged: ['src/a.ts'],
-      commandsRun: ['npm test'],
-      verificationRequired: true,
-      verificationStatus: 'passed',
-    });
-    expect(passed.verificationHint).toBeUndefined();
-
-    const mdOnly = buildToolPlan('write doc', {
-      goal: 'write doc',
-      intent: 'docs',
-      phase: 'editing',
-      filesRead: [],
-      filesChanged: ['/tmp/out.md'],
-      commandsRun: [],
-      verificationRequired: true,
-      verificationStatus: 'required',
-    });
-    expect(mdOnly.verificationHint).toBeUndefined();
+    expect('verificationHint' in pending).toBe(false);
   });
 
-  it('recommended flow asks for unit tests before finishing on edit intent', () => {
+  it('recommended flow stays domain-neutral', () => {
     const plan = buildToolPlan('fix bug', {
       goal: 'fix bug',
       intent: 'edit',
@@ -73,6 +49,7 @@ describe('buildToolPlan', () => {
       verificationRequired: true,
       verificationStatus: 'required',
     });
-    expect(plan.recommendedFlow.join(' ')).toMatch(/unit tests before finishing/i);
+    expect(plan.recommendedFlow.join(' ')).toContain('relevant observation');
+    expect(plan.recommendedFlow.join(' ')).not.toMatch(/unit tests|source code|documentation/i);
   });
 });

@@ -7,14 +7,9 @@ import { resolveCheckpointUserGoal } from './session-goal-anchor.js';
 import {
   MAX_EMPTY_RESPONSE_RETRIES,
   MAX_OUTPUT_TOKENS_RECOVERY_LIMIT,
-  MAX_PREMATURE_COMPLETION_RECOVERY,
   MAX_REASONING_ONLY_RECOVERY,
   MAX_STOP_HOOK_CONTINUATIONS,
-  MAX_VERIFICATION_GATE_CONTINUATIONS,
 } from './harness-constants.js';
-import {
-  canVerifyDeliverableKind,
-} from './document-deliverable.js';
 import type { HarnessMemoryIntegration } from './harness-memory.js';
 import {
   getLatestRealUserText,
@@ -25,7 +20,6 @@ import {
   hasPendingWork,
   isReasoningOnlyResponse,
 } from './incomplete-completion.js';
-import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import { isResumeContinuationMessage } from './resume-goal.js';
 import type { ResilienceBridgeDeps } from './harness-resilience.js';
 import { resilienceSaveCheckpoint } from './harness-resilience.js';
@@ -33,7 +27,6 @@ import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
-import { buildToolPlan, formatToolPlan } from './tool-planner.js';
 import type { StopHookManager } from './stop-hooks.js';
 import type {
   HarnessResult,
@@ -41,32 +34,20 @@ import type {
 } from './types.js';
 import type { ToolDefinition } from '../llm/types.js';
 import type { UnifiedMessage } from '../llm/types.js';
-import type { TaskStateSnapshot } from '../types/runtime-snapshot.js';
 import {
   buildCompletionGatePrompt,
   CompletionGate,
   type CompletionStatus,
 } from './completion-gate.js';
+import { buildCompletionGateInput } from './completion-context.js';
 import {
   containsEmbeddedToolCalls,
   prepareAssistantContentForHistory,
   sanitizeAssistantContentForUser,
 } from './text-tool-call-salvage.js';
 
-function verificationGateHalfPoint(): number {
-  return Math.ceil(MAX_VERIFICATION_GATE_CONTINUATIONS / 2);
-}
-
-function buildNoToolExecutionRecoveryPrompt(
-  msgs: UnifiedMessage[],
-  userMessage: string,
-  taskSnap: TaskStateSnapshot,
-): string {
-  return [
-    '[System] The user asked for an executable software-engineering action, but you did not invoke tools via the API. Continue now using native function-calling (tool_calls) — do not embed tool invocations as XML/JSON text in your reply.',
-    '',
-    formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap)),
-  ].join('\n');
+function buildNoToolExecutionRecoveryPrompt(): string {
+  return '[System] The user requested an executable action, but no tool was invoked. Continue with the relevant available tools through native function-calling; do not embed tool syntax in plain text.';
 }
 
 function pushAssistantForHistory(
@@ -145,7 +126,7 @@ export async function handleNoToolCalls(
     msgs.push({
       role: 'user',
       content: [
-        buildNoToolExecutionRecoveryPrompt(msgs, userMessage, state.taskState.snapshot()),
+        buildNoToolExecutionRecoveryPrompt(),
         '',
         'The previous reply contained tool-like XML/text in the message body. Use native function-calling only — do not repeat tool syntax in plain text.',
       ].join('\n'),
@@ -255,7 +236,7 @@ export async function handleNoToolCalls(
     pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
-      content: 'You must call tools to continue the task. Do not stop with thinking only — run verification or edit files now.',
+      content: 'Continue the requested task with relevant available tools. Do not stop with thinking only.',
     });
     state.transition = 'max_output_tokens_recovery';
     return { action: 'continue' };
@@ -317,9 +298,7 @@ export async function handleNoToolCalls(
   state.repoContext.reconcileMissingChangedFiles(deps.workspaceRoot);
 
   const taskSnap = state.taskState.snapshot();
-  const repoSnap = state.repoContext.snapshot();
   const workspaceRoot = deps.workspaceRoot;
-  const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
   const pendingWork = hasPendingWork(taskSnap, state.taskAcceptance, workspaceRoot);
   const latestUserText = getLatestRealUserText(msgs, userMessage);
   const resumeWithPending = isResumeContinuationMessage(latestUserText) && pendingWork;
@@ -371,35 +350,64 @@ export async function handleNoToolCalls(
     }
   }
 
-  // verification gate：单元测试提示 / Acceptance Gate pending 时优先于 no_tool recovery
-  const toolNames = currentTools.map(t => t.name);
-  const canVerifyDeliverable = canVerifyDeliverableKind(
-    taskSnap.filesChanged,
-    toolNames,
-    acceptanceIncomplete,
-    taskSnap.verificationStatus,
-  );
-  const universalCompletionEnabled = !!state.operationOutcomes;
-  let blockVerification = acceptanceIncomplete
-    || (!universalCompletionEnabled
-      && state.taskState.isVerificationBlockingFinal(false, workspaceRoot));
+  const completionDecision = new CompletionGate().evaluate(buildCompletionGateInput(state, {
+    answerReady: Boolean(response.content?.trim()),
+    currentTools,
+    workspaceRoot,
+  }));
+  const completionStatus: CompletionStatus = completionDecision.status;
 
-  const returnVerificationExhausted = (detail?: string): HandleNoToolCallsResult => {
-    const defaultSuffix = canVerifyDeliverable
-      ? '\n任务因验收无法继续而暂停：已连续多轮未调用 run_command 完成单元测试。'
-      : '\n任务因验收无法继续而暂停：当前工具集缺少验收所需工具。';
-    const suffix = detail ? `\n${detail}` : defaultSuffix;
-    const content = sanitizeAssistantContentForUser(response.content) + suffix;
+  if (completionDecision.action === 'continue') {
+    const prompt = buildCompletionGatePrompt(completionDecision);
+    if (prompt) {
+      state.completionGateContinuationCount++;
+      state.completionGateBlockingSignature = completionDecision.blockingSignature;
+      pushAssistantForHistory(msgs, response);
+      injectContinuationUserMessage(deps, state, msgs, prompt);
+      await resilienceSaveCheckpoint(deps, 'verification_started', state);
+      state.transition = 'no_tool_execution_recovery';
+      return { action: 'continue' };
+    }
+  }
+
+  if (completionDecision.action === 'pause' || completionDecision.action === 'fail') {
+    const reason = completionDecision.action === 'fail'
+      ? 'completion_failed'
+      : 'completion_paused';
+    const detail = completionDecision.reason === 'operation_pending'
+      ? '任务仍有未结束的操作或待审批事项，已暂停且未报告完成。'
+      : completionDecision.reason === 'high_risk_receipt_missing'
+        ? '高风险操作缺少结果证据，已暂停且未报告完成。'
+        : completionDecision.reason === 'condition_pending'
+          || completionDecision.reason === 'condition_unverifiable'
+          ? '用户明确要求的完成条件尚未取得证据，已暂停且未报告完成。'
+          : '操作或完成条件未成功结清，已保留失败状态。';
+    const content = `${sanitizeAssistantContentForUser(response.content)}\n${detail}`.trim();
     pushAssistantForHistory(msgs, response);
-    deps.loopController.stop('verification_exhausted');
+    deps.loopController.stop(reason);
     const finalState = deps.loopController.getState();
-    logger.loopStop('verification_exhausted', finalState.currentRound, finalState.totalToolCalls);
+    logger.loopStop(reason, finalState.currentRound, finalState.totalToolCalls);
+    await saveTaskCheckpoint(
+      deps,
+      completionDecision.action === 'fail' ? 'failed' : 'paused',
+      resolveCheckpointUserGoal(state, userMessage),
+      msgs,
+      state,
+      reason,
+    );
+    await resilienceSaveCheckpoint(deps, 'final_draft', state, reason);
+    recordTelemetrySummary(deps, reason, state, {
+      status: completionDecision.status,
+      reason: completionDecision.reason,
+    });
     onStep?.({
       type: 'final',
       iteration: finalState.currentRound,
       totalToolCalls: finalState.totalToolCalls,
       content,
-      stopReason: 'verification_exhausted',
+      stopReason: reason,
+      completionStatus: completionDecision.status,
+      completionReason: completionDecision.reason,
     });
     return {
       action: 'return',
@@ -408,144 +416,13 @@ export async function handleNoToolCalls(
         loopState: finalState,
         messages: [...msgs],
         log: logger.getEntries(),
+        completionStatus,
       },
     };
-  };
-
-  if (!blockVerification) {
-    state.verificationGateContinuationCount = 0;
-  } else if (!canVerifyDeliverable) {
-    console.log('[harness] 验收仍 pending 但当前轮次无可用验收工具，强制结束');
-    return returnVerificationExhausted(
-      acceptanceIncomplete
-        ? 'The Acceptance Gate requires run_command, but that tool is unavailable.'
-        : 'Source changes require unit tests through run_command, but that tool is unavailable.',
-    );
-  } else if (blockVerification) {
-    if (!acceptanceIncomplete && state.verificationGateContinuationCount >= 1) {
-      console.log('[harness] verification gate 已提醒，允许 model_done');
-      state.taskState.markVerificationWaived();
-      blockVerification = false;
-    } else if (state.verificationGateContinuationCount >= MAX_VERIFICATION_GATE_CONTINUATIONS) {
-      console.log('[harness] verification gate 连续注入已达上限，强制结束');
-      return returnVerificationExhausted();
-    } else {
-      state.verificationGateContinuationCount++;
-      console.log(
-        `[harness] verification gate 注入 (${state.verificationGateContinuationCount}/${MAX_VERIFICATION_GATE_CONTINUATIONS})`,
-      );
-      pushAssistantForHistory(msgs, response);
-      let prompt: string;
-      if (acceptanceIncomplete && state.taskAcceptance) {
-        prompt = state.taskAcceptance.buildAcceptancePrompt();
-      } else {
-        prompt = state.taskState.buildVerificationPrompt();
-      }
-      const injectionParts = [
-        prompt,
-        '',
-        formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot(), workspaceRoot)),
-      ];
-      if (state.verificationGateContinuationCount === verificationGateHalfPoint()) {
-        console.log('[harness] verification gate 半程叠加 no_tool 强提示');
-        injectionParts.push('', buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap));
-      }
-      injectContinuationUserMessage(deps, state, msgs, injectionParts.join('\n'));
-      await resilienceSaveCheckpoint(deps, 'verification_started', state);
-      state.transition = 'stop_hook_continue';
-      return { action: 'continue' };
-    }
   }
 
-  if (
-    !universalCompletionEnabled
-    &&
-    !blockVerification
-    && !state.failedUnitTestReminderInjected
-    && state.taskState.shouldInjectFailedUnitTestReminder()
-  ) {
-    state.failedUnitTestReminderInjected = true;
-    console.log('[harness] 单测失败加强提示 inject（不 hard block）');
-    pushAssistantForHistory(msgs, response);
-    injectContinuationUserMessage(deps, state, msgs, [
-      state.taskState.buildFailedUnitTestReminderPrompt(),
-      '',
-      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), state.taskState.snapshot(), workspaceRoot)),
-    ].join('\n'));
-    state.transition = 'stop_hook_continue';
-    return { action: 'continue' };
-  }
-
-  let completionStatus: CompletionStatus = 'completed';
-  if (universalCompletionEnabled) {
-    const completionDecision = new CompletionGate().evaluate({
-      ledger: state.operationOutcomes,
-      explicitConditionsPending: acceptanceIncomplete,
-      // 当前无工具回复已经是模型读取工具结果后的自主收尾机会；
-      // 软提示位于 system prompt，不再强制追加 LLM 轮。
-      recoveryCount: Math.max(1, state.completionRecoveryCount ?? 0),
-      evidenceRequestCount: Math.max(1, state.completionEvidenceRequestCount ?? 0),
-    });
-    completionStatus = completionDecision.status;
-
-    if (completionDecision.action === 'continue') {
-      const prompt = buildCompletionGatePrompt(completionDecision);
-      if (prompt) {
-        if (completionDecision.reason === 'operation_failed') {
-          state.completionRecoveryCount = (state.completionRecoveryCount ?? 0) + 1;
-        } else if (completionDecision.reason === 'high_risk_receipt_missing') {
-          state.completionEvidenceRequestCount = (state.completionEvidenceRequestCount ?? 0) + 1;
-        }
-        pushAssistantForHistory(msgs, response);
-        injectContinuationUserMessage(deps, state, msgs, prompt);
-        state.transition = 'no_tool_execution_recovery';
-        return { action: 'continue' };
-      }
-    }
-
-    if (completionDecision.action === 'pause' || completionDecision.action === 'fail') {
-      const reason = completionDecision.action === 'fail'
-        ? 'completion_failed'
-        : 'completion_paused';
-      const detail = completionDecision.reason === 'operation_pending'
-        ? '任务仍有未结束的操作或待审批事项，已暂停且未报告完成。'
-        : completionDecision.reason === 'high_risk_receipt_missing'
-          ? '高风险操作缺少结果回执，已暂停且未报告完成。'
-          : '操作未成功完成，已保留失败状态。';
-      const content = `${sanitizeAssistantContentForUser(response.content)}\n${detail}`.trim();
-      pushAssistantForHistory(msgs, response);
-      deps.loopController.stop(reason);
-      const finalState = deps.loopController.getState();
-      logger.loopStop(reason, finalState.currentRound, finalState.totalToolCalls);
-      await saveTaskCheckpoint(
-        deps,
-        completionDecision.action === 'fail' ? 'failed' : 'paused',
-        resolveCheckpointUserGoal(state, userMessage),
-        msgs,
-        state,
-        reason,
-      );
-      await resilienceSaveCheckpoint(deps, 'final_draft', state, reason);
-      recordTelemetrySummary(deps, reason, state);
-      onStep?.({
-        type: 'final',
-        iteration: finalState.currentRound,
-        totalToolCalls: finalState.totalToolCalls,
-        content,
-        stopReason: reason,
-      });
-      return {
-        action: 'return',
-        result: {
-          content,
-          loopState: finalState,
-          messages: [...msgs],
-          log: logger.getEntries(),
-          completionStatus,
-        },
-      };
-    }
-  }
+  state.completionGateContinuationCount = 0;
+  state.completionGateBlockingSignature = undefined;
 
   if (
     currentTools.length > 0
@@ -566,35 +443,10 @@ export async function handleNoToolCalls(
     pushAssistantForHistory(msgs, response);
     msgs.push({
       role: 'user',
-      content: buildNoToolExecutionRecoveryPrompt(msgs, userMessage, taskSnap),
+      content: buildNoToolExecutionRecoveryPrompt(),
     });
     state.transition = 'no_tool_execution_recovery';
     return { action: 'continue' };
-  }
-
-  if (
-    pendingWork
-    && state.prematureCompletionRecoveryCount < MAX_PREMATURE_COMPLETION_RECOVERY
-  ) {
-    state.prematureCompletionRecoveryCount++;
-    console.log(
-      `[harness] 验收/诊断未清，拦截 model_done (${state.prematureCompletionRecoveryCount}/${MAX_PREMATURE_COMPLETION_RECOVERY})`,
-    );
-    pushAssistantForHistory(msgs, response);
-    injectContinuationUserMessage(deps, state, msgs, [
-      buildIncompleteContinuationPrompt(taskSnap, repoSnap, state.taskAcceptance, workspaceRoot),
-      '',
-      formatToolPlan(buildToolPlan(getLatestRealUserText(msgs, userMessage), taskSnap, workspaceRoot)),
-    ].join('\n'));
-    await saveTaskCheckpoint(deps, 'paused', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
-    await resilienceSaveCheckpoint(deps, 'verification_started', state);
-    state.transition = 'no_tool_execution_recovery';
-    return { action: 'continue' };
-  }
-
-  if (pendingWork) {
-    console.log('[harness] 验收未清，拒绝 model_done');
-    return returnVerificationExhausted('任务仍有未完成的验收项。');
   }
 
   state.stopHookContinuationCount = 0;
@@ -606,13 +458,15 @@ export async function handleNoToolCalls(
     }
   }
 
-  const checkpointStatus = pendingWork ? 'paused' : 'completed';
   deps.loopController.stop('model_done');
   const finalState = deps.loopController.getState();
   logger.loopStop('model_done', finalState.currentRound, finalState.totalToolCalls);
-  await saveTaskCheckpoint(deps, checkpointStatus, resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
+  await saveTaskCheckpoint(deps, 'completed', resolveCheckpointUserGoal(state, userMessage), msgs, state, 'model_done');
   await resilienceSaveCheckpoint(deps, 'final_draft', state, 'model_done');
-  recordTelemetrySummary(deps, 'model_done', state);
+  recordTelemetrySummary(deps, 'model_done', state, {
+    status: completionDecision.status,
+    reason: completionDecision.reason,
+  });
 
   onStep?.({
     type: 'final',
@@ -620,6 +474,8 @@ export async function handleNoToolCalls(
     totalToolCalls: finalState.totalToolCalls,
     content: sanitizeAssistantContentForUser(response.content),
     stopReason: 'model_done',
+    completionStatus: completionDecision.status,
+    completionReason: completionDecision.reason,
     tokenUsage: { inputTokens: tokenUsage.input, outputTokens: tokenUsage.output },
     totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
       lastInputTokens: finalState.lastInputTokens,
@@ -634,7 +490,7 @@ export async function handleNoToolCalls(
       loopState: finalState,
       messages: [...msgs],
       log: logger.getEntries(),
-      ...(universalCompletionEnabled ? { completionStatus } : {}),
+      completionStatus,
     },
   };
 }

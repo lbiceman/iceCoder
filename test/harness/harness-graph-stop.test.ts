@@ -7,6 +7,7 @@ import { TaskState } from '../../src/harness/task-state.js';
 import { RepoContext } from '../../src/harness/repo-context.js';
 import { LoopController } from '../../src/harness/loop-controller.js';
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
+import { TaskAcceptanceTracker } from '../../src/harness/task-acceptance-tracker.js';
 
 function makeState(): HarnessRunState {
   return {
@@ -17,13 +18,12 @@ function makeState(): HarnessRunState {
     llmRetryCount: 0,
     emptyResponseRetryCount: 0,
     reasoningOnlyRecoveryCount: 0,
-    prematureCompletionRecoveryCount: 0,
     consecutiveToolFailures: 0,
     consecutiveReadOnlyRounds: 0,
     noToolExecutionRecoveryCount: 0,
     taskSwitchInjected: false,
     stopHookContinuationCount: 0,
-    verificationGateContinuationCount: 0,
+    completionGateContinuationCount: 0,
     transition: 'initial',
     justCompacted: false,
     amnesiaRecoveryCount: 0,
@@ -99,7 +99,7 @@ describe('tryGraphTerminalStop', () => {
     expect(onStep).toHaveBeenCalledWith(expect.objectContaining({ type: 'task_graph_done' }));
   });
 
-  it('pendingWork 存在时不强制停止', async () => {
+  it('旧验证状态不会阻塞统一图收尾', async () => {
     const loopController = new LoopController({ maxRounds: 10 });
     const executor = new GraphExecutor();
     finishGraph(executor);
@@ -128,10 +128,10 @@ describe('tryGraphTerminalStop', () => {
       },
     );
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
   });
 
-  it('写后读 pending（有 writeVersion 无 confirm）时不强制停止', async () => {
+  it('旧文件确认状态不会形成第二套图门控', async () => {
     const loopController = new LoopController({ maxRounds: 10 });
     const executor = new GraphExecutor();
     finishGraph(executor);
@@ -141,7 +141,7 @@ describe('tryGraphTerminalStop', () => {
       { id: 'w1', name: 'write_file', arguments: { path: 'src/a.ts' } },
       { success: true, output: 'ok' },
     );
-    expect(shouldBlockGraphTerminalStop(state)).toBe(true);
+    expect(shouldBlockGraphTerminalStop(state)).toBe(false);
 
     const result = await tryGraphTerminalStop(
       {
@@ -158,7 +158,19 @@ describe('tryGraphTerminalStop', () => {
       },
     );
 
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+  });
+
+  it('显式 required 条件未满足时阻塞图收尾', () => {
+    const state = makeState();
+    state.tools = [
+      { name: 'run_command', description: 'run', parameters: { type: 'object', properties: {} } },
+    ];
+    state.taskAcceptance = new TaskAcceptanceTracker(
+      '完成条件：必须运行 `node --check target.js` 后才能结束',
+    );
+
+    expect(shouldBlockGraphTerminalStop(state)).toBe(true);
   });
 
   it('verificationStatus=failed 时不拦截 graph-stop', async () => {

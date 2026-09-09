@@ -60,11 +60,18 @@ export function recordTelemetrySummary(
     repoContext: RepoContext;
     harnessPolicyStats?: import('./harness-policy-stats.js').HarnessPolicyStats;
   },
+  completion?: {
+    status: import('./completion-gate.js').CompletionStatus;
+    reason: import('./completion-gate.js').CompletionGateReason;
+  },
 ): void {
   const loopState = deps.loopController.getState();
   const task = runtimeState.taskState.snapshot();
   deps.runtimeTelemetry?.recordSummary({
     stopReason,
+    ...(completion
+      ? { completionStatus: completion.status, completionReason: completion.reason }
+      : {}),
     task,
     repo: runtimeState.repoContext.snapshot(),
     rounds: loopState.currentRound,

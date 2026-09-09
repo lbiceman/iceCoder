@@ -9,36 +9,27 @@ import type { HarnessRunState } from './harness-run-state.js';
 import type { HarnessLogger } from './logger.js';
 import type { LoopController } from './loop-controller.js';
 import type { GraphExecutor } from './task-graph-executor.js';
-import { hasPendingWork } from './incomplete-completion.js';
-import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import { sanitizeAssistantContentForUser } from './text-tool-call-salvage.js';
 import type { HarnessResult, HarnessStepEvent } from './types.js';
 import { CompletionGate } from './completion-gate.js';
+import { buildCompletionGateInput } from './completion-context.js';
 
 export interface GraphStopDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
   workspaceRoot?: string;
 }
 
-/** 图 terminal 时是否应继续跑（与 Verification Gate 同标尺 + pendingWork） */
+/** 图 terminal 与普通无工具收尾共用同一个 CompletionGate。 */
 export function shouldBlockGraphTerminalStop(
   state: HarnessRunState,
   workspaceRoot?: string,
 ): boolean {
-  const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
-  if (state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot)) {
-    if (!state.operationOutcomes) return true;
-  }
-  if (state.operationOutcomes) {
-    const completion = new CompletionGate().evaluate({
-      ledger: state.operationOutcomes,
-      explicitConditionsPending: acceptanceIncomplete,
-      recoveryCount: state.completionRecoveryCount,
-      evidenceRequestCount: state.completionEvidenceRequestCount,
-    });
-    if (completion.action !== 'complete') return true;
-  }
-  return hasPendingWork(state.taskState.snapshot(), state.taskAcceptance, workspaceRoot);
+  const completion = new CompletionGate().evaluate(buildCompletionGateInput(state, {
+    answerReady: true,
+    currentTools: state.tools,
+    workspaceRoot,
+  }));
+  return completion.action !== 'complete';
 }
 
 export interface TryGraphTerminalStopArgs {
@@ -51,8 +42,7 @@ export interface TryGraphTerminalStopArgs {
 }
 
 /**
- * 任务图已 terminal 且无 pending 验收工作时强制以 model_done 结束，避免图完成后空转。
- * 工程变更未跑单测 / Acceptance Gate pending 时不拦截（与 Verification Gate 同标尺）。
+ * 任务图已 terminal 且统一收尾门控允许完成时，以 model_done 结束。
  */
 export async function tryGraphTerminalStop(
   deps: GraphStopDeps,
@@ -66,6 +56,11 @@ export async function tryGraphTerminalStop(
   if (shouldBlockGraphTerminalStop(state, deps.workspaceRoot)) {
     return null;
   }
+  const completion = new CompletionGate().evaluate(buildCompletionGateInput(state, {
+    answerReady: true,
+    currentTools,
+    workspaceRoot: deps.workspaceRoot,
+  }));
 
   onStep?.({ type: 'task_graph_done' });
 
@@ -83,7 +78,10 @@ export async function tryGraphTerminalStop(
     'model_done',
   );
   await resilienceSaveCheckpoint(deps, 'final_draft', state, 'model_done');
-  recordTelemetrySummary(deps, 'model_done', state);
+  recordTelemetrySummary(deps, 'model_done', state, {
+    status: completion.status,
+    reason: completion.reason,
+  });
 
   const finalContent = resolveGraphDoneFinalContent(msgs);
 
@@ -93,6 +91,8 @@ export async function tryGraphTerminalStop(
     totalToolCalls: finalState.totalToolCalls,
     content: finalContent,
     stopReason: 'model_done',
+    completionStatus: completion.status,
+    completionReason: completion.reason,
     totalTokenUsage: buildTotalTokenUsageWithContext(msgs, currentTools, {
       lastInputTokens: finalState.lastInputTokens,
       lastOutputTokens: finalState.lastOutputTokens,
@@ -106,16 +106,7 @@ export async function tryGraphTerminalStop(
     loopState: finalState,
     messages: [...msgs],
     log: logger.getEntries(),
-    ...(state.operationOutcomes
-      ? {
-          completionStatus: new CompletionGate().evaluate({
-            ledger: state.operationOutcomes,
-            explicitConditionsPending: false,
-            recoveryCount: state.completionRecoveryCount,
-            evidenceRequestCount: state.completionEvidenceRequestCount,
-          }).status,
-        }
-      : {}),
+    completionStatus: completion.status,
   };
 }
 

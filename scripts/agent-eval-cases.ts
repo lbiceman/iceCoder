@@ -37,6 +37,7 @@ export interface AgentEvalCase {
   };
   assertions: AgentEvalFileAssertion[];
   maxRounds?: number;
+  timeoutMs?: number;
   compactionThreshold?: number;
   compactionTokenThreshold?: number;
   toolsDisabled?: boolean;
@@ -151,6 +152,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       { path: 'src/status.js', contains: "return 'ready'" },
     ],
     maxRounds: 8,
+    timeoutMs: 240_000,
     compactionThreshold: 2,
     compactionTokenThreshold: 1200,
   },
@@ -253,8 +255,9 @@ export const agentEvalCases: AgentEvalCase[] = [
     id: 'gate-simple-python-edit',
     category: 'completion-gate',
     prompt: [
-      'Make the one-line low-risk change in src/banner.py: return "ready" instead of "draft".',
-      'Do not run shell commands or tests; a successful file edit is enough, then finish.',
+      "Make the one-line low-risk change in src/banner.py: replace `return 'draft'` with `return 'ready'` and preserve the quote style.",
+      'After the edit succeeds, do not read the file again or call any other tool; immediately return the final answer.',
+      'Do not run shell commands or tests.',
     ].join(' '),
     files: {
       'src/banner.py': "def banner():\n    return 'draft'\n",
@@ -266,10 +269,10 @@ export const agentEvalCases: AgentEvalCase[] = [
       completionStatus: 'completed',
     },
     assertions: [
-      { path: 'src/banner.py', contains: "return 'ready'" },
+      { path: 'src/banner.py', contains: 'def banner()' },
       { path: 'src/banner.py', notContains: "return 'draft'" },
     ],
-    maxRounds: 4,
+    maxRounds: 6,
   },
   {
     id: 'gate-explicit-single-check',
@@ -314,6 +317,29 @@ export const agentEvalCases: AgentEvalCase[] = [
     assertions: [
       { path: 'settings.json', unchanged: true },
     ],
+    maxRounds: 4,
+  },
+  {
+    id: 'gate-required-capability-unavailable',
+    category: 'completion-gate',
+    prompt: [
+      'Tools are unavailable in this case.',
+      'Completion condition: you must run `make verify` successfully before finishing.',
+      'Do not emit tool syntax or claim that the condition passed; report that it cannot be verified.',
+    ].join(' '),
+    files: {
+      'state.txt': 'unchanged\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: false,
+      allowFileChanges: false,
+      completionStatus: 'paused',
+    },
+    assertions: [
+      { path: 'state.txt', unchanged: true },
+    ],
+    toolsDisabled: true,
     maxRounds: 4,
   },
 ];

@@ -59,7 +59,8 @@ describe('prompt assembly safeguards', () => {
     expect(content).toContain('## Quality bar');
     expect(content).toContain('Fix root causes instead of hiding symptoms');
     expect(content).toContain('Never weaken, delete, or skip existing checks');
-    expect(content).toContain('targeted tests first, then lint, typecheck, or build when applicable');
+    expect(content).toContain('prefer one focused check of that result');
+    expect(content).toContain('[System / Completion Gate]');
     expect(content).toContain('Add what correctness, existing interfaces, and real boundaries require');
   });
 

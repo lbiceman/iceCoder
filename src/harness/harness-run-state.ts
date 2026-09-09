@@ -45,8 +45,6 @@ export interface HarnessRunState {
   emptyResponseRetryCount: number;
   /** 仅 reasoning 无 toolCalls 时的恢复次数 */
   reasoningOnlyRecoveryCount: number;
-  /** 验收未清时拦截 model_done 的次数 */
-  prematureCompletionRecoveryCount: number;
   /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
   consecutiveToolFailures: number;
   /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */
@@ -57,10 +55,6 @@ export interface HarnessRunState {
   taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */
   stopHookContinuationCount: number;
-  /** verification gate 连续注入计数（模型未调工具时熔断） */
-  verificationGateContinuationCount: number;
-  /** 单测失败时是否已 inject 加强提示（每 run 一次，不 hard block） */
-  failedUnitTestReminderInjected: boolean;
   /** 上一次 continue 的原因 */
   transition: Transition;
   /** 本轮是否刚刚完成上下文压缩 */
@@ -103,10 +97,10 @@ export interface HarnessRunState {
   taskAcceptance?: TaskAcceptanceTracker;
   /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
   operationOutcomes?: OperationOutcomeLedger;
-  /** 通用收尾：失败后最多一次纠正提示。 */
-  completionRecoveryCount?: number;
-  /** 通用收尾：高风险缺回执时最多一次确认提示。 */
-  completionEvidenceRequestCount?: number;
+  /** 统一收尾门控已注入的有界续轮数。 */
+  completionGateContinuationCount: number;
+  /** 上一次阻塞快照；相同快照不得重复注入。 */
+  completionGateBlockingSignature?: string;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */

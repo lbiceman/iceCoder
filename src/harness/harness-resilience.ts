@@ -7,6 +7,8 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import type { CheckpointEngine } from './checkpoint-engine.js';
 import { shouldSkipResilienceCheckpoint } from './casual-mode.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { buildCompletionGateInput } from './completion-context.js';
+import { CompletionGate } from './completion-gate.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
@@ -255,10 +257,11 @@ export async function resilienceSaveCheckpoint(
         verificationOutputTail: checkpointVerificationOutputTail(state),
         acceptanceGate: checkpointAcceptanceGate(state),
         ...checkpointHarnessEscalationFields(state),
-        verificationPending: state.taskState.isVerificationBlockingFinalAfterSync(
-          state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
-          deps.workspaceRoot,
-        ),
+        verificationPending: new CompletionGate().evaluate(buildCompletionGateInput(state, {
+          answerReady: true,
+          currentTools: state.tools,
+          workspaceRoot: deps.workspaceRoot,
+        })).action !== 'complete',
         lastStopReason: stopReason,
       });
     } catch (err) {

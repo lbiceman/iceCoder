@@ -93,6 +93,26 @@ describe('task-acceptance-tracker', () => {
     expect(normalizeAcceptanceCommandKey('cd /tmp')).toBe('cd /tmp');
   });
 
+  it('normalizes an executable path and platform suffix by identity', () => {
+    expect(normalizeAcceptanceCommandKey('C:\\tools\\make.exe verify')).toBe('make verify');
+    expect(normalizeAcceptanceCommandKey('"/opt/tools/make" verify')).toBe('make verify');
+  });
+
+  it('exports tracked progress as evidence-backed completion conditions', () => {
+    const tracker = new TaskAcceptanceTracker(
+      '完成条件：必须运行 `make verify` 后才能结束。',
+    );
+    tracker.recordRunCommand('C:\\tools\\make.exe verify', true, 'tool-1');
+
+    expect(tracker.toCompletionConditions()).toEqual([
+      expect.objectContaining({
+        required: true,
+        status: 'satisfied',
+        evidenceRefs: ['tool-1'],
+      }),
+    ]);
+  });
+
   it('normalizeAcceptanceCommandKey normalizes playwright/cypress e2e to `npm run test:e2e`', () => {
     expect(normalizeAcceptanceCommandKey('npx playwright test --reporter=list')).toBe('npm run test:e2e');
     expect(normalizeAcceptanceCommandKey('cd /d E:\\app && npx playwright test')).toBe('npm run test:e2e');

@@ -2,7 +2,6 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
-  engineeringTestTargetPaths,
   extractDeletedPathsFromCommand,
   deliverableVersionFromMap,
   gateConfirmationPaths,
@@ -15,9 +14,6 @@ import {
   normalizeDeliverablePath,
   pathsReferToSameFile,
   hasEngineeringTestTargets,
-  isEngineeringUnitTestTargetPath,
-  shouldInjectFailedUnitTestReminder,
-  shouldPromptEngineeringUnitTest,
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
@@ -159,49 +155,6 @@ export class TaskState {
     return classifyChangedFiles([...this.filesChanged]);
   }
 
-  buildVerificationPrompt(): string {
-    const targets = engineeringTestTargetPaths([...this.filesChanged]);
-    const maxList = 12;
-    const listed = targets.slice(0, maxList);
-    const fileList = listed.length > 0
-      ? listed.map(f => `- ${f}`).join('\n')
-      : '- (no engineering source paths — skip unit tests)';
-    const more = targets.length > maxList
-      ? `\n- … and ${targets.length - maxList} more`
-      : '';
-
-    return `[System] You changed source code but have not run unit tests yet.
-
-Before finishing, consider running unit tests for these changed files (pick the command for this project — mvn test, pytest, go test, cargo test, npm test, etc.):
-${fileList}${more}
-
-If you're confident the changes are correct and low-risk, you may finish with a brief note. Otherwise use run_command to verify and fix any failures.`;
-  }
-
-  buildFailedUnitTestReminderPrompt(): string {
-    const targets = engineeringTestTargetPaths([...this.filesChanged]);
-    const maxList = 8;
-    const listed = targets.slice(0, maxList);
-    const fileList = listed.map(f => `- ${f}`).join('\n');
-    const more = targets.length > maxList
-      ? `\n- … and ${targets.length - maxList} more`
-      : '';
-
-    return `[System] Unit tests failed for your recent changes.
-
-If you can fix them, re-run tests via run_command and address failures. If not, you may finish — but state the failure plainly in your summary.
-
-Changed source files:
-${fileList}${more}`;
-  }
-
-  /** 模型在 Verification Gate 提醒后选择不跑测收尾 */
-  markVerificationWaived(): void {
-    if (this.verificationStatus === 'required') {
-      this.verificationStatus = 'not_required';
-    }
-  }
-
   /** filesChanged 中缺少 writeVersion 的路径补版本（checkpoint 恢复或历史审计遗留） */
   reconcileOrphanFileDeliverableWriteVersions(workspaceRoot?: string): number {
     let fixed = 0;
@@ -222,10 +175,6 @@ ${fileList}${more}`;
     return fixed;
   }
 
-  pendingFileDeliverableCount(workspaceRoot?: string): number {
-    return this.isVerificationBlockingFinal(false, workspaceRoot) ? 1 : 0;
-  }
-
   /** 续跑时覆盖被「继续」污染的 goal/intent */
   rebindGoal(goal: string): void {
     this.goal = goal;
@@ -241,39 +190,19 @@ ${fileList}${more}`;
     }
   }
 
-  /** Acceptance Gate：全部验收命令通过后同步为 passed。 */
+  /** 兼容适配器：全部显式条件满足后同步为 passed。 */
   markVerificationPassed(): void {
     this.verificationRequired = true;
     this.verificationStatus = 'passed';
     this.phase = 'verification';
   }
 
-  /** Acceptance Gate：仍有未跑或未过的验收命令。 */
+  /** 兼容适配器：仍有显式条件未满足。 */
   markVerificationRequired(): void {
     this.verificationRequired = true;
     if (this.verificationStatus !== 'failed') {
       this.verificationStatus = 'required';
     }
-  }
-
-  /**
-   * 纯查询：是否应 inject 单元测试提示并 continue（无副作用）。
-   * Acceptance Gate 或工程变更未跑单测时可 block；测失败不 block（仅加强提示）。
-   */
-  isVerificationBlockingFinal(acceptanceIncomplete?: boolean, workspaceRoot?: string): boolean {
-    if (acceptanceIncomplete) return true;
-    return shouldPromptEngineeringUnitTest(
-      [...this.filesChanged],
-      this.verificationStatus,
-    );
-  }
-
-  /** 查询前同步（checkpoint / resilience 用） */
-  isVerificationBlockingFinalAfterSync(
-    acceptanceIncomplete?: boolean,
-    workspaceRoot?: string,
-  ): boolean {
-    return this.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
   }
 
   areAllFileDeliverablesConfirmed(workspaceRoot?: string): boolean {
@@ -283,31 +212,6 @@ ${fileList}${more}`;
       mapToVersionRecord(this.fileDeliverableConfirmVersion),
       workspaceRoot,
     );
-  }
-
-  /** verification gate 熔断：工程变更均已测过时不 block */
-  reconcileFileDeliverablesAfterWrite(_workspaceRoot?: string): boolean {
-    return !shouldPromptEngineeringUnitTest(
-      [...this.filesChanged],
-      this.verificationStatus,
-    );
-  }
-
-  shouldInjectFailedUnitTestReminder(): boolean {
-    return shouldInjectFailedUnitTestReminder(
-      [...this.filesChanged],
-      this.verificationStatus,
-    );
-  }
-
-  /** 本轮是否成功写入工程源码（供 Harness 重置失败提醒） */
-  isEngineeringWriteToolCall(toolCall: ToolCall, result: ToolResult): boolean {
-    if (!result.success) return false;
-    const writeTools = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
-    if (!writeTools.has(toolCall.name)) return false;
-    const path = extractPathLikeArg(toolCall.arguments);
-    if (!path) return false;
-    return isEngineeringUnitTestTargetPath(path);
   }
 
   /**

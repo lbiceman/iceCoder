@@ -1,4 +1,5 @@
 import type { OperationOutcome, OperationOutcomeLedger } from './operation-outcome.js';
+import type { CompletionCondition } from './completion-condition.js';
 
 export type CompletionStatus =
   | 'completed'
@@ -8,26 +9,34 @@ export type CompletionStatus =
   | 'interrupted';
 
 export type CompletionGateAction = 'complete' | 'continue' | 'pause' | 'fail';
+export type CompletionGateReason =
+  | 'condition_pending'
+  | 'condition_failed'
+  | 'condition_unverifiable'
+  | 'operation_pending'
+  | 'operation_failed'
+  | 'high_risk_receipt_missing'
+  | 'answer_not_ready'
+  | 'settled'
+  | 'settled_without_independent_receipt';
 
 export interface CompletionGateInput {
   ledger?: OperationOutcomeLedger;
-  explicitConditionsPending?: boolean;
-  recoveryCount?: number;
-  evidenceRequestCount?: number;
+  conditions?: readonly CompletionCondition[];
+  answerReady?: boolean;
+  continuationCount?: number;
+  previousBlockingSignature?: string;
+  maxContinuations?: number;
 }
 
 export interface CompletionGateDecision {
   action: CompletionGateAction;
   status: CompletionStatus;
-  reason:
-    | 'explicit_condition_pending'
-    | 'operation_pending'
-    | 'operation_failed'
-    | 'high_risk_receipt_missing'
-    | 'settled'
-    | 'settled_without_independent_receipt';
+  reason: CompletionGateReason;
   prompt?: string;
   outcome?: OperationOutcome;
+  condition?: CompletionCondition;
+  blockingSignature?: string;
 }
 
 /**
@@ -36,11 +45,40 @@ export interface CompletionGateDecision {
  */
 export class CompletionGate {
   evaluate(input: CompletionGateInput): CompletionGateDecision {
-    if (input.explicitConditionsPending) {
+    const blockingCondition = findBlockingCondition(input.conditions ?? [], input.ledger);
+    if (blockingCondition) {
+      const reason = blockingCondition.status === 'failed'
+        ? 'condition_failed'
+        : blockingCondition.status === 'unverifiable'
+          ? 'condition_unverifiable'
+          : 'condition_pending';
+      const blockingSignature = `condition:${blockingCondition.id}:${blockingCondition.status}`;
+      if (reason === 'condition_unverifiable') {
+        return {
+          action: 'pause',
+          status: 'paused',
+          reason,
+          condition: blockingCondition,
+          blockingSignature,
+        };
+      }
+      if (canContinue(input, blockingSignature)) {
+        const decision: CompletionGateDecision = {
+          action: 'continue',
+          status: reason === 'condition_failed' ? 'failed' : 'paused',
+          reason,
+          condition: blockingCondition,
+          blockingSignature,
+        };
+        decision.prompt = buildConditionPrompt(input.conditions ?? [], reason);
+        return decision;
+      }
       return {
-        action: 'continue',
-        status: 'paused',
-        reason: 'explicit_condition_pending',
+        action: reason === 'condition_failed' ? 'fail' : 'pause',
+        status: reason === 'condition_failed' ? 'failed' : 'paused',
+        reason,
+        condition: blockingCondition,
+        blockingSignature,
       };
     }
 
@@ -51,37 +89,45 @@ export class CompletionGate {
         status: 'paused',
         reason: 'operation_pending',
         outcome: pending,
+        blockingSignature: `pending:${pending.scope}`,
       };
     }
 
     const failure = input.ledger?.latestUnresolvedFailure();
     if (failure) {
-      if ((input.recoveryCount ?? 0) < 1 && failure.disposition !== 'user_denied') {
+      const blockingSignature = `failure:${failure.scope}`;
+      const cannotRetry = failure.disposition === 'user_denied'
+        || failure.disposition === 'policy_block';
+      if (!cannotRetry && canContinue(input, blockingSignature)) {
         return {
           action: 'continue',
           status: 'failed',
           reason: 'operation_failed',
           outcome: failure,
           prompt: buildFailurePrompt(failure),
+          blockingSignature,
         };
       }
       return {
-        action: failure.disposition === 'user_denied' ? 'pause' : 'fail',
-        status: failure.disposition === 'user_denied' ? 'paused' : 'failed',
+        action: cannotRetry ? 'pause' : 'fail',
+        status: cannotRetry ? 'paused' : 'failed',
         reason: 'operation_failed',
         outcome: failure,
+        blockingSignature,
       };
     }
 
     const missingReceipt = input.ledger?.latestHighRiskWithoutReceipt();
     if (missingReceipt) {
-      if ((input.evidenceRequestCount ?? 0) < 1) {
+      const blockingSignature = `evidence:${missingReceipt.scope}`;
+      if (canContinue(input, blockingSignature)) {
         return {
           action: 'continue',
           status: 'paused',
           reason: 'high_risk_receipt_missing',
           outcome: missingReceipt,
           prompt: buildEvidencePrompt(missingReceipt),
+          blockingSignature,
         };
       }
       return {
@@ -89,7 +135,26 @@ export class CompletionGate {
         status: 'paused',
         reason: 'high_risk_receipt_missing',
         outcome: missingReceipt,
+        blockingSignature,
       };
+    }
+
+    if (input.answerReady === false) {
+      const blockingSignature = 'answer:not_ready';
+      return canContinue(input, blockingSignature)
+        ? {
+            action: 'continue',
+            status: 'paused',
+            reason: 'answer_not_ready',
+            prompt: '[System / Completion Gate] The requested result is not ready. Continue the current task without expanding its scope.',
+            blockingSignature,
+          }
+        : {
+            action: 'pause',
+            status: 'paused',
+            reason: 'answer_not_ready',
+            blockingSignature,
+          };
     }
 
     if (input.ledger?.hasCompletedMutation() && !input.ledger.hasIndependentReceipt()) {
@@ -110,10 +175,45 @@ export class CompletionGate {
 
 export function buildCompletionGatePrompt(decision: CompletionGateDecision): string | null {
   if (decision.prompt) return decision.prompt;
-  if (decision.reason === 'explicit_condition_pending') {
-    return '[System / Completion Gate] An explicit user completion condition is still pending. Satisfy that condition before finishing.';
-  }
   return null;
+}
+
+function canContinue(input: CompletionGateInput, blockingSignature: string): boolean {
+  const count = input.continuationCount ?? 0;
+  const max = input.maxContinuations ?? 3;
+  return count < max && input.previousBlockingSignature !== blockingSignature;
+}
+
+function findBlockingCondition(
+  conditions: readonly CompletionCondition[],
+  ledger: OperationOutcomeLedger | undefined,
+): CompletionCondition | undefined {
+  return conditions.find(condition => {
+    if (!condition.required) return false;
+    if (condition.status !== 'satisfied') return true;
+    if (condition.evidenceRefs.length === 0) return true;
+    return !condition.evidenceRefs.some(reference => {
+      const outcome = ledger?.getByToolCallId(reference);
+      return outcome?.status === 'completed';
+    });
+  });
+}
+
+function buildConditionPrompt(
+  conditions: readonly CompletionCondition[],
+  reason: 'condition_pending' | 'condition_failed',
+): string {
+  const pending = conditions.filter(condition =>
+    condition.required && condition.status !== 'satisfied',
+  );
+  return [
+    '[System / Completion Gate] Required completion conditions are not settled.',
+    ...pending.map(condition => `- ${condition.label}: ${condition.status}`),
+    reason === 'condition_failed'
+      ? 'Try one materially different corrective step if practical.'
+      : 'Satisfy all pending conditions together before finishing.',
+    'Do not repeat an unchanged action or perform unrelated checks.',
+  ].join('\n');
 }
 
 function buildFailurePrompt(outcome: OperationOutcome): string {
