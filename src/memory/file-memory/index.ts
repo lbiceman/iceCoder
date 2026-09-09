@@ -12,9 +12,11 @@
 export {
   loadMemoryPrompt,
   buildMemoryInstructions,
+  buildReadOnlyMemoryInstructions,
   truncateEntrypointContent,
   ensureMemoryDirExists,
 } from './memory-prompt.js';
+export type { LoadMemoryPromptOptions } from './memory-prompt.js';
 
 export {
   scanMemoryFiles,

@@ -82,7 +82,7 @@ export const agentEvalCases: AgentEvalCase[] = [
     verifyCommands: ['npm test'],
     expected: { requiresTool: true, requiresVerification: true },
     assertions: [
-      { path: 'src/discount.js', contains: '1 - rate' },
+      { path: 'src/discount.js', notContains: 'return price - rate;' },
     ],
   },
   {

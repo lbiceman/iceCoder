@@ -133,11 +133,11 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
           properties: {
             path: {
               type: 'string',
-              description: '要浏览的目录的绝对路径（如 D:\\Projects 或 /home/user/documents）',
+              description: 'Absolute directory path, for example D:\\Projects or /home/user/documents',
             },
             showHidden: {
               type: 'boolean',
-              description: '是否显示隐藏文件（以.开头的文件）',
+              description: 'Show hidden files whose names begin with a dot',
               default: false,
             },
           },
@@ -244,16 +244,16 @@ export function createFilesystemBrowserTools(): RegisteredTool[] {
           properties: {
             path: {
               type: 'string',
-              description: '要读取的文件的绝对路径（如 D:\\docs\\readme.txt）',
+              description: 'Absolute file path, for example D:\\docs\\readme.txt',
             },
             encoding: {
               type: 'string',
-              description: '文件编码，默认 utf-8',
+              description: 'File encoding; default utf-8',
               default: 'utf-8',
             },
             maxLines: {
               type: 'number',
-              description: '最多读取的行数，默认不限制。对于大文件建议设置此参数。',
+              description: 'Maximum lines to read; unlimited by default. Recommended for large files.',
             },
           },
           required: ['path'],

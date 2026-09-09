@@ -252,6 +252,7 @@ export class Harness {
       onShellMandatoryConfirm: this.onShellMandatoryConfirm,
       shellCollabActive: this.shellCollabActive,
       planModeActive: this.planModeActive,
+      ephemeralSystemContext: this.contextAssembler.buildEphemeralSystemContextMessage(),
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
       sessionDir: this.sessionDir,

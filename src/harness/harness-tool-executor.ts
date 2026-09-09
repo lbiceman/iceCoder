@@ -77,8 +77,8 @@ export interface ToolExecutorDeps {
 function formatToolFailureOutput(error: string | undefined, rawOutput: string): string {
   const message = error ?? 'Unknown error';
   const body = rawOutput.trim();
-  if (body) return `工具执行错误: ${message}\n\n${body}`;
-  return `工具执行错误: ${message}`;
+  if (body) return `Tool execution error: ${message}\n\n${body}`;
+  return `Tool execution error: ${message}`;
 }
 
 function observableToolArgs(tc: ToolCall): Record<string, any> {

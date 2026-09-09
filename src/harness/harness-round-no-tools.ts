@@ -410,8 +410,8 @@ export async function handleNoToolCalls(
     console.log('[harness] 验收仍 pending 但当前轮次无可用验收工具，强制结束');
     return returnVerificationExhausted(
       acceptanceIncomplete
-        ? 'Acceptance Gate 需要 run_command，但当前工具集不可用。'
-        : '工程源码变更需要 run_command 跑单元测试，但当前工具集不可用。',
+        ? 'The Acceptance Gate requires run_command, but that tool is unavailable.'
+        : 'Source changes require unit tests through run_command, but that tool is unavailable.',
     );
   } else if (blockVerification) {
     if (!acceptanceIncomplete && state.verificationGateContinuationCount >= 1) {

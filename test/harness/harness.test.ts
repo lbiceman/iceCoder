@@ -389,7 +389,7 @@ describe('Harness - 工具调用循环', () => {
 
     expect(result.content).toBe('File does not exist');
     // 消息中应该包含工具错误
-    const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('工具执行错误'));
+    const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('Tool execution error'));
     expect(toolMsg).toBeDefined();
   });
 });

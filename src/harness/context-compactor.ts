@@ -978,8 +978,10 @@ Continue the conversation from where it left off without asking the user any fur
         if (toolName && FILE_TOOLS.has(toolName)) return msg; // 保留完整内容
 
         const content = msg.content;
-        const isError = content.startsWith('工具执行错误') || content.startsWith('工具调用被拒绝');
-        const status = isError ? '失败' : '成功';
+        const isError = content.startsWith('Tool execution error')
+          || content.startsWith('工具执行错误')
+          || content.startsWith('工具调用被拒绝');
+        const status = isError ? 'failed' : 'succeeded';
         const preview = content.substring(0, 50).replace(/\n/g, ' ');
         return { ...msg, content: `[${status}] ${preview}${content.length > 50 ? '...' : ''}` };
       }
@@ -1194,11 +1196,11 @@ Continue the conversation from where it left off without asking the user any fur
     const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     const lines: string[] = [];
-    lines.push(`以下是之前 ${messages.length} 条对话的结构化摘要：`);
+    lines.push(`Structured summary of the previous ${messages.length} messages:`);
 
     for (const msg of messages) {
       if (msg.role === 'user') {
-        const content = typeof msg.content === 'string' ? msg.content : '[多模态内容]';
+        const content = typeof msg.content === 'string' ? msg.content : '[multimodal content]';
         if (
           content.startsWith('<system-reminder>')
           || content.startsWith('<context-summary>')
@@ -1207,7 +1209,7 @@ Continue the conversation from where it left off without asking the user any fur
           continue;
         }
         const truncated = content.length > 100 ? content.substring(0, 100) + '...' : content;
-        lines.push(`- 用户: ${truncated}`);
+        lines.push(`- User: ${truncated}`);
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           const toolNames = msg.toolCalls.map(tc => {
@@ -1215,24 +1217,28 @@ Continue the conversation from where it left off without asking the user any fur
             const truncatedArgs = argsStr.length > 80 ? argsStr.substring(0, 80) + '...' : argsStr;
             return `${tc.name}(${truncatedArgs})`;
           });
-          lines.push(`- 助手调用工具: ${toolNames.join(', ')}`);
+          lines.push(`- Assistant tool calls: ${toolNames.join(', ')}`);
         } else {
           const content = typeof msg.content === 'string' ? msg.content : '';
           if (content) {
             const truncated = content.length > 100 ? content.substring(0, 100) + '...' : content;
-            lines.push(`- 助手: ${truncated}`);
+            lines.push(`- Assistant: ${truncated}`);
           }
         }
       } else if (msg.role === 'tool') {
         const content = typeof msg.content === 'string' ? msg.content : '';
-        const isError = content.startsWith('工具执行错误') || content.startsWith('工具调用被拒绝') || content.startsWith('[失败]');
+        const isError = content.startsWith('Tool execution error')
+          || content.startsWith('工具执行错误')
+          || content.startsWith('工具调用被拒绝')
+          || content.startsWith('[failed]')
+          || content.startsWith('[失败]');
         const status = isError ? '❌' : '✅';
 
         // 文件操作工具的结果保留更多内容（500 字符而非 80）
         const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
         const maxLen = (toolName && FILE_TOOLS.has(toolName)) ? 500 : 80;
         const truncated = content.length > maxLen ? content.substring(0, maxLen) + '...' : content;
-        lines.push(`  ${status} 结果: ${truncated}`);
+        lines.push(`  ${status} Result: ${truncated}`);
       }
     }
 
