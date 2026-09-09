@@ -13,6 +13,7 @@ import { hasPendingWork } from './incomplete-completion.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import { sanitizeAssistantContentForUser } from './text-tool-call-salvage.js';
 import type { HarnessResult, HarnessStepEvent } from './types.js';
+import { CompletionGate } from './completion-gate.js';
 
 export interface GraphStopDeps extends CheckpointDeps, ResilienceBridgeDeps {
   loopController: LoopController;
@@ -26,7 +27,16 @@ export function shouldBlockGraphTerminalStop(
 ): boolean {
   const acceptanceIncomplete = hasPendingAcceptanceWork(state.taskAcceptance);
   if (state.taskState.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot)) {
-    return true;
+    if (!state.operationOutcomes) return true;
+  }
+  if (state.operationOutcomes) {
+    const completion = new CompletionGate().evaluate({
+      ledger: state.operationOutcomes,
+      explicitConditionsPending: acceptanceIncomplete,
+      recoveryCount: state.completionRecoveryCount,
+      evidenceRequestCount: state.completionEvidenceRequestCount,
+    });
+    if (completion.action !== 'complete') return true;
   }
   return hasPendingWork(state.taskState.snapshot(), state.taskAcceptance, workspaceRoot);
 }
@@ -96,6 +106,16 @@ export async function tryGraphTerminalStop(
     loopState: finalState,
     messages: [...msgs],
     log: logger.getEntries(),
+    ...(state.operationOutcomes
+      ? {
+          completionStatus: new CompletionGate().evaluate({
+            ledger: state.operationOutcomes,
+            explicitConditionsPending: false,
+            recoveryCount: state.completionRecoveryCount,
+            evidenceRequestCount: state.completionEvidenceRequestCount,
+          }).status,
+        }
+      : {}),
   };
 }
 

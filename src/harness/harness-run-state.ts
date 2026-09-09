@@ -6,6 +6,7 @@ import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
+import type { OperationOutcomeLedger } from './operation-outcome.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -100,6 +101,12 @@ export interface HarnessRunState {
   verificationOutputBuffer: VerificationOutputBuffer;
   /** 长跑任务多命令验收门禁（npm ci → test → build → e2e） */
   taskAcceptance?: TaskAcceptanceTracker;
+  /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
+  operationOutcomes?: OperationOutcomeLedger;
+  /** 通用收尾：失败后最多一次纠正提示。 */
+  completionRecoveryCount?: number;
+  /** 通用收尾：高风险缺回执时最多一次确认提示。 */
+  completionEvidenceRequestCount?: number;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */

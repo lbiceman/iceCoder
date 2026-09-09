@@ -6,7 +6,8 @@ export type AgentEvalCategory =
   | 'memory-conflict'
   | 'tool-failure'
   | 'async-subagent'
-  | 'eval-mode';
+  | 'eval-mode'
+  | 'completion-gate';
 
 export interface AgentEvalFileAssertion {
   path: string;
@@ -27,6 +28,12 @@ export interface AgentEvalCase {
     requiresVerification?: boolean;
     allowFileChanges?: boolean;
     requiresAnalysisArtifact?: boolean;
+    /** 软验证场景：不允许 Harness 强推 shell 验证。 */
+    forbidVerification?: boolean;
+    /** 通用收尾协议的结构化终态。 */
+    completionStatus?: 'completed' | 'completed_unverified' | 'paused' | 'failed' | 'interrupted';
+    /** 最终用户可见文本应包含。 */
+    finalContains?: string;
   };
   assertions: AgentEvalFileAssertion[];
   maxRounds?: number;
@@ -241,5 +248,72 @@ export const agentEvalCases: AgentEvalCase[] = [
     ],
     toolsDisabled: true,
     maxRounds: 2,
+  },
+  {
+    id: 'gate-simple-python-edit',
+    category: 'completion-gate',
+    prompt: [
+      'Make the one-line low-risk change in src/banner.py: return "ready" instead of "draft".',
+      'Do not run shell commands or tests; a successful file edit is enough, then finish.',
+    ].join(' '),
+    files: {
+      'src/banner.py': "def banner():\n    return 'draft'\n",
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      forbidVerification: true,
+      completionStatus: 'completed',
+    },
+    assertions: [
+      { path: 'src/banner.py', contains: "return 'ready'" },
+      { path: 'src/banner.py', notContains: "return 'draft'" },
+    ],
+    maxRounds: 4,
+  },
+  {
+    id: 'gate-explicit-single-check',
+    category: 'completion-gate',
+    prompt: [
+      'Update src/config.js so exported mode is "production".',
+      'Completion condition: you must run `node --check src/config.js` and it must succeed before finishing.',
+    ].join(' '),
+    files: {
+      'src/config.js': "module.exports = { mode: 'development' };\n",
+    },
+    verifyCommands: ['node --check src/config.js'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+    },
+    assertions: [
+      { path: 'src/config.js', contains: "mode: 'production'" },
+      { path: 'src/config.js', notContains: "mode: 'development'" },
+    ],
+    maxRounds: 6,
+  },
+  {
+    id: 'gate-read-only-finish',
+    category: 'completion-gate',
+    prompt: [
+      'Read settings.json and answer with the configured region.',
+      'Do not modify files or run shell commands.',
+    ].join(' '),
+    files: {
+      'settings.json': '{\n  "region": "ap-southeast-1"\n}\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      forbidVerification: true,
+      completionStatus: 'completed',
+      finalContains: 'ap-southeast-1',
+    },
+    assertions: [
+      { path: 'settings.json', unchanged: true },
+    ],
+    maxRounds: 4,
   },
 ];

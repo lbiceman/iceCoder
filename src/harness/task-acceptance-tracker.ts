@@ -33,7 +33,10 @@ export class TaskAcceptanceTracker {
     const parsed = presetCommands?.length
       ? presetCommands.map(c => ({ key: normalizeAcceptanceCommandKey(c), label: c.trim() }))
       : parseAcceptanceCommandsFromGoal(goal);
-    this.active = parsed.length >= 2 && isLongRunningImplementationGoal(goal);
+    this.active = parsed.length > 0 && (
+      hasExplicitAcceptanceMarker(goal)
+      || (parsed.length >= 2 && isLongRunningImplementationGoal(goal))
+    );
     this.commands = parsed.map(({ key, label }) => ({
       key,
       label,
@@ -148,6 +151,18 @@ export class TaskAcceptanceTracker {
 export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: string; label: string }> {
   const found: string[] = [];
 
+  if (hasExplicitAcceptanceMarker(goal)) {
+    for (const match of goal.matchAll(/`([^`\r\n]+)`/g)) {
+      const candidate = match[1]?.trim();
+      if (!candidate) continue;
+      const parts = candidate.split(/\s*→\s*|\s*->\s*|\s+then\s+/i);
+      for (const part of parts) {
+        const command = part.trim();
+        if (looksLikeCommandCriterion(command)) found.push(command);
+      }
+    }
+  }
+
   if (/npm ci[^→\n]*→[^→\n]*npm test[^→\n]*→[^→\n]*npm run build[^→\n]*→[^→\n]*npm run test:e2e/is.test(goal)) {
     found.push('npm ci', 'npm test', 'npm run build', 'npm run test:e2e');
   }
@@ -192,6 +207,17 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
     unique.push({ key, label });
   }
   return unique;
+}
+
+function hasExplicitAcceptanceMarker(goal: string): boolean {
+  return /验收(?:命令|条件)?|完成条件|必须(?:运行|通过|成功)|全部成功后|done when|acceptance|must (?:pass|succeed|run)|before (?:you )?(?:finish|stop)/i.test(goal);
+}
+
+function looksLikeCommandCriterion(value: string): boolean {
+  const text = value.trim();
+  if (!text || text.length > 500 || /[\r\n]/.test(text)) return false;
+  return /^(?:npm|pnpm|yarn|npx|bun|deno|node|python|python3|pytest|go|cargo|mvnw?|gradlew(?:\.bat)?|dotnet|make|cmake|ctest|bundle|phpunit|composer|git|docker|kubectl|terraform|ansible|powershell|pwsh|bash|sh)\b/i.test(text)
+    || /^(?:\.\/|\.\\|[A-Za-z]:\\)\S+/.test(text);
 }
 
 /**

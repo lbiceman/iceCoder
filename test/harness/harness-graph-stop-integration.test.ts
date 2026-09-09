@@ -147,7 +147,7 @@ describe('Harness graph terminal stop (integration)', () => {
     expect(events.filter(e => e.type === 'final')).toHaveLength(1);
   });
 
-  it('图 done 但有 pendingWork：继续跑，不因闸门误停', async () => {
+  it('图 done 且低风险写入已有回执：不强制追加验证轮', async () => {
     const workspaceRoot = await mkdtemp(join(tmpdir(), 'ice-graph-stop-'));
     try {
       const tools = [makeTool('write_file')];
@@ -169,8 +169,9 @@ describe('Harness graph terminal stop (integration)', () => {
         }
       });
 
-      expect(chatFn.mock.calls.length).toBeGreaterThanOrEqual(2);
-      expect(['model_done', 'verification_exhausted']).toContain(result.loopState.stopReason);
+      expect(chatFn).toHaveBeenCalledTimes(1);
+      expect(result.loopState.stopReason).toBe('model_done');
+      expect(result.completionStatus).toBe('completed');
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }

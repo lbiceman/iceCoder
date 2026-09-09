@@ -45,6 +45,7 @@ import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.
 import { syncHydratedTaskState } from './resume-task-state.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import { OperationOutcomeLedger } from './operation-outcome.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
@@ -575,6 +576,9 @@ export class Harness {
       buildDiagnosticGateActive: false,
       verificationOutputBuffer: new VerificationOutputBuffer(),
       taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
+      operationOutcomes: new OperationOutcomeLedger(),
+      completionRecoveryCount: 0,
+      completionEvidenceRequestCount: 0,
       consecutiveNoToolRounds: 0,
       missingFileAttempts: new Map(),
       shellMandatoryConfirmDenials: new Set(),
