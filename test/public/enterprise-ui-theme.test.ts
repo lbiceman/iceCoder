@@ -55,6 +55,21 @@ describe('企业级 UI 主题体系', () => {
     expect(enterprise).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
+  it('滚动条只在 shell.css 定义一套，不被企业层或聊天页覆盖', () => {
+    const tokens = readPublic('css/tokens.css');
+    const shell = readPublic('css/shell.css');
+    const chat = readPublic('css/chat.css');
+    const enterprise = readPublic('css/enterprise.css');
+
+    expect(tokens).toContain('--scrollbar-size');
+    expect(shell).toContain('::-webkit-scrollbar {');
+    expect(shell).toContain('width: var(--scrollbar-size)');
+    expect(chat).not.toContain('::-webkit-scrollbar');
+    expect(chat).not.toContain('scrollbar-width');
+    expect(enterprise).not.toContain('::-webkit-scrollbar');
+    expect(enterprise).not.toContain('scrollbar-width');
+  });
+
   it('聊天工作台关键控件具备清晰对比度和足够点击宽度', () => {
     const enterprise = readPublic('css/enterprise.css');
 
@@ -63,9 +78,6 @@ describe('企业级 UI 主题体系', () => {
     );
     expect(enterprise).toMatch(
       /\.message\.user \.msg-label[\s\S]*?color:\s*color-mix\(in srgb,\s*var\(--msg-user-fg,\s*var\(--text-primary\)\)\s*65%,\s*transparent\)/,
-    );
-    expect(enterprise).toMatch(
-      /\.chat-messages::\-webkit-scrollbar[\s\S]*?width:\s*16px/,
     );
     expect(enterprise).toMatch(
       /\.chat-staircase-lines[\s\S]*?background:\s*transparent/,
