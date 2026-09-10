@@ -75,7 +75,7 @@ export interface CheckpointIndexFile {
   /** CheckpointEngine 当前 cursor（最近 Intent 的 messageId） */
   cursorMessageId: string | null;
   entries: CheckpointIndexEntry[];
-  /** 会话级累积 touched 路径（POSIX），用于 workspace 快照补全 */
+  /** 会话级累积写入路径（POSIX）。只由 touch 维护，供 workspace 快照与会话修改列表共用。 */
   sessionTouchedPaths?: string[];
 }
 

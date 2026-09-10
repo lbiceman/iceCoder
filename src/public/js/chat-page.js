@@ -1033,6 +1033,9 @@ window.ChatPage = (function () {
     if (UI && typeof UI.setCheckpointMessageIds === 'function') {
       UI.setCheckpointMessageIds([]);
     }
+    if (UI && typeof UI.setCursorMessageId === 'function') {
+      UI.setCursorMessageId('');
+    }
     if (typeof options.canRestore === 'boolean') {
       applyHarnessRestoreUi(options.canRestore, options.checkpointMessageIds);
     } else {
@@ -1542,6 +1545,16 @@ window.ChatPage = (function () {
       && window.ChatExecutionPlan.hasSnapshotCheckpoint(restoreId);
     if (!knownByChat && !knownBySnapshot) {
       notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
+      return;
+    }
+    var atCursor = UI && typeof UI.isCurrentRestoreCursor === 'function'
+      && UI.isCurrentRestoreCursor(restoreId, sentAt);
+    if (!atCursor && window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.isSnapshotCursorMessage === 'function') {
+      atCursor = !!window.ChatExecutionPlan.isSnapshotCursorMessage(restoreId);
+    }
+    if (atCursor) {
+      notifyUser('已在该检查点，无需回滚。', 'info', { duration: 3000 });
       return;
     }
     showRestoreConfirmDialog(restoreId);

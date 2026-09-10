@@ -363,20 +363,26 @@ describe('ETL bridge 生命周期', () => {
     await page.close();
   });
 
-  it('notifyNewTurnStarted 清空计划但不丢本会话改过的文件', async () => {
+  it('notifyNewTurnStarted 清空计划但不丢 checkpoint 下发的会话文件', async () => {
     const page = await loadLifecycle();
-    const names = await page.evaluate((plan) => {
+    const names = await page.evaluate(async (plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       const panel = (window as any).ChatExecutionPlan;
+      (window as any).fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [{ path: 'src/kept.ts', op: '新建', ts: 1 }],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ plan }) };
+      };
       bridge.handleStep({ type: 'task_graph_init', plan });
-      panel.applyToolActivity({
-        type: 'tool_call',
-        toolCallId: 'w-keep',
-        toolName: 'write_file',
-        toolArgs: { path: 'src/kept.ts' },
-        iteration: 1,
-      });
       (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 40));
       bridge.notifyNewTurnStarted();
       return Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
         .map((el) => el.textContent);

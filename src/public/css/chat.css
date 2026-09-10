@@ -911,6 +911,10 @@
   cursor: not-allowed;
 }
 
+.message.user .msg-restore-btn[hidden] {
+  display: none;
+}
+
 .message.user .msg-delete-btn:disabled .msg-delete-icon,
 .message.user .msg-restore-btn:disabled .msg-restore-icon {
   opacity: 0.45;

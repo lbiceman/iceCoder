@@ -1377,8 +1377,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-    expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
-    expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
+    expect(result.attrs).toEqual(['msg-a', 'msg-b']);
+    expect(result.restored).toEqual(['msg-a', 'msg-b']);
     await page.close();
   });
 
@@ -1431,7 +1431,6 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
 
     expect(result.ready).toEqual([
       { id: 'msg-a', disabled: false, ready: true },
-      { id: 'msg-b', disabled: false, ready: true },
     ]);
     expect(result.blocked.every((b) => b.disabled)).toBe(true);
     expect(result.known).toEqual({ a: true, b: true, other: false });
@@ -1439,13 +1438,22 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('状态快照下列出本会话写过的文件，新一轮不丢、切会话才清', async () => {
+  it('状态快照文件列表只读 checkpoint，不另存一份', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async (plan) => {
       const panel = (window as any).ChatExecutionPlan;
       window.fetch = async (url: string) => {
         if (String(url).includes('/checkpoints')) {
-          return { ok: true, json: async () => ({ entries: [] }) } as Response;
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [
+                { path: 'src/foo/bar.ts', op: '新建', ts: 2 },
+                { path: 'notes/todo.md', op: '修改', ts: 1 },
+              ],
+            }),
+          } as Response;
         }
         return { ok: false, json: async () => ({}) } as Response;
       };
@@ -1454,18 +1462,11 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         type: 'tool_call',
         toolCallId: 'w1',
         toolName: 'write_file',
-        toolArgs: { path: 'src/foo/bar.ts' },
-        iteration: 1,
-      });
-      panel.applyToolActivity({
-        type: 'tool_call',
-        toolCallId: 'r1',
-        toolName: 'read_file',
-        toolArgs: { path: 'src/secret.ts' },
+        toolArgs: { path: 'src/secret-local.ts' },
         iteration: 1,
       });
       (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
-      await new Promise((r) => setTimeout(r, 30));
+      await new Promise((r) => setTimeout(r, 50));
       const splitReady = !!(
         document.querySelector('.etl-snapshot-section--checkpoints')
         && document.querySelector('.etl-snapshot-section--files')
@@ -1474,6 +1475,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         .map((el) => el.textContent);
       const ops1 = Array.from(document.querySelectorAll('.etl-snapshot-file-badge'))
         .map((el) => el.textContent);
+      const snap = panel.getFlowSnapshot();
       panel.resetToolActivity();
       const names2 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
         .map((el) => el.textContent);
@@ -1489,16 +1491,72 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       panel.clear();
       const names3 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
         .map((el) => el.textContent);
-      return { splitReady, names1, ops1, names2, namesKeep, namesOverlay, names3 };
+      return {
+        splitReady,
+        names1,
+        ops1,
+        names2,
+        namesKeep,
+        namesOverlay,
+        names3,
+        persistedFiles: snap && snap.sessionChangedFiles,
+      };
     }, makePlan());
 
     expect(result.splitReady).toBe(true);
-    expect(result.names1).toEqual(['bar.ts']);
-    expect(result.ops1).toEqual(['新建']);
-    expect(result.names2).toEqual(['bar.ts']);
-    expect(result.namesKeep).toEqual(['bar.ts']);
-    expect(result.namesOverlay).toEqual(['bar.ts']);
+    expect(result.names1).toEqual(['bar.ts', 'todo.md']);
+    expect(result.ops1).toEqual(['新建', '修改']);
+    expect(result.persistedFiles).toBeUndefined();
+    expect(result.names2).toEqual(['bar.ts', 'todo.md']);
+    expect(result.namesKeep).toEqual(['bar.ts', 'todo.md']);
+    expect(result.namesOverlay).toEqual(['bar.ts', 'todo.md']);
     expect(result.names3).toEqual([]);
+    await page.close();
+  });
+
+  it('点击变更文件名会请求系统默认程序打开', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const calls: { url: string; init?: RequestInit }[] = [];
+      window.fetch = async (url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [{ path: 'src/foo/bar.ts', op: '新建', ts: 2 }],
+            }),
+          } as Response;
+        }
+        if (String(url).includes('/open-file')) {
+          return { ok: true, json: async () => ({ ok: true }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-open' };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const btn = document.querySelector('.etl-snapshot-file-name') as HTMLButtonElement;
+      btn.click();
+      await new Promise((r) => setTimeout(r, 20));
+      const openCall = calls.find((c) => c.url.includes('/open-file'));
+      return {
+        tag: btn && btn.tagName,
+        label: btn && btn.getAttribute('aria-label'),
+        openUrl: openCall && openCall.url,
+        method: openCall && openCall.init && openCall.init.method,
+        body: openCall && openCall.init && String(openCall.init.body),
+      };
+    }, makePlan());
+
+    expect(result.tag).toBe('BUTTON');
+    expect(result.label).toBe('打开 src/foo/bar.ts');
+    expect(result.openUrl).toBe('/api/sessions/sess-open/open-file');
+    expect(result.method).toBe('POST');
+    expect(result.body).toBe(JSON.stringify({ path: 'src/foo/bar.ts' }));
     await page.close();
   });
 
@@ -1539,6 +1597,51 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.activeTab).not.toBe('snapshot');
     expect(result.merged[0]).toEqual(['flow-a', 'flow-b']);
     expect(result.known).toBe(true);
+    await page.close();
+  });
+
+  it('当前位置检查点不显示回滚按钮', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              cursorMessageId: 'msg-now',
+              entries: [
+                { messageId: 'msg-old', preview: 'earlier', isCursor: false },
+                { messageId: 'msg-now', preview: 'current', isCursor: true },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
+        .map((b) => b.getAttribute('data-message-id'));
+      const cursorCard = document.querySelector('.etl-snapshot-node.is-cursor .etl-snapshot-card');
+      return {
+        buttons,
+        cursorHidden: !!(cursorCard && cursorCard.classList.contains('etl-snapshot-card--no-restore')),
+        isCursor: panel.isSnapshotCursorMessage('msg-now'),
+        notCursor: panel.isSnapshotCursorMessage('msg-old'),
+      };
+    }, makePlan());
+
+    expect(result.buttons).toEqual(['msg-old']);
+    expect(result.cursorHidden).toBe(true);
+    expect(result.isCursor).toBe(true);
+    expect(result.notCursor).toBe(false);
     await page.close();
   });
 

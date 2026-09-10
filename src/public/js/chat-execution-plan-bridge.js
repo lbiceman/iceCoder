@@ -63,7 +63,7 @@ window.ChatExecutionPlanBridge = (function () {
     planFootDismissed = false;
     clearSessionFlow(sessionId || getActiveSessionId());
     if (window.ChatExecutionPlan) {
-      // 同会话新一轮 / 清计划：执行流可丢，会话改过的文件列表要留。
+      // 同会话新一轮 / 清计划：执行流可丢；文件列表只读 checkpoint，不在这里另存。
       window.ChatExecutionPlan.clear({ resetSessionFiles: false });
       if (!enabled) window.ChatExecutionPlan.setVisible(false);
     }
@@ -110,8 +110,7 @@ window.ChatExecutionPlanBridge = (function () {
     var bridgePlanId = bridgeState && bridgeState.currentPlanId;
     var bridgeFootDismissed = bridgeState && bridgeState.planFootDismissed;
     var planId = bridgePlanId || currentPlanId || (plan && plan.planId) || null;
-    var hasFlow = !!(planId || panel.roundRecords.length || panel.currentExecutionMode
-      || (panel.sessionChangedFiles && panel.sessionChangedFiles.length));
+    var hasFlow = !!(planId || panel.roundRecords.length || panel.currentExecutionMode);
     if (!hasFlow) {
       clearSessionFlow(sessionId);
       return;
