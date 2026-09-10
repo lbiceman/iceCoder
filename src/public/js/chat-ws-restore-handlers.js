@@ -155,8 +155,11 @@ window.ChatWsRestoreHandlers = (function () {
 
     function onCheckpointMessageIds(data) {
       if (isForeignSessionEvent(data)) return;
-      if (!data || !UI || typeof UI.setCheckpointMessageIds !== 'function') return;
-      UI.setCheckpointMessageIds(data.ids || []);
+      if (!data || !UI) return;
+      if (Array.isArray(data.ids) && data.ids.length
+        && typeof UI.setCheckpointMessageIds === 'function') {
+        UI.setCheckpointMessageIds(data.ids);
+      }
       ctx.refreshSnapshotTimelinePanel();
     }
 

@@ -350,6 +350,20 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   flex-direction: column;
 }
 
+.etl-body--fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.etl-body--fill #etl-panel-snapshot {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
 .etl-tabpanel {
   display: flex;
   flex-direction: column;
@@ -1065,7 +1079,30 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   -webkit-overflow-scrolling: touch;
 }
 
-/* ── 状态快照 Tab：会话检查点时间轴 ── */
+/* ── 状态快照 Tab：上半检查点 + 下半会话修改 ── */
+.etl-snapshot-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.etl-snapshot-section {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+
+.etl-snapshot-section--checkpoints {
+  flex: 1 1 52%;
+}
+
+.etl-snapshot-section--files {
+  flex: 1 1 48%;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--surface-sidebar) 55%, var(--surface-panel));
+}
+
 .etl-snapshot-timeline {
   display: flex;
   flex-direction: column;
@@ -1268,8 +1305,85 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 }
 
 .etl-snapshot-empty,
-.etl-snapshot-loading {
+.etl-snapshot-loading,
+.etl-snapshot-files-empty {
   padding: var(--space-5) var(--space-3);
+}
+
+.etl-snapshot-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.etl-snapshot-files-list.hidden {
+  display: none;
+}
+
+.etl-snapshot-file {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius);
+}
+
+.etl-snapshot-file-badge {
+  flex-shrink: 0;
+  margin-top: 1px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.etl-snapshot-file-badge--add {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.etl-snapshot-file-badge--edit {
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.etl-snapshot-file-badge--del {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.etl-snapshot-file-badge--move {
+  background: var(--accent-light);
+  color: var(--text-secondary);
+}
+
+.etl-snapshot-file-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.etl-snapshot-file-name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-snapshot-file-path {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #etl-panel-snapshot {

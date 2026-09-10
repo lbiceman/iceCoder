@@ -1030,10 +1030,13 @@ window.ChatPage = (function () {
       Session.setSessionId(sessionId);
     }
     resetViewportTransientState();
+    if (UI && typeof UI.setCheckpointMessageIds === 'function') {
+      UI.setCheckpointMessageIds([]);
+    }
     if (typeof options.canRestore === 'boolean') {
       applyHarnessRestoreUi(options.canRestore, options.checkpointMessageIds);
     } else {
-      applyHarnessRestoreUi(false, []);
+      applyHarnessRestoreUi(false);
     }
     if (window.ChatSessionStore && typeof window.ChatSessionStore.acknowledgeRunPhase === 'function') {
       window.ChatSessionStore.acknowledgeRunPhase(sessionId);
@@ -1349,8 +1352,11 @@ window.ChatPage = (function () {
     if (UI && typeof UI.setRestoreAvailability === 'function') {
       UI.setRestoreAvailability(canRestore);
     }
-    if (UI && typeof UI.setCheckpointMessageIds === 'function') {
-      UI.setCheckpointMessageIds(checkpointIds || []);
+    // 空数组不能当「权威清空」：connected/harness_state 偶发缺字段会被收成 []，
+    // 会把气泡回滚全部打成禁用，而快照时间轴仍有节点。切会话在上面显式清空。
+    if (UI && Array.isArray(checkpointIds) && checkpointIds.length
+      && typeof UI.setCheckpointMessageIds === 'function') {
+      UI.setCheckpointMessageIds(checkpointIds);
     }
     notifySnapshotRestoreAvailability();
   }
@@ -1363,6 +1369,9 @@ window.ChatPage = (function () {
   }
 
   function notifySnapshotRestoreAvailability() {
+    if (UI && typeof UI.refreshRestoreButtonsVisibility === 'function') {
+      UI.refreshRestoreButtonsVisibility();
+    }
     if (window.ChatExecutionPlan
       && typeof window.ChatExecutionPlan.notifySnapshotRestoreAvailability === 'function') {
       window.ChatExecutionPlan.notifySnapshotRestoreAvailability();
@@ -1378,6 +1387,9 @@ window.ChatPage = (function () {
       onRestore: handleMessageRestoreAction,
       canRestore: function () {
         if (runtimeRestoreInFlight) return false;
+        if (UI && typeof UI.isChatRestoreAllowed === 'function') {
+          return !!UI.isChatRestoreAllowed();
+        }
         return !!(WS.canRestoreRuntime && WS.canRestoreRuntime());
       },
     });
@@ -1502,7 +1514,14 @@ window.ChatPage = (function () {
       return;
     }
     if (btn && btn.disabled) {
-      notifyUser('运行中，请等待当前任务完成后再回滚。', 'warning', { duration: 4000 });
+      var processing = !WS.canRestoreRuntime || !WS.canRestoreRuntime();
+      notifyUser(
+        processing
+          ? '运行中，请等待当前任务完成后再回滚。'
+          : '未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。',
+        'warning',
+        { duration: 4000 },
+      );
       return;
     }
     if (!WS.canRestoreRuntime || !WS.canRestoreRuntime()) {
@@ -1510,11 +1529,22 @@ window.ChatPage = (function () {
       return;
     }
     if (!messageId) return;
-    if (UI && typeof UI.hasCheckpointForMessage === 'function' && !UI.hasCheckpointForMessage(messageId)) {
+    var sentAt = btn && btn.dataset && btn.dataset.sentAt
+      ? Number(btn.dataset.sentAt)
+      : undefined;
+    var restoreId = UI && typeof UI.resolveCheckpointMessageId === 'function'
+      ? UI.resolveCheckpointMessageId(messageId, sentAt)
+      : messageId;
+    var knownByChat = UI && typeof UI.hasCheckpointForMessage === 'function'
+      && UI.hasCheckpointForMessage(restoreId, sentAt);
+    var knownBySnapshot = window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.hasSnapshotCheckpoint === 'function'
+      && window.ChatExecutionPlan.hasSnapshotCheckpoint(restoreId);
+    if (!knownByChat && !knownBySnapshot) {
       notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
       return;
     }
-    showRestoreConfirmDialog(messageId);
+    showRestoreConfirmDialog(restoreId);
   }
 
   function onRestoreButtonClick(e) {

@@ -362,4 +362,27 @@ describe('ETL bridge 生命周期', () => {
     expect(result.planIdAfterRest).toBeNull();
     await page.close();
   });
+
+  it('notifyNewTurnStarted 清空计划但不丢本会话改过的文件', async () => {
+    const page = await loadLifecycle();
+    const names = await page.evaluate((plan) => {
+      const bridge = (window as any).ChatExecutionPlanBridge;
+      const panel = (window as any).ChatExecutionPlan;
+      bridge.handleStep({ type: 'task_graph_init', plan });
+      panel.applyToolActivity({
+        type: 'tool_call',
+        toolCallId: 'w-keep',
+        toolName: 'write_file',
+        toolArgs: { path: 'src/kept.ts' },
+        iteration: 1,
+      });
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      bridge.notifyNewTurnStarted();
+      return Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+    }, makePlan());
+
+    expect(names).toEqual(['kept.ts']);
+    await page.close();
+  });
 });
