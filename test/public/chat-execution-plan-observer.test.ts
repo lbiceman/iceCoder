@@ -1377,8 +1377,168 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-    expect(result.attrs).toEqual(['msg-a', 'msg-b']);
-    expect(result.restored).toEqual(['msg-a', 'msg-b']);
+    expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
+    expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
+    await page.close();
+  });
+
+  it('状态快照时间轴节点视为已有检查点，不因 ChatUI 集合滞后而禁用', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const entries = [
+        { messageId: 'msg-a', preview: 'first', isCursor: false },
+        { messageId: 'msg-b', preview: 'second', isCursor: true },
+      ];
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      const merged: string[][] = [];
+      (window as any).ChatUI = {
+        hasCheckpointForMessage: () => false,
+        mergeCheckpointMessageIds: (ids: string[]) => { merged.push(ids.slice()); },
+      };
+      let allow = true;
+      panel.registerSnapshotHandlers({
+        onRestore: () => {},
+        canRestore: () => allow,
+      });
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return { ok: true, json: async () => ({ entries }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const readState = () => Array.from(
+        document.querySelectorAll('.etl-snapshot-restore-btn'),
+      ).map((b) => ({
+        id: b.getAttribute('data-message-id'),
+        disabled: (b as HTMLButtonElement).disabled,
+        ready: b.classList.contains('etl-snapshot-restore-btn--ready'),
+      }));
+      const ready = readState();
+      const known = {
+        a: panel.hasSnapshotCheckpoint('msg-a'),
+        b: panel.hasSnapshotCheckpoint('msg-b'),
+        other: panel.hasSnapshotCheckpoint('msg-x'),
+      };
+      allow = false;
+      panel.notifySnapshotRestoreAvailability();
+      const blocked = readState();
+      return { ready, blocked, known, merged };
+    }, makePlan());
+
+    expect(result.ready).toEqual([
+      { id: 'msg-a', disabled: false, ready: true },
+      { id: 'msg-b', disabled: false, ready: true },
+    ]);
+    expect(result.blocked.every((b) => b.disabled)).toBe(true);
+    expect(result.known).toEqual({ a: true, b: true, other: false });
+    expect(result.merged[0]).toEqual(['msg-a', 'msg-b']);
+    await page.close();
+  });
+
+  it('状态快照下列出本会话写过的文件，新一轮不丢、切会话才清', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return { ok: true, json: async () => ({ entries: [] }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call',
+        toolCallId: 'w1',
+        toolName: 'write_file',
+        toolArgs: { path: 'src/foo/bar.ts' },
+        iteration: 1,
+      });
+      panel.applyToolActivity({
+        type: 'tool_call',
+        toolCallId: 'r1',
+        toolName: 'read_file',
+        toolArgs: { path: 'src/secret.ts' },
+        iteration: 1,
+      });
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 30));
+      const splitReady = !!(
+        document.querySelector('.etl-snapshot-section--checkpoints')
+        && document.querySelector('.etl-snapshot-section--files')
+      );
+      const names1 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      const ops1 = Array.from(document.querySelectorAll('.etl-snapshot-file-badge'))
+        .map((el) => el.textContent);
+      panel.resetToolActivity();
+      const names2 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      panel.clear({ resetSessionFiles: false });
+      const namesKeep = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      panel.restoreFlowSnapshot({
+        roundRecords: [],
+        toolRecords: [],
+      }, { overlayOnly: true });
+      const namesOverlay = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      panel.clear();
+      const names3 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      return { splitReady, names1, ops1, names2, namesKeep, namesOverlay, names3 };
+    }, makePlan());
+
+    expect(result.splitReady).toBe(true);
+    expect(result.names1).toEqual(['bar.ts']);
+    expect(result.ops1).toEqual(['新建']);
+    expect(result.names2).toEqual(['bar.ts']);
+    expect(result.namesKeep).toEqual(['bar.ts']);
+    expect(result.namesOverlay).toEqual(['bar.ts']);
+    expect(result.names3).toEqual([]);
+    await page.close();
+  });
+
+  it('未打开状态快照 Tab 也会把检查点同步给气泡', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const merged: string[][] = [];
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: (ids: string[]) => { merged.push(ids.slice()); },
+      };
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [
+                { messageId: 'flow-a', preview: 'one' },
+                { messageId: 'flow-b', preview: 'two' },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      const activeTab = document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+      return {
+        activeTab,
+        merged,
+        known: panel.hasSnapshotCheckpoint('flow-a'),
+      };
+    }, makePlan());
+
+    expect(result.activeTab).not.toBe('snapshot');
+    expect(result.merged[0]).toEqual(['flow-a', 'flow-b']);
+    expect(result.known).toBe(true);
     await page.close();
   });
 
