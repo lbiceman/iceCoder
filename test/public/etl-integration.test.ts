@@ -141,9 +141,22 @@ async function loadObserver(options: {
     (window as any).ChatPetBridge = { syncExecPlanFoot: () => {} };
     (window as any).AppShell = { getTheme: () => 'dark' };
     (window as any).AppRouter = { isSetupRequired: () => false };
-    (window as any).fetch = (url: string) => new Promise((resolve) => {
-      requests.push({ url: String(url), resolve });
-    });
+    (window as any).fetch = (url: string) => {
+      const href = String(url);
+      // 只把 /plan 推进可控队列；/checkpoints、/config 等立即返回，避免占位导致下标错位。
+      if (href.includes('/plan')) {
+        return new Promise((resolve) => {
+          requests.push({ url: href, resolve });
+        });
+      }
+      const body = href.includes('/checkpoints')
+        ? { entries: [], changedFiles: [] }
+        : {};
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+      });
+    };
   }, {
     showPanel: options.showPanel ?? true,
     sessionId: options.sessionId ?? 'integration-session',
@@ -290,8 +303,8 @@ describe('ETL 真实 Observer 链路', () => {
     ]);
 
     await page.evaluate(({ oldPlan, newPlan }) => {
-      (window as any).__resolveFetch(2, { plan: newPlan });
-      (window as any).__resolveFetch(1, { plan: oldPlan });
+      (window as any).__resolveFetch(1, { plan: newPlan });
+      (window as any).__resolveFetch(0, { plan: oldPlan });
     }, {
       oldPlan: makePlan('stale-session-plan'),
       newPlan: makePlan('session-b-plan'),

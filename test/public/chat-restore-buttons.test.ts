@@ -190,4 +190,55 @@ describe('聊天气泡回滚按钮', () => {
     expect(result).toEqual({ disabled: true, ready: true, allowed: false });
     await page.close();
   });
+
+  it('已在当前位置的气泡回滚按钮隐藏，较早消息仍可回滚', async () => {
+    const page = await browser.newPage();
+    openPages.add(page);
+    await loadChatUi(page);
+
+    const result = await page.evaluate(async () => {
+      const ui = (window as any).ChatUI;
+      const messages = [
+        { role: 'user', id: 'bubble-1', content: '先做这件事', sentAt: 1_000 },
+        { role: 'user', id: 'bubble-2', content: '再做那件事', sentAt: 2_000 },
+      ];
+      (window as any).ChatSession = {
+        getMessages: () => messages,
+        prepareUserMessageForDisplay: (m: unknown) => m,
+      };
+      (window as any).ChatWebSocket = { canRestoreRuntime: () => true };
+      (window as any).ChatExecutionPlan = {
+        hasSnapshotCheckpoint: (id: string) => id === 'bubble-1' || id === 'bubble-2',
+        getSnapshotCheckpointEntries: () => [
+          { messageId: 'bubble-1', userMessageTime: 1_000, preview: '先做这件事' },
+          { messageId: 'bubble-2', userMessageTime: 2_000, preview: '再做那件事', isCursor: true },
+        ],
+        getSnapshotCursorMessageId: () => 'bubble-2',
+        isSnapshotCursorMessage: (id: string) => id === 'bubble-2',
+      };
+      ui.renderMessagesOnly(messages, {}, (t: string) => t, false, {});
+      ui.mergeCheckpointMessageIds(['bubble-1', 'bubble-2']);
+      ui.setCursorMessageId('bubble-2');
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      const buttons = Array.from(document.querySelectorAll('.msg-restore-btn')).map((btn) => ({
+        id: (btn as HTMLButtonElement).dataset.messageId || '',
+        hidden: (btn as HTMLButtonElement).hidden,
+        disabled: (btn as HTMLButtonElement).disabled,
+        ready: btn.classList.contains('msg-restore-btn--ready'),
+      }));
+      return {
+        buttons,
+        cursor1: ui.isCurrentRestoreCursor('bubble-1'),
+        cursor2: ui.isCurrentRestoreCursor('bubble-2'),
+      };
+    });
+
+    expect(result.cursor1).toBe(false);
+    expect(result.cursor2).toBe(true);
+    expect(result.buttons).toEqual([
+      { id: 'bubble-1', hidden: false, disabled: false, ready: true },
+      { id: 'bubble-2', hidden: true, disabled: true, ready: false },
+    ]);
+    await page.close();
+  });
 });

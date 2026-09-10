@@ -199,6 +199,7 @@ window.ChatWsRestoreHandlers = (function () {
       if (Session.invalidateStructuredCache) Session.invalidateStructuredCache();
       ctx.refreshChatHistoryAfterTurn(true);
       ctx.syncSidebarWorkspace({ sessionId: Session.getActiveId ? Session.getActiveId() : 'default' });
+      ctx.refreshSnapshotTimelinePanel();
     }
 
     function onDeleteMessageFailed(data) {

@@ -39,7 +39,10 @@ import {
   capturePreTurnWriteSnapshot,
   isIntentCheckpointWriteTool,
 } from './intent-checkpoint-turn-snapshot.js';
-import { touchSessionTouchedPath } from './intent-checkpoint-store.js';
+import {
+  collectSessionTouchedPaths,
+  touchSessionTouchedPaths,
+} from './intent-checkpoint-store.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
@@ -710,6 +713,15 @@ export async function executeToolCallsStreaming(
       }
     }
 
+    if (result.success && deps.sessionDir && deps.sessionId) {
+      const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments);
+      if (touchedPaths.length) {
+        await touchSessionTouchedPaths(deps.sessionDir, deps.sessionId, touchedPaths).catch(() => {
+          /* ignore */
+        });
+      }
+    }
+
     logger.toolResult(tc.name, result.success, output.length, result.error);
     deps.runtimeTelemetry?.recordTool({
       round: iteration,
@@ -745,12 +757,6 @@ export async function executeToolCallsStreaming(
 
     taskState?.recordToolResult(tc, result);
     repoContext?.recordToolResult(tc, result);
-    if (result.success && deps.sessionDir && deps.sessionId) {
-      const touchedPath = extractToolTargetPath(tc.name, tc.arguments);
-      if (touchedPath && (isIntentCheckpointWriteTool(tc.name) || tc.name === 'read_file')) {
-        void touchSessionTouchedPath(deps.sessionDir, deps.sessionId, touchedPath).catch(() => { /* ignore */ });
-      }
-    }
     if (taskState && repoContext) {
       // currentPlanTracker.onToolResult removed (Phase 11)
     }

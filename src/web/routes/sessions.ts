@@ -39,6 +39,8 @@ import {
 } from '../../session/bg-tasks-store.js';
 import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
 import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
+import { buildCheckpointChangedFiles, type CheckpointChangedFile } from '../session-changed-files.js';
+import { openWorkspaceChangedFile } from '../open-workspace-file.js';
 import { purgeSessionDiskFiles } from '../session-file-purge.js';
 import { buildShellCollabActiveIndex } from '../../session/shell-collab-store.js';
 import { buildPlanModeActiveIndex } from '../../session/plan-mode-store.js';
@@ -136,6 +138,7 @@ export interface CheckpointTimelineEntry {
 export async function readCheckpointTimeline(sessionId: string): Promise<{
   cursorMessageId: string | null;
   entries: CheckpointTimelineEntry[];
+  changedFiles: CheckpointChangedFile[];
 }> {
   const index = await loadCheckpointIndex(SESSIONS_DIR, sessionId);
   const uiMessages = await readUiSessionMessages(SESSIONS_DIR, sessionId);
@@ -163,7 +166,11 @@ export async function readCheckpointTimeline(sessionId: string): Promise<{
     return a.createdAt.localeCompare(b.createdAt);
   });
 
-  return { cursorMessageId: index.cursorMessageId, entries };
+  return {
+    cursorMessageId: index.cursorMessageId,
+    entries,
+    changedFiles: buildCheckpointChangedFiles(index.sessionTouchedPaths, uiMessages),
+  };
 }
 
 async function readSessionPlan(sessionId: string): Promise<any> {
@@ -372,7 +379,7 @@ export function createSessionsRouter(): Router {
   });
 
   /**
-   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴（状态快照 Tab）
+   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴（检查点 Tab）
    */
   router.get('/:id/checkpoints', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -380,6 +387,24 @@ export function createSessionsRouter(): Router {
     if (rejectUnsafeSessionId(res, id)) return;
     const timeline = await readCheckpointTimeline(id);
     res.json(timeline);
+  });
+
+  /**
+   * POST /api/sessions/:id/open-file - 用系统默认程序打开本会话变更文件
+   */
+  router.post('/:id/open-file', async (req: Request, res: Response): Promise<void> => {
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const relPath = typeof req.body?.path === 'string' ? req.body.path : '';
+    const result = await openWorkspaceChangedFile({
+      sessionsDir: SESSIONS_DIR,
+      sessionId,
+      relPath,
+    });
+    res.status(result.status).json({
+      ok: result.ok,
+      error: result.error,
+    });
   });
 
   /**

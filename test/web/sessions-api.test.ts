@@ -331,4 +331,23 @@ describe('Sessions API (multi-session)', () => {
     expect(ids).toContain(created.session.id);
     expect(ids).toContain('c18e59a8');
   });
+
+  it('POST /:id/open-file 拒绝不安全会话 id 与工作区外路径', async () => {
+    const unsafe = await fetch(`${baseUrl}/foo..bar/open-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'kept.ts' }),
+    });
+    expect(unsafe.status).toBe(400);
+
+    const res = await fetch(`${baseUrl}/default/open-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '../secret.txt' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBeTruthy();
+  });
 });
