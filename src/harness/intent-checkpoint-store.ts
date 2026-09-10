@@ -179,6 +179,7 @@ export async function saveIntentCheckpoint(input: SaveIntentCheckpointInput): Pr
       index.entries.push(entry);
     }
     index.cursorMessageId = archive.messageId;
+    index.cursorRestored = false;
     // 不把归档 trackedPaths（含用户提示路径）并进 live manifest，避免会话修改列表掺未写入文件。
     await saveCheckpointIndex(sessionDir, sessionId, index);
   });
@@ -277,6 +278,7 @@ export async function setCheckpointCursor(
       throw new Error(`Checkpoint index has no entry for messageId=${messageId}`);
     }
     index.cursorMessageId = messageId;
+    index.cursorRestored = true;
     await saveCheckpointIndex(sessionDir, sessionId, index);
   });
 }
@@ -319,6 +321,7 @@ export async function truncateCheckpointsFrom(
     index.cursorMessageId = index.entries.length > 0
       ? index.entries[index.entries.length - 1].messageId
       : null;
+    index.cursorRestored = false;
     await syncTouchedPathsToCursorArchive(sessionDir, sessionId, index);
     await saveCheckpointIndex(sessionDir, sessionId, index);
   });
@@ -349,6 +352,7 @@ export async function removeCheckpoint(
       index.cursorMessageId = targetIdx > 0
         ? index.entries[targetIdx - 1].messageId
         : null;
+      index.cursorRestored = false;
     }
     await saveCheckpointIndex(sessionDir, sessionId, index);
   });
@@ -376,6 +380,7 @@ export async function truncateCheckpointsAfter(
     toRemove = index.entries.slice(targetIdx + 1);
     index.entries = index.entries.slice(0, targetIdx + 1);
     index.cursorMessageId = messageId;
+    index.cursorRestored = true;
     await syncTouchedPathsToCursorArchive(sessionDir, sessionId, index);
     await saveCheckpointIndex(sessionDir, sessionId, index);
   });

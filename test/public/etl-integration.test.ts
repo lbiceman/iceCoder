@@ -102,7 +102,7 @@ async function loadObserver(options: {
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
     };
     const listeners: Array<() => void> = [];
     let activeSessionId = sessionId;

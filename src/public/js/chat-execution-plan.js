@@ -106,6 +106,7 @@ window.ChatExecutionPlan = (function () {
   var snapshotCheckpointIds = Object.create(null);
   var snapshotCheckpointEntries = [];
   var snapshotCursorMessageId = '';
+  var snapshotCursorRestored = false;
   /** 检查点时间轴下发的会话改动文件（只读 sessionTouchedPaths，不另存）。 */
   var snapshotChangedFiles = [];
   var snapshotFilesRefreshTimer = 0;
@@ -184,10 +185,20 @@ window.ChatExecutionPlan = (function () {
 
   function applyPanelWidth() {
     try {
-      var w = pref('panelWidth', 360);
+      var w = pref('panelWidth', 320);
       w = typeof w === 'number' ? w : parseInt(w, 10);
-      if (!isFinite(w)) w = 360;
-      w = Math.min(480, Math.max(320, w));
+      if (!isFinite(w)) w = 320;
+      var allowed = [280, 320, 380];
+      var best = allowed[0];
+      var bestDist = Math.abs(w - best);
+      for (var i = 1; i < allowed.length; i++) {
+        var d = Math.abs(w - allowed[i]);
+        if (d < bestDist) {
+          best = allowed[i];
+          bestDist = d;
+        }
+      }
+      w = best;
       document.documentElement.style.setProperty('--etl-w', w + 'px');
     } catch (_e) { /* ignore */ }
   }
@@ -350,7 +361,7 @@ window.ChatExecutionPlan = (function () {
               '<span class="etl-snapshot-header-label">变更文件</span>' +
               '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
             '</div>' +
-            '<p class="etl-snapshot-desc">本会话工具写入或修改过的文件。点击文件名可用系统默认程序打开。</p>' +
+            '<p class="etl-snapshot-desc">本会话工具写入或修改过的文件。点击文件名可打开所在文件夹并定位到该文件。</p>' +
           '</div>' +
           '<div class="etl-snapshot-section-body">' +
             '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
@@ -3257,6 +3268,7 @@ window.ChatExecutionPlan = (function () {
       snapshotCheckpointIds = Object.create(null);
       snapshotCheckpointEntries = [];
       snapshotCursorMessageId = '';
+      snapshotCursorRestored = false;
       try {
         if (window.ChatUI && typeof window.ChatUI.setCursorMessageId === 'function') {
           window.ChatUI.setCursorMessageId('');
@@ -3818,14 +3830,14 @@ window.ChatExecutionPlan = (function () {
       return res.json().then(function (body) {
         return { ok: res.ok, body: body || {} };
       }).catch(function () {
-        return { ok: false, body: { error: '无法打开文件' } };
+        return { ok: false, body: { error: '无法在文件夹中定位文件' } };
       });
     }).then(function (result) {
       if (result.ok) return;
-      notifySnapshotFileOpen((result.body && result.body.error) || '无法打开文件', 'error');
+      notifySnapshotFileOpen((result.body && result.body.error) || '无法在文件夹中定位文件', 'error');
     }).catch(function (e) {
       safeWarn('openSnapshotChangedFile', e);
-      notifySnapshotFileOpen('无法打开文件', 'error');
+      notifySnapshotFileOpen('无法在文件夹中定位文件', 'error');
     }).then(function () {
       delete snapshotFileOpenInFlight[filePath];
       if (btn) btn.disabled = false;
@@ -3845,8 +3857,8 @@ window.ChatExecutionPlan = (function () {
     nameEl.type = 'button';
     nameEl.className = 'etl-snapshot-file-name';
     nameEl.textContent = snapshotFileName(file.path) || file.path;
-    nameEl.title = (file.path || '') + '\n用系统默认程序打开';
-    nameEl.setAttribute('aria-label', '打开 ' + (file.path || nameEl.textContent));
+    nameEl.title = (file.path || '') + '\n打开所在文件夹并定位';
+    nameEl.setAttribute('aria-label', '在文件夹中定位 ' + (file.path || nameEl.textContent));
     nameEl.addEventListener('click', function (ev) {
       ev.preventDefault();
       ev.stopPropagation();
@@ -3935,10 +3947,11 @@ window.ChatExecutionPlan = (function () {
     return snapshotCanRestoreFn ? !!snapshotCanRestoreFn() : true;
   }
 
-  function rememberSnapshotCheckpointIds(entries, cursorMessageId) {
+  function rememberSnapshotCheckpointIds(entries, cursorMessageId, cursorRestored) {
     snapshotCheckpointIds = Object.create(null);
     snapshotCheckpointEntries = [];
     snapshotCursorMessageId = cursorMessageId || '';
+    snapshotCursorRestored = !!cursorRestored;
     if (!Array.isArray(entries)) return;
     for (var i = 0; i < entries.length; i++) {
       var entry = entries[i];
@@ -3946,12 +3959,14 @@ window.ChatExecutionPlan = (function () {
       if (!mid) continue;
       snapshotCheckpointIds[mid] = true;
       if (entry.isCursor) snapshotCursorMessageId = mid;
+      if (entry.isRestoredCursor) snapshotCursorRestored = true;
       snapshotCheckpointEntries.push({
         messageId: mid,
         userMessageTime: typeof entry.userMessageTime === 'number' ? entry.userMessageTime : null,
         createdAt: entry.createdAt || '',
         preview: entry.preview || '',
         isCursor: !!entry.isCursor,
+        isRestoredCursor: !!entry.isRestoredCursor,
       });
     }
   }
@@ -3972,6 +3987,15 @@ window.ChatExecutionPlan = (function () {
     return !!(messageId && snapshotCursorMessageId && messageId === snapshotCursorMessageId);
   }
 
+  function isSnapshotCursorRestored() {
+    return !!snapshotCursorRestored;
+  }
+
+  /** 只有回滚落到该节点后才隐藏回滚；仅「当前位置」不够。 */
+  function isSnapshotRestoreHidden(messageId) {
+    return isSnapshotCursorMessage(messageId) && snapshotCursorRestored;
+  }
+
   function syncSnapshotCheckpointsToChatUi(entries) {
     var ids = [];
     if (Array.isArray(entries)) {
@@ -3986,7 +4010,7 @@ window.ChatExecutionPlan = (function () {
         window.ChatUI.setCheckpointMessageIds(ids);
       }
       if (window.ChatUI && typeof window.ChatUI.setCursorMessageId === 'function') {
-        window.ChatUI.setCursorMessageId(snapshotCursorMessageId);
+        window.ChatUI.setCursorMessageId(snapshotCursorMessageId, snapshotCursorRestored);
       }
     } catch (_e) { /* ignore */ }
   }
@@ -4056,7 +4080,7 @@ window.ChatExecutionPlan = (function () {
     if (!snapshotTimelineEl) return;
     try {
       var entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
-      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId);
+      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
       syncSnapshotCheckpointsToChatUi(entries);
       applyCheckpointChangedFiles(payload.changedFiles);
       renderSnapshotFiles();
@@ -4133,7 +4157,7 @@ window.ChatExecutionPlan = (function () {
 
         card.appendChild(meta);
         card.appendChild(preview);
-        if (isCursor) {
+        if (isSnapshotRestoreHidden(entry.messageId)) {
           card.classList.add('etl-snapshot-card--no-restore');
         } else {
           card.appendChild(createSnapshotRestoreButton(entry.messageId));
@@ -4170,7 +4194,7 @@ window.ChatExecutionPlan = (function () {
       var payload = data || { entries: [] };
       var entries = Array.isArray(payload.entries) ? payload.entries : [];
       // 无论当前是不是快照 Tab，都要把检查点同步给气泡回滚。
-      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId);
+      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
       syncSnapshotCheckpointsToChatUi(entries);
       applyCheckpointChangedFiles(payload.changedFiles);
       renderSnapshotFiles();
@@ -4272,5 +4296,7 @@ window.ChatExecutionPlan = (function () {
     getSnapshotCheckpointEntries: getSnapshotCheckpointEntries,
     getSnapshotCursorMessageId: getSnapshotCursorMessageId,
     isSnapshotCursorMessage: isSnapshotCursorMessage,
+    isSnapshotCursorRestored: isSnapshotCursorRestored,
+    isSnapshotRestoreHidden: isSnapshotRestoreHidden,
   };
 })();

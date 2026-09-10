@@ -1547,13 +1547,13 @@ window.ChatPage = (function () {
       notifyUser('未找到该消息的检查点。该消息可能在回滚功能启用前发送，请发送新消息后再试。', 'warning', { duration: 5000 });
       return;
     }
-    var atCursor = UI && typeof UI.isCurrentRestoreCursor === 'function'
-      && UI.isCurrentRestoreCursor(restoreId, sentAt);
-    if (!atCursor && window.ChatExecutionPlan
-      && typeof window.ChatExecutionPlan.isSnapshotCursorMessage === 'function') {
-      atCursor = !!window.ChatExecutionPlan.isSnapshotCursorMessage(restoreId);
+    var hideRestore = UI && typeof UI.shouldHideRestoreAtCursor === 'function'
+      && UI.shouldHideRestoreAtCursor(restoreId, sentAt);
+    if (!hideRestore && window.ChatExecutionPlan
+      && typeof window.ChatExecutionPlan.isSnapshotRestoreHidden === 'function') {
+      hideRestore = !!window.ChatExecutionPlan.isSnapshotRestoreHidden(restoreId);
     }
-    if (atCursor) {
+    if (hideRestore) {
       notifyUser('已在该检查点，无需回滚。', 'info', { duration: 3000 });
       return;
     }

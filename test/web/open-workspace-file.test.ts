@@ -100,7 +100,7 @@ describe('openWorkspaceChangedFile', () => {
     expect(openPath).not.toHaveBeenCalled();
   });
 
-  it('系统打开失败时返回 500', async () => {
+  it('在文件夹中定位失败时返回 500', async () => {
     const result = await openWorkspaceChangedFile({
       sessionsDir,
       sessionId: 's1',
@@ -108,6 +108,6 @@ describe('openWorkspaceChangedFile', () => {
       defaultWorkDir: workDir,
       openPath: async () => false,
     });
-    expect(result).toMatchObject({ ok: false, status: 500, error: '无法用系统默认程序打开' });
+    expect(result).toMatchObject({ ok: false, status: 500, error: '无法在文件夹中定位文件' });
   });
 });

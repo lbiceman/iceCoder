@@ -68,7 +68,7 @@ async function loadPanel(
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
     };
     const prefListeners: Array<() => void> = [];
     (window as any).EtlPrefs = {
@@ -700,7 +700,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const prefs = {
         showTransparencyPanel: false,
         panelDefaultExpanded: true,
-        panelWidth: 360,
+        panelWidth: 320,
       };
       (window as any).__setCapability = (value: boolean) => { enabled = value; };
       (window as any).__setShowPanel = (value: boolean) => { prefs.showTransparencyPanel = value; };
@@ -1298,7 +1298,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const prefs: Record<string, unknown> = {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
       };
       (window as any).__prefs = prefs;
       (window as any).ChatExecutionPlanBridge = { isEnabled: () => true };
@@ -1377,8 +1377,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-    expect(result.attrs).toEqual(['msg-a', 'msg-b']);
-    expect(result.restored).toEqual(['msg-a', 'msg-b']);
+    expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
+    expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
     await page.close();
   });
 
@@ -1431,6 +1431,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
 
     expect(result.ready).toEqual([
       { id: 'msg-a', disabled: false, ready: true },
+      { id: 'msg-b', disabled: false, ready: true },
     ]);
     expect(result.blocked.every((b) => b.disabled)).toBe(true);
     expect(result.known).toEqual({ a: true, b: true, other: false });
@@ -1514,7 +1515,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('点击变更文件名会请求系统默认程序打开', async () => {
+  it('点击变更文件名会请求在文件夹中定位', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async (plan) => {
       const panel = (window as any).ChatExecutionPlan;
@@ -1553,7 +1554,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     }, makePlan());
 
     expect(result.tag).toBe('BUTTON');
-    expect(result.label).toBe('打开 src/foo/bar.ts');
+    expect(result.label).toBe('在文件夹中定位 src/foo/bar.ts');
     expect(result.openUrl).toBe('/api/sessions/sess-open/open-file');
     expect(result.method).toBe('POST');
     expect(result.body).toBe(JSON.stringify({ path: 'src/foo/bar.ts' }));
@@ -1600,7 +1601,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('当前位置检查点不显示回滚按钮', async () => {
+  it('未回滚时当前位置仍显示回滚按钮', async () => {
     const page = await loadPanel();
     const result = await page.evaluate(async (plan) => {
       const panel = (window as any).ChatExecutionPlan;
@@ -1615,9 +1616,56 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
             ok: true,
             json: async () => ({
               cursorMessageId: 'msg-now',
+              cursorRestored: false,
               entries: [
-                { messageId: 'msg-old', preview: 'earlier', isCursor: false },
-                { messageId: 'msg-now', preview: 'current', isCursor: true },
+                { messageId: 'msg-old', preview: 'earlier', isCursor: false, isRestoredCursor: false },
+                { messageId: 'msg-now', preview: 'current', isCursor: true, isRestoredCursor: false },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
+        .map((b) => b.getAttribute('data-message-id'));
+      const cursorCard = document.querySelector('.etl-snapshot-node.is-cursor .etl-snapshot-card');
+      return {
+        buttons,
+        cursorHidden: !!(cursorCard && cursorCard.classList.contains('etl-snapshot-card--no-restore')),
+        isCursor: panel.isSnapshotCursorMessage('msg-now'),
+        hidden: panel.isSnapshotRestoreHidden('msg-now'),
+      };
+    }, makePlan());
+
+    expect(result.buttons).toEqual(['msg-old', 'msg-now']);
+    expect(result.cursorHidden).toBe(false);
+    expect(result.isCursor).toBe(true);
+    expect(result.hidden).toBe(false);
+    await page.close();
+  });
+
+  it('回滚到当前节点后隐藏回滚按钮', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              cursorMessageId: 'msg-now',
+              cursorRestored: true,
+              entries: [
+                { messageId: 'msg-old', preview: 'earlier', isCursor: false, isRestoredCursor: false },
+                { messageId: 'msg-now', preview: 'current', isCursor: true, isRestoredCursor: true },
               ],
             }),
           } as Response;
@@ -1635,6 +1683,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         cursorHidden: !!(cursorCard && cursorCard.classList.contains('etl-snapshot-card--no-restore')),
         isCursor: panel.isSnapshotCursorMessage('msg-now'),
         notCursor: panel.isSnapshotCursorMessage('msg-old'),
+        hidden: panel.isSnapshotRestoreHidden('msg-now'),
       };
     }, makePlan());
 
@@ -1642,6 +1691,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.cursorHidden).toBe(true);
     expect(result.isCursor).toBe(true);
     expect(result.notCursor).toBe(false);
+    expect(result.hidden).toBe(true);
     await page.close();
   });
 

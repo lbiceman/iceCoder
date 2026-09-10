@@ -247,12 +247,15 @@ describe('Sessions API (multi-session)', () => {
     expect(res.ok).toBe(true);
     const body = await res.json() as {
       cursorMessageId: string;
-      entries: { messageId: string; preview: string; isCursor: boolean }[];
+      cursorRestored: boolean;
+      entries: { messageId: string; preview: string; isCursor: boolean; isRestoredCursor: boolean }[];
     };
     expect(body.cursorMessageId).toBe(messageId);
+    expect(body.cursorRestored).toBe(false);
     expect(body.entries).toHaveLength(1);
     expect(body.entries[0].preview).toBe('修复登录接口超时');
     expect(body.entries[0].isCursor).toBe(true);
+    expect(body.entries[0].isRestoredCursor).toBe(false);
   });
 
   it('readFirstSessionIdFromIndex 返回 index 第一项', async () => {
