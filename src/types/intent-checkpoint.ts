@@ -74,11 +74,16 @@ export interface CheckpointIndexFile {
   version: 1;
   /** CheckpointEngine 当前 cursor（最近 Intent 的 messageId） */
   cursorMessageId: string | null;
+  /**
+   * cursor 是否来自回滚。发新消息捕获检查点后为 false；
+   * Restore 落到该节点后为 true，此时再回滚同一节点是空操作。
+   */
+  cursorRestored?: boolean;
   entries: CheckpointIndexEntry[];
   /** 会话级累积写入路径（POSIX）。只由 touch 维护，供 workspace 快照与会话修改列表共用。 */
   sessionTouchedPaths?: string[];
 }
 
 export function emptyCheckpointIndex(): CheckpointIndexFile {
-  return { version: 1, cursorMessageId: null, entries: [] };
+  return { version: 1, cursorMessageId: null, cursorRestored: false, entries: [] };
 }

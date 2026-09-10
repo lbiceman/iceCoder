@@ -132,17 +132,21 @@ export interface CheckpointTimelineEntry {
   createdAt: string;
   preview: string;
   isCursor: boolean;
+  /** 已回滚到此节点（再回滚是空操作）；仅发消息落到 cursor 时为 false。 */
+  isRestoredCursor: boolean;
 }
 
 /** 读取 Intent Checkpoint 索引，附带用户消息摘要（供状态快照 Tab 时间轴）。 */
 export async function readCheckpointTimeline(sessionId: string): Promise<{
   cursorMessageId: string | null;
+  cursorRestored: boolean;
   entries: CheckpointTimelineEntry[];
   changedFiles: CheckpointChangedFile[];
 }> {
   const index = await loadCheckpointIndex(SESSIONS_DIR, sessionId);
   const uiMessages = await readUiSessionMessages(SESSIONS_DIR, sessionId);
   const uiById = new Map(uiMessages.filter((m) => m.id).map((m) => [m.id!, m]));
+  const cursorRestored = !!index.cursorRestored;
 
   const entries: CheckpointTimelineEntry[] = index.entries.map((entry) => {
     const ui = uiById.get(entry.messageId);
@@ -150,12 +154,14 @@ export async function readCheckpointTimeline(sessionId: string): Promise<{
     const preview = raw.length > CHECKPOINT_PREVIEW_MAX
       ? `${raw.slice(0, CHECKPOINT_PREVIEW_MAX)}…`
       : raw;
+    const isCursor = entry.messageId === index.cursorMessageId;
     return {
       messageId: entry.messageId,
       userMessageTime: entry.userMessageTime,
       createdAt: entry.createdAt,
       preview: preview || '（无消息摘要）',
-      isCursor: entry.messageId === index.cursorMessageId,
+      isCursor,
+      isRestoredCursor: isCursor && cursorRestored,
     };
   });
 
@@ -168,6 +174,7 @@ export async function readCheckpointTimeline(sessionId: string): Promise<{
 
   return {
     cursorMessageId: index.cursorMessageId,
+    cursorRestored,
     entries,
     changedFiles: buildCheckpointChangedFiles(index.sessionTouchedPaths, uiMessages),
   };
@@ -390,7 +397,7 @@ export function createSessionsRouter(): Router {
   });
 
   /**
-   * POST /api/sessions/:id/open-file - 用系统默认程序打开本会话变更文件
+   * POST /api/sessions/:id/open-file - 在文件管理器中打开所在文件夹并定位本会话变更文件
    */
   router.post('/:id/open-file', async (req: Request, res: Response): Promise<void> => {
     const sessionId = String(req.params.id || SESSION_ID);

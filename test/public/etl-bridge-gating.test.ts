@@ -38,7 +38,7 @@ function makeEtlPrefs(overrides: Record<string, unknown> = {}): EtlPrefsStub {
   const prefs: Record<string, unknown> = {
     showTransparencyPanel: false,
     panelDefaultExpanded: true,
-    panelWidth: 360,
+      panelWidth: 320,
     ...overrides,
   };
   return {

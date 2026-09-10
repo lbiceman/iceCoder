@@ -6,7 +6,7 @@
  */
 
 :root {
-  --etl-w: 360px;
+  --etl-w: 320px;
   --etl-supervision-fg: var(--chip-skill-fg, #c4b0e0);
   --etl-supervision-bg: var(--chip-skill-bg, rgba(167, 148, 200, 0.12));
   --etl-supervision-border: var(--chip-skill-border, rgba(180, 168, 210, 0.28));
@@ -18,7 +18,7 @@
   right: 0;
   top: 0;
   bottom: 0;
-  width: var(--etl-w, 360px);
+  width: var(--etl-w, 320px);
   max-width: 100vw;
   display: flex;
   flex-direction: column;
@@ -42,7 +42,7 @@
 }
 
 body.etl-panel-open .page-container {
-  padding-right: var(--etl-w, 360px);
+  padding-right: var(--etl-w, 320px);
   transition: padding-right var(--transition);
 }
 

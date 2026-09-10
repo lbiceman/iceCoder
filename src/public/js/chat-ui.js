@@ -1591,7 +1591,7 @@ window.ChatUI = (function () {
     return null;
   }
 
-  var restoreUiState = { canRestore: true, checkpointIds: {}, cursorMessageId: '' };
+  var restoreUiState = { canRestore: true, checkpointIds: {}, cursorMessageId: '', cursorRestored: false };
   var messageActionHandlers = { onDelete: null, onRestore: null };
 
   function rebindExistingMessageActionButtons() {
@@ -1738,13 +1738,15 @@ window.ChatUI = (function () {
     refreshRestoreButtonsAfterVirtual();
   }
 
-  function setCursorMessageId(messageId) {
+  function setCursorMessageId(messageId, restored) {
     var next = messageId ? String(messageId) : '';
-    if (restoreUiState.cursorMessageId === next) {
+    var nextRestored = !!next && !!restored;
+    if (restoreUiState.cursorMessageId === next && restoreUiState.cursorRestored === nextRestored) {
       refreshRestoreButtonsVisibility();
       return;
     }
     restoreUiState.cursorMessageId = next;
+    restoreUiState.cursorRestored = nextRestored;
     refreshRestoreButtonsAfterVirtual();
   }
 
@@ -1757,6 +1759,17 @@ window.ChatUI = (function () {
       }
     } catch (_e) { /* ignore */ }
     return '';
+  }
+
+  function isCursorRestored() {
+    if (restoreUiState.cursorRestored) return true;
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.isSnapshotCursorRestored === 'function') {
+        return !!window.ChatExecutionPlan.isSnapshotCursorRestored();
+      }
+    } catch (_e) { /* ignore */ }
+    return false;
   }
 
   function isCurrentRestoreCursor(messageId, sentAt) {
@@ -1777,6 +1790,19 @@ window.ChatUI = (function () {
     } catch (_e) { /* ignore */ }
     var resolved = resolveCheckpointMessageId(messageId, sentAt);
     return !!(resolved && (resolved === cursor || cursorAliases.indexOf(resolved) >= 0));
+  }
+
+  /** 已回滚到该节点才隐藏回滚；仅「当前位置」仍展示。 */
+  function shouldHideRestoreAtCursor(messageId, sentAt) {
+    if (!isCursorRestored()) return false;
+    if (isCurrentRestoreCursor(messageId, sentAt)) return true;
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.isSnapshotRestoreHidden === 'function') {
+        return !!window.ChatExecutionPlan.isSnapshotRestoreHidden(messageId);
+      }
+    } catch (_e) { /* ignore */ }
+    return false;
   }
 
   /** 把时间轴等权威来源的 id 并入，不覆盖已有集合。 */
@@ -1956,7 +1982,7 @@ window.ChatUI = (function () {
     var mid = btn.dataset.messageId || btn.getAttribute('data-message-id') || '';
     var sentAtRaw = btn.dataset.sentAt || btn.getAttribute('data-sent-at') || '';
     var sentAt = sentAtRaw ? Number(sentAtRaw) : NaN;
-    var atCursor = isCurrentRestoreCursor(mid, isFinite(sentAt) ? sentAt : undefined);
+    var atCursor = shouldHideRestoreAtCursor(mid, isFinite(sentAt) ? sentAt : undefined);
     btn.hidden = atCursor;
     if (atCursor) {
       btn.disabled = true;
@@ -3043,6 +3069,8 @@ window.ChatUI = (function () {
     mergeCheckpointMessageIds: mergeCheckpointMessageIds,
     setCursorMessageId: setCursorMessageId,
     isCurrentRestoreCursor: isCurrentRestoreCursor,
+    shouldHideRestoreAtCursor: shouldHideRestoreAtCursor,
+    isCursorRestored: isCursorRestored,
     hasCheckpointForMessage: hasCheckpointForMessage,
     resolveCheckpointMessageId: resolveCheckpointMessageId,
     isChatRestoreAllowed: isChatRestoreAllowed,

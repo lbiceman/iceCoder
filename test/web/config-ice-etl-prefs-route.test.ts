@@ -63,7 +63,7 @@ describe('PATCH /api/config/ice-etl-prefs（allowedKeys 与 DEFAULT 一致性）
     const cases: Record<string, unknown> = {
       showTransparencyPanel: false,
       panelDefaultExpanded: false,
-      panelWidth: 420,
+      panelWidth: 380,
       taskDoneNotification: true,
       panelAutoCollapse: true,
     };
@@ -133,7 +133,7 @@ describe('PATCH /api/config/ice-etl-prefs（allowedKeys 与 DEFAULT 一致性）
     const body = await res.json();
     expect(body.iceEtlPrefs).toEqual({
       ...DEFAULT_ICE_ETL_PREFS,
-      panelWidth: 480,
+      panelWidth: 380,
     });
   });
 });

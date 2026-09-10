@@ -142,6 +142,7 @@ describe('RuntimeRestoreCoordinator', () => {
 
     const index = await loadCheckpointIndex(tmp, sessionId);
     expect(index.cursorMessageId).toBe(messageId);
+    expect(index.cursorRestored).toBe(true);
     expect(index.entries).toHaveLength(1);
 
     const archive = await loadIntentCheckpoint(tmp, sessionId, messageId);
@@ -224,6 +225,7 @@ describe('RuntimeRestoreCoordinator', () => {
     });
     let index = await loadCheckpointIndex(tmp, sessionId);
     expect(index.cursorMessageId).toBe(msg3);
+    expect(index.cursorRestored).toBe(true);
     expect(index.entries).toHaveLength(3);
 
     await coordinator.restore({
@@ -234,6 +236,7 @@ describe('RuntimeRestoreCoordinator', () => {
     });
     index = await loadCheckpointIndex(tmp, sessionId);
     expect(index.cursorMessageId).toBe(msg2);
+    expect(index.cursorRestored).toBe(true);
     expect(index.entries).toHaveLength(2);
 
     const uiRaw = JSON.parse(await fs.readFile(path.join(tmp, `${sessionId}.json`), 'utf-8'));

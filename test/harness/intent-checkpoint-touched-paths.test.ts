@@ -82,6 +82,7 @@ describe('sessionTouchedPaths', () => {
       await removeCheckpoint(sessionDir, sessionId, 'u1');
       const index = await loadCheckpointIndex(sessionDir, sessionId);
       expect(index.cursorMessageId).toBe('u2');
+      expect(index.cursorRestored).toBe(false);
       expect(index.sessionTouchedPaths).toEqual(['src/old.ts', 'src/live.ts']);
     } finally {
       await fs.rm(sessionDir, { recursive: true, force: true });
@@ -110,6 +111,7 @@ describe('sessionTouchedPaths', () => {
       await truncateCheckpointsAfter(sessionDir, sessionId, 'u1');
       const index = await loadCheckpointIndex(sessionDir, sessionId);
       expect(index.cursorMessageId).toBe('u1');
+      expect(index.cursorRestored).toBe(true);
       expect(index.sessionTouchedPaths).toEqual(['src/keep.ts']);
     } finally {
       await fs.rm(sessionDir, { recursive: true, force: true });

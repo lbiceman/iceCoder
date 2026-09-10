@@ -177,10 +177,9 @@ window.SettingsPage = (function () {
                 '</div>' +
                 '<div class="settings-card-control">' +
                   '<select class="settings-etl-select" id="etl-panel-width" aria-label="面板默认宽度">' +
+                    '<option value="280">280 px</option>' +
                     '<option value="320">320 px</option>' +
-                    '<option value="360">360 px</option>' +
-                    '<option value="420">420 px</option>' +
-                    '<option value="480">480 px</option>' +
+                    '<option value="380">380 px</option>' +
                   '</select>' +
                 '</div>' +
               '</div>' +
@@ -270,7 +269,7 @@ window.SettingsPage = (function () {
       panelDefaultExpanded.disabled = subgroupDisabled;
     }
     if (panelWidth) {
-      panelWidth.value = String(prefs.panelWidth || 360);
+      panelWidth.value = String(prefs.panelWidth || 320);
       panelWidth.disabled = subgroupDisabled;
     }
     if (panelAutoCollapse) {

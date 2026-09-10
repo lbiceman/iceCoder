@@ -11,7 +11,7 @@ window.EtlPrefs = (function () {
   var DEFAULTS = {
     showTransparencyPanel: true,
     panelDefaultExpanded: true,
-    panelWidth: 360,
+    panelWidth: 320,
     taskDoneNotification: false,
     panelAutoCollapse: false,
   };
@@ -22,10 +22,21 @@ window.EtlPrefs = (function () {
   var readyResolved = false;
   var loading = false;
 
+  var ALLOWED_PANEL_WIDTHS = [280, 320, 380];
+
   function clampPanelWidth(value) {
     var w = typeof value === 'number' ? value : parseInt(value, 10);
     if (!isFinite(w)) return DEFAULTS.panelWidth;
-    return Math.min(480, Math.max(320, w));
+    var best = ALLOWED_PANEL_WIDTHS[0];
+    var bestDist = Math.abs(w - best);
+    for (var i = 1; i < ALLOWED_PANEL_WIDTHS.length; i++) {
+      var d = Math.abs(w - ALLOWED_PANEL_WIDTHS[i]);
+      if (d < bestDist) {
+        best = ALLOWED_PANEL_WIDTHS[i];
+        bestDist = d;
+      }
+    }
+    return best;
   }
 
   function sanitize(raw) {

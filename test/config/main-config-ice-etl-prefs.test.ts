@@ -13,8 +13,12 @@ describe('main-config-ice-etl-prefs', () => {
   it('sanitizeIceEtlPrefs 夹紧 panelWidth 并补默认', () => {
     expect(sanitizeIceEtlPrefs({ panelWidth: 9999 })).toEqual({
       ...DEFAULT_ICE_ETL_PREFS,
-      panelWidth: 480,
+      panelWidth: 380,
     });
+    expect(sanitizeIceEtlPrefs({ panelWidth: 10 }).panelWidth).toBe(280);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 280 }).panelWidth).toBe(280);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 320 }).panelWidth).toBe(320);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 380 }).panelWidth).toBe(380);
     expect(sanitizeIceEtlPrefs(null)).toEqual(DEFAULT_ICE_ETL_PREFS);
   });
 
@@ -25,12 +29,12 @@ describe('main-config-ice-etl-prefs', () => {
 
     const saved = await writeIceEtlPrefsToMainConfig(configPath, {
       showTransparencyPanel: false,
-      panelWidth: 420,
+      panelWidth: 380,
     });
     expect(saved).toEqual({
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
-      panelWidth: 420,
+      panelWidth: 380,
       taskDoneNotification: false,
       panelAutoCollapse: false,
     });

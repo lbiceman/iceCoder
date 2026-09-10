@@ -1,10 +1,10 @@
 /**
- * 将会话变更文件的相对路径解析到工作区，再用系统默认程序打开。
+ * 将会话变更文件的相对路径解析到工作区，再在文件管理器中定位该文件。
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { openPathWithDefaultApp } from '../cli/open-path.js';
+import { revealPathInFolder } from '../cli/open-path.js';
 import { loadCheckpointIndex } from '../harness/intent-checkpoint-store.js';
 import { getDefaultWorkDir } from '../cli/paths.js';
 import { normalizeSessionTouchedPath } from './session-changed-files.js';
@@ -98,10 +98,10 @@ export async function openWorkspaceChangedFile(opts: {
     return { ok: false, status: resolved.status, error: resolved.error };
   }
 
-  const openPath = opts.openPath ?? openPathWithDefaultApp;
+  const openPath = opts.openPath ?? revealPathInFolder;
   const opened = await openPath(resolved.absPath);
   if (!opened) {
-    return { ok: false, status: 500, error: '无法用系统默认程序打开' };
+    return { ok: false, status: 500, error: '无法在文件夹中定位文件' };
   }
   return { ok: true, status: 200, absPath: resolved.absPath };
 }

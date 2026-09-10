@@ -58,7 +58,7 @@ async function loadLifecycle(): Promise<Page> {
     const prefs = {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
     };
     (window as any).EtlPrefs = {
       getKey: (key: keyof typeof prefs) => prefs[key],
@@ -252,7 +252,7 @@ describe('ETL bridge 生命周期', () => {
       const prefs = {
         showTransparencyPanel: true,
         panelDefaultExpanded: true,
-        panelWidth: 360,
+        panelWidth: 320,
       };
       (window as any).EtlPrefs = {
         getKey: (key: keyof typeof prefs) => prefs[key],
