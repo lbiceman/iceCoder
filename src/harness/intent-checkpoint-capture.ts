@@ -19,6 +19,7 @@ import {
   collectTrackedPathsFromCheckpoint,
   extractLikelyFilePathsFromText,
   mergeTrackedPathSets,
+  remapPathToWorkspace,
   resolveLikelyPathsInWorkspace,
 } from './workspace-snapshot.js';
 import { loadSessionWorkspace } from './session-workspace-store.js';
@@ -72,7 +73,7 @@ export async function captureIntentCheckpoint(
     collectTrackedPathsFromCheckpoint(projectCheckpoint, params.priorTrackedPaths ?? []),
     manifestPaths,
     hintedPaths,
-  );
+  ).map((p) => remapPathToWorkspace(params.workspaceRoot, p) ?? p.replace(/\\/g, '/'));
   const workspaceFiles = await captureWorkspaceFileSnapshot(
     params.workspaceRoot,
     trackedPaths,

@@ -174,7 +174,7 @@ describe('checkpoint upgrade compatibility', () => {
     });
   });
 
-  it('restores an old combinedCheckpoint intent without rewriting that archive', async () => {
+  it('restores an old combinedCheckpoint intent and drops the restored user turn', async () => {
     await seedPreV3Session(tmp, sessionId);
     const coordinator = new RuntimeRestoreCoordinator();
     await coordinator.restore({
@@ -187,7 +187,7 @@ describe('checkpoint upgrade compatibility', () => {
     const ui = JSON.parse(await fs.readFile(path.join(tmp, `${sessionId}.json`), 'utf-8')) as Array<{
       id: string;
     }>;
-    expect(ui.map(m => m.id)).toEqual(['u1']);
+    expect(ui.map(m => m.id)).toEqual([]);
     expect(await fs.readFile(path.join(tmp, 'src', 'a.ts'), 'utf-8')).toBe('before');
 
     const restored = JSON.parse(
@@ -197,10 +197,9 @@ describe('checkpoint upgrade compatibility', () => {
     expect(restored.execution.taskState.goal).toBe('Implement the remaining editor feature without losing session history');
     expect(restored.extensions.restoredFromIntentMessageId).toBe('u1');
 
-    const u1OnDisk = JSON.parse(
-      await fs.readFile(intentCheckpointArchivePath(tmp, sessionId, 'u1'), 'utf-8'),
-    );
-    expect(u1OnDisk.combinedCheckpoint.taskId).toBe('task-legacy');
+    await expect(fs.access(intentCheckpointArchivePath(tmp, sessionId, 'u1'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
     await expect(fs.access(intentCheckpointArchivePath(tmp, sessionId, 'u2'))).rejects.toMatchObject({
       code: 'ENOENT',
     });

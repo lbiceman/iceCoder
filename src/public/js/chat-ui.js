@@ -1668,13 +1668,14 @@ window.ChatUI = (function () {
     return restoreBtn;
   }
 
-  function createDeleteButton(messageId) {
+  function createDeleteButton(messageId, sentAt) {
     var deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'msg-delete-btn';
     deleteBtn.innerHTML = deleteButtonIconSvg();
     if (window.AppIcon) window.AppIcon.hydrate(deleteBtn);
     deleteBtn.dataset.messageId = messageId;
+    if (sentAt) deleteBtn.dataset.sentAt = String(sentAt);
     deleteBtn.setAttribute('aria-label', '删除此消息');
     deleteBtn.title = '删除此消息';
     bindMessageActionButton(deleteBtn, 'delete', messageId);
@@ -1684,7 +1685,7 @@ window.ChatUI = (function () {
   function createUserMessageActions(messageId, sentAt) {
     var actions = document.createElement('div');
     actions.className = 'msg-label-actions';
-    actions.appendChild(createDeleteButton(messageId));
+    actions.appendChild(createDeleteButton(messageId, sentAt));
     actions.appendChild(createRestoreButton(messageId, sentAt));
     return actions;
   }

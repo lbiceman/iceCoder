@@ -91,6 +91,14 @@ export async function flushStructuredMessagesNow(sessionId: string): Promise<voi
   );
 }
 
+export function cancelPendingStructuredSave(sessionId: string): void {
+  const pending = saveTimerMap.get(sessionId);
+  if (pending) {
+    clearTimeout(pending);
+    saveTimerMap.delete(sessionId);
+  }
+}
+
 export function saveStructuredMessages(messages: UnifiedMessage[], sessionId?: string): void {
   const id = sessionId || getActiveSessionId();
   if (isSessionTombstoned(id)) return;
@@ -98,9 +106,12 @@ export function saveStructuredMessages(messages: UnifiedMessage[], sessionId?: s
   const existing = saveTimerMap.get(id);
   if (existing) clearTimeout(existing);
   const timer = setTimeout(async () => {
+    saveTimerMap.delete(id);
     if (isSessionTombstoned(id)) return;
     try {
-      await writeStructuredMessagesFile(SESSIONS_DIR, id, messages);
+      const current = getCachedMessages(id);
+      if (current === undefined) return;
+      await writeStructuredMessagesFile(SESSIONS_DIR, id, current);
     } catch (err) {
       console.error('[chat-ws] 保存结构化消息失败:', err);
     }

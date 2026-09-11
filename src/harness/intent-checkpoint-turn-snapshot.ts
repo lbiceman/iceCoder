@@ -11,7 +11,7 @@ import {
   saveIntentCheckpoint,
 } from './intent-checkpoint-store.js';
 import type { IntentCheckpointArchive } from '../types/intent-checkpoint.js';
-import { toPosixRel } from './workspace-snapshot.js';
+import { remapPathToWorkspace, remapSnapshotToWorkspace } from './workspace-snapshot.js';
 
 const WRITE_TOOLS = new Set([
   'write_file',
@@ -73,9 +73,8 @@ async function readWorkspaceFileOrNull(
   workspaceRoot: string,
   relPath: string,
 ): Promise<string | null> {
-  const root = path.resolve(workspaceRoot);
-  const normalized = relPath.replace(/\\/g, '/');
-  const abs = path.join(root, ...normalized.split('/'));
+  const rel = remapPathToWorkspace(workspaceRoot, relPath) ?? relPath.replace(/\\/g, '/');
+  const abs = path.resolve(path.resolve(workspaceRoot), rel);
   try {
     const stat = await fs.stat(abs);
     if (!stat.isFile()) return null;
@@ -94,13 +93,29 @@ export async function capturePreTurnWriteSnapshot(
   if (!sessionId || !relPath?.trim()) return;
   const activeTurn = activeTurns.get(sessionId);
   if (!activeTurn) return;
-  const normalized = relPath.replace(/\\/g, '/');
-  const posix = toPosixRel(workspaceRoot, path.resolve(workspaceRoot, ...normalized.split('/')));
-  const rel = posix ?? normalized;
+  const root = activeTurn.workspaceRoot || workspaceRoot;
+  const rel = remapPathToWorkspace(root, relPath) ?? relPath.replace(/\\/g, '/');
   const key = turnKey(activeTurn.sessionId, activeTurn.messageId);
   const buf = turnBuffers.get(key);
   if (!buf || rel in buf) return;
-  buf[rel] = await readWorkspaceFileOrNull(workspaceRoot, rel);
+  buf[rel] = await readWorkspaceFileOrNull(root, rel);
+}
+
+/** 命令执行后发现的新建文件：写入前状态记为不存在。 */
+export function recordPreTurnMissingFile(
+  sessionId: string | undefined,
+  workspaceRoot: string,
+  relPath: string | undefined,
+): void {
+  if (!sessionId || !relPath?.trim()) return;
+  const activeTurn = activeTurns.get(sessionId);
+  if (!activeTurn) return;
+  const root = activeTurn.workspaceRoot || workspaceRoot;
+  const rel = remapPathToWorkspace(root, relPath) ?? relPath.replace(/\\/g, '/');
+  const key = turnKey(activeTurn.sessionId, activeTurn.messageId);
+  const buf = turnBuffers.get(key);
+  if (!buf || rel in buf) return;
+  buf[rel] = null;
 }
 
 /** 将本轮写入前快照合并进 Intent Checkpoint 归档（Harness 本轮结束后调用）。 */
@@ -117,10 +132,13 @@ export async function finalizeIntentCheckpointTurn(
   const archive = await loadIntentCheckpoint(sessionDir, sessionId, messageId);
   if (!archive) return;
 
-  const mergedFiles = { ...archive.workspaceFiles };
-  const mergedTracked = new Set(archive.trackedPaths.map((p) => p.replace(/\\/g, '/')));
+  const root = archive.workspaceRoot || sessionDir;
+  const mergedFiles = remapSnapshotToWorkspace(root, archive.workspaceFiles);
+  const mergedTracked = new Set(
+    archive.trackedPaths.map((p) => remapPathToWorkspace(root, p) ?? p.replace(/\\/g, '/')),
+  );
   for (const [rel, content] of Object.entries(buf)) {
-    const normalized = rel.replace(/\\/g, '/');
+    const normalized = remapPathToWorkspace(root, rel) ?? rel.replace(/\\/g, '/');
     if (!(normalized in mergedFiles)) {
       mergedFiles[normalized] = content;
     }

@@ -38,11 +38,20 @@ import { recordBudgetBlockByPath } from './harness-policy-stats.js';
 import {
   capturePreTurnWriteSnapshot,
   isIntentCheckpointWriteTool,
+  recordPreTurnMissingFile,
 } from './intent-checkpoint-turn-snapshot.js';
 import {
   collectSessionTouchedPaths,
   touchSessionTouchedPaths,
 } from './intent-checkpoint-store.js';
+import { remapPathToWorkspace } from './workspace-snapshot.js';
+import {
+  diffInventoryTouchedPaths,
+  isShellWorkspaceTouchTool,
+  listWorkspaceFileInventory,
+  rememberPreCommandInventory,
+  takePreCommandInventory,
+} from './workspace-command-touch.js';
 import { redactToolArguments } from '../tools/tool-argument-redaction.js';
 import { evaluatePlanModeToolCall } from '../session/plan-mode-tool-policy.js';
 import type { CompletionFactsView } from './completion-facts-view.js';
@@ -650,11 +659,24 @@ export async function executeToolCallsStreaming(
       deps.harnessPolicyStats && (deps.harnessPolicyStats.writeBypassUsedCount += 1);
     }
 
-    if (isIntentCheckpointWriteTool(tc.name) && targetPath) {
-      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, targetPath);
+    const snapshotPaths = new Set<string>();
+    if (targetPath && (isIntentCheckpointWriteTool(tc.name) || tc.name === 'read_file')) {
+      snapshotPaths.add(targetPath);
     }
-    if (tc.name === 'read_file') {
-      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, targetPath);
+    for (const p of collectSessionTouchedPaths(tc.name, tc.arguments)) snapshotPaths.add(p);
+    for (const p of snapshotPaths) {
+      await capturePreTurnWriteSnapshot(deps.sessionId, deps.workspaceRoot, p);
+    }
+    if (
+      deps.sessionId
+      && tc.id
+      && isShellWorkspaceTouchTool(tc.name, tc.arguments)
+    ) {
+      rememberPreCommandInventory(
+        deps.sessionId,
+        tc.id,
+        await listWorkspaceFileInventory(deps.workspaceRoot),
+      );
     }
 
     // ── 提交到流式执行器 ──
@@ -713,8 +735,23 @@ export async function executeToolCallsStreaming(
       }
     }
 
+    const preInv = deps.sessionId && tc.id
+      ? takePreCommandInventory(deps.sessionId, tc.id)
+      : undefined;
     if (result.success && deps.sessionDir && deps.sessionId) {
-      const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments);
+      const touchedPaths = collectSessionTouchedPaths(tc.name, tc.arguments)
+        .map((p) => remapPathToWorkspace(deps.workspaceRoot, p) ?? p)
+        .filter(Boolean);
+      if (preInv) {
+        const after = await listWorkspaceFileInventory(deps.workspaceRoot);
+        const diff = diffInventoryTouchedPaths(deps.workspaceRoot, preInv, after);
+        for (const created of diff.created) {
+          recordPreTurnMissingFile(deps.sessionId, deps.workspaceRoot, created);
+          touchedPaths.push(created);
+        }
+        // 不把 mtime 变化的已有文件算进会话改动：npm test 等会误伤 lockfile。
+        // 命令里写明的删除/改写路径已由 collectSessionTouchedPaths 覆盖。
+      }
       if (touchedPaths.length) {
         await touchSessionTouchedPaths(deps.sessionDir, deps.sessionId, touchedPaths).catch(() => {
           /* ignore */

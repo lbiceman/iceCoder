@@ -16,6 +16,62 @@ function toPosixRel(workspaceRoot: string, absPath: string): string | null {
   return rel.split(path.sep).join('/');
 }
 
+function stripRedundantWorkspacePrefix(root: string, posixRel: string): string {
+  const rootParts = path.resolve(root).replace(/\\/g, '/').split('/').filter(Boolean);
+  const pathParts = posixRel.split('/').filter(Boolean);
+  if (pathParts.length < 2) return posixRel;
+  const max = Math.min(rootParts.length, pathParts.length - 1);
+  const basename = (rootParts[rootParts.length - 1] || '').toLowerCase();
+  for (let n = max; n >= 1; n--) {
+    if (n === 1 && pathParts[0].toLowerCase() !== basename) continue;
+    const tail = rootParts.slice(-n).join('/');
+    const head = pathParts.slice(0, n).join('/');
+    if (tail.toLowerCase() !== head.toLowerCase()) continue;
+    const rest = pathParts.slice(n).join('/');
+    if (rest) return rest;
+  }
+  return posixRel;
+}
+
+/**
+ * 把工具/归档里的路径收成「相对当前工作区根」的 POSIX 路径。
+ * 锁定子目录后，模型常给出带父级前缀的 path（如 test/agentToolTest/20260910/empty.txt），
+ * 直接 join 会删错套娃路径，真正的 empty.txt 还在根上。
+ */
+export function remapPathToWorkspace(workspaceRoot: string, storedPath: string): string | null {
+  const raw = String(storedPath || '').trim();
+  if (!raw) return null;
+  const root = path.resolve(workspaceRoot);
+  const posix = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+  const looksAbs = path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw);
+  const abs = looksAbs ? path.resolve(raw) : path.resolve(root, posix);
+  const inside = toPosixRel(root, abs);
+  const stripped = stripRedundantWorkspacePrefix(root, posix);
+  if (stripped !== posix) {
+    const strippedRel = toPosixRel(root, path.resolve(root, stripped));
+    if (strippedRel) return strippedRel;
+  }
+  return inside ?? posix;
+}
+
+export function remapSnapshotToWorkspace(
+  workspaceRoot: string,
+  snapshot: Record<string, string | null>,
+): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const [raw, content] of Object.entries(snapshot)) {
+    const key = remapPathToWorkspace(workspaceRoot, raw) ?? raw.replace(/\\/g, '/');
+    if (!(key in out) || content === null) out[key] = content;
+  }
+  return out;
+}
+
+function absInWorkspace(workspaceRoot: string, storedPath: string): string {
+  const rel = remapPathToWorkspace(workspaceRoot, storedPath)
+    ?? storedPath.replace(/\\/g, '/');
+  return path.resolve(path.resolve(workspaceRoot), rel);
+}
+
 export function collectTrackedPathsFromCheckpoint(
   combined: CombinedCheckpointFile | ProjectCheckpointV3 | null,
   extra: string[] = [],
@@ -61,21 +117,20 @@ export async function captureWorkspaceFileSnapshot(
   workspaceRoot: string,
   trackedPaths: string[],
 ): Promise<Record<string, string | null>> {
-  const root = path.resolve(workspaceRoot);
   const snapshot: Record<string, string | null> = {};
 
   for (const rel of trackedPaths) {
-    const normalized = rel.replace(/\\/g, '/');
-    const abs = path.join(root, ...normalized.split('/'));
+    const key = remapPathToWorkspace(workspaceRoot, rel) ?? rel.replace(/\\/g, '/');
+    const abs = absInWorkspace(workspaceRoot, key);
     try {
       const stat = await fs.stat(abs);
       if (stat.isFile()) {
-        snapshot[normalized] = await fs.readFile(abs, 'utf-8');
+        snapshot[key] = await fs.readFile(abs, 'utf-8');
       } else {
-        snapshot[normalized] = null;
+        snapshot[key] = null;
       }
     } catch {
-      snapshot[normalized] = null;
+      snapshot[key] = null;
     }
   }
   return snapshot;
@@ -86,27 +141,24 @@ export async function applyWorkspaceFileSnapshot(
   snapshot: Record<string, string | null>,
   pathsToDelete: string[] = [],
 ): Promise<void> {
-  const root = path.resolve(workspaceRoot);
-
-  for (const rel of pathsToDelete) {
-    const normalized = rel.replace(/\\/g, '/');
-    const abs = path.join(root, ...normalized.split('/'));
+  const unlinkRel = async (rel: string) => {
+    const abs = absInWorkspace(workspaceRoot, rel);
     try {
       await fs.unlink(abs);
     } catch {
       /* may not exist */
     }
+  };
+
+  for (const rel of pathsToDelete) {
+    await unlinkRel(rel);
   }
 
-  for (const [rel, content] of Object.entries(snapshot)) {
-    const normalized = rel.replace(/\\/g, '/');
-    const abs = path.join(root, ...normalized.split('/'));
+  const remapped = remapSnapshotToWorkspace(workspaceRoot, snapshot);
+  for (const [rel, content] of Object.entries(remapped)) {
+    const abs = absInWorkspace(workspaceRoot, rel);
     if (content === null) {
-      try {
-        await fs.unlink(abs);
-      } catch {
-        /* absent */
-      }
+      await unlinkRel(rel);
       continue;
     }
     await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -114,13 +166,33 @@ export async function applyWorkspaceFileSnapshot(
   }
 }
 
-/** 合并后续 checkpoint 中新增的路径，用于 restore 时清理 */
+/**
+ * 检查点当时还不存在的路径才进入删除列表。
+ * 快照里已有内容（含空文件）必须写回，不能因为会话后来碰过就删掉。
+ */
 export function collectPathsToDeleteOnRestore(
   targetFiles: Record<string, string | null>,
-  laterTrackedPaths: string[],
+  laterCreatedPaths: string[],
+  workspaceRoot?: string,
 ): string[] {
-  const targetKeys = new Set(Object.keys(targetFiles));
-  return laterTrackedPaths.filter((p) => !targetKeys.has(p.replace(/\\/g, '/')));
+  const remap = (raw: string) =>
+    workspaceRoot
+      ? (remapPathToWorkspace(workspaceRoot, raw) ?? raw.replace(/\\/g, '/'))
+      : raw.replace(/\\/g, '/');
+  const existedKeys = new Set(
+    Object.entries(targetFiles)
+      .filter(([, content]) => content !== null)
+      .map(([raw]) => remap(raw)),
+  );
+  const extra: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of laterCreatedPaths) {
+    const p = remap(raw);
+    if (!p || existedKeys.has(p) || seen.has(p)) continue;
+    seen.add(p);
+    extra.push(p);
+  }
+  return extra;
 }
 
 export function absolutizeIfNeeded(workspaceRoot: string, filePath: string): string {

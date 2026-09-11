@@ -230,6 +230,78 @@ describe('chat-ws-loop', () => {
     expect(leftover[0].text).toBe('second');
   });
 
+  it('本轮执行期间入队的最后一项会在循环结束后 kickoff', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    addChatClient(ws);
+    const tq = getTaskQueueManager(getSessionsDir());
+    vi.mocked(handleChatMessage).mockImplementation(async (input) => {
+      if (input.message === 'first') {
+        await tq.enqueue(sid, {
+          text: 'last-stuck',
+          source: 'implicit',
+          messageId: 'm-last',
+        });
+      }
+      return 'model_done';
+    });
+
+    await enqueueAndMaybeKickoff(dummyDeps, sid, ws, {
+      text: 'first',
+      source: 'implicit',
+      messageId: 'm-first',
+    });
+    await vi.waitFor(() => {
+      expect(handleChatMessage).toHaveBeenCalledTimes(2);
+    });
+    expect(vi.mocked(handleChatMessage).mock.calls[1]?.[0]).toMatchObject({
+      message: 'last-stuck',
+    });
+    await vi.waitFor(async () => {
+      expect(await tq.list(sid)).toHaveLength(0);
+    });
+    await vi.waitFor(() => {
+      expect(sessionProcessing.has(sid)).toBe(false);
+    });
+  });
+
+  it('空闲时并发入队只 kickoff 一次并吃完队列', async () => {
+    const sid = uniqueSid();
+    const ws = fakeWs();
+    subscribeWsToSession(ws, sid);
+    addChatClient(ws);
+    let releaseFirst!: () => void;
+    const firstTurn = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let started = 0;
+    vi.mocked(handleChatMessage).mockImplementation(async () => {
+      started += 1;
+      if (started === 1) await firstTurn;
+      return 'model_done';
+    });
+
+    await Promise.all([
+      enqueueAndMaybeKickoff(dummyDeps, sid, ws, { text: 'A', source: 'implicit', messageId: 'm-a' }),
+      enqueueAndMaybeKickoff(dummyDeps, sid, ws, { text: 'B', source: 'implicit', messageId: 'm-b' }),
+      enqueueAndMaybeKickoff(dummyDeps, sid, ws, { text: 'C', source: 'implicit', messageId: 'm-c' }),
+      enqueueAndMaybeKickoff(dummyDeps, sid, ws, { text: 'D', source: 'implicit', messageId: 'm-d' }),
+    ]);
+    expect(started).toBe(1);
+
+    releaseFirst();
+    await vi.waitFor(() => {
+      expect(handleChatMessage).toHaveBeenCalledTimes(4);
+    });
+    await vi.waitFor(async () => {
+      expect(await getTaskQueueManager(getSessionsDir()).list(sid)).toHaveLength(0);
+    });
+    await vi.waitFor(() => {
+      expect(sessionProcessing.has(sid)).toBe(false);
+    });
+  });
+
   it('handleChatMessage 抛错时广播 error 并结束循环', async () => {
     const sid = uniqueSid();
     const ws = fakeWs();
