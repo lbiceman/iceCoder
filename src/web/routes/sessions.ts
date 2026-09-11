@@ -386,7 +386,7 @@ export function createSessionsRouter(): Router {
   });
 
   /**
-   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴（检查点 Tab）
+   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴
    */
   router.get('/:id/checkpoints', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');

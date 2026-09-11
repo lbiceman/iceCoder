@@ -387,7 +387,7 @@ describe('ETL bridge 生命周期', () => {
         return { ok: true, json: async () => ({ plan }) };
       };
       bridge.handleStep({ type: 'task_graph_init', plan });
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 40));
       bridge.notifyNewTurnStarted();
       return Array.from(document.querySelectorAll('.etl-snapshot-file-name'))

@@ -1174,41 +1174,43 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('刷新后默认展示执行流 Tab', async () => {
+  it('刷新后工作台无 Tab，检查点与执行流同屏', async () => {
     const page = await loadPanel();
-    const switched = await page.evaluate((plan) => {
+    const layout = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
-      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      return {
+        tabs: document.querySelectorAll('.etl-tab').length,
+        chapters: !!document.querySelector('#etl-chapter-timeline'),
+        flow: !!document.querySelector('#etl-panel-flow'),
+      };
     }, makePlan());
-    expect(switched).toBe('snapshot');
+    expect(layout).toEqual({ tabs: 0, chapters: true, flow: true });
     await page.close();
 
     const freshPage = await loadPanel();
-    const defaultTab = await freshPage.evaluate((plan) => {
+    const again = await freshPage.evaluate((plan) => {
       (window as any).ChatExecutionPlan.setPlan(plan);
-      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      return document.querySelectorAll('.etl-tab').length;
     }, makePlan());
-    expect(defaultTab).toBe('flow');
+    expect(again).toBe(0);
     await freshPage.close();
   });
 
-  it('移动端切到桌面专属 Tab 时回退 flow', async () => {
+  it('移动端同样无 Tab', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
       document.documentElement.setAttribute('data-shell', 'mobile');
       panel.setPlan({ ...plan, planId: 'mobile-plan' });
       return {
-        active: document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab'),
-        flowHidden: document.querySelector('[data-panel="flow"]')?.classList.contains('hidden'),
+        tabs: document.querySelectorAll('.etl-tab').length,
+        flowHidden: document.querySelector('#etl-panel-flow')?.classList.contains('hidden') ?? true,
       };
     }, makePlan());
 
-    expect(result).toEqual({ active: 'flow', flowHidden: false });
+    expect(result).toEqual({ tabs: 0, flowHidden: false });
     await page.close();
   });
 
@@ -1371,7 +1373,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return originalFetch(url);
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const buttons = Array.from(
         document.querySelectorAll('.etl-snapshot-restore-btn'),
@@ -1382,8 +1384,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-    expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
-    expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
+      expect(result.attrs).toEqual(['msg-c', 'msg-b', 'msg-a']);
+      expect(result.restored).toEqual(['msg-c', 'msg-b', 'msg-a']);
     await page.close();
   });
 
@@ -1413,7 +1415,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const readState = () => Array.from(
         document.querySelectorAll('.etl-snapshot-restore-btn'),
@@ -1435,8 +1437,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     }, makePlan());
 
     expect(result.ready).toEqual([
-      { id: 'msg-a', disabled: false, ready: true },
       { id: 'msg-b', disabled: false, ready: true },
+      { id: 'msg-a', disabled: false, ready: true },
     ]);
     expect(result.blocked.every((b) => b.disabled)).toBe(true);
     expect(result.known).toEqual({ a: true, b: true, other: false });
@@ -1471,11 +1473,12 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         toolArgs: { path: 'src/secret-local.ts' },
         iteration: 1,
       });
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const splitReady = !!(
-        document.querySelector('.etl-snapshot-section--checkpoints')
-        && document.querySelector('.etl-snapshot-section--files')
+        document.querySelector('#etl-chapter-timeline')
+        && document.querySelector('#etl-snapshot-files')
+        && document.querySelector('#etl-foot-files')
       );
       const names1 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
         .map((el) => el.textContent);
@@ -1543,7 +1546,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
       (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-open' };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const btn = document.querySelector('.etl-snapshot-file-name') as HTMLButtonElement;
       btn.click();
@@ -1563,6 +1566,101 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.openUrl).toBe('/api/sessions/sess-open/open-file');
     expect(result.method).toBe('POST');
     expect(result.body).toBe(JSON.stringify({ path: 'src/foo/bar.ts' }));
+    await page.close();
+  });
+
+  it('底栏工具与文件共用弹出层，展示本会话工具名', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const jumped: string[] = [];
+      (window as any).ChatUI = {
+        scrollToToolCall: (id: string) => { jumped.push(id); },
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [{ path: 'notes/todo.md', op: '修改', ts: 1 }],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 'r1', toolName: 'read_file', iteration: 1,
+      });
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 'r2', toolName: 'read_file', iteration: 1,
+      });
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 'w1', toolName: 'write_file', iteration: 1,
+      });
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+
+      const toolBtn = document.querySelector('#etl-foot-tool') as HTMLButtonElement;
+      toolBtn.click();
+      const sheet = document.querySelector('#etl-snapshot-files') as HTMLElement;
+      const afterTools = {
+        tag: toolBtn && toolBtn.tagName,
+        expanded: toolBtn.getAttribute('aria-expanded'),
+        open: sheet.classList.contains('etl-files-sheet--open'),
+        hidden: sheet.classList.contains('hidden'),
+        kind: sheet.getAttribute('data-dock-kind'),
+        title: sheet.querySelector('.etl-files-sheet-title')?.textContent,
+        count: sheet.querySelector('#etl-snapshot-files-count')?.textContent,
+        names: Array.from(document.querySelectorAll('.etl-snapshot-file-name')).map((el) => el.textContent),
+        badges: Array.from(document.querySelectorAll('.etl-snapshot-file-badge')).map((el) => el.textContent),
+        nameTag: document.querySelector('.etl-snapshot-file-name')?.tagName,
+        staticRow: document.querySelector('.etl-snapshot-file')?.classList.contains('is-static'),
+      };
+      const toolName = document.querySelector('[data-tool-name="write_file"] .etl-snapshot-file-name') as HTMLElement;
+      toolName.click();
+
+      const fileBtn = document.querySelector('#etl-foot-files') as HTMLButtonElement;
+      fileBtn.click();
+      const afterFiles = {
+        kind: sheet.getAttribute('data-dock-kind'),
+        names: Array.from(document.querySelectorAll('.etl-snapshot-file-name')).map((el) => el.textContent),
+        toolExpanded: toolBtn.getAttribute('aria-expanded'),
+        fileExpanded: fileBtn.getAttribute('aria-expanded'),
+      };
+      toolBtn.click();
+      const afterSwitchBack = {
+        kind: sheet.getAttribute('data-dock-kind'),
+        names: Array.from(document.querySelectorAll('.etl-snapshot-file-name')).map((el) => el.textContent),
+      };
+      return { afterTools, jumped, afterFiles, afterSwitchBack };
+    }, makePlan());
+
+    expect(result.afterTools).toEqual({
+      tag: 'BUTTON',
+      expanded: 'true',
+      open: true,
+      hidden: false,
+      kind: 'tools',
+      title: '会话工具 · 2',
+      count: '2 个工具',
+      names: ['read_file', 'write_file'],
+      badges: ['×2', '×1'],
+      nameTag: 'SPAN',
+      staticRow: true,
+    });
+    expect(result.jumped).toEqual([]);
+    expect(result.afterFiles).toEqual({
+      kind: 'files',
+      names: ['todo.md'],
+      toolExpanded: 'false',
+      fileExpanded: 'true',
+    });
+    expect(result.afterSwitchBack).toEqual({
+      kind: 'tools',
+      names: ['read_file', 'write_file'],
+    });
     await page.close();
   });
 
@@ -1590,17 +1688,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      const activeTab = document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      const tabCount = document.querySelectorAll('.etl-tab').length;
       panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       return {
-        activeTab,
+        tabCount,
         merged,
         known: panel.hasSnapshotCheckpoint('flow-a'),
       };
     }, makePlan());
 
-    expect(result.activeTab).not.toBe('snapshot');
+    expect(result.tabCount).toBe(0);
     expect(result.merged[0]).toEqual(['flow-a', 'flow-b']);
     expect(result.known).toBe(true);
     await page.close();
@@ -1632,7 +1730,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
         .map((b) => b.getAttribute('data-message-id'));
@@ -1645,7 +1743,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     }, makePlan());
 
-    expect(result.buttons).toEqual(['msg-old', 'msg-now']);
+    expect(result.buttons).toEqual(['msg-now', 'msg-old']);
     expect(result.cursorHidden).toBe(false);
     expect(result.isCursor).toBe(true);
     expect(result.hidden).toBe(false);
@@ -1678,7 +1776,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
         .map((b) => b.getAttribute('data-message-id'));

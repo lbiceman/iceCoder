@@ -1,8 +1,8 @@
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
- * 结构：头部 → 监管条 → Tab（执行流 / 检查点）→ 执行流章节目录 → Footer。
- * 执行流是 session 编年史：每一句用户话一章，章内是 Harness 轮次。
+ * 结构：头部 → 监管条 → 工作台（上：检查点章节 / 下：本章执行流）→ 文件层 → Footer。
+ * 点章节打开下边执行流；回滚按钮在章节标题右侧，逻辑复用现有检查点回滚。
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
  */
 
@@ -66,16 +66,6 @@ window.ChatExecutionPlan = (function () {
     write_intent: '写入意图降级',
   };
 
-  var TABS = [
-    { id: 'flow', label: '执行流' },
-    { id: 'snapshot', label: '检查点' },
-  ];
-
-  // 移动端底部 sheet 仅保留「执行流」。
-  var MOBILE_TABS = [
-    { id: 'flow', label: '执行流' },
-  ];
-
   var currentPlan = null;
   var frozenPlanId = null;
   var currentExecutionMode = null;
@@ -83,7 +73,6 @@ window.ChatExecutionPlan = (function () {
   var capabilityEnabled = true;
   var pageActive = true;
   var minimized = false;
-  var activeTab = 'flow';
 
   var rootEl = null;
   var listEl = null;
@@ -94,8 +83,9 @@ window.ChatExecutionPlan = (function () {
   var llmActivityEl = null;
   var taskOverviewEl = null;
   var roundTimelineEl = null;
-  var snapshotTimelineEl = null;
   var snapshotFilesEl = null;
+  /** 底栏弹出层：'' 关闭；files 变更文件；tools 本会话工具名。 */
+  var dockSheetKind = '';
   var snapshotRestoreHandler = null;
   var snapshotCanRestoreFn = null;
   var snapshotFetchGeneration = 0;
@@ -110,7 +100,7 @@ window.ChatExecutionPlan = (function () {
 
   // 挂载模式与承载容器：桌面 = 右侧停靠 aside；移动 = 顶部条 + 底部 sheet（设计 §6）。
   var mountedMode = null;      // 'desktop' | 'mobile'
-  var hostEl = null;          // 承载 tabs/panels/footer 的容器（桌面=rootEl，移动=mobileSheetEl）
+  var hostEl = null;          // 承载工作台/footer 的容器（桌面=rootEl，移动=mobileSheetEl）
   var mobileBarEl = null;      // 移动端顶部一行入口「执行 X/N ▸」
   var mobileSheetEl = null;    // 移动端底部 sheet
   var mobileBackdropEl = null; // 移动端 sheet 蒙层
@@ -146,13 +136,16 @@ window.ChatExecutionPlan = (function () {
   var sealedChapters = [];
   /** 当前活章元数据：{ messageId, preview, startedAt, markers, status } */
   var liveChapterMeta = null;
-  var expandedChapters = Object.create(null);
+  var selectedChapterKey = '';
+  var userPinnedChapter = false;
   var chapterVisibleLimit = 30;
   var chapterTimelineEl = null;
   var sealedToolCount = 0;
   var pendingRevealMessageId = '';
   var chapterTimelineBound = false;
   var chapterClickHandler = null;
+  var filesSheetBound = false;
+  var filesSheetDocHandler = null;
 
   function safeWarn(where, err) {
     try {
@@ -334,91 +327,67 @@ window.ChatExecutionPlan = (function () {
 
   // ── 挂载 ──
 
-  function buildTabsHtml(tabs) {
-    var html = '';
-    for (var i = 0; i < tabs.length; i++) {
-      var t = tabs[i];
-      var tabId = 'etl-tab-' + t.id;
-      var panelId = 'etl-panel-' + t.id;
-      html +=
-        '<button type="button" class="etl-tab' + (t.id === activeTab ? ' is-active' : '') +
-        '" id="' + tabId + '" data-tab="' + t.id + '" role="tab" aria-controls="' + panelId +
-        '" aria-selected="' + (t.id === activeTab ? 'true' : 'false') +
-        '" tabindex="' + (t.id === activeTab ? '0' : '-1') + '">' +
-        t.label + '</button>';
-    }
-    return html;
-  }
-
   function headerActionsHtml() {
-    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">—</button>';
+    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">x</button>';
   }
 
-  /** 检查点 Tab：上半检查点时间轴，下半本会话改过的文件（只读）。 */
-  function snapshotPanelHtml() {
-    return '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
-      '<div class="etl-snapshot-split">' +
-        '<div class="etl-snapshot-section etl-snapshot-section--checkpoints">' +
-          '<div class="etl-snapshot-section-head">' +
-            '<div class="etl-snapshot-header">' +
-              '<span class="etl-snapshot-header-label">检查点</span>' +
-              '<span class="etl-snapshot-header-count" id="etl-snapshot-checkpoints-count">加载中…</span>' +
-            '</div>' +
-            '<p class="etl-snapshot-desc">回滚到某条用户消息发送时的运行时；之后的对话与文件修改将被丢弃。</p>' +
-          '</div>' +
-          '<div class="etl-snapshot-timeline" id="etl-snapshot-timeline">' +
-            '<div class="etl-empty etl-snapshot-loading">加载检查点…</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="etl-snapshot-section etl-snapshot-section--files" id="etl-snapshot-files">' +
-          '<div class="etl-snapshot-section-head">' +
-            '<div class="etl-snapshot-header">' +
-              '<span class="etl-snapshot-header-label">变更文件</span>' +
-              '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
-            '</div>' +
-            '<p class="etl-snapshot-desc">本会话工具写入或修改过的文件。点击文件名可打开所在文件夹并定位到该文件。</p>' +
-          '</div>' +
-          '<div class="etl-snapshot-section-body">' +
-            '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
-            '<ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol>' +
-          '</div>' +
-        '</div>' +
+  function filesSheetHtml() {
+    return '<div class="etl-files-sheet hidden" id="etl-snapshot-files">' +
+      '<div class="etl-files-sheet-head">' +
+        '<span class="etl-files-sheet-title">变更文件</span>' +
+        '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
+        '<button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" aria-label="关闭变更文件">x</button>' +
       '</div>' +
-    '</section>';
+      '<div class="etl-files-sheet-body">' +
+        '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
+        '<ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol>' +
+      '</div>' +
+    '</div>';
   }
 
-  /** 执行流 Tab 主体：章节目录 + 活章内的轮次时间轴。 */
-  function flowPanelHtml() {
-    return '<section class="etl-tabpanel" id="etl-panel-flow" data-panel="flow" role="tabpanel" aria-labelledby="etl-tab-flow">' +
-      '<div class="etl-chapter-timeline" id="etl-chapter-timeline">' +
-        '<div class="etl-chapter-heading hidden" id="etl-chapter-heading">' +
-          '<span class="etl-chapter-heading-title">执行流</span>' +
-          '<span class="etl-chapter-heading-count" id="etl-chapter-count"></span>' +
+  /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
+  function workbenchHtml() {
+    return '<div class="etl-body etl-workbench">' +
+      '<div class="etl-wb-status hidden" id="etl-wb-status">' +
+        '<span class="etl-wb-status-run" id="etl-wb-status-run">当前运行中</span>' +
+      '</div>' +
+      '<section class="etl-wb-chapters" id="etl-chapter-timeline">' +
+        '<div class="etl-wb-section-head">' +
+          '<div class="etl-wb-section-header">' +
+            '<span class="etl-wb-section-title">检查点</span>' +
+            '<span class="etl-wb-section-count" id="etl-chapter-node-count"></span>' +
+          '</div>' +
+          '<p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p>' +
         '</div>' +
         '<div class="etl-chapter-empty etl-empty">等待模型开始执行</div>' +
-        '<button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button>' +
         '<ol class="etl-chapter-list"></ol>' +
-      '</div>' +
-      '<div class="etl-round-timeline hidden" id="etl-round-timeline">' +
-        '<div class="etl-round-empty etl-empty hidden">等待模型开始执行</div>' +
-        '<div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div>' +
-        '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
-        '<ol class="etl-round-list"></ol>' +
-      '</div>' +
-      '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
-      '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
-      '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
-      '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
-      '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
-    '</section>';
+        '<button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↓</button>' +
+      '</section>' +
+      '<section class="etl-wb-flow" id="etl-panel-flow">' +
+        '<div class="etl-wb-section-head">' +
+          '<div class="etl-wb-section-header">' +
+            '<span class="etl-wb-section-title">执行流</span>' +
+            '<span class="etl-wb-section-count" id="etl-flow-step-count"></span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
+        '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
+        '<div class="etl-round-timeline" id="etl-round-timeline">' +
+          '<div class="etl-round-empty etl-empty hidden">等待模型开始执行</div>' +
+          '<div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div>' +
+          '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
+          '<ol class="etl-round-list"></ol>' +
+        '</div>' +
+        '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
+        '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
+        '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
+      '</section>' +
+      filesSheetHtml() +
+    '</div>';
   }
 
   function sharedBodyHtml() {
-    return '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
-      '<div class="etl-body">' +
-        flowPanelHtml() +
-        snapshotPanelHtml() +
-      '</div>';
+    return workbenchHtml();
   }
 
   /** 从 host 抓取渲染所需元素引用（模块级变量，后续渲染均以此为准）。 */
@@ -432,12 +401,11 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
     chapterTimelineEl = host.querySelector('#etl-chapter-timeline');
-    snapshotTimelineEl = host.querySelector('#etl-snapshot-timeline');
     snapshotFilesEl = host.querySelector('#etl-snapshot-files');
     bindRoundTimelineEvents();
     bindChapterTimelineEvents();
-    syncSnapshotSplitLayout();
-    renderSnapshotFiles();
+    bindFilesSheetControls();
+    renderDockSheet();
     if (window.EtlShellDock && typeof window.EtlShellDock.mount === 'function') {
       var dockHost = host.querySelector('#etl-shell-dock-host');
       if (dockHost) window.EtlShellDock.mount(dockHost);
@@ -447,7 +415,7 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  /** 绑定最小化按钮 + Tab 切换（桌面/移动共用）。 */
+  /** 绑定最小化按钮（桌面/移动共用）。 */
   function bindHostControls(host) {
     var minBtn = host.querySelector('.etl-minimize');
     if (minBtn) {
@@ -455,27 +423,6 @@ window.ChatExecutionPlan = (function () {
         minimize();
       });
     }
-    var tabBtns = host.querySelectorAll('.etl-tab');
-    Array.prototype.forEach.call(tabBtns, function (btn) {
-      btn.addEventListener('click', function () {
-        setActiveTab(btn.getAttribute('data-tab'));
-      });
-      btn.addEventListener('keydown', function (event) {
-        var key = event.key;
-        if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
-        event.preventDefault();
-        var available = Array.prototype.slice.call(host.querySelectorAll('.etl-tab'));
-        if (!available.length) return;
-        var index = available.indexOf(btn);
-        if (key === 'Home') index = 0;
-        else if (key === 'End') index = available.length - 1;
-        else if (key === 'ArrowRight') index = (index + 1) % available.length;
-        else index = (index - 1 + available.length) % available.length;
-        var target = available[index];
-        setActiveTab(target.getAttribute('data-tab'));
-        target.focus();
-      });
-    });
   }
 
   function ensureMounted() {
@@ -519,10 +466,10 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl = null;
     roundTimelineEl = null;
     chapterTimelineEl = null;
-    snapshotTimelineEl = null;
     snapshotFilesEl = null;
     unbindRoundTimelineEvents();
     unbindChapterTimelineEvents();
+    unbindFilesSheetControls();
     mountedMode = null;
     if (window.EtlShellDock && typeof window.EtlShellDock.resetMount === 'function') {
       window.EtlShellDock.resetMount();
@@ -556,12 +503,8 @@ window.ChatExecutionPlan = (function () {
     bindHostControls(rootEl);
   }
 
-  /** 移动端：顶部一行入口 + 底部 sheet（仅执行流 Tab；设计 §6）。 */
+  /** 移动端：顶部一行入口 + 底部 sheet（与桌面同一工作台，无 Tab）。 */
   function mountMobile() {
-    // 移动端仅有 flow Tab；若 activeTab 落在桌面独有 Tab 上则回落到 flow。
-    if (activeTab !== 'flow') {
-      activeTab = 'flow';
-    }
 
     mobileBarEl = document.createElement('button');
     mobileBarEl.type = 'button';
@@ -593,11 +536,7 @@ window.ChatExecutionPlan = (function () {
       '</header>' +
       '<div class="etl-main-scroll">' +
         '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
-        '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
-        '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(MOBILE_TABS) + '</nav>' +
-        '<div class="etl-body">' +
-          flowPanelHtml() +
-        '</div>' +
+        sharedBodyHtml() +
       '</div>' +
       '<div class="etl-shell-dock-host" id="etl-shell-dock-host"></div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
@@ -673,31 +612,6 @@ window.ChatExecutionPlan = (function () {
   function layoutMobileBar() {
     if (!mobileBarEl) return;
     mobileBarEl.style.top = navBottom() + 'px';
-  }
-
-  function setActiveTab(tabId) {
-    try {
-      if (!tabId || !hostEl) return;
-      activeTab = tabId;
-      var tabBtns = hostEl.querySelectorAll('.etl-tab');
-      Array.prototype.forEach.call(tabBtns, function (btn) {
-        var on = btn.getAttribute('data-tab') === tabId;
-        btn.classList.toggle('is-active', on);
-        btn.setAttribute('aria-selected', on ? 'true' : 'false');
-        btn.setAttribute('tabindex', on ? '0' : '-1');
-      });
-      var panels = hostEl.querySelectorAll('.etl-tabpanel');
-      Array.prototype.forEach.call(panels, function (p) {
-        p.classList.toggle('hidden', p.getAttribute('data-panel') !== tabId);
-      });
-      syncSnapshotSplitLayout();
-      if (tabId === 'snapshot') {
-        refreshSnapshotTimeline();
-        refreshSnapshotFiles();
-      }
-    } catch (e) {
-      safeWarn('setActiveTab', e);
-    }
   }
 
   // ── 显隐控制 ──
@@ -1129,8 +1043,35 @@ window.ChatExecutionPlan = (function () {
     if (!footerEl || footerEl.querySelector('.etl-foot-token')) return;
     footerEl.innerHTML = '';
     footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', '—'));
-    footerEl.appendChild(makeFootItem('etl-foot-tool', '工具', '—'));
+    footerEl.appendChild(makeFootToggleItem(
+      'etl-foot-tool', 'etl-foot-tool', '工具', '—',
+      '本会话使用过的工具，点击查看', 'tools'
+    ));
+    footerEl.appendChild(makeFootToggleItem(
+      'etl-foot-files', 'etl-foot-files', '文件', '0',
+      '本会话变更的文件，点击查看', 'files'
+    ));
     footerEl.appendChild(makeFootItem('etl-foot-time', '时间', '00:00'));
+  }
+
+  function makeFootToggleItem(id, extraClass, label, initial, title, kind) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'etl-foot-item etl-foot-toggle ' + extraClass;
+    btn.id = id;
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-controls', 'etl-snapshot-files');
+    btn.title = title;
+    var b = document.createElement('b');
+    b.textContent = initial;
+    btn.appendChild(document.createTextNode(label + ' '));
+    btn.appendChild(b);
+    btn.addEventListener('click', function (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      toggleDockSheet(kind);
+    });
+    return btn;
   }
 
   function renderFooter() {
@@ -1143,11 +1084,24 @@ window.ChatExecutionPlan = (function () {
     var tokenEl = footerEl.querySelector('.etl-foot-token b');
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
     var timeEl = footerEl.querySelector('.etl-foot-time b');
+    var fileEl = footerEl.querySelector('.etl-foot-files b');
     if (tokenEl) tokenEl.textContent = tokenTxt;
     var tokenItem = footerEl.querySelector('.etl-foot-token');
     if (tokenItem) safeSetTitle(tokenItem, tokenTxt && tokenTxt !== '—' ? ('上下文 ' + tokenTxt) : '');
     if (toolEl) toolEl.textContent = toolTxt;
     if (timeEl) timeEl.textContent = timeTxt;
+    var fileCount = snapshotChangedFiles.length;
+    if (fileEl) fileEl.textContent = String(fileCount);
+    var fileBtn = footerEl.querySelector('#etl-foot-files');
+    if (fileBtn) {
+      fileBtn.classList.toggle('is-empty', fileCount <= 0);
+    }
+    var toolBtn = footerEl.querySelector('#etl-foot-tool');
+    if (toolBtn) {
+      toolBtn.classList.toggle('is-empty', liveToolCount <= 0 && authoritativeToolCalls === null);
+    }
+    syncDockToggleAria();
+    renderWorkbenchStatus();
   }
 
   function makeFootItem(cls, label, value) {
@@ -1158,6 +1112,93 @@ window.ChatExecutionPlan = (function () {
     span.appendChild(document.createTextNode(label + ' '));
     span.appendChild(b);
     return span;
+  }
+
+  function renderWorkbenchStatus() {
+    if (!hostEl) return;
+    try {
+      var statusEl = hostEl.querySelector('#etl-wb-status');
+      var runEl = hostEl.querySelector('#etl-wb-status-run');
+      var countEl = hostEl.querySelector('#etl-chapter-node-count');
+      var n = allChapterViews().length;
+      var running = liveChapterStatus() === 'running';
+      if (statusEl) statusEl.classList.toggle('hidden', !running);
+      if (runEl) {
+        runEl.textContent = running ? '当前运行中' : '';
+        runEl.classList.toggle('is-running', running);
+      }
+      if (countEl) countEl.textContent = n ? (n + ' 个节点') : '';
+    } catch (e) {
+      safeWarn('renderWorkbenchStatus', e);
+    }
+  }
+
+  function setDockSheet(kind) {
+    dockSheetKind = kind === 'files' || kind === 'tools' ? kind : '';
+    if (snapshotFilesEl) {
+      var open = !!dockSheetKind;
+      snapshotFilesEl.classList.toggle('hidden', !open);
+      snapshotFilesEl.classList.toggle('etl-files-sheet--open', open);
+      if (open) snapshotFilesEl.setAttribute('data-dock-kind', dockSheetKind);
+      else snapshotFilesEl.removeAttribute('data-dock-kind');
+    }
+    renderDockSheet();
+    syncDockToggleAria();
+  }
+
+  function toggleDockSheet(kind) {
+    setDockSheet(dockSheetKind === kind ? '' : kind);
+  }
+
+  function syncDockToggleAria() {
+    var fileBtn = footerEl && footerEl.querySelector('#etl-foot-files');
+    var toolBtn = footerEl && footerEl.querySelector('#etl-foot-tool');
+    if (fileBtn) fileBtn.setAttribute('aria-expanded', dockSheetKind === 'files' ? 'true' : 'false');
+    if (toolBtn) toolBtn.setAttribute('aria-expanded', dockSheetKind === 'tools' ? 'true' : 'false');
+  }
+
+  function bindFilesSheetControls() {
+    if (filesSheetBound) return;
+    var closeBtn = hostEl && hostEl.querySelector('#etl-files-sheet-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        setDockSheet('');
+      });
+    }
+    filesSheetDocHandler = function (evt) {
+      try {
+        if (!dockSheetKind) return;
+        if (evt.type === 'keydown' && evt.key === 'Escape') {
+          setDockSheet('');
+          evt.stopPropagation();
+          return;
+        }
+        if (evt.type !== 'click') return;
+        var t = evt.target;
+        if (!t || !t.closest) return;
+        if (t.closest('#etl-snapshot-files')
+          || t.closest('#etl-foot-files')
+          || t.closest('#etl-foot-tool')) return;
+        if (hostEl && hostEl.contains(t)) setDockSheet('');
+      } catch (e) {
+        safeWarn('filesSheetDoc', e);
+      }
+    };
+    document.addEventListener('click', filesSheetDocHandler, true);
+    document.addEventListener('keydown', filesSheetDocHandler, true);
+    filesSheetBound = true;
+  }
+
+  function unbindFilesSheetControls() {
+    if (filesSheetDocHandler) {
+      document.removeEventListener('click', filesSheetDocHandler, true);
+      document.removeEventListener('keydown', filesSheetDocHandler, true);
+    }
+    filesSheetDocHandler = null;
+    filesSheetBound = false;
+    dockSheetKind = '';
   }
 
   // ── 监管横幅 ──
@@ -1685,37 +1726,18 @@ window.ChatExecutionPlan = (function () {
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
   }
 
+  function formatChapterClock(ts) {
+    if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
+    var d = new Date(ts);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
   function toolPreviewLine(tool) {
     if (!tool) return '';
     var name = tool.toolName || '';
     var preview = tool.preview || tool.target || tool.detail || '';
     if (name && preview) return name + ' · ' + preview;
     return preview || name;
-  }
-
-  function chapterDescription(chapter) {
-    if (!chapter) return '';
-    if (chapter.live && chapter.status === 'running') {
-      var now = nowDoingText();
-      if (now) return now;
-    }
-    var rounds = chapter.rounds || [];
-    if (rounds.length) {
-      var first = rounds[0];
-      var toolLine = toolPreviewLine(first && first.tools && first.tools[0]);
-      if (toolLine) return toolLine;
-      if (first && first.title) return first.title;
-    }
-    var bits = [];
-    if (chapter.roundCount) bits.push(chapter.roundCount + ' 轮');
-    if (chapter.filesChangedCount) bits.push('改 ' + chapter.filesChangedCount + ' 个文件');
-    if (chapter.markers && chapter.markers.length) {
-      for (var m = 0; m < chapter.markers.length; m++) {
-        var label = chapterMarkerLabel(chapter.markers[m]);
-        if (label) bits.push(label);
-      }
-    }
-    return bits.join(' · ');
   }
 
   function liveChapterViewModel() {
@@ -1757,11 +1779,39 @@ window.ChatExecutionPlan = (function () {
     };
   }
 
+  function isSyntheticLiveId(id) {
+    return !id || String(id).indexOf('live-') === 0;
+  }
+
   function allChapterViews() {
     var list = sealedChapters.slice();
     var live = liveChapterViewModel();
-    if (live) list.push(live);
-    return list;
+    if (live) {
+      if (!isSyntheticLiveId(live.messageId) || !snapshotCheckpointEntries.length) {
+        list.push(live);
+      }
+    }
+    if (list.length) return list;
+    return checkpointFallbackChapters();
+  }
+
+  function checkpointFallbackChapters() {
+    var out = [];
+    for (var i = 0; i < snapshotCheckpointEntries.length; i++) {
+      var e = snapshotCheckpointEntries[i];
+      if (!e || !e.messageId) continue;
+      var ts = typeof e.userMessageTime === 'number' ? e.userMessageTime : 0;
+      if (!ts && e.createdAt) ts = Date.parse(e.createdAt) || 0;
+      out.push({
+        messageId: e.messageId,
+        preview: e.preview || '（无消息摘要）',
+        status: 'done',
+        startTs: ts,
+        rounds: [],
+        live: false,
+      });
+    }
+    return out;
   }
 
   function visibleChapterViews() {
@@ -1770,43 +1820,57 @@ window.ChatExecutionPlan = (function () {
     return all.slice(all.length - chapterVisibleLimit);
   }
 
-  function isChapterExpanded(chapter, isCurrent) {
-    if (!chapter) return false;
-    var key = chapter.messageId || (isCurrent ? '__live__' : '');
-    if (pendingRevealMessageId && chapter.messageId === pendingRevealMessageId) return true;
-    if (expandedChapters[key] === true) return true;
-    if (expandedChapters[key] === false) return false;
-    return isCurrent;
+  function chapterKey(chapter) {
+    if (!chapter) return '';
+    return chapter.messageId || (chapter.live ? '__live__' : '');
   }
 
-  function liveTimelineInChapter() {
-    return !!(roundTimelineEl && roundTimelineEl.closest && roundTimelineEl.closest('.etl-chapter-node'));
+  function newestChapterKey() {
+    var all = allChapterViews();
+    if (!all.length) return '';
+    return chapterKey(all[all.length - 1]);
+  }
+
+  function getSelectedChapter() {
+    var all = allChapterViews();
+    if (!all.length) return null;
+    if (selectedChapterKey) {
+      for (var i = 0; i < all.length; i++) {
+        if (chapterKey(all[i]) === selectedChapterKey) return all[i];
+      }
+    }
+    return all[all.length - 1];
+  }
+
+  function isChapterSelected(chapter) {
+    if (!chapter) return false;
+    var selected = getSelectedChapter();
+    return !!(selected && chapterKey(selected) === chapterKey(chapter));
+  }
+
+  function selectedChapterIsLive() {
+    var ch = getSelectedChapter();
+    return !!(ch && ch.live && (
+      ch.status === 'running'
+      || roundRecords.length > 0
+      || uniqueToolCallCount > 0
+    ));
   }
 
   function hideParkedLiveWidgets() {
-    if (roundTimelineEl && !liveTimelineInChapter()) {
-      roundTimelineEl.classList.add('hidden');
-      var parkedList = roundTimelineEl.querySelector('.etl-round-list');
-      if (parkedList) parkedList.innerHTML = '';
-    }
-    if (taskOverviewEl && !taskOverviewEl.closest('.etl-chapter-node')) {
-      taskOverviewEl.classList.add('hidden');
-    }
-    if (currentStepEl && !currentStepEl.closest('.etl-chapter-node')) {
-      currentStepEl.classList.add('hidden');
+    var live = selectedChapterIsLive();
+    if (!live) {
+      if (taskOverviewEl) {
+        var ch = getSelectedChapter();
+        if (!(ch && ch.goal)) taskOverviewEl.classList.add('hidden');
+      }
+      if (currentStepEl) currentStepEl.classList.add('hidden');
     }
   }
 
   function focusNewestChapter() {
-    var views = allChapterViews();
-    var last = views.length ? views[views.length - 1] : null;
-    var lastKey = last ? (last.messageId || (last.live ? '__live__' : '')) : '';
-    for (var i = 0; i < views.length; i++) {
-      var ch = views[i];
-      var key = ch.messageId || (ch.live ? '__live__' : '');
-      if (!key) continue;
-      expandedChapters[key] = key === lastKey;
-    }
+    userPinnedChapter = false;
+    selectedChapterKey = newestChapterKey();
   }
 
   function detachLiveWidgets() {
@@ -1838,20 +1902,28 @@ window.ChatExecutionPlan = (function () {
     return (lastTool.pending ? '正在' : '') + label + elapsed;
   }
 
-  function makeFrozenRoundNode(round, options) {
-    options = options || {};
+  function makeRoundToggle(expanded) {
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'etl-round-toggle etl-visually-hidden';
+    toggle.tabIndex = -1;
+    toggle.setAttribute('aria-hidden', 'true');
+    toggle.textContent = expanded ? '▴' : '▾';
+    return toggle;
+  }
+
+  function makeFrozenRoundNode(round) {
     var item = document.createElement('li');
     var status = round.status || 'done';
-    var startOpen = !!options.startExpanded;
     item.className = 'etl-round-node etl-round-card status-' + status
-      + (round.isFinal ? ' is-final' : '')
-      + (startOpen ? ' is-expanded' : '');
+      + (round.isFinal ? ' is-final' : '');
     item.dataset.iteration = String(round.iteration);
+    item.dataset.frozen = '1';
     var row = document.createElement('div');
     row.className = 'etl-round-row';
     row.setAttribute('role', 'button');
     row.tabIndex = 0;
-    row.setAttribute('aria-expanded', startOpen ? 'true' : 'false');
+    row.setAttribute('aria-expanded', 'false');
     var marker = document.createElement('span');
     marker.className = 'etl-round-marker';
     marker.textContent = String(round.iteration);
@@ -1866,30 +1938,30 @@ window.ChatExecutionPlan = (function () {
     time.className = 'etl-round-duration';
     var stamp = formatClockStamp(round.startTs);
     time.textContent = stamp || formatChapterDuration(round.durationMs);
+    var toggle = makeRoundToggle(false);
     var badge = document.createElement('span');
     badge.className = 'etl-round-badge status-' + status;
     badge.textContent = roundStatusLabel(status);
-    var toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'etl-round-toggle';
-    toggle.textContent = startOpen ? '▴' : '▾';
     head.appendChild(title);
     head.appendChild(time);
     head.appendChild(badge);
     head.appendChild(toggle);
     summary.appendChild(head);
+    var meta = document.createElement('div');
+    meta.className = 'etl-round-meta';
     var desc = toolPreviewLine(round.tools && round.tools[0]);
     if (desc) {
       var descEl = document.createElement('div');
       descEl.className = 'etl-round-desc';
       descEl.textContent = desc;
-      summary.appendChild(descEl);
+      meta.appendChild(descEl);
     }
+    summary.appendChild(meta);
     row.appendChild(marker);
     row.appendChild(summary);
     item.appendChild(row);
     var detail = document.createElement('div');
-    detail.className = 'etl-round-detail' + (startOpen ? '' : ' hidden');
+    detail.className = 'etl-round-detail';
     var actions = document.createElement('ol');
     actions.className = 'etl-round-actions';
     var tools = round.tools || [];
@@ -1909,7 +1981,6 @@ window.ChatExecutionPlan = (function () {
       evt.stopPropagation();
       var open = !item.classList.contains('is-expanded');
       item.classList.toggle('is-expanded', open);
-      detail.classList.toggle('hidden', !open);
       row.setAttribute('aria-expanded', open ? 'true' : 'false');
       toggle.textContent = open ? '▴' : '▾';
     });
@@ -1920,12 +1991,15 @@ window.ChatExecutionPlan = (function () {
     var status = toolStatusClass(tool.status);
     var row = document.createElement('li');
     row.className = 'etl-round-action etl-round-tool status-' + status;
-    if (tool.toolCallId) row.dataset.toolCallId = tool.toolCallId;
+    if (tool.toolCallId) {
+      row.dataset.toolCallId = tool.toolCallId;
+      row.title = '定位到对话';
+    }
     var icon = document.createElement('span');
     icon.className = 'etl-round-action-icon';
     icon.textContent = status === 'failed' ? '×' : '✓';
     var body = document.createElement('div');
-    body.style.minWidth = '0';
+    body.className = 'etl-round-action-body';
     var name = document.createElement('div');
     name.className = 'etl-round-action-name';
     name.textContent = tool.intent || tool.toolName || '工具';
@@ -1946,135 +2020,83 @@ window.ChatExecutionPlan = (function () {
   }
 
   function makeChapterNode(chapter, index, isCurrent) {
-    var expanded = isChapterExpanded(chapter, isCurrent);
-    var isLiveRunning = !!(isCurrent && chapter && chapter.live && chapter.status === 'running');
+    var selected = isChapterSelected(chapter);
+    var isCursor = !!(chapter.messageId && isSnapshotCursorMessage(chapter.messageId));
     var li = document.createElement('li');
-    li.className = 'etl-chapter-node'
+    li.className = 'etl-chapter-node etl-snapshot-node'
       + (isCurrent ? ' is-current' : '')
-      + (expanded ? ' is-expanded' : '')
+      + (selected ? ' is-selected' : '')
+      + (isCursor ? ' is-cursor' : '')
       + ' status-' + (chapter.status || 'done');
     if (chapter.messageId) li.setAttribute('data-message-id', chapter.messageId);
     li.setAttribute('data-chapter-index', String(index));
 
-    var row = document.createElement('div');
-    row.className = 'etl-chapter-row';
-    row.setAttribute('role', 'button');
-    row.tabIndex = 0;
-    row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    var rail = document.createElement('div');
+    rail.className = 'etl-snapshot-rail';
+    rail.setAttribute('aria-hidden', 'true');
+    var marker = document.createElement('span');
+    marker.className = 'etl-chapter-marker etl-snapshot-index etl-chapter-index';
+    marker.textContent = String(index);
+    var line = document.createElement('span');
+    line.className = 'etl-snapshot-line';
+    rail.appendChild(marker);
+    rail.appendChild(line);
 
-    var indexEl = document.createElement('span');
-    indexEl.className = 'etl-chapter-index';
-    indexEl.textContent = String(index);
+    var card = document.createElement('div');
+    card.className = 'etl-snapshot-card etl-chapter-row';
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+    card.setAttribute('aria-selected', selected ? 'true' : 'false');
 
     var main = document.createElement('div');
     main.className = 'etl-chapter-main';
+    var timeEl = document.createElement('time');
+    timeEl.className = 'etl-snapshot-time etl-chapter-clock';
+    var stamp = formatChapterClock(chapter.startTs);
+    timeEl.textContent = stamp;
+    timeEl.classList.toggle('hidden', !stamp);
 
-    var topline = document.createElement('div');
-    topline.className = 'etl-chapter-topline';
-
-    var title = document.createElement('div');
-    title.className = 'etl-chapter-title';
-    title.textContent = chapter.preview || '（无消息摘要）';
-    safeSetTitle(title, title.textContent);
-
-    var clock = document.createElement('span');
-    clock.className = 'etl-chapter-clock';
-    var stamp = formatClockStamp(chapter.startTs);
-    clock.textContent = stamp;
-    clock.classList.toggle('hidden', !stamp);
-
+    var titleRow = document.createElement('div');
+    titleRow.className = 'etl-chapter-title-row';
+    var preview = document.createElement('div');
+    preview.className = 'etl-snapshot-preview etl-chapter-title';
+    preview.textContent = chapter.preview || '（无消息摘要）';
+    safeSetTitle(preview, preview.textContent);
     var statusEl = document.createElement('span');
-    statusEl.className = 'etl-chapter-status';
+    statusEl.className = 'etl-chapter-status etl-round-badge status-' + (chapter.status || 'done');
     statusEl.textContent = chapterStatusLabel(chapter.status);
-
-    var toggle = document.createElement('span');
-    toggle.className = 'etl-chapter-toggle';
-    toggle.textContent = expanded ? '▴' : '▾';
-
-    topline.appendChild(title);
-    topline.appendChild(clock);
-    topline.appendChild(statusEl);
-    topline.appendChild(toggle);
-
-    var meta = document.createElement('div');
-    meta.className = 'etl-chapter-meta';
-    var desc = chapterDescription(chapter);
-    meta.textContent = desc;
-    safeSetTitle(meta, desc);
-    meta.classList.toggle('hidden', !desc);
-
-    main.appendChild(topline);
-    main.appendChild(meta);
-
-    row.appendChild(indexEl);
-    row.appendChild(main);
-    li.appendChild(row);
-
-    var body = document.createElement('div');
-    body.className = 'etl-chapter-body' + (expanded ? '' : ' hidden');
-
-    if (expanded && !isLiveRunning && (chapter.goal || chapter.phase)) {
-      var planHead = document.createElement('div');
-      planHead.className = 'etl-chapter-plan';
-      if (chapter.goal) {
-        var g = document.createElement('div');
-        g.textContent = '目标  ' + chapter.goal;
-        planHead.appendChild(g);
-      }
-      if (chapter.phase) {
-        var p = document.createElement('div');
-        p.textContent = '阶段  ' + chapter.phase;
-        planHead.appendChild(p);
-      }
-      body.appendChild(planHead);
+    titleRow.appendChild(preview);
+    titleRow.appendChild(statusEl);
+    if (chapter.messageId && isSnapshotRestoreHidden(chapter.messageId)) {
+      card.classList.add('etl-snapshot-card--no-restore');
+    } else if (chapter.messageId) {
+      titleRow.appendChild(createSnapshotRestoreButton(chapter.messageId));
     }
-
-    if (expanded && !isLiveRunning) {
-      var sub = findSubagentMarker(chapter);
-      if (sub) body.appendChild(sub);
-      var roundList = document.createElement('ol');
-      roundList.className = 'etl-chapter-rounds etl-round-list';
-      var rounds = chapter.rounds || [];
-      for (var r = 0; r < rounds.length; r++) {
-        roundList.appendChild(makeFrozenRoundNode(rounds[r], {
-          startExpanded: !!isCurrent && r === rounds.length - 1,
-        }));
-      }
-      body.appendChild(roundList);
-    }
-
-    li.appendChild(body);
+    main.appendChild(timeEl);
+    main.appendChild(titleRow);
+    card.appendChild(main);
+    li.appendChild(rail);
+    li.appendChild(card);
     return li;
-  }
-
-  function findSubagentMarker(chapter) {
-    if (!chapter.markers || chapter.markers.indexOf('subagent') < 0) return null;
-    var line = document.createElement('button');
-    line.type = 'button';
-    line.className = 'etl-chapter-subagent';
-    line.textContent = chapter.subagentReady ? '分析已就绪' : '分析中';
-    line.addEventListener('click', function (evt) {
-      evt.stopPropagation();
-      jumpToChatTool(chapter.subagentToolCallId || '');
-    });
-    return line;
   }
 
   function syncChapterEmptyAndLoadMore(allCount, visibleCount) {
     if (!chapterTimelineEl) return;
     var empty = chapterTimelineEl.querySelector('.etl-chapter-empty');
     if (empty) empty.classList.toggle('hidden', allCount > 0);
-    var heading = chapterTimelineEl.querySelector('#etl-chapter-heading');
-    var countEl = chapterTimelineEl.querySelector('#etl-chapter-count');
-    if (heading) heading.classList.toggle('hidden', allCount <= 0);
-    if (countEl) countEl.textContent = allCount > 0 ? ('共 ' + allCount + ' 章') : '';
     var loadMore = chapterTimelineEl.querySelector('#etl-chapter-load-more');
     if (!loadMore) return;
     var hiddenCount = Math.max(0, allCount - visibleCount);
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
     loadMore.textContent = hiddenCount
-      ? ('加载更早的章节 ↑ (' + hiddenCount + ')')
-      : '加载更早的章节 ↑';
+      ? ('加载更早的章节 ↓ (' + hiddenCount + ')')
+      : '加载更早的章节 ↓';
+  }
+
+  function updateFlowStepCount(n) {
+    var el = hostEl && hostEl.querySelector('#etl-flow-step-count');
+    if (!el) return;
+    el.textContent = n > 0 ? ('共 ' + n + ' 个步骤') : '';
   }
 
   function renderChapterDirectory(options) {
@@ -2089,31 +2111,17 @@ window.ChatExecutionPlan = (function () {
       var visible = visibleChapterViews();
       var offset = all.length - visible.length;
       syncChapterEmptyAndLoadMore(all.length, visible.length);
+      renderWorkbenchStatus();
 
-      for (var i = 0; i < visible.length; i++) {
+      for (var i = visible.length - 1; i >= 0; i--) {
         var chapter = visible[i];
         var absIndex = offset + i + 1;
-        var isCurrent = !!chapter.live || (i === visible.length - 1);
-        var node = makeChapterNode(chapter, absIndex, isCurrent);
-        list.appendChild(node);
-        var liveRunning = isCurrent && !!chapter.live && chapter.status === 'running';
-        if (liveRunning && isChapterExpanded(chapter, true)) {
-          var body = node.querySelector('.etl-chapter-body');
-          if (body) {
-            if (taskOverviewEl) body.appendChild(taskOverviewEl);
-            if (currentStepEl) body.appendChild(currentStepEl);
-            if (roundTimelineEl) {
-              roundTimelineEl.classList.remove('hidden');
-              body.appendChild(roundTimelineEl);
-            }
-          }
-        }
+        var isCurrent = !!chapter.live || chapter === all[all.length - 1];
+        list.appendChild(makeChapterNode(chapter, absIndex, isCurrent));
       }
 
-      hideParkedLiveWidgets();
-
-      if (options.scrollToLatest && list.lastElementChild && list.lastElementChild.scrollIntoView) {
-        list.lastElementChild.scrollIntoView({ block: 'nearest' });
+      if (options.scrollToLatest && list.firstElementChild && list.firstElementChild.scrollIntoView) {
+        list.firstElementChild.scrollIntoView({ block: 'nearest' });
       }
       if (pendingRevealMessageId) {
         var reveal = list.querySelector('[data-message-id="' + pendingRevealMessageId.replace(/"/g, '\\"') + '"]');
@@ -2140,27 +2148,22 @@ window.ChatExecutionPlan = (function () {
       safeSetTitle(title, live.preview);
     }
     var statusEl = node.querySelector('.etl-chapter-status');
-    if (statusEl) statusEl.textContent = chapterStatusLabel(live.status);
+    if (statusEl) {
+      statusEl.textContent = chapterStatusLabel(live.status);
+      statusEl.className = 'etl-chapter-status etl-round-badge status-' + (live.status || 'done');
+    }
     node.classList.remove('status-running', 'status-done', 'status-failed', 'status-paused', 'status-stopped');
     node.classList.add('status-' + (live.status || 'done'));
     var clock = node.querySelector('.etl-chapter-clock');
     if (clock) {
-      var stamp = formatClockStamp(live.startTs);
+      var stamp = formatChapterClock(live.startTs);
       clock.textContent = stamp;
       clock.classList.toggle('hidden', !stamp);
     }
-    var meta = node.querySelector('.etl-chapter-meta');
-    if (meta) {
-      var desc = chapterDescription(live);
-      meta.textContent = desc;
-      safeSetTitle(meta, desc);
-      meta.classList.toggle('hidden', !desc);
-    }
-    var toggle = node.querySelector('.etl-chapter-toggle');
-    if (toggle) toggle.textContent = node.classList.contains('is-expanded') ? '▴' : '▾';
+    renderWorkbenchStatus();
   }
 
-  function toggleChapterExpanded(messageId, indexAttr) {
+  function selectChapter(messageId, indexAttr, fromUser) {
     var views = allChapterViews();
     var chapter = null;
     if (messageId) {
@@ -2173,9 +2176,9 @@ window.ChatExecutionPlan = (function () {
       if (idx >= 1 && idx <= views.length) chapter = views[idx - 1];
     }
     if (!chapter) return;
-    var key = chapter.messageId || (chapter.live ? '__live__' : '');
-    var isCurrent = !!chapter.live || chapter === views[views.length - 1];
-    expandedChapters[key] = !isChapterExpanded(chapter, isCurrent);
+    var key = chapterKey(chapter);
+    if (fromUser) userPinnedChapter = key !== newestChapterKey();
+    selectedChapterKey = key;
     renderChapterDirectory();
     renderTaskOverview();
     renderCurrentStep();
@@ -2186,9 +2189,10 @@ window.ChatExecutionPlan = (function () {
   function revealChapter(messageId) {
     if (!messageId) return;
     pendingRevealMessageId = messageId;
-    expandedChapters[messageId] = true;
-    if (activeTab !== 'flow') return;
+    userPinnedChapter = true;
+    selectedChapterKey = messageId;
     renderChapterDirectory({ scrollToLatest: false });
+    renderRoundTimeline(true);
   }
 
   function jumpToChatTool(toolCallId) {
@@ -2206,39 +2210,20 @@ window.ChatExecutionPlan = (function () {
     try {
       var target = event.target;
       if (!target || !target.closest) return;
+      if (target.closest('.etl-snapshot-restore-btn')) return;
       var loadMore = target.closest('#etl-chapter-load-more');
       if (loadMore) {
         chapterVisibleLimit += 8;
         renderChapterDirectory();
         return;
       }
-      var action = target.closest('.etl-round-action[data-tool-call-id]');
-      if (action && event.type === 'click') {
-        jumpToChatTool(action.getAttribute('data-tool-call-id'));
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      var roundRow = target.closest('.etl-round-row');
-      if (roundRow) {
-        var inLiveTimeline = !!roundRow.closest('#etl-round-timeline');
-        var liveRound = inLiveTimeline ? roundRow.closest('.etl-round-node') : null;
-        if (liveRound && liveRound.dataset.iteration) {
-          if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
-          if (event.type === 'click' || event.type === 'keydown') event.preventDefault();
-          event.stopPropagation();
-          toggleRoundExpanded(liveRound.dataset.iteration);
-        }
-        return;
-      }
-      if (target.closest('.etl-chapter-subagent')) return;
       var row = target.closest('.etl-chapter-row');
       if (!row) return;
       var node = row.closest('.etl-chapter-node');
       if (!node) return;
       if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
       if (event.type === 'keydown') event.preventDefault();
-      toggleChapterExpanded(node.getAttribute('data-message-id') || '', node.getAttribute('data-chapter-index'));
+      selectChapter(node.getAttribute('data-message-id') || '', node.getAttribute('data-chapter-index'), true);
     } catch (e) {
       safeWarn('chapterTimelineClick', e);
     }
@@ -2303,6 +2288,7 @@ window.ChatExecutionPlan = (function () {
           renderEmptyState();
           renderExecutionModeBanner();
           renderFooter();
+          renderDockSheet();
           hideParkedLiveWidgets();
         }
         return false;
@@ -2329,7 +2315,7 @@ window.ChatExecutionPlan = (function () {
         chapter.status = status;
         sealedChapters.push(chapter);
         sealedToolCount += typeof chapter.toolCount === 'number' ? chapter.toolCount : 0;
-        if (chapter.messageId) expandedChapters[chapter.messageId] = false;
+        if (chapter.messageId) userPinnedChapter = false;
       }
       resetLiveChapterState();
       ensureLiveChapter(opts.nextMeta || {});
@@ -2342,6 +2328,7 @@ window.ChatExecutionPlan = (function () {
         renderEmptyState();
         renderExecutionModeBanner();
         renderFooter();
+        renderDockSheet();
         hideParkedLiveWidgets();
       }
       scheduleFlowPersist();
@@ -2428,6 +2415,7 @@ window.ChatExecutionPlan = (function () {
     }
     if (!keepLive && last) loadChapterIntoLive(last);
     else if (!keepLive && !last) resetLiveChapterState();
+    if (!userPinnedChapter) focusNewestChapter();
   }
 
   function stampLiveMarker(key) {
@@ -2777,23 +2765,17 @@ window.ChatExecutionPlan = (function () {
     return 'e:' + tools.map(function (tool) { return tool.toolCallId; }).join(',');
   }
 
-  function shouldRebuildRoundPills(roundNode, record) {
-    var tools = getRoundTools(record);
-    var collapsed = !isRoundExpanded(record);
-    var wrap = roundNode.querySelector('.etl-round-pills');
-    if (!tools.length) return !!wrap;
-    if (!wrap) return true;
-    var nextSig = roundPillSignature(tools, collapsed);
-    return wrap.dataset.pillSig !== nextSig;
-  }
-
   function renderRoundPills(summary, tools, record) {
     if (!summary) return;
     var collapsed = !isRoundExpanded(record);
     var pills = buildRoundPills(tools, collapsed);
-    if (!pills.length) return;
+    var host = summary.querySelector('.etl-round-meta') || summary;
+    var wrap = host.querySelector('.etl-round-pills');
+    if (!pills.length) {
+      if (wrap) wrap.parentNode.removeChild(wrap);
+      return;
+    }
     var nextSig = roundPillSignature(tools, collapsed);
-    var wrap = summary.querySelector('.etl-round-pills');
     if (wrap && wrap.dataset.pillSig === nextSig) return;
     if (wrap) wrap.parentNode.removeChild(wrap);
     var pillWrap = document.createElement('div');
@@ -2806,7 +2788,7 @@ window.ChatExecutionPlan = (function () {
       pill.title = pills[p].title || pills[p].raw || '';
       pillWrap.appendChild(pill);
     }
-    summary.appendChild(pillWrap);
+    host.appendChild(pillWrap);
   }
 
   /** 按当前展开态刷新所有可见轮次的摘要 pill（避免旧轮次残留多条工具标签）。 */
@@ -2841,6 +2823,7 @@ window.ChatExecutionPlan = (function () {
     var row = document.createElement('li');
     row.className = 'etl-round-action etl-round-tool status-' + status;
     row.dataset.toolCallId = tool.toolCallId;
+    row.title = '定位到对话';
     row.dataset.status = tool.status;
     if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
     if (typeof tool.resultTs === 'number') row.dataset.resultTs = String(tool.resultTs);
@@ -2848,7 +2831,7 @@ window.ChatExecutionPlan = (function () {
     icon.className = 'etl-round-action-icon etl-round-tool-icon';
     icon.textContent = status === 'failed' ? '×' : '✓';
     var body = document.createElement('div');
-    body.style.minWidth = '0';
+    body.className = 'etl-round-action-body';
     var name = document.createElement('div');
     name.className = 'etl-round-action-name';
     name.textContent = inferToolIntent(tool);
@@ -3012,14 +2995,15 @@ window.ChatExecutionPlan = (function () {
       visible = !isPanelSuppressed() && (hasChronicleWork() || !!currentPlan);
       if (visible || hostEl) {
         ensureMounted();
+        if (!userPinnedChapter) focusNewestChapter();
         renderChapterDirectory({ scrollToLatest: true });
         renderRoundTimeline(true);
         renderTaskOverview();
         renderCurrentStep();
-        hideParkedLiveWidgets();
         renderEmptyState();
         patchFooterToolCount();
         renderFooter();
+        renderDockSheet();
       }
       scheduleFlowPersist();
       return true;
@@ -3095,19 +3079,19 @@ window.ChatExecutionPlan = (function () {
     var time = document.createElement('span');
     time.className = 'etl-round-duration';
     time.textContent = roundDuration(record);
+    var toggle = makeRoundToggle(false);
     var badge = document.createElement('span');
     badge.className = 'etl-round-badge status-' + visualStatus;
     badge.textContent = roundStatusLabel(visualStatus);
-    var toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'etl-round-toggle';
-    toggle.setAttribute('aria-label', '展开轮次详情');
-    toggle.textContent = '▾';
     head.appendChild(title);
     head.appendChild(time);
     head.appendChild(badge);
     head.appendChild(toggle);
     summary.appendChild(head);
+
+    var meta = document.createElement('div');
+    meta.className = 'etl-round-meta';
+    summary.appendChild(meta);
 
     var liveTools = document.createElement('ul');
     liveTools.className = 'etl-round-live-tools';
@@ -3278,88 +3262,6 @@ window.ChatExecutionPlan = (function () {
     if (reason) reason.textContent = deriveRoundReason(record);
   }
 
-  /** 就地更新已有轮次节点，避免 replaceChild 引发整表重绘闪烁。 */
-  function patchRoundNode(roundNode, record) {
-    if (!roundNode || !record) return;
-    snapshotRoundPlan(record);
-    patchRoundSummary(roundNode, record);
-    appendRoundDetailElement(roundNode, record);
-    var detail = roundNode.querySelector('.etl-round-detail');
-    if (!detail) return;
-    var tools = getRoundTools(record);
-    var actions = detail.querySelector('.etl-round-actions');
-    if (tools.length) {
-      if (actions) {
-        var validIds = Object.create(null);
-        for (var tv = 0; tv < tools.length; tv++) {
-          validIds[tools[tv].toolCallId] = true;
-        }
-        var existingRows = actions.querySelectorAll('[data-tool-call-id]');
-        Array.prototype.forEach.call(existingRows, function (row) {
-          if (!validIds[row.dataset.toolCallId]) {
-            row.parentNode.removeChild(row);
-          }
-        });
-        for (var ti = 0; ti < tools.length; ti++) {
-          var tool = tools[ti];
-          if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
-            actions.appendChild(makeRoundActionRow(tool));
-          }
-        }
-      } else {
-        rebuildRoundDetailBody(detail, record);
-      }
-    } else if (record.isFinal) {
-      var actionLabel = detail.querySelector('.etl-round-section-label');
-      if (actionLabel) actionLabel.textContent = '本轮结果';
-      if (!detail.querySelector('.etl-round-complete')) {
-        rebuildRoundDetailBody(detail, record);
-      } else {
-        var completion = detail.querySelector('.etl-round-complete');
-        if (completion) completion.textContent = roundCompletionText(record);
-      }
-    } else {
-      var planning = detail.querySelector('.etl-round-reason');
-      if (planning && !actions) {
-        planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
-      } else if (!planning) {
-        rebuildRoundDetailBody(detail, record);
-      }
-    }
-    patchRoundReason(roundNode, record);
-    var row = roundNode.querySelector('.etl-round-row');
-    if (row) row.setAttribute('aria-expanded', isRoundExpanded(record) ? 'true' : 'false');
-    var toggle = roundNode.querySelector('.etl-round-toggle');
-    if (toggle) {
-      var expanded = isRoundExpanded(record);
-      toggle.textContent = expanded ? '▴' : '▾';
-      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
-    }
-  }
-
-  function patchRoundSummary(roundNode, record, options) {
-    options = options || {};
-    var visualStatus = roundVisualStatus(record);
-    roundNode.classList.remove('status-done', 'status-failed', 'status-running', 'is-expanded');
-    roundNode.classList.add('status-' + visualStatus);
-    roundNode.classList.toggle('is-final', !!record.isFinal);
-    roundNode.classList.toggle('is-expanded', isRoundExpanded(record));
-    var marker = roundNode.querySelector('.etl-round-marker');
-    if (marker) marker.textContent = String(record.iteration);
-    var title = roundNode.querySelector('.etl-round-title');
-    if (title) title.textContent = deriveRoundTitle(record);
-    var badge = roundNode.querySelector('.etl-round-badge');
-    if (badge) {
-      badge.className = 'etl-round-badge status-' + visualStatus;
-      badge.textContent = roundStatusLabel(visualStatus);
-    }
-    var time = roundNode.querySelector('.etl-round-duration');
-    if (time) time.textContent = roundDuration(record);
-    if (!options.skipPills && shouldRebuildRoundPills(roundNode, record)) {
-      rebuildRoundPillsInNode(roundNode, record);
-    }
-  }
-
   function rebuildRoundDetailBody(detail, record) {
     var label = detail.querySelector('.etl-round-section-label');
     if (!label) return;
@@ -3435,23 +3337,6 @@ window.ChatExecutionPlan = (function () {
     item.appendChild(detail);
   }
 
-  function appendToolToRoundNode(roundNode, record, tool) {
-    appendRoundDetailElement(roundNode, record);
-    patchRoundSummary(roundNode, record);
-    var detail = roundNode.querySelector('.etl-round-detail');
-    if (!detail) return;
-    var actions = detail.querySelector('.etl-round-actions');
-    if (actions) {
-      if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
-        actions.appendChild(makeRoundActionRow(tool));
-      }
-    } else {
-      rebuildRoundDetailBody(detail, record);
-      return;
-    }
-    patchRoundReason(roundNode, record);
-  }
-
   function patchRoundToolRow(row, tool) {
     if (!row || !tool) return;
     var status = toolStatusClass(tool.status);
@@ -3477,40 +3362,45 @@ window.ChatExecutionPlan = (function () {
     return true;
   }
 
-  /** 已有节点就地 patch；新节点走 pushRoundNodeToList。 */
-  function ensureRoundNode(record, options) {
-    options = options || {};
-    var ctx = getRoundListContext();
-    if (!ctx || !ctx.list || !record) return null;
-    var existing = findRoundNode(record.iteration);
-    if (existing) {
-      patchRoundNode(existing, record);
-      return existing;
-    }
-    if (options.insert) return pushRoundShellToList(ctx.list, record);
-    return null;
+  function attachLiveTimelineIfRunning() {
+    if (!roundTimelineEl || !hostEl) return false;
+    if (!selectedChapterIsLive()) return false;
+    roundTimelineEl.classList.remove('hidden');
+    var flow = hostEl.querySelector('#etl-panel-flow');
+    if (flow && roundTimelineEl.parentNode !== flow) flow.appendChild(roundTimelineEl);
+    return true;
   }
 
-  function attachLiveTimelineIfRunning() {
-    if (!roundTimelineEl || !chapterTimelineEl) return false;
-    if (liveTimelineInChapter()) return true;
-    if (liveChapterStatus() !== 'running') return false;
-    if (!chapterTimelineEl.querySelector('.etl-chapter-node.is-current')) {
-      renderChapterDirectory();
-    }
-    var current = chapterTimelineEl.querySelector('.etl-chapter-node.is-current');
-    if (!current || !current.classList.contains('is-expanded')) return false;
-    var body = current.querySelector('.etl-chapter-body');
-    if (!body) return false;
+  function renderFrozenSelectedFlow() {
+    if (!roundTimelineEl) return;
     roundTimelineEl.classList.remove('hidden');
-    body.appendChild(roundTimelineEl);
-    return true;
+    var list = roundTimelineEl.querySelector('.etl-round-list');
+    var empty = roundTimelineEl.querySelector('.etl-round-empty');
+    var loadMore = roundTimelineEl.querySelector('#etl-round-load-more');
+    if (loadMore) loadMore.classList.add('hidden');
+    if (!list) return;
+    list.innerHTML = '';
+    var ch = getSelectedChapter();
+    var rounds = (ch && ch.rounds) || [];
+    if (empty) {
+      empty.textContent = ch ? '本章暂无执行步骤' : '等待模型开始执行';
+      empty.classList.toggle('hidden', rounds.length > 0);
+    }
+    for (var r = 0; r < rounds.length; r++) {
+      list.appendChild(makeFrozenRoundNode(rounds[r]));
+    }
+    updateFlowStepCount(rounds.length);
+    if (taskOverviewEl && !(ch && ch.live)) {
+      taskOverviewEl.classList.add('hidden');
+    }
+    if (currentStepEl && !(ch && ch.live && ch.status === 'running')) {
+      currentStepEl.classList.add('hidden');
+    }
   }
 
   function syncRoundTimeline(options) {
     options = options || {};
     if (!attachLiveTimelineIfRunning()) {
-      hideParkedLiveWidgets();
       return;
     }
     try {
@@ -3564,17 +3454,18 @@ window.ChatExecutionPlan = (function () {
       syncLoadMoreButton(true);
       rebuildVisibleRoundList(ctx.list);
       refreshVisibleRoundPillSummaries();
+      updateFlowStepCount(roundRecords.length);
     } catch (e) {
       safeWarn('syncRoundTimeline', e);
     }
   }
 
   function renderRoundTimeline(reset) {
-    if (!attachLiveTimelineIfRunning()) {
-      hideParkedLiveWidgets();
+    if (attachLiveTimelineIfRunning()) {
+      syncRoundTimeline({ reset: !!reset });
       return;
     }
-    syncRoundTimeline({ reset: !!reset });
+    renderFrozenSelectedFlow();
   }
 
   function toggleRoundExpanded(iteration) {
@@ -3608,6 +3499,7 @@ window.ChatExecutionPlan = (function () {
       if (!row) return;
       var node = row.closest('.etl-round-node');
       if (!node || !node.dataset.iteration) return;
+      if (node.dataset.frozen === '1') return;
       if (event.type === 'keydown') {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
@@ -3646,65 +3538,6 @@ window.ChatExecutionPlan = (function () {
     roundTimelineEl.addEventListener('keydown', roundTimelineKeydownHandler);
     roundTimelineBoundEl = roundTimelineEl;
     roundTimelineBound = true;
-  }
-
-  function makeRoundNode(record, options) {
-    options = options || {};
-    var tools = getRoundTools(record);
-    var visualStatus = roundVisualStatus(record);
-    var itemKey = String(record.iteration);
-    var isExpanded = isRoundExpanded(record);
-
-    var item = document.createElement('li');
-    item.className = 'etl-round-node etl-round-card status-' + visualStatus
-      + (record.isFinal ? ' is-final' : '')
-      + (isExpanded ? ' is-expanded' : '');
-    item.dataset.iteration = itemKey;
-
-    var row = document.createElement('div');
-    row.className = 'etl-round-row';
-    row.setAttribute('role', 'button');
-    row.setAttribute('tabindex', '0');
-    row.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-
-    var marker = document.createElement('span');
-    marker.className = 'etl-round-marker';
-    marker.textContent = String(record.iteration);
-
-    var summary = document.createElement('div');
-    summary.className = 'etl-round-summary';
-
-    var head = document.createElement('div');
-    head.className = 'etl-round-head';
-    var title = document.createElement('span');
-    title.className = 'etl-round-title';
-    title.textContent = deriveRoundTitle(record);
-    var badge = document.createElement('span');
-    badge.className = 'etl-round-badge status-' + visualStatus;
-    badge.textContent = roundStatusLabel(visualStatus);
-    var time = document.createElement('span');
-    time.className = 'etl-round-duration';
-    time.textContent = roundDuration(record);
-    var toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'etl-round-toggle';
-    toggle.setAttribute('aria-label', isExpanded ? '收起轮次详情' : '展开轮次详情');
-    toggle.textContent = isExpanded ? '▴' : '▾';
-    head.appendChild(title);
-    head.appendChild(time);
-    head.appendChild(badge);
-    head.appendChild(toggle);
-    summary.appendChild(head);
-
-    renderRoundPills(summary, tools, record);
-
-    row.appendChild(marker);
-    row.appendChild(summary);
-    item.appendChild(row);
-
-    if (!options.summaryOnly) appendRoundDetailElement(item, record);
-
-    return item;
   }
 
   function buildTaskOverviewSkeleton() {
@@ -3941,6 +3774,7 @@ window.ChatExecutionPlan = (function () {
         if (createdTool) {
           patchFooterToolCount();
           renderLlmActivity();
+          if (dockSheetKind === 'tools') renderDockTools();
         }
       } else if (step.type === 'tool_result') {
         var resultId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
@@ -4014,7 +3848,7 @@ window.ChatExecutionPlan = (function () {
       renderEmptyState();
       renderLlmActivity();
       renderFooter();
-      renderSnapshotFiles();
+      renderDockSheet();
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('resetToolActivity', e);
@@ -4060,7 +3894,7 @@ window.ChatExecutionPlan = (function () {
     renderList();
     renderLlmActivity();
     renderFooter();
-    renderSnapshotFiles();
+    renderDockSheet();
     if (mountedMode === 'mobile') updateMobileBar();
   }
 
@@ -4247,9 +4081,11 @@ window.ChatExecutionPlan = (function () {
       sealedChapters = [];
       sealedToolCount = 0;
       liveChapterMeta = null;
-      expandedChapters = Object.create(null);
+      selectedChapterKey = '';
+      userPinnedChapter = false;
       chapterVisibleLimit = 30;
       pendingRevealMessageId = '';
+      setDockSheet('');
       // 文件列表来自 checkpoint；切会话/回滚时清视图，新一轮保留到下次拉取。
       if (snapshotFilesRefreshTimer) {
         clearTimeout(snapshotFilesRefreshTimer);
@@ -4284,7 +4120,7 @@ window.ChatExecutionPlan = (function () {
         renderRoundTimeline(true);
         renderExecutionModeBanner();
         renderFooter();
-        renderSnapshotFiles();
+        renderDockSheet();
       }
       applyVisibility();
       notifyPetFoot();
@@ -4756,13 +4592,7 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  // ── 检查点 Tab：检查点时间轴 + 本会话改过的文件 ──
-
-  function syncSnapshotSplitLayout() {
-    if (!hostEl) return;
-    var body = hostEl.querySelector('.etl-body');
-    if (body) body.classList.toggle('etl-body--fill', activeTab === 'snapshot');
-  }
+  // ── 检查点数据：回滚按钮挂在章节上；变更文件走底栏弹出层 ──
 
   function normalizeChangedPath(p) {
     var text = String(p || '').trim().split(/\r?\n/)[0] || '';
@@ -4877,19 +4707,123 @@ window.ChatExecutionPlan = (function () {
     return li;
   }
 
-  function renderSnapshotFiles() {
+  function collectSessionToolUsage() {
+    var byName = Object.create(null);
+    var order = [];
+    var seenCall = Object.create(null);
+
+    function add(name, callId) {
+      var toolName = String(name || '').trim();
+      if (!toolName) return;
+      if (callId) {
+        if (seenCall[callId]) return;
+        seenCall[callId] = true;
+      }
+      if (!byName[toolName]) {
+        byName[toolName] = { name: toolName, count: 0 };
+        order.push(toolName);
+      }
+      byName[toolName].count += 1;
+    }
+
+    function addFromRounds(rounds) {
+      if (!Array.isArray(rounds)) return;
+      for (var i = 0; i < rounds.length; i++) {
+        var tools = (rounds[i] && rounds[i].tools) || [];
+        for (var t = 0; t < tools.length; t++) {
+          var tool = tools[t];
+          if (!tool) continue;
+          add(tool.toolName, tool.toolCallId);
+        }
+      }
+    }
+
+    for (var c = 0; c < sealedChapters.length; c++) {
+      addFromRounds(sealedChapters[c] && sealedChapters[c].rounds);
+    }
+    for (var j = 0; j < toolRecords.length; j++) {
+      var rec = toolRecords[j];
+      if (!rec) continue;
+      add(rec.toolName, rec.toolCallId);
+    }
+    var out = [];
+    for (var k = 0; k < order.length; k++) out.push(byName[order[k]]);
+    return out;
+  }
+
+  function renderDockSheet() {
+    if (dockSheetKind === 'tools') renderDockTools();
+    else renderSnapshotFiles();
+  }
+
+  function buildDockToolItem(entry) {
+    var li = document.createElement('li');
+    li.className = 'etl-snapshot-file is-static';
+    li.setAttribute('role', 'listitem');
+    li.setAttribute('data-tool-name', entry.name);
+
+    var badge = document.createElement('span');
+    badge.className = 'etl-snapshot-file-badge etl-snapshot-file-badge--tool';
+    badge.textContent = '×' + entry.count;
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'etl-snapshot-file-name';
+    nameEl.textContent = entry.name;
+    nameEl.title = entry.name;
+
+    li.appendChild(badge);
+    li.appendChild(nameEl);
+    return li;
+  }
+
+  function renderDockTools() {
     if (!snapshotFilesEl) return;
     try {
+      var titleEl = snapshotFilesEl.querySelector('.etl-files-sheet-title');
+      var countEl = snapshotFilesEl.querySelector('#etl-snapshot-files-count');
+      var emptyEl = snapshotFilesEl.querySelector('.etl-snapshot-files-empty');
+      var list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
+      if (!list) return;
+      var tools = collectSessionToolUsage().slice(0, 200);
+      if (titleEl) titleEl.textContent = tools.length ? ('会话工具 · ' + tools.length) : '会话工具';
+      if (countEl) countEl.textContent = tools.length ? (tools.length + ' 个工具') : '暂无工具';
+      list.innerHTML = '';
+      if (!tools.length) {
+        if (emptyEl) {
+          emptyEl.textContent = '尚无工具调用';
+          emptyEl.classList.remove('hidden');
+        }
+        list.classList.add('hidden');
+        return;
+      }
+      if (emptyEl) emptyEl.classList.add('hidden');
+      list.classList.remove('hidden');
+      for (var i = 0; i < tools.length; i++) {
+        list.appendChild(buildDockToolItem(tools[i]));
+      }
+    } catch (e) {
+      safeWarn('renderDockTools', e);
+    }
+  }
+
+  function renderSnapshotFiles() {
+    if (!snapshotFilesEl) return;
+    if (dockSheetKind === 'tools') return;
+    try {
+      var titleEl = snapshotFilesEl.querySelector('.etl-files-sheet-title');
       var countEl = snapshotFilesEl.querySelector('#etl-snapshot-files-count');
       var emptyEl = snapshotFilesEl.querySelector('.etl-snapshot-files-empty');
       var list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
       if (!list) return;
       var files = snapshotChangedFiles.slice(0, 200);
+      if (titleEl) titleEl.textContent = files.length ? ('变更文件 · ' + files.length) : '变更文件';
       if (countEl) countEl.textContent = files.length ? (files.length + ' 个文件') : '暂无文件';
+      if (emptyEl) emptyEl.textContent = '尚无变更文件';
       list.innerHTML = '';
       if (!files.length) {
         if (emptyEl) emptyEl.classList.remove('hidden');
         list.classList.add('hidden');
+        renderFooter();
         return;
       }
       if (emptyEl) emptyEl.classList.add('hidden');
@@ -4897,6 +4831,7 @@ window.ChatExecutionPlan = (function () {
       for (var i = 0; i < files.length; i++) {
         list.appendChild(buildSnapshotFileItem(files[i]));
       }
+      renderFooter();
     } catch (e) {
       safeWarn('renderSnapshotFiles', e);
     }
@@ -4918,29 +4853,6 @@ window.ChatExecutionPlan = (function () {
       }
     } catch (_e) { /* ignore */ }
     return 'default';
-  }
-
-  function formatSnapshotTime(userMessageTime, createdAt) {
-    var ts = typeof userMessageTime === 'number' && isFinite(userMessageTime)
-      ? userMessageTime
-      : (createdAt ? Date.parse(createdAt) : NaN);
-    if (!isFinite(ts)) return '';
-    var d = new Date(ts);
-    if (isNaN(d.getTime())) return '';
-    var now = new Date();
-    var sameDay = d.getFullYear() === now.getFullYear()
-      && d.getMonth() === now.getMonth()
-      && d.getDate() === now.getDate();
-    if (sameDay) {
-      return d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-    }
-    return d.toLocaleString('zh-CN', {
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
   }
 
   function snapshotRestoreIconHtml() {
@@ -5075,118 +4987,15 @@ window.ChatExecutionPlan = (function () {
     return restoreBtn;
   }
 
-  function updateSnapshotCheckpointCount(text) {
-    var section = snapshotTimelineEl && snapshotTimelineEl.closest
-      ? snapshotTimelineEl.closest('.etl-snapshot-section')
-      : null;
-    var count = section && section.querySelector('#etl-snapshot-checkpoints-count');
-    if (count) count.textContent = text;
-  }
-
-  function renderSnapshotTimeline(payload) {
-    if (!snapshotTimelineEl) return;
-    try {
-      var entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
-      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
-      syncSnapshotCheckpointsToChatUi(entries);
-      applyCheckpointChangedFiles(payload.changedFiles);
-      renderSnapshotFiles();
-      var canRestore = snapshotRestoreAllowed();
-      snapshotTimelineEl.innerHTML = '';
-      updateSnapshotCheckpointCount(entries.length ? (entries.length + ' 个节点') : '暂无节点');
-
-      if (!canRestore) {
-        var hint = document.createElement('div');
-        hint.className = 'etl-snapshot-hint';
-        hint.setAttribute('role', 'status');
-        hint.textContent = '任务运行中或回滚进行中，请稍候再试。';
-        snapshotTimelineEl.appendChild(hint);
-      }
-
-      if (!entries.length) {
-        var empty = document.createElement('div');
-        empty.className = 'etl-empty etl-snapshot-empty';
-        empty.textContent = '发送用户消息后，将在此列出可回滚节点。';
-        snapshotTimelineEl.appendChild(empty);
-        return;
-      }
-
-      var list = document.createElement('ol');
-      list.className = 'etl-snapshot-list';
-      list.setAttribute('role', 'list');
-
-      for (var i = 0; i < entries.length; i++) {
-        var entry = entries[i];
-        if (!entry || !entry.messageId) continue;
-        var isCursor = !!entry.isCursor;
-        var li = document.createElement('li');
-        li.className = 'etl-snapshot-node' + (isCursor ? ' is-cursor' : '');
-        li.setAttribute('role', 'listitem');
-        li.setAttribute('data-message-id', entry.messageId);
-
-        var rail = document.createElement('div');
-        rail.className = 'etl-snapshot-rail';
-        rail.setAttribute('aria-hidden', 'true');
-        var dot = document.createElement('span');
-        dot.className = 'etl-snapshot-dot';
-        rail.appendChild(dot);
-        if (i < entries.length - 1) {
-          var line = document.createElement('span');
-          line.className = 'etl-snapshot-line';
-          rail.appendChild(line);
-        }
-
-        var card = document.createElement('div');
-        card.className = 'etl-snapshot-card';
-
-        var meta = document.createElement('div');
-        meta.className = 'etl-snapshot-meta';
-        var indexEl = document.createElement('span');
-        indexEl.className = 'etl-snapshot-index';
-        indexEl.textContent = String(i + 1);
-        var timeEl = document.createElement('time');
-        timeEl.className = 'etl-snapshot-time';
-        var timeText = formatSnapshotTime(entry.userMessageTime, entry.createdAt);
-        if (timeText) timeEl.textContent = timeText;
-        meta.appendChild(indexEl);
-        meta.appendChild(timeEl);
-        if (isCursor) {
-          var cursorBadge = document.createElement('span');
-          cursorBadge.className = 'etl-snapshot-badge';
-          cursorBadge.textContent = '当前位置';
-          meta.appendChild(cursorBadge);
-        }
-
-        var preview = document.createElement('div');
-        preview.className = 'etl-snapshot-preview';
-        preview.textContent = entry.preview || '（无消息摘要）';
-        preview.title = entry.preview || '';
-
-        card.appendChild(meta);
-        card.appendChild(preview);
-        card.addEventListener('click', function (evt) {
-          if (evt.target && evt.target.closest && evt.target.closest('.etl-snapshot-restore-btn')) return;
-          revealChapter(entry.messageId);
-        });
-        if (isSnapshotRestoreHidden(entry.messageId)) {
-          card.classList.add('etl-snapshot-card--no-restore');
-        } else {
-          card.appendChild(createSnapshotRestoreButton(entry.messageId));
-        }
-
-        li.appendChild(rail);
-        li.appendChild(card);
-        list.appendChild(li);
-      }
-
-      snapshotTimelineEl.appendChild(list);
-    } catch (e) {
-      safeWarn('renderSnapshotTimeline', e);
-      if (snapshotTimelineEl) {
-        updateSnapshotCheckpointCount('暂无节点');
-        snapshotTimelineEl.innerHTML = '<div class="etl-empty etl-snapshot-empty">检查点加载失败</div>';
-      }
-    }
+  function applyCheckpointPayload(payload) {
+    var entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
+    rememberSnapshotCheckpointIds(entries, payload && payload.cursorMessageId, payload && payload.cursorRestored);
+    syncSnapshotCheckpointsToChatUi(entries);
+    applyCheckpointChangedFiles(payload && payload.changedFiles);
+    renderDockSheet();
+    renderChapterDirectory();
+    renderRoundTimeline(true);
+    notifySnapshotRestoreAvailability();
   }
 
   function fetchSnapshotTimeline(sessionId, done) {
@@ -5202,14 +5011,7 @@ window.ChatExecutionPlan = (function () {
       return null;
     }).then(function (data) {
       if (gen !== snapshotFetchGeneration) return;
-      var payload = data || { entries: [] };
-      var entries = Array.isArray(payload.entries) ? payload.entries : [];
-      // 无论当前是不是快照 Tab，都要把检查点同步给气泡回滚。
-      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
-      syncSnapshotCheckpointsToChatUi(entries);
-      applyCheckpointChangedFiles(payload.changedFiles);
-      renderSnapshotFiles();
-      if (snapshotTimelineEl) renderSnapshotTimeline(payload);
+      applyCheckpointPayload(data || { entries: [] });
       if (typeof done === 'function') done(data);
     });
   }
@@ -5234,21 +5036,23 @@ window.ChatExecutionPlan = (function () {
   }
 
   function notifySnapshotRestoreAvailability() {
-    if (activeTab !== 'snapshot' || !snapshotTimelineEl) return;
-    var list = snapshotTimelineEl.querySelector('.etl-snapshot-list');
+    if (!chapterTimelineEl) return;
+    var list = chapterTimelineEl.querySelector('.etl-chapter-list');
     if (!list) {
       refreshSnapshotTimeline();
       return;
     }
     var canRestore = snapshotRestoreAllowed();
-    var hint = snapshotTimelineEl.querySelector('.etl-snapshot-hint');
+    var hint = chapterTimelineEl.querySelector('.etl-snapshot-hint');
     if (!canRestore && !hint) {
       hint = document.createElement('div');
       hint.className = 'etl-snapshot-hint';
       hint.setAttribute('role', 'status');
       hint.textContent = '任务运行中或回滚进行中，请稍候再试。';
-      snapshotTimelineEl.insertBefore(hint, snapshotTimelineEl.firstChild);
-    } else if (canRestore && hint) {
+      var head = chapterTimelineEl.querySelector('.etl-wb-section-head');
+      if (head && head.nextSibling) chapterTimelineEl.insertBefore(hint, head.nextSibling);
+      else chapterTimelineEl.insertBefore(hint, chapterTimelineEl.firstChild);
+    } else if (canRestore && hint && hint.parentNode) {
       hint.parentNode.removeChild(hint);
     }
     var btns = list.querySelectorAll('.etl-snapshot-restore-btn');
