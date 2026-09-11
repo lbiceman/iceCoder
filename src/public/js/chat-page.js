@@ -115,7 +115,10 @@ window.ChatPage = (function () {
     }
     if (window.ChatExecutionPlan
       && typeof window.ChatExecutionPlan.hydrateFromStructured === 'function') {
-      window.ChatExecutionPlan.hydrateFromStructured(structured);
+      window.ChatExecutionPlan.hydrateFromStructured(
+        structured,
+        Session.getMessages ? Session.getMessages() : [],
+      );
     }
   }
 

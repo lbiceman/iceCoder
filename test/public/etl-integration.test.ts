@@ -9,6 +9,10 @@ const PANEL_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
   'utf-8',
 );
+const CHRONICLE_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+  'utf-8',
+);
 const BRIDGE_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js'),
   'utf-8',
@@ -161,6 +165,7 @@ async function loadObserver(options: {
     showPanel: options.showPanel ?? true,
     sessionId: options.sessionId ?? 'integration-session',
   });
+  await page.addScriptTag({ content: CHRONICLE_SOURCE });
   await page.addScriptTag({ content: PANEL_SOURCE });
   await page.addScriptTag({ content: FLOW_STORE_SOURCE });
   await page.addScriptTag({ content: BRIDGE_SOURCE });
@@ -847,7 +852,7 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('发送下一条用户提示词时清空执行流，随后只展示新一轮调用', async () => {
+  it('发送下一条用户提示词时封存上一章，新一轮出现在下方', async () => {
     const page = await loadChatPageObserver();
     const result = await page.evaluate(() => {
       const emit = (window as any).__emitWs;
@@ -863,6 +868,7 @@ describe('ETL 真实 Observer 链路', () => {
       });
       const before = {
         rounds: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        chapters: document.querySelectorAll('.etl-chapter-node').length,
         footer: document.querySelector('.etl-foot-tool b')?.textContent,
       };
 
@@ -871,9 +877,10 @@ describe('ETL 真实 Observer 链路', () => {
       Date.now = () => 100_000;
       (document.querySelector('#btn-send') as HTMLButtonElement).click();
       const afterSend = {
-        rounds: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
-        empty: document.querySelector('#etl-round-timeline .etl-round-empty')?.textContent,
+        liveRounds: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        chapters: document.querySelectorAll('.etl-chapter-node').length,
         footer: document.querySelector('.etl-foot-tool b')?.textContent,
+        chapterEmpty: document.querySelector('.etl-chapter-empty')?.classList.contains('hidden'),
       };
 
       emit('step', {
@@ -887,19 +894,37 @@ describe('ETL 真实 Observer 链路', () => {
       });
       Date.now = () => 105_000;
       emit('status', { status: 'idle' });
+      const titles = Array.from(document.querySelectorAll('.etl-chapter-title')).map((el) => el.textContent);
+      const nodes = Array.from(document.querySelectorAll('.etl-chapter-node'));
       return {
         before,
         afterSend,
         currentRoundText: document.querySelector('#etl-round-timeline .etl-round-node')?.textContent,
         elapsed: document.querySelector('.etl-foot-time b')?.textContent,
+        titles,
+        chaptersAfter: nodes.length,
+        previousCollapsed: nodes[0] ? !nodes[0].classList.contains('is-expanded') : false,
+        currentExpanded: !!document.querySelector('.etl-chapter-node.is-current.is-expanded'),
+        parkedNodes: document.querySelectorAll('#etl-panel-flow > #etl-round-timeline .etl-round-node').length,
+        restoreInFlow: !!document.querySelector('#etl-panel-flow .etl-snapshot-restore-btn'),
+        prefixHint: document.querySelector('#etl-round-prefix-hint')?.textContent || '',
       };
     });
 
-    expect(result.before).toEqual({ rounds: 1, footer: '1' });
-    expect(result.afterSend).toEqual({ rounds: 0, empty: '等待模型开始执行', footer: '—' });
+    expect(result.before).toEqual({ rounds: 1, chapters: 1, footer: '1' });
+    expect(result.afterSend.chapters).toBeGreaterThanOrEqual(2);
+    expect(result.afterSend.liveRounds).toBe(0);
+    expect(result.afterSend.footer).toBe('1');
+    expect(result.afterSend.chapterEmpty).toBe(true);
     expect(result.currentRoundText).toMatch(/glob|查找匹配/i);
-    expect(result.currentRoundText).not.toContain('read_file');
+    expect(result.currentRoundText).not.toContain('previous.ts');
     expect(result.elapsed).toBe('00:05');
+    expect(result.chaptersAfter).toBeGreaterThanOrEqual(2);
+    expect(result.previousCollapsed).toBe(true);
+    expect(result.currentExpanded).toBe(true);
+    expect(result.parkedNodes).toBe(0);
+    expect(result.restoreInFlow).toBe(false);
+    expect(result.prefixHint).not.toContain('未载入本面板');
     await page.close();
   });
 
@@ -1011,7 +1036,7 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.durations).toEqual(['4.0s', '3.0s', '2.0s']);
     expect(result.roundTexts[0]).toMatch(/run_command|Run Command|Run Integration Test/i);
     expect(result.roundTexts[1]).toMatch(/read_file|Read File|读取/i);
-    expect(result.finalMarker).toBe('✓');
+    expect(result.finalMarker).toBe('3');
     expect(result.finalComplete).toBe('✅ 模型已完成本次任务');
     expect(result.finalRoundText).toContain('本轮结果');
     expect(result.footerLabel).toContain('上下文');
@@ -1233,6 +1258,155 @@ describe('ETL 真实 Observer 链路', () => {
       return snap.roundRecords.length;
     });
     expect(restored).toBe(0);
+    await page.close();
+  });
+
+  it('hydrateFromStructured 把两句用户话装配成两章，页脚工具与目录合计一致', async () => {
+    const page = await loadObserver();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.hydrateFromStructured(
+        [
+          { role: 'user', content: '补测试并跑 vitest' },
+          {
+            role: 'assistant',
+            toolCalls: [
+              { id: 'h1', name: 'read_file', arguments: { path: 'a.ts' } },
+              { id: 'h2', name: 'write_file', arguments: { path: 'a.test.ts' } },
+            ],
+          },
+          { role: 'assistant', content: '测过了' },
+          { role: 'user', content: '登录失败时不要清掉表单' },
+          {
+            role: 'assistant',
+            toolCalls: [{ id: 'h3', name: 'edit_file', arguments: { path: 'LoginForm.tsx' } }],
+          },
+        ],
+        [
+          { role: 'user', id: 'u1', content: '补测试并跑 vitest' },
+          { role: 'user', id: 'u2', content: '登录失败时不要清掉表单' },
+        ],
+      );
+      const titles = Array.from(document.querySelectorAll('.etl-chapter-title')).map((el) => el.textContent);
+      const footer = document.querySelector('.etl-foot-tool b')?.textContent;
+      const prefix = document.querySelector('#etl-round-prefix-hint');
+      return {
+        chapters: document.querySelectorAll('.etl-chapter-node').length,
+        titles,
+        footer,
+        prefixHidden: prefix?.classList.contains('hidden') ?? true,
+        restoreInFlow: !!document.querySelector('#etl-panel-flow .etl-snapshot-restore-btn'),
+        expandedCurrent: !!document.querySelector('.etl-chapter-node.is-current.is-expanded'),
+      };
+    });
+    expect(result.chapters).toBe(2);
+    expect(result.titles[0]).toContain('补测试');
+    expect(result.titles[1]).toContain('登录失败');
+    expect(result.footer).toBe('3');
+    expect(result.prefixHidden).toBe(true);
+    expect(result.restoreInFlow).toBe(false);
+    expect(result.expandedCurrent).toBe(true);
+    await page.close();
+  });
+
+  it('hydrate 用 session toolTraces 补齐 structured 缺失的工具，末章显示完成', async () => {
+    const page = await loadObserver();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.hydrateFromStructured(
+        [
+          { role: 'user', content: '新增一个2.txt文件' },
+          { role: 'assistant', content: '已创建' },
+          { role: 'user', content: '修改1.txt文件，内容随便一首诗' },
+          { role: 'assistant', content: '已改为《江雪》' },
+        ],
+        [
+          { role: 'user', id: 'u1', content: '新增一个2.txt文件' },
+          { role: 'agent', id: 'a1', content: '已创建' },
+          { role: 'user', id: 'u2', content: '修改1.txt文件，内容随便一首诗' },
+          { role: 'agent', id: 'a2', content: '已改为《江雪》' },
+        ],
+        {
+          a1: [{ toolName: 'write_file', detail: '2.txt', status: 'done', toolCallId: 'w2' }],
+          a2: [
+            { toolName: 'read_file', detail: '1.txt', status: 'done', toolCallId: 'r1' },
+            { toolName: 'write_file', detail: '1.txt', status: 'done', toolCallId: 'w1' },
+          ],
+        },
+      );
+      const nodes = Array.from(document.querySelectorAll('.etl-chapter-node'));
+      const current = document.querySelector('.etl-chapter-node.is-current');
+      const empty = document.querySelector('.etl-round-empty');
+      const tools = Array.from(document.querySelectorAll('.etl-round-action-target'))
+        .map((el) => el.textContent);
+      return {
+        chapters: nodes.length,
+        currentStatus: current?.className || '',
+        currentMeta: current?.querySelector('.etl-chapter-meta')?.textContent || '',
+        footer: document.querySelector('.etl-foot-tool b')?.textContent,
+        roundEmptyHidden: empty?.classList.contains('hidden') ?? true,
+        waitingCopy: document.querySelector('#etl-panel-flow')?.textContent?.includes('等待模型开始执行') &&
+          !document.querySelector('.etl-chapter-empty')?.classList.contains('hidden'),
+        tools,
+      };
+    });
+    expect(result.chapters).toBe(2);
+    expect(result.currentStatus).toContain('status-done');
+    expect(result.currentStatus).not.toContain('status-running');
+    expect(result.footer).toBe('3');
+    expect(result.roundEmptyHidden).toBe(true);
+    expect(result.waitingCopy).toBe(false);
+    await page.close();
+  });
+
+  it('已结束的当前章轮次可以点击收起再展开', async () => {
+    const page = await loadObserver();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.hydrateFromStructured(
+        [
+          { role: 'user', content: '你是谁?' },
+          { role: 'assistant', content: '我是助手' },
+        ],
+        [
+          { role: 'user', id: 'u-q', content: '你是谁?' },
+          { role: 'agent', id: 'a-q', content: '我是助手' },
+        ],
+      );
+      const current = document.querySelector('.etl-chapter-node.is-current');
+      const round = current && current.querySelector('.etl-round-node');
+      const row = round && round.querySelector('.etl-round-row');
+      const before = round ? round.classList.contains('is-expanded') : null;
+      if (row instanceof HTMLElement) row.click();
+      const afterCollapse = round ? round.classList.contains('is-expanded') : null;
+      if (row instanceof HTMLElement) row.click();
+      const afterExpand = round ? round.classList.contains('is-expanded') : null;
+      const parked = document.querySelector('#etl-panel-flow > #etl-round-timeline');
+      const chapterRow = current && current.querySelector('.etl-chapter-row');
+      if (chapterRow instanceof HTMLElement) chapterRow.click();
+      const afterChapterCollapse = {
+        currentExpanded: !!document.querySelector('.etl-chapter-node.is-current.is-expanded'),
+        parkedNodes: document.querySelectorAll('#etl-panel-flow > #etl-round-timeline .etl-round-node').length,
+      };
+      return {
+        before,
+        afterCollapse,
+        afterExpand,
+        inChapter: current ? current.querySelectorAll('.etl-round-node').length : 0,
+        parkedHidden: !parked || parked.classList.contains('hidden'),
+        afterChapterCollapse,
+      };
+    });
+    expect(result.before).toBe(true);
+    expect(result.afterCollapse).toBe(false);
+    expect(result.afterExpand).toBe(true);
+    expect(result.inChapter).toBe(1);
+    expect(result.parkedHidden).toBe(true);
+    expect(result.afterChapterCollapse.currentExpanded).toBe(false);
+    expect(result.afterChapterCollapse.parkedNodes).toBe(0);
     await page.close();
   });
 });

@@ -3061,6 +3061,16 @@ window.ChatUI = (function () {
     setInputValue: setInputValue,
     focusInput: focusInput,
     updateToolActionByCallId: updateToolActionByCallId,
+    scrollToToolCall: function (toolCallId) {
+      var block = findToolRowBlockByCallId(toolCallId);
+      if (!block || typeof block.scrollIntoView !== 'function') return false;
+      try {
+        block.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (_e) {
+        block.scrollIntoView(true);
+      }
+      return true;
+    },
     mountDiffForToolCallId: mountDiffForToolCallId,
     repairMissingDiffMountsFromStructured: repairMissingDiffMountsFromStructured,
     showDiffForToolCallId: showDiffForToolCallId,
