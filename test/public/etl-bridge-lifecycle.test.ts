@@ -9,6 +9,10 @@ const PANEL_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
   'utf-8',
 );
+const CHRONICLE_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+  'utf-8',
+);
 const BRIDGE_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan-bridge.js'),
   'utf-8',
@@ -68,6 +72,7 @@ async function loadLifecycle(): Promise<Page> {
     (window as any).ChatSessionStore = { getActiveSessionId: () => 'lifecycle-session' };
     (window as any).fetch = () => new Promise(() => {});
   });
+  await page.addScriptTag({ content: CHRONICLE_SOURCE });
   await page.addScriptTag({ content: PANEL_SOURCE });
   await page.addScriptTag({ content: FLOW_STORE_SOURCE });
   await page.addScriptTag({ content: BRIDGE_SOURCE });
@@ -273,6 +278,7 @@ describe('ETL bridge 生命周期', () => {
       });
       (window as any).fetch = () => new Promise(() => {});
     });
+    await page.addScriptTag({ content: CHRONICLE_SOURCE });
     await page.addScriptTag({ content: PANEL_SOURCE });
     await page.addScriptTag({ content: APP_SOURCE });
     await page.evaluate(() => {

@@ -1,7 +1,7 @@
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
- * 布局：头部 → 监管横幅 → 任务摘要 → Tab 条 → 执行流（可折叠轮次）→ Footer。
+ * 布局：头部 → 监管横幅 → Tab 条 → 执行流（章节目录）→ Footer。
  * 视觉：对齐 tokens.css 的 shadcn/zinc 中性灰阶；状态色仅用 success / warning / danger。
  */
 
@@ -370,7 +370,6 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: 10px;
   min-height: 0;
 }
 
@@ -401,6 +400,255 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   border: 0 !important;
 }
 
+/* ── 执行流：章节目录（编号列表，无时间轴圆点） ── */
+.etl-chapter-timeline {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+
+.etl-chapter-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.etl-chapter-heading-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.etl-chapter-heading-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.etl-chapter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.etl-chapter-node {
+  display: block;
+  min-width: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.etl-chapter-node:last-child {
+  border-bottom: 0;
+}
+
+.etl-chapter-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.etl-chapter-row:hover {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+}
+
+.etl-chapter-node.is-expanded .etl-chapter-row {
+  padding-bottom: 8px;
+}
+
+.etl-chapter-index {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding-top: 2px;
+  min-width: 1.2em;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.etl-chapter-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.etl-chapter-topline {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.etl-chapter-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
+}
+
+.etl-chapter-clock {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.etl-chapter-status {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.etl-chapter-node.status-done .etl-chapter-status {
+  background: var(--success-light);
+  color: var(--success);
+}
+
+.etl-chapter-node.status-running .etl-chapter-status {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.etl-chapter-node.status-failed .etl-chapter-status,
+.etl-chapter-node.status-stopped .etl-chapter-status {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.etl-chapter-node.status-paused .etl-chapter-status {
+  background: var(--warning-light, var(--surface-panel));
+  color: var(--warning, var(--text-muted));
+}
+
+.etl-chapter-toggle {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.etl-chapter-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-chapter-meta.hidden,
+.etl-chapter-clock.hidden,
+.etl-chapter-heading.hidden,
+.etl-chapter-now.hidden {
+  display: none;
+}
+
+.etl-chapter-now {
+  font-size: 12px;
+  color: var(--text-secondary, var(--text-primary));
+  line-height: 1.4;
+}
+
+.etl-chapter-body {
+  padding: 0 12px 10px 24px;
+}
+
+.etl-chapter-body.hidden {
+  display: none;
+}
+
+.etl-chapter-body > .etl-task-overview {
+  margin: 6px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.etl-chapter-body > .etl-current-step {
+  margin: 6px 0;
+}
+
+.etl-chapter-body > .etl-round-timeline {
+  margin-top: 4px;
+}
+
+.etl-chapter-body .etl-round-list {
+  padding-bottom: 0;
+}
+
+.etl-chapter-plan {
+  font-size: 12px;
+  color: var(--text-secondary, var(--text-primary));
+  line-height: 1.5;
+  margin: 0 0 8px;
+}
+
+.etl-chapter-subagent {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 4px 0;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.etl-chapter-load-more {
+  align-self: stretch;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.etl-chapter-load-more.hidden,
+.etl-chapter-empty.hidden {
+  display: none;
+}
+
+.etl-chapter-timeline > .etl-empty {
+  padding: 28px 12px;
+}
+
 /* ── 执行流：模型轮次列表 ── */
 .etl-round-timeline {
   min-width: 0;
@@ -409,12 +657,16 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   gap: var(--space-2);
 }
 
+.etl-round-timeline.hidden {
+  display: none;
+}
+
 .etl-round-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 2px;
   margin: 0;
-  padding: 0 0 10px 0;
+  padding: 0 0 4px 0;
   list-style: none;
   overflow-anchor: none;
 }
@@ -439,49 +691,44 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   min-width: 0;
 }
 
+.etl-round-node:not(:last-child) {
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+}
+
 .etl-round-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: var(--space-2);
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
   align-items: start;
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--surface-raised);
+  padding: 8px 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
 }
 
-.etl-round-row:hover {
-  transition: border-color var(--transition-fast), background var(--transition-fast);
-  border-color: var(--border-strong);
-  background: color-mix(in srgb, var(--surface-raised) 88%, var(--bg-hover));
-}
-
 .etl-round-node.is-expanded .etl-round-row {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  border-bottom-color: transparent;
+  border-radius: 0;
 }
 
 .etl-round-marker {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  background: var(--surface-panel);
+  align-items: flex-start;
+  justify-content: flex-end;
+  width: 22px;
+  padding-top: 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  line-height: 1.35;
 }
 
 .etl-round-node.is-final .etl-round-marker {
-  border-color: color-mix(in srgb, var(--success) 55%, var(--border-strong));
-  background: var(--success-light);
-  color: var(--success);
+  color: var(--text-muted);
 }
 
 .etl-round-status-icon {
@@ -532,7 +779,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
-  padding-left: 5px;
+  padding-left: 0;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -540,10 +787,11 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 
 .etl-round-badge {
   flex-shrink: 0;
-  padding: 1px var(--space-2);
+  padding: 1px 7px;
   border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .etl-round-badge.status-done {
@@ -557,8 +805,8 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 }
 
 .etl-round-badge.status-running {
-  background: var(--warning-light);
-  color: var(--warning);
+  background: var(--accent-light);
+  color: var(--accent);
 }
 
 .etl-round-duration {
@@ -566,6 +814,19 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   color: var(--text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.etl-round-desc {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.etl-round-node.is-expanded .etl-round-desc {
+  display: none;
 }
 
 .etl-round-toggle {
@@ -578,7 +839,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 18px;
+  font-size: 14px;
   cursor: pointer;
   border-radius: var(--radius-xs);
 }
@@ -605,13 +866,13 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 
 .etl-round-pill {
   max-width: 100%;
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-panel);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-family: var(--font-mono);
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -620,16 +881,21 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 .etl-round-detail {
   display: none;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius);
-  background: var(--msg-agent-bg);
+  gap: var(--space-2);
+  margin: 0 0 4px 22px;
+  padding: 0 0 6px 10px;
+  border: 0;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
 }
 
 .etl-round-node.is-expanded .etl-round-detail {
   display: flex;
+}
+
+.etl-round-detail.hidden {
+  display: none;
 }
 
 .etl-round-section-label {
@@ -943,13 +1209,14 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 .etl-footer {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  padding: 8px 12px;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  padding: 6px 10px;
   border-top: 1px solid var(--border-color);
   background: var(--surface-sidebar);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 11px;
+  line-height: 1.3;
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -957,8 +1224,19 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 .etl-foot-item {
   display: inline-flex;
   align-items: baseline;
-  gap: var(--space-1);
+  gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.etl-foot-token {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .etl-foot-item b {
@@ -967,7 +1245,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 }
 
 .etl-foot-time {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 @keyframes ice-plan-pulse {

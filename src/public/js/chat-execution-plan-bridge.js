@@ -280,7 +280,10 @@ window.ChatExecutionPlanBridge = (function () {
       }
       var structured = window.ChatSession.getStructuredMessages();
       if (structured && structured.length) {
-        window.ChatExecutionPlan.hydrateFromStructured(structured);
+        var ui = typeof window.ChatSession.getMessages === 'function'
+          ? window.ChatSession.getMessages()
+          : [];
+        window.ChatExecutionPlan.hydrateFromStructured(structured, ui);
       }
     } catch (_e) { /* ignore */ }
   }
@@ -339,9 +342,13 @@ window.ChatExecutionPlanBridge = (function () {
       return;
     }
 
-    // 独立于 enabled：上一轮残留 UI 在非计划型对话时也必须清掉
+    // 独立于 enabled：上一轮封成一章，不擦掉整本编年史
     if (step.type === 'execution_plan_clear') {
-      clearPlanStateForSession(getActiveSessionId());
+      if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.sealChapter === 'function') {
+        window.ChatExecutionPlan.sealChapter({ status: 'done' });
+      } else {
+        clearPlanStateForSession(getActiveSessionId());
+      }
       return;
     }
 
@@ -500,8 +507,8 @@ window.ChatExecutionPlanBridge = (function () {
   }
 
   /**
-   * 同会话新一轮用户输入开始时调用：清空上一轮 goal/steps/执行流，
-   * 并抑制 session_updated 触发的 REST /plan 把旧计划写回面板。
+   * 同会话新一轮用户输入开始时调用：把上一章封存，开新章；
+   * 并抑制 session_updated 触发的 REST /plan 把旧计划写回当前章。
    */
   function onNewTurnStarted() {
     syncGeneration++;
@@ -514,7 +521,11 @@ window.ChatExecutionPlanBridge = (function () {
     if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.cancelFlowPersist === 'function') {
       window.ChatExecutionPlan.cancelFlowPersist();
     }
-    clearPlanStateForSession(getActiveSessionId());
+    if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.sealChapter === 'function') {
+      window.ChatExecutionPlan.sealChapter({ status: 'done' });
+    } else {
+      clearPlanStateForSession(getActiveSessionId());
+    }
     if (enabled) ensurePanelVisible();
   }
 

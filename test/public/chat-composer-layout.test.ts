@@ -11,6 +11,7 @@ const TOKENS_CSS = readFileSync(path.join(publicRoot, 'css/tokens.css'), 'utf-8'
 const CHAT_UI_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-ui.js'), 'utf-8');
 const ETL_CSS = readFileSync(path.join(publicRoot, 'css/chat-execution-plan.css'), 'utf-8');
 const ETL_PANEL_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-plan.js'), 'utf-8');
+const ETL_CHRONICLE_SOURCE = readFileSync(path.join(publicRoot, 'js/etl-chronicle.js'), 'utf-8');
 const ETL_BRIDGE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-plan-bridge.js'), 'utf-8');
 const ETL_FLOW_STORE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-flow-store.js'), 'utf-8');
 
@@ -165,6 +166,7 @@ describe('聊天输入区与欢迎页布局审计', () => {
       (window as any).ChatSessionStore = { getActiveSessionId: () => 'audit-session' };
       (window as any).fetch = () => new Promise(() => {});
     });
+    await page.addScriptTag({ content: ETL_CHRONICLE_SOURCE });
     await page.addScriptTag({ content: ETL_PANEL_SOURCE });
     await page.addScriptTag({ content: ETL_FLOW_STORE_SOURCE });
     await page.addScriptTag({ content: ETL_BRIDGE_SOURCE });

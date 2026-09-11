@@ -9,6 +9,10 @@ const PANEL_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
   'utf-8',
 );
+const CHRONICLE_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+  'utf-8',
+);
 const CONFIG_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/config-page.js'),
   'utf-8',
@@ -91,6 +95,7 @@ async function loadPanel(
     (window as any).ChatExecutionPlanBridge = { isEnabled: () => true };
     (window as any).ChatPetBridge = { syncExecPlanFoot: () => {} };
   }, { showPanel: showTransparencyPanel });
+  await page.addScriptTag({ content: CHRONICLE_SOURCE });
   await page.addScriptTag({ content: PANEL_SOURCE });
   return page;
 }
@@ -224,8 +229,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     });
 
-    expect(result.hintHidden).toBe(false);
-    expect(result.hintText).toContain('轮次 1–18');
+    expect(result.hintHidden).toBe(true);
+    expect(result.hintText).not.toContain('未载入本面板');
     expect(result.loadMoreHidden).toBe(true);
     expect(result.loadMoreBeforeList).toBe(true);
     await page.close();

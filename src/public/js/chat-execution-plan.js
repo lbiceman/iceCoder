@@ -1,12 +1,9 @@
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
- * Phase 4：由锚定冰豆的 popover 重构为聊天页右侧常驻 `<aside id="exec-transparency-panel">`。
- * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 检查点）→ 执行流主体 → Footer（上下文/工具/时间）。
- * 显示门控读 EtlPrefs（`showTransparencyPanel`）；最小化收为宠物形态，双击宠物展开。
- *
+ * 结构：头部 → 监管条 → Tab（执行流 / 检查点）→ 执行流章节目录 → Footer。
+ * 执行流是 session 编年史：每一句用户话一章，章内是 Harness 轮次。
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
- * 对外契约（setPlan/applyPatch/clear/... ）签名保持不变。
  */
 
 /* exported ChatExecutionPlan */
@@ -145,6 +142,17 @@ window.ChatExecutionPlan = (function () {
   var cachedLoadMoreHidden = -1;
   var flowPersistTimer = null;
   var flowPersistHandler = null;
+  /** 已封存的历史章（不含当前活章）。 */
+  var sealedChapters = [];
+  /** 当前活章元数据：{ messageId, preview, startedAt, markers, status } */
+  var liveChapterMeta = null;
+  var expandedChapters = Object.create(null);
+  var chapterVisibleLimit = 30;
+  var chapterTimelineEl = null;
+  var sealedToolCount = 0;
+  var pendingRevealMessageId = '';
+  var chapterTimelineBound = false;
+  var chapterClickHandler = null;
 
   function safeWarn(where, err) {
     try {
@@ -152,6 +160,13 @@ window.ChatExecutionPlan = (function () {
         console.warn('[ChatExecutionPlan] ' + where + ' 降级：', err);
       }
     } catch (_e) { /* ignore */ }
+  }
+
+  function safeSetTitle(el, text) {
+    if (!el) return;
+    try {
+      el.title = text == null ? '' : String(text);
+    } catch (_e) { /* tooltip 能力缺失时忽略 */ }
   }
 
   // ── 偏好读取（EtlPrefs）──
@@ -372,16 +387,26 @@ window.ChatExecutionPlan = (function () {
     '</section>';
   }
 
-  /** 执行流 Tab 主体（轮次时间轴 + 隐藏的计划列表供 patch 增量更新）。 */
+  /** 执行流 Tab 主体：章节目录 + 活章内的轮次时间轴。 */
   function flowPanelHtml() {
     return '<section class="etl-tabpanel" id="etl-panel-flow" data-panel="flow" role="tabpanel" aria-labelledby="etl-tab-flow">' +
-      '<div class="etl-round-timeline" id="etl-round-timeline">' +
-        '<div class="etl-round-empty etl-empty">等待模型开始执行</div>' +
+      '<div class="etl-chapter-timeline" id="etl-chapter-timeline">' +
+        '<div class="etl-chapter-heading hidden" id="etl-chapter-heading">' +
+          '<span class="etl-chapter-heading-title">执行流</span>' +
+          '<span class="etl-chapter-heading-count" id="etl-chapter-count"></span>' +
+        '</div>' +
+        '<div class="etl-chapter-empty etl-empty">等待模型开始执行</div>' +
+        '<button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button>' +
+        '<ol class="etl-chapter-list"></ol>' +
+      '</div>' +
+      '<div class="etl-round-timeline hidden" id="etl-round-timeline">' +
+        '<div class="etl-round-empty etl-empty hidden">等待模型开始执行</div>' +
         '<div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div>' +
         '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
         '<ol class="etl-round-list"></ol>' +
       '</div>' +
       '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
+      '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
       '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
       '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
       '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
@@ -389,8 +414,7 @@ window.ChatExecutionPlan = (function () {
   }
 
   function sharedBodyHtml() {
-    return '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
-      '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
+    return '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
       '<div class="etl-body">' +
         flowPanelHtml() +
         snapshotPanelHtml() +
@@ -407,9 +431,11 @@ window.ChatExecutionPlan = (function () {
     llmActivityEl = host.querySelector('#etl-llm-activity');
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
+    chapterTimelineEl = host.querySelector('#etl-chapter-timeline');
     snapshotTimelineEl = host.querySelector('#etl-snapshot-timeline');
     snapshotFilesEl = host.querySelector('#etl-snapshot-files');
     bindRoundTimelineEvents();
+    bindChapterTimelineEvents();
     syncSnapshotSplitLayout();
     renderSnapshotFiles();
     if (window.EtlShellDock && typeof window.EtlShellDock.mount === 'function') {
@@ -492,9 +518,11 @@ window.ChatExecutionPlan = (function () {
     llmActivityEl = null;
     taskOverviewEl = null;
     roundTimelineEl = null;
+    chapterTimelineEl = null;
     snapshotTimelineEl = null;
     snapshotFilesEl = null;
     unbindRoundTimelineEvents();
+    unbindChapterTimelineEvents();
     mountedMode = null;
     if (window.EtlShellDock && typeof window.EtlShellDock.resetMount === 'function') {
       window.EtlShellDock.resetMount();
@@ -849,7 +877,8 @@ window.ChatExecutionPlan = (function () {
     }
     // Footer 总时间
     var timeElFoot = footerEl && footerEl.querySelector('.etl-foot-time b');
-    if (timeElFoot) timeElFoot.textContent = formatTurnElapsed();
+    if (timeElFoot) timeElFoot.textContent = formatClock(sessionWorkMs());
+    patchCurrentChapterChrome();
     // 移动端顶部条进度计数
     if (mountedMode === 'mobile') updateMobileBar();
   }
@@ -981,9 +1010,22 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
+  function hasSealableWork() {
+    return roundRecords.length > 0 || uniqueToolCallCount > 0 || !!currentPlan;
+  }
+
+  function hasLiveChapterWork() {
+    if (liveChapterMeta) return true;
+    return hasSealableWork() || !!currentExecutionMode;
+  }
+
+  function hasChronicleWork() {
+    return sealedChapters.length > 0 || hasLiveChapterWork();
+  }
+
   function renderEmptyState() {
     if (!emptyStateEl) return;
-    emptyStateEl.classList.toggle('hidden', !!currentPlan || roundRecords.length > 0);
+    emptyStateEl.classList.toggle('hidden', !!currentPlan || roundRecords.length > 0 || sealedChapters.length > 0);
   }
 
   function applyPatchToStep(stepEl, patch) {
@@ -1095,15 +1137,15 @@ window.ChatExecutionPlan = (function () {
     if (!footerEl) return;
     ensureFooterSkeleton();
     var tokenTxt = formatTokenStat();
-    var liveToolCount = authoritativeToolCalls === null
-      ? uniqueToolCallCount
-      : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+    var liveToolCount = sessionToolTotal();
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
-    var timeTxt = formatTurnElapsed();
+    var timeTxt = formatClock(sessionWorkMs());
     var tokenEl = footerEl.querySelector('.etl-foot-token b');
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
     var timeEl = footerEl.querySelector('.etl-foot-time b');
     if (tokenEl) tokenEl.textContent = tokenTxt;
+    var tokenItem = footerEl.querySelector('.etl-foot-token');
+    if (tokenItem) safeSetTitle(tokenItem, tokenTxt && tokenTxt !== '—' ? ('上下文 ' + tokenTxt) : '');
     if (toolEl) toolEl.textContent = toolTxt;
     if (timeEl) timeEl.textContent = timeTxt;
   }
@@ -1507,6 +1549,893 @@ window.ChatExecutionPlan = (function () {
     return intents.length ? intents : ['理解用户目标并规划下一步执行'];
   }
 
+  // ── 编年史：章节目录 ──
+
+  function chronicleApi() {
+    try {
+      return window.EtlChronicle || null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function chapterStatusLabel(status) {
+    var api = chronicleApi();
+    if (api && api.STATUS_LABELS && api.STATUS_LABELS[status]) return api.STATUS_LABELS[status];
+    if (status === 'running') return '进行中';
+    if (status === 'failed') return '失败';
+    if (status === 'paused') return '已暂停';
+    if (status === 'stopped') return '用户停止';
+    return '完成';
+  }
+
+  function chapterMarkerLabel(key) {
+    var api = chronicleApi();
+    if (api && api.MARKER_LABELS && api.MARKER_LABELS[key]) return api.MARKER_LABELS[key];
+    if (key === 'supervision') return '监管曾介入';
+    if (key === 'compaction') return '本章发生过压缩';
+    if (key === 'circuit') return '熔断保护';
+    if (key === 'subagent') return '子代理';
+    return '';
+  }
+
+  function formatChapterDuration(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '';
+    if (ms < 60000) return Math.max(1, Math.round(ms / 1000)) + 's';
+    return formatClock(ms);
+  }
+
+  function liveChapterDurationMs() {
+    if (typeof turnStartedAt !== 'number') return 0;
+    var end = typeof turnEndedAt === 'number' ? turnEndedAt : Date.now();
+    return Math.max(0, end - turnStartedAt);
+  }
+
+  function sealedDurationTotal() {
+    var total = 0;
+    for (var i = 0; i < sealedChapters.length; i++) {
+      var ms = sealedChapters[i] && sealedChapters[i].durationMs;
+      if (typeof ms === 'number') total += ms;
+    }
+    return total;
+  }
+
+  function sessionWorkMs() {
+    return sealedDurationTotal() + liveChapterDurationMs();
+  }
+
+  function sessionToolTotal() {
+    if (authoritativeToolCalls === null) {
+      return sealedToolCount + uniqueToolCallCount;
+    }
+    return authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+  }
+
+  function liveMarkersFromState() {
+    var markers = (liveChapterMeta && Array.isArray(liveChapterMeta.markers))
+      ? liveChapterMeta.markers.slice()
+      : [];
+    if (currentExecutionMode && currentExecutionMode.executionMode === 'forced') {
+      if (markers.indexOf('supervision') < 0) markers.push('supervision');
+    }
+    for (var i = 0; i < roundRecords.length; i++) {
+      var rec = roundRecords[i];
+      if (!rec) continue;
+      if (rec.stopReason === 'circuit_breaker' && markers.indexOf('circuit') < 0) {
+        markers.push('circuit');
+      }
+    }
+    return markers;
+  }
+
+  function liveChapterStatus() {
+    if (liveChapterMeta && liveChapterMeta.status && liveChapterMeta.status !== 'running') {
+      return liveChapterMeta.status;
+    }
+    for (var i = roundRecords.length - 1; i >= 0; i--) {
+      var rec = roundRecords[i];
+      if (!rec) continue;
+      if (rec.stopReason === 'circuit_breaker') return 'failed';
+      if (rec.stopReason === 'user_stop' || rec.stopReason === 'cancelled') return 'stopped';
+      if (rec.stopReason === 'completion_paused') return 'paused';
+      if (roundVisualStatus(rec) === 'failed') return 'failed';
+    }
+    if (roundRecords.length && currentPlan && isPlanComplete(currentPlan)) return 'done';
+    var last = roundRecords.length ? roundRecords[roundRecords.length - 1] : null;
+    if (last && last.isFinal && last.status === 'done') return 'done';
+    if (hasLiveChapterWork()) return 'running';
+    return 'done';
+  }
+
+  function liveFilesChangedCount() {
+    var seen = Object.create(null);
+    var n = 0;
+    for (var i = 0; i < toolRecords.length; i++) {
+      var tool = toolRecords[i];
+      if (!tool || !CONTEXT_WRITE_TOOLS[tool.toolName]) continue;
+      if (tool.status === 'failed' || tool.status === 'error') continue;
+      var pathVal = tool.target || tool.detail || '';
+      if (!pathVal || seen[pathVal]) continue;
+      seen[pathVal] = true;
+      n++;
+    }
+    return n;
+  }
+
+  function ensureLiveChapter(opts) {
+    opts = opts || {};
+    if (!liveChapterMeta) {
+      liveChapterMeta = {
+        messageId: opts.messageId || ('live-' + Date.now()),
+        preview: opts.preview || '',
+        startedAt: typeof turnStartedAt === 'number' ? turnStartedAt : Date.now(),
+        markers: [],
+        status: 'running',
+      };
+    } else {
+      if (opts.messageId) liveChapterMeta.messageId = opts.messageId;
+      if (opts.preview) liveChapterMeta.preview = opts.preview;
+    }
+    return liveChapterMeta;
+  }
+
+  function formatClockStamp(ts) {
+    if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
+    var d = new Date(ts);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  }
+
+  function toolPreviewLine(tool) {
+    if (!tool) return '';
+    var name = tool.toolName || '';
+    var preview = tool.preview || tool.target || tool.detail || '';
+    if (name && preview) return name + ' · ' + preview;
+    return preview || name;
+  }
+
+  function chapterDescription(chapter) {
+    if (!chapter) return '';
+    if (chapter.live && chapter.status === 'running') {
+      var now = nowDoingText();
+      if (now) return now;
+    }
+    var rounds = chapter.rounds || [];
+    if (rounds.length) {
+      var first = rounds[0];
+      var toolLine = toolPreviewLine(first && first.tools && first.tools[0]);
+      if (toolLine) return toolLine;
+      if (first && first.title) return first.title;
+    }
+    var bits = [];
+    if (chapter.roundCount) bits.push(chapter.roundCount + ' 轮');
+    if (chapter.filesChangedCount) bits.push('改 ' + chapter.filesChangedCount + ' 个文件');
+    if (chapter.markers && chapter.markers.length) {
+      for (var m = 0; m < chapter.markers.length; m++) {
+        var label = chapterMarkerLabel(chapter.markers[m]);
+        if (label) bits.push(label);
+      }
+    }
+    return bits.join(' · ');
+  }
+
+  function liveChapterViewModel() {
+    if (!hasLiveChapterWork()) return null;
+    var meta = ensureLiveChapter();
+    var files = liveFilesChangedCount();
+    var rounds = [];
+    var api = chronicleApi();
+    if (api && typeof api.fromLive === 'function') {
+      var packed = api.fromLive({
+        messageId: meta.messageId,
+        preview: meta.preview || '正在执行',
+        status: liveChapterStatus(),
+        startedAt: meta.startedAt || turnStartedAt,
+        endedAt: turnEndedAt,
+        markers: liveMarkersFromState(),
+        roundRecords: roundRecords,
+        toolRecords: toolRecords,
+        plan: currentPlan,
+      });
+      if (packed && Array.isArray(packed.rounds)) rounds = packed.rounds;
+    }
+    return {
+      messageId: meta.messageId,
+      preview: meta.preview || '正在执行',
+      status: liveChapterStatus(),
+      roundCount: roundRecords.length,
+      filesChangedCount: files,
+      durationMs: liveChapterDurationMs(),
+      markers: liveMarkersFromState(),
+      toolCount: uniqueToolCallCount,
+      rounds: rounds,
+      goal: currentPlan && currentPlan.goal ? currentPlan.goal : '',
+      phase: currentPlan && currentPlan.phase ? currentPlan.phase : '',
+      progress: currentPlan && typeof currentPlan.progress === 'number' ? currentPlan.progress : null,
+      intent: currentPlan && currentPlan.intent ? currentPlan.intent : '',
+      startTs: typeof meta.startedAt === 'number' ? meta.startedAt : turnStartedAt,
+      live: true,
+    };
+  }
+
+  function allChapterViews() {
+    var list = sealedChapters.slice();
+    var live = liveChapterViewModel();
+    if (live) list.push(live);
+    return list;
+  }
+
+  function visibleChapterViews() {
+    var all = allChapterViews();
+    if (all.length <= chapterVisibleLimit) return all;
+    return all.slice(all.length - chapterVisibleLimit);
+  }
+
+  function isChapterExpanded(chapter, isCurrent) {
+    if (!chapter) return false;
+    var key = chapter.messageId || (isCurrent ? '__live__' : '');
+    if (pendingRevealMessageId && chapter.messageId === pendingRevealMessageId) return true;
+    if (expandedChapters[key] === true) return true;
+    if (expandedChapters[key] === false) return false;
+    return isCurrent;
+  }
+
+  function liveTimelineInChapter() {
+    return !!(roundTimelineEl && roundTimelineEl.closest && roundTimelineEl.closest('.etl-chapter-node'));
+  }
+
+  function hideParkedLiveWidgets() {
+    if (roundTimelineEl && !liveTimelineInChapter()) {
+      roundTimelineEl.classList.add('hidden');
+      var parkedList = roundTimelineEl.querySelector('.etl-round-list');
+      if (parkedList) parkedList.innerHTML = '';
+    }
+    if (taskOverviewEl && !taskOverviewEl.closest('.etl-chapter-node')) {
+      taskOverviewEl.classList.add('hidden');
+    }
+    if (currentStepEl && !currentStepEl.closest('.etl-chapter-node')) {
+      currentStepEl.classList.add('hidden');
+    }
+  }
+
+  function focusNewestChapter() {
+    var views = allChapterViews();
+    var last = views.length ? views[views.length - 1] : null;
+    var lastKey = last ? (last.messageId || (last.live ? '__live__' : '')) : '';
+    for (var i = 0; i < views.length; i++) {
+      var ch = views[i];
+      var key = ch.messageId || (ch.live ? '__live__' : '');
+      if (!key) continue;
+      expandedChapters[key] = key === lastKey;
+    }
+  }
+
+  function detachLiveWidgets() {
+    if (!hostEl) return;
+    var flow = hostEl.querySelector('#etl-panel-flow');
+    if (!flow) return;
+    if (taskOverviewEl && taskOverviewEl.parentNode !== flow) flow.appendChild(taskOverviewEl);
+    if (currentStepEl && currentStepEl.parentNode !== flow) flow.appendChild(currentStepEl);
+    if (roundTimelineEl && roundTimelineEl.parentNode !== flow) flow.appendChild(roundTimelineEl);
+  }
+
+  function nowDoingText() {
+    if (!lastTool.toolName) return '';
+    var target = '';
+    var rec = lastTool.toolCallId ? toolRecordById[lastTool.toolCallId] : null;
+    if (rec) target = rec.target || rec.detail || '';
+    var label = inferToolIntent({
+      toolName: lastTool.toolName,
+      target: target,
+      detail: target,
+    });
+    var elapsed = '';
+    if (lastTool.ts) {
+      elapsed = ' · ' + formatToolDuration({
+        callTs: lastTool.ts,
+        resultTs: lastTool.pending ? Date.now() : rec && rec.resultTs,
+      });
+    }
+    return (lastTool.pending ? '正在' : '') + label + elapsed;
+  }
+
+  function makeFrozenRoundNode(round, options) {
+    options = options || {};
+    var item = document.createElement('li');
+    var status = round.status || 'done';
+    var startOpen = !!options.startExpanded;
+    item.className = 'etl-round-node etl-round-card status-' + status
+      + (round.isFinal ? ' is-final' : '')
+      + (startOpen ? ' is-expanded' : '');
+    item.dataset.iteration = String(round.iteration);
+    var row = document.createElement('div');
+    row.className = 'etl-round-row';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.setAttribute('aria-expanded', startOpen ? 'true' : 'false');
+    var marker = document.createElement('span');
+    marker.className = 'etl-round-marker';
+    marker.textContent = String(round.iteration);
+    var summary = document.createElement('div');
+    summary.className = 'etl-round-summary';
+    var head = document.createElement('div');
+    head.className = 'etl-round-head';
+    var title = document.createElement('span');
+    title.className = 'etl-round-title';
+    title.textContent = round.title || ('第 ' + round.iteration + ' 轮');
+    var time = document.createElement('span');
+    time.className = 'etl-round-duration';
+    var stamp = formatClockStamp(round.startTs);
+    time.textContent = stamp || formatChapterDuration(round.durationMs);
+    var badge = document.createElement('span');
+    badge.className = 'etl-round-badge status-' + status;
+    badge.textContent = roundStatusLabel(status);
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'etl-round-toggle';
+    toggle.textContent = startOpen ? '▴' : '▾';
+    head.appendChild(title);
+    head.appendChild(time);
+    head.appendChild(badge);
+    head.appendChild(toggle);
+    summary.appendChild(head);
+    var desc = toolPreviewLine(round.tools && round.tools[0]);
+    if (desc) {
+      var descEl = document.createElement('div');
+      descEl.className = 'etl-round-desc';
+      descEl.textContent = desc;
+      summary.appendChild(descEl);
+    }
+    row.appendChild(marker);
+    row.appendChild(summary);
+    item.appendChild(row);
+    var detail = document.createElement('div');
+    detail.className = 'etl-round-detail' + (startOpen ? '' : ' hidden');
+    var actions = document.createElement('ol');
+    actions.className = 'etl-round-actions';
+    var tools = round.tools || [];
+    for (var i = 0; i < tools.length; i++) {
+      actions.appendChild(makeFrozenToolRow(tools[i]));
+    }
+    if (!tools.length && round.isFinal) {
+      var complete = document.createElement('div');
+      complete.className = 'etl-round-complete';
+      complete.textContent = '模型判断本章目标已达成';
+      detail.appendChild(complete);
+    }
+    detail.appendChild(actions);
+    item.appendChild(detail);
+    row.addEventListener('click', function (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      var open = !item.classList.contains('is-expanded');
+      item.classList.toggle('is-expanded', open);
+      detail.classList.toggle('hidden', !open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.textContent = open ? '▴' : '▾';
+    });
+    return item;
+  }
+
+  function makeFrozenToolRow(tool) {
+    var status = toolStatusClass(tool.status);
+    var row = document.createElement('li');
+    row.className = 'etl-round-action etl-round-tool status-' + status;
+    if (tool.toolCallId) row.dataset.toolCallId = tool.toolCallId;
+    var icon = document.createElement('span');
+    icon.className = 'etl-round-action-icon';
+    icon.textContent = status === 'failed' ? '×' : '✓';
+    var body = document.createElement('div');
+    body.style.minWidth = '0';
+    var name = document.createElement('div');
+    name.className = 'etl-round-action-name';
+    name.textContent = tool.intent || tool.toolName || '工具';
+    body.appendChild(name);
+    if (tool.preview) {
+      var path = document.createElement('div');
+      path.className = 'etl-round-action-target';
+      path.textContent = tool.preview;
+      body.appendChild(path);
+    }
+    var dur = document.createElement('span');
+    dur.className = 'etl-round-action-dur';
+    dur.textContent = formatChapterDuration(tool.durationMs);
+    row.appendChild(icon);
+    row.appendChild(body);
+    row.appendChild(dur);
+    return row;
+  }
+
+  function makeChapterNode(chapter, index, isCurrent) {
+    var expanded = isChapterExpanded(chapter, isCurrent);
+    var isLiveRunning = !!(isCurrent && chapter && chapter.live && chapter.status === 'running');
+    var li = document.createElement('li');
+    li.className = 'etl-chapter-node'
+      + (isCurrent ? ' is-current' : '')
+      + (expanded ? ' is-expanded' : '')
+      + ' status-' + (chapter.status || 'done');
+    if (chapter.messageId) li.setAttribute('data-message-id', chapter.messageId);
+    li.setAttribute('data-chapter-index', String(index));
+
+    var row = document.createElement('div');
+    row.className = 'etl-chapter-row';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+    var indexEl = document.createElement('span');
+    indexEl.className = 'etl-chapter-index';
+    indexEl.textContent = String(index);
+
+    var main = document.createElement('div');
+    main.className = 'etl-chapter-main';
+
+    var topline = document.createElement('div');
+    topline.className = 'etl-chapter-topline';
+
+    var title = document.createElement('div');
+    title.className = 'etl-chapter-title';
+    title.textContent = chapter.preview || '（无消息摘要）';
+    safeSetTitle(title, title.textContent);
+
+    var clock = document.createElement('span');
+    clock.className = 'etl-chapter-clock';
+    var stamp = formatClockStamp(chapter.startTs);
+    clock.textContent = stamp;
+    clock.classList.toggle('hidden', !stamp);
+
+    var statusEl = document.createElement('span');
+    statusEl.className = 'etl-chapter-status';
+    statusEl.textContent = chapterStatusLabel(chapter.status);
+
+    var toggle = document.createElement('span');
+    toggle.className = 'etl-chapter-toggle';
+    toggle.textContent = expanded ? '▴' : '▾';
+
+    topline.appendChild(title);
+    topline.appendChild(clock);
+    topline.appendChild(statusEl);
+    topline.appendChild(toggle);
+
+    var meta = document.createElement('div');
+    meta.className = 'etl-chapter-meta';
+    var desc = chapterDescription(chapter);
+    meta.textContent = desc;
+    safeSetTitle(meta, desc);
+    meta.classList.toggle('hidden', !desc);
+
+    main.appendChild(topline);
+    main.appendChild(meta);
+
+    row.appendChild(indexEl);
+    row.appendChild(main);
+    li.appendChild(row);
+
+    var body = document.createElement('div');
+    body.className = 'etl-chapter-body' + (expanded ? '' : ' hidden');
+
+    if (expanded && !isLiveRunning && (chapter.goal || chapter.phase)) {
+      var planHead = document.createElement('div');
+      planHead.className = 'etl-chapter-plan';
+      if (chapter.goal) {
+        var g = document.createElement('div');
+        g.textContent = '目标  ' + chapter.goal;
+        planHead.appendChild(g);
+      }
+      if (chapter.phase) {
+        var p = document.createElement('div');
+        p.textContent = '阶段  ' + chapter.phase;
+        planHead.appendChild(p);
+      }
+      body.appendChild(planHead);
+    }
+
+    if (expanded && !isLiveRunning) {
+      var sub = findSubagentMarker(chapter);
+      if (sub) body.appendChild(sub);
+      var roundList = document.createElement('ol');
+      roundList.className = 'etl-chapter-rounds etl-round-list';
+      var rounds = chapter.rounds || [];
+      for (var r = 0; r < rounds.length; r++) {
+        roundList.appendChild(makeFrozenRoundNode(rounds[r], {
+          startExpanded: !!isCurrent && r === rounds.length - 1,
+        }));
+      }
+      body.appendChild(roundList);
+    }
+
+    li.appendChild(body);
+    return li;
+  }
+
+  function findSubagentMarker(chapter) {
+    if (!chapter.markers || chapter.markers.indexOf('subagent') < 0) return null;
+    var line = document.createElement('button');
+    line.type = 'button';
+    line.className = 'etl-chapter-subagent';
+    line.textContent = chapter.subagentReady ? '分析已就绪' : '分析中';
+    line.addEventListener('click', function (evt) {
+      evt.stopPropagation();
+      jumpToChatTool(chapter.subagentToolCallId || '');
+    });
+    return line;
+  }
+
+  function syncChapterEmptyAndLoadMore(allCount, visibleCount) {
+    if (!chapterTimelineEl) return;
+    var empty = chapterTimelineEl.querySelector('.etl-chapter-empty');
+    if (empty) empty.classList.toggle('hidden', allCount > 0);
+    var heading = chapterTimelineEl.querySelector('#etl-chapter-heading');
+    var countEl = chapterTimelineEl.querySelector('#etl-chapter-count');
+    if (heading) heading.classList.toggle('hidden', allCount <= 0);
+    if (countEl) countEl.textContent = allCount > 0 ? ('共 ' + allCount + ' 章') : '';
+    var loadMore = chapterTimelineEl.querySelector('#etl-chapter-load-more');
+    if (!loadMore) return;
+    var hiddenCount = Math.max(0, allCount - visibleCount);
+    loadMore.classList.toggle('hidden', hiddenCount <= 0);
+    loadMore.textContent = hiddenCount
+      ? ('加载更早的章节 ↑ (' + hiddenCount + ')')
+      : '加载更早的章节 ↑';
+  }
+
+  function renderChapterDirectory(options) {
+    options = options || {};
+    if (!chapterTimelineEl) return;
+    try {
+      detachLiveWidgets();
+      var list = chapterTimelineEl.querySelector('.etl-chapter-list');
+      if (!list) return;
+      list.innerHTML = '';
+      var all = allChapterViews();
+      var visible = visibleChapterViews();
+      var offset = all.length - visible.length;
+      syncChapterEmptyAndLoadMore(all.length, visible.length);
+
+      for (var i = 0; i < visible.length; i++) {
+        var chapter = visible[i];
+        var absIndex = offset + i + 1;
+        var isCurrent = !!chapter.live || (i === visible.length - 1);
+        var node = makeChapterNode(chapter, absIndex, isCurrent);
+        list.appendChild(node);
+        var liveRunning = isCurrent && !!chapter.live && chapter.status === 'running';
+        if (liveRunning && isChapterExpanded(chapter, true)) {
+          var body = node.querySelector('.etl-chapter-body');
+          if (body) {
+            if (taskOverviewEl) body.appendChild(taskOverviewEl);
+            if (currentStepEl) body.appendChild(currentStepEl);
+            if (roundTimelineEl) {
+              roundTimelineEl.classList.remove('hidden');
+              body.appendChild(roundTimelineEl);
+            }
+          }
+        }
+      }
+
+      hideParkedLiveWidgets();
+
+      if (options.scrollToLatest && list.lastElementChild && list.lastElementChild.scrollIntoView) {
+        list.lastElementChild.scrollIntoView({ block: 'nearest' });
+      }
+      if (pendingRevealMessageId) {
+        var reveal = list.querySelector('[data-message-id="' + pendingRevealMessageId.replace(/"/g, '\\"') + '"]');
+        if (reveal && reveal.scrollIntoView) reveal.scrollIntoView({ block: 'nearest' });
+        pendingRevealMessageId = '';
+      }
+    } catch (e) {
+      safeWarn('renderChapterDirectory', e);
+    }
+  }
+
+  function patchCurrentChapterChrome() {
+    if (!chapterTimelineEl) return;
+    var live = liveChapterViewModel();
+    if (!live) return;
+    var node = chapterTimelineEl.querySelector('.etl-chapter-node.is-current');
+    if (!node) {
+      renderChapterDirectory();
+      return;
+    }
+    var title = node.querySelector('.etl-chapter-title');
+    if (title && live.preview) {
+      title.textContent = live.preview;
+      safeSetTitle(title, live.preview);
+    }
+    var statusEl = node.querySelector('.etl-chapter-status');
+    if (statusEl) statusEl.textContent = chapterStatusLabel(live.status);
+    node.classList.remove('status-running', 'status-done', 'status-failed', 'status-paused', 'status-stopped');
+    node.classList.add('status-' + (live.status || 'done'));
+    var clock = node.querySelector('.etl-chapter-clock');
+    if (clock) {
+      var stamp = formatClockStamp(live.startTs);
+      clock.textContent = stamp;
+      clock.classList.toggle('hidden', !stamp);
+    }
+    var meta = node.querySelector('.etl-chapter-meta');
+    if (meta) {
+      var desc = chapterDescription(live);
+      meta.textContent = desc;
+      safeSetTitle(meta, desc);
+      meta.classList.toggle('hidden', !desc);
+    }
+    var toggle = node.querySelector('.etl-chapter-toggle');
+    if (toggle) toggle.textContent = node.classList.contains('is-expanded') ? '▴' : '▾';
+  }
+
+  function toggleChapterExpanded(messageId, indexAttr) {
+    var views = allChapterViews();
+    var chapter = null;
+    if (messageId) {
+      for (var i = 0; i < views.length; i++) {
+        if (views[i].messageId === messageId) { chapter = views[i]; break; }
+      }
+    }
+    if (!chapter && indexAttr) {
+      var idx = parseInt(indexAttr, 10);
+      if (idx >= 1 && idx <= views.length) chapter = views[idx - 1];
+    }
+    if (!chapter) return;
+    var key = chapter.messageId || (chapter.live ? '__live__' : '');
+    var isCurrent = !!chapter.live || chapter === views[views.length - 1];
+    expandedChapters[key] = !isChapterExpanded(chapter, isCurrent);
+    renderChapterDirectory();
+    renderTaskOverview();
+    renderCurrentStep();
+    renderRoundTimeline(true);
+    hideParkedLiveWidgets();
+  }
+
+  function revealChapter(messageId) {
+    if (!messageId) return;
+    pendingRevealMessageId = messageId;
+    expandedChapters[messageId] = true;
+    if (activeTab !== 'flow') return;
+    renderChapterDirectory({ scrollToLatest: false });
+  }
+
+  function jumpToChatTool(toolCallId) {
+    if (!toolCallId) return;
+    try {
+      if (window.ChatUI && typeof window.ChatUI.scrollToToolCall === 'function') {
+        window.ChatUI.scrollToToolCall(toolCallId);
+      }
+    } catch (e) {
+      safeWarn('jumpToChatTool', e);
+    }
+  }
+
+  function handleChapterTimelineInteraction(event) {
+    try {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      var loadMore = target.closest('#etl-chapter-load-more');
+      if (loadMore) {
+        chapterVisibleLimit += 8;
+        renderChapterDirectory();
+        return;
+      }
+      var action = target.closest('.etl-round-action[data-tool-call-id]');
+      if (action && event.type === 'click') {
+        jumpToChatTool(action.getAttribute('data-tool-call-id'));
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      var roundRow = target.closest('.etl-round-row');
+      if (roundRow) {
+        var inLiveTimeline = !!roundRow.closest('#etl-round-timeline');
+        var liveRound = inLiveTimeline ? roundRow.closest('.etl-round-node') : null;
+        if (liveRound && liveRound.dataset.iteration) {
+          if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+          if (event.type === 'click' || event.type === 'keydown') event.preventDefault();
+          event.stopPropagation();
+          toggleRoundExpanded(liveRound.dataset.iteration);
+        }
+        return;
+      }
+      if (target.closest('.etl-chapter-subagent')) return;
+      var row = target.closest('.etl-chapter-row');
+      if (!row) return;
+      var node = row.closest('.etl-chapter-node');
+      if (!node) return;
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.type === 'keydown') event.preventDefault();
+      toggleChapterExpanded(node.getAttribute('data-message-id') || '', node.getAttribute('data-chapter-index'));
+    } catch (e) {
+      safeWarn('chapterTimelineClick', e);
+    }
+  }
+
+  function unbindChapterTimelineEvents() {
+    if (chapterTimelineEl && chapterClickHandler) {
+      chapterTimelineEl.removeEventListener('click', chapterClickHandler);
+      chapterTimelineEl.removeEventListener('keydown', chapterClickHandler);
+    }
+    chapterClickHandler = null;
+    chapterTimelineBound = false;
+  }
+
+  function bindChapterTimelineEvents() {
+    if (!chapterTimelineEl) return;
+    if (chapterTimelineBound) return;
+    chapterClickHandler = handleChapterTimelineInteraction;
+    chapterTimelineEl.addEventListener('click', chapterClickHandler);
+    chapterTimelineEl.addEventListener('keydown', chapterClickHandler);
+    chapterTimelineBound = true;
+  }
+
+  function resetLiveChapterState() {
+    currentPlan = null;
+    frozenPlanId = null;
+    currentExecutionMode = null;
+    bannerDetailOpen = false;
+    lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
+    toolRecords = [];
+    toolRecordById = Object.create(null);
+    toolCallIds = Object.create(null);
+    uniqueToolCallCount = 0;
+    authoritativeToolCalls = null;
+    calibratedUniqueToolCount = 0;
+    footerStats.totalToolCalls = null;
+    roundRecords = [];
+    roundRecordByIteration = Object.create(null);
+    expandedRounds = Object.create(null);
+    roundVisibleLimit = 20;
+    cachedLoadMoreHidden = -1;
+    liveChapterMeta = null;
+    turnStartedAt = null;
+    turnEndedAt = null;
+  }
+
+  function sealLiveChapter(opts) {
+    opts = opts || {};
+    try {
+      if (!hasSealableWork()) {
+        currentPlan = null;
+        frozenPlanId = null;
+        currentExecutionMode = null;
+        bannerDetailOpen = false;
+        ensureLiveChapter(opts.nextMeta || {});
+        focusNewestChapter();
+        if (hostEl) {
+          renderChapterDirectory();
+          renderTaskOverview();
+          renderRoundTimeline(true);
+          renderCurrentStep();
+          renderEmptyState();
+          renderExecutionModeBanner();
+          renderFooter();
+          hideParkedLiveWidgets();
+        }
+        return false;
+      }
+      ensureLiveChapter();
+      var status = opts.status || liveChapterStatus();
+      if (status === 'running') status = 'done';
+      var api = chronicleApi();
+      var chapter = null;
+      if (api && typeof api.fromLive === 'function') {
+        chapter = api.fromLive({
+          messageId: liveChapterMeta.messageId,
+          preview: liveChapterMeta.preview || '（无消息摘要）',
+          status: status,
+          startedAt: liveChapterMeta.startedAt || turnStartedAt,
+          endedAt: typeof turnEndedAt === 'number' ? turnEndedAt : Date.now(),
+          markers: liveMarkersFromState(),
+          roundRecords: roundRecords,
+          toolRecords: toolRecords,
+          plan: currentPlan,
+        });
+      }
+      if (chapter) {
+        chapter.status = status;
+        sealedChapters.push(chapter);
+        sealedToolCount += typeof chapter.toolCount === 'number' ? chapter.toolCount : 0;
+        if (chapter.messageId) expandedChapters[chapter.messageId] = false;
+      }
+      resetLiveChapterState();
+      ensureLiveChapter(opts.nextMeta || {});
+      focusNewestChapter();
+      if (hostEl) {
+        renderChapterDirectory();
+        renderTaskOverview();
+        renderRoundTimeline(true);
+        renderCurrentStep();
+        renderEmptyState();
+        renderExecutionModeBanner();
+        renderFooter();
+        hideParkedLiveWidgets();
+      }
+      scheduleFlowPersist();
+      return true;
+    } catch (e) {
+      safeWarn('sealLiveChapter', e);
+      return false;
+    }
+  }
+
+  function loadChapterIntoLive(chapter) {
+    if (!chapter) return;
+    resetLiveChapterState();
+    liveChapterMeta = {
+      messageId: chapter.messageId || ('live-' + Date.now()),
+      preview: chapter.preview || '',
+      startedAt: chapter.startTs,
+      markers: Array.isArray(chapter.markers) ? chapter.markers.slice() : [],
+      status: chapter.status === 'running' ? 'running' : (chapter.status || 'done'),
+    };
+    /* hydrate 回填的章不要造空任务图，否则总览卡会撑乱目录。 */
+    var rounds = chapter.rounds || [];
+    var startBase = typeof chapter.startTs === 'number' ? chapter.startTs : Date.now() - rounds.length * 2000;
+    for (var r = 0; r < rounds.length; r++) {
+      var round = rounds[r];
+      var roundTs = startBase + r * 2000;
+      var ensured = ensureRoundRecord(round.iteration || (r + 1), roundTs);
+      var record = ensured.record;
+      record.status = round.status === 'running' ? 'running' : 'done';
+      record.isFinal = !!round.isFinal;
+      record.endTs = roundTs + (round.durationMs || 1500);
+      if (round.stopReason) record.stopReason = round.stopReason;
+      var tools = round.tools || [];
+      for (var t = 0; t < tools.length; t++) {
+        var tool = tools[t];
+        var callId = tool.toolCallId || ('hydrate-' + record.iteration + '-' + t);
+        if (toolRecordById[callId]) continue;
+        var toolTs = roundTs + t * 200;
+        var toolRec = {
+          toolCallId: callId,
+          toolName: tool.toolName,
+          callTs: toolTs,
+          resultTs: toolTs + Math.max(100, tool.durationMs || 100),
+          status: tool.status || 'done',
+          detail: tool.preview || tool.target || '',
+          target: tool.target || tool.preview || '',
+          iteration: record.iteration,
+        };
+        toolRecords.push(toolRec);
+        toolRecordById[callId] = toolRec;
+        if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
+        if (!toolCallIds[callId]) {
+          toolCallIds[callId] = true;
+          uniqueToolCallCount++;
+        }
+      }
+    }
+    if (typeof chapter.startTs === 'number') turnStartedAt = chapter.startTs;
+    if (typeof chapter.endTs === 'number') turnEndedAt = chapter.endTs;
+    else if (chapter.status && chapter.status !== 'running') {
+      turnEndedAt = turnStartedAt ? turnStartedAt + (chapter.durationMs || 0) : Date.now();
+    }
+    if (chapter.status && chapter.status !== 'running') stopTick();
+  }
+
+  function applyAssembledChapters(chapters, options) {
+    options = options || {};
+    if (!Array.isArray(chapters)) chapters = [];
+    var keepLive = options.keepLive && (roundRecords.length > 0 || uniqueToolCallCount > 0);
+    if (keepLive && !chapters.length) return;
+    var liveId = liveChapterMeta && liveChapterMeta.messageId;
+    sealedChapters = [];
+    sealedToolCount = 0;
+    var last = null;
+    for (var i = 0; i < chapters.length; i++) {
+      var ch = chapters[i];
+      last = ch;
+      if (keepLive && liveId && ch.messageId === liveId) continue;
+      if (keepLive && !liveId && i === chapters.length - 1) continue;
+      if (keepLive || i < chapters.length - 1) {
+        sealedChapters.push(ch);
+        sealedToolCount += typeof ch.toolCount === 'number' ? ch.toolCount : 0;
+      }
+    }
+    if (!keepLive && last) loadChapterIntoLive(last);
+    else if (!keepLive && !last) resetLiveChapterState();
+  }
+
+  function stampLiveMarker(key) {
+    ensureLiveChapter();
+    if (!liveChapterMeta.markers) liveChapterMeta.markers = [];
+    if (liveChapterMeta.markers.indexOf(key) < 0) liveChapterMeta.markers.push(key);
+  }
+
   // ── 渲染：按模型轮次的执行流 ──
 
   var PHASE_LABELS = {
@@ -1620,6 +2549,10 @@ window.ChatExecutionPlan = (function () {
       syncRoundTimeline({ iteration: record.iteration, insert: roundResult.created });
       renderEmptyState();
       if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
+      if (evt.stopReason === 'circuit_breaker') stampLiveMarker('circuit');
+      if (evt.type === 'compaction' || evt.kind === 'compaction') stampLiveMarker('compaction');
+      ensureLiveChapter();
+      patchCurrentChapterChrome();
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyRoundActivity', e);
@@ -1960,7 +2893,7 @@ window.ChatExecutionPlan = (function () {
     if (!roundTimelineEl) return null;
     var empty = roundTimelineEl.querySelector('.etl-round-empty');
     var list = roundTimelineEl.querySelector('.etl-round-list');
-    if (empty) empty.classList.toggle('hidden', roundRecords.length > 0);
+    if (empty) empty.classList.add('hidden');
     return { empty: empty, list: list };
   }
 
@@ -1977,105 +2910,117 @@ window.ChatExecutionPlan = (function () {
     loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ' (' + hiddenCount + ')' : '');
   }
 
-  /** 轮次从中间开始（如 19）时提示：更早轮次未实时捕获，可回填或去聊天区展开。 */
+  /** 前缀缺口提示已废弃：编年史从会话数据回填，不再叫人去聊天区翻历史。 */
   function syncPrefixGapHint() {
     if (!roundTimelineEl) return;
     var hint = roundTimelineEl.querySelector('#etl-round-prefix-hint');
     if (!hint) return;
-    if (!roundRecords.length) {
-      hint.classList.add('hidden');
-      hint.textContent = '';
-      return;
-    }
-    var firstIteration = roundRecords[0].iteration;
-    if (typeof firstIteration !== 'number' || firstIteration <= 1) {
-      hint.classList.add('hidden');
-      hint.textContent = '';
-      return;
-    }
-    var missing = firstIteration - 1;
-    hint.textContent = '轮次 1–' + missing + ' 未载入本面板 · 完整工具记录见聊天区「还有 N 条历史 · 展开」';
-    hint.classList.remove('hidden');
+    hint.classList.add('hidden');
+    hint.textContent = '';
   }
 
   function sliceCurrentTurnStructured(structured) {
-    if (!Array.isArray(structured) || !structured.length) return [];
-    var startIdx = -1;
-    for (var i = structured.length - 1; i >= 0; i--) {
-      if (structured[i] && structured[i].role === 'user') {
-        startIdx = i;
-        break;
-      }
-    }
-    return startIdx < 0 ? structured.slice() : structured.slice(startIdx);
+    return Array.isArray(structured) ? structured : [];
   }
 
   /**
-   * 从 structured 助手轮次回填 ETL 缺失的前缀轮次（面板晚开 / F5 后只拿到后半段时）。
-   * 只补 roundRecordByIteration 中不存在的 iteration，不覆盖实时数据。
+   * 从 structured + UI 消息回填整本编年史。
+   * 正在跑的活章不覆盖实时 tool/round。
    */
-  function hydrateFromStructured(structured) {
+  function hydrateFromStructured(structured, uiMessages, toolTracesOpt) {
     try {
       try {
         scheduleSnapshotTimelineRefresh();
       } catch (fileErr) {
         safeWarn('hydrateFromStructured.files', fileErr);
       }
-      var slice = sliceCurrentTurnStructured(structured);
-      if (!slice.length) return false;
-      var baseTs = Date.now() - slice.length * 2000;
-      var iteration = 0;
-      var filled = 0;
-      for (var i = 0; i < slice.length; i++) {
-        var msg = slice[i];
-        if (!msg || msg.role !== 'assistant') continue;
-        iteration++;
-        if (roundRecordByIteration[String(iteration)]) continue;
-        var roundTs = baseTs + iteration * 2000;
-        var roundResult = ensureRoundRecord(iteration, roundTs);
-        var record = roundResult.record;
-        record.status = 'done';
-        record.endTs = roundTs + 1500;
-        var toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
-        for (var ti = 0; ti < toolCalls.length; ti++) {
-          var tc = toolCalls[ti];
-          if (!tc || !tc.name) continue;
-          var callId = typeof tc.id === 'string' && tc.id
-            ? tc.id
-            : ('hydrate-' + iteration + '-' + ti);
-          if (toolRecordById[callId]) continue;
-          var toolTs = roundTs + ti * 200;
-          var toolRec = {
-            toolCallId: callId,
-            toolName: tc.name,
-            callTs: toolTs,
-            resultTs: toolTs + 100,
-            status: 'done',
-            detail: formatToolArgsPreview(tc.name, tc.arguments),
-            target: extractToolTarget(tc.name, tc.arguments),
-            iteration: iteration,
-          };
-          toolRecords.push(toolRec);
-          toolRecordById[callId] = toolRec;
-          if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
-          if (!toolCallIds[callId]) {
-            toolCallIds[callId] = true;
-            uniqueToolCallCount++;
+      var api = chronicleApi();
+      var ui = Array.isArray(uiMessages) ? uiMessages : [];
+      var traces = (toolTracesOpt && typeof toolTracesOpt === 'object') ? toolTracesOpt : null;
+      try {
+        if (window.ChatSession) {
+          if (!ui.length && typeof window.ChatSession.getMessages === 'function') {
+            ui = window.ChatSession.getMessages() || [];
           }
-          if (toolRecords.length > MAX_TOOL_HISTORY) {
-            var removed = toolRecords.shift();
-            if (removed) delete toolRecordById[removed.toolCallId];
+          if (!traces && typeof window.ChatSession.getToolTraces === 'function') {
+            traces = window.ChatSession.getToolTraces() || {};
           }
         }
-        filled++;
+      } catch (_e) { /* ignore */ }
+      if (api && typeof api.assemble === 'function') {
+        var lastAssembledStatus = '';
+        var liveRunning = liveChapterStatus() === 'running'
+          && (roundRecords.length > 0 || uniqueToolCallCount > 0);
+        var assembled = api.assemble({
+          uiMessages: ui,
+          structured: structured,
+          toolTraces: traces,
+          checkpointEntries: snapshotCheckpointEntries,
+          currentPlan: liveRunning ? currentPlan : null,
+        });
+        var lastCh = assembled && assembled.chapters && assembled.chapters.length
+          ? assembled.chapters[assembled.chapters.length - 1]
+          : null;
+        lastAssembledStatus = lastCh && lastCh.status ? lastCh.status : '';
+        var keepLive = liveRunning && (!lastCh || lastAssembledStatus === 'running');
+        applyAssembledChapters(assembled && assembled.chapters, { keepLive: keepLive });
+        if (!keepLive && lastAssembledStatus && lastAssembledStatus !== 'running') stopTick();
+      } else {
+        var slice = sliceCurrentTurnStructured(structured);
+        if (!slice.length) return false;
+        var baseTs = Date.now() - slice.length * 2000;
+        var iteration = 0;
+        for (var i = 0; i < slice.length; i++) {
+          var msg = slice[i];
+          if (!msg || msg.role !== 'assistant') continue;
+          iteration++;
+          if (roundRecordByIteration[String(iteration)]) continue;
+          var roundTs = baseTs + iteration * 2000;
+          var roundResult = ensureRoundRecord(iteration, roundTs);
+          var record = roundResult.record;
+          record.status = 'done';
+          record.endTs = roundTs + 1500;
+          var toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
+          for (var ti = 0; ti < toolCalls.length; ti++) {
+            var tc = toolCalls[ti];
+            if (!tc || !tc.name) continue;
+            var callId = typeof tc.id === 'string' && tc.id
+              ? tc.id
+              : ('hydrate-' + iteration + '-' + ti);
+            if (toolRecordById[callId]) continue;
+            var toolTs = roundTs + ti * 200;
+            var toolRec = {
+              toolCallId: callId,
+              toolName: tc.name,
+              callTs: toolTs,
+              resultTs: toolTs + 100,
+              status: 'done',
+              detail: formatToolArgsPreview(tc.name, tc.arguments),
+              target: extractToolTarget(tc.name, tc.arguments),
+              iteration: iteration,
+            };
+            toolRecords.push(toolRec);
+            toolRecordById[callId] = toolRec;
+            if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
+            if (!toolCallIds[callId]) {
+              toolCallIds[callId] = true;
+              uniqueToolCallCount++;
+            }
+          }
+        }
       }
-      if (!filled) {
-        syncPrefixGapHint();
-        return false;
+      visible = !isPanelSuppressed() && (hasChronicleWork() || !!currentPlan);
+      if (visible || hostEl) {
+        ensureMounted();
+        renderChapterDirectory({ scrollToLatest: true });
+        renderRoundTimeline(true);
+        renderTaskOverview();
+        renderCurrentStep();
+        hideParkedLiveWidgets();
+        renderEmptyState();
+        patchFooterToolCount();
+        renderFooter();
       }
-      renderRoundTimeline(true);
-      renderEmptyState();
-      patchFooterToolCount();
       scheduleFlowPersist();
       return true;
     } catch (e) {
@@ -2137,7 +3082,7 @@ window.ChatExecutionPlan = (function () {
 
     var marker = document.createElement('span');
     marker.className = 'etl-round-marker';
-    marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    marker.textContent = String(record.iteration);
 
     var summary = document.createElement('div');
     summary.className = 'etl-round-summary';
@@ -2147,20 +3092,20 @@ window.ChatExecutionPlan = (function () {
     var title = document.createElement('span');
     title.className = 'etl-round-title';
     title.textContent = deriveRoundTitle(record);
-    var badge = document.createElement('span');
-    badge.className = 'etl-round-badge status-' + visualStatus;
-    badge.textContent = roundStatusLabel(visualStatus);
     var time = document.createElement('span');
     time.className = 'etl-round-duration';
     time.textContent = roundDuration(record);
+    var badge = document.createElement('span');
+    badge.className = 'etl-round-badge status-' + visualStatus;
+    badge.textContent = roundStatusLabel(visualStatus);
     var toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'etl-round-toggle';
     toggle.setAttribute('aria-label', '展开轮次详情');
     toggle.textContent = '▾';
     head.appendChild(title);
-    head.appendChild(badge);
     head.appendChild(time);
+    head.appendChild(badge);
     head.appendChild(toggle);
     summary.appendChild(head);
 
@@ -2247,7 +3192,7 @@ window.ChatExecutionPlan = (function () {
     roundNode.classList.add('status-' + visualStatus);
     roundNode.classList.toggle('is-final', !!record.isFinal);
     var marker = roundNode.querySelector('.etl-round-marker');
-    if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    if (marker) marker.textContent = String(record.iteration);
     var title = roundNode.querySelector('.etl-round-title');
     if (title) title.textContent = deriveRoundTitle(record);
     var badge = roundNode.querySelector('.etl-round-badge');
@@ -2264,9 +3209,7 @@ window.ChatExecutionPlan = (function () {
   function patchFooterToolCount() {
     if (!footerEl) return;
     ensureFooterSkeleton();
-    var liveToolCount = authoritativeToolCalls === null
-      ? uniqueToolCallCount
-      : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+    var liveToolCount = sessionToolTotal();
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
     if (toolEl && toolEl.textContent !== toolTxt) toolEl.textContent = toolTxt;
@@ -2402,7 +3345,7 @@ window.ChatExecutionPlan = (function () {
     roundNode.classList.toggle('is-final', !!record.isFinal);
     roundNode.classList.toggle('is-expanded', isRoundExpanded(record));
     var marker = roundNode.querySelector('.etl-round-marker');
-    if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    if (marker) marker.textContent = String(record.iteration);
     var title = roundNode.querySelector('.etl-round-title');
     if (title) title.textContent = deriveRoundTitle(record);
     var badge = roundNode.querySelector('.etl-round-badge');
@@ -2548,8 +3491,28 @@ window.ChatExecutionPlan = (function () {
     return null;
   }
 
+  function attachLiveTimelineIfRunning() {
+    if (!roundTimelineEl || !chapterTimelineEl) return false;
+    if (liveTimelineInChapter()) return true;
+    if (liveChapterStatus() !== 'running') return false;
+    if (!chapterTimelineEl.querySelector('.etl-chapter-node.is-current')) {
+      renderChapterDirectory();
+    }
+    var current = chapterTimelineEl.querySelector('.etl-chapter-node.is-current');
+    if (!current || !current.classList.contains('is-expanded')) return false;
+    var body = current.querySelector('.etl-chapter-body');
+    if (!body) return false;
+    roundTimelineEl.classList.remove('hidden');
+    body.appendChild(roundTimelineEl);
+    return true;
+  }
+
   function syncRoundTimeline(options) {
     options = options || {};
+    if (!attachLiveTimelineIfRunning()) {
+      hideParkedLiveWidgets();
+      return;
+    }
     try {
       var ctx = getRoundListContext();
       if (!ctx || !ctx.list) return;
@@ -2607,6 +3570,10 @@ window.ChatExecutionPlan = (function () {
   }
 
   function renderRoundTimeline(reset) {
+    if (!attachLiveTimelineIfRunning()) {
+      hideParkedLiveWidgets();
+      return;
+    }
     syncRoundTimeline({ reset: !!reset });
   }
 
@@ -2630,6 +3597,13 @@ window.ChatExecutionPlan = (function () {
         syncRoundTimeline({ loadMore: true });
         return;
       }
+      var action = target.closest('.etl-round-action[data-tool-call-id]');
+      if (action && event.type === 'click') {
+        jumpToChatTool(action.getAttribute('data-tool-call-id'));
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       var row = target.closest('.etl-round-row');
       if (!row) return;
       var node = row.closest('.etl-round-node');
@@ -2641,6 +3615,7 @@ window.ChatExecutionPlan = (function () {
         event.preventDefault();
       }
       toggleRoundExpanded(node.dataset.iteration);
+      event.stopPropagation();
     } catch (e) {
       safeWarn('roundTimelineClick', e);
     }
@@ -2694,7 +3669,7 @@ window.ChatExecutionPlan = (function () {
 
     var marker = document.createElement('span');
     marker.className = 'etl-round-marker';
-    marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    marker.textContent = String(record.iteration);
 
     var summary = document.createElement('div');
     summary.className = 'etl-round-summary';
@@ -2716,8 +3691,8 @@ window.ChatExecutionPlan = (function () {
     toggle.setAttribute('aria-label', isExpanded ? '收起轮次详情' : '展开轮次详情');
     toggle.textContent = isExpanded ? '▴' : '▾';
     head.appendChild(title);
-    head.appendChild(badge);
     head.appendChild(time);
+    head.appendChild(badge);
     head.appendChild(toggle);
     summary.appendChild(head);
 
@@ -3005,6 +3980,12 @@ window.ChatExecutionPlan = (function () {
           scheduleSnapshotTimelineRefresh();
         }
       }
+      ensureLiveChapter();
+      if (hostEl && chapterTimelineEl && !chapterTimelineEl.querySelector('.etl-chapter-node.is-current')) {
+        renderChapterDirectory();
+      } else {
+        patchCurrentChapterChrome();
+      }
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyToolActivity', e);
@@ -3028,6 +4009,7 @@ window.ChatExecutionPlan = (function () {
       roundVisibleLimit = 20;
       cachedLoadMoreHidden = -1;
       renderTaskOverview();
+      renderChapterDirectory();
       renderRoundTimeline(true);
       renderEmptyState();
       renderLlmActivity();
@@ -3044,6 +4026,7 @@ window.ChatExecutionPlan = (function () {
       recoverPanelAfterFatal();
       turnStartedAt = typeof ts === 'number' ? ts : Date.now();
       turnEndedAt = null;
+      ensureLiveChapter();
       renderFooter();
       startTick();
     } catch (e) {
@@ -3068,9 +4051,11 @@ window.ChatExecutionPlan = (function () {
   function fullRender() {
     if (!ensureMounted()) throw new Error('执行透明层挂载失败');
     renderExecutionModeBanner();
+    renderChapterDirectory({ scrollToLatest: true });
     renderTaskOverview();
     renderRoundTimeline(true);
     renderCurrentStep();
+    hideParkedLiveWidgets();
     renderEmptyState();
     renderList();
     renderLlmActivity();
@@ -3108,16 +4093,9 @@ window.ChatExecutionPlan = (function () {
       }
       if (!prevId || prevId !== plan.planId) {
         frozenPlanId = null;
-        lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
-        toolRecords = [];
-        toolRecordById = Object.create(null);
-        toolCallIds = Object.create(null);
-        uniqueToolCallCount = 0;
-        authoritativeToolCalls = null;
-        calibratedUniqueToolCount = 0;
-        footerStats.totalToolCalls = null;
       }
       currentPlan = plan;
+      ensureLiveChapter();
       if (isPlanComplete(currentPlan)) frozenPlanId = currentPlan.planId;
       visible = !isPanelSuppressed();
       if (isPanelSuppressed()) {
@@ -3242,6 +4220,13 @@ window.ChatExecutionPlan = (function () {
   function clear(opts) {
     try {
       opts = opts || {};
+      if (opts.sealChapter) {
+        sealLiveChapter({ status: opts.status || 'done', nextMeta: opts.nextMeta });
+        visible = !isPanelSuppressed();
+        applyVisibility();
+        notifyPetFoot();
+        return;
+      }
       currentPlan = null;
       frozenPlanId = null;
       currentExecutionMode = null;
@@ -3259,6 +4244,12 @@ window.ChatExecutionPlan = (function () {
       authoritativeToolCalls = null;
       calibratedUniqueToolCount = 0;
       footerStats = { totalTokenUsage: null, totalToolCalls: null };
+      sealedChapters = [];
+      sealedToolCount = 0;
+      liveChapterMeta = null;
+      expandedChapters = Object.create(null);
+      chapterVisibleLimit = 30;
+      pendingRevealMessageId = '';
       // 文件列表来自 checkpoint；切会话/回滚时清视图，新一轮保留到下次拉取。
       if (snapshotFilesRefreshTimer) {
         clearTimeout(snapshotFilesRefreshTimer);
@@ -3275,6 +4266,8 @@ window.ChatExecutionPlan = (function () {
         }
       } catch (_e) { /* ignore */ }
       if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
+      turnStartedAt = null;
+      turnEndedAt = null;
       if (hostEl) {
         if (listEl) listEl.innerHTML = '';
         if (currentStepEl) {
@@ -3287,6 +4280,7 @@ window.ChatExecutionPlan = (function () {
           llmActivityEl.classList.add('hidden');
         }
         renderTaskOverview();
+        renderChapterDirectory();
         renderRoundTimeline(true);
         renderExecutionModeBanner();
         renderFooter();
@@ -3387,6 +4381,7 @@ window.ChatExecutionPlan = (function () {
         return;
       }
       currentExecutionMode = Object.assign({}, step.executionMode);
+      stampLiveMarker('supervision');
       if (!isPanelSuppressed() && pageActive) {
         ensureMounted();
         renderExecutionModeBanner();
@@ -3538,6 +4533,9 @@ window.ChatExecutionPlan = (function () {
         authoritativeToolCalls: typeof authoritativeToolCalls === 'number'
           ? authoritativeToolCalls
           : null,
+        sealedChapters: JSON.parse(JSON.stringify(sealedChapters)),
+        liveChapterMeta: liveChapterMeta ? Object.assign({}, liveChapterMeta) : null,
+        sealedToolCount: sealedToolCount,
       };
     } catch (e) {
       safeWarn('getFlowSnapshot', e);
@@ -3590,6 +4588,15 @@ window.ChatExecutionPlan = (function () {
         : null;
       expandedRounds = Object.create(null);
       roundVisibleLimit = 20;
+      if (Array.isArray(snapshot.sealedChapters)) {
+        sealedChapters = snapshot.sealedChapters;
+      }
+      if (snapshot.liveChapterMeta && typeof snapshot.liveChapterMeta === 'object') {
+        liveChapterMeta = Object.assign({}, snapshot.liveChapterMeta);
+      }
+      if (typeof snapshot.sealedToolCount === 'number') {
+        sealedToolCount = snapshot.sealedToolCount;
+      }
 
       if (!opts.overlayOnly) {
         currentPlan = snapshot.currentPlan && hasSafePlanShape(snapshot.currentPlan)
@@ -3602,7 +4609,7 @@ window.ChatExecutionPlan = (function () {
       }
 
       visible = !isPanelSuppressed()
-        && !!(currentPlan || currentExecutionMode || roundRecords.length);
+        && !!(currentPlan || currentExecutionMode || roundRecords.length || sealedChapters.length);
       if (visible || hostEl) {
         ensureMounted();
         fullRender();
@@ -4157,6 +5164,10 @@ window.ChatExecutionPlan = (function () {
 
         card.appendChild(meta);
         card.appendChild(preview);
+        card.addEventListener('click', function (evt) {
+          if (evt.target && evt.target.closest && evt.target.closest('.etl-snapshot-restore-btn')) return;
+          revealChapter(entry.messageId);
+        });
         if (isSnapshotRestoreHidden(entry.messageId)) {
           card.classList.add('etl-snapshot-card--no-restore');
         } else {
@@ -4281,6 +5292,9 @@ window.ChatExecutionPlan = (function () {
     getFlowSnapshot: getFlowSnapshot,
     restoreFlowSnapshot: restoreFlowSnapshot,
     hydrateFromStructured: hydrateFromStructured,
+    sealChapter: sealLiveChapter,
+    revealChapter: revealChapter,
+    getSealedChapters: function () { return sealedChapters.slice(); },
     registerFlowPersist: registerFlowPersist,
     flushFlowPersist: flushFlowPersist,
     cancelFlowPersist: cancelFlowPersist,
