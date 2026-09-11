@@ -18,18 +18,15 @@
  * 设计文档：docs/长时间连续工作.md §Part 3
  */
 
-import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-
 import type { TaskGraphSnapshot, GraphMetrics, GraphSession } from '../types/task-graph.js';
 import type { TaskCheckpoint } from './checkpoint.js';
-// ExecutionPlan type removed (Phase 11)
 import {
   RUNTIME_CHECKPOINT_VERSION,
   isRuntimeCheckpointV2,
   emptyRuntimeCheckpointV2,
   emptyRuntimeExecutionModeCheckpointState,
+  isProjectCheckpointV3,
+  cloneProjectCheckpointV3,
   type RuntimeCheckpointV2,
   type RuntimeExecutionModeCheckpointState,
   type CheckpointSaveTrigger,
@@ -37,10 +34,11 @@ import {
   type FailureHistoryEntry,
   type RecoverySignal,
   type VerificationOutputTailEntry,
-  type AcceptanceGateSnapshot,
+  type ProjectCheckpointV3,
 } from '../types/runtime-checkpoint.js';
 import { BranchBudgetTracker } from './branch-budget.js';
-import type { AcceptanceCommandEntry } from './task-acceptance-tracker.js';
+import { ProjectCheckpointStore } from './project-checkpoint-store.js';
+import { adaptLegacyCheckpoint } from './legacy-checkpoint-adapter.js';
 
 /** 增强 checkpoint 在磁盘上的存储壳子 —— 与 TaskCheckpoint(v1) 共享同一个 JSON。 */
 export interface CombinedCheckpointFile extends TaskCheckpoint {
@@ -66,8 +64,6 @@ export interface CheckpointSaveInput {
   appendTool?: ToolHistoryEntry;
   /** 增量的 recent failure 记录 */
   appendFailure?: FailureHistoryEntry;
-  /** 当前是否有 verification pending（来自 TaskState.isVerificationBlockingFinalAfterSync） */
-  verificationPending?: boolean;
   /** 待注入的 recovery signal（新触发的） */
   appendRecoverySignal?: RecoverySignal;
   /** ExecutionPlan，可选（仅用于读 plan.version） */
@@ -84,8 +80,6 @@ export interface CheckpointSaveInput {
   executionModeState?: RuntimeExecutionModeCheckpointState;
   /** 最近验收失败 stderr tail（VerificationOutputBuffer.snapshot） */
   verificationOutputTail?: VerificationOutputTailEntry[];
-  /** TaskAcceptanceTracker.snapshot */
-  acceptanceGate?: AcceptanceGateSnapshot;
   /** Rebuild Escalation 已注入次数 */
   rebuildEscalationInjections?: number;
   /** 并行 BranchBudget 拦截指引是否已注入 */
@@ -129,15 +123,17 @@ export function isResilienceV2Enabled(): boolean {
  */
 export class CheckpointEngine {
   readonly checkpointPath: string;
+  private readonly projectStore: ProjectCheckpointStore;
   /** 内存中保留的 v2 累积状态（save 之间增量更新） */
   private v2State: RuntimeCheckpointV2 = emptyRuntimeCheckpointV2();
   /** §2.8 / T12 — forced 段是否启用更积极的 checkpoint policy。 */
   private forcedPolicyActive = false;
-  /** Runtime Restore 期间禁止落盘，避免半恢复污染 checkpoint。 */
+  /** Runtime Restore / in-flight tool batches forbid durable snapshots. */
   private restoreLock = false;
 
   constructor(sessionDir: string, sessionId = 'default') {
-    this.checkpointPath = path.join(sessionDir, `${sessionId}.checkpoint.json`);
+    this.projectStore = new ProjectCheckpointStore({ sessionDir, sessionId });
+    this.checkpointPath = this.projectStore.checkpointPath;
   }
 
   /** 暴露内存中的 v2 状态（测试 / 调试用） */
@@ -159,21 +155,33 @@ export class CheckpointEngine {
     this.restoreLock = locked;
   }
 
+  setToolExecutionLock(locked: boolean): void {
+    this.projectStore.setPersistBlocked(locked);
+  }
+
   isRestoreLocked(): boolean {
     return this.restoreLock;
   }
 
   /**
-   * 从完整 CombinedCheckpointFile 装载 v2 内存状态（Restore 路径）。
-   * 不触发磁盘读写。
+   * Apply runtime updates without writing. Used to coalesce a tool batch into one persist.
    */
-  loadFromCombined(combined: CombinedCheckpointFile): RuntimeCheckpointV2 | null {
-    if (combined.runtimeV2 && isRuntimeCheckpointV2(combined.runtimeV2)) {
-      this.v2State = cloneV2(combined.runtimeV2);
-      return cloneV2(combined.runtimeV2);
+  stage(input: CheckpointSaveInput): RuntimeCheckpointV2 {
+    this.applyInput(input);
+    return cloneV2(this.v2State);
+  }
+
+  /**
+   * Load v2 memory state from a captured aggregate. Accepts V3 or a legacy combined file.
+   */
+  loadFromCombined(combined: CombinedCheckpointFile | ProjectCheckpointV3): RuntimeCheckpointV2 | null {
+    const v2 = resilienceFromAggregate(combined);
+    if (!v2) {
+      this.v2State = emptyRuntimeCheckpointV2();
+      return null;
     }
-    this.v2State = emptyRuntimeCheckpointV2();
-    return null;
+    this.v2State = cloneV2(v2);
+    return cloneV2(this.v2State);
   }
 
   /**
@@ -196,27 +204,24 @@ export class CheckpointEngine {
    */
   async loadV2(): Promise<RuntimeCheckpointV2 | null> {
     try {
-      const raw = await fs.readFile(this.checkpointPath, 'utf-8');
-      const parsed = JSON.parse(raw) as CombinedCheckpointFile;
-      if (parsed && isRuntimeCheckpointV2(parsed.runtimeV2)) {
-        this.v2State = cloneV2(parsed.runtimeV2);
-        return cloneV2(parsed.runtimeV2);
+      const project = await this.projectStore.load();
+      if (!project) return null;
+      const v2 = resilienceFromAggregate(project);
+      if (!v2) {
+        this.v2State = emptyRuntimeCheckpointV2();
+        return null;
       }
-      return null;
+      this.v2State = cloneV2(v2);
+      return cloneV2(this.v2State);
     } catch {
       return null;
     }
   }
 
-  /** 加载完整 CombinedCheckpointFile（含 taskGraph 等 Phase 6 字段） */
+  /** @deprecated Combined v1+v2 files are adapted through ProjectCheckpointStore.load. */
   async loadCombined(): Promise<CombinedCheckpointFile | null> {
-    try {
-      const raw = await fs.readFile(this.checkpointPath, 'utf-8');
-      const parsed = JSON.parse(raw) as CombinedCheckpointFile;
-      return parsed ?? null;
-    } catch {
-      return null;
-    }
+    const project = await this.projectStore.load();
+    return project ? v3ToCombinedCompatibility(project) : null;
   }
 
   /**
@@ -226,76 +231,40 @@ export class CheckpointEngine {
    * 如果文件还不存在（v1 尚未写过），自动建立一个最小占位（只含 runtimeV2）。
    */
   async save(input: CheckpointSaveInput): Promise<RuntimeCheckpointV2> {
-    if (this.restoreLock) {
-      this.applyInput(input);
-      return cloneV2(this.v2State);
-    }
     this.applyInput(input);
-
-    await fs.mkdir(path.dirname(this.checkpointPath), { recursive: true });
-    const tmpPath = `${this.checkpointPath}.${randomUUID()}.tmp`;
-
-    const isTerminal = (c: CombinedCheckpointFile | null | undefined): c is CombinedCheckpointFile =>
-      !!c && (c.status === 'completed' || c.status === 'failed' || c.status === 'aborted');
-
-    const peekA = await this.readExistingCheckpoint(6, 14);
-    const peekB = await this.readExistingCheckpoint(6, 14);
-
-    let base: CombinedCheckpointFile | null =
-      isTerminal(peekB) ? peekB
-      : isTerminal(peekA) ? peekA
-      : peekB ?? peekA;
-
-    // TaskCheckpointManager 写完 tmp 后 rename 的极短窗口内读盘可能失败；
-    // 若目标文件已存在，则短重试而非用 running stub 覆盖可能已写入的终态 v1。
-    if (!base) {
-      try {
-        await fs.access(this.checkpointPath);
-        for (let i = 0; i < 12; i++) {
-          const recovered = await this.readExistingCheckpoint(4, 20);
-          if (recovered) {
-            base = recovered;
-            break;
-          }
-          await new Promise((r) => setTimeout(r, 12));
-        }
-        if (!base) {
-          console.debug(
-            '[checkpoint-engine] skip v2 merge write: checkpoint file exists but JSON not readable yet',
-          );
-          return cloneV2(this.v2State);
-        }
-      } catch {
-        base = this.buildMinimalV1Stub();
-      }
-    }
-
-    let merged: CombinedCheckpointFile = {
-      ...base,
-      runtimeV2: cloneV2(this.v2State),
-      taskGraph: input.taskGraphSnapshot,
-      graphMetrics: input.graphMetrics,
-      graphSession: input.graphSession,
-    };
-
-    const peekC = await this.readExistingCheckpoint(8, 18);
-    if (isTerminal(peekC)) {
-      merged = { ...peekC, runtimeV2: cloneV2(this.v2State), taskGraph: input.taskGraphSnapshot, graphMetrics: input.graphMetrics, graphSession: input.graphSession };
-    }
-
-    // rename 前一拍：Manager 可能比 Engine 的快照更新；必须用最新磁盘快照做 v1 信封，否则会写回陈旧 running。
-    const fence = await this.readExistingCheckpoint(12, 16);
-    if (fence) {
-      merged = { ...fence, runtimeV2: cloneV2(this.v2State), taskGraph: input.taskGraphSnapshot, graphMetrics: input.graphMetrics, graphSession: input.graphSession };
-    } else if (await this.checkpointMainPathProbablyExists()) {
-      console.debug(
-        '[checkpoint-engine] skip v2 merge write before rename: file exists but could not parse JSON reliably',
-      );
+    if (this.restoreLock || this.projectStore.isPersistBlocked()) {
       return cloneV2(this.v2State);
     }
 
-    await fs.writeFile(tmpPath, JSON.stringify(merged, null, 2), 'utf-8');
-    await fs.rename(tmpPath, this.checkpointPath);
+    const loaded = this.projectStore.latest() ?? await this.projectStore.load();
+    if (!loaded && await this.projectStore.hasDurableFile()) {
+      // An unreadable existing file must not be replaced with an empty stub.
+      return cloneV2(this.v2State);
+    }
+    const aggregate = loaded ?? adaptLegacyCheckpoint(this.buildMinimalV1Stub(), {
+      sessionId: pathSessionId(this.checkpointPath),
+      projectId: this.checkpointPath,
+      capturedAt: this.v2State.v2UpdatedAt,
+    });
+    const next = cloneProjectCheckpointV3(aggregate);
+    next.migration = null;
+    next.snapshotMeta.capturedAt = this.v2State.v2UpdatedAt;
+    next.snapshotMeta.trigger = input.trigger;
+    next.snapshotMeta.producer = 'checkpoint-engine';
+    if (this.v2State.currentStepId) next.execution.currentStepId = this.v2State.currentStepId;
+    if (this.v2State.currentStepTitle) next.execution.currentStepTitle = this.v2State.currentStepTitle;
+    if (this.v2State.lastStopReason !== undefined) {
+      next.execution.lastStopReason = this.v2State.lastStopReason;
+    }
+    next.execution.resumable = {
+      ...(next.execution.resumable ?? {}),
+      branchBudget: this.v2State.branchBudget,
+    };
+    next.extensions.runtimeResilience = durableResilienceState(this.v2State);
+    if (input.taskGraphSnapshot !== undefined) next.extensions.taskGraph = input.taskGraphSnapshot;
+    if (input.graphMetrics !== undefined) next.extensions.graphMetrics = input.graphMetrics;
+    if (input.graphSession !== undefined) next.extensions.graphSession = input.graphSession;
+    await this.projectStore.save(next);
 
     return cloneV2(this.v2State);
   }
@@ -311,7 +280,6 @@ export class CheckpointEngine {
 
     if (input.currentStepId !== undefined) state.currentStepId = input.currentStepId;
     if (input.currentStepTitle !== undefined) state.currentStepTitle = input.currentStepTitle;
-    if (input.verificationPending !== undefined) state.verificationPending = input.verificationPending;
     if (input.lastStopReason !== undefined) state.lastStopReason = input.lastStopReason;
     if (input.plan?.version !== undefined) state.planVersion = input.plan.version;
     if (input.executionModeState) {
@@ -320,13 +288,6 @@ export class CheckpointEngine {
     if (input.verificationOutputTail !== undefined) {
       state.verificationOutputTail = input.verificationOutputTail.map(entry => ({ ...entry }));
     }
-    if (input.acceptanceGate !== undefined) {
-      state.acceptanceGate = {
-        active: input.acceptanceGate.active,
-        commands: input.acceptanceGate.commands.map((entry: AcceptanceCommandEntry) => ({ ...entry })),
-      };
-    }
-
     if (input.rebuildEscalationInjections !== undefined) {
       state.rebuildEscalationInjections = input.rebuildEscalationInjections;
     }
@@ -398,58 +359,6 @@ export class CheckpointEngine {
     this.v2State = emptyRuntimeCheckpointV2();
   }
 
-  // ─── 内部 ───
-
-  /** 是否为「尚无 checkpoint 文件」类错误；ENOENT 不重试 backoff，否则会拖慢首轮 save（单测超时）。 */
-  private isENOENT(err: unknown): boolean {
-    return typeof err === 'object'
-      && err !== null
-      && 'code' in err
-      && (err as { code?: unknown }).code === 'ENOENT';
-  }
-
-  /** 校验 JSON checkpoint 的版本号是否为有效 v1。 */
-  private isV1CombinedCheckpoint(parsed: unknown): parsed is CombinedCheckpointFile {
-    if (!parsed || typeof parsed !== 'object') return false;
-    const ver = (parsed as { version?: unknown }).version;
-    return typeof ver === 'number' && ver === 1;
-  }
-
-  /** 读取现有 checkpoint JSON；多轮退让重试以降低与 TaskCheckpointManager.rename 的竞争读失败概率。 */
-  private async readExistingCheckpoint(
-    maxAttempts: number,
-    baseBackoffMs = 22,
-  ): Promise<CombinedCheckpointFile | null> {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const raw = await fs.readFile(this.checkpointPath, 'utf-8');
-        const parsed: unknown = JSON.parse(raw);
-        if (!this.isV1CombinedCheckpoint(parsed)) continue;
-        return parsed;
-      } catch (err: unknown) {
-        if (this.isENOENT(err)) return null;
-        if (attempt < maxAttempts - 1) {
-          await new Promise((r) => setTimeout(r, baseBackoffMs * (attempt + 1)));
-        }
-      }
-    }
-    return null;
-  }
-
-  /** 磁盘上是否存在主 checkpoint 路径（先于 JSON 解析）；配合「存在但解析失败→跳过写入」语义。 */
-  private async checkpointMainPathProbablyExists(): Promise<boolean> {
-    try {
-      await fs.access(this.checkpointPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * 当 checkpoint 文件还不存在时生成一个最小 v1 兼容壳。
-   * 真正的 v1 完整字段由 TaskCheckpointManager.save() 在下一次循环中覆盖。
-   */
   private buildMinimalV1Stub(): TaskCheckpoint {
     const now = new Date().toISOString();
     return {
@@ -465,8 +374,6 @@ export class CheckpointEngine {
         filesRead: [],
         filesChanged: [],
         commandsRun: [],
-        verificationRequired: false,
-        verificationStatus: 'not_required',
       },
       repoContext: {
         filesRead: [],
@@ -487,6 +394,74 @@ export class CheckpointEngine {
       updatedAt: now,
     };
   }
+}
+
+function resilienceFromAggregate(input: unknown): RuntimeCheckpointV2 | null {
+  if (isProjectCheckpointV3(input)) {
+    return resilienceFromDurable(input.extensions.runtimeResilience);
+  }
+  if (input && typeof input === 'object' && isRuntimeCheckpointV2((input as CombinedCheckpointFile).runtimeV2)) {
+    const v2 = (input as CombinedCheckpointFile).runtimeV2!;
+    return {
+      ...cloneV2(v2),
+      verificationPending: false,
+      acceptanceGate: undefined,
+    };
+  }
+  return null;
+}
+
+function resilienceFromDurable(durable: unknown): RuntimeCheckpointV2 | null {
+  if (!durable || typeof durable !== 'object' || Array.isArray(durable)) return null;
+  const record = durable as Record<string, unknown>;
+  if (record.runtimeVersion !== undefined && record.runtimeVersion !== RUNTIME_CHECKPOINT_VERSION) {
+    return null;
+  }
+  if (!record.branchBudget || !Array.isArray(record.recentTools) || !Array.isArray(record.recentFailures)) {
+    return null;
+  }
+  return cloneV2({
+    ...emptyRuntimeCheckpointV2(),
+    ...(durable as Partial<RuntimeCheckpointV2>),
+    runtimeVersion: RUNTIME_CHECKPOINT_VERSION,
+    verificationPending: false,
+    acceptanceGate: undefined,
+  });
+}
+
+function v3ToCombinedCompatibility(project: ProjectCheckpointV3): CombinedCheckpointFile {
+  const legacy = project.extensions.legacyApi;
+  const compat = legacy !== null && typeof legacy === 'object' && !Array.isArray(legacy)
+    ? legacy as Record<string, unknown>
+    : {};
+  return {
+    version: 1,
+    taskId: project.identity.checkpointId,
+    status: ['running', 'paused', 'completed', 'failed', 'aborted'].includes(String(compat.status))
+      ? compat.status as TaskCheckpoint['status']
+      : 'paused',
+    userGoal: typeof compat.userGoal === 'string' ? compat.userGoal : project.execution.taskState.goal,
+    phase: project.execution.taskState.phase,
+    taskState: project.execution.taskState,
+    repoContext: project.workspace.repoContext,
+    failedToolCalls: Array.isArray(compat.failedToolCalls)
+      ? compat.failedToolCalls.filter((value): value is string => typeof value === 'string')
+      : [],
+    stopReason: project.execution.lastStopReason,
+    messageCount: project.conversation.messages.length,
+    loop: {
+      currentRound: project.execution.loopState.currentRound,
+      totalToolCalls: project.execution.loopState.totalToolCalls,
+      totalInputTokens: project.execution.loopState.totalInputTokens,
+      totalOutputTokens: project.execution.loopState.totalOutputTokens,
+    },
+    createdAt: typeof compat.createdAt === 'string' ? compat.createdAt : project.snapshotMeta.capturedAt,
+    updatedAt: typeof compat.updatedAt === 'string' ? compat.updatedAt : project.snapshotMeta.capturedAt,
+    runtimeV2: resilienceFromAggregate(project) ?? undefined,
+    ...(project.extensions.taskGraph ? { taskGraph: project.extensions.taskGraph as CombinedCheckpointFile['taskGraph'] } : {}),
+    ...(project.extensions.graphMetrics ? { graphMetrics: project.extensions.graphMetrics as CombinedCheckpointFile['graphMetrics'] } : {}),
+    ...(project.extensions.graphSession ? { graphSession: project.extensions.graphSession as CombinedCheckpointFile['graphSession'] } : {}),
+  };
 }
 
 function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
@@ -525,6 +500,24 @@ function cloneV2(v: RuntimeCheckpointV2): RuntimeCheckpointV2 {
     parallelBudgetBlockHintInjected: v.parallelBudgetBlockHintInjected,
     v2UpdatedAt: v.v2UpdatedAt,
   };
+}
+
+function durableResilienceState(
+  state: RuntimeCheckpointV2,
+): Record<string, unknown> {
+  const {
+    verificationPending: _verificationPending,
+    acceptanceGate: _acceptanceGate,
+    ...durable
+  } = cloneV2(state);
+  return JSON.parse(JSON.stringify(durable)) as Record<string, unknown>;
+}
+
+function pathSessionId(checkpointPath: string): string {
+  const name = checkpointPath.replace(/\\/g, '/').split('/').at(-1) ?? 'default.checkpoint.json';
+  return name.endsWith('.checkpoint.json')
+    ? name.slice(0, -'.checkpoint.json'.length)
+    : 'default';
 }
 
 function cloneExecutionModeState(

@@ -32,7 +32,10 @@ import { disposeAllBackgroundTaskManagers } from '../../tools/background-task-ma
 import { stopAllShellWork } from '../../tools/session-shell-control.js';
 import { purgeAllUploadedFiles } from '../../web/routes/upload.js';
 import { formatFriendlyError } from '../friendly-errors.js';
-import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
+import {
+  alignPromptWithAvailableTools,
+  harnessOverlayToContextFields,
+} from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
 import {
   selectToolsForOffering,
@@ -424,6 +427,7 @@ ${c.bold}终端内置命令:${c.reset}
         mcpManager: ctx.mcpManager,
       });
       toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+      const promptToolNames = toolDefs.map((tool) => tool.name);
       // Lazy Tool Offering（CLI）：按信号裁剪文档工具
       const offeringResult = selectToolsForOffering(toolDefs, {
         userMessage: input,
@@ -448,15 +452,20 @@ ${c.bold}终端内置命令:${c.reset}
         toolDefs.map((t) => t.name),
       );
       const mergedSystemContext = { ...docToolsContext, ...mcpRuntimeContext };
-      const harnessDynamic = harnessOverlayToContextFields(assembled);
+      const effectiveAssembled = alignPromptWithAvailableTools(assembled, promptToolNames);
+      const harnessDynamic = harnessOverlayToContextFields(effectiveAssembled);
       const harnessConfig: HarnessConfig = {
         context: {
-          systemPrompt: assembled.systemPrompt,
+          systemPrompt: effectiveAssembled.systemPrompt,
           tools: toolDefs,
-          memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
+          memoryPrompt: await loadMemoryPrompt(
+            { memoryDir: memoryFilesDir },
+            { readOnly: shouldDisableRuntimeTools() },
+          ) ?? undefined,
           ...harnessDynamic,
           ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
         },
+        enableRequestAnalysis: !shouldDisableRuntimeTools(),
         loop: {
           maxRounds: getHarnessMaxRoundsFromEnv(),
           timeout: getHarnessTimeoutMsFromEnv(),

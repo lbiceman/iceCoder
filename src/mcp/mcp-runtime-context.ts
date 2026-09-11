@@ -4,6 +4,17 @@
 
 import type { MCPManager } from './mcp-manager.js';
 
+function sanitizeRuntimeName(value: string): string {
+  return value.replace(/[\r\n<>`]/g, '_').slice(0, 120);
+}
+
+function sanitizeRuntimeError(value: string | undefined): string {
+  return (value ?? 'unknown error')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[<>]/g, '')
+    .slice(0, 500);
+}
+
 export function buildMcpRuntimeContext(
   mcpManager: MCPManager | undefined,
   registeredToolNames: readonly string[],
@@ -15,12 +26,15 @@ export function buildMcpRuntimeContext(
 
   const mcpToolNames = registeredToolNames.filter((name) => name.startsWith('mcp_'));
   const serverLines = infos.map((s) => {
-    const err = s.error ? ` — ${s.error}` : '';
+    const serverName = sanitizeRuntimeName(s.name);
+    const err = s.error ? ` — ${sanitizeRuntimeError(s.error)}` : '';
     if (s.status === 'ready' && s.tools.length > 0) {
-      const names = s.tools.map((t) => `mcp_${s.name}_${t.name}`).join(', ');
-      return `- ${s.name}: ready (${s.tools.length} tools) → ${names}`;
+      const names = s.tools
+        .map((t) => `mcp_${serverName}_${sanitizeRuntimeName(t.name)}`)
+        .join(', ');
+      return `- ${serverName}: ready (${s.tools.length} tools) → ${names}`;
     }
-    return `- ${s.name}: ${s.status}${err}`;
+    return `- ${serverName}: ${s.status}${err}`;
   });
 
   const out: Record<string, string> = {
@@ -40,7 +54,7 @@ export function buildMcpRuntimeContext(
   const failed = infos.filter((s) => s.status === 'error');
   if (failed.length > 0) {
     out.mcpFailures = failed
-      .map((s) => `${s.name}: ${s.error ?? 'unknown error'}`)
+      .map((s) => `${sanitizeRuntimeName(s.name)}: ${sanitizeRuntimeError(s.error)}`)
       .join('; ');
     out.mcpRetryHint =
       'If an mcp_* call failed but the server shows ready, retry the same tool once. Do NOT claim MCP is unconfigured when mcp_* tools are listed above. For puppeteer, ensure Chrome is installed at PUPPETEER_EXECUTABLE_PATH in mcp.json.';

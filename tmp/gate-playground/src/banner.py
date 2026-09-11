@@ -1,0 +1,2 @@
+def banner():
+    return 'ready'

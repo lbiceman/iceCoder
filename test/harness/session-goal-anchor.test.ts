@@ -113,8 +113,6 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     taskState.applySnapshot({
       ...taskState.snapshot(),
       filesChanged: ['src/foo.ts', 'src/bar.ts'],
-      verificationRequired: true,
-      verificationStatus: 'required',
     });
 
     const newMsg = '使用 git diff 分析刚才的变动';
@@ -124,8 +122,6 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     expect(snap.goal).toBe(newMsg);
     expect(snap.intent === 'question' || snap.intent === 'inspect').toBe(true);
     expect(snap.filesChanged).toEqual([]);
-    expect(snap.verificationStatus).toBe('not_required');
-    expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
   });
 
   it('syncHydratedTaskState 不因 read-before-edit 软错误强制 verification failed', () => {
@@ -143,16 +139,12 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     taskState.applySnapshot({
       ...taskState.snapshot(),
       filesChanged: ['data/session-notes.md'],
-      verificationRequired: false,
-      verificationStatus: 'not_required',
     });
 
     const turn3 = '记住，Git commit message 一律用中文，subject 不超过 50 字。';
     syncHydratedTaskState(turn3, [], taskState, repoContext, editGoal);
 
     expect(taskState.snapshot().goal).toBe(turn3);
-    expect(taskState.snapshot().verificationStatus).toBe('not_required');
-    expect(taskState.isVerificationBlockingFinalAfterSync(false)).toBe(false);
   });
 
   it('syncHydratedTaskState keeps sticky state when resume continuation', () => {
@@ -161,13 +153,10 @@ describe('isFreshQueryMessage / sticky-state isolation on topic switch', () => {
     taskState.applySnapshot({
       ...taskState.snapshot(),
       filesChanged: ['src/foo.ts'],
-      verificationRequired: true,
-      verificationStatus: 'required',
     });
 
     syncHydratedTaskState('继续', [], taskState, repoContext, editGoal);
 
     expect(taskState.snapshot().filesChanged).toContain('src/foo.ts');
-    expect(taskState.snapshot().verificationStatus).toBe('required');
   });
 });

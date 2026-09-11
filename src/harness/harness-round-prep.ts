@@ -57,6 +57,8 @@ export interface RoundPrepDeps extends CompactionDeps, StopHandlerDeps {
   workspaceRoot?: string;
   /** 规划模式：不自动拉起可能改仓库的后台分析。 */
   planModeActive?: boolean;
+  /** 当前用户轮次的易变工具/MCP 上下文；仅进入发送视图，不写主历史。 */
+  ephemeralSystemContext?: string | null;
 }
 
 export interface PrepareHarnessRoundArgs {
@@ -136,6 +138,9 @@ export async function prepareHarnessRound(
   logger.llmCall();
 
   const ephemeralBlocks: string[] = [];
+  if (deps.ephemeralSystemContext) {
+    ephemeralBlocks.push(deps.ephemeralSystemContext);
+  }
   const runtimeContext = prepareRuntimeContextEphemeral(state);
   if (runtimeContext) ephemeralBlocks.push(runtimeContext);
 

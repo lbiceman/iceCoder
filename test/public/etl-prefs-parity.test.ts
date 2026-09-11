@@ -36,18 +36,18 @@ describe('前后端 iceEtlPrefs 一致性（防漂移）', () => {
     expect(front.get()).toEqual(DEFAULT_ICE_ETL_PREFS);
   });
 
-  it('超限 panelWidth 两端同样夹紧到 480', async () => {
+  it('超限 panelWidth 两端同样夹紧到 380', async () => {
     const front = loadFrontEtlPrefs();
     await front.set({ panelWidth: 9999 });
-    expect(front.get().panelWidth).toBe(480);
-    expect(sanitizeIceEtlPrefs({ panelWidth: 9999 }).panelWidth).toBe(480);
+    expect(front.get().panelWidth).toBe(380);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 9999 }).panelWidth).toBe(380);
   });
 
-  it('过小 panelWidth 两端同样夹紧到 320', async () => {
+  it('过小 panelWidth 两端同样夹紧到 280', async () => {
     const front = loadFrontEtlPrefs();
     await front.set({ panelWidth: 10 });
-    expect(front.get().panelWidth).toBe(320);
-    expect(sanitizeIceEtlPrefs({ panelWidth: 10 }).panelWidth).toBe(320);
+    expect(front.get().panelWidth).toBe(280);
+    expect(sanitizeIceEtlPrefs({ panelWidth: 10 }).panelWidth).toBe(280);
   });
 
   it('类型不符的字段两端同样回退默认', async () => {

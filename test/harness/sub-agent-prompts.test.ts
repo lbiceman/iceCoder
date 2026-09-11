@@ -30,7 +30,11 @@ describe('sub-agent prompts', () => {
   });
 
   it('infers conservative kinds from intent and goal', () => {
-    expect(inferKindFromIntent('test', 'verification', 'fix failing tests')).toBe('test_analysis');
+    expect(inferKindFromIntent('test', 'verification', 'use background analysis for test coverage')).toBe('test_analysis');
+    expect(inferKindFromIntent('test', 'verification', 'fix failing tests')).toBeNull();
+    expect(inferKindFromIntent('refactor', 'context', 'rename addOne to increment')).toBeNull();
+    expect(inferKindFromIntent('debug', 'context', 'fix greeting output')).toBeNull();
+    expect(inferKindFromIntent('edit', 'context', 'use background analysis to inspect OAuth flow before editing')).toBe('explorer');
     expect(inferKindFromIntent('inspect', 'context', 'understand module')).toBe('explorer');
     expect(inferKindFromIntent('question', 'intent', 'hello')).toBeNull();
   });

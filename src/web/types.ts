@@ -66,6 +66,7 @@ export interface ProviderConfig {
 export interface IceEtlPrefs {
   showTransparencyPanel: boolean;
   panelDefaultExpanded: boolean;
+  /** 面板宽度，仅 280 / 320 / 380 */
   panelWidth: number;
   /** 任务完成后是否通过桌面系统通知提醒（仅桌面端生效） */
   taskDoneNotification: boolean;

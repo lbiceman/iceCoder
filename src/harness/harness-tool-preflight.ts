@@ -1,7 +1,7 @@
 import type { BranchBudgetTracker } from './branch-budget.js';
 import { extractRunCommand } from './branch-budget-tool-path.js';
 import type { ToolCall } from '../llm/types.js';
-import type { TaskState } from './task-state.js';
+import type { CompletionFactsView } from './completion-facts-view.js';
 import { isBuildVerificationCommand, isHarnessVerificationCommand } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
 import {
@@ -13,7 +13,7 @@ export interface ToolPreflightInput {
   toolName: string;
   args: Record<string, unknown>;
   branchBudget?: BranchBudgetTracker;
-  taskState?: TaskState;
+  completionFacts?: CompletionFactsView;
   buildDiagnosticGateActive?: boolean;
   workspaceRoot?: string;
   lockedWorkspaceRoot?: string;
@@ -146,8 +146,8 @@ export function checkToolPreflight(input: ToolPreflightInput): ToolPreflightDeci
   if (missing.blocked) return missing;
 
   if (input.toolName === 'read_file' && isDistArtifactPath(path)) {
-    const verification = input.taskState?.snapshot().verificationStatus;
-    if (verification === 'failed' || verification === 'required') {
+    const verification = input.completionFacts?.verificationSignal();
+    if (verification?.status === 'failed' || verification?.status === 'pending') {
       return {
         blocked: true,
         reason: 'dist_read',

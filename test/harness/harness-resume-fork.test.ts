@@ -69,8 +69,6 @@ function buildPausedCheckpoint(): TaskCheckpoint {
       filesRead: ['src/main.ts'],
       filesChanged: ['src/main.ts'],
       commandsRun: ['npm test'],
-      verificationRequired: true,
-      verificationStatus: 'failed',
     },
     repoContext: {
       filesRead: ['src/main.ts'],

@@ -24,13 +24,13 @@ export function createDiffTool(workDir: string): RegisteredTool {
       parameters: {
         type: 'object',
         properties: {
-          file1: { type: 'string', description: '第一个文件路径（相对于工作目录）' },
-          file2: { type: 'string', description: '第二个文件路径（相对于工作目录）' },
-          text1: { type: 'string', description: '直接提供第一段文本内容（与 file1 二选一）' },
-          text2: { type: 'string', description: '直接提供第二段文本内容（与 file2 二选一）' },
+          file1: { type: 'string', description: 'First file path relative to the working directory' },
+          file2: { type: 'string', description: 'Second file path relative to the working directory' },
+          text1: { type: 'string', description: 'First text value; use instead of file1' },
+          text2: { type: 'string', description: 'Second text value; use instead of file2' },
           contextLines: {
             type: 'number',
-            description: '差异上下文行数，默认 3',
+            description: 'Number of diff context lines; default 3',
             default: 3,
           },
         },

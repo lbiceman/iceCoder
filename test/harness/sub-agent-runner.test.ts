@@ -105,7 +105,7 @@ describe('SubAgentRunner', () => {
     expect(result.status).toBe('completed');
     expect(handler).not.toHaveBeenCalled();
     const secondMessages = chatFn.mock.calls[1][0] as UnifiedMessage[];
-    expect(secondMessages.some(m => m.role === 'tool' && String(m.content).includes('不允许调用 write_file'))).toBe(true);
+    expect(secondMessages.some(m => m.role === 'tool' && String(m.content).includes('cannot call write_file'))).toBe(true);
   });
 
   it('only allows fs_operation list in sub-agents', async () => {
@@ -124,7 +124,7 @@ describe('SubAgentRunner', () => {
     expect(result.status).toBe('completed');
     expect(handler).not.toHaveBeenCalled();
     const secondMessages = chatFn.mock.calls[1][0] as UnifiedMessage[];
-    expect(secondMessages.some(m => m.role === 'tool' && String(m.content).includes('只允许 fs_operation 的 list 操作'))).toBe(true);
+    expect(secondMessages.some(m => m.role === 'tool' && String(m.content).includes('allows only the list action of fs_operation'))).toBe(true);
   });
 
   it('truncates large read_file and grep outputs inside the sub-agent context', async () => {

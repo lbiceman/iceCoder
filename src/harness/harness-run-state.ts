@@ -6,6 +6,12 @@ import type { TaskState } from './task-state.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import type { HarnessPolicyStats } from './harness-policy-stats.js';
+import type { OperationOutcomeLedger } from './operation-outcome.js';
+import type { CompletionCondition } from './completion-condition.js';
+import type {
+  CompletionGateReason,
+  CompletionStatus,
+} from './completion-gate.js';
 import type {
   ExecutionMode,
   ForcedDegradedTier,
@@ -44,8 +50,6 @@ export interface HarnessRunState {
   emptyResponseRetryCount: number;
   /** 仅 reasoning 无 toolCalls 时的恢复次数 */
   reasoningOnlyRecoveryCount: number;
-  /** 验收未清时拦截 model_done 的次数 */
-  prematureCompletionRecoveryCount: number;
   /** 连续工具失败轮次计数（一轮中所有工具都失败才算 1 次） */
   consecutiveToolFailures: number;
   /** 连续只读轮次计数（无 write/edit 工具调用的轮次） */
@@ -56,10 +60,6 @@ export interface HarnessRunState {
   taskSwitchInjected: boolean;
   /** stop_hook 连续干预计数 */
   stopHookContinuationCount: number;
-  /** verification gate 连续注入计数（模型未调工具时熔断） */
-  verificationGateContinuationCount: number;
-  /** 单测失败时是否已 inject 加强提示（每 run 一次，不 hard block） */
-  failedUnitTestReminderInjected: boolean;
   /** 上一次 continue 的原因 */
   transition: Transition;
   /** 本轮是否刚刚完成上下文压缩 */
@@ -100,6 +100,17 @@ export interface HarnessRunState {
   verificationOutputBuffer: VerificationOutputBuffer;
   /** 长跑任务多命令验收门禁（npm ci → test → build → e2e） */
   taskAcceptance?: TaskAcceptanceTracker;
+  /** 与语言/工具无关的操作结果账本，供统一收尾门控使用。 */
+  operationOutcomes?: OperationOutcomeLedger;
+  /** 从 V3 恢复且尚未被本轮 tracker 替代的 completion 条件。 */
+  restoredCompletionConditions?: CompletionCondition[];
+  /** 统一收尾门控已注入的有界续轮数。 */
+  completionGateContinuationCount: number;
+  /** 上一次阻塞快照；相同快照不得重复注入。 */
+  completionGateBlockingSignature?: string;
+  /** 最近一次统一收尾裁决，供 checkpoint 原样恢复。 */
+  completionStatus?: CompletionStatus;
+  completionReason?: CompletionGateReason;
   /** 连续无工具调用的 LLM 轮（用于 no_progress / 早停拦截） */
   consecutiveNoToolRounds: number;
   /** missing-file preflight：同路径拦截次数 */
@@ -142,8 +153,10 @@ export interface HarnessRunState {
     signal: ModeSignal,
     payload?: Record<string, unknown>,
   ) => void;
-  /** W4：recovery 信号的「跨轮 sticky」标志；由 supervisor 接管完成时清除。仅阻塞 exit，不参与 enter。 */
+  /** W4：尚未被有效进展解除的 recovery 标志。仅阻塞 exit，不参与 enter。 */
   recoveryPendingSticky?: boolean;
+  /** 最近工具轮是否出现应升级模式的真实失败；验收命令失败不计入。 */
+  lastRoundModeEscalatingFailure?: boolean;
   /** W1：连续无失败轮次计数（与 consecutiveToolFailures 互斥推进），用于 stableRounds 派生。 */
   stableRoundsSinceLastFailure?: number;
   /** W1：本轮开始时 RepoContext.filesChanged 长度的快照，用于派生 accumulatedDiffLines。 */

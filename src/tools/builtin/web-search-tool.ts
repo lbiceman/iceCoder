@@ -195,21 +195,21 @@ export function createWebSearchTool(): RegisteredTool {
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: '搜索关键词' },
+          query: { type: 'string', description: 'Search query' },
           maxResults: {
             type: 'number',
-            description: '最大返回结果数，默认 8',
+            description: 'Maximum number of results; default 8',
             default: 8,
           },
           engine: {
             type: 'string',
-            description: '搜索引擎：bing_cn（默认，国内 Bing）、duckduckgo、searxng（需配置 apiUrl）',
+            description: 'Search engine: bing_cn (default), duckduckgo, or searxng (requires apiUrl)',
             enum: ['bing_cn', 'duckduckgo', 'searxng'],
             default: DEFAULT_ENGINE,
           },
           apiUrl: {
             type: 'string',
-            description: 'SearXNG 实例地址（仅 engine=searxng 时需要，如 http://localhost:8080）',
+            description: 'SearXNG instance URL; required only when engine=searxng, for example http://localhost:8080',
           },
         },
         required: ['query'],

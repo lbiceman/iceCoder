@@ -6,6 +6,7 @@ import { isSystemInjectedUserContent } from './harness-message-utils.js';
 import type { HarnessRunState } from './harness-run-state.js';
 import { isPoisonedGoal } from './session-goal-anchor.js';
 import { hasExecutableSideSignal } from './task-state.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 
 const RESUME_CHECKPOINT_OPEN = '<resume-checkpoint>';
 const RESUME_CHECKPOINT_BLOCK_RE = /<resume-checkpoint>[\s\S]*?<\/resume-checkpoint>/gi;
@@ -53,7 +54,10 @@ export function isResumeCheckpointContent(content: string): boolean {
 }
 
 /** 短摘要注入 LLM（完整 JSON 仅留磁盘）。 */
-export function buildCheckpointResumeSummary(checkpoint: TaskCheckpoint): string {
+export function buildCheckpointResumeSummary(
+  checkpoint: TaskCheckpoint,
+  completionFacts = CompletionFactsView.fromTaskSnapshot(checkpoint.taskState),
+): string {
   const goalPreview = sanitizeCheckpointGoal(checkpoint.taskState.goal)
     .replace(/\s+/g, ' ')
     .slice(0, 600);
@@ -70,6 +74,9 @@ export function buildCheckpointResumeSummary(checkpoint: TaskCheckpoint): string
     `status: ${checkpoint.status}`,
     `stopReason: ${checkpoint.stopReason ?? 'unknown'} @ harness round ${checkpoint.loop.currentRound}`,
     `toolCalls: ${checkpoint.loop.totalToolCalls}`,
+    `verificationSignal: ${completionFacts.verificationSignal().status}`,
+    `requiredCompletionBlockers: ${completionFacts.requiredBlockers().length}`,
+    `pendingOperation: ${completionFacts.hasPendingOperation()}`,
     '',
     `lastCompleted: ${checkpoint.lastCompletedStep ?? '(none)'}`,
     `nextStep: ${checkpoint.nextSuggestedStep ?? 'Continue verification and fix remaining failures.'}`,

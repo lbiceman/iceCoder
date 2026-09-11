@@ -229,7 +229,7 @@ describe('Harness - 工具调用循环', () => {
     )).toBe(false);
   });
 
-  it('修改代码未跑测时 verification gate inject', async () => {
+  it('简单修改有成功回执时不强制追加测试', async () => {
     const tools = [makeTool('edit_file'), makeTool('read_file'), makeTool('run_command')];
     const executor = createToolExecutor(tools);
     const harness = new Harness(minConfig({ context: { systemPrompt: 'test', tools } }), executor);
@@ -244,13 +244,13 @@ describe('Harness - 工具调用循环', () => {
     const result = await harness.run('修复失败用例', chatFn);
 
     expect(result.content).toBe('已修复');
-    expect(result.loopState.totalToolCalls).toBe(2);
+    expect(result.loopState.totalToolCalls).toBe(1);
     expect(result.loopState.stopReason).toBe('model_done');
     expect(result.messages.some(m =>
       m.role === 'user'
       && typeof m.content === 'string'
       && /unit tests/i.test(m.content)
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it('修改代码且 npm test 通过后允许完成', async () => {
@@ -383,13 +383,15 @@ describe('Harness - 工具调用循环', () => {
       toolCallResponse([{ id: 'tc1', name: 'read_file' }]),
       stepReviewLlmStub(),
       finalResponse('File does not exist'),
+      finalResponse('File does not exist'),
     ]);
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toBe('File does not exist');
+    expect(result.content).toContain('File does not exist');
+    expect(result.completionStatus).toBe('failed');
     // 消息中应该包含工具错误
-    const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('工具执行错误'));
+    const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('Tool execution error'));
     expect(toolMsg).toBeDefined();
   });
 });
@@ -756,7 +758,9 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harnessWithExecutor.run('Read file', chatFn);
 
-    expect(result.content).toBe('Cannot read');
+    expect(result.content).toContain('Cannot read');
+    expect(result.completionStatus).toBe('paused');
+    expect(result.loopState.stopReason).toBe('completion_paused');
     expect(handler).not.toHaveBeenCalled();
     expect(result.messages.some(m =>
       m.role === 'tool'
@@ -783,7 +787,8 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toBe('User declined');
+    expect(result.content).toContain('User declined');
+    expect(result.completionStatus).toBe('paused');
     expect(onConfirm).toHaveBeenCalledWith('read_file', {});
     expect(handler).not.toHaveBeenCalled();
   });
@@ -804,7 +809,8 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toBe('Need confirmation');
+    expect(result.content).toContain('Need confirmation');
+    expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     expect(result.messages.some(m =>
       m.role === 'tool'
@@ -872,7 +878,8 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Delete important.txt', chatFn);
 
-    expect(result.content).toBe('OK, I will not delete it');
+    expect(result.content).toContain('OK, I will not delete it');
+    expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('User denied'));
     expect(toolMsg).toBeDefined();
@@ -1228,7 +1235,7 @@ describe('ContextCompactor - 微压缩', () => {
     expect(message.content).toContain('npm test');
     expect(message.content).toContain('<runtime-recovery-context');
     expect(message.content).toContain('## Critical Task State');
-    expect(message.content).toContain('verificationStatus: passed');
+    expect(message.content).toContain('verificationSignal: not_required');
     expect(message.content).not.toContain('# Runtime State');
   });
 
@@ -1241,8 +1248,6 @@ describe('ContextCompactor - 微压缩', () => {
       filesRead: Array.from({ length: 80 }, (_, i) => `src/read-${String(i).padStart(2, '0')}.ts`),
       filesChanged: Array.from({ length: 12 }, (_, i) => `src/changed-${String(i).padStart(2, '0')}.ts`),
       commandsRun: Array.from({ length: 30 }, (_, i) => `npm run command-${i}`),
-      verificationRequired: true,
-      verificationStatus: 'required' as const,
     };
     const repoSnapshot = {
       filesRead: taskSnapshot.filesRead,
@@ -1259,7 +1264,7 @@ describe('ContextCompactor - 微压缩', () => {
     };
 
     expect(message.content).toContain('budgetTokens="400"');
-    expect(message.content).toContain('verificationStatus: required');
+    expect(message.content).toContain('verificationSignal: not_required');
     expect(message.content).toContain('src/changed-11.ts');
     expect(message.content).toContain('npm test -- test/harness/harness.test.ts');
     expect(message.content).toContain('omitted');
@@ -1589,12 +1594,14 @@ describe('Harness - 连续工具失败熔断', () => {
       toolCallResponse([{ id: 'tc2', name: 'read_file' }]),
       toolCallResponse([{ id: 'tc3', name: 'read_file' }]),
       finalResponse('summary'),
+      finalResponse('summary'),
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 熔断改为渐进式干预：3 轮失败后注入提示并继续，模型可正常回复
-    expect(result.loopState.stopReason).toBe('model_done');
-    expect(result.content).toBe('summary');
+    // 模型仍可输出总结，但结构化终态必须保留最后一次失败。
+    expect(result.loopState.stopReason).toBe('completion_failed');
+    expect(result.completionStatus).toBe('failed');
+    expect(result.content).toContain('summary');
   });
 
   it('重复同参工具失败时注入换策略提示', async () => {
@@ -1861,12 +1868,18 @@ describe('Harness - task checkpoint', () => {
 
     const result = await harness.run('Read src/a.ts', chatFn);
     const raw = await fs.readFile(path.join(sessionDir, 'default.checkpoint.json'), 'utf-8');
-    const checkpoint = JSON.parse(raw) as TaskCheckpoint;
+    const checkpoint = JSON.parse(raw);
 
     expect(result.loopState.stopReason).toBe('model_done');
-    expect(checkpoint.status).toBe('completed');
-    expect(checkpoint.userGoal).toBe('Read src/a.ts');
-    expect(checkpoint.taskState.filesRead).toContain('src/a.ts');
+    expect(checkpoint.version).toBe(3);
+    expect(checkpoint.extensions.legacyApi.status).toBe('completed');
+    expect(checkpoint.extensions.legacyApi.userGoal).toBe('Read src/a.ts');
+    expect(checkpoint.execution.taskState.filesRead).toContain('src/a.ts');
+    expect(checkpoint.completion.operationOutcomes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolCallId: 'tc1', status: 'completed' }),
+    ]));
+    expect(checkpoint.completion.continuationCount).toBe(0);
+    expect(checkpoint.execution.resumable.branchBudget).toBeDefined();
   });
 
   it('恢复时注入 active checkpoint', async () => {
@@ -1886,8 +1899,6 @@ describe('Harness - task checkpoint', () => {
           filesRead: [],
           filesChanged: ['src/a.ts'],
           commandsRun: ['npx tsc --noEmit'],
-          verificationRequired: true,
-          verificationStatus: 'failed',
         },
         repoContext: {
           filesRead: [],

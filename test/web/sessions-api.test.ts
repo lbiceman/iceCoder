@@ -247,12 +247,15 @@ describe('Sessions API (multi-session)', () => {
     expect(res.ok).toBe(true);
     const body = await res.json() as {
       cursorMessageId: string;
-      entries: { messageId: string; preview: string; isCursor: boolean }[];
+      cursorRestored: boolean;
+      entries: { messageId: string; preview: string; isCursor: boolean; isRestoredCursor: boolean }[];
     };
     expect(body.cursorMessageId).toBe(messageId);
+    expect(body.cursorRestored).toBe(false);
     expect(body.entries).toHaveLength(1);
     expect(body.entries[0].preview).toBe('修复登录接口超时');
     expect(body.entries[0].isCursor).toBe(true);
+    expect(body.entries[0].isRestoredCursor).toBe(false);
   });
 
   it('readFirstSessionIdFromIndex 返回 index 第一项', async () => {
@@ -330,5 +333,24 @@ describe('Sessions API (multi-session)', () => {
     const ids = list.sessions.map((s) => s.id);
     expect(ids).toContain(created.session.id);
     expect(ids).toContain('c18e59a8');
+  });
+
+  it('POST /:id/open-file 拒绝不安全会话 id 与工作区外路径', async () => {
+    const unsafe = await fetch(`${baseUrl}/foo..bar/open-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'kept.ts' }),
+    });
+    expect(unsafe.status).toBe(400);
+
+    const res = await fetch(`${baseUrl}/default/open-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '../secret.txt' }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBeTruthy();
   });
 });

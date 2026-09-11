@@ -70,6 +70,9 @@ export async function runAgentEvalCase(
       await writeCaseFiles(memoryDir, testCase.memoryFiles);
     }
     await fs.mkdir(sessionDir, { recursive: true });
+    if (testCase.seedLegacyCheckpoint) {
+      await seedLegacyCheckpoint(sessionDir, testCase.id);
+    }
 
     const fileParser = new FileParser();
     fileParser.registerStrategy(new HtmlParserStrategy());
@@ -97,7 +100,7 @@ export async function runAgentEvalCase(
       },
       loop: {
         maxRounds: testCase.maxRounds ?? 8,
-        timeout: 120_000,
+        timeout: testCase.timeoutMs ?? 120_000,
         tokenBudget: 250_000,
       },
       permissions: [],
@@ -253,7 +256,9 @@ async function scoreCase(args: {
   const finalEvent = [...events].reverse().find(event => event.type === 'final');
   const agentVerificationPassed = didAgentRunVerification(events, testCase.verifyCommands);
   const anyFileChanged = await didAnyCaseFileChange(workspace, initialFiles);
-  const analysisArtifactCount = await countAnalysisArtifacts(workspace, testCase.id);
+  const analysisArtifactCount = testCase.expected.requiresAnalysisArtifact
+    ? await countAnalysisArtifacts(workspace, testCase.id)
+    : 0;
 
   if (testCase.expected.requiresTool && toolCallEvents.length === 0) {
     failures.push('expected tool use');
@@ -261,12 +266,30 @@ async function scoreCase(args: {
   if (testCase.expected.requiresVerification && !agentVerificationPassed) {
     failures.push('expected agent-run verification');
   }
+  if (testCase.expected.forbidVerification && didAgentRunShell(events)) {
+    failures.push('unexpected shell verification for soft/no-verification case');
+  }
   if (testCase.expected.allowFileChanges === false && anyFileChanged) {
     failures.push('files changed while case expected no mutations');
   }
   if (testCase.expected.requiresAnalysisArtifact && analysisArtifactCount === 0) {
     failures.push('expected async sub-agent analysis artifact');
   }
+  if (
+    testCase.expected.completionStatus
+    && result.completionStatus !== testCase.expected.completionStatus
+  ) {
+    failures.push(
+      `expected completionStatus=${testCase.expected.completionStatus}, got ${result.completionStatus ?? '(missing)'}`,
+    );
+  }
+  if (
+    testCase.expected.finalContains
+    && !result.content.includes(testCase.expected.finalContains)
+  ) {
+    failures.push(`final response does not contain ${JSON.stringify(testCase.expected.finalContains)}`);
+  }
+  failures.push(...await evaluateCheckpoint(workspace, testCase));
 
   const summary = telemetry
     .filter((event): event is Extract<RuntimeTelemetryEvent, { type: 'summary' }> => event.type === 'summary')
@@ -318,12 +341,109 @@ async function scoreCase(args: {
 
 async function countAnalysisArtifacts(workspace: string, sessionId: string): Promise<number> {
   const analysisDir = path.join(workspace, '.icecoder', 'sessions', sessionId, 'analysis');
-  try {
-    const entries = await fs.readdir(analysisDir);
-    return entries.filter(entry => entry.endsWith('.meta.json')).length;
-  } catch {
-    return 0;
+  const deadline = Date.now() + 10_000;
+  do {
+    try {
+      const entries = await fs.readdir(analysisDir);
+      const count = entries.filter(entry => entry.endsWith('.meta.json')).length;
+      if (count > 0) return count;
+    } catch {
+      // Detached analysis may not have created its directory yet.
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
+  return 0;
+}
+
+async function seedLegacyCheckpoint(sessionDir: string, sessionId: string): Promise<void> {
+  const payload = {
+    version: 1,
+    taskId: 'legacy-eval',
+    status: 'running',
+    userGoal: 'legacy upgrade',
+    phase: 'intent',
+    taskState: {
+      goal: 'legacy upgrade',
+      intent: 'question',
+      phase: 'intent',
+      filesRead: [],
+      filesChanged: [],
+      commandsRun: [],
+      verificationRequired: true,
+      verificationStatus: 'required',
+    },
+    repoContext: {
+      filesRead: [],
+      filesChanged: [],
+      commandsRun: [],
+      testCommands: [],
+      recentDiagnostics: [],
+    },
+    failedToolCalls: [],
+    messageCount: 1,
+    loop: {
+      currentRound: 0,
+      totalToolCalls: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    runtimeV2: {
+      runtimeVersion: 2,
+      branchBudget: { fileEdits: {}, commandRetries: {}, errorRepeats: {}, recoverTriggers: 0 },
+      recentTools: [],
+      recentFailures: [],
+      recoverySignals: [],
+      verificationPending: true,
+      lastTrigger: 'manual',
+      v2UpdatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  };
+  await fs.writeFile(
+    path.join(sessionDir, `${sessionId}.checkpoint.json`),
+    JSON.stringify(payload, null, 2),
+    'utf-8',
+  );
+}
+
+async function evaluateCheckpoint(workspace: string, testCase: AgentEvalCase): Promise<string[]> {
+  const expected = testCase.expected.checkpoint;
+  if (!expected) return [];
+  const failures: string[] = [];
+  const checkpointPath = path.join(workspace, '.icecoder', 'sessions', `${testCase.id}.checkpoint.json`);
+  const raw = await fs.readFile(checkpointPath, 'utf-8').catch(() => '');
+  if (!raw) {
+    failures.push(`missing V3 checkpoint: ${checkpointPath}`);
+    return failures;
   }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    failures.push('checkpoint is not valid JSON');
+    return failures;
+  }
+  if (parsed.version !== expected.version) {
+    failures.push(`expected checkpoint version ${expected.version}, got ${String(parsed.version)}`);
+  }
+  if (expected.forbidLegacyFields) {
+    for (const field of ['verificationStatus', 'verificationRequired', 'verificationPending', 'acceptanceGate']) {
+      if (raw.includes(`"${field}"`)) {
+        failures.push(`checkpoint still contains legacy field ${field}`);
+      }
+    }
+  }
+  const completion = parsed.completion as { conditions?: unknown; operationOutcomes?: unknown } | undefined;
+  if (expected.hasCompletion && (!completion || !Array.isArray(completion.conditions) || !Array.isArray(completion.operationOutcomes))) {
+    failures.push('checkpoint is missing V3 completion section');
+  }
+  if (expected.migratedFromLegacy) {
+    const backupPath = `${checkpointPath}.legacy.backup.json`;
+    const backupExists = await fs.access(backupPath).then(() => true).catch(() => false);
+    if (!backupExists) failures.push('legacy checkpoint backup was not created');
+  }
+  return failures;
 }
 
 async function evaluateAssertions(
@@ -369,6 +489,17 @@ function didAgentRunVerification(events: HarnessStepEvent[], verifyCommands: str
     const command = String(event.toolArgs?.command ?? event.toolArgs?.cmd ?? '');
     return verifyCommands.some(expected => command.includes(expected));
   });
+}
+
+function didAgentRunShell(events: HarnessStepEvent[]): boolean {
+  return events.some(event =>
+    event.type === 'tool_call'
+    && (
+      event.toolName === 'run_command'
+      || event.toolName === 'shell_exec'
+      || event.toolName === 'interactive_shell'
+    ),
+  );
 }
 
 function firstToolLatency(events: HarnessStepEvent[]): number {

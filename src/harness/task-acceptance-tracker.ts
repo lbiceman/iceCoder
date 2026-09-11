@@ -1,4 +1,5 @@
 import { isLongRunningImplementationGoal } from './resume-goal.js';
+import type { CompletionCondition } from './completion-condition.js';
 
 export type AcceptanceCommandStatus = 'pending' | 'passed' | 'failed';
 
@@ -17,6 +18,7 @@ export interface AcceptanceCommandEntry {
   label: string;
   status: AcceptanceCommandStatus;
   lastRunAt?: number;
+  evidenceRefs?: string[];
 }
 
 export interface AcceptanceGateSnapshot {
@@ -33,7 +35,10 @@ export class TaskAcceptanceTracker {
     const parsed = presetCommands?.length
       ? presetCommands.map(c => ({ key: normalizeAcceptanceCommandKey(c), label: c.trim() }))
       : parseAcceptanceCommandsFromGoal(goal);
-    this.active = parsed.length >= 2 && isLongRunningImplementationGoal(goal);
+    this.active = parsed.length > 0 && (
+      hasExplicitAcceptanceMarker(goal)
+      || (parsed.length >= 2 && isLongRunningImplementationGoal(goal))
+    );
     this.commands = parsed.map(({ key, label }) => ({
       key,
       label,
@@ -79,7 +84,11 @@ export class TaskAcceptanceTracker {
    * 返回 transition 详情（命令、前后状态），方便上层注入「刚刚 ✓ / ✗」的反馈消息。
    * 返回 null 表示未匹配到任何验收项。
    */
-  recordRunCommand(rawCommand: string, success: boolean): AcceptanceTransition | null {
+  recordRunCommand(
+    rawCommand: string,
+    success: boolean,
+    evidenceRef?: string,
+  ): AcceptanceTransition | null {
     if (!this.isActive() || !rawCommand.trim()) return null;
     const entry = matchAcceptanceEntry(this.commands, rawCommand);
     if (!entry) return null;
@@ -87,6 +96,9 @@ export class TaskAcceptanceTracker {
     const newStatus: AcceptanceCommandStatus = success ? 'passed' : 'failed';
     entry.status = newStatus;
     entry.lastRunAt = Date.now();
+    if (evidenceRef) {
+      entry.evidenceRefs = [...new Set([...(entry.evidenceRefs ?? []), evidenceRef])];
+    }
     return { command: entry.label, previousStatus, newStatus };
   }
 
@@ -99,7 +111,10 @@ export class TaskAcceptanceTracker {
    * 调用方应在 run_command 工具结果落到 messages 后调用。
    * 返回 transition 详情（同 {@link recordRunCommand}），未匹配返回 null。
    */
-  recordRunCommandToolResult(result: RunCommandResultClassification): AcceptanceTransition | null {
+  recordRunCommandToolResult(
+    result: RunCommandResultClassification,
+    evidenceRef?: string,
+  ): AcceptanceTransition | null {
     if (!this.isActive()) return null;
     if (result.kind === 'background_start' || result.kind === 'background_running') return null;
     if (!result.command.trim()) return null;
@@ -107,16 +122,33 @@ export class TaskAcceptanceTracker {
       ? result.foregroundSuccess === true
       : result.kind === 'background_completed'
         && (result.exitCode === undefined || result.exitCode === 0);
-    return this.recordRunCommand(result.command, completed);
+    return this.recordRunCommand(result.command, completed, evidenceRef);
+  }
+
+  toCompletionConditions(canExecute = true): CompletionCondition[] {
+    if (!this.isActive()) return [];
+    return this.commands.map(command => ({
+      id: `acceptance:${command.key}`,
+      label: command.label,
+      required: true,
+      status: command.status === 'passed'
+        ? 'satisfied'
+        : !canExecute
+          ? 'unverifiable'
+          : command.status,
+      source: 'user',
+      sourceRef: `acceptance:${command.key}`,
+      evidenceRefs: [...(command.evidenceRefs ?? [])],
+    }));
   }
 
   buildAcceptancePrompt(): string {
     const lines = [
-      '[System / Acceptance Gate] Task is NOT complete. Required verification commands must all exit 0 before you may stop.',
+      '[System / Completion Gate] Required completion conditions are not settled.',
       '',
-      `Progress: ${this.getPassedCount()}/${this.commands.length} passed`,
+      `Progress: ${this.getPassedCount()}/${this.commands.length} satisfied`,
       '',
-      'Required commands:',
+      'Required conditions:',
     ];
     for (const cmd of this.commands) {
       const mark = cmd.status === 'passed' ? '✓' : cmd.status === 'failed' ? '✗' : '○';
@@ -124,9 +156,9 @@ export class TaskAcceptanceTracker {
     }
     const next = this.getPendingCommands()[0] ?? this.commands.find(c => c.status === 'failed');
     if (next) {
-      lines.push('', `Next: run \`${next.label}\`, fix failures, then continue remaining commands.`);
+      lines.push('', `Next unresolved condition: ${next.label}`);
     }
-    lines.push('', 'Do not output final delivery bullets or stop calling tools until all commands pass.');
+    lines.push('', 'Use relevant available tools to settle all required conditions before finishing.');
     return lines.join('\n');
   }
 
@@ -147,6 +179,18 @@ export class TaskAcceptanceTracker {
 /** 从 goal 提取 `npm ci → npm test → ...` 或枚举式验收命令。 */
 export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: string; label: string }> {
   const found: string[] = [];
+
+  if (hasExplicitAcceptanceMarker(goal)) {
+    for (const match of goal.matchAll(/`([^`\r\n]+)`/g)) {
+      const candidate = match[1]?.trim();
+      if (!candidate) continue;
+      const parts = candidate.split(/\s*→\s*|\s*->\s*|\s+then\s+/i);
+      for (const part of parts) {
+        const command = part.trim();
+        if (looksLikeCommandCriterion(command)) found.push(command);
+      }
+    }
+  }
 
   if (/npm ci[^→\n]*→[^→\n]*npm test[^→\n]*→[^→\n]*npm run build[^→\n]*→[^→\n]*npm run test:e2e/is.test(goal)) {
     found.push('npm ci', 'npm test', 'npm run build', 'npm run test:e2e');
@@ -194,6 +238,17 @@ export function parseAcceptanceCommandsFromGoal(goal: string): Array<{ key: stri
   return unique;
 }
 
+function hasExplicitAcceptanceMarker(goal: string): boolean {
+  return /验收(?:命令|条件)?|完成条件|必须(?:运行|通过|成功)|全部成功后|done when|acceptance|must (?:pass|succeed|run)|before (?:you )?(?:finish|stop)/i.test(goal);
+}
+
+function looksLikeCommandCriterion(value: string): boolean {
+  const text = value.trim();
+  if (!text || text.length > 500 || /[\r\n]/.test(text)) return false;
+  return /^(?:npm|pnpm|yarn|npx|bun|deno|node|python|python3|pytest|go|cargo|mvnw?|gradlew(?:\.bat)?|dotnet|make|cmake|ctest|bundle|phpunit|composer|git|docker|kubectl|terraform|ansible|powershell|pwsh|bash|sh)\b/i.test(text)
+    || /^(?:\.\/|\.\\|[A-Za-z]:\\)\S+/.test(text);
+}
+
 /**
  * 剥离 Windows / POSIX 常见的 `cd ... && <real-cmd>` 前缀，仅保留真实命令体。
  * 例如：
@@ -228,6 +283,8 @@ export function normalizeAcceptanceCommandKey(command: string): string {
     .trim()
     .toLowerCase();
 
+  key = normalizeExecutableIdentity(key);
+
   // 等价归一化：playwright/cypress e2e 视作 `npm run test:e2e`
   if (/\bnpx\s+playwright\s+test\b/.test(key) || /\bplaywright\s+test\b/.test(key)) {
     return 'npm run test:e2e';
@@ -245,6 +302,15 @@ export function normalizeAcceptanceCommandKey(command: string): string {
   }
 
   return key;
+}
+
+function normalizeExecutableIdentity(command: string): string {
+  const match = command.match(/^(?:"([^"]+)"|(\S+))(.*)$/);
+  if (!match) return command;
+  const executable = match[1] ?? match[2] ?? '';
+  const suffix = match[3] ?? '';
+  const basename = executable.split(/[\\/]/).at(-1)?.replace(/\.(?:exe|cmd|bat|com)$/i, '');
+  return basename ? `${basename}${suffix}`.trim() : command;
 }
 
 function matchAcceptanceEntry(

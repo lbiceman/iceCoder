@@ -12,6 +12,7 @@ export {
   appendSystemContext,
   environmentInfoToRecord,
   harnessOverlayToContextFields,
+  alignPromptWithAvailableTools,
 } from './prompt-assembler.js';
 
 export type {
@@ -42,9 +43,21 @@ export {
   createMemorySection,
   createPreferencesSection,
   createToolResultClearingSection,
+  createEvaluationModeSection,
+  createPlanModeSection,
+  PLAN_MODE_REMOVED_SECTION_IDS,
   createShellCopilotSection,
   SHELL_COLLAB_REMOVED_SECTION_IDS,
 } from './sections.js';
+
+export { applyEvaluationModePromptOverlay } from './evaluation-mode-prompt.js';
+export { applyRuntimeModePrompt } from './runtime-mode-prompt.js';
+export type { RuntimePromptMode } from './runtime-mode-prompt.js';
+
+export {
+  applyPlanModePromptOverlay,
+  assemblePlanModePrompt,
+} from './plan-mode-prompt.js';
 
 export {
   applyShellCollabPromptOverlay,

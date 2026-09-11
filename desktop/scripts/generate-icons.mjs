@@ -11,7 +11,8 @@ import pngToIco from 'png-to-ico';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const assetsDir = path.join(__dirname, '..', 'assets');
-const logoPngPath = path.join(__dirname, '..', '..', 'src', 'public', 'icons', 'logo.png');
+const publicDir = path.join(__dirname, '..', '..', 'src', 'public');
+const logoPngPath = path.join(publicDir, 'icons', 'logo.png');
 
 async function renderPng(size) {
   return sharp(logoPngPath)
@@ -42,7 +43,11 @@ async function main() {
   const ico = await pngToIco(icoBuffers);
   fs.writeFileSync(path.join(assetsDir, 'icon.ico'), ico);
 
-  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), notification-app-logo.png (44), icon.ico');
+  const favIco = await pngToIco(await Promise.all([16, 32, 48].map((s) => renderPng(s))));
+  fs.writeFileSync(path.join(publicDir, 'favicon.ico'), favIco);
+  fs.writeFileSync(path.join(publicDir, 'icons', 'favicon.ico'), favIco);
+
+  console.log('[generate-icons] wrote icon.png (512), tray-icon.png (32), notification-app-logo.png (44), icon.ico, public favicon.ico');
   console.log('[generate-icons] macOS .icns 将在 electron-builder --mac 时由 icon.png 自动转换');
 }
 

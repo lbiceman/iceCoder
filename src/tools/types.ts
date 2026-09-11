@@ -5,6 +5,18 @@
 
 import type { ToolDefinition } from '../llm/types.js';
 
+export type ToolResultStatus = 'completed' | 'pending' | 'failed' | 'awaiting_approval';
+export type ToolEffect = 'observe' | 'local_change' | 'external_change' | 'execute';
+export type ToolRisk = 'low' | 'high';
+
+export interface ToolReceipt {
+  operationId?: string;
+  target?: string;
+  exitCode?: number;
+  version?: string;
+  summary?: string;
+}
+
 /**
  * 工具执行结果。
  */
@@ -12,6 +24,11 @@ export interface ToolResult {
   success: boolean;
   output: string;
   error?: string;
+  /** 通用收尾协议字段；旧工具可省略，由 Harness 归一化。 */
+  status?: ToolResultStatus;
+  effect?: ToolEffect;
+  risk?: ToolRisk;
+  receipt?: ToolReceipt;
 }
 
 /**

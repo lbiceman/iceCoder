@@ -146,14 +146,14 @@ export function createPatchTool(workDir: string, sessionId = 'default'): Registe
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '要打补丁的文件路径（相对于工作目录）' },
+          path: { type: 'string', description: 'File path relative to the working directory' },
           patch: {
             type: 'string',
-            description: 'unified diff 格式的补丁内容（包含 @@ 行号标记和 +/- 前缀）',
+            description: 'Unified diff content with @@ hunk markers and +/- line prefixes',
           },
           dryRun: {
             type: 'boolean',
-            description: '仅预览变更，不实际写入文件',
+            description: 'Preview changes without writing the file',
             default: false,
           },
         },

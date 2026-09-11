@@ -20,7 +20,7 @@ function createFetchMock(initialPrefs: Record<string, unknown>, onPatch?: (body:
       onPatch?.(body);
       prefs = {
         panelDefaultExpanded: true,
-        panelWidth: 360,
+        panelWidth: 320,
         showTransparencyPanel: true,
         ...prefs,
         ...(body.iceEtlPrefs || {}),
@@ -63,25 +63,25 @@ describe('etl-prefs', () => {
     const EtlPrefs = loadEtlPrefs(createFetchMock({
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
     }));
     await EtlPrefs.whenReady();
     expect(EtlPrefs.get()).toEqual({
       showTransparencyPanel: false,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
       taskDoneNotification: false,
       panelAutoCollapse: false,
     });
   });
 
-  it('set({ panelWidth: 9999 }) PATCH 后读回被夹到 480', async () => {
+  it('set({ panelWidth: 9999 }) PATCH 后读回被夹到 380', async () => {
     let patched: unknown = null;
     const EtlPrefs = loadEtlPrefs(createFetchMock({}, (body) => { patched = body; }));
     await EtlPrefs.whenReady();
     await EtlPrefs.set({ panelWidth: 9999 });
     expect(patched).toEqual({ iceEtlPrefs: { panelWidth: 9999 } });
-    expect(EtlPrefs.getKey('panelWidth')).toBe(480);
+    expect(EtlPrefs.getKey('panelWidth')).toBe(380);
   });
 
   it('onChange 仅在实际变化时触发', async () => {
@@ -89,8 +89,8 @@ describe('etl-prefs', () => {
     await EtlPrefs.whenReady();
     let count = 0;
     EtlPrefs.onChange(() => { count += 1; });
-    await EtlPrefs.set({ panelWidth: 420 });
-    await EtlPrefs.set({ panelWidth: 420 });
+    await EtlPrefs.set({ panelWidth: 380 });
+    await EtlPrefs.set({ panelWidth: 380 });
     expect(count).toBe(1);
   });
 
@@ -106,7 +106,7 @@ describe('etl-prefs', () => {
     expect(EtlPrefs.get()).toEqual({
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
       taskDoneNotification: false,
       panelAutoCollapse: false,
     });

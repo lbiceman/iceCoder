@@ -53,7 +53,7 @@ describe('request_analysis tool', () => {
     expect(messages[0]?.content).toContain('asa-test');
   });
 
-  it('blocks write tools when analysis is pending', async () => {
+  it('does not block independent writes while detached analysis is pending', async () => {
     const messages: UnifiedMessage[] = [];
     const tc: ToolCall = {
       id: 'write-1',
@@ -61,7 +61,7 @@ describe('request_analysis tool', () => {
       arguments: { path: 'src/auth.ts', content: 'updated' },
     };
     const hasPendingAnalyses = vi.fn(async () => true);
-    const executeTool = vi.fn();
+    const executeTool = vi.fn(async () => ({ success: true, output: 'written' }));
 
     const stats = await executeToolCallsStreaming(
       {
@@ -84,9 +84,9 @@ describe('request_analysis tool', () => {
       },
     );
 
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(hasPendingAnalyses).toHaveBeenCalledWith('sess-tool');
-    expect(stats.policyBlockedSignatures).toHaveLength(1);
-    expect(messages[0]?.content).toContain('background analysis is still pending');
+    expect(executeTool).toHaveBeenCalledWith(tc, undefined);
+    expect(hasPendingAnalyses).not.toHaveBeenCalled();
+    expect(stats.policyBlockedSignatures).toHaveLength(0);
+    expect(messages[0]?.content).toBe('written');
   });
 });

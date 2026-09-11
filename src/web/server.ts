@@ -97,14 +97,22 @@ export async function createServer(config?: ServerConfig): Promise<Express> {
   const staticDir = resolvedStatic.dir;
   const isProd = resolvedStatic.prodCaching;
 
+  const faviconIcoPath = path.join(staticDir, 'favicon.ico');
   const faviconSvgPath = path.join(staticDir, 'icons', 'favicon.svg');
   /** 浏览器默认请求 /favicon.ico；须先于 SPA 回退，否则会被改成返回 index.html */
   const sendFaviconIco: express.RequestHandler = (_req, res, next: NextFunction) => {
-    if (!fs.existsSync(faviconSvgPath)) {
+    const icoExists = fs.existsSync(faviconIcoPath);
+    const svgExists = fs.existsSync(faviconSvgPath);
+    if (!icoExists && !svgExists) {
       next();
       return;
     }
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    if (icoExists) {
+      res.type('image/x-icon');
+      res.sendFile(faviconIcoPath);
+      return;
+    }
     res.type('image/svg+xml');
     res.sendFile(faviconSvgPath);
   };

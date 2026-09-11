@@ -69,7 +69,7 @@ export function createGitTool(workDir: string): RegisteredTool {
         properties: {
           subcommand: {
             type: 'string',
-            description: 'Git 子命令',
+            description: 'Git subcommand',
             enum: [
               'status',
               'diff',
@@ -97,7 +97,7 @@ export function createGitTool(workDir: string): RegisteredTool {
           },
           args: {
             type: 'string',
-            description: '子命令的参数（如 diff 的文件路径、log 的 --oneline -10 等）',
+            description: 'Subcommand arguments, such as a path for diff or --oneline -10 for log',
             default: '',
           },
         },

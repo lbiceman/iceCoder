@@ -101,6 +101,17 @@ describe('TaskQueueManager', () => {
     await expect(fs.access(path.join(tempDir, 's1.task-queue.json'))).rejects.toThrow();
   });
 
+  it('并发 enqueue 不会丢项', async () => {
+    await Promise.all([
+      manager.enqueue('s1', { text: 'A', source: 'implicit' }),
+      manager.enqueue('s1', { text: 'B', source: 'implicit' }),
+      manager.enqueue('s1', { text: 'C', source: 'implicit' }),
+      manager.enqueue('s1', { text: 'D', source: 'implicit' }),
+    ]);
+    const texts = (await manager.list('s1')).map((item) => item.text).sort();
+    expect(texts).toEqual(['A', 'B', 'C', 'D']);
+  });
+
   it('s1 与 s2 队列互不污染', async () => {
     await manager.enqueue('s1', { text: 'one', source: 'explicit' });
     await manager.enqueue('s2', { text: 'two', source: 'implicit' });

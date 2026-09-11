@@ -39,6 +39,8 @@ import {
 } from '../../session/bg-tasks-store.js';
 import { loadCheckpointIndex } from '../../harness/intent-checkpoint-store.js';
 import { readUiSessionMessages } from '../../harness/intent-checkpoint-capture.js';
+import { buildCheckpointChangedFiles, type CheckpointChangedFile } from '../session-changed-files.js';
+import { openWorkspaceChangedFile } from '../open-workspace-file.js';
 import { purgeSessionDiskFiles } from '../session-file-purge.js';
 import { buildShellCollabActiveIndex } from '../../session/shell-collab-store.js';
 import { buildPlanModeActiveIndex } from '../../session/plan-mode-store.js';
@@ -130,16 +132,21 @@ export interface CheckpointTimelineEntry {
   createdAt: string;
   preview: string;
   isCursor: boolean;
+  /** 已回滚到此节点（再回滚是空操作）；仅发消息落到 cursor 时为 false。 */
+  isRestoredCursor: boolean;
 }
 
 /** 读取 Intent Checkpoint 索引，附带用户消息摘要（供状态快照 Tab 时间轴）。 */
 export async function readCheckpointTimeline(sessionId: string): Promise<{
   cursorMessageId: string | null;
+  cursorRestored: boolean;
   entries: CheckpointTimelineEntry[];
+  changedFiles: CheckpointChangedFile[];
 }> {
   const index = await loadCheckpointIndex(SESSIONS_DIR, sessionId);
   const uiMessages = await readUiSessionMessages(SESSIONS_DIR, sessionId);
   const uiById = new Map(uiMessages.filter((m) => m.id).map((m) => [m.id!, m]));
+  const cursorRestored = !!index.cursorRestored;
 
   const entries: CheckpointTimelineEntry[] = index.entries.map((entry) => {
     const ui = uiById.get(entry.messageId);
@@ -147,12 +154,14 @@ export async function readCheckpointTimeline(sessionId: string): Promise<{
     const preview = raw.length > CHECKPOINT_PREVIEW_MAX
       ? `${raw.slice(0, CHECKPOINT_PREVIEW_MAX)}…`
       : raw;
+    const isCursor = entry.messageId === index.cursorMessageId;
     return {
       messageId: entry.messageId,
       userMessageTime: entry.userMessageTime,
       createdAt: entry.createdAt,
       preview: preview || '（无消息摘要）',
-      isCursor: entry.messageId === index.cursorMessageId,
+      isCursor,
+      isRestoredCursor: isCursor && cursorRestored,
     };
   });
 
@@ -163,7 +172,12 @@ export async function readCheckpointTimeline(sessionId: string): Promise<{
     return a.createdAt.localeCompare(b.createdAt);
   });
 
-  return { cursorMessageId: index.cursorMessageId, entries };
+  return {
+    cursorMessageId: index.cursorMessageId,
+    cursorRestored,
+    entries,
+    changedFiles: buildCheckpointChangedFiles(index.sessionTouchedPaths, uiMessages),
+  };
 }
 
 async function readSessionPlan(sessionId: string): Promise<any> {
@@ -372,7 +386,7 @@ export function createSessionsRouter(): Router {
   });
 
   /**
-   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴（状态快照 Tab）
+   * GET /api/sessions/:id/checkpoints - Intent Checkpoint 时间轴（检查点 Tab）
    */
   router.get('/:id/checkpoints', async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -380,6 +394,24 @@ export function createSessionsRouter(): Router {
     if (rejectUnsafeSessionId(res, id)) return;
     const timeline = await readCheckpointTimeline(id);
     res.json(timeline);
+  });
+
+  /**
+   * POST /api/sessions/:id/open-file - 在文件管理器中打开所在文件夹并定位本会话变更文件
+   */
+  router.post('/:id/open-file', async (req: Request, res: Response): Promise<void> => {
+    const sessionId = String(req.params.id || SESSION_ID);
+    if (rejectUnsafeSessionId(res, sessionId)) return;
+    const relPath = typeof req.body?.path === 'string' ? req.body.path : '';
+    const result = await openWorkspaceChangedFile({
+      sessionsDir: SESSIONS_DIR,
+      sessionId,
+      relPath,
+    });
+    res.status(result.status).json({
+      ok: result.ok,
+      error: result.error,
+    });
   });
 
   /**

@@ -68,7 +68,7 @@ async function loadPanel(
     const prefs: Record<string, unknown> = {
       showTransparencyPanel: showPanel,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
     };
     const prefListeners: Array<() => void> = [];
     (window as any).EtlPrefs = {
@@ -700,7 +700,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const prefs = {
         showTransparencyPanel: false,
         panelDefaultExpanded: true,
-        panelWidth: 360,
+        panelWidth: 320,
       };
       (window as any).__setCapability = (value: boolean) => { enabled = value; };
       (window as any).__setShowPanel = (value: boolean) => { prefs.showTransparencyPanel = value; };
@@ -1298,7 +1298,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       const prefs: Record<string, unknown> = {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
       };
       (window as any).__prefs = prefs;
       (window as any).ChatExecutionPlanBridge = { isEnabled: () => true };
@@ -1377,8 +1377,321 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-    expect(result.attrs).toEqual(['msg-a', 'msg-b']);
-    expect(result.restored).toEqual(['msg-a', 'msg-b']);
+    expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
+    expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
+    await page.close();
+  });
+
+  it('状态快照时间轴节点视为已有检查点，不因 ChatUI 集合滞后而禁用', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const entries = [
+        { messageId: 'msg-a', preview: 'first', isCursor: false },
+        { messageId: 'msg-b', preview: 'second', isCursor: true },
+      ];
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      const merged: string[][] = [];
+      (window as any).ChatUI = {
+        hasCheckpointForMessage: () => false,
+        mergeCheckpointMessageIds: (ids: string[]) => { merged.push(ids.slice()); },
+      };
+      let allow = true;
+      panel.registerSnapshotHandlers({
+        onRestore: () => {},
+        canRestore: () => allow,
+      });
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return { ok: true, json: async () => ({ entries }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const readState = () => Array.from(
+        document.querySelectorAll('.etl-snapshot-restore-btn'),
+      ).map((b) => ({
+        id: b.getAttribute('data-message-id'),
+        disabled: (b as HTMLButtonElement).disabled,
+        ready: b.classList.contains('etl-snapshot-restore-btn--ready'),
+      }));
+      const ready = readState();
+      const known = {
+        a: panel.hasSnapshotCheckpoint('msg-a'),
+        b: panel.hasSnapshotCheckpoint('msg-b'),
+        other: panel.hasSnapshotCheckpoint('msg-x'),
+      };
+      allow = false;
+      panel.notifySnapshotRestoreAvailability();
+      const blocked = readState();
+      return { ready, blocked, known, merged };
+    }, makePlan());
+
+    expect(result.ready).toEqual([
+      { id: 'msg-a', disabled: false, ready: true },
+      { id: 'msg-b', disabled: false, ready: true },
+    ]);
+    expect(result.blocked.every((b) => b.disabled)).toBe(true);
+    expect(result.known).toEqual({ a: true, b: true, other: false });
+    expect(result.merged[0]).toEqual(['msg-a', 'msg-b']);
+    await page.close();
+  });
+
+  it('状态快照文件列表只读 checkpoint，不另存一份', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [
+                { path: 'src/foo/bar.ts', op: '新建', ts: 2 },
+                { path: 'notes/todo.md', op: '修改', ts: 1 },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call',
+        toolCallId: 'w1',
+        toolName: 'write_file',
+        toolArgs: { path: 'src/secret-local.ts' },
+        iteration: 1,
+      });
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const splitReady = !!(
+        document.querySelector('.etl-snapshot-section--checkpoints')
+        && document.querySelector('.etl-snapshot-section--files')
+      );
+      const names1 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      const ops1 = Array.from(document.querySelectorAll('.etl-snapshot-file-badge'))
+        .map((el) => el.textContent);
+      const snap = panel.getFlowSnapshot();
+      panel.resetToolActivity();
+      const names2 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      panel.clear({ resetSessionFiles: false });
+      const namesKeep = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      panel.restoreFlowSnapshot({
+        roundRecords: [],
+        toolRecords: [],
+      }, { overlayOnly: true });
+      const namesOverlay = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      panel.clear();
+      const names3 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+      return {
+        splitReady,
+        names1,
+        ops1,
+        names2,
+        namesKeep,
+        namesOverlay,
+        names3,
+        persistedFiles: snap && snap.sessionChangedFiles,
+      };
+    }, makePlan());
+
+    expect(result.splitReady).toBe(true);
+    expect(result.names1).toEqual(['bar.ts', 'todo.md']);
+    expect(result.ops1).toEqual(['新建', '修改']);
+    expect(result.persistedFiles).toBeUndefined();
+    expect(result.names2).toEqual(['bar.ts', 'todo.md']);
+    expect(result.namesKeep).toEqual(['bar.ts', 'todo.md']);
+    expect(result.namesOverlay).toEqual(['bar.ts', 'todo.md']);
+    expect(result.names3).toEqual([]);
+    await page.close();
+  });
+
+  it('点击变更文件名会请求在文件夹中定位', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const calls: { url: string; init?: RequestInit }[] = [];
+      window.fetch = async (url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [{ path: 'src/foo/bar.ts', op: '新建', ts: 2 }],
+            }),
+          } as Response;
+        }
+        if (String(url).includes('/open-file')) {
+          return { ok: true, json: async () => ({ ok: true }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-open' };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const btn = document.querySelector('.etl-snapshot-file-name') as HTMLButtonElement;
+      btn.click();
+      await new Promise((r) => setTimeout(r, 20));
+      const openCall = calls.find((c) => c.url.includes('/open-file'));
+      return {
+        tag: btn && btn.tagName,
+        label: btn && btn.getAttribute('aria-label'),
+        openUrl: openCall && openCall.url,
+        method: openCall && openCall.init && openCall.init.method,
+        body: openCall && openCall.init && String(openCall.init.body),
+      };
+    }, makePlan());
+
+    expect(result.tag).toBe('BUTTON');
+    expect(result.label).toBe('在文件夹中定位 src/foo/bar.ts');
+    expect(result.openUrl).toBe('/api/sessions/sess-open/open-file');
+    expect(result.method).toBe('POST');
+    expect(result.body).toBe(JSON.stringify({ path: 'src/foo/bar.ts' }));
+    await page.close();
+  });
+
+  it('未打开状态快照 Tab 也会把检查点同步给气泡', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const merged: string[][] = [];
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: (ids: string[]) => { merged.push(ids.slice()); },
+      };
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [
+                { messageId: 'flow-a', preview: 'one' },
+                { messageId: 'flow-b', preview: 'two' },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      const activeTab = document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+      return {
+        activeTab,
+        merged,
+        known: panel.hasSnapshotCheckpoint('flow-a'),
+      };
+    }, makePlan());
+
+    expect(result.activeTab).not.toBe('snapshot');
+    expect(result.merged[0]).toEqual(['flow-a', 'flow-b']);
+    expect(result.known).toBe(true);
+    await page.close();
+  });
+
+  it('未回滚时当前位置仍显示回滚按钮', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              cursorMessageId: 'msg-now',
+              cursorRestored: false,
+              entries: [
+                { messageId: 'msg-old', preview: 'earlier', isCursor: false, isRestoredCursor: false },
+                { messageId: 'msg-now', preview: 'current', isCursor: true, isRestoredCursor: false },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
+        .map((b) => b.getAttribute('data-message-id'));
+      const cursorCard = document.querySelector('.etl-snapshot-node.is-cursor .etl-snapshot-card');
+      return {
+        buttons,
+        cursorHidden: !!(cursorCard && cursorCard.classList.contains('etl-snapshot-card--no-restore')),
+        isCursor: panel.isSnapshotCursorMessage('msg-now'),
+        hidden: panel.isSnapshotRestoreHidden('msg-now'),
+      };
+    }, makePlan());
+
+    expect(result.buttons).toEqual(['msg-old', 'msg-now']);
+    expect(result.cursorHidden).toBe(false);
+    expect(result.isCursor).toBe(true);
+    expect(result.hidden).toBe(false);
+    await page.close();
+  });
+
+  it('回滚到当前节点后隐藏回滚按钮', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-1' };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              cursorMessageId: 'msg-now',
+              cursorRestored: true,
+              entries: [
+                { messageId: 'msg-old', preview: 'earlier', isCursor: false, isRestoredCursor: false },
+                { messageId: 'msg-now', preview: 'current', isCursor: true, isRestoredCursor: true },
+              ],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 50));
+      const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
+        .map((b) => b.getAttribute('data-message-id'));
+      const cursorCard = document.querySelector('.etl-snapshot-node.is-cursor .etl-snapshot-card');
+      return {
+        buttons,
+        cursorHidden: !!(cursorCard && cursorCard.classList.contains('etl-snapshot-card--no-restore')),
+        isCursor: panel.isSnapshotCursorMessage('msg-now'),
+        notCursor: panel.isSnapshotCursorMessage('msg-old'),
+        hidden: panel.isSnapshotRestoreHidden('msg-now'),
+      };
+    }, makePlan());
+
+    expect(result.buttons).toEqual(['msg-old']);
+    expect(result.cursorHidden).toBe(true);
+    expect(result.isCursor).toBe(true);
+    expect(result.notCursor).toBe(false);
+    expect(result.hidden).toBe(true);
     await page.close();
   });
 
