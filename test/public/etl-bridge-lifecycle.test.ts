@@ -58,7 +58,7 @@ async function loadLifecycle(): Promise<Page> {
     const prefs = {
       showTransparencyPanel: true,
       panelDefaultExpanded: true,
-      panelWidth: 360,
+      panelWidth: 320,
     };
     (window as any).EtlPrefs = {
       getKey: (key: keyof typeof prefs) => prefs[key],
@@ -252,7 +252,7 @@ describe('ETL bridge 生命周期', () => {
       const prefs = {
         showTransparencyPanel: true,
         panelDefaultExpanded: true,
-        panelWidth: 360,
+        panelWidth: 320,
       };
       (window as any).EtlPrefs = {
         getKey: (key: keyof typeof prefs) => prefs[key],
@@ -360,6 +360,35 @@ describe('ETL bridge 生命周期', () => {
     expect(result.afterClear.planId).toBeNull();
     expect(result.afterClear.goal).toBeNull();
     expect(result.planIdAfterRest).toBeNull();
+    await page.close();
+  });
+
+  it('notifyNewTurnStarted 清空计划但不丢 checkpoint 下发的会话文件', async () => {
+    const page = await loadLifecycle();
+    const names = await page.evaluate(async (plan) => {
+      const bridge = (window as any).ChatExecutionPlanBridge;
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [{ path: 'src/kept.ts', op: '新建', ts: 1 }],
+            }),
+          };
+        }
+        return { ok: true, json: async () => ({ plan }) };
+      };
+      bridge.handleStep({ type: 'task_graph_init', plan });
+      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      await new Promise((r) => setTimeout(r, 40));
+      bridge.notifyNewTurnStarted();
+      return Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
+        .map((el) => el.textContent);
+    }, makePlan());
+
+    expect(names).toEqual(['kept.ts']);
     await page.close();
   });
 });

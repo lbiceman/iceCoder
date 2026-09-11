@@ -18,7 +18,10 @@ import {
 import { Harness } from '../../harness/harness.js';
 import type { HarnessConfig } from '../../harness/types.js';
 import { loadMemoryPrompt } from '../../memory/file-memory/index.js';
-import { harnessOverlayToContextFields } from '../../prompts/prompt-assembler.js';
+import {
+  alignPromptWithAvailableTools,
+  harnessOverlayToContextFields,
+} from '../../prompts/prompt-assembler.js';
 import { loadAssembledChatPrompt, shouldDisableRuntimeTools } from '../../prompts/load-chat-prompt.js';
 import { DEFAULT_SYSTEM_PROMPT, getDefaultWorkDir } from '../paths.js';
 import {
@@ -88,6 +91,7 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       mcpManager: ctx.mcpManager,
     });
     toolDefs = shouldDisableRuntimeTools() ? [] : wsCtx.toolDefs;
+    const promptToolNames = toolDefs.map((tool) => tool.name);
     // Lazy Tool Offering（CLI）：按信号裁剪文档工具；CLI 暂无上传/引用/多模态
     const offeringResult = selectToolsForOffering(toolDefs, {
       userMessage: task,
@@ -98,6 +102,10 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
       hasInlineVisionImages: false,
     });
     toolDefs = offeringResult.tools;
+    const effectiveAssembled = alignPromptWithAvailableTools(
+      assembled,
+      promptToolNames,
+    );
     if (lazyToolOfferingLogEnabled() && offeringResult.reasons.length > 0) {
       console.log(`[lazy-tools] run reasons=${offeringResult.reasons.join(',')}`);
     }
@@ -115,12 +123,16 @@ export async function runRun(ctx: BootstrapResult, args: ParsedArgs): Promise<vo
 
     const harnessConfig: HarnessConfig = {
       context: {
-        systemPrompt: assembled.systemPrompt,
+        systemPrompt: effectiveAssembled.systemPrompt,
         tools: toolDefs,
-        memoryPrompt: await loadMemoryPrompt({ memoryDir: memoryFilesDir }) ?? undefined,
-        ...harnessOverlayToContextFields(assembled),
+        memoryPrompt: await loadMemoryPrompt(
+          { memoryDir: memoryFilesDir },
+          { readOnly: shouldDisableRuntimeTools() },
+        ) ?? undefined,
+        ...harnessOverlayToContextFields(effectiveAssembled),
         ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
       },
+      enableRequestAnalysis: !shouldDisableRuntimeTools(),
       loop: {
         maxRounds,
         timeout: getHarnessTimeoutMsFromEnv(),

@@ -21,14 +21,14 @@ export function truncateOldSubAgentResult(content: string): string {
   const markerIndex = content.indexOf(marker);
   if (markerIndex < 0) {
     return content.length > OLD_SUBAGENT_SUMMARY_CHARS
-      ? `${content.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[旧子代理结果已裁剪，原始长度 ${content.length} 字符]`
+      ? `${content.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[older sub-agent result trimmed; original length: ${content.length} characters]`
       : content;
   }
 
   const header = content.slice(0, markerIndex + marker.length);
   const summary = content.slice(markerIndex + marker.length);
   if (summary.length <= OLD_SUBAGENT_SUMMARY_CHARS) return content;
-  return `${header}${summary.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[旧子代理摘要已裁剪，原始长度 ${summary.length} 字符]`;
+  return `${header}${summary.slice(0, OLD_SUBAGENT_SUMMARY_CHARS)}\n...[older sub-agent summary trimmed; original length: ${summary.length} characters]`;
 }
 
 /** 是否已完成 tool budget 封存（显式字段优先，旧落盘回退正文 marker） */

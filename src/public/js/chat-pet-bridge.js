@@ -422,7 +422,17 @@ window.ChatPetBridge = (function () {
       case 'final':
         {
           var sr = step.stopReason;
-          if (sr === 'error') {
+          var cs = step.completionStatus;
+          if (cs === 'failed') {
+            sessionPet.setState('error');
+            bubble(step.content || '任务未能完成');
+          } else if (cs === 'paused') {
+            sessionPet.setState('idle');
+            bubble(step.content || '任务已暂停');
+          } else if (cs === 'completed_unverified') {
+            sessionPet.setState('clap');
+            bubble('已完成，未做独立验证');
+          } else if (sr === 'error') {
             sessionPet.setState('error');
             bubble(step.content || '出错了');
           } else if (sr === 'circuit_breaker') {
@@ -431,7 +441,7 @@ window.ChatPetBridge = (function () {
           } else if (sr === 'user_abort') {
             recoverThinkingOrIdle();
             sessionPet.setBubbleText('');
-          } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds' || sr === 'verification_exhausted') {
+          } else if (sr === 'token_budget' || sr === 'max_output_tokens' || sr === 'timeout' || sr === 'max_rounds' || sr === 'completion_paused' || sr === 'completion_failed') {
             sessionPet.setState('error');
             if (step.content) bubble(step.content);
           } else if (sr === 'task_recovery') {

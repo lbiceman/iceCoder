@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { HarnessRunState } from '../../src/harness/harness-run-state.js';
-import { markForcedDegraded } from '../../src/harness/supervisor/execution-mode-constraints.js';
+import {
+  clearResolvedRecoveryPending,
+  markForcedDegraded,
+} from '../../src/harness/supervisor/execution-mode-constraints.js';
 
 function state(overrides: Partial<HarnessRunState> = {}): HarnessRunState {
   return {
@@ -47,5 +50,13 @@ describe('Execution mode forced degraded - Batch 5', () => {
 
     expect(s.executionMode).toBe('free');
     expect(s.forcedDegradedTier).toBeUndefined();
+  });
+
+  it('clears sticky recovery after meaningful progress resolves the recovery', () => {
+    const s = state({ executionMode: 'forced', recoveryPendingSticky: true });
+
+    expect(clearResolvedRecoveryPending(s)).toBe(true);
+    expect(s.recoveryPendingSticky).toBe(false);
+    expect(clearResolvedRecoveryPending(s)).toBe(false);
   });
 });

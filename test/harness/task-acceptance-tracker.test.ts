@@ -40,6 +40,18 @@ describe('task-acceptance-tracker', () => {
     expect(tracker.isComplete()).toBe(true);
   });
 
+  it('activates for one explicitly required command in any toolchain', () => {
+    const tracker = new TaskAcceptanceTracker(
+      '完成条件：必须通过 `cargo test --workspace` 后才能结束。',
+    );
+    expect(tracker.isActive()).toBe(true);
+    expect(tracker.getPendingCommands().map(item => item.label)).toEqual([
+      'cargo test --workspace',
+    ]);
+    tracker.recordRunCommand('cargo test --workspace', true);
+    expect(tracker.isComplete()).toBe(true);
+  });
+
   it('requires all commands to pass before isComplete', () => {
     const tracker = new TaskAcceptanceTracker(BENCHMARK_GOAL);
     tracker.recordRunCommand('npm test 2>&1', true);
@@ -79,6 +91,26 @@ describe('task-acceptance-tracker', () => {
     expect(normalizeAcceptanceCommandKey('cd "C:\\Program Files\\app" && npm ci')).toBe('npm ci');
     // 单独 `cd somewhere` 不应被剥成空串
     expect(normalizeAcceptanceCommandKey('cd /tmp')).toBe('cd /tmp');
+  });
+
+  it('normalizes an executable path and platform suffix by identity', () => {
+    expect(normalizeAcceptanceCommandKey('C:\\tools\\make.exe verify')).toBe('make verify');
+    expect(normalizeAcceptanceCommandKey('"/opt/tools/make" verify')).toBe('make verify');
+  });
+
+  it('exports tracked progress as evidence-backed completion conditions', () => {
+    const tracker = new TaskAcceptanceTracker(
+      '完成条件：必须运行 `make verify` 后才能结束。',
+    );
+    tracker.recordRunCommand('C:\\tools\\make.exe verify', true, 'tool-1');
+
+    expect(tracker.toCompletionConditions()).toEqual([
+      expect.objectContaining({
+        required: true,
+        status: 'satisfied',
+        evidenceRefs: ['tool-1'],
+      }),
+    ]);
   });
 
   it('normalizeAcceptanceCommandKey normalizes playwright/cypress e2e to `npm run test:e2e`', () => {
@@ -302,8 +334,6 @@ describe('task-acceptance-tracker', () => {
         filesRead: [],
         filesChanged: ['a.ts'],
         commandsRun: ['npm test 2>&1'],
-        verificationRequired: true,
-        verificationStatus: 'passed',
       },
       tracker,
     )).toBe(true);

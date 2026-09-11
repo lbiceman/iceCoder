@@ -26,9 +26,11 @@ import { addSessionReferenceReads } from '../harness/session-workspace-store.js'
 import { loadMemoryPrompt } from '../memory/file-memory/index.js';
 import { resolveFileReferences } from './routes/upload.js';
 import { shouldDisableRuntimeTools } from '../prompts/load-chat-prompt.js';
-import { assembleShellCollabPrompt } from '../prompts/shell-collab-prompt.js';
-import { assemblePlanModePrompt } from '../prompts/plan-mode-prompt.js';
-import { harnessOverlayToContextFields } from '../prompts/prompt-assembler.js';
+import { applyRuntimeModePrompt } from '../prompts/runtime-mode-prompt.js';
+import {
+  alignPromptWithAvailableTools,
+  harnessOverlayToContextFields,
+} from '../prompts/prompt-assembler.js';
 import {
   getHarnessMaxRoundsFromEnv,
   getHarnessTimeoutMsFromEnv,
@@ -419,7 +421,8 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     && typeof harnessUserMessage === 'string'
     && looksLikeFileAnalysisIntent(message)
   ) {
-    harnessUserMessage += `\n\n（服务端提示：最近一次列出的文件夹为 \`${fbs.lastBrowsedPath}\`。用户若只给出文件名，请与该路径拼接为完整绝对路径后调用 parse_document / parse_pptx_deep / open_file。）`;
+    // 中文说明：提示模型把用户给出的相对文件名解析到最近浏览目录。
+    harnessUserMessage += `\n\nServer context: the most recently listed directory is \`${fbs.lastBrowsedPath}\`. If the user gives only a file name, resolve it against that directory before calling parse_document, parse_pptx_deep, or open_file.`;
   }
 
   const abortController = new AbortController();
@@ -443,6 +446,10 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     mcpManager,
   });
   toolDefs = sessionToolCtx.toolDefs;
+  const runtimeToolsDisabled = shouldDisableRuntimeTools();
+  const promptToolNames = runtimeToolsDisabled
+    ? []
+    : toolDefs.map((tool) => tool.name);
   const effectiveWorkspace = sessionToolCtx.effectiveWorkspaceRoot;
   const runToolExecutor = sessionToolCtx.toolExecutor;
 
@@ -460,13 +467,17 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     console.log(`[lazy-tools] session=${runSessionId.slice(0, 8)} reasons=${offeringResult.reasons.join(',')}`);
   }
 
-  const effectiveAssembled = sessionToolCtx.shellCollabActive
-    ? assembleShellCollabPrompt(assembled)
-    : sessionToolCtx.planModeActive
-      ? assemblePlanModePrompt(assembled)
-      : assembled;
+  const toolAlignedAssembled = alignPromptWithAvailableTools(
+    assembled,
+    promptToolNames,
+  );
+  const effectiveAssembled = applyRuntimeModePrompt(toolAlignedAssembled, {
+    toolsDisabled: runtimeToolsDisabled,
+    shellCollabActive: sessionToolCtx.shellCollabActive,
+    planModeActive: sessionToolCtx.planModeActive,
+  });
   const mcpRuntimeContext = sessionToolCtx.mcpRuntimeContext;
-  const docToolsContext = sessionToolCtx.shellCollabActive || shouldDisableRuntimeTools()
+  const docToolsContext = sessionToolCtx.shellCollabActive || runtimeToolsDisabled
     ? {}
     : buildAvailableDocToolsContext(
         [...offeringResult.activated].filter((n) => DEFERRED_TOOLS.has(n)),
@@ -488,10 +499,13 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
   const harnessConfig: HarnessConfig = {
     context: {
       systemPrompt: effectiveAssembled.systemPrompt,
-      tools: shouldDisableRuntimeTools() ? [] : toolDefs,
-      memoryPrompt: sessionToolCtx.shellCollabActive
+      tools: runtimeToolsDisabled ? [] : toolDefs,
+      memoryPrompt: sessionToolCtx.shellCollabActive && !runtimeToolsDisabled
         ? undefined
-        : await loadMemoryPrompt({ memoryDir: MEMORY_DIR }) ?? undefined,
+        : await loadMemoryPrompt(
+            { memoryDir: MEMORY_DIR },
+            { readOnly: runtimeToolsDisabled },
+          ) ?? undefined,
       ...harnessDynamic,
       ...(Object.keys(mergedSystemContext).length > 0 ? { systemContext: mergedSystemContext } : {}),
     },
@@ -519,9 +533,11 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
     verificationExemptDirs,
     supervisorConfig: supervisorRuntime.supervisorConfig,
     globalPolicy: supervisorRuntime.globalPolicy,
-    enableRequestAnalysis: sessionToolCtx.enableRequestAnalysis,
-    shellCollabActive: sessionToolCtx.shellCollabActive,
-    planModeActive: sessionToolCtx.planModeActive,
+    enableRequestAnalysis: runtimeToolsDisabled
+      ? false
+      : sessionToolCtx.enableRequestAnalysis,
+    shellCollabActive: runtimeToolsDisabled ? false : sessionToolCtx.shellCollabActive,
+    planModeActive: runtimeToolsDisabled ? false : sessionToolCtx.planModeActive,
     onShellMandatoryConfirm: createShellMandatoryConfirmHandler(runSessionId),
     onConfirm: createToolConfirmHandler(runSessionId),
   };

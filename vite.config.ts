@@ -27,7 +27,8 @@ export default defineConfig({
         server.middlewares.use((req, _res, next) => {
           const url = req.url?.split('?')[0];
           if (url === '/favicon.ico') {
-            req.url = '/icons/favicon.svg';
+            const icoPath = path.join(publicRoot, 'favicon.ico');
+            req.url = fs.existsSync(icoPath) ? '/favicon.ico' : '/icons/favicon.svg';
           }
           next();
         });
@@ -44,8 +45,8 @@ export default defineConfig({
         if (fs.existsSync(indexPath)) {
           let html = fs.readFileSync(indexPath, 'utf8');
           html = html.replace(
-            /<link rel="icon" href="\/assets\/favicon-[^"]+\.svg" type="image\/svg\+xml">/,
-            '<link rel="icon" href="/icons/favicon.svg" type="image/svg+xml">',
+            /<link rel="icon" href="\/assets\/favicon-[^"]+\.svg[^"]*" type="image\/svg\+xml">/,
+            '<link rel="icon" href="/icons/favicon.svg?v=20260908" type="image/svg+xml">',
           );
           fs.writeFileSync(indexPath, html);
         }

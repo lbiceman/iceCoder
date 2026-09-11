@@ -323,9 +323,8 @@ export class BranchBudgetTracker {
   ): string {
     if (!fileExists) {
       return [
-        `[BranchBudget / Blocked] 工具未执行：${path} 编辑计数 ${currentCount} 次（上限 ${this.limits.fileEditMax}），但磁盘上不存在该文件（多为 patch 失败仍计次）。`,
-        '用 write_file 写入完整文件以创建；可参考同目录已有文件作模板。',
-        '禁止 read_file / patch_file / edit_file 此路径。若见 [System / Rebuild Escalation]，按其中 write_file 步骤执行。',
+        `[BranchBudget / Blocked] Tool not executed: ${path} reached ${currentCount} edit attempts (limit ${this.limits.fileEditMax}), but the file does not exist on disk; failed patches may still have consumed the budget.`,
+        'Create it with write_file using the complete file body; use an existing sibling as a template when helpful.',
         'Do NOT read or patch a missing path — use write_file (full body) or wait for Rebuild write bypass.',
       ].join('\n');
     }
@@ -335,7 +334,7 @@ export class BranchBudgetTracker {
       : 'Rebuild write bypass already used or not granted — do NOT retry write/edit/patch on this path until verification passes or a new [Rebuild Escalation] grants bypass.';
 
     return [
-      `[BranchBudget / Blocked] 工具未执行：${path} 已编辑 ${currentCount} 次（上限 ${this.limits.fileEditMax}）。`,
+      `[BranchBudget / Blocked] Tool not executed: ${path} has been edited ${currentCount} times (limit ${this.limits.fileEditMax}).`,
       bypassHint,
       'Read failing e2e/test output first; fix only what verification requires. Do not bulk-rewrite capped scene files without bypass.',
       'Do not rewrite this file again until you have read the failing test and documented expected vs actual behavior.',
@@ -345,9 +344,9 @@ export class BranchBudgetTracker {
   buildCommandBlockMessage(command: string, failedAttempts: number): string {
     const short = command.length > 120 ? `${command.slice(0, 117)}...` : command;
     return [
-      `[BranchBudget / Blocked] 工具未执行：该命令已失败 ${failedAttempts} 次（拦截阈值 ${this.limits.commandRetryMax}）。`,
-      `命令: ${short}`,
-      '先 read_file 失败输出中引用的源码/测试，分析错误后再改代码；可用 npx tsc --noEmit 收集编译错误。不要原样重跑 build/test。',
+      `[BranchBudget / Blocked] Tool not executed: this command has failed ${failedAttempts} times (limit ${this.limits.commandRetryMax}).`,
+      `Command: ${short}`,
+      'Read the source or tests referenced by the failure, diagnose the error, and then change the code. Use npx tsc --noEmit for compiler evidence when appropriate. Do not rerun the same build or test unchanged.',
       'Do not rerun the same command until you have new evidence from source or compiler output.',
     ].join('\n');
   }

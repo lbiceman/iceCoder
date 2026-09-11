@@ -10,6 +10,21 @@ import {
   loadIntentCheckpoint,
   saveIntentCheckpoint,
 } from '../src/harness/intent-checkpoint-store.js';
+import { captureIntentCheckpoint } from '../src/harness/intent-checkpoint-capture.js';
+import {
+  resetHarnessRuntimeRegistry,
+} from '../src/harness/harness-runtime-registry.js';
+import { RuntimeRestoreCoordinator } from '../src/harness/runtime-restore-coordinator.js';
+import {
+  isSessionContextWriteStale,
+  resetSessionContextWriteEpoch,
+  sessionContextWriteEpoch,
+} from '../src/harness/session-context-write-gate.js';
+import {
+  parsePersistedRuntime,
+  serializePersistedRuntime,
+  sessionNotesPath,
+} from '../src/memory/file-memory/session-memory.js';
 import type { UnifiedMessage } from '../src/llm/types.js';
 import {
   appendQueuedAlsoNotesToMessages,
@@ -27,7 +42,7 @@ import type {
 
 export interface SessionFlowEvalCaseResult {
   id: string;
-  category: 'delete' | 'also' | 'next' | 'isolation';
+  category: 'delete' | 'restore' | 'also' | 'next' | 'isolation';
   passed: boolean;
   durationMs: number;
   failures: string[];
@@ -128,6 +143,36 @@ async function writeConversationFixture(caseDir: string, sessionId: string): Pro
   return { uiMessages, structuredMessages };
 }
 
+function runtimeNotes(title: string, filesChanged: string[]): string {
+  return [
+    '# Session Title',
+    title,
+    '',
+    '# Runtime Evidence (auto)',
+    '_auto_',
+    '',
+    '```icecoder-runtime',
+    serializePersistedRuntime(
+      {
+        goal: title,
+        intent: 'edit',
+        phase: 'editing',
+        filesRead: [],
+        filesChanged,
+        commandsRun: [],
+      },
+      {
+        filesRead: [],
+        filesChanged,
+        commandsRun: [],
+        testCommands: [],
+        recentDiagnostics: [],
+      },
+    ),
+    '```',
+  ].join('\n');
+}
+
 const cases: EvalCase[] = [
   {
     id: 'delete-single-middle-message',
@@ -187,6 +232,83 @@ const cases: EvalCase[] = [
         (await fs.readFile(structuredFile, 'utf-8')) === beforeStructured,
         'structured file changed after missing delete',
       );
+    },
+  },
+  {
+    id: 'delete-scrubs-session-notes-runtime',
+    category: 'delete',
+    async run(caseDir) {
+      resetSessionContextWriteEpoch('delete-notes');
+      const sessionId = 'delete-notes';
+      const notesFile = sessionNotesPath(caseDir, sessionId);
+      await fs.mkdir(caseDir, { recursive: true });
+      await fs.writeFile(
+        path.join(caseDir, `${sessionId}.json`),
+        JSON.stringify([
+          { role: 'user', id: 'u1', content: '先建空文件' },
+          { role: 'tool_trace', toolName: 'write_file', detail: 'empty.txt', status: 'success' },
+          { role: 'user', id: 'u2', content: '再建 1.txt' },
+          { role: 'tool_trace', toolName: 'write_file', detail: '1.txt', status: 'success' },
+        ]),
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(caseDir, `${sessionId}.structured.json`),
+        JSON.stringify([
+          { role: 'user', content: '先建空文件' },
+          { role: 'user', content: '再建 1.txt' },
+        ]),
+        'utf-8',
+      );
+      await fs.writeFile(notesFile, runtimeNotes('再建 1.txt', ['empty.txt', '1.txt']), 'utf-8');
+
+      const epochBefore = sessionContextWriteEpoch(sessionId);
+      await deleteUserMessageConversation({ sessionDir: caseDir, sessionId, messageId: 'u2' });
+
+      const notes = parsePersistedRuntime(await fs.readFile(notesFile, 'utf-8'));
+      assertJsonEqual(notes?.task.filesChanged, ['empty.txt'], 'deleted-turn path should leave session-notes');
+      assert(!notes?.task.filesChanged.includes('1.txt'), '1.txt should be scrubbed from session-notes');
+      assert(isSessionContextWriteStale(sessionId, epochBefore), 'delete should invalidate in-flight notes writes');
+    },
+  },
+  {
+    id: 'restore-rejects-stale-session-notes-write',
+    category: 'restore',
+    async run(caseDir) {
+      resetHarnessRuntimeRegistry();
+      resetSessionContextWriteEpoch('restore-notes');
+      const sessionId = 'restore-notes';
+      const messageId = 'user-msg-1';
+      const notesFile = sessionNotesPath(caseDir, sessionId);
+      await fs.mkdir(caseDir, { recursive: true });
+      await fs.writeFile(notesFile, runtimeNotes('先做一件事', ['empty.txt']), 'utf-8');
+      await captureIntentCheckpoint({
+        sessionDir: caseDir,
+        sessionId,
+        messageId,
+        userMessageTime: 1000,
+        workspaceRoot: caseDir,
+        workspaceState: { referenceReads: [], changeCount: 0 },
+        structuredMessages: [{ role: 'user', content: '先做一件事' }],
+        uiMessages: [{ role: 'user', content: '先做一件事', id: messageId, sentAt: 1000 }],
+      });
+      await fs.writeFile(notesFile, runtimeNotes('再建 1.txt', ['empty.txt', '1.txt']), 'utf-8');
+
+      const staleEpoch = sessionContextWriteEpoch(sessionId);
+      await new RuntimeRestoreCoordinator().restore({
+        sessionDir: caseDir,
+        sessionId,
+        messageId,
+        defaultWorkDir: caseDir,
+      });
+
+      assert(isSessionContextWriteStale(sessionId, staleEpoch), 'restore should invalidate in-flight notes writes');
+      if (!isSessionContextWriteStale(sessionId, staleEpoch)) {
+        await fs.writeFile(notesFile, runtimeNotes('再建 1.txt', ['empty.txt', '1.txt']), 'utf-8');
+      }
+      const notes = parsePersistedRuntime(await fs.readFile(notesFile, 'utf-8'));
+      assertJsonEqual(notes?.task.filesChanged, ['empty.txt'], 'stale notes write overwrote restored checkpoint');
+      assert(!notes?.task.filesChanged.includes('1.txt'), 'rolled-back file returned via stale notes write');
     },
   },
   {
@@ -252,6 +374,42 @@ const cases: EvalCase[] = [
     },
   },
   {
+    id: 'task-queue-four-item-drain-keeps-tail',
+    category: 'next',
+    async run(caseDir) {
+      const manager = new TaskQueueManager(caseDir);
+      await manager.enqueue('s1', { text: 'q1', source: 'implicit', messageId: 'm1' });
+      await manager.enqueue('s1', { text: 'q2', source: 'implicit', messageId: 'm2' });
+      await manager.enqueue('s1', { text: 'q3', source: 'implicit', messageId: 'm3' });
+      await manager.enqueue('s1', { text: 'q4', source: 'implicit', messageId: 'm4' });
+
+      assert((await manager.dequeue('s1'))?.messageId === 'm1', 'first should dequeue');
+      assert((await manager.dequeue('s1'))?.messageId === 'm2', 'second should dequeue');
+      assert((await manager.dequeue('s1'))?.messageId === 'm3', 'third should dequeue');
+      const leftover = await manager.list('s1');
+      assert(
+        leftover.length === 1 && leftover[0].messageId === 'm4',
+        'last item must remain after 3/4 drain',
+      );
+
+      const restored = new TaskQueueManager(caseDir);
+      assert(
+        (await restored.list('s1'))[0]?.messageId === 'm4',
+        'last item must persist after 3/4 drain',
+      );
+
+      await Promise.all([
+        manager.enqueue('s1', { text: 'late-a', source: 'implicit', messageId: 'la' }),
+        manager.enqueue('s1', { text: 'late-b', source: 'implicit', messageId: 'lb' }),
+        manager.enqueue('s1', { text: 'late-c', source: 'implicit', messageId: 'lc' }),
+      ]);
+      const afterLate = await manager.list('s1');
+      assert(afterLate.length === 4, `late concurrent enqueue lost items: ${afterLate.length}`);
+      const ids = new Set(afterLate.map(task => task.messageId));
+      assert(ids.has('m4') && ids.has('la') && ids.has('lb') && ids.has('lc'), 'late items missing');
+    },
+  },
+  {
     id: 'task-queue-session-isolation',
     category: 'isolation',
     async run(caseDir) {
@@ -300,6 +458,8 @@ export async function runSessionFlowEval(
       });
     } finally {
       resetPendingNotesForTests();
+      resetSessionContextWriteEpoch();
+      resetHarnessRuntimeRegistry();
     }
   }
   const passedCount = results.filter(result => result.passed).length;

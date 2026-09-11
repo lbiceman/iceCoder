@@ -128,17 +128,35 @@ Memory entries are point-in-time snapshots — files may be renamed, deleted, or
 `;
 }
 
+export interface LoadMemoryPromptOptions {
+  /** 无工具/评测模式：仅提供记忆内容，不提示模型维护记忆文件。 */
+  readOnly?: boolean;
+}
+
+/**
+ * 构建无工具模式下的只读记忆说明。
+ */
+export function buildReadOnlyMemoryInstructions(): string {
+  // 中文说明：当前请求没有文件工具，记忆内容只能作为只读背景，不能尝试维护记忆文件。
+  return `# Persistent Memory
+
+The memory index below is read-only background context for this request. Do not attempt to read, write, update, or delete memory files. Follow the current user request and use only the memory content already provided here.`;
+}
+
 /**
  * 加载完整的记忆提示词（指令 + MEMORY.md 内容）。
  */
 export async function loadMemoryPrompt(
   config: Partial<FileMemoryConfig> = {},
+  options: LoadMemoryPromptOptions = {},
 ): Promise<string | null> {
   const cfg = { ...DEFAULT_FILE_MEMORY_CONFIG, ...config };
 
   await ensureMemoryDirExists(cfg.memoryDir);
 
-  const instructions = buildMemoryInstructions(cfg.memoryDir);
+  const instructions = options.readOnly
+    ? buildReadOnlyMemoryInstructions()
+    : buildMemoryInstructions(cfg.memoryDir);
   const entrypointPath = path.join(cfg.memoryDir, cfg.entrypointName);
 
   let entrypointContent = '';

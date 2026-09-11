@@ -6,7 +6,8 @@ export type AgentEvalCategory =
   | 'memory-conflict'
   | 'tool-failure'
   | 'async-subagent'
-  | 'eval-mode';
+  | 'eval-mode'
+  | 'completion-gate';
 
 export interface AgentEvalFileAssertion {
   path: string;
@@ -27,12 +28,28 @@ export interface AgentEvalCase {
     requiresVerification?: boolean;
     allowFileChanges?: boolean;
     requiresAnalysisArtifact?: boolean;
+    /** 软验证场景：不允许 Harness 强推 shell 验证。 */
+    forbidVerification?: boolean;
+    /** 通用收尾协议的结构化终态。 */
+    completionStatus?: 'completed' | 'completed_unverified' | 'paused' | 'failed' | 'interrupted';
+    /** 最终用户可见文本应包含。 */
+    finalContains?: string;
+    /** 结束后断言活动 checkpoint 为 ProjectCheckpointV3。 */
+    checkpoint?: {
+      version: 3;
+      forbidLegacyFields?: boolean;
+      hasCompletion?: boolean;
+      migratedFromLegacy?: boolean;
+    };
   };
   assertions: AgentEvalFileAssertion[];
   maxRounds?: number;
+  timeoutMs?: number;
   compactionThreshold?: number;
   compactionTokenThreshold?: number;
   toolsDisabled?: boolean;
+  /** 运行前写入旧 v1 checkpoint，验证首次保存升级为 V3。 */
+  seedLegacyCheckpoint?: boolean;
 }
 
 const basePackageJson = {
@@ -82,7 +99,7 @@ export const agentEvalCases: AgentEvalCase[] = [
     verifyCommands: ['npm test'],
     expected: { requiresTool: true, requiresVerification: true },
     assertions: [
-      { path: 'src/discount.js', contains: '1 - rate' },
+      { path: 'src/discount.js', notContains: 'return price - rate;' },
     ],
   },
   {
@@ -144,6 +161,7 @@ export const agentEvalCases: AgentEvalCase[] = [
       { path: 'src/status.js', contains: "return 'ready'" },
     ],
     maxRounds: 8,
+    timeoutMs: 240_000,
     compactionThreshold: 2,
     compactionTokenThreshold: 1200,
   },
@@ -241,5 +259,106 @@ export const agentEvalCases: AgentEvalCase[] = [
     ],
     toolsDisabled: true,
     maxRounds: 2,
+  },
+  {
+    id: 'gate-simple-python-edit',
+    category: 'completion-gate',
+    prompt: [
+      "Make the one-line low-risk change in src/banner.py: replace `return 'draft'` with `return 'ready'` and preserve the quote style.",
+      'After the edit succeeds, do not read the file again or call any other tool; immediately return the final answer.',
+      'Do not run shell commands or tests.',
+    ].join(' '),
+    files: {
+      'src/banner.py': "def banner():\n    return 'draft'\n",
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      forbidVerification: true,
+      completionStatus: 'completed',
+      checkpoint: { version: 3, forbidLegacyFields: true, hasCompletion: true },
+    },
+    assertions: [
+      { path: 'src/banner.py', contains: 'def banner()' },
+      { path: 'src/banner.py', notContains: "return 'draft'" },
+    ],
+    maxRounds: 6,
+  },
+  {
+    id: 'gate-explicit-single-check',
+    category: 'completion-gate',
+    prompt: [
+      'Update src/config.js so exported mode is "production".',
+      'Completion condition: you must run `node --check src/config.js` and it must succeed before finishing.',
+    ].join(' '),
+    files: {
+      'src/config.js': "module.exports = { mode: 'development' };\n",
+    },
+    verifyCommands: ['node --check src/config.js'],
+    expected: {
+      requiresTool: true,
+      requiresVerification: true,
+      completionStatus: 'completed',
+      checkpoint: { version: 3, forbidLegacyFields: true, hasCompletion: true },
+    },
+    assertions: [
+      { path: 'src/config.js', contains: "mode: 'production'" },
+      { path: 'src/config.js', notContains: "mode: 'development'" },
+    ],
+    maxRounds: 6,
+  },
+  {
+    id: 'gate-read-only-finish',
+    category: 'completion-gate',
+    prompt: [
+      'Read settings.json and answer with the configured region.',
+      'Do not modify files or run shell commands.',
+    ].join(' '),
+    files: {
+      'settings.json': '{\n  "region": "ap-southeast-1"\n}\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: true,
+      allowFileChanges: false,
+      forbidVerification: true,
+      completionStatus: 'completed',
+      finalContains: 'ap-southeast-1',
+      checkpoint: { version: 3, forbidLegacyFields: true, hasCompletion: true },
+    },
+    assertions: [
+      { path: 'settings.json', unchanged: true },
+    ],
+    maxRounds: 4,
+  },
+  {
+    id: 'gate-required-capability-unavailable',
+    category: 'completion-gate',
+    prompt: [
+      'Tools are unavailable in this case.',
+      'Completion condition: you must run `make verify` successfully before finishing.',
+      'Do not emit tool syntax or claim that the condition passed; report that it cannot be verified.',
+    ].join(' '),
+    files: {
+      'state.txt': 'unchanged\n',
+    },
+    verifyCommands: [],
+    expected: {
+      requiresTool: false,
+      allowFileChanges: false,
+      completionStatus: 'paused',
+      checkpoint: {
+        version: 3,
+        forbidLegacyFields: true,
+        hasCompletion: true,
+        migratedFromLegacy: true,
+      },
+    },
+    assertions: [
+      { path: 'state.txt', unchanged: true },
+    ],
+    toolsDisabled: true,
+    seedLegacyCheckpoint: true,
+    maxRounds: 4,
   },
 ];

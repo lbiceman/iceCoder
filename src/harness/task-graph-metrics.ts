@@ -112,10 +112,33 @@ export function buildGraphMetrics(input: GraphMetricsInput): GraphMetrics {
 // ═══════════════════════════════════════════════
 
 interface CheckpointData {
+  version?: number;
   runtimeV2?: {
-    recentTools?: Array<{ name: string; at: number; success?: boolean; args?: Record<string, unknown> }>;
+    recentTools?: Array<{
+      toolName?: string;
+      name?: string;
+      at: number;
+      success?: boolean;
+      args?: Record<string, unknown>;
+    }>;
     recentFailures?: Array<{ signature: string; lastError?: string; at: number }>;
   };
+  extensions?: {
+    runtimeResilience?: {
+      recentTools?: Array<{
+        toolName?: string;
+        name?: string;
+        at: number;
+        success?: boolean;
+        args?: Record<string, unknown>;
+      }>;
+      recentFailures?: Array<{ signature: string; lastError?: string; at: number }>;
+    };
+  };
+}
+
+function resilienceSection(checkpoint: CheckpointData | null): CheckpointData['runtimeV2'] {
+  return checkpoint?.extensions?.runtimeResilience ?? checkpoint?.runtimeV2;
 }
 
 export class ReplayBuilder {
@@ -139,10 +162,10 @@ export class ReplayBuilder {
   }
 
   static buildToolTrace(graphId: string, checkpoint: CheckpointData | null): ToolReplay[] {
-    const tools = checkpoint?.runtimeV2?.recentTools ?? [];
+    const tools = resilienceSection(checkpoint)?.recentTools ?? [];
     return tools.map((t, i) => ({
       replayId: `${graphId}-tool-${i + 1}`,
-      toolName: t.name,
+      toolName: t.toolName ?? t.name ?? 'unknown',
       argsSignature: JSON.stringify(t.args ?? {}).slice(0, 80),
       success: t.success ?? true,
       duration: 0,
@@ -152,7 +175,7 @@ export class ReplayBuilder {
   }
 
   static buildFailureTrace(graphId: string, checkpoint: CheckpointData | null): FailureReplay[] {
-    const failures = checkpoint?.runtimeV2?.recentFailures ?? [];
+    const failures = resilienceSection(checkpoint)?.recentFailures ?? [];
     return failures.map((f, i) => ({
       replayId: `${graphId}-fail-${i + 1}`,
       failureType: 'tool_error' as const,

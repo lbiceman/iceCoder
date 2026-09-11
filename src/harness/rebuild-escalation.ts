@@ -5,6 +5,7 @@ import { extractRunCommand } from './branch-budget-tool-path.js';
 import type { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { buildVerificationDigest, isBuildVerificationCommand, isHarnessVerificationCommand, parseBuildErrorSourcePaths } from './verification-digest.js';
 import { workspaceFileExists } from './workspace-path-guard.js';
+import type { VerificationSignal } from './completion-facts-view.js';
 
 function topFileEditFromInspect(
   fileEdits: Record<string, number>,
@@ -191,7 +192,7 @@ export function shouldInjectParallelBudgetBlockHint(args: {
 /** 同一实现文件达 BranchBudget 上限且验收仍失败 → 触发 rebuild（不依赖连续全失败轮次）。 */
 export function shouldTriggerFileCapRebuild(args: {
   branchBudget?: BranchBudgetTracker;
-  verificationStatus: string;
+  verificationSignal: VerificationSignal;
   rebuildEscalationInjections: number;
   maxRebuildEscalationsPerRun?: number;
 }): boolean {
@@ -199,14 +200,14 @@ export function shouldTriggerFileCapRebuild(args: {
     args.rebuildEscalationInjections,
     args.maxRebuildEscalationsPerRun,
   ) || !args.branchBudget) return false;
-  if (args.verificationStatus !== 'failed') return false;
+  if (args.verificationSignal.status !== 'failed') return false;
 
   const topFile = topFileEditFromInspect(args.branchBudget.inspect().fileEdits);
   if (!topFile) return false;
   return args.branchBudget.wouldBlockFileEdit(topFile.path);
 }
 
-/** Budget 已满但磁盘无文件 → 触发 rebuild + write bypass（不依赖 verificationStatus）。 */
+/** Budget 已满但磁盘无文件 → 触发 rebuild + write bypass（不依赖验证状态）。 */
 export function shouldTriggerMissingFileBudgetRebuild(args: {
   branchBudget?: BranchBudgetTracker;
   workspaceRoot?: string;
@@ -230,7 +231,7 @@ export function shouldTriggerMissingFileBudgetRebuild(args: {
 
 export function shouldTriggerAnyFileCapRebuild(args: {
   branchBudget?: BranchBudgetTracker;
-  verificationStatus: string;
+  verificationSignal: VerificationSignal;
   workspaceRoot?: string;
   rebuildEscalationInjections: number;
   maxRebuildEscalationsPerRun?: number;
@@ -253,7 +254,7 @@ export function shouldTriggerAnyFileCapRebuild(args: {
     return { trigger: 'missing_file_budget_mismatch', topFile };
   }
 
-  if (args.verificationStatus === 'failed') {
+  if (args.verificationSignal.status === 'failed') {
     return { trigger: 'file_cap_verification_failed', topFile };
   }
 

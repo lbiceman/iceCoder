@@ -42,14 +42,17 @@ import { HarnessMemoryIntegration } from './harness-memory.js';
 import { TaskState } from './task-state.js';
 import { RepoContext } from './repo-context.js';
 import { resolveSessionGoalAnchor, isPoisonedGoal } from './session-goal-anchor.js';
-import { syncHydratedTaskState } from './resume-task-state.js';
+import { isFreshQueryMessage, syncHydratedTaskState } from './resume-task-state.js';
 import { VerificationOutputBuffer } from './verification-output-buffer.js';
 import { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
+import { OperationOutcomeLedger } from './operation-outcome.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 import { emptyHarnessPolicyStats } from './harness-policy-stats.js';
 import { TaskCheckpointManager } from './checkpoint.js';
 import { RuntimeTelemetry } from './runtime-telemetry.js';
 import { BranchBudgetTracker } from './branch-budget.js';
 import { CheckpointEngine, isResilienceV2Enabled } from './checkpoint-engine.js';
+import { emitLightweightSnapshotBoundary } from './checkpoint-snapshot.js';
 import { GraphExecutor } from './task-graph-executor.js';
 import { ensureRequestAnalysisTool } from './sub-agent-runner.js';
 import { AsyncSubAgentManager } from './async-sub-agent-manager.js';
@@ -252,6 +255,7 @@ export class Harness {
       onShellMandatoryConfirm: this.onShellMandatoryConfirm,
       shellCollabActive: this.shellCollabActive,
       planModeActive: this.planModeActive,
+      ephemeralSystemContext: this.contextAssembler.buildEphemeralSystemContextMessage(),
       workspaceRoot: this.workspaceRoot,
       sessionId: this.sessionId,
       sessionDir: this.sessionDir,
@@ -330,9 +334,12 @@ export class Harness {
       forcedEntryRound: state.executionModeEnteredAtRound ?? null,
       forcedTaskBearingRoundsSinceEntry: state.forcedTaskBearingRoundsSinceEntry ?? 0,
       stableRounds,
-      lastToolSuccess: state.consecutiveToolFailures === 0,
+      // 验收失败仍参与 digest / circuit breaker，但不单独升级 execution mode。
+      lastToolSuccess: !state.lastRoundModeEscalatingFailure,
       recoveryPending,
-      branchDebt: state.branchBudget?.recoverTriggerCount ?? 0,
+      // recoverTriggerCount 是累计遥测值，不能作为当前债务，否则首次恢复触发后
+      // branchDebt 将永久大于 0，forced 再也无法退出。
+      branchDebt: recoveryPending ? 1 : 0,
       accumulatedDiffLines,
       branchSwitchedThisRound: !!state.branchSwitchedThisRound,
     });
@@ -460,7 +467,12 @@ export class Harness {
         }
       }
     }
-    const activeCheckpoint = await this.checkpointManager?.loadActive();
+    const projectCheckpoint = this.checkpointManager
+      ? await this.checkpointManager.loadProject()
+      : null;
+    const activeCheckpoint = projectCheckpoint
+      ? this.checkpointManager?.toActiveCheckpoint(projectCheckpoint) ?? null
+      : null;
 
     const plainUserText = typeof userMessage === 'string'
       ? userMessage
@@ -547,13 +559,10 @@ export class Harness {
       noToolExecutionRecoveryCount: 0,
       taskSwitchInjected: false,
       stopHookContinuationCount: 0,
-      verificationGateContinuationCount: 0,
-      failedUnitTestReminderInjected: false,
       transition: 'initial',
       justCompacted: false,
       amnesiaRecoveryCount: 0,
       reasoningOnlyRecoveryCount: 0,
-      prematureCompletionRecoveryCount: 0,
       taskState: new TaskState(sessionGoalAnchor),
       repoContext: new RepoContext(),
       runtimeStateHash: '',
@@ -571,6 +580,8 @@ export class Harness {
       buildDiagnosticGateActive: false,
       verificationOutputBuffer: new VerificationOutputBuffer(),
       taskAcceptance: new TaskAcceptanceTracker(sessionGoalAnchor),
+      operationOutcomes: new OperationOutcomeLedger(),
+      completionGateContinuationCount: 0,
       consecutiveNoToolRounds: 0,
       missingFileAttempts: new Map(),
       shellMandatoryConfirmDenials: new Set(),
@@ -584,6 +595,7 @@ export class Harness {
       pendingModeSignals: [],
       forcedTaskBearingRoundsSinceEntry: 0,
       recoveryPendingSticky: false,
+      lastRoundModeEscalatingFailure: false,
       stableRoundsSinceLastFailure: 0,
       filesChangedAtRoundStart: 0,
       branchSwitchedThisRound: false,
@@ -612,7 +624,7 @@ export class Harness {
             state.forcedTaskBearingRoundsSinceEntry = execution.forcedTaskBearingRoundsSinceEntry ?? 0;
             state.lastModeDecision = execution.lastModeDecision;
           }
-          // verificationOutputBuffer / acceptanceGate / pending recoverySignals 不跨用户发送恢复
+          // Verification output buffers and pending recovery signals do not cross user turns.
           this.checkpointEngine.discardPendingRecoverySignals();
         }
       } catch (err) {
@@ -635,6 +647,7 @@ export class Harness {
         const hydrated = await this.memoryIntegration.hydrateRuntimeFromSessionNotes(
           state.taskState,
           state.repoContext,
+          { completionAuthority: projectCheckpoint ? 'checkpoint' : 'legacy-notes' },
         );
         if (hydrated) {
           state.sessionGoalAnchor = syncHydratedTaskState(
@@ -656,6 +669,39 @@ export class Harness {
           err instanceof Error ? err.message : err,
         );
       }
+    }
+
+    // V3 is the authoritative runtime snapshot. Session notes above remain a legacy,
+    // read-only source for narrative/repo continuity and cannot replace V3 completion.
+    if (
+      projectCheckpoint
+      && !isFreshQueryMessage(userMessage, projectCheckpoint.execution.taskState.goal)
+    ) {
+      const completion = CompletionFactsView.fromCompletionSnapshot(projectCheckpoint.completion);
+      state.taskState.applySnapshot(projectCheckpoint.execution.taskState);
+      state.repoContext.applySnapshot(projectCheckpoint.workspace.repoContext);
+      state.operationOutcomes?.replace(projectCheckpoint.completion.operationOutcomes);
+      state.restoredCompletionConditions = completion.conditionSnapshot();
+      state.completionGateContinuationCount = projectCheckpoint.completion.continuationCount ?? 0;
+      state.completionGateBlockingSignature = projectCheckpoint.completion.blockingSignature;
+      state.completionStatus = projectCheckpoint.completion.status;
+      state.completionReason = projectCheckpoint.completion.reason;
+      state.branchBudget?.applySnapshot(projectCheckpoint.execution.resumable?.branchBudget);
+      state.failedToolCallSignatures = new Map(
+        Object.entries(projectCheckpoint.execution.resumable?.failedToolCallSignatures ?? {}),
+      );
+      state.sessionGoalAnchor = syncHydratedTaskState(
+        userMessage,
+        messages,
+        state.taskState,
+        state.repoContext,
+        state.sessionGoalAnchor,
+      );
+      onStep?.({
+        type: 'memory_event',
+        memoryKind: 'session_hydrate',
+        memoryDetail: '已从 V3 checkpoint 恢复执行与完成状态',
+      });
     }
 
     if (activeCheckpoint) {
@@ -717,6 +763,11 @@ export class Harness {
           endTiming('round_wall', roundStartedAt);
           return prep.result;
         }
+        emitLightweightSnapshotBoundary({
+          boundary: 'round_started',
+          sessionId: this.sessionId,
+          round: prep.round,
+        });
 
         const graphStopBeforeRound = await timeAsync('graph_stop_check', () => tryGraphTerminalStop(deps, {
           state,
@@ -836,7 +887,7 @@ export class Harness {
         endTiming('round_wall', roundStartedAt, prep.round);
         if (toolRound.action === 'return') return toolRound.result;
 
-        // 工具轮后不 graph-stop：工程变更须走 Verification Gate（单测提示），避免图 done 绕过验收
+        // 工具轮后不 graph-stop：让下一轮统一 CompletionGate 读取最新条件与操作回执。
       }
     } finally {
       endTiming('run_total', runStartedAt);

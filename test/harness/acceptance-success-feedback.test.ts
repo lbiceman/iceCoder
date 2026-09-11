@@ -21,12 +21,12 @@ describe('buildAcceptanceSuccessFeedbackMessage', () => {
       passedCount: 1,
       totalCount: 4,
     });
-    expect(msg).toContain('[System / Acceptance ✓] npm test');
+    expect(msg).toContain('[System / Completion ✓] npm test');
     expect(msg).toContain('8 files / 22 tests passed');
-    expect(msg).toContain('(1/4 passed)');
+    expect(msg).toContain('(1/4 satisfied)');
     // 单条 passed 时不应出现 stopping signal
     expect(msg).not.toMatch(/STOP calling tools/);
-    expect(msg).not.toMatch(/All \d+ acceptance commands passed/);
+    expect(msg).not.toMatch(/All \d+ required conditions/);
   });
 
   it('appends stopping signal when all commands pass', () => {
@@ -36,8 +36,8 @@ describe('buildAcceptanceSuccessFeedbackMessage', () => {
       passedCount: 4,
       totalCount: 4,
     });
-    expect(msg).toContain('[System / Acceptance ✓] npm run test:e2e — 5 e2e tests passed in 4.4s (4/4 passed)');
-    expect(msg).toContain('[System / Acceptance ✓] All 4 acceptance commands passed.');
+    expect(msg).toContain('[System / Completion ✓] npm run test:e2e — 5 e2e tests passed in 4.4s (4/4 satisfied)');
+    expect(msg).toContain('[System / Completion ✓] All 4 required conditions are satisfied.');
     expect(msg).toContain('Output ≤10 delivery bullets now and STOP calling tools.');
     expect(msg).toMatch(/the task is complete/);
   });
@@ -49,7 +49,7 @@ describe('buildAcceptanceSuccessFeedbackMessage', () => {
       passedCount: 2,
       totalCount: 4,
     });
-    expect(msg).toContain('[System / Acceptance ✓] npm ci (2/4 passed)');
+    expect(msg).toContain('[System / Completion ✓] npm ci (2/4 satisfied)');
     // 没有 summary 时不会插入「 — 」
     expect(msg).not.toMatch(/ — null/);
     expect(msg).not.toMatch(/—\s+\(/);
@@ -79,12 +79,12 @@ describe('buildAcceptanceSuccessFeedbackMessage', () => {
       passedCount: 3,
       totalCount: 4,
     });
-    const lines = msg!.split('\n').filter(l => l.startsWith('[System / Acceptance ✓]'));
+    const lines = msg!.split('\n').filter(l => l.startsWith('[System / Completion ✓]'));
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain('npm test');
-    expect(lines[0]).toContain('(2/4 passed)');
+    expect(lines[0]).toContain('(2/4 satisfied)');
     expect(lines[1]).toContain('npm run build');
-    expect(lines[1]).toContain('(3/4 passed)');
+    expect(lines[1]).toContain('(3/4 satisfied)');
   });
 
   it('returns stopping signal alone when completedAll fires with no fresh newlyPassed', () => {
@@ -96,7 +96,7 @@ describe('buildAcceptanceSuccessFeedbackMessage', () => {
       passedCount: 4,
       totalCount: 4,
     });
-    expect(msg).toContain('All 4 acceptance commands passed.');
+    expect(msg).toContain('All 4 required conditions are satisfied.');
     expect(msg).toContain('STOP calling tools');
   });
 });

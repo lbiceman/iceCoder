@@ -90,32 +90,32 @@ export function createUrlFetchTool(): RegisteredTool {
       parameters: {
         type: 'object',
         properties: {
-          url: { type: 'string', description: '要访问的 URL' },
+          url: { type: 'string', description: 'URL to fetch' },
           method: {
             type: 'string',
-            description: 'HTTP 方法',
+            description: 'HTTP method',
             enum: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'],
             default: 'GET',
           },
           headers: {
             type: 'object',
-            description: '自定义请求头',
+            description: 'Custom request headers',
             additionalProperties: { type: 'string' },
           },
-          body: { type: 'string', description: '请求体（POST/PUT/PATCH 时使用）' },
+          body: { type: 'string', description: 'Request body for POST, PUT, or PATCH' },
           extractText: {
             type: 'boolean',
-            description: '对 HTML 响应是否提取纯文本（去除标签），默认 true',
+            description: 'Extract plain text from HTML responses; default true',
             default: true,
           },
           maxLength: {
             type: 'number',
-            description: '返回内容的最大字符数，默认 50000',
+            description: 'Maximum number of returned characters; default 50000',
             default: 50000,
           },
           timeout: {
             type: 'number',
-            description: '请求超时（毫秒），默认 30000',
+            description: 'Request timeout in milliseconds; default 30000',
             default: 30000,
           },
         },

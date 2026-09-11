@@ -2,7 +2,6 @@ import type { ToolCall } from '../llm/types.js';
 import type { ToolResult } from '../tools/types.js';
 import {
   classifyChangedFiles,
-  engineeringTestTargetPaths,
   extractDeletedPathsFromCommand,
   deliverableVersionFromMap,
   gateConfirmationPaths,
@@ -14,10 +13,6 @@ import {
   missingChangedFilePaths,
   normalizeDeliverablePath,
   pathsReferToSameFile,
-  hasEngineeringTestTargets,
-  isEngineeringUnitTestTargetPath,
-  shouldInjectFailedUnitTestReminder,
-  shouldPromptEngineeringUnitTest,
   writeConfirmationPaths,
   type DeliverableKind,
 } from './document-deliverable.js';
@@ -27,14 +22,12 @@ import type {
   TaskIntent,
   TaskPhase,
   TaskStateSnapshot,
-  VerificationStatus,
 } from '../types/runtime-snapshot.js';
 
 export type {
   TaskIntent,
   TaskPhase,
   TaskStateSnapshot,
-  VerificationStatus,
 } from '../types/runtime-snapshot.js';
 
 const FILE_READ_TOOLS = new Set(['read_file', 'open_file', 'glob', 'grep', 'git', 'file_info']);
@@ -47,8 +40,6 @@ export class TaskState {
   private filesRead = new Set<string>();
   private filesChanged = new Set<string>();
   private commandsRun: string[] = [];
-  private verificationRequired = false;
-  private verificationStatus: VerificationStatus = 'not_required';
   /** 文件交付物写操作版本（归一化路径 → 版本号，写后递增） */
   private fileDeliverableWriteVersion = new Map<string, number>();
   /** 文件交付物确认时对应的写版本（须与 writeVersion 一致才算验收） */
@@ -70,8 +61,6 @@ export class TaskState {
         this.commandsRun.push(effectiveCommand);
         if (looksLikeVerificationCommand(effectiveCommand)) {
           this.phase = 'verification';
-          this.verificationRequired = true;
-          this.applyUnitTestVerificationFromRunResult(args, effectiveCommand, result);
         }
         if (result.success) {
           for (const deletedPath of extractDeletedPathsFromCommand(effectiveCommand)) {
@@ -117,89 +106,12 @@ export class TaskState {
       if (path) {
         this.filesChanged.add(path);
         this.bumpFileDeliverableWriteVersion(path);
-        this.verificationRequired = true;
-        this.verificationStatus = 'required';
       }
     }
-  }
-
-  /** 按 run_command 真实完成态更新单测验收（跳过后台启动 / 运行中） */
-  private applyUnitTestVerificationFromRunResult(
-    args: Record<string, unknown>,
-    _command: string,
-    result: ToolResult,
-  ): void {
-    const rawOutput = `${result.output ?? ''}`;
-    const classified = classifyRunCommandResult(args, rawOutput, result.success);
-    if (classified) {
-      switch (classified.kind) {
-        case 'background_start':
-        case 'background_running':
-          if (this.verificationStatus !== 'passed') {
-            this.verificationStatus = 'required';
-          }
-          return;
-        case 'background_completed':
-          this.verificationStatus = (classified.exitCode ?? 0) === 0 ? 'passed' : 'failed';
-          return;
-        case 'background_failed':
-          this.verificationStatus = 'failed';
-          return;
-        case 'foreground':
-          this.verificationStatus = classified.foregroundSuccess ? 'passed' : 'failed';
-          return;
-        default:
-          break;
-      }
-    }
-    this.verificationStatus = result.success ? 'passed' : 'failed';
   }
 
   deliverableKind(): DeliverableKind {
     return classifyChangedFiles([...this.filesChanged]);
-  }
-
-  buildVerificationPrompt(): string {
-    const targets = engineeringTestTargetPaths([...this.filesChanged]);
-    const maxList = 12;
-    const listed = targets.slice(0, maxList);
-    const fileList = listed.length > 0
-      ? listed.map(f => `- ${f}`).join('\n')
-      : '- (no engineering source paths — skip unit tests)';
-    const more = targets.length > maxList
-      ? `\n- … and ${targets.length - maxList} more`
-      : '';
-
-    return `[System] You changed source code but have not run unit tests yet.
-
-Before finishing, consider running unit tests for these changed files (pick the command for this project — mvn test, pytest, go test, cargo test, npm test, etc.):
-${fileList}${more}
-
-If you're confident the changes are correct and low-risk, you may finish with a brief note. Otherwise use run_command to verify and fix any failures.`;
-  }
-
-  buildFailedUnitTestReminderPrompt(): string {
-    const targets = engineeringTestTargetPaths([...this.filesChanged]);
-    const maxList = 8;
-    const listed = targets.slice(0, maxList);
-    const fileList = listed.map(f => `- ${f}`).join('\n');
-    const more = targets.length > maxList
-      ? `\n- … and ${targets.length - maxList} more`
-      : '';
-
-    return `[System] Unit tests failed for your recent changes.
-
-If you can fix them, re-run tests via run_command and address failures. If not, you may finish — but state the failure plainly in your summary.
-
-Changed source files:
-${fileList}${more}`;
-  }
-
-  /** 模型在 Verification Gate 提醒后选择不跑测收尾 */
-  markVerificationWaived(): void {
-    if (this.verificationStatus === 'required') {
-      this.verificationStatus = 'not_required';
-    }
   }
 
   /** filesChanged 中缺少 writeVersion 的路径补版本（checkpoint 恢复或历史审计遗留） */
@@ -222,58 +134,10 @@ ${fileList}${more}`;
     return fixed;
   }
 
-  pendingFileDeliverableCount(workspaceRoot?: string): number {
-    return this.isVerificationBlockingFinal(false, workspaceRoot) ? 1 : 0;
-  }
-
   /** 续跑时覆盖被「继续」污染的 goal/intent */
   rebindGoal(goal: string): void {
     this.goal = goal;
     this.intent = inferIntent(goal);
-  }
-
-  /** 与 RepoContext.recentDiagnostics 对齐 */
-  forceVerificationFailed(): void {
-    this.verificationRequired = true;
-    this.verificationStatus = 'failed';
-    if (this.filesChanged.size > 0) {
-      this.phase = 'verification';
-    }
-  }
-
-  /** Acceptance Gate：全部验收命令通过后同步为 passed。 */
-  markVerificationPassed(): void {
-    this.verificationRequired = true;
-    this.verificationStatus = 'passed';
-    this.phase = 'verification';
-  }
-
-  /** Acceptance Gate：仍有未跑或未过的验收命令。 */
-  markVerificationRequired(): void {
-    this.verificationRequired = true;
-    if (this.verificationStatus !== 'failed') {
-      this.verificationStatus = 'required';
-    }
-  }
-
-  /**
-   * 纯查询：是否应 inject 单元测试提示并 continue（无副作用）。
-   * Acceptance Gate 或工程变更未跑单测时可 block；测失败不 block（仅加强提示）。
-   */
-  isVerificationBlockingFinal(acceptanceIncomplete?: boolean, workspaceRoot?: string): boolean {
-    if (acceptanceIncomplete) return true;
-    return shouldPromptEngineeringUnitTest(
-      [...this.filesChanged],
-      this.verificationStatus,
-    );
-  }
-
-  /** 查询前同步（checkpoint / resilience 用） */
-  isVerificationBlockingFinalAfterSync(
-    acceptanceIncomplete?: boolean,
-    workspaceRoot?: string,
-  ): boolean {
-    return this.isVerificationBlockingFinal(acceptanceIncomplete, workspaceRoot);
   }
 
   areAllFileDeliverablesConfirmed(workspaceRoot?: string): boolean {
@@ -283,31 +147,6 @@ ${fileList}${more}`;
       mapToVersionRecord(this.fileDeliverableConfirmVersion),
       workspaceRoot,
     );
-  }
-
-  /** verification gate 熔断：工程变更均已测过时不 block */
-  reconcileFileDeliverablesAfterWrite(_workspaceRoot?: string): boolean {
-    return !shouldPromptEngineeringUnitTest(
-      [...this.filesChanged],
-      this.verificationStatus,
-    );
-  }
-
-  shouldInjectFailedUnitTestReminder(): boolean {
-    return shouldInjectFailedUnitTestReminder(
-      [...this.filesChanged],
-      this.verificationStatus,
-    );
-  }
-
-  /** 本轮是否成功写入工程源码（供 Harness 重置失败提醒） */
-  isEngineeringWriteToolCall(toolCall: ToolCall, result: ToolResult): boolean {
-    if (!result.success) return false;
-    const writeTools = new Set(['write_file', 'edit_file', 'append_file', 'batch_edit_file', 'patch_file']);
-    if (!writeTools.has(toolCall.name)) return false;
-    const path = extractPathLikeArg(toolCall.arguments);
-    if (!path) return false;
-    return isEngineeringUnitTestTargetPath(path);
   }
 
   /**
@@ -337,15 +176,6 @@ ${fileList}${more}`;
     this.fileDeliverableWriteVersion.delete(norm);
     this.fileDeliverableConfirmVersion.delete(norm);
 
-    if (this.filesChanged.size === 0) {
-      if (this.verificationStatus === 'required') {
-        this.verificationStatus = 'not_required';
-      }
-    } else if (!hasEngineeringTestTargets([...this.filesChanged])) {
-      if (this.verificationStatus === 'required') {
-        this.verificationStatus = 'not_required';
-      }
-    }
     return true;
   }
 
@@ -354,9 +184,6 @@ ${fileList}${more}`;
     const next = (this.fileDeliverableWriteVersion.get(norm) ?? 0) + 1;
     this.fileDeliverableWriteVersion.set(norm, next);
     this.fileDeliverableConfirmVersion.delete(norm);
-    if (this.verificationStatus === 'passed') {
-      this.verificationStatus = 'required';
-    }
   }
 
   private tryConfirmFileDeliverable(
@@ -390,8 +217,6 @@ ${fileList}${more}`;
       filesRead: [...this.filesRead],
       filesChanged: [...this.filesChanged],
       commandsRun: [...this.commandsRun],
-      verificationRequired: this.verificationRequired,
-      verificationStatus: this.verificationStatus,
     };
     const writeVersions = mapToVersionRecord(this.fileDeliverableWriteVersion);
     const confirmVersions = mapToVersionRecord(this.fileDeliverableConfirmVersion);
@@ -410,8 +235,6 @@ ${fileList}${more}`;
     this.filesRead = new Set(snapshot.filesRead);
     this.filesChanged = new Set(snapshot.filesChanged);
     this.commandsRun = [...snapshot.commandsRun];
-    this.verificationRequired = snapshot.verificationRequired;
-    this.verificationStatus = snapshot.verificationStatus;
     this.fileDeliverableWriteVersion = recordToVersionMap(snapshot.fileDeliverableWriteVersions);
     this.fileDeliverableConfirmVersion = recordToVersionMap(snapshot.fileDeliverableConfirmVersions);
     if (this.fileDeliverableWriteVersion.size === 0) {
@@ -421,9 +244,6 @@ ${fileList}${more}`;
           norm,
           resolveOrphanWriteVersion(this.fileDeliverableConfirmVersion, path),
         );
-        if (snapshot.verificationStatus === 'passed') {
-          this.fileDeliverableConfirmVersion.set(norm, 1);
-        }
       }
     }
     this.reconcileOrphanFileDeliverableWriteVersions();

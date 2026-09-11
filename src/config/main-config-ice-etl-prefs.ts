@@ -9,15 +9,26 @@ import { readMainConfigFile } from './main-config-supervisor-mode.js';
 export const DEFAULT_ICE_ETL_PREFS: IceEtlPrefs = {
   showTransparencyPanel: true,
   panelDefaultExpanded: true,
-  panelWidth: 360,
+  panelWidth: 320,
   taskDoneNotification: false,
   panelAutoCollapse: false,
 };
 
+const ALLOWED_PANEL_WIDTHS = [280, 320, 380] as const;
+
 function clampPanelWidth(value: unknown): number {
   const w = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(w)) return DEFAULT_ICE_ETL_PREFS.panelWidth;
-  return Math.min(480, Math.max(320, w));
+  let best: number = ALLOWED_PANEL_WIDTHS[0];
+  let bestDist = Math.abs(w - best);
+  for (const allowed of ALLOWED_PANEL_WIDTHS) {
+    const d = Math.abs(w - allowed);
+    if (d < bestDist) {
+      best = allowed;
+      bestDist = d;
+    }
+  }
+  return best;
 }
 
 export function sanitizeIceEtlPrefs(raw: unknown): IceEtlPrefs {

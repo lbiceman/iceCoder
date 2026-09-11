@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AssembledPrompt } from '../../src/prompts/types.js';
 import {
@@ -11,6 +14,16 @@ const fakePrompt = {
   systemPrompt: 'sys',
   harnessOverlay: {},
 } as unknown as AssembledPrompt;
+const originalSystemPromptPath = process.env.ICE_SYSTEM_PROMPT_PATH;
+
+afterEach(() => {
+  if (originalSystemPromptPath === undefined) {
+    delete process.env.ICE_SYSTEM_PROMPT_PATH;
+  } else {
+    process.env.ICE_SYSTEM_PROMPT_PATH = originalSystemPromptPath;
+  }
+  resetAssembledChatPromptCache();
+});
 
 describe('chat-ws-prewarm', () => {
   it('getOrLoadAssembledChatPrompt 同进程内只加载一次', async () => {
@@ -42,6 +55,27 @@ describe('chat-ws-prewarm', () => {
     await expect(getOrLoadAssembledChatPrompt('[test]')).resolves.toBe(fakePrompt);
     expect(spy).toHaveBeenCalledTimes(2);
     spy.mockRestore();
+  });
+
+  it('显式 prompt 文件变化时刷新缓存', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-prompt-prewarm-'));
+    const promptPath = path.join(dir, 'system-prompt.md');
+    await fs.writeFile(promptPath, 'one', 'utf-8');
+    process.env.ICE_SYSTEM_PROMPT_PATH = promptPath;
+    resetAssembledChatPromptCache();
+
+    const spy = vi.spyOn(
+      await import('../../src/prompts/load-chat-prompt.js'),
+      'loadAssembledChatPrompt',
+    ).mockResolvedValue(fakePrompt);
+
+    await getOrLoadAssembledChatPrompt('[test]');
+    await fs.writeFile(promptPath, 'a longer second value', 'utf-8');
+    await getOrLoadAssembledChatPrompt('[test]');
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+    await fs.rm(dir, { recursive: true, force: true });
   });
 
   it('prewarmChatRuntime 并行触发三个 hook 且吞掉错误', async () => {

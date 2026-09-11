@@ -81,7 +81,8 @@ window.ChatWebSocket = (function () {
   }
 
   function applyCheckpointMessageIds(ids) {
-    checkpointMessageIds = Array.isArray(ids) ? ids.slice() : [];
+    if (!Array.isArray(ids)) return;
+    checkpointMessageIds = ids.slice();
     emit('checkpoint_message_ids', { ids: checkpointMessageIds });
   }
   var lastToolProgressHint = '';

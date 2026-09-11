@@ -7,11 +7,12 @@ import type { BranchBudgetTracker } from './branch-budget.js';
 import type { CheckpointEngine } from './checkpoint-engine.js';
 import { shouldSkipResilienceCheckpoint } from './casual-mode.js';
 import type { HarnessRunState } from './harness-run-state.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 import { toolCallSignature } from './harness-permission-runtime.js';
 import { collectRecentErrors, collectRecentToolTraces } from './harness-step-context.js';
 import { reviewStep } from './step-review.js';
 import type { ChatFunction, StopReason } from './types.js';
-import type { VerificationOutputTailEntry, AcceptanceGateSnapshot } from '../types/runtime-checkpoint.js';
+import type { VerificationOutputTailEntry } from '../types/runtime-checkpoint.js';
 
 export interface ResilienceBridgeDeps {
   resilienceV2Enabled: boolean;
@@ -22,11 +23,6 @@ export interface ResilienceBridgeDeps {
 
 function checkpointVerificationOutputTail(state: HarnessRunState): VerificationOutputTailEntry[] | undefined {
   return state.verificationOutputBuffer?.snapshot();
-}
-
-function checkpointAcceptanceGate(state: HarnessRunState): AcceptanceGateSnapshot | undefined {
-  if (!state.taskAcceptance?.isActive()) return undefined;
-  return state.taskAcceptance.snapshot();
 }
 
 /**
@@ -89,11 +85,16 @@ export async function resilienceRecordToolCalls(
             branchBudget: state.branchBudget,
             executionModeState: buildExecutionModeCheckpointState(state),
             verificationOutputTail: checkpointVerificationOutputTail(state),
-            acceptanceGate: checkpointAcceptanceGate(state),
             ...checkpointHarnessEscalationFields(state),
             appendFailure: {
               signature: sig,
               count: 1,
+              at: Date.now(),
+            },
+            appendTool: {
+              toolName: tc.name,
+              success: false,
+              signature: sig,
               at: Date.now(),
             },
           });
@@ -104,29 +105,37 @@ export async function resilienceRecordToolCalls(
           );
         }
       });
+      continue;
     }
 
-    const perToolTrigger: CheckpointSaveTrigger = failed ? 'tool_failed' : 'step_completed';
-    if (!engine.shouldPersistOnTrigger(perToolTrigger)) continue;
+    engine.stage({
+      trigger: 'step_completed',
+      branchBudget: state.branchBudget,
+      executionModeState: buildExecutionModeCheckpointState(state),
+      verificationOutputTail: checkpointVerificationOutputTail(state),
+      ...checkpointHarnessEscalationFields(state),
+      appendTool: {
+        toolName: tc.name,
+        success: true,
+        signature: sig,
+        at: Date.now(),
+      },
+    });
+  }
+
+  if (engine.shouldPersistOnTrigger('step_completed')) {
     await deps.enqueueCheckpointPersist(async () => {
       try {
         await engine.save({
-          trigger: perToolTrigger,
+          trigger: 'step_completed',
           branchBudget: state.branchBudget,
           executionModeState: buildExecutionModeCheckpointState(state),
           verificationOutputTail: checkpointVerificationOutputTail(state),
-          acceptanceGate: checkpointAcceptanceGate(state),
           ...checkpointHarnessEscalationFields(state),
-          appendTool: {
-            toolName: tc.name,
-            success: !failed,
-            signature: sig,
-            at: Date.now(),
-          },
         });
       } catch (err) {
         console.warn(
-          '[harness] resilience v2 save (tool) failed:',
+          '[harness] resilience v2 save (tool batch) failed:',
           err instanceof Error ? err.message : err,
         );
       }
@@ -202,6 +211,7 @@ export async function resilienceMaybeReviewStep(
       lastErrors,
       trigger,
       taskSnapshot: state.taskState.snapshot(),
+      completionFacts: CompletionFactsView.fromHarnessRunState(state),
       previousReview: state.lastStepReview,
     }, chatFn);
 
@@ -253,12 +263,7 @@ export async function resilienceSaveCheckpoint(
         branchBudget: state.branchBudget,
         executionModeState: buildExecutionModeCheckpointState(state),
         verificationOutputTail: checkpointVerificationOutputTail(state),
-        acceptanceGate: checkpointAcceptanceGate(state),
         ...checkpointHarnessEscalationFields(state),
-        verificationPending: state.taskState.isVerificationBlockingFinalAfterSync(
-          state.taskAcceptance?.isActive() && !state.taskAcceptance.isComplete(),
-          deps.workspaceRoot,
-        ),
         lastStopReason: stopReason,
       });
     } catch (err) {

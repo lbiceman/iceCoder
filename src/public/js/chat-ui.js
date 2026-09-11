@@ -122,6 +122,7 @@ window.ChatUI = (function () {
         renderUnit: renderHistoryUnit,
         stickyThresholdPx: SCROLL_STICKY_THRESHOLD_PX,
         onAfterVisibleRender: function () {
+          refreshRestoreButtonsVisibility();
           if (window.ChatStaircaseNav && typeof window.ChatStaircaseNav.notifyScrollSync === 'function') {
             window.ChatStaircaseNav.notifyScrollSync();
           }
@@ -1590,7 +1591,7 @@ window.ChatUI = (function () {
     return null;
   }
 
-  var restoreUiState = { canRestore: true, checkpointIds: {} };
+  var restoreUiState = { canRestore: true, checkpointIds: {}, cursorMessageId: '', cursorRestored: false };
   var messageActionHandlers = { onDelete: null, onRestore: null };
 
   function rebindExistingMessageActionButtons() {
@@ -1663,16 +1664,18 @@ window.ChatUI = (function () {
     if (sentAt) restoreBtn.dataset.sentAt = String(sentAt);
     restoreBtn.setAttribute('aria-label', '回滚到此消息');
     bindMessageActionButton(restoreBtn, 'restore', messageId);
+    applyRestoreButtonState(restoreBtn);
     return restoreBtn;
   }
 
-  function createDeleteButton(messageId) {
+  function createDeleteButton(messageId, sentAt) {
     var deleteBtn = document.createElement('button');
     deleteBtn.type = 'button';
     deleteBtn.className = 'msg-delete-btn';
     deleteBtn.innerHTML = deleteButtonIconSvg();
     if (window.AppIcon) window.AppIcon.hydrate(deleteBtn);
     deleteBtn.dataset.messageId = messageId;
+    if (sentAt) deleteBtn.dataset.sentAt = String(sentAt);
     deleteBtn.setAttribute('aria-label', '删除此消息');
     deleteBtn.title = '删除此消息';
     bindMessageActionButton(deleteBtn, 'delete', messageId);
@@ -1682,7 +1685,7 @@ window.ChatUI = (function () {
   function createUserMessageActions(messageId, sentAt) {
     var actions = document.createElement('div');
     actions.className = 'msg-label-actions';
-    actions.appendChild(createDeleteButton(messageId));
+    actions.appendChild(createDeleteButton(messageId, sentAt));
     actions.appendChild(createRestoreButton(messageId, sentAt));
     return actions;
   }
@@ -1712,6 +1715,19 @@ window.ChatUI = (function () {
     ensureUserMessageActionButtons();
   }
 
+  function refreshRestoreButtonsAfterVirtual() {
+    ensureRestoreButtonsOnUserMessages();
+    refreshRestoreButtonsVisibility();
+    // 虚拟历史 refresh 是 rAF 异步重绘；不要为了改按钮态去拆 DOM。
+    // 若别处触发了重绘，下一帧再刷一次，避免 --ready 被冲掉。
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function () {
+        ensureRestoreButtonsOnUserMessages();
+        refreshRestoreButtonsVisibility();
+      });
+    }
+  }
+
   function setCheckpointMessageIds(ids) {
     var map = {};
     if (Array.isArray(ids)) {
@@ -1720,38 +1736,284 @@ window.ChatUI = (function () {
       }
     }
     restoreUiState.checkpointIds = map;
-    ensureRestoreButtonsOnUserMessages();
-    refreshRestoreButtonsVisibility();
-    if (virtualScroller && typeof virtualScroller.refresh === 'function') {
-      virtualScroller.refresh();
+    refreshRestoreButtonsAfterVirtual();
+  }
+
+  function setCursorMessageId(messageId, restored) {
+    var next = messageId ? String(messageId) : '';
+    var nextRestored = !!next && !!restored;
+    if (restoreUiState.cursorMessageId === next && restoreUiState.cursorRestored === nextRestored) {
+      refreshRestoreButtonsVisibility();
+      return;
+    }
+    restoreUiState.cursorMessageId = next;
+    restoreUiState.cursorRestored = nextRestored;
+    refreshRestoreButtonsAfterVirtual();
+  }
+
+  function getCursorMessageId() {
+    if (restoreUiState.cursorMessageId) return restoreUiState.cursorMessageId;
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.getSnapshotCursorMessageId === 'function') {
+        return window.ChatExecutionPlan.getSnapshotCursorMessageId() || '';
+      }
+    } catch (_e) { /* ignore */ }
+    return '';
+  }
+
+  function isCursorRestored() {
+    if (restoreUiState.cursorRestored) return true;
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.isSnapshotCursorRestored === 'function') {
+        return !!window.ChatExecutionPlan.isSnapshotCursorRestored();
+      }
+    } catch (_e) { /* ignore */ }
+    return false;
+  }
+
+  function isCurrentRestoreCursor(messageId, sentAt) {
+    var cursor = getCursorMessageId();
+    if (!cursor || !messageId) return false;
+    var aliases = collectMessageIdAliases(messageId);
+    if (aliases.indexOf(cursor) >= 0) return true;
+    var cursorAliases = collectMessageIdAliases(cursor);
+    for (var i = 0; i < aliases.length; i++) {
+      if (cursorAliases.indexOf(aliases[i]) >= 0) return true;
+    }
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.isSnapshotCursorMessage === 'function'
+        && window.ChatExecutionPlan.isSnapshotCursorMessage(messageId)) {
+        return true;
+      }
+    } catch (_e) { /* ignore */ }
+    var resolved = resolveCheckpointMessageId(messageId, sentAt);
+    return !!(resolved && (resolved === cursor || cursorAliases.indexOf(resolved) >= 0));
+  }
+
+  /** 已回滚到该节点才隐藏回滚；仅「当前位置」仍展示。 */
+  function shouldHideRestoreAtCursor(messageId, sentAt) {
+    if (!isCursorRestored()) return false;
+    if (isCurrentRestoreCursor(messageId, sentAt)) return true;
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.isSnapshotRestoreHidden === 'function') {
+        return !!window.ChatExecutionPlan.isSnapshotRestoreHidden(messageId);
+      }
+    } catch (_e) { /* ignore */ }
+    return false;
+  }
+
+  /** 把时间轴等权威来源的 id 并入，不覆盖已有集合。 */
+  function mergeCheckpointMessageIds(ids) {
+    if (!Array.isArray(ids) || !ids.length) {
+      refreshRestoreButtonsVisibility();
+      return;
+    }
+    var changed = false;
+    for (var i = 0; i < ids.length; i++) {
+      if (!ids[i] || restoreUiState.checkpointIds[ids[i]]) continue;
+      restoreUiState.checkpointIds[ids[i]] = true;
+      changed = true;
+    }
+    if (!changed) {
+      refreshRestoreButtonsVisibility();
+      return;
+    }
+    refreshRestoreButtonsAfterVirtual();
+  }
+
+  function collectUserMessages() {
+    try {
+      if (!window.ChatSession || typeof window.ChatSession.getMessages !== 'function') return [];
+      var msgs = window.ChatSession.getMessages() || [];
+      var users = [];
+      for (var i = 0; i < msgs.length; i++) {
+        if (msgs[i] && msgs[i].role === 'user') users.push(msgs[i]);
+      }
+      return users;
+    } catch (_e) {
+      return [];
     }
   }
 
-  function hasCheckpointForMessage(messageId) {
-    return !!(messageId && restoreUiState.checkpointIds[messageId]);
+  function collectMessageIdAliases(messageId) {
+    var ids = [];
+    if (messageId) ids.push(messageId);
+    var users = collectUserMessages();
+    for (var i = 0; i < users.length; i++) {
+      var m = users[i];
+      if (m.id === messageId && m._prevId && ids.indexOf(m._prevId) < 0) ids.push(m._prevId);
+      if (m._prevId === messageId && m.id && ids.indexOf(m.id) < 0) ids.push(m.id);
+    }
+    return ids;
+  }
+
+  function findUserMessageRecord(messageId) {
+    var users = collectUserMessages();
+    for (var i = 0; i < users.length; i++) {
+      if (users[i].id === messageId || users[i]._prevId === messageId) return users[i];
+    }
+    return null;
+  }
+
+  function getSnapshotCheckpointEntriesSafe() {
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.getSnapshotCheckpointEntries === 'function') {
+        var entries = window.ChatExecutionPlan.getSnapshotCheckpointEntries();
+        return Array.isArray(entries) ? entries : [];
+      }
+    } catch (_e) { /* ignore */ }
+    return [];
+  }
+
+  function normalizeRestorePreview(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function previewMatchesContent(preview, content) {
+    var p = normalizeRestorePreview(preview).replace(/…$/, '').trim();
+    var c = normalizeRestorePreview(content);
+    if (!p || !c) return false;
+    return c === p || c.indexOf(p) === 0 || p.indexOf(c) === 0;
+  }
+
+  function parseSnapshotEntryTime(entry) {
+    if (!entry) return NaN;
+    if (typeof entry.userMessageTime === 'number' && isFinite(entry.userMessageTime)) {
+      return entry.userMessageTime;
+    }
+    if (entry.createdAt) {
+      var parsed = Date.parse(entry.createdAt);
+      if (isFinite(parsed)) return parsed;
+    }
+    return NaN;
+  }
+
+  function matchSnapshotEntryForMessage(messageId, sentAt) {
+    var entries = getSnapshotCheckpointEntriesSafe();
+    if (!entries.length) return null;
+    var aliases = collectMessageIdAliases(messageId);
+    var e;
+    for (var i = 0; i < entries.length; i++) {
+      e = entries[i];
+      if (e && e.messageId && aliases.indexOf(e.messageId) >= 0) return e;
+    }
+    var users = collectUserMessages();
+    var msg = findUserMessageRecord(messageId);
+    if (users.length && users.length === entries.length) {
+      for (var u = 0; u < users.length; u++) {
+        if (users[u].id === messageId || users[u]._prevId === messageId) {
+          return entries[u] || null;
+        }
+      }
+    }
+    var content = msg && typeof msg.content === 'string' ? msg.content : '';
+    var ts = (typeof sentAt === 'number' && isFinite(sentAt))
+      ? sentAt
+      : (msg && typeof msg.sentAt === 'number' ? msg.sentAt : NaN);
+    var contentHits = [];
+    for (var j = 0; j < entries.length; j++) {
+      if (previewMatchesContent(entries[j].preview, content)) contentHits.push(entries[j]);
+    }
+    if (contentHits.length === 1) return contentHits[0];
+    if (isFinite(ts)) {
+      var pool = contentHits.length ? contentHits : entries;
+      var best = null;
+      var bestDelta = Infinity;
+      for (var k = 0; k < pool.length; k++) {
+        var et = parseSnapshotEntryTime(pool[k]);
+        if (!isFinite(et)) continue;
+        var delta = Math.abs(et - ts);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          best = pool[k];
+        }
+      }
+      if (best && bestDelta <= 8000) return best;
+    }
+    return contentHits[0] || null;
+  }
+
+  function idHasKnownCheckpoint(id) {
+    if (!id) return false;
+    if (restoreUiState.checkpointIds[id]) return true;
+    try {
+      if (window.ChatExecutionPlan
+        && typeof window.ChatExecutionPlan.hasSnapshotCheckpoint === 'function') {
+        return !!window.ChatExecutionPlan.hasSnapshotCheckpoint(id);
+      }
+    } catch (_e) { /* ignore */ }
+    return false;
+  }
+
+  function hasCheckpointForMessage(messageId, sentAt) {
+    var aliases = collectMessageIdAliases(messageId);
+    for (var i = 0; i < aliases.length; i++) {
+      if (idHasKnownCheckpoint(aliases[i])) return true;
+    }
+    var hit = matchSnapshotEntryForMessage(messageId, sentAt);
+    return !!(hit && hit.messageId);
+  }
+
+  function resolveCheckpointMessageId(messageId, sentAt) {
+    var aliases = collectMessageIdAliases(messageId);
+    for (var i = 0; i < aliases.length; i++) {
+      if (idHasKnownCheckpoint(aliases[i])) return aliases[i];
+    }
+    var hit = matchSnapshotEntryForMessage(messageId, sentAt);
+    return (hit && hit.messageId) || messageId;
+  }
+
+  /** 与状态快照同一套门闩：WS.canRestoreRuntime = harnessCanRestore && !processing。 */
+  function isChatRestoreAllowed() {
+    try {
+      if (window.ChatWebSocket && typeof window.ChatWebSocket.canRestoreRuntime === 'function') {
+        return !!window.ChatWebSocket.canRestoreRuntime();
+      }
+    } catch (_e) { /* ignore */ }
+    return !!restoreUiState.canRestore;
+  }
+
+  function applyRestoreButtonState(btn) {
+    if (!btn) return;
+    var mid = btn.dataset.messageId || btn.getAttribute('data-message-id') || '';
+    var sentAtRaw = btn.dataset.sentAt || btn.getAttribute('data-sent-at') || '';
+    var sentAt = sentAtRaw ? Number(sentAtRaw) : NaN;
+    var atCursor = shouldHideRestoreAtCursor(mid, isFinite(sentAt) ? sentAt : undefined);
+    btn.hidden = atCursor;
+    if (atCursor) {
+      btn.disabled = true;
+      btn.classList.remove('msg-restore-btn--ready');
+      btn.title = '已在该检查点，无需回滚';
+      btn.setAttribute('aria-label', '已在该检查点，无需回滚');
+      return;
+    }
+    var visible = hasCheckpointForMessage(mid, isFinite(sentAt) ? sentAt : undefined);
+    var can = isChatRestoreAllowed();
+    btn.classList.toggle('msg-restore-btn--ready', visible);
+    btn.disabled = !visible || !can;
+    btn.title = !visible
+      ? '未找到检查点，无法回滚'
+      : (can ? '回滚到此消息' : '运行中，请等待当前任务完成后再回滚');
+    btn.setAttribute('aria-label', btn.title);
   }
 
   function refreshRestoreButtonsVisibility() {
     if (!elMessages) return;
     var restoreButtons = elMessages.querySelectorAll('.msg-restore-btn');
     for (var i = 0; i < restoreButtons.length; i++) {
-      var btn = restoreButtons[i];
-      var mid = btn.dataset.messageId || '';
-      var visible = hasCheckpointForMessage(mid);
-      if (visible) btn.classList.add('msg-restore-btn--ready');
-      else btn.classList.remove('msg-restore-btn--ready');
-      btn.disabled = !visible || !restoreUiState.canRestore;
-      btn.title = !visible
-        ? '未找到检查点，无法回滚'
-        : (restoreUiState.canRestore
-          ? '回滚到此消息'
-          : '运行中，请等待当前任务完成后再回滚');
+      applyRestoreButtonState(restoreButtons[i]);
     }
+    var can = isChatRestoreAllowed();
     var deleteButtons = elMessages.querySelectorAll('.msg-delete-btn');
     for (var j = 0; j < deleteButtons.length; j++) {
       var delBtn = deleteButtons[j];
-      delBtn.disabled = !restoreUiState.canRestore;
-      delBtn.title = restoreUiState.canRestore
+      delBtn.disabled = !can;
+      delBtn.title = can
         ? '删除此消息及对应回复'
         : '运行中，请等待当前任务完成后再删除';
     }
@@ -2805,7 +3067,15 @@ window.ChatUI = (function () {
     showDiffAfterToolAction: showDiffAfterToolAction,
     setRestoreAvailability: setRestoreAvailability,
     setCheckpointMessageIds: setCheckpointMessageIds,
+    mergeCheckpointMessageIds: mergeCheckpointMessageIds,
+    setCursorMessageId: setCursorMessageId,
+    isCurrentRestoreCursor: isCurrentRestoreCursor,
+    shouldHideRestoreAtCursor: shouldHideRestoreAtCursor,
+    isCursorRestored: isCursorRestored,
     hasCheckpointForMessage: hasCheckpointForMessage,
+    resolveCheckpointMessageId: resolveCheckpointMessageId,
+    isChatRestoreAllowed: isChatRestoreAllowed,
+    refreshRestoreButtonsVisibility: refreshRestoreButtonsVisibility,
     setMessageActionHandlers: setMessageActionHandlers,
   };
 })();

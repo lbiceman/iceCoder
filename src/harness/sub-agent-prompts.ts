@@ -43,14 +43,23 @@ export function inferKindFromIntent(
   goal: string,
 ): SubAgentKind | null {
   const text = goal.toLowerCase();
-  if (intent === 'test' || phase === 'verification') return 'test_analysis';
+  const asksForAnalysis = /\b(analy[sz]e|investigate|explain why|coverage|root cause|审计|分析|调查|根因)\b/i.test(goal);
+  const explicitlyRequestsBackgroundAnalysis =
+    /\b(background analysis|background investigation|sub-agent|delegate|parallel analysis|后台分析|子代理|委派|并行分析)\b/i.test(goal);
+  const mutatingIntent = intent === 'edit'
+    || intent === 'debug'
+    || intent === 'test'
+    || intent === 'refactor';
+  if (mutatingIntent && !explicitlyRequestsBackgroundAnalysis) return null;
+  if ((intent === 'test' || phase === 'verification') && asksForAnalysis) return 'test_analysis';
   if (/\b(import|dependency|dependencies|circular|调用链|依赖|循环依赖)\b/i.test(goal)) return 'dependency';
   if (/\b(risk|review|regression|影响|风险|审计)\b/i.test(goal)) return 'review';
   if (/\b(find|search|reference|usage|grep|查找|搜索|引用)\b/i.test(goal)) return 'search';
+  const broadEngineeringScope =
+    /\b(architecture|module|multi-file|across (?:the )?(?:codebase|files)|call chain|flow|subsystem|架构|模块|多文件|调用链|流程|子系统)\b/i;
   if (
     intent === 'inspect'
-    || intent === 'debug'
-    || intent === 'refactor'
+    || ((intent === 'debug' || intent === 'refactor') && broadEngineeringScope.test(goal))
     || (intent === 'edit' && /\b(auth|oauth|login|module|模块|入口|架构)\b/i.test(text))
   ) {
     return 'explorer';

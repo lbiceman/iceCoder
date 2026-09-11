@@ -16,9 +16,9 @@
 
 ![桌面端 — 执行流：轮次时间轴与步骤详情](./docs/assets/desktop-workbench-flow-detail.png)
 
-**执行透明层 · 状态快照** — 会话检查点时间轴，标记当前位置与工作目录，支持查看历史状态与回滚恢复：
+**执行透明层 · 检查点** — 检查点时间轴，标记当前位置与工作目录，支持查看历史状态与回滚恢复：
 
-![桌面端 — 状态快照：会话检查点与当前位置](./docs/assets/desktop-work-snapshot.png)
+![桌面端 — 检查点：检查点与当前位置](./docs/assets/desktop-work-snapshot.png)
 
 **记忆图谱** — 标签筛选 + 力导向关系图，点击节点查看详情：
 

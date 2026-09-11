@@ -1,16 +1,13 @@
 import type { LLMResponse } from '../llm/types.js';
 import type { RepoContextSnapshot, TaskStateSnapshot } from '../types/runtime-snapshot.js';
+import type { ProjectCheckpointV3 } from '../types/runtime-checkpoint.js';
 import type { TaskAcceptanceTracker } from './task-acceptance-tracker.js';
 import { hasPendingAcceptanceWork } from './task-acceptance-tracker.js';
 import {
-  engineeringTestTargetPaths,
   hasUnfulfilledFileDeliverableGoal,
-  shouldPromptEngineeringUnitTest,
 } from './document-deliverable.js';
-import type { TaskState } from './task-state.js';
-import type { TaskCheckpoint } from './checkpoint.js';
 
-/** 任务是否仍有未完成的验收工作（Acceptance Gate + 未写交付物 goal） */
+/** 兼容事实查询：是否仍有显式条件或交付目标未完成。 */
 export function hasPendingWork(
   task: TaskStateSnapshot,
   acceptance?: TaskAcceptanceTracker,
@@ -25,8 +22,25 @@ export function hasPendingWork(
   return false;
 }
 
-export function checkpointHasPendingWork(checkpoint: TaskCheckpoint): boolean {
-  return hasPendingWork(checkpoint.taskState);
+export function checkpointHasPendingWork(checkpoint: ProjectCheckpointV3): boolean {
+  const completedOutcomeIds = new Set(
+    checkpoint.completion.operationOutcomes
+      .filter(outcome => outcome.status === 'completed')
+      .map(outcome => outcome.toolCallId),
+  );
+  const hasRequiredBlocker = checkpoint.completion.conditions.some(condition =>
+    condition.required
+    && (
+      condition.status !== 'satisfied'
+      || condition.evidenceRefs.length === 0
+      || !condition.evidenceRefs.some(ref => completedOutcomeIds.has(ref))
+    ),
+  );
+  return hasRequiredBlocker || hasUnfulfilledFileDeliverableGoal(
+    checkpoint.execution.taskState.goal,
+    checkpoint.execution.taskState.filesChanged,
+    checkpoint.execution.taskState.intent,
+  );
 }
 
 /** 仅 reasoning、无可见 content、无 toolCalls */
@@ -56,70 +70,25 @@ export function buildIncompleteContinuationPrompt(
   if (repo.recentDiagnostics.length > 0) {
     lines.push(`- Recent tool failures: ${repo.recentDiagnostics.slice(-3).join('; ')}`);
   }
-  if (task.verificationStatus === 'failed') {
-    lines.push('- Unit tests failed; consider fixing and re-running before stopping.');
-  } else if (shouldPromptEngineeringUnitTest(task.filesChanged, task.verificationStatus)) {
-    lines.push('- Source code changed but unit tests have not been run yet.');
-  }
 
   const awaitsFileWrite = hasUnfulfilledFileDeliverableGoal(task.goal, task.filesChanged, task.intent);
   if (awaitsFileWrite) {
-    lines.push('- Expected file deliverable has not been written yet.');
-  }
-
-  const testTargets = engineeringTestTargetPaths(task.filesChanged);
-  if (testTargets.length > 0 && task.verificationStatus !== 'passed') {
-    const maxList = 12;
-    const listed = testTargets.slice(0, maxList);
-    lines.push('', 'Changed source files (consider running unit tests for these):');
-    for (const p of listed) {
-      lines.push(`- ${p}`);
-    }
-    if (testTargets.length > maxList) {
-      lines.push(`- … and ${testTargets.length - maxList} more`);
-    }
+    lines.push('- An explicitly requested result has not been produced.');
   }
 
   if (awaitsFileWrite) {
     lines.push(
       '',
-      'Continue NOW: write the deliverable with write_file (or edit_file).',
+      'Continue now and produce the requested result with available tools.',
       'Do not stop with a chat summary.',
-    );
-  } else if (task.verificationStatus === 'failed') {
-    lines.push(
-      '',
-      'Continue: fix failing tests and re-run via run_command if you can; otherwise finish with a clear failure summary.',
-      'Do not output plans or thinking-only replies.',
-    );
-  } else if (shouldPromptEngineeringUnitTest(task.filesChanged, task.verificationStatus)) {
-    lines.push(
-      '',
-      'Continue: run unit tests via run_command if useful, or finish with a brief note if you are confident the change is safe.',
-      'Do not output plans or thinking-only replies.',
     );
   } else {
     lines.push(
       '',
-      'Continue NOW by calling tools (run_command, edit_file, write_file, read_file) as needed.',
+      'Continue now with the available tools as needed.',
       'Do not output plans or thinking-only replies.',
     );
   }
 
   return lines.join('\n');
-}
-
-/** 工具轮结束后，将 Acceptance Gate 进度同步回 TaskState.verificationStatus。 */
-export function syncTaskVerificationFromAcceptance(
-  taskState: TaskState,
-  acceptance: TaskAcceptanceTracker | undefined,
-): void {
-  if (!acceptance?.isActive()) return;
-  if (acceptance.isComplete()) {
-    taskState.markVerificationPassed();
-  } else if (acceptance.hasFailure()) {
-    taskState.forceVerificationFailed();
-  } else {
-    taskState.markVerificationRequired();
-  }
 }

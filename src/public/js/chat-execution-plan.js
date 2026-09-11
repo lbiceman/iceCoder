@@ -2,7 +2,7 @@
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
  * Phase 4：由锚定冰豆的 popover 重构为聊天页右侧常驻 `<aside id="exec-transparency-panel">`。
- * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 状态快照）→ 执行流主体 → Footer（上下文/工具/时间）。
+ * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 检查点）→ 执行流主体 → Footer（上下文/工具/时间）。
  * 显示门控读 EtlPrefs（`showTransparencyPanel`）；最小化收为宠物形态，双击宠物展开。
  *
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
@@ -71,7 +71,7 @@ window.ChatExecutionPlan = (function () {
 
   var TABS = [
     { id: 'flow', label: '执行流' },
-    { id: 'snapshot', label: '状态快照' },
+    { id: 'snapshot', label: '检查点' },
   ];
 
   // 移动端底部 sheet 仅保留「执行流」。
@@ -98,9 +98,18 @@ window.ChatExecutionPlan = (function () {
   var taskOverviewEl = null;
   var roundTimelineEl = null;
   var snapshotTimelineEl = null;
+  var snapshotFilesEl = null;
   var snapshotRestoreHandler = null;
   var snapshotCanRestoreFn = null;
   var snapshotFetchGeneration = 0;
+  /** 最近一次 /checkpoints 时间轴上的 messageId，比聊天气泡内存集合更权威。 */
+  var snapshotCheckpointIds = Object.create(null);
+  var snapshotCheckpointEntries = [];
+  var snapshotCursorMessageId = '';
+  var snapshotCursorRestored = false;
+  /** 检查点时间轴下发的会话改动文件（只读 sessionTouchedPaths，不另存）。 */
+  var snapshotChangedFiles = [];
+  var snapshotFilesRefreshTimer = 0;
 
   // 挂载模式与承载容器：桌面 = 右侧停靠 aside；移动 = 顶部条 + 底部 sheet（设计 §6）。
   var mountedMode = null;      // 'desktop' | 'mobile'
@@ -176,10 +185,20 @@ window.ChatExecutionPlan = (function () {
 
   function applyPanelWidth() {
     try {
-      var w = pref('panelWidth', 360);
+      var w = pref('panelWidth', 320);
       w = typeof w === 'number' ? w : parseInt(w, 10);
-      if (!isFinite(w)) w = 360;
-      w = Math.min(480, Math.max(320, w));
+      if (!isFinite(w)) w = 320;
+      var allowed = [280, 320, 380];
+      var best = allowed[0];
+      var bestDist = Math.abs(w - best);
+      for (var i = 1; i < allowed.length; i++) {
+        var d = Math.abs(w - allowed[i]);
+        if (d < bestDist) {
+          best = allowed[i];
+          bestDist = d;
+        }
+      }
+      w = best;
       document.documentElement.style.setProperty('--etl-w', w + 'px');
     } catch (_e) { /* ignore */ }
   }
@@ -320,11 +339,35 @@ window.ChatExecutionPlan = (function () {
     return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">—</button>';
   }
 
-  /** 状态快照 Tab：会话检查点时间轴（回滚复用 chat-page restore 流程）。 */
+  /** 检查点 Tab：上半检查点时间轴，下半本会话改过的文件（只读）。 */
   function snapshotPanelHtml() {
     return '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
-      '<div class="etl-snapshot-timeline" id="etl-snapshot-timeline">' +
-        '<div class="etl-empty etl-snapshot-loading">加载检查点…</div>' +
+      '<div class="etl-snapshot-split">' +
+        '<div class="etl-snapshot-section etl-snapshot-section--checkpoints">' +
+          '<div class="etl-snapshot-section-head">' +
+            '<div class="etl-snapshot-header">' +
+              '<span class="etl-snapshot-header-label">检查点</span>' +
+              '<span class="etl-snapshot-header-count" id="etl-snapshot-checkpoints-count">加载中…</span>' +
+            '</div>' +
+            '<p class="etl-snapshot-desc">回滚到某条用户消息发送时的运行时；之后的对话与文件修改将被丢弃。</p>' +
+          '</div>' +
+          '<div class="etl-snapshot-timeline" id="etl-snapshot-timeline">' +
+            '<div class="etl-empty etl-snapshot-loading">加载检查点…</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="etl-snapshot-section etl-snapshot-section--files" id="etl-snapshot-files">' +
+          '<div class="etl-snapshot-section-head">' +
+            '<div class="etl-snapshot-header">' +
+              '<span class="etl-snapshot-header-label">变更文件</span>' +
+              '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
+            '</div>' +
+            '<p class="etl-snapshot-desc">本会话工具写入或修改过的文件。点击文件名可打开所在文件夹并定位到该文件。</p>' +
+          '</div>' +
+          '<div class="etl-snapshot-section-body">' +
+            '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
+            '<ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol>' +
+          '</div>' +
+        '</div>' +
       '</div>' +
     '</section>';
   }
@@ -365,7 +408,10 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
     snapshotTimelineEl = host.querySelector('#etl-snapshot-timeline');
+    snapshotFilesEl = host.querySelector('#etl-snapshot-files');
     bindRoundTimelineEvents();
+    syncSnapshotSplitLayout();
+    renderSnapshotFiles();
     if (window.EtlShellDock && typeof window.EtlShellDock.mount === 'function') {
       var dockHost = host.querySelector('#etl-shell-dock-host');
       if (dockHost) window.EtlShellDock.mount(dockHost);
@@ -447,6 +493,7 @@ window.ChatExecutionPlan = (function () {
     taskOverviewEl = null;
     roundTimelineEl = null;
     snapshotTimelineEl = null;
+    snapshotFilesEl = null;
     unbindRoundTimelineEvents();
     mountedMode = null;
     if (window.EtlShellDock && typeof window.EtlShellDock.resetMount === 'function') {
@@ -615,7 +662,11 @@ window.ChatExecutionPlan = (function () {
       Array.prototype.forEach.call(panels, function (p) {
         p.classList.toggle('hidden', p.getAttribute('data-panel') !== tabId);
       });
-      if (tabId === 'snapshot') refreshSnapshotTimeline();
+      syncSnapshotSplitLayout();
+      if (tabId === 'snapshot') {
+        refreshSnapshotTimeline();
+        refreshSnapshotFiles();
+      }
     } catch (e) {
       safeWarn('setActiveTab', e);
     }
@@ -1623,7 +1674,8 @@ window.ChatExecutionPlan = (function () {
     model_done: '模型已完成本次任务',
     stop_hook: '任务在收尾校验后完成',
     max_output_tokens: '输出达到上限后结束',
-    verification_exhausted: '验证轮次用尽后结束',
+    completion_paused: '任务仍有未完成条件，已暂停',
+    completion_failed: '任务未能完成必要条件',
     circuit_breaker: '触发熔断保护后结束',
     error: '执行出现错误后结束',
   };
@@ -1964,6 +2016,11 @@ window.ChatExecutionPlan = (function () {
    */
   function hydrateFromStructured(structured) {
     try {
+      try {
+        scheduleSnapshotTimelineRefresh();
+      } catch (fileErr) {
+        safeWarn('hydrateFromStructured.files', fileErr);
+      }
       var slice = sliceCurrentTurnStructured(structured);
       if (!slice.length) return false;
       var baseTs = Date.now() - slice.length * 2000;
@@ -2943,6 +3000,10 @@ window.ChatExecutionPlan = (function () {
           lastTool.pending = false;
           renderLlmActivity();
         }
+        var resultName = (matched && matched.toolName) || step.toolName || '';
+        if (CONTEXT_WRITE_TOOLS[resultName] && step.toolSuccess !== false) {
+          scheduleSnapshotTimelineRefresh();
+        }
       }
       scheduleFlowPersist();
     } catch (e) {
@@ -2971,6 +3032,7 @@ window.ChatExecutionPlan = (function () {
       renderEmptyState();
       renderLlmActivity();
       renderFooter();
+      renderSnapshotFiles();
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('resetToolActivity', e);
@@ -3013,6 +3075,7 @@ window.ChatExecutionPlan = (function () {
     renderList();
     renderLlmActivity();
     renderFooter();
+    renderSnapshotFiles();
     if (mountedMode === 'mobile') updateMobileBar();
   }
 
@@ -3176,8 +3239,9 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  function clear() {
+  function clear(opts) {
     try {
+      opts = opts || {};
       currentPlan = null;
       frozenPlanId = null;
       currentExecutionMode = null;
@@ -3195,6 +3259,21 @@ window.ChatExecutionPlan = (function () {
       authoritativeToolCalls = null;
       calibratedUniqueToolCount = 0;
       footerStats = { totalTokenUsage: null, totalToolCalls: null };
+      // 文件列表来自 checkpoint；切会话/回滚时清视图，新一轮保留到下次拉取。
+      if (snapshotFilesRefreshTimer) {
+        clearTimeout(snapshotFilesRefreshTimer);
+        snapshotFilesRefreshTimer = 0;
+      }
+      if (opts.resetSessionFiles !== false) snapshotChangedFiles = [];
+      snapshotCheckpointIds = Object.create(null);
+      snapshotCheckpointEntries = [];
+      snapshotCursorMessageId = '';
+      snapshotCursorRestored = false;
+      try {
+        if (window.ChatUI && typeof window.ChatUI.setCursorMessageId === 'function') {
+          window.ChatUI.setCursorMessageId('');
+        }
+      } catch (_e) { /* ignore */ }
       if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
       if (hostEl) {
         if (listEl) listEl.innerHTML = '';
@@ -3211,6 +3290,7 @@ window.ChatExecutionPlan = (function () {
         renderRoundTimeline(true);
         renderExecutionModeBanner();
         renderFooter();
+        renderSnapshotFiles();
       }
       applyVisibility();
       notifyPetFoot();
@@ -3669,7 +3749,159 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  // ── 状态快照 Tab：会话检查点时间轴 ──
+  // ── 检查点 Tab：检查点时间轴 + 本会话改过的文件 ──
+
+  function syncSnapshotSplitLayout() {
+    if (!hostEl) return;
+    var body = hostEl.querySelector('.etl-body');
+    if (body) body.classList.toggle('etl-body--fill', activeTab === 'snapshot');
+  }
+
+  function normalizeChangedPath(p) {
+    var text = String(p || '').trim().split(/\r?\n/)[0] || '';
+    return text.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  }
+
+  function applyCheckpointChangedFiles(files) {
+    snapshotChangedFiles = [];
+    if (!Array.isArray(files)) return;
+    for (var i = 0; i < files.length; i++) {
+      var fe = files[i];
+      if (!fe || typeof fe.path !== 'string') continue;
+      var path = normalizeChangedPath(fe.path);
+      if (!path) continue;
+      snapshotChangedFiles.push({
+        path: path,
+        op: fe.op || '修改',
+        ts: typeof fe.ts === 'number' ? fe.ts : 0,
+      });
+    }
+  }
+
+  function scheduleSnapshotTimelineRefresh() {
+    if (snapshotFilesRefreshTimer) clearTimeout(snapshotFilesRefreshTimer);
+    snapshotFilesRefreshTimer = setTimeout(function () {
+      snapshotFilesRefreshTimer = 0;
+      refreshSnapshotTimeline();
+    }, 400);
+  }
+
+  function snapshotFileName(p) {
+    var n = normalizeChangedPath(p);
+    var idx = n.lastIndexOf('/');
+    return idx >= 0 ? n.slice(idx + 1) : n;
+  }
+
+  function snapshotFileBadgeClass(op) {
+    if (op === '新建') return 'etl-snapshot-file-badge--add';
+    if (op === '删除') return 'etl-snapshot-file-badge--del';
+    if (op === '移动') return 'etl-snapshot-file-badge--move';
+    return 'etl-snapshot-file-badge--edit';
+  }
+
+  function notifySnapshotFileOpen(message, type) {
+    try {
+      if (window.Notification && typeof window.Notification.show === 'function') {
+        window.Notification.show(message, type || 'info', { duration: 4000 });
+        return;
+      }
+    } catch (_e) { /* ignore */ }
+    try {
+      if (window.ChatPage && typeof window.ChatPage.notifyUser === 'function') {
+        window.ChatPage.notifyUser(message, type || 'info', { duration: 4000 });
+      }
+    } catch (_e2) { /* ignore */ }
+  }
+
+  var snapshotFileOpenInFlight = Object.create(null);
+
+  function openSnapshotChangedFile(relPath, btn) {
+    var filePath = normalizeChangedPath(relPath);
+    if (!filePath || snapshotFileOpenInFlight[filePath]) return;
+    snapshotFileOpenInFlight[filePath] = true;
+    if (btn) btn.disabled = true;
+    var sid = getActiveSessionIdForSnapshot();
+    fetch('/api/sessions/' + encodeURIComponent(sid) + '/open-file', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath }),
+    }).then(function (res) {
+      return res.json().then(function (body) {
+        return { ok: res.ok, body: body || {} };
+      }).catch(function () {
+        return { ok: false, body: { error: '无法在文件夹中定位文件' } };
+      });
+    }).then(function (result) {
+      if (result.ok) return;
+      notifySnapshotFileOpen((result.body && result.body.error) || '无法在文件夹中定位文件', 'error');
+    }).catch(function (e) {
+      safeWarn('openSnapshotChangedFile', e);
+      notifySnapshotFileOpen('无法在文件夹中定位文件', 'error');
+    }).then(function () {
+      delete snapshotFileOpenInFlight[filePath];
+      if (btn) btn.disabled = false;
+    });
+  }
+
+  function buildSnapshotFileItem(file) {
+    var li = document.createElement('li');
+    li.className = 'etl-snapshot-file';
+    li.setAttribute('role', 'listitem');
+
+    var badge = document.createElement('span');
+    badge.className = 'etl-snapshot-file-badge ' + snapshotFileBadgeClass(file.op);
+    badge.textContent = file.op || '修改';
+
+    var nameEl = document.createElement('button');
+    nameEl.type = 'button';
+    nameEl.className = 'etl-snapshot-file-name';
+    nameEl.textContent = snapshotFileName(file.path) || file.path;
+    nameEl.title = (file.path || '') + '\n打开所在文件夹并定位';
+    nameEl.setAttribute('aria-label', '在文件夹中定位 ' + (file.path || nameEl.textContent));
+    nameEl.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openSnapshotChangedFile(file.path, nameEl);
+    });
+
+    li.appendChild(badge);
+    li.appendChild(nameEl);
+    return li;
+  }
+
+  function renderSnapshotFiles() {
+    if (!snapshotFilesEl) return;
+    try {
+      var countEl = snapshotFilesEl.querySelector('#etl-snapshot-files-count');
+      var emptyEl = snapshotFilesEl.querySelector('.etl-snapshot-files-empty');
+      var list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
+      if (!list) return;
+      var files = snapshotChangedFiles.slice(0, 200);
+      if (countEl) countEl.textContent = files.length ? (files.length + ' 个文件') : '暂无文件';
+      list.innerHTML = '';
+      if (!files.length) {
+        if (emptyEl) emptyEl.classList.remove('hidden');
+        list.classList.add('hidden');
+        return;
+      }
+      if (emptyEl) emptyEl.classList.add('hidden');
+      list.classList.remove('hidden');
+      for (var i = 0; i < files.length; i++) {
+        list.appendChild(buildSnapshotFileItem(files[i]));
+      }
+    } catch (e) {
+      safeWarn('renderSnapshotFiles', e);
+    }
+  }
+
+  function refreshSnapshotFiles() {
+    try {
+      renderSnapshotFiles();
+    } catch (e) {
+      safeWarn('refreshSnapshotFiles', e);
+    }
+  }
 
   function getActiveSessionIdForSnapshot() {
     try {
@@ -3711,12 +3943,150 @@ window.ChatExecutionPlan = (function () {
     return '↩';
   }
 
+  function snapshotRestoreAllowed() {
+    return snapshotCanRestoreFn ? !!snapshotCanRestoreFn() : true;
+  }
+
+  function rememberSnapshotCheckpointIds(entries, cursorMessageId, cursorRestored) {
+    snapshotCheckpointIds = Object.create(null);
+    snapshotCheckpointEntries = [];
+    snapshotCursorMessageId = cursorMessageId || '';
+    snapshotCursorRestored = !!cursorRestored;
+    if (!Array.isArray(entries)) return;
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      var mid = entry && entry.messageId;
+      if (!mid) continue;
+      snapshotCheckpointIds[mid] = true;
+      if (entry.isCursor) snapshotCursorMessageId = mid;
+      if (entry.isRestoredCursor) snapshotCursorRestored = true;
+      snapshotCheckpointEntries.push({
+        messageId: mid,
+        userMessageTime: typeof entry.userMessageTime === 'number' ? entry.userMessageTime : null,
+        createdAt: entry.createdAt || '',
+        preview: entry.preview || '',
+        isCursor: !!entry.isCursor,
+        isRestoredCursor: !!entry.isRestoredCursor,
+      });
+    }
+  }
+
+  function hasSnapshotCheckpoint(messageId) {
+    return !!(messageId && snapshotCheckpointIds[messageId]);
+  }
+
+  function getSnapshotCheckpointEntries() {
+    return snapshotCheckpointEntries.slice();
+  }
+
+  function getSnapshotCursorMessageId() {
+    return snapshotCursorMessageId || '';
+  }
+
+  function isSnapshotCursorMessage(messageId) {
+    return !!(messageId && snapshotCursorMessageId && messageId === snapshotCursorMessageId);
+  }
+
+  function isSnapshotCursorRestored() {
+    return !!snapshotCursorRestored;
+  }
+
+  /** 只有回滚落到该节点后才隐藏回滚；仅「当前位置」不够。 */
+  function isSnapshotRestoreHidden(messageId) {
+    return isSnapshotCursorMessage(messageId) && snapshotCursorRestored;
+  }
+
+  function syncSnapshotCheckpointsToChatUi(entries) {
+    var ids = [];
+    if (Array.isArray(entries)) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i] && entries[i].messageId) ids.push(entries[i].messageId);
+      }
+    }
+    try {
+      if (window.ChatUI && typeof window.ChatUI.mergeCheckpointMessageIds === 'function') {
+        window.ChatUI.mergeCheckpointMessageIds(ids);
+      } else if (window.ChatUI && typeof window.ChatUI.setCheckpointMessageIds === 'function') {
+        window.ChatUI.setCheckpointMessageIds(ids);
+      }
+      if (window.ChatUI && typeof window.ChatUI.setCursorMessageId === 'function') {
+        window.ChatUI.setCursorMessageId(snapshotCursorMessageId, snapshotCursorRestored);
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
+  /** 时间轴条目即检查点；聊天气泡内存集合可能滞后，不能单独作为否决。 */
+  function snapshotHasCheckpoint(messageId) {
+    if (hasSnapshotCheckpoint(messageId)) return true;
+    try {
+      if (window.ChatUI && typeof window.ChatUI.hasCheckpointForMessage === 'function') {
+        return !!window.ChatUI.hasCheckpointForMessage(messageId);
+      }
+    } catch (_e) { /* ignore */ }
+    return false;
+  }
+
+  function applySnapshotRestoreButtonState(btn, messageId) {
+    if (!btn) return;
+    var hasCp = snapshotHasCheckpoint(messageId);
+    var can = snapshotRestoreAllowed();
+    btn.disabled = !hasCp || !can;
+    btn.classList.toggle('etl-snapshot-restore-btn--ready', hasCp);
+    var title = !hasCp
+      ? '未找到检查点，无法回滚'
+      : (can ? '回滚到此消息' : '运行中，请等待当前任务完成后再回滚');
+    btn.title = title;
+    btn.setAttribute('aria-label', title);
+  }
+
+  function bindSnapshotRestoreButton(btn) {
+    if (!btn || btn._snapshotRestoreBound) return;
+    btn._snapshotRestoreBound = true;
+    btn.addEventListener('click', function (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      if (!btn || btn.disabled) return;
+      var targetMessageId = btn.getAttribute('data-message-id');
+      if (!targetMessageId) return;
+      if (typeof snapshotRestoreHandler === 'function') {
+        snapshotRestoreHandler(targetMessageId, btn);
+      }
+    });
+  }
+
+  function createSnapshotRestoreButton(messageId) {
+    var restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'etl-snapshot-restore-btn';
+    restoreBtn.setAttribute('data-message-id', messageId);
+    restoreBtn.innerHTML = snapshotRestoreIconHtml();
+    if (window.AppIcon && typeof window.AppIcon.hydrate === 'function') {
+      window.AppIcon.hydrate(restoreBtn);
+    }
+    applySnapshotRestoreButtonState(restoreBtn, messageId);
+    bindSnapshotRestoreButton(restoreBtn);
+    return restoreBtn;
+  }
+
+  function updateSnapshotCheckpointCount(text) {
+    var section = snapshotTimelineEl && snapshotTimelineEl.closest
+      ? snapshotTimelineEl.closest('.etl-snapshot-section')
+      : null;
+    var count = section && section.querySelector('#etl-snapshot-checkpoints-count');
+    if (count) count.textContent = text;
+  }
+
   function renderSnapshotTimeline(payload) {
     if (!snapshotTimelineEl) return;
     try {
       var entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
-      var canRestore = snapshotCanRestoreFn ? !!snapshotCanRestoreFn() : true;
+      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
+      syncSnapshotCheckpointsToChatUi(entries);
+      applyCheckpointChangedFiles(payload.changedFiles);
+      renderSnapshotFiles();
+      var canRestore = snapshotRestoreAllowed();
       snapshotTimelineEl.innerHTML = '';
+      updateSnapshotCheckpointCount(entries.length ? (entries.length + ' 个节点') : '暂无节点');
 
       if (!canRestore) {
         var hint = document.createElement('div');
@@ -3725,23 +4095,6 @@ window.ChatExecutionPlan = (function () {
         hint.textContent = '任务运行中或回滚进行中，请稍候再试。';
         snapshotTimelineEl.appendChild(hint);
       }
-
-      var header = document.createElement('div');
-      header.className = 'etl-snapshot-header';
-      var label = document.createElement('span');
-      label.className = 'etl-snapshot-header-label';
-      label.textContent = '会话检查点';
-      var count = document.createElement('span');
-      count.className = 'etl-snapshot-header-count';
-      count.textContent = entries.length ? (entries.length + ' 个节点') : '暂无节点';
-      header.appendChild(label);
-      header.appendChild(count);
-      snapshotTimelineEl.appendChild(header);
-
-      var desc = document.createElement('p');
-      desc.className = 'etl-snapshot-desc';
-      desc.textContent = '回滚到某条用户消息发送时的运行时；之后的对话与文件修改将被丢弃。';
-      snapshotTimelineEl.appendChild(desc);
 
       if (!entries.length) {
         var empty = document.createElement('div');
@@ -3804,31 +4157,10 @@ window.ChatExecutionPlan = (function () {
 
         card.appendChild(meta);
         card.appendChild(preview);
-
-        if (!isCursor) {
-          var restoreBtn = document.createElement('button');
-          restoreBtn.type = 'button';
-          restoreBtn.className = 'etl-snapshot-restore-btn';
-          restoreBtn.setAttribute('data-message-id', entry.messageId);
-          restoreBtn.innerHTML = snapshotRestoreIconHtml();
-          if (window.AppIcon && typeof window.AppIcon.hydrate === 'function') {
-            window.AppIcon.hydrate(restoreBtn);
-          }
-          restoreBtn.setAttribute('aria-label', '回滚到此消息');
-          restoreBtn.title = '回滚到此消息';
-          restoreBtn.disabled = !canRestore;
-          restoreBtn.addEventListener('click', function (evt) {
-            evt.preventDefault();
-            evt.stopPropagation();
-            var btn = evt.currentTarget;
-            if (!btn || btn.disabled) return;
-            var targetMessageId = btn.getAttribute('data-message-id');
-            if (!targetMessageId) return;
-            if (typeof snapshotRestoreHandler === 'function') {
-              snapshotRestoreHandler(targetMessageId, btn);
-            }
-          });
-          card.appendChild(restoreBtn);
+        if (isSnapshotRestoreHidden(entry.messageId)) {
+          card.classList.add('etl-snapshot-card--no-restore');
+        } else {
+          card.appendChild(createSnapshotRestoreButton(entry.messageId));
         }
 
         li.appendChild(rail);
@@ -3840,6 +4172,7 @@ window.ChatExecutionPlan = (function () {
     } catch (e) {
       safeWarn('renderSnapshotTimeline', e);
       if (snapshotTimelineEl) {
+        updateSnapshotCheckpointCount('暂无节点');
         snapshotTimelineEl.innerHTML = '<div class="etl-empty etl-snapshot-empty">检查点加载失败</div>';
       }
     }
@@ -3858,14 +4191,20 @@ window.ChatExecutionPlan = (function () {
       return null;
     }).then(function (data) {
       if (gen !== snapshotFetchGeneration) return;
-      renderSnapshotTimeline(data || { entries: [] });
+      var payload = data || { entries: [] };
+      var entries = Array.isArray(payload.entries) ? payload.entries : [];
+      // 无论当前是不是快照 Tab，都要把检查点同步给气泡回滚。
+      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
+      syncSnapshotCheckpointsToChatUi(entries);
+      applyCheckpointChangedFiles(payload.changedFiles);
+      renderSnapshotFiles();
+      if (snapshotTimelineEl) renderSnapshotTimeline(payload);
       if (typeof done === 'function') done(data);
     });
   }
 
   function refreshSnapshotTimeline() {
     try {
-      if (activeTab !== 'snapshot' || !snapshotTimelineEl) return;
       fetchSnapshotTimeline(getActiveSessionIdForSnapshot());
     } catch (e) {
       safeWarn('refreshSnapshotTimeline', e);
@@ -3880,7 +4219,7 @@ window.ChatExecutionPlan = (function () {
     handlers = handlers || {};
     snapshotRestoreHandler = typeof handlers.onRestore === 'function' ? handlers.onRestore : null;
     snapshotCanRestoreFn = typeof handlers.canRestore === 'function' ? handlers.canRestore : null;
-    if (activeTab === 'snapshot') refreshSnapshotTimeline();
+    refreshSnapshotTimeline();
   }
 
   function notifySnapshotRestoreAvailability() {
@@ -3890,7 +4229,7 @@ window.ChatExecutionPlan = (function () {
       refreshSnapshotTimeline();
       return;
     }
-    var canRestore = snapshotCanRestoreFn ? !!snapshotCanRestoreFn() : true;
+    var canRestore = snapshotRestoreAllowed();
     var hint = snapshotTimelineEl.querySelector('.etl-snapshot-hint');
     if (!canRestore && !hint) {
       hint = document.createElement('div');
@@ -3903,7 +4242,7 @@ window.ChatExecutionPlan = (function () {
     }
     var btns = list.querySelectorAll('.etl-snapshot-restore-btn');
     Array.prototype.forEach.call(btns, function (btn) {
-      btn.disabled = !canRestore;
+      applySnapshotRestoreButtonState(btn, btn.getAttribute('data-message-id') || '');
     });
   }
 
@@ -3953,5 +4292,11 @@ window.ChatExecutionPlan = (function () {
     registerSnapshotHandlers: registerSnapshotHandlers,
     refreshSnapshotTimeline: refreshSnapshotTimeline,
     notifySnapshotRestoreAvailability: notifySnapshotRestoreAvailability,
+    hasSnapshotCheckpoint: hasSnapshotCheckpoint,
+    getSnapshotCheckpointEntries: getSnapshotCheckpointEntries,
+    getSnapshotCursorMessageId: getSnapshotCursorMessageId,
+    isSnapshotCursorMessage: isSnapshotCursorMessage,
+    isSnapshotCursorRestored: isSnapshotCursorRestored,
+    isSnapshotRestoreHidden: isSnapshotRestoreHidden,
   };
 })();

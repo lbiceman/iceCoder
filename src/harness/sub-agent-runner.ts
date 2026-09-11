@@ -460,11 +460,11 @@ function validateReadOnlyToolCall(
   allowedPaths: string[] | undefined,
 ): string | undefined {
   if (!allowedTools.has(toolCall.name) || toolCall.name === 'request_analysis') {
-    return `只读子代理不允许调用 ${toolCall.name}`;
+    return `The read-only sub-agent cannot call ${toolCall.name}`;
   }
 
   if (toolCall.name === 'fs_operation' && toolCall.arguments.operation !== 'list') {
-    return '只读子代理只允许 fs_operation 的 list 操作';
+    return 'The read-only sub-agent allows only the list action of fs_operation';
   }
 
   const pathsToCheck = [
@@ -486,11 +486,11 @@ function validateReadOnlyToolCall(
  */
 function validateRelativePath(candidate: string, allowedPaths: string[] | undefined): string | undefined {
   if (path.isAbsolute(candidate)) {
-    return `只读子代理只能访问工作区相对路径: ${candidate}`;
+    return `The read-only sub-agent can access only workspace-relative paths: ${candidate}`;
   }
   const normalized = normalizePath(candidate);
   if (normalized === '..' || normalized.startsWith('../')) {
-    return `只读子代理不允许访问工作区外路径: ${candidate}`;
+    return `The read-only sub-agent cannot access paths outside the workspace: ${candidate}`;
   }
   if (!allowedPaths?.length || normalized === '.') return undefined;
 

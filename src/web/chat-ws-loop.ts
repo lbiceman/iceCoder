@@ -24,7 +24,7 @@ import {
   pickSessionWs,
 } from './chat-ws-broadcast.js';
 import { appendMessages, broadcastHarnessState } from './chat-ws-persist.js';
-import { hasBusySessionRun, ensureRunningTurn } from './chat-ws-running-turn.js';
+import { hasBusySessionRun, ensureRunningTurn, clearRunningTurn } from './chat-ws-running-turn.js';
 import {
   SESSIONS_DIR,
   beginSessionBatch,
@@ -117,7 +117,6 @@ const ERROR_LIKE_STOP = new Set<StopReason>([
   'error',
   'timeout',
   'circuit_breaker',
-  'verification_exhausted',
   'max_output_tokens',
   'max_rounds',
   'token_budget',
@@ -147,8 +146,54 @@ function resolveTerminalPhase(stopReason?: StopReason): SessionRunPhase {
 }
 
 /**
- * 会话级运行循环：串行处理同一会话的任务队列。
- * 通过 `sessionProcessing` 防止同一会话被多个连接并发跑两个 harness（P1-9）。
+ * 认领会话锁后再出队。必须在 `hasBusySessionRun` 判定之后同步 `sessionProcessing.add`，
+ * 避免两个空闲 kickoff 同时 dequeue 开出两条 harness。
+ */
+async function claimNextQueuedTask(
+  runSid: string,
+  ws: WebSocket,
+  announceQueued: boolean,
+): Promise<PendingChatMessage | null> {
+  if (hasBusySessionRun(runSid)) return null;
+  sessionProcessing.add(runSid);
+  const taskQueue = getTaskQueueManager(SESSIONS_DIR);
+  let next: QueuedTask | undefined;
+  try {
+    next = await taskQueue.dequeue(runSid);
+  } catch (err) {
+    sessionProcessing.delete(runSid);
+    throw err;
+  }
+  if (!next) {
+    sessionProcessing.delete(runSid);
+    return null;
+  }
+  await publishTaskQueueState(runSid);
+  if (announceQueued) {
+    broadcastToSession(runSid, {
+      type: 'info',
+      message: `📋 正在执行排队任务：${next.text}`,
+    });
+  }
+  const relayWs = pickSessionWs(runSid, ws);
+  const loopWs = relayWs ?? ws;
+  return queuedTaskToPending(next, loopWs);
+}
+
+async function tryKickoffSessionLoop(
+  deps: ChatRunDeps,
+  runSid: string,
+  ws: WebSocket,
+  announceQueued = false,
+): Promise<boolean> {
+  const next = await claimNextQueuedTask(runSid, ws, announceQueued);
+  if (!next) return false;
+  void runSessionMessageLoop(deps, runSid, next.ws, next);
+  return true;
+}
+
+/**
+ * 会话级运行循环：一次只跑一条。model_done 后释放锁再扫队列 kickoff 下一条。
  */
 export async function enqueueAndMaybeKickoff(
   deps: ChatRunDeps,
@@ -164,16 +209,7 @@ export async function enqueueAndMaybeKickoff(
     await taskQueue.enqueue(runSid, taskInput);
   }
   await publishTaskQueueState(runSid);
-
-  if (!hasBusySessionRun(runSid)) {
-    const next = await taskQueue.dequeue(runSid);
-    await publishTaskQueueState(runSid);
-    if (next) {
-      const relayWs = pickSessionWs(runSid, ws);
-      const loopWs = relayWs ?? ws;
-      void runSessionMessageLoop(deps, runSid, loopWs, queuedTaskToPending(next, loopWs));
-    }
-  }
+  await tryKickoffSessionLoop(deps, runSid, ws);
 }
 
 export async function runSessionMessageLoop(
@@ -183,68 +219,62 @@ export async function runSessionMessageLoop(
   first: PendingChatMessage,
 ): Promise<void> {
   sessionProcessing.add(runSid);
-  const taskQueue = getTaskQueueManager(SESSIONS_DIR);
   let terminalPhase: SessionRunPhase | null = null;
   let terminalReason: StopReason | undefined;
   try {
     publishRunState(runSid, 'running');
-    let current: PendingChatMessage | undefined = first;
-    while (current) {
-      beginSessionBatch(runSid);
-      broadcastHarnessState(runSid);
-      ensureRunningTurn(runSid);
-      broadcastToSession(runSid, { type: 'status', status: 'processing' });
-      let stopReason: StopReason | undefined;
-      try {
-        stopReason = await handleChatMessage({
-          ws: current.ws,
-          message: current.content,
-          orchestrator: deps.orchestrator,
-          toolRegistry: deps.toolRegistry,
-          toolExecutor: deps.toolExecutor,
-          images: current.images,
-          referencePaths: current.referencePaths,
-          clientMessageId: current.messageId ?? null,
-          mcpManager: deps.mcpManager,
-          runSessionId: runSid,
-          skipUserMessageAppend: current.skipUserMessageAppend,
-          source: current.source,
-          reasoningEffort: current.reasoningEffort,
-        });
-      } catch (err) {
-        broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
-        terminalPhase = 'error';
-        break;
-      } finally {
-        endSessionBatch(runSid);
-        broadcastHarnessState(runSid);
-        broadcastToSession(runSid, { type: 'status', status: 'idle' });
-      }
-
-      if (stopReason !== 'model_done') {
-        terminalPhase = resolveTerminalPhase(stopReason);
-        terminalReason = stopReason;
-        break;
-      }
-
-      const nextQueued = await taskQueue.dequeue(runSid);
-      if (!nextQueued) {
-        terminalPhase = 'done';
-        terminalReason = 'model_done';
-        break;
-      }
-
-      await publishTaskQueueState(runSid);
-      broadcastToSession(runSid, {
-        type: 'info',
-        message: `📋 正在执行排队任务：${nextQueued.text}`,
+    beginSessionBatch(runSid);
+    broadcastHarnessState(runSid);
+    ensureRunningTurn(runSid);
+    broadcastToSession(runSid, { type: 'status', status: 'processing' });
+    let stopReason: StopReason | undefined;
+    try {
+      stopReason = await handleChatMessage({
+        ws: first.ws,
+        message: first.content,
+        orchestrator: deps.orchestrator,
+        toolRegistry: deps.toolRegistry,
+        toolExecutor: deps.toolExecutor,
+        images: first.images,
+        referencePaths: first.referencePaths,
+        clientMessageId: first.messageId ?? null,
+        mcpManager: deps.mcpManager,
+        runSessionId: runSid,
+        skipUserMessageAppend: first.skipUserMessageAppend,
+        source: first.source,
+        reasoningEffort: first.reasoningEffort,
       });
+    } catch (err) {
+      broadcastToSession(runSid, { type: 'error', message: formatFriendlyError(err) });
+      terminalPhase = 'error';
+    } finally {
+      endSessionBatch(runSid);
+      broadcastHarnessState(runSid);
+      broadcastToSession(runSid, { type: 'status', status: 'idle' });
+      // handleChatMessage 若在自身 try/finally 之前抛错，这里兜底清 runningTurns，
+      // 否则 hasBusySessionRun 会一直为 true，队列再也 kickoff 不了。
+      clearRunningTurn(runSid);
+    }
 
-      const relayWs = pickSessionWs(runSid, ws) ?? current.ws;
-      current = queuedTaskToPending(nextQueued, relayWs);
+    if (terminalPhase === 'error') {
+      // 已在 catch 里标记
+    } else if (stopReason !== 'model_done') {
+      terminalPhase = resolveTerminalPhase(stopReason);
+      terminalReason = stopReason;
+    } else {
+      terminalPhase = 'done';
+      terminalReason = 'model_done';
     }
   } finally {
     sessionProcessing.delete(runSid);
+    // 只在循环结束后扫一次：漏网项和队列里的下一条走同一条 kickoff。
+    if (terminalPhase === 'done') {
+      const next = await claimNextQueuedTask(runSid, ws, true);
+      if (next) {
+        await runSessionMessageLoop(deps, runSid, next.ws, next);
+        return;
+      }
+    }
     if (terminalPhase && terminalPhase !== 'running') {
       publishRunState(runSid, terminalPhase, terminalReason);
     }

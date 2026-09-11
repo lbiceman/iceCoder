@@ -2,7 +2,7 @@
   "supervisorMode": "adaptive",
   "iceEtlPrefs": {
     "panelDefaultExpanded": true,
-    "panelWidth": 360,
+    "panelWidth": 320,
     "showTransparencyPanel": true,
     "taskDoneNotification": false,
     "panelAutoCollapse": false

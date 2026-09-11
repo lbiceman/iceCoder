@@ -29,6 +29,7 @@ import {
   type SessionMemoryState,
   type PackageJsonTestFacts,
 } from '../../../src/memory/file-memory/session-memory.js';
+import { LEGACY_TASK_VERIFICATION_KEYS } from '../../../src/types/legacy-runtime-schema.js';
 
 // Mock remote config
 vi.mock('../../../src/memory/file-memory/memory-remote-config.js', () => ({
@@ -314,8 +315,6 @@ describe('persisted runtime (icecoder-runtime)', () => {
     filesRead: ['a.ts'],
     filesChanged: [],
     commandsRun: ['npm test'],
-    verificationRequired: false,
-    verificationStatus: 'not_required' as const,
   };
   const minimalRepo = {
     filesRead: ['a.ts'],
@@ -334,7 +333,7 @@ describe('persisted runtime (icecoder-runtime)', () => {
     expect(p!.repo.filesRead).toContain('a.ts');
   });
 
-  it('buildRuntimeEvidenceSection 含可解析 fence', () => {
+  it('new Runtime Evidence writes schema v2 without legacy completion fields', () => {
     const md = buildRuntimeEvidenceSection(
       {
         task: {
@@ -344,8 +343,6 @@ describe('persisted runtime (icecoder-runtime)', () => {
           filesRead: [],
           filesChanged: [],
           commandsRun: [],
-          verificationRequired: true,
-          verificationStatus: 'required',
         },
         repo: {
           filesRead: [],
@@ -358,10 +355,11 @@ describe('persisted runtime (icecoder-runtime)', () => {
       null,
     );
     expect(md).toContain(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}`);
-    expect(parsePersistedRuntime(md)?.task.intent).toBe('edit');
+    expect(md).toContain('"version":2');
+    expect(parsePersistedRuntime(md)?.task.goal).toBe('g');
   });
 
-  it('buildRuntimeEvidenceSection preserves file deliverable write versions', () => {
+  it('new Runtime Evidence preserves deliverable generation counters', () => {
     const md = buildRuntimeEvidenceSection(
       {
         task: {
@@ -371,8 +369,6 @@ describe('persisted runtime (icecoder-runtime)', () => {
           filesRead: [],
           filesChanged: ['/tmp/out.md'],
           commandsRun: [],
-          verificationRequired: true,
-          verificationStatus: 'required',
           fileDeliverableWriteVersions: { '/tmp/out.md': 2 },
           fileDeliverableConfirmVersions: { '/tmp/out.md': 1 },
         },
@@ -386,12 +382,11 @@ describe('persisted runtime (icecoder-runtime)', () => {
       },
       null,
     );
-    const parsed = parsePersistedRuntime(md);
-    expect(parsed?.task.fileDeliverableWriteVersions?.['/tmp/out.md']).toBe(2);
-    expect(parsed?.task.fileDeliverableConfirmVersions?.['/tmp/out.md']).toBe(1);
+    expect(parsePersistedRuntime(md)?.task.fileDeliverableWriteVersions).toEqual({ '/tmp/out.md': 2 });
+    expect(parsePersistedRuntime(md)?.task.fileDeliverableConfirmVersions).toEqual({ '/tmp/out.md': 1 });
   });
 
-  it('truncateSessionMemoryForCompact 保留 Runtime Evidence 内长 JSON', () => {
+  it('truncateSessionMemoryForCompact keeps narrative without runtime fence', () => {
     const evidence = buildRuntimeEvidenceSection(
       {
         task: {
@@ -401,8 +396,6 @@ describe('persisted runtime (icecoder-runtime)', () => {
           filesRead: Array.from({ length: 80 }, (_, i) => `f${i}.ts`),
           filesChanged: [],
           commandsRun: [],
-          verificationRequired: false,
-          verificationStatus: 'not_required',
         },
         repo: {
           filesRead: [],
@@ -417,7 +410,24 @@ describe('persisted runtime (icecoder-runtime)', () => {
     const longWorklog = '# Worklog\n' + 'x'.repeat(25000);
     const content = `# Session Title\nok\n\n# Runtime Evidence (auto)\n${evidence}\n\n${longWorklog}`;
     const { truncatedContent } = truncateSessionMemoryForCompact(content);
-    expect(parsePersistedRuntime(truncatedContent)).not.toBeNull();
-    expect(truncatedContent).toContain('icecoder-runtime');
+    expect(parsePersistedRuntime(truncatedContent)?.task.filesRead).toHaveLength(64);
+    expect(truncatedContent).toContain('## Harness TaskState');
+  });
+
+  it('migrates a legacy v1 fence and drops its verification mirror', () => {
+    const legacy = JSON.stringify({
+      version: 1,
+      task: {
+        ...minimalTask,
+        verificationRequired: true,
+        verificationStatus: 'failed',
+      },
+      repo: minimalRepo,
+    });
+    const parsed = parsePersistedRuntime(`\`\`\`${ICECODER_RUNTIME_FENCE_LANG}\n${legacy}\n\`\`\``);
+    expect(parsed?.task.goal).toBe('fix login');
+    for (const key of LEGACY_TASK_VERIFICATION_KEYS) {
+      expect(parsed?.task).not.toHaveProperty(key);
+    }
   });
 });

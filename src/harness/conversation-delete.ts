@@ -21,6 +21,13 @@ import {
   rewriteIntentCheckpoint,
 } from './intent-checkpoint-store.js';
 import { removeToolTraceDiffEntries } from '../web/session-tool-trace-diffs.js';
+import {
+  buildRuntimeEvidenceSection,
+  mergeRuntimeEvidenceIntoNotes,
+  parsePersistedRuntime,
+  sessionNotesPath,
+} from '../memory/file-memory/session-memory.js';
+import { bumpSessionContextWriteEpoch } from './session-context-write-gate.js';
 
 function isAlsoNoteUiMessage(message: UiChatMessage): boolean {
   return message.role === 'user' && message.alsoNote === true;
@@ -54,13 +61,6 @@ function findSkillGuideIndexForDeletedRequest(
   });
 }
 
-function findNextUiUserIndex(uiMessages: UiChatMessage[], afterIdx: number): number {
-  for (let i = afterIdx + 1; i < uiMessages.length; i++) {
-    if (uiMessages[i].role === 'user') return i;
-  }
-  return -1;
-}
-
 function findNextRealUiUserIndex(uiMessages: UiChatMessage[], afterIdx: number): number {
   for (let i = afterIdx + 1; i < uiMessages.length; i++) {
     if (isRealUiUserMessage(uiMessages[i])) return i;
@@ -70,6 +70,30 @@ function findNextRealUiUserIndex(uiMessages: UiChatMessage[], afterIdx: number):
 
 function uiUserContent(message: UiChatMessage | undefined): string {
   return typeof message?.content === 'string' ? message.content : '';
+}
+
+/** UI 正文是展示用短句，structured 常带工作区路径前缀。 */
+function structuredTextMatchesUi(structuredText: string, uiContent: string): boolean {
+  const a = structuredText.trim();
+  const b = uiContent.trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return a.endsWith(b) || a.includes(`\n${b}`);
+}
+
+function findStructuredUserIndexByUiContent(
+  structuredMessages: UnifiedMessage[],
+  uiContent: string,
+): number {
+  const needle = uiContent.trim();
+  if (!needle) return -1;
+  let found = -1;
+  for (let i = 0; i < structuredMessages.length; i++) {
+    if (!isRealStructuredUserMessage(structuredMessages[i])) continue;
+    const text = extractUserMessageText(structuredMessages[i].content ?? '');
+    if (structuredTextMatchesUi(text, needle)) found = i;
+  }
+  return found;
 }
 
 function findStructuredStartForUiUser(
@@ -84,8 +108,18 @@ function findStructuredStartForUiUser(
   }
 
   let start = findNthRealStructuredUserIndex(structuredMessages, realUiBefore);
+  if (anchorUserContent && start >= 0) {
+    const text = extractUserMessageText(structuredMessages[start].content ?? '');
+    if (!structuredTextMatchesUi(text, anchorUserContent)) {
+      const byContent = findStructuredUserIndexByUiContent(structuredMessages, anchorUserContent);
+      if (byContent >= 0) start = byContent;
+    }
+  }
   if (start < 0 && anchorUserContent) {
     start = findSkillGuideIndexForDeletedRequest(structuredMessages, anchorUserContent);
+  }
+  if (start < 0 && anchorUserContent) {
+    start = findStructuredUserIndexByUiContent(structuredMessages, anchorUserContent);
   }
   return start;
 }
@@ -169,6 +203,84 @@ function removeStructuredAlsoNote(
   ];
 }
 
+const WRITE_TRACE_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'append_file',
+  'batch_edit_file',
+  'patch_file',
+  'fs_operation',
+  'apply_patch',
+  'create_file',
+  'multi_edit',
+]);
+
+function normalizeNotePath(raw: string): string {
+  return raw.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+}
+
+function collectWritePathsFromUiMessages(messages: UiChatMessage[]): string[] {
+  const paths = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== 'tool_trace' || !message.toolName) continue;
+    if (!WRITE_TRACE_TOOLS.has(message.toolName)) continue;
+    const status = String(message.status || '');
+    if (status === 'failed' || status === 'error' || status === 'warn') continue;
+    const rel = typeof message.detail === 'string' ? normalizeNotePath(message.detail) : '';
+    if (rel && rel !== '.' && rel !== '..') paths.add(rel);
+  }
+  return [...paths];
+}
+
+function filterDroppedPaths(paths: string[], dropped: Set<string>): string[] {
+  return paths.filter((raw) => {
+    const key = normalizeNotePath(raw);
+    return key && !dropped.has(key);
+  });
+}
+
+/** 从 session-notes 运行时快照里去掉「只在被删回合写过」的路径，避免下一轮按旧笔记重写文件。 */
+export function scrubSessionNotesRuntimeAfterDelete(
+  notes: string,
+  deletedOnlyPaths: string[],
+): string {
+  if (!notes.trim() || deletedOnlyPaths.length === 0) return notes;
+  const dropped = new Set(deletedOnlyPaths.map(normalizeNotePath).filter(Boolean));
+  if (dropped.size === 0) return notes;
+  const parsed = parsePersistedRuntime(notes);
+  if (!parsed) return notes;
+  const task = {
+    ...parsed.task,
+    filesRead: filterDroppedPaths(parsed.task.filesRead, dropped),
+    filesChanged: filterDroppedPaths(parsed.task.filesChanged, dropped),
+  };
+  const repo = {
+    ...parsed.repo,
+    filesRead: filterDroppedPaths(parsed.repo.filesRead, dropped),
+    filesChanged: filterDroppedPaths(parsed.repo.filesChanged, dropped),
+  };
+  return mergeRuntimeEvidenceIntoNotes(notes, buildRuntimeEvidenceSection({ task, repo }, null));
+}
+
+async function scrubSessionNotesAfterDelete(
+  sessionDir: string,
+  sessionId: string,
+  deletedOnlyPaths: string[],
+): Promise<void> {
+  if (deletedOnlyPaths.length === 0) return;
+  const file = sessionNotesPath(sessionDir, sessionId);
+  try {
+    const raw = await fs.readFile(file, 'utf-8');
+    const next = scrubSessionNotesRuntimeAfterDelete(raw, deletedOnlyPaths);
+    if (next === raw) return;
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    await fs.writeFile(tmp, next, 'utf-8');
+    await fs.rename(tmp, file);
+  } catch {
+    /* notes may be absent */
+  }
+}
+
 function collectToolCallIdsFromUiMessages(messages: UiChatMessage[]): string[] {
   const ids: string[] = [];
   for (const message of messages) {
@@ -224,6 +336,14 @@ export class DeleteMessageNotFoundError extends Error {
   }
 }
 
+function findDeletedUiTurnEnd(uiMessages: UiChatMessage[], startIdx: number): number {
+  for (let i = startIdx + 1; i < uiMessages.length; i++) {
+    const role = uiMessages[i].role;
+    if (role === 'user' || role === 'system') return i;
+  }
+  return uiMessages.length;
+}
+
 export function removeUiUserMessage(
   uiMessages: UiChatMessage[],
   messageId: string,
@@ -235,8 +355,7 @@ export function removeUiUserMessage(
     return [...uiMessages.slice(0, idx), ...uiMessages.slice(idx + 1)];
   }
 
-  const nextUiUserIdx = findNextUiUserIndex(uiMessages, idx);
-  const end = nextUiUserIdx >= 0 ? nextUiUserIdx : uiMessages.length;
+  const end = findDeletedUiTurnEnd(uiMessages, idx);
   return [...uiMessages.slice(0, idx), ...uiMessages.slice(end)];
 }
 
@@ -262,13 +381,77 @@ export function removeStructuredUserMessage(
     deletedUserContent,
   );
   if (!range) {
-    return stripResumeCheckpointMessages(structuredMessages);
+    const fallbackStart = findStructuredUserIndexByUiContent(structuredMessages, deletedUserContent);
+    if (fallbackStart < 0) {
+      return stripResumeCheckpointMessages(structuredMessages);
+    }
+    let fallbackEnd = structuredMessages.length;
+    const nextRealUiUserIdx = findNextRealUiUserIndex(uiMessages, uiIdx);
+    if (nextRealUiUserIdx >= 0) {
+      const nextStart = findStructuredStartForUiUser(
+        structuredMessages,
+        uiMessages,
+        nextRealUiUserIdx,
+        uiUserContent(uiMessages[nextRealUiUserIdx]),
+      );
+      if (nextStart > fallbackStart) fallbackEnd = nextStart;
+    }
+    return stripResumeCheckpointMessages([
+      ...structuredMessages.slice(0, fallbackStart),
+      ...structuredMessages.slice(fallbackEnd),
+    ]);
   }
 
   return stripResumeCheckpointMessages([
     ...structuredMessages.slice(0, range.start),
     ...structuredMessages.slice(range.end),
   ]);
+}
+
+/**
+ * 回滚：丢掉该用户消息及其之后的全部对话（聊天记录与模型上下文都截断）。
+ * 与 {@link removeUiUserMessage} 不同，后面的用户回合也不会保留。
+ */
+export function truncateConversationBeforeUserMessage(
+  uiMessages: UiChatMessage[],
+  structuredMessages: UnifiedMessage[],
+  messageId: string,
+  fallbackUserContent = '',
+): {
+  uiMessages: UiChatMessage[];
+  structuredMessages: UnifiedMessage[];
+} {
+  const uiIdx = uiMessages.findIndex((m) => m.id === messageId && m.role === 'user');
+  const deletedContent = uiIdx >= 0 && typeof uiMessages[uiIdx].content === 'string'
+    ? uiMessages[uiIdx].content
+    : fallbackUserContent;
+  const nextUi = uiIdx >= 0
+    ? uiMessages.slice(0, uiIdx)
+    : uiMessages.filter((m) => m.id !== messageId);
+
+  let nextStructured = structuredMessages;
+  if (uiIdx >= 0) {
+    const start = findStructuredStartForUiUser(
+      structuredMessages,
+      uiMessages,
+      uiIdx,
+      deletedContent,
+    );
+    if (start >= 0) {
+      nextStructured = structuredMessages.slice(0, start);
+    } else {
+      const found = findStructuredUserIndexByUiContent(structuredMessages, deletedContent);
+      nextStructured = found >= 0 ? structuredMessages.slice(0, found) : [];
+    }
+  } else if (deletedContent.trim()) {
+    const found = findStructuredUserIndexByUiContent(structuredMessages, deletedContent);
+    if (found >= 0) nextStructured = structuredMessages.slice(0, found);
+  }
+
+  return {
+    uiMessages: nextUi,
+    structuredMessages: stripResumeCheckpointMessages(nextStructured),
+  };
 }
 
 export interface DeleteUserMessageParams {
@@ -287,9 +470,11 @@ async function removeMessageFromCheckpointHistory(
 ): Promise<void> {
   const index = await loadCheckpointIndex(sessionDir, sessionId);
   const targetIdx = index.entries.findIndex((entry) => entry.messageId === messageId);
-  if (targetIdx < 0) return;
+  const laterEntries = targetIdx >= 0
+    ? index.entries.slice(targetIdx + 1)
+    : index.entries;
 
-  for (const entry of index.entries.slice(targetIdx + 1)) {
+  for (const entry of laterEntries) {
     const archive = await loadIntentCheckpoint(sessionDir, sessionId, entry.messageId);
     if (!archive) continue;
     const nextStructured = removeStructuredUserMessage(
@@ -307,7 +492,9 @@ async function removeMessageFromCheckpointHistory(
     });
   }
 
-  await removeCheckpoint(sessionDir, sessionId, messageId);
+  if (targetIdx >= 0) {
+    await removeCheckpoint(sessionDir, sessionId, messageId);
+  }
 }
 
 export async function deleteUserMessageConversation(
@@ -327,11 +514,11 @@ export async function deleteUserMessageConversation(
   if (deleteIdx < 0 || !deletedMessage) {
     throw new DeleteMessageNotFoundError('未找到该用户消息。');
   }
+  bumpSessionContextWriteEpoch(sessionId);
 
-  const nextUiUserIdx = findNextUiUserIndex(uiMessages, deleteIdx);
   const removedUiMessages = isAlsoNoteUiMessage(deletedMessage)
     ? [deletedMessage]
-    : uiMessages.slice(deleteIdx, nextUiUserIdx >= 0 ? nextUiUserIdx : uiMessages.length);
+    : uiMessages.slice(deleteIdx, findDeletedUiTurnEnd(uiMessages, deleteIdx));
 
   const nextUi = removeUiUserMessage(uiMessages, messageId);
   if (!nextUi) {
@@ -352,7 +539,7 @@ export async function deleteUserMessageConversation(
 
   await writeUiSessionMessages(sessionDir, sessionId, nextUi);
   await writeStructuredMessages(sessionDir, sessionId, nextStructured);
-  params.setStructuredMessages?.(nextStructured.length > 0 ? nextStructured : undefined);
+  params.setStructuredMessages?.(nextStructured);
   await removeToolTraceDiffEntries(
     sessionDir,
     sessionId,
@@ -360,6 +547,10 @@ export async function deleteUserMessageConversation(
   );
   await removeMessageFromCheckpointHistory(sessionDir, sessionId, messageId, deletedUserContent);
   await clearActiveTaskCheckpoint(sessionDir, sessionId);
+  const remainingWritePaths = new Set(collectWritePathsFromUiMessages(nextUi));
+  const deletedOnlyPaths = collectWritePathsFromUiMessages(removedUiMessages)
+    .filter((rel) => !remainingWritePaths.has(rel));
+  await scrubSessionNotesAfterDelete(sessionDir, sessionId, deletedOnlyPaths);
 
   const remainingUsers = nextUi.filter((message) => isRealUiUserMessage(message));
   const firstRemainingContent = remainingUsers.find((message) =>

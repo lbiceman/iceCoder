@@ -30,6 +30,7 @@ import { prepareAssistantContentForHistory } from './text-format-tool-call-parse
 import { estimateMessagesTokens, resolveCompactionUsage } from '../llm/token-estimator.js';
 import type { ChatFunction } from './types.js';
 import type { TaskStateSnapshot, RepoContextSnapshot } from '../types/runtime-snapshot.js';
+import { CompletionFactsView } from './completion-facts-view.js';
 import type { CompactBoundaryMeta } from './compaction-strategy.js';
 import {
   applyLightMicrocompactToolClear,
@@ -222,14 +223,19 @@ function formatRecoveryList(
   return lines;
 }
 
-function nextRecoveryAction(taskState: TaskStateSnapshot, repoContext: RepoContextSnapshot): string {
-  if (taskState.verificationStatus === 'failed' || repoContext.recentDiagnostics.length > 0) {
+function nextRecoveryAction(
+  taskState: TaskStateSnapshot,
+  repoContext: RepoContextSnapshot,
+  facts: CompletionFactsView,
+): string {
+  const verification = facts.verificationSignal();
+  if (verification.status === 'failed' || repoContext.recentDiagnostics.length > 0) {
     return 'Fix the latest failure or diagnostic, then rerun the relevant verification command.';
   }
-  if (taskState.verificationStatus === 'required') {
+  if (verification.status === 'pending') {
     return 'Run focused verification for the changed files before finalizing.';
   }
-  if (taskState.verificationStatus === 'passed') {
+  if (verification.status === 'passed') {
     return 'Continue from the latest user instruction; if implementation is complete, summarize the verified result.';
   }
   if (taskState.phase === 'editing') {
@@ -496,6 +502,7 @@ export class ContextCompactor {
   buildRuntimeRecoveryContext(
     taskState: TaskStateSnapshot,
     repoContext: RepoContextSnapshot,
+    completionFacts = CompletionFactsView.fromTaskSnapshot(taskState),
   ): UnifiedMessage {
     const buildWithCaps = (caps: RuntimeRecoveryCaps): UnifiedMessage => {
       const changedFiles = uniqueInOrder([
@@ -511,6 +518,8 @@ export class ContextCompactor {
         ...repoContext.commandsRun,
       ]);
       const testCommands = uniqueLatest(repoContext.testCommands);
+      const verification = completionFacts.verificationSignal();
+      const requiredBlockers = completionFacts.requiredBlockers();
 
       const content = [
         '<runtime-recovery-context>',
@@ -520,9 +529,10 @@ export class ContextCompactor {
         `- goal: ${truncateForRecovery(taskState.goal, caps.goalChars)}`,
         `- intent: ${taskState.intent}`,
         `- phase: ${taskState.phase}`,
-        `- verificationRequired: ${taskState.verificationRequired}`,
-        `- verificationStatus: ${taskState.verificationStatus}`,
-        `- nextAction: ${nextRecoveryAction(taskState, repoContext)}`,
+        `- verificationSignal: ${verification.status}`,
+        `- requiredCompletionBlockers: ${requiredBlockers.length}`,
+        `- pendingOperation: ${completionFacts.hasPendingOperation()}`,
+        `- nextAction: ${nextRecoveryAction(taskState, repoContext, completionFacts)}`,
         '',
         ...formatRecoveryList('Changed Files', changedFiles, caps.changedFiles),
         '',
@@ -978,8 +988,10 @@ Continue the conversation from where it left off without asking the user any fur
         if (toolName && FILE_TOOLS.has(toolName)) return msg; // 保留完整内容
 
         const content = msg.content;
-        const isError = content.startsWith('工具执行错误') || content.startsWith('工具调用被拒绝');
-        const status = isError ? '失败' : '成功';
+        const isError = content.startsWith('Tool execution error')
+          || content.startsWith('工具执行错误')
+          || content.startsWith('工具调用被拒绝');
+        const status = isError ? 'failed' : 'succeeded';
         const preview = content.substring(0, 50).replace(/\n/g, ' ');
         return { ...msg, content: `[${status}] ${preview}${content.length > 50 ? '...' : ''}` };
       }
@@ -1194,11 +1206,11 @@ Continue the conversation from where it left off without asking the user any fur
     const FILE_TOOLS = FILE_TOOLS_PRESERVE_FULL_OUTPUT;
 
     const lines: string[] = [];
-    lines.push(`以下是之前 ${messages.length} 条对话的结构化摘要：`);
+    lines.push(`Structured summary of the previous ${messages.length} messages:`);
 
     for (const msg of messages) {
       if (msg.role === 'user') {
-        const content = typeof msg.content === 'string' ? msg.content : '[多模态内容]';
+        const content = typeof msg.content === 'string' ? msg.content : '[multimodal content]';
         if (
           content.startsWith('<system-reminder>')
           || content.startsWith('<context-summary>')
@@ -1207,7 +1219,7 @@ Continue the conversation from where it left off without asking the user any fur
           continue;
         }
         const truncated = content.length > 100 ? content.substring(0, 100) + '...' : content;
-        lines.push(`- 用户: ${truncated}`);
+        lines.push(`- User: ${truncated}`);
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           const toolNames = msg.toolCalls.map(tc => {
@@ -1215,24 +1227,28 @@ Continue the conversation from where it left off without asking the user any fur
             const truncatedArgs = argsStr.length > 80 ? argsStr.substring(0, 80) + '...' : argsStr;
             return `${tc.name}(${truncatedArgs})`;
           });
-          lines.push(`- 助手调用工具: ${toolNames.join(', ')}`);
+          lines.push(`- Assistant tool calls: ${toolNames.join(', ')}`);
         } else {
           const content = typeof msg.content === 'string' ? msg.content : '';
           if (content) {
             const truncated = content.length > 100 ? content.substring(0, 100) + '...' : content;
-            lines.push(`- 助手: ${truncated}`);
+            lines.push(`- Assistant: ${truncated}`);
           }
         }
       } else if (msg.role === 'tool') {
         const content = typeof msg.content === 'string' ? msg.content : '';
-        const isError = content.startsWith('工具执行错误') || content.startsWith('工具调用被拒绝') || content.startsWith('[失败]');
+        const isError = content.startsWith('Tool execution error')
+          || content.startsWith('工具执行错误')
+          || content.startsWith('工具调用被拒绝')
+          || content.startsWith('[failed]')
+          || content.startsWith('[失败]');
         const status = isError ? '❌' : '✅';
 
         // 文件操作工具的结果保留更多内容（500 字符而非 80）
         const toolName = msg.toolCallId ? toolCallIdToName.get(msg.toolCallId) : undefined;
         const maxLen = (toolName && FILE_TOOLS.has(toolName)) ? 500 : 80;
         const truncated = content.length > maxLen ? content.substring(0, maxLen) + '...' : content;
-        lines.push(`  ${status} 结果: ${truncated}`);
+        lines.push(`  ${status} Result: ${truncated}`);
       }
     }
 

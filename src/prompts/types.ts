@@ -80,9 +80,7 @@ export interface UserContext {
 }
 
 /**
- * 系统上下文 — 追加到系统提示词末尾。
- *
- * 包含 git 状态等实时信息。
+ * 易变系统上下文 — 由 Harness 在发送管道末尾注入，不写入静态 system 或主历史。
  */
 export interface SystemContext {
   [key: string]: string;
@@ -119,6 +117,6 @@ export interface AssembledPrompt {
   harnessOverlay?: HarnessPromptOverlay;
   /** 用户上下文 */
   userContext?: UserContext;
-  /** 系统上下文 */
+  /** 易变系统上下文（通常由入口直接传给 Harness） */
   systemContext?: SystemContext;
 }

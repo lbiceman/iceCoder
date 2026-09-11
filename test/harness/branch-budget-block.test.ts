@@ -138,6 +138,6 @@ describe('BranchBudgetTracker - hard block gate', () => {
     );
     expect(block.blocked).toBe(true);
     expect(block.message).toMatch(/write_file/);
-    expect(block.message).toMatch(/不存在/);
+    expect(block.message).toMatch(/does not exist on disk/);
   });
 });

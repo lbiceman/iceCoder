@@ -47,13 +47,24 @@ function withParsedReasoningEffort(item: QueuedTask): QueuedTask {
 
 export class TaskQueueManager {
   private readonly queues = new Map<string, QueuedTask[]>();
+  /** 按会话串行化读写，避免并发 enqueue/dequeue 读到两份内存副本或互相覆盖落盘。 */
+  private readonly opTails = new Map<string, Promise<void>>();
 
   constructor(readonly sessionsDir: string) {}
+
+  private runExclusive<T>(sessionId: string, op: () => Promise<T>): Promise<T> {
+    const prev = this.opTails.get(sessionId) ?? Promise.resolve();
+    const run = prev.then(op, op);
+    this.opTails.set(sessionId, run.then(() => undefined, () => undefined));
+    return run;
+  }
 
   private async ensureLoaded(sessionId: string): Promise<QueuedTask[]> {
     let queue = this.queues.get(sessionId);
     if (queue) return queue;
     queue = await this.readFromDisk(sessionId);
+    const raced = this.queues.get(sessionId);
+    if (raced) return raced;
     this.queues.set(sessionId, queue);
     return queue;
   }
@@ -80,36 +91,44 @@ export class TaskQueueManager {
   }
 
   async load(sessionId: string): Promise<void> {
-    await this.ensureLoaded(sessionId);
+    await this.runExclusive(sessionId, () => this.ensureLoaded(sessionId));
   }
 
   async list(sessionId: string): Promise<QueuedTask[]> {
-    const queue = await this.ensureLoaded(sessionId);
-    return queue.map((item) => ({ ...item }));
+    return this.runExclusive(sessionId, async () => {
+      const queue = await this.ensureLoaded(sessionId);
+      return queue.map((item) => ({ ...item }));
+    });
   }
 
   async enqueue(sessionId: string, task: TaskEnqueueInput): Promise<QueuedTask> {
-    const queue = await this.ensureLoaded(sessionId);
-    const entry = toQueuedTask(task, randomUUID(), Date.now());
-    queue.push(entry);
-    await this.persist(sessionId, queue);
-    return { ...entry };
+    return this.runExclusive(sessionId, async () => {
+      const queue = await this.ensureLoaded(sessionId);
+      const entry = toQueuedTask(task, randomUUID(), Date.now());
+      queue.push(entry);
+      await this.persist(sessionId, queue);
+      return { ...entry };
+    });
   }
 
   async dequeue(sessionId: string): Promise<QueuedTask | undefined> {
-    const queue = await this.ensureLoaded(sessionId);
-    const next = queue.shift();
-    await this.persist(sessionId, queue);
-    return next ? { ...next } : undefined;
+    return this.runExclusive(sessionId, async () => {
+      const queue = await this.ensureLoaded(sessionId);
+      const next = queue.shift();
+      await this.persist(sessionId, queue);
+      return next ? { ...next } : undefined;
+    });
   }
 
   async removeById(sessionId: string, id: string): Promise<QueuedTask | undefined> {
-    const queue = await this.ensureLoaded(sessionId);
-    const index = queue.findIndex((item) => item.id === id);
-    if (index < 0) return undefined;
-    const [removed] = queue.splice(index, 1);
-    await this.persist(sessionId, queue);
-    return { ...removed };
+    return this.runExclusive(sessionId, async () => {
+      const queue = await this.ensureLoaded(sessionId);
+      const index = queue.findIndex((item) => item.id === id);
+      if (index < 0) return undefined;
+      const [removed] = queue.splice(index, 1);
+      await this.persist(sessionId, queue);
+      return { ...removed };
+    });
   }
 
   async insertAt(
@@ -117,17 +136,21 @@ export class TaskQueueManager {
     index: number,
     task: TaskEnqueueInput,
   ): Promise<QueuedTask> {
-    const queue = await this.ensureLoaded(sessionId);
-    const clamped = Math.max(0, Math.min(index, queue.length));
-    const entry = toQueuedTask(task, randomUUID(), Date.now());
-    queue.splice(clamped, 0, entry);
-    await this.persist(sessionId, queue);
-    return { ...entry };
+    return this.runExclusive(sessionId, async () => {
+      const queue = await this.ensureLoaded(sessionId);
+      const clamped = Math.max(0, Math.min(index, queue.length));
+      const entry = toQueuedTask(task, randomUUID(), Date.now());
+      queue.splice(clamped, 0, entry);
+      await this.persist(sessionId, queue);
+      return { ...entry };
+    });
   }
 
   async clearSession(sessionId: string): Promise<void> {
-    this.queues.delete(sessionId);
-    await fs.unlink(taskQueueFilePath(this.sessionsDir, sessionId)).catch(() => {});
+    await this.runExclusive(sessionId, async () => {
+      this.queues.delete(sessionId);
+      await fs.unlink(taskQueueFilePath(this.sessionsDir, sessionId)).catch(() => {});
+    });
   }
 }
 

@@ -63,7 +63,8 @@ window.ChatExecutionPlanBridge = (function () {
     planFootDismissed = false;
     clearSessionFlow(sessionId || getActiveSessionId());
     if (window.ChatExecutionPlan) {
-      window.ChatExecutionPlan.clear();
+      // 同会话新一轮 / 清计划：执行流可丢；文件列表只读 checkpoint，不在这里另存。
+      window.ChatExecutionPlan.clear({ resetSessionFiles: false });
       if (!enabled) window.ChatExecutionPlan.setVisible(false);
     }
   }
