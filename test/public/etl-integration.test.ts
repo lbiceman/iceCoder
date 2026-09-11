@@ -672,72 +672,42 @@ describe('ETL 真实 Observer 链路', () => {
     });
   });
 
-  it('执行层 Tabs 具备完整关联并支持桌面与移动键盘导航', async () => {
+  it('工作台无 Tab，检查点与执行流同屏', async () => {
     const desktop = await loadObserver();
     const desktopResult = await desktop.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       bridge.notifyConnected({ features: { executionPlan: true } });
       bridge.handleStep({ type: 'execution_plan_init', plan });
-      const flow = document.querySelector('[data-tab="flow"]') as HTMLButtonElement;
-      const read = () => {
-        const active = document.activeElement as HTMLElement;
-        return {
-          tab: active?.dataset.tab,
-          activeTab: document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab'),
-        };
-      };
-      const press = (key: string) => {
-        (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', {
-          key,
-          bubbles: true,
-        }));
-        return read();
-      };
-      flow.focus();
-      const associations = [...document.querySelectorAll('.etl-tab')].map((node) => {
-        const tab = node as HTMLButtonElement;
-        const panel = document.getElementById(tab.getAttribute('aria-controls') || '');
-        return {
-          id: tab.id,
-          controls: tab.getAttribute('aria-controls'),
-          panelLabelledBy: panel?.getAttribute('aria-labelledby'),
-        };
-      });
       return {
-        associations,
-        right: press('ArrowRight'),
-        end: press('End'),
-        left: press('ArrowLeft'),
-        home: press('Home'),
+        tabs: document.querySelectorAll('.etl-tab').length,
+        chapters: !!document.querySelector('#etl-chapter-timeline'),
+        flow: !!document.querySelector('#etl-panel-flow'),
+        filesFoot: !!document.querySelector('#etl-foot-files'),
+        clock: !!document.querySelector('#etl-wb-clock'),
+        nodeCount: !!document.querySelector('#etl-chapter-node-count'),
       };
     }, makePlan('desktop-tabs'));
-
-    expect(desktopResult.associations).toHaveLength(2);
-    for (const association of desktopResult.associations) {
-      expect(association.id).toMatch(/^etl-tab-/);
-      expect(association.controls).toMatch(/^etl-panel-/);
-      expect(association.panelLabelledBy).toBe(association.id);
-    }
-    expect(desktopResult.right).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
-    expect(desktopResult.end).toEqual({ tab: 'snapshot', activeTab: 'snapshot' });
-    expect(desktopResult.left).toEqual({ tab: 'flow', activeTab: 'flow' });
-    expect(desktopResult.home).toEqual({ tab: 'flow', activeTab: 'flow' });
+    expect(desktopResult).toEqual({
+      tabs: 0,
+      chapters: true,
+      flow: true,
+      filesFoot: true,
+      clock: false,
+      nodeCount: true,
+    });
 
     const mobile = await loadObserver({ mobile: true });
     const mobileResult = await mobile.evaluate((plan) => {
       const bridge = (window as any).ChatExecutionPlanBridge;
       bridge.notifyConnected({ features: { executionPlan: true } });
       bridge.handleStep({ type: 'execution_plan_init', plan });
-      const flow = document.querySelector('[data-tab="flow"]') as HTMLButtonElement;
-      flow.focus();
-      flow.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
       return {
-        count: document.querySelectorAll('.etl-tab').length,
-        focused: (document.activeElement as HTMLElement)?.dataset.tab,
-        active: document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab'),
+        tabs: document.querySelectorAll('.etl-tab').length,
+        chapters: !!document.querySelector('#etl-chapter-timeline'),
+        flow: !!document.querySelector('#etl-panel-flow'),
       };
     }, makePlan('mobile-tabs'));
-    expect(mobileResult).toEqual({ count: 1, focused: 'flow', active: 'flow' });
+    expect(mobileResult).toEqual({ tabs: 0, chapters: true, flow: true });
   });
 
   it('真实 panel render 异常被隔离，bridge 后续事件仍更新并恢复 UI', async () => {
@@ -903,8 +873,8 @@ describe('ETL 真实 Observer 链路', () => {
         elapsed: document.querySelector('.etl-foot-time b')?.textContent,
         titles,
         chaptersAfter: nodes.length,
-        previousCollapsed: nodes[0] ? !nodes[0].classList.contains('is-expanded') : false,
-        currentExpanded: !!document.querySelector('.etl-chapter-node.is-current.is-expanded'),
+        previousCollapsed: nodes[1] ? !nodes[1].classList.contains('is-selected') : false,
+        currentExpanded: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
         parkedNodes: document.querySelectorAll('#etl-panel-flow > #etl-round-timeline .etl-round-node').length,
         restoreInFlow: !!document.querySelector('#etl-panel-flow .etl-snapshot-restore-btn'),
         prefixHint: document.querySelector('#etl-round-prefix-hint')?.textContent || '',
@@ -922,7 +892,7 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.chaptersAfter).toBeGreaterThanOrEqual(2);
     expect(result.previousCollapsed).toBe(true);
     expect(result.currentExpanded).toBe(true);
-    expect(result.parkedNodes).toBe(0);
+    expect(result.parkedNodes).toBeGreaterThanOrEqual(1);
     expect(result.restoreInFlow).toBe(false);
     expect(result.prefixHint).not.toContain('未载入本面板');
     await page.close();
@@ -1297,12 +1267,12 @@ describe('ETL 真实 Observer 链路', () => {
         footer,
         prefixHidden: prefix?.classList.contains('hidden') ?? true,
         restoreInFlow: !!document.querySelector('#etl-panel-flow .etl-snapshot-restore-btn'),
-        expandedCurrent: !!document.querySelector('.etl-chapter-node.is-current.is-expanded'),
+        expandedCurrent: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
       };
     });
     expect(result.chapters).toBe(2);
-    expect(result.titles[0]).toContain('补测试');
-    expect(result.titles[1]).toContain('登录失败');
+    expect(result.titles[0]).toContain('登录失败');
+    expect(result.titles[1]).toContain('补测试');
     expect(result.footer).toBe('3');
     expect(result.prefixHidden).toBe(true);
     expect(result.restoreInFlow).toBe(false);
@@ -1361,7 +1331,7 @@ describe('ETL 真实 Observer 链路', () => {
     await page.close();
   });
 
-  it('已结束的当前章轮次可以点击收起再展开', async () => {
+  it('已结束的当前章轮次可以点击展开再收起', async () => {
     const page = await loadObserver();
     const result = await page.evaluate(() => {
       const panel = (window as any).ChatExecutionPlan;
@@ -1377,36 +1347,36 @@ describe('ETL 真实 Observer 链路', () => {
         ],
       );
       const current = document.querySelector('.etl-chapter-node.is-current');
-      const round = current && current.querySelector('.etl-round-node');
+      const round = document.querySelector('#etl-round-timeline .etl-round-node');
       const row = round && round.querySelector('.etl-round-row');
       const before = round ? round.classList.contains('is-expanded') : null;
       if (row instanceof HTMLElement) row.click();
-      const afterCollapse = round ? round.classList.contains('is-expanded') : null;
-      if (row instanceof HTMLElement) row.click();
       const afterExpand = round ? round.classList.contains('is-expanded') : null;
+      if (row instanceof HTMLElement) row.click();
+      const afterCollapse = round ? round.classList.contains('is-expanded') : null;
       const parked = document.querySelector('#etl-panel-flow > #etl-round-timeline');
       const chapterRow = current && current.querySelector('.etl-chapter-row');
       if (chapterRow instanceof HTMLElement) chapterRow.click();
-      const afterChapterCollapse = {
-        currentExpanded: !!document.querySelector('.etl-chapter-node.is-current.is-expanded'),
-        parkedNodes: document.querySelectorAll('#etl-panel-flow > #etl-round-timeline .etl-round-node').length,
+      const afterChapterClick = {
+        currentSelected: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
+        flowNodes: document.querySelectorAll('#etl-panel-flow > #etl-round-timeline .etl-round-node').length,
       };
       return {
         before,
-        afterCollapse,
         afterExpand,
+        afterCollapse,
         inChapter: current ? current.querySelectorAll('.etl-round-node').length : 0,
         parkedHidden: !parked || parked.classList.contains('hidden'),
-        afterChapterCollapse,
+        afterChapterClick,
       };
     });
-    expect(result.before).toBe(true);
-    expect(result.afterCollapse).toBe(false);
+    expect(result.before).toBe(false);
     expect(result.afterExpand).toBe(true);
-    expect(result.inChapter).toBe(1);
-    expect(result.parkedHidden).toBe(true);
-    expect(result.afterChapterCollapse.currentExpanded).toBe(false);
-    expect(result.afterChapterCollapse.parkedNodes).toBe(0);
+    expect(result.afterCollapse).toBe(false);
+    expect(result.inChapter).toBe(0);
+    expect(result.parkedHidden).toBe(false);
+    expect(result.afterChapterClick.currentSelected).toBe(true);
+    expect(result.afterChapterClick.flowNodes).toBeGreaterThanOrEqual(1);
     await page.close();
   });
 });

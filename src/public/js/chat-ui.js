@@ -31,6 +31,9 @@ window.ChatUI = (function () {
   var userPinnedScroll = false;
   var scrollRafId = 0;
   var suppressScrollSync = false;
+  var toolScrollGen = 0;
+  var toolScrollFinishTimer = 0;
+  var toolScrollEndHandler = null;
   var elJumpBottom = null;
   var contentResizeObserver = null;
   var tailResizeObserver = null;
@@ -1471,6 +1474,80 @@ window.ChatUI = (function () {
     var blocks = queryToolRowBlocks(toolCallId);
     if (blocks.length > 0) return blocks[blocks.length - 1];
     return null;
+  }
+
+  function revealCollapsedToolTrace(block) {
+    if (!block || !block.closest) return;
+    var collapsed = block.closest('.tool-trace-collapsed');
+    if (!collapsed || collapsed.style.display !== 'none') return;
+    collapsed.style.display = '';
+    var group = collapsed.closest('.tool-trace-group');
+    var btn = group && group.querySelector('.tool-trace-toggle');
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'true');
+      btn.textContent = '收起';
+    }
+    if (group && isNodeInHistoryRegion(group)) {
+      primeHistoryDiffSourcesInGroup(group);
+      notifyHistoryLayoutChange(group);
+    }
+  }
+
+  function stopPinnedToolScrollWatch() {
+    if (toolScrollFinishTimer) {
+      clearTimeout(toolScrollFinishTimer);
+      toolScrollFinishTimer = 0;
+    }
+    if (toolScrollEndHandler && elMessages) {
+      elMessages.removeEventListener('scrollend', toolScrollEndHandler);
+      toolScrollEndHandler = null;
+    }
+  }
+
+  function finishPinnedToolScroll(gen) {
+    if (gen !== toolScrollGen) return;
+    stopPinnedToolScrollWatch();
+    userPinnedScroll = true;
+    autoScrollEnabled = false;
+    updateFollowBottomClass();
+    updateJumpBottomButton();
+    requestAnimationFrame(function () {
+      if (gen !== toolScrollGen) return;
+      suppressScrollSync = false;
+      notifyStaircaseNavRefresh();
+    });
+  }
+
+  /** 先脱离贴底跟随，再滚到工具行。滚完保持钉住，避免末尾几毫秒贴底/虚拟列表把位置拽偏。 */
+  function scrollToToolCall(toolCallId) {
+    var block = findToolRowBlockByCallId(toolCallId);
+    if (!block || typeof block.scrollIntoView !== 'function') return false;
+    revealCollapsedToolTrace(block);
+    userPinnedScroll = true;
+    autoScrollEnabled = false;
+    updateFollowBottomClass();
+    updateJumpBottomButton();
+    suppressScrollSync = true;
+    stopPinnedToolScrollWatch();
+    var gen = ++toolScrollGen;
+    toolScrollEndHandler = function () {
+      finishPinnedToolScroll(gen);
+    };
+    if (elMessages) {
+      elMessages.addEventListener('scrollend', toolScrollEndHandler);
+    }
+    toolScrollFinishTimer = setTimeout(function () {
+      finishPinnedToolScroll(gen);
+    }, 800);
+    requestAnimationFrame(function () {
+      if (gen !== toolScrollGen) return;
+      try {
+        block.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (_e) {
+        try { block.scrollIntoView(true); } catch (_e2) { /* ignore */ }
+      }
+    });
+    return true;
   }
 
   function updateToolActionByCallId(toolCallId, toolName, status) {
@@ -3061,16 +3138,7 @@ window.ChatUI = (function () {
     setInputValue: setInputValue,
     focusInput: focusInput,
     updateToolActionByCallId: updateToolActionByCallId,
-    scrollToToolCall: function (toolCallId) {
-      var block = findToolRowBlockByCallId(toolCallId);
-      if (!block || typeof block.scrollIntoView !== 'function') return false;
-      try {
-        block.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      } catch (_e) {
-        block.scrollIntoView(true);
-      }
-      return true;
-    },
+    scrollToToolCall: scrollToToolCall,
     mountDiffForToolCallId: mountDiffForToolCallId,
     repairMissingDiffMountsFromStructured: repairMissingDiffMountsFromStructured,
     showDiffForToolCallId: showDiffForToolCallId,
