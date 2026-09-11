@@ -12,15 +12,18 @@ describe('session-flow-eval', () => {
     try {
       const report = await runSessionFlowEval({ workspaceRoot: workspace });
 
-      expect(report.caseCount).toBeGreaterThanOrEqual(6);
+      expect(report.caseCount).toBeGreaterThanOrEqual(9);
       expect(report.passRate).toBe(1);
       expect(report.results.every((result) => result.passed)).toBe(true);
       expect(report.results.map((result) => result.id)).toEqual(expect.arrayContaining([
         'delete-single-middle-message',
         'delete-missing-message-is-noop',
+        'delete-scrubs-session-notes-runtime',
+        'restore-rejects-stale-session-notes-write',
         'also-active-run-injection',
         'also-run-and-session-isolation',
         'next-explicit-fifo-persistence',
+        'task-queue-four-item-drain-keeps-tail',
         'task-queue-session-isolation',
       ]));
     } finally {

@@ -7,10 +7,10 @@ import path from 'node:path';
 
 import type { IntentCheckpointArchive, UiChatMessage } from '../types/intent-checkpoint.js';
 import { readUiSessionMessages } from './intent-checkpoint-capture.js';
-import { loadIntentCheckpoint } from './intent-checkpoint-store.js';
+import { loadCheckpointIndex, loadIntentCheckpoint } from './intent-checkpoint-store.js';
 import { extractUnifiedDiffFromText } from '../web/tool-display-extract.js';
 import { readToolTraceDiffIndex } from '../web/session-tool-trace-diffs.js';
-import { toPosixRel } from './workspace-snapshot.js';
+import { remapPathToWorkspace, remapSnapshotToWorkspace } from './workspace-snapshot.js';
 
 const WRITE_TOOLS = new Set([
   'write_file',
@@ -19,6 +19,35 @@ const WRITE_TOOLS = new Set([
   'batch_edit_file',
   'patch_file',
 ]);
+
+const PATH_WRITE_TOOLS = new Set([
+  ...WRITE_TOOLS,
+  'fs_operation',
+]);
+
+function isFailedToolTrace(status: string | undefined): boolean {
+  return status === 'failed'
+    || status === 'error'
+    || status === 'warn'
+    || status === 'pending'
+    || status === 'background';
+}
+
+/**
+ * write_file 在目标不存在时用空字符串当旧内容，diff 是 `--- 1.txt` 加一行空 `-`，
+ * 而不是 git 的 `--- /dev/null`。这两种都表示检查点之后新建的文件。
+ */
+export function isNewFileUnifiedDiff(diffText: string): boolean {
+  const diff = extractUnifiedDiffFromText(diffText) ?? diffText;
+  if (!diff.trim()) return false;
+  if (/^---\s+\/dev\/null/m.test(diff)) return true;
+  const hunks = parseUnifiedDiff(diff);
+  if (hunks.length === 0) return false;
+  const oldLines = hunks.flatMap((h) =>
+    h.lines.filter((l) => l.type === 'context' || l.type === 'delete').map((l) => l.content),
+  );
+  return oldLines.length === 0 || oldLines.every((line) => line === '');
+}
 
 type HunkLine = { type: 'context' | 'delete' | 'insert'; content: string };
 
@@ -134,31 +163,45 @@ export function revertContentUsingUnifiedDiff(
   currentContent: string,
   diffText: string,
 ): string | null {
-  const fromDiff = extractPreImageFromUnifiedDiff(diffText);
-  if (fromDiff !== null) return fromDiff;
+  if (isNewFileUnifiedDiff(diffText)) {
+    const fromDiff = extractPreImageFromUnifiedDiff(diffText);
+    return fromDiff ?? '';
+  }
 
   const diff = extractUnifiedDiffFromText(diffText);
   if (!diff) return null;
   const hunks = parseUnifiedDiff(diff);
-  if (hunks.length === 0) return null;
-  const lines = currentContent.split('\n');
-  const reverted = applyHunks(lines, invertHunks(hunks));
-  return reverted && reverted.length > 0 ? reverted.join('\n') : null;
+  if (hunks.length === 0) return extractPreImageFromUnifiedDiff(diffText);
+
+  // 局部 hunk 不能拼成全文：对当前文件反应用 hunk，避免大文件被截成几行。
+  const reverted = applyHunks(currentContent.split('\n'), invertHunks(hunks));
+  if (reverted) return reverted.join('\n');
+  return extractPreImageFromUnifiedDiff(diffText);
+}
+
+function resolveUserMessageIndex(
+  uiMessages: UiChatMessage[],
+  targetMessageId: string,
+  archive?: IntentCheckpointArchive,
+): number {
+  const exact = uiMessages.findIndex((m) => m.id === targetMessageId);
+  if (exact >= 0) return exact;
+  const archived = archive?.uiMessages.find((m) => m.id === targetMessageId && m.role === 'user');
+  const text = typeof archived?.content === 'string' ? archived.content.trim() : '';
+  if (!text) return -1;
+  return uiMessages.findIndex((m) => m.role === 'user' && String(m.content || '').trim() === text);
 }
 
 function normalizeRelPath(workspaceRoot: string, raw: string | undefined): string | null {
   if (!raw?.trim()) return null;
-  const trimmed = raw.trim().replace(/\\/g, '/');
-  if (trimmed.includes('/')) return trimmed.replace(/^\/+/, '');
-  const abs = path.resolve(workspaceRoot, trimmed);
-  return toPosixRel(workspaceRoot, abs);
+  return remapPathToWorkspace(workspaceRoot, raw.trim());
 }
 
 async function readWorkspaceFileText(
   workspaceRoot: string,
   relPath: string,
 ): Promise<string | null> {
-  const abs = path.join(path.resolve(workspaceRoot), ...relPath.split('/'));
+  const abs = path.resolve(path.resolve(workspaceRoot), remapPathToWorkspace(workspaceRoot, relPath) ?? relPath);
   try {
     return await fs.readFile(abs, 'utf-8');
   } catch {
@@ -176,14 +219,16 @@ function collectWriteTracesAfterMessage(
   targetMessageId: string,
   diffIndex: Record<string, string>,
   workspaceRoot: string,
+  archive?: IntentCheckpointArchive,
 ): WriteTraceEntry[] {
-  const targetIdx = uiMessages.findIndex((m) => m.id === targetMessageId);
+  const targetIdx = resolveUserMessageIndex(uiMessages, targetMessageId, archive);
   if (targetIdx < 0) return [];
 
   const entries: WriteTraceEntry[] = [];
   for (let i = targetIdx + 1; i < uiMessages.length; i++) {
     const m = uiMessages[i];
     if (m.role !== 'tool_trace' || !m.toolName || !WRITE_TOOLS.has(m.toolName)) continue;
+    if (isFailedToolTrace(m.status)) continue;
     const relPath = normalizeRelPath(workspaceRoot, m.detail);
     if (!relPath) continue;
     const diff = (typeof m.diffSource === 'string' && m.diffSource)
@@ -192,6 +237,94 @@ function collectWriteTracesAfterMessage(
     entries.push({ relPath, diff });
   }
   return entries;
+}
+
+function collectWrittenRelPathsInMessageRange(
+  uiMessages: UiChatMessage[],
+  startExclusive: number,
+  endExclusive: number,
+  workspaceRoot: string,
+): string[] {
+  const paths = new Set<string>();
+  const from = Math.max(0, startExclusive + 1);
+  const to = Math.min(uiMessages.length, endExclusive);
+  for (let i = from; i < to; i++) {
+    const m = uiMessages[i];
+    if (m.role !== 'tool_trace' || !m.toolName || !PATH_WRITE_TOOLS.has(m.toolName)) continue;
+    if (isFailedToolTrace(m.status)) continue;
+    const relPath = normalizeRelPath(workspaceRoot, m.detail);
+    if (!relPath || relPath === '.' || relPath === '..' || relPath.endsWith('/')) continue;
+    paths.add(relPath);
+  }
+  return [...paths];
+}
+
+/** 目标消息之后所有写入类工具涉及的相对路径（含无 diff 的 write_file / fs_operation）。 */
+export function collectWrittenRelPathsAfterMessage(
+  uiMessages: UiChatMessage[],
+  targetMessageId: string,
+  workspaceRoot: string,
+  archive?: IntentCheckpointArchive,
+): string[] {
+  const targetIdx = resolveUserMessageIndex(uiMessages, targetMessageId, archive);
+  if (targetIdx < 0) return [];
+  return collectWrittenRelPathsInMessageRange(uiMessages, targetIdx, uiMessages.length, workspaceRoot);
+}
+
+/** 目标检查点发出之前已经写入过的路径（更早一步已经存在的文件）。 */
+export function collectWrittenRelPathsBeforeMessage(
+  uiMessages: UiChatMessage[],
+  targetMessageId: string,
+  workspaceRoot: string,
+  archive?: IntentCheckpointArchive,
+): string[] {
+  const targetIdx = resolveUserMessageIndex(uiMessages, targetMessageId, archive);
+  if (targetIdx < 0) return [];
+  return collectWrittenRelPathsInMessageRange(uiMessages, -1, targetIdx, workspaceRoot);
+}
+
+export async function collectExistedRelPathsAtCheckpoint(opts: {
+  archive: IntentCheckpointArchive;
+  sessionDir: string;
+  sessionId: string;
+  workspaceRoot: string;
+  snapshot: Record<string, string | null>;
+  uiMessages: UiChatMessage[];
+}): Promise<Set<string>> {
+  const { archive, sessionDir, sessionId, workspaceRoot, snapshot, uiMessages } = opts;
+  const existed = new Set(
+    Object.entries(snapshot)
+      .filter(([, content]) => content !== null)
+      .map(([rel]) => rel),
+  );
+  for (const relPath of collectWrittenRelPathsBeforeMessage(
+    uiMessages,
+    archive.messageId,
+    workspaceRoot,
+    archive,
+  )) {
+    existed.add(relPath);
+  }
+  const index = await loadCheckpointIndex(sessionDir, sessionId);
+  const targetIdx = index.entries.findIndex((e) => e.messageId === archive.messageId);
+  for (let i = 0; i < targetIdx; i++) {
+    const earlier = await loadIntentCheckpoint(sessionDir, sessionId, index.entries[i].messageId);
+    if (!earlier) continue;
+    const remapped = remapSnapshotToWorkspace(workspaceRoot, earlier.workspaceFiles);
+    for (const [rel, content] of Object.entries(remapped)) {
+      if (content !== null) existed.add(rel);
+    }
+  }
+  return existed;
+}
+
+function reconstructedPreImageIsMissingFile(
+  content: string,
+  pathWrites: WriteTraceEntry[],
+): boolean {
+  if (content.trim() === '') return true;
+  // 只看该路径在检查点之后的第一次写入：先新建再改内容，仍应删除。
+  return pathWrites.length > 0 && isNewFileUnifiedDiff(pathWrites[0].diff);
 }
 
 /** 合并 checkpoint 快照 + 会话 tool trace 逆向 diff，供 Restore 写回磁盘。 */
@@ -203,12 +336,16 @@ export async function buildSessionWorkspaceRestoreSnapshot(opts: {
   currentUiMessages?: UiChatMessage[];
 }): Promise<Record<string, string | null>> {
   const { sessionDir, sessionId, workspaceRoot, archive } = opts;
-  const snapshot: Record<string, string | null> = { ...archive.workspaceFiles };
+  const snapshot: Record<string, string | null> = remapSnapshotToWorkspace(
+    workspaceRoot,
+    archive.workspaceFiles,
+  );
 
   const fresh = await loadIntentCheckpoint(sessionDir, sessionId, archive.messageId);
   if (fresh) {
-    for (const [rel, content] of Object.entries(fresh.workspaceFiles)) {
-      snapshot[rel.replace(/\\/g, '/')] = content;
+    const remappedFresh = remapSnapshotToWorkspace(workspaceRoot, fresh.workspaceFiles);
+    for (const [rel, content] of Object.entries(remappedFresh)) {
+      if (!(rel in snapshot) || content === null) snapshot[rel] = content;
     }
   }
 
@@ -220,6 +357,7 @@ export async function buildSessionWorkspaceRestoreSnapshot(opts: {
     archive.messageId,
     diffIndex,
     workspaceRoot,
+    archive,
   );
 
   const byPath = new Map<string, WriteTraceEntry[]>();
@@ -228,6 +366,15 @@ export async function buildSessionWorkspaceRestoreSnapshot(opts: {
     list.push(w);
     byPath.set(w.relPath, list);
   }
+
+  const existedAtCheckpoint = await collectExistedRelPathsAtCheckpoint({
+    archive,
+    sessionDir,
+    sessionId,
+    workspaceRoot,
+    snapshot,
+    uiMessages,
+  });
 
   for (const [relPath, pathWrites] of byPath) {
     if (relPath in snapshot) continue;
@@ -242,11 +389,89 @@ export async function buildSessionWorkspaceRestoreSnapshot(opts: {
       content = reverted;
     }
     if (content !== null) {
-      snapshot[relPath] = content === '' && pathWrites.some((w) => w.diff.includes('/dev/null'))
+      const missing = reconstructedPreImageIsMissingFile(content, pathWrites);
+      snapshot[relPath] = missing && !existedAtCheckpoint.has(relPath)
         ? null
         : content;
     }
   }
 
+  for (const relPath of collectWrittenRelPathsAfterMessage(
+    uiMessages,
+    archive.messageId,
+    workspaceRoot,
+    archive,
+  )) {
+    if (existedAtCheckpoint.has(relPath)) continue;
+    const reconstructed = snapshot[relPath];
+    if (typeof reconstructed === 'string' && reconstructed.trim() !== '') continue;
+    snapshot[relPath] = null;
+  }
+
+  const recovered = await recoverMissingExistedContent({
+    sessionDir,
+    sessionId,
+    workspaceRoot,
+    archiveMessageId: archive.messageId,
+    snapshot,
+    existedAtCheckpoint,
+  });
+  for (const [rel, content] of Object.entries(recovered)) {
+    if (!(rel in snapshot)) snapshot[rel] = content;
+  }
+
   return snapshot;
+}
+
+async function recoverMissingExistedContent(opts: {
+  sessionDir: string;
+  sessionId: string;
+  workspaceRoot: string;
+  archiveMessageId: string;
+  snapshot: Record<string, string | null>;
+  existedAtCheckpoint: Set<string>;
+}): Promise<Record<string, string>> {
+  const missing = [...opts.existedAtCheckpoint].filter((rel) => !(rel in opts.snapshot));
+  if (missing.length === 0) return {};
+
+  const index = await loadCheckpointIndex(opts.sessionDir, opts.sessionId);
+  const targetIdx = index.entries.findIndex((e) => e.messageId === opts.archiveMessageId);
+  const found: Record<string, string> = {};
+  const still = new Set(missing);
+
+  for (let i = targetIdx - 1; i >= 0 && still.size; i--) {
+    const earlier = await loadIntentCheckpoint(
+      opts.sessionDir,
+      opts.sessionId,
+      index.entries[i].messageId,
+    );
+    if (!earlier) continue;
+    const remapped = remapSnapshotToWorkspace(opts.workspaceRoot, earlier.workspaceFiles);
+    for (const rel of still) {
+      const content = remapped[rel];
+      if (typeof content === 'string') {
+        found[rel] = content;
+        still.delete(rel);
+      }
+    }
+  }
+
+  for (let i = targetIdx + 1; i < index.entries.length && still.size; i++) {
+    const later = await loadIntentCheckpoint(
+      opts.sessionDir,
+      opts.sessionId,
+      index.entries[i].messageId,
+    );
+    if (!later) continue;
+    const remapped = remapSnapshotToWorkspace(opts.workspaceRoot, later.workspaceFiles);
+    for (const rel of still) {
+      const content = remapped[rel];
+      if (typeof content === 'string') {
+        found[rel] = content;
+        still.delete(rel);
+      }
+    }
+  }
+
+  return found;
 }

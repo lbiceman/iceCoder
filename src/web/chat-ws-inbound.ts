@@ -58,6 +58,7 @@ import {
   buildEnqueueInput,
   flushStructuredMessagesNow,
   loadStructuredMessages,
+  cancelPendingStructuredSave,
 } from './chat-ws-persist.js';
 import { handleShellCollabRoute, queueShellCollabTransition, waitForShellCollabTransition } from './chat-ws-shell.js';
 import {
@@ -212,6 +213,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
         }
         console.log(`[chat-ws] restore_runtime session=${sid} messageId=${messageId}`);
         try {
+          cancelPendingStructuredSave(sid);
           const result = await getRuntimeRestoreCoordinator().restore({
             sessionDir: SESSIONS_DIR,
             sessionId: sid,
@@ -270,7 +272,7 @@ export function createInboundMessageHandler(deps: ChatRunDeps) {
           return;
         }
         try {
-          await flushStructuredMessagesNow(sid);
+          cancelPendingStructuredSave(sid);
           const deletion = await deleteUserMessageConversation({
             sessionDir: SESSIONS_DIR,
             sessionId: sid,

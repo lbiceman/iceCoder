@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { IntentCheckpointArchive } from '../../src/types/intent-checkpoint.js';
 import {
   collectSessionTouchedPaths,
+  collectTrackedPathsAfterMessage,
   loadCheckpointIndex,
   removeCheckpoint,
   saveIntentCheckpoint,
@@ -18,6 +19,8 @@ function makeArchive(
   sessionId: string,
   messageId: string,
   trackedPaths: string[],
+  workspaceRoot = '/tmp',
+  workspaceFiles: Record<string, string | null> = {},
 ): IntentCheckpointArchive {
   return {
     version: 1,
@@ -26,8 +29,8 @@ function makeArchive(
     createdAt: new Date().toISOString(),
     userMessageTime: null,
     workspace: { referenceReads: [], changeCount: 0 },
-    workspaceRoot: '/tmp',
-    workspaceFiles: {},
+    workspaceRoot,
+    workspaceFiles,
     trackedPaths,
     uiMessages: [],
     structuredMessages: [],
@@ -45,6 +48,7 @@ describe('sessionTouchedPaths', () => {
       path: 'a.ts',
       target: 'b.ts',
     })).toEqual(['a.ts', 'b.ts']);
+    expect(collectSessionTouchedPaths('run_command', { command: 'echo hi > 1.txt' })).toEqual(['1.txt']);
   });
 
   it('保存检查点不会把归档提示路径并进 live manifest', async () => {
@@ -118,6 +122,30 @@ describe('sessionTouchedPaths', () => {
     }
   });
 
+  it('回滚截断时把带父级前缀的 live 路径对齐到工作区相对路径再求交', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-touched-remap-'));
+    const sessionId = 's1';
+    const workspaceRoot = path.join(sessionDir, 'test', 'agentToolTest', '20260910');
+    try {
+      await saveIntentCheckpoint({
+        sessionDir,
+        sessionId,
+        archive: makeArchive(
+          sessionId,
+          'u1',
+          ['test/agentToolTest/20260910/empty.txt'],
+          workspaceRoot,
+        ),
+      });
+      await touchSessionTouchedPaths(sessionDir, sessionId, ['empty.txt']);
+      await truncateCheckpointsAfter(sessionDir, sessionId, 'u1');
+      const index = await loadCheckpointIndex(sessionDir, sessionId);
+      expect(index.sessionTouchedPaths).toEqual(['empty.txt']);
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   it('并行 touch 不会丢路径', async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-touched-race-'));
     const sessionId = 's1';
@@ -129,6 +157,34 @@ describe('sessionTouchedPaths', () => {
       ]);
       const index = await loadCheckpointIndex(sessionDir, sessionId);
       expect(new Set(index.sessionTouchedPaths)).toEqual(new Set(['a.ts', 'b.ts', 'c.ts']));
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('collectTrackedPathsAfterMessage 只收后续归档里当时不存在的路径', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-tracked-after-'));
+    const sessionId = 's1';
+    try {
+      await saveIntentCheckpoint({
+        sessionDir,
+        sessionId,
+        archive: makeArchive(sessionId, 'u1', ['empty.txt'], '/tmp', { 'empty.txt': null }),
+      });
+      await saveIntentCheckpoint({
+        sessionDir,
+        sessionId,
+        archive: makeArchive(sessionId, 'u2', ['empty.txt', '1.txt', 'readme.md', 'docs/hint.md'], '/tmp', {
+          'empty.txt': '',
+          '1.txt': null,
+          'readme.md': '# hello',
+        }),
+      });
+      const later = await collectTrackedPathsAfterMessage(sessionDir, sessionId, 'u1');
+      expect(later).toContain('1.txt');
+      expect(later).not.toContain('empty.txt');
+      expect(later).not.toContain('readme.md');
+      expect(later).not.toContain('docs/hint.md');
     } finally {
       await fs.rm(sessionDir, { recursive: true, force: true });
     }

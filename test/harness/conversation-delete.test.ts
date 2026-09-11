@@ -8,7 +8,19 @@ import {
   deleteUserMessageConversation,
   removeStructuredUserMessage,
   removeUiUserMessage,
+  scrubSessionNotesRuntimeAfterDelete,
+  truncateConversationBeforeUserMessage,
 } from '../../src/harness/conversation-delete.js';
+import {
+  bumpSessionContextWriteEpoch,
+  isSessionContextWriteStale,
+  resetSessionContextWriteEpoch,
+  sessionContextWriteEpoch,
+} from '../../src/harness/session-context-write-gate.js';
+import {
+  parsePersistedRuntime,
+  serializePersistedRuntime,
+} from '../../src/memory/file-memory/session-memory.js';
 import {
   loadCheckpointIndex,
   loadIntentCheckpoint,
@@ -64,6 +76,56 @@ describe('conversation-delete', () => {
     expect(removeStructuredUserMessage(structuredMessages, uiMessages, 'u3')).toEqual(
       structuredMessages.slice(0, 4),
     );
+  });
+
+  it('truncateConversationBeforeUserMessage drops the target turn and everything after', () => {
+    expect(truncateConversationBeforeUserMessage(uiMessages, structuredMessages, 'u2')).toEqual({
+      uiMessages: uiMessages.slice(0, 2),
+      structuredMessages: structuredMessages.slice(0, 2),
+    });
+  });
+
+  it('truncates structured context by archived user text when the live id is missing', () => {
+    expect(truncateConversationBeforeUserMessage(
+      uiMessages.map((m) => (m.id === 'u2' ? { ...m, id: 'optimistic-u2' } : m)),
+      structuredMessages,
+      'u2',
+      'image turn',
+    )).toEqual({
+      uiMessages: uiMessages.map((m) => (m.id === 'u2' ? { ...m, id: 'optimistic-u2' } : m)),
+      structuredMessages: structuredMessages.slice(0, 2),
+    });
+  });
+
+  it('deletes a turn whose structured text has a workspace path prefix', async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-delete-prefix-'));
+    const sessionId = 'prefix-delete';
+    const ui: UiChatMessage[] = [
+      { role: 'user', id: 'u1', content: '随便新增一个空文件' },
+      { role: 'system', id: 'sys1', content: '已回滚至检查点' },
+    ];
+    const structured: UnifiedMessage[] = [
+      { role: 'user', content: 'E:\\test\\agentToolTest\\20260910\n\n随便新增一个空文件' },
+    ];
+    try {
+      await fs.writeFile(path.join(sessionDir, `${sessionId}.json`), JSON.stringify(ui), 'utf-8');
+      await fs.writeFile(
+        path.join(sessionDir, `${sessionId}.structured.json`),
+        JSON.stringify(structured),
+        'utf-8',
+      );
+      await deleteUserMessageConversation({ sessionDir, sessionId, messageId: 'u1' });
+      const savedUi = JSON.parse(
+        await fs.readFile(path.join(sessionDir, `${sessionId}.json`), 'utf-8'),
+      ) as UiChatMessage[];
+      const savedStructured = JSON.parse(
+        await fs.readFile(path.join(sessionDir, `${sessionId}.structured.json`), 'utf-8'),
+      ) as UnifiedMessage[];
+      expect(savedUi.map((message) => message.id)).toEqual(['sys1']);
+      expect(savedStructured).toEqual([]);
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
   });
 
   it('removeStructuredUserMessage keeps later turns when deleting before a skill guide turn', () => {
@@ -299,5 +361,123 @@ describe('conversation-delete', () => {
     } finally {
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
+  });
+
+  it('scrubs deleted-turn write paths from session-notes runtime evidence', () => {
+    const notes = [
+      '# Session Title',
+      'demo',
+      '',
+      '# Runtime Evidence (auto)',
+      '_auto_',
+      '',
+      '```icecoder-runtime',
+      serializePersistedRuntime(
+        {
+          goal: '写文件',
+          intent: 'edit',
+          phase: 'editing',
+          filesRead: [],
+          filesChanged: ['empty.txt', '1.txt'],
+          commandsRun: [],
+        },
+        {
+          filesRead: [],
+          filesChanged: ['empty.txt', '1.txt'],
+          commandsRun: [],
+          testCommands: [],
+          recentDiagnostics: [],
+        },
+      ),
+      '```',
+      '',
+      '# Worklog',
+      'wrote files',
+    ].join('\n');
+
+    const next = scrubSessionNotesRuntimeAfterDelete(notes, ['1.txt']);
+    const parsed = parsePersistedRuntime(next);
+    expect(parsed?.task.filesChanged).toEqual(['empty.txt']);
+    expect(parsed?.repo.filesChanged).toEqual(['empty.txt']);
+  });
+
+  it('invalidates in-flight session-notes writes after a message is deleted', async () => {
+    resetSessionContextWriteEpoch();
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ice-delete-notes-'));
+    const sessionId = 'notes-delete';
+    const epochBefore = sessionContextWriteEpoch(sessionId);
+    try {
+      await fs.writeFile(
+        path.join(sessionDir, `${sessionId}.json`),
+        JSON.stringify([
+          { role: 'user', id: 'u1', content: '新建 1.txt' },
+          {
+            role: 'tool_trace',
+            toolName: 'write_file',
+            detail: '1.txt',
+            status: 'success',
+            toolCallId: 'call-1',
+          },
+        ]),
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(sessionDir, `${sessionId}.structured.json`),
+        JSON.stringify([{ role: 'user', content: '新建 1.txt' }]),
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(sessionDir, `${sessionId}.session-notes.md`),
+        [
+          '# Session Title',
+          'demo',
+          '',
+          '# Runtime Evidence (auto)',
+          '_auto_',
+          '',
+          '```icecoder-runtime',
+          serializePersistedRuntime(
+            {
+              goal: '新建 1.txt',
+              intent: 'edit',
+              phase: 'editing',
+              filesRead: [],
+              filesChanged: ['1.txt'],
+              commandsRun: [],
+            },
+            {
+              filesRead: [],
+              filesChanged: ['1.txt'],
+              commandsRun: [],
+              testCommands: [],
+              recentDiagnostics: [],
+            },
+          ),
+          '```',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      await deleteUserMessageConversation({ sessionDir, sessionId, messageId: 'u1' });
+
+      const notes = await fs.readFile(path.join(sessionDir, `${sessionId}.session-notes.md`), 'utf-8');
+      expect(parsePersistedRuntime(notes)?.task.filesChanged).toEqual([]);
+      expect(sessionContextWriteEpoch(sessionId)).toBeGreaterThan(epochBefore);
+      expect(isSessionContextWriteStale(sessionId, epochBefore)).toBe(true);
+    } finally {
+      resetSessionContextWriteEpoch(sessionId);
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('session-context-write-gate', () => {
+  it('marks captured epochs stale after bump', () => {
+    resetSessionContextWriteEpoch('gate-s');
+    const epoch = bumpSessionContextWriteEpoch('gate-s');
+    expect(isSessionContextWriteStale('gate-s', epoch)).toBe(false);
+    bumpSessionContextWriteEpoch('gate-s');
+    expect(isSessionContextWriteStale('gate-s', epoch)).toBe(true);
+    resetSessionContextWriteEpoch('gate-s');
   });
 });

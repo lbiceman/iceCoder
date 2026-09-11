@@ -1456,8 +1456,8 @@ window.ChatPage = (function () {
     overlay.innerHTML =
       '<div class="restore-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-confirm-title">' +
         '<h3 id="restore-confirm-title">确认回滚？</h3>' +
-        '<p>将运行时回滚到此对话点？<br><br>' +
-        '当前运行时状态及之后的全部对话记录将被丢弃。</p>' +
+        '<p>将工作区恢复到该消息发送前的状态。<br><br>' +
+        '该条用户消息及之后的对话会从聊天和模型上下文中移除，仅保留回滚记录。</p>' +
         '<div class="restore-confirm-actions">' +
           '<button type="button" class="restore-confirm-cancel">取消</button>' +
           '<button type="button" class="restore-confirm-ok">回滚</button>' +
@@ -1508,7 +1508,25 @@ window.ChatPage = (function () {
       return;
     }
     if (!messageId) return;
-    showDeleteConfirmDialog(messageId);
+    var sentAt = btn && btn.dataset && btn.dataset.sentAt
+      ? Number(btn.dataset.sentAt)
+      : undefined;
+    var deleteId = messageId;
+    if (UI && typeof UI.resolveCheckpointMessageId === 'function') {
+      deleteId = UI.resolveCheckpointMessageId(messageId, isFinite(sentAt) ? sentAt : undefined) || messageId;
+    }
+    if (deleteId === messageId && Session && typeof Session.getMessages === 'function') {
+      var msgs = Session.getMessages();
+      for (var i = 0; i < msgs.length; i++) {
+        var m = msgs[i];
+        if (!m || m.role !== 'user') continue;
+        if (m._prevId === messageId && m.id) {
+          deleteId = m.id;
+          break;
+        }
+      }
+    }
+    showDeleteConfirmDialog(deleteId);
   }
 
   function handleMessageRestoreAction(messageId, btn) {

@@ -20,6 +20,8 @@ import {
   type ProjectCheckpointV3,
 } from '../types/runtime-checkpoint.js';
 import { adaptLegacyCheckpoint } from './legacy-checkpoint-adapter.js';
+import { remapPathToWorkspace } from './workspace-snapshot.js';
+import { extractLikelyWritePathsFromCommand } from './workspace-command-touch.js';
 
 function indexPath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.checkpoint-index.json`);
@@ -80,6 +82,16 @@ export function collectSessionTouchedPaths(
     if (op === 'list') return [];
     add(args.path ?? args.filePath);
     if (op === 'move' || op === 'copy') add(args.target);
+    return out;
+  }
+
+  if (toolName === 'run_command' || toolName === 'shell_exec') {
+    const action = String(args.action || '').toLowerCase();
+    if (action === 'check' || action === 'list' || action === 'stop') return [];
+    const command = typeof args.command === 'string'
+      ? args.command
+      : typeof args.cmd === 'string' ? args.cmd : '';
+    for (const p of extractLikelyWritePathsFromCommand(command)) add(p);
     return out;
   }
 
@@ -252,13 +264,16 @@ async function syncTouchedPathsToCursorArchive(
     return;
   }
   const archive = await loadIntentCheckpoint(sessionDir, sessionId, index.cursorMessageId);
+  const root = archive?.workspaceRoot;
   const archivePaths = new Set<string>();
   for (const raw of archive?.trackedPaths ?? []) {
     const norm = normalizeTouchedPath(raw);
-    if (norm) archivePaths.add(norm);
+    const remapped = root ? (remapPathToWorkspace(root, norm) ?? norm) : norm;
+    if (remapped) archivePaths.add(remapped);
   }
   const live = (index.sessionTouchedPaths ?? [])
     .map((p) => normalizeTouchedPath(p))
+    .map((p) => (root ? (remapPathToWorkspace(root, p) ?? p) : p))
     .filter(Boolean);
   // 旧索引若还没有 live（只有归档），回退到归档路径，避免回滚后列表被清空。
   index.sessionTouchedPaths = live.length
@@ -283,7 +298,10 @@ export async function setCheckpointCursor(
   });
 }
 
-/** 获取 cursor 之后的所有 trackedPaths（用于 workspace 清理）。 */
+/**
+ * 目标检查点之后「当时还不存在」的路径，供 restore 删除新建文件。
+ * 只看后续归档里 content === null 的快照键；trackedPaths 含只读/提示路径，不能当删除名单。
+ */
 export async function collectTrackedPathsAfterMessage(
   sessionDir: string,
   sessionId: string,
@@ -297,8 +315,10 @@ export async function collectTrackedPathsAfterMessage(
   for (let i = targetIdx + 1; i < index.entries.length; i++) {
     const entry = index.entries[i];
     const archive = await loadIntentCheckpoint(sessionDir, sessionId, entry.messageId);
-    if (archive) {
-      for (const p of archive.trackedPaths) paths.add(p);
+    if (!archive) continue;
+    const files = archive.workspaceFiles ?? {};
+    for (const [p, content] of Object.entries(files)) {
+      if (content === null) paths.add(p);
     }
   }
   return [...paths];
