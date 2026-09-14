@@ -1841,4 +1841,141 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('有检查点时模型开工即逐条展示最新章执行流', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-live' };
+      (window as any).ChatSession = {
+        getMessages: () => [{ role: 'user', id: 'u-now', content: '看着这个项目的沙箱模块' }],
+      };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [{
+                messageId: 'u-now',
+                preview: '看着这个项目的沙箱模块',
+                userMessageTime: Date.now(),
+              }],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setVisible(true);
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+      panel.beginTurnTimer(Date.now(), {
+        messageId: 'u-now',
+        preview: '看着这个项目的沙箱模块',
+      });
+      const before = {
+        empty: document.querySelector('.etl-round-empty')?.textContent || '',
+        emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? true,
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+      };
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'live-t1',
+        toolName: 'read_file',
+        toolArgs: { path: 'src/a.ts' },
+        ts: Date.now(),
+      });
+      const afterFirst = {
+        emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? false,
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
+        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        firstName: document.querySelector('#etl-round-timeline .etl-round-action-name')?.textContent || '',
+      };
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'live-t2',
+        toolName: 'write_file',
+        toolArgs: { path: 'tmp/probe.js' },
+        ts: Date.now() + 20,
+      });
+      const afterSecond = {
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
+      };
+      return { before, afterFirst, afterSecond };
+    });
+
+    expect(result.before.status).toContain('进行中');
+    expect(result.afterFirst.emptyHidden).toBe(true);
+    expect(result.afterFirst.nodes).toBe(1);
+    expect(result.afterFirst.tools).toBeGreaterThanOrEqual(1);
+    expect(result.afterFirst.status).toContain('进行中');
+    expect(result.afterFirst.firstName).toMatch(/读|read_file|读取/i);
+    expect(result.afterSecond.nodes).toBe(1);
+    expect(result.afterSecond.tools).toBeGreaterThan(result.afterFirst.tools);
+    await page.close();
+  });
+
+  it('检查点回退章在开工后不再空着等收工', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-fallback' };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [{
+                messageId: 'u-fallback',
+                preview: '看着这个项目的沙箱模块',
+                userMessageTime: Date.now(),
+              }],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setVisible(true);
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+      panel.beginTurnTimer(Date.now());
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'fb-t1',
+        toolName: 'read_file',
+        toolArgs: { path: 'D:/work/self/iceCoder/src/tools/shell-host-guard.ts' },
+        ts: Date.now(),
+      });
+      const empty = document.querySelector('.etl-round-empty');
+      return {
+        emptyText: empty?.textContent || '',
+        emptyHidden: empty?.classList.contains('hidden') ?? false,
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
+        waiting: !!(empty && !empty.classList.contains('hidden')
+          && (empty.textContent || '').includes('本章暂无执行步骤')),
+        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+      };
+    });
+
+    expect(result.emptyHidden).toBe(true);
+    expect(result.waiting).toBe(false);
+    expect(result.nodes).toBeGreaterThanOrEqual(1);
+    expect(result.tools).toBeGreaterThanOrEqual(1);
+    expect(result.status).toContain('进行中');
+    await page.close();
+  });
+
 });

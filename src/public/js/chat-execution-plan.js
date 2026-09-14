@@ -1710,8 +1710,104 @@ window.ChatExecutionPlan = (function () {
     return markers;
   }
 
+  function isTurnInFlight() {
+    return typeof turnStartedAt === 'number' && turnEndedAt === null;
+  }
+
+  function hasLiveProgress() {
+    return roundRecords.length > 0 || uniqueToolCallCount > 0;
+  }
+
+  function latestUiUserIdentity() {
+    try {
+      if (!window.ChatSession || typeof window.ChatSession.getMessages !== 'function') return null;
+      var msgs = window.ChatSession.getMessages() || [];
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        var msg = msgs[i];
+        if (!msg || msg.role !== 'user' || !msg.id) continue;
+        var preview = '';
+        var api = chronicleApi();
+        if (api && typeof api.previewFromUser === 'function') {
+          preview = api.previewFromUser(msg) || '';
+        }
+        return { messageId: String(msg.id), preview: preview };
+      }
+    } catch (_e) { /* ignore */ }
+    return null;
+  }
+
+  function adoptLiveChapterIdentity(messageId, preview) {
+    if (!liveChapterMeta || !messageId) return;
+    var prev = liveChapterMeta.messageId || '';
+    liveChapterMeta.messageId = String(messageId);
+    if (preview) liveChapterMeta.preview = preview;
+    if (selectedChapterKey && (selectedChapterKey === prev || selectedChapterKey === '__live__')) {
+      selectedChapterKey = liveChapterMeta.messageId;
+    }
+  }
+
+  function bindLiveChapterIdentity(meta) {
+    if (!liveChapterMeta) return;
+    if (meta && typeof meta === 'object') {
+      if (meta.messageId) adoptLiveChapterIdentity(meta.messageId, meta.preview);
+      else if (meta.preview && !liveChapterMeta.preview) liveChapterMeta.preview = meta.preview;
+    }
+    if (!isSyntheticLiveId(liveChapterMeta.messageId)) {
+      if (!liveChapterMeta.preview) {
+        var same = latestUiUserIdentity();
+        if (same && same.messageId === liveChapterMeta.messageId && same.preview) {
+          liveChapterMeta.preview = same.preview;
+        }
+      }
+      return;
+    }
+    var ident = latestUiUserIdentity();
+    if (ident && ident.messageId) adoptLiveChapterIdentity(ident.messageId, ident.preview);
+  }
+
+  function markLiveChapterRunning(meta) {
+    var prevKey = selectedChapterKey;
+    ensureLiveChapter(meta || {});
+    liveChapterMeta.status = 'running';
+    bindLiveChapterIdentity(meta);
+    if (!userPinnedChapter) focusNewestChapter();
+    if (hostEl && selectedChapterKey && selectedChapterKey !== prevKey) {
+      renderChapterDirectory();
+    }
+  }
+
+  function mergeLiveIntoChapterList(list, live) {
+    list = Array.isArray(list) ? list.slice() : [];
+    if (!live) return list;
+    if (!isSyntheticLiveId(live.messageId)) {
+      for (var i = list.length - 1; i >= 0; i--) {
+        if (list[i] && list[i].messageId === live.messageId) {
+          list[i] = live;
+          return list;
+        }
+      }
+      list.push(live);
+      return list;
+    }
+    if (list.length) {
+      var last = list[list.length - 1];
+      if (last && last.messageId) {
+        adoptLiveChapterIdentity(last.messageId, last.preview);
+        live.messageId = last.messageId;
+        if (last.preview && (!live.preview || live.preview === '正在执行')) {
+          live.preview = last.preview;
+        }
+        list[list.length - 1] = live;
+        return list;
+      }
+    }
+    list.push(live);
+    return list;
+  }
+
   function liveChapterStatus() {
-    if (liveChapterMeta && liveChapterMeta.status && liveChapterMeta.status !== 'running') {
+    if (!isTurnInFlight()
+      && liveChapterMeta && liveChapterMeta.status && liveChapterMeta.status !== 'running') {
       return liveChapterMeta.status;
     }
     for (var i = roundRecords.length - 1; i >= 0; i--) {
@@ -1752,12 +1848,14 @@ window.ChatExecutionPlan = (function () {
         preview: opts.preview || '',
         startedAt: typeof turnStartedAt === 'number' ? turnStartedAt : Date.now(),
         markers: [],
-        status: 'running',
+        status: opts.status || 'running',
       };
     } else {
       if (opts.messageId) liveChapterMeta.messageId = opts.messageId;
       if (opts.preview) liveChapterMeta.preview = opts.preview;
+      if (opts.status) liveChapterMeta.status = opts.status;
     }
+    bindLiveChapterIdentity(opts);
     return liveChapterMeta;
   }
 
@@ -1825,15 +1923,15 @@ window.ChatExecutionPlan = (function () {
   }
 
   function allChapterViews() {
+    bindLiveChapterIdentity();
     var list = sealedChapters.slice();
     var live = liveChapterViewModel();
-    if (live) {
-      if (!isSyntheticLiveId(live.messageId) || !snapshotCheckpointEntries.length) {
-        list.push(live);
-      }
+    if (!list.length && snapshotCheckpointEntries.length) {
+      var fallbacks = checkpointFallbackChapters();
+      return live ? mergeLiveIntoChapterList(fallbacks, live) : fallbacks;
     }
-    if (list.length) return list;
-    return checkpointFallbackChapters();
+    if (live) return mergeLiveIntoChapterList(list, live);
+    return list;
   }
 
   function checkpointFallbackChapters() {
@@ -1889,13 +1987,21 @@ window.ChatExecutionPlan = (function () {
     return !!(selected && chapterKey(selected) === chapterKey(chapter));
   }
 
+  function chapterMatchesLive(chapter) {
+    if (!chapter) return false;
+    if (chapter.live) return true;
+    return !!(liveChapterMeta && chapter.messageId && liveChapterMeta.messageId === chapter.messageId);
+  }
+
   function selectedChapterIsLive() {
     var ch = getSelectedChapter();
-    return !!(ch && ch.live && (
-      ch.status === 'running'
-      || roundRecords.length > 0
-      || uniqueToolCallCount > 0
-    ));
+    if (!ch || !hasLiveChapterWork()) return false;
+    var followingNewest = !userPinnedChapter && chapterKey(ch) === newestChapterKey();
+    if (!chapterMatchesLive(ch) && !followingNewest) return false;
+    return ch.status === 'running'
+      || liveChapterStatus() === 'running'
+      || hasLiveProgress()
+      || isTurnInFlight();
   }
 
   function hideParkedLiveWidgets() {
@@ -2107,10 +2213,16 @@ window.ChatExecutionPlan = (function () {
     statusEl.className = 'etl-chapter-status etl-round-badge status-' + (chapter.status || 'done');
     statusEl.textContent = chapterStatusLabel(chapter.status);
     titleRow.appendChild(preview);
+    if (isCurrent) {
+      var latest = document.createElement('span');
+      latest.className = 'etl-chapter-latest';
+      latest.textContent = '最新';
+      titleRow.appendChild(latest);
+    }
     titleRow.appendChild(statusEl);
     if (chapter.messageId && isSnapshotRestoreHidden(chapter.messageId)) {
       card.classList.add('etl-snapshot-card--no-restore');
-    } else if (chapter.messageId) {
+    } else if (chapter.messageId && !isSyntheticLiveId(chapter.messageId)) {
       titleRow.appendChild(createSnapshotRestoreButton(chapter.messageId));
     }
     main.appendChild(timeEl);
@@ -2319,7 +2431,7 @@ window.ChatExecutionPlan = (function () {
         frozenPlanId = null;
         currentExecutionMode = null;
         bannerDetailOpen = false;
-        ensureLiveChapter(opts.nextMeta || {});
+        markLiveChapterRunning(opts.nextMeta || {});
         focusNewestChapter();
         if (hostEl) {
           renderChapterDirectory();
@@ -2359,7 +2471,7 @@ window.ChatExecutionPlan = (function () {
         if (chapter.messageId) userPinnedChapter = false;
       }
       resetLiveChapterState();
-      ensureLiveChapter(opts.nextMeta || {});
+      markLiveChapterRunning(opts.nextMeta || {});
       focusNewestChapter();
       if (hostEl) {
         renderChapterDirectory();
@@ -2438,7 +2550,11 @@ window.ChatExecutionPlan = (function () {
   function applyAssembledChapters(chapters, options) {
     options = options || {};
     if (!Array.isArray(chapters)) chapters = [];
-    var keepLive = options.keepLive && (roundRecords.length > 0 || uniqueToolCallCount > 0);
+    var keepLive = !!options.keepLive && (
+      hasLiveProgress()
+      || isTurnInFlight()
+      || !!(liveChapterMeta && liveChapterMeta.status === 'running')
+    );
     if (keepLive && !chapters.length) return;
     var liveId = liveChapterMeta && liveChapterMeta.messageId;
     sealedChapters = [];
@@ -2448,7 +2564,7 @@ window.ChatExecutionPlan = (function () {
       var ch = chapters[i];
       last = ch;
       if (keepLive && liveId && ch.messageId === liveId) continue;
-      if (keepLive && !liveId && i === chapters.length - 1) continue;
+      if (keepLive && isSyntheticLiveId(liveId) && i === chapters.length - 1) continue;
       if (keepLive || i < chapters.length - 1) {
         sealedChapters.push(ch);
         sealedToolCount += typeof ch.toolCount === 'number' ? ch.toolCount : 0;
@@ -2549,6 +2665,7 @@ window.ChatExecutionPlan = (function () {
   function applyRoundActivity(evt) {
     try {
       if (!evt || !evt.type) return;
+      markLiveChapterRunning();
       var ts = typeof evt.ts === 'number' ? evt.ts : Date.now();
       var roundResult = ensureRoundRecord(evt.iteration, ts);
       var record = roundResult.record;
@@ -2973,8 +3090,13 @@ window.ChatExecutionPlan = (function () {
       } catch (_e) { /* ignore */ }
       if (api && typeof api.assemble === 'function') {
         var lastAssembledStatus = '';
-        var liveRunning = liveChapterStatus() === 'running'
-          && (roundRecords.length > 0 || uniqueToolCallCount > 0);
+        bindLiveChapterIdentity();
+        var turnInFlight = isTurnInFlight();
+        var liveRunning = (
+          liveChapterStatus() === 'running'
+          || turnInFlight
+          || !!(liveChapterMeta && liveChapterMeta.status === 'running')
+        ) && (hasLiveProgress() || turnInFlight || !!liveChapterMeta);
         var assembled = api.assemble({
           uiMessages: ui,
           structured: structured,
@@ -2986,7 +3108,16 @@ window.ChatExecutionPlan = (function () {
           ? assembled.chapters[assembled.chapters.length - 1]
           : null;
         lastAssembledStatus = lastCh && lastCh.status ? lastCh.status : '';
-        var keepLive = liveRunning && (!lastCh || lastAssembledStatus === 'running');
+        if (lastCh && lastCh.messageId && liveChapterMeta && isSyntheticLiveId(liveChapterMeta.messageId)
+          && (lastAssembledStatus === 'running' || turnInFlight)) {
+          adoptLiveChapterIdentity(lastCh.messageId, lastCh.preview);
+        }
+        var hasLiveWork = hasLiveProgress() || turnInFlight;
+        var lastIsSameDone = !!(lastCh && liveChapterMeta && lastCh.messageId
+          && lastCh.messageId === liveChapterMeta.messageId
+          && lastAssembledStatus && lastAssembledStatus !== 'running'
+          && !turnInFlight);
+        var keepLive = hasLiveWork && !lastIsSameDone;
         applyAssembledChapters(assembled && assembled.chapters, { keepLive: keepLive });
         if (!keepLive && lastAssembledStatus && lastAssembledStatus !== 'running') stopTick();
       } else {
@@ -3762,6 +3893,7 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!step || !step.type) return;
       recoverPanelAfterFatal();
+      markLiveChapterRunning();
       if (step.type === 'tool_call') {
         var callId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
         if (!callId) return;
@@ -3896,14 +4028,21 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  function beginTurnTimer(ts) {
+  function beginTurnTimer(ts, meta) {
     try {
       recoverPanelAfterFatal();
       turnStartedAt = typeof ts === 'number' ? ts : Date.now();
       turnEndedAt = null;
-      ensureLiveChapter();
+      markLiveChapterRunning(meta && typeof meta === 'object' ? meta : {});
       renderFooter();
       startTick();
+      if (hostEl) {
+        renderChapterDirectory();
+        renderRoundTimeline(true);
+        renderCurrentStep();
+        renderEmptyState();
+        hideParkedLiveWidgets();
+      }
     } catch (e) {
       safeWarn('beginTurnTimer', e);
     }
@@ -5033,6 +5172,7 @@ window.ChatExecutionPlan = (function () {
     rememberSnapshotCheckpointIds(entries, payload && payload.cursorMessageId, payload && payload.cursorRestored);
     syncSnapshotCheckpointsToChatUi(entries);
     applyCheckpointChangedFiles(payload && payload.changedFiles);
+    bindLiveChapterIdentity();
     renderDockSheet();
     renderChapterDirectory();
     renderRoundTimeline(true);

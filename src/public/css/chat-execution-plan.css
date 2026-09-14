@@ -470,11 +470,41 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   display: none;
 }
 
-.etl-chapter-node.is-selected .etl-chapter-marker,
-.etl-chapter-node.is-current .etl-chapter-marker,
-.etl-snapshot-node.is-cursor .etl-chapter-marker {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
-  background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
+/* 选中 = 正在看的那一章（下边执行流对应它）。最新章不再套同一套高亮。 */
+.etl-chapter-node.is-selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.etl-chapter-node.is-selected:hover,
+.etl-chapter-node.is-selected:focus-within {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.etl-chapter-node.is-selected .etl-chapter-marker {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-panel));
+  color: var(--accent);
+}
+
+.etl-chapter-node.is-selected .etl-chapter-title {
+  font-weight: 600;
+}
+
+.etl-chapter-latest {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.etl-chapter-node.is-selected .etl-chapter-latest {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-panel));
+  color: var(--accent);
 }
 
 .etl-chapter-row {

@@ -510,7 +510,7 @@ window.ChatExecutionPlanBridge = (function () {
    * 同会话新一轮用户输入开始时调用：把上一章封存，开新章；
    * 并抑制 session_updated 触发的 REST /plan 把旧计划写回当前章。
    */
-  function onNewTurnStarted() {
+  function onNewTurnStarted(nextMeta) {
     syncGeneration++;
     lastSyncMs = 0;
     restPlanSuppressed = true;
@@ -521,8 +521,9 @@ window.ChatExecutionPlanBridge = (function () {
     if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.cancelFlowPersist === 'function') {
       window.ChatExecutionPlan.cancelFlowPersist();
     }
+    var meta = nextMeta && typeof nextMeta === 'object' ? nextMeta : {};
     if (window.ChatExecutionPlan && typeof window.ChatExecutionPlan.sealChapter === 'function') {
-      window.ChatExecutionPlan.sealChapter({ status: 'done' });
+      window.ChatExecutionPlan.sealChapter({ status: 'done', nextMeta: meta });
     } else {
       clearPlanStateForSession(getActiveSessionId());
     }

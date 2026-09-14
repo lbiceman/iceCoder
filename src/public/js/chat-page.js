@@ -632,6 +632,7 @@ window.ChatPage = (function () {
     var msgImages = pendingImages.map(function (p) { return p.dataUrl; });
 
     var didAppendUserMessage = false;
+    var newTurnMeta = null;
     if (appendUserMessageNow && (displayParts.length > 0 || msgImages.length > 0 || selectedSkillFilenames.length > 0 || referencePaths.length > 0)) {
       if (startNewTurnUi) {
         UI.finalizeBeforeUserMessage(Session.getMessages(), Session.stripStatusTag);
@@ -647,6 +648,15 @@ window.ChatPage = (function () {
       if (referencePaths.length > 0) userMsg.referencePaths = referencePaths.slice();
       userMsg._pendingServerAck = true;
       Session.appendMessage(userMsg);
+      newTurnMeta = { messageId: userMessageId };
+      try {
+        if (window.EtlChronicle && typeof window.EtlChronicle.previewFromUser === 'function') {
+          newTurnMeta.preview = window.EtlChronicle.previewFromUser(userMsg);
+        }
+      } catch (_e) { /* ignore */ }
+      if (!newTurnMeta.preview && userMsg.content) {
+        newTurnMeta.preview = String(userMsg.content).replace(/\s+/g, ' ').trim().slice(0, 72);
+      }
       UI.appendMessageEl(userMsg, Session.stripStatusTag);
       if (startNewTurnUi && UI.maybeRepartitionTailIfNeeded) {
         UI.maybeRepartitionTailIfNeeded(
@@ -692,14 +702,14 @@ window.ChatPage = (function () {
         pendingTurnTokenUsage = null;
         if (window.ChatExecutionPlanBridge
           && typeof window.ChatExecutionPlanBridge.notifyNewTurnStarted === 'function') {
-          window.ChatExecutionPlanBridge.notifyNewTurnStarted();
+          window.ChatExecutionPlanBridge.notifyNewTurnStarted(newTurnMeta || {});
         } else if (window.ChatExecutionPlan
           && typeof window.ChatExecutionPlan.resetToolActivity === 'function') {
           window.ChatExecutionPlan.resetToolActivity();
         }
         if (window.ChatExecutionPlan
           && typeof window.ChatExecutionPlan.beginTurnTimer === 'function') {
-          window.ChatExecutionPlan.beginTurnTimer();
+          window.ChatExecutionPlan.beginTurnTimer(undefined, newTurnMeta || {});
         }
         if (Pet && typeof Pet.showThinking === 'function') {
           Pet.showThinking(uploadedFiles.length > 0 || msgImages.length > 0);

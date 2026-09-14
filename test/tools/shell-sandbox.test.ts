@@ -119,6 +119,27 @@ describe('shell-sandbox', () => {
     expect(analyzeShellSandbox('taskkill /F /IM node.exe', { configPath }).blocked).toBe(true);
   });
 
+  it('blocks destructive shapes beyond rm -rf', () => {
+    for (const command of [
+      'find / -delete',
+      'shred -u secret.txt',
+      'truncate -s 0 app.log',
+      'cat img > /dev/sda',
+    ]) {
+      const result = analyzeShellSandbox(command, { configPath });
+      expect(result.blocked, command).toBe(true);
+      expect(result.reason, command).toBe('blacklist');
+    }
+  });
+
+  it('allows --force-with-lease while blocking force push', () => {
+    expect(
+      analyzeShellSandbox('git push --force-with-lease origin main', { configPath }).blocked,
+    ).toBe(false);
+    expect(analyzeShellSandbox('git push -f origin main', { configPath }).blocked).toBe(true);
+    expect(analyzeShellSandbox('git push --force origin main', { configPath }).blocked).toBe(true);
+  });
+
   it('resolveShellBlacklistPatterns falls back to defaults', () => {
     expect(resolveShellBlacklistPatterns(undefined)).toEqual(DEFAULT_SHELL_BLACKLIST_PATTERNS);
     expect(resolveShellBlacklistPatterns([])).toEqual([]);

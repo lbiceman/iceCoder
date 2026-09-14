@@ -1261,13 +1261,22 @@ describe('ETL 真实 Observer 链路', () => {
       const titles = Array.from(document.querySelectorAll('.etl-chapter-title')).map((el) => el.textContent);
       const footer = document.querySelector('.etl-foot-tool b')?.textContent;
       const prefix = document.querySelector('#etl-round-prefix-hint');
+      const expandedCurrent = !!document.querySelector('.etl-chapter-node.is-current.is-selected');
+      const olderRow = document.querySelector('.etl-chapter-node:not(.is-current) .etl-chapter-row');
+      if (olderRow instanceof HTMLElement) olderRow.click();
       return {
         chapters: document.querySelectorAll('.etl-chapter-node').length,
         titles,
         footer,
         prefixHidden: prefix?.classList.contains('hidden') ?? true,
         restoreInFlow: !!document.querySelector('#etl-panel-flow .etl-snapshot-restore-btn'),
-        expandedCurrent: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
+        expandedCurrent,
+        afterPickOld: {
+          selectedCount: document.querySelectorAll('.etl-chapter-node.is-selected').length,
+          currentIsSelected: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
+          currentHasLatest: !!document.querySelector('.etl-chapter-node.is-current .etl-chapter-latest'),
+          selectedHasLatest: !!document.querySelector('.etl-chapter-node.is-selected .etl-chapter-latest'),
+        },
       };
     });
     expect(result.chapters).toBe(2);
@@ -1277,6 +1286,12 @@ describe('ETL 真实 Observer 链路', () => {
     expect(result.prefixHidden).toBe(true);
     expect(result.restoreInFlow).toBe(false);
     expect(result.expandedCurrent).toBe(true);
+    expect(result.afterPickOld).toEqual({
+      selectedCount: 1,
+      currentIsSelected: false,
+      currentHasLatest: true,
+      selectedHasLatest: false,
+    });
     await page.close();
   });
 
