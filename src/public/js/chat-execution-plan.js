@@ -242,10 +242,18 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  function formatWindow(n) {
-    if (!isFinite(n) || n <= 0) return '';
-    if (n >= 1000) return Math.round(n / 1000) + 'K';
-    return '' + n;
+  /** 底栏上下文：小于 1K 原样，1K–1M 用 K，更大用 M。 */
+  function formatCompactCount(n) {
+    var num = Number(n);
+    if (!isFinite(num) || num < 0) return '0';
+    if (num < 1000) return String(Math.round(num));
+    function oneDecimal(x) {
+      return String(Math.round(x * 10) / 10);
+    }
+    if (num < 1000000) {
+      return (num < 10000 ? oneDecimal(num / 1000) : String(Math.round(num / 1000))) + 'K';
+    }
+    return oneDecimal(num / 1000000) + 'M';
   }
 
   // ── 计划状态工具 ──
@@ -327,8 +335,14 @@ window.ChatExecutionPlan = (function () {
 
   // ── 挂载 ──
 
+  function minimizeIconHtml() {
+    return '<span class="etl-min-icon" aria-hidden="true"></span>';
+  }
+
   function headerActionsHtml() {
-    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">x</button>';
+    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">' +
+      minimizeIconHtml() +
+    '</button>';
   }
 
   function filesSheetHtml() {
@@ -336,7 +350,9 @@ window.ChatExecutionPlan = (function () {
       '<div class="etl-files-sheet-head">' +
         '<span class="etl-files-sheet-title">变更文件</span>' +
         '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
-        '<button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" aria-label="关闭变更文件">x</button>' +
+        '<button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" title="收起" aria-label="收起">' +
+          minimizeIconHtml() +
+        '</button>' +
       '</div>' +
       '<div class="etl-files-sheet-body">' +
         '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
@@ -360,8 +376,8 @@ window.ChatExecutionPlan = (function () {
           '<p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p>' +
         '</div>' +
         '<div class="etl-chapter-empty etl-empty">等待模型开始执行</div>' +
+        '<button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button>' +
         '<ol class="etl-chapter-list"></ol>' +
-        '<button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↓</button>' +
       '</section>' +
       '<section class="etl-wb-flow" id="etl-panel-flow">' +
         '<div class="etl-wb-section-head">' +
@@ -789,9 +805,8 @@ window.ChatExecutionPlan = (function () {
         if (roundTime) roundTime.textContent = roundDuration(roundRecords[rr]);
       }
     }
-    // Footer 总时间
     var timeElFoot = footerEl && footerEl.querySelector('.etl-foot-time b');
-    if (timeElFoot) timeElFoot.textContent = formatClock(sessionWorkMs());
+    if (timeElFoot) timeElFoot.textContent = formatTurnElapsed();
     patchCurrentChapterChrome();
     // 移动端顶部条进度计数
     if (mountedMode === 'mobile') updateMobileBar();
@@ -1022,21 +1037,21 @@ window.ChatExecutionPlan = (function () {
     return formatClock(e - start);
   }
 
-  /** 右下角时间：本轮用户发送 → model_done 的本地模型工作耗时。 */
+  /** 右下角时间：最近一次对话（当前任务）从发出到做完的耗时，不是整段 session。 */
   function formatTurnElapsed() {
-    if (typeof turnStartedAt !== 'number') return '00:00';
-    var end = typeof turnEndedAt === 'number' ? turnEndedAt : Date.now();
-    return formatClock(Math.max(0, end - turnStartedAt));
+    return formatClock(liveChapterDurationMs());
   }
 
-  function formatTokenStat() {
+  function formatTokenStat(compact) {
     var t = footerStats.totalTokenUsage;
     if (!t) return '—';
     var used = typeof t.effectiveUsed === 'number' && t.effectiveUsed > 0 ? t.effectiveUsed : (t.inputTokens || 0);
     var win = typeof t.contextWindow === 'number' ? t.contextWindow : 0;
-    if (!win) return formatThousands(used);
-    var pct = win > 0 ? ((used / win) * 100).toFixed(1) : '0';
-    return formatThousands(used) + '/' + formatWindow(win) + ' (' + pct + '%)';
+    var usedTxt = compact ? formatCompactCount(used) : formatThousands(used);
+    if (!win) return usedTxt;
+    var pct = ((used / win) * 100).toFixed(1);
+    var winTxt = compact ? formatCompactCount(win) : formatThousands(win);
+    return usedTxt + '/' + winTxt + ' (' + pct + '%)';
   }
 
   function ensureFooterSkeleton() {
@@ -1077,17 +1092,18 @@ window.ChatExecutionPlan = (function () {
   function renderFooter() {
     if (!footerEl) return;
     ensureFooterSkeleton();
-    var tokenTxt = formatTokenStat();
+    var tokenTxt = formatTokenStat(true);
+    var tokenDetail = formatTokenStat(false);
     var liveToolCount = sessionToolTotal();
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
-    var timeTxt = formatClock(sessionWorkMs());
+    var timeTxt = formatTurnElapsed();
     var tokenEl = footerEl.querySelector('.etl-foot-token b');
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
     var timeEl = footerEl.querySelector('.etl-foot-time b');
     var fileEl = footerEl.querySelector('.etl-foot-files b');
     if (tokenEl) tokenEl.textContent = tokenTxt;
     var tokenItem = footerEl.querySelector('.etl-foot-token');
-    if (tokenItem) safeSetTitle(tokenItem, tokenTxt && tokenTxt !== '—' ? ('上下文 ' + tokenTxt) : '');
+    if (tokenItem) safeSetTitle(tokenItem, tokenDetail && tokenDetail !== '—' ? ('上下文 ' + tokenDetail) : '');
     if (toolEl) toolEl.textContent = toolTxt;
     if (timeEl) timeEl.textContent = timeTxt;
     var fileCount = snapshotChangedFiles.length;
@@ -1626,9 +1642,34 @@ window.ChatExecutionPlan = (function () {
     return formatClock(ms);
   }
 
+  function lastLiveWorkTs() {
+    var last = 0;
+    for (var i = 0; i < roundRecords.length; i++) {
+      var rec = roundRecords[i];
+      if (!rec) continue;
+      if (typeof rec.endTs === 'number' && rec.endTs > last) last = rec.endTs;
+      if (typeof rec.startTs === 'number' && rec.startTs > last) last = rec.startTs;
+    }
+    for (var j = 0; j < toolRecords.length; j++) {
+      var tool = toolRecords[j];
+      if (!tool) continue;
+      if (typeof tool.resultTs === 'number' && tool.resultTs > last) last = tool.resultTs;
+      if (typeof tool.callTs === 'number' && tool.callTs > last) last = tool.callTs;
+    }
+    return last || 0;
+  }
+
   function liveChapterDurationMs() {
     if (typeof turnStartedAt !== 'number') return 0;
-    var end = typeof turnEndedAt === 'number' ? turnEndedAt : Date.now();
+    var end;
+    if (typeof turnEndedAt === 'number') {
+      end = turnEndedAt;
+    } else if (liveChapterStatus() === 'running') {
+      end = Date.now();
+    } else {
+      var work = lastLiveWorkTs();
+      end = work > turnStartedAt ? work : turnStartedAt;
+    }
     return Math.max(0, end - turnStartedAt);
   }
 
@@ -2089,8 +2130,8 @@ window.ChatExecutionPlan = (function () {
     var hiddenCount = Math.max(0, allCount - visibleCount);
     loadMore.classList.toggle('hidden', hiddenCount <= 0);
     loadMore.textContent = hiddenCount
-      ? ('加载更早的章节 ↓ (' + hiddenCount + ')')
-      : '加载更早的章节 ↓';
+      ? ('加载更早的章节 ↑ (' + hiddenCount + ')')
+      : '加载更早的章节 ↑';
   }
 
   function updateFlowStepCount(n) {
@@ -2113,15 +2154,15 @@ window.ChatExecutionPlan = (function () {
       syncChapterEmptyAndLoadMore(all.length, visible.length);
       renderWorkbenchStatus();
 
-      for (var i = visible.length - 1; i >= 0; i--) {
+      for (var i = 0; i < visible.length; i++) {
         var chapter = visible[i];
         var absIndex = offset + i + 1;
         var isCurrent = !!chapter.live || chapter === all[all.length - 1];
         list.appendChild(makeChapterNode(chapter, absIndex, isCurrent));
       }
 
-      if (options.scrollToLatest && list.firstElementChild && list.firstElementChild.scrollIntoView) {
-        list.firstElementChild.scrollIntoView({ block: 'nearest' });
+      if (options.scrollToLatest && list.lastElementChild && list.lastElementChild.scrollIntoView) {
+        list.lastElementChild.scrollIntoView({ block: 'nearest' });
       }
       if (pendingRevealMessageId) {
         var reveal = list.querySelector('[data-message-id="' + pendingRevealMessageId.replace(/"/g, '\\"') + '"]');

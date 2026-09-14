@@ -83,14 +83,21 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 18px;
-  line-height: 1;
   cursor: pointer;
   transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.etl-min-icon {
+  display: block;
+  width: 12px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
 }
 
 .etl-minimize:hover,
@@ -517,7 +524,7 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   margin: 0;
   padding: 8px 12px;
   border: 0;
-  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
   background: none;
   color: var(--text-muted);
   font-size: 12px;
@@ -1174,14 +1181,21 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   padding: 0;
   border: 0;
   background: none;
-  color: inherit;
+  color: var(--text-primary);
   font: inherit;
   cursor: pointer;
   flex: 0 0 auto;
 }
 
-.etl-foot-toggle.is-empty {
-  color: var(--text-muted);
+.etl-foot-toggle b {
+  color: inherit;
+}
+
+.etl-foot-toggle:hover,
+.etl-foot-toggle:focus-visible {
+  color: var(--text-primary);
+  text-decoration: underline;
+  outline: none;
 }
 
 .etl-foot-toggle[aria-expanded="true"] {
@@ -1236,8 +1250,6 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  font-size: 16px;
-  line-height: 1;
   cursor: pointer;
 }
 

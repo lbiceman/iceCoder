@@ -261,6 +261,37 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('底栏时间只计最近一次任务，且不含回滚系统提示', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.hydrateFromStructured(
+        [
+          { role: 'user', content: '新增一个3.txt文件' },
+          { role: 'assistant', content: '已创建' },
+          { role: 'user', content: '新增一个4.txt文件' },
+          { role: 'assistant', content: '已创建' },
+        ],
+        [
+          { role: 'user', id: 'u1', content: '新增一个3.txt文件', sentAt: 1_000_000 },
+          { role: 'agent', id: 'a1', content: '已创建', sentAt: 1_025_000, completedAt: 1_025_000 },
+          {
+            role: 'system',
+            id: 'sys-restore',
+            content: '已回滚至检查点',
+            sentAt: 8_000_000,
+          },
+          { role: 'user', id: 'u2', content: '新增一个4.txt文件', sentAt: 9_000_000 },
+          { role: 'agent', id: 'a2', content: '已创建', sentAt: 9_012_000, completedAt: 9_012_000 },
+        ],
+      );
+      return document.querySelector('.etl-foot-time b')?.textContent;
+    });
+    expect(result).toBe('00:12');
+    await page.close();
+  });
+
   it('全部步骤进入终态但 patch 无 updatedAt 时按步骤结束时间定格', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
@@ -926,17 +957,29 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         totalToolCalls: 3,
       });
       panel.endTurnTimer(plan.createdAt + 5000);
+      const compact = document.querySelector('.etl-foot-token b')?.textContent;
+      const titleSmall = document.querySelector('.etl-foot-token')?.getAttribute('title');
+      panel.applyRuntimeStats({
+        totalTokenUsage: { effectiveUsed: 221612, contextWindow: 1000000 },
+        totalToolCalls: 3,
+      });
       return {
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
         contextLabel: document.querySelector('.etl-foot-token')?.textContent,
-        token: document.querySelector('.etl-foot-token b')?.textContent,
+        token: compact,
+        tokenLarge: document.querySelector('.etl-foot-token b')?.textContent,
+        titleSmall,
+        titleLarge: document.querySelector('.etl-foot-token')?.getAttribute('title'),
         tools: document.querySelector('.etl-foot-tool b')?.textContent,
       };
     }, makePlan());
 
     expect(result.footerTime).toBe('00:05');
     expect(result.contextLabel).toContain('上下文');
-    expect(result.token).toBe('1,200/8K (15.0%)');
+    expect(result.token).toBe('1.2K/8K (15.0%)');
+    expect(result.tokenLarge).toBe('222K/1M (22.2%)');
+    expect(result.titleSmall).toBe('上下文 1,200/8,000 (15.0%)');
+    expect(result.titleLarge).toBe('上下文 221,612/1,000,000 (22.2%)');
     expect(result.tools).toBe('3');
     await page.close();
   });
@@ -1384,8 +1427,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-      expect(result.attrs).toEqual(['msg-c', 'msg-b', 'msg-a']);
-      expect(result.restored).toEqual(['msg-c', 'msg-b', 'msg-a']);
+      expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
+      expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
     await page.close();
   });
 
@@ -1437,8 +1480,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     }, makePlan());
 
     expect(result.ready).toEqual([
-      { id: 'msg-b', disabled: false, ready: true },
       { id: 'msg-a', disabled: false, ready: true },
+      { id: 'msg-b', disabled: false, ready: true },
     ]);
     expect(result.blocked.every((b) => b.disabled)).toBe(true);
     expect(result.known).toEqual({ a: true, b: true, other: false });
@@ -1743,7 +1786,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     }, makePlan());
 
-    expect(result.buttons).toEqual(['msg-now', 'msg-old']);
+    expect(result.buttons).toEqual(['msg-old', 'msg-now']);
     expect(result.cursorHidden).toBe(false);
     expect(result.isCursor).toBe(true);
     expect(result.hidden).toBe(false);

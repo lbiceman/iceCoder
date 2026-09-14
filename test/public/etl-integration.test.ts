@@ -873,7 +873,7 @@ describe('ETL 真实 Observer 链路', () => {
         elapsed: document.querySelector('.etl-foot-time b')?.textContent,
         titles,
         chaptersAfter: nodes.length,
-        previousCollapsed: nodes[1] ? !nodes[1].classList.contains('is-selected') : false,
+        previousCollapsed: nodes[0] ? !nodes[0].classList.contains('is-selected') : false,
         currentExpanded: !!document.querySelector('.etl-chapter-node.is-current.is-selected'),
         parkedNodes: document.querySelectorAll('#etl-panel-flow > #etl-round-timeline .etl-round-node').length,
         restoreInFlow: !!document.querySelector('#etl-panel-flow .etl-snapshot-restore-btn'),
@@ -1271,8 +1271,8 @@ describe('ETL 真实 Observer 链路', () => {
       };
     });
     expect(result.chapters).toBe(2);
-    expect(result.titles[0]).toContain('登录失败');
-    expect(result.titles[1]).toContain('补测试');
+    expect(result.titles[0]).toContain('补测试');
+    expect(result.titles[1]).toContain('登录失败');
     expect(result.footer).toBe('3');
     expect(result.prefixHidden).toBe(true);
     expect(result.restoreInFlow).toBe(false);

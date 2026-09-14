@@ -651,9 +651,17 @@ window.EtlChronicle = (function () {
     return structured.slice(start, end);
   }
 
+  function isWorkMsg(msg) {
+    if (!msg) return false;
+    if (msg.role === 'tool_trace') return true;
+    return isAgentMsg(msg);
+  }
+
+  /** 章结束时刻只看模型/工具工作，不含回滚系统提示和下一句用户空闲等待。 */
   function lastSliceTs(slice, fallback) {
     if (!Array.isArray(slice)) return fallback;
     for (var i = slice.length - 1; i >= 0; i--) {
+      if (!isWorkMsg(slice[i])) continue;
       var ts = msgTs(slice[i]);
       if (typeof ts === 'number') return ts;
     }
@@ -712,11 +720,7 @@ window.EtlChronicle = (function () {
       var cp = checkpointByMessageId(input.checkpointEntries, messageId);
       var startTs = msgTs(ui);
       if (startTs == null && cp && typeof cp.userMessageTime === 'number') startTs = cp.userMessageTime;
-      var endTs = ui && typeof ui.completedAt === 'number' ? ui.completedAt : lastSliceTs(uiSlice, null);
-      if (endTs == null && !isLastIncomplete) {
-        var nextUser = uiUsers[n + 1];
-        endTs = msgTs(nextUser);
-      }
+      var endTs = lastSliceTs(uiSlice, lastSliceTs(structSlice, null));
       var preview = previewFromUser(ui || structUser);
       if (preview === '（无消息摘要）' && cp && cp.preview) preview = clamp(cp.preview, PREVIEW_MAX);
       chapters.push(buildChapter({

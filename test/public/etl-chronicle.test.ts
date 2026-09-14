@@ -282,4 +282,27 @@ describe('EtlChronicle.assemble', () => {
     expect(chapters[1].goal).toBe('修登录失败清空表单');
     expect(chapters[1].phase).toBe('editing');
   });
+
+  it('章耗时只统计模型工作，不含回滚系统提示和下一句间隔', () => {
+    const Chronicle = loadChronicle();
+    const { chapters } = Chronicle.assemble({
+      uiMessages: [
+        { role: 'user', id: 'u1', content: '新增一个3.txt文件', sentAt: 15_31_000 },
+        { role: 'agent', id: 'a1', content: '已创建', sentAt: 15_31_800, completedAt: 15_31_800 },
+        {
+          role: 'system',
+          id: 'sys-restore',
+          content: '已回滚至检查点：\n2026/9/11 15:32:11\n\n运行时已成功恢复。',
+          sentAt: 17_42_000,
+        },
+        { role: 'user', id: 'u2', content: '新增一个4.txt文件', sentAt: 20_00_000 },
+        { role: 'agent', id: 'a2', content: '已创建', sentAt: 20_00_400, completedAt: 20_00_400 },
+      ],
+    });
+    expect(chapters).toHaveLength(2);
+    expect(chapters[0].durationMs).toBe(800);
+    expect(chapters[1].durationMs).toBe(400);
+    expect(chapters[0].endTs).toBe(15_31_800);
+    expect(chapters[1].endTs).toBe(20_00_400);
+  });
 });
