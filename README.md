@@ -8,17 +8,21 @@
 
 ### Desktop
 
-**Work / chat** — multi-session sidebar, tool execution trail, **iceCoder Workbench** (execution overlay) on the right, and `#` / `@` composer; repeated tool failures trigger **supervision mode** with round indicators:
+**Work / chat** — multi-session sidebar, transcript, **iceCoder Workbench** on the right, and `#` / `@` composer. The workbench has no tabs: top **Checkpoints** is the per-user-turn chapter list (oldest on top; click a chapter to show its flow below; ↩ on the title row rolls back). Bottom **Flow** is that chapter’s Harness rounds and short tool previews. Footer: context, tools, files, and current-chapter elapsed time:
 
-![Desktop — work chat: multi-session, tool calls, and execution overlay](./docs/assets/desktop-work-chat.png)
+![Desktop — work chat: checkpoint directory and selected-chapter flow](./docs/assets/desktop-work-chat.png)
 
-**Execution overlay · Flow** — per-round step timeline with pass/fail status; expand a step for **what was done** / **why**, plus live context usage, tool count, and elapsed time in the footer:
+**iceCoder Workbench · footer docks** — **Tools** opens this session’s tool names and counts; **Files** opens this session’s changed files (created / modified / deleted / moved + filename):
 
-![Desktop — execution flow: round timeline and step details](./docs/assets/desktop-workbench-flow-detail.png)
+![Desktop — workbench: session tool names](./docs/assets/desktop-workbench-tools.png)
 
-**Execution overlay · Snapshot** — session checkpoint timeline marking current position and working directory; browse history and roll back:
+![Desktop — workbench: changed files](./docs/assets/desktop-work-snapshot.png)
 
-![Desktop — status snapshot: session checkpoints and current position](./docs/assets/desktop-work-snapshot.png)
+**Empty-session welcome** — “IceCoder ready”: mode / Memory / Harness / L2·Gate, quick start, current context, Ice Bean on the right. The workbench stays closed until there is a turn:
+
+![Desktop — empty-session welcome (dark)](./docs/assets/desktop-welcome.png)
+
+![Desktop — empty-session welcome (light)](./docs/assets/desktop-welcome-light.png)
 
 **Memory map** — tag filters + force-directed graph; click nodes for details:
 
@@ -40,7 +44,7 @@
 
 ![Desktop — MCP settings: server list and unity-mcp detail](./docs/assets/desktop-config-mcp.png)
 
-**Work / chat (light theme)** — same layout with light appearance:
+**Work / chat (light theme)** — same workbench layout with the changed-files dock open:
 
 ![Desktop — work chat (light theme)](./docs/assets/desktop-work-chat-light.png)
 

@@ -8,17 +8,21 @@
 
 ### 桌面端
 
-**工作 / 聊天** — 侧栏多会话、工具执行记录、右侧 **iceCoder 工作台**（执行透明层）与 `#` / `@` 输入区；工具连续失败时自动进入 **监管模式** 并提示轮次：
+**工作 / 聊天** — 侧栏多会话、聊天区、右侧 **iceCoder 工作台** 与 `#` / `@` 输入区。工作台无 Tab：上半「检查点」按用户句切章（旧上新下；点章看下边执行流；标题右侧 ↩ 回滚），下半「执行流」是该章的 Harness 轮次与工具短预览。底栏：上下文、工具、文件、当前章耗时：
 
-![桌面端 — 工作聊天页：多会话、工具调用与执行透明层](./docs/assets/desktop-work-chat.png)
+![桌面端 — 工作聊天页：检查点目录与选中章执行流](./docs/assets/desktop-work-chat.png)
 
-**执行透明层 · 执行流** — 按模型轮次展示步骤时间轴，标注完成/失败状态；展开单步可查看 **做了什么** / **为什么这么做**，底部实时显示上下文用量、工具数与耗时：
+**iceCoder 工作台 · 底栏层** — 点「工具」弹出本会话用过的工具名与次数；点「文件」弹出本会话变更文件（新建 / 修改 / 删除 / 移动 + 文件名）：
 
-![桌面端 — 执行流：轮次时间轴与步骤详情](./docs/assets/desktop-workbench-flow-detail.png)
+![桌面端 — 工作台：会话工具名单](./docs/assets/desktop-workbench-tools.png)
 
-**执行透明层 · 检查点** — 检查点时间轴，标记当前位置与工作目录，支持查看历史状态与回滚恢复：
+![桌面端 — 工作台：变更文件名单](./docs/assets/desktop-work-snapshot.png)
 
-![桌面端 — 检查点：检查点与当前位置](./docs/assets/desktop-work-snapshot.png)
+**空会话欢迎页** — 「IceCoder 已就绪」：模式 / Memory / Harness / L2·Gate、快速上手、当前上下文；右侧冰豆。尚未发过话时工作台默认不占右侧：
+
+![桌面端 — 空会话欢迎页（深色）](./docs/assets/desktop-welcome.png)
+
+![桌面端 — 空会话欢迎页（浅色）](./docs/assets/desktop-welcome-light.png)
 
 **记忆图谱** — 标签筛选 + 力导向关系图，点击节点查看详情：
 
@@ -40,7 +44,7 @@
 
 ![桌面端 — 设置页 MCP 配置：服务器列表与 unity-mcp 详情](./docs/assets/desktop-config-mcp.png)
 
-**工作 / 聊天（浅色主题）** — 相同布局下的浅色外观：
+**工作 / 聊天（浅色主题）** — 相同工作台布局，底栏展开变更文件层：
 
 ![桌面端 — 工作聊天页（浅色主题）](./docs/assets/desktop-work-chat-light.png)
 

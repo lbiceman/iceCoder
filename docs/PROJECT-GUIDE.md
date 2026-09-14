@@ -29,6 +29,7 @@ The goal is not only to chat with a model, but to run a **software-engineering a
 | **Workspace & file browser** | Per-session workspace lock; `@` refs + `/api/workspace/browse`; `list_drives` / `browse_directory` / `open_file`; `~open` direct listing |
 | **Mobile H5 Shell** | `#/m/*` routes; bottom tabs + session drawer; shared JS Core with desktop — see **Web app** |
 | **Ice Bean (pet UI)** | Web Canvas session indicator; L0 eye color + L1 forced chip + ~20 expressions — see **Web app** |
+| **Workbench (ETL UI)** | Right-hand panel, no tabs: chapter directory (rollback on title) + selected-chapter flow; footer docks for files and tool names. Chronicle from session data (`etl-chronicle.js`). Spec: [`requirement/工作台融合-最终效果-finish.md`](./requirement/工作台融合-最终效果-finish.md) |
 | **Diff Viewer** | Git-style inline diff for edit/patch tool output in Web chat |
 | **Shell dual-track** | `run_command` classifier (long → background, short → foreground + soft-timeout escalate); **detached** background tasks survive Agent Stop / session switch; ETL Shell Dock + `bgTasks` WS snapshot — see **Tool Runtime** |
 | **Setup gate** | Web serves config-only until valid API key; dev `./data/` vs prod `~/.iceCoder/` — see README |
@@ -634,7 +635,17 @@ Full gallery: [README § Preview](../README.md#preview) · [README.zh-CN § 界�
 
 **Desktop**
 
-![Work chat](./assets/desktop-work-chat.png)
+![Work chat — checkpoints and selected-chapter flow](./assets/desktop-work-chat.png)
+
+![Workbench — session tool names](./assets/desktop-workbench-tools.png)
+
+![Workbench — changed files](./assets/desktop-work-snapshot.png)
+
+![Empty-session welcome (dark)](./assets/desktop-welcome.png)
+
+![Empty-session welcome (light)](./assets/desktop-welcome-light.png)
+
+![Work chat (light) — changed-files dock](./assets/desktop-work-chat-light.png)
 
 ![Memory graph](./assets/desktop-memory-graph.png)
 
@@ -812,7 +823,9 @@ Higher-level prose (beyond this README):
 - [`docs/双模机制详解.md`](./双模机制详解.md) — current L0 / L1 / L3 single-axis supervisor
 - [`docs/L2监管层详解.md`](./L2监管层详解.md) — retired L2 migration note
 - [`docs/requirement/任务图规划-finish.md`](./requirement/任务图规划-finish.md) — TaskGraph / StepGraph design (implemented core)
-- [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (superseded by TaskGraph)
+- [`docs/requirement/执行透明-finish.md`](./requirement/执行透明-finish.md) — legacy Execution Transparency Layer (prompt injection superseded by TaskGraph; the **UI panel** is now the workbench)
+- [`docs/requirement/执行流-最终效果-finish.md`](./requirement/执行流-最终效果-finish.md) — chronicle data meaning (chapter = user turn)
+- [`docs/requirement/工作台融合-最终效果-finish.md`](./requirement/工作台融合-最终效果-finish.md) — **current** workbench UI (no tabs; aligned to 2026-09-14 code)
 - [`docs/requirement/长时间连续工作-finish.md`](./requirement/长时间连续工作-finish.md) — long sessions & checkpoint triggers
 - [`docs/requirement/记忆系统调整-finish.md`](./requirement/记忆系统调整-finish.md) — memory system adjustments (changelog)
 - [`docs/requirement/L2测试过程.md`](./requirement/L2测试过程.md) — **dual-mode test playbook** (~2,000 automated + 15 manual Web scenarios)
