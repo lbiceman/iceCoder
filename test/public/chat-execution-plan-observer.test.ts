@@ -1978,4 +1978,109 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
+  it('任务未结束时工具失败不把检查点标成失败，模型停止后再更新', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      const chapterStatus = () =>
+        document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '';
+      const roundStatus = () =>
+        document.querySelector('#etl-round-timeline .etl-round-badge')?.textContent || '';
+      panel.setVisible(true);
+      panel.beginTurnTimer(Date.now(), {
+        messageId: 'u-fail-live',
+        preview: '这是一个复杂企业审批流',
+      });
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'fail-t1',
+        toolName: 'run_command',
+        toolArgs: { command: 'npm test' },
+        ts: Date.now(),
+      });
+      panel.applyToolActivity({
+        type: 'tool_result',
+        iteration: 1,
+        toolCallId: 'fail-t1',
+        toolName: 'run_command',
+        toolSuccess: false,
+        ts: Date.now() + 10,
+      });
+      const duringRun = {
+        chapter: chapterStatus(),
+        round: roundStatus(),
+      };
+      panel.endTurnTimer(Date.now() + 20);
+      const afterPrematureEnd = chapterStatus();
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 2,
+        toolCallId: 'fail-t2',
+        toolName: 'read_file',
+        toolArgs: { path: 'src/a.ts' },
+        ts: Date.now() + 30,
+      });
+      const afterMoreWork = chapterStatus();
+      panel.applyRoundActivity({
+        type: 'model_task_final',
+        iteration: 2,
+        stopReason: 'circuit_breaker',
+        ts: Date.now() + 40,
+      });
+      return {
+        duringRun,
+        afterPrematureEnd,
+        afterMoreWork,
+        afterStop: chapterStatus(),
+      };
+    });
+
+    expect(result.duringRun.chapter).toContain('进行中');
+    expect(result.duringRun.round).toContain('失败');
+    expect(result.afterPrematureEnd).toContain('进行中');
+    expect(result.afterMoreWork).toContain('进行中');
+    expect(result.afterStop).toContain('失败');
+    await page.close();
+  });
+
+  it('模型正常收尾时，中间工具失败不把检查点标成失败', async () => {
+    const page = await loadPanel();
+    const status = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.beginTurnTimer(Date.now(), {
+        messageId: 'u-fail-done',
+        preview: '修失败用例',
+      });
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'ok-fail',
+        toolName: 'run_command',
+        toolArgs: { command: 'npm test' },
+        ts: Date.now(),
+      });
+      panel.applyToolActivity({
+        type: 'tool_result',
+        iteration: 1,
+        toolCallId: 'ok-fail',
+        toolName: 'run_command',
+        toolSuccess: false,
+        ts: Date.now() + 10,
+      });
+      panel.applyRoundActivity({
+        type: 'model_task_final',
+        iteration: 2,
+        stopReason: 'model_done',
+        ts: Date.now() + 20,
+      });
+      return document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '';
+    });
+
+    expect(status).toContain('完成');
+    expect(status).not.toContain('失败');
+    await page.close();
+  });
+
 });

@@ -610,7 +610,7 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
     if (result.action === 'return') {
       expect(result.result.completionStatus).toBe('paused');
       expect(result.result.loopState.stopReason).toBe('completion_paused');
-      expect(result.result.content).toMatch(/未结束/);
+      expect(result.result.content).toBe('任务完成。');
     }
   });
 
@@ -643,6 +643,83 @@ describe('handleNoToolCalls — 通用收尾协议', () => {
     if (second.action === 'return') {
       expect(second.result.loopState.stopReason).toBe('completion_paused');
       expect(second.result.completionStatus).toBe('paused');
+      expect(second.result.content).toBe('还是完成了。');
+    }
+  });
+
+  it('高风险缺回执续轮一次后暂停，正文仍是模型原文', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: '部署到生产环境' }];
+    const state = makeState(messages, '部署到生产环境');
+    state.operationOutcomes = new OperationOutcomeLedger();
+    state.operationOutcomes.record({
+      toolCallId: 'd1',
+      toolName: 'run_command',
+      status: 'completed',
+      effect: 'external_change',
+      risk: 'high',
+      disposition: 'executed',
+      scope: 'target:prod',
+      at: 1,
+    });
+
+    const first = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '已部署。', finishReason: 'stop' },
+      userMessage: '部署到生产环境',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    expect(first.action).toBe('continue');
+
+    const second = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '部署完成，可以结束。', finishReason: 'stop' },
+      userMessage: '部署到生产环境',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    expect(second.action).toBe('return');
+    if (second.action === 'return') {
+      expect(second.result.completionStatus).toBe('paused');
+      expect(second.result.loopState.stopReason).toBe('completion_paused');
+      expect(second.result.content).toBe('部署完成，可以结束。');
+    }
+  });
+
+  it('未解除失败续轮一次后失败，正文仍是模型原文', async () => {
+    const messages: UnifiedMessage[] = [{ role: 'user', content: '运行测试' }];
+    const state = makeState(messages, '运行测试');
+    state.operationOutcomes = new OperationOutcomeLedger();
+    state.operationOutcomes.record(normalizeOperationOutcome(
+      { id: 't1', name: 'run_command', arguments: { command: 'npx vitest run --reporter=basic' } },
+      { success: false, output: '', error: 'unknown reporter' },
+    ));
+
+    const first = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '测试失败了。', finishReason: 'stop' },
+      userMessage: '运行测试',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    expect(first.action).toBe('continue');
+
+    const second = await handleNoToolCalls(makeDeps(new StopHookManager()), {
+      state,
+      response: { content: '参数错误已排除，测试已通过。', finishReason: 'stop' },
+      userMessage: '运行测试',
+      currentTools: state.tools,
+      tokenUsage: { input: 1, output: 1 },
+      logger: makeLogger(),
+    });
+    expect(second.action).toBe('return');
+    if (second.action === 'return') {
+      expect(second.result.completionStatus).toBe('failed');
+      expect(second.result.loopState.stopReason).toBe('completion_failed');
+      expect(second.result.content).toBe('参数错误已排除，测试已通过。');
     }
   });
 });

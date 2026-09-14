@@ -315,13 +315,6 @@
 .chat-welcome-brand {
   display: flex;
   align-items: center;
-  gap: 16px;
-}
-
-.chat-welcome-logo {
-  flex-shrink: 0;
-  width: 52px;
-  height: 52px;
 }
 
 .chat-welcome-title {

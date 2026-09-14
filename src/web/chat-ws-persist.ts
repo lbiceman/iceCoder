@@ -213,6 +213,7 @@ export type AppendableSessionMessage = {
   detail?: string;
   status?: string;
   toolCallId?: string;
+  iteration?: number;
   images?: string[];
   skills?: string[];
   referencePaths?: string[];

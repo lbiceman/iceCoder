@@ -381,15 +381,8 @@ export async function handleNoToolCalls(
     const reason = completionDecision.action === 'fail'
       ? 'completion_failed'
       : 'completion_paused';
-    const detail = completionDecision.reason === 'operation_pending'
-      ? '任务仍有未结束的操作或待审批事项，已暂停且未报告完成。'
-      : completionDecision.reason === 'high_risk_receipt_missing'
-        ? '高风险操作缺少结果证据，已暂停且未报告完成。'
-        : completionDecision.reason === 'condition_pending'
-          || completionDecision.reason === 'condition_unverifiable'
-          ? '用户明确要求的完成条件尚未取得证据，已暂停且未报告完成。'
-          : '操作或完成条件未成功结清，已保留失败状态。';
-    const content = `${sanitizeAssistantContentForUser(response.content)}\n${detail}`.trim();
+    // 终态只写入 completionStatus / stopReason / checkpoint；不要把门控术语拼进用户可见正文。
+    const content = sanitizeAssistantContentForUser(response.content);
     pushAssistantForHistory(msgs, response);
     deps.loopController.stop(reason);
     const finalState = deps.loopController.getState();

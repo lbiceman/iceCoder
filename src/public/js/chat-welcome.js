@@ -102,7 +102,6 @@ window.ChatWelcome = (function () {
       '<div class="chat-welcome-inner">' +
         '<header class="chat-welcome-header">' +
           '<div class="chat-welcome-brand">' +
-            '<span class="chat-welcome-logo ice-brand-logo" aria-hidden="true"></span>' +
             '<div class="chat-welcome-headings">' +
               '<h1 class="chat-welcome-title">IceCoder 已就绪</h1>' +
               '<p class="chat-welcome-subtitle" data-welcome-subtitle></p>' +

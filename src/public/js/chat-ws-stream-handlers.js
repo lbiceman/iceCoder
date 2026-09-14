@@ -228,6 +228,7 @@ window.ChatWsStreamHandlers = (function () {
           detail: detail,
           status: callStatus,
           toolCallId: toolCallId,
+          iteration: typeof step.iteration === 'number' ? step.iteration : undefined,
         });
         if (toolCallId) {
           ctx.setStreamingDiffBuffer({ toolCallId: toolCallId, text: '' });

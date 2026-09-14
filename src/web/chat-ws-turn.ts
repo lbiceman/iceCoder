@@ -117,8 +117,29 @@ export interface ToolTraceBatchEntry {
   detail: string;
   status: string;
   toolCallId?: string;
+  /** Harness 轮次。执行流按此切步，不能只挂在一条 agent 气泡上。 */
+  iteration?: number;
   /** 供刷新后 UI 还原 diff 面板（不依赖 .structured.json 对齐） */
   diffSource?: string | null;
+}
+
+function toSessionToolTrace(
+  t: ToolTraceBatchEntry,
+  agentMsgId: string,
+): Parameters<typeof appendMessages>[0][number] {
+  const entry: Parameters<typeof appendMessages>[0][number] = {
+    role: 'tool_trace',
+    parentId: agentMsgId,
+    toolName: t.toolName,
+    detail: t.detail,
+    status: t.status,
+    toolCallId: t.toolCallId,
+  };
+  if (typeof t.iteration === 'number' && Number.isFinite(t.iteration) && t.iteration > 0) {
+    entry.iteration = Math.floor(t.iteration);
+  }
+  if (t.diffSource) entry.diffSource = t.diffSource;
+  return entry;
 }
 
 export interface HandleChatMessageInput {
@@ -159,14 +180,7 @@ async function finalizeDirectBrowserTurn(
   const agentMsgId = randomUUID();
   const entries: Parameters<typeof appendMessages>[0] = [];
   for (const t of opts.toolTraceBatch) {
-    entries.push({
-      role: 'tool_trace',
-      parentId: agentMsgId,
-      toolName: t.toolName,
-      detail: t.detail,
-      status: t.status,
-      toolCallId: t.toolCallId,
-    });
+    entries.push(toSessionToolTrace(t, agentMsgId));
   }
   entries.push({ role: 'agent', content: opts.assistantContent, id: agentMsgId });
   await appendMessages(entries, sid);
@@ -633,6 +647,9 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
             detail: detail || '',
             status: callStatus,
             toolCallId: typeof event.toolCallId === 'string' ? event.toolCallId : '',
+            iteration: typeof event.iteration === 'number' && event.iteration > 0
+              ? Math.floor(event.iteration)
+              : undefined,
             diffSource: capToolTraceDiffSource(extractDiffSource(
               String(event.toolName),
               undefined,
@@ -723,16 +740,7 @@ export async function handleChatMessage(input: HandleChatMessageInput): Promise<
       }
 
       for (const trace of toolTraceBatch) {
-        const entry: Record<string, unknown> = {
-          role: 'tool_trace',
-          parentId: agentMsgId,
-          toolName: trace.toolName,
-          detail: trace.detail,
-          status: trace.status,
-          toolCallId: trace.toolCallId,
-        };
-        if (trace.diffSource) entry.diffSource = trace.diffSource;
-        sessionEntries.push(entry as (typeof sessionEntries)[number]);
+        sessionEntries.push(toSessionToolTrace(trace, agentMsgId));
       }
 
       const turnTokenUsage = {

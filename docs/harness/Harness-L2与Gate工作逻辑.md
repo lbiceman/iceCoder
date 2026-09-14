@@ -113,8 +113,8 @@ interface CompletionCondition {
 
 `harness-round-no-tools.ts` 完成空响应、截断和 Stop Hook 等前置处理后，只调用一次统一门控：
 
-- `continue`：注入门控生成的领域无关提示。
-- `pause/fail`：保存 checkpoint 并返回结构化终态。
+- `continue`：注入门控生成的领域无关提示（给模型，不展示给用户）。
+- `pause/fail`：保存 checkpoint，并在 `completionStatus` / `completionReason` / `stopReason` 中保留真实终态；用户可见正文仍是模型原文，不追加结清术语。
 - `complete`：以 `model_done` 正常收尾。
 
 ### 6.3 任务图结束

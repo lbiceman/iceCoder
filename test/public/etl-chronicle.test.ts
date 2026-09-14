@@ -305,4 +305,125 @@ describe('EtlChronicle.assemble', () => {
     expect(chapters[0].endTs).toBe(15_31_800);
     expect(chapters[1].endTs).toBe(20_00_400);
   });
+
+  it('一条 agent 上的 tool_trace 带 iteration 时按 Harness 轮切开', () => {
+    const Chronicle = loadChronicle();
+    const traces = [];
+    for (let r = 1; r <= 8; r++) {
+      traces.push({
+        toolName: r % 2 ? 'read_file' : 'write_file',
+        detail: `src/f${r}.ts`,
+        status: 'success',
+        toolCallId: `c${r}`,
+        iteration: r,
+      });
+    }
+    const { chapters } = Chronicle.assemble({
+      uiMessages: [
+        { role: 'user', id: 'u1', content: '修完所有缺陷' },
+        { role: 'agent', id: 'a1', content: '7 条验收已通过' },
+      ],
+      structured: [
+        { role: 'user', content: '修完所有缺陷' },
+        { role: 'assistant', content: '7 条验收已通过' },
+      ],
+      toolTraces: { a1: traces },
+    });
+    expect(chapters).toHaveLength(1);
+    const rounds = chapters[0].rounds as Array<{
+      iteration: number;
+      isFinal: boolean;
+      tools: Array<{ toolCallId: string }>;
+    }>;
+    const work = rounds.filter((r) => !r.isFinal);
+    expect(work).toHaveLength(8);
+    expect(work.map((r) => r.iteration)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(work.every((r) => r.tools.length === 1)).toBe(true);
+    expect(chapters[0].toolCount).toBe(8);
+    expect(chapters[0].roundCount).toBeGreaterThanOrEqual(8);
+  });
+
+  it('UI 把多轮工具压在一条气泡且无 iteration 时，不把全部工具塞进第一轮', () => {
+    const Chronicle = loadChronicle();
+    const blob = [];
+    for (let i = 1; i <= 12; i++) {
+      blob.push({
+        toolName: i <= 4 ? 'read_file' : 'write_file',
+        detail: i <= 4 ? `src/a${i}.ts` : `src/b${i}.ts`,
+        status: 'success',
+        toolCallId: `u${i}`,
+      });
+    }
+    const structured = [
+      { role: 'user', content: '修登录失败清空表单' },
+      { role: 'assistant', toolCalls: [{ id: 'u1', name: 'read_file', arguments: { path: 'src/a1.ts' } }] },
+      { role: 'assistant', toolCalls: [{ id: 'u2', name: 'read_file', arguments: { path: 'src/a2.ts' } }] },
+      { role: 'assistant', toolCalls: [{ id: 'u3', name: 'read_file', arguments: { path: 'src/a3.ts' } }] },
+      { role: 'assistant', toolCalls: [{ id: 'u4', name: 'read_file', arguments: { path: 'src/a4.ts' } }] },
+      { role: 'assistant', content: '改好了' },
+    ];
+    const { chapters } = Chronicle.assemble({
+      uiMessages: [
+        { role: 'user', id: 'u1', content: '修登录失败清空表单' },
+        { role: 'agent', id: 'a1', content: '改好了' },
+      ],
+      structured,
+      toolTraces: { a1: blob },
+    });
+    const rounds = chapters[0].rounds as Array<{
+      isFinal: boolean;
+      tools: unknown[];
+    }>;
+    const work = rounds.filter((r) => !r.isFinal);
+    expect(work.length).toBeGreaterThanOrEqual(4);
+    expect(work[0].tools.length).toBeLessThan(blob.length);
+    expect(chapters[0].toolCount).toBe(12);
+  });
+});
+
+describe('EtlChronicle.fromLive', () => {
+  it('显式 running 时，工具失败不改章状态', () => {
+    const Chronicle = loadChronicle();
+    const chapter = Chronicle.fromLive({
+      messageId: 'u1',
+      preview: '修测试',
+      status: 'running',
+      roundRecords: [{
+        iteration: 1,
+        status: 'done',
+        toolCallIds: ['t1'],
+        startTs: 1,
+        endTs: 2,
+      }],
+      toolRecords: [{
+        toolCallId: 't1',
+        toolName: 'run_command',
+        status: 'failed',
+        detail: 'npm test',
+        callTs: 1,
+        resultTs: 2,
+      }],
+    });
+    expect(chapter.status).toBe('running');
+  });
+
+  it('熔断终态时章状态为失败', () => {
+    const Chronicle = loadChronicle();
+    const chapter = Chronicle.fromLive({
+      status: 'failed',
+      roundRecords: [{
+        iteration: 1,
+        status: 'done',
+        isFinal: true,
+        stopReason: 'circuit_breaker',
+        toolCallIds: ['t1'],
+      }],
+      toolRecords: [{
+        toolCallId: 't1',
+        toolName: 'run_command',
+        status: 'failed',
+      }],
+    });
+    expect(chapter.status).toBe('failed');
+  });
 });

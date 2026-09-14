@@ -388,7 +388,7 @@ describe('Harness - 工具调用循环', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toContain('File does not exist');
+    expect(result.content).toBe('File does not exist');
     expect(result.completionStatus).toBe('failed');
     // 消息中应该包含工具错误
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('Tool execution error'));
@@ -758,7 +758,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harnessWithExecutor.run('Read file', chatFn);
 
-    expect(result.content).toContain('Cannot read');
+    expect(result.content).toBe('Cannot read');
     expect(result.completionStatus).toBe('paused');
     expect(result.loopState.stopReason).toBe('completion_paused');
     expect(handler).not.toHaveBeenCalled();
@@ -787,7 +787,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toContain('User declined');
+    expect(result.content).toBe('User declined');
     expect(result.completionStatus).toBe('paused');
     expect(onConfirm).toHaveBeenCalledWith('read_file', {});
     expect(handler).not.toHaveBeenCalled();
@@ -809,7 +809,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Read file', chatFn);
 
-    expect(result.content).toContain('Need confirmation');
+    expect(result.content).toBe('Need confirmation');
     expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     expect(result.messages.some(m =>
@@ -878,7 +878,7 @@ describe('Harness - 破坏性工具权限确认', () => {
 
     const result = await harness.run('Delete important.txt', chatFn);
 
-    expect(result.content).toContain('OK, I will not delete it');
+    expect(result.content).toBe('OK, I will not delete it');
     expect(result.completionStatus).toBe('paused');
     expect(handler).not.toHaveBeenCalled();
     const toolMsg = result.messages.find(m => m.role === 'tool' && typeof m.content === 'string' && (m.content as string).includes('User denied'));
@@ -1598,10 +1598,10 @@ describe('Harness - 连续工具失败熔断', () => {
     ]);
     const result = await harness.run('test', chatFn);
 
-    // 模型仍可输出总结，但结构化终态必须保留最后一次失败。
+    // 模型仍可输出总结，但结构化终态必须保留最后一次失败；正文不再追加门控术语。
     expect(result.loopState.stopReason).toBe('completion_failed');
     expect(result.completionStatus).toBe('failed');
-    expect(result.content).toContain('summary');
+    expect(result.content).toBe('summary');
   });
 
   it('重复同参工具失败时注入换策略提示', async () => {

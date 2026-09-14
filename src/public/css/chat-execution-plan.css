@@ -456,28 +456,11 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   column-gap: 10px;
   align-items: stretch;
   min-width: 0;
-  margin: 0 -6px;
-  padding: 2px 6px;
   border-radius: var(--radius);
-}
-
-.etl-chapter-node:hover,
-.etl-chapter-node:focus-within {
-  background: var(--bg-hover);
 }
 
 .etl-chapter-node:last-child .etl-snapshot-line {
   display: none;
-}
-
-/* 选中 = 正在看的那一章（下边执行流对应它）。最新章不再套同一套高亮。 */
-.etl-chapter-node.is-selected {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-.etl-chapter-node.is-selected:hover,
-.etl-chapter-node.is-selected:focus-within {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .etl-chapter-node.is-selected .etl-chapter-marker {
@@ -511,6 +494,11 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
   cursor: pointer;
 }
 
+.etl-chapter-node:hover .etl-chapter-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .etl-chapter-main {
   display: flex;
   flex-direction: column;
@@ -528,6 +516,8 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 .etl-chapter-title-row .etl-chapter-title,
 .etl-chapter-title-row .etl-snapshot-preview {
   display: block;
+  flex: 1;
+  min-width: 0;
   -webkit-line-clamp: unset;
   -webkit-box-orient: unset;
   overflow: hidden;
@@ -546,7 +536,8 @@ html[data-shell="mobile"] body.etl-panel-open .page-container {
 
 .etl-chapter-title-row .etl-snapshot-restore-btn {
   position: static;
-  flex-shrink: 0;
+  flex: 0 0 24px;
+  width: 24px;
 }
 
 .etl-chapter-load-more {

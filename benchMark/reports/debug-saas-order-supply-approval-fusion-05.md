@@ -2,7 +2,7 @@
 
 > **task_id**：`debug-saas-order-supply-approval-fusion-05`  
 > **prompt 版本**：v0.1（2026-07-09）  
-> **评测日期**：2026-07-09（公开验收复跑 + 隐藏语义探针 + 盲评归档）  
+> **评测日期**：2026-07-09（01/02 公开验收复跑 + 隐藏语义探针 + 盲评归档）· **2026-09-14**（**05** 增补）  
 > **出题 / 裁判**：GPT-5.5（盲评；平台映射为赛后归档）  
 > **rubric**：`JUDGE_RUBRIC_v0.1`（Gate 0–40 + Judge 0–60）  
 > **任务规格**：[`../md/debug-saas-order-supply-approval-fusion-05-任务规格.md`](../md/debug-saas-order-supply-approval-fusion-05-任务规格.md)
@@ -37,14 +37,16 @@
 |------|------|----------|------|
 | **01** | **iceCoder** | `E:\test\agentToolTest\debug-saas-order-supply-approval-fusion-01` | ✅ 已评 |
 | **02** | **CC**（Claude Code） | `E:\test\agentToolTest\debug-saas-order-supply-approval-fusion-02` | ✅ 已评 |
+| **05** | **iceCoder**（Harness · adaptive） | `E:\test\agentToolTest\debug-saas-order-supply-approval-fusion-05` | ✅ 已评 |
 
-> 目录后缀为批次代号；**平台身份已解盲（赛后归档）**：**01 = iceCoder**，**02 = CC**。裁判评分阶段不可见平台名。
+> 目录后缀为批次代号；**01 / 02** 平台身份已解盲（赛后归档）：**01 = iceCoder**，**02 = CC**。**05** 为同任务新批次，目录名与 task_id 后缀一致。
 
 **参测约定**
 
-- 评测方式：盲评后归档映射
-- 工作区均 **非 git 仓库**；G2 范围合规无法完整审计，两边均保守扣 2 分
-- 产物源码规模约 **34** 个 `src/**/*.ts`，明显低于 L8 设计口径 `160–220`
+- **01 / 02**：盲评后归档映射；模型未在报告中统一标注（非 05 批次）
+- **05**：模型 **`deepseek-4.1-flash`** · iceCoder **Harness** · `adaptive`
+- 工作区均 **非 git 仓库**；G2 范围合规无法完整审计，保守扣 2 分
+- 产物 `src/**/*.ts` 规模：**01/02 约 34** · **05 约 30**，均明显低于 L8 设计口径 `160–220`
 
 ---
 
@@ -224,20 +226,112 @@
 
 ---
 
+## Run: 05 / iceCoder / debug-saas-order-supply-approval-fusion-05
+
+### 实现摘要（≤150 字）
+
+公开验收链 **7/7 全绿**（2026-09-14 本机复跑：单测 30/30、集成 2/2、合同 3/3）。`canShip()` 校验超量发货；`executeApprovalWorkflow` 自动审批可写带 `tenantId` 的稳定 `eventId`；`nextVersion(events, aggregateId, tenantId?)` 在传入 tenant 时可隔离，**省略 tenant 时仍与公开 contract 测例一致、按 aggregate 合并版本**。`src` 约 **30** 文件，仍远低于 L8 完整规格。
+
+### 验收结果
+
+| 命令 | 结果 | 说明 |
+|------|------|------|
+| `npm ci` | **PASS** | exit 0 |
+| `npm test` | **PASS** | 30/30 |
+| `npm run test:integration` | **PASS** | 2/2 |
+| `npm run test:contracts` | **PASS** | 3/3 |
+| `npm run migrate:check` | **PASS** | exit 0 |
+| `npm run audit:snapshot` | **PASS** | exit 0 |
+| `npm run build` | **PASS** | `tsc --noEmit` |
+
+### 执行统计
+
+| 字段 | 值 |
+|------|-----|
+| codename | **05** |
+| platform | iceCoder（Harness · adaptive） |
+| model | **deepseek-4.1-flash** |
+| duration | **743000ms**（**12m 23s**） |
+| turns | **83** |
+| 备注 | 耗时 / 轮次为赛后执行元数据，不参与评分 |
+
+### Gate 客观门禁（0–40）
+
+| 子项 | 分数 | 证据 |
+|------|------|------|
+| G1 验收通过 | **25 / 25** | 公开验收命令全部 exit 0 |
+| G2 范围合规 | **6 / 8** | 非 git repo，禁改路径无法完整审计；未见直接违规证据 |
+| G3 可构建 | **4 / 4** | `npm run build` 通过 |
+| G4 无致命泄漏 | **3 / 3** | 未发现 `.env`、密钥或超大二进制风险 |
+
+**Gate 合计：38/40**
+
+### Judge 六维（0–60）
+
+| 维度 | 分数 | 证据 |
+|------|------|------|
+| D1 需求完成度 | **4 / 10** | 公开测试覆盖域名义齐全；约 30 个 `src` 文件 vs L8 160–220 |
+| D2 正确性 | **5 / 10** | 发货数量校验正确；自动审批 audit 可带 tenant；outbox 默认路径仍跨租户合并版本 |
+| D3 代码质量 | **6 / 10** | 模块分层清晰、审批链 ADR 顺序合理；整体仍偏薄实现 |
+| D4 最小改动 | **7 / 10** | 未见大范围无关实现；无 git diff，保守评分 |
+| D5 验证意识 | **9 / 10** | 完整公开验收链复跑；隐藏语义探针（outbox / canShip / auto-approve）已核对 |
+| D6 实现说明 | **5 / 10** | 产物内无参测终稿 bullet；行为与公开通过结果可对照 |
+
+**Judge 合计：36/60**
+
+```json
+{
+  "run_id": "saas-fusion-05-deepseek-flash",
+  "model": "deepseek-4.1-flash",
+  "dimensions": {
+    "D1": { "score": 4, "evidence": "Public acceptance green; ~30 src files vs L8 160-220 target" },
+    "D2": { "score": 5, "evidence": "canShip OK; auto-approve audit with tenant OK; nextVersion cross-tenant when tenantId omitted" },
+    "D3": { "score": 6, "evidence": "Clear module boundaries; ADR approval order; thin but coherent" },
+    "D4": { "score": 7, "evidence": "No large unrelated surface; no git audit" },
+    "D5": { "score": 9, "evidence": "7/7 acceptance re-run; hidden semantic probes checked" },
+    "D6": { "score": 5, "evidence": "No delivery bullets in repo; gap vs full L8 spec" }
+  },
+  "judge_total": 36,
+  "one_line_verdict": "公开验收全绿且隐藏探针优于 01；outbox 默认路径与 L8 体量仍不达标。",
+  "implementation_summary": "Harness 83 轮 / 12m23s；全链绿；canShip 与 audit 改进；outbox 可选 tenant 但默认仍合并。"
+}
+```
+
+### 综合分与等级
+
+| 指标 | 值 |
+|------|-----|
+| Gate | **38/40** |
+| Judge | **36/60** |
+| **Composite** | **74** |
+| **等级** | **B**（验收通过 + 可用；L8 完整语义未达成） |
+
+### 关键扣分证据
+
+| 探针 | 观察到的行为 | 风险 |
+|------|--------------|------|
+| `outboxCrossTenant` | 不传 `tenantId` 时 `nextVersion()` 对同 `aggregateId` 取全局 max | 与 contract 测例一致，但跨租户串版本 |
+| `canShipTooMuch` | reservation=1 发货 2 → `false` | **通过** |
+| `autoApproveAudit` | 显式 tenant → `tenantId` + 稳定 `eventId`；无 tenant 时 fallback `"unknown"` | **优于 01**；无 tenant 路径语义仍弱 |
+
+---
+
 ## 跨平台对比
 
-| 代号 | 平台 | SR（公开验收） | Composite | 等级 | Gate | Judge | Turns | Duration | 备注 |
-|------|------|----------------|-----------|------|------|-------|-------|----------|------|
-| **01** | **iceCoder** | **1** | **71** | **B** | **38** | **33** | **122** | **≈16m 8s** | 修掉发货超量；audit `eventId` 稳定 |
-| **02** | **CC** | **1** | **69** | **C** | **38** | **31** | **—** | **4m 58s** | 更快；发货超量与 audit 双空 |
+| 代号 | 平台 | 模型 | SR | Composite | 等级 | Gate | Judge | Turns | Duration | 备注 |
+|------|------|------|-----|-----------|------|------|-------|-------|----------|------|
+| **05** | **iceCoder** | **deepseek-4.1-flash** | **1** | **74** | **B** | **38** | **36** | **83** | **12m 23s** | Harness；隐藏探针优于 01 |
+| **01** | **iceCoder** | — | **1** | **71** | **B** | **38** | **33** | **122** | **≈16m 8s** | 修掉发货超量；audit `tenantId` 空 |
+| **02** | **CC** | — | **1** | **69** | **C** | **38** | **31** | **—** | **4m 58s** | 更快；发货超量与 audit 双空 |
 
 **横向要点：**
 
-- **SR（公开）**：均为 **1**（7/7 验收命令全绿）。
-- **质量**：Composite **01 71 > 02 69**（+2）；Judge **33 vs 31**，主因 `canShipTooMuch` 与 audit `eventId`。
-- **效率**：**02 更快**（约 4m58s vs 16m8s）；01 有 **122** 轮可观测，02 turns 未记录。
-- **共性缺口**：outbox 未按 `(tenantId, aggregateId)` 作用域；自动审批 audit 缺 `tenantId`；源码规模远低于 L8 设计口径。
-- **结论**：当前两份产物中 **01 更好**，但两者均不能视为完整符合 L8 规格。
+- **SR（公开）**：三批均为 **1**（7/7 验收命令全绿）。
+- **质量（Composite）**：**05 74 > 01 71 > 02 69**；05 Judge **36**，较 01 **+3**（D2/D3/D5）。
+- **效率（同平台 iceCoder）**：**05** **83 轮 / 12m23s** vs **01** **122 轮 / ≈16m8s** — 05 墙钟更短、轮次更少且分更高。
+- **模型**：**05 为 deepseek-4.1-flash**，与 01/02 **不可同模横比**；与 01 对比主要反映 **模型 + Harness 策略 + 实现路径**。
+- **共性缺口**：outbox **默认/contract 路径**仍可能跨租户；源码规模远低于 L8；**均不能视为完整 L8 规格**。
+- **结论**：当前三份产物中 **05 综合最佳**，但仍是 **公开绿 + 部分隐藏语义** 档，非完整企业融合交付。
 
 ### Composite 分差解读（01 vs 02 · +2）
 
@@ -252,13 +346,26 @@
 | D5 | 8 | 8 | 0 |
 | D6 | 5 | 5 | 0 |
 
+### Composite 分差解读（05 vs 01 · +3）
+
+**Composite 74 vs 71 的 3 分差全部来自 Judge（Gate 均为 38/40）。**
+
+| 维度 | 05 deepseek | 01 iceCoder | 差 |
+|------|-------------|-------------|-----|
+| D1 | 4 | 4 | 0 |
+| D2 | **5** | 4 | **+1**（05 自动审批 audit 可带 tenant；outbox 可选 tenant 参数） |
+| D3 | **6** | 5 | **+1**（05 模块与 workflow 更整） |
+| D4 | 7 | 7 | 0 |
+| D5 | **9** | 8 | **+1**（05 含隐藏探针复核对） |
+| D6 | 5 | 5 | 0 |
+
 ### 隐藏探针对照
 
-| 探针 | 01 | 02 | 对比 |
-|------|----|----|------|
-| `outboxCrossTenant` | 失败 | 失败 | 持平 |
-| `canShipTooMuch` | **通过** | 失败 | **01 明显优于 02** |
-| `autoApproveAudit` | 部分失败（`eventId` 稳，`tenantId` 空） | 失败（双空） | **01 略优** |
+| 探针 | 05 | 01 | 02 | 对比 |
+|------|----|----|-----|------|
+| `outboxCrossTenant` | 失败（省略 tenant 合并） | 失败 | 失败 | 05 传 tenant 可隔离；默认路径仍失败 |
+| `canShipTooMuch` | **通过** | **通过** | 失败 | 05 / 01 持平优于 02 |
+| `autoApproveAudit` | **基本通过**（显式 tenant） | 部分失败（`tenantId` 空） | 失败（双空） | **05 最优** |
 
 ---
 
@@ -274,4 +381,4 @@
 
 ---
 
-*报告基于 `debug-saas-order-supply-approval-fusion-01`（iceCoder · 967853ms / 122 轮）与 `02`（CC · 4m 58s）公开验收复跑、隐藏语义探针与盲评归档结果。*
+*报告基于 `debug-saas-order-supply-approval-fusion-01`（iceCoder · 967853ms / 122 轮）、`02`（CC · 4m 58s）盲评归档，及 **`05`**（iceCoder Harness · **deepseek-4.1-flash** · **743000ms / 83 轮** · 2026-09-14 验收复跑与隐藏探针）增补结果。*

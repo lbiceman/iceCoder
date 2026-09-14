@@ -14,8 +14,9 @@ window.ChatExecutionPlan = (function () {
   var PANEL_ID = 'exec-transparency-panel';
   // Observer 必须同步、快速返回；异常大的计划不应把浏览器事件循环拖死。
   var MAX_RENDER_STEPS = 500;
-  var MAX_TOOL_HISTORY = 100;
-  var MAX_ROUND_HISTORY = 50;
+  var MAX_TOOL_HISTORY = 4000;
+  var MAX_ROUND_HISTORY = 400;
+  var MAX_TOOLS_PER_ROUND_DOM = 80;
 
   var STATE_LABELS = {
     pending: '待执行',
@@ -1805,24 +1806,65 @@ window.ChatExecutionPlan = (function () {
     return list;
   }
 
+  function lastLiveRound() {
+    for (var i = roundRecords.length - 1; i >= 0; i--) {
+      if (roundRecords[i]) return roundRecords[i];
+    }
+    return null;
+  }
+
+  function stopReasonChapterStatus(reason) {
+    if (!reason) return '';
+    if (reason === 'circuit_breaker' || reason === 'completion_failed' || reason === 'error') {
+      return 'failed';
+    }
+    if (reason === 'user_stop' || reason === 'cancelled' || reason === 'user_abort') {
+      return 'stopped';
+    }
+    if (reason === 'completion_paused') return 'paused';
+    return '';
+  }
+
+  function liveChapterHasStopped() {
+    var last = lastLiveRound();
+    if (!last) return false;
+    if (last.isFinal) return true;
+    if (stopReasonChapterStatus(last.stopReason)) return true;
+    return last.stopReason === 'model_done' || last.stopReason === 'stop_hook';
+  }
+
   function liveChapterStatus() {
-    if (!isTurnInFlight()
-      && liveChapterMeta && liveChapterMeta.status && liveChapterMeta.status !== 'running') {
+    // 任务还在跑、模型未停：目录徽章保持进行中。
+    // 某轮工具失败（如测试没过）不能把整章提前标成失败。
+    if (!liveChapterHasStopped()) {
+      if (isTurnInFlight() || !liveChapterMeta || liveChapterMeta.status === 'running') {
+        return 'running';
+      }
+    }
+    if (liveChapterMeta && liveChapterMeta.status && liveChapterMeta.status !== 'running') {
       return liveChapterMeta.status;
     }
-    for (var i = roundRecords.length - 1; i >= 0; i--) {
-      var rec = roundRecords[i];
-      if (!rec) continue;
-      if (rec.stopReason === 'circuit_breaker') return 'failed';
-      if (rec.stopReason === 'user_stop' || rec.stopReason === 'cancelled') return 'stopped';
-      if (rec.stopReason === 'completion_paused') return 'paused';
-      if (roundVisualStatus(rec) === 'failed') return 'failed';
+    var last = lastLiveRound();
+    if (last) {
+      var fromStop = stopReasonChapterStatus(last.stopReason);
+      if (fromStop) return fromStop;
+      if (last.isFinal && last.status === 'done') return 'done';
+      if (liveChapterHasStopped() && roundVisualStatus(last) === 'failed') return 'failed';
     }
-    if (roundRecords.length && currentPlan && isPlanComplete(currentPlan)) return 'done';
-    var last = roundRecords.length ? roundRecords[roundRecords.length - 1] : null;
-    if (last && last.isFinal && last.status === 'done') return 'done';
-    if (hasLiveChapterWork()) return 'running';
+    if (liveChapterHasStopped() && roundRecords.length && currentPlan && isPlanComplete(currentPlan)) {
+      return 'done';
+    }
+    if (hasLiveChapterWork() && !liveChapterHasStopped()) return 'running';
     return 'done';
+  }
+
+  /** WS 闪断等会提前 endTurnTimer；模型还没停、后续工具/轮次到来时把活章重新打开。 */
+  function reopenTurnIfModelStillWorking() {
+    if (liveChapterHasStopped()) return;
+    if (typeof turnStartedAt !== 'number' || turnEndedAt === null) return;
+    turnEndedAt = null;
+    if (liveChapterMeta) liveChapterMeta.status = 'running';
+    startTick();
   }
 
   function liveFilesChangedCount() {
@@ -2665,6 +2707,7 @@ window.ChatExecutionPlan = (function () {
   function applyRoundActivity(evt) {
     try {
       if (!evt || !evt.type) return;
+      if (evt.type !== 'model_task_final') reopenTurnIfModelStillWorking();
       markLiveChapterRunning();
       var ts = typeof evt.ts === 'number' ? evt.ts : Date.now();
       var roundResult = ensureRoundRecord(evt.iteration, ts);
@@ -2678,7 +2721,7 @@ window.ChatExecutionPlan = (function () {
         // 最终轮：标记任务完成，供轮次卡展示「已完成」结果。
         record.isFinal = true;
         markRoundsComplete(record.iteration);
-        if (evt.stopReason === 'model_done') endTurnTimer(ts);
+        endTurnTimer(ts);
       }
       if (evt.executionMode) {
         addUniqueStrings(record.signals, evt.executionMode.enteredBy || []);
@@ -3064,6 +3107,42 @@ window.ChatExecutionPlan = (function () {
     return Array.isArray(structured) ? structured : [];
   }
 
+  function countAssembledWorkRounds(rounds) {
+    var n = 0;
+    if (!Array.isArray(rounds)) return 0;
+    for (var i = 0; i < rounds.length; i++) {
+      if (rounds[i] && !rounds[i].isFinal) n++;
+    }
+    return n;
+  }
+
+  function overlayRicherLiveChapter(chapter) {
+    if (!chapter) return;
+    var liveWork = 0;
+    for (var i = 0; i < roundRecords.length; i++) {
+      if (roundRecords[i] && !roundRecords[i].isFinal) liveWork++;
+    }
+    if (liveWork <= countAssembledWorkRounds(chapter.rounds)) return;
+    var api = chronicleApi();
+    if (!api || typeof api.fromLive !== 'function') return;
+    var packed = api.fromLive({
+      messageId: chapter.messageId,
+      preview: chapter.preview,
+      status: chapter.status,
+      startedAt: liveChapterMeta && liveChapterMeta.startedAt,
+      endedAt: turnEndedAt,
+      markers: liveMarkersFromState(),
+      roundRecords: roundRecords,
+      toolRecords: toolRecords,
+      plan: currentPlan,
+    });
+    if (!packed || countAssembledWorkRounds(packed.rounds) <= countAssembledWorkRounds(chapter.rounds)) return;
+    chapter.rounds = packed.rounds;
+    chapter.roundCount = packed.roundCount;
+    chapter.toolCount = packed.toolCount;
+    chapter.filesChangedCount = packed.filesChangedCount;
+  }
+
   /**
    * 从 structured + UI 消息回填整本编年史。
    * 正在跑的活章不覆盖实时 tool/round。
@@ -3117,6 +3196,7 @@ window.ChatExecutionPlan = (function () {
           && lastCh.messageId === liveChapterMeta.messageId
           && lastAssembledStatus && lastAssembledStatus !== 'running'
           && !turnInFlight);
+        if (lastCh && hasLiveProgress()) overlayRicherLiveChapter(lastCh);
         var keepLive = hasLiveWork && !lastIsSameDone;
         applyAssembledChapters(assembled && assembled.chapters, { keepLive: keepLive });
         if (!keepLive && lastAssembledStatus && lastAssembledStatus !== 'running') stopTick();
@@ -3303,7 +3383,7 @@ window.ChatExecutionPlan = (function () {
     if (!actions) return;
     if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
       actions.appendChild(makeRoundActionRow(tool));
-      while (actions.children.length > MAX_TOOL_HISTORY) {
+      while (actions.children.length > MAX_TOOLS_PER_ROUND_DOM) {
         actions.removeChild(actions.firstElementChild);
       }
     }
@@ -3335,7 +3415,7 @@ window.ChatExecutionPlan = (function () {
     var list = ensureLiveToolsList(roundNode);
     if (!list || list.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) return;
     list.appendChild(makeRoundActionRow(tool));
-    while (list.children.length > MAX_TOOL_HISTORY) {
+    while (list.children.length > MAX_TOOLS_PER_ROUND_DOM) {
       list.removeChild(list.firstElementChild);
     }
     syncRoundToolsPreview(roundNode, record);
@@ -3893,6 +3973,7 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!step || !step.type) return;
       recoverPanelAfterFatal();
+      reopenTurnIfModelStillWorking();
       markLiveChapterRunning();
       if (step.type === 'tool_call') {
         var callId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
@@ -4052,7 +4133,11 @@ window.ChatExecutionPlan = (function () {
     try {
       if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') return;
       turnEndedAt = typeof ts === 'number' ? Math.max(turnStartedAt, ts) : Date.now();
+      if (liveChapterMeta && liveChapterHasStopped()) {
+        liveChapterMeta.status = liveChapterStatus();
+      }
       renderFooter();
+      patchCurrentChapterChrome();
       stopTick();
       scheduleFlowPersist();
     } catch (e) {

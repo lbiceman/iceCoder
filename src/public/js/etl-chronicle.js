@@ -177,7 +177,7 @@ window.EtlChronicle = (function () {
     var args = tc && (tc.arguments || tc.toolArgs || tc.args);
     var target = extractToolTarget(name, args);
     var preview = formatToolPreview(name, args);
-    return {
+    var tool = {
       toolCallId: (tc && (tc.id || tc.toolCallId)) ? String(tc.id || tc.toolCallId) : '',
       toolName: name,
       intent: inferToolIntent(name, target),
@@ -186,6 +186,18 @@ window.EtlChronicle = (function () {
       durationMs: typeof extras.durationMs === 'number' ? extras.durationMs : 0,
       status: toolStatus(extras.status || (tc && tc.status)),
     };
+    var iteration = normalizeIter(extras.iteration != null ? extras.iteration : (tc && tc.iteration));
+    if (iteration) tool.iteration = iteration;
+    return tool;
+  }
+
+  function normalizeIter(v) {
+    if (typeof v === 'number' && isFinite(v) && v > 0) return Math.floor(v);
+    if (typeof v === 'string' && /^\d+$/.test(v)) {
+      var n = parseInt(v, 10);
+      return n > 0 ? n : 0;
+    }
+    return 0;
   }
 
   function collectWritePaths(tools) {
@@ -249,13 +261,20 @@ window.EtlChronicle = (function () {
 
   function chapterStatusFromRounds(rounds, explicit, isLastIncomplete) {
     if (explicit) return explicit;
-    if (!rounds.length) return isLastIncomplete ? 'running' : 'done';
+    if (isLastIncomplete) return 'running';
+    if (!rounds.length) return 'done';
     var last = rounds[rounds.length - 1];
-    if (last.stopReason === 'circuit_breaker') return 'failed';
-    if (last.stopReason === 'user_stop' || last.stopReason === 'cancelled') return 'stopped';
+    if (last.stopReason === 'circuit_breaker' || last.stopReason === 'completion_failed'
+      || last.stopReason === 'error') {
+      return 'failed';
+    }
+    if (last.stopReason === 'user_stop' || last.stopReason === 'cancelled'
+      || last.stopReason === 'user_abort') {
+      return 'stopped';
+    }
     if (last.stopReason === 'completion_paused') return 'paused';
     if (last.status === 'failed') return 'failed';
-    if (last.status === 'running' || isLastIncomplete) return 'running';
+    if (last.status === 'running') return 'running';
     return 'done';
   }
 
@@ -386,7 +405,8 @@ window.EtlChronicle = (function () {
         id: tr.toolCallId || tr.id || '',
         name: name,
         arguments: guessArgsFromDetail(name, tr.detail || tr.target || ''),
-      }, { status: tr.status }));
+        iteration: tr.iteration,
+      }, { status: tr.status, iteration: tr.iteration }));
     }
     return tools;
   }
@@ -400,12 +420,15 @@ window.EtlChronicle = (function () {
       var pid = m.parentId || '';
       if (!pid) continue;
       if (!traces[pid]) traces[pid] = [];
-      traces[pid].push({
+      var row = {
         toolName: m.toolName || '',
         detail: m.detail || '',
         status: m.status || 'done',
         toolCallId: m.toolCallId || '',
-      });
+      };
+      var iter = normalizeIter(m.iteration);
+      if (iter) row.iteration = iter;
+      traces[pid].push(row);
     }
     return traces;
   }
@@ -447,10 +470,11 @@ window.EtlChronicle = (function () {
     return out;
   }
 
-  function makeRound(tools, isFinal) {
+  function makeRound(tools, isFinal, iteration) {
     tools = tools || [];
+    var it = normalizeIter(iteration) || 1;
     return {
-      iteration: 1,
+      iteration: it,
       title: deriveRoundTitle(tools, isFinal, isFinal),
       status: roundStatusFromTools(tools, 'done'),
       durationMs: 0,
@@ -460,12 +484,81 @@ window.EtlChronicle = (function () {
     };
   }
 
+  function collectSliceTraces(userMsg, slice, toolTraces) {
+    toolTraces = toolTraces || {};
+    var out = [];
+    var used = Object.create(null);
+    function take(key) {
+      if (!key || used[key]) return;
+      var list = toolTraces[key];
+      if (!Array.isArray(list) || !list.length) return;
+      used[key] = true;
+      for (var i = 0; i < list.length; i++) out.push(list[i]);
+    }
+    for (var s = 0; s < slice.length; s++) {
+      if (isAgentMsg(slice[s]) && slice[s].id) take(String(slice[s].id));
+    }
+    if (userMsg && userMsg.id) take(String(userMsg.id));
+    return out;
+  }
+
+  function tracesHaveIteration(traces) {
+    if (!Array.isArray(traces)) return false;
+    for (var i = 0; i < traces.length; i++) {
+      if (normalizeIter(traces[i] && traces[i].iteration)) return true;
+    }
+    return false;
+  }
+
+  function roundsFromIteratedTools(tools, addFinal) {
+    var buckets = Object.create(null);
+    var order = [];
+    var orphans = [];
+    var i;
+    for (i = 0; i < tools.length; i++) {
+      var it = normalizeIter(tools[i].iteration);
+      if (!it) {
+        orphans.push(tools[i]);
+        continue;
+      }
+      if (!buckets[it]) {
+        buckets[it] = [];
+        order.push(it);
+      }
+      buckets[it].push(tools[i]);
+    }
+    order.sort(function (a, b) { return a - b; });
+    var rounds = [];
+    for (i = 0; i < order.length; i++) {
+      rounds.push(makeRound(buckets[order[i]], false, order[i]));
+    }
+    if (orphans.length) {
+      var extraIter = order.length ? (order[order.length - 1] + 1) : 1;
+      rounds.push(makeRound(orphans, false, extraIter));
+    }
+    if (addFinal) {
+      var last = rounds[rounds.length - 1];
+      if (!last || !last.isFinal) {
+        rounds.push(makeRound([], true, last ? last.iteration + 1 : 1));
+      }
+    }
+    return finalizeRoundOrder(rounds);
+  }
+
   function roundsFromUiSlice(userMsg, slice, toolTraces) {
     toolTraces = toolTraces || {};
     var agents = [];
     var i;
     for (i = 0; i < slice.length; i++) {
       if (isAgentMsg(slice[i]) && !slice[i]._streaming) agents.push(slice[i]);
+    }
+    var rawTraces = collectSliceTraces(userMsg, slice, toolTraces);
+    var lastAgent = agents.length ? agents[agents.length - 1] : null;
+    var lastKey = lastAgent && lastAgent.id ? String(lastAgent.id) : '';
+    var lastHasTraces = !!(lastKey && toolTraces[lastKey] && toolTraces[lastKey].length);
+    var addFinal = !!(lastAgent && msgHasText(lastAgent) && !lastHasTraces);
+    if (tracesHaveIteration(rawTraces) && rawTraces.length) {
+      return roundsFromIteratedTools(toolsFromTraceList(rawTraces), addFinal);
     }
     var rounds = [];
     var usedParents = Object.create(null);
@@ -479,28 +572,19 @@ window.EtlChronicle = (function () {
       if (!tools.length && !isLast) continue;
       var isFinal = isLast && tools.length === 0;
       if (isFinal && !msgHasText(msg)) continue;
-      rounds.push(makeRound(tools, isFinal));
+      rounds.push(makeRound(tools, isFinal, rounds.length + 1));
     }
     var userKey = userMsg && userMsg.id ? String(userMsg.id) : '';
     if (userKey && toolTraces[userKey] && !usedParents[userKey]) {
       var extra = toolsFromTraceList(toolTraces[userKey]);
-      if (extra.length) rounds.unshift(makeRound(extra, false));
+      if (extra.length) rounds.unshift(makeRound(extra, false, 1));
     }
-    return reindexRounds(rounds);
+    return finalizeRoundOrder(rounds);
   }
 
   function toolKey(tool) {
     if (tool && tool.toolCallId) return 'id:' + tool.toolCallId;
     return 'np:' + ((tool && tool.toolName) || '') + '|' + ((tool && (tool.preview || tool.target)) || '');
-  }
-
-  function collectToolKeys(rounds) {
-    var seen = Object.create(null);
-    for (var i = 0; i < rounds.length; i++) {
-      var tools = rounds[i].tools || [];
-      for (var j = 0; j < tools.length; j++) seen[toolKey(tools[j])] = true;
-    }
-    return seen;
   }
 
   function flattenTools(rounds) {
@@ -512,44 +596,184 @@ window.EtlChronicle = (function () {
     return out;
   }
 
-  function reindexRounds(rounds) {
-    for (var i = 0; i < rounds.length; i++) rounds[i].iteration = i + 1;
+  function countWorkRounds(rounds) {
+    var n = 0;
+    if (!Array.isArray(rounds)) return 0;
+    for (var i = 0; i < rounds.length; i++) {
+      if (rounds[i] && !rounds[i].isFinal) n++;
+    }
+    return n;
+  }
+
+  function cloneRound(round) {
+    return {
+      iteration: normalizeIter(round && round.iteration) || 1,
+      title: (round && round.title) || '',
+      status: (round && round.status) || 'done',
+      durationMs: round && typeof round.durationMs === 'number' ? round.durationMs : 0,
+      isFinal: !!(round && round.isFinal),
+      stopReason: (round && round.stopReason) || '',
+      tools: round && Array.isArray(round.tools) ? round.tools.slice() : [],
+    };
+  }
+
+  function refreshRoundMeta(round) {
+    round.title = deriveRoundTitle(round.tools || [], !!round.isFinal, !!round.isFinal);
+    round.status = roundStatusFromTools(round.tools || [], round.status || 'done');
+  }
+
+  function finalizeRoundOrder(rounds) {
+    if (!Array.isArray(rounds)) return [];
+    rounds.sort(function (a, b) {
+      if (a.isFinal && !b.isFinal) return 1;
+      if (!a.isFinal && b.isFinal) return -1;
+      var ia = typeof a.iteration === 'number' ? a.iteration : 0;
+      var ib = typeof b.iteration === 'number' ? b.iteration : 0;
+      return ia - ib;
+    });
+    var seenWork = Object.create(null);
+    var collision = false;
+    var hasHigh = false;
+    for (var i = 0; i < rounds.length; i++) {
+      var it = typeof rounds[i].iteration === 'number' ? rounds[i].iteration : 1;
+      if (it > 1) hasHigh = true;
+      if (rounds[i].isFinal) continue;
+      if (seenWork[String(it)]) collision = true;
+      seenWork[String(it)] = true;
+    }
+    if (!hasHigh || collision) {
+      for (var j = 0; j < rounds.length; j++) rounds[j].iteration = j + 1;
+    }
     return rounds;
   }
 
+  function enrichTool(base, extra) {
+    if (!base || !extra) return;
+    if (toolStatus(extra.status) === 'failed') base.status = 'failed';
+    if (extra.preview && extra.preview.length > String(base.preview || '').length) {
+      base.preview = extra.preview;
+      base.target = extra.target || base.target;
+      base.intent = extra.intent || base.intent;
+    }
+    if (!base.iteration && extra.iteration) base.iteration = extra.iteration;
+  }
+
+  function lastWorkRound(list) {
+    var found = null;
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].isFinal) found = list[i];
+    }
+    return found;
+  }
+
+  function insertWorkRound(list, byIter, round) {
+    var it = round.iteration;
+    if (it && byIter[it] && !byIter[it].isFinal) return byIter[it];
+    if (it) byIter[it] = round;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].isFinal) {
+        list.splice(i, 0, round);
+        return round;
+      }
+    }
+    list.push(round);
+    return round;
+  }
+
   function mergeRoundLists(primary, secondary) {
-    if (!primary.length) return reindexRounds(secondary.slice());
-    if (!secondary.length) return reindexRounds(primary.slice());
-    var base = primary.slice();
-    var extra = flattenTools(secondary);
-    var seen = collectToolKeys(base);
-    var missing = [];
-    for (var i = 0; i < extra.length; i++) {
-      if (seen[toolKey(extra[i])]) continue;
-      seen[toolKey(extra[i])] = true;
-      missing.push(extra[i]);
-    }
-    if (missing.length) {
-      var inserted = false;
-      for (var r = 0; r < base.length; r++) {
-        if (base[r].isFinal) continue;
-        base[r].tools = (base[r].tools || []).concat(missing);
-        base[r].title = deriveRoundTitle(base[r].tools, false, false);
-        base[r].status = roundStatusFromTools(base[r].tools, base[r].status || 'done');
-        inserted = true;
-        break;
+    if (!primary.length) return finalizeRoundOrder(secondary.slice().map(cloneRound));
+    if (!secondary.length) return finalizeRoundOrder(primary.slice().map(cloneRound));
+    var list = primary.map(cloneRound);
+    var byIter = Object.create(null);
+    var byId = Object.create(null);
+    var i;
+    var j;
+    var tools;
+    var t;
+    var key;
+
+    function indexRound(round) {
+      if (typeof round.iteration === 'number' && round.iteration > 0 && !round.isFinal) {
+        if (!byIter[round.iteration]) byIter[round.iteration] = round;
       }
-      if (!inserted) {
-        base.unshift(makeRound(missing, false));
+      tools = round.tools || [];
+      for (j = 0; j < tools.length; j++) byId[toolKey(tools[j])] = tools[j];
+    }
+    for (i = 0; i < list.length; i++) indexRound(list[i]);
+
+    var unmatchedNoIter = [];
+    for (i = 0; i < secondary.length; i++) {
+      var sec = secondary[i];
+      if (sec.isFinal) continue;
+      tools = sec.tools || [];
+      var secIter = normalizeIter(sec.iteration);
+      for (j = 0; j < tools.length; j++) {
+        t = tools[j];
+        key = toolKey(t);
+        if (byId[key]) {
+          enrichTool(byId[key], t);
+          continue;
+        }
+        var destIter = normalizeIter(t.iteration) || secIter;
+        if (destIter && byIter[destIter]) {
+          byIter[destIter].tools.push(t);
+          byId[key] = t;
+          continue;
+        }
+        if (destIter > 1) {
+          var dest = insertWorkRound(list, byIter, makeRound([], false, destIter));
+          dest.tools.push(t);
+          byId[key] = t;
+          indexRound(dest);
+          continue;
+        }
+        unmatchedNoIter.push(t);
       }
     }
+
+    if (unmatchedNoIter.length) {
+      var workN = countWorkRounds(list);
+      var lastWork = lastWorkRound(list);
+      var primaryToolN = 0;
+      for (i = 0; i < list.length; i++) primaryToolN += (list[i].tools || []).length;
+      if (workN <= 1 && lastWork) {
+        lastWork.tools = (lastWork.tools || []).concat(unmatchedNoIter);
+      } else if (unmatchedNoIter.length >= Math.max(4, primaryToolN)) {
+        var minIter = Infinity;
+        for (i = 0; i < list.length; i++) {
+          if (list[i].isFinal) continue;
+          if (typeof list[i].iteration === 'number' && list[i].iteration < minIter) {
+            minIter = list[i].iteration;
+          }
+        }
+        var prefixIter = isFinite(minIter) && minIter > 1 ? minIter - 1 : 1;
+        list.unshift(makeRound(unmatchedNoIter, false, prefixIter));
+      } else if (lastWork) {
+        lastWork.tools = (lastWork.tools || []).concat(unmatchedNoIter);
+      } else {
+        list.unshift(makeRound(unmatchedNoIter, false, 1));
+      }
+    }
+
     var secFinal = secondary.length && secondary[secondary.length - 1].isFinal;
-    var baseFinal = base.length && base[base.length - 1].isFinal;
-    if (secFinal && !baseFinal) base.push(makeRound([], true));
-    return reindexRounds(base);
+    var baseFinal = list.length && list[list.length - 1].isFinal;
+    if (secFinal && !baseFinal) {
+      var lw = lastWorkRound(list);
+      list.push(makeRound([], true, lw ? lw.iteration + 1 : list.length + 1));
+    }
+    for (i = 0; i < list.length; i++) refreshRoundMeta(list[i]);
+    return finalizeRoundOrder(list);
   }
 
   function pickRicherRounds(structRounds, uiRounds) {
+    var uiWork = countWorkRounds(uiRounds);
+    var structWork = countWorkRounds(structRounds);
+    if (tracesHaveIteration(flattenTools(uiRounds)) && uiWork >= structWork) {
+      return mergeRoundLists(uiRounds, structRounds);
+    }
+    if (structWork > 1 && uiWork <= 1) {
+      return mergeRoundLists(structRounds, uiRounds);
+    }
     if (countTools(uiRounds) > countTools(structRounds)) {
       return mergeRoundLists(uiRounds, structRounds);
     }
@@ -746,15 +970,19 @@ window.EtlChronicle = (function () {
   }
 
   function toolFromLiveRecord(rec) {
-    return {
+    var target = rec.target || rec.detail || '';
+    var tool = {
       toolCallId: rec.toolCallId || '',
       toolName: rec.toolName || '',
-      intent: inferToolIntent(rec.toolName || '', rec.target || rec.detail || ''),
+      intent: inferToolIntent(rec.toolName || '', target),
       preview: clamp(rec.detail || rec.target || '', TOOL_PREVIEW_MAX),
-      target: rec.target || rec.detail || '',
+      target: target,
       durationMs: durationOf(rec.callTs, rec.resultTs),
       status: toolStatus(rec.status),
     };
+    var iteration = normalizeIter(rec.iteration);
+    if (iteration) tool.iteration = iteration;
+    return tool;
   }
 
   /**
@@ -780,7 +1008,7 @@ window.EtlChronicle = (function () {
       var isLast = r === roundRecords.length - 1;
       var isFinal = !!rec.isFinal || (isLast && !tools.length);
       rounds.push({
-        iteration: r + 1,
+        iteration: typeof rec.iteration === 'number' && rec.iteration > 0 ? rec.iteration : (r + 1),
         title: rec.activeTitle
           ? String(rec.activeTitle)
           : deriveRoundTitle(tools, isFinal, isFinal),
