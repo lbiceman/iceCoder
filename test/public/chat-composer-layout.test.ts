@@ -11,6 +11,7 @@ const TOKENS_CSS = readFileSync(path.join(publicRoot, 'css/tokens.css'), 'utf-8'
 const CHAT_UI_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-ui.js'), 'utf-8');
 const ETL_CSS = readFileSync(path.join(publicRoot, 'css/chat-execution-plan.css'), 'utf-8');
 const ETL_PANEL_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-plan.js'), 'utf-8');
+const ETL_CHRONICLE_SOURCE = readFileSync(path.join(publicRoot, 'js/etl-chronicle.js'), 'utf-8');
 const ETL_BRIDGE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-plan-bridge.js'), 'utf-8');
 const ETL_FLOW_STORE_SOURCE = readFileSync(path.join(publicRoot, 'js/chat-execution-flow-store.js'), 'utf-8');
 
@@ -165,6 +166,7 @@ describe('聊天输入区与欢迎页布局审计', () => {
       (window as any).ChatSessionStore = { getActiveSessionId: () => 'audit-session' };
       (window as any).fetch = () => new Promise(() => {});
     });
+    await page.addScriptTag({ content: ETL_CHRONICLE_SOURCE });
     await page.addScriptTag({ content: ETL_PANEL_SOURCE });
     await page.addScriptTag({ content: ETL_FLOW_STORE_SOURCE });
     await page.addScriptTag({ content: ETL_BRIDGE_SOURCE });
@@ -221,16 +223,19 @@ describe('聊天输入区与欢迎页布局审计', () => {
 
     const result = await page.evaluate(() => {
       const panel = document.getElementById('exec-transparency-panel') as HTMLElement;
-      const scroll = panel.querySelector('.etl-main-scroll') as HTMLElement;
+      const main = panel.querySelector('.etl-main-scroll') as HTMLElement;
+      const flow = panel.querySelector('#etl-round-timeline') as HTMLElement;
+      const chapters = panel.querySelector('.etl-chapter-list') as HTMLElement;
       const goal = document.querySelector('#etl-overview-goal')?.textContent || '';
-      scroll.scrollTop = scroll.scrollHeight;
+      flow.scrollTop = flow.scrollHeight;
       const banner = panel.querySelector('.exec-plan-mode-banner') as HTMLElement;
-      const overflowY = window.getComputedStyle(scroll).overflowY;
       return {
-        hasScrollRegion: !!scroll,
-        overflowY,
-        scrollable: scroll.scrollHeight > scroll.clientHeight + 4,
-        canReachBottom: scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 4,
+        hasScrollRegion: !!flow,
+        overflowY: window.getComputedStyle(flow).overflowY,
+        chapterOverflowY: window.getComputedStyle(chapters).overflowY,
+        scrollable: flow.scrollHeight > flow.clientHeight + 4,
+        canReachBottom: flow.scrollTop + flow.clientHeight >= flow.scrollHeight - 4,
+        mainFitsPanel: main.clientHeight <= panel.clientHeight + 1,
         goal,
         goalNotFullSkill: !goal.includes('步骤一\n步骤一'),
         bannerVisible: banner && !banner.classList.contains('hidden'),
@@ -239,9 +244,11 @@ describe('聊天输入区与欢迎页布局审计', () => {
     });
 
     expect(result.hasScrollRegion).toBe(true);
-    expect(result.overflowY).toBe('auto');
+    expect(['auto', 'scroll']).toContain(result.overflowY);
+    expect(['auto', 'scroll']).toContain(result.chapterOverflowY);
     expect(result.scrollable).toBe(true);
     expect(result.canReachBottom).toBe(true);
+    expect(result.mainFitsPanel).toBe(true);
     expect(result.roundCount).toBeGreaterThan(0);
     expect(result.goal).toBe('[Active Skill: examLogin/skill.md]');
     expect(result.goalNotFullSkill).toBe(true);

@@ -9,6 +9,10 @@ const PANEL_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/chat-execution-plan.js'),
   'utf-8',
 );
+const CHRONICLE_SOURCE = readFileSync(
+  path.join(__dirname, '../../src/public/js/etl-chronicle.js'),
+  'utf-8',
+);
 const CONFIG_SOURCE = readFileSync(
   path.join(__dirname, '../../src/public/js/config-page.js'),
   'utf-8',
@@ -91,6 +95,7 @@ async function loadPanel(
     (window as any).ChatExecutionPlanBridge = { isEnabled: () => true };
     (window as any).ChatPetBridge = { syncExecPlanFoot: () => {} };
   }, { showPanel: showTransparencyPanel });
+  await page.addScriptTag({ content: CHRONICLE_SOURCE });
   await page.addScriptTag({ content: PANEL_SOURCE });
   return page;
 }
@@ -224,8 +229,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
     });
 
-    expect(result.hintHidden).toBe(false);
-    expect(result.hintText).toContain('轮次 1–18');
+    expect(result.hintHidden).toBe(true);
+    expect(result.hintText).not.toContain('未载入本面板');
     expect(result.loadMoreHidden).toBe(true);
     expect(result.loadMoreBeforeList).toBe(true);
     await page.close();
@@ -253,6 +258,37 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
 
     expect(result.frozen).toBe('01:05');
     expect(result.afterWait).toBe('01:05');
+    await page.close();
+  });
+
+  it('底栏时间只计最近一次任务，且不含回滚系统提示', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(() => {
+      const panel = (window as any).ChatExecutionPlan;
+      panel.setVisible(true);
+      panel.hydrateFromStructured(
+        [
+          { role: 'user', content: '新增一个3.txt文件' },
+          { role: 'assistant', content: '已创建' },
+          { role: 'user', content: '新增一个4.txt文件' },
+          { role: 'assistant', content: '已创建' },
+        ],
+        [
+          { role: 'user', id: 'u1', content: '新增一个3.txt文件', sentAt: 1_000_000 },
+          { role: 'agent', id: 'a1', content: '已创建', sentAt: 1_025_000, completedAt: 1_025_000 },
+          {
+            role: 'system',
+            id: 'sys-restore',
+            content: '已回滚至检查点',
+            sentAt: 8_000_000,
+          },
+          { role: 'user', id: 'u2', content: '新增一个4.txt文件', sentAt: 9_000_000 },
+          { role: 'agent', id: 'a2', content: '已创建', sentAt: 9_012_000, completedAt: 9_012_000 },
+        ],
+      );
+      return document.querySelector('.etl-foot-time b')?.textContent;
+    });
+    expect(result).toBe('00:12');
     await page.close();
   });
 
@@ -921,17 +957,29 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         totalToolCalls: 3,
       });
       panel.endTurnTimer(plan.createdAt + 5000);
+      const compact = document.querySelector('.etl-foot-token b')?.textContent;
+      const titleSmall = document.querySelector('.etl-foot-token')?.getAttribute('title');
+      panel.applyRuntimeStats({
+        totalTokenUsage: { effectiveUsed: 221612, contextWindow: 1000000 },
+        totalToolCalls: 3,
+      });
       return {
         footerTime: document.querySelector('.etl-foot-time b')?.textContent,
         contextLabel: document.querySelector('.etl-foot-token')?.textContent,
-        token: document.querySelector('.etl-foot-token b')?.textContent,
+        token: compact,
+        tokenLarge: document.querySelector('.etl-foot-token b')?.textContent,
+        titleSmall,
+        titleLarge: document.querySelector('.etl-foot-token')?.getAttribute('title'),
         tools: document.querySelector('.etl-foot-tool b')?.textContent,
       };
     }, makePlan());
 
     expect(result.footerTime).toBe('00:05');
     expect(result.contextLabel).toContain('上下文');
-    expect(result.token).toBe('1,200/8K (15.0%)');
+    expect(result.token).toBe('1.2K/8K (15.0%)');
+    expect(result.tokenLarge).toBe('222K/1M (22.2%)');
+    expect(result.titleSmall).toBe('上下文 1,200/8,000 (15.0%)');
+    expect(result.titleLarge).toBe('上下文 221,612/1,000,000 (22.2%)');
     expect(result.tools).toBe('3');
     await page.close();
   });
@@ -1169,41 +1217,43 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     await page.close();
   });
 
-  it('刷新后默认展示执行流 Tab', async () => {
+  it('刷新后工作台无 Tab，检查点与执行流同屏', async () => {
     const page = await loadPanel();
-    const switched = await page.evaluate((plan) => {
+    const layout = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
-      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      return {
+        tabs: document.querySelectorAll('.etl-tab').length,
+        chapters: !!document.querySelector('#etl-chapter-timeline'),
+        flow: !!document.querySelector('#etl-panel-flow'),
+      };
     }, makePlan());
-    expect(switched).toBe('snapshot');
+    expect(layout).toEqual({ tabs: 0, chapters: true, flow: true });
     await page.close();
 
     const freshPage = await loadPanel();
-    const defaultTab = await freshPage.evaluate((plan) => {
+    const again = await freshPage.evaluate((plan) => {
       (window as any).ChatExecutionPlan.setPlan(plan);
-      return document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      return document.querySelectorAll('.etl-tab').length;
     }, makePlan());
-    expect(defaultTab).toBe('flow');
+    expect(again).toBe(0);
     await freshPage.close();
   });
 
-  it('移动端切到桌面专属 Tab 时回退 flow', async () => {
+  it('移动端同样无 Tab', async () => {
     const page = await loadPanel();
     const result = await page.evaluate((plan) => {
       const panel = (window as any).ChatExecutionPlan;
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
       document.documentElement.setAttribute('data-shell', 'mobile');
       panel.setPlan({ ...plan, planId: 'mobile-plan' });
       return {
-        active: document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab'),
-        flowHidden: document.querySelector('[data-panel="flow"]')?.classList.contains('hidden'),
+        tabs: document.querySelectorAll('.etl-tab').length,
+        flowHidden: document.querySelector('#etl-panel-flow')?.classList.contains('hidden') ?? true,
       };
     }, makePlan());
 
-    expect(result).toEqual({ active: 'flow', flowHidden: false });
+    expect(result).toEqual({ tabs: 0, flowHidden: false });
     await page.close();
   });
 
@@ -1366,7 +1416,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return originalFetch(url);
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const buttons = Array.from(
         document.querySelectorAll('.etl-snapshot-restore-btn'),
@@ -1377,8 +1427,8 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       return { attrs, restored };
     }, makePlan());
 
-    expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
-    expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
+      expect(result.attrs).toEqual(['msg-a', 'msg-b', 'msg-c']);
+      expect(result.restored).toEqual(['msg-a', 'msg-b', 'msg-c']);
     await page.close();
   });
 
@@ -1408,7 +1458,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const readState = () => Array.from(
         document.querySelectorAll('.etl-snapshot-restore-btn'),
@@ -1466,11 +1516,12 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         toolArgs: { path: 'src/secret-local.ts' },
         iteration: 1,
       });
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const splitReady = !!(
-        document.querySelector('.etl-snapshot-section--checkpoints')
-        && document.querySelector('.etl-snapshot-section--files')
+        document.querySelector('#etl-chapter-timeline')
+        && document.querySelector('#etl-snapshot-files')
+        && document.querySelector('#etl-foot-files')
       );
       const names1 = Array.from(document.querySelectorAll('.etl-snapshot-file-name'))
         .map((el) => el.textContent);
@@ -1538,7 +1589,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
       };
       (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-open' };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const btn = document.querySelector('.etl-snapshot-file-name') as HTMLButtonElement;
       btn.click();
@@ -1558,6 +1609,101 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.openUrl).toBe('/api/sessions/sess-open/open-file');
     expect(result.method).toBe('POST');
     expect(result.body).toBe(JSON.stringify({ path: 'src/foo/bar.ts' }));
+    await page.close();
+  });
+
+  it('底栏工具与文件共用弹出层，展示本会话工具名', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async (plan) => {
+      const panel = (window as any).ChatExecutionPlan;
+      const jumped: string[] = [];
+      (window as any).ChatUI = {
+        scrollToToolCall: (id: string) => { jumped.push(id); },
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [],
+              changedFiles: [{ path: 'notes/todo.md', op: '修改', ts: 1 }],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setPlan(plan);
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 'r1', toolName: 'read_file', iteration: 1,
+      });
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 'r2', toolName: 'read_file', iteration: 1,
+      });
+      panel.applyToolActivity({
+        type: 'tool_call', toolCallId: 'w1', toolName: 'write_file', iteration: 1,
+      });
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+
+      const toolBtn = document.querySelector('#etl-foot-tool') as HTMLButtonElement;
+      toolBtn.click();
+      const sheet = document.querySelector('#etl-snapshot-files') as HTMLElement;
+      const afterTools = {
+        tag: toolBtn && toolBtn.tagName,
+        expanded: toolBtn.getAttribute('aria-expanded'),
+        open: sheet.classList.contains('etl-files-sheet--open'),
+        hidden: sheet.classList.contains('hidden'),
+        kind: sheet.getAttribute('data-dock-kind'),
+        title: sheet.querySelector('.etl-files-sheet-title')?.textContent,
+        count: sheet.querySelector('#etl-snapshot-files-count')?.textContent,
+        names: Array.from(document.querySelectorAll('.etl-snapshot-file-name')).map((el) => el.textContent),
+        badges: Array.from(document.querySelectorAll('.etl-snapshot-file-badge')).map((el) => el.textContent),
+        nameTag: document.querySelector('.etl-snapshot-file-name')?.tagName,
+        staticRow: document.querySelector('.etl-snapshot-file')?.classList.contains('is-static'),
+      };
+      const toolName = document.querySelector('[data-tool-name="write_file"] .etl-snapshot-file-name') as HTMLElement;
+      toolName.click();
+
+      const fileBtn = document.querySelector('#etl-foot-files') as HTMLButtonElement;
+      fileBtn.click();
+      const afterFiles = {
+        kind: sheet.getAttribute('data-dock-kind'),
+        names: Array.from(document.querySelectorAll('.etl-snapshot-file-name')).map((el) => el.textContent),
+        toolExpanded: toolBtn.getAttribute('aria-expanded'),
+        fileExpanded: fileBtn.getAttribute('aria-expanded'),
+      };
+      toolBtn.click();
+      const afterSwitchBack = {
+        kind: sheet.getAttribute('data-dock-kind'),
+        names: Array.from(document.querySelectorAll('.etl-snapshot-file-name')).map((el) => el.textContent),
+      };
+      return { afterTools, jumped, afterFiles, afterSwitchBack };
+    }, makePlan());
+
+    expect(result.afterTools).toEqual({
+      tag: 'BUTTON',
+      expanded: 'true',
+      open: true,
+      hidden: false,
+      kind: 'tools',
+      title: '会话工具 · 2',
+      count: '2 个工具',
+      names: ['read_file', 'write_file'],
+      badges: ['×2', '×1'],
+      nameTag: 'SPAN',
+      staticRow: true,
+    });
+    expect(result.jumped).toEqual([]);
+    expect(result.afterFiles).toEqual({
+      kind: 'files',
+      names: ['todo.md'],
+      toolExpanded: 'false',
+      fileExpanded: 'true',
+    });
+    expect(result.afterSwitchBack).toEqual({
+      kind: 'tools',
+      names: ['read_file', 'write_file'],
+    });
     await page.close();
   });
 
@@ -1585,17 +1731,17 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      const activeTab = document.querySelector('.etl-tab.is-active')?.getAttribute('data-tab');
+      const tabCount = document.querySelectorAll('.etl-tab').length;
       panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       return {
-        activeTab,
+        tabCount,
         merged,
         known: panel.hasSnapshotCheckpoint('flow-a'),
       };
     }, makePlan());
 
-    expect(result.activeTab).not.toBe('snapshot');
+    expect(result.tabCount).toBe(0);
     expect(result.merged[0]).toEqual(['flow-a', 'flow-b']);
     expect(result.known).toBe(true);
     await page.close();
@@ -1627,7 +1773,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
         .map((b) => b.getAttribute('data-message-id'));
@@ -1673,7 +1819,7 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
         return { ok: false, json: async () => ({}) } as Response;
       };
       panel.setPlan(plan);
-      (document.querySelector('[data-tab="snapshot"]') as HTMLButtonElement).click();
+      panel.refreshSnapshotTimeline();
       await new Promise((r) => setTimeout(r, 50));
       const buttons = Array.from(document.querySelectorAll('.etl-snapshot-restore-btn'))
         .map((b) => b.getAttribute('data-message-id'));
@@ -1692,6 +1838,143 @@ describe('phase 8 — 执行透明层 Observer 红线', () => {
     expect(result.isCursor).toBe(true);
     expect(result.notCursor).toBe(false);
     expect(result.hidden).toBe(true);
+    await page.close();
+  });
+
+  it('有检查点时模型开工即逐条展示最新章执行流', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-live' };
+      (window as any).ChatSession = {
+        getMessages: () => [{ role: 'user', id: 'u-now', content: '看着这个项目的沙箱模块' }],
+      };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [{
+                messageId: 'u-now',
+                preview: '看着这个项目的沙箱模块',
+                userMessageTime: Date.now(),
+              }],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setVisible(true);
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+      panel.beginTurnTimer(Date.now(), {
+        messageId: 'u-now',
+        preview: '看着这个项目的沙箱模块',
+      });
+      const before = {
+        empty: document.querySelector('.etl-round-empty')?.textContent || '',
+        emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? true,
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+      };
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'live-t1',
+        toolName: 'read_file',
+        toolArgs: { path: 'src/a.ts' },
+        ts: Date.now(),
+      });
+      const afterFirst = {
+        emptyHidden: document.querySelector('.etl-round-empty')?.classList.contains('hidden') ?? false,
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
+        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+        firstName: document.querySelector('#etl-round-timeline .etl-round-action-name')?.textContent || '',
+      };
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'live-t2',
+        toolName: 'write_file',
+        toolArgs: { path: 'tmp/probe.js' },
+        ts: Date.now() + 20,
+      });
+      const afterSecond = {
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
+      };
+      return { before, afterFirst, afterSecond };
+    });
+
+    expect(result.before.status).toContain('进行中');
+    expect(result.afterFirst.emptyHidden).toBe(true);
+    expect(result.afterFirst.nodes).toBe(1);
+    expect(result.afterFirst.tools).toBeGreaterThanOrEqual(1);
+    expect(result.afterFirst.status).toContain('进行中');
+    expect(result.afterFirst.firstName).toMatch(/读|read_file|读取/i);
+    expect(result.afterSecond.nodes).toBe(1);
+    expect(result.afterSecond.tools).toBeGreaterThan(result.afterFirst.tools);
+    await page.close();
+  });
+
+  it('检查点回退章在开工后不再空着等收工', async () => {
+    const page = await loadPanel();
+    const result = await page.evaluate(async () => {
+      const panel = (window as any).ChatExecutionPlan;
+      (window as any).ChatSessionStore = { getActiveSessionId: () => 'sess-fallback' };
+      (window as any).ChatUI = {
+        mergeCheckpointMessageIds: () => {},
+        setCursorMessageId: () => {},
+      };
+      window.fetch = async (url: string) => {
+        if (String(url).includes('/checkpoints')) {
+          return {
+            ok: true,
+            json: async () => ({
+              entries: [{
+                messageId: 'u-fallback',
+                preview: '看着这个项目的沙箱模块',
+                userMessageTime: Date.now(),
+              }],
+            }),
+          } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      };
+      panel.setVisible(true);
+      panel.refreshSnapshotTimeline();
+      await new Promise((r) => setTimeout(r, 50));
+      panel.beginTurnTimer(Date.now());
+      panel.applyToolActivity({
+        type: 'tool_call',
+        iteration: 1,
+        toolCallId: 'fb-t1',
+        toolName: 'read_file',
+        toolArgs: { path: 'D:/work/self/iceCoder/src/tools/shell-host-guard.ts' },
+        ts: Date.now(),
+      });
+      const empty = document.querySelector('.etl-round-empty');
+      return {
+        emptyText: empty?.textContent || '',
+        emptyHidden: empty?.classList.contains('hidden') ?? false,
+        nodes: document.querySelectorAll('#etl-round-timeline .etl-round-node').length,
+        tools: document.querySelectorAll('#etl-round-timeline .etl-round-action').length,
+        waiting: !!(empty && !empty.classList.contains('hidden')
+          && (empty.textContent || '').includes('本章暂无执行步骤')),
+        status: document.querySelector('.etl-chapter-node.is-selected .etl-chapter-status')?.textContent || '',
+      };
+    });
+
+    expect(result.emptyHidden).toBe(true);
+    expect(result.waiting).toBe(false);
+    expect(result.nodes).toBeGreaterThanOrEqual(1);
+    expect(result.tools).toBeGreaterThanOrEqual(1);
+    expect(result.status).toContain('进行中');
     await page.close();
   });
 

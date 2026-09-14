@@ -1,12 +1,9 @@
 /**
  * 执行透明层（ETL）— 右侧停靠侧边栏。
  *
- * Phase 4：由锚定冰豆的 popover 重构为聊天页右侧常驻 `<aside id="exec-transparency-panel">`。
- * 结构：头部（标题 + 最小化）→ Tab 条（执行流 / 检查点）→ 执行流主体 → Footer（上下文/工具/时间）。
- * 显示门控读 EtlPrefs（`showTransparencyPanel`）；最小化收为宠物形态，双击宠物展开。
- *
+ * 结构：头部 → 监管条 → 工作台（上：检查点章节 / 下：本章执行流）→ 文件层 → Footer。
+ * 点章节打开下边执行流；回滚按钮在章节标题右侧，逻辑复用现有检查点回滚。
  * Observer 红线：只消费事件、不影响事件；所有入口 try/catch，异常降级为空 UI，绝不 throw 冒泡。
- * 对外契约（setPlan/applyPatch/clear/... ）签名保持不变。
  */
 
 /* exported ChatExecutionPlan */
@@ -69,16 +66,6 @@ window.ChatExecutionPlan = (function () {
     write_intent: '写入意图降级',
   };
 
-  var TABS = [
-    { id: 'flow', label: '执行流' },
-    { id: 'snapshot', label: '检查点' },
-  ];
-
-  // 移动端底部 sheet 仅保留「执行流」。
-  var MOBILE_TABS = [
-    { id: 'flow', label: '执行流' },
-  ];
-
   var currentPlan = null;
   var frozenPlanId = null;
   var currentExecutionMode = null;
@@ -86,7 +73,6 @@ window.ChatExecutionPlan = (function () {
   var capabilityEnabled = true;
   var pageActive = true;
   var minimized = false;
-  var activeTab = 'flow';
 
   var rootEl = null;
   var listEl = null;
@@ -97,8 +83,9 @@ window.ChatExecutionPlan = (function () {
   var llmActivityEl = null;
   var taskOverviewEl = null;
   var roundTimelineEl = null;
-  var snapshotTimelineEl = null;
   var snapshotFilesEl = null;
+  /** 底栏弹出层：'' 关闭；files 变更文件；tools 本会话工具名。 */
+  var dockSheetKind = '';
   var snapshotRestoreHandler = null;
   var snapshotCanRestoreFn = null;
   var snapshotFetchGeneration = 0;
@@ -113,7 +100,7 @@ window.ChatExecutionPlan = (function () {
 
   // 挂载模式与承载容器：桌面 = 右侧停靠 aside；移动 = 顶部条 + 底部 sheet（设计 §6）。
   var mountedMode = null;      // 'desktop' | 'mobile'
-  var hostEl = null;          // 承载 tabs/panels/footer 的容器（桌面=rootEl，移动=mobileSheetEl）
+  var hostEl = null;          // 承载工作台/footer 的容器（桌面=rootEl，移动=mobileSheetEl）
   var mobileBarEl = null;      // 移动端顶部一行入口「执行 X/N ▸」
   var mobileSheetEl = null;    // 移动端底部 sheet
   var mobileBackdropEl = null; // 移动端 sheet 蒙层
@@ -145,6 +132,20 @@ window.ChatExecutionPlan = (function () {
   var cachedLoadMoreHidden = -1;
   var flowPersistTimer = null;
   var flowPersistHandler = null;
+  /** 已封存的历史章（不含当前活章）。 */
+  var sealedChapters = [];
+  /** 当前活章元数据：{ messageId, preview, startedAt, markers, status } */
+  var liveChapterMeta = null;
+  var selectedChapterKey = '';
+  var userPinnedChapter = false;
+  var chapterVisibleLimit = 30;
+  var chapterTimelineEl = null;
+  var sealedToolCount = 0;
+  var pendingRevealMessageId = '';
+  var chapterTimelineBound = false;
+  var chapterClickHandler = null;
+  var filesSheetBound = false;
+  var filesSheetDocHandler = null;
 
   function safeWarn(where, err) {
     try {
@@ -152,6 +153,13 @@ window.ChatExecutionPlan = (function () {
         console.warn('[ChatExecutionPlan] ' + where + ' 降级：', err);
       }
     } catch (_e) { /* ignore */ }
+  }
+
+  function safeSetTitle(el, text) {
+    if (!el) return;
+    try {
+      el.title = text == null ? '' : String(text);
+    } catch (_e) { /* tooltip 能力缺失时忽略 */ }
   }
 
   // ── 偏好读取（EtlPrefs）──
@@ -234,10 +242,18 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  function formatWindow(n) {
-    if (!isFinite(n) || n <= 0) return '';
-    if (n >= 1000) return Math.round(n / 1000) + 'K';
-    return '' + n;
+  /** 底栏上下文：小于 1K 原样，1K–1M 用 K，更大用 M。 */
+  function formatCompactCount(n) {
+    var num = Number(n);
+    if (!isFinite(num) || num < 0) return '0';
+    if (num < 1000) return String(Math.round(num));
+    function oneDecimal(x) {
+      return String(Math.round(x * 10) / 10);
+    }
+    if (num < 1000000) {
+      return (num < 10000 ? oneDecimal(num / 1000) : String(Math.round(num / 1000))) + 'K';
+    }
+    return oneDecimal(num / 1000000) + 'M';
   }
 
   // ── 计划状态工具 ──
@@ -319,82 +335,75 @@ window.ChatExecutionPlan = (function () {
 
   // ── 挂载 ──
 
-  function buildTabsHtml(tabs) {
-    var html = '';
-    for (var i = 0; i < tabs.length; i++) {
-      var t = tabs[i];
-      var tabId = 'etl-tab-' + t.id;
-      var panelId = 'etl-panel-' + t.id;
-      html +=
-        '<button type="button" class="etl-tab' + (t.id === activeTab ? ' is-active' : '') +
-        '" id="' + tabId + '" data-tab="' + t.id + '" role="tab" aria-controls="' + panelId +
-        '" aria-selected="' + (t.id === activeTab ? 'true' : 'false') +
-        '" tabindex="' + (t.id === activeTab ? '0' : '-1') + '">' +
-        t.label + '</button>';
-    }
-    return html;
+  function minimizeIconHtml() {
+    return '<span class="etl-min-icon" aria-hidden="true"></span>';
   }
 
   function headerActionsHtml() {
-    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">—</button>';
+    return '<button type="button" class="etl-minimize" title="最小化" aria-label="最小化面板">' +
+      minimizeIconHtml() +
+    '</button>';
   }
 
-  /** 检查点 Tab：上半检查点时间轴，下半本会话改过的文件（只读）。 */
-  function snapshotPanelHtml() {
-    return '<section class="etl-tabpanel hidden" id="etl-panel-snapshot" data-panel="snapshot" role="tabpanel" aria-labelledby="etl-tab-snapshot">' +
-      '<div class="etl-snapshot-split">' +
-        '<div class="etl-snapshot-section etl-snapshot-section--checkpoints">' +
-          '<div class="etl-snapshot-section-head">' +
-            '<div class="etl-snapshot-header">' +
-              '<span class="etl-snapshot-header-label">检查点</span>' +
-              '<span class="etl-snapshot-header-count" id="etl-snapshot-checkpoints-count">加载中…</span>' +
-            '</div>' +
-            '<p class="etl-snapshot-desc">回滚到某条用户消息发送时的运行时；之后的对话与文件修改将被丢弃。</p>' +
-          '</div>' +
-          '<div class="etl-snapshot-timeline" id="etl-snapshot-timeline">' +
-            '<div class="etl-empty etl-snapshot-loading">加载检查点…</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="etl-snapshot-section etl-snapshot-section--files" id="etl-snapshot-files">' +
-          '<div class="etl-snapshot-section-head">' +
-            '<div class="etl-snapshot-header">' +
-              '<span class="etl-snapshot-header-label">变更文件</span>' +
-              '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
-            '</div>' +
-            '<p class="etl-snapshot-desc">本会话工具写入或修改过的文件。点击文件名可打开所在文件夹并定位到该文件。</p>' +
-          '</div>' +
-          '<div class="etl-snapshot-section-body">' +
-            '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
-            '<ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol>' +
-          '</div>' +
-        '</div>' +
+  function filesSheetHtml() {
+    return '<div class="etl-files-sheet hidden" id="etl-snapshot-files">' +
+      '<div class="etl-files-sheet-head">' +
+        '<span class="etl-files-sheet-title">变更文件</span>' +
+        '<span class="etl-snapshot-header-count" id="etl-snapshot-files-count">暂无文件</span>' +
+        '<button type="button" class="etl-files-sheet-close" id="etl-files-sheet-close" title="收起" aria-label="收起">' +
+          minimizeIconHtml() +
+        '</button>' +
       '</div>' +
-    '</section>';
+      '<div class="etl-files-sheet-body">' +
+        '<div class="etl-empty etl-snapshot-files-empty">尚无变更文件</div>' +
+        '<ol class="etl-snapshot-files-list hidden" id="etl-snapshot-files-list"></ol>' +
+      '</div>' +
+    '</div>';
   }
 
-  /** 执行流 Tab 主体（轮次时间轴 + 隐藏的计划列表供 patch 增量更新）。 */
-  function flowPanelHtml() {
-    return '<section class="etl-tabpanel" id="etl-panel-flow" data-panel="flow" role="tabpanel" aria-labelledby="etl-tab-flow">' +
-      '<div class="etl-round-timeline" id="etl-round-timeline">' +
-        '<div class="etl-round-empty etl-empty">等待模型开始执行</div>' +
-        '<div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div>' +
-        '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
-        '<ol class="etl-round-list"></ol>' +
+  /** 单工作台：上检查点章节，下本章执行流，文件层叠在底栏上方。 */
+  function workbenchHtml() {
+    return '<div class="etl-body etl-workbench">' +
+      '<div class="etl-wb-status hidden" id="etl-wb-status">' +
+        '<span class="etl-wb-status-run" id="etl-wb-status-run">当前运行中</span>' +
       '</div>' +
-      '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
-      '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
-      '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
-      '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
-    '</section>';
+      '<section class="etl-wb-chapters" id="etl-chapter-timeline">' +
+        '<div class="etl-wb-section-head">' +
+          '<div class="etl-wb-section-header">' +
+            '<span class="etl-wb-section-title">检查点</span>' +
+            '<span class="etl-wb-section-count" id="etl-chapter-node-count"></span>' +
+          '</div>' +
+          '<p class="etl-wb-desc">回溯到某个检查点可以恢复到该时间点的状态，同时包含本次执行的完整上下文。</p>' +
+        '</div>' +
+        '<div class="etl-chapter-empty etl-empty">等待模型开始执行</div>' +
+        '<button type="button" class="etl-chapter-load-more hidden" id="etl-chapter-load-more">加载更早的章节 ↑</button>' +
+        '<ol class="etl-chapter-list"></ol>' +
+      '</section>' +
+      '<section class="etl-wb-flow" id="etl-panel-flow">' +
+        '<div class="etl-wb-section-head">' +
+          '<div class="etl-wb-section-header">' +
+            '<span class="etl-wb-section-title">执行流</span>' +
+            '<span class="etl-wb-section-count" id="etl-flow-step-count"></span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
+        '<div class="etl-current-step hidden" id="etl-current-step"></div>' +
+        '<div class="etl-round-timeline" id="etl-round-timeline">' +
+          '<div class="etl-round-empty etl-empty hidden">等待模型开始执行</div>' +
+          '<div class="etl-round-prefix-hint hidden" id="etl-round-prefix-hint" role="note"></div>' +
+          '<button type="button" class="etl-round-load-more hidden" id="etl-round-load-more">加载更早的轮次 ↓</button>' +
+          '<ol class="etl-round-list"></ol>' +
+        '</div>' +
+        '<div class="etl-empty etl-plan-empty hidden">本次任务无结构化执行计划</div>' +
+        '<ol class="exec-plan-list" id="exec-plan-list"></ol>' +
+        '<div class="etl-llm-activity hidden" id="etl-llm-activity" aria-live="polite"></div>' +
+      '</section>' +
+      filesSheetHtml() +
+    '</div>';
   }
 
   function sharedBodyHtml() {
-    return '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
-      '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(TABS) + '</nav>' +
-      '<div class="etl-body">' +
-        flowPanelHtml() +
-        snapshotPanelHtml() +
-      '</div>';
+    return workbenchHtml();
   }
 
   /** 从 host 抓取渲染所需元素引用（模块级变量，后续渲染均以此为准）。 */
@@ -407,11 +416,12 @@ window.ChatExecutionPlan = (function () {
     llmActivityEl = host.querySelector('#etl-llm-activity');
     taskOverviewEl = host.querySelector('#etl-task-overview');
     roundTimelineEl = host.querySelector('#etl-round-timeline');
-    snapshotTimelineEl = host.querySelector('#etl-snapshot-timeline');
+    chapterTimelineEl = host.querySelector('#etl-chapter-timeline');
     snapshotFilesEl = host.querySelector('#etl-snapshot-files');
     bindRoundTimelineEvents();
-    syncSnapshotSplitLayout();
-    renderSnapshotFiles();
+    bindChapterTimelineEvents();
+    bindFilesSheetControls();
+    renderDockSheet();
     if (window.EtlShellDock && typeof window.EtlShellDock.mount === 'function') {
       var dockHost = host.querySelector('#etl-shell-dock-host');
       if (dockHost) window.EtlShellDock.mount(dockHost);
@@ -421,7 +431,7 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  /** 绑定最小化按钮 + Tab 切换（桌面/移动共用）。 */
+  /** 绑定最小化按钮（桌面/移动共用）。 */
   function bindHostControls(host) {
     var minBtn = host.querySelector('.etl-minimize');
     if (minBtn) {
@@ -429,27 +439,6 @@ window.ChatExecutionPlan = (function () {
         minimize();
       });
     }
-    var tabBtns = host.querySelectorAll('.etl-tab');
-    Array.prototype.forEach.call(tabBtns, function (btn) {
-      btn.addEventListener('click', function () {
-        setActiveTab(btn.getAttribute('data-tab'));
-      });
-      btn.addEventListener('keydown', function (event) {
-        var key = event.key;
-        if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
-        event.preventDefault();
-        var available = Array.prototype.slice.call(host.querySelectorAll('.etl-tab'));
-        if (!available.length) return;
-        var index = available.indexOf(btn);
-        if (key === 'Home') index = 0;
-        else if (key === 'End') index = available.length - 1;
-        else if (key === 'ArrowRight') index = (index + 1) % available.length;
-        else index = (index - 1 + available.length) % available.length;
-        var target = available[index];
-        setActiveTab(target.getAttribute('data-tab'));
-        target.focus();
-      });
-    });
   }
 
   function ensureMounted() {
@@ -492,9 +481,11 @@ window.ChatExecutionPlan = (function () {
     llmActivityEl = null;
     taskOverviewEl = null;
     roundTimelineEl = null;
-    snapshotTimelineEl = null;
+    chapterTimelineEl = null;
     snapshotFilesEl = null;
     unbindRoundTimelineEvents();
+    unbindChapterTimelineEvents();
+    unbindFilesSheetControls();
     mountedMode = null;
     if (window.EtlShellDock && typeof window.EtlShellDock.resetMount === 'function') {
       window.EtlShellDock.resetMount();
@@ -528,12 +519,8 @@ window.ChatExecutionPlan = (function () {
     bindHostControls(rootEl);
   }
 
-  /** 移动端：顶部一行入口 + 底部 sheet（仅执行流 Tab；设计 §6）。 */
+  /** 移动端：顶部一行入口 + 底部 sheet（与桌面同一工作台，无 Tab）。 */
   function mountMobile() {
-    // 移动端仅有 flow Tab；若 activeTab 落在桌面独有 Tab 上则回落到 flow。
-    if (activeTab !== 'flow') {
-      activeTab = 'flow';
-    }
 
     mobileBarEl = document.createElement('button');
     mobileBarEl.type = 'button';
@@ -565,11 +552,7 @@ window.ChatExecutionPlan = (function () {
       '</header>' +
       '<div class="etl-main-scroll">' +
         '<div class="exec-plan-mode-banner hidden" id="exec-plan-mode-banner"></div>' +
-        '<div class="etl-task-overview hidden" id="etl-task-overview"></div>' +
-        '<nav class="etl-tabs" role="tablist">' + buildTabsHtml(MOBILE_TABS) + '</nav>' +
-        '<div class="etl-body">' +
-          flowPanelHtml() +
-        '</div>' +
+        sharedBodyHtml() +
       '</div>' +
       '<div class="etl-shell-dock-host" id="etl-shell-dock-host"></div>' +
       '<footer class="etl-footer" id="etl-footer"></footer>';
@@ -645,31 +628,6 @@ window.ChatExecutionPlan = (function () {
   function layoutMobileBar() {
     if (!mobileBarEl) return;
     mobileBarEl.style.top = navBottom() + 'px';
-  }
-
-  function setActiveTab(tabId) {
-    try {
-      if (!tabId || !hostEl) return;
-      activeTab = tabId;
-      var tabBtns = hostEl.querySelectorAll('.etl-tab');
-      Array.prototype.forEach.call(tabBtns, function (btn) {
-        var on = btn.getAttribute('data-tab') === tabId;
-        btn.classList.toggle('is-active', on);
-        btn.setAttribute('aria-selected', on ? 'true' : 'false');
-        btn.setAttribute('tabindex', on ? '0' : '-1');
-      });
-      var panels = hostEl.querySelectorAll('.etl-tabpanel');
-      Array.prototype.forEach.call(panels, function (p) {
-        p.classList.toggle('hidden', p.getAttribute('data-panel') !== tabId);
-      });
-      syncSnapshotSplitLayout();
-      if (tabId === 'snapshot') {
-        refreshSnapshotTimeline();
-        refreshSnapshotFiles();
-      }
-    } catch (e) {
-      safeWarn('setActiveTab', e);
-    }
   }
 
   // ── 显隐控制 ──
@@ -847,9 +805,9 @@ window.ChatExecutionPlan = (function () {
         if (roundTime) roundTime.textContent = roundDuration(roundRecords[rr]);
       }
     }
-    // Footer 总时间
     var timeElFoot = footerEl && footerEl.querySelector('.etl-foot-time b');
     if (timeElFoot) timeElFoot.textContent = formatTurnElapsed();
+    patchCurrentChapterChrome();
     // 移动端顶部条进度计数
     if (mountedMode === 'mobile') updateMobileBar();
   }
@@ -981,9 +939,22 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
+  function hasSealableWork() {
+    return roundRecords.length > 0 || uniqueToolCallCount > 0 || !!currentPlan;
+  }
+
+  function hasLiveChapterWork() {
+    if (liveChapterMeta) return true;
+    return hasSealableWork() || !!currentExecutionMode;
+  }
+
+  function hasChronicleWork() {
+    return sealedChapters.length > 0 || hasLiveChapterWork();
+  }
+
   function renderEmptyState() {
     if (!emptyStateEl) return;
-    emptyStateEl.classList.toggle('hidden', !!currentPlan || roundRecords.length > 0);
+    emptyStateEl.classList.toggle('hidden', !!currentPlan || roundRecords.length > 0 || sealedChapters.length > 0);
   }
 
   function applyPatchToStep(stepEl, patch) {
@@ -1066,46 +1037,87 @@ window.ChatExecutionPlan = (function () {
     return formatClock(e - start);
   }
 
-  /** 右下角时间：本轮用户发送 → model_done 的本地模型工作耗时。 */
+  /** 右下角时间：最近一次对话（当前任务）从发出到做完的耗时，不是整段 session。 */
   function formatTurnElapsed() {
-    if (typeof turnStartedAt !== 'number') return '00:00';
-    var end = typeof turnEndedAt === 'number' ? turnEndedAt : Date.now();
-    return formatClock(Math.max(0, end - turnStartedAt));
+    return formatClock(liveChapterDurationMs());
   }
 
-  function formatTokenStat() {
+  function formatTokenStat(compact) {
     var t = footerStats.totalTokenUsage;
     if (!t) return '—';
     var used = typeof t.effectiveUsed === 'number' && t.effectiveUsed > 0 ? t.effectiveUsed : (t.inputTokens || 0);
     var win = typeof t.contextWindow === 'number' ? t.contextWindow : 0;
-    if (!win) return formatThousands(used);
-    var pct = win > 0 ? ((used / win) * 100).toFixed(1) : '0';
-    return formatThousands(used) + '/' + formatWindow(win) + ' (' + pct + '%)';
+    var usedTxt = compact ? formatCompactCount(used) : formatThousands(used);
+    if (!win) return usedTxt;
+    var pct = ((used / win) * 100).toFixed(1);
+    var winTxt = compact ? formatCompactCount(win) : formatThousands(win);
+    return usedTxt + '/' + winTxt + ' (' + pct + '%)';
   }
 
   function ensureFooterSkeleton() {
     if (!footerEl || footerEl.querySelector('.etl-foot-token')) return;
     footerEl.innerHTML = '';
     footerEl.appendChild(makeFootItem('etl-foot-token', '上下文', '—'));
-    footerEl.appendChild(makeFootItem('etl-foot-tool', '工具', '—'));
+    footerEl.appendChild(makeFootToggleItem(
+      'etl-foot-tool', 'etl-foot-tool', '工具', '—',
+      '本会话使用过的工具，点击查看', 'tools'
+    ));
+    footerEl.appendChild(makeFootToggleItem(
+      'etl-foot-files', 'etl-foot-files', '文件', '0',
+      '本会话变更的文件，点击查看', 'files'
+    ));
     footerEl.appendChild(makeFootItem('etl-foot-time', '时间', '00:00'));
+  }
+
+  function makeFootToggleItem(id, extraClass, label, initial, title, kind) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'etl-foot-item etl-foot-toggle ' + extraClass;
+    btn.id = id;
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-controls', 'etl-snapshot-files');
+    btn.title = title;
+    var b = document.createElement('b');
+    b.textContent = initial;
+    btn.appendChild(document.createTextNode(label + ' '));
+    btn.appendChild(b);
+    btn.addEventListener('click', function (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      toggleDockSheet(kind);
+    });
+    return btn;
   }
 
   function renderFooter() {
     if (!footerEl) return;
     ensureFooterSkeleton();
-    var tokenTxt = formatTokenStat();
-    var liveToolCount = authoritativeToolCalls === null
-      ? uniqueToolCallCount
-      : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+    var tokenTxt = formatTokenStat(true);
+    var tokenDetail = formatTokenStat(false);
+    var liveToolCount = sessionToolTotal();
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
     var timeTxt = formatTurnElapsed();
     var tokenEl = footerEl.querySelector('.etl-foot-token b');
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
     var timeEl = footerEl.querySelector('.etl-foot-time b');
+    var fileEl = footerEl.querySelector('.etl-foot-files b');
     if (tokenEl) tokenEl.textContent = tokenTxt;
+    var tokenItem = footerEl.querySelector('.etl-foot-token');
+    if (tokenItem) safeSetTitle(tokenItem, tokenDetail && tokenDetail !== '—' ? ('上下文 ' + tokenDetail) : '');
     if (toolEl) toolEl.textContent = toolTxt;
     if (timeEl) timeEl.textContent = timeTxt;
+    var fileCount = snapshotChangedFiles.length;
+    if (fileEl) fileEl.textContent = String(fileCount);
+    var fileBtn = footerEl.querySelector('#etl-foot-files');
+    if (fileBtn) {
+      fileBtn.classList.toggle('is-empty', fileCount <= 0);
+    }
+    var toolBtn = footerEl.querySelector('#etl-foot-tool');
+    if (toolBtn) {
+      toolBtn.classList.toggle('is-empty', liveToolCount <= 0 && authoritativeToolCalls === null);
+    }
+    syncDockToggleAria();
+    renderWorkbenchStatus();
   }
 
   function makeFootItem(cls, label, value) {
@@ -1116,6 +1128,93 @@ window.ChatExecutionPlan = (function () {
     span.appendChild(document.createTextNode(label + ' '));
     span.appendChild(b);
     return span;
+  }
+
+  function renderWorkbenchStatus() {
+    if (!hostEl) return;
+    try {
+      var statusEl = hostEl.querySelector('#etl-wb-status');
+      var runEl = hostEl.querySelector('#etl-wb-status-run');
+      var countEl = hostEl.querySelector('#etl-chapter-node-count');
+      var n = allChapterViews().length;
+      var running = liveChapterStatus() === 'running';
+      if (statusEl) statusEl.classList.toggle('hidden', !running);
+      if (runEl) {
+        runEl.textContent = running ? '当前运行中' : '';
+        runEl.classList.toggle('is-running', running);
+      }
+      if (countEl) countEl.textContent = n ? (n + ' 个节点') : '';
+    } catch (e) {
+      safeWarn('renderWorkbenchStatus', e);
+    }
+  }
+
+  function setDockSheet(kind) {
+    dockSheetKind = kind === 'files' || kind === 'tools' ? kind : '';
+    if (snapshotFilesEl) {
+      var open = !!dockSheetKind;
+      snapshotFilesEl.classList.toggle('hidden', !open);
+      snapshotFilesEl.classList.toggle('etl-files-sheet--open', open);
+      if (open) snapshotFilesEl.setAttribute('data-dock-kind', dockSheetKind);
+      else snapshotFilesEl.removeAttribute('data-dock-kind');
+    }
+    renderDockSheet();
+    syncDockToggleAria();
+  }
+
+  function toggleDockSheet(kind) {
+    setDockSheet(dockSheetKind === kind ? '' : kind);
+  }
+
+  function syncDockToggleAria() {
+    var fileBtn = footerEl && footerEl.querySelector('#etl-foot-files');
+    var toolBtn = footerEl && footerEl.querySelector('#etl-foot-tool');
+    if (fileBtn) fileBtn.setAttribute('aria-expanded', dockSheetKind === 'files' ? 'true' : 'false');
+    if (toolBtn) toolBtn.setAttribute('aria-expanded', dockSheetKind === 'tools' ? 'true' : 'false');
+  }
+
+  function bindFilesSheetControls() {
+    if (filesSheetBound) return;
+    var closeBtn = hostEl && hostEl.querySelector('#etl-files-sheet-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        setDockSheet('');
+      });
+    }
+    filesSheetDocHandler = function (evt) {
+      try {
+        if (!dockSheetKind) return;
+        if (evt.type === 'keydown' && evt.key === 'Escape') {
+          setDockSheet('');
+          evt.stopPropagation();
+          return;
+        }
+        if (evt.type !== 'click') return;
+        var t = evt.target;
+        if (!t || !t.closest) return;
+        if (t.closest('#etl-snapshot-files')
+          || t.closest('#etl-foot-files')
+          || t.closest('#etl-foot-tool')) return;
+        if (hostEl && hostEl.contains(t)) setDockSheet('');
+      } catch (e) {
+        safeWarn('filesSheetDoc', e);
+      }
+    };
+    document.addEventListener('click', filesSheetDocHandler, true);
+    document.addEventListener('keydown', filesSheetDocHandler, true);
+    filesSheetBound = true;
+  }
+
+  function unbindFilesSheetControls() {
+    if (filesSheetDocHandler) {
+      document.removeEventListener('click', filesSheetDocHandler, true);
+      document.removeEventListener('keydown', filesSheetDocHandler, true);
+    }
+    filesSheetDocHandler = null;
+    filesSheetBound = false;
+    dockSheetKind = '';
   }
 
   // ── 监管横幅 ──
@@ -1507,6 +1606,981 @@ window.ChatExecutionPlan = (function () {
     return intents.length ? intents : ['理解用户目标并规划下一步执行'];
   }
 
+  // ── 编年史：章节目录 ──
+
+  function chronicleApi() {
+    try {
+      return window.EtlChronicle || null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function chapterStatusLabel(status) {
+    var api = chronicleApi();
+    if (api && api.STATUS_LABELS && api.STATUS_LABELS[status]) return api.STATUS_LABELS[status];
+    if (status === 'running') return '进行中';
+    if (status === 'failed') return '失败';
+    if (status === 'paused') return '已暂停';
+    if (status === 'stopped') return '用户停止';
+    return '完成';
+  }
+
+  function chapterMarkerLabel(key) {
+    var api = chronicleApi();
+    if (api && api.MARKER_LABELS && api.MARKER_LABELS[key]) return api.MARKER_LABELS[key];
+    if (key === 'supervision') return '监管曾介入';
+    if (key === 'compaction') return '本章发生过压缩';
+    if (key === 'circuit') return '熔断保护';
+    if (key === 'subagent') return '子代理';
+    return '';
+  }
+
+  function formatChapterDuration(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return '';
+    if (ms < 60000) return Math.max(1, Math.round(ms / 1000)) + 's';
+    return formatClock(ms);
+  }
+
+  function lastLiveWorkTs() {
+    var last = 0;
+    for (var i = 0; i < roundRecords.length; i++) {
+      var rec = roundRecords[i];
+      if (!rec) continue;
+      if (typeof rec.endTs === 'number' && rec.endTs > last) last = rec.endTs;
+      if (typeof rec.startTs === 'number' && rec.startTs > last) last = rec.startTs;
+    }
+    for (var j = 0; j < toolRecords.length; j++) {
+      var tool = toolRecords[j];
+      if (!tool) continue;
+      if (typeof tool.resultTs === 'number' && tool.resultTs > last) last = tool.resultTs;
+      if (typeof tool.callTs === 'number' && tool.callTs > last) last = tool.callTs;
+    }
+    return last || 0;
+  }
+
+  function liveChapterDurationMs() {
+    if (typeof turnStartedAt !== 'number') return 0;
+    var end;
+    if (typeof turnEndedAt === 'number') {
+      end = turnEndedAt;
+    } else if (liveChapterStatus() === 'running') {
+      end = Date.now();
+    } else {
+      var work = lastLiveWorkTs();
+      end = work > turnStartedAt ? work : turnStartedAt;
+    }
+    return Math.max(0, end - turnStartedAt);
+  }
+
+  function sealedDurationTotal() {
+    var total = 0;
+    for (var i = 0; i < sealedChapters.length; i++) {
+      var ms = sealedChapters[i] && sealedChapters[i].durationMs;
+      if (typeof ms === 'number') total += ms;
+    }
+    return total;
+  }
+
+  function sessionWorkMs() {
+    return sealedDurationTotal() + liveChapterDurationMs();
+  }
+
+  function sessionToolTotal() {
+    if (authoritativeToolCalls === null) {
+      return sealedToolCount + uniqueToolCallCount;
+    }
+    return authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+  }
+
+  function liveMarkersFromState() {
+    var markers = (liveChapterMeta && Array.isArray(liveChapterMeta.markers))
+      ? liveChapterMeta.markers.slice()
+      : [];
+    if (currentExecutionMode && currentExecutionMode.executionMode === 'forced') {
+      if (markers.indexOf('supervision') < 0) markers.push('supervision');
+    }
+    for (var i = 0; i < roundRecords.length; i++) {
+      var rec = roundRecords[i];
+      if (!rec) continue;
+      if (rec.stopReason === 'circuit_breaker' && markers.indexOf('circuit') < 0) {
+        markers.push('circuit');
+      }
+    }
+    return markers;
+  }
+
+  function isTurnInFlight() {
+    return typeof turnStartedAt === 'number' && turnEndedAt === null;
+  }
+
+  function hasLiveProgress() {
+    return roundRecords.length > 0 || uniqueToolCallCount > 0;
+  }
+
+  function latestUiUserIdentity() {
+    try {
+      if (!window.ChatSession || typeof window.ChatSession.getMessages !== 'function') return null;
+      var msgs = window.ChatSession.getMessages() || [];
+      for (var i = msgs.length - 1; i >= 0; i--) {
+        var msg = msgs[i];
+        if (!msg || msg.role !== 'user' || !msg.id) continue;
+        var preview = '';
+        var api = chronicleApi();
+        if (api && typeof api.previewFromUser === 'function') {
+          preview = api.previewFromUser(msg) || '';
+        }
+        return { messageId: String(msg.id), preview: preview };
+      }
+    } catch (_e) { /* ignore */ }
+    return null;
+  }
+
+  function adoptLiveChapterIdentity(messageId, preview) {
+    if (!liveChapterMeta || !messageId) return;
+    var prev = liveChapterMeta.messageId || '';
+    liveChapterMeta.messageId = String(messageId);
+    if (preview) liveChapterMeta.preview = preview;
+    if (selectedChapterKey && (selectedChapterKey === prev || selectedChapterKey === '__live__')) {
+      selectedChapterKey = liveChapterMeta.messageId;
+    }
+  }
+
+  function bindLiveChapterIdentity(meta) {
+    if (!liveChapterMeta) return;
+    if (meta && typeof meta === 'object') {
+      if (meta.messageId) adoptLiveChapterIdentity(meta.messageId, meta.preview);
+      else if (meta.preview && !liveChapterMeta.preview) liveChapterMeta.preview = meta.preview;
+    }
+    if (!isSyntheticLiveId(liveChapterMeta.messageId)) {
+      if (!liveChapterMeta.preview) {
+        var same = latestUiUserIdentity();
+        if (same && same.messageId === liveChapterMeta.messageId && same.preview) {
+          liveChapterMeta.preview = same.preview;
+        }
+      }
+      return;
+    }
+    var ident = latestUiUserIdentity();
+    if (ident && ident.messageId) adoptLiveChapterIdentity(ident.messageId, ident.preview);
+  }
+
+  function markLiveChapterRunning(meta) {
+    var prevKey = selectedChapterKey;
+    ensureLiveChapter(meta || {});
+    liveChapterMeta.status = 'running';
+    bindLiveChapterIdentity(meta);
+    if (!userPinnedChapter) focusNewestChapter();
+    if (hostEl && selectedChapterKey && selectedChapterKey !== prevKey) {
+      renderChapterDirectory();
+    }
+  }
+
+  function mergeLiveIntoChapterList(list, live) {
+    list = Array.isArray(list) ? list.slice() : [];
+    if (!live) return list;
+    if (!isSyntheticLiveId(live.messageId)) {
+      for (var i = list.length - 1; i >= 0; i--) {
+        if (list[i] && list[i].messageId === live.messageId) {
+          list[i] = live;
+          return list;
+        }
+      }
+      list.push(live);
+      return list;
+    }
+    if (list.length) {
+      var last = list[list.length - 1];
+      if (last && last.messageId) {
+        adoptLiveChapterIdentity(last.messageId, last.preview);
+        live.messageId = last.messageId;
+        if (last.preview && (!live.preview || live.preview === '正在执行')) {
+          live.preview = last.preview;
+        }
+        list[list.length - 1] = live;
+        return list;
+      }
+    }
+    list.push(live);
+    return list;
+  }
+
+  function liveChapterStatus() {
+    if (!isTurnInFlight()
+      && liveChapterMeta && liveChapterMeta.status && liveChapterMeta.status !== 'running') {
+      return liveChapterMeta.status;
+    }
+    for (var i = roundRecords.length - 1; i >= 0; i--) {
+      var rec = roundRecords[i];
+      if (!rec) continue;
+      if (rec.stopReason === 'circuit_breaker') return 'failed';
+      if (rec.stopReason === 'user_stop' || rec.stopReason === 'cancelled') return 'stopped';
+      if (rec.stopReason === 'completion_paused') return 'paused';
+      if (roundVisualStatus(rec) === 'failed') return 'failed';
+    }
+    if (roundRecords.length && currentPlan && isPlanComplete(currentPlan)) return 'done';
+    var last = roundRecords.length ? roundRecords[roundRecords.length - 1] : null;
+    if (last && last.isFinal && last.status === 'done') return 'done';
+    if (hasLiveChapterWork()) return 'running';
+    return 'done';
+  }
+
+  function liveFilesChangedCount() {
+    var seen = Object.create(null);
+    var n = 0;
+    for (var i = 0; i < toolRecords.length; i++) {
+      var tool = toolRecords[i];
+      if (!tool || !CONTEXT_WRITE_TOOLS[tool.toolName]) continue;
+      if (tool.status === 'failed' || tool.status === 'error') continue;
+      var pathVal = tool.target || tool.detail || '';
+      if (!pathVal || seen[pathVal]) continue;
+      seen[pathVal] = true;
+      n++;
+    }
+    return n;
+  }
+
+  function ensureLiveChapter(opts) {
+    opts = opts || {};
+    if (!liveChapterMeta) {
+      liveChapterMeta = {
+        messageId: opts.messageId || ('live-' + Date.now()),
+        preview: opts.preview || '',
+        startedAt: typeof turnStartedAt === 'number' ? turnStartedAt : Date.now(),
+        markers: [],
+        status: opts.status || 'running',
+      };
+    } else {
+      if (opts.messageId) liveChapterMeta.messageId = opts.messageId;
+      if (opts.preview) liveChapterMeta.preview = opts.preview;
+      if (opts.status) liveChapterMeta.status = opts.status;
+    }
+    bindLiveChapterIdentity(opts);
+    return liveChapterMeta;
+  }
+
+  function formatClockStamp(ts) {
+    if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
+    var d = new Date(ts);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  }
+
+  function formatChapterClock(ts) {
+    if (typeof ts !== 'number' || !isFinite(ts) || ts <= 0) return '';
+    var d = new Date(ts);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  function toolPreviewLine(tool) {
+    if (!tool) return '';
+    var name = tool.toolName || '';
+    var preview = tool.preview || tool.target || tool.detail || '';
+    if (name && preview) return name + ' · ' + preview;
+    return preview || name;
+  }
+
+  function liveChapterViewModel() {
+    if (!hasLiveChapterWork()) return null;
+    var meta = ensureLiveChapter();
+    var files = liveFilesChangedCount();
+    var rounds = [];
+    var api = chronicleApi();
+    if (api && typeof api.fromLive === 'function') {
+      var packed = api.fromLive({
+        messageId: meta.messageId,
+        preview: meta.preview || '正在执行',
+        status: liveChapterStatus(),
+        startedAt: meta.startedAt || turnStartedAt,
+        endedAt: turnEndedAt,
+        markers: liveMarkersFromState(),
+        roundRecords: roundRecords,
+        toolRecords: toolRecords,
+        plan: currentPlan,
+      });
+      if (packed && Array.isArray(packed.rounds)) rounds = packed.rounds;
+    }
+    return {
+      messageId: meta.messageId,
+      preview: meta.preview || '正在执行',
+      status: liveChapterStatus(),
+      roundCount: roundRecords.length,
+      filesChangedCount: files,
+      durationMs: liveChapterDurationMs(),
+      markers: liveMarkersFromState(),
+      toolCount: uniqueToolCallCount,
+      rounds: rounds,
+      goal: currentPlan && currentPlan.goal ? currentPlan.goal : '',
+      phase: currentPlan && currentPlan.phase ? currentPlan.phase : '',
+      progress: currentPlan && typeof currentPlan.progress === 'number' ? currentPlan.progress : null,
+      intent: currentPlan && currentPlan.intent ? currentPlan.intent : '',
+      startTs: typeof meta.startedAt === 'number' ? meta.startedAt : turnStartedAt,
+      live: true,
+    };
+  }
+
+  function isSyntheticLiveId(id) {
+    return !id || String(id).indexOf('live-') === 0;
+  }
+
+  function allChapterViews() {
+    bindLiveChapterIdentity();
+    var list = sealedChapters.slice();
+    var live = liveChapterViewModel();
+    if (!list.length && snapshotCheckpointEntries.length) {
+      var fallbacks = checkpointFallbackChapters();
+      return live ? mergeLiveIntoChapterList(fallbacks, live) : fallbacks;
+    }
+    if (live) return mergeLiveIntoChapterList(list, live);
+    return list;
+  }
+
+  function checkpointFallbackChapters() {
+    var out = [];
+    for (var i = 0; i < snapshotCheckpointEntries.length; i++) {
+      var e = snapshotCheckpointEntries[i];
+      if (!e || !e.messageId) continue;
+      var ts = typeof e.userMessageTime === 'number' ? e.userMessageTime : 0;
+      if (!ts && e.createdAt) ts = Date.parse(e.createdAt) || 0;
+      out.push({
+        messageId: e.messageId,
+        preview: e.preview || '（无消息摘要）',
+        status: 'done',
+        startTs: ts,
+        rounds: [],
+        live: false,
+      });
+    }
+    return out;
+  }
+
+  function visibleChapterViews() {
+    var all = allChapterViews();
+    if (all.length <= chapterVisibleLimit) return all;
+    return all.slice(all.length - chapterVisibleLimit);
+  }
+
+  function chapterKey(chapter) {
+    if (!chapter) return '';
+    return chapter.messageId || (chapter.live ? '__live__' : '');
+  }
+
+  function newestChapterKey() {
+    var all = allChapterViews();
+    if (!all.length) return '';
+    return chapterKey(all[all.length - 1]);
+  }
+
+  function getSelectedChapter() {
+    var all = allChapterViews();
+    if (!all.length) return null;
+    if (selectedChapterKey) {
+      for (var i = 0; i < all.length; i++) {
+        if (chapterKey(all[i]) === selectedChapterKey) return all[i];
+      }
+    }
+    return all[all.length - 1];
+  }
+
+  function isChapterSelected(chapter) {
+    if (!chapter) return false;
+    var selected = getSelectedChapter();
+    return !!(selected && chapterKey(selected) === chapterKey(chapter));
+  }
+
+  function chapterMatchesLive(chapter) {
+    if (!chapter) return false;
+    if (chapter.live) return true;
+    return !!(liveChapterMeta && chapter.messageId && liveChapterMeta.messageId === chapter.messageId);
+  }
+
+  function selectedChapterIsLive() {
+    var ch = getSelectedChapter();
+    if (!ch || !hasLiveChapterWork()) return false;
+    var followingNewest = !userPinnedChapter && chapterKey(ch) === newestChapterKey();
+    if (!chapterMatchesLive(ch) && !followingNewest) return false;
+    return ch.status === 'running'
+      || liveChapterStatus() === 'running'
+      || hasLiveProgress()
+      || isTurnInFlight();
+  }
+
+  function hideParkedLiveWidgets() {
+    var live = selectedChapterIsLive();
+    if (!live) {
+      if (taskOverviewEl) {
+        var ch = getSelectedChapter();
+        if (!(ch && ch.goal)) taskOverviewEl.classList.add('hidden');
+      }
+      if (currentStepEl) currentStepEl.classList.add('hidden');
+    }
+  }
+
+  function focusNewestChapter() {
+    userPinnedChapter = false;
+    selectedChapterKey = newestChapterKey();
+  }
+
+  function detachLiveWidgets() {
+    if (!hostEl) return;
+    var flow = hostEl.querySelector('#etl-panel-flow');
+    if (!flow) return;
+    if (taskOverviewEl && taskOverviewEl.parentNode !== flow) flow.appendChild(taskOverviewEl);
+    if (currentStepEl && currentStepEl.parentNode !== flow) flow.appendChild(currentStepEl);
+    if (roundTimelineEl && roundTimelineEl.parentNode !== flow) flow.appendChild(roundTimelineEl);
+  }
+
+  function nowDoingText() {
+    if (!lastTool.toolName) return '';
+    var target = '';
+    var rec = lastTool.toolCallId ? toolRecordById[lastTool.toolCallId] : null;
+    if (rec) target = rec.target || rec.detail || '';
+    var label = inferToolIntent({
+      toolName: lastTool.toolName,
+      target: target,
+      detail: target,
+    });
+    var elapsed = '';
+    if (lastTool.ts) {
+      elapsed = ' · ' + formatToolDuration({
+        callTs: lastTool.ts,
+        resultTs: lastTool.pending ? Date.now() : rec && rec.resultTs,
+      });
+    }
+    return (lastTool.pending ? '正在' : '') + label + elapsed;
+  }
+
+  function makeRoundToggle(expanded) {
+    var toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'etl-round-toggle etl-visually-hidden';
+    toggle.tabIndex = -1;
+    toggle.setAttribute('aria-hidden', 'true');
+    toggle.textContent = expanded ? '▴' : '▾';
+    return toggle;
+  }
+
+  function makeFrozenRoundNode(round) {
+    var item = document.createElement('li');
+    var status = round.status || 'done';
+    item.className = 'etl-round-node etl-round-card status-' + status
+      + (round.isFinal ? ' is-final' : '');
+    item.dataset.iteration = String(round.iteration);
+    item.dataset.frozen = '1';
+    var row = document.createElement('div');
+    row.className = 'etl-round-row';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.setAttribute('aria-expanded', 'false');
+    var marker = document.createElement('span');
+    marker.className = 'etl-round-marker';
+    marker.textContent = String(round.iteration);
+    var summary = document.createElement('div');
+    summary.className = 'etl-round-summary';
+    var head = document.createElement('div');
+    head.className = 'etl-round-head';
+    var title = document.createElement('span');
+    title.className = 'etl-round-title';
+    title.textContent = round.title || ('第 ' + round.iteration + ' 轮');
+    var time = document.createElement('span');
+    time.className = 'etl-round-duration';
+    var stamp = formatClockStamp(round.startTs);
+    time.textContent = stamp || formatChapterDuration(round.durationMs);
+    var toggle = makeRoundToggle(false);
+    var badge = document.createElement('span');
+    badge.className = 'etl-round-badge status-' + status;
+    badge.textContent = roundStatusLabel(status);
+    head.appendChild(title);
+    head.appendChild(time);
+    head.appendChild(badge);
+    head.appendChild(toggle);
+    summary.appendChild(head);
+    var meta = document.createElement('div');
+    meta.className = 'etl-round-meta';
+    var desc = toolPreviewLine(round.tools && round.tools[0]);
+    if (desc) {
+      var descEl = document.createElement('div');
+      descEl.className = 'etl-round-desc';
+      descEl.textContent = desc;
+      meta.appendChild(descEl);
+    }
+    summary.appendChild(meta);
+    row.appendChild(marker);
+    row.appendChild(summary);
+    item.appendChild(row);
+    var detail = document.createElement('div');
+    detail.className = 'etl-round-detail';
+    var actions = document.createElement('ol');
+    actions.className = 'etl-round-actions';
+    var tools = round.tools || [];
+    for (var i = 0; i < tools.length; i++) {
+      actions.appendChild(makeFrozenToolRow(tools[i]));
+    }
+    if (!tools.length && round.isFinal) {
+      var complete = document.createElement('div');
+      complete.className = 'etl-round-complete';
+      complete.textContent = '模型判断本章目标已达成';
+      detail.appendChild(complete);
+    }
+    detail.appendChild(actions);
+    item.appendChild(detail);
+    row.addEventListener('click', function (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      var open = !item.classList.contains('is-expanded');
+      item.classList.toggle('is-expanded', open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.textContent = open ? '▴' : '▾';
+    });
+    return item;
+  }
+
+  function makeFrozenToolRow(tool) {
+    var status = toolStatusClass(tool.status);
+    var row = document.createElement('li');
+    row.className = 'etl-round-action etl-round-tool status-' + status;
+    if (tool.toolCallId) {
+      row.dataset.toolCallId = tool.toolCallId;
+      row.title = '定位到对话';
+    }
+    var icon = document.createElement('span');
+    icon.className = 'etl-round-action-icon';
+    icon.textContent = status === 'failed' ? '×' : '✓';
+    var body = document.createElement('div');
+    body.className = 'etl-round-action-body';
+    var name = document.createElement('div');
+    name.className = 'etl-round-action-name';
+    name.textContent = tool.intent || tool.toolName || '工具';
+    body.appendChild(name);
+    if (tool.preview) {
+      var path = document.createElement('div');
+      path.className = 'etl-round-action-target';
+      path.textContent = tool.preview;
+      body.appendChild(path);
+    }
+    var dur = document.createElement('span');
+    dur.className = 'etl-round-action-dur';
+    dur.textContent = formatChapterDuration(tool.durationMs);
+    row.appendChild(icon);
+    row.appendChild(body);
+    row.appendChild(dur);
+    return row;
+  }
+
+  function makeChapterNode(chapter, index, isCurrent) {
+    var selected = isChapterSelected(chapter);
+    var isCursor = !!(chapter.messageId && isSnapshotCursorMessage(chapter.messageId));
+    var li = document.createElement('li');
+    li.className = 'etl-chapter-node etl-snapshot-node'
+      + (isCurrent ? ' is-current' : '')
+      + (selected ? ' is-selected' : '')
+      + (isCursor ? ' is-cursor' : '')
+      + ' status-' + (chapter.status || 'done');
+    if (chapter.messageId) li.setAttribute('data-message-id', chapter.messageId);
+    li.setAttribute('data-chapter-index', String(index));
+
+    var rail = document.createElement('div');
+    rail.className = 'etl-snapshot-rail';
+    rail.setAttribute('aria-hidden', 'true');
+    var marker = document.createElement('span');
+    marker.className = 'etl-chapter-marker etl-snapshot-index etl-chapter-index';
+    marker.textContent = String(index);
+    var line = document.createElement('span');
+    line.className = 'etl-snapshot-line';
+    rail.appendChild(marker);
+    rail.appendChild(line);
+
+    var card = document.createElement('div');
+    card.className = 'etl-snapshot-card etl-chapter-row';
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+    card.setAttribute('aria-selected', selected ? 'true' : 'false');
+
+    var main = document.createElement('div');
+    main.className = 'etl-chapter-main';
+    var timeEl = document.createElement('time');
+    timeEl.className = 'etl-snapshot-time etl-chapter-clock';
+    var stamp = formatChapterClock(chapter.startTs);
+    timeEl.textContent = stamp;
+    timeEl.classList.toggle('hidden', !stamp);
+
+    var titleRow = document.createElement('div');
+    titleRow.className = 'etl-chapter-title-row';
+    var preview = document.createElement('div');
+    preview.className = 'etl-snapshot-preview etl-chapter-title';
+    preview.textContent = chapter.preview || '（无消息摘要）';
+    safeSetTitle(preview, preview.textContent);
+    var statusEl = document.createElement('span');
+    statusEl.className = 'etl-chapter-status etl-round-badge status-' + (chapter.status || 'done');
+    statusEl.textContent = chapterStatusLabel(chapter.status);
+    titleRow.appendChild(preview);
+    if (isCurrent) {
+      var latest = document.createElement('span');
+      latest.className = 'etl-chapter-latest';
+      latest.textContent = '最新';
+      titleRow.appendChild(latest);
+    }
+    titleRow.appendChild(statusEl);
+    if (chapter.messageId && isSnapshotRestoreHidden(chapter.messageId)) {
+      card.classList.add('etl-snapshot-card--no-restore');
+    } else if (chapter.messageId && !isSyntheticLiveId(chapter.messageId)) {
+      titleRow.appendChild(createSnapshotRestoreButton(chapter.messageId));
+    }
+    main.appendChild(timeEl);
+    main.appendChild(titleRow);
+    card.appendChild(main);
+    li.appendChild(rail);
+    li.appendChild(card);
+    return li;
+  }
+
+  function syncChapterEmptyAndLoadMore(allCount, visibleCount) {
+    if (!chapterTimelineEl) return;
+    var empty = chapterTimelineEl.querySelector('.etl-chapter-empty');
+    if (empty) empty.classList.toggle('hidden', allCount > 0);
+    var loadMore = chapterTimelineEl.querySelector('#etl-chapter-load-more');
+    if (!loadMore) return;
+    var hiddenCount = Math.max(0, allCount - visibleCount);
+    loadMore.classList.toggle('hidden', hiddenCount <= 0);
+    loadMore.textContent = hiddenCount
+      ? ('加载更早的章节 ↑ (' + hiddenCount + ')')
+      : '加载更早的章节 ↑';
+  }
+
+  function updateFlowStepCount(n) {
+    var el = hostEl && hostEl.querySelector('#etl-flow-step-count');
+    if (!el) return;
+    el.textContent = n > 0 ? ('共 ' + n + ' 个步骤') : '';
+  }
+
+  function renderChapterDirectory(options) {
+    options = options || {};
+    if (!chapterTimelineEl) return;
+    try {
+      detachLiveWidgets();
+      var list = chapterTimelineEl.querySelector('.etl-chapter-list');
+      if (!list) return;
+      list.innerHTML = '';
+      var all = allChapterViews();
+      var visible = visibleChapterViews();
+      var offset = all.length - visible.length;
+      syncChapterEmptyAndLoadMore(all.length, visible.length);
+      renderWorkbenchStatus();
+
+      for (var i = 0; i < visible.length; i++) {
+        var chapter = visible[i];
+        var absIndex = offset + i + 1;
+        var isCurrent = !!chapter.live || chapter === all[all.length - 1];
+        list.appendChild(makeChapterNode(chapter, absIndex, isCurrent));
+      }
+
+      if (options.scrollToLatest && list.lastElementChild && list.lastElementChild.scrollIntoView) {
+        list.lastElementChild.scrollIntoView({ block: 'nearest' });
+      }
+      if (pendingRevealMessageId) {
+        var reveal = list.querySelector('[data-message-id="' + pendingRevealMessageId.replace(/"/g, '\\"') + '"]');
+        if (reveal && reveal.scrollIntoView) reveal.scrollIntoView({ block: 'nearest' });
+        pendingRevealMessageId = '';
+      }
+    } catch (e) {
+      safeWarn('renderChapterDirectory', e);
+    }
+  }
+
+  function patchCurrentChapterChrome() {
+    if (!chapterTimelineEl) return;
+    var live = liveChapterViewModel();
+    if (!live) return;
+    var node = chapterTimelineEl.querySelector('.etl-chapter-node.is-current');
+    if (!node) {
+      renderChapterDirectory();
+      return;
+    }
+    var title = node.querySelector('.etl-chapter-title');
+    if (title && live.preview) {
+      title.textContent = live.preview;
+      safeSetTitle(title, live.preview);
+    }
+    var statusEl = node.querySelector('.etl-chapter-status');
+    if (statusEl) {
+      statusEl.textContent = chapterStatusLabel(live.status);
+      statusEl.className = 'etl-chapter-status etl-round-badge status-' + (live.status || 'done');
+    }
+    node.classList.remove('status-running', 'status-done', 'status-failed', 'status-paused', 'status-stopped');
+    node.classList.add('status-' + (live.status || 'done'));
+    var clock = node.querySelector('.etl-chapter-clock');
+    if (clock) {
+      var stamp = formatChapterClock(live.startTs);
+      clock.textContent = stamp;
+      clock.classList.toggle('hidden', !stamp);
+    }
+    renderWorkbenchStatus();
+  }
+
+  function selectChapter(messageId, indexAttr, fromUser) {
+    var views = allChapterViews();
+    var chapter = null;
+    if (messageId) {
+      for (var i = 0; i < views.length; i++) {
+        if (views[i].messageId === messageId) { chapter = views[i]; break; }
+      }
+    }
+    if (!chapter && indexAttr) {
+      var idx = parseInt(indexAttr, 10);
+      if (idx >= 1 && idx <= views.length) chapter = views[idx - 1];
+    }
+    if (!chapter) return;
+    var key = chapterKey(chapter);
+    if (fromUser) userPinnedChapter = key !== newestChapterKey();
+    selectedChapterKey = key;
+    renderChapterDirectory();
+    renderTaskOverview();
+    renderCurrentStep();
+    renderRoundTimeline(true);
+    hideParkedLiveWidgets();
+  }
+
+  function revealChapter(messageId) {
+    if (!messageId) return;
+    pendingRevealMessageId = messageId;
+    userPinnedChapter = true;
+    selectedChapterKey = messageId;
+    renderChapterDirectory({ scrollToLatest: false });
+    renderRoundTimeline(true);
+  }
+
+  function jumpToChatTool(toolCallId) {
+    if (!toolCallId) return;
+    try {
+      if (window.ChatUI && typeof window.ChatUI.scrollToToolCall === 'function') {
+        window.ChatUI.scrollToToolCall(toolCallId);
+      }
+    } catch (e) {
+      safeWarn('jumpToChatTool', e);
+    }
+  }
+
+  function handleChapterTimelineInteraction(event) {
+    try {
+      var target = event.target;
+      if (!target || !target.closest) return;
+      if (target.closest('.etl-snapshot-restore-btn')) return;
+      var loadMore = target.closest('#etl-chapter-load-more');
+      if (loadMore) {
+        chapterVisibleLimit += 8;
+        renderChapterDirectory();
+        return;
+      }
+      var row = target.closest('.etl-chapter-row');
+      if (!row) return;
+      var node = row.closest('.etl-chapter-node');
+      if (!node) return;
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.type === 'keydown') event.preventDefault();
+      selectChapter(node.getAttribute('data-message-id') || '', node.getAttribute('data-chapter-index'), true);
+    } catch (e) {
+      safeWarn('chapterTimelineClick', e);
+    }
+  }
+
+  function unbindChapterTimelineEvents() {
+    if (chapterTimelineEl && chapterClickHandler) {
+      chapterTimelineEl.removeEventListener('click', chapterClickHandler);
+      chapterTimelineEl.removeEventListener('keydown', chapterClickHandler);
+    }
+    chapterClickHandler = null;
+    chapterTimelineBound = false;
+  }
+
+  function bindChapterTimelineEvents() {
+    if (!chapterTimelineEl) return;
+    if (chapterTimelineBound) return;
+    chapterClickHandler = handleChapterTimelineInteraction;
+    chapterTimelineEl.addEventListener('click', chapterClickHandler);
+    chapterTimelineEl.addEventListener('keydown', chapterClickHandler);
+    chapterTimelineBound = true;
+  }
+
+  function resetLiveChapterState() {
+    currentPlan = null;
+    frozenPlanId = null;
+    currentExecutionMode = null;
+    bannerDetailOpen = false;
+    lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
+    toolRecords = [];
+    toolRecordById = Object.create(null);
+    toolCallIds = Object.create(null);
+    uniqueToolCallCount = 0;
+    authoritativeToolCalls = null;
+    calibratedUniqueToolCount = 0;
+    footerStats.totalToolCalls = null;
+    roundRecords = [];
+    roundRecordByIteration = Object.create(null);
+    expandedRounds = Object.create(null);
+    roundVisibleLimit = 20;
+    cachedLoadMoreHidden = -1;
+    liveChapterMeta = null;
+    turnStartedAt = null;
+    turnEndedAt = null;
+  }
+
+  function sealLiveChapter(opts) {
+    opts = opts || {};
+    try {
+      if (!hasSealableWork()) {
+        currentPlan = null;
+        frozenPlanId = null;
+        currentExecutionMode = null;
+        bannerDetailOpen = false;
+        markLiveChapterRunning(opts.nextMeta || {});
+        focusNewestChapter();
+        if (hostEl) {
+          renderChapterDirectory();
+          renderTaskOverview();
+          renderRoundTimeline(true);
+          renderCurrentStep();
+          renderEmptyState();
+          renderExecutionModeBanner();
+          renderFooter();
+          renderDockSheet();
+          hideParkedLiveWidgets();
+        }
+        return false;
+      }
+      ensureLiveChapter();
+      var status = opts.status || liveChapterStatus();
+      if (status === 'running') status = 'done';
+      var api = chronicleApi();
+      var chapter = null;
+      if (api && typeof api.fromLive === 'function') {
+        chapter = api.fromLive({
+          messageId: liveChapterMeta.messageId,
+          preview: liveChapterMeta.preview || '（无消息摘要）',
+          status: status,
+          startedAt: liveChapterMeta.startedAt || turnStartedAt,
+          endedAt: typeof turnEndedAt === 'number' ? turnEndedAt : Date.now(),
+          markers: liveMarkersFromState(),
+          roundRecords: roundRecords,
+          toolRecords: toolRecords,
+          plan: currentPlan,
+        });
+      }
+      if (chapter) {
+        chapter.status = status;
+        sealedChapters.push(chapter);
+        sealedToolCount += typeof chapter.toolCount === 'number' ? chapter.toolCount : 0;
+        if (chapter.messageId) userPinnedChapter = false;
+      }
+      resetLiveChapterState();
+      markLiveChapterRunning(opts.nextMeta || {});
+      focusNewestChapter();
+      if (hostEl) {
+        renderChapterDirectory();
+        renderTaskOverview();
+        renderRoundTimeline(true);
+        renderCurrentStep();
+        renderEmptyState();
+        renderExecutionModeBanner();
+        renderFooter();
+        renderDockSheet();
+        hideParkedLiveWidgets();
+      }
+      scheduleFlowPersist();
+      return true;
+    } catch (e) {
+      safeWarn('sealLiveChapter', e);
+      return false;
+    }
+  }
+
+  function loadChapterIntoLive(chapter) {
+    if (!chapter) return;
+    resetLiveChapterState();
+    liveChapterMeta = {
+      messageId: chapter.messageId || ('live-' + Date.now()),
+      preview: chapter.preview || '',
+      startedAt: chapter.startTs,
+      markers: Array.isArray(chapter.markers) ? chapter.markers.slice() : [],
+      status: chapter.status === 'running' ? 'running' : (chapter.status || 'done'),
+    };
+    /* hydrate 回填的章不要造空任务图，否则总览卡会撑乱目录。 */
+    var rounds = chapter.rounds || [];
+    var startBase = typeof chapter.startTs === 'number' ? chapter.startTs : Date.now() - rounds.length * 2000;
+    for (var r = 0; r < rounds.length; r++) {
+      var round = rounds[r];
+      var roundTs = startBase + r * 2000;
+      var ensured = ensureRoundRecord(round.iteration || (r + 1), roundTs);
+      var record = ensured.record;
+      record.status = round.status === 'running' ? 'running' : 'done';
+      record.isFinal = !!round.isFinal;
+      record.endTs = roundTs + (round.durationMs || 1500);
+      if (round.stopReason) record.stopReason = round.stopReason;
+      var tools = round.tools || [];
+      for (var t = 0; t < tools.length; t++) {
+        var tool = tools[t];
+        var callId = tool.toolCallId || ('hydrate-' + record.iteration + '-' + t);
+        if (toolRecordById[callId]) continue;
+        var toolTs = roundTs + t * 200;
+        var toolRec = {
+          toolCallId: callId,
+          toolName: tool.toolName,
+          callTs: toolTs,
+          resultTs: toolTs + Math.max(100, tool.durationMs || 100),
+          status: tool.status || 'done',
+          detail: tool.preview || tool.target || '',
+          target: tool.target || tool.preview || '',
+          iteration: record.iteration,
+        };
+        toolRecords.push(toolRec);
+        toolRecordById[callId] = toolRec;
+        if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
+        if (!toolCallIds[callId]) {
+          toolCallIds[callId] = true;
+          uniqueToolCallCount++;
+        }
+      }
+    }
+    if (typeof chapter.startTs === 'number') turnStartedAt = chapter.startTs;
+    if (typeof chapter.endTs === 'number') turnEndedAt = chapter.endTs;
+    else if (chapter.status && chapter.status !== 'running') {
+      turnEndedAt = turnStartedAt ? turnStartedAt + (chapter.durationMs || 0) : Date.now();
+    }
+    if (chapter.status && chapter.status !== 'running') stopTick();
+  }
+
+  function applyAssembledChapters(chapters, options) {
+    options = options || {};
+    if (!Array.isArray(chapters)) chapters = [];
+    var keepLive = !!options.keepLive && (
+      hasLiveProgress()
+      || isTurnInFlight()
+      || !!(liveChapterMeta && liveChapterMeta.status === 'running')
+    );
+    if (keepLive && !chapters.length) return;
+    var liveId = liveChapterMeta && liveChapterMeta.messageId;
+    sealedChapters = [];
+    sealedToolCount = 0;
+    var last = null;
+    for (var i = 0; i < chapters.length; i++) {
+      var ch = chapters[i];
+      last = ch;
+      if (keepLive && liveId && ch.messageId === liveId) continue;
+      if (keepLive && isSyntheticLiveId(liveId) && i === chapters.length - 1) continue;
+      if (keepLive || i < chapters.length - 1) {
+        sealedChapters.push(ch);
+        sealedToolCount += typeof ch.toolCount === 'number' ? ch.toolCount : 0;
+      }
+    }
+    if (!keepLive && last) loadChapterIntoLive(last);
+    else if (!keepLive && !last) resetLiveChapterState();
+    if (!userPinnedChapter) focusNewestChapter();
+  }
+
+  function stampLiveMarker(key) {
+    ensureLiveChapter();
+    if (!liveChapterMeta.markers) liveChapterMeta.markers = [];
+    if (liveChapterMeta.markers.indexOf(key) < 0) liveChapterMeta.markers.push(key);
+  }
+
   // ── 渲染：按模型轮次的执行流 ──
 
   var PHASE_LABELS = {
@@ -1591,6 +2665,7 @@ window.ChatExecutionPlan = (function () {
   function applyRoundActivity(evt) {
     try {
       if (!evt || !evt.type) return;
+      markLiveChapterRunning();
       var ts = typeof evt.ts === 'number' ? evt.ts : Date.now();
       var roundResult = ensureRoundRecord(evt.iteration, ts);
       var record = roundResult.record;
@@ -1620,6 +2695,10 @@ window.ChatExecutionPlan = (function () {
       syncRoundTimeline({ iteration: record.iteration, insert: roundResult.created });
       renderEmptyState();
       if (typeof turnStartedAt === 'number' && turnEndedAt === null) startTick();
+      if (evt.stopReason === 'circuit_breaker') stampLiveMarker('circuit');
+      if (evt.type === 'compaction' || evt.kind === 'compaction') stampLiveMarker('compaction');
+      ensureLiveChapter();
+      patchCurrentChapterChrome();
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyRoundActivity', e);
@@ -1844,23 +2923,17 @@ window.ChatExecutionPlan = (function () {
     return 'e:' + tools.map(function (tool) { return tool.toolCallId; }).join(',');
   }
 
-  function shouldRebuildRoundPills(roundNode, record) {
-    var tools = getRoundTools(record);
-    var collapsed = !isRoundExpanded(record);
-    var wrap = roundNode.querySelector('.etl-round-pills');
-    if (!tools.length) return !!wrap;
-    if (!wrap) return true;
-    var nextSig = roundPillSignature(tools, collapsed);
-    return wrap.dataset.pillSig !== nextSig;
-  }
-
   function renderRoundPills(summary, tools, record) {
     if (!summary) return;
     var collapsed = !isRoundExpanded(record);
     var pills = buildRoundPills(tools, collapsed);
-    if (!pills.length) return;
+    var host = summary.querySelector('.etl-round-meta') || summary;
+    var wrap = host.querySelector('.etl-round-pills');
+    if (!pills.length) {
+      if (wrap) wrap.parentNode.removeChild(wrap);
+      return;
+    }
     var nextSig = roundPillSignature(tools, collapsed);
-    var wrap = summary.querySelector('.etl-round-pills');
     if (wrap && wrap.dataset.pillSig === nextSig) return;
     if (wrap) wrap.parentNode.removeChild(wrap);
     var pillWrap = document.createElement('div');
@@ -1873,7 +2946,7 @@ window.ChatExecutionPlan = (function () {
       pill.title = pills[p].title || pills[p].raw || '';
       pillWrap.appendChild(pill);
     }
-    summary.appendChild(pillWrap);
+    host.appendChild(pillWrap);
   }
 
   /** 按当前展开态刷新所有可见轮次的摘要 pill（避免旧轮次残留多条工具标签）。 */
@@ -1908,6 +2981,7 @@ window.ChatExecutionPlan = (function () {
     var row = document.createElement('li');
     row.className = 'etl-round-action etl-round-tool status-' + status;
     row.dataset.toolCallId = tool.toolCallId;
+    row.title = '定位到对话';
     row.dataset.status = tool.status;
     if (typeof tool.callTs === 'number') row.dataset.callTs = String(tool.callTs);
     if (typeof tool.resultTs === 'number') row.dataset.resultTs = String(tool.resultTs);
@@ -1915,7 +2989,7 @@ window.ChatExecutionPlan = (function () {
     icon.className = 'etl-round-action-icon etl-round-tool-icon';
     icon.textContent = status === 'failed' ? '×' : '✓';
     var body = document.createElement('div');
-    body.style.minWidth = '0';
+    body.className = 'etl-round-action-body';
     var name = document.createElement('div');
     name.className = 'etl-round-action-name';
     name.textContent = inferToolIntent(tool);
@@ -1960,7 +3034,7 @@ window.ChatExecutionPlan = (function () {
     if (!roundTimelineEl) return null;
     var empty = roundTimelineEl.querySelector('.etl-round-empty');
     var list = roundTimelineEl.querySelector('.etl-round-list');
-    if (empty) empty.classList.toggle('hidden', roundRecords.length > 0);
+    if (empty) empty.classList.add('hidden');
     return { empty: empty, list: list };
   }
 
@@ -1977,105 +3051,132 @@ window.ChatExecutionPlan = (function () {
     loadMore.textContent = '加载更早的轮次 ↓' + (hiddenCount ? ' (' + hiddenCount + ')' : '');
   }
 
-  /** 轮次从中间开始（如 19）时提示：更早轮次未实时捕获，可回填或去聊天区展开。 */
+  /** 前缀缺口提示已废弃：编年史从会话数据回填，不再叫人去聊天区翻历史。 */
   function syncPrefixGapHint() {
     if (!roundTimelineEl) return;
     var hint = roundTimelineEl.querySelector('#etl-round-prefix-hint');
     if (!hint) return;
-    if (!roundRecords.length) {
-      hint.classList.add('hidden');
-      hint.textContent = '';
-      return;
-    }
-    var firstIteration = roundRecords[0].iteration;
-    if (typeof firstIteration !== 'number' || firstIteration <= 1) {
-      hint.classList.add('hidden');
-      hint.textContent = '';
-      return;
-    }
-    var missing = firstIteration - 1;
-    hint.textContent = '轮次 1–' + missing + ' 未载入本面板 · 完整工具记录见聊天区「还有 N 条历史 · 展开」';
-    hint.classList.remove('hidden');
+    hint.classList.add('hidden');
+    hint.textContent = '';
   }
 
   function sliceCurrentTurnStructured(structured) {
-    if (!Array.isArray(structured) || !structured.length) return [];
-    var startIdx = -1;
-    for (var i = structured.length - 1; i >= 0; i--) {
-      if (structured[i] && structured[i].role === 'user') {
-        startIdx = i;
-        break;
-      }
-    }
-    return startIdx < 0 ? structured.slice() : structured.slice(startIdx);
+    return Array.isArray(structured) ? structured : [];
   }
 
   /**
-   * 从 structured 助手轮次回填 ETL 缺失的前缀轮次（面板晚开 / F5 后只拿到后半段时）。
-   * 只补 roundRecordByIteration 中不存在的 iteration，不覆盖实时数据。
+   * 从 structured + UI 消息回填整本编年史。
+   * 正在跑的活章不覆盖实时 tool/round。
    */
-  function hydrateFromStructured(structured) {
+  function hydrateFromStructured(structured, uiMessages, toolTracesOpt) {
     try {
       try {
         scheduleSnapshotTimelineRefresh();
       } catch (fileErr) {
         safeWarn('hydrateFromStructured.files', fileErr);
       }
-      var slice = sliceCurrentTurnStructured(structured);
-      if (!slice.length) return false;
-      var baseTs = Date.now() - slice.length * 2000;
-      var iteration = 0;
-      var filled = 0;
-      for (var i = 0; i < slice.length; i++) {
-        var msg = slice[i];
-        if (!msg || msg.role !== 'assistant') continue;
-        iteration++;
-        if (roundRecordByIteration[String(iteration)]) continue;
-        var roundTs = baseTs + iteration * 2000;
-        var roundResult = ensureRoundRecord(iteration, roundTs);
-        var record = roundResult.record;
-        record.status = 'done';
-        record.endTs = roundTs + 1500;
-        var toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
-        for (var ti = 0; ti < toolCalls.length; ti++) {
-          var tc = toolCalls[ti];
-          if (!tc || !tc.name) continue;
-          var callId = typeof tc.id === 'string' && tc.id
-            ? tc.id
-            : ('hydrate-' + iteration + '-' + ti);
-          if (toolRecordById[callId]) continue;
-          var toolTs = roundTs + ti * 200;
-          var toolRec = {
-            toolCallId: callId,
-            toolName: tc.name,
-            callTs: toolTs,
-            resultTs: toolTs + 100,
-            status: 'done',
-            detail: formatToolArgsPreview(tc.name, tc.arguments),
-            target: extractToolTarget(tc.name, tc.arguments),
-            iteration: iteration,
-          };
-          toolRecords.push(toolRec);
-          toolRecordById[callId] = toolRec;
-          if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
-          if (!toolCallIds[callId]) {
-            toolCallIds[callId] = true;
-            uniqueToolCallCount++;
+      var api = chronicleApi();
+      var ui = Array.isArray(uiMessages) ? uiMessages : [];
+      var traces = (toolTracesOpt && typeof toolTracesOpt === 'object') ? toolTracesOpt : null;
+      try {
+        if (window.ChatSession) {
+          if (!ui.length && typeof window.ChatSession.getMessages === 'function') {
+            ui = window.ChatSession.getMessages() || [];
           }
-          if (toolRecords.length > MAX_TOOL_HISTORY) {
-            var removed = toolRecords.shift();
-            if (removed) delete toolRecordById[removed.toolCallId];
+          if (!traces && typeof window.ChatSession.getToolTraces === 'function') {
+            traces = window.ChatSession.getToolTraces() || {};
           }
         }
-        filled++;
+      } catch (_e) { /* ignore */ }
+      if (api && typeof api.assemble === 'function') {
+        var lastAssembledStatus = '';
+        bindLiveChapterIdentity();
+        var turnInFlight = isTurnInFlight();
+        var liveRunning = (
+          liveChapterStatus() === 'running'
+          || turnInFlight
+          || !!(liveChapterMeta && liveChapterMeta.status === 'running')
+        ) && (hasLiveProgress() || turnInFlight || !!liveChapterMeta);
+        var assembled = api.assemble({
+          uiMessages: ui,
+          structured: structured,
+          toolTraces: traces,
+          checkpointEntries: snapshotCheckpointEntries,
+          currentPlan: liveRunning ? currentPlan : null,
+        });
+        var lastCh = assembled && assembled.chapters && assembled.chapters.length
+          ? assembled.chapters[assembled.chapters.length - 1]
+          : null;
+        lastAssembledStatus = lastCh && lastCh.status ? lastCh.status : '';
+        if (lastCh && lastCh.messageId && liveChapterMeta && isSyntheticLiveId(liveChapterMeta.messageId)
+          && (lastAssembledStatus === 'running' || turnInFlight)) {
+          adoptLiveChapterIdentity(lastCh.messageId, lastCh.preview);
+        }
+        var hasLiveWork = hasLiveProgress() || turnInFlight;
+        var lastIsSameDone = !!(lastCh && liveChapterMeta && lastCh.messageId
+          && lastCh.messageId === liveChapterMeta.messageId
+          && lastAssembledStatus && lastAssembledStatus !== 'running'
+          && !turnInFlight);
+        var keepLive = hasLiveWork && !lastIsSameDone;
+        applyAssembledChapters(assembled && assembled.chapters, { keepLive: keepLive });
+        if (!keepLive && lastAssembledStatus && lastAssembledStatus !== 'running') stopTick();
+      } else {
+        var slice = sliceCurrentTurnStructured(structured);
+        if (!slice.length) return false;
+        var baseTs = Date.now() - slice.length * 2000;
+        var iteration = 0;
+        for (var i = 0; i < slice.length; i++) {
+          var msg = slice[i];
+          if (!msg || msg.role !== 'assistant') continue;
+          iteration++;
+          if (roundRecordByIteration[String(iteration)]) continue;
+          var roundTs = baseTs + iteration * 2000;
+          var roundResult = ensureRoundRecord(iteration, roundTs);
+          var record = roundResult.record;
+          record.status = 'done';
+          record.endTs = roundTs + 1500;
+          var toolCalls = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
+          for (var ti = 0; ti < toolCalls.length; ti++) {
+            var tc = toolCalls[ti];
+            if (!tc || !tc.name) continue;
+            var callId = typeof tc.id === 'string' && tc.id
+              ? tc.id
+              : ('hydrate-' + iteration + '-' + ti);
+            if (toolRecordById[callId]) continue;
+            var toolTs = roundTs + ti * 200;
+            var toolRec = {
+              toolCallId: callId,
+              toolName: tc.name,
+              callTs: toolTs,
+              resultTs: toolTs + 100,
+              status: 'done',
+              detail: formatToolArgsPreview(tc.name, tc.arguments),
+              target: extractToolTarget(tc.name, tc.arguments),
+              iteration: iteration,
+            };
+            toolRecords.push(toolRec);
+            toolRecordById[callId] = toolRec;
+            if (record.toolCallIds.indexOf(callId) < 0) record.toolCallIds.push(callId);
+            if (!toolCallIds[callId]) {
+              toolCallIds[callId] = true;
+              uniqueToolCallCount++;
+            }
+          }
+        }
       }
-      if (!filled) {
-        syncPrefixGapHint();
-        return false;
+      visible = !isPanelSuppressed() && (hasChronicleWork() || !!currentPlan);
+      if (visible || hostEl) {
+        ensureMounted();
+        if (!userPinnedChapter) focusNewestChapter();
+        renderChapterDirectory({ scrollToLatest: true });
+        renderRoundTimeline(true);
+        renderTaskOverview();
+        renderCurrentStep();
+        renderEmptyState();
+        patchFooterToolCount();
+        renderFooter();
+        renderDockSheet();
       }
-      renderRoundTimeline(true);
-      renderEmptyState();
-      patchFooterToolCount();
       scheduleFlowPersist();
       return true;
     } catch (e) {
@@ -2137,7 +3238,7 @@ window.ChatExecutionPlan = (function () {
 
     var marker = document.createElement('span');
     marker.className = 'etl-round-marker';
-    marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    marker.textContent = String(record.iteration);
 
     var summary = document.createElement('div');
     summary.className = 'etl-round-summary';
@@ -2147,22 +3248,22 @@ window.ChatExecutionPlan = (function () {
     var title = document.createElement('span');
     title.className = 'etl-round-title';
     title.textContent = deriveRoundTitle(record);
-    var badge = document.createElement('span');
-    badge.className = 'etl-round-badge status-' + visualStatus;
-    badge.textContent = roundStatusLabel(visualStatus);
     var time = document.createElement('span');
     time.className = 'etl-round-duration';
     time.textContent = roundDuration(record);
-    var toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'etl-round-toggle';
-    toggle.setAttribute('aria-label', '展开轮次详情');
-    toggle.textContent = '▾';
+    var toggle = makeRoundToggle(false);
+    var badge = document.createElement('span');
+    badge.className = 'etl-round-badge status-' + visualStatus;
+    badge.textContent = roundStatusLabel(visualStatus);
     head.appendChild(title);
-    head.appendChild(badge);
     head.appendChild(time);
+    head.appendChild(badge);
     head.appendChild(toggle);
     summary.appendChild(head);
+
+    var meta = document.createElement('div');
+    meta.className = 'etl-round-meta';
+    summary.appendChild(meta);
 
     var liveTools = document.createElement('ul');
     liveTools.className = 'etl-round-live-tools';
@@ -2247,7 +3348,7 @@ window.ChatExecutionPlan = (function () {
     roundNode.classList.add('status-' + visualStatus);
     roundNode.classList.toggle('is-final', !!record.isFinal);
     var marker = roundNode.querySelector('.etl-round-marker');
-    if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
+    if (marker) marker.textContent = String(record.iteration);
     var title = roundNode.querySelector('.etl-round-title');
     if (title) title.textContent = deriveRoundTitle(record);
     var badge = roundNode.querySelector('.etl-round-badge');
@@ -2264,9 +3365,7 @@ window.ChatExecutionPlan = (function () {
   function patchFooterToolCount() {
     if (!footerEl) return;
     ensureFooterSkeleton();
-    var liveToolCount = authoritativeToolCalls === null
-      ? uniqueToolCallCount
-      : authoritativeToolCalls + Math.max(0, uniqueToolCallCount - calibratedUniqueToolCount);
+    var liveToolCount = sessionToolTotal();
     var toolTxt = liveToolCount > 0 || authoritativeToolCalls !== null ? String(liveToolCount) : '—';
     var toolEl = footerEl.querySelector('.etl-foot-tool b');
     if (toolEl && toolEl.textContent !== toolTxt) toolEl.textContent = toolTxt;
@@ -2333,88 +3432,6 @@ window.ChatExecutionPlan = (function () {
     var reasons = detail.querySelectorAll('.etl-round-reason');
     var reason = reasons.length ? reasons[reasons.length - 1] : null;
     if (reason) reason.textContent = deriveRoundReason(record);
-  }
-
-  /** 就地更新已有轮次节点，避免 replaceChild 引发整表重绘闪烁。 */
-  function patchRoundNode(roundNode, record) {
-    if (!roundNode || !record) return;
-    snapshotRoundPlan(record);
-    patchRoundSummary(roundNode, record);
-    appendRoundDetailElement(roundNode, record);
-    var detail = roundNode.querySelector('.etl-round-detail');
-    if (!detail) return;
-    var tools = getRoundTools(record);
-    var actions = detail.querySelector('.etl-round-actions');
-    if (tools.length) {
-      if (actions) {
-        var validIds = Object.create(null);
-        for (var tv = 0; tv < tools.length; tv++) {
-          validIds[tools[tv].toolCallId] = true;
-        }
-        var existingRows = actions.querySelectorAll('[data-tool-call-id]');
-        Array.prototype.forEach.call(existingRows, function (row) {
-          if (!validIds[row.dataset.toolCallId]) {
-            row.parentNode.removeChild(row);
-          }
-        });
-        for (var ti = 0; ti < tools.length; ti++) {
-          var tool = tools[ti];
-          if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
-            actions.appendChild(makeRoundActionRow(tool));
-          }
-        }
-      } else {
-        rebuildRoundDetailBody(detail, record);
-      }
-    } else if (record.isFinal) {
-      var actionLabel = detail.querySelector('.etl-round-section-label');
-      if (actionLabel) actionLabel.textContent = '本轮结果';
-      if (!detail.querySelector('.etl-round-complete')) {
-        rebuildRoundDetailBody(detail, record);
-      } else {
-        var completion = detail.querySelector('.etl-round-complete');
-        if (completion) completion.textContent = roundCompletionText(record);
-      }
-    } else {
-      var planning = detail.querySelector('.etl-round-reason');
-      if (planning && !actions) {
-        planning.textContent = record.activeTitle || '分析目标并生成下一步动作';
-      } else if (!planning) {
-        rebuildRoundDetailBody(detail, record);
-      }
-    }
-    patchRoundReason(roundNode, record);
-    var row = roundNode.querySelector('.etl-round-row');
-    if (row) row.setAttribute('aria-expanded', isRoundExpanded(record) ? 'true' : 'false');
-    var toggle = roundNode.querySelector('.etl-round-toggle');
-    if (toggle) {
-      var expanded = isRoundExpanded(record);
-      toggle.textContent = expanded ? '▴' : '▾';
-      toggle.setAttribute('aria-label', expanded ? '收起轮次详情' : '展开轮次详情');
-    }
-  }
-
-  function patchRoundSummary(roundNode, record, options) {
-    options = options || {};
-    var visualStatus = roundVisualStatus(record);
-    roundNode.classList.remove('status-done', 'status-failed', 'status-running', 'is-expanded');
-    roundNode.classList.add('status-' + visualStatus);
-    roundNode.classList.toggle('is-final', !!record.isFinal);
-    roundNode.classList.toggle('is-expanded', isRoundExpanded(record));
-    var marker = roundNode.querySelector('.etl-round-marker');
-    if (marker) marker.textContent = record.isFinal ? '✓' : String(record.iteration);
-    var title = roundNode.querySelector('.etl-round-title');
-    if (title) title.textContent = deriveRoundTitle(record);
-    var badge = roundNode.querySelector('.etl-round-badge');
-    if (badge) {
-      badge.className = 'etl-round-badge status-' + visualStatus;
-      badge.textContent = roundStatusLabel(visualStatus);
-    }
-    var time = roundNode.querySelector('.etl-round-duration');
-    if (time) time.textContent = roundDuration(record);
-    if (!options.skipPills && shouldRebuildRoundPills(roundNode, record)) {
-      rebuildRoundPillsInNode(roundNode, record);
-    }
   }
 
   function rebuildRoundDetailBody(detail, record) {
@@ -2492,23 +3509,6 @@ window.ChatExecutionPlan = (function () {
     item.appendChild(detail);
   }
 
-  function appendToolToRoundNode(roundNode, record, tool) {
-    appendRoundDetailElement(roundNode, record);
-    patchRoundSummary(roundNode, record);
-    var detail = roundNode.querySelector('.etl-round-detail');
-    if (!detail) return;
-    var actions = detail.querySelector('.etl-round-actions');
-    if (actions) {
-      if (!actions.querySelector('[data-tool-call-id="' + tool.toolCallId + '"]')) {
-        actions.appendChild(makeRoundActionRow(tool));
-      }
-    } else {
-      rebuildRoundDetailBody(detail, record);
-      return;
-    }
-    patchRoundReason(roundNode, record);
-  }
-
   function patchRoundToolRow(row, tool) {
     if (!row || !tool) return;
     var status = toolStatusClass(tool.status);
@@ -2534,22 +3534,47 @@ window.ChatExecutionPlan = (function () {
     return true;
   }
 
-  /** 已有节点就地 patch；新节点走 pushRoundNodeToList。 */
-  function ensureRoundNode(record, options) {
-    options = options || {};
-    var ctx = getRoundListContext();
-    if (!ctx || !ctx.list || !record) return null;
-    var existing = findRoundNode(record.iteration);
-    if (existing) {
-      patchRoundNode(existing, record);
-      return existing;
+  function attachLiveTimelineIfRunning() {
+    if (!roundTimelineEl || !hostEl) return false;
+    if (!selectedChapterIsLive()) return false;
+    roundTimelineEl.classList.remove('hidden');
+    var flow = hostEl.querySelector('#etl-panel-flow');
+    if (flow && roundTimelineEl.parentNode !== flow) flow.appendChild(roundTimelineEl);
+    return true;
+  }
+
+  function renderFrozenSelectedFlow() {
+    if (!roundTimelineEl) return;
+    roundTimelineEl.classList.remove('hidden');
+    var list = roundTimelineEl.querySelector('.etl-round-list');
+    var empty = roundTimelineEl.querySelector('.etl-round-empty');
+    var loadMore = roundTimelineEl.querySelector('#etl-round-load-more');
+    if (loadMore) loadMore.classList.add('hidden');
+    if (!list) return;
+    list.innerHTML = '';
+    var ch = getSelectedChapter();
+    var rounds = (ch && ch.rounds) || [];
+    if (empty) {
+      empty.textContent = ch ? '本章暂无执行步骤' : '等待模型开始执行';
+      empty.classList.toggle('hidden', rounds.length > 0);
     }
-    if (options.insert) return pushRoundShellToList(ctx.list, record);
-    return null;
+    for (var r = 0; r < rounds.length; r++) {
+      list.appendChild(makeFrozenRoundNode(rounds[r]));
+    }
+    updateFlowStepCount(rounds.length);
+    if (taskOverviewEl && !(ch && ch.live)) {
+      taskOverviewEl.classList.add('hidden');
+    }
+    if (currentStepEl && !(ch && ch.live && ch.status === 'running')) {
+      currentStepEl.classList.add('hidden');
+    }
   }
 
   function syncRoundTimeline(options) {
     options = options || {};
+    if (!attachLiveTimelineIfRunning()) {
+      return;
+    }
     try {
       var ctx = getRoundListContext();
       if (!ctx || !ctx.list) return;
@@ -2601,13 +3626,18 @@ window.ChatExecutionPlan = (function () {
       syncLoadMoreButton(true);
       rebuildVisibleRoundList(ctx.list);
       refreshVisibleRoundPillSummaries();
+      updateFlowStepCount(roundRecords.length);
     } catch (e) {
       safeWarn('syncRoundTimeline', e);
     }
   }
 
   function renderRoundTimeline(reset) {
-    syncRoundTimeline({ reset: !!reset });
+    if (attachLiveTimelineIfRunning()) {
+      syncRoundTimeline({ reset: !!reset });
+      return;
+    }
+    renderFrozenSelectedFlow();
   }
 
   function toggleRoundExpanded(iteration) {
@@ -2630,10 +3660,18 @@ window.ChatExecutionPlan = (function () {
         syncRoundTimeline({ loadMore: true });
         return;
       }
+      var action = target.closest('.etl-round-action[data-tool-call-id]');
+      if (action && event.type === 'click') {
+        jumpToChatTool(action.getAttribute('data-tool-call-id'));
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       var row = target.closest('.etl-round-row');
       if (!row) return;
       var node = row.closest('.etl-round-node');
       if (!node || !node.dataset.iteration) return;
+      if (node.dataset.frozen === '1') return;
       if (event.type === 'keydown') {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
@@ -2641,6 +3679,7 @@ window.ChatExecutionPlan = (function () {
         event.preventDefault();
       }
       toggleRoundExpanded(node.dataset.iteration);
+      event.stopPropagation();
     } catch (e) {
       safeWarn('roundTimelineClick', e);
     }
@@ -2671,65 +3710,6 @@ window.ChatExecutionPlan = (function () {
     roundTimelineEl.addEventListener('keydown', roundTimelineKeydownHandler);
     roundTimelineBoundEl = roundTimelineEl;
     roundTimelineBound = true;
-  }
-
-  function makeRoundNode(record, options) {
-    options = options || {};
-    var tools = getRoundTools(record);
-    var visualStatus = roundVisualStatus(record);
-    var itemKey = String(record.iteration);
-    var isExpanded = isRoundExpanded(record);
-
-    var item = document.createElement('li');
-    item.className = 'etl-round-node etl-round-card status-' + visualStatus
-      + (record.isFinal ? ' is-final' : '')
-      + (isExpanded ? ' is-expanded' : '');
-    item.dataset.iteration = itemKey;
-
-    var row = document.createElement('div');
-    row.className = 'etl-round-row';
-    row.setAttribute('role', 'button');
-    row.setAttribute('tabindex', '0');
-    row.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-
-    var marker = document.createElement('span');
-    marker.className = 'etl-round-marker';
-    marker.textContent = record.isFinal ? '✓' : String(record.iteration);
-
-    var summary = document.createElement('div');
-    summary.className = 'etl-round-summary';
-
-    var head = document.createElement('div');
-    head.className = 'etl-round-head';
-    var title = document.createElement('span');
-    title.className = 'etl-round-title';
-    title.textContent = deriveRoundTitle(record);
-    var badge = document.createElement('span');
-    badge.className = 'etl-round-badge status-' + visualStatus;
-    badge.textContent = roundStatusLabel(visualStatus);
-    var time = document.createElement('span');
-    time.className = 'etl-round-duration';
-    time.textContent = roundDuration(record);
-    var toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'etl-round-toggle';
-    toggle.setAttribute('aria-label', isExpanded ? '收起轮次详情' : '展开轮次详情');
-    toggle.textContent = isExpanded ? '▴' : '▾';
-    head.appendChild(title);
-    head.appendChild(badge);
-    head.appendChild(time);
-    head.appendChild(toggle);
-    summary.appendChild(head);
-
-    renderRoundPills(summary, tools, record);
-
-    row.appendChild(marker);
-    row.appendChild(summary);
-    item.appendChild(row);
-
-    if (!options.summaryOnly) appendRoundDetailElement(item, record);
-
-    return item;
   }
 
   function buildTaskOverviewSkeleton() {
@@ -2913,6 +3893,7 @@ window.ChatExecutionPlan = (function () {
     try {
       if (!step || !step.type) return;
       recoverPanelAfterFatal();
+      markLiveChapterRunning();
       if (step.type === 'tool_call') {
         var callId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
         if (!callId) return;
@@ -2966,6 +3947,7 @@ window.ChatExecutionPlan = (function () {
         if (createdTool) {
           patchFooterToolCount();
           renderLlmActivity();
+          if (dockSheetKind === 'tools') renderDockTools();
         }
       } else if (step.type === 'tool_result') {
         var resultId = typeof step.toolCallId === 'string' ? step.toolCallId : '';
@@ -3005,6 +3987,12 @@ window.ChatExecutionPlan = (function () {
           scheduleSnapshotTimelineRefresh();
         }
       }
+      ensureLiveChapter();
+      if (hostEl && chapterTimelineEl && !chapterTimelineEl.querySelector('.etl-chapter-node.is-current')) {
+        renderChapterDirectory();
+      } else {
+        patchCurrentChapterChrome();
+      }
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('applyToolActivity', e);
@@ -3028,24 +4016,33 @@ window.ChatExecutionPlan = (function () {
       roundVisibleLimit = 20;
       cachedLoadMoreHidden = -1;
       renderTaskOverview();
+      renderChapterDirectory();
       renderRoundTimeline(true);
       renderEmptyState();
       renderLlmActivity();
       renderFooter();
-      renderSnapshotFiles();
+      renderDockSheet();
       scheduleFlowPersist();
     } catch (e) {
       safeWarn('resetToolActivity', e);
     }
   }
 
-  function beginTurnTimer(ts) {
+  function beginTurnTimer(ts, meta) {
     try {
       recoverPanelAfterFatal();
       turnStartedAt = typeof ts === 'number' ? ts : Date.now();
       turnEndedAt = null;
+      markLiveChapterRunning(meta && typeof meta === 'object' ? meta : {});
       renderFooter();
       startTick();
+      if (hostEl) {
+        renderChapterDirectory();
+        renderRoundTimeline(true);
+        renderCurrentStep();
+        renderEmptyState();
+        hideParkedLiveWidgets();
+      }
     } catch (e) {
       safeWarn('beginTurnTimer', e);
     }
@@ -3068,14 +4065,16 @@ window.ChatExecutionPlan = (function () {
   function fullRender() {
     if (!ensureMounted()) throw new Error('执行透明层挂载失败');
     renderExecutionModeBanner();
+    renderChapterDirectory({ scrollToLatest: true });
     renderTaskOverview();
     renderRoundTimeline(true);
     renderCurrentStep();
+    hideParkedLiveWidgets();
     renderEmptyState();
     renderList();
     renderLlmActivity();
     renderFooter();
-    renderSnapshotFiles();
+    renderDockSheet();
     if (mountedMode === 'mobile') updateMobileBar();
   }
 
@@ -3108,16 +4107,9 @@ window.ChatExecutionPlan = (function () {
       }
       if (!prevId || prevId !== plan.planId) {
         frozenPlanId = null;
-        lastTool = { toolCallId: '', toolName: '', pending: false, ts: 0 };
-        toolRecords = [];
-        toolRecordById = Object.create(null);
-        toolCallIds = Object.create(null);
-        uniqueToolCallCount = 0;
-        authoritativeToolCalls = null;
-        calibratedUniqueToolCount = 0;
-        footerStats.totalToolCalls = null;
       }
       currentPlan = plan;
+      ensureLiveChapter();
       if (isPlanComplete(currentPlan)) frozenPlanId = currentPlan.planId;
       visible = !isPanelSuppressed();
       if (isPanelSuppressed()) {
@@ -3242,6 +4234,13 @@ window.ChatExecutionPlan = (function () {
   function clear(opts) {
     try {
       opts = opts || {};
+      if (opts.sealChapter) {
+        sealLiveChapter({ status: opts.status || 'done', nextMeta: opts.nextMeta });
+        visible = !isPanelSuppressed();
+        applyVisibility();
+        notifyPetFoot();
+        return;
+      }
       currentPlan = null;
       frozenPlanId = null;
       currentExecutionMode = null;
@@ -3259,6 +4258,14 @@ window.ChatExecutionPlan = (function () {
       authoritativeToolCalls = null;
       calibratedUniqueToolCount = 0;
       footerStats = { totalTokenUsage: null, totalToolCalls: null };
+      sealedChapters = [];
+      sealedToolCount = 0;
+      liveChapterMeta = null;
+      selectedChapterKey = '';
+      userPinnedChapter = false;
+      chapterVisibleLimit = 30;
+      pendingRevealMessageId = '';
+      setDockSheet('');
       // 文件列表来自 checkpoint；切会话/回滚时清视图，新一轮保留到下次拉取。
       if (snapshotFilesRefreshTimer) {
         clearTimeout(snapshotFilesRefreshTimer);
@@ -3275,6 +4282,8 @@ window.ChatExecutionPlan = (function () {
         }
       } catch (_e) { /* ignore */ }
       if (typeof turnStartedAt !== 'number' || typeof turnEndedAt === 'number') stopTick();
+      turnStartedAt = null;
+      turnEndedAt = null;
       if (hostEl) {
         if (listEl) listEl.innerHTML = '';
         if (currentStepEl) {
@@ -3287,10 +4296,11 @@ window.ChatExecutionPlan = (function () {
           llmActivityEl.classList.add('hidden');
         }
         renderTaskOverview();
+        renderChapterDirectory();
         renderRoundTimeline(true);
         renderExecutionModeBanner();
         renderFooter();
-        renderSnapshotFiles();
+        renderDockSheet();
       }
       applyVisibility();
       notifyPetFoot();
@@ -3387,6 +4397,7 @@ window.ChatExecutionPlan = (function () {
         return;
       }
       currentExecutionMode = Object.assign({}, step.executionMode);
+      stampLiveMarker('supervision');
       if (!isPanelSuppressed() && pageActive) {
         ensureMounted();
         renderExecutionModeBanner();
@@ -3538,6 +4549,9 @@ window.ChatExecutionPlan = (function () {
         authoritativeToolCalls: typeof authoritativeToolCalls === 'number'
           ? authoritativeToolCalls
           : null,
+        sealedChapters: JSON.parse(JSON.stringify(sealedChapters)),
+        liveChapterMeta: liveChapterMeta ? Object.assign({}, liveChapterMeta) : null,
+        sealedToolCount: sealedToolCount,
       };
     } catch (e) {
       safeWarn('getFlowSnapshot', e);
@@ -3590,6 +4604,15 @@ window.ChatExecutionPlan = (function () {
         : null;
       expandedRounds = Object.create(null);
       roundVisibleLimit = 20;
+      if (Array.isArray(snapshot.sealedChapters)) {
+        sealedChapters = snapshot.sealedChapters;
+      }
+      if (snapshot.liveChapterMeta && typeof snapshot.liveChapterMeta === 'object') {
+        liveChapterMeta = Object.assign({}, snapshot.liveChapterMeta);
+      }
+      if (typeof snapshot.sealedToolCount === 'number') {
+        sealedToolCount = snapshot.sealedToolCount;
+      }
 
       if (!opts.overlayOnly) {
         currentPlan = snapshot.currentPlan && hasSafePlanShape(snapshot.currentPlan)
@@ -3602,7 +4625,7 @@ window.ChatExecutionPlan = (function () {
       }
 
       visible = !isPanelSuppressed()
-        && !!(currentPlan || currentExecutionMode || roundRecords.length);
+        && !!(currentPlan || currentExecutionMode || roundRecords.length || sealedChapters.length);
       if (visible || hostEl) {
         ensureMounted();
         fullRender();
@@ -3749,13 +4772,7 @@ window.ChatExecutionPlan = (function () {
     }
   }
 
-  // ── 检查点 Tab：检查点时间轴 + 本会话改过的文件 ──
-
-  function syncSnapshotSplitLayout() {
-    if (!hostEl) return;
-    var body = hostEl.querySelector('.etl-body');
-    if (body) body.classList.toggle('etl-body--fill', activeTab === 'snapshot');
-  }
+  // ── 检查点数据：回滚按钮挂在章节上；变更文件走底栏弹出层 ──
 
   function normalizeChangedPath(p) {
     var text = String(p || '').trim().split(/\r?\n/)[0] || '';
@@ -3870,19 +4887,123 @@ window.ChatExecutionPlan = (function () {
     return li;
   }
 
-  function renderSnapshotFiles() {
+  function collectSessionToolUsage() {
+    var byName = Object.create(null);
+    var order = [];
+    var seenCall = Object.create(null);
+
+    function add(name, callId) {
+      var toolName = String(name || '').trim();
+      if (!toolName) return;
+      if (callId) {
+        if (seenCall[callId]) return;
+        seenCall[callId] = true;
+      }
+      if (!byName[toolName]) {
+        byName[toolName] = { name: toolName, count: 0 };
+        order.push(toolName);
+      }
+      byName[toolName].count += 1;
+    }
+
+    function addFromRounds(rounds) {
+      if (!Array.isArray(rounds)) return;
+      for (var i = 0; i < rounds.length; i++) {
+        var tools = (rounds[i] && rounds[i].tools) || [];
+        for (var t = 0; t < tools.length; t++) {
+          var tool = tools[t];
+          if (!tool) continue;
+          add(tool.toolName, tool.toolCallId);
+        }
+      }
+    }
+
+    for (var c = 0; c < sealedChapters.length; c++) {
+      addFromRounds(sealedChapters[c] && sealedChapters[c].rounds);
+    }
+    for (var j = 0; j < toolRecords.length; j++) {
+      var rec = toolRecords[j];
+      if (!rec) continue;
+      add(rec.toolName, rec.toolCallId);
+    }
+    var out = [];
+    for (var k = 0; k < order.length; k++) out.push(byName[order[k]]);
+    return out;
+  }
+
+  function renderDockSheet() {
+    if (dockSheetKind === 'tools') renderDockTools();
+    else renderSnapshotFiles();
+  }
+
+  function buildDockToolItem(entry) {
+    var li = document.createElement('li');
+    li.className = 'etl-snapshot-file is-static';
+    li.setAttribute('role', 'listitem');
+    li.setAttribute('data-tool-name', entry.name);
+
+    var badge = document.createElement('span');
+    badge.className = 'etl-snapshot-file-badge etl-snapshot-file-badge--tool';
+    badge.textContent = '×' + entry.count;
+
+    var nameEl = document.createElement('span');
+    nameEl.className = 'etl-snapshot-file-name';
+    nameEl.textContent = entry.name;
+    nameEl.title = entry.name;
+
+    li.appendChild(badge);
+    li.appendChild(nameEl);
+    return li;
+  }
+
+  function renderDockTools() {
     if (!snapshotFilesEl) return;
     try {
+      var titleEl = snapshotFilesEl.querySelector('.etl-files-sheet-title');
+      var countEl = snapshotFilesEl.querySelector('#etl-snapshot-files-count');
+      var emptyEl = snapshotFilesEl.querySelector('.etl-snapshot-files-empty');
+      var list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
+      if (!list) return;
+      var tools = collectSessionToolUsage().slice(0, 200);
+      if (titleEl) titleEl.textContent = tools.length ? ('会话工具 · ' + tools.length) : '会话工具';
+      if (countEl) countEl.textContent = tools.length ? (tools.length + ' 个工具') : '暂无工具';
+      list.innerHTML = '';
+      if (!tools.length) {
+        if (emptyEl) {
+          emptyEl.textContent = '尚无工具调用';
+          emptyEl.classList.remove('hidden');
+        }
+        list.classList.add('hidden');
+        return;
+      }
+      if (emptyEl) emptyEl.classList.add('hidden');
+      list.classList.remove('hidden');
+      for (var i = 0; i < tools.length; i++) {
+        list.appendChild(buildDockToolItem(tools[i]));
+      }
+    } catch (e) {
+      safeWarn('renderDockTools', e);
+    }
+  }
+
+  function renderSnapshotFiles() {
+    if (!snapshotFilesEl) return;
+    if (dockSheetKind === 'tools') return;
+    try {
+      var titleEl = snapshotFilesEl.querySelector('.etl-files-sheet-title');
       var countEl = snapshotFilesEl.querySelector('#etl-snapshot-files-count');
       var emptyEl = snapshotFilesEl.querySelector('.etl-snapshot-files-empty');
       var list = snapshotFilesEl.querySelector('#etl-snapshot-files-list');
       if (!list) return;
       var files = snapshotChangedFiles.slice(0, 200);
+      if (titleEl) titleEl.textContent = files.length ? ('变更文件 · ' + files.length) : '变更文件';
       if (countEl) countEl.textContent = files.length ? (files.length + ' 个文件') : '暂无文件';
+      if (emptyEl) emptyEl.textContent = '尚无变更文件';
       list.innerHTML = '';
       if (!files.length) {
         if (emptyEl) emptyEl.classList.remove('hidden');
         list.classList.add('hidden');
+        renderFooter();
         return;
       }
       if (emptyEl) emptyEl.classList.add('hidden');
@@ -3890,6 +5011,7 @@ window.ChatExecutionPlan = (function () {
       for (var i = 0; i < files.length; i++) {
         list.appendChild(buildSnapshotFileItem(files[i]));
       }
+      renderFooter();
     } catch (e) {
       safeWarn('renderSnapshotFiles', e);
     }
@@ -3911,29 +5033,6 @@ window.ChatExecutionPlan = (function () {
       }
     } catch (_e) { /* ignore */ }
     return 'default';
-  }
-
-  function formatSnapshotTime(userMessageTime, createdAt) {
-    var ts = typeof userMessageTime === 'number' && isFinite(userMessageTime)
-      ? userMessageTime
-      : (createdAt ? Date.parse(createdAt) : NaN);
-    if (!isFinite(ts)) return '';
-    var d = new Date(ts);
-    if (isNaN(d.getTime())) return '';
-    var now = new Date();
-    var sameDay = d.getFullYear() === now.getFullYear()
-      && d.getMonth() === now.getMonth()
-      && d.getDate() === now.getDate();
-    if (sameDay) {
-      return d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-    }
-    return d.toLocaleString('zh-CN', {
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
   }
 
   function snapshotRestoreIconHtml() {
@@ -4068,114 +5167,16 @@ window.ChatExecutionPlan = (function () {
     return restoreBtn;
   }
 
-  function updateSnapshotCheckpointCount(text) {
-    var section = snapshotTimelineEl && snapshotTimelineEl.closest
-      ? snapshotTimelineEl.closest('.etl-snapshot-section')
-      : null;
-    var count = section && section.querySelector('#etl-snapshot-checkpoints-count');
-    if (count) count.textContent = text;
-  }
-
-  function renderSnapshotTimeline(payload) {
-    if (!snapshotTimelineEl) return;
-    try {
-      var entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
-      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
-      syncSnapshotCheckpointsToChatUi(entries);
-      applyCheckpointChangedFiles(payload.changedFiles);
-      renderSnapshotFiles();
-      var canRestore = snapshotRestoreAllowed();
-      snapshotTimelineEl.innerHTML = '';
-      updateSnapshotCheckpointCount(entries.length ? (entries.length + ' 个节点') : '暂无节点');
-
-      if (!canRestore) {
-        var hint = document.createElement('div');
-        hint.className = 'etl-snapshot-hint';
-        hint.setAttribute('role', 'status');
-        hint.textContent = '任务运行中或回滚进行中，请稍候再试。';
-        snapshotTimelineEl.appendChild(hint);
-      }
-
-      if (!entries.length) {
-        var empty = document.createElement('div');
-        empty.className = 'etl-empty etl-snapshot-empty';
-        empty.textContent = '发送用户消息后，将在此列出可回滚节点。';
-        snapshotTimelineEl.appendChild(empty);
-        return;
-      }
-
-      var list = document.createElement('ol');
-      list.className = 'etl-snapshot-list';
-      list.setAttribute('role', 'list');
-
-      for (var i = 0; i < entries.length; i++) {
-        var entry = entries[i];
-        if (!entry || !entry.messageId) continue;
-        var isCursor = !!entry.isCursor;
-        var li = document.createElement('li');
-        li.className = 'etl-snapshot-node' + (isCursor ? ' is-cursor' : '');
-        li.setAttribute('role', 'listitem');
-        li.setAttribute('data-message-id', entry.messageId);
-
-        var rail = document.createElement('div');
-        rail.className = 'etl-snapshot-rail';
-        rail.setAttribute('aria-hidden', 'true');
-        var dot = document.createElement('span');
-        dot.className = 'etl-snapshot-dot';
-        rail.appendChild(dot);
-        if (i < entries.length - 1) {
-          var line = document.createElement('span');
-          line.className = 'etl-snapshot-line';
-          rail.appendChild(line);
-        }
-
-        var card = document.createElement('div');
-        card.className = 'etl-snapshot-card';
-
-        var meta = document.createElement('div');
-        meta.className = 'etl-snapshot-meta';
-        var indexEl = document.createElement('span');
-        indexEl.className = 'etl-snapshot-index';
-        indexEl.textContent = String(i + 1);
-        var timeEl = document.createElement('time');
-        timeEl.className = 'etl-snapshot-time';
-        var timeText = formatSnapshotTime(entry.userMessageTime, entry.createdAt);
-        if (timeText) timeEl.textContent = timeText;
-        meta.appendChild(indexEl);
-        meta.appendChild(timeEl);
-        if (isCursor) {
-          var cursorBadge = document.createElement('span');
-          cursorBadge.className = 'etl-snapshot-badge';
-          cursorBadge.textContent = '当前位置';
-          meta.appendChild(cursorBadge);
-        }
-
-        var preview = document.createElement('div');
-        preview.className = 'etl-snapshot-preview';
-        preview.textContent = entry.preview || '（无消息摘要）';
-        preview.title = entry.preview || '';
-
-        card.appendChild(meta);
-        card.appendChild(preview);
-        if (isSnapshotRestoreHidden(entry.messageId)) {
-          card.classList.add('etl-snapshot-card--no-restore');
-        } else {
-          card.appendChild(createSnapshotRestoreButton(entry.messageId));
-        }
-
-        li.appendChild(rail);
-        li.appendChild(card);
-        list.appendChild(li);
-      }
-
-      snapshotTimelineEl.appendChild(list);
-    } catch (e) {
-      safeWarn('renderSnapshotTimeline', e);
-      if (snapshotTimelineEl) {
-        updateSnapshotCheckpointCount('暂无节点');
-        snapshotTimelineEl.innerHTML = '<div class="etl-empty etl-snapshot-empty">检查点加载失败</div>';
-      }
-    }
+  function applyCheckpointPayload(payload) {
+    var entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
+    rememberSnapshotCheckpointIds(entries, payload && payload.cursorMessageId, payload && payload.cursorRestored);
+    syncSnapshotCheckpointsToChatUi(entries);
+    applyCheckpointChangedFiles(payload && payload.changedFiles);
+    bindLiveChapterIdentity();
+    renderDockSheet();
+    renderChapterDirectory();
+    renderRoundTimeline(true);
+    notifySnapshotRestoreAvailability();
   }
 
   function fetchSnapshotTimeline(sessionId, done) {
@@ -4191,14 +5192,7 @@ window.ChatExecutionPlan = (function () {
       return null;
     }).then(function (data) {
       if (gen !== snapshotFetchGeneration) return;
-      var payload = data || { entries: [] };
-      var entries = Array.isArray(payload.entries) ? payload.entries : [];
-      // 无论当前是不是快照 Tab，都要把检查点同步给气泡回滚。
-      rememberSnapshotCheckpointIds(entries, payload.cursorMessageId, payload.cursorRestored);
-      syncSnapshotCheckpointsToChatUi(entries);
-      applyCheckpointChangedFiles(payload.changedFiles);
-      renderSnapshotFiles();
-      if (snapshotTimelineEl) renderSnapshotTimeline(payload);
+      applyCheckpointPayload(data || { entries: [] });
       if (typeof done === 'function') done(data);
     });
   }
@@ -4223,21 +5217,23 @@ window.ChatExecutionPlan = (function () {
   }
 
   function notifySnapshotRestoreAvailability() {
-    if (activeTab !== 'snapshot' || !snapshotTimelineEl) return;
-    var list = snapshotTimelineEl.querySelector('.etl-snapshot-list');
+    if (!chapterTimelineEl) return;
+    var list = chapterTimelineEl.querySelector('.etl-chapter-list');
     if (!list) {
       refreshSnapshotTimeline();
       return;
     }
     var canRestore = snapshotRestoreAllowed();
-    var hint = snapshotTimelineEl.querySelector('.etl-snapshot-hint');
+    var hint = chapterTimelineEl.querySelector('.etl-snapshot-hint');
     if (!canRestore && !hint) {
       hint = document.createElement('div');
       hint.className = 'etl-snapshot-hint';
       hint.setAttribute('role', 'status');
       hint.textContent = '任务运行中或回滚进行中，请稍候再试。';
-      snapshotTimelineEl.insertBefore(hint, snapshotTimelineEl.firstChild);
-    } else if (canRestore && hint) {
+      var head = chapterTimelineEl.querySelector('.etl-wb-section-head');
+      if (head && head.nextSibling) chapterTimelineEl.insertBefore(hint, head.nextSibling);
+      else chapterTimelineEl.insertBefore(hint, chapterTimelineEl.firstChild);
+    } else if (canRestore && hint && hint.parentNode) {
       hint.parentNode.removeChild(hint);
     }
     var btns = list.querySelectorAll('.etl-snapshot-restore-btn');
@@ -4281,6 +5277,9 @@ window.ChatExecutionPlan = (function () {
     getFlowSnapshot: getFlowSnapshot,
     restoreFlowSnapshot: restoreFlowSnapshot,
     hydrateFromStructured: hydrateFromStructured,
+    sealChapter: sealLiveChapter,
+    revealChapter: revealChapter,
+    getSealedChapters: function () { return sealedChapters.slice(); },
     registerFlowPersist: registerFlowPersist,
     flushFlowPersist: flushFlowPersist,
     cancelFlowPersist: cancelFlowPersist,

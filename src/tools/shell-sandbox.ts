@@ -24,7 +24,7 @@ export const DEFAULT_SHELL_BLACKLIST_PATTERNS: string[] = [
   '\\breboot\\b',
   '\\bhalt\\b',
   '\\bpoweroff\\b',
-  'git\\s+push\\s+.*(-f|--force)',
+  'git\\s+push\\s+.*(-f(?![a-z])|--force(?!-with-lease))',
   'git\\s+reset\\s+--hard',
   'git\\s+clean\\s+.*-f',
   '\\bdel\\s+/[fq]',
@@ -33,6 +33,10 @@ export const DEFAULT_SHELL_BLACKLIST_PATTERNS: string[] = [
   '\\bfdisk\\b',
   '\\bdropdb\\b',
   'DROP\\s+(TABLE|DATABASE)',
+  '\\bfind\\b.*\\s-delete\\b',
+  '\\bshred\\b',
+  '>\\s*/dev/sd',
+  '\\btruncate\\b.*-s\\s*0',
 ];
 
 /**

@@ -20,7 +20,7 @@
     "\\breboot\\b",
     "\\bhalt\\b",
     "\\bpoweroff\\b",
-    "git\\s+push\\s+.*(-f|--force)",
+    "git\\s+push\\s+.*(-f(?![a-z])|--force(?!-with-lease))",
     "git\\s+reset\\s+--hard",
     "git\\s+clean\\s+.*-f",
     "\\bdel\\s+/[fq]",
@@ -28,7 +28,11 @@
     "\\bdiskpart\\b",
     "\\bfdisk\\b",
     "\\bdropdb\\b",
-    "DROP\\s+(TABLE|DATABASE)"
+    "DROP\\s+(TABLE|DATABASE)",
+    "\\bfind\\b.*\\s-delete\\b",
+    "\\bshred\\b",
+    ">\\s*/dev/sd",
+    "\\btruncate\\b.*-s\\s*0"
   ],
   "providers": [
     {
